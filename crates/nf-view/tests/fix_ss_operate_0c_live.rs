@@ -62,9 +62,40 @@ fn the_bullet_driven_winch_sweeps_on_a_shot_and_holds_without_one() {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let s = &sim.drones.sss.list[wi];
-        assert!(s.t > 0.0 || s.state != 0x40,
-            "the winch ss[{wi}] moved: t {} state {:#x} — the bullet contact drove the sweep [M 0x1a9df8:12-45]", s.t, s.state);
+        assert_eq!(s.state, 1,
+            "the winch ss[{wi}] latched state 1 on the operate tick [M 0x1a9948's 0x40 arm: *(ext+0x22) = 1]");
+    }
+    // The full sweep [M 0x1a9948's state 1]: one operate tick is enough — state 1 sweeps every
+    // tick to the wrap (t past the last key → t = 0, state = wrap_flag == 0 ? 0x40 : 0), no
+    // further contact needed. The old port re-required operate every tick, so the shot's single
+    // contact tick stalled the render at t = one step (task 787's follow-up).
+    let (keys_n, rate, wrap_flag) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let s = &sim.drones.sss.list[wi];
+        (s.keys.len(), s.rate, s.wrap_flag)
+    };
+    let last = (keys_n - 1) as f32;
+    let step = last / rate as f32;
+    let mut max_t = 0.0f32;
+    let start = w.total_ticks;
+    let wrapped = loop {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let s = &sim.drones.sss.list[wi];
+        max_t = max_t.max(s.t);
+        if s.t == 0.0 && (s.state == 0x40 || s.state == 0) { break true; }
+        if w.total_ticks - start > rate + 40 { break false; }
+        w.tick(nf_game::player::Input::default(), false);
+        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+    };
+    assert!(wrapped, "the winch ss[{wi}] never wrapped after the shot (t {max_t} state stalled) — the sweep did not run in state 1 [M 0x1a9948]");
+    assert!(max_t >= last - step,
+        "the winch ss[{wi}] peaked at t {max_t} but the last key is {last} (step {step}) — the sweep stopped short");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let s = &sim.drones.sss.list[wi];
         eprintln!("[ssop] after the shot: t {} state {:#x} pos {:?}", s.t, s.state, s.pos());
+        assert_eq!(s.state, if wrap_flag == 0 { 0x40 } else { 0 },
+            "the wrap re-arms (wrap_flag 0) or disarms [M 0x1a9948:119-128]");
     }
     eprintln!("[ssop] done in {} ticks", w.total_ticks);
 }
