@@ -975,6 +975,55 @@ impl CollisionWorld {
         self.segment_in_sets(from, to, false)
     }
 
+    /// The SIGHT-class segment: the masked ray behind the game's vision tests. The drone vision
+    /// call runs `Collide_LineOfSight` whose last argument ORs 0xa27 into the caller's flags [M
+    /// `DroneVision_CanSeeObjectFrom` 0x176f18:69-70 and 95-96 — the 0xa27 immediates at
+    /// 0x176fec/0x1770b0 sit directly before both calls], and `Collide_LineOfSight` 0x1edf50
+    /// forwards it as `Collide_RayIntersect`'s HITTEST+0x98 mask (disasm 0x1edf54 `ori t3,t1,4`
+    /// — 0xa27 already carries bit 2, and `Collide_RayIntersect` 0x1ec690 stores arg7 at
+    /// HITTEST+0x98). `Collide_Pick`/`Collide_Intersect` then drop, before a hit is reported:
+    /// - the 0x1000-flagged nodes (mask bit 0x20) [M `Collide_Pick` 0x1eb320:149-152] — the port's
+    ///   missile cage, the same skip `segment_actor` already ports;
+    /// - any surface whose material byte carries 0x40 (mask bit 0x800) [M `Collide_Intersect`
+    ///   0x1ebaa8:301];
+    /// - materials 0xD and 0xE (mask bit 0x1: `(mat & 0x3f) - 0xd < 2`) [M 0x1ebaa8:311];
+    /// - material 0x10 (mask bit 0x2) [M 0x1ebaa8:314];
+    /// and still tests objects (mask bit 0x10 clear → `Collide_PickObj` runs [M 0x1eb320:314]).
+    /// So unlike `segment_bullet` (mask bit 0x8: the NODE pass flag drops the hit) the sight ray
+    /// drops only the 0x40 MATERIAL byte — the raw `segment` is strictly stricter, which is what
+    /// blocked the 01 escort's stairwell peer (the game sees guard 2, the raw ray did not).
+    pub fn segment_masked(&self, from: V3, to: V3) -> Option<f32> {
+        let d = sub(to, from);
+        let mut best = None::<f32>;
+        let dynamic = self.dynamic.read().unwrap();
+        let sets: Vec<&Geo> = vec![&self.stat, &dynamic.geo];
+        for g in sets {
+            for o in along(g, from, to) {
+                for k in o.tris.clone() {
+                    let m = g.mats[k];
+                    let low = m & 0x3f;
+                    if m & 0x40 != 0 || low == 0xd || low == 0xe || low == 0x10 { continue; } // the 0xa27 drops [M 0x1ebaa8:301/311/314]
+                    let t = &g.tris[k];
+                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                    if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                    let p = cross(d, e2);
+                    let det = dot(e1, p);
+                    if det.abs() < 1e-12 { continue; }
+                    let inv = 1.0 / det;
+                    let s = sub(from, t[0]);
+                    let u = dot(s, p) * inv;
+                    if !(0.0..=1.0).contains(&u) { continue; }
+                    let q = cross(s, e1);
+                    let v = dot(d, q) * inv;
+                    if v < 0.0 || u + v > 1.0 { continue; }
+                    let tt = dot(e2, q) * inv;
+                    if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b) { best = Some(tt); }
+                }
+            }
+        }
+        best
+    }
+
     fn segment_in_sets(&self, from: V3, to: V3, with_missile: bool) -> Option<f32> {
         self.segment_in_sets_drop_pass(from, to, with_missile, false)
     }
@@ -1450,5 +1499,48 @@ mod tests {
         assert!(w.line_of_sight([0.0, 1.0, 0.0], [0.0, 1.0, 4.9]));
         assert!(!w.line_of_sight([0.0, 1.0, 0.0], [0.0, 1.0, 6.0]));
         assert!(w.line_of_sight([0.0, 4.0, 0.0], [0.0, 4.0, 6.0]), "over the wall");
+    }
+
+    /// The sight-class mask 0xa27 (`DroneVision_CanSeeObjectFrom` 0x176f18 ORs it into every
+    /// `Collide_LineOfSight` — immediates 0x176fec/0x1770b0): the masked ray drops the hits the
+    /// game's `Collide_Intersect` 0x1ebaa8 tail drops for it (0x40-flagged material byte
+    /// [0x1ebaa8:301], materials 0xD/0xE [:311], material 0x10 [:314]) and skips the 0x1000-flagged
+    /// nodes (mask bit 0x20, `Collide_Pick` 0x1eb320:149-152 — the port's missile cage), while the
+    /// flat `segment` still reports them. A plain wall (any other material) blocks BOTH.
+    #[test]
+    fn sight_mask_drops_the_0xa27_classes_but_not_walls() {
+        // Rays fly +x. Cards facing −x at x = 1..4, a solid class-10 (0x0a) wall at x = 6.
+        let face = |x: f32, m: u8| -> ([[f32; 3]; 3], u8, bool) { ([[x, 0.0, -1.0], [x, 2.0, 1.0], [x, 2.0, -1.0]], m, false) };
+        let from = [0.0f32, 1.0, 0.0];
+        let to = [8.0f32, 1.0, 0.0];
+        // Each class alone: the flat ray reports it at x/8, the sight ray reports the wall behind.
+        for (x, m, why) in [
+            (1.0f32, 0x40u8, "the 0x40 material byte [M 0x1ebaa8:301]"),
+            (2.0, 0x0d, "material 0xD [M 0x1ebaa8:311]"),
+            (3.0, 0x0e, "material 0xE [M 0x1ebaa8:311]"),
+            (4.0, 0x10, "material 0x10 [M 0x1ebaa8:314]"),
+        ] {
+            let w = CollisionWorld::from_triangles_flags(vec![face(x, m), face(6.0, 0x0a)]);
+            let traw = w.segment(from, to).unwrap();
+            assert!((traw - x / 8.0).abs() < 1e-6, "flat segment reports the {why} card (t={traw})");
+            let tm = w.segment_masked(from, to).unwrap();
+            assert!((tm - 6.0 / 8.0).abs() < 1e-6, "sight ray skips the {why} card, first report is the wall (t={tm})");
+        }
+        // Sister (the sister that can fail): a plain wall is NOT a masked class — the sight ray
+        // hits it exactly where the flat ray does.
+        let w = CollisionWorld::from_triangles_flags(vec![face(2.0, 0x04), face(6.0, 0x0a)]);
+        let t1 = w.segment(from, to).unwrap();
+        let t2 = w.segment_masked(from, to).unwrap();
+        assert!((t1 - 2.0 / 8.0).abs() < 1e-6 && (t2 - 2.0 / 8.0).abs() < 1e-6, "mat-4 geometry blocks both rays (t={t1}/{t2})");
+        // The 0x1000-flagged nodes (the missile cage) are skipped by the sight ray (mask bit 0x20
+        // [M 0x1eb320:149-152]) but stay solid to the flat segment — the same split segment_actor
+        // already pins.
+        let mut w = CollisionWorld::from_triangles_flags(vec![face(6.0, 0x0a)]);
+        w.missile = Geo::default();
+        w.missile.push(std::iter::once(([[3.0, 0.0, -1.0], [3.0, 2.0, 1.0], [3.0, 2.0, -1.0]], 0x0a)));
+        w.missile.chunk(16);
+        assert!(w.segment(from, to).unwrap() < 0.5, "flat: the cage card blocks");
+        let tm = w.segment_masked(from, to).unwrap();
+        assert!((tm - 6.0 / 8.0).abs() < 1e-6, "sight ray: the cage card is behind the mask bit 0x20 (t={tm})");
     }
 }

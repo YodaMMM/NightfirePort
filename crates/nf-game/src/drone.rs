@@ -968,6 +968,19 @@ pub struct Drone {
     /// `NDrone2_NearArmedDrone` 0x15ea28's calls — the port snapshots positions, so the team/started
     /// filter runs where the snapshot is built; f32::MAX = none) (fix-actors).
     pub armed_peer_dist: f32,
+    /// The hide-exit read's distance: the same scan PLUS the +0x2B8 remembered-peer latch —
+    /// `NDrone2_NotNearArmedDrone` 0x177640 returns "near" for the peer latched by the last
+    /// NearArmedDrone hit by DISTANCE ALONE, without the sight test [M 0x177640:94-115; the live/
+    /// armed filters still apply to him]. Consumed only by the LEAD_HIDE > 14.0 exit (0x15ec08
+    /// case 3); the ≤ 10.0 enters and the ≤ 20.0 hostage sites read the sight-gated
+    /// `armed_peer_dist` like the game's fresh NearArmedDrone calls. level-01-complete-4: without
+    /// the latch the escort's stairwell descent lost the peer behind the walls and the hide exited
+    /// 1.8 east of the AND plate.
+    pub armed_peer_exit_dist: f32,
+    /// The remembered peer (Drone+0x2B8 [M 0x177420:126 writes the found peer there]): the drone
+    /// index, u32::MAX = none. Re-written on every sighted hit; read by the exit scan's
+    /// distance-alone rule.
+    pub peer_latch: u32,
     pub special_death: u32,
     /// The spot a special death plays at (`+0xBE0`: the object's position at creation; `+0xBF4`: its yaw) and the
     /// stationary flag (`+0x4F8 & 0x10`: set at creation for special-death scripts other than 0x0600021F; blocks combat
@@ -1367,6 +1380,8 @@ impl Drone {
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false,
             mission_wait_channel: 0,
+            armed_peer_exit_dist: f32::MAX,
+            peer_latch: u32::MAX,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
             down: false,
@@ -5964,8 +5979,12 @@ impl Drone {
                 // An armed, started hostile within 10 → LeadHide (the cower) [M 0x15e698's armed-drone
                 // branch + 0x15ec08; the port's armed_peer_dist snapshot. `NDrone2_FindRunToPoint`
                 // 0x15168 — the branch's run-to-a-point half → AllyGoToGoalPosition 0x28 — is not
-                // ported; the hide arm only, as fix-actors].
-                if self.armed_peer_dist <= 10.0 {
+                // ported; the hide arm only, as fix-actors]. The game calls
+                // `NDrone2_NearArmedDrone(…, flag=1)` [M 0x15e698:30], whose flag-1 arm requires the
+                // drone's OWN behaviour prop 0x50 too [M 0x177420:57-61,
+                // `behaviour_util_getProperty` 0x1c7d98 — the port's `prop`] — without it the cower
+                // arm is dead in the game, so the port gates the enter on the same bit.
+                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 {
                     if std::env::var_os("NF_AILOG").is_some() { eprintln!("[ailog] escort {} → LeadHide (peer {:.1})", self.index, self.armed_peer_dist); }
                     self.set_state(LEAD_HIDE);
                     return true;
@@ -6000,10 +6019,11 @@ impl Drone {
             (ALLY_LEAD_WAIT, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15eda8 case 1: 0x21]
             (ALLY_LEAD_WAIT, msg::UPDATE) => {
                 // [M 0x15eda8 case 3]: an armed hostile within 10 → hide (the FindRunToPoint stand-in,
-                // as Lead's arm); else the path bands: ≤ −7.0 (Bond still over 7 behind on the route)
-                // stays, and 0.0 with Bond ≥ 5.0 straight-line stays; anything else resumes the lead
-                // (the game's −9.0 enter / −7.0 resume hysteresis).
-                if self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
+                // as Lead's arm; the flag-1 prop-0x50 gate applies here too, as in Lead [M
+                // 0x15eda8:30 + 0x177420:57-61]); else the path bands: ≤ −7.0 (Bond still over 7
+                // behind on the route) stays, and 0.0 with Bond ≥ 5.0 straight-line stays; anything
+                // else resumes the lead (the game's −9.0 enter / −7.0 resume hysteresis).
+                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
                 let pd = self.object_mission_path_distance(d, 5.0, self.player_pos);
                 self.mission_path_dist = pd;
                 if pd > -7.0 && (pd != 0.0 || crate::nav::dist2d(self.pos, self.player_pos) < 5.0) { self.set_state(ALLY_LEAD); }
@@ -6016,18 +6036,21 @@ impl Drone {
             // parks him in PlayerInWay.
             (PLAYER_IN_WAY, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15ea28 case 1: 0x21]
             (PLAYER_IN_WAY, msg::UPDATE) => {
-                // An armed hostile within 10 → hide (the FindRunToPoint stand-in, as Lead's arm);
+                // An armed hostile within 10 → hide (the FindRunToPoint stand-in, as Lead's arm; the
+                // flag-1 prop-0x50 gate applies here too [M 0x15ea28:30 + 0x177420:57-61]);
                 // otherwise resume the lead once Bond leaves the stay band — inside the π/3
                 // (0x3f860a92) facing cone AND 3.5 [M 0x15ea28 case 3].
-                if self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
+                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
                 if !self.bond_band(3.5, 1.047_197_6) { self.set_state(ALLY_LEAD); }
                 true
             }
             (LEAD_HIDE, msg::ENTER) => { self.call_anim(d, anim_state::COWER, 0, 0); true } // [M 0x15ec08 case 1: 0x19]
             (LEAD_HIDE, msg::UPDATE) => {
                 // No armed drone within 14 (0x41600000) → latch and return to Lead in 2 ticks
-                // [M 0x15ec08 case 3: +0xCD8 = 1, timer C = now + 2·FRAME_RATE_INT].
-                if self.armed_peer_dist > 14.0 && self.timer_c.is_none() {
+                // [M 0x15ec08 case 3: +0xCD8 = 1, timer C = now + 2·FRAME_RATE_INT]. The exit read
+                // is NotNearArmedDrone's latch-aware scan (armed_peer_exit_dist) — the remembered
+                // peer holds the hide by distance alone [M 0x177640:94-115].
+                if self.armed_peer_exit_dist > 14.0 && self.timer_c.is_none() {
                     self.timer_c = Some(frame + 2);
                 }
                 true
@@ -6050,12 +6073,13 @@ impl Drone {
             }
             // AllyLeadBondCombat 0x22 (0x15f120): Bond is fighting near the escort — hold the alert
             // idle. UPDATE [M 0x15f120 case 3]: an armed hostile within 10 → hide (the FindRunToPoint
-            // stand-in); else the path distance: < 0 (Bond still behind on the route) stays;
+            // stand-in; the flag-1 prop-0x50 gate applies here too [M 0x15f120:26 +
+            // 0x177420:57-61]); else the path distance: < 0 (Bond still behind on the route) stays;
             // `DAT_00298f80 != 0` stays (no decomp writer — reads 0, docs/fields/
             // hitdata-spawner-ally.md §3); otherwise Lead.
             (LEAD_BOND_COMBAT, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15f120 case 1: 0x21]
             (LEAD_BOND_COMBAT, msg::UPDATE) => {
-                if self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
+                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
                 let pd = self.object_mission_path_distance(d, 5.0, self.player_pos);
                 self.mission_path_dist = pd;
                 if pd >= 0.0 { self.set_state(ALLY_LEAD); }
@@ -10718,15 +10742,66 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         let positions: Vec<Option<V3>> = self.list.iter().map(|x| x.enabled.then_some(x.pos)).collect();
-        // The armed-peer distances for `NDrone2_NearArmedDrone`'s calls (fix-actors): the nearest
-        // started, alive, team-1 drone (positions only here; the per-drone team/started filter runs
-        // on the same list before the mutable borrow below).
-        let armed_peer_dist: Vec<f32> = self.list.iter().enumerate().map(|(i, dr)| {
-            self.list.iter().enumerate()
-                .filter(|&(j, o)| j != i && o.team == 1 && o.started && !o.corpse && o.enabled)
-                .map(|(_, o)| ((o.pos[0] - dr.pos[0]).powi(2) + (o.pos[1] - dr.pos[1]).powi(2) + (o.pos[2] - dr.pos[2]).powi(2)).sqrt())
-                .fold(f32::MAX, f32::min)
+        // The armed-peer distances for `NDrone2_NearArmedDrone`/`NDrone2_NotNearArmedDrone`'s calls
+        // (fix-actors): the nearest started, alive, team-1 drone that ALSO passes the game's weapon
+        // and sight gates:
+        // - weapon [M `NDrone2_NearArmedDrone` 0x177420:94-105, disasm 0x17752c-0x177578;
+        //   `NDrone2_NotNearArmedDrone` 0x177640:76-92]: the candidate's weapon byte (obj+0xdc →
+        //   +0x62; the port's `weapon`) qualifies the candidate ONLY when it is armed — the branch
+        //   chain's SKIP exit is 0x177604 (the next-node step; the `beq v0,zero → 0x177604` at
+        //   0x177578 fires for v0==0), so a NULL record (0x177530 beql → delay v0=0), bytes 0/1
+        //   (slti < 2), 0x47 exactly (beq → 0x177574 → v0=0) and [0x48..0x69]∪≥0x72 (slti ≥ 0x48
+        //   falls to 0x177574) all SKIP, and PROCEED is exactly b ∈ [2..0x46] ∪ [0x6a..0x71] — the
+        //   same predicate as `NDrone2_ObjectIsArmed` 0x178768 (`Drone::obj_armed`). The 701d
+        //   report's "NULL record or 0x47 qualifies" reading had the branch polarity inverted.
+        // - sight [M 0x177420:110-128 / 0x177640:94-115: `DroneVision_CanSeeObjectFrom` 0x176f18,
+        //   bone 5 = the head, a head-to-head `Collide_LineOfSight` whose mask is the caller's
+        //   flags | 0xa27 (NearArmedDrone passes flags 0 [M 0x177420:124])] — the port's
+        //   `segment_masked` (world.rs) carries the 0xa27 cel/material exclusions; the old raw
+        //   `world.line_of_sight` was strictly stricter and blocked the 01 escort's stairwell peer.
+        // The scan stops at 20.0: every consumer branches at 10.0 (the Lead enters), 14.0 (the hide
+        // exit) or 20.0 (the hostage sites 0x15ce60:29 / 0x15cfe0:24), so a peer beyond 20.0 can
+        // never flip any of those comparisons (min > 20 ≡ MAX at each).
+        // Without the sight gate a guard parked on the balcony 13.7 from the escort counted forever
+        // — the hide exit needs > 14.0 — and the walk's contact never reached the plate.
+        let sighted: Vec<(f32, u32)> = self.list.iter().enumerate().map(|(i, dr)| {
+            let mut best = (f32::MAX, u32::MAX);
+            for (j, o) in self.list.iter().enumerate() {
+                if j == i || o.team != 1 || !o.started || o.corpse || !o.enabled
+                    || o.health <= 0.0 || !o.obj_armed() { continue; }
+                let d2 = (o.pos[0] - dr.pos[0]).powi(2) + (o.pos[1] - dr.pos[1]).powi(2) + (o.pos[2] - dr.pos[2]).powi(2);
+                if d2 > 400.0 { continue; }
+                if d.world.segment_masked(dr.head(), o.head()).is_some() { continue; }
+                let d3 = d2.sqrt();
+                if d3 < best.0 { best = (d3, j as u32); }
+            }
+            best
         }).collect();
+        // Phase B: the latch life-cycle and the exit read.
+        // - The enter scan (`NDrone2_NearArmedDrone` 0x177420) clears Drone+0x2B8 at entry
+        //   [M 0x177420:55] and writes the found peer on a sighted hit [M 0x177420:126]; it runs
+        //   in the four AllyLead-family states' case 3 (behind the flag-1 prop-0x50 gate [M
+        //   0x177420:57-61] — which clears first anyway) and does NOT run in LEAD_HIDE, so a latch
+        //   written at a hide-enter survives while hiding.
+        // - The exit scan (`NDrone2_NotNearArmedDrone` 0x177640) reads the latch: the remembered
+        //   peer returns "near" by DISTANCE ALONE, without the sight test [M 0x177640:94-115] —
+        //   his live/armed filters still apply. That is the game's stairwell behavior: the escort
+        //   saw the peer when the hide armed, and the walls that later block the raw sight line do
+        //   not end the hide until the remembered peer is beyond 14.
+        let latched: Vec<f32> = self.list.iter().enumerate().map(|(i, dr)| {
+            let lat = dr.peer_latch as usize;
+            if lat == usize::MAX || lat >= self.list.len() { return f32::MAX; }
+            let o = &self.list[lat];
+            if o.team != 1 || !o.started || o.corpse || !o.enabled || o.health <= 0.0 || !o.obj_armed() { return f32::MAX; }
+            ((o.pos[0] - dr.pos[0]).powi(2) + (o.pos[1] - dr.pos[1]).powi(2) + (o.pos[2] - dr.pos[2]).powi(2)).sqrt()
+        }).collect();
+        for (i, dr) in self.list.iter_mut().enumerate() {
+            dr.armed_peer_dist = sighted[i].0;
+            if matches!(dr.state, state::ALLY_LEAD | state::ALLY_LEAD_WAIT | state::PLAYER_IN_WAY | state::LEAD_BOND_COMBAT) {
+                dr.peer_latch = if sighted[i].0 <= 10.0 && sighted[i].1 != u32::MAX && dr.prop(d, 0x50) { sighted[i].1 } else { u32::MAX };
+            }
+            dr.armed_peer_exit_dist = sighted[i].0.min(latched[i]);
+        }
         let peers: Vec<(usize, V3, bool)> = self.llist.iter().map(|&i| (i, self.list[i].pos, self.list[i].seen)).filter(|&(i, _, _)| self.list[i].enabled).collect();
         // NoBunching's candidate snapshot (present, enabled, non-corpse — the game's chain rides
         // +0x4F8 bits the port does not model), indexed by drone index.
@@ -11258,7 +11333,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             // `NDrone2_NearArmedDrone`'s scan (fix-actors): the nearest started, alive, hostile peer.
             // (The snapshot list was taken before the mutable borrow; the armed/started filter rides it.)
-            dr.armed_peer_dist = armed_peer_dist[index];
+            // level-01-complete-4: `armed_peer_dist`/`armed_peer_exit_dist`/`peer_latch` are assigned
+            // in the scan's phase B above — the latch must not be re-armed by the later walk.
             // `NDrone2_PreDroneControl`: the second switch (`+0x135`) with a tag (`+0x13A`): 0xC deletes the drone,
             // otherwise the alternate type's state (`+0x5A4`; Attack for these guards, *suggested*).
             if dr.second_channel != 0 && dr.second_tag != 0 && self.channels.on(dr.second_channel as u32) {
@@ -12439,6 +12515,8 @@ mod tests {
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
+            armed_peer_exit_dist: f32::MAX,
+            peer_latch: u32::MAX,
             mission_wait_channel: 0,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
