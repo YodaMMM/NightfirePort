@@ -9771,6 +9771,75 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         handle
     }
 
+    /// `GunImp_Activate` 0x132f00 (the class-0x47 arm of `Player_Activate` 0x1a5170): the imp
+    /// takes the player over — state `obj+0xf4 = 1`. The player-side bookkeeping (the 0xc
+    /// substate, cam mode 0xe, `Player_Disable`) lives in the view's step_bond, which owns Bond.
+    pub fn gunimp_activate(&mut self, i: usize) {
+        if let Some(g) = self.props.gunimps.get_mut(i) {
+            if !g.active { g.active = true; }
+        }
+    }
+
+    /// `GunImp_Update` 0x1320d8 while state 1: the mounted aim + fire. `look`/`turn` are the raw
+    /// stick axes (the game's `Input_Actionf(slot, 4/3, 1)`), `fire` action 9, `use_key` action
+    /// 0xe (the dismount). The laser round is the player's own bullet (`Bullet_init`'s owner is
+    /// the player object [M 0x1320d8:327-331]) and flies the player-bullet flight, so its class-5
+    /// contacts drain the C5 `Destroy` leaves (`Destroy_CollisionHandler` 0x12bd48).
+    pub fn gunimp_tick(&mut self, weapons: &nf_formats::weapon::WeaponData, look: f32, turn: f32, fire: bool, use_key: bool) {
+        let Some(gi) = self.props.gunimps.iter().position(|g| g.active) else { return };
+        if use_key {
+            // `Input_Action(slot, 0xe, 4)` → `GunImp_Deactivate` 0x132c18 [M 0x1320d8:119-123].
+            self.props.gunimps[gi].active = false;
+            return;
+        }
+        {
+            let g = &mut self.props.gunimps[gi];
+            // aim [M 0x1320d8:124-135]: yaw -= stick-x·FR·0.015, pitch -= stick-y·FR·0.015,
+            // pitch clamped to [−π/2, +π/4]; FRAME_RATE_MUL = 1.0 [L].
+            g.yaw -= turn * 0.015;
+            let p = g.pitch - look * 0.015;
+            g.pitch = if p < -1.5707964 { -1.5707964 } else if p > 0.7853982 { 0.7853982 } else { p };
+            // the 0.15 ease toward the smoothed mirrors [M 0x1320d8:136-161]
+            g.pitch_s += (g.pitch - g.pitch_s) * 0.15;
+            g.yaw_s += (g.yaw - g.yaw_s) * 0.15;
+            // the cooldown drains every tick regardless of state [M 0x1320d8:107-112]
+            g.cooldown -= 1.0;
+        }
+        if !fire || self.props.gunimps[gi].cooldown > 0.0 { return; }
+        let tg = &crate::gunimp::TURRET_GUNS[crate::gunimp::SP_TURRET];
+        {
+            let g = &mut self.props.gunimps[gi];
+            // the refill [M 0x1320d8:324 — `piVar2[0x25] = TurretGuns[+0x14]`], the heat [M
+            // 0x1320d8:292-298 — += 2.0 per laser shot, 200 saturates the hot byte]
+            g.cooldown = tg.interval;
+            g.heat += 2.0;
+            if g.heat > 200.0 { g.hot = true; }
+        }
+        let (muzzle, dir) = {
+            let g = &self.props.gunimps[gi];
+            (g.muzzle(), g.barrel_dir())
+        };
+        let weapon = tg.weapon;
+        let Some(w) = weapons.records.get(weapon as usize) else { return };
+        let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+        let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+        let flags6c = u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap());
+        // `Bullet_init`'s own cone draw [M 0x12c5a0:171-180 — unconditional, spread 0.0 for 0x67
+        // [L ee_start_05.bin weapon_data + 0x67·0x10c: +0x24 = 0.0, +0x68 = 0]]
+        let dir = crate::bullet::spread(dir, f(0x24), flags68, &mut self.rng);
+        let speed = f(0x20) * if flags6c & 0x200 != 0 { 0.25 } else { 1.0 };
+        // The direct `Bullet_init` — no `PlrStat_LogShotFired` (that logs inside
+        // `Player_WeaponInitBullet`'s pellet loop [M 0x1a4bf0:258], unreachable from the mount).
+        self.player_bullets.push(PlayerBullet {
+            pos: muzzle, dir, speed, travelled: 0.0, range: f(0x1c), damage: f(0x0c), weapon: weapon as u16,
+            first: true, dead: false, bounces: 0,
+            homing: flags6c & 0x2_0000 != 0, target: None,
+            gravity: flags6c & 0x8 != 0,
+            guided_cam: false, // 0x67's +0x6C is 0 [L] — the arm is inert either way
+            snd: 0, swoosh: None, born: self.frame,
+        });
+    }
+
     /// `Player_Activate` (0x1a5170): Bond's use sphere (radius 1.0 at head + 1 unit forward) activates every
     /// cel-linked object it meets. The door part calls `Door_Activate` (0x1a5310); the trigger part (class 0x1D)
     /// calls `Trigger_Activate` (0x1b2318) — routes b and c on 07000005 (the on-foot gate door and the zip-wire
