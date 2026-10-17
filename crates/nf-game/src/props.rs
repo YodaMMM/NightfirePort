@@ -62,6 +62,9 @@ pub struct Destroy {
 pub struct Props {
     pub subjects: Vec<CamSubject>,
     pub destroy: Vec<Destroy>,
+    /// The mounted-gun implementations (`GunImp_Create` 0x131f20, placement 0x34). Own line
+    /// (merge lesson 4).
+    pub gunimps: Vec<crate::gunimp::GunImp>,
 }
 
 /// One placement's target object's bounds placed by the placement transform (the game's contact
@@ -106,6 +109,14 @@ impl Props {
                 // (as f32; the tag holds a float the handler subtracts into), tag+0x16 (kind) =
                 // param 2's low byte, tag+0x08 (smash blast damage) = param 5 [M disasm].
                 0xe1 => props.destroy.push(Destroy { placement: i, lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32 }),
+                // `GunImp_Create` 0x131f20 (placement 0x34, class 0x47): the SP arm mounts the
+                // TurretGuns[0xb] hardware (the laser) [M 0x131f20:52-63]; the base transform is
+                // the placement's (0x225's rotation is identity [D]).
+                0x34 => props.gunimps.push(crate::gunimp::GunImp {
+                    placement: i, pos: p.translation, yaw_base: p.rotation[1],
+                    pitch: 0.0, yaw: 0.0, pitch_s: 0.0, yaw_s: 0.0,
+                    active: false, heat: 0.0, cooldown: 0.0, hot: false,
+                }),
                 _ => {}
             }
         }
@@ -174,6 +185,7 @@ mod tests {
             subjects: vec![CamSubject { placement: 0, lo: [4.0, 7.0, -111.0], hi: [6.0, 9.0, -109.0], channel: 0x1c, hit: false }],
             destroy: vec![Destroy { placement: 1, lo: [133.0, 4.0, -270.0], hi: [137.0, 7.0, -268.0], channel: 0x1f, health: 100.0, dead: false,
             kind: 1, blast_damage: 100.0 }],
+            gunimps: Vec::new(),
         }
     }
 

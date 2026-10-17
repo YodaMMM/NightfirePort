@@ -48,6 +48,7 @@ pub mod death;
 pub mod nav;
 pub mod nis;
 pub mod props;
+pub mod gunimp;
 pub mod pickup;
 pub mod player;
 pub mod progress;
