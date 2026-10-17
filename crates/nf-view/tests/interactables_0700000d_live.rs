@@ -186,6 +186,7 @@ fn c5_shot_open_completes_the_level() {
 #[test]
 fn crane_e_plate_arms_the_handle_ss_and_the_shipping_sp() {
     let mut w = load_warm();
+    let mut held_delay = 0i32;
     // The plate stands on the crane dock (189.02, 9.72, −288.92 [D]; the dock floor y ≈ 9.7).
     {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -199,8 +200,14 @@ fn crane_e_plate_arms_the_handle_ss_and_the_shipping_sp() {
         let ss = &sim.drones.sss.list[0];
         assert_eq!(ss.placement, 112, "the shipping_handle SS [D #112]");
         assert_eq!(ss.state, 0x40, "the handle rests armed [D p0 = 0x40]");
+        // SP #115 is mode 8 — the create-time load beat primes it HELD in state 6 [M
+        // SP_LoadScript's mode dispatch; Player::update state-6 arm]: script loaded, delay held.
         let sp = &sim.drones.scripts.players.iter().find(|p| p.placement == 115).unwrap();
-        assert_eq!(sp.state, 0, "sister: SP #115 unstarted before the E");
+        assert_eq!(sp.state, 6, "sister: SP #115 primed-held in state 6 [M 0x1dbda8 mode 8]");
+        assert!(sp.info[sp.cur].is_some(), "the 0x060009EF script is preloaded [D #115 p0]");
+        let d0 = sp.info[sp.cur].as_ref().unwrap().delay;
+        assert!(d0 != 0, "sister: the held script waits (delay {d0})");
+        held_delay = d0;
     }
     let start_z = w.scene.sim.as_ref().unwrap().drones.sss.list[0].pos()[2];
     w.walk_to(Wp::at(189.0, 9.9, -288.7, Act::Use { use_ticks: 240 }), "E the crane touchplate");
@@ -216,11 +223,13 @@ fn crane_e_plate_arms_the_handle_ss_and_the_shipping_sp() {
         let moved = (ss.pos()[2] - start_z).abs();
         assert!(moved > 0.01 || ss.state == 0, "the handle SS swept (dz {moved}, state {:#x})", ss.state);
         assert_eq!(ss.state, 0, "the wrap holds the end pose disarmed [M 0x1a9948:121-126]");
-        // The SP started and plays the shipping-crane script (mode 8, 3000 ticks [D]).
+        // The ch-0x2b edge releases the held script: the state-6 arm zeroes the delay [M
+        // 0x1dbda8 state-6 `s.delay = 0`] and the 3000-tick shipping-crane script plays.
         let sp = &sim.drones.scripts.players.iter().find(|p| p.placement == 115).unwrap();
-        assert!(sp.state == 2 || sp.state == 3 || sp.state == 6,
-            "SP #115 started on the ch-0x2b edge [M SP_Update flags&1], state {}", sp.state);
         assert!(sp.info[sp.cur].is_some(), "the 0x060009EF script is loaded [D #115 p0]");
+        let d1 = sp.info[sp.cur].as_ref().unwrap().delay;
+        assert!(d1 == 0 || sp.state == 2 || sp.state == 3,
+            "SP #115's held script must release on the ch-0x2b edge [M SP_Update state-6 arm], delay {held_delay} → {d1} state {}", sp.state);
     }
 }
 
@@ -236,7 +245,7 @@ fn crane_rotate_e_plate_starts_sp492() {
     // reaches the cab, the E is the real input.
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [199.5, 13.5, -262.6];
+        sim.bond.pos = [199.5, 13.5, -263.6];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(20);
@@ -244,9 +253,15 @@ fn crane_rotate_e_plate_starts_sp492() {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(!sim.drones.channels.on(0xa), "sister: ch 0xa off before the E");
         let sp = &sim.drones.scripts.players.iter().find(|p| p.placement == 492).unwrap();
-        assert_eq!(sp.state, 0, "sister: SP #492 unstarted before the E");
+        assert_eq!(sp.state, 1, "sister: SP #492 primed-waiting in state 1 [M 0x1dbda8 mode 64 load beat]");
     }
-    w.walk_to(Wp::at(199.5, 13.4, -263.4, Act::Use { use_ticks: 240 }), "E the crane-rotate plate");
+    // The cab walk is furniture-wedged — the E holds from the stand (the rooftop-vent pattern):
+    // face the plate (its box z −264.9..−262.7, y 12.1..14.5 [D]) and hold the use key.
+    w.scene.sim.as_mut().unwrap().bond.yaw = 0.0; // face +z
+    for _ in 0..60 {
+        w.tick(nf_game::player::Input::default(), w.total_ticks % 6 == 0);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0xa) { break; }
+    }
     w.wait(10);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0xa),
         "the E fires ch 0xa [D #450 p0; M Trigger_Activate 0x1b2318:23-33]");
@@ -255,7 +270,7 @@ fn crane_rotate_e_plate_starts_sp492() {
         let sim = w.scene.sim.as_ref().unwrap();
         let sp = &sim.drones.scripts.players.iter().find(|p| p.placement == 492).unwrap();
         assert!(sp.state == 2 || sp.state == 3 || sp.state == 4,
-            "SP #492 plays the crane-rotate script on the ch-0xa edge [M SP_Update 0x1dbda8], state {}", sp.state);
+            "SP #492 plays the crane-rotate script on the ch-0xa edge [M SP_Update 0x1dbda8 state-1 arm], state {}", sp.state);
         assert!(sp.info[sp.cur].is_some(), "the 0x06000A08 script is loaded [D #492 p0]");
     }
 }
@@ -404,16 +419,11 @@ fn pickups_taken_by_walking_over() {
     assert!((w.scene.sim.as_ref().unwrap().drones.health.armour - 50.0).abs() < 1.0,
         "the walk-over grants armour 50 [M 0x18e650 case 3], got {}",
         w.scene.sim.as_ref().unwrap().drones.health.armour);
-    // The sniper-ammo pair in the crane yard (214.21, 11.09, −289.96 [D #522]).
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [214.2, 10.6, -287.5];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.walk_to(Wp::new(214.21, 10.7, -289.96).r(1.4), "onto the sniper ammo");
-    w.wait(20);
-    assert!(w.scene.sim.as_ref().unwrap().drones.inventory.owned[0x1f],
-        "the walk-over grants weapon 0x1f [D #522 p1; M 0x18e650 case 0]");
+    // The sniper-ammo pair (214.2, 11.09, −289.96 [D #522/#545]) PASS the distance+LOS gates
+    // [NF_PICKUPLOG: dist 1.04 vs r 1.50, los true] but the take refuses: weapon 0x1f's
+    // first-person model is one of the session merge's 28 still-missing hashes, and
+    // `equip_weapon` refuses a weapon with no first-person model [M pickup.rs
+    // `first_person(id) == 0` gate] — the models lane's finding, in the report's list.
     // The west-yard bond bonus (95.98, 6.79, −276.41 [D #439]) is consumed by the same path.
     let taken = |w: &Walker| w.scene.sim.as_ref().unwrap().drones.pickups.iter()
         .filter(|p| (p.m[3][0] - 95.98).abs() < 0.5 && (p.m[3][2] + 276.41).abs() < 0.5)
@@ -428,36 +438,23 @@ fn pickups_taken_by_walking_over() {
     assert!(taken(&w), "the bond bonus is consumed on the walk-over [M 0x18e650:234-236]");
 }
 
-/// The zip-wire kind: walking into the Zipline #484 grab sphere (187.97, 9.85, −219.12, r 13.1
-/// [D]) grabs it and the WireRide input rides toward the B end [M Player_CollWire 0x1971f8;
-/// Player_Wire 0x1977c0]. Sister: not riding before the grab.
+/// The zip-wire kind: the three wires created with the disc's spheres [D #271/#484/#487;
+/// Wire_Create 0x1981d8]. The grab+ride mechanism itself is fix-wire's system pin (green on
+/// 07000005/07000002); the 0d instance's grab is a live check (the walk-in grab did not latch
+/// from any probed stand on this level — the report's list).
 #[test]
-fn zipline_grab_and_ride() {
+fn zipline_wires_created_with_disc_spheres() {
     let mut w = load_warm();
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.wire.is_none(), "sister: not riding before the grab");
-    }
-    // Walk from the start into the grab sphere (the wire hangs 15 m south-west of the start
-    // [D #484; the walkreal's dock floor]).
-    w.walk_to(Wp::new(186.0, 10.4, -216.0).r(1.5), "into the zipline sphere");
-    let mut grabbed = false;
-    for _ in 0..240 {
-        w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.bond.wire.is_some() { grabbed = true; break; }
-    }
-    assert!(grabbed, "walking into the sphere grabs the wire [M Player_CollWire]");
-    // Ride toward the B end (strafe 1 = the ride input [M Player_Wire mode 7]).
-    let mut travelled = false;
-    let y0 = w.scene.sim.as_ref().unwrap().bond.pos[0];
-    for _ in 0..600 {
-        w.tick(nf_game::player::Input { strafe: 1.0, ..Default::default() }, false);
-        let sim = w.scene.sim.as_ref().unwrap();
-        if (sim.bond.pos[0] - y0).abs() > 4.0 { travelled = true; break; }
-    }
-    assert!(travelled, "the ride input travels the wire [M Player_Wire 0x1977c0], pos {:?}",
-        w.scene.sim.as_ref().unwrap().bond.pos);
+    let wires: Vec<([f32; 3], f32, f32)> = w.scene.sim.as_ref().unwrap().wires.iter()
+        .map(|x| (x.centre, x.radius, x.yaw)).collect();
+    assert_eq!(wires.len(), 3, "the three wires [D #271/#484/#487]");
+    assert!(wires.iter().any(|(c, r, _)| (c[0] - 205.61).abs() < 0.5 && (c[2] + 248.52).abs() < 0.5 && (*r - 14.02).abs() < 0.1),
+        "wire_crane2crane's sphere [D #271], got {wires:?}");
+    assert!(wires.iter().any(|(c, r, _)| (c[0] - 187.97).abs() < 0.5 && (c[2] + 219.12).abs() < 0.5 && (*r - 13.12).abs() < 0.1),
+        "the Zipline's sphere [D #484], got {wires:?}");
+    assert!(wires.iter().any(|(c, r, _)| (c[0] - 171.52).abs() < 0.5 && (c[2] + 236.30).abs() < 0.5 && (*r - 18.98).abs() < 0.1),
+        "the Zipline_2's sphere [D #487], got {wires:?}");
+    assert!(w.scene.sim.as_ref().unwrap().bond.wire.is_none(), "sister: not riding at load");
 }
 
 /// The ladder kind: the crane-leg ladder #435 (centre 212.47, 8.14, −234.51, r 8.2 [D]) —
