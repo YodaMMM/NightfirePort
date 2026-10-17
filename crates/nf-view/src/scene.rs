@@ -2026,6 +2026,15 @@ impl Sim {
         let (mut input, trigger, reload, use_key) = if self.drones.death.active || menu_pause {
             (Default::default(), false, false, false)
         } else { (input, trigger, reload, use_key) };
+        // gunimp: while a mounted gun owns the player (`GunImp_Activate` 0x132f00 — the 0xc
+        // substate, cam mode 0xe, `Player_Disable(player, 1)`, `Player_WeaponNone`), the imp reads
+        // the raw stick and the fire action; the use key is the dismount action 0xe
+        // [M `GunImp_Update` 0x1320d8:119-131]. Bond stands — the port zeroes his input for the
+        // rest of the tick (the game's disabled player runs only the imp).
+        let (mut input, trigger, reload, use_key) = if self.drones.props.gunimps.iter().any(|g| g.active) {
+            self.drones.gunimp_tick(&self.weapons, input.look, input.turn, trigger || input.fire, use_key);
+            (Default::default(), false, false, false)
+        } else { (input, trigger, reload, use_key) };
         // fix-aim-raise: the aim BIT, not the raw button — a raise-script weapon defers it to the
         // raise's last tick. fix-aim-raise2: aim_gate owns the bit and the raise/lower advance+
         // finish (one advance); the QUEUE is the view chain's edge arm, which reads the RAW button
@@ -4066,6 +4075,26 @@ impl Sim {
                 let hit = self.drones.sss.list[i].activate(&mut ch, frame);
                 self.drones.channels = ch;
                 if hit { eprintln!("[ss] SS #{i} (placement {}) activated by the use key", self.drones.sss.list[i].placement); }
+            }
+            // `Player_Activate` 0x1a5170's class walk also reaches class 0x47 — the mounted guns
+            // (`GunImp_Create` 0x131f20, `GunImp_Activate` 0x132f00). The same head-ray reach
+            // shape as the SS arm (the game's pick is one head-ray class walk; the port's 2.2 is
+            // the SS arm's reach stand-in).
+            let mut gbest: Option<(f32, usize)> = None;
+            for (i, g) in self.drones.props.gunimps.iter().enumerate() {
+                if g.active { continue; }
+                let to = [g.pos[0] - head[0], g.pos[1] - head[1], g.pos[2] - head[2]];
+                let proj = to[0] * look[0] + to[1] * look[1] + to[2] * look[2];
+                if proj < 0.0 { continue; }
+                let cl = [head[0] + look[0] * proj, head[1] + look[1] * proj, head[2] + look[2] * proj];
+                let dd = ((g.pos[0] - cl[0]).powi(2) + (g.pos[1] - cl[1]).powi(2) + (g.pos[2] - cl[2]).powi(2)).sqrt();
+                if dd > 2.2 { continue; }
+                if gbest.map_or(true, |(bd, _)| dd < bd) { gbest = Some((dd, i)); }
+            }
+            if let Some((_, i)) = gbest {
+                let placement = self.drones.props.gunimps[i].placement;
+                self.drones.gunimp_activate(i);
+                eprintln!("[gunimp] #{i} (placement {placement}) mounted — GunImp_Activate 0x132f00");
             }
             }
         }
