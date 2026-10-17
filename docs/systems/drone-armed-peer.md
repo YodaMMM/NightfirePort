@@ -28,10 +28,11 @@ and accepts a candidate only when ALL of these hold:
 5. **The sight gate** [M 0x177420:113-128]: `NDrone2_GetHeadPos` on the seeker, then
    `DroneVision_CanSeeObjectFrom(drone, candidate, 5, head_pos, drone_cel, 0)` —
    0x176f18 builds the candidate's bone-5 (head) position and runs a head-to-head
-   `Collide_LineOfSight(0xa27)` behind an `AINetwork_TestRayCels` AI-cel pretest (the two cels'
+   `Collide_LineOfSight` whose mask is the caller's flags | **0xa27** (NearArmedDrone passes
+   flags 0 [M 0x177420:124]) behind an `AINetwork_TestRayCels` AI-cel pretest (the two cels'
    AI ray must be clear first; equal cels skip the pretest) [M 0x176f18:56-105].
-   The port's stand-in is the shared head-to-head `world.line_of_sight` (the shape the shout
-   pass already uses) — the AI-cel pretest is subsumed by the world segment test.
+   The port's stand-in is the head-to-head `world.segment_masked` (the 0xa27 mask — see the
+   next section; world.rs). The AI-cel pretest is subsumed by the world segment test.
 6. **The flag-1 prop gate** [M 0x177420:57-61]: with `flag != 0`, the SEEKER's own behaviour
    property 0x50 must be set (`behaviour_util_getProperty` 0x1c7d98 on Drone+0x4D8) — the
    callers pass flag=1 at the four AllyLead enter sites [M 0x15e698:30, 0x15eda8:30, 0x15ea28:30,
@@ -47,6 +48,26 @@ The port does not model the +0x2B8 latch (each of its snapshots recomputes the m
 peers); the walkreal 01 walk does not hit the difference — the balcony guard who parks 13.7 from
 the contact is never VISIBLE from the ground, so the sight gate alone clears the exit.
 
+## The 0xa27 sight mask
+
+Every drone-vision `Collide_LineOfSight` runs `Collide_RayIntersect` with HITTEST+0x98 = the
+caller's flags | 0xa27 [M `DroneVision_CanSeeObjectFrom` 0x176f18 — the `ori t1, t3, 0xa27` /
+`li t1, 0xa27` immediates at 0x176fec and 0x1770b0 sit directly before both calls;
+`Collide_LineOfSight` 0x1edf50 forwards arg6 | 4 as `Collide_RayIntersect` arg7 → HITTEST+0x98
+(0xa27 already carries bit 2), and 0x10 as arg8]. The mask's set bits exclude, before a hit is
+reported:
+
+- **bit 0x20**: the 0x1000-flagged nodes (the port's missile cage) [M `Collide_Pick` 0x1eb320:149-152];
+- **bit 0x800**: any surface whose material byte carries 0x40 [M `Collide_Intersect` 0x1ebaa8:301];
+- **bit 0x1**: materials 0xD and 0xE (`(mat & 0x3f) - 0xd < 2`) [M 0x1ebaa8:311];
+- **bit 0x2**: material 0x10 [M 0x1ebaa8:314];
+
+and still tests objects (bit 0x10 clear → `Collide_PickObj` runs [M 0x1eb320:314]). Bit 0x8 of
+the mask (the NODE pass-flag drop the bullet queries ride, disasm 0x1ebff0) is NOT in 0xa27 —
+the sight ray keeps node-pass-flagged hits and drops only the 0x40 MATERIAL byte. The port's
+`CollisionWorld::segment_masked` (world.rs) carries exactly these exclusions; the raw `segment`
+is strictly stricter, which is what blocked the 01 escort's stairwell peer.
+
 ## Why the sight gate matters on 07000001
 
 The meet scene wakes four ch-0xE hall guards; one (skin 0x05000036) ends the walk parked on the
@@ -55,6 +76,15 @@ balcony above the west stairwell — head-to-head LOS from the escort's ground p
 hiding at the stairwell head could not reach the > 14.0 exit (the guard sits at 3D ≈ 3.9-13.7
 through the descent) and never finished his mission route to the LoadPointActivator plate. With
 the gate he stops being a peer the moment the line blocks, exactly as the game reads it.
+
+The other side of the same coin (701d): while the escort descends the stairwell, a LIVING armed
+guard on the landing above (guard 2, ≈ 4 from the contact) must STILL count — the hide's run-to
+points walk the contact west to the AND plate (placement #180, Touch out 0x10, filter skin 0x4F
+[D triggers]) only while a peer is within 10.0. The raw `segment` blocked that head-to-head ray
+too (the stairwell geometry), so the hardened scan dropped EVERY candidate and the contact
+parked 1.8 east of the plate. The 0xa27 mask is what separates the two cases: the balcony
+guard's ray crosses real walls (mat 4 — still blocking for 0xa27), the stairwell peer's ray
+crosses the masked classes.
 
 ## The port's consumers
 
