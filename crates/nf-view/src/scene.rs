@@ -8490,7 +8490,9 @@ impl Sim {
     /// slot reads `bond`, the others `mp_bonds`), then the MP match state. An empty slot folds a
     /// sentinel so the shape is total and equal on every machine.
     pub fn net_state_hash(&self, local: usize) -> u64 {
-        if std::env::var_os("NF_NET_HASHDBG").is_some() && self.drones.frame < 18 {
+        // NF_NET_HASHDBG="a-b": dump frames a..=b (any other value: 0-17).
+        let dbg = std::env::var("NF_NET_HASHDBG").ok().map(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))).unwrap_or((0, 17)));
+        if dbg.is_some_and(|(a, b)| (a..=b).contains(&self.drones.frame)) {
             let b = |s: usize| if s == local { Some(&self.bond) } else { self.mp_bonds[s].as_ref() };
             eprintln!("[hashdbg] frame {} rng {:x}/{:x}/{} bonds {:?} mp {:?}", self.drones.frame, self.drones.rng.x, self.drones.rng.y, self.drones.rng.draws,
                 (0..2).map(|s| b(s).map(|b| (b.pos, b.yaw, b.pitch, b.substate, b.crouched))).collect::<Vec<_>>(),

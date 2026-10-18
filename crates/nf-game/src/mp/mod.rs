@@ -113,8 +113,10 @@ pub struct MpSettings {
     pub gametype_mask: u32,
     /// +0x1AC (u16): the player count (= the viewports).
     pub player_count: u16,
-    /// +0x384: the MP master enable — `MP_Start`/`MP_Update` and both placement registrations
-    /// return when it is 0 [M 0x183a50:72-74, 0x1d04f0 case 0x25].
+    /// +0x180 (Ghidra `MPSettings._384_4_` — the 384 is DECIMAL; this said +0x384 before): the MP
+    /// master enable — `MP_Start`/`MP_Update` and both placement registrations return when it is
+    /// 0 [M 0x183a50:72-74, 0x184bd0:14, 0x1d04f0 case 0x25], and `Mission_Update` returns when it
+    /// is NOT 0 [M 0x182c60:16-18].
     pub master: u32,
     /// +0x388: `MP_Start` copies the master enable here [M 0x183a50:70].
     pub master_copy: u32,

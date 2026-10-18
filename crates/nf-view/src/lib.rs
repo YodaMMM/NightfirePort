@@ -1129,6 +1129,8 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // then the bots, so the spawn picks' RNG draws keep the game's sequence.
             m.create_bots(&mut sim.drones.rng);
             eprintln!("mp: bots created: {}", m.bots.len());
+            // The SP mission machine stays off for the match [M 0x182c60:16-18 — Drones::mp_master].
+            sim.drones.mp_master = m.settings.master;
             sim.mp = Some(m);
             eprintln!("mp: arena {level_id:08x} — {spawn_count} spawn points registered, {humans} human(s), Bond at spawn {sp} ({:.2}, {:.2}, {:.2}) yaw {:.3}",
                 sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.yaw);
@@ -4571,6 +4573,10 @@ pub fn run() -> Result<()> {
         let port = args.get(i + 1).and_then(|v| v.parse::<u16>().ok()).unwrap_or(27420);
         let arena = args.get(i + 2).and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(0x0700_0023);
         let mut st = nf_game::mp::MpSettings::deathmatch(arena);
+        // The menu's default duration, 10 minutes, in the SECONDS `MPSettings+0x1a0` holds (the
+        // menu writes minutes × 0x3c [M P_MPCONFIRM]); `deathmatch()`'s raw 10 ended the demo match
+        // after 10 seconds — straight to the debriefing (the two-window check, 2026-10-18).
+        st.time_limit = 10 * 60;
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(1);
         st.seed = nanos | 1;
         app.net_armed = Some(st);
