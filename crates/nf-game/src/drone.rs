@@ -8198,6 +8198,10 @@ pub struct Drones {
     /// The world presentation FX (0x21 ripples, 0xe3 flicker, 0xd4 cloud drift, 0x4a apocalypse,
     /// 0xf2 emitters — crates/nf-game/src/world_fx.rs, fix-world-fx).
     pub fx: crate::world_fx::WorldFx,
+    /// The mines (placement 0xFE → `Mine_Create` 0x17ce28, class 0x4B; crate::worldobj::Mine —
+    /// the floating laser tripbombs, 07000015's nine `Tripbomb_3rd_*` cels). Created in
+    /// `attach_level`, ticked in `tick` (the bob + the contact explode).
+    pub mines: Vec<crate::worldobj::Mine>,
     /// The mission-progress layer (crates/nf-game/src/progress.rs, docs/systems/progress.md):
     /// `PlrMissionStats` 0x2bcc20, `BondMoments` 0x2bcde0, the `ScoringTable` runtime, the `bonus`
     /// bitmask, the `sp_level` flags and the save codec (fix-progress). The tally hooks fold the
@@ -8364,6 +8368,8 @@ impl Drones {
             worldobjs: Default::default(),
             // fix-world-fx: the presentation FX (fields on their own lines — merge lesson 4).
             fx: Default::default(),
+            // level-15-interactables: the mines (fields on their own lines — merge lesson 4).
+            mines: Vec::new(),
             pending_world_impacts: Vec::new(),
             effects: crate::effect::Effects::new(),
             casings: crate::casing::Casings::new(),
@@ -8582,6 +8588,17 @@ impl Drones {
         // The sound triggers (`SoundTrigger_Create` 0x1b2628, placement 0xF9; fix-06-alarm) —
         // 07000006's four oSoundTrigger cubes, the alarm siren among them. No RNG at create [M].
         self.sound_triggers = crate::sound::SoundTriggers::create(&level.maps[m].placements, self.difficulty);
+        // The mines (`Mine_Create` 0x17ce28, placement 0xFE; crate::worldobj::Mine) — the floating
+        // laser tripbombs. No RNG at create [M]; the contact tris come from the placement's object
+        // collision (the same resolution the doors/locks use).
+        self.mines = crate::worldobj::Mine::create(&level.maps[m].placements, |p| {
+            let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
+                else { level.maps[m].objects.get(p.index as usize) };
+            let Some(o) = obj else { return Vec::new() };
+            let Some(c) = o.collision.as_ref() else { return Vec::new() };
+            let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+            c.triangles().into_iter().map(|t| t.map(|v| nf_formats::placement::transform(&mx, v))).collect()
+        });
         let ps = &level.maps[m].placements;
         let lib = level.nis.iter().map(|(&h, n)| (h, std::sync::Arc::new(n.clone()))).collect();
         self.scripts = crate::nis::Scripts::new(lib, ps);
@@ -10557,6 +10574,31 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // stay static registration). The viewer position for the fade is `glb_viewer+0xC0` — the
         // player's eye here (headless stand-in [S]).
         let wo_viewer = [player.eye[0], player.eye[1], player.eye[2]];
+        // `Mine_Update` 0x17c930: the bob (the fixed 60 Hz clock), then the explode arm — the
+        // hit-list walk fires when the collide pass gave the mine a referenced contact. The port
+        // tests the player capsule (feet pos, 1.8 tall, r 0.55 [M Player_CollLadder]) and the
+        // present drones (the 0.4 body cylinders `Check_Target` uses) against the mine's own
+        // collision tris [M docs/atlas/object.md +0xD0]. The blast is the shared `spawn_blast`
+        // (the Explode object class 0xF's damage = param 0, radius/shake/scale = param 1, script
+        // = param 5 [M 0x17ca74-0x17cb10]; the mine's own delete — obj+0xFE |= 1 — follows).
+        let drone_bodies: Vec<(V3, V3)> = self.list.iter()
+            .filter(|dr| dr.present && !dr.corpse)
+            .map(|dr| ([dr.pos[0], dr.pos[1] - 1.0, dr.pos[2]], [dr.pos[0], dr.pos[1] + 0.8, dr.pos[2]]))
+            .collect();
+        for mi in 0..self.mines.len() {
+            let mine = &mut self.mines[mi];
+            if mine.exploded { continue; }
+            mine.bob(frame);
+            let feet = [player.pos[0], player.pos[1], player.pos[2]];
+            let head = [player.pos[0], player.pos[1] + 1.8, player.pos[2]];
+            let hit = mine.touching(feet, head, 0.55)
+                || drone_bodies.iter().any(|&(a, b)| mine.touching(a, b, 0.4));
+            if hit {
+                let (pos, radius, damage, script) = (mine.pos, mine.radius, mine.damage, mine.script);
+                self.mines[mi].exploded = true;
+                self.spawn_blast(d, pos, radius, damage, usize::MAX, 0, player.pos, frame, script, radius);
+            }
+        }
         crate::worldobj::WorldObjects::tick(
             &mut self.worldobjs, &mut self.channels, wo_viewer, d.weapons, &mut self.rng, &mut self.bullets, frame,
             &mut self.music,
