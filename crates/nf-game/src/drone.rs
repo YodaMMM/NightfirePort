@@ -8515,6 +8515,14 @@ impl Drones {
                 else { level.maps[m].objects.get(p.index as usize) };
             obj.map(|o| (o.centre, o.radius))
         });
+        // `Lock_Update` case 1 (0x1ae3d8) writes `switch_channels[u16[+8]] = 1` EVERY tick while the
+        // lock sits in state 1 (unlocked) — so the param-6 Operative create-unlock holds its out
+        // channel on from the first frame (07000011's keypad lock #177, out ch 0x12, gates the
+        // stairwell door). The port has no per-tick lock loop (the burn is event-driven), so the
+        // hold is written once here — the channels are level-latched, the state is identical.
+        for l in self.locks.iter().filter(|l| (l.unlocked || l.burned) && l.out != 0) {
+            self.channels.set(l.out as u32, 1, self.frame);
+        }
         // The grapple points (`Grapple_Create` 0x198298, placement 0x3A, class 0x51; fix-gadgets) —
         // the Q-Claw's fire targets, the same world-sphere shape as the ladders.
         self.grapple_points = crate::gadget::GrapplePoint::create(&level.maps[m].placements, |p| {
