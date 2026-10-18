@@ -1,4 +1,4 @@
-//! Scratch (not committed): print the LAN lobby list after a few seconds of scanning.
+//! Diagnostic: print the lobby list (LAN, plus the directory when NF_LOBBY_SERVER is set) after 4 s of scanning.
 fn main() {
     let mut l = nf_net::discovery::LobbyList::open(nf_net::PROTOCOL_VERSION, nf_net::DEFAULT_BUILD_ID, 42);
     let t0 = std::time::Instant::now();
