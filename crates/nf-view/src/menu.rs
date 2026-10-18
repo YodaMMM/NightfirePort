@@ -6516,6 +6516,9 @@ impl FrontEnd {
     /// save"); None with no save at all (the host then names the slot "Player N") [S].
     pub fn mp_save_name(&self) -> Option<String> {
         if let Some(n) = self.active_profile.as_ref().filter(|n| !n.trim().is_empty()) { return Some(n.clone()); }
+        // The disk scan is the game's (the app arms it at startup): tests never read the
+        // machine's real profiles.
+        if !SAVE_NAMES_FROM_DISK.load(std::sync::atomic::Ordering::Relaxed) { return None; }
         let dir = self.profile_dir.clone().or_else(crate::settings::config_dir)?;
         std::fs::read_dir(dir).ok()?
             .filter_map(|e| e.ok())
@@ -7442,7 +7445,14 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 }
             }
             plate(&mut h, 176.0, 355.0, 408.0, 52.0, gs(0x1e1210, 0x60));
-            let (rl, rarg) = fe.mp_debriefing_result();
+            let (rl, mut rarg) = fe.mp_debriefing_result();
+            // A bot winner has no codename in the settings: its name cell's caption stands in
+            // (the line read "%s wins the match." when the Guard bot won the two-window match) [S].
+            if rarg.is_empty() && rl == nf_game::mp::debrief::RESULT_WINS_LABEL {
+                if let Some(nf_game::mp::debrief::MpDebriefName::Bot(ch)) = fe.mp_debriefing.as_ref().and_then(|b| b.rows.first()).map(|r| &r.name) {
+                    rarg = nf_game::mp::MpMatch::bot_short_name_label(*ch).map(|l| bind(l)).filter(|s| !s.is_empty()).unwrap_or_else(|| "Bot".into());
+                }
+            }
             let line = if rarg.is_empty() { bind(rl) } else { bind(rl).replace("%s", &rarg) };
             centred(&mut h, font, -2, &line, mx(178.0 + 202.5), my(369.0 + 12.0), bright, true, 1.0);
             hint_bar(&mut h, font, &hint(MP_DEBRIEFING_HINT, "~A Continue  ~Y Replay"), 50.0, 419.0, cream);
@@ -9097,6 +9107,9 @@ mod secret_grid_tests {
         assert_eq!(fe.page, Page::CnMenu);
     }
 }
+
+/// The app arms the online name's profile scan (`FrontEnd::mp_save_name`) at startup.
+pub static SAVE_NAMES_FROM_DISK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// An online agent's lobby name: the codename it sent, or "Player N" by its slot when it has no
 /// profile (the host's own profile-less default is "Player 1"). nf-net's session keeps its own

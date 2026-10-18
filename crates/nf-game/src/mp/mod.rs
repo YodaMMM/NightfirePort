@@ -550,7 +550,9 @@ impl MpMatch {
             let p4 = self.spawns.points[sp].pos;
             let pos = [p4[0], p4[1], p4[2]];
             let yaw = self.spawns.points[sp].facing[1];
-            let max_hp = rec.max_hp() as f32;
+            // A record reading 0 hit points (the second INITIAL record) would make an unkillable
+            // bot at 0/0 — the port gives it 100 [S, the record's field attribution is open].
+            let max_hp = if rec.max_hp() == 0 { 100.0 } else { rec.max_hp() as f32 };
             let brain = crate::mp::bots::BotBrain::bot_init(rec, slot as u8, pos, yaw);
             let weapon = rec.preferred_weapon_class();
             self.game.slots[slot].pos = Some(pos);

@@ -376,6 +376,11 @@ pub struct Sim {
     net_rng_shared: Option<nf_game::drone::Rng>,
     /// Online combat (700v6): each human slot's health, and the ticks since its death (0 = alive).
     pub mp_hp: [f32; 4],
+    /// The bots' pickup table (`MP_PICKUP` rows the goal picker scores [M BOTSTATE_pickGoal
+    /// 0x126b88]): the arena's weapon/ammo/armour pickups, with the per-bot visit stamps the
+    /// driver mirrors from `last_visit_stamp` (blocked 704's item 1 — the driver passed none, so
+    /// a bot with nobody in sight never left its spawn).
+    pub mp_bot_pickups: Vec<nf_game::mp::bots::BotPickup>,
     pub mp_dead_ticks: [u32; 4],
     /// Each human slot's held weapon (the session's `Input::held`; the local slot reads `gun.weapon`).
     pub mp_held: [u8; 8],
@@ -7116,6 +7121,7 @@ impl Scene {
             net_rng: None,
             net_rng_shared: None,
             mp_hp: [100.0; 4],
+            mp_bot_pickups: Vec::new(),
             mp_dead_ticks: [0; 4],
             mp_held: [2; 8],
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
@@ -8525,6 +8531,11 @@ impl Scene {
 // state and the shared RNG stream — `net_state_hash` folds exactly that in a fixed slot order.
 /// mp-bots-in-match: the closest-approach parameter of the segment `a→b` to `center`, when the
 /// ray passes within `radius` (the bot shots' body hit — [S], see step_mp_bots).
+/// The bots' head above a player position (`Bond::pos` = floor + 1.1, the head `EYE` above it): a
+/// bot's `brain.pos` and every human row in its view sit at head height, so distances, sight lines
+/// and aimed rounds compare like with like [S].
+pub const BOT_EYE: f32 = nf_game::player::EYE;
+
 fn ray_body_hit(a: [f32; 3], b: [f32; 3], center: [f32; 3], radius: f32) -> Option<f32> {
     let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
@@ -8570,7 +8581,7 @@ impl Sim {
                 let health = if online { self.mp_hp[slot] } else if slot == 0 { self.drones.health.health } else { 100.0 };
                 let alive = if online { self.mp_dead_ticks[slot] == 0 && health > 0.0 } else { health > 0.0 };
                 others[slot] = nf_game::mp::bots::OtherPlayer {
-                    pos: b.pos, alive, index: slot,
+                    pos: [b.pos[0], b.pos[1] + BOT_EYE, b.pos[2]], alive, index: slot,
                     team: m.settings.players[slot].team, flags: 0, dist2: 0.0,
                     health, score: m.game.slots[slot].score,
                 };
@@ -8646,7 +8657,25 @@ impl Sim {
     pub fn step_mp_bots(&mut self) {
         if self.mp.as_ref().map_or(true, |m| m.bots.is_empty()) { return; }
         let others = self.bot_others(); // the immutable pass ends before the match is taken &mut
-        let Some(m) = self.mp.as_mut() else { return };
+        {
+            use nf_game::pickup::kind;
+            let live: Vec<([f32; 3], u16, u8)> = self.drones.pickups.iter()
+                .filter(|p| matches!(p.kind, kind::WEAPON | kind::AMMO | kind::ARMOUR))
+                .map(|p| ([p.m[3][0], p.m[3][1], p.m[3][2]], p.weapon, p.kind as u8))
+                .collect();
+            if live.len() != self.mp_bot_pickups.len() {
+                self.mp_bot_pickups = live.iter().map(|&(pos, w, c)| nf_game::mp::bots::BotPickup {
+                    pos, weapon_id: w, mp_class: c, is_obj_flag2: false, visit: [0.0; 4],
+                }).collect();
+            } else {
+                for (b, &(pos, w, c)) in self.mp_bot_pickups.iter_mut().zip(live.iter()) {
+                    b.pos = pos; b.weapon_id = w; b.mp_class = c;
+                }
+            }
+        }
+        let pickups = std::mem::take(&mut self.mp_bot_pickups);
+        let Some(m) = self.mp.as_mut() else { self.mp_bot_pickups = pickups; return };
+        let mut stamps: Vec<(usize, (usize, f32))> = Vec::new();
         let frame = self.drones.frame;
         let scenario = m.settings.scenario;
         let world = &self.world;
@@ -8666,8 +8695,9 @@ impl Sim {
                     let rec = nf_game::mp::bots::INITIAL_BOT_RECORDS[i].clone();
                     let sp = m.get_spawn_point(team, slot, &mut self.drones.rng) as usize;
                     let p4 = m.spawns.points[sp].pos;
-                    let pos = [p4[0], p4[1], p4[2]];
                     let yaw = m.spawns.points[sp].facing[1];
+                    let feet = nf_game::player::Bond::stand_at(world, [p4[0], p4[1], p4[2]], yaw).pos;
+                    let pos = [feet[0], feet[1] + BOT_EYE, feet[2]];
                     m.bots[i].brain = nf_game::mp::bots::BotBrain::bot_init(&rec, slot as u8, pos, yaw);
                     m.bots[i].health = m.bots[i].max_health;
                     m.bots[i].dead = false;
@@ -8679,13 +8709,28 @@ impl Sim {
             let health = m.bots[i].health;
             let max_health = m.bots[i].max_health;
             let my_team = m.settings.players[m.bots[i].slot].team;
+            // This bot's view of the others: the squared distance and the candidate + seen bits
+            // `find_opponent` reads (bit1|bit2 [M the CanSeeObject bit]) — the eye-to-chest line
+            // clear of the world. The driver passed every row with flags 0 / dist2 0, so no bot
+            // ever acquired anyone and they idled in 0xF9 all match (the user: "bots need to work
+            // too"; blocked 704's item 2) [S the vision cone/range stand-in: LOS only].
+            let me = m.bots[i].brain.pos;
+            let mut seen = others;
+            for o in seen.iter_mut() {
+                if !o.alive || o.index == m.bots[i].slot { continue; }
+                let d = [o.pos[0] - me[0], o.pos[1] - me[1], o.pos[2] - me[2]];
+                o.dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                let eye = me;
+                let chest = [o.pos[0], o.pos[1] - 0.4, o.pos[2]];
+                if world.segment_surface_bullet(eye, chest).is_none() { o.flags |= 0x6; }
+            }
             let ctx = nf_game::mp::bots::BotCtx {
                 now: 0.0, // the brain's own tick counter is the clock (net-lockstep F4)
                 scenario,
                 my_index: m.bots[i].slot,
                 my_team,
-                pickups: &[],
-                others: &others,
+                pickups: &pickups,
+                others: &seen,
                 world,
                 health,
                 max_health,
@@ -8693,12 +8738,24 @@ impl Sim {
             };
             let before = m.bots[i].brain.shots.len();
             m.bots[i].brain.step(&ctx, &mut self.drones.rng, true);
+            stamps.push((i, m.bots[i].brain.last_visit_stamp));
+            // The walk stays on the floor: the brain's straight-line mover moves in the plane
+            // (or straight through floors toward a goal), so the bot re-stands each tick [S].
+            {
+                let p = m.bots[i].brain.pos;
+                let feet = nf_game::player::Bond::stand_at(world, [p[0], p[1] - BOT_EYE + 0.6, p[2]], m.bots[i].brain.yaw).pos;
+                m.bots[i].brain.pos[1] = feet[1] + BOT_EYE;
+            }
             if std::env::var_os("NF_BOTLOG").is_some() && frame % 600 == 0 {
                 eprintln!("[botlog] f{} bot{} state {:#x} pending {:?} opp {:?} goals {:?} pos {:.1?} trace {}",
                     frame, i, m.bots[i].brain.state, m.bots[i].brain.trace.last(),
                     m.bots[i].brain.vars.opponent,
                     m.bots[i].brain.vars.goals.iter().map(|g| (g.active, g.goal_type, g.target)).collect::<Vec<_>>(),
                     m.bots[i].brain.pos, m.bots[i].brain.trace.len());
+                let v = &m.bots[i].brain.vars;
+                eprintln!("[botlog]   fire latch {} empty {} next {:.2} unseen {} clip {} yaw {:.2} tick {} weapon {} interval {} burst {} hp {:.0}/{:.0} deaths {}",
+                    v.fire_latch, v.burst_empty, v.next_bullet_at, v.unseen_ticks, v.clip_rounds, m.bots[i].brain.yaw, m.bots[i].brain.tick,
+                    v.weapon_id, m.bots[i].brain.weapon.interval, m.bots[i].brain.weapon.burst, m.bots[i].health, m.bots[i].max_health, m.bots[i].deaths);
             }
             let new_shots: Vec<nf_game::mp::bots::BotShot> =
                 m.bots[i].brain.shots[before..].to_vec();
@@ -8724,14 +8781,11 @@ impl Sim {
                            shot.pos[1] + shot.dir[1] * range,
                            shot.pos[2] + shot.dir[2] * range];
                 // The other bots: nearest body (radius 0.6 [S]) the ray passes within, world-clear.
-                let clear = world.segment(shot.pos, end).is_none();
                 let mut best: Option<(usize, f32)> = None;
-                if clear {
-                    for (j, b) in m.bots.iter().enumerate() {
-                        if j == i || b.dead { continue; }
-                        if let Some(t) = ray_body_hit(shot.pos, end, b.brain.pos, 0.6) {
-                            if best.map_or(true, |(_, bt)| t < bt) { best = Some((j, t)); }
-                        }
+                for (j, b) in m.bots.iter().enumerate() {
+                    if j == i || b.dead { continue; }
+                    if let Some(t) = ray_body_hit(shot.pos, end, b.brain.pos, 0.6) {
+                        if best.map_or(true, |(_, bt)| t < bt) { best = Some((j, t)); }
                     }
                 }
                 // The human: the game's damage is the bullet event chain (armour, flash, the
@@ -8747,9 +8801,23 @@ impl Sim {
                     let o = &others[h];
                     if !o.alive || o.index != h { continue; }
                     if !online && h != 0 { continue; }
-                    if let Some(t) = ray_body_hit(shot.pos, end, o.pos, 0.6) {
+                    // The human's position is the feet; the round leaves the bot at eye height
+                    // (its spawn point's floor + 1.6): the body sphere sits at the chest [S].
+                    if let Some(t) = ray_body_hit(shot.pos, end, [o.pos[0], o.pos[1] - 0.3, o.pos[2]], 0.7) {
                         if hit_human.is_none_or(|(_, bt)| t < bt) { hit_human = Some((h, t)); }
                     }
+                }
+                // One round hits one body — the nearest, bot or human — and only when the world is
+                // clear up to it. The old gate tested the whole ray out to the weapon's range
+                // (which nearly always ends in a wall), so no bot round ever hit another bot, while
+                // the human test had no wall check at all [S the bullet-route stand-in].
+                let tb = best.map_or(f32::MAX, |b| b.1);
+                let th = hit_human.map_or(f32::MAX, |h| h.1);
+                if th <= tb { best = None; } else { hit_human = None; }
+                let tt = th.min(tb);
+                if tt < f32::MAX {
+                    let p = [shot.pos[0] + (end[0] - shot.pos[0]) * tt, shot.pos[1] + (end[1] - shot.pos[1]) * tt, shot.pos[2] + (end[2] - shot.pos[2]) * tt];
+                    if world.segment(shot.pos, p).is_some() { best = None; hit_human = None; }
                 }
                 if let Some((h, _)) = hit_human {
                     let shooter = m.bots[i].slot;
@@ -8785,6 +8853,12 @@ impl Sim {
                 }
             }
         }
+        // The visit stamps the brains left (`set_pickup_visit_time`'s MP_PICKUP+0x80 write).
+        let mut pickups = pickups;
+        for (i, (idx, t)) in stamps {
+            if let Some(p) = pickups.get_mut(idx) { if i < 4 { p.visit[i] = t; } }
+        }
+        self.mp_bot_pickups = pickups;
     }
 
     // The bots' observation API (the live tests read the per-bot table through these).
@@ -8840,7 +8914,9 @@ impl Sim {
             Some((b.pos, b.yaw, s.mp_body_speed[slot]))
         } else {
             let bot = m.bots.iter().find(|b| b.slot == slot)?;
-            Some((bot.brain.pos, bot.brain.yaw, s.mp_body_speed[slot]))
+            // The bot's position is its eye (BOT_EYE above the feet); the body draws from the feet.
+            let p = bot.brain.pos;
+            Some(([p[0], p[1] - BOT_EYE, p[2]], bot.brain.yaw, s.mp_body_speed[slot]))
         }
     }
 

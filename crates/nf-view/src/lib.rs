@@ -1250,6 +1250,13 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // `BOT_init` per enabled record in slot order — the game's order is the humans FIRST,
             // then the bots, so the spawn picks' RNG draws keep the game's sequence.
             m.create_bots(&mut sim.drones.rng);
+            // The bots stand on the floor like the humans' `Bond::stand_at`: the spawn point's raw
+            // height left them floating ~4 units up, firing level over every player [S].
+            for b in m.bots.iter_mut() {
+                let feet = nf_game::player::Bond::stand_at(&sim.world, b.brain.pos, b.brain.yaw).pos;
+                b.brain.pos = [feet[0], feet[1] + scene::BOT_EYE, feet[2]];
+                m.game.slots[b.slot].pos = Some(b.brain.pos);
+            }
             eprintln!("mp: bots created: {}", m.bots.len());
             // The SP mission machine stays off for the match [M 0x182c60:16-18 — Drones::mp_master].
             sim.drones.mp_master = m.settings.master;
@@ -4887,6 +4894,7 @@ pub fn run() -> Result<()> {
     // `--hold-npcs` (dev): the window run holds every guard in place, still shootable.
     if dev && args.iter().any(|a| a == "--hold-npcs") { if let Some(sim) = scene.sim.as_mut() { sim.drones.hold_npcs = true; } }
     let force_channel = if dev { args.iter().position(|a| a == "--set-channel").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u8>().ok()) } else { None };
+    menu::SAVE_NAMES_FROM_DISK.store(true, std::sync::atomic::Ordering::Relaxed);
     let mut app = App { sound, scene, cam, gfx: None, keys: HashSet::new(), grabbed: false, trigger: false, aiming: false, last: std::time::Instant::now(), choice, anim_time: time, paused: false, opts, noclip: false, just: HashSet::new(), turn: 0.0, look: 0.0, weapon_cycle: 0, gadget_cycle: 0, weapon_switch_to: None, zoom: false, dev: dev.then(|| Box::new(dev::Dev { infinite_ammo: true, ..Default::default() })), notex, nofog, iso, pending_level: None, pending_weapon_assets: None, entry_save: None, all, recorder: None, replay: None, replay_idx: 0, prev_lock_ch: false, ticked: false, frame_ticks: 0, menu_clock: 0.0, fe_clock: 0.0, selected_difficulty: 2, zoom_cycle: 0, pending_mission_end: false, pending_mp_debrief: None, force_channel, cam_prev: None, cam_cur: None, pal_prev: None, pal_cur: None, pal_blend: Vec::new(), pal_moving: Vec::new(), fps_cap, fps_meter: FpsMeter::default(), frame_start: std::time::Instant::now(), panel: None, panel_level: 0, panel_frames: 0, fe: None, level_code: 0, fe_music_page: None, menu_handle: 0, lang: None, profile_session: menu::ProfileSession::default(), #[cfg(feature = "gamepad")] pad: pad_backend,
         movie: None, devwin: None,
         audio_paused: false, loading_art: None, loading_hint: Default::default(), menu_pointer: None,

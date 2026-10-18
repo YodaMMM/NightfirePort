@@ -762,6 +762,7 @@ pub struct BotVars {
     pub burst_empty: u8,         // Drone+0x3C
     pub clip_rounds: i16,        // `BOTWEAP_AmmoInGun` = BOT_vars+0x144 + w*0xC [M 0x12ae40]
     pub next_bullet_at: f32,     // Drone+0xBC4 (the burst deadline)
+    pub burst_done_tick: u32,    // [S] the tick the last burst emptied (the re-arm stand-in)
     pub burst_left: u32,         // Drone+0xBC0
     pub resume_state: u16,       // Drone+0x5A6 (the 0xF6 door-detour resume marker)
 }
@@ -803,6 +804,7 @@ impl Default for BotVars {
             burst_empty: 0,
             clip_rounds: 0,
             next_bullet_at: 0.0,
+            burst_done_tick: 0,
             burst_left: 0,
             resume_state: 0,
         }
@@ -900,6 +902,13 @@ impl BotBrain {
             pending: Some(state::BOT_IDLE), // the BotInit chain's SetState(0xF9) [M 0x1748c8:18],
             // committed by the first `step` (the game's PostLoad_Init → msg 1 → SetState order)
         };
+        // The spawn loadout: weapon pickups are not taken by bots yet, so a bot holding nothing
+        // (weapon 0) starts with the match's start weapon, the P2K (2), and its clip — with
+        // weapon 0 its rounds did record 0's damage (none) [S].
+        if brain.vars.weapon_id == 0 {
+            brain.vars.weapon_id = 2;
+            brain.vars.clip_rounds = 12;
+        }
         brain
     }
 
@@ -966,6 +975,9 @@ impl BotBrain {
             state::BOT_GOTO_GOAL_POSITION => self.bot_goto_goal_msg3(ctx),
             state::BOT_ATTACK => self.bot_attack_msg3(ctx, rng),
             state::BOT_ATTACK_FIRE => self.bot_attack_fire_msg3(ctx, rng),
+            state::BOT_ATTACK_RUN => self.bot_attack_run_msg3(ctx),
+            state::BOT_ATTACK_BACKOFF => self.bot_attack_backoff_msg3(ctx),
+            state::BOT_ATTACK_NO_OPPONENT => self.set_state(state::BOT_IDLE),
             _ => {}
         }
         // 3. the per-tick firing pipeline [M 0x1490f0:231 `DroneWeap_HandleFiring`]
@@ -1814,6 +1826,52 @@ impl BotBrain {
         self.route_vision_block(ctx, dist, rng); // 3C != 0 → the block [M :52]
     }
 
+    /// One straight-line step toward (`sign` 1) or away from (−1) a point, facing the opponent —
+    /// the goal walk's stand-in mover (`move_to_goal_position`) reused by the attack states [S].
+    fn attack_step(&mut self, target: [f32; 3], sign: f32) {
+        let dx = target[0] - self.pos[0];
+        let dz = target[2] - self.pos[2];
+        let d = (dx * dx + dz * dz).sqrt();
+        if d < 1e-3 { return; }
+        let mul = [0.7f32, 1.0, 1.3][(self.vars.speed as usize).min(2)];
+        let step = 0.05 * mul * sign;
+        self.pos[0] += dx / d * step;
+        self.pos[2] += dz / d * step;
+        self.yaw = crate::trig::atan2_approx(dz, dx);
+    }
+
+    /// 0xD0 BotAttackRun [M 0x16F390 — not lifted; the stand-in]: close in on the opponent, then
+    /// back to BotAttack once in engage range and in sight. Unported, the bot sat in 0xD0 forever
+    /// (the two-window bots) [S].
+    fn bot_attack_run_msg3(&mut self, ctx: &BotCtx) {
+        let Some(o) = self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive) else {
+            self.set_state(state::BOT_IDLE);
+            return;
+        };
+        let dist = o.dist2.sqrt();
+        if dist < self.vars.combat_range[1] && self.vars.unseen_ticks < 0x10 {
+            self.vars.fire_latch = 0;
+            self.set_state(state::BOT_ATTACK);
+            return;
+        }
+        if !ctx.stationary { self.attack_step(o.pos, 1.0); }
+    }
+
+    /// 0xD7 BotAttackBackoff [M 0x16FC30 — not lifted; the stand-in]: step away until past the
+    /// close range, then back to BotAttack [S].
+    fn bot_attack_backoff_msg3(&mut self, ctx: &BotCtx) {
+        let Some(o) = self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive) else {
+            self.set_state(state::BOT_IDLE);
+            return;
+        };
+        if o.dist2.sqrt() > self.vars.combat_range[0] + 1.0 || ctx.stationary {
+            self.vars.fire_latch = 0;
+            self.set_state(state::BOT_ATTACK);
+            return;
+        }
+        self.attack_step(o.pos, -1.0);
+    }
+
     /// BotAttackFire's route/vision block [M 0x16f5e8:56-93].
     fn route_vision_block(&mut self, ctx: &BotCtx, dist: f32, rng: &mut Rng) {
         if ctx.stationary {
@@ -1832,6 +1890,18 @@ impl BotBrain {
         if dist >= self.vars.combat_range[2] {
             // the chase route [M :81-93]: the port's route stand-in → run
             self.set_state(state::BOT_ATTACK_RUN);
+            return;
+        }
+        // The game leaves 0xD2 through its combat moves (strafe/step, `chooseCombatMove`), which
+        // re-enter the fire state; those are not ported, so a spent burst re-arms here after the
+        // weapon's interval [S].
+        if self.vars.burst_empty != 0 {
+            let interval = (self.weapon.interval.max(20)) as u32;
+            if self.tick.wrapping_sub(self.vars.burst_done_tick) >= interval {
+                self.vars.fire_latch = 0;
+                self.vars.burst_empty = 0;
+                self.set_state(state::BOT_ATTACK);
+            }
         }
     }
 
@@ -1876,13 +1946,31 @@ impl BotBrain {
         let Some(target) = ctx.others.get(o) else { return };
         // `BOTWEAP_WeaponHasAmmo` (0x12adb0): the port gates on clip rounds only; the ammo-pool
         // half (BotVars+0x698) is not modelled [S partial].
-        if !target.alive || self.vars.clip_rounds < 1 {
+        if !target.alive {
             return;
+        }
+        if self.vars.clip_rounds < 1 {
+            // The reload: the ammo pool (BotVars+0x698) is not modelled, so an empty clip refills
+            // from an unmodelled pool — 12, the start P2K's clip [S]. Without it a bot spawned
+            // with 0 rounds and never fired a shot (the two-window bots: clip 0 all match).
+            self.vars.clip_rounds = 12;
+            return; // the reload takes this tick
         }
         let dx = target.pos[0] - self.pos[0];
         let dz = target.pos[2] - self.pos[2];
         let d = (dx * dx + dz * dz).sqrt();
         let dir = [dx / d, 0.0, dz / d];
+        // The aim turn: the bot swings toward its opponent (≤ 0.2 rad a tick) before the cone
+        // test — nothing turned an attacking bot (only the goal walk faced its heading), so it
+        // never entered the cone and never fired (the two-window bots stood in 0xD2 all match)
+        // [S the drones' aim-turn rate is not lifted; the game's ATAN2_APPROX keeps it lockstep-
+        // exact].
+        let want = crate::trig::atan2_approx(dz, dx);
+        let pi = std::f32::consts::PI;
+        let mut delta = want - self.yaw;
+        while delta > pi { delta -= 2.0 * pi; }
+        while delta < -pi { delta += 2.0 * pi; }
+        self.yaw += delta.clamp(-0.2, 0.2);
         // the aim cone [M 0x178c48: dot > 0.9998]
         // the game's PS2Sinf/PS2Cosf (0x120700) — see the ATAN2_APPROX note above: std trig is
         // libm-dependent; the game's own approximations are not.
@@ -1891,12 +1979,18 @@ impl BotBrain {
         if dot <= 0.9998 {
             return;
         }
-        // FireWeapon [M 0x179d40→0x17a080:11]
-        self.shots.push(BotShot { tick: self.tick, pos: self.pos, dir, weapon: self.vars.weapon_id });
+        // FireWeapon [M 0x179d40→0x17a080:11] — the round aims at the target's height too (a level
+        // round passed over a player on another floor) [S the aim's vertical half].
+        let dy = target.pos[1] - 0.3 - self.pos[1];
+        let len = (d * d + dy * dy).sqrt().max(1e-6);
+        let aim = [dx / len, dy / len, dz / len];
+        let _ = dir;
+        self.shots.push(BotShot { tick: self.tick, pos: self.pos, dir: aim, weapon: self.vars.weapon_id });
         self.vars.clip_rounds -= 1;
         self.vars.burst_left -= 1;
         if self.vars.burst_left == 0 {
             self.vars.burst_empty = 1; // [M 0x17a180:63]
+            self.vars.burst_done_tick = self.tick;
             self.vars.next_bullet_at = 0.0; // the pipeline stops — Fire's only caller is the state ENTER [M]
         } else {
             self.vars.next_bullet_at += self.weapon.interval.max(0) as f32 / 60.0;
