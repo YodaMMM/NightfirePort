@@ -1460,25 +1460,37 @@ self.local = [vs / k, vf / k];
             walkable = fw;
             floor = world.segment_hit(self.pos, to);
         }
-        // The contact-distance band [M Player_FeetOnPoint 0x194188:106 `*(float *)(hit + 0xc) - 0.1
-        // <= cc`] reads HITDATA+0xC, which Intersect_RayGeom 0x10a8c8 fills with the ABSOLUTE
-        // distance |from − hit| — hit = from + t·dir (:176-179 the dir·t product and the from add;
-        // :252-256 the store to HITDATA+0x40), dir = to − from recomputed f32 [M Collide_Intersect
-        // 0x1ebaa8's 0x201 branch], and the sqrt-of-squares store :312-325 — NOT t·raylen, which is
-        // what the port multiplied here. For the upright ray the x/z deltas are exactly 0 (the
-        // endpoint's x/z equal pos), so the VU's pairwise-add collapse leaves the single y term.
-        // With the game's own B arm and ray the crouched rest grounds through the push dither with
-        // no epsilon: the rest contact (0.09999999403953552 + 0.55f32 below the root) lands 1 ulp
-        // under the band's f32 edge (0x3f266667, where `hit − 0.1f32` rounds to exactly cc), while
-        // the port's old 0.45f32 arm sat exactly ON the edge and the t·ray multiply tipped it over
-        // (probe14_ground.rs: the rest y dithered ±3 ulps and grounded flickered) [L: the crouched
-        // Bond crawls out of the 07000014 vent on PCSX2].
-        self.grounded = walkable || floor.is_some_and(|(t, _)| {
-            let d_y = to[1] - self.pos[1];
-            let hit_y = self.pos[1] + t * d_y;
-            let dy = self.pos[1] - hit_y;
-            (dy * dy).sqrt() - 0.1 <= self.cc
-        });
+        // The game's grounding arms BOTH live inside `Player_FeetOnPoint`: the contact-distance
+        // band [M Player_FeetOnPoint 0x194188:106 `*(float *)(hit + 0xc) - 0.1 <= cc`] and the
+        // ray's own hit bits — HITTEST+0x9c, OR'd per hit by `Collide_Intersect` 0x1ebaa8:390
+        // during the ray's own `Collide_RayIntersect` [M 0x194188:84-88], with the grounded store
+        // `BLData+0x60 |= 8` firing when EITHER is set [M 0x194188:183-192]. Both arms read the
+        // ONE vertical ray from obj+0x30 — a tick whose feet ray sees no ground is AIRBORNE, and
+        // no capsule contact elsewhere may ground it. The port's capsule-contact `walkable`
+        // therefore gates on the same ray: the 07000014 stairwell chute's lip held Bond grounded
+        // forever on a 0.0094-deep graze of the corridor-slab edge corner 0.41 north of him
+        // (the slab at y 0.600 pokes to z 55.858 past the threshold face at z 55.719 [D
+        // probe14_chute]) while the ray at his pos ran down an open shaft — the game's Bond
+        // falls through [D probe14_xsect's stack: no surface at (40.8, 56.27) below the duct
+        // roof]. Reads HITDATA+0xC, which Intersect_RayGeom 0x10a8c8 fills with the ABSOLUTE
+        // distance |from − hit| — hit = from + t·dir (:176-179 the dir·t product and the from
+        // add; :252-256 the store to HITDATA+0x40), dir = to − from recomputed f32 [M
+        // Collide_Intersect 0x1ebaa8's 0x201 branch], and the sqrt-of-squares store :312-325 —
+        // NOT t·raylen. For the upright ray the x/z deltas are exactly 0 (the endpoint's x/z
+        // equal pos), so the VU's pairwise-add collapse leaves the single y term. With the game's
+        // own B arm and ray the crouched rest grounds through the push dither with no epsilon:
+        // the rest contact (0.09999999403953552 + 0.55f32 below the root) lands 1 ulp under the
+        // band's f32 edge (0x3f266667, where `hit − 0.1f32` rounds to exactly cc), while the
+        // port's old 0.45f32 arm sat exactly ON the edge and the t·ray multiply tipped it over
+        // (probe14_ground.rs: the rest y dithered ±3 ulps and grounded flickered) [L: the
+        // crouched Bond crawls out of the 07000014 vent on PCSX2].
+        self.grounded = floor.is_some()
+            && (walkable || floor.is_some_and(|(t, _)| {
+                let d_y = to[1] - self.pos[1];
+                let hit_y = self.pos[1] + t * d_y;
+                let dy = self.pos[1] - hit_y;
+                (dy * dy).sqrt() - 0.1 <= self.cc
+            }));
         if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
@@ -2394,5 +2406,70 @@ mod tests {
         let mut b = Bond::new([0.0, 30.0, 0.0], 0.0);
         for _ in 0..30 { b.tick(&w, &Input::default()); }
         assert!(b.pos[1] < 30.0 - 1.0 && !b.grounded);
+    }
+
+    /// level-14-complete-2: the chute lip. The game's grounding arms BOTH read the one vertical
+    /// feet ray from obj+0x30 — the band [M Player_FeetOnPoint 0x194188:106] and the ray's hit
+    /// bits (HITTEST+0x9c, OR'd per ray hit by Collide_Intersect 0x1ebaa8:390; the grounded
+    /// store BLData+0x60 |= 8 on either [M 0x194188:183-192]). A tick whose ray sees no ground
+    /// is airborne. Geometry = the 07000014 stairwell lip [D probe14_chute/probe14_xsect]: the
+    /// threshold face at z=0 (y 0.446..1.786, normal +z) with the corridor slab (y 0.600) poking
+    /// 0.139 NORTH past it, and open shaft below. Bond crouched at z=0.551: his bottom sphere
+    /// grazes the slab's edge corner ((0, 0.600, 0.139), 0.412 away — a 0.0094-deep contact)
+    /// while the ray at his pos runs down the open shaft. The old `walkable ||` grounded him on
+    /// that graze forever; the game's Bond falls.
+    #[test]
+    fn the_chute_lip_corner_graze_cannot_ground() {
+        let q = |a: V3, b: V3, c: V3, d: V3| [[a, b, c], [a, c, d]];
+        let mut t = Vec::new();
+        // The corridor slab: top at y 0.600 (wound UP, the room() convention), north edge at
+        // z=+0.139, thickened south (the underside wound DOWN).
+        t.extend(q([-5.0, 0.600, -5.0], [-5.0, 0.600, 0.139], [5.0, 0.600, 0.139], [5.0, 0.600, -5.0]));
+        t.extend(q([-5.0, 0.300, 0.139], [-5.0, 0.300, -5.0], [5.0, 0.300, -5.0], [5.0, 0.300, 0.139]));
+        // The threshold face at z=0, y 0.446..1.786, normal +z (toward Bond, north of it).
+        t.extend(q([-5.0, 0.446, 0.0], [5.0, 0.446, 0.0], [5.0, 1.786, 0.0], [-5.0, 1.786, 0.0]));
+        let w = CollisionWorld::from_triangles(t);
+        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false };
+        // Crouched at the lip: root 1.05 over the shaft, z 0.551 (the wall push's equilibrium
+        // 0 + 0.55 + slop).
+        let mut b = Bond::new([0.0, 1.05, 0.551], 0.0);
+        b.crouched = true; // the walkreal's set_crouch
+        b.cc = CROUCH_ROOT_HEIGHT; // the toggle's store [M 0x1916b0's crouch arm]
+        for _ in 0..40 { b.tick_ctx(&w, &ctx, &Input::default()); }
+        assert!(!b.grounded, "the corner graze grounded him (pos {:?})", b.pos);
+        assert!(b.pos[1] < 0.5, "he never fell down the shaft (pos {:?})", b.pos);
+        // Sister (the control the game pins): the same slab under his column grounds him —
+        // the ray hits in band, grounded, and he stands (the old and new rules agree).
+        let mut b = Bond::new([0.0, 1.05, -1.0], 0.0);
+        b.crouched = true;
+        b.cc = CROUCH_ROOT_HEIGHT;
+        for _ in 0..40 { b.tick_ctx(&w, &ctx, &Input::default()); }
+        assert!(b.grounded, "the slab under his column did not ground (pos {:?})", b.pos);
+        assert!((b.pos[1] - (0.600 + 0.65)).abs() < 0.05, "not resting on the slab: {:?}", b.pos);
+    }
+
+    /// level-14-complete-2 control: the crouch rest holds — the 717c band arithmetic (the exact
+    /// f32 constants, no GROUND_EPS) plus the ray-gated walkable arm keep him on the floor. On a
+    /// synthetic EXACT-edge floor the band can miss by 1 ulp on separated dither ticks (the old
+    /// rule dithered identically — probe14_ground's ±3-ulps flicker), so this pins the substance:
+    /// he never sinks, never falls, and grounds on the contact ticks.
+    #[test]
+    fn the_crouched_rest_still_grounds_on_the_band() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        b.crouched = true; // the walkreal's set_crouch
+        b.cc = CROUCH_ROOT_HEIGHT;
+        for _ in 0..15 { b.tick(&w, &Input::default()); }
+        let mut grounded_ticks = 0;
+        for i in 0..40 {
+            b.tick(&w, &Input::default());
+            if b.grounded { grounded_ticks += 1; }
+            assert!(b.pos[1] > CROUCH_ROOT_HEIGHT - 0.1 && b.pos[1] < CROUCH_ROOT_HEIGHT + 0.25,
+                "the rest broke at tick {i}: {:?}", b.pos);
+        }
+        assert!(grounded_ticks >= 15, "grounded only {grounded_ticks}/40 — the rest fell");
+        // The dither parity: the OLD rule (walkable without the ray gate) dithers the same
+        // 2-tick cycle on this exact-edge floor — the control's substance is the bounds above.
+        assert!((b.pos[0]).abs() < 1e-3 && (b.pos[2]).abs() < 1e-3, "drifted: {:?}", b.pos);
     }
 }

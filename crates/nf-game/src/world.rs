@@ -435,6 +435,29 @@ impl CollisionWorld {
         out
     }
 
+    /// Probe support (level-14-complete-2): the missile-set (glist flags 0x1000) triangles whose
+    /// object's box meets `lo`..`hi` — solid to the ray queries, skipped by the actor-movement
+    /// capsule queries when HITTEST+0x98 carries bit 0x20 [M Collide_Pick 0x1eb320 disasm
+    /// 0x1eb480-0x1eb49c].
+    pub fn missile_tris_near(&self, lo: V3, hi: V3) -> Vec<[[f32; 3]; 3]> {
+        let mut out = Vec::new();
+        for o in overlapping(&self.missile, lo, hi) {
+            out.extend(self.missile.tris[o.tris.clone()].iter().copied());
+        }
+        out
+    }
+
+    /// Probe support: the dynamic set's triangles (the hashed glist movers — doors and the
+    /// scripted props) whose object's box meets `lo`..`hi`.
+    pub fn dynamic_tris_near(&self, lo: V3, hi: V3) -> Vec<[[f32; 3]; 3]> {
+        let d = self.dynamic.read().unwrap();
+        let mut out = Vec::new();
+        for o in overlapping(&d.geo, lo, hi) {
+            out.extend(d.geo.tris[o.tris.clone()].iter().copied());
+        }
+        out
+    }
+
     /// No geometry (tests).
     pub fn empty() -> CollisionWorld { Self::from_triangles(Vec::new()) }
 
