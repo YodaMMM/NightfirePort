@@ -2056,6 +2056,8 @@ struct App {
     /// Online rematch: how this machine got into the running match — (hosted, its port / the
     /// address it dialed) — handed to the debriefing so Continue returns to the online lobby.
     net_rejoin: Option<(bool, String)>,
+    /// The finished online match's session, kept open while its debriefing is up.
+    net_finished: Option<mpnet::SessionProxy>,
     /// The online match's wall clock (set when its level swaps in): the lockstep runs to
     /// `elapsed · 60` ticks, catching up after a stall instead of dropping the stalled ticks.
     net_clock: Option<std::time::Instant>,
@@ -2791,8 +2793,10 @@ impl App {
         // Online: the finished match's session closes (the next match is a fresh lobby on the
         // same port/address — the debriefing's Continue re-listens / re-dials).
         if self.net.is_some() {
-            if let Some(se) = self.net.as_mut() { se.0.borrow_mut().close(); }
-            self.net = None;
+            // The finished session stays open (polled, not ticked) while the debriefing is up:
+            // closing it here told a peer still finishing its last ticks that the host had left
+            // (the two-match check's "player 1 left" on the client). It closes when the page goes.
+            self.net_finished = self.net.take();
             self.net_lobby = None;
             self.net_menu_load = false;
             self.net_late_self = None;
@@ -3698,6 +3702,14 @@ impl ApplicationHandler for App {
                 // resolve lands in the same frame the state 6 popped.
                 self.movie_tick();
                 self.adopt_lobby_session();
+                if self.net_finished.is_some() {
+                    let on_debrief = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::MpDebriefing);
+                    if on_debrief {
+                        if let Some(s) = self.net_finished.as_ref() { s.0.borrow_mut().poll(); }
+                    } else if let Some(s) = self.net_finished.take() {
+                        s.0.borrow_mut().close();
+                    }
+                }
                 // frontend-music: the menus' own audio (the jingle pair, the credits track), the
                 // page-change transitions and the per-frame pump.
                 self.menu_music_tick();
@@ -4878,7 +4890,7 @@ pub fn run() -> Result<()> {
     let mut app = App { sound, scene, cam, gfx: None, keys: HashSet::new(), grabbed: false, trigger: false, aiming: false, last: std::time::Instant::now(), choice, anim_time: time, paused: false, opts, noclip: false, just: HashSet::new(), turn: 0.0, look: 0.0, weapon_cycle: 0, gadget_cycle: 0, weapon_switch_to: None, zoom: false, dev: dev.then(|| Box::new(dev::Dev { infinite_ammo: true, ..Default::default() })), notex, nofog, iso, pending_level: None, pending_weapon_assets: None, entry_save: None, all, recorder: None, replay: None, replay_idx: 0, prev_lock_ch: false, ticked: false, frame_ticks: 0, menu_clock: 0.0, fe_clock: 0.0, selected_difficulty: 2, zoom_cycle: 0, pending_mission_end: false, pending_mp_debrief: None, force_channel, cam_prev: None, cam_cur: None, pal_prev: None, pal_cur: None, pal_blend: Vec::new(), pal_moving: Vec::new(), fps_cap, fps_meter: FpsMeter::default(), frame_start: std::time::Instant::now(), panel: None, panel_level: 0, panel_frames: 0, fe: None, level_code: 0, fe_music_page: None, menu_handle: 0, lang: None, profile_session: menu::ProfileSession::default(), #[cfg(feature = "gamepad")] pad: pad_backend,
         movie: None, devwin: None,
         audio_paused: false, loading_art: None, loading_hint: Default::default(), menu_pointer: None,
-        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_menu_load: false, net_late_self: None, net_rejoin: None, net_clock: None, net_shot_pending: false, net_armed: None,
+        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_menu_load: false, net_late_self: None, net_rejoin: None, net_finished: None, net_clock: None, net_shot_pending: false, net_armed: None,
         net_join_pending: None, net_late_handover: None,
         async_load: None,
         music_bank_flip: false,
