@@ -445,6 +445,12 @@ pub struct Sim {
     /// `Some(true)` = the aim ray met a live guard within weapon_data+0x1c (the shot spawns and the
     /// taser beam draws), `Some(false)` = no target (no bullet, no beam), `None` = not holding fire.
     pub stunner_target: Option<bool>,
+    /// The Q-Decryptor's gate pick this tick — the lock index the use gate passed on
+    /// [M Player_WeaponFiring 0x1a5460:551-578], `None` = the gate failed (or no decryptor out).
+    pub decryptor_target: Option<usize>,
+    /// The lock the previous tick's decryptor shot scanned (the decay's skip marker —
+    /// docs/systems/decryptor.md's port model).
+    pub decryptor_scanned: Option<usize>,
     /// The laser watch's held-meter charge, 0–100 [S stand-in; M HUD_UpdateAmmoPane 0x19a7f0:160-176
     /// — the state-0xb pane reads a 0–100 value, not the clip percent; D the measured ~31/s drain].
     pub laser_charge: f32,
@@ -2046,6 +2052,18 @@ impl Sim {
         }
         self.laser_beam = None;
         self.stunner_target = None;
+        self.decryptor_target = None;
+        // The decrypt scan's decay [M Lock_Update 0x1ae3d8:327-344]: a lock in state 5 with NO
+        // contact bullet loses 4/tick (at 0 the scan resets). The port's scan contact runs on the
+        // shot tick (the fire block below), so the locks not scanned in the PREVIOUS tick decay
+        // here — one-tick-late at the release edge [S].
+        let scanned_prev = self.decryptor_scanned.take();
+        for (i, l) in self.drones.locks.iter_mut().enumerate() {
+            if l.scanning && scanned_prev != Some(i) {
+                let ch = &mut self.drones.channels;
+                l.decrypt_tick(0, false, ch, self.drones.frame);
+            }
+        }
         self.smoke.retain(|s| !s.dead());
         let (trigger, reload) = if self.disabled { input = Default::default(); (false, false) } else { (trigger, reload) };
         // fix-death-restart: a dead Bond gets no input — `Player_Update` 0x193600 runs only the anim
@@ -3689,6 +3707,42 @@ impl Sim {
             }
             if release {
                 'shot: {
+                // The Q-Decryptor's use tick [M Player_WeaponFiring 0x1a5460:551-578]: the gate runs
+                // BEFORE `Player_RoundToFire` — the aim target (the 50-unit crosshair ray's first
+                // hit, `Check_Target` 0x1a7810) must be a lock (type 0x3a) of record kind 0/2 in
+                // state 0/5, within the weapon's own `weapon_data+0x1C` (2.0/4.0 [L]); else the
+                // function returns and the decryptor does NOTHING — the playtest 1017 symptom. On
+                // the pass the shot runs (the scan bullet, class 5 [M Bullet_init 0x12c5a0:87]) and
+                // `Lock_Update`'s contact scan decodes (docs/systems/decryptor.md). The port's
+                // stand-in: the pick below, then one +1/+3 scan tick [S — one contact bullet; the
+                // game's count varies with the bullet lifetime]. The spend `update_with` already
+                // made is refunded on a FAILED gate (the game never reaches the spend; the refund is
+                // the stunner's miss-arm shape [M 0x1a4bf0:193-199]). No bullet spawns: the record
+                // carries no beam bits (+0x6C = 0 [L]) and the lock side consumes the pulse.
+                if nf_game::gadget::is_decryptor(self.gun.weapon) {
+                    let range = self.weapons.records.get(self.gun.weapon as usize).map_or(2.0, |r| f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap()));
+                    let upgraded = self.gun.weapon == 0x57;
+                    let root = self.bond.pos;
+                    // Check_Target's ray is the VIEW matrix's dir, not the fired bullet's aim point —
+                    // no auto-aim offsets ride on it [M 0x1a7810:117-121 Mat_GetDir of the head
+                    // matrix vs Player_GetAimingPoint's offsets in the bullet path].
+                    let vdir = self.bond.look();
+                    let pick = nf_game::gadget::pick_decryptor_lock(camera, vdir, root, &self.drones.locks, &self.world, range);
+                    match pick {
+                        Some(i) => {
+                            let frame = self.drones.frame + 1;
+                            self.drones.locks[i].decrypt_tick(1, upgraded, &mut self.drones.channels, frame);
+                            self.decryptor_scanned = Some(i);
+                            self.decryptor_target = Some(i);
+                        }
+                        None => {
+                            let clip_size = self.weapons.clip_size(self.gun.weapon as usize).max(1) as u32;
+                            let spend = u32::from(self.weapons.records.get(self.gun.weapon as usize).map_or(1u8, |r| r[0x91]).max(1));
+                            self.gun.clip = (self.gun.clip + spend).min(clip_size);
+                        }
+                    }
+                    break 'shot;
+                }
                 // `Player_WeaponInitBullet` 0x1a4bf0's FIRST branch [M disasm 0x1a4c30-0x1a4cd4]: a record
                 // whose +0x68 carries 0x20000 — the Remote Mine's detonator 0x38 (+0x68 = 0x00020010
                 // [L ee_start_05.bin]; the mine 0x37 = 0x00014090 lacks the bit; 0x39 is the inert
@@ -4528,6 +4582,16 @@ impl Sim {
     /// The crosshair state (`HUD_UpdateCrossHair` 0x19e6d0 reads BLData+0x133): 2 normal, 3 = the red
     /// "no" mark on a non-enemy target (`Check_Target` 0x1a7810:181-182). fix-player2.
     pub fn crosshair_state(&self) -> u8 { self.cross_state }
+
+    /// The decryptor's scan state for the draw code (the watch face, `Player_WeaponFiring`
+    /// 0x1a5460:155-194): the scanning lock's index, progress (`obj+0xf6`, the +1/+3 accumulator)
+    /// and solved digit count (`DAT_002a37e3`) — `None` when no scan runs. The unsolved digits'
+    /// randomization is the game's `Rand_Rand(10)` cosmetic [M 0x1ae3d8:351-363] — the port does
+    /// not draw it (no RNG draws added; the main agent's render compares against PCSX2).
+    pub fn decryptor_scan(&self) -> Option<(usize, u32, u8)> {
+        self.drones.locks.iter().position(|l| l.scanning)
+            .map(|i| (i, self.drones.locks[i].scan_progress, self.drones.locks[i].scan_solved))
+    }
 
     /// The held weapon's laser sight this tick — the getter the draw code reads. The tuple is
     /// (beam start = the FP model's bone-4 sight datum, beam end = the aim-trace hit or the far
@@ -6816,7 +6880,7 @@ impl Scene {
             // pass 1 and the front-end path passes the menu's pick.
             Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [None, None, None, None],
-                wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, laser_charge: 100.0, missile_cam: None,
+                wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
                 prev_aiming: false,
