@@ -165,13 +165,20 @@ impl LobbyState {
         let rest = buf.strip_prefix(&LOBBY_STATE_MAGIC)?;
         if rest.first() != Some(&1) { return None; }
         let mut off = LOBBY_STATE_MAGIC.len() + 1; // offsets index the full buffer
-        let mut u32s = [0u32; 5 + PLAYER_MODS + ENVIROMODS];
-        for slot in u32s.iter_mut() {
-            *slot = get_u32(buf, off)?;
-            off += 4;
-        }
+        let scenario = get_u32(buf, off)?; off += 4;
+        let level = get_u32(buf, off)?; off += 4;
+        let weapon_set = get_u32(buf, off)?; off += 4;
+        let radar = get_u32(buf, off)?; off += 4;
+        let friendly_fire = get_u32(buf, off)?; off += 4;
         let frag_limit = get_i32(buf, off)?; off += 4;
         let time_limit = get_i32(buf, off)?; off += 4;
+        let m0 = get_u32(buf, off)?; off += 4;
+        let m1 = get_u32(buf, off)?; off += 4;
+        let e0 = get_u32(buf, off)?; off += 4;
+        let e1 = get_u32(buf, off)?; off += 4;
+        let e2 = get_u32(buf, off)?; off += 4;
+        let e3 = get_u32(buf, off)?; off += 4;
+        let e4 = get_u32(buf, off)?; off += 4;
         let mut bots = [LobbyBot {
             enabled: false, team_mi6: false, character: 0, skill: 0, aim: 0, hit_points: 0,
             speed: 0, recovery1: 0, recovery2: 0, trait_id: 0,
@@ -210,7 +217,6 @@ impl LobbyState {
             p.codename = get_codename(buf, off)?; off += CODENAME_WIRE;
         }
         if off != buf.len() { return None; }
-        let [scenario, level, weapon_set, radar, friendly_fire, m0, m1, e0, e1, e2, e3, e4] = u32s;
         Some(LobbyState {
             scenario, level, weapon_set, radar, friendly_fire, frag_limit, time_limit,
             player_mods: [m0, m1], envmods: [e0, e1, e2, e3, e4], bots, players,
