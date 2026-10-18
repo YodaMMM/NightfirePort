@@ -1441,7 +1441,13 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
 
 async fn device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
     let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: surface, ..Default::default() }).await?;
-    let (device, queue) = adapter.request_device(&Default::default()).await?;
+    // batch-draws: the bindless texture array + per-draw first_instance the batched world pass needs
+    // (gpu.rs `Batch`); requested only where the adapter has them — the per-draw path is the fallback.
+    let want = wgpu::Features::TEXTURE_BINDING_ARRAY
+        | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
+        | wgpu::Features::INDIRECT_FIRST_INSTANCE;
+    let desc = wgpu::DeviceDescriptor { required_features: adapter.features() & want, required_limits: adapter.limits(), ..Default::default() };
+    let (device, queue) = adapter.request_device(&desc).await?;
     Ok((adapter, device, queue))
 }
 
@@ -1692,7 +1698,8 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     // The doors' `Door_IsClosed` snapshot for the walk's portal gate (fix-door-portal-links).
     let door_closed = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, scene.sim.as_ref().map(|s| &s.world), door_closed.as_deref());
-    r.update_skin(&queue, scene, choice, time, opts, vis_shot.as_deref());
+    // cull-relax: objects are never room-culled (see the live path).
+    r.update_skin(&queue, scene, choice, time, opts, None);
     r.set_char_light_centres(scene);
     r.lights = scene.frame_lights();
     r.screen_aspect = w as f32 / h as f32;
@@ -1710,7 +1717,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
         let ms = |a: std::time::Instant, b: std::time::Instant| (b - a).as_secs_f64() * 1000.0 / n as f64;
         eprintln!("[bench] {} char vertices: animate {:.2} ms, posed_vertices (incl. animate) {:.2} ms, upload {:.2} ms", v.len(), ms(t0, t1), ms(t1, t2), ms(t2, t3));
         let t4 = std::time::Instant::now();
-        for _ in 0..n { r.update_skin(&queue, scene, choice, time, opts, vis_shot.as_deref()); }
+        for _ in 0..n { r.update_skin(&queue, scene, choice, time, opts, None); }
         queue.submit([]); let _ = device.poll(wgpu::PollType::wait_indefinitely());
         eprintln!("[bench] GPU path: palette build + upload {:.2} ms", ms(t4, std::time::Instant::now()));
     }
@@ -3872,7 +3879,11 @@ impl ApplicationHandler for App {
                 // G-043: build the palette only when a tick ran, then draw between the last two ticks.
                 let pal_rebuilt = self.ticked || self.pal_cur.is_none();
                 if pal_rebuilt {
-                    let new = self.scene.skin_palette(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, vis.as_deref());
+                    // cull-relax: characters, doors, pickups and props are never room-culled — the
+                    // mask's misses (a guard in a doorway, an object between areas) vanished whole
+                    // objects in the user's playtest; they are few and the depth test hides the ones
+                    // behind walls. The World draws keep the (widened) room cull in render().
+                    let new = self.scene.skin_palette(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None);
                     g.renderer.char_light_centre = self.scene.char_light_centres();
                     self.pal_prev = self.pal_cur.take();
                     // perf-240: the entries that move between the two ticks, and the blend buffer seeded
