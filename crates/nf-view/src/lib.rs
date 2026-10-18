@@ -390,6 +390,53 @@ pub fn load_mp_carry(iso: &str, archive: &str, all: bool, save: Option<&nf_game:
     load_impl(iso, archive, all, save, false, &[], true, Some(settings), 1)
 }
 
+/// mp-join-in-progress: the late joiner's headless fast-forward. Loads the
+/// level from the host's handover settings (the same `load_mp_carry` path a
+/// match start uses), replays the host's recorded run log tick by tick with
+/// the net tick's driver shape (`Sim::step_net_remotes` + the local
+/// `Bond::tick_ctx` + `set_slot` — the movement core every machine ticks),
+/// and returns the scene plus the state hash at the last replayed tick. The
+/// app compares that hash against the handover's `snapshot_hash` before
+/// `NetCore::confirm_late_join` — a mismatch refuses the join
+/// (`NetCore::late_join_verify_failed`). The returned scene IS the joiner's
+/// live sim from the snapshot onward: it keeps ticking through the announced
+/// join tick (the spawn via `Sim::mp_join_spawn`, its own slot's inputs) as
+/// normal net ticks. Wall-clock measurement of the catch-up belongs to the
+/// CALLER (the determinism rule keeps timers out of the Sim).
+pub fn mp_late_join_catchup(
+    iso: &str,
+    settings: nf_game::mp::MpSettings,
+    log: &[[nf_net::Input; 4]],
+    replay_ticks: u32,
+) -> Result<(scene::Scene, u64), String> {
+    let arena = format!("{:08x}.bin", settings.level_code);
+    let mut scene = load_mp_carry(iso, &arena, false, None, settings)
+        .map_err(|e| format!("late join: the arena load failed: {e}"))?;
+    let sim = scene.sim.as_mut().ok_or("late join: the scene has no sim")?;
+    let mut prev = 0u64;
+    for (i, row) in log.iter().enumerate() {
+        let tick = i as u32;
+        if tick > replay_ticks {
+            break;
+        }
+        let inputs = std::array::from_fn(|s| mpnet::to_player_input(&row[s]));
+        sim.step_net_remotes(&inputs, 0);
+        let ladder = nf_game::player::LadderCtx::default();
+        let inp = inputs[0];
+        sim.bond.tick_ctx(&sim.world, &ladder, &inp);
+        if let Some(m) = sim.mp.as_mut() {
+            m.set_slot(0, sim.bond.pos);
+            for sl in 1..4 {
+                if let Some(b) = &sim.mp_bonds[sl] {
+                    m.set_slot(sl, b.pos);
+                }
+            }
+        }
+        prev = sim.net_state_hash(0);
+    }
+    Ok((scene, prev))
+}
+
 /// `--dev`: the same load with the dev view-model merge (folded 190-fix-dev2). Normal play never
 /// passes `dev = true`, so no extra archive is opened without the flag.
 pub fn load_dev(iso: &str, archive: &str, all: bool) -> Result<scene::Scene> {
@@ -1926,6 +1973,14 @@ struct App {
     net_lobby: Option<mpnet::SessionProxy>,
     /// This machine's slot in the online match (the host is 0; a client's arrives in WELCOME).
     net_local_slot: usize,
+    /// mp-join-in-progress: the announced join (slot, tick) — the app spawns
+    /// the slot's agent at that tick (`Sim::mp_join_spawn`) on every machine.
+    net_join_pending: Option<(u8, u32)>,
+    /// mp-join-in-progress: the joiner's completed handover (the settings,
+    /// the snapshot tick + hash and the recorded log) — the app replays it
+    /// (`mp_late_join_catchup`) and confirms or refuses. The draw code reads
+    /// this for the joining-in-progress page.
+    net_late_handover: Option<(Box<nf_game::mp::MpSettings>, u32, u64, Vec<[nf_net::Input; 4]>)>,
     /// The next sim tick of the online match (the lockstep counter; render interpolation is
     /// unchanged — `ticked` still marks the frames that advanced it).
     net_tick: u32,
@@ -2309,6 +2364,8 @@ impl App {
         self.net = None;
         self.net_lobby = None;
         self.net_armed = None;
+        self.net_join_pending = None;
+        self.net_late_handover = None;
         let fe = self.fe.get_or_insert_with(menu::FrontEnd::new);
         // settings-persist: a freshly minted front end (fe was None) boots the option file's
         // values, not the bare defaults — the pause page's options tabs show what the user set.
@@ -3713,6 +3770,49 @@ impl ApplicationHandler for App {
                             mpnet::CoreEvent::HostTimeout => {
                                 self.net_fail("The host went away\nReturning to the lobby");
                             }
+                            mpnet::CoreEvent::LateJoinStarted { slot } => {
+                                // The match runs on untouched; the draw code may show
+                                // "player joining" from this.
+                                eprintln!("[net] late join: serving the run log to slot {slot}");
+                            }
+                            mpnet::CoreEvent::LateJoinHandover { slot, settings, snapshot_tick, snapshot_hash, log } => {
+                                // The joiner's handover: the app replays the log headless
+                                // (`mp_late_join_catchup`), compares the hash, then confirms
+                                // or refuses. The replay is seconds of sim — the flag path
+                                // runs it inline here (the draw code may thread it later);
+                                // the main agent's joining page owns the pacing.
+                                eprintln!("[net] late join: slot {slot} handover, replaying {} ticks from the host's log", snapshot_tick + 1);
+                                match crate::mp_late_join_catchup(&self.iso, *settings.clone(), &log, snapshot_tick) {
+                                    Ok((scene, hash)) => {
+                                        if hash == snapshot_hash {
+                                            eprintln!("[net] late join: replay verified at tick {snapshot_tick}");
+                                            self.scene = scene;
+                                            self.net_tick = snapshot_tick + 1;
+                                            self.net_local_slot = slot as usize;
+                                            if let Some(s) = self.net.as_mut() { s.0.borrow_mut().confirm_late_join(); }
+                                        } else {
+                                            eprintln!("[net] late join: replay hash mismatch at tick {snapshot_tick} — refusing");
+                                            if let Some(s) = self.net.as_mut() { s.0.borrow_mut().late_join_verify_failed(); }
+                                            self.net_fail("The join could not be verified against the match state");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("[net] late join: replay failed: {e}");
+                                        if let Some(s) = self.net.as_mut() { s.0.borrow_mut().late_join_verify_failed(); }
+                                        self.net_fail(&format!("The join failed: {e}"));
+                                    }
+                                }
+                                let _ = &snapshot_hash; // (the comparison used the replay's hash)
+                                self.net_late_handover = Some((settings, snapshot_tick, snapshot_hash, log));
+                            }
+                            mpnet::CoreEvent::LateJoinSlot { slot, join_tick } => {
+                                // Every machine arms the slot at the announced tick: the
+                                // spawn runs inside the net tick (the shared-stream draw is
+                                // part of the deterministic tick), the joiner's own view
+                                // adopts the slot there.
+                                eprintln!("[net] late join: slot {slot} arms at tick {join_tick}");
+                                self.net_join_pending = Some((slot, join_tick));
+                            }
                     }
                 }
                 let menu_hold = self.paused || self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::Pause);
@@ -3916,6 +4016,23 @@ impl ApplicationHandler for App {
                                 // borrowed" — latent until the lockstep fix let a tick run).
                                 let ready = session.0.borrow_mut().ready_inputs(self.net_tick);
                                 if let Some(net_inputs) = ready {
+                                    // mp-join-in-progress: the host records the exact transcript
+                                    // a late joiner replays (bit-exact by construction).
+                                    session.0.borrow_mut().record_run_tick(self.net_tick, net_inputs);
+                                    // mp-join-in-progress: the announced join spawn — every
+                                    // machine creates the slot's agent at the same tick (the
+                                    // shared-stream pick is part of this deterministic tick);
+                                    // the joiner's own view adopts the slot (the camera and
+                                    // the full local path tick it from here on).
+                                    if let Some((js, jt)) = self.net_join_pending {
+                                        if self.net_tick == jt {
+                                            sim.mp_join_spawn(js as usize);
+                                            if js as usize == slot {
+                                                sim.swap_local_slot(slot);
+                                            }
+                                            self.net_join_pending = None;
+                                        }
+                                    }
                                     let inputs = net_inputs.map(|i| mpnet::to_player_input(&i));
                                     sim.step_net_remotes(&inputs, slot);
                                     sim.step_net_combat(&net_inputs, slot);
@@ -4622,6 +4739,7 @@ pub fn run() -> Result<()> {
         movie: None, devwin: None,
         audio_paused: false, loading_art: None, loading_hint: Default::default(), menu_pointer: None,
         net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_clock: None, net_shot_pending: false, net_armed: None,
+        net_join_pending: None, net_late_handover: None,
         async_load: None,
         music_bank_flip: false,
         music_loaded_bank: 0xc,

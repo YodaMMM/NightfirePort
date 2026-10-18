@@ -18,6 +18,11 @@
 //! | 8 | SLOTMAP | human_slots bitmask u8, rsv 3B |
 //! | 9 | GO (host→client) | first_tick u32 |
 //! | 10 | DATA (app tunnel) | len u16 + bytes — opaque app-to-app blob (the lobby's choices); the session never inspects it |
+//! | 11 | JOIN_BEGIN (host→late joiner) | first_tick u32, snapshot_tick u32, snapshot_hash u64 — the late-join handover head: the input log covers `first_tick..snapshot_tick` and the replay must hash to `snapshot_hash` at `snapshot_tick` |
+//! | 12 | JOIN_LOG (host→late joiner) | first_tick u32, tick_count u8, chunk_index u16, chunk_count u16, tick_count × (4 × 24 B inputs) — one chunk of the recorded run log |
+//! | 13 | JOIN_ACK (late joiner→host) | chunk_index u16 — all chunks ≤ chunk_index are held |
+//! | 14 | JOIN_READY (late joiner→host) | — the replay verified (hash matched) and the joiner is caught up; the host picks the join tick |
+//! | 15 | JOIN_SLOT (host→all) | slot u8, join_tick u32 — the slot becomes human from join_tick (its inputs start there; before it the slot rides NEUTRAL) |
 //!
 //! INPUT `agent_mask` bit i = slot i has an input in each tick run; inputs
 //! are stored per tick in ascending slot order. The ack fields acknowledge
@@ -27,7 +32,7 @@
 
 use crate::input::{Input, INPUT_WIRE_SIZE};
 use crate::settings::{MatchSettings, SETTINGS_WIRE_SIZE};
-use crate::{MAGIC, MAX_PACKET, PROTOCOL_VERSION};
+use crate::{MAGIC, MAX_AGENTS, MAX_PACKET, PROTOCOL_VERSION};
 
 pub const PT_HELLO: u8 = 1;
 pub const PT_WELCOME: u8 = 2;
@@ -39,6 +44,15 @@ pub const PT_LEAVE: u8 = 7;
 pub const PT_SLOTMAP: u8 = 8;
 pub const PT_GO: u8 = 9;
 pub const PT_DATA: u8 = 10;
+pub const PT_JOIN_BEGIN: u8 = 11;
+pub const PT_JOIN_LOG: u8 = 12;
+pub const PT_JOIN_ACK: u8 = 13;
+pub const PT_JOIN_READY: u8 = 14;
+pub const PT_JOIN_SLOT: u8 = 15;
+
+/// Ticks one JOIN_LOG chunk carries (4 slots × 24 B × 12 = 1152 B — fits
+/// [`MAX_PACKET`] with header room).
+pub const JOIN_LOG_CHUNK_TICKS: usize = 12;
 
 /// codename field width on the wire (nul-padded).
 pub const CODENAME_WIRE: usize = 32;
@@ -100,6 +114,32 @@ pub enum Packet {
     /// `Event::Data` untouched.
     Data {
         bytes: Vec<u8>,
+    },
+    /// Host → late joiner: the handover head (see the module table).
+    JoinBegin {
+        first_tick: u32,
+        snapshot_tick: u32,
+        snapshot_hash: u64,
+    },
+    /// Host → late joiner: one chunk of the recorded run log
+    /// (`tick_count × MAX_AGENTS` inputs, tick-major, slot-ascending).
+    JoinLog {
+        first_tick: u32,
+        tick_count: u8,
+        chunk_index: u16,
+        chunk_count: u16,
+        inputs: Vec<Input>,
+    },
+    /// Late joiner → host: chunks ≤ `chunk_index` are held.
+    JoinAck {
+        chunk_index: u16,
+    },
+    /// Late joiner → host: the replay verified and the joiner is caught up.
+    JoinReady {},
+    /// Host → all: `slot` becomes human from `join_tick` (inputs start there).
+    JoinSlot {
+        slot: u8,
+        join_tick: u32,
     },
 }
 
@@ -202,6 +242,41 @@ pub fn encode(p: &Packet, out: &mut Vec<u8>) {
             out.push(0);
             out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
             out.extend_from_slice(bytes);
+        }
+        Packet::JoinBegin { first_tick, snapshot_tick, snapshot_hash } => {
+            out.push(PT_JOIN_BEGIN);
+            out.push(0);
+            out.extend_from_slice(&first_tick.to_le_bytes());
+            out.extend_from_slice(&snapshot_tick.to_le_bytes());
+            out.extend_from_slice(&snapshot_hash.to_le_bytes());
+        }
+        Packet::JoinLog { first_tick, tick_count, chunk_index, chunk_count, inputs } => {
+            out.push(PT_JOIN_LOG);
+            out.push(0);
+            out.extend_from_slice(&first_tick.to_le_bytes());
+            out.push(*tick_count);
+            out.extend_from_slice(&chunk_index.to_le_bytes());
+            out.extend_from_slice(&chunk_count.to_le_bytes());
+            for inp in inputs {
+                let mut b = [0u8; INPUT_WIRE_SIZE];
+                inp.encode(&mut b, 0);
+                out.extend_from_slice(&b);
+            }
+        }
+        Packet::JoinAck { chunk_index } => {
+            out.push(PT_JOIN_ACK);
+            out.push(0);
+            out.extend_from_slice(&chunk_index.to_le_bytes());
+        }
+        Packet::JoinReady {} => {
+            out.push(PT_JOIN_READY);
+            out.push(0);
+        }
+        Packet::JoinSlot { slot, join_tick } => {
+            out.push(PT_JOIN_SLOT);
+            out.push(0);
+            out.push(*slot);
+            out.extend_from_slice(&join_tick.to_le_bytes());
         }
     }
 }
@@ -332,6 +407,55 @@ pub fn decode(buf: &[u8]) -> Option<Packet> {
                 return None;
             }
             Some(Packet::Data { bytes: body[2..2 + n].to_vec() })
+        }
+        PT_JOIN_BEGIN => {
+            if body.len() < 16 {
+                return None;
+            }
+            Some(Packet::JoinBegin {
+                first_tick: u32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                snapshot_tick: u32::from_le_bytes([body[4], body[5], body[6], body[7]]),
+                snapshot_hash: u64::from_le_bytes([
+                    body[8], body[9], body[10], body[11], body[12], body[13], body[14], body[15],
+                ]),
+            })
+        }
+        PT_JOIN_LOG => {
+            if body.len() < 11 {
+                return None;
+            }
+            let first_tick = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+            let tick_count = body[4] as usize;
+            let chunk_index = u16::from_le_bytes([body[5], body[6]]);
+            let chunk_count = u16::from_le_bytes([body[7], body[8]]);
+            if tick_count == 0 || tick_count > JOIN_LOG_CHUNK_TICKS {
+                return None;
+            }
+            let need = 9 + tick_count * MAX_AGENTS * INPUT_WIRE_SIZE;
+            if body.len() < need {
+                return None;
+            }
+            let mut inputs = Vec::with_capacity(tick_count * MAX_AGENTS);
+            for i in 0..tick_count * MAX_AGENTS {
+                inputs.push(Input::decode(body, 9 + i * INPUT_WIRE_SIZE)?);
+            }
+            Some(Packet::JoinLog { first_tick, tick_count: tick_count as u8, chunk_index, chunk_count, inputs })
+        }
+        PT_JOIN_ACK => {
+            if body.len() < 2 {
+                return None;
+            }
+            Some(Packet::JoinAck { chunk_index: u16::from_le_bytes([body[0], body[1]]) })
+        }
+        PT_JOIN_READY => Some(Packet::JoinReady {}),
+        PT_JOIN_SLOT => {
+            if body.len() < 5 {
+                return None;
+            }
+            Some(Packet::JoinSlot {
+                slot: body[0],
+                join_tick: u32::from_le_bytes([body[1], body[2], body[3], body[4]]),
+            })
         }
         _ => None,
     }

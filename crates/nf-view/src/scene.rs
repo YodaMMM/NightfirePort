@@ -8828,6 +8828,31 @@ impl Sim {
         self.drones.health.health = self.mp_hp[local];
     }
 
+    /// mp-join-in-progress: create the late joiner's agent at the announced join tick — the
+    /// game's own MP create shape, run on EVERY machine at the same tick (the shared stream's
+    /// spawn pick is part of the deterministic tick): `MP_GetSpawnPoint(team, NULL)` before
+    /// `Player_Init(slot, pos, facing, …)` [M 0x183a50:120-127; `Player_Init` 0x1910f8 refuses
+    /// only an occupied slot and creates the obj — a free slot mid-match is the game's own
+    /// path; `MP_ReSpawn` 0x185368 only re-positions an EXISTING obj]. The port's `Player_Init`
+    /// shape is the load's spawn loop (`Bond::stand_at`, lib.rs) — one new slot of it here.
+    /// A slot that already holds a body (a dropped peer's agent, `DropPolicy::Neutral`) is a
+    /// RECONNECT: no spawn, the real input just resumes. Returns whether a body was created.
+    pub fn mp_join_spawn(&mut self, slot: usize) -> bool {
+        if slot == 0 || slot >= 4 { return false; }
+        if self.mp_bonds[slot].is_some() { return false; }
+        let Some(m) = self.mp.as_mut() else { return false };
+        let team = m.settings.players[slot].team as u16;
+        let sp = m.get_spawn_point(team, slot, &mut self.drones.rng) as usize;
+        let ent = m.spawns.points[sp];
+        let b = nf_game::player::Bond::stand_at(&self.world, [ent.pos[0], ent.pos[1], ent.pos[2]], ent.facing[1]);
+        m.set_slot(slot, b.pos);
+        self.mp_bonds[slot] = Some(b);
+        // The online combat's per-slot state starts fresh for the new agent (700v6).
+        self.mp_hp[slot] = 100.0;
+        self.mp_dead_ticks[slot] = 0;
+        true
+    }
+
     /// The per-tick state hash sent every N ticks (the app calls it; the nf-net session compares).
     /// Fixed fold order: frame, RNG stream, then each slot's bond pose (slot order — the local
     /// slot reads `bond`, the others `mp_bonds`), then the MP match state. An empty slot folds a
