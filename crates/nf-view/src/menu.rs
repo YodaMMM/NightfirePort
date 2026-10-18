@@ -2139,6 +2139,9 @@ pub struct FrontEnd {
     pub mp_net_error: Option<MpNetError>,
     /// The Dialing countdown in menu ticks; 0 → TimedOut [S §2.2 — MP_NET_TIMEOUT_TICKS = 10 s].
     pub mp_net_timeout: u32,
+    /// The window's height in pixels (the app sets it each frame): the online lobby keeps its text
+    /// a constant on-screen size, so a taller window shows more rows and a short one scrolls [S].
+    pub view_h: f32,
     /// Online rematch: the finished online match's way back (the app sets it when the debriefing
     /// opens): (this machine hosted, the host's port / the address it dialed).
     pub mp_online_rejoin: Option<(bool, String)>,
@@ -2417,6 +2420,7 @@ impl FrontEnd {
             mp_net_state: MpNetState::Idle,
             mp_net_error: None,
             mp_net_timeout: 0,
+            view_h: 720.0,
             mp_online_rejoin: None,
             mp_auto_rejoin: None,
             mp_session: None,
@@ -7323,39 +7327,65 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 let nth = names[..k].iter().filter(|x| *x == n).count() + 1;
                 format!("{n} {nth}")
             }).collect();
-            // The settings column: 18 rows visible, scrolled to keep the focus in view.
-            const VIS: usize = 18;
+            // The lobby keeps its text a constant size on screen (the user: "the ui expands with
+            // resolution so it's a scroll bar when smaller" — the 16-player lobbies): `k` is the
+            // page units per 720p unit, so a taller window fits more rows; a list that overflows its
+            // column scrolls with the focus and draws a scroll bar [S].
+            let k = (720.0 / fe.view_h.max(1.0)).clamp(0.4, 1.25);
+            let scroll_bar = |h: &mut Hud, x: f32, y: f32, hh: f32, first: usize, vis: usize, total: usize| {
+                if total <= vis || total == 0 { return; }
+                plate(h, x, y, 3.0, hh);
+                let th = (hh * vis as f32 / total as f32).max(8.0);
+                let ty = y + (hh - th) * first as f32 / (total - vis) as f32;
+                let c = [0.55, 0.50, 0.38, 0.9];
+                let (a, b) = (h.ndc(Anchor::Centre, mx(x), my(ty)), h.ndc(Anchor::Centre, mx(x + 3.0), my(ty + th)));
+                let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.0, 0.0], c };
+                h.ndc_solid(-1, [p([a[0], a[1]]), p([b[0], a[1]]), p([b[0], b[1]]), p([a[0], a[1]]), p([b[0], b[1]]), p([a[0], b[1]])], c);
+            };
+            // The settings column, scrolled to keep the focus in view.
+            let (col_top, col_h) = (72.0f32, 272.0f32);
+            let rh = 15.0 * k;
+            let vis = ((col_h / rh) as usize).max(3);
             let focus = rows.iter().position(|r| r.focused).unwrap_or(0);
-            let first = focus.saturating_sub(VIS - 3).min(rows.len().saturating_sub(VIS));
-            for (k, r) in rows.iter().enumerate().skip(first).take(VIS) {
-                let y = 72.0 + 15.0 * (k - first) as f32;
-                let name = names[k].clone();
+            let first = focus.saturating_sub(vis.saturating_sub(3)).min(rows.len().saturating_sub(vis));
+            for (n, r) in rows.iter().enumerate().skip(first).take(vis) {
+                let y = col_top + rh * (n - first) as f32;
+                let name = names[n].clone();
                 let value = if r.value_id != 0 { bind(r.value_id) } else { r.value_text.clone() };
                 let col = if r.focused { bright } else if !r.enabled || !r.editable { dim } else { cream };
-                left_text(&mut h, font, &name, mx(66.0), my(y + 6.0), col, true, 0.85);
+                left_text(&mut h, font, &name, mx(66.0), my(y + 6.0 * k), col, true, 0.85 * k);
                 if !value.is_empty() {
                     let shown = if r.focused && r.editable { format!("< {value} >") } else { value };
-                    label(&mut h, font, &shown, 212.0, y - 3.0, 130.0, 12.0, col, true, 0.85);
+                    label(&mut h, font, &shown, 222.0, y - 3.0 * k, 122.0, 12.0 * k, col, true, 0.85 * k);
                 }
             }
-            if first > 0 { label(&mut h, font, "^", 190.0, 52.0, 20.0, 10.0, dim, true, 0.8); }
-            if first + VIS < rows.len() { label(&mut h, font, "v", 190.0, 72.0 + 15.0 * VIS as f32 - 6.0, 20.0, 10.0, dim, true, 0.8); }
+            scroll_bar(&mut h, 346.0, col_top - 4.0, col_h, first, vis, rows.len());
             // The players column.
             left_text(&mut h, font, "Players", mx(366.0), my(70.0), cream, true, 0.95);
             let team_game = fe.mp_one.team_game();
-            for (i, pl) in fe.mp_one.players.iter().enumerate() {
-                let y = 92.0 + 34.0 * i as f32;
+            // The players list: as many as fit at the constant text size; it follows a focused
+            // Player row (own-row edits) and scrolls with a bar when the lobby is bigger [S].
+            let (pl_top, pl_h) = (92.0f32, 146.0f32);
+            let ph = 30.0 * k;
+            let pvis = ((pl_h / ph) as usize).max(1);
+            let total_pl = fe.mp_one.players.len();
+            let pfocus = rows.get(focus).and_then(|r| if let crate::mp_lobby::MpLobbyRowId::Player(i) | crate::mp_lobby::MpLobbyRowId::PlayerTeam(i) = r.id { Some(i) } else { None })
+                .unwrap_or(fe.mp_one.own_slot.min(total_pl.saturating_sub(1)));
+            let pfirst = pfocus.saturating_sub(pvis.saturating_sub(1)).min(total_pl.saturating_sub(pvis));
+            scroll_bar(&mut h, 624.0, pl_top - 6.0, pl_h, pfirst, pvis, total_pl);
+            for (i, pl) in fe.mp_one.players.iter().enumerate().skip(pfirst).take(pvis) {
+                let y = pl_top + ph * (i - pfirst) as f32;
                 if !pl.joined {
-                    left_text(&mut h, font, &format!("{}  (open)", i + 1), mx(366.0), my(y), dim, true, 0.85);
+                    left_text(&mut h, font, &format!("{}  (open)", i + 1), mx(366.0), my(y), dim, true, 0.85 * k);
                     continue;
                 }
                 let col = if pl.ready { cream } else { dim };
-                left_text(&mut h, font, &format!("{}  {}", i + 1, pl.codename), mx(366.0), my(y), col, true, 0.9);
+                left_text(&mut h, font, &format!("{}  {}", i + 1, pl.codename), mx(366.0), my(y), col, true, 0.9 * k);
                 let mut info = Vec::new();
                 if team_game { info.push(if pl.team == 1 { "MI6".to_string() } else { "Phoenix".to_string() }); }
                 info.push(if pl.ready { "Ready".to_string() } else { "Not ready".to_string() });
                 if i != 0 || !fe.mp_hosting { info.push(format!("{} ms", pl.ping_ms)); }
-                left_text(&mut h, font, &info.join("   "), mx(384.0), my(y + 14.0), dim, true, 0.75);
+                left_text(&mut h, font, &info.join("   "), mx(384.0), my(y + 13.0 * k), dim, true, 0.75 * k);
             }
             let start_line = if fe.mp_hosting {
                 if fe.mp_lobby_start_enabled() { "Everyone is ready - Start the match" } else { "Waiting for every player to be ready" }

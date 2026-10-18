@@ -1665,6 +1665,9 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
     let Some(tables) = scene.hud.as_ref() else { eprintln!("[front end] no HUD tables (the game font) — the menu overlay needs ACTION.ELF"); return (None, None); };
     let mut fe = menu::FrontEnd::new();
     if args.iter().any(|a| a == "--unlock-all") { fe.unlock_all = true; }
+    // Render aid: NF_VIEW_H=<px> renders the page as a window that tall would (the online lobby's
+    // constant-size text: more rows on a tall window, a scroll bar on a short one).
+    if let Some(v) = std::env::var("NF_VIEW_H").ok().and_then(|v| v.parse::<f32>().ok()) { fe.view_h = v; }
     if let Some(i) = args.iter().position(|a| a == "--cursor") {
         fe.cursor = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
     }
@@ -4520,6 +4523,7 @@ impl ApplicationHandler for App {
                         if fe.page == menu::Page::Pause {
                             if let Some(sim) = self.scene.sim.as_ref() { fe.pause_objectives = pause_objective_rows(sim); }
                         }
+                        fe.view_h = g.config.height as f32;
                         let mut f = match &self.scene.hud {
                             Some(tables) => menu::menu_overlay(fe, &tables.font, &tables.font_header, lang, &self.scene.hud_textures, aspect),
                             None => overlay_for(&self.scene, aspect),
