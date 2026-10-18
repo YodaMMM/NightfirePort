@@ -27,31 +27,59 @@ use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// Walk onto a fusebox's stand point and E-cut it through the real interaction loop (the lid
-/// press, then the cut — the teleport test's 3×E, gap, 3×E rhythm, held until the group channel
-/// rises). The look arm: the walker's turn input keeps Bond facing the box.
+/// Walk to a stance inside the Laser's range of a fusebox wire and burn it through the REAL fire
+/// path. E does nothing on fuseboxes — `Player_Activate` 0x1a5170 has no class-0x3C arm [M
+/// 0x1a5170:95-160] — the game's cut is the Laser beam (weapon 0x4E, range 4.0 [L weapon_data
+/// 0x4E +0x1C]) into the wire sub-object; `FuseBox_Update` 0x1adfe8 writes the group's channel
+/// words on the wire death. (walkreal-b's original E-cut predates that finding and never fired.)
 fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
-    let stand = [box_pos[0] + 0.6, box_pos[1] - 1.2, box_pos[2]];
-    w.walk_to(Wp::new(stand[0], stand[1], stand[2]).r(0.6), &format!("{label} stand point"));
+    // The stance: the teleport test's candidate offsets, floored and range-checked [D the wire
+    // stand-ins hang at the box's front]; the first that keeps the wire inside 3.4 wins.
+    let sim = w.scene.sim.as_ref().unwrap();
+    let fb = sim.drones.fuseboxes.iter().position(|f| f.ch[0] as u32 == want as u32)
+        .unwrap_or_else(|| panic!("{label}: the fusebox with group-0 channel {want:#x} exists [D]"));
+    let (bp, wire) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let wp = sim.drones.fuseboxes[fb].alive_wires()
+            .filter_map(|(_, _, o)| nf_game::drone::Drones::script_obj_pos(&sim.drones.scripts, &sim.data(), o))
+            .next().expect("the script registered wires (groups 0 and 1 [L])");
+        (sim.drones.fuseboxes[fb].pos, wp)
+    };
+    let cands = [[0.6f32, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6]];
+    let mut stood = false;
+    for c in &cands {
+        let spot = [bp[0] + c[0], bp[1] + c[1], bp[2] + c[2]];
+        let floor = w.scene.sim.as_ref().unwrap().world.segment(spot, [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] - 30.0 * t);
+        if !matches!(floor, Some(f) if (f - (bp[1] - 2.4)).abs() < 3.0) { continue; }
+        w.walk_to(Wp::new(spot[0], spot[1], spot[2]).r(0.6), &format!("{label} stance"));
+        let head = w.scene.sim.as_ref().unwrap().bond.head();
+        let d = [wire[0] - head[0], wire[1] - head[1], wire[2] - head[2]];
+        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= 3.4 { stood = true; break; }
+    }
+    assert!(stood, "{label}: a stance inside the Laser's range exists [L weapon_data 0x4E +0x1C]");
+    // Draw the Laser, then aim-and-burn the wire (the walker's real aim-and-fire loop vs the wire
+    // point; the channel rise is the cut [M 0x1adfe8]).
+    for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false); }
     let start = w.total_ticks;
     loop {
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.drones.channels.on(want as u32) { break; }
-        assert!(w.total_ticks - start < 240, "{label}: the cut never wrote ch {want:#x} [M 0x1adfe8]");
-        let p = sim.bond.pos;
-        let desired = (box_pos[0] - p[0]).atan2(box_pos[2] - p[2]);
-        let err = walker::wrap_pi(desired - sim.bond.yaw);
-        let t = w.total_ticks - start;
-        // E held 3 ticks, released 1 (the press edge the trigger's mask-4 arm reads [M 0x1b2318]).
-        let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() };
-        w.tick(input, t % 4 != 3);
+        assert!(w.total_ticks - start < 600, "{label}: the laser cut never wrote ch {want:#x} [M 0x1adfe8]");
+        let head = sim.bond.head();
+        let dir = [wire[0] - head[0], wire[1] - head[1], wire[2] - head[2]];
+        let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+        w.tick_fire(nf_game::player::Input {
+            turn: (dir[0].atan2(dir[2]) - sim.bond.yaw).clamp(-0.08, 0.08),
+            look: (((dir[1] / l).atan() / std::f32::consts::FRAC_PI_2) - sim.bond.pitch).clamp(-0.08, 0.08),
+            ..Default::default()
+        });
     }
-    // The lid-press/cut pair writes both channel words on the cut [M 0x1adfe8].
-    eprintln!("[014] {label}: ch {want:#x} on at +{} ticks", w.total_ticks - start);
+    // The wire death writes both channel words on the cut [M 0x1adfe8].
+    eprintln!("[014] {label}: ch {want:#x} on at +{} ticks (laser cut)", w.total_ticks - start);
 }
 
 #[test]
-#[ignore = "the vent duct is grated: the crawl south from the start wedges at z=59.41 on the grate frame's posts + bars at z=58.81..58.91 [D world tris t77/t92/t95/t96/t188-t196: two 0.10 posts x 40.05..40.15/41.44..41.55 + a full-width bar face at z≈58.90, window x 40.15..41.44 y 2.50..3.76] — the crouch capsule (r 0.55) cannot thread it and nothing in the port opens it. The game's way past it is unverified: the lid SPs (#266/#328/#847, script 0x06000A3B, mode-64 preload stopped) sit on the route and are the open candidates, or the route leaves through the east duct to the Vent_StoreRoom_Ladder #304 (46.01,−1.30,62.57) past the locked hatch #267 [D names]. Live checks requested in the report. The fusebox legs below also need the Laser (E does nothing on fuseboxes [M 0x1a5170:95-160]) — walkreal-b's E-cut predates that finding."]
+#[ignore = "the vent duct is grated: the crawl south from the start wedges at z=59.41 on the grate frame's posts + bars at z=58.81..58.91 [D world tris t77/t92/t95/t96/t188-t196 + the six bars t320-t343 at z=58.86, gaps 0.12-0.13] — the crouch capsule (r 0.55) cannot thread it and nothing in the port opens it. The game's way past it is unverified: the lid SPs (#266/#328/#847, script 0x06000A3B, mode-64 preload stopped) sit on the route and are the open candidates, or the route leaves through the east duct to the Vent_StoreRoom_Ladder #304 (46.01,−1.30,62.57) past the locked hatch #267 [D names]. Live checks requested in the report. The fusebox legs below now use the game's real Laser cut."]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
