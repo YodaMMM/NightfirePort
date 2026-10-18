@@ -184,7 +184,9 @@ impl MpSession for FakeHandle {
     fn close(&mut self) { self.0.borrow_mut().link = MpNetLink::Idle; }
 }
 
-/// Main → Multiplayer → Host Online → Start Listening → the host lobby (the join page).
+/// Main → Multiplayer → Host Online → Start Listening → the ONE screen (mp-lobby-one-screen
+/// replaced the couch walk on the online path; the couch backout below goes through the LOCAL
+/// path, which is untouched [S docs/systems/net-online-lobby.md §6]).
 fn to_host_lobby(fe: &mut FrontEnd) {
     to_main(fe);
     assert!(act(fe, Action::Down), "the Multiplayer row");
@@ -195,25 +197,35 @@ fn to_host_lobby(fe: &mut FrontEnd) {
     assert_eq!(fe.page, Page::MpHost);
     assert!(act(fe, Action::Down), "the Start Listening row");
     assert!(act(fe, Action::Confirm), "Start Listening");
-    assert_eq!(fe.page, Page::MpJoin, "the host lobby IS the join page");
+    assert_eq!(fe.page, Page::MpOnlineLobby, "the online path lands on the ONE screen");
 }
 
 #[test]
 fn two_joined_players_survive_the_same_backout_and_the_match_starts() {
-    let fake = Rc::new(RefCell::new(Fake::new()));
+    // The couch backout (the pinned behaviour) through the LOCAL path — the online path no
+    // longer walks these pages [S mp-lobby-one-screen]; the second human is a joined pad
+    // record (the game's own join message end state, P_MPJOIN 0x20ca00's msg-0x6a).
     let mut fe = FrontEnd::new();
-    fe.mp_session = Some(Box::new(FakeHandle(fake.clone())));
-    to_host_lobby(&mut fe);
-    assert!(fe.mp_hosting, "host mode armed");
-    assert!(fe.mp_join[0].joined && fe.mp_join[0].ready, "the host's own panel is in");
-    // A second human lands in panel 2.
-    fake.borrow_mut().join_remote(1, "Alec");
-    fe.tick();
-    assert!(fe.mp_join[1].joined, "the remote agent lands in panel 2");
+    to_main(&mut fe);
+    assert!(act(&mut fe, Action::Down), "the Multiplayer row");
+    assert!(act(&mut fe, Action::Confirm), "Multiplayer");
+    assert_eq!(fe.page, Page::MpMode);
+    assert!(act(&mut fe, Action::Confirm), "the Local row walks to the join page");
+    assert_eq!(fe.page, Page::MpJoin);
+    // The keyboard agent joins: ✕ (state 0 → 1), ✕ on the codename list (1 → 5) [M the
+    // MpJoin arm's folded walk], then a second human lands in panel 2 (a pad join's record).
+    assert!(act(&mut fe, Action::Confirm), "agent 1 joins");
+    assert!(act(&mut fe, Action::Confirm), "agent 1 picks the codename");
+    assert!(fe.mp_join[0].joined, "the host's own panel is in");
+    fe.mp_join[1] = nf_view::menu::MpJoinAgent {
+        state: 5, joined: true, ready: true, team: 0, skin: 1, codename_row: 0, codename: "Alec".into(),
+    };
     assert_eq!(fe.mp_human_count(), 2, "two joined players");
 
-    // The host's ✕ walks on; the usual flow to the setup page and through the character.
-    assert!(act(&mut fe, Action::Confirm), "the host's ✕ walks on");
+    // The host's ✕ readies and walks on; the usual flow to the setup page and through the
+    // character [M the state-5 arm: mpjoin+1 = 1, Menu_MPAreWeReady → 0x4000001a].
+    assert!(act(&mut fe, Action::Confirm), "the host's ✕ readies and walks on");
+    assert!(fe.mp_join[0].ready, "the ready set with the walk");
     assert_eq!(fe.page, Page::MpScenario);
     to_ffa_setup_after_character(&mut fe);
 
@@ -230,19 +242,18 @@ fn two_joined_players_survive_the_same_backout_and_the_match_starts() {
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::Main);
 
-    // ── forward again: host again, the agent lands again, the match starts ──
+    // ── forward again: the agent joins again, the match starts ──
     assert!(act(&mut fe, Action::Confirm), "Multiplayer");
-    assert!(act(&mut fe, Action::Down), "the Host Online row");
-    assert!(act(&mut fe, Action::Confirm));
-    assert_eq!(fe.page, Page::MpHost);
-    assert!(act(&mut fe, Action::Down));
-    assert!(act(&mut fe, Action::Confirm), "Start Listening");
+    assert!(act(&mut fe, Action::Confirm), "the Local row again");
     assert_eq!(fe.page, Page::MpJoin);
-    assert!(fe.mp_join[0].joined && fe.mp_join[0].ready, "the host panel is in again");
-    fake.borrow_mut().join_remote(1, "Alec");
-    fe.tick();
+    assert!(act(&mut fe, Action::Confirm), "agent 1 joins again");
+    assert!(act(&mut fe, Action::Confirm), "agent 1 picks the codename again");
+    assert!(fe.mp_join[0].joined, "the host panel is in again");
+    fe.mp_join[1] = nf_view::menu::MpJoinAgent {
+        state: 5, joined: true, ready: true, team: 0, skin: 1, codename_row: 0, codename: "Alec".into(),
+    };
     assert!(fe.mp_join[1].joined, "the agent lands again");
-    assert!(act(&mut fe, Action::Confirm), "the host's ✕ walks on");
+    assert!(act(&mut fe, Action::Confirm), "the host's ✕ readies and walks on");
     assert_eq!(fe.page, Page::MpScenario);
     to_ffa_setup_after_character(&mut fe);
     // Two humans pass the start checks with no bot.
