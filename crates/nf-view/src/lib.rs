@@ -36,6 +36,8 @@ pub mod weapon_assets;
 pub mod woman;
 pub mod loading;
 pub mod async_load;
+/// The launcher (`NightfirePort` binary): pick the disc image once, then PLAY.
+pub mod launcher;
 /// The weapon matrix (task 100d): every on-foot level × every weapon, measured headless.
 pub mod matrix;
 
