@@ -276,7 +276,9 @@ fn stun_only_host_punches_to_the_joiners_code() {
         }
         if client.poll(now).iter().any(|e| matches!(e, Event::Connected { .. })) { connected = true; }
         if client.take_stray().iter().any(|(from, d)| *from == host.local_addr() && p2p::punch::is_punch(d)) { punched = true; }
-        connected && punched
+        // Either the joiner saw a punch, or the host already heard the joiner from that endpoint
+        // (its same-network probes count) — both prove the path is open both ways.
+        connected && (punched || reach.status().punches.iter().any(|(_, s)| *s == p2p::PunchState::Reached))
     }, 10), "punches reached the joiner and the session connected: {:?}", reach.status().punches);
 }
 

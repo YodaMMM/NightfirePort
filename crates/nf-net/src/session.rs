@@ -360,11 +360,33 @@ impl<T: Transport> Session<T> {
     /// Ignored until the client's slot is assigned (host: always slot 0) —
     /// the app samples controls only after `Event::Connected`/`MatchStarted`,
     /// so nothing is lost.
+    /// The match's input lead: the app submits the input sampled while running tick `t` for
+    /// tick `t + input_delay()` (the host's config; a client takes it from the WELCOME).
+    pub fn input_delay(&self) -> u32 {
+        self.cfg.input_delay
+    }
+
+    /// The first `input_delay` ticks have no sampled input yet (nothing ran `input_delay` ticks
+    /// before them): they are NEUTRAL on every machine, so tick `start_tick` is ready at once
+    /// instead of every machine waiting on its own not-yet-sampled input (the two-window freeze,
+    /// 2026-10-18). Once started, a lead-window tick that already holds an input is final
+    /// (`local_input` ignores it): it may already be on the wire.
+    fn prefill_delay(&mut self) {
+        let s = self.local_slot as usize;
+        for t in self.start_tick..self.start_tick + self.cfg.input_delay {
+            self.inputs[s].entry(t).or_insert(NEUTRAL);
+        }
+    }
+
     pub fn local_input(&mut self, tick: u32, input: Input) {
         if let Role::Client { slot: None, .. } = &self.role {
             return;
         }
-        self.inputs[self.local_slot as usize].insert(tick, input);
+        let s = self.local_slot as usize;
+        if self.started && tick < self.start_tick + self.cfg.input_delay && self.inputs[s].contains_key(&tick) {
+            return;
+        }
+        self.inputs[s].insert(tick, input);
     }
 
     /// Report the local state hash for `tick` (after running it). Hashes are
@@ -474,6 +496,7 @@ impl<T: Transport> Session<T> {
             }
             Role::Client { .. } => return Err(SessionError::NotHost),
         };
+        self.prefill_delay();
         let pkt = Packet::Go { first_tick };
         for a in addrs {
             self.send_packet(a, &pkt);
@@ -1036,6 +1059,8 @@ impl<T: Transport> Session<T> {
                         go_confirmed: false,
                         last_go_ms: 0,
                     });
+                    // The host's delay is the match's (both sides schedule the same lead).
+                    self.cfg.input_delay = input_delay as u32;
                     events.push(Event::Connected {
                         slot,
                         seed,
@@ -1061,6 +1086,7 @@ impl<T: Transport> Session<T> {
                 if !self.started {
                     self.started = true;
                     self.start_tick = first_tick;
+                    self.prefill_delay();
                     events.push(Event::MatchStarted { first_tick });
                 }
             }

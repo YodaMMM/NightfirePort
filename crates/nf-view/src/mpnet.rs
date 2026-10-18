@@ -248,6 +248,8 @@ pub struct NetCore {
     reach_cfg: Option<nf_net::p2p::ReachConfig>,
     reach_host: Option<nf_net::p2p::HostReach>,
     reach_join: Option<nf_net::p2p::JoinReach>,
+    /// The last reach status line printed to the console.
+    reach_line: Option<String>,
 }
 
 /// The host repeats the match-start payload every this many polls …
@@ -277,6 +279,7 @@ impl NetCore {
             reach_cfg: None,
             reach_host: None,
             reach_join: None,
+            reach_line: None,
         })))
     }
 
@@ -338,6 +341,7 @@ impl NetCore {
             reach_cfg: None,
             reach_host: None,
             reach_join: None,
+            reach_line: None,
         })))
     }
 
@@ -423,6 +427,28 @@ impl NetCore {
             if let Some(r) = self.reach_host.as_mut() { r.poll(now, &mut |to, d| out.push((to, d.to_vec()))); }
             if let Some(r) = self.reach_join.as_mut() { r.poll(now, &mut |to, d| out.push((to, d.to_vec()))); }
             for (to, d) in out { self.sess.send_raw(to, &d); }
+            // net-p2p §3a: the host answered our LAN probe — dial its LAN address instead of the
+            // public one (no hairpin needed), keeping the join reach and the codename.
+            let redirect = if self.sess.local_slot() == 0 && self.match_start.is_none() {
+                self.reach_join.as_mut().and_then(|r| r.take_redirect())
+            } else {
+                None
+            };
+            if let Some(a) = redirect {
+                eprintln!("[net] same network: dialing the host's LAN address {a}");
+                let name = self.display_name();
+                if let Ok(tr) = UdpTransport::bind("0.0.0.0:0") {
+                    self.sess = Session::new_client(session_cfg(), tr, a);
+                    if !name.is_empty() { self.sess.set_display_name(&name); }
+                }
+            }
+            // The console line the CLI path (--net-host / --net-join) reads: the state and the
+            // code once, and again when they change.
+            let line = self.reach().map(|r| format!("{} | code {} | my code {} | {}", r.state, r.code.unwrap_or_default(), r.my_code.unwrap_or_default(), r.note));
+            if line.is_some() && line != self.reach_line {
+                if let Some(l) = &line { eprintln!("[net] {l}"); }
+                self.reach_line = line;
+            }
         } else {
             self.sess.take_stray();
         }
@@ -554,6 +580,11 @@ impl NetCore {
 
     pub fn local_input(&mut self, tick: u32, input: nf_net::Input) {
         self.sess.local_input(tick, input);
+    }
+
+    /// The match's input lead (see `nf_net::Session::input_delay`).
+    pub fn input_delay(&self) -> u32 {
+        self.sess.input_delay()
     }
 
     pub fn submit_hash(&mut self, tick: u32, hash: u64) {

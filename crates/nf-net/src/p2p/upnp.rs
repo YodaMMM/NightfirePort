@@ -48,9 +48,16 @@ pub struct Gateway {
 /// One M-SEARCH round: send every target, collect LOCATION headers for `wait`.
 /// `ssdp` is the multicast address (tests pass a loopback fake).
 pub fn discover_locations(ssdp: &str, wait: Duration) -> Result<Vec<String>, UpnpError> {
-    let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| UpnpError::Io(e.to_string()))?;
-    sock.set_read_timeout(Some(Duration::from_millis(100))).map_err(|e| UpnpError::Io(e.to_string()))?;
     let to: SocketAddr = ssdp.parse().map_err(|_| UpnpError::Io(format!("bad ssdp addr {ssdp}")))?;
+    // Bind to the LAN interface for the real multicast search: on a PC with virtual adapters
+    // (Hyper-V / WSL's vEthernet) a 0.0.0.0 socket's multicast leaves on the wrong interface and
+    // no router answers [L 2026-10-18 on the user's PC: 0 answers unbound, the OpenWRT IGD bound].
+    let bind = match (to.ip().is_multicast(), super::local_ipv4()) {
+        (true, Some(ip)) => SocketAddr::new(ip.into(), 0),
+        _ => "0.0.0.0:0".parse().expect("static"),
+    };
+    let sock = UdpSocket::bind(bind).map_err(|e| UpnpError::Io(e.to_string()))?;
+    sock.set_read_timeout(Some(Duration::from_millis(100))).map_err(|e| UpnpError::Io(e.to_string()))?;
     for st in TARGETS {
         let msg = format!("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nST: {st}\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\n\r\n");
         let _ = sock.send_to(msg.as_bytes(), to);
@@ -68,6 +75,10 @@ pub fn discover_locations(ssdp: &str, wait: Duration) -> Result<Vec<String>, Upn
             }
         }
     }
+    // The default gateway's own device first (x.y.z.1 of the LAN address [S heuristic]); link-local
+    // 169.254 locations (a range extender advertising a WAN it does not route) last.
+    let gw = super::local_ipv4().map(|ip| { let o = ip.octets(); format!("http://{}.{}.{}.1:", o[0], o[1], o[2]) });
+    out.sort_by_key(|l| (!gw.as_deref().is_some_and(|g| l.starts_with(g)), l.starts_with("http://169.254.")));
     if out.is_empty() { Err(UpnpError::NoGateway) } else { Ok(out) }
 }
 

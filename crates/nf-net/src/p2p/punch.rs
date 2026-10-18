@@ -22,6 +22,29 @@ pub fn is_punch(data: &[u8]) -> bool {
     data.len() == 12 && data[0] == 0x4E && data[1] == 0x46 && data[2] == PT_PUNCH
 }
 
+/// Same-network shortcut (docs/systems/net-p2p.md §3a): a joiner whose public IP equals the
+/// code's (it sits behind the host's own NAT, where many routers do not hairpin) broadcasts a
+/// PROBE on the code's port; the host answers PROBE_ACK from its game socket, and the joiner dials
+/// that LAN address instead. Same 12-byte layout as a punch.
+pub const PT_PROBE: u8 = 0x51;
+pub const PT_PROBE_ACK: u8 = 0x52;
+
+pub fn probe_packet(ty: u8, nonce: [u8; 8]) -> [u8; 12] {
+    let mut b = punch_packet(nonce);
+    b[2] = ty;
+    b
+}
+
+/// (type, nonce) of a probe / probe-ack.
+pub fn parse_probe(data: &[u8]) -> Option<(u8, [u8; 8])> {
+    if data.len() == 12 && data[0] == 0x4E && data[1] == 0x46 && matches!(data[2], PT_PROBE | PT_PROBE_ACK) {
+        let mut n = [0u8; 8];
+        n.copy_from_slice(&data[4..12]);
+        return Some((data[2], n));
+    }
+    None
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PunchState {
     Punching,

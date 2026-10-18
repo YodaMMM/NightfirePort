@@ -175,6 +175,8 @@ pub struct HostReach {
     punches: Vec<Puncher>,
     renew_due_ms: Option<u64>,
     seed: u64,
+    /// Replies waiting for the next `poll` (PROBE_ACKs to same-network joiners).
+    out: Vec<(SocketAddr, [u8; 12])>,
 }
 
 impl HostReach {
@@ -194,6 +196,7 @@ impl HostReach {
             punches: Vec::new(),
             renew_due_ms: None,
             seed,
+            out: Vec::new(),
         }
     }
 
@@ -248,12 +251,21 @@ impl HostReach {
                 send(to, &pkt);
             }
         }
+        for (to, pkt) in self.out.drain(..) {
+            send(to, &pkt);
+        }
     }
 
     /// Offer every stray datagram (STUN replies, punches); true when consumed.
     pub fn on_packet(&mut self, from: SocketAddr, data: &[u8]) -> bool {
         for p in &mut self.punches {
             p.on_datagram(from);
+        }
+        if let Some((punch::PT_PROBE, nonce)) = punch::parse_probe(data) {
+            if self.out.len() < 16 {
+                self.out.push((from, punch::probe_packet(punch::PT_PROBE_ACK, nonce)));
+            }
+            return true;
         }
         if let Some(st) = self.stun.as_mut() {
             if st.on_packet(from, data) {
@@ -364,14 +376,23 @@ pub struct JoinReach {
     mapper: Arc<Mutex<MapperResult>>,
     stun: Option<StunClient>,
     seed: u64,
+    /// §3a: the next PROBE time, and the host's LAN address once a PROBE_ACK came back.
+    probe_next_ms: u64,
+    probes_sent: u32,
+    lan_host: Option<SocketAddr>,
+    redirected: bool,
 }
+
+/// §3a: PROBEs go out every this many ms, this many times.
+pub const PROBE_EVERY_MS: u64 = 400;
+pub const PROBE_TRIES: u32 = 10;
 
 impl JoinReach {
     /// Decode the typed text (a code or `a.b.c.d:port`) and start STUN for "my code".
     pub fn start(typed: &str, cfg: &ReachConfig, seed: u64) -> Result<JoinReach, CodeError> {
         let target = parse_target(typed)?;
         let cfg = ReachConfig { map: false, ..cfg.clone() };
-        Ok(JoinReach { target, mapper: spawn_mapper(0, &cfg), stun: None, seed })
+        Ok(JoinReach { target, mapper: spawn_mapper(0, &cfg), stun: None, seed, probe_next_ms: 0, probes_sent: 0, lan_host: None, redirected: false })
     }
 
     pub fn target(&self) -> SocketAddr {
@@ -389,10 +410,37 @@ impl JoinReach {
                 send(to, &req);
             }
         }
+        // §3a: behind the host's own NAT (our public IP = the code's) → find it on the LAN.
+        let same_nat = self.stun.as_ref().and_then(|s| s.public()).is_some_and(|me| me.ip() == self.target.addr.ip());
+        if same_nat && self.lan_host.is_none() && self.probes_sent < PROBE_TRIES && now_ms >= self.probe_next_ms {
+            self.probes_sent += 1;
+            self.probe_next_ms = now_ms + PROBE_EVERY_MS;
+            let pkt = punch::probe_packet(punch::PT_PROBE, self.seed.to_le_bytes());
+            let port = self.target.addr.port();
+            send(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, port)), &pkt);
+            // The same PC (a second window): broadcasts do not always loop back.
+            send(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)), &pkt);
+        }
     }
 
     pub fn on_packet(&mut self, from: SocketAddr, data: &[u8]) -> bool {
+        if let Some((punch::PT_PROBE_ACK, nonce)) = punch::parse_probe(data) {
+            if nonce == self.seed.to_le_bytes() && self.lan_host.is_none() {
+                self.lan_host = Some(from);
+            }
+            return true;
+        }
         self.stun.as_mut().is_some_and(|s| s.on_packet(from, data)) || punch::is_punch(data)
+    }
+
+    /// §3a: the host's LAN address, once (the caller re-dials it).
+    pub fn take_redirect(&mut self) -> Option<SocketAddr> {
+        if self.redirected {
+            return None;
+        }
+        let a = self.lan_host?;
+        self.redirected = true;
+        Some(a)
     }
 
     pub fn status(&self, now_ms: u64) -> JoinStatus {
