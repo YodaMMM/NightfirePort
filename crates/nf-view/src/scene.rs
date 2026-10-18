@@ -7732,6 +7732,16 @@ impl Scene {
     /// positions resolved against their searchlight parts. Per draw the renderer picks the ≤2
     /// closest within the draw's bounding sphere — the game's
     /// `Lights_CalcClosestLights` 0x1cb2e0 / `psiLight_SetLights` 0x10e588 per object/cel.
+    /// light-actors: per character, the light-pick centre when it is NOT the palette root slot —
+    /// the script actors' drawn root (`Sim::characters_script_pos`, the same point the ambient ramp
+    /// samples); None = the root slot's translation is right (drones, view models, props).
+    pub fn char_light_centres(&self) -> Vec<Option<[f32; 3]>> {
+        let Some(s) = self.sim.as_ref() else { return Vec::new() };
+        self.characters.iter().enumerate()
+            .map(|(ci, c)| c.script.and_then(|_| s.characters_script_pos(ci)))
+            .collect()
+    }
+
     pub fn frame_lights(&self) -> nf_game::light::ResolvedLights {
         let Some(s) = self.sim.as_ref() else { return Default::default() };
         s.drones.lights.resolve(&|i: u32| s.drones.searchlights.parts.get(i as usize).map(|p| p.pos).unwrap_or([0.0; 3]))

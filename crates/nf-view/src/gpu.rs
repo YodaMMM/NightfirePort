@@ -291,6 +291,10 @@ pub struct Renderer {
     /// The last uploaded palette's translations — a skinned draw's live world position for its light
     /// pick (`DrawCall::skin`; the game's obj+0x80 sphere follows the object [M 0x1e69a0:73-81]).
     skin_pos: std::cell::RefCell<Vec<[f32; 3]>>,
+    /// Per character: the light-pick centre when the palette's root slot is not where the
+    /// character is drawn (`Scene::char_light_centres` — the script actors, whose object sits at
+    /// the origin while the sequence root carries the body). Set with each palette build.
+    pub char_light_centre: Vec<Option<[f32; 3]>>,
     /// fix-gpu-facial-morphs: the per-character facial-weight blocks (per frame) and the static
     /// morph-target buffer.
     wts_buf: wgpu::Buffer,
@@ -590,7 +594,7 @@ impl Renderer {
         // movies.md §Presentation], so the quad draws BEFORE the HUD runs (under the page
         // controls); state 6 suppresses the overlay while its movie plays, so the draw position
         // is equivalent there.
-        Renderer { woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        Renderer { woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -667,6 +671,9 @@ impl Renderer {
         queue.write_buffer(&self.col_buf, 0, bytemuck::cast_slice(&cols));
         self.upload_morph_weights(queue, scene);
     }
+
+    /// The shot path's companion to `update_skin` (it takes `&self`): the per-character light centres.
+    pub fn set_char_light_centres(&mut self, scene: &Scene) { self.char_light_centre = scene.char_light_centres(); }
 
     /// fix-gpu-facial-morphs: one frame's facial morph weights into the weight buffer (the GPU half
     /// of `SkinIt` 0x10bf30's Morph_Weight marshalling). No-op on scenes without morph bearers.
@@ -915,8 +922,17 @@ impl Renderer {
                         // The game zeroes the light slots for the sky and sprite passes [M 0x1e5ad0:89].
                         continue;
                     }
-                    // The view model takes no point lights (the list-2 pass after the zeroing; `VIEW_MODEL_NODE`).
-                    if dc.node == crate::scene::VIEW_MODEL_NODE && dc.layer != Layer::World { continue; }
+                    // light-viewmodel: the view model IS lit. `Game_Draw` zeroes the lights before list 2
+                    // [M 0x1e6f50:150], but every animated object draws through `AnimObjectDraw`
+                    // [M 0x1c4490:117-122], which re-picks: `View_SetupRenderModes` at the object's
+                    // sphere [M 0x1e78b0:21-23] or `View_SetupRenderModes2` at the viewer's camera with
+                    // radius 2.0 [M 0x1e7908:28-36]. The hands and gun sit at the eye either way — the
+                    // pick centres on the eye, radius 2.0, with the draw's own flags word.
+                    if dc.node == crate::scene::VIEW_MODEL_NODE && dc.layer != Layer::World {
+                        let (lp, lc) = self.lights.pick2([eye[0], eye[1], eye[2], 2.0], dc.lflags as u32);
+                        for (i, v) in lp.iter().chain(lc.iter()).enumerate() { s[i * 4..i * 4 + 4].copy_from_slice(v); }
+                        continue;
+                    }
                     // A skinned draw picks its lights at its owner's LIVE root (the palette slot the GPU skins
                     // with) — the game's per-object obj+0x80 sphere [M 0x1e69a0:73-81]; a hidden owner (the FAR
                     // collapse) picks none. Static draws keep their build centre.
@@ -924,7 +940,14 @@ impl Renderer {
                         Some((ci, att)) => {
                             let idx = match att { None => self.skin_layout.char_base.get(ci as usize).copied(), Some(a) => Some(self.skin_layout.attach_base + a) };
                             match idx.and_then(|i| skin_pos.get(i as usize).copied()) {
-                                Some(p) if p[1] > -9000.0 => p,
+                                // light-actors: a script actor's object sits at the origin while its
+                                // sequence root carries the body [Script_AnimStart 0x1d8f40's origin
+                                // create; AnimSeqTick 0x1c28d0 root motion] — the game's per-object
+                                // sphere (obj+0x80) follows the body, so the pick centres there.
+                                Some(p) if p[1] > -9000.0 => match att {
+                                    None => self.char_light_centre.get(ci as usize).copied().flatten().unwrap_or(p),
+                                    Some(_) => p,
+                                },
                                 Some(_) => continue,
                                 None => dc.centre,
                             }

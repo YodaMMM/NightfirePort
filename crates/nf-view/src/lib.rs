@@ -1693,6 +1693,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let door_closed = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, scene.sim.as_ref().map(|s| &s.world), door_closed.as_deref());
     r.update_skin(&queue, scene, choice, time, opts, vis_shot.as_deref());
+    r.set_char_light_centres(scene);
     r.lights = scene.frame_lights();
     r.screen_aspect = w as f32 / h as f32;
     // `NF_BENCH=N`: time the per-frame CPU side N times (posing + vertex build, and the upload) for profiling.
@@ -3872,6 +3873,7 @@ impl ApplicationHandler for App {
                 let pal_rebuilt = self.ticked || self.pal_cur.is_none();
                 if pal_rebuilt {
                     let new = self.scene.skin_palette(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, vis.as_deref());
+                    g.renderer.char_light_centre = self.scene.char_light_centres();
                     self.pal_prev = self.pal_cur.take();
                     // perf-240: the entries that move between the two ticks, and the blend buffer seeded
                     // with the newer tick (every other entry blends to it).
