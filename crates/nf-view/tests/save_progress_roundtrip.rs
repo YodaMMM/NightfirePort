@@ -126,6 +126,7 @@ fn the_roundtrip_restores_the_progress() {
     fe.mission = 4;
     fe.mission_ended(Outcome::Complete, Stats { shots_fired: 44, shots_hit: 30, accuracy_pct: 68, time_s: 190 });
     fe.requested_level = None;
+    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
     assert!(fe.results_enter(&mut progress, 0x0700_0001, 6, 2, None), "the fields built");
     let medal2 = fe.results.as_ref().expect("the results fields").medal;
     fe.sync_profile_progress(&progress);
@@ -257,6 +258,7 @@ fn play_without_saving_leaves_no_file() {
         progress.stats[0].dispatched = 2 + i as u32;
         fe.mission_ended(Outcome::Complete, Stats::default());
         fe.requested_level = None;
+        fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
         fe.sync_profile_progress(&progress);
         assert!(fe.results_enter(&mut progress, map, 6, 2, None), "mission {i} fields built");
         assert!(fe.action(Action::Confirm));
