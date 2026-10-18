@@ -28,7 +28,7 @@ use walker::{Walker, Wp};
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 #[test]
-#[ignore = "the front entrance's mouth is glazed shut for the capsule: every walked lane (x −6.2 and the slid west x −8.09) pins at z 64.47 against a south-facing wall at z ≈ 65.0 — the security gate, whose raise has no writer the port runs (the objective's cut-scene/channel is unported); cold segment rays at y −368.4 pass under the sill, so only the capsule-height band is blocked. Needs the game's raise path (gdbwatch in PCSX2 which channel/SP lifts the gate when 'Raise security gate and escape' arms) — walkreal-b's addendum documents the same regression; owner: the cut-scene/collision owner (fix-cutscenes2 candidate)"]
+#[ignore = "the front entrance's mouth is closed by the Shutters2 SS object (placement #149, the west shutter leaf at z 65.02 [D obj bounds; glist flags 0x1 like the solid doors]) — it raises +4.824 y over 240 ticks on ch 0x23 [D params/keys; M SS_Update 0x1a9948's 0x40 arm], and the level-13 census found NO ch-0x23 writer on the disc (docs/levels/07000013.md §7: every writer family checked; the only candidate is SP #427's OUT param 6 = 0x23 [M 0x1dbda8's restart arms], unreachable at its world-origin placement). The raise RESPONSE is ported and proven green (interactables_07000013_live::the_shutter_ss_sweeps_up_on_ch_0x23); the writer needs the main agent's gdbwatch on switch_channels+0x23 (0x26fc92) across a fresh boot — owner: level-13-interactables follow-up"]
 fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     let iso = iso();
     // ---- 07000012 walked (the shared route) ----
