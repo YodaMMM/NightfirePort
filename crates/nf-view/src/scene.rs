@@ -6161,7 +6161,11 @@ impl Scene {
         // 0x02000039 per drop with the viewer's rotation (Mat_CopyRot viewer+0x1A0) under
         // psiSetTweakARGB(36, 32, 32, 32). Effect kinds 7 / 8, one slot per drop (the rain cap is
         // 0x80 on 09-0b, 0x40 elsewhere — 128 slots cover both [M InitDrops]).
-        if drones.is_some() {
+        // Only a rain level gets the pool: a SNOW_gen placement (type 0xDF) with DropType (param 0) = 1,
+        // the same placement `Drones` builds its weather from — elsewhere the 128 slots were dead weight.
+        let rains = level.maps.iter().flat_map(|m| m.placements.iter())
+            .any(|p| p.flags & 0xff == 0xdf && p.params.iter().find(|(i, _)| *i == 0).is_some_and(|&(_, v)| v as u8 == 1));
+        if drones.is_some() && rains {
             for (kind, mesh) in [(7u8, 0x0200_0290u32)] {
                 let Some(&(m, o)) = level.by_hash.get(&mesh) else { continue };
                 let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
