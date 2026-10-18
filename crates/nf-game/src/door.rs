@@ -651,6 +651,14 @@ impl Doors {
         // Stand-in shape [S — the game's straddle test function is not pinned]: a closed straddle
         // door activates (from_player — the lock guards hold) when the player's feet stand inside
         // its threshold (xz 1.4, the leaf's half-width plus the capsule; y within the door band).
+        // CORRECTION (level-15-complete): the "every 07000015 kind-2 door carries it" and
+        // "door[32] is E-dead" claims above are DISPROVEN by the disc — none of 07000015's
+        // corridor doors [29]/[32]/[49]/[50]/[51]/[52] carries a par-4 (parsed `straddle=false`,
+        // probe walkreal_probe15), and door[32] opens with the plain E path once the player
+        // stands in reach: the walkreal-c stop was the ROUTE (the console placement map54 #145
+        // walls the south-east corner; the nav graph's own lane reaches the doorway from the
+        // north — walkreal_07000015_live now walks it green). The arm stays for the
+        // 07000016-arrival-door shape [S] and changes no E-path behaviour.
         for i in 0..self.list.len() {
             let d = &self.list[i];
             if !d.straddle || d.kind == 0 || d.state & 0xc != 0 { continue; }
