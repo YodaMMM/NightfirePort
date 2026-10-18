@@ -71,6 +71,10 @@ pub struct PcQworm {
     pub armed: bool,
     /// `obj+0xF4`: 0 idle, 1 installing, ≥2 done [M 0x1aee20].
     pub state: u8,
+    /// The object's world-sphere radius (obj+0x8C): 0 until `set_pc_spheres` refines it from the
+    /// object's glist bounds — `Player_Activate` 0x1a5170 picks sphere-vs-sphere against the hit
+    /// object's world sphere, not a point. The sphere rides the placement position (`pos`).
+    pub radius: f32,
 }
 
 /// One switch (`Switch_Create` 0x1adcc0's ext: +0x12 = param0 channel, +0x10 = param2 auto-delay,
@@ -147,7 +151,7 @@ impl UseObjects {
             let pos = p.translation;
             if p.flags & 0xff == 0x35 {
                 // PCQWorm_Create 0x1b07a8: ext[1] = param 1 (the channel), ext[2] byte = param 2.
-                u.pcs.push(PcQworm { pos, ch: par(1) as u8, e_usable: par(2) as u8, armed: par(3) != 0, state: 0 });
+                u.pcs.push(PcQworm { pos, ch: par(1) as u8, e_usable: par(2) as u8, armed: par(3) != 0, state: 0, radius: 0.0 });
             } else {
                 // Switch_Create 0x1adcc0: +0x12 = param 0, +0x10 = param 2, +0x16 = param 3,
                 // +0x19 = param 4, +0x14 = param 5; obj+0xF4 starts at param 3.
@@ -161,6 +165,31 @@ impl UseObjects {
             }
         }
         u
+    }
+
+    /// Refine each PC's world-sphere RADIUS from its object's glist bounds (`props::bounds`):
+    /// the half-diagonal — the port's stand-in for the game's obj+0x8C [M Player_Activate
+    /// 0x1a5170's sphere pick; the same quantity `Control_BuildWorldSph` derives for script
+    /// entities, 0x1d8d78:113]. The CENTRE stays the placement transform: the port's obj+0x30
+    /// world position. 715a first moved the centre to the bounds centre, which broke the 0a
+    /// Q-Worm install's geometry (the live test anchors Bond to `pc.pos`; at the bounds centre
+    /// he spawns inside the desk's collision and is pushed ~2.5 from the PC, out of the bullet's
+    /// reach — probe 715c) for no live consumer: the E pick is the only sphere reader, and its
+    /// reach (view sphere r 1.0 + this radius) covers the object either way. Called once after
+    /// `create` by the level build (the placements alone carry no model bounds).
+    pub fn set_pc_spheres(&mut self, level: &nf_formats::level::Level, m: usize) {
+        let mut it = self.pcs.iter_mut();
+        let Some(first) = it.next() else { return };
+        let mut pcs: Vec<&mut PcQworm> = vec![first];
+        pcs.extend(it);
+        let mut k = 0usize;
+        for p in &level.maps[m].placements {
+            if p.flags & 0xff != 0x35 { continue; }
+            let Some(pc) = pcs.get_mut(k) else { break };
+            let (lo, hi) = crate::props::bounds(level, m, p);
+            pc.radius = (((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt()) / 2.0;
+            k += 1;
+        }
     }
 
     /// `PCQWorm_Update` 0x1aee20 + `Switch_Update` 0x1adea8, once per tick. `bullets` are this
@@ -333,9 +362,11 @@ impl UseObjects {
             }
         }
         // PCQWorm_Activate 0x1b0840: only when param 2 != 0 (the Tower PCs: 0 → E does nothing).
+        // The pick is the game's sphere-vs-sphere [M 0x1a5170]: the view sphere (r 1.0) against the
+        // PC's own world sphere (obj+0x80 centre, obj+0x8C radius; radius 0 = the unrefined point).
         for pc in self.pcs.iter_mut() {
             if pc.e_usable == 0 || pc.state != 0 { continue; }
-            if near(pc.pos) {
+            if in_sphere(pc.pos, pc.radius) {
                 pc.state = 1;
                 used = true;
             }
