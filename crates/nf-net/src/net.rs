@@ -47,6 +47,8 @@ impl UdpTransport {
     pub fn bind(addr: &str) -> std::io::Result<UdpTransport> {
         let sock = UdpSocket::bind(addr)?;
         sock.set_nonblocking(true)?;
+        // net-p2p §3a: the same-network PROBE is a broadcast.
+        let _ = sock.set_broadcast(true);
         // Read timeout is irrelevant in non-blocking mode but set a sane
         // bound anyway; try_recv never blocks.
         sock.set_read_timeout(Some(Duration::from_millis(1)))?;

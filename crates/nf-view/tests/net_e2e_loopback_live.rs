@@ -122,7 +122,7 @@ fn host_listen(fe: &mut FrontEnd, port: u16) {
     assert!(act(fe, None, Action::Down), "the Start Listening row");
     assert!(act(fe, None, Action::Confirm), "Start Listening");
     assert!(fe.mp_hosting, "the host is hosting");
-    assert_eq!(fe.page, Page::MpJoin, "the host lobby is the game's Join page [S port: net-online-lobby §2]");
+    assert_eq!(fe.page, Page::MpOnlineLobby, "the online path lands on the ONE screen [S port: net-online-lobby §6]");
 }
 
 /// The address chars through the REAL typing path, then Connect — the real
@@ -137,7 +137,7 @@ fn client_connect(fe: &mut FrontEnd, host: &mut FrontEnd, addr: &str) {
     assert!(act(fe, None, Action::Confirm), "Connect");
     assert_eq!(fe.mp_net_status(), Some("Connecting..."), "dialing");
     let deadline = Instant::now() + Duration::from_secs(10);
-    while fe.page != Page::MpLobby {
+    while fe.page != Page::MpOnlineLobby {
         fe.tick();
         host.tick();
         std::thread::sleep(Duration::from_millis(2));
@@ -254,41 +254,22 @@ fn run_e2e(path: &str, fault: Option<(u64, u32, u32)>) {
     assert_eq!(feh.mp_human_count(), 2, "the host counts both humans");
     assert_eq!(feh.mp_net_status(), None, "the host lobby is quiet once the mirror is full");
 
-    // ── the host picks the scenario/map/options and starts: Deathmatch →
-    // Skyrail → the defaults → Game Rules (frag limit 10 → 2, so the scripted
-    // kills end the match) → the start checks → the confirm ──
-    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "the host's ready panel → the scenario wheel [M menu.rs:4714]");
-    assert_eq!(feh.page, Page::MpScenario);
-    // The wheel opens on the row of MPSettings+0x1A4 = 1 (boot) — Arena [M P_MPSCENARIO 0x217348:25;
-    // bootup 0x1c7e78:30]; row 0 is Quick Game.
-    assert_eq!(feh.mp_scenario_row, 1, "the scenario wheel opens on Arena [M 0x217348:25]");
-    // Hold the lobby's pacing where the old walk had its Down press: a no-op key on the wheel
-    // (Extra has no arm there) still runs act()'s 60 paired ticks.
-    assert!(!act(&mut feh, Some(&mut fec), Action::Extra), "Extra is a no-op on the scenario wheel");
-    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "Arena (Deathmatch, row 1) → the map wheel");
-    assert_eq!(feh.page, Page::MpMap);
-    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "Skyrail (row 0) → the setup");
-    assert_eq!(feh.page, Page::MpSetup);
-    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "the character");
-    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "the handicap → the options hub");
-    assert_eq!(feh.page, Page::MpOptions);
-    assert!(act(&mut feh, Some(&mut fec), Action::Down), "the AI Bots row");
-    assert!(act(&mut feh, Some(&mut fec), Action::Down), "the Game Rules row");
-    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "Game Rules");
-    assert_eq!(feh.page, Page::MpRules);
-    assert!(act(&mut feh, Some(&mut fec), Action::Down), "the points row");
+    // ── the host sets the match on the ONE screen and starts: the defaults are
+    // Arena/Skyrail [S §6.1]; the frag limit steps to 2 so the scripted kills
+    // end the match [M P_MPRULES 0x20f790:45-76's list] ──
+    let lim = feh.mp_lobby_rows().unwrap().iter()
+        .position(|r| r.id == nf_view::mp_lobby::MpLobbyRowId::Limit).unwrap();
+    feh.mp_one.focus = lim;
     for _ in 0..8 {
         assert!(act(&mut feh, Some(&mut fec), Action::Left), "the frag limit steps down (1..10 by 1 [M P_MPRULES 0x20f790:45-54])");
     }
-    assert_eq!(feh.mp_frag_limit, 2, "the frag limit is 2 — the scripted kills end the match");
-    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "the rules close to the hub");
-    assert_eq!(feh.page, Page::MpOptions);
-    assert_eq!(feh.mp_options_row, 2, "the hub's row is where Rules was opened from");
-    assert!(act(&mut feh, Some(&mut fec), Action::Up), "back to AI Bots");
-    assert!(act(&mut feh, Some(&mut fec), Action::Up), "back to Continue");
-    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "Continue passes the start checks");
-    assert_eq!(feh.page, Page::MpConfirm);
-    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "the summary's ✕ starts the match");
+    assert_eq!(feh.mp_one.frag_limit, 2, "the frag limit is 2 — the scripted kills end the match");
+    // The publish rides the paired ticks; the client's own screen mirrors the host's limit.
+    assert_eq!(fec.mp_one.frag_limit, 2, "the client mirrors the host's limit [S §6.4]");
+    let start = feh.mp_lobby_rows().unwrap().iter()
+        .position(|r| r.id == nf_view::mp_lobby::MpLobbyRowId::Start).unwrap();
+    feh.mp_one.focus = start;
+    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "Start builds the settings and hands over [M mp_confirm_start]");
     let hs = feh.mp_match_settings.clone().expect("the host's settings ride the request");
     assert_eq!(feh.requested_level, Some(ARENA), "the host requests the arena");
 

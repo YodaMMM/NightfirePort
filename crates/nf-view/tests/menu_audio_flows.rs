@@ -374,6 +374,7 @@ impl Host {
         fe.flow.stack = vec![nf_view::menu::ST_RUNNER];
         fe.flow.current_level = EXCHANGE;
         fe.mission_ended(if complete { Outcome::Complete } else { Outcome::Failed }, Stats::default());
+        if complete { fe.reopen_queued_page(); } // the load tail's MenuManager_Create [M 0x1d6360:160-163]
         self.fe = Some(fe);
         self.music_page = None;
         self.frame();
@@ -597,7 +598,7 @@ fn an_sp_mission_start_stops_the_menu_music_for_the_level() {
     // [D SB_12]. [S port: the game opens no page over the mission on completion — case 4 sets
     // +0x1c = 0x40000036 and loads (0x182c60:72-75); the port shows the page during the load.]
     h.mission_end(true);
-    assert!(h.fe.as_ref().is_some_and(|fe| fe.page == Page::Results));
+    assert!(h.fe.as_ref().is_some_and(|fe| fe.page == Page::Results), "the load tail opened the queued page [M 0x1d6360:160-163]");
     assert_eq!(h.jingles(), 0, "the results page's restart is silent over a mission");
     assert!(h.drv.log.iter().any(|l| l.starts_with("gated start")),
         "the command mirrors the game's call, the gate mutes it");

@@ -60,6 +60,24 @@ pub mod hud;
 
 pub use rules::{MpObjState, MpObjectsRt, Winner};
 
+/// `MP_skins` (ACTION.ELF 0x26d488, 29 records × 16 B: skin hashcode, name label, a small count,
+/// 0) — the character index `MPSettings+slot*0x30+0x24` → the body's skin hashcode
+/// `Player_Init` 0x1910f8:111 reads [D the ELF data, dumped 2026-10-18; M]. All 29 resolve in
+/// 07000023's loaded skins [L probe_mp_skins].
+pub const MP_SKINS: [u32; 29] = [
+    0x0500_0089, 0x0500_00a5, 0x0500_008e, 0x0500_0092, 0x0500_0095, 0x0500_0096, 0x0500_0097, 0x0500_0098,
+    0x0500_009a, 0x0500_00c6, 0x0500_009e, 0x0500_00a0, 0x0500_00a4, 0x0500_008b, 0x0500_00bb, 0x0500_001c,
+    0x0500_001d, 0x0500_001f, 0x0500_0056, 0x0500_0060, 0x0500_0063, 0x0500_0086, 0x0500_0081, 0x0500_0082,
+    0x0500_0084, 0x0500_006b, 0x0500_0085, 0x0500_007b, 0x0500_00b9,
+];
+
+/// The body skin for one slot of these settings (0 = the slot is empty).
+pub fn slot_skin(s: &MpSettings, slot: usize) -> u32 {
+    let used = if slot < 4 { slot < s.human_count as usize } else { slot - 4 < s.bot_count as usize };
+    if !used { return 0; }
+    MP_SKINS.get(s.players[slot].skin as usize).copied().unwrap_or(MP_SKINS[0])
+}
+
 /// The scenario words (`MPSettings+0x420`, atlas §3) — phase 1 only constructs Deathmatch; the rest
 /// name the ids the registration gates on.
 pub mod scenario {
@@ -113,8 +131,10 @@ pub struct MpSettings {
     pub gametype_mask: u32,
     /// +0x1AC (u16): the player count (= the viewports).
     pub player_count: u16,
-    /// +0x384: the MP master enable — `MP_Start`/`MP_Update` and both placement registrations
-    /// return when it is 0 [M 0x183a50:72-74, 0x1d04f0 case 0x25].
+    /// +0x180 (Ghidra `MPSettings._384_4_` — the 384 is DECIMAL; this said +0x384 before): the MP
+    /// master enable — `MP_Start`/`MP_Update` and both placement registrations return when it is
+    /// 0 [M 0x183a50:72-74, 0x184bd0:14, 0x1d04f0 case 0x25], and `Mission_Update` returns when it
+    /// is NOT 0 [M 0x182c60:16-18].
     pub master: u32,
     /// +0x388: `MP_Start` copies the master enable here [M 0x183a50:70].
     pub master_copy: u32,

@@ -253,7 +253,14 @@ pub struct Session<T: Transport> {
     host_timed_out: bool,
     listen_emitted: bool,
     match_ended: bool,
+    /// net-p2p: datagrams that are not session packets (STUN responses, hole punches) — kept for
+    /// [`Session::take_stray`] so the reachability layer can share the game socket (its public
+    /// mapping IS the game port's). Capped at [`STRAY_CAP`]; the oldest are dropped.
+    stray: Vec<(SocketAddr, Vec<u8>)>,
 }
+
+/// net-p2p: at most this many un-taken stray datagrams are held [S port design].
+pub const STRAY_CAP: usize = 64;
 
 impl<T: Transport> Session<T> {
     /// Create the host. `settings` and `seed` are sent to every client in
@@ -283,6 +290,7 @@ impl<T: Transport> Session<T> {
             host_timed_out: false,
             listen_emitted: false,
             match_ended: false,
+            stray: Vec::new(),
         }
     }
 
@@ -310,6 +318,7 @@ impl<T: Transport> Session<T> {
             host_timed_out: false,
             listen_emitted: false,
             match_ended: false,
+            stray: Vec::new(),
         }
     }
 
@@ -351,6 +360,12 @@ impl<T: Transport> Session<T> {
     /// Ignored until the client's slot is assigned (host: always slot 0) —
     /// the app samples controls only after `Event::Connected`/`MatchStarted`,
     /// so nothing is lost.
+    /// The match's input lead: the app submits the input sampled while running tick `t` for
+    /// tick `t + input_delay()` (the host's config; a client takes it from the WELCOME).
+    pub fn input_delay(&self) -> u32 {
+        self.cfg.input_delay
+    }
+
     pub fn local_input(&mut self, tick: u32, input: Input) {
         if let Role::Client { slot: None, .. } = &self.role {
             return;
@@ -490,6 +505,22 @@ impl<T: Transport> Session<T> {
         self.send_to_peers(&pkt);
     }
 
+    /// net-p2p: send a raw datagram from the session's own socket (STUN binding requests, hole
+    /// punches) — the NAT mapping the peer must reach is this socket's.
+    pub fn send_raw(&mut self, to: SocketAddr, data: &[u8]) {
+        self.transport.send(to, data);
+    }
+
+    /// net-p2p: the datagrams `poll` received that were not session packets, oldest first.
+    pub fn take_stray(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
+        std::mem::take(&mut self.stray)
+    }
+
+    /// The local bind address of the session's socket.
+    pub fn local_addr(&self) -> SocketAddr {
+        self.transport.local_addr()
+    }
+
     // ---------- internals ----------
     fn send_to_peers(&mut self, pkt: &Packet) {
         let mut buf = Vec::new();
@@ -536,6 +567,9 @@ impl<T: Transport> Session<T> {
         while let Some((from, data)) = self.transport.try_recv() {
             if let Some(pkt) = proto::decode(&data) {
                 self.handle_packet(from, pkt, &mut events);
+            } else {
+                if self.stray.len() >= STRAY_CAP { self.stray.remove(0); }
+                self.stray.push((from, data));
             }
         }
         // 2. Client HELLO retransmit until WELCOME/REFUSE.
@@ -1008,6 +1042,8 @@ impl<T: Transport> Session<T> {
                         go_confirmed: false,
                         last_go_ms: 0,
                     });
+                    // The host's delay is the match's (both sides schedule the same lead).
+                    self.cfg.input_delay = input_delay as u32;
                     events.push(Event::Connected {
                         slot,
                         seed,

@@ -225,6 +225,7 @@ fn finishing_a_mission_under_the_codename_saves_progress() {
     session.apply_to(&mut fe2);
     fe2.mission_ended(Outcome::Complete, Stats { shots_fired: 30, shots_hit: 20, accuracy_pct: 66, time_s: 100 });
     fe2.requested_level = None; // the headless leg skips the outro wrap
+    fe2.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
     let mut progress = nf_game::progress::Progress::default();
     progress.stats[0].dispatched = 2;
     progress.stats[0].shots_fired = 10;

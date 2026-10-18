@@ -123,6 +123,7 @@ fn the_sp_run_stack_matches_the_game() {
     fe.requested_level = None;   // the host takes the request when it schedules the load
     assert_eq!(fe.flow.stack, vec![ST_BOOT, ST_RUNNER]);
     assert_eq!(fe.flow.page, menu::PAGE_RESULTS, "the results page [M 0x1d6360's MenuManager_Create on 0x7000048]");
+    fe.reopen_queued_page(); // the load tail's MenuManager_Create opened it [M 0x1d6360:160-163]
 
     // --- next level from the results page: Confirm opens the mission list [M 0x208e78:39-44 —
     // a page change, not a load], then the row pick runs the same push sequence as before. Row 2
