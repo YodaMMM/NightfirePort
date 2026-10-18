@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use nf_net::net::Transport;
 use nf_net::shim::{Shim, ShimEndpoint};
 use nf_net::session::{Config, Event, LeaveReason, RefuseReason, Session};
-use nf_net::{Input, MatchSettings, NEUTRAL};
+use nf_net::{Input, MatchSettings, NEUTRAL, MAX_AGENTS};
 
 fn addr(port: u16) -> SocketAddr {
     format!("127.0.0.1:{port}").parse().unwrap()
@@ -45,7 +45,7 @@ fn agent_input(slot: u8, tick: u32) -> Input {
 
 /// The fake deterministic sim hash (the lockstep tests' chain): same inputs
 /// on every machine = same hash; a one-bit difference flips it.
-fn sim_hash(tick: u32, inputs: &[Input; 4], prev: u64) -> u64 {
+fn sim_hash(tick: u32, inputs: &[Input; MAX_AGENTS], prev: u64) -> u64 {
     let mut h = prev ^ 0xC0FF_EE00;
     for (s, i) in inputs.iter().enumerate() {
         h = h.rotate_left(17) ^ (i.forward.to_bits() as u64).wrapping_add(s as u64 + 1);
@@ -70,7 +70,7 @@ impl Sim {
         Sim { next_tick: 0, prev_hash: 0, marks: Vec::new() }
     }
     /// Run `tick` with `inputs`: fold the chain, return the hash.
-    fn run(&mut self, tick: u32, inputs: &[Input; 4]) -> u64 {
+    fn run(&mut self, tick: u32, inputs: &[Input; MAX_AGENTS]) -> u64 {
         assert_eq!(self.next_tick, tick, "ticks run sequentially");
         self.prev_hash = sim_hash(tick, inputs, self.prev_hash);
         self.next_tick += 1;
@@ -305,17 +305,18 @@ fn late_join_transfer_verify_and_hashes_agree() {
     assert!(desyncs.is_empty(), "no desync was reported: {desyncs:?}");
 }
 
-/// The match is full (4 agents = the game's MP limit, humans 0..4 [M
-/// MP_Start 0x183a50]): a late HELLO is refused with `Full`.
+/// The match is full (16 agents = the port's cap [S mp-16-slots; the game's
+/// own limit is 4 humans, MP_Start 0x183a50]): a late HELLO is refused with
+/// `Full`.
 #[test]
 fn late_join_refused_when_full() {
     let shim = Shim::new(7);
     let mut ms: u64 = 0;
     let mut host = Session::new_host(test_cfg(), shim.endpoint(addr(8810)), MatchSettings::default(), 1);
-    let mut clients: Vec<Session<ShimEndpoint>> = (0..3)
-        .map(|i| Session::new_client(test_cfg(), shim.endpoint(addr(8811 + i)), addr(8810)))
+    let mut clients: Vec<Session<ShimEndpoint>> = (0..MAX_AGENTS - 1)
+        .map(|i| Session::new_client(test_cfg(), shim.endpoint(addr(8811 + i as u16)), addr(8810)))
         .collect();
-    for i in 0..3 {
+    for i in 0..MAX_AGENTS - 1 {
         let deadline = ms + 4000;
         loop {
             ms += 10;
@@ -360,7 +361,7 @@ fn late_join_refused_when_full() {
         }
         assert!(ms < deadline, "the full host refuses the late joiner");
     }
-    assert_eq!(host.agents().len(), 4, "the refusal left the roster untouched");
+    assert_eq!(host.agents().len(), MAX_AGENTS, "the refusal left the roster untouched");
 }
 
 /// A joiner whose replay does NOT verify leaves with `JoinVerifyFailed` —

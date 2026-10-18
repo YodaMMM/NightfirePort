@@ -107,7 +107,7 @@ fn agent_input(slot: u8, tick: u32) -> nf_net::Input {
 
 /// The fake deterministic sim: a hash chain over all 4 agents' inputs —
 /// same inputs on every machine = same hash; one flipped bit changes it.
-fn sim_hash(tick: u32, inputs: &[nf_net::Input; 4], prev: u64) -> u64 {
+fn sim_hash(tick: u32, inputs: &[nf_net::Input; nf_net::MAX_AGENTS], prev: u64) -> u64 {
     let mut h = prev ^ 0xC0FF_EE00;
     for (s, i) in inputs.iter().enumerate() {
         h = h.rotate_left(17) ^ (i.forward.to_bits() as u64).wrapping_add(s as u64 + 1);
