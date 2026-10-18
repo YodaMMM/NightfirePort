@@ -1700,7 +1700,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     // The doors' `Door_IsClosed` snapshot for the walk's portal gate (fix-door-portal-links).
     let door_closed = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, scene.sim.as_ref().map(|s| &s.world), door_closed.as_deref());
-    // cull-relax: objects are never room-culled (see the live path).
+    // Objects are never room-culled (see the live path).
     r.update_skin(&queue, scene, choice, time, opts, None);
     r.set_char_light_centres(scene);
     r.lights = scene.frame_lights();
@@ -3881,10 +3881,9 @@ impl ApplicationHandler for App {
                 // G-043: build the palette only when a tick ran, then draw between the last two ticks.
                 let pal_rebuilt = self.ticked || self.pal_cur.is_none();
                 if pal_rebuilt {
-                    // cull-relax: characters, doors, pickups and props are never room-culled — the
-                    // mask's misses (a guard in a doorway, an object between areas) vanished whole
-                    // objects in the user's playtest; they are few and the depth test hides the ones
-                    // behind walls. The World draws keep the (widened) room cull in render().
+                    // The user (2026-10-18): "culling should only happen on map geometry, no characters
+                    // or items" — characters, doors, pickups and props are never room-culled; only the
+                    // World draws take the room/portal cull (render()).
                     let new = self.scene.skin_palette(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None);
                     g.renderer.char_light_centre = self.scene.char_light_centres();
                     self.pal_prev = self.pal_cur.take();
