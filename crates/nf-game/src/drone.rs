@@ -8425,6 +8425,21 @@ impl Drones {
         self.exit_hold.as_ref().map(|h| (h.fade_frames, h.total))
     }
 
+    /// The exit hold as the game's viewer fade (level-exit-fade): `Game_Draw`'s overlay source is
+    /// the viewer's fade object — alpha +0x228, byte +0x233, colour +0x230-232 [M 0x1e6f50:203-209
+    /// `psiFadeView(R,G,B,A)`]; `GameFlow_PushState`'s state-7 push carried colour 0xff (black,
+    /// alpha byte 255 [M 0x1b2318:112 a1=0xff]) and `Camera_SetFade` stored the linear per-tick
+    /// rate 1/300 [M 0x1bbdd8 disasm 0x1bbe20-0x1bbe54: f0 = 60.0/f12 · (1/60) · (0xff/255)].
+    /// The port's per-tick alpha: `1 − left/total` — 1/300 on the first held tick (the game's
+    /// frame 1 draws `step` [M 0x1bada0:16-20 `alpha += step·FRAME_RATE_MUL`]), 1.0 on the last
+    /// (left 0, the fade-done frame before the state-8 pop [M 0x1c98c8:174-176]).
+    pub fn exit_fade_view(&self) -> Option<ViewFade> {
+        self.exit_hold.as_ref().map(|h| ViewFade {
+            alpha: 1.0 - h.fade_frames as f32 / h.total as f32,
+            rate: 1.0 / h.total as f32,
+        })
+    }
+
     /// `GameState+0x28`'s setter (C_SBNFDFCTY_Handler 0x216ca8 stores the difficulty page's
     /// selection to 0x2a3790, `sw v0,14224(t0)` @0x216dc4; the boot default is 2 [M bootup
     /// 0x1c7e78:25 @0x1c7f88]). The menus (180-fix-menus) call this.
@@ -10479,6 +10494,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // check below; the fail/success ones ride the mission's own transitions here.
         if events.iter().any(|e| matches!(e, crate::mission::Event::MissionFailed)) { self.music.event(7, 1); }
         if events.iter().any(|e| matches!(e, crate::mission::Event::MissionComplete { .. })) { self.music.event(8, 1); }
+        // level-exit-fade: the mission's own exit fade [M 0x182c60:73-74 — `ResetMap_LevelToLoad(
+        // LevelToEndTo)` + `GameFlow_PushState(0x42700000, 7, FadeClr_147)`, 0x42700000 = 60.0f]:
+        // the mission-complete path holds the same 60-tick fade the trigger path holds at 300
+        // [M 0x1b2318:112's 0x43960000 = 300.0f]. Only the in-port arm (an 0x0700 level, the same
+        // gate the host's level_exit drain uses) — the front-end 0x7000048 / 0x7300 outro codes
+        // leave the level without this sim's fade.
+        if self.exit_hold.is_none() {
+            if let Some(next) = events.iter().find_map(|e| match e {
+                crate::mission::Event::LevelEnd { next } if next & 0xffff_0000 == 0x0700_0000 && *next != 0x0700_0048 => Some(*next),
+                _ => None,
+            }) {
+                self.exit_hold = Some(ExitHold { next, fade_frames: 60, total: 60 });
+            }
+        }
         self.mission_events = events;
         // `Game_Run`: `Env_Update` (one `Rand_Rand(20000)`, then `UpdateDrops`) runs BEFORE the
         // object handler (fix-impact-remainder2: moved above the fx pass — the game's order is

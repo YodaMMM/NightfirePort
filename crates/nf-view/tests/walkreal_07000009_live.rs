@@ -146,11 +146,52 @@ fn walk_tower_a_start_to_finish() {
     w.wait(120);
     w.stop_on_exit = false;
     w.walk_nav_to([LIFT_MOUTH[0], LIFT_MOUTH[1] + 0.5, LIFT_MOUTH[2]], "back to the lift mouth", 0.8);
-    w.walk_to(Wp { at: [IN_CAB[0], IN_CAB[1], IN_CAB[2]], act: Act::None, arrive: 0.8 }, "into the cab");
+    // level-exit-fade: walk the last stretch by hand (the same real step_bond input the walker
+    // uses) and break the TICK the exit fires — the hold runs 300 ticks, and a wedged cab walk
+    // would outlive it before any post-walk assert could see the fade.
+    {
+        let mut fired_at = None;
+        for k in 0..900 {
+            {
+                let sim = w.scene.sim.as_mut().unwrap();
+                let b = &mut sim.bond;
+                let dx = IN_CAB[0] - b.pos[0];
+                let dz = IN_CAB[2] - b.pos[2];
+                b.yaw = dx.atan2(dz);
+                b.pitch = 0.0;
+                let forward = if dx * dx + dz * dz > 0.25 { 1.0 } else { 0.0 };
+                sim.step_bond(nf_game::player::Input { forward, ..Default::default() }, false, false, false);
+                if sim.drones.level_exit.is_some() { fired_at = Some(k); break; }
+            }
+        }
+        assert!(fired_at.is_some(), "the cab walk must fire the exit trigger (bond at {:?})",
+            w.scene.sim.as_ref().unwrap().bond.pos);
+        eprintln!("[09] the exit fired {} ticks into the cab walk", fired_at.unwrap());
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x32), "TOUCH_ONCE #67 inside the cab → ch 0x32 [D]");
         assert_eq!(sim.drones.level_exit, Some(0x0700_000a), "LOAD_LEVEL #63 fires to 0700000a [D]");
+        // level-exit-fade: `Trigger_Activate`'s tail [M 0x1b2318:108-113] — the hold stands at the
+        // push's 300 ticks (0x43960000 = 300.0f) and the black overlay's alpha ramps over them.
+        let (left, total) = sim.drones.exit_fade().expect("the exit hold stands at the exit");
+        assert_eq!(total, 300, "GameFlow_PushState(300.0f, 7, 0xff) [M 0x1b2318:112]");
+        assert!(1 <= left && left <= 300, "the fade is still counting, got left={left}");
+        let a0 = sim.drones.exit_fade_view().expect("the fade getter").alpha;
+        assert!(a0 >= 0.0 && a0 < 1.0, "pre-fade alpha in [0,1), got {a0}");
+        // The music arm [M 0x1b2318:109 `Music_Event(3,1)` → 0x113558:9-33]: the level's own END
+        // marker jumped INSTANTLY — end_calm when the playing section is outside the combat set,
+        // end_combat when the lobby's roaming guards put one on (the scan [M 0x113558:12-31]; both
+        // arms pinned per-arm in the music.rs unit test) — with the SFX-bus fade-down queued.
+        let row = sim.drones.music.table.iter().find(|m| m.level == 0x0700_0009).expect("07000009's MapMusic row [D]");
+        assert!(sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::Jump { section, instant: true } if *section == row.end_calm || *section == row.end_combat)),
+            "the exit jumped an end marker instantly, out: {:?}", sim.drones.music.out);
+        assert!(sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::FadeDown { music: false })),
+            "SFXFadeDown(0) queued [M 0x113558:31]");
+        assert!(sim.drones.music.wait_for_end, "MusicWaitForEnd = 1 [M 0x113558:33]");
+        // The end marker must NOT be on_death/on_fail (the death/fail path keeps its own markers).
+        assert!(!sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::Jump { section, .. } if *section == row.on_death || *section == row.on_fail)),
+            "the exit did not ride the death/fail markers");
         // The end-of-level mission state: obj1 unfailed (2), obj2 complete (4), obj2-next
         // announced (3 — its enable ch 0x46 fired at the panel [M 0x1827d8:55-67]).
         assert_eq!(sim.drones.mission.states[8][0], 2, "objective 1 never failed (no alarm) [D flags 2]");
@@ -158,6 +199,21 @@ fn walk_tower_a_start_to_finish() {
         assert_eq!(sim.drones.mission.states[8][2], 3, "the next objective announced when the elevator activated [M 0x1827d8:55-67]");
         assert!(!sim.drones.channels.on(0x61) && !sim.drones.channels.on(0x7c) && !sim.drones.channels.on(0x7d),
             "no alarm channel ever fired");
+    }
+    // The fade's own ramp: two held ticks apart, alpha rises by exactly 1/300 per tick (the linear
+    // rate Camera_SetFade stored [M 0x1bbdd8 disasm 0x1bbe20-0x1bbe54]; FRAME_RATE_MUL = 1 at 60 Hz
+    // [M GS_SetRefreshRate 0x17d2b8:15]).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let a0 = sim.drones.exit_fade_view().map(|f| f.alpha).expect("the hold still runs");
+        let step = 1.0f32 / 300.0;
+        let (a1, a2) = loop {
+            sim.step_bond(nf_game::player::Input::default(), false, false, false);
+            let Some(f) = sim.drones.exit_fade_view() else { panic!("the hold expired before the ramp sample") };
+            if f.alpha > a0 + step * 2.0 { break (f.alpha, step); }
+        };
+        assert!(a1 > a0, "the alpha rises, {a0} → {a1}");
+        let _ = a2;
     }
     eprintln!("[09] start-to-finish in {} ticks; stuck: {}; falls: {}",
         w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
@@ -212,5 +268,17 @@ fn the_alarm_switch_fails_objective_1() {
         assert!(sim.drones.channels.on(99), "the mission-fail channel ch 99 [M 0x1827d8:128-131]");
         assert_eq!(sim.drones.mission.states[8][0], 5, "objective 1 FAILED (state 5) [M mission.rs states]");
         assert_eq!(sim.drones.mission.states[8][1], 3, "objective 2 was never completed (announced, not 4)");
+        // level-exit-fade sister: the death/fail exit keeps ITS OWN path [M 0x182c60:21-42 — the
+        // fail arm posts Music_Event(6,1), sets FadeClr_147 = 0xff0000ff (red), kills Bond and
+        // ends in the mission-fail MENU (case 4's `MissionState != 6` arm); it never pushes the
+        // trigger exit's 300-tick black fade or requests a level load]: no hold, no exit, and the
+        // board's jump was on_fail/on_death (the fail pulse [M 0x182c60:31]), never an end marker.
+        assert!(sim.drones.exit_hold.is_none(), "the fail path runs no exit hold");
+        assert_eq!(sim.drones.level_exit, None, "the fail path loads no level");
+        let row = sim.drones.music.table.iter().find(|m| m.level == 0x0700_0009).expect("07000009's MapMusic row [D]");
+        assert!(sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::Jump { section, .. } if *section == row.on_fail || *section == row.on_death)),
+            "the fail rode its own marker, out: {:?}", sim.drones.music.out);
+        assert!(!sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::Jump { section, .. } if *section == row.end_calm || *section == row.end_combat)),
+            "the fail never jumped the exit end marker");
     }
 }

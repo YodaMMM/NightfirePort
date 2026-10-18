@@ -5416,7 +5416,14 @@ impl Scene {
         let flash = if h.flashbang <= 0.0 || h.flash_total <= 0.0 { 0.0 }
             else if h.flashbang > h.flash_total * 0.5 { h.flash_alpha }
             else { h.flash_alpha * (h.flashbang / (h.flash_total * 0.5)) };
-        crate::hud::script_overlay(sim.drones.view_fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash)
+        // level-exit-fade: the exit hold rides the same overlay as the script fade — in the game
+        // BOTH are the viewer's fade object (`Game_Draw` 0x1e6f50:203-209 draws one
+        // `psiFadeView(R+0x230, G+0x231, B+0x232, A+0x233)` per viewer), and `GameFlow_PushState`
+        // ABORTS a push while a fade is already in flight [M 0x1c9f88 `beqz $v0` → no push], so
+        // the two can never run at once: `view_fade` wins when a script owns the fade, the exit
+        // hold otherwise.
+        let fade = sim.drones.view_fade.or_else(|| sim.drones.exit_fade_view());
+        crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash)
     }
 
     /// `skeletons`: every skeleton on the disc by id; `sequences`: the level's animation archive, grouped by skeleton.

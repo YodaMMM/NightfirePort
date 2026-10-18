@@ -287,6 +287,8 @@ pub struct Renderer {
     /// View-projection without the camera translation (sky objects that follow the viewer).
     /// The per-frame uniform staging, reused (frame-240: no per-frame allocation).
     staged: Vec<f32>,
+    /// portal-orphans: per cel-graph node, true when no portal touches it and no room's chain owns it.
+    orphan_nodes: Vec<bool>,
     /// batch-draws: the world pass with every texture in one bound array (the draw's texture index
     /// rides its per-draw slot) and one `multi_draw_indexed_indirect` per run of equal pipelines, in
     /// the draw order — None = the per-draw path (no adapter support, or `NF_NOBINDLESS`).
@@ -650,7 +652,14 @@ impl Renderer {
         // movies.md §Presentation], so the quad draws BEFORE the HUD runs (under the page
         // controls); state 6 suppresses the overlay while its movie plays, so the draw position
         // is equivalent there.
-        Renderer { woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        let orphan_nodes: Vec<bool> = {
+            let n = cel_graph.cells.len();
+            let mut reached = vec![false; n];
+            for p in &cel_graph.portals { if p.cel_a < n { reached[p.cel_a] = true; } if p.cel_b < n { reached[p.cel_b] = true; } }
+            for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
+            reached.iter().map(|r| !r).collect()
+        };
+        Renderer { woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -884,6 +893,11 @@ impl Renderer {
             // creates_cel placement (u32::MAX = the distance-keyed objects, gated by their
             // containing room as before).
             let cell_visible: Option<&Vec<bool>> = self.last_cell_vis.as_ref();
+            // portal-orphans (the user's 07000015 F12 004: the silo tunnel walls missing): a node no
+            // room's chain owns and no portal reaches can never be marked by the walk, so the cel
+            // cull dropped it from every position. The game draws its unlinked objects from the
+            // forced list (`View_AddForcedObjects` 0x1e5fb8) — they take only the frustum test.
+            let orphan = &self.orphan_nodes;
             let mut cel_culled = 0usize;
             // Skip redundant `set_pipeline` calls (A-11e). The group-0 bind now carries a per-draw
             // dynamic offset (fix-lighting: each draw's own light pair), so it is issued every draw.
@@ -921,11 +935,16 @@ impl Renderer {
                 }
                 if cel_cull && dc.layer == Layer::World {
                     let hidden = match (cell_visible, dc.node) {
-                        (Some(cv), n) if n != u32::MAX => !cv[n as usize],
+                        (Some(cv), n) if n != u32::MAX => !cv[n as usize] && !orphan.get(n as usize).copied().unwrap_or(false),
                         _ => dc.cel.is_some_and(|c| !cel_visible[c as usize]),
                     };
                     if hidden {
                         if trace { cel_culled += 1; }
+                        // Dev diagnostic: `NF_CULLDIFF=1` names the near, in-frustum World draws the room
+                        // cull removes (the cel/node the walk failed to reach).
+                        if std::env::var_os("NF_CULLDIFF").is_some() && d2(dc.centre) < 400.0 + dc.radius * dc.radius && !sphere_outside(&planes, dc.centre, dc.radius) {
+                            eprintln!("[culldiff] draw {k} node {} cel {:?} chain {} centre {:?} r {:.2}", dc.node, dc.cel, dc.chain, dc.centre, dc.radius);
+                        }
                         return false;
                     }
                 }
