@@ -525,7 +525,8 @@ impl NetCore {
         }
         for ev in self.sess.poll(now) {
             match ev {
-                Event::Refused { .. } => {
+                Event::Refused { reason } => {
+                    eprintln!("[net] refused by the host: {reason:?}");
                     self.refused = true;
                     self.events.push(CoreEvent::Refused);
                 }

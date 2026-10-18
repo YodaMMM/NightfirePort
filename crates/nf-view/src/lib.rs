@@ -1994,6 +1994,9 @@ struct App {
     /// frame 1 with `net_tick` still at 3 — every later hash compared different frames; the
     /// two-window check, 2026-10-18). Cleared, with `net_tick = 0`, by `swap_in_scene`.
     net_await_load: bool,
+    /// The lobby path adopted the session and its menu handover already requested the arena —
+    /// the MatchStarted event must not request it again (one load per match).
+    net_menu_load: bool,
     /// The online match's wall clock (set when its level swaps in): the lockstep runs to
     /// `elapsed · 60` ticks, catching up after a stall instead of dropping the stalled ticks.
     net_clock: Option<std::time::Instant>,
@@ -2109,6 +2112,7 @@ impl App {
                 self.net_tick = 0;
                 self.net = Some(p);
                 self.net_await_load = true;
+                self.net_menu_load = true;
                 eprintln!("[net] adopted the lobby's session for the match");
             }
         }
@@ -2363,6 +2367,7 @@ impl App {
         if let Some(se) = self.net.as_mut() { se.0.borrow_mut().close(); }
         self.net = None;
         self.net_lobby = None;
+        self.net_menu_load = false;
         self.net_armed = None;
         self.net_join_pending = None;
         self.net_late_handover = None;
@@ -3732,9 +3737,9 @@ impl ApplicationHandler for App {
                                 // + `adopt_lobby_session`): a second request reloaded it warm on
                                 // both machines — two loading screens per match (the two-window
                                 // menu check). The flag paths (--net-host/--net-join) still load here.
-                                let already = self.pending_level == Some(st.level_code)
-                                    || self.async_load.as_ref().is_some_and(|l| l.next == st.level_code)
-                                    || self.scene.sim.as_ref().is_some_and(|s| s.level == st.level_code);
+                                // Only the lobby path: a flag start (--net-host/--net-join) has the
+                                // arena loaded from the command line and still needs the match load.
+                                let already = std::mem::take(&mut self.net_menu_load);
                                 if already { if let Some(fe) = self.fe.as_mut() { fe.closed = true; } continue; }
                                 self.pending_level = Some(st.level_code);
                                 self.pending_mp_settings = Some(*st);
@@ -4745,7 +4750,7 @@ pub fn run() -> Result<()> {
     let mut app = App { sound, scene, cam, gfx: None, keys: HashSet::new(), grabbed: false, trigger: false, aiming: false, last: std::time::Instant::now(), choice, anim_time: time, paused: false, opts, noclip: false, just: HashSet::new(), turn: 0.0, look: 0.0, weapon_cycle: 0, gadget_cycle: 0, weapon_switch_to: None, zoom: false, dev: dev.then(|| Box::new(dev::Dev { infinite_ammo: true, ..Default::default() })), notex, nofog, iso, pending_level: None, pending_weapon_assets: None, entry_save: None, all, recorder: None, replay: None, replay_idx: 0, prev_lock_ch: false, ticked: false, frame_ticks: 0, menu_clock: 0.0, fe_clock: 0.0, selected_difficulty: 2, zoom_cycle: 0, pending_mission_end: false, pending_mp_debrief: None, force_channel, cam_prev: None, cam_cur: None, pal_prev: None, pal_cur: None, pal_blend: Vec::new(), pal_moving: Vec::new(), fps_cap, fps_meter: FpsMeter::default(), frame_start: std::time::Instant::now(), panel: None, panel_level: 0, panel_frames: 0, fe: None, level_code: 0, fe_music_page: None, menu_handle: 0, lang: None, profile_session: menu::ProfileSession::default(), #[cfg(feature = "gamepad")] pad: pad_backend,
         movie: None, devwin: None,
         audio_paused: false, loading_art: None, loading_hint: Default::default(), menu_pointer: None,
-        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_clock: None, net_shot_pending: false, net_armed: None,
+        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_menu_load: false, net_clock: None, net_shot_pending: false, net_armed: None,
         net_join_pending: None, net_late_handover: None,
         async_load: None,
         music_bank_flip: false,
