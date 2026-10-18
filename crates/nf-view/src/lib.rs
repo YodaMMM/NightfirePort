@@ -428,14 +428,14 @@ pub fn net_slot0_setup(sim: &mut scene::Sim) {
 /// One online tick as slot 0's machine runs it in the live loop: the local slot's full
 /// `step_bond` on its session input, the remotes, the online combat, the slots' positions, the
 /// state hash. The hashed state is the same on every machine whatever its local slot.
-pub fn net_slot0_tick(sim: &mut scene::Sim, row: &[nf_net::Input; 4]) -> u64 {
+pub fn net_slot0_tick(sim: &mut scene::Sim, row: &[nf_net::Input; nf_net::MAX_AGENTS]) -> u64 {
     let li = row[0];
     sim.step_bond(mpnet::to_player_input(&li), li.trigger, li.reload, li.use_key);
-    let inputs = row.map(|i| mpnet::to_player_input(&i));
+    let inputs = std::array::from_fn(|i| mpnet::to_player_input(&row[i]));
     sim.step_net_remotes(&inputs, 0);
     sim.step_net_combat(row, 0);
     if let Some(m) = sim.mp.as_mut() {
-        for sl in 1..4 {
+        for sl in 1..nf_net::MAX_AGENTS {
             if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); }
         }
         m.set_slot(0, sim.bond.pos);
@@ -446,7 +446,7 @@ pub fn net_slot0_tick(sim: &mut scene::Sim, row: &[nf_net::Input; 4]) -> u64 {
 pub fn mp_late_join_catchup(
     iso: &str,
     settings: nf_game::mp::MpSettings,
-    log: &[[nf_net::Input; 4]],
+    log: &[[nf_net::Input; nf_net::MAX_AGENTS]],
     replay_ticks: u32,
 ) -> Result<(scene::Scene, u64), String> {
     let arena = format!("{:08x}.bin", settings.level_code);
@@ -2030,7 +2030,7 @@ struct App {
     /// the snapshot tick + hash and the recorded log) — the app replays it
     /// (`mp_late_join_catchup`) and confirms or refuses. The draw code reads
     /// this for the joining-in-progress page.
-    net_late_handover: Option<(Box<nf_game::mp::MpSettings>, u32, u64, Vec<[nf_net::Input; 4]>)>,
+    net_late_handover: Option<(Box<nf_game::mp::MpSettings>, u32, u64, Vec<[nf_net::Input; nf_net::MAX_AGENTS]>)>,
     /// The next sim tick of the online match (the lockstep counter; render interpolation is
     /// unchanged — `ticked` still marks the frames that advanced it).
     net_tick: u32,

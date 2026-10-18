@@ -1278,6 +1278,18 @@ impl<T: Transport> Session<T> {
     /// a hash). The transfer itself is chunked (JOIN_LOG) and acked
     /// (JOIN_ACK); the joiner's verified confirm arrives as JOIN_READY.
     fn begin_late_join(&mut self, from: SocketAddr, codename: String, events: &mut Vec<Event>) {
+        // A RETRANSMITTED HELLO from a peer already being served (the joiner
+        // retries every hello_retry_ms until the WELCOME lands — under load
+        // the first WELCOME can still be in flight) must not double-allocate
+        // a slot: answer the WELCOME again and leave the transfer state alone
+        // (mp-16-slots: the 9-human loopback hit the duplicate — the roster
+        // grew a phantom slot 10).
+        if let Role::Host { peers, .. } = &self.role {
+            if let Some(p) = peers.iter().find(|p| p.addr == from) {
+                self.send_welcome_to(from, p.slot);
+                return;
+            }
+        }
         // Free slot? Host is slot 0; late joiners take 1..=MAX_AGENTS.
         let free: Option<u8> = match &self.role {
             Role::Host { peers, .. } => {

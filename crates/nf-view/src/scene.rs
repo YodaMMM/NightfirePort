@@ -278,7 +278,7 @@ pub struct DroneContext {
     pub mp_seed: u32,
     /// The MP bodies: one skin hashcode per player slot (0..4 humans, 4..8 bots; 0 = none) —
     /// `nf_game::mp::slot_skin` of the match settings.
-    pub mp_body_skins: [u32; 8],
+    pub mp_body_skins: [u32; nf_net::MAX_AGENTS],
     pub weapons: Option<nf_formats::weapon::WeaponData>,
     pub props: Option<nf_formats::drone::PropertyTables>,
     /// The level's tuning (`ReadTuningVars` applied), hit boxes and sound hearing data.
@@ -361,12 +361,12 @@ pub struct Sim {
     /// slot's entry stays `None` — its bond IS `bond`). [S] port-only: the game's four join
     /// panels are four `Player_Init` objects; the port keeps one full local machine (the
     /// weapons/view path) and ticks the remotes' movement through the same `Bond::tick_ctx`.
-    pub mp_bonds: [Option<nf_game::player::Bond>; 4],
+    pub mp_bonds: [Option<nf_game::player::Bond>; nf_net::MAX_AGENTS],
     /// The slot this machine plays (its body is the camera, never drawn) — `swap_local_slot` sets it.
     pub mp_local_slot: usize,
     /// Draw-only: each MP slot's horizontal speed (units/s) over the last tick, from its position
     /// change — the body's idle/walk/run pick (never hashed, never read by the sim).
-    pub mp_body_speed: [f32; 8],
+    pub mp_body_speed: [f32; nf_net::MAX_AGENTS],
     /// Online (700v6): this machine's PRIVATE generator. In an online match the shared bit-exact
     /// stream (`drones.rng`, hashed) is drawn only by the parts every machine runs identically —
     /// the MP rules, the bots and the per-slot MP combat; the local player's own tick (view model,
@@ -375,10 +375,10 @@ pub struct Sim {
     pub net_rng: Option<nf_game::drone::Rng>,
     net_rng_shared: Option<nf_game::drone::Rng>,
     /// Online combat (700v6): each human slot's health, and the ticks since its death (0 = alive).
-    pub mp_hp: [f32; 4],
-    pub mp_dead_ticks: [u32; 4],
+    pub mp_hp: [f32; nf_net::MAX_AGENTS],
+    pub mp_dead_ticks: [u32; nf_net::MAX_AGENTS],
     /// Each human slot's held weapon (the session's `Input::held`; the local slot reads `gun.weapon`).
-    pub mp_held: [u8; 8],
+    pub mp_held: [u8; nf_net::MAX_AGENTS],
     /// Aim mode's cursor (`BL+0x118 / +0x11C`) and its smoothed copy (`+0x120 / +0x124`), −1…1 across half the screen.
     pub cursor: [f32; 2],
     pub cross: [f32; 2],
@@ -1987,7 +1987,7 @@ impl Sim {
             // flags stay false (KOTH scoring stays the headless rigs'; see the report's left
             // items). Order: `update_objects` then `update`, the headless lockstep rig's recorded
             // order (mp_lockstep drive). The RNG is drawn only by the GE/blueprint re-picks.
-            m.update_objects(1.0 / 60.0, &[false; 8], &mut self.drones.rng);
+            m.update_objects(1.0 / 60.0, &[false; nf_game::mp::MP_MAX_SLOTS], &mut self.drones.rng);
             // the shared bit-exact generator — the game's MP_Update draws the global RNG only on
             // the state-6 restart's site re-pick (MP_RestartScenario 0x183fc0)
             m.update(1.0 / 60.0, false, &mut self.drones.rng);
@@ -2000,7 +2000,7 @@ impl Sim {
             // the spawn picker saw a different world on every client mid-tick (the late join's
             // spawn pick diverged on the other client: the three-window check's desync).
             let local = self.mp_local_slot;
-            for slot in 0..4 {
+            for slot in 0..nf_net::MAX_AGENTS {
                 let b = if slot == local { Some(&self.bond) } else { self.mp_bonds[slot].as_ref() };
                 if let Some(b) = b { m.set_slot(slot, b.pos); }
             }
@@ -7110,14 +7110,14 @@ impl Scene {
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
             Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
-            mp_bonds: [None, None, None, None],
+            mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
-            mp_body_speed: [0.0; 8],
+            mp_body_speed: [0.0; nf_net::MAX_AGENTS],
             net_rng: None,
             net_rng_shared: None,
-            mp_hp: [100.0; 4],
-            mp_dead_ticks: [0; 4],
-            mp_held: [2; 8],
+            mp_hp: [100.0; nf_net::MAX_AGENTS],
+            mp_dead_ticks: [0; nf_net::MAX_AGENTS],
+            mp_held: [2; nf_net::MAX_AGENTS],
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
@@ -7264,7 +7264,7 @@ impl Scene {
                 // 0x1c0938) — `nf_formats::mpanim::mp_body_pose` [M, D the descriptors].
                 let held = s.mp_held.get(slot).copied().unwrap_or(2);
                 let class = nf_formats::mpanim::weapon_anim_class(&s.weapons, held);
-                let substate = if slot < 4 { s.mp_bonds[slot].as_ref().map_or(0, |b| b.substate) } else { 0 };
+                let substate = s.mp_bonds.get(slot).and_then(|b| b.as_ref()).map_or(0, |b| b.substate);
                 let pick = self.mp_anim_sets.as_ref().map_or(0, |sets| {
                     let st = nf_formats::mpanim::MpBodyState {
                         mp: true, weapon: held, substate, fwd: speed / 60.0, strafe: 0.0,
@@ -8539,7 +8539,7 @@ impl Sim {
     /// slot 0's lands in `bond`. After the load, each machine moves ITS slot's bond into `bond`
     /// (the camera and the full local path tick it) and parks the old local one back at slot 0.
     pub fn swap_local_slot(&mut self, slot: usize) {
-        if slot == 0 || slot >= 4 { return; }
+        if slot == 0 || slot >= nf_net::MAX_AGENTS { return; }
         self.mp_local_slot = slot;
         if let Some(mut mine) = self.mp_bonds[slot].take() {
             mine = std::mem::replace(&mut self.bond, mine);
@@ -8556,15 +8556,15 @@ impl Sim {
 
     /// The 8-slot `others` view one brain reads (`BOT_setOtherPlayerInfo` 0x125390: the slot's
     /// obj position, the alive gate, the team word, the score/health for the trait picks).
-    fn bot_others(&self) -> [nf_game::mp::bots::OtherPlayer; 8] {
-        let mut others: [nf_game::mp::bots::OtherPlayer; 8] = Default::default();
+    fn bot_others(&self) -> [nf_game::mp::bots::OtherPlayer; nf_net::MAX_AGENTS] {
+        let mut others: [nf_game::mp::bots::OtherPlayer; nf_net::MAX_AGENTS] = Default::default();
         if let Some(m) = self.mp.as_ref() {
             // The humans, by SLOT: the local slot is the live `bond`, the others the parked
             // `mp_bonds` (`swap_local_slot` parks the old local body at slot 0). Online every
             // machine must build the same view (the bots draw the shared stream from it), so the
             // health is the per-slot online combat's; offline slot 0 is the local health.
             let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
-            for slot in 0..4 {
+            for slot in 0..nf_net::MAX_AGENTS {
                 let body = if slot == self.mp_local_slot { Some(&self.bond) } else { self.mp_bonds[slot].as_ref() };
                 let Some(b) = body else { continue };
                 let health = if online { self.mp_hp[slot] } else if slot == 0 { self.drones.health.health } else { 100.0 };
@@ -8707,9 +8707,9 @@ impl Sim {
             let bot_pos = m.bots[i].brain.pos;
             let bslot = m.bots[i].slot;
             // The bot body's held weapon: its latest shot's (the brain has no weapon id of its own).
-            if let Some(s0) = new_shots.last() { if bslot < 8 { self.mp_held[bslot] = s0.weapon; } }
+            if let Some(s0) = new_shots.last() { if bslot < nf_net::MAX_AGENTS { self.mp_held[bslot] = s0.weapon; } }
             if let Some(prev) = m.game.slots[bslot].pos {
-                if bslot < 8 { self.mp_body_speed[bslot] = ((bot_pos[0] - prev[0]).powi(2) + (bot_pos[2] - prev[2]).powi(2)).sqrt() * 60.0; }
+                if bslot < nf_net::MAX_AGENTS { self.mp_body_speed[bslot] = ((bot_pos[0] - prev[0]).powi(2) + (bot_pos[2] - prev[2]).powi(2)).sqrt() * 60.0; }
             }
             m.game.slots[bslot].pos = Some(bot_pos);
 
@@ -8743,7 +8743,7 @@ impl Sim {
                 // word the kill credit later resolves; the port has no HitByList), and a blocked
                 // hit deals no damage — the game's own order.
                 let mut hit_human: Option<(usize, f32)> = None;
-                for h in 0..4 {
+                for h in 0..m.settings.human_count as usize {
                     let o = &others[h];
                     if !o.alive || o.index != h { continue; }
                     if !online && h != 0 { continue; }
@@ -8814,9 +8814,9 @@ impl Sim {
     /// docs/systems/net-match-host.md's *Deviations*). `water` is `None` for the remotes (no swim
     /// state machine on a remote body yet) — the same `None` on every machine, so the lockstep
     /// holds.
-    pub fn step_net_remotes(&mut self, inputs: &[nf_game::player::Input; 4], local: usize) {
-        for slot in 0..4 {
-            if slot == local || slot >= 4 { continue; }
+    pub fn step_net_remotes(&mut self, inputs: &[nf_game::player::Input; nf_net::MAX_AGENTS], local: usize) {
+        for slot in 0..nf_net::MAX_AGENTS {
+            if slot == local { continue; }
             let Some(b) = self.mp_bonds[slot].as_mut() else { continue };
             let before = b.pos;
             let input = inputs[slot];
@@ -8834,7 +8834,9 @@ impl Sim {
     pub fn mp_body_state(&self, slot: usize) -> Option<([f32; 3], f32, f32)> {
         let s = self;
         let m = s.mp.as_ref()?;
-        if slot < 4 {
+        let humans = m.settings.human_count as usize;
+        if slot < humans {
+            if slot >= nf_net::MAX_AGENTS { return None; }
             if slot == s.mp_local_slot || s.mp_dead_ticks[slot] > 0 { return None; }
             let b = s.mp_bonds[slot].as_ref()?;
             Some((b.pos, b.yaw, s.mp_body_speed[slot]))
@@ -8852,14 +8854,14 @@ impl Sim {
     /// MP_PlayerKilled 0x188f70], the respawn waits 5 s [M Player_HandleDeath 0x190bb0:41-54] and
     /// takes `mp_respawn`'s spawn pick + health [M MP_ReSpawn 0x185368]. The local slot's health
     /// drives this machine's HUD and death sequence.
-    pub fn step_net_combat(&mut self, inputs: &[nf_net::Input; 4], local: usize) {
+    pub fn step_net_combat(&mut self, inputs: &[nf_net::Input; nf_net::MAX_AGENTS], local: usize) {
         if self.mp.is_none() { return; }
         let body = |s: &Sim, slot: usize| -> Option<nf_game::player::Bond> {
             if slot == local { Some(s.bond.clone()) } else { s.mp_bonds[slot].clone() }
         };
-        for s in 0..4 { self.mp_held[s] = if s == local { self.gun.weapon } else { inputs[s].held }; }
+        for s in 0..nf_net::MAX_AGENTS { self.mp_held[s] = if s == local { self.gun.weapon } else { inputs[s].held }; }
         // 1. The shots, in slot order (the bodies as they stand this tick).
-        for shooter in 0..4 {
+        for shooter in 0..nf_net::MAX_AGENTS {
             let inp = &inputs[shooter];
             if !inp.shot || self.mp_dead_ticks[shooter] > 0 { continue; }
             let Some(b) = body(self, shooter) else { continue };
@@ -8873,7 +8875,7 @@ impl Sim {
                 end = [head[0] + (end[0] - head[0]) * t, head[1] + (end[1] - head[1]) * t, head[2] + (end[2] - head[2]) * t];
             }
             let mut best: Option<(f32, usize)> = None;
-            for victim in 0..4 {
+            for victim in 0..nf_net::MAX_AGENTS {
                 if victim == shooter || self.mp_dead_ticks[victim] > 0 { continue; }
                 let Some(v) = body(self, victim) else { continue };
                 // The body: a stack of 0.45 spheres from the knees to the head [S stand-in for the
@@ -8923,7 +8925,7 @@ impl Sim {
             }
         }
         // 2. The dead wait 5 s, then respawn at the policy's pick.
-        for slot in 0..4 {
+        for slot in 0..nf_net::MAX_AGENTS {
             if self.mp_dead_ticks[slot] == 0 { continue; }
             self.mp_dead_ticks[slot] += 1;
             if self.mp_dead_ticks[slot] < 300 { continue; }
@@ -8959,7 +8961,7 @@ impl Sim {
     /// A slot that already holds a body (a dropped peer's agent, `DropPolicy::Neutral`) is a
     /// RECONNECT: no spawn, the real input just resumes. Returns whether a body was created.
     pub fn mp_join_spawn(&mut self, slot: usize) -> bool {
-        if slot == 0 || slot >= 4 { return false; }
+        if slot == 0 || slot >= nf_net::MAX_AGENTS { return false; }
         if self.mp_bonds[slot].is_some() { return false; }
         let Some(m) = self.mp.as_mut() else { return false };
         let team = m.settings.players[slot].team as u16;
@@ -8984,19 +8986,19 @@ impl Sim {
         if dbg.is_some_and(|(a, b)| (a..=b).contains(&self.drones.frame)) {
             let b = |s: usize| if s == local { Some(&self.bond) } else { self.mp_bonds[s].as_ref() };
             eprintln!("[hashdbg] frame {} rng {:x}/{:x}/{} bonds {:?} mp {:?}", self.drones.frame, self.drones.rng.x, self.drones.rng.y, self.drones.rng.draws,
-                (0..4).map(|s| b(s).map(|b| (b.pos, b.yaw, b.pitch, b.substate, b.crouched))).collect::<Vec<_>>(),
-                self.mp.as_ref().map(|m| (m.game.state, m.game.clock, m.game.limit, m.game.slots.iter().take(4).map(|s| (s.pos, s.timers, s.score, s.kills, s.deaths, s.dead)).collect::<Vec<_>>(),
+                (0..nf_net::MAX_AGENTS).map(|s| b(s).map(|b| (b.pos, b.yaw, b.pitch, b.substate, b.crouched))).collect::<Vec<_>>(),
+                self.mp.as_ref().map(|m| (m.game.state, m.game.clock, m.game.limit, m.game.slots.iter().map(|s| (s.pos, s.timers, s.score, s.kills, s.deaths, s.dead)).collect::<Vec<_>>(),
                     (m.settings.level_code, m.settings.scenario, m.settings.frag_limit, m.settings.time_limit, m.settings.seed, m.settings.human_count))));
             eprintln!("[hashdbg]   hp {:?} dead {:?}", self.mp_hp, self.mp_dead_ticks);
         }
         let mut h = nf_net::hash::Hasher::new();
         h.u32(self.drones.frame);
         // 700v6: the online combat's per-slot state.
-        for s in 0..4 { h.f32(self.mp_hp[s]); h.u32(self.mp_dead_ticks[s]); }
+        for s in 0..nf_net::MAX_AGENTS { h.f32(self.mp_hp[s]); h.u32(self.mp_dead_ticks[s]); }
         h.u32(self.drones.rng.x);
         h.u32(self.drones.rng.y);
         h.u64(self.drones.rng.draws);
-        for slot in 0..4 {
+        for slot in 0..nf_net::MAX_AGENTS {
             let bond = if slot == local { Some(&self.bond) } else { self.mp_bonds[slot].as_ref() };
             match bond {
                 Some(b) => {

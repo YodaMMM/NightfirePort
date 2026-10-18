@@ -316,21 +316,17 @@ fn late_join_refused_when_full() {
     let mut clients: Vec<Session<ShimEndpoint>> = (0..MAX_AGENTS - 1)
         .map(|i| Session::new_client(test_cfg(), shim.endpoint(addr(8811 + i as u16)), addr(8810)))
         .collect();
-    for i in 0..MAX_AGENTS - 1 {
-        let deadline = ms + 4000;
-        loop {
-            ms += 10;
-            shim.advance(10);
-            let _ = host.poll(ms);
-            let mut done = clients[i].local_slot() == (i as u8 + 1);
-            for e in clients[i].poll(ms) {
-                let _ = e;
-            }
-            if done {
-                break;
-            }
-            assert!(ms < deadline, "client {i} handshake");
+    // The concurrent HELLOs race, so the wait is on the WHOLE roster (every
+    // client holds a slot and the host sees all 15), not on per-index order.
+    let deadline = ms + 40000;
+    while host.agents().len() < MAX_AGENTS {
+        ms += 10;
+        shim.advance(10);
+        let _ = host.poll(ms);
+        for c in clients.iter_mut() {
+            let _ = c.poll(ms);
         }
+        assert!(ms < deadline, "all 15 handshakes (ms={ms})");
     }
     host.start_match(0).unwrap();
     let deadline = ms + 4000;
@@ -343,8 +339,9 @@ fn late_join_refused_when_full() {
         }
         assert!(ms < deadline, "GO reaches everyone");
     }
-    // A fourth machine dials: refused, full.
-    let mut joiner = Session::new_client(test_cfg(), shim.endpoint(addr(8814)), addr(8810));
+    // A 17th machine dials on a FRESH port (the 15 clients hold 8811..8825):
+    // refused, full.
+    let mut joiner = Session::new_client(test_cfg(), shim.endpoint(addr(8830)), addr(8810));
     let deadline = ms + 4000;
     loop {
         ms += 10;
@@ -426,5 +423,112 @@ fn late_join_verify_failure_reports_clear_reason_and_slot_stays_free() {
             break;
         }
         assert!(ms < deadline, "the retry transfer completes");
+    }
+}
+
+/// mp-16-slots [S]: a running match with 9 humans (host + clients on slots
+/// 1..8) hands a 10th machine slot 9 — the first free slot — through the full
+/// late-join handover (LateJoinStarted 9 → the log → JOIN_SLOT 9), and the
+/// host's roster holds 10 agents.
+#[test]
+fn late_join_into_a_9_human_match_takes_slot_9() {
+    let shim = shim();
+    let mut ms: u64 = 0;
+    let mut host = Session::new_host(test_cfg(), shim.endpoint(addr(8900)), MatchSettings::default(), 0x0BED_0BAD);
+    let n_clients = 8usize; // slots 1..=8
+    let mut clients: Vec<Session<ShimEndpoint>> = (1..=n_clients as u16)
+        .map(|i| Session::new_client(test_cfg(), shim.endpoint(addr(8900 + i)), addr(8900)))
+        .collect();
+    let deadline = ms + 20000;
+    while clients.iter().any(|c| c.local_slot() == 0) {
+        ms += 10;
+        shim.advance(10);
+        let _ = host.poll(ms);
+        for c in clients.iter_mut() {
+            let _ = c.poll(ms);
+        }
+        assert!(ms < deadline, "all 8 handshakes (ms={ms})");
+    }
+    // The concurrent HELLOs race on the shim, so the SLOT ORDER is
+    // arrival-order; the SET is exactly 1..=8 (each HELLO took the first
+    // free slot at its arrival).
+    let mut taken: Vec<u8> = clients.iter().map(|c| c.local_slot()).collect();
+    taken.sort_unstable();
+    let want: Vec<u8> = (1..=n_clients as u8).collect();
+    assert_eq!(taken, want, "the 8 clients hold exactly the slots 1..=8");
+    host.start_match(0).unwrap();
+    let deadline = ms + 4000;
+    while clients.iter().any(|c| !c.is_started()) {
+        ms += 10;
+        shim.advance(10);
+        let _ = host.poll(ms);
+        for c in clients.iter_mut() {
+            let _ = c.poll(ms);
+        }
+        assert!(ms < deadline, "GO reaches all 8");
+    }
+    // Run 90 ticks: every human feeds its input; the host records + hashes.
+    // The loop is TICK-driven: the shim's 30±20 ms latency means a tick's
+    // inputs need several 10 ms polls to arrive.
+    let mut host_sim = Sim::new();
+    while host_sim.next_tick < 90 {
+        ms += 10;
+        shim.advance(10);
+        let t = host_sim.next_tick;
+        host.local_input(t, agent_input(0, t));
+        for (i, c) in clients.iter_mut().enumerate() {
+            c.local_input(t, agent_input(i as u8 + 1, t));
+        }
+        let _ = host.poll(ms);
+        for c in clients.iter_mut() {
+            let _ = c.poll(ms);
+        }
+        if let Some(inputs) = host.ready_inputs(t) {
+            let h = host_sim.run(t, &inputs);
+            host.record_run_tick(t, inputs);
+            host.submit_hash(t, h);
+        }
+        assert!(ms < 120000, "the 9-human run advances (ms={ms})");
+    }
+    assert_eq!(host_sim.next_tick, 90, "every tick ran (9 humans' inputs arrived)");
+
+    // The 10th machine dials: the late join begins on slot 9.
+    let mut joiner = Session::new_client(test_cfg(), shim.endpoint(addr(8909)), addr(8900));
+    let mut handover: Option<Event> = None;
+    let mut host_saw_slot9 = false;
+    let deadline = ms + 20000;
+    while handover.is_none() {
+        ms += 10;
+        shim.advance(10);
+        for e in host.poll(ms) {
+            if matches!(e, Event::LateJoinStarted { slot: 9, .. }) {
+                host_saw_slot9 = true;
+            }
+        }
+        for c in clients.iter_mut() {
+            let _ = c.poll(ms);
+        }
+        for e in joiner.poll(ms) {
+            if matches!(e, Event::LateJoinHandover { slot: 9, .. }) {
+                handover = Some(e);
+            }
+        }
+        assert!(ms < deadline, "the log transfer completes (ms={ms})");
+    }
+    assert!(host_saw_slot9, "the host announced LateJoinStarted on slot 9");
+    assert_eq!(joiner.local_slot(), 9, "the joiner took the first free slot");
+    assert_eq!(host.agents().len(), 10, "host + 8 players + the late joiner");
+    // The replay verifies against the host's recorded log (the fake sim chain).
+    if let Some(Event::LateJoinHandover { log, first_tick, snapshot_tick, snapshot_hash, .. }) = handover {
+        assert_eq!(first_tick, 0);
+        assert!(snapshot_tick >= 89, "the snapshot covers the recorded run");
+        let mut j_sim = Sim::new();
+        let mut last = 0u64;
+        for (i, row) in log.iter().enumerate() {
+            last = j_sim.run(first_tick + i as u32, row);
+        }
+        assert_eq!(last, snapshot_hash, "the joiner's replay reproduces the host's snapshot hash");
+    } else {
+        panic!("the handover event held the log");
     }
 }

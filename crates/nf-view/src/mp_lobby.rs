@@ -31,11 +31,11 @@ pub enum MpLobbyRowId {
     Radar,
     PlayerMod(u8),
     Enviro(u8),
-    /// Bot `usize` (0..3): the Enabled toggle + the character wheel on ◀ ▶.
+    /// Bot `usize` (0..14): the Enabled toggle + the character wheel on ◀ ▶.
     Bot(usize),
     /// Bot `usize`'s Skill row (the difficulty proxy).
     BotSkill(usize),
-    /// Player `usize` (0..3): the character wheel on ◀ ▶, the ready toggle on Confirm.
+    /// Player `usize` (0..15): the character wheel on ◀ ▶, the ready toggle on Confirm.
     Player(usize),
     /// Player `usize`'s team row — only in team games [M the 0x2000_0000 bit, P_MPSETUP 0x20d7a8].
     PlayerTeam(usize),
@@ -106,11 +106,13 @@ pub struct MpLobby {
     pub player_mods: [u32; 2],
     /// +0x1C0, +0x1B8, +0x1D4, +0x1D0, +0x1CC in page order [M P_MPENVIROMODS 0x210030].
     pub envmods: [u32; 5],
-    /// The four mpbots records [M mpbots 0x2deea8 — the layout is MpBot's].
-    pub bots: [MpBot; 4],
-    /// The per-player rows, HOST-relative: slot 0 = the host, 1..3 = the clients [S §6.4 —
-    /// the same mapping MpSettings.players and the session's slots use].
-    pub players: [MpLobbyPlayer; 4],
+    /// The mpbots records [M mpbots 0x2deea8 — the layout is MpBot's] — 15 rows, the port's
+    /// bot cap [S mp-16-slots; the game's own block is 4 records].
+    pub bots: [MpBot; nf_net::lobby::BOTS],
+    /// The per-player rows, HOST-relative: slot 0 = the host, 1..15 = the clients [S §6.4 —
+    /// the same mapping MpSettings.players and the session's slots use] — 16 rows [S
+    /// mp-16-slots].
+    pub players: [MpLobbyPlayer; nf_net::lobby::SLOTS],
     /// Which slot is this machine's own row: 0 for the host, the session slot for a client
     /// [S §6.4]. The rows mark it editable; the edits carry it.
     pub own_slot: usize,
@@ -145,7 +147,7 @@ impl MpLobby {
     pub fn new_host(
         scenario: u32, level: u32, weapon_set: u32, radar: u32, friendly_fire: u32,
         frag_limit: i32, time_limit: i32, player_mods: [u32; 2], envmods: [u32; 5],
-        bots: [MpBot; 4], host_codename: &str, unlock_all: bool, bonus_mask: u64,
+        bots: [MpBot; nf_net::lobby::BOTS], host_codename: &str, unlock_all: bool, bonus_mask: u64,
     ) -> MpLobby {
         let mut lobby = MpLobby {
             host: true,
@@ -364,7 +366,7 @@ impl MpLobby {
             MpLobbyRowId::Bot(i) => {
                 // The character wheel over mp_characters; a locked character refuses [M
                 // C_SBMPBTCHOOSE 0x210f08:18-20] — the step skips it [S, the scenario mapping].
-                let b = &mut self.bots[i.min(3)];
+                let b = &mut self.bots[i.min(nf_net::lobby::BOTS - 1)];
                 if !b.enabled { return false; }
                 let mut r = b.character.min(28) as i32;
                 for _ in 0..MP_CHARACTERS.len() {
@@ -377,16 +379,16 @@ impl MpLobby {
             MpLobbyRowId::BotSkill(i) => {
                 // Poor 8 / Average 5 / Good 3 / Very Good 1 [M P_MPBOTSETUP 0x211270:49-59].
                 const SKILLS: [i32; 4] = [1, 3, 5, 8];
-                let b = &mut self.bots[i.min(3)];
+                let b = &mut self.bots[i.min(nf_net::lobby::BOTS - 1)];
                 let cur = SKILLS.iter().position(|&s| s == b.skill).unwrap_or(0) as i32;
                 b.skill = SKILLS[(cur + dir).rem_euclid(SKILLS.len() as i32) as usize];
                 true
             }
-            MpLobbyRowId::Player(i) if i.min(3) == self.own_slot => {
+            MpLobbyRowId::Player(i) if i.min(nf_net::lobby::SLOTS - 1) == self.own_slot => {
                 // The character wheel, own row only [S §6.2]; the edit stays dirty until the
                 // host's publish echoes it.
                 self.own_dirty.0 = true;
-                let p = &mut self.players[i.min(3)];
+                let p = &mut self.players[i.min(nf_net::lobby::SLOTS - 1)];
                 let mut r = p.character.min(28) as i32;
                 for _ in 0..MP_CHARACTERS.len() {
                     r = (r + dir).rem_euclid(MP_CHARACTERS.len() as i32);
@@ -395,9 +397,9 @@ impl MpLobby {
                 p.character = r as u32;
                 true
             }
-            MpLobbyRowId::PlayerTeam(i) if i.min(3) == self.own_slot => {
+            MpLobbyRowId::PlayerTeam(i) if i.min(nf_net::lobby::SLOTS - 1) == self.own_slot => {
                 self.own_dirty.1 = true;
-                let t = &mut self.players[i.min(3)].team;
+                let t = &mut self.players[i.min(nf_net::lobby::SLOTS - 1)].team;
                 *t ^= 1; // 0 Phoenix / 1 MI6 [M C_RBMPSETUP 0x20de58's two-item list]
                 true
             }
@@ -411,20 +413,20 @@ impl MpLobby {
         let (id, editable) = match self.focused_row() { Some(x) => x, None => return false };
         if !editable { return false; }
         match id {
-            MpLobbyRowId::Player(i) if i.min(3) == self.own_slot => {
+            MpLobbyRowId::Player(i) if i.min(nf_net::lobby::SLOTS - 1) == self.own_slot => {
                 self.own_dirty.2 = true;
-                let p = &mut self.players[i.min(3)];
+                let p = &mut self.players[i.min(nf_net::lobby::SLOTS - 1)];
                 p.ready = !p.ready;
                 true
             }
             MpLobbyRowId::Player(_) | MpLobbyRowId::PlayerTeam(_) => false, // not this machine's row
             MpLobbyRowId::PlayerTeam(i) => {
-                let t = &mut self.players[i.min(3)].team;
+                let t = &mut self.players[i.min(nf_net::lobby::SLOTS - 1)].team;
                 *t ^= 1;
                 true
             }
             MpLobbyRowId::Bot(i) => {
-                let b = &mut self.bots[i.min(3)];
+                let b = &mut self.bots[i.min(nf_net::lobby::BOTS - 1)];
                 b.enabled = !b.enabled; // the Bot Setup page's own Enabled Yes/No row [M P_MPBOTSETUP row 0]
                 true
             }
@@ -436,8 +438,8 @@ impl MpLobby {
     /// ([`MpLobby::own_slot`]); empty on the host (the host edits the model directly).
     pub fn own_row_edits(&self) -> Vec<nf_net::LobbyEdit> {
         if self.host { return Vec::new(); }
-        let p = &self.players[self.own_slot.min(3)];
-        let slot = self.own_slot.min(3) as u8;
+        let p = &self.players[self.own_slot.min(nf_net::lobby::SLOTS - 1)];
+        let slot = self.own_slot.min(nf_net::lobby::SLOTS - 1) as u8;
         let mut v = Vec::new();
         if self.own_dirty.0 {
             v.push(nf_net::LobbyEdit { slot, field: nf_net::lobby::EDIT_CHARACTER, value: p.character });
@@ -454,7 +456,7 @@ impl MpLobby {
     /// The own row's dirty fields as one comparable word-triple — the push diff rides on it
     /// [S §6.4].
     pub fn own_row_words(&self) -> (u32, u32, u32) {
-        let p = &self.players[self.own_slot.min(3)];
+        let p = &self.players[self.own_slot.min(nf_net::lobby::SLOTS - 1)];
         (p.character, p.team, p.ready as u32)
     }
 
@@ -531,7 +533,7 @@ impl MpLobby {
     /// A client's edit merges into the host's model [S §6.4].
     pub fn apply_edit(&mut self, e: &nf_net::LobbyEdit) -> bool {
         let slot = e.slot as usize;
-        if slot >= 4 { return false; }
+        if slot >= nf_net::lobby::SLOTS { return false; }
         let p = &mut self.players[slot];
         if !p.joined { return false; }
         match e.field {
