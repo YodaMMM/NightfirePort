@@ -1479,15 +1479,26 @@ self.local = [vs / k, vf / k];
         // 0.139 north past it [D probe14_chute]) wedges Bond on a 0.0094-deep graze of the slab's
         // edge corner 0.412 away — this walkable arm grounds him while the feet ray runs down an
         // open well. A naive ray gate (grounded requires floor.is_some()) UN-WEDGES the lip
-        // (probe14_landing) but is WRONG: the grounded bit's other arm reads HITTEST+0x9c, OR'd
-        // per hit by Collide_Intersect 0x1ebaa8:390 — and Collide_Intersect serves BOTH the feet
-        // ray and the capsule pick on the one SHARED BLData+0x740 HITTEST, so the pick contacts
-        // feed the arm too (hatch-crouch-0c's pinned trace depends on it — the ray gate broke
-        // fix_input_kbd_trace::keyboard_trace_unchanged, reverted same-session). The game must
-        // filter the arm's bits: Collide_Intersect ORs `uStack_84` per hit, and which hits carry
-        // the bit (the slab-corner graze must NOT) is the next session's first disassembly read
-        // (0x1ebaa8's uStack_84 source; the sister test the_chute_lip_corner_graze_cannot_ground
-        // pins the wanted outcome, currently ignored with this note).
+        // (probe14_landing) but is WRONG about the game's rule: the grounded accumulator's only
+        // writer is Intersect_CylGeom, which ORs BIT 0x1 into QUERY+0x9c when the contact
+        // distance < 0.7 (0x3f333333) [M 0x109da0 @0x10a72c-34 — the ACTION.ELF has exactly three
+        // sh-0x9c sites: this OR, the per-frame clear `sh $zero, 0x9c` in Collide_Update
+        // 0x1ea398:46c, and the merge `QUERY+0x9c |= copy+0x9c` in Collide_Intersect
+        // 0x1ebaa8:390]; the ray/point/cyltri helpers never touch +0x9c, and Collide_Intersect's
+        // copy is its own frame copy of the QUERY (amemcpy(sp+0x50, QUERY, 0xa0) 0x1ebc90), so the
+        // pick contacts on the SHARED BLData+0x740 HITTEST feed the arm [M Player_FeetOnPoint
+        // 0x194188:183-201 sets bit 8 on `*(short*)(QUERY+0x9c) != 0`]. The 0.412 graze is within
+        // 0.7: the game's Bond is GROUNDED on the lip — this `walkable ||` arm is game-accurate
+        // on the bit (the port's only divergence is past 0.7, where it still grounds; the 0.7
+        // gate is the port-side todo). The WEDGE is therefore not a grounding error: the game
+        // keeps him grounded while the BAND arm (the feet ray) decides the floor height, and the
+        // drop's catcher is open — the "well ladder" hypothesis died [D probe14_wellladder:
+        // 02000751 is placement kind 0x19 "Vent_StoreRoom_Ladder" ART at (46.01, −1.30, 62.57),
+        // OUTSIDE the well box, and script Entity type 25 rides Script_CreateEntity's generic
+        // gfx path (the only ladder mapping is stream type 0x22 → arm 0x2d [M 0x1d8968:66-67]);
+        // the level has NO kind-0x22 ladder placement at all (ladder::all = 0). Live checks in
+        // docs/reports/level-14-complete-2.md; the sister test
+        // the_chute_lip_corner_graze_grounds_per_the_game_rule pins the accumulator rule.
         self.grounded = walkable || floor.is_some_and(|(t, _)| {
             let d_y = to[1] - self.pos[1];
             let hit_y = self.pos[1] + t * d_y;
@@ -2411,19 +2422,27 @@ mod tests {
         assert!(b.pos[1] < 30.0 - 1.0 && !b.grounded);
     }
 
-    /// level-14-complete-2: the chute lip. The game's grounding arms BOTH read the one vertical
-    /// feet ray from obj+0x30 — the band [M Player_FeetOnPoint 0x194188:106] and the ray's hit
-    /// bits (HITTEST+0x9c, OR'd per ray hit by Collide_Intersect 0x1ebaa8:390; the grounded
-    /// store BLData+0x60 |= 8 on either [M 0x194188:183-192]). A tick whose ray sees no ground
-    /// is airborne. Geometry = the 07000014 stairwell lip [D probe14_chute/probe14_xsect]: the
-    /// threshold face at z=0 (y 0.446..1.786, normal +z) with the corridor slab (y 0.600) poking
-    /// 0.139 NORTH past it, and open shaft below. Bond crouched at z=0.551: his bottom sphere
-    /// grazes the slab's edge corner ((0, 0.600, 0.139), 0.412 away — a 0.0094-deep contact)
-    /// while the ray at his pos runs down the open shaft. The old `walkable ||` grounded him on
-    /// that graze forever; the game's Bond falls.
-    #[ignore = "pins the GAME's wanted outcome (the lip graze must not ground — Bond falls into the well), but the naive ray gate that made it pass broke fix_input_kbd_trace::keyboard_trace_unchanged (reverted same-session): the grounded arm's HITTEST+0x9c bits come from Collide_Intersect on the SHARED HITTEST (ray AND capsule pick), so the real fix needs the bit filter's source (uStack_84 in 0x1ebaa8's disassembly). Kept as the next session's target."]
+    /// level-14-complete-2: the chute lip's grounding, per the game's own rule. The grounded
+    /// bit's accumulator arm: `Player_FeetOnPoint` sets BLData+0x60 |= 8 when `*(short*)(QUERY+0x9c)
+    /// != 0` [M 0x194188:183-201]; the accumulator's only writer is `Intersect_CylGeom`, which ORs
+    /// BIT 0x1 when the contact distance < 0.7 (0x3f333333) [M 0x10a72c-34 — the ELF has exactly
+    /// three sh-0x9c sites: this OR, the per-frame clear in Collide_Update 0x1ea398:46c, and the
+    /// merge in Collide_Intersect 0x1ebaa8:390]; the ray/point/cyltri helpers never touch +0x9c.
+    /// So a capsule contact within 0.7 GROUNDS even when the feet ray sees nothing — and the
+    /// 07000014 lip graze (0.412 away) is within 0.7: the game's Bond is GROUNDED on the graze
+    /// (the earlier draft of this test pinned the opposite and was wrong — the naive ray gate
+    /// that passed it broke fix_input_kbd_trace, reverted same-session). Geometry = the 07000014
+    /// stairwell lip [D probe14_chute/probe14_xsect]: the threshold face at z=0 (y 0.446..1.786,
+    /// normal +z) with the corridor slab (y 0.600) poking 0.139 NORTH past it, open shaft below;
+    /// Bond crouched at z=0.551 grazes the slab's edge corner 0.412 away. What the graze must NOT
+    /// provide is a FLOOR HEIGHT (the band arm's ray decides that [M 0x194188:106]); the drop's
+    /// catcher and the port's wedge-out are the live checks + the under-opening geometry probe
+    /// (the "well ladder" hypothesis died: 02000751 is kind 0x19 ladder ART at (46.01, −1.30,
+    /// 62.57), outside the well, and script Entity type 25 takes Script_CreateEntity's generic
+    /// gfx path [M 0x1d8968:66-67 is the only ladder mapping — stream type 0x22 → arm 0x2d]).
+    #[ignore = "the RULE is settled [M Intersect_CylGeom 0x10a72c-34: bit 0x1 for contacts < 0.7; FeetOnPoint 0x194188:183-201 grounds on != 0] but this synthetic tri set does not hold the contact (the real lip graze persists through the level's own geometry — the walkreal's world, not this approximation); re-pin on the real 07000014 geometry when the walkreal un-ignores"]
     #[test]
-    fn the_chute_lip_corner_graze_cannot_ground() {
+    fn the_chute_lip_corner_graze_grounds_per_the_game_rule() {
         let q = |a: V3, b: V3, c: V3, d: V3| [[a, b, c], [a, c, d]];
         let mut t = Vec::new();
         // The corridor slab: top at y 0.600 (wound UP, the room() convention), north edge at
@@ -2436,12 +2455,13 @@ mod tests {
         let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false };
         // Crouched at the lip: root 1.05 over the shaft, z 0.551 (the wall push's equilibrium
         // 0 + 0.55 + slop).
-        let mut b = Bond::new([0.0, 1.05, 0.551], 0.0);
-        b.crouched = true; // the walkreal's set_crouch
-        b.cc = CROUCH_ROOT_HEIGHT; // the toggle's store [M 0x1916b0's crouch arm]
+        // Standing (the walk pick radius 0.275 [M 0x194df0 case 0/6]) with his column PAST the
+        // slab's north edge (z 0.139): z 0.289 puts the ray 0.15 past the edge (it runs down the
+        // shaft) while the capsule still overlaps the slab edge by 0.125 — a contact distance
+        // ≈0.125, within the game's 0.7 [M 0x10a72c-34]: bit 0x1 sets, the grounded bit follows.
+        let mut b = Bond::new([0.0, 1.2, 0.289], 0.0);
         for _ in 0..40 { b.tick_ctx(&w, &ctx, &Input::default()); }
-        assert!(!b.grounded, "the corner graze grounded him (pos {:?})", b.pos);
-        assert!(b.pos[1] < 0.5, "he never fell down the shaft (pos {:?})", b.pos);
+        assert!(b.grounded, "the capsule-edge contact (within 0.7) did not ground (pos {:?})", b.pos);
         // Sister (the control the game pins): the same slab under his column grounds him —
         // the ray hits in band, grounded, and he stands (the old and new rules agree).
         let mut b = Bond::new([0.0, 1.05, -1.0], 0.0);
