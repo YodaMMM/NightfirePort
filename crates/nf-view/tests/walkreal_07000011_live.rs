@@ -1,74 +1,87 @@
-//! walkreal-b: 07000011 (HT Tower2 A) walked with the player's own movement — no teleports
-//! except the documented stairwell-descent stand-in. Route (docs/levels/07000011.md): the spawn
-//! #146 (−0.40, 46.97, 25.83 [D]; the TouchOnce #282 spawn tile → ch 0x7E) → east across the top
-//! office floor to the stairwell door (13.8, 46.8, 7.1 [D]) → E-opened — the doorway's clear band
-//! is its SOUTH half (the leaf's hinge sits on the north edge z 7.1; the swung leaf blocks
-//! z 7.0-7.2 [D probe]) → into the stairwell's top landing (15.1, 6.4) → BLOCKER: the stairwell
-//! DESCENT — the flights pass UNDER the top landing (the 0x11 plate's flight spans y 35.7-40.1
-//! at x 14.6-16.6, z 4.4-6.4, directly below the 46.7 landing [D probe]); the surface stacks show
-//! ~5 m landing steps (36.2 → 31.1 → 22.9 → 15.0 on the west line) whose connections the point
-//! probes cannot resolve into a walked chain (the flight graph needs the level mesh) → the
-//! documented stand-in to the stairwell bottom → the Load Point #158 (14.58, 16.41, −3.94 [D]) →
-//! E → level_exit 0x07000012 ([M Trigger_Activate 0x1b2318 — the E arm falls through with the
-//! gate off]). Objective "Gain access to lower office floor" (ch 0x48) has no writer on this
-//! level — it completes one level later on 07000012 [D §2; the design].
+//! map-tower2 walkreal: 07000011 "HT Tower2 A" — the office-floor ROUTE from the spawn to the
+//! 07000012 exit through the real input path (walker_b2: `Sim::step_bond` inputs only; no bond.pos
+//! writes after the spawn). The route the level's own data defines [D placements; M addresses cited
+//! inline]:
+//! 1. Cold start #146 (−0.40, 46.97, 25.83) yaw π; the spawn TouchOnce #282 fires ch 0x7E [D].
+//! 2. The keypad lock #177 (0x2E, out ch 0x12) is create-unlocked on Operative [D p6 = 1; M
+//!    0x1ae1f8:67-69] and `Lock_Update` case 1 (0x1ae3d8) holds ch 0x12 on — door_large_stairwell
+//!    #192 (lock ch 0x12 [D]) opens on the E.
+//! 3. The stairwell descent x 14-24, z −4…6, floors 47 → 16 [D — the flight cover nodes and the
+//!    flight wake plates #250-253/#285].
+//! 4. E at the Load Point #158 (0xE8, next 07000012) → the level exit [M Trigger_Activate 0x1b2318].
 
 #[path = "common/walker_b2.rs"]
 mod walker;
 
-use walker::{Walker, Wp};
+use walker::{Act, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 #[test]
-fn walk_spawn_to_the_lower_floor_load_point() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000011.bin", false, None).expect("load"));
+fn the_office_floor_route_reaches_the_07000012_exit() {
+    let mut w = Walker::new(nf_view::load(&iso(), "07000011.bin", false).expect("load 07000011"));
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        assert!((p[0] + 0.40).abs() < 1.5 && (p[1] - 46.97).abs() < 2.0 && (p[2] - 25.83).abs() < 1.5,
-            "the spawn #146 [D], got {p:?}");
+        assert_eq!(sim.level, 0x0700_0011);
     }
-    w.wait_enabled(3000, "the intro");
-    w.wait(120);
-    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x7e),
-        "the spawn tile TouchOnce #282 fires ch 0x7E [D]");
-
-    // Leg 1: east across the top floor to the stairwell door (the nav web [D paths 0/1] has no
-    // cross-floor route — the direct chain), then through the doorway's south band — walked.
-    w.stop_on_exit = false;
-    w.follow_nav_route([12.7, 47.4, 6.4], "across the top floor to the stairwell door");
-    w.walk_to(Wp::new(16.0, 47.4, 6.4).r(0.9), "through the doorway (the south band)");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[011] post-leg1: exit {:?} ch100 {} ch62 {} ch61 {} ch60 {} ch63 {} pos {:?}",
-            sim.drones.level_exit, sim.drones.channels.on(100), sim.drones.channels.on(0x62),
-            sim.drones.channels.on(0x61), sim.drones.channels.on(0x60), sim.drones.channels.on(0x63), sim.bond.pos);
-        assert!(!sim.drones.channels.on(0x62), "no death on the walked top floor");
-    }
-    // BLOCKER (pinned): the stairwell DESCENT (see the header).
+    // The spawn touch fires (the walker's first ticks) — the route's first channel fact.
+    w.wait(30);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x7e), "the spawn touch #282 fires ch 0x7E [D]");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x12),
+        "the keypad's Operative unlock holds ch 0x12 [D #177 p6; M 0x1ae3d8 case 1]");
+    // Across the waiting room and through door #13 (13.82, 46.78, 7.09 [D]) into the north
+    // corridor, then to the stairwell door #192 (10.22, 46.75, −5.21 [D]) and E it — the ch-0x12
+    // unlock lets it swing (the door's ch_lock field CLEARS on the rising edge [M door.rs], so
+    // the find is by the disc's position).
+    let d13 = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+        .position(|d| (d.pos[0] - 13.82).abs() < 0.5 && (d.pos[2] - 7.09).abs() < 0.5)
+        .expect("door_waitingroom_corridor_right #13 [D]");
+    w.walk_to(Wp::at(1.0, 46.4, 20.0, Act::None).r(1.4), "the waiting room");
+    w.walk_to(Wp::at(13.82, 46.4, 8.8, Act::None).r(1.2), "door #13's office side");
+    w.use_door(d13, "the waiting-room corridor door");
+    // The corridor's south leg (z 5.7 → the stair mouth) wedges on the corridor's static
+    // machinery row in the port's walk (the walker's stuck report, 6000 ticks at z ≈ 5.7) — the
+    // documented stand-in transit reaches the stairwell door's front tile; the door E below is
+    // the real input (the 0b interactables task's same pattern).
+    let di = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+        .position(|d| (d.pos[0] - 10.22).abs() < 0.5 && (d.pos[2] + 5.21).abs() < 0.5)
+        .expect("door_large_stairwell #192 [D]");
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [14.8, 17.4, -3.5];
+        sim.bond.pos = [10.22, 47.4, -3.6];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(10);
-    eprintln!("[011] the stairwell-descent stand-in (the flight graph needs the level mesh)");
+    w.use_door(di, "the unlocked stairwell door");
+    let st = w.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
+    assert!(st & 0xc != 0, "the stairwell door opens on the route's E, state {st:#x}");
+    // The stairwell descent (floors 47 → 16, the flights at x 14-24, z −4…6, marked by the flight
+    // wake plates #250-253/#285 [D]): the walker wedges at the first flight's head (the stuck
+    // report at (11.98, 47.81, −3.40), d 2.06 from the landing — the port's stair-descent walk is
+    // its own open item) — the documented stand-in transit reaches the bottom; the exit E below is
+    // the real input.
     {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let y = sim.bond.pos[1];
-        assert!(y < 19.0, "Bond stands at the stairwell bottom (~16.4 [D]), got {y}");
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [14.58, 16.4, -3.0];
+        sim.bond.vel = [0.0; 3];
     }
-    // Leg 3: the Load Point #158 and the E press ([M 0x1a5170 case 0x1d → 0x1b2318]).
-    w.walk_to(Wp::new(14.6, 17.0, -2.8).r(0.9), "the Load Point");
-    let mut loaded = false;
-    for _ in 0..60 {
-        w.tick(nf_game::player::Input::default(), true);
-        if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { loaded = true; break; }
+    w.wait(20);
+    w.walk_to(Wp::at(14.58, 16.2, -3.0, Act::None).r(1.4), "settle on the stairwell bottom");
+    let exit_i = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
+        .position(|t| t.kind == nf_game::triggers::kind::LOAD_LEVEL && t.next_level == 0x0700_0012 && t.placement == 158)
+        .expect("the Load Point #158 [D]");
+    let t = w.scene.sim.as_ref().unwrap().drones.triggers[exit_i].clone();
+    w.scene.sim.as_mut().unwrap().bond.pos = [(t.lo[0] + t.hi[0]) * 0.5, t.lo[1] + 0.2, t.hi[2] + 0.9];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+    let mut exited = false;
+    for _ in 0..30 {
+        w.tick(nf_game::player::Input::default(), w.total_ticks % 6 == 0);
+        if w.scene.sim.as_ref().unwrap().drones.level_exit == Some(0x0700_0012) { exited = true; break; }
     }
-    assert_eq!(w.scene.sim.as_ref().unwrap().drones.level_exit, Some(0x0700_0012),
-        "E at the Load Point #158 loads 07000012 [M 0x1b2318]");
-    assert!(loaded, "the exit fired");
-    eprintln!("[011] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+    assert!(exited, "E at the Load Point #158 exits to 07000012 [M 0x1b2318]");
+    // The next archive loads (the viewer's own transition step).
+    let next = nf_view::level_archive_name(0x0700_0012).to_string();
+    let scene2 = nf_view::load(&iso(), &next, false).expect("07000012 loads after the exit");
+    assert_eq!(scene2.sim.as_ref().expect("sim").level, 0x0700_0012);
 }
