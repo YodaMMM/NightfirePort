@@ -30,7 +30,7 @@ fn probe_xsect() {
         let sim = scene.sim.as_ref().unwrap();
         // The vertical lines across the slot: the ramp foot, the trench, the wall plane, and
         // the corridor south of it.
-        for x in [40.8f32, 40.3, 41.3] {
+        for x in [45.2f32, 44.8, 45.6] {
             for z in [56.5f32, 56.27, 56.1, 55.95, 55.8, 55.72, 55.65, 55.5, 55.2, 54.9, 54.6] {
                 let hits = stack(sim, x, z, 3.8, -3.5);
                 let s: Vec<String> = hits.iter().map(|y| format!("{y:.2}")).collect();
