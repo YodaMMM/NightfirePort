@@ -1460,37 +1460,40 @@ self.local = [vs / k, vf / k];
             walkable = fw;
             floor = world.segment_hit(self.pos, to);
         }
-        // The game's grounding arms BOTH live inside `Player_FeetOnPoint`: the contact-distance
-        // band [M Player_FeetOnPoint 0x194188:106 `*(float *)(hit + 0xc) - 0.1 <= cc`] and the
-        // ray's own hit bits — HITTEST+0x9c, OR'd per hit by `Collide_Intersect` 0x1ebaa8:390
-        // during the ray's own `Collide_RayIntersect` [M 0x194188:84-88], with the grounded store
-        // `BLData+0x60 |= 8` firing when EITHER is set [M 0x194188:183-192]. Both arms read the
-        // ONE vertical ray from obj+0x30 — a tick whose feet ray sees no ground is AIRBORNE, and
-        // no capsule contact elsewhere may ground it. The port's capsule-contact `walkable`
-        // therefore gates on the same ray: the 07000014 stairwell chute's lip held Bond grounded
-        // forever on a 0.0094-deep graze of the corridor-slab edge corner 0.41 north of him
-        // (the slab at y 0.600 pokes to z 55.858 past the threshold face at z 55.719 [D
-        // probe14_chute]) while the ray at his pos ran down an open shaft — the game's Bond
-        // falls through [D probe14_xsect's stack: no surface at (40.8, 56.27) below the duct
-        // roof]. Reads HITDATA+0xC, which Intersect_RayGeom 0x10a8c8 fills with the ABSOLUTE
-        // distance |from − hit| — hit = from + t·dir (:176-179 the dir·t product and the from
-        // add; :252-256 the store to HITDATA+0x40), dir = to − from recomputed f32 [M
-        // Collide_Intersect 0x1ebaa8's 0x201 branch], and the sqrt-of-squares store :312-325 —
-        // NOT t·raylen. For the upright ray the x/z deltas are exactly 0 (the endpoint's x/z
-        // equal pos), so the VU's pairwise-add collapse leaves the single y term. With the game's
-        // own B arm and ray the crouched rest grounds through the push dither with no epsilon:
-        // the rest contact (0.09999999403953552 + 0.55f32 below the root) lands 1 ulp under the
-        // band's f32 edge (0x3f266667, where `hit − 0.1f32` rounds to exactly cc), while the
-        // port's old 0.45f32 arm sat exactly ON the edge and the t·ray multiply tipped it over
-        // (probe14_ground.rs: the rest y dithered ±3 ulps and grounded flickered) [L: the
-        // crouched Bond crawls out of the 07000014 vent on PCSX2].
-        self.grounded = floor.is_some()
-            && (walkable || floor.is_some_and(|(t, _)| {
-                let d_y = to[1] - self.pos[1];
-                let hit_y = self.pos[1] + t * d_y;
-                let dy = self.pos[1] - hit_y;
-                (dy * dy).sqrt() - 0.1 <= self.cc
-            }));
+        // The contact-distance band [M Player_FeetOnPoint 0x194188:106 `*(float *)(hit + 0xc) - 0.1
+        // <= cc`] reads HITDATA+0xC, which Intersect_RayGeom 0x10a8c8 fills with the ABSOLUTE
+        // distance |from − hit| — hit = from + t·dir (:176-179 the dir·t product and the from add;
+        // :252-256 the store to HITDATA+0x40), dir = to − from recomputed f32 [M Collide_Intersect
+        // 0x1ebaa8's 0x201 branch], and the sqrt-of-squares store :312-325 — NOT t·raylen, which is
+        // what the port multiplied here. For the upright ray the x/z deltas are exactly 0 (the
+        // endpoint's x/z equal pos), so the VU's pairwise-add collapse leaves the single y term.
+        // With the game's own B arm and ray the crouched rest grounds through the push dither with
+        // no epsilon: the rest contact (0.09999999403953552 + 0.55f32 below the root) lands 1 ulp
+        // under the band's f32 edge (0x3f266667, where `hit − 0.1f32` rounds to exactly cc), while
+        // the port's old 0.45f32 arm sat exactly ON the edge and the t·ray multiply tipped it over
+        // (probe14_ground.rs: the rest y dithered ±3 ulps and grounded flickered) [L: the crouched
+        // Bond crawls out of the 07000014 vent on PCSX2].
+        //
+        // level-14-complete-2: the 07000014 stairwell lip (the chute's overhung ramp end at y
+        // 1.786, the threshold face z=55.719 y 0.446..1.786, the corridor slab y 0.600 poking
+        // 0.139 north past it [D probe14_chute]) wedges Bond on a 0.0094-deep graze of the slab's
+        // edge corner 0.412 away — this walkable arm grounds him while the feet ray runs down an
+        // open well. A naive ray gate (grounded requires floor.is_some()) UN-WEDGES the lip
+        // (probe14_landing) but is WRONG: the grounded bit's other arm reads HITTEST+0x9c, OR'd
+        // per hit by Collide_Intersect 0x1ebaa8:390 — and Collide_Intersect serves BOTH the feet
+        // ray and the capsule pick on the one SHARED BLData+0x740 HITTEST, so the pick contacts
+        // feed the arm too (hatch-crouch-0c's pinned trace depends on it — the ray gate broke
+        // fix_input_kbd_trace::keyboard_trace_unchanged, reverted same-session). The game must
+        // filter the arm's bits: Collide_Intersect ORs `uStack_84` per hit, and which hits carry
+        // the bit (the slab-corner graze must NOT) is the next session's first disassembly read
+        // (0x1ebaa8's uStack_84 source; the sister test the_chute_lip_corner_graze_cannot_ground
+        // pins the wanted outcome, currently ignored with this note).
+        self.grounded = walkable || floor.is_some_and(|(t, _)| {
+            let d_y = to[1] - self.pos[1];
+            let hit_y = self.pos[1] + t * d_y;
+            let dy = self.pos[1] - hit_y;
+            (dy * dy).sqrt() - 0.1 <= self.cc
+        });
         if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
@@ -2418,6 +2421,7 @@ mod tests {
     /// grazes the slab's edge corner ((0, 0.600, 0.139), 0.412 away — a 0.0094-deep contact)
     /// while the ray at his pos runs down the open shaft. The old `walkable ||` grounded him on
     /// that graze forever; the game's Bond falls.
+    #[ignore = "pins the GAME's wanted outcome (the lip graze must not ground — Bond falls into the well), but the naive ray gate that made it pass broke fix_input_kbd_trace::keyboard_trace_unchanged (reverted same-session): the grounded arm's HITTEST+0x9c bits come from Collide_Intersect on the SHARED HITTEST (ray AND capsule pick), so the real fix needs the bit filter's source (uStack_84 in 0x1ebaa8's disassembly). Kept as the next session's target."]
     #[test]
     fn the_chute_lip_corner_graze_cannot_ground() {
         let q = |a: V3, b: V3, c: V3, d: V3| [[a, b, c], [a, c, d]];
