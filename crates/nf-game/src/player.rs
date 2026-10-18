@@ -36,6 +36,9 @@ pub const WALK_PICK_RADIUS: f32 = 0.275;
 /// `BL+0x908` on land.
 pub const EYE: f32 = 0.7;
 const GRAVITY: f32 = -9.8;
+/// The feet-point band's float slop [M Player_FeetOnPoint 0x194188:106 `hit − 0.1 <= cc`; the
+/// port's rounding at the exact crouch contact — see the physics_tick comment].
+const GROUND_EPS: f32 = 1e-4;
 
 /// `obj+0xF6` substates, from the `Player_Update` 0x193600 dispatch [M switch @0x193958; the jump table
 /// reads obj+0xF6 and its cases call Player_SSWalk 0x192310 (0), Player_Climb 0x196310 (1),
@@ -790,7 +793,7 @@ impl Bond {
         // The floor test reads the same HITTEST (`Player_CollisionHandler` 0x1949a8 →
         // `Player_FeetOnPoint(param_1, BLData+0x740, …)`), so it shares the per-cel scope.
         let floor = world.segment_hit_scoped(self.cel, self.pos, [self.pos[0], self.pos[1] - ray, self.pos[2]]);
-        self.grounded = walkable || floor.is_some_and(|(t, _)| t * ray - 0.1 <= self.cc);
+        self.grounded = walkable || floor.is_some_and(|(t, _)| t * ray - 0.1 <= self.cc + GROUND_EPS);
         if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
     }
 
@@ -1435,7 +1438,16 @@ self.local = [vs / k, vf / k];
             walkable = fw;
             floor = world.segment_hit(self.pos, [self.pos[0], self.pos[1] - ray, self.pos[2]]);
         }
-        self.grounded = walkable || floor.is_some_and(|(t, _)| t * ray - 0.1 <= self.cc);
+        // The contact-distance band [M Player_FeetOnPoint 0x194188:106 `hit − 0.1 <= cc`]: by the
+        // crouch capsule's own arms (B = 0.45 − cc, r 0.55 → the resting sphere bottom hangs
+        // exactly cc + 0.1 under the root) the crouched rest sits EXACTLY on the band edge, and
+        // the port's fraction×ray multiply rounds the contact distance a hair above it
+        // (0.650000056 vs 0.65 — the 07000014 crawl-vent start [D p3=3] hovered ungrounded
+        // forever, flickering with the push, and the walk stalled in the duct). The game's own
+        // f32 ray path holds grounded through the same contact [L: the crouched Bond crawls out
+        // of the vent on PCSX2], so the port allows its own rounding slop: 1e-4, 400× below the
+        // 0.1 band and invisible to every gameplay distance.
+        self.grounded = walkable || floor.is_some_and(|(t, _)| t * ray - 0.1 <= self.cc + GROUND_EPS);
         if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
