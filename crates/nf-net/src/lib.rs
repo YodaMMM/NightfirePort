@@ -35,7 +35,7 @@ pub mod shim;
 
 pub use hash::Hasher;
 pub use input::{Input, NEUTRAL};
-pub use lobby::{LobbyEdit, LobbyPlayer, LobbyState};
+pub use lobby::{LobbyBot, LobbyEdit, LobbyPlayer, LobbyState};
 pub use net::UdpTransport;
 pub use session::{AgentInfo, Config, DropPolicy, Event, LeaveReason, RefuseReason, Session, SessionError};
 pub use settings::MatchSettings;

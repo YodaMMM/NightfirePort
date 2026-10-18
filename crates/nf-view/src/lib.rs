@@ -25,6 +25,7 @@ pub mod devwin;
 pub mod hud;
 pub mod credits;
 pub mod menu;
+pub mod mp_lobby;
 pub mod menu_music;
 pub mod settings;
 pub mod movie;
