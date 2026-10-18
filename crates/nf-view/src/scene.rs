@@ -4979,6 +4979,9 @@ pub struct Scene {
     /// draw moves them (mp-character-data's loader API; the pose comes from
     /// `nf_formats::mpanim::mp_body_pose` over `sim.mp`'s live slots).
     pub mp_char_bodies: Vec<MpBody>,
+    /// mp-character-data: the animation-set descriptors (ACTION.ELF 0x2b91b0) the drawn MP bodies
+    /// pick their script from each frame (`nf_formats::mpanim::mp_body_pose`).
+    pub mp_anim_sets: Option<nf_formats::mpanim::MpAnimSets>,
     /// The level's room cels (`parse_room_cels`), kept for the static-draw cel cull
     /// (`View_AddCels` 0x1e6ba0 frustum-tests each cel's bbox; `cel_sphere`/`cel_index_at`).
     pub cels: Vec<Cel>,
@@ -5873,6 +5876,8 @@ impl Scene {
         // game loads no other archive for MP characters — `MP_PostLoad_Init` 0x183718 inits the
         // game-mode objects, no loads [M]).
         let mut mp_char_bodies: Vec<MpBody> = Vec::new();
+        // The 16 descriptors for the draw's per-frame pick (`mp_body_pose`).
+        let mp_anim_sets = drones.and_then(|d| d.mp_anims.as_ref()).map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets });
         if let (Some(mp_set), Some(d)) = (mp, drones) {
             if let (Some(skins), Some(anim_sets)) = (d.mp_skins.as_ref(), d.mp_anims.as_ref()) {
                 let humans = (mp_set.human_count as usize).clamp(1, 4);
@@ -7158,7 +7163,7 @@ impl Scene {
         // bbox-face FindCel approximation (documented deviation; every live load path builds sim).
         if sim.is_none() { build_chains(&mut cel_graph, None); }
         crate::phase_mark("b10 collider index + final assembly", t);
-        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
+        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -7253,24 +7258,20 @@ impl Scene {
             if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
                 let s = self.sim.as_ref()?;
                 let (pos, yaw, speed) = s.mp_body_state(slot)?;
-                // The PLAYER anim set the game's MP body runs [M PlayerAnimSetInitNormal 0x18fcd8: in MP
-                // the set is chosen by the held weapon's class byte weapon_data[w]+0x84; D the tables
-                // below, ACTION.ELF 0x2b9200..0x2b93e0, 10 script hashes each]. The slot pick by speed
-                // is a stand-in until `AnimSetUpdate` 0x1c0938's blend is ported (700v7): slot 0 stand,
-                // slot 4 forward [S].
-                const SETS: [(u8, [u32; 10]); 7] = [
-                    (3, [0x60001d4, 0x60001db, 0x60001d9, 0, 0x600097c, 0x600097c, 0x600097d, 0x600097d, 0, 0]),
-                    (1, [0x60009dc, 0x60009de, 0x60009db, 0, 0x60009d7, 0x60009d7, 0x60009d8, 0x60009d8, 0, 0]),
-                    (5, [0x60001e6, 0x60001e7, 0x60001e5, 0, 0x60009df, 0x60009df, 0x60009e0, 0x60009e0, 0, 0]),
-                    (4, [0x60001ce, 0x60001cf, 0x60001cd, 0, 0x60009fc, 0x60009fc, 0x60009fd, 0x60009fd, 0, 0]),
-                    (6, [0x60009fe, 0x60009b5, 0x60009b7, 0, 0x60009ba, 0x60009ba, 0x60009bb, 0x60009bb, 0, 0]),
-                    (2, [0x60009b0, 0x60009b2, 0x60009af, 0, 0x60009b3, 0x60009b3, 0x60009b4, 0x60009b4, 0, 0]),
-                    (0, [0x60001f1, 0x60001f2, 0x60001f0, 0, 0x60009e4, 0x60009e4, 0x60009e5, 0x60009e5, 0, 0]),
-                ];
+                // The PLAYER anim set the game's MP body runs, through 700v7's port: the set by the
+                // held weapon's class and the stance (`PlayerAnimSetInitNormal`/`InitCrouch`
+                // 0x18fcd8/0x18fea0), the idle/walk pick by forward speed (`AnimSetUpdate`
+                // 0x1c0938) — `nf_formats::mpanim::mp_body_pose` [M, D the descriptors].
                 let held = s.mp_held.get(slot).copied().unwrap_or(2);
-                let class = s.weapons.records.get(held as usize).map_or(0, |r| r[0x84]);
-                let set = SETS.iter().find(|(c, _)| *c == class).map_or(&SETS[6].1, |(_, t)| t);
-                let pick = if speed < 0.5 { set[0] } else { set[4] };
+                let class = nf_formats::mpanim::weapon_anim_class(&s.weapons, held);
+                let substate = if slot < 4 { s.mp_bonds[slot].as_ref().map_or(0, |b| b.substate) } else { 0 };
+                let pick = self.mp_anim_sets.as_ref().map_or(0, |sets| {
+                    let st = nf_formats::mpanim::MpBodyState {
+                        mp: true, weapon: held, substate, fwd: speed / 60.0, strafe: 0.0,
+                        phase: 0.37, hold: 0, one_shot_time: 0.0, water_level: -9.9,
+                    };
+                    nf_formats::mpanim::mp_body_pose(sets, class, &st).script
+                });
                 let player_script = Some(pick).filter(|h| s.scripts.contains_key(h));
                 let st = if speed < 0.5 { nf_game::drone::anim_state::STAND_IDLE } else if speed < 4.5 { nf_game::drone::anim_state::WALK } else { nf_game::drone::anim_state::RUN };
                 let danim = s.tables.danim_for_state(st, 0);
