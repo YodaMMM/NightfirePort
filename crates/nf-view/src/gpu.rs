@@ -1244,9 +1244,9 @@ mod shader_tests {
     }
 }
 
-/// no-room-cull (the user, 2026-10-17: "I'm not a fan of the culling at all" — rooms and objects
-/// vanished in doorways and between areas): the room/portal cull of the World draws is OFF by
-/// default; only the per-draw frustum cull remains. The batched draw path (batch-draws) holds every
-/// level above 240 fps with the whole level drawn. `NF_ROOMCULL=1` turns the room cull back on
-/// (the portal walk, widened one portal; `NF_NOPORTAL` / `NF_NOCELCULL` still narrow it).
-pub fn room_cull_enabled() -> bool { std::env::var_os("NF_ROOMCULL").is_some() }
+/// The room/portal cull is ON (cull-on, 2026-10-18): Nightfire's maps overlap rooms in space and the
+/// portal walk is what keeps them apart — with it off, 07000011's stairwell drew a neighbouring room's
+/// brown wall slab straight across the corridor (the user's playtest F12s 003-005, "the map cutting
+/// into itself"). The walk is widened one portal (cull-relax) so a room being stepped into is never
+/// cut at the threshold. `NF_NOROOMCULL=1` turns it off (debug only).
+pub fn room_cull_enabled() -> bool { std::env::var_os("NF_NOROOMCULL").is_none() }
