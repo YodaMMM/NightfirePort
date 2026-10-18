@@ -102,3 +102,35 @@ the matrix column, the port's is world-down — pre-existing, and the band has 0
   `walkreal_07000012_live`, `probe14_vent` — all ok with the epsilon gone.
 - probe14_ground.rs (assertion-free): the rest y 1 ulp lower than 717a's tree, contact
   0.6499999/0.64999986, band true, stable across the push dither.
+
+## The band gates BLData+0x110 too (level-14-interactables-3)
+
+The band is not only the grounding condition — it is also the gate on the OTHER FeetOnPoint
+output: `param_3` (= `BLData+0x110`, the port's `floor_ny`). FeetOnPoint writes
+`*param_3 = 1.0f` first [M 0x194188:85] and overwrites it with the band-passed hit's `+0x14`
+(the surface normal y) **only inside the band** [M 0x194188:106-109]. The gravity gate reads
+that value: `Player_Collision` 0x194df0 applies gravity when `flag8 == 0 || BL+0x110 < 0.5`
+[M 0x194df0:104] — a steep surface only pulls Bond off his feet when the band PASSED on it.
+
+The port's `floor_ny` took the hit normal regardless of the band. That was harmless while the
+ray was `pos − (cc+0.6)` (master) — a hit past the band edge was rare — but the B-hop ray
+reaches ~0.48 further down (standing: `0.55f32 − cc` = −0.4847183 of extra reach), and on the
+07000005 upper ledge it now hits the ny 0.45 slope ~1.85 below the walkable rest every tick.
+The port then fed 0.45 into the gravity gate on ticks Bond was walkable-grounded, gravity fired
+and he slid off the ledge (the 717c merge hold:
+`interact_07000005_live::the_ledge_plate_plays_the_sound_trigger`). In the game the band FAILS
+at that rest (1.85 − 0.1 = 1.75 > cc), so `BLData+0x110` stays 1.0 and the gate never opens
+[M 0x194df0:104].
+
+Flag-8 detail from the disassembly (the grounding flag FeetOnPoint sets at 0x194188:176-185):
+flag 8 = `HITTEST+0x9c != 0 || band passed`. `HITTEST+0x9c` is written by `Collide_Intersect`
+(read-modify-write at 0x1ec138-0x1ec150) **only when `HITTEST+0x94 & 0x200`** — but
+`Player_Collision` stores 0x800 into `HITTEST+0x94` every tick [M 0x194df0:204/228/256/…], and
+`0x800 & 0x200 == 0`, so for the player's feet ray the OR-store is skipped: ordinary world
+triangles never set +0x9c. The one unconditional writer is `Intersect_CylGeom` (+0x9c |= 1 at
+0x10a72c-0x10a734) — cylinder hits (poles) mark the ray. Net: for the player, flag 8 = the band
+passed (triangle floors) plus the cylinder case; the port's `walkable` push net stays as the
+documented port-scope stand-in for the game's per-cel geometry the port's buckets miss [S].
+
+The port's fix (both grounded sites): `floor_ny = band ? hit ny : 1.0` — the game's
+`BLData+0x110` chain, bit-mirrored. `grounded` keeps `walkable || band`.
