@@ -2222,6 +2222,15 @@ pub struct FrontEnd {
     /// `DAT_002e1c49`: the playing movie accepts the skip [M Menu_StopMovie 0x215a50:6]. P_INTRO
     /// clears it (0x209e88:41, 55 — the boot logos are unskippable), P_ESTHERO sets it (0x20a060:18).
     pub intro_skippable: bool,
+    /// reward-after-outro: the completed mission's results page sits QUEUED in GameState+0x28
+    /// (0x40000036 [M Mission_Update 0x182c60:72]) while `MenuManager_Create` has NOT run — the
+    /// manager opens at the load's tail [M ResetMap_Load 0x1d6360:160-163], after the outro
+    /// movie for the 0x7300xx endings (the GameFlow state-6 gate holds until `psiMovieFinished`
+    /// [M 0x1c98c8 case 6]; phase 2 resolves the code to the map [M 0x1d3560; 0x1d6360:173-177]).
+    /// While it stands no menu page draws or takes input (the game has no manager up), and
+    /// P_START/P_MAIN's no-input counter is not live. [`Self::reopen_queued_page`] — the load
+    /// tail's stand-in — clears it.
+    pub results_queued: bool,
 }
 
 /// The codename session the window carries across front-end creates
@@ -2427,7 +2436,10 @@ impl FrontEnd {
             intro_movie: false,
             intro_frames: 0,
             intro_live: false,
-            intro_skippable: false };
+            intro_skippable: false,
+            // reward-after-outro (new field on its own line [WORKLOG lesson 4]).
+            results_queued: false,
+        };
         // The boot opens P_START: the pair plays with `menu_movie` clear [M P_START 0x20a408:12-22;
         // the game's boot path P_INTRO → P_START replays it the same way — the intro movie end
         // clears the static [M 0x209e88:44,58]].
@@ -3167,6 +3179,9 @@ impl FrontEnd {
         match Page::from_id(self.flow.page) {
             Some(p) if self.page != p => {
                 self.enter_page(p);
+                // reward-after-outro: the queued results page is now up — the load tail's
+                // MenuManager_Create ran [M 0x1d6360:160-163]. (The fail menu never queues.)
+                self.results_queued = false;
                 // The page's own 0x4c row: the mission list opens on the highest unlocked row
                 // [M P_NFMAP 0x20b608:58-64]; the others on row 0.
                 self.cursor = if p == Page::MissionSelect { self.highest_unlocked() } else { 0 };
@@ -3219,7 +3234,9 @@ impl FrontEnd {
         self.mp_net_poll();
         // (the `!self.intro_playing` fire guard below: the intro pages never check the count [M
         // only P_START/P_MAIN call Menu_GetNoInputCount]; Main's 0x4c reset lands in intro_tick.)
-        self.no_input_frames = self.no_input_frames.saturating_add(1);
+        // reward-after-outro: while the results page is queued no manager runs — P_START/P_MAIN's
+        // no-input counter is not live [M 0x1d6360:160-163], so a long outro cannot attract-open.
+        self.no_input_frames = if self.results_queued { 0 } else { self.no_input_frames.saturating_add(1) };
         // attract-mode: the title's and main menu's no-input timeout fires on the tick the count
         // reaches 0xa8c [M P_START 0x20a408 / P_MAIN 0x20a7b0 — `Menu_GetNoInputCount() == 0xa8c`
         // sends 0x44/0x40000035; `Menu_AlphaUpdate` 0x1f3170 increments `frame_counter` before the
@@ -3439,19 +3456,27 @@ impl FrontEnd {
             self.cursor = 0;
             return;
         }
+        // reward-after-outro: case 4 QUEUES the page — GameState+0x28 = 0x40000036 [M 0x182c60:72]
+        // — and the MenuManager_Create runs at the LOAD's tail [M 0x1d6360:160-163], after the
+        // outro: the state-6 gate holds until `psiMovieFinished` [M 0x1c98c8 case 6], phase 2
+        // resolves the 0x7300xx code to the map [M 0x1d3560; 0x1d6360:173-177]. The port used to
+        // `enter_page(Results)` here — the reward screen showed before the ending cut-scene
+        // (playtest 2026-10-18). `reopen_queued_page` (the load tail's stand-in) opens it.
         self.flow.page = PAGE_RESULTS;
+        self.results_queued = true;
         // Case 6's `LevelToEndTo`: the outro code 0x073000xx for the levels with an outro
         // (compiled switch [M 0x182c60:89-116]; 0x7000016 → 0x7300017 is the one non-identity
-        // entry), the front-end map for the rest. Case 4 runs `ResetMap_LevelToLoad(LevelToEndTo,
-        // 0, 0)` — the outro rides the briefing machinery, so the movie wrap plays it and phase 2
-        // returns to the map with the results page [M 0x1d6360/0x1d3560; P_NFRESULTS 0x208e78].
+        // entry), the front-end map for the rest — with no outro the plain front-end load's tail
+        // opens the page the same way [M 0x1d6360:160-163]. Case 4 runs
+        // `ResetMap_LevelToLoad(LevelToEndTo, 0, 0)` — the outro rides the briefing machinery, so
+        // the movie wrap plays it and phase 2 returns to the map with the results page [M
+        // 0x1d6360/0x1d3560; P_NFRESULTS 0x208e78].
         let end_to = outro_for(self.flow.current_level);
         self.requested_level = Some(end_to);
         self.flow.reset_map_level_to_load(end_to, false, false);
         // The game's order [M 0x182c60:73-74]: the load first, THEN the fade push on top —
         // `GameFlow_PushState(60.0, 7, ...)` [M disasm 0x183054-60: f12 = 0x42700000 = 60.0f, a0 = 7].
         self.flow.push_state(7, 60);
-        self.enter_page(Page::Results);
         self.cursor = 0;
     }
 
@@ -4359,6 +4384,12 @@ impl FrontEnd {
         // death-loop-07: a fresh input decides the restart marker anew — only the results page's
         // REPLAY row sets it (the end-mission menu's row 0 [M 0x216618:19-21]).
         self.requested_restart = false;
+        // reward-after-outro: the results page is queued but MenuManager_Create has not run — the
+        // game has no page handlers until the load's tail [M 0x1d6360:160-163]. The outro's own
+        // skip rides GameFlow case 6's action read (the App's intercept, before this).
+        if self.results_queued {
+            return false;
+        }
         // The MP start checks' refusal is the game's option box too (Menu_CreateOptionBox with the
         // error label [M C_SBMPOPTIONS 0x20e818:50-130]); it was never drawn, so Continue just did
         // nothing (playtest 1015-2231 "cant get into a match").

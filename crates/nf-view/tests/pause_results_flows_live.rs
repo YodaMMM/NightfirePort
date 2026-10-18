@@ -456,7 +456,11 @@ fn completing_the_mission_reaches_the_results_and_the_next_pages() {
     fe.flow.current_level = 0x0700_0005;
     fe.mission = menu::CAMPAIGN.iter().position(|c| c.3 == 0x0700_0005).unwrap();
     fe.mission_ended(Outcome::Complete, Stats::default());
-    assert_eq!(fe.page, Page::Results);
+    // reward-after-outro [M 0x182c60:72-74 / 0x1d6360:160-163]: case 4 only QUEUES the page —
+    // GameState+0x28 = 0x40000036 — no MenuManager_Create runs here, so no page is up yet (the
+    // old assert pinned the playtest bug: the reward page before the ending cut-scene).
+    assert!(fe.results_queued, "the page queues at the end [M 0x182c60:72]");
+    assert_eq!(fe.page, Page::Start, "no manager is up during the load [M 0x1d6360:160-163]");
     assert_eq!(fe.requested_level.take(), Some(menu::outro_for(0x0700_0005)), "the end code rode the request");
     // The wrap: the plain front-end load completes in the model (no outro for 05 — no movie wrap,
     // [M 0x1d3800's switch has no 0x7000048]); the results page stays queued [M 0x182c60:72-74 set
@@ -469,7 +473,8 @@ fn completing_the_mission_reaches_the_results_and_the_next_pages() {
     }
     assert!(landed, "the front-end map completed in the model");
     assert_eq!(fe.flow.page, menu::PAGE_RESULTS, "+0x1c = 0x40000036 [M 0x1d6360]");
-    assert_eq!(fe.page, Page::Results, "the results page is up");
+    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
+    assert_eq!(fe.page, Page::Results, "the results page is up — after the load, not the end");
     assert!(fe.results_enter(&mut progress, 0x0700_0005, 6, difficulty, lang.as_ref()),
         "the results fields build [M P_NFRESULTS 0x208e78:77]");
     // The award [M Menu_SetLevelBonus 0x1ffa10:62-66]: the completed row stamps and the NEXT row unlocks.

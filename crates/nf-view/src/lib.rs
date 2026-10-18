@@ -2753,7 +2753,10 @@ impl App {
         fe.opts = opts;
         // The demo hook stands in for Mission_Update 0x182c60, which fires in state 2 — the flow
         // must be in a state reset_map_level_to_load accepts (its gate [M 0x1d3800]) for the outro
-        // request to wrap into the movie state.
+        // request to wrap into the movie state. The results PAGE opens only at the front-end
+        // load's tail (`reopen_queued_page` — the game's MenuManager_Create [M 0x1d6360:160-163]),
+        // i.e. after the outro movie for the 0x7300xx endings; the fields below build now (the
+        // game's own commit runs at the page enter — the data lands before any page can read it).
         fe.flow.stack = vec![menu::ST_RUNNER];
         fe.flow.current_level = self.level_code;
         fe.mission_ended(if complete { menu::Outcome::Complete } else { menu::Outcome::Failed }, menu::Stats::default());
@@ -4354,12 +4357,16 @@ impl ApplicationHandler for App {
                     self.fe_clock -= fe_n as f32 / 60.0;
                     for _ in 0..fe_n.min(8) { fe.tick(); }
                     fe.backdrop_live = aux_up && movie_frame.is_some();
-                    if flow_up || (intro_up && movie_frame.is_some()) || (attract_up && movie_frame.is_some()) {
+                    if flow_up || (intro_up && movie_frame.is_some()) || (attract_up && movie_frame.is_some()) || fe.results_queued {
                         // The movie plane replaces the overlay: the state-6 briefing blits over the
                         // empty backdrop and the fog pass is suppressed while a movie plays [M
                         // DecodeBGFMVFrame 0x108550 + PS2UploadBGMImage 0x108740, psiDrawFogPass
                         // 0x10b960]; the intro FMV owns the screen the same way [M 0x209e88]. The
                         // quad itself is drawn inside render(), before the (empty) HUD runs.
+                        // reward-after-outro: the queued results page draws nothing either — the
+                        // game has no MenuManager until the load's tail [M 0x1d6360:160-163]; the
+                        // mission's last frame (under the GameFlow fade) shows until the movie
+                        // starts, exactly like the game's state-7 window.
                         gpu::HudFrame::default()
                     } else {
                         // fix-pause-menu2: the OBJECTIVES tab's rows come from the sim's mission

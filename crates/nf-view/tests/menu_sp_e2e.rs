@@ -482,6 +482,7 @@ fn a_completed_mission_routes_the_results_save_and_the_next_row() {
     // The Exchange has no outro code: the front-end map loads plain, the results page stands.
     assert_eq!(fe.requested_level.take(), Some(menu::FRONTEND_LEVEL), "no outro for 07000005");
     assert_eq!(drive_end_to_map(&mut fe), None, "a plain map load has no phase-2 resolve");
+    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
     assert_eq!(fe.page, Page::Results);
     assert_eq!(fe.flow.page, menu::PAGE_RESULTS);
 
@@ -614,6 +615,7 @@ fn the_final_mission_routes_to_the_win_page_and_credits() {
     );
     assert_eq!(fe.requested_level.take(), Some(0x0730_001b), "the final level wraps to its outro");
     assert_eq!(drive_end_to_map(&mut fe), Some(menu::FRONTEND_LEVEL), "the outro resolves to the map");
+    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
     assert_eq!(fe.page, Page::Results);
     assert_eq!(fe.flow.page, menu::PAGE_RESULTS);
     assert!(fe.results_enter(&mut progress, level, 6, fe.difficulty as u32, None));
