@@ -29,9 +29,9 @@ const ALERT: Rgb = rgb(0xe0705e);
 const COL_X: f32 = 468.0;
 const COL_W: f32 = 440.0;
 const BARREL: (f32, f32, f32) = (232.0, 270.0, 162.0);
-const CARD_R: Rect = Rect::new(COL_X, 286.0, COL_W, 100.0);
-const PRIMARY_R: Rect = Rect::new(COL_X, 404.0, COL_W, 60.0);
-const SECOND_Y: f32 = 492.0;
+const CARD_R: Rect = Rect::new(COL_X, 270.0, COL_W, 100.0);
+const PRIMARY_R: Rect = Rect::new(COL_X, 388.0, COL_W, 60.0);
+const SECOND_Y: f32 = 476.0;
 
 /// A disc image that passed the identity check.
 #[derive(Clone, Debug, PartialEq)]
@@ -145,7 +145,6 @@ pub fn paint(c: &mut Canvas, bg: &Canvas, fonts: &Fonts, ui: &Ui, scale: f32) {
     let title_size = if title_w > COL_W * s { title_size * COL_W * s / title_w } else { title_size };
     c.text(&fonts.display, title_size, x - 3.0 * s, 222.0 * s, "NIGHTFIRE", TEXT, 1.0, 3.0 * s);
     c.hline_fade(x, 242.0 * s, COL_W * s, 1.2 * s, GOLD, 0.85);
-    c.text(&fonts.regular, 15.0 * s, x, 270.0 * s, "Native PC port \u{b7} plays from your own PS2 disc image", DIM, 1.0, 0.2 * s);
 
     // ── Disc card ───────────────────────────────────────────────────────────────────────────────────────
     let card = CARD_R.scaled(s);
@@ -175,8 +174,6 @@ pub fn paint(c: &mut Canvas, bg: &Canvas, fonts: &Fonts, ui: &Ui, scale: f32) {
         let tag_w = measure(&fonts.bold, 11.0 * s, tag, 2.4 * s);
         let tag_x = card.x + card.w - 18.0 * s - tag_w;
         c.text(&fonts.bold, 11.0 * s, tag_x, card.y + 30.0 * s, tag, GOLD, 1.0, 2.4 * s);
-        let blink = 0.65 + 0.35 * (t * 2.2).sin().abs();
-        c.fill_rrect(Rect::new(tag_x - 13.0 * s, card.y + 22.0 * s, 7.0 * s, 7.0 * s), 3.5 * s, GOLD_HI, blink);
         c.text(&fonts.bold, 11.0 * s, tx, card.y + 30.0 * s, "DISC IMAGE", FAINT, 1.0, 2.4 * s);
         let name = ellipsize_middle(&fonts.bold, 18.0 * s, &d.file_name(), tw);
         c.text(&fonts.bold, 18.0 * s, tx, card.y + 58.0 * s, &name, TEXT, 1.0, 0.0);
@@ -234,14 +231,8 @@ pub fn paint(c: &mut Canvas, bg: &Canvas, fonts: &Fonts, ui: &Ui, scale: f32) {
 
     // ── Footer ──────────────────────────────────────────────────────────────────────────────────────────
     let fy = (H - 18.0) * s;
-    let ver = format!("v{}  \u{b7}  unofficial fan port \u{2014} requires your own disc", env!("CARGO_PKG_VERSION"));
+    let ver = format!("v{}", env!("CARGO_PKG_VERSION"));
     c.text(&fonts.regular, 11.5 * s, 24.0 * s, fy, &ver, FAINT, 1.0, 0.3 * s);
-    let hints = if ui.disc.is_some() { "ENTER  play     O  change disc     ESC  quit" } else { "ENTER  select disc     ESC  quit" };
-    // The key hints share the right column with the error; the error wins.
-    if ui.error.is_none() {
-        let hw = measure(&fonts.regular, 11.5 * s, hints, 0.6 * s);
-        c.text(&fonts.regular, 11.5 * s, (W - 24.0) * s - hw, fy, hints, FAINT, 1.0, 0.6 * s);
-    }
 }
 
 /// A soft diagonal light band across a rounded rect (additive).
