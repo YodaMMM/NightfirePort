@@ -8010,6 +8010,10 @@ pub struct Drones {
     /// Weather (`DrawSnow`: a `SNOW_gen` placement, type 0xDF): the drop type and volumes from the level, built at the
     /// first tick; the generator of the first-frame fill (before the snapshot point, so not the shared one).
     pub env: Option<crate::env::Drops>,
+    /// `SunVector` 0x2d88a0: `Env_Create` 0x17b968:116-121 zeroes it, then (param 9 ≠ 0)
+    /// `Vec_Spherical_2_Cartesian(1000, p10·π/180, −p11·π/180)`; zero = no sun. Read by the
+    /// lens-flare pane's sun test (`Sim::sun_seen`).
+    pub sun_vector: [f32; 3],
     env_pending: Option<(u8, Vec<crate::env::RainBox>)>,
     fill_rng: Rng,
     /// Pickups in the world, Bond's inventory and what he took (tick, what) — docs/systems/pickups.md.
@@ -8315,7 +8319,7 @@ impl Drones {
         // `Drone_SM_InitObject` numbers state machines in creation order (the base is not known: 0 here).
         for (i, dr) in list.iter_mut().enumerate() { dr.sm_id = i as u32; dr.index = i; }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, env_pending: None, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             movie_request: None,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
@@ -8684,6 +8688,11 @@ impl Drones {
                 crate::env::RainBox { min: [o.min[0] + t[0], o.min[1] + t[1], o.min[2] + t[2]], max: [o.max[0] + t[0], o.max[1] + t[1], o.max[2] + t[2]] }
             }).collect();
             self.env_pending = Some((kind, boxes));
+            let pv = |k: u32| p.params.iter().find(|(i, _)| *i == k).map_or(0, |&(_, v)| v);
+            self.sun_vector = if pv(9) != 0 {
+                let rad = 0.017453294f32;
+                crate::sky::spherical_2_cartesian(1000.0, pv(10) as f32 * rad, -(pv(11) as f32 * rad))
+            } else { [0.0; 3] };
         }
         // The presentation FX (0x21/0xe3/0xd4/0x4a/0xf2 placements, fix-world-fx): the same
         // placement-order walk `parsemap_create_dynamic_objects` 0x1d04f0 runs.

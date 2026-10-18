@@ -528,6 +528,8 @@ pub struct Sim {
     pub view_model_chars: Vec<usize>,
     /// fix-render3: the `ambient_at` call counter (a test guard for the posed-vertices hoist).
     pub ambient_lookups: std::cell::Cell<usize>,
+    /// light-sun: BLData+0x962 — Bond's head sees the sun this tick (`ramp_char_ambient`).
+    pub sun_seen: bool,
     /// The language string table (`USATxt.dat`, the NTSC-U default `FNames[SelLang]`) — the source of the
     /// HUD's label text (`Txt_BindLabel` 0x1cad60). Loaded in `nf_view::load`.
     pub lang: Option<nf_formats::hud::Lang>,
@@ -1763,9 +1765,24 @@ impl Sim {
 
     /// One `Lights_CalcAmbientLight` pass over the characters: the view models follow Bond's cel, drone-backed
     /// characters their drone's cel, script characters their entity matrix; characters with none keep the value
-    /// snapped at build. The 0x10000 doubled targets (night vision, `glb_blokes+0x962`) are not ported — the
+    /// snapped at build. The 0x10000 doubled targets (`glb_blokes+0x962` = Bond sees the sun, light-sun) apply to the view models — the
     /// goggles are not in the port yet, so the flag can never set.
     pub fn ramp_char_ambient(&mut self) {
+        // light-sun: `HUD_UpdateLensFlarePane` 0x19d770:64-90 sets BLData+0x962 each frame when the
+        // `SunVector` is non-zero and the head → sun line of sight is clear; it is
+        // the gate of the 0x10000 doubled ambient below (the old note called it night vision — it is
+        // the "Bond sees the sun" flag: 1 at the 0700000c start [L PCSX2 BLData+0x962]).
+        let sv = self.drones.sun_vector;
+        self.sun_seen = sv != [0.0; 3] && {
+            let h = self.bond.head();
+            // `Collide_LineOfSight(head, head − SunVector, cel, obj, 0, 8)` [M 0x19d770:84-85]: mask
+            // 8 | 4 — bit 0x8 is the node-pass skip the bullet ray carries (`segment_bullet`'s class);
+            // the raw segment stopped on the 0700000c start's invisible boundary at y 40.
+            self.world.segment_surface_bullet(h, [h[0] - sv[0], h[1] - sv[1], h[2] - sv[2]]).is_none()
+        };
+        // The view model shares Bond's linked cel (obj+0x20 — the same cel on both objects at the
+        // 0700000c start [L PCSX2]); `Lights_CalcAmbientLight` reads THAT cel, not a fresh bbox find.
+        let bond_room = self.bond.cel.and_then(|cell| self.room_cell.iter().position(|c| *c == Some(cell)));
         // Positions first (the borrow of `self` ends before the mutable ambient walk).
         let positions: Vec<Option<[f32; 3]>> = (0..self.char_ambient.len()).map(|ci| {
             if self.view_model_chars.contains(&ci) {
@@ -1778,7 +1795,21 @@ impl Sim {
                 self.characters_script_pos(ci)
             }
         }).collect();
-        let targets: Vec<Option<[u8; 3]>> = positions.iter().map(|p| p.and_then(|p| self.ambient_at(p))).collect();
+        let mut targets: Vec<Option<[u8; 3]>> = positions.iter().map(|p| p.and_then(|p| self.ambient_at(p))).collect();
+        for &vm in &self.view_model_chars {
+            let Some(t) = targets.get_mut(vm) else { continue };
+            if let Some(r) = bond_room {
+                let c = &self.cels[r];
+                let off = *self.drones.channels.v.get(c.zone as usize).unwrap_or(&0);
+                *t = Some(c.ambient[(off as usize).min(1)]);
+            }
+            // The 0x10000 doubled target [M 0x1cb178:20-35, each byte ×2 clamped to 0xff]: the view
+            // model's flags word carries it (obj+0xF0 = 0x1a8a0 at the 0700000c start [L PCSX2]; Bond's
+            // own body 0x880 does not).
+            if self.sun_seen {
+                if let Some(a) = t.as_mut() { for k in 0..3 { a[k] = (a[k] as u32 * 2).min(0xff) as u8; } }
+            }
+        }
         for (ci, amb) in self.char_ambient.iter_mut().enumerate() {
             let Some(target) = targets[ci] else { continue };
             if *amb == [0xff, 0xff, 0xff] {
@@ -6783,7 +6814,7 @@ impl Scene {
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), ambient_lookups: std::cell::Cell::new(0), lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [None, None, None, None],
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, laser_charge: 100.0, missile_cam: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
