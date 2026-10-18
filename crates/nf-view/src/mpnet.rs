@@ -26,7 +26,7 @@ use std::time::Instant;
 use nf_game::mp::{MpPlayer, MpSettings};
 use nf_game::player;
 use nf_net::session::{Config, Event, Session};
-use nf_net::{MatchSettings, UdpTransport};
+use nf_net::{MatchSettings, UdpTransport, MAX_AGENTS};
 
 use crate::menu::{MpNetAgent, MpNetChoices, MpNetError, MpNetLink};
 
@@ -235,7 +235,7 @@ pub enum CoreEvent {
         settings: Box<MpSettings>,
         snapshot_tick: u32,
         snapshot_hash: u64,
-        log: Vec<[nf_net::Input; 4]>,
+        log: Vec<[nf_net::Input; MAX_AGENTS]>,
     },
     /// mp-join-in-progress. All machines: `slot` becomes human from
     /// `join_tick` — the app spawns its agent there (`Sim::mp_join_spawn`)
@@ -692,7 +692,7 @@ impl NetCore {
 
     // ── the app's match surface (the lockstep tick gate) ────────────────
 
-    pub fn ready_inputs(&mut self, tick: u32) -> Option<[nf_net::Input; 4]> {
+    pub fn ready_inputs(&mut self, tick: u32) -> Option<[nf_net::Input; MAX_AGENTS]> {
         self.sess.ready_inputs(tick)
     }
 
@@ -712,7 +712,7 @@ impl NetCore {
     /// Host: record the per-tick inputs a tick ran with (the late-join
     /// transcript; the app calls it right after `ready_inputs` returned
     /// `Some`). Host-only — clients ignore it.
-    pub fn record_run_tick(&mut self, tick: u32, inputs: [nf_net::Input; 4]) {
+    pub fn record_run_tick(&mut self, tick: u32, inputs: [nf_net::Input; MAX_AGENTS]) {
         self.sess.record_run_tick(tick, inputs);
     }
 

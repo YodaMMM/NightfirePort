@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use nf_net::net::{Transport, UdpTransport};
 use nf_net::shim::Shim;
 use nf_net::session::{Config, DropPolicy, Event, LeaveReason, RefuseReason, Session};
-use nf_net::{Input, MatchSettings, NEUTRAL};
+use nf_net::{Input, MatchSettings, NEUTRAL, MAX_AGENTS};
 
 fn addr(port: u16) -> SocketAddr {
     format!("127.0.0.1:{port}").parse().unwrap()
@@ -45,7 +45,7 @@ fn agent_input(slot: u8, tick: u32) -> Input {
 /// The fake deterministic sim: a hash chain folded from all 4 inputs of a
 /// tick. Same inputs on every machine = same hash (the lockstep premise);
 /// a one-bit input difference changes it (the sister-test premise).
-fn sim_hash(tick: u32, inputs: &[Input; 4], prev: u64) -> u64 {
+fn sim_hash(tick: u32, inputs: &[Input; MAX_AGENTS], prev: u64) -> u64 {
     let mut h = prev ^ 0xC0FF_EE00;
     for (s, i) in inputs.iter().enumerate() {
         h = h.rotate_left(17) ^ (i.forward.to_bits() as u64).wrapping_add(s as u64 + 1);
@@ -286,7 +286,7 @@ fn handshake_delivers_settings_seed_and_go() {
     // SLOTMAP: host human + 3 clients.
     assert!(events
         .iter()
-        .any(|e| matches!(e, Event::SlotMapChanged { human_slots } if *human_slots == [true, true, true, true])));
+        .any(|e| matches!(e, Event::SlotMapChanged { human_slots } if human_slots[..4] == [true, true, true, true])));
     // GO: everyone started at tick 0.
     assert!(events
         .iter()

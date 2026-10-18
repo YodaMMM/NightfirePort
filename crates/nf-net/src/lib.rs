@@ -45,19 +45,29 @@ pub use session::{AgentInfo, Config, DropPolicy, Event, LeaveReason, RefuseReaso
 pub use settings::MatchSettings;
 pub use teams::{scenario_has_teams, start_check, team_label, StartError, TeamEdit, TeamSelection};
 
-/// Maximum agents in an MP match — the game's own limit: humans occupy slots
-/// 0..4 (`MpSettings.human_count`, bots 4..8), `MP_Start` 0x183a50 inits
-/// humans into slots 0..player_count-1 and bots into 4..4+bot_count-1 [M]
-/// (`work/decomp` MP_Start; `crates/nf-game/src/mp/mod.rs:59,664`;
-/// `docs/atlas/multiplayer.md` "MP 1-4").
-pub const MAX_AGENTS: usize = 4;
+/// Maximum agents in an MP match. The GAME's own limit is 8 slots — humans
+/// occupy slots 0..4 (`MpSettings.human_count`, bots 4..8), `MP_Start`
+/// 0x183a50 inits humans into slots 0..player_count-1 and bots into
+/// 4..4+bot_count-1 [M] (`work/decomp` MP_Start;
+/// `crates/nf-game/src/mp/mod.rs:59,664`; `docs/atlas/multiplayer.md`
+/// "MP 1-4"). The PORT extends the cap to 16 participants, any mix of humans
+/// and bots (humans 1..16, bots 0..15, humans + bots ≤ 16) [S — the user's
+/// request; every per-slot rule stays the game's, only the counts grow]. The
+/// slot ORDER stays the game's shape: humans 0..humans-1, bots follow
+/// (humans..humans+bots-1) — the game's order, extended [S].
+pub const MAX_AGENTS: usize = 16;
 
 /// Wire protocol version. Bumped on any incompatible packet-layout change.
 /// 2: settings 208 B (per-player radar_on + registered_pickups), the HELLO
 /// codename is a display name (not compared), REFUSE 3 = started, DATA added
 /// (net-consolidate 2026-10-16).
 /// 3: the input carries `held` (byte 21) + `shot` (flag-1 bit 2) — the online combat (700v6).
-pub const PROTOCOL_VERSION: u16 = 3;
+/// 4: mp-16-slots — 16 agents: the INPUT packet's `agent_mask` and the
+/// SLOTMAP's `human_slots` are u16, the WELCOME settings carry 16 per-player
+/// records (334 B), the INPUT header grows to 15 bytes, JOIN_LOG chunks
+/// carry 3 ticks (16 agents × 24 B × 3 = 1152 B) and MAX_INPUT_COUNT_H2C
+/// drops to 3 so the largest relay packet still fits [`MAX_PACKET`] [S].
+pub const PROTOCOL_VERSION: u16 = 4;
 
 /// Build id carried in the handshake so mismatched executables refuse cleanly.
 /// The host app sets this (e.g. a build counter); both sides must match exactly.

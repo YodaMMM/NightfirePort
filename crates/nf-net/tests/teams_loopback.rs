@@ -118,7 +118,9 @@ fn team_edits_travel_the_data_tunnel_and_the_settings_carry_the_teams() {
     settings.team_game = (settings.scenario >> 29) & 1;
     settings.human_count = 2;
     settings.bot_count = 1;
-    settings.players[4].0 = TEAM_MI6; // the bot record's team [M 0x183a50:140-141]
+    // The bot record's team — the bot's slot follows the humans (humans=2 → slot 2) [M
+    // 0x183a50:140-141, the slot base extended by mp-16-slots].
+    settings.players[2].0 = TEAM_MI6;
 
     let (mut host, mut client, client_settings) = bring_up(45710, settings);
 
@@ -154,16 +156,16 @@ fn team_edits_travel_the_data_tunnel_and_the_settings_carry_the_teams() {
     let mut ts = ts;
     ts.set_team(edit.slot as usize, edit.team).unwrap();
     let mut applied = MatchSettings::default();
-    applied.players[4].0 = TEAM_MI6;
+    applied.players[2].0 = TEAM_MI6;
     ts.apply(&mut applied, 2);
     let teams = ts.effective_teams(&applied, 2);
     assert_eq!(start_check(0x2000_0004, &teams, 2, 1), Ok(()));
     assert_eq!(applied.players[1].0, TEAM_PHOENIX, "the applied pick landed in the settings record");
-    assert_eq!(applied.players[4].0, TEAM_MI6, "the bot record keeps its own team [M 0x183a50:140-141]");
+    assert_eq!(applied.players[2].0, TEAM_MI6, "the bot record keeps its own team [M 0x183a50:140-141]");
 
     // Sister: the client's handshake copy of the settings carries the same teams (the slot records
     // ride the protocol-2 wire — settings.rs's players tuples).
     assert_eq!(client_settings.players[0].0, TEAM_PHOENIX);
     assert_eq!(client_settings.players[1].0, TEAM_MI6, "the pick made AFTER the handshake doesn't retro-edit it — the host republishes per the lobby flow");
-    assert_eq!(client_settings.players[4].0, TEAM_MI6);
+    assert_eq!(client_settings.players[2].0, TEAM_MI6);
 }

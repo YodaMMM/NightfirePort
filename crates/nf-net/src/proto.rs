@@ -9,17 +9,17 @@
 //! | type | name | payload |
 //! |------|------|---------|
 //! | 1 | HELLO (client→host) | proto u16, build u32, display codename 32B |
-//! | 2 | WELCOME (host→client) | proto u16, build u32, host codename 32B, slot u8, input_delay u8, hash_every u8, rsv u8, seed u32, settings 208B |
+//! | 2 | WELCOME (host→client) | proto u16, build u32, host codename 32B, slot u8, input_delay u8, hash_every u8, rsv u8, seed u32, settings (334 B, protocol 4) |
 //! | 3 | REFUSE (host→client) | reason u8 (1 version, 2 build, 3 started, 4 full), rsv 3B |
-//! | 4 | INPUT | base_tick u32, agent_mask u8, count u8, ack_tick u32, ack_bits u32, count*popcount(mask)*24B inputs |
+//! | 4 | INPUT | base_tick u32, agent_mask u16, count u8, ack_tick u32, ack_bits u32, count*popcount(mask)*24B inputs |
 //! | 5 | HASH | tick u32, hash u64, prev_tick u32, prev_hash u64 |
 //! | 6 | KEEPALIVE | seq u32 |
 //! | 7 | LEAVE | slot u8, reason u8, rsv 2B |
-//! | 8 | SLOTMAP | human_slots bitmask u8, rsv 3B |
+//! | 8 | SLOTMAP | human_slots bitmask u16, rsv 2B |
 //! | 9 | GO (host→client) | first_tick u32 |
 //! | 10 | DATA (app tunnel) | len u16 + bytes — opaque app-to-app blob (the lobby's choices); the session never inspects it |
 //! | 11 | JOIN_BEGIN (host→late joiner) | first_tick u32, snapshot_tick u32, snapshot_hash u64 — the late-join handover head: the input log covers `first_tick..snapshot_tick` and the replay must hash to `snapshot_hash` at `snapshot_tick` |
-//! | 12 | JOIN_LOG (host→late joiner) | first_tick u32, tick_count u8, chunk_index u16, chunk_count u16, tick_count × (4 × 24 B inputs) — one chunk of the recorded run log |
+//! | 12 | JOIN_LOG (host→late joiner) | first_tick u32, tick_count u8, chunk_index u16, chunk_count u16, tick_count × (16 × 24 B inputs) — one chunk of the recorded run log |
 //! | 13 | JOIN_ACK (late joiner→host) | chunk_index u16 — all chunks ≤ chunk_index are held |
 //! | 14 | JOIN_READY (late joiner→host) | — the replay verified (hash matched) and the joiner is caught up; the host picks the join tick |
 //! | 15 | JOIN_SLOT (host→all) | slot u8, join_tick u32 — the slot becomes human from join_tick (its inputs start there; before it the slot rides NEUTRAL) |
@@ -50,16 +50,22 @@ pub const PT_JOIN_ACK: u8 = 13;
 pub const PT_JOIN_READY: u8 = 14;
 pub const PT_JOIN_SLOT: u8 = 15;
 
-/// Ticks one JOIN_LOG chunk carries (4 slots × 24 B × 12 = 1152 B — fits
-/// [`MAX_PACKET`] with header room).
-pub const JOIN_LOG_CHUNK_TICKS: usize = 12;
+/// Ticks one JOIN_LOG chunk carries (16 agents × 24 B × 3 = 1152 B — fits
+/// [`MAX_PACKET`] with header room; protocol ≤ 3 carried 12 ticks of 4
+/// agents, the same 1152 B [S mp-16-slots]).
+pub const JOIN_LOG_CHUNK_TICKS: usize = 3;
 
 /// codename field width on the wire (nul-padded).
 pub const CODENAME_WIRE: usize = 32;
-/// How many ticks one INPUT packet may carry client→host (24B each).
+/// How many ticks one INPUT packet may carry client→host (24B each; a
+/// client's mask holds its own slot only, so 32 ticks × 24 B + the 15-byte
+/// header stays well under [`MAX_PACKET`]).
 pub const MAX_INPUT_COUNT_C2H: usize = 32;
-/// How many ticks one INPUT packet may carry host→client (3 agents × 24B each).
-pub const MAX_INPUT_COUNT_H2C: usize = 8;
+/// How many ticks one INPUT packet may carry host→client. The relay mask
+/// holds every agent but the receiver's (15 of 16 [S mp-16-slots]):
+/// 3 ticks × 15 × 24 B + the 15-byte header = 1095 ≤ [`MAX_PACKET`].
+/// (Protocol ≤ 3: 8 ticks of 3 agents.)
+pub const MAX_INPUT_COUNT_H2C: usize = 3;
 
 /// A decoded packet. Sizes are exact; `inputs` holds
 /// `count * popcount(agent_mask)` entries in tick-major, slot-ascending order.
@@ -85,7 +91,9 @@ pub enum Packet {
     },
     Input {
         base_tick: u32,
-        agent_mask: u8,
+        /// Bit i = slot i carries an input each tick (u16 since protocol 4 —
+        /// 16 agents [S mp-16-slots]; was u8).
+        agent_mask: u16,
         ack_tick: u32,
         ack_bits: u32,
         inputs: Vec<Input>,
@@ -104,7 +112,9 @@ pub enum Packet {
         reason: u8,
     },
     SlotMap {
-        human_slots: u8,
+        /// Bit i = slot i is a live human (u16 since protocol 4 [S
+        /// mp-16-slots]; was u8).
+        human_slots: u16,
     },
     Go {
         first_tick: u32,
@@ -195,7 +205,7 @@ pub fn encode(p: &Packet, out: &mut Vec<u8>) {
             out.push(PT_INPUT);
             out.push(0);
             out.extend_from_slice(&base_tick.to_le_bytes());
-            out.push(*agent_mask);
+            out.extend_from_slice(&agent_mask.to_le_bytes());
             let per_tick = agent_mask.count_ones().max(1) as usize;
             out.push((inputs.len() / per_tick) as u8);
             out.extend_from_slice(&ack_tick.to_le_bytes());
@@ -229,8 +239,8 @@ pub fn encode(p: &Packet, out: &mut Vec<u8>) {
         Packet::SlotMap { human_slots } => {
             out.push(PT_SLOTMAP);
             out.push(0);
-            out.push(*human_slots);
-            out.extend_from_slice(&[0, 0, 0]);
+            out.extend_from_slice(&human_slots.to_le_bytes());
+            out.extend_from_slice(&[0, 0]);
         }
         Packet::Go { first_tick } => {
             out.push(PT_GO);
@@ -330,14 +340,15 @@ pub fn decode(buf: &[u8]) -> Option<Packet> {
             Some(Packet::Refuse { reason: body[0] })
         }
         PT_INPUT => {
-            if body.len() < 11 {
+            // The 15-byte fixed head (protocol ≤ 3: 14 — the mask was u8).
+            if body.len() < 15 {
                 return None;
             }
             let base_tick = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
-            let agent_mask = body[4];
-            let count = body[5] as usize;
-            let ack_tick = u32::from_le_bytes([body[6], body[7], body[8], body[9]]);
-            let ack_bits = u32::from_le_bytes([body[10], body[11], body[12], body[13]]);
+            let agent_mask = u16::from_le_bytes([body[4], body[5]]);
+            let count = body[6] as usize;
+            let ack_tick = u32::from_le_bytes([body[7], body[8], body[9], body[10]]);
+            let ack_bits = u32::from_le_bytes([body[11], body[12], body[13], body[14]]);
             if agent_mask == 0 {
                 return None;
             }
@@ -345,13 +356,13 @@ pub fn decode(buf: &[u8]) -> Option<Packet> {
             if count == 0 || count > MAX_INPUT_COUNT_C2H {
                 return None;
             }
-            let need = 14 + count * per_tick * INPUT_WIRE_SIZE;
+            let need = 15 + count * per_tick * INPUT_WIRE_SIZE;
             if body.len() < need {
                 return None;
             }
             let mut inputs = Vec::with_capacity(count * per_tick);
             for i in 0..count * per_tick {
-                inputs.push(Input::decode(body, 14 + i * INPUT_WIRE_SIZE)?);
+                inputs.push(Input::decode(body, 15 + i * INPUT_WIRE_SIZE)?);
             }
             Some(Packet::Input { base_tick, agent_mask, ack_tick, ack_bits, inputs })
         }
@@ -385,10 +396,10 @@ pub fn decode(buf: &[u8]) -> Option<Packet> {
             Some(Packet::Leave { slot: body[0], reason: body[1] })
         }
         PT_SLOTMAP => {
-            if body.is_empty() {
+            if body.len() < 2 {
                 return None;
             }
-            Some(Packet::SlotMap { human_slots: body[0] })
+            Some(Packet::SlotMap { human_slots: u16::from_le_bytes([body[0], body[1]]) })
         }
         PT_GO => {
             if body.len() < 4 {
@@ -494,7 +505,7 @@ mod tests {
         }
         let p = Packet::Input {
             base_tick: 100,
-            agent_mask: 0b0111,
+            agent_mask: 0b0111u16,
             ack_tick: 97,
             ack_bits: 0b101,
             inputs,
@@ -502,6 +513,51 @@ mod tests {
         let mut b = Vec::new();
         encode(&p, &mut b);
         assert_eq!(decode(&b).unwrap(), p);
+    }
+
+    #[test]
+    fn input_u16_mask_and_size_limits() {
+        // mp-16-slots [S]: a full 16-agent mask roundtrips — bit 15 rides the
+        // high byte the u8 mask could not carry.
+        let inputs = vec![NEUTRAL; 2 * 16];
+        let p = Packet::Input {
+            base_tick: 500,
+            agent_mask: 0xffffu16,
+            ack_tick: 497,
+            ack_bits: 0,
+            inputs,
+        };
+        let mut b = Vec::new();
+        encode(&p, &mut b);
+        assert_eq!(decode(&b).unwrap(), p);
+        assert_eq!(b[8], 0xff, "mask low byte (header 4 + tick 4)");
+        assert_eq!(b[9], 0xff, "mask high byte");
+        // The largest relay packet fits MAX_PACKET: 3 ticks × 15 agents × 24 B
+        // + the 15-byte head + the 4-byte header.
+        let h2c = Packet::Input {
+            base_tick: 0,
+            agent_mask: 0xffffu16 & !(1u16 << 7), // every agent but slot 7
+            ack_tick: u32::MAX,
+            ack_bits: 0,
+            inputs: vec![NEUTRAL; 3 * 15],
+        };
+        encode(&h2c, &mut b);
+        assert!(b.len() <= MAX_PACKET, "the 16-agent H2C relay packet must fit MAX_PACKET: {}", b.len());
+        // Sister: one more tick would overflow the wire cap — the sender must
+        // cap at MAX_INPUT_COUNT_H2C.
+        assert!(3 * 16 * 24 + 15 + 4 > 3 * 15 * 24 + 15 + 4);
+        assert!(decode(&b).is_some());
+    }
+
+    #[test]
+    fn slotmap_u16_roundtrip() {
+        // mp-16-slots [S]: slot 15's bit survives (u8 could not carry it).
+        let p = Packet::SlotMap { human_slots: 0b1000_0000_0000_0001u16 };
+        let mut b = Vec::new();
+        encode(&p, &mut b);
+        assert_eq!(decode(&b).unwrap(), p);
+        // Sister: a body shorter than the u16 mask must not decode.
+        assert!(decode(&b[..b.len() - 3]).is_none());
     }
 
     #[test]

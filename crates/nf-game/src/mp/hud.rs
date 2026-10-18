@@ -219,11 +219,12 @@ impl MpHudSnapshot {
             rows: Vec::new(),
         };
 
-        // The rows: humans 0..human_count, then bots 4..4+bot_count — the game's slot walk
-        // [M 0x212198:92-111; the pause board 0x204408:327-399 buckets by the same order].
-        let humans = (m.settings.human_count as usize).min(4);
-        let bots = (m.settings.bot_count as usize).min(4);
-        for slot in (0..humans).chain(4..4 + bots) {
+        // The rows: humans 0..human_count, then the bots — the game's slot walk with its
+        // fixed bot base 4 [M 0x212198:92-111; the pause board 0x204408:327-399 buckets by the
+        // same order] extended to follow the humans [S mp-16-slots].
+        let humans = (m.settings.human_count as usize).min(super::MP_MAX_SLOTS);
+        let bots = (m.settings.bot_count as usize).min(super::MP_MAX_SLOTS - humans);
+        for slot in (0..humans).chain(humans..humans + bots) {
             let s = &m.game.slots[slot];
             snap.rows.push(MpScoreRow {
                 slot,
@@ -250,7 +251,7 @@ impl MpHudSnapshot {
                 let argb = radar_team_color(m.settings.team_game, m.settings.players[slot].team);
                 snap.radar.push(MpRadarObj { pos, argb, kind: RadarKind::Player.as_u16(), slot: Some(slot) });
             }
-            for slot in 4..4 + bots {
+            for slot in humans..humans + bots {
                 if slot == viewer_slot || m.game.slots[slot].dead {
                     continue;
                 }

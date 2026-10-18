@@ -28,7 +28,7 @@ fn team_match() -> MpMatch {
 
 fn tick(m: &mut MpMatch, frames: u32, rng: &mut Rng) {
     for _ in 0..frames {
-        m.update_objects(DT, &[false; 8], rng);
+        m.update_objects(DT, &[false; nf_game::mp::MP_MAX_SLOTS], rng);
         m.update(DT, false, rng);
     }
 }

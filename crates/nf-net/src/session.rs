@@ -345,6 +345,19 @@ pub struct Session<T: Transport> {
 /// net-p2p: at most this many un-taken stray datagrams are held [S port design].
 pub const STRAY_CAP: usize = 64;
 
+/// Human-slot initial state: slot 0 (the host) is human, every other slot
+/// starts empty — the count comes from [`MAX_AGENTS`] [S mp-16-slots].
+fn slot0_human() -> [bool; MAX_AGENTS] {
+    let mut m = [false; MAX_AGENTS];
+    m[0] = true;
+    m
+}
+
+/// The all-agents bitmask over [`MAX_AGENTS`] (16 bits set [S mp-16-slots]).
+fn all_agents_mask() -> u16 {
+    ((1u32 << MAX_AGENTS) - 1) as u16
+}
+
 impl<T: Transport> Session<T> {
     /// Create the host. `settings` and `seed` are sent to every client in
     /// the handshake; the seed is the u32 fed to the game's own
@@ -358,7 +371,7 @@ impl<T: Transport> Session<T> {
             now_ms: 0,
             start_tick: 0,
             started: false,
-            slot_human: [true, false, false, false],
+            slot_human: slot0_human(),
             join_from: [0; MAX_AGENTS],
             inputs: Default::default(),
             run_log: Vec::new(),
@@ -393,7 +406,7 @@ impl<T: Transport> Session<T> {
             now_ms: 0,
             start_tick: 0,
             started: false,
-            slot_human: [true, false, false, false],
+            slot_human: slot0_human(),
             join_from: [0; MAX_AGENTS],
             inputs: Default::default(),
             run_log: Vec::new(),
@@ -698,8 +711,8 @@ impl<T: Transport> Session<T> {
         self.transport.send(to, &buf);
     }
 
-    fn human_mask(&self) -> u8 {
-        let mut m = 0u8;
+    fn human_mask(&self) -> u16 {
+        let mut m = 0u16;
         for (i, h) in self.slot_human.iter().enumerate() {
             if *h {
                 m |= 1 << i;
@@ -916,10 +929,13 @@ impl<T: Transport> Session<T> {
     /// fully-ready tick. Client: the client's own inputs from the host's ack
     /// cursor up to the newest sampled input.
     fn build_input_packet(&self, peer_slot: u8, their_ack: Option<u32>, our_ack: u32, recv_ticks: &[u32]) -> Option<Packet> {
-        let (mask, newest): (u8, u32) = match &self.role {
+        let (mask, newest): (u16, u32) = match &self.role {
             Role::Host { .. } => {
                 let newest = self.last_ready?;
-                let mask = (0b1111u8 & !(1 << peer_slot)) & 0b1111;
+                // Every agent but the receiver's own slot (the receiver knows
+                // its own input) — 15 of the 16 bits [S mp-16-slots; the game
+                // relayed 3 of 4, mask 0b1111 & !(1 << peer_slot)].
+                let mask = all_agents_mask() & !(1u16 << peer_slot);
                 (mask, newest)
             }
             Role::Client { .. } => {
@@ -940,7 +956,7 @@ impl<T: Transport> Session<T> {
                         }
                     }
                 };
-                (1u8 << slot, newest)
+                (1u16 << slot, newest)
             }
         };
         let per_tick = mask.count_ones() as usize;
@@ -987,7 +1003,7 @@ impl<T: Transport> Session<T> {
         let mut inputs = Vec::with_capacity(count * per_tick);
         for t in start..=end {
             for s in 0..MAX_AGENTS {
-                if mask & (1 << s) == 0 {
+                if mask & (1u16 << s) == 0 {
                     continue;
                 }
                 match self.slot_input_for_send(s, t) {
@@ -1153,7 +1169,7 @@ impl<T: Transport> Session<T> {
                 let per_tick = agent_mask.count_ones().max(1) as usize;
                 for k in 0..inputs.len() / per_tick.max(1) {
                     let t = base_tick.wrapping_add(k as u32);
-                    for (j, s) in (0..MAX_AGENTS as u8).filter(|s| agent_mask & (1 << s) != 0).enumerate() {
+                    for (j, s) in (0..MAX_AGENTS as u8).filter(|s| agent_mask & (1u16 << s) != 0).enumerate() {
                         if s as usize == self.local_slot as usize {
                             continue;
                         }
@@ -1262,6 +1278,18 @@ impl<T: Transport> Session<T> {
     /// a hash). The transfer itself is chunked (JOIN_LOG) and acked
     /// (JOIN_ACK); the joiner's verified confirm arrives as JOIN_READY.
     fn begin_late_join(&mut self, from: SocketAddr, codename: String, events: &mut Vec<Event>) {
+        // A RETRANSMITTED HELLO from a peer already being served (the joiner
+        // retries every hello_retry_ms until the WELCOME lands — under load
+        // the first WELCOME can still be in flight) must not double-allocate
+        // a slot: answer the WELCOME again and leave the transfer state alone
+        // (mp-16-slots: the 9-human loopback hit the duplicate — the roster
+        // grew a phantom slot 10).
+        if let Role::Host { peers, .. } = &self.role {
+            if let Some(p) = peers.iter().find(|p| p.addr == from) {
+                self.send_welcome_to(from, p.slot);
+                return;
+            }
+        }
         // Free slot? Host is slot 0; late joiners take 1..=MAX_AGENTS.
         let free: Option<u8> = match &self.role {
             Role::Host { peers, .. } => {
@@ -1436,7 +1464,7 @@ impl<T: Transport> Session<T> {
                 let per_tick = agent_mask.count_ones().max(1) as usize;
                 for k in 0..inputs.len() / per_tick.max(1) {
                     let t = base_tick.wrapping_add(k as u32);
-                    for (j, s) in (0..MAX_AGENTS as u8).filter(|s| agent_mask & (1 << s) != 0).enumerate() {
+                    for (j, s) in (0..MAX_AGENTS as u8).filter(|s| agent_mask & (1u16 << s) != 0).enumerate() {
                         if s as usize == self.local_slot as usize {
                             continue;
                         }
@@ -1486,7 +1514,7 @@ impl<T: Transport> Session<T> {
             Packet::SlotMap { human_slots } => {
                 let old = self.slot_human;
                 for i in 0..MAX_AGENTS {
-                    self.slot_human[i] = human_slots & (1 << i) != 0;
+                    self.slot_human[i] = human_slots & (1u16 << i) != 0;
                 }
                 if old != self.slot_human {
                     events.push(Event::SlotMapChanged { human_slots: self.slot_human });

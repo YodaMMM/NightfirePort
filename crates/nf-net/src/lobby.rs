@@ -14,8 +14,12 @@ pub const LOBBY_STATE_MAGIC: [u8; 4] = [0x4e, 0x46, 0x4c, 0x53];
 pub const LOBBY_EDIT_MAGIC: [u8; 4] = [0x4e, 0x46, 0x4c, 0x45];
 
 pub const CODENAME_WIRE: usize = 32;
-pub const SLOTS: usize = 4;
-pub const BOTS: usize = 4;
+/// The player rows: the port's 16-agent cap [S mp-16-slots; protocol ≤ 3
+/// carried 4 — the game's own human count].
+pub const SLOTS: usize = 16;
+/// The bot rows: 15 (16 participants minus the 1 required human) [S
+/// mp-16-slots; the game's own bot block is 4 records @0x2deea8].
+pub const BOTS: usize = 15;
 pub const ENVIROMODS: usize = 5;
 pub const PLAYER_MODS: usize = 2;
 
@@ -46,10 +50,11 @@ pub struct LobbyState {
     pub player_mods: [u32; PLAYER_MODS],
     /// +0x1C0, +0x1B8, +0x1D4, +0x1D0, +0x1CC in page order [M P_MPENVIROMODS 0x210030].
     pub envmods: [u32; ENVIROMODS],
-    /// The four mpbots records (0x2deea8's layout: enabled, team side, character, the seven
-    /// stats [M the record layout in the port's MpBot]).
+    /// The mpbots records (0x2deea8's layout: enabled, team side, character, the seven
+    /// stats [M the record layout in the port's MpBot]) — 15 rows, the port's bot cap
+    /// [S mp-16-slots].
     pub bots: [LobbyBot; BOTS],
-    /// The four player rows, slot 0 = the host's own agent [S §3].
+    /// The player rows, slot 0 = the host's own agent [S §3] — 16 [S mp-16-slots].
     pub players: [LobbyPlayer; SLOTS],
 }
 
@@ -96,7 +101,7 @@ pub struct LobbyPlayer {
 /// into its model; the next publish carries it to every client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LobbyEdit {
-    /// The editing client's lobby slot (0..3).
+    /// The editing client's lobby slot (0..16 [S mp-16-slots]).
     pub slot: u8,
     /// [`EDIT_CHARACTER`] / [`EDIT_TEAM`] / [`EDIT_READY`].
     pub field: u8,
@@ -197,15 +202,9 @@ impl LobbyState {
             b.recovery2 = get_i32(buf, off)?; off += 4;
             b.trait_id = get_i32(buf, off)?; off += 4;
         }
-        let mut players = [LobbyPlayer {
+        let mut players = std::array::from_fn(|_| LobbyPlayer {
             joined: false, ready: false, team: 0, character: 0, ping_ms: 0, codename: String::new(),
-        }, LobbyPlayer {
-            joined: false, ready: false, team: 0, character: 0, ping_ms: 0, codename: String::new(),
-        }, LobbyPlayer {
-            joined: false, ready: false, team: 0, character: 0, ping_ms: 0, codename: String::new(),
-        }, LobbyPlayer {
-            joined: false, ready: false, team: 0, character: 0, ping_ms: 0, codename: String::new(),
-        }];
+        });
         for p in players.iter_mut() {
             if off + 2 > buf.len() { return None; }
             p.joined = buf[off] != 0;
@@ -262,18 +261,16 @@ mod tests {
             time_limit: 10,
             player_mods: [0, 1],
             envmods: [2, 1, 0x10, 0, 3],
-            bots: [
-                LobbyBot { enabled: true, team_mi6: false, character: 1, skill: 5, aim: 2, hit_points: 100, speed: 1, recovery1: 100, recovery2: 100, trait_id: 6 },
-                LobbyBot { enabled: false, team_mi6: true, character: 6, skill: 8, aim: 2, hit_points: 100, speed: 1, recovery1: 100, recovery2: 100, trait_id: 0 },
-                LobbyBot { enabled: false, team_mi6: false, character: 7, skill: 5, aim: 2, hit_points: 100, speed: 1, recovery1: 100, recovery2: 100, trait_id: 5 },
-                LobbyBot { enabled: false, team_mi6: false, character: 8, skill: 5, aim: 2, hit_points: 100, speed: 1, recovery1: 100, recovery2: 100, trait_id: 0 },
-            ],
-            players: [
-                LobbyPlayer { joined: true, ready: true, team: 1, character: 0, ping_ms: 12, codename: "Player 1".into() },
-                LobbyPlayer { joined: true, ready: false, team: 0, character: 2, ping_ms: 47, codename: "Alec".into() },
-                LobbyPlayer { joined: false, ready: false, team: 0, character: 0, ping_ms: 0, codename: String::new() },
-                LobbyPlayer { joined: false, ready: false, team: 0, character: 0, ping_ms: 0, codename: String::new() },
-            ],
+            bots: std::array::from_fn(|i| LobbyBot {
+                enabled: i == 0, team_mi6: i == 1, character: (i % 9) as u32 + 1,
+                skill: 5, aim: 2, hit_points: 100, speed: 1, recovery1: 100, recovery2: 100,
+                trait_id: (i % 9) as i32,
+            }),
+            players: std::array::from_fn(|i| LobbyPlayer {
+                joined: i < 2, ready: i == 0, team: (i % 2) as u32, character: (i % 3) as u32,
+                ping_ms: i as u32 * 7,
+                codename: if i == 0 { "Player 1".into() } else if i == 1 { "Alec".into() } else { String::new() },
+            }),
         }
     }
 
@@ -285,6 +282,13 @@ mod tests {
         // Sister: a truncated payload must not decode.
         let e = s.encode();
         assert!(LobbyState::decode(&e[..e.len() - 1]).is_none());
+        // mp-16-slots [S]: the full 16-player + 15-bot snapshot rides ONE
+        // DATA packet under MAX_PACKET (4-byte packet header + 2-byte len).
+        let wire = crate::proto::Packet::Data { bytes: s.encode() };
+        let mut b = Vec::new();
+        crate::proto::encode(&wire, &mut b);
+        assert!(b.len() <= crate::MAX_PACKET,
+            "the 16-slot lobby snapshot must fit one packet: {}", b.len());
     }
 
     #[test]

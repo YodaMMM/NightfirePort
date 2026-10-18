@@ -248,7 +248,7 @@ impl MpMatch {
         let lk = self.game.slots[dead].last_killer;
         self.assassin = None;
         self.assassin_target = None;
-        let present: Vec<usize> = (0..8).filter(|i| self.game.slots[*i].pos.is_some()).collect();
+        let present: Vec<usize> = (0..self.game.slots.len()).filter(|i| self.game.slots[*i].pos.is_some()).collect();
         let new_a = if lk != 0xffff && lk as usize != dead && present.contains(&(lk as usize)) {
             Some(lk as usize) // [M :24-28]
         } else if present.is_empty() {
@@ -539,7 +539,7 @@ impl MpMatch {
     /// this is gated on the master/started flags only. `on_hill` is the caller's KOTH volume test
     /// (the game's trigger box is level data [M 0x186ae0:88-93]); `rng` is drawn only by the
     /// GoldenEye/blueprint respawn re-picks.
-    pub fn update_objects(&mut self, dt: f32, on_hill: &[bool; 8], rng: &mut Rng) {
+    pub fn update_objects(&mut self, dt: f32, on_hill: &[bool; super::MP_MAX_SLOTS], rng: &mut Rng) {
         if self.settings.master == 0 || !self.settings.started {
             return;
         }
@@ -574,7 +574,7 @@ impl MpMatch {
             }
             if self.settings.team_game != 0 {
                 let mut sum = 0.0f32;
-                for i in 0..8 {
+                for i in 0..self.game.slots.len() {
                     if self.settings.players[i].team as usize == t {
                         sum += self.game.slots[i].score;
                     }
@@ -602,12 +602,12 @@ impl MpMatch {
     /// `MP_KOHUpdate` 0x186ae0:78-151 — every alive player on the hill drips 0.2/s personally; in
     /// team games the scoring player's team score is recomputed as Σ that team's personals [M
     /// :122-137]. (The 5-point milestone sound and the on-hill status bits are presentation.)
-    fn koth_update(&mut self, dt: f32, on_hill: &[bool; 8]) {
+    fn koth_update(&mut self, dt: f32, on_hill: &[bool; super::MP_MAX_SLOTS]) {
         let s = self.settings.scenario;
         if s != scenario::KOTH_FFA && s != scenario::KOTH_TEAM {
             return;
         }
-        for slot in 0..8 {
+        for slot in 0..self.game.slots.len() {
             if !on_hill[slot] || self.game.slots[slot].pos.is_none() || self.game.slots[slot].dead {
                 continue; // the alive gate [M 0x186ae0:86]
             }
@@ -615,7 +615,7 @@ impl MpMatch {
             if self.settings.team_game != 0 {
                 let t = self.settings.players[slot].team as usize;
                 let mut sum = 0.0f32;
-                for i in 0..8 {
+                for i in 0..self.game.slots.len() {
                     if self.settings.players[i].team as usize == t {
                         sum += self.game.slots[i].score;
                     }
@@ -784,7 +784,7 @@ impl MpMatch {
                 }
                 // the target: a random player of the opposing team [M :362-367]
                 let filter = if ct == 0 { 1u32 } else { 0u32 };
-                let cands: Vec<usize> = (0..8)
+                let cands: Vec<usize> = (0..self.game.slots.len())
                     .filter(|i| {
                         self.game.slots[*i].pos.is_some()
                             && self.settings.players[*i].team == filter

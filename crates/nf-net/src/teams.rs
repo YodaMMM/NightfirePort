@@ -73,12 +73,13 @@ pub fn team_label(team: u32) -> u32 {
     TEAM_LABELS[(team == TEAM_MI6) as usize]
 }
 
-/// The humans' team picks (slots 0..4 — bots' teams ride their bot records [M 0x183a50:140-141],
-/// so they never enter this state). The lobby edits it; `apply` writes it into the wire settings.
+/// The humans' team picks (slots 0..16 — bots' teams ride their bot records [M 0x183a50:140-141],
+/// so they never enter this state; the count is the port's agent cap [S mp-16-slots]). The lobby
+/// edits it; `apply` writes it into the wire settings.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TeamSelection {
     /// Per human slot: `TEAM_PHOENIX` or `TEAM_MI6`.
-    picks: [u32; 4],
+    picks: [u32; crate::MAX_AGENTS],
 }
 
 impl Default for TeamSelection {
@@ -87,20 +88,26 @@ impl Default for TeamSelection {
         // both-teams-non-empty gate [M 0x20e818:84-103] passes for 2+ humans with no edits; an FFA
         // default of all-Phoenix keeps the ≤1-MI6 gate [M 0x20e818:85-89] trivially true. The
         // couch flow's fixed Quick-Start teams are the closest game shape (mp-menus.md §Quick Start).
-        TeamSelection { picks: [TEAM_PHOENIX, TEAM_MI6, TEAM_PHOENIX, TEAM_MI6] }
+        let picks = (0..crate::MAX_AGENTS)
+            .map(|i| if i % 2 == 0 { TEAM_PHOENIX } else { TEAM_MI6 })
+            .collect::<Vec<_>>()
+            .try_into()
+            .ok()
+            .expect("MAX_AGENTS picks");
+        TeamSelection { picks }
     }
 }
 
 impl TeamSelection {
-    /// The pick of human slot `slot` (0..4).
+    /// The pick of human slot `slot` (0..16).
     pub fn team_of(&self, slot: usize) -> u32 {
-        self.picks[slot.min(3)]
+        self.picks[slot.min(crate::MAX_AGENTS - 1)]
     }
 
-    /// Set a pick. Returns `Err` (leaving the state unchanged) for a slot ≥ 4 (bots don't pick
-    /// [M 0x183a50:140-141]) or a team id outside {0, 1} [M the two-item pick list].
+    /// Set a pick. Returns `Err` (leaving the state unchanged) for a slot ≥ [`crate::MAX_AGENTS`]
+    /// (bots don't pick [M 0x183a50:140-141]) or a team id outside {0, 1} [M the two-item pick list].
     pub fn set_team(&mut self, slot: usize, team: u32) -> Result<(), TeamError> {
-        if slot >= 4 {
+        if slot >= crate::MAX_AGENTS {
             return Err(TeamError::NotAPickingSlot);
         }
         if team != TEAM_PHOENIX && team != TEAM_MI6 {
@@ -120,7 +127,7 @@ impl TeamSelection {
     /// validates]. Deterministic: fill Phoenix/MI6 alternately over `humans` slots. The lobby can
     /// call this on a "balance teams" control before Start.
     pub fn auto_balance(&mut self, humans: usize) {
-        let humans = humans.min(4);
+        let humans = humans.min(crate::MAX_AGENTS);
         for i in 0..humans {
             self.picks[i] = if i % 2 == 0 { TEAM_PHOENIX } else { TEAM_MI6 };
         }
@@ -132,21 +139,22 @@ impl TeamSelection {
     /// `MpSettings.players[slot].team` (nf-view mpnet.rs `match_to_mp`), where the ported rules
     /// read them [M the rules cites at the top of this file].
     pub fn apply(&self, s: &mut MatchSettings, humans: usize) {
-        for (i, p) in s.players.iter_mut().enumerate().take(humans.min(4)) {
+        for (i, p) in s.players.iter_mut().enumerate().take(humans.min(crate::MAX_AGENTS)) {
             p.0 = self.picks[i];
         }
     }
 
     /// The effective team of every slot: the humans' picks plus the bots' record teams (slot
-    /// `4+i` = `bots[i]`, `TEAM_PHOENIX`/`TEAM_MI6`). This is the array the start gate scores —
-    /// the same composition `MP_Start` builds from `mpjoin+4` and the bot records [M 0x20ec00:109-144,
-    /// 0x183a50:140-141].
-    pub fn effective_teams(&self, s: &MatchSettings, humans: usize) -> [u32; 8] {
-        let mut t = [TEAM_PHOENIX; 8];
+    /// `humans+i` = the settings' bot record `i` — the game's order extended [S mp-16-slots;
+    /// the game's fixed layout is bots at 4..8, `TEAM_PHOENIX`/`TEAM_MI6`]). This is the array the
+    /// start gate scores — the same composition `MP_Start` builds from `mpjoin+4` and the bot
+    /// records [M 0x20ec00:109-144, 0x183a50:140-141].
+    pub fn effective_teams(&self, s: &MatchSettings, humans: usize) -> [u32; crate::MAX_AGENTS] {
+        let mut t = [TEAM_PHOENIX; crate::MAX_AGENTS];
         for (i, p) in s.players.iter().enumerate() {
             t[i] = p.0;
         }
-        for (i, pick) in self.picks.iter().enumerate().take(humans.min(4)) {
+        for (i, pick) in self.picks.iter().enumerate().take(humans.min(crate::MAX_AGENTS)) {
             t[i] = *pick;
         }
         t
@@ -167,11 +175,12 @@ pub enum StartError {
 
 /// The couch Start gates over the EFFECTIVE teams (humans' picks + bots' records), ported from
 /// `C_SBMPOPTIONS` 0x20e818:50-130 [M]. The participants are the humans' slots 0..`humans` plus
-/// the bots' slots 4..4+`bots` — the game's slot layout [M 0x183a50:116-141: humans inited first,
-/// then the bots in slots 4..].
+/// the bots' slots `humans..humans+bots` — the game's slot layout extended (the game inits humans
+/// first, then the bots; its fixed base was 4 [M 0x183a50:116-141], the port's is `humans` [S
+/// mp-16-slots]).
 pub fn start_check(
     scenario: u32,
-    effective_teams: &[u32; 8],
+    effective_teams: &[u32; crate::MAX_AGENTS],
     humans: usize,
     bots: usize,
 ) -> Result<(), StartError> {
@@ -180,10 +189,10 @@ pub fn start_check(
         return Err(StartError::TooFewPlayers);
     }
     let mut participants: Vec<u32> = Vec::with_capacity(total);
-    for t in effective_teams.iter().take(humans.min(4)) {
+    for t in effective_teams.iter().take(humans.min(crate::MAX_AGENTS)) {
         participants.push(*t);
     }
-    for t in effective_teams.iter().skip(4).take(bots.min(4)) {
+    for t in effective_teams.iter().skip(humans).take(bots) {
         participants.push(*t);
     }
     if scenario_has_teams(scenario) {
@@ -302,17 +311,20 @@ mod tests {
         assert_eq!(start_check(0x1, &teams, 2, 0), Err(StartError::TooManyMi6));
         // Fewer than 2 participants [M 0x20e818:104-111].
         assert_eq!(start_check(0x1, &teams, 1, 0), Err(StartError::TooFewPlayers));
-        // Bots count: a Phoenix/MI6 human pair + 2 Phoenix bots keeps the team game legal.
-        let mut teams8 = ts.effective_teams(&s, 2);
-        teams8[4] = TEAM_PHOENIX;
-        teams8[5] = TEAM_PHOENIX;
-        assert_eq!(start_check(0x2000_0004, &teams8, 2, 2), Ok(()));
+        // Bots count: a Phoenix/MI6 human pair + 2 Phoenix bots keeps the team game legal —
+        // the bots' slots follow the humans (slots 2, 3) [S mp-16-slots].
+        let mut teams = ts.effective_teams(&s, 2);
+        teams[2] = TEAM_PHOENIX;
+        teams[3] = TEAM_PHOENIX;
+        assert_eq!(start_check(0x2000_0004, &teams, 2, 2), Ok(()));
     }
 
     #[test]
     fn picks_reject_bogus_slots_and_teams() {
         let mut ts = TeamSelection::default();
-        assert_eq!(ts.set_team(4, TEAM_MI6), Err(TeamError::NotAPickingSlot), "bots don't pick [M 0x183a50:140-141]");
+        // The game's bots never pick [M 0x183a50:140-141]; the port's human
+        // slots are 0..16, so the boundary sits at MAX_AGENTS [S mp-16-slots].
+        assert_eq!(ts.set_team(crate::MAX_AGENTS, TEAM_MI6), Err(TeamError::NotAPickingSlot));
         assert_eq!(ts.set_team(0, 5), Err(TeamError::BadTeam));
         assert_eq!(ts.team_of(0), TEAM_PHOENIX, "the state is unchanged after a rejection");
         ts.toggle(0).unwrap();
@@ -333,15 +345,20 @@ mod tests {
     fn apply_writes_humans_and_leaves_bot_records() {
         let mut ts = TeamSelection::default();
         let mut s = MatchSettings::default();
-        s.players[4].0 = TEAM_MI6; // a bot record's team [M 0x183a50:140-141]
-        s.players[5].0 = TEAM_MI6;
+        s.players[2].0 = TEAM_MI6; // a bot record's team — bots follow the humans [S mp-16-slots]
+        s.players[3].0 = TEAM_MI6;
         ts.set_team(1, TEAM_PHOENIX).unwrap();
         ts.apply(&mut s, 2);
         assert_eq!(s.players[0].0, TEAM_PHOENIX);
         assert_eq!(s.players[1].0, TEAM_PHOENIX);
-        assert_eq!(s.players[2].0, TEAM_PHOENIX, "unpicked human slots keep their record value");
-        assert_eq!(s.players[4].0, TEAM_MI6, "bot slots untouched");
-        assert_eq!(s.players[5].0, TEAM_MI6, "bot slots untouched");
+        assert_eq!(s.players[2].0, TEAM_MI6, "bot slots untouched");
+        assert_eq!(s.players[3].0, TEAM_MI6, "bot slots untouched");
+        // The effective teams read the same layout: humans' picks then the bot records.
+        let t = ts.effective_teams(&s, 2);
+        assert_eq!((t[0], t[1], t[2], t[3]), (TEAM_PHOENIX, TEAM_PHOENIX, TEAM_MI6, TEAM_MI6));
+        // Sister: a 16th slot is a picking slot, a 17th is not (the port cap [S mp-16-slots]).
+        assert!(ts.set_team(15, TEAM_MI6).is_ok());
+        assert_eq!(ts.set_team(16, TEAM_MI6), Err(TeamError::NotAPickingSlot));
     }
 
     #[test]

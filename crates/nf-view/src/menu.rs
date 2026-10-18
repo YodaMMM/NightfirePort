@@ -2036,7 +2036,7 @@ pub struct FrontEnd {
     /// at +2+slot·0x12 (0x2DEEAA in the game); the fields' game offsets are in MpBot]. Fresh
     /// records have the game's default characters 6/7/8/9 [M C_SBMPOPTIONS 0x20e818's msg-0x51
     /// init writes DAT_002deeba=6, 0x2deecc=7, 0x2deede=8, 0x2deef0=9] and enabled = 0.
-    pub mp_bots: [MpBot; 4],
+    pub mp_bots: [MpBot; nf_net::lobby::BOTS],
     /// P_MPSETUP's per-agent state for agent 1: 2 = Choose Team (team games), 3 = Choose
     /// Character (FFA), 4 = Health Handicap, 5 = chosen [M P_MPSETUP 0x20d7a8 sets
     /// mp_stuff+0x360 to 2/3 from the scenario's 0x20000000 bit; C_RBMPSETUP 0x20de58's 0x4b
@@ -6845,7 +6845,7 @@ impl FrontEnd {
     }
 
     /// The one screen's player rows — None off the lobby page [S §6.3].
-    pub fn mp_lobby_players(&self) -> Option<&[crate::mp_lobby::MpLobbyPlayer; 4]> {
+    pub fn mp_lobby_players(&self) -> Option<&[crate::mp_lobby::MpLobbyPlayer; nf_net::lobby::SLOTS]> {
         if self.page != Page::MpOnlineLobby { return None; }
         Some(&self.mp_one.players)
     }

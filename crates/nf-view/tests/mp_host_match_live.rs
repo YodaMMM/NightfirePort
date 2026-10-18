@@ -26,7 +26,7 @@ fn local_deathmatch_kill_scores_respawns_and_ends_into_the_debriefing() {
     let Some(iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     let mut settings = nf_game::mp::MpSettings::deathmatch(0x0700_0023);
     settings.frag_limit = 2;
-    settings.bot_count = 1; // a Quick Game's bot — its slot 4 takes the scripted kill credit
+    settings.bot_count = 1; // a Quick Game's bot — its slot follows the humans (1 human → slot 1; the game's fixed base was 4) [S mp-16-slots]
     settings.time_limit = -1; // no time-up latch in the window (the frag limit owns the end)
     let mut scene = nf_view::load_mp_carry(&iso, "07000023.bin", false, None, settings)
         .expect("the arena loads through the app's MP carry path");
@@ -48,8 +48,8 @@ fn local_deathmatch_kill_scores_respawns_and_ends_into_the_debriefing() {
     // damage lands, and one app tick runs the death + the real scoring.
     {
         let m = sim.mp.as_mut().unwrap();
-        assert!(m.register_bullet_hit(0, 4), "the FFA hit is allowed [M 0x1857c0]");
-        assert_eq!(m.game.slots[0].status, 4, "the last-shooter word records the attacker [M 0x1857c0:34]");
+        assert!(m.register_bullet_hit(0, 1), "the FFA hit is allowed [M 0x1857c0]");
+        assert_eq!(m.game.slots[0].status, 1, "the last-shooter word records the attacker [M 0x1857c0:34] (the bot is slot 1 [S mp-16-slots]);");
     }
     sim.drones.health.health = 0.0;
     sim.step_bond(Default::default(), false, false, false);
@@ -57,12 +57,12 @@ fn local_deathmatch_kill_scores_respawns_and_ends_into_the_debriefing() {
     assert!(sim.drones.death.active, "the death sequence started [M 0x190810]");
     assert_eq!(m.game.slots[0].deaths, 1, "every scenario counts the death [M 0x188f70:92-94]");
     assert!(m.game.slots[0].dead, "the slot's dead marker (the obj+0xF4 stand-in)");
-    assert_eq!(m.game.slots[4].kills, 1, "the killer's kill count [M 0x188f70:157-163]");
-    assert_eq!(m.game.slots[4].streak, 1, "the killer's streak [M 0x188f70]");
-    assert!((m.game.slots[4].score - 1.0).abs() < 1e-6,
+    assert_eq!(m.game.slots[1].kills, 1, "the killer's kill count [M 0x188f70:157-163]");
+    assert_eq!(m.game.slots[1].streak, 1, "the killer's streak [M 0x188f70]");
+    assert!((m.game.slots[1].score - 1.0).abs() < 1e-6,
         "the frag scores: bit30 clear + the deathmatch personal gate [M 0x188f70:179-184]");
     assert_eq!(m.game.state, 0, "frag limit 2 > high 1: the match is still playing");
-    assert_eq!(m.game.slots[0].status, 4, "the word survives until the respawn resets it [M 0x185368:56]");
+    assert_eq!(m.game.slots[0].status, 1, "the word survives until the respawn resets it [M 0x185368:56] (the bot is slot 1 [S mp-16-slots])");
 
     // ---- The 5 s gate: `Player_HandleDeath` 0x190bb0:41-54 — FRAME_RATE_INT * 5 frames after
     // the stamp. The 300th dead tick respawns (the dead-tick counter starts at 0 on the stamp
@@ -82,7 +82,7 @@ fn local_deathmatch_kill_scores_respawns_and_ends_into_the_debriefing() {
     // from the live bot; no RNG (policy 0 draws nothing), first-of-equal wins; the unset
     // fallback is the range start 0 [M 0x185098:165-176]. The bot is inert (704: BotIdle), so
     // its position is the load pick's.
-    let bot_pos = m.game.slots[4].pos.expect("the bot's slot rides its live position");
+    let bot_pos = m.game.slots[1].pos.expect("the bot's slot rides its live position");
     let mut expect: usize = 0;
     let mut min = 9999.0f32;
     for (i, p) in m.spawns.points.iter().enumerate().take(m.spawns.count as usize) {
@@ -102,13 +102,13 @@ fn local_deathmatch_kill_scores_respawns_and_ends_into_the_debriefing() {
     {
         let m = sim.mp.as_mut().unwrap();
         // [M MP_RegisterBulletHit 0x1857c0; MP_PlayerKilled 0x188f70:179-184] the second frag scores
-        assert!(m.register_bullet_hit(0, 4), "the second hit registers");
+        assert!(m.register_bullet_hit(0, 1), "the second hit registers");
     }
     sim.drones.health.health = 0.0;
     sim.step_bond(Default::default(), false, false, false);
     let m = sim.mp.as_ref().unwrap();
     // [M 0x188f70:179-184] the deathmatch frag
-    assert!((m.game.slots[4].score - 2.0).abs() < 1e-6, "the second frag scores");
+    assert!((m.game.slots[1].score - 2.0).abs() < 1e-6, "the second frag scores");
     // The victim stays dead this time: the frag latch leaves state != 0 and `MP_ReSpawn`'s
     // gate refuses [M 0x185368:16-20].
     for _ in 0..6 { sim.step_bond(Default::default(), false, false, false); }
@@ -131,7 +131,7 @@ fn local_deathmatch_kill_scores_respawns_and_ends_into_the_debriefing() {
     assert_eq!(fe.page, Page::MpDebriefing, "the handover lands on the debriefing page");
     let board = fe.mp_debriefing.as_ref().expect("the board built");
     assert_eq!(board.rows[0].points, 2, "the bot ranks first with the 2 frags");
-    assert_eq!(board.rows[0].slot, 4, "the winner is the killer's slot");
+    assert_eq!(board.rows[0].slot, 1, "the winner is the killer's slot (the bot is slot 1 [S mp-16-slots])");
     // [M 0x188f70:92-94] every death counts
     assert_eq!(board.rows[1].deaths, 2, "the victim's two deaths on the board");
     assert!(matches!(board.result, MpDebriefResult::Wins(_)), "an FFA win line [M 0x1848d0:79-84]");
@@ -200,7 +200,7 @@ fn ctf_capture_scores_in_the_live_host_like_the_headless_rules() {
     assert!((m.game.slots[0].score - 1.0).abs() < 1e-6, "the carrier +1.0 [M 0x1861a8:94-98]");
     assert_eq!(m.objects_rt.flags[1].as_ref().unwrap().state, 0, "the flag reset home [M 0x1861a8:99-112]");
     // Parity: the headless rules land on the same scores through the same events.
-    for _ in 0..60 { head.update_objects(1.0 / 60.0, &[false; 8], &mut nf_game::drone::Rng::new(1)); }
+    for _ in 0..60 { head.update_objects(1.0 / 60.0, &[false; nf_game::mp::MP_MAX_SLOTS], &mut nf_game::drone::Rng::new(1));}
     assert!((head.game.team_scores[0] - m.game.team_scores[0]).abs() < 1e-6
         && (head.game.slots[0].score - m.game.slots[0].score).abs() < 1e-6,
         "the live host scores the capture exactly like the headless rules");
