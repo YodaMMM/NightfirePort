@@ -35,6 +35,7 @@ pub mod proto;
 pub mod session;
 pub mod settings;
 pub mod shim;
+pub mod teams;
 
 pub use hash::Hasher;
 pub use input::{Input, NEUTRAL};
@@ -42,6 +43,7 @@ pub use lobby::{LobbyBot, LobbyEdit, LobbyPlayer, LobbyState};
 pub use net::UdpTransport;
 pub use session::{AgentInfo, Config, DropPolicy, Event, LeaveReason, RefuseReason, Session, SessionError};
 pub use settings::MatchSettings;
+pub use teams::{scenario_has_teams, start_check, team_label, StartError, TeamEdit, TeamSelection};
 
 /// Maximum agents in an MP match — the game's own limit: humans occupy slots
 /// 0..4 (`MpSettings.human_count`, bots 4..8), `MP_Start` 0x183a50 inits
