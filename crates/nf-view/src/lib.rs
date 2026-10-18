@@ -4057,8 +4057,12 @@ impl ApplicationHandler for App {
                 if let Some(w) = self.devwin.as_mut() { w.tick(); }
                 if let Some(fps) = self.fps_cap.filter(|f| *f > 0.0) {
                     let target = std::time::Duration::from_secs_f32(1.0 / fps);
+                    // fps-cap: sleep to ~1.5 ms short of the deadline, then spin — Windows' sleep
+                    // overshoots by a scheduler tick, which held `--fps 240` at ~222 fps.
+                    let margin = std::time::Duration::from_micros(1500);
                     let el = self.frame_start.elapsed();
-                    if el < target { std::thread::sleep(target - el); }
+                    if el + margin < target { std::thread::sleep(target - el - margin); }
+                    while self.frame_start.elapsed() < target { std::hint::spin_loop(); }
                 }
                 // `NF_FPSLOG=1`: one stderr line per second — frames, average and worst frame time.
                 if std::env::var_os("NF_FPSLOG").is_some() { fps_log(self.frame_start.elapsed()); }
