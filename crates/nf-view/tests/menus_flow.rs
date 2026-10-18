@@ -183,6 +183,10 @@ fn locked_missions_cannot_be_scrolled_to_or_picked() {
     let mut progress = nf_game::progress::Progress::default();
     progress.set_nightfire_status(0x3); // the fresh profile's boot bits [D sp_level .data rows 0-1]
     fe.results_enter(&mut progress, 0x0700_0005, 6, 2, None);
+    // reward-after-outro [M 0x182c60:72 / 0x1d6360:160-163]: the complete arm QUEUES the page and
+    // the load tail's MenuManager_Create opens it — the modeled load completes, so re-open before
+    // walking the list (the queued window swallows input).
+    fe.reopen_queued_page();
     assert!(fe.unlocked_row(2), "completing row i unlocks row i+1");
     // Back on the mission list, Down walks onto the newly unlocked row.
     fe.page = Page::MissionSelect;
@@ -260,8 +264,16 @@ fn the_results_pages_split_complete_from_failed() {
     // +0x1c = 0x40000036 and pushes a 60-frame fade].
     fe.mission_ended(Outcome::Complete, Stats { shots_fired: 120, shots_hit: 40, accuracy_pct: 33, time_s: 754 });
     assert_eq!(fe.flow.page, 0x4000_0036);
-    assert_eq!(fe.page, Page::Results);
+    // reward-after-outro [M 0x182c60:72-74 / 0x1d6360:160-163]: the page QUEUES at the end — no
+    // MenuManager runs until the load's tail (the old assert pinned the playtest bug: the reward
+    // page before the ending cut-scene).
+    assert!(fe.results_queued, "the page queues at the end [M 0x182c60:72]");
+    assert_eq!(fe.page, Page::Start, "no manager is up during the load [M 0x1d6360:160-163]");
     assert_eq!(fe.flow.get_state(), ST_FADE_HOLD, "the fade hold is pushed [M 0x182c60:74]");
+    // The modeled plain front-end load (05 has no outro — the default arm [M 0x182c60:89-116])
+    // completes; its tail re-opens the queued page [M 0x1d6360:160-163].
+    assert!(fe.reopen_queued_page(), "the load tail opens the results page");
+    assert_eq!(fe.page, Page::Results);
     assert_eq!(fe.outcome, Outcome::Complete);
     // The COMPLETED page is P_NFRESULTS 0x208e78: no row list [L page 0x40000036's controls];
     // Confirm continues to the mission list [M 0x208e78:39-44 — Manager_SendMessage(0x44,

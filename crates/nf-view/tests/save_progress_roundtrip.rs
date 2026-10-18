@@ -100,6 +100,7 @@ fn the_roundtrip_restores_the_progress() {
     fe.mission = 1;
     fe.mission_ended(Outcome::Complete, Stats { shots_fired: 30, shots_hit: 20, accuracy_pct: 66, time_s: 100 });
     fe.requested_level = None; // the headless leg skips the outro wrap
+    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163] — the complete arm queues the page [M 0x182c60:72]
     assert!(fe.results_enter(&mut progress, 0x0700_0005, 6, 2, None), "the fields built [M 0x208e78:77]");
     assert!(fe.results_improved, "the commit improved (first completion) [M DoneBetter]");
     let medal1 = fe.results.as_ref().expect("the results fields").medal;

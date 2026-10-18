@@ -720,6 +720,9 @@ fn front_end_chain_01_to_05() {
         assert_eq!(fe.flow.page, menu::PAGE_RESULTS, "phase 2 sets +0x1c = 0x40000036 [M 0x1d6360]");
         fe.tick();
         assert_eq!(fe.flow.current_level, menu::FRONTEND_LEVEL, "the front-end map loads [M 0x1d6360 phase 3]");
+        // reward-after-outro [M 0x182c60:72 / 0x1d6360:160-163]: the complete arm QUEUES the page;
+        // the load tail's MenuManager_Create re-opens it before the page's 0x4c fields build.
+        fe.reopen_queued_page();
         // P_NFRESULTS case 0x4c against the live layer: the fields + the award.
         let difficulty = progress.difficulty;
         assert!(fe.results_enter(&mut progress, m, 6, difficulty, lang.as_ref()),
