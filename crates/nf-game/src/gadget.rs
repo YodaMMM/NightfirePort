@@ -29,7 +29,6 @@
 use crate::lock::Lock;
 use crate::triggers::Channels;
 use crate::world::V3;
-
 /// The weapon ids whose shots carry the LASER BEAM bit `weapon_data+0x6C & 0x100` [M
 /// Player_MuzzleFlash 0x1a4298:131 → `Draw_LaserBeam`]: the Laser 0x4E and its upgrade 0x4F
 /// [D weapon_data records: 0x4E +0x6C = 0x900 (0x800|0x100), 0x4F = 0x900; the disc names them
@@ -55,6 +54,62 @@ pub fn runs_beam(w: u8) -> bool {
 /// level loadouts granting 0x50 (07000005's start [L Inventory::level_start]).
 pub fn is_grapple(w: u8) -> bool {
     matches!(w, 0x50 | 0x51)
+}
+
+/// The Q-Decryptor's ids: **0x56 (base) and 0x57 (upgrade)**. Evidence: the disc records
+/// (label 0x0500004e, range +0x1C = 2.0/4.0, +0x6C = 0 — NO beam bits, so the shot is a plain
+/// bullet [L ee_start_05.bin @ weapon_data 0x2bf150]); `Player_WeaponFiring` 0x1a5460's
+/// `uVar6 − 0x56 < 2` bands (:155 the watch-face digits, :551 the use gate) and `Lock_Update`
+/// 0x1ae3d8's `− 0x56 < 2` contact band (:162, case 0) with the 0x56→+1 / 0x57→+3 decode rates
+/// (:305-315, case 5).
+pub fn is_decryptor(w: u8) -> bool {
+    matches!(w, 0x56 | 0x57)
+}
+
+/// The decryptor's use-gate pick [M Player_WeaponFiring 0x1a5460:551-578 + Check_Target
+/// 0x1a7810]: the 50-unit crosshair ray (0x42480000 [M 0x1a7810:114-116]) must hit the lock
+/// (the game's `Collide_RayIntersect` object hit stored to BLData+0x880, then the gate re-checks
+/// the type byte 0x3a and the kind/state), and the player-to-lock distance must be within the
+/// weapon's own `weapon_data+0x1C` (2.0/4.0 [L]). The port's stand-in [S, as laser_tick's]: the
+/// ray's closest approach within the lock's world sphere, no world hit before it, and the
+/// distance gate. Returns the lock index.
+pub fn pick_decryptor_lock(
+    eye: V3,
+    dir: V3,
+    root: V3,
+    locks: &[Lock],
+    world: &crate::world::CollisionWorld,
+    range: f32,
+) -> Option<usize> {
+    const RAY_LEN: f32 = 50.0; // [M 0x1a7810:114-116]
+    let end = [eye[0] + dir[0] * RAY_LEN, eye[1] + dir[1] * RAY_LEN, eye[2] + dir[2] * RAY_LEN];
+    let world_t = world.segment(eye, end).unwrap_or(1.0) * RAY_LEN; // the fraction → units
+    let ab2 = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2];
+    if ab2 < 1e-9 { return None; }
+    let mut best: Option<(f32, usize)> = None;
+    let dbg = std::env::var_os("NF_DECPICK_DEBUG").is_some();
+    for (i, lock) in locks.iter().enumerate() {
+        if lock.burned || lock.unlocked { continue; }
+        if lock.kind != 0 && lock.kind != 2 { continue; } // the gate's kind test [M 0x1a5460:562]
+        let ap = [lock.pos[0] - eye[0], lock.pos[1] - eye[1], lock.pos[2] - eye[2]];
+        let t = (ap[0] * dir[0] + ap[1] * dir[1] + ap[2] * dir[2]) / ab2;
+        if t < 0.0 || t * ab2.sqrt() > RAY_LEN { if dbg { eprintln!("decpick {i}: REJ ray t={t}"); } continue; }
+        let closest = [eye[0] + dir[0] * t, eye[1] + dir[1] * t, eye[2] + dir[2] * t];
+        let d2 = (closest[0] - lock.pos[0]).powi(2) + (closest[1] - lock.pos[1]).powi(2) + (closest[2] - lock.pos[2]).powi(2);
+        if d2 > lock.radius * lock.radius { if dbg { eprintln!("decpick {i}: REJ sphere d={:?}", d2.sqrt()); } continue; }
+        // A wall in FRONT of the lock blocks [M 0x1a7810:121] — but the lock's own plate sits
+        // flush on the wall it is mounted on, and the port's lock carries no collision box of its
+        // own (only the 0.132 keypad sphere), so the mount wall's face lands within the sphere's
+        // tolerance. The occlusion test therefore floors the margin at 0.5 [S — the game's ray
+        // hits the lock object itself in Collide_RayIntersect; the port cannot separate the mount
+        // geometry from the lock's own bounds].
+        if world_t < t - lock.radius.max(0.5) { continue; }
+        // The distance gate is the PLAYER ROOT to the lock [M 0x1a5460:574-577 — `iVar18+0x30`].
+        let dist = ((lock.pos[0] - root[0]).powi(2) + (lock.pos[1] - root[1]).powi(2) + (lock.pos[2] - root[2]).powi(2)).sqrt();
+        if dist > range { continue; }
+        if best.is_none_or(|(bt, _)| t < bt) { best = Some((t, i)); }
+    }
+    best.map(|(_, i)| i)
 }
 
 
@@ -142,6 +197,7 @@ mod tests {
         let world = empty_world();
         let mut locks = vec![Lock {
             placement: 0, pos: [99.5, 0.0, 0.0], radius: 1.0, out: 134, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
+            kind: 1, code: 0, scan_progress: 0, scan_solved: 0, scanning: false,
         }];
         let (a, b) = laser_tick([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], &mut locks, &world, &mut ch, 10);
         assert!(locks[0].burned, "the aim line passes 0.5 from the lock's centre — within 1.0+0.25");
@@ -156,6 +212,7 @@ mod tests {
         let world = empty_world();
         let mut locks = vec![Lock {
             placement: 0, pos: [99.5, 4.0, 0.0], radius: 1.0, out: 135, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
+            kind: 1, code: 0, scan_progress: 0, scan_solved: 0, scanning: false,
         }];
         let _ = laser_tick([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], &mut locks, &world, &mut ch, 10);
         assert!(!locks[0].burned, "the aim line passes 4 units off the lock's centre — no contact");
@@ -199,8 +256,110 @@ mod tests {
         for w in [0x4eu8, 0x4f, 0x4a, 0x4c] { assert!(runs_beam(w), "{w:#x} runs the beam"); }
         for w in [0x50u8, 0x54, 0x52] { assert!(!runs_beam(w), "{w:#x} does not"); }
     }
-}
 
+    #[test]
+    fn is_decryptor_matches_the_q_decryptor_records() {
+        // The disc records: 0x56/0x57 label 0x0500004e, +0x6C = 0 (no beam bits) [L ee_start_05.bin];
+        // the −0x56 < 2 bands in Player_WeaponFiring 0x1a5460:155/551 and Lock_Update 0x1ae3d8:162/305.
+        for w in [0x56u8, 0x57] { assert!(is_decryptor(w), "{w:#x} is the Decryptor"); }
+        for w in [0x4eu8, 0x4f, 0x50u8, 0x54u8, 0x55u8, 0x58u8, 0x02u8] { assert!(!is_decryptor(w), "{w:#x} is not"); }
+    }
+
+    fn dec_lock(kind: u16, out: u16) -> Lock {
+        Lock {
+            placement: 0, pos: [10.0, 0.0, 0.0], radius: 1.0, out, key_channels: [0xffff; 2],
+            burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
+            kind, code: 7, scan_progress: 0, scan_solved: 0, scanning: false,
+        }
+    }
+
+    #[test]
+    fn decrypt_scan_solves_the_four_digits_at_the_game_thresholds_then_writes_the_channel() {
+        // The base 0x56: +1/tick. Digit i solves when progress > (4−i)·0x28 — 160/120/80/40
+        // [M Lock_Update 0x1ae3d8:347-364]; a solve resets the progress to 5 [M :367]; the unlock
+        // lands at 4 of 4 (the disasm's bne v1,v0 0x1aebec) and writes the out channel
+        // [M Lock_Unlock 0x1b0650 → case 1 :193-196].
+        let mut ch = Channels::default();
+        let mut l = dec_lock(0, 90);
+        let mut ticks = 0u32;
+        let mut solved_at = [0u32; 4];
+        let mut last = false;
+        while !l.unlocked && ticks < 100_000 {
+            ticks += 1;
+            let was = l.scan_solved;
+            last = l.decrypt_tick(1, false, &mut ch, ticks);
+            if l.scan_solved != was && (l.scan_solved as usize) <= 4 { solved_at[(l.scan_solved - 1) as usize] = ticks; }
+        }
+        assert!(l.unlocked, "4 of 4 digits unlock the lock");
+        assert!(last, "decrypt_tick returned true exactly on the unlock tick");
+        assert!(ch.on(90), "the unlock writes the lock's out switch channel");
+        // The 0x56's own timeline: 161 + 116 + 76 + 36 = 389 ticks of continuous contact
+        // (161 to exceed 160 from 0, then 116 to exceed 120 from 5, 76 from 5 past 80, 36 past 40).
+        assert_eq!(ticks, 389, "the 0x56's per-tick +1 must take exactly 389 ticks (got {ticks})");
+        assert_eq!(solved_at, [161, 277, 353, 389], "the per-digit solve ticks");
+    }
+
+    #[test]
+    fn decrypt_upgrade_runs_three_times_faster() {
+        // The 0x57 adds 3/tick [M 0x1ae3d8:309-314]: from 0 to >160 needs 54 ticks (53·3=159),
+        // from 5 to >120 39 (5+38·3=119), from 5 to >80 26 (5+25·3=80 is not > 80; 83 is),
+        // from 5 to >40 12 (5+11·3=38, 5+12·3=41) — 54+39+26+12 = 131 ticks.
+        let mut ch = Channels::default();
+        let mut l = dec_lock(0, 91);
+        let mut ticks = 0u32;
+        while !l.unlocked && ticks < 100_000 { ticks += 1; l.decrypt_tick(1, true, &mut ch, ticks); }
+        assert!(l.unlocked && ch.on(91));
+        assert_eq!(ticks, 131, "the 0x57's +3/tick takes 131 ticks (got {ticks})");
+    }
+
+    #[test]
+    fn decrypt_scan_decays_four_per_tick_and_resets_completely() {
+        // No contact bullet: −4/tick [M 0x1ae3d8:328-339]; at 0 the scan resets — state back to 0,
+        // the solved digits lost [M :340-344].
+        let mut ch = Channels::default();
+        let mut l = dec_lock(0, 92);
+        for _ in 0..100 { l.decrypt_tick(1, false, &mut ch, 1); }
+        assert!(l.scanning && l.scan_progress > 0, "scanning after 100 ticks");
+        for _ in 0..30 { l.decrypt_tick(0, false, &mut ch, 1); }
+        assert!(!l.scanning && l.scan_solved == 0 && l.scan_progress == 0,
+            "30 ticks of −4 fully reset the scan (progress now {})", l.scan_progress);
+        // And the reset scan re-accumulates from scratch (the game restarts the digits).
+        for _ in 0..50 { l.decrypt_tick(1, false, &mut ch, 1); }
+        assert_eq!(l.scan_progress, 50, "re-contact accumulates from 0 again");
+    }
+
+    #[test]
+    fn decrypt_scan_ignores_a_laser_kind_lock_and_an_unlocked_one() {
+        // The sister: record[0] == 1 is the LASER-burn lock — the decryptor never scans it
+        // [M the use gate 0x1a5460:562 == 0 || == 2; Lock_Update case 0's kind-1 arm reads 0x4e/0x4f only].
+        let mut ch = Channels::default();
+        let mut l = dec_lock(1, 93);
+        for _ in 0..500 { l.decrypt_tick(1, false, &mut ch, 1); }
+        assert!(!l.scanning && !l.unlocked && !ch.on(93), "the laser-kind lock ignores the decryptor");
+        let mut l2 = dec_lock(0, 94);
+        l2.unlocked = true;
+        for _ in 0..10 { assert!(!l2.decrypt_tick(1, false, &mut ch, 1)); }
+        assert!(!ch.on(94), "an already-unlocked lock stays quiet");
+    }
+
+    #[test]
+    fn decrypt_pick_gates_on_the_ray_the_world_and_the_range() {
+        let world = empty_world();
+        // A decryptor-kind lock 1.5 ahead; eye and root colocated for the unit test.
+        let locks = vec![dec_lock(0, 95)];
+        assert_eq!(pick_decryptor_lock([8.5, 0.0, 0.0], [1.0, 0.0, 0.0], [8.5, 0.0, 0.0], &locks, &world, 2.0), Some(0));
+        // The gate is the DISTANCE root→lock, not the ray [M 0x1a5460:574-577].
+        assert_eq!(pick_decryptor_lock([7.0, 0.0, 0.0], [1.0, 0.0, 0.0], [7.0, 0.0, 0.0], &locks, &world, 2.0), None,
+            "3.0 from the lock is beyond the base decryptor's 2.0 range");
+        // The 0x57's 4.0 reaches it.
+        assert_eq!(pick_decryptor_lock([7.0, 0.0, 0.0], [1.0, 0.0, 0.0], [7.0, 0.0, 0.0], &locks, &world, 4.0), Some(0));
+        // Off the ray: no pick.
+        assert_eq!(pick_decryptor_lock([8.5, 3.0, 0.0], [0.0, 1.0, 0.0], [8.5, 3.0, 0.0], &locks, &world, 4.0), None);
+        // The laser-kind lock is not a target.
+        let laser_locks = vec![dec_lock(1, 96)];
+        assert_eq!(pick_decryptor_lock([8.5, 0.0, 0.0], [1.0, 0.0, 0.0], [8.5, 0.0, 0.0], &laser_locks, &world, 4.0), None);
+    }
+}
 // ---- the Q-Claw grapple (0x4A/0x4C, substate 2) ----------------------------------------------------
 
 /// A grapple point (placement 0x3A, `Grapple_Create` 0x198298 — the class-0x51 object, the world
