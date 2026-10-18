@@ -1,5 +1,6 @@
-//! walkreal-b: 07000013 (HT Tower2 C, the tower lobby → the front entrance) walked with the
-//! player's own movement. The warm chain (mission 0x07000011's parts): 07000012 WALKED (the
+//! walkreal-b (716c): 07000013 (HT Tower2 C, the tower lobby → the front entrance) walked with
+//! the player's own movement, START TO FINISH: spawn → the security-room door (portal 1) → the
+//! panel E (ch 0x23, the gate rises) → back out → the entrance → Mission Complete. The warm chain (mission 0x07000011's parts): 07000012 WALKED (the
 //! keypad burn, the console E, the shaft entrance — the shared `tower2` route, with its one
 //! documented doorway stand-in) → its exit loads 0700004A, whose start #43 (4.26, −7.71, −4.76
 //! [D]) sits INSIDE TouchOnce #277 (out 0x4D, y −9.87…−7.65 [D]) — Bond drops onto the touch at
@@ -28,7 +29,6 @@ use walker::{Walker, Wp};
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 #[test]
-#[ignore = "the gate raise chain is proven green by gate13_live (the panel E → ch 0x23 → the SS rise → the mouth clears); this end-to-end walk is blocked twice over: (1) the walked approach to the panel — the lobby's west furniture maze wedges the walker at every probed lane (z 25, z 20-22, z 28-31; STUCK at (−8.1, 21.6), (−12.8, 30.8), (−13.9, 31.9), segment visible but the push cancels the move), and (2) the reach-only teleport that does reach the panel leaves the port's room cell west — every later leg falls (y −386 → −852) while the warm no-E load stands stable at y −368.33 for 240+ ticks (fall13_probe). Needs the cell re-resolution after a teleport, or the game's own path to the panel (through the security-room door #355, open ch 0x11d — no writer found [D]). The pre-E legs, the gate mechanism and the entrance/exit chain are pinned by walk_07000013_live, gate13_live and the probes"]
 fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     let iso = iso();
     // ---- 07000012 walked (the shared route) ----
@@ -101,33 +101,76 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
             .map(|s| s.matrix[3][1]).expect("the Shutters2 SS on ch 0x23 [D]");
         assert!(rest.abs() < 0.05, "the gate SS rests at key 0 (y offset {rest}) [D]");
     }
-    // The panel E — WALKED, not teleported: the port's room-cell rides the walk (a teleport
-    // across the lobby leaves the scoped collision in the old cell and the floor vanishes —
-    // see the report). The panel's port-side entity sphere sits at the model centre transformed
-    // by the SP's stream matrix (t −1.41 x) — (−19.49, −368.23, 25.01); the game-side
-    // displacement of a world-baked glist is the report's live check. The press is the real use
-    // key.
-    w.lenient = true;
-    w.walk_to(Wp::new(-4.0, -368.5, 20.0).r(1.2), "13: off the car, south-west");
-    w.walk_to(Wp::new(-10.0, -368.5, 20.8).r(1.2), "13: the south-west aisle");
-    w.walk_to(Wp::new(-15.0, -368.6, 22.5).r(1.0), "13: the aisle west end");
-    w.walk_to(Wp::new(-18.4, -369.0, 24.6).r(0.7), "13: at the shutter panel");
-    let mut ch23 = false;
-    for _ in 0..80 {
-        w.tick(nf_game::player::Input::default(), true);
-        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x23) { ch23 = true; break; }
-    }
-    assert!(ch23, "E at the shutter panel writes ch 0x23 [M 0x1dbda8:221-229; D SP #161 out]");
-    // The gate lifts while Bond walks south (the SS playhead runs the ~4-unit rise over ~200
-    // ticks [probe]).
+    // The panel E — WALKED through the security room (716c): the lobby's west "furniture maze"
+    // truly blocks every direct lane (the fake-lift doors' baked mesh at x −14.6..−12.9 /
+    // z 31.3..32.9 inside the security-room glass band x −18.4..−10.6 / z 27.5..35.3, plus the
+    // room's own east wall — probe13_cell's stuck A/B/C object dumps), and the panel display
+    // (−18.08, −368.23, 25.01 [D obj 70]) sits INSIDE the security room's footprint. The
+    // player's route is the unlocked north-west door at (−26.65, −368.36, 37.44) — the only
+    // west door the sim creates, no lock channel, E-opens [M Door_Activate's toggle] — whose
+    // doorway carries portal 1 (cels 21↔28 [D the portal record's celA/celB]); Bond's runtime
+    // cel crosses 21→28 through the stateful relink's portal arm (Cel_ObjectLeftCel 0x1e0d58)
+    // and the room's own floor (cel 28's bucket) holds him.
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
-    w.walk_to(Wp::new(3.0, -368.4, 45.0).r(1.5), "13: the lobby mid");
-    w.walk_to(Wp::new(-6.0, -368.2, 60.0).r(1.5), "13: the lobby south");
+    w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
+    w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
+    w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
+    w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
+    w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");
+    w.wait(120); // the sliding door finishes [probe: state 0x8 → 0x4 within the wait]
+    w.walk_to(Wp::new(-27.0, -368.4, 37.0).r(1.0), "13: through the doorway");
+    w.walk_to(Wp::new(-27.0, -368.4, 35.0).r(1.2), "13: inside the security room");
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        let y = sim.drones.sss.list.iter().find(|s| s.channel == 0x23).map(|s| s.matrix[3][1]).unwrap_or(0.0);
-        assert!(y > 3.0, "the gate SS has risen to key 1 by the lobby's south end (y offset {y}) [M SS_Update 0x1a9948]");
+        assert_eq!(sim.bond.cel, Some(28), "the portal-1 cross relinks Bond into the security room's cel [M 0x1e0d58]");
     }
+    w.walk_to(Wp::new(-25.5, -368.4, 32.5).r(1.2), "13: the room south-east");
+    w.walk_to(Wp::new(-22.0, -368.4, 29.0).r(1.2), "13: the room south");
+    w.walk_to(Wp::new(-18.5, -368.4, 26.2).r(1.1), "13: at the shutter panel");
+    // The press is the real use key at the walked spot.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x23), "ch 0x23 off before the panel E [D]");
+    }
+    let mut ch23 = false;
+    for t in 0..150 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let desired = (-18.08f32 - sim.bond.pos[0]).atan2(25.01 - sim.bond.pos[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), ..Default::default() };
+        w.tick(input, t % 6 == 0);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x23) { ch23 = true; break; }
+    }
+    assert!(ch23, "the walked E at the shutter panel writes ch 0x23 [M 0x1dbda8:221-229; D SP #161 out]");
+    // The gate lifts while Bond walks back out and south (the SS playhead runs the ~4-unit rise
+    // over ~200 ticks [probe]).
+    w.walk_to(Wp::new(-22.0, -368.4, 29.0).r(1.2), "13: back north");
+    w.walk_to(Wp::new(-25.5, -368.4, 32.5).r(1.2), "13: back to the room's north-east");
+    w.walk_to(Wp::new(-27.0, -368.4, 35.5).r(1.2), "13: back to the doorway");
+    // The door auto-closes ≈150 ticks after the E [probe]: press it (only while closed — the E
+    // is a toggle [M Door_Activate]) and hold forward through the doorway's west side in one
+    // loop, so the crossing rides the open window.
+    let di = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+        .position(|d| walker::dxz(d.pos, [-26.65, -368.36, 37.44]) < 2.0).expect("the security-room door");
+    let mut out = false;
+    for _ in 0..900 {
+        let (door_closed, bp) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.doors.list[di];
+            (d.state & 0xc == 0, sim.bond.pos)
+        };
+        if bp[2] > 38.4 && (-28.0..=-25.5).contains(&bp[0]) { out = true; break; }
+        let dx = -27.05f32 - bp[0];
+        let dz = 38.7 - bp[2];
+        let desired = dx.atan2(dz);
+        let err = walker::wrap_pi(desired - w.scene.sim.as_ref().unwrap().bond.yaw);
+        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), forward: 1.0, ..Default::default() };
+        w.tick(input, door_closed);
+    }
+    assert!(out, "13: out through the doorway while the door's open window holds [probe]");
+    w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: out of the room");
+    w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west again");
+    w.walk_to(Wp::new(-6.0, -368.2, 55.0).r(1.5), "13: the lobby south");
     w.walk_to(Wp::new(-6.2, -368.0, 66.3).r(0.6), "13: the front entrance");
     {
         let sim = w.scene.sim.as_ref().unwrap();
