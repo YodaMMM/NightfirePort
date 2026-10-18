@@ -114,6 +114,9 @@ pub struct MpLobby {
     /// Which slot is this machine's own row: 0 for the host, the session slot for a client
     /// [S §6.4]. The rows mark it editable; the edits carry it.
     pub own_slot: usize,
+    /// The client's own-row fields the local user edited and the host's publish has not
+    /// echoed yet (character, team, ready) — the echo clears them [S §6.4].
+    own_dirty: (bool, bool, bool),
     /// The focused row index over [`MpLobby::rows`].
     pub focus: usize,
     /// The unlock-everything cheat [M the couch gates read the same flag].
@@ -150,6 +153,7 @@ impl MpLobby {
             player_mods, envmods, bots,
             players: std::array::from_fn(|_| MpLobbyPlayer::default()),
             own_slot: 0,
+            own_dirty: (false, false, false),
             focus: 0,
             unlock_all,
             bonus_mask,
@@ -375,8 +379,10 @@ impl MpLobby {
                 b.skill = SKILLS[(cur + dir).rem_euclid(SKILLS.len() as i32) as usize];
                 true
             }
-            MpLobbyRowId::Player(i) => {
-                // The character wheel, own row only [S §6.2].
+            MpLobbyRowId::Player(i) if i.min(3) == self.own_slot => {
+                // The character wheel, own row only [S §6.2]; the edit stays dirty until the
+                // host's publish echoes it.
+                self.own_dirty.0 = true;
                 let p = &mut self.players[i.min(3)];
                 let mut r = p.character.min(28) as i32;
                 for _ in 0..MP_CHARACTERS.len() {
@@ -386,12 +392,14 @@ impl MpLobby {
                 p.character = r as u32;
                 true
             }
-            MpLobbyRowId::PlayerTeam(i) => {
+            MpLobbyRowId::PlayerTeam(i) if i.min(3) == self.own_slot => {
+                self.own_dirty.1 = true;
                 let t = &mut self.players[i.min(3)].team;
                 *t ^= 1; // 0 Phoenix / 1 MI6 [M C_RBMPSETUP 0x20de58's two-item list]
                 true
             }
             MpLobbyRowId::Start => false, // ◀ ▶ do nothing on Start
+            MpLobbyRowId::Player(_) | MpLobbyRowId::PlayerTeam(_) => false, // not this machine's row
         }
     }
 
@@ -400,11 +408,13 @@ impl MpLobby {
         let (id, editable) = match self.focused_row() { Some(x) => x, None => return false };
         if !editable { return false; }
         match id {
-            MpLobbyRowId::Player(i) => {
+            MpLobbyRowId::Player(i) if i.min(3) == self.own_slot => {
+                self.own_dirty.2 = true;
                 let p = &mut self.players[i.min(3)];
                 p.ready = !p.ready;
                 true
             }
+            MpLobbyRowId::Player(_) | MpLobbyRowId::PlayerTeam(_) => false, // not this machine's row
             MpLobbyRowId::PlayerTeam(i) => {
                 let t = &mut self.players[i.min(3)].team;
                 *t ^= 1;
@@ -425,15 +435,21 @@ impl MpLobby {
         if self.host { return Vec::new(); }
         let p = &self.players[self.own_slot.min(3)];
         let slot = self.own_slot.min(3) as u8;
-        vec![
-            nf_net::LobbyEdit { slot, field: nf_net::lobby::EDIT_CHARACTER, value: p.character },
-            nf_net::LobbyEdit { slot, field: nf_net::lobby::EDIT_TEAM, value: p.team },
-            nf_net::LobbyEdit { slot, field: nf_net::lobby::EDIT_READY, value: p.ready as u32 },
-        ]
+        let mut v = Vec::new();
+        if self.own_dirty.0 {
+            v.push(nf_net::LobbyEdit { slot, field: nf_net::lobby::EDIT_CHARACTER, value: p.character });
+        }
+        if self.own_dirty.1 {
+            v.push(nf_net::LobbyEdit { slot, field: nf_net::lobby::EDIT_TEAM, value: p.team });
+        }
+        if self.own_dirty.2 {
+            v.push(nf_net::LobbyEdit { slot, field: nf_net::lobby::EDIT_READY, value: p.ready as u32 });
+        }
+        v
     }
 
-    /// The own row's (character, team, ready) as one comparable word-triple — the push diff
-    /// rides on it [S §6.4].
+    /// The own row's dirty fields as one comparable word-triple — the push diff rides on it
+    /// [S §6.4].
     pub fn own_row_words(&self) -> (u32, u32, u32) {
         let p = &self.players[self.own_slot.min(3)];
         (p.character, p.team, p.ready as u32)
@@ -498,12 +514,13 @@ impl MpLobby {
                 joined: sp.joined,
                 ping_ms: sp.ping_ms,
             };
-            // The own row keeps the local picks the publish has not echoed yet [S]; the other
-            // rows take the host's words.
+            // The own row keeps the dirty local picks (the host's publish has not echoed them
+            // yet); a publish that already carries the local value confirms it — the dirty flag
+            // clears. The other rows take the host's words [S §6.4].
             if own && !self.host {
-                p.character = character;
-                p.team = team;
-                p.ready = ready;
+                if self.own_dirty.0 { p.character = character; if sp.character == character { self.own_dirty.0 = false; } }
+                if self.own_dirty.1 { p.team = team; if sp.team == team { self.own_dirty.1 = false; } }
+                if self.own_dirty.2 { p.ready = ready; if sp.ready == ready { self.own_dirty.2 = false; } }
             }
         }
     }
