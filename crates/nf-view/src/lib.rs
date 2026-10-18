@@ -1909,6 +1909,8 @@ struct App {
     /// The online match's wall clock (set when its level swaps in): the lockstep runs to
     /// `elapsed · 60` ticks, catching up after a stall instead of dropping the stalled ticks.
     net_clock: Option<std::time::Instant>,
+    /// 700v6: the local fire pipeline spawned a round on the last tick (rides the next input).
+    net_shot_pending: bool,
     /// The `--net-host` demo arm: the settings waiting for the first client to join (the lobby
     /// pages are task 052's; the flag path starts the match as soon as someone connects).
     net_armed: Option<nf_game::mp::MpSettings>,
@@ -2477,6 +2479,11 @@ impl App {
             if let Some(n) = self.net.as_ref() {
                 let lead = n.0.borrow().input_delay();
                 for t in 0..lead { n.0.borrow_mut().local_input(t, nf_net::NEUTRAL); }
+            }
+            // 700v6: the local tick's private generator (seeded per machine; nothing hashed reads it).
+            let slot = self.net_local_slot as u32;
+            if let Some(sim) = self.scene.sim.as_mut() {
+                sim.net_rng = Some(nf_game::drone::Rng::new(0x5eed_0b0b ^ slot.wrapping_mul(0x9e37_79b9)));
             }
         }
         if self.net.is_some() && self.net_local_slot != 0 {
@@ -3748,6 +3755,12 @@ impl ApplicationHandler for App {
                             let (mut input, trigger, reload, use_key) = if net_menu {
                                 (Default::default(), false, false, false)
                             } else { (input, trigger, reload, use_key) };
+                            // Test aid (NF_NET_AUTOFIRE="a-b"): hold the trigger on match ticks a..=b — the
+                            // two-window desync hunt fires without a hand on the window.
+                            let trigger = trigger || (self.net.is_some() && std::env::var("NF_NET_AUTOFIRE").ok()
+                                .and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
+                                .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick) && (self.net_tick - a) % 12 < 6));
+                            if trigger { input.fire = true; }
                             // weapon-matrix: the dev menu's "Test weapon" run (dev.rs) merges its
                             // inputs into this tick — the same lanes the keyboard uses
                             // (`switch_to`, the trigger, the R edge), never during a replay
@@ -3780,7 +3793,11 @@ impl ApplicationHandler for App {
                             // local view lanes (zero-g lift/stabilise, the wheel's zoom steps) stay
                             // local — they never ride the wire.
                             let (trigger, reload, use_key) = if let Some(session) = self.net.as_mut() {
-                                let ni = mpnet::to_net_input(&input, trigger, reload, use_key);
+                                let mut ni = mpnet::to_net_input(&input, trigger, reload, use_key);
+                                // 700v6: this player's weapon and whether its own pipeline fired a round
+                                // on the last local tick — every machine resolves that shot identically.
+                                ni.held = sim.gun.weapon;
+                                ni.shot = std::mem::take(&mut self.net_shot_pending);
                                 let lead = session.0.borrow().input_delay();
                                 session.0.borrow_mut().local_input(self.net_tick + lead, ni);
                                 let ready = session.0.borrow_mut().ready_inputs(self.net_tick);
@@ -3820,6 +3837,9 @@ impl ApplicationHandler for App {
                                 if let Some(net_inputs) = ready {
                                     let inputs = net_inputs.map(|i| mpnet::to_player_input(&i));
                                     sim.step_net_remotes(&inputs, slot);
+                                    sim.step_net_combat(&net_inputs, slot);
+                                    // The local pipeline's shot this tick rides the next submitted input.
+                                    if sim.shot_tick { self.net_shot_pending = true; }
                                     if let Some(m) = sim.mp.as_mut() {
                                         for sl in 0..4 {
                                             if sl != slot { if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); } }
@@ -4520,7 +4540,7 @@ pub fn run() -> Result<()> {
     let mut app = App { sound, scene, cam, gfx: None, keys: HashSet::new(), grabbed: false, trigger: false, aiming: false, last: std::time::Instant::now(), choice, anim_time: time, paused: false, opts, noclip: false, just: HashSet::new(), turn: 0.0, look: 0.0, weapon_cycle: 0, gadget_cycle: 0, weapon_switch_to: None, zoom: false, dev: dev.then(|| Box::new(dev::Dev { infinite_ammo: true, ..Default::default() })), notex, nofog, iso, pending_level: None, pending_weapon_assets: None, entry_save: None, all, recorder: None, replay: None, replay_idx: 0, prev_lock_ch: false, ticked: false, frame_ticks: 0, menu_clock: 0.0, fe_clock: 0.0, selected_difficulty: 2, zoom_cycle: 0, pending_mission_end: false, pending_mp_debrief: None, force_channel, cam_prev: None, cam_cur: None, pal_prev: None, pal_cur: None, pal_blend: Vec::new(), pal_moving: Vec::new(), fps_cap, fps_meter: FpsMeter::default(), frame_start: std::time::Instant::now(), panel: None, panel_level: 0, panel_frames: 0, fe: None, level_code: 0, fe_music_page: None, menu_handle: 0, lang: None, profile_session: menu::ProfileSession::default(), #[cfg(feature = "gamepad")] pad: pad_backend,
         movie: None, devwin: None,
         audio_paused: false, loading_art: None, loading_hint: Default::default(), menu_pointer: None,
-        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_clock: None, net_armed: None,
+        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_clock: None, net_shot_pending: false, net_armed: None,
         async_load: None,
         music_bank_flip: false,
         music_loaded_bank: 0xc,

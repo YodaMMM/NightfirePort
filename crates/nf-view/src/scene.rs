@@ -361,6 +361,16 @@ pub struct Sim {
     /// Draw-only: each MP slot's horizontal speed (units/s) over the last tick, from its position
     /// change — the body's idle/walk/run pick (never hashed, never read by the sim).
     pub mp_body_speed: [f32; 8],
+    /// Online (700v6): this machine's PRIVATE generator. In an online match the shared bit-exact
+    /// stream (`drones.rng`, hashed) is drawn only by the parts every machine runs identically —
+    /// the MP rules, the bots and the per-slot MP combat; the local player's own tick (view model,
+    /// its bullets' spread / impacts / effects) runs on this one, so one machine's firing can no
+    /// longer desync the match [S port design — the PS2 had no online play]. None = offline.
+    pub net_rng: Option<nf_game::drone::Rng>,
+    net_rng_shared: Option<nf_game::drone::Rng>,
+    /// Online combat (700v6): each human slot's health, and the ticks since its death (0 = alive).
+    pub mp_hp: [f32; 4],
+    pub mp_dead_ticks: [u32; 4],
     /// Aim mode's cursor (`BL+0x118 / +0x11C`) and its smoothed copy (`+0x120 / +0x124`), −1…1 across half the screen.
     pub cursor: [f32; 2],
     pub cross: [f32; 2],
@@ -1986,6 +1996,11 @@ impl Sim {
         // runs per frame inside the MP flow (the brains + the firing pipeline + respawn/score
         // bookkeeping), exactly like the port's `MP_Update` block above.
         self.step_mp_bots();
+        // 700v6: online, the rest of the tick (the local player's own pipeline and its effects)
+        // draws this machine's private generator; the shared one comes back at the tick's end.
+        if let Some(r) = self.net_rng.take() {
+            self.net_rng_shared = Some(std::mem::replace(&mut self.drones.rng, r));
+        }
         // `Game_Run` 0x1c9790:33 runs `Light_Update` before the object movement each tick (fix-lighting):
         // lifetimes (the muzzle light of the previous tick dies here), the script-channel gate and the
         // flicker state machine. The flicker's RNG re-seeds ride the shared generator before this tick's draws.
@@ -2785,6 +2800,9 @@ impl Sim {
             }
         }
         self.first_person = !self.disabled;
+        if let Some(shared) = self.net_rng_shared.take() {
+            self.net_rng = Some(std::mem::replace(&mut self.drones.rng, shared));
+        }
     }
 
     /// drive-ptp: the ACTION→DRIVING handover for a `0x0730xxxx` interlude — the port of
@@ -4243,7 +4261,8 @@ impl Sim {
         // respawns (`Player_HandleDeath` 0x190bb0:41-54 → `MP_ReSpawn` 0x185368).
         let mp_death_was_active = self.drones.death.active;
         self.drones.tick(&d, &player);
-        self.step_mp_death_respawn(mp_death_was_active);
+        // Online, death + respawn belong to the per-slot MP combat (every machine, shared stream).
+        if self.net_rng.is_none() && self.net_rng_shared.is_none() { self.step_mp_death_respawn(mp_death_was_active); }
         // fix-script-objects: the script-created AI volumes (`Drone_AIVolume_Create` 0x1376c0 via
         // `Script_CreateEntity` 0x1d8968's 0xF5 arm) join the level's volume list the tick their
         // script creates them (the game's `LList_Add` 0x2706c8 registration), and their matrix
@@ -6954,6 +6973,10 @@ impl Scene {
             mp_bonds: [None, None, None, None],
             mp_local_slot: 0,
             mp_body_speed: [0.0; 8],
+            net_rng: None,
+            net_rng_shared: None,
+            mp_hp: [100.0; 4],
+            mp_dead_ticks: [0; 4],
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
@@ -8642,6 +8665,77 @@ impl Sim {
         }
     }
 
+    /// Online combat (700v6) [S port design — the PS2 had no online play]: every machine resolves
+    /// every human slot's shot from the session's inputs, in slot order, on the shared stream. A
+    /// shot (`Input::shot`, the sender's own fire pipeline decided it) is a hit test from the
+    /// shooter's head along its aim, stopped by the world, against the other slots' bodies; the
+    /// damage is the held weapon's record +0x0C. Death scores through `player_killed` [M
+    /// MP_PlayerKilled 0x188f70], the respawn waits 5 s [M Player_HandleDeath 0x190bb0:41-54] and
+    /// takes `mp_respawn`'s spawn pick + health [M MP_ReSpawn 0x185368]. The local slot's health
+    /// drives this machine's HUD and death sequence.
+    pub fn step_net_combat(&mut self, inputs: &[nf_net::Input; 4], local: usize) {
+        if self.mp.is_none() { return; }
+        let body = |s: &Sim, slot: usize| -> Option<nf_game::player::Bond> {
+            if slot == local { Some(s.bond.clone()) } else { s.mp_bonds[slot].clone() }
+        };
+        // 1. The shots, in slot order (the bodies as they stand this tick).
+        for shooter in 0..4 {
+            let inp = &inputs[shooter];
+            if !inp.shot || self.mp_dead_ticks[shooter] > 0 { continue; }
+            let Some(b) = body(self, shooter) else { continue };
+            let head = b.head();
+            let (sy, cy) = b.yaw.sin_cos();
+            let (sp, cp) = b.pitch.sin_cos();
+            let dir = [cp * sy, sp, cp * cy];
+            let range = 200.0;
+            let mut end = [head[0] + dir[0] * range, head[1] + dir[1] * range, head[2] + dir[2] * range];
+            if let Some((t, _, _)) = self.world.segment_surface_bullet(head, end) {
+                end = [head[0] + (end[0] - head[0]) * t, head[1] + (end[1] - head[1]) * t, head[2] + (end[2] - head[2]) * t];
+            }
+            let mut best: Option<(f32, usize)> = None;
+            for victim in 0..4 {
+                if victim == shooter || self.mp_dead_ticks[victim] > 0 { continue; }
+                let Some(v) = body(self, victim) else { continue };
+                // The body: a stack of 0.45 spheres from the knees to the head [S stand-in for the
+                // player's hit boxes — `Collide_Jointy` 0x1ec180's per-bone test is the game's].
+                for h in [0.5f32, 1.0, 1.5] {
+                    let c = [v.pos[0], v.pos[1] + h, v.pos[2]];
+                    if let Some(t) = ray_body_hit(head, end, c, 0.45) {
+                        if best.is_none_or(|(bt, _)| t < bt) { best = Some((t, victim)); }
+                    }
+                }
+            }
+            let Some((_, victim)) = best else { continue };
+            let damage = self.weapons.records.get(inp.held as usize)
+                .map_or(10.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
+            self.mp_hp[victim] -= damage;
+            if self.mp_hp[victim] <= 0.0 {
+                self.mp_hp[victim] = 0.0;
+                self.mp_dead_ticks[victim] = 1;
+                if let Some(m) = self.mp.as_mut() { m.player_killed(victim, Some(shooter), false, false, &mut self.drones.rng); }
+                eprintln!("[mp] slot {shooter} killed slot {victim} (frame {})", self.drones.frame);
+            }
+        }
+        // 2. The dead wait 5 s, then respawn at the policy's pick.
+        for slot in 0..4 {
+            if self.mp_dead_ticks[slot] == 0 { continue; }
+            self.mp_dead_ticks[slot] += 1;
+            if self.mp_dead_ticks[slot] < 300 { continue; }
+            let Some(m) = self.mp.as_mut() else { continue };
+            let Some((sp_idx, hp)) = m.mp_respawn(slot, &mut self.drones.rng) else { continue };
+            let sp = m.spawns.points[sp_idx as usize];
+            let nb = nf_game::player::Bond::stand_at(&self.world, [sp.pos[0], sp.pos[1], sp.pos[2]], sp.facing[1]);
+            m.set_slot(slot, nb.pos);
+            if slot == local { self.bond = nb; } else { self.mp_bonds[slot] = Some(nb); }
+            self.mp_hp[slot] = hp;
+            self.mp_dead_ticks[slot] = 0;
+            eprintln!("[mp] slot {slot} respawned at spawn {sp_idx} (frame {})", self.drones.frame);
+            if slot == local { self.drones.death = nf_game::death::Death::default(); }
+        }
+        // 3. This machine's own health is the slot's (the HUD, the death sequence's start).
+        self.drones.health.health = self.mp_hp[local];
+    }
+
     /// The per-tick state hash sent every N ticks (the app calls it; the nf-net session compares).
     /// Fixed fold order: frame, RNG stream, then each slot's bond pose (slot order — the local
     /// slot reads `bond`, the others `mp_bonds`), then the MP match state. An empty slot folds a
@@ -8657,6 +8751,8 @@ impl Sim {
         }
         let mut h = nf_net::hash::Hasher::new();
         h.u32(self.drones.frame);
+        // 700v6: the online combat's per-slot state.
+        for s in 0..4 { h.f32(self.mp_hp[s]); h.u32(self.mp_dead_ticks[s]); }
         h.u32(self.drones.rng.x);
         h.u32(self.drones.rng.y);
         h.u64(self.drones.rng.draws);

@@ -115,6 +115,9 @@ pub fn to_net_input(i: &player::Input, trigger: bool, reload: bool, use_key: boo
         weapon_cycle: i.weapon_cycle,
         gadget_cycle: i.gadget_cycle,
         switch_to: i.switch_to,
+        // 700v6: the caller fills `held` / `shot` from the local weapon pipeline (lib.rs).
+        held: 0,
+        shot: false,
     }
 }
 
