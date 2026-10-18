@@ -1989,9 +1989,14 @@ impl Sim {
             // reads the live `obj+0x30` per comparison [M 0x185098:123-129]) — the net path set
             // these per tick already; the local path never did, so the spawn policy and the rules
             // saw the load-time positions.
-            m.set_slot(0, self.bond.pos);
-            for slot in 1..4 {
-                if let Some(b) = &self.mp_bonds[slot] { m.set_slot(slot, b.pos); }
+            // By SLOT: the local body is `bond` at `mp_local_slot`, the others `mp_bonds` — a joiner
+            // (local slot 1..3) wrote its own position into slot 0 here, so the match's rules and
+            // the spawn picker saw a different world on every client mid-tick (the late join's
+            // spawn pick diverged on the other client: the three-window check's desync).
+            let local = self.mp_local_slot;
+            for slot in 0..4 {
+                let b = if slot == local { Some(&self.bond) } else { self.mp_bonds[slot].as_ref() };
+                if let Some(b) = b { m.set_slot(slot, b.pos); }
             }
         }
         // mp-bots-in-match: the bots' per-frame driver — the game's `BOT_update` 0x126448 family
@@ -8863,8 +8868,10 @@ impl Sim {
         if dbg.is_some_and(|(a, b)| (a..=b).contains(&self.drones.frame)) {
             let b = |s: usize| if s == local { Some(&self.bond) } else { self.mp_bonds[s].as_ref() };
             eprintln!("[hashdbg] frame {} rng {:x}/{:x}/{} bonds {:?} mp {:?}", self.drones.frame, self.drones.rng.x, self.drones.rng.y, self.drones.rng.draws,
-                (0..2).map(|s| b(s).map(|b| (b.pos, b.yaw, b.pitch, b.substate, b.crouched))).collect::<Vec<_>>(),
-                self.mp.as_ref().map(|m| (m.game.state, m.game.clock, m.game.slots.iter().take(2).map(|s| (s.pos, s.timers, s.score, s.dead)).collect::<Vec<_>>())));
+                (0..4).map(|s| b(s).map(|b| (b.pos, b.yaw, b.pitch, b.substate, b.crouched))).collect::<Vec<_>>(),
+                self.mp.as_ref().map(|m| (m.game.state, m.game.clock, m.game.limit, m.game.slots.iter().take(4).map(|s| (s.pos, s.timers, s.score, s.kills, s.deaths, s.dead)).collect::<Vec<_>>(),
+                    (m.settings.level_code, m.settings.scenario, m.settings.frag_limit, m.settings.time_limit, m.settings.seed, m.settings.human_count))));
+            eprintln!("[hashdbg]   hp {:?} dead {:?}", self.mp_hp, self.mp_dead_ticks);
         }
         let mut h = nf_net::hash::Hasher::new();
         h.u32(self.drones.frame);

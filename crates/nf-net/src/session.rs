@@ -1008,7 +1008,10 @@ impl<T: Transport> Session<T> {
     /// agent does not exist yet), which also gives its acks a carrier.
     fn slot_input_for_send(&self, s: usize, t: u32) -> Option<Input> {
         if s == self.local_slot as usize {
-            if !self.slot_human[s] || t < self.join_from[s] {
+            // A late joiner whose join tick is not announced yet (join_from still 0) is
+            // NEUTRAL too — without this the packet had no input to carry and no acks went out.
+            let unannounced = self.late_joined && self.join_from[s] == 0;
+            if !self.slot_human[s] || t < self.join_from[s] || unannounced {
                 return Some(NEUTRAL);
             }
             return self.inputs[s].get(&t).copied();
@@ -1547,6 +1550,11 @@ impl<T: Transport> Session<T> {
                     // the ack base there (the relays resume at snapshot+1).
                     if let Role::Client { host_peer: Some(p), .. } = &mut self.role {
                         p.our_ack = lr.snapshot_tick.wrapping_add(1);
+                        // ...and our own send window starts there too: the host seeded its ack
+                        // of this slot at the snapshot (`begin_late_join`), so inputs from tick 0
+                        // were never counted and the window never moved (the app's three-window
+                        // check: every machine stalled at the join tick).
+                        p.their_ack = Some(lr.snapshot_tick);
                     }
                     if let Some((seed, settings)) = self.welcomed.clone() {
                         events.push(Event::LateJoinHandover {
@@ -1563,9 +1571,17 @@ impl<T: Transport> Session<T> {
             }
             Packet::JoinSlot { slot, join_tick } => {
                 if (slot as usize) < MAX_AGENTS {
+                    let mine = slot == self.local_slot && self.late_joined;
                     if let Role::Client { host_peer, .. } = &mut self.role {
                         if let Some(p) = host_peer {
                             p.last_recv_ms = self.now_ms;
+                            // The joiner's own send window starts at the join tick: the host
+                            // seeded its ack of this slot there (JOIN_READY: "everything before
+                            // it is implicitly covered"). Without it the window kept resending
+                            // the pre-join NEUTRAL ticks, never reached the join tick, and the
+                            // host - stalled there - had no INPUT packet to carry the ack back:
+                            // every machine froze at the join tick (the three-window check).
+                            if mine { p.their_ack = Some(join_tick.wrapping_sub(1)); }
                         }
                     }
                     self.late_confirm_due = None; // the confirm was answered

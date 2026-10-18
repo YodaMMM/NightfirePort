@@ -250,7 +250,11 @@ fn run_e2e(path: &str, fault: Option<(u64, u32, u32)>) {
         std::thread::sleep(Duration::from_millis(2));
         assert!(Instant::now() < deadline, "both lobbies see both agents");
     }
-    assert_eq!(feh.mp_join[1].codename, fec.mp_join[0].codename, "the codename rode the handshake");
+    // The names rode the handshake: the client mirrors the host's ("Player 1", no profile); the
+    // profile-less client sends none and the host names it by its slot ("Player 2" — two
+    // machines both reading "Player 1" was the two-window check's duplicate) [S].
+    assert_eq!(fec.mp_join[0].codename, "Player 1", "the host's name reached the client");
+    assert_eq!(feh.mp_join[1].codename, "Player 2", "the client shows as its slot on the host");
     assert_eq!(feh.mp_human_count(), 2, "the host counts both humans");
     assert_eq!(feh.mp_net_status(), None, "the host lobby is quiet once the mirror is full");
 

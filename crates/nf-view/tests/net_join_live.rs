@@ -37,26 +37,6 @@ fn cfg() -> nf_net::session::Config {
     nf_net::session::Config { hash_every: 15, ..Default::default() }
 }
 
-/// The net tick's sim driver (the movement core every machine ticks — the
-/// same shape `net_match_live` proves hash-equal across slots and the app's
-/// frame loop runs; every machine here — the replay included — uses slot 0's
-/// shape: the hash is local-slot-independent, proven by the cross-slot
-/// assertions there).
-fn net_tick_sim(sim: &mut nf_view::scene::Sim, inputs: &[nf_game::player::Input; 4]) -> u64 {
-    sim.step_net_remotes(inputs, 0);
-    let ladder = nf_game::player::LadderCtx::default();
-    let inp = inputs[0];
-    sim.bond.tick_ctx(&sim.world, &ladder, &inp);
-    if let Some(m) = sim.mp.as_mut() {
-        m.set_slot(0, sim.bond.pos);
-        for sl in 1..4 {
-            if let Some(b) = &sim.mp_bonds[sl] {
-                m.set_slot(sl, b.pos);
-            }
-        }
-    }
-    sim.net_state_hash(0)
-}
 
 struct Peer {
     sess: Session<UdpTransport>,
@@ -107,8 +87,7 @@ impl Peer {
                     assert!(s.mp_join_spawn(js as usize), "the join spawns a body at tick {jt}");
                 }
             }
-            let pi = std::array::from_fn(|i| to_player_input(&inputs[i]));
-            self.last_hash = net_tick_sim(s, &pi);
+            self.last_hash = nf_view::net_slot0_tick(s, &inputs);
             self.sess.record_run_tick(t, inputs);
             self.sess.submit_hash(t, self.last_hash);
             self.next_tick = t + 1;
@@ -142,6 +121,8 @@ fn run_two(h: &mut Peer, c1: &mut Peer, s: &MpSettings, ticks: u32, ms: &mut u64
     let arena = format!("{:08x}.bin", s.level_code);
     h.sim = Some(nf_view::load_mp_carry(path, &arena, false, None, s.clone()).expect("host sim loads"));
     c1.sim = Some(nf_view::load_mp_carry(path, &arena, false, None, s.clone()).expect("client sim loads"));
+    // The live match start's setup (slot 0's machine shape — the replay starts from the same).
+    for p in [&mut *h, &mut *c1] { nf_view::net_slot0_setup(p.sim.as_mut().unwrap().sim.as_mut().unwrap()); }
     let deadline = Instant::now() + std::time::Duration::from_secs(120);
     while h.next_tick < ticks || c1.next_tick < ticks {
         *ms += 5;
