@@ -7898,6 +7898,18 @@ pub struct Drones {
     /// Bond's bullets in flight, what they hit this tick, the global flinch stamp (`DAT_00298FC0`) and whether Bond
     /// aims (L1).
     pub player_bullets: Vec<PlayerBullet>,
+    /// fix-0c-hatch-latches2 (rebased onto the grate-02 machine): this tick's player-bullet Operate
+    /// contacts against the SS parts, per SS index (bit 1 = a bullet) — recorded by
+    /// `update_player_bullets` from each bullet's flight segment (dead or alive: in the game the
+    /// collision pass registers the contact on the hit object's `obj+0xD0` [M `SS_Operate`
+    /// 0x1a9df8:12-45], and that pass is also what kills the bullet — a solid SS winch box can only
+    /// be reached by a bullet that dies on it). Merged into the `SS_Operate` contacts by the tick's
+    /// SS block; cleared each tick at the flight pass's head.
+    pub ss_bullet_contacts: Vec<u8>,
+    /// level-0c-complete: the use key's class-0x1D trigger half, deferred from the scene's use
+    /// block to this tick's post-`Trigger_Calc` slot (the game runs it at Bond's turn in the
+    /// object walk — see `player_use_doors`'s note). `(head, look)`.
+    pub use_trigger_request: Option<(V3, V3)>,
     pub player_impacts: Vec<PlayerImpact>,
     /// fix-gas-rng4 (111d3's deferral onto the G-041 walk): the world-hit draws' ride record — one
     /// entry per player bullet whose flight segment ended on the world this tick, `(bullet index,
@@ -8310,6 +8322,10 @@ impl Drones {
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), props: Default::default(), breaks: Default::default(), break_kills: Vec::new(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             // fix-06-alarm (fields on their own lines — merge lesson 4).
             sound_triggers: Default::default(),
+            // fix-0c-hatch-latches2: the per-tick player-bullet SS Operate contacts (see the field).
+            ss_bullet_contacts: Vec::new(),
+            // level-0c-complete: the deferred use-key trigger half (see the field).
+            use_trigger_request: None,
             node_doors: None,
             // fix-nav-remainder (fields on their own lines — merge lesson 4).
             node_kicks: None,
@@ -9087,6 +9103,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let held_targets = self.scripts.held_hit_targets(d);
         let frame = self.frame;
         let mut bullets = std::mem::take(&mut self.player_bullets);
+        // fix-0c-hatch-latches2: this tick's bullet-vs-SS-part Operate contacts (bit 1), recorded
+        // per flying bullet below — the game's collision pass registers the bullet contact on the
+        // hit object's `obj+0xD0` list whether or not the hit kills the bullet [M `SS_Operate`
+        // 0x1a9df8:12-45; `Collide_Update` 0x1ea398], so a solid SS winch box is driven by the
+        // very bullet that dies on it. The port's dead bullets are removed by this pass's retain
+        // before the tick's SS block runs — the recording here is what carries the contact over.
+        // (The boxes are the LAST set_dynamic's poses — the walk runs after this pass; one tick
+        // stale for a bullet that is dead-on-hit anyway.)
+        self.ss_bullet_contacts.clear();
+        let ss_parts: Vec<(usize, [f32; 3], [f32; 3])> = d.world.dynamic_boxes().iter()
+            .filter(|&&(id, _, _)| id >> 40 == 0x2)
+            .map(|&(id, lo, hi)| ((id & 0xF_FFFF_FFFF) as usize, lo, hi)).collect();
+        if !ss_parts.is_empty() { self.ss_bullet_contacts.resize(self.sss.list.len(), 0); }
         for (bi, b) in bullets.iter_mut().enumerate() {
             if b.dead { continue; }
             // rocket-sound-leak [M Bullet_update 0x12e7b0:98-108, the head of EVERY tick before the
@@ -9135,6 +9164,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let ray = [b.dir[0] * l, b.dir[1] * l, b.dir[2] * l];
             let end = [b.pos[0] + ray[0], b.pos[1] + ray[1], b.pos[2] + ray[2]];
             self.bullet_paths.push((b.pos, end));
+            // fix-0c-hatch-latches2: the flight segment's SS Operate contacts (bit 1) — the game's
+            // bullet registers on every object its flight touches this tick, the death inclusive
+            // [M 0x1a9df8:35-39 the class-5 bit; the contact list is the collision pass's product].
+            for &(k, lo, hi) in &ss_parts {
+                if k >= self.ss_bullet_contacts.len() { continue; }
+                let over = (0..3).all(|ax| {
+                    let (slo, shi) = (b.pos[ax].min(end[ax]) - 0.05, b.pos[ax].max(end[ax]) + 0.05);
+                    hi[ax] >= slo && lo[ax] <= shi
+                });
+                if over { self.ss_bullet_contacts[k] |= 2; }
+            }
             // fix-samurai-fire: the `+0x6C` bit 0x10000 Swoosh ribbon [M `Bullet_init` 0x12c5a0:116-133:
             // for such records `Swoosh_Create(spawn, spawn, weapon_data+0x76, 0x20005cd, 0)` when the
             // base (+0x02) is 0x33/0x6a/0x6e — else 0x2000481, kind 1 — stored at BU+0xe; `Bullet_update`
@@ -9879,7 +9919,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         // `Player_Activate`'s class-0x1D trigger path: for every trigger within the use sphere, call
         // `Trigger_Activate` — for LOAD_LEVEL, request the level load; for TouchOnce, set the output channel.
-        self.player_use_triggers(head, look, frame);
+        // level-0c-complete: the TRIGGER half defers to the sim tick's post-`Trigger_Calc` slot — the
+        // game's E press runs at Bond's turn in the OBJECT WALK [M Player_Activate 0x1a5170 called
+        // from the walk], so the written channel is read by later-in-the-walk muxes in the SAME
+        // frame, and the next frame's `Trigger_Calc` clear (0x1b1900's type-2 zero pass) only
+        // follows the consumption. The port's use path ran BEFORE `tick_inner` — the clear+rescan
+        // wiped the write before the mux walk ever saw it (0700000c's secret-door E plate #558
+        // [D: mask 4, out 3] never reached its AND). The doors' half stays here (the events feed
+        // the scene's sound path); the request carries (head, look).
+        self.use_trigger_request = Some((head, look));
         // `Player_Activate`'s remaining classes the Tower levels need (map-tower): the mask-4
         // ScriptPlayers (`SP_Activate` 0x1dc338 — the elevator, the security keyboard), the
         // switches (0x29, `Switch_Activate` 0x1b02a8) and the Q-Worm PCs (0x35,
@@ -10871,6 +10919,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .collect();
         drop(prof_pre);
         { let _p = crate::prof::scope("drones: Trigger_Calc"); crate::triggers::calc(d.level, &mut self.triggers, &mut self.channels, &touchers, frame); }
+        // level-0c-complete: the deferred use-key trigger half — the game's E press fires at
+        // Bond's turn in the object walk, AFTER Trigger_Calc's touch clear and BEFORE the later
+        // muxes' updates in the same walk [M 0x1336f8's loop; Player_Activate 0x1a5170]. Consumed
+        // here so the written channel survives to the mux walk (0700000c's secret door).
+        if let Some((head, look)) = self.use_trigger_request.take() {
+            self.player_use_triggers(head, look, frame);
+        }
         // `switch_channels_prev` is snapshotted right after `Trigger_Calc`, BEFORE the object walk [M 0x1336f8:52-53
         // — `prev ← hold; hold ← channels` at 0x1337cc/0x1337dc] — so `Door_Update`'s lock rising edge
         // (`prev == 0 && now != 0`, 0x136550-0x136608) sees a channel a trigger or script pulsed earlier this
@@ -12391,8 +12446,36 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // decay (−f/6 per tick) erased the whiteout in ~6 ticks — invisible.
         self.health.flashbang = (self.health.flashbang - 1.0).max(0.0);
         self.shake = (self.shake * 0.9 - 0.05).max(0.0);
-        // The SimpleScripts' playheads (`SS_Update` 0x1a9948 — channel on → the last key, off → key 0).
-        self.sss.tick(&self.channels);
+        // The SimpleScripts (`SS_Update` 0x1a9948's state machine — grates-02). The `SS_Operate`
+        // 0x1a9df8 contacts, from the collision pass's registered dynamic set: the player's
+        // capsule box (bit 0) and this tick's player-bullet flight (bit 1) against each SS part's
+        // box (ids bit 41 | the ss index — the same parts `set_dynamic` holds). The 0c winches
+        // (#351/#364/#377, mask 0x2 [D]) are bullet-driven; the disc's other SS masks are 0x1
+        // (channel-only) [D census, fix-0c-hatch-latches].
+        let ss_contacts = {
+            let parts = d.world.dynamic_boxes();
+            let mut c = vec![0u8; self.sss.list.len()];
+            let (plo, phi) = (
+                [self.player_pos[0] - 0.4, self.player_pos[1] - 1.15, self.player_pos[2] - 0.4],
+                [self.player_pos[0] + 0.4, self.player_pos[1] + 0.95, self.player_pos[2] + 0.4],
+            );
+            for &(id, lo, hi) in &parts {
+                if id >> 40 != 0x2 { continue; }
+                let k = (id & 0xF_FFFF_FFFF) as usize;
+                if k >= c.len() { continue; }
+                if (0..3).all(|ax| hi[ax] >= plo[ax] && lo[ax] <= phi[ax]) { c[k] |= 1; }
+            }
+            // fix-0c-hatch-latches2: the bullet contacts recorded by this tick's flight pass —
+            // including the bullets that DIED on the part (the retain removed them from
+            // `player_bullets` before this block; see `update_player_bullets`).
+            for (k, bits) in self.ss_bullet_contacts.iter().enumerate() {
+                if *bits & 2 != 0 && k < c.len() { c[k] |= 2; }
+            }
+            c
+        };
+        let mut ch = std::mem::take(&mut self.channels);
+        self.sss.tick(&mut ch, &ss_contacts, self.frame);
+        self.channels = ch;
         // The sound triggers (`SoundTrigger_Update` 0x1b2790 — the object walk's per-frame pass;
         // fix-06-alarm): the alarm siren starts the same frame its ON channel is up.
         self.sound_triggers.tick(&mut self.audio, &self.channels);

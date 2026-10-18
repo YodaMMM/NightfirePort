@@ -99,8 +99,16 @@ pub fn walk_12(w: &mut crate::walker::Walker) {
         if sim.drones.channels.on(0x49) && sim.drones.channels.on(0x59) { pressed = true; break; }
     }
     assert!(pressed, "E at the console writes ch 0x49 (override #731) and ch 0x59 (lift call #702) [D]");
+    // The game's frame order: `Mission_Update` (0x182c60) runs from `Game_Run` (0x1c9790:17)
+    // BEFORE the object handler (0x1336f8:30-35) — the E press fires at Bond's turn INSIDE the
+    // walk, so the objective completes on the channels the NEXT frame. The port's use-trigger
+    // half is deferred to the same mid-walk slot (level-0c-complete-2); one more tick is the
+    // game's own timing, not slack.
+    w.tick(nf_game::player::Input::default(), false);
     {
         let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x49) && sim.drones.channels.on(0x59),
+            "ch 0x49/0x59 hold into the next frame (TouchOnce latched, not cleared) [M 0x1b1a78 case 1]");
         assert_eq!(sim.drones.mission.states[16][0], 4, "the override objective completes [M 0x1827d8]");
         assert_eq!(sim.drones.mission.states[16][1], 3, "'Escape through the elevator shaft' announces [L]");
     }

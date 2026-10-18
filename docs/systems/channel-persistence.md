@@ -29,11 +29,13 @@ writer inventory, with evidence, and the census method that checks the port agai
 | Script events | the op's target channel — event 0xD (`ch = param1`), event 0x11 (conditional pick of two channels) | `Script_EventHandler` 0x1d94c0 case 0xD / 0x11 (the stamp at 0x1d94c0:112) |
 | Script players | the SP's own OUT while its trigger bits hold | `SP_Update` 0x1dc1c0's out write (the port's nis.rs `Player::update` tail) |
 | Script-created triggers | `Script_CreateEntity` 0xEA/0xEB build type-1/type-2 trigger objects — they write like the placed families | 0x1d8968; the port rebuilds them per tick from live entities (drone.rs, `script: Some`) |
+| SimpleScripts' operate latch | each SS's channel word (ext+0x10) while the mask word's bit 0 is CLEAR — the operate result into a 0-valued `switch_channels[ch]`, every tick while the channel reads 0; on E, `SS_Activate` 0x1a9ea8:11-13 latches it 1 (the ported `Ss::activate`) | `SS_Update` 0x1a9948:18-23 + `SS_Operate` 0x1a9df8 (the operate result: the contact-class bits AND the mask, else the channel half); the walk dispatches SS_Update for every class-0x25 object each frame [M control_movement_object_handler 0x1336f8's control_funcs loop]. Ported by level-0c-complete-2 (the held s/level-0c-complete's SS_Operate change, un-held). Disc example: 07000002's SS #308 (mask 0x0004, ch 0x02) — the game writes ch 0x02 = 0 every tick until something raises it [D census probe] |
 | Bond-moment sweep | READS 0x65-0x6E (no write) → `PlrStat_DoneBondMoment` | `Trigger_Calc` 0x1b1900:12-20 |
 
-Known UNPORTED writer: the SimpleScript operate arm — `SS_Update` 0x1a9948:20-23 writes the
-operate result into a 0-valued channel (documented in `crates/nf-game/src/ss.rs`; needs the
-presence result). A channel only that arm writes never turns on in the port.
+Ported (level-0c-complete-2): the SimpleScript operate arm — the table row above. The 0x1a9948
+latch needs the presence result, so it landed together with `SS_Operate` 0x1a9df8's contact half
+(the port's collision-pass product per SS part: the player capsule → class 3 → mask 0x8, a
+player-bullet flight → class 5 → 0x2; the drone class 2 → 0x10 has no disc SS [D census]).
 
 ## The 750q "open port bug" was the disc's own OUT copy
 
