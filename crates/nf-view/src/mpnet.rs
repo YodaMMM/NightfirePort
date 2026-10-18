@@ -254,6 +254,8 @@ pub struct NetCore {
     lobby: Option<nf_net::discovery::LobbyInfo>,
     /// net-lobby-list: the joiner's LAN browser while the Join Online page is up.
     browse: Option<nf_net::discovery::LobbyList>,
+    /// The next REGISTER to the lobby directory (ms on the core's clock).
+    dir_next_ms: u64,
 }
 
 /// The host repeats the match-start payload every this many polls …
@@ -286,6 +288,7 @@ impl NetCore {
             reach_line: None,
             lobby: None,
             browse: None,
+            dir_next_ms: 0,
         })))
     }
 
@@ -350,6 +353,7 @@ impl NetCore {
             reach_line: None,
             lobby: None,
             browse: None,
+            dir_next_ms: 0,
         })))
     }
 
@@ -431,6 +435,15 @@ impl NetCore {
         if let Some(b) = self.browse.as_mut() { b.poll(now); }
         let strays = self.sess.take_stray();
         if self.is_host && !self.closed {
+            // The internet directory: REGISTER from the game socket every few seconds (the server
+            // lists the source address — this socket's public mapping).
+            if let (Some(dir), Some(info)) = (self.reach_cfg.as_ref().and_then(|c| c.directory), self.lobby.as_ref()) {
+                if now >= self.dir_next_ms {
+                    self.dir_next_ms = now + nf_net::directory::REGISTER_EVERY_MS;
+                    let pkt = nf_net::directory::register_packet(info);
+                    self.sess.send_raw(dir, &pkt);
+                }
+            }
             if let Some(info) = self.lobby.as_mut() {
                 info.in_progress = self.match_start.is_some();
                 info.port = self.sess.local_addr().port();
@@ -724,7 +737,9 @@ impl crate::menu::MpSession for SessionProxy {
     fn browse(&mut self, on: bool) {
         let mut c = self.0.borrow_mut();
         if on && c.browse.is_none() {
-            c.browse = Some(nf_net::discovery::LobbyList::open(nf_net::PROTOCOL_VERSION, nf_net::DEFAULT_BUILD_ID, reach_seed() as u32));
+            let mut l = nf_net::discovery::LobbyList::open(nf_net::PROTOCOL_VERSION, nf_net::DEFAULT_BUILD_ID, reach_seed() as u32);
+            l.set_directory(c.reach_cfg.as_ref().and_then(|r| r.directory));
+            c.browse = Some(l);
         } else if !on {
             c.browse = None;
         }

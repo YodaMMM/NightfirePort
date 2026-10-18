@@ -2467,6 +2467,13 @@ impl App {
         if self.net.is_some() && self.net_await_load {
             self.net_await_load = false;
             self.net_tick = 0;
+            // The first `input_delay` ticks have no sampled input (nothing ran that many ticks
+            // before them): every machine submits NEUTRAL for its own slot there, so tick 0 is ready
+            // at once instead of each window waiting on itself (the two-window freeze, 2026-10-18).
+            if let Some(n) = self.net.as_ref() {
+                let lead = n.0.borrow().input_delay();
+                for t in 0..lead { n.0.borrow_mut().local_input(t, nf_net::NEUTRAL); }
+            }
         }
         if self.net.is_some() && self.net_local_slot != 0 {
             if let Some(sim) = self.scene.sim.as_mut() {
@@ -4786,6 +4793,17 @@ fn reach_config() -> Option<nf_net::p2p::ReachConfig> {
     if let Ok(s) = std::env::var("NF_STUN") {
         cfg.stun_servers = s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     }
+    // The lobby directory (docs/tools/listing-server.md): NF_LOBBY_SERVER, else the
+    // `lobby_server = host:port` line of <config dir>/net.txt; empty = none.
+    let server = std::env::var("NF_LOBBY_SERVER").ok().or_else(|| {
+        let text = std::fs::read_to_string(settings::config_dir()?.join("net.txt")).ok()?;
+        text.lines().find_map(|l| l.split_once('=').filter(|(k, _)| k.trim() == "lobby_server").map(|(_, v)| v.trim().trim_matches('"').to_string()))
+    });
+    cfg.directory = server.filter(|s| !s.is_empty()).and_then(|s| {
+        use std::net::ToSocketAddrs;
+        let s = if s.contains(':') { s } else { format!("{s}:{}", nf_net::directory::DEFAULT_PORT) };
+        s.to_socket_addrs().ok()?.find(|a| a.is_ipv4())
+    });
     Some(cfg)
 }
 

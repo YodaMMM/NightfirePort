@@ -36,6 +36,9 @@ pub struct ReachConfig {
     pub natpmp_gateway: Option<SocketAddr>,
     /// Try UPnP / NAT-PMP at all (off: STUN only — the joiner side and tests).
     pub map: bool,
+    /// The optional internet lobby directory (`directory`, the user's home server) — None unless
+    /// the user's setting names one; never a built-in address.
+    pub directory: Option<SocketAddr>,
 }
 
 impl Default for ReachConfig {
@@ -46,6 +49,7 @@ impl Default for ReachConfig {
             ssdp_wait: Duration::from_millis(1500),
             natpmp_gateway: None,
             map: true,
+            directory: None,
         }
     }
 }

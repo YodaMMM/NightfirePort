@@ -132,6 +132,8 @@ pub struct LobbyList {
     entries: BTreeMap<SocketAddr, LobbyEntry>,
     protocol: u16,
     build: u32,
+    /// The internet directory (`directory`, the user's home server) — None unless the setting names one.
+    directory: Option<SocketAddr>,
 }
 
 impl LobbyList {
@@ -159,7 +161,24 @@ impl LobbyList {
 
     /// Tests: an explicit socket and target list.
     pub fn with_socket(sock: Option<UdpSocket>, targets: Vec<SocketAddr>, protocol: u16, build: u32, seed: u32) -> LobbyList {
-        LobbyList { sock, targets, nonce: seed | 1, next_ms: 0, entries: BTreeMap::new(), protocol, build }
+        LobbyList { sock, targets, nonce: seed | 1, next_ms: 0, entries: BTreeMap::new(), protocol, build, directory: None }
+    }
+
+    /// Also list the lobbies the internet directory knows (the joiner dials the public endpoint
+    /// the directory saw).
+    pub fn set_directory(&mut self, server: Option<SocketAddr>) {
+        self.directory = server;
+    }
+
+    fn add(&mut self, addr: SocketAddr, info: LobbyInfo, echo: [u8; 8], now_ms: u64) {
+        if u32::from_le_bytes([echo[0], echo[1], echo[2], echo[3]]) != self.nonce {
+            return;
+        }
+        let sent = u32::from_le_bytes([echo[4], echo[5], echo[6], echo[7]]);
+        let joinable = info.protocol == self.protocol && info.build == self.build;
+        let ping = (now_ms as u32).wrapping_sub(sent);
+        let ping = self.entries.get(&addr).filter(|e| e.last_seen_ms + QUERY_EVERY_MS > now_ms).map_or(ping, |e| e.ping_ms.min(ping));
+        self.entries.insert(addr, LobbyEntry { addr, info, ping_ms: ping, last_seen_ms: now_ms, joinable });
     }
 
     /// Send the periodic query, drain replies, expire stale rows.
@@ -171,21 +190,26 @@ impl LobbyList {
             for t in &self.targets {
                 let _ = sock.send_to(&q, t);
             }
+            if let Some(d) = self.directory {
+                let _ = sock.send_to(&crate::directory::list_packet(self.nonce, now_ms as u32), d);
+            }
         }
-        let mut buf = [0u8; 512];
+        let mut buf = [0u8; 1500];
+        let mut got: Vec<(SocketAddr, LobbyInfo, [u8; 8])> = Vec::new();
         while let Ok((n, from)) = sock.recv_from(&mut buf) {
-            let Some((info, echo)) = LobbyInfo::decode(&buf[..n]) else { continue };
-            if u32::from_le_bytes([echo[0], echo[1], echo[2], echo[3]]) != self.nonce {
+            if Some(from) == self.directory {
+                if let Some((echo, rows)) = crate::directory::parse_entries(&buf[..n]) {
+                    got.extend(rows.into_iter().map(|(a, i)| (a, i, echo)));
+                }
                 continue;
             }
-            let sent = u32::from_le_bytes([echo[4], echo[5], echo[6], echo[7]]);
-            let addr = SocketAddr::new(from.ip(), info.port);
-            let joinable = info.protocol == self.protocol && info.build == self.build;
             // One host answers once per target that reached it (broadcast + localhost + its LAN IP):
-            // keep the row keyed by its game address, the best ping.
-            let ping = (now_ms as u32).wrapping_sub(sent);
-            let ping = self.entries.get(&addr).filter(|e| e.last_seen_ms + QUERY_EVERY_MS > now_ms).map_or(ping, |e| e.ping_ms.min(ping));
-            self.entries.insert(addr, LobbyEntry { addr, info, ping_ms: ping, last_seen_ms: now_ms, joinable });
+            // the row is keyed by its game address and keeps the best ping.
+            let Some((info, echo)) = LobbyInfo::decode(&buf[..n]) else { continue };
+            got.push((SocketAddr::new(from.ip(), info.port), info, echo));
+        }
+        for (a, i, e) in got {
+            self.add(a, i, e, now_ms);
         }
         self.entries.retain(|_, e| now_ms.saturating_sub(e.last_seen_ms) <= EXPIRE_MS);
     }

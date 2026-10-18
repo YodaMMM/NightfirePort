@@ -183,7 +183,7 @@ fn host_reach_upnp_then_code_round_trip_and_session_connects() {
     let tr = UdpTransport::bind("127.0.0.1:0").unwrap();
     let port = tr.local_addr().port();
     let mut host = Session::new_host(Config::default(), tr, MatchSettings::default(), 7);
-    let cfg = ReachConfig { stun_servers: vec![stun_a.to_string()], ssdp, ssdp_wait: Duration::from_millis(300), natpmp_gateway: None, map: true };
+    let cfg = ReachConfig { stun_servers: vec![stun_a.to_string()], ssdp, ssdp_wait: Duration::from_millis(300), natpmp_gateway: None, map: true, directory: None };
     let mut reach = HostReach::start(port, cfg, 1);
     let ok = pump_until(|now| {
         host.poll(now);
@@ -229,6 +229,7 @@ fn stun_only_host_punches_to_the_joiners_code() {
         ssdp_wait: Duration::from_millis(200),
         natpmp_gateway: Some(silent_pmp.local_addr().unwrap()),
         map: true,
+        directory: None,
     };
     let mut reach = HostReach::start(port, cfg.clone(), 3);
     let step_host = |host: &mut Session<UdpTransport>, reach: &mut HostReach, now: u64| -> Vec<Event> {

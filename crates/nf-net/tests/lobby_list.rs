@@ -82,3 +82,31 @@ fn two_hosts_on_one_pc_both_list_and_joining_a_row_connects() {
     run(|t| { serve(&mut b, &ib, t); if c.poll(t).iter().any(|e| matches!(e, Event::Connected { .. })) { ok = true; } }, 400, 3000);
     assert!(ok, "the client connected to the listed host");
 }
+
+/// The internet directory (700v4 item 5): a host registers from its game socket, the server keys
+/// it by the source address, and a joiner's list (no LAN targets) shows it from the directory.
+#[test]
+fn the_directory_lists_a_registered_host() {
+    let srv = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let srv_addr = srv.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let mut dir = nf_net::directory::Directory::default();
+        let t0 = std::time::Instant::now();
+        let mut buf = [0u8; 2048];
+        // Like nf-lobbyd: a recv error (Windows reports an earlier ICMP unreachable this way) is
+        // not the end of the server.
+        loop {
+            let Ok((n, from)) = srv.recv_from(&mut buf) else { continue };
+            for r in dir.handle(from, &buf[..n], t0.elapsed().as_millis() as u64) { let _ = srv.send_to(&r, from); }
+        }
+    });
+    let (mut h, info) = host("Internet game", nf_net::DEFAULT_BUILD_ID);
+    h.send_raw(srv_addr, &nf_net::directory::register_packet(&info));
+    let mut list = list_for(Vec::new());
+    list.set_directory(Some(srv_addr));
+    run(|t| { h.poll(t); list.poll(t); }, 0, 600);
+    let rows = list.rows();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].addr, h.local_addr(), "the endpoint the server saw (the host's game socket)");
+    assert_eq!(rows[0].info.name, "Internet game");
+}
