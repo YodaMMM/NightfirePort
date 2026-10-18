@@ -36,6 +36,15 @@ fn dump_07000015_placements_by_kind() {
     by_kind.sort();
     for (k, idxs) in &by_kind {
         println!("== KIND {k:#04x}: {} placements ==", idxs.len());
+        if *k == 0x47 {
+            // The room placements: the map each references (the port's sub-map loader reads
+            // p.index for kind 0x47 [S] — print the raw index to map the placed rooms).
+            for &i in idxs {
+                let (mi, p) = placements[i];
+                println!("m{mi} #{i} room-ref index {} flags {:#x} t {:?}", p.index, p.flags, p.translation);
+            }
+            continue;
+        }
         for &i in idxs {
             let (mi, p) = placements[i];
             let target = if p.by_hash() { lv.by_hash.get(&p.hashcode).copied() }
@@ -48,5 +57,32 @@ fn dump_07000015_placements_by_kind() {
             println!("m{mi} #{i} kind {k:#04x}{cel} \"{}\" @({:.2},{:.2},{:.2}) params [{}] hash {:08x} flags {:#x}",
                 name, t[0], t[1], t[2], params.join(" "), p.hashcode, p.flags);
         }
+    }
+}
+
+#[test]
+#[ignore = "assertion-free probe; run with --ignored"]
+fn probe_07000015_mine_objects() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
+    let data = read_archive(&iso, "07000015.bin");
+    let lv = Level::parse(&data).expect("parse");
+    let mm = lv.main_map().unwrap_or(0);
+    for p in &lv.maps[mm].placements {
+        if p.flags & 0xff != 0xfe { continue; }
+        let target = if p.by_hash() { lv.by_hash.get(&p.hashcode).copied() }
+            else if (p.index as usize) < lv.maps[mm].objects.len() { Some((mm, p.index as usize)) } else { None };
+        if let Some((m, o)) = target {
+            let obj = &lv.maps[m].objects[o];
+            match &obj.collision {
+                Some(c) => {
+                    let mut lo = [f32::MAX; 3]; let mut hi = [-f32::MAX; 3];
+                    let tris = c.triangles();
+                    let n = tris.len();
+                    for t in &tris { for v in t { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
+                    println!("mine m{mm}#{o} \"{}\" tris {n} lo {lo:.2?} hi {hi:.2?} centre {:.2?} r {:.2}", obj.name.trim(), obj.centre, obj.radius);
+                }
+                None => println!("mine m{mm}#{o} \"{}\" NO collision, centre {:.2?} r {:.2}", obj.name.trim(), obj.centre, obj.radius),
+            }
+        } else { println!("mine UNRESOLVED hash {:08x}", p.hashcode); }
     }
 }
