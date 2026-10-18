@@ -36,9 +36,6 @@ pub const WALK_PICK_RADIUS: f32 = 0.275;
 /// `BL+0x908` on land.
 pub const EYE: f32 = 0.7;
 const GRAVITY: f32 = -9.8;
-/// The feet-point band's float slop [M Player_FeetOnPoint 0x194188:106 `hit − 0.1 <= cc`; the
-/// port's rounding at the exact crouch contact — see the physics_tick comment].
-const GROUND_EPS: f32 = 1e-4;
 
 /// `obj+0xF6` substates, from the `Player_Update` 0x193600 dispatch [M switch @0x193958; the jump table
 /// reads obj+0xF6 and its cases call Player_SSWalk 0x192310 (0), Player_Climb 0x196310 (1),
@@ -465,17 +462,23 @@ impl Bond {
     }
 
     /// The capsule ends (top A, bottom B) for the current stance, off the dynamic root height `cc`
-    /// (`Player_Collision` 0x194df0: standing `0.275` / `0.55 − cc`; crouched `0.65 − cc` / `0.45 − cc`).
-    /// The swim substate (3) builds its own pair [M 0x194df0 case 3:228-253]: spheres at
-    /// `0.1 − (cc − 0.55)` = `0.65 − cc` and `0.45 − cc` with `+0x7cc` (the radius slot) 0.55 — a
-    /// low-slung 0.2-long spine hanging under the root, so at the swim equilibrium (root = surface − 0.3)
-    /// the capsule's top stays ~0.13 under the water plane and never touches a pond floor that sits at
-    /// the surface (the 07000002 garden pond [D probe_vent_swim]).
+    /// (`Player_Collision` 0x194df0: standing (default arm) `0.275` / `0.55 − cc`; the crouch/swim
+    /// case 3 `0.1 − (cc − 0.55)` / `0.45000002 − cc`, stores to BLData+0x760/+0x770 with the radius
+    /// slot +0x7cc = 0x3f0ccccd 0.55 [M 0x194df0:235/248 + the tail store :405-408]). The constants
+    /// are the game's f32 literals evaluated in the game's order — NOT the algebraic simplifications:
+    /// `0.65 − 0.55f32` = 0.1000000238418579 but the game's `0.1 − (0.55 − 0.55)` = 0.1f32, and
+    /// `0.45f32 − cc` = −0.10000002384185791 but the game's `0.45000002f32 − cc` (0x3EE66667) =
+    /// −0.09999999403953552. The 3e-8 difference is the crouch grounded band: the feet-point ray is
+    /// built from the B arm (see the physics_tick comment), so the port's lower B hung the crouch
+    /// rest EXACTLY on `Player_FeetOnPoint`'s band edge and the push dither flickered Bond ungrounded
+    /// at every hard-floor crouch rest (probe14_ground.rs, the 07000014 crawl-vent start). The swim
+    /// pair is the same case-3 arm [M 0x194df0 case 3] — a low-slung 0.2-long spine hanging under the
+    /// root, so at the swim equilibrium (root = surface − 0.3) the capsule's top stays ~0.13 under the
+    /// water plane and never touches a pond floor that sits at the surface (the 07000002 garden pond
+    /// [D probe_vent_swim]).
     fn capsule(&self) -> (V3, V3) {
-        let (a, b) = if self.substate == SS_SWIM {
-            (0.65 - self.cc, 0.45 - self.cc)
-        } else if self.crouched {
-            (0.65 - self.cc, 0.45 - self.cc)
+        let (a, b) = if self.substate == SS_SWIM || self.crouched {
+            (0.1 - (self.cc - 0.55), 0.450_000_02 - self.cc)
         } else {
             (0.275, 0.55 - self.cc)
         };
@@ -789,11 +792,22 @@ impl Bond {
         let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS);
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
-        let ray = self.cc + 0.6;
         // The floor test reads the same HITTEST (`Player_CollisionHandler` 0x1949a8 →
-        // `Player_FeetOnPoint(param_1, BLData+0x740, …)`), so it shares the per-cel scope.
-        let floor = world.segment_hit_scoped(self.cel, self.pos, [self.pos[0], self.pos[1] - ray, self.pos[2]]);
-        self.grounded = walkable || floor.is_some_and(|(t, _)| t * ray - 0.1 <= self.cc + GROUND_EPS);
+        // `Player_FeetOnPoint(param_1, BLData+0x740, …)`), so it shares the per-cel scope. The ray
+        // and the band are the game's own: to = capsuleB + up·(−(cc+0.6)) [M Player_FeetOnPoint
+        // 0x194188:89-98 — HITTEST+0x30 = BLData+0x770, the climb B arm pos + up·(0x7cc − cc) from
+        // Player_Collision 0x194df0 case 0 + the tail store :405-408], and HITDATA+0xC =
+        // |from − hit| with hit = from + t·dir [M Intersect_RayGeom 0x10a8c8:176-179/252-256/
+        // 312-325]; band `hit − 0.1 <= cc` [M 0x194188:106]. See the walk tick's comment.
+        let ray = self.cc + 0.6;
+        let to = [b[0], b[1] + -ray, b[2]];
+        let floor = world.segment_hit_scoped(self.cel, self.pos, to);
+        self.grounded = walkable || floor.is_some_and(|(t, _)| {
+            let d_y = to[1] - self.pos[1];
+            let hit_y = self.pos[1] + t * d_y;
+            let dy = self.pos[1] - hit_y;
+            (dy * dy).sqrt() - 0.1 <= self.cc
+        });
         if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
     }
 
@@ -1419,8 +1433,16 @@ self.local = [vs / k, vf / k];
         // `self.cel` is the Sim's per-tick relink (obj+0x20); `None` falls back to the flat world.
         let (a, b) = self.capsule();
         let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS);
+        // The floor ray: from = obj+0x30, to = capsuleB + up·(−(cc+0.6)) [M Player_FeetOnPoint
+        // 0x194188:89-98 loads HITTEST+0x30 = BLData+0x770 — the B arm Player_Collision 0x194df0
+        // stores at :405-408 — adds the matrix up scaled −(cc+0.6) (:92, one negation of the f32
+        // sum), and passes obj+0x30 as the from]. Upright the up is (0,1,0), so the multiplies are
+        // exact and the endpoint is B.y − (cc+0.6); the port's old `pos − (cc+0.6)` skipped the B
+        // hop and shortened the crouch ray to 1.15 where the game's is exactly −1.25 (probe14_ground
+        // d_y 0xbfa00000).
         let ray = self.cc + 0.6;
-        let mut floor = world.segment_hit_scoped(self.cel, self.pos, [self.pos[0], self.pos[1] - ray, self.pos[2]]);
+        let to = [b[0], b[1] + -ray, b[2]];
+        let mut floor = world.segment_hit_scoped(self.cel, self.pos, to);
         // The game's pass never lands over a void: `build_FindCel` 0x1c8cb0 relinks obj+0x20 by
         // tie-break rays against each candidate's own chain geometry, so the actor's cel always
         // carries the geometry under him. The port's buckets are coarser than the game's cels [S]:
@@ -1436,18 +1458,27 @@ self.local = [vs / k, vf / k];
             let (fp, fw) = world.capsule_push(a, b, RADIUS);
             push = fp;
             walkable = fw;
-            floor = world.segment_hit(self.pos, [self.pos[0], self.pos[1] - ray, self.pos[2]]);
+            floor = world.segment_hit(self.pos, to);
         }
-        // The contact-distance band [M Player_FeetOnPoint 0x194188:106 `hit − 0.1 <= cc`]: by the
-        // crouch capsule's own arms (B = 0.45 − cc, r 0.55 → the resting sphere bottom hangs
-        // exactly cc + 0.1 under the root) the crouched rest sits EXACTLY on the band edge, and
-        // the port's fraction×ray multiply rounds the contact distance a hair above it
-        // (0.650000056 vs 0.65 — the 07000014 crawl-vent start [D p3=3] hovered ungrounded
-        // forever, flickering with the push, and the walk stalled in the duct). The game's own
-        // f32 ray path holds grounded through the same contact [L: the crouched Bond crawls out
-        // of the vent on PCSX2], so the port allows its own rounding slop: 1e-4, 400× below the
-        // 0.1 band and invisible to every gameplay distance.
-        self.grounded = walkable || floor.is_some_and(|(t, _)| t * ray - 0.1 <= self.cc + GROUND_EPS);
+        // The contact-distance band [M Player_FeetOnPoint 0x194188:106 `*(float *)(hit + 0xc) - 0.1
+        // <= cc`] reads HITDATA+0xC, which Intersect_RayGeom 0x10a8c8 fills with the ABSOLUTE
+        // distance |from − hit| — hit = from + t·dir (:176-179 the dir·t product and the from add;
+        // :252-256 the store to HITDATA+0x40), dir = to − from recomputed f32 [M Collide_Intersect
+        // 0x1ebaa8's 0x201 branch], and the sqrt-of-squares store :312-325 — NOT t·raylen, which is
+        // what the port multiplied here. For the upright ray the x/z deltas are exactly 0 (the
+        // endpoint's x/z equal pos), so the VU's pairwise-add collapse leaves the single y term.
+        // With the game's own B arm and ray the crouched rest grounds through the push dither with
+        // no epsilon: the rest contact (0.09999999403953552 + 0.55f32 below the root) lands 1 ulp
+        // under the band's f32 edge (0x3f266667, where `hit − 0.1f32` rounds to exactly cc), while
+        // the port's old 0.45f32 arm sat exactly ON the edge and the t·ray multiply tipped it over
+        // (probe14_ground.rs: the rest y dithered ±3 ulps and grounded flickered) [L: the crouched
+        // Bond crawls out of the 07000014 vent on PCSX2].
+        self.grounded = walkable || floor.is_some_and(|(t, _)| {
+            let d_y = to[1] - self.pos[1];
+            let hit_y = self.pos[1] + t * d_y;
+            let dy = self.pos[1] - hit_y;
+            (dy * dy).sqrt() - 0.1 <= self.cc
+        });
         if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
