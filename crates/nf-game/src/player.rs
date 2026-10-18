@@ -25,13 +25,15 @@ pub const ROOT_HEIGHT: f32 = 1.0347183;
 pub const CROUCH_ROOT_HEIGHT: f32 = 0.55;
 /// Capsule radius (`HITTEST+0x8C`).
 pub const RADIUS: f32 = 0.55;
-/// The WALK arm's pick radius (`Player_Collision` 0x194df0 case 0/6 writes the radius slot
-/// `+0x7CC = 0x3e8ccccd` = 0.275 — the swim/crouch/default arms write 0x3f0ccccd = 0.55). The walk
-/// grab's reach past the ladder's rung plane is the WALK capsule's 0.275, not the swim arm's 0.55:
-/// the game's `Player_CollLadder` 0x196118 fires from the walking HITTEST's mesh refine only when
-/// the walk capsule (r 0.275, segment A = pos + up·0.55, B = pos + up·(+0x7CC − cc)) touches the
-/// ladder glist (`Collide_Update` 0x1ea398:84-93 → `Collide_Intersect` 0x1ebaa8), so a walker or a
-/// just-dismounted stander 0.5+ off the plane never re-grabs. fix-ladder-water2.
+/// The CLIMB/CREEP hittest arm's radius: `Player_Collision` 0x194df0's substate switch maps the
+/// substates 1 (climb) and 7 (creep) to the narrow arm — the radius slot `+0x7CC = 0x3e8ccccd` =
+/// 0.275, segment A = pos + up·0.55, B = pos + up·(+0x7CC − cc) [M the jump table @0x2fc0d0 (case
+/// 0 = substate 1, case 6 = substate 7) + 0x1950a0]. The WALK substate 0 is NOT in that arm: the
+/// switch indexes substate−1, walk 0 → −1 → the unsigned bounds check fails → the DEFAULT arm (r
+/// 0.55) [M 0x1953f4]. The port's walk GRAB rides the default arm (`Ladder::capsule_hits_default`);
+/// this const stays for the climb/creep arm's shape (`Ladder::capsule_hits`) — the port's climb
+/// tick runs no grab scan (the game's `Player_CollLadder` 0x196118 excludes substates 1/2), so the
+/// narrow arm's remaining role is documentation + the unit pins of the switch's own geometry.
 pub const WALK_PICK_RADIUS: f32 = 0.275;
 /// `BL+0x908` on land.
 pub const EYE: f32 = 0.7;
@@ -387,6 +389,18 @@ pub struct Bond {
     /// the walk yaw/pitch on the first zero-g tick, dropped on leaving the substates). Field on
     /// its own line (merge lesson 4).
     pub zero_g_active: bool,
+    /// The post-integration, pre-push-out position — the game's hittest build point [M
+    /// `Player_Collision` 0x194df0 builds BLData+0x760 from obj+0x30 AFTER `Player_Update`'s
+    /// integration 0x193600:284-295 (:361); the refine runs on it in the collision pass
+    /// (`Collide_Update` 0x1ea398 from `control_movement_object_handler` 0x1336f8:238), and the
+    /// +0x750 push-out lands on obj+0x30 only inside `Player_CollisionHandler` 0x1949a8:136-140,
+    /// right before the hit dispatch]. The ladder grab's pick tests THIS spot: `Player_CollLadder`
+    /// 0x196118 runs no distance test — the grab rides the hit's EXISTENCE, decided by the refine
+    /// on the pre-push-out segment. A free-standing ladder's own collision triangles hold the
+    /// pushed-out body at exactly RADIUS (0.55) — that spot sits ON the strict refine boundary [M
+    /// Intersect_CylGeom 0x109da0:447 `dist < radius`] and never grabs, while the game's pre-push
+    /// segment (the tick's inward move included) does. Field on its own line (merge lesson 4).
+    pub pre_collide: V3,
 }
 
 impl Bond {
@@ -399,6 +413,7 @@ impl Bond {
             icon_ctx: 0xff,
             cel: None,
             prev_pos: pos,
+            pre_collide: pos,
             creep: None,
             world_gravity: [0.0, -9.8, 0.0],
             zero_g_rot: [[0.0; 3]; 3],
@@ -610,23 +625,35 @@ impl Bond {
         // (both underwater and dry: the underwater path jumps past the gravity straight into this
         // switch [M disasm 0x194f4c-0x194f70: `cel+0x90 > obj+0x34` → `bc1fl 0x195070`]). The
         // underwater ladder softlock (750a): the swim grab ran the CROUCH arm here, whose LOW spine
-        // (A = −0.385) misses rungs the game's default arm reaches. The WALK grab keeps the shipped
-        // 0.275 arm (the walk-on reach fix-ladder-water2 pinned through playtests) — the arm-mapping
-        // question for the walk substate is a documented divergence, not changed here.
-        let swim = self.substate == SS_SWIM;
+        // (A = −0.385) misses rungs the game's default arm reaches.
+        //
+        // ladder-0c: the WALK arm is the DEFAULT arm, pinned by the switch's own jump table [M
+        // Player_Collision 0x194df0 second switch @0x195070: the index is substate−1 (`lhu 0xf6($s3)`,
+        // `addiu −1`, `sltiu $v1, $a0, 0xf` bounds, the table @0x2fc0d0) — walk 0 → −1 → 0xffffffff
+        // fails the unsigned bounds → the default arm @0x1953f4 (r +0x7CC = 0x3f0ccccd = 0.55, A =
+        // up·0.275 = 0x3e8ccccd, B = up·(0.55 − cc)); only the substates 1 (climb) and 7 (creep) take
+        // the narrow 0.275 arm (@0x1950a0). fix-ladder-water2's "case 0/6 = substate 0 (walk)" mapped
+        // the switch on the raw substate — the table maps case 0 → substate 1. The 0.275 arm left the
+        // 0700000c yard ladder #164 unclimbable: Bond's walk capsule stops him 0.4985 from its rung
+        // plane (the silo wall sits ~0.05 behind the plane [D probes]) and 0.4985 > 0.275 never
+        // touches — the game's 0.55 arm does (0.4985 < 0.55), and the dismount escape still clears:
+        // the dismount hop −0.05 [M Player_Climb 0x196310:88-96, consumed the same tick by the
+        // integration Player_Update 0x193600:284-295] puts the stander 0.55 out, the refine's strict
+        // `dist < radius` [M Intersect_CylGeom 0x109da0:447] rejects the exact touch, and the swim
+        // escape's drift (0.5 + 0.05 + 0.2 > 0.55) still clears.
         for (i, lad) in ctx.ladders.iter().enumerate() {
-            let hit = if swim {
-                // The swim substate 3 rides the switch's DEFAULT arm [M 0x195070 default].
-                lad.capsule_hits_default(self.pos, RADIUS, self.cc)
-            } else if self.crouched {
+            // The pick runs on the PRE-push-out spot [M — see the `pre_collide` field doc]: the
+            // game's grab rides the hit existence from the hittest built at the integrated
+            // position, before the handler's push-out.
+            let pick = self.pre_collide;
+            let hit = if self.crouched {
                 // The crouched walk is the game's substate 4 (the port folds the crouch into
                 // substate 0 + the flag) — the switch's case 3, the LOW arm [M 0x194df0 case 3].
-                lad.capsule_hits_crouch(self.pos, RADIUS, self.cc)
-            } else if self.substate == SS_WALK {
-                // [S] the shipped walk pick (fix-ladder-water2's 0.275 walk-on reach) — see above.
-                lad.capsule_hits(self.pos, WALK_PICK_RADIUS, self.cc)
+                lad.capsule_hits_crouch(pick, RADIUS, self.cc)
             } else {
-                lad.capsule_hits_default(self.pos, RADIUS, self.cc)
+                // The walk 0, the swim 3 and every other grab-eligible substate ride the switch's
+                // DEFAULT arm [M 0x1953f4 via the jump table @0x2fc0d0].
+                lad.capsule_hits_default(pick, RADIUS, self.cc)
             };
             if !hit { continue; }
             let diff = wrap_pi(lad.yaw - self.yaw); // Vec_AngleDifference(player, ladder) [M 0x1e2b78]
@@ -1503,6 +1530,10 @@ self.local = [vs / k, vf / k];
             _ => 1.0,
         };
         self.head_bump = push[1] < -1e-4;
+        // The pre-push-out snapshot: the game's ladder-grab pick sees the segment built HERE (the
+        // hittest from the integrated obj+0x30 [M 0x194df0:361]; the +0x750 push lands in the
+        // handler 0x1949a8:136-140, after the refine) — see the `pre_collide` field doc.
+        self.pre_collide = self.pos;
         for k in 0..3 { self.pos[k] += push[k]; }
         self.grounded_history = (self.grounded_history >> 1) | if self.grounded { 8 } else { 0 };
         // Fall damage: ticks falling with no ground for 4 ticks; on landing, over 60 → (timer − 60) if ≥ 10.
