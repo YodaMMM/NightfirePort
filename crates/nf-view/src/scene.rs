@@ -371,6 +371,8 @@ pub struct Sim {
     /// Online combat (700v6): each human slot's health, and the ticks since its death (0 = alive).
     pub mp_hp: [f32; 4],
     pub mp_dead_ticks: [u32; 4],
+    /// Each human slot's held weapon (the session's `Input::held`; the local slot reads `gun.weapon`).
+    pub mp_held: [u8; 4],
     /// Aim mode's cursor (`BL+0x118 / +0x11C`) and its smoothed copy (`+0x120 / +0x124`), −1…1 across half the screen.
     pub cursor: [f32; 2],
     pub cross: [f32; 2],
@@ -4948,6 +4950,8 @@ pub struct Scene {
     pub view_models: HashMap<u8, usize>,
     /// The MP bodies: (player slot, character index) — see `Scene::build`'s MP-body block.
     pub mp_bodies: Vec<(usize, usize)>,
+    /// The MP bodies' weapon attachments: attachment index → (slot, weapon id).
+    pub mp_body_weapons: HashMap<u32, (usize, u8)>,
     /// The snow flake texture (`DrawDrops`: 0x03000045).
     pub snow_texture: Option<TextureImage>,
     /// Streamed effects: `STREAMS.LUT` entries and `STREAMS.BIN` (set by the loader).
@@ -5926,6 +5930,7 @@ impl Scene {
         // player slot with the slot's `MP_skins` body [M Player_Init 0x1910f8:111], parked at the origin
         // and posed each frame from the slot's movement (`Scene::mp_body_state`).
         let mut mp_bodies: Vec<(usize, usize)> = Vec::new();
+        let mut mp_body_weapons: HashMap<u32, (usize, u8)> = HashMap::new();
         if let Some(d) = drones {
             let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
             let placement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
@@ -5950,6 +5955,21 @@ impl Scene {
                 }
                 characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones, start: None, role: drone::SpawnRole::Placed, floor: None, script: None, morph_targets: morph });
                 mp_bodies.push((slot, ci as usize));
+                // The held weapon (`AnimObjectDraw`): weapon_data[w]+0x80 on the datum +0x50 names, as a
+                // guard holds his (the drone block above) — one attachment per weapon the level carries,
+                // shown only while the slot holds it (`mp_body_weapons`).
+                if let Some(wd) = d.weapons.as_ref() {
+                    for w in 1u8..0x73 {
+                        let Some((mesh, datum_id)) = wd.third_person(w) else { continue };
+                        let datum_id = if datum_id == 0xff { 0 } else { datum_id as u32 };
+                        let Some(dt) = skin.datums.iter().find(|x| x.id == datum_id && x.bone >= 0) else { continue };
+                        let Some(&(map, object)) = level.by_hash.get(&mesh) else { continue };
+                        let winst = Instance { map, object, matrix: ident, placement: placement.clone() };
+                        add_instance(level, &winst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        mp_body_weapons.insert(attachments.len() as u32, (slot, w));
+                        attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+                    }
+                }
             }
             if d.mp_body_skins.iter().any(|&s| s != 0) {
                 eprintln!("mp: bodies {:?} (slot, character) from skins {:x?}", mp_bodies, d.mp_body_skins);
@@ -6977,6 +6997,7 @@ impl Scene {
             net_rng_shared: None,
             mp_hp: [100.0; 4],
             mp_dead_ticks: [0; 4],
+            mp_held: [2; 4],
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
@@ -7022,7 +7043,7 @@ impl Scene {
         // bbox-face FindCel approximation (documented deviation; every live load path builds sim).
         if sim.is_none() { build_chains(&mut cel_graph, None); }
         crate::phase_mark("b10 collider index + final assembly", t);
-        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
+        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -7527,6 +7548,10 @@ impl Scene {
                         m[3],
                     ]
                 }).unwrap_or(far);
+            }
+            // An MP body's weapon draws only while its slot holds that weapon.
+            if let Some(&(slot, w)) = self.mp_body_weapons.get(&(k as u32)) {
+                if self.sim.as_ref().is_none_or(|s| s.mp_held[slot] != w) { return far; }
             }
             if a.dropped {
                 // fix-objects: `!p.gone` — a TAKEN drop stays in the list as a tombstone (drone.rs
@@ -8656,7 +8681,7 @@ impl Sim {
         let s = self;
         let m = s.mp.as_ref()?;
         if slot < 4 {
-            if slot == s.mp_local_slot { return None; }
+            if slot == s.mp_local_slot || s.mp_dead_ticks[slot] > 0 { return None; }
             let b = s.mp_bonds[slot].as_ref()?;
             Some((b.pos, b.yaw, s.mp_body_speed[slot]))
         } else {
@@ -8678,6 +8703,7 @@ impl Sim {
         let body = |s: &Sim, slot: usize| -> Option<nf_game::player::Bond> {
             if slot == local { Some(s.bond.clone()) } else { s.mp_bonds[slot].clone() }
         };
+        for s in 0..4 { self.mp_held[s] = if s == local { self.gun.weapon } else { inputs[s].held }; }
         // 1. The shots, in slot order (the bodies as they stand this tick).
         for shooter in 0..4 {
             let inp = &inputs[shooter];
