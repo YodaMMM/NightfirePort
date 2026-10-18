@@ -97,14 +97,18 @@ fn the_slit_float_carries_bond_west_without_a_fall() {
     }
 }
 
-/// The full chain (the game's completion): the deck → the zero-G slit crossing → the island →
-/// the Drake arena → ch 0x0a → Drake → the defeat NIS → ch 0x0b + ch 100 → MissionState 6.
-/// BLOCKED at the zero-G entry: the port has no C_CHCHZEROG 0x216388 handler — the zone script's
-/// 0x4b event never flips Bond to substate 9, the float stalls at (4.98, −1.62, 0.00) (the
-/// island's east face), and the island/arena legs never happen. Un-ignore when the 0x4b →
-/// ChangeSubState(9) path lands (see docs/reports/level-1b-complete.md).
+/// The full chain (the game's completion): the deck → the slit float → ch 0x0a → Drake spawns
+/// (spawner #187 answers the gate from the pit's edge — the arena floor is never needed;
+/// probe1b_drake.rs) → the defeat through the real fire path → the defeat NIS → ch 0x0b +
+/// ch 100 → MissionState 6 → 0x0730001b. BLOCKED at the fight exposure: Drake spawns and is
+/// enabled, but NO aim sphere is exposed from any walk-reachable spot — the root-to-root LOS is
+/// clear, yet everything above his root crosses the island slab's east face (the +0.4 line hits
+/// at t 0.32, probe1b_drake.rs), and the fight's own activation (NIS 0x060008f0's chain, or the
+/// arena's materialization) is not understood yet. The zero-G ENTRY (C_CHCHZEROG 0x216388 →
+/// substate 9) also stays unported — the float runs in the walk substate and stalls at
+/// (4.98, −1.62, 0.00).
 #[test]
-#[ignore = "the walk's reached blocker — the zero-G entry (C_CHCHZEROG 0x216388 → substate 9) is unported; the float stalls at (4.98,-1.62,0.00)"]
+#[ignore = "the walk's reached blocker — Drake is spawned+enabled but no aim sphere is exposed from any walk-reachable spot (the island slab's shadow); the fight activation chain is the missing piece"]
 fn walk_arrival_to_drakes_defeat() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
@@ -117,26 +121,23 @@ fn walk_arrival_to_drakes_defeat() {
         assert_eq!(sim.drones.mission.states[23][1], 1, "'Defeat Drake' hides until ch 0x09 [L record 1b obj 2]");
     }
 
-    // The mapped deck route, then the slit float (legs 1-2 above).
-    for wp in [[20.0f32, -1.9, 1.0], [17.0, -1.9, -1.0], [13.0, -1.9, -1.0], [10.0, -1.9, -1.0], [8.6, -1.9, -0.6]] {
-        let _ = w.try_walk_to(walker::Wp::new(wp[0], wp[1], wp[2]).r(1.2), "the deck west");
+    // The mapped deck route to the SOUTH-WEST firing corner. The slit at z≈0 is NOT entered —
+    // the float zone is a one-way grab (the walker cannot walk back out) and the slit line to
+    // Drake is island-blocked; from the SW corner (x 12, z −6.5) the LOS to Drake's hover
+    // (−7.32, −1.42, 0.06) passes south of the island (x 1-3, z −2..1).
+    for wp in [[20.0f32, -1.9, 1.0], [17.0, -1.9, -1.0], [14.0, -1.9, -4.0], [12.0, -1.9, -6.5]] {
+        let _ = w.try_walk_to(walker::Wp::new(wp[0], wp[1], wp[2]).r(1.3), "the deck south-west");
     }
-    // THE BLOCKER: the zero-G entry. In the game the slit zone script fires 0x4b and
-    // C_CHCHZEROG 0x216388 sets substate 9 [M]; the port stalls here (the float wedges at the
-    // island's east face). The rest of the chain below is the game's route, kept for the un-ignore.
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert_eq!(sim.bond.substate, SS_ZEROG_9,
-            "the slit zone puts Bond in the zero-G substate [M 0x216388:10-17]");
+        let p = sim.bond.pos;
+        assert!(p[0] < 16.0 && p[2] < -3.0 && p[1] > -3.5, "Bond reached the deck's south-west ({p:?})");
     }
-    for wp in [[3.0f32, -1.7, 0.0], [1.5, -1.7, 0.0], [-2.0, -1.7, 0.0], [-6.0, -1.6, 0.0], [-7.0, -1.5, 0.1]] {
-        let _ = w.try_walk_to(walker::Wp::new(wp[0], wp[1], wp[2]).r(1.2), "the zero-G crossing");
-    }
-    w.walk_to(walker::Wp::new(-7.0, -1.5, 0.1).r(1.2), "the arena floor");
 
     // The fight gate: ch 0x0a (0x060008f0 t104 [D]) — the documented drive of the channel the
     // missile choreography's chain writes (docs/levels/0700001b.md §6; fix_finale drives it the
-    // same way). Drake spawns (spawner #187, trigger 10 [D]) and his wait-switch enables him.
+    // same way). Drake spawns INSTANTLY from the pit's edge (spawner #187, trigger 10 [D];
+    // probe1b_drake.rs) and his wait-switch enables him — the arena floor is never stood on.
     let drake = {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.drones.channels.set(0x0a, 1, sim.drones.frame);
@@ -153,31 +154,46 @@ fn walk_arrival_to_drakes_defeat() {
         assert!(w.scene.sim.as_ref().unwrap().drones.list[i].enabled, "the gate enables Drake (wait-switch 10 [D])");
         i
     };
+    // The spawn is pinned (the 720a "does not spawn" gap is refuted — probe1b_drake.rs); the
+    // defeat leg below needs the fight-exposure fix.
+    let _ = drake;
+    panic!("the fight-exposure blocker: no aim sphere is exposed from the SW corner (see the doc comment)");
+}
 
-    // The defeat through the REAL fire path: aim + tap the trigger until he dies (walker.shoot —
-    // the gun, the bullets, the hit boxes).
-    assert!(w.shoot(drake, "Drake"), "Drake dies to Bond's fire");
-
-    // Death_Anim's msg-2 raises ch 0x0e on its first update [M 0x1637f8 case 2]; the defeat NIS
-    // (SP #198 → 0x06000a20) follows. It must PLAY OUT (skip_cutscenes off): t600 writes ch 0x0b,
-    // t720 ch 100 [D decode; Script_EventHandler 0x1d94c0 case 0x11].
-    w.skip_cutscenes = false;
-    let mut complete = false;
-    for _ in 0..2400u32 {
+/// The spawn pin (green): with ch 0x0a driven from the WALKED deck route, spawner #187 produces
+/// Drake instantly, enabled, at his placement (−7.32, −1.42, 0.06) — the 720a "Drake does not
+/// spawn in the port" gap is refuted (their Bond had fallen into the pit; the spawner answers
+/// from the deck's edge).
+#[test]
+fn the_fight_gate_spawns_drake_from_the_deck() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    w.wait_enabled(3000, "the shuttle arrival");
+    for wp in [[20.0f32, -1.9, 1.0], [17.0, -1.9, -1.0], [14.0, -1.9, -4.0], [12.0, -1.9, -6.5]] {
+        let _ = w.try_walk_to(walker::Wp::new(wp[0], wp[1], wp[2]).r(1.3), "the deck south-west");
+    }
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.drones.channels.set(0x0a, 1, sim.drones.frame);
+    }
+    let mut found = None;
+    for _ in 0..900u32 {
         w.tick(Default::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
-        if sim.drones.mission.status() == 6 { complete = true; break; }
+        if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0xba) {
+            found = Some(i);
+            break;
+        }
     }
-    w.skip_cutscenes = true;
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x0e), "Drake's death channel fires ch 0x0e [D param 12 = 14]");
-        assert!(sim.drones.channels.on(0x0b), "the NIS's t600 event-11 writes ch 0x0b [D]");
-        assert!(sim.drones.channels.on(100), "the NIS's t720 event-11 writes ch 0x64 = 100 [D]");
-        assert!(complete, "the station mission completes (MissionState 6 [M 0x182c60])");
-        assert_eq!(sim.drones.mission.to_end, 0x0730_001b, "the station's own end code [M 0x182c60:114-116]");
-    }
+    let i = found.expect("the gate spawns Drake (spawner #187 [D])");
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = &sim.drones.list[i];
+    assert!(d.enabled, "the gate enables Drake (wait-switch 10 [D])");
+    assert!((d.pos[0] - (-7.32)).abs() < 1.5 && (d.pos[2] - 0.06).abs() < 1.5,
+        "Drake stands at his placement ({:?})", d.pos);
+    assert!(!sim.drones.channels.on(0x0e), "Drake is alive (ch 0x0e not yet fired [D param 12 = 14])");
 }
+
 
 /// Sister walk: the mapped east-deck leg never enters a scripted zero-G set piece — Bond's
 /// substate stays a ground substate the whole way (the station's zero-G is script-driven,
