@@ -6155,6 +6155,24 @@ impl Scene {
                 }
             }
         }
+        // rain-drops: `DrawDrops` 0x18cb90 for DropType 1 [M disasm] — every live drop draws the
+        // rain-streak MESH 0x02000290 with an identity rotation translated to the drop (Mat_Identity,
+        // row 3 = DropVector, psiDrawObjectMatrix), and on 07000009..0700000b a second pass draws
+        // 0x02000039 per drop with the viewer's rotation (Mat_CopyRot viewer+0x1A0) under
+        // psiSetTweakARGB(36, 32, 32, 32). Effect kinds 7 / 8, one slot per drop (the rain cap is
+        // 0x80 on 09-0b, 0x40 elsewhere — 128 slots cover both [M InitDrops]).
+        if drones.is_some() {
+            for (kind, mesh) in [(7u8, 0x0200_0290u32)] {
+                let Some(&(m, o)) = level.by_hash.get(&mesh) else { continue };
+                let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
+                let rplacement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
+                for slot in 0..RAIN_SLOTS {
+                    let rinst = Instance { map: m, object: o, matrix: ident, placement: rplacement.clone() };
+                    add_instance(level, &rinst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    attachments.push(Attachment { character: 0, bone: 0, local: rinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((kind, slot, mesh)), silencer: false, quiver_bolt: None });
+                }
+            }
+        }
         // fix-satchel-tripbomb: the satchel's countdown digits — the 0x3b tail of `Bullet_DoTrails`
         // (0x12d890:485-553) spawns two kind-0x40 objects every tick, gfx `SatchelDigits[sec/10]` and
         // `SatchelDigits[sec%10]` [L SatchelDigits @0x2bed90 = 0x2000791..0x200079a], linked to the
@@ -7262,6 +7280,23 @@ impl Scene {
                     // The DroneScan bracket: at the candidate's root (`obj+0x30` [M 0x1a12d8:53]), no rotation
                     // (control_create_object's null angles) — its glist flag 8 makes `View_DrawObjectGlist` 0x1e6780
                     // billboard it (the viewer's rotation), scale 1.
+                    7 | 8 => match s.drones.env.as_ref().filter(|e| e.kind == 1) {
+                        // rain-drops: the live drop at this slot [M DrawDrops 0x18cb90: DropState == 1].
+                        Some(e) if e.alive.get(slot).copied().unwrap_or(false) => {
+                            // The second pass is level-gated: GameState+12 − 0x07000009 < 3 [M].
+                            if kind == 8 && !matches!(s.level.wrapping_sub(0x0700_0009), 0..=2) { return far; }
+                            let p = e.drops[slot];
+                            let mut m = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [p[0], p[1], p[2], 1.0]];
+                            if kind == 8 {
+                                // Mat_CopyRot(viewer+0x1A0): the camera's rotation — right / up / forward rows.
+                                let (r, u) = (opts.right, opts.up);
+                                let f = [r[1] * u[2] - r[2] * u[1], r[2] * u[0] - r[0] * u[2], r[0] * u[1] - r[1] * u[0]];
+                                m[0] = [r[0], r[1], r[2], 0.0]; m[1] = [u[0], u[1], u[2], 0.0]; m[2] = [f[0], f[1], f[2], 0.0];
+                            }
+                            m
+                        }
+                        _ => far,
+                    },
                     6 => match crate::hud::camera_scan_roots(s).get(slot) {
                         Some(p) => {
                             let (r, u) = (opts.right, opts.up);
@@ -8536,3 +8571,5 @@ mod tests {
     }
 }
 
+/// rain-drops: the per-level rain-mesh slots (`InitDrops`' rain cap: 0x80 on 07000009-0b, 0x40 elsewhere).
+pub const RAIN_SLOTS: usize = 128;
