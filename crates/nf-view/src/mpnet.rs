@@ -218,6 +218,26 @@ pub enum CoreEvent {
     HostTimeout,
     /// Client: the host refused the join.
     Refused,
+    /// mp-join-in-progress. Host: a HELLO arrived after GO; the run-log
+    /// transfer to that peer began (the match runs on untouched).
+    LateJoinStarted { slot: u8 },
+    /// mp-join-in-progress. The late joiner's log transfer completed: the app
+    /// loads the level from `settings` (the WELCOME's handover), replays
+    /// `log` headless (ticks `0..=snapshot_tick` —
+    /// `crate::mp_late_join_catchup`), and MUST produce `snapshot_hash` at
+    /// `snapshot_tick` — then `NetCore::confirm_late_join` (or
+    /// `late_join_verify_failed` on a mismatch).
+    LateJoinHandover {
+        slot: u8,
+        settings: Box<MpSettings>,
+        snapshot_tick: u32,
+        snapshot_hash: u64,
+        log: Vec<[nf_net::Input; 4]>,
+    },
+    /// mp-join-in-progress. All machines: `slot` becomes human from
+    /// `join_tick` — the app spawns its agent there (`Sim::mp_join_spawn`)
+    /// and the joiner adopts the slot as its own view.
+    LateJoinSlot { slot: u8, join_tick: u32 },
 }
 
 /// The shared session state: one per match/lobby. See the module docs.
@@ -342,6 +362,22 @@ impl NetCore {
                     self.refused = true;
                     self.events.push(CoreEvent::Refused);
                 }
+                Event::LateJoinStarted { slot, .. } => {
+                    self.events.push(CoreEvent::LateJoinStarted { slot });
+                }
+                Event::LateJoinHandover { slot, seed, settings, first_tick: _, snapshot_tick, snapshot_hash, log } => {
+                    let s = match_to_mp(&settings, seed);
+                    self.events.push(CoreEvent::LateJoinHandover {
+                        slot,
+                        settings: Box::new(s),
+                        snapshot_tick,
+                        snapshot_hash,
+                        log,
+                    });
+                }
+                Event::LateJoinSlot { slot, join_tick } => {
+                    self.events.push(CoreEvent::LateJoinSlot { slot, join_tick });
+                }
                 Event::ClientJoined { slot, .. } => {
                     self.events.push(CoreEvent::AgentJoined { slot });
                 }
@@ -380,7 +416,8 @@ impl NetCore {
                     }
                 }
                 Event::Listening | Event::Connected { .. } | Event::SlotMapChanged { .. }
-                | Event::Stalled { .. } | Event::Resumed { .. } | Event::MatchEnded { .. } => {}
+                | Event::Stalled { .. } | Event::Resumed { .. } | Event::MatchEnded { .. }
+                | Event::ClientJoined { .. } | Event::MatchStarted { .. } => {}
             }
         }
     }
@@ -459,6 +496,27 @@ impl NetCore {
 
     pub fn submit_hash(&mut self, tick: u32, hash: u64) {
         self.sess.submit_hash(tick, hash);
+    }
+
+    /// Host: record the per-tick inputs a tick ran with (the late-join
+    /// transcript; the app calls it right after `ready_inputs` returned
+    /// `Some`). Host-only — clients ignore it.
+    pub fn record_run_tick(&mut self, tick: u32, inputs: [nf_net::Input; 4]) {
+        self.sess.record_run_tick(tick, inputs);
+    }
+
+    /// Late joiner: the replay verified — the host picks the join tick and
+    /// every machine arms the slot at it (JOIN_SLOT →
+    /// [`CoreEvent::LateJoinSlot`]).
+    pub fn confirm_late_join(&mut self) {
+        self.sess.confirm_late_join();
+    }
+
+    /// Late joiner: the replay hash disagreed with the host's snapshot —
+    /// leave with the explicit reason (the host reports
+    /// `ClientLeft { JoinVerifyFailed }`; the match never sees this joiner).
+    pub fn late_join_verify_failed(&mut self) {
+        self.sess.leave_with(nf_net::LeaveReason::JoinVerifyFailed);
     }
 
     pub fn local_slot(&self) -> usize {
