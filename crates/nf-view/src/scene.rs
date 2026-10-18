@@ -7138,11 +7138,29 @@ impl Scene {
             if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
                 let s = self.sim.as_ref()?;
                 let (pos, yaw, speed) = s.mp_body_state(slot)?;
+                // The PLAYER anim set the game's MP body runs [M PlayerAnimSetInitNormal 0x18fcd8: in MP
+                // the set is chosen by the held weapon's class byte weapon_data[w]+0x84; D the tables
+                // below, ACTION.ELF 0x2b9200..0x2b93e0, 10 script hashes each]. The slot pick by speed
+                // is a stand-in until `AnimSetUpdate` 0x1c0938's blend is ported (700v7): slot 0 stand,
+                // slot 4 forward [S].
+                const SETS: [(u8, [u32; 10]); 7] = [
+                    (3, [0x60001d4, 0x60001db, 0x60001d9, 0, 0x600097c, 0x600097c, 0x600097d, 0x600097d, 0, 0]),
+                    (1, [0x60009dc, 0x60009de, 0x60009db, 0, 0x60009d7, 0x60009d7, 0x60009d8, 0x60009d8, 0, 0]),
+                    (5, [0x60001e6, 0x60001e7, 0x60001e5, 0, 0x60009df, 0x60009df, 0x60009e0, 0x60009e0, 0, 0]),
+                    (4, [0x60001ce, 0x60001cf, 0x60001cd, 0, 0x60009fc, 0x60009fc, 0x60009fd, 0x60009fd, 0, 0]),
+                    (6, [0x60009fe, 0x60009b5, 0x60009b7, 0, 0x60009ba, 0x60009ba, 0x60009bb, 0x60009bb, 0, 0]),
+                    (2, [0x60009b0, 0x60009b2, 0x60009af, 0, 0x60009b3, 0x60009b3, 0x60009b4, 0x60009b4, 0, 0]),
+                    (0, [0x60001f1, 0x60001f2, 0x60001f0, 0, 0x60009e4, 0x60009e4, 0x60009e5, 0x60009e5, 0, 0]),
+                ];
+                let held = s.mp_held.get(slot).copied().unwrap_or(2);
+                let class = s.weapons.records.get(held as usize).map_or(0, |r| r[0x84]);
+                let set = SETS.iter().find(|(c, _)| *c == class).map_or(&SETS[6].1, |(_, t)| t);
+                let pick = if speed < 0.5 { set[0] } else { set[4] };
+                let player_script = Some(pick).filter(|h| s.scripts.contains_key(h));
                 let st = if speed < 0.5 { nf_game::drone::anim_state::STAND_IDLE } else if speed < 4.5 { nf_game::drone::anim_state::WALK } else { nf_game::drone::anim_state::RUN };
                 let danim = s.tables.danim_for_state(st, 0);
-                // The set: the first of the 27 drone anim sets that carries this danim whose script the
-                // level loaded (set 0 is empty for some rows) [S stand-in, see above].
-                let script = danim.filter(|&d| d >= 0).and_then(|d| (0..27u16).filter_map(|set| s.tables.script_for(d as u16, set)).find(|h| s.scripts.contains_key(h)));
+                // Fallback when the arena lacks the player script: the drone set [S].
+                let script = player_script.or_else(|| danim.filter(|&d| d >= 0).and_then(|d| (0..27u16).filter_map(|set| s.tables.script_for(d as u16, set)).find(|h| s.scripts.contains_key(h))));
                 if std::env::var_os("NF_MPBODY_DBG").is_some() && s.drones.frame % 60 == 0 {
                     eprintln!("[mpbody] slot {slot} pos {pos:?} yaw {yaw:.2} speed {speed:.2} state {st:#x} danim {danim:?} script {script:x?} has {}", script.is_some_and(|h| s.scripts.contains_key(&h)));
                 }
@@ -8797,7 +8815,14 @@ impl Sim {
             self.mp_hp[slot] = hp;
             self.mp_dead_ticks[slot] = 0;
             eprintln!("[mp] slot {slot} respawned at spawn {sp_idx} (frame {})", self.drones.frame);
-            if slot == local { self.drones.death = nf_game::death::Death::default(); }
+            if slot == local {
+                self.drones.death = nf_game::death::Death::default();
+                // The respawn re-arms the player (`MP_ReSpawn` 0x185368 re-inits the player's weapon
+                // state; the death sequence had switched him to the fists 0x47 [M 0x190810:61]) — the
+                // match's start loadout: the P2K drawn, as at the load.
+                self.gun = nf_game::gun::Gun::new(2, 7, 41);
+                self.drones.bond_weapon = 2;
+            }
         }
         // 3. This machine's own health is the slot's (the HUD, the death sequence's start).
         self.drones.health.health = self.mp_hp[local];
