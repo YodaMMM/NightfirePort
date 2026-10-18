@@ -256,6 +256,10 @@ pub const PAGE_MP_HOST: u32 = 0x5000_0002;
 pub const PAGE_MP_NETJOIN: u32 = 0x5000_0003;
 /// The client's lobby: the host's choices mirrored read-only until the match starts [S §2.2].
 pub const PAGE_MP_LOBBY: u32 = 0x5000_0004;
+/// mp-lobby-one-screen: the ONE-screen online lobby (both roles; docs/systems/net-online-lobby.md
+/// §6) — a spare id next to the §2 block so the game's 0x4000_00xx and the older port-only ids
+/// stay untouched [S].
+pub const PAGE_MP_ONLINE_LOBBY: u32 = 0x5000_0005;
 
 /// The GameState stack machine's fields [M addresses in the doc comment].
 #[derive(Clone, Debug, Default)]
@@ -637,7 +641,7 @@ pub fn aux_movie_for(page_id: u32) -> u32 {
         | PAGE_MP_CONFIRM | PAGE_MP_DEBRIEFING => 0x0735_0048,
         // The port-only online pages (net-online-lobby) sit between Main and the MP Join page, so they
         // take the same list backdrop as their MP neighbours [S: no game record exists for them].
-        PAGE_MP_MODE | PAGE_MP_HOST | PAGE_MP_NETJOIN => 0x0735_0048,
+        PAGE_MP_MODE | PAGE_MP_HOST | PAGE_MP_NETJOIN | PAGE_MP_ONLINE_LOBBY => 0x0735_0048,
         _ => 0,
     }
 }
@@ -715,7 +719,9 @@ pub enum Page { Start, Main, Codename, Difficulty, MissionSelect, Dossier, Recor
     // mp-menu-flow: the multiplayer front end (page ids in the PAGE_MP_* constants below).
     MpJoin, MpScenario, MpMap, MpSetup, MpOptions, MpRules, MpPlayerMods, MpEnviroMods, MpBots, MpBotChoose, MpBotSetup, MpConfirm, MpDebriefing,
     // net-online-lobby: the port-only online pages (ids in the PAGE_MP_* constants below).
-    MpMode, MpHost, MpNetJoin, MpLobby, Credits,
+    MpMode, MpHost, MpNetJoin, MpLobby,
+    // mp-lobby-one-screen: the ONE-screen online lobby (both roles).
+    MpOnlineLobby, Credits,
     // fe-audit: the intro run's pages (ids in PAGE_INTRO / PAGE_PARISENUM / PAGE_ESTHERO).
     Intro, ParisEnum, EstHero,
     // unlock-popups: the post-results pages (ids in PAGE_NF_BONUS / PAGE_WIN_GAME / PAGE_CHEAT_MEDAL).
@@ -739,6 +745,7 @@ impl Page {
             Page::MpConfirm => PAGE_MP_CONFIRM, Page::MpDebriefing => PAGE_MP_DEBRIEFING,
             Page::MpMode => PAGE_MP_MODE, Page::MpHost => PAGE_MP_HOST,
             Page::MpNetJoin => PAGE_MP_NETJOIN, Page::MpLobby => PAGE_MP_LOBBY,
+            Page::MpOnlineLobby => PAGE_MP_ONLINE_LOBBY,
             Page::Credits => crate::credits::PAGE_CREDITS,
             Page::Intro => PAGE_INTRO, Page::ParisEnum => PAGE_PARISENUM, Page::EstHero => PAGE_ESTHERO,
             Page::NfBonus => PAGE_NF_BONUS, Page::WinGame => PAGE_WIN_GAME, Page::CheatMedal => PAGE_CHEAT_MEDAL,
@@ -761,6 +768,7 @@ impl Page {
             PAGE_MP_CONFIRM => Page::MpConfirm, PAGE_MP_DEBRIEFING => Page::MpDebriefing,
             PAGE_MP_MODE => Page::MpMode, PAGE_MP_HOST => Page::MpHost,
             PAGE_MP_NETJOIN => Page::MpNetJoin, PAGE_MP_LOBBY => Page::MpLobby,
+            PAGE_MP_ONLINE_LOBBY => Page::MpOnlineLobby,
             crate::credits::PAGE_CREDITS => Page::Credits,
             PAGE_INTRO => Page::Intro, PAGE_PARISENUM => Page::ParisEnum, PAGE_ESTHERO => Page::EstHero,
             PAGE_NF_BONUS => Page::NfBonus, PAGE_WIN_GAME => Page::WinGame, PAGE_CHEAT_MEDAL => Page::CheatMedal,
@@ -1384,6 +1392,19 @@ pub trait MpSession {
     fn match_started(&self) -> Option<nf_game::mp::MpSettings>;
     /// Tell the session this machine's lobby codename.
     fn set_codename(&mut self, name: &str);
+    /// This machine's lobby slot, host-relative: 0 = the host, 1..3 = the clients
+    /// [mp-lobby-one-screen; the lobby model's own-row edits carry it]. Default 0 (the host).
+    fn local_slot(&self) -> usize { 0 }
+    /// mp-lobby-one-screen: the host's last published one-screen lobby snapshot (the client
+    /// reads it; None until one arrives) [S docs/systems/net-online-lobby.md §6.4].
+    fn lobby_state(&self) -> Option<nf_net::LobbyState> { None }
+    /// mp-lobby-one-screen: the host pushes the whole snapshot on change (the publish-diff
+    /// pattern the choices tunnel already rides) [S §6.4].
+    fn publish_lobby(&mut self, _s: &nf_net::LobbyState) {}
+    /// mp-lobby-one-screen: a client pushes one own-row edit to the host [S §6.4].
+    fn push_row_edit(&mut self, _e: &nf_net::LobbyEdit) {}
+    /// mp-lobby-one-screen: the host drains one arrived client edit (None when none) [S §6.4].
+    fn take_row_edit(&mut self) -> Option<nf_net::LobbyEdit> { None }
     /// Close cleanly (Back / cancel / the match handover's end).
     fn close(&mut self);
     /// net-p2p: the internet reachability lines for the online pages (None: not probing — the
@@ -2125,6 +2146,14 @@ pub struct FrontEnd {
     pub mp_lobby_choices: Option<MpNetChoices>,
     /// The host's last published choices — the publish diff rides on it [S §2.1].
     pub mp_host_published: Option<MpNetChoices>,
+    /// mp-lobby-one-screen: the ONE-screen online lobby's model (each field on its own line
+    /// [WORKLOG lesson 4]; docs/systems/net-online-lobby.md §6). Present on every front end;
+    /// only the online path reads it.
+    pub mp_one: crate::mp_lobby::MpLobby,
+    /// The host's last published lobby snapshot — the publish diff rides on it [S §6.4].
+    pub mp_one_published: Option<nf_net::LobbyState>,
+    /// The client's last sent own-row edits (character, team, ready) — the push diff [S §6.4].
+    pub mp_one_sent: Option<(u32, u32, u32)>,
 
     // ── attract-mode (each new field on its own line [WORKLOG lesson 4]) ──
     /// The attract sequence is up — the game's attract page 0x40000035 opened over the opener
@@ -2374,6 +2403,13 @@ impl FrontEnd {
             mp_net_error: None,
             mp_net_timeout: 0,
             mp_session: None,
+            // mp-lobby-one-screen: the couch boot words [M the same defaults above; the map
+            // starts on MP_MAP_ROWS row 0 — the boot +0x1A8 = 0 is "no map", which the one
+            // screen cannot sit on [S]].
+            mp_one: crate::mp_lobby::MpLobby::new_host(1, 0x0700_0024, 0, 1, 0, 10, 10, [0, 1], [2, 0, 0, 0, 0],
+                std::array::from_fn(MpBot::fresh), "Player 1", false, 0),
+            mp_one_published: None,
+            mp_one_sent: None,
             mp_lobby_choices: None,
             mp_host_published: None,
             // attract-mode (each new field on its own line [WORKLOG lesson 4]).
@@ -2585,6 +2621,8 @@ impl FrontEnd {
             Page::MpHost => 2,
             Page::MpNetJoin => 1,
             Page::MpLobby => 1,
+            // mp-lobby-one-screen: the one screen's row count (the model's own) [S §6.3].
+            Page::MpOnlineLobby => self.mp_one.row_count(),
             Page::MpScenario => MP_SCENARIO_ROWS.len(),
             Page::MpMap => MP_MAP_ROWS.len(),
             // The setup page drives agent 1's single pick row (the game's per-agent lists live on
@@ -2682,6 +2720,7 @@ impl FrontEnd {
             Page::MpHost => ["Port", "Start Listening"][row.min(1)].into(),
             Page::MpNetJoin => String::new(),   // the address row draws its own text (mp_net_addr)
             Page::MpLobby => String::new(),     // the mirror draws through mp_lobby_lines
+            Page::MpOnlineLobby => String::new(), // the one screen draws through mp_lobby_rows [S §6.3]
             Page::MpScenario => {
                 let r = row.min(MP_SCENARIO_ROWS.len() - 1);
                 if self.mp_scenario_locked(r) { bind(MP_LOCKED_SCENARIO_DESC) } else { bind(MP_SCENARIO_ROWS[r].1) }
@@ -4373,7 +4412,9 @@ impl FrontEnd {
         // grid cursor; elsewhere they keep the old Back / Confirm meaning. The MP wheels
         // (scenario/map/options/bots) keep the remap.
         let a = match (a, matches!(self.page, Page::CnAdvanced | Page::CnMp | Page::CnAv | Page::CnName
-            | Page::MpJoin | Page::MpHost | Page::MpSetup | Page::MpRules | Page::MpPlayerMods | Page::MpEnviroMods | Page::MpBotSetup | Page::ScreenAdjust | Page::Pause)) {
+            | Page::MpJoin | Page::MpHost | Page::MpSetup | Page::MpRules | Page::MpPlayerMods | Page::MpEnviroMods | Page::MpBotSetup | Page::ScreenAdjust | Page::Pause
+            // mp-lobby-one-screen: the one screen's ◀ ▶ step values like the MP value pages [S §6.2].
+            | Page::MpOnlineLobby)) {
             (Action::Left, false) => Action::Back,
             (Action::Right, false) => Action::Confirm,
             (a, _) => a,
@@ -5509,6 +5550,26 @@ impl FrontEnd {
                     _ => {}
                 }
             }
+            // mp-lobby-one-screen: the ONE-screen online lobby [S docs/systems/net-online-lobby.md
+            // §6 — the model owns the navigation; the front end owns Start's handover].
+            Page::MpOnlineLobby => {
+                match a {
+                    Action::Back => {
+                        // Back cancels cleanly: the session closes, the model resets, the mode
+                        // page [S §6.2 — the §2 pages' Back contract].
+                        self.mp_net_cancel();
+                        self.enter_page(Page::MpMode);
+                        self.cursor = 0;
+                        return true;
+                    }
+                    Action::Confirm => {
+                        let on_start = self.mp_one.focused_row().map_or(false, |(id, _)| id == crate::mp_lobby::MpLobbyRowId::Start);
+                        if on_start { return self.mp_lobby_start(); }
+                        return self.mp_one.apply(a);
+                    }
+                    _ => return self.mp_one.apply(a),
+                }
+            }
             // The match summary [M P_MPCONFIRM 0x20ec00: the enter builds the lines, Confirm
             // starts the match].
             Page::MpConfirm => {
@@ -5886,7 +5947,17 @@ impl FrontEnd {
     /// on success the page becomes the confirm page; on failure the error-box label lands in
     /// mp_error (the game pops Menu_CreateOptionBox with it).
     pub fn mp_start_checks(&mut self) -> bool {
-        self.mp_error = 0;
+        self.mp_error = self.mp_start_check_error();
+        if self.mp_error != 0 { return false; }
+        self.mp_confirm_from = Page::MpOptions;
+        self.enter_page(Page::MpConfirm);
+        self.cursor = 0;
+        true
+    }
+
+    /// The same checks as a pure gate for the one-screen lobby's Start [M 0x20e818:50-130 —
+    /// mp-lobby-one-screen; 0 = pass, else the error-box label].
+    pub fn mp_start_check_error(&self) -> u32 {
         let humans = self.mp_join.iter().filter(|a| a.joined).count();
         let bots = self.mp_bots.iter().filter(|b| b.enabled).count();
         let team = self.mp_scenario & 0x2000_0000 != 0;
@@ -5894,21 +5965,18 @@ impl FrontEnd {
             // FFA: the game refuses more than one "good" (MI6-side) player [M the uVar1 > 1 arm,
             // Txt 0x1000311; the decomp's counting is thin — the string settles the intent].
             let good = self.mp_join.iter().filter(|a| a.joined && a.team == 1).count();
-            if good > 1 { self.mp_error = 0x0100_0311; return false; }
+            if good > 1 { return 0x0100_0311; }
         } else {
             // Team: both sides need someone [M the 0x389 arm with 0x1c7/0x1c8].
             let blue = self.mp_join.iter().filter(|a| a.joined && a.team == 1).count()
                 + self.mp_bots.iter().filter(|b| b.enabled && b.team_mi6).count();
             let red = self.mp_join.iter().filter(|a| a.joined && a.team == 0).count()
                 + self.mp_bots.iter().filter(|b| b.enabled && !b.team_mi6).count();
-            if blue == 0 || red == 0 { self.mp_error = 0x389; return false; }
+            if blue == 0 || red == 0 { return 0x389; }
         }
         // At least two players overall [M the 0x39e arm].
-        if humans + bots < 2 { self.mp_error = 0x39e; return false; }
-        self.mp_confirm_from = Page::MpOptions;
-        self.enter_page(Page::MpConfirm);
-        self.cursor = 0;
-        true
+        if humans + bots < 2 { return 0x39e; }
+        0
     }
 
     /// The Quick Game row: the fixed quick-start config then straight to the confirm page [M
@@ -6405,7 +6473,16 @@ impl FrontEnd {
                     state: 5, joined: true, ready: true, team: 0, skin: 0,
                     codename_row: 0, codename: codename.clone(),
                 };
-                self.page = Page::MpJoin;
+                // mp-lobby-one-screen: the online path lands on the ONE screen with the front
+                // end's current words (the boot defaults at this point) [S §6.1].
+                self.mp_one = crate::mp_lobby::MpLobby::new_host(
+                    self.mp_scenario, if self.mp_level != 0 { self.mp_level } else { 0x0700_0024 },
+                    self.mp_weapon_set, self.mp_radar, self.mp_friendly_fire,
+                    self.mp_frag_limit, self.mp_time_limit, self.mp_player_mods, self.mp_envmods,
+                    self.mp_bots, &codename, self.unlock_all, self.mp_bonus_mask);
+                self.mp_one_published = None;
+                self.mp_one_sent = None;
+                self.page = Page::MpOnlineLobby;
                 self.cursor = 0;
                 true
             }
@@ -6424,6 +6501,11 @@ impl FrontEnd {
         self.mp_lobby_choices = None;
         self.mp_host_published = None;
         self.mp_join = std::array::from_fn(|_| MpJoinAgent::default());
+        // mp-lobby-one-screen: the one screen resets with the session [S §6.2 — Back cancels].
+        self.mp_one.players = std::array::from_fn(|_| crate::mp_lobby::MpLobbyPlayer::default());
+        self.mp_one.focus = 0;
+        self.mp_one_published = None;
+        self.mp_one_sent = None;
     }
 
     /// Join: the Connect action [S §2.2]. A usable address (mp_net_addr_ok) starts the
@@ -6478,6 +6560,18 @@ impl FrontEnd {
                 self.mp_host_published = Some(c);
             }
             self.mp_net_mirror_agents();
+            // mp-lobby-one-screen: the agents land in the model's player rows first (an edit
+            // for an unjoined slot would drop), then the clients' own-row edits merge [S §6.4],
+            // then the whole snapshot publishes on the next tick when it changed.
+            self.mp_net_mirror_lobby_players();
+            while let Some(e) = self.mp_session.as_mut().unwrap().take_row_edit() {
+                self.mp_one.apply_edit(&e);
+            }
+            let st = self.mp_one.to_state();
+            if self.mp_one_published.as_ref() != Some(&st) {
+                self.mp_session.as_mut().unwrap().publish_lobby(&st);
+                self.mp_one_published = Some(st);
+            }
         }
         match self.mp_net_state {
             MpNetState::Dialing => {
@@ -6487,7 +6581,11 @@ impl FrontEnd {
                 match link {
                     MpNetLink::Connected => {
                         self.mp_net_state = MpNetState::InLobby;
-                        self.page = Page::MpLobby;
+                        // mp-lobby-one-screen: the client lands on the same ONE screen; its
+                        // own row is its session slot (host-relative) [S §6.4].
+                        self.mp_one.own_slot = self.mp_session.as_ref().unwrap().local_slot();
+                        self.mp_one.host = false;
+                        self.page = Page::MpOnlineLobby;
                         self.cursor = 0;
                         // The mirror is current the moment the lobby opens (the next tick
                         // keeps it live in the InLobby arm below).
@@ -6519,6 +6617,19 @@ impl FrontEnd {
                 }
                 self.mp_net_mirror_agents();
                 self.mp_lobby_choices = self.mp_session.as_ref().unwrap().host_choices();
+                // mp-lobby-one-screen: the host's snapshot drives the one screen [S §6.4] and
+                // the own-row edits ride out when they changed.
+                if let Some(st) = self.mp_session.as_ref().unwrap().lobby_state() {
+                    self.mp_one.apply_state(&st);
+                    self.mp_one_published = Some(st);
+                }
+                let own = self.mp_one.own_row_words();
+                if self.mp_one_sent != Some(own) {
+                    for e in self.mp_one.own_row_edits() {
+                        self.mp_session.as_mut().unwrap().push_row_edit(&e);
+                    }
+                    self.mp_one_sent = Some(own);
+                }
                 // The match start: the same handover the host's confirm page runs [M
                 // mp_confirm_start's tail — P_MPCONFIRM 0x20ec00:53-94].
                 if let Some(s) = self.mp_session.as_ref().unwrap().match_started() {
@@ -6562,6 +6673,84 @@ impl FrontEnd {
                 None => { if self.mp_join[slot].joined { self.mp_join[slot] = MpJoinAgent::default(); } }
             }
         }
+    }
+
+    /// mp-lobby-one-screen: the session's agents mirrored into the model's host-relative
+    /// player rows [S §6.4 — slot 0 stays the host's own row; a gone agent un-joins].
+    fn mp_net_mirror_lobby_players(&mut self) {
+        let agents: Vec<MpNetAgent> = self.mp_session.as_ref().unwrap().agents();
+        for slot in 1..4usize {
+            match agents.iter().find(|a| a.slot == slot) {
+                Some(ag) => {
+                    let p = &mut self.mp_one.players[slot];
+                    if !p.joined || p.codename != ag.codename {
+                        *p = crate::mp_lobby::MpLobbyPlayer {
+                            codename: ag.codename.clone(),
+                            character: 0, team: 0,
+                            ready: ag.ready, joined: true, ping_ms: 0,
+                        };
+                    }
+                }
+                None => {
+                    let p = &mut self.mp_one.players[slot];
+                    if p.joined { *p = crate::mp_lobby::MpLobbyPlayer::default(); }
+                }
+            }
+        }
+    }
+
+    /// mp-lobby-one-screen: the host's Start [S §6.2]. The gate is the model's (every joined
+    /// human ready), then the game's own start checks [M C_SBMPOPTIONS 0x20e818:50-130], then
+    /// the couch confirm's build — the model's words copy into the front end's mp_* fields and
+    /// `mp_confirm_start` builds the MpSettings, so the struct is what the couch pages build
+    /// for the same choices by construction [M mp_confirm_start, P_MPCONFIRM 0x20ec00:53-94].
+    pub fn mp_lobby_start(&mut self) -> bool {
+        if !self.mp_one.start_enabled() { return false; }
+        // The model's words into the couch fields (the map row is never 0 — the boot 0 is
+        // "no map" and the lobby starts on MP_MAP_ROWS row 0 [S §6.1]).
+        self.mp_scenario = self.mp_one.scenario;
+        self.mp_level = self.mp_one.level;
+        self.mp_scenario_row = MP_SCENARIO_ROWS.iter().position(|r| r.3 == self.mp_one.scenario).unwrap_or(0);
+        self.mp_map_row = MP_MAP_ROWS.iter().position(|r| r.3 == self.mp_one.level).unwrap_or(0);
+        self.mp_weapon_set = self.mp_one.weapon_set;
+        self.mp_radar = self.mp_one.radar;
+        self.mp_friendly_fire = self.mp_one.friendly_fire;
+        self.mp_frag_limit = self.mp_one.frag_limit;
+        self.mp_time_limit = self.mp_one.time_limit;
+        self.mp_player_mods = self.mp_one.player_mods;
+        self.mp_envmods = self.mp_one.envmods;
+        self.mp_bots = self.mp_one.bots;
+        for (i, p) in self.mp_one.players.iter().enumerate().take(4) {
+            self.mp_join[i] = MpJoinAgent {
+                state: if p.joined { 5 } else { 0 },
+                joined: p.joined, ready: p.ready,
+                team: p.team, skin: p.character,
+                codename_row: 0, codename: p.codename.clone(),
+            };
+        }
+        // The game's own team/FFA/count gates [M C_SBMPOPTIONS 0x20e818:50-130] — the same
+        // checks the couch Options page's Continue runs, without the couch page change.
+        self.mp_error = self.mp_start_check_error();
+        if self.mp_error != 0 { return false; }
+        // The couch confirm's build + the session handover (mp_confirm_start rides mp_hosting).
+        self.mp_confirm_start()
+    }
+
+    /// The host's current one-screen rows for the draw code — None off the lobby page [S §6.3].
+    pub fn mp_lobby_rows(&mut self) -> Option<Vec<crate::mp_lobby::MpLobbyRow>> {
+        if self.page != Page::MpOnlineLobby { return None; }
+        Some(self.mp_one.rows())
+    }
+
+    /// The one screen's player rows — None off the lobby page [S §6.3].
+    pub fn mp_lobby_players(&self) -> Option<&[crate::mp_lobby::MpLobbyPlayer; 4]> {
+        if self.page != Page::MpOnlineLobby { return None; }
+        Some(&self.mp_one.players)
+    }
+
+    /// The Start gate for the draw code — false off the lobby page [S §6.3].
+    pub fn mp_lobby_start_enabled(&self) -> bool {
+        self.page == Page::MpOnlineLobby && self.mp_one.start_enabled()
     }
 
     /// The host's current lobby choices as the publishable struct [S §3 — the words the mirror
@@ -6635,6 +6824,11 @@ impl FrontEnd {
                 _ => err,
             },
             Page::MpLobby => if self.mp_lobby_choices.is_none() { Some("Waiting for the host...") } else { None },
+            // mp-lobby-one-screen: the same waiting note on the one screen until the first
+            // snapshot lands [S §6.2 — port-only page, the port's own string].
+            Page::MpOnlineLobby => {
+                if !self.mp_hosting && self.mp_one_published.is_none() { Some("Waiting for the host...") } else { None }
+            }
             _ => None,
         }
     }
@@ -7000,6 +7194,9 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         // Not drawn yet: the per-agent setup step (PCSX2 m52-m54 — the Join Game panels with Choose Team / Choose
         // Character / Health Handicap) and the Start summary (m65).
         Page::MpSetup | Page::MpConfirm => {}
+        Page::MpOnlineLobby => {}
+        // mp-lobby-one-screen: the one screen's drawing is the main agent's [S §6 — the getters
+        // are mp_lobby_rows / mp_lobby_players / mp_lobby_start_enabled].
         // The debriefing [L the menu-def page 0x40000033 (mp-debriefing.md §4): header (50,40,376×17)
         // 0x151; the column titles (120×16) x=52 at y 183/217/250/284/318 = Agent/Points/Victories/
         // Deaths/TOTAL; the four slot panels x 176/280/384/488 (the portrait 81×81 at y=102, the name

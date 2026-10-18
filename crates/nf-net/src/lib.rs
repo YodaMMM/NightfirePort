@@ -26,6 +26,7 @@
 
 pub mod hash;
 pub mod input;
+pub mod lobby;
 pub mod net;
 pub mod p2p;
 pub mod discovery;
@@ -37,6 +38,7 @@ pub mod shim;
 
 pub use hash::Hasher;
 pub use input::{Input, NEUTRAL};
+pub use lobby::{LobbyBot, LobbyEdit, LobbyPlayer, LobbyState};
 pub use net::UdpTransport;
 pub use session::{AgentInfo, Config, DropPolicy, Event, LeaveReason, RefuseReason, Session, SessionError};
 pub use settings::MatchSettings;
