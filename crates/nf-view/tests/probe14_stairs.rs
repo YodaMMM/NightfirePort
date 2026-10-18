@@ -139,3 +139,57 @@ fn probe_duct_floor_hole() {
     }
     eprintln!("legend: . = duct floor slab, H = opening (under-floor seen), # = raised");
 }
+
+#[test]
+fn probe_east_floor_hole() {
+    let iso = iso();
+    let mut scene = nf_view::load(&iso, "07000014.bin", false).unwrap();
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    let mut z = 67.0f32;
+    while z >= 56.5 {
+        let mut row = String::new();
+        let mut x = 44.5f32;
+        while x <= 46.2 {
+            let hit = sim.world.segment([x, 2.6, z], [x, -0.5, z]);
+            match hit {
+                None => row.push('?'),
+                Some(t) => {
+                    let y = 2.6 - 3.1 * t;
+                    row.push(if y < 1.9 { 'H' } else if y < 2.45 { '.' } else { '#' });
+                }
+            }
+            x += 0.2;
+        }
+        eprintln!("z {z:5.2} {row}");
+        z -= 0.25;
+    }
+    eprintln!("legend: . = duct floor slab (~2.4), H = opening (floor below 1.9), # = raised, ? = no hit");
+}
+
+#[test]
+fn probe_ledge_climb() {
+    let iso = iso();
+    let mut scene = nf_view::load(&iso, "07000014.bin", false).unwrap();
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+        sim.bond.pos = [40.8, 1.4, 56.27];
+        sim.bond.crouched = true;
+        let mut traj = Vec::new();
+        for t in 0..420 {
+            // Face east, push forward — try to climb the trench's side ledge into the middle void.
+            let inp = Input { forward: 1.0, turn: if t < 30 { 0.05 } else { 0.0 }, ..Default::default() };
+            sim.step_bond(inp, false, false, false);
+            if t % 40 == 0 { traj.push(sim.bond.pos); }
+        }
+        traj.push(sim.bond.pos);
+        let pts: Vec<String> = traj.iter().map(|p| format!("({:.2},{:.2},{:.2})", p[0], p[1], p[2])).collect();
+        eprintln!("ledge climb east: {}", pts.join(" "));
+        let p = scene.sim.as_ref().unwrap().bond.pos;
+        eprintln!("final: ({:.2},{:.2},{:.2}) grounded {}", p[0], p[1], p[2], scene.sim.as_ref().unwrap().bond.grounded);
+    }
+}
