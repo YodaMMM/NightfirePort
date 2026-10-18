@@ -8274,6 +8274,9 @@ pub struct Drones {
     /// pop deep — each new pop overwrites it; cleared nowhere (the probe is read-after-pop by
     /// tests; the flash state itself decays independently).
     pub flash_probe: Option<FlashProbe>,
+    /// The 07000041 wrapper-end countdown (ticks since the approach chain's ch 1 rose): the port's
+    /// [S] stand-in for the wrapper's end into 0x0700001b — see the tick_inner arm for the evidence.
+    pub wrapper_end_timer: Option<u32>,
 }
 
 /// `NDrone2_DefaultInit` (0x14b300): the voice set `+0xD8` from the character id (skin 0x05000000 + id).
@@ -8431,6 +8434,7 @@ impl Drones {
             driving_return: None,
             // frag-throw-timing2: the stun flash's recorded geometry (own line — merge lesson 4).
             flash_probe: None,
+            wrapper_end_timer: None,
             // mayhew-end-transition: no hold at build (own line — merge lesson 4).
             exit_hold: None,
     };
@@ -10448,6 +10452,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let prof_pre = crate::prof::scope("drones: shared passes");
         self.frame += 1;
         self.player_pos = player.pos;
+        // The 07000041 wrapper end ([S] unverified — the port's flow for the task's known open
+        // item "it must play through into 0700001b"): with the approach chain fired (ch 1, the
+        // scripted-drone plate #99's out [D PL#99]) the wrapper's approach sequence runs; once it
+        // has run the chain's longest script (0x06000027, 241 ticks [D the nis dump]) the level
+        // ends into the space station 0x0700001b — the hand-off the game itself models as the
+        // 0x7100018 briefing special case [M ResetMap_Load 0x1d6360:99-102]. 07000041.bin carries
+        // no exit placement of its own [D the placement scan: no 0xE8 LOAD_LEVEL; no ch-100
+        // writer in the 7 scripts [D the nis decode]], so the timer is the port's stand-in.
+        if d.level == 0x0700_0041 && self.level_exit.is_none() {
+            if self.channels.on(1) {
+                let t = self.wrapper_end_timer.unwrap_or(0) + 1;
+                if t >= 241 { self.level_exit = Some(0x0700_001b); }
+                self.wrapper_end_timer = Some(t);
+            } else {
+                self.wrapper_end_timer = None;
+            }
+        }
         // The route-node → door binding (`NDrone_InitDoorNodes` 0x139a70), on the first tick: every
         // door-flagged node binds the nearest door (the scan takes its first candidate
         // unconditionally, so effectively the nearest overall); a node with no door never binds.
