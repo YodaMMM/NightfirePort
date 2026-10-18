@@ -224,3 +224,167 @@ fn probe_objects_at_stuck_spots() {
         }
     }
 }
+
+/// The security-room door route probe (716c blocker 1): dump the doors near the west end, walk
+/// to the security-room door #355, E it, cross into the room, walk to the panel, E it. Run with
+/// --ignored --nocapture.
+#[test]
+#[ignore = "assertion-free probe; run with --ignored --nocapture"]
+fn probe_door355_route_to_panel() {
+    let iso = std::env::var("NF_ISO").expect("NF_ISO");
+    let mut w = Walker::new(nf_view::load(&iso, "07000013.bin", false).expect("load 07000013"));
+    w.wait_enabled(3000, "the intro");
+    w.wait(30);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for (i, d) in sim.drones.doors.list.iter().enumerate() {
+            if d.pos[0] < -5.0 && d.pos[2] < 45.0 {
+                eprintln!("[door] door[{i}] pos ({:.2},{:.2},{:.2}) kind {} state {:#x} ch_open {:#x} ch_lock {:#x} locked {} approach {}",
+                    d.pos[0], d.pos[1], d.pos[2], d.kind, d.state, d.ch_open, d.ch_lock, d.locked_flag, d.approach);
+            }
+        }
+    }
+    // The east lane opener, then the west side to the door area (x −10.6 is the glass band's
+    // east edge; the door sits in it).
+    let legs = [
+        (5.0, -368.4, 26.5),
+        (-6.0, -368.4, 40.0),
+        (-6.0, -368.4, 30.0),
+        (-8.6, -368.4, 30.5), // approach the glass band's east edge from the lobby
+    ];
+    for (i, (x, y, z)) in legs.iter().enumerate() {
+        let r = w.try_walk_to(Wp::new(*x, *y, *z).r(1.2), &format!("door route leg {i} ({x},{z})"));
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[door] leg {i} ok {r}: pos ({:.2},{:.2},{:.2}) cel {:?} grounded {}",
+            sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.cel, sim.bond.grounded);
+        if sim.bond.pos[1] < -380.0 { eprintln!("[door] FELL — stop"); return; }
+    }
+    // Find the nearest west door and E it.
+    let (di, dpos) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let mut best: Option<(usize, [f32; 3])> = None;
+        for (i, d) in sim.drones.doors.list.iter().enumerate() {
+            if d.pos[0] < -5.0 && d.pos[2] < 45.0 {
+                let dd = walker::dxz(d.pos, sim.bond.pos);
+                if best.map_or(true, |(_, p)| dd < walker::dxz(p, sim.bond.pos)) { best = Some((i, d.pos)); }
+            }
+        }
+        best.map(|(i, p)| (i, [p[0], p[1], p[2]])).expect("a west door")
+    };
+    eprintln!("[door] pressing E at door {di} ({:.2},{:.2},{:.2})", dpos[0], dpos[1], dpos[2]);
+    let _ = w.walk_to(Wp::at(dpos[0], dpos[1], dpos[2], walker::Act::Use { use_ticks: 90 }).r(1.6), "door355 E");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let d = &sim.drones.doors.list[di];
+        eprintln!("[door] after E: state {:#x} pos01 {:.2}", d.state, d.pos01);
+    }
+    // Through the door into the room, then south-west to the panel.
+    let legs2 = [
+        (-11.5, -368.4, 31.0), // through the doorway
+        (-14.0, -368.4, 29.0),
+        (-17.0, -368.4, 26.5), // inside the room, at the panel
+    ];
+    for (i, (x, y, z)) in legs2.iter().enumerate() {
+        let r = w.try_walk_to(Wp::new(*x, *y, *z).r(1.2), &format!("room leg {i} ({x},{z})"));
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[door] room leg {i} ok {r}: pos ({:.2},{:.2},{:.2}) cel {:?} grounded {}",
+            sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.cel, sim.bond.grounded);
+        if sim.bond.pos[1] < -380.0 { eprintln!("[door] FELL — stop"); return; }
+    }
+    let mut ch23 = false;
+    for t in 0..150 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let desired = (-18.08f32 - sim.bond.pos[0]).atan2(25.01 - sim.bond.pos[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), ..Default::default() };
+        w.tick(input, t % 6 == 0);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x23) { ch23 = true; break; }
+    }
+    eprintln!("[door] panel E → ch23 {ch23}");
+    if ch23 {
+        for _ in 0..400 { w.tick(nf_game::player::Input::default(), false); }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let y = sim.drones.sss.list.iter().find(|s| s.channel == 0x23).map(|s| s.matrix[3][1]).unwrap_or(0.0);
+        eprintln!("[door] gate SS y {y:.2} (rise expected > 3)");
+    }
+}
+
+/// The north-west door route probe (716c): door[1] at (−26.65, −368.36, 37.44) is the unlocked
+/// E-openable door at portal 1 (21↔28). Route: the lobby's west side north of the glass band →
+/// the door → into the security room → south to the panel → E. Run with --ignored --nocapture.
+#[test]
+#[ignore = "assertion-free probe; run with --ignored --nocapture"]
+fn probe_northwest_door_route_to_panel() {
+    let iso = std::env::var("NF_ISO").expect("NF_ISO");
+    let mut w = Walker::new(nf_view::load(&iso, "07000013.bin", false).expect("load 07000013"));
+    w.wait_enabled(3000, "the intro");
+    w.wait(30);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for (i, d) in sim.drones.doors.list.iter().enumerate() {
+            eprintln!("[nw] door[{i}] pos ({:.2},{:.2},{:.2}) kind {} state {:#x} ch_open {:#x} ch_lock {:#x} locked {}",
+                d.pos[0], d.pos[1], d.pos[2], d.kind, d.state, d.ch_open, d.ch_lock, d.locked_flag);
+        }
+    }
+    let legs = [
+        (5.0, -368.4, 26.5),
+        (-6.0, -368.4, 40.0),
+        (-14.0, -368.4, 40.0),
+        (-22.0, -368.4, 39.5),
+        (-25.6, -368.4, 38.6),
+    ];
+    for (i, (x, y, z)) in legs.iter().enumerate() {
+        let r = w.try_walk_to(Wp::new(*x, *y, *z).r(1.2), &format!("nw leg {i} ({x},{z})"));
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[nw] leg {i} ok {r}: pos ({:.2},{:.2},{:.2}) cel {:?} grounded {}",
+            sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.cel, sim.bond.grounded);
+        if sim.bond.pos[1] < -380.0 { eprintln!("[nw] FELL — stop"); return; }
+    }
+    // E the door (portal 1).
+    let dpos = [-26.65f32, -368.36, 37.44];
+    let _ = w.walk_to(Wp::at(dpos[0], dpos[1], dpos[2], walker::Act::Use { use_ticks: 120 }).r(1.4), "nw door E");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if let Some(d) = sim.drones.doors.list.iter().find(|d| walker::dxz(d.pos, dpos) < 2.0) {
+            eprintln!("[nw] door after E: state {:#x} pos01 {:.2}", d.state, d.pos01);
+        }
+    }
+    // Into the room, south to the panel. Wait for the sliding door to finish first.
+    w.wait(120);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if let Some(d) = sim.drones.doors.list.iter().find(|d| walker::dxz(d.pos, dpos) < 2.0) {
+            eprintln!("[nw] door after the wait: state {:#x} pos01 {:.2}", d.state, d.pos01);
+        }
+    }
+    let legs2 = [
+        (-27.0, -368.4, 37.0),
+        (-27.0, -368.4, 35.0),
+        (-25.5, -368.4, 32.5),
+        (-22.0, -368.4, 29.0),
+        (-18.5, -368.4, 26.2),
+    ];
+    for (i, (x, y, z)) in legs2.iter().enumerate() {
+        let r = w.try_walk_to(Wp::new(*x, *y, *z).r(1.1), &format!("room leg {i} ({x},{z})"));
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[nw] room leg {i} ok {r}: pos ({:.2},{:.2},{:.2}) cel {:?} grounded {}",
+            sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.cel, sim.bond.grounded);
+        if sim.bond.pos[1] < -380.0 { eprintln!("[nw] FELL — stop"); return; }
+    }
+    let mut ch23 = false;
+    for t in 0..150 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let desired = (-18.08f32 - sim.bond.pos[0]).atan2(25.01 - sim.bond.pos[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), ..Default::default() };
+        w.tick(input, t % 6 == 0);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x23) { ch23 = true; break; }
+    }
+    eprintln!("[nw] panel E → ch23 {ch23}");
+    if ch23 {
+        for _ in 0..400 { w.tick(nf_game::player::Input::default(), false); }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let y = sim.drones.sss.list.iter().find(|s| s.channel == 0x23).map(|s| s.matrix[3][1]).unwrap_or(0.0);
+        eprintln!("[nw] gate SS y {y:.2} (rise expected > 3)");
+    }
+}
