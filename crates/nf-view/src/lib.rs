@@ -2050,6 +2050,9 @@ struct App {
     /// mp-join-in-progress: this machine is the late joiner of that slot, still ticking the
     /// replayed slot-0 view until the announced join tick.
     net_late_self: Option<usize>,
+    /// Online rematch: how this machine got into the running match — (hosted, its port / the
+    /// address it dialed) — handed to the debriefing so Continue returns to the online lobby.
+    net_rejoin: Option<(bool, String)>,
     /// The online match's wall clock (set when its level swaps in): the lockstep runs to
     /// `elapsed · 60` ticks, catching up after a stall instead of dropping the stalled ticks.
     net_clock: Option<std::time::Instant>,
@@ -2146,11 +2149,6 @@ pub fn wheel_steps_zoom(zoom_held: bool, weapon_flags: u32, weapon_zoom: f32) ->
 }
 
 impl App {
-    /// One menu action from the keyboard or the mouse (PC mouse support, 2026-10-15): the movie skip, the pause page's
-    /// Back = resume, the page's own handling, then the level request / close the page asked for.
-    /// Test aid (NF_MENU_SCRIPT="ms:step,ms:step,..."): timed menu presses for the two-window MP
-    /// checks, no desktop input. A step is up/down/left/right/confirm/back/side/extra, shot (the F12
-    /// capture) or type=TEXT (the join page's typing); ms counts from the first frame.
     /// net-consolidate: an online match starting adopts the lobby's session as the lockstep
     /// gate. `has_match` is exact: match_start is Some only after the host's arm / the client's
     /// tunnel payload, and a cancelled lobby's core is closed. Called after a menu action AND
@@ -2161,6 +2159,9 @@ impl App {
         let adopt = self.net_lobby.as_ref().map_or(false, |p| p.has_match() && !p.core_is_closed());
         if adopt && self.net.is_none() {
             if let Some(p) = self.net_lobby.take() {
+                if let Some(fe) = self.fe.as_ref() {
+                    self.net_rejoin = Some(if fe.mp_hosting { (true, fe.mp_net_port.to_string()) } else { (false, fe.mp_net_addr.trim().to_string()) });
+                }
                 self.net_local_slot = p.0.borrow().local_slot();
                 self.net_tick = 0;
                 self.net = Some(p);
@@ -2171,17 +2172,30 @@ impl App {
         }
     }
 
+    /// Test aid (NF_MENU_SCRIPT="ms:step,ms:step,..."): menu presses for the two-window MP checks,
+    /// no desktop input. Each `ms` is the delay after the PREVIOUS step (the first counts from the
+    /// first frame). Steps: up/down/left/right/confirm/back/side/extra (`down*30` repeats), shot
+    /// (the F12 capture), type=TEXT (the join page's typing), page=Name (wait until that page is up
+    /// and no load runs — `page=None` is "in a level, no menu"), sleep (nothing). A wait holds the
+    /// script, so a slow boot or load never lands presses on the wrong page.
     fn menu_script_tick(&mut self) {
         use std::sync::atomic::Ordering::Relaxed;
-        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        static LAST: std::sync::OnceLock<std::sync::Mutex<std::time::Instant>> = std::sync::OnceLock::new();
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let Ok(spec) = std::env::var("NF_MENU_SCRIPT") else { return };
-        let ms = START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64;
+        let last = LAST.get_or_init(|| std::sync::Mutex::new(std::time::Instant::now()));
         let steps: Vec<(u64, &str)> = spec.split(',').filter_map(|s| s.split_once(':')).filter_map(|(a, b)| Some((a.trim().parse().ok()?, b.trim()))).collect();
-        while let Some(&(at, step)) = steps.get(NEXT.load(Relaxed)) {
-            if ms < at { break; }
+        while let Some(&(delay, step)) = steps.get(NEXT.load(Relaxed)) {
+            let since = last.lock().map(|l| l.elapsed().as_millis() as u64).unwrap_or(0);
+            if since < delay { break; }
+            if let Some(want) = step.strip_prefix("page=") {
+                let now = format!("{:?}", self.fe.as_ref().map(|f| f.page)).replace("Some(", "").replace(')', "");
+                if now != want || self.async_load.is_some() || self.pending_level.is_some() { break; }
+            } else if self.async_load.is_some() {
+                break; // no menu input while a level load runs
+            }
             NEXT.fetch_add(1, Relaxed);
-            if self.async_load.is_some() { eprintln!("[menu-script] {at} {step}: skipped (loading)"); continue; }
+            if let Ok(mut l) = last.lock() { *l = std::time::Instant::now(); }
             use menu::Action as MA;
             // "down*30" repeats a press.
             let (step, times) = match step.split_once('*') { Some((s, n)) => (s, n.parse().unwrap_or(1)), None => (step, 1usize) };
@@ -2192,10 +2206,12 @@ impl App {
             else if let Some(text) = step.strip_prefix("type=") {
                 if let Some(fe) = self.fe.as_mut() { for c in text.chars() { fe.mp_net_type(c); } }
             }
-            eprintln!("[menu-script] {at} {step} -> page {:?}", self.fe.as_ref().map(|f| f.page));
+            eprintln!("[menu-script] +{delay} {step} -> page {:?} net_tick {}", self.fe.as_ref().map(|f| f.page), self.net_tick);
         }
     }
 
+    /// One menu action from the keyboard or the mouse (PC mouse support, 2026-10-15): the movie skip, the pause page's
+    /// Back = resume, the page's own handling, then the level request / close the page asked for.
     fn menu_input(&mut self, a: menu::Action) {
         if self.fe.is_none() { return; }
         use menu::Action as MA;
@@ -2396,6 +2412,7 @@ impl App {
         self.net_lobby = None;
         self.net_local_slot = 0;
         self.net_tick = 0;
+        self.net_rejoin = Some((true, port.to_string()));
         Ok(())
     }
 
@@ -2410,6 +2427,7 @@ impl App {
         self.net_lobby = None;
         self.net_local_slot = 0; // corrected when the WELCOME lands
         self.net_tick = 0;
+        self.net_rejoin = Some((false, addr.trim().to_string()));
         Ok(())
     }
 
@@ -2767,6 +2785,17 @@ impl App {
         // already holds the match's choices (the game's manager-side restore is the same data).
         fe.restore_mp_match(&settings);
         fe.show_mp_debriefing(board);
+        // Online: the finished match's session closes (the next match is a fresh lobby on the
+        // same port/address — the debriefing's Continue re-listens / re-dials).
+        if self.net.is_some() {
+            if let Some(se) = self.net.as_mut() { se.0.borrow_mut().close(); }
+            self.net = None;
+            self.net_lobby = None;
+            self.net_menu_load = false;
+            self.net_late_self = None;
+            self.net_join_pending = None;
+            fe.mp_online_rejoin = self.net_rejoin.take();
+        }
         // The level request + the fade, the game's order [M 0x184bd0:64-78]: the front-end map
         // load pushes first, the fade state lands on top. The sim (the arena) freezes: the tick
         // loop runs only while `fe.is_none()` — the game's GS_PausePlayer per slot.
@@ -4845,7 +4874,7 @@ pub fn run() -> Result<()> {
     let mut app = App { sound, scene, cam, gfx: None, keys: HashSet::new(), grabbed: false, trigger: false, aiming: false, last: std::time::Instant::now(), choice, anim_time: time, paused: false, opts, noclip: false, just: HashSet::new(), turn: 0.0, look: 0.0, weapon_cycle: 0, gadget_cycle: 0, weapon_switch_to: None, zoom: false, dev: dev.then(|| Box::new(dev::Dev { infinite_ammo: true, ..Default::default() })), notex, nofog, iso, pending_level: None, pending_weapon_assets: None, entry_save: None, all, recorder: None, replay: None, replay_idx: 0, prev_lock_ch: false, ticked: false, frame_ticks: 0, menu_clock: 0.0, fe_clock: 0.0, selected_difficulty: 2, zoom_cycle: 0, pending_mission_end: false, pending_mp_debrief: None, force_channel, cam_prev: None, cam_cur: None, pal_prev: None, pal_cur: None, pal_blend: Vec::new(), pal_moving: Vec::new(), fps_cap, fps_meter: FpsMeter::default(), frame_start: std::time::Instant::now(), panel: None, panel_level: 0, panel_frames: 0, fe: None, level_code: 0, fe_music_page: None, menu_handle: 0, lang: None, profile_session: menu::ProfileSession::default(), #[cfg(feature = "gamepad")] pad: pad_backend,
         movie: None, devwin: None,
         audio_paused: false, loading_art: None, loading_hint: Default::default(), menu_pointer: None,
-        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_menu_load: false, net_late_self: None, net_clock: None, net_shot_pending: false, net_armed: None,
+        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_menu_load: false, net_late_self: None, net_rejoin: None, net_clock: None, net_shot_pending: false, net_armed: None,
         net_join_pending: None, net_late_handover: None,
         async_load: None,
         music_bank_flip: false,

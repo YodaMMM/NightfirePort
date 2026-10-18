@@ -2139,6 +2139,12 @@ pub struct FrontEnd {
     pub mp_net_error: Option<MpNetError>,
     /// The Dialing countdown in menu ticks; 0 → TimedOut [S §2.2 — MP_NET_TIMEOUT_TICKS = 10 s].
     pub mp_net_timeout: u32,
+    /// Online rematch: the finished online match's way back (the app sets it when the debriefing
+    /// opens): (this machine hosted, the host's port / the address it dialed).
+    pub mp_online_rejoin: Option<(bool, String)>,
+    /// The rejoin in progress after the debriefing's Continue: (host, port/address, tries left,
+    /// cooldown ticks) — the host re-listens, the client re-dials until the host is up [S].
+    pub mp_auto_rejoin: Option<(bool, String, u32, u32)>,
     /// The online session behind the flow — None = offline (the host wires 051's real session,
     /// the tests a fake) [S §3].
     pub mp_session: Option<Box<dyn MpSession>>,
@@ -2411,6 +2417,8 @@ impl FrontEnd {
             mp_net_state: MpNetState::Idle,
             mp_net_error: None,
             mp_net_timeout: 0,
+            mp_online_rejoin: None,
+            mp_auto_rejoin: None,
             mp_session: None,
             // mp-lobby-one-screen: the couch boot words [M the same defaults above; the map
             // starts on MP_MAP_ROWS row 0 — the boot +0x1A8 = 0 is "no map", which the one
@@ -5618,6 +5626,25 @@ impl FrontEnd {
             Page::MpDebriefing => {
                 // [M C_MPDBG 0x217860:9-10 → 0x44 0x4000001a; the page's 0x4c re-selects the row
                 // of MPSettings+0x1A4 (0x217348:25) — see enter_page.]
+                // Online: Continue (and Replay — the local re-request would run one machine's arena
+                // alone) goes back to the online lobby: the host re-listens on its port and the
+                // client re-dials it, then the host starts the next match [S port design].
+                if matches!(a, Action::Confirm | Action::Extra) {
+                    if let Some((host, target)) = self.mp_online_rejoin.take() {
+                        self.mp_net_state = MpNetState::Idle;
+                        self.mp_net_error = None;
+                        if host {
+                            if let Ok(port) = target.parse::<u32>() { self.mp_net_port = port; }
+                            self.page = Page::MpHost;
+                        } else {
+                            self.mp_net_addr = target.clone();
+                            self.page = Page::MpNetJoin;
+                        }
+                        self.cursor = 0;
+                        self.mp_auto_rejoin = Some((host, target, 40, 0));
+                        return true;
+                    }
+                }
                 if a == Action::Confirm { self.enter_page(Page::MpScenario); return true; }
                 if a == Action::Extra {
                     // C_MPDBG 0x217860:12-16: ResetMap_LevelToLoad(MPSettings+0x1A8) + the fade
@@ -6574,6 +6601,23 @@ impl FrontEnd {
     /// The fake (tests) and the real session (051) both ride this.
     pub fn mp_net_poll(&mut self) {
         if self.mp_session.is_none() { return; }
+        // Online rematch: the host re-listens / the client re-dials (retrying while the host's
+        // listen comes up) until the lobby is back.
+        if let Some((host, target, tries, cool)) = self.mp_auto_rejoin.clone() {
+            if self.page == Page::MpOnlineLobby || tries == 0 {
+                self.mp_auto_rejoin = None;
+            } else if cool > 0 {
+                self.mp_auto_rejoin = Some((host, target, tries, cool - 1));
+            } else if host && self.page == Page::MpHost {
+                let ok = self.mp_host_begin();
+                self.mp_auto_rejoin = if ok { None } else { Some((host, target, tries - 1, 60)) };
+            } else if !host && self.page == Page::MpNetJoin && self.mp_net_state != MpNetState::Dialing {
+                self.mp_net_addr = target.clone();
+                self.mp_net_error = None;
+                let _ = self.mp_net_dial();
+                self.mp_auto_rejoin = Some((host, target, tries - 1, 90));
+            }
+        }
         // net-lobby-list: the Join Online page lists the LAN's lobbies while nothing is dialing.
         let browsing = self.page == Page::MpNetJoin && self.mp_net_state != MpNetState::Dialing && !self.mp_hosting;
         self.mp_session.as_mut().unwrap().browse(browsing);
@@ -6808,7 +6852,13 @@ impl FrontEnd {
     /// The client's match handover — the host's confirm-page tail [M mp_confirm_start's
     /// handover] with the settings as the host published them [S §2.2]. Pub for the
     /// app-state-parity test (the arm's difficulty write is pinned there).
-    pub fn mp_client_start(&mut self, s: nf_game::mp::MpSettings) {
+    pub fn mp_client_start(&mut self, mut s: nf_game::mp::MpSettings) {
+        // The wire's settings carry no codenames: the lobby's player rows (the host's published
+        // names) fill them, so the client's HUD/debriefing name every human (the two-window
+        // rematch check showed blank names on the client only) [S].
+        for (i, p) in self.mp_one.players.iter().enumerate() {
+            if p.joined && i < s.players.len() && s.players[i].codename.is_empty() { s.players[i].codename = p.codename.clone(); }
+        }
         self.mp_match_settings = Some(s.clone());
         // app-state-parity: the host's confirm tail writes GameState+0x28 = 1 before the load
         // [M 0x20ec00:150]; the client's handover mirrors that tail, so the difficulty rides it

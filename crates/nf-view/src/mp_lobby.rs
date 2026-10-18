@@ -365,7 +365,10 @@ impl MpLobby {
                 // The character wheel over mp_characters; a locked character refuses [M
                 // C_SBMPBTCHOOSE 0x210f08:18-20] — the step skips it [S, the scenario mapping].
                 let b = &mut self.bots[i.min(3)];
-                if !b.enabled { return false; }
+                // ◀ ▶ on an Off bot switches it on with its current character (the row reads
+                // "< Off >": stepping it did nothing, so a bot could only be added by Confirm —
+                // the two-window check's bot never joined) [S].
+                if !b.enabled { b.enabled = true; return true; }
                 let mut r = b.character.min(28) as i32;
                 for _ in 0..MP_CHARACTERS.len() {
                     r = (r + dir).rem_euclid(MP_CHARACTERS.len() as i32);
