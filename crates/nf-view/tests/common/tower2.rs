@@ -106,21 +106,62 @@ pub fn walk_12(w: &mut crate::walker::Walker) {
     }
 }
 
-/// Leg 4 + the exit: the shaft entrance and the gated exit (the shared tail of the route).
+/// Leg 4: the lift call button #699 (ch 0x58 — the security-centre shutters), then the REAL walk
+/// into the shaft lobby and the gated exit (the shared tail of the route).
 pub fn walk_12_exit(w: &mut crate::walker::Walker) {
-    // THE SECOND DOCUMENTED STAND-IN: the shaft lobby's entrance. The lobby (the exit #669
-    // trigger at (2.3, 10.0), the touch #683 at z 12.1-13.1 [D]) is walled off from the office
-    // floor on every probed line (the south x 0.5/2.4, the east z 9.5/11, the west z 9.5 — all
-    // class-21 hits [D probe]; the call-button #699 (1.1, 8.2) is an E-touch ON the wall face,
-    // not a doorway). The game reaches the lobby some probed-ray-invisible way (see the report's
-    // live checks). The stand-in places Bond inside the lobby; the touch and the exit stay REAL.
+    // The lift call button #699 (E-touch, out 0x58, mask 4 [D trig dump]: lo (0.87, 0.86, 8.08)
+    // hi (1.37, 0.91, 8.34)) sits on the north wall's face, east of the override console (#702
+    // shares the console volume, out 0x59). Walk to its face and hold E: ch 0x58 swaps BOTH
+    // SimpleScript pairs (sh_shuttersclosed_LEFT #657 ↔ sh_shuttersopen_LEFT #676 and
+    // sh_screen-shutter_down #697 ↔ _up #698 [D census §5]).
+    let ss_at = |w: &crate::walker::Walker, plc: usize| -> [f32; 3] {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let s = sim.drones.sss.list.iter().find(|s| s.placement == plc)
+            .unwrap_or_else(|| panic!("ss #{plc} is an animated SS [D census §5]"));
+        [s.matrix[3][0], s.matrix[3][1], s.matrix[3][2]]
+    };
+    let (sh_closed_0, sh_open_0, scr_down_0, scr_up_0) =
+        (ss_at(w, 657), ss_at(w, 676), ss_at(w, 697), ss_at(w, 698));
+    w.walk_to(Wp::new(1.1, 0.9, 7.4).r(0.5), "the lift call button #699");
+    let mut shutters = false;
+    for _ in 0..60 {
+        w.tick(nf_game::player::Input::default(), true);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x58) { shutters = true; break; }
+    }
+    assert!(shutters, "E at #699 writes ch 0x58 [D trig 699 out 0x58; M Trigger_Activate 0x1b2318 type 1]");
+    // The swap needs the SS tick: wait, then assert both pairs exchanged (complementary
+    // keyframes — the playhead runs to the last key while the channel is on [M SS_Update 0x1a9948]).
+    for _ in 0..120 { w.tick(nf_game::player::Input::default(), false); }
+    {
+        let (sh_closed_1, sh_open_1, scr_down_1, scr_up_1) =
+            (ss_at(w, 657), ss_at(w, 676), ss_at(w, 697), ss_at(w, 698));
+        let moved = |a: [f32; 3], b: [f32; 3]| (a[1] - b[1]).abs() > 0.5 || (a[2] - b[2]).abs() > 0.5;
+        assert!(moved(sh_closed_0, sh_closed_1) && moved(sh_open_0, sh_open_1),
+            "ch 0x58 swaps the shutter pair #657/#676 [M SS_Update; D census §5] (closed {sh_closed_0:?}→{sh_closed_1:?}, open {sh_open_0:?}→{sh_open_1:?})");
+        assert!(moved(scr_down_0, scr_down_1) && moved(scr_up_0, scr_up_1),
+            "ch 0x58 swaps the screen-shutter pair #697/#698 [D census §5] (down {scr_down_0:?}→{scr_down_1:?}, up {scr_up_0:?}→{scr_up_1:?})");
+    }
+
+    // THE DOCUMENTED STAND-IN (walkreal-b's, kept; the funnel now MEASURED — probe 12/12b/12d):
+    // the north wall's opening at x ≈ 4.6..6.2 (its north face z 9.17..9.33 is open there) narrows
+    // to a 0.88 pinch at z ≈ 8.7 between the round pilaster (class 0x05: south face z 9.00 @x 5.3
+    // → 8.60 @x 6.0, west face x 5.25 @z 9.0) and the core's west wall (class 0x15, x 7.00) — the
+    // r 0.55 capsule [M Player_Collision 0x194df0] needs x ∈ [6.67, 6.45] = ∅ there, while the gap
+    // opens to 1.75 at z 9.0 and 2.65 at z 9.3. Behind it the lobby floor is a RAMP (class 0x0a,
+    // y 1.14 @z 9.4 → 0.32 @z 13.4) with a floor trench at x 5.0..5.5 (no floor to −2 [D probe
+    // 12d]). The game passes the pinch on the same key data — its cylinder move (Intersect_CylGeom
+    // 0x109da0) resolves the penetration along the move rather than as a full two-sided
+    // depenetration (the same funnel class as the door[19] pincer below; live-check item in the
+    // report). The stand-in crosses the wall onto the ramp; the touch and the exit stay REAL.
+    // The screen-shutter/screen-lift SS pairs (#697/#698, #700/#701) sit at the world ORIGIN
+    // (baked art [D probe 12c]: matrices (0,0,0)/(0,−1.10,0)) and do not bound this funnel.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [2.3, 0.7, 10.4];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(10);
-    eprintln!("[012] the shaft-lobby entrance stand-in (the walled-off lobby; see the report)");
+    eprintln!("[012] the north-wall funnel stand-in (the 0.88 pinch; see the comment) — the lobby ramp");
     w.walk_to(Wp::new(2.2, 0.7, 12.55).r(0.4), "into the shaft entrance");
     {
         let sim = w.scene.sim.as_ref().unwrap();
