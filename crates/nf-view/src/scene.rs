@@ -372,7 +372,7 @@ pub struct Sim {
     pub mp_hp: [f32; 4],
     pub mp_dead_ticks: [u32; 4],
     /// Each human slot's held weapon (the session's `Input::held`; the local slot reads `gun.weapon`).
-    pub mp_held: [u8; 4],
+    pub mp_held: [u8; 8],
     /// Aim mode's cursor (`BL+0x118 / +0x11C`) and its smoothed copy (`+0x120 / +0x124`), −1…1 across half the screen.
     pub cursor: [f32; 2],
     pub cross: [f32; 2],
@@ -6997,7 +6997,7 @@ impl Scene {
             net_rng_shared: None,
             mp_hp: [100.0; 4],
             mp_dead_ticks: [0; 4],
-            mp_held: [2; 4],
+            mp_held: [2; 8],
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
@@ -7551,7 +7551,7 @@ impl Scene {
             }
             // An MP body's weapon draws only while its slot holds that weapon.
             if let Some(&(slot, w)) = self.mp_body_weapons.get(&(k as u32)) {
-                if self.sim.as_ref().is_none_or(|s| s.mp_held[slot] != w) { return far; }
+                if self.sim.as_ref().is_none_or(|s| s.mp_held.get(slot) != Some(&w)) { return far; }
             }
             if a.dropped {
                 // fix-objects: `!p.gone` — a TAKEN drop stays in the list as a tombstone (drone.rs
@@ -8420,27 +8420,21 @@ impl Sim {
     fn bot_others(&self) -> [nf_game::mp::bots::OtherPlayer; 8] {
         let mut others: [nf_game::mp::bots::OtherPlayer; 8] = Default::default();
         if let Some(m) = self.mp.as_ref() {
-            // The humans: slot 0 = the live `bond`, the rest the parked `mp_bonds` (a swapped
-            // local parks the old body at slot 0 — `swap_local_slot`).
-            let human_alive = self.drones.health.health > 0.0;
-            others[0] = nf_game::mp::bots::OtherPlayer {
-                pos: self.bond.pos,
-                alive: human_alive,
-                index: 0,
-                team: m.settings.players[0].team,
-                flags: 0,
-                dist2: 0.0,
-                health: self.drones.health.health,
-                score: m.game.slots[0].score,
-            };
-            for slot in 1..4 {
-                if let Some(b) = self.mp_bonds[slot].as_ref() {
-                    others[slot] = nf_game::mp::bots::OtherPlayer {
-                        pos: b.pos, alive: true, index: slot,
-                        team: m.settings.players[slot].team, flags: 0, dist2: 0.0,
-                        health: self.drones.health.health, score: m.game.slots[slot].score,
-                    };
-                }
+            // The humans, by SLOT: the local slot is the live `bond`, the others the parked
+            // `mp_bonds` (`swap_local_slot` parks the old local body at slot 0). Online every
+            // machine must build the same view (the bots draw the shared stream from it), so the
+            // health is the per-slot online combat's; offline slot 0 is the local health.
+            let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
+            for slot in 0..4 {
+                let body = if slot == self.mp_local_slot { Some(&self.bond) } else { self.mp_bonds[slot].as_ref() };
+                let Some(b) = body else { continue };
+                let health = if online { self.mp_hp[slot] } else if slot == 0 { self.drones.health.health } else { 100.0 };
+                let alive = if online { self.mp_dead_ticks[slot] == 0 && health > 0.0 } else { health > 0.0 };
+                others[slot] = nf_game::mp::bots::OtherPlayer {
+                    pos: b.pos, alive, index: slot,
+                    team: m.settings.players[slot].team, flags: 0, dist2: 0.0,
+                    health, score: m.game.slots[slot].score,
+                };
             }
             // The bots (positions snapshotted this tick — the brain's own row is skipped by index).
             for (i, b) in m.bots.iter().enumerate() {
@@ -8518,8 +8512,9 @@ impl Sim {
         let scenario = m.settings.scenario;
         let world = &self.world;
         let wdata = &self.weapons;
-        // The human's live state the bots read/fight (slot 0).
-        let human = others[0];
+        // The humans the bots fight (online: every human slot on every machine; offline slot 0).
+        let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
+        let local = self.mp_local_slot;
 
         for i in 0..m.bots.len() {
             let alive = !m.bots[i].dead;
@@ -8572,6 +8567,8 @@ impl Sim {
             m.bots[i].brain.shots.clear();
             let bot_pos = m.bots[i].brain.pos;
             let bslot = m.bots[i].slot;
+            // The bot body's held weapon: its latest shot's (the brain has no weapon id of its own).
+            if let Some(s0) = new_shots.last() { if bslot < 8 { self.mp_held[bslot] = s0.weapon; } }
             if let Some(prev) = m.game.slots[bslot].pos {
                 if bslot < 8 { self.mp_body_speed[bslot] = ((bot_pos[0] - prev[0]).powi(2) + (bot_pos[2] - prev[2]).powi(2)).sqrt() * 60.0; }
             }
@@ -8606,11 +8603,29 @@ impl Sim {
                 // (`MP_RegisterBulletHit` 0x1857c0 — the friendly-fire gate + the last-shooter
                 // word the kill credit later resolves; the port has no HitByList), and a blocked
                 // hit deals no damage — the game's own order.
-                let hits_human = human.alive && ray_body_hit(shot.pos, end, human.pos, 0.6).is_some();
-                if hits_human {
+                let mut hit_human: Option<(usize, f32)> = None;
+                for h in 0..4 {
+                    let o = &others[h];
+                    if !o.alive || o.index != h { continue; }
+                    if !online && h != 0 { continue; }
+                    if let Some(t) = ray_body_hit(shot.pos, end, o.pos, 0.6) {
+                        if hit_human.is_none_or(|(_, bt)| t < bt) { hit_human = Some((h, t)); }
+                    }
+                }
+                if let Some((h, _)) = hit_human {
                     let shooter = m.bots[i].slot;
-                    if m.register_bullet_hit(0, shooter) {
-                        self.drones.health.health = (self.drones.health.health - dmg).max(0.0);
+                    if m.register_bullet_hit(h, shooter) {
+                        if online {
+                            // The per-slot online combat owns the health and the death (every machine).
+                            self.mp_hp[h] = (self.mp_hp[h] - dmg).max(0.0);
+                            if self.mp_hp[h] <= 0.0 && self.mp_dead_ticks[h] == 0 {
+                                self.mp_dead_ticks[h] = 1;
+                                m.player_killed(h, Some(shooter), false, false, &mut self.drones.rng);
+                            }
+                            if h == local { self.drones.health.health = self.mp_hp[h]; }
+                        } else {
+                            self.drones.health.health = (self.drones.health.health - dmg).max(0.0);
+                        }
                     }
                 }
                 if let Some((j, _)) = best {
@@ -8731,9 +8746,35 @@ impl Sim {
                     }
                 }
             }
-            let Some((_, victim)) = best else { continue };
             let damage = self.weapons.records.get(inp.held as usize)
                 .map_or(10.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
+            // The bots are targets too (nearer than any human wins).
+            let mut bot_hit: Option<(f32, usize)> = None;
+            if let Some(m) = self.mp.as_ref() {
+                for (j, bt) in m.bots.iter().enumerate() {
+                    if bt.dead { continue; }
+                    if let Some(t) = ray_body_hit(head, end, bt.brain.pos, 0.6) {
+                        if bot_hit.is_none_or(|(b, _)| t < b) { bot_hit = Some((t, j)); }
+                    }
+                }
+            }
+            if let Some((tb, j)) = bot_hit.filter(|(tb, _)| best.is_none_or(|(th, _)| *tb < th)) {
+                let _ = tb;
+                let frame = self.drones.frame;
+                if let Some(m) = self.mp.as_mut() {
+                    m.bots[j].health -= damage;
+                    if m.bots[j].health <= 0.0 && !m.bots[j].dead {
+                        let victim_slot = m.bots[j].slot;
+                        m.bots[j].health = 0.0;
+                        m.bots[j].dead = true;
+                        m.bots[j].deaths += 1;
+                        m.bots[j].respawn_at = frame + 180;
+                        m.player_killed(victim_slot, Some(shooter), false, false, &mut self.drones.rng);
+                    }
+                }
+                continue;
+            }
+            let Some((_, victim)) = best else { continue };
             self.mp_hp[victim] -= damage;
             if self.mp_hp[victim] <= 0.0 {
                 self.mp_hp[victim] = 0.0;
