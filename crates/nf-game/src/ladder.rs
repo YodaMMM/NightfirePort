@@ -80,20 +80,22 @@ impl Ladder {
     /// `BLData+0x8A4` = `centre.y − radius + 1.0` — the bottom dismount threshold [M same functions].
     pub fn bottom(&self) -> f32 { self.centre[1] - self.radius + 1.0 }
 
-    /// The WALK form of the grab pick (`Player_Collision` 0x194df0's capsule switch case 0/6 [M]).
-    /// Two stages:
+    /// The CLIMB/CREEP form of the pick (`Player_Collision` 0x194df0's capsule switch case 0/6 [M
+    /// — the switch indexes on substate−1 and its jump table @0x2fc0d0 maps case 0 → substate 1
+    /// (climb) and case 6 → substate 7 (creep); NOT the walk 0]). Two stages:
     ///
     /// Stage 1 — the game's pick sphere. `Collide_PickObj` 0x1eae80:152-168 [M] tests the player's
     /// HITTEST capsule segment against the object's world sphere inflated ×1.5 plus the capsule
-    /// radius (mode word BLData+0x7D4 = 0x800). The walk arm's HITTEST [M 0x194df0 case 0/6]:
-    /// radius `+0x7CC = 0x3e8ccccd` (0.275 — the caller passes `player::WALK_PICK_RADIUS`), segment
+    /// radius (mode word BLData+0x7D4 = 0x800). The climb arm's HITTEST [M 0x1950a0]:
+    /// radius `+0x7CC = 0x3e8ccccd` (0.275 — `player::WALK_PICK_RADIUS`), segment
     /// A = pos + up·0.55 (0x3f0ccccd) and B = pos + up·(+0x7CC − cc) — the game reads the B offset's
     /// base FROM the same radius slot it just wrote, so `b = pos + (capsule_radius − cc)` here.
-    /// With the stand cc 1.0347 the segment spans 0.55..−0.76. This is what lets a DEEP walker
-    /// below the bounds centre trigger the grab — `Player_CollLadder` 0x196118:23-31 then lifts
-    /// pos.y to `bottom + 0.02`, the climb-out assist.
+    /// With the stand cc 1.0347 the segment spans 0.55..−0.76. The port's climb tick runs no grab
+    /// scan (`Player_CollLadder` 0x196118:16-17 excludes substates 1/2 [M]), so this shape's live
+    /// role is the unit pins of the switch's own geometry; the WALK grab rides
+    /// `capsule_hits_default` (ladder-0c).
     ///
-    /// Stage 2 — the climb-plane bound. The game's pick reach is narrowed past the sphere by the
+    /// Stage 2 — the rung-plane bound. The game's pick reach is narrowed past the sphere by the
     /// straddled-cel scoping (`Collide_Pick` 0x1eb320:125-134/318-328 tests only objects linked to the
     /// cels the player straddles) and the glist mesh refine (`Collide_Intersect` 0x1ebaa8, run per
     /// candidate in `Collide_Update` 0x1ea398:84-93, not ported): a tall ladder's bounds sphere is its
@@ -102,28 +104,30 @@ impl Ladder {
     /// the axis plus the rails' lateral span. The port models the refine as the capsule against the
     /// mesh's bounds box in the ladder's frame ([S] the stand-in for cel scoping + mesh refine; the
     /// box itself is [M], `in_mesh_box`): the capsule reaches the rung box (±0.06 deep, ±0.354 wide
-    /// on the shipped ladders) and no farther. With the WALK arm's own 0.275 the walk grab fires only
-    /// when the walk capsule touches the rung plane — a walker brushing past, a stander 0.5+ off the
-    /// plane or a just-dismounted dry stander at the dismount offset 0.5 never re-grabs, as in the
-    /// game (fix-ladder-water2; the pre-109i2 port passed the swim arm's 0.55 here and re-grabbed a
-    /// dry stander at 0.5). The SWIM arm keeps 0.55 [M 0x194df0 case 3]: that bound is the
-    /// dismount-into-water escape — the dismount leaves Bond ~0.5 off the plane facing the ladder,
-    /// the swim entry's 5-tick regrab [M Player_InWater 0x195e50] buys ~0.2 of drift at the
-    /// `Player_Move` 0.2/tick ramp [M 0x191dd0:108-117], and 0.5+0.2 > 0.55 clears the plane reach
-    /// while the old bare `min(radius,1)+capsule` column (1.55 on the hut ladder) re-grabbed him every
-    /// cycle — the user's "infinitely latching onto the ladder", playtest 1014-1725. The yaw window in
+    /// on the shipped ladders) and no farther. The yaw window in
     /// `Player_CollLadder` 0x196118:20 gates the sides (a walker brushing past faces across the
     /// ladder, |diff| = π/2, no grab).
     pub fn capsule_hits(&self, pos: V3, capsule_radius: f32, cc: f32) -> bool {
         self.pick_hit(pos, 0.55, capsule_radius - cc, capsule_radius)
     }
 
-    /// The DEFAULT arm of the pick (`Player_Collision` 0x194df0's capsule switch default case [M],
-    /// which covers the crouch substate 4 and the other non-walk/non-swim substates that reach
-    /// `Player_CollLadder` through the walk tick): radius `+0x7CC = 0x3f0ccccd` (0.55), segment
-    /// A = pos + up·0.275 (0x3e8ccccd), B = pos + up·(0.55 − cc). Stage 1/stage 2 as in
-    /// `capsule_hits`. (fix-ladder-water2: this arm was implicit before — the port fed every
-    /// non-swim substate one shape.)
+    /// The DEFAULT arm of the pick — THE WALK GRAB'S ARM (`Player_Collision` 0x194df0's capsule
+    /// switch DEFAULT case [M]: the switch indexes on substate−1 (`lhu 0xf6`, `addiu −1`,
+    /// `sltiu $v1, $a0, 0xf` unsigned bounds) and its jump table @0x2fc0d0 routes the walk 0 (index
+    /// −1 → the bounds check fails on 0xffffffff), the grapple 2, the swim 3 and the substates
+    /// 5/8-11 to 0x1953f4): radius `+0x7CC = 0x3f0ccccd` (0.55), segment A = pos + up·0.275
+    /// (0x3e8ccccd), B = pos + up·(0.55 − cc). ladder-0c: the game's walk substate 0 rides THIS
+    /// arm, so Bond's body stopped against the rung plane (the walk capsule's own 0.55 vs the
+    /// ladder's collision triangles — the wall behind the 0700000c yard ladder's plane sits ~0.05
+    /// recessed [D probes], stopping the walker at 0.4985) is still INSIDE the grab reach (0.4985
+    /// < 0.55) and the walk-in grabs — the fix-ladder-water2 walk mapping (0.275 for substate 0)
+    /// read the switch on the raw substate and left that ladder unclimbable (playtest 2026-10-18
+    /// "the ladder doesnt work"). The dismount escape still clears the fatter arm: the dismount
+    /// hop −0.05 [M Player_Climb 0x196310:88-96, consumed the same tick by the integration
+    /// Player_Update 0x193600:284-295] leaves the stander 0.55 off a FLAT rung plane (the yard
+    /// ladder's mesh is z-degenerate [D bounds]) and the refine's strict `dist < radius` [M
+    /// Intersect_CylGeom 0x109da0:447] rejects the exact touch; the swim escape's drift (0.5 +
+    /// 0.05 + 0.2 > 0.55) still clears. Stage 1/stage 2 as in `capsule_hits`.
     pub fn capsule_hits_default(&self, pos: V3, capsule_radius: f32, cc: f32) -> bool {
         self.pick_hit(pos, 0.275, 0.55 - cc, capsule_radius)
     }
@@ -144,7 +148,9 @@ impl Ladder {
         let cx = a[0] + ab[0] * t - self.centre[0];
         let cy = a[1] + ab[1] * t - self.centre[1];
         let cz = a[2] + ab[2] * t - self.centre[2];
-        if (cx * cx + cy * cy + cz * cz).sqrt() > self.radius * 1.5 + capsule_radius { return false; }
+        // Strictly inside: the game's pick rejects when `(r·1.5 + cap)² <= dist²` [M Collide_PickObj
+        // 0x1eae80:166 `if (fVar12 * fVar12 <= fVar11) return;`].
+        if (cx * cx + cy * cy + cz * cz).sqrt() >= self.radius * 1.5 + capsule_radius { return false; }
         self.in_mesh_box(pos, a_off.max(b_off), a_off.min(b_off), capsule_radius)
     }
 
@@ -164,11 +170,18 @@ impl Ladder {
     /// pos.y + hi, radius `capsule_radius`) against the ladder mesh's bounds box in the ladder's frame
     /// (`fwd(yaw) = (sin, ·, cos)`, the grab snap's convention [M 0x196118:36-44]; lateral = the rungs'
     /// width, frontal = their depth) — the stand-in for the glist refine (`Collide_Update`
-    /// 0x1ea398:84-93 → `Collide_Intersect` 0x1ebaa8, not ported) and the straddled-cel scoping. The
-    /// box is the mesh's own [M `half`/`y_span`]; the pre-1016 port used a guessed ±0.4 rail span with
+    /// 0x1ea398:84-93 → `Collide_Intersect` 0x1ebaa8 → `Intersect_CylGeom` 0x109da0, not ported) and
+    /// the straddled-cel scoping. The box is the mesh's own [M `half`/`y_span`]; the boundary is
+    /// STRICT: the game's cylinder refine tracks a triangle only when its distance is strictly below
+    /// the capsule radius [M Intersect_CylGeom 0x109da0:447 `if (fVar30 < *(float *)(param_1[8] +
+    /// 0xc))`] — the touch at exactly the radius is no hit, which is what keeps the just-dismounted
+    /// stander (snap 0.5 + the one-tick hop −0.05 [M Player_Climb 0x196310:88-96 + Player_Update
+    /// 0x193600:284-295]) 0.55 off a FLAT rung plane (the 0700000c yard ladder's mesh is z-degenerate
+    /// [D bounds]) from re-grabbing. The pre-1016 port used a guessed ±0.4 rail span with
     /// zero depth, which reached 0.95 sideways for the swim's 0.55 capsule where the mesh gives 0.904 —
     /// the 02 hut-pocket swimmer at 0.955 slid along that edge and grabbed where the PS2 swims past
-    /// (PCSX2 2026-10-16, yaw 0.4/0.7 from (-76.27, 3.17, 22.14)). See `capsule_hits`'s doc.
+    /// (PCSX2 2026-10-16, yaw 0.4/0.7 from (-76.27, 3.17, 22.14)). See `capsule_hits_default`'s doc
+    /// for the walk-arm mapping.
     fn in_mesh_box(&self, pos: V3, hi: f32, lo: f32, capsule_radius: f32) -> bool {
         let dx = pos[0] - self.centre[0];
         let dz = pos[2] - self.centre[2];
@@ -178,7 +191,7 @@ impl Ladder {
         let ox = (lateral.abs() - self.half[0]).max(0.0);
         let oz = (frontal.abs() - self.half[1]).max(0.0);
         let oy = (self.y_span[0] - (pos[1] + hi)).max((pos[1] + lo) - self.y_span[1]).max(0.0);
-        ox * ox + oz * oz + oy * oy <= capsule_radius * capsule_radius
+        ox * ox + oz * oz + oy * oy < capsule_radius * capsule_radius
     }
 }
 
@@ -228,15 +241,14 @@ mod tests {
     fn grab_zone_is_the_game_pick_shape() {
         let l = ladder(0.0);
         let cc = 1.0347f32;
-        let wr = crate::player::WALK_PICK_RADIUS; // 0.275 [M Player_Collision 0x194df0 case 0/6]
-        // On the rung plane at mid height: the walk capsule (r 0.275) touches it — hit (stage 1 dist
-        // ≈ 0.6 ≤ 1.5·1.5 + 0.275; stage 2 frontal 0.2 ≤ 0.275).
+        let wr = crate::player::WALK_PICK_RADIUS; // 0.275 [M the climb/creep arm 0x1950a0 via the jump table @0x2fc0d0]
+        // On the rung plane at mid height: the climb capsule (r 0.275) touches it — hit (stage 1 dist
+        // ≈ 0.6 ≤ 1.5·1.5 + 0.275; stage 2 frontal 0.2 < 0.275).
         assert!(l.capsule_hits([10.0, 3.0, 20.2], wr, cc));
-        // Sister: 0.4 off the plane is past the walk capsule's reach (0.4 > 0.275) — the game's
-        // walk HITTEST refine only fires on capsule-vs-rung contact [M 0x194df0 case 0/6 +
-        // Collide_Intersect 0x1ebaa8], so a walker parked 0.4 off the plane does not grab.
+        // Sister: 0.4 off the plane is past the climb capsule's reach (0.4 > 0.275) — the climb/creep
+        // arm never touches there [M 0x1950a0]. (The WALK grab does — see the default-arm pins below.)
         assert!(!l.capsule_hits([10.0, 3.0, 20.4], wr, cc));
-        // 2 units to the side: the bare stage-1 sphere reaches (2.0 ≤ 2.775) [M 0x1eae80:152-168], but the
+        // 2 units to the side: the bare stage-1 sphere reaches (2.0 < 2.775) [M 0x1eae80:152-168], but the
         // game narrows the reach past the sphere (the straddled-cel scoping Collide_Pick 0x1eb320:125-134
         // + the glist mesh refine Collide_Intersect 0x1ebaa8 — both unported); the port's stage-2
         // mesh-box bound stands in: lateral 2.0 − 0.354 > 0.275 → no hit. (The bare stage 1 here is what
@@ -244,8 +256,8 @@ mod tests {
         assert!(!l.capsule_hits([12.0, 3.0, 20.0], wr, cc));
         // 4 units to the side: beyond both stages: no hit.
         assert!(!l.capsule_hits([14.0, 3.0, 20.0], wr, cc));
-        // DEEP below the sphere bottom (the climb-out assist): the walk segment (down to
-        // pos + 0.275 − cc = pos − 0.76 [M case 0/6 reads the B base from the radius slot]) against
+        // DEEP below the sphere bottom (the climb-out assist): the climb segment (down to
+        // pos + 0.275 − cc = pos − 0.76 [M 0x1950a0 reads the B base from the radius slot]) against
         // the ×1.5 sphere reaches — the grab y-snap then lifts him to bottom + 0.02 [M 0x196118:23-31].
         assert!(l.capsule_hits([10.0, 0.9, 20.0], wr, cc));
         // Sister: a shallow radius ladder stops reaching deep (the pick tracks the sphere).
@@ -253,19 +265,80 @@ mod tests {
         assert!(!thin.capsule_hits([10.0, 0.9, 20.0], wr, cc), "the inflated pick reached a thin ladder's bed depth");
         // Sister (the swim2 regression, the 0700000c yard ladder's real geometry — y span 0.8..12.1
         // [D probes] → cy 5.55, r 5.75): the top-exit dismount leaves Bond ~2.9 from the axis at
-        // walkway height when regrab expires. The bare stage-1 sphere HITS him there (dist 6.4 ≤ 9.03)
+        // walkway height when regrab expires. The bare stage-1 sphere HITS him there (dist 6.4 < 9.03)
         // and yanked him back into the climb; the stage-2 column bound rejects.
         let yard = Ladder::simple([9.7, 5.55, -187.3], 5.75, 0.0);
         // Walking INTO the ladder at walkway height (crossing the rung plane) still grabs — the
-        // walk capsule's own reach [M 0x194df0 case 0/6].
+        // climb capsule's own reach [M 0x1950a0] (and the walk arm's, which is wider).
         assert!(yard.capsule_hits([9.7, 11.736, -187.1], wr, cc), "the walk-on grab at the walkway height must still reach");
-        // The just-dismounted spot (frontal 0.372, lateral 0.249): past the walk capsule's plane
-        // reach (0.372 > 0.275) — the game's walk HITTEST does not touch the rungs there either, so
-        // no re-grab (fix-ladder-water2; the pre-109i2 0.55 stand-in grabbed this spot).
-        assert!(!yard.capsule_hits([9.949, 11.736, -186.928], wr, cc),
-            "the just-dismounted stander 0.372 off the plane re-grabbed — the walk arm's reach is the walk capsule's 0.275");
         assert!(!yard.capsule_hits([9.285, 11.736, -190.167], wr, cc),
             "the dismounted walker 2.9 from the axis re-grabbed (the 102h limit cycle)");
+    }
+
+    /// ladder-0c: the WALK substate 0 rides the switch's DEFAULT arm [M the jump table @0x2fc0d0:
+    /// substate−1, walk 0 → −1 → the unsigned bounds check fails → 0x1953f4, r 0.55]. These pins
+    /// replace fix-ladder-water2's walk-arm units, which mapped the switch on the raw substate and
+    /// pinned the 0.275 climb arm for the walk — the 0700000c yard ladder #164 (a z-degenerate rung
+    /// plane [D bounds], the wall ~0.05 recessed behind it) stopped the walker at 0.4985 and the
+    /// 0.275 arm never touched: the user's "the ladder doesnt work" (playtest 2026-10-18).
+    #[test]
+    fn walk_grab_is_the_default_arm_the_jump_table_routes_substate_zero_to_0x1953f4() {
+        let cc = 1.0347f32;
+        let r = crate::player::RADIUS;
+        // The 0700000c yard ladder's DISC geometry [D placement #164 (9.6697, 5.5266, −187.3427)
+        // yaw 0.5934 + its map object: bounds x ±0.576195, y ±5.73384, z degenerate (−0.0..−0.0),
+        // sphere r 5.7627 → the port's centre/radius/half/y_span below].
+        let yard = Ladder {
+            centre: [9.669741, 5.526596, -187.3427],
+            radius: 5.762721,
+            yaw: 0.5934119,
+            channel: 0,
+            half: [0.576195, 0.0],
+            y_span: [-0.20724726, 11.260439],
+        };
+        // The walker's stop: the port's walk capsule (r 0.55) rests Bond at frontal 0.4985 (the wall
+        // recess behind the plane) — the default arm's stage 2 reaches it (0.4985 < 0.55) [M
+        // 0x1953f4 + Intersect_CylGeom 0x109da0:447 strict], so the walk-in grabs.
+        assert!(yard.capsule_hits_default([9.92, 1.02, -186.91], r, cc),
+            "the walked-in yard ladder base (0.4985 off the plane) must grab under the default arm");
+        // Sister that FAILS on the pre-ladder-0c code: the same spot under the old 0.275 walk arm
+        // (the climb arm) never touches — pinned here so the arm mapping can't silently regress.
+        assert!(!yard.capsule_hits([9.92, 1.02, -186.91], crate::player::WALK_PICK_RADIUS, cc),
+            "the 0.275 climb arm must NOT reach the walker's stop (that's the playtest's broken ladder)");
+        // The grab-snap spot (0.5 in front of the plane [M 0x196118:36-44]): inside the default arm.
+        assert!(yard.capsule_hits_default([9.9493, 5.5266, -186.9282], r, cc));
+        // The just-dismounted stander: snap 0.5 + the one-tick hop −0.05 [M Player_Climb 0x196310:88-96
+        // + Player_Update 0x193600:284-295] = 0.55 off the FLAT plane — the strict refine boundary [M
+        // Intersect_CylGeom 0x109da0:447 `dist < radius`] rejects the exact touch. The 0.55 spot is
+        // the [M] shape; the exact f32 landing is the port's own bit-exact trig + hop (below, the
+        // game-shaped construction via the port's ee ops).
+        let a = crate::trig::ee_add(yard.yaw, crate::trig::PI);
+        let mul = nf_formats::ps2float::mul;
+        let snap = [
+            crate::trig::ee_sub(yard.centre[0], mul(crate::trig::sinf(a), 0.5)),
+            11.736,
+            crate::trig::ee_sub(yard.centre[2], mul(crate::trig::sinf(crate::trig::ee_add(a, crate::trig::HALF_PI)), 0.5)),
+        ];
+        // The snap IS inside the arm (0.5 < 0.55): the stander only escapes once the hop carries
+        // him past the strict boundary.
+        assert!(yard.capsule_hits_default(snap, r, cc), "the grab-snap spot (0.5 off the plane) must grab");
+        // 0.56 out: past the strict boundary — no grab.
+        let out = [snap[0] - 0.06 * crate::trig::sinf(a), 11.736, snap[2] - 0.06 * crate::trig::sinf(crate::trig::ee_add(a, crate::trig::HALF_PI))];
+        assert!(!yard.capsule_hits_default(out, r, cc), "0.56 off the flat plane is past the strict 0.55 reach");
+        // Lateral: the walkway strip 0.67 off the plane (the real walkway edge [D probes]) — no re-grab
+        // after the top mantle.
+        assert!(!yard.capsule_hits_default([9.3, 11.086, -187.9], r, cc),
+            "the walkway edge 0.67 off the plane must not re-grab");
+        // The simple-ladder walk-on shapes: 0.4 off the plane grabs under the default arm (0.4 < 0.55)
+        // where the old walk arm missed — the game's stander 0.4 off the plane re-latches on approach.
+        let l = ladder(0.0);
+        assert!(l.capsule_hits_default([10.0, 3.0, 20.4], r, cc));
+        assert!(!l.capsule_hits_default([12.0, 3.0, 20.0], r, cc), "lateral 2.0 − 0.354 stays past the stage-2 box");
+        // The deep walk segment: B = pos + (0.55 − cc) = pos − 0.485 reaches the ×1.5 sphere at the
+        // root 0.9 (closest point dist ≈ 1.83 < 1.5·1.5 + 0.55).
+        assert!(l.capsule_hits_default([10.0, 0.9, 20.0], r, cc));
+        let thin = Ladder::simple([10.0, 3.0, 20.0], 0.6, 0.0);
+        assert!(!thin.capsule_hits_default([10.0, 0.9, 20.0], r, cc), "the thin ladder's sphere stops the deep reach");
     }
 
     #[test]
@@ -293,12 +366,12 @@ mod tests {
     fn swim_pick_is_the_game_default_arm_the_switch_indexes_substate_minus_one() {
         let l = ladder(0.0); // centre (10, 3, 20), r 1.5 → bottom 2.5, top 5.35
         let cc = 1.0347f32;
-        // The swim grab rides the switch's DEFAULT arm [M 0x195070 default — the switch value is
-        // substate−1, so the DEFAULT covers the swim 3]: r 0.55, A = up·0.275, B = up·(0.55 − cc).
-        // At the grab-snap offset 0.5 [M 0x196118:36-44] it reaches (stage 2: 0.5 ≤ 0.55).
+        // The swim grab rides the switch's DEFAULT arm [M the jump table @0x2fc0d0: swim 3 → index 2
+        // → 0x1953f4]: r 0.55, A = up·0.275, B = up·(0.55 − cc).
+        // At the grab-snap offset 0.5 [M 0x196118:36-44] it reaches (stage 2: 0.5 < 0.55).
         assert!(l.capsule_hits_default([10.0, 3.0, 20.5], crate::player::RADIUS, cc));
         // The dismount-into-water escape (109i): the back-stick drift (~0.2 over the swim entry's
-        // 5-tick regrab [M 0x195e50]) clears the plane cut: 0.5 + 0.2 > 0.55.
+        // 5-tick regrab [M 0x195e50]) clears the plane cut: 0.5 + 0.05 (the hop) + 0.2 > 0.55.
         assert!(!l.capsule_hits_default([10.0, 3.0, 20.62], crate::player::RADIUS, cc));
     }
 }
