@@ -1244,8 +1244,9 @@ mod shader_tests {
     }
 }
 
-/// The room/portal cull is ON (cull-on, 2026-10-18): Nightfire's maps overlap rooms in space and the
-/// portal walk is what keeps them apart — with it off, 07000011's stairwell drew a neighbouring room's
+/// The room/portal cull is ON for the MAP GEOMETRY only (cull-on, 2026-10-18; characters and items are
+/// never room-culled — the user's rule): Nightfire's maps overlap rooms in space and the portal walk is
+/// what keeps them apart — with it off, 07000011's stairwell drew a neighbouring room's
 /// brown wall slab straight across the corridor (the user's playtest F12s 003-005, "the map cutting
 /// into itself"). The walk is widened one portal (cull-relax) so a room being stepped into is never
 /// cut at the threshold. `NF_NOROOMCULL=1` turns it off (debug only).
