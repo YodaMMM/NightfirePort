@@ -299,6 +299,22 @@ impl CollisionWorld {
         let mut obj_cell: Vec<Option<u32>> = Vec::new();
         for inst in instances {
             let Some(c) = &level.maps[inst.map].objects[inst.object].collision else { continue };
+            // Glist flags bit 0x1 = the static art carries NO world collision [D — every 07000014
+            // object with the solo bit is one whose blocking is dynamic or purely visual: the
+            // shootable windows (ServerRoomGlass1-5, ServerRoomWindow, CompRoom1Window — the
+            // kind-0x20 Breakables provide the shoot state), the door arts' static twins
+            // (Door_Slide_*/Door_Win_Slide_* flags 0x40001 — the kind-0xDB doors collide), the
+            // vent grills (AirConGrill1-4 — Bond crawls through), the drain slimes and the labels;
+            // the structural art (AirConditioningRoom, the vent walls themselves) carries flags 0.
+            // On 07000014 the old include sealed the crawl-vent start box shut at the AirConGrill1
+            // plane z=58.86 (24 tris, the six 0.12-0.13 bar gaps) — a box the game cannot ship:
+            // walls z=67.2 north, grill south, floor 2.40, roof 3.86, the only start #666 inside
+            // [D probe14_walls/placements]. [M-adjacent] Control_SetGList 0x134960 masks the
+            // glist flags into obj+0xF0 and the runtime collision consumers read only that word;
+            // a live PCSX2 check (grill → the crawl passes) should pin the exact parsemap skip.
+            if level.maps[inst.map].objects[inst.object].flags & 1 != 0 {
+                continue;
+            }
             // The node's bullet-pass flag: the placement's glist flags bit 0x40 (cel+0x94 [M
             // 0x1d1998:103]; Collide_Intersect 0x1ebaa8:143-145 turns every hit on the node into a
             // pass, and the bit-0x8 bullet queries drop those hits — bullets fly through the node).

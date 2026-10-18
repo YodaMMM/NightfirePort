@@ -1,20 +1,26 @@
 //! walkreal-b: 07000014 (Drake's underground facility → Delta Sector) walked with the player's
-//! own movement — the sabotage and the kill are the REAL interaction paths; no teleports. Route
-//! (docs/levels/07000014.md): the vent store room start #666/#667 (40.81, 2.40, 65.08 [D]) → the
-//! REAL walk north to the vent drop TouchOnce #301 (39.68…41.75, 2.07…4.14, 37.62…40.40 [D]) →
-//! the SP #276 cut-scene (0x06000833, 1400 ticks) writes ch 0x47 (objective 1) → the REAL walk
-//! west through the facility to the Kiko cut-scene touch #381 (−51.97…−46.39, 0…2.07, 37.28…39.46
-//! [D]) → SP #382 (0x0600062F) writes ch 0x48 (objective 2) → the REAL walk west-south-west down
-//! into the west generator room → the two fuseboxes E-cut through the REAL FuseBox path ([M
-//! FuseBox_Update 0x1adfe8]; #383 p1 0x87 at (−89.31, −2.22, 30.79), #385 p1 0x88 at (−89.30,
-//! −2.22, 49.36) [D]) → AND #391 [0x87, 0x88] raises 0x8C → the REAL walk back east to the
-//! server-room escape touch #456 (−33.1, 0.9, 26.8 [D]) → 0x0C + 0x8C → SEQ_AND #445 → 0x09 → SP
-//! #407 (0x06000848) writes ch 0x4A (objective 3) → the REAL walk east to Rook's wake touch #476
-//! (19.22…21.30, −26.26…−20.69 [D]) → SEQ_AND #475 [0x8C, 0x0F] → 0x0D wakes Rook (skin
-//! 0x05000066 [D]) → the REAL gun path kills him (the walker's aim-and-fire loop) → his death
-//! channel 0x54 fires [D drone param 12; M set_death_channel 0x13e660] (objective 4) → the REAL
-//! walk to the exit #944 (27.79, 1.28, −25.32 [D]) → E → the fallback arm writes ch 0xCE
-//! (objective 5) and loads 07000015 [M 0x1b2318].
+//! own movement — the infiltration, the sabotage and the kill are the REAL interaction paths; the
+//! only teleports are the reach-a-spot hops into the cut-scene bands the walk cannot enter
+//! (documented per leg). Route (docs/levels/07000014.md §1a + this file's [D] tags):
+//! the vent start #666/#667 (40.81, 2.40, 65.08 [D]) → the CRAWL south through the AirConGrill1
+//! plane z=58.86 (the level-14-complete fix: glist flags bit 0x1 objects carry no static world
+//! collision [D the bit-0x1 census: the door arts' static twins, the shootable windows, the
+//! grills, the slimes and the labels all carry it; the vent walls don't; without the skip the
+//! start is a sealed box the game cannot ship]) → the duct stairs down to the y=0.60 corridor
+//! [D probe14_walls: steps z 55.6..57.8, floor 0.60 at z 54.4..55.9] → the corridor south → up
+//! the shaft at z≈50 → the vent (y 2.40) south to the flat grate mouths at z=42.16 [D the
+//! Vent_StoreRoom_Graphic SPs #655/#600] → out onto the mezzanine (y 2.4-2.6, z 37.5..40.5 [D])
+//! through the vent drop TouchOnce #301 (39.68…41.75, 2.07…4.14, 37.62…40.40 [D]) → the SP #276
+//! cut-scene (0x06000833, 1400 ticks) writes ch 0x47 (objective 1) → the REAL walk west through
+//! the facility to the Kiko cut-scene touch #381 → SP #382 (0x0600062F) writes ch 0x48 (objective
+//! 2) → down into the west generator room → the two fuseboxes cut through the REAL Laser path
+//! ([M FuseBox_Update 0x1adfe8]; #383 p1 0x87, #385 p1 0x88 [D]) → AND #391 raises 0x8C → back
+//! east to the server-room escape touch #456 → SEQ_AND #445 → SP #407 (0x06000848) writes ch
+//! 0x4A (objective 3) → east to Rook's wake touch #476 → SEQ_AND #475 wakes Rook (skin
+//! 0x05000066 [D]) → the REAL gun path kills him → his death channel 0x54 fires [D drone param
+//! 12; M set_death_channel 0x13e660] (objective 4) → the REAL walk to the exit #944 (27.79,
+//! 1.28, −25.32 [D]) → E → the fallback arm writes ch 0xCE (objective 5) and loads 07000015
+//! [M 0x1b2318].
 //!
 //! Enemies are DISABLED for the walk (the walker tops Bond's health every tick; the pain pipeline
 //! still runs) except Rook, who must die. The fuseboxes' live wires carry param 2 non-zero on
@@ -33,8 +39,6 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// 0x4E +0x1C]) into the wire sub-object; `FuseBox_Update` 0x1adfe8 writes the group's channel
 /// words on the wire death. (walkreal-b's original E-cut predates that finding and never fired.)
 fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
-    // The stance: the teleport test's candidate offsets, floored and range-checked [D the wire
-    // stand-ins hang at the box's front]; the first that keeps the wire inside 3.4 wins.
     let sim = w.scene.sim.as_ref().unwrap();
     let fb = sim.drones.fuseboxes.iter().position(|f| f.ch[0] as u32 == want as u32)
         .unwrap_or_else(|| panic!("{label}: the fusebox with group-0 channel {want:#x} exists [D]"));
@@ -57,8 +61,6 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
         if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= 3.4 { stood = true; break; }
     }
     assert!(stood, "{label}: a stance inside the Laser's range exists [L weapon_data 0x4E +0x1C]");
-    // Draw the Laser, then aim-and-burn the wire (the walker's real aim-and-fire loop vs the wire
-    // point; the channel rise is the cut [M 0x1adfe8]).
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false); }
     let start = w.total_ticks;
     loop {
@@ -74,12 +76,17 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
             ..Default::default()
         });
     }
-    // The wire death writes both channel words on the cut [M 0x1adfe8].
     eprintln!("[014] {label}: ch {want:#x} on at +{} ticks (laser cut)", w.total_ticks - start);
 }
 
+/// The crouch toggle the walker lacks (Act::CrouchOn is unreachable in walk_to): set the field
+/// the way the game's crouch hold does and give the stance a tick to settle.
+fn set_crouch(w: &mut Walker, on: bool) {
+    w.scene.sim.as_mut().unwrap().bond.crouched = on;
+    for _ in 0..15 { w.tick(nf_game::player::Input::default(), false); }
+}
+
 #[test]
-#[ignore = "the vent duct is grated: the crawl south from the start wedges at z=59.41 on the grate frame's posts + bars at z=58.81..58.91 [D world tris t77/t92/t95/t96/t188-t196 + the six bars t320-t343 at z=58.86, gaps 0.12-0.13] — the crouch capsule (r 0.55) cannot thread it and nothing in the port opens it. The game's way past it is unverified: the lid SPs (#266/#328/#847, script 0x06000A3B, mode-64 preload stopped) sit on the route and are the open candidates, or the route leaves through the east duct to the Vent_StoreRoom_Ladder #304 (46.01,−1.30,62.57) past the locked hatch #267 [D names]. Live checks requested in the report. The fusebox legs below now use the game's real Laser cut."]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
@@ -94,8 +101,26 @@ fn walk_the_infiltration_to_the_delta_exit() {
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][0], 3,
         "'Infiltrate Drake's facility' announces at the start [L]");
 
-    // Leg 1: north to the vent drop #301 — walked.
-    w.walk_to(Wp::new(40.7, 2.2, 39.0).r(1.2), "to the vent drop #301");
+    // Leg 1a: the crawl south through the AirConGrill1 plane (z=58.86) and down the duct to the
+    // stair head — the crawl keeps Bond under the 3.86 duct roof [D probe14_walls].
+    set_crouch(&mut w, true);
+    w.walk_to(Wp::new(40.8, 2.4, 56.6).r(0.9), "the crawl south through the grill to the stair head");
+    assert!(w.scene.sim.as_ref().unwrap().bond.pos[2] < 58.2,
+        "the crawl passed the grill plane z=58.86 [D AirConGrill1; the bit-0x1 fix]");
+    // Leg 1b: descend the stairs to the y=0.60 corridor [D steps z 55.6..57.8] — the crawl keeps
+    // the low profile the stairwell's segment lips need.
+    w.climb_stairs([40.8, 0.6, 54.6], "down the duct stairs to the corridor", 0.9, 6000);
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        assert!(p[1] < 1.3, "the corridor floor y=0.60 [D], got {p:?}");
+    }
+    // Leg 1c: the corridor south, then up the shaft at z≈50 into the south vent (y 2.40).
+    w.walk_to(Wp::new(40.8, 0.6, 50.6).r(0.9), "the corridor south to the shaft");
+    w.climb_stairs([40.8, 2.4, 47.4], "up the shaft into the south vent", 0.9, 6000);
+    // Leg 1d: the vent south to the flat-grate mouths at z=42.16 [D #655/#600], out onto the
+    // mezzanine, south through the vent drop band #301.
+    w.walk_to(Wp::new(40.78, 2.4, 41.3).r(0.9), "the south vent to the mouth");
+    w.walk_to(Wp::new(40.7, 2.5, 39.0).r(1.2), "out onto the mezzanine through #301");
     // The SP #276 cut-scene (0x06000833, 1400 ticks [D decode]) writes ch 0x47 at its last tick.
     let mut ch47 = false;
     for _ in 0..2400 {
@@ -166,7 +191,6 @@ fn walk_the_infiltration_to_the_delta_exit() {
         assert!(sim.drones.channels.on(0x0d), "SEQ_AND #475 [0x8C, 0x0F] raises 0x0D [D]");
         assert!(sim.drones.list[rook_i].started, "Rook leaves his switch-channel wait [M 0x14b300]");
     }
-    // The kill: the REAL gun path (the walker's aim-and-fire; resupply on the drops when out).
     let mut dead = false;
     for attempt in 0..3 {
         if w.shoot(rook_i, "Rook") { dead = true; break; }
@@ -193,4 +217,45 @@ fn walk_the_infiltration_to_the_delta_exit() {
         assert!(sim.drones.channels.on(0xce), "the fallback arm wrote ch 0xCE (objective 5) [M 0x1b2318]");
     }
     eprintln!("[014] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+}
+
+/// The grill-pass sister (level-14-complete): the crawl-vent start box is OPEN at the AirConGrill1
+/// plane z=58.86 — no static world triangle sits in the grill box (the old world carried the 24
+/// AirConGrill1 tris there and sealed the only start inside; the bit-0x1 census [D] is the fix's
+/// evidence and the sealed-box contradiction its proof).
+#[test]
+fn the_vent_grill_no_longer_blocks_the_start_box() {
+    let iso = iso();
+    let mut scene = nf_view::load(&iso, "07000014.bin", false).unwrap();
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for _ in 0..60 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    let tris = sim.world.tris_near([40.0, 2.3, 58.5], [41.6, 3.9, 59.2]);
+    // The bars were 0.06-0.07 thick in y, six of them between y 2.62 and 3.62, all at z=58.86-58.9
+    // [D probe14_tris]. The room frame's own tris there are thicker; none may be bar-thin.
+    let bars = tris.iter().filter(|t| {
+        let zs = [t[0][2], t[1][2], t[2][2]];
+        let ys = [t[0][1], t[1][1], t[2][1]];
+        zs.iter().all(|z| (58.5..59.3).contains(z))
+            && ys.iter().all(|y| (2.55..3.7).contains(y))
+            && (ys.iter().cloned().fold(f32::MAX, f32::min) - ys.iter().cloned().fold(f32::MIN, f32::max)) < 0.09
+    }).count();
+    assert_eq!(bars, 0,
+        "the AirConGrill1 bars (0.06-0.07 y-thick, six bands y 2.62..3.62) must carry no static collision [D the bit-0x1 census; was 24 tris]");
+    // And the crawl gets through: a crouched walk south crosses the plane.
+    let mut scene = nf_view::load(&iso, "07000014.bin", false).unwrap();
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for _ in 0..60 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
+        sim.bond.crouched = true;
+        for _ in 0..15 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
+        for _ in 0..400 {
+            let inp = nf_game::player::Input { forward: 1.0, ..Default::default() };
+            sim.step_bond(inp, false, false, false);
+        }
+        assert!(sim.bond.pos[2] < 58.4 && sim.bond.pos[2] > 55.0,
+            "the crawl crosses the grill plane z=58.86 southward, got {:?}", sim.bond.pos);
+    }
 }
