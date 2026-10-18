@@ -7194,9 +7194,81 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         // Not drawn yet: the per-agent setup step (PCSX2 m52-m54 — the Join Game panels with Choose Team / Choose
         // Character / Health Handicap) and the Start summary (m65).
         Page::MpSetup | Page::MpConfirm => {}
-        Page::MpOnlineLobby => {}
-        // mp-lobby-one-screen: the one screen's drawing is the main agent's [S §6 — the getters
-        // are mp_lobby_rows / mp_lobby_players / mp_lobby_start_enabled].
+        // mp-lobby-one-screen: the one screen (the main agent's draw over the model's getters
+        // [S docs/systems/net-online-lobby.md §6]): the settings column on the panel's left, the
+        // players on its right, the internet line + join code in the band under the panel. The
+        // look is the couch MP pages' (the header face, the 0x030000b3 panel, cream rows, the
+        // bright focus, dim read-only rows).
+        Page::MpOnlineLobby => {
+            page_header(&mut h, hfont, "Online Lobby");
+            // Dark plates behind the two columns (the couch pages' ring panel art sat behind the
+            // text and swallowed it — the main agent's render, 2026-10-18).
+            let plate = |h: &mut Hud, x: f32, y: f32, w: f32, hh: f32| {
+                let c = [0.02, 0.02, 0.03, 0.62];
+                let (a, b) = (h.ndc(Anchor::Centre, mx(x), my(y)), h.ndc(Anchor::Centre, mx(x + w), my(y + hh)));
+                let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.0, 0.0], c };
+                h.ndc_solid(-1, [p([a[0], a[1]]), p([b[0], a[1]]), p([b[0], b[1]]), p([a[0], a[1]]), p([b[0], b[1]]), p([a[0], b[1]])], c);
+            };
+            plate(&mut h, 56.0, 64.0, 296.0, 284.0);
+            plate(&mut h, 358.0, 64.0, 272.0, 200.0);
+            let bind = |id: u32| lang.and_then(|l| l.bind(id)).map(str::to_string).unwrap_or_default();
+            let mut one = fe.mp_one.clone();
+            let rows = one.rows();
+            // Rows sharing a label (the five Enviro-Mods, the four bots' Bot/Skill pairs) number themselves.
+            let names: Vec<String> = rows.iter().map(|r| if r.label_id != 0 { bind(r.label_id) } else { r.label_text.to_string() }).collect();
+            let names: Vec<String> = names.iter().enumerate().map(|(k, n)| {
+                let total = names.iter().filter(|x| *x == n).count();
+                if total < 2 { return n.clone(); }
+                let nth = names[..k].iter().filter(|x| *x == n).count() + 1;
+                format!("{n} {nth}")
+            }).collect();
+            // The settings column: 18 rows visible, scrolled to keep the focus in view.
+            const VIS: usize = 18;
+            let focus = rows.iter().position(|r| r.focused).unwrap_or(0);
+            let first = focus.saturating_sub(VIS - 3).min(rows.len().saturating_sub(VIS));
+            for (k, r) in rows.iter().enumerate().skip(first).take(VIS) {
+                let y = 72.0 + 15.0 * (k - first) as f32;
+                let name = names[k].clone();
+                let value = if r.value_id != 0 { bind(r.value_id) } else { r.value_text.clone() };
+                let col = if r.focused { bright } else if !r.enabled || !r.editable { dim } else { cream };
+                left_text(&mut h, font, &name, mx(66.0), my(y + 6.0), col, true, 0.85);
+                if !value.is_empty() {
+                    let shown = if r.focused && r.editable { format!("< {value} >") } else { value };
+                    label(&mut h, font, &shown, 212.0, y - 3.0, 130.0, 12.0, col, true, 0.85);
+                }
+            }
+            if first > 0 { label(&mut h, font, "^", 190.0, 52.0, 20.0, 10.0, dim, true, 0.8); }
+            if first + VIS < rows.len() { label(&mut h, font, "v", 190.0, 72.0 + 15.0 * VIS as f32 - 6.0, 20.0, 10.0, dim, true, 0.8); }
+            // The players column.
+            left_text(&mut h, font, "Players", mx(366.0), my(70.0), cream, true, 0.95);
+            let team_game = fe.mp_one.team_game();
+            for (i, pl) in fe.mp_one.players.iter().enumerate() {
+                let y = 92.0 + 34.0 * i as f32;
+                if !pl.joined {
+                    left_text(&mut h, font, &format!("{}  (open)", i + 1), mx(366.0), my(y), dim, true, 0.85);
+                    continue;
+                }
+                let col = if pl.ready { cream } else { dim };
+                left_text(&mut h, font, &format!("{}  {}", i + 1, pl.codename), mx(366.0), my(y), col, true, 0.9);
+                let mut info = Vec::new();
+                if team_game { info.push(if pl.team == 1 { "MI6".to_string() } else { "Phoenix".to_string() }); }
+                info.push(if pl.ready { "Ready".to_string() } else { "Not ready".to_string() });
+                if i != 0 || !fe.mp_hosting { info.push(format!("{} ms", pl.ping_ms)); }
+                left_text(&mut h, font, &info.join("   "), mx(384.0), my(y + 14.0), dim, true, 0.75);
+            }
+            let start_line = if fe.mp_hosting {
+                if fe.mp_lobby_start_enabled() { "Everyone is ready - Start the match" } else { "Waiting for every player to be ready" }
+            } else { "The host starts the match" };
+            left_text(&mut h, font, start_line, mx(366.0), my(250.0), if fe.mp_lobby_start_enabled() { bright } else { dim }, true, 0.8);
+            // The internet band (net-p2p): the state, the join code (Ctrl+C), the small print.
+            if let Some(r) = fe.mp_session.as_ref().and_then(|s| s.reach()) {
+                let line = match &r.code { Some(c) => format!("{}    Code: {}  (Ctrl+C)", r.state, c), None => r.state.clone() };
+                if !line.is_empty() { label(&mut h, font, &line, 50.0, 356.0, 540.0, 13.0, cream, true, 0.9); }
+                if !r.note.is_empty() { label(&mut h, font, &r.note, 50.0, 374.0, 540.0, 11.0, dim, true, 0.8); }
+                if let Some(mine) = &r.my_code { label(&mut h, font, &format!("Your code: {mine}  (Ctrl+C)"), 50.0, 390.0, 540.0, 11.0, dim, true, 0.8); }
+            }
+            hint_bar(&mut h, font, &hint(0x217, "~A Confirm  ~V Scroll  ~H Change  ~B Back"), 50.0, 419.0, cream);
+        }
         // The debriefing [L the menu-def page 0x40000033 (mp-debriefing.md §4): header (50,40,376×17)
         // 0x151; the column titles (120×16) x=52 at y 183/217/250/284/318 = Agent/Points/Victories/
         // Deaths/TOTAL; the four slot panels x 176/280/384/488 (the portrait 81×81 at y=102, the name

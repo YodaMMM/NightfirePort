@@ -1604,6 +1604,13 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
             "mpplayermods" => menu::Page::MpPlayerMods,
             "mpenviromods" => menu::Page::MpEnviroMods,
             "mpbotsetup" => menu::Page::MpBotSetup,
+            // The online one screen as the host sees it (a joined player in slot 2 for the render).
+            "mplobby" => {
+                fe.mp_hosting = true;
+                fe.mp_one.players[0].joined = true; fe.mp_one.players[0].ready = true; fe.mp_one.players[0].codename = "Bond".into();
+                fe.mp_one.players[1].joined = true; fe.mp_one.players[1].codename = "Agent 2".into(); fe.mp_one.players[1].ping_ms = 23;
+                menu::Page::MpOnlineLobby
+            }
             // fix-pause-menu: the in-game pages render headless too (the pause page over the
             // paused frame, the results per outcome). `--cursor N` picks the row, `--pause-tab N`
             // picks the pause tab, `--confirm` arms the pause confirm.
