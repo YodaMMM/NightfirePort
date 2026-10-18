@@ -300,8 +300,10 @@ fn the_built_settings_equal_the_couch_build() {
     couch.mp_join[0] = nf_view::menu::MpJoinAgent {
         state: 5, joined: true, ready: true, team: 1, skin: 2, codename_row: 0, codename: "Player 1".into(),
     };
+    // The profile-less client is named by its slot on the host ("Player 2" — two machines both
+    // reading "Player 1" was the two-window check's duplicate) [S].
     couch.mp_join[1] = nf_view::menu::MpJoinAgent {
-        state: 5, joined: true, ready: true, team: 0, skin: 1, codename_row: 0, codename: "Player 1".into(),
+        state: 5, joined: true, ready: true, team: 0, skin: 1, codename_row: 0, codename: "Player 2".into(),
     };
     assert!(couch.mp_confirm_start(), "the couch confirm starts");
     let couch_s = couch.mp_match_settings.clone().expect("the couch build");
@@ -386,4 +388,21 @@ fn the_model_rows_carry_the_game_labels_and_gates() {
     fe.mp_one.players[1].joined = true;
     let rows = fe.mp_lobby_rows().unwrap();
     assert!(rows.iter().any(|r| matches!(r.id, MpLobbyRowId::PlayerTeam(1))), "team rows in a team game");
+}
+
+#[test]
+fn every_row_is_reachable_with_the_bots_off() {
+    // row_count must equal the row list: a disabled bot still lists its (blank) Skill row, and
+    // counting it once stranded the focus on Bot 4 — the player rows and Start unreachable
+    // (the two-window menu check) [S].
+    let mut one = nf_view::mp_lobby::MpLobby::new_host(1, 0x0700_0024, 0, 1, 0, 10, 10, [0, 1], [2, 0, 0, 0, 0],
+        std::array::from_fn(nf_view::menu::MpBot::fresh), "Player 1", false, 0);
+    for enabled in [false, true] {
+        for b in one.bots.iter_mut() { b.enabled = enabled; }
+        let n = one.rows().len();
+        assert_eq!(one.row_count(), n, "row_count with bots enabled={enabled}");
+        for _ in 0..n + 5 { one.apply(nf_view::menu::Action::Down); }
+        assert_eq!(one.focused_row().map(|(id, _)| id), Some(MpLobbyRowId::Start), "Down reaches Start (bots enabled={enabled})");
+        for _ in 0..n + 5 { one.apply(nf_view::menu::Action::Up); }
+    }
 }

@@ -286,7 +286,10 @@ impl MpLobby {
     /// The number of rows `rows()` yields (the join-aware count, without building it) [S].
     pub fn row_count(&self) -> usize {
         let mut n = 7 + 2 + 5; // scenario, map, weapon, limit, duration, ff, radar + 2 mods + 5 enviro
-        for b in &self.bots { n += if b.enabled { 2 } else { 1 }; }
+        // Every bot lists its Skill row (blank and disabled while the bot is off) — `rows()`
+        // pushes both, so a disabled bot still counts two (counting one stranded the focus on
+        // Bot 4: the player rows and Start were unreachable — the two-window check).
+        n += self.bots.len() * 2;
         let joined = self.players.iter().filter(|p| p.joined).count();
         n += joined * if self.team_game() { 2 } else { 1 };
         n + 1 // Start

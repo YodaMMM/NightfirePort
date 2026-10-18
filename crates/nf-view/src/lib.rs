@@ -2037,6 +2037,53 @@ pub fn wheel_steps_zoom(zoom_held: bool, weapon_flags: u32, weapon_zoom: f32) ->
 impl App {
     /// One menu action from the keyboard or the mouse (PC mouse support, 2026-10-15): the movie skip, the pause page's
     /// Back = resume, the page's own handling, then the level request / close the page asked for.
+    /// Test aid (NF_MENU_SCRIPT="ms:step,ms:step,..."): timed menu presses for the two-window MP
+    /// checks, no desktop input. A step is up/down/left/right/confirm/back/side/extra, shot (the F12
+    /// capture) or type=TEXT (the join page's typing); ms counts from the first frame.
+    /// net-consolidate: an online match starting adopts the lobby's session as the lockstep
+    /// gate. `has_match` is exact: match_start is Some only after the host's arm / the client's
+    /// tunnel payload, and a cancelled lobby's core is closed. Called after a menu action AND
+    /// every frame — the client's handover comes from the lobby poll (movie_tick takes its
+    /// level request), and adopting only in menu_after left the joiner loading the arena
+    /// offline while the host waited on it (the two-window menu check: "player 2 timed out").
+    fn adopt_lobby_session(&mut self) {
+        let adopt = self.net_lobby.as_ref().map_or(false, |p| p.has_match() && !p.core_is_closed());
+        if adopt && self.net.is_none() {
+            if let Some(p) = self.net_lobby.take() {
+                self.net_local_slot = p.0.borrow().local_slot();
+                self.net_tick = 0;
+                self.net = Some(p);
+                self.net_await_load = true;
+                eprintln!("[net] adopted the lobby's session for the match");
+            }
+        }
+    }
+
+    fn menu_script_tick(&mut self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let Ok(spec) = std::env::var("NF_MENU_SCRIPT") else { return };
+        let ms = START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64;
+        let steps: Vec<(u64, &str)> = spec.split(',').filter_map(|s| s.split_once(':')).filter_map(|(a, b)| Some((a.trim().parse().ok()?, b.trim()))).collect();
+        while let Some(&(at, step)) = steps.get(NEXT.load(Relaxed)) {
+            if ms < at { break; }
+            NEXT.fetch_add(1, Relaxed);
+            if self.async_load.is_some() { eprintln!("[menu-script] {at} {step}: skipped (loading)"); continue; }
+            use menu::Action as MA;
+            // "down*30" repeats a press.
+            let (step, times) = match step.split_once('*') { Some((s, n)) => (s, n.parse().unwrap_or(1)), None => (step, 1usize) };
+            let a = match step { "up" => Some(MA::Up), "down" => Some(MA::Down), "left" => Some(MA::Left), "right" => Some(MA::Right),
+                "confirm" => Some(MA::Confirm), "back" => Some(MA::Back), "side" => Some(MA::Side), "extra" => Some(MA::Extra), _ => None };
+            if let Some(a) = a { for _ in 0..times { self.menu_input(a); } }
+            else if step == "shot" { let m = self.spot_shot(); eprintln!("[spot] {m}"); }
+            else if let Some(text) = step.strip_prefix("type=") {
+                if let Some(fe) = self.fe.as_mut() { for c in text.chars() { fe.mp_net_type(c); } }
+            }
+            eprintln!("[menu-script] {at} {step} -> page {:?}", self.fe.as_ref().map(|f| f.page));
+        }
+    }
+
     fn menu_input(&mut self, a: menu::Action) {
         if self.fe.is_none() { return; }
         use menu::Action as MA;
@@ -2146,18 +2193,9 @@ impl App {
             if let Some(st) = fe.mp_match_settings.take() { self.pending_mp_settings = Some(st); }
             // net-consolidate: an online match starting (the host's confirm page armed the
             // session, or the client took the tunnel's match payload) — adopt the lobby's
-            // session as the lockstep gate. `has_match` is exact: match_start is Some only
-            // after the arm / the tunnel payload, and a cancelled lobby's core is closed.
-            let adopt = self.net_lobby.as_ref().map_or(false, |p| p.has_match() && !p.core_is_closed());
-            if adopt && self.net.is_none() {
-                if let Some(p) = self.net_lobby.take() {
-                    self.net_local_slot = p.0.borrow().local_slot();
-                    self.net_tick = 0;
-                    self.net = Some(p);
-                    self.net_await_load = true;
-                    eprintln!("[net] adopted the lobby's session for the match");
-                }
-            }
+            // session as the lockstep gate (also run every frame: the client's start arrives
+            // on a lobby tick, not an action — `adopt_lobby_session`).
+            self.adopt_lobby_session();
         }
         // The pause page's Resume row (cursor 0) closes the menu [M C_GCPAUSE_Handler
         // 0x204408 — the game's resume is its own row]: the host consumes the flag and
@@ -3512,9 +3550,11 @@ impl ApplicationHandler for App {
             },
             WindowEvent::RedrawRequested => {
                 if NET_SHOT_DUE.swap(false, std::sync::atomic::Ordering::Relaxed) { let m = self.spot_shot(); eprintln!("[spot] {m}"); }
+                self.menu_script_tick();
                 // fix-movie-playback: the movie glue runs before the load path so a phase-2
                 // resolve lands in the same frame the state 6 popped.
                 self.movie_tick();
+                self.adopt_lobby_session();
                 // frontend-music: the menus' own audio (the jingle pair, the credits track), the
                 // page-change transitions and the per-frame pump.
                 self.menu_music_tick();
@@ -3628,6 +3668,14 @@ impl ApplicationHandler for App {
                                 eprintln!("[net] match starting: arena {:08x}, {} humans, seed {:#x}",
                                     st.level_code, st.human_count, st.seed);
                                 self.net_local_slot = self.net.as_ref().map_or(0, |s| s.0.borrow().local_slot());
+                                // The lobby path already requested this arena (the menu handover
+                                // + `adopt_lobby_session`): a second request reloaded it warm on
+                                // both machines — two loading screens per match (the two-window
+                                // menu check). The flag paths (--net-host/--net-join) still load here.
+                                let already = self.pending_level == Some(st.level_code)
+                                    || self.async_load.as_ref().is_some_and(|l| l.next == st.level_code)
+                                    || self.scene.sim.as_ref().is_some_and(|s| s.level == st.level_code);
+                                if already { if let Some(fe) = self.fe.as_mut() { fe.closed = true; } continue; }
                                 self.pending_level = Some(st.level_code);
                                 self.pending_mp_settings = Some(*st);
                                 self.net_await_load = true;

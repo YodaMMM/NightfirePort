@@ -6444,6 +6444,7 @@ impl FrontEnd {
     /// The lobby codename this machine shows in its own panel: the active profile's codename,
     /// else the game's template "Player 1" [M C_RBMPCNAME 0x20d448's default row — Txt 0x1c3 +
     /// sprintf "%s %d" @0x30d388 with slot+1].
+    /// An online player's shown name: its codename, or "Player N" by slot when it sent none.
     fn mp_net_codename(&self) -> String {
         self.active_profile.clone().unwrap_or_else(|| "Player 1".into())
     }
@@ -6518,7 +6519,9 @@ impl FrontEnd {
             self.mp_net_error = Some(MpNetError::BadAddress);
             return false;
         }
-        let codename = self.mp_net_codename();
+        // A client without a profile sends no name: the host names it by its slot ("Player 2"…),
+        // so two profile-less machines don't both read "Player 1" (the two-window check) [S].
+        let codename = self.active_profile.clone().unwrap_or_default();
         let Some(sess) = self.mp_session.as_mut() else {
             self.mp_net_error = Some(MpNetError::Denied);
             return false;
@@ -6663,10 +6666,11 @@ impl FrontEnd {
             match agents.iter().find(|a| a.slot == slot) {
                 Some(ag) => {
                     let j = &mut self.mp_join[slot];
-                    if !j.joined || j.codename != ag.codename {
+                    let name = mp_slot_name(&ag.codename, slot);
+                    if !j.joined || j.codename != name {
                         *j = MpJoinAgent {
                             state: 5, joined: true, ready: ag.ready, team: 0, skin: 0,
-                            codename_row: 0, codename: ag.codename.clone(),
+                            codename_row: 0, codename: name,
                         };
                     }
                 }
@@ -6683,9 +6687,10 @@ impl FrontEnd {
             match agents.iter().find(|a| a.slot == slot) {
                 Some(ag) => {
                     let p = &mut self.mp_one.players[slot];
-                    if !p.joined || p.codename != ag.codename {
+                    let name = mp_slot_name(&ag.codename, slot);
+                    if !p.joined || p.codename != name {
                         *p = crate::mp_lobby::MpLobbyPlayer {
-                            codename: ag.codename.clone(),
+                            codename: name,
                             character: 0, team: 0,
                             ready: ag.ready, joined: true, ping_ms: 0,
                         };
@@ -8958,4 +8963,12 @@ mod secret_grid_tests {
         assert!(fe.action(Action::Back));
         assert_eq!(fe.page, Page::CnMenu);
     }
+}
+
+/// An online agent's lobby name: the codename it sent, or "Player N" by its slot when it has no
+/// profile (the host's own profile-less default is "Player 1"). nf-net's session keeps its own
+/// "player" when given an empty name, so that reads as no name too [S].
+fn mp_slot_name(sent: &str, slot: usize) -> String {
+    let s = sent.trim();
+    if s.is_empty() || s == "player" { format!("Player {}", slot + 1) } else { sent.to_string() }
 }
