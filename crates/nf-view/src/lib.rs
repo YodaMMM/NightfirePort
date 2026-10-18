@@ -116,11 +116,26 @@ pub fn ticks_for_frame(anim_time: &mut f32, dt: f32, max_ticks: u32) -> u32 {
 /// drive the exact path the `RedrawRequested` handler runs.
 pub fn lerp_palette(a: &[nf_formats::anim::Mat4], b: &[nf_formats::anim::Mat4], t: f32) -> Vec<nf_formats::anim::Mat4> {
     if a.len() != b.len() { return b.to_vec(); }
-    a.iter().zip(b).map(|(x, y)| {
-        let d = (0..3).map(|k| (x[3][k] - y[3][k]).powi(2)).sum::<f32>().sqrt();
-        if d > SNAP { return *y; }
-        blend_pose(x, y, t)
-    }).collect()
+    a.iter().zip(b).map(|(x, y)| lerp_entry(x, y, t)).collect()
+}
+
+/// One palette entry of `lerp_palette`.
+fn lerp_entry(x: &nf_formats::anim::Mat4, y: &nf_formats::anim::Mat4, t: f32) -> nf_formats::anim::Mat4 {
+    // perf-240: an entry that did not change between the two ticks blends to itself — skip the
+    // quaternion round trip (the bulk of the palette: props, doors at rest, collapsed slots).
+    if x == y { return *y; }
+    let d = (0..3).map(|k| (x[3][k] - y[3][k]).powi(2)).sum::<f32>().sqrt();
+    if d > SNAP { return *y; }
+    blend_pose(x, y, t)
+}
+
+/// perf-240: the per-frame blend touches only the entries that differ between the two ticks.
+/// `out` holds the newer tick's palette (set once per tick, `moving` = the differing indices);
+/// each presented frame rewrites just those (and `extra`, the view-model entries the camera
+/// re-attach overwrote last frame). Equal to `lerp_palette(prev, cur, t)` entry for entry.
+pub fn lerp_palette_moving(out: &mut [nf_formats::anim::Mat4], prev: &[nf_formats::anim::Mat4], cur: &[nf_formats::anim::Mat4], moving: &[u32], extra: &[usize], t: f32) {
+    for &i in moving { let i = i as usize; out[i] = lerp_entry(&prev[i], &cur[i], t); }
+    for &i in extra { if i < out.len() { out[i] = lerp_entry(&prev[i], &cur[i], t); } }
 }
 
 /// The rotation blend of one palette entry: slerp of the rotation part ([M `Quat_Slerp_Acc`
@@ -1298,7 +1313,7 @@ fn fps_log(frame: std::time::Duration) {
     let a = acc.get_or_insert((std::time::Instant::now(), 0, 0.0, 0.0));
     a.1 += 1; a.2 += ms; a.3 = a.3.max(ms);
     if a.0.elapsed().as_secs_f64() >= 1.0 {
-        eprintln!("[fps] {} frames, avg {:.2} ms, worst {:.2} ms", a.1, a.2 / a.1 as f64, a.3);
+        { let __m = format!("[fps] {} frames, avg {:.2} ms, worst {:.2} ms", a.1, a.2 / a.1 as f64, a.3); std::thread::spawn(move || eprintln!("{__m}")); }
         *acc = None;
     }
 }
@@ -1843,6 +1858,9 @@ struct App {
     cam_cur: Option<Camera>,
     pal_prev: Option<(Vec<nf_formats::anim::Mat4>, Vec<[f32; 4]>)>,
     pal_cur: Option<(Vec<nf_formats::anim::Mat4>, Vec<[f32; 4]>)>,
+    /// perf-240: the presented-frame palette (seeded per tick) and the entries that move between the two ticks.
+    pal_blend: Vec<nf_formats::anim::Mat4>,
+    pal_moving: Vec<u32>,
     /// `--fps N`: a frame-rate cap (vsync off); None = vsync.
     fps_cap: Option<f32>,
     /// The always-on frame counter (top right): frames actually presented, counted over half-second
@@ -3851,9 +3869,20 @@ impl ApplicationHandler for App {
                 let door_closed = if portal { self.scene.sim.as_ref().map(|s| s.drones.doors.closed_flags()) } else { None };
                 let vis = g.renderer.cel_visibility(draw_cam.pos.to_array(), vp0, if portal { self.scene.sim.as_ref().map(|s| &s.world) } else { None }, door_closed.as_deref());
                 // G-043: build the palette only when a tick ran, then draw between the last two ticks.
-                if self.ticked || self.pal_cur.is_none() {
+                let pal_rebuilt = self.ticked || self.pal_cur.is_none();
+                if pal_rebuilt {
                     let new = self.scene.skin_palette(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, vis.as_deref());
                     self.pal_prev = self.pal_cur.take();
+                    // perf-240: the entries that move between the two ticks, and the blend buffer seeded
+                    // with the newer tick (every other entry blends to it).
+                    self.pal_moving.clear();
+                    if let Some((pp, _)) = &self.pal_prev {
+                        if pp.len() == new.0.len() {
+                            self.pal_moving.extend(pp.iter().zip(&new.0).enumerate().filter(|(_, (x, y))| x != y).map(|(i, _)| i as u32));
+                        }
+                    }
+                    self.pal_blend.clear();
+                    self.pal_blend.extend_from_slice(&new.0);
                     self.pal_cur = Some(new);
                     self.cam_prev = self.cam_cur;
                     self.cam_cur = Some(self.cam);
@@ -3863,7 +3892,13 @@ impl ApplicationHandler for App {
                 if let Some((pal, cols)) = &self.pal_cur {
                     match &self.pal_prev {
                         Some((pp, _)) if interp => {
-                            let mut blended = lerp_palette(pp, pal, alpha);
+                            let vm_entries = view_model_entries(&self.scene, &g.renderer.skin_layout);
+                            let blended = &mut self.pal_blend;
+                            if pp.len() == pal.len() && blended.len() == pal.len() {
+                                lerp_palette_moving(blended, pp, pal, &self.pal_moving, vm_entries.as_deref().unwrap_or(&[]), alpha);
+                            } else {
+                                *blended = lerp_palette(pp, pal, alpha);
+                            }
                             // fix-interp-ghosting: the view model (posed in world space from each
                             // tick's camera [M Player_PositionGun 0x1a3b40]) re-attaches to the
                             // interpolated draw camera — the same camera-space scheme lerp_cam
@@ -3872,18 +3907,20 @@ impl ApplicationHandler for App {
                             // gun keeps the plain world blend there.
                             if self.scene.sim.as_ref().map_or(true, |s| s.script_camera().is_none()) {
                                 if let (Some(entries), Some(cp), Some(cc)) =
-                                    (view_model_entries(&self.scene, &g.renderer.skin_layout), self.cam_prev, self.cam_cur) {
-                                    reattach_view_model(&mut blended, pp, pal, alpha, &cp, &cc, &draw_cam, &entries);
+                                    (vm_entries.as_ref(), self.cam_prev, self.cam_cur) {
+                                    reattach_view_model(blended, pp, pal, alpha, &cp, &cc, &draw_cam, entries);
                                 }
                             }
-                            g.renderer.upload_skin(&g.queue, &blended, cols);
+                            g.renderer.upload_skin(&g.queue, blended, cols);
                         }
                         _ => g.renderer.upload_skin(&g.queue, pal, cols),
                     }
                     // fix-gpu-facial-morphs: the facial morph weights ride the same tick — the
                     // shader blends them into the bind-pose vertices before the palette (the
                     // shot path's `update_skin` does the same upload).
-                    g.renderer.upload_morph_weights(&g.queue, &self.scene);
+                    // perf-240: the weights are tick state (no interpolation) — upload them when the
+                    // palette is rebuilt (each tick, and the first frame of a scene), not every frame.
+                    if pal_rebuilt || self.scene.sim.is_none() { g.renderer.upload_morph_weights(&g.queue, &self.scene); }
                 }
                 let frame = match g.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
@@ -4316,7 +4353,7 @@ pub fn run() -> Result<()> {
     // `--hold-npcs` (dev): the window run holds every guard in place, still shootable.
     if dev && args.iter().any(|a| a == "--hold-npcs") { if let Some(sim) = scene.sim.as_mut() { sim.drones.hold_npcs = true; } }
     let force_channel = if dev { args.iter().position(|a| a == "--set-channel").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u8>().ok()) } else { None };
-    let mut app = App { sound, scene, cam, gfx: None, keys: HashSet::new(), grabbed: false, trigger: false, aiming: false, last: std::time::Instant::now(), choice, anim_time: time, paused: false, opts, noclip: false, just: HashSet::new(), turn: 0.0, look: 0.0, weapon_cycle: 0, gadget_cycle: 0, weapon_switch_to: None, zoom: false, dev: dev.then(|| Box::new(dev::Dev { infinite_ammo: true, ..Default::default() })), notex, nofog, iso, pending_level: None, pending_weapon_assets: None, entry_save: None, all, recorder: None, replay: None, replay_idx: 0, prev_lock_ch: false, ticked: false, frame_ticks: 0, menu_clock: 0.0, fe_clock: 0.0, selected_difficulty: 2, zoom_cycle: 0, pending_mission_end: false, pending_mp_debrief: None, force_channel, cam_prev: None, cam_cur: None, pal_prev: None, pal_cur: None, fps_cap, fps_meter: FpsMeter::default(), frame_start: std::time::Instant::now(), panel: None, panel_level: 0, panel_frames: 0, fe: None, level_code: 0, fe_music_page: None, menu_handle: 0, lang: None, profile_session: menu::ProfileSession::default(), #[cfg(feature = "gamepad")] pad: pad_backend,
+    let mut app = App { sound, scene, cam, gfx: None, keys: HashSet::new(), grabbed: false, trigger: false, aiming: false, last: std::time::Instant::now(), choice, anim_time: time, paused: false, opts, noclip: false, just: HashSet::new(), turn: 0.0, look: 0.0, weapon_cycle: 0, gadget_cycle: 0, weapon_switch_to: None, zoom: false, dev: dev.then(|| Box::new(dev::Dev { infinite_ammo: true, ..Default::default() })), notex, nofog, iso, pending_level: None, pending_weapon_assets: None, entry_save: None, all, recorder: None, replay: None, replay_idx: 0, prev_lock_ch: false, ticked: false, frame_ticks: 0, menu_clock: 0.0, fe_clock: 0.0, selected_difficulty: 2, zoom_cycle: 0, pending_mission_end: false, pending_mp_debrief: None, force_channel, cam_prev: None, cam_cur: None, pal_prev: None, pal_cur: None, pal_blend: Vec::new(), pal_moving: Vec::new(), fps_cap, fps_meter: FpsMeter::default(), frame_start: std::time::Instant::now(), panel: None, panel_level: 0, panel_frames: 0, fe: None, level_code: 0, fe_music_page: None, menu_handle: 0, lang: None, profile_session: menu::ProfileSession::default(), #[cfg(feature = "gamepad")] pad: pad_backend,
         movie: None, devwin: None,
         audio_paused: false, loading_art: None, loading_hint: Default::default(), menu_pointer: None,
         net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_armed: None,

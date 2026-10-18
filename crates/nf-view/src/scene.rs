@@ -6868,10 +6868,29 @@ impl Scene {
     /// character's skin matrices, bone world matrices and object matrix (None = unposed), every attachment's
     /// matrix, and which characters are hidden (collapsed to their object origin).
     pub fn frame_state(&self, choice: Option<usize>, ticks: f32, opts: ViewOpts) -> FrameState {
-        let mut cache: HashMap<(u32, usize, u32), (Vec<Mat4>, Vec<Mat4>, f32)> = HashMap::new();
+        self.frame_state_for(choice, ticks, opts, false)
+    }
+
+    /// `frame_state` for the GPU palette (frame-240): with `skip_hidden`, a hidden character is not
+    /// posed at all (`posed[ci] = None`). The palette collapses every hidden character's bones to its
+    /// placement point without reading the pose, and its attachments collapse to a zero-size point
+    /// (`collapse`) — drawn nothing either way — so the pose was pure cost: on the pool-heavy levels
+    /// most of the ~150 characters are parked reinforcements.
+    pub fn frame_state_for(&self, choice: Option<usize>, ticks: f32, opts: ViewOpts, skip_hidden: bool) -> FrameState {
+        let hidden = |c: &Character, ci: usize| {
+            if choice.is_some() {
+                match c.script {
+                    Some(src) => self.sim.as_ref().and_then(|s| s.script_anim(src, c.skin.hashcode)).is_none(),
+                    None => false,
+                }
+            } else {
+                self.char_hidden(ci, opts)
+            }
+        };
         // With the AI running (and no sequence browsing), each guard shows its drone's animation, yaw and position.
         let drone_of = |ci: usize| choice.is_none().then(|| self.sim.as_ref().and_then(|s| s.char_drone[ci].map(|di| (s, di)))).flatten();
-        let posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>> = self.characters.iter().enumerate().map(|(ci, c)| {
+        let pose_one = |ci: usize, c: &Character, cache: &mut HashMap<(u32, usize, u32), (Vec<Mat4>, Vec<Mat4>, f32)>| -> Option<(Vec<Mat4>, Vec<Mat4>, Mat4)> {
+            if skip_hidden && hidden(c, ci) { return None; }
             // Drones: the simulation's pose — blended scripts, fractional frames, upper-body aim — the same one the hit
             // boxes use (`Drone::object_pose`).
             if let Some((s, di)) = drone_of(ci) {
@@ -6926,24 +6945,17 @@ impl Scene {
             let a0 = drone_height(hip);
             m[3][1] = match c.floor { Some(f) => f + a0, None => c.matrix[3][1] + a0 - 1.0 };
             Some((mats, world, m))
-        }).collect();
+        };
+        // One memo across the characters: the crowds share (mesh, sequence, frame) poses.
+        let mut cache = HashMap::new();
+        let posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>> = self.characters.iter().enumerate().map(|(ci, c)| pose_one(ci, c, &mut cache)).collect();
         // Held back: spawner reinforcements and drones disabled while they wait for a switch channel (object flags
         // 0x30, `NDrone2_Enable(0)`); R shows them. The inspect path (`choice`) pins a drone-backed
         // character visible; script actors keep their liveness gate either way.
-        let hidden = |c: &Character, ci: usize| {
-            if choice.is_some() {
-                match c.script {
-                    Some(src) => self.sim.as_ref().and_then(|s| s.script_anim(src, c.skin.hashcode)).is_none(),
-                    None => false,
-                }
-            } else {
-                self.char_hidden(ci, opts)
-            }
-        };
         // A matrix that collapses a mesh to one point: its triangles become degenerate and draw nothing.
         let collapse = |at: &Mat4| -> Mat4 { [[0.0; 4], [0.0; 4], [0.0; 4], [at[3][0], at[3][1], at[3][2], 1.0]] };
         // Attached meshes: datum local · bone world · object (bind world when the character has no animation).
-        let attach: Vec<Mat4> = self.attachments.iter().enumerate().map(|(k, a)| {
+        let att_one = |k: usize, a: &Attachment| -> Mat4 {
             // The gas puffs: a camera billboard with the puff's scale and spin (the game's draw path is
             // `View_DrawObjectGlist`'s obj+0xF0 & 8 billboard: viewer rotation · the object's angles, scaled
             // by obj+0xE8 [M 0x1e6780:43-65]); free slots collapse like the tracers.
@@ -7292,6 +7304,10 @@ impl Scene {
                 return p.map_or(far, |p| p.m);
             }
             let c = &self.characters[a.character as usize];
+            // A hidden owner's attachments collapse at its placement point (frame-240: the palette path
+            // no longer poses hidden characters; the collapsed mesh draws nothing wherever it sits, and
+            // the CPU path collapses at the same point so the two stay vertex-equal).
+            if hidden(c, a.character as usize) { return collapse(&c.matrix); }
             let datum = match &posed[a.character as usize] {
                 Some((_, world, m)) => anim::mul(&anim::mul(&a.local, &world[a.bone]), m),
                 None => {
@@ -7300,7 +7316,6 @@ impl Scene {
                     anim::mul(&anim::mul(&a.local, &bind), &c.matrix)
                 }
             };
-            if hidden(c, a.character as usize) { return collapse(&datum); }
             // Dropped: the drone holds nothing (`anim+0x62` = 0).
             // Unarmed (dropped, or surrendered: `ChangeWeapon(1)`): no gun. *Deviation*: a drawn sidearm (weapon 6) still
             // shows the original weapon's mesh.
@@ -7407,7 +7422,8 @@ impl Scene {
             let tick = ticks as u32 + 3 * a.character;
             if !opts.firing || tick % 8 >= 2 { return collapse(&datum); }
             muzzle_flash_matrix(&datum, (tick / 8) ^ (k as u32).wrapping_mul(0x9e37_79b9))
-        }).collect();
+        };
+        let attach: Vec<Mat4> = self.attachments.iter().enumerate().map(|(k, a)| att_one(k, a)).collect();
         let mut hidden: Vec<bool> = self.characters.iter().enumerate().map(|(ci, c)| hidden(c, ci)).collect();
         // fix-sentinel-camera-play: the guided ride draws no view model — the game's player
         // substate 10 cleared the anim set [M `Player_ChangeSubState(10)`, `Player_Update`
@@ -7731,7 +7747,7 @@ impl Scene {
     /// the forced list, `View_AddForcedObjects` 0x1e5fb8). `None` = the walk is off (`NF_NOPORTAL`).
     pub fn skin_palette(&self, l: &SkinLayout, choice: Option<usize>, time: f32, opts: ViewOpts, vis: Option<&[bool]>) -> (Vec<Mat4>, Vec<[f32; 4]>) {
         const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
-        let fs = self.frame_state(choice, time, opts);
+        let fs = self.frame_state_for(choice, time, opts, true);
         let collapse = |at: &Mat4| -> Mat4 { [[0.0; 4], [0.0; 4], [0.0; 4], [at[3][0], at[3][1], at[3][2], 1.0]] };
         // fix-dev-spawn-visible: a LIVE drone's character (present + enabled — the dev NPC spawns, and
         // the placed guards while they fight) must not vanish when the strict portal walk drops the
@@ -8464,3 +8480,4 @@ mod tests {
         assert!((0..3).any(|k| (efar[k] - b[k]).abs() > 0.05), "the euler build should miss: {efar:?}");
     }
 }
+
