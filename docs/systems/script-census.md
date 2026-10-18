@@ -125,6 +125,10 @@ does not act on, plus 4 one-per-level marker types neither side touches. (The ga
 has spawned them since — `nf-game/src/cover.rs` `from_placement`/`build`, `Drone_CoverCornerNode`
 0x136ff0 / `Drone_CoverLowNode` 0x137340, from EVERY map entry per the loader dispatch
 [task cover-nodes, 2026-10-17].)
+(0x2c lightning 15 was listed here by the original census; the port now pairs the records into
+strikes and runs `Lightning_Update` — `nf-game/src/world_fx.rs` `pair_lightning_recs` +
+`LightningStrike::tick`, `Lightning_Create` 0x18cde8 / `Lightning_Update` 0x18cf68
+[task script-ops-unported, 2026-10-18].)
 (0xFB music trigger 15 was listed here by the original census; the port now creates the trigger
 and runs its update — `nf-game/src/worldobj.rs` `MusicTrigger`, `MusicTrigger_Create` 0x1b30e0 /
 `MusicTrigger_Update` 0x1b31a0 [task music-triggers, 2026-10-17].)
@@ -135,14 +139,14 @@ start set with the game's kind 0 — `nf-game/src/player.rs` `starts_from_placem
 | type | count | port | game spawn fn |
 |---|---|---|---|
 | 0x27 | 41 | — | GT_Create 0x17ffa0 |
-| 0x2b | 3 | — | LeafGen_Create 0x1acbd0 |
-| 0x2c | 15 | — | Lightning_Create 0x18cde8 |
+| 0x2b | 3 | PORTED (world_fx.rs `LeafGenFx`) | LeafGen_Create 0x1acbd0 |
+| 0x2c | 15 | PORTED (world_fx.rs `LightningStrike`, script-ops-unported) | Lightning_Create 0x18cde8 |
 | 0x38 | 1 | — | Create_SpaceLaser 0x1aa8b8 |
-| 0x39 | 8 | — | Create_SpaceMissile 0x1a9ef0 |
+| 0x39 | 8 | PORTED (space_missile.rs, drone.rs 0x39 walk) | Create_SpaceMissile 0x1a9ef0 |
 | 0xdd | 33 | — | — none (game ignores) |
 | 0xe4 | 64 | — | Hurt_Create 0x17e870 |
-| 0xe9 | 162 | — | Drone_AIPoint 0x137550 |
-| 0xf3 | 8 | — | Env_Tree_Create 0x17c200 |
+| 0xe9 | 162 | PORTED (aipoint.rs, task ai-points) | Drone_AIPoint 0x137550 |
+| 0xf3 | 8 | PORTED (world_fx.rs `TreeFx`) | Env_Tree_Create 0x17c200 |
 | 0xf6 | 33 | — | — none (game ignores) |
 | 0xf7 | 33 | — | — none (game ignores) |
 | 0xff | 39 | — | — none (game ignores) |
@@ -315,11 +319,11 @@ player scripts, so its real gameplay reach is narrower than its 12,947 count.
 | 7 | placement 0x2D start-pos slot 0 | 51 | PORTED (nf-game/src/player.rs, 2026-10-17): `starts_from_placements` — `Player_AddNewStartPos(...,0)` 0x195c00 kind 0 | second start-position set |
 | 8 | placement 0x27 GT | 41 | `GT_Create` 0x17ffa0 (+ Update/Activate/TakeControl) | controllable special object |
 | 9 | placement 0xFB music trigger | 15 | `MusicTrigger_Create` 0x1b30e0 / `_Update` 0x1b31a0 | `Music_Event(id,2)` countdown music |
-| 10 | placement 0x2C lightning | 15 | `Lightning_Create` 0x18cde8 | storm lightning in 07000001/07000041 |
+| 10 | placement 0x2C lightning | 15 | PORTED (nf-game/src/world_fx.rs, 2026-10-18): `pair_lightning_recs` — `Lightning_Create` 0x18cde8's class-0x33 pairing (the finder is the master) + `Lightning_Update` 0x18cf68's visibility/reflicker + `FractalThing` 0x1a94d8; the storm side (the 0x2a sky timers + `SuperHappyLightningFlag`) is sky.rs's, not driven by the sim yet | storm bolts in 07000001/07000041 — data + state for the render pass |
 | 11 | anim op-4 kinds 1/3/7 | 109 | flag toggle / `Sound_StopAllWithId` / weapon transform [M 0x1c1b38] | minor audio/anim polish |
-| 12 | placement 0x39 space missile | 8 | `Create_SpaceMissile` 0x1a9ef0 | 0700001b set piece |
-| 13 | placement 0xF3 tree | 8 | `Env_Tree_Create` 0x17c200 | trees in 07000002/07000004 |
-| 14 | placement 0x2B leaf gen | 3 | `LeafGen_Create` 0x1acbd0 | leaf particle emitters |
+| 12 | placement 0x39 space missile | 8 | PORTED (nf-game/src/space_missile.rs, drone.rs 0x39 walk) | 0700001b set piece |
+| 13 | placement 0xF3 tree | 8 | PORTED (nf-game/src/world_fx.rs `TreeFx`) | trees in 07000002/07000004 |
+| 14 | placement 0x2B leaf gen | 3 | PORTED (nf-game/src/world_fx.rs `LeafGenFx`) | leaf particle emitters |
 | 15 | NIS event 0x08 coder drone | 1 | `Drone_CoderCreate` 0x13a108 | 07000001 gadget-drone intro |
 | 16 | NIS event 0x09 cam mode | 1 | `Player_Cam2Mode` 0x195fc8 | 07000001 camera mode — **ported (nis-event9-cnis)** |
 | 17 | NIS event 0x0a break | 1 | `Break_DoBreak` 0x12c168 | 07000001 script breakable |
@@ -363,7 +367,14 @@ records (165), NIS op none, anim ops 2/3 (0), event kinds 0x0e/0x10/0x13 (0), en
    (`worldobj.rs` `MusicTrigger`); 07000001 pins the real path — channel 13 on fires
    `Music_Event(2, 2)` into the alarm hysteresis, clearing it lets the 0x1e countdown expire.
    The original task text: `MusicTrigger_Create` 0x1b30e0 + `MusicTrigger_Update` 0x1b31a0.
-6. **Lightning (0x2C, 15; 07000001 ×11, 07000041 ×4).** `Lightning_Create` 0x18cde8: storm
+6. **Lightning (0x2C, 15; 07000001 ×11, 07000041 ×4).** ~~Port~~ **DONE (task
+   script-ops-unported, 2026-10-18):** `world_fx.rs` `pair_lightning_recs`/`LightningStrike` —
+   the pairing (the finder of the key match is the master, 07000001 chains 9 strikes off its
+   two ladders), the hide/draw arms reading the port's `LightningGlobals` copy, and
+   `fractal_thing` 0x1a94d8 with caller-supplied draws (the 21 shared-stream `Rand_FRand`s
+   stay out of the sim's stream — the counter-hash stand-in [S]). `lightning_live.rs` pins
+   both levels. The storm timers (sky.rs `Sky`) are NOT sim-driven yet — the bolts rest hidden
+   until the sky pass lands. The original task text: `Lightning_Create` 0x18cde8: storm
    flashes. Visual — needs the main agent's render pass to confirm the flash/timing model.
 7. **NIS event kinds 0x08/0x09/0x0a (script 0600005b, 07000001).** Three single-line handlers:
    `Drone_CoderCreate` 0x13a108 (spawn coder drone: params skin 0x0500001b, anim 0x060000a6,
@@ -394,7 +405,7 @@ menus; kind-15 icon — cosmetic; anim op-4 kinds 1/3/7 — 109 commands, minor.
 
 `crates/nf-formats/tests/script_census.rs` (added by this task) re-runs the census through the
 port's own parsers on every 07* archive and pins the handled sets and the headline counts as
-constants: 20 NIS opcodes handled, 14 event kinds, 7 trigger actions, 62 placement types; and
+constants: 20 NIS opcodes handled, 14 event kinds, 7 trigger actions, 63 placement types; and
 the disc totals (468 NIS scripts, 5,263 streams, 851 events with 3 on unhandled kinds, 18,231
 anim scripts, 50,279 anim commands, 7,372 dynamic placements, 676 triggers, 1 movie trigger).
 A regression that stops handling something, or a newly handled opcode, changes a constant and
