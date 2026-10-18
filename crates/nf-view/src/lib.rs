@@ -1906,6 +1906,9 @@ struct App {
     /// frame 1 with `net_tick` still at 3 — every later hash compared different frames; the
     /// two-window check, 2026-10-18). Cleared, with `net_tick = 0`, by `swap_in_scene`.
     net_await_load: bool,
+    /// The online match's wall clock (set when its level swaps in): the lockstep runs to
+    /// `elapsed · 60` ticks, catching up after a stall instead of dropping the stalled ticks.
+    net_clock: Option<std::time::Instant>,
     /// The `--net-host` demo arm: the settings waiting for the first client to join (the lobby
     /// pages are task 052's; the flag path starts the match as soon as someone connects).
     net_armed: Option<nf_game::mp::MpSettings>,
@@ -2467,6 +2470,7 @@ impl App {
         if self.net.is_some() && self.net_await_load {
             self.net_await_load = false;
             self.net_tick = 0;
+            self.net_clock = Some(std::time::Instant::now());
             // The first `input_delay` ticks have no sampled input (nothing ran that many ticks
             // before them): every machine submits NEUTRAL for its own slot there, so tick 0 is ready
             // at once instead of each window waiting on itself (the two-window freeze, 2026-10-18).
@@ -3662,6 +3666,16 @@ impl ApplicationHandler for App {
                         Some(d) => d.tick_count(elapsed),
                         None => elapsed,
                     };
+                    // Online: the tick budget is the match clock's, not the frame's — ticks a stall
+                    // held back run on the next frames (≤ 4 per frame), so a stall delays the match
+                    // instead of permanently slowing it (the two-window check ran at ~15 Hz).
+                    let n_ticks = match (self.net.is_some(), self.net_clock) {
+                        (true, Some(c)) => {
+                            let target = (c.elapsed().as_secs_f64() * 60.0) as u32;
+                            target.saturating_sub(self.net_tick).min(4)
+                        }
+                        _ => n_ticks,
+                    };
                     self.ticked = n_ticks > 0;
                     let eye = [self.cam.pos.x, self.cam.pos.y, self.cam.pos.z];
                     let look = self.cam.dir().to_array();
@@ -3680,7 +3694,11 @@ impl ApplicationHandler for App {
                             // wait, not a default.
                             if let Some(session) = self.net.as_mut() {
                                 if self.net_await_load { self.ticked = false; break; }
-                                if session.0.borrow_mut().ready_inputs(self.net_tick).is_none() { self.ticked = false; break; }
+                                if session.0.borrow_mut().ready_inputs(self.net_tick).is_none() {
+                                    NET_STALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    self.ticked = false;
+                                    break;
+                                }
                             }
                             // B-5 record/replay: when `--replay` is set, the input comes from the recording, not the
                             // keyboard. The recorded tick drives `step_bond` exactly as it did when recorded; the user
@@ -3812,6 +3830,11 @@ impl ApplicationHandler for App {
                                     session.0.borrow_mut().submit_hash(self.net_tick, h);
                                 }
                                 self.net_tick += 1;
+                                // NF_NET_RATE: once a second, the ticks run / stalls / frames.
+                                if self.net_tick % 60 == 0 && std::env::var_os("NF_NET_RATE").is_some() {
+                                    let c = self.net_clock.map_or(0.0, |c| c.elapsed().as_secs_f64());
+                                    eprintln!("[netrate] tick {} at {:.1} s ({:.1}/s), stalls {}", self.net_tick, c, self.net_tick as f64 / c.max(1e-3), NET_STALLS.swap(0, std::sync::atomic::Ordering::Relaxed));
+                                }
                                 // Render-check aid (NF_NET_SHOT=<tick>): the F12 capture at that match tick.
                                 if std::env::var("NF_NET_SHOT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(self.net_tick) {
                                     NET_SHOT_DUE.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -4497,7 +4520,7 @@ pub fn run() -> Result<()> {
     let mut app = App { sound, scene, cam, gfx: None, keys: HashSet::new(), grabbed: false, trigger: false, aiming: false, last: std::time::Instant::now(), choice, anim_time: time, paused: false, opts, noclip: false, just: HashSet::new(), turn: 0.0, look: 0.0, weapon_cycle: 0, gadget_cycle: 0, weapon_switch_to: None, zoom: false, dev: dev.then(|| Box::new(dev::Dev { infinite_ammo: true, ..Default::default() })), notex, nofog, iso, pending_level: None, pending_weapon_assets: None, entry_save: None, all, recorder: None, replay: None, replay_idx: 0, prev_lock_ch: false, ticked: false, frame_ticks: 0, menu_clock: 0.0, fe_clock: 0.0, selected_difficulty: 2, zoom_cycle: 0, pending_mission_end: false, pending_mp_debrief: None, force_channel, cam_prev: None, cam_cur: None, pal_prev: None, pal_cur: None, pal_blend: Vec::new(), pal_moving: Vec::new(), fps_cap, fps_meter: FpsMeter::default(), frame_start: std::time::Instant::now(), panel: None, panel_level: 0, panel_frames: 0, fe: None, level_code: 0, fe_music_page: None, menu_handle: 0, lang: None, profile_session: menu::ProfileSession::default(), #[cfg(feature = "gamepad")] pad: pad_backend,
         movie: None, devwin: None,
         audio_paused: false, loading_art: None, loading_hint: Default::default(), menu_pointer: None,
-        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_armed: None,
+        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_clock: None, net_armed: None,
         async_load: None,
         music_bank_flip: false,
         music_loaded_bank: 0xc,
@@ -4819,3 +4842,6 @@ fn reach_config() -> Option<nf_net::p2p::ReachConfig> {
 
 /// The NF_NET_SHOT render-check aid's pending capture (set inside the tick loop's sim borrow).
 static NET_SHOT_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// NF_NET_RATE's stall counter.
+static NET_STALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
