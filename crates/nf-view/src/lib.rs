@@ -1230,7 +1230,13 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // online match's bodies agree; slot 0's bond takes `sim.bond` (the pre-net behaviour) and
             // the rest park in `Sim::mp_bonds` until each machine swaps its own slot in
             // (`Sim::swap_local_slot`).
-            let humans = (m.settings.human_count as usize).clamp(1, 4);
+            // The game's own human cap is 4 (its fixed 8-slot layout); the
+            // port extends the spawn walk to every human slot of the 16-cap
+            // settings [S mp-16-slots — MP_Start 0x183a50:116-128 inits
+            // humans 0..player_count, the count now reaching 16].
+            let humans = (m.settings.human_count as usize)
+                .clamp(1, nf_game::mp::MP_MAX_SLOTS)
+                .min(sim.mp_bonds.len());
             let mut first_spawn = 0usize;
             for slot in 0..humans {
                 let sp = m.get_spawn_point(m.settings.players[slot].team as u16, slot, &mut sim.drones.rng) as usize;

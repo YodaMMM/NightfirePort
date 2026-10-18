@@ -8575,9 +8575,11 @@ impl Sim {
                     health, score: m.game.slots[slot].score,
                 };
             }
-            // The bots (positions snapshotted this tick — the brain's own row is skipped by index).
+            // The bots (positions snapshotted this tick — the brain's own row is skipped by
+            // index). Their slots follow the humans [S mp-16-slots; the game's base was 4].
             for (i, b) in m.bots.iter().enumerate() {
-                let slot = 4 + i;
+                let slot = m.settings.human_count as usize + i;
+                if slot >= nf_net::MAX_AGENTS { continue; }
                 others[slot] = nf_game::mp::bots::OtherPlayer {
                     pos: b.brain.pos,
                     alive: !b.dead,
@@ -8804,7 +8806,10 @@ impl Sim {
         self.mp.as_ref().map_or(0, |m| m.bots[i].respawns)
     }
     pub fn mp_bot_score(&self, i: usize) -> i32 {
-        self.mp.as_ref().map_or(0, |m| m.game.slots[4 + i].score as i32)
+        self.mp.as_ref().map_or(0, |m| {
+            let slot = m.settings.human_count as usize + i;
+            if slot < m.game.slots.len() { m.game.slots[slot].score as i32 } else { 0 }
+        })
     }
 
 
