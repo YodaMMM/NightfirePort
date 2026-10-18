@@ -6504,7 +6504,22 @@ impl FrontEnd {
     /// sprintf "%s %d" @0x30d388 with slot+1].
     /// An online player's shown name: its codename, or "Player N" by slot when it sent none.
     fn mp_net_codename(&self) -> String {
-        self.active_profile.clone().unwrap_or_else(|| "Player 1".into())
+        self.mp_save_name().unwrap_or_else(|| "Player 1".into())
+    }
+
+    /// The online name: the player's single-player save codename — the one picked this session,
+    /// else the most recently saved profile on disk (the user: "use the name attached to their SP
+    /// save"); None with no save at all (the host then names the slot "Player N") [S].
+    pub fn mp_save_name(&self) -> Option<String> {
+        if let Some(n) = self.active_profile.as_ref().filter(|n| !n.trim().is_empty()) { return Some(n.clone()); }
+        let dir = self.profile_dir.clone().or_else(crate::settings::config_dir)?;
+        std::fs::read_dir(dir).ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "profile"))
+            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path().file_stem()?.to_string_lossy().into_owned())))
+            .max_by_key(|(m, _)| *m)
+            .map(|(_, n)| n)
+            .filter(|n| !n.trim().is_empty())
     }
 
     /// Host: the Start Listening row [S §2.1]. Arms host mode: the session binds the port, the
@@ -6579,7 +6594,7 @@ impl FrontEnd {
         }
         // A client without a profile sends no name: the host names it by its slot ("Player 2"…),
         // so two profile-less machines don't both read "Player 1" (the two-window check) [S].
-        let codename = self.active_profile.clone().unwrap_or_default();
+        let codename = self.mp_save_name().unwrap_or_default();
         let Some(sess) = self.mp_session.as_mut() else {
             self.mp_net_error = Some(MpNetError::Denied);
             return false;
@@ -7346,6 +7361,13 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 if fe.mp_lobby_start_enabled() { "Everyone is ready - Start the match" } else { "Waiting for every player to be ready" }
             } else { "The host starts the match" };
             left_text(&mut h, font, start_line, mx(366.0), my(250.0), if fe.mp_lobby_start_enabled() { bright } else { dim }, true, 0.8);
+            // The chosen map's picture (the user: "map image needs to be shown on lobby screen"):
+            // the Select Map wheel's own preview texture [the MP_MAP_ROWS preview ids], disc-masked
+            // like that page's emblem, under the players column.
+            if let Some(row) = MP_MAP_ROWS.iter().find(|r| r.3 == fe.mp_one.level) {
+                circle_clipped_quad(&mut h, row.0, 380.0, 258.0, 100.0, 100.0, [0.0, 0.0, 128.0, 128.0], gs(0x7f7f7f, 0xff));
+                left_text(&mut h, font, &bind(row.1), mx(492.0), my(304.0), cream, true, 1.0);
+            }
             // The internet band (net-p2p): the state, the join code (Ctrl+C), the small print.
             if let Some(r) = fe.mp_session.as_ref().and_then(|s| s.reach()) {
                 let line = match &r.code { Some(c) => format!("{}    Code: {}  (Ctrl+C)", r.state, c), None => r.state.clone() };
