@@ -51,7 +51,7 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
 }
 
 #[test]
-#[ignore = "the vent cut-scene (SP #276, script 0x06000833 [D]) never writes ch 0x47 in the port — the scene's firing (the touch #301 → SP start → the 1400-tick script's channel write) is the documented open gap walkreal-b parked ('the next session debugs the vent cut-scene'); the route past it is written and continues from the branch once the scene fires — owner: the cut-scene owner (fix-cutscenes2 candidate)"]
+#[ignore = "the vent duct is grated: the crawl south from the start wedges at z=59.41 on the grate frame's posts + bars at z=58.81..58.91 [D world tris t77/t92/t95/t96/t188-t196: two 0.10 posts x 40.05..40.15/41.44..41.55 + a full-width bar face at z≈58.90, window x 40.15..41.44 y 2.50..3.76] — the crouch capsule (r 0.55) cannot thread it and nothing in the port opens it. The game's way past it is unverified: the lid SPs (#266/#328/#847, script 0x06000A3B, mode-64 preload stopped) sit on the route and are the open candidates, or the route leaves through the east duct to the Vent_StoreRoom_Ladder #304 (46.01,−1.30,62.57) past the locked hatch #267 [D names]. Live checks requested in the report. The fusebox legs below also need the Laser (E does nothing on fuseboxes [M 0x1a5170:95-160]) — walkreal-b's E-cut predates that finding."]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
