@@ -968,6 +968,19 @@ pub struct Drone {
     /// `NDrone2_NearArmedDrone` 0x15ea28's calls — the port snapshots positions, so the team/started
     /// filter runs where the snapshot is built; f32::MAX = none) (fix-actors).
     pub armed_peer_dist: f32,
+    /// The hide-exit read's distance: the same scan PLUS the +0x2B8 remembered-peer latch —
+    /// `NDrone2_NotNearArmedDrone` 0x177640 returns "near" for the peer latched by the last
+    /// NearArmedDrone hit by DISTANCE ALONE, without the sight test [M 0x177640:94-115; the live/
+    /// armed filters still apply to him]. Consumed only by the LEAD_HIDE > 14.0 exit (0x15ec08
+    /// case 3); the ≤ 10.0 enters and the ≤ 20.0 hostage sites read the sight-gated
+    /// `armed_peer_dist` like the game's fresh NearArmedDrone calls. level-01-complete-4: without
+    /// the latch the escort's stairwell descent lost the peer behind the walls and the hide exited
+    /// 1.8 east of the AND plate.
+    pub armed_peer_exit_dist: f32,
+    /// The remembered peer (Drone+0x2B8 [M 0x177420:126 writes the found peer there]): the drone
+    /// index, u32::MAX = none. Re-written on every sighted hit; read by the exit scan's
+    /// distance-alone rule.
+    pub peer_latch: u32,
     pub special_death: u32,
     /// The spot a special death plays at (`+0xBE0`: the object's position at creation; `+0xBF4`: its yaw) and the
     /// stationary flag (`+0x4F8 & 0x10`: set at creation for special-death scripts other than 0x0600021F; blocks combat
@@ -1367,6 +1380,8 @@ impl Drone {
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false,
             mission_wait_channel: 0,
+            armed_peer_exit_dist: f32::MAX,
+            peer_latch: u32::MAX,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
             down: false,
@@ -5964,8 +5979,12 @@ impl Drone {
                 // An armed, started hostile within 10 → LeadHide (the cower) [M 0x15e698's armed-drone
                 // branch + 0x15ec08; the port's armed_peer_dist snapshot. `NDrone2_FindRunToPoint`
                 // 0x15168 — the branch's run-to-a-point half → AllyGoToGoalPosition 0x28 — is not
-                // ported; the hide arm only, as fix-actors].
-                if self.armed_peer_dist <= 10.0 {
+                // ported; the hide arm only, as fix-actors]. The game calls
+                // `NDrone2_NearArmedDrone(…, flag=1)` [M 0x15e698:30], whose flag-1 arm requires the
+                // drone's OWN behaviour prop 0x50 too [M 0x177420:57-61,
+                // `behaviour_util_getProperty` 0x1c7d98 — the port's `prop`] — without it the cower
+                // arm is dead in the game, so the port gates the enter on the same bit.
+                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 {
                     if std::env::var_os("NF_AILOG").is_some() { eprintln!("[ailog] escort {} → LeadHide (peer {:.1})", self.index, self.armed_peer_dist); }
                     self.set_state(LEAD_HIDE);
                     return true;
@@ -6000,10 +6019,11 @@ impl Drone {
             (ALLY_LEAD_WAIT, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15eda8 case 1: 0x21]
             (ALLY_LEAD_WAIT, msg::UPDATE) => {
                 // [M 0x15eda8 case 3]: an armed hostile within 10 → hide (the FindRunToPoint stand-in,
-                // as Lead's arm); else the path bands: ≤ −7.0 (Bond still over 7 behind on the route)
-                // stays, and 0.0 with Bond ≥ 5.0 straight-line stays; anything else resumes the lead
-                // (the game's −9.0 enter / −7.0 resume hysteresis).
-                if self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
+                // as Lead's arm; the flag-1 prop-0x50 gate applies here too, as in Lead [M
+                // 0x15eda8:30 + 0x177420:57-61]); else the path bands: ≤ −7.0 (Bond still over 7
+                // behind on the route) stays, and 0.0 with Bond ≥ 5.0 straight-line stays; anything
+                // else resumes the lead (the game's −9.0 enter / −7.0 resume hysteresis).
+                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
                 let pd = self.object_mission_path_distance(d, 5.0, self.player_pos);
                 self.mission_path_dist = pd;
                 if pd > -7.0 && (pd != 0.0 || crate::nav::dist2d(self.pos, self.player_pos) < 5.0) { self.set_state(ALLY_LEAD); }
@@ -6016,18 +6036,21 @@ impl Drone {
             // parks him in PlayerInWay.
             (PLAYER_IN_WAY, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15ea28 case 1: 0x21]
             (PLAYER_IN_WAY, msg::UPDATE) => {
-                // An armed hostile within 10 → hide (the FindRunToPoint stand-in, as Lead's arm);
+                // An armed hostile within 10 → hide (the FindRunToPoint stand-in, as Lead's arm; the
+                // flag-1 prop-0x50 gate applies here too [M 0x15ea28:30 + 0x177420:57-61]);
                 // otherwise resume the lead once Bond leaves the stay band — inside the π/3
                 // (0x3f860a92) facing cone AND 3.5 [M 0x15ea28 case 3].
-                if self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
+                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
                 if !self.bond_band(3.5, 1.047_197_6) { self.set_state(ALLY_LEAD); }
                 true
             }
             (LEAD_HIDE, msg::ENTER) => { self.call_anim(d, anim_state::COWER, 0, 0); true } // [M 0x15ec08 case 1: 0x19]
             (LEAD_HIDE, msg::UPDATE) => {
                 // No armed drone within 14 (0x41600000) → latch and return to Lead in 2 ticks
-                // [M 0x15ec08 case 3: +0xCD8 = 1, timer C = now + 2·FRAME_RATE_INT].
-                if self.armed_peer_dist > 14.0 && self.timer_c.is_none() {
+                // [M 0x15ec08 case 3: +0xCD8 = 1, timer C = now + 2·FRAME_RATE_INT]. The exit read
+                // is NotNearArmedDrone's latch-aware scan (armed_peer_exit_dist) — the remembered
+                // peer holds the hide by distance alone [M 0x177640:94-115].
+                if self.armed_peer_exit_dist > 14.0 && self.timer_c.is_none() {
                     self.timer_c = Some(frame + 2);
                 }
                 true
@@ -6050,12 +6073,13 @@ impl Drone {
             }
             // AllyLeadBondCombat 0x22 (0x15f120): Bond is fighting near the escort — hold the alert
             // idle. UPDATE [M 0x15f120 case 3]: an armed hostile within 10 → hide (the FindRunToPoint
-            // stand-in); else the path distance: < 0 (Bond still behind on the route) stays;
+            // stand-in; the flag-1 prop-0x50 gate applies here too [M 0x15f120:26 +
+            // 0x177420:57-61]); else the path distance: < 0 (Bond still behind on the route) stays;
             // `DAT_00298f80 != 0` stays (no decomp writer — reads 0, docs/fields/
             // hitdata-spawner-ally.md §3); otherwise Lead.
             (LEAD_BOND_COMBAT, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15f120 case 1: 0x21]
             (LEAD_BOND_COMBAT, msg::UPDATE) => {
-                if self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
+                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
                 let pd = self.object_mission_path_distance(d, 5.0, self.player_pos);
                 self.mission_path_dist = pd;
                 if pd >= 0.0 { self.set_state(ALLY_LEAD); }
@@ -7874,6 +7898,18 @@ pub struct Drones {
     /// Bond's bullets in flight, what they hit this tick, the global flinch stamp (`DAT_00298FC0`) and whether Bond
     /// aims (L1).
     pub player_bullets: Vec<PlayerBullet>,
+    /// fix-0c-hatch-latches2 (rebased onto the grate-02 machine): this tick's player-bullet Operate
+    /// contacts against the SS parts, per SS index (bit 1 = a bullet) — recorded by
+    /// `update_player_bullets` from each bullet's flight segment (dead or alive: in the game the
+    /// collision pass registers the contact on the hit object's `obj+0xD0` [M `SS_Operate`
+    /// 0x1a9df8:12-45], and that pass is also what kills the bullet — a solid SS winch box can only
+    /// be reached by a bullet that dies on it). Merged into the `SS_Operate` contacts by the tick's
+    /// SS block; cleared each tick at the flight pass's head.
+    pub ss_bullet_contacts: Vec<u8>,
+    /// level-0c-complete: the use key's class-0x1D trigger half, deferred from the scene's use
+    /// block to this tick's post-`Trigger_Calc` slot (the game runs it at Bond's turn in the
+    /// object walk — see `player_use_doors`'s note). `(head, look)`.
+    pub use_trigger_request: Option<(V3, V3)>,
     pub player_impacts: Vec<PlayerImpact>,
     /// fix-gas-rng4 (111d3's deferral onto the G-041 walk): the world-hit draws' ride record — one
     /// entry per player bullet whose flight segment ended on the world this tick, `(bullet index,
@@ -8286,6 +8322,10 @@ impl Drones {
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), props: Default::default(), breaks: Default::default(), break_kills: Vec::new(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             // fix-06-alarm (fields on their own lines — merge lesson 4).
             sound_triggers: Default::default(),
+            // fix-0c-hatch-latches2: the per-tick player-bullet SS Operate contacts (see the field).
+            ss_bullet_contacts: Vec::new(),
+            // level-0c-complete: the deferred use-key trigger half (see the field).
+            use_trigger_request: None,
             node_doors: None,
             // fix-nav-remainder (fields on their own lines — merge lesson 4).
             node_kicks: None,
@@ -8517,6 +8557,14 @@ impl Drones {
                 else { level.maps[m].objects.get(p.index as usize) };
             obj.map(|o| (o.centre, o.radius))
         });
+        // `Lock_Update` case 1 (0x1ae3d8) writes `switch_channels[u16[+8]] = 1` EVERY tick while the
+        // lock sits in state 1 (unlocked) — so the param-6 Operative create-unlock holds its out
+        // channel on from the first frame (07000011's keypad lock #177, out ch 0x12, gates the
+        // stairwell door). The port has no per-tick lock loop (the burn is event-driven), so the
+        // hold is written once here — the channels are level-latched, the state is identical.
+        for l in self.locks.iter().filter(|l| (l.unlocked || l.burned) && l.out != 0) {
+            self.channels.set(l.out as u32, 1, self.frame);
+        }
         // The grapple points (`Grapple_Create` 0x198298, placement 0x3A, class 0x51; fix-gadgets) —
         // the Q-Claw's fire targets, the same world-sphere shape as the ladders.
         self.grapple_points = crate::gadget::GrapplePoint::create(&level.maps[m].placements, |p| {
@@ -9065,6 +9113,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let held_targets = self.scripts.held_hit_targets(d);
         let frame = self.frame;
         let mut bullets = std::mem::take(&mut self.player_bullets);
+        // fix-0c-hatch-latches2: this tick's bullet-vs-SS-part Operate contacts (bit 1), recorded
+        // per flying bullet below — the game's collision pass registers the bullet contact on the
+        // hit object's `obj+0xD0` list whether or not the hit kills the bullet [M `SS_Operate`
+        // 0x1a9df8:12-45; `Collide_Update` 0x1ea398], so a solid SS winch box is driven by the
+        // very bullet that dies on it. The port's dead bullets are removed by this pass's retain
+        // before the tick's SS block runs — the recording here is what carries the contact over.
+        // (The boxes are the LAST set_dynamic's poses — the walk runs after this pass; one tick
+        // stale for a bullet that is dead-on-hit anyway.)
+        self.ss_bullet_contacts.clear();
+        let ss_parts: Vec<(usize, [f32; 3], [f32; 3])> = d.world.dynamic_boxes().iter()
+            .filter(|&&(id, _, _)| id >> 40 == 0x2)
+            .map(|&(id, lo, hi)| ((id & 0xF_FFFF_FFFF) as usize, lo, hi)).collect();
+        if !ss_parts.is_empty() { self.ss_bullet_contacts.resize(self.sss.list.len(), 0); }
         for (bi, b) in bullets.iter_mut().enumerate() {
             if b.dead { continue; }
             // rocket-sound-leak [M Bullet_update 0x12e7b0:98-108, the head of EVERY tick before the
@@ -9113,6 +9174,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let ray = [b.dir[0] * l, b.dir[1] * l, b.dir[2] * l];
             let end = [b.pos[0] + ray[0], b.pos[1] + ray[1], b.pos[2] + ray[2]];
             self.bullet_paths.push((b.pos, end));
+            // fix-0c-hatch-latches2: the flight segment's SS Operate contacts (bit 1) — the game's
+            // bullet registers on every object its flight touches this tick, the death inclusive
+            // [M 0x1a9df8:35-39 the class-5 bit; the contact list is the collision pass's product].
+            for &(k, lo, hi) in &ss_parts {
+                if k >= self.ss_bullet_contacts.len() { continue; }
+                let over = (0..3).all(|ax| {
+                    let (slo, shi) = (b.pos[ax].min(end[ax]) - 0.05, b.pos[ax].max(end[ax]) + 0.05);
+                    hi[ax] >= slo && lo[ax] <= shi
+                });
+                if over { self.ss_bullet_contacts[k] |= 2; }
+            }
             // fix-samurai-fire: the `+0x6C` bit 0x10000 Swoosh ribbon [M `Bullet_init` 0x12c5a0:116-133:
             // for such records `Swoosh_Create(spawn, spawn, weapon_data+0x76, 0x20005cd, 0)` when the
             // base (+0x02) is 0x33/0x6a/0x6e — else 0x2000481, kind 1 — stored at BU+0xe; `Bullet_update`
@@ -9857,7 +9929,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         // `Player_Activate`'s class-0x1D trigger path: for every trigger within the use sphere, call
         // `Trigger_Activate` — for LOAD_LEVEL, request the level load; for TouchOnce, set the output channel.
-        self.player_use_triggers(head, look, frame);
+        // level-0c-complete: the TRIGGER half defers to the sim tick's post-`Trigger_Calc` slot — the
+        // game's E press runs at Bond's turn in the OBJECT WALK [M Player_Activate 0x1a5170 called
+        // from the walk], so the written channel is read by later-in-the-walk muxes in the SAME
+        // frame, and the next frame's `Trigger_Calc` clear (0x1b1900's type-2 zero pass) only
+        // follows the consumption. The port's use path ran BEFORE `tick_inner` — the clear+rescan
+        // wiped the write before the mux walk ever saw it (0700000c's secret-door E plate #558
+        // [D: mask 4, out 3] never reached its AND). The doors' half stays here (the events feed
+        // the scene's sound path); the request carries (head, look).
+        self.use_trigger_request = Some((head, look));
         // `Player_Activate`'s remaining classes the Tower levels need (map-tower): the mask-4
         // ScriptPlayers (`SP_Activate` 0x1dc338 — the elevator, the security keyboard), the
         // switches (0x29, `Switch_Activate` 0x1b02a8) and the Q-Worm PCs (0x35,
@@ -10720,15 +10800,66 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         let positions: Vec<Option<V3>> = self.list.iter().map(|x| x.enabled.then_some(x.pos)).collect();
-        // The armed-peer distances for `NDrone2_NearArmedDrone`'s calls (fix-actors): the nearest
-        // started, alive, team-1 drone (positions only here; the per-drone team/started filter runs
-        // on the same list before the mutable borrow below).
-        let armed_peer_dist: Vec<f32> = self.list.iter().enumerate().map(|(i, dr)| {
-            self.list.iter().enumerate()
-                .filter(|&(j, o)| j != i && o.team == 1 && o.started && !o.corpse && o.enabled)
-                .map(|(_, o)| ((o.pos[0] - dr.pos[0]).powi(2) + (o.pos[1] - dr.pos[1]).powi(2) + (o.pos[2] - dr.pos[2]).powi(2)).sqrt())
-                .fold(f32::MAX, f32::min)
+        // The armed-peer distances for `NDrone2_NearArmedDrone`/`NDrone2_NotNearArmedDrone`'s calls
+        // (fix-actors): the nearest started, alive, team-1 drone that ALSO passes the game's weapon
+        // and sight gates:
+        // - weapon [M `NDrone2_NearArmedDrone` 0x177420:94-105, disasm 0x17752c-0x177578;
+        //   `NDrone2_NotNearArmedDrone` 0x177640:76-92]: the candidate's weapon byte (obj+0xdc →
+        //   +0x62; the port's `weapon`) qualifies the candidate ONLY when it is armed — the branch
+        //   chain's SKIP exit is 0x177604 (the next-node step; the `beq v0,zero → 0x177604` at
+        //   0x177578 fires for v0==0), so a NULL record (0x177530 beql → delay v0=0), bytes 0/1
+        //   (slti < 2), 0x47 exactly (beq → 0x177574 → v0=0) and [0x48..0x69]∪≥0x72 (slti ≥ 0x48
+        //   falls to 0x177574) all SKIP, and PROCEED is exactly b ∈ [2..0x46] ∪ [0x6a..0x71] — the
+        //   same predicate as `NDrone2_ObjectIsArmed` 0x178768 (`Drone::obj_armed`). The 701d
+        //   report's "NULL record or 0x47 qualifies" reading had the branch polarity inverted.
+        // - sight [M 0x177420:110-128 / 0x177640:94-115: `DroneVision_CanSeeObjectFrom` 0x176f18,
+        //   bone 5 = the head, a head-to-head `Collide_LineOfSight` whose mask is the caller's
+        //   flags | 0xa27 (NearArmedDrone passes flags 0 [M 0x177420:124])] — the port's
+        //   `segment_masked` (world.rs) carries the 0xa27 cel/material exclusions; the old raw
+        //   `world.line_of_sight` was strictly stricter and blocked the 01 escort's stairwell peer.
+        // The scan stops at 20.0: every consumer branches at 10.0 (the Lead enters), 14.0 (the hide
+        // exit) or 20.0 (the hostage sites 0x15ce60:29 / 0x15cfe0:24), so a peer beyond 20.0 can
+        // never flip any of those comparisons (min > 20 ≡ MAX at each).
+        // Without the sight gate a guard parked on the balcony 13.7 from the escort counted forever
+        // — the hide exit needs > 14.0 — and the walk's contact never reached the plate.
+        let sighted: Vec<(f32, u32)> = self.list.iter().enumerate().map(|(i, dr)| {
+            let mut best = (f32::MAX, u32::MAX);
+            for (j, o) in self.list.iter().enumerate() {
+                if j == i || o.team != 1 || !o.started || o.corpse || !o.enabled
+                    || o.health <= 0.0 || !o.obj_armed() { continue; }
+                let d2 = (o.pos[0] - dr.pos[0]).powi(2) + (o.pos[1] - dr.pos[1]).powi(2) + (o.pos[2] - dr.pos[2]).powi(2);
+                if d2 > 400.0 { continue; }
+                if d.world.segment_masked(dr.head(), o.head()).is_some() { continue; }
+                let d3 = d2.sqrt();
+                if d3 < best.0 { best = (d3, j as u32); }
+            }
+            best
         }).collect();
+        // Phase B: the latch life-cycle and the exit read.
+        // - The enter scan (`NDrone2_NearArmedDrone` 0x177420) clears Drone+0x2B8 at entry
+        //   [M 0x177420:55] and writes the found peer on a sighted hit [M 0x177420:126]; it runs
+        //   in the four AllyLead-family states' case 3 (behind the flag-1 prop-0x50 gate [M
+        //   0x177420:57-61] — which clears first anyway) and does NOT run in LEAD_HIDE, so a latch
+        //   written at a hide-enter survives while hiding.
+        // - The exit scan (`NDrone2_NotNearArmedDrone` 0x177640) reads the latch: the remembered
+        //   peer returns "near" by DISTANCE ALONE, without the sight test [M 0x177640:94-115] —
+        //   his live/armed filters still apply. That is the game's stairwell behavior: the escort
+        //   saw the peer when the hide armed, and the walls that later block the raw sight line do
+        //   not end the hide until the remembered peer is beyond 14.
+        let latched: Vec<f32> = self.list.iter().enumerate().map(|(i, dr)| {
+            let lat = dr.peer_latch as usize;
+            if lat == usize::MAX || lat >= self.list.len() { return f32::MAX; }
+            let o = &self.list[lat];
+            if o.team != 1 || !o.started || o.corpse || !o.enabled || o.health <= 0.0 || !o.obj_armed() { return f32::MAX; }
+            ((o.pos[0] - dr.pos[0]).powi(2) + (o.pos[1] - dr.pos[1]).powi(2) + (o.pos[2] - dr.pos[2]).powi(2)).sqrt()
+        }).collect();
+        for (i, dr) in self.list.iter_mut().enumerate() {
+            dr.armed_peer_dist = sighted[i].0;
+            if matches!(dr.state, state::ALLY_LEAD | state::ALLY_LEAD_WAIT | state::PLAYER_IN_WAY | state::LEAD_BOND_COMBAT) {
+                dr.peer_latch = if sighted[i].0 <= 10.0 && sighted[i].1 != u32::MAX && dr.prop(d, 0x50) { sighted[i].1 } else { u32::MAX };
+            }
+            dr.armed_peer_exit_dist = sighted[i].0.min(latched[i]);
+        }
         let peers: Vec<(usize, V3, bool)> = self.llist.iter().map(|&i| (i, self.list[i].pos, self.list[i].seen)).filter(|&(i, _, _)| self.list[i].enabled).collect();
         // NoBunching's candidate snapshot (present, enabled, non-corpse — the game's chain rides
         // +0x4F8 bits the port does not model), indexed by drone index.
@@ -10798,6 +10929,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .collect();
         drop(prof_pre);
         { let _p = crate::prof::scope("drones: Trigger_Calc"); crate::triggers::calc(d.level, &mut self.triggers, &mut self.channels, &touchers, frame); }
+        // level-0c-complete: the deferred use-key trigger half — the game's E press fires at
+        // Bond's turn in the object walk, AFTER Trigger_Calc's touch clear and BEFORE the later
+        // muxes' updates in the same walk [M 0x1336f8's loop; Player_Activate 0x1a5170]. Consumed
+        // here so the written channel survives to the mux walk (0700000c's secret door).
+        if let Some((head, look)) = self.use_trigger_request.take() {
+            self.player_use_triggers(head, look, frame);
+        }
         // `switch_channels_prev` is snapshotted right after `Trigger_Calc`, BEFORE the object walk [M 0x1336f8:52-53
         // — `prev ← hold; hold ← channels` at 0x1337cc/0x1337dc] — so `Door_Update`'s lock rising edge
         // (`prev == 0 && now != 0`, 0x136550-0x136608) sees a channel a trigger or script pulsed earlier this
@@ -11260,7 +11398,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             // `NDrone2_NearArmedDrone`'s scan (fix-actors): the nearest started, alive, hostile peer.
             // (The snapshot list was taken before the mutable borrow; the armed/started filter rides it.)
-            dr.armed_peer_dist = armed_peer_dist[index];
+            // level-01-complete-4: `armed_peer_dist`/`armed_peer_exit_dist`/`peer_latch` are assigned
+            // in the scan's phase B above — the latch must not be re-armed by the later walk.
             // `NDrone2_PreDroneControl`: the second switch (`+0x135`) with a tag (`+0x13A`): 0xC deletes the drone,
             // otherwise the alternate type's state (`+0x5A4`; Attack for these guards, *suggested*).
             if dr.second_channel != 0 && dr.second_tag != 0 && self.channels.on(dr.second_channel as u32) {
@@ -12317,8 +12456,36 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // decay (−f/6 per tick) erased the whiteout in ~6 ticks — invisible.
         self.health.flashbang = (self.health.flashbang - 1.0).max(0.0);
         self.shake = (self.shake * 0.9 - 0.05).max(0.0);
-        // The SimpleScripts' playheads (`SS_Update` 0x1a9948 — channel on → the last key, off → key 0).
-        self.sss.tick(&self.channels);
+        // The SimpleScripts (`SS_Update` 0x1a9948's state machine — grates-02). The `SS_Operate`
+        // 0x1a9df8 contacts, from the collision pass's registered dynamic set: the player's
+        // capsule box (bit 0) and this tick's player-bullet flight (bit 1) against each SS part's
+        // box (ids bit 41 | the ss index — the same parts `set_dynamic` holds). The 0c winches
+        // (#351/#364/#377, mask 0x2 [D]) are bullet-driven; the disc's other SS masks are 0x1
+        // (channel-only) [D census, fix-0c-hatch-latches].
+        let ss_contacts = {
+            let parts = d.world.dynamic_boxes();
+            let mut c = vec![0u8; self.sss.list.len()];
+            let (plo, phi) = (
+                [self.player_pos[0] - 0.4, self.player_pos[1] - 1.15, self.player_pos[2] - 0.4],
+                [self.player_pos[0] + 0.4, self.player_pos[1] + 0.95, self.player_pos[2] + 0.4],
+            );
+            for &(id, lo, hi) in &parts {
+                if id >> 40 != 0x2 { continue; }
+                let k = (id & 0xF_FFFF_FFFF) as usize;
+                if k >= c.len() { continue; }
+                if (0..3).all(|ax| hi[ax] >= plo[ax] && lo[ax] <= phi[ax]) { c[k] |= 1; }
+            }
+            // fix-0c-hatch-latches2: the bullet contacts recorded by this tick's flight pass —
+            // including the bullets that DIED on the part (the retain removed them from
+            // `player_bullets` before this block; see `update_player_bullets`).
+            for (k, bits) in self.ss_bullet_contacts.iter().enumerate() {
+                if *bits & 2 != 0 && k < c.len() { c[k] |= 2; }
+            }
+            c
+        };
+        let mut ch = std::mem::take(&mut self.channels);
+        self.sss.tick(&mut ch, &ss_contacts, self.frame);
+        self.channels = ch;
         // The sound triggers (`SoundTrigger_Update` 0x1b2790 — the object walk's per-frame pass;
         // fix-06-alarm): the alarm siren starts the same frame its ON channel is up.
         self.sound_triggers.tick(&mut self.audio, &self.channels);
@@ -12441,6 +12608,8 @@ mod tests {
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
+            armed_peer_exit_dist: f32::MAX,
+            peer_latch: u32::MAX,
             mission_wait_channel: 0,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],

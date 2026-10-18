@@ -54,6 +54,16 @@ fn owners(sim: &nf_view::scene::Sim, level: u32) -> std::collections::BTreeSet<u
     for s in &d.sensors.list { if s.out != 0 { o.insert(s.out as u8); } }
     for f in &d.fx.flickers { if f.signal_channel != 0 { o.insert(f.signal_channel as u8); } }
     for e in &d.fx.emitters { if e.ch_out != 0 { o.insert(e.ch_out as u8); } }
+    // The SimpleScripts' operate latch [M SS_Update 0x1a9948:18-23]: with the mask word's bit 0
+    // CLEAR and the channel word (ext+0x10) non-zero, the operate result goes into a 0-valued
+    // `switch_channels[ch]` — a write every tick while the channel reads 0 (SS_Operate 0x1a9df8
+    // returns 0 with no contact and the channel off). The object walk dispatches SS_Update for
+    // every class-0x25 object each frame [M control_movement_object_handler 0x1336f8's
+    // control_funcs loop]. Disc example: 07000002's SS #308 (mask 0x0004, ch 0x02) — the game
+    // writes ch 0x02 = 0 there every tick until something raises it [D census probe].
+    for s in &d.sss.list {
+        if s.mask & 1 == 0 && s.channel != 0 { o.insert(s.channel as u8); }
+    }
     if level == 0x0700_0005 { o.insert(0x6f); }
     if level == 0x0700_000b { o.insert(0x2d); }
     o.insert(0x97); // Drone_InitComms 0x139520:198-201
