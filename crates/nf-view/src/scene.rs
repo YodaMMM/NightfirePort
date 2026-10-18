@@ -276,6 +276,9 @@ pub struct DroneContext {
     pub level_id: u32,
     /// net-match-host: the online match's lockstep seed (0 = the pre-net constant, local play).
     pub mp_seed: u32,
+    /// The MP bodies: one skin hashcode per player slot (0..4 humans, 4..8 bots; 0 = none) —
+    /// `nf_game::mp::slot_skin` of the match settings.
+    pub mp_body_skins: [u32; 8],
     pub weapons: Option<nf_formats::weapon::WeaponData>,
     pub props: Option<nf_formats::drone::PropertyTables>,
     /// The level's tuning (`ReadTuningVars` applied), hit boxes and sound hearing data.
@@ -353,6 +356,8 @@ pub struct Sim {
     /// panels are four `Player_Init` objects; the port keeps one full local machine (the
     /// weapons/view path) and ticks the remotes' movement through the same `Bond::tick_ctx`.
     pub mp_bonds: [Option<nf_game::player::Bond>; 4],
+    /// The slot this machine plays (its body is the camera, never drawn) — `swap_local_slot` sets it.
+    pub mp_local_slot: usize,
     /// Aim mode's cursor (`BL+0x118 / +0x11C`) and its smoothed copy (`+0x120 / +0x124`), −1…1 across half the screen.
     pub cursor: [f32; 2],
     pub cross: [f32; 2],
@@ -4855,6 +4860,8 @@ pub struct Scene {
     /// weapon id, built at scene build time. The active one is selected each frame in `animate` from
     /// `sim.gun.weapon`.
     pub view_models: HashMap<u8, usize>,
+    /// The MP bodies: (player slot, character index) — see `Scene::build`'s MP-body block.
+    pub mp_bodies: Vec<(usize, usize)>,
     /// The snow flake texture (`DrawDrops`: 0x03000045).
     pub snow_texture: Option<TextureImage>,
     /// Streamed effects: `STREAMS.LUT` entries and `STREAMS.BIN` (set by the loader).
@@ -5827,6 +5834,39 @@ impl Scene {
                 }
                 characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones: level.maps[map].objects[object].gfx.slot_bones.clone(), start: None, role: drone::SpawnRole::Placed, floor: None, script: None , morph_targets: None });
                 view_models.insert(wid, ci as usize);
+            }
+        }
+        // MP bodies (the user's two-window check: "they cant see eachother"): one character per used
+        // player slot with the slot's `MP_skins` body [M Player_Init 0x1910f8:111], parked at the origin
+        // and posed each frame from the slot's movement (`Scene::mp_body_state`).
+        let mut mp_bodies: Vec<(usize, usize)> = Vec::new();
+        if let Some(d) = drones {
+            let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
+            let placement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
+            for (slot, &sh) in d.mp_body_skins.iter().enumerate() {
+                if sh == 0 { continue; }
+                let (Some(skin), Some(skeleton)) = (level.skins.get(&sh), level.skins.get(&sh).and_then(|k| skeletons.get(&k.skeleton))) else { continue };
+                let ci = characters.len() as u32;
+                let mut slot_bones = Vec::new();
+                let mut morph = None;
+                for &mh in skin.main.iter().flatten() {
+                    let Some(&(map, object)) = level.by_hash.get(&mh) else { continue };
+                    let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
+                    add_instance(level, &inst, Layer::Character, Some((ci, None)), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    slot_bones = level.maps[map].objects[object].gfx.slot_bones.clone();
+                    morph = level.maps[map].objects[object].morph_targets.clone();
+                }
+                for &(bone, part) in &skin.extra {
+                    let Some(&(map, object)) = part.and_then(|ph| level.by_hash.get(&ph)) else { continue };
+                    let pinst = Instance { map, object, matrix: ident, placement: placement.clone() };
+                    add_instance(level, &pinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+                }
+                characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones, start: None, role: drone::SpawnRole::Placed, floor: None, script: None, morph_targets: morph });
+                mp_bodies.push((slot, ci as usize));
+            }
+            if d.mp_body_skins.iter().any(|&s| s != 0) {
+                eprintln!("mp: bodies {:?} (slot, character) from skins {:x?}", mp_bodies, d.mp_body_skins);
             }
         }
         // Script objects (docs/systems/script-player.md): every animation and drawn entity the main map's script players
@@ -6845,6 +6885,7 @@ impl Scene {
             // pass 1 and the front-end path passes the menu's pick.
             Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [None, None, None, None],
+            mp_local_slot: 0,
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, laser_charge: 100.0, missile_cam: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
@@ -6890,7 +6931,7 @@ impl Scene {
         // bbox-face FindCel approximation (documented deviation; every live load path builds sim).
         if sim.is_none() { build_chains(&mut cel_graph, None); }
         crate::phase_mark("b10 collider index + final assembly", t);
-        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
+        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -6978,6 +7019,29 @@ impl Scene {
                 // [-27.25, 1.41, 34.39]) — which drew the actors inside the camera: the main agent's
                 // render showed the intro room with NO characters at all.
                 return Some((anim::skin_matrices(&world, &c.skin), world, c.matrix));
+            }
+            // MP bodies: the guards' movement scripts (idle / walk / run by speed) at the slot's
+            // position and yaw [S stand-in until 700v7 ports the player anim set, PlayerAnimSetInit*
+            // 0x18fcd8 — the game's MP bodies run the PLAYER set, not the drone tables].
+            if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
+                let s = self.sim.as_ref()?;
+                let (pos, yaw, speed) = s.mp_body_state(slot)?;
+                let st = if speed < 0.5 { nf_game::drone::anim_state::STAND_IDLE } else if speed < 4.5 { nf_game::drone::anim_state::WALK } else { nf_game::drone::anim_state::RUN };
+                let danim = s.tables.danim_for_state(st, 0);
+                // The set: the first of the 27 drone anim sets that carries this danim whose script the
+                // level loaded (set 0 is empty for some rows) [S stand-in, see above].
+                let script = danim.filter(|&d| d >= 0).and_then(|d| (0..27u16).filter_map(|set| s.tables.script_for(d as u16, set)).find(|h| s.scripts.contains_key(h)));
+                if std::env::var_os("NF_MPBODY_DBG").is_some() && s.drones.frame % 60 == 0 {
+                    eprintln!("[mpbody] slot {slot} pos {pos:?} yaw {yaw:.2} speed {speed:.2} state {st:#x} danim {danim:?} script {script:x?} has {}", script.is_some_and(|h| s.scripts.contains_key(&h)));
+                }
+                let script = script?;
+                let time = 1.0 + s.scripts.get(&script)?.time_at(s.drones.frame as f32);
+                let mut local = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time)?;
+                let hip = local.first().map_or(0.0, |r| r.0[1]);
+                if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
+                let world = anim::world_pose(&local, &c.skin);
+                let m = nf_formats::placement::object_matrix([0.0, yaw, 0.0], [pos[0], pos[1] - 1.0 + drone_height(hip), pos[2]]);
+                return Some((anim::skin_matrices(&world, &c.skin), world, m));
             }
             let view = self.sim.as_ref().and_then(|s| self.view_models.get(&s.gun.weapon).filter(|&&v| v == ci)).and(self.sim.as_ref());
             let (i, frame) = match (view, drone_of(ci)) {
@@ -7538,6 +7602,9 @@ impl Scene {
         // (user F12 0700000a 003, 2026-10-17).
         if self.view_models.values().any(|&v| v == ci) {
             return self.view_models.get(&s.gun.weapon) != Some(&ci);
+        }
+        if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
+            return s.mp_body_state(slot).is_none();
         }
         let c = &self.characters[ci];
         match c.script {
@@ -8218,6 +8285,7 @@ impl Sim {
     /// (the camera and the full local path tick it) and parks the old local one back at slot 0.
     pub fn swap_local_slot(&mut self, slot: usize) {
         if slot == 0 || slot >= 4 { return; }
+        self.mp_local_slot = slot;
         if let Some(mut mine) = self.mp_bonds[slot].take() {
             mine = std::mem::replace(&mut self.bond, mine);
             self.mp_bonds[0] = Some(mine);
@@ -8482,6 +8550,21 @@ impl Sim {
                 water: None, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
             };
             b.tick_ctx(&self.world, &ctx, &input);
+        }
+    }
+
+    /// An MP body's (position, yaw, horizontal speed per second) now, None = not drawn (the local
+    /// slot, an empty slot, no match).
+    pub fn mp_body_state(&self, slot: usize) -> Option<([f32; 3], f32, f32)> {
+        let s = self;
+        let m = s.mp.as_ref()?;
+        if slot < 4 {
+            if slot == s.mp_local_slot { return None; }
+            let b = s.mp_bonds[slot].as_ref()?;
+            Some((b.pos, b.yaw, (b.vel[0] * b.vel[0] + b.vel[2] * b.vel[2]).sqrt()))
+        } else {
+            let bot = m.bots.iter().find(|b| b.slot == slot)?;
+            Some((bot.brain.pos, bot.brain.yaw, 0.0))
         }
     }
 

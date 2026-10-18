@@ -878,6 +878,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // net-match-host: the online match builds the level from the host's seed (equal on every
         // machine — the session's settings blob carries it); 0 keeps the pre-net constant.
         mp_seed: mp_settings.as_ref().map_or(0, |st| st.seed),
+        mp_body_skins: std::array::from_fn(|slot| mp_settings.as_ref().map_or(0, |st| nf_game::mp::slot_skin(st, slot))),
     };
     let mut scene = scene::Scene::build(&level, !all, &skeletons, sequences, Some(&drones), difficulty);
     phase_mark("07 scene build (Scene::build)", t); t = std::time::Instant::now();
@@ -2471,6 +2472,21 @@ impl App {
                 self.cam = Camera { pos: Vec3::new(sim.bond.pos[0], sim.bond.pos[1] + 1.6, sim.bond.pos[2]), yaw: sim.bond.yaw, pitch: 0.0, fov: GAME_FOV };
             }
         }
+        // Render-check aid (NF_MP_FACE_OTHER=1): an online match starts facing the first other human
+        // body (the two-window check's shots — the arena's spawns face away from each other).
+        if self.net.is_some() && std::env::var_os("NF_MP_FACE_OTHER").is_some() {
+            // Every human turns to the nearest other one — the same on every machine (the yaw is in
+            // the lockstep hash).
+            if let Some(sim) = self.scene.sim.as_mut() {
+                let mut all: Vec<(usize, [f32; 3])> = vec![(sim.mp_local_slot, sim.bond.pos)];
+                for (s, b) in sim.mp_bonds.iter().enumerate() { if let Some(b) = b { all.push((s, b.pos)); } }
+                let face = |me: [f32; 3]| all.iter().map(|(_, p)| *p).filter(|p| *p != me)
+                    .min_by(|a, b| { let d = |p: &[f32; 3]| (p[0] - me[0]).powi(2) + (p[2] - me[2]).powi(2); d(a).total_cmp(&d(b)) })
+                    .map(|o| (o[0] - me[0]).atan2(o[2] - me[2]));
+                if let Some(y) = face(sim.bond.pos) { sim.bond.yaw = y; self.cam.yaw = y; }
+                for b in sim.mp_bonds.iter_mut().flatten() { if let Some(y) = face(b.pos) { b.yaw = y; } }
+            }
+        }
         // drive-ptp: `Boot_LoadPTPData` 0x1c8560's mirror runs on the returned
         // session — the mission status + the 12 slots, after the hub's own
         // `Mission_Init` (the game's `Mission_Init` skips 0x7000048 entirely
@@ -3442,6 +3458,7 @@ impl ApplicationHandler for App {
                 }
             },
             WindowEvent::RedrawRequested => {
+                if NET_SHOT_DUE.swap(false, std::sync::atomic::Ordering::Relaxed) { let m = self.spot_shot(); eprintln!("[spot] {m}"); }
                 // fix-movie-playback: the movie glue runs before the load path so a phase-2
                 // resolve lands in the same frame the state 6 popped.
                 self.movie_tick();
@@ -3776,6 +3793,10 @@ impl ApplicationHandler for App {
                                     session.0.borrow_mut().submit_hash(self.net_tick, h);
                                 }
                                 self.net_tick += 1;
+                                // Render-check aid (NF_NET_SHOT=<tick>): the F12 capture at that match tick.
+                                if std::env::var("NF_NET_SHOT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(self.net_tick) {
+                                    NET_SHOT_DUE.store(true, std::sync::atomic::Ordering::Relaxed);
+                                }
                             }
                             // The lock's rising edge auto-draws the handgun (`Upgrade_Weapon(6)` = 2 [L])
                             // [M 0x1a24c8:247-250]. `prev` = last tick's channel (the game's
@@ -4765,3 +4786,6 @@ fn reach_config() -> Option<nf_net::p2p::ReachConfig> {
     }
     Some(cfg)
 }
+
+/// The NF_NET_SHOT render-check aid's pending capture (set inside the tick loop's sim borrow).
+static NET_SHOT_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
