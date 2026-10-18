@@ -289,6 +289,12 @@ pub struct DroneContext {
     pub voices: Option<Vec<nf_formats::sfx::VoiceLine>>,
     /// The HUD's sprite tables and font (docs/systems/hud.md).
     pub hud: Option<nf_formats::hud::HudTables>,
+    /// mp-character-data: the `MP_skins` per-character table (ACTION.ELF 0x26d488, 29 × 0x10) [D].
+    /// Only the MP body build and the pose consume it.
+    pub mp_skins: Option<nf_formats::mpanim::MpSkins>,
+    /// mp-character-data: the 16 animation-set descriptors (ACTION.ELF 0x2b91b0..0x2b9430) [D] —
+    /// the ids `mp_body_pose` returns.
+    pub mp_anims: Option<nf_formats::mpanim::MpAnimSets>,
 }
 
 /// The running game simulation (nf-game): drones plus the data they consult, and which character mesh shows which
@@ -4936,9 +4942,43 @@ pub const NPC_POOL: usize = 3;
 #[derive(Clone)]
 pub struct NpcSlot { pub key: [u32; 3], pub skin: u32, pub params: Vec<(u32, u32)>, pub chars: Vec<usize> }
 
+/// One MP body (mp-character-data): the third-person character one MP slot drives — a human
+/// (slots 0..3) or a bot (4..7). The data is the game's own tables: `Player_Init` 0x1910f8 builds
+/// the body's anim object from `MP_skins[MPSettings+slot*0x30+0x24]` [M 0x1910f8:108-117] and the
+/// body runs the descriptor set `PlayerAnimSetInitNormal`/`InitCrouch` pick per weapon class
+/// [M 0x18fcd8/0x18fea0]. Parked hidden (the meshes sit at the sentinel translation, below the
+/// world) until the draw moves them — `frame_state_for`'s hidden pass skips a parked body.
+pub struct MpBody {
+    /// The MP slot (0..3 human, 4..7 bot).
+    pub slot: usize,
+    /// `MPSettings+slot*0x30+0x24`: the MP character index (the `MP_skins` row).
+    pub char_index: u32,
+    /// `MP_skins[char_index]+0x00`: the skin (anim object) hash [M 0x1913d4].
+    pub skin: u32,
+    /// `MP_skins[char_index]+0x04`: the skin's DATA file hash [M 0x120ca0].
+    pub file: u32,
+    /// `MP_skins[char_index]+0x08`: the sleeve variant (→ `BLData+0x965`, the first-person arms
+    /// when this slot is the local view) [M 0x1913e0].
+    pub sleeve: u32,
+    /// The skin's skeleton id — `Scene::sequences`' bucket key and `mp_body_pose`'s draw filter.
+    pub skeleton: u8,
+    /// The parked characters (one per main mesh, in the skin's `main` order) — hidden until the
+    /// draw moves their matrices.
+    pub chars: Vec<usize>,
+    /// The body's sequence set: every anim SCRIPT id the descriptors/transitions/death can put on
+    /// the body (`MpAnimSets::all_body_scripts`) resolved through the arena's kind-5 scripts →
+    /// `(first script frame, last script frame, index into Scene::sequences[skeleton])` — the
+    /// `StartAnim` resolution. Scripts the arena doesn't carry are absent.
+    pub scripts: HashMap<u32, Vec<(u16, u16, usize)>>,
+}
+
 pub struct Scene {
     /// Hidden NPC copies the dev panel can bring to life (`dev::spawn_npc`).
     pub npc_pool: Vec<NpcSlot>,
+    /// The MP bodies (mp-character-data), one per human slot and per bot — parked hidden until the
+    /// draw moves them (mp-character-data's loader API; the pose comes from
+    /// `nf_formats::mpanim::mp_body_pose` over `sim.mp`'s live slots).
+    pub mp_char_bodies: Vec<MpBody>,
     /// The level's room cels (`parse_room_cels`), kept for the static-draw cel cull
     /// (`View_AddCels` 0x1e6ba0 frustum-tests each cel's bbox; `cel_sphere`/`cel_index_at`).
     pub cels: Vec<Cel>,
@@ -5465,7 +5505,9 @@ impl Scene {
     }
 
     /// `skeletons`: every skeleton on the disc by id; `sequences`: the level's animation archive, grouped by skeleton.
-    pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, sequences: HashMap<u8, Vec<Sequence>>, drones: Option<&DroneContext>, difficulty: u32) -> Scene {
+    /// `mp`: the MP match settings on an MP load (`--mp`/net) — the body slots the scene parks
+    /// (mp-character-data); `None` on every campaign load (no bodies).
+    pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, sequences: HashMap<u8, Vec<Sequence>>, drones: Option<&DroneContext>, difficulty: u32, mp: Option<&nf_game::mp::MpSettings>) -> Scene {
         let mut t = std::time::Instant::now();
         // cross-process-determinism: the buckets are walked in ASCENDING skeleton id, not HashMap
         // order — a hashcode present under two buckets resolves to the highest-id bucket's entry
@@ -5820,6 +5862,74 @@ impl Scene {
                     add_instance(level, &finst, Layer::Effect, Some((character, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                     attachments.push(Attachment { character, bone: md.bone as usize, local: anim::quat_trans_to_mat(md.q, md.t), flash: Some(rgb), tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
                 }
+            }
+        }
+        // mp-character-data: the MP bodies — one per human slot and per bot, parked hidden. The
+        // game builds each slot's body at `Player_Init`/`BOT_init` from `MP_skins[settings skin]`
+        // [M 0x1910f8:108-117, 0x1249e8:100]; every MP arena's map pack carries ALL 29 skins +
+        // their data files (the load-time `MP_NeedSkin`/`MP_NeedFile` filter picks the selected
+        // ones — 0x1c block discard 0x1d12e8 / skin gate 0x1bdf40), so the arena archive the port
+        // parsed IS the source; nothing to merge (the G-021 session pattern has no MP gap: the
+        // game loads no other archive for MP characters — `MP_PostLoad_Init` 0x183718 inits the
+        // game-mode objects, no loads [M]).
+        let mut mp_char_bodies: Vec<MpBody> = Vec::new();
+        if let (Some(mp_set), Some(d)) = (mp, drones) {
+            if let (Some(skins), Some(anim_sets)) = (d.mp_skins.as_ref(), d.mp_anims.as_ref()) {
+                let humans = (mp_set.human_count as usize).clamp(1, 4);
+                let bots = (mp_set.bot_count as usize).min(4);
+                let mut slot_ids: Vec<usize> = (0..humans).collect();
+                slot_ids.extend(4..4 + bots);
+                for slot in slot_ids {
+                    let char_idx = mp_set.players[slot].skin as usize;
+                    let Some(entry) = skins.entries.get(char_idx) else {
+                        eprintln!("mp body: slot {slot} character index {char_idx} is outside MP_skins (29 entries) — no body");
+                        continue;
+                    };
+                    let Some(skin) = level.skins.get(&entry.skin) else {
+                        eprintln!("mp body: slot {slot} skin {:08x} is not in this arena's archive", entry.skin);
+                        continue;
+                    };
+                    let Some(skeleton) = skeletons.get(&skin.skeleton) else {
+                        eprintln!("mp body: slot {slot} skin {:08x} skeleton {} not on the disc", entry.skin, skin.skeleton);
+                        continue;
+                    };
+                    // The parked translation: the NPC-pool sentinel scale (y <= -999_000.0), one
+                    // x-slot per body so the draw can tell them apart until it moves them.
+                    let tr = [-1.0e6 - slot as f32, -1.0e6, -1.0e6];
+                    let matrix = nf_formats::placement::object_matrix([0.0, 0.0, 0.0], tr);
+                    let placement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
+                    let mut chars = Vec::new();
+                    for mh in skin.main.iter().flatten() {
+                        let Some(&(map, object)) = level.by_hash.get(mh) else { continue };
+                        let obj = &level.maps[map].objects[object];
+                        if !obj.gfx.is_skinned() || skin.inverse_bind.is_empty() { continue; }
+                        let mut p2 = placement.clone();
+                        p2.translation = tr;
+                        p2.params = vec![(0, entry.skin)];
+                        let inst = Instance { map, object, matrix, placement: p2 };
+                        add_instance(level, &inst, Layer::Character, Some((characters.len() as u32, None)), &mut groups, Some(&mut bounds), None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        let morph_of_main = skin.main.iter().flatten()
+                            .filter_map(|mh2| level.by_hash.get(mh2).and_then(|&(m2, o2)| level.maps[m2].objects[o2].morph_targets.clone()))
+                            .next();
+                        characters.push(Character { matrix, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones: obj.gfx.slot_bones.clone(), start: None, role: drone::SpawnRole::Placed, floor: None, script: None, morph_targets: obj.morph_targets.clone().or(morph_of_main) });
+                        chars.push(characters.len() - 1);
+                    }
+                    if chars.is_empty() {
+                        eprintln!("mp body: slot {slot} skin {:08x} has no drawable main mesh in this arena", entry.skin);
+                        continue;
+                    }
+                    // The body's sequence set: every script id the pose can return, resolved
+                    // through the arena's kind-5 scripts (the StartAnim resolution).
+                    let mut body_scripts = HashMap::new();
+                    for id in anim_sets.all_body_scripts() {
+                        let Some(script) = d.scripts.get(&id) else { continue };
+                        let seqs = script.sequences()
+                            .filter_map(|(a, b, q)| by_hash.get(&q).filter(|(sk, _)| *sk == skin.skeleton).map(|&(_, i)| (a, b, i))).collect();
+                        body_scripts.insert(id, seqs);
+                    }
+                    mp_char_bodies.push(MpBody { slot, char_index: char_idx as u32, skin: entry.skin, file: entry.file, sleeve: entry.sleeve, skeleton: skin.skeleton, chars, scripts: body_scripts });
+                }
+                eprintln!("mp bodies: {} parked ({} humans, {} bots)", mp_char_bodies.len(), humans, bots);
             }
         }
         // The first-person gun models: one character per owned weapon with a first-person skin (`weapon_data+0xDC`),
@@ -7048,7 +7158,7 @@ impl Scene {
         // bbox-face FindCel approximation (documented deviation; every live load path builds sim).
         if sim.is_none() { build_chains(&mut cel_graph, None); }
         crate::phase_mark("b10 collider index + final assembly", t);
-        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
+        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -7746,6 +7856,11 @@ impl Scene {
             return s.mp_body_state(slot).is_none();
         }
         let c = &self.characters[ci];
+        // mp-character-data: a parked MP body is hidden — the draw moves the Character matrix to
+        // the slot's live position to reveal it (the sentinel is the NPC-pool scale).
+        if self.mp_char_bodies.iter().any(|b| b.chars.contains(&ci)) && c.matrix[3][1] <= -999_000.0 {
+            return true;
+        }
         match c.script {
             Some(src) => s.script_anim(src, c.skin.hashcode).is_none(),
             None => !opts.reinforcements && match s.char_drone.get(ci).copied().flatten() {
