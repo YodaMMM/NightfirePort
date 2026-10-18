@@ -1391,6 +1391,29 @@ pub trait MpSession {
     fn reach(&self) -> Option<MpReach> { None }
     /// net-p2p: the host pasted a joiner's code — punch toward it. False when it did not decode.
     fn expect_peer(&mut self, _code: &str) -> bool { false }
+    /// net-lobby-list: browse the LAN's open lobbies while the Join Online page is up (on) / stop.
+    fn browse(&mut self, _on: bool) {}
+    /// net-lobby-list: the listed lobbies now.
+    fn browse_rows(&self) -> Vec<MpLobbyRow> { Vec::new() }
+    /// net-lobby-list: what this host advertises (name, arena, scenario, joined players).
+    fn set_lobby(&mut self, _name: &str, _level: u32, _scenario: u32, _players: u8) {}
+}
+
+/// net-lobby-list: one row of the Join Online page's lobby list [S docs/systems/net-lobby-list.md].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MpLobbyRow {
+    pub name: String,
+    pub host: String,
+    pub level: u32,
+    pub scenario: u32,
+    pub players: u8,
+    pub max_players: u8,
+    pub in_progress: bool,
+    pub ping_ms: u32,
+    /// Same protocol + build (the HELLO gate would accept it).
+    pub joinable: bool,
+    /// "a.b.c.d:port" to dial.
+    pub addr: String,
 }
 
 /// net-p2p: what the online pages show about internet play [S docs/systems/net-p2p.md §4].
@@ -2084,6 +2107,8 @@ pub struct FrontEnd {
     /// The join page's typed address [S §2.2 — digits, dots, colon; the 22-char cap fits
     /// "255.255.255.255:65535"].
     pub mp_net_addr: String,
+    /// net-lobby-list: the Join Online page's lobby rows (cursor 0 = the typed address, k = row k-1).
+    pub mp_lobby_rows: Vec<MpLobbyRow>,
     /// The address page's own clipboard — Ctrl+C copies, Ctrl+V pastes [S §2.2; the system
     /// clipboard needs a crate, see the report].
     pub mp_net_clip: String,
@@ -2343,6 +2368,7 @@ impl FrontEnd {
             mp_net_port: 27420,
             mp_hosting: false,
             mp_net_addr: String::new(),
+            mp_lobby_rows: Vec::new(),
             mp_net_clip: String::new(),
             mp_net_state: MpNetState::Idle,
             mp_net_error: None,
@@ -5140,6 +5166,15 @@ impl FrontEnd {
             // mp_net_paste (the keyboard layer routes around action()), ✕ = Connect [S §2.2].
             Page::MpNetJoin => {
                 match a {
+                    // net-lobby-list: ▲▼ walk the address row (0) and the lobby rows (1..).
+                    Action::Up if self.cursor > 0 => { self.cursor -= 1; return true; }
+                    Action::Down if self.cursor < self.mp_lobby_rows.len() => { self.cursor += 1; return true; }
+                    Action::Confirm if self.cursor > 0 => {
+                        let Some(row) = self.mp_lobby_rows.get(self.cursor - 1).cloned() else { return false };
+                        if !row.joinable { self.mp_net_error = Some(MpNetError::Denied); return false; }
+                        self.mp_net_addr = row.addr;
+                        return self.mp_net_dial();
+                    }
                     Action::Confirm => { return self.mp_net_dial(); }
                     Action::Back => { self.mp_net_cancel(); self.page = Page::MpMode; self.cursor = 2; return true; }
                     _ => {}
@@ -6423,7 +6458,19 @@ impl FrontEnd {
     /// The fake (tests) and the real session (051) both ride this.
     pub fn mp_net_poll(&mut self) {
         if self.mp_session.is_none() { return; }
+        // net-lobby-list: the Join Online page lists the LAN's lobbies while nothing is dialing.
+        let browsing = self.page == Page::MpNetJoin && self.mp_net_state != MpNetState::Dialing && !self.mp_hosting;
+        self.mp_session.as_mut().unwrap().browse(browsing);
+        if browsing {
+            self.mp_session.as_mut().unwrap().poll();
+            self.mp_lobby_rows = self.mp_session.as_ref().unwrap().browse_rows();
+            self.cursor = self.cursor.min(self.mp_lobby_rows.len());
+        }
         if self.mp_hosting {
+            let joined = self.mp_join.iter().filter(|a| a.joined).count() as u8;
+            let c0 = self.mp_net_choices();
+            let name = format!("{}'s game", self.mp_join[0].codename);
+            self.mp_session.as_mut().unwrap().set_lobby(&name, c0.level, c0.scenario, joined.max(1));
             self.mp_session.as_mut().unwrap().poll();
             let c = self.mp_net_choices();
             if self.mp_host_published.as_ref() != Some(&c) {
@@ -7251,7 +7298,21 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 }
                 Page::MpNetJoin => {
                     let shown = if fe.mp_net_addr.is_empty() { "IP:PORT or JOIN CODE" } else { &fe.mp_net_addr };
-                    label(&mut h, font, shown, 200.0, y, 240.0, 18.0, bright, true, 1.0);
+                    label(&mut h, font, shown, 200.0, y, 240.0, 18.0, if fe.cursor == 0 { bright } else { dim }, true, 1.0);
+                    // net-lobby-list: the LAN's lobbies under the address row (▲▼ + ✕ joins).
+                    if fe.mp_net_state != MpNetState::Dialing {
+                        if fe.mp_lobby_rows.is_empty() {
+                            label(&mut h, font, "Searching the network for games...", 120.0, y + 30.0, 400.0, 14.0, dim, true, 1.0);
+                        }
+                        let bind = |id: u32| lang.and_then(|l| l.bind(id)).map(str::to_string).unwrap_or_default();
+                        for (k, r) in fe.mp_lobby_rows.iter().take(5).enumerate() {
+                            let map = MP_MAP_ROWS.iter().find(|m| m.3 == r.level).map(|m| bind(m.1)).unwrap_or_else(|| format!("{:08x}", r.level));
+                            let status = if !r.joinable { "  (other version)" } else if r.in_progress { "  (in progress)" } else { "" };
+                            let line = format!("{}  -  {}  -  {}/{}  -  {} ms{}", r.name, map, r.players, r.max_players, r.ping_ms, status);
+                            let col = if fe.cursor == k + 1 { bright } else { dim };
+                            label(&mut h, font, &line, 60.0, y + 30.0 + 20.0 * k as f32, 520.0, 15.0, col, true, 1.0);
+                        }
+                    }
                     // net-p2p: while dialing, the host may need THIS machine's code to punch [S net-p2p §3].
                     if let Some(r) = fe.mp_session.as_ref().and_then(|s| s.reach()) {
                         let mut yy = y + 34.0;

@@ -250,6 +250,10 @@ pub struct NetCore {
     reach_join: Option<nf_net::p2p::JoinReach>,
     /// The last reach status line printed to the console.
     reach_line: Option<String>,
+    /// net-lobby-list: what this host answers discovery queries with (None = not advertising).
+    lobby: Option<nf_net::discovery::LobbyInfo>,
+    /// net-lobby-list: the joiner's LAN browser while the Join Online page is up.
+    browse: Option<nf_net::discovery::LobbyList>,
 }
 
 /// The host repeats the match-start payload every this many polls …
@@ -280,6 +284,8 @@ impl NetCore {
             reach_host: None,
             reach_join: None,
             reach_line: None,
+            lobby: None,
+            browse: None,
         })))
     }
 
@@ -342,6 +348,8 @@ impl NetCore {
             reach_host: None,
             reach_join: None,
             reach_line: None,
+            lobby: None,
+            browse: None,
         })))
     }
 
@@ -418,8 +426,21 @@ impl NetCore {
         let now = self.epoch.elapsed().as_millis() as u64;
         // net-p2p: STUN replies and punches share the game socket (the session hands back
         // what is not a session packet); the reachability layer sends through it too.
+        // net-lobby-list: a host answers discovery queries on its game socket (in the lobby and
+        // in progress — the record says which).
+        if let Some(b) = self.browse.as_mut() { b.poll(now); }
+        let strays = self.sess.take_stray();
+        if self.is_host && !self.closed {
+            if let Some(info) = self.lobby.as_mut() {
+                info.in_progress = self.match_start.is_some();
+                info.port = self.sess.local_addr().port();
+                for (from, d) in &strays {
+                    if let Some(r) = nf_net::discovery::answer(d, info) { self.sess.send_raw(*from, &r); }
+                }
+            }
+        }
         if self.reach_host.is_some() || self.reach_join.is_some() {
-            for (from, d) in self.sess.take_stray() {
+            for (from, d) in strays {
                 if let Some(r) = self.reach_host.as_mut() { r.on_packet(from, &d); }
                 if let Some(r) = self.reach_join.as_mut() { r.on_packet(from, &d); }
             }
@@ -449,8 +470,6 @@ impl NetCore {
                 if let Some(l) = &line { eprintln!("[net] {l}"); }
                 self.reach_line = line;
             }
-        } else {
-            self.sess.take_stray();
         }
         if self.is_host && !self.closed {
             if let Some((bytes, left)) = self.start_resend.as_mut() {
@@ -702,6 +721,31 @@ impl crate::menu::MpSession for SessionProxy {
     fn set_codename(&mut self, name: &str) { self.0.borrow_mut().set_codename(name); }
     fn close(&mut self) { self.0.borrow_mut().close(); }
     fn reach(&self) -> Option<crate::menu::MpReach> { self.0.borrow().reach() }
+    fn browse(&mut self, on: bool) {
+        let mut c = self.0.borrow_mut();
+        if on && c.browse.is_none() {
+            c.browse = Some(nf_net::discovery::LobbyList::open(nf_net::PROTOCOL_VERSION, nf_net::DEFAULT_BUILD_ID, reach_seed() as u32));
+        } else if !on {
+            c.browse = None;
+        }
+    }
+    fn browse_rows(&self) -> Vec<crate::menu::MpLobbyRow> {
+        self.0.borrow().browse.as_ref().map_or(Vec::new(), |b| b.rows().into_iter().map(|e| crate::menu::MpLobbyRow {
+            name: e.info.name, host: e.info.host, level: e.info.level_code, scenario: e.info.scenario,
+            players: e.info.players, max_players: e.info.max_players, in_progress: e.info.in_progress,
+            ping_ms: e.ping_ms, joinable: e.joinable, addr: e.addr.to_string(),
+        }).collect())
+    }
+    fn set_lobby(&mut self, name: &str, level: u32, scenario: u32, players: u8) {
+        let mut c = self.0.borrow_mut();
+        let host = c.display_name();
+        let port = c.sess.local_addr().port();
+        let in_progress = c.match_start.is_some();
+        c.lobby = Some(nf_net::discovery::LobbyInfo {
+            name: name.to_string(), host, level_code: level, scenario, players, max_players: nf_net::MAX_AGENTS as u8,
+            in_progress, protocol: nf_net::PROTOCOL_VERSION, build: nf_net::DEFAULT_BUILD_ID, port,
+        });
+    }
     fn expect_peer(&mut self, code: &str) -> bool { self.0.borrow_mut().expect_peer(code) }
 }
 

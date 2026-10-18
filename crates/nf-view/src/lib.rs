@@ -2202,6 +2202,8 @@ impl App {
         let p = mpnet::SessionProxy::host(0)?;
         if let Some(cfg) = reach_config() { p.0.borrow_mut().enable_reach(cfg); }
         p.0.borrow_mut().rebind_host(port)?;
+        // net-lobby-list: the flag host advertises too (the lobby page's host sets it each tick).
+        { let mut q = p.clone(); menu::MpSession::set_lobby(&mut q, "Bond's game", self.net_armed.as_ref().map_or(0x0700_0023, |s| s.level_code), 1, 1); }
         self.net = Some(p);
         self.net_lobby = None;
         self.net_local_slot = 0;
