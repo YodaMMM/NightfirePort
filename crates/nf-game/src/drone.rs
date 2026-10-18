@@ -897,6 +897,9 @@ pub struct Drone {
     /// uncovered, so the flag + the sphere stand-in is what makes the re-hit real.)
     pub down: bool,
     pub death_pending: bool,
+    /// `Drone+0xcdc`: AbseilDeath's landing latch [M 0x169b28 case 1 sets it 0 at ENTER, case 3 sets
+    /// it 1 when the feet probe lands the corpse — its own field, NOT the +0xcd8 death-channel latch].
+    pub abseil_land_latch: bool,
     pub death_channel: u8,
     /// The last hit on this drone came from the player (a bullet, a punch or an owned explosion) —
     /// `Drone+0x2B4` (last-hit-by) is the player [M `DroneFunc_OnInitDeath` 0x145bd0 reads it; the port
@@ -1382,6 +1385,7 @@ impl Drone {
             mission_wait_channel: 0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
+            abseil_land_latch: false,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
             down: false,
@@ -2357,6 +2361,12 @@ impl Drone {
             // the port has no DSTATE for (07000004's seated target, state 0xb2) swallowed the player's
             // bullets — the impacts registered, the health never moved.
             GLOBAL => (0, false),
+            // The abseil family: their DSTATE case 8/9 both call `DroneFunc_HandleImpact(d, msg, 0, 0)` —
+            // resume 0, allow 0: bullets and blasts damage an abseiler with no state change (alive) and
+            // the death selector routes the kill [M 0x169610:48-50 / 0x169730:68-70 / 0x169940:50-52 /
+            // 0x1738e0:31-33]. (ElevatorJumper 0x8d has no case 8 — its hits fall through the SM's
+            // unhandled→GLOBAL route to the same base arm [M 0x15b830].)
+            ABSEIL_INIT | ABSEIL_SLIDE | ABSEIL_HANG | ABSEIL_STEP_OFF => (0, false),
             IDLE | ALERT | PATROL | ALERT_TO_POSITION | SEARCH_AREA | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT
                 | RUN_FOR_COVER | UNDER_COVER_INIT | UNDER_COVER_LEAVE_NOW => (ATTACK, false),
             UNDER_COVER_IDLE | UNDER_COVER_AIM | UNDER_COVER_FIRE | UNDER_COVER_RETURN => (UNDER_COVER_LEAVE_NOW, false),
@@ -2496,11 +2506,11 @@ impl Drone {
             self.last_damage = r.recorded;
         }
         if self.health <= 0.0 {
-            // The death routing [M 0x1465e4-0x14697c]: kind 0x0D → 0x44, 0x1B/0x1C → 0x92,
-            // 0x1D → 0xBF, else 0x45 DeathByExplosion (the death states 0x92/0xBF are not ported —
-            // their kinds do not occur in the port's roster [*suggested*]; they land in 0x44 like
-            // the port's bullet path).
-            self.set_state(match self.kind { 0x0d | 0x1b | 0x1c | 0x1d => DEATH_ANIM, _ => DEATH_BY_EXPLOSION });
+            // The death routing [M 0x146480 @0x1465e4-0x146660] by the MODE byte +0xc5 (the old port
+            // read the voice set +0xd8 — `kind` — the wrong field; drone-port-check.md #3): 0x1b/0x1c →
+            // AbseilDeath 0x92, 0x0d → Death_Anim 0x44, 0x1d → AstronautDeath 0xbf, else
+            // DeathByExplosion 0x45.
+            self.set_state(match self.mode { 0x1b | 0x1c => ABSEIL_DEATH, 0x0d => DEATH_ANIM, 0x1d => ASTRONAUT_DEATH, _ => DEATH_BY_EXPLOSION });
             return true;
         }
         if !allow {
@@ -2774,9 +2784,14 @@ impl Drone {
         let p3 = if p3 == self.state { 0 } else { p3 };
         self.do_hit_effects(d);
         if self.health <= 0.0 {
-            // The death selector: mode 0x1D dies into AstronautDeath 0xBF, the other dtypes into
-            // Death_Anim 0x44 [M NDrone2_BulletImpact 0x1461c8:47-50].
-            self.set_state(if self.mode == 0x1D { state::ASTRONAUT_DEATH } else { state::DEATH_ANIM });
+            // The death selector by the mode byte +0xc5 [M NDrone2_BulletImpact 0x1461c8:40-52]:
+            // 0x1e → BotDeathAnim 0xf2 (not ported — no Bot row in the port's roster), 0x1b/0x1c →
+            // AbseilDeath 0x92, 0x1d → AstronautDeath 0xbf, else Death_Anim 0x44.
+            self.set_state(match self.mode {
+                0x1b | 0x1c => state::ABSEIL_DEATH,
+                0x1d => state::ASTRONAUT_DEATH,
+                _ => state::DEATH_ANIM,
+            });
             return true;
         }
         if allow {
@@ -2919,6 +2934,11 @@ impl Drone {
                 self.corpse = true;
                 self.vision_on = false;
                 self.firing = false;
+                // [M 0x1637f8:30-38, BEFORE the special-death check]: the ENTER re-routes an abseil
+                // kill that arrived here — mode 0x1b/0x1c → AbseilDeath 0x92, 0x1d → AstronautDeath
+                // 0xbf (the corpse flag is already set, AbseilDeath's own arm sets it again).
+                if matches!(self.mode, 0x1b | 0x1c) { self.set_state(ABSEIL_DEATH); return Some(true); }
+                if self.mode == 0x1d { self.set_state(ASTRONAUT_DEATH); return Some(true); }
                 if self.special_death != 0 { self.set_state(SPECIAL_DEATH); return Some(true); }
                 self.death_pending = true;
                 // `DroneFunc_OnInitDeath` 0x145bd0's mission-fail half (fix-actors, corners per
@@ -4009,11 +4029,16 @@ impl Drone {
             }
             return;
         }
-        if self.free_root || self.corpse || !self.bounded { return; }
+        if self.free_root || !self.bounded { return; }
         // `+0x4F8 & 0x4000` cleared at the top.
         self.in_air = false;
-        // `NDrone2_DoCollision` / `NDrone2_DoGravity` predicates: alive, & 0x20 (collision) / & 0x80 (gravity), not
-        // in a death state. The port's `bounded` flag stands for `& 0x20`; gravity always runs when bounded.
+        // `NDrone2_DoCollision` / `NDrone2_DoGravity` predicates: the game gates these on the drone
+        // flags +0x4F8 (& 0x20 collision / & 0x80 gravity / & 0x200 no-gravity) with voice/drawn
+        // refinements [M 0x149ec8 / 0x141e58] — the CORPSE flag obj+0xF0 & 0x20 is read by NEITHER
+        // predicate: a dead drone keeps gravity and collision (the abseil corpse must land for
+        // AbseilDeath's feet probe [M 0x169b28 case 3]; the death-drift 0x156008 is the astronaut's
+        // own move). The port's `bounded` stands for & 0x20; gravity always runs when bounded — the
+        // old `corpse` short-circuit here froze shot abseilers on the rope (the playtest bug).
         let on_surface = self.feet_on_point(world);
         self.on_surface = on_surface.is_some();
         if let Some(floor) = on_surface {
@@ -6767,7 +6792,10 @@ impl Drone {
                 } else {
                     self.corpse = true; // obj+0xf0 bit 0x20
                 }
-                self.death_pending = true;
+                self.death_pending = true; // +0xcd8 = 1 (the EXIT's SetDeathChannel latch) [M case 1]
+                self.alert = 1.0; // Drone_AlertStatusSet(3) → the 0x2f5cc8 table row 3 = 1.0 [M 0x169b28:28; L the table]
+                if self.team == 1 && !self.knocked_out { self.dispatched_logged = true; } // LogDroneDeath [M 0x169b28:29 → 0x14ab00:11-31]
+                self.abseil_land_latch = false; // +0xcdc = 0 [M case 1]
                 self.air = false;
                 self.call_anim(d, anim_state::DEATH, 0, 0);
                 self.drop_weapon(d, rng);
@@ -6779,10 +6807,13 @@ impl Drone {
             (state::ABSEIL_DEATH, msg::UPDATE) => {
                 if d.level == 0x0700_004a {
                     if self.drawn { self.present = false; self.enabled = false; }
-                } else if !self.death_pending {
+                } else if !self.abseil_land_latch {
+                    // The landing gate is +0xcdc (NOT +0xcd8 — the old port polled the death-channel
+                    // latch here and never landed) [M 0x169b28 case 3]: the feet probe (anim+0x60 & 8,
+                    // the collision handler's own flag) → danim 10, +0xcdc = 1, DEAD 0x47.
                     if self.on_surface {
                         self.set_danim(d, 10, 0);
-                        self.death_pending = true;
+                        self.abseil_land_latch = true;
                         self.set_state(state::DEAD);
                     }
                 }
@@ -12710,6 +12741,7 @@ mod tests {
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
             mission_wait_channel: 0,
+            abseil_land_latch: false,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
             down: false,
