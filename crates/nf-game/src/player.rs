@@ -802,13 +802,19 @@ impl Bond {
         let ray = self.cc + 0.6;
         let to = [b[0], b[1] + -ray, b[2]];
         let floor = world.segment_hit_scoped(self.cel, self.pos, to);
-        self.grounded = walkable || floor.is_some_and(|(t, _)| {
+        let band = floor.as_ref().map_or(false, |(t, _)| {
             let d_y = to[1] - self.pos[1];
             let hit_y = self.pos[1] + t * d_y;
             let dy = self.pos[1] - hit_y;
             (dy * dy).sqrt() - 0.1 <= self.cc
         });
-        if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
+        self.grounded = walkable || band;
+        // floor_ny is the band-gated BLData+0x110 [M Player_FeetOnPoint 0x194188:85/:106-109;
+        // 0x194df0:104] — see the walk tick's comment.
+        self.floor_ny = match floor.as_ref() {
+            Some((_, n)) if band => n[1],
+            _ => 1.0,
+        };
     }
 
     /// `Player_ClearInertia` 0x195e08 [M]: the four velocity triples (`BLData+0x10/+0x20/+0x30/+0x40`)
@@ -1473,13 +1479,29 @@ self.local = [vs / k, vf / k];
         // the port's old 0.45f32 arm sat exactly ON the edge and the t·ray multiply tipped it over
         // (probe14_ground.rs: the rest y dithered ±3 ulps and grounded flickered) [L: the crouched
         // Bond crawls out of the 07000014 vent on PCSX2].
-        self.grounded = walkable || floor.is_some_and(|(t, _)| {
+        let band = floor.as_ref().map_or(false, |(t, _)| {
             let d_y = to[1] - self.pos[1];
             let hit_y = self.pos[1] + t * d_y;
             let dy = self.pos[1] - hit_y;
             (dy * dy).sqrt() - 0.1 <= self.cc
         });
-        if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
+        self.grounded = walkable || band;
+        // `BLData+0x110` — the port's floor_ny — is the band's OTHER output, and it is band-GATED:
+        // FeetOnPoint writes `*param_3 = 1.0f` first [M 0x194188:85] and overwrites it with the
+        // band-passed hit's +0x14 only inside the band [M :106-109]; the gravity gate reads that
+        // value (`flag8 == 0 || BL+0x110 < 0.5` → gravity [M Player_Collision 0x194df0:104]). The
+        // port's old floor_ny took the hit normal REGARDLESS of the band, so the B-hop ray's far
+        // hits — geometry past the band that master's `pos − (cc+0.6)` ray never reached — fed
+        // steep normals into the gravity gate on ticks Bond was otherwise grounded: on the
+        // 07000005 upper ledge he rested walkable-grounded over a ny 0.45 slope ~1.85 below the
+        // root, floor_ny went 0.45, the < 0.5 gravity branch fired every tick and he slid off the
+        // ledge (interact_07000005_live::the_ledge_plate_plays_the_sound_trigger; master's short
+        // ray missed that geometry — floor=None — and floor_ny stayed 1.0). In the game the band
+        // fails there, so BL+0x110 stays 1.0 and the gate never opens [M 0x194df0:104].
+        self.floor_ny = match floor.as_ref() {
+            Some((_, n)) if band => n[1],
+            _ => 1.0,
+        };
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
         self.grounded_history = (self.grounded_history >> 1) | if self.grounded { 8 } else { 0 };
