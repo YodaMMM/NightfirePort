@@ -126,3 +126,69 @@ fn the_armed_drone_plate_has_no_disc_toucher() {
     assert_eq!(sim.drones.level_exit, None, "no exit request [D dump]");
     assert_eq!(sim.drones.mission_end, None, "no mission end [M]");
 }
+
+/// The movie-player trigger #81 (type 0xF4, params (0, 4, 0) [D #81]) through the REAL E path:
+/// standing in its volume (16.13, 0, −0.41 [D #81]), the use key latches movie_request = Some(0)
+/// — the OUT slot's whole u32 — and re-fires on every press (no spent latch [M 0x1b2318:53-61]).
+/// Nothing starts a movie and nothing loads a level: the OUT slot is 0 (not in
+/// psiStartBackgroundMovie's whitelist [D docs/systems/movies.md]) and the trigger path carries
+/// no ResetMap call [M 0x1b2318]. A teleport reaches the volume (the game's own route to it is not
+/// on this wrapper's data); the operation is the real E.
+#[test]
+fn the_movie_trigger_e_path_stays_a_no_op() {
+    let iso = iso();
+    let mut scene = nf_view::load(&iso, "07000041.bin", false).unwrap();
+    let sim = scene.sim.as_mut().unwrap();
+    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [16.14, 0.0, -0.41], std::f32::consts::PI);
+    for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
+    let sim = scene.sim.as_mut().unwrap();
+    assert_eq!(sim.drones.movie_request, None, "cold before the E");
+    for _ in 0..40 { sim.step_bond(Input::default(), false, false, true); }
+    let sim = scene.sim.as_ref().unwrap();
+    assert_eq!(sim.drones.movie_request, Some(0), "the E latches the OUT slot's code [M 0x1b2318:53-61]");
+    assert_eq!(sim.drones.level_exit, None, "no level load on the movie path [M]");
+    // No spent latch: the second press re-fires [M 0x1b2318 has no spent write].
+    let sim = scene.sim.as_mut().unwrap();
+    for _ in 0..40 { sim.step_bond(Input::default(), false, false, false); }
+    for _ in 0..40 { sim.step_bond(Input::default(), false, false, true); }
+    assert_eq!(scene.sim.as_ref().unwrap().drones.movie_request, Some(0), "re-fires on the second press");
+}
+
+/// The tether crossing (§3), pinned to what the disc's own data allows: Bond WALKS the station
+/// floor south to the wire #26's sphere (11.26, 2.51, −54.13 [D #26]) — and the disc gives him no
+/// way to grab it: the level's only third-icon placements are #82..#85 (contexts 1/2, at
+/// (7.97,·,−45.5)/(14.76,38.57,−47.54) [D #82-#85]), none near the wire, and the game's grab that
+/// is certain is the JUMP press with the icon context 3 [M Player_HandleJump 0x1916b0:126-147;
+/// Player_Activate 0x1a5170 has no class-0x2C arm] — so the press is a plain jump. The ride the
+/// approach shows is scripted, not player-operated, on this wrapper's data. Sister: the five
+/// 0x3E cables themselves parse [D #26/#36/#102/#103/#104].
+#[test]
+fn the_tether_wires_refuse_a_player_grab_on_the_disc_data() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000041.bin", false).unwrap());
+    w.wait_enabled(600, "the wrapper's load");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.wires.len(), 5, "the tether cables parse as 0x3E wires [D]");
+    }
+    w.walk_route(&[
+        ("off the airlock west", Wp::new(24.0, 1.1, -31.0).r(1.4)),
+        ("the station floor", Wp::new(19.0, 1.1, -32.5).r(1.4)),
+        ("south to the tether deck", Wp::new(13.0, 1.1, -47.0).r(2.0)),
+        ("under the wire #26", Wp::new(11.3, 1.1, -54.1).r(0.9)),
+    ]);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded, "Bond stands on the tether deck");
+        assert!(sim.bond.icon_ctx != 3, "no wire icon arms at the tether [D #82-#85 ctx 1/2]");
+    }
+    // The jump press with no context: a plain jump, no grab [M 0x1916b0's icon gate].
+    for _ in 0..120 {
+        let mut input = Input::default();
+        input.jump = true;
+        w.tick(input, false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.bond.substate != nf_game::player::SS_WIRE && sim.bond.substate != nf_game::player::SS_ZIPLINE,
+        "the tether refuses the player grab on the disc's icon set [M 0x1916b0:126-147]");
+}
