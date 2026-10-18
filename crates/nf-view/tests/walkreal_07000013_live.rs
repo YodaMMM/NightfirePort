@@ -28,7 +28,7 @@ use walker::{Walker, Wp};
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 #[test]
-#[ignore = "the gate raise chain is proven green by gate13_live (the panel E → ch 0x23 → the SS rise → the mouth clears); this end-to-end walk is blocked by the port's room-cell stickiness: the walked approach to the panel is walled off by the lobby furniture (the walker wedges at x −13.3, z 31.3, segment_to_target None — the panel side is behind the security-room wall), and the reach-only teleport that reaches the panel leaves the scoped collision in the west cell (every later leg falls, y −386 → −852, while the warm no-E load stands stable at y −368.33 for 240+ ticks — fall13/gate13 probes). Needs the cell re-resolution after a teleport (or a walked path through the security-room door #355, whose open ch 0x11d has no found writer [D]). The pre-E legs and the entrance/exit chain are proven by walk_07000013_live + the probes"]
+#[ignore = "the gate raise chain is proven green by gate13_live (the panel E → ch 0x23 → the SS rise → the mouth clears); this end-to-end walk is blocked twice over: (1) the walked approach to the panel — the lobby's west furniture maze wedges the walker at every probed lane (z 25, z 20-22, z 28-31; STUCK at (−8.1, 21.6), (−12.8, 30.8), (−13.9, 31.9), segment visible but the push cancels the move), and (2) the reach-only teleport that does reach the panel leaves the port's room cell west — every later leg falls (y −386 → −852) while the warm no-E load stands stable at y −368.33 for 240+ ticks (fall13_probe). Needs the cell re-resolution after a teleport, or the game's own path to the panel (through the security-room door #355, open ch 0x11d — no writer found [D]). The pre-E legs, the gate mechanism and the entrance/exit chain are pinned by walk_07000013_live, gate13_live and the probes"]
 fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     let iso = iso();
     // ---- 07000012 walked (the shared route) ----
@@ -108,11 +108,10 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     // displacement of a world-baked glist is the report's live check. The press is the real use
     // key.
     w.lenient = true;
-    w.walk_to(Wp::new(-2.0, -368.6, 18.0).r(1.5), "13: off the car, south-west");
-    w.walk_to(Wp::new(-9.0, -368.5, 24.0).r(1.2), "13: the west lane");
-    w.walk_to(Wp::new(-12.5, -368.2, 31.5).r(1.2), "13: the west wall lane");
-    w.walk_to(Wp::new(-16.0, -368.4, 28.2).r(1.0), "13: the panel approach");
-    w.walk_to(Wp::new(-17.9, -369.0, 25.4).r(0.7), "13: at the shutter panel");
+    w.walk_to(Wp::new(-4.0, -368.5, 20.0).r(1.2), "13: off the car, south-west");
+    w.walk_to(Wp::new(-10.0, -368.5, 20.8).r(1.2), "13: the south-west aisle");
+    w.walk_to(Wp::new(-15.0, -368.6, 22.5).r(1.0), "13: the aisle west end");
+    w.walk_to(Wp::new(-18.4, -369.0, 24.6).r(0.7), "13: at the shutter panel");
     let mut ch23 = false;
     for _ in 0..80 {
         w.tick(nf_game::player::Input::default(), true);
