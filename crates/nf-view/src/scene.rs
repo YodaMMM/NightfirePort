@@ -7486,6 +7486,13 @@ impl Scene {
     /// hidden unless R asks for the reinforcements.
     pub fn char_hidden(&self, ci: usize, opts: ViewOpts) -> bool {
         let Some(s) = self.sim.as_ref() else { return false };
+        // A first-person view model that is not the held weapon's is never drawn: only the held
+        // one is placed at the eye (`frame_state`'s view arm); the rest sat at their load matrix
+        // near the world origin — the "all the weapons in one spot, seen through the map" cluster
+        // (user F12 0700000a 003, 2026-10-17).
+        if self.view_models.values().any(|&v| v == ci) {
+            return self.view_models.get(&s.gun.weapon) != Some(&ci);
+        }
         let c = &self.characters[ci];
         match c.script {
             Some(src) => s.script_anim(src, c.skin.hashcode).is_none(),

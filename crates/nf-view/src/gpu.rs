@@ -251,6 +251,11 @@ pub fn alpha_shaped(rgba: &[u8]) -> bool {
 }
 
 /// One indexed draw: its layer, pass, pipeline, texture bind group, index range and the object's world centre + radius.
+/// batch-draws: the bindless world bind group, the snow texture's index in it, the indirect-args
+/// buffer and its per-frame staging (5 u32 per draw: index_count, instance_count, first_index,
+/// base_vertex, first_instance).
+struct Batch { bg: wgpu::BindGroup, snow_tex: u32, indirect: wgpu::Buffer, args: Vec<u32> }
+
 #[derive(Clone, Copy)]
 struct DrawCall { layer: crate::scene::Layer, pass: u8, pipeline: usize, tex: usize, first: u32, count: u32, centre: [f32; 3], radius: f32, cel: Option<u16>, chain: u32, node: u32, lflags: u16, skin: Option<(u32, Option<u32>)> }
 
@@ -282,6 +287,10 @@ pub struct Renderer {
     /// View-projection without the camera translation (sky objects that follow the viewer).
     /// The per-frame uniform staging, reused (frame-240: no per-frame allocation).
     staged: Vec<f32>,
+    /// batch-draws: the world pass with every texture in one bound array (the draw's texture index
+    /// rides its per-draw slot) and one `multi_draw_indexed_indirect` per run of equal pipelines, in
+    /// the draw order — None = the per-draw path (no adapter support, or `NF_NOBINDLESS`).
+    batch: Option<Batch>,
     vbuf: wgpu::Buffer,
     skin_buf: wgpu::Buffer,
     snow_skin: wgpu::Buffer,
@@ -345,7 +354,24 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, scene: &Scene, notex: bool, nofog: bool) -> Renderer {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("nf-view"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+        // batch-draws: the bindless decision comes first — it picks the shader variant and the layout.
+        let n_world_tex = 2 + scene.textures.iter().map(|t| 1 + t.more.len()).sum::<usize>();
+        let want = wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING | wgpu::Features::INDIRECT_FIRST_INSTANCE;
+        let bindless = device.features().contains(want)
+            && (n_world_tex as u32) <= device.limits().max_binding_array_elements_per_shader_stage
+            && std::env::var_os("NF_NOBINDLESS").is_none();
+        let src = if bindless {
+            let s = (String::from("enable wgpu_binding_array;
+") + SHADER)
+                .replace("@group(1) @binding(0) var tex: texture_2d<f32>;", "@group(1) @binding(0) var texs: binding_array<texture_2d<f32>>;")
+                .replace("struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32 };",
+                         "struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32, @location(3) @interpolate(flat) ti: u32 };")
+                .replace("    o.uv = uv;\n    o.c = c * (255.0 / 128.0);", "    o.uv = uv;\n    o.ti = u32(us[b + 4u].y);\n    o.c = c * (255.0 / 128.0);")
+                .replace("let s = textureSample(tex, samp, i.uv);", "let s = textureSample(texs[i.ti], samp, i.uv);");
+            assert!(s.contains("texs[i.ti]") && s.contains("o.ti = ") && s.contains("binding_array"), "the bindless shader edits must all apply");
+            s
+        } else { SHADER.to_string() };
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("nf-view"), source: wgpu::ShaderSource::Wgsl(src.into()) });
         let ubgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -373,7 +399,18 @@ impl Renderer {
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
             ],
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&ubgl), Some(&tbgl)], immediate_size: 0 });
+        let wtbgl = bindless.then(|| device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("world textures (bindless)"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: std::num::NonZeroU32::new(n_world_tex as u32),
+                },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+            ],
+        }));
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&ubgl), Some(wtbgl.as_ref().unwrap_or(&tbgl))], immediate_size: 0 });
         // World: depth-tested. Sky pass: painted first in slot order without depth (`View_DrawSky` before the world).
         // One pipeline per draw state: blend (ALPHA_1), depth write (ZBUF_1), alpha test (TEST_1) and fog as shader
         // overrides; the pre-world sky pass ignores depth, the post-fog sky is pinned to the far plane (drawn only where
@@ -488,7 +525,7 @@ impl Renderer {
             address_mode_u: wgpu::AddressMode::Repeat, address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default()
         });
-        let make_tex =|w: u32, h: u32, rgba: &[u8]| {
+        let make_tex2 =|w: u32, h: u32, rgba: &[u8]| {
             let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
             let t = device.create_texture(&wgpu::TextureDescriptor {
                 label: None, size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
@@ -498,12 +535,18 @@ impl Renderer {
                 wgpu::TexelCopyTextureInfo { texture: &t, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 rgba, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) }, size);
             let view = t.create_view(&Default::default());
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None, layout: &tbgl,
                 entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) }],
-            })
+            });
+            (bg, view)
         };
-        let mut tex_bgs = vec![make_tex(1, 1, &[255, 255, 255, 255])];
+        let make_tex = |w: u32, h: u32, rgba: &[u8]| make_tex2(w, h, rgba).0;
+        // batch-draws: the world textures' views, index-aligned with `tex_bgs` (the bindless array).
+        let mut tex_views: Vec<wgpu::TextureView> = Vec::new();
+        let (bg0, v0) = make_tex2(1, 1, &[255, 255, 255, 255]);
+        tex_views.push(v0);
+        let mut tex_bgs = vec![bg0];
         let mut tex_frames = vec![(0, 1, 1)];
         let hud_bgs = std::iter::once(make_tex(1, 1, &[255, 255, 255, 255])).chain(scene.hud_textures.iter().map(|(_, t)| make_tex(t.width, t.height, &t.rgba))).collect();
         // The burning woman's texture (0x030000db, crate::woman): its own updatable texture — the frame loop rewrites its
@@ -528,8 +571,9 @@ impl Renderer {
         });
         for t in &scene.textures {
             tex_frames.push((tex_bgs.len(), 1 + t.more.len() as u32, t.rate));
-            tex_bgs.push(make_tex(t.width, t.height, &t.rgba));
-            for f in &t.more { tex_bgs.push(make_tex(t.width, t.height, f)); }
+            let (bg, v) = make_tex2(t.width, t.height, &t.rgba);
+            tex_bgs.push(bg); tex_views.push(v);
+            for f in &t.more { let (bg, v) = make_tex2(t.width, t.height, f); tex_bgs.push(bg); tex_views.push(v); }
         }
         let material_tex: Vec<usize> = scene.materials.iter()
             .map(|m| m.key.and_then(|k| scene.textures.iter().position(|t| t.key == k)).map_or(0, |i| i + 1)).collect();
@@ -571,7 +615,19 @@ impl Renderer {
         let fog = scene.fog;
         let snow_pipeline = make_pipeline(Draw { pass: 5, blend: 1, zwrite: false, atest: 0, fog: 0 });
         let snow_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let snow_bg = match &scene.snow_texture { Some(t) => make_tex(t.width, t.height, &t.rgba), None => make_tex(1, 1, &[255, 255, 255, 255]) };
+        let (snow_bg, snow_view) = match &scene.snow_texture { Some(t) => make_tex2(t.width, t.height, &t.rgba), None => make_tex2(1, 1, &[255, 255, 255, 255]) };
+        let batch = wtbgl.as_ref().map(|l| {
+            let snow_tex = tex_views.len() as u32;
+            let mut refs: Vec<&wgpu::TextureView> = tex_views.iter().collect();
+            refs.push(&snow_view);
+            assert_eq!(refs.len(), n_world_tex, "the bindless array holds exactly the counted textures");
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("world textures (bindless)"), layout: l,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureViewArray(&refs) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) }],
+            });
+            let indirect = device.create_buffer(&wgpu::BufferDescriptor { label: Some("draw args"), size: 20 * (scene.materials.len() as u64 + 1), usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            Batch { bg, snow_tex, indirect, args: Vec::new() }
+        });
         let order_cap = draws.len();
         let cel_boxes = scene.cels.iter().map(|c| (c.min, c.max)).collect();
         let cel_graph = scene.cel_graph.clone();
@@ -594,7 +650,7 @@ impl Renderer {
         // movies.md §Presentation], so the quad draws BEFORE the HUD runs (under the page
         // controls); state 6 suppresses the overlay while its movie plays, so the draw position
         // is equivalent there.
-        Renderer { woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        Renderer { woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -629,7 +685,7 @@ impl Renderer {
 
     pub fn cel_visibility(&mut self, eye: [f32; 3], view_proj: [[f32; 4]; 4], world: Option<&nf_game::world::CollisionWorld>, doors: Option<&[bool]>) -> Option<Vec<bool>> {
         let planes = extract_frustum(view_proj);
-        let portal_enabled = std::env::var_os("NF_NOPORTAL").is_none();
+        let portal_enabled = room_cull_enabled() && std::env::var_os("NF_NOPORTAL").is_none();
         // The cell-level game mask (`View_AddCels` 0x1e6ba0: the VisCelList plus the +0x18 chain
         // pass under `Vision_InView`) gates the World draws; the strict VisCelList mask gates the
         // rooms/objects (`View_DrawObjList` 0x1e69a0 walks the VisCelList cels' object lists —
@@ -655,6 +711,22 @@ impl Renderer {
                 None => (None, None),
             }
         } else { (None, None) };
+        // cull-relax (the user's playtest, 2026-10-17: objects and rooms vanished in doorways and
+        // between areas): every cel one portal beyond the walk's set draws too, so a room being
+        // stepped into or looked through is never cut at the threshold. Port choice, not the game's
+        // walk — the walk is exact only where the port's cel attribution is, and the user ranks
+        // nothing-missing above the culled frames (the draws stay frustum-culled per draw).
+        let widen = |m: Option<Vec<bool>>| m.map(|mut v| {
+            let seed = v.clone();
+            for pe in &self.cel_graph.portals {
+                if pe.cel_a < seed.len() && pe.cel_b < seed.len() {
+                    if seed[pe.cel_a] { v[pe.cel_b] = true; }
+                    if seed[pe.cel_b] { v[pe.cel_a] = true; }
+                }
+            }
+            v
+        });
+        let (cell_vis, strict_vis) = (widen(cell_vis), widen(strict_vis));
         self.last_cell_vis = cell_vis;
         let vis = strict_vis.map(|cell_vis| self.cel_graph.room_to_cell.iter().map(|m| m.map(|c| cell_vis[c]).unwrap_or(true)).collect::<Vec<bool>>());
         let vis = vis.unwrap_or_else(|| self.cel_boxes.iter().map(|&(min, max)| !box_outside(&planes, min, max)).collect());
@@ -791,7 +863,7 @@ impl Renderer {
             // per cel bbox). Computed once per frame — ~200 sphere tests; a World draw whose cel is
             // out is skipped before the pipeline/bind work. The eye's own cel always passes (its
             // bbox contains the eye, so its sphere can never be outside the frustum).
-            let cel_cull = std::env::var_os("NF_NOCELCULL").is_none();
+            let cel_cull = room_cull_enabled() && std::env::var_os("NF_NOCELCULL").is_none();
             // fix-perf-level: the visibility set is the game's own portal walk
             // (`Vision_Portal_Recurse` 0x1e86e8 → `Vision_Recurse` 0x1e82e0, the GfxList set) from the
             // eye's room cel, with the depth-0 pyramid = the frustum's four side planes + near (the
@@ -817,6 +889,7 @@ impl Renderer {
             // dynamic offset (fix-lighting: each draw's own light pair), so it is issued every draw.
             let mut last_pipeline: Option<usize> = None;
             let mut last_tex: Option<usize> = None;
+            let (mut __pipe_sw, mut __tex_sw) = (0usize, 0usize);
             // Debug: `NF_SKIP_MAT=i,j,..` skips those material indices (bisecting a wrong-looking surface).
             static SKIP: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
             let skip = SKIP.get_or_init(|| std::env::var("NF_SKIP_MAT").map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default());
@@ -910,6 +983,8 @@ impl Renderer {
                 staged[32..40].copy_from_slice(&extra);
                 {
                     let s = &mut staged[HEAD..HEAD + SLOT];
+                    // batch-draws: slot 0 (the snow pass) samples the snow texture from the array.
+                    s[17] = self.batch.as_ref().map_or(0.0, |b| b.snow_tex as f32);
                     let (lp, lc) = self.lights.pick2([eye[0], eye[1], eye[2], 2.0], 0x80);
                     for (i, v) in lp.iter().chain(lc.iter()).enumerate() { s[i * 4..i * 4 + 4].copy_from_slice(v); }
                 }
@@ -918,6 +993,8 @@ impl Renderer {
                     let dc = &self.draws[k];
                     let s = &mut staged[HEAD + (j + 1) * SLOT..][..SLOT];
                     if dc.layer == Layer::SkyCamera { s[16] = 1.0; }
+                    // batch-draws: the draw's texture (animated frames included) as an index into the array.
+                    { let (fb, nf, rate) = self.tex_frames[dc.tex]; s[17] = (fb + ((ticks / rate) % nf) as usize) as f32; }
                     if matches!(dc.layer, Layer::SkyCamera | Layer::SkyFixed) {
                         // The game zeroes the light slots for the sky and sprite passes [M 0x1e5ad0:89].
                         continue;
@@ -962,32 +1039,58 @@ impl Renderer {
                 self.staged = staged;
             }
             pass.set_bind_group(0, &self.uniform_bg, &[]);
-            for (j, &(_, _, k)) in self.order.iter().enumerate() {
-                let dc = self.draws[k];
-                if trace { submitted += 1; }
-                let (first, count) = (dc.first, dc.count);
-                if last_pipeline != Some(dc.pipeline) {
-                    pass.set_pipeline(&self.pipelines[dc.pipeline].1);
-                    last_pipeline = Some(dc.pipeline);
+            if let Some(b) = self.batch.as_mut() {
+                // batch-draws: every texture is bound at once, so only a pipeline change splits the
+                // stream; each run of equal pipelines (in the draw order — the blend order is kept) is
+                // ONE indirect multi-draw whose per-draw first_instance selects the uniform slot.
+                pass.set_bind_group(1, &b.bg, &[]);
+                b.args.clear();
+                for (j, &(_, _, k)) in self.order.iter().enumerate() {
+                    let dc = &self.draws[k];
+                    b.args.extend_from_slice(&[dc.count, 1, dc.first, 0, j as u32 + 1]);
                 }
-                let (first_bg, n_frames, rate) = self.tex_frames[dc.tex];
-                // frame-240: a texture bind only when it changes (the sort keeps a material's draws together).
-                let tbg = first_bg + ((ticks / rate) % n_frames) as usize;
-                if last_tex != Some(tbg) {
-                    pass.set_bind_group(1, &self.tex_bgs[tbg], &[]);
-                    last_tex = Some(tbg);
+                if !b.args.is_empty() { queue.write_buffer(&b.indirect, 0, bytemuck::cast_slice(&b.args)); }
+                let mut start = 0usize;
+                while start < self.order.len() {
+                    let pl = self.draws[self.order[start].2].pipeline;
+                    let mut end = start + 1;
+                    while end < self.order.len() && self.draws[self.order[end].2].pipeline == pl { end += 1; }
+                    pass.set_pipeline(&self.pipelines[pl].1);
+                    pass.multi_draw_indexed_indirect(&b.indirect, start as u64 * 20, (end - start) as u32);
+                    if trace { __pipe_sw += 1; }
+                    start = end;
                 }
-                pass.draw_indexed(first..first + count, 0, (j as u32 + 1)..(j as u32 + 2));
+                if trace { submitted = self.order.len(); }
+            } else {
+                for (j, &(_, _, k)) in self.order.iter().enumerate() {
+                    let dc = self.draws[k];
+                    if trace { submitted += 1; }
+                    let (first, count) = (dc.first, dc.count);
+                    if trace && last_pipeline != Some(dc.pipeline) { __pipe_sw += 1; }
+                    if last_pipeline != Some(dc.pipeline) {
+                        pass.set_pipeline(&self.pipelines[dc.pipeline].1);
+                        last_pipeline = Some(dc.pipeline);
+                    }
+                    let (first_bg, n_frames, rate) = self.tex_frames[dc.tex];
+                    // frame-240: a texture bind only when it changes (the sort keeps a material's draws together).
+                    let tbg = first_bg + ((ticks / rate) % n_frames) as usize;
+                    if trace && last_tex != Some(tbg) { __tex_sw += 1; }
+                    if last_tex != Some(tbg) {
+                        pass.set_bind_group(1, &self.tex_bgs[tbg], &[]);
+                        last_tex = Some(tbg);
+                    }
+                    pass.draw_indexed(first..first + count, 0, (j as u32 + 1)..(j as u32 + 2));
+                }
             }
             if trace {
-                eprintln!("render: {submitted} draws submitted, {culled} frustum-culled, {cel_culled} cel-culled ({} total, {:.1}% skipped)",
+                eprintln!("render: pipe switches {__pipe_sw} tex switches {__tex_sw}; {submitted} draws submitted, {culled} frustum-culled, {cel_culled} cel-culled ({} total, {:.1}% skipped)",
                     submitted + culled + cel_culled, 100.0 * (culled + cel_culled) as f32 / (submitted + culled + cel_culled).max(1) as f32);
             }
             // `DrawDrops` runs after the fog pass, the alpha list and the shards.
             if ns > 0 {
                 pass.set_pipeline(&self.snow_pipeline);
                 pass.set_bind_group(0, &self.uniform_bg, &[]);
-                pass.set_bind_group(1, &self.snow_bg, &[]);
+                match self.batch.as_ref() { Some(b) => pass.set_bind_group(1, &b.bg, &[]), None => pass.set_bind_group(1, &self.snow_bg, &[]) }
                 pass.set_vertex_buffer(0, self.snow_vbuf.slice(..));
                 pass.set_vertex_buffer(1, self.snow_skin.slice(..));
                 pass.draw(0..ns as u32, 0..1);
@@ -1140,3 +1243,10 @@ mod shader_tests {
         assert!(!super::SHADER.contains("term / 128.0"), "the old 2× over-add must stay gone");
     }
 }
+
+/// no-room-cull (the user, 2026-10-17: "I'm not a fan of the culling at all" — rooms and objects
+/// vanished in doorways and between areas): the room/portal cull of the World draws is OFF by
+/// default; only the per-draw frustum cull remains. The batched draw path (batch-draws) holds every
+/// level above 240 fps with the whole level drawn. `NF_ROOMCULL=1` turns the room cull back on
+/// (the portal walk, widened one portal; `NF_NOPORTAL` / `NF_NOCELCULL` still narrow it).
+pub fn room_cull_enabled() -> bool { std::env::var_os("NF_ROOMCULL").is_some() }
