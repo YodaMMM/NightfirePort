@@ -358,6 +358,9 @@ pub struct Sim {
     pub mp_bonds: [Option<nf_game::player::Bond>; 4],
     /// The slot this machine plays (its body is the camera, never drawn) — `swap_local_slot` sets it.
     pub mp_local_slot: usize,
+    /// Draw-only: each MP slot's horizontal speed (units/s) over the last tick, from its position
+    /// change — the body's idle/walk/run pick (never hashed, never read by the sim).
+    pub mp_body_speed: [f32; 8],
     /// Aim mode's cursor (`BL+0x118 / +0x11C`) and its smoothed copy (`+0x120 / +0x124`), −1…1 across half the screen.
     pub cursor: [f32; 2],
     pub cross: [f32; 2],
@@ -6950,6 +6953,7 @@ impl Scene {
             Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [None, None, None, None],
             mp_local_slot: 0,
+            mp_body_speed: [0.0; 8],
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
@@ -8519,7 +8523,11 @@ impl Sim {
             m.bots[i].shots += new_shots.len() as u32;
             m.bots[i].brain.shots.clear();
             let bot_pos = m.bots[i].brain.pos;
-            m.game.slots[m.bots[i].slot].pos = Some(bot_pos);
+            let bslot = m.bots[i].slot;
+            if let Some(prev) = m.game.slots[bslot].pos {
+                if bslot < 8 { self.mp_body_speed[bslot] = ((bot_pos[0] - prev[0]).powi(2) + (bot_pos[2] - prev[2]).powi(2)).sqrt() * 60.0; }
+            }
+            m.game.slots[bslot].pos = Some(bot_pos);
 
             // The shots: real bullets at the human (the shared pipeline damages him), and the
             // body-sphere sweep at the other bots (the shared system cannot hit non-drones).
@@ -8608,12 +8616,14 @@ impl Sim {
         for slot in 0..4 {
             if slot == local || slot >= 4 { continue; }
             let Some(b) = self.mp_bonds[slot].as_mut() else { continue };
+            let before = b.pos;
             let input = inputs[slot];
             let ctx = nf_game::player::LadderCtx {
                 ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims),
                 water: None, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
             };
             b.tick_ctx(&self.world, &ctx, &input);
+            self.mp_body_speed[slot] = ((b.pos[0] - before[0]).powi(2) + (b.pos[2] - before[2]).powi(2)).sqrt() * 60.0;
         }
     }
 
@@ -8625,10 +8635,10 @@ impl Sim {
         if slot < 4 {
             if slot == s.mp_local_slot { return None; }
             let b = s.mp_bonds[slot].as_ref()?;
-            Some((b.pos, b.yaw, (b.vel[0] * b.vel[0] + b.vel[2] * b.vel[2]).sqrt()))
+            Some((b.pos, b.yaw, s.mp_body_speed[slot]))
         } else {
             let bot = m.bots.iter().find(|b| b.slot == slot)?;
-            Some((bot.brain.pos, bot.brain.yaw, 0.0))
+            Some((bot.brain.pos, bot.brain.yaw, s.mp_body_speed[slot]))
         }
     }
 
