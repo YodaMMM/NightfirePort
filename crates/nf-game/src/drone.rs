@@ -9218,8 +9218,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the class-5 contact subtracts its damage; Break_Kill 0x12b970 sets obj+0xFE bit 0
             // and plays the kill sound; no channel is written]). The kill records queue for the
             // view (sound + shatter/debris presentation).
-            self.break_kills.extend(self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage)
-                .into_iter().map(|k| (k.placement, k.kind, k.sound)));
+            for k in self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage) {
+                self.break_kills.push((k.placement, k.kind, k.sound));
+                // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
+                // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
+                // audio voice plus the hearing entry (the level's sfx-table data, the shape the
+                // script sounds use); the shatter/debris stays on the view queue. The effect's
+                // pos is the bounds centre (the port's obj+0x80 stand-in).
+                let id = u32::from(k.sound);
+                self.audio.play3d(id, k.pos, None);
+                if let Some(t) = d.sfx {
+                    let e = t.get(id);
+                    if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
+                }
+            }
             // The monitor consoles take the bullet too (`Monitor_ApplyDamage` — state 3 +
             // `Explode_Create` 0x6000027; the game's r·6 radius reads the placed sphere, the
             // port's blast queue takes the historical radius stand-in).
@@ -12540,13 +12552,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.prev_event2 = self.music.events[2];
         self.music.update(self.iop_section);
         // The drone-contact pass ([M Break_Update 0x12bfd8:23-34]: class-2 contacts damage kind-2
-        // breakables by the squared step × 20, on 07000001 only). The kills join the view queue.
+        // breakables by the squared step × 20, on 07000001 only). The kills join the view queue;
+        // Break_Kill 0x12b970:75 plays the kill sound inline (the same presentation the bullet
+        // pass makes above).
         let level_01 = d.level == 0x0700_0001;
         for (dr, from) in self.list.iter().zip(drone_from) {
             if !dr.present || dr.corpse { continue; }
-            let kills = self.breaks.drone_step(from, dr.pos, level_01);
-            if !kills.is_empty() {
-                self.break_kills.extend(kills.into_iter().map(|k| (k.placement, k.kind, k.sound)));
+            for k in self.breaks.drone_step(from, dr.pos, level_01) {
+                self.break_kills.push((k.placement, k.kind, k.sound));
+                let id = u32::from(k.sound);
+                self.audio.play3d(id, k.pos, None);
+                if let Some(t) = d.sfx {
+                    let e = t.get(id);
+                    if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
+                }
             }
         }
     }

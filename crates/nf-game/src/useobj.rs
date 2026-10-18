@@ -73,7 +73,7 @@ pub struct PcQworm {
     pub state: u8,
     /// The object's world-sphere radius (obj+0x8C): 0 until `set_pc_spheres` refines it from the
     /// object's glist bounds — `Player_Activate` 0x1a5170 picks sphere-vs-sphere against the hit
-    /// object's world sphere, not a point.
+    /// object's world sphere, not a point. The sphere rides the placement position (`pos`).
     pub radius: f32,
 }
 
@@ -167,11 +167,16 @@ impl UseObjects {
         u
     }
 
-    /// Refine each PC's world sphere from its object's glist bounds (`props::bounds`): the centre
-    /// moves to the bounds centre and `radius` becomes the half-diagonal — the port's stand-in for
-    /// the game's obj+0x80/+0x8C world sphere [M Player_Activate 0x1a5170's sphere pick; the same
-    /// quantity `Control_BuildWorldSph` derives for script entities, 0x1d8d78:113]. Called once
-    /// after `create` by the level build (the placements alone carry no model bounds).
+    /// Refine each PC's world-sphere RADIUS from its object's glist bounds (`props::bounds`):
+    /// the half-diagonal — the port's stand-in for the game's obj+0x8C [M Player_Activate
+    /// 0x1a5170's sphere pick; the same quantity `Control_BuildWorldSph` derives for script
+    /// entities, 0x1d8d78:113]. The CENTRE stays the placement transform: the port's obj+0x30
+    /// world position. 715a first moved the centre to the bounds centre, which broke the 0a
+    /// Q-Worm install's geometry (the live test anchors Bond to `pc.pos`; at the bounds centre
+    /// he spawns inside the desk's collision and is pushed ~2.5 from the PC, out of the bullet's
+    /// reach — probe 715c) for no live consumer: the E pick is the only sphere reader, and its
+    /// reach (view sphere r 1.0 + this radius) covers the object either way. Called once after
+    /// `create` by the level build (the placements alone carry no model bounds).
     pub fn set_pc_spheres(&mut self, level: &nf_formats::level::Level, m: usize) {
         let mut it = self.pcs.iter_mut();
         let Some(first) = it.next() else { return };
@@ -182,10 +187,7 @@ impl UseObjects {
             if p.flags & 0xff != 0x35 { continue; }
             let Some(pc) = pcs.get_mut(k) else { break };
             let (lo, hi) = crate::props::bounds(level, m, p);
-            let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
-            let r = (((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt()) / 2.0;
-            pc.pos = c;
-            pc.radius = r;
+            pc.radius = (((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt()) / 2.0;
             k += 1;
         }
     }

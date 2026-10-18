@@ -138,12 +138,16 @@ fn doors_open_on_the_walk_and_stay_shut_untouched() {
 
 /// The keypad locks: the loadout's Q-Decryptor (0x4E) burns "Lock - KeypadLocked" (#919/#957,
 /// out ch 0xa [D param 5]) through the real G-cycle + held-beam path, and ch 0xa's rising edge
-/// opens door[19] [M Lock_Update 0x1ae3d8:194 + Door_Update's lock path]. Sister: without the
-/// burn ch 0xa stays off and the door stays shut.
+/// opens door[19] [M Lock_Update 0x1ae3d8:194 + Door_Update's lock path]. Sister: the Operative
+/// load's auto-unlock holds ch 0xa on without a burn [M 0x1ae3d8 case 1], the door still needing
+/// proximity to move.
 #[test]
 fn the_keypad_burn_opens_its_door() {
     // Sister (the Operative load): the param-6 tag auto-unlocks the locks at create [M 0x1ae1f8
-    // tail] — and the door still waits for ch 0xa, which nothing writes at load.
+    // tail], and Lock_Update case 1 (0x1ae3d8) HOLDS the out channel on every tick in state 1
+    // [M — the level-11 pin: door_large_stairwell #192 stood locked forever until the hold was
+    // ported]. So on Operative ch 0xa is on WITHOUT any burn, and door[19] is unlocked with it
+    // (it still does not move: no proximity — the movement bits stay 0).
     {
         let mut w = load();
         w.walk_to(Wp::new(9.3, 1.1, -0.6).r(1.0).r(1.0), "the keypad approach");
@@ -151,8 +155,9 @@ fn the_keypad_burn_opens_its_door() {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.locks.iter().any(|l| l.out == 0xa && l.unlocked),
             "the Operative load starts the keypad locks unlocked [M 0x1ae1f8 tail]");
-        assert!(!sim.drones.channels.on(0xa), "no burn, no ch 0xa [D param 5]");
-        assert_eq!(sim.drones.doors.list[19].state & 0xc, 0, "the keypad door stays shut [D]");
+        assert!(sim.drones.channels.on(0xa),
+            "the Operative auto-unlock's state-1 lock holds ch 0xa on [M 0x1ae3d8 case 1]");
+        assert_eq!(sim.drones.doors.list[19].state & 0xc, 0, "the keypad door holds still without proximity [D]");
     }
     let mut w = load_agent();
     w.top_up_health = true;
@@ -451,6 +456,21 @@ fn glass_shatters_under_fire() {
     let w2 = nf_view::load_weapons(&iso(), "07000012.bin", false, &[shooter]).expect("load with the gun");
     let mut w = Walker::new(w2);
     w.top_up_health = true;
+    // The hand-over: `load_weapons` merges only the gun's ASSETS (the first-person model in
+    // memory = `loaded`); the weapon itself enters the inventory through the game's give path
+    // `Player_EquipWeapon` 0x1a8a58 (the same call a pickup's take makes) — owned + a full clip
+    // (casings16's give_p2k pattern). Only the table-branch guns need it; a loadout gun is
+    // already owned. The draw itself stays the real switch input below.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if !sim.drones.inventory.owned.get(shooter as usize).copied().unwrap_or(false) {
+            let wd = sim.weapons.clone();
+            let rounds = wd.clip_size(shooter as usize).max(1);
+            assert!(sim.drones.inventory.equip_weapon(&wd, shooter as usize, rounds, true),
+                "the give of weapon {shooter} equips it [M Player_EquipWeapon 0x1a8a58]");
+            sim.drones.inventory.equip_ammo(&wd, shooter as usize, rounds * 3);
+        }
+    }
     w.wait_enabled(3000, "the intro");
     w.wait(60);
     // Switch to the filter-passing gun through the real weapon-switch input.
@@ -477,6 +497,14 @@ fn glass_shatters_under_fire() {
     };
     // Stand where the pane is visible (a ring of spots — the pane's facing is data we don't pin),
     // then burst it. The teleports only reach the spot; the shot is the real trigger path.
+    // The kill sound's observation: the per-tick hearing list is CONSUMED by the AI pass the
+    // same tick (Drone_InitComms' HandleSoundAlerts takes it [M 0x139520:124-284; the port's
+    // mem::take at the hearing gate]), so a between-ticks sample of `drones.sounds` cannot see
+    // an early-tick kill sound — the 715a text asserted exactly that and could not pass on any
+    // tree (probe 715c: dead true, kill recorded, sounds already drained). The kill RECORD is
+    // the surviving evidence: Break_Kill 0x12b970's type-2 arm picks sound 0x2e [M 0x12b970:
+    // uVar5 = 0x2e] and the port queues (placement, kind, sound) at the kill — the same pin,
+    // read where the game's data survives the tick.
     let heard = std::cell::Cell::new(false);
     let mut hit = false;
     for ring in [1.4f32, 2.4] {
@@ -490,14 +518,14 @@ fn glass_shatters_under_fire() {
             }
             w.wait(5);
             if shoot_at(&mut w, centre, 60, &|sim| {
-                if sim.drones.sounds.iter().any(|s| s.id == 0x2e) { heard.set(true); }
+                if sim.drones.break_kills.iter().any(|&(_, kind, sound)| kind == 2 && sound == 0x2e) { heard.set(true); }
                 sim.drones.breaks.list[bi].dead
             }) { hit = true; break; }
         }
         if hit { break; }
     }
     assert!(hit, "the burst shatters the glass pane [M Break_Update 0x12bfd8's class-5 contact]");
-    assert!(heard.get(), "the glass kill plays sound 0x2e [M 0x12b970's type-2 arm]");
+    assert!(heard.get(), "the glass kill's Break_Kill record carries sound 0x2e [M 0x12b970's type-2 arm; the hearing list drains into the AI pass the same tick, 0x139520]");
     let sim = w.scene.sim.as_ref().unwrap();
     // Sister: another pane stays whole.
     assert!(sim.drones.breaks.list.iter().filter(|b| b.kind == 2).count() > 1
