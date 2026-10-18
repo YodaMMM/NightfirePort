@@ -263,3 +263,23 @@ fn the_spawn_plate_spawns_group_one_at_its_spawner() {
     assert!(matches!(d.skin & 0xffff, 0x87 | 0x8c | 0xb1),
         "the spawned squad wears the level's guard skins [D census p0 skins]");
 }
+
+/// Every placement's model resolves on this level — zero missing hashes/indices of the 707
+/// placements across all 64 maps [D parse].
+#[test]
+fn every_placement_resolves_its_model() {
+    let img = nf_formats::iso9660::IsoImage::open(&iso()).expect("open iso");
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000016.bin")).expect("07000016.bin");
+    let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+    let lv = nf_formats::level::Level::parse(&data).expect("parse");
+    let mut unresolved = 0;
+    for m in &lv.maps {
+        for p in &m.placements {
+            let ok = if p.by_hash() { lv.by_hash.contains_key(&p.hashcode) }
+                else { (p.index as usize) < m.objects.len() };
+            if !ok { unresolved += 1; }
+        }
+    }
+    assert_eq!(unresolved, 0, "every placement's model resolves [D the 07000016 parse]");
+}

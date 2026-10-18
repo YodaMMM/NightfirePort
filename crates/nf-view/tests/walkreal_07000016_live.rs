@@ -91,6 +91,13 @@ fn door7_opens_on_bonds_e_and_bond_passes() {
 // ON the furniture at y 1.75, grounded=false). door[0] is lock 0x24 [D] — its mask-0x04 panel
 // trigger still needs locating for the E. Next session: re-lane the approach west of x 3.1 and
 // find the 0x24 writer.
+//
+// RESOLVED (level-16-interactables): the 0x24 writer IS FOUND — the SecurityStation activate
+// trigger #597 (mask 0x4, E) at (−15.20, 6.52, −94.56), the west security room's UPPER floor
+// (docs/levels/07000016.md §7) — not a panel beside the door. interactables_07000016_live's
+// door0_unlocks_from_the_security_station_and_opens proves the fetch + the door open through the
+// real E. The un-ignored walk still needs the route to WALK there (the upper room's approach —
+// the AI_ShadowVolumes at y −0.48/5.67 mark the two levels) and the re-lane west of x 3.1.
 #[test]
 #[ignore = "the walk's next blocker — door[0]'s approach (the east furniture hop); door[7] + the trench are resolved, see the header"]
 fn walk_arrival_to_the_chasers_defeat() {
