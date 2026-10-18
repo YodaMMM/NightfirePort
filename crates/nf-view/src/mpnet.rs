@@ -243,6 +243,10 @@ pub struct NetCore {
     /// the host repeats it every `START_RESEND_EVERY` polls for `START_RESEND_POLLS` polls and
     /// the client keeps the first copy [S port protocol].
     start_resend: Option<(Vec<u8>, u32)>,
+    /// mp-lobby-one-screen: the host's last published snapshot / the client's last received
+    /// one, and the arrived client edits the host has not drained [S §6.4].
+    lobby: Option<nf_net::LobbyState>,
+    lobby_edits: Vec<nf_net::LobbyEdit>,
 }
 
 /// The host repeats the match-start payload every this many polls …
@@ -269,6 +273,8 @@ impl NetCore {
             closed: false,
             events: Vec::new(),
             start_resend: None,
+            lobby: None,
+            lobby_edits: Vec::new(),
         })))
     }
 
@@ -322,6 +328,8 @@ impl NetCore {
             closed: false,
             events: Vec::new(),
             start_resend: None,
+            lobby: None,
+            lobby_edits: Vec::new(),
         })))
     }
 
@@ -376,6 +384,18 @@ impl NetCore {
                                 self.events.push(CoreEvent::MatchStarted(Box::new(s)));
                             }
                         }
+                        // mp-lobby-one-screen: tag 2 = the one-screen snapshot, tag 3 = a
+                        // client's own-row edit [S docs/systems/net-online-lobby.md §6.4].
+                        Some(2) => {
+                            if let Some(st) = nf_net::LobbyState::decode(&bytes[1..]) {
+                                self.lobby = Some(st);
+                            }
+                        }
+                        Some(3) => {
+                            if let Some(e) = nf_net::LobbyEdit::decode(&bytes[1..]) {
+                                self.lobby_edits.push(e);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -417,6 +437,31 @@ impl NetCore {
 
     pub fn host_choices(&self) -> Option<MpNetChoices> {
         self.choices.clone()
+    }
+
+    /// mp-lobby-one-screen: the client reads the host's last snapshot [S §6.4].
+    pub fn lobby_state(&self) -> Option<nf_net::LobbyState> {
+        self.lobby.clone()
+    }
+
+    /// mp-lobby-one-screen: the host stores + pushes the whole snapshot [S §6.4].
+    pub fn publish_lobby(&mut self, st: &nf_net::LobbyState) {
+        self.lobby = Some(st.clone());
+        let mut payload = vec![2u8];
+        payload.extend_from_slice(&st.encode());
+        self.sess.send_data(payload);
+    }
+
+    /// mp-lobby-one-screen: a client pushes one own-row edit [S §6.4].
+    pub fn push_row_edit(&mut self, e: &nf_net::LobbyEdit) {
+        let mut payload = vec![3u8];
+        payload.extend_from_slice(&e.encode());
+        self.sess.send_data(payload);
+    }
+
+    /// mp-lobby-one-screen: the host drains one arrived client edit [S §6.4].
+    pub fn take_row_edit(&mut self) -> Option<nf_net::LobbyEdit> {
+        if self.lobby_edits.is_empty() { None } else { Some(self.lobby_edits.remove(0)) }
     }
 
     pub fn publish_choices(&mut self, c: &MpNetChoices) {
@@ -570,5 +615,10 @@ impl crate::menu::MpSession for SessionProxy {
     fn start_match(&mut self, s: &nf_game::mp::MpSettings) { self.0.borrow_mut().start_match(s); }
     fn match_started(&self) -> Option<nf_game::mp::MpSettings> { self.0.borrow().match_started() }
     fn set_codename(&mut self, name: &str) { self.0.borrow_mut().set_codename(name); }
+    fn local_slot(&self) -> usize { self.0.borrow().local_slot() }
+    fn lobby_state(&self) -> Option<nf_net::LobbyState> { self.0.borrow().lobby_state() }
+    fn publish_lobby(&mut self, s: &nf_net::LobbyState) { self.0.borrow_mut().publish_lobby(s); }
+    fn push_row_edit(&mut self, e: &nf_net::LobbyEdit) { self.0.borrow_mut().push_row_edit(e); }
+    fn take_row_edit(&mut self) -> Option<nf_net::LobbyEdit> { self.0.borrow_mut().take_row_edit() }
     fn close(&mut self) { self.0.borrow_mut().close(); }
 }
