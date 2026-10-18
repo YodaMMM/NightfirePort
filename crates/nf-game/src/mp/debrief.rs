@@ -32,7 +32,8 @@ pub enum MpDebriefName {
     Bot(u32),
 }
 
-/// One rendered row of the debriefing (the game renders at most 4).
+/// One rendered row of the debriefing (the game renders at most 4; the DATA
+/// builder carries up to the port's 16 participants [S mp-16-slots]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MpDebriefRow {
     /// The sorted slot's game slot index (the values all read that slot's records).
@@ -99,11 +100,13 @@ impl MpMatch {
 
     /// The debriefing board [M P_MPDEBRIEFING_Handler 0x212198, msg 0x4c, decomp lines 83-250].
     pub fn debriefing(&self) -> MpDebriefing {
-        // 1. The (slot, score) pairs: humans 0..+0x1AC then bots 4..4+0x1B0 [M decomp :93-111].
-        let humans = (self.settings.human_count as usize).min(4);
-        let bots = (self.settings.bot_count as usize).min(4);
+        // 1. The (slot, score) pairs: humans 0..+0x1AC then bots — the game's fixed layout is
+        //    bots 4..4+0x1B0 [M decomp :93-111]; the port's bots follow the humans [S
+        //    mp-16-slots] and the counts extend to the port cap [S].
+        let humans = (self.settings.human_count as usize).min(super::MP_MAX_SLOTS);
+        let bots = (self.settings.bot_count as usize).min(super::MP_MAX_SLOTS - humans);
         let mut slots: Vec<usize> = (0..humans).collect();
-        slots.extend(4..4 + bots);
+        slots.extend(humans..humans + bots);
         let mut scores: Vec<i32> = slots.iter().map(|&s| self.get_mp_score(s)).collect();
         // 2. The stable descending bubble sort over `MPSettings+0x194` entries [M decomp :112-130].
         //    (The game sorts its whole pair array; the port's array is exactly humans+bots,
@@ -130,7 +133,7 @@ impl MpMatch {
             if i > 0 && scores[i] != scores[i - 1] {
                 rank = i;
             }
-            let name = if s < 4 {
+            let name = if s < self.settings.human_count as usize {
                 MpDebriefName::Human(self.settings.players[s].codename.clone())
             } else {
                 MpDebriefName::Bot(self.settings.players[s].skin)
@@ -145,8 +148,10 @@ impl MpMatch {
                 deaths: self.game.slots[s].deaths,
                 total: scores[i],
             });
-            if rows.len() == 4 {
-                break; // the row loop caps at 4 [decomp line 219; disasm 0x212904]
+            if rows.len() == super::MP_MAX_SLOTS {
+                break; // the game's own loop caps at 4 rendered rows [decomp line 219; disasm
+                       // 0x212904] — the DATA builder carries all 16 participants [S mp-16-slots;
+                       // the renderer's visible cap stays the draw code's business]
             }
         }
         // 4. The result line [M decomp :220-250].

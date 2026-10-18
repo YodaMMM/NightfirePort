@@ -25,7 +25,7 @@ fn join(m: &mut MpMatch, slot: usize, team: u32) {
 
 fn tick(m: &mut MpMatch, frames: u32, rng: &mut Rng) {
     for _ in 0..frames {
-        m.update_objects(DT, &[false; 8], rng);
+        m.update_objects(DT, &[false; nf_game::mp::MP_MAX_SLOTS], rng);
         m.update(DT, false, rng);
     }
 }
@@ -354,14 +354,14 @@ fn koth_drip_ffa_and_team() {
     let mut ffa = make(scenario::KOTH_FFA, 3, -1);
     join(&mut ffa, 0, 0);
     join(&mut ffa, 1, 0);
-    let hill = [true, true, false, false, false, false, false, false];
+    let mut hill = [false; nf_game::mp::MP_MAX_SLOTS]; hill[0] = true; hill[1] = true;
     for _ in 0..300 {
         ffa.update_objects(DT, &hill, &mut rng);
         ffa.update(DT, false, &mut rng);
     }
     assert!((ffa.game.slots[0].score - 1.0).abs() < 1e-4, "0.2/s for 5 s on the hill");
     assert!((ffa.game.slots[1].score - 1.0).abs() < 1e-4, "everyone on the hill scores at once");
-    let dead = [true, false, false, false, false, false, false, false];
+    let mut dead = [false; nf_game::mp::MP_MAX_SLOTS]; dead[0] = true;
     ffa.game.slots[1].dead = true;
     ffa.game.slots[1].score = 0.0;
     for _ in 0..60 {
@@ -373,7 +373,7 @@ fn koth_drip_ffa_and_team() {
     let mut team = make(scenario::KOTH_TEAM, 3, -1);
     join(&mut team, 0, 0);
     join(&mut team, 1, 1);
-    let one = [true, false, false, false, false, false, false, false];
+    let mut one = [false; nf_game::mp::MP_MAX_SLOTS]; one[0] = true;
     for _ in 0..300 {
         team.update_objects(DT, &one, &mut rng);
         team.update(DT, false, &mut rng);
