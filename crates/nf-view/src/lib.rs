@@ -3633,7 +3633,13 @@ impl ApplicationHandler for App {
                     if let Some(sim) = self.scene.sim.as_mut() { sim.drones.music.sfx_paused = menu_hold; }
                     if let Some(s) = self.sound.as_mut() { s.set_paused(menu_hold); }
                 }
-                if !self.paused && self.fe.is_none() {
+                // An online match never stops for one machine's pause page: the others would stall on
+                // its missing inputs (lockstep). The match runs on under the menu with this machine's
+                // player idle (NEUTRAL input below) [S port design — the PS2's couch pause stops every
+                // pad's game; online there is no shared screen to pause].
+                let net_menu = self.net.is_some() && !self.net_await_load
+                    && self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::Pause);
+                if !self.paused && (self.fe.is_none() || net_menu) {
                     // Game logic at its fixed 60 Hz, decoupled from the render rate: one AI tick per whole tick of time.
                     // Dev mode's time scale changes the number of ticks run (WORKLOG 0081), not the tick rate.
                     let before = self.anim_time as u32;
@@ -3720,6 +3726,10 @@ impl ApplicationHandler for App {
                                 };
                                 (input, self.trigger, self.just.remove(&KeyCode::KeyR), self.just.remove(&KeyCode::KeyE))
                             };
+                            // The online pause (net_menu): the keys belong to the menu — this player idles.
+                            let (mut input, trigger, reload, use_key) = if net_menu {
+                                (Default::default(), false, false, false)
+                            } else { (input, trigger, reload, use_key) };
                             // weapon-matrix: the dev menu's "Test weapon" run (dev.rs) merges its
                             // inputs into this tick — the same lanes the keyboard uses
                             // (`switch_to`, the trigger, the R edge), never during a replay
