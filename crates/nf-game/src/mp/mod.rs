@@ -521,6 +521,11 @@ impl MpMatch {
             let slot = 4 + i;
             let team = rec.team() as u16; // +0x0F, the team byte [M 0x183a50:143-145]
             self.settings.players[slot].team = team as u32;
+            // `BOT_init` 0x1249e8:160 writes the record's character byte (+0x10) into the bot
+            // slot's settings skin word (`*(uint *)(MPSettings + slot*0x30 + 0x24) = rec[0x10]`)
+            // and reads the body's skin from `MP_skins[rec[0x10]]` [M 0x1249e8:100] — the loader
+            // reads the same word per slot.
+            self.settings.players[slot].skin = rec.character() as u32;
             let sp = self.get_spawn_point(team, slot, rng) as usize;
             let p4 = self.spawns.points[sp].pos;
             let pos = [p4[0], p4[1], p4[2]];

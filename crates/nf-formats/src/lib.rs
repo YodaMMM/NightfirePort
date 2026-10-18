@@ -23,6 +23,7 @@ pub mod level;
 pub mod levelbin;
 pub mod map;
 pub mod menudef;
+pub mod mpanim;
 pub mod music;
 pub mod nis;
 pub mod ps2gfx;

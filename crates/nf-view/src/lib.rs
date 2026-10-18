@@ -875,6 +875,18 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // Drone start animations: ACTION.ELF's tables (read through its symbols) and the level's scripts (type 5).
     phase_mark("06 skin merge + loadable packs", t); t = std::time::Instant::now();
     let elf = iso.read_file(iso.find("/ACTION.ELF").context("no ACTION.ELF on the disc")?)?;
+    // mp-character-data: the bot slots' character word BEFORE the scene build — `BOT_init`
+    // 0x1249e8:160 writes the bot record's character byte (+0x10) into
+    // `MPSettings+slot*0x30+0x24` (and reads the body's skin from `MP_skins[rec[0x10]]`,
+    // 0x1249e8:100). The port's `MpMatch::create_bots` repeats the write when the match starts;
+    // the scene build parks the bodies earlier, so it happens here off the same records.
+    let mp_settings = mp_settings.map(|mut st| {
+        let bots = (st.bot_count as usize).min(4);
+        for (i, rec) in nf_game::mp::bots::INITIAL_BOT_RECORDS.iter().take(bots).enumerate() {
+            st.players[4 + i].skin = rec.character() as u32;
+        }
+        st
+    });
     let drones = scene::DroneContext {
         tables: nf_formats::drone::DroneAnimData::from_action_elf(&elf)?,
         // The level's own kind-5 scripts plus the weapon-asset merge's foreign view scripts (the
@@ -897,11 +909,15 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         surfaces: nf_formats::sfx::SurfaceSounds::from_action_elf(&elf).map_err(|e| eprintln!("EffectInfo: {e}")).ok(),
         voices: nf_formats::sfx::voice_lines(&elf).map_err(|e| eprintln!("Drone_SfxInfo: {e}")).ok(),
         hud: nf_formats::hud::HudTables::from_action_elf(&elf).map_err(|e| eprintln!("HUD tables: {e}")).ok(),
+        // mp-character-data: the MP body tables, read from the same ELF [D]. Parsed on every load
+        // (cheap — 29 × 0x10 + 16 × 0x28 bytes); only the MP body build consumes them.
+        mp_skins: nf_formats::mpanim::MpSkins::from_action_elf(&elf).map_err(|e| eprintln!("MP_skins: {e}")).ok(),
+        mp_anims: nf_formats::mpanim::MpAnimSets::from_action_elf(&elf).map_err(|e| eprintln!("MP anim sets: {e}")).ok(),
         // net-match-host: the online match builds the level from the host's seed (equal on every
         // machine — the session's settings blob carries it); 0 keeps the pre-net constant.
         mp_seed: mp_settings.as_ref().map_or(0, |st| st.seed),
     };
-    let mut scene = scene::Scene::build(&level, !all, &skeletons, sequences, Some(&drones), difficulty);
+    let mut scene = scene::Scene::build(&level, !all, &skeletons, sequences, Some(&drones), difficulty, mp_settings.as_ref());
     phase_mark("07 scene build (Scene::build)", t); t = std::time::Instant::now();
     // The pause/fail menus' burning woman [M `psiDecompressWoman` 0x1202a8]: the archive's kind-16 "woman" run-length
     // mask filled from the fire texture 0x030000da, drawn into 0x030000db's texels through 0x030000da's CLUT (the
