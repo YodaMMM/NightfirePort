@@ -28,31 +28,39 @@ use walker::{Walker, Wp};
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 #[test]
-#[ignore = "the front entrance's mouth is glazed shut for the capsule: every walked lane (x −6.2 and the slid west x −8.09) pins at z 64.47 against a south-facing wall at z ≈ 65.0 — the security gate, whose raise has no writer the port runs (the objective's cut-scene/channel is unported); cold segment rays at y −368.4 pass under the sill, so only the capsule-height band is blocked. Needs the game's raise path (gdbwatch in PCSX2 which channel/SP lifts the gate when 'Raise security gate and escape' arms) — walkreal-b's addendum documents the same regression; owner: the cut-scene/collision owner (fix-cutscenes2 candidate)"]
+#[ignore = "the gate raise chain is proven green by gate13_live (the panel E → ch 0x23 → the SS rise → the mouth clears); this end-to-end walk is blocked by the port's room-cell stickiness: the walked approach to the panel is walled off by the lobby furniture (the walker wedges at x −13.3, z 31.3, segment_to_target None — the panel side is behind the security-room wall), and the reach-only teleport that reaches the panel leaves the scoped collision in the west cell (every later leg falls, y −386 → −852, while the warm no-E load stands stable at y −368.33 for 240+ ticks — fall13/gate13 probes). Needs the cell re-resolution after a teleport (or a walked path through the security-room door #355, whose open ch 0x11d has no found writer [D]). The pre-E legs and the entrance/exit chain are proven by walk_07000013_live + the probes"]
 fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     let iso = iso();
     // ---- 07000012 walked (the shared route) ----
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000012.bin", false, None).unwrap());
-    tower2::walk_12(&mut w);
-    tower2::walk_12_exit(&mut w);
+    // Agent difficulty (3): the keypad locks' param-6 tag auto-unlocks them at create on
+    // Operative [M 0x1ae1f8 tail], and the route's burn leg pins the Agent+ behaviour
+    // (the burn writes ch 0xa; the Operative create-unlock writes nothing [M Lock_Unlock
+    // 0x1b0650's flag arm]). The block drops the scene before the next level loads (the 4 GB
+    // sandbox OOMs three resident levels).
     let save = {
+        let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3).unwrap());
+        tower2::walk_12(&mut w);
+        tower2::walk_12_exit(&mut w);
         let sim = w.scene.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request,
             &sim.drones.inventory, &sim.drones.channels).with_mission(&sim.drones.mission)
     };
 
     // ---- 0700004A: the spawn drop onto the 0x4D touch (the game's own placement) ----
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700004a.bin", false, Some(&save)).unwrap());
-    w.wait_enabled(3000, "the 4A intro");
-    let mut landed = false;
-    for _ in 0..600 {
-        w.tick(nf_game::player::Input::default(), false);
-        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d) { landed = true; break; }
-    }
-    assert!(landed, "4A: the start #43 drops Bond into touch #277 → ch 0x4D [D]");
-    assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[16][1], 4,
-        "12's 'Escape through the elevator shaft' completes (the late AND) [M 0x1827d8]");
     let save = {
+        let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700004a.bin", false, Some(&save)).unwrap());
+        w.wait_enabled(3000, "the 4A intro");
+        let mut landed = false;
+        for _ in 0..600 {
+            w.tick(nf_game::player::Input::default(), false);
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d) { landed = true; break; }
+        }
+        assert!(landed, "4A: the start #43 drops Bond into touch #277 → ch 0x4D [D]");
+        // fix-objective-banner: the monitor runs at the TOP of the tick — the objective completes the
+        // tick after the channel rises.
+        for _ in 0..2 { w.tick(nf_game::player::Input::default(), false); }
+        assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[16][1], 4,
+            "12's 'Escape through the elevator shaft' completes (the late AND) [M 0x1827d8]");
         let sim = w.scene.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request,
             &sim.drones.inventory, &sim.drones.channels).with_mission(&sim.drones.mission)
@@ -74,12 +82,53 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
         assert_eq!(sim.drones.mission.states[18][0], 3, "'Raise security gate…' announces (enable 0x4A) [L]");
     }
 
-    // The REAL walk south through the lobby to the front entrance (~55 units; the desks, the
-    // glass and the pillars thread between the nav nodes [D §4]; the direct steer wedges on the
-    // central desk block at z ≈ 25 [D probe] — the route swings west of it).
+    // THE SECURITY GATE: the "Shutters2" SimpleScript #149 (out ch 0x23 [D param 3]) is the
+    // entrance mouth's panel (the SS cel's glist spans x −8.54..−4.97 at z 65.02 [D the object
+    // bounds] — exactly the wall the old walk pinned at). Its writer is ScriptPlayer #161
+    // ("SCRIPTPLAYER_Elevators", mode 64 preload, mask 4, out ch 0x23 [D params (5,4),(6,23)]):
+    // the preload's Entity op creates 0x02000A2C "SCRIPT_SHUTTER_CLOSE" — the wall panel's
+    // world-baked glist at (−18.08, −368.23, 25.01) [D obj 70] — with obj+0xE4 = the SP handle
+    // [M Script_EntityStart 0x1d8d78:110], so the E pick's class-0 arm reaches SP_Activate
+    // [M Player_Activate 0x1a5170:121-122] and the played script writes ch 0x23
+    // [M SP_Update 0x1dbda8:221-229]. The panel is the west-wall shutter display ("SCRIPT_
+    // SHUTTER_CLOSE/OPEN" share its glist centre [D objs 68/69]); ch 0x23 runs the SS playhead
+    // to key 1 and the gate lifts [M SS_Update 0x1a9948 + KeyFrame_Interp 0x1e1140].
+    // Sister: before the press ch 0x23 is off and the SS rests at key 0.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x23), "ch 0x23 off before the panel [D]");
+        let rest = sim.drones.sss.list.iter().find(|s| s.channel == 0x23)
+            .map(|s| s.matrix[3][1]).expect("the Shutters2 SS on ch 0x23 [D]");
+        assert!(rest.abs() < 0.05, "the gate SS rests at key 0 (y offset {rest}) [D]");
+    }
+    // The panel E — WALKED, not teleported: the port's room-cell rides the walk (a teleport
+    // across the lobby leaves the scoped collision in the old cell and the floor vanishes —
+    // see the report). The panel's port-side entity sphere sits at the model centre transformed
+    // by the SP's stream matrix (t −1.41 x) — (−19.49, −368.23, 25.01); the game-side
+    // displacement of a world-baked glist is the report's live check. The press is the real use
+    // key.
+    w.lenient = true;
+    w.walk_to(Wp::new(-2.0, -368.6, 18.0).r(1.5), "13: off the car, south-west");
+    w.walk_to(Wp::new(-9.0, -368.5, 24.0).r(1.2), "13: the west lane");
+    w.walk_to(Wp::new(-12.5, -368.2, 31.5).r(1.2), "13: the west wall lane");
+    w.walk_to(Wp::new(-16.0, -368.4, 28.2).r(1.0), "13: the panel approach");
+    w.walk_to(Wp::new(-17.9, -369.0, 25.4).r(0.7), "13: at the shutter panel");
+    let mut ch23 = false;
+    for _ in 0..80 {
+        w.tick(nf_game::player::Input::default(), true);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x23) { ch23 = true; break; }
+    }
+    assert!(ch23, "E at the shutter panel writes ch 0x23 [M 0x1dbda8:221-229; D SP #161 out]");
+    // The gate lifts while Bond walks south (the SS playhead runs the ~4-unit rise over ~200
+    // ticks [probe]).
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
     w.walk_to(Wp::new(3.0, -368.4, 45.0).r(1.5), "13: the lobby mid");
     w.walk_to(Wp::new(-6.0, -368.2, 60.0).r(1.5), "13: the lobby south");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let y = sim.drones.sss.list.iter().find(|s| s.channel == 0x23).map(|s| s.matrix[3][1]).unwrap_or(0.0);
+        assert!(y > 3.0, "the gate SS has risen to key 1 by the lobby's south end (y offset {y}) [M SS_Update 0x1a9948]");
+    }
     w.walk_to(Wp::new(-6.2, -368.0, 66.3).r(0.6), "13: the front entrance");
     {
         let sim = w.scene.sim.as_ref().unwrap();
