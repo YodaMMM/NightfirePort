@@ -27,6 +27,7 @@
 pub mod hash;
 pub mod input;
 pub mod net;
+pub mod p2p;
 pub mod proto;
 pub mod session;
 pub mod settings;

@@ -1386,6 +1386,26 @@ pub trait MpSession {
     fn set_codename(&mut self, name: &str);
     /// Close cleanly (Back / cancel / the match handover's end).
     fn close(&mut self);
+    /// net-p2p: the internet reachability lines for the online pages (None: not probing — the
+    /// fakes, LAN-only builds) [S docs/systems/net-p2p.md §4].
+    fn reach(&self) -> Option<MpReach> { None }
+    /// net-p2p: the host pasted a joiner's code — punch toward it. False when it did not decode.
+    fn expect_peer(&mut self, _code: &str) -> bool { false }
+}
+
+/// net-p2p: what the online pages show about internet play [S docs/systems/net-p2p.md §4].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MpReach {
+    /// True on the host, false on a joiner.
+    pub hosting: bool,
+    /// One status line ("Internet: open (UPnP)", "Opening the port...", ...).
+    pub state: String,
+    /// Host: the join code friends type (Ctrl+C copies it).
+    pub code: Option<String>,
+    /// Joiner: this machine's own code, for a host that has to punch (Ctrl+C copies it).
+    pub my_code: Option<String>,
+    /// Small print (why mapping failed, what to do next).
+    pub note: String,
 }
 
 /// The join timeout: 600 menu ticks = 10 s at the fixed 60 Hz [S §2.2].
@@ -6377,7 +6397,7 @@ impl FrontEnd {
     pub fn mp_net_dial(&mut self) -> bool {
         self.mp_net_error = None;
         let addr = self.mp_net_addr.trim().to_string();
-        if !mp_net_addr_ok(&addr) {
+        if !mp_net_addr_ok(&addr) && nf_net::p2p::JoinCode::decode(&addr).is_err() {
             self.mp_net_error = Some(MpNetError::BadAddress);
             return false;
         }
@@ -6554,7 +6574,7 @@ impl FrontEnd {
     /// pages, so the strings are the port's own literals].
     pub fn mp_net_status(&self) -> Option<&'static str> {
         let err = match self.mp_net_error {
-            Some(MpNetError::BadAddress) => Some("Enter an address as IP:PORT"),
+            Some(MpNetError::BadAddress) => Some("Enter IP:PORT or a join code"),
             Some(MpNetError::Busy) => Some("Port already in use"),
             Some(MpNetError::Denied) => Some("No network session is wired"),
             None => None,
@@ -6584,9 +6604,10 @@ impl FrontEnd {
             return true;
         }
         if self.page != Page::MpNetJoin { return false; }
-        if !(c.is_ascii_digit() || c == '.' || c == ':') { return false; }
+        // net-p2p: a join code types too (Crockford letters + the dashes) [S net-p2p §2].
+        if !(c.is_ascii_alphanumeric() || c == '.' || c == ':' || c == '-') { return false; }
         if self.mp_net_addr.chars().count() >= 22 { return false; }
-        self.mp_net_addr.push(c);
+        self.mp_net_addr.push(c.to_ascii_uppercase());
         true
     }
 
@@ -6616,7 +6637,8 @@ impl FrontEnd {
         if self.page != Page::MpNetJoin { return false; }
         let room = 22usize.saturating_sub(self.mp_net_addr.chars().count());
         if room == 0 { return false; }
-        let take: String = s.chars().filter(|c| c.is_ascii_digit() || *c == '.' || *c == ':').take(room).collect();
+        let take: String = s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == ':' || *c == '-')
+            .map(|c| c.to_ascii_uppercase()).take(room).collect();
         if take.is_empty() { return false; }
         self.mp_net_addr.push_str(&take);
         true
@@ -6798,6 +6820,15 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                     // PCSX2 m42: port 2 for agent 2, the multitap line for 3 and 4].
                     (1, _) => { let t = bind(0x3c0).replace("%s", "2"); lines_at(&mut h, &t, py + 32.0 + 36.0); }
                     _ => { let t = bind(0x4a2); lines_at(&mut h, t.trim_end(), py + 32.0 + 36.0); }
+                }
+            }
+            // net-p2p: the hosting lobby's internet line + join code, in the band between the
+            // panels (bottom 387) and the hint bar (419) [S docs/systems/net-p2p.md §4].
+            if fe.mp_hosting {
+                if let Some(r) = fe.mp_session.as_ref().and_then(|s| s.reach()) {
+                    let line = match &r.code { Some(c) => format!("{}    Code: {}  (Ctrl+C)", r.state, c), None => r.state.clone() };
+                    label(&mut h, font, &line, 50.0, 389.0, 540.0, 13.0, cream, true, 1.0);
+                    if !r.note.is_empty() { label(&mut h, font, &r.note, 50.0, 403.0, 540.0, 11.0, dim, true, 1.0); }
                 }
             }
             hint_bar(&mut h, font, &hint(0x49b, "~A Confirm  ~V Change  ~B Back"), 50.0, 419.0, cream);
@@ -7211,15 +7242,25 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                     let editing = fe.cursor == 0 && !fe.mp_hosting;
                     let port = if fe.mp_net_port == 0 { String::new() } else { fe.mp_net_port.to_string() };
                     label(&mut h, font, &format!("Port  {}{}", port, if editing { "_" } else { "" }), 200.0, y, 240.0, 18.0, bright, true, 1.0);
-                    // The address a friend types into Join Online: this PC's LAN address (the
-                    // interface the OS would route out of) and the port. Over the internet they
-                    // need the router's public address and a forwarded UDP port instead.
+                    // The address a friend on the same network types into Join Online: this PC's
+                    // LAN address and the port. Over the internet the lobby shows a join code once
+                    // listening (net-p2p: UPnP / NAT-PMP open the port, else STUN + punching).
                     let ip = local_ip().unwrap_or_else(|| "this PC's IP".into());
-                    label(&mut h, font, &format!("Friends join:  {}:{}", ip, fe.mp_net_port), 200.0, y + 30.0, 240.0, 14.0, dim, true, 1.0);
+                    label(&mut h, font, &format!("Same network:  {}:{}", ip, fe.mp_net_port), 200.0, y + 30.0, 240.0, 14.0, dim, true, 1.0);
+                    label(&mut h, font, "Internet: a join code shows in the lobby", 200.0, y + 50.0, 240.0, 14.0, dim, true, 1.0);
                 }
                 Page::MpNetJoin => {
-                    let shown = if fe.mp_net_addr.is_empty() { "IP:PORT" } else { &fe.mp_net_addr };
+                    let shown = if fe.mp_net_addr.is_empty() { "IP:PORT or JOIN CODE" } else { &fe.mp_net_addr };
                     label(&mut h, font, shown, 200.0, y, 240.0, 18.0, bright, true, 1.0);
+                    // net-p2p: while dialing, the host may need THIS machine's code to punch [S net-p2p §3].
+                    if let Some(r) = fe.mp_session.as_ref().and_then(|s| s.reach()) {
+                        let mut yy = y + 34.0;
+                        for l in [r.state.clone(), r.my_code.as_ref().map(|c| format!("Your code: {c}  (Ctrl+C)")).unwrap_or_default(), r.note.clone()] {
+                            if l.is_empty() { continue; }
+                            label(&mut h, font, &l, 120.0, yy, 400.0, 14.0, dim, true, 1.0);
+                            yy += 18.0;
+                        }
+                    }
                 }
                 _ => {
                     for (i, a) in fe.mp_join.iter().enumerate() {
@@ -8452,6 +8493,14 @@ pub fn net_char_key(key: winit::keyboard::KeyCode) -> Option<char> {
         KeyCode::Digit9 | KeyCode::Numpad9 => '9',
         KeyCode::Period | KeyCode::NumpadDecimal => '.',
         KeyCode::Semicolon => ':',
+        // net-p2p: the join code's letters and dashes [S net-p2p §2].
+        KeyCode::Minus | KeyCode::NumpadSubtract => '-',
+        KeyCode::KeyA => 'A', KeyCode::KeyB => 'B', KeyCode::KeyC => 'C', KeyCode::KeyD => 'D', KeyCode::KeyE => 'E',
+        KeyCode::KeyF => 'F', KeyCode::KeyG => 'G', KeyCode::KeyH => 'H', KeyCode::KeyI => 'I', KeyCode::KeyJ => 'J',
+        KeyCode::KeyK => 'K', KeyCode::KeyL => 'L', KeyCode::KeyM => 'M', KeyCode::KeyN => 'N', KeyCode::KeyO => 'O',
+        KeyCode::KeyP => 'P', KeyCode::KeyQ => 'Q', KeyCode::KeyR => 'R', KeyCode::KeyS => 'S', KeyCode::KeyT => 'T',
+        KeyCode::KeyU => 'U', KeyCode::KeyV => 'V', KeyCode::KeyW => 'W', KeyCode::KeyX => 'X', KeyCode::KeyY => 'Y',
+        KeyCode::KeyZ => 'Z',
         _ => return None,
     })
 }

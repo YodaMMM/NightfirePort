@@ -255,16 +255,17 @@ fn join_flow_type_connect_lobby_and_match_start() {
     assert!(fe.action(Action::Confirm), "Join Online confirm must navigate");
     assert_eq!(fe.page, Page::MpNetJoin);
     assert_eq!(fe.page.id(), PAGE_MP_NETJOIN);
-    // The typing: digits, dots, colon; letters never land; Backspace deletes.
+    // The typing: digits, dots, colon, and (net-p2p) a join code's letters and dashes; anything
+    // else never lands; Backspace deletes.
     for c in "127.0.0.1:27420".chars() { assert!(fe.mp_net_type(c), "{c} must type"); }
-    assert!(!fe.mp_net_type('x'), "letters never land");
+    assert!(!fe.mp_net_type('!'), "punctuation never lands");
     assert!(fe.mp_net_backspace(), "Backspace deletes");
     assert_eq!(fe.mp_net_addr, "127.0.0.1:2742");
     assert!(fe.mp_net_type('0'), "the corrected digit lands");
     assert_eq!(fe.mp_net_addr, "127.0.0.1:27420");
     // Paste keeps the simple set only; nothing simple surviving pastes nothing.
-    assert!(!fe.mp_net_paste("abc"), "nothing simple survives → nothing lands");
-    assert_eq!(fe.mp_net_addr, "127.0.0.1:27420", "letters never paste");
+    assert!(!fe.mp_net_paste("!?/"), "nothing simple survives → nothing lands");
+    assert_eq!(fe.mp_net_addr, "127.0.0.1:27420", "punctuation never pastes");
     assert!(fe.mp_net_paste(":5"), "digits and the colon paste");
     assert_eq!(fe.mp_net_addr, "127.0.0.1:27420:5", "…appended (the next dial's gate catches it)");
     assert!(fe.mp_net_backspace());
@@ -382,7 +383,7 @@ fn the_address_gate_and_bad_address_report() {
     assert!(!fe.action(Action::Confirm), "a portless address refuses");
     assert_eq!(fe.page, Page::MpNetJoin);
     assert_eq!(fe.mp_net_state, MpNetState::Idle, "no dial started");
-    assert_eq!(fe.mp_net_status(), Some("Enter an address as IP:PORT"));
+    assert_eq!(fe.mp_net_status(), Some("Enter IP:PORT or a join code"));
 }
 
 #[test]
@@ -465,4 +466,31 @@ fn mouse_rows_hover_and_click_the_new_pages() {
     assert_eq!(fe.mp_net_state, MpNetState::Idle, "the off-row click did not dial");
     assert!(fe.mouse_click(320.0, 259.0), "the address row's click confirms");
     assert_eq!(fe.mp_net_state, MpNetState::Dialing);
+}
+
+/// net-p2p: a join code types (lower case lands upper case), dials, and a mistyped code is
+/// refused at the gate like a bad address [S docs/systems/net-p2p.md §2].
+#[test]
+fn a_join_code_types_and_dials() {
+    let code = nf_net::p2p::JoinCode::new("127.0.0.1:27420".parse().unwrap(), 0).encode();
+    let (mut fe, fake) = fe_with_session();
+    to_mode(&mut fe);
+    fe.cursor = 2;
+    assert!(fe.action(Action::Confirm));
+    for c in code.to_lowercase().chars() { assert!(fe.mp_net_type(c), "{c} must type"); }
+    assert_eq!(fe.mp_net_addr, code);
+    assert!(fe.action(Action::Confirm), "a valid code dials");
+    assert_eq!(fe.mp_net_state, MpNetState::Dialing);
+    assert_eq!(fake.borrow().dialed.as_deref(), Some(code.as_str()));
+    // Sister: one wrong symbol fails the checksum → the address report, no dial.
+    let (mut fe, fake) = fe_with_session();
+    to_mode(&mut fe);
+    fe.cursor = 2;
+    assert!(fe.action(Action::Confirm));
+    let mut bad: Vec<char> = code.chars().collect();
+    bad[0] = if bad[0] == '0' { '1' } else { '0' };
+    for c in bad { fe.mp_net_type(c); }
+    assert!(!fe.action(Action::Confirm));
+    assert_eq!(fake.borrow().dialed, None);
+    assert_eq!(fe.mp_net_status(), Some("Enter IP:PORT or a join code"));
 }

@@ -29,6 +29,7 @@ pub mod menu_music;
 pub mod settings;
 pub mod movie;
 pub mod mpnet;
+pub mod clipboard;
 pub mod scene;
 pub mod replay;
 pub mod panel;
@@ -2070,6 +2071,16 @@ impl App {
         if matches!(fe.page, menu::Page::MpHost | menu::Page::MpNetJoin) && self.net_lobby.is_none() {
             match mpnet::SessionProxy::host(0) {
                 Ok(p) => {
+                    // net-p2p: the app's sessions probe internet reachability (UPnP / NAT-PMP /
+                    // STUN) on listen and dial; NF_NO_REACH=1 keeps them LAN-only, NF_STUN
+                    // ("host:port,host:port") replaces the public STUN list [S net-p2p §1].
+                    if std::env::var_os("NF_NO_REACH").is_none() {
+                        let mut cfg = nf_net::p2p::ReachConfig::default();
+                        if let Ok(s) = std::env::var("NF_STUN") {
+                            cfg.stun_servers = s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+                        }
+                        p.0.borrow_mut().enable_reach(cfg);
+                    }
                     fe.mp_session = Some(Box::new(p.clone()));
                     self.net_lobby = Some(p);
                 }
@@ -3206,13 +3217,33 @@ impl ApplicationHandler for App {
                         };
                         if typed { return; }
                     }
+                    // net-p2p: the host's lobby — Ctrl+C copies the join code to the system
+                    // clipboard, Ctrl+V reads a friend's code from it and starts punching.
+                    if ctrl && matches!(k, KeyCode::KeyC | KeyCode::KeyV) {
+                        if let Some(fe) = self.fe.as_mut().filter(|fe| fe.mp_hosting && fe.page == menu::Page::MpJoin) {
+                            if let Some(sess) = fe.mp_session.as_mut() {
+                                if k == KeyCode::KeyC {
+                                    if let Some(code) = sess.reach().and_then(|r| r.code) { clipboard::set(&code); }
+                                } else if let Some(text) = clipboard::get() {
+                                    sess.expect_peer(text.trim());
+                                }
+                            }
+                            return;
+                        }
+                    }
                     let typing = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::MpNetJoin);
                     if typing {
                         let fe = self.fe.as_mut().unwrap();
                         match k {
                             KeyCode::Backspace => { fe.mp_net_backspace(); }
-                            KeyCode::KeyV if ctrl => { let clip = fe.mp_net_clip.clone(); fe.mp_net_paste(&clip); }
-                            KeyCode::KeyC if ctrl => { fe.mp_net_copy(); }
+                            // net-p2p: the system clipboard first (a friend's code), then the page's own.
+                            KeyCode::KeyV if ctrl => { let clip = clipboard::get().unwrap_or_else(|| fe.mp_net_clip.clone()); fe.mp_net_paste(&clip); }
+                            // While dialing, Ctrl+C copies THIS machine's code (for a host that must punch).
+                            KeyCode::KeyC if ctrl => {
+                                fe.mp_net_copy();
+                                let mine = fe.mp_session.as_ref().and_then(|s| s.reach()).and_then(|r| r.my_code);
+                                clipboard::set(mine.as_deref().unwrap_or(&fe.mp_net_addr));
+                            }
                             KeyCode::Enter | KeyCode::Space => { if fe.action(menu::Action::Confirm) { self.menu_after(); } }
                             KeyCode::Escape => { if fe.action(menu::Action::Back) { self.menu_after(); } }
                             _ => if let Some(c) = menu::net_char_key(k) { fe.mp_net_type(c); }

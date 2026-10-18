@@ -243,6 +243,11 @@ pub struct NetCore {
     /// the host repeats it every `START_RESEND_EVERY` polls for `START_RESEND_POLLS` polls and
     /// the client keeps the first copy [S port protocol].
     start_resend: Option<(Vec<u8>, u32)>,
+    /// net-p2p: internet reachability — None until the app enables it (`enable_reach`); tests that
+    /// build cores directly never probe the LAN gateway or a public STUN server.
+    reach_cfg: Option<nf_net::p2p::ReachConfig>,
+    reach_host: Option<nf_net::p2p::HostReach>,
+    reach_join: Option<nf_net::p2p::JoinReach>,
 }
 
 /// The host repeats the match-start payload every this many polls …
@@ -269,6 +274,9 @@ impl NetCore {
             closed: false,
             events: Vec::new(),
             start_resend: None,
+            reach_cfg: None,
+            reach_host: None,
+            reach_join: None,
         })))
     }
 
@@ -282,6 +290,10 @@ impl NetCore {
         self.sess = Session::new_host(session_cfg(), tr, MatchSettings::default(), 0);
         self.is_host = true;
         self.epoch = Instant::now();
+        self.drop_reach();
+        if let Some(cfg) = self.reach_cfg.clone() {
+            self.reach_host = Some(nf_net::p2p::HostReach::start(port, cfg, reach_seed()));
+        }
         self.match_start = None;
         self.choices = None;
         self.refused = false;
@@ -298,6 +310,7 @@ impl NetCore {
         self.sess = Session::new_client(session_cfg(), tr, addr);
         self.is_host = false;
         self.epoch = Instant::now();
+        self.drop_reach();
         self.match_start = None;
         self.choices = None;
         self.refused = false;
@@ -322,12 +335,97 @@ impl NetCore {
             closed: false,
             events: Vec::new(),
             start_resend: None,
+            reach_cfg: None,
+            reach_host: None,
+            reach_join: None,
         })))
+    }
+
+    /// net-p2p: probe internet reachability on every later listen / dial (the app's real
+    /// sessions; never the tests' direct cores).
+    pub fn enable_reach(&mut self, cfg: nf_net::p2p::ReachConfig) {
+        self.reach_cfg = Some(cfg);
+    }
+
+    /// Client: dial a typed target — a join code or `a.b.c.d:port` — on the SAME core, starting
+    /// "my code" discovery when reach is enabled.
+    pub fn dial(&mut self, typed: &str) -> Result<(), String> {
+        let jc = nf_net::p2p::parse_target(typed).map_err(|e| format!("{e:?}"))?;
+        self.rebind_client(std::net::SocketAddr::V4(jc.addr))?;
+        if let Some(cfg) = self.reach_cfg.clone() {
+            self.reach_join = nf_net::p2p::JoinReach::start(typed, &cfg, reach_seed()).ok();
+        }
+        Ok(())
+    }
+
+    /// net-p2p: stop probing; a host's mapping is deleted on a background thread (the UPnP/NAT-PMP
+    /// exchange blocks for up to a few seconds).
+    fn drop_reach(&mut self) {
+        if let Some(mut r) = self.reach_host.take() {
+            std::thread::spawn(move || r.close());
+        }
+        self.reach_join = None;
+    }
+
+    /// net-p2p: the online pages' reachability lines.
+    pub fn reach(&self) -> Option<crate::menu::MpReach> {
+        use nf_net::p2p::{HostState, MapMethod};
+        if let Some(r) = self.reach_host.as_ref() {
+            let s = r.status();
+            let state = match s.state {
+                HostState::Probing => "Internet: opening the port...".to_string(),
+                HostState::Mapped(MapMethod::Upnp) => "Internet: open (UPnP)".to_string(),
+                HostState::Mapped(MapMethod::NatPmp) => "Internet: open (NAT-PMP)".to_string(),
+                HostState::StunOnly => "Internet: no port forward - Ctrl+V a friend's code".to_string(),
+                HostState::Failed => "Internet: unavailable (LAN only)".to_string(),
+            };
+            let note = match s.state {
+                HostState::StunOnly if s.symmetric => "Your router changes ports per peer: direct play may fail".to_string(),
+                HostState::StunOnly => {
+                    let n = s.punches.len();
+                    if n == 0 { "Friends send you their code from Join Online".to_string() } else { format!("Opening a path to {n} friend(s)") }
+                }
+                HostState::Failed => format!("Forward UDP {} on your router to play online", s.local_port),
+                _ => String::new(),
+            };
+            return Some(crate::menu::MpReach { hosting: true, state, code: s.code, my_code: None, note });
+        }
+        if let Some(j) = self.reach_join.as_ref() {
+            let s = j.status(self.epoch.elapsed().as_millis() as u64);
+            let (state, note) = if s.symmetric_both {
+                ("Both routers block direct play".to_string(), "A relay would be needed (not supported)".to_string())
+            } else if s.host_needs_punch {
+                ("The host has no port forward".to_string(), "Send the host your code (Ctrl+C copies it)".to_string())
+            } else {
+                (String::new(), String::new())
+            };
+            return Some(crate::menu::MpReach { hosting: false, state, code: None, my_code: s.my_code, note });
+        }
+        None
+    }
+
+    /// net-p2p: the host pasted a joiner's code.
+    pub fn expect_peer(&mut self, code: &str) -> bool {
+        self.reach_host.as_mut().is_some_and(|r| r.expect_peer(code).is_ok())
     }
 
     /// Pump the transport once per frame: receive, timers, events → state.
     pub fn poll(&mut self) {
         let now = self.epoch.elapsed().as_millis() as u64;
+        // net-p2p: STUN replies and punches share the game socket (the session hands back
+        // what is not a session packet); the reachability layer sends through it too.
+        if self.reach_host.is_some() || self.reach_join.is_some() {
+            for (from, d) in self.sess.take_stray() {
+                if let Some(r) = self.reach_host.as_mut() { r.on_packet(from, &d); }
+                if let Some(r) = self.reach_join.as_mut() { r.on_packet(from, &d); }
+            }
+            let mut out: Vec<(std::net::SocketAddr, Vec<u8>)> = Vec::new();
+            if let Some(r) = self.reach_host.as_mut() { r.poll(now, &mut |to, d| out.push((to, d.to_vec()))); }
+            if let Some(r) = self.reach_join.as_mut() { r.poll(now, &mut |to, d| out.push((to, d.to_vec()))); }
+            for (to, d) in out { self.sess.send_raw(to, &d); }
+        } else {
+            self.sess.take_stray();
+        }
         if self.is_host && !self.closed {
             if let Some((bytes, left)) = self.start_resend.as_mut() {
                 *left = left.saturating_sub(1);
@@ -432,6 +530,7 @@ impl NetCore {
         if !self.closed {
             self.sess.leave();
             self.closed = true;
+            self.drop_reach();
         }
     }
 
@@ -548,11 +647,11 @@ impl crate::menu::MpSession for SessionProxy {
     }
     fn connect(&mut self, addr: &str) -> Result<(), MpNetError> {
         let name = self.0.borrow().display_name();
-        let parsed = addr.parse::<std::net::SocketAddr>();
-        let r = match parsed {
-            Ok(a) => self.0.borrow_mut().rebind_client(a),
-            Err(_) => return Err(MpNetError::BadAddress),
-        };
+        // net-p2p: a join code or `a.b.c.d:port` (nf_net::p2p::parse_target).
+        if nf_net::p2p::parse_target(addr).is_err() {
+            return Err(MpNetError::BadAddress);
+        }
+        let r = self.0.borrow_mut().dial(addr);
         match r {
             Ok(()) => {
                 if let Some(f) = self.1 {
@@ -571,4 +670,11 @@ impl crate::menu::MpSession for SessionProxy {
     fn match_started(&self) -> Option<nf_game::mp::MpSettings> { self.0.borrow().match_started() }
     fn set_codename(&mut self, name: &str) { self.0.borrow_mut().set_codename(name); }
     fn close(&mut self) { self.0.borrow_mut().close(); }
+    fn reach(&self) -> Option<crate::menu::MpReach> { self.0.borrow().reach() }
+    fn expect_peer(&mut self, code: &str) -> bool { self.0.borrow_mut().expect_peer(code) }
+}
+
+/// A per-run seed for STUN transaction ids / punch nonces (not security relevant).
+fn reach_seed() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64)
 }
