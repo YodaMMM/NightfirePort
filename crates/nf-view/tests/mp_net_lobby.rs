@@ -5,11 +5,11 @@
 //!
 //! Main row 1 → PAGE_MP_MODE (Local / Host Online / Join Online) [S
 //! docs/systems/net-online-lobby.md §2] → Host: PAGE_MP_HOST (port 27420 + Start Listening) →
-//! the game's 0x40000019 as the host lobby (remote agents in panels 2-4) → the usual
-//! Scenario → Map → Setup → Options → Confirm walk with the choices published and the match
-//! start riding the session [M P_MPCONFIRM 0x20ec00's handover]; Join: PAGE_MP_NETJOIN (typed
-//! IP:PORT, Connecting / refused / timed-out) → PAGE_MP_LOBBY (the host's choices mirrored
-//! read-only) → the match handover. Every test keeps a sister assertion that can fail.
+//! PAGE_MP_ONLINE_LOBBY, the ONE screen (mp-lobby-one-screen replaced the couch walk on the
+//! online path; the couch flow itself is untouched); Join: PAGE_MP_NETJOIN (typed IP:PORT,
+//! Connecting / refused / timed-out) → the same ONE screen → the match handover [M
+//! P_MPCONFIRM 0x20ec00's handover — mp_confirm_start]. Every test keeps a sister assertion
+//! that can fail. The §2 couch-walk tests live in mp_menu_lists / menus_e2e_mp.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,9 +17,10 @@ use std::rc::Rc;
 use nf_game::mp::MpSettings;
 use nf_view::menu::{
     mp_net_addr_ok, Action, FrontEnd, MpNetAgent, MpNetChoices, MpNetError, MpNetLink, MpSession,
-    MpNetState, Page, MP_MAP_ROWS, MP_NET_TIMEOUT_TICKS, PAGE_MP_HOST, PAGE_MP_LOBBY, PAGE_MP_MODE,
-    PAGE_MP_NETJOIN,
+    MpNetState, Page, MP_MAP_ROWS, MP_NET_TIMEOUT_TICKS, PAGE_MP_HOST, PAGE_MP_MODE,
+    PAGE_MP_NETJOIN, PAGE_MP_ONLINE_LOBBY,
 };
+use nf_view::mp_lobby::MpLobbyRowId;
 
 // ── the fake session ─────────────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,8 @@ struct Fake {
     started: Option<MpSettings>,
     closed: usize,
     codename: String,
+    /// mp-lobby-one-screen: the published one-screen snapshot.
+    lobby: Option<nf_net::LobbyState>,
     /// poll() turns a Dialing link into Connected (the handshake landed).
     advise_connected: bool,
     /// poll() turns a Dialing link into Refused.
@@ -47,6 +50,7 @@ impl Fake {
         Fake {
             link: MpNetLink::Idle, port: None, dialed: None, busy: false,
             agents: Vec::new(), choices: None, started: None, closed: 0, codename: String::new(),
+            lobby: None,
             advise_connected: false, advise_refused: false, advise_timeout: false,
         }
     }
@@ -100,6 +104,11 @@ impl MpSession for FakeHandle {
         f.codename = name.into();
         f.ensure_local();
     }
+    fn local_slot(&self) -> usize { 1 } // the join side's own slot (host-relative) [S §6.4]
+    fn lobby_state(&self) -> Option<nf_net::LobbyState> { self.0.borrow().lobby.clone() }
+    fn publish_lobby(&mut self, s: &nf_net::LobbyState) { self.0.borrow_mut().lobby = Some(s.clone()); }
+    fn push_row_edit(&mut self, _e: &nf_net::LobbyEdit) {}
+    fn take_row_edit(&mut self) -> Option<nf_net::LobbyEdit> { None }
     fn close(&mut self) {
         let mut f = self.0.borrow_mut();
         f.closed += 1;
@@ -162,52 +171,41 @@ fn host_flow_listen_agents_choices_and_start() {
     // Start Listening (row 1).
     fe.cursor = 1;
     assert!(fe.action(Action::Confirm), "Start Listening must navigate");
-    assert_eq!(fe.page, Page::MpJoin, "the host lobby IS the game's Join Game page");
-    assert_eq!(fe.page.id(), 0x4000_0019);
+    assert_eq!(fe.page, Page::MpOnlineLobby, "the online path lands on the ONE screen [S §6.1]");
+    assert_eq!(fe.page.id(), PAGE_MP_ONLINE_LOBBY);
     assert!(fe.mp_hosting, "host mode armed");
     assert_eq!(fake.borrow().port, Some(27420), "the session bound the port");
     assert_eq!(fake.borrow().link, MpNetLink::Listening);
     assert!(fe.mp_join[0].joined, "the host's own panel joins");
     assert!(fe.mp_join[0].ready, "the host is ready by definition [S]");
     assert_eq!(fe.mp_join[0].codename, "Player 1", "the template codename [M Txt 0x1c3 + slot]");
-    // A remote agent arrives into panel 2 with its codename.
+    assert!(fe.mp_one.players[0].joined, "the model's own row joined too");
+    // A remote agent arrives into the lobby (host-relative slot 1, panel 2).
     fake.borrow_mut().join_remote(1, "Alec");
     fe.tick();
     assert!(fe.mp_join[1].joined, "the remote agent lands in panel 2");
     assert_eq!(fe.mp_join[1].codename, "Alec");
-    assert_eq!(fe.rows(), 4, "the Join page keeps its four panels");
-    // Confirm on the host's own (ready) panel walks to the scenario page [S §2.1].
-    fe.cursor = 0;
-    assert!(fe.action(Action::Confirm), "the host's ✕ walks on");
-    assert_eq!(fe.page, Page::MpScenario);
-    assert_eq!(fe.page.id(), 0x4000_001a);
-    // The usual flow: Scenario → Map → Setup → Options → Confirm.
-    fe.mp_scenario_row = 1; // Arena / Deathmatch
-    assert!(fe.action(Action::Confirm), "the scenario confirm navigates");
-    assert_eq!(fe.page, Page::MpMap);
-    assert!(fe.action(Action::Confirm), "the map confirm navigates");
-    assert_eq!(fe.page, Page::MpSetup);
-    // 611b (mp-defaults-and-setup) made the setup page the game's prompt chain: team (team games
-    // only) → character → handicap, then the options hub [M C_RBMPSETUP 0x20de58's 0x4b states 2-4].
-    // Arena is FFA, so two picks: the character, then the handicap.
-    assert!(fe.action(Action::Confirm), "the character pick moves to the handicap prompt");
-    assert_eq!(fe.page, Page::MpSetup, "the handicap prompt is still the setup page");
-    assert!(fe.action(Action::Confirm), "the handicap pick navigates to the options hub");
-    assert_eq!(fe.page, Page::MpOptions);
-    assert!(fe.action(Action::Confirm), "Continue runs the start checks");
-    assert_eq!(fe.page, Page::MpConfirm, "2 humans pass the start checks [M C_SBMPOPTIONS 0x20e818]");
-    // The publish diff rides the tick — the walk above changed the words, so tick once.
+    assert!(fe.mp_one.players[1].joined && fe.mp_one.players[1].codename == "Alec",
+        "the model mirrored the agent");
+    // The host edits on the ONE screen: the map row steps (row 0 → row 7, the wheel wraps).
+    fe.mp_one.focus = 1; // the Map row (row 0 = Scenario)
+    assert!(fe.mp_one.apply(Action::Left), "the map row is the host's to edit");
+    assert_eq!(fe.mp_one.level, MP_MAP_ROWS[7].3, "◀ from row 0 wraps to row 7 [M the wheel order]");
+    // The publish diff rides the tick.
     fe.tick();
-    // Sister: the choices were published and they are the host's words.
-    let c = fake.borrow().choices.clone().expect("the host published its choices");
-    assert_eq!(c.scenario, fe.mp_scenario);
-    assert_eq!(c.level, fe.mp_level);
-    assert_eq!(c.time_limit, fe.mp_time_limit);
-    // Start the match — the settings ride the session.
-    assert!(fe.action(Action::Confirm), "the summary's ✕ starts");
+    let st = fake.borrow().lobby.clone().expect("the host published its lobby snapshot");
+    assert_eq!(st.level, MP_MAP_ROWS[7].3, "the snapshot carries the edit");
+    assert_eq!(st.players[1].codename, "Alec", "the snapshot carries the player rows");
+    // Start the match — the settings ride the session through the couch build [M mp_confirm_start].
+    // (The fake's join_remote marks the agent ready; the not-ready gate is pinned in
+    // mp_lobby_one_screen.rs, where the fake joins not-ready clients.)
+    let start_idx = fe.mp_lobby_rows().unwrap().iter().position(|r| r.id == MpLobbyRowId::Start).unwrap();
+    fe.mp_one.focus = start_idx;
+    assert!(fe.mp_lobby_start_enabled(), "everyone ready opens Start");
+    assert!(fe.action(Action::Confirm), "Start hands the match over");
     assert!(fe.mp_match_settings.is_some(), "the host handed the match over");
     let s = fake.borrow().started.clone().expect("the match start rode the session");
-    assert_eq!(s.level_code, fe.mp_level);
+    assert_eq!(s.level_code, fe.mp_one.level);
     assert_eq!(s.human_count, 2, "the host + the remote agent");
     assert_eq!(s.master, 1, "the host's copy keeps master = 1 [M +0x180 = 1]");
 }
@@ -229,7 +227,7 @@ fn host_port_busy_reports_and_back_cancels() {
     // The port frees up: the listen lands.
     fake.borrow_mut().busy = false;
     assert!(fe.action(Action::Confirm), "the retry listens");
-    assert_eq!(fe.page, Page::MpJoin);
+    assert_eq!(fe.page, Page::MpOnlineLobby, "the retry lands on the ONE screen [S §6.1]");
     assert!(fe.mp_hosting);
     // A remote agent is in; Back leaves and cancels cleanly.
     fake.borrow_mut().join_remote(1, "Alec");
@@ -255,16 +253,17 @@ fn join_flow_type_connect_lobby_and_match_start() {
     assert!(fe.action(Action::Confirm), "Join Online confirm must navigate");
     assert_eq!(fe.page, Page::MpNetJoin);
     assert_eq!(fe.page.id(), PAGE_MP_NETJOIN);
-    // The typing: digits, dots, colon; letters never land; Backspace deletes.
+    // The typing: digits, dots, colon, and (net-p2p) a join code's letters and dashes; anything
+    // else never lands; Backspace deletes.
     for c in "127.0.0.1:27420".chars() { assert!(fe.mp_net_type(c), "{c} must type"); }
-    assert!(!fe.mp_net_type('x'), "letters never land");
+    assert!(!fe.mp_net_type('!'), "punctuation never lands");
     assert!(fe.mp_net_backspace(), "Backspace deletes");
     assert_eq!(fe.mp_net_addr, "127.0.0.1:2742");
     assert!(fe.mp_net_type('0'), "the corrected digit lands");
     assert_eq!(fe.mp_net_addr, "127.0.0.1:27420");
     // Paste keeps the simple set only; nothing simple surviving pastes nothing.
-    assert!(!fe.mp_net_paste("abc"), "nothing simple survives → nothing lands");
-    assert_eq!(fe.mp_net_addr, "127.0.0.1:27420", "letters never paste");
+    assert!(!fe.mp_net_paste("!?/"), "nothing simple survives → nothing lands");
+    assert_eq!(fe.mp_net_addr, "127.0.0.1:27420", "punctuation never pastes");
     assert!(fe.mp_net_paste(":5"), "digits and the colon paste");
     assert_eq!(fe.mp_net_addr, "127.0.0.1:27420:5", "…appended (the next dial's gate catches it)");
     assert!(fe.mp_net_backspace());
@@ -275,31 +274,29 @@ fn join_flow_type_connect_lobby_and_match_start() {
     assert_eq!(fe.mp_net_state, MpNetState::Dialing);
     assert_eq!(fake.borrow().dialed.as_deref(), Some("127.0.0.1:27420"));
     assert_eq!(fe.mp_net_status(), Some("Connecting..."));
-    // The handshake lands → the lobby.
+    // The handshake lands → the same ONE screen.
     fake.borrow_mut().advise_connected = true;
     fe.tick();
-    assert_eq!(fe.page, Page::MpLobby, "connected → the lobby [S]");
-    assert_eq!(fe.page.id(), PAGE_MP_LOBBY);
+    assert_eq!(fe.page, Page::MpOnlineLobby, "connected → the ONE screen [S §6.1]");
+    assert_eq!(fe.page.id(), PAGE_MP_ONLINE_LOBBY);
     assert_eq!(fe.mp_net_state, MpNetState::InLobby);
-    assert!(fe.mp_join[0].joined, "the client's own panel mirrors");
-    assert_eq!(fe.mp_join[0].codename, "Player 1");
-    assert_eq!(fe.mp_net_status(), Some("Waiting for the host..."), "no choices yet");
-    // The host's choices arrive: the mirror shows them.
-    let published = MpNetChoices {
-        scenario: 1, level: MP_MAP_ROWS[0].3, weapon_set: 0, radar: 1, friendly_fire: 0,
-        frag_limit: 10, time_limit: 10, player_mods: [0, 0], envmods: [1, 0, 0, 0, 0],
-    };
-    fake.borrow_mut().choices = Some(published.clone());
+    assert_eq!(fe.mp_one.own_slot, 1, "the client's own row is its session slot [S §6.4]");
+    assert_eq!(fe.mp_net_status(), Some("Waiting for the host..."), "no snapshot yet");
+    // The host's snapshot arrives: the client's rows show it.
+    let mut st = nf_view::mp_lobby::lobby_state_template();
+    st.level = MP_MAP_ROWS[0].3;
+    st.scenario = 1;
+    st.players[0] = nf_net::LobbyPlayer { joined: true, ready: true, team: 0, character: 0, ping_ms: 0, codename: "Player 1".into() };
+    st.players[1] = nf_net::LobbyPlayer { joined: true, ready: false, team: 0, character: 2, ping_ms: 47, codename: "Alec".into() };
+    fake.borrow_mut().lobby = Some(st.clone());
     fe.tick();
-    assert_eq!(fe.mp_lobby_choices, Some(published.clone()), "the mirror took the publish");
-    let lines = fe.mp_lobby_lines(None);
-    assert_eq!(lines[0].0, 0x3d4, "the confirm page's own Map pair [M P_MPCONFIRM]");
-    assert_eq!(lines[0].1, format!("<{:#x}>", MP_MAP_ROWS[0].1), "the map line resolves through the shared table");
-    assert_eq!(lines[4], (0x3d6, "10".to_string()), "the duration line");
-    // A remote agent arrives; the lobby's panels mirror it.
-    fake.borrow_mut().join_remote(1, "Alec");
-    fe.tick();
-    assert!(fe.mp_join[1].joined && fe.mp_join[1].codename == "Alec");
+    let rows = fe.mp_lobby_rows().expect("the lobby page is up");
+    let map = rows.iter().find(|r| r.id == MpLobbyRowId::Map).expect("the map row");
+    assert_eq!(map.label_id, 0x3d4, "the confirm page's own Map label [M P_MPCONFIRM]");
+    assert_eq!(map.value_id, MP_MAP_ROWS[0].1, "the map value rides the shared table");
+    assert!(!map.editable, "the client cannot edit the host's map");
+    let own = rows.iter().find(|r| r.id == MpLobbyRowId::Player(1)).expect("the own row");
+    assert!(own.editable, "the own row is the client's to edit");
     // The host starts the match: the same handover the host's confirm page runs.
     let mut s = MpSettings::deathmatch(MP_MAP_ROWS[0].3);
     s.scenario = 1;
@@ -382,7 +379,7 @@ fn the_address_gate_and_bad_address_report() {
     assert!(!fe.action(Action::Confirm), "a portless address refuses");
     assert_eq!(fe.page, Page::MpNetJoin);
     assert_eq!(fe.mp_net_state, MpNetState::Idle, "no dial started");
-    assert_eq!(fe.mp_net_status(), Some("Enter an address as IP:PORT"));
+    assert_eq!(fe.mp_net_status(), Some("Enter IP:PORT or a join code"));
 }
 
 #[test]
@@ -450,7 +447,7 @@ fn mouse_rows_hover_and_click_the_new_pages() {
     // The Start row's click listens (the move lands the cursor on row 1 first).
     assert!(fe.mouse_move(320.0, 183.0), "hovering row 1 moves the cursor");
     assert!(fe.mouse_click(320.0, 183.0), "the Start row's click confirms");
-    assert_eq!(fe.page, Page::MpJoin);
+    assert_eq!(fe.page, Page::MpOnlineLobby, "the Start row lands on the ONE screen [S §6.1]");
     assert!(fe.mp_hosting);
     assert_eq!(fake.borrow().port, Some(27420));
     // The join side: the address row's click dials. The drawn address line is the page's one row
@@ -465,4 +462,31 @@ fn mouse_rows_hover_and_click_the_new_pages() {
     assert_eq!(fe.mp_net_state, MpNetState::Idle, "the off-row click did not dial");
     assert!(fe.mouse_click(320.0, 259.0), "the address row's click confirms");
     assert_eq!(fe.mp_net_state, MpNetState::Dialing);
+}
+
+/// net-p2p: a join code types (lower case lands upper case), dials, and a mistyped code is
+/// refused at the gate like a bad address [S docs/systems/net-p2p.md §2].
+#[test]
+fn a_join_code_types_and_dials() {
+    let code = nf_net::p2p::JoinCode::new("127.0.0.1:27420".parse().unwrap(), 0).encode();
+    let (mut fe, fake) = fe_with_session();
+    to_mode(&mut fe);
+    fe.cursor = 2;
+    assert!(fe.action(Action::Confirm));
+    for c in code.to_lowercase().chars() { assert!(fe.mp_net_type(c), "{c} must type"); }
+    assert_eq!(fe.mp_net_addr, code);
+    assert!(fe.action(Action::Confirm), "a valid code dials");
+    assert_eq!(fe.mp_net_state, MpNetState::Dialing);
+    assert_eq!(fake.borrow().dialed.as_deref(), Some(code.as_str()));
+    // Sister: one wrong symbol fails the checksum → the address report, no dial.
+    let (mut fe, fake) = fe_with_session();
+    to_mode(&mut fe);
+    fe.cursor = 2;
+    assert!(fe.action(Action::Confirm));
+    let mut bad: Vec<char> = code.chars().collect();
+    bad[0] = if bad[0] == '0' { '1' } else { '0' };
+    for c in bad { fe.mp_net_type(c); }
+    assert!(!fe.action(Action::Confirm));
+    assert_eq!(fake.borrow().dialed, None);
+    assert_eq!(fe.mp_net_status(), Some("Enter IP:PORT or a join code"));
 }

@@ -25,10 +25,12 @@ pub mod devwin;
 pub mod hud;
 pub mod credits;
 pub mod menu;
+pub mod mp_lobby;
 pub mod menu_music;
 pub mod settings;
 pub mod movie;
 pub mod mpnet;
+pub mod clipboard;
 pub mod scene;
 pub mod replay;
 pub mod panel;
@@ -900,6 +902,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // net-match-host: the online match builds the level from the host's seed (equal on every
         // machine — the session's settings blob carries it); 0 keeps the pre-net constant.
         mp_seed: mp_settings.as_ref().map_or(0, |st| st.seed),
+        mp_body_skins: std::array::from_fn(|slot| mp_settings.as_ref().map_or(0, |st| nf_game::mp::slot_skin(st, slot))),
     };
     let mut scene = scene::Scene::build(&level, !all, &skeletons, sequences, Some(&drones), difficulty);
     phase_mark("07 scene build (Scene::build)", t); t = std::time::Instant::now();
@@ -1151,6 +1154,8 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // then the bots, so the spawn picks' RNG draws keep the game's sequence.
             m.create_bots(&mut sim.drones.rng);
             eprintln!("mp: bots created: {}", m.bots.len());
+            // The SP mission machine stays off for the match [M 0x182c60:16-18 — Drones::mp_master].
+            sim.drones.mp_master = m.settings.master;
             sim.mp = Some(m);
             eprintln!("mp: arena {level_id:08x} — {spawn_count} spawn points registered, {humans} human(s), Bond at spawn {sp} ({:.2}, {:.2}, {:.2}) yaw {:.3}",
                 sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.yaw);
@@ -1599,6 +1604,13 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
             "mpplayermods" => menu::Page::MpPlayerMods,
             "mpenviromods" => menu::Page::MpEnviroMods,
             "mpbotsetup" => menu::Page::MpBotSetup,
+            // The online one screen as the host sees it (a joined player in slot 2 for the render).
+            "mplobby" => {
+                fe.mp_hosting = true;
+                fe.mp_one.players[0].joined = true; fe.mp_one.players[0].ready = true; fe.mp_one.players[0].codename = "Bond".into();
+                fe.mp_one.players[1].joined = true; fe.mp_one.players[1].codename = "Agent 2".into(); fe.mp_one.players[1].ping_ms = 23;
+                menu::Page::MpOnlineLobby
+            }
             // fix-pause-menu: the in-game pages render headless too (the pause page over the
             // paused frame, the results per outcome). `--cursor N` picks the row, `--pause-tab N`
             // picks the pause tab, `--confirm` arms the pause confirm.
@@ -1922,6 +1934,16 @@ struct App {
     /// confirm path rides the same slot (its `mp_match_settings` was set but never read before —
     /// the menu's own choices now reach the match core through it too).
     pending_mp_settings: Option<nf_game::mp::MpSettings>,
+    /// The online match is armed but its level has not been swapped in yet: no lockstep tick runs
+    /// (the host ran 3 match ticks on its pre-match scene, then the load restarted the sim at
+    /// frame 1 with `net_tick` still at 3 — every later hash compared different frames; the
+    /// two-window check, 2026-10-18). Cleared, with `net_tick = 0`, by `swap_in_scene`.
+    net_await_load: bool,
+    /// The online match's wall clock (set when its level swaps in): the lockstep runs to
+    /// `elapsed · 60` ticks, catching up after a stall instead of dropping the stalled ticks.
+    net_clock: Option<std::time::Instant>,
+    /// 700v6: the local fire pipeline spawned a round on the last tick (rides the next input).
+    net_shot_pending: bool,
     /// The `--net-host` demo arm: the settings waiting for the first client to join (the lobby
     /// pages are task 052's; the flag path starts the match as soon as someone connects).
     net_armed: Option<nf_game::mp::MpSettings>,
@@ -2095,6 +2117,10 @@ impl App {
         if matches!(fe.page, menu::Page::MpHost | menu::Page::MpNetJoin) && self.net_lobby.is_none() {
             match mpnet::SessionProxy::host(0) {
                 Ok(p) => {
+                    // net-p2p: the app's sessions probe internet reachability (UPnP / NAT-PMP /
+                    // STUN) on listen and dial; NF_NO_REACH=1 keeps them LAN-only, NF_STUN
+                    // ("host:port,host:port") replaces the public STUN list [S net-p2p §1].
+                    if let Some(cfg) = reach_config() { p.0.borrow_mut().enable_reach(cfg); }
                     fe.mp_session = Some(Box::new(p.clone()));
                     self.net_lobby = Some(p);
                 }
@@ -2128,6 +2154,7 @@ impl App {
                     self.net_local_slot = p.0.borrow().local_slot();
                     self.net_tick = 0;
                     self.net = Some(p);
+                    self.net_await_load = true;
                     eprintln!("[net] adopted the lobby's session for the match");
                 }
             }
@@ -2208,7 +2235,14 @@ impl App {
     /// Host: listen on `port` (slot 0 is this machine's agent). The lobby pages are task 052's;
     /// the flag path (`--net-host`) arms the demo match for the first join.
     pub fn net_host(&mut self, port: u16) -> Result<(), String> {
-        self.net = Some(mpnet::SessionProxy::host(port)?);
+        // net-p2p: an ephemeral placeholder, reach on, then the real port — so the mapping /
+        // STUN probe starts for it (the console prints the join code once known).
+        let p = mpnet::SessionProxy::host(0)?;
+        if let Some(cfg) = reach_config() { p.0.borrow_mut().enable_reach(cfg); }
+        p.0.borrow_mut().rebind_host(port)?;
+        // net-lobby-list: the flag host advertises too (the lobby page's host sets it each tick).
+        { let mut q = p.clone(); menu::MpSession::set_lobby(&mut q, "Bond's game", self.net_armed.as_ref().map_or(0x0700_0023, |s| s.level_code), 1, 1); }
+        self.net = Some(p);
         self.net_lobby = None;
         self.net_local_slot = 0;
         self.net_tick = 0;
@@ -2217,7 +2251,10 @@ impl App {
 
     /// Client: dial `addr` ("host:port"); the slot arrives in the session's WELCOME.
     pub fn net_join(&mut self, addr: &str) -> Result<(), String> {
-        let s = mpnet::SessionProxy::connect(addr)?;
+        // net-p2p: `addr` may be a join code too.
+        let s = mpnet::SessionProxy::host(0)?;
+        if let Some(cfg) = reach_config() { s.0.borrow_mut().enable_reach(cfg); }
+        s.0.borrow_mut().dial(addr)?;
         s.0.borrow_mut().set_codename("Bond");
         self.net = Some(s);
         self.net_lobby = None;
@@ -2461,6 +2498,48 @@ impl App {
         if let Some(start) = scene.start { self.cam = Camera { pos: Vec3::new(start.0[0], start.0[1] + 1.6, start.0[2]), yaw: start.1, pitch: 0.0, fov: GAME_FOV }; }
         self.scene = scene;
         self.anim_time = 0.0;
+        // net-p2p two-window check (2026-10-18): the online match's load spawns every human in slot
+        // order with slot 0's body in `sim.bond`; a joiner must move into ITS slot's body
+        // (`Sim::swap_local_slot` existed but nothing called it — the joiner played slot 0's spawn
+        // and had no body for the host, a desync at tick 0). The camera follows the swapped body.
+        if self.net.is_some() && self.net_await_load {
+            self.net_await_load = false;
+            self.net_tick = 0;
+            self.net_clock = Some(std::time::Instant::now());
+            // The first `input_delay` ticks have no sampled input (nothing ran that many ticks
+            // before them): every machine submits NEUTRAL for its own slot there, so tick 0 is ready
+            // at once instead of each window waiting on itself (the two-window freeze, 2026-10-18).
+            if let Some(n) = self.net.as_ref() {
+                let lead = n.0.borrow().input_delay();
+                for t in 0..lead { n.0.borrow_mut().local_input(t, nf_net::NEUTRAL); }
+            }
+            // 700v6: the local tick's private generator (seeded per machine; nothing hashed reads it).
+            let slot = self.net_local_slot as u32;
+            if let Some(sim) = self.scene.sim.as_mut() {
+                sim.net_rng = Some(nf_game::drone::Rng::new(0x5eed_0b0b ^ slot.wrapping_mul(0x9e37_79b9)));
+            }
+        }
+        if self.net.is_some() && self.net_local_slot != 0 {
+            if let Some(sim) = self.scene.sim.as_mut() {
+                sim.swap_local_slot(self.net_local_slot);
+                self.cam = Camera { pos: Vec3::new(sim.bond.pos[0], sim.bond.pos[1] + 1.6, sim.bond.pos[2]), yaw: sim.bond.yaw, pitch: 0.0, fov: GAME_FOV };
+            }
+        }
+        // Render-check aid (NF_MP_FACE_OTHER=1): an online match starts facing the first other human
+        // body (the two-window check's shots — the arena's spawns face away from each other).
+        if self.net.is_some() && std::env::var_os("NF_MP_FACE_OTHER").is_some() {
+            // Every human turns to the nearest other one — the same on every machine (the yaw is in
+            // the lockstep hash).
+            if let Some(sim) = self.scene.sim.as_mut() {
+                let mut all: Vec<(usize, [f32; 3])> = vec![(sim.mp_local_slot, sim.bond.pos)];
+                for (s, b) in sim.mp_bonds.iter().enumerate() { if let Some(b) = b { all.push((s, b.pos)); } }
+                let face = |me: [f32; 3]| all.iter().map(|(_, p)| *p).filter(|p| *p != me)
+                    .min_by(|a, b| { let d = |p: &[f32; 3]| (p[0] - me[0]).powi(2) + (p[2] - me[2]).powi(2); d(a).total_cmp(&d(b)) })
+                    .map(|o| (o[0] - me[0]).atan2(o[2] - me[2]));
+                if let Some(y) = face(sim.bond.pos) { sim.bond.yaw = y; self.cam.yaw = y; }
+                for b in sim.mp_bonds.iter_mut().flatten() { if let Some(y) = face(b.pos) { b.yaw = y; } }
+            }
+        }
         // drive-ptp: `Boot_LoadPTPData` 0x1c8560's mirror runs on the returned
         // session — the mission status + the 12 slots, after the hub's own
         // `Mission_Init` (the game's `Mission_Init` skips 0x7000048 entirely
@@ -3234,13 +3313,33 @@ impl ApplicationHandler for App {
                         };
                         if typed { return; }
                     }
+                    // net-p2p: the host's lobby — Ctrl+C copies the join code to the system
+                    // clipboard, Ctrl+V reads a friend's code from it and starts punching.
+                    if ctrl && matches!(k, KeyCode::KeyC | KeyCode::KeyV) {
+                        if let Some(fe) = self.fe.as_mut().filter(|fe| fe.mp_hosting && fe.page == menu::Page::MpJoin) {
+                            if let Some(sess) = fe.mp_session.as_mut() {
+                                if k == KeyCode::KeyC {
+                                    if let Some(code) = sess.reach().and_then(|r| r.code) { clipboard::set(&code); }
+                                } else if let Some(text) = clipboard::get() {
+                                    sess.expect_peer(text.trim());
+                                }
+                            }
+                            return;
+                        }
+                    }
                     let typing = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::MpNetJoin);
                     if typing {
                         let fe = self.fe.as_mut().unwrap();
                         match k {
                             KeyCode::Backspace => { fe.mp_net_backspace(); }
-                            KeyCode::KeyV if ctrl => { let clip = fe.mp_net_clip.clone(); fe.mp_net_paste(&clip); }
-                            KeyCode::KeyC if ctrl => { fe.mp_net_copy(); }
+                            // net-p2p: the system clipboard first (a friend's code), then the page's own.
+                            KeyCode::KeyV if ctrl => { let clip = clipboard::get().unwrap_or_else(|| fe.mp_net_clip.clone()); fe.mp_net_paste(&clip); }
+                            // While dialing, Ctrl+C copies THIS machine's code (for a host that must punch).
+                            KeyCode::KeyC if ctrl => {
+                                fe.mp_net_copy();
+                                let mine = fe.mp_session.as_ref().and_then(|s| s.reach()).and_then(|r| r.my_code);
+                                clipboard::set(mine.as_deref().unwrap_or(&fe.mp_net_addr));
+                            }
                             KeyCode::Enter | KeyCode::Space => { if fe.action(menu::Action::Confirm) { self.menu_after(); } }
                             KeyCode::Escape => { if fe.action(menu::Action::Back) { self.menu_after(); } }
                             _ => if let Some(c) = menu::net_char_key(k) { fe.mp_net_type(c); }
@@ -3415,6 +3514,7 @@ impl ApplicationHandler for App {
                 }
             },
             WindowEvent::RedrawRequested => {
+                if NET_SHOT_DUE.swap(false, std::sync::atomic::Ordering::Relaxed) { let m = self.spot_shot(); eprintln!("[spot] {m}"); }
                 // fix-movie-playback: the movie glue runs before the load path so a phase-2
                 // resolve lands in the same frame the state 6 popped.
                 self.movie_tick();
@@ -3533,6 +3633,7 @@ impl ApplicationHandler for App {
                                 self.net_local_slot = self.net.as_ref().map_or(0, |s| s.0.borrow().local_slot());
                                 self.pending_level = Some(st.level_code);
                                 self.pending_mp_settings = Some(*st);
+                                self.net_await_load = true;
                                 if let Some(fe) = self.fe.as_mut() { fe.closed = true; }
                             }
                             mpnet::CoreEvent::AgentJoined { slot } => {
@@ -3547,6 +3648,7 @@ impl ApplicationHandler for App {
                                     if let Some(s) = self.net.as_mut() { s.0.borrow_mut().start_match(&armed); }
                                     self.pending_level = Some(armed.level_code);
                                     self.pending_mp_settings = Some(armed);
+                                    self.net_await_load = true;
                                 }
                             }
                             mpnet::CoreEvent::Refused => {
@@ -3578,7 +3680,13 @@ impl ApplicationHandler for App {
                     if let Some(sim) = self.scene.sim.as_mut() { sim.drones.music.sfx_paused = menu_hold; }
                     if let Some(s) = self.sound.as_mut() { s.set_paused(menu_hold); }
                 }
-                if !self.paused && self.fe.is_none() {
+                // An online match never stops for one machine's pause page: the others would stall on
+                // its missing inputs (lockstep). The match runs on under the menu with this machine's
+                // player idle (NEUTRAL input below) [S port design — the PS2's couch pause stops every
+                // pad's game; online there is no shared screen to pause].
+                let net_menu = self.net.is_some() && !self.net_await_load
+                    && self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::Pause);
+                if !self.paused && (self.fe.is_none() || net_menu) {
                     // Game logic at its fixed 60 Hz, decoupled from the render rate: one AI tick per whole tick of time.
                     // Dev mode's time scale changes the number of ticks run (WORKLOG 0081), not the tick rate.
                     let before = self.anim_time as u32;
@@ -3601,6 +3709,16 @@ impl ApplicationHandler for App {
                         Some(d) => d.tick_count(elapsed),
                         None => elapsed,
                     };
+                    // Online: the tick budget is the match clock's, not the frame's — ticks a stall
+                    // held back run on the next frames (≤ 4 per frame), so a stall delays the match
+                    // instead of permanently slowing it (the two-window check ran at ~15 Hz).
+                    let n_ticks = match (self.net.is_some(), self.net_clock) {
+                        (true, Some(c)) => {
+                            let target = (c.elapsed().as_secs_f64() * 60.0) as u32;
+                            target.saturating_sub(self.net_tick).min(4)
+                        }
+                        _ => n_ticks,
+                    };
                     self.ticked = n_ticks > 0;
                     let eye = [self.cam.pos.x, self.cam.pos.y, self.cam.pos.z];
                     let look = self.cam.dir().to_array();
@@ -3618,7 +3736,12 @@ impl ApplicationHandler for App {
                             // survive the stall. Never guess: the session's missing input is a
                             // wait, not a default.
                             if let Some(session) = self.net.as_mut() {
-                                if session.0.borrow_mut().ready_inputs(self.net_tick).is_none() { self.ticked = false; break; }
+                                if self.net_await_load { self.ticked = false; break; }
+                                if session.0.borrow_mut().ready_inputs(self.net_tick).is_none() {
+                                    NET_STALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    self.ticked = false;
+                                    break;
+                                }
                             }
                             // B-5 record/replay: when `--replay` is set, the input comes from the recording, not the
                             // keyboard. The recorded tick drives `step_bond` exactly as it did when recorded; the user
@@ -3664,6 +3787,16 @@ impl ApplicationHandler for App {
                                 };
                                 (input, self.trigger, self.just.remove(&KeyCode::KeyR), self.just.remove(&KeyCode::KeyE))
                             };
+                            // The online pause (net_menu): the keys belong to the menu — this player idles.
+                            let (mut input, trigger, reload, use_key) = if net_menu {
+                                (Default::default(), false, false, false)
+                            } else { (input, trigger, reload, use_key) };
+                            // Test aid (NF_NET_AUTOFIRE="a-b"): hold the trigger on match ticks a..=b — the
+                            // two-window desync hunt fires without a hand on the window.
+                            let trigger = trigger || (self.net.is_some() && std::env::var("NF_NET_AUTOFIRE").ok()
+                                .and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
+                                .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick) && (self.net_tick - a) % 12 < 6));
+                            if trigger { input.fire = true; }
                             // weapon-matrix: the dev menu's "Test weapon" run (dev.rs) merges its
                             // inputs into this tick — the same lanes the keyboard uses
                             // (`switch_to`, the trigger, the R edge), never during a replay
@@ -3688,10 +3821,35 @@ impl ApplicationHandler for App {
                             // net-consolidate: the finalized input goes to the session (this slot's
                             // entry in the per-tick exchange; the trigger/reload/use_key lanes ride
                             // the 24-byte wire input now — 053's 20-byte packing dropped them).
-                            if let Some(session) = self.net.as_mut() {
-                                let ni = mpnet::to_net_input(&input, trigger, reload, use_key);
-                                session.0.borrow_mut().local_input(self.net_tick, ni);
-                            }
+                            // The lockstep fix (the two-window freeze, 2026-10-18): the input sampled now
+                            // is scheduled `input_delay` ticks ahead, and THIS tick runs on the input
+                            // every machine has for it (the session prefilled the first ticks with
+                            // NEUTRAL). Submitting for `net_tick` after the gate had already asked for
+                            // it meant no machine ever had its own input: every window froze. The
+                            // local view lanes (zero-g lift/stabilise, the wheel's zoom steps) stay
+                            // local — they never ride the wire.
+                            let (trigger, reload, use_key) = if let Some(session) = self.net.as_mut() {
+                                let mut ni = mpnet::to_net_input(&input, trigger, reload, use_key);
+                                // 700v6: this player's weapon and whether its own pipeline fired a round
+                                // on the last local tick — every machine resolves that shot identically.
+                                ni.held = sim.gun.weapon;
+                                ni.shot = std::mem::take(&mut self.net_shot_pending);
+                                let lead = session.0.borrow().input_delay();
+                                session.0.borrow_mut().local_input(self.net_tick + lead, ni);
+                                let ready = session.0.borrow_mut().ready_inputs(self.net_tick);
+                                match ready {
+                                    Some(r) => {
+                                        let li = r[self.net_local_slot.min(3)];
+                                        let view = (input.lift, input.stabilise, input.zoom_cycle);
+                                        input = mpnet::to_player_input(&li);
+                                        (input.lift, input.stabilise, input.zoom_cycle) = view;
+                                        (li.trigger, li.reload, li.use_key)
+                                    }
+                                    None => (trigger, reload, use_key),
+                                }
+                            } else {
+                                (trigger, reload, use_key)
+                            };
                             // B-5 record: capture the exact input passed to step_bond, before the call.
                             if let Some(r) = &mut self.recorder { r.push(replay::TickInput::from_parts(&input, trigger, reload, use_key)); }
                             // The PC-port rapid fire (`--rapid-fire` / the dev Toggles page): local play only —
@@ -3708,9 +3866,16 @@ impl ApplicationHandler for App {
                             if self.net.is_some() {
                                 let session = self.net.as_mut().unwrap();
                                 let slot = self.net_local_slot;
-                                if let Some(net_inputs) = session.0.borrow_mut().ready_inputs(self.net_tick) {
+                                // Bound first: an `if let` keeps its scrutinee's RefCell borrow for the
+                                // whole body, and submit_hash below borrows again ("RefCell already
+                                // borrowed" — latent until the lockstep fix let a tick run).
+                                let ready = session.0.borrow_mut().ready_inputs(self.net_tick);
+                                if let Some(net_inputs) = ready {
                                     let inputs = net_inputs.map(|i| mpnet::to_player_input(&i));
                                     sim.step_net_remotes(&inputs, slot);
+                                    sim.step_net_combat(&net_inputs, slot);
+                                    // The local pipeline's shot this tick rides the next submitted input.
+                                    if sim.shot_tick { self.net_shot_pending = true; }
                                     if let Some(m) = sim.mp.as_mut() {
                                         for sl in 0..4 {
                                             if sl != slot { if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); } }
@@ -3721,6 +3886,15 @@ impl ApplicationHandler for App {
                                     session.0.borrow_mut().submit_hash(self.net_tick, h);
                                 }
                                 self.net_tick += 1;
+                                // NF_NET_RATE: once a second, the ticks run / stalls / frames.
+                                if self.net_tick % 60 == 0 && std::env::var_os("NF_NET_RATE").is_some() {
+                                    let c = self.net_clock.map_or(0.0, |c| c.elapsed().as_secs_f64());
+                                    eprintln!("[netrate] tick {} at {:.1} s ({:.1}/s), stalls {}", self.net_tick, c, self.net_tick as f64 / c.max(1e-3), NET_STALLS.swap(0, std::sync::atomic::Ordering::Relaxed));
+                                }
+                                // Render-check aid (NF_NET_SHOT=<tick>): the F12 capture at that match tick.
+                                if std::env::var("NF_NET_SHOT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(self.net_tick) {
+                                    NET_SHOT_DUE.store(true, std::sync::atomic::Ordering::Relaxed);
+                                }
                             }
                             // The lock's rising edge auto-draws the handgun (`Upgrade_Weapon(6)` = 2 [L])
                             // [M 0x1a24c8:247-250]. `prev` = last tick's channel (the game's
@@ -4406,7 +4580,7 @@ pub fn run() -> Result<()> {
     let mut app = App { sound, scene, cam, gfx: None, keys: HashSet::new(), grabbed: false, trigger: false, aiming: false, last: std::time::Instant::now(), choice, anim_time: time, paused: false, opts, noclip: false, just: HashSet::new(), turn: 0.0, look: 0.0, weapon_cycle: 0, gadget_cycle: 0, weapon_switch_to: None, zoom: false, dev: dev.then(|| Box::new(dev::Dev { infinite_ammo: true, ..Default::default() })), notex, nofog, iso, pending_level: None, pending_weapon_assets: None, entry_save: None, all, recorder: None, replay: None, replay_idx: 0, prev_lock_ch: false, ticked: false, frame_ticks: 0, menu_clock: 0.0, fe_clock: 0.0, selected_difficulty: 2, zoom_cycle: 0, pending_mission_end: false, pending_mp_debrief: None, force_channel, cam_prev: None, cam_cur: None, pal_prev: None, pal_cur: None, pal_blend: Vec::new(), pal_moving: Vec::new(), fps_cap, fps_meter: FpsMeter::default(), frame_start: std::time::Instant::now(), panel: None, panel_level: 0, panel_frames: 0, fe: None, level_code: 0, fe_music_page: None, menu_handle: 0, lang: None, profile_session: menu::ProfileSession::default(), #[cfg(feature = "gamepad")] pad: pad_backend,
         movie: None, devwin: None,
         audio_paused: false, loading_art: None, loading_hint: Default::default(), menu_pointer: None,
-        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_armed: None,
+        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_clock: None, net_shot_pending: false, net_armed: None,
         async_load: None,
         music_bank_flip: false,
         music_loaded_bank: 0xc,
@@ -4522,6 +4696,14 @@ pub fn run() -> Result<()> {
         let port = args.get(i + 1).and_then(|v| v.parse::<u16>().ok()).unwrap_or(27420);
         let arena = args.get(i + 2).and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(0x0700_0023);
         let mut st = nf_game::mp::MpSettings::deathmatch(arena);
+        // The menu's default duration, 10 minutes, in the SECONDS `MPSettings+0x1a0` holds (the
+        // menu writes minutes × 0x3c [M P_MPCONFIRM]); `deathmatch()`'s raw 10 ended the demo match
+        // after 10 seconds — straight to the debriefing (the two-window check, 2026-10-18).
+        st.time_limit = 10 * 60;
+        // Test aid (NF_NET_BOTS=n): n bots in the flag host's match (the online bots check).
+        if let Some(n) = std::env::var("NF_NET_BOTS").ok().and_then(|v| v.parse::<u32>().ok()) {
+            st.bot_count = n.min(4);
+        }
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(1);
         st.seed = nanos | 1;
         app.net_armed = Some(st);
@@ -4699,3 +4881,31 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
     }
     false
 }
+
+/// net-p2p: the reachability config for the app's real sessions — None with NF_NO_REACH=1 (LAN
+/// only); NF_STUN ("host:port,host:port") replaces the public STUN list [S net-p2p §1].
+fn reach_config() -> Option<nf_net::p2p::ReachConfig> {
+    if std::env::var_os("NF_NO_REACH").is_some() { return None; }
+    let mut cfg = nf_net::p2p::ReachConfig::default();
+    if let Ok(s) = std::env::var("NF_STUN") {
+        cfg.stun_servers = s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+    }
+    // The lobby directory (docs/tools/listing-server.md): NF_LOBBY_SERVER, else the
+    // `lobby_server = host:port` line of <config dir>/net.txt; empty = none.
+    let server = std::env::var("NF_LOBBY_SERVER").ok().or_else(|| {
+        let text = std::fs::read_to_string(settings::config_dir()?.join("net.txt")).ok()?;
+        text.lines().find_map(|l| l.split_once('=').filter(|(k, _)| k.trim() == "lobby_server").map(|(_, v)| v.trim().trim_matches('"').to_string()))
+    });
+    cfg.directory = server.filter(|s| !s.is_empty()).and_then(|s| {
+        use std::net::ToSocketAddrs;
+        let s = if s.contains(':') { s } else { format!("{s}:{}", nf_net::directory::DEFAULT_PORT) };
+        s.to_socket_addrs().ok()?.find(|a| a.is_ipv4())
+    });
+    Some(cfg)
+}
+
+/// The NF_NET_SHOT render-check aid's pending capture (set inside the tick loop's sim borrow).
+static NET_SHOT_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// NF_NET_RATE's stall counter.
+static NET_STALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

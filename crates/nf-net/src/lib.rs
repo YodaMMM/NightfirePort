@@ -26,17 +26,24 @@
 
 pub mod hash;
 pub mod input;
+pub mod lobby;
 pub mod net;
+pub mod p2p;
+pub mod discovery;
+pub mod directory;
 pub mod proto;
 pub mod session;
 pub mod settings;
 pub mod shim;
+pub mod teams;
 
 pub use hash::Hasher;
 pub use input::{Input, NEUTRAL};
+pub use lobby::{LobbyBot, LobbyEdit, LobbyPlayer, LobbyState};
 pub use net::UdpTransport;
 pub use session::{AgentInfo, Config, DropPolicy, Event, LeaveReason, RefuseReason, Session, SessionError};
 pub use settings::MatchSettings;
+pub use teams::{scenario_has_teams, start_check, team_label, StartError, TeamEdit, TeamSelection};
 
 /// Maximum agents in an MP match — the game's own limit: humans occupy slots
 /// 0..4 (`MpSettings.human_count`, bots 4..8), `MP_Start` 0x183a50 inits
@@ -49,7 +56,8 @@ pub const MAX_AGENTS: usize = 4;
 /// 2: settings 208 B (per-player radar_on + registered_pickups), the HELLO
 /// codename is a display name (not compared), REFUSE 3 = started, DATA added
 /// (net-consolidate 2026-10-16).
-pub const PROTOCOL_VERSION: u16 = 2;
+/// 3: the input carries `held` (byte 21) + `shot` (flag-1 bit 2) — the online combat (700v6).
+pub const PROTOCOL_VERSION: u16 = 3;
 
 /// Build id carried in the handshake so mismatched executables refuse cleanly.
 /// The host app sets this (e.g. a build counter); both sides must match exactly.
