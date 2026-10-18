@@ -595,6 +595,15 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         else if !give.is_empty() { weapon_assets::Wanted::Ids(give.to_vec()) }
         else { weapon_assets::Wanted::None };
     let mut weapons_table: Option<nf_formats::weapon::WeaponData> = None;
+    // qworm-not-on-0c: the skin set `Player_InitWeapon`'s availability gate (0x1a7ef8 tail →
+    // `Player_CheckWeaponsLoaded` 0x1a97c8) must see — the game's hashtable at loadout time. The
+    // game's hashtable holds what its containers registered: this level's own archive skins plus
+    // the session-accumulated ones the g-021 merge models below. The dev/`--give` asset merge's
+    // foreign skins are a PORT viewing aid (they must not leak into the loadout, or the kit's
+    // gadget lines — e.g. 0c's own EquipWeapon(0x58, 0) [M 0x1a8568] — own the Q-Worm on levels
+    // whose session hashtable misses it: the user's "qworm shouldnt be on that map", playtest
+    // 2026-10-18). Snapshots: before the asset merge, after it, after g-021.
+    let loadout_skins_pre_assets: std::collections::HashSet<u32> = level.skins.keys().copied().collect();
     if weapon_wanted != weapon_assets::Wanted::None {
         // weapon_data once for the whole load (the EE initialiser run the merge needs is the same
         // one the DroneContext consumes below; `--dev` used to run it twice).
@@ -635,6 +644,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             Err(e) => { eprintln!("weapon_data: {e} — drones drawn unarmed"); None }
         },
     };
+    let loadout_skins_post_assets: std::collections::HashSet<u32> = level.skins.keys().copied().collect();
     phase_mark("05 weapon_data (ACTION.ELF)", t); t = std::time::Instant::now();
 
     // G-021 (models-characters): drone placements whose skin (placement param 0) is not in their
@@ -800,6 +810,19 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // in that list (they ride in on borrowed skins), which then won over the level's own: the 08
     // launcher drew another level's grey glove instead of the tuxedo cuff and bare hand (PCSX2 side
     // by side, 2026-10-17). A level with its own sleeve drops the borrowed ones before the pick.
+    // qworm-not-on-0c: the loadout's availability set = the level's own skins + the game-accurate
+    // session additions (the g-021 merge and the 0x05000090 substitution above) — NOT the dev/`--give`
+    // asset merge's foreign skins (the viewing aid) [M 0x1a97c8's hashtable read; the game's
+    // hashtable only holds what its containers registered, D the archive skin scan]. On 0700000c
+    // this keeps the kit's EquipWeapon(0x58, 0) refused: the Q-Worm fp skin 0x050005b is carried
+    // only by 07000009/0a/0b (+ the MP/bonus 41/46 containers), not by 0700000c.bin [D scan].
+    let loadout_skins: std::collections::HashSet<u32> = {
+        let mut s = loadout_skins_pre_assets.clone();
+        for (&h, _) in level.skins.iter() {
+            if !loadout_skins_post_assets.contains(&h) { s.insert(h); }
+        }
+        s
+    };
     if let Some(own) = own_sleeve {
         for h in SLEEVES { if h != own { level.by_hash.remove(&h); } }
     }
@@ -1138,8 +1161,10 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         }
         // `Player_CheckWeaponsLoaded`'s model check (0x1a97c8): the hashtable holds the level's loaded
         // skins; the port's equivalent is the level skin table [M — the fp model hash is a skin hash].
+        // qworm-not-on-0c: `loadout_skins` (own + game-accurate session pulls) not `sim.skins` —
+        // the dev/`--give` merge's foreign skins must not own kit gadgets the game's hashtable misses.
         let loaded: Vec<bool> = (0..0x72u32)
-            .map(|w| sim.skins.contains_key(&sim.weapons.first_person(w as usize))).collect();
+            .map(|w| loadout_skins.contains(&sim.weapons.first_person(w as usize))).collect();
         let loaded = |w: u8| loaded.get(w as usize).copied().unwrap_or(false);
         let req = nf_game::player::init_level_loadout(level_id, save, &mut sim.drones.health,
             &mut sim.drones.inventory, &mut sim.drones.channels, &sim.weapons, loaded);
