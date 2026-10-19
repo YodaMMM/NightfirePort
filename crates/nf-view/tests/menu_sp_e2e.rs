@@ -244,18 +244,22 @@ fn back_walks_every_single_player_step_to_the_title() {
     assert_eq!(fe.cursor, 0, "the Dossier wheel opens at Records [M 0x216de0:9-16]");
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::MissionSelect);
-    // Down the chain: list → difficulty → codename → main → title [S unverified — the △ pops are
-    // the page stack's; P_NFMAP's 99 arm sends Main (0x20b608:67-68), not checked in PCSX2].
+    // fe-audit 1019: the list's Back is ROUTE-DEPENDENT. 0x5f runs the page's msg-99 SCRIPT
+    // first [M 0x21c858:588-592] — the disc's front-end def binds no msg-99 script on any page
+    // (every page's only SCRIPT is 0x2000000f on the 0x4c-open slot 0 [D the 08000002 tag
+    // stream]) — so the pushed SP chain takes the manager's default pop: reopen the wheel with
+    // its saved cursor [M 0x21c858:592-600]. (The empty-stack results route is P_NFMAP's 99 arm
+    // → MAIN [M 0x20b608:67-68] — pinned in a_completed_mission_routes… below.)
     assert!(act(&mut fe, Action::Back));
-    assert_eq!(fe.page, Page::Difficulty);
-    assert_eq!(fe.cursor, 0, "the wheel re-opens on the chosen difficulty (Operative)");
+    assert_eq!(fe.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-600]");
+    assert_eq!(fe.cursor, 0, "the wheel re-opens on the chosen difficulty (Operative) [M 0x21c858:600]");
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::Codename);
     assert_eq!(fe.cursor, 0);
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::Main);
     assert!(act(&mut fe, Action::Back));
-    assert_eq!(fe.page, Page::Start, "Back walks all the way to the title");
+    assert_eq!(fe.page, Page::Start, "Back walks all the way to the title [S — the port's Main Back]");
     // …and forward again still works.
     assert!(act(&mut fe, Action::Confirm), "the title");
     assert_eq!(fe.page, Page::Main);
@@ -322,8 +326,9 @@ fn select_codename_new_codename_validates_creates_saves_and_reloads() {
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::Main);
     assert_eq!(fe.cursor, 2, "the Codenames row");
-    assert!(act(&mut fe, Action::Down), "Down wraps to NightFire");
-    assert_eq!(fe.cursor, 0);
+    // fe-audit 1017: Main's wrap is [S unverified] (the rows are M_BUTTONs; the focus walk is
+    // not in the decompile) — the walk selects NightFire directly instead of relying on it.
+    fe.cursor = 0;
     assert!(act(&mut fe, Action::Confirm), "NightFire");
     assert_eq!(fe.page, Page::Codename);
     assert_eq!(fe.rows(), 3, "the card's codename is listed [M Menu_EnumSaves]");
@@ -358,7 +363,11 @@ fn each_difficulty_reaches_the_mission_list() {
     assert_eq!(fe.cursor, 2);
     assert!(act(&mut fe, Action::Down), "Down at the bottom wraps");
     assert_eq!(fe.cursor, 0, "back on Operative [M 0x221b20:186-194]");
-    // Every row confirms into the mission list; Back re-opens the wheel on the chosen row.
+    // Every tier confirms into the mission list. The confirm stores GameState+0x40 =
+    // difficulty[i*0x18+0xc] — the boot table's tier values 1/2/3, the port's +1 offset [D
+    // ACTION.ELF .data 0x2df4c0: records 0..2 hold +0xc = 1/2/3, 0x18-byte stride] — and opens
+    // 0x4000001c [M C_SBNFDFCTY 0x216ca8:10-17]. The gate byte +0x10 is 1 on all three rows, so
+    // a fresh profile confirms every tier [D 0x2df4c0; the gate M 0x216ca8:12-15].
     for d in [2usize, 1, 0] {
         while fe.cursor < d {
             assert!(act(&mut fe, Action::Down));
@@ -371,9 +380,13 @@ fn each_difficulty_reaches_the_mission_list() {
         assert_eq!(fe.page, Page::MissionSelect);
         assert_eq!(fe.difficulty, d, "the choice rode the confirm");
         assert_eq!(fe.cursor, 1, "the list opens on the highest unlocked row [M 0x20b608:60-64]");
+        // fe-audit 1019: the pushed chain pops back to the wheel — the confirm's 0x44 b=0 pushed
+        // it [M C_SBNFDFCTY 0x216ca8:10-17 + the push rule 0x21c858 case 0x44], and the pop
+        // reopens the saved page AND cursor [M 0x21c858:592-600]. (No msg-99 script stands on
+        // the disc [D the 08000002 tag stream] — the 99 arm only fires on an empty stack.)
         assert!(act(&mut fe, Action::Back));
-        assert_eq!(fe.page, Page::Difficulty);
-        assert_eq!(fe.cursor, d, "Back re-opens the wheel on the chosen row");
+        assert_eq!(fe.page, Page::Difficulty, "the pop re-opens the wheel [M 0x21c858:592-600]");
+        assert_eq!(fe.cursor, d, "Back re-opens the wheel on the chosen row [M 0x21c858:600]");
     }
 }
 
@@ -441,7 +454,8 @@ fn a_completed_mission_routes_the_results_save_and_the_next_row() {
     assert_eq!(fe.page, Page::CnSelect);
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::Main);
-    assert!(act(&mut fe, Action::Down), "Down wraps to NightFire [S unverified — Main's wrap]");
+    // fe-audit 1017: Main's wrap is [S unverified] — select NightFire directly.
+    fe.cursor = 0;
     assert!(act(&mut fe, Action::Confirm), "NightFire");
     assert_eq!(fe.cursor, 1, "opened from Main on row 1 [M 0x20aec0:96-97]");
     assert!(act(&mut fe, Action::Down));
@@ -528,13 +542,22 @@ fn a_completed_mission_routes_the_results_save_and_the_next_row() {
     let status = back.progress.nightfire_status();
     assert_eq!(status & 0b111, 0b111, "rows 0-2 ride the save");
 
-    // Reloading the codename brings the unlocks back.
+    // Reloading the codename brings the unlocks back. fe-audit 1019: the post-results list
+    // rides a FRESH manager (the front-end reload's MenuManager_Create [M 0x1d6360:160-163]) —
+    // the results/bonus confirms open 0x4000001c with b=1, no push [M 0x208e78:43;
+    // P_NFBONUS 0x209670:51-56] — so the list's Back finds an EMPTY stack and P_NFMAP's 99 arm
+    // opens MAIN, stack-clearing [M 0x20b608:67-68]. (The SP chain's pushed Back is the wheel —
+    // back_walks…/each_difficulty… pin that side.)
     assert!(act(&mut fe, Action::Back));
-    assert_eq!(fe.page, Page::Difficulty);
-    assert!(act(&mut fe, Action::Back));
+    assert_eq!(fe.page, Page::Main, "the empty-stack △ opens MAIN [M 0x20b608:67-68]");
+    // Forward again through NightFire (row 0 → C_GONIGHTFIRE's delayed 0x44(0x40000025, 0)
+    // [M 0x2169b8]) — the Codenames row would open P_CNSELECT 0x4000001b, not this page
+    // [M C_GOCODENAMES 0x2169e8].
+    assert!(act(&mut fe, Action::Confirm), "NightFire");
     assert_eq!(fe.page, Page::Codename);
-    assert!(act(&mut fe, Action::Down));
-    assert!(act(&mut fe, Action::Down));
+    while fe.cursor < 2 {
+        assert!(act(&mut fe, Action::Down));
+    }
     assert_eq!(fe.cursor, 2);
     assert!(act(&mut fe, Action::Confirm), "the saved codename loads");
     assert_eq!(fe.page, Page::Difficulty);
@@ -560,7 +583,12 @@ fn a_failed_mission_restarts_and_quits_from_the_results_page() {
     assert_eq!(fe.flow.current_level, level, "the mission stays loaded under the menu");
     assert_eq!(fe.page, Page::Results);
     assert_eq!(fe.page_id(), menu::PAGE_FAIL_MENU);
-    assert_eq!(fe.rows(), 2, "the fail menu's REPLAY / QUIT [L page 0x40000042]");
+    // fe-audit 1017: the fail menu's two rows are the DISC's own values — REPLAY carries value 0
+    // and QUIT value 2 (msg-0x11 bindings 0x5bc/0 and 0x16c/2 of control 0x100001a4, mission def
+    // 08000001 page 0x40000042 [D]); no value-1 row exists on the page, so P_ENDMISSION's BaseMap
+    // arm (value 1 [M 0x216618:14-17]) is unreachable from it. REPLAY (value 0) is the warm
+    // checkpoint restart [M 0x216618:19-21].
+    assert_eq!(fe.rows(), 2, "the fail menu's REPLAY / QUIT [D the mission def's 0x11 rows]");
     assert_eq!(fe.cursor, 0);
     assert!(fe.action(Action::Back), "△ lands on the second row [S unverified — the option list's △]");
     assert_eq!(fe.cursor, 1);

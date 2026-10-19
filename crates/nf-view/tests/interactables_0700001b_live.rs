@@ -25,6 +25,12 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 fn load() -> Walker {
     let mut w = Walker::new(nf_view::load(&iso(), "0700001b.bin", false).unwrap());
     w.wait_enabled(3000, "the shuttle arrival");
+    // [S] unverified — NOT a game assertion: the p3 == 2 spawn enters substate 8 [M Player_Init
+    // 0x1910f8 :178-183, now ported], but no decompile path back to a ground substate after the
+    // arrival NIS is pinned and the port wires no substate-changing handler. These tests pin
+    // the port's WALK/shoot routes, so the substate is forced back to the ground path (the
+    // walkreal_0700001b precedent).
+    w.scene.sim.as_mut().unwrap().bond.substate = nf_game::player::SS_WALK;
     w.wait(120);
     w
 }

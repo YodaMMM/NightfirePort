@@ -2410,7 +2410,19 @@ impl Sim {
             let water = bond_cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
                 .map(|r| self.cels[r].water).filter(|w| *w > -400.0);
             let sink = input.crouch;
-            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false };
+            // The pick capsule's straddle set [M Collide_StraddleCels 0x1eac98 runs on the pick's
+            // HITTEST; Collide_Pick 0x1eb320:125-134 scopes the candidates to its cels]: the BFS
+            // from the player's runtime cel (obj+0x20 — the same stateful one-tick-stale link the
+            // game reads) through the portals the current substate's pick arm capsule touches
+            // (`Bond::pick_arm`'s segment + radius, anchored at the last integrated pre-push-out
+            // spot [S: the game builds the HITTEST at THIS tick's integrated position — one tick
+            // apart at most; the portal walk's own permissiveness covers the difference]).
+            let (ao, bo, ar) = nf_game::player::pick_arm(self.bond.substate, self.bond.crouched, self.bond.cc);
+            let pc = self.bond.pre_collide;
+            let straddle_cells = bond_cel
+                .map(|c| self.world.debug_straddle(c, [pc[0], pc[1] + ao, pc[2]], [pc[0], pc[1] + bo, pc[2]], ar))
+                .unwrap_or_default();
+            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells };
             // The third-icon context [M ThirdIcon_Update 0x196e80 + Player_CollisionHandler 0x1949a8:22]:
             // the tick starts with +0x95F = 0xFF (none), then every ENABLED icon (its param-1 channel on,
             // or param 1 == 0 = always [M ThirdIcon_Create 0x197070:27-32]) whose straddle-cel set holds
@@ -7009,6 +7021,15 @@ impl Scene {
             // sphere comes from the placement's object glist bounds, like the game's
             // `Control_BuildWorldSph` 0x133070.
             let ladders = nf_game::ladder::all(level);
+            // The ladders' runtime cel link [M build_LinkToRoom 0x1c9680:
+            // build_FindCel(world-sphere centre) → control_link_object_to_cel] — the pick admits a
+            // ladder only from a straddled cel's chain [M Collide_Pick 0x1eb320:125-134], so the
+            // per-tick straddle set tests against THIS cel. Unresolved (None) = the game's
+            // unlinked object: never admitted while scoping is active.
+            let mut ladders = ladders;
+            for lad in ladders.iter_mut() {
+                lad.cell = world.find_cel(lad.centre).map(|c| c as u32);
+            }
             // Wires (`Wire_Create` 0x1981d8, placement type 0x3E): the level's zip wires, resolved
             // against their map objects like the ladders (fix-wire: the world sphere replaces the
             // hardcoded 4.0 length; the endpoints derive at grab time per the atlas).
@@ -8823,6 +8844,7 @@ impl Sim {
             let ctx = nf_game::player::LadderCtx {
                 ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims),
                 water: None, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
+                straddle: &[], // MP remotes carry no per-body cel link yet — no scoping.
             };
             b.tick_ctx(&self.world, &ctx, &input);
             self.mp_body_speed[slot] = ((b.pos[0] - before[0]).powi(2) + (b.pos[2] - before[2]).powi(2)).sqrt() * 60.0;
