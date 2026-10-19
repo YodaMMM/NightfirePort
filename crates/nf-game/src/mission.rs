@@ -524,4 +524,54 @@ mod tests {
         assert_eq!(m2.states[8][0], 2, "the fail record stays announced-fail");
         assert_eq!(m2.states[8][1], 3, "the unfired record stays announced");
     }
+
+    /// objectives-all-levels: the census — every on-foot level's objective record can complete
+    /// through `Mission_MonitorObjectives` (0x1827d8), and the AND of every condition gates
+    /// ch 100 → `Mission_Update` 0x182c60 case 6 (MissionState 6, MissionComplete). Each level is
+    /// initialised cold (`Mission_Init` 0x182270), then every condition channel of its mission is
+    /// set the way a writer would (normal records ON; the fail record's channel stays OFF — its
+    /// condition is the channel being OFF [M 0x1827d8:32-38]; channel 0 is a real index for the
+    /// monitor — the game has no ch-0 guard [M 0x1827d8:32-38, 0700000f/07000010's records]).
+    #[test]
+    fn every_level_objectives_complete_through_the_monitor_and_gate_ch_100() {
+        for l in LEVELS.iter() {
+            let mut ch = Channels::default();
+            let mut m = Mission::new();
+            m.init(l.level, false, &mut ch, 0);
+            for ll in LEVELS.iter().filter(|x| x.mission == l.mission) {
+                for o in ll.objectives {
+                    if o.flags & 2 != 0 { continue; } // the fail record's channel stays OFF
+                    ch.set(o.channel as u32, 1, 1);   // channel 0 included: a real index [M]
+                    // the reveal writer: enable-gated records announce only when their enable
+                    // channel fires [M 0x1827d8:55-67]
+                    if o.enable != 0 && o.enable != 0xff { ch.set(o.enable as u32, 1, 1); }
+                }
+            }
+            let mut out = Vec::new();
+            m.update(&mut ch, 2, l.level, false, &mut out); // monitor tick: announce (0/1 → 3)
+            m.update(&mut ch, 3, l.level, false, &mut out); // fold 3 → 4; `all` → ch 100; case 6
+            assert!(ch.on(100), "level {:x}: ch 100 must fire once every condition holds", l.level);
+            assert!(
+                out.iter().any(|e| matches!(e, Event::MissionComplete { .. })),
+                "level {:x}: MissionComplete missing", l.level
+            );
+            assert_eq!(m.state, 6, "level {:x}: MissionState 6", l.level);
+            for (i, ll) in LEVELS.iter().enumerate() {
+                if ll.mission != l.mission { continue; }
+                for (j, o) in ll.objectives.iter().enumerate() {
+                    let s = m.states[i][j];
+                    if ll.level <= l.level {
+                        // a record announced on the completing tick sits at 3: the monitor's `all`
+                        // fires ch 100 the same tick and `Mission_Update` leaves internal 1 (case 1
+                        // → ch 100 → case 6 [M 0x182c60:23-28]), so the 3→4 fold's next monitor
+                        // tick never runs. 4/2 = announced earlier and folded/failed.
+                        assert!(s == 2 || s == 3 || s == 4,
+                            "level {:x}: record {:x} (ch {:x}) state {} != announced/complete", l.level, o.text, o.channel, s);
+                    }
+                    // future records: the state-1 enable arm has no level gate [M 0x1827d8:55-67],
+                    // so a future record whose enable fired sits announced — not a census claim.
+                }
+            }
+        }
+    }
 }
