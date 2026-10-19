@@ -31,11 +31,6 @@ pub const BEST_WEAPON: [u16; 18] = [0x42, 0x32, 0x1a, 0x18, 0x1c, 0x16, 0x15, 0x
 /// wrong guns.) The full table is `crate::mp::equip::PICKUP_MATRIX`.
 pub const PICKUP_MATRIX_ROW0: [u16; 5] = crate::mp::equip::PICKUP_MATRIX[0];
 
-/// `Pickup_CreateFromSet` (0x18f1b0) creates its pickup with respawn 3 (`Pickup_Create`'s arg 11,
-/// stored at PICKUPINFO+0x2C: `FRAME_RATE_INT · 3 · 10` = 30 s hidden after a take) [M disasm
-/// 0x18f25c `sw s6(=3),16(sp)`; 0x18dda0:129].
-pub const SET_RESPAWN: u16 = 3;
-
 /// A model's glist bounds (`celglist+0x20`: centre, radius).
 #[derive(Clone, Copy, Debug)]
 pub struct Model { pub centre: V3, pub radius: f32 }

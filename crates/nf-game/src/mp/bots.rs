@@ -724,6 +724,14 @@ pub struct BotCtx<'a> {
     /// per-slot/per-team status words, the assassin roles, the other bots' objective goals) —
     /// `None` = no scenario objects (the unit rigs; the brain then plays deathmatch only).
     pub objectives: Option<&'a BotObjectives>,
+    /// mp-bot-weapons: the arena's `weapon_data` lift (`botweap::BotWeaponTable`). `Some` arms
+    /// the bot with the game's weapon layer on its first tick (`BOTWEAP_InitWeapon`) — the
+    /// arsenal, the per-weapon fire timing, the reload/change states, the weapon choice. `None`
+    /// keeps the old stand-in (one weapon, an endless 12-round clip) for the unit rigs [S].
+    pub weapons: Option<&'a crate::mp::botweap::BotWeaponTable>,
+    /// mp-bot-weapons: the match's `startweap` (`weapon_data[PickupMatrix[set·10]].base`
+    /// [M 0x129e48:44-45]) — `BotWeaponTable::start_weapon(settings.weapon_set)`.
+    pub start_weapon: u8,
 }
 
 // ============================================================================
@@ -958,14 +966,6 @@ pub enum ObjPick {
     Hold,
     /// Nothing scored → the slot-0 pickup fall-through [M :315-324].
     None,
-    /// mp-bot-weapons: the arena's `weapon_data` lift (`botweap::BotWeaponTable`). `Some` arms
-    /// the bot with the game's weapon layer on its first tick (`BOTWEAP_InitWeapon`) — the
-    /// arsenal, the per-weapon fire timing, the reload/change states, the weapon choice. `None`
-    /// keeps the old stand-in (one weapon, an endless 12-round clip) for the unit rigs [S].
-    pub weapons: Option<&'a crate::mp::botweap::BotWeaponTable>,
-    /// mp-bot-weapons: the match's `startweap` (`weapon_data[PickupMatrix[set·10]].base`
-    /// [M 0x129e48:44-45]) — `BotWeaponTable::start_weapon(settings.weapon_set)`.
-    pub start_weapon: u8,
 }
 
 
