@@ -5145,15 +5145,61 @@ impl Drone {
             // The full-alert sight gate ([M 0x177ed0:12-14]) does not cover these: the sound path is how
             // the game's alarm-heard scripted guards reach combat (cover_nodes_live's 06 gunfire).
             (PLAY_SCRIPT, msg::SOUND) => {
-                if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n) }
-                true
+                // 0x15ba68 case 0x14 → `DroneVision_EnemyAlerts` case 0x14 → `DroneVision_AlertSound`
+                // 0x177800. The ENTER case sets `+0x4F8 |= 0x400000` for start scripts 0x6000169 and
+                // 0x60007ac [M 0x15ba68:36-44], and AlertSound returns 0 while it is set [M
+                // 0x177800:19-21] — those scripted guards are DEAF to gunfire while the script plays
+                // (the flag clears when the script ends, 0x15ba68 case 5; the port's start_script
+                // zeroes at the same point, the PLAY_SCRIPT msg::ANIM_DONE arm).
+                if self.start_script == 0x6000_169 || self.start_script == 0x6000_7ac {
+                    if std::env::var_os("NF_AILOG").is_some() {
+                        eprintln!("[ailog] guard {} PlayScript SOUND: script {:#x} holds +0x4F8 0x400000 — deaf to gunfire [M 0x177800:19-21]", self.index, self.start_script);
+                    }
+                    return true;
+                }
+                // [M 0x177800:76-100] the mode switch: modes 9/0x12/0x13/0x16 alert only above
+                // alertness 0.7 (→ Attack 0x56); every other mode (the escort/civilian rows among
+                // them) takes the HeardNoise branch (0xa2 when share > 0.2 or alert > 0.66). The
+                // level-0x0700000c/0xd skin-kind-5/6 shortcut of 0x177800:24-33 is level-specific
+                // and unmodelled here.
+                if std::env::var_os("NF_AILOG").is_some() {
+                    eprintln!("[ailog] guard {} PlayScript SOUND: mode {:#x} alert {:.2} dist {:.1} share {:.2} prop1f {} script {:#x}",
+                        self.index, self.mode, self.alert, self.dist, self.sound_share, self.prop(d, 0x1f), self.start_script);
+                }
+                if matches!(self.mode, 9 | 0x12 | 0x13 | 0x16) {
+                    if self.alert > 0.7 {
+                        if !self.investigating { self.resume_state = s; self.home = self.feet(); }
+                        self.set_state(ATTACK);
+                    }
+                    true
+                } else if let Some(n) = self.enemy_alerts(d, s) {
+                    self.set_state(n);
+                    true
+                } else {
+                    true
+                }
             }
             (PLAY_SCRIPT, msg::ALARM) => {
-                // 0x15ba68 case 0x1e → `DroneVision_EnemyAlerts` 0x177c18 case 0x1e: Attack, with the
-                // same save-return-state/home first step the idle states' ALARM arm runs.
-                if !self.investigating { self.resume_state = s; self.home = self.feet(); }
-                self.set_state(ATTACK);
-                true
+                // 0x15ba68 case 0x1e → `DroneVision_EnemyAlerts` 0x177c18 case 0x1e: the
+                // friendly/civilian modes 9 and 0x12 return 0 [M 0x177c18:113-117] — the scripted
+                // escort (dtype 10/0xb/0xd/0xe below full alertness remaps to 9, or 0x12 for the
+                // female row, GetDTYPENEW 0x14c938) NEVER takes the alarm. Mode 0x1e is the bot row:
+                // in SP the ambush drones (dtype 0x10 → 0x1e) fail MP_areObjectsOnSameTeam with
+                // Bond [M 0x177c18:121-126], so the alarm does nothing for them either; the bot
+                // arm (alertness = 1.0 → BOT_reactToDroneAlertMsg → 0xcf) is the MP bot path, not
+                // ported here. The rest → Attack, with the same save-return-state/home first step
+                // the idle states' ALARM arm runs.
+                if std::env::var_os("NF_AILOG").is_some() {
+                    eprintln!("[ailog] guard {} PlayScript ALARM: mode {:#x} alert {:.2} script {:#x}",
+                        self.index, self.mode, self.alert, self.start_script);
+                }
+                if matches!(self.mode, 9 | 0x12 | 0x1e) {
+                    true
+                } else {
+                    if !self.investigating { self.resume_state = s; self.home = self.feet(); }
+                    self.set_state(ATTACK);
+                    true
+                }
             }
             (WAIT_SWITCH, msg::ENTER) => { self.enabled = false; self.vision_on = false; self.watching = false; true }
             (WAIT_SWITCH, msg::UPDATE) => { if self.channel_on { self.enabled = true; let s = self.start_state(d); self.set_state(s) } true }
