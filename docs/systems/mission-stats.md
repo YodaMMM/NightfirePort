@@ -61,9 +61,10 @@ the blank spacer (the static string 0x30d2d8, before Subtotal [M :117]).
 - `SeparateNumber(u32, buf)` 0x1dec78: `<1e3` → `%d`; `<1e6` → `%d,%.3d`; else `%d,%.3d,%.3d`
   (millions group printed unpadded) [M the format strings 0x30d090/0x30d098].
 - `Timer_Seconds2String(cs, 0)` 0x1deaa8: seconds = `fptoui(cs × 0.01 + 0.5)` (round-half-up);
-  hours = (s/3600)%60; hours ≠ 0 → `h:mm:ss` [S — the hour branch's args are dropped in the
-  decompile]; else `%.2d:%.2d` mm:ss [M case 2]. Negative → all zero [M]. The Time row feeds
-  elapsed in 1/100 s and par × 100 [M 0x209938:103-108].
+  hours = (s/3600)%60; hours ≠ 0 → the TWO-field `%.2d:%.2d` with (hours, minutes) [M :27-31;
+  ACTION.ELF disasm 0x1deb8c-0x1deba4 — the default arm's sprintf rides $a2 = hours, $a3 =
+  minutes, the same fmt 0x305940 case 2 uses]; else `%.2d:%.2d` mm:ss [M case 2]. Negative →
+  all zero [M]. The Time row feeds elapsed in 1/100 s and par × 100 [M 0x209938:103-108].
 
 ## The formulas (already `Progress::get_score`, corrected here)
 
@@ -83,8 +84,11 @@ the blank spacer (the static string 0x30d2d8, before Subtotal [M :117]).
 - `base = Σ raw` (f32 accumulate, trunc on store) [M :288-293]; difficulty multiplier
   `fptoui` of `ScoringTableDifMul` 0x2bc910: difficulty 1 → [0] = 0.0, 2 → [1] = 1.0, else →
   [2] = 2.0 [M :294-300]; bonus = base × mult [M integer multiply]; TOTAL = base + bonus, and
-  with commit: best = max(best, TOTAL) [M :301-315]. Status ≠ 6 zeroes every runtime field
-  [M :316-333] — the stats page on a non-6 status shows the design data with zero scores.
+  with commit: best = max(best, TOTAL) [M :301-315]. Status ≠ 6 zeroes ONLY the per-row points
+  (+0x10 — the 0x14-stride loop) and the entry's dif/bonus/subtotal/total plus DoneBetter
+  [M :318-333] — the tallies (+0x08) and ratios (+0x0c) survive, so the stats page on a non-6
+  status still shows the run's current cells and percentages (the handler's reads at
+  0x209938:70/84/101) with every TOTAL cell zeroed.
 
 ## The port's surface
 
