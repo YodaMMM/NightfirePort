@@ -480,6 +480,19 @@ fn a_host_departure_mid_match_is_still_host_left() {
         }
         std::thread::sleep(Duration::from_millis(1));
     }
+    // Catch-up (the main agent, 2026-10-19: this assert failed 1 run in 3 under load): every input up to tick 200 is
+    // already submitted, but UDP delivery is asynchronous, so a step can leave a machine a tick behind. Pump until all
+    // three have run tick 200 (bounded), with no new submits.
+    let t0 = std::time::Instant::now();
+    while (mh.tick, m1.tick, m2.tick) != (200, 200, 200) && t0.elapsed() < Duration::from_secs(5) {
+        mh.pump();
+        m1.pump();
+        m2.pump();
+        mh.advance(&[]);
+        m1.advance(&[]);
+        m2.advance(&[]);
+        std::thread::sleep(Duration::from_millis(1));
+    }
     assert_eq!((mh.tick, m1.tick, m2.tick), (200, 200, 200), "all three ran the same ticks");
     eprintln!("[sister] closing the host's session");
     mh.sess.0.borrow_mut().close();
