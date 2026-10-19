@@ -25,23 +25,24 @@ fn finished_match() -> MpMatch {
     s.total_players = 4;
     s.frag_limit = 10;
     s.time_limit = 600;
+    // mp-16-slots: the bots follow the humans (slots 2 and 3 with 2 humans) [S].
     let mut m = MpMatch::init(s);
     m.start(&mut Rng::new(7));
     m.settings.players[0].codename = "Bond".into();
     m.settings.players[1].codename = "Drake".into();
-    m.settings.players[4].skin = 6; // Snow Guard preset
-    m.settings.players[5].skin = 2; // Rook preset
+    m.settings.players[2].skin = 6; // Snow Guard preset
+    m.settings.players[3].skin = 2; // Rook preset
     m.game.slots[0].kills = 9;
     m.game.slots[0].score = 9.0;
     m.game.slots[1].kills = 8;
     m.game.slots[1].score = 8.0;
-    m.game.slots[4].kills = 8;
-    m.game.slots[4].score = 8.0;
-    m.game.slots[5].kills = 2;
-    m.game.slots[5].score = 2.0;
+    m.game.slots[2].kills = 8;
+    m.game.slots[2].score = 8.0;
+    m.game.slots[3].kills = 2;
+    m.game.slots[3].score = 2.0;
     m.game.slots[1].deaths = 3;
-    m.game.slots[4].deaths = 5;
-    m.game.slots[5].deaths = 7;
+    m.game.slots[2].deaths = 5;
+    m.game.slots[3].deaths = 7;
     m
 }
 
@@ -55,7 +56,7 @@ fn the_handover_opens_the_page_with_the_rows() {
     assert_eq!(fe.page.id(), 0x4000_0033);
     let rows = fe.mp_debriefing_rows();
     // Sort by TOTAL (kills in Arena): Bond 9, then the two 8s (slot 1 built before slot 4 —
-    // the game's stable bubble sort [M 0x212198:112-130]), then Rook-bot 2.
+    // the game's stable bubble sort [M 0x212198:112-130]; slot 1 before the bot's slot 2), then Rook-bot 2.
     assert_eq!(rows[0], (0x0100_0297, MpDebriefName::Human("Bond".into()), 0x0300_0154, 9, 9, 0, 9), "rank 1st + Bond's small-table portrait [L 0x2df8f8 row 0]");
     assert_eq!(rows[1].0, 0x0100_0298, "the 8s start the \"2nd\" rank [M 0x212198:135-137]");
     assert_eq!(rows[1].1, MpDebriefName::Human("Drake".into()));
