@@ -7328,7 +7328,7 @@ impl Scene {
                 // Fallback when the arena lacks the player script: the drone set [S].
                 let script = player_script.or_else(|| danim.filter(|&d| d >= 0).and_then(|d| (0..27u16).filter_map(|set| s.tables.script_for(d as u16, set)).find(|h| s.scripts.contains_key(h))));
                 if std::env::var_os("NF_MPBODY_DBG").is_some() && s.drones.frame % 60 == 0 {
-                    eprintln!("[mpbody] slot {slot} pos {pos:?} yaw {yaw:.2} speed {speed:.2} state {st:#x} danim {danim:?} script {script:x?} has {}", script.is_some_and(|h| s.scripts.contains_key(&h)));
+                    eprintln!("[mpbody] slot {slot} held {} raw {:?} pos {pos:?} yaw {yaw:.2} speed {speed:.2} state {st:#x} danim {danim:?} script {script:x?} has {}", s.mp_body_held(slot), s.mp_held.get(slot), script.is_some_and(|h| s.scripts.contains_key(&h)));
                 }
                 let script = script?;
                 // mp-body-look: the walk/run pair is distance-driven, not clock-driven. `AnimSetUpdate`

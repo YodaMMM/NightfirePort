@@ -415,6 +415,11 @@ fn face_other_aid(sim: &mut scene::Sim) -> bool {
         .map(|o| (o[0] - me[0]).atan2(o[2] - me[2]));
     if let Some(y) = face(sim.bond.pos) { sim.bond.yaw = y; }
     for b in sim.mp_bonds.iter_mut().flatten() { if let Some(y) = face(b.pos) { b.yaw = y; } }
+    // NF_MP_FACE_TURN1=radians: slot 1 turns away by that much (a side view of its body) — the same
+    // on every machine (the env rides both windows).
+    if let Some(d) = std::env::var("NF_MP_FACE_TURN1").ok().and_then(|v| v.parse::<f32>().ok()) {
+        if sim.mp_local_slot == 1 { sim.bond.yaw += d; } else if let Some(b) = sim.mp_bonds.get_mut(1).and_then(|b| b.as_mut()) { b.yaw += d; }
+    }
     true
 }
 
