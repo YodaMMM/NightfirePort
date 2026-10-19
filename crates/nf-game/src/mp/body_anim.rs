@@ -36,7 +36,7 @@
 //!   while it counts; it ends (and the set is rebuilt) when any script stopped
 //!   (`AnimScriptIsStopped` 0x1c70d8) or the count reaches 1.
 //! - **Death** (substates 0xd/0xe, `Player_ChangeSubState`): every script deleted, one script —
-//!   0x6000151 (the water-level global is −9.9 from `Player_Init`; 0x60008e0 only when it is 0.0)
+//!   0x6000151 (the gravity Y `WldGravity.y` is −9.8 from `Player_Init` [M 0x1910f8:152-154]; 0x60008e0 only in zero-g, when it is 0.0)
 //!   at speed 1, non-looping (297 frames, holds the end). The respawn rebuilds the set.
 //! - **Weights** (`AnimFrameResolve` 0x1c35f8): fade +1 → clock += 1 up to the blend length;
 //!   fade −1 → clock −= 1, deleted at ≤ 0; weight = clock / length. The pose: the scripts in stamp
