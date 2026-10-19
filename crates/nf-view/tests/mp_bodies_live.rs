@@ -61,7 +61,8 @@ fn every_mp_characters_mesh_resolves_in_three_arenas() {
 fn an_mp_load_parks_one_body_per_slot_hidden_with_a_sequence_set() {
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     // Two humans (Bond 0 + a Phoenix Commando 9) and two bots (the disc's INITIAL records:
-    // slot 4 = character 6, slot 5 = character 7 [D INITIAL_BOT_RECORDS]).
+    // bots follow the humans since mp-16-slots — slot 2 = character 6, slot 3 = character 7
+    // [D INITIAL_BOT_RECORDS]).
     let mut settings = nf_game::mp::MpSettings::deathmatch(0x0700_0023);
     settings.human_count = 2;
     settings.bot_count = 2;
@@ -74,7 +75,7 @@ fn an_mp_load_parks_one_body_per_slot_hidden_with_a_sequence_set() {
     assert_eq!(skins, [0x0500_0089, 0x0500_00c6, 0x0500_0097, 0x0500_0098],
         "slot chars 0/9 from the settings, 6/7 from the bot records (BOT_init 0x1249e8:160) [D MP_skins]");
     for b in bodies {
-        assert_eq!(b.char_index as usize, match b.slot { 0 => 0, 1 => 9, 4 => 6, 5 => 7, s => panic!("slot {s}") });
+        assert_eq!(b.char_index as usize, match b.slot { 0 => 0, 1 => 9, 2 => 6, 3 => 7, s => panic!("slot {s}") });
         assert!(!b.chars.is_empty(), "slot {} has drawable characters", b.slot);
         for &ci in &b.chars {
             let c = &scene.characters[ci];
@@ -94,4 +95,81 @@ fn an_mp_load_parks_one_body_per_slot_hidden_with_a_sequence_set() {
         assert!(!bodies[0].scripts.get(&id).unwrap_or_else(|| panic!("script {id:08x} missing")).is_empty(),
             "class-1 set word {id:08x} resolves on 07000023");
     }
+}
+
+/// mp-body-look: the DRAWN bodies (`Scene::mp_bodies`) in an online match — 2 humans + 2 bots,
+/// slot 0's machine, 90 lockstep ticks with the remote human sending its held P2K:
+/// - the bots draw their records' characters (Snow Guard 0x05000097 / Black Ops 0x05000098), not
+///   character 0 (the loader's mirror wrote slots 4.. — Bond bodies at slots 2/3);
+/// - every drawn body holds its weapon in hand from spawn: the slot's P2K attachment is placed on
+///   the hand (the bots have no session input — the empty row's held 0 hid their guns);
+/// - the bodies ramp to their cel's ambient like every drawn object (they kept the 0xff sentinel);
+/// - a moving body's walk cycle advances (the walk script is distance-driven; the clock read froze
+///   every moving body in the walk's last frame 86 ticks into the match).
+#[test]
+fn drawn_bodies_hold_their_gun_take_the_cel_light_and_walk() {
+    let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
+    let mut settings = nf_game::mp::MpSettings::deathmatch(0x0700_0023);
+    settings.human_count = 2;
+    settings.bot_count = 2;
+    settings.players[0].skin = 0;
+    settings.players[1].skin = 9;
+    let mut scene = nf_view::load_mp_carry(&path, "07000023.bin", false, None, settings).expect("load 07000023");
+    let skins: Vec<(usize, u32)> = scene.mp_bodies.iter().map(|&(slot, ci)| (slot, scene.characters[ci].skin.hashcode)).collect();
+    assert_eq!(skins, [(0, 0x0500_0089), (1, 0x0500_00c6), (2, 0x0500_0097), (3, 0x0500_0098)],
+        "the bots' bodies are their records' characters (MP_skins[6], [7]) at slots human_count + i");
+    nf_view::net_slot0_setup(scene.sim.as_mut().unwrap());
+    let mut row = [nf_net::input::NEUTRAL; nf_net::MAX_AGENTS];
+    row[0].held = 2;
+    row[1].held = 2;
+    let bot_slots = [2usize, 3];
+    let mut walk_poses: Vec<Vec<[f32; 3]>> = vec![Vec::new(); 4];
+    let mut moving_ticks = [0u32; 4];
+    for t in 0..240u32 {
+        nf_view::net_slot0_tick(scene.sim.as_mut().unwrap(), &row);
+        let fs = scene.frame_state(None, t as f32, Default::default());
+        let s = scene.sim.as_ref().unwrap();
+        for &(slot, ci) in &scene.mp_bodies {
+            if slot == 0 { continue; }
+            let Some((_, _, speed)) = s.mp_body_state(slot) else { continue };
+            // The held weapon: the attachment of (slot, held) sits on the body (not the FAR park).
+            let held = s.mp_body_held(slot);
+            assert_eq!(held, 2, "tick {t}: slot {slot} holds the spawn P2K");
+            let (&k, _) = scene.mp_body_weapons.iter().find(|(_, &(sl, w))| sl == slot && w == held).expect("a P2K attachment per body");
+            let m = fs.attach[k as usize];
+            let body = fs.posed[ci].as_ref().map(|(_, _, m)| m[3]).expect("the body is posed");
+            let d = ((m[3][0] - body[0]).powi(2) + (m[3][1] - body[1]).powi(2) + (m[3][2] - body[2]).powi(2)).sqrt();
+            assert!(d < 1.5, "tick {t}: slot {slot}'s gun is in its hand ({d:.2} from the body origin)");
+            // The other weapons stay hidden.
+            for (&k2, &(sl, w)) in &scene.mp_body_weapons {
+                if sl == slot && w != held { assert!(fs.attach[k2 as usize][3][1] < -9000.0, "slot {slot} weapon {w:#x} hidden"); }
+            }
+            if speed >= 0.5 && t >= 100 {
+                moving_ticks[slot] += 1;
+                if let Some((_, world, _)) = fs.posed[ci].as_ref() {
+                    walk_poses[slot].push([world[4][3][0], world[4][3][1], world[4][3][2]]);
+                }
+            }
+        }
+    }
+    let s = scene.sim.as_ref().unwrap();
+    for &(slot, ci) in &scene.mp_bodies {
+        if slot == 0 { continue; }
+        let (p, _, _) = s.mp_body_state(slot).unwrap();
+        let cel = s.ambient_at(p).expect("the body stands in a cel");
+        assert_ne!(s.char_ambient[ci], [0xff; 3], "slot {slot}: the body's ambient left the 0xff sentinel");
+        let near = (0..3).all(|k| (s.char_ambient[ci][k] as i32 - cel[k] as i32).abs() <= 24);
+        assert!(near, "slot {slot}: ambient {:?} ramps toward its cel's {:?}", s.char_ambient[ci], cel);
+    }
+    // A bot that walked after tick 100 (past the walk script's 86 frames) shows changing poses.
+    let mut checked = 0;
+    for &slot in &bot_slots {
+        let v = &walk_poses[slot];
+        if v.len() < 10 { continue; }
+        let distinct = v.windows(2).filter(|w| (0..3).any(|k| (w[0][k] - w[1][k]).abs() > 1e-4)).count();
+        eprintln!("slot {slot}: {} moving ticks, {distinct} pose changes", moving_ticks[slot]);
+        assert!(distinct * 2 >= v.len() - 1, "slot {slot}: the walk cycle advances while the body moves ({distinct}/{})", v.len() - 1);
+        checked += 1;
+    }
+    assert!(checked > 0, "a bot walked after tick 100 (moving ticks {moving_ticks:?})");
 }
