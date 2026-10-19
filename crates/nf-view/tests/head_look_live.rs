@@ -87,7 +87,12 @@ fn tracking_head_stays_upright_and_points_at_bond() {
                 (t, head_stats(&world, target))
             };
             let (t, (upness, ang)) = stats;
-            if best.map_or(true, |(_, bu, _)| upness > bu || (upness - bu).abs() < 1e-4 && ang < best.unwrap().2) {
+            // Pick the best-ANGLE tick among upright-enough ticks. (The audit-fix-door-guard task
+            // made the door-guard zone arms live — the zone-1 step-change anim replay [M
+            // 0x160648 case 3] resets a door guard's head to a perfectly-upright idle pose, and
+            // the old max-upness-first order preferred those idle ticks over true tracking
+            // ticks. Both assertion thresholds below are unchanged.)
+            if best.map_or(true, |(_, bu, _)| (upness > 0.99 && (bu <= 0.99 || ang < best.unwrap().2)) || (bu <= 0.99 && upness > bu)) {
                 best = Some((di, upness, ang));
             }
         }

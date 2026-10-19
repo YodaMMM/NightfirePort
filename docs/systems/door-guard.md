@@ -87,15 +87,34 @@ shout + Attack; 1 → face + idle-anim replay on the step change; 2 → anim 0x5
 `DroneFunc_SetMissionFailReason(drone, 0xc)` + Attack; 0 → idle-anim replay. The idle
 cycle 0x24 → 0x25 → 0x26 re-arms at frame + (Rand(20) + 5)·FRAME_RATE_INT [M :124-150].
 
+## Sequential pairing: the claims overwrite each other
+
+The 0x31 ENTER calls SetDronePartner **unconditionally** [M 0x160648 case 1], the claim
+`me->0x2BC = cand` is written INSIDE the scan [M 0x141360:96], and the mutual write
+`cand->0x2BC = me` lands after the scan [M :113] — nothing gates the caller and nothing
+re-checks an earlier claim. The ENTERs of the guards that start in 0x31 therefore chain in
+list order and later claims overwrite earlier ones. On 07000007 (all six guards at Y 44.0
+[D the roster dump — the height gate never separates them here]) the four active guards
+settle into: 404→417 (404's own claim), 417→442 (417's own re-scan — she is the nearer
+partnerless guard), 441→442 (441's scan finds everyone claimed), 442→441 (442's own
+re-scan) — only 441↔442 ends mutual, and 404/417's edges are the stale claims the later
+scans left behind. The planes follow the same chain: 404 holds his own build (v0 =
+404→417), 441 holds the build 442's ENTER made on her (v0 = 441→442), and 442 still holds
+the build 417's ENTER made on her (v0 = 442→417) — unread, because 442 is a 0xff mirror.
+417 holds no planes at all. The pre-audit port/test showed two clean mutual pairs only
+because the old wrong yaw gate filtered the cross-pair candidates.
+
 ## Opponent (+0x170) in the port
 
 The game's handler needs the drone's current opponent pointer (+0x170). The port stands
 it in with "the guard currently sees Bond" (`los`) [S unverified stand-in — the real
 perception write to +0x170 is not ported]; the height gate against Bond's position Y is
 the game's [M 0x1416d8:22]. The port's `door_side` keeps only the 0xff marker; the
-owner's zone lives in `door_zone` and the mirror copies the partner's `door_zone`
-(the game reads the partner's `+0x2CC`, which the owner's handler tail overwrote with
-the zone [M 0x1416d8:19-21, 75-77]).
+owner's zone lives in `door_zone` and the mirror copies the partner's stored zone — or
+0xff when the partner is itself a 0xff holder, because the game returns the partner's
+RAW +0x2CC and the mirror path returns early without storing [M 0x1416d8:19-21, 75-77]:
+on 07000007, 417 (0xff) mirrors 442 (0xff) and so reads 0xff — the 0x31 UPDATE dispatch
+`(lVar3 == 1 / == 2 / == 3)` falls through for 255 and the guard stands idle.
 
 ## Tests
 
