@@ -467,7 +467,7 @@ impl Script {
                         let (Some(&n), Some(&kind)) = (cmds.get(pc + 1), cmds.get(pc + 2)) else { self.streams[i].pc = None; return };
                         let p: Vec<u32> = (0..n as usize).filter_map(|k| rd(2 + 4 * k, 4)).collect();
                         next = pc + 3 + 4 * n as usize + 1;
-                        self.event(i, kind, p, objs, ch, w, frame, out);
+                        self.event(i, kind, p, objs, ch, frame, out);
                     }
                     0x16 => {
                         // `Script_SoundStart` (0x1d8820): 2-D when asked or when the object stream has no object.
@@ -784,7 +784,7 @@ impl Script {
     /// `Script_EventHandler` (0x1d94c0). Events 3/4/5/6/7/8/9/0xB/0xC/0xD/0xE/0x10/0x11/0x12/0x13 measured there;
     /// event 5 (`Drone_EnableAll(0, hash)`) and event 7 (flag 0x80) are the drone-freeze pair.
     #[allow(clippy::too_many_arguments)]
-    fn event(&mut self, i: usize, kind: u8, p: Vec<u32>, objs: &Objects, ch: &mut Channels, w: &dyn World, frame: u32, out: &mut Vec<Request>) {
+    fn event(&mut self, i: usize, kind: u8, p: Vec<u32>, objs: &Objects, ch: &mut Channels, frame: u32, out: &mut Vec<Request>) {
         // NF_SCRIPTLOG=1 (or NF_LEVELLOG=1): every script event (op 0x12) fired — tick (script clock), game frame,
         // owning ScriptPlayer's placement index, script hashcode, stream, event kind, params. Lets the user see
         // e.g. that 07000005's EndLevel script (0x06000A23) fires event 0x11 → ch 0x1D, or that the truck script
@@ -807,17 +807,7 @@ impl Script {
             6 => {
                 self.flags |= 0x100;
                 let prev = i.checked_sub(1).map(|j| &self.streams[j]).filter(|s| matches!(s.kind, 1 | 2)).and_then(|s| s.obj);
-                // The snapshot reads the object's +0x90 matrix [M 0x1d94c0:125-134, Mat_Copy(src,dst)
-                // 0x1e3348]. An entity stream's object carries the keyed matrix at +0x90; an ANIM
-                // stream's object carries its discrete frame-0 pose there (`Script_GetInterp` case 2
-                // copies obj+0x90 as the source [M 0x1da158 case 2], `AnimObjectUpdate` keys it) —
-                // 060006d3 (the 0700004a lobby-arrival scene) snapshots its stream-3 body anim this
-                // way, so the enable pose is the anim's final pose, not Bond's frozen cab spot.
-                self.player_at = prev.and_then(|o| match objs.list.get(o) {
-                    Some(Some(Obj::Entity { matrix, .. })) => Some(*matrix),
-                    Some(Some(Obj::Anim { skin, script, frame, .. })) => w.discrete0(*skin, *script, *frame),
-                    _ => None,
-                });
+                self.player_at = prev.and_then(|o| match objs.list.get(o) { Some(Some(Obj::Entity { matrix, .. })) => Some(*matrix), _ => None });
                 self.player_mode = g(0) as u8;
                 // fix-final-blockers2 diagnostic: which stream/object the snapshot came from (the game's iVar5
                 // = record(i−1)+0x10 gated on record(i−1)+0x24 kind ∈ {1,2}, fallback `glb_players+0x90`
@@ -908,23 +898,9 @@ impl Script {
                 // at a parent-chain end" per the case-1 tail-Concat structure [M 0x1d9a08:106-133] — it
                 // REVERTED: 07000014's fusebox wire and 07000008's safe entities key LOCAL offsets and are
                 // render-verified with the base applied, so the game composes the base for unparented
-                // streams too (the decompile loses the step).)
-                // level-4a-complete EXCEPTion — a zero-key entity stream composes NO base: its
-                // `Script_GetInterp` collapses onto the raw pool entry at `first_key`
-                // [M 0x1da158: the zero-width search lands on key[first_key]], and those pool-tail
-                // keys are authored WORLD poses, not base-relative ones — 060006cf's stream 25
-                // (the ot25 enable marker, zero keys) reads pool[1409] = (1.80, −54.128, −3.453),
-                // Bond's freeze pose ON the held cab [D raw key dump; the SP #289 base is
-                // (0, −53.53, −3.38) [D placement]], while the SAME script's keyed stream 13
-                // carries local offsets (y 0.99 → −5.33 [D]) that NEED the base. Composing the
-                // base into the marker puts the enable at (1.80, −107.66, −6.83) — a column with
-                // no floor from −52 to −160 [D probe fb6g] — and `Player_Enable` 0x195498's
-                // mode-1 SphereIntersect only dispatches wire/creepwall hits, it does not push
-                // the player onto geometry [M 0x195498:90-111], so the base reading is
-                // unplayable. [S] unverified: the live check (gdbwatch SCRIPTINFO+0x40 + Bond's
-                // y through the −52 landing in a fresh-boot PCSX2) settles which matrix the game
-                // really hands `Player_Enable`.
-                let keyed = self.streams[i].last_key > self.streams[i].first_key;
+                // streams too (the decompile loses the step). See the report: #289's marker stays the
+                // open question (base-composed −107.66 = void on its column; raw −54.13 = the freeze pose;
+                // the game's mode-1 SphereIntersect rescue is the live check).)
                 let mut p = s.parent;
                 let mut n = 0;
                 while p >= 0 && (p as usize) < self.streams.len() && n < self.streams.len() {
@@ -932,7 +908,7 @@ impl Script {
                     p = self.streams[p as usize].parent;
                     n += 1;
                 }
-                if keyed { m = mul(&m, &self.matrix); }
+                m = mul(&m, &self.matrix);
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
             4 => {
@@ -1372,15 +1348,19 @@ impl Player {
                     self.activated = true;
                     if let Some(s) = self.info[self.cur].as_mut() { s.delay = 0; }
                 }
-                // The Tower-2 lift's hold (0x06000571's t1611 event 3 [D]) releases through ch 0x22
-                // — and the channel's WRITER is the landing cut-scene 0x060006cf's stream-27 event
-                // 0xD [34, 1] at the scene's last tick [D pack 0780004a.bin; switch_channels[34] =
-                // ch 0x22, SP #42's out [D placement]]: the cab holds the whole scene (Bond
-                // disabled on it), then the scene's end unpauses the lift. The old port stand-in
-                // ("the channel rises when the hold engages", docs/levels/0700004a.md §6) resumed
-                // the cab one tick into the hold — the pack script's event was invisible to the
-                // level-bin channel scans that justified it. The scans now cover the packs; the
-                // real writer exists, so the stand-in is gone (level-4a-complete).
+                // script-negative-delay [S stand-in, docs/levels/0700004a.md §6]: the Tower-2 lift
+                // (SP #42: mask 1, out 0x22 [D placement]) resumes ONLY while ch 0x22 is on — the
+                // game's case-2 rule above — and its script HOLDS itself at t1611 (stream 4's
+                // event 3 p0 = 0 → the −1 delay [D 0x06000571]). The disc carries no ch-0x22
+                // writer the port's scans reach (the 11 scripts' 0xD/0x11 events, the placements,
+                // the 13 TouchOnce plates — the same "no writer found" shape as ch 0x4a below),
+                // so the port marks the play the doc's reading ("the ch-0x22 SP out marks the
+                // play"): the channel rises when the hold engages, and the mask&1 rule then
+                // releases the hold through `SP_UnPause` — the game's path, not a delay override.
+                if w.level() == 0x0700_004a && self.scripts[self.cur] == 0x0600_0571
+                    && self.info[self.cur].as_ref().is_some_and(|s| s.delay < 0) {
+                    ch.set(0x22, 1, frame);
+                }
                 // The skip [M 0x1dbda8:129-141]: `Input_Action(-1, 0x19, 1)` — any player pressing the skip
                 // action — fast-forwards the current script via `Script_FFwd(cur, 1)`, unless the script is one
                 // of the three death NISs (`Script_IsDeathNIS` reads slot A's hash, always +0x1C).
@@ -1390,15 +1370,14 @@ impl Player {
                     }
                 }
                 if !self.info[self.cur].as_ref().is_some_and(Script::playing) {
-                    // level-4a-complete: the old ch-0x4a stand-in ("the lift's lobby arrival
-                    // completes the objective at the script's end") is GONE — the real writer is
-                    // 07000013's spawn TouchOnce #153, whose ch 0x4A completes 4a's "Gain access
-                    // to lobby" through the late AND [D 07000013 trigger #153; M 0x1827d8 the
-                    // enable+complete AND; docs/levels/07000013.md §2 already records the late
-                    // AND]. No 0700004a-resident writer exists ([D] the level's triggers, its
-                    // scripts and BOTH pack scripts 060006cf/060006d3 — their only 0xD targets
-                    // are 0x40 and 0x22), so the row completes on the next level's spawn, the
-                    // same shape as 12's objective completing on 4a's plate #277.
+                    // fix-finale-blockers [S, docs/levels/0700004a.md §6]: the Tower-2 lift — the
+                    // 0x06000571 script's last key parks the platform entity 150 units down at the
+                    // lobby. The game's own ch-0x4a writer ("the lift's lobby arrival") is not in
+                    // the data the port reaches (no mux, trigger, script event or SP writes it —
+                    // the scans), so the port completes the objective at the lift script's end.
+                    if w.level() == 0x0700_004a && self.scripts[self.cur] == 0x0600_0571 {
+                        ch.set(0x4a, 1, frame);
+                    }
                     if self.stay { self.state = 5; } else {
                         if self.other().is_some() { self.cur ^= 1; self.load(lib, objs, ch, w, frame, out); }
                         self.state = 3;
@@ -1707,14 +1686,11 @@ mod tests {
     use super::*;
     use nf_formats::nis::{Nis, Stream as NisStream};
 
-    /// A no-op `World` for tests: animation length 100; the discrete object 0 pose only for the
-    /// event-6 sister's body-anim hash (every other test's anims keep the old None).
+    /// A no-op `World` for tests: animation length 100, no discrete object 0.
     struct TestWorld;
     impl World for TestWorld {
         fn anim_length(&self, _script: u32) -> Option<u16> { Some(100) }
-        fn discrete0(&self, _skin: u32, script: u32, _frame: f32) -> Option<Mat4> {
-            (script == 0x0600_0042).then_some([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [2.5, -62.75, 4.25, 1.0]])
-        }
+        fn discrete0(&self, _skin: u32, _script: u32, _frame: f32) -> Option<Mat4> { None }
     }
 
     /// Event 0xB (`Script_EventHandler` 0x1d94c0:152-158) writes the weapon byte on the PREVIOUS stream's Anim
@@ -2031,108 +2007,5 @@ mod tests {
             let s = p2.info[0].as_ref().unwrap();
             assert!(s.clock > 1.0, "a zero delay runs the streams again (clock {})", s.clock);
         }
-    }
-
-    /// level-4a-complete sister A: `Script_EventHandler` case 6 snapshots the PREVIOUS stream's
-    /// object matrix even when that object is an ANIM (`Script_GetInterp` case 2 reads the anim
-    /// object's +0x90 discrete pose [M 0x1da158 case 2]; `Mat_Copy(src=obj+0x90, dst=+0x40)`
-    /// [M 0x1d94c0:125-134 with the src/dst order from 0x1e3348]) — 060006d3's arrival scene
-    /// (stream 4's ev06[0], prev stream 3 = the Bond body ANIM) enables Bond at the anim's final
-    /// pose [D pack 0790004a]. Fails on the old code, which matched only `Obj::Entity` and left
-    /// the snapshot `None` (the fallback re-enables Bond at his frozen cab spot).
-    #[test]
-    fn event_6_snapshots_an_anim_stream_object_pose() {
-        let anim_cmd = {
-            let mut v = vec![0x0a];
-            v.extend(0x0600_0042u32.to_le_bytes()); // the TestWorld's known-pose script
-            v.extend(0x0500_0004u32.to_le_bytes()); // skin
-            v.extend(1u32.to_le_bytes());            // start
-            v.push(0);
-            v
-        };
-        let event_cmd = {
-            let mut v = vec![0x12, 0x01, 0x06];
-            v.extend(1u32.to_le_bytes()); // param[0] = mode 1 (the collision-check arm)
-            v.push(0);
-            v
-        };
-        let nis = Arc::new(Nis {
-            hashcode: 0x0600_06d3,
-            camera: false,
-            loop_start: 0,
-            length: 100,
-            streams: vec![
-                NisStream { first_key: 0, last_key: 0, commands: anim_cmd },
-                NisStream { first_key: 0, last_key: 0, commands: event_cmd },
-            ],
-            keys: Vec::new(),
-        });
-        let mut script = Script::load(nis, IDENT, 1.0);
-        script.start(false);
-        let mut objs = Objects::default();
-        let mut ch = Channels::default();
-        let mut out = Vec::new();
-        let world = TestWorld;
-        let mut subs = Vec::new();
-        script.update(&mut subs, &Default::default(), &mut objs, &mut ch, &world, 0, &mut out);
-        script.free(&mut subs, &mut objs, &mut out);
-        let at = out.iter().find_map(|r| match r { Request::PlayerEnable { at, mode } => Some((*at, *mode)), _ => None });
-        let (at, mode) = at.expect("free() must push PlayerEnable after the event-6 flag [M 0x1da880:44-47]");
-        assert_eq!(mode, 1, "the event's param rides the enable's collide flag [M 0x1d94c0:133]");
-        let m = at.expect("the anim object's discrete pose is the snapshot — the old code left None");
-        assert!((m[3][1] + 62.75).abs() < 1e-3 && (m[3][0] - 2.5).abs() < 1e-3,
-            "the snapshot is the anim's discrete0 pose, got {:?}", m[3]);
-    }
-
-    /// level-4a-complete sister B: a ZERO-KEY entity stream composes NO script base — its
-    /// `Script_GetInterp` collapses onto the raw pool entry at `first_key` [M 0x1da158], and
-    /// 060006cf's pool[1409] = (1.80, −54.128, −3.453) is the authored WORLD freeze pose [D raw
-    /// pool dump]: the ot25 enable marker must sit ON the held cab, not at base+key
-    /// (1.80, −107.66, −6.83 — a column with no floor [D probe fb6g]). Fails on the old code,
-    /// which applied the base to every entity stream.
-    #[test]
-    fn zero_key_entity_stream_keeps_its_world_key() {
-        // Stream 0: Cmd::Entity { hash: 0, no parent, not spline, obj_type 0x19, no params }
-        // (op 0x07: op, hash u32, has_parent, parent, spline, obj_type, n, [params], pad).
-        let ent_cmd = {
-            let mut v = vec![0x07];
-            v.extend(0u32.to_le_bytes()); // hash 0 — control_create_object(0,0,0,0) [M disasm 0x1d8d24]
-            v.push(0); // has_parent = 0
-            v.push(0); // parent index (unused)
-            v.push(0); // spline = 0
-            v.push(0x19); // obj_type 25 — the enable marker class
-            v.push(0); // n params
-            v.push(0);
-            v
-        };
-        let nis = Arc::new(Nis {
-            hashcode: 0x0600_06cf,
-            camera: false,
-            loop_start: 0,
-            length: 575,
-            streams: vec![NisStream { first_key: 0, last_key: 0, commands: ent_cmd }],
-            keys: vec![nf_formats::nis::Key {
-                pos: [1.8, -54.128, -3.453, 1.0],
-                quat: [0.0, 0.0, 0.0, 1.0],
-                scale: 1.0,
-                w24: [0, 0, 0, 0],
-                w28: 0.0,
-                time: 575.0,
-            }],
-        });
-        // SP #289's base [D placement]: (0, −53.53, −3.38).
-        let base = [[1.0f32, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, -53.53, -3.38, 1.0]];
-        let mut script = Script::load(nis, base, 1.0);
-        script.start(false);
-        let mut objs = Objects::default();
-        let mut ch = Channels::default();
-        let mut out = Vec::new();
-        let world = TestWorld;
-        let mut subs = Vec::new();
-        script.update(&mut subs, &Default::default(), &mut objs, &mut ch, &world, 0, &mut out);
-        let m = objs.list.iter().flatten().find_map(|o| match o { Obj::Entity { matrix, .. } => Some(*matrix), _ => None });
-        let m = m.expect("the marker entity exists");
-        assert!((m[3][1] + 54.128).abs() < 1e-3 && (m[3][2] + 3.453).abs() < 1e-3,
-            "the zero-key marker keeps its world key (the old code composed the base: y −107.66), got {:?}", m[3]);
     }
 }

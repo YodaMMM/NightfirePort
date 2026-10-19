@@ -77,12 +77,7 @@ fn owners(sim: &nf_view::scene::Sim, level: u32) -> std::collections::BTreeSet<u
 /// The documented port-only [S] stand-in writers (never game owners).
 fn standins(level: u32) -> std::collections::BTreeSet<u8> {
     let mut o = std::collections::BTreeSet::new();
-    // level-4a-complete: 0700004a's old 0x22/0x4a stand-ins are gone. 0x22's writer is the pack
-    // script 060006cf's stream-27 event 0xD [34, 1] at the landing scene's end [D pack
-    // 0780004a.bin] (the level-bin scans that justified the stand-in never read the packs), and
-    // ch 0x4a has NO writer on 0700004a at all — its writer is 07000013's spawn plate #153 (the
-    // late AND [M 0x1827d8; D #153]).
-    let _ = level;
+    if level == 0x0700_004a { o.insert(0x22); o.insert(0x4a); } // docs/levels/0700004a.md §6
     o
 }
 

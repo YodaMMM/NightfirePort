@@ -1,8 +1,7 @@
 //! map-finale: the 0700004a walkthrough (docs/levels/0700004a.md). The Tower-2 elevator: the shaft's
 //! TouchOnce plates fire their floor channels as Bond descends (teleporting between floors is fine
 //! for walking), the first plate's ch 0x4d reveals "Gain access to lobby" [L record 4a], and the
-//! mission stays open on this level (ch 0x4a's writer is 07000013's spawn plate #153 — the late
-//! AND [M 0x1827d8; D #153]; docs/levels/0700004a.md §6). Opt-in via NF_ISO.
+//! mission stays open (ch 0x4a's completing writer is not ported — the doc's §6). Opt-in via NF_ISO.
 
 use nf_game::player::Input;
 
@@ -41,9 +40,8 @@ fn the_descent_plates_fire_and_the_objective_reveals() {
         assert!(fired, "the descent plate near y {y} fired ch {ch:#x} [D triggers]");
     }
     let sim = scene.sim.as_ref().unwrap();
-    // Sister: the completing channel 0x4a has NO writer on 0700004a at all — its writer is
-    // 07000013's spawn plate #153 (the late AND [M 0x1827d8; D #153]).
-    assert!(!sim.drones.channels.on(0x4a), "ch 0x4a never fires on 0700004a — the completion is 07000013's late AND");
+    // Sister: the completing channel 0x4a has no ported writer (the doc's §6) — the mission stays open.
+    assert!(!sim.drones.channels.on(0x4a), "ch 0x4a never fires without the lift's lobby arrival");
     assert!(!sim.drones.channels.on(100), "the Tower-2 mission stays open on this part");
     assert_eq!(sim.drones.level_exit, None, "no level exit on 0700004a [D — 13 touch plates only]");
 }

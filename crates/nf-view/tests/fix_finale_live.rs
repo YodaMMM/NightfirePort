@@ -216,12 +216,9 @@ fn the_0700001b_drakes_defeat_ends_the_space_station() {
 
 /// 0700004a: the lift (SP #42 "SCRIPTPLAYER_Lift", mode 1 [D]) plays 0x06000571 — the platform
 /// entity descends 150 units over 4950 ticks [D keys] — Bond rides it down the shaft, the floor
-/// plates fire (the walkthrough's channels), the −52 landing HOLDS the cab through the #289
-/// cut-scene (the lift's t1611 pause releases on ch 0x22 at the scene's end [D pack 0780004a,
-/// 060006cf stream 27 ev0d[34,1]]), and the parked cab sits inside the lobby touch #275 whose
-/// ch 0x84 starts the arrival scene [D pack 0790004a, 060006d3]. Sisters: ch 0x4a — 4a's
-/// objective-complete — never fires on this level (its writer is 07000013's spawn plate #153,
-/// the late AND [M 0x1827d8; D #153]); the lift's own start and resume channels do.
+/// plates fire (the walkthrough's channels), and the lobby arrival (the script's end; the nis.rs
+/// stand-in) completes "Gain access to lobby" (ch 0x4a [L record 4a]). Sister: ch 0x4a does not
+/// fire mid-ride (the script has ~2000 ticks to go at the check).
 #[test]
 fn the_0700004a_lift_ride_reaches_the_lobby() {
     let iso = iso();
@@ -232,68 +229,47 @@ fn the_0700004a_lift_ride_reaches_the_lobby() {
         sim.bond = nf_game::player::Bond::stand_at(&sim.world, [3.0, -7.0, -3.4], 0.0);
     }
     let y0 = scene.sim.as_ref().unwrap().bond.pos[1];
-    // Ride the whole script (5040 ticks + the #289 hold) — the plates fire as the platform passes
-    // them; the shaft garrison's fire is shrugged off (the ride is the system under test, not the
-    // fight). Bond is re-seated on the platform each segment: the shaft doors' auto-open on the
-    // lift's approach is not ported (docs/levels/0700004a.md §6), so the closed leaves scrape him
-    // off mid-ride — the walk test's teleporting-between-floors shape, now along the script's key
-    // line (t90 y0 → t5040 y0 − 150 [D 0x06000571 keys]). The cap carries the landing hold: the
-    // cab freezes t1611→~t2186 (#289's 575-tick scene [D length]) before the descent resumes —
-    // the re-seat line ignores the hold (a teleporting harness, not a walkreal), and the enable
-    // at the scene's end re-places Bond at the snapshot pose on the held cab anyway
-    // [M 0x1da880:44-47 + 0x1d94c0:125-134].
+    // Ride the whole script (5040 ticks) — the plates fire as the platform passes them; the shaft
+    // garrison's fire is shrugged off (the ride is the system under test, not the fight). Bond is
+    // re-seated on the platform each segment: the shaft doors' auto-open on the lift's approach is
+    // not ported (docs/levels/0700004a.md §6), so the closed leaves scrape him off mid-ride —
+    // the walk test's teleporting-between-floors shape, now along the script's key line
+    // (t90 y0 → t5040 y0 − 150 [D 0x06000571 keys]).
     let mut fired = Vec::new();
-    let mut disabled_seen = false;
-    // The hold model (the walkreal's): the script clock freezes between the landing scene's
-    // tick-0 disable and its ch-0x22 end, so the re-seat line must freeze with it — the raw
-    // line would teleport Bond 17 units BELOW the held cab during the scene.
-    let mut hold: f32 = 0.0;
-    let mut freeze: Option<u32> = None;
-    let mut ch22_tick: Option<u32> = None;
-    for t in 0..6300u32 {
+    for t in 0..5400u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
         scene.sim.as_mut().unwrap().drones.health.health = 100.0;
-        let sim = scene.sim.as_ref().unwrap();
-        if sim.disabled && freeze.is_none() && ch22_tick.is_none() { freeze = Some(t); }
-        if ch22_tick.is_none() && sim.drones.channels.on(0x22) { ch22_tick = Some(t); }
-        hold = match (freeze, ch22_tick) {
-            (Some(a), Some(b)) => (b - a) as f32,
-            (Some(a), None) => (t - a) as f32,
-            _ => 0.0,
-        };
-        drop(sim);
         if t % 30 == 0 {
             let sim = scene.sim.as_mut().unwrap();
-            let py = (y0 - ((t as f32 - 90.0 - hold).max(0.0)) * (150.0 / 4950.0)).max(y0 - 150.0);
+            let py = (y0 - ((t as f32 - 90.0).max(0.0)) * (150.0 / 4950.0)).max(y0 - 150.0);
             sim.bond.pos = [3.0, py + 1.2, -3.4];
         }
         let sim = scene.sim.as_ref().unwrap();
-        for ch in [0x3du32, 0x17, 0x18, 0x3f, 0x19, 0x45, 0x1a, 0x3e, 0x1b, 0x4f, 0x84, 0x40, 0x22] {
+        for ch in [0x3du32, 0x17, 0x18, 0x3f, 0x19, 0x45, 0x1a, 0x3e, 0x1b, 0x4f, 0x84] {
             if sim.drones.channels.on(ch) && !fired.contains(&ch) { fired.push(ch); }
         }
-        if sim.disabled { disabled_seen = true; }
         if t == 3000 {
             assert!(!sim.drones.channels.on(0x4a),
-                "sister: ch 0x4a never fires on 0700004a — the completion is 07000013's spawn plate #153 (the late AND [M 0x1827d8; D #153])");
+                "ch 0x4a waits for the lobby arrival (the script's end) — sister");
             assert!(sim.bond.pos[1] < y0 - 30.0, "Bond is riding the platform down (y {} from {y0})", sim.bond.pos[1]);
         }
-        if scene.sim.as_ref().unwrap().drones.channels.on(0x84) { break; }
+        if sim.drones.channels.on(0x4a) { break; }
     }
     {
-        let sim = scene.sim.as_ref().unwrap();
+        let sim = scene.sim.as_mut().unwrap();
         assert!(fired.contains(&0x3d) || fired.contains(&0x17), "descent plates fire during the ride ([D] floors), got {fired:?}");
-        assert!(fired.contains(&0x40), "the lift's t1610 event 0xD raised ch 0x40 — #289's start channel [D 06000571 stream 5 ev0d[64,1]]");
-        assert!(fired.contains(&0x22), "the landing scene's end raised ch 0x22 — the lift's resume channel [D pack 0780004a 060006cf stream 27 ev0d[34,1]]");
-        assert!(disabled_seen, "the landing scene disabled Bond (its tick-0 event 4 [D 060006cf stream 9 ev04])");
-        assert!(fired.contains(&0x84), "the cab parked inside the lobby touch #275 → ch 0x84, the arrival scene's start [D]");
-        assert!(sim.drones.channels.on(0x84),
-            "the arrival cut-scene 060006d3's start channel is live (its tick-0 event 4's disable rides the view's request drain — walkreal_0700004a pins the window; this raw step_bond loop does not drain it)");
-        assert!(sim.bond.pos[1] < y0 - 140.0, "the ride covered the shaft (y {:.2} from {y0})", sim.bond.pos[1]);
-        assert!(!sim.drones.channels.on(0x4a),
-            "sister: ch 0x4a stays OFF through the whole level [D — no 0700004a writer; the completion is 07000013's late AND]");
+        assert!(sim.drones.channels.on(0x4a), "the lift's lobby arrival completes the objective [L record 4a; nis.rs stand-in]");
+        // fix-objective-banner: the monitor runs at the TOP of the tick (Game_Run order), so it
+        // completes the objective the tick after the channel rises.
+        for _ in 0..2 { sim.step_bond(Input::default(), false, false, false); }
+        assert_eq!(sim.drones.mission.states[17][0], 4, "the monitor completes 'Gain access to lobby'");
     }
 }
 
+/// The unported start states (fix-levels-sweep's table): 0xb4 (07000007) despawns at once
+/// [M 0x173f00], the mode-7 0x85 drones on 07000011/12/13/15 resolve to Idle/Alert/Attack — never
+/// stuck [M 0x168910:32-36] — and 07000004's assassin (dtype 0xf → 0xd → 0xa6/0xa7 [M 0x14c938])
+/// enters the ninja chain at alert 1.0.
 #[test]
 fn the_unported_start_states_behave_like_the_game() {
     let iso = iso();
