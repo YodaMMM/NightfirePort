@@ -419,6 +419,10 @@ pub fn bug_replay(iso: &str, zip: &Path, shot: Option<&Path>) -> anyhow::Result<
     let get = |n: &str| files.iter().find(|(f, _)| f == n).map(|(_, b)| b.clone());
     let report = String::from_utf8_lossy(&get("report.txt").context("the zip has no report.txt")?).into_owned();
     let field = |k: &str| report.lines().find_map(|l| l.strip_prefix(&format!("{k}: ")).map(str::to_string));
+    // net-desync-detail: an online desync report replays the lockstep transcript (below).
+    if field("kind").as_deref() == Some("desync") {
+        return desync_replay(iso, &get, &field);
+    }
     let replay = crate::replay::Replay::from_bytes(&get("session.nfr").context("the report has no session recording (taken outside a level?)")?)?;
     let entry = get("entry.sav").map(|b| decode_ram_save(&b)).transpose().map_err(anyhow::Error::msg)?;
     let difficulty: u32 = field("difficulty").and_then(|d| d.parse().ok()).unwrap_or(2);
@@ -443,6 +447,59 @@ pub fn bug_replay(iso: &str, zip: &Path, shot: Option<&Path>) -> anyhow::Result<
     if let Some(p) = shot {
         crate::bug_replay_shot(&scene, p)?;
         out.push(format!("wrote {}", p.display()));
+    }
+    Ok(out)
+}
+
+/// net-desync-detail: `--bug-replay` of an online desync report (extended to the online
+/// transcripts) — rebuilds the match from the report's `match-settings.bin` (the tag-1
+/// match-start payload: settings + seed), replays `match-log.bin` headless (the lockstep
+/// transcript IS every machine's view) and names the first tick/component where the replay's
+/// component hashes differ from the report's recorded `hash-history.txt` (the reporter's view;
+/// the replay reproduces the honest state, so the first difference is the symptom the reporter
+/// carried). Returns the lines it printed.
+fn desync_replay(
+    iso: &str,
+    get: &dyn Fn(&str) -> Option<Vec<u8>>,
+    field: &dyn Fn(&str) -> Option<String>,
+) -> anyhow::Result<Vec<String>> {
+    let settings_bin = get("match-settings.bin").ok_or_else(|| anyhow::anyhow!("the report has no match-settings.bin"))?;
+    let (settings, seed) = crate::mpnet::decode_match_start(&settings_bin).ok_or_else(|| anyhow::anyhow!("match-settings.bin does not decode (tag-1 payload expected)"))?;
+    let mp = crate::mpnet::match_to_mp(&settings, seed);
+    let (base, log) = crate::desync::decode_match_log(&get("match-log.bin").ok_or_else(|| anyhow::anyhow!("the report has no match-log.bin"))?).map_err(anyhow::Error::msg)?;
+    let hist = crate::desync::HashHistory::from_text(&String::from_utf8_lossy(&get("hash-history.txt").ok_or_else(|| anyhow::anyhow!("the report has no hash-history.txt"))?));
+    let mut out = vec![
+        format!("desync report {} — version {}", field("report_id").unwrap_or_default(), field("version").unwrap_or_default()),
+        format!("level {:08x} seed {seed:#x} scenario {:#x}, {} match ticks from {base}, {} history rows", mp.level_code, mp.scenario, log.len(), hist.entries.len()),
+    ];
+    let arena = format!("{:08x}.bin", mp.level_code);
+    let mut scene = crate::load_mp_carry(iso, &arena, false, None, mp)?;
+    let sim = scene.sim.as_mut().ok_or_else(|| anyhow::anyhow!("the level has no Sim"))?;
+    crate::net_slot0_setup(sim);
+    let mut first: Option<(u32, usize)> = None;
+    let mut compared = 0usize;
+    for (i, row) in log.iter().enumerate() {
+        let tick = base + i as u32;
+        let comps = crate::net_tick_comps(sim, row, 0);
+        if let Some(rec) = hist.comps_at(tick) {
+            compared += 1;
+            if first.is_none() {
+                if let Some(c) = crate::desync::first_diff_component(&comps, &rec) {
+                    first = Some((tick, c));
+                }
+            }
+        }
+    }
+    out.push(format!("the replay covered {compared} recorded ticks"));
+    match first {
+        Some((tick, c)) => out.push(format!(
+            "FIRST DIFFERENCE: tick {} component {} ({}) — the replay's honest state leaves the reporter's recorded hashes there",
+            tick, c, crate::scene::NET_HASH_COMPONENT_NAMES[c],
+        )),
+        None => out.push("the replay matches the recorded hashes at every compared tick (the reporter's divergence came from something the transcript does not carry)".into()),
+    }
+    if let Some(c) = field("first_component") {
+        out.push(format!("the report recorded: first diverging component {c} at tick {}", field("desync_tick").unwrap_or_default()));
     }
     Ok(out)
 }

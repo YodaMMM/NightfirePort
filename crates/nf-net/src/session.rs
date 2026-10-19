@@ -129,6 +129,12 @@ pub enum Event {
     Resumed { tick: u32 },
     /// Both: state hashes disagree at `tick`. Session keeps running.
     Desync { tick: u32, local: u64, remote: u64 },
+    /// net-desync-detail: the peer's component hashes for the desync tick arrived
+    /// (`PT_HASHCOMPS`; both machines send theirs on seeing the desync).
+    HashComps { tick: u32, comps: [u64; proto::HASH_COMPONENTS] },
+    /// net-desync-detail: the peer's per-item breakdown of `component` for the desync tick
+    /// arrived (`PT_HASHDETAIL`).
+    HashDetail { tick: u32, component: u8, items: Vec<u64> },
     /// Both: a human slot's client left (timeout or graceful).
     ClientLeft { slot: u8, reason: LeaveReason },
     /// Client: no packets from the host for `Config::timeout_ms`.
@@ -809,6 +815,13 @@ impl<T: Transport> Session<T> {
         self.delay_sched.iter().rev().find(|(f, _)| *f <= tick).map_or(self.cfg.input_delay, |(_, d)| *d)
     }
 
+    /// net-desync-detail: the hash-exchange cadence in force (`Config::hash_every` — a desync
+    /// is only ever detected at a multiple of it; the watcher's per-item detail rows ride the
+    /// same cadence).
+    pub fn hash_every(&self) -> u32 {
+        self.cfg.hash_every
+    }
+
     /// The input-delay schedule (from_tick, delay) — identical on every machine that heard
     /// every announcement in time (net-internet; the agreement test compares them).
     pub fn delay_schedule(&self) -> &[(u32, u32)] {
@@ -893,16 +906,15 @@ impl<T: Transport> Session<T> {
         self.pump_peers(now_ms);
     }
 
-    /// Host: record the per-tick inputs a tick actually RAN with (the app
-    /// calls this right after `ready_inputs` returned `Some`, before stepping
-    /// the sim). The recorded log is the exact transcript a late joiner
-    /// replays — bit-exact by construction. Host-only; ticks must arrive in
-    /// ascending order (a gap is filled with NEUTRAL and cannot verify — the
-    /// snapshot walk stops at the log's end).
+    /// Record the per-tick inputs a tick actually RAN with (the app calls this
+    /// right after `ready_inputs` returned `Some`, before stepping the sim).
+    /// The recorded log is the exact transcript a late joiner replays —
+    /// bit-exact by construction — and, since net-desync-detail, every
+    /// machine's desync report carries it (`Session::run_log`): the lockstep
+    /// transcript is the same on every machine, so the client records it too.
+    /// Ticks must arrive in ascending order (a gap is filled with NEUTRAL and
+    /// cannot verify — the snapshot walk stops at the log's end).
     pub fn record_run_tick(&mut self, tick: u32, inputs: [Input; MAX_AGENTS]) {
-        if !matches!(self.role, Role::Host { .. }) {
-            return;
-        }
         if self.run_log.is_empty() {
             self.log_base = tick;
         }
@@ -927,6 +939,14 @@ impl<T: Transport> Session<T> {
         if self.late_joined {
             self.late_confirm_due = Some(self.now_ms);
         }
+    }
+
+    /// net-desync-detail: the recorded run transcript — the base tick
+    /// `run_log[0]` holds and the per-tick rows since the match start (the
+    /// app records every executed tick on every machine; the desync report's
+    /// `match-log.bin` is this log at rest). Empty before the first tick runs.
+    pub fn run_log(&self) -> (u32, &[[Input; MAX_AGENTS]]) {
+        (self.log_base, &self.run_log)
     }
 
     /// Leave the session with an explicit reason (the late joiner reports a
@@ -1063,6 +1083,22 @@ impl<T: Transport> Session<T> {
     /// choices mirror rides this). Peers see [`Event::Data`].
     pub fn send_data(&mut self, bytes: Vec<u8>) {
         let pkt = Packet::Data { bytes };
+        self.send_to_peers(&pkt);
+    }
+
+    /// net-desync-detail: send this machine's component hashes for `tick` — the desync
+    /// exchange's first packet (both machines send it on seeing the desync). Peers see
+    /// [`Event::HashComps`].
+    pub fn send_hash_comps(&mut self, tick: u32, comps: [u64; proto::HASH_COMPONENTS]) {
+        let pkt = Packet::HashComps { tick, comps };
+        self.send_to_peers(&pkt);
+    }
+
+    /// net-desync-detail: send the first diverging component's per-item hashes for `tick`
+    /// (the report's slot diagnosis). Peers see [`Event::HashDetail`]. At most
+    /// [`proto::HASH_DETAIL_CAP`] items ride one packet (a bigger world truncates the tail).
+    pub fn send_hash_detail(&mut self, tick: u32, component: u8, items: Vec<u64>) {
+        let pkt = Packet::HashDetail { tick, component, items };
         self.send_to_peers(&pkt);
     }
 
@@ -1768,6 +1804,14 @@ impl<T: Transport> Session<T> {
                     }
                 }
             }
+            Packet::HashComps { tick, comps } => {
+                // net-desync-detail: the peer's components for the desync tick — handed up for
+                // the diagnosis (the session keeps running; the app writes the report).
+                events.push(Event::HashComps { tick, comps });
+            }
+            Packet::HashDetail { tick, component, items } => {
+                events.push(Event::HashDetail { tick, component, items });
+            }
             Packet::Keepalive { .. } => {
                 if let Role::Host { peers, .. } = &mut self.role {
                     if let Some(p) = peers.iter_mut().find(|p| p.addr == from) {
@@ -2128,6 +2172,13 @@ impl<T: Transport> Session<T> {
                         }
                     }
                 }
+            }
+            Packet::HashComps { tick, comps } => {
+                // net-desync-detail: the host's components for the desync tick.
+                events.push(Event::HashComps { tick, comps });
+            }
+            Packet::HashDetail { tick, component, items } => {
+                events.push(Event::HashDetail { tick, component, items });
             }
             Packet::Keepalive { .. } => {
                 if let Role::Client { host_peer, .. } = &mut self.role {

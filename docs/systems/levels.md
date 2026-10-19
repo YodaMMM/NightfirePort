@@ -11,20 +11,28 @@ phase 4) and are listed in §3 only.
 ## 1. Story order and status
 
 The story order is the case order of `ResetMap_LevelCode2Img` (0x1d5258) — the level codes ascend in mission order.
+**Mission names (corrected 2026-10-19):** a level's mission is the mission-select row whose first level is the
+nearest at or below it — `CAMPAIGN` in crates/nf-view/src/menu.rs (sp_level +0x0c [L EE snapshot]): Double Cross
+07000001, The Exchange 07000005, Night Shift 07000009, Chain Reaction 0700000c, Phoenix Fire 07000011, Countdown
+07000014, Equinox 0700001b (Paris Prelude, Alpine Escape, Enemies Vanquished, Deep Descent and Island Infiltration are
+driving missions, 0x09…). Content agrees: 07000001's exit loads 07000002 [D], whose objective is "Destroy Mayhew's
+computer"; 07000007 is the party where Bond first sees Drake. The game's internal MFX names are the other way round
+(`01Castle*` = Mayhew's estate, `02Mayhew*` = Drake's castle); this table used to take the mission names from them
+and from the row position, which was wrong.
 Level names are the `UpdateMFX_*` function names (ACTION.ELF symbol table) and the `Txt_BindLabel` ids (*sourced*,
 wiki.nightfire.dev, CC BY 4.0 — facts with attribution).
 
 | Code | Name (MFX updater / mission) | Maps | Objects | Placements | Drones | Collision | Parse | Game logic¹ | Render² |
 |---|---|---|---|---|---|---|---|---|---|
-| 07000001 | Paris Prelude (Castle A) `UpdateMFX_01CastleA` | 54 | 215 | 331 | 20 | 190 | ok | ok | 07000005's systems³ |
-| 07000002 | The Exchange (Castle B) `UpdateMFX_01CastleB` | 52 | 353 | 502 | 25 | 321 | ok | ok | ³ |
-| 07000003 | Alpine Escape (Castle C) `UpdateMFX_01CastleC` | 51 | 347 | 511 | 20 | 335 | ok | ok | ³ |
-| 07000004 | Enemies Vanish (Castle D) `UpdateMFX_01CastleD` | 50 | 54 | 70 | 1 | 42 | ok | ok | ³ |
-| 07000005 | Paris Prelude (Mayhew A) `UpdateMFX_02MayhewA` | 51 | 178 | 363 | 16 | 120 | ok | ok | **the test level** |
-| 07000006 | The Exchange (Mayhew B) `UpdateMFX_02MayhewB` | 49 | 223 | 813 | 32 | 174 | ok | ok | ³ |
-| 07000007 | Alpine Escape (Mayhew C) `UpdateMFX_02MayhewC` | 48 | 291 | 513 | 58 | 256 | ok | ok | ³ |
-| 07000008 | Enemies Vanish (Mayhew D) `UpdateMFX_02MayhewD` | 52 | 208 | 308 | 26 | 170 | ok | ok | ³ |
-| 07000009 | Night of the Agent (Tower A) `UpdateMFX_03TowerA` | 40 | 151 | 288 | 6 | 120 | ok | ok | ³ |
+| 07000001 | Double Cross pt. 1 `UpdateMFX_01CastleA` | 54 | 215 | 331 | 20 | 190 | ok | ok | 07000005's systems³ |
+| 07000002 | Double Cross pt. 2 `UpdateMFX_01CastleB` | 52 | 353 | 502 | 25 | 321 | ok | ok | ³ |
+| 07000003 | Double Cross pt. 3 `UpdateMFX_01CastleC` | 51 | 347 | 511 | 20 | 335 | ok | ok | ³ |
+| 07000004 | Double Cross pt. 4 `UpdateMFX_01CastleD` | 50 | 54 | 70 | 1 | 42 | ok | ok | ³ |
+| 07000005 | The Exchange pt. 1 `UpdateMFX_02MayhewA` | 51 | 178 | 363 | 16 | 120 | ok | ok | **the test level** |
+| 07000006 | The Exchange pt. 2 `UpdateMFX_02MayhewB` | 49 | 223 | 813 | 32 | 174 | ok | ok | ³ |
+| 07000007 | The Exchange pt. 3 `UpdateMFX_02MayhewC` | 48 | 291 | 513 | 58 | 256 | ok | ok | ³ |
+| 07000008 | The Exchange pt. 4 `UpdateMFX_02MayhewD` | 52 | 208 | 308 | 26 | 170 | ok | ok | ³ |
+| 07000009 | Night Shift pt. 1 `UpdateMFX_03TowerA` | 40 | 151 | 288 | 6 | 120 | ok | ok | ³ |
 | 0700000a | (Tower B) `UpdateMFX_03TowerB` | 38 | 601 | 800 | 20 | 543 | ok | ok | ³ |
 | 0700000b | (Tower C) `UpdateMFX_03TowerC` | 51 | 242 | 380 | 10 | 177 | ok | ok | ³ |
 | 0700000c | `UpdateMFX_PowerStationA1` | 46 | 274 | 575 | 40 | 231 | ok | ok | ³ |
@@ -185,7 +193,7 @@ Cut-scene-worthy ones (the rest are object animations — vents, doors, indicato
 
 | Level | SP | Script | Waits on |
 |---|---|---|---|
-| 07000007 | #312 "OBJECT_UrnBreak" (mask 2) | 0x0600007A (archive) | a bullet hit — `SP_Hit` bit 2, not modelled in the port yet (the priming itself is: state 1 at the first tick, tested) |
+| 07000007 | The Exchange pt. 3 `SP_Hit` bit 2, not modelled in the port yet (the priming itself is: state 1 at the first tick, tested) |
 | 07000008 | #295 "ScriptPlayer_CableCar" (out 1) | 0x0600004C (archive) | mux #235: AND(ch 0x4A, ch 4) — the cable-car boarding |
 | 07000005 | #320 "ScriptPlayer_EndLevel" (out 101) | 0x06000A23 (archive) | ch 0x65 (the level-exit chain, already works) |
 | 07000006 | #809 "Script-IceTrigger" (out 40) | 0x06000A28 (archive) | ch 0x28 |
