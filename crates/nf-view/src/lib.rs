@@ -30,6 +30,7 @@ pub mod menu_music;
 pub mod settings;
 pub mod movie;
 pub mod mpnet;
+pub mod mpfx;
 pub mod clipboard;
 pub mod scene;
 pub mod replay;
@@ -415,6 +416,19 @@ fn face_other_aid(sim: &mut scene::Sim) -> bool {
         .map(|o| (o[0] - me[0]).atan2(o[2] - me[2]));
     if let Some(y) = face(sim.bond.pos) { sim.bond.yaw = y; }
     for b in sim.mp_bonds.iter_mut().flatten() { if let Some(y) = face(b.pos) { b.yaw = y; } }
+    // NF_MP_FACE_TURN="<slot>:<radians>[:<pitch>][,…]" (mp-remote-fx render aid): those slots then turn by
+    // that much — e.g. 1:3.14159 faces slot 1 away, so its rounds land on the wall the host looks at.
+    // Every machine applies it (the yaw is hashed).
+    if let Ok(v) = std::env::var("NF_MP_FACE_TURN") {
+        // "<slot>:<yaw>[:<pitch>]" — the optional pitch is SET (negative = down).
+        for part in v.split(',') {
+            let f: Vec<&str> = part.split(':').map(str::trim).collect();
+            let (Some(sl), Some(dy)) = (f.first().and_then(|x| x.parse::<usize>().ok()), f.get(1).and_then(|x| x.parse::<f32>().ok())) else { continue };
+            let pitch = f.get(2).and_then(|x| x.parse::<f32>().ok());
+            let b = if sl == sim.mp_local_slot { Some(&mut sim.bond) } else { sim.mp_bonds.get_mut(sl).and_then(|b| b.as_mut()) };
+            if let Some(b) = b { b.yaw += dy; if let Some(p) = pitch { b.pitch = p; } }
+        }
+    }
     true
 }
 
@@ -1620,6 +1634,7 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     let driver = &s.driver;
     sim.drones.audio.update(sim.sfx.as_ref(), (pos, norm, [0.0, 1.0, 0.0], f), &|h| driver.is_playing(h));
     let cmds = sim.drones.audio.take_commands();
+    let (mpfx_log, listener, frame) = (std::env::var_os("NF_MPFX_LOG").is_some(), pos, sim.drones.frame);
     // `Sound_UpdateListeners` 0x1dd278 (fix-room-sound): every frame, from the active viewer's cel —
     // `SFXSetEnvironment(cel s16 +0x98, underwater = (cel+0x3c & 0x10000000) || env >= 20)` [M disasm
     // 0x1dd4b0-0x1dd4fc]; a viewer with no cel sends nothing and the IOP keeps its previous targets.
@@ -1635,7 +1650,14 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
         for c in cmds {
             match c {
                 nf_game::sound::Cmd::Listener { pos, norm, dir, .. } => { drv.set_listener(pos, dir, norm); }
-                nf_game::sound::Cmd::Start { handle, id, pos, radii } => { drv.start(out, id, pos, handle, radii.map(|(i, o)| (i as i32, o as i32))); }
+                nf_game::sound::Cmd::Start { handle, id, pos, radii } => {
+                    // mp-remote-fx's log: every driver start with its position (NF_MPFX_LOG).
+                    if mpfx_log {
+                        let d = pos.map(|p| ((p[0] - listener[0]).powi(2) + (p[1] - listener[1]).powi(2) + (p[2] - listener[2]).powi(2)).sqrt());
+                        eprintln!("[snd] f{frame} start {id:#x} handle {handle} at {pos:?} dist {d:?}");
+                    }
+                    drv.start(out, id, pos, handle, radii.map(|(i, o)| (i as i32, o as i32)));
+                }
                 nf_game::sound::Cmd::Position { handle, pos } => drv.set_position(handle, None, pos),
                 nf_game::sound::Cmd::Remove { handle } => drv.remove(handle, None),
             }
@@ -4385,9 +4407,25 @@ impl ApplicationHandler for App {
                                     let c = self.net_clock.map_or(0.0, |c| c.elapsed().as_secs_f64());
                                     eprintln!("[netrate] tick {} at {:.1} s ({:.1}/s), stalls {}", self.net_tick, c, self.net_tick as f64 / c.max(1e-3), NET_STALLS.swap(0, std::sync::atomic::Ordering::Relaxed));
                                 }
-                                // Render-check aid (NF_NET_SHOT=<tick>): the F12 capture at that match tick.
-                                if std::env::var("NF_NET_SHOT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(self.net_tick) {
+                                // Render-check aid (NF_NET_SHOT=<tick>[,<tick>…] or <a>-<b>): the F12 capture at
+                                // those match ticks (a range catches the 2-tick muzzle flashes, mp-remote-fx).
+                                let tick = self.net_tick;
+                                if std::env::var("NF_NET_SHOT").ok().is_some_and(|v| v.split(',').any(|x| match x.trim().split_once('-') {
+                                    Some((a, b)) => a.parse::<u32>().ok().zip(b.parse::<u32>().ok()).is_some_and(|(a, b)| (a..=b).contains(&tick)),
+                                    None => x.trim().parse::<u32>().ok() == Some(tick),
+                                })) {
                                     NET_SHOT_DUE.store(true, std::sync::atomic::Ordering::Relaxed);
+                                }
+                                // NF_NET_SHOT_FX=<n> (mp-remote-fx render aid): capture the first n ticks on
+                                // which another slot fired (its muzzle flash is up for this tick's draw).
+                                if let Some(n) = std::env::var("NF_NET_SHOT_FX").ok().and_then(|v| v.parse::<u32>().ok()) {
+                                    let f = sim.drones.frame;
+                                    let fired = (0..nf_net::MAX_AGENTS).any(|sl| sl != sim.mp_local_slot && sim.mp_fx.last_shot[sl] == Some(f));
+                                    if fired && NET_SHOT_FX_TAKEN.load(std::sync::atomic::Ordering::Relaxed) < n {
+                                        NET_SHOT_FX_TAKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                        eprintln!("[mpfx] capture at frame {f} (a remote slot fired)");
+                                        NET_SHOT_DUE.store(true, std::sync::atomic::Ordering::Relaxed);
+                                    }
                                 }
                             }
                             // The lock's rising edge auto-draws the handgun (`Upgrade_Weapon(6)` = 2 [L])
@@ -5082,7 +5120,8 @@ pub fn run() -> Result<()> {
             let slot = v.first().copied().unwrap_or(1.0) as usize;
             let (dist, height, angle) = (v.get(1).copied().unwrap_or(2.5), v.get(2).copied().unwrap_or(1.2), v.get(3).copied().unwrap_or(0.0));
             let mut scene = scene;
-            let st = scene.sim.as_ref().and_then(|s| s.mp_body_state(slot)).context("--mp-look: that slot has no drawn body")?;
+            // mp-remote-fx: a dead slot's death body counts too.
+            let st = scene.sim.as_ref().and_then(|s| s.mp_body_state(slot).or_else(|| s.mp_body_death(slot).map(|(p, y, _)| (p, y, 0.0)))).context("--mp-look: that slot has no drawn body")?;
             let (p, yaw) = (st.0, st.1 + angle);
             // The body's `pos` is Bond::pos (floor + 1.1) for humans, the bot's eye − BOT_EYE for bots.
             let feet_y = p[1] - 1.1;
@@ -5440,6 +5479,7 @@ fn reach_config() -> Option<nf_net::p2p::ReachConfig> {
 
 /// The NF_NET_SHOT render-check aid's pending capture (set inside the tick loop's sim borrow).
 static NET_SHOT_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NET_SHOT_FX_TAKEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// NF_NET_RATE's stall counter.
 static NET_STALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

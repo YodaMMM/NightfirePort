@@ -39,7 +39,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 /// Per-weapon op-1 sound id remap (docs/systems/sound.md §7 line 313): the first-person gun's animation script
 /// emits a sound id that the game replaces based on the player's weapon (`+0xDC → +0x62`). The P2K (weapon 2) has no
 /// remap — 0x403 plays as-is. Other weapons' fire sounds are remapped so they do not all sound like the P2K [M].
-fn remap_op1_sound(id: u32, weapon: u8) -> u32 {
+pub(crate) fn remap_op1_sound(id: u32, weapon: u8) -> u32 {
     match (id, weapon) {
         (1, 7) | (1, 9) => 2,
         (0x403, 3) | (0x403, 5) => 2,
@@ -384,6 +384,9 @@ pub struct Sim {
     pub mp_dead_ticks: [u32; nf_net::MAX_AGENTS],
     /// Each human slot's held weapon (the session's `Input::held`; the local slot reads `gun.weapon`).
     pub mp_held: [u8; nf_net::MAX_AGENTS],
+    /// mp-remote-fx: the other players' and the bots' shot effects/sounds (draw/audio state, not
+    /// hashed — `crate::mpfx`).
+    pub mp_fx: crate::mpfx::MpFx,
     /// Aim mode's cursor (`BL+0x118 / +0x11C`) and its smoothed copy (`+0x120 / +0x124`), −1…1 across half the screen.
     pub cursor: [f32; 2],
     pub cross: [f32; 2],
@@ -1838,7 +1841,7 @@ impl Sim {
                 // mp-body-look: an MP body is a drawn object like a drone — `Lights_CalcAmbientLight`
                 // 0x1cb178 ramps its obj+0x100..0x102 toward the cel it stands in. Without this the
                 // bodies kept the 0xff sentinel: drawn at 1.0 where the arena cel says 0x46 (07000023).
-                self.mp_body_state(slot).map(|(p, _, _)| p)
+                self.mp_body_state(slot).map(|(p, _, _)| p).or_else(|| self.mp_body_death(slot).map(|(p, _, _)| p))
             } else if let Some(di) = self.char_drone[ci] {
                 let d = &self.drones.list[di];
                 Some([d.pos[0], d.pos[1], d.pos[2]])
@@ -2847,6 +2850,9 @@ impl Sim {
         if let Some(shared) = self.net_rng_shared.take() {
             self.net_rng = Some(std::mem::replace(&mut self.drones.rng, shared));
         }
+        // mp-remote-fx: offline (split/bots) the bots' shot effects flush here; online the flush
+        // runs after the per-slot combat (`step_net_combat`).
+        if self.net_rng.is_none() { self.flush_mp_fx(); }
     }
 
     /// drive-ptp: the ACTION→DRIVING handover for a `0x0730xxxx` interlude — the port of
@@ -5478,6 +5484,8 @@ pub const VIEW_MODEL_NODE: u32 = u32::MAX - 1;
 
 /// Tracer slots (bullets drawn at once).
 const TRACER_SLOTS: usize = 32;
+/// mp-remote-fx: the MP trail slots start here (after the gadget/laser beam slots TRACER_SLOTS..+6).
+const MP_TRACER_BASE: usize = TRACER_SLOTS + 16;
 
 /// A unit-axis matrix (rows = axes) whose z row points along `dir` at `pos`, x kept horizontal
 /// (up × z; world x when `dir` is vertical). sg5-laser-draw: the yaw/pitch euler the tripbomb beam
@@ -6136,6 +6144,20 @@ impl Scene {
                         add_instance(level, &winst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                         mp_body_weapons.insert(attachments.len() as u32, (slot, w));
                         attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+                        // mp-remote-fx: its muzzle flash — the guards' `DroneWeap_FireWeapon` flash (mesh
+                        // weapon_data+0x4C on the datum id + 1, the muzzle [M]); shown 2 ticks per shot of
+                        // the slot (`Sim::mp_fx.last_shot`). The PS2's human players draw theirs on the
+                        // first-person view model only (`Draw_MuzzleFlash` 0x1a3fe0); the opponent's
+                        // third-person flash is the port's [S] so the other machine sees the shot.
+                        if let Some((fmesh, rgb)) = wd.muzzle_flash(w) {
+                            let muzzle = skin.datums.iter().find(|x| x.id == datum_id + 1 && x.bone >= 0);
+                            if let (Some(&(fmap, fobject)), Some(md)) = (level.by_hash.get(&fmesh), muzzle) {
+                                let finst = Instance { map: fmap, object: fobject, matrix: ident, placement: placement.clone() };
+                                add_instance(level, &finst, Layer::Effect, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                                mp_body_weapons.insert(attachments.len() as u32, (slot, w));
+                                attachments.push(Attachment { character: ci, bone: md.bone as usize, local: anim::quat_trans_to_mat(md.q, md.t), flash: Some(rgb), tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+                            }
+                        }
                     }
                 }
             }
@@ -6271,6 +6293,13 @@ impl Scene {
             for slot in 1..TRACER_SLOTS {
                 pool_replay(&mut groups, &rec, Some(attachments.len() as u32));
                 attachments.push(Attachment { character: 0, bone: 0, local: tinst.matrix, flash: None, tracer: Some(slot), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+            }
+            // mp-remote-fx: the other players' / bots' trails (`Sim::mp_tracer`), MP only.
+            if mp.is_some() {
+                for k in 0..crate::mpfx::MP_TRACER_SLOTS {
+                    pool_replay(&mut groups, &rec, Some(attachments.len() as u32));
+                    attachments.push(Attachment { character: 0, bone: 0, local: tinst.matrix, flash: None, tracer: Some(MP_TRACER_BASE + k), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+                }
             }
             // fix-gadgets-live: the gadget BEAM draws the game's own sprites, not the trail stand-in —
             // `Draw_LaserBeam` 0x1a4560 sets the beam object's gfx to 0x2000131 "lazer" (the class-'N'
@@ -7167,6 +7196,7 @@ impl Scene {
             mp_bot_pickups: Vec::new(),
             mp_dead_ticks: [0; nf_net::MAX_AGENTS],
             mp_held: [2; nf_net::MAX_AGENTS],
+            mp_fx: Default::default(),
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
@@ -7307,6 +7337,25 @@ impl Scene {
             // 0x18fcd8 — the game's MP bodies run the PLAYER set, not the drone tables].
             if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
                 let s = self.sim.as_ref()?;
+                // mp-remote-fx: a dead slot's body plays the death script (substate 0xd) from its
+                // death tick, held on the last frame until the respawn [M Player_CheckForDeath
+                // 0x190810:89-93, Player_ChangeSubState 0x190630 case 0xd — `mp_body_pose`'s arm 1].
+                if let Some((pos, yaw, ticks)) = s.mp_body_death(slot) {
+                    let st = nf_formats::mpanim::MpBodyState {
+                        mp: true, weapon: 0, substate: 0xd, fwd: 0.0, strafe: 0.0,
+                        phase: MP_WALK_INIT, hold: 0, one_shot_time: 0.0, water_level: -9.9,
+                    };
+                    let script = self.mp_anim_sets.as_ref().map(|sets| nf_formats::mpanim::mp_body_pose(sets, 0, &st).script)
+                        .unwrap_or(nf_formats::mpanim::DEATH_SCRIPT);
+                    let sc = s.scripts.get(&script)?;
+                    let time = (ticks as f32).min(sc.length.max(1) as f32);
+                    let mut local = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time)?;
+                    let hip = local.first().map_or(0.0, |r| r.0[1]);
+                    if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
+                    let world = anim::world_pose(&local, &c.skin);
+                    let m = nf_formats::placement::object_matrix([0.0, yaw, 0.0], [pos[0], pos[1] - 1.0 + drone_height(hip), pos[2]]);
+                    return Some((anim::skin_matrices(&world, &c.skin), world, m));
+                }
                 let (pos, yaw, speed) = s.mp_body_state(slot)?;
                 // The PLAYER anim set the game's MP body runs, through 700v7's port: the set by the
                 // held weapon's class and the stance (`PlayerAnimSetInitNormal`/`InitCrouch`
@@ -7422,6 +7471,19 @@ impl Scene {
                 ];
             }
             if let Some(slot) = a.tracer {
+                if slot >= MP_TRACER_BASE {
+                    // mp-remote-fx: a remote shot's trail — `tracer_matrix`'s convention (+Z along the
+                    // flight, scaled by one tick of travel, cut at the contact).
+                    let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
+                    let Some(t) = self.sim.as_ref().and_then(|s| s.mp_tracer(slot - MP_TRACER_BASE)) else { return far };
+                    let d = t.dir;
+                    let yaw = d[0].atan2(d[2]);
+                    let pitch = -d[1].atan2((d[0] * d[0] + d[2] * d[2]).sqrt());
+                    let mut m = nf_formats::placement::object_matrix([pitch, yaw, 0.0], t.pos);
+                    let len = t.speed.min(t.left.max(0.0));
+                    for c in 0..3 { m[2][c] *= len; }
+                    return m;
+                }
                 // fix-laser-beam: the gadget BEAM (Draw_LaserBeam / Draw_TaserBeam via
                 // Player_MuzzleFlash 0x1a4298:107-137 — one stretched sprite from the muzzle to the
                 // crosshair-ray hit). fix-gadgets-live: slots TRACER_SLOTS / +1 carry the game's own
@@ -7762,6 +7824,9 @@ impl Scene {
             // An MP body's weapon draws only while its slot holds that weapon.
             if let Some(&(slot, w)) = self.mp_body_weapons.get(&(k as u32)) {
                 if self.sim.as_ref().is_none_or(|s| s.mp_body_held(slot) != w) { return far; }
+                // mp-remote-fx: the dead body holds nothing — `Player_CheckForDeath` 0x190810 drops
+                // the gun as a pickup and runs `Player_WeaponNone` [M :43-63].
+                if self.sim.as_ref().is_some_and(|s| s.mp_body_death(slot).is_some()) { return far; }
             }
             if a.dropped {
                 // fix-objects: `!p.gone` — a TAKEN drop stays in the list as a tombstone (drone.rs
@@ -7876,6 +7941,16 @@ impl Scene {
                     None => collapse(&datum),
                 };
             }
+            // mp-remote-fx: an MP body's flash (the held weapon's — the gate above) lives 2 ticks
+            // after each of the slot's shots, as the guards' (`DroneWeap_FireWeapon`).
+            if let Some(&(slot, _)) = self.mp_body_weapons.get(&(k as u32)) {
+                let Some(s) = self.sim.as_ref() else { return collapse(&datum) };
+                let now = s.drones.frame;
+                return match s.mp_fx.last_shot.get(slot).copied().flatten().filter(|&f| now.saturating_sub(f) < 2) {
+                    Some(f) => muzzle_flash_matrix(&datum, f ^ (k as u32).wrapping_mul(0x9e37_79b9)),
+                    None => collapse(&datum),
+                };
+            }
             // AI-driven: the flash object lives 2 ticks after each shot (`DroneWeap_FireWeapon`).
             if let Some((s, di)) = drone_of(a.character as usize) {
                 let now = s.drones.frame;
@@ -7930,7 +8005,7 @@ impl Scene {
             return self.view_models.get(&s.gun.weapon) != Some(&ci);
         }
         if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
-            return s.mp_body_state(slot).is_none();
+            return s.mp_body_state(slot).is_none() && s.mp_body_death(slot).is_none();
         }
         let c = &self.characters[ci];
         // mp-character-data: a parked MP body is hidden — the draw moves the Character matrix to
@@ -8985,6 +9060,16 @@ impl Sim {
                     let p = [shot.pos[0] + (end[0] - shot.pos[0]) * tt, shot.pos[1] + (end[1] - shot.pos[1]) * tt, shot.pos[2] + (end[2] - shot.pos[2]) * tt];
                     if world.segment(shot.pos, p).is_some() { best = None; hit_human = None; }
                 }
+                // mp-remote-fx: the resolved round for the effects pass (draw/audio only).
+                {
+                    use crate::mpfx::{MpShot, MpShotHit};
+                    let at = |t: f32| [shot.pos[0] + (end[0] - shot.pos[0]) * t, shot.pos[1] + (end[1] - shot.pos[1]) * t, shot.pos[2] + (end[2] - shot.pos[2]) * t];
+                    let (hit, fend) = if let Some((h, t)) = hit_human { (MpShotHit::Human(h), at(t)) }
+                        else if let Some((j, t)) = best { (MpShotHit::Bot(m.bots[j].slot), at(t)) }
+                        else if let Some((t, normal, material)) = world.segment_surface_bullet(shot.pos, end) { (MpShotHit::World { normal, material }, at(t)) }
+                        else { (MpShotHit::Miss, end) };
+                    self.mp_fx.events.push(MpShot { shooter: m.bots[i].slot, bot: true, weapon: shot.weapon, from: shot.pos, dir: shot.dir, end: fend, hit, damage: dmg });
+                }
                 if let Some((h, _)) = hit_human {
                     let shooter = m.bots[i].slot;
                     if m.register_bullet_hit(h, shooter) {
@@ -9105,7 +9190,8 @@ impl Sim {
                 water, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
             };
             b.tick_ctx(&self.world, &ctx, &input);
-            b.sfx_out.clear();
+            // mp-remote-fx: the body's jump launch / head bump sounds play at the flush.
+            self.mp_fx.body_sounds.extend(b.sfx_out.drain(..));
             b.prev_pos = prev_tick_pos;
             self.mp_body_speed[slot] = ((b.pos[0] - before[0]).powi(2) + (b.pos[2] - before[2]).powi(2)).sqrt() * 60.0;
         }
@@ -9124,6 +9210,8 @@ impl Sim {
             Some((b.pos, b.yaw, s.mp_body_speed[slot]))
         } else {
             let bot = m.bots.iter().find(|b| b.slot == slot)?;
+            // mp-remote-fx: a dead bot lies in its death pose (`Sim::mp_body_death`), not standing.
+            if bot.dead { return None; }
             // The bot's position is its eye (BOT_EYE above the feet); the body draws from the feet.
             let p = bot.brain.pos;
             Some(([p[0], p[1] - BOT_EYE, p[2]], bot.brain.yaw, s.mp_body_speed[slot]))
@@ -9171,9 +9259,15 @@ impl Sim {
             let dir = [cp * sy, sp, cp * cy];
             let range = 200.0;
             let mut end = [head[0] + dir[0] * range, head[1] + dir[1] * range, head[2] + dir[2] * range];
-            if let Some((t, _, _)) = self.world.segment_surface_bullet(head, end) {
+            let mut world_hit: Option<([f32; 3], u8)> = None;
+            if let Some((t, n, m)) = self.world.segment_surface_bullet(head, end) {
                 end = [head[0] + (end[0] - head[0]) * t, head[1] + (end[1] - head[1]) * t, head[2] + (end[2] - head[2]) * t];
+                world_hit = Some((n, m));
             }
+            // mp-remote-fx: the resolved shot for the effects pass (draw/audio only).
+            let at = |t: f32| [head[0] + (end[0] - head[0]) * t, head[1] + (end[1] - head[1]) * t, head[2] + (end[2] - head[2]) * t];
+            let mut fx = crate::mpfx::MpShot { shooter, bot: false, weapon: inp.held, from: head, dir, end,
+                hit: world_hit.map_or(crate::mpfx::MpShotHit::Miss, |(normal, material)| crate::mpfx::MpShotHit::World { normal, material }), damage: 0.0 };
             let mut best: Option<(f32, usize)> = None;
             for victim in 0..nf_net::MAX_AGENTS {
                 if victim == shooter || self.mp_dead_ticks[victim] > 0 { continue; }
@@ -9207,12 +9301,16 @@ impl Sim {
                     let nearer = best.is_some_and(|(th, _)| th < ts) || bot_hit.is_some_and(|(tb, _)| tb < ts);
                     if !nearer {
                         if let Some(m) = self.mp.as_mut() { m.damage_site(damage, shooter); }
+                        fx.hit = crate::mpfx::MpShotHit::Site; fx.end = at(ts); fx.damage = damage;
+                        self.mp_fx.events.push(fx);
                         continue;
                     }
                 }
             }
             if let Some((tb, j)) = bot_hit.filter(|(tb, _)| best.is_none_or(|(th, _)| *tb < th)) {
-                let _ = tb;
+                if let Some(m) = self.mp.as_ref() { fx.hit = crate::mpfx::MpShotHit::Bot(m.bots[j].slot); }
+                fx.end = at(tb); fx.damage = damage;
+                self.mp_fx.events.push(fx);
                 let frame = self.drones.frame;
                 if let Some(m) = self.mp.as_mut() {
                     m.bots[j].health -= damage;
@@ -9227,7 +9325,9 @@ impl Sim {
                 }
                 continue;
             }
-            let Some((_, victim)) = best else { continue };
+            let Some((tv, victim)) = best else { self.mp_fx.events.push(fx); continue };
+            fx.hit = crate::mpfx::MpShotHit::Human(victim); fx.end = at(tv); fx.damage = damage;
+            self.mp_fx.events.push(fx);
             self.mp_hp[victim] -= damage;
             if self.mp_hp[victim] <= 0.0 {
                 self.mp_hp[victim] = 0.0;
@@ -9261,6 +9361,8 @@ impl Sim {
         }
         // 3. This machine's own health is the slot's (the HUD, the death sequence's start).
         self.drones.health.health = self.mp_hp[local];
+        // mp-remote-fx: this tick's shot effects / sounds (draw/audio only, after every hashed write).
+        self.flush_mp_fx();
     }
 
     /// mp-join-in-progress: create the late joiner's agent at the announced join tick — the
