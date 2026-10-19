@@ -247,7 +247,7 @@ fn walk_arrival_to_the_chasers_spawn() {
 /// PCSX2 watch of switch_channels[243] (0x26fc90+243) and Bond's position through the launch
 /// cinema settles whether the port's cinema-Bond placement or the volume's live window is wrong.
 #[test]
-#[ignore = "U-051: the ch-0xf3 hurt volume kills pit-floor Bond between the chaser's spawn and the defeat — needs the live ch-243 window"]
+#[ignore = "U-051 ANSWERED (docs/systems/hurt-volumes.md): the volume window is 0x0600090a stream 6 ticks 1611..2170 [D] and the game's Bond escapes on the pack flight — the port has no jetpack substate, so pit-floor Bond dies; the re-seat stand-in is documented in fix_finale_live"]
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());

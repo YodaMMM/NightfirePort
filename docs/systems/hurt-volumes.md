@@ -166,3 +166,50 @@ hold, hits == 0), `hurt_02_live`, `interact_07000006_live` (#373 inert), `fix_fi
    −24.1 valley floor under #42–44 — expect the drone's health to drop by 1000·damage_taken and
    the death selector to fire (the drone-side delivery the port infers from NDrone2_DealWithObjHit
    0x13fff0; not yet live-pinned).
+
+### U-051 answered (hurt-volumes-16b, 2026-10-19): the 07000016 finale window
+
+The volume #309 "HurtPoly-ShuttleLaunch" (gate 0xf3, type 2, damage 1000, box x −30.7..35.3,
+y −24.1..−21.3, z −197.3..−133.8 [D]) is live for a bounded, player-outsmartable window — the game
+does NOT move Bond out of its box, and the port does not either; the difference is the flight the
+pack buys:
+
+1. **When ch 0xf3 (243) rises.** The launch script **0x0600090a "ShuttleLaunch"** (SP #272, length
+   7810 [D]) raises it from **stream 6's event-0xD write at script tick 1611 and drops it at 2170**
+   [D the script's stream-6 commands + the port's scriptlog]. The disc's order puts the whole pulse
+   BEFORE the spawner writes (ch 0xf0 at tick 2180 [D]) — the chaser fight never overlaps the pulse.
+2. **Where the game puts Bond.** The pack cinema **0x06000631** streams from the loadable pack
+   **07800016.bin** (the level archive's type-0xC record `(0x06000631, flag 1)` →
+   `LoadableLoad` 0x1d69e8's nibble-8 pack [M 0x1d4880 case 0xC; D measured]). Its Bond-actor stream
+   (**stream 8, kind 1**) carries **exactly one key at t747, pos (3.57, −22.76, −179.55)** [D the
+   pack's 205-key dump] — the actor never moves: the pack cinema is the pickup close-up, and the
+   snapshot the cinema's **event 6** takes for the hand-back is the PREVIOUS stream's live entity
+   matrix [M `Script_EventHandler` 0x1d94c0:73-84 takes record(i−1) gated on kind ∈ {1,2}] = that
+   same pit-floor pose. `Script_Free` 0x1da880:46-49 hands it to **`Player_Enable` 0x195498**, which
+   **teleports** the player: `obj+0x30 = matrix[3]`, `+0x40` follows, the look re-derived through
+   `vecutil_cartesian_to_spherical_acc`, then `control_unlink_object` +
+   `build_LinkToRoom(obj, 1, glb_world)` (straddle flag 1) [M 0x195498 param_2 path]. So the game's
+   Bond re-enables at (3.57, −22.76, −179.55) — **INSIDE the volume's box**, exactly where the port
+   re-enables him. The port's cinema path is faithful; the bug U-051 saw is not a misplaced re-seat.
+3. **The escape is the pack flight.** Between the re-enable (cinema tick 750) and the pulse
+   (script tick 1611) the game's player has ~861 ticks (≈14.4 s) of control at the pit floor with
+   the pack picked up. The pit's door (13.9, −23.1, −166.4) locks on ch 240/241, and ch 0xf0 rises
+   only at tick **2180** — after the pulse drops [D] — so no door escape exists before it; the pit
+   holds no ladder/wire placement (the near-pit census: doors, spawners #257/#293, the pickups at
+   y −9.1 [D]). The survival mechanism is the pack's own flight (the port enumerates no jetpack
+   substate — the substate list is walk/climb/grapple/swim/wire/creep/zipline/zero-g [M
+   player.rs consts + the symtab's Player_SS*]) — **[S] the flight's controls and physics are the
+   one unverified piece; live check below.**
+4. **The port's stand-in.** `fix_finale_live` re-seats Bond on the upper floor once the cinema
+   hands control back — the documented stand-in for the pack flight [S], needed only because the
+   test fires ch 0x81 from the upper floor (the game's Bond is at the pit when the pack trigger
+   fires; the re-enable then leaves him where he already was). `walkreal_07000016_live`'s tail
+   stays `#[ignore]`d for the same reason (its reason text cites this section).
+
+**Live checks for the main agent (U-051 closure):**
+5. PCSX2, fresh boot of 07000016, play to the pack pickup: watch `switch_channels[243]`
+   (0x26fc90 + 243·4) and the player position (obj+0x30) from the pack cinema's end to the launch.
+   Expected: position == (3.57, −22.76, −179.55) at the re-enable; the player RISES out of the pit
+   (the pack flight) before ch 243 rises at the launch script's tick 1611; the volume never deals
+   damage. If the player instead walks a route (ladder/door not in the port's census), the
+   position trace shows it.
