@@ -208,7 +208,7 @@ fn the_script_players_settle_the_story_handoff() {
 }
 
 /// KIND: the env 0xDF (#5 Rain_generator, params (0,1),(1,1),(2,4),(3,6) [D]) — `Env_Create`
-/// 0x1e5d20 sets the level's rain. The port's env state carries the drops. Sister: a rainless
+/// 0x17b968 sets the level's rain. The port's env state carries the drops. Sister: a rainless
 /// level load would leave no rain boxes — asserted via the kind-1 rain env existing.
 #[test]
 fn the_env_generator_sets_rain() {
@@ -217,7 +217,7 @@ fn the_env_generator_sets_rain() {
     w.tick(Default::default(), false);
     w.tick(Default::default(), false);
     let sim = w.scene.sim.as_ref().unwrap();
-    let env = sim.drones.env.as_ref().expect("the rain env exists [D #5; M Env_Create 0x1e5d20]");
+    let env = sim.drones.env.as_ref().expect("the rain env exists [D #5; M Env_Create 0x17b968]");
     assert_eq!(env.kind, 1, "drop type 1 = rain [M Env_Create type byte; D param 0 = 1]");
     assert!(!env.boxes.is_empty(), "the rain boxes from the level's 0x32 Rainboxes exist");
 }

@@ -114,16 +114,14 @@ fn a_bullet_opens_the_shoji_ss_and_the_e_key_refuses_it() {
     // Walk near the shoji and fire at the panel through the real gun path.
     w.walk_nav_to([target[0] + 1.2, target[1], target[2] + 1.2], "beside the shoji", 1.8);
     face_and_fire(&mut w, [target[0], target[1] + 1.0, target[2]], "the shoji panel");
-    {
-        let s = w.scene.sim.as_ref().unwrap();
-        let any_open = s.drones.sss.list.iter().any(|ss| ss.state != 0x40);
-        if any_open {
-            return; // the bullet operated the SS [M SS_Operate 0x1a9df8 mask 2]
-        }
-    }
-    // The bullet path is position-sensitive; assert the operate mask instead when the shot
-    // couldn't land: the SS's operate mask is 2 (bullets), never 8/4 — checked on the sim state.
+    // The shot lands through the real gun path: the SS leaves idle 0x40 [M SS_Operate 0x1a9df8
+    // mask 2 — the bullet operate these placements carry]. No early-out fallback: this asserts.
     let s = w.scene.sim.as_ref().unwrap();
+    assert!(
+        s.drones.sss.list.iter().any(|ss| ss.state != 0x40),
+        "the bullet operates the shoji SS (state leaves 0x40) [M SS_Operate 0x1a9df8 mask 2]"
+    );
+    // The placements' operate rule stands too: every 07000001 SS takes bullets, never walk/E-use.
     assert!(
         s.drones.sss.list.iter().all(|ss| ss.mask & 0x8 == 0 && ss.mask & 0x4 == 0),
         "every 07000001 SS operates on bullets only [D placements p2=2; M 0x1a9df8]"
@@ -156,14 +154,9 @@ fn bullets_shatter_the_glass_and_vases_and_the_sister_stays_whole() {
     let s = w.scene.sim.as_ref().unwrap();
     let dead = s.drones.breaks.list.iter().filter(|b| b.dead).count();
     let kills = s.drones.break_kills.len();
-    if dead == 0 && kills == 0 {
-        // The shot didn't land (position-sensitive); the sister assertion still pins the state:
-        // no breakable died without a bullet, and the health rule holds on the sim state.
-        assert!(s.drones.breaks.list.iter().all(|b| !b.dead || b.health < 0.0),
-            "a breakable is dead only under the damage rule [M 0x12bfd8:44-50]");
-    } else {
-        assert!(dead >= 1 && kills >= 1, "the kill records queue for the presentation [M 0x12b970]");
-    }
+    // No fallback: the shot lands through the real fire path and the kill must record.
+    assert!(dead >= 1 && kills >= 1,
+        "the bullet kills the breakable and the kill records queue [M 0x12bfd8:44-50, 0x12b970]");
     // Sister: a fresh load, no shots — every breakable whole.
     let mut w2 = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("reload"));
     past_intro(&mut w2);
@@ -337,14 +330,10 @@ fn e_use_on_the_monitor_takes_the_camera_feed() {
     }
     let s = w.scene.sim.as_ref().unwrap();
     let st = s.drones.monitors.list[0].state;
-    if st == 2 {
-        assert!(s.drones.channels.on(0) || true, "the viewed tick writes the sensor's monitor channel [M 0x1afcc8]");
-        assert!(s.drones.sensors.list.iter().any(|sn| sn.unhidden), "the watched sensor unhides [M 0x1afcc8]");
-    } else {
-        // The walk couldn't reach the console (position-sensitive); the sister still pins the
-        // state machine: idle without the E press.
-        assert_eq!(st, 0, "no E press → the monitor stays idle (the sister) [M 0x1b0058]");
-    }
+    // No fallback: the E pulses face the console and Monitor_Activate must fire [M 0x1b0058].
+    assert_eq!(st, 2, "the E press activates the monitor (state 2) [M 0x1b0058]");
+    assert!(s.drones.channels.on(0), "the viewed tick writes the sensor's monitor channel (p8 = 0) [M 0x1afcc8 — switch_channels[sensor+0x5C] = 1; D the level's sensor p8 = 0]");
+    assert!(s.drones.sensors.list.iter().any(|sn| sn.unhidden), "the watched sensor unhides [M 0x1afcc8]");
 }
 
 #[test]
