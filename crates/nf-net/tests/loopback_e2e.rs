@@ -239,6 +239,12 @@ fn run_600(corrupt_client: Option<usize>, corrupt_tick: u32, port: u16) -> (Peer
             break;
         }
     }
+    if corrupt_client.is_none() && (host.executed < target || clients.iter().any(|c| c.executed < target)) {
+        eprintln!("WEDGED at ms={ms}: host exec={} {}", host.executed, host.sess.debug_state());
+        for c in clients.iter() {
+            eprintln!("  client exec={} {}", c.executed, c.sess.debug_state());
+        }
+    }
     (host, clients, desyncs)
 }
 

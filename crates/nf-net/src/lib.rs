@@ -29,6 +29,7 @@ pub mod input;
 pub mod lobby;
 pub mod net;
 pub mod p2p;
+pub mod pace;
 pub mod discovery;
 pub mod directory;
 pub mod proto;
@@ -67,7 +68,7 @@ pub const MAX_AGENTS: usize = 16;
 /// records (334 B), the INPUT header grows to 15 bytes, JOIN_LOG chunks
 /// carry 3 ticks (16 agents × 24 B × 3 = 1152 B) and MAX_INPUT_COUNT_H2C
 /// drops to 3 so the largest relay packet still fits [`MAX_PACKET`] [S].
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 
 /// Build id carried in the handshake so mismatched executables refuse cleanly.
 /// The host app sets this (e.g. a build counter); both sides must match exactly.
