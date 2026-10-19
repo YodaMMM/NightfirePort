@@ -1,8 +1,10 @@
 //! zero-g-movement-1b: Bond's spacewalk substate against the real level. `Player_ZeroG` 0x192ab0
 //! runs as dispatch cases 8/9 [M Player_Update 0x193600:238-241]; the level's zero gravity is the
-//! p3 == 2 start [M Player_Init 0x1910f8 — pinned by fix_world_gravity_live]. These tests drive
-//! the real input path (`Sim::step_bond`) on 0700001b with the substate entered the way the
-//! game's script does (ChangeSubState 9 — the port's tests assign it directly, the swim-entry
+//! p3 == 2 start [M Player_Init 0x1910f8 — pinned by fix_world_gravity_live], and that same start
+//! ENTERS substate 8: `Player_StandAtNewPosition(.., 8)` in the `level start == 2` branch [M
+//! 0x1910f8 :178-183, now ported]. These tests drive
+//! the real input path (`Sim::step_bond`) on 0700001b with the slit's script entry (ChangeSubState
+//! 9 — the port's tests assign it directly, the swim-entry
 //! precedent, until the C_CHCHZEROG 0x216388 msg-0x4b wire lands; see
 //! docs/reports/zero-g-movement-1b.md): the thrusters move Bond along the object matrix, `vel`
 //! (BL+0x50) stays zero [M 0x192ab0:71], and nothing pulls him down.
@@ -54,12 +56,17 @@ fn zero_g_on_0700001b_thrusts_along_the_look_and_hangs() {
     assert!(sim.bond.pos[1] > y0 + 1.0, "lifted: {} → {} (sub {}, disabled {})",
         y0, sim.bond.pos[1], sim.bond.substate, sim.disabled);
     assert_eq!(sim.bond.vel, [0.0; 3], "no gravity sneaks into vel");
-    // Sister: the same lift input in the WALK substate does not lift — the spawn stands, and the
-    // substate never enters 8/9 on its own.
+    // Sister: the p3 == 2 start ITSELF enters the zero-G substate — `Player_StandAtNewPosition
+    // (.., 8)` in the `level start == 2` branch [M Player_Init 0x1910f8 :178-183; the daily
+    // audit 2026-10-17: the old "walk stays walk" pinned the port's missing start]. No script
+    // assignment: the same lift input lifts from the spawn's own substate 8 (the dispatch's
+    // cases 8/9 share Player_ZeroG [M Player_Update 0x193600:238-241]).
     let mut scene = nf_view::load(&iso, "0700001b.bin", false).expect("load 1b (sister)");
     let sim = loaded_sim(&mut scene);
+    assert_eq!(sim.bond.substate, nf_game::player::SS_ZEROG_8,
+        "the p3 == 2 start is substate 8 [M Player_Init 0x1910f8 :178-183]");
     let y0 = sim.bond.pos[1];
     for _ in 0..60 { step(sim, Input { lift: 1.0, ..Default::default() }); }
-    assert_eq!(sim.bond.substate, nf_game::player::SS_WALK, "walk stays walk");
-    assert!(sim.bond.pos[1] <= y0 + 0.01, "walk ignores the lift: {} vs {}", y0, sim.bond.pos[1]);
+    assert!(sim.bond.pos[1] > y0 + 1.0, "the spawn's own zero-G lifts: {} → {} (sub {})",
+        y0, sim.bond.pos[1], sim.bond.substate);
 }

@@ -118,7 +118,11 @@ impl Breaks {
     fn seg_box(a: V3, b: V3, lo: V3, hi: V3) -> bool {
         // Same rule as crate::props::seg_box: the bullet segment's AABB against the bounds grown
         // by 0.1 (the contact registers on the sphere touching the glist bounds).
-        let (g, mut mn, mut mx) = (0.1, [0.0; 3], [0.0; 3]);
+        Self::seg_box_grow(a, b, lo, hi, 0.1)
+    }
+
+    fn seg_box_grow(a: V3, b: V3, lo: V3, hi: V3, g: f32) -> bool {
+        let (_, mut mn, mut mx) = (g, [0.0; 3], [0.0; 3]);
         for k in 0..3 {
             mn[k] = a[k].min(b[k]);
             mx[k] = a[k].max(b[k]);
@@ -147,19 +151,42 @@ impl Breaks {
 
     /// The drone-contact arm ([M Break_Update 0x12bfd8:23-34 — only on GameState+0x12 ==
     /// 0x7000001, only kind == 2, damage = the drone's squared step × 20]). `level_01` is the
-    /// caller's `GameState+0x12 == 0x07000001` check.
-    pub fn drone_step(&mut self, drone_from: V3, drone_to: V3, level_01: bool) -> Vec<BreakEffect> {
+    /// caller's `GameState+0x12 == 0x07000001` check. `scripted_walk`: this tick's position
+    /// change was carried by the anim root motion (the port's `Drone::scripted_move`) —
+    /// glass-breach-guards-4's gate, the last paragraph.
+    ///
+    /// The contact stands in for the game's collision pair ([M 0x12bfd8:15 — the pane's obj+0xD0
+    /// list the collision pass fills): the pair exists when the body's movement CARRIES IT INTO
+    /// the pane's collision sheet — this tick's step segment crosses the pane's bounds. A body
+    /// whose approach merely closes distance (a guard walking up to the glass, or standing near
+    /// it) has no pair until the collision engages; the port's pane bake stops bodies at the
+    /// sheet, so the crossing IS the engagement. The previous 0.55-grown hull zone fired ~0.6
+    /// before any physical contact — a proximity kill the game's list cannot produce (a pressed
+    /// guard's position is collision-owned: zero net step, zero damage [M the SqDist rule]).
+    ///
+    /// **The scripted-walk gate (glass-breach-guards-4).** The drain is `Vec_SqDist3D(hitter+0x30,
+    /// hitter+0x40)` — the hitter's current vs previous position. The movement pass copies
+    /// +0x30 → +0x40 per object AFTER that object's anim/root-motion processing in the same walk
+    /// [M 0x1336f8:212 — the copy sits behind the per-object rotation/world-sphere work], so a
+    /// step carried by the anim root motion lands in BOTH +0x30 and +0x40 before the copy — it
+    /// reads 0 and never drains the pane. The move that shows in the pair is the AI steering
+    /// step. This is the [D] behaviour on 07000001: the placed guard g0's replayed intro script
+    /// (his state-3 walk-by, which the port demonstrably carries across pane 130's sheet at
+    /// 0xB+23) leaves the pane whole [D the observed run — pane 130 alive until the breach at
+    /// 0xB+911], while the breach squad's AI charge shatters it [D 0xB+911]. The held branch's
+    /// failure was exactly this: the replayed scripted walk killed 01's breakables nobody shot
+    /// (interact_07000001_live.rs:171).
+    pub fn drone_step(&mut self, drone_from: V3, drone_to: V3, level_01: bool, scripted_walk: bool) -> Vec<BreakEffect> {
         let mut kills = Vec::new();
-        if !level_01 { return kills; }
+        if !level_01 || scripted_walk { return kills; }
         let sq = (drone_to[0] - drone_from[0]).powi(2)
             + (drone_to[1] - drone_from[1]).powi(2)
             + (drone_to[2] - drone_from[2]).powi(2);
         if sq == 0.0 { return kills; }
         let dmg = sq * 20.0;
         for br in self.list.iter_mut().filter(|b| !b.dead && b.kind == 2) {
-            // The contact is the drone's body inside the glass bounds this tick.
-            let inside = drone_to.iter().zip(br.lo).zip(br.hi).all(|((&v, l), h)| v >= l && v <= h);
-            if inside {
+            // The contact: this tick's step crosses the pane's bounds (the collision pair).
+            if Self::seg_box_grow(drone_from, drone_to, br.lo, br.hi, 0.0) {
                 br.health -= dmg;
                 if br.health < 0.0 {
                     br.dead = true;
@@ -226,13 +253,29 @@ mod tests {
         // drone arm; damage = squared step × 20 — a 0.5-step guard crosses 5.0, a vase (kind 0)
         // never takes drone damage.]
         let mut b = one(2, 0.0);
-        let kills = b.drone_step([5.0, 8.0, -1.5], [5.3, 8.0, -1.5], true);
+        let kills = b.drone_step([5.0, 8.0, -1.5], [5.3, 8.0, -1.5], true, false);
         assert_eq!(kills.len(), 1, "0.09 · 20 = 1.8 damage kills the 0-health glass");
         let mut v = one(0, 0.0);
-        assert!(v.drone_step([5.0, 8.0, -1.5], [5.3, 8.0, -1.5], true).is_empty(),
+        assert!(v.drone_step([5.0, 8.0, -1.5], [5.3, 8.0, -1.5], true, false).is_empty(),
             "kind != 2 never takes drone damage [M 0x12bfd8:31-34]");
         let mut g = one(2, 0.0);
-        assert!(g.drone_step([5.0, 8.0, -1.5], [5.3, 8.0, -1.5], false).is_empty(),
+        assert!(g.drone_step([5.0, 8.0, -1.5], [5.3, 8.0, -1.5], false, false).is_empty(),
             "off 07000001 the drone arm is dead [M 0x12bfd8:24]");
+    }
+
+    #[test]
+    fn a_scripted_walk_by_never_drains_the_pane_and_the_sister_ai_step_still_does() {
+        // glass-breach-guards-4 [D 750p + M 0x1336f8:212]: the placed guard g0's replayed intro
+        // script walks him across pane 130's sheet at 0xB+23 in the port, yet the game's pane
+        // survives until the breach at 0xB+911 — the root-motion-carried step lands in BOTH
+        // +0x30 and +0x40 (the movement pass copies +0x30 → +0x40 after the anim processing in
+        // the same walk), so SqDist(pos, prev) = 0 and the drain never fires. The SAME crossing
+        // by an AI-steered mover (the breach squad's charge) drains [M 0x12bfd8:26-27].
+        let mut b = one(2, 0.0);
+        assert!(b.drone_step([5.0, 8.0, -1.5], [5.3, 8.0, -1.5], true, true).is_empty(),
+            "the scripted (root-motion-carried) walk-by reads SqDist(pos, prev) = 0 [M 0x1336f8:212]");
+        assert!(!b.list[0].dead, "pane 130 survives g0's scripted walk-by [D the observed run]");
+        let kills = b.drone_step([5.0, 8.0, -1.5], [5.3, 8.0, -1.5], true, false);
+        assert_eq!(kills.len(), 1, "the same crossing by an AI-steered mover drains [M 0x12bfd8:26-27]");
     }
 }
