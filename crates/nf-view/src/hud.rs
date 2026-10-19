@@ -858,7 +858,171 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             }
         }
     }
+    // The MP match's own panes (radar, clock, team score, standings) — nothing on SP levels.
+    if s.mp.is_some() { mp_panes(&mut h, s, t); }
     h.finish()
+}
+
+// ─── The in-match MP panes (port draw over `nf_game::mp::hud::MpHudSnapshot`) ───────────────
+/// The window height the HUD is shown at (pixels), for the lists that keep a constant on-screen text
+/// size like the online lobby (`FrontEnd::view_h`). The window loop stores it each frame
+/// ([`set_view_h`]); headless renders keep the 720 default (the --shot size).
+static VIEW_H_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x4434_0000); // 720.0
+
+/// Store the window height for the MP standings' constant-size layout.
+pub fn set_view_h(h: f32) {
+    if h > 0.0 { VIEW_H_BITS.store(h.to_bits(), std::sync::atomic::Ordering::Relaxed); }
+}
+
+fn view_h() -> f32 { f32::from_bits(VIEW_H_BITS.load(std::sync::atomic::Ordering::Relaxed)) }
+
+/// The MP-only HUD textures: the radar ring 0x03000088 [L RadarSprInfo[0] @0x2bdd60] and the blip
+/// sheet 0x0300016f [M 0x19f4e8:52]. Loaded for MP scenes only — the SP pane list never creates the
+/// radar (`hud_radar_live` pins that an SP scene has neither).
+pub const MP_TEXTURES: [u32; 2] = [0x0300_0088, RADAR_TEX];
+
+/// The standings list's layout for a participant count, in HUD units (512×448) [S port layout]:
+/// `(scale, row pitch, max rows)`. Up to the game's 8 slots the rows are the HUD font's own size
+/// (scale 1, one font line each). Past 8 (the port's 9–16 player matches) the text keeps a
+/// constant ON-SCREEN size like the online lobby — `k = 720 / view_h` HUD units per 720p unit —
+/// at 0.75 of the 720p row, and the list takes as many rows as fit in `avail` units; the viewer's
+/// own row is always among them ([`nf_game::mp::hud::MpHudSnapshot::board`]).
+pub fn mp_board_layout(participants: usize, line_h: f32, view_h: f32, avail: f32) -> (f32, f32, usize) {
+    if participants <= nf_game::mp::hud::GAME_SLOTS {
+        let pitch = line_h + 1.0;
+        return (1.0, pitch, participants);
+    }
+    let k = (720.0 / view_h.max(1.0)).clamp(0.4, 1.25);
+    let scale = 0.75 * k;
+    let pitch = (line_h + 1.0) * scale;
+    // One row is kept back for the "+N" line when the list is cut.
+    let fit = (avail / pitch).floor().max(2.0) as usize;
+    let rows = if participants <= fit { participants } else { fit - 1 };
+    (scale, pitch, rows)
+}
+
+/// A participant's name for the standings: a human's codename (`MPSettings+slot·0x30+0x00`), a
+/// bot's character short name (the debriefing's label 0x10002e2+character), else "Player N" /
+/// "Bot N" [S].
+fn mp_name(m: &nf_game::mp::MpMatch, lang: Option<&nf_formats::hud::Lang>, slot: usize) -> String {
+    let p = &m.settings.players[slot];
+    if slot < m.settings.human_count as usize {
+        if !p.codename.is_empty() { return p.codename.clone(); }
+        return format!("Player {}", slot + 1);
+    }
+    nf_game::mp::MpMatch::bot_short_name_label(p.skin)
+        .and_then(|l| lang.and_then(|lg| lg.bind(l)))
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("Bot {}", slot + 1 - m.settings.human_count as usize))
+}
+
+/// Cut `s` so its laid-out width at `scale` fits `max_w` HUD units.
+fn fit_text(font: &nf_formats::hud::Font, s: &str, scale: f32, max_w: f32) -> String {
+    let mut out = s.to_string();
+    while !out.is_empty() && font.layout(&out, 0.0, 0.0).1 * scale > max_w { out.pop(); }
+    out
+}
+
+/// The in-match MP panes from the frame's [`nf_game::mp::hud::MpHudSnapshot`]:
+/// - the radar (`radar_frame`, the game's projection [M 0x19f6e8]) at the top-right, the ring hidden
+///   when the viewer's radar toggle is off [M 0x19f6e8:102-105];
+/// - the match clock `mm:ss` (`Timer_Seconds2String` mode 2 [M 0x1deaa8]) top-centre and, in a team
+///   game, the `"%d - %d"` team score (`MP_GetTeamScore` 0x18b338 [M]) under it;
+/// - the standings list (port-only [S] — the game's per-viewer score pane is not decoded yet):
+///   rank, name, display score; the viewer's row highlighted; ≤ 8 participants at the HUD font's
+///   size, 9–16 compact ([`mp_board_layout`]).
+/// Positions are port choices [S]; the clock/score/list colours are the HUD's cream/white.
+fn mp_panes(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) {
+    let Some(m) = s.mp.as_ref() else { return };
+    let me = s.mp_local_slot.min(nf_game::mp::MP_MAX_SLOTS - 1);
+    let radar_on = m.settings.players[me].radar_on != 0;
+    let snap = nf_game::mp::hud::MpHudSnapshot::build(m, me, radar_on);
+    let font = &t.font;
+
+    // The radar. The viewer matrix rows from the render camera's axes (`camera_brackets`' build):
+    // the game negates view x and z [M disasm 0x19f888-0x19f8b0]; with row 0 = −right and row 2 =
+    // forward a blip to the right of the viewer lands right of the ring centre and one ahead lands
+    // above it [S — the port's camera-axis mapping onto viewer+0x120].
+    let yaw = s.bond.yaw;
+    let pitch = s.bond.pitch * std::f32::consts::FRAC_PI_2;
+    let fwd = [pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()];
+    let right = [-yaw.cos(), 0.0, yaw.sin()];
+    let up = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]];
+    let rot = [[-right[0], -right[1], -right[2]], up, fwd];
+    let objs: Vec<RadarObj> = snap.radar.iter().map(|o| RadarObj { pos: o.pos, argb: o.argb, kind: o.kind }).collect();
+    let ring_tex = h.tex_dims(0x0300_0088);
+    let ring_tex = if ring_tex.0 > 0.0 { ring_tex } else { (64.0, 64.0) };
+    for (layer, tex, c, x, y, w, hh, uv) in radar_frame(rot, s.bond.head(), s.bond.pos[1], ring_tex, (0.0, SW, 0.0, SH), radar_on, &objs) {
+        let uv = if uv[2] == 0.0 && uv[3] == 0.0 { [0.0, 0.0, w, hh] } else { uv };
+        // Flag 0x100 on the blips is the additive blend [M 0x19f4e8:58; ALPHA_1 0x48].
+        let blend = if tex == RADAR_TEX { 1 } else { 0 };
+        h.quad(Anchor::Right, layer, tex, blend, x, y, w, hh, uv, (false, false), c);
+    }
+
+    // The clock, top-centre, and the team score under it.
+    let white = gs(0x7f7f7f, 0xff);
+    let cream = gs(0x7d6d59, 0xff);
+    let clock = snap.timer_string();
+    let (_, cw) = font.layout(&clock, 0.0, 0.0);
+    h.text(Anchor::Centre, font, 20, &clock, SW / 2.0 - cw / 2.0, 22.0, false, white, true);
+    let lh = font.line_height();
+    if m.settings.team_game != 0 {
+        let ts = format!("{} - {}", snap.team_scores[0] as i32, snap.team_scores[1] as i32);
+        let (_, tw) = font.layout(&ts, 0.0, 0.0);
+        h.text(Anchor::Centre, font, 20, &ts, SW / 2.0 - tw / 2.0, 22.0 + lh, false, white, true);
+    }
+
+    // The standings list, left edge, between the objective/info bars' band and the health ring
+    // (HealthSprInfo[15] at y 341 [L]).
+    let (top, bottom) = (150.0f32, 332.0f32);
+    let n = snap.participants();
+    let (scale, pitch, max_rows) = mp_board_layout(n, lh, view_h(), bottom - top);
+    let board = snap.board(max_rows);
+    let x0 = 10.0f32;
+    let (rank_w, name_w, score_w) = (22.0 * scale, 112.0 * scale, 30.0 * scale);
+    let width = rank_w + name_w + score_w + 6.0 * scale;
+    let rows_drawn = board.rows.len() + usize::from(board.hidden > 0);
+    // A translucent backing plate (the menus' dark plate tone) so the rows read over the arena.
+    {
+        let (a, b) = (h.ndc(Anchor::Left, x0 - 4.0, top - 2.0), h.ndc(Anchor::Left, x0 + width + 4.0, top + pitch * rows_drawn as f32 + 2.0));
+        let q = |p: [f32; 2]| HudVertex { p, uv: [0.0, 0.0], c: [0.0; 4] };
+        h.ndc_solid(22, [q([a[0], a[1]]), q([b[0], a[1]]), q([b[0], b[1]]), q([a[0], a[1]]), q([b[0], b[1]]), q([a[0], b[1]])], [0.03, 0.02, 0.02, 0.45]);
+    }
+    let cap = font.glyphs.first().map_or(0.0, |g| (g.h + g.yoff) as f32);
+    let lang = s.lang.as_ref();
+    // Participants sharing a name (the bots past the disc's 4 records cycle them [S mp-16-slots])
+    // number themselves in slot order, the way the menus' repeated rows do ("Guard 2").
+    let names: Vec<(usize, String)> = {
+        let raw: Vec<(usize, String)> = snap.rows.iter().map(|r| (r.slot, mp_name(m, lang, r.slot))).collect();
+        raw.iter().enumerate().map(|(k, (slot, n))| {
+            let total = raw.iter().filter(|(_, x)| x == n).count();
+            if total < 2 { return (*slot, n.clone()); }
+            let nth = raw[..k].iter().filter(|(_, x)| x == n).count() + 1;
+            (*slot, format!("{n} {nth}"))
+        }).collect()
+    };
+    let name_of = |slot: usize| names.iter().find(|(s, _)| *s == slot).map_or_else(String::new, |(_, n)| n.clone());
+    let team_game = m.settings.team_game != 0;
+    for (i, r) in board.rows.iter().enumerate() {
+        // `Hud::text` puts the glyph tops at y − cap (cap = glyph 0's h + yoff): pen y = row top + cap.
+        let y = top + pitch * i as f32 + cap;
+        let base = if r.viewer { gs(0xc8b400, 0xff) } else { cream };
+        let name_col = if team_game && !r.viewer { gs(radar_team_color_rgb(r.team), 0xff) } else { base };
+        h.text_scaled(Anchor::Left, font, 20, &format!("{}", r.rank + 1), x0 + rank_w - 4.0 * scale, y, true, base, true, scale);
+        let nm = fit_text(font, &name_of(r.slot), scale, name_w - 4.0 * scale);
+        h.text_scaled(Anchor::Left, font, 20, &nm, x0 + rank_w, y, false, name_col, true, scale);
+        h.text_scaled(Anchor::Left, font, 20, &format!("{}", r.score as i32), x0 + width - 2.0 * scale, y, true, base, true, scale);
+    }
+    if board.hidden > 0 {
+        let y = top + pitch * board.rows.len() as f32 + cap;
+        h.text_scaled(Anchor::Left, font, 20, &format!("+{} more", board.hidden), x0 + rank_w, y, false, cream, true, scale);
+    }
+}
+
+/// The team tint as an RGB for the standings' names — the radar's team pair [M 0x189840:58-62].
+fn radar_team_color_rgb(team: u32) -> u32 {
+    nf_game::mp::hud::radar_team_color(1, team) >> 8
 }
 
 // ─── The Micro-Camera's target brackets (CameraPane 11's per-drone sprites) ─────────────────
@@ -995,7 +1159,7 @@ pub fn radar_project(
     objs: &[RadarObj],
 ) -> Vec<RadarBlip> {
     let mut out = Vec::new();
-    for o in objs.iter().take(24) {
+    for o in objs.iter().take(nf_game::mp::hud::RADAR_BLIP_CAP) {
         let d = [o.pos[0] - cam[0], o.pos[1] - cam[1], o.pos[2] - cam[2]];
         let vx = view_rot[0][0] * d[0] + view_rot[0][1] * d[1] + view_rot[0][2] * d[2];
         let vy = view_rot[1][0] * d[0] + view_rot[1][1] * d[1] + view_rot[1][2] * d[2];
@@ -1063,8 +1227,10 @@ pub fn radar_frame(
     let ring = radar_ring_rect(ring_tex.0, ring_tex.1, viewer);
     let layer = radar_ring_layer(radar_on);
     if layer != 0xff {
-        // The ring sprite: RadarSprInfo[0] colour 0x7f7f7fff, full texture [L 0x2bdd60].
-        let ring_col: [f32; 4] = [0x7f as f32, 0x7f as f32, 0x7f as f32, 0xff as f32];
+        // The ring sprite: RadarSprInfo[0] colour 0x7f7f7fff, flags 0 (plain blend), full texture
+        // [L 0x2bdd60] — on the GS scale like every other sprite colour (the raw 127/255 floats
+        // this used to pass blew the dark-red ring out to white; the first live draw showed it).
+        let ring_col = gs(0x7f7f7f, 0xff);
         quads.push((layer, 0x0300_0088, ring_col, ring.0, ring.1, ring.2, ring.3, [0.0, 0.0, 0.0, 0.0]));
     }
     for b in radar_project(view_rot, cam, bond_y, ring, objs) {
