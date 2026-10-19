@@ -374,9 +374,10 @@ impl Drop for Player {
             if tm.audio_clocked { "audio" } else { "wall" }, if self.ended { "" } else { " (stopped early)" });
         eprint!("{line}");
         if nf_audio::silent() { return; } // tests never write next to their binaries
-        if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        {
             use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("movie-timing.log")) { let _ = f.write_all(line.as_bytes()); }
+            let path = crate::settings::output_dir().join("movie-timing.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) { let _ = f.write_all(line.as_bytes()); }
         }
     }
 }
@@ -448,7 +449,8 @@ fn open_pcm_out(src: std::sync::Arc<Vec<i16>>, rate: f64, looping: bool, gain: f
                 }
                 let i = pos as usize;
                 let t = (pos - i as f64) as f32;
-                let at = |k: usize, c: usize| src[2 * k + c] as f32 / 32768.0 * gain;
+                // nf_audio::OUTPUT_GAIN: the port's overall output level, the same as the game mixer's.
+                let at = |k: usize, c: usize| src[2 * k + c] as f32 / 32768.0 * gain * nf_audio::OUTPUT_GAIN;
                 let l = at(i, 0) * (1.0 - t) + at(i + 1, 0) * t;
                 let r = at(i, 1) * (1.0 - t) + at(i + 1, 1) * t;
                 for (k, out) in frame.iter_mut().enumerate() { *out = if k % 2 == 0 { l } else { r }; }

@@ -3694,7 +3694,8 @@ impl App {
     /// A numbered screenshot plus its spot: `nf-shots/NNN-<level>.png` and `.txt` holding the `--bond x,y,z,yaw,pitch` and
     /// level to re-render the view headless (F12 and the panel's "Screenshot + log spot").
     fn spot_shot(&mut self) -> String {
-        let dir = std::path::Path::new("nf-shots");
+        let dir_buf = crate::settings::output_dir().join("nf-shots");
+        let dir = dir_buf.as_path();
         if let Err(e) = std::fs::create_dir_all(dir) { return format!("screenshot: {e}"); }
         let level = self.scene.sim.as_ref().map_or(0, |s| s.level);
         let n = (1..10000).find(|n| !dir.join(format!("{n:03}-{level:08x}.png")).exists()).unwrap_or(0);
@@ -5415,13 +5416,16 @@ impl App {
         false
     }
 
-    /// headless-app-harness: the App skeleton with every field at its neutral value — gfx: None,
-    /// sound silent (`None`; `build_sound` fills the window run's after construction), no dev, no
-    /// panel, no net. The window `run()` and the headless harness build the SAME skeleton and
-    /// apply their knobs on top, so a headless frame runs the exact per-frame path the window runs.
-    fn bare(iso: String, scene: scene::Scene, cam: Camera, opts: scene::ViewOpts, choice: Option<usize>, anim_time: f32) -> App {
+    /// headless-app-harness: the App skeleton with every field at its neutral value — gfx: None, no dev, no panel,
+    /// no net — and the sound driver built from the scene's bank (`build_sound`; under NF_SILENT a real driver with no
+    /// output device). The window `run()` and the headless harness build the SAME skeleton and apply their knobs on
+    /// top, so a headless frame runs the exact per-frame path the window runs. The driver is built HERE: run() used to
+    /// build it beside this call and drop it, so the front end had no driver and every menu sound was silent in every
+    /// build from 2026-10-17 to v0.1.6 (the user's "menu sounds are missing entirely").
+    fn bare(iso: String, mut scene: scene::Scene, cam: Camera, opts: scene::ViewOpts, choice: Option<usize>, anim_time: f32) -> App {
+        let sound = build_sound(&mut scene);
         App {
-            sound: None,
+            sound,
             scene,
             cam,
             gfx: None,
@@ -5721,7 +5725,7 @@ pub fn run() -> Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let text = format!("{info}\n{}\n", std::backtrace::Backtrace::force_capture());
-        let _ = std::fs::write("nf-view-crash.log", &text);
+        let _ = std::fs::write(crate::settings::output_dir().join("nf-view-crash.log"), &text);
         default_hook(info);
     }));
     // Player bug reports: a panic also writes a crash report the launcher offers to send (bugreport.rs).
@@ -6020,9 +6024,8 @@ pub fn run() -> Result<()> {
         return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
     }
     let event_loop = EventLoop::new()?;
-    // Sound: the level's bank in the driver, the default output device (silent without one).
+    // Sound: built in `App::bare` (the level's bank in the driver, the default output device; silent without one).
     let mut scene = scene;
-    let sound = build_sound(&mut scene);
     // `--dev --scenario <name>`: place Bond and set up the world for a specific feature test. (B-3a/b: the two
     // scenario systems are merged into `dev::scenario` / `dev::SCENARIOS` in `dev.rs`; `apply_scenario` is gone.)
     #[cfg(feature = "gamepad")]
@@ -6423,9 +6426,10 @@ mod headless_app_harness {
             app.fe = Some(menu::FrontEnd::new());
             if let Some(fe) = app.fe.as_mut() { fe.start_boot_intro(); }
             if let Some(fe) = app.fe.as_mut() {
-                // run(): the boot bank flip [M 0x1dceb8 case 0x7000048] — the driver
-                // re-point has no target with the silent sound stack.
-                let _hash = fe.music.front_end_sound_ready();
+                // run(): the boot bank flip [M 0x1dceb8 case 0x7000048] re-points the driver's
+                // primary slot (the driver exists here too: `App::bare` builds it, silent).
+                let hash = fe.music.front_end_sound_ready();
+                if let Some(s) = app.sound.as_mut() { s.driver.set_primary(if hash == 0x38 { 1 } else { 0 }); }
             }
             // run(): the game's strings for the front end (Txt_LoadLanguage 0x1caad0).
             if let Some(bytes) = read_files_bin(&app.iso, "USATxt.dat") {
@@ -6538,6 +6542,26 @@ mod headless_app_harness {
             }
             false
         }
+    }
+
+    /// The user, 2026-10-19: "menu sounds are missing entirely". run() built the sound driver and dropped it, so the
+    /// front end had none; the event-level tests (menu_sfx_flow) and the driver MODEL (menu_audio_flows) could not see
+    /// it. This drives the REAL nf-audio driver through the real boot (silent: NF_SILENT, no output device): the
+    /// driver exists, and START on the title starts the select blip 0x1da [docs/systems/menu-sfx.md §1 MENU_SOUND 0]
+    /// in it.
+    #[test]
+    fn the_title_start_plays_its_blip_in_the_real_driver() {
+        let Some(iso) = std::env::var_os("NF_ISO") else { return; };
+        let iso = iso.to_string_lossy().to_string();
+        let mut h = HeadlessApp::boot(&iso);
+        assert!(h.app.sound.is_some(), "the front end has a sound driver (App::bare builds it)");
+        assert!(h.pump(60.0, |a| a.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::Start && !fe.intro_playing)), "title");
+        let ids = |h: &HeadlessApp| h.app.sound.as_ref().unwrap().driver.ids();
+        // Sister: the boot logos and the title start no select blip by themselves.
+        assert!(!ids(&h).contains(&0x1da), "no select blip before START: {:x?}", ids(&h));
+        h.key(KeyCode::Enter);
+        h.frames(2);
+        assert!(ids(&h).contains(&0x1da), "START's select blip 0x1da reaches the real driver: {:x?}", ids(&h));
     }
 
     /// (a) A fresh boot walked through the real menus to The Exchange: the briefing

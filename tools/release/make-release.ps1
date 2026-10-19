@@ -31,10 +31,16 @@ $env:NF_RELEASE_VERSION = $Version
 $env:NF_GIT_HASH = (git -C $ws rev-parse HEAD).Trim()
 $env:NF_NOTICES_FILE = $notices
 $env:CARGO_TARGET_DIR = $Target
+# The C runtime linked in (no VCRUNTIME140.dll import): a lone exe must start on a PC without the Visual C++
+# runtime, and a stray DLL of that name beside it (often Downloads) must not load into us. The other hijack-prone
+# imports are delay-loaded (crates/nf-view/build.rs); check-imports.py verifies the result.
+$env:RUSTFLAGS = "-C target-feature=+crt-static"
 & cargo build --release -p nf-view --bins --features movies --manifest-path (Join-Path $ws "Cargo.toml")
 $code = $LASTEXITCODE
-Remove-Item Env:NF_RELEASE_VERSION, Env:NF_GIT_HASH, Env:NF_NOTICES_FILE
+Remove-Item Env:NF_RELEASE_VERSION, Env:NF_GIT_HASH, Env:NF_NOTICES_FILE, Env:RUSTFLAGS
 if ($code -ne 0) { throw "cargo build failed" }
+& python -I (Join-Path $PSScriptRoot "check-imports.py") (Join-Path $Target "release\NightfirePort.exe")
+if ($LASTEXITCODE -ne 0) { throw "the exe imports a DLL that can be hijacked from its folder" }
 
 $exe = Join-Path $Out "NightfirePort.exe"
 Copy-Item (Join-Path $Target "release\NightfirePort.exe") $exe
