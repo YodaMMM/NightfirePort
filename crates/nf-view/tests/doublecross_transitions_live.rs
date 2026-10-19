@@ -49,25 +49,62 @@ fn assert_no_wrapper_target(sim: &nf_view::scene::Sim, level: &str) {
     }
 }
 
-/// `Player_Init`'s entry fade [M 0x1910f8:45]: armed (45, 45) at the load, alpha 1.0 → 0.0 over
-/// 45 ticks, gone after. Sister: the fade really advances (a pin on a constant alpha can't fail).
-fn assert_entry_fade_runs(scene: &mut Scene, level: &str) {
-    let sim = scene.sim.as_mut().unwrap();
-    let (mut left, total) = sim.drones.spawn_fade.expect("the entry fade is armed at the load");
-    assert_eq!((left, total), (45, 45), "{level}: Player_Init arms a 45-tick fade [M 0x1910f8:45]");
-    let first = sim.drones.spawn_fade_view().expect("the draw read before the first tick");
-    assert!((first.alpha - 1.0).abs() < 1e-6, "{level}: the fade starts at black (alpha 1.0)");
-    let mut prev = first.alpha;
-    for _ in 0..44 {
-        sim.step_bond(Default::default(), false, false, false);
-        let v = sim.drones.spawn_fade_view().expect("the fade must outlive 44 ticks");
-        assert!(v.alpha < prev, "{level}: the entry fade must fall monotonically ({} → {})", prev, v.alpha);
-        prev = v.alpha;
+/// `Player_Init`'s entry fade [M 0x1910f8:45] — the RAW state and the DRAW read are two
+/// different claims, and both are pinned here:
+/// - RAW: armed (45, 45) at the load, falls exactly 1 per tick, gone after 45. The game
+///   advances the fade object per Game_Run tick — `Camera_UpdateAll` 0x1bbd68 loops every
+///   viewer and runs unconditionally in Game_Run 0x1c9790:43, including while a script camera
+///   owns the view; [L] FRAME_RATE_MUL = 1.0 (ee_snapshot 0x0030d0d8), so a 45-tick rate is
+///   45 ticks.
+/// - VIEW (`spawn_fade_view`, what the draw overlay reads): the fade object lives on the
+///   PLAYER's viewer [M Camera_SetFade 0x1bbdd8:9 indexes `(&glb_viewer)[param_2]`;
+///   Player_Init 0x1910f8:44-45 passes the player's viewer id], and a script camera DISABLES
+///   the gameplay viewers — `Script_CameraStart` 0x1d9140 runs `Camera_Enable(v, 0, 0, 0)` for
+///   v 0..6 (clearing the +0x2a draw flag [M Camera_Enable 0x1b9920:31-32]) and enables viewer
+///   4, which never carries the entry fade (the SCRIPT fade arms there — Script_FadeStart
+///   0x1db3d0:10). `Game_Draw` draws `psiFadeView` per viewer from that viewer's own fade
+///   bytes [M 0x1e6f50:186-212], and PushStates/PopStates save only +0x29/+0x2a [M
+///   0x1bbc60/0x1bbcd0]. So the view read is None exactly while a script camera owns the view:
+///   the PS2 shows 07000002's opening cut-scene at full brightness from +3 [L, the main
+///   agent's GDB-build capture, 2026-10-19]. On a load with no auto-play intro — Castle C's
+///   script bank is mode-0/64 only [D, the §4 census] — the player viewer stays drawn and the
+///   fade-up really shows for its 45 ticks.
+/// Sisters that can fail: the exact per-tick raw ramp (a tick drift fails), the per-level
+/// camera expectation at tick 0 (a viewer-rule or script regression fails), and the exact
+/// drawn alpha ramp.
+fn assert_entry_fade_runs(scene: &mut Scene, level: &str, view_drawn: bool) {
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let (left, total) = sim.drones.spawn_fade.expect("the entry fade is armed at the load");
+        assert_eq!((left, total), (45, 45), "{level}: Player_Init arms a 45-tick fade [M 0x1910f8:45]");
     }
-    sim.step_bond(Default::default(), false, false, false);
-    assert!(sim.drones.spawn_fade.is_none(), "{level}: the fade ends at tick 45");
-    // Sister: the screen is NOT black once the fade expired — the overlay source is gone.
-    assert!(sim.drones.spawn_fade_view().is_none());
+    for n in 0..46u32 {
+        let sim = scene.sim.as_mut().unwrap();
+        let cam = sim.drones.scripts.camera().is_some();
+        let view = sim.drones.spawn_fade_view();
+        let raw_left = sim.drones.spawn_fade.map(|(l, _)| l);
+        if n < 45 {
+            assert_eq!(raw_left, Some(45 - n),
+                "{level}: the raw fade falls 1/tick even under the cut-scene [M 0x1bada0:18 + 0x1c9790:43]");
+        } else {
+            assert_eq!(sim.drones.spawn_fade, None, "{level}: the raw fade ends at tick 45");
+        }
+        if view_drawn {
+            assert!(!cam, "{level}: tick {n} must be camera-free (Castle C has no auto-play intro [D])");
+            if n < 45 {
+                let v = view.expect("{level}: the fade draws while no script camera owns the view [M 0x1e6f50:186-212]");
+                assert!((v.alpha - (45 - n) as f32 / 45.0).abs() < 1e-6,
+                    "{level}: drawn alpha must be (45-{n})/45, got {}", v.alpha);
+            } else {
+                assert!(view.is_none(), "{level}: the expired fade draws nothing");
+            }
+        } else {
+            assert!(cam, "{level}: tick {n} must sit under the auto-play intro's script camera [D mode-1 SP]");
+            assert!(view.is_none(),
+                "{level}: the entry fade must NOT draw while the cut-scene owns the view [M 0x1d9140 + 0x1b9920:31-32 + 0x1e6f50:186-212; L the PS2 capture]");
+        }
+        sim.step_bond(Default::default(), false, false, false);
+    }
 }
 
 /// Castle A (07000001): the real route — the intro script 0x06000087 (mode 1, pack 07800001)
@@ -128,12 +165,14 @@ fn castle_a_route_fires_the_exit_and_the_hop_runs_the_wrapped_load() {
     // The loading screen rows [M 0x1d5258 — the Double Cross group].
     assert_eq!(nf_view::loading::image_for(0x0700_0002), 0x0300_00d2, "the Double Cross art group");
     assert_eq!(nf_view::loading::objective_for(0x0700_0002), Some(0x0400_0008), "[M 0x1d5258's title labels]");
-    // The next part loads and the entry fade runs [M 0x1910f8:45].
+    // The next part loads; the entry fade is armed but its DRAW is None — the opening
+    // cut-scene's script camera owns the view from tick 0 (the PS2 shows the cut-scene at full
+    // brightness [L]). Raw state still ticks to expiry [M 0x1c9790:43].
     let next = nf_view::level_archive_name(0x0700_0002).to_string();
     let mut scene2 = load(&iso_v, &next);
     assert_eq!(scene2.sim.as_ref().expect("sim").level, 0x0700_0002);
     assert_no_wrapper_target(scene2.sim.as_ref().unwrap(), "07000002");
-    assert_entry_fade_runs(&mut scene2, "07000002");
+    assert_entry_fade_runs(&mut scene2, "07000002", false);
 }
 
 /// Castle B (07000002): the exit #206 is E-key-only behind key gate ch 0x4C (AND #480 = [0x48,
@@ -188,7 +227,10 @@ fn castle_b_exit_is_locked_until_the_gate_then_loads_07000003_through_the_wrap()
     let next = nf_view::level_archive_name(0x0700_0003).to_string();
     let mut scene2 = load(&iso_v, &next);
     assert_eq!(scene2.sim.as_ref().expect("sim").level, 0x0700_0003);
-    assert_entry_fade_runs(&mut scene2, "07000003");
+    // 07000003 draws the entry fade: its script bank is mode-0/64 only — no auto-play intro,
+    // no script camera in the window [D §4], so the player viewer stays drawn and the game's
+    // fade-up really shows [M 0x1e6f50:186-212].
+    assert_entry_fade_runs(&mut scene2, "07000003", true);
 }
 
 /// Castle C (07000003): exit #451, key gate 0x52 (AND #435 = [0x4e, 0x51]) [D] — same shape,
@@ -238,7 +280,7 @@ fn castle_c_exit_is_locked_until_the_gate_then_loads_07000004_through_the_wrap()
     let next = nf_view::level_archive_name(0x0700_0004).to_string();
     let mut scene2 = load(&iso_v, &next);
     assert_eq!(scene2.sim.as_ref().expect("sim").level, 0x0700_0004);
-    assert_entry_fade_runs(&mut scene2, "07000004");
+    assert_entry_fade_runs(&mut scene2, "07000004", false); // auto-play SP #3 [D §4] — hidden like 02
 }
 
 /// Castle D (07000004) ends in the mission layer, not a level exit [D — the level has no 0xE8]:

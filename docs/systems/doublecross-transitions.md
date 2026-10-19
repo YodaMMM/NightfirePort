@@ -73,7 +73,9 @@ pops when `BGFMVPlaying == 0`]. **The game plays no movie on a Castle hop.**
 0x07100002 → **0x07000002**: the straight load stands.
 
 **Net sequence on a hop**: exit trigger → end sting + pause → 300-tick fade to black →
-(wrapped load, no movie, no state-6 hold) → loading screen → archive load → 45-tick fade-up →
+(wrapped load, no movie, no state-6 hold) → loading screen → archive load → the entry fade
+arms (§7: on the player's viewer — DRAWN only when no script camera owns the view, so the
+cut-scene openings show no fade-up; Castle C's camera-free load does) →
 
 ## 4. The next level's intro [M/D]
 
@@ -145,3 +147,46 @@ with a sister that can fail):
    the movie-less wrap keeps the straight load (no `USING_MOVIE` hit) — the sister for "a level
    that has none keeps its straight load"; no Double-Cross exit references the wrapper codes
    0x07000041/43/46/49 [D].
+
+## 7. The entry fade is on the player's viewer, not the cut-scene (doublecross-transitions-2)
+
+The main agent held 779's merge on a render comparison (2026-10-19): the port faded 07000002's
+opening cut-scene up from black over 45 frames; the PS2 (GDB build, the level loaded through
+goto_level.py's push = `ResetMap_LevelToLoad(0x07000002, 0, 1)`, captures timed by
+GameState+0x34) shows the loading screen at +1/+2 and the same cut-scene at FULL brightness
+from +3 (mean 19.4 at +3 → 21.2 at +30, drift only). Both are right about their own object —
+the fade exists, but the port drew it on the wrong viewer:
+
+1. `Camera_SetFade` 0x1bbdd8:9 arms the fade on `(&glb_viewer)[param_2]` — one fade object PER
+   VIEWER (`+0x228` alpha, `+0x22c` rate, `+0x230..33` RGBA, `+0x234/35` state). `Player_Init`
+   0x1910f8:44-45 passes the PLAYER's viewer id (`Camera_Enable(param_1, 1, 1, 0)` right
+   before) — viewer 0 in single-player.
+2. `Script_CameraStart` 0x1d9140 — the cut-scene camera — runs `Camera_Enable(v, 0, 0, 0)` for
+   v 0..6 and `Camera_Enable(4, 1, 1, 0)`: the gameplay viewers' draw flag `+0x2a` goes 0 [M
+   Camera_Enable 0x1b9920:31-32 stores param_2→+0x29, param_3→+0x2a] and viewer 4 (the script
+   camera's) is drawn. `Game_Draw` 0x1e6f50:186-212 draws each DRAWN viewer's sprites and then
+   its own `psiFadeView(+0x230..33)` only when that viewer's `+0x235` is set — viewer 4's fade
+   bytes are never armed by Player_Init, so **no fade over the cut-scene** [the L capture].
+   (Script fades DO arm on viewer 4 — `Script_FadeStart` 0x1db3d0:10 `Camera_SetFade(-f, 4,
+   0xff, 0)` — the port's existing `view_fade`.)
+3. The raw state keeps advancing: `Camera_UpdateAll` 0x1bbd68 → `Camera_UpdateGlbVars`
+   0x1bada0:16-35 (`+0x235 == 1`: `alpha += rate · FRAME_RATE_MUL`, → 2 → 0) runs
+   unconditionally in `Game_Run` 0x1c9790:43 every game tick, cut-scene or not; [L]
+   FRAME_RATE_MUL = 1.0 (ee_snapshot 0x0030d0d8 = `0000803f`), so the -45 arm is exactly 45
+   ticks. `Camera_PushStates`/`PopStates` 0x1bbc60/0x1bbcd0 snapshot only +0x29/+0x2a, so no
+   cut-scene end resurrects it — by the time gameplay returns the fade is expired (a cut-scene
+   shorter than 45 ticks would hand the remainder back to the player viewer; none of the
+   Castle intros is that short [D §4 — 500/830-tick scripts]).
+4. Where the game DOES draw it: a load with no auto-play intro. Castle C (07000003) has
+   mode-0/64 script players only [D §4], its port sim runs no script camera for the whole
+   window, so viewer 0 stays drawn and the fade-up shows for its 45 ticks [M 0x1e6f50 draws
+   every +0x2a viewer's fade]. Castle A/B/D open under their auto-play intros (SP #277/#400/#3
+   [D §4]) — hidden, like 02.
+
+**Port shape (unchanged draw code)**: `Drones::spawn_fade` still arms (45, 45) at every load
+and ticks 1/tick; `spawn_fade_view()` now returns None while a script camera owns the view
+(`scripts.camera().is_some()`) — the getter the draw overlay reads (scene.rs chains script →
+exit → entry). Tests pin both halves: `doublecross_transitions_live::assert_entry_fade_runs`
+walks 46 ticks per part — the raw ramp exactly (45−n, 45) with expiry at 45, the view None
+under the cut-scene camera (01/02/04, the PS2-pinned case) and the exact drawn ramp on
+Castle C (the game-draws-it case).

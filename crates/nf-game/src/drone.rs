@@ -8519,7 +8519,10 @@ pub struct Drones {
     /// (`Camera_SetFade`'s negative-duration rule: alpha starts 1.0, falls 1/45 per tick [M
     /// 0x1bbdd8 disasm 0x1bbe8c-0x1bbefc]). Armed at build (the port's `Player_Init` stand-in:
     /// phase 3 runs `Player_Start` on every level load [M 0x1d6360:152]), ticked in `tick`, read
-    /// by the draw code through `spawn_fade_view`. See docs/systems/doublecross-transitions.md §6.
+    /// by the draw code through `spawn_fade_view`. doublecross-transitions-2: the object belongs
+    /// to the PLAYER's viewer and never DRAWS while a script camera owns the view (the viewer
+    /// rule in `spawn_fade_view`'s doc); the raw state still advances per tick. See
+    /// docs/systems/doublecross-transitions.md §6/§7.
     pub spawn_fade: Option<(u32, u32)>,
 }
 
@@ -8759,7 +8762,22 @@ impl Drones {
     /// ONE fade object too [M 0x1e6f50:203-209 draws one `psiFadeView` per viewer]: alpha starts
     /// 1.0 (the byte 255 [M 0x1bbe8c-0x1bbefc — a negative rate arms alpha 1.0]) and falls 1/45
     /// per tick, so the port's per-tick alpha is `left/total` (45 → 0).
+    ///
+    /// doublecross-transitions-2: the fade object lives on the PLAYER's viewer — `Camera_SetFade`
+    /// indexes `(&glb_viewer)[param_2]` [M 0x1bbdd8:9] and `Player_Init` passes the player's
+    /// viewer id [M 0x1910f8:44-45]. A script camera DISABLES the gameplay viewers
+    /// (`Script_CameraStart` 0x1d9140: `Camera_Enable(v, 0, 0, 0)` for v 0..6 clears the +0x2a
+    /// draw flag [M Camera_Enable 0x1b9920:31-32]) and draws viewer 4 only, which never carries
+    /// the entry fade (`Script_FadeStart` 0x1db3d0:10 arms the SCRIPT fade there); `Game_Draw`
+    /// draws `psiFadeView` per viewer from that viewer's own fade bytes [M 0x1e6f50:186-212].
+    /// So while a script camera owns the view the entry fade never draws — the PS2 shows
+    /// 07000002's opening cut-scene at full brightness [L, the main agent's GDB-build capture].
+    /// The RAW state still advances per Game_Run tick (`Camera_UpdateAll` 0x1bbd68 runs
+    /// unconditionally in Game_Run 0x1c9790:43; [L] FRAME_RATE_MUL = 1.0, ee_snapshot
+    /// 0x0030d0d8) — `tick` keeps the decrement. Camera_PushStates/PopStates save only the
+    /// +0x29/+0x2a pair [M 0x1bbc60/0x1bbcd0], so no cut-scene resurrects it.
     pub fn spawn_fade_view(&self) -> Option<ViewFade> {
+        if self.scripts.camera().is_some() { return None; }
         self.spawn_fade.as_ref().map(|&(left, total)| ViewFade {
             alpha: left as f32 / total as f32,
             rate: -(1.0 / total as f32),
