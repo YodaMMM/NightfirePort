@@ -242,6 +242,7 @@ fn drive(sim: &mut Sim, _t: u32, input: &MpTickInput) -> (u64, u64) {
             pickups: &sim.pickups,
             others: &others,
             world: &sim.world,
+            nav: None,
             health: 100.0,
             max_health: 100.0,
             stationary: false,
