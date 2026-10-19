@@ -10,8 +10,7 @@ launchers install it automatically on launch.
 
 | File | What |
 |---|---|
-| `NightfirePort.exe` | the launcher (GUI subsystem): disc image picker, PLAY, self-update |
-| `NightfirePort-game.exe` | the game (the `nf-view` build renamed; console subsystem, the launcher starts it hidden; dev builds keep `nf-view.exe`, which the launcher also finds) |
+| `NightfirePort.exe` | the one program (GUI subsystem): double-clicked, the launcher (disc picker, PLAY, self-update, Report crash); PLAY runs the same file as `NightfirePort.exe <iso> --game`, the game (`nf_view::run`), its output sent to `nf-view.log`. v0.1.0 shipped the game as a second `NightfirePort-game.exe`; the launcher deletes that file on start |
 | `README.txt` | player instructions (`tools/release/README.txt`, version filled in) |
 | `THIRD_PARTY_NOTICES.txt` | every crate linked into the binaries with its licence files (`tools/release/notices.py`) |
 | `THIRD_PARTY_RERAC_LICENSE.txt` | the in-tree rerac code's notice |
@@ -21,7 +20,7 @@ No game data: players supply their own disc image. Online play uses join codes (
 
 ## Building and publishing
 
-- `tools/release/make-release.ps1 -Version X.Y.Z` builds both binaries with `--features movies` and
+- `tools/release/make-release.ps1 -Version X.Y.Z` builds `NightfirePort.exe` with `--features movies` and
   `NF_RELEASE_VERSION=X.Y.Z` (the launcher's version; a build without it is a dev build that never updates), stages the
   files, zips them with the system `tar.exe` and writes the `.sha256`.
 - `tools/release/publish.ps1 [-Lane <checkout>]` refuses unless HEAD is on `origin/master` and the tree is clean, takes
@@ -48,3 +47,7 @@ Test aids: `NF_UPDATE_API=<url>` replaces the release query (a `file:///…/late
 v0.1.0 unzipped into an empty folder, clean `%APPDATA%`, `NF_UPDATE_API` → a v0.1.1 `latest.json` with `file://` assets,
 autoplay: the launcher updated both exes (hashes = v0.1.1's), restarted, removed the `.old`, started the game (intro
 movies, title screen) and closed. Offline (`NF_UPDATE_API` unreachable): v0.1.0 kept, the game started.
+
+Single exe (same day): the published v0.1.0 zip (two exes) downloaded from GitHub and unzipped, `NF_UPDATE_API` → a
+local one-exe v0.1.1: the launcher updated, deleted `NightfirePort-game.exe`, restarted, and PLAY ran
+`NightfirePort.exe <iso> --game` (intro movies in `nf-view.log`); the launcher process closed.

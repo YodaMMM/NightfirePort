@@ -1,4 +1,4 @@
-# Builds a NightfirePort release zip: the launcher (NightfirePort.exe) and the game (NightfirePort-game.exe), built with the
+# Builds a NightfirePort release zip: NightfirePort.exe (the launcher, and the game with --game), built with the
 # release version baked in (NF_RELEASE_VERSION — the launcher's self-update compares against it), plus README.txt and
 # the licence notices. No game data: players supply their own disc image.
 #
@@ -18,18 +18,20 @@ if (-not $Target) { $Target = Join-Path $ws "target\release-build" }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
 $env:NF_RELEASE_VERSION = $Version
+# The commit, baked in for bug reports (players have no git).
+$env:NF_GIT_HASH = (git -C $ws rev-parse HEAD).Trim()
 $env:CARGO_TARGET_DIR = $Target
 & cargo build --release -p nf-view --bins --features movies --manifest-path (Join-Path $ws "Cargo.toml")
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 Remove-Item Env:NF_RELEASE_VERSION
+Remove-Item Env:NF_GIT_HASH
 
 $name = "NightfirePort-v$Version-windows"
 $stage = Join-Path $Out $name
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force $stage | Out-Null
+# One program (the user's choice, 2026-10-19): NightfirePort.exe is the launcher and, run with --game, the game.
 Copy-Item (Join-Path $Target "release\NightfirePort.exe") $stage
-# The game ships as NightfirePort-game.exe (the user's name, 2026-10-19); the launcher looks for it first.
-Copy-Item (Join-Path $Target "release\nf-view.exe") (Join-Path $stage "NightfirePort-game.exe")
 (Get-Content (Join-Path $PSScriptRoot "README.txt") -Raw).Replace("{VERSION}", $Version) | Set-Content -Encoding utf8 (Join-Path $stage "README.txt")
 Copy-Item (Join-Path $ws "THIRD_PARTY_RERAC_LICENSE.txt") $stage
 & python -I (Join-Path $PSScriptRoot "notices.py") $ws (Join-Path $stage "THIRD_PARTY_NOTICES.txt") movies

@@ -331,8 +331,10 @@ impl Writer {
     }
 }
 
-/// nf-view's git revision at build time (or "unknown" if git is unavailable). Captured once when a recording starts.
-fn git_hash() -> String {
+/// nf-view's git revision: baked in by the release build (`NF_GIT_HASH`, tools/release/make-release.ps1 — players have
+/// no git), else asked of git at run time (dev builds run from the checkout), else "unknown".
+pub fn git_hash() -> String {
+    if let Some(h) = option_env!("NF_GIT_HASH").filter(|h| !h.is_empty()) { return h.to_string(); }
     match std::process::Command::new("git").args(["rev-parse", "HEAD"]).output() {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
         _ => "unknown".to_string(),

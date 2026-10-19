@@ -1,0 +1,73 @@
+name: Bug report
+description: Something wrong in NightfirePort. Press F10 in the game first. It saves a report file for you to attach here.
+title: "[Bug] "
+labels: ["bug-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! The best reports come from **pressing F10 in the game right when the problem happens**.
+        That opens this form already filled in and shows you a `NightfirePort-report-….zip` file.
+        **Drag that zip into the "Report file" box below.** It lets us replay exactly what happened.
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Describe the problem. What did you see or hear?
+      placeholder: "The door in the first corridor wouldn't open when I pressed E."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we make it happen again?
+      description: The steps that led to it, if you know them.
+      placeholder: |
+        1. Start Paris Prelude on Agent
+        2. Go to the first door
+        3. Press E
+    validations:
+      required: false
+  - type: textarea
+    id: attachment
+    attributes:
+      label: Report file
+      description: Drag the NightfirePort-report-….zip from the folder F10 opened into this box. Crash reports come from the launcher's "Report crash" button.
+      placeholder: Drop the report zip here.
+    validations:
+      required: false
+  - type: input
+    id: report_id
+    attributes:
+      label: Report id
+      description: Filled in by the game.
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Game version
+      description: Filled in by the game (also shown at the bottom of the launcher).
+    validations:
+      required: false
+  - type: input
+    id: level
+    attributes:
+      label: Level
+      description: Filled in by the game.
+    validations:
+      required: false
+  - type: textarea
+    id: details
+    attributes:
+      label: System and place
+      description: Filled in by the game.
+      render: text
+    validations:
+      required: false
