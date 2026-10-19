@@ -7,12 +7,14 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-/// The game binary beside the launcher (`nf-view.exe`).
+/// The game binary beside the launcher: `NightfirePort-game.exe` in a release (the zip's name for the `nf-view` build,
+/// user 2026-10-19), else the cargo build's own `nf-view.exe` (dev builds run from target\).
 pub fn game_exe() -> Result<PathBuf, String> {
     let me = std::env::current_exe().map_err(|e| format!("can't locate the launcher: {e}"))?;
     let dir = me.parent().ok_or("the launcher has no folder")?;
-    let exe = dir.join(if cfg!(windows) { "nf-view.exe" } else { "nf-view" });
-    if exe.is_file() { Ok(exe) } else { Err(format!("The game ({}) isn't next to the launcher.", exe.file_name().unwrap_or_default().to_string_lossy())) }
+    let names: &[&str] = if cfg!(windows) { &["NightfirePort-game.exe", "nf-view.exe"] } else { &["NightfirePort-game", "nf-view"] };
+    names.iter().map(|n| dir.join(n)).find(|p| p.is_file())
+        .ok_or_else(|| format!("The game ({}) isn't next to the launcher.", names[0]))
 }
 
 /// Starts the game on `iso`. Its console output goes to `log` (the game is a console program; the launcher hides

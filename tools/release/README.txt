@@ -14,7 +14,7 @@ Getting started
    The launcher checks it and remembers it.
 4. Press PLAY.
 
-nf-view.exe is the game itself; the launcher starts it for you.
+NightfirePort-game.exe is the game itself; the launcher starts it for you.
 
 Updates
 -------
@@ -24,14 +24,16 @@ version.
 
 Online multiplayer
 ------------------
-Host or join from the game's multiplayer menu. A host listens on UDP port 27420
-by default; others can join it by its address and port. If friends can't reach
-your game, forward UDP 27420 on your router to your PC.
+Host a game from the multiplayer menu. Once your game is reachable from the
+internet, the lobby shows a join code (like ABCD-EFGH-JKLM-NPQR); Ctrl+C copies
+it. Send it to your friends, and they type it in on the join screen.
 
-To list games through a lobby server, create the file
-%APPDATA%\NightfirePort\net.txt containing one line:
-    lobby_server = <server address>:<port>
-(ask whoever runs the server for its address).
+The game opens its port on your router by itself (UPnP / NAT-PMP). If your
+router has that turned off and friends can't connect, forward UDP port 27420
+on the router to your PC.
+
+Players on the same home network can also join by the host's local address
+and port.
 
 Files
 -----

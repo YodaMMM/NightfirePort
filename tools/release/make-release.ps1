@@ -1,4 +1,4 @@
-# Builds a NightfirePort release zip: the launcher (NightfirePort.exe) and the game (nf-view.exe), built with the
+# Builds a NightfirePort release zip: the launcher (NightfirePort.exe) and the game (NightfirePort-game.exe), built with the
 # release version baked in (NF_RELEASE_VERSION — the launcher's self-update compares against it), plus README.txt and
 # the licence notices. No game data: players supply their own disc image.
 #
@@ -28,7 +28,8 @@ $stage = Join-Path $Out $name
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item (Join-Path $Target "release\NightfirePort.exe") $stage
-Copy-Item (Join-Path $Target "release\nf-view.exe") $stage
+# The game ships as NightfirePort-game.exe (the user's name, 2026-10-19); the launcher looks for it first.
+Copy-Item (Join-Path $Target "release\nf-view.exe") (Join-Path $stage "NightfirePort-game.exe")
 (Get-Content (Join-Path $PSScriptRoot "README.txt") -Raw).Replace("{VERSION}", $Version) | Set-Content -Encoding utf8 (Join-Path $stage "README.txt")
 Copy-Item (Join-Path $ws "THIRD_PARTY_RERAC_LICENSE.txt") $stage
 & python -I (Join-Path $PSScriptRoot "notices.py") $ws (Join-Path $stage "THIRD_PARTY_NOTICES.txt") movies

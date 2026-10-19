@@ -11,12 +11,12 @@ launchers install it automatically on launch.
 | File | What |
 |---|---|
 | `NightfirePort.exe` | the launcher (GUI subsystem): disc image picker, PLAY, self-update |
-| `nf-view.exe` | the game (console subsystem; the launcher starts it hidden) |
+| `NightfirePort-game.exe` | the game (the `nf-view` build renamed; console subsystem, the launcher starts it hidden; dev builds keep `nf-view.exe`, which the launcher also finds) |
 | `README.txt` | player instructions (`tools/release/README.txt`, version filled in) |
 | `THIRD_PARTY_NOTICES.txt` | every crate linked into the binaries with its licence files (`tools/release/notices.py`) |
 | `THIRD_PARTY_RERAC_LICENSE.txt` | the in-tree rerac code's notice |
 
-No game data: players supply their own disc image. The listing-server address is never baked in (players put
+No game data: players supply their own disc image. Online play uses join codes (the host's lobby shows one once UPnP / NAT-PMP or STUN reach it). The listing-server address is never baked in (a player may put
 `lobby_server = host:port` in `%APPDATA%\NightfirePort\net.txt`).
 
 ## Building and publishing
@@ -26,7 +26,7 @@ No game data: players supply their own disc image. The listing-server address is
   files, zips them with the system `tar.exe` and writes the `.sha256`.
 - `tools/release/publish.ps1 [-Lane <checkout>]` refuses unless HEAD is on `origin/master` and the tree is clean, takes
   the newest release's tag + 1 patch, runs make-release, and `gh release create`s the tag on HEAD with both files and
-  the last `docs/merge-log.md` entry as notes. `-Draft` for a draft.
+  a required plain-English `-Notes` summary (the user's choice) plus the install line. `-Draft` for a draft.
 
 ## The self-update (crates/nf-view/src/launcher/update.rs)
 

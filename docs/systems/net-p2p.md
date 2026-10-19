@@ -72,3 +72,13 @@ user's own and is never hard-coded.
 response (its FINGERPRINT CRC-32 is checked too, so a mistyped vector fails); join-code round trip, checksum and
 version rejection; a fake IGD on 127.0.0.1 (canned SSDP reply, device XML, SOAP responses) driven through the real
 HTTP/SOAP client; a fake NAT-PMP gateway on 127.0.0.1; the punch state machine on loopback sockets.
+
+## 7. Live checks
+
+- 2026-10-19, the user's home router (UPnP IGD at 192.168.1.1:5000): `cargo run -p nf-net --example upnp_probe` —
+  SSDP found the IGD, `AddPortMapping` UDP 27420 (lease 60 s) succeeded, `GetExternalIPAddress` matched the public
+  address, `DeletePortMapping` removed it [L].
+- Same day, two game instances on that PC (`--net-host 27420` with reach on; the joiner dialled the host's printed join
+  code): the host showed "Internet: open (UPnP)" and its code; the joiner decoded the code, saw the same public address
+  as its own and dialled the host's LAN address (the same-network path), the match started with no desync [L]. A join
+  from a different network is not yet tested (needs a second site).
