@@ -437,6 +437,9 @@ pub fn net_slot0_tick(sim: &mut scene::Sim, row: &[nf_net::Input; nf_net::MAX_AG
 /// online combat, the slots' positions, the state hash. Every machine must reach the same hash.
 pub fn net_tick(sim: &mut scene::Sim, row: &[nf_net::Input; nf_net::MAX_AGENTS], local: usize) -> u64 {
     let li = row[local];
+    // mp-world-sync: the row rides into `step_bond` (the remotes move inside it, before the local
+    // body; the call below is then a no-op).
+    sim.net_row = Some(*row);
     sim.step_bond(mpnet::to_player_input(&li), li.trigger, li.reload, li.use_key);
     let inputs = std::array::from_fn(|i| mpnet::to_player_input(&row[i]));
     sim.step_net_remotes(&inputs, local);
@@ -1330,6 +1333,12 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             m.start_assassin(&mut sim.drones.rng);
             // The SP mission machine stays off for the match [M 0x182c60:16-18 — Drones::mp_master].
             sim.drones.mp_master = m.settings.master;
+            // mp-world-sync (agent 9): an MP match creates no mounted gun unless the Enviro-Mods
+            // word `MPSettings+0x1B8` is set — `GunImp_Create` 0x131f20:52-58 returns 0 for
+            // `MPSettings+0x180 != 0 && +0x1B8 == 0` [M]; the boot value is 0 [M bootup 0x1c7e78,
+            // L the EE snapshots; menu.rs mp_envmods] and the match settings carry no such word yet,
+            // so the arenas' 0x34 placements stay uncreated (a mount was one machine's alone).
+            sim.drones.props.gunimps.clear();
             sim.mp = Some(m);
             eprintln!("mp: arena {level_id:08x} — {spawn_count} spawn points registered, {humans} human(s), Bond at spawn {sp} ({:.2}, {:.2}, {:.2}) yaw {:.3}",
                 sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.yaw);
@@ -4254,6 +4263,31 @@ impl ApplicationHandler for App {
                                 input.jump = ph % 211 == 0;
                                 input.crouch = ph % 307 == 0;
                             }
+                            // Test aid (NF_NET_AUTOPICK="a-b", mp-world-sync): on match ticks a..=b
+                            // steer this player at a live pickup (one of the three nearest, the pick
+                            // rotating every 10 s so a stuck walk moves on) — the two-window pickup
+                            // check without a hand on either window. Input only; the sim is untouched.
+                            if self.net.is_some() && std::env::var("NF_NET_AUTOPICK").ok()
+                                .and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
+                                .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick))
+                            {
+                                let b = &sim.bond;
+                                let mut live: Vec<[f32; 3]> = sim.drones.pickups.iter().filter(|p| !p.gone && !p.hidden)
+                                    .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]]).collect();
+                                let d2 = |p: &[f32; 3]| (p[0] - b.pos[0]).powi(2) + (p[2] - b.pos[2]).powi(2);
+                                live.sort_by(|x, y| d2(x).total_cmp(&d2(y)));
+                                let k = ((self.net_tick / 600) as usize + self.net_local_slot) % live.len().clamp(1, 3);
+                                if let Some(tg) = live.get(k) {
+                                    let want = (tg[0] - b.pos[0]).atan2(tg[2] - b.pos[2]);
+                                    let mut dy = (want - b.yaw) % std::f32::consts::TAU;
+                                    if dy > std::f32::consts::PI { dy -= std::f32::consts::TAU; }
+                                    if dy < -std::f32::consts::PI { dy += std::f32::consts::TAU; }
+                                    input.turn = dy.clamp(-0.08, 0.08);
+                                    input.forward = if dy.abs() < 0.8 { 1.0 } else { 0.2 };
+                                    input.look = (-b.pitch).clamp(-0.05, 0.05);
+                                    input.jump = self.net_tick % 97 == 0;
+                                }
+                            }
                             // weapon-matrix: the dev menu's "Test weapon" run (dev.rs) merges its
                             // inputs into this tick — the same lanes the keyboard uses
                             // (`switch_to`, the trigger, the R edge), never during a replay
@@ -4296,6 +4330,10 @@ impl ApplicationHandler for App {
                                 let ready = session.0.borrow_mut().ready_inputs(self.net_tick);
                                 match ready {
                                     Some(r) => {
+                                        // mp-world-sync: the row rides into `step_bond` (the remotes
+                                        // move before the local body; every slot's use/shot reaches
+                                        // the shared world).
+                                        sim.net_row = Some(r);
                                         let li = r[self.net_local_slot.min(nf_net::MAX_AGENTS - 1)];
                                         let view = (input.lift, input.stabilise, input.zoom_cycle);
                                         input = mpnet::to_player_input(&li);
@@ -4307,6 +4345,29 @@ impl ApplicationHandler for App {
                             } else {
                                 (trigger, reload, use_key)
                             };
+                            // mp-join-in-progress: the announced join spawn — every machine creates
+                            // the slot's agent at the same tick (the shared-stream pick is part of
+                            // this deterministic tick); the joiner's own view adopts the slot (the
+                            // camera and the full local path tick it from here on). mp-world-sync:
+                            // BEFORE the tick (`step_bond` now moves the remotes inside it) — the
+                            // late joiner's replay (`mp_late_join_catchup_joins`) spawns before its
+                            // tick too, so both see the same shared-stream order.
+                            let mut swap_after: Option<usize> = None;
+                            if self.net.is_some() && sim.net_row.is_some() {
+                                if let Some((js, jt)) = self.net_join_pending {
+                                    if self.net_tick == jt {
+                                        sim.mp_join_spawn(js as usize);
+                                        if js as usize == self.net_local_slot {
+                                            sim.swap_local_slot(js as usize);
+                                        } else if self.net_late_self == Some(js as usize) {
+                                            // The joiner: this tick runs as slot 0's machine
+                                            // (the host's exact tick); the move follows the hash.
+                                            swap_after = Some(js as usize);
+                                        }
+                                        self.net_join_pending = None;
+                                    }
+                                }
+                            }
                             // B-5 record: capture the exact input passed to step_bond, before the call.
                             if let Some(r) = &mut self.recorder { r.push(replay::TickInput::from_parts(&input, trigger, reload, use_key)); }
                             // The PC-port rapid fire (`--rapid-fire` / the dev Toggles page): local play only —
@@ -4331,25 +4392,7 @@ impl ApplicationHandler for App {
                                     // mp-join-in-progress: the host records the exact transcript
                                     // a late joiner replays (bit-exact by construction).
                                     session.0.borrow_mut().record_run_tick(self.net_tick, net_inputs);
-                                    // mp-join-in-progress: the announced join spawn — every
-                                    // machine creates the slot's agent at the same tick (the
-                                    // shared-stream pick is part of this deterministic tick);
-                                    // the joiner's own view adopts the slot (the camera and
-                                    // the full local path tick it from here on).
-                                    let mut swap_after: Option<usize> = None;
-                                    if let Some((js, jt)) = self.net_join_pending {
-                                        if self.net_tick == jt {
-                                            sim.mp_join_spawn(js as usize);
-                                            if js as usize == slot {
-                                                sim.swap_local_slot(slot);
-                                            } else if self.net_late_self == Some(js as usize) {
-                                                // The joiner: this tick runs as slot 0's machine
-                                                // (the host's exact tick); the move follows the hash.
-                                                swap_after = Some(js as usize);
-                                            }
-                                            self.net_join_pending = None;
-                                        }
-                                    }
+                                    // (The announced join spawn ran before `step_bond` — see there.)
                                     let inputs = net_inputs.map(|i| mpnet::to_player_input(&i));
                                     sim.step_net_remotes(&inputs, slot);
                                     sim.step_net_combat(&net_inputs, slot);

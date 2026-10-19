@@ -10,6 +10,9 @@ use nf_formats::weapon::WeaponData;
 pub const SOUND: u32 = 0xf5;
 /// `FRAME_RATE_INT · 120` (single player) with FRAME_RATE_INT = 60 [L]: a dropped gun lasts two minutes.
 pub const DROP_LIFETIME: u16 = 60 * 120;
+/// `Pickup_CreateFromSet` 0x18f1b0's respawn argument: 3 (×10 s) [M disasm 0x18f21c `addiu s6,zero,3`
+/// → 0x18f25c `sw s6,16(sp)`, `Pickup_Create`'s param 11 → +0x2C].
+pub const SET_RESPAWN: u16 = 3;
 /// `WldGravity.y · REC_FRAME_RATE²` [L]: the fall per tick².
 const GRAVITY: f32 = -9.8 * (1.0 / 60.0) * (1.0 / 60.0);
 
@@ -200,12 +203,19 @@ impl Pickup {
         let bounds = *models.get(&model)?;
         let rounds = (w.clip_size(base as usize) as i16).wrapping_mul(2);
         let m = nf_formats::placement::object_matrix(rotation, translation);
+        // The create call's stack arguments [M 0x18f1b0 disasm: `sw v1(0xF5),0(sp)` 0x18f24c →
+        // param 9 sound, `sw s5(1),8(sp)` → param 10 rest, `sw s6(3),16(sp)` 0x18f25c → param 11,
+        // `sw zero,24(sp)` → param 12; `Pickup_Create` 0x18dda0 stores param 11 → +0x2C (the
+        // respawn: 0x18dda8 `lhu v1,272(sp)` → 0x18def8 `sh v0,44(s3)`) and param 12 → +0x2E
+        // (the lifetime: 0x18ddb0 → 0x18df08)]. So every set pickup respawns 3·10 s after a take
+        // (`Pickup_Update` 0x18e148's `FRAME_RATE_INT · respawn · 10` wait) — mp-world-sync: the
+        // port's 0 deleted the arenas' weapons for good on the first take.
         Some(Pickup {
             kind: kind::WEAPON, weapon: base, rounds, model, bounds, m,
             start: translation, vel: [0.0; 3], state: 1, lifetime: 0,
-            switch_channel: 0, sound: None,
+            switch_channel: 0, sound: Some(SOUND),
             hidden: false, gone: false, from: None, obj: None,
-            respawn: 0, respawn_ticks: 0, spin: false,
+            respawn: SET_RESPAWN, respawn_ticks: 0, spin: false,
             label: 0,
         })
     }
