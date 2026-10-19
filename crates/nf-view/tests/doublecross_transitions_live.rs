@@ -40,7 +40,7 @@ fn hop_lands_on(next: u32) -> u32 {
 /// None of the Double Cross exits may reference the never-entered wrapper codes [D: every 0xE8
 /// param 0 on the disc scanned — nothing loads 0x07000041/43/46/49; the decomp has no loader
 /// constant for them [M — the only ELF hits are the MapMusic rows 0x24fe0c-0x24fef0]].
-fn assert_no_wrapper_target(sim: &nf_game::Sim, level: &str) {
+fn assert_no_wrapper_target(sim: &nf_view::scene::Sim, level: &str) {
     for t in &sim.drones.triggers {
         if t.kind == nf_game::triggers::kind::LOAD_LEVEL {
             assert!(!matches!(t.next_level, 0x0700_0041 | 0x0700_0043 | 0x0700_0046 | 0x0700_0049),
@@ -332,8 +332,8 @@ fn the_double_cross_row_wraps_movie_less_and_keeps_the_straight_load() {
     }
     // The hint tables' sizes [M 0x1d5258: 01 two entries, 02 four, 03 five, 04 two; 05 is the
     // fixed-hint sister [M — pinned in loading.rs's tables]].
-    assert_eq!(nf_view::loading::hint_for(0x0700_0002, || 1), Some(0x0100_00c7), "02's own table, first pick with the coin flip on");
-    assert_eq!(nf_view::loading::hint_for(0x0700_0004, || 3), Some(0x0100_00d0), "04's own table");
+    assert_eq!(nf_view::loading::hint_for(0x0700_0002, || 1), Some(0x0100_00c8), "02's own table (rand 1 → entry 1, the coin flip keeps it) [M 0x1d5258]");
+    assert_eq!(nf_view::loading::hint_for(0x0700_0004, || 3), Some(0x0100_00d0), "04's own table (rand 3 → entry 1) [M 0x1d5258]");
 }
 
 /// The mission-fail side stays separate [M 0x182c60:21-42 — a ch-0x60 death never requests a
