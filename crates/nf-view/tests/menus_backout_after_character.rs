@@ -212,8 +212,7 @@ fn two_joined_players_survive_the_same_backout_and_the_match_starts() {
     assert_eq!(fe.page, Page::MpMode);
     assert!(act(&mut fe, Action::Confirm), "the Local row walks to the join page");
     assert_eq!(fe.page, Page::MpJoin);
-    // The keyboard agent joins: ✕ (state 0 → 1), ✕ on the codename list (1 → 5) [M the
-    // MpJoin arm's folded walk], then a second human lands in panel 2 (a pad join's record).
+    // The keyboard agent joins: ✕ (state 0 → 1), ✕ on the codename list (1 → 5) [M P_MPJOIN 0x20ca00's state arms + the ready walk: C_RBMPSTART 0x20d048:55-60 + P_MPJOIN 0x20ca00:185-192], then a second human lands in panel 2 (a pad join's record).
     assert!(act(&mut fe, Action::Confirm), "agent 1 joins");
     assert!(act(&mut fe, Action::Confirm), "agent 1 picks the codename");
     assert!(fe.mp_join[0].joined, "the host's own panel is in");
@@ -223,7 +222,7 @@ fn two_joined_players_survive_the_same_backout_and_the_match_starts() {
     assert_eq!(fe.mp_human_count(), 2, "two joined players");
 
     // The host's ✕ readies and walks on; the usual flow to the setup page and through the
-    // character [M the state-5 arm: mpjoin+1 = 1, Menu_MPAreWeReady → 0x4000001a].
+    // character [M P_MPJOIN 0x20ca00:185-192 (the mpjoin+…==1 walk, Menu_MPAreWeReady → the 0x44/0x4000001a send); C_RBMPSTART 0x20d048:55-60 (the state-5 arm)].
     assert!(act(&mut fe, Action::Confirm), "the host's ✕ readies and walks on");
     assert!(fe.mp_join[0].ready, "the ready set with the walk");
     assert_eq!(fe.page, Page::MpScenario);

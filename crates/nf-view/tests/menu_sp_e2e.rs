@@ -380,8 +380,12 @@ fn each_difficulty_reaches_the_mission_list() {
         assert_eq!(fe.page, Page::MissionSelect);
         assert_eq!(fe.difficulty, d, "the choice rode the confirm");
         assert_eq!(fe.cursor, 1, "the list opens on the highest unlocked row [M 0x20b608:60-64]");
-        // fe-audit 1019: the pushed chain pops back to the wheel — the confirm's 0x44 b=0 pushed
-        // it [M C_SBNFDFCTY 0x216ca8:10-17 + the push rule 0x21c858 case 0x44], and the pop
+        // fe-audit 1019: the pushed chain pops back to the wheel — the confirm's 0x44 carries
+        // b = DAT_002e1adc [M 0x202190:9] — here 0 [S] unverified: the global is cleared by
+        // C_SBNFCN 0x20b390:30 / P_NFSELECT 0x20aec0:65 and set by P_MPJOIN 0x20ca00:182 /
+        // C_SBCNOPTIONS 0x213528:66 / P_CNNAME 0x213790:71 / C_KEYBOARD 0x213a98:61, so the
+        // value depends on which menus ran — pushed it [M the push rule 0x21c858 case 0x44;
+        // C_SBNFDFCTY 0x216ca8:10-17 only calls Menu_ChangePageCloseIris], and the pop
         // reopens the saved page AND cursor [M 0x21c858:592-600]. (No msg-99 script stands on
         // the disc [D the 08000002 tag stream] — the 99 arm only fires on an empty stack.)
         assert!(act(&mut fe, Action::Back));
@@ -552,7 +556,7 @@ fn a_completed_mission_routes_the_results_save_and_the_next_row() {
     assert_eq!(fe.page, Page::Main, "the empty-stack △ opens MAIN [M 0x20b608:67-68]");
     // Forward again through NightFire (row 0 → C_GONIGHTFIRE's delayed 0x44(0x40000025, 0)
     // [M 0x2169b8]) — the Codenames row would open P_CNSELECT 0x4000001b, not this page
-    // [M C_GOCODENAMES 0x2169e8].
+    // [M C_GOCODENAMES 0x216b38:36-37 — the delayed 0x44 to 0x4000001b].
     assert!(act(&mut fe, Action::Confirm), "NightFire");
     assert_eq!(fe.page, Page::Codename);
     while fe.cursor < 2 {

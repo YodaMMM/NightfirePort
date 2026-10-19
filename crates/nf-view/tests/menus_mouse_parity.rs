@@ -610,10 +610,14 @@ fn clicks_never_change_what_they_should_not() {
     }
     // The difficulty ride-along: clicks on the difficulty wheel pick rows only through the
     // page's own confirm — the value lands in requested_difficulty once, not per click.
-    // fe-audit 1019: the list was PUSHED over the wheel (the confirm's 0x44 b=0 [M
-    // C_SBNFDFCTY 0x216ca8:10-17 + 0x21c858 case 0x44]), so Back is the default pop — the
-    // wheel, cursor restored [M 0x21c858:592-600]. (No msg-99 script stands on the disc
-    // [D the 08000002 tag stream]; the empty-stack arm → MAIN is the results route, pinned
+    // fe-audit 1019: the list was PUSHED over the wheel (the confirm's 0x44 carries
+    // b = DAT_002e1adc [M 0x202190:9] — here 0 [S] unverified: the global is cleared by
+    // C_SBNFCN 0x20b390:30 / P_NFSELECT 0x20aec0:65 and set by P_MPJOIN 0x20ca00:182 /
+    // C_SBCNOPTIONS 0x213528:66 / P_CNNAME 0x213790:71 / C_KEYBOARD 0x213a98:61, so the
+    // value depends on which menus ran; C_SBNFDFCTY 0x216ca8:10-17 only calls
+    // Menu_ChangePageCloseIris + the push rule 0x21c858 case 0x44]), so Back is the default
+    // pop — the wheel, cursor restored [M 0x21c858:592-600]. (No msg-99 script stands on the
+    // disc [D the 08000002 tag stream]; the empty-stack arm → MAIN is the results route, pinned
     // in menu_sp_e2e.)
     let mut g = FrontEnd::new();
     to_missions(&mut g);
