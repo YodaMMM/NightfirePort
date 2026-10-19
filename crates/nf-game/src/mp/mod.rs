@@ -58,6 +58,10 @@ pub mod replay;
 pub mod rules;
 pub mod hud;
 
+/// mp-combat-weapons: the online match's shared rounds/grenades/blasts and the MP pain rules
+/// (`Player_HandlePain` 0x1902c8's MP arm) — see `docs/systems/mp-combat.md`.
+pub mod combat;
+
 pub use rules::{MpObjBounds, MpObjState, MpObjectsRt, Winner};
 
 /// `MP_skins` (ACTION.ELF 0x26d488, 29 records × 16 B: skin hashcode, name label, a small count,
@@ -172,7 +176,10 @@ pub struct MpSettings {
     pub bot_count: u32,
     /// +0x436: the weapon set 0..10 (the PickupMatrix row).
     pub weapon_set: u32,
-    /// +0x444: the capture-weapon reward.
+    /// +0x444 (Ghidra decimal — hex +0x1BC): the capture-weapon reward word — the Player Mods
+    /// "Professional Mode" row (label 0x1ac [L USATxt.dat], P_MPPLAYERMODS 0x2104d0:14 [M]); the
+    /// MP pain path multiplies by 3 when it is set [M `Player_HandlePain` 0x1902c8:79-81
+    /// `MPSettings._444_4_`] (mp-combat-weapons).
     pub capture_reward: u32,
     /// +0x448: the spawn selection policy — see `MpMatch::get_spawn_point` for what the game's
     /// arithmetic actually does per value.
@@ -185,6 +192,10 @@ pub struct MpSettings {
     /// bullet hits in `MP_RegisterBulletHit` 0x1857c0:43-57 [M]. The menu's Player Mods row 0x1ae
     /// writes it [M mp-menus.md].
     pub friendly_fire: u32,
+    /// +0x1C8 hex (Ghidra `_456_`): Location Damage (label 0x24e [L USATxt.dat]; the Player Mods
+    /// row P_MPPLAYERMODS 0x2104d0:15 [M]) — the MP pain path's per-part multipliers [M
+    /// `Player_HandlePain` 0x1902c8:62-78]. Boot value 1 [M bootup_bootup 0x1c7e78 @0x1c7ff8].
+    pub location_damage: u32,
     /// Port-only ([S], no game field): the deterministic lockstep seed — every machine in an
     /// online match builds the level from the same seed (net-match-host). The game's local flow
     /// keeps the level-build constant the port used before (0x1234_5678 equivalent: seed 0 keeps
@@ -219,6 +230,7 @@ impl MpSettings {
             radar: 1,
             registered_pickups: 0,
             friendly_fire: 0,
+            location_damage: 1,
             seed: 0,
         }
     }

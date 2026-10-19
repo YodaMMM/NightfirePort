@@ -68,7 +68,12 @@ pub const MAX_AGENTS: usize = 16;
 /// records (334 B), the INPUT header grows to 15 bytes, JOIN_LOG chunks
 /// carry 3 ticks (16 agents × 24 B × 3 = 1152 B) and MAX_INPUT_COUNT_H2C
 /// drops to 3 so the largest relay packet still fits [`MAX_PACKET`] [S].
-pub const PROTOCOL_VERSION: u16 = 5;
+/// 5: mp-combat-weapons — the input grows to 28 bytes: the shot description
+/// (byte 22 the fired record, byte 23 the shot flags, bytes 24..28 the aim
+/// yaw/pitch as i16 angles). JOIN_LOG chunks stay 3 ticks (1344 B of inputs).
+/// 6: net-internet (compact delta inputs, adaptive delay) + mp-combat-weapons (28-byte input)
+/// merged — the compact encoding runs over the 28-byte layout (7 words).
+pub const PROTOCOL_VERSION: u16 = 6;
 
 /// Build id carried in the handshake so mismatched executables refuse cleanly.
 /// The host app sets this (e.g. a build counter); both sides must match exactly.

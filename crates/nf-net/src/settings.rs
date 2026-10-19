@@ -10,7 +10,7 @@
 //! carries two unrelated profile fields) — this wire layout is new, tagged
 //! [S] as a port feature (the PS2 game has no network mode).
 //!
-//! Wire layout (334 bytes, little-endian, protocol 4): 19 `u32` scalars in a
+//! Wire layout (338 bytes, little-endian, protocol 5): 20 `u32` scalars in a
 //! fixed order, then the per-player records of 4 `u32` (team, skin,
 //! armor_bonus, radar_on), then a `u16` registered_pickups + 2 reserved
 //! bytes. Offsets in comments are the game's `MpSettings` hex offsets for
@@ -18,7 +18,8 @@
 //! and no registered_pickups — the consolidation (net-consolidate 2026-10-16)
 //! added the two fields the match-host layer carried and this one dropped.
 //! Protocol 2/3 carried 8 records (208 B, the game's own slot count [M]);
-//! protocol 4 (mp-16-slots) carries 16 — the port's agent cap [S].
+//! protocol 4 (mp-16-slots) carries 16 — the port's agent cap [S]; protocol 5
+//! (mp-combat-weapons) adds the 20th scalar, Location Damage (+0x1C8).
 
 /// The match configuration the host sends in `WELCOME`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,7 +54,8 @@ pub struct MatchSettings {
     pub bot_count: u32,
     /// weapon_set (0x1B4)
     pub weapon_set: u32,
-    /// capture_reward (0x1BC)
+    /// capture_reward (0x1BC) — the Player Mods "Professional Mode" word (label 0x1ac [L
+    /// USATxt.dat]; `Player_HandlePain` 0x1902c8 multiplies MP damage by 3 when set [M])
     pub capture_reward: u32,
     /// spawn_policy (0x1C0)
     pub spawn_policy: u32,
@@ -62,6 +64,9 @@ pub struct MatchSettings {
     /// friendly_fire (0x198 hex; Ghidra `_408_` decimal 0x198 was once
     /// misread as decimal +0x408 — the merge-review trap this field caused)
     pub friendly_fire: u32,
+    /// location_damage (0x1C8): the Player Mods "Location Damage" word (label 0x24e [L
+    /// USATxt.dat]) — the MP pain path's per-part multipliers [M 0x1902c8:62-78]. Protocol 5.
+    pub location_damage: u32,
     /// Per-slot records: (team 0x20, skin 0x24, armor_bonus 0x2c, radar_on
     /// +0x28) per MpPlayer; name (+0x00) and saved-flag (+0x28's bit) are not
     /// carried by the port's MpPlayer. The game's own block is 8 records
@@ -74,10 +79,13 @@ pub struct MatchSettings {
     pub registered_pickups: u16,
 }
 
-/// Bytes occupied by a [`MatchSettings`] on the wire: 19 u32 scalars +
+/// Bytes occupied by a [`MatchSettings`] on the wire: 20 u32 scalars +
 /// [`crate::MAX_AGENTS`] × 16-byte records + the u16 registered_pickups
 /// (protocol ≤ 3: 208 with 8 records [M the game's 8-slot block]).
-pub const SETTINGS_WIRE_SIZE: usize = 19 * 4 + crate::MAX_AGENTS * 16 + 2;
+pub const SETTINGS_WIRE_SIZE: usize = SCALARS * 4 + crate::MAX_AGENTS * 16 + 2;
+
+/// The scalar words before the per-player records (protocol 5: 20).
+const SCALARS: usize = 20;
 
 impl Default for MatchSettings {
     fn default() -> Self {
@@ -101,6 +109,7 @@ impl Default for MatchSettings {
             spawn_policy: 0,
             radar: 0,
             friendly_fire: 0,
+            location_damage: 1, // the boot value [M bootup_bootup 0x1c7e78 @0x1c7ff8]
             players: [(0, 0, 0, 1); crate::MAX_AGENTS],
             registered_pickups: 0,
         }
@@ -135,15 +144,16 @@ impl MatchSettings {
         put(16, self.spawn_policy);
         put(17, self.radar);
         put(18, self.friendly_fire);
+        put(19, self.location_damage);
         for (k, &(team, skin, armor, radar_on)) in self.players.iter().enumerate() {
-            let base = 19 + k * 4;
+            let base = SCALARS + k * 4;
             put(base, team);
             put(base + 1, skin);
             put(base + 2, armor);
             put(base + 3, radar_on);
         }
         // The registered pickup count (u16) in the old reserved tail.
-        let tail = 19 * 4 + crate::MAX_AGENTS * 16;
+        let tail = SCALARS * 4 + crate::MAX_AGENTS * 16;
         out[tail..tail + 2].copy_from_slice(&self.registered_pickups.to_le_bytes());
     }
 
@@ -157,10 +167,10 @@ impl MatchSettings {
         };
         let mut players = [(0u32, 0u32, 0u32, 0u32); crate::MAX_AGENTS];
         for (k, p) in players.iter_mut().enumerate() {
-            let base = 19 + k * 4;
+            let base = SCALARS + k * 4;
             *p = (get(base), get(base + 1), get(base + 2), get(base + 3));
         }
-        let tail = 19 * 4 + crate::MAX_AGENTS * 16;
+        let tail = SCALARS * 4 + crate::MAX_AGENTS * 16;
         let registered_pickups = u16::from_le_bytes([buf[tail], buf[tail + 1]]);
         Some(MatchSettings {
             started: get(0),
@@ -182,6 +192,7 @@ impl MatchSettings {
             spawn_policy: get(16),
             radar: get(17),
             friendly_fire: get(18),
+            location_damage: get(19),
             players,
             registered_pickups,
         })

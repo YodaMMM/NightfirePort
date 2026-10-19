@@ -7929,6 +7929,11 @@ pub struct Drones {
     /// Bond's bullets in flight, what they hit this tick, the global flinch stamp (`DAT_00298FC0`) and whether Bond
     /// aims (L1).
     pub player_bullets: Vec<PlayerBullet>,
+    /// mp-combat-weapons: an online match runs the human's damage in the shared combat
+    /// (`nf_game::mp::combat`); this machine's own visual blasts must not hurt its local player
+    /// (the shared health is written back every tick, but a local zero would start the death
+    /// sequence on one machine only). Set by the app's Sim while online. Local only.
+    pub net_no_self_hurt: bool,
     /// fix-0c-hatch-latches2 (rebased onto the grate-02 machine): this tick's player-bullet Operate
     /// contacts against the SS parts, per SS index (bit 1 = a bullet) — recorded by
     /// `update_player_bullets` from each bullet's flight segment (dead or alive: in the game the
@@ -8401,7 +8406,7 @@ impl Drones {
         // `Drone_SM_InitObject` numbers state machines in creation order (the base is not known: 0 here).
         for (i, dr) in list.iter_mut().enumerate() { dr.sm_id = i as u32; dr.index = i; }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             movie_request: None,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
@@ -9030,7 +9035,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let hits = crate::explode::propagate(pos, radius, damage, owner,
             &crate::explode::Targets { drones: &drones, player: player_pos, breaks: &[], destroys: &[] });
         // Bond: `Player_Hurt` (the difficulty factor is applied in `explode_propagate`).
-        if let Some(ph) = hits.player {
+        if let Some(ph) = hits.player.filter(|_| !self.net_no_self_hurt) {
             let before = self.health.health;
             // `Explode_Propagate` → `Player_Hurt` → `Player_HandlePain` (type 0): BL+0x967 = 0xC
             // (both sides) [M 0x1902c8:124-130]. The pain grunt rides the 1-in-4 roll [M 0x1902c8:110-119].

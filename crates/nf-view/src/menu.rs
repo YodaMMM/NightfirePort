@@ -6301,6 +6301,11 @@ impl FrontEnd {
         // place (mp-menus.md row 0x1ae) and MP_RegisterBulletHit 0x1857c0:43-57 reads it; the
         // port rebuilds the struct here, so the choice must be mapped or it is dropped.]
         s.friendly_fire = self.mp_friendly_fire;
+        // mp-combat-weapons: the other two Player Mods rows — +0x1BC Professional Mode (the
+        // port's `capture_reward` word) and +0x1C8 Location Damage [M P_MPPLAYERMODS
+        // 0x2104d0:14-15]; the MP pain path reads both [M Player_HandlePain 0x1902c8:62-81].
+        s.capture_reward = self.mp_player_mods[0];
+        s.location_damage = self.mp_player_mods[1];
         // [M P_MPCONFIRM 0x20ec00's msg-0x4b: 0x20f708 andi 1 → 0x20f710 sw — Explosive Scenery
         // masks to 0/1 at match start, so the locked page's stale 0x10 can never arm it]
         self.mp_envmods[2] &= 1;
@@ -6378,6 +6383,7 @@ impl FrontEnd {
         self.mp_weapon_set = s.weapon_set;
         self.mp_radar = s.radar;
         self.mp_friendly_fire = s.friendly_fire;
+        self.mp_player_mods = [s.capture_reward, s.location_damage];
         for (i, slot) in self.mp_join.iter_mut().enumerate().take(4) {
             let joined = (i as u32) < s.human_count;
             slot.joined = joined;

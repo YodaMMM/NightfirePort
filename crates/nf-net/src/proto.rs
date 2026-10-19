@@ -19,7 +19,7 @@
 //! | 9 | GO (host→client) | first_tick u32 |
 //! | 10 | DATA (app tunnel) | len u16 + bytes — opaque app-to-app blob (the lobby's choices); the session never inspects it |
 //! | 11 | JOIN_BEGIN (host→late joiner) | first_tick u32, snapshot_tick u32, snapshot_hash u64 — the late-join handover head: the input log covers `first_tick..snapshot_tick` and the replay must hash to `snapshot_hash` at `snapshot_tick` |
-//! | 12 | JOIN_LOG (host→late joiner) | first_tick u32, tick_count u8, chunk_index u16, chunk_count u16, tick_count × (16 × 24 B inputs) — one chunk of the recorded run log |
+//! | 12 | JOIN_LOG (host→late joiner) | first_tick u32, tick_count u8, chunk_index u16, chunk_count u16, tick_count × (16 × 28 B inputs) — one chunk of the recorded run log |
 //! | 13 | JOIN_ACK (late joiner→host) | chunk_index u16 — all chunks ≤ chunk_index are held |
 //! | 14 | JOIN_READY (late joiner→host) | — the replay verified (hash matched) and the joiner is caught up; the host picks the join tick |
 //! | 15 | JOIN_SLOT (host→all) | slot u8, join_tick u32 — the slot becomes human from join_tick (its inputs start there; before it the slot rides NEUTRAL) |
@@ -56,8 +56,8 @@ pub const PT_PING: u8 = 16;
 pub const PT_PONG: u8 = 17;
 pub const PT_DELAY: u8 = 18;
 
-/// Ticks one JOIN_LOG chunk carries (16 agents × 24 B × 3 = 1152 B — fits
-/// [`MAX_PACKET`] with header room; protocol ≤ 3 carried 12 ticks of 4
+/// Ticks one JOIN_LOG chunk carries (16 agents × 28 B × 3 = 1344 B — fits
+/// [`MAX_PACKET`] with header room (1357 B with the headers); protocol ≤ 3 carried 12 ticks of 4
 /// agents, the same 1152 B [S mp-16-slots]).
 pub const JOIN_LOG_CHUNK_TICKS: usize = 3;
 
@@ -671,7 +671,7 @@ mod tests {
         assert_eq!(decode(&b).unwrap(), p);
         assert_eq!(b[8], 0xff, "mask low byte (header 4 + tick 4)");
         assert_eq!(b[9], 0xff, "mask high byte");
-        // The largest relay packet fits MAX_PACKET: 3 ticks × 15 agents × 24 B
+        // The largest relay packet fits MAX_PACKET: 3 ticks × 15 agents × 28 B
         // + the 15-byte head + the 4-byte header.
         let h2c = Packet::Input {
             base_tick: 0,
