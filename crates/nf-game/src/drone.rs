@@ -8282,6 +8282,45 @@ pub struct Drones {
     /// The 07000041 wrapper-end countdown (ticks since the approach chain's ch 1 rose): the port's
     /// [S] stand-in for the wrapper's end into 0x0700001b — see the tick_inner arm for the evidence.
     pub wrapper_end_timer: Option<u32>,
+    /// mp-world-sync (agent 9): online, every body the shared world sees this tick (the human
+    /// slots in slot order, then the bots), set by the Sim before `tick`. `Some` switches the
+    /// world's player-contact passes (the pickup take, `Trigger_Calc`'s player touchers, the
+    /// doors' actor list) from the one local player to these bodies, so every machine's world
+    /// reacts to every body identically [S port design — the PS2's four `glb_players` are one
+    /// machine's objects; the game's own walks already loop over all of them, e.g. `Pickup_Update`
+    /// 0x18e148's player loop + the MP bot loop]. `None` offline (the single-player path).
+    pub net_bodies: Option<Vec<NetBody>>,
+    /// mp-world-sync: the pickup takes of the latest online tick — (pickup index, the taker's
+    /// slot, the taker is a bot). The Sim applies the takers' shared effects (armour, a bot's health).
+    pub net_takes: Vec<(usize, usize, bool)>,
+    /// mp-world-sync: online, every slot's use-key trigger half (head, look) in slot order —
+    /// the deferred `Player_Activate` trigger arm of `use_trigger_request`, one per pressing body.
+    pub net_use_triggers: Vec<(V3, V3)>,
+}
+
+/// mp-world-sync (agent 9): one body as the online shared world sees it (see `Drones::net_bodies`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NetBody {
+    /// The MP slot (humans 0..; a bot's own slot).
+    pub slot: usize,
+    /// A bot (`Drone_tag` class in the game — the drone toucher, the bot pickup arm).
+    pub bot: bool,
+    /// This machine's own player (its take also fills the real inventory).
+    pub local: bool,
+    /// Alive (the game's `obj+0xF4 == 1` gate in `Pickup_Update` 0x18e148).
+    pub alive: bool,
+    /// The object position (`obj+0x30`, the port's `Bond::pos`; a bot's eye minus `EYE`).
+    pub pos: V3,
+    /// The world-sphere centre (`obj+0x80` — the pickup LOS origin).
+    pub sph: V3,
+    /// The head (a bot's eye) — the drone toucher's top.
+    pub head: V3,
+    /// The runtime cel the queries start from (as `Player::cel`).
+    pub cel: Option<usize>,
+    /// Hanging on a wire/zipline (no volume contacts).
+    pub hanging: bool,
+    /// The slot's shared armour (`BLData+0x8B0`) — the armour pickup's refusal gate.
+    pub armour: f32,
 }
 
 /// `NDrone2_DefaultInit` (0x14b300): the voice set `+0xD8` from the character id (skin 0x05000000 + id).
@@ -8442,6 +8481,10 @@ impl Drones {
             wrapper_end_timer: None,
             // mayhew-end-transition: no hold at build (own line — merge lesson 4).
             exit_hold: None,
+            // mp-world-sync: offline until the Sim sets the bodies (own lines — merge lesson 4).
+            net_bodies: None,
+            net_takes: Vec::new(),
+            net_use_triggers: Vec::new(),
     };
         drones
     }
@@ -9299,7 +9342,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the class-5 contact subtracts its damage; Break_Kill 0x12b970 sets obj+0xFE bit 0
             // and plays the kill sound; no channel is written]). The kill records queue for the
             // view (sound + shatter/debris presentation).
-            for k in self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage) {
+            // mp-world-sync (agent 9): online the breakables and destroyables take every slot's
+            // shot in the Sim's shared world pass (`Sim::step_net_world`), on every machine —
+            // this machine's own bullet must not break them here alone.
+            let net_world = self.net_bodies.is_some();
+            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage) } {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
                 // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
@@ -9320,7 +9367,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let m = self.monitors.list.iter().find(|m| m.state == 3).map(|m| m.pos);
                 if let Some(p) = m { self.pending_blasts.push((p, 3.0, 200.0, usize::MAX, 0, 0x0600_0027, 3.0)); }
             }
-            for (pos, radius, damage, kind) in self.props.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.channels, frame) {
+            for (pos, radius, damage, kind) in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.channels, frame) } {
                 let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
                 // fix-blast-scripts2: Destroy_Smash's f12 reads the tag's +0x8c [M 0x12bcdc `lwc1
                 // $f12, 140($16)`] — the port keeps the historical scale = radius here (no disc
@@ -10427,6 +10474,92 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // Every consumer already filters `gone`/`hidden`.
     }
 
+    /// mp-world-sync (agent 9): `Pickup_Update` 0x18e148 online — the same per-pickup walk
+    /// (the state-2 respawn wait, the spin, the fall, the touch, the lifetime) with the game's
+    /// own taker order: every human slot in slot order (the `glb_players[0..4]` loop: alive
+    /// `obj+0xF4 == 1`, `dist²(pickup+0x80, player+0x30) < (r + 1.1)²`, the LOS from the
+    /// player's `+0x80`), then — only when no human touched — the bots (the `MPSettings+0x184`
+    /// loop over `MPGame` slots 4..7, the LOS from the bot's `+0x30`); the first qualifying
+    /// body gets `Pickup_Handler` 0x18e650 and the walk returns for that pickup [M 0x18e148:203-246].
+    ///
+    /// The take decision rides only state every machine holds: the armour pickup is refused at
+    /// the taker's shared armour ≥ 50 [M 0x18e650:220-225]; a weapon/ammo pickup is consumed by
+    /// the first touching body even when that player's ammo is full **[S deviation]** — the
+    /// game refuses a full player there (`Player_EquipAmmo` returning 0), but that player's ammo
+    /// lives only on its own machine, so no other machine could decide the same way. The local
+    /// taker's real inventory still takes the item (`Inventory::take`, the auto-switch, the
+    /// tally) — only the consumption is shared. The consumption tail is the game's: the sound,
+    /// the switch channel, then respawn 0 → deleted, 0xFFFF → stays, else hidden in state 2 for
+    /// `FRAME_RATE_INT · respawn · 10` ticks [M 0x18e650:322-348] — every machine counts the
+    /// same timer, so the respawns agree. `net_takes` lists the takes for the Sim's shared
+    /// effects (armour, a bot's health).
+    fn update_pickups_net(&mut self, d: &Data, bodies: &[NetBody], frame: u32) {
+        self.net_takes.clear();
+        for k in 0..self.pickups.len() {
+            {
+                let p = &mut self.pickups[k];
+                if p.gone { continue; }
+                if p.state == 2 { p.respawn_wait(); continue; }
+                p.spin_tick();
+                p.fall(d.world);
+            }
+            let p = &self.pickups[k];
+            let touching = |b: &NetBody| b.alive && p.touches(d.world, b.cel, b.pos, if b.bot { b.pos } else { b.sph });
+            let taker = bodies.iter().position(|b| !b.bot && touching(b))
+                .or_else(|| bodies.iter().position(|b| b.bot && touching(b)));
+            if let Some(bi) = taker {
+                let b = bodies[bi];
+                let kind = self.pickups[k].kind;
+                // The armour refusal is the only shared refusal (the pickup stays; the walk still
+                // returns for this pickup, so its lifetime does not run this tick [M 0x18e148:238]).
+                // The bot arm never refuses armour (health +20, armour +rounds capped — 0x18e650:
+                // case 3 of the class-2 branch).
+                if !b.bot && kind == crate::pickup::kind::ARMOUR && b.armour >= 50.0 { continue; }
+                let clock = frame;
+                if b.local {
+                    let p = self.pickups[k].clone();
+                    let loaded = d.skins.contains_key(&d.weapons.first_person(p.weapon as usize));
+                    let mut armour = b.armour;
+                    let taken = self.inventory.take(d.weapons, &p, loaded, &mut armour, clock);
+                    if std::env::var_os("NF_PICKUPLOG").is_some() {
+                        eprintln!("[take-net] tick {} slot {} weapon {:#x} kind {} → {:?}", frame, b.slot, p.weapon, p.kind, taken);
+                    }
+                    if self.auto_switch && matches!(taken, Some(crate::pickup::Taken::Weapon { .. })) {
+                        let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                        if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
+                            self.weapon_switch_request = Some(id);
+                        }
+                    }
+                    if matches!(taken, Some(crate::pickup::Taken::Bonus)) { self.progress.log_bond_bonus(self.mission.status()); }
+                    if let Some(t) = taken { self.taken.push((frame, t)); }
+                }
+                let p = &mut self.pickups[k];
+                if p.switch_channel != 0 { self.channels.set(p.switch_channel as u32, 1, frame); }
+                // The per-kind take sound [M 0x18e650:290-321] — local presentation only.
+                let sound = match kind {
+                    crate::pickup::kind::WEAPON | crate::pickup::kind::AMMO => Some(0xF5),
+                    crate::pickup::kind::BOND_BONUS => Some(0x14C),
+                    crate::pickup::kind::ARMOUR => Some(0x141),
+                    _ => p.sound,
+                };
+                match p.respawn {
+                    0 => p.gone = true,
+                    0xFFFF => {}
+                    r => { p.hidden = true; p.state = 2; p.respawn_ticks = 60 * r as u32 * 10; }
+                }
+                let at = [p.m[3][0], p.m[3][1], p.m[3][2]];
+                if let (Some(id), Some(sfx)) = (sound, d.sfx) { self.play_sound(at, sfx.get(id)); }
+                self.net_takes.push((k, b.slot, b.bot));
+                continue;
+            }
+            let p = &mut self.pickups[k];
+            if p.lifetime != 0 {
+                p.lifetime -= 1;
+                if p.lifetime == 0 { p.gone = true; }
+            }
+        }
+    }
+
     /// Turns a switch channel on (callers and tests).
     pub fn set_channel(&mut self, c: u8) { let f = self.frame; self.channels.set(c as u32, 1, f); }
 
@@ -11076,7 +11209,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // stand-in's remaining known miss (07000002's bunker plate 0x80 below the floor) is
         // unchanged in kind — floor plates between 0.4 and 0.557 below the reference now fire, as
         // the game's do.
-        let touchers: Vec<crate::triggers::Toucher> = std::iter::once(crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) })
+        // mp-world-sync (agent 9): online every live human body is a player toucher (the same
+        // stand-in reach) and every live bot a drone toucher (the bot is a `Drone_tag` — the
+        // drone-class contact bit), in slot order, so a door plate or trigger sees every body
+        // on every machine [S the per-body touchers; the reach laws are the ones above].
+        let player_touchers: Vec<crate::triggers::Toucher> = match &self.net_bodies {
+            None => vec![crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) }],
+            Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| if b.bot {
+                crate::triggers::Toucher { a: [b.pos[0], b.pos[1] - 1.0, b.pos[2]], b: b.head, r: 0.4, drone: true, skin: 0, contain: true }
+            } else {
+                crate::triggers::Toucher { contain: !b.hanging, ..crate::triggers::Toucher::player([b.pos[0], b.pos[1] - 0.6, b.pos[2]]) }
+            }).collect(),
+        };
+        let touchers: Vec<crate::triggers::Toucher> = player_touchers.into_iter()
             .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true }))
             .collect();
         drop(prof_pre);
@@ -11086,6 +11231,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // muxes' updates in the same walk [M 0x1336f8's loop; Player_Activate 0x1a5170]. Consumed
         // here so the written channel survives to the mux walk (0700000c's secret door).
         if let Some((head, look)) = self.use_trigger_request.take() {
+            self.player_use_triggers(head, look, frame);
+        }
+        // mp-world-sync: online, every pressing body's trigger half, in slot order.
+        for (head, look) in std::mem::take(&mut self.net_use_triggers) {
             self.player_use_triggers(head, look, frame);
         }
         // `switch_channels_prev` is snapshotted right after `Trigger_Calc`, BEFORE the object walk [M 0x1336f8:52-53
@@ -11221,7 +11370,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .collect();
         order.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         // Pickups are created at run time, so they head the control list: `Pickup_Update` before the placed objects.
-        self.update_pickups(d, player, frame);
+        // mp-world-sync: online the take walk sees every body (`update_pickups_net`).
+        match self.net_bodies.take() {
+            Some(bodies) => { self.update_pickups_net(d, &bodies, frame); self.net_bodies = Some(bodies); }
+            None => self.update_pickups(d, player, frame),
+        }
         // The actor list `Door_Update`'s proximity test (`dist² < (r1+r2)²·2` over classes
         // 2/3/0x12, skipping `obj+0xF0 & 0x10` candidates [M 0x136678-0x136684]) sees: the player
         // first (`glb_players`, the activator of every auto-activation) with radius 0.4, then every
@@ -11229,7 +11382,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // modelled CLEAR for both — the 07000005 player reads 0x880 [L ee_start_05.bin]; the drones'
         // 07000005 value is not in the snapshots and the bit's writer is unported (door-port-check #2:
         // on 07000001 both are SET [L], which the port cannot reproduce yet).
-        let actors: Vec<crate::door::DoorActor> = std::iter::once((player.pos, 0.4, false))
+        // mp-world-sync: online the actor list is every live body (humans in slot order, then
+        // the bots — `Door_Update`'s scan covers classes 2/3/0x12, every player object [M
+        // 0x136678]) instead of the one local player.
+        let player_actors: Vec<crate::door::DoorActor> = match &self.net_bodies {
+            None => vec![(player.pos, 0.4, false)],
+            Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| (b.pos, 0.4, false)).collect(),
+        };
+        let actors: Vec<crate::door::DoorActor> = player_actors.into_iter()
             .chain(self.list.iter().filter(|x| x.present && !x.corpse).map(|x| (x.pos, 0.4, false)))
             .collect();
         // fix-casings-16: the straddle walk-in runs EVERY tick, once, on this actor list (the game's

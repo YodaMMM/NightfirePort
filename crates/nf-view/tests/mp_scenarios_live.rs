@@ -74,6 +74,9 @@ fn start(s: MpSettings) -> Option<Pair> {
 /// One machine's online tick — the live loop's shape (lib.rs, the net branch).
 fn machine(sim: &mut Sim, local: usize, row: &[nf_net::Input; N]) -> u64 {
     let li = row[local];
+    // mp-world-sync: the live loop hands `step_bond` the row (the remotes move inside it; the
+    // explicit call below is then a no-op).
+    sim.net_row = Some(*row);
     sim.step_bond(to_player_input(&li), li.trigger, li.reload, li.use_key);
     let inputs = std::array::from_fn(|i| to_player_input(&row[i]));
     sim.step_net_remotes(&inputs, local);
