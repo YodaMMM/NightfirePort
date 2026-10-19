@@ -288,7 +288,13 @@ impl MpBodyAnim {
             self.debounce = SLOT_DEBOUNCE;
             let old = self.slot;
             self.slot = new_slot;
-            if old == 0 || new_slot == 0 { self.fade_out(true); }
+            // Into or out of idle — and out of the unset slot (0xff) into the walk: the set init's
+            // first tick leaves the idle at full weight with the slot forced back to 0xff (the
+            // strafe pass's dir 0 ≠ 0xff), so a walk appended there without the fade sat under an
+            // idle of weight 1 (`AnimFrameResolve` gives the next script 1 − weight(previous)) and
+            // the body glided in its idle pose for good — every bot that moved within the first 4
+            // ticks after a spawn or weapon set [S: the fade on every slot change].
+            self.fade_out(true);
             if new_slot == 0 {
                 self.append(LayerKind::Idle(set.idle), 1.0, lens, false, true);
             } else {
@@ -425,6 +431,19 @@ mod tests {
         assert_eq!(a.layers[0].time, 150.0, "the non-looping idle holds its last frame");
         assert!(a.layers[0].stopped);
         assert_eq!(a.phase, SET_PHASE_INIT, "a lone set script resets the walk distance");
+    }
+
+    #[test]
+    fn a_walk_right_after_the_set_init_shows_over_the_idle() {
+        let s = sets();
+        let mut a = MpBodyAnim::new();
+        // Idle on tick 1 (the slot then forced back to 0xff), moving from tick 3: the walk appends
+        // when the debounce runs out and the idle under it fades, so the walk takes the body.
+        for k in 0..20 { a.tick(&s, &lens, &inp(if k >= 2 { 0.075 } else { 0.0 }, 0.0)); }
+        let walk = a.layers.iter().position(|l| matches!(l.kind, LayerKind::Walk { .. })).expect("the walk plays");
+        let f = a.blend_factors();
+        assert!((f[walk] - 1.0).abs() < 1e-6 || walk == 0, "the walk is fully visible ({:?})", a.layers);
+        assert!(a.layers.iter().all(|l| !matches!(l.kind, LayerKind::Idle(_)) || l.fade < 0), "no full-weight idle stays under the walk");
     }
 
     #[test]

@@ -247,6 +247,7 @@ fn drive(sim: &mut Sim, _t: u32, input: &MpTickInput) -> (u64, u64) {
             max_health: 100.0,
             stationary: false,
             lazy_sight: false,
+            objectives: None,
         };
         sim.brains[bi].step(&ctx, &mut sim.rng, true);
     }

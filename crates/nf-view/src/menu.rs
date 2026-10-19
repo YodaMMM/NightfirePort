@@ -6371,6 +6371,14 @@ impl FrontEnd {
             if i >= s.players.len() { continue; }
             s.players[i] = nf_game::mp::MpPlayer { team, skin, armor_bonus: 0, radar_on: 1, codename };
         }
+        // mp-bot-objectives: the enabled bots' team bytes (record +0x0F — blue = MI6 = team 1,
+        // the confirm summary's split [M :337-352]) ride the bot slots' team words; the bots follow
+        // the humans in enabled order (`Menu_PrepareBots` 0x1f94a0 compacts them [M]) and the
+        // match's `create_bots` keeps the word in a team game.
+        for (k, b) in self.mp_bots.iter().filter(|b| b.enabled).take(bots as usize).enumerate() {
+            let slot = humans + k;
+            if slot < nf_game::mp::MP_MAX_SLOTS { s.players[slot].team = b.team_mi6 as u32; }
+        }
         self.mp_match_settings = Some(s.clone());
         // app-state-parity: the confirm arm writes GameState+0x28 = 1 BEFORE the level request
         // [M P_MPCONFIRM 0x20ec00:150 — between `MPSettings._384_4_ = 1` and

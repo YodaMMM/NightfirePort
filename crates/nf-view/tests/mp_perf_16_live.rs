@@ -22,8 +22,9 @@ fn iso() -> Option<String> {
 // Re-pinned on the merged MP branch (agents 8/9/10/11/12/14 changed the simulated result on purpose:
 // bot objectives, shared world interactions, shared rounds, bot brains in the hash; agent 14 arms
 // the bots with the weapon set's first gun and carries the lobby's bot records); agent 13's
-// optimisations were proven result-identical against its own base (0xe5ac_fd39_a20a_ac80).
-const PINNED_DIGEST: u64 = 0xd71c_79d4_4897_c7aa;
+// optimisations were proven result-identical against its own base (0xe5ac_fd39_a20a_ac80), and the
+// lazy sight line again on the merge (lazy_sight false + the precomputed bit2: the same digest).
+const PINNED_DIGEST: u64 = 0x78cd_537a_a62b_b300;
 
 const TICKS: u32 = 3600;
 

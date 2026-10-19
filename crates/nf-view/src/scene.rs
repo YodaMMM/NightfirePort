@@ -9297,6 +9297,28 @@ impl Sim {
         let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
         let local = self.mp_local_slot;
         let pain = nf_game::mp::equip::MpPainMods::from_tuning(&self.tuning);
+        // mp-bot-objectives: the scenario view the bots' objective goals read (the mode objects,
+        // the status words, the roles, the other bots' objective goals — refreshed per bot below,
+        // the game's bots read each other live in slot order).
+        let mut objectives = m.bot_objectives();
+        // The team view of `BOT_setOtherPlayerInfo` 0x125390:62-73: team games and Assassination
+        // compare the team words; FFA compares against team 3 (no one is a team-mate) [M].
+        let team_view = m.settings.team_game != 0 || scenario == nf_game::mp::scenario::ASSASSIN;
+        if std::env::var_os("NF_BOTLOG").is_some() && frame % 60 == 0 {
+            // mp-bot-objectives: the scenario objects + scores once a second (log only)
+            eprintln!("[botlog] f{} objectives: team scores {:?} slot scores {:?} flags {:?} uplinks {:?} hill-status {:?} site {:?} ge {:?} bp {:?}",
+                frame, m.game.team_scores, m.game.slots.iter().map(|s| s.score).collect::<Vec<_>>(),
+                m.objects_rt.flags.iter().flatten().map(|f| (f.state, f.carrier)).collect::<Vec<_>>(),
+                m.objects_rt.uplinks.iter().map(|u| (u.state, u.controller)).collect::<Vec<_>>(),
+                m.game.slots.iter().map(|s| s.status_bits & 0x10 != 0).collect::<Vec<_>>(),
+                m.objects_rt.site.as_ref().map(|x| (x.state, x.sub)),
+                m.objects_rt.ge.iter().flatten().map(|g| (g.state, g.carrier)).collect::<Vec<_>>(),
+                m.objects_rt.blueprint.as_ref().map(|b| (b.state, b.carrier)));
+            for b in &m.bots {
+                let g = &b.brain.vars.goals[1];
+                eprintln!("[botlog]   slot {} team {} goal1 type {} target {:#x} state {:#x} opp {:?}", b.slot, b.team, g.goal_type, g.target, b.brain.state, b.brain.vars.opponent);
+            }
+        }
 
         for i in 0..m.bots.len() {
             let alive = !m.bots[i].dead;
@@ -9346,17 +9368,34 @@ impl Sim {
             // ever acquired anyone and they idled in 0xF9 all match (the user: "bots need to work
             // too"; blocked 704's item 2) [S the vision cone/range stand-in: LOS only].
             let me = m.bots[i].brain.pos;
-            let mut seen = others;
+            let mut seen: Vec<nf_game::mp::bots::OtherPlayer> = others.to_vec();
             // mp-perf-16: the eye-to-chest sight line (`segment_surface_bullet`, eye = `me`, chest =
-            // the other's eye − 0.4) is no longer run for every pair here (14 bots × 15 others =
-            // 210 segments a tick, 75% of the 16-participant tick): `find_opponent` — its only
-            // reader whose result depends on it — runs it lazily for the candidates that can
-            // change its pick (`BotCtx::lazy_sight`; the pinned digest in mp_perf_16_live proves
-            // the match bit-identical).
+            // the other's eye − 0.4) is not run for every pair here (14 bots × 15 others = 210
+            // segments a tick, 75% of the 16-participant tick): `find_opponent` — its only reader
+            // whose result depends on it — runs it lazily for the candidates that can change its
+            // pick (`BotCtx::lazy_sight`). The cheap bits (candidate, team-mate) stay precomputed.
             for o in seen.iter_mut() {
                 if !o.alive || o.index == m.bots[i].slot { continue; }
                 let d = [o.pos[0] - me[0], o.pos[1] - me[1], o.pos[2] - me[2]];
                 o.dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                // bit1 candidate for every present player [M 0x125390:99-101], bit3 the team-mate
+                // in the team view [M :100-102] (mp-bot-objectives), bit2 seen (lazily, in `find_opponent`)
+                o.flags |= 0x2;
+                if team_view && o.team == my_team { o.flags |= 0x8; }
+            }
+            // mp-bot-objectives: the standing Demolition/Protection site rides the objective row
+            // (`OBJ_ROW`) — the attackers take it as their opponent (`NDrone2_FindOpponent`
+            // 0x1424e0:519-560 sets the site obj as `Drone+0x170` [M]); the row's position is the
+            // site sphere centre + 0.3 so the brain's chest aim (−0.3) lands on the centre [S].
+            if let Some(site) = objectives.site.filter(|s| s.radius > 0.0) {
+                let c = site.centre;
+                let d = [c[0] - me[0], c[1] - me[1], c[2] - me[2]];
+                let clear = world.segment_surface_bullet(me, c).is_none();
+                seen.push(nf_game::mp::bots::OtherPlayer {
+                    pos: [c[0], c[1] + 0.3, c[2]], alive: true, index: nf_game::mp::bots::OBJ_ROW,
+                    team: objectives.site_defenders, flags: 0x2 | if clear { 0x4 } else { 0 },
+                    dist2: d[0] * d[0] + d[1] * d[1] + d[2] * d[2], health: site.state as f32, score: 0.0,
+                });
             }
             let ctx = nf_game::mp::bots::BotCtx {
                 now: 0.0, // the brain's own tick counter is the clock (net-lockstep F4)
@@ -9371,19 +9410,25 @@ impl Sim {
                 max_health,
                 stationary: false,
                 lazy_sight: true,
+                objectives: Some(&objectives),
             };
             let before = m.bots[i].brain.shots.len();
             { let _p = nf_game::prof::scope("bots: brain.step"); m.bots[i].brain.step(&ctx, &mut self.drones.rng, true); }
+            if let Some(g) = objectives.bot_goals.get_mut(i) {
+                let g1 = &m.bots[i].brain.vars.goals[1];
+                *g = (m.bots[i].slot, g1.goal_type, g1.target);
+            }
             stamps.push((i, m.bots[i].brain.last_visit_stamp));
             // (The brain's body walks the world itself — the player's movement core: collision,
             // floors, gravity — so the old per-tick re-stand, which could snap a bot onto a
             // lower floor, is gone.)
             if frame % 60 == 0 && env_flag(&ENV_BOTLOG, "NF_BOTLOG") {
-                eprintln!("[botlog] f{} bot{} state {:#x} pending {:?} opp {:?} goals {:?} pos {:.1?} trace {}",
+                eprintln!("[botlog] f{} bot{} state {:#x} pending {:?} opp {:?} goals {:?} pos {:.1?} trace {} route {}/{} valid {:?} dest {:.1?} stuck {}",
                     frame, i, m.bots[i].brain.state, m.bots[i].brain.trace.last(),
                     m.bots[i].brain.vars.opponent,
                     m.bots[i].brain.vars.goals.iter().map(|g| (g.active, g.goal_type, g.target)).collect::<Vec<_>>(),
-                    m.bots[i].brain.pos, m.bots[i].brain.trace.len());
+                    m.bots[i].brain.pos, m.bots[i].brain.trace.len(),
+                    m.bots[i].brain.route.idx, m.bots[i].brain.route.nodes.len(), m.bots[i].brain.route.valid, m.bots[i].brain.route.dest, m.bots[i].brain.stuck_hits);
                 let v = &m.bots[i].brain.vars;
                 eprintln!("[botlog]   fire latch {} empty {} next {:.2} unseen {} clip {} yaw {:.2} tick {} weapon {} interval {} burst {} hp {:.0}/{:.0} deaths {}",
                     v.fire_latch, v.burst_empty, v.next_bullet_at, v.unseen_ticks, v.clip_rounds, m.bots[i].brain.yaw, m.bots[i].brain.tick,
@@ -9447,6 +9492,19 @@ impl Sim {
                 let th = hit_human.map_or(f32::MAX, |h| h.1);
                 if th <= tb { best = None; } else { hit_human = None; }
                 let tt = th.min(tb);
+                // mp-bot-objectives: the Demolition/Protection site takes the round when it is the
+                // nearest thing on the ray and the world is clear up to it (the human combat's
+                // site test, `step_net_combat`; the site SP's hit damage [M 0x1870a0:81-91]) [S].
+                if let Some((c, r)) = m.site_sphere() {
+                    if let Some(ts) = ray_body_hit(shot.pos, end, c, r) {
+                        let p = [shot.pos[0] + (end[0] - shot.pos[0]) * ts, shot.pos[1] + (end[1] - shot.pos[1]) * ts, shot.pos[2] + (end[2] - shot.pos[2]) * ts];
+                        if ts < tt && world.segment(shot.pos, p).is_none() {
+                            let shooter = m.bots[i].slot;
+                            m.damage_site(dmg, shooter);
+                            continue;
+                        }
+                    }
+                }
                 if tt < f32::MAX {
                     let p = [shot.pos[0] + (end[0] - shot.pos[0]) * tt, shot.pos[1] + (end[1] - shot.pos[1]) * tt, shot.pos[2] + (end[2] - shot.pos[2]) * tt];
                     if !world.segment_clear(shot.pos, p) { best = None; hit_human = None; }
@@ -10270,6 +10328,14 @@ impl Sim {
             // the site HP, the GoldenEye items + strike, the blueprint), the assassin words. The
             // fold above covered only the slots, so a scenario desync went undetected.
             h.u64(nf_game::mp::hash::state_hash(m));
+            // The bots' brains (their state, goals, route, body, weapon/fire state —
+            // `BotBrain::state_hash`) and their health/death: a bot desync shows at once instead
+            // of only once it moved a body (the brains were never folded in).
+            for b in &m.bots {
+                h.u64(b.brain.state_hash());
+                h.f32(b.health);
+                h.bool(b.dead);
+            }
         } else {
             h.u32(0xffff_fffe);
         }
