@@ -107,6 +107,16 @@ fn walk_the_party_start_to_finish() {
             if t % 300 == 0 {
                 let sim = w.scene.sim.as_ref().unwrap();
                 eprintln!("[07 hall t{t}] bond {:?} 0x48 {}", sim.bond.pos, sim.drones.channels.on(0x48) as u8);
+                for (k, d) in sim.drones.doors.list.iter().enumerate() {
+                    if walker::dxz(d.pos, sim.bond.pos) < 6.0 { eprintln!("[07 hall t{t}] door{k} pos {:?} state {:#04x}", d.pos, d.state); }
+                }
+                for (gi, g) in sim.drones.list.iter().enumerate() {
+                    let near = walker::dxz(g.pos, sim.bond.pos) < 25.0;
+                    if near && (g.state == nf_game::drone::state::CIVILIAN_DOOR_GUARD || gi == 10 || gi == 19) {
+                        eprintln!("[07 hall t{t}] guard{gi} pos {:?} yaw {:.2} state {:#04x} partner {:?} side {:#04x} zone {:#04x} los {}",
+                            g.pos, g.yaw, g.state, g.door_partner, g.door_side, g.door_zone, g.los);
+                    }
+                }
             }
         }
     }

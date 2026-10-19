@@ -367,7 +367,7 @@ pub struct FinishedLevel {
     /// `mission.base_map`).
     pub base_map: u32,
     /// The results-path mission status the production runs under (6 — the game's step 6 keeps
-    /// the scores only there [M 0x1984b0:316-333]).
+    /// the scores only there [M 0x1984b0:318-333]).
     pub mission_status: u32,
     /// The entry's 9 rows after the build: count/target the static design data, value the run's
     /// stat, ratio (+0xC) and raw (+0x10) the formula's output [M 0x1984b0:100-293].
@@ -618,16 +618,20 @@ impl Progress {
                 e.best = e.best.max(total);
             }
         }
-        // Step 6 [M 0x1984b0:316-333]: scores only stick on the results path (Mission_Status 6) —
-        // everything from step 3 except entry.best is zeroed otherwise, and DoneBetter clears.
+        // Step 6 [M 0x1984b0:318-333]: scores only stick on the results path (Mission_Status 6).
+        // The game's non-6 wipe zeroes ONLY the per-row points (+0x10 — the 0x14-stride loop at
+        // :322-327 stores just that offset) and the entry's dif/bonus/subtotal/total
+        // (puVar7[9]/[10]/[0xb]/[0xd]) plus DoneBetter. The tallies (+0x08) and ratios (+0x0c)
+        // SURVIVE — the handler still shows them on a non-6 status (the current/ratio reads at
+        // 0x209938:70/84/101), which is why the page shows 1, "01:19" and the pct rows.
         let e = &mut self.table[idx];
         if ms != 6 {
-            for r in e.rows.iter_mut() { r.value = 0; r.ratio = 0.0; r.raw = 0.0; }
-            e.base = 0;
-            e.bonus = 0;
-            e.last = 0;
-            e.dif = 0;
-            done_better = false;
+            for r in e.rows.iter_mut() { r.raw = 0.0; } // only row+0x10 [M :323-327]
+            e.dif = 0; // puVar7[9] +0x24 [M :328]
+            e.bonus = 0; // puVar7[10] +0x28 [M :329]
+            e.base = 0; // puVar7[0xb] +0x2c [M :330]
+            e.last = 0; // puVar7[0xd] +0x34 [M :331]
+            done_better = false; // DoneBetter [M :332]
         }
         let th = SCORING_TABLE[idx].thresholds;
         let medal = if e.last >= th[3] { 4 } else if e.last >= th[2] { 3 }
@@ -648,7 +652,7 @@ impl Progress {
     /// inputs score the same rows; the last tick's data is the final hand-off).
     pub fn finish_level(&mut self, base_map: u32, difficulty: u32) -> Option<FinishedLevel> {
         // The results-path status: step 6 keeps the scores only at Mission_Status 6
-        // [M 0x1984b0:316-333]; the commit flag false leaves the entry's best/last alone
+        // [M 0x1984b0:318-333]; the commit flag false leaves the entry's best/last alone
         // [M :301-315 — the param_1 != 0 arm].
         self.get_score(base_map, 6, difficulty, false)?;
         let idx = self.table.iter().position(|e| e.hash == base_map)?;
@@ -978,8 +982,9 @@ mod tests {
         assert_eq!(sc2.base, 363_000);
         assert_eq!(sc2.bonus, 726_000, "bonus = base × 2.0 [M 0x1984b0 step 4]");
         assert_eq!(sc2.last, 1_089_000, "last = base + bonus");
-        // Sister: status != 6 zeroes the stickable fields but keeps best (step 6 zeroes everything
-        // from step 3 EXCEPT entry.best [M 0x1984b0:316-333]). A fresh tally still scores: stealth
+        // Sister: status != 6 zeroes the stickable fields but keeps best (step 6 zeroes the row
+        // points and the dif/bonus/subtotal/total, NOT the tallies/ratios [M 0x1984b0:318-333]).
+        // A fresh tally still scores: stealth
         // 25000 (0 detections ≤ 30) + accuracy 50000 (no shots → the par copies) + the time row's
         // max × par / max(0, 1) = 25000·540 = 13,500,000 [M :118-170 — the max(elapsed, 1) guard].
         let mut p3 = Progress::default();

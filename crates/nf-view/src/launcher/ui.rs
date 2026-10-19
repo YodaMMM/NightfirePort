@@ -60,7 +60,7 @@ impl Disc {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Btn { Select, Play, Change, Quit }
+pub enum Btn { Select, Play, Change, ReportCrash, Quit }
 
 #[derive(Clone, Debug, Default)]
 pub struct Ui {
@@ -75,6 +75,12 @@ pub struct Ui {
     pub launching: bool,
     /// Seconds since the launcher opened (animation clock).
     pub t: f32,
+    /// An update is being checked / downloaded / installed (PLAY waits).
+    pub updating: bool,
+    /// The update line in the footer ("Downloading update v0.1.8…", a failure), if any.
+    pub update_note: Option<String>,
+    /// A crash report waiting to be sent (bugreport.rs: the zip and the panic's first line) — "Report crash".
+    pub crash: Option<(PathBuf, String)>,
 }
 
 impl Ui {
@@ -82,11 +88,12 @@ impl Ui {
     pub fn buttons(&self) -> Vec<(Btn, Rect)> {
         let mut v = vec![(if self.disc.is_some() { Btn::Play } else { Btn::Select }, PRIMARY_R)];
         if self.disc.is_some() { v.push((Btn::Change, Rect::new(COL_X - 6.0, SECOND_Y - 18.0, 120.0, 28.0))); }
+        if self.crash.is_some() { v.push((Btn::ReportCrash, Rect::new(COL_X + COL_W * 0.5 - 60.0, SECOND_Y - 18.0, 120.0, 28.0))); }
         v.push((Btn::Quit, Rect::new(COL_X + COL_W - 60.0, SECOND_Y - 18.0, 66.0, 28.0)));
         v
     }
     pub fn hit(&self, lx: f32, ly: f32) -> Option<Btn> {
-        if self.launching { return None; }
+        if self.launching || self.updating { return None; }
         self.buttons().into_iter().find(|(_, r)| r.contains(lx, ly)).map(|(b, _)| b)
     }
     /// The action Enter / Space takes.
@@ -200,7 +207,7 @@ pub fn paint(c: &mut Canvas, bg: &Canvas, fonts: &Fonts, ui: &Ui, scale: f32) {
     let ph = (t % period) / period;
     let sx = b.x - 0.3 * b.w + ph * b.w * 1.9;
     sheen(c, b, rad, sx, 70.0 * s, if ui.launching { 0.28 } else { 0.16 });
-    let label = if ui.launching { "STARTING\u{2026}" } else if primary == Btn::Play { "PLAY" } else { "SELECT DISC IMAGE" };
+    let label = if ui.updating { "UPDATING\u{2026}" } else if ui.launching { "STARTING\u{2026}" } else if primary == Btn::Play { "PLAY" } else { "SELECT DISC IMAGE" };
     let ls = if primary == Btn::Play && !ui.launching { 23.0 * s } else { 18.0 * s };
     let track = if primary == Btn::Play && !ui.launching { 9.0 * s } else { 4.0 * s };
     let base = b.y + b.h * 0.5 + ascent(&fonts.bold, ls) * 0.36;
@@ -208,12 +215,12 @@ pub fn paint(c: &mut Canvas, bg: &Canvas, fonts: &Fonts, ui: &Ui, scale: f32) {
 
     // ── Secondary row ───────────────────────────────────────────────────────────────────────────────────
     for (btn, r) in ui.buttons() {
-        let label = match btn { Btn::Change => "Change disc", Btn::Quit => "Quit", _ => continue };
+        let label = match btn { Btn::Change => "Change disc", Btn::ReportCrash => "Report crash", Btn::Quit => "Quit", _ => continue };
         let hot = ui.hover == Some(btn) && !ui.launching;
-        let col = if hot { TEXT } else { DIM };
+        let col = if hot { TEXT } else if btn == Btn::ReportCrash { GOLD } else { DIM };
         let size = 14.5 * s;
         let lw = measure(&fonts.regular, size, label, 0.4 * s);
-        let lx = if btn == Btn::Quit { (r.x + r.w) * s - lw - 6.0 * s } else { (r.x + 6.0) * s };
+        let lx = match btn { Btn::Quit => (r.x + r.w) * s - lw - 6.0 * s, Btn::ReportCrash => (r.x + r.w * 0.5) * s - lw * 0.5, _ => (r.x + 6.0) * s };
         c.text(&fonts.regular, size, lx, SECOND_Y * s, label, col, 1.0, 0.4 * s);
         if hot { c.fill_rrect(Rect::new(lx, (SECOND_Y + 5.0) * s, lw, 1.2 * s), 0.0, GOLD, 0.9); }
     }
@@ -231,8 +238,14 @@ pub fn paint(c: &mut Canvas, bg: &Canvas, fonts: &Fonts, ui: &Ui, scale: f32) {
 
     // ── Footer ──────────────────────────────────────────────────────────────────────────────────────────
     let fy = (H - 18.0) * s;
-    let ver = format!("v{}", env!("CARGO_PKG_VERSION"));
-    c.text(&fonts.regular, 11.5 * s, 24.0 * s, fy, &ver, FAINT, 1.0, 0.3 * s);
+    let ver = super::update::display_version();
+    // `text` returns the advance (width), so the note starts after the version plus a gap.
+    let vw = c.text(&fonts.regular, 11.5 * s, 24.0 * s, fy, &ver, FAINT, 1.0, 0.3 * s);
+    if let Some(n) = &ui.update_note {
+        let nx = 24.0 * s + vw + 18.0 * s;
+        let note = ellipsize_middle(&fonts.regular, 11.5 * s, n, (W - 24.0) * s - nx);
+        c.text(&fonts.regular, 11.5 * s, nx, fy, &note, DIM, 1.0, 0.2 * s);
+    }
 }
 
 /// A soft diagonal light band across a rounded rect (additive).

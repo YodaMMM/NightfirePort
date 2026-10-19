@@ -96,7 +96,7 @@ pointer (+0x18) and the row-0 value (rows+8, the moments row) cross the hand-off
 
 The port's production (`Progress::finish_level` + the tick-end hook on the level-exit latch):
 at every level end the Sim builds the rows the game would hand to the results screen — the same
-formula at status 6 [M 0x1984b0:316-333] — as a plain `FinishedLevel` (the 9 scored rows, base/
+formula at status 6 [M 0x1984b0:318-333] — as a plain `FinishedLevel` (the 9 scored rows, base/
 dif/bonus/last, the entry's untouched best, the would-be medal, and the `PlrMissionStats`
 snapshot the rows were produced from). Read-mode (commit = false): a mid-mission part exit
 (07000005's truck ride into 07000006 — a trigger LOAD_LEVEL, not a mission end) must not stamp

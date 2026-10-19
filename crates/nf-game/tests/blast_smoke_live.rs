@@ -6,8 +6,10 @@
 //! - `Explode_Propagate` case 2 → `Drone_ExplosiveHit` 0x13aab8: the +0x2B4 attacker stamp, then
 //!   `SendMsgSelf(9, DroneImpact*, 0, 0)`. `DroneFunc_HandleImpact` case 9 (0x1469b8:173-201):
 //!   allow = 0 → `NDrone2_ExplosiveImpact(impact, resume, 0)` — damage + PainTalk + the resume
-//!   entry (the idle/patrol guards' (0x56, 0) pair: hostile at once, no stagger); allow = 1 → the
-//!   +0x118 resume stamp and state 0x54 (the 0x47 stagger anim). A kill routes per kind: 0x0D →
+//!   entry; allow = 1 → the +0x118 resume stamp and state 0x54 (the 0x47 stagger anim). The allow
+//!   is the DSTATE's own case-9 arm: Idle/Alert/Patrol pass (0x56, 1) on their 7/9/0x17/0x18/0x19
+//!   group — a surviving guard staggers [M 0x15bf18:100-110, 0x15c248:68-77, 0x15c498:65-74;
+//!   daily-audit 2026-10-17] — case 8 alone is (0x56, 0). A kill routes per kind: 0x0D →
 //!   0x44, 0x1B/0x1C → 0x92, 0x1D → 0xBF, else **0x45 DeathByExplosion** [M 0x1465e4-0x14697c] —
 //!   the launch anim 0x44 with the `NDrone2_ExplosionDir` variant, follow-on 0x47 DEAD.
 //! - The damage is the raw falloff amount: `HitDamage(f12 = *(float*)impact, part −1)` [M disasm
