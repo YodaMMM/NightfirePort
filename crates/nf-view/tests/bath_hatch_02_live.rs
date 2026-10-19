@@ -112,7 +112,7 @@ fn disc_bath_hatch_chain_over_the_deep_ladder() {
     // And no script stream writes it either: every Nis of the level's packs, every decoded
     // command — the only channel-set events (kind 0xD [M Script_EventHandler 0x1d94c0]) carry
     // other channels (the intro's lone write is [0x47, 1] [D 0x06000084, hatch-02-intro]).
-    let mut sim = load();
+    let sim = load();
     for (hash, nis) in sim.drones.scripts.lib.iter() {
         for (si, s) in nis.streams.iter().enumerate() {
             for cmd in s.decode() {
