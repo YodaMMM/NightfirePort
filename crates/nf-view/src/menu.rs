@@ -1871,6 +1871,16 @@ pub struct FrontEnd {
     /// `menu_unlock_everything` 0x30d2a7 — the dev unlock [M 0x20b8d8:18]. The host sets it with
     /// `--unlock-all` so every page can be rendered.
     pub unlock_all: bool,
+    /// fe-audit 1019: the manager's page stack, as far as the port's routes need it. A manager
+    /// msg 0x44 whose b arg has bit 0 clear PUSHES {current page, current cursor} before the
+    /// switch [M 0x21c858 case 0x44: `uStack_b0 = (b^1)&1` → `Stack_Push(manager+0xa8, …)`];
+    /// b bit 0 set navigates without pushing (and b&4 clears the whole stack when the target is
+    /// MAIN 0x40000002 [M 0x21c858's `if (param_3 == 0x40000002)` arm]). Back (0x5f) pops the
+    /// top and reopens that page with its saved cursor [M 0x21c858:588-600]. The port records
+    /// only the pushes its routes make — every other Back arm stays the hardcoded [S] it was.
+    /// The stack dies with the manager: the mission pick deletes it [M C_SBNFMAP 0x20b8d8 0x4b's
+    /// MenuManager_Delete] and every front-end reload recreates it [M 0x1d6360:160-163].
+    pub back_stack: Vec<(Page, usize)>,
     /// sp_level[i]+0x10 — which campaign rows are unlocked [M 0x2df2e0 layout]. A fresh profile has
     /// row 0 only [S]; completing row *i* unlocks *i+1* [M Menu_SetLevelBonus 0x1ffa10:63-65].
     pub unlocked: [bool; 12],
@@ -2327,6 +2337,8 @@ impl FrontEnd {
         unlocked[0] = true;
         unlocked[1] = true;
         let mut fe = FrontEnd { flow, page, cursor: 0, mission: 0, difficulty: 0, no_input_frames: 0, press_start_on: true, outcome: Outcome::Failed, stats: Stats::default(), requested_level: None, requested_difficulty: None, confirming_quit: false, confirming_default_profile: false, unlock_all: UNLOCK_ALL.load(std::sync::atomic::Ordering::Relaxed), unlocked, closed: false, intro_playing: false, intro_index: 0, intro_list: &INTRO_MOVIES, intro_end: Page::Start, intro_ticks: 0,
+            // fe-audit 1019 (each new field on its own line [WORKLOG lesson 4]).
+            back_stack: Vec::new(),
             backdrop_live: false,
             // fix-pause-menu: the pause page's own state (each on its line [WORKLOG lesson 4]).
             confirming_restart: false,
@@ -3220,6 +3232,10 @@ impl FrontEnd {
     pub fn reopen_queued_page(&mut self) -> bool {
         match Page::from_id(self.flow.page) {
             Some(p) if self.page != p => {
+                // The load tail's MenuManager_Create is a FRESH manager — the page stack died
+                // with the old one [M 0x1d6360:160-163; MenuManager_Create 0x21b908 builds the
+                // manager anew].
+                self.back_stack.clear();
                 self.enter_page(p);
                 // reward-after-outro: the queued results page is now up — the load tail's
                 // MenuManager_Create ran [M 0x1d6360:160-163]. (The fail menu never queues.)
@@ -4826,6 +4842,11 @@ impl FrontEnd {
                     self.requested_difficulty = Some(self.difficulty as u32 + 1);
                     // → the Single Player list [M C_SBNFDFCTY 0x216ca8:10-17 Menu_ChangePageCloseIris
                     // 0x4000001c — the driver's observed order Select Difficulty → Single Player].
+                    // The open PUSHES this page {page, cursor}: the delayed 0x44's b is
+                    // DAT_002e1adc, 0 through the SP chain (C_SBNFCN 0x20b390:30 set it last),
+                    // and b bit 0 clear pushes [M 0x21c858 case 0x44]. The list's Back pops it
+                    // back [M 0x21c858:588-600].
+                    self.back_stack.push((Page::Difficulty, self.cursor));
                     self.open_mission_list();
                     return true;
                 }
@@ -4880,8 +4901,9 @@ impl FrontEnd {
                         // load hand-over [M 0x20b8d8]), so the pair dies here — the port's manager
                         // only goes at the async swap, and without this the jingle played on under
                         // the briefing (menu-audio-state). menu_movie clears with it [M
-                        // MenuManager_Delete 0x21c2b0:15].
+                        // MenuManager_Delete 0x21c2b0:15]. The page stack dies with the manager.
                         self.menu_movie = false;
+                        self.back_stack.clear();
                         self.remove_pair();
                     }
                     return true;
@@ -4891,8 +4913,36 @@ impl FrontEnd {
                 // 0x1000010c, which rejects out-of-range indices and redraws (Scroll_SendMessage
                 // 0x221810:98-106); without the reset the port entered with the missions cursor
                 // and the wheel showed Weapons on screen — the playtest's "the port adds Weapons"].
-                Action::Side => { self.enter_page(Page::Dossier); self.cursor = 0; return true; }   // □ Dossier
-                Action::Back => { self.enter_page(Page::Difficulty); self.cursor = self.difficulty; return true; }
+                // The open pushes the list {page, cursor} — the dossier's opener rides the same
+                // 0x44 push rule as every forward hop [M 0x21c858 case 0x44].
+                Action::Side => {
+                    self.back_stack.push((Page::MissionSelect, self.cursor));
+                    self.enter_page(Page::Dossier);
+                    self.cursor = 0;
+                    return true;
+                }   // □ Dossier — the open pushes the list {page, cursor} [M 0x21c858 case 0x44]
+                // fe-audit 1019: the list's Back is ROUTE-DEPENDENT, and both halves are pinned.
+                // 0x5f runs the page's msg-99 SCRIPT first [M 0x21c858:588-592] — the disc binds
+                // none (the Dossier note below), so the decision is the stack:
+                // • pushed over the difficulty wheel (the SP chain: the confirm's 0x44 b=0,
+                //   [M C_SBNFDFCTY 0x216ca8:10-17 + 0x21c858 case 0x44]) — the default pop
+                //   reopens the wheel with its saved cursor [M 0x21c858:592-600];
+                // • on a FRESH manager with an empty stack (the results/bonus route: the confirm
+                //   opens 0x4000001c with b=1, no push [M P_NFRESULTS 0x208e78:43,
+                //   P_NFBONUS 0x209670:51-56]) — the pop's else sends msg 99 to the manager
+                //   [M 0x21c858:612-620] and P_NFMAP's 99 arm opens MAIN, stack-clearing
+                //   [M 0x20b608:67-68]. The old single-target arms (the wheel, then Main) each
+                //   half-contradicted the decompile.
+                Action::Back => {
+                    if let Some((p, cur)) = self.back_stack.pop() {
+                        self.enter_page(p);
+                        self.cursor = cur;
+                    } else {
+                        self.enter_page(Page::Main);   // P_NFMAP's 99 arm: 0x44(0x40000002, 1)
+                        self.cursor = 0;
+                    }
+                    return true;
+                }
                 Action::Extra => {}
             },
             Page::Dossier => match a {
@@ -4914,7 +4964,21 @@ impl FrontEnd {
                     self.cursor = if to == Page::Records { self.mission.min(CAMPAIGN.len() - 1) } else { 0 };
                     return true;
                 }
-                Action::Back | Action::Side => { self.enter_page(Page::MissionSelect); return true; }
+                // fe-audit 1019: the Dossier has no △ arm of its own [M P_DOSSIER 0x216de0 has
+                // only the 0x4c/0x50 arms], and the disc's front-end def binds no msg-99 script
+                // on any page [D the 08000002 tag stream: every page's only SCRIPT is
+                // 0x2000000f on the 0x4c-open slot 0]. So Back is the manager's default pop —
+                // reopen the stack top's page with its saved cursor [M 0x21c858:592-600].
+                Action::Back => {
+                    if let Some((p, cur)) = self.back_stack.pop() {
+                        self.enter_page(p);
+                        self.cursor = cur;
+                    } else {
+                        self.enter_page(Page::MissionSelect);
+                    }
+                    return true;
+                }
+                Action::Side => { self.enter_page(Page::MissionSelect); return true; }   // □ again reopens the list
                 _ => {}
             },
             Page::Records => match a {
@@ -5876,17 +5940,19 @@ impl FrontEnd {
     /// P_MPRULES's two lists, steps by `dir`. Duration (control 0x10000008, MPSettings+0x1a0):
     /// item values 1..10, then 15, 20 … 60 in steps of 5, then the 0x3ca "Unlimited" item with
     /// value −1 [M 0x20f790:21-42]. Points/Lives (control 0x100000f6, MPSettings+0x19c): 1..10,
-    /// then 15 … 120 in steps of 5, no Unlimited [M 0x20f790:45-76]. Both clamp at the list
-    /// ends [S unverified — the list control's ◀▶ code is not exported].
+    /// then 15 … 120 in steps of 5, no Unlimited [M 0x20f790:45-76]. Both WRAP at the ends —
+    /// Scroll_Update's ◀▶ at the max/min re-enters from the other end while the wrap flag stands
+    /// [M 0x221b20:186-210], the flag defaults on (Scroll_Init 0x22214f0:102-103 sets +0x144 = 1;
+    /// only msg 0x69 clears it [M 0x221810:136-138]) and nothing sends 0x69 to the rules page.
     fn mp_rules_step(&mut self, dir: i32) {
         if self.cursor.min(1) == 0 {
             let times = MP_RULES_DURATIONS;
             let idx = times.iter().position(|&t| t == self.mp_time_limit).unwrap_or(0) as i32;
-            self.mp_time_limit = times[(idx + dir).clamp(0, times.len() as i32 - 1) as usize];
+            self.mp_time_limit = times[(idx + dir).rem_euclid(times.len() as i32) as usize];
         } else {
             let pts = MP_RULES_POINTS;
             let idx = pts.iter().position(|&t| t == self.mp_frag_limit).unwrap_or(0) as i32;
-            self.mp_frag_limit = pts[(idx + dir).clamp(0, pts.len() as i32 - 1) as usize];
+            self.mp_frag_limit = pts[(idx + dir).rem_euclid(pts.len() as i32) as usize];
         }
     }
 
