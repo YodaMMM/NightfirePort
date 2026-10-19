@@ -188,6 +188,12 @@ impl Mach {
         }
         if sim.mp.as_ref().expect("the mp match").game.request_debriefing {
             self.done = true;
+            // The app's handover (net-match-end §4): the finished machine
+            // announces its own end over the real session — the final tick
+            // plus its board's fold (Data tag 4; the debriefing open in the
+            // runner sends exactly this on every netted machine).
+            let bh = nf_game::mp::debrief::board_hash(&sim.mp.as_ref().unwrap().debriefing());
+            self.sess.0.borrow_mut().send_debrief_ack(self.tick, bh);
         }
     }
 }
@@ -265,23 +271,40 @@ fn start_three_machine_match(path: &str, port: u16, limit_left: usize, duration_
     assert_eq!(cs1.human_count, 3);
     assert_eq!(cs2.human_count, 3);
 
-    // The arena loads (three workers; every session pumped meanwhile — a load longer than the
-    // 5 s session timeout must not drop a peer).
+    // The arena loads, one machine at a time: three concurrent scene loads
+    // spike past a 4 GB sandbox (OOM-kill, dmesg `anon-rss` 2.9 GB). Every
+    // session is still polled throughout each blocking load, so a load longer
+    // than the 5 s session timeout must not drop a peer — the property the
+    // old three-worker load exercised, with one load's transient at a time.
     let arena = format!("{ARENA:08x}.bin");
     let hs2 = hs.clone();
     let cs1b = cs1.clone();
     let cs2b = cs2.clone();
     let (hscene, s1, s2) = std::thread::scope(|sc| {
-        let hj = sc.spawn(|| nf_view::load_mp_carry(path, &arena, false, None, hs2).expect("the host sim loads"));
-        let j1 = sc.spawn(|| nf_view::load_mp_carry(path, &arena, false, None, cs1b).expect("the client 1 sim loads"));
-        let j2 = sc.spawn(|| nf_view::load_mp_carry(path, &arena, false, None, cs2b).expect("the client 2 sim loads"));
-        while !(hj.is_finished() && j1.is_finished() && j2.is_finished()) {
+        let poll_all = || {
             let _ = hp.0.borrow_mut().poll();
             let _ = c1p.0.borrow_mut().poll();
             let _ = c2p.0.borrow_mut().poll();
+        };
+        let hj = sc.spawn(|| nf_view::load_mp_carry(path, &arena, false, None, hs2).expect("the host sim loads"));
+        while !hj.is_finished() {
+            poll_all();
             std::thread::sleep(Duration::from_millis(16));
         }
-        (hj.join().unwrap(), j1.join().unwrap(), j2.join().unwrap())
+        let hscene = hj.join().unwrap();
+        let j1 = sc.spawn(|| nf_view::load_mp_carry(path, &arena, false, None, cs1b).expect("the client 1 sim loads"));
+        while !j1.is_finished() {
+            poll_all();
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        let s1 = j1.join().unwrap();
+        let j2 = sc.spawn(|| nf_view::load_mp_carry(path, &arena, false, None, cs2b).expect("the client 2 sim loads"));
+        while !j2.is_finished() {
+            poll_all();
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        let s2 = j2.join().unwrap();
+        (hscene, s1, s2)
     });
     let mut mh = Mach { scene: hscene, sess: hp, slot: 0, tick: 0, done: false, events: Vec::new(), fe_board: None };
     let mut m1 = Mach { scene: s1, sess: c1p, slot: 1, tick: 0, done: false, events: Vec::new(), fe_board: None };
@@ -308,6 +331,13 @@ fn run_to_debriefing(machines: (&mut Mach, &mut Mach, &mut Mach), kills: &[u32],
         mh.submit();
         m1.submit();
         m2.submit();
+        // Two pump passes: the host's catch of a client's fresh input and the
+        // clients' catch of the host's relay both land inside the step, so a
+        // step runs one tick whatever the wall clock does (one pass left the
+        // step's progress to the relay rhythm — two iterations per tick).
+        mh.pump();
+        m1.pump();
+        m2.pump();
         mh.pump();
         m1.pump();
         m2.pump();
@@ -331,6 +361,21 @@ fn run_to_debriefing(machines: (&mut Mach, &mut Mach, &mut Mach), kills: &[u32],
         assert!(mh.tick <= limit_ticks + 60 && m1.tick <= limit_ticks + 60 && m2.tick <= limit_ticks + 60,
             "no machine ran past its final tick+60 (host {}, c1 {}, c2 {})", mh.tick, m1.tick, m2.tick);
         assert!(Instant::now() < deadline, "the match reached every debriefing within 4 minutes");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // The app's end handover: the finished machines announced their ends (the
+    // tag-4 ack at the done transition) and the host keeps polling its live
+    // session until every human peer's ack landed — the end wait's done
+    // condition (docs/systems/net-match-end.md §4). The loop above exits the
+    // moment the last sim finishes; the acks ride the next polls.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !(mh.events.iter().any(|e| e.contains("DebriefAck { slot: 1"))
+        && mh.events.iter().any(|e| e.contains("DebriefAck { slot: 2")))
+    {
+        mh.pump();
+        m1.pump();
+        m2.pump();
+        assert!(Instant::now() < deadline, "the host's end wait collects both clients' acks");
         std::thread::sleep(Duration::from_millis(1));
     }
     let ends = [mh.tick, m1.tick, m2.tick];
@@ -376,7 +421,8 @@ fn three_machines_reach_the_debriefing_with_identical_boards() {
         let r = e.split("DebriefAck { slot: ").nth(1)?;
         let slot: u8 = r.get(..1)?.parse().ok()?;
         let tick: u32 = r.split("final_tick: ").nth(1)?.split(",").next()?.trim().parse().ok()?;
-        let hash: u64 = u64::from_str_radix(r.split("board_hash: ").nth(1)?.split(" }").next()?.trim().trim_start_matches("0x"), 16).ok()?;
+        // The event's Debug prints the fold in decimal (derive on u64).
+        let hash: u64 = r.split("board_hash: ").nth(1)?.split(" }").next()?.trim().parse().ok()?;
         Some((slot, tick, hash))
     }).collect();
     assert!(acks.iter().any(|&(s, _, _)| s == 1), "client 1's ack arrived (Debrief events: {:?})",
@@ -417,6 +463,12 @@ fn a_host_departure_mid_match_is_still_host_left() {
         mh.submit();
         m1.submit();
         m2.submit();
+        // Two pump passes: the relay converges within the step (the host's
+        // catch of a client's fresh input and the clients' catch of the relay
+        // both land here), so a step runs one tick at any sandbox speed.
+        mh.pump();
+        m1.pump();
+        m2.pump();
         mh.pump();
         m1.pump();
         m2.pump();
@@ -452,6 +504,13 @@ fn a_client_departure_mid_match_still_runs_the_match_on() {
         mh.submit();
         m1.submit();
         m2.submit();
+        // Two pump passes, as in the host-departure sister: the relay
+        // converges within the step, so a step runs one tick at any sandbox
+        // speed (one pass left every step at the relay's mercy — two
+        // iterations per tick on a fast loop).
+        mh.pump();
+        m1.pump();
+        m2.pump();
         mh.pump();
         m1.pump();
         m2.pump();
@@ -473,17 +532,26 @@ fn a_client_departure_mid_match_still_runs_the_match_on() {
         "the departure is slot 1's graceful quit");
     // The match runs on: the ticks past the departure are ready (the departed slot NEUTRAL, the
     // other two still submitting).
+    // The match runs on: the departed slot rides NEUTRAL from its boundary
+    // [M Session::drop_slot's left_at], the other two keep sampling every tick
+    // (the app submits each tick's controls), and the live relay carries both
+    // to the host — the relay sends contiguous runs from its last sent tick,
+    // so the ticks must be sampled without gaps for the later ones to turn
+    // ready.
     let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
+    let mut t = 200u32;
+    while t < 260 {
+        mh.sess.0.borrow_mut().local_input(t, scripted_input(t, 0));
+        m2.sess.0.borrow_mut().local_input(t, scripted_input(t, 2));
         mh.pump();
         m2.pump();
-        mh.sess.0.borrow_mut().local_input(260, scripted_input(260, 0));
-        m2.sess.0.borrow_mut().local_input(260, scripted_input(260, 2));
-        if mh.sess.0.borrow_mut().ready_inputs(260).is_some() {
-            break;
+        mh.pump();
+        m2.pump();
+        if mh.sess.0.borrow_mut().ready_inputs(t).is_some() {
+            t += 1;
         }
-        assert!(Instant::now() < deadline, "tick 260 stays ready after the departure");
-        std::thread::sleep(Duration::from_millis(5));
+        assert!(Instant::now() < deadline, "the match runs on to tick 260 after the departure");
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
