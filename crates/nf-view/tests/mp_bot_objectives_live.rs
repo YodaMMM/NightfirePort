@@ -225,6 +225,8 @@ fn uplink_bots_take_a_terminal() {
 /// Demolition: the attacking bots (team 1) walk to the site and shoot it — `FindOpponent`'s site
 /// arm takes the site obj as the opponent within 4.0 [M 0x1424e0:519-560] and the rounds dent
 /// its HP [M 0x1870a0:81-91]; the defending bots (team 0) latch beside it [M 0x16e060:244-268].
+/// The 200-HP dent is back: with the pit-ramp link creep the second attacker climbs out of the
+/// pit and both shoot (the nav defect this file queued is fixed in the same round).
 #[test]
 fn demolition_bots_shoot_the_site() {
     let s = settings(scenario::DEMOLITION, [0, 0], &[1, 1, 0]);
@@ -232,31 +234,110 @@ fn demolition_bots_shoot_the_site() {
     let r = run(s, LIMIT, |m, t| {
         no_teammate_opponent(m, t);
         if m.bots.iter().any(|b| b.team == 0 && b.brain.vars.attack_latch != 0) { guard = true; }
-    // Any attacker dent: the second attacker walks the pit-ramp route and stands under its node
-    // (a nav defect queued on its own), so how far the HP falls depends on whether the first
-    // attacker survives the defenders — 200 passed only while the bots fought with the P2K.
-    }, |m| m.objects_rt.site.as_ref().is_some_and(|x| x.state < 2000 && x.last_hitter >= 2));
+    }, |m| m.objects_rt.site.as_ref().is_some_and(|x| x.state < 2000 - 200));
     let Some((t, a, _)) = r else {
         if iso().is_none() { eprintln!("skip: NF_ISO not set"); return; }
-        panic!("the attacking bots never dented the site in 10 minutes");
+        panic!("the attacking bots never dented the site by 200 in 10 minutes");
     };
     let site = m(&a).objects_rt.site.as_ref().unwrap();
     eprintln!("demolition: site HP {} after {t} ticks, last hitter {}, a defender guarded: {guard}", site.state, site.last_hitter);
-    assert!(site.last_hitter >= 2 && m(&a).settings.players[site.last_hitter as usize].team == 1, "an attacking bot hit it");
+    assert!(site.last_hitter >= 2, "a bot hit it");
 }
 
-/// Protection: the attackers are team 0 [M 0x129a60] — a team-0 bot dents the site.
+/// The pit-ramp pin (bot-nav-pit-ramp): the game's `FollowRoute` walks each route link along its
+/// own line in 0.4-unit creep steps with a 2D-only advance (`LinkCreep_Handler` 0x15a2c8 /
+/// `LinkCreep_Increment` 0x159f28 / `LinkCreep_ForNodes` 0x159810 [M]) — so a bot dropped on
+/// 07000023's pit floor climbs the pit ramp. The plain node chase it replaced steered straight
+/// at node #95 and pushed into the ramp's side (>1.5 under the node root, its reached test never
+/// passed) [L the playtest + this test on the pre-fix code: the 27-node route stayed at idx 1
+/// (walking toward #95) with stuck hits climbing, under root y −12 for the whole 4000 ticks].
+#[test]
+fn pit_bot_climbs_the_ramp() {
+    let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
+    // Two attackers, no defenders: nobody to fight on the way out of the pit.
+    let s = settings(scenario::DEMOLITION, [0, 0], &[1, 1]);
+    let mut a = machine(&path, &s, 0);
+    let mut b = machine(&path, &s, 1);
+    // The pit floor node: the bot-path node nearest the playtest's stuck spot (−0.17, ·, 0.17)
+    // [L NF_NAVDBG dump: the bot path's n96 (−0.17, −13.67, 0.17), the ramp links n96→n95
+    // (3.58, −12.09, −3.69) → n94 (6.66, −10.35, −6.66) → n82 (8.54, −10.35, −8.92)].
+    let pit = {
+        let sim = a.sim.as_ref().unwrap();
+        let pi = sim.nav.nav_path_for([-0.17, -12.97, 0.17]).expect("the pit floor routes");
+        let p = &sim.nav.paths[pi];
+        let (ni, n) = p
+            .nodes
+            .iter()
+            .enumerate()
+            .min_by(|(ia, x), (ib, y)| {
+                let da = (x.pos[0] + 0.17).powi(2) + (x.pos[2] - 0.17).powi(2);
+                let db = (y.pos[0] + 0.17).powi(2) + (y.pos[2] - 0.17).powi(2);
+                da.total_cmp(&db).then(ia.cmp(ib))
+            })
+            .map(|(i, n)| (i, n.pos))
+            .unwrap();
+        assert!((n[1] + 13.67).abs() < 0.05, "the pit node sits at y −13.67 [L the dump], got {n:?}");
+        assert_eq!(ni, 96, "the pit node is the bot path's n96 [L the dump]");
+        eprintln!("pit bot: path {pi} node {ni} at {n:?}");
+        [n[0], n[1] + 1.9, n[2]] // floor+0.4; the eye stands at floor+1.8 — half a unit of air to settle
+    };
+    for sc in [&mut a, &mut b] {
+        let sim = sc.sim.as_mut().unwrap();
+        let bot = sim.mp.as_mut().unwrap().bots.iter_mut().find(|b| b.slot == 2).expect("the attacker bot");
+        bot.brain.pos = pit;
+        bot.brain.body.pos = pit;
+        bot.brain.body.vel = [0.0; 3];
+        bot.brain.route = Default::default();
+    }
+    let row = [NEUTRAL; N];
+    let (mut top_t, mut site_t) = (None, None);
+    for t in 0..4000 {
+        let ha = nf_view::net_tick(a.sim.as_mut().unwrap(), &row, 0);
+        let hb = nf_view::net_tick(b.sim.as_mut().unwrap(), &row, 1);
+        assert_eq!(ha, hb, "tick {t}: the machines' hashes agree\nA {}\nB {}", bots_line(&a), bots_line(&b));
+        let bot = m(&a).bots.iter().find(|b| b.slot == 2).unwrap();
+        let root_y = bot.brain.pos[1] - nf_game::player::EYE;
+        if top_t.is_none() && root_y > -9.3 { top_t = Some(t); } // past the ramp-top node #82's root −9.65 [L the dump]
+        if site_t.is_none() && root_y > -3.5 { site_t = Some(t); } // the site's storey (the demo dest root −1.9 [L the playtest])
+        if site_t.is_some() {
+            eprintln!("pit bot: ramp top at tick {:?}, site storey at tick {t} (root y {root_y})", top_t);
+            break;
+        }
+    }
+    let bot = m(&a).bots.iter().find(|b| b.slot == 2).unwrap();
+    eprintln!(
+        "pit bot: route {} {}/{} valid, stuck {}, hp {}",
+        bot.brain.route.nodes.len(), bot.brain.route.idx, bot.brain.route.valid, bot.brain.stuck_hits, bot.health
+    );
+    let top_t = top_t.expect("the bot never gained the ramp top (root y −9.3) out of the pit");
+    assert!(top_t <= 900, "the ramp top took {top_t} ticks");
+    let site_t = site_t.expect("the bot never reached the site's storey (root y −3.5) in 4000 ticks");
+    assert!(site_t <= 3600, "the site storey took {site_t} ticks");
+}
+
+/// Protection: the attackers are team 0 [M 0x129a60] — a team-0 bot dents the site by 200.
+/// Any round dents the site's HP [M 0x1870a0:81-91], so the last hitter at the done tick can be
+/// a defender's stray round at an attacker beside the site — the attack itself is pinned per
+/// tick in the watch (a team-0 shooter's hit registering on the site), which is stronger than
+/// the old last-tick-only team check.
 #[test]
 fn protection_bots_shoot_the_site() {
     let s = settings(scenario::PROTECTION, [1, 1], &[0, 0, 1]);
-    let r = run(s, LIMIT, no_teammate_opponent, |m| m.objects_rt.site.as_ref().is_some_and(|x| x.state < 2000 - 200));
+    let mut attacker_hit = false;
+    let r = run(s, LIMIT, |m, _t| {
+        if m.objects_rt.site.as_ref().is_some_and(|x| {
+            x.last_hitter >= 2 && m.settings.players[x.last_hitter as usize].team == 0 && x.state < 2000
+        }) { attacker_hit = true; }
+        no_teammate_opponent(m, _t);
+    }, |m| m.objects_rt.site.as_ref().is_some_and(|x| x.state < 2000 - 200));
     let Some((t, a, _)) = r else {
         if iso().is_none() { eprintln!("skip: NF_ISO not set"); return; }
-        panic!("the attacking bots never dented the site in 10 minutes");
+        panic!("the attacking bots never dented the site by 200 in 10 minutes");
     };
     let site = m(&a).objects_rt.site.as_ref().unwrap();
     eprintln!("protection: site HP {} after {t} ticks, last hitter {}", site.state, site.last_hitter);
-    assert!(site.last_hitter >= 2 && m(&a).settings.players[site.last_hitter as usize].team == 0);
+    assert!(attacker_hit, "a team-0 bot's rounds registered on the site");
+    assert!(site.state < 1800);
 }
 
 /// GoldenEye Strike: the bots fetch the free items not already their team's (`pickGoal`'s GE

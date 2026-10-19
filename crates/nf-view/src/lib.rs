@@ -6031,6 +6031,9 @@ pub fn run() -> Result<()> {
         st.time_limit = 10 * 60;
         // Test aid (NF_NET_TIME=seconds): a shorter flag-path match (the debriefing checks).
         if let Some(s) = std::env::var("NF_NET_TIME").ok().and_then(|v| v.parse::<i32>().ok()) { st.time_limit = s; }
+        // Test aid (NF_NET_FRAGS=n, −1 = none): the frag limit (the long-match soak: 14 armed bots hit the default 20 in
+        // under 3 minutes).
+        if let Some(f) = std::env::var("NF_NET_FRAGS").ok().and_then(|v| v.parse::<i32>().ok()) { st.frag_limit = f; }
         // Test aid (NF_NET_BOTS=n): n bots in the flag host's match (the online bots check).
         if let Some(n) = std::env::var("NF_NET_BOTS").ok().and_then(|v| v.parse::<u32>().ok()) {
             st.bot_count = n.min(nf_game::mp::MP_MAX_SLOTS as u32 - 1);
