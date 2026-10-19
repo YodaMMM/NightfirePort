@@ -76,7 +76,11 @@ pub const MAX_AGENTS: usize = 16;
 /// 7: mp-lobby-settings merged — the settings grow a tail (the four enviro-mod
 /// words + the prepared bot records) so every lobby setting reaches the clients'
 /// matches [S]; Location Damage stays the 20th scalar.
-pub const PROTOCOL_VERSION: u16 = 7;
+/// 8: net-desync-detail — PT_HASHCOMPS/PT_HASHDETAIL (the desync diagnosis exchange). The
+/// combined state hash also became the fold of the named component hashes
+/// (`nf_view::scene::fold_component_hashes`), so hashes from a protocol-7 build never match an
+/// 8 build's; the handshake refuses that mix.
+pub const PROTOCOL_VERSION: u16 = 8;
 
 /// Build id carried in the handshake so mismatched executables refuse cleanly.
 /// The host app sets this (e.g. a build counter); both sides must match exactly.

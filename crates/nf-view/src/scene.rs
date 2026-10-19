@@ -10309,11 +10309,21 @@ impl Sim {
     }
 
     /// The per-tick state hash sent every N ticks (the app calls it; the nf-net session compares).
-    /// Fixed fold order: frame, RNG stream, then each slot's bond pose (slot order — the local
-    /// slot reads `bond`, the others `mp_bonds`), then the MP match state. An empty slot folds a
-    /// sentinel so the shape is total and equal on every machine.
+    /// The fold is the fixed-order fold of the named component hashes ([`Self::net_component_hashes`]
+    /// — net-desync-detail): frame+rng, per-slot bodies, per-slot vitals, the online combat, the
+    /// match state, the bots, the world. The component grouping moved the fields around relative to
+    /// the old flat fold (the combined value changed — re-pinned on purpose, see the task report),
+    /// but every field is still hashed exactly once, so equal states give equal hashes on every
+    /// machine and every field's change still moves the combined hash.
     pub fn net_state_hash(&self, local: usize) -> u64 {
-        let _p = nf_game::prof::scope("net: net_state_hash");
+        fold_component_hashes(&self.net_component_hashes(local))
+    }
+
+    /// net-desync-detail: the named component hashes, in the fixed order
+    /// [`NET_HASH_COMPONENT_NAMES`]. Each component is its own FNV fold, so a desync report can
+    /// name the first component whose hashes disagree between the machines.
+    pub fn net_component_hashes(&self, local: usize) -> [u64; NET_HASH_COMPONENTS] {
+        let _p = nf_game::prof::scope("net: net_component_hashes");
         // NF_NET_HASHDBG="a-b": dump frames a..=b (any other value: 0-17).
         // mp-perf-16: the env var is read once per process, not once per tick.
         static HASHDBG: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
@@ -10326,17 +10336,102 @@ impl Sim {
                     (m.settings.level_code, m.settings.scenario, m.settings.frag_limit, m.settings.time_limit, m.settings.seed, m.settings.human_count))));
             eprintln!("[hashdbg]   hp {:?} dead {:?}", self.mp_hp, self.mp_dead_ticks);
         }
-        let mut h = nf_net::hash::Hasher::new();
-        h.u32(self.drones.frame);
-        // 700v6: the online combat's per-slot state.
-        for s in 0..nf_net::MAX_AGENTS { h.f32(self.mp_hp[s]); h.u32(self.mp_dead_ticks[s]); }
-        // mp-combat-weapons: the armour and the shared rounds/grenades/rides.
-        for s in 0..nf_net::MAX_AGENTS { h.f32(self.mp_armour[s]); }
-        self.mp_combat.hash_into(&mut |v| h.u32(v));
-        h.u32(self.drones.rng.x);
-        h.u32(self.drones.rng.y);
-        h.u64(self.drones.rng.draws);
+        let mut frame_rng = nf_net::hash::Hasher::new();
+        frame_rng.u32(self.drones.frame);
+        frame_rng.u32(self.drones.rng.x);
+        frame_rng.u32(self.drones.rng.y);
+        frame_rng.u64(self.drones.rng.draws);
+        let mut bodies = nf_net::hash::Hasher::new();
         for slot in 0..nf_net::MAX_AGENTS {
+            let bond = if slot == local { Some(&self.bond) } else { self.mp_bonds[slot].as_ref() };
+            match bond {
+                Some(b) => {
+                    bodies.u32(slot as u32);
+                    for k in 0..3 { bodies.f32(b.pos[k]); }
+                    bodies.f32(b.yaw);
+                    bodies.f32(b.pitch);
+                    bodies.u32(b.substate as u32);
+                    bodies.bool(b.crouched);
+                }
+                None => bodies.u32(0xffff_ffff),
+            }
+        }
+        let mut vitals = nf_net::hash::Hasher::new();
+        // 700v6: the online combat's per-slot state.
+        for s in 0..nf_net::MAX_AGENTS { vitals.f32(self.mp_hp[s]); vitals.u32(self.mp_dead_ticks[s]); }
+        for s in 0..nf_net::MAX_AGENTS { vitals.f32(self.mp_armour[s]); }
+        let mut combat = nf_net::hash::Hasher::new();
+        self.mp_combat.hash_into(&mut |v| combat.u32(v));
+        let mut matchh = nf_net::hash::Hasher::new();
+        if let Some(m) = &self.mp {
+            matchh.u32(m.game.state);
+            matchh.f32(m.game.clock);
+            matchh.f32(m.game.limit);
+            for s in &m.game.slots {
+                match s.pos {
+                    Some(p) => { for k in 0..3 { matchh.f32(p[k]); } }
+                    None => matchh.u32(0xffff_ffff),
+                }
+                matchh.u32(s.timers[0] as u32);
+                matchh.u32(s.timers[1] as u32);
+                matchh.f32(s.score);
+                matchh.i32(s.kills);
+                matchh.i32(s.deaths);
+                matchh.bool(s.dead);
+            }
+            matchh.u32(m.settings.level_code);
+            matchh.u32(m.settings.scenario);
+            matchh.i32(m.settings.frag_limit);
+            matchh.i32(m.settings.time_limit);
+            matchh.u32(m.settings.seed);
+            matchh.u32(m.settings.human_count);
+            // mp-scenarios-online (agent6): the WHOLE match state — the team scores, the end
+            // latches, the scenario objects (flag carriers/positions, terminal owners, the hill,
+            // the site HP, the GoldenEye items + strike, the blueprint), the assassin words. The
+            // fold above covered only the slots, so a scenario desync went undetected.
+            matchh.u64(nf_game::mp::hash::state_hash(m));
+        } else {
+            matchh.u32(0xffff_fffe);
+        }
+        let mut bots = nf_net::hash::Hasher::new();
+        // The bots' brains (their state, goals, route, body, weapon/fire state —
+        // `BotBrain::state_hash`) and their health/death: a bot desync shows at once instead
+        // of only once it moved a body (the brains were never folded in).
+        if let Some(m) = &self.mp {
+            for b in &m.bots {
+                bots.u64(b.brain.state_hash());
+                bots.f32(b.health);
+                bots.bool(b.dead);
+            }
+        }
+        let mut world = nf_net::hash::Hasher::new();
+        // mp-world-sync (agent 9): the shared world — the pickups (taken/hidden/respawn timers),
+        // the slots' armour, the doors, the triggers, the world channels, the destroyables, the
+        // breakables, the SS objects, the hurt volumes. Before this fold a take, a door or a
+        // broken object on one machine only went undetected (pickups were not in the hash).
+        self.net_world_fold(&mut world);
+        [
+            frame_rng.finish(), bodies.finish(), vitals.finish(), combat.finish(),
+            matchh.finish(), bots.finish(), world.finish(),
+        ]
+    }
+
+    /// net-desync-detail: the per-item breakdown of each component
+    /// ([`Self::net_component_hashes`]) — one item hash per hashed element in the same fixed
+    /// order (bodies/vitals: one per agent slot; combat: one per round, then per thrown, then
+    /// per ride slot; bots: one per bot; world: one per pickup, then per door, then per
+    /// trigger, then per channel entry, then per destroyable, per breakable, per SS object,
+    /// per hurt volume; frame_rng and match: the single component hash). The desync exchange
+    /// sends the first diverging component's items, so the report can name the exact slot.
+    pub fn net_component_items(&self, local: usize) -> [Vec<u64>; NET_HASH_COMPONENTS] {
+        let mut frame_rng = nf_net::hash::Hasher::new();
+        frame_rng.u32(self.drones.frame);
+        frame_rng.u32(self.drones.rng.x);
+        frame_rng.u32(self.drones.rng.y);
+        frame_rng.u64(self.drones.rng.draws);
+        let mut bodies = Vec::with_capacity(nf_net::MAX_AGENTS);
+        for slot in 0..nf_net::MAX_AGENTS {
+            let mut h = nf_net::hash::Hasher::new();
             let bond = if slot == local { Some(&self.bond) } else { self.mp_bonds[slot].as_ref() };
             match bond {
                 Some(b) => {
@@ -10349,8 +10444,52 @@ impl Sim {
                 }
                 None => h.u32(0xffff_ffff),
             }
+            bodies.push(h.finish());
         }
+        let mut vitals = Vec::with_capacity(nf_net::MAX_AGENTS);
+        for s in 0..nf_net::MAX_AGENTS {
+            let mut h = nf_net::hash::Hasher::new();
+            h.f32(self.mp_hp[s]);
+            h.u32(self.mp_dead_ticks[s]);
+            h.f32(self.mp_armour[s]);
+            vitals.push(h.finish());
+        }
+        let mut combat = Vec::new();
+        {
+            // The same fields `MpCombat::hash_into` folds, one record per item (rounds, then
+            // thrown, then the ride slots).
+            let c = &self.mp_combat;
+            let mut item = nf_net::hash::Hasher::new();
+            item.u32(c.rounds.len() as u32);
+            combat.push(item.finish());
+            for r in &c.rounds {
+                let mut h = nf_net::hash::Hasher::new();
+                h.u32(r.owner as u32); h.u32(r.weapon as u32);
+                for k in 0..3 { h.f32(r.pos[k]); h.f32(r.dir[k]); }
+                h.f32(r.speed); h.f32(r.travelled); h.u32(r.first as u32); h.u32(r.target.map_or(u32::MAX, |t| t as u32));
+                combat.push(h.finish());
+            }
+            let mut item = nf_net::hash::Hasher::new();
+            item.u32(c.thrown.len() as u32);
+            combat.push(item.finish());
+            for g in &c.thrown {
+                let mut h = nf_net::hash::Hasher::new();
+                h.u32(g.owner as u32); h.u32(g.weapon_type as u32);
+                for k in 0..3 { h.f32(g.pos[k]); h.f32(g.velocity[k]); }
+                h.f32(g.travelled); h.f32(g.range); h.u32(g.state as u32); h.u32(g.bounces as u32);
+                h.u32(g.stuck as u32); h.u32(g.resting as u32);
+                h.u32(g.phase.as_ref().map_or(0, |p| (p.armed as u32) | (((p.arm.to_bits())) << 1)));
+                combat.push(h.finish());
+            }
+            for r in &c.ride {
+                let mut h = nf_net::hash::Hasher::new();
+                h.u32(r.riding as u32); h.u32(r.restore as u32);
+                combat.push(h.finish());
+            }
+        }
+        let mut matchh = Vec::new();
         if let Some(m) = &self.mp {
+            let mut h = nf_net::hash::Hasher::new();
             h.u32(m.game.state);
             h.f32(m.game.clock);
             h.f32(m.game.limit);
@@ -10372,28 +10511,80 @@ impl Sim {
             h.i32(m.settings.time_limit);
             h.u32(m.settings.seed);
             h.u32(m.settings.human_count);
-            // mp-scenarios-online (agent6): the WHOLE match state — the team scores, the end
-            // latches, the scenario objects (flag carriers/positions, terminal owners, the hill,
-            // the site HP, the GoldenEye items + strike, the blueprint), the assassin words. The
-            // fold above covered only the slots, so a scenario desync went undetected.
             h.u64(nf_game::mp::hash::state_hash(m));
-            // The bots' brains (their state, goals, route, body, weapon/fire state —
-            // `BotBrain::state_hash`) and their health/death: a bot desync shows at once instead
-            // of only once it moved a body (the brains were never folded in).
+            matchh.push(h.finish());
+        } else {
+            let mut h = nf_net::hash::Hasher::new();
+            h.u32(0xffff_fffe);
+            matchh.push(h.finish());
+        }
+        let mut bots = Vec::new();
+        if let Some(m) = &self.mp {
             for b in &m.bots {
+                let mut h = nf_net::hash::Hasher::new();
                 h.u64(b.brain.state_hash());
                 h.f32(b.health);
                 h.bool(b.dead);
+                bots.push(h.finish());
             }
-        } else {
-            h.u32(0xffff_fffe);
         }
-        // mp-world-sync (agent 9): the shared world — the pickups (taken/hidden/respawn timers),
-        // the slots' armour, the doors, the triggers, the world channels, the destroyables, the
-        // breakables, the SS objects, the hurt volumes. Before this fold a take, a door or a
-        // broken object on one machine only went undetected (pickups were not in the hash).
-        self.net_world_fold(&mut h);
-        h.finish()
+        // The world's items in `net_world_fold`'s order; the report maps an item index to a
+        // name from the counts it prints (pickups, doors, triggers, channels, destroy,
+        // breaks, ss, hurts).
+        let mut world = Vec::new();
+        {
+            let d = &self.drones;
+            for p in &d.pickups {
+                let mut h = nf_net::hash::Hasher::new();
+                h.bool(p.gone); h.bool(p.hidden); h.u32(p.state as u32);
+                h.u32(p.respawn_ticks); h.u32(p.lifetime as u32);
+                for k in 0..3 { h.f32(p.m[3][k]); }
+                world.push(h.finish());
+            }
+            for x in &d.doors.list {
+                let mut h = nf_net::hash::Hasher::new();
+                h.u32(x.state as u32); h.f32(x.pos01); h.i32(x.timer as i32); h.u32(x.open_timer as u32);
+                world.push(h.finish());
+            }
+            for t in &d.triggers {
+                let mut h = nf_net::hash::Hasher::new();
+                h.bool(t.gone);
+                world.push(h.finish());
+            }
+            let mut chs: Vec<u32> = Vec::new();
+            chs.extend(d.triggers.iter().map(|t| t.out as u32));
+            chs.extend(d.doors.list.iter().flat_map(|x| [x.ch_open as u32, x.ch_lock as u32]));
+            chs.extend(d.props.destroy.iter().map(|x| x.channel as u32));
+            chs.extend(d.pickups.iter().map(|p| p.switch_channel as u32));
+            chs.extend(d.sss.list.iter().map(|x| x.channel as u32));
+            chs.extend(self.hurts.iter().map(|x| x.gate as u32));
+            for c in chs {
+                let mut h = nf_net::hash::Hasher::new();
+                h.u32(d.channels.v.get(c as usize).copied().unwrap_or(0) as u32);
+                world.push(h.finish());
+            }
+            for x in &d.props.destroy {
+                let mut h = nf_net::hash::Hasher::new();
+                h.f32(x.health); h.bool(x.dead);
+                world.push(h.finish());
+            }
+            for x in &d.breaks.list {
+                let mut h = nf_net::hash::Hasher::new();
+                h.f32(x.health); h.bool(x.dead);
+                world.push(h.finish());
+            }
+            for x in &d.sss.list {
+                let mut h = nf_net::hash::Hasher::new();
+                h.u32(x.state as u32); h.f32(x.t);
+                world.push(h.finish());
+            }
+            for x in &self.hurts {
+                let mut h = nf_net::hash::Hasher::new();
+                h.bool(x.disabled); h.bool(x.fired);
+                world.push(h.finish());
+            }
+        }
+        [vec![frame_rng.finish()], bodies, vitals, combat, matchh, bots, world]
     }
 
     /// mp-world-sync: the shared world's hashed state (see `net_state_hash`). Fixed order; the
@@ -10492,3 +10683,24 @@ mod tests {
 
 /// rain-drops: the per-level rain-mesh slots (`InitDrops`' rain cap: 0x80 on 07000009-0b, 0x40 elsewhere).
 pub const RAIN_SLOTS: usize = 128;
+
+/// net-desync-detail: how many named components the net state hash folds
+/// (see [`Sim::net_component_hashes`]).
+pub const NET_HASH_COMPONENTS: usize = 7;
+/// net-desync-detail: the components' names, in the fixed fold order. A desync report names the
+/// first component whose hashes disagree between the machines, so the order is part of the wire
+/// contract (`PT_HASHCOMPS`); never reorder or rename these without bumping the protocol.
+pub const NET_HASH_COMPONENT_NAMES: [&str; NET_HASH_COMPONENTS] =
+    ["frame_rng", "bodies", "vitals", "combat", "match", "bots", "world"];
+
+/// net-desync-detail: the combined hash — the fixed-order FNV fold of the component hashes. The
+/// combined value is a different function of the state than the old flat fold (the components
+/// group the same fields differently), so hashes exchanged with an older build never match; the
+/// protocol version bump (7 → 8) refuses that mix.
+pub fn fold_component_hashes(comps: &[u64; NET_HASH_COMPONENTS]) -> u64 {
+    let mut h = nf_net::hash::Hasher::new();
+    for c in comps {
+        h.u64(*c);
+    }
+    h.finish()
+}
