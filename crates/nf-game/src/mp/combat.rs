@@ -693,7 +693,10 @@ impl MpCombat {
     }
 
     /// (Re-)seeds one slot's gate inventory with the equip loadout — the match load and every
-    /// shared respawn (`MP_ReSpawn` 0x185368 → `MP_EquipPlayer` 0x1855f8 re-equips [M]).
+    /// shared respawn (`MP_ReSpawn` 0x185368 → `MP_EquipPlayer` 0x1855f8 re-equips [M]; the
+    /// equip's `Player_InitAmmoWeapons` 0x1a7ef8 arm wipes the carried rounds, the clips and the
+    /// owned bytes first [M nf-game::player::init_ammo_weapons], so the fresh kit is all the
+    /// slot has).
     pub fn gate_equip(&mut self, slot: usize, s: &super::MpSettings, wd: &WeaponData, loaded: impl Fn(u8) -> bool + Copy) {
         let Some(g) = self.gates.get_mut(slot) else { return };
         let row = super::equip::weapon_row(s);
@@ -703,6 +706,9 @@ impl MpCombat {
         g.reload_state = 0;
         g.reload_ticks = 0;
         g.fire_prev = false;
+        // A fresh kit: nothing was seen before it (a weapon held later seeds once against the
+        // new kit — the last one is gone with the death).
+        g.seen = [0; 2];
         // The equip granted the owned weapons their rounds: they are seen.
         for id in 0..g.inv.owned.len() {
             if g.inv.owned[id] { g.set_seen_bit(id); }

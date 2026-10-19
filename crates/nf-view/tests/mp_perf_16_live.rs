@@ -28,7 +28,7 @@ fn iso() -> Option<String> {
 // follower is the game's `FollowRoute` link creep now (bots.rs `steer_to`/`follow_route`
 // [M 0x15b110/0x159810/0x159f28/0x15a2c8]) — routes end at different ticks, bots die differently;
 // the two machines' hashes still agree every tick.
-const PINNED_DIGEST: u64 = 0x001c_313c_9be0_b2e1;
+const PINNED_DIGEST: u64 = 0x960a_2ce8_2552_8195;
 
 const TICKS: u32 = 3600;
 

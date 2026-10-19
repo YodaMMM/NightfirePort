@@ -99,7 +99,11 @@ fn eight_humans_spamming_explosives_every_tick_stay_in_sync() {
         "[stress] {ticks} ticks, {HUMANS} humans + 8 bots, an explosive per human per tick: peak rounds {peak_rounds}, peak thrown {peak_thrown}, blasts {blasts_seen}, kills {kills}, deaths {deaths}; net_tick avg {avg:.3} ms, p99 {:.3}, max {:.3}",
         sorted[sorted.len() * 99 / 100], sorted[sorted.len() - 1]
     );
-    assert!(peak_rounds >= 20 && blasts_seen > 100 && deaths > 0, "the run really is an explosives storm");
+    // mp-shot-gate: the gate applies each slot's shot only at the launcher's real rate with the
+    // shared rounds ([M] Player_WeaponFiring 0x1a5460, Player_RoundToFire 0x1a18e0), so the
+    // per-tick spam now arrives gated (peak rounds 6, blasts 384, deaths 300 on the pinned run)
+    // — the storm is the game's rate, and the machines still agree every tick.
+    assert!(peak_rounds >= 5 && blasts_seen > 100 && deaths > 0, "the run really is an explosives storm (peak {peak_rounds}, blasts {blasts_seen}, deaths {deaths})");
     // Sister: a live round is in the hash — nudging one rocket on one machine shows at once.
     let sb = ms[1].sim.as_mut().unwrap();
     let h = sb.net_state_hash(locals[1]);

@@ -424,6 +424,15 @@ fn demolition_online() {
     let (spot, yaw) = firing_spot(&p, centre, centre[1], 4.0);
     place(&mut p, 0, spot, yaw);
     // mp-combat-weapons: the round flies (the record's speed) — a few ticks to the site.
+    // mp-shot-gate: the siege outlasts any real clip, so the setup tops the shooter's shared
+    // clip on both machines alike (the gate spends it identically; docs/systems/mp-shot-gate.md).
+    for sim in [&mut p.a, &mut p.b] {
+        let sim = sim.sim.as_mut().unwrap();
+        let cs = sim.weapons.base(held as usize) as usize;
+        for g in sim.mp_combat.gates.iter_mut() {
+            if cs < g.inv.clip.len() { g.inv.clip[cs] = 10000; }
+        }
+    }
     let r = row_at(&p, 0, held, centre);
     ticks(&mut p, 4, &r);
     let hp = p.m().objects_rt.site.as_ref().unwrap().state;
