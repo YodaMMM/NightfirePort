@@ -108,7 +108,7 @@ const LEVEL_ID: u32 = 0x0700_0011;
 
 /// The 07000011 rope guard: fire its switch channel 0x13 [D param 3], let the chain reach the
 /// Hang, then a killing bullet. The kill must route to AbseilDeath 0x92 (mode 0x1c [M 0x1461c8:
-/// 44-52]), the ENTER must release the rope (+0x23 cleared [M 0x169b28:31]), and the corpse must
+/// 44-52]), the ENTER must release the rope (+0x23 cleared [M 0x169b28:28]), and the corpse must
 /// fall — the gravity/collision predicates never read the corpse flag [M 0x141e58 / 0x149ec8] —
 /// and land: the feet probe → danim 10 + DEAD 0x47 [M 0x169b28 case 3].
 #[test]
@@ -132,8 +132,8 @@ fn a_guard_killed_on_the_rope_leaves_it_and_lands_below() {
     sim.list[ai].hit = Some(Hit { part: 4, ray: [0.0; 3], point: [0.0; 3], damage: 5000.0, weapon: 2 });
     sim.list[ai].send(&d, &mut sim.rng, sim.frame, msg::BULLET);
     assert_eq!(sim.list[ai].state, state::ABSEIL_DEATH, "mode 0x1c kill → AbseilDeath 0x92 [M 0x1461c8:44-52]");
-    assert!(!sim.list[ai].air, "+0x23 cleared at the ENTER — released from the rope [M 0x169b28:31]");
-    assert!(sim.list[ai].corpse, "obj+0xF0 & 0x20 (SP arm) [M 0x169b28:24-26]");
+    assert!(!sim.list[ai].air, "+0x23 cleared at the ENTER — released from the rope [M 0x169b28:28]");
+    assert!(sim.list[ai].corpse, "obj+0xF0 & 0x20 (SP arm) [M 0x169b28:23]");
     // The corpse falls (the port must NOT short-circuit the collision handler on the corpse flag
     // — the game's DoCollision/DoGravity gate on +0x4F8 bits [M 0x149ec8 / 0x141e58]) and lands:
     // the feet probe → danim 10 + DEAD 0x47 [M 0x169b28 case 3]. WldGravity 9.8 u/s² [M
@@ -189,7 +189,7 @@ fn an_explosive_kill_releases_the_rope_guard_the_same_way() {
     sim.list[ai].blast = Some(sim.list[ai].pos);
     sim.list[ai].send(&d, &mut sim.rng, sim.frame, msg::EXPLOSION);
     assert_eq!(sim.list[ai].state, state::ABSEIL_DEATH, "the blast kill routes by mode +0xC5 [M 0x146480 @0x1465e4]");
-    assert!(!sim.list[ai].air, "released [M 0x169b28:31]");
+    assert!(!sim.list[ai].air, "released [M 0x169b28:28]");
     let mut landed = None;
     for t in 1..=240u32 {
         sim.tick(&d, &bond_at([0.0, -1000.0, 0.0]));
@@ -243,7 +243,7 @@ fn only_the_disc_abseilers_rope_the_stairwell_walkers_walk() {
     assert!(sim.list.iter().all(|x| x.mode != 0x1b), "no placement uses 0x0600089C [D]");
     // The stairwell walkers: every present skin-0x05000004/06 guard is a normal dtypenew-1/2
     // guard (modes 0/2) — NEVER the rope modes: DefaultInit arms the rope only for mode
-    // 0x1b/0x1c, and only the 0x06000892 placement writes those [M 0x14b300:757-766 + D params].
+    // 0x1b/0x1c, 0x06000892 writes those [M 0x14b300:757-766 + D params] and 0x0600089c also writes mode 0x1b [M 0x14b300:620-622] — it is just absent from the disc placements [D params].
     let walkers: Vec<u8> = sim.list.iter().filter(|x| x.present && matches!(x.skin, 0x0500_0004 | 0x0500_0006)).map(|x| x.mode).collect();
     assert!(!walkers.is_empty(), "07000011 ships stairwell walkers on those skins [D docs/levels/07000011.md]");
     assert!(walkers.iter().all(|&m| !matches!(m, 0x1b | 0x1c)), "the walkers never rope [D placements + M 0x14b300:757-766], modes {walkers:?}");

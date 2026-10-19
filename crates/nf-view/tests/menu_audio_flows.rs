@@ -488,6 +488,9 @@ fn a_skipped_intro_still_leaves_the_main_menu_music_up() {
     let mut h = Host::boot();
     assert_eq!(h.jingles(), 1, "the title's pair");
     assert!(h.input(Action::Confirm), "the title's Enter starts the intro");
+    // G-048(4): P_PARISENUM holds for the card machine's walk before P_ESTHERO opens
+    // [M 0x20a648:36-47; the old 3-frame budget pinned the 1-tick [S] completion].
+    for _ in 0..32 { h.frame(); if h.fe.as_ref().is_some_and(|fe| fe.page == Page::EstHero) { break; } }
     for _ in 0..3 { h.frame(); }
     assert!(h.fe.as_ref().is_some_and(|fe| fe.page == Page::EstHero && fe.intro_movie));
     assert_eq!(h.player.as_ref().map(|p| p.code), Some(ESTHERO_MOVIE));
@@ -545,9 +548,9 @@ fn the_backdrop_pages_keep_one_pair_and_the_list_pages_touch_nothing() {
     // The mission list IS a backdrop page: leaving and coming back while the pair is up must
     // restart NOTHING (the menu_movie gate [M 0x20b608's if menu_movie == 0; P_MAIN's 0x4c
     // likewise only restarts when menu_movie == 0, 0x20a7b0:42-48]). fe-audit 1019: the list
-    // was PUSHED over the wheel (the confirm's 0x44 b=0 [M C_SBNFDFCTY 0x216ca8:10-17 +
-    // 0x21c858 case 0x44]), so Back is the manager's default pop — the wheel, cursor restored
-    // [M 0x21c858:592-600]. (The disc binds no msg-99 script [D the 08000002 tag stream]; the
+    // was PUSHED over the wheel (the confirm's 0x44 carries b = DAT_002e1adc [M 0x202190:9] — here 0 [S] unverified: the global is cleared by C_SBNFCN 0x20b390:30 / P_NFSELECT 0x20aec0:65 and set by P_MPJOIN 0x20ca00:182 / C_SBCNOPTIONS 0x213528:66 / P_CNNAME 0x213790:71 / C_KEYBOARD 0x213a98:61, so the value depends on which menus ran; C_SBNFDFCTY 0x216ca8:10-17 only calls Menu_ChangePageCloseIris
+    // + the push rule 0x21c858 case 0x44]), so Back is the manager's default pop — the wheel, cursor restored
+    // [M 0x21c858:592-598]. (The disc binds no msg-99 script [D the 08000002 tag stream]; the
     // empty-stack 99 arm → MAIN is the results route, pinned in menu_sp_e2e.)
     assert!(act(&mut h, Action::Back));
     assert!(h.fe.as_ref().is_some_and(|fe| fe.page == Page::Difficulty));
@@ -601,10 +604,9 @@ fn an_sp_mission_start_stops_the_menu_music_for_the_level() {
     to_missions(&mut h);
     start_exchange(&mut h);
     assert!(h.drv.jingles.is_empty() && h.drv.others.is_empty(), "the fresh sound stack carries nothing of the menus");
-    // The results page over the STILL-LOADED mission: its 0x4c restart queues the restart [M
-    // 0x208e78:60-65] and the gate mutes it — the mission bank resolves neither jingle
-    // [D SB_12]. [S port: the game opens no page over the mission on completion — case 4 sets
-    // +0x1c = 0x40000036 and loads (0x182c60:72-75); the port shows the page during the load.]
+    // G-048(3): the game opens NO page over the mission on completion — case 4 only sets
+    // +0x1c = 0x40000036 and loads [M 0x182c60:72-75; 0x1d6360:160-163 creates the manager].
+    // The old assertion pinned the port's immediate page (a marked [S]; the decompile wins).
     h.mission_end(true);
     assert!(h.fe.as_ref().is_some_and(|fe| fe.page == Page::Results), "the load tail opened the queued page [M 0x1d6360:160-163]");
     assert_eq!(h.jingles(), 0, "the results page's restart is silent over a mission");

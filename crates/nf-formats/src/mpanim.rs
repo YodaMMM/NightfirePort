@@ -96,8 +96,7 @@ impl MpSkins {
 /// `AnimSetInit` 0x1c6a48 + `AnimSetUpdate` 0x1c0938's reads:
 /// `u32 loco[countA] , 0 , u32 strafe[4] , 0` — locomotion = `[idle, walk, run]` (the crouch
 /// sets carry walk == run), strafe = `[left_a, left_b, right_a, right_b]` (the pairs duplicate;
-/// `AnimSetUpdate` reads word[countA+1] for dir 1 and word[countA+3] for dir 2 [M 0x1c0938
-/// disasm 0x1c0f2c/0x1c0f48]).
+/// `AnimSetUpdate` reads word[countA+1] for dir 1 and word[countA+3] for dir 2 [M 0x1c0938:105-112; disasm 0x1c0f2c/0x1c0f48]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MpAnimSet {
     pub idle: u32,

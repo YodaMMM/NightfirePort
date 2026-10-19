@@ -135,7 +135,7 @@ fn to_main(fe: &mut FrontEnd) {
     assert!(fe.action(Action::Confirm), "the title's Enter starts the intro run");
     assert!(fe.intro_playing, "the intro run follows the title");
     assert_eq!(fe.page, Page::ParisEnum, "the up-page is P_PARISENUM, not Main [M 0x20a648]");
-    for _ in 0..3 { fe.tick(); }
+    for _ in 0..32 { fe.tick(); if fe.page == Page::EstHero { break; } } // G-048(4): the card walk
     assert_eq!(fe.page, Page::EstHero, "then P_ESTHERO while its movie plays [M 0x20a060:44-45]");
     assert!(!fe.action(Action::Down), "the intro swallows other input [M 0x20a060:25 msg 0x68/1]");
     for _ in 0..5000 {
@@ -207,7 +207,8 @@ fn boot_reaches_main_through_the_intro_both_ways() {
     assert_eq!(fe.page, Page::Start);
     assert!(fe.action(Action::Confirm), "the title's Enter");
     assert!(fe.intro_playing);
-    for _ in 0..3 { fe.tick(); }
+    for _ in 0..32 { fe.tick(); if fe.page == Page::EstHero { break; } } // G-048(4): the card walk
+    for _ in 0..2 { fe.tick(); }
     assert!(fe.intro_movie, "P_ESTHERO's 2nd 0x50 started the movie [M 0x20a060:16-24]");
     // The grace: a press in the first 180 ticks is refused and the intro keeps playing
     // [M 0x20a060:17 DAT_002e1c4c = 0xb4; Menu_StopMovie 0x215a50:6].
@@ -244,14 +245,14 @@ fn back_walks_every_single_player_step_to_the_title() {
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::MissionSelect);
     // fe-audit 1019: the list's Back is ROUTE-DEPENDENT. 0x5f runs the page's msg-99 SCRIPT
-    // first [M 0x21c858:588-592] — the disc's front-end def binds no msg-99 script on any page
+    // first [M 0x21c858:604-608] — the disc's front-end def binds no msg-99 script on any page
     // (every page's only SCRIPT is 0x2000000f on the 0x4c-open slot 0 [D the 08000002 tag
     // stream]) — so the pushed SP chain takes the manager's default pop: reopen the wheel with
-    // its saved cursor [M 0x21c858:592-600]. (The empty-stack results route is P_NFMAP's 99 arm
+    // its saved cursor [M 0x21c858:592-598]. (The empty-stack results route is P_NFMAP's 99 arm
     // → MAIN [M 0x20b608:67-68] — pinned in a_completed_mission_routes… below.)
     assert!(act(&mut fe, Action::Back));
-    assert_eq!(fe.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-600]");
-    assert_eq!(fe.cursor, 0, "the wheel re-opens on the chosen difficulty (Operative) [M 0x21c858:600]");
+    assert_eq!(fe.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-598]");
+    assert_eq!(fe.cursor, 0, "the wheel re-opens on the chosen difficulty (Operative) [M 0x21c858:598]");
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::Codename);
     assert_eq!(fe.cursor, 0);
@@ -379,13 +380,17 @@ fn each_difficulty_reaches_the_mission_list() {
         assert_eq!(fe.page, Page::MissionSelect);
         assert_eq!(fe.difficulty, d, "the choice rode the confirm");
         assert_eq!(fe.cursor, 1, "the list opens on the highest unlocked row [M 0x20b608:60-64]");
-        // fe-audit 1019: the pushed chain pops back to the wheel — the confirm's 0x44 b=0 pushed
-        // it [M C_SBNFDFCTY 0x216ca8:10-17 + the push rule 0x21c858 case 0x44], and the pop
-        // reopens the saved page AND cursor [M 0x21c858:592-600]. (No msg-99 script stands on
+        // fe-audit 1019: the pushed chain pops back to the wheel — the confirm's 0x44 carries
+        // b = DAT_002e1adc [M 0x202190:9] — here 0 [S] unverified: the global is cleared by
+        // C_SBNFCN 0x20b390:30 / P_NFSELECT 0x20aec0:65 and set by P_MPJOIN 0x20ca00:182 /
+        // C_SBCNOPTIONS 0x213528:66 / P_CNNAME 0x213790:71 / C_KEYBOARD 0x213a98:61, so the
+        // value depends on which menus ran — pushed it [M the push rule 0x21c858 case 0x44;
+        // C_SBNFDFCTY 0x216ca8:10-17 only calls Menu_ChangePageCloseIris], and the pop
+        // reopens the saved page AND cursor [M 0x21c858:592-598]. (No msg-99 script stands on
         // the disc [D the 08000002 tag stream] — the 99 arm only fires on an empty stack.)
         assert!(act(&mut fe, Action::Back));
-        assert_eq!(fe.page, Page::Difficulty, "the pop re-opens the wheel [M 0x21c858:592-600]");
-        assert_eq!(fe.cursor, d, "Back re-opens the wheel on the chosen row [M 0x21c858:600]");
+        assert_eq!(fe.page, Page::Difficulty, "the pop re-opens the wheel [M 0x21c858:592-598]");
+        assert_eq!(fe.cursor, d, "Back re-opens the wheel on the chosen row [M 0x21c858:598]");
     }
 }
 
@@ -496,7 +501,9 @@ fn a_completed_mission_routes_the_results_save_and_the_next_row() {
     // The Exchange has no outro code: the front-end map loads plain, the results page stands.
     assert_eq!(fe.requested_level.take(), Some(menu::FRONTEND_LEVEL), "no outro for 07000005");
     assert_eq!(drive_end_to_map(&mut fe), None, "a plain map load has no phase-2 resolve");
-    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
+    // G-048(3): the load tail's MenuManager_Create lands the queued page once
+    // [M 0x1d6360:160-163]; a second call on the open page is a no-op.
+    assert!(fe.reopen_queued_page(), "the results page opens with the manager");
     assert_eq!(fe.page, Page::Results);
     assert_eq!(fe.flow.page, menu::PAGE_RESULTS);
 
@@ -549,7 +556,7 @@ fn a_completed_mission_routes_the_results_save_and_the_next_row() {
     assert_eq!(fe.page, Page::Main, "the empty-stack △ opens MAIN [M 0x20b608:67-68]");
     // Forward again through NightFire (row 0 → C_GONIGHTFIRE's delayed 0x44(0x40000025, 0)
     // [M 0x2169b8]) — the Codenames row would open P_CNSELECT 0x4000001b, not this page
-    // [M C_GOCODENAMES 0x2169e8].
+    // [M C_GOCODENAMES 0x216b38:36-37 — the delayed 0x44 to 0x4000001b].
     assert!(act(&mut fe, Action::Confirm), "NightFire");
     assert_eq!(fe.page, Page::Codename);
     while fe.cursor < 2 {
@@ -643,7 +650,9 @@ fn the_final_mission_routes_to_the_win_page_and_credits() {
     );
     assert_eq!(fe.requested_level.take(), Some(0x0730_001b), "the final level wraps to its outro");
     assert_eq!(drive_end_to_map(&mut fe), Some(menu::FRONTEND_LEVEL), "the outro resolves to the map");
-    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
+    // G-048(3): the load tail's MenuManager_Create lands the queued page once
+    // [M 0x1d6360:160-163]; a second call on the open page is a no-op.
+    assert!(fe.reopen_queued_page(), "the results page opens with the manager");
     assert_eq!(fe.page, Page::Results);
     assert_eq!(fe.flow.page, menu::PAGE_RESULTS);
     assert!(fe.results_enter(&mut progress, level, 6, fe.difficulty as u32, None));

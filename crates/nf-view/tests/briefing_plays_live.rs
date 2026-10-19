@@ -70,13 +70,23 @@ fn walk_to_mission_select(fe: &mut FrontEnd, row: usize, name: &str) {
         if fe.flow.get_state() == ST_RUNNER && fe.flow.current_level == menu::FRONTEND_LEVEL { break; }
     }
     fe.action(Action::Confirm);
-    for _ in 0..3 + menu::ESTHERO_TICKS { fe.tick(); }
+    // The intro's end opens Main through `Menu_ChangePageCloseIris` — the page lands
+    // `CLOSE_IRIS_PAGE_TICKS` later [M 0x202190; G-048(1)].
+    for _ in 0..3 + menu::ESTHERO_TICKS + menu::CLOSE_IRIS_PAGE_TICKS { fe.tick(); }
     assert_eq!(fe.page, Page::Main, "{name}: the intro ran out; Main is up");
     fe.action(Action::Confirm); // NightFire → Codename after the 0x13 delay [M C_GONIGHTFIRE 0x2169b8]
+    // Every page change below rides `Menu_ChangePageCloseIris`: input is blocked until the delayed
+    // 0x44 lands `CLOSE_IRIS_PAGE_TICKS` later [M 0x202190 + 0x21c858:315; G-048(1)], so the walk
+    // waits it out after each confirm, as a player's next press would.
+    let iris = |fe: &mut FrontEnd| for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 1 { fe.tick(); };
     for _ in 0..menu::DELAYED_PAGE_TICKS + menu::MAIN_OPEN_BLOCK { fe.tick(); }
-    fe.action(Action::Confirm); // Play without saving (row 1 [M P_NFSELECT 0x20aec0:96-97])
+    iris(fe);
+    fe.action(Action::Confirm); // Play without saving (row 1 — [S] unverified: P_NFSELECT 0x20aec0:96-97 only pre-selects the default codename (the 0x2e send at :97); no line there names the row)
+    iris(fe);
     fe.action(Action::Confirm); // the box
+    iris(fe);
     fe.action(Action::Confirm); // difficulty → the Single Player list
+    iris(fe);
     fe.unlock_all = true;
     fe.cursor = row;
     assert!(fe.action(Action::Confirm), "{name}: the row did not confirm");
@@ -149,7 +159,7 @@ fn outro_row(row: &Row) {
     fe.mission_ended(Outcome::Complete, Stats::default());
     assert_eq!(fe.requested_level.take(), Some(code),
         "{}: Mission_Update case 6 maps the end level {:#x} to the outro [M 0x182e60-0x182eb4]", row.name, row.end);
-    assert!(fe.flow.movie_pending, "{}: the 0x73 code wraps to a movie [M 0x1d3800's switch]", row.name);
+    assert!(fe.flow.movie_pending, "{}: the 0x73 code wraps to a movie [M ResetMap_Load 0x1d6360:39 (the GS+8 & 0xff0000 movie decision) + :101 (the state-6 push)]", row.name);
     assert_eq!(fe.flow.page, menu::PAGE_RESULTS, "{}: the results page queued [M 0x182c60:72]", row.name);
     assert!(fe.results_queued, "{}: the page waits for the load tail [M 0x1d6360:160-163]", row.name);
     assert_ne!(fe.page, Page::Results, "{}: no manager while the movie is due [M 0x1d6360:160-163]", row.name);
