@@ -1388,11 +1388,12 @@ impl BotBrain {
         if let Some(o) = self.vars.opponent {
             if let Some(t) = ctx.others.get(o) {
                 if t.alive {
-                    // The line to the aim point (the chest, eye − 0.3 — where `handle_firing`'s
-                    // round goes): an eye-to-eye line over a ledge lip saw a bot on the storey
-                    // below whom no round could reach, and the pair stood firing into the lip
-                    // all match instead of running the route round [S the CanSeeObject stand-in].
-                    let clear = ctx.world.segment_clear(self.pos, [t.pos[0], t.pos[1] - 0.3, t.pos[2]]);
+                    // The line to the aim point — where `handle_firing`'s round goes now that the
+                    // aim targets the opponent's position [M 0x125b30/0x178f68] (the old chest
+                    // −0.3 line matched the old chest aim; the pair must agree or a bot "sees"
+                    // along one line and shoots along another — the ledge-lip case this once
+                    // patched is the same line again). [S the CanSeeObject stand-in.]
+                    let clear = ctx.world.segment_clear(self.pos, t.pos);
                     if clear && self.opponent_visibility(t) >= 0.7 {
                         self.vars.seen_ticks = self.vars.seen_ticks.saturating_add(1); // +0x270 [M 0x176a28 seen arm]
                         self.vars.unseen_ticks = 0; // Drone+0x274
@@ -2392,12 +2393,14 @@ impl BotBrain {
             }
             if ctx.lazy_sight {
                 // mp-perf-16: only a candidate that would take the pick pays for its sight line —
-                // the same answer as the precomputed bit2, without the per-pair segments. The
-                // candidate cone is the scan's own hard ±half-FOV test above [M 0x1424e0's
-                // replacement arm re-tests the pick against ±(+0xE4·57.3)° before keeping it];
-                // the vis ≥ 0.7 score gates the perception's ack, not the scan's pick.
-                let chest = [o.pos[0], o.pos[1] - 0.4, o.pos[2]];
-                let seen = o.flags & 0x6 == 0x6 || ctx.world.segment_bullet_clear(self.pos, chest);
+                // the same answer as the precomputed bit2, without the per-pair segments. The test
+                // is the perception ack's own chain (bot-weapons-finish-3): the segment to the aim
+                // point plus the `OpponentVisibility` ≥ 0.7 cone+range score. A looser bare
+                // segment kept re-picking an opponent the sight chain never acked, which starved
+                // the scan tail's site arm: the protection attackers stood "attacking" a defender
+                // they could not sight and never shot the site.
+                let seen = o.flags & 0x6 == 0x6
+                    || (ctx.world.segment_clear(self.pos, o.pos) && self.opponent_visibility(o) >= 0.7);
                 if !seen { continue; }
             }
             best = Some((o.index, d));
@@ -3456,9 +3459,16 @@ impl BotBrain {
         if dot <= 0.9998 {
             return;
         }
-        // FireWeapon [M 0x179d40→0x17a080:11] — the round aims at the target's height too (a level
-        // round passed over a player on another floor) [S the aim's vertical half].
-        let dy = target.pos[1] - 0.3 - self.pos[1];
+        // FireWeapon [M 0x178f68] — the bullet leaves the weapon fire bone's world position
+        // (`AnimGetBoneWorldTrans` → `Bullet_init(.., &bone_pos, dir)`) and, with the opponent
+        // held, its direction is `normalise(aim_point − bone_pos)` where the aim point is the
+        // opponent's obj position + the aim wobble (`BOT_opponentTargetting` 0x125b30 stores
+        // opp+0x30 [+0x210 wobble] into +0x1f0; the wobble is 0 once the aim settles). The port
+        // has no model bones: its single-point stand-in is the bot's own pos for the muzzle, so
+        // the shot aims AT the target's pos — level for a standing target on the same floor, the
+        // right vertical for a target on another floor. (The old `- 0.3` chest offset was a port
+        // guess [S]; the decompile's aim point is the opponent's position itself.)
+        let dy = target.pos[1] - self.pos[1];
         let len = (d * d + dy * dy).sqrt().max(1e-6);
         let aim = [dx / len, dy / len, dz / len];
         let _ = dir;

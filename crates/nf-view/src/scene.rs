@@ -9423,13 +9423,15 @@ impl Sim {
             // mp-bot-objectives: the standing Demolition/Protection site rides the objective row
             // (`OBJ_ROW`) — the attackers take it as their opponent (`NDrone2_FindOpponent`
             // 0x1424e0:519-560 sets the site obj as `Drone+0x170` [M]); the row's position is the
-            // site sphere centre + 0.3 so the brain's chest aim (−0.3) lands on the centre [S].
+            // site sphere centre — the game's aim point is the opponent obj's position
+            // (+0x30 [M 0x125b30]), and the old +0.3 chest-aim compensation is gone with it
+            // (bot-weapons-finish-3).
             if let Some(site) = objectives.site.filter(|s| s.radius > 0.0) {
                 let c = site.centre;
                 let d = [c[0] - me[0], c[1] - me[1], c[2] - me[2]];
                 let clear = world.segment_surface_bullet(me, c).is_none();
                 seen.push(nf_game::mp::bots::OtherPlayer {
-                    pos: [c[0], c[1] + 0.3, c[2]], alive: true, index: nf_game::mp::bots::OBJ_ROW,
+                    pos: c, alive: true, index: nf_game::mp::bots::OBJ_ROW,
                     team: objectives.site_defenders, flags: 0x2 | if clear { 0x4 } else { 0 },
                     dist2: d[0] * d[0] + d[1] * d[1] + d[2] * d[2], health: site.state as f32, score: 0.0,
                 });
