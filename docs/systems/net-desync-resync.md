@@ -88,10 +88,20 @@ disagrees with the host's resyncs; everyone else keeps playing.
   the host only, the handover replays through the app's real catch-up, the re-announce lands, the
   re-spawns are no-ops), all three agree on every hash exchange after, no fatal, the match runs
   on. Sisters: no perturbation → nothing resyncs; a second perturbation within 60 s → fatal.
-- NOTE (the report carries it too): the 3-scene live test needs ~3 MP arenas in memory (~2.5 GB);
-  this sandbox's 4 GB OOM-kills it at the third load (rc 137 — reproduced four ways, incl.
-  `setsid`). It is written to run on the main agent's machine; the session-level protocol flow is
-  pinned by the nf-net tests (`cargo test -p nf-net` — 39 + the integration files, green here).
+  **Not yet run green anywhere**: this sandbox's 4 GB OOM-kills a 3-full-scene process at the
+  third arena load (rc 137 — reproduced four ways, incl. `setsid`); it is written to run on the
+  main agent's machine.
+- `crates/nf-net/tests/resync.rs` — the same flow at session level on the shim (3 machines, fake
+  hash chains, persistent one-bit hash corruption from the desync tick on): the handshake, the
+  serve, the replay verify, the NEUTRAL gap on both sides, the re-announce, no `join_history`
+  growth, and the two fallbacks. **State: `without_a_divergence_nothing_resyncs` green; the two
+  resync runs complete the handshake/replay/re-announce and converge, then STALL together ~9 ticks
+  before the target (host 353 = c1 = charlie of 362) — the post-rejoin input-window seam (the
+  same class the late-join path's three-window comments cover, session.rs's `their_ack`/`our_ack`
+  re-seeding at JOIN_READY) — the next session continues from the branch.**
+- `cargo test -p nf-net` (the whole crate): 39 unit + the integration files green with the
+  changes (the late-join/reconnect/lockstep/loopback suites all pass — the widened
+  `Event::Desync` and the resync arming do not disturb them).
 
 ## 5. Live checks for the main agent
 
