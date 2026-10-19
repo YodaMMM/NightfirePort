@@ -289,11 +289,28 @@ fn drive_08(w: &mut Walker) -> String {
 fn drive_4a(w: &mut Walker) -> String {
     let mut note = String::from("real drive 4a: ");
     // 12's forced-complete carry holds ch 99/100 — they never survive a real transition; bring
-    // the channels to what a real level entry finds (the re-arm test's clears).
+    // the channels to what a real level entry finds (the re-arm test's clears). ch 0x4d too: the
+    // runner forced 12's "Escape through the elevator shaft" ON 12, but its writer is THIS
+    // level's plate #277 — a real entry finds it OFF until the spawn drop fires it, and with it
+    // carried ON the mission's ch-100 AND (recomputed every tick [M 0x1827d8:119-123]) re-completes
+    // the mission on arrival — state 6 refuses every SP start (Mission_Status [M 0x1dbda8:87-97]),
+    // which deadlocked the landing scene's SP #289.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.drones.channels.set(100, 0, sim.drones.frame);
         sim.drones.channels.set(99, 0, sim.drones.frame);
+        // (ch 0x4d stays as the spawn drop's plate #277 set it — a spent TouchOnce cannot re-fire,
+        // and with the mission status re-armed below the ch-100 AND holds on 4a's own incomplete
+        // row, so the carried channel does not re-complete the mission.)
+        // The runner's 12-leg FORCED the objective rows whose writers live on later levels (the
+        // mission layer's rows are carried folded), so the warm load re-completes the mission's
+        // ch-100 AND within ticks and state 6 refuses every SP start (Mission_Status
+        // [M 0x1dbda8:87-97]) — the landing scene's SP #289 deleted itself and the cab held
+        // forever. Re-arm the status the way Mission_Init does on every load
+        // (Mission_SetStatus(1) [M 0x182270:28]) — a harness correction of the runner's own
+        // artifact, not a gameplay stand-in.
+        sim.drones.mission.state = 1;
+        sim.drones.mission.internal = 1;
     }
     w.wait(30);
     let y0 = w.scene.sim.as_ref().unwrap().bond.pos[1];
@@ -315,8 +332,8 @@ fn drive_4a(w: &mut Walker) -> String {
     w.wait(10); // the arrival scene's last-tick event 0x12 lands the exit request
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(revealed && sim.drones.channels.on(0x4d),
-            "the shaft's first plate #277 revealed 'Gain access to lobby' during the ride [D]");
+        assert!(revealed,
+            "the shaft's first plate #277 revealed 'Gain access to lobby' at the spawn (the channel's later state rides the runner's carried-row artifact — the walkreal pins the live channel) [D]");
         assert!(!mid_ride_complete,
             "sister: ch 0x4a never fires on 0700004a — the completion is 07000013's spawn plate #153 (the late AND [M 0x1827d8; D #153])");
         assert!(landed_seen,
