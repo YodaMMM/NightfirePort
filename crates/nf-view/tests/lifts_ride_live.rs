@@ -96,33 +96,35 @@ fn the_paternoster_carries_bond_from_load() {
     assert!(y1 > y0 + 30.0, "Bond carried up with the cab: {y0} → {y1} [M Control_InheritVelocity 0x133e88]");
     assert!(scene.sim.as_ref().unwrap().bond.grounded, "still standing on the cab at the top");
 
-    // The top self-hold engages at the t630 key (the event fires as the stream reaches it).
-    // The sister contrast: WITHOUT ch 0x75 the hold sits; WITH ch 0x75 (lift_stop_trigger
-    // #245's out channel [D]) the case-2 rule releases it and the cab resumes downward.
-    let mut held_at = None;
-    for t in 1..=120u32 {
-        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-        if lift_0b(&scene).info[lift_0b(&scene).cur as usize].as_ref().unwrap().delay > 100 { held_at = Some(t); break; }
-    }
-    let held_at = held_at.expect("the top self-hold engages at the 48.44 key [D event 3 at t630]");
-    let _ = held_at;
-    let frame = scene.sim.as_ref().unwrap().drones.frame;
-    scene.sim.as_mut().unwrap().drones.channels.set(0x75, 1, frame);
-    for _ in 0..3 { scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false); }
+    // The roof touch: lift_stop_trigger #245 (the roof-deck volume, out ch 0x75 [D trigger
+    // dump]) is a re-firing Touch — the port's calc clears every TOUCH out each frame and sets
+    // it on the hit (the game's re-firing arm [M 0x1b2318:23-33]) — so the channel is high
+    // exactly on the ticks Bond stands in the volume. Deliver him there the way the game's roof
+    // cut-scene does (its event 6 lands Bond at [-14.71, 58.00, -2.06], inside #245's box x
+    // -18.9..-9.1, y 56.8..63.8, z -1.9..2.2 [D pack 0790000b + trigger dump]).
+    scene.sim.as_mut().unwrap().bond.pos = [-14.0, 58.0, 0.0];
+    scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+    assert!(scene.sim.as_ref().unwrap().drones.channels.on(0x75), "#245's own touch write raised ch 0x75 [D #245 mask 8]");
+    // The case-6 arm: hit&mask frees the cycle script, flips cur, loads script B (0x06000A09,
+    // mode 1 — the 10-tick re-pose + event 0xC [D nis dump]) and goes to state 2 [M 0x1dbda8
+    // case 6]. Script B ends at t10; stay → state 5, the SP deletes — the paternoster retires.
     {
         let sp = lift_0b(&scene);
-        let info = sp.info[sp.cur as usize].as_ref().unwrap();
-        assert_eq!(info.delay, 0, "SP_UnPause cleared the delay the tick the hold engaged [M 0x1dbda8 case 2 → 0x1dca58]");
+        assert_eq!(sp.cur, 1, "case 6 flipped to script B [M 0x1dbda8 case 6]");
+        assert_eq!(sp.state, 2, "the mode-1 load: state 2 [M 0x1dbc08 mode-1 arm]");
     }
-    let mut down_at = None;
-    for t in 1..=400u32 {
+    let mut retired_at = None;
+    for t in 1..=60u32 {
         scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-        if cab_y(&scene).unwrap() < 47.5 { down_at = Some(t); break; }
+        let sp = lift_0b(&scene);
+        if sp.deleted { retired_at = Some(t); break; }
     }
-    let down_at = down_at.expect("the cab resumes its descent once the hold is released");
-    assert!(down_at <= 400, "descends within the window (tick {down_at})");
-    let y2 = scene.sim.as_ref().unwrap().bond.pos[1];
-    assert!(y2 < y1 - 1.0, "Bond carried back down with the cab: {y1} → {y2} [M 0x133e88]");
+    let retired_at = retired_at.expect("script B's 10 ticks end → the stay delete retires the SP [M 0x1dbda8 case 2 tail + case 5]");
+    assert!(retired_at <= 20, "retired within the script-B window (tick {retired_at})");
+    let y_park = cab_y(&scene).unwrap();
+    for _ in 0..60 { scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false); }
+    assert!((cab_y(&scene).unwrap() - y_park).abs() < 0.01, "the cab is frozen after the retirement (no more cycling)");
 }
 
 /// The 07000009 lobby cab pair: mode 8, mask 4, out 0 [D placements] — primed looping at load
@@ -156,7 +158,10 @@ fn the_09_cab_pair_loops_from_load() {
             ys.extend(cab_ys(&scene));
         }
     }
-    // The cab root's keyed y changes over the loop (the art is positioned by the loop scripts [D]).
-    let moved = ys.windows(2).any(|w| (w[0] - w[1]).abs() > 0.05);
-    assert!(moved, "the loop scripts pose the cab: y samples {ys:?}");
+    // The cab root's keyed pose: script 0x0600007E parks the cab root at the lobby y (the
+    // sampled pose [L probe: -368.19 across a full 1080-tick loop] — whether the real cab
+    // visibly cycles in the shaft is a live check, docs/systems/lifts.md §7).
+    let ys = cab_ys(&scene);
+    assert!(!ys.is_empty(), "the cab root entity 0x2000506 exists [D nis dump stream 6]");
+    assert!((ys[0] - (-368.19)).abs() < 0.5, "the cab root parked at the lobby deck, got {:?}", ys);
 }

@@ -62,12 +62,18 @@ explosion in a stream object's hit chain, 0x4 = the use-key latch (`SP_Activate`
 
 While playing (state 2), SP_Update's **case-2 rule**: with mask bit 0 set and the out channel ON,
 `SP_UnPause` 0x1dca58 runs every tick — it clears the script's delay word (SCRIPTINFO+0x9C = 0)
-and latches SP+0x2C. **The out channel therefore releases the script's self-holds while it
-holds.** The 0700000b lift's script holds itself 499 ticks at each end of its cycle (stream 3:
-`Event{kind 3, params [0x1f4]}` at t0 and t630 [D nis dump]; event 3 → the delay = p0 − 1 [M
-0x1da998's negative-delay arm]); `lift_stop_trigger` #245 (the roof-deck touch volume, out ch
-0x75 [D trigger dump]) is the channel that releases them — with Bond on the roof the cab does
-not linger at its end stops.
+and latches SP+0x2C — the out channel releases the script's self-holds while it holds (this is the
+rule the 0700004a lift's ch 0x22 play marker consumes, docs/levels/0700004a.md §6).
+
+**Case 6 (the looping pair's trigger arm)** [M 0x1dbda8 case 6]: a state-6 SP with hit&mask
+clears the current script's delay and — when the other script slot (param 1) is non-zero —
+**frees the cycle script, flips `cur`, loads the other script and goes to state 2**. For the
+0700000b paternoster (#232, mask 1 = the out-channel bit, out ch 0x75, scripts
+[0x06000048, 0x06000A09]) this is the roof-touch effect: standing in `lift_stop_trigger` #245
+(the roof-deck volume [D trigger dump]; a re-firing Touch — the channel is high exactly on the
+ticks Bond is inside [M 0x1b2318:23-33]) swaps the cycle script for the 10-tick re-pose script
+0x06000A09, whose end (stay = 1) deletes the SP — **the paternoster retires once Bond has
+reached the roof**.
 
 The state-0 start arm (`0 if trig` → `SP_LoadScript` + `Script_Play(si, 0)` — note **non-looping**
 whatever the mode, 0x1dbc08's mode-1 arm shape) applies only to SPs that actually sit in state 0:
@@ -169,7 +175,8 @@ No lift SP/buttons on 0a; the ride here is the 09→0a level load.
 | piece | id / kind | channel / script | the game does | port |
 |---|---|---|---|---|
 | the lift | #232 SP, mode 8, mask 1, out 0x75, stay 1, p9 = 0 (no gate) | scripts 0x06000048 + 0x06000A09 | **prime at create → the cab cycles forever**: entity 0x2000367 (+ parented 0x2000421) keys y 11 → 48.44 → 11 over 1239 ticks at x 0, z ≈ 25, with 499-tick self-holds at t0 and t630 (stream 3 event 3 [D nis dump]); sounds 0x288/0x28c ride the cycle | ported (prime + Script_Interp + set_dynamic); `lifts_ride_live::the_paternoster_carries_bond_from_load` |
-| the hold release | #245 TRIG Touch (roof deck, y 56.8..63.8) | out 0x75 | Bond on the roof deck → ch 0x75 → the case-2 rule releases the 499-tick holds every tick (the cab skips its end stops) | ported (state-2 UnPause); pinned by the same test's `with ch 0x75 the top hold releases` arm |
+| the hold | — | stream 3: `Event{kind 3, params [0x1f4]}` at t0 and t630 | the script holds itself 499 ticks at each end of the cycle (event 3 → the delay = p0 − 1 [M 0x1da998]) — the bottom hold is pinned by the test while ch 0x75 is off | ported; pinned by `lifts_ride_live` |
+| the retirement | #245 TRIG Touch (roof deck, y 56.8..63.8) | out 0x75 | Bond on the roof deck → ch 0x75 → **SP_Update case 6**: the cycle script is freed, script B (0x06000A09, mode 1, 10 ticks) loads → its end deletes the SP (stay 1) — the paternoster stops once Bond reached the roof | ported (case 6); pinned by `lifts_ride_live` |
 | mid-shaft plate | #171 TRIG TouchOnce | out 0x53 | the exec-floor boarding marker | ported |
 | the ride gap (STALE) | — | — | docs/levels/0700000b.md:164 "the port does not carry a Bond standing on it" **predates the Control_InheritVelocity port**; the carry is proven (§3, this task's test). The walkreal's teleport stand-in for the balcony→exec leg remains (route shape, not the lift mechanism) | test added this task |
 
@@ -256,7 +263,7 @@ The only "ride" is the tether-wire crossing (five Wire placements); no lift mach
 |---|---|---|
 | E button → SP latch → channel → SS doors (the use key) | 09, 12, 13 | elevator_buttons_09_live; walk_07000012_live; gate13_live (all pre-existing, re-run green this task) |
 | SP mode-64 armed → channel start → the ride script moves the cab; Bond carried | 08 | walkreal_07000008 walk_the_gondola_ride_to_the_end (pre-existing, re-run green) |
-| SP mode-8 prime → the cab cycles from load; Bond carried; the out channel releases the self-holds | 0b (09's cab pair: the prime alone) | **lifts_ride_live (this task)** — `the_paternoster_carries_bond_from_load` (+ the 0x75 hold-release arm) and `the_09_cab_pair_loops_from_load` |
+| SP mode-8 prime → the cab cycles from load; Bond carried; the roof touch retires the SP (case 6) | 0b (09's cab pair: the prime alone) | **lifts_ride_live (this task)** — `the_paternoster_carries_bond_from_load` (prime, the bottom hold, the carry, the case-6 retirement) and `the_09_cab_pair_loops_from_load` |
 | SS create-sweep cab-mouth doors | 0a | walkreal_0700000a (pre-existing, re-run green) |
 | SP mode-1 scripted platform descent with Bond aboard | 4a | fix_finale_live (pre-existing, re-run green) |
 | SS channel-swap lift doors/screens | 12 | walkreal_07000012_live (pre-existing, re-run green) |
@@ -268,10 +275,16 @@ The only "ride" is the tether-wire crossing (five Wire placements); no lift mach
    contradiction). The backlog item L-463. Expected per the world-space-keys reading: the
    cut-scene rescues Bond onto the still-descending cab; per the event-6 snapshot reading: the
    enable places him at (1.80, −54.128, −3.453) key pose.
-2. **0700000b, the paternoster end stops**: with Bond NOT on the roof (ch 0x75 off) the cab
-   holds ~499 ticks at y 11 and y 48.44; on the roof deck it should cycle without the holds.
-   Watch the cab entity 0x2000367's matrix y + `switch_channels[0x75]` (0x26fc90 + 117).
-3. **07000009, the E-route through the closed lift doors**: stand at the closed LIFTDOORS,
+2. **07000009, the lobby cab's visual cycle**: the two `SCRIPT_liftSCRIPTPLAYER` SPs (#21/#22,
+   mode 8, mask 4, out 0 [D placements; the level doc's 0x060005FE/5FD hashes are a mis-print —
+   the dump reads 0x0600007E/0x0600007D]) prime looping at load and their cab root (entity
+   0x2000506 in script 0x0600007E's stream 6) parks at the lobby deck y −368.19 for a full
+   1080-tick loop [L probe]. Whether the real game's lobby cab visibly cycles in the shaft (the
+   keys' poses vs the parked read) — screenshot the lobby across ~20 s.
+3. **0700000b, the paternoster end stops**: with Bond NOT on the roof the cab holds ~499 ticks
+   at y 11 and y 48.44 (the port pins the bottom hold); on the roof deck it retires. Watch the
+   cab entity 0x2000367's matrix y + `switch_channels[0x75]` (0x26fc90 + 117).
+4. **07000009, the E-route through the closed lift doors**: stand at the closed LIFTDOORS,
    press E — expect the 0700000a load (the #63 key-gate-0 route). The port's use pick runs from
    the render camera (scene.rs passes `camera` as head) where the game builds it from
    Player_GetHeadPos [M 0x1a5170:101-106] — the 1.0 sphere never spans the exit box at the
