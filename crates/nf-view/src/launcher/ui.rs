@@ -60,7 +60,7 @@ impl Disc {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Btn { Select, Play, Change, Quit }
+pub enum Btn { Select, Play, Change, ReportCrash, Quit }
 
 #[derive(Clone, Debug, Default)]
 pub struct Ui {
@@ -79,6 +79,8 @@ pub struct Ui {
     pub updating: bool,
     /// The update line in the footer ("Downloading update v0.1.8…", a failure), if any.
     pub update_note: Option<String>,
+    /// A crash report waiting to be sent (bugreport.rs: the zip and the panic's first line) — "Report crash".
+    pub crash: Option<(PathBuf, String)>,
 }
 
 impl Ui {
@@ -86,6 +88,7 @@ impl Ui {
     pub fn buttons(&self) -> Vec<(Btn, Rect)> {
         let mut v = vec![(if self.disc.is_some() { Btn::Play } else { Btn::Select }, PRIMARY_R)];
         if self.disc.is_some() { v.push((Btn::Change, Rect::new(COL_X - 6.0, SECOND_Y - 18.0, 120.0, 28.0))); }
+        if self.crash.is_some() { v.push((Btn::ReportCrash, Rect::new(COL_X + COL_W * 0.5 - 60.0, SECOND_Y - 18.0, 120.0, 28.0))); }
         v.push((Btn::Quit, Rect::new(COL_X + COL_W - 60.0, SECOND_Y - 18.0, 66.0, 28.0)));
         v
     }
@@ -212,12 +215,12 @@ pub fn paint(c: &mut Canvas, bg: &Canvas, fonts: &Fonts, ui: &Ui, scale: f32) {
 
     // ── Secondary row ───────────────────────────────────────────────────────────────────────────────────
     for (btn, r) in ui.buttons() {
-        let label = match btn { Btn::Change => "Change disc", Btn::Quit => "Quit", _ => continue };
+        let label = match btn { Btn::Change => "Change disc", Btn::ReportCrash => "Report crash", Btn::Quit => "Quit", _ => continue };
         let hot = ui.hover == Some(btn) && !ui.launching;
-        let col = if hot { TEXT } else { DIM };
+        let col = if hot { TEXT } else if btn == Btn::ReportCrash { GOLD } else { DIM };
         let size = 14.5 * s;
         let lw = measure(&fonts.regular, size, label, 0.4 * s);
-        let lx = if btn == Btn::Quit { (r.x + r.w) * s - lw - 6.0 * s } else { (r.x + 6.0) * s };
+        let lx = match btn { Btn::Quit => (r.x + r.w) * s - lw - 6.0 * s, Btn::ReportCrash => (r.x + r.w * 0.5) * s - lw * 0.5, _ => (r.x + 6.0) * s };
         c.text(&fonts.regular, size, lx, SECOND_Y * s, label, col, 1.0, 0.4 * s);
         if hot { c.fill_rrect(Rect::new(lx, (SECOND_Y + 5.0) * s, lw, 1.2 * s), 0.0, GOLD, 0.9); }
     }

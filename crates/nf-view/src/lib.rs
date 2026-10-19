@@ -34,6 +34,7 @@ pub mod mpfx;
 pub mod clipboard;
 pub mod scene;
 pub mod replay;
+pub mod bugreport;
 pub mod panel;
 pub mod weapon_assets;
 pub mod woman;
@@ -332,6 +333,16 @@ fn start_camera(scene: &scene::Scene) -> Camera {
             Camera { pos: Vec3::new((lo[0] + hi[0]) / 2.0, hi[1], lo[2]), yaw: 0.0, pitch: -0.4, fov: GAME_FOV }
         }
     }
+}
+
+/// The `--bug-replay` frame: Bond's first-person view after the replay (head, yaw, pitch × π/2 — the HUD's own
+/// camera convention), else the level's start camera.
+pub(crate) fn bug_replay_shot(scene: &scene::Scene, out: &std::path::Path) -> Result<()> {
+    let cam = match scene.sim.as_ref() {
+        Some(s) => { let h = s.bond.head(); Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: s.bond.yaw, pitch: s.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV } }
+        None => start_camera(scene),
+    };
+    shot(scene, &cam, &out.to_string_lossy(), None, 0.0, scene::ViewOpts::default(), false, false, None, None)
 }
 
 /// Builds the sound driver + output from the scene's bank/music, and wires the music logic. The scene's bank,
@@ -1767,6 +1778,8 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
 
 async fn device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
     let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: surface, ..Default::default() }).await?;
+    // Player bug reports carry the GPU and its driver (bugreport.rs).
+    let _ = bugreport::GPU_INFO.set({ let i = adapter.get_info(); format!("{} ({:?}; driver {} {})", i.name, i.backend, i.driver, i.driver_info) });
     // batch-draws: the bindless texture array + per-draw first_instance the batched world pass needs
     // (gpu.rs `Batch`); requested only where the adapter has them — the per-draw path is the fallback.
     let want = wgpu::Features::TEXTURE_BINDING_ARRAY
@@ -3548,6 +3561,14 @@ impl App {
         // it) the overlay skips its dark plate, the movie plane draws nothing and a front-end
         // page shots the raw black void of the front-end level — the user's all-dark
         // nf-shots/001-07000048.png (F12 on a menu page).
+        match self.capture_png(&png) {
+            Ok(()) => format!("saved {} ({line})", png.display()),
+            Err(e) => format!("screenshot failed: {e} ({line})"),
+        }
+    }
+
+    /// What the window shows, rendered to `png` (the spot shot's and the bug report's capture).
+    fn capture_png(&mut self, png: &std::path::Path) -> Result<()> {
         let (movie_owned, overlay_blank) = self.spot_movie_frame();
         let fe_menu = if overlay_blank {
             // The intro/attract/briefing movie owns the screen — the redraw sends an empty HUD
@@ -3559,9 +3580,67 @@ impl App {
                 menu::menu_overlay(fe, &t.font, &t.font_header, lang, &self.scene.hud_textures, 1280.0 / 720.0)
             }))
         };
-        match shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref()) {
-            Ok(()) => format!("saved {} ({line})", png.display()),
-            Err(e) => format!("screenshot failed: {e} ({line})"),
+        shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref())
+    }
+
+    /// Player bug report (F10, bugreport.rs): the frame, where the player is, the system, the session recording and
+    /// the log go into a zip in the reports folder; the browser opens the GitHub bug form pre-filled and Explorer
+    /// shows the zip to drag in.
+    fn bug_report(&mut self) -> String {
+        let id = bugreport::report_id();
+        let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+        let tmp = std::env::temp_dir().join(format!("nf-report-{id}.png"));
+        let shot_note = match self.capture_png(&tmp) {
+            Ok(()) => match std::fs::read(&tmp) { Ok(b) => { files.push(("screenshot.png".into(), b)); "yes".to_string() } Err(e) => format!("unreadable ({e})") },
+            Err(e) => format!("failed ({e})"),
+        };
+        let _ = std::fs::remove_file(&tmp);
+        let (session_files, session_note) = bugreport::session_files();
+        let gpu = bugreport::GPU_INFO.get().cloned().unwrap_or_default();
+        let window = self.gfx.as_ref().map(|g| { let s = g.window.inner_size(); format!("{}x{} scale {:.2} fullscreen {}", s.width, s.height, g.window.scale_factor(), g.window.fullscreen().is_some()) }).unwrap_or_default();
+        let (place, level_field) = match self.scene.sim.as_ref() {
+            Some(sim) => {
+                let objectives: Vec<String> = sim.drones.mission.states.iter().map(|v| format!("{v:?}")).collect();
+                (format!("level: {:08x}\ntick: {}\nbond: pos {:.2?} yaw {:.3} pitch {:.3} substate {} health {:.1} armour {:.1}\nweapon: {:#04x} clip {} spare {}\nmission: internal state {} state {} base {:#010x} order {}\nobjective states: {}\nbond spot (for --bond): {:.2},{:.2},{:.2},{:.3},{:.3}",
+                    sim.level, sim.drones.frame, sim.bond.pos, sim.bond.yaw, sim.bond.pitch, sim.bond.substate, sim.drones.health.health, sim.drones.health.armour,
+                    sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.mission.internal, sim.drones.mission.state, sim.drones.mission.base_map, sim.drones.mission.order,
+                    objectives.join(" "), sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.yaw, sim.bond.pitch),
+                 format!("{:08x}", sim.level))
+            }
+            None => ("level: (none — front end)".into(), "front end".into()),
+        };
+        let menu = self.fe.as_ref().map(|fe| format!("front end page: {:?} (flow state {})", fe.page, fe.flow.get_state())).unwrap_or_else(|| "front end: closed".into());
+        let online = match &self.net {
+            Some(n) => { let s = n.0.borrow(); format!("online: slot {} net tick {} agents {} reach {:?} lobby {}", self.net_local_slot, self.net_tick, s.agents().len(), s.reach(), self.net_lobby.is_some()) }
+            None => "online: no".into(),
+        };
+        let mp = self.scene.sim.as_ref().and_then(|s| s.mp.as_ref()).map(|m| format!("mp match: scenario {:#x} level {:#010x} humans {} bots {} seed {:#x} state {}", m.settings.scenario, m.settings.level_code, m.settings.human_count, m.settings.bot_count, m.settings.seed, m.game.state)).unwrap_or_else(|| "mp match: no".into());
+        let report = format!("kind: player report (F10)\nreport_id: {id}\nversion: {}\nos: {}\ngpu: {gpu}\nwindow: {window}\nfps: {:.0}\ndifficulty: {}\n{place}\n{menu}\n{online}\n{mp}\n{session_note}\nscreenshot: {shot_note}\n",
+            bugreport::version_line(), bugreport::os_line(), self.fps_meter.shown, self.selected_difficulty);
+        files.insert(0, ("report.txt".into(), bugreport::scrub(&report).into_bytes()));
+        files.extend(session_files);
+        if let Some(p) = settings::config_dir().map(|d| d.join("settings.toml")) {
+            if let Ok(t) = std::fs::read_to_string(p) { files.push(("settings.toml".into(), bugreport::scrub(&t).into_bytes())); }
+        }
+        if let Some(t) = bugreport::log_tail(3000) { files.push(("game-log.txt".into(), t.into_bytes())); }
+        let url = bugreport::issue_url(&format!("[Bug] {level_field}: "), &[
+            ("version", bugreport::version_line()),
+            ("level", level_field.clone()),
+            ("report_id", id.clone()),
+            ("details", bugreport::scrub(&format!("{}\n{gpu}\n{window}\n{place}", bugreport::os_line()))),
+        ]);
+        match bugreport::save(&id, files, url) {
+            Ok(saved) => {
+                // Hand the mouse back and open the form + the zip (the player finishes the report there).
+                self.grab(false);
+                let opened = bugreport::open_url(&saved.url);
+                bugreport::reveal(&saved.zip);
+                match opened {
+                    Ok(()) => format!("bug report {} saved: {} — finish it in the browser and drag the zip in", saved.id, saved.zip.display()),
+                    Err(e) => format!("bug report saved: {} (the browser didn't open: {e}; the form is {})", saved.zip.display(), saved.url),
+                }
+            }
+            Err(e) => format!("bug report failed: {e}"),
         }
     }
 
@@ -4290,6 +4369,21 @@ impl App {
                             }
                             // B-5 record: capture the exact input passed to step_bond, before the call.
                             if let Some(r) = &mut self.recorder { r.push(replay::TickInput::from_parts(&input, trigger, reload, use_key)); }
+                            // Player bug reports: the always-on recording of this level (a new one on every
+                            // (re)start) and, once a second, the crash context (bugreport.rs).
+                            bugreport::record_tick(sim, self.entry_save.as_ref(), self.selected_difficulty, replay::TickInput::from_parts(&input, trigger, reload, use_key));
+                            // Test aid (NF_BUG_REPORT_AT=tick): the F10 report at that tick, taken after the frame.
+                            if bugreport::report_at() == Some(sim.drones.frame) { bugreport::DUE.store(true, std::sync::atomic::Ordering::Relaxed); }
+                            // Test aid (NF_TEST_PANIC_AT=tick): a deliberate panic, to exercise the crash report.
+                            if std::env::var("NF_TEST_PANIC_AT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(sim.drones.frame) {
+                                panic!("NF_TEST_PANIC_AT: deliberate test panic at tick {}", sim.drones.frame);
+                            }
+                            if sim.drones.frame % 60 == 0 {
+                                bugreport::set_context(format!("level: {:08x}\ntick: {}\ndifficulty: {}\nbond: pos {:.2?} yaw {:.3} pitch {:.3} substate {} health {:.1} armour {:.1}\nweapon: {:#04x} clip {} spare {}\nmission: internal state {} base {:#010x}\nonline: {}",
+                                    sim.level, sim.drones.frame, self.selected_difficulty, sim.bond.pos, sim.bond.yaw, sim.bond.pitch, sim.bond.substate,
+                                    sim.drones.health.health, sim.drones.health.armour, sim.gun.weapon, sim.gun.clip, sim.gun.spare,
+                                    sim.drones.mission.internal, sim.drones.mission.base_map, self.net.is_some()));
+                            }
                             // The PC-port rapid fire (`--rapid-fire` / the dev Toggles page): local play only —
                             // an online match keeps every machine on the game's rules (lockstep).
                             sim.rapid_fire = RAPID_FIRE.load(std::sync::atomic::Ordering::Relaxed) && self.net.is_none();
@@ -4560,6 +4654,7 @@ impl App {
     /// the fps cap. No game logic — `frame` ran it already.
     fn draw_frame(&mut self, dt: f32) {
                 if NET_SHOT_DUE.swap(false, std::sync::atomic::Ordering::Relaxed) { let m = self.spot_shot(); eprintln!("[spot] {m}"); }
+                if bugreport::DUE.swap(false, std::sync::atomic::Ordering::Relaxed) { let m = self.bug_report(); eprintln!("[bug-report] {m}"); }
                 let Some(g) = &mut self.gfx else { return };
                 if g.minimized {
                     // Keep the game ticking at a modest pace without drawing.
@@ -4823,6 +4918,12 @@ impl App {
                     eprintln!("[spot] {m}");
                     return false
                 }
+                // Player bug report (bugreport.rs): F10 works on every screen, menus included.
+                if state == ElementState::Pressed && k == KeyCode::F10 && !repeat {
+                    let m = self.bug_report();
+                    eprintln!("[bug-report] {m}");
+                    return false
+                }
                 // No menu input while a level load runs: the loading screen owns the frame and the
                 // game's main loop runs no menu manager inside ResetMap_Load [M 0x1d6360 state 3].
                 // Keys pressed there used to reach the still-open front end — a second Enter on
@@ -4935,6 +5036,10 @@ impl App {
                     }
                     return false
                 }
+                // The viewer's debug keys (noclip, enemy fire, every channel on, the demo results, …) are for
+                // dev builds and `--dev` only: a release build (NF_RELEASE_VERSION) hands those keys to the game,
+                // so a player can't noclip or break a level by accident (release review 2026-10-19).
+                let dbg = self.dev.is_some() || crate::launcher::update::current_version().is_none();
                 match (k, state) {
                     (KeyCode::Escape, ElementState::Pressed) => {
                         // Esc in a mission ALWAYS pauses, grabbed or not: the briefing hand-over left the
@@ -4989,10 +5094,12 @@ impl App {
                         } else { return true }
                     }
                     (KeyCode::F12, ElementState::Pressed) => { let m = self.spot_shot(); eprintln!("[spot] {m}"); }
+                    // Player bug report (bugreport.rs).
+                    (KeyCode::F10, ElementState::Pressed) => if !repeat { let m = self.bug_report(); eprintln!("[bug-report] {m}"); },
                     // fix-menus demo hooks: F8 = mission complete, F9 = mission failed (the results page).
-                    (KeyCode::F8, ElementState::Pressed) => self.demo_results(true),
-                    (KeyCode::F9, ElementState::Pressed) => self.demo_results(false),
-                    (KeyCode::BracketRight | KeyCode::BracketLeft, ElementState::Pressed) => {
+                    (KeyCode::F8, ElementState::Pressed) if dbg => self.demo_results(true),
+                    (KeyCode::F9, ElementState::Pressed) if dbg => self.demo_results(false),
+                    (KeyCode::BracketRight | KeyCode::BracketLeft, ElementState::Pressed) if dbg => {
                         self.choice = match (k == KeyCode::BracketRight, self.choice) {
                             (true, None) => Some(0),
                             (true, Some(n)) => Some(n + 1),
@@ -5002,15 +5109,15 @@ impl App {
                         self.anim_time = 0.0;
                         if let Some(g) = &self.gfx { g.window.set_title(&format!("nf-view — {}", self.scene.sequence_label(self.choice))); }
                     }
-                    (KeyCode::KeyP, ElementState::Pressed) => self.paused = !self.paused,
+                    (KeyCode::KeyP, ElementState::Pressed) if dbg => self.paused = !self.paused,
                     // Dev mode keys (WORKLOG 0081): F1 = AI overlay, F2 = dev menu, F11 = step one tick (when paused).
                     (KeyCode::F1, ElementState::Pressed) => if let Some(d) = self.dev.as_deref_mut() { d.overlay = !d.overlay; },
                     (KeyCode::F2, ElementState::Pressed) => if self.devwin.is_some() { self.grab(false); if let Some(w) = self.devwin.as_ref() { w.show(); } } else if let Some(d) = self.dev.as_deref_mut() { d.menu = !d.menu; if d.menu { self.grab(false); } else if self.scene.sim.is_some() { self.grab(true); } },
                     (KeyCode::F11, ElementState::Pressed) => if let Some(d) = self.dev.as_deref_mut() { if d.time_scale <= 0.0 { d.step = true; } },
-                    (KeyCode::F3, ElementState::Pressed) => self.opts.reinforcements = !self.opts.reinforcements,
-                    (KeyCode::KeyF, ElementState::Pressed) => self.opts.firing = !self.opts.firing,
-                    (KeyCode::KeyN, ElementState::Pressed) => { let on = !self.noclip; self.set_noclip(on); }
-                    (KeyCode::KeyT, ElementState::Pressed) => if let Some(sim) = self.scene.sim.as_mut() { sim.auto_aim = !sim.auto_aim },
+                    (KeyCode::F3, ElementState::Pressed) if dbg => self.opts.reinforcements = !self.opts.reinforcements,
+                    (KeyCode::KeyF, ElementState::Pressed) if dbg => self.opts.firing = !self.opts.firing,
+                    (KeyCode::KeyN, ElementState::Pressed) if dbg => { let on = !self.noclip; self.set_noclip(on); }
+                    (KeyCode::KeyT, ElementState::Pressed) if dbg => if let Some(sim) = self.scene.sim.as_mut() { sim.auto_aim = !sim.auto_aim },
                     // Weapon switching: number keys 1–9 select directly, Q = prev, E (when not use) = next.
                     // The mapping: 1 = P2K (weapon 2), 2 = SG5 Commando (0x16), 3 = sniper (0x24), etc. The exact
                     // slot mapping follows the game's weapon order (selectable weapons with `weapon_data+0x04 == 1`).
@@ -5031,9 +5138,9 @@ impl App {
                     // which the catch-all below already lands in `just` (read in the Input build:
                     // `mode_switch`) [M Player_Weapon 0x1a24c8: `Input_Action(slot, 0xc, 4)`].
                     // Turn every switch channel on: drones waiting for one (WaitSwitch) start (triggers are not ported).
-                    (KeyCode::KeyK, ElementState::Pressed) => if let Some(sim) = self.scene.sim.as_mut() { for c in 1..=255 { sim.drones.set_channel(c) } },
+                    (KeyCode::KeyK, ElementState::Pressed) if dbg => if let Some(sim) = self.scene.sim.as_mut() { for c in 1..=255 { sim.drones.set_channel(c) } },
                     // Bug 3: log the name of the object Bond is touching (its AABB contains his feet).
-                    (KeyCode::KeyC, ElementState::Pressed) => {
+                    (KeyCode::KeyC, ElementState::Pressed) if dbg => {
                         let p = if let Some(sim) = self.scene.sim.as_ref() { sim.bond.pos } else { [self.cam.pos.x, self.cam.pos.y, self.cam.pos.z] };
                         let mut hits: Vec<&str> = self.scene.colliders.iter()
                             .filter(|(_, lo, hi)| p[0] >= lo[0] - 0.5 && p[0] <= hi[0] + 0.5 && p[2] >= lo[2] - 0.5 && p[2] <= hi[2] + 0.5 && p[1] >= lo[1] - 2.0 && p[1] <= hi[1] + 0.5)
@@ -5352,6 +5459,8 @@ pub fn run() -> Result<()> {
         let _ = std::fs::write("nf-view-crash.log", &text);
         default_hook(info);
     }));
+    // Player bug reports: a panic also writes a crash report the launcher offers to send (bugreport.rs).
+    bugreport::install_crash_hook();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--rapid-fire") { RAPID_FIRE.store(true, std::sync::atomic::Ordering::Relaxed); }
     const USAGE: &str = "usage: nf-view [<iso>] <level> [--all] [--seq K] [--frame F] [--fire] [--reinforcements] [--dev [--panel]] [--scenario <name>] [--record <file>] [--replay <file>] [--no-fog] [--no-tex] [--shot out.png [--cam x y z yaw pitch] [--dev-page <name>]]\n\
@@ -5370,6 +5479,14 @@ pub fn run() -> Result<()> {
         let iso_path = args.first().cloned().or_else(|| std::env::var("NF_ISO").ok()).context("no <iso> given and NF_ISO is not set")?;
         let iso = nf_formats::iso9660::IsoImage::open(&iso_path)?;
         movie::movie_frame_shot(&iso, name, frame, &out)?;
+        return Ok(());
+    }
+    // Player bug reports, our side (bugreport.rs): `--bug-replay <report.zip> [--shot out.png]`, NF_ISO = the disc.
+    if let Some(i) = args.iter().position(|a| a == "--bug-replay") {
+        let zip = args.get(i + 1).context("--bug-replay needs <report.zip>")?;
+        let iso = std::env::var("NF_ISO").context("--bug-replay needs NF_ISO (the disc image)")?;
+        let shot_out = args.iter().position(|a| a == "--shot").and_then(|j| args.get(j + 1)).map(std::path::PathBuf::from);
+        for line in bugreport::bug_replay(&iso, std::path::Path::new(zip), shot_out.as_deref())? { println!("{line}"); }
         return Ok(());
     }
     // Positional arguments are the ones before the first flag.

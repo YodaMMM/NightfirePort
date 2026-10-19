@@ -4,8 +4,10 @@
 //! Each test drives a headless mission end through the REAL tally path (`Progress::log_*`, the
 //! same entry points the Sim calls) and asserts the page's cells — display strings + ids. No
 //! ISO: the scoring tables are the committed [L] snapshots in `progress.rs`, so every assertion
-//! here can fail on a formula regression (the fail-first sister is the status-gate test, whose
-//! assertions die if the game's step-6 zeroing is dropped).
+//! here can fail on a formula regression (the fail-first sister is the status-gate test: its
+//! ZEROED asserts die if the game's step-6 point/total zeroing is dropped, and its SURVIVES
+//! asserts die if anyone re-widens the zeroing to the tallies/ratios the game keeps [M
+//! 0x1984b0:318-333]).
 
 use nf_game::progress::Progress;
 use nf_game::stats::{separate_number, stats_rows, timer_string};
@@ -30,12 +32,13 @@ fn separate_number_groups_like_the_game() {
 
 #[test]
 fn timer_string_formats_mmss_like_the_game() {
-    // [M Timer_Seconds2String 0x1deaa8 mode 0: round-half-up seconds, %.2d:%.2d]
+    // [M Timer_Seconds2String 0x1deaa8 mode 0: round-half-up seconds, %.2d:%.2d; the hour
+    // branch is ALSO the two-field fmt — hours:minutes [M :27-31 + disasm 0x1deb8c-0x1deba4]]
     assert_eq!(timer_string(0), "00:00");
     assert_eq!(timer_string(7900), "01:19"); // the capture's current
     assert_eq!(timer_string(54000), "09:00"); // the capture's target (par × 100)
     assert_eq!(timer_string(-5), "00:00"); // [M the negative arm]
-    assert_eq!(timer_string(360000), "01:00:00"); // the hour branch [S — args dropped]
+    assert_eq!(timer_string(360000), "01:00"); // the hour branch: TWO fields, hours:minutes [M 0x1deaa8:27-31]
 }
 
 /// A known mission end, every cell asserted. The tally: 1 Bond moment, 2 dispatched, 1 subdued,
@@ -141,9 +144,11 @@ fn the_pcsx2_capture_is_the_golden() {
     assert_eq!(cell(0x163).total, "295,887"); // the capture's TOTAL = Subtotal
 }
 
-/// The fail-first sister: the game zeroes every runtime field when the status isn't 6
-/// [M 0x1984b0:316-333] — the page on a non-6 status shows the design data with zero scores.
-/// If the zeroing gate is ever dropped, these asserts die.
+/// The fail-first sister: on a non-6 status the game zeroes ONLY the per-row points (+0x10 —
+/// the 0x14-stride loop) and the entry's dif/bonus/subtotal/total [M 0x1984b0:318-333]. The
+/// tallies (+0x08) and ratios (+0x0c) survive, so the page on a non-6 status still shows the
+/// run's current cells and percentages — the handler's current reads at 0x209938:70/84/101.
+/// A re-widened zeroing kills the SURVIVES asserts; a dropped zeroing kills the ZEROED asserts.
 #[test]
 fn a_non_6_status_zeroes_the_scores() {
     let mut p = Progress::default();
@@ -158,13 +163,18 @@ fn a_non_6_status_zeroes_the_scores() {
 
     let rows = stats_rows(&mut p, 0x0700_0005, 1, 1, None).unwrap(); // status 1 = playing
     let cell = |id: u32| rows.iter().find(|r| r.id == id).unwrap();
-    assert_eq!(cell(0x165).current, "0", "the tally's value is zeroed [M 0x1984b0:316-333]");
-    assert_eq!(cell(0x15b).current, "0");
-    assert_eq!(cell(0x160).current, "00:00");
-    assert_eq!(cell(0x160).total, "0");
-    assert_eq!(cell(0x15d).current, "0%");
-    assert_eq!(cell(0x162).total, "0");
-    assert_eq!(cell(0x163).total, "0");
+    // SURVIVE the wipe [M 0x1984b0:323-327 touch only row+0x10; the handler shows them at
+    // 0x209938:70/84/101]:
+    assert_eq!(cell(0x15b).current, "1", "the dispatched tally survives the non-6 wipe [M 0x1984b0:323-327]");
+    assert_eq!(cell(0x160).current, "01:19", "the elapsed survives [M 0x209938:101]");
+    assert_eq!(cell(0x15d).current, "100%", "the stealth ratio survives (0 of 30 detected) [M 0x209938:84]");
+    assert_eq!(cell(0x15e).current, "100%", "the accuracy ratio survives (10/10)");
+    assert_eq!(cell(0x165).current, "0"); // nothing logged — not the wipe's work
+    // ZEROED by the wipe [M 0x1984b0:323-331]:
+    assert_eq!(cell(0x160).total, "0", "row+0x10 zeroed [M :323-327]");
+    assert_eq!(cell(0x15d).total, "0", "the ratio's row points zeroed too [M :323-327]");
+    assert_eq!(cell(0x162).total, "0", "subtotal +0x2c zeroed [M :330]");
+    assert_eq!(cell(0x163).total, "0", "total +0x34 zeroed [M :331]");
     // The design data stays: Target cells keep the static rows.
     assert_eq!(cell(0x160).target, "09:00");
     assert_eq!(cell(0x15b).target, "30");

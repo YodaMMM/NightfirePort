@@ -7,21 +7,19 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-/// The game binary beside the launcher: `NightfirePort-game.exe` in a release (the zip's name for the `nf-view` build,
-/// user 2026-10-19), else the cargo build's own `nf-view.exe` (dev builds run from target\).
+/// The game is the launcher's own program run with `--game` (one `NightfirePort.exe`, the user's choice 2026-10-19:
+/// "why are there 2 of them?"); `src/bin/NightfirePort.rs` hands `--game` to the game's `run`.
 pub fn game_exe() -> Result<PathBuf, String> {
-    let me = std::env::current_exe().map_err(|e| format!("can't locate the launcher: {e}"))?;
-    let dir = me.parent().ok_or("the launcher has no folder")?;
-    let names: &[&str] = if cfg!(windows) { &["NightfirePort-game.exe", "nf-view.exe"] } else { &["NightfirePort-game", "nf-view"] };
-    names.iter().map(|n| dir.join(n)).find(|p| p.is_file())
-        .ok_or_else(|| format!("The game ({}) isn't next to the launcher.", names[0]))
+    std::env::current_exe().map_err(|e| format!("can't locate the launcher: {e}"))
 }
 
-/// Starts the game on `iso`. Its console output goes to `log` (the game is a console program; the launcher hides
-/// the console so only the game window appears).
+/// The separate game exe the v0.1.0 zip shipped; the single-exe launcher deletes it on start.
+pub const LEGACY_GAME_EXE: &str = "NightfirePort-game.exe";
+
+/// Starts the game (`<exe> <iso> --game`) on `iso`. Its output goes to `log`; no window but the game's appears.
 pub fn launch(exe: &Path, iso: &Path, log: Option<&Path>) -> Result<Child, String> {
     let mut cmd = Command::new(exe);
-    cmd.arg(iso).stdin(Stdio::null());
+    cmd.arg(iso).arg("--game").stdin(Stdio::null());
     if let Some(dir) = exe.parent() { cmd.current_dir(dir); }
     match log.and_then(|p| { if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); } std::fs::File::create(p).ok() }) {
         Some(f) => {

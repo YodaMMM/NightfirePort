@@ -14,7 +14,16 @@ Getting started
    The launcher checks it and remembers it.
 4. Press PLAY.
 
-NightfirePort-game.exe is the game itself; the launcher starts it for you.
+Reporting bugs
+--------------
+Found a bug? Press F10 in the game right when it happens. The game saves a
+report (a screenshot, where you are, and a recording of what you did in the
+level), opens our bug form in your browser with the details filled in, and
+shows the report file. Describe what went wrong in the form and drag the
+report file into it. If the game crashes, the launcher offers "Report crash"
+the next time you start it.
+
+You need a free GitHub account to send the form.
 
 Updates
 -------
@@ -43,4 +52,4 @@ If the game won't start, nf-view.log there has the details.
 Licences
 --------
 THIRD_PARTY_NOTICES.txt and THIRD_PARTY_RERAC_LICENSE.txt list the open-source
-software included in these programs.
+software included in NightfirePort.exe.

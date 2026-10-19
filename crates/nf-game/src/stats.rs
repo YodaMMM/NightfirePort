@@ -27,9 +27,10 @@ pub fn separate_number(v: u32) -> String {
 }
 
 /// `Timer_Seconds2String__FiUi` 0x1deaa8, mode 0: seconds = `fptoui(cs × 0.01 + 0.5)` (round
-/// half up [M :17]); hours = (s/3600)%60; hours ≠ 0 → `hh:mm:ss` [S — the branch's sprintf args
-/// are dropped in the decompile; the case-2 `%.2d:%.2d` mm:ss is exact [M :21-24]]; negative →
-/// zeros [M :19-23].
+/// half up [M :17]); negative → zeros [M :21-25]. The mode-0 default arm: hours ≠ 0 → the
+/// TWO-field `%.2d:%.2d` with (hours, minutes) [M :27-31; ACTION.ELF disasm 0x1deb8c-0x1deba4 —
+/// the branch jumps to its own `sprintf` with $a2 = hours, $a3 = minutes, the SAME fmt 0x305940
+/// `"%.2d:%.2d"` case 2 uses]; case 2 is mm:ss [M :32-34].
 pub fn timer_string(cs: i64) -> String {
     if cs < 0 {
         return "00:00".into();
@@ -39,7 +40,7 @@ pub fn timer_string(cs: i64) -> String {
     let m = (s / 60) % 60;
     let sec = s % 60;
     if h != 0 {
-        format!("{:02}:{:02}:{:02}", h, m, sec) // [S the hour branch]
+        format!("{:02}:{:02}", h, m) // [M 0x1deaa8:27-31 — two fields, hours:minutes]
     } else {
         format!("{:02}:{:02}", m, sec) // case 2 [M]
     }
@@ -75,10 +76,10 @@ pub struct StatsRow {
 
 /// `P_NFSTATS_Handler` 0x209938's rows for `base_map`'s entry. Runs the game's page-enter
 /// `PlrStat_GetScore(0)` (the commit) first, then formats. `ms` is the mission status the game
-/// reads (`Mission_Status()` — 6 on the results path; anything else zeroes the runtime fields,
-/// 0x1984b0:316-333). Returns `None` when the hash is not a `ScoringTable` entry (the game's
-/// `score_table == 0` arm [M :38-40]). Row order, gating and formats per
-/// `docs/systems/mission-stats.md`'s table.
+/// reads (`Mission_Status()` — 6 on the results path; anything else zeroes the row points and
+/// the entry totals, NOT the tallies/ratios — 0x1984b0:318-333). Returns `None` when the hash
+/// is not a `ScoringTable` entry (the game's `score_table == 0` arm [M :38-40]). Row order,
+/// gating and formats per `docs/systems/mission-stats.md`'s table.
 pub fn stats_rows(
     progress: &mut Progress,
     base_map: u32,
