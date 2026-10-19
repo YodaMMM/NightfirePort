@@ -214,7 +214,15 @@ fn flashbang_stuns_three_guards_and_never_kills() {
     // that). The stun/disarm/drop pins below are the ACTIVE-guard behavior (Idle's 0x18 →
     // HandleImpact(0x56, 1) [M 0x15bf18:100-110]), so the trio is primed into Idle — the same
     // test-side priming the frag kill-pin uses.
-    for &i in idx.iter() { sim.list[i].set_state(state::IDLE); }
+    // The prime is the game's own post-NIS EnableAll broadcast: msg 0xe → WaitSwitch's case 0xe
+    // arm — Enable(1) + the +0x5a2 start-state pick [M 0x15b960:43-49; the broadcast 0x1383e8:27].
+    // (A bare `set_state` never applies: a disabled guard's queued transition only runs on the
+    // next send, and the old ungated flash/GLOBAL arms masked the dead prime.)
+    // Test-side prime: a direct state write (the port's ENABLE route bounces a pathless yard
+    // guard back to WaitSwitch — a port divergence, not today's subject). The game's own
+    // activation is the post-NIS EnableAll [M 0x1383e8:27]; the delivery below does not gate on
+    // enabled, only the state byte matters for the msg routing.
+    for &i in idx.iter() { sim.list[i].enabled = true; sim.list[i].state = state::IDLE; }
     { let p0 = bond_at([blast[0] + 60.0, blast[1], blast[2]]); sim.tick(&d, &p0); }
 
     let healths: Vec<f32> = idx.iter().map(|&i| sim.list[i].health).collect();
@@ -306,7 +314,12 @@ fn frag_at_the_same_spot_kills_the_trio() {
     // pins that). The blast-path kill pin therefore primes the trio into Idle — a state whose
     // case 9 forwards to DroneFunc_HandleImpact(0x56, 0) [M 0x15bf18 case 8/9 fall-through] — the
     // same test-side priming the missile pod-pick pin uses on the level's own copter record.
-    for &i in idx.iter() { sim.list[i].set_state(nf_game::drone::state::IDLE); }
+    // The prime is the game's own post-NIS EnableAll broadcast: msg 0xe → WaitSwitch's case 0xe
+    // arm — Enable(1) + the +0x5a2 start-state pick [M 0x15b960:43-49; the broadcast 0x1383e8:27]
+    // — the active states whose case 9 forwards to DroneFunc_HandleImpact [M 0x15bf18 etc.].
+    // Test-side prime: a direct state write (see the flash trio's note — the port's ENABLE route
+    // bounces pathless guards back to WaitSwitch).
+    for &i in idx.iter() { sim.list[i].enabled = true; sim.list[i].state = nf_game::drone::state::IDLE; }
     { let p0 = bond_at([blast[0] + 60.0, blast[1], blast[2]]); sim.tick(&d, &p0); }
     sim.grenades.push(nf_game::grenade::Grenade {
         pos: blast, velocity: [0.0; 3], speed: 0.0, travelled: 0.0, range: 210.0,
@@ -439,7 +452,9 @@ fn a_flashed_guard_killed_after_drops_nothing_more() {
     // The prime: pl 3 sits in WaitSwitch as loaded — the flash reaches drones only as msg 0x18
     // [M 0x12d890:365] and WaitSwitch/Global both drop it [M 0x15b960:40-42, 0x15b830:59-61] —
     // prime him into Idle (the case-0x18 state) like the trio pins above.
-    sim.list[gi].set_state(nf_game::drone::state::IDLE);
+    // The prime is the game's own post-NIS EnableAll broadcast (msg 0xe, WaitSwitch case 0xe [M
+    // 0x15b960:43-49]) — a bare set_state never applies on a disabled guard.
+    sim.list[gi].enabled = true; sim.list[gi].state = nf_game::drone::state::IDLE;
     { let p0 = bond_at([blast[0] + 60.0, blast[1], blast[2]]); sim.tick(&d, &p0); }
     sim.grenades.push(nf_game::grenade::Grenade {
         pos: blast, velocity: [0.0; 3], speed: 0.0, travelled: 0.0, range: 210.0,
