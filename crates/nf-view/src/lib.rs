@@ -1011,6 +1011,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     };
     let mut scene = scene::Scene::build(&level, !all, &skeletons, sequences, Some(&drones), difficulty, mp_settings.as_ref());
     phase_mark("07 scene build (Scene::build)", t); t = std::time::Instant::now();
+    // The MP radar's textures (hud::MP_TEXTURES) — MP scenes only: the SP pane list has no radar.
+    if mp {
+        for h in hud::MP_TEXTURES {
+            if scene.hud_textures.iter().any(|(k, _)| *k == h) { continue; }
+            if let Some(img) = level.maps.iter().enumerate().find_map(|(mi, m)| m.textures.iter().find(|t| t.hashcode == h).map(|t| scene::TextureImage::from_texture(mi, t))) {
+                scene.hud_textures.push((h, img));
+            } else {
+                eprintln!("mp hud: texture {h:#010x} not in the arena archive");
+            }
+        }
+    }
     // The pause/fail menus' burning woman [M `psiDecompressWoman` 0x1202a8]: the archive's kind-16 "woman" run-length
     // mask filled from the fire texture 0x030000da, drawn into 0x030000db's texels through 0x030000da's CLUT (the
     // disc's 0x030000db is a placeholder). The HUD texture starts on the first decoded frame.
@@ -1199,7 +1210,15 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         if mp {
             // net-match-host: the online path hands the negotiated settings here (the host's
             // choices + seed); local `--mp` keeps the deathmatch default.
-            let settings = mp_settings.unwrap_or_else(|| nf_game::mp::MpSettings::deathmatch(level_id));
+            let local_default = mp_settings.is_none();
+            let mut settings = mp_settings.unwrap_or_else(|| nf_game::mp::MpSettings::deathmatch(level_id));
+            // Render aid (NF_MP_BOTS=n, local `--mp` only): n bots in the default match, so a
+            // headless `--mp --shot` shows a full 16-participant HUD (n is clamped to the 16 cap).
+            if local_default {
+                if let Some(n) = std::env::var("NF_MP_BOTS").ok().and_then(|v| v.parse::<u32>().ok()) {
+                    settings.bot_count = n.min(nf_game::mp::MP_MAX_SLOTS as u32 - settings.human_count.max(1) as u32);
+                }
+            }
             let mut m = nf_game::mp::MpMatch::init(settings);
             let map = level.main_map().and_then(|mi| level.maps.get(mi));
             let mut spawn_count = 0usize;
@@ -4532,6 +4551,8 @@ impl ApplicationHandler for App {
                     && !self.fe.as_ref().is_some_and(|fe| fe.flow.movie_pending);
                 let movie_up = intro_up || flow_up || aux_up || attract_up;
                 let movie_frame = if movie_up { self.movie.as_mut().and_then(|p| p.present()) } else { None };
+                // The MP standings keep a constant on-screen text size (the lobby's view_h rule).
+                hud::set_view_h(g.config.height as f32);
                 let mut hud = if let Some(fe) = self.fe.as_mut() {
                     let lang = self.lang.as_ref().or_else(|| self.scene.sim.as_ref().and_then(|s| s.lang.as_ref()));
                     // fe-60hz: the front end is the game's 60 Hz menu tick (`MenuManager_Update` 0x21c3d8 runs once

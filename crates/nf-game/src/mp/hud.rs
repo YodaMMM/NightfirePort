@@ -99,7 +99,8 @@ pub fn radar_team_color(team_game: u32, team: u32) -> u32 {
 /// +0x08 deaths).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MpScoreRow {
-    /// The MPGame slot (humans 0..human_count, bots 4..4+bot_count [M 0x212198:92-111]).
+    /// The MPGame slot (humans 0..human_count, then the bots — the game's fixed bot base 4 [M
+    /// 0x212198:92-111] follows the human count in the port [S mp-16-slots]).
     pub slot: usize,
     /// `MPSettings + slot·0x30 + 0x20` — the team (the is-target marker in scenario 0x400
     /// [M 0x189840:59, 0x18aa70:38-41]; the port keeps the marker in `MpMatch::assassin_target`).
@@ -134,6 +135,38 @@ impl MpScoreRow {
             (2, self.kills as f32, self.kills, self.deaths)
         }
     }
+}
+
+/// The game's own MP participant layout: 4 humans + 4 bots in 8 `MPGame` slots [M `MP_Start`
+/// 0x183a50:116-160]. The HUD keeps the game-sized layout up to this count [S mp-16-slots].
+pub const GAME_SLOTS: usize = 8;
+
+/// The radar pane's blip cap: `RadarPane` CREATE+0x16 = 24 runtime blips [M 0x19f6e8:108,153;
+/// docs/fields/hud-panes.md]. With 16 participants the worst list is 15 player blips + the 8
+/// uplink terminals = 23, so the game's cap still holds every blip (pinned by the tests).
+pub const RADAR_BLIP_CAP: usize = 24;
+
+/// One standings row ([`MpHudSnapshot::board`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MpBoardRow {
+    /// 0-based rank (equal display scores share a rank — the debriefing's walk [M 0x212198:131-143]).
+    pub rank: usize,
+    pub slot: usize,
+    pub team: u32,
+    /// [`MpScoreRow::display_score`].
+    pub score: f32,
+    pub kills: i32,
+    pub deaths: i32,
+    /// The reading machine's own row.
+    pub viewer: bool,
+}
+
+/// The standings list the HUD draws ([`MpHudSnapshot::board`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MpBoard {
+    pub rows: Vec<MpBoardRow>,
+    /// Participants not listed (the cut below `max_rows`).
+    pub hidden: usize,
 }
 
 /// One uplink terminal's HUD state (`HUD_MPUpdatePane` colors the pane icons from it [M
@@ -341,7 +374,60 @@ impl MpHudSnapshot {
         format!("{mm:02}:{ss:02}")
     }
 
-    /// The rows sorted the way the game sorts its board: `P_MPDEBRIEFING_Handler` 0x212198's
+    /// The match's participant count (humans + bots) — the rows' length.
+    pub fn participants(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// More participants than the game's own 8-slot layout (4 humans + 4 bots [M `MP_Start`
+    /// 0x183a50:116-160]) — the port's 9–16 player matches [S mp-16-slots]. The HUD draw switches
+    /// its standings list to the compact layout when this holds; ≤ 8 keeps the full-size rows.
+    pub fn compact(&self) -> bool {
+        self.rows.len() > GAME_SLOTS
+    }
+
+    /// The in-match standings list [S port-only: the game's in-match HUD has one score pane per
+    /// viewer and no list — `HUD_MPUpdatePane` 0x19f0a0 shows the team line over the viewer's own
+    /// line; the only ranked board is the debriefing's]. The rows are [`Self::sorted_rows`] (the
+    /// debriefing's descending display-score order, equal scores in slot order) with the
+    /// debriefing's rank walk (the rank advances only when the score differs from the row above
+    /// [M 0x212198:131-143]). At most `max_rows` rows; when the viewer's own row falls below the
+    /// cut it replaces the last visible row, so the viewer is ALWAYS listed with their true rank
+    /// [S]. `hidden` counts the participants left out.
+    pub fn board(&self, max_rows: usize) -> MpBoard {
+        let sc = self.scenario;
+        let sorted = self.sorted_rows();
+        let mut ranked: Vec<MpBoardRow> = Vec::with_capacity(sorted.len());
+        let mut rank = 0usize;
+        for (i, r) in sorted.iter().enumerate() {
+            if i > 0 && r.display_score(sc) != sorted[i - 1].display_score(sc) {
+                rank = i;
+            }
+            ranked.push(MpBoardRow {
+                rank,
+                slot: r.slot,
+                team: r.team,
+                score: r.display_score(sc),
+                kills: r.kills,
+                deaths: r.deaths,
+                viewer: r.slot == self.viewer_slot,
+            });
+        }
+        let total = ranked.len();
+        let max_rows = max_rows.max(1);
+        if total > max_rows {
+            let own = ranked.iter().position(|r| r.viewer);
+            let mut shown: Vec<MpBoardRow> = ranked[..max_rows].to_vec();
+            if let Some(i) = own.filter(|&i| i >= max_rows) {
+                shown[max_rows - 1] = ranked[i];
+            }
+            MpBoard { rows: shown, hidden: total - max_rows }
+        } else {
+            MpBoard { rows: ranked, hidden: 0 }
+        }
+    }
+
+    /// The rows sorted the way the game sorts its board:`P_MPDEBRIEFING_Handler` 0x212198's
     /// bubble pass, descending by `Menu_GetMPScore` 0x203af8's display score [M 0x212198:112-130;
     /// 0x203af8:44-54]. The bubble swaps only on a strictly greater score, so equal scores keep
     /// slot order — this getter is that stable order (a merge-safe re-derivation, not a port of

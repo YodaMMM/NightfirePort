@@ -148,3 +148,37 @@ owner+controller+RGB / the Assassin target marker ride the snapshot.
 4. **The assassin marker**: in scenario 0x400, check `MPSettings + target·0x30 + 0x20` = 1 after
    `MP_assassinReset` (write at 0x18aa70:38-41) — the port models the marker via
    `MpMatch::assassin_target` instead; the game's field is shared with the team word.
+
+## 7. 16 participants and the in-match draw (mp-hud-16, port-only [S])
+
+The port allows 16 participants (700v8 mp-16-slots); the game's layout is 8 (4 humans + 4 bots
+[M `MP_Start` 0x183a50:116-160]). What scales with the count in the game's own HUD:
+
+- **The score pane** is one per viewer (the team line over the viewer's own line [M
+  0x19f0a0:56-70]) — it never lists participants, so the count does not reach it.
+- **The radar** carries one blip per other live participant plus the scenario markers, capped at
+  the pane's 24 runtime blips (`RadarPane` CREATE+0x16 [M 0x19f6e8:108,153]). The worst
+  16-participant list is 15 players + 8 uplink terminals = 23 — inside the cap
+  (`hud::RADAR_BLIP_CAP`, pinned by `tests/mp_hud_16.rs`).
+
+Before this task the port drew NONE of the MP panes in a match: `nf_view::hud::overlay` is the
+SP pane set and `radar_frame` had no caller; the radar textures were not loaded. The port's
+in-match MP draw (`nf_view::hud::mp_panes`, called from `overlay` when `Sim::mp` is set):
+
+- the radar via `radar_frame` (the game's projection) at the top-right — the viewer matrix rows
+  are the render camera's axes with row 0 = −right [S the mapping onto viewer+0x120]; the ring
+  hides with the viewer's `radar_on` [M 0x19f6e8:102-105]; textures 0x03000088 / 0x0300016f load
+  for MP scenes only (`hud::MP_TEXTURES`, lib.rs after `Scene::build`);
+- the clock `mm:ss` top-centre (`timer_string`, `Timer_Seconds2String` mode 2 [M]) and the team
+  game's `"%d - %d"` (`MP_GetTeamScore` 0x18b338 [M]) under it;
+- a standings list (rank, name, display score) at the left edge between y 150 and the health
+  ring (341) [S port-only — the game's MPScoreInfo pane (7 sprites @0x2BE888) is not decoded
+  yet]. `MpHudSnapshot::board(max_rows)`: the debrief's order and rank walk; when cut, the
+  viewer's row replaces the last visible row (true rank kept) and a "+N more" line follows.
+  `nf_view::hud::mp_board_layout`: ≤ 8 participants → the HUD font's size, one font line per
+  row; 9–16 → constant on-screen size like the online lobby (`k = 720 / view_h`, 0.75 of the
+  720p row; the window loop stores the height via `hud::set_view_h`), as many rows as fit.
+- Render aid: `NF_MP_BOTS=n` adds n bots to the local `--mp` default match (headless `--shot`).
+
+Open: decode MPScoreInfo + `HUD_MPUpdatePane` 0x19f0a0's sprite use and replace the port's
+clock/list placement with the game's pane; a PCSX2 side-by-side of an MP match HUD.
