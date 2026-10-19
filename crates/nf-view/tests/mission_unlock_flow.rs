@@ -36,8 +36,14 @@ fn to_mission_select(fe: &mut FrontEnd) {
     assert_eq!(fe.cursor, 1, "opened from Main on Play without saving [M P_NFSELECT 0x20aec0:96-97]");
     assert!(fe.action(Action::Confirm), "pop the confirm box");
     assert!(fe.action(Action::Confirm), "confirm it → Difficulty");
+    // G-048(1): the option-box resolve rides Menu_ChangePageCloseIris [M P_NFSELECT
+    // 0x20aec0:103 → 0x202190:8-9, the 10-tick delayed 0x44] — the old immediate-flip assert
+    // pinned the pre-G-048 port choice; fixed with the address (fe-gaps-g048-2).
+    for _ in 0..nf_view::menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
     assert_eq!(fe.page, Page::Difficulty);
     assert!(fe.action(Action::Confirm), "Difficulty → MissionSelect");
+    // G-048(1): C_SBNFDFCTY's confirm is a CloseIris caller too [M 0x216ca8:16].
+    for _ in 0..nf_view::menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
     assert_eq!(fe.page, Page::MissionSelect);
 }
 

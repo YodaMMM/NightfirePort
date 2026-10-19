@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use nf_game::mp::MpSettings;
-use nf_view::menu::{
+use nf_view::menu::{self,
     mp_net_addr_ok, Action, FrontEnd, MpNetAgent, MpNetChoices, MpNetError, MpNetLink, MpSession,
     MpNetState, Page, MP_MAP_ROWS, MP_NET_TIMEOUT_TICKS, PAGE_MP_HOST, PAGE_MP_MODE,
     PAGE_MP_NETJOIN, PAGE_MP_ONLINE_LOBBY,

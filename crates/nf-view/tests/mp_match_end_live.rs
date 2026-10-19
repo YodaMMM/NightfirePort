@@ -83,6 +83,9 @@ fn frag_limit_end_hands_over_to_the_debriefing_and_confirm_returns() {
 
     // The host handover: the debriefing page with the board, ranks and winner line.
     let mut fe = handover_fe(board, &settings);
+    // G-048(3): case 4 only QUEUES +0x1c = 0x40000033 [M 0x184bd0:63]; the page lands at the
+    // load's MenuManager_Create [M 0x1d6360:160-163] — the port's load-tail reopen.
+    assert!(fe.reopen_queued_page(), "the load tail's create opens the queued debriefing");
     assert_eq!(fe.page, Page::MpDebriefing, "the case-4 navigation lands on 0x40000033 [M 0x184bd0:63]");
     assert_eq!(fe.page.id(), 0x4000_0033);
     let rows = fe.mp_debriefing_rows();
