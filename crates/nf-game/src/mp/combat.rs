@@ -228,6 +228,9 @@ pub struct MpCombat {
     pub blasts: Vec<Blast>,
     pub fired: Vec<Fired>,
     pub ride: [Ride; MP_MAX_SLOTS],
+    /// mp-shot-gate: the human slots' shared fire gates (docs/systems/mp-shot-gate.md) — empty
+    /// until [`MpCombat::gate_setup`].
+    pub gates: Vec<ShotGate>,
 }
 
 fn f32_at(w: &[u8], o: usize) -> f32 { f32::from_le_bytes(w[o..o + 4].try_into().unwrap()) }
@@ -615,6 +618,219 @@ impl MpCombat {
             h(g.phase.as_ref().map_or(0, |p| (p.armed as u32) | ((f(p.arm)) << 1)));
         }
         for r in &self.ride { h(r.riding as u32); h(r.restore as u32); }
+        // mp-shot-gate: the per-slot shared fire gates (docs/systems/mp-shot-gate.md).
+        h(self.gates.len() as u32);
+        for g in &self.gates {
+            h(g.weapon as u32); h(f(g.timer)); h(g.reload_state as u32); h(g.reload_ticks);
+            h(g.inv.clip.len() as u32);
+            for &c in &g.inv.clip { h(c as u16 as u32); h((c < 0) as u32); }
+            h(g.inv.carried.len() as u32);
+            for &c in &g.inv.carried { h(c as u16 as u32); h((c < 0) as u32); }
+            for ch in g.inv.owned.chunks(32) {
+                let mut word = 0u32;
+                for (i, &o) in ch.iter().enumerate() { if o { word |= 1 << i; } }
+                h(word);
+            }
+        }
+    }
+}
+
+/// mp-shot-gate: one human slot's shared fire gate (docs/systems/mp-shot-gate.md). Every machine
+/// applies a slot's shot description only when the game would let that slot fire — it holds that
+/// weapon, has the rounds, and the weapon's refire interval has run ([M]
+/// `Player_WeaponFiring` 0x1a5460, `Player_RoundToFire` 0x1a18e0; the wire's shot description is
+/// `nf_net::Input::shot*`). The state is the game's own gate state, shared: the held weapon, the
+/// slot's `BLData` inventory fields (`Inventory.clip`/`carried`/`owned`), the refire timer
+/// (`BLData+0x92c`) and the reload state machine.
+#[derive(Clone, Debug)]
+pub struct ShotGate {
+    /// The weapon the gate models — the wire's held byte (the game fires the held weapon, player
+    /// data `+0x62` [M `Player_WeaponFiring` 0x1a5460 / `Player_RoundToFire` 0x1a18e0]).
+    pub weapon: u8,
+    /// The slot's shared inventory (the `BLData` fields `Inventory` models): clips per weapon
+    /// slot, rounds carried per ammo type, the owned bytes. Seeded by `mp_equip_player`
+    /// 0x1855f8, spent by the gate, granted by the shared pickup takes.
+    pub inv: crate::pickup::Inventory,
+    /// `BLData+0x92c` — the refire timer: falls by 1 per tick while above 0, a fire resets it to
+    /// `max(weapon_data[w]+0x40, 1.0)` [M 0x1a5460: the decrement and the fire block's reset].
+    pub timer: f32,
+    /// The reload state machine (5 start `+0xA8` / 6 shell loop `+0xA4` / 7 end `+0xAC`), the
+    /// port's `Gun::reload_tick` shape [M `Player_SetWeaponAnimObj` 0x1a2e38 cases 5/6/7].
+    pub reload_state: u8,
+    /// Ticks left in the current reload script.
+    pub reload_ticks: u32,
+    /// The trigger's previous level — the fresh-press edge the auto-reload reads [M 0x1a5460's
+    /// `Input_Action(9,1)` edge test, the port's `gun.rs` auto_reload rule].
+    pub fire_prev: bool,
+    /// Weapon ids the gate has already seeded (bit `id`, ids < 128): a weapon the gate never saw
+    /// equipped or taken holds ONE spawn-equip grant, and a switch away and back does not refill
+    /// [S — the stand-in for the remote inventory events the shared sim cannot see].
+    pub seen: [u64; 2],
+}
+
+impl ShotGate {
+    fn new() -> ShotGate {
+        ShotGate {
+            weapon: 0,
+            inv: crate::pickup::Inventory::level_start(0x73, 34),
+            timer: 0.0, reload_state: 0, reload_ticks: 0, fire_prev: false, seen: [0; 2],
+        }
+    }
+
+    fn seen_bit(&self, id: usize) -> bool { id < 128 && self.seen[id / 64] >> (id % 64) & 1 != 0 }
+    fn set_seen_bit(&mut self, id: usize) { if id < 128 { self.seen[id / 64] |= 1 << (id % 64); } }
+}
+
+impl MpCombat {
+    /// Builds the human slots' gates and seeds each with the match's spawn loadout
+    /// (`mp_equip_player` 0x1855f8 [M nf-game::mp::equip]). `humans` = the match's human count
+    /// (the port's slot order).
+    pub fn gate_setup(&mut self, humans: usize, s: &super::MpSettings, wd: &WeaponData, loaded: impl Fn(u8) -> bool + Copy) {
+        self.gates = (0..humans).map(|_| ShotGate::new()).collect();
+        for slot in 0..self.gates.len() {
+            self.gate_equip(slot, s, wd, loaded);
+        }
+    }
+
+    /// (Re-)seeds one slot's gate inventory with the equip loadout — the match load and every
+    /// shared respawn (`MP_ReSpawn` 0x185368 → `MP_EquipPlayer` 0x1855f8 re-equips [M]).
+    pub fn gate_equip(&mut self, slot: usize, s: &super::MpSettings, wd: &WeaponData, loaded: impl Fn(u8) -> bool + Copy) {
+        let Some(g) = self.gates.get_mut(slot) else { return };
+        let row = super::equip::weapon_row(s);
+        let req = super::equip::mp_equip_player(s, &row, slot, &mut g.inv, wd, loaded);
+        g.weapon = req;
+        g.timer = 0.0;
+        g.reload_state = 0;
+        g.reload_ticks = 0;
+        g.fire_prev = false;
+        // The equip granted the owned weapons their rounds: they are seen.
+        for id in 0..g.inv.owned.len() {
+            if g.inv.owned[id] { g.set_seen_bit(id); }
+        }
+    }
+
+    /// A shared pickup take by a human slot (`step_net_world`): the same `Inventory::take` the
+    /// local inventory runs, on the gate's shared copy — a remote slot's ammo/weapon pickups
+    /// land in the shared state identically on every machine.
+    pub fn gate_take(&mut self, slot: usize, p: &crate::pickup::Pickup, wd: &WeaponData, armour: &mut f32, clock: u32) {
+        let Some(g) = self.gates.get_mut(slot) else { return };
+        // The take covers the weapon (raw and the `Upgrade_Weapon` remap): the lazy seed must
+        // not double-grant it later.
+        g.set_seen_bit(p.weapon as usize);
+        g.set_seen_bit(crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock) as usize);
+        let _ = g.inv.take(wd, p, true, armour, clock);
+    }
+
+    /// One gate tick for a human slot, in `step_net_combat`'s slot order before any shot is
+    /// applied: the held weapon follows the wire byte, the reload machine advances, the refire
+    /// timer falls. `script_len` resolves a first-person script hash to its frame length (the
+    /// reload tick counts).
+    pub fn gate_tick(&mut self, slot: usize, held: u8, fire: bool, reload_key: bool, wd: &WeaponData, script_len: &impl Fn(u32) -> Option<u32>) {
+        let Some(g) = self.gates.get_mut(slot) else { return };
+        if held != g.weapon {
+            g.weapon = held;
+            // The draw-done zero: one weapon's leftover interval must not poison the next
+            // [M `Player_SetWeaponAnimObj` case 4 — the port's scene.rs draw-done note].
+            g.timer = 0.0;
+            // The switch cancels the reload's scripts without a partial refill [S — the game's
+            // view anim restarts; the shells had moved only at the script stops].
+            g.reload_state = 0;
+            g.reload_ticks = 0;
+            g.fire_prev = fire;
+        }
+        let w = g.weapon as usize;
+        let Some(rec) = wd.records.get(w) else { return };
+        // The lazy seed: a weapon the gate never saw holds one spawn-equip grant —
+        // `clip_size` into the clip, the rest carried (`mp_equip_player`'s `clip_size·2`
+        // through `equip_weapon`'s split) [S, see the struct's `seen` doc].
+        if !g.seen_bit(w) {
+            g.set_seen_bit(w);
+            let rounds = wd.clip_size(w).wrapping_mul(2);
+            let _ = g.inv.equip_weapon(wd, w, rounds, true);
+        }
+        let p = crate::gun::GunParams::from_record(&rec[..], 0, |h| script_len(h));
+        let t = wd.ammo_type(w);
+        let cs = crate::pickup::Inventory::clip_slot(wd, w);
+        let clip = |g: &ShotGate| g.inv.clip.get(cs).copied().unwrap_or(0) as i32;
+        let spare = |g: &ShotGate| g.inv.carried.get(t).copied().unwrap_or(0) as i32;
+        // The reload starts: the reload key, or the auto-reload — no fresh fire press and the
+        // clip can't feed a shot [M 0x1a5460's action-14 / `Input_Action(9,1)==0` branches; the
+        // branch-B timer zero at 0x1a6244].
+        if g.reload_state == 0 {
+            let fresh = fire && !g.fire_prev;
+            let can_reload = spare(g) > 0 && clip(g) < p.clip as i32;
+            let auto_reload = !fire || g.fire_prev; // ¬(fresh press)
+            if can_reload && (reload_key || (auto_reload && clip(g) < p.ammo_per_shot as i32)) {
+                if !reload_key { g.timer = 0.0; }
+                g.reload_state = if p.reload_start_ticks > 0 { 5 } else { 6 };
+                g.reload_ticks = if p.reload_start_ticks > 0 { p.reload_start_ticks.max(1) } else { p.reload_ticks.max(1) };
+            }
+            let _ = fresh;
+        }
+        g.fire_prev = fire;
+        // The reload machine advances (the port's `Gun::reload_tick` shape; the trigger's level
+        // drives the shell weapons' interrupt).
+        if g.reload_state != 0 {
+            if g.reload_ticks > 0 { g.reload_ticks -= 1; }
+            if g.reload_ticks == 0 {
+                match g.reload_state {
+                    5 => { g.reload_state = 6; g.reload_ticks = p.reload_loop_ticks.max(1); }
+                    6 => {
+                        let n = if p.one_at_a_time { 1 } else { (p.clip as i32 - clip(g)).min(spare(g)) };
+                        let n = n.max(0).min(spare(g).max(0)) as i16;
+                        if cs < g.inv.clip.len() && t < g.inv.carried.len() {
+                            g.inv.clip[cs] += n;
+                            g.inv.carried[t] -= n;
+                        }
+                        if p.one_at_a_time {
+                            let more = spare(g) > 0 && clip(g) < p.clip as i32;
+                            if more && !fire {
+                                g.reload_ticks = p.reload_loop_ticks.max(1);
+                            } else {
+                                g.reload_state = 7;
+                                g.reload_ticks = p.reload_end_ticks.max(1);
+                            }
+                        } else {
+                            g.reload_state = 0;
+                            g.reload_ticks = 0;
+                        }
+                    }
+                    7 => { g.reload_state = 0; g.reload_ticks = 0; }
+                    _ => { g.reload_state = 0; g.reload_ticks = 0; }
+                }
+            }
+            // The timer's fall during a reload is behaviourally moot for the filter: the reload
+            // states refuse every shot, and the timer expires either way (the start zeroed it).
+            return;
+        }
+        // The refire timer's fall [M 0x1a5460: while above 0, minus FRAME_RATE_MUL (1 at 60 Hz)].
+        if g.timer > 0.0 { g.timer -= 1.0; }
+    }
+
+    /// The shot filter, before `MpCombat::fire`: is this shot description one the game would let
+    /// the slot fire? On a pass it spends the rounds and resets the refire timer — the game's
+    /// fire tick, minus the view-anim half that stays the sender's. Returns false (the shot is
+    /// dropped identically on every machine, drawing nothing from the shared stream) when the
+    /// record is not the held weapon, a reload is running, the timer has not run, or the shared
+    /// clip cannot feed the `+0x91` byte [M `Player_RoundToFire` 0x1a18e0].
+    pub fn gate_allow(&mut self, slot: usize, weapon: u8, wd: &WeaponData) -> bool {
+        let Some(g) = self.gates.get_mut(slot) else { return true };
+        if weapon != g.weapon { return false; }
+        if g.reload_state != 0 { return false; }
+        if g.timer > 0.0 { return false; }
+        let w = weapon as usize;
+        let Some(rec) = wd.records.get(w) else { return false };
+        let t = wd.ammo_type(w);
+        if t != 0 {
+            let need = rec[0x91] as i16;
+            let cs = crate::pickup::Inventory::clip_slot(wd, w);
+            let clip = g.inv.clip.get(cs).copied().unwrap_or(0);
+            if clip < need { return false; }
+            if cs < g.inv.clip.len() { g.inv.clip[cs] = clip - need; }
+        }
+        let interval = u32::from_le_bytes(rec[0x40..0x44].try_into().unwrap()) as f32;
+        g.timer = interval.max(1.0);
+        true
     }
 }
 

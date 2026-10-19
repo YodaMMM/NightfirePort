@@ -1446,6 +1446,11 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // arm handed the arenas the give-everything kit) never runs in MP.
             sim.mp_weapon_loaded = (0..0x72u8).map(loaded).collect();
             sim.mp_equip_local();
+            // mp-shot-gate: every human slot's shared fire gate, seeded with the same equip
+            // (docs/systems/mp-shot-gate.md) — the rate/ammo/holding check every machine applies
+            // to every slot's shot description.
+            let humans = (sim.mp.as_ref().unwrap().settings.human_count as usize).clamp(1, nf_net::MAX_AGENTS);
+            sim.mp_combat.gate_setup(humans, &sim.mp.as_ref().unwrap().settings, &sim.weapons, loaded);
             sim.gun.weapon
         } else {
             nf_game::player::init_level_loadout(level_id, save, &mut sim.drones.health,
