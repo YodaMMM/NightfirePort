@@ -130,6 +130,10 @@ pub enum Packet {
         first_tick: u32,
         snapshot_tick: u32,
         snapshot_hash: u64,
+        /// The earlier late joins (slot, join tick) up to the snapshot — the replay must spawn
+        /// those bodies where the live machines did (mp-online-failures: a second late join, or
+        /// a reconnect of a late joiner, could never verify without them).
+        joins: Vec<(u8, u32)>,
     },
     /// Host → late joiner: one chunk of the recorded run log
     /// (`tick_count × MAX_AGENTS` inputs, tick-major, slot-ascending).
@@ -253,12 +257,18 @@ pub fn encode(p: &Packet, out: &mut Vec<u8>) {
             out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
             out.extend_from_slice(bytes);
         }
-        Packet::JoinBegin { first_tick, snapshot_tick, snapshot_hash } => {
+        Packet::JoinBegin { first_tick, snapshot_tick, snapshot_hash, joins } => {
             out.push(PT_JOIN_BEGIN);
             out.push(0);
             out.extend_from_slice(&first_tick.to_le_bytes());
             out.extend_from_slice(&snapshot_tick.to_le_bytes());
             out.extend_from_slice(&snapshot_hash.to_le_bytes());
+            let n = joins.len().min(255);
+            out.push(n as u8);
+            for (slot, tick) in joins.iter().take(n) {
+                out.push(*slot);
+                out.extend_from_slice(&tick.to_le_bytes());
+            }
         }
         Packet::JoinLog { first_tick, tick_count, chunk_index, chunk_count, inputs } => {
             out.push(PT_JOIN_LOG);
@@ -423,12 +433,26 @@ pub fn decode(buf: &[u8]) -> Option<Packet> {
             if body.len() < 16 {
                 return None;
             }
+            // The join history (mp-online-failures): a count byte + (slot u8, join_tick u32)
+            // per earlier late join; absent = none.
+            let mut joins = Vec::new();
+            if body.len() > 16 {
+                let n = body[16] as usize;
+                if body.len() < 17 + n * 5 {
+                    return None;
+                }
+                for k in 0..n {
+                    let o = 17 + k * 5;
+                    joins.push((body[o], u32::from_le_bytes([body[o + 1], body[o + 2], body[o + 3], body[o + 4]])));
+                }
+            }
             Some(Packet::JoinBegin {
                 first_tick: u32::from_le_bytes([body[0], body[1], body[2], body[3]]),
                 snapshot_tick: u32::from_le_bytes([body[4], body[5], body[6], body[7]]),
                 snapshot_hash: u64::from_le_bytes([
                     body[8], body[9], body[10], body[11], body[12], body[13], body[14], body[15],
                 ]),
+                joins,
             })
         }
         PT_JOIN_LOG => {
@@ -587,6 +611,22 @@ mod tests {
         assert!(decode(&b).is_none());
         // Sister assertion: truncated payload must not decode.
         assert!(decode(&b[..3]).is_none());
+    }
+
+    /// mp-online-failures: JOIN_BEGIN carries the join history; an empty one round-trips too,
+    /// and a truncated history is rejected (sister).
+    #[test]
+    fn join_begin_history_roundtrip_and_truncation() {
+        for joins in [vec![], vec![(2u8, 391u32), (5, 77_001)]] {
+            let p = Packet::JoinBegin { first_tick: 0, snapshot_tick: 300, snapshot_hash: 0xDEAD_BEEF_0123, joins };
+            let mut b = Vec::new();
+            encode(&p, &mut b);
+            assert_eq!(decode(&b), Some(p));
+        }
+        let mut b = Vec::new();
+        encode(&Packet::JoinBegin { first_tick: 0, snapshot_tick: 1, snapshot_hash: 2, joins: vec![(1, 9)] }, &mut b);
+        b.pop();
+        assert_eq!(decode(&b), None, "a cut history entry is refused");
     }
 
     #[test]

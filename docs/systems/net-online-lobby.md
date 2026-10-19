@@ -250,3 +250,24 @@ and ids only, every test with a sister assertion that can fail:
 - the built MpSettings equals what the couch pages build for the same choices [M mp_confirm_start]
   — the same words through both paths produce equal structs;
 - the `LobbyState` / `LobbyEdit` codec round-trips.
+
+## 7. The failure paths (mp-online-failures, 2026-10-18) [S — port-only design]
+
+The PS2 game has no online mode, so every rule here is the port's own [S]; the one game fact
+leaned on is the dead-pad NEUTRAL a dropped slot rides (`psiInput_PollDevices` 0x10ca78 [M],
+net-lockstep.md "Disconnects").
+
+| Path | Before | Now | Test |
+|---|---|---|---|
+| A client leaves mid-match | The pause page's QUIT never closed the session: the leaver kept sending keepalives, so nobody timed it out and every other machine stalled on its missing inputs **forever**. A clean LEAVE desynced any client that was behind the host (it ran the leaver's last ticks NEUTRAL, the host had run them with its real input) | QUIT closes the session (`App::net_leave_match`, LEAVE at once); a dropped core sends LEAVE (`impl Drop for NetCore` — the window closing). The host keeps relaying the leaver's REAL inputs for every tick it ran (`left_at`, the drop tick) and a client takes every other slot from the host's relay — never its own guess | `drop_rejoin::a_client_leaving_mid_match_never_desyncs_the_others`, `…_crashing_…` (both FAIL on the old session: desync at tick 150) |
+| The leaver comes back | Late join to the lowest free slot | A HELLO whose (non-empty) codename matches a slot's departed human takes THAT slot (its body still stands → the reconnect path of `Sim::mp_join_spawn`, no second body) | `drop_rejoin::a_reconnect_takes_its_own_slot_back_and_plays_on_in_sync`, `mp_online_failures::join_in_progress_from_the_menus_then_leave_and_reconnect` [ISO] |
+| The host leaves mid-match | Clients logged "player 1 left" and froze; a host that quit to its menus kept its keepalives flowing, so the 5 s `HostTimeout` never fired; when it did, `net_fail` opened the couch Join Game page over the frozen arena | The host's LEAVE is `Event::HostLeft` → `CoreEvent::HostLeft` at once; `net_fail` lands on the page this machine came from (`FrontEnd::mp_net_return`: a client's Join Online with the address kept, a host's port page with Start focused) with the reason in the notice box, and the arena unloads (the debriefing's front-end rebuild) | `mp_online_failures::the_host_leaving_mid_match_reaches_every_client_at_once` |
+| The host backs out of the lobby | The client sat on the lobby until the 5 s timeout | The client is back on Join Online within the link latency, "The host left the lobby" | `mp_online_failures::the_host_leaving_the_lobby_returns_the_client_at_once` |
+| Join a running match from the menus | The dial reached the late-join handover but the page went to the one-screen lobby ("Waiting for the host…") forever: the handover event sat in the lobby core nobody drained | `MpNetState::Joining` ("Joining the match in progress…", only Back acts); the app adopts the lobby session as `mpnet::LobbyAdopt::LateJoin` (no arena load, no load hold), runs the handover's replay, confirms and closes the front end — the flag path's late join | `mp_online_failures::join_in_progress_from_the_menus_then_leave_and_reconnect` [ISO] |
+| Rematch, a client presses Continue before the host | The re-dial hit the host's finished match (still open under its debriefing) and LATE-JOINED it — a dead lobby | `NetCore::finish_match` (`mp_results`): the finished session answers no new HELLO; the client's HELLO retries until the host's next lobby listens on the port | `mp_online_failures::three_machines_rematch_through_the_lobby` (host + 2 clients; the clients press Continue first, then the second match starts) |
+| Back on the lobby, then host the same port | "Port already in use": the closed session kept its socket until the whole core dropped (the app keeps it in `net_lobby`) | `NetCore::close` swaps in an ephemeral loopback placeholder (the port is free when it returns); `rebind_host` releases the old socket before binding | `mp_online_failures::back_releases_the_socket_and_the_same_port_rehosts_at_once` |
+
+The app glue (`crates/nf-view/src/lib.rs`): `adopt_lobby_session` (the `LobbyAdopt` decision; a
+late join cancelled with Back drops the adopted core), `ensure_lobby_session` (the online pages'
+proxy — not while a session is adopted, and wired at once by `net_fail`), `net_leave_match`,
+`net_fail`, the `HostLeft` arm, the `LateJoinHandover` arm closing the join page.

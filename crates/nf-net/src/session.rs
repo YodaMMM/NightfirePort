@@ -133,6 +133,9 @@ pub enum Event {
     ClientLeft { slot: u8, reason: LeaveReason },
     /// Client: no packets from the host for `Config::timeout_ms`.
     HostTimeout,
+    /// Client: the host sent LEAVE (it quit the match or closed the lobby) —
+    /// reported at once instead of after the timeout [S mp-online-failures].
+    HostLeft,
     /// Both: `DropPolicy::EndMatch` fired.
     MatchEnded { reason: LeaveReason },
     /// Both: an app-to-app blob arrived (the lobby's choices mirror). The
@@ -242,6 +245,11 @@ struct Peer {
     /// This peer late-joined a running match (GO retransmit is suppressed —
     /// it never receives a GO; the JOIN_SLOT announcement arms it).
     late_joined: bool,
+    /// The join tick already announced for this late joiner: a retransmitted
+    /// JOIN_READY (the joiner resends until JOIN_SLOT lands — a round trip
+    /// longer than `hello_retry_ms` sends two) gets the SAME tick again. A
+    /// second pick moved the join tick on some machines and not others.
+    announced: Option<u32>,
 }
 
 /// Host: the per-peer late-join transfer state.
@@ -298,6 +306,28 @@ pub struct Session<T: Transport> {
     /// a late joiner's slot flips human only at the announced join tick;
     /// before it, the slot rides NEUTRAL). 0 for the match-start humans.
     join_from: [u32; MAX_AGENTS],
+    /// Host: per slot, the first tick a departed human no longer drives (its
+    /// drop tick — `last_ready + 1` when it left). The ticks before it RAN
+    /// with the leaver's real inputs, so the host keeps relaying those (a
+    /// client a few ticks behind still needs them) and only the ticks from
+    /// here on are NEUTRAL [S mp-online-failures: relaying NEUTRAL for the
+    /// already-run ticks desynced every client that was behind the host].
+    left_at: [u32; MAX_AGENTS],
+    /// Host: the codename of each slot's last departed human — a reconnect
+    /// with the same (non-empty) codename takes its old slot back (its body
+    /// still stands on `DropPolicy::Neutral`).
+    left_names: [String; MAX_AGENTS],
+    /// Host: the match is over (the debriefing is up) — HELLOs from unknown
+    /// peers are ignored, so a client re-dialing for the rematch keeps
+    /// retrying until the NEXT lobby listens on the port instead of
+    /// late-joining the finished match.
+    joins_closed: bool,
+    /// Client: the host sent LEAVE ([`Event::HostLeft`] fired).
+    host_left: bool,
+    /// The match's late joins as (slot, join tick): the host appends each announcement; a late
+    /// joiner receives the ones up to its snapshot in JOIN_BEGIN — its replay spawns those
+    /// bodies at those ticks, exactly as the live machines did (mp-online-failures).
+    join_history: Vec<(u8, u32)>,
     /// All agents' inputs by tick. Slot `local_slot` is filled by
     /// `local_input`; remote human slots by INPUT packets.
     inputs: [HashMap<u32, Input>; MAX_AGENTS],
@@ -373,6 +403,11 @@ impl<T: Transport> Session<T> {
             started: false,
             slot_human: slot0_human(),
             join_from: [0; MAX_AGENTS],
+            left_at: [0; MAX_AGENTS],
+            left_names: Default::default(),
+            joins_closed: false,
+            host_left: false,
+            join_history: Vec::new(),
             inputs: Default::default(),
             run_log: Vec::new(),
             log_base: 0,
@@ -408,6 +443,11 @@ impl<T: Transport> Session<T> {
             started: false,
             slot_human: slot0_human(),
             join_from: [0; MAX_AGENTS],
+            left_at: [0; MAX_AGENTS],
+            left_names: Default::default(),
+            joins_closed: false,
+            host_left: false,
+            join_history: Vec::new(),
             inputs: Default::default(),
             run_log: Vec::new(),
             log_base: 0,
@@ -464,6 +504,64 @@ impl<T: Transport> Session<T> {
 
     pub fn is_started(&self) -> bool {
         self.started
+    }
+
+    /// Client: this session is joining a match already in progress — the
+    /// host began the late-join handover (JOIN_BEGIN arrived) or completed it.
+    /// The front end shows "joining" instead of the pre-match lobby.
+    pub fn late_join_pending(&self) -> bool {
+        matches!(self.role, Role::Client { .. }) && (self.late_recv.is_some() || self.late_joined)
+    }
+
+    /// Host: the match is over — ignore HELLOs from unknown peers from now on
+    /// (a re-dial for the rematch must reach the NEXT lobby, never late-join
+    /// this finished match). Known peers are unaffected.
+    pub fn close_joins(&mut self) {
+        self.joins_closed = true;
+    }
+
+    /// Client: the host sent LEAVE.
+    pub fn host_left(&self) -> bool {
+        self.host_left
+    }
+
+    /// Late joiner: the earlier late joins (slot, join tick) up to the snapshot, from the
+    /// host's JOIN_BEGIN — the replay must spawn those bodies at those ticks (`Sim::mp_join_spawn`
+    /// before the tick, as every live machine did). Host: every join announced so far.
+    pub fn join_history(&self) -> &[(u8, u32)] {
+        &self.join_history
+    }
+
+    /// Host: whether `s`'s input for `tick` is a real input — a live human
+    /// from its join tick, or a departed human for the ticks before its drop
+    /// (`left_at`): those ran with its real inputs on the host and every
+    /// client must run them the same way.
+    fn host_slot_required(&self, s: usize, tick: u32) -> bool {
+        if self.slot_human[s] {
+            tick >= self.join_from[s]
+        } else {
+            tick >= self.join_from[s] && tick < self.left_at[s]
+        }
+    }
+
+    /// The input `ready_inputs` uses for slot `s` at `tick`, or None while it
+    /// is missing. The local slot rides NEUTRAL before its join tick (a late
+    /// joiner produces no inputs until then). The HOST decides every other
+    /// slot (`host_slot_required`); a CLIENT takes every other slot from the
+    /// host's relay — the host's materialised NEUTRAL included — so a drop or
+    /// a join can never make a client guess differently from the host for a
+    /// tick the host already ran [S mp-online-failures].
+    fn tick_input(&self, s: usize, tick: u32) -> Option<Input> {
+        if s == self.local_slot as usize {
+            if self.slot_human[s] && tick >= self.join_from[s] {
+                return self.inputs[s].get(&tick).copied();
+            }
+            return Some(NEUTRAL);
+        }
+        if matches!(self.role, Role::Host { .. }) && !self.host_slot_required(s, tick) {
+            return Some(NEUTRAL);
+        }
+        self.inputs[s].get(&tick).copied()
     }
 
     /// Record the local agent's input for `tick`. Idempotent per tick.
@@ -562,21 +660,7 @@ impl<T: Transport> Session<T> {
         let mut out = [NEUTRAL; MAX_AGENTS];
         let mut complete = true;
         for s in 0..MAX_AGENTS {
-            let required = self.slot_human[s] && tick >= self.join_from[s];
-            let v = if s == self.local_slot as usize {
-                // The local slot rides NEUTRAL before its join tick too (a
-                // late joiner produces no inputs until the announced tick).
-                if required {
-                    self.inputs[s].get(&tick).copied()
-                } else {
-                    Some(NEUTRAL)
-                }
-            } else if !required {
-                Some(NEUTRAL)
-            } else {
-                self.inputs[s].get(&tick).copied()
-            };
-            match v {
+            match self.tick_input(s, tick) {
                 Some(x) => out[s] = x,
                 None => complete = false,
             }
@@ -602,15 +686,7 @@ impl<T: Transport> Session<T> {
     fn missing_slots(&self, tick: u32) -> Vec<u8> {
         let mut miss = Vec::new();
         for s in 0..MAX_AGENTS {
-            let required = self.slot_human[s] && tick >= self.join_from[s];
-            let have = if s == self.local_slot as usize {
-                !required || self.inputs[s].contains_key(&tick)
-            } else if !required {
-                true
-            } else {
-                self.inputs[s].contains_key(&tick)
-            };
-            if !have {
+            if self.tick_input(s, tick).is_none() {
                 miss.push(s as u8);
             }
         }
@@ -1033,7 +1109,9 @@ impl<T: Transport> Session<T> {
             return self.inputs[s].get(&t).copied();
         }
         if let Role::Host { .. } = self.role {
-            if !self.slot_human[s] || t < self.join_from[s] {
+            // A departed human's already-run ticks relay its REAL inputs (the
+            // ticks before `left_at`); NEUTRAL only from its drop tick on.
+            if !self.host_slot_required(s, t) {
                 return Some(NEUTRAL);
             }
         }
@@ -1079,6 +1157,15 @@ impl<T: Transport> Session<T> {
                 if let Some(reason) = refuse {
                     self.send_packet(from, &Packet::Refuse { reason: reason.to_wire() });
                     return;
+                }
+                // The finished match (the debriefing) answers no new peer: the
+                // HELLO goes unanswered and the dialer keeps retrying until the
+                // next lobby listens on this port [S mp-online-failures].
+                if self.joins_closed {
+                    let known = matches!(&self.role, Role::Host { peers, .. } if peers.iter().any(|p| p.addr == from));
+                    if !known {
+                        return;
+                    }
                 }
                 if self.started {
                     // mp-join-in-progress: a HELLO after GO asks to join the
@@ -1137,6 +1224,7 @@ impl<T: Transport> Session<T> {
                         last_go_ms: 0,
                         late_serve: None,
                         late_joined: false,
+                        announced: None,
                     });
                     self.slot_human[slot as usize] = true;
                 }
@@ -1224,7 +1312,7 @@ impl<T: Transport> Session<T> {
                     if let Some(i) = peers.iter().position(|p| p.addr == from) {
                         let p = peers.remove(i);
                         let reason = LeaveReason::from_wire(reason);
-                        self.drop_slot(p.slot, reason, events);
+                        self.drop_slot(p.slot, &p.codename, reason, events);
                     }
                 }
                 let _ = slot;
@@ -1251,16 +1339,30 @@ impl<T: Transport> Session<T> {
                 let host_head = self.last_ready.unwrap_or(0);
                 let join_tick = host_head.saturating_add(JOIN_MARGIN_TICKS);
                 let mut announce: Option<(SocketAddr, u8, u32)> = None;
+                let mut repeat: Option<(SocketAddr, u8, u32)> = None;
                 if let Role::Host { peers, .. } = &mut self.role {
                     if let Some(p) = peers.iter_mut().find(|p| p.addr == from) {
-                        if p.late_serve.is_none() && p.late_joined && (p.slot as usize) < MAX_AGENTS {
+                        if let Some(jt) = p.announced {
+                            // A retransmitted JOIN_READY (the joiner resends until a
+                            // JOIN_SLOT lands): the SAME tick again, to the joiner only.
+                            // A second pick moved the join tick on some machines and
+                            // not others (mp-online-failures: the reconnect test caught
+                            // the slot arming at a later tick than first announced).
+                            p.last_recv_ms = self.now_ms;
+                            repeat = Some((p.addr, p.slot, jt));
+                        } else if p.late_serve.is_none() && p.late_joined && (p.slot as usize) < MAX_AGENTS {
+                            p.announced = Some(join_tick);
                             p.last_recv_ms = self.now_ms;
                             p.our_ack = join_tick;
                             self.slot_human[p.slot as usize] = true;
                             self.join_from[p.slot as usize] = join_tick;
                             announce = Some((p.addr, p.slot, join_tick));
+                            self.join_history.push((p.slot, join_tick));
                         }
                     }
+                }
+                if let Some((addr, slot, join_tick)) = repeat {
+                    self.send_packet(addr, &Packet::JoinSlot { slot, join_tick });
                 }
                 if let Some((addr, slot, join_tick)) = announce {
                     self.send_packet(addr, &Packet::JoinSlot { slot, join_tick });
@@ -1290,11 +1392,17 @@ impl<T: Transport> Session<T> {
                 return;
             }
         }
-        // Free slot? Host is slot 0; late joiners take 1..=MAX_AGENTS.
+        // Free slot? Host is slot 0; late joiners take 1..=MAX_AGENTS. A
+        // RECONNECT — the codename of a slot's departed human, non-empty —
+        // takes that slot back (its body still stands on NEUTRAL); anyone
+        // else the first free slot [S mp-online-failures].
         let free: Option<u8> = match &self.role {
             Role::Host { peers, .. } => {
                 let used: Vec<u8> = peers.iter().map(|p| p.slot).collect();
-                (1..MAX_AGENTS as u8).find(|s| !used.contains(s))
+                let name: String = codename.chars().take(31).collect();
+                let mine = (1..MAX_AGENTS as u8)
+                    .find(|s| !used.contains(s) && !name.is_empty() && self.left_names[*s as usize] == name);
+                mine.or_else(|| (1..MAX_AGENTS as u8).find(|s| !used.contains(s)))
             }
             _ => return,
         };
@@ -1344,6 +1452,7 @@ impl<T: Transport> Session<T> {
                 last_go_ms: 0,
                 late_serve: Some(LateServe { snapshot_tick: snap, snapshot_hash, chunk_count, sent: 0, acked: 0, last_send_ms: 0 }),
                 late_joined: true,
+                announced: None,
             });
             // The slot does NOT flip human here: everyone keeps riding
             // NEUTRAL for it until the JOIN_SLOT announcement.
@@ -1353,7 +1462,8 @@ impl<T: Transport> Session<T> {
         // must know which slots are live humans (its own slot stays out — it
         // is not human until the JOIN_SLOT announcement).
         self.send_packet(from, &Packet::SlotMap { human_slots: self.human_mask() });
-        self.send_packet(from, &Packet::JoinBegin { first_tick, snapshot_tick: snap, snapshot_hash });
+        let joins: Vec<(u8, u32)> = self.join_history.iter().copied().filter(|(_, t)| *t <= snap).collect();
+        self.send_packet(from, &Packet::JoinBegin { first_tick, snapshot_tick: snap, snapshot_hash, joins });
         events.push(Event::LateJoinStarted { slot, codename: codename.chars().take(31).collect() });
     }
 
@@ -1419,6 +1529,7 @@ impl<T: Transport> Session<T> {
                         last_go_ms: 0,
                         late_serve: None,
                         late_joined: false,
+                        announced: None,
                     });
                     // The host's delay is the match's (both sides schedule the same lead).
                     self.cfg.input_delay = input_delay as u32;
@@ -1506,6 +1617,16 @@ impl<T: Transport> Session<T> {
                 if reason == LeaveReason::MatchEnded {
                     self.match_ended = true;
                     events.push(Event::MatchEnded { reason });
+                } else if slot == 0 {
+                    // The HOST left (its own LEAVE — the host never relays a
+                    // slot-0 departure): the match and the lobby are gone. Report
+                    // it now; waiting out the timeout froze the client for 5 s,
+                    // and a host still polling its socket (a quit to the menus)
+                    // kept the keepalives coming, so the timeout never fired.
+                    if !self.host_left {
+                        self.host_left = true;
+                        events.push(Event::HostLeft);
+                    }
                 } else if (slot as usize) < MAX_AGENTS {
                     self.slot_human[slot as usize] = false;
                     events.push(Event::ClientLeft { slot, reason });
@@ -1520,9 +1641,10 @@ impl<T: Transport> Session<T> {
                     events.push(Event::SlotMapChanged { human_slots: self.slot_human });
                 }
             }
-            Packet::JoinBegin { first_tick, snapshot_tick, snapshot_hash } => {
+            Packet::JoinBegin { first_tick, snapshot_tick, snapshot_hash, joins } => {
                 // mp-join-in-progress: the host began the late-join handover.
                 // The chunks follow; the log assembles on the last one.
+                self.join_history = joins;
                 if let Role::Client { host_peer, .. } = &mut self.role {
                     if let Some(p) = host_peer {
                         p.last_recv_ms = self.now_ms;
@@ -1598,7 +1720,17 @@ impl<T: Transport> Session<T> {
                 }
             }
             Packet::JoinSlot { slot, join_tick } => {
-                if (slot as usize) < MAX_AGENTS {
+                // The joiner hears the announcement twice (the direct send + the
+                // broadcast, and again per retransmitted JOIN_READY): arm once.
+                let dup = (slot as usize) < MAX_AGENTS
+                    && self.slot_human[slot as usize]
+                    && self.join_from[slot as usize] == join_tick;
+                if dup {
+                    self.late_confirm_due = None;
+                    if let Role::Client { host_peer: Some(p), .. } = &mut self.role {
+                        p.last_recv_ms = self.now_ms;
+                    }
+                } else if (slot as usize) < MAX_AGENTS {
                     let mine = slot == self.local_slot && self.late_joined;
                     if let Role::Client { host_peer, .. } = &mut self.role {
                         if let Some(p) = host_peer {
@@ -1625,11 +1757,24 @@ impl<T: Transport> Session<T> {
     }
 
     /// Host: remove a human from `slot` (drop policy applies).
-    fn drop_slot(&mut self, slot: u8, reason: LeaveReason, events: &mut Vec<Event>) {
+    fn drop_slot(&mut self, slot: u8, codename: &str, reason: LeaveReason, events: &mut Vec<Event>) {
         if slot == 0 || slot as usize >= MAX_AGENTS {
             return;
         }
-        self.slot_human[slot as usize] = false;
+        let s = slot as usize;
+        // The drop tick: every tick up to the last one the host ran used the
+        // leaver's real inputs (they keep relaying — a client behind the host
+        // still needs them); from the next tick on the slot is NEUTRAL. Only a
+        // slot that WAS human moves the boundary (a late joiner that never
+        // reached its join tick drove nothing).
+        let next = self.last_ready.map_or(self.start_tick, |t| t.wrapping_add(1));
+        if self.slot_human[s] {
+            self.left_at[s] = next.max(self.join_from[s]);
+        }
+        let keep_below = self.left_at[s];
+        self.inputs[s].retain(|t, _| *t < keep_below);
+        self.left_names[s] = codename.chars().take(31).collect();
+        self.slot_human[s] = false;
         match self.cfg.drop_policy {
             DropPolicy::Neutral => {
                 events.push(Event::ClientLeft { slot, reason });
@@ -1655,22 +1800,22 @@ impl<T: Transport> Session<T> {
         // Host: drop silent clients.
         if let Role::Host { peers, .. } = &mut self.role {
             let now = now_ms;
-            let mut dropped: Vec<(u8, LeaveReason)> = Vec::new();
+            let mut dropped: Vec<(u8, String, LeaveReason)> = Vec::new();
             peers.retain(|p| {
                 if p.connected && now.saturating_sub(p.last_recv_ms) > timeout {
-                    dropped.push((p.slot, LeaveReason::Timeout));
+                    dropped.push((p.slot, p.codename.clone(), LeaveReason::Timeout));
                     false
                 } else {
                     true
                 }
             });
-            for (slot, reason) in dropped {
-                self.drop_slot(slot, reason, events);
+            for (slot, name, reason) in dropped {
+                self.drop_slot(slot, &name, reason, events);
             }
             return;
         }
         // Client: host silence after connection.
-        if !self.host_timed_out {
+        if !self.host_timed_out && !self.host_left {
             if let Role::Client { host_peer, slot, .. } = &mut self.role {
                 if slot.is_some() {
                     if let Some(p) = host_peer {

@@ -1326,7 +1326,12 @@ pub enum MpNetError { BadAddress, Busy, Denied }
 
 /// The join side's page state — what PAGE_MP_NETJOIN and PAGE_MP_LOBBY draw [S §2.2].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MpNetState { Idle, Dialing, Refused, TimedOut, InLobby }
+pub enum MpNetState {
+    Idle, Dialing, Refused, TimedOut, InLobby,
+    /// mp-online-failures: the dial reached a match in progress — the late-join handover runs
+    /// (the app replays the host's log and drops the player into the match) [S].
+    Joining,
+}
 
 /// One lobby agent as the session reports it: slot 0 = this machine's agent, slots 1..3 = the
 /// remote panels 2-4 [S §3].
@@ -1407,6 +1412,9 @@ pub trait MpSession {
     fn take_row_edit(&mut self) -> Option<nf_net::LobbyEdit> { None }
     /// Close cleanly (Back / cancel / the match handover's end).
     fn close(&mut self);
+    /// mp-online-failures: the dial reached a match already in progress — the host is serving
+    /// the late-join handover (the join page shows "joining"; no lobby will come). Default false.
+    fn joining_match(&self) -> bool { false }
     /// net-p2p: the internet reachability lines for the online pages (None: not probing — the
     /// fakes, LAN-only builds) [S docs/systems/net-p2p.md §4].
     fn reach(&self) -> Option<MpReach> { None }
@@ -5249,6 +5257,8 @@ impl FrontEnd {
             // The join address page: the typing rides mp_net_type / mp_net_backspace /
             // mp_net_paste (the keyboard layer routes around action()), ✕ = Connect [S §2.2].
             Page::MpNetJoin => {
+                // mp-online-failures: while the late join runs only Back acts (it cancels the join).
+                if self.mp_net_state == MpNetState::Joining && a != Action::Back { return false; }
                 match a {
                     // net-lobby-list: ▲▼ walk the address row (0) and the lobby rows (1..).
                     Action::Up if self.cursor > 0 => { self.cursor -= 1; return true; }
@@ -6633,6 +6643,9 @@ impl FrontEnd {
             } else if host && self.page == Page::MpHost {
                 let ok = self.mp_host_begin();
                 self.mp_auto_rejoin = if ok { None } else { Some((host, target, tries - 1, 60)) };
+            } else if !host && self.mp_net_state == MpNetState::Joining {
+                // The re-dial reached a match in progress: the late join takes it from here.
+                self.mp_auto_rejoin = None;
             } else if !host && self.page == Page::MpNetJoin && self.mp_net_state != MpNetState::Dialing {
                 self.mp_net_addr = target.clone();
                 self.mp_net_error = None;
@@ -6641,7 +6654,7 @@ impl FrontEnd {
             }
         }
         // net-lobby-list: the Join Online page lists the LAN's lobbies while nothing is dialing.
-        let browsing = self.page == Page::MpNetJoin && self.mp_net_state != MpNetState::Dialing && !self.mp_hosting;
+        let browsing = self.page == Page::MpNetJoin && !matches!(self.mp_net_state, MpNetState::Dialing | MpNetState::Joining) && !self.mp_hosting;
         self.mp_session.as_mut().unwrap().browse(browsing);
         if browsing {
             self.mp_session.as_mut().unwrap().poll();
@@ -6679,6 +6692,12 @@ impl FrontEnd {
                 self.mp_session.as_mut().unwrap().poll();
                 let link = self.mp_session.as_ref().unwrap().link();
                 match link {
+                    // mp-online-failures: the host's match is RUNNING — the HELLO began the
+                    // late-join handover, not a lobby seat. The page stays and says so; the app
+                    // adopts the session (mpnet::LobbyAdopt::LateJoin) and runs the replay.
+                    MpNetLink::Connected if self.mp_session.as_ref().unwrap().joining_match() => {
+                        self.mp_net_state = MpNetState::Joining;
+                    }
                     MpNetLink::Connected => {
                         self.mp_net_state = MpNetState::InLobby;
                         // mp-lobby-one-screen: the client lands on the same ONE screen; its
@@ -6709,10 +6728,21 @@ impl FrontEnd {
             }
             MpNetState::InLobby => {
                 self.mp_session.as_mut().unwrap().poll();
-                // The host went away: back to the address page cleanly [S §2.2].
+                // The host went away: back to the address page cleanly [S §2.2], with the
+                // reason on screen (mp-online-failures: the host's LEAVE lands at once — Lost).
                 if self.mp_session.as_ref().unwrap().link() == MpNetLink::Lost {
                     self.mp_net_cancel();
                     self.page = Page::MpNetJoin;
+                    self.cursor = 0;
+                    self.net_notice = Some("The host left the lobby".into());
+                    return;
+                }
+                // The WELCOME came before the late-join handover's first packet: the lobby
+                // page was a guess — the match is running, the join is in progress.
+                if self.mp_session.as_ref().unwrap().joining_match() {
+                    self.mp_net_state = MpNetState::Joining;
+                    self.page = Page::MpNetJoin;
+                    self.cursor = 0;
                     return;
                 }
                 self.mp_net_mirror_agents();
@@ -6736,7 +6766,51 @@ impl FrontEnd {
                     self.mp_client_start(s.clone());
                 }
             }
+            // mp-online-failures: the late-join handover runs (the app owns the replay and the
+            // drop into the match; it closes this front end when the replay verifies). Here only
+            // the failure: the host went away mid-transfer — back to the address page, said.
+            MpNetState::Joining => {
+                self.mp_session.as_mut().unwrap().poll();
+                if self.mp_session.as_ref().unwrap().link() == MpNetLink::Lost {
+                    self.mp_net_cancel();
+                    self.page = Page::MpNetJoin;
+                    self.cursor = 0;
+                    self.net_notice = Some("The host left the match".into());
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// mp-online-failures: the front end a failed online match lands on — the online page this
+    /// machine came from with the reason on screen (`net_notice`, the modal box): the host's
+    /// port page (port kept, cursor on Start Listening) or the client's address page (address
+    /// kept), else the mode page. Called by the app's `net_fail` (a lost host, a desync, a
+    /// refused/failed join) on a front end it then hands the front-end map load. The lobby
+    /// state resets (the old session is closed by the caller; the app wires a fresh one).
+    pub fn mp_net_return(&mut self, rejoin: Option<(bool, String)>, msg: &str) {
+        self.mp_net_cancel();
+        self.mp_auto_rejoin = None;
+        self.mp_online_rejoin = None;
+        self.mp_match_settings = None;
+        self.requested_level = None;
+        self.closed = false;
+        self.net_notice = Some(msg.to_string());
+        match rejoin {
+            Some((true, port)) => {
+                if let Ok(p) = port.parse::<u32>() { self.mp_net_port = p; }
+                self.enter_page(Page::MpHost);
+                self.cursor = 1;
+            }
+            Some((false, addr)) => {
+                self.mp_net_addr = addr;
+                self.enter_page(Page::MpNetJoin);
+                self.cursor = 0;
+            }
+            None => {
+                self.enter_page(Page::MpMode);
+                self.cursor = 0;
+            }
         }
     }
 
@@ -6929,6 +7003,7 @@ impl FrontEnd {
                 MpNetState::Dialing => Some("Connecting..."),
                 MpNetState::Refused => Some("Connection refused"),
                 MpNetState::TimedOut => Some("Connection timed out"),
+                MpNetState::Joining => Some("Joining the match in progress..."),
                 _ => err,
             },
             Page::MpLobby => if self.mp_lobby_choices.is_none() { Some("Waiting for the host...") } else { None },
@@ -7759,7 +7834,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                     let shown = if fe.mp_net_addr.is_empty() { "IP:PORT or JOIN CODE" } else { &fe.mp_net_addr };
                     label(&mut h, font, shown, 200.0, y, 240.0, 18.0, if fe.cursor == 0 { bright } else { dim }, true, 1.0);
                     // net-lobby-list: the LAN's lobbies under the address row (▲▼ + ✕ joins).
-                    if fe.mp_net_state != MpNetState::Dialing {
+                    if !matches!(fe.mp_net_state, MpNetState::Dialing | MpNetState::Joining) {
                         if fe.mp_lobby_rows.is_empty() {
                             label(&mut h, font, "Searching the network for games...", 120.0, y + 30.0, 400.0, 14.0, dim, true, 1.0);
                         }
