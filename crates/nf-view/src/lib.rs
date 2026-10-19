@@ -5502,7 +5502,9 @@ mod headless_app_harness {
         // countdown pops state 6 on its first tick [S the documented stand-in], and no
         // state-6 frame is observable between the fe ticks. briefing_plays_live pins the
         // hold itself on a movie-bearing image.
-        let movie_data = crate::movie::Player::start(&iso, 0x0710_0005).is_ok();
+        // movie-sfx-volume: master's start takes the SFX master volume [M 0x116e18]; the
+        // harness has no option file here — the boot default 100 [L 0x30c95c].
+        let movie_data = crate::movie::Player::start(&iso, 0x0710_0005, 100).is_ok();
         #[cfg(feature = "movies")]
         if movie_data {
             // Sister (fails on the pre-a2cdd771 behaviour: state 6 popped on its first
