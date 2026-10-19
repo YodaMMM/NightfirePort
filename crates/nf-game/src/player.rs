@@ -508,13 +508,20 @@ impl Bond {
     /// −0.09999999403953552. The 3e-8 difference is the crouch grounded band: the feet-point ray is
     /// built from the B arm (see the physics_tick comment), so the port's lower B hung the crouch
     /// rest EXACTLY on `Player_FeetOnPoint`'s band edge and the push dither flickered Bond ungrounded
-    /// at every hard-floor crouch rest (probe14_ground.rs, the 07000014 crawl-vent start). The swim
-    /// pair is the same case-3 arm [M 0x194df0 case 3] — a low-slung 0.2-long spine hanging under the
-    /// root, so at the swim equilibrium (root = surface − 0.3) the capsule's top stays ~0.13 under the
-    /// water plane and never touches a pond floor that sits at the surface (the 07000002 garden pond
-    /// [D probe_vent_swim]).
+    /// at every hard-floor crouch rest (probe14_ground.rs, the 07000014 crawl-vent start).
+    ///
+    /// The arms follow the hittest switch's own table [M Player_Collision 0x194df0, second switch
+    /// @0x195070 indexed substate−1, jump table @0x2fc0d0]: the crouch substate 4 alone takes the
+    /// LOW arm (case 3: A = pos + up·(0.1 − (cc − 0.55)), B = pos + up·(0.45 − cc)); the DEFAULT
+    /// arm (A = pos + up·0.275, B = pos + up·(0.55 − cc), r 0.55) covers the walk 0 AND the swim 3
+    /// — the underwater path jumps past the gravity straight into this switch [M disasm
+    /// 0x194f4c-0x194f70]. The swim pair rode the LOW arm pre-fix (the same misread 750a made for
+    /// the swim grab pick): its lowest point sat cc + 0.10 under the root against the game's cc, so
+    /// the pond-bed push-out parked the swimmer ~0.1 high (the 02-pond playtest: 3.60/3.70 settles
+    /// against the PS2's 3.48/3.17 [L]; docs/systems/swim.md). The grab pick's own swim arm is the
+    /// default one [M ladder.rs::capsule_hits_default] — the pair now agrees with it.
     fn capsule(&self) -> (V3, V3) {
-        let (a, b) = if self.substate == SS_SWIM || self.crouched {
+        let (a, b) = if self.crouched {
             (0.1 - (self.cc - 0.55), 0.450_000_02 - self.cc)
         } else {
             (0.275, 0.55 - self.cc)
@@ -2282,6 +2289,35 @@ mod tests {
         let y_at = b.pos[1];
         for _ in 0..30 { b.tick_ctx(&world, &ctx, &Input { jump: true, crouch: true, ..Default::default() }); }
         assert!((b.pos[1] - y_at).abs() < 1e-3, "crouch/jump moved the swimmer (y {} -> {})", y_at, b.pos[1]);
+    }
+
+    /// swim-height-02: the hittest capsule arms follow the switch's own table [M
+    /// `Player_Collision` 0x194df0 second switch @0x195070, indexed substate−1, jump table
+    /// @0x2fc0d0]: the SWIM 3 rides the DEFAULT arm (A = pos + up·0.275, B = pos + up·(0.55 − cc),
+    /// r 0.55 — lowest point exactly cc under the root), and only the crouch substate 4 takes the
+    /// LOW arm (case 3: A = pos + up·(0.1 − (cc − 0.55)), B = pos + up·(0.45 − cc)). Pre-fix the
+    /// port gave the swim the LOW arm, hanging the lowest point cc + 0.10 under the root — the
+    /// pond-bed push-out parked the swimmer ~0.1 high (the 02-pond 3.60/3.70 settles vs the PS2's
+    /// 3.48/3.17 [L]). The grab pick's swim arm is the default one [M ladder.rs
+    /// `capsule_hits_default`] — the pair must agree.
+    #[test]
+    fn swim_capsule_is_the_switch_default_arm_and_crouch_keeps_the_low_arm() {
+        let mut b = Bond::new([0.0, 3.0, 0.0], 0.0);
+        b.substate = SS_SWIM;
+        let (a, c) = b.capsule();
+        assert!((a[1] - 3.275).abs() < 1e-6, "the swim capsule's A rode the wrong arm: {}", a[1]);
+        assert!((c[1] - (3.0 + 0.55 - b.cc)).abs() < 1e-6, "the swim capsule's B rode the wrong arm: {}", c[1]);
+        // Sister: the crouch stance keeps the LOW arm (case 3 [M 0x195070 case 3]).
+        let mut b4 = Bond::new([0.0, 3.0, 0.0], 0.0);
+        b4.crouched = true;
+        let (a4, c4) = b4.capsule();
+        assert!((a4[1] - (3.0 + 0.1 - (b4.cc - 0.55))).abs() < 1e-6, "the crouch A left the LOW arm: {}", a4[1]);
+        assert!((c4[1] - (3.0 + 0.450_000_02 - b4.cc)).abs() < 1e-6, "the crouch B left the LOW arm: {}", c4[1]);
+        // Sister: the LOW arm's lowest point hangs exactly 0.1 deeper than the default's
+        // (cc + 0.10 vs cc) — the pre-fix excess that rode the bed.
+        let low = b4.cc - c4[1] - 0.55;
+        let def = b.cc - c[1] - 0.55;
+        assert!((low - def - 0.1).abs() < 1e-4, "the arm depth gap moved: {low} vs {def}");
     }
 
     /// fix-ladder2: the climb look [M Player_Climb 0x196310 + Player_Update 0x193600 + ViewClamping
