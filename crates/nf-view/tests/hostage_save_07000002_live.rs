@@ -90,6 +90,12 @@ fn killing_the_captor_saves_geisha_1() {
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(0x49),
         "the captor's death saves the geisha: ch 0x49 rises [M 0x1441c0 via 0x15cb78:24-36]");
-    assert!(matches!(sim.drones.list[gi].state, nf_game::drone::state::HOSTAGE_GO_TO_GOAL | nf_game::drone::state::HOSTAGE_IDLE),
-        "the saved geisha leaves in HostageGoToGoalPosition (or cowers) [M 0x15ccf0:24-44]");
+    // 0x15ccf0 case 1 after the save: the 0xd arm is the RESUME branch (+0x5a4 != 0 && +0x135 == 0)
+    // — unreachable here, the geisha's +0x135 = 0x49 [D param 6]. The fresh arm: FindRunToPoint →
+    // none: 0xE HostageHide; some: +0x5a2 = 0xe + state 100/0x64 [M 0x15ccf0:37-44].
+    assert!(matches!(sim.drones.list[gi].state,
+                     nf_game::drone::state::HOSTAGE_GO_TO_GOAL | nf_game::drone::state::HOSTAGE_HIDE),
+        "the saved geisha leaves in HostageGoToGoalPosition or HostageHide 0x0e [M 0x15ccf0:37-44] — \
+         HOSTAGE_IDLE 0x0d is the resume arm's state, never reached with +0x135 = 0x49 (daily-audit 2026-10-17), got {:#x}",
+        sim.drones.list[gi].state);
 }

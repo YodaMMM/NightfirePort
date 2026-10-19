@@ -98,20 +98,51 @@ fn the_tase_enter_screams_and_only_once() {
 
     // Release: the fall wait expires into STUNNED 0x4b [M 0x162b98 case 0xc — the held beam
     // re-arms +30 every tick (case 7), so the wait only runs while released]. Then hold again:
-    // the STUNNED msg 7 re-falls him into TASER [M 0x162eb0 case 7] — the TASER ENTER (and its
-    // scream arm) runs a SECOND time.
+    // STUNNED case 7 re-fells ONLY when the stored fall anim (+0xCD8) is not 0x32 — the Taser
+    // ENTER picks 0x32/0x31 with Rand_Rand(2) [M 0x162b98:44-49]; a 0x32 fall falls through to
+    // case 0x19's re-arm instead [M 0x162eb0:48-60]. Pin BOTH rolls: whatever the port seed
+    // rolled, assert its branch through the held-beam path, then force the other anim (the
+    // port's own +0xCD8 stand-in) and assert the other branch the same way.
     let mut cycled = false;
     for _ in 0..90u32 {
         steer_and_fire(&mut scene, gi, false);
         if scene.sim.as_ref().unwrap().drones.list[gi].state == nf_game::drone::state::STUNNED { cycled = true; break; }
     }
     assert!(cycled, "the released fall wait reached STUNNED [M 0x162b98 case 0xc]");
+    use nf_game::drone::anim_state;
+    let rolled_b = scene.sim.as_ref().unwrap().drones.list[gi].tase_fall_anim == anim_state::TASER_FALL_B;
     let mut re_fell = false;
     for _ in 0..90u32 {
         steer_and_fire(&mut scene, gi, true);
         if scene.sim.as_ref().unwrap().drones.list[gi].state == nf_game::drone::state::TASER { re_fell = true; break; }
     }
-    assert!(re_fell, "the held beam re-fell him from STUNNED [M 0x162eb0 case 7] — the ENTER re-ran");
+    if rolled_b {
+        assert!(!re_fell, "the 0x32 roll must NOT re-fell — case 7 falls through to the 0x19 re-arm [M 0x162eb0:48-60]");
+        assert_eq!(scene.sim.as_ref().unwrap().drones.list[gi].state, nf_game::drone::state::STUNNED,
+            "the held beam keeps him down via the re-arm, not a re-fall [M 0x162eb0 case 0x19]");
+    } else {
+        assert!(re_fell, "the 0x31 roll re-fells under the held beam [M 0x162eb0 case 7] — the ENTER re-ran");
+    }
+    // The other roll, forced (test setup on the port's +0xCD8 field; the outcome rides the same
+    // real held-beam path): back to STUNNED, flip the anim, hold again.
+    if scene.sim.as_ref().unwrap().drones.list[gi].state != nf_game::drone::state::STUNNED {
+        for _ in 0..90u32 {
+            steer_and_fire(&mut scene, gi, false);
+            if scene.sim.as_ref().unwrap().drones.list[gi].state == nf_game::drone::state::STUNNED { break; }
+        }
+    }
+    scene.sim.as_mut().unwrap().drones.list[gi].tase_fall_anim =
+        if rolled_b { anim_state::TASER_FALL_A } else { anim_state::TASER_FALL_B };
+    let mut re_fell2 = false;
+    for _ in 0..90u32 {
+        steer_and_fire(&mut scene, gi, true);
+        if scene.sim.as_ref().unwrap().drones.list[gi].state == nf_game::drone::state::TASER { re_fell2 = true; break; }
+    }
+    if rolled_b {
+        assert!(re_fell2, "the forced 0x31 fall re-fells [M 0x162eb0 case 7]");
+    } else {
+        assert!(!re_fell2, "the forced 0x32 fall does not re-fell [M 0x162eb0:48-60]");
+    }
     // The once-per-life bit holds across the second ENTER (no reset, no second queue — the
     // hurt-scream share [M 0x145e28 + 0x162b98 both gate on +0x4F8 & 8]).
     assert!(scene.sim.as_ref().unwrap().drones.list[gi].screamed,
