@@ -36,7 +36,6 @@ fn face_and_fire(w: &mut Walker, target: V3, label: &str) {
         let clip_empty = sim.gun.clip == 0 && sim.gun.spare > 0;
         let on_target = err.abs() < 0.03 && perr.abs() < 0.035 && t % 16 == 0;
         let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() };
-        
         let reload = clip_empty && t % 20 == 0;
         w.scene.sim.as_mut().unwrap().step_bond(input, on_target && !clip_empty, reload, false);
         w.total_ticks += 1;
@@ -113,12 +112,34 @@ fn a_bullet_opens_the_shoji_ss_and_the_e_key_refuses_it() {
     drop(s);
     // Walk near the shoji and fire at the panel through the real gun path.
     w.walk_nav_to([target[0] + 1.2, target[1], target[2] + 1.2], "beside the shoji", 1.8);
-    face_and_fire(&mut w, [target[0], target[1] + 1.0, target[2]], "the shoji panel");
-    // The shot lands through the real gun path: the SS leaves idle 0x40 [M SS_Operate 0x1a9df8
-    // mask 2 — the bullet operate these placements carry]. No early-out fallback: this asserts.
+    // The SS placement origin sits at the panel's top rail [D: the shoji's posed box spans
+    // y 6.10..8.06 while the placement reads y 8.03] — aim at a point INSIDE the panel, not a
+    // unit above it. The trigger fires one round per press edge (shoot_point's held fire is one
+    // round), so tap on edges while the view converges, and watch the SS states EVERY tick — the
+    // sweep returns to 0x40 at its wrap [M 0x1a9948:119-128; D the shoji's rate 50/75].
+    let aim_at = [target[0], target[1] - 1.0, target[2]];
+    let mut ever_open = false;
+    let mut shots = 0u32;
+    for t in 0..900u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let dx = aim_at[0] - bp[0];
+        let dz = aim_at[2] - bp[2];
+        let dy = aim_at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+        let err = wrap_pi_pub(dx.atan2(dz) - sim.bond.yaw);
+        let want_pitch = (dy / dxz_pub(bp, aim_at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+        let perr = want_pitch - sim.bond.pitch;
+        let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() };
+        let fire = t % 16 == 0;
+        if fire { shots += 1; }
+        w.scene.sim.as_mut().unwrap().step_bond(input, fire, false, false);
+        w.total_ticks += 1;
+        if w.scene.sim.as_ref().unwrap().drones.sss.list.iter().any(|ss| ss.state != 0x40) { ever_open = true; break; }
+    }
+    assert!(shots >= 1, "the trigger fired at least once through the real path");
     let s = w.scene.sim.as_ref().unwrap();
     assert!(
-        s.drones.sss.list.iter().any(|ss| ss.state != 0x40),
+        ever_open,
         "the bullet operates the shoji SS (state leaves 0x40) [M SS_Operate 0x1a9df8 mask 2]"
     );
     // The placements' operate rule stands too: every 07000001 SS takes bullets, never walk/E-use.
@@ -312,7 +333,10 @@ fn e_use_on_the_monitor_takes_the_camera_feed() {
         assert_eq!(s.drones.monitors.list[0].state, 0, "idle until used [M 0x1b0058]");
     }
     let mpos = w.scene.sim.as_ref().unwrap().drones.monitors.list[0].pos;
-    w.walk_nav_to([mpos[0], mpos[1] - 1.0, mpos[2] + 1.2], "in front of the tv", 1.2);
+    // The E reach is 2.2 from the head [M the use-sphere rule]; standing 1.2 + 1.0 down put the
+    // head 2.39 from the monitor — step to 0.7 so the pick reaches (the floor holds Bond at
+    // 6.47; the monitor reads y 6.84).
+    w.walk_nav_to([mpos[0], mpos[1] - 1.0, mpos[2] + 0.7], "in front of the tv", 1.2);
     let (mx, my, mz) = (mpos[0], mpos[1], mpos[2]);
     // Face the console and pulse E (the walker's use rule: one edge per 6 ticks).
     for t in 0..120u32 {
