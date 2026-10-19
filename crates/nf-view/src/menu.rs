@@ -2147,6 +2147,10 @@ pub struct FrontEnd {
     /// the host must write the option file (crates/nf-view/src/settings.rs). The model stays pure;
     /// the host drains the flag in `menu_after` (the same split as `secret.pending_submit`).
     pub settings_save_pending: bool,
+    /// net-desync-detail: the desync report line to show on the online fail box (the diagnosis +
+    /// the report zip's path); set from `App::desync_report` when the exchange completes. The
+    /// draw code reads [`FrontEnd::desync_report`].
+    pub desync_report: Option<String>,
     /// The codename the "Edit <name>" wheel edits ("Default" for the default profile) [L PCSX2 m30 "Edit Default"].
     pub cn_name: String,
     /// The results page's fields, built by `results_enter` (P_NFRESULTS case 0x4c). None until
@@ -2541,6 +2545,17 @@ impl ProfileSession {
 }
 
 impl FrontEnd {
+    /// net-desync-detail: the fail box's desync line (the diagnosis + the report zip's path) —
+    /// set from `App::desync_report` when the exchange completes; the draw code reads it back.
+    pub fn set_desync_report(&mut self, line: String) {
+        self.desync_report = Some(line);
+    }
+
+    /// net-desync-detail: the desync report line this machine shows on the online fail box.
+    pub fn desync_report(&self) -> Option<&str> {
+        self.desync_report.as_deref()
+    }
+
     pub fn new() -> Self {
         let flow = GameFlow::boot();
         let page = Page::from_id(flow.page).unwrap_or(Page::Start);
@@ -2571,6 +2586,7 @@ impl FrontEnd {
             opts: default_opts(),
             opts_saved: None,
             settings_save_pending: false,
+            desync_report: None,
             cn_name: String::new(),
             // codename-entry (each on its own line [WORKLOG lesson 4]).
             cn_typed: String::new(),

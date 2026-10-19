@@ -3,16 +3,18 @@
 //!
 //! A release build carries its version (`NF_RELEASE_VERSION`, baked in by the release build — `tools/release`); a dev
 //! build carries none and never updates. On start the launcher asks GitHub for the repository's latest release
-//! (`releases/latest`); when its tag is newer it downloads the release's Windows zip and the `.sha256` beside it,
-//! checks the digest ([`nf_formats::sha256`] — a corruption/truncation check; both files come over HTTPS from the
-//! same release), unpacks the zip into a staging folder and swaps the files in. Windows lets a running program be
-//! renamed but not overwritten, so each replaced file is first renamed to `<name>.old` (deleted on the next start),
-//! then the new launcher is started and this one exits. Any failure (offline, GitHub down, no write access to the
-//! folder) leaves the installed version untouched and the game playable.
+//! (`releases/latest`); when its tag is newer it downloads the release's `NightfirePort.exe` and the `.sha256` beside
+//! it (the user, 2026-10-19: a release is just the exe — no zip), checks the digest ([`nf_formats::sha256`] — a
+//! corruption/truncation check; both files come over HTTPS from the same release) and swaps the exe in. Windows lets
+//! a running program be renamed but not overwritten, so the running exe is first renamed to `<name>.old` (deleted on
+//! the next start), then the new one is started and this one exits. Any failure (offline, GitHub down, no write
+//! access to the folder) leaves the installed version untouched and the game playable.
 //!
-//! No new crates: the transfers use the system `curl.exe` and the zip the system `tar.exe` (bsdtar), both part of
-//! Windows 10 1803+ and Windows 11. `NF_UPDATE_API` overrides the release query URL (tests point it at a local
-//! `file://` JSON).
+//! v0.1.0–v0.1.2 launchers only knew a `-windows.zip` asset, so the bridge release v0.1.3 also carries one (holding
+//! just the exe) that moves them onto this updater.
+//!
+//! No new crates: the transfers use the system `curl.exe` (Windows 10 1803+ and Windows 11). `NF_UPDATE_API`
+//! overrides the release query URL (tests point it at a local `file://` JSON).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -38,9 +40,12 @@ pub fn display_version() -> String {
 pub struct Release {
     pub tag: String,
     pub version: (u32, u32, u32),
-    pub zip_url: String,
+    pub exe_url: String,
     pub sha_url: String,
 }
+
+/// The release asset's file name.
+pub const ASSET: &str = "NightfirePort.exe";
 
 /// `v1.2.3` / `1.2.3` → (1, 2, 3).
 pub fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
@@ -77,14 +82,14 @@ fn json_strings(json: &str, key: &str) -> Vec<String> {
     out
 }
 
-/// Reads the `releases/latest` answer: the tag, and the Windows zip + its `.sha256` among the assets.
+/// Reads the `releases/latest` answer: the tag, and `NightfirePort.exe` + its `.sha256` among the assets.
 pub fn parse_latest(json: &str) -> Option<Release> {
     let tag = json_strings(json, "tag_name").into_iter().next()?;
     let version = parse_version(&tag)?;
     let urls = json_strings(json, "browser_download_url");
-    let zip_url = urls.iter().find(|u| u.ends_with("-windows.zip"))?.clone();
-    let sha_url = urls.iter().find(|u| u.ends_with("-windows.zip.sha256"))?.clone();
-    Some(Release { tag, version, zip_url, sha_url })
+    let exe_url = urls.iter().find(|u| u.ends_with(&format!("/{ASSET}")))?.clone();
+    let sha_url = urls.iter().find(|u| u.ends_with(&format!("/{ASSET}.sha256")))?.clone();
+    Some(Release { tag, version, exe_url, sha_url })
 }
 
 /// The first 64-hex-digit word of a `.sha256` file (`<hex>  <name>` or just the hex).
@@ -136,25 +141,27 @@ pub fn check() -> Result<Option<Release>, String> {
     Ok((rel.version > cur).then_some(rel))
 }
 
-/// Downloads, verifies and unpacks `rel` into a fresh staging folder; returns it.
+/// The running exe's file name (the player may have renamed it; the update keeps their name).
+fn own_name() -> std::ffi::OsString {
+    std::env::current_exe().ok().and_then(|p| p.file_name().map(|n| n.to_owned())).unwrap_or_else(|| ASSET.into())
+}
+
+/// Downloads and verifies `rel`'s exe into a fresh staging folder (under the running exe's own name); returns it.
 pub fn download(rel: &Release) -> Result<PathBuf, String> {
     let dir = work_dir();
     let stage = dir.join(format!("stage-{}", rel.tag));
     let _ = std::fs::remove_dir_all(&stage);
     std::fs::create_dir_all(&stage).map_err(|e| format!("temp folder: {e}"))?;
-    let zip = dir.join(format!("{}.zip", rel.tag));
-    let sha = dir.join(format!("{}.zip.sha256", rel.tag));
+    let exe = stage.join(own_name());
+    let sha = dir.join(format!("{}.sha256", rel.tag));
     fetch(&rel.sha_url, &sha, 60)?;
-    fetch(&rel.zip_url, &zip, 900)?;
+    fetch(&rel.exe_url, &exe, 900)?;
     let want = std::fs::read_to_string(&sha).ok().as_deref().and_then(parse_sha_file).ok_or("the release's checksum file is unreadable")?;
-    let bytes = std::fs::read(&zip).map_err(|e| format!("downloaded zip: {e}"))?;
+    let bytes = std::fs::read(&exe).map_err(|e| format!("downloaded exe: {e}"))?;
     let got = nf_formats::sha256::hex(&nf_formats::sha256::digest(&bytes));
-    if got != want { return Err(format!("the download is damaged (checksum {got}, expected {want})")); }
-    let o = quiet(Command::new(system_tool("tar.exe")).arg("-xf").arg(&zip).arg("-C").arg(&stage)).output()
-        .map_err(|e| format!("couldn't run tar: {e}"))?;
-    if !o.status.success() { return Err(format!("unpacking failed: {}", String::from_utf8_lossy(&o.stderr).trim())); }
-    if !stage.join(if cfg!(windows) { "NightfirePort.exe" } else { "NightfirePort" }).exists() {
-        return Err("the release zip has no launcher in it".into());
+    if got != want {
+        let _ = std::fs::remove_dir_all(&stage);
+        return Err(format!("the download is damaged (checksum {got}, expected {want})"));
     }
     Ok(stage)
 }
@@ -207,10 +214,32 @@ pub fn install(stage: &Path, dest: &Path) -> Result<(), String> {
     result
 }
 
-/// Deletes the `.old` files a previous update left beside the launcher (they were still running then).
+/// The files an update can have renamed to `.old`: this exe (under its own name) and what the zip releases
+/// (v0.1.0–v0.1.3) held.
+const ZIP_ERA_FILES: [&str; 5] = ["NightfirePort.exe", "NightfirePort-game.exe", "README.txt", "THIRD_PARTY_NOTICES.txt", "THIRD_PARTY_RERAC_LICENSE.txt"];
+
+/// Deletes the `.old` files a previous update left beside the launcher (they were still running then). Only those
+/// exact names: a lone exe may sit in Downloads or on the desktop, beside the player's own files.
 pub fn cleanup_old(dir: &Path) {
-    for rel in files_under(dir) {
-        if rel.extension().is_some_and(|e| e == "old") { let _ = std::fs::remove_file(dir.join(rel)); }
+    let own = own_name();
+    for name in ZIP_ERA_FILES.iter().map(std::ffi::OsString::from).chain(std::iter::once(own)) {
+        let _ = std::fs::remove_file(old_name(&dir.join(name)));
+    }
+}
+
+/// The licence notices baked into this exe (build.rs), plus the in-tree rerac code's notice.
+pub const NOTICES: &str = include_str!(concat!(env!("OUT_DIR"), "/notices.txt"));
+const RERAC_NOTICE: &str = include_str!("../../../../THIRD_PARTY_RERAC_LICENSE.txt");
+
+/// Writes the licence notices to `<config dir>/THIRD_PARTY_NOTICES.txt` (a release is just the exe; the notices
+/// travel inside it). Rewritten only when they changed.
+pub fn write_notices() {
+    let Some(dir) = crate::settings::config_dir() else { return };
+    let text = format!("{NOTICES}\n\n==== rerac (in-tree code) ====\n\n{RERAC_NOTICE}");
+    let path = dir.join("THIRD_PARTY_NOTICES.txt");
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(&path, text);
     }
 }
 
@@ -223,8 +252,11 @@ pub fn install_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    // The bridge release's shape: the exe + its sha, and the old launchers' zip + sha.
     const LATEST: &str = r#"{"url":"https://api.github.com/repos/YodaMMM/NightfirePort/releases/1","tag_name":"v0.1.12","name":"NightfirePort 0.1.12",
         "assets":[{"name":"NightfirePort-v0.1.12-windows.zip.sha256","browser_download_url":"https:\/\/github.com\/YodaMMM\/NightfirePort\/releases\/download\/v0.1.12\/NightfirePort-v0.1.12-windows.zip.sha256"},
+                  {"name":"NightfirePort.exe.sha256","browser_download_url":"https:\/\/github.com\/YodaMMM\/NightfirePort\/releases\/download\/v0.1.12\/NightfirePort.exe.sha256"},
+                  {"name":"NightfirePort.exe","browser_download_url":"https://github.com/YodaMMM/NightfirePort/releases/download/v0.1.12/NightfirePort.exe"},
                   {"name":"NightfirePort-v0.1.12-windows.zip","browser_download_url":"https://github.com/YodaMMM/NightfirePort/releases/download/v0.1.12/NightfirePort-v0.1.12-windows.zip"}]}"#;
 
     #[test]
@@ -232,10 +264,11 @@ mod tests {
         let r = parse_latest(LATEST).expect("parses");
         assert_eq!(r.tag, "v0.1.12");
         assert_eq!(r.version, (0, 1, 12));
-        assert!(r.zip_url.ends_with("/v0.1.12/NightfirePort-v0.1.12-windows.zip"), "{}", r.zip_url);
-        assert!(r.sha_url.ends_with("-windows.zip.sha256") && r.sha_url.starts_with("https://github.com/YodaMMM/"), "{}", r.sha_url);
-        // Sister: a release without the Windows zip is not an update.
+        assert!(r.exe_url.ends_with("/v0.1.12/NightfirePort.exe"), "{}", r.exe_url);
+        assert!(r.sha_url.ends_with("/v0.1.12/NightfirePort.exe.sha256") && r.sha_url.starts_with("https://github.com/YodaMMM/"), "{}", r.sha_url);
+        // Sister: a release without the exe is not an update (an old zip-only release included).
         assert!(parse_latest(r#"{"tag_name":"v0.2.0","assets":[]}"#).is_none());
+        assert!(parse_latest(r#"{"tag_name":"v0.2.0","assets":[{"browser_download_url":"https://x/NightfirePort-v0.2.0-windows.zip"},{"browser_download_url":"https://x/NightfirePort-v0.2.0-windows.zip.sha256"}]}"#).is_none());
     }
 
     #[test]
@@ -264,14 +297,22 @@ mod tests {
         std::fs::create_dir_all(&stage).unwrap();
         std::fs::create_dir_all(&dest).unwrap();
         std::fs::write(stage.join("NightfirePort.exe"), b"new launcher").unwrap();
-        std::fs::write(stage.join("nf-view.exe"), b"new game").unwrap();
         std::fs::write(dest.join("NightfirePort.exe"), b"old launcher").unwrap();
+        std::fs::write(dest.join("README.txt"), b"zip-era readme").unwrap();
+        std::fs::write(dest.join("README.txt.old"), b"zip-era leftover").unwrap();
+        // The player's own files beside a lone exe (e.g. Downloads) are never touched.
+        std::fs::write(dest.join("backup.old"), b"player's file").unwrap();
+        std::fs::create_dir_all(dest.join("sub")).unwrap();
+        std::fs::write(dest.join("sub").join("NightfirePort.exe.old"), b"player's file").unwrap();
         install(&stage, &dest).unwrap();
         assert_eq!(std::fs::read(dest.join("NightfirePort.exe")).unwrap(), b"new launcher");
-        assert_eq!(std::fs::read(dest.join("nf-view.exe")).unwrap(), b"new game");
         assert_eq!(std::fs::read(dest.join("NightfirePort.exe.old")).unwrap(), b"old launcher");
         cleanup_old(&dest);
         assert!(!dest.join("NightfirePort.exe.old").exists());
+        assert!(!dest.join("README.txt.old").exists());
+        assert!(dest.join("README.txt").exists(), "only .old files go");
+        assert!(dest.join("backup.old").exists() && dest.join("sub").join("NightfirePort.exe.old").exists(),
+            "sister: other .old files and subfolders are left alone");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

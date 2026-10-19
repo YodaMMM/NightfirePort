@@ -30,6 +30,10 @@ use nf_net::{MatchSettings, UdpTransport, MAX_AGENTS};
 
 use crate::menu::{MpNetAgent, MpNetChoices, MpNetError, MpNetLink};
 
+/// net-desync-detail: the component count `PT_HASHCOMPS` carries (the app's fold pins it —
+/// `crate::scene::NET_HASH_COMPONENTS`).
+pub const HASH_COMPONENTS: usize = nf_net::proto::HASH_COMPONENTS;
+
 // ── conversions ──────────────────────────────────────────────────────────────
 
 /// `MpSettings` → the wire's `MatchSettings` (field mapping documented in
@@ -196,7 +200,9 @@ impl MpNetChoices {
     }
 }
 
-fn encode_match_start(m: &MatchSettings, seed: u32) -> Vec<u8> {
+/// net-desync-detail (public: the desync report's `match-settings.bin` is this payload): the
+/// tag-1 match-start payload — the 208-byte MatchSettings + the seed.
+pub fn encode_match_start(m: &MatchSettings, seed: u32) -> Vec<u8> {
     let mut o = vec![1u8];
     let mut buf = [0u8; nf_net::settings::SETTINGS_WIRE_SIZE];
     m.encode(&mut buf);
@@ -205,7 +211,9 @@ fn encode_match_start(m: &MatchSettings, seed: u32) -> Vec<u8> {
     o
 }
 
-fn decode_match_start(b: &[u8]) -> Option<(MatchSettings, u32)> {
+/// net-desync-detail (public: `--bug-replay` of a desync report rebuilds the match from this
+/// payload): decodes the tag-1 match-start payload — the MatchSettings + the seed.
+pub fn decode_match_start(b: &[u8]) -> Option<(MatchSettings, u32)> {
     if b.len() < 1 + nf_net::settings::SETTINGS_WIRE_SIZE + 4 || b[0] != 1 {
         return None;
     }
@@ -235,6 +243,12 @@ pub enum CoreEvent {
     /// inside the 60 s window, an unserved request, an unanswered watch) — the
     /// app shows the pre-resync box and returns to the lobby.
     DesyncFatal { tick: u32 },
+    /// net-desync-detail: the peer's component hashes for the desync tick arrived
+    /// (`PT_HASHCOMPS`) — the desync watcher pairs them with our own.
+    HashComps { tick: u32, comps: [u64; HASH_COMPONENTS] },
+    /// net-desync-detail: the peer's per-item breakdown of `component` for the desync tick
+    /// arrived (`PT_HASHDETAIL`) — completes the report's slot diagnosis.
+    HashDetail { tick: u32, component: u8, items: Vec<u64> },
     /// Client: the host went silent past the timeout.
     HostTimeout,
     /// Client: the host LEFT (quit the match / closed the lobby) — at once,
@@ -626,6 +640,12 @@ impl NetCore {
                 Event::DesyncFatal { tick } => {
                     self.events.push(CoreEvent::DesyncFatal { tick });
                 }
+                Event::HashComps { tick, comps } => {
+                    self.events.push(CoreEvent::HashComps { tick, comps });
+                }
+                Event::HashDetail { tick, component, items } => {
+                    self.events.push(CoreEvent::HashDetail { tick, component, items });
+                }
                 Event::Data { bytes, .. } => {
                     match bytes.first() {
                         Some(0) => {
@@ -821,18 +841,46 @@ impl NetCore {
         self.sess.delay_schedule().to_vec()
     }
 
+    /// net-desync-detail: the recorded run transcript — the base tick and the per-tick rows
+    /// since the match start (the desync report's `match-log.bin` holds a copy).
+    pub fn run_log(&self) -> (u32, Vec<[nf_net::Input; MAX_AGENTS]>) {
+        let (base, log) = self.sess.run_log();
+        (base, log.to_vec())
+    }
+
     /// The input delay in force at `tick`.
     pub fn delay_at(&self, tick: u32) -> u32 {
         self.sess.delay_at(tick)
+    }
+
+    /// net-desync-detail: the hash-exchange cadence (the watcher's detail rows ride it).
+    pub fn hash_every(&self) -> u32 {
+        self.sess.hash_every()
     }
 
     pub fn submit_hash(&mut self, tick: u32, hash: u64) {
         self.sess.submit_hash(tick, hash);
     }
 
+    /// net-desync-detail: send our component hashes for the desync tick (the watcher's first
+    /// exchange packet).
+    pub fn send_hash_comps(&mut self, tick: u32, comps: [u64; HASH_COMPONENTS]) {
+        if !self.closed {
+            self.sess.send_hash_comps(tick, comps);
+        }
+    }
+
+    /// net-desync-detail: send the first diverging component's per-item hashes.
+    pub fn send_hash_detail(&mut self, tick: u32, component: u8, items: Vec<u64>) {
+        if !self.closed {
+            self.sess.send_hash_detail(tick, component, items);
+        }
+    }
+
     /// Host: record the per-tick inputs a tick ran with (the late-join
     /// transcript; the app calls it right after `ready_inputs` returned
-    /// `Some`). Host-only — clients ignore it.
+    /// `Some`). Since net-desync-detail every machine records (the desync
+    /// report's match-log.bin is this log at rest).
     pub fn record_run_tick(&mut self, tick: u32, inputs: [nf_net::Input; MAX_AGENTS]) {
         self.sess.record_run_tick(tick, inputs);
     }
