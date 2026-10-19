@@ -1017,6 +1017,9 @@ pub struct BotVars {
     pub opponent: Option<usize>, // Drone+0x170 (index into ctx.others)
     pub sighted: u32,            // Drone+0x228 (bit 2 = opponent visible)
     pub unseen_ticks: u32,       // Drone+0x274 (ticks since the last LOS tick)
+    /// Drone+0x270 — the seen-arm counter `ProcessDroneSight` increments while the vision chain
+    /// holds, `HaveOpponentSight` gates the bit-2 ack on [M 0x175ef0:41-44].
+    pub seen_ticks: u32,
     pub sight_stamp: f32,        // Drone+0x238 (last-sight stamp; heartbeat's 5 s latch)
     pub combat_range: [f32; 3],  // Drone+0xEC/0xF0/0xFC (too-close / engage / too-far)
     pub fire_latch: u8,          // Drone+0x3B
@@ -1070,6 +1073,7 @@ impl Default for BotVars {
             opponent: None,
             sighted: 0,
             unseen_ticks: u32::MAX,
+            seen_ticks: 0,
             sight_stamp: f32::NEG_INFINITY,
             combat_range: [2.0, 20.0, 40.0],
             fire_latch: 0,
@@ -1297,12 +1301,45 @@ impl BotBrain {
         }
     }
 
+    /// `DroneVision_OpponentVisibility` 0x175af0 with the bots' constants: sight 24.0 (the
+    /// drones' default-case +0xE8 = 0x41c00000 [M 0x14b300:386]; the bots' own arm is not
+    /// confirmed — [S], the same constant `find_opponent` squares), half-FOV π/2 [M 0x14b300
+    /// LAB_0014bb44], alertness 0 (the bots never raise +0x50c in the port) and light 1.0
+    /// ([S] the bots run no AI-volume factor). The ≥ 0.7 score is `SeekOpponentLOS` 0x175cb8's
+    /// gate before its raycast.
+    fn opponent_visibility(&self, t: &OtherPlayer) -> f32 {
+        let dx = t.pos[0] - self.pos[0];
+        let dy = t.pos[1] - self.pos[1];
+        let dz = t.pos[2] - self.pos[2];
+        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+        if dist < 2.0 {
+            return 1.0;
+        }
+        let r = 24.0f32; // sight × (2·alertness + 1), alertness 0
+        let mut vis = 0.7 - (dist - r) / r;
+        let yaw_to_opp = crate::trig::atan2_approx(dx, dz);
+        let margin = crate::trig::HALF_PI + 0.392_699_1 - crate::trig::angle_difference(self.yaw, yaw_to_opp).abs();
+        if margin < 0.0 {
+            return 0.0;
+        }
+        vis *= crate::trig::sinf(margin / crate::trig::HALF_PI * crate::trig::HALF_PI);
+        vis.max(0.0)
+    }
+
     /// One drone-control tick [M 0x1490f0:81 + 0x171df8:78-86,119-203]: heartbeat to 0xC5, msg 3
     /// to the current state, the firing pipeline, then the pending commit (0x2E + ENTER).
     pub fn step(&mut self, ctx: &BotCtx, rng: &mut Rng, weapon_fire: bool) {
         self.tick += 1;
         // 0. the perception pass [M 0x1490f0:164-167 — setOtherPlayerInfo then FindOpponent]:
-        // the LOS/sight bookkeeping (the port's `CanSeeObject` = the collision-world segment)
+        // the LOS/sight bookkeeping (the port's `CanSeeObject` = the collision-world segment).
+        // The bit-2 sight the heartbeat's react and the combat states read is the DRONE vision
+        // chain's ack, not a bare segment: `DroneVision_OpponentVisibility` 0x175af0 scores the
+        // cone + range band (≥ 0.7 before any raycast — `SeekOpponentSight` 0x175cb8), and
+        // `HaveOpponentSight` 0x175ef0 sets +0x228 bit 2 only once the seen counter (+0x270)
+        // passes `DroneFunc_ReactionTime` 0x14ac60 (10 ticks off the five SP levels; MP
+        // 0x07000023 lands in the default arm). Without the cone a goal-running bot "saw" the
+        // opponent it was walking AWAY from (the segment ignores facing), the heartbeat reacted
+        // every tick, and a carrier could never break contact to deliver (bot-weapons-finish-2).
         self.vars.sighted &= !4;
         if let Some(o) = self.vars.opponent {
             if let Some(t) = ctx.others.get(o) {
@@ -1312,15 +1349,20 @@ impl BotBrain {
                     // below whom no round could reach, and the pair stood firing into the lip
                     // all match instead of running the route round [S the CanSeeObject stand-in].
                     let clear = ctx.world.segment_clear(self.pos, [t.pos[0], t.pos[1] - 0.3, t.pos[2]]);
-                    if clear {
-                        self.vars.sighted |= 4; // Drone+0x228 bit 2 [M]
+                    if clear && self.opponent_visibility(t) >= 0.7 {
+                        self.vars.seen_ticks = self.vars.seen_ticks.saturating_add(1); // +0x270 [M 0x176a28 seen arm]
                         self.vars.unseen_ticks = 0; // Drone+0x274
-                        // the brain's canonical clock: its own tick counter (60 Hz), NOT the
-                        // driver-supplied ctx.now — a lockstep host's wall-clock accumulation
-                        // must not reach sim state (net-lockstep finding F4). next_bullet_at is
-                        // already tick-derived; this aligns every time read with it.
-                        self.vars.sight_stamp = self.tick as f32 / 60.0; // Drone+0x238
+                        if self.vars.seen_ticks >= 10 {
+                            // HaveOpponentSight's ack [M 0x175ef0:41-67 — bit 2 + the +0x238 stamp]
+                            self.vars.sighted |= 4; // Drone+0x228 bit 2 [M]
+                            // the brain's canonical clock: its own tick counter (60 Hz), NOT the
+                            // driver-supplied ctx.now — a lockstep host's wall-clock accumulation
+                            // must not reach sim state (net-lockstep finding F4). next_bullet_at is
+                            // already tick-derived; this aligns every time read with it.
+                            self.vars.sight_stamp = self.tick as f32 / 60.0; // Drone+0x238
+                        }
                     } else {
+                        self.vars.seen_ticks = 0; // the lost arm zeroes +0x270 [M 0x176a28]
                         self.vars.unseen_ticks = self.vars.unseen_ticks.saturating_add(1);
                     }
                 }
@@ -1444,6 +1486,7 @@ impl BotBrain {
         }
         h.u32(v.sighted);
         h.u32(v.unseen_ticks);
+        h.u32(v.seen_ticks);
         h.f32(v.sight_stamp);
         h.f32_slice(&v.combat_range);
         h.u8(v.fire_latch);
@@ -2228,10 +2271,45 @@ impl BotBrain {
     /// health > 0]; the full score/history selection is not lifted — [S], see the report).
     /// Team reads are `MP_getObjectTeam` (0x18b6c0).
     pub fn find_opponent(&mut self, ctx: &BotCtx) {
-        // keep the current opponent while it lives and is not (now) a team-mate (Assassination's
-        // roles move between deaths)
-        if self.vars.opponent.is_some_and(|i| ctx.others.get(i).is_some_and(|o| o.alive && o.flags & 8 == 0)) {
-            return;
+        // The hold [M 0x1424e0:355-365]: the current opponent survives only while it is valid
+        // (alive, not a team-mate in the Assassination role shuffle) and the unseen counter is
+        // within FRAME_RATE × aggression_mul × 20 — `BOT_getAggressionMul` 0x126468 (0.3..1.0
+        // by the aggression byte, × up to 3 inside 2.5u) — then it clears and the scan re-picks.
+        // Holding until death kept a carrier chasing an enemy that had broken line of sight
+        // instead of resuming the objective (bot-weapons-finish-2).
+        if let Some(i) = self.vars.opponent {
+            // The validity arm is class-gated [M 0x1424e0:357-365]: class 1 clears outright,
+            // class 2 (a drone) runs the alive/enabled check, any OTHER class (the demolition/
+            // protection site pseudo-opponent) skips it. The port's site opponent (index
+            // OBJ_ROW and above, not a ctx.others row) is that other class, and the perception
+            // pass never ticks +0x274 for it — the port keeps it for the goal's lifetime (the
+            // attackers shoot the standing site; bot-weapons-finish-2's hold regressed
+            // demolition/protection and the site-ack chain needs its own task).
+            if i >= OBJ_ROW {
+                return;
+            }
+            let (valid, dist) = if i < OBJ_ROW {
+                let o = ctx.others.get(i);
+                (o.is_some_and(|o| o.alive && o.flags & 8 == 0), o.map(|o| o.dist2.sqrt()))
+            } else {
+                (true, None)
+            };
+            let mut mul = match self.vars.aggression {
+                0 => 0.3,
+                1 => 0.5,
+                2 => 0.7,
+                3 => 0.85,
+                _ => 1.0,
+            };
+            if let Some(d) = dist {
+                if d < 2.5 {
+                    mul = (mul * ((2.5 - d) + 1.0)).min(3.0); // [M 0x126468:22-30]
+                }
+            }
+            let hold = (mul * 20.0) as u32; // FRAME_RATE is 1 at the fixed 60 Hz
+            if !valid || self.vars.unseen_ticks > hold {
+                self.vars.opponent = None; // NDrone2_SetOpponent(0) [M 0x1424e0 LAB_0014277c]
+            }
         }
         let mut best: Option<(usize, f32)> = None;
         for o in ctx.others {
@@ -2270,15 +2348,31 @@ impl BotBrain {
             }
             if ctx.lazy_sight {
                 // mp-perf-16: only a candidate that would take the pick pays for its sight line —
-                // the same answer as the precomputed bit2, without the per-pair segments.
+                // the same answer as the precomputed bit2, without the per-pair segments. The
+                // candidate cone is the scan's own hard ±half-FOV test above [M 0x1424e0's
+                // replacement arm re-tests the pick against ±(+0xE4·57.3)° before keeping it];
+                // the vis ≥ 0.7 score gates the perception's ack, not the scan's pick.
                 let chest = [o.pos[0], o.pos[1] - 0.4, o.pos[2]];
                 let seen = o.flags & 0x6 == 0x6 || ctx.world.segment_bullet_clear(self.pos, chest);
                 if !seen { continue; }
             }
             best = Some((o.index, d));
         }
-        self.vars.opponent = best.map(|(i, _)| i);
-        if self.vars.opponent.is_none() {
+        // The pick: the port overwrites the held opponent with this tick's scan result — the
+        // game's hold (the block above) bounds a held opponent to ~aggression×20 unseen frames
+        // anyway, so the port's stricter re-acquire lands within the same window [*S* port
+        // choice: the decompile's scan-miss keeps the held opponent (0x1424e0's tail returns
+        // without SetOpponent(0)), but the game's vision-chain re-acquire gates make the
+        // effective lifetime near-identical; the overwrite ends the chases the moment the
+        // segment check fails, which the carriers' delivery windows need]. A miss still runs
+        // the tail's site arm — its own gate is `site != +0x170`, not "no opponent" [M
+        // 0x1424e0:541].
+        if let Some((i, _)) = best {
+            if self.vars.opponent != Some(i) && i >= OBJ_ROW {
+                self.vars.unseen_ticks = 0; // the site pick starts its hold fresh
+            }
+            self.vars.opponent = Some(i);
+        } else {
             self.find_site_opponent(ctx);
         }
     }
@@ -2290,6 +2384,9 @@ impl BotBrain {
     /// (`MP_sendBotMessage(.., 0x3b, 1, 0)` → `setGoalComplete(1)`) [M]. The cone half-angle
     /// (`Drone+0xE4`) is not lifted — 90° [S]; the sight is the driver's seen bit on the row.
     fn find_site_opponent(&mut self, ctx: &BotCtx) {
+        if self.vars.opponent.is_some_and(|i| i >= OBJ_ROW) {
+            return; // the site is already the opponent [M 0x1424e0:541 `iVar7 != +0x170`]
+        }
         let Some(ob) = ctx.objectives else { return };
         let Some(site) = ob.site else { return };
         let team = ob.teams.get(ctx.my_index).copied().unwrap_or(ctx.my_team);
@@ -2840,7 +2937,10 @@ impl BotBrain {
         self.body.yaw = byaw;
         self.pos = [self.body.pos[0], self.body.pos[1] + crate::player::EYE, self.body.pos[2]];
         // The stuck watch: every 45 ticks of wanting to walk, under 0.4 covered → one jump and a
-        // re-plan; three in a row tell the walker's caller to give the goal up [S].
+        // re-plan; three in a row tell the walker's caller to give the goal up [S]. The xz
+        // measure false-triggers on stair climbs (bot-weapons-finish-2) — the jump+re-plan it
+        // drives is kept: the jump is the wedge escape that un-wedges the carriers at the
+        // stairwell mouths.
         if want.is_some_and(|w| w.1 > 0.3) && !ctx.stationary {
             if self.tick.wrapping_sub(self.stuck_ref.1) >= 45 {
                 let r = self.root();
