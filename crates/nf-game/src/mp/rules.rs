@@ -162,6 +162,14 @@ impl MpMatch {
             self.game.slots[victim].score -= 1.0; // the lives copy [M :96-98]
         }
         self.game.slots[victim].dead = true; // the port's obj+0xF4 ∈ {2,3} stand-in
+        // The kill message to the last shooter when that is not the victim [M :100-107]. The
+        // port's credited killer stands in for the `+0x20` last-shooter word: the port registers
+        // only some hits through `register_bullet_hit` (bot-vs-bot rounds do not), so the word
+        // can be stale where the game's never is [S].
+        if let Some(k) = killer.filter(|&k| k != victim && k < super::MP_MAX_SLOTS) {
+            if self.kill_msgs.len() >= 64 { self.kill_msgs.remove(0); }
+            self.kill_msgs.push((k, victim));
+        }
         let mut delta = 0.0f32;
         if let Some(k) = killer {
             if k == victim {

@@ -1043,7 +1043,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     phase_mark("07 scene build (Scene::build)", t); t = std::time::Instant::now();
     // The MP radar's textures (hud::MP_TEXTURES) — MP scenes only: the SP pane list has no radar.
     if mp {
-        for h in hud::MP_TEXTURES {
+        for h in hud::MP_TEXTURES.into_iter().chain([hud::HEADER_FONT_TEX]) {
             if scene.hud_textures.iter().any(|(k, _)| *k == h) { continue; }
             if let Some(img) = level.maps.iter().enumerate().find_map(|(mi, m)| m.textures.iter().find(|t| t.hashcode == h).map(|t| scene::TextureImage::from_texture(mi, t))) {
                 scene.hud_textures.push((h, img));
@@ -1248,8 +1248,25 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                 if let Some(n) = std::env::var("NF_MP_BOTS").ok().and_then(|v| v.parse::<u32>().ok()) {
                     settings.bot_count = n.min(nf_game::mp::MP_MAX_SLOTS as u32 - settings.human_count.max(1) as u32);
                 }
+                // mp-hud-real render aids: NF_MP_SCENARIO=<hex scenario word> (e.g. 20000002 Team
+                // Arena; `MpMatch::init` derives the team/bit30 flags from it) and
+                // NF_MP_TIME=<seconds> (the time limit — the PCSX2 comparison's 600).
+                if let Some(sc) = std::env::var("NF_MP_SCENARIO").ok().and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()) {
+                    settings.scenario = sc;
+                    settings.gametype_mask = sc;
+                }
+                if let Some(t) = std::env::var("NF_MP_TIME").ok().and_then(|v| v.parse::<i32>().ok()) {
+                    settings.time_limit = t;
+                }
             }
             let mut m = nf_game::mp::MpMatch::init(settings);
+            // Render aid (mp-hud-real): NF_MP_KILLMSG=<victim slot> queues the kill message the
+            // local player gets for that victim (the MP info pane's draw, headless).
+            if local_default {
+                if let Some(v) = std::env::var("NF_MP_KILLMSG").ok().and_then(|v| v.parse::<usize>().ok()) {
+                    m.kill_msgs.push((0, v.min(nf_game::mp::MP_MAX_SLOTS - 1)));
+                }
+            }
             let map = level.main_map().and_then(|mi| level.maps.get(mi));
             let mut spawn_count = 0usize;
             if let Some(map) = map {
@@ -1806,6 +1823,23 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
             "pause" => menu::Page::Pause,
             "results" | "failed" => { fe.outcome = menu::Outcome::Failed; menu::Page::Results }
             "complete" => { fe.outcome = menu::Outcome::Complete; menu::Page::Results }
+            // Render aid (mp-hud-real): the debriefing of a 1-human + 3-bot draw — the PCSX2
+            // comparison's match (codename "Agent"; bots Snow Guard / Black Ops / Yakuza =
+            // characters 6/7/8, 0 kills, 7 deaths each). NF_DEBRIEF_N=n: n participants.
+            "mpdebrief" => {
+                let n = std::env::var("NF_DEBRIEF_N").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(4).clamp(1, nf_game::mp::MP_MAX_SLOTS as u32);
+                let mut st = nf_game::mp::MpSettings::deathmatch(0x0700_0023);
+                st.human_count = 1;
+                st.bot_count = n - 1;
+                st.total_players = n;
+                st.players[0].codename = "Agent".into();
+                for k in 1..n as usize { st.players[k].skin = [6, 7, 8, 9][(k - 1) % 4]; }
+                let mut m = nf_game::mp::MpMatch::init(st);
+                m.start(&mut nf_game::drone::Rng::new(1));
+                for k in 1..n as usize { m.game.slots[k].deaths = 7; }
+                fe.open_mp_debriefing(&m);
+                menu::Page::MpDebriefing
+            }
             other => { eprintln!("unknown --page '{other}' (start|main|codename|difficulty|missions|dossier|pause|results|complete)"); return (None, None); }
         };
     }
