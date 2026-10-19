@@ -7368,27 +7368,34 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             let team_game = fe.mp_one.team_game();
             // The players list: as many as fit at the constant text size; it follows a focused
             // Player row (own-row edits) and scrolls with a bar when the lobby is bigger [S].
-            let (pl_top, pl_h) = (92.0f32, 146.0f32);
-            let ph = 30.0 * k;
+            // 16-player lobbies: one line per JOINED player (name, team, ready, ping), the open slots
+            // summed in one line under them; the list scrolls with a bar when it overflows [S].
+            let (pl_top, pl_h) = (90.0f32, 150.0f32);
+            let ph = 15.0 * k;
+            let joined: Vec<usize> = (0..fe.mp_one.players.len()).filter(|&i| fe.mp_one.players[i].joined).collect();
+            let open = fe.mp_one.players.len() - joined.len();
+            let lines = joined.len() + usize::from(open > 0);
             let pvis = ((pl_h / ph) as usize).max(1);
-            let total_pl = fe.mp_one.players.len();
-            let pfocus = rows.get(focus).and_then(|r| if let crate::mp_lobby::MpLobbyRowId::Player(i) | crate::mp_lobby::MpLobbyRowId::PlayerTeam(i) = r.id { Some(i) } else { None })
-                .unwrap_or(fe.mp_one.own_slot.min(total_pl.saturating_sub(1)));
-            let pfirst = pfocus.saturating_sub(pvis.saturating_sub(1)).min(total_pl.saturating_sub(pvis));
-            scroll_bar(&mut h, 624.0, pl_top - 6.0, pl_h, pfirst, pvis, total_pl);
-            for (i, pl) in fe.mp_one.players.iter().enumerate().skip(pfirst).take(pvis) {
-                let y = pl_top + ph * (i - pfirst) as f32;
-                if !pl.joined {
-                    left_text(&mut h, font, &format!("{}  (open)", i + 1), mx(366.0), my(y), dim, true, 0.85 * k);
-                    continue;
-                }
+            let pfocus_slot = rows.get(focus).and_then(|r| if let crate::mp_lobby::MpLobbyRowId::Player(i) | crate::mp_lobby::MpLobbyRowId::PlayerTeam(i) = r.id { Some(i) } else { None })
+                .unwrap_or(fe.mp_one.own_slot);
+            let pfocus = joined.iter().position(|&i| i == pfocus_slot).unwrap_or(0);
+            let pfirst = pfocus.saturating_sub(pvis.saturating_sub(1)).min(lines.saturating_sub(pvis));
+            scroll_bar(&mut h, 624.0, pl_top - 6.0, pl_h, pfirst, pvis, lines);
+            for (n, &i) in joined.iter().enumerate().skip(pfirst).take(pvis) {
+                let pl = &fe.mp_one.players[i];
+                let y = pl_top + ph * (n - pfirst) as f32;
                 let col = if pl.ready { cream } else { dim };
-                left_text(&mut h, font, &format!("{}  {}", i + 1, pl.codename), mx(366.0), my(y), col, true, 0.9 * k);
+                left_text(&mut h, font, &format!("{}  {}", i + 1, pl.codename), mx(366.0), my(y), col, true, 0.85 * k);
                 let mut info = Vec::new();
                 if team_game { info.push(if pl.team == 1 { "MI6".to_string() } else { "Phoenix".to_string() }); }
                 info.push(if pl.ready { "Ready".to_string() } else { "Not ready".to_string() });
                 if i != 0 || !fe.mp_hosting { info.push(format!("{} ms", pl.ping_ms)); }
-                left_text(&mut h, font, &info.join("   "), mx(384.0), my(y + 13.0 * k), dim, true, 0.75 * k);
+                left_text(&mut h, font, &info.join("  "), mx(500.0), my(y), dim, true, 0.75 * k);
+            }
+            if open > 0 && lines - 1 >= pfirst && lines - 1 < pfirst + pvis {
+                let y = pl_top + ph * (lines - 1 - pfirst) as f32;
+                let s = if open == 1 { "1 open slot".to_string() } else { format!("{open} open slots") };
+                left_text(&mut h, font, &s, mx(366.0), my(y), dim, true, 0.8 * k);
             }
             let start_line = if fe.mp_hosting {
                 if fe.mp_lobby_start_enabled() { "Everyone is ready - Start the match" } else { "Waiting for every player to be ready" }

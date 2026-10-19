@@ -1722,6 +1722,13 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
                 fe.mp_hosting = true;
                 fe.mp_one.players[0].joined = true; fe.mp_one.players[0].ready = true; fe.mp_one.players[0].codename = "Bond".into();
                 fe.mp_one.players[1].joined = true; fe.mp_one.players[1].codename = "Agent 2".into(); fe.mp_one.players[1].ping_ms = 23;
+                // NF_LOBBY_PLAYERS=n: n joined players for the big-lobby render.
+                if let Some(n) = std::env::var("NF_LOBBY_PLAYERS").ok().and_then(|v| v.parse::<usize>().ok()) {
+                    for i in 2..n.min(fe.mp_one.players.len()) {
+                        let p = &mut fe.mp_one.players[i];
+                        p.joined = true; p.ready = i % 3 != 0; p.codename = format!("Agent {}", i + 1); p.ping_ms = 20 + i as u32 * 7;
+                    }
+                }
                 menu::Page::MpOnlineLobby
             }
             // fix-pause-menu: the in-game pages render headless too (the pause page over the
