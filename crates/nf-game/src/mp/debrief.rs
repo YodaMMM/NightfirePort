@@ -78,6 +78,27 @@ pub struct MpDebriefing {
     pub result: MpDebriefResult,
 }
 
+/// The board's comparison fold (net-match-end): FNV-1a over the numbers of every row — slot,
+/// rank, character, points, victories, deaths, total — plus the result line's shape (the draw
+/// / team-label / a win with no name). The name cells are EXCLUDED: the wire's 208-byte
+/// MatchSettings carries no name bytes, so a client's own copy shows the empty-name rows (the
+/// same reason the loopback e2e pins the numbers, not the names) [S port protocol].
+pub fn board_hash(b: &MpDebriefing) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    let mut fold = |h: &mut u64, x: u64| { *h = (*h ^ x).wrapping_mul(0x0000_0100_0000_01b3).rotate_left(7); };
+    for r in &b.rows {
+        for v in [r.slot as u64, r.rank as u64, r.character as u64, r.points as u64, r.victories as u64, r.deaths as u64, r.total as u64] {
+            fold(&mut h, v);
+        }
+    }
+    fold(&mut h, match &b.result {
+        MpDebriefResult::Draw => 0,
+        MpDebriefResult::Wins(_) => 1,
+        MpDebriefResult::Team(label) => *label as u64,
+    });
+    h
+}
+
 impl MpMatch {
     /// `Menu_GetMPScore` 0x203af8 — the TOTAL column and the ranking key: kills for Arena and
     /// Team Arena, the slot score for the objective modes, 0 for anything else [M 0x203af8].

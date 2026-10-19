@@ -1,18 +1,22 @@
 # Publishes the next NightfirePort release from a lane checked out at a GREEN master commit (the user's rule,
 # 2026-10-19: a release after every fully green merge batch; players' launchers install it automatically on launch).
 #
-#   powershell -File tools\release\publish.ps1 -Notes <plain-English summary> [-Lane <checkout>] [-Version 0.1.7] [-Draft]
+#   powershell -File tools\release\publish.ps1 -NotesFile <notes.md> [-Lane <checkout>] [-Version 0.1.7] [-Draft]
+#   (or -Notes <text>; prefer -NotesFile: straight double quotes in -Notes break `powershell -File` argument passing)
 #
 # Version: the newest release's tag + 1 patch unless given. The tag is created on the lane's HEAD (which must be on
-# origin/master). -Notes is required: a short plain-English summary of what changed for players (the user's choice,
+# origin/master). The notes are required: a short plain-English summary of what changed for players (the user's choice,
 # 2026-10-19 — not the merge log's jargon), nothing appended. Assets: NightfirePort.exe + .sha256 (v0.1.3 also the bridge zip). Needs `gh` signed in with release rights.
 param(
-    [Parameter(Mandatory = $true)][string]$Notes,
+    [string]$Notes = "",
+    [string]$NotesFile = "",
     [string]$Lane = "",
     [string]$Version = "",
     [switch]$Draft
 )
 $ErrorActionPreference = "Stop"
+if ($NotesFile) { $Notes = [IO.File]::ReadAllText((Resolve-Path $NotesFile), [Text.Encoding]::UTF8) }
+if (-not $Notes.Trim()) { throw "release notes are required (-NotesFile or -Notes)" }
 if (-not $Lane) { $Lane = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }
 $repo = "YodaMMM/NightfirePort"
 $head = (git -C $Lane rev-parse HEAD).Trim()

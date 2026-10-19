@@ -28,7 +28,7 @@ No game data: players supply their own disc image. Online play uses join codes (
   `NF_GIT_HASH` and `NF_NOTICES_FILE`, and writes the `.sha256` (and the bridge zip + its `.sha256`).
 - `tools/release/publish.ps1 [-Lane <checkout>]` refuses unless HEAD is on `origin/master` and the tree is clean,
   takes the newest release's tag + 1 patch, runs make-release (the bridge zip on 0.1.3 only), and `gh release create`s
-  the tag on HEAD with the files and the required plain-English `-Notes` summary, with nothing appended. `-Draft`
+  the tag on HEAD with the files and the required plain-English summary (`-NotesFile notes.md`; `-Notes` text breaks on straight double quotes), with nothing appended. `-Draft`
   for a draft. Mission names in the notes come from the mission-select table (`CAMPAIGN` in menu.rs), never from
   memory or docs titles.
 

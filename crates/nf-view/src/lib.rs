@@ -1453,6 +1453,11 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // arm handed the arenas the give-everything kit) never runs in MP.
             sim.mp_weapon_loaded = (0..0x72u8).map(loaded).collect();
             sim.mp_equip_local();
+            // mp-shot-gate: every human slot's shared fire gate, seeded with the same equip
+            // (docs/systems/mp-shot-gate.md) — the rate/ammo/holding check every machine applies
+            // to every slot's shot description.
+            let humans = (sim.mp.as_ref().unwrap().settings.human_count as usize).clamp(1, nf_net::MAX_AGENTS);
+            sim.mp_combat.gate_setup(humans, &sim.mp.as_ref().unwrap().settings, &sim.weapons, loaded);
             sim.gun.weapon
         } else {
             nf_game::player::init_level_loadout(level_id, save, &mut sim.drones.health,
@@ -2395,6 +2400,11 @@ struct App {
     net_rejoin: Option<(bool, String)>,
     /// The finished online match's session, kept open while its debriefing is up.
     net_finished: Option<mpnet::SessionProxy>,
+    /// net-match-end: the host's end wait — the finished match's session stays LIVE (polled,
+    /// relaying inputs) until every human peer has acked its own final tick + debriefing, or
+    /// departed, or the wall deadline passes. Only then does the session move to `net_finished`
+    /// (docs/systems/net-match-end.md §4) [S port protocol].
+    net_end_wait: Option<NetEndWait>,
     /// The online match's wall clock (set when its level swaps in): the lockstep runs to
     /// `elapsed · 60` ticks, catching up after a stall instead of dropping the stalled ticks.
     net_clock: Option<std::time::Instant>,
@@ -2499,6 +2509,33 @@ pub const LOADING_HOLD: f64 = 5.0;
 /// [S the 2026-10-15 playtest]. Otherwise it keeps switching weapons (the pre-feature behaviour).
 pub fn wheel_steps_zoom(zoom_held: bool, weapon_flags: u32, weapon_zoom: f32) -> bool {
     zoom_held && weapon_flags & 0x40 != 0 && weapon_zoom > 1.0
+}
+
+/// net-match-end: the host's end wait (docs/systems/net-match-end.md §4) [S port protocol — the
+/// disc has no online]. The finished match's session stays live while the host's debriefing is
+/// up, so a client still draining its last ticks keeps its relay; the wait ends when every human
+/// peer has acked its own debriefing or departed (a dead peer cannot hold it — the deadline).
+struct NetEndWait {
+    /// The human slots that must ack (snapshot at the handover; `slot_human` shrinks on a
+    /// departure [M nf-net Session::drop_slot], the snapshot keeps them countable).
+    peers: Vec<usize>,
+    /// Peers whose ack arrived (their board hash matched the host's own fold — a mismatch logs
+    /// and shows on the debriefing's notice, the ack still counts).
+    acked: Vec<usize>,
+    /// Peers seen departing (ClientLeft / dropped by the session's timeout).
+    gone: Vec<usize>,
+    /// The host's own board fold, to compare the acks against.
+    board_hash: u64,
+    /// Wall deadline — a dead peer can't hold the debriefing forever.
+    deadline: std::time::Instant,
+    /// Whether any ack's fold disagreed with the host's own board.
+    board_mismatch: bool,
+}
+
+impl NetEndWait {
+    fn done(&self) -> bool {
+        self.peers.iter().all(|p| self.acked.contains(p) || self.gone.contains(p))
+    }
 }
 
 impl App {
@@ -2925,6 +2962,7 @@ impl App {
         eprintln!("[net] {msg}");
         if let Some(se) = self.net.as_mut() { se.0.borrow_mut().close(); }
         self.net = None;
+        self.net_end_wait = None;
         self.net_lobby = None;
         self.net_menu_load = false;
         self.net_late_self = None;
@@ -3300,18 +3338,43 @@ impl App {
         // The restore BEFORE the page open: C_MPDBG's Confirm must land on a scenario page that
         // already holds the match's choices (the game's manager-side restore is the same data).
         fe.restore_mp_match(&settings);
+        // net-match-end: the board's fold, taken before the board moves into the page (the ack
+        // and the host's end-wait comparisons fold it; docs/systems/net-match-end.md §4).
+        let board_fold = nf_game::mp::debrief::board_hash(&board);
+        let final_tick = self.scene.sim.as_ref().map(|s| s.drones.frame).unwrap_or(0);
         fe.show_mp_debriefing(board);
-        // Online: the finished match's session closes (the next match is a fresh lobby on the
-        // same port/address — the debriefing's Continue re-listens / re-dials).
+        // Online: the finished match's handover (net-match-end, docs/systems/net-match-end.md
+        // §4 [S port protocol]). Every machine announces its own end first — the final tick plus
+        // its board's fold (Data tag 4) — before anything happens to its session. The HOST then
+        // holds the LIVE session until every human peer has acked or departed (a client still
+        // draining its last ticks keeps the relay; a dead peer can't hold it — the wall
+        // deadline); a client (or a host with no human peers) runs the old tail at once.
         if self.net.is_some() {
-            // The finished session stays open (polled, not ticked) while the debriefing is up:
-            // closing it here told a peer still finishing its last ticks that the host had left
-            // (the two-match check's "player 1 left" on the client). It closes when the page goes.
-            self.net_finished = self.net.take();
-            // mp-online-failures: the finished match takes no new peer — a client that pressed
-            // Continue first re-dials this port, and its HELLO must wait for the host's next
-            // lobby, not late-join the match that just ended (it landed in a dead lobby).
-            if let Some(s) = self.net_finished.as_ref() { s.0.borrow_mut().finish_match(); }
+            let bh = board_fold;
+            if let Some(s) = self.net.as_ref() { s.0.borrow_mut().send_debrief_ack(final_tick, bh); }
+            let is_host = self.net.as_ref().is_some_and(|s| s.is_host());
+            let peers = self.net.as_ref().map(|s| s.0.borrow().human_peers()).unwrap_or_default();
+            if is_host && !peers.is_empty() {
+                self.net_end_wait = Some(NetEndWait {
+                    peers,
+                    acked: Vec::new(),
+                    gone: Vec::new(),
+                    board_hash: bh,
+                    deadline: std::time::Instant::now() + std::time::Duration::from_secs(15),
+                    board_mismatch: false,
+                });
+            } else {
+                // The finished session stays open (polled, not ticked) while the debriefing is
+                // up: closing it here told a peer still finishing its last ticks that the host
+                // had left (the two-match check's "player 1 left" on the client). It closes when
+                // the page goes.
+                self.net_finished = self.net.take();
+                // mp-online-failures: the finished match takes no new peer — a client that
+                // pressed Continue first re-dials this port, and its HELLO must wait for the
+                // host's next lobby, not late-join the match that just ended (it landed in a
+                // dead lobby).
+                if let Some(s) = self.net_finished.as_ref() { s.0.borrow_mut().finish_match(); }
+            }
             self.net_lobby = None;
             self.net_menu_load = false;
             self.net_late_self = None;
@@ -3906,6 +3969,62 @@ impl App {
                         s.0.borrow_mut().close();
                     }
                 }
+                // net-match-end: the host's end wait — the live session keeps polling (the
+                // relay feeds a client still draining its final ticks [M nf-net relay_horizon])
+                // while the wait collects each peer's DebriefAck / departure; when every peer is
+                // done (or the wall deadline passes — a dead peer can't hold the debriefing),
+                // the session runs the normal finished tail. docs/systems/net-match-end.md §4.
+                if self.net_end_wait.is_some() {
+                    let mut events = Vec::new();
+                    if let Some(s) = self.net.as_ref() {
+                        let mut core = s.0.borrow_mut();
+                        core.poll();
+                        events = core.take_app_events();
+                    }
+                    // The notices the wait saw this frame (a differing board fold, a departure)
+                    // surface on the debriefing's notice line [S].
+                    let mut board_notice = false;
+                    if let Some(w) = self.net_end_wait.as_mut() {
+                        for ev in events {
+                            match ev {
+                                mpnet::CoreEvent::DebriefAck { slot, final_tick, board_hash } => {
+                                    let s = slot as usize;
+                                    if !w.acked.contains(&s) { w.acked.push(s); }
+                                    if board_hash != w.board_hash {
+                                        w.board_mismatch = true;
+                                        board_notice = true;
+                                        eprintln!("[net] slot {} reached its debriefing at tick {} — its board differs from ours", slot + 1, final_tick);
+                                    } else {
+                                        eprintln!("[net] slot {} reached its debriefing at tick {} — the boards agree", slot + 1, final_tick);
+                                    }
+                                }
+                                mpnet::CoreEvent::ClientLeft { slot, graceful } => {
+                                    let s = slot as usize;
+                                    if !w.gone.contains(&s) { w.gone.push(s); }
+                                    eprintln!("[net] player {} {} while the debriefing waits", slot + 1, if graceful { "left" } else { "timed out" });
+                                    if let Some(fe) = self.fe.as_mut() { fe.net_notice = Some(format!("Player {} left the match.", slot + 1)); }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    let done = self.net_end_wait.as_ref().is_some_and(|w| w.done() || std::time::Instant::now() >= w.deadline);
+                    if done {
+                        let mismatch = self.net_end_wait.as_ref().is_some_and(|w| w.board_mismatch);
+                        let timed_out = self.net_end_wait.as_ref().is_some_and(|w| !w.done());
+                        self.net_end_wait = None;
+                        self.net_finished = self.net.take();
+                        if let Some(s) = self.net_finished.as_ref() { s.0.borrow_mut().finish_match(); }
+                        eprintln!("[net] the match's end handover complete (all peers at their debriefing{}{})",
+                            if mismatch { "; a board differed" } else { "" },
+                            if timed_out { "; the wait timed out" } else { "" });
+                        if mismatch {
+                            if let Some(fe) = self.fe.as_mut() { fe.net_notice = Some("A player's debriefing board differs from yours.".into()); }
+                        }
+                    } else if board_notice {
+                        if let Some(fe) = self.fe.as_mut() { fe.net_notice = Some("A player's debriefing board differs from yours.".into()); }
+                    }
+                }
                 // frontend-music: the menus' own audio (the jingle pair, the credits track), the
                 // page-change transitions and the per-frame pump.
                 self.menu_music_tick();
@@ -4174,6 +4293,10 @@ impl App {
                                     self.net_pacer.reset();
                                 }
                             }
+                            // net-match-end: the debriefing acks ride the wait block above (the
+                            // host's end wait consumes them from its own drain); the match's
+                            // event loop ignores them.
+                            mpnet::CoreEvent::DebriefAck { .. } => {}
                     }
                 }
                 // net-desync-detail: the diagnosis exchange's wait — the report once the peer's
@@ -4543,6 +4666,12 @@ impl App {
                                     // the last 600 ticks of components plus, at the exchange
                                     // cadence, the per-item rows the desync exchange diagnoses
                                     // from (a desync is only ever detected at an exchanged tick).
+                                    // Test aid (NF_NET_PERTURB_AT=<tick>): nudge this machine's own body once at that net tick
+                                    // — the live desync check (the fail box, the diagnosis, the report zip).
+                                    if std::env::var("NF_NET_PERTURB_AT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(self.net_tick) {
+                                        sim.bond.pos[0] += 0.01;
+                                        eprintln!("[net] test aid: perturbed this machine's body at net tick {}", self.net_tick);
+                                    }
                                     let comps = sim.net_component_hashes(slot);
                                     let h = crate::scene::fold_component_hashes(&comps);
                                     self.desync_watch.on_tick(self.net_tick, comps);
@@ -5371,6 +5500,7 @@ impl App {
             net_late_self: None,
             net_rejoin: None,
             net_finished: None,
+            net_end_wait: None,
             net_clock: None,
             net_pacer: nf_net::pace::TickPacer::new(),
             net_shot_pending: None,
