@@ -56,6 +56,7 @@ pub fn mp_to_match(s: &MpSettings) -> MatchSettings {
         spawn_policy: s.spawn_policy,
         radar: s.radar,
         friendly_fire: s.friendly_fire,
+        location_damage: s.location_damage,
         players: s.players.each_ref().map(|p| (p.team, p.skin, p.armor_bonus, p.radar_on)),
         registered_pickups: s.registered_pickups,
     }
@@ -89,6 +90,7 @@ pub fn match_to_mp(m: &MatchSettings, seed: u32) -> MpSettings {
         radar: m.radar,
         registered_pickups: m.registered_pickups,
         friendly_fire: m.friendly_fire,
+        location_damage: m.location_damage,
         seed,
     }
 }
@@ -115,9 +117,13 @@ pub fn to_net_input(i: &player::Input, trigger: bool, reload: bool, use_key: boo
         weapon_cycle: i.weapon_cycle,
         gadget_cycle: i.gadget_cycle,
         switch_to: i.switch_to,
-        // 700v6: the caller fills `held` / `shot` from the local weapon pipeline (lib.rs).
+        // 700v6: the caller fills `held` / `shot` from the local weapon pipeline (lib.rs);
+        // mp-combat-weapons: and the shot description.
         held: 0,
         shot: false,
+        shot_weapon: 0,
+        shot_flags: 0,
+        shot_aim: [0, 0],
     }
 }
 

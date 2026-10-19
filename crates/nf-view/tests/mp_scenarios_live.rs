@@ -102,6 +102,23 @@ fn row(shooter: Option<usize>, held: u8) -> [nf_net::Input; N] {
     r
 }
 
+/// mp-combat-weapons: a row where `shooter` fires `held` AT `target` (the shot description the
+/// live app sends: the fired record + the aim from the shooter's head). The old rows' bare
+/// `shot` flag fired along the body's view — fine at one height, but the online combat now hits
+/// the real body volume (feet to head) instead of the old spheres that sat 0.5-1.5 ABOVE
+/// `Bond::pos` (mostly over the head), so a horizontal eye-height shot misses a victim standing
+/// a little lower.
+fn row_at(p: &Pair, shooter: usize, held: u8, target: [f32; 3]) -> [nf_net::Input; N] {
+    let s = p.sim();
+    let b = if shooter == s.mp_local_slot { s.bond.clone() } else { s.mp_bonds[shooter].clone().unwrap() };
+    let h = b.head();
+    let d = [target[0] - h[0], target[1] - h[1], target[2] - h[2]];
+    let mut r = row(Some(shooter), held);
+    r[shooter].shot_weapon = held;
+    r[shooter].shot_aim = nf_game::mp::combat::aim_from_dir(d);
+    r
+}
+
 /// One lockstep tick on both machines; the hashes must agree.
 fn tick(p: &mut Pair, r: &[nf_net::Input; N]) {
     let t = p.t;
@@ -160,10 +177,19 @@ fn firing_spot(p: &Pair, target: [f32; 3], aim_y: f32, dist: f32) -> ([f32; 3], 
 }
 
 /// The weapon whose record deals the most damage (`weapon_data + id·0x10C + 0x0C` — the online
-/// combat's damage word) — the site/body kills take fewer ticks.
+/// combat's damage word) — the site/body kills take fewer ticks. mp-combat-weapons: among the
+/// plain bullet records that reach the 4 u firing spot (no grenade-family throw, no contact
+/// blast — those now fly/blast as in the game and would take the shooter with them).
 fn strongest_weapon(p: &Pair) -> u8 {
     let w = &p.sim().weapons;
+    let plain = |i: usize| {
+        let r = &w.records[i];
+        let f = |o: usize| u32::from_le_bytes(r[o..o + 4].try_into().unwrap());
+        let range = f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap());
+        f(0x6c) & 0x8 == 0 && f(0x70) & (0x4 | 0x10_0000 | 0x20_0000) == 0 && f(0x68) & 0x2_0000 == 0 && range >= 10.0 && f(0x18) >= 1
+    };
     (0..w.records.len().min(0x47))
+        .filter(|&i| plain(i))
         .max_by(|&x, &y| {
             let d = |i: usize| f32::from_le_bytes(w.records[i][0x0c..0x10].try_into().unwrap());
             d(x).total_cmp(&d(y))
@@ -178,7 +204,9 @@ fn shoot_dead(p: &mut Pair, shooter: usize, victim: usize, held: u8) {
     place(p, shooter, spot, yaw);
     let deaths = p.m().game.slots[victim].deaths;
     for _ in 0..600 {
-        tick(p, &row(Some(shooter), held));
+        let v = body_pos(p, victim);
+        let r = row_at(p, shooter, held, [v[0], v[1] + 0.2, v[2]]);
+        tick(p, &r);
         if p.m().game.slots[victim].deaths > deaths {
             return;
         }
@@ -392,13 +420,15 @@ fn demolition_online() {
     place(&mut p, 1, away, 0.0);
     let (spot, yaw) = firing_spot(&p, centre, centre[1], 4.0);
     place(&mut p, 0, spot, yaw);
-    tick(&mut p, &row(Some(0), held));
+    // mp-combat-weapons: the round flies (the record's speed) — a few ticks to the site.
+    let r = row_at(&p, 0, held, centre);
+    ticks(&mut p, 4, &r);
     let hp = p.m().objects_rt.site.as_ref().unwrap().state;
     assert!(hp < 2000, "the shot damaged the site (HP {hp})");
     assert_eq!(p.m().objects_rt.site.as_ref().unwrap().last_hitter, 0);
     for _ in 0..4000 {
         if p.m().game.state == 6 { break; }
-        tick(&mut p, &row(Some(0), held));
+        tick(&mut p, &r);
     }
     assert_eq!(p.m().game.state, 6, "the site fell: the round is over");
     assert_eq!(p.m().game.team_scores, [0.0, 1.0], "the attacking team scores");

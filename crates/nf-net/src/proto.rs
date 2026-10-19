@@ -11,7 +11,7 @@
 //! | 1 | HELLO (client→host) | proto u16, build u32, display codename 32B |
 //! | 2 | WELCOME (host→client) | proto u16, build u32, host codename 32B, slot u8, input_delay u8, hash_every u8, rsv u8, seed u32, settings (334 B, protocol 4) |
 //! | 3 | REFUSE (host→client) | reason u8 (1 version, 2 build, 3 started, 4 full), rsv 3B |
-//! | 4 | INPUT | base_tick u32, agent_mask u16, count u8, ack_tick u32, ack_bits u32, count*popcount(mask)*24B inputs |
+//! | 4 | INPUT | base_tick u32, agent_mask u16, count u8, ack_tick u32, ack_bits u32, count*popcount(mask)*28B inputs |
 //! | 5 | HASH | tick u32, hash u64, prev_tick u32, prev_hash u64 |
 //! | 6 | KEEPALIVE | seq u32 |
 //! | 7 | LEAVE | slot u8, reason u8, rsv 2B |
@@ -19,7 +19,7 @@
 //! | 9 | GO (host→client) | first_tick u32 |
 //! | 10 | DATA (app tunnel) | len u16 + bytes — opaque app-to-app blob (the lobby's choices); the session never inspects it |
 //! | 11 | JOIN_BEGIN (host→late joiner) | first_tick u32, snapshot_tick u32, snapshot_hash u64 — the late-join handover head: the input log covers `first_tick..snapshot_tick` and the replay must hash to `snapshot_hash` at `snapshot_tick` |
-//! | 12 | JOIN_LOG (host→late joiner) | first_tick u32, tick_count u8, chunk_index u16, chunk_count u16, tick_count × (16 × 24 B inputs) — one chunk of the recorded run log |
+//! | 12 | JOIN_LOG (host→late joiner) | first_tick u32, tick_count u8, chunk_index u16, chunk_count u16, tick_count × (16 × 28 B inputs) — one chunk of the recorded run log |
 //! | 13 | JOIN_ACK (late joiner→host) | chunk_index u16 — all chunks ≤ chunk_index are held |
 //! | 14 | JOIN_READY (late joiner→host) | — the replay verified (hash matched) and the joiner is caught up; the host picks the join tick |
 //! | 15 | JOIN_SLOT (host→all) | slot u8, join_tick u32 — the slot becomes human from join_tick (its inputs start there; before it the slot rides NEUTRAL) |
@@ -50,20 +50,20 @@ pub const PT_JOIN_ACK: u8 = 13;
 pub const PT_JOIN_READY: u8 = 14;
 pub const PT_JOIN_SLOT: u8 = 15;
 
-/// Ticks one JOIN_LOG chunk carries (16 agents × 24 B × 3 = 1152 B — fits
-/// [`MAX_PACKET`] with header room; protocol ≤ 3 carried 12 ticks of 4
+/// Ticks one JOIN_LOG chunk carries (16 agents × 28 B × 3 = 1344 B — fits
+/// [`MAX_PACKET`] with header room (1357 B with the headers); protocol ≤ 3 carried 12 ticks of 4
 /// agents, the same 1152 B [S mp-16-slots]).
 pub const JOIN_LOG_CHUNK_TICKS: usize = 3;
 
 /// codename field width on the wire (nul-padded).
 pub const CODENAME_WIRE: usize = 32;
-/// How many ticks one INPUT packet may carry client→host (24B each; a
-/// client's mask holds its own slot only, so 32 ticks × 24 B + the 15-byte
+/// How many ticks one INPUT packet may carry client→host (28B each; a
+/// client's mask holds its own slot only, so 32 ticks × 28 B + the 15-byte
 /// header stays well under [`MAX_PACKET`]).
 pub const MAX_INPUT_COUNT_C2H: usize = 32;
 /// How many ticks one INPUT packet may carry host→client. The relay mask
 /// holds every agent but the receiver's (15 of 16 [S mp-16-slots]):
-/// 3 ticks × 15 × 24 B + the 15-byte header = 1095 ≤ [`MAX_PACKET`].
+/// 3 ticks × 15 × 28 B + the 15-byte header = 1275 ≤ [`MAX_PACKET`].
 /// (Protocol ≤ 3: 8 ticks of 3 agents.)
 pub const MAX_INPUT_COUNT_H2C: usize = 3;
 
@@ -556,7 +556,7 @@ mod tests {
         assert_eq!(decode(&b).unwrap(), p);
         assert_eq!(b[8], 0xff, "mask low byte (header 4 + tick 4)");
         assert_eq!(b[9], 0xff, "mask high byte");
-        // The largest relay packet fits MAX_PACKET: 3 ticks × 15 agents × 24 B
+        // The largest relay packet fits MAX_PACKET: 3 ticks × 15 agents × 28 B
         // + the 15-byte head + the 4-byte header.
         let h2c = Packet::Input {
             base_tick: 0,
@@ -569,7 +569,7 @@ mod tests {
         assert!(b.len() <= MAX_PACKET, "the 16-agent H2C relay packet must fit MAX_PACKET: {}", b.len());
         // Sister: one more tick would overflow the wire cap — the sender must
         // cap at MAX_INPUT_COUNT_H2C.
-        assert!(3 * 16 * 24 + 15 + 4 > 3 * 15 * 24 + 15 + 4);
+        assert!(4 * 15 * INPUT_WIRE_SIZE + 15 + 4 > MAX_PACKET);
         assert!(decode(&b).is_some());
     }
 
