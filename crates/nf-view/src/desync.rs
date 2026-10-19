@@ -154,6 +154,7 @@ pub struct Watcher {
 
 /// What the driver must send after a step (`send_comps` → `PT_HASHCOMPS`,
 /// `send_detail` → `PT_HASHDETAIL`).
+#[derive(Clone, Debug)]
 pub enum Action {
     SendComps(u32, [u64; NET_HASH_COMPONENTS]),
     SendDetail(u32, u8, Vec<u64>),
@@ -171,27 +172,43 @@ impl Watcher {
         self.hist.push_detail(tick, items);
     }
 
-    /// The session reported a desync at `tick`. Returns the `PT_HASHCOMPS` to send (the local
-    /// components for that tick, from the history).
-    pub fn on_desync(&mut self, tick: u32) -> Option<Action> {
+    /// The session reported a desync at `tick`. Returns the packets to send now (the local
+    /// components for that tick from the history, and — if the peer's components already
+    /// arrived — the first diverging component's items: the packets cross, so the machine that
+    /// sees the peer's `PT_HASHCOMPS` first still completes its half of the exchange).
+    pub fn on_desync(&mut self, tick: u32) -> Vec<Action> {
         self.desync = Some(tick);
-        self.step()
+        self.pump()
     }
 
     /// The peer's `PT_HASHCOMPS` arrived.
-    pub fn on_peer_comps(&mut self, tick: u32, comps: [u64; NET_HASH_COMPONENTS]) -> Option<Action> {
+    pub fn on_peer_comps(&mut self, tick: u32, comps: [u64; NET_HASH_COMPONENTS]) -> Vec<Action> {
         if self.peer_comps.is_none() {
             self.peer_comps = Some((tick, comps));
         }
-        self.step()
+        self.pump()
     }
 
     /// The peer's `PT_HASHDETAIL` arrived (`component` is the wire's component index).
-    pub fn on_peer_detail(&mut self, tick: u32, component: u8, items: Vec<u64>) -> Option<Action> {
+    pub fn on_peer_detail(&mut self, tick: u32, component: u8, items: Vec<u64>) -> Vec<Action> {
         if self.peer_detail.is_none() {
             self.peer_detail = Some((tick, component as usize, items));
         }
-        self.step()
+        self.pump()
+    }
+
+    /// Runs the state machine to quiescence: every send is a one-shot flag
+    /// (`comps_sent` / `detail_sent`) and the diagnosis completes once, so the loop is bounded
+    /// (at most a `PT_HASHCOMPS` + a `PT_HASHDETAIL` per desync).
+    fn pump(&mut self) -> Vec<Action> {
+        let mut out = Vec::new();
+        while let Some(a) = self.step() {
+            out.push(a);
+            if self.diagnosis.is_some() {
+                break;
+            }
+        }
+        out
     }
 
     /// The state machine: send our comps; when both sides' comps are known, name the first
@@ -293,8 +310,11 @@ pub fn desync_report_files(
         world_counts[0] + world_counts[1] + world_counts[2] + world_counts[3] + world_counts[4] + world_counts[5] + world_counts[6],
         world_counts[0] + world_counts[1] + world_counts[2] + world_counts[3] + world_counts[4] + world_counts[5] + world_counts[6] + world_counts[7],
     );
+    // The seed from the tag-1 payload (the report carries the match settings + seed in both
+    // the readable line and the binary payload --bug-replay rebuilds the match from).
+    let seed = crate::mpnet::decode_match_start(settings_payload).map(|(_, s)| s).unwrap_or(0);
     let report = format!(
-        "kind: desync\nreport_id: {id}\nversion: {}\nos: {}\nlevel: {level:08x}\ndesync_tick: {}\nfirst_component: {}\nfirst_item: {item}\ncombined_local: {:016x}\ncombined_peer: {:016x}\nprotocol: nf-net 8 (PT_HASHCOMPS/PT_HASHDETAIL)\nreplay: nf-view --bug-replay <this zip>  (replays match-log.bin and names the first tick/component that differs from hash-history.txt)\n{counts}\n",
+        "kind: desync\nreport_id: {id}\nversion: {}\nos: {}\nlevel: {level:08x}\nseed: {seed:#x}\ndesync_tick: {}\nfirst_component: {}\nfirst_item: {item}\ncombined_local: {:016x}\ncombined_peer: {:016x}\nprotocol: nf-net 8 (PT_HASHCOMPS/PT_HASHDETAIL)\nreplay: nf-view --bug-replay <this zip>  (replays match-log.bin and names the first tick/component that differs from hash-history.txt)\n{counts}\n",
         crate::bugreport::version_line(), crate::bugreport::os_line(), diag.tick, diag.component_name(),
         fold_component_hashes(&local), fold_component_hashes(&peer),
     );
@@ -403,20 +423,22 @@ mod tests {
             }
         }
         // The sessions report the desync at tick 30 (the next exchange tick after the poke).
-        let act_a = a.on_desync(30).expect("A sends its comps");
-        let act_b = b.on_desync(30).expect("B sends its comps");
-        let Action::SendComps(ta, ca) = &act_a else { panic!("comps") };
-        let Action::SendComps(tb, cb) = &act_b else { panic!("comps") };
-        assert_eq!((*ta, *tb), (30, 30));
+        let acts_a = a.on_desync(30);
+        let acts_b = b.on_desync(30);
+        let Action::SendComps(ta, ca) = acts_a[0] else { panic!("comps") };
+        let Action::SendComps(tb, cb) = acts_b[0] else { panic!("comps") };
+        assert_eq!((ta, tb), (30, 30));
+        assert_eq!(acts_a.len(), 1, "no detail yet — the peer's components have not arrived");
+        assert_eq!(acts_b.len(), 1);
         // The packets cross; each completes the diagnosis off the peer's packets.
-        let act_a2 = a.on_peer_comps(*tb, *cb).expect("A names the component and sends its items");
-        let act_b2 = b.on_peer_comps(*ta, *ca).expect("B names the component and sends its items");
-        let Action::SendDetail(tick_a, comp_a, items_a) = &act_a2 else { panic!("detail") };
-        let Action::SendDetail(tick_b, comp_b, items_b) = &act_b2 else { panic!("detail") };
-        assert_eq!((*tick_a, *comp_a), (30, 6), "the world component is the first diverging one");
-        assert_eq!((*tick_b, *comp_b), (30, 6));
-        assert!(a.on_peer_detail(*tick_b, *comp_b, items_b.clone()).is_none(), "A's diagnosis completes with no further sends");
-        assert!(b.on_peer_detail(*tick_a, *comp_a, items_a.clone()).is_none());
+        let acts_a2 = a.on_peer_comps(tb, cb);
+        let acts_b2 = b.on_peer_comps(ta, ca);
+        let Action::SendDetail(tick_a, comp_a, items_a) = acts_a2[0].clone() else { panic!("detail") };
+        let Action::SendDetail(tick_b, comp_b, items_b) = acts_b2[0].clone() else { panic!("detail") };
+        assert_eq!((tick_a, comp_a), (30, 6), "the world component is the first diverging one");
+        assert_eq!((tick_b, comp_b), (30, 6));
+        assert!(a.on_peer_detail(tick_b, comp_b, items_b.clone()).is_empty(), "A's diagnosis completes with no further sends");
+        assert!(b.on_peer_detail(tick_a, comp_a, items_a.clone()).is_empty());
         let da = a.diagnosis.as_ref().expect("A diagnosed");
         let db = b.diagnosis.as_ref().expect("B diagnosed");
         assert_eq!(da.component_name(), "world");
@@ -435,7 +457,7 @@ mod tests {
 
     #[test]
     fn the_match_log_round_trips() {
-        let mut row: [nf_net::Input; nf_net::MAX_AGENTS] = Default::default();
+        let mut row: [nf_net::Input; nf_net::MAX_AGENTS] = [nf_net::NEUTRAL; nf_net::MAX_AGENTS];
         row[0].forward = 0.5;
         row[1].turn = -0.25;
         row[1].trigger = true;
@@ -457,7 +479,7 @@ mod tests {
             local_comps: [1; NET_HASH_COMPONENTS], peer_comps: [1; NET_HASH_COMPONENTS],
             local_items: vec![1, 2, 3], peer_items: vec![1, 2, 9],
         };
-        let row: [nf_net::Input; nf_net::MAX_AGENTS] = Default::default();
+        let row: [nf_net::Input; nf_net::MAX_AGENTS] = [nf_net::NEUTRAL; nf_net::MAX_AGENTS];
         let files = desync_report_files(&diag, 0x0700_0023, &[1, 2, 3], 0, &[row], [4, 2, 0, 0, 0, 0, 0, 0], "# tick\n");
         let get = |n: &str| files.iter().find(|(f, _)| f == n).map(|(_, b)| b.clone());
         let report = String::from_utf8(get("report.txt").unwrap()).unwrap();

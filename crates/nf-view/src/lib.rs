@@ -4059,18 +4059,18 @@ impl App {
                                 // the wait state below completes or times it out, then net_fail
                                 // carries the report path.
                                 eprintln!("[net] state desync at tick {tick} — exchanging the component hashes");
-                                if let Some(a) = self.desync_watch.on_desync(tick) {
+                                for a in self.desync_watch.on_desync(tick) {
                                     self.send_desync_action(a);
                                 }
                                 self.desync_wait = Some((tick, std::time::Instant::now()));
                             }
                             mpnet::CoreEvent::HashComps { tick, comps } => {
-                                if let Some(a) = self.desync_watch.on_peer_comps(tick, comps) {
+                                for a in self.desync_watch.on_peer_comps(tick, comps) {
                                     self.send_desync_action(a);
                                 }
                             }
                             mpnet::CoreEvent::HashDetail { tick, component, items } => {
-                                if let Some(a) = self.desync_watch.on_peer_detail(tick, component, items) {
+                                for a in self.desync_watch.on_peer_detail(tick, component, items) {
                                     self.send_desync_action(a);
                                 }
                             }
