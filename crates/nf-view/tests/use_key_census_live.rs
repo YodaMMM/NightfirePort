@@ -357,9 +357,12 @@ fn use_census_0700000d() {
     // playhead advances as the channel's CONSUMER [M SS_Update 0x1a9948], so the refusal is
     // not observable in isolation on this level. 07000013 carries the class rule row.)
 
-    // E-panel trigger (mask 4, not LOAD_LEVEL, out != 0) writes its out channel [M 0x1b2318].
+    // E-panel trigger (mask 4, out != 0, type TOUCH_ONCE/TOUCH) writes its out channel: only
+    // trigger types 1 and 2 write `+0x20` [M 0x1b2318:23-49]; MOVIE (0xd) pushes game states 6/7
+    // instead (:51-62) and AND/SEQ_AND/OUT/OR do nothing there (daily audit 2026-10-19).
     let ti = sim.drones.triggers.iter().position(|t| t.mask & 4 != 0 && t.out != 0
-            && t.kind != nf_game::triggers::kind::LOAD_LEVEL && !t.gone && t.script.is_none()
+            && matches!(t.kind, nf_game::triggers::kind::TOUCH_ONCE | nf_game::triggers::kind::TOUCH)
+            && !t.gone && t.script.is_none()
             && !near_load_trigger(sim, trigger_centre(t.lo, t.hi), 2.5));
     if let Some(ti) = ti {
         let (out, tpos) = (sim.drones.triggers[ti].out,
@@ -514,9 +517,12 @@ fn use_census_07000016() {
             "E on the switch must toggle its channel [M 0x1b02a8] — ch {ch:#04x} gate {gate:#04x} busy {sbusy} latch {slatch} value {svalue} bond_dxz {dxz:.2}");
     }
 
-    // E-panel trigger (mask 4, not LOAD_LEVEL, out != 0) writes its out channel [M 0x1b2318].
+    // E-panel trigger (mask 4, out != 0, type TOUCH_ONCE/TOUCH) writes its out channel: only
+    // trigger types 1 and 2 write `+0x20` [M 0x1b2318:23-49]; MOVIE (0xd) pushes game states 6/7
+    // instead (:51-62) and AND/SEQ_AND/OUT/OR do nothing there (daily audit 2026-10-19).
     let ti = sim.drones.triggers.iter().position(|t| t.mask & 4 != 0 && t.out != 0
-            && t.kind != nf_game::triggers::kind::LOAD_LEVEL && !t.gone && t.script.is_none()
+            && matches!(t.kind, nf_game::triggers::kind::TOUCH_ONCE | nf_game::triggers::kind::TOUCH)
+            && !t.gone && t.script.is_none()
             && !near_load_trigger(sim, trigger_centre(t.lo, t.hi), 2.5));
     if let Some(ti) = ti {
         let (out, tpos) = (sim.drones.triggers[ti].out,

@@ -228,7 +228,7 @@ fn the_driving_rows_take_the_no_movie_path() {
         walk_to_mission_select(&mut fe, row.cursor, row.name);
         assert!(!fe.flow.movie_pending, "{}: no movie is due for a driving row", row.name);
         assert_eq!(fe.flow.level_to_load, menu::FRONTEND_LEVEL,
-            "{}: the game keeps the map as GameState+8 until DRIVING.ELF takes over [M 0x1d3800:104-108]", row.name);
+            "{}: the port requests no level for a refused driving row [S port choice — the game itself writes the driving hash to GameState+8, C_SBNFMAP 0x20b8d8:27 / 0x1d3800:105-108, and hands over to DRIVING.ELF]", row.name);
         assert!(fe.notice.is_some(),
             "{}: the port's driving notice stands in for the state-9 handover [S port choice]", row.name);
         let mut slot: Option<nf_view::movie::Player> = None;

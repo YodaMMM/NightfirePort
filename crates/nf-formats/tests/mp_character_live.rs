@@ -94,7 +94,7 @@ fn mp_body_pose_picks_the_game_script_per_movement_state() {
     let st = |f: fn(&mut MpBodyState)| {
         let mut s = MpBodyState {
             mp: true, weapon: 0x02, substate: 0, fwd: 0.0, strafe: 0.0,
-            phase: 0.37, hold: 0, one_shot_time: 1.0, water_level: -9.9,
+            phase: 0.37, hold: 0, one_shot_time: 1.0, gravity_y: -9.8,
         };
         f(&mut s);
         s
@@ -135,9 +135,9 @@ fn mp_body_pose_picks_the_game_script_per_movement_state() {
     assert_eq!(sp.script, 0x0600_09ff, "SP crouch = the 999 crouch set [D 0x2b91d8]");
     // Death: substates 0xd/0xe pick the death script by the water level [M 0x190630 cases 0xd/0xe].
     let p = mp_body_pose(&sets, class1, &st(|s| s.substate = 0xd));
-    assert_eq!(p.script, DEATH_SCRIPT, "water_level −9.9 (Player_Init's value [M 0x1910f8:153]) → 0x6000151");
-    let p = mp_body_pose(&sets, class1, &st(|s| { s.substate = 0xe; s.water_level = 0.0; }));
-    assert_eq!(p.script, DEATH_SCRIPT_WATER_ZERO, "water_level == 0.0 → 0x60008e0 [M 0x190630]");
+    assert_eq!(p.script, DEATH_SCRIPT, "gravity Y −9.8 (Player_Init's WldGravity.y [M 0x1910f8:153]) → 0x6000151");
+    let p = mp_body_pose(&sets, class1, &st(|s| { s.substate = 0xe; s.gravity_y = 0.0; }));
+    assert_eq!(p.script, DEATH_SCRIPT_WATER_ZERO, "gravity Y == 0.0 (zero-g) → 0x60008e0 [M 0x190630]");
     // The MP spawn script is class 3's idle [M 0x1910f8:155-158].
     assert_eq!(MP_SPAWN_SCRIPT, sets.set(3, false).idle);
 }
@@ -149,7 +149,7 @@ fn mp_body_strafe_overlay_follows_the_angle_threshold() {
     let st = |f: fn(&mut MpBodyState)| {
         let mut s = MpBodyState {
             mp: true, weapon: 0x02, substate: 0, fwd: 0.0, strafe: 0.0,
-            phase: 0.37, hold: 0, one_shot_time: 1.0, water_level: -9.9,
+            phase: 0.37, hold: 0, one_shot_time: 1.0, gravity_y: -9.8,
         };
         f(&mut s);
         s

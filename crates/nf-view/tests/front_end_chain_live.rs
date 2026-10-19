@@ -21,7 +21,7 @@ fn the_completed_results_page_continues_to_the_mission_list() {
     fe.flow.current_level = 0x0700_0004; // 01's final part — the outro wraps 0x0730004 [M 0x182c60:89-91]
     fe.flow.stack = vec![nf_view::menu::ST_RUNNER]; // the host's demo_results boots the runner state [lib.rs]
     fe.mission_ended(Outcome::Complete, Stats::default());
-    // reward-after-outro: case 4 only QUEUES the page — GameState+0x28 = 0x40000036 [M 0x182c60:72];
+    // reward-after-outro: case 4 only QUEUES the page — GameState+0x1c (Ghidra `_28_4_`, decimal) = 0x40000036 [M 0x182c60:72];
     // the MenuManager_Create runs at the load's tail [M 0x1d6360:160-163], after the outro movie.
     // The old `assert_eq!(fe.page, Page::Results)` HERE pinned the pre-fix order the playtest
     // reported as "reward screen appearing before ending cutscene" — fixed with the addresses.

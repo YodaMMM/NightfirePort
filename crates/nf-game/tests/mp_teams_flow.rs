@@ -44,7 +44,8 @@ fn the_picked_teams_score_per_the_game() {
     join_picked(&mut m, 0, 0); // Phoenix pick
     join_picked(&mut m, 1, 1); // MI6 pick
     // Phoenix kills MI6: the enemy kill → the attacker's (Phoenix, team 0) score += |Δ| where Δ is
-    // the victim's score delta; a fresh victim pays 1 → +0x180 (team 0) [M 0x188f70:246-274].
+    // the KILLER's personal delta (1 for an enemy kill, −1 suicide, 2 the bonus case) → +0x180
+    // (team 0) [M 0x188f70:166-178, 266-271] (was "the victim's delta" — daily audit 2026-10-19).
     m.player_killed(1, Some(0), false, false, &mut rng);
     assert_eq!(m.game.team_scores[0], 1.0, "the Phoenix pick's team scores the enemy kill");
     assert_eq!(m.game.team_scores[1], 0.0);
