@@ -723,6 +723,10 @@ fn front_end_chain_01_to_05() {
         // reward-after-outro [M 0x182c60:72 / 0x1d6360:160-163]: the complete arm QUEUES the page;
         // the load tail's MenuManager_Create re-opens it before the page's 0x4c fields build.
         fe.reopen_queued_page();
+        // G-048(3): the load tail's MenuManager_Create lands the queued page — nothing was open
+        // between the mission end and here [M 0x1d6360:160-163, 0x182c60:72-75].
+        assert!(fe.reopen_queued_page(), "the manager create opens the queued results page");
+        assert_eq!(fe.page, Page::Results);
         // P_NFRESULTS case 0x4c against the live layer: the fields + the award.
         let difficulty = progress.difficulty;
         assert!(fe.results_enter(&mut progress, m, 6, difficulty, lang.as_ref()),
