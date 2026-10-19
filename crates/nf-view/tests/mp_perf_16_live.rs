@@ -24,7 +24,11 @@ fn iso() -> Option<String> {
 // the bots with the weapon set's first gun and carries the lobby's bot records); agent 13's
 // optimisations were proven result-identical against its own base (0xe5ac_fd39_a20a_ac80), and the
 // lazy sight line again on the merge (lazy_sight false + the precomputed bit2: the same digest).
-const PINNED_DIGEST: u64 = 0x78cd_537a_a62b_b300;
+// Re-pinned for bot-nav-pit-ramp (0x001c_313c_9be0_b2e1, kills 90 over 3600 ticks): the bots'
+// follower is the game's `FollowRoute` link creep now (bots.rs `steer_to`/`follow_route`
+// [M 0x15b110/0x159810/0x159f28/0x15a2c8]) — routes end at different ticks, bots die differently;
+// the two machines' hashes still agree every tick.
+const PINNED_DIGEST: u64 = 0x001c_313c_9be0_b2e1;
 
 const TICKS: u32 = 3600;
 
