@@ -79,8 +79,19 @@ fn shoot_gadget_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32,
 /// the documented SP-activation blocker → the AND mux completes obj 2 → the lift doors' SSs
 /// open → the cab → the real TOUCH_ONCE #67 → ch 0x32 → the real LOAD_LEVEL exit → 0700000a.
 /// (The runner's old self-loop "exit" — blocker 3 — is never touched: the walked cab exit wins.)
+/// The NPCs are held (the renderer's --hold-npcs dev hold [M lib.rs:5763]): a walking Bond IS
+/// seen by the patrolling lobby guard, and the game's sighted-guard chain — NearArmedPerson
+/// 0x1787c8:13-22 (no armed gate on 09/0A) → CivilianPatrol 0x15d610 case 3 SetState(0x56) →
+/// FirstSightState 0x147c48 prop 0x1A → CivilianChallenge 0x162558 → RunToAlarm → PressAlarm
+/// 0x168ea8 → SetMissionFailReason 0x13e560 case 0x10 — ends with the GUARD pressing the
+/// nearest switch (ch 0x7D → mux → ch 0x61 → objective 1 failed). The old "the walk must not
+/// raise the alarm (the switches are never touched)" claim was green only while the port froze
+/// sighted guards in CivilianHiding. The unheld sight repro is
+/// security_alarm_09_live::the_panel_guard_raises_the_alarm_and_fails_the_mission
+/// (docs/systems/security-room-alarm-09.md §"The walk tests under the real rule").
 fn drive_09(w: &mut Walker) -> String {
     let mut note = String::from("real drive 09: ");
+    w.scene.sim.as_mut().unwrap().drones.hold_npcs = true;
     w.wait(60);
     assert!(w.scene.sim.as_ref().unwrap().drones.scripts.players.iter().any(|p| p.out == 0x39),
         "SP #70 SCRIPTPLAYER_Elevators (out ch 0x39) [D placement]");
