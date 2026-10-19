@@ -114,6 +114,32 @@ Measured catch-up (the sandbox, release build): 301 ticks in 1194 ms ≈ **251 t
 a 20-minute match limit (72 000 ticks) back-fills in ~286 s of wall time, during which the match
 keeps running (the joiner catches up live through the relay after the snapshot).
 
+## 6a. Hardening (mp-online-failures, 2026-10-18) [S]
+
+- **Join history.** JOIN_BEGIN now carries the match's earlier late joins: after the hash, a count
+  byte + (slot u8, join_tick u32) per join up to the snapshot (absent = none). The replay
+  (`mp_late_join_catchup_joins`, `CoreEvent::LateJoinHandover.joins`) spawns those bodies before
+  their ticks exactly as the live machines did. Without it a SECOND late join — or a late joiner
+  reconnecting — never verified (the replay lacked the first joiner's body; caught by
+  `mp_online_failures::join_in_progress_from_the_menus_then_leave_and_reconnect`).
+- **One join tick.** A retransmitted JOIN_READY (the joiner resends every `hello_retry_ms` until a
+  JOIN_SLOT lands; a round trip longer than that sends two) re-picked a NEW join tick — machines
+  could arm the slot at different ticks. The host now answers a repeat with the tick it already
+  announced (`Peer::announced`, to the joiner only); a client arms a (slot, tick) once.
+- **Reconnect = own slot.** A late HELLO whose non-empty codename matches a slot's departed human
+  takes that slot (the body stands on NEUTRAL — §3's RECONNECT); anyone else the first free slot.
+  A profile-less player (empty name) gets the first free slot, which is its own when it was the
+  only one gone.
+- **Drop boundary.** A departed human's ticks before its drop tick (`left_at` = the host's
+  `last_ready + 1` when it left) keep their real inputs in the host's relay; a client takes every
+  non-local slot from the relay (the host's materialised NEUTRAL included), so a drop or join can
+  never make a client run a tick differently from the host.
+- **The finished match** (`Session::close_joins`, the host's debriefing) answers no new HELLO, so
+  a rematch re-dial never late-joins it.
+- **From the menus**: net-online-lobby.md §7 (`MpNetState::Joining`, `LobbyAdopt::LateJoin`).
+- Tests: `crates/nf-net/tests/drop_rejoin.rs` (shim, lossy), `crates/nf-net/src/proto.rs`
+  `join_begin_history_roundtrip_and_truncation`, `crates/nf-view/tests/mp_online_failures.rs`.
+
 ## 7. Live checks for the main agent
 
 None required — the PS2 has no late join to observe and the tests are headless. The visible work

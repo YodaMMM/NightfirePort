@@ -219,6 +219,10 @@ pub enum CoreEvent {
     Desync { tick: u32 },
     /// Client: the host went silent past the timeout.
     HostTimeout,
+    /// Client: the host LEFT (quit the match / closed the lobby) — at once,
+    /// not after the timeout. The app returns to the online pages with a
+    /// message [S mp-online-failures].
+    HostLeft,
     /// Client: the host refused the join.
     Refused,
     /// mp-join-in-progress. Host: a HELLO arrived after GO; the run-log
@@ -236,6 +240,9 @@ pub enum CoreEvent {
         snapshot_tick: u32,
         snapshot_hash: u64,
         log: Vec<[nf_net::Input; MAX_AGENTS]>,
+        /// The earlier late joins (slot, join tick) the replay spawns
+        /// (`crate::mp_late_join_catchup_joins`) — mp-online-failures.
+        joins: Vec<(u8, u32)>,
     },
     /// mp-join-in-progress. All machines: `slot` becomes human from
     /// `join_tick` — the app spawns its agent there (`Sim::mp_join_spawn`)
@@ -258,6 +265,8 @@ pub struct NetCore {
     choices: Option<MpNetChoices>,
     refused: bool,
     host_timed_out: bool,
+    /// Client: the host sent LEAVE (the link reads Lost at once).
+    host_left: bool,
     closed: bool,
     /// Events for the app (`take_app_events`).
     events: Vec<CoreEvent>,
@@ -306,6 +315,7 @@ impl NetCore {
             choices: None,
             refused: false,
             host_timed_out: false,
+            host_left: false,
             closed: false,
             events: Vec::new(),
             start_resend: None,
@@ -327,6 +337,10 @@ impl NetCore {
     /// replace-the-Rc shape left the other holders on the stale placeholder
     /// socket). The lobby calls it only before anything flows.
     pub fn rebind_host(&mut self, port: u16) -> Result<(), String> {
+        // mp-online-failures: the old session's socket goes FIRST — a core re-listening on the
+        // port it already holds (Back then Host again, the rematch's re-listen) could never bind
+        // while its own old socket stood.
+        self.release_socket();
         let tr = UdpTransport::bind(&format!("0.0.0.0:{port}")).map_err(|e| format!("bind {port}: {e}"))?;
         self.sess = Session::new_host(session_cfg(), tr, MatchSettings::default(), 0);
         self.is_host = true;
@@ -339,9 +353,21 @@ impl NetCore {
         self.choices = None;
         self.refused = false;
         self.host_timed_out = false;
+        self.host_left = false;
         self.closed = false;
         self.events.clear();
+        self.start_resend = None;
+        self.lobby = None;
+        self.lobby_edits.clear();
         Ok(())
+    }
+
+    /// mp-online-failures: swap the session for an unbound-port placeholder (an ephemeral
+    /// loopback socket), dropping the old one — its UDP port is free at once. Nothing is sent.
+    fn release_socket(&mut self) {
+        if let Ok(tr) = UdpTransport::bind("127.0.0.1:0") {
+            self.sess = Session::new_host(session_cfg(), tr, MatchSettings::default(), 0);
+        }
     }
 
     /// The lobby's re-bind, client side: dial `addr` on the SAME core (see
@@ -356,8 +382,12 @@ impl NetCore {
         self.choices = None;
         self.refused = false;
         self.host_timed_out = false;
+        self.host_left = false;
         self.closed = false;
         self.events.clear();
+        self.start_resend = None;
+        self.lobby = None;
+        self.lobby_edits.clear();
         Ok(())
     }
 
@@ -373,6 +403,7 @@ impl NetCore {
             choices: None,
             refused: false,
             host_timed_out: false,
+            host_left: false,
             closed: false,
             events: Vec::new(),
             start_resend: None,
@@ -541,6 +572,7 @@ impl NetCore {
                         snapshot_tick,
                         snapshot_hash,
                         log,
+                        joins: self.sess.join_history().to_vec(),
                     });
                 }
                 Event::LateJoinSlot { slot, join_tick } => {
@@ -563,6 +595,10 @@ impl NetCore {
                 Event::HostTimeout => {
                     self.host_timed_out = true;
                     self.events.push(CoreEvent::HostTimeout);
+                }
+                Event::HostLeft => {
+                    self.host_left = true;
+                    self.events.push(CoreEvent::HostLeft);
                 }
                 Event::Desync { tick, .. } => {
                     self.events.push(CoreEvent::Desync { tick });
@@ -670,19 +706,46 @@ impl NetCore {
         self.sess.set_display_name(name);
     }
 
+    /// Leave (LEAVE to every peer) and RELEASE the socket: the port is free the moment this
+    /// returns, so a re-host on the same port works at once (mp-online-failures — the closed
+    /// session used to keep its socket bound until the whole core dropped: Back then Host again
+    /// on the same port read "Port already in use").
     pub fn close(&mut self) {
         if !self.closed {
             self.sess.leave();
             self.closed = true;
             self.drop_reach();
+            self.release_socket();
+            self.advert = None;
+            self.browse = None;
         }
+    }
+
+    /// mp-online-failures: the match is over (the host's debriefing) — the finished session
+    /// keeps its peers (polled, not ticked) but answers no new HELLO, so a client re-dialing for
+    /// the rematch reaches the next lobby on this port instead of late-joining this match.
+    pub fn finish_match(&mut self) {
+        if self.is_host { self.sess.close_joins(); }
+        self.advert = None;
+    }
+
+    /// mp-online-failures: a client dialed a match already in progress — the host began (or
+    /// completed) the late-join handover. The front end shows "joining" and the app adopts the
+    /// session for the replay instead of waiting for a lobby that will never come.
+    pub fn joining_match(&self) -> bool {
+        !self.is_host && !self.closed && self.sess.late_join_pending()
+    }
+
+    /// The session socket's local address (tests: the port is released after `close`).
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        self.sess.local_addr()
     }
 
     /// The link state the join flow reads.
     pub fn link(&self) -> MpNetLink {
         if self.closed { return MpNetLink::Idle; }
         if self.is_host { return MpNetLink::Listening; }
-        if self.host_timed_out { return MpNetLink::Lost; }
+        if self.host_timed_out || self.host_left { return MpNetLink::Lost; }
         if self.refused { return MpNetLink::Refused; }
         if self.sess.local_slot() != 0 || self.match_start.is_some() {
             return MpNetLink::Connected;
@@ -754,6 +817,17 @@ impl NetCore {
     }
 }
 
+/// mp-online-failures: a core dropped while still open (the window closed, the app exiting
+/// mid-match) says goodbye — the peers learn at once (`ClientLeft` on the host, `HostLeft` on a
+/// client) instead of stalling out the 5 s timeout.
+impl Drop for NetCore {
+    fn drop(&mut self) {
+        if !self.closed {
+            self.sess.leave();
+        }
+    }
+}
+
 /// A cheap cloneable handle: the front end holds one as its `MpSession`
 /// trait object, the app drives the match through another. The second field
 /// is the test-only link-fault recipe (`None` in production): the lobby's
@@ -789,6 +863,39 @@ impl SessionProxy {
     /// (client) — the app's adoption cue.
     pub fn has_match(&self) -> bool {
         self.0.borrow().match_started().is_some()
+    }
+    /// mp-online-failures: the lobby's dial reached a match in progress — the app's late-join
+    /// adoption cue (the handover replays instead of a normal match load).
+    pub fn late_joining(&self) -> bool {
+        self.0.borrow().joining_match()
+    }
+}
+
+/// mp-online-failures: what the app does with the lobby's session this frame — the pure
+/// decision `App::adopt_lobby_session` runs (pinned headless by the failure-path tests).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LobbyAdopt {
+    /// Nothing to adopt yet (still in the lobby, or cancelled).
+    No,
+    /// The host armed / the client received the match start: adopt and load the arena.
+    Match,
+    /// The dial reached a match in progress: adopt for the late-join handover (no arena load —
+    /// the handover's replay builds the scene).
+    LateJoin,
+}
+
+impl SessionProxy {
+    /// The adoption decision for this lobby proxy.
+    pub fn adopt_kind(&self) -> LobbyAdopt {
+        if self.core_is_closed() {
+            LobbyAdopt::No
+        } else if self.has_match() {
+            LobbyAdopt::Match
+        } else if self.late_joining() {
+            LobbyAdopt::LateJoin
+        } else {
+            LobbyAdopt::No
+        }
     }
 }
 
@@ -845,6 +952,7 @@ impl crate::menu::MpSession for SessionProxy {
     fn push_row_edit(&mut self, e: &nf_net::LobbyEdit) { self.0.borrow_mut().push_row_edit(e); }
     fn take_row_edit(&mut self) -> Option<nf_net::LobbyEdit> { self.0.borrow_mut().take_row_edit() }
     fn close(&mut self) { self.0.borrow_mut().close(); }
+    fn joining_match(&self) -> bool { self.0.borrow().joining_match() }
     fn reach(&self) -> Option<crate::menu::MpReach> { self.0.borrow().reach() }
     fn browse(&mut self, on: bool) {
         let mut c = self.0.borrow_mut();

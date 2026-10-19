@@ -449,6 +449,20 @@ pub fn mp_late_join_catchup(
     log: &[[nf_net::Input; nf_net::MAX_AGENTS]],
     replay_ticks: u32,
 ) -> Result<(scene::Scene, u64), String> {
+    mp_late_join_catchup_joins(iso, settings, log, replay_ticks, &[])
+}
+
+/// `mp_late_join_catchup` with the match's earlier late joins (slot, join tick — the host's
+/// JOIN_BEGIN history): each body spawns before its tick exactly as the live machines spawned it
+/// (`Sim::mp_join_spawn`; a reconnect into a standing body creates nothing). Without them a
+/// second late join — or a late joiner's reconnect — could never verify (mp-online-failures).
+pub fn mp_late_join_catchup_joins(
+    iso: &str,
+    settings: nf_game::mp::MpSettings,
+    log: &[[nf_net::Input; nf_net::MAX_AGENTS]],
+    replay_ticks: u32,
+    joins: &[(u8, u32)],
+) -> Result<(scene::Scene, u64), String> {
     let arena = format!("{:08x}.bin", settings.level_code);
     let mut scene = load_mp_carry(iso, &arena, false, None, settings)
         .map_err(|e| format!("late join: the arena load failed: {e}"))?;
@@ -465,6 +479,9 @@ pub fn mp_late_join_catchup(
         let tick = i as u32;
         if tick > replay_ticks {
             break;
+        }
+        for (slot, jt) in joins {
+            if *jt == tick { sim.mp_join_spawn(*slot as usize); }
         }
         prev = net_slot0_tick(sim, row);
     }
@@ -2181,8 +2198,18 @@ impl App {
     /// level request), and adopting only in menu_after left the joiner loading the arena
     /// offline while the host waited on it (the two-window menu check: "player 2 timed out").
     fn adopt_lobby_session(&mut self) {
-        let adopt = self.net_lobby.as_ref().map_or(false, |p| p.has_match() && !p.core_is_closed());
-        if adopt && self.net.is_none() {
+        // mp-online-failures: a late join the player cancelled (Back on the join page while the
+        // handover ran) closed the adopted core — drop it, the menus own the online pages again.
+        if self.net.as_ref().is_some_and(|p| p.core_is_closed())
+            && self.fe.as_ref().is_some_and(|fe| matches!(fe.page, menu::Page::MpMode | menu::Page::MpNetJoin | menu::Page::MpHost))
+        {
+            self.net = None;
+            self.net_late_self = None;
+            self.net_join_pending = None;
+            self.net_late_handover = None;
+        }
+        let kind = self.net_lobby.as_ref().map_or(mpnet::LobbyAdopt::No, |p| p.adopt_kind());
+        if kind != mpnet::LobbyAdopt::No && self.net.is_none() {
             if let Some(p) = self.net_lobby.take() {
                 if let Some(fe) = self.fe.as_ref() {
                     self.net_rejoin = Some(if fe.mp_hosting { (true, fe.mp_net_port.to_string()) } else { (false, fe.mp_net_addr.trim().to_string()) });
@@ -2190,11 +2217,55 @@ impl App {
                 self.net_local_slot = p.0.borrow().local_slot();
                 self.net_tick = 0;
                 self.net = Some(p);
-                self.net_await_load = true;
-                self.net_menu_load = true;
-                eprintln!("[net] adopted the lobby's session for the match");
+                if kind == mpnet::LobbyAdopt::LateJoin {
+                    // mp-online-failures: the menu dial reached a running match — no arena load
+                    // and no load hold: the handover's replay builds the scene (the
+                    // LateJoinHandover arm below), exactly the flag path's late join.
+                    self.net_await_load = false;
+                    self.net_menu_load = false;
+                    eprintln!("[net] adopted the lobby's session for a join in progress");
+                } else {
+                    self.net_await_load = true;
+                    self.net_menu_load = true;
+                    eprintln!("[net] adopted the lobby's session for the match");
+                }
             }
         }
+    }
+
+    /// The online pages need their session: the proxy is created lazily on page entry (the
+    /// listen/dial rows re-bind its unbound placeholder core); `net_lobby` holds the same Rc so
+    /// the app can adopt it when the match starts. Not while a session is adopted (a late join
+    /// in progress keeps the join page up — a fresh proxy would orphan it).
+    fn ensure_lobby_session(&mut self) {
+        let Some(fe) = self.fe.as_mut() else { return };
+        if matches!(fe.page, menu::Page::MpHost | menu::Page::MpNetJoin) && self.net_lobby.is_none() && self.net.is_none() {
+            if let Ok(p) = mpnet::SessionProxy::host(0) {
+                // net-p2p: the app's sessions probe internet reachability (UPnP / NAT-PMP /
+                // STUN) on listen and dial; NF_NO_REACH=1 keeps them LAN-only, NF_STUN
+                // ("host:port,host:port") replaces the public STUN list [S net-p2p §1].
+                if let Some(cfg) = reach_config() { p.0.borrow_mut().enable_reach(cfg); }
+                fe.mp_session = Some(Box::new(p.clone()));
+                self.net_lobby = Some(p);
+            }
+        }
+    }
+
+    /// mp-online-failures: this machine leaves the running online match on its own (the pause
+    /// page's QUIT): LEAVE goes out now — the others continue on NEUTRAL for this slot (a client)
+    /// or return to their online pages at once (the host) — instead of the session lingering
+    /// with keepalives and every other machine stalled on this one's missing inputs forever.
+    fn net_leave_match(&mut self) {
+        if let Some(p) = self.net.take() { p.0.borrow_mut().close(); }
+        self.net_lobby = None;
+        self.net_menu_load = false;
+        self.net_late_self = None;
+        self.net_armed = None;
+        self.net_join_pending = None;
+        self.net_late_handover = None;
+        self.net_await_load = false;
+        self.net_rejoin = None;
+        eprintln!("[net] left the online match");
     }
 
     /// Test aid (NF_MENU_SCRIPT="ms:step,ms:step,..."): menu presses for the two-window MP checks,
@@ -2309,24 +2380,14 @@ impl App {
                 });
             }
         }
+        // net-consolidate: the online pages need their session (`ensure_lobby_session`).
+        self.ensure_lobby_session();
+        // mp-online-failures: the pause page's QUIT out of a running online match (the quit
+        // requests the front-end map) leaves the session — LEAVE now, not a lingering socket.
+        let quitting_online = self.net.is_some()
+            && self.fe.as_ref().is_some_and(|fe| fe.requested_level == Some(menu::FRONTEND_LEVEL));
+        if quitting_online { self.net_leave_match(); }
         let Some(fe) = self.fe.as_mut() else { return };
-        // net-consolidate: the online pages need their session. The proxy is
-        // created lazily on page entry (the listen/dial rows replace its
-        // unbound placeholder core); `net_lobby` holds the same Rc so the app
-        // can adopt it when the match starts.
-        if matches!(fe.page, menu::Page::MpHost | menu::Page::MpNetJoin) && self.net_lobby.is_none() {
-            match mpnet::SessionProxy::host(0) {
-                Ok(p) => {
-                    // net-p2p: the app's sessions probe internet reachability (UPnP / NAT-PMP /
-                    // STUN) on listen and dial; NF_NO_REACH=1 keeps them LAN-only, NF_STUN
-                    // ("host:port,host:port") replaces the public STUN list [S net-p2p §1].
-                    if let Some(cfg) = reach_config() { p.0.borrow_mut().enable_reach(cfg); }
-                    fe.mp_session = Some(Box::new(p.clone()));
-                    self.net_lobby = Some(p);
-                }
-                Err(_) => {}
-            }
-        }
         let closed = fe.closed;
         if let Some(code) = fe.requested_level.take() {
             // The menu picked a level: through the same reload path a LOAD_LEVEL uses. A cold pick
@@ -2458,6 +2519,13 @@ impl App {
 
     /// A desync / a lost host / a refused join: the game's message box (the front end's option
     /// box with the port-only string) and the lobby page underneath it; the session is closed.
+    ///
+    /// mp-online-failures: it lands on the ONLINE page this machine came from (the host's port
+    /// page / the client's address page, `net_rejoin`) — the couch Join Game page it used to
+    /// open had no way back online. Out of a running match the front end is rebuilt the
+    /// debriefing's way (`mp_results`: the music statics, the profile session, the runner flow,
+    /// the front-end map requested under the fade) so the arena unloads instead of staying up
+    /// frozen behind the page.
     fn net_fail(&mut self, msg: &str) {
         eprintln!("[net] {msg}");
         if let Some(se) = self.net.as_mut() { se.0.borrow_mut().close(); }
@@ -2468,21 +2536,41 @@ impl App {
         self.net_armed = None;
         self.net_join_pending = None;
         self.net_late_handover = None;
-        let fe = self.fe.get_or_insert_with(menu::FrontEnd::new);
-        // settings-persist: a freshly minted front end (fe was None) boots the option file's
-        // values, not the bare defaults — the pause page's options tabs show what the user set.
+        self.net_await_load = false;
+        let rejoin = self.net_rejoin.take();
+        let in_match = self.scene.sim.is_some() && self.level_code != 0 && self.level_code != menu::FRONTEND_LEVEL;
+        let mut fe = if in_match {
+            let mut fe = menu::FrontEnd::new();
+            if let Some(old) = self.fe.take() {
+                self.profile_session = menu::ProfileSession::from_fe(&old);
+                Self::inherit_music_statics(&mut fe, old.music.bank_flip, old.music.loaded_bank, old.music.music_master);
+            } else {
+                Self::inherit_music_statics(&mut fe, self.music_bank_flip, self.music_loaded_bank, self.music_master);
+            }
+            fe
+        } else {
+            self.fe.take().unwrap_or_else(menu::FrontEnd::new)
+        };
+        // settings-persist: the option file's values, not the bare defaults.
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
         fe.opts = opts;
         // profile-session: keep the standing codename session (the other re-creates' rule).
-        let session = self.profile_session.clone();
-        session.apply_to(fe);
-        fe.net_notice = Some(msg.to_string());
-        fe.page = menu::Page::MpJoin;
-        fe.cursor = 0;
-        fe.closed = false;
-        fe.mp_match_settings = None;
-        for a in fe.mp_join.iter_mut() { a.joined = false; a.ready = false; }
+        self.inherit_profile_session(&mut fe);
+        fe.mp_net_return(rejoin, msg);
+        if in_match {
+            // `mp_results`' order: the runner flow, the front-end map request, the fade on top.
+            fe.flow.stack = vec![menu::ST_RUNNER];
+            fe.flow.current_level = menu::FRONTEND_LEVEL;
+            fe.requested_level = Some(menu::FRONTEND_LEVEL);
+            fe.flow.reset_map_level_to_load(menu::FRONTEND_LEVEL, false, false);
+            fe.flow.push_state(7, 84);
+            // The load tail re-opens the queued page (`reopen_queued_page`): queue the online page.
+            fe.flow.page = fe.page.id();
+        }
+        self.fe = Some(fe);
+        // The online page needs its fresh session now (the first press may be Start/Connect).
+        self.ensure_lobby_session();
         if self.scene.sim.is_some() { self.grab(false); }
     }
 
@@ -2817,6 +2905,10 @@ impl App {
             // closing it here told a peer still finishing its last ticks that the host had left
             // (the two-match check's "player 1 left" on the client). It closes when the page goes.
             self.net_finished = self.net.take();
+            // mp-online-failures: the finished match takes no new peer — a client that pressed
+            // Continue first re-dials this port, and its HELLO must wait for the host's next
+            // lobby, not late-join the match that just ended (it landed in a dead lobby).
+            if let Some(s) = self.net_finished.as_ref() { s.0.borrow_mut().finish_match(); }
             self.net_lobby = None;
             self.net_menu_load = false;
             self.net_late_self = None;
@@ -3886,21 +3978,26 @@ impl ApplicationHandler for App {
                                     slot + 1, if graceful { "left" } else { "timed out" });
                             }
                             mpnet::CoreEvent::HostTimeout => {
-                                self.net_fail("The host went away\nReturning to the lobby");
+                                self.net_fail("Lost the connection to the host");
+                            }
+                            mpnet::CoreEvent::HostLeft => {
+                                // mp-online-failures: the host quit — every client is told at
+                                // once and lands back on its Join Online page (address kept).
+                                self.net_fail("The host left the match");
                             }
                             mpnet::CoreEvent::LateJoinStarted { slot } => {
                                 // The match runs on untouched; the draw code may show
                                 // "player joining" from this.
                                 eprintln!("[net] late join: serving the run log to slot {slot}");
                             }
-                            mpnet::CoreEvent::LateJoinHandover { slot, settings, snapshot_tick, snapshot_hash, log } => {
+                            mpnet::CoreEvent::LateJoinHandover { slot, settings, snapshot_tick, snapshot_hash, log, joins } => {
                                 // The joiner's handover: the app replays the log headless
                                 // (`mp_late_join_catchup`), compares the hash, then confirms
                                 // or refuses. The replay is seconds of sim — the flag path
                                 // runs it inline here (the draw code may thread it later);
                                 // the main agent's joining page owns the pacing.
                                 eprintln!("[net] late join: slot {slot} handover, replaying {} ticks from the host's log", snapshot_tick + 1);
-                                match crate::mp_late_join_catchup(&self.iso, *settings.clone(), &log, snapshot_tick) {
+                                match crate::mp_late_join_catchup_joins(&self.iso, *settings.clone(), &log, snapshot_tick, &joins) {
                                     Ok((scene, hash)) => {
                                         if hash == snapshot_hash {
                                             eprintln!("[net] late join: replay verified at tick {snapshot_tick}");
@@ -3931,6 +4028,12 @@ impl ApplicationHandler for App {
                                             self.net_local_slot = 0;
                                             self.net_late_self = Some(slot as usize);
                                             if let Some(s) = self.net.as_mut() { s.0.borrow_mut().confirm_late_join(); }
+                                            // mp-online-failures: the menu path's join page closes
+                                            // (the tick loop runs only without a front end) and
+                                            // the arena is the level now.
+                                            self.level_code = settings.level_code;
+                                            if self.fe.is_some() { self.close_front_end(); }
+                                            if self.scene.sim.is_some() { self.grab(true); }
                                         } else {
                                             eprintln!("[net] late join: replay hash mismatch at tick {snapshot_tick} — refusing");
                                             if let Some(s) = self.net.as_mut() { s.0.borrow_mut().late_join_verify_failed(); }
