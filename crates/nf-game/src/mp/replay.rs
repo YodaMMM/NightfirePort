@@ -84,7 +84,7 @@ pub struct ObjReg {
 #[derive(Clone, Debug, Default)]
 pub struct MpTickInput {
     /// The KOTH hill occupancy (`update_objects`' per-slot mask).
-    pub on_hill: [bool; 8],
+    pub on_hill: [bool; super::MP_MAX_SLOTS],
     /// `update`'s paused flag.
     pub paused: bool,
     /// Human slot positions applied this tick (`set_slot`), in slot order.

@@ -98,6 +98,9 @@ pub struct GunImp {
     pub cooldown: f32,
     /// `ext+0x9c` — the hot byte (200 heat reached).
     pub hot: bool,
+    /// `ext+0x9d` — the `TurretGuns` entry: 0xb in SP, the MP weapon set (Random: a `Rand_Rand(10)`
+    /// pick) [M GunImp_Create 0x131f20:52-63,87].
+    pub turret: u8,
 }
 
 impl GunImp {
@@ -115,7 +118,7 @@ impl GunImp {
     /// [M 0x1320d8:196-211 — the offset vector rotated by the gun object's matrix].
     pub fn muzzle(&self) -> V3 {
         let d = self.barrel_dir();
-        let m = TURRET_GUNS[SP_TURRET].muzzle;
+        let m = TURRET_GUNS[(self.turret as usize).min(TURRET_GUNS.len() - 1)].muzzle;
         // The offset (0, 0, 1.71) is pure barrel-forward; the rotated form keeps the general shape.
         let along = m[2];
         [self.pos[0] + d[0] * along + m[0], self.pos[1] + d[1] * along + m[1], self.pos[2] + d[2] * along + m[2]]

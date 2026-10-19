@@ -389,20 +389,24 @@ fn cursors_wrap_and_back_walks_up_the_pages() {
     // CloseIris delay [M C_SBNFMAP 0x20b8d8:48, G-048(1)].
     iris_side(&mut fe);
     assert_eq!(fe.page, Page::Dossier);
-    // fe-audit 1019: the Dossier's Back is the manager's default page pop [M 0x21c858:592-600;
+    // fe-audit 1019: the Dossier's Back is the manager's default page pop [M 0x21c858:592-598;
     // the disc's front-end def binds no msg-99 script on any page — every page's only SCRIPT is
     // id 0x2000000f bound to the 0x4c-open slot 0 by its single MSG 0x21 [D the 08000002 tag
     // stream]] — the mission list it was opened from.
     assert!(fe.action(Action::Back));
     assert_eq!(fe.page, Page::MissionSelect);
     // fe-audit 1019: the list's Back is ROUTE-DEPENDENT. 0x5f runs the page's msg-99 SCRIPT
-    // first [M 0x21c858:588-592] — none is bound [D] — so the pushed SP chain takes the default
-    // pop: reopen the wheel with its saved cursor [M 0x21c858:592-600]. The wheel was pushed by
-    // the confirm's 0x44 b=0 [M C_SBNFDFCTY 0x216ca8:10-17; the push rule 0x21c858 case 0x44].
+    // first [M 0x21c858:604-608] — none is bound [D] — so the pushed SP chain takes the default
+    // pop: reopen the wheel with its saved cursor [M 0x21c858:592-598]. The wheel was pushed by
+    // the confirm's 0x44 carrying b = DAT_002e1adc [M 0x202190:9] — here 0 [S] unverified: the
+    // global is cleared by C_SBNFCN 0x20b390:30 / P_NFSELECT 0x20aec0:65 and set by P_MPJOIN
+    // 0x20ca00:182 / C_SBCNOPTIONS 0x213528:66 / P_CNNAME 0x213790:71 / C_KEYBOARD
+    // 0x213a98:61, so the value depends on which menus ran; C_SBNFDFCTY 0x216ca8:10-17 only
+    // calls Menu_ChangePageCloseIris + the push rule 0x21c858 case 0x44].
     // (On an EMPTY stack — the results/bonus route, opened with b=1 [M 0x208e78:43] — the pop's
     // else reaches P_NFMAP's 99 arm → MAIN [M 0x20b608:67-68]; that route is menu_sp_e2e's.)
     assert!(fe.action(Action::Back));
-    assert_eq!(fe.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-600]");
+    assert_eq!(fe.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-598]");
     assert_eq!(fe.cursor, 2, "the wheel's saved cursor rode the pop [M 0x21c858:600 — 00 Agent was picked]");
 }
 

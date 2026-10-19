@@ -102,6 +102,18 @@ pub struct HudTables {
     /// The 0700001b missile-status pane 20 (`SpacePane` 0x2be598 → `HUD_UpdateSpacePane` 0x19d3b8,
     /// `SpaceSprInfo` 0x2be3b0, 11 sprites): the "T" body, the 8 missile lamps, the 2 top boxes.
     pub space: Vec<SpriteInfo>,
+    /// The MP radar pane's ring sprite (`RadarPane` → `HUD_CreateRadar` 0x19f4e8 / `HUD_RadarUpdate`
+    /// 0x19f6e8, `RadarSprInfo` 0x2bdd60, 1 sprite) — empty when the ELF lacks the symbol.
+    pub radar: Vec<SpriteInfo>,
+    /// The MP score pane's 7 sprites (`MPScorePane` → `HUD_MPUpdatePane` 0x19f0a0, `MPScoreInfo`
+    /// 0x2be888) — empty when the ELF lacks the symbol.
+    pub mp_score: Vec<SpriteInfo>,
+    /// The MP health pane's 8 sprites (`MPHealthPane` → `HUD_CreateMPHealthPane` 0x19b390 /
+    /// `HUD_UpdateMPHealthPane` 0x19b630, `MPHealthSprInfo` 0x2be6b8) — empty when absent.
+    pub mp_health: Vec<SpriteInfo>,
+    /// The MP ammo pane's 3 text sprites (`MPAmmoPane` → `HUD_UpdateAmmoPane` 0x19a7f0,
+    /// `MPAmmoSprInfo` 0x2be610) — empty when absent.
+    pub mp_ammo: Vec<SpriteInfo>,
     /// Per ammo type: u, v, width, pixels per round.
     pub bullets: Vec<[f32; 4]>,
     /// Font 2 (`FONTSerpLight`, the HUD's).
@@ -163,7 +175,11 @@ impl HudTables {
         let air = sprites("AirSprInfo")?;
         let redeemer = sprites("RedeemerSprInfo")?;
         let space = sprites("SpaceSprInfo")?;
-        Ok(HudTables { health: sprites("HealthSprInfo")?, ammo: sprites("AmmoSprInfo")?, air, redeemer, space, bullets, font, font_header })
+        let radar = sprites("RadarSprInfo").unwrap_or_default();
+        let mp_score = sprites("MPScoreInfo").unwrap_or_default();
+        let mp_health = sprites("MPHealthSprInfo").unwrap_or_default();
+        let mp_ammo = sprites("MPAmmoSprInfo").unwrap_or_default();
+        Ok(HudTables { health: sprites("HealthSprInfo")?, ammo: sprites("AmmoSprInfo")?, air, redeemer, space, radar, mp_score, mp_health, mp_ammo, bullets, font, font_header })
     }
 }
 

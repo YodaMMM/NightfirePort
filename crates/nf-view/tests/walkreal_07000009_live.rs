@@ -179,7 +179,7 @@ fn walk_tower_a_start_to_finish() {
         assert!(1 <= left && left <= 300, "the fade is still counting, got left={left}");
         let a0 = sim.drones.exit_fade_view().expect("the fade getter").alpha;
         assert!(a0 >= 0.0 && a0 < 1.0, "pre-fade alpha in [0,1), got {a0}");
-        // The music arm [M 0x1b2318:109 `Music_Event(3,1)` → 0x113558:9-33]: the level's own END
+        // The music arm [M 0x1b2318:109 `Music_Event(3,1)` → UpdateMFX_03TowerA 0x113558 (SFXFadeDown(0) at :37)]: the level's own END
         // marker jumped INSTANTLY — end_calm when the playing section is outside the combat set,
         // end_combat when the lobby's roaming guards put one on (the scan [M 0x113558:12-31]; both
         // arms pinned per-arm in the music.rs unit test) — with the SFX-bus fade-down queued.
@@ -187,8 +187,8 @@ fn walk_tower_a_start_to_finish() {
         assert!(sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::Jump { section, instant: true } if *section == row.end_calm || *section == row.end_combat)),
             "the exit jumped an end marker instantly, out: {:?}", sim.drones.music.out);
         assert!(sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::FadeDown { music: false })),
-            "SFXFadeDown(0) queued [M 0x113558:31]");
-        assert!(sim.drones.music.wait_for_end, "MusicWaitForEnd = 1 [M 0x113558:33]");
+            "SFXFadeDown(0) queued [M UpdateMFX_03TowerA 0x113558:37]");
+        assert!(sim.drones.music.wait_for_end, "MusicWaitForEnd = 1 [M UpdateMFX_03TowerA 0x113558:39]");
         // The end marker must NOT be on_death/on_fail (the death/fail path keeps its own markers).
         assert!(!sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::Jump { section, .. } if *section == row.on_death || *section == row.on_fail)),
             "the exit did not ride the death/fail markers");

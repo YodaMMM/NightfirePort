@@ -132,10 +132,16 @@ fn time_limit_end_hands_over_with_the_draw_line() {
     assert!(m.game.time_up, "0xfe latched [M 0x184268:142-143]");
     assert_eq!(m.game.state, 5);
     assert_eq!(board.rows.len(), 2);
-    let (label, arg) = match &board.result {
-        MpDebriefResult::Draw => (RESULT_DRAW_LABEL, String::new()),
-        other => panic!("a scoreless match must draw, got {other:?}"),
-    };
-    assert_eq!(label, 0x0100_02a0, "\"Match was a draw\" [L USATxt]");
-    assert!(arg.is_empty());
+    // The bot now fights (it hunts the idle human), so the score is whatever the minute gave:
+    // the result line follows the game's rule — the top two TOTALs tie → the draw text, else
+    // the leader wins [M 0x212198:222-229].
+    let tie = board.rows[0].total == board.rows[1].total;
+    match &board.result {
+        MpDebriefResult::Draw => {
+            assert!(tie, "a draw only when the top two tie");
+            assert_eq!(RESULT_DRAW_LABEL, 0x0100_02a0, "\"Match was a draw\" [L USATxt]");
+        }
+        MpDebriefResult::Wins(_) => assert!(!tie, "a win only when the leader is ahead"),
+        other => panic!("an Arena match ends in a draw or a win, got {other:?}"),
+    }
 }

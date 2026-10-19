@@ -99,7 +99,8 @@ pub fn radar_team_color(team_game: u32, team: u32) -> u32 {
 /// +0x08 deaths).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MpScoreRow {
-    /// The MPGame slot (humans 0..human_count, bots 4..4+bot_count [M 0x212198:92-111]).
+    /// The MPGame slot (humans 0..human_count, then the bots — the game's fixed bot base 4 [M
+    /// 0x212198:92-111] follows the human count in the port [S mp-16-slots]).
     pub slot: usize,
     /// `MPSettings + slot·0x30 + 0x20` — the team (the is-target marker in scenario 0x400
     /// [M 0x189840:59, 0x18aa70:38-41]; the port keeps the marker in `MpMatch::assassin_target`).
@@ -134,6 +135,38 @@ impl MpScoreRow {
             (2, self.kills as f32, self.kills, self.deaths)
         }
     }
+}
+
+/// The game's own MP participant layout: 4 humans + 4 bots in 8 `MPGame` slots [M `MP_Start`
+/// 0x183a50:116-160]. The HUD keeps the game-sized layout up to this count [S mp-16-slots].
+pub const GAME_SLOTS: usize = 8;
+
+/// The radar pane's blip cap: `RadarPane` CREATE+0x16 = 24 runtime blips [M 0x19f6e8:108,153;
+/// docs/fields/hud-panes.md]. With 16 participants the worst list is 15 player blips + the 8
+/// uplink terminals = 23, so the game's cap still holds every blip (pinned by the tests).
+pub const RADAR_BLIP_CAP: usize = 24;
+
+/// One standings row ([`MpHudSnapshot::board`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MpBoardRow {
+    /// 0-based rank (equal display scores share a rank — the debriefing's walk [M 0x212198:131-143]).
+    pub rank: usize,
+    pub slot: usize,
+    pub team: u32,
+    /// [`MpScoreRow::display_score`].
+    pub score: f32,
+    pub kills: i32,
+    pub deaths: i32,
+    /// The reading machine's own row.
+    pub viewer: bool,
+}
+
+/// The standings list the HUD draws ([`MpHudSnapshot::board`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MpBoard {
+    pub rows: Vec<MpBoardRow>,
+    /// Participants not listed (the cut below `max_rows`).
+    pub hidden: usize,
 }
 
 /// One uplink terminal's HUD state (`HUD_MPUpdatePane` colors the pane icons from it [M
@@ -219,11 +252,12 @@ impl MpHudSnapshot {
             rows: Vec::new(),
         };
 
-        // The rows: humans 0..human_count, then bots 4..4+bot_count — the game's slot walk
-        // [M 0x212198:92-111; the pause board 0x204408:327-399 buckets by the same order].
-        let humans = (m.settings.human_count as usize).min(4);
-        let bots = (m.settings.bot_count as usize).min(4);
-        for slot in (0..humans).chain(4..4 + bots) {
+        // The rows: humans 0..human_count, then the bots — the game's slot walk with its
+        // fixed bot base 4 [M 0x212198:92-111; the pause board 0x204408:327-399 buckets by the
+        // same order] extended to follow the humans [S mp-16-slots].
+        let humans = (m.settings.human_count as usize).min(super::MP_MAX_SLOTS);
+        let bots = (m.settings.bot_count as usize).min(super::MP_MAX_SLOTS - humans);
+        for slot in (0..humans).chain(humans..humans + bots) {
             let s = &m.game.slots[slot];
             snap.rows.push(MpScoreRow {
                 slot,
@@ -250,7 +284,7 @@ impl MpHudSnapshot {
                 let argb = radar_team_color(m.settings.team_game, m.settings.players[slot].team);
                 snap.radar.push(MpRadarObj { pos, argb, kind: RadarKind::Player.as_u16(), slot: Some(slot) });
             }
-            for slot in 4..4 + bots {
+            for slot in humans..humans + bots {
                 if slot == viewer_slot || m.game.slots[slot].dead {
                     continue;
                 }
@@ -340,7 +374,60 @@ impl MpHudSnapshot {
         format!("{mm:02}:{ss:02}")
     }
 
-    /// The rows sorted the way the game sorts its board: `P_MPDEBRIEFING_Handler` 0x212198's
+    /// The match's participant count (humans + bots) — the rows' length.
+    pub fn participants(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// More participants than the game's own 8-slot layout (4 humans + 4 bots [M `MP_Start`
+    /// 0x183a50:116-160]) — the port's 9–16 player matches [S mp-16-slots]. The HUD draw switches
+    /// its standings list to the compact layout when this holds; ≤ 8 keeps the full-size rows.
+    pub fn compact(&self) -> bool {
+        self.rows.len() > GAME_SLOTS
+    }
+
+    /// The in-match standings list [S port-only: the game's in-match HUD has one score pane per
+    /// viewer and no list — `HUD_MPUpdatePane` 0x19f0a0 shows the team line over the viewer's own
+    /// line; the only ranked board is the debriefing's]. The rows are [`Self::sorted_rows`] (the
+    /// debriefing's descending display-score order, equal scores in slot order) with the
+    /// debriefing's rank walk (the rank advances only when the score differs from the row above
+    /// [M 0x212198:131-143]). At most `max_rows` rows; when the viewer's own row falls below the
+    /// cut it replaces the last visible row, so the viewer is ALWAYS listed with their true rank
+    /// [S]. `hidden` counts the participants left out.
+    pub fn board(&self, max_rows: usize) -> MpBoard {
+        let sc = self.scenario;
+        let sorted = self.sorted_rows();
+        let mut ranked: Vec<MpBoardRow> = Vec::with_capacity(sorted.len());
+        let mut rank = 0usize;
+        for (i, r) in sorted.iter().enumerate() {
+            if i > 0 && r.display_score(sc) != sorted[i - 1].display_score(sc) {
+                rank = i;
+            }
+            ranked.push(MpBoardRow {
+                rank,
+                slot: r.slot,
+                team: r.team,
+                score: r.display_score(sc),
+                kills: r.kills,
+                deaths: r.deaths,
+                viewer: r.slot == self.viewer_slot,
+            });
+        }
+        let total = ranked.len();
+        let max_rows = max_rows.max(1);
+        if total > max_rows {
+            let own = ranked.iter().position(|r| r.viewer);
+            let mut shown: Vec<MpBoardRow> = ranked[..max_rows].to_vec();
+            if let Some(i) = own.filter(|&i| i >= max_rows) {
+                shown[max_rows - 1] = ranked[i];
+            }
+            MpBoard { rows: shown, hidden: total - max_rows }
+        } else {
+            MpBoard { rows: ranked, hidden: 0 }
+        }
+    }
+
+    /// The rows sorted the way the game sorts its board:`P_MPDEBRIEFING_Handler` 0x212198's
     /// bubble pass, descending by `Menu_GetMPScore` 0x203af8's display score [M 0x212198:112-130;
     /// 0x203af8:44-54]. The bubble swaps only on a strictly greater score, so equal scores keep
     /// slot order — this getter is that stable order (a merge-safe re-derivation, not a port of
@@ -355,3 +442,153 @@ impl MpHudSnapshot {
         rows
     }
 }
+
+// ─── The per-viewer score pane (`MPScorePane` 13: `HUD_CreateMPScorePane` 0x19ed10 +
+//     `HUD_MPUpdatePane` 0x19f0a0, `MPScoreInfo` 0x2be888, 7 sprites) ─────────────────────────
+//
+// The positions are the created runtime rects for one full-screen viewer, measured in the real
+// game [L PCSX2 EE snapshots 2026-10-18 of a 1-human Arena (FFA) and Team Arena match on
+// 07000023: pane 13's sprite array at `HUD+8+13·0x20+8`] and re-derived from the create code:
+// every sprite is created at its template (0,0) / (0,448) and `HUD_FixMP` 0x19b110 clamps it into
+// the viewer rect inset by 16 (MPSettings+0x1ac == 1 [M 0x19b110:27-31]) → (16,16) / (16,432−h);
+// then 0x19ed10 moves them per scenario [M 0x19ed10:58-123].
+
+/// One icon sprite of the score pane, in HUD units (512×448).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MpPaneIcon {
+    /// The pane sprite index (1/2/6 = the objective icons, 3/4/5 = the line icons).
+    pub sprite: usize,
+    /// The texture hash (`hashtable_set_sprite` [M 0x19f0a0] or the template's [L 0x2be888]).
+    pub tex: u32,
+    pub x: f32,
+    pub y: f32,
+    /// The sprite colour 0xRRGGBBAA [M 0x19f0a0 / L 0x2be888: 0x7f7f7fff].
+    pub rgba: u32,
+    /// The draw layer (0x1e — `HUD_MPUpdatePane` writes 0x1e to every shown icon [M]).
+    pub layer: i32,
+    /// Flag 0x100 (additive): the line icons 3/4/5 carry it, the objective icons not [L 0x2be888].
+    pub additive: bool,
+}
+
+/// The score pane for one viewer: the text sprite (0) + the icons drawn this frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MpScorePane {
+    /// The text, '\n'-separated lines (line 1 may be empty: the FFA player string starts "\n").
+    pub text: String,
+    /// The text sprite's pen (x, y): (40, 13) when the team line is suppressed, else (40, 30)
+    /// [L; M 0x19ed10:101-118 — +0x18 x, −3 y, then +0x11 y unless FFA + not bit30 + not 0x400].
+    pub text_x: f32,
+    pub text_y: f32,
+    /// The text colour (0x7f7f7fff [L MPScoreInfo[0]]) and its outline colour = the sprite's
+    /// colour2 (+0x14): black, or with a team line the team's (team 0 `0xff0000ff`, else
+    /// `0x0000ffff`) [M 0x19f0a0:52-70 — the store goes to +0x14, not the text colour; L the
+    /// Team Arena capture: white digits, red outline for team 0].
+    pub rgba: u32,
+    pub outline: u32,
+    pub icons: Vec<MpPaneIcon>,
+}
+
+/// The template textures [L MPScoreInfo @0x2be888]: 3 = 0x03000188 (the team star),
+/// 4 = 0x03000187 (the gun = kills), 5 = 0x03000186 (the skull = deaths).
+pub const SCORE_ICON_TEX: [u32; 3] = [0x0300_0188, 0x0300_0187, 0x0300_0186];
+
+impl MpScorePane {
+    /// `HUD_CreateMPScorePane` + `HUD_MPUpdatePane` for the snapshot's viewer (team
+    /// `viewer_team`), the single full-screen viewer layout. `team_game`/`bit30` are
+    /// MPSettings+0x18c/+0x190.
+    pub fn build(snap: &MpHudSnapshot, team_game: u32, bit30: u32, viewer_team: u32) -> MpScorePane {
+        let sc = snap.scenario;
+        // The create's text move [M 0x19ed10:101-118]: x += 0x18, y −= 3, then y += 0x11 unless
+        // (team_game == 0 && bit30 == 0 && scenario != 0x400) — where sprite 3 hides instead
+        // (FuckOffSprite3 = 1, its y −= 0x11).
+        let suppressed = team_game == 0 && bit30 == 0 && sc != scenario::ASSASSIN;
+        let (text_y, s3_y) = if suppressed { (13.0, -1.0) } else { (30.0, 16.0) };
+        // Sprites 4/5 follow 3 at +0x12 each [M 0x19ed10:120-123].
+        let mut icons = Vec::new();
+        for (k, tex) in SCORE_ICON_TEX.iter().enumerate() {
+            if k == 0 && suppressed { continue; } // layer 0xff [M 0x19f0a0:44-46]
+            icons.push(MpPaneIcon { sprite: 3 + k, tex: *tex, x: 16.0, y: s3_y + 18.0 * k as f32, rgba: 0x7f7f_7fff, layer: 0x1e, additive: true });
+        }
+        // The text [M 0x19f0a0:47-70; MP_GetTeamScore 0x18b338, MP_GetPlayerScore 0x189730].
+        let row = snap.rows.iter().find(|r| r.slot == snap.viewer_slot);
+        let (score, kills, deaths) = row.map_or((0.0, 0, 0), |r| (r.score, r.kills, r.deaths));
+        let player = if sc == scenario::ASSASSIN || sc == scenario::KOTH_FFA {
+            format!("{}\n{}\n{}", score as i32, kills, deaths)
+        } else if team_game == 0 {
+            format!("\n{kills}\n{deaths}")
+        } else {
+            format!("{kills}\n{deaths}")
+        };
+        let (text, outline) = if team_game != 0 {
+            let t = (viewer_team as usize).min(1);
+            let team = format!("{} - {}", snap.team_scores[t] as i32, snap.team_scores[1 - t] as i32);
+            (format!("{team}\n{player}"), if viewer_team == 0 { 0xff00_00ff } else { 0x0000_ffff })
+        } else {
+            (player, 0x0000_00ff)
+        };
+        // The objective icons 1/2/6 [M 0x19f0a0:71-180; positions M 0x19ed10:58-96 + L].
+        let me = snap.viewer_slot;
+        let icon = |sprite: usize, tex: u32, x: f32, y: f32, rgba: u32| MpPaneIcon { sprite, tex, x, y, rgba, layer: 0x1e, additive: false };
+        match sc {
+            scenario::CAPTURE_THE_FLAG => {
+                // MP_HasTeamFlag(obj, team == 0): carrying the other team's flag, tinted with that
+                // flag's colour (viewer team 0 → 0x0040ffff, else 0xff0000ff) [M :89-100].
+                let other = if viewer_team == 0 { 1 } else { 0 };
+                if snap.flags[other] == Some(me) {
+                    icons.push(icon(1, 0x0300_0182, 16.0, 376.0, if viewer_team == 0 { 0x0040_ffff } else { 0xff00_00ff }));
+                }
+            }
+            scenario::ASSASSIN => {
+                if snap.assassin == Some(me) { icons.push(icon(1, 0x0300_0180, 16.0, 384.0, 0x7f7f_7fff)); }
+                if snap.target == Some(me) { icons.push(icon(2, 0x0300_0189, 16.0, 368.0, 0x7f7f_7fff)); }
+            }
+            scenario::UPLINK => {
+                // All three shown, tinted by `MP_getUplinkStatus(0..2)` [M :134-180]; the create
+                // re-textures them 0x03000185 and lines them up at x 16/32/48, y 352 [M 0x19ed10:76-96].
+                for (k, sprite) in [1usize, 2, 6].iter().enumerate() {
+                    let owner = snap.uplinks.iter().find(|u| u.index == k).map_or(2, |u| u.owner);
+                    let rgba = match owner { 0 => 0xd22d_35ff, 1 => 0x2d61_d2ff, _ => 0x7f7f_7fff };
+                    icons.push(icon(*sprite, 0x0300_0185, 16.0 + 16.0 * k as f32, 352.0, rgba));
+                }
+            }
+            _ => {}
+        }
+        MpScorePane { text, text_x: 40.0, text_y, rgba: 0x7f7f_7fff, outline, icons }
+    }
+}
+
+/// One piece of [`status_line`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum StatusPart {
+    Label(u32),
+    /// A label used as a `%s` format with one argument.
+    Format(u32, String),
+    Text(String),
+}
+
+/// The MP status line (`StatusSpr`, `MPStatusInfo` @0x2a4740: (256,48), font 2 centred, white
+/// [L]) as `MP_SortOutWhoWon` 0x1848d0 / `MP_Update` 0x184bd0 case 2 write it, in print order
+/// (the caller binds and concatenates). Empty while playing.
+pub fn status_line(m: &MpMatch) -> Vec<StatusPart> {
+    use super::MpEndStatus;
+    if m.game.state < 3 { return Vec::new(); }
+    let lives = m.settings.scenario == scenario::DEATH_LIMIT_FFA;
+    match &m.game.end_status {
+        // 0x10: "Player %s Won" 0x2000022 [M :21-41]; else "%s%s %s" (0x2000024, name, 0x2000027) [M :62-70].
+        MpEndStatus::Won(n) if lives => vec![StatusPart::Format(0x0200_0022, n.clone())],
+        MpEndStatus::Won(n) => vec![StatusPart::Label(0x0200_0024), StatusPart::Text(n.clone()), StatusPart::Text(" ".into()), StatusPart::Label(0x0200_0027)],
+        // "%s%s" (0x2000024, 0x2000023) [M :72-90]; 0x10 alone: 0x2000023 [M :43-52].
+        MpEndStatus::Draw if lives => vec![StatusPart::Label(0x0200_0023)],
+        MpEndStatus::Draw => vec![StatusPart::Label(0x0200_0024), StatusPart::Label(0x0200_0023)],
+        // Time up outside 0x10: case 2 prints "%s%s" (0x2000028, 0x1c9) and skips the sort [M 0x184bd0:42-50].
+        MpEndStatus::None => vec![StatusPart::Label(0x0200_0028), StatusPart::Label(0x1c9)],
+    }
+}
+
+/// The kill message `MP_PlayerKilled` 0x188f70:100-107 posts: `Text_AddMsg(recipient, 0, 1,
+/// sprintf(Txt_BindLabel(0x200004d), victim's name), 0, 0xb4)` — to the victim's last shooter
+/// (`MPGame + victim·0x30 + 0x20`) when that is not the victim. Shown by the MP info pane
+/// (`MPMsgInfoStatusPane`, `HUD_MPUpdateStatusPane` 0x19ca88).
+pub const KILL_MSG_LABEL: u32 = 0x0200_004d;
+/// Its life in ticks (0xb4 = 180).
+pub const KILL_MSG_TICKS: u32 = 0xb4;

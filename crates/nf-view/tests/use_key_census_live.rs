@@ -308,7 +308,7 @@ fn use_census_0700000b() {
         assert!(!sim.drones.channels.on(ch as u32), "sister: the PC channel starts off");
         place_near(sim, ppos);
         assert!(aim_use(sim, ppos, &|s| s.drones.channels.on(ch as u32)),
-            "E on the PC must raise its channel [M 0x1b0840]");
+            "E on the PC must raise its channel [M PCQWorm_Update 0x1aee20:34-37 — the channel write; 0x1b0840 is the Activate gate]");
     }
 
     if let Some(si) = sim.drones.useobjs.switches.iter().position(|s| s.ch != 0 && s.ch != 0x61
@@ -385,7 +385,7 @@ fn use_census_07000011() {
     assert!(!sim.drones.channels.on(ch as u32), "sister: the PC channel starts off");
     place_near(sim, ppos);
     assert!(aim_use(sim, ppos, &|s| s.drones.channels.on(ch as u32)),
-        "E on the PC must raise its channel [M 0x1b0840]");
+        "E on the PC must raise its channel [M PCQWorm_Update 0x1aee20:34-37 — the channel write; 0x1b0840 is the Activate gate]");
 
     if let Some(li) = sim.drones.locks.iter().position(|l| !l.unlocked && !at_origin(l.pos)) {
         let (out, lpos) = (sim.drones.locks[li].out, sim.drones.locks[li].pos);
@@ -398,7 +398,7 @@ fn use_census_07000011() {
 
 // --- 07000012: PC (out 0x34), monitor (grp 10, 5 sensors), locks ×2 — decryptor pair; the
 // ch-0x58/0x59 E-switches #962/#965 sit on another map and the sim attaches use-objects from
-// the main map only [M Drones::attach_level — UseObjects::create(main_map.placements)] — the
+// the main map only [S] unverified (the port's Drones::attach_level / UseObjects::create main-map scoping; the game's per-map attach is not pinned here) — the
 // census asserts the sim truth (no main-map switch) and the gap is in the report [D 12.md:133].
 #[test]
 fn use_census_07000012() {
@@ -413,7 +413,7 @@ fn use_census_07000012() {
     assert!(!sim.drones.channels.on(pch as u32), "sister: the PC channel starts off");
     place_near(sim, ppos);
     assert!(aim_use(sim, ppos, &|s| s.drones.channels.on(pch as u32)),
-        "E on the PC must raise its channel [M 0x1b0840]");
+        "E on the PC must raise its channel [M PCQWorm_Update 0x1aee20:34-37 — the channel write; 0x1b0840 is the Activate gate]");
 
     if let Some(mi) = sim.drones.monitors.list.iter().position(|m| m.state == 0 && !at_origin(m.pos)) {
         let mpos = sim.drones.monitors.list[mi].pos;

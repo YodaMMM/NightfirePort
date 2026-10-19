@@ -650,7 +650,7 @@ pub struct BotPickup {
     /// `MPOBJECT+0x20` (s16) == 2 — the "only ≥ 5.0 away" special [M 0x126b88:420-421].
     pub is_obj_flag2: bool,
     /// +0x80 — the per-bot visit stamps [f32; 4] by bot index [M 0x129958:10-15].
-    pub visit: [f32; 4],
+    pub visit: [f32; 16],
 }
 
 
@@ -698,6 +698,9 @@ pub struct BotCtx<'a> {
     pub others: &'a [OtherPlayer],
     /// The collision world (the LOS/cel stand-in).
     pub world: &'a CollisionWorld,
+    /// The arena's AI network (map block 0x05 — `AINetwork_CalcRouteToPosition`'s graph); `None`
+    /// = no routes (the bots steer straight, as the unit rigs' empty worlds do).
+    pub nav: Option<&'a crate::nav::Network>,
     /// The bot's health (`Drone+0xAC`).
     pub health: f32,
     /// The bot's max HP (`BOT_vars+0xA4`).
@@ -705,6 +708,252 @@ pub struct BotCtx<'a> {
     /// The attack states' stationary gate: behaviour prop 0x40 / `Drone+0x4F8` bit 0x10
     /// [M 0x16f198:42-45, 0x16f5e8:56-60]. The "stand" preset maps here [S — see the report].
     pub stationary: bool,
+    /// mp-perf-16: the caller left the seen bits (0x6) of `others` unset and `find_opponent` runs
+    /// the sight line itself — the bot's eye (`pos`) to the other's chest (eye − 0.4), clear of the
+    /// bullet-class world (`segment_surface_bullet` = `segment_bullet_clear`) — only for the
+    /// candidates whose answer can change the pick (nearer than the best so far). The flags are
+    /// read nowhere else in a way the answer changes (the 0xA melee gate and the trait-5 0x10 test
+    /// see the same values with bits 0x6 clear or set), so the pick is bit-identical to the
+    /// precomputed pass while the per-pair segments fall away [S port optimisation].
+    pub lazy_sight: bool,
+    /// mp-bot-objectives: the scenario view the objective goals read (the mode objects, the
+    /// per-slot/per-team status words, the assassin roles, the other bots' objective goals) —
+    /// `None` = no scenario objects (the unit rigs; the brain then plays deathmatch only).
+    pub objectives: Option<&'a BotObjectives>,
+}
+
+// ============================================================================
+// 7. mp-bot-objectives: the scenario objects as the bots' goal machine reads them
+// ============================================================================
+// `BOTSTATE_pickGoal` 0x126b88 Phase A (slot 1, objective weight != 0 [M :143-313]) switches on
+// MPSettings+0x420 and reads the mode objects through the getter family (`MP_getFlagObj` 0x18b978,
+// `MP_getBaseObj` 0x18b9a0, `MP_getUplinkObj` 0x18b9c8, `MP_getHillObj` 0x18bb50,
+// `MP_getDemolitionObj` 0x18bab8 / `MP_getProtectionObj` 0x18bac8, `MP_getGoldenEyeObj` 0x18baf0,
+// `MP_getBlueprintObj` 0x18bad8, `MP_getEsponageBaseObj` 0x18a338), the bot's player status word
+// `MPGame+slot·0x30+0x26` and its team's status word `MPGame+team·2+0x1a8` [M :133-135]. The port
+// keeps the objects in `MpObjectsRt`; this snapshot is the read-only view one tick's brains share.
+
+/// The objective-row index in the `BotCtx::others` table: the Demolition/Protection site rides
+/// one row past the player slots so the attack/fire states can take it as their opponent — the
+/// game sets the site obj itself as `Drone+0x170` (`NDrone2_FindOpponent` 0x1424e0:520-560,
+/// `BOTSTATE_opponentIsMissile` 0x129a60) [M]; the row is the port's carrier for that obj [S].
+pub const OBJ_ROW: usize = super::MP_MAX_SLOTS;
+
+/// Goal-target ids for the type-2 (objective) goals — `+0x3C` holds the MPOBJECT pointer in the
+/// game [M 0x126b88:294-297]; the port encodes which object (kind | index).
+pub mod obj_id {
+    pub const FLAG: usize = 0x1000;
+    pub const BASE: usize = 0x2000;
+    pub const UPLINK: usize = 0x3000;
+    pub const HILL: usize = 0x4000;
+    pub const SITE: usize = 0x5000;
+    pub const GOLDENEYE: usize = 0x6000;
+    pub const BLUEPRINT: usize = 0x7000;
+    /// + team·4 + approach point k (`MP_getEsponageBaseObj(team, k)` [M 0x18a338]).
+    pub const ESP_BASE: usize = 0x8000;
+    pub const KIND: usize = 0xF000;
+}
+
+/// The GoldenEye items' team-status masks `DAT_0030ca88` = {1, 2} [L ee_snapshot 0x30ca88; read
+/// `pickGoal` 0x126b88:147,185].
+pub const GE_TEAM_MASKS: [u16; 2] = [1, 2];
+
+/// One mode object as the bots see it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ObjView {
+    /// The object's current position (`obj+0x30` / the carried object's ride position).
+    pub pos: [f32; 3],
+    /// The contact sphere centre (`obj+0x80`) and radius (`obj+0x8C`), 0 radius = no bounds.
+    pub centre: [f32; 3],
+    pub radius: f32,
+    /// The box (world-space min/max) for the hill and the site (`celglist+0x20/+0x30`).
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+    /// `obj+0xF4` / `obj+0xF6`.
+    pub state: i16,
+    pub sub: i16,
+    pub carrier: Option<usize>,
+}
+
+/// The scenario snapshot one tick's bots share ([`super::MpMatch::bot_objectives`]).
+#[derive(Clone, Debug, Default)]
+pub struct BotObjectives {
+    /// `MPSettings+0x420`.
+    pub scenario: u32,
+    /// `MPSettings+0x396` — the team view of `BOT_setOtherPlayerInfo` 0x125390:62-73.
+    pub team_game: bool,
+    /// `MPGame+slot·0x30+0x26` — the player status bits: 1 flag, 2 blueprint, 4/8 GoldenEye item
+    /// 0/1, 0x10 on the hill (`MP_setPlayerStatus` 0x18a518 callers: 0x1861a8:178, 0x1882d8:128,
+    /// 0x187568:232/235, 0x186ae0:115) [M]. Derived from the objects' carriers (the port's rules
+    /// keep only bits 1/0x10) + the hill bit.
+    pub status: [u16; super::MP_MAX_SLOTS],
+    /// `MPGame+team·2+0x1a8` — the team status: bit0 = the team carries the enemy flag / the
+    /// blueprint / GoldenEye item 0 (status events 0x2f/0x32/0x35), bit1 = item 1 (0x36)
+    /// [M 0x18a518:107-161]. Derived from the carriers' teams.
+    pub team_status: [u16; 2],
+    /// The per-slot team words (`MPSettings+slot·0x30+0x20`).
+    pub teams: [u32; super::MP_MAX_SLOTS],
+    pub flags: [Option<ObjView>; 2],
+    pub bases: [Option<ObjView>; 2],
+    pub uplinks: Vec<ObjView>,
+    pub hill: Option<ObjView>,
+    /// The Demolition/Protection site while it stands (`obj+0xF6 != 1`).
+    pub site: Option<ObjView>,
+    /// The defending team of the site mode (Demolition 0, Protection 1 — `BotGlobal`
+    /// 0x16e060:247-255) and the attacking one (`opponentIsMissile` 0x129a60: Protection team 0,
+    /// Demolition team 1).
+    pub site_defenders: u32,
+    pub ge: [Option<ObjView>; 2],
+    pub blueprint: Option<ObjView>,
+    pub esp_bases: [Option<ObjView>; 2],
+    /// Assassination (0x400): the assassin and the target slot (`MP_IsAssasin`,
+    /// `MP_getAssassinTarget` [M 0x128b50:80-86]).
+    pub assassin: Option<usize>,
+    pub assassin_target: Option<usize>,
+    /// Every bot's slot-1 goal (slot, goal type, target id) — `BOTSTATE_isObjAlreadyAnotherTeam
+    /// Objective` 0x1297b8 walks the bots' `BOT_vars+0x95/+0x8C`. The driver refreshes a bot's row
+    /// after its step (the game's bots run in slot order and read each other live).
+    pub bot_goals: Vec<(usize, u8, usize)>,
+}
+
+impl BotObjectives {
+    /// The object behind a type-2 goal target id (its live view), `None` when gone.
+    pub fn view(&self, id: usize) -> Option<ObjView> {
+        let i = id & !obj_id::KIND;
+        match id & obj_id::KIND {
+            obj_id::FLAG => self.flags.get(i).copied().flatten(),
+            obj_id::BASE => self.bases.get(i).copied().flatten(),
+            obj_id::UPLINK => self.uplinks.get(i).copied(),
+            obj_id::HILL => self.hill,
+            obj_id::SITE => self.site,
+            obj_id::GOLDENEYE => self.ge.get(i).copied().flatten(),
+            obj_id::BLUEPRINT => self.blueprint,
+            obj_id::ESP_BASE => self.esp_point(i / 4, i % 4),
+            _ => None,
+        }
+    }
+
+    /// `MP_getEsponageBaseObj(team, k)` 0x18a338: the k-th approach point round the base — the
+    /// sphere centre + (sin a, cos a)·(radius + 0.1) with a = yaw + k·π/2, at the centre height
+    /// [M :26-36] (the port's placements are unrotated, yaw 0 [S]; the floor snap
+    /// `build_PointOnFloor` is the walk's own floor read).
+    pub fn esp_point(&self, team: usize, k: usize) -> Option<ObjView> {
+        let b = self.esp_bases.get(team).copied().flatten()?;
+        let r = b.radius + 0.1;
+        let (s, c) = [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)][k & 3];
+        let p = [b.centre[0] + s * r, b.centre[1], b.centre[2] + c * r];
+        Some(ObjView { pos: p, centre: b.centre, radius: b.radius, ..b })
+    }
+
+    /// `BOTSTATE_isObjAlreadyAnotherTeamObjective` 0x1297b8: another bot's slot-1 goal is an
+    /// objective (type 2) on the same object. The game's team test compares the asker's team word
+    /// with itself (always equal — any other bot counts) [M :17-19]; a team-2 asker never counts
+    /// [M :9-11].
+    pub fn already_objective(&self, id: usize, me: usize) -> bool {
+        if self.teams.get(me).is_some_and(|&t| t == 2) {
+            return false;
+        }
+        self.bot_goals.iter().any(|&(s, ty, t)| s != me && ty == 2 && t == id)
+    }
+}
+
+impl super::MpMatch {
+    /// The bots' scenario snapshot for this tick (see [`BotObjectives`]).
+    pub fn bot_objectives(&self) -> BotObjectives {
+        use super::rules::MpObjState;
+        let rt = &self.objects_rt;
+        let s = self.settings.scenario;
+        let view = |o: &MpObjState| {
+            let (centre, radius, min, max) = match o.bounds {
+                Some(b) => (
+                    [o.pos[0] + b.centre[0], o.pos[1] + b.centre[1], o.pos[2] + b.centre[2]],
+                    b.radius,
+                    [o.pos[0] + b.min[0], o.pos[1] + b.min[1], o.pos[2] + b.min[2]],
+                    [o.pos[0] + b.max[0], o.pos[1] + b.max[1], o.pos[2] + b.max[2]],
+                ),
+                None => (o.pos, 0.0, o.pos, o.pos),
+            };
+            ObjView { pos: o.pos, centre, radius, min, max, state: o.state, sub: o.sub, carrier: o.carrier }
+        };
+        let point = |p: [f32; 3], b: Option<super::rules::MpObjBounds>| {
+            let mut o = MpObjState { pos: p, bounds: b, ..Default::default() };
+            o.home = p;
+            view(&o)
+        };
+        let mut ob = BotObjectives {
+            scenario: s,
+            team_game: self.settings.team_game != 0,
+            ..Default::default()
+        };
+        for slot in 0..super::MP_MAX_SLOTS {
+            ob.teams[slot] = self.settings.players[slot].team;
+            ob.status[slot] = self.game.slots[slot].status_bits & 0x10;
+        }
+        let team_of = |c: usize| self.settings.players[c].team as usize;
+        if s == super::scenario::CAPTURE_THE_FLAG {
+            for ti in 0..2 {
+                ob.flags[ti] = rt.flags[ti].as_ref().map(view);
+                ob.bases[ti] = rt.bases[ti].map(|p| point(p, rt.bases_bounds[ti]));
+                if let Some(c) = rt.flags[ti].as_ref().and_then(|f| f.carrier.filter(|_| f.state == 1)) {
+                    ob.status[c] |= 1;
+                    if team_of(c) < 2 && team_of(c) != ti {
+                        ob.team_status[team_of(c)] |= 1;
+                    }
+                }
+            }
+        }
+        if s == super::scenario::UPLINK {
+            ob.uplinks = rt.uplinks.iter().map(view).collect();
+        }
+        if s == super::scenario::KOTH_FFA || s == super::scenario::KOTH_TEAM {
+            ob.hill = rt.hill.as_ref().map(view);
+        }
+        if s == super::scenario::DEMOLITION || s == super::scenario::PROTECTION {
+            ob.site = rt.site.as_ref().filter(|x| x.sub != 1).map(view);
+            ob.site_defenders = if s == super::scenario::DEMOLITION { 0 } else { 1 };
+        }
+        if s == super::scenario::GOLDENEYE {
+            for i in 0..2 {
+                ob.ge[i] = rt.ge[i].as_ref().map(view);
+                if let Some(c) = rt.ge[i].as_ref().and_then(|g| g.carrier.filter(|_| g.state == 1)) {
+                    ob.status[c] |= 4 << i;
+                    if team_of(c) < 2 {
+                        ob.team_status[team_of(c)] |= GE_TEAM_MASKS[i];
+                    }
+                }
+            }
+        }
+        if s == super::scenario::BLUEPRINT {
+            ob.blueprint = rt.blueprint.as_ref().map(view);
+            for ti in 0..2 {
+                ob.esp_bases[ti] = rt.esp_bases[ti].map(|p| point(p, rt.esp_bases_bounds[ti]));
+            }
+            if let Some(c) = rt.blueprint.as_ref().and_then(|b| b.carrier.filter(|_| b.state == 1)) {
+                ob.status[c] |= 2;
+                if team_of(c) < 2 {
+                    ob.team_status[team_of(c)] |= 1;
+                }
+            }
+        }
+        if s == super::scenario::ASSASSIN {
+            ob.assassin = self.assassin;
+            ob.assassin_target = self.assassin_target;
+        }
+        ob.bot_goals = self.bots.iter().map(|b| (b.slot, b.brain.vars.goals[1].goal_type, b.brain.vars.goals[1].target)).collect();
+        ob
+    }
+}
+
+/// What the objective scan found (`pickGoal` Phase A's three outcomes).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ObjPick {
+    /// A scored objective: (target id, goal position, subtype `+0x4A`).
+    Goal(usize, [f32; 3], u8),
+    /// King of the Hill with the bot on the hill: `iVar18 = -3` → pickGoal returns 0 without the
+    /// pickup fall-through — the bot holds the hill [M 0x126b88:237-243, :491-493].
+    Hold,
+    /// Nothing scored → the slot-0 pickup fall-through [M :315-324].
+    None,
 }
 
 
@@ -762,6 +1011,7 @@ pub struct BotVars {
     pub burst_empty: u8,         // Drone+0x3C
     pub clip_rounds: i16,        // `BOTWEAP_AmmoInGun` = BOT_vars+0x144 + w*0xC [M 0x12ae40]
     pub next_bullet_at: f32,     // Drone+0xBC4 (the burst deadline)
+    pub burst_done_tick: u32,    // [S] the tick the last burst emptied (the re-arm stand-in)
     pub burst_left: u32,         // Drone+0xBC0
     pub resume_state: u16,       // Drone+0x5A6 (the 0xF6 door-detour resume marker)
 }
@@ -803,6 +1053,7 @@ impl Default for BotVars {
             burst_empty: 0,
             clip_rounds: 0,
             next_bullet_at: 0.0,
+            burst_done_tick: 0,
             burst_left: 0,
             resume_state: 0,
         }
@@ -845,7 +1096,70 @@ pub struct BotBrain {
     pub last_visit_stamp: (usize, f32),
     /// The pending SetState (`SM+0x0C` + the flag [M 0x1758c0:53-55]).
     pending: Option<u8>,
+    /// The bot's walking body: the player's movement core (`Bond::tick_ctx` — the capsule
+    /// push-out, the floor ray, gravity, steps) stands in for the drone mover
+    /// (`NDrone2_MoveToGoalPosition`'s anim-driven root motion + `Collide`) [S]. `pos` is this
+    /// body's root + `player::EYE`. Unused (the plane walk) when the world has no triangles —
+    /// the unit rigs' empty worlds.
+    pub body: crate::player::Bond,
+    /// The route the body follows (`AINetwork_CalcRouteToPosition` / `FollowRoute`'s port
+    /// stand-in over the arena's AI network) [S].
+    pub route: BotRoute,
+    /// This tick's walk request (world x/z unit direction, speed 0..1) — the states write it, the
+    /// body walk at the end of `step` consumes it.
+    move_want: Option<([f32; 2], f32)>,
+    /// The combat move's end tick (`Drone+0xCC4` — the strafe's `(Rand(8)+2)·FRAME_RATE_INT`
+    /// timer [M 0x16f850]; the step's anim length stand-in [S]).
+    pub combat_move_until: u32,
+    /// The stuck watch: (root position, tick) of the last check, and the consecutive stuck checks.
+    stuck_ref: ([f32; 3], u32),
+    pub stuck_hits: u8,
+    /// One jump on the next body tick (the stuck recovery [S]).
+    jump_next: bool,
 }
+
+/// The port's route over the arena AI network [S — the game's `AIRoute` + link creep are
+/// ported in `nav.rs` for the SP drones; the bots use a plain shortest path over the same graph
+/// with a walk-clear shortcut, see `BotBrain::steer_to`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BotRoute {
+    /// The nav path index and its node list (empty = walk straight to `dest`).
+    pub path: usize,
+    pub nodes: Vec<u16>,
+    /// The next node to reach.
+    pub idx: usize,
+    /// The destination (body-root space) the route was built for.
+    pub dest: [f32; 3],
+    /// The tick it was built (re-plans age out).
+    pub built: u32,
+    pub valid: bool,
+}
+
+/// The walk-clear test between two body roots: the floor+1.0 line (root − 0.1) is clear of the
+/// world and the height step is one a walk can take [S — the game's `NDrone2_MoveTest` reads the
+/// boundary walls + portals; the collision world stands in, as `nav::Network::move_test` does].
+fn walk_clear(world: &CollisionWorld, a: [f32; 3], b: [f32; 3]) -> bool {
+    (b[1] - a[1]).abs() < 1.5
+        && world.line_of_sight([a[0], a[1] - 0.1, a[2]], [b[0], b[1] - 0.1, b[2]])
+        // mp-bot-objectives: and the knee line (floor + 0.35) — the floor+1.0 line alone passed
+        // over a ramp's side wall, so a bot cut the corner onto 07000023's pit ramp from the side
+        // and pushed into its edge for good (the Espionage carrier, the KOTH walkers) [S]
+        && world.line_of_sight([a[0], a[1] - 0.75, a[2]], [b[0], b[1] - 0.75, b[2]])
+}
+
+fn dist2d(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]) * (a[0] - b[0]) + (a[2] - b[2]) * (a[2] - b[2])).sqrt()
+}
+
+/// A nav node's body-root height: the node sits at floor + 0.4 (`AIPath_Parse`), the root at
+/// floor + 1.1 (`Player_StandAtNewPosition`).
+fn node_root(p: [f32; 3]) -> [f32; 3] {
+    [p[0], p[1] + 0.7, p[2]]
+}
+
+/// The body's top forward step per tick (`Player_Move`'s 0.1·f² + 0.005 at full stick) — the
+/// plane walk (no world) moves at the same speed.
+const BODY_STEP: f32 = 0.105;
 
 
 /// `BOTSTATE_getStateType` is already above; the states the port dispatches to.
@@ -899,11 +1213,27 @@ impl BotBrain {
             last_visit_stamp: (usize::MAX, 0.0),
             pending: Some(state::BOT_IDLE), // the BotInit chain's SetState(0xF9) [M 0x1748c8:18],
             // committed by the first `step` (the game's PostLoad_Init → msg 1 → SetState order)
+            // The body stands at the root under the eye; Bond's yaw convention (forward =
+            // (sin, cos)) is the brain's (forward = (cos, sin)) mirrored about 45°.
+            body: crate::player::Bond::new([pos[0], pos[1] - crate::player::EYE, pos[2]], crate::trig::HALF_PI - yaw),
+            route: BotRoute::default(),
+            move_want: None,
+            combat_move_until: 0,
+            stuck_ref: ([pos[0], pos[1] - crate::player::EYE, pos[2]], 0),
+            stuck_hits: 0,
+            jump_next: false,
         };
+        // The spawn loadout: weapon pickups are not taken by bots yet, so a bot holding nothing
+        // (weapon 0) starts with the match's start weapon, the P2K (2), and its clip — with
+        // weapon 0 its rounds did record 0's damage (none) [S].
+        if brain.vars.weapon_id == 0 {
+            brain.vars.weapon_id = 2;
+            brain.vars.clip_rounds = 12;
+        }
         brain
     }
 
-    fn enter_state(&mut self, next: u8, rng: &mut Rng) {
+    fn enter_state(&mut self, next: u8, ctx: &BotCtx, rng: &mut Rng) {
         // the commit: the state flips, +0x766 := the type [M 0x16e060:605], ENTER msg 1 runs below
         let prev = self.state;
         self.state = next;
@@ -913,11 +1243,13 @@ impl BotBrain {
         match next {
             state::BOT_IDLE => self.bot_idle_enter(),
             state::BOT_GOTO_GOAL_POSITION => {} // walk anim 0x1E [M 0x171240:20]
-            state::BOT_ATTACK => self.bot_attack_enter(rng),
+            state::BOT_ATTACK => self.bot_attack_enter(ctx, rng),
             state::BOT_ATTACK_FIRE => self.bot_attack_fire_enter(rng), // the trigger pull [M 0x16f5e8:19-26]
             st::BOT_SEEN_OPPONENT => {
                 self.set_state(state::BOT_ATTACK); // the 0xEC stub ENTER [M 0x175268:9-13]
             }
+            st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT
+            | st::BOT_ATTACK_STEP_AIM_LEFT | st::BOT_ATTACK_STEP_AIM_RIGHT => self.bot_attack_move_enter(next, rng),
             _ => {} // 0xF2/0xF6/0xD3… not ported (the report lists the gap)
         }
     }
@@ -939,7 +1271,11 @@ impl BotBrain {
         if let Some(o) = self.vars.opponent {
             if let Some(t) = ctx.others.get(o) {
                 if t.alive {
-                    let clear = ctx.world.segment(self.pos, t.pos).is_none();
+                    // The line to the aim point (the chest, eye − 0.3 — where `handle_firing`'s
+                    // round goes): an eye-to-eye line over a ledge lip saw a bot on the storey
+                    // below whom no round could reach, and the pair stood firing into the lip
+                    // all match instead of running the route round [S the CanSeeObject stand-in].
+                    let clear = ctx.world.segment_clear(self.pos, [t.pos[0], t.pos[1] - 0.3, t.pos[2]]);
                     if clear {
                         self.vars.sighted |= 4; // Drone+0x228 bit 2 [M]
                         self.vars.unseen_ticks = 0; // Drone+0x274
@@ -954,7 +1290,7 @@ impl BotBrain {
                 }
             }
         }
-        self.find_opponent(ctx); // [M 0x1490f0:167]
+        { let _p = crate::prof::scope("bots: find_opponent"); self.find_opponent(ctx); } // [M 0x1490f0:167]
         // 1. the forced-to-0xC5 heartbeat [M 0x171df8:78-86]
         self.bot_global_msg3(ctx);
         // 2. msg 3 to the current state (unknown states do not consume → nothing, like the
@@ -966,18 +1302,42 @@ impl BotBrain {
             state::BOT_GOTO_GOAL_POSITION => self.bot_goto_goal_msg3(ctx),
             state::BOT_ATTACK => self.bot_attack_msg3(ctx, rng),
             state::BOT_ATTACK_FIRE => self.bot_attack_fire_msg3(ctx, rng),
+            state::BOT_ATTACK_RUN => self.bot_attack_run_msg3(ctx),
+            state::BOT_ATTACK_BACKOFF => self.bot_attack_backoff_msg3(ctx),
+            state::BOT_ATTACK_NO_OPPONENT => self.set_state(state::BOT_IDLE),
+            st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT => self.bot_attack_strafe_msg3(ctx, rng),
+            st::BOT_ATTACK_STEP_AIM_LEFT | st::BOT_ATTACK_STEP_AIM_RIGHT => self.bot_attack_step_msg3(ctx, rng),
             _ => {}
+        }
+        // The lost opponent: an attack state with the opponent out of sight for 5 s gives up and
+        // goes back to its goals [S — the game's attack-route failure path (0xD1 BotAttackNoRoute,
+        // the heartbeat's combat block) is not lifted; without it a bot chased a hidden opponent
+        // forever].
+        if self.vars.state_type == 4 && self.vars.unseen_ticks != u32::MAX && self.vars.unseen_ticks > 300 {
+            self.vars.opponent = None;
+            self.vars.fire_latch = 0;
+            self.set_state(state::BOT_IDLE);
+        }
+        // `DroneWeap_AimTarget_IsOpponent` [M 0x16f850 / 0x174e88 msg 3]: the combat states keep
+        // the body turned on the opponent while they move.
+        if self.vars.state_type == 4 {
+            if let Some(t) = self.vars.opponent.and_then(|o| ctx.others.get(o)) {
+                let t = t.pos;
+                self.turn_toward(t, 0.2);
+            }
         }
         // 3. the per-tick firing pipeline [M 0x1490f0:231 `DroneWeap_HandleFiring`]
         if weapon_fire {
             self.handle_firing(ctx, rng);
         }
+        // The body walk (the drone mover's place in `Drone_Control`, after the state's msg 3).
+        self.walk_body(ctx);
         // 4. the commit [M 0x171df8:119-203]: EXIT msg 2 is a no-op for the ported states, the
         //    commit, the synthetic 0x2E (the +0x766 type write is the ported part [M 0x16e060:605]),
         //    then ENTER msg 1 — the loop repeats while ENTERs chain more SetStates [M :119-203].
         while let Some(next) = self.pending.take() {
             self.vars.state_type = state_type(next as u32);
-            self.enter_state(next, rng);
+            self.enter_state(next, ctx, rng);
         }
     }
 
@@ -1052,6 +1412,15 @@ impl BotBrain {
         h.u8(self.state);
         h.f32_slice(&self.pos);
         h.f32(self.yaw);
+        // the walking body + its route (sim state: the next tick's walk reads them)
+        h.f32_slice(&self.body.pos);
+        h.f32_slice(&self.body.vel);
+        h.f32_slice(&self.body.local);
+        h.u8(self.body.grounded as u8);
+        h.usize(self.route.nodes.len());
+        h.usize(self.route.idx);
+        h.u32(self.combat_move_until);
+        h.u8(self.stuck_hits);
         h.u32(self.tick);
         h.i16(self.weapon.interval);
         h.u16(self.weapon.burst);
@@ -1234,11 +1603,27 @@ impl BotBrain {
     /// `BOTSTATE_pickGoal` 0x126b88 (the port's flow; route distance → straight-line [Deviation]).
     /// Returns true when a goal was initialised + `gotoGoal` ran.
     pub fn pick_goal(&mut self, ctx: &BotCtx, rng: &mut Rng, slot: usize) -> bool {
+        self.pick_goal_scan(ctx, rng, slot, true)
+    }
+
+    /// `pick_goal` with the Phase A scan optional (`scan == false`: the caller already ran
+    /// [`BotBrain::objective_scan`] this tick and it found nothing).
+    fn pick_goal_scan(&mut self, ctx: &BotCtx, rng: &mut Rng, slot: usize, scan: bool) -> bool {
         let mut slot = slot;
-        // Phase A: the mode-objective scan (slot 1 only) [M :143-303]. Deathmatch (0x1) has no
-        // arm in the dispatch; the objective wrappers are mode globals not lifted here — see
-        // the report. Nothing found → uninitGoal(0), zero slot-0 prefs, fall through [M :317-319].
+        // Phase A: the mode-objective scan (slot 1 only) [M :143-303] — `objective_scan`.
+        // Nothing found → uninitGoal(0), zero slot-0 prefs, fall through [M :317-319]; the KOTH
+        // hold returns 0 at once [M :491-493].
         if slot == 1 {
+            self.uninit_goal(1); // [M :137]
+            let pick = if scan { self.objective_scan(ctx, rng) } else { ObjPick::None };
+            match pick {
+                ObjPick::Goal(id, p, sub) => {
+                    self.init_goal(1, 2, [p[0], p[1], p[2], 0.0], id, sub); // [M :508-509]
+                    return self.goto_goal(ctx, rng, 1, state::BOT_IDLE); // [M :510]
+                }
+                ObjPick::Hold => return false,
+                ObjPick::None => {}
+            }
             self.uninit_goal(0);
             self.set_goal_pick_prefs(0.0, 0.0, 0.0, 0.0, 0, 0, 0, ctx.health, 1.0, 1.0);
             slot = 0;
@@ -1280,7 +1665,7 @@ impl BotBrain {
                 if dist > dist_limit || dist <= 0.0 {
                     continue; // [M :397]
                 }
-                let visit = p.visit[self.vars.bot_index as usize];
+                let visit = p.visit.get(self.vars.bot_index as usize).copied().unwrap_or(0.0);
                 if pass < 3 {
                     if visit != 0.0 && g0.pref_byte & 0x20 == 0 {
                         continue; // [M :404-417 — visited pickups skipped until the last pass]
@@ -1346,6 +1731,242 @@ impl BotBrain {
         self.goto_goal(ctx, rng, slot, state::BOT_IDLE) // [M :510]
     }
 
+    /// `BOTSTATE_pickGoal` 0x126b88 Phase A [M :143-313]: the scenario dispatch on
+    /// MPSettings+0x420, each candidate object scored `((u8)+0x47 + 1 − dist)·+0x38` when
+    /// `dist ≤ (u8)+0x47`, ties to the nearer [M :284-301] (`NDrone2_DistanceToEmitter`'s route
+    /// distance → the straight line, the same *Deviation* as the pickup scoring). The arms, with
+    /// `team` = my team word, `status` = my `MPGame+0x26`, `ts` = my team's `MPGame+0x1a8`:
+    /// - CTF 0x20000004 (team ≠ 2): carrying (status & 1) → my base (subtype 2); else when my
+    ///   team carries nothing (ts & 1 == 0) → the enemy flag `MP_getFlagObj(team == 0)` wherever it
+    ///   is (subtype 1) [M :269-283].
+    /// - Demolition 0x20000040 / Protection 0x20000080 (team ≠ 2): the site (subtype 8) [M :160-173,
+    ///   :248-255] — both teams; the defenders' guard latch and the attackers' site-as-opponent are
+    ///   the heartbeat's and `find_opponent`'s.
+    /// - Espionage 0x20000100 (team ≠ 2): carrying (status & 2) → the best of my base's 4 approach
+    ///   points (subtype 5); else when my team does not carry it (ts & 1 == 0) → the blueprint
+    ///   wherever it is (subtype 4) [M :256-267, :303-312].
+    /// - GoldenEye 0x20000200: items 0, 1 that are free/dropped (`MP_getGoldenEyeObj` gates state
+    ///   ∈ {0, 2}) and not already my team's (ts & {1,2}[i]); an item another bot already targets
+    ///   is kept only as the fallback (`Rand_Rand(100) & 0x20` picks between two such), scored in
+    ///   the third pass when nothing else scored (subtype 3) [M :175-201].
+    /// - Uplink 0x60000008 (team ≠ 2): the terminals not owned by my team (`MP_getUplinkObj(−n,
+    ///   team)` — the first from index n−1 whose state ≠ team), the other bots' objectives kept as
+    ///   the fallback (`Rand_Rand(bot count) == n` re-picks it) (subtype 6) [M :203-233].
+    /// - KOTH 0x40000800, team KOTH 0x60001000 (team ≠ 2): on the hill (status & 0x10) → hold;
+    ///   else the hill (subtype 7) [M :234-246].
+    pub fn objective_scan(&mut self, ctx: &BotCtx, rng: &mut Rng) -> ObjPick {
+        use super::scenario as sc;
+        let Some(ob) = ctx.objectives else { return ObjPick::None };
+        let weight = self.vars.goals[1].objective_weight;
+        if weight == 0.0 {
+            return ObjPick::None; // [M :144]
+        }
+        let me = ctx.my_index;
+        let team = ob.teams.get(me).copied().unwrap_or(ctx.my_team);
+        let status = ob.status.get(me).copied().unwrap_or(0);
+        let ts = if team < 2 { ob.team_status[team as usize] } else { 0 };
+        let limit = self.vars.goals[1].dist_limit as u8 as f32;
+        // the scoring state (fVar21 best score, fVar25 its distance) [M :284-301]
+        let mut best: Option<(usize, [f32; 3], u8, f32, f32)> = None;
+        let root = self.root();
+        let mut consider = |id: usize, p: [f32; 3], sub: u8, best: &mut Option<(usize, [f32; 3], u8, f32, f32)>| {
+            let d = ((root[0] - p[0]).powi(2) + (root[1] - p[1]).powi(2) + (root[2] - p[2]).powi(2)).sqrt();
+            if d > limit {
+                return;
+            }
+            let score = (limit + 1.0 - d) * weight;
+            let take = match *best {
+                None => score >= -1.0,
+                Some((_, _, _, bs, bd)) => bs <= score && (score != bs || d < bd),
+            };
+            if take {
+                *best = Some((id, p, sub, score, d));
+            }
+        };
+        match ctx.scenario {
+            sc::CAPTURE_THE_FLAG if team != 2 => {
+                if status & 1 != 0 {
+                    let t = team as usize;
+                    if let Some(b) = ob.bases.get(t).copied().flatten() {
+                        consider(obj_id::BASE | t, b.pos, 2, &mut best);
+                    }
+                } else if ts & 1 == 0 {
+                    let e = (team == 0) as usize;
+                    if let Some(f) = ob.flags[e] {
+                        consider(obj_id::FLAG | e, f.pos, 1, &mut best);
+                    }
+                }
+            }
+            sc::DEMOLITION | sc::PROTECTION if team != 2 => {
+                if let Some(s) = ob.site {
+                    consider(obj_id::SITE, s.pos, 8, &mut best);
+                }
+            }
+            sc::BLUEPRINT if team != 2 => {
+                if status & 2 != 0 {
+                    for k in 0..4 {
+                        if let Some(p) = ob.esp_point(team as usize, k) {
+                            consider(obj_id::ESP_BASE | (team as usize * 4 + k), p.pos, 5, &mut best);
+                        }
+                    }
+                } else if ts & 1 == 0 {
+                    if let Some(b) = ob.blueprint {
+                        consider(obj_id::BLUEPRINT, b.pos, 4, &mut best);
+                    }
+                }
+            }
+            sc::GOLDENEYE => {
+                let mut fallback: Option<usize> = None; // lVar9
+                for i in 0..3usize {
+                    let mut cand: Option<usize> = None; // lVar14
+                    if i == 2 {
+                        cand = fallback.filter(|_| best.is_none()); // [M :177-181]
+                    } else if ts & GE_TEAM_MASKS[i] == 0 {
+                        if let Some(g) = ob.ge[i].filter(|g| g.state == 0 || g.state == 2) {
+                            let id = obj_id::GOLDENEYE | i;
+                            if ob.already_objective(id, me) {
+                                // [M :190-196]: keep the first, then a coin (bit 0x20 of Rand(100))
+                                if fallback.is_none() || rng.rand(100) & 0x20 != 0 {
+                                    fallback = Some(id);
+                                }
+                            } else {
+                                fallback = Some(id);
+                                cand = Some(id);
+                            }
+                            let _ = g;
+                        }
+                    }
+                    if let Some(id) = cand {
+                        if let Some(v) = ob.view(id) {
+                            consider(id, v.pos, 3, &mut best);
+                        }
+                    }
+                }
+            }
+            sc::UPLINK if team != 2 => {
+                let mut fallback: Option<usize> = None;
+                let n = ob.uplinks.len();
+                let bots = ob.bot_goals.len().max(1) as u32;
+                let mut start = 0usize;
+                loop {
+                    let next = start + 1; // iVar6 [M :205]
+                    // MP_getUplinkObj(−next, team): the first terminal from index next−1 whose
+                    // state ≠ team [M 0x18b9c8:12-25]
+                    let found = (start..n).find(|&k| ob.uplinks[k].state as i32 != team as i32);
+                    start = next;
+                    let Some(k) = found else {
+                        // the scan ran out: the fallback scores unless something already did [M :210-215]
+                        if best.is_none() {
+                            if let Some(id) = fallback {
+                                let p = ob.view(id).unwrap().pos;
+                                consider(id, p, 6, &mut best);
+                            }
+                        }
+                        break;
+                    };
+                    let id = obj_id::UPLINK | k;
+                    if ob.already_objective(id, me) {
+                        // [M :217-230]: the first such is kept; later ones replace it when
+                        // Rand_Rand(bot count) == iVar6
+                        fallback = match fallback {
+                            None => Some(id),
+                            Some(f) => {
+                                if rng.rand(bots) == next as u32 { Some(id) } else { Some(f) }
+                            }
+                        };
+                    } else {
+                        consider(id, ob.uplinks[k].pos, 6, &mut best);
+                    }
+                }
+            }
+            sc::KOTH_FFA | sc::KOTH_TEAM if ctx.scenario == sc::KOTH_FFA || team != 2 => {
+                if status & 0x10 != 0 {
+                    return ObjPick::Hold; // [M :237-243]
+                }
+                if let Some(h) = ob.hill {
+                    // the box centre — the hill obj's emitter stand-in [S]
+                    let c = [(h.min[0] + h.max[0]) * 0.5, h.pos[1], (h.min[2] + h.max[2]) * 0.5];
+                    consider(obj_id::HILL, c, 7, &mut best);
+                }
+            }
+            _ => {}
+        }
+        match best {
+            Some((id, p, sub, _, _)) => ObjPick::Goal(id, p, sub),
+            None => ObjPick::None,
+        }
+    }
+
+    /// The type-2 goal's validity each tick — the port's form of `processGoals`' objective gate
+    /// (`(MPGame+team·2+0x1a8 & mask(obj+0x80)) == 0` [M 0x127c78:73-84]) and of the 0x3D
+    /// `cancelGoalToObj` broadcasts `MP_setPlayerStatus` sends when an object changes hands [M
+    /// 0x18a518:111-127]: the object must still pass the scan's own gate [S].
+    fn objective_valid(&self, ctx: &BotCtx, id: usize) -> bool {
+        let Some(ob) = ctx.objectives else { return false };
+        let Some(v) = ob.view(id) else { return false };
+        let me = ctx.my_index;
+        let team = ob.teams.get(me).copied().unwrap_or(ctx.my_team);
+        let status = ob.status.get(me).copied().unwrap_or(0);
+        let ts = if team < 2 { ob.team_status[team as usize] } else { 0 };
+        match id & obj_id::KIND {
+            obj_id::FLAG => status & 1 == 0 && ts & 1 == 0,
+            obj_id::BASE => status & 1 != 0,
+            obj_id::UPLINK => v.state as i32 != team as i32,
+            obj_id::HILL => status & 0x10 == 0,
+            obj_id::SITE => ob.site.is_some(),
+            obj_id::GOLDENEYE => {
+                let i = id & !obj_id::KIND;
+                (v.state == 0 || v.state == 2) && ts & GE_TEAM_MASKS[i.min(1)] == 0
+            }
+            obj_id::BLUEPRINT => status & 2 == 0 && ts & 1 == 0,
+            obj_id::ESP_BASE => status & 2 != 0,
+            _ => false,
+        }
+    }
+
+    /// The objective's current goal point (objects move: a dropped flag, a carried blueprint).
+    fn objective_point(&self, ctx: &BotCtx, slot: usize) -> [f32; 3] {
+        let g = &self.vars.goals[slot];
+        let id = g.target;
+        let fixed = [g.celpos[0], g.celpos[1], g.celpos[2]];
+        match (id & obj_id::KIND, ctx.objectives.and_then(|o| o.view(id))) {
+            (obj_id::FLAG | obj_id::GOLDENEYE | obj_id::BLUEPRINT, Some(v)) => v.pos,
+            _ => fixed,
+        }
+    }
+
+    /// The objective arrival [S the `dist < Drone+0x8EC` stand-in for objects]: the body sphere
+    /// in contact with the object's sphere (`MP_HitBy`'s reach — the touch the rules react to), the
+    /// site within 3.0 (inside `FindOpponent`'s 4.0 site reach [M 0x1424e0:536-538]), the hill
+    /// with the body centre inside its box (`MP_isPosOnHill` [M 0x18bc20]).
+    fn objective_arrived(&self, ctx: &BotCtx, slot: usize) -> bool {
+        let Some(ob) = ctx.objectives else { return false };
+        let id = self.vars.goals[slot].target;
+        let Some(v) = ob.view(id) else { return false };
+        let root = self.root();
+        let c = [root[0], root[1] + super::rules::PLAYER_SPHERE_DY, root[2]];
+        match id & obj_id::KIND {
+            obj_id::SITE => {
+                let d2 = (root[0] - v.pos[0]).powi(2) + (root[1] - v.pos[1]).powi(2) + (root[2] - v.pos[2]).powi(2);
+                d2 < 9.0
+            }
+            obj_id::HILL => (0..3).all(|k| {
+                // a 0.3 horizontal margin keeps the bot inside, not on the edge
+                let m = if k != 1 && v.max[k] - v.min[k] > 1.0 { 0.3 } else { 0.0 };
+                v.min[k] + m <= c[k] && c[k] <= v.max[k] - m
+            }),
+            // the CTF capture is the carrier within sq-dist 2.0 of the base + 1.0 y
+            // [M 0x1861a8:74-86] — the plain floor-plan arrival on the base point reaches it
+            obj_id::BASE => false,
+            _ if v.radius > 0.0 => {
+                let reach = v.radius + super::rules::PLAYER_SPHERE_RADIUS - 0.15;
+                let d2 = (c[0] - v.centre[0]).powi(2) + (c[1] - v.centre[1]).powi(2) + (c[2] - v.centre[2]).powi(2);
+                d2 < reach * reach
+            }
+            _ => false,
+        }
+    }
+
     /// `BOTSTATE_processGoals` 0x127c78 (the port's flow; called by the heartbeat's non-combat
     /// types [M 0x16e060:498-501]). Returns true when it changed the SM state.
     pub fn process_goals(&mut self, ctx: &BotCtx) -> bool {
@@ -1369,6 +1990,17 @@ impl BotBrain {
         }
         // per-type validity
         match g.goal_type {
+            2 => {
+                // the objective gate [M :73-84] (the port's form — `objective_valid`); invalid →
+                // the goal's state fires and the slot clears [M :206-221]
+                if !self.objective_valid(ctx, g.target) {
+                    if matches!(self.state, 0xEB | 0xF8) {
+                        self.set_state_change(g.fire_state);
+                    }
+                    self.uninit_goal(slot);
+                    return true;
+                }
+            }
             3 => {
                 // the hunt target must be a live player [M :88-97]
                 let valid = ctx.others.get(g.target).is_some_and(|o| o.alive);
@@ -1417,12 +2049,25 @@ impl BotBrain {
     /// `BOTSTATE_getPreferredTraitOpponentObjIndex` 0x128b50 — the trait switch [M :92-223].
     /// Returns the player index or −1.
     pub fn trait_pick_opponent(&self, ctx: &BotCtx) -> i8 {
+        // mp-bot-objectives: Assassination — the assassin's pick is always the target
+        // (`MP_IsAssasin` → `MP_getAssassinTarget` [M :80-86]), ahead of the trait switch.
+        if ctx.scenario == super::scenario::ASSASSIN {
+            if let Some(ob) = ctx.objectives {
+                if ob.assassin == Some(ctx.my_index) {
+                    return ob.assassin_target.map_or(-1, |t| t as i8);
+                }
+            }
+        }
+        // The team reads are the +0xB0 rows' bit 0x8 (same team in the team view of
+        // `setOtherPlayerInfo` 0x125390:62-102 — FFA compares against team 3, so no one) [M
+        // :98/:136/:155]; the old team-word compares found no enemy at all in FFA (every word 0).
+        let same = |o: &OtherPlayer| o.flags & 8 != 0;
         match self.vars.trait_id {
             2 => {
                 // the same-team pool [M :93-131]: min dist² among same-team candidates
                 let mut best: Option<(usize, f32)> = None;
                 for o in ctx.others {
-                    if o.index == ctx.my_index || o.team != ctx.my_team || !o.alive {
+                    if o.index == ctx.my_index || o.index >= OBJ_ROW || !same(o) || !o.alive {
                         continue;
                     }
                     match best {
@@ -1445,7 +2090,7 @@ impl BotBrain {
                 // the top-score enemy [M :132-150]
                 let mut best: Option<(usize, f32)> = None;
                 for o in ctx.others {
-                    if o.index == ctx.my_index || o.team == ctx.my_team || !o.alive {
+                    if o.index == ctx.my_index || o.index >= OBJ_ROW || same(o) || !o.alive {
                         continue;
                     }
                     if best.map_or(true, |(_, s)| o.score > s) {
@@ -1461,10 +2106,10 @@ impl BotBrain {
                 }
                 let mut best: Option<(usize, f32)> = None;
                 for o in ctx.others {
-                    if o.index == ctx.my_index || o.team == ctx.my_team || !o.alive {
+                    if o.index == ctx.my_index || o.index >= OBJ_ROW || same(o) || !o.alive {
                         continue;
                     }
-                    if o.flags & 0x10 != 0x2 {
+                    if o.flags & 0xA != 0x2 {
                         continue; // bit1 candidate set, bit3 clear [M :152-166]
                     }
                     match best {
@@ -1478,7 +2123,7 @@ impl BotBrain {
                 // the lowest-health enemy, init my own health [M :192-223]
                 let mut best: Option<(usize, f32)> = None;
                 for o in ctx.others {
-                    if o.index == ctx.my_index || o.team == ctx.my_team || !o.alive {
+                    if o.index == ctx.my_index || o.index >= OBJ_ROW || same(o) || !o.alive {
                         continue;
                     }
                     if best.map_or(true, |(_, h)| o.health < h) {
@@ -1498,7 +2143,7 @@ impl BotBrain {
         self.vars.scan_flag = 0;
         let mut seen_any = false;
         for o in ctx.others {
-            if o.index == ctx.my_index || !o.alive {
+            if o.index == ctx.my_index || o.index >= OBJ_ROW || !o.alive {
                 continue;
             }
             seen_any = true;
@@ -1513,24 +2158,89 @@ impl BotBrain {
     /// health > 0]; the full score/history selection is not lifted — [S], see the report).
     /// Team reads are `MP_getObjectTeam` (0x18b6c0).
     pub fn find_opponent(&mut self, ctx: &BotCtx) {
-        if self.vars.opponent.is_some_and(|i| ctx.others.get(i).is_some_and(|o| o.alive)) {
-            return; // keep the current opponent
+        // keep the current opponent while it lives and is not (now) a team-mate (Assassination's
+        // roles move between deaths)
+        if self.vars.opponent.is_some_and(|i| ctx.others.get(i).is_some_and(|o| o.alive && o.flags & 8 == 0)) {
+            return;
         }
         let mut best: Option<(usize, f32)> = None;
         for o in ctx.others {
-            if o.index == ctx.my_index || !o.alive {
+            if o.index == ctx.my_index || o.index >= OBJ_ROW || !o.alive {
                 continue;
             }
-            if o.flags & 0x6 != 0x6 {
+            if !ctx.lazy_sight && o.flags & 0x6 != 0x6 {
                 continue; // bit1 candidate + bit2 seen (the game's CanSeeObject bit [S — the
                           // vision query's range/params are not lifted; the caller supplies it])
             }
-            match best {
-                Some((_, d)) if o.dist2 >= d => {}
-                _ => best = Some((o.index, o.dist2)),
+            if o.flags & 8 != 0 {
+                continue; // a team-mate (`(uVar3 & 8) == 0` gates the scoring [M :364])
             }
+            // mp-bot-objectives: the sight range and cone — `fVar24 = Drone+0xE8²` (the
+            // drones' default 24.0 [M 0x14b300:386]) and the half-angle `Drone+0xE4` (π/2 [M
+            // 0x14b300:427]); the 360° bit (stats +0x0C & 8) widens the range to 300.0 and drops
+            // the cone [M 0x1424e0:277-300]. (The bots' own `DefaultInit` arm is not confirmed —
+            // the default row is the port's pick [S].) Unlimited LOS made every bot fight every
+            // bot it could see across the arena, and no objective was ever reached.
+            let wide = self.vars.flags & 0x08 != 0;
+            if o.dist2 >= if wide { 90000.0 } else { 576.0 } {
+                continue;
+            }
+            if !wide {
+                let (dx, dz) = (o.pos[0] - self.pos[0], o.pos[2] - self.pos[2]);
+                if dx * crate::trig::cosf(self.yaw) + dz * crate::trig::sinf(self.yaw) < 0.0 {
+                    continue; // outside ±90°
+                }
+            }
+            // mp-bot-objectives: an objective carrier (status & 0xF — flag, blueprint, the
+            // GoldenEye items) scores at a quarter of its distance [M :367-369, fVar20 = 0.25]
+            let carrier = ctx.objectives.is_some_and(|ob| ob.status.get(o.index).is_some_and(|&s| s & 0xF != 0));
+            let d = if carrier { o.dist2 * 0.25 } else { o.dist2 };
+            if best.is_some_and(|(_, bd)| d >= bd) {
+                continue; // the earlier pick stays on a tie
+            }
+            if ctx.lazy_sight {
+                // mp-perf-16: only a candidate that would take the pick pays for its sight line —
+                // the same answer as the precomputed bit2, without the per-pair segments.
+                let chest = [o.pos[0], o.pos[1] - 0.4, o.pos[2]];
+                let seen = o.flags & 0x6 == 0x6 || ctx.world.segment_bullet_clear(self.pos, chest);
+                if !seen { continue; }
+            }
+            best = Some((o.index, d));
         }
         self.vars.opponent = best.map(|(i, _)| i);
+        if self.vars.opponent.is_none() {
+            self.find_site_opponent(ctx);
+        }
+    }
+
+    /// The tail of `NDrone2_FindOpponent` 0x1424e0:519-560 — with no player chosen, an
+    /// attacker (Protection team 0, Demolition team 1) takes the standing site as its opponent
+    /// when it is within sq-dist 16.0, inside the vision cone and visible
+    /// (`NDrone2_CanSeeObject(.., 5, 0)`), and tells itself the objective goal is complete
+    /// (`MP_sendBotMessage(.., 0x3b, 1, 0)` → `setGoalComplete(1)`) [M]. The cone half-angle
+    /// (`Drone+0xE4`) is not lifted — 90° [S]; the sight is the driver's seen bit on the row.
+    fn find_site_opponent(&mut self, ctx: &BotCtx) {
+        let Some(ob) = ctx.objectives else { return };
+        let Some(site) = ob.site else { return };
+        let team = ob.teams.get(ctx.my_index).copied().unwrap_or(ctx.my_team);
+        if team != 1 - ob.site_defenders.min(1) {
+            return; // the defenders never shoot their own site [M 0x1424e0:520-525]
+        }
+        let Some(row) = ctx.others.get(OBJ_ROW).filter(|r| r.alive && r.index == OBJ_ROW) else { return };
+        let root = self.root();
+        let d2 = (root[0] - site.pos[0]).powi(2) + (root[1] - site.pos[1]).powi(2) + (root[2] - site.pos[2]).powi(2);
+        if d2 >= 16.0 {
+            return; // [M :536-538]
+        }
+        let (dx, dz) = (site.pos[0] - self.pos[0], site.pos[2] - self.pos[2]);
+        if dx * crate::trig::cosf(self.yaw) + dz * crate::trig::sinf(self.yaw) < 0.0 {
+            return; // behind the bot [M :539-549, the cone]
+        }
+        if row.flags & 4 == 0 {
+            return; // [M :550]
+        }
+        self.vars.opponent = Some(OBJ_ROW);
+        self.set_goal_complete(1); // the 0x3b self-message [M :551]
     }
 
     /// `NDrone2_ReactToOpponentSighted` 0x1770f0 — the gates the decompile shows, then the
@@ -1542,11 +2252,12 @@ impl BotBrain {
         suggested
     }
 
-    /// `BOTSTATE_chooseCombatMove` 0x129218 via `checkAttackMove`: `Rand_Rand(4)` →
-    /// 0xD4/0xD5/0xDB/0xDC [M 0x129218:14], gated by `checkAttackMove`'s validity [S — the
-    /// strafe/step states are not ported; the validity gate keeps the bot in 0xCF so the roll
-    /// still consumes the shared RNG in the game's order].
-    fn choose_combat_move(&mut self, rng: &mut Rng) -> Option<u8> {
+    /// `BOTSTATE_chooseCombatMove` 0x129218 via `checkAttackMove` 0x126a40: `Rand_Rand(4)` →
+    /// 0xD5 (1) / 0xD4 (0) / 0xDB (2) / 0xDC (3) [M 0x129218], each gated by its `NDrone2_Can*`
+    /// test [M 0x126a40: 0xD4 CanStrafeLeft, 0xD5 CanStrafeRight, 0xDB CanStepLeft, 0xDC
+    /// CanStepRight — the port's `can_side_move`]. `BOTSTATE_EvasiveMove` and
+    /// `BOT_getMovePossibility(drone, 2)` are not lifted (taken as no evasive move / possible) [S].
+    fn choose_combat_move(&mut self, ctx: &BotCtx, rng: &mut Rng) -> Option<u8> {
         let roll = rng.rand(4);
         let mv = match roll {
             0 => st::BOT_ATTACK_STRAFE_AIM_LEFT,
@@ -1554,7 +2265,11 @@ impl BotBrain {
             2 => st::BOT_ATTACK_STEP_AIM_LEFT,
             _ => st::BOT_ATTACK_STEP_AIM_RIGHT,
         };
-        None // checkAttackMove's stand-in: no move state is ported yet (the report lists it)
+        if ctx.stationary {
+            return None; // the stand preset never moves
+        }
+        let reach = if matches!(mv, st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT) { 1.5 } else { 1.0 };
+        self.can_side_move(ctx, Self::move_side(mv), reach).then_some(mv)
     }
 
     // ------------------------------------------------------------------
@@ -1587,6 +2302,22 @@ impl BotBrain {
             self.vars.regen_deadline += FRAME_RATE_INT;
         }
         let ty = self.vars.state_type;
+        // mp-bot-objectives: the defenders' guard latch [M :244-268] — in a type-5 (goal walk)
+        // state of Protection (defenders team 1) / Demolition (team 0), a defender whose sphere
+        // centre is within 3.0 of the site's box latches `+0x771` and stops (SetState 0xF9); BotIdle
+        // then holds it there while the latch re-tests true [M 0x171b80:66-96].
+        if ty == 5 {
+            if let Some(ob) = ctx.objectives {
+                let team = ob.teams.get(ctx.my_index).copied().unwrap_or(ctx.my_team);
+                if let Some(site) = ob.site.filter(|s| s.radius > 0.0 && team == ob.site_defenders) {
+                    self.vars.attack_latch = self.site_sphere_box(&site) as u8;
+                    if self.vars.attack_latch != 0 {
+                        self.set_state(state::BOT_IDLE);
+                        return;
+                    }
+                }
+            }
+        }
         match ty {
             1 | 2 | 4 => {
                 // types 1/2 → the tail return [M :517-519]; type 4 → the combat block [M :290-495]
@@ -1625,6 +2356,31 @@ impl BotBrain {
         self.set_state(state::BOT_ATTACK); // [M :45-49]
     }
 
+    /// The hunt goal on the nearest live opponent (slot 0, type 3 → subtype 9 — the same goal
+    /// the grudge hunt builds [M 0x126b88:327-342]). Opponents: every live row not marked
+    /// same-team (bit 0x8 — the team view of `setOtherPlayerInfo` 0x125390:62-102: FFA marks no
+    /// one, team games the team-mates, Assassination everyone but the assassin for the
+    /// non-assassins). Returns true when set.
+    fn hunt_nearest(&mut self, ctx: &BotCtx, rng: &mut Rng) -> bool {
+        // (the goal target is the row position — the rows sit at their slot index)
+        let live = || ctx.others.iter().enumerate().filter(|(_, o)| o.index != ctx.my_index && o.index < OBJ_ROW && o.alive);
+        let mut best: Option<(usize, f32)> = None;
+        for (i, o) in live() {
+            if o.flags & 8 != 0 {
+                continue;
+            }
+            let d = dist2d(o.pos, self.pos) + (o.pos[1] - self.pos[1]).abs();
+            if best.is_none_or(|(_, b)| d < b) {
+                best = Some((i, d));
+            }
+        }
+        let Some((idx, _)) = best else { return false };
+        let p = ctx.others[idx].pos;
+        self.uninit_goal(0);
+        self.init_goal(0, 3, [p[0], p[1], p[2], 0.0], idx, 9);
+        self.goto_goal(ctx, rng, 0, state::BOT_IDLE)
+    }
+
     fn bot_idle_msg3(&mut self, ctx: &BotCtx, rng: &mut Rng) {
         let pick = self.trait_pick_opponent(ctx); // [M :54]
         self.vars.grudge = pick; // +0x76B [M :55]
@@ -1640,8 +2396,41 @@ impl BotBrain {
         if self.vars.attack_latch == 0
             || !matches!(ctx.scenario, 0x2000_0080 | 0x2000_0040)
         {
-            self.set_goal_pick_prefs(0.0, 0.0, 0.0, 1.0, 1, 0, 0, ctx.health, 1.0, 1.0);
-            if self.pick_goal(ctx, rng, 1) {
+            // mp-bot-objectives: `setGoalPickPrefs(0,0,0,1.0, slot 1)` + `pickGoal(1)` [M :73-79] —
+            // its Phase A (the mode objective) first; the KOTH hold keeps the bot idle on the hill.
+            if ctx.objectives.is_some() {
+                self.set_goal_pick_prefs(0.0, 0.0, 0.0, 1.0, 1, 0, 0, ctx.health, 1.0, 1.0);
+                self.uninit_goal(1);
+                match self.objective_scan(ctx, rng) {
+                    ObjPick::Goal(id, p, sub) => {
+                        self.init_goal(1, 2, [p[0], p[1], p[2], 0.0], id, sub);
+                        if self.goto_goal(ctx, rng, 1, state::BOT_IDLE) {
+                            self.set_state(state::BOT_GOTO_GOAL_POSITION); // [M :76-78]
+                        }
+                        return;
+                    }
+                    ObjPick::Hold => return,
+                    ObjPick::None => {}
+                }
+            }
+            // The hunt fallback [S]: with every pickup visited inside its 45 s cooldown (or none
+            // registered) the bot hunts the nearest live opponent instead of re-walking a stale
+            // pickup — the game's deathmatch bots roam into their opponents; its own source of
+            // that (the objective/route scoring of `pickGoal` Phase A, the `NDrone2_FindOpponent`
+            // search sweep) is not lifted. Without it the bots stood once the table was spent.
+            let now = self.tick as f32 / 60.0;
+            let idx = self.vars.bot_index as usize;
+            let fresh = ctx.pickups.iter().enumerate().any(|(i, p)| {
+                i as i8 != self.vars.last_pickup && p.visit.get(idx).is_some_and(|&v| v == 0.0 || v < now)
+            });
+            if fresh {
+                self.set_goal_pick_prefs(0.0, 0.0, 0.0, 1.0, 1, 0, 0, ctx.health, 1.0, 1.0);
+                if self.pick_goal_scan(ctx, rng, 1, ctx.objectives.is_none()) {
+                    self.set_state(state::BOT_GOTO_GOAL_POSITION);
+                    return;
+                }
+            }
+            if self.hunt_nearest(ctx, rng) {
                 self.set_state(state::BOT_GOTO_GOAL_POSITION);
             }
         } else {
@@ -1658,8 +2447,25 @@ impl BotBrain {
     /// site → the latch clears (the caller only reaches here in those modes).
         // `BOTSTATE_opponentIsMissile` (0x129a60): the demo/protection attacker may target the
         // site object itself as "opponent" (team-gated, +0xF6 done check) — ported as a stub [S].
-    fn guard_site_check(&mut self, _ctx: &BotCtx) -> u8 {
-        0
+    fn guard_site_check(&mut self, ctx: &BotCtx) -> u8 {
+        let Some(ob) = ctx.objectives else { return 0 };
+        let Some(site) = ob.site.filter(|s| s.radius > 0.0) else { return 0 }; // obj+0xD8 != 0 [M :86]
+        self.site_sphere_box(&site) as u8
+    }
+
+    /// `Intersect_SphereBox(3.0, obj+0x80 − site+0xC0, box min, box max)` [M 0x171b80:86-94,
+    /// 0x16e060:258-265]: the bot's world-sphere centre within 3.0 of the site's box (the box is
+    /// the snapshot's world-space min/max — the same relative test) [M `Intersect_SphereBox`
+    /// 0x1ed988: the clamped-point distance].
+    fn site_sphere_box(&self, site: &ObjView) -> bool {
+        let root = self.root();
+        let c = [root[0], root[1] + super::rules::PLAYER_SPHERE_DY, root[2]];
+        let mut d2 = 0.0f32;
+        for k in 0..3 {
+            let q = c[k].clamp(site.min[k], site.max[k]);
+            d2 += (c[k] - q) * (c[k] - q);
+        }
+        d2 <= 9.0
     }
 
     // ------------------------------------------------------------------
@@ -1675,30 +2481,411 @@ impl BotBrain {
         // pickup/objective goals use the goal's CelPos [M :77-78]
         let target: [f32; 3] = if self.vars.goals[slot].goal_type == 3 {
             ctx.others.get(self.vars.goals[slot].target).map(|o| o.pos).unwrap_or(self.pos)
+        } else if self.vars.goals[slot].goal_type == 2 {
+            // mp-bot-objectives: the objective goal walks to the object (`MP_recalcObjExtPaths`
+            // keeps a moving object's emitter on it [M 0x18b888]) and arrives on contact
+            if self.objective_arrived(ctx, slot) {
+                return 3;
+            }
+            self.objective_point(ctx, slot)
         } else {
             let c = self.vars.goals[slot].celpos;
             [c[0], c[1], c[2]]
         };
-        let dx = target[0] - self.pos[0];
+        // The arrival: within 1.0 on the floor plan and on the same storey (the body walks the
+        // floors, so the eye never meets an item's height) [S the `dist < Drone+0x8EC` stand-in].
         let dy = target[1] - self.pos[1];
-        let dz = target[2] - self.pos[2];
-        let d = (dx * dx + dy * dy + dz * dz).sqrt();
-        if d < 1.0 {
+        if dist2d(self.pos, target) < 1.0 && dy.abs() < 2.0 {
             return 3; // arrived
         }
         if ctx.stationary {
             return 1; // the stationary gate holds the bot in place [M 0x16f198:42-45 pattern; 0xEB arm [S]]
         }
+        // The goal walk: a hunt target's root is its eye − EYE; an item's is its floor + 1.1.
+        let hunt = self.vars.goals[slot].goal_type == 3;
+        let dest = if hunt {
+            [target[0], target[1] - crate::player::EYE, target[2]]
+        } else {
+            self.item_root(ctx, target)
+        };
         let mul = [0.7f32, 1.0, 1.3][(self.vars.speed as usize).min(2)]; // the speed mult [M atlas §4]
-        let step = 0.05 * mul;
-        self.pos[0] += dx / d * step;
-        self.pos[1] += dy / d * step;
-        self.pos[2] += dz / d * step;
-        // the game's own ATAN2_APPROX (0x1e4528), not std libm: std's atan2/sin/cos differ by
-        // ulps across libm versions/platforms, which would desync lockstep peers at the aim-cone
-        // gate (dot <= 0.9998). Same convention: tangent dz/dx, same quadrants.
-        self.yaw = crate::trig::atan2_approx(dz, dx); // face the target
+        if !self.steer_to(ctx, dest, mul.min(1.0), true) {
+            return 0xC; // no route and stuck: the route failed (validateRoute → the goal ends)
+        }
         1
+    }
+
+    /// An item's standing spot: the floor under it + 1.1 (the body root), else its own height.
+    fn item_root(&self, ctx: &BotCtx, p: [f32; 3]) -> [f32; 3] {
+        if self.route.valid && dist2d(self.route.dest, p) < 0.01 {
+            return self.route.dest;
+        }
+        match ctx.world.floor_below([p[0], p[1] + 0.5, p[2]], 3.0) {
+            Some(f) => [p[0], f + 1.1, p[2]],
+            None => [p[0], p[1] + 0.6, p[2]],
+        }
+    }
+
+    /// Turn the facing toward a point by at most `rate` rad (the game's ATAN2_APPROX, not std
+    /// libm — std's atan2 differs by ulps across libms and would desync lockstep peers).
+    fn turn_toward(&mut self, p: [f32; 3], rate: f32) {
+        let dx = p[0] - self.pos[0];
+        let dz = p[2] - self.pos[2];
+        if dx * dx + dz * dz < 1e-6 {
+            return;
+        }
+        self.turn_to_yaw(crate::trig::atan2_approx(dz, dx), rate);
+    }
+
+    fn turn_to_yaw(&mut self, want: f32, rate: f32) {
+        let pi = std::f32::consts::PI;
+        let mut delta = want - self.yaw;
+        while delta > pi { delta -= 2.0 * pi; }
+        while delta < -pi { delta += 2.0 * pi; }
+        self.yaw += delta.clamp(-rate, rate);
+        while self.yaw > pi { self.yaw -= 2.0 * pi; }
+        while self.yaw < -pi { self.yaw += 2.0 * pi; }
+    }
+
+    /// The body root (the feet's floor + 1.1).
+    fn root(&self) -> [f32; 3] {
+        [self.pos[0], self.pos[1] - crate::player::EYE, self.pos[2]]
+    }
+
+    /// Walk toward `dest` (body-root space) along the arena's AI network: straight when the walk
+    /// is clear, else a shortest path over the network's links between the nearest walk-clear
+    /// nodes, skipping ahead whenever the node after next is already walk-clear [S — the game's
+    /// `AINetwork_CalcRouteToPosition` → A* → `OptimiseRoute` → `FollowRoute` link creep; the
+    /// ported creep (`nav::Route`) is tuned to the drones' anim root motion, so the bots use this
+    /// plain follower over the same graph]. `face` turns the body along the walk (the goal walk;
+    /// the combat moves keep it on the opponent). Returns false when the bot is stuck for good
+    /// (three stuck checks in a row) so the caller can drop the goal.
+    fn steer_to(&mut self, ctx: &BotCtx, dest: [f32; 3], speed: f32, face: bool) -> bool {
+        let root = self.root();
+        let mut way = dest;
+        if ctx.world.triangle_count() > 0 {
+            if let Some(net) = ctx.nav {
+                let stale = !self.route.valid
+                    || dist2d(self.route.dest, dest) > 3.0
+                    || (dest[1] - self.route.dest[1]).abs() > 1.5
+                    || self.tick.wrapping_sub(self.route.built) > 240;
+                if stale && (!self.route.valid || self.tick.wrapping_sub(self.route.built) >= 20) {
+                    self.plan_route(ctx, net, root, dest);
+                }
+                if self.route.valid && !self.route.nodes.is_empty() {
+                    let p = &net.paths[self.route.path];
+                    // Advance past reached nodes; skip ahead one node a tick when the next-but-one
+                    // (or the destination, past the last) is already walk-clear.
+                    while self.route.idx < self.route.nodes.len() {
+                        let n = node_root(p.nodes[self.route.nodes[self.route.idx] as usize].pos);
+                        if dist2d(root, n) < 0.8 && (n[1] - root[1]).abs() < 1.5 {
+                            self.route.idx += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if self.route.idx < self.route.nodes.len() {
+                        let after = if self.route.idx + 1 < self.route.nodes.len() {
+                            node_root(p.nodes[self.route.nodes[self.route.idx + 1] as usize].pos)
+                        } else {
+                            dest
+                        };
+                        if walk_clear(ctx.world, root, after) {
+                            self.route.idx += 1;
+                        }
+                    }
+                    if self.route.idx < self.route.nodes.len() {
+                        way = node_root(p.nodes[self.route.nodes[self.route.idx] as usize].pos);
+                    }
+                }
+            }
+        }
+        let dx = way[0] - root[0];
+        let dz = way[2] - root[2];
+        let d = (dx * dx + dz * dz).sqrt();
+        if d > 1e-4 {
+            self.move_want = Some(([dx / d, dz / d], speed));
+            if face {
+                self.turn_to_yaw(crate::trig::atan2_approx(dz, dx), 0.25);
+            }
+        }
+        self.stuck_hits < 3
+    }
+
+    /// The route plan (see `steer_to`): straight when walk-clear; else Dijkstra over the network
+    /// links from the nearest walk-clear nodes at the start to the nearest at the destination
+    /// (ties by node index — deterministic). No reachable node → straight (the body slides).
+    fn plan_route(&mut self, ctx: &BotCtx, net: &crate::nav::Network, from: [f32; 3], dest: [f32; 3]) {
+        let _p = crate::prof::scope("bots: plan_route");
+        self.route = BotRoute { path: 0, nodes: Vec::new(), idx: 0, dest, built: self.tick, valid: true };
+        if walk_clear(ctx.world, from, dest) {
+            return;
+        }
+        let Some(pi) = net.nav_path_for(from) else { return };
+        let p = &net.paths[pi];
+        let n = p.nodes.len();
+        if n == 0 {
+            return;
+        }
+        // The nearest few walk-clear nodes around a point (2D order, ties by index).
+        let near = |at: [f32; 3]| -> Vec<(usize, f32)> {
+            let mut c: Vec<(f32, usize)> = (0..n)
+                .map(|i| (dist2d(node_root(p.nodes[i].pos), at), i))
+                .filter(|&(d, i)| d < 30.0 && (node_root(p.nodes[i].pos)[1] - at[1]).abs() < 3.0)
+                .collect();
+            c.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            c.into_iter()
+                .take(10)
+                .filter(|&(_, i)| walk_clear(ctx.world, at, node_root(p.nodes[i].pos)))
+                .take(3)
+                .map(|(d, i)| (i, d))
+                .collect()
+        };
+        let starts = near(from);
+        let goals = near(dest);
+        if starts.is_empty() || goals.is_empty() {
+            return;
+        }
+        let mut dist = vec![f32::INFINITY; n];
+        let mut prev = vec![u16::MAX; n];
+        let mut done = vec![false; n];
+        for &(i, d) in &starts {
+            if d < dist[i] {
+                dist[i] = d;
+            }
+        }
+        loop {
+            let mut cur = usize::MAX;
+            for i in 0..n {
+                if !done[i] && dist[i].is_finite() && (cur == usize::MAX || dist[i] < dist[cur]) {
+                    cur = i;
+                }
+            }
+            if cur == usize::MAX {
+                break;
+            }
+            done[cur] = true;
+            for &li in &p.adj[cur] {
+                let l = &p.links[li as usize];
+                let nb = if l.a as usize == cur { l.b } else { l.a } as usize;
+                let c = dist[cur] + l.len;
+                if c < dist[nb] {
+                    dist[nb] = c;
+                    prev[nb] = cur as u16;
+                }
+            }
+        }
+        let mut best: Option<(usize, f32)> = None;
+        for &(g, d) in &goals {
+            let total = dist[g] + d;
+            if total.is_finite() && best.is_none_or(|(_, b)| total < b) {
+                best = Some((g, total));
+            }
+        }
+        let Some((g, _)) = best else { return };
+        let mut nodes = vec![g as u16];
+        let mut k = g;
+        while prev[k] != u16::MAX && nodes.len() <= n {
+            k = prev[k] as usize;
+            nodes.push(k as u16);
+        }
+        nodes.reverse();
+        self.route.path = pi;
+        self.route.nodes = nodes;
+    }
+
+    /// The body walk: this tick's request (+ the keep-apart push from bodies closer than 1.5)
+    /// through the player's movement core, facing the brain's yaw — the walk direction splits
+    /// into the body's forward/strafe sticks. With no world (the unit rigs) the walk is a plane
+    /// move at the body's top speed.
+    fn walk_body(&mut self, ctx: &BotCtx) {
+        let _p = crate::prof::scope("bots: walk_body");
+        let want = self.move_want.take();
+        let (mut dir, mut speed) = want.unwrap_or(([0.0, 0.0], 0.0));
+        dir = [dir[0] * speed, dir[1] * speed];
+        // Keep apart [S — the game's drone-vs-drone `Collide` pushes bodies apart; the port's
+        // bot bodies are not collision objects]: a push away from every live body within 1.5.
+        let mut pushed = false;
+        for o in ctx.others {
+            if o.index == ctx.my_index || o.index >= OBJ_ROW || !o.alive || (o.pos[1] - self.pos[1]).abs() > 2.0 {
+                continue;
+            }
+            let ax = self.pos[0] - o.pos[0];
+            let az = self.pos[2] - o.pos[2];
+            let d = (ax * ax + az * az).sqrt();
+            if d < 1.5 {
+                let k = (1.5 - d) / 1.5;
+                if d > 1e-4 {
+                    dir[0] += ax / d * k;
+                    dir[1] += az / d * k;
+                } else {
+                    // stacked exactly: split by slot order (deterministic)
+                    let s = if ctx.my_index < o.index { 1.0 } else { -1.0 };
+                    dir[0] += s * k;
+                }
+                pushed = true;
+            }
+        }
+        let len = (dir[0] * dir[0] + dir[1] * dir[1]).sqrt();
+        if len > 1e-4 {
+            speed = len.min(1.0).max(if pushed { 0.6 } else { 0.0 });
+            dir = [dir[0] / len, dir[1] / len];
+        } else {
+            speed = 0.0;
+        }
+        if ctx.world.triangle_count() == 0 {
+            // The plane walk (no world to stand on).
+            if speed > 0.0 && !ctx.stationary {
+                self.pos[0] += dir[0] * speed * BODY_STEP;
+                self.pos[2] += dir[1] * speed * BODY_STEP;
+            }
+            return;
+        }
+        let mut input = crate::player::Input::default();
+        let byaw = crate::trig::HALF_PI - self.yaw;
+        self.body.yaw = byaw;
+        if speed > 0.0 && !ctx.stationary {
+            let (s, c) = (crate::trig::sinf(byaw), crate::trig::cosf(byaw));
+            // Bond's forward is (sin, cos), his strafe (+) (cos, −sin) [M Player_Move's
+            // `pos += c·vs + s·vf, −s·vs + c·vf`]. The forward stick is quadratic (0.1·f²), so
+            // its share is the square root of the wanted component.
+            let f = dir[0] * s + dir[1] * c;
+            let r = dir[0] * c - dir[1] * s;
+            input.forward = if f > 0.0 { (f * speed).sqrt() } else { -(-f * speed).sqrt() };
+            input.strafe = r * speed * 1.4;
+        }
+        input.jump = std::mem::take(&mut self.jump_next);
+        self.body.cel = None;
+        self.body.tick_ctx(ctx.world, &crate::player::LadderCtx::default(), &input);
+        self.body.sfx_out.clear();
+        self.body.yaw = byaw;
+        self.pos = [self.body.pos[0], self.body.pos[1] + crate::player::EYE, self.body.pos[2]];
+        // The stuck watch: every 45 ticks of wanting to walk, under 0.4 covered → one jump and a
+        // re-plan; three in a row tell the walker's caller to give the goal up [S].
+        if want.is_some_and(|w| w.1 > 0.3) && !ctx.stationary {
+            if self.tick.wrapping_sub(self.stuck_ref.1) >= 45 {
+                let r = self.root();
+                if dist2d(r, self.stuck_ref.0) < 0.4 {
+                    self.stuck_hits = self.stuck_hits.saturating_add(1);
+                    self.jump_next = true;
+                    self.route.valid = false;
+                } else {
+                    self.stuck_hits = 0;
+                }
+                self.stuck_ref = (r, self.tick);
+            }
+        } else {
+            self.stuck_ref = (self.root(), self.tick);
+            self.stuck_hits = 0;
+        }
+    }
+
+    /// `NDrone2_CanStrafeLeft/Right` / `CanStepLeft/Right` / `CanBackoff` [S — the game's tests
+    /// (0x14f9e8…) sweep the drone's bounds; the port: the side spot `dist` away is walk-clear
+    /// and has a floor under it].
+    fn can_side_move(&self, ctx: &BotCtx, side: f32, dist: f32) -> bool {
+        let r = self.root();
+        // left (side +1) = (−sin, cos) of the brain's facing (cos, sin)
+        let lx = -crate::trig::sinf(self.yaw) * side;
+        let lz = crate::trig::cosf(self.yaw) * side;
+        let to = [r[0] + lx * dist, r[1], r[2] + lz * dist];
+        walk_clear(ctx.world, r, to) && ctx.world.floor_below([to[0], to[1] - 1.1, to[2]], 0.9).is_some()
+    }
+
+    /// The side a combat move walks: +1 left, −1 right.
+    fn move_side(state: u8) -> f32 {
+        match state {
+            st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STEP_AIM_LEFT => 1.0,
+            _ => -1.0,
+        }
+    }
+
+    /// Walk sideways (relative to the facing) at `speed`, drifting in (`fwd` > 0) or out.
+    fn side_walk(&mut self, side: f32, fwd: f32, speed: f32) {
+        let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
+        let x = -s * side + c * fwd;
+        let z = c * side + s * fwd;
+        let l = (x * x + z * z).sqrt().max(1e-6);
+        self.move_want = Some(([x / l, z / l], speed));
+    }
+
+    /// The combat moves' ENTER [M 0x16f850 msg 1 (strafe): the trigger pull when the latch is
+    /// clear, the `(Rand(8)+2)·FRAME_RATE_INT` timer; 0x174e88 msg 1 (step): the trigger pull,
+    /// the step anim 0x5A — its length stands in as 30 ticks [S]].
+    fn bot_attack_move_enter(&mut self, next: u8, rng: &mut Rng) {
+        if self.vars.fire_latch == 0 {
+            self.bot_attack_fire_enter(rng);
+        }
+        self.combat_move_until = match next {
+            st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT => {
+                self.tick + (rng.rand(8) + 2) * FRAME_RATE_INT
+            }
+            _ => self.tick + 30,
+        };
+    }
+
+    /// The spent burst's re-pull inside a combat move (the 0xD2 re-arm stand-in, see
+    /// `route_vision_block`) [S].
+    fn rearm_burst(&mut self, rng: &mut Rng) {
+        if self.vars.burst_empty != 0 {
+            let interval = (self.weapon.interval.max(20)) as u32;
+            if self.tick.wrapping_sub(self.vars.burst_done_tick) >= interval {
+                self.vars.fire_latch = 0;
+                self.vars.burst_empty = 0;
+                self.bot_attack_fire_enter(rng);
+            }
+        }
+    }
+
+    /// 0xD4/0xD5 BotAttackStrafeAim{Left,Right} msg 3 [M 0x16f850/0x16f9b8]: no opponent →
+    /// 0xD3; aim; `CanStrafe` failing → `chooseCombatMove` (none → 0xCF); out of sight 16+ ticks
+    /// → 0xD0 run; the timer (msg 0xC) → 0xCF. The strafe walk itself is the anim's root motion
+    /// in the game (anim 0xC); the port walks the body sideways at the strafe stick [S].
+    fn bot_attack_strafe_msg3(&mut self, ctx: &BotCtx, rng: &mut Rng) {
+        let Some(o) = self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive) else {
+            self.set_state(st::BOT_ATTACK_NO_OPPONENT);
+            return;
+        };
+        let dist = o.dist2.sqrt();
+        if self.tick >= self.combat_move_until {
+            self.set_state(state::BOT_ATTACK); // the timer's msg 0xC [M]
+            return;
+        }
+        let side = Self::move_side(self.state);
+        if !self.can_side_move(ctx, side, 1.5) {
+            let mv = self.choose_combat_move(ctx, rng).unwrap_or(state::BOT_ATTACK);
+            self.set_state(mv);
+            return;
+        }
+        if self.vars.unseen_ticks >= 0x10 {
+            self.set_state(state::BOT_ATTACK_RUN);
+            return;
+        }
+        // drift in when far, out when inside the too-close band [S]
+        let fwd = if dist > self.vars.combat_range[1] * 0.5 { 0.35 } else if dist < self.vars.combat_range[0] * 2.0 { -0.35 } else { 0.0 };
+        self.side_walk(side, fwd, 1.0);
+        self.rearm_burst(rng);
+    }
+
+    /// 0xDB/0xDC BotAttackStepAim{Left,Right} msg 3 [M 0x174e88/0x174fa8]: no opponent → 0xD3;
+    /// the step anim over → 0xD2; aim; `Rand(5) == 3` → `chooseCombatMove` (none → stay).
+    fn bot_attack_step_msg3(&mut self, ctx: &BotCtx, rng: &mut Rng) {
+        if self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive).is_none() {
+            self.set_state(st::BOT_ATTACK_NO_OPPONENT);
+            return;
+        }
+        if self.tick >= self.combat_move_until {
+            self.set_state(state::BOT_ATTACK_FIRE); // `CanDoAnimState(0x5A)` fails → 0xD2 [M]
+            return;
+        }
+        let side = Self::move_side(self.state);
+        self.side_walk(side, 0.0, 0.8);
+        if rng.rand(5) == 3 {
+            if let Some(mv) = self.choose_combat_move(ctx, rng) {
+                self.set_state(mv);
+            }
+        }
+        self.rearm_burst(rng);
     }
 
     fn bot_goto_goal_msg3(&mut self, ctx: &BotCtx) {
@@ -1742,10 +2929,10 @@ impl BotBrain {
     // State 0xCF BotAttack [M 0x16f198]
     // ------------------------------------------------------------------
 
-    fn bot_attack_enter(&mut self, rng: &mut Rng) {
+    fn bot_attack_enter(&mut self, ctx: &BotCtx, rng: &mut Rng) {
         // anim 10, the attack message, InvalidateAttackRoute, then the 1-in-3 roll [M :18-28,91]
         if rng.rand(3) == 0 {
-            if let Some(mv) = self.choose_combat_move(rng) {
+            if let Some(mv) = self.choose_combat_move(ctx, rng) {
                 self.set_state(mv); // [M :26-28]
             }
         }
@@ -1806,12 +2993,59 @@ impl BotBrain {
                 return; // keep firing [M :48-50]
             }
             // the fall-through → chooseCombatMove [M :51 → LAB_0016f818]
-            if let Some(mv) = self.choose_combat_move(rng) {
+            if let Some(mv) = self.choose_combat_move(ctx, rng) {
                 self.set_state(mv);
             }
             return;
         }
         self.route_vision_block(ctx, dist, rng); // 3C != 0 → the block [M :52]
+    }
+
+    /// 0xD0 BotAttackRun [M 0x16f390]: no opponent → 0xD3 (the port: idle); the route to the
+    /// opponent (`NDrone2_MoveToObject` — the port's `steer_to` over the AI network); inside
+    /// the too-close range → 0xD7 backoff; inside the engage range (+0xF0) and sighted → react
+    /// → 0xCF. A route that fails for good (the stuck watch) → 0xD1's place: drop the opponent
+    /// and go back to the goals [S].
+    fn bot_attack_run_msg3(&mut self, ctx: &BotCtx) {
+        let Some(o) = self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive) else {
+            self.set_state(state::BOT_IDLE);
+            return;
+        };
+        let dist = o.dist2.sqrt();
+        let target = o.pos;
+        if dist <= self.vars.combat_range[0] {
+            self.set_state(state::BOT_ATTACK_BACKOFF); // [M :72-76]
+            return;
+        }
+        if dist < self.vars.combat_range[1] && self.vars.sighted & 4 != 0 && self.vars.unseen_ticks < 0x10 {
+            self.vars.fire_latch = 0;
+            self.set_state(state::BOT_ATTACK); // [M :86-91]
+            return;
+        }
+        if ctx.stationary {
+            return;
+        }
+        let dest = [target[0], target[1] - crate::player::EYE, target[2]];
+        if !self.steer_to(ctx, dest, 1.0, true) {
+            self.vars.opponent = None;
+            self.stuck_hits = 0;
+            self.set_state(state::BOT_IDLE);
+        }
+    }
+
+    /// 0xD7 BotAttackBackoff [M 0x16fc30 — not lifted; the stand-in]: walk back (facing the
+    /// opponent) until past the close range, then back to BotAttack [S].
+    fn bot_attack_backoff_msg3(&mut self, ctx: &BotCtx) {
+        let Some(o) = self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive) else {
+            self.set_state(state::BOT_IDLE);
+            return;
+        };
+        if o.dist2.sqrt() > self.vars.combat_range[0] + 1.0 || ctx.stationary || self.stuck_hits > 0 {
+            self.vars.fire_latch = 0;
+            self.set_state(state::BOT_ATTACK);
+            return;
+        }
+        self.side_walk(0.0, -1.0, 0.8);
     }
 
     /// BotAttackFire's route/vision block [M 0x16f5e8:56-93].
@@ -1824,7 +3058,7 @@ impl BotBrain {
             return;
         }
         if self.vars.unseen_ticks >= 0x10 {
-            if let Some(mv) = self.choose_combat_move(rng) {
+            if let Some(mv) = self.choose_combat_move(ctx, rng) {
                 self.set_state(mv); // [M :77]
             }
             return;
@@ -1832,6 +3066,18 @@ impl BotBrain {
         if dist >= self.vars.combat_range[2] {
             // the chase route [M :81-93]: the port's route stand-in → run
             self.set_state(state::BOT_ATTACK_RUN);
+            return;
+        }
+        // The game leaves 0xD2 through its combat moves (strafe/step, `chooseCombatMove`), which
+        // re-enter the fire state; those are not ported, so a spent burst re-arms here after the
+        // weapon's interval [S].
+        if self.vars.burst_empty != 0 {
+            let interval = (self.weapon.interval.max(20)) as u32;
+            if self.tick.wrapping_sub(self.vars.burst_done_tick) >= interval {
+                self.vars.fire_latch = 0;
+                self.vars.burst_empty = 0;
+                self.set_state(state::BOT_ATTACK);
+            }
         }
     }
 
@@ -1876,13 +3122,31 @@ impl BotBrain {
         let Some(target) = ctx.others.get(o) else { return };
         // `BOTWEAP_WeaponHasAmmo` (0x12adb0): the port gates on clip rounds only; the ammo-pool
         // half (BotVars+0x698) is not modelled [S partial].
-        if !target.alive || self.vars.clip_rounds < 1 {
+        if !target.alive {
             return;
+        }
+        if self.vars.clip_rounds < 1 {
+            // The reload: the ammo pool (BotVars+0x698) is not modelled, so an empty clip refills
+            // from an unmodelled pool — 12, the start P2K's clip [S]. Without it a bot spawned
+            // with 0 rounds and never fired a shot (the two-window bots: clip 0 all match).
+            self.vars.clip_rounds = 12;
+            return; // the reload takes this tick
         }
         let dx = target.pos[0] - self.pos[0];
         let dz = target.pos[2] - self.pos[2];
         let d = (dx * dx + dz * dz).sqrt();
         let dir = [dx / d, 0.0, dz / d];
+        // The aim turn: the bot swings toward its opponent (≤ 0.2 rad a tick) before the cone
+        // test — nothing turned an attacking bot (only the goal walk faced its heading), so it
+        // never entered the cone and never fired (the two-window bots stood in 0xD2 all match)
+        // [S the drones' aim-turn rate is not lifted; the game's ATAN2_APPROX keeps it lockstep-
+        // exact].
+        let want = crate::trig::atan2_approx(dz, dx);
+        let pi = std::f32::consts::PI;
+        let mut delta = want - self.yaw;
+        while delta > pi { delta -= 2.0 * pi; }
+        while delta < -pi { delta += 2.0 * pi; }
+        self.yaw += delta.clamp(-0.2, 0.2);
         // the aim cone [M 0x178c48: dot > 0.9998]
         // the game's PS2Sinf/PS2Cosf (0x120700) — see the ATAN2_APPROX note above: std trig is
         // libm-dependent; the game's own approximations are not.
@@ -1891,12 +3155,18 @@ impl BotBrain {
         if dot <= 0.9998 {
             return;
         }
-        // FireWeapon [M 0x179d40→0x17a080:11]
-        self.shots.push(BotShot { tick: self.tick, pos: self.pos, dir, weapon: self.vars.weapon_id });
+        // FireWeapon [M 0x179d40→0x17a080:11] — the round aims at the target's height too (a level
+        // round passed over a player on another floor) [S the aim's vertical half].
+        let dy = target.pos[1] - 0.3 - self.pos[1];
+        let len = (d * d + dy * dy).sqrt().max(1e-6);
+        let aim = [dx / len, dy / len, dz / len];
+        let _ = dir;
+        self.shots.push(BotShot { tick: self.tick, pos: self.pos, dir: aim, weapon: self.vars.weapon_id });
         self.vars.clip_rounds -= 1;
         self.vars.burst_left -= 1;
         if self.vars.burst_left == 0 {
             self.vars.burst_empty = 1; // [M 0x17a180:63]
+            self.vars.burst_done_tick = self.tick;
             self.vars.next_bullet_at = 0.0; // the pipeline stops — Fire's only caller is the state ENTER [M]
         } else {
             self.vars.next_bullet_at += self.weapon.interval.max(0) as f32 / 60.0;
@@ -2128,7 +3398,7 @@ mod brain_tests {
                     weapon_id: 0x10,
                     mp_class: 0,
                     is_obj_flag2: false,
-                    visit: [0.0; 4],
+                    visit: [0.0; 16],
                 }],
                 others: vec![
                     OtherPlayer { index: 0, pos: [10.0, 1.6, 0.0], alive: true, team: 0, flags: 0, dist2: 0.0, health: 100.0, score: 0.0 },
@@ -2156,9 +3426,12 @@ mod brain_tests {
                 pickups,
                 others,
                 world,
+                nav: None,
                 health: 100.0,
                 max_health: 100.0,
                 stationary,
+                lazy_sight: false,
+                objectives: None,
             }
         }
 
@@ -2285,7 +3558,7 @@ mod brain_tests {
             weapon_id: 0x11,
             mp_class: 0,
             is_obj_flag2: false,
-            visit: [0.0; 4],
+            visit: [0.0; 16],
         });
         // first pick: the near pickup 0 wins (both class 0, weights equal → the highest score)
         r.step();
@@ -2325,5 +3598,74 @@ mod brain_tests {
         assert_eq!(a.brain.vars.goals[a.brain.vars.active_goal as usize].target,
                    b.brain.vars.goals[b.brain.vars.active_goal as usize].target,
                    "the pickup pick consumes no RNG (subtype 0 → no gotoGoal roll)");
+    }
+
+    /// A 100×100 floor at y 0 (+ optionally a 4-wide, 3-high wall across the walk at x 3, both
+    /// faces). The bot stands on it: eye = floor + 1.1 (root) + EYE.
+    fn floor_world(wall: bool) -> CollisionWorld {
+        let mut t = vec![
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
+        ];
+        if wall {
+            let (a, b, c, d) = ([3.0, 0.0, -2.0], [3.0, 0.0, 2.0], [3.0, 3.0, 2.0], [3.0, 3.0, -2.0]);
+            t.extend([[a, b, c], [a, c, d], [a, c, b], [a, d, c]]);
+        }
+        CollisionWorld::from_triangles(t)
+    }
+
+    fn floor_rig(wall: bool) -> Rig {
+        let mut r = Rig::new();
+        r.world = floor_world(wall);
+        let eye = 1.1 + crate::player::EYE;
+        let mut rec = INITIAL_BOT_RECORDS[0].clone();
+        rec.0[0x0E] = 1;
+        r.brain = BotBrain::bot_init(&rec, 4, [0.0, eye, 0.0], 0.0);
+        r.brain.weapon = BotWeapon { interval: 6, burst: 3, aggression_mul: 1.0 };
+        r.brain.vars.weapon_id = 0x02;
+        r.brain.vars.clip_rounds = 50;
+        r.pickups[0].pos = [6.0, 0.3, 0.0];
+        r.others[0].pos = [10.0, eye, 0.0];
+        r.others[1].pos = [0.0, eye, 0.0];
+        r
+    }
+
+    /// The body walk on real geometry: the bot walks the floor to the pickup (the height holds —
+    /// no re-stand, no sinking), and the walk is the body's (it moved at walking pace).
+    #[test]
+    fn body_walks_the_floor_to_the_pickup() {
+        let mut r = floor_rig(false);
+        let eye = r.brain.pos[1];
+        let mut arrived = None;
+        for t in 0..400 {
+            r.step();
+            assert!((r.brain.pos[1] - eye).abs() < 0.05, "tick {t}: the body stays on the floor, eye {:?}", r.brain.pos);
+            if arrived.is_none() && r.brain.visited_pickups.contains(&0) {
+                arrived = Some(t);
+            }
+        }
+        let t = arrived.expect("the bot reaches the pickup");
+        // 5 units at ≤ 0.105 a tick (+ the turn and the stick ease) — not instant, not stalled
+        assert!(t >= 45 && t <= 200, "arrival tick {t}");
+    }
+
+    /// Sister: a wall across the walk holds the body (the capsule push) — the bot never passes
+    /// x = 3 while it is inside the wall's z span — and it keeps moving (no frozen stand).
+    #[test]
+    fn body_never_walks_through_a_wall() {
+        let mut r = floor_rig(true);
+        let start = r.brain.pos;
+        let mut walked = 0.0;
+        let mut last = start;
+        for t in 0..600 {
+            r.step();
+            let p = r.brain.pos;
+            if p[2].abs() < 1.5 {
+                assert!(p[0] < 3.0, "tick {t}: the body passed the wall, pos {p:?}");
+            }
+            walked += ((p[0] - last[0]).powi(2) + (p[2] - last[2]).powi(2)).sqrt();
+            last = p;
+        }
+        assert!(walked > 2.0, "the bot walked up to the wall, walked {walked}");
     }
 }

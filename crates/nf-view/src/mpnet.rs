@@ -26,7 +26,7 @@ use std::time::Instant;
 use nf_game::mp::{MpPlayer, MpSettings};
 use nf_game::player;
 use nf_net::session::{Config, Event, Session};
-use nf_net::{MatchSettings, UdpTransport};
+use nf_net::{MatchSettings, UdpTransport, MAX_AGENTS};
 
 use crate::menu::{MpNetAgent, MpNetChoices, MpNetError, MpNetLink};
 
@@ -56,8 +56,11 @@ pub fn mp_to_match(s: &MpSettings) -> MatchSettings {
         spawn_policy: s.spawn_policy,
         radar: s.radar,
         friendly_fire: s.friendly_fire,
+        location_damage: s.location_damage,
         players: s.players.each_ref().map(|p| (p.team, p.skin, p.armor_bonus, p.radar_on)),
         registered_pickups: s.registered_pickups,
+        mods: [s.gun_emplacements, s.vehicles, s.grapple, s.explosive_scenery],
+        bot_records: s.bot_records.iter().map(|r| r.0).collect(),
     }
 }
 
@@ -89,6 +92,12 @@ pub fn match_to_mp(m: &MatchSettings, seed: u32) -> MpSettings {
         radar: m.radar,
         registered_pickups: m.registered_pickups,
         friendly_fire: m.friendly_fire,
+        location_damage: m.location_damage,
+        gun_emplacements: m.mods[0],
+        vehicles: m.mods[1],
+        grapple: m.mods[2],
+        explosive_scenery: m.mods[3],
+        bot_records: m.bot_records.iter().map(|r| nf_game::mp::bots::BotRecord(*r)).collect(),
         seed,
     }
 }
@@ -115,9 +124,13 @@ pub fn to_net_input(i: &player::Input, trigger: bool, reload: bool, use_key: boo
         weapon_cycle: i.weapon_cycle,
         gadget_cycle: i.gadget_cycle,
         switch_to: i.switch_to,
-        // 700v6: the caller fills `held` / `shot` from the local weapon pipeline (lib.rs).
+        // 700v6: the caller fills `held` / `shot` from the local weapon pipeline (lib.rs);
+        // mp-combat-weapons: and the shot description.
         held: 0,
         shot: false,
+        shot_weapon: 0,
+        shot_flags: 0,
+        shot_aim: [0, 0],
     }
 }
 
@@ -219,6 +232,10 @@ pub enum CoreEvent {
     Desync { tick: u32 },
     /// Client: the host went silent past the timeout.
     HostTimeout,
+    /// Client: the host LEFT (quit the match / closed the lobby) — at once,
+    /// not after the timeout. The app returns to the online pages with a
+    /// message [S mp-online-failures].
+    HostLeft,
     /// Client: the host refused the join.
     Refused,
     /// mp-join-in-progress. Host: a HELLO arrived after GO; the run-log
@@ -235,7 +252,10 @@ pub enum CoreEvent {
         settings: Box<MpSettings>,
         snapshot_tick: u32,
         snapshot_hash: u64,
-        log: Vec<[nf_net::Input; 4]>,
+        log: Vec<[nf_net::Input; MAX_AGENTS]>,
+        /// The earlier late joins (slot, join tick) the replay spawns
+        /// (`crate::mp_late_join_catchup_joins`) — mp-online-failures.
+        joins: Vec<(u8, u32)>,
     },
     /// mp-join-in-progress. All machines: `slot` becomes human from
     /// `join_tick` — the app spawns its agent there (`Sim::mp_join_spawn`)
@@ -258,6 +278,8 @@ pub struct NetCore {
     choices: Option<MpNetChoices>,
     refused: bool,
     host_timed_out: bool,
+    /// Client: the host sent LEAVE (the link reads Lost at once).
+    host_left: bool,
     closed: bool,
     /// Events for the app (`take_app_events`).
     events: Vec<CoreEvent>,
@@ -291,7 +313,9 @@ const START_RESEND_EVERY: u32 = 4;
 const START_RESEND_POLLS: u32 = 120;
 
 fn session_cfg() -> Config {
-    Config { hash_every: 15, ..Default::default() } // NET_HASH_EVERY's cadence
+    // NET_HASH_EVERY's cadence; net-internet: the host measures every peer's RTT and adapts
+    // the input delay (the app schedules through `submit_local`, which follows it).
+    Config { hash_every: 15, adaptive_delay: true, ..Default::default() }
 }
 
 impl NetCore {
@@ -306,6 +330,7 @@ impl NetCore {
             choices: None,
             refused: false,
             host_timed_out: false,
+            host_left: false,
             closed: false,
             events: Vec::new(),
             start_resend: None,
@@ -327,6 +352,10 @@ impl NetCore {
     /// replace-the-Rc shape left the other holders on the stale placeholder
     /// socket). The lobby calls it only before anything flows.
     pub fn rebind_host(&mut self, port: u16) -> Result<(), String> {
+        // mp-online-failures: the old session's socket goes FIRST — a core re-listening on the
+        // port it already holds (Back then Host again, the rematch's re-listen) could never bind
+        // while its own old socket stood.
+        self.release_socket();
         let tr = UdpTransport::bind(&format!("0.0.0.0:{port}")).map_err(|e| format!("bind {port}: {e}"))?;
         self.sess = Session::new_host(session_cfg(), tr, MatchSettings::default(), 0);
         self.is_host = true;
@@ -339,9 +368,21 @@ impl NetCore {
         self.choices = None;
         self.refused = false;
         self.host_timed_out = false;
+        self.host_left = false;
         self.closed = false;
         self.events.clear();
+        self.start_resend = None;
+        self.lobby = None;
+        self.lobby_edits.clear();
         Ok(())
+    }
+
+    /// mp-online-failures: swap the session for an unbound-port placeholder (an ephemeral
+    /// loopback socket), dropping the old one — its UDP port is free at once. Nothing is sent.
+    fn release_socket(&mut self) {
+        if let Ok(tr) = UdpTransport::bind("127.0.0.1:0") {
+            self.sess = Session::new_host(session_cfg(), tr, MatchSettings::default(), 0);
+        }
     }
 
     /// The lobby's re-bind, client side: dial `addr` on the SAME core (see
@@ -356,8 +397,12 @@ impl NetCore {
         self.choices = None;
         self.refused = false;
         self.host_timed_out = false;
+        self.host_left = false;
         self.closed = false;
         self.events.clear();
+        self.start_resend = None;
+        self.lobby = None;
+        self.lobby_edits.clear();
         Ok(())
     }
 
@@ -373,6 +418,7 @@ impl NetCore {
             choices: None,
             refused: false,
             host_timed_out: false,
+            host_left: false,
             closed: false,
             events: Vec::new(),
             start_resend: None,
@@ -541,6 +587,7 @@ impl NetCore {
                         snapshot_tick,
                         snapshot_hash,
                         log,
+                        joins: self.sess.join_history().to_vec(),
                     });
                 }
                 Event::LateJoinSlot { slot, join_tick } => {
@@ -563,6 +610,10 @@ impl NetCore {
                 Event::HostTimeout => {
                     self.host_timed_out = true;
                     self.events.push(CoreEvent::HostTimeout);
+                }
+                Event::HostLeft => {
+                    self.host_left = true;
+                    self.events.push(CoreEvent::HostLeft);
                 }
                 Event::Desync { tick, .. } => {
                     self.events.push(CoreEvent::Desync { tick });
@@ -670,19 +721,46 @@ impl NetCore {
         self.sess.set_display_name(name);
     }
 
+    /// Leave (LEAVE to every peer) and RELEASE the socket: the port is free the moment this
+    /// returns, so a re-host on the same port works at once (mp-online-failures — the closed
+    /// session used to keep its socket bound until the whole core dropped: Back then Host again
+    /// on the same port read "Port already in use").
     pub fn close(&mut self) {
         if !self.closed {
             self.sess.leave();
             self.closed = true;
             self.drop_reach();
+            self.release_socket();
+            self.advert = None;
+            self.browse = None;
         }
+    }
+
+    /// mp-online-failures: the match is over (the host's debriefing) — the finished session
+    /// keeps its peers (polled, not ticked) but answers no new HELLO, so a client re-dialing for
+    /// the rematch reaches the next lobby on this port instead of late-joining this match.
+    pub fn finish_match(&mut self) {
+        if self.is_host { self.sess.close_joins(); }
+        self.advert = None;
+    }
+
+    /// mp-online-failures: a client dialed a match already in progress — the host began (or
+    /// completed) the late-join handover. The front end shows "joining" and the app adopts the
+    /// session for the replay instead of waiting for a lobby that will never come.
+    pub fn joining_match(&self) -> bool {
+        !self.is_host && !self.closed && self.sess.late_join_pending()
+    }
+
+    /// The session socket's local address (tests: the port is released after `close`).
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        self.sess.local_addr()
     }
 
     /// The link state the join flow reads.
     pub fn link(&self) -> MpNetLink {
         if self.closed { return MpNetLink::Idle; }
         if self.is_host { return MpNetLink::Listening; }
-        if self.host_timed_out { return MpNetLink::Lost; }
+        if self.host_timed_out || self.host_left { return MpNetLink::Lost; }
         if self.refused { return MpNetLink::Refused; }
         if self.sess.local_slot() != 0 || self.match_start.is_some() {
             return MpNetLink::Connected;
@@ -692,7 +770,7 @@ impl NetCore {
 
     // ── the app's match surface (the lockstep tick gate) ────────────────
 
-    pub fn ready_inputs(&mut self, tick: u32) -> Option<[nf_net::Input; 4]> {
+    pub fn ready_inputs(&mut self, tick: u32) -> Option<[nf_net::Input; MAX_AGENTS]> {
         self.sess.ready_inputs(tick)
     }
 
@@ -705,6 +783,41 @@ impl NetCore {
         self.sess.input_delay()
     }
 
+    /// net-internet: schedule the local input sampled while running `run_tick` (it lands
+    /// `delay_at(run_tick)` ticks ahead — the host's adaptive delay; see
+    /// `nf_net::Session::submit_local`).
+    pub fn submit_local(&mut self, run_tick: u32, input: nf_net::Input) {
+        self.sess.submit_local(run_tick, input);
+    }
+
+    /// net-internet: send what the frame's ticks just scheduled now (no receive, no events) —
+    /// the app calls it after its tick loop, so its inputs leave this frame, not the next.
+    pub fn flush(&mut self) {
+        if self.closed {
+            return;
+        }
+        let now = self.epoch.elapsed().as_millis() as u64;
+        self.sess.flush(now);
+    }
+
+    /// net-internet diagnostics: (the worst peer RTT in ms, the delay in force, bytes and
+    /// datagrams sent so far).
+    pub fn net_stats(&self) -> (Option<f64>, u32, u64, u64) {
+        let rtt = self.sess.peer_rtts().into_iter().filter_map(|(_, r)| r).fold(None, |a: Option<f64>, r| Some(a.map_or(r, |a| a.max(r))));
+        let (b, n) = self.sess.sent_totals();
+        (rtt, self.sess.input_delay(), b, n)
+    }
+
+    /// net-internet: the session's input-delay schedule (from_tick, delay).
+    pub fn delay_schedule(&self) -> Vec<(u32, u32)> {
+        self.sess.delay_schedule().to_vec()
+    }
+
+    /// The input delay in force at `tick`.
+    pub fn delay_at(&self, tick: u32) -> u32 {
+        self.sess.delay_at(tick)
+    }
+
     pub fn submit_hash(&mut self, tick: u32, hash: u64) {
         self.sess.submit_hash(tick, hash);
     }
@@ -712,7 +825,7 @@ impl NetCore {
     /// Host: record the per-tick inputs a tick ran with (the late-join
     /// transcript; the app calls it right after `ready_inputs` returned
     /// `Some`). Host-only — clients ignore it.
-    pub fn record_run_tick(&mut self, tick: u32, inputs: [nf_net::Input; 4]) {
+    pub fn record_run_tick(&mut self, tick: u32, inputs: [nf_net::Input; MAX_AGENTS]) {
         self.sess.record_run_tick(tick, inputs);
     }
 
@@ -752,6 +865,23 @@ impl NetCore {
     pub fn inject_link_fault(&mut self, seed: u64, drop_per_mille: u32, reorder_per_mille: u32) {
         self.sess.inject_link_fault(seed, drop_per_mille, reorder_per_mille);
     }
+
+    /// Test-only (net-internet): the fault line plus a one-way delay and jitter in ms on
+    /// this core's sends — half of a simulated internet path.
+    pub fn inject_link_delay(&mut self, seed: u64, drop_per_mille: u32, delay_ms: u64, jitter_ms: u64) {
+        self.sess.inject_link_delay(seed, drop_per_mille, 0, delay_ms, jitter_ms);
+    }
+}
+
+/// mp-online-failures: a core dropped while still open (the window closed, the app exiting
+/// mid-match) says goodbye — the peers learn at once (`ClientLeft` on the host, `HostLeft` on a
+/// client) instead of stalling out the 5 s timeout.
+impl Drop for NetCore {
+    fn drop(&mut self) {
+        if !self.closed {
+            self.sess.leave();
+        }
+    }
 }
 
 /// A cheap cloneable handle: the front end holds one as its `MpSession`
@@ -789,6 +919,39 @@ impl SessionProxy {
     /// (client) — the app's adoption cue.
     pub fn has_match(&self) -> bool {
         self.0.borrow().match_started().is_some()
+    }
+    /// mp-online-failures: the lobby's dial reached a match in progress — the app's late-join
+    /// adoption cue (the handover replays instead of a normal match load).
+    pub fn late_joining(&self) -> bool {
+        self.0.borrow().joining_match()
+    }
+}
+
+/// mp-online-failures: what the app does with the lobby's session this frame — the pure
+/// decision `App::adopt_lobby_session` runs (pinned headless by the failure-path tests).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LobbyAdopt {
+    /// Nothing to adopt yet (still in the lobby, or cancelled).
+    No,
+    /// The host armed / the client received the match start: adopt and load the arena.
+    Match,
+    /// The dial reached a match in progress: adopt for the late-join handover (no arena load —
+    /// the handover's replay builds the scene).
+    LateJoin,
+}
+
+impl SessionProxy {
+    /// The adoption decision for this lobby proxy.
+    pub fn adopt_kind(&self) -> LobbyAdopt {
+        if self.core_is_closed() {
+            LobbyAdopt::No
+        } else if self.has_match() {
+            LobbyAdopt::Match
+        } else if self.late_joining() {
+            LobbyAdopt::LateJoin
+        } else {
+            LobbyAdopt::No
+        }
     }
 }
 
@@ -845,6 +1008,7 @@ impl crate::menu::MpSession for SessionProxy {
     fn push_row_edit(&mut self, e: &nf_net::LobbyEdit) { self.0.borrow_mut().push_row_edit(e); }
     fn take_row_edit(&mut self) -> Option<nf_net::LobbyEdit> { self.0.borrow_mut().take_row_edit() }
     fn close(&mut self) { self.0.borrow_mut().close(); }
+    fn joining_match(&self) -> bool { self.0.borrow().joining_match() }
     fn reach(&self) -> Option<crate::menu::MpReach> { self.0.borrow().reach() }
     fn browse(&mut self, on: bool) {
         let mut c = self.0.borrow_mut();

@@ -30,6 +30,7 @@ pub mod menu_music;
 pub mod settings;
 pub mod movie;
 pub mod mpnet;
+pub mod mpfx;
 pub mod clipboard;
 pub mod scene;
 pub mod replay;
@@ -407,6 +408,7 @@ pub fn load_mp_carry(iso: &str, archive: &str, all: bool, save: Option<&nf_game:
 /// online match start - the same on every machine (the yaw is in the lockstep hash), and in the
 /// late joiner's replay. Returns whether it ran.
 fn face_other_aid(sim: &mut scene::Sim) -> bool {
+    duel_aid(sim);
     if std::env::var_os("NF_MP_FACE_OTHER").is_none() { return false; }
     let mut all: Vec<(usize, [f32; 3])> = vec![(sim.mp_local_slot, sim.bond.pos)];
     for (s, b) in sim.mp_bonds.iter().enumerate() { if let Some(b) = b { all.push((s, b.pos)); } }
@@ -415,7 +417,49 @@ fn face_other_aid(sim: &mut scene::Sim) -> bool {
         .map(|o| (o[0] - me[0]).atan2(o[2] - me[2]));
     if let Some(y) = face(sim.bond.pos) { sim.bond.yaw = y; }
     for b in sim.mp_bonds.iter_mut().flatten() { if let Some(y) = face(b.pos) { b.yaw = y; } }
+    // NF_MP_FACE_TURN1=radians: slot 1 turns away by that much (a side view of its body) — the same
+    // on every machine (the env rides both windows).
+    if let Some(d) = std::env::var("NF_MP_FACE_TURN1").ok().and_then(|v| v.parse::<f32>().ok()) {
+        if sim.mp_local_slot == 1 { sim.bond.yaw += d; } else if let Some(b) = sim.mp_bonds.get_mut(1).and_then(|b| b.as_mut()) { b.yaw += d; }
+    }
+    // NF_MP_FACE_TURN="<slot>:<radians>[:<pitch>][,…]" (mp-remote-fx render aid): those slots then turn by
+    // that much — e.g. 1:3.14159 faces slot 1 away, so its rounds land on the wall the host looks at.
+    // Every machine applies it (the yaw is hashed).
+    if let Ok(v) = std::env::var("NF_MP_FACE_TURN") {
+        // "<slot>:<yaw>[:<pitch>]" — the optional pitch is SET (negative = down).
+        for part in v.split(',') {
+            let f: Vec<&str> = part.split(':').map(str::trim).collect();
+            let (Some(sl), Some(dy)) = (f.first().and_then(|x| x.parse::<usize>().ok()), f.get(1).and_then(|x| x.parse::<f32>().ok())) else { continue };
+            let pitch = f.get(2).and_then(|x| x.parse::<f32>().ok());
+            let b = if sl == sim.mp_local_slot { Some(&mut sim.bond) } else { sim.mp_bonds.get_mut(sl).and_then(|b| b.as_mut()) };
+            if let Some(b) = b { b.yaw += dy; if let Some(p) = pitch { b.pitch = p; } }
+        }
+    }
     true
+}
+
+/// Test aid (NF_MP_DUEL=<dist>, mp-combat-weapons): at the online match start slot 1's body is
+/// moved onto the first spot `dist` from slot 0 (16 headings) on the same floor with a clear line
+/// between the eyes — identically on every machine (the positions are in the lockstep hash, every
+/// window runs it with the same env) — so the two-window weapon check fires across open ground.
+/// Combine with NF_MP_FACE_OTHER=1.
+fn duel_aid(sim: &mut scene::Sim) {
+    let Some(dist) = std::env::var("NF_MP_DUEL").ok().and_then(|v| v.parse::<f32>().ok()) else { return };
+    let local = sim.mp_local_slot;
+    let body = |sim: &scene::Sim, s: usize| if s == local { Some(sim.bond.clone()) } else { sim.mp_bonds[s].clone() };
+    let (Some(a), Some(_)) = (body(sim, 0), body(sim, 1)) else { return };
+    for k in 0..16 {
+        let ang = k as f32 * std::f32::consts::TAU / 16.0;
+        let spot = [a.pos[0] + dist * ang.sin(), a.pos[1], a.pos[2] + dist * ang.cos()];
+        let b = nf_game::player::Bond::stand_at(&sim.world, spot, 0.0);
+        if (b.pos[1] - a.pos[1]).abs() > 0.2 || sim.world.segment(a.head(), b.head()).is_some() { continue; }
+        let bp = b.pos;
+        if local == 1 { sim.bond = b; } else { sim.mp_bonds[1] = Some(b); }
+        if let Some(m) = sim.mp.as_mut() { m.set_slot(1, bp); }
+        eprintln!("[net] duel aid: slot 1 placed {dist} from slot 0 at {bp:?}");
+        return;
+    }
+    eprintln!("[net] duel aid: no clear spot {dist} from slot 0");
 }
 
 /// The online match start's sim setup as slot 0's machine (`swap_in_scene`'s net block: slot 0's
@@ -428,26 +472,51 @@ pub fn net_slot0_setup(sim: &mut scene::Sim) {
 /// One online tick as slot 0's machine runs it in the live loop: the local slot's full
 /// `step_bond` on its session input, the remotes, the online combat, the slots' positions, the
 /// state hash. The hashed state is the same on every machine whatever its local slot.
-pub fn net_slot0_tick(sim: &mut scene::Sim, row: &[nf_net::Input; 4]) -> u64 {
-    let li = row[0];
+pub fn net_slot0_tick(sim: &mut scene::Sim, row: &[nf_net::Input; nf_net::MAX_AGENTS]) -> u64 {
+    net_tick(sim, row, 0)
+}
+
+/// One online tick as the machine playing `local` runs it (the live loop's shape, the join
+/// handling left out): the local slot's full `step_bond` on its session input, the remotes, the
+/// online combat, the slots' positions, the state hash. Every machine must reach the same hash.
+pub fn net_tick(sim: &mut scene::Sim, row: &[nf_net::Input; nf_net::MAX_AGENTS], local: usize) -> u64 {
+    let li = row[local];
+    // mp-world-sync: the row rides into `step_bond` (the remotes move inside it, before the local
+    // body; the call below is then a no-op).
+    sim.net_row = Some(*row);
     sim.step_bond(mpnet::to_player_input(&li), li.trigger, li.reload, li.use_key);
-    let inputs = row.map(|i| mpnet::to_player_input(&i));
-    sim.step_net_remotes(&inputs, 0);
-    sim.step_net_combat(row, 0);
+    let inputs = std::array::from_fn(|i| mpnet::to_player_input(&row[i]));
+    sim.step_net_remotes(&inputs, local);
+    sim.step_net_combat(row, local);
     if let Some(m) = sim.mp.as_mut() {
-        for sl in 1..4 {
+        for sl in 0..nf_net::MAX_AGENTS {
+            if sl == local { continue; }
             if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); }
         }
-        m.set_slot(0, sim.bond.pos);
+        m.set_slot(local, sim.bond.pos);
     }
-    sim.net_state_hash(0)
+    sim.net_state_hash(local)
 }
 
 pub fn mp_late_join_catchup(
     iso: &str,
     settings: nf_game::mp::MpSettings,
-    log: &[[nf_net::Input; 4]],
+    log: &[[nf_net::Input; nf_net::MAX_AGENTS]],
     replay_ticks: u32,
+) -> Result<(scene::Scene, u64), String> {
+    mp_late_join_catchup_joins(iso, settings, log, replay_ticks, &[])
+}
+
+/// `mp_late_join_catchup` with the match's earlier late joins (slot, join tick — the host's
+/// JOIN_BEGIN history): each body spawns before its tick exactly as the live machines spawned it
+/// (`Sim::mp_join_spawn`; a reconnect into a standing body creates nothing). Without them a
+/// second late join — or a late joiner's reconnect — could never verify (mp-online-failures).
+pub fn mp_late_join_catchup_joins(
+    iso: &str,
+    settings: nf_game::mp::MpSettings,
+    log: &[[nf_net::Input; nf_net::MAX_AGENTS]],
+    replay_ticks: u32,
+    joins: &[(u8, u32)],
 ) -> Result<(scene::Scene, u64), String> {
     let arena = format!("{:08x}.bin", settings.level_code);
     let mut scene = load_mp_carry(iso, &arena, false, None, settings)
@@ -465,6 +534,9 @@ pub fn mp_late_join_catchup(
         let tick = i as u32;
         if tick > replay_ticks {
             break;
+        }
+        for (slot, jt) in joins {
+            if *jt == tick { sim.mp_join_spawn(*slot as usize); }
         }
         prev = net_slot0_tick(sim, row);
     }
@@ -963,10 +1035,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // `MPSettings+slot*0x30+0x24` (and reads the body's skin from `MP_skins[rec[0x10]]`,
     // 0x1249e8:100). The port's `MpMatch::create_bots` repeats the write when the match starts;
     // the scene build parks the bodies earlier, so it happens here off the same records.
+    // mp-body-look: the bots sit at `human_count + i` with the records cycled (`MpMatch::create_bots`,
+    // mp-16-slots); this mirror still wrote slots 4.. from the first 4 records, so with 2 humans
+    // the bot bodies (slots 2, 3) drew character 0 (Bond) instead of their records' characters
+    // (Snow Guard 6 / Black Ops 7) — render before_bot2_f200.png.
     let mp_settings = mp_settings.map(|mut st| {
-        let bots = (st.bot_count as usize).min(4);
-        for (i, rec) in nf_game::mp::bots::INITIAL_BOT_RECORDS.iter().take(bots).enumerate() {
-            st.players[4 + i].skin = rec.character() as u32;
+        let humans = st.human_count as usize;
+        let bots = (st.bot_count as usize)
+            .min(nf_game::mp::MP_MAX_SLOTS.saturating_sub(humans))
+            .min(st.players.len().saturating_sub(humans));
+        for i in 0..bots {
+            st.players[humans + i].skin = nf_game::mp::MpMatch::bot_record(&st, i).character() as u32;
         }
         st
     });
@@ -1003,6 +1082,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     };
     let mut scene = scene::Scene::build(&level, !all, &skeletons, sequences, Some(&drones), difficulty, mp_settings.as_ref());
     phase_mark("07 scene build (Scene::build)", t); t = std::time::Instant::now();
+    // The MP radar's textures (hud::MP_TEXTURES) — MP scenes only: the SP pane list has no radar.
+    if mp {
+        for h in hud::MP_TEXTURES.into_iter().chain([hud::HEADER_FONT_TEX]) {
+            if scene.hud_textures.iter().any(|(k, _)| *k == h) { continue; }
+            if let Some(img) = level.maps.iter().enumerate().find_map(|(mi, m)| m.textures.iter().find(|t| t.hashcode == h).map(|t| scene::TextureImage::from_texture(mi, t))) {
+                scene.hud_textures.push((h, img));
+            } else {
+                eprintln!("mp hud: texture {h:#010x} not in the arena archive");
+            }
+        }
+    }
     // The pause/fail menus' burning woman [M `psiDecompressWoman` 0x1202a8]: the archive's kind-16 "woman" run-length
     // mask filled from the fire texture 0x030000da, drawn into 0x030000db's texels through 0x030000da's CLUT (the
     // disc's 0x030000db is a placeholder). The HUD texture starts on the first decoded frame.
@@ -1196,8 +1286,44 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         if mp {
             // net-match-host: the online path hands the negotiated settings here (the host's
             // choices + seed); local `--mp` keeps the deathmatch default.
-            let settings = mp_settings.unwrap_or_else(|| nf_game::mp::MpSettings::deathmatch(level_id));
+            let local_default = mp_settings.is_none();
+            let mut settings = mp_settings.unwrap_or_else(|| nf_game::mp::MpSettings::deathmatch(level_id));
+            // Render aid (NF_MP_BOTS=n, local `--mp` only): n bots in the default match, so a
+            // headless `--mp --shot` shows a full 16-participant HUD (n is clamped to the 16 cap).
+            if local_default {
+                if let Some(n) = std::env::var("NF_MP_BOTS").ok().and_then(|v| v.parse::<u32>().ok()) {
+                    settings.bot_count = n.min(nf_game::mp::MP_MAX_SLOTS as u32 - settings.human_count.max(1) as u32);
+                }
+                // mp-hud-real render aids: NF_MP_SCENARIO=<hex scenario word> (e.g. 20000002 Team
+                // Arena; `MpMatch::init` derives the team/bit30 flags from it) and
+                // NF_MP_TIME=<seconds> (the time limit — the PCSX2 comparison's 600).
+                if let Some(sc) = std::env::var("NF_MP_SCENARIO").ok().and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()) {
+                    settings.scenario = sc;
+                    settings.gametype_mask = sc;
+                }
+                if let Some(t) = std::env::var("NF_MP_TIME").ok().and_then(|v| v.parse::<i32>().ok()) {
+                    settings.time_limit = t;
+                }
+            }
+            // mp-lobby-settings: one line with every lobby word the match runs on (the two-window
+            // settings check diffs the host's line against each client's).
+            {
+                let st = &settings;
+                let bots: Vec<String> = st.bot_records.iter().map(|r| format!("c{}/s{}/t{}/hp{}", r.character(), r.aggression(), r.team(), r.max_hp())).collect();
+                let hum: Vec<String> = (0..st.human_count as usize).map(|i| format!("{}:t{}/c{}", st.players[i].codename, st.players[i].team, st.players[i].skin)).collect();
+                eprintln!("[mp-settings] level {:#x} scen {:#x} ws {} frag {} time {} ff {} radar {} cap(0x1BC) {} loc(0x1C8) {} spawn(0x1C0) {} guns(0x1B8) {} expl(0x1D4) {} grapple(0x1D0) {} vehicles(0x1CC) {} humans [{}] bots {} [{}] seed {:#x}",
+                    st.level_code, st.scenario, st.weapon_set, st.frag_limit, st.time_limit, st.friendly_fire, st.radar, st.capture_reward,
+                    st.location_damage, st.spawn_policy, st.gun_emplacements, st.explosive_scenery, st.grapple, st.vehicles,
+                    hum.join(" "), st.bot_count, bots.join(" "), st.seed);
+            }
             let mut m = nf_game::mp::MpMatch::init(settings);
+            // Render aid (mp-hud-real): NF_MP_KILLMSG=<victim slot> queues the kill message the
+            // local player gets for that victim (the MP info pane's draw, headless).
+            if local_default {
+                if let Some(v) = std::env::var("NF_MP_KILLMSG").ok().and_then(|v| v.parse::<usize>().ok()) {
+                    m.kill_msgs.push((0, v.min(nf_game::mp::MP_MAX_SLOTS - 1)));
+                }
+            }
             let map = level.main_map().and_then(|mi| level.maps.get(mi));
             let mut spawn_count = 0usize;
             if let Some(map) = map {
@@ -1215,7 +1341,16 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                         0x26 => {
                             let ty = param(p, 0);
                             let cfg: [u32; 7] = std::array::from_fn(|k| param(p, k as u32));
-                            m.register_mp_object(p.translation, p.rotation, ty, cfg, p.hashcode);
+                            // mp-scenarios-online (agent6): the placement model's bounds — the
+                            // celglist the game's object keeps at obj+0xD8 [M MP_CreateObject
+                            // 0x185de8:118] (centre/radius = +0x10/+0x1C, box = +0x20/+0x30 [D
+                            // MapObject]) — give the flags/terminals/items their contact sphere and
+                            // the hill its box.
+                            let bounds = level.by_hash.get(&p.hashcode).map(|&(mi, oi)| {
+                                let o = &level.maps[mi].objects[oi];
+                                nf_game::mp::MpObjBounds { centre: o.centre, radius: o.radius, min: o.min, max: o.max }
+                            });
+                            m.register_mp_object_bounds(p.translation, p.rotation, ty, cfg, p.hashcode, bounds);
                         }
                         _ => {}
                     }
@@ -1235,7 +1370,13 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // online match's bodies agree; slot 0's bond takes `sim.bond` (the pre-net behaviour) and
             // the rest park in `Sim::mp_bonds` until each machine swaps its own slot in
             // (`Sim::swap_local_slot`).
-            let humans = (m.settings.human_count as usize).clamp(1, 4);
+            // The game's own human cap is 4 (its fixed 8-slot layout); the
+            // port extends the spawn walk to every human slot of the 16-cap
+            // settings [S mp-16-slots — MP_Start 0x183a50:116-128 inits
+            // humans 0..player_count, the count now reaching 16].
+            let humans = (m.settings.human_count as usize)
+                .clamp(1, nf_game::mp::MP_MAX_SLOTS)
+                .min(sim.mp_bonds.len());
             let mut first_spawn = 0usize;
             for slot in 0..humans {
                 let sp = m.get_spawn_point(m.settings.players[slot].team as u16, slot, &mut sim.drones.rng) as usize;
@@ -1254,10 +1395,29 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // The bots' half of `MP_Start` (0x183a50:134-160): after every human's create, one
             // `BOT_init` per enabled record in slot order — the game's order is the humans FIRST,
             // then the bots, so the spawn picks' RNG draws keep the game's sequence.
+            // mp-lobby-settings: the bots start with the Weapon Set's gun [M BOTWEAP_InitWeapon
+            // 0x129e48:44-48].
+            m.bot_start = Some(nf_game::mp::equip::bot_start_weapon(&nf_game::mp::equip::weapon_row(&m.settings), &sim.weapons));
             m.create_bots(&mut sim.drones.rng);
+            // The bots stand on the floor like the humans' `Bond::stand_at`: the spawn point's raw
+            // height left them floating ~4 units up, firing level over every player [S].
+            for b in m.bots.iter_mut() {
+                let feet = nf_game::player::Bond::stand_at(&sim.world, b.brain.pos, b.brain.yaw).pos;
+                b.brain.pos = [feet[0], feet[1] + scene::BOT_EYE, feet[2]];
+                m.game.slots[b.slot].pos = Some(b.brain.pos);
+            }
             eprintln!("mp: bots created: {}", m.bots.len());
+            // mp-scenarios-online (agent6): `MP_Start` 0x183a50:166-167 — Assassination picks its
+            // first target and assassin (`MP_assassinReset(0)`) once every player and bot exists.
+            m.start_assassin(&mut sim.drones.rng);
             // The SP mission machine stays off for the match [M 0x182c60:16-18 — Drones::mp_master].
             sim.drones.mp_master = m.settings.master;
+            // mp-world-sync (agent 9): an MP match creates no mounted gun unless the Enviro-Mods
+            // word `MPSettings+0x1B8` is set — `GunImp_Create` 0x131f20:52-58 returns 0 for
+            // `MPSettings+0x180 != 0 && +0x1B8 == 0` [M]; the boot value is 0 [M bootup 0x1c7e78,
+            // L the EE snapshots; menu.rs mp_envmods] and the match settings carry no such word yet,
+            // so the arenas' 0x34 placements stay uncreated (a mount was one machine's alone).
+            sim.drones.props.gunimps.clear();
             sim.mp = Some(m);
             eprintln!("mp: arena {level_id:08x} — {spawn_count} spawn points registered, {humans} human(s), Bond at spawn {sp} ({:.2}, {:.2}, {:.2}) yaw {:.3}",
                 sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.yaw);
@@ -1269,8 +1429,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         let loaded: Vec<bool> = (0..0x72u32)
             .map(|w| loadout_skins.contains(&sim.weapons.first_person(w as usize))).collect();
         let loaded = |w: u8| loaded.get(w as usize).copied().unwrap_or(false);
-        let req = nf_game::player::init_level_loadout(level_id, save, &mut sim.drones.health,
-            &mut sim.drones.inventory, &mut sim.drones.channels, &sim.weapons, loaded);
+        let req = if sim.mp.is_some() {
+            // mp-lobby-settings: an MP match's `Player_InitWeapon` takes its MP arm — `MP_EquipPlayer`
+            // and nothing else [M 0x1a7ef8:143-145]; the per-level switch below it (whose default
+            // arm handed the arenas the give-everything kit) never runs in MP.
+            sim.mp_weapon_loaded = (0..0x72u8).map(loaded).collect();
+            sim.mp_equip_local();
+            sim.gun.weapon
+        } else {
+            nf_game::player::init_level_loadout(level_id, save, &mut sim.drones.health,
+                &mut sim.drones.inventory, &mut sim.drones.channels, &sim.weapons, loaded)
+        };
         // The switch request is the game's `M_CONTROL+0x63`; the draw machine holsters and draws it
         // (`Player_WeaponSelect` 0x1a2cc0). 0x47 (none) draws nothing.
         sim.gun.switch_request = req;
@@ -1439,6 +1608,18 @@ impl FpsMeter {
     }
 }
 
+/// mp-perf-16 (`NF_FPSLOG`): this frame's tick-loop time and its CPU time up to the submit /
+/// the present call, folded into the once-a-second `[fps]` line (avg / worst of each).
+static PAL_REBUILDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static FRAME_PARTS: std::sync::Mutex<[f64; 12]> = std::sync::Mutex::new([0.0; 12]);
+fn frame_part(i: usize, d: std::time::Duration) {
+    if let Ok(mut p) = FRAME_PARTS.lock() {
+        let ms = d.as_secs_f64() * 1000.0;
+        p[i * 2] += ms;
+        p[i * 2 + 1] = p[i * 2 + 1].max(ms);
+    }
+}
+
 fn fps_log(frame: std::time::Duration) {
     use std::sync::Mutex;
     static ACC: Mutex<Option<(std::time::Instant, u32, f64, f64)>> = Mutex::new(None);
@@ -1447,7 +1628,10 @@ fn fps_log(frame: std::time::Duration) {
     let a = acc.get_or_insert((std::time::Instant::now(), 0, 0.0, 0.0));
     a.1 += 1; a.2 += ms; a.3 = a.3.max(ms);
     if a.0.elapsed().as_secs_f64() >= 1.0 {
-        { let __m = format!("[fps] {} frames, avg {:.2} ms, worst {:.2} ms", a.1, a.2 / a.1 as f64, a.3); std::thread::spawn(move || eprintln!("{__m}")); }
+        let parts = FRAME_PARTS.lock().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default();
+        let n = a.1.max(1) as f64;
+        { let __m = format!("[fps] {} frames, avg {:.2} ms, worst {:.2} ms | ticks avg {:.2} worst {:.2} | to submit avg {:.2} worst {:.2} | submit+present avg {:.2} worst {:.2} | palette build avg {:.2} worst {:.2} | blend+upload avg {:.2} worst {:.2} | render encode avg {:.2} worst {:.2} | tick frames {}", a.1, a.2 / a.1 as f64, a.3,
+            parts[0] / n, parts[1], parts[2] / n, parts[3], parts[4] / n, parts[5], parts[6] / n, parts[7], parts[8] / n, parts[9], parts[10] / n, parts[11], PAL_REBUILDS.swap(0, std::sync::atomic::Ordering::Relaxed)); std::thread::spawn(move || eprintln!("{__m}")); }
         *acc = None;
     }
 }
@@ -1548,6 +1732,7 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     let driver = &s.driver;
     sim.drones.audio.update(sim.sfx.as_ref(), (pos, norm, [0.0, 1.0, 0.0], f), &|h| driver.is_playing(h));
     let cmds = sim.drones.audio.take_commands();
+    let (mpfx_log, listener, frame) = (std::env::var_os("NF_MPFX_LOG").is_some(), pos, sim.drones.frame);
     // `Sound_UpdateListeners` 0x1dd278 (fix-room-sound): every frame, from the active viewer's cel —
     // `SFXSetEnvironment(cel s16 +0x98, underwater = (cel+0x3c & 0x10000000) || env >= 20)` [M disasm
     // 0x1dd4b0-0x1dd4fc]; a viewer with no cel sends nothing and the IOP keeps its previous targets.
@@ -1563,7 +1748,14 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
         for c in cmds {
             match c {
                 nf_game::sound::Cmd::Listener { pos, norm, dir, .. } => { drv.set_listener(pos, dir, norm); }
-                nf_game::sound::Cmd::Start { handle, id, pos, radii } => { drv.start(out, id, pos, handle, radii.map(|(i, o)| (i as i32, o as i32))); }
+                nf_game::sound::Cmd::Start { handle, id, pos, radii } => {
+                    // mp-remote-fx's log: every driver start with its position (NF_MPFX_LOG).
+                    if mpfx_log {
+                        let d = pos.map(|p| ((p[0] - listener[0]).powi(2) + (p[1] - listener[1]).powi(2) + (p[2] - listener[2]).powi(2)).sqrt());
+                        eprintln!("[snd] f{frame} start {id:#x} handle {handle} at {pos:?} dist {d:?}");
+                    }
+                    drv.start(out, id, pos, handle, radii.map(|(i, o)| (i as i32, o as i32)));
+                }
                 nf_game::sound::Cmd::Position { handle, pos } => drv.set_position(handle, None, pos),
                 nf_game::sound::Cmd::Remove { handle } => drv.remove(handle, None),
             }
@@ -1670,6 +1862,9 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
     let Some(tables) = scene.hud.as_ref() else { eprintln!("[front end] no HUD tables (the game font) — the menu overlay needs ACTION.ELF"); return (None, None); };
     let mut fe = menu::FrontEnd::new();
     if args.iter().any(|a| a == "--unlock-all") { fe.unlock_all = true; }
+    // Render aid: NF_VIEW_H=<px> renders the page as a window that tall would (the online lobby's
+    // constant-size text: more rows on a tall window, a scroll bar on a short one).
+    if let Some(v) = std::env::var("NF_VIEW_H").ok().and_then(|v| v.parse::<f32>().ok()) { fe.view_h = v; }
     if let Some(i) = args.iter().position(|a| a == "--cursor") {
         fe.cursor = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
     }
@@ -1711,6 +1906,13 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
                 fe.mp_hosting = true;
                 fe.mp_one.players[0].joined = true; fe.mp_one.players[0].ready = true; fe.mp_one.players[0].codename = "Bond".into();
                 fe.mp_one.players[1].joined = true; fe.mp_one.players[1].codename = "Agent 2".into(); fe.mp_one.players[1].ping_ms = 23;
+                // NF_LOBBY_PLAYERS=n: n joined players for the big-lobby render.
+                if let Some(n) = std::env::var("NF_LOBBY_PLAYERS").ok().and_then(|v| v.parse::<usize>().ok()) {
+                    for i in 2..n.min(fe.mp_one.players.len()) {
+                        let p = &mut fe.mp_one.players[i];
+                        p.joined = true; p.ready = i % 3 != 0; p.codename = format!("Agent {}", i + 1); p.ping_ms = 20 + i as u32 * 7;
+                    }
+                }
                 menu::Page::MpOnlineLobby
             }
             // fix-pause-menu: the in-game pages render headless too (the pause page over the
@@ -1719,6 +1921,23 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
             "pause" => menu::Page::Pause,
             "results" | "failed" => { fe.outcome = menu::Outcome::Failed; menu::Page::Results }
             "complete" => { fe.outcome = menu::Outcome::Complete; menu::Page::Results }
+            // Render aid (mp-hud-real): the debriefing of a 1-human + 3-bot draw — the PCSX2
+            // comparison's match (codename "Agent"; bots Snow Guard / Black Ops / Yakuza =
+            // characters 6/7/8, 0 kills, 7 deaths each). NF_DEBRIEF_N=n: n participants.
+            "mpdebrief" => {
+                let n = std::env::var("NF_DEBRIEF_N").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(4).clamp(1, nf_game::mp::MP_MAX_SLOTS as u32);
+                let mut st = nf_game::mp::MpSettings::deathmatch(0x0700_0023);
+                st.human_count = 1;
+                st.bot_count = n - 1;
+                st.total_players = n;
+                st.players[0].codename = "Agent".into();
+                for k in 1..n as usize { st.players[k].skin = [6, 7, 8, 9][(k - 1) % 4]; }
+                let mut m = nf_game::mp::MpMatch::init(st);
+                m.start(&mut nf_game::drone::Rng::new(1));
+                for k in 1..n as usize { m.game.slots[k].deaths = 7; }
+                fe.open_mp_debriefing(&m);
+                menu::Page::MpDebriefing
+            }
             other => { eprintln!("unknown --page '{other}' (start|main|codename|difficulty|missions|dossier|pause|results|complete)"); return (None, None); }
         };
     }
@@ -1816,6 +2035,102 @@ pub fn movie_iso_name(iso_path: &str) -> String {
 
 /// Renders one frame offscreen and writes it as a PNG. `menu` = a front-end overlay frame (fix-menus2:
 /// `--shot` on the front-end boot draws the menu pages too, so the main agent can compare with PCSX2).
+/// The `--mp-look slot[,dist,height,angle]` camera: `dist` (2.5) from that slot's body, `angle` (0 = in
+/// front) around its yaw, `height` (1.2) above its feet, looking at its chest.
+fn mp_look_camera(scene: &scene::Scene, v: &[f32]) -> Option<Camera> {
+    let slot = v.first().copied().unwrap_or(1.0) as usize;
+    let (dist, height, angle) = (v.get(1).copied().unwrap_or(2.5), v.get(2).copied().unwrap_or(1.2), v.get(3).copied().unwrap_or(0.0));
+    let s = scene.sim.as_ref()?;
+    let st = s.mp_body_state(slot)?;
+    let (p, yaw) = (st.0, st.1 + angle);
+    let feet_y = p[1] - s.mp_body_cc(slot);
+    let eye = [p[0] + yaw.sin() * dist, feet_y + height, p[2] + yaw.cos() * dist];
+    let target = [p[0], feet_y + 1.0, p[2]];
+    let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+    Some(Camera { pos: Vec3::new(eye[0], eye[1], eye[2]), yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV })
+}
+
+/// `--mp-drive` (see the `--shot` path): scripted slot-1 inputs through the online tick, captures at
+/// the `--mp-shots` ticks with the `--mp-look` camera (fixed to the body's yaw at the first capture
+/// unless `--mp-look-follow`).
+fn mp_drive_shots(scene: &mut scene::Scene, args: &[String], spec: &str, out: &str, ticks: u32, opts: scene::ViewOpts) -> Result<()> {
+    struct Seg { a: u32, b: u32, f: f32, s: f32, t: f32, l: f32, c: bool, j: bool, k: bool }
+    let mut segs = Vec::new();
+    for part in spec.split(';').map(str::trim).filter(|p| !p.is_empty()) {
+        let (range, keys) = part.split_once(':').unwrap_or((part, ""));
+        let (a, b) = range.split_once('-').context("--mp-drive: a segment needs a-b")?;
+        let mut sg = Seg { a: a.trim().parse()?, b: b.trim().parse()?, f: 0.0, s: 0.0, t: 0.0, l: 0.0, c: false, j: false, k: false };
+        for kv in keys.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+            let (k, v) = kv.split_once('=').unwrap_or((kv, "1"));
+            let v: f32 = v.trim().parse()?;
+            match k.trim() { "f" => sg.f = v, "s" => sg.s = v, "t" => sg.t = v, "l" => sg.l = v, "c" => sg.c = v != 0.0, "j" => sg.j = v != 0.0, "k" => sg.k = v != 0.0, o => anyhow::bail!("--mp-drive: unknown key {o:?}") }
+        }
+        segs.push(sg);
+    }
+    let shots: Vec<u32> = match args.iter().position(|a| a == "--mp-shots") {
+        Some(i) => args.get(i + 1).context("--mp-shots needs ticks")?.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>()?,
+        None => vec![ticks],
+    };
+    let look: Vec<f32> = match args.iter().position(|a| a == "--mp-look") {
+        Some(i) => args.get(i + 1).context("--mp-look needs slot[,dist,height,angle]")?.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>()?,
+        None => vec![1.0],
+    };
+    let follow = args.iter().any(|a| a == "--mp-look-follow");
+    let stem = out.trim_end_matches(".png");
+    if let Some(sim) = scene.sim.as_mut() { net_slot0_setup(sim); }
+    let mut fixed: Option<Camera> = None;
+    for t in 1..=ticks {
+        let mut row = [nf_net::input::NEUTRAL; nf_net::MAX_AGENTS];
+        let held = scene.sim.as_ref().map_or(2, |s| s.gun.weapon);
+        row[0].held = held;
+        row[1].held = 2;
+        for sg in segs.iter().filter(|sg| (sg.a..=sg.b).contains(&t)) {
+            row[1].forward = sg.f;
+            row[1].strafe = sg.s;
+            row[1].turn = sg.t;
+            row[1].look = sg.l;
+            row[1].crouch = sg.c;
+            row[1].jump = sg.j;
+            if sg.k && t == sg.a {
+                if let Some(s) = scene.sim.as_mut() {
+                    s.mp_hp[1] = 0.0;
+                    s.mp_dead_ticks[1] = 1;
+                    if let Some(m) = s.mp.as_mut() { m.player_killed(1, Some(0), false, false, &mut s.drones.rng); }
+                }
+            }
+        }
+        net_slot0_tick(scene.sim.as_mut().context("no sim")?, &row);
+        if shots.contains(&t) {
+            let cam = if follow { mp_look_camera(scene, &look) } else { fixed.or_else(|| mp_look_camera(scene, &look)) };
+            let Some(cam) = cam else { eprintln!("--mp-shots: tick {t}: slot has no drawn body"); continue };
+            if !follow && fixed.is_none() { fixed = Some(cam); }
+            // A fixed camera keeps its spot but re-aims at the body, which may have walked.
+            let cam = if follow { cam } else {
+                let s = scene.sim.as_ref().context("no sim")?;
+                match s.mp_body_state(look.first().copied().unwrap_or(1.0) as usize) {
+                    Some((p, _, _)) => {
+                        let slot = look.first().copied().unwrap_or(1.0) as usize;
+                        let target = [p[0], p[1] - s.mp_body_cc(slot) + 1.0, p[2]];
+                        let d = [target[0] - cam.pos.x, target[1] - cam.pos.y, target[2] - cam.pos.z];
+                        Camera { pos: cam.pos, yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV }
+                    }
+                    None => cam,
+                }
+            };
+            if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
+            if let Some(s) = scene.sim.as_ref() {
+                let a = &s.mp_anim[1];
+                eprintln!("--mp-shots t{t}: slot 1 layers {:?} phase {:.3} aim {:?} crouch {} dead {} root y {:.3} cc {:.3}",
+                    a.layers.iter().map(|l| (l.kind, (l.time * 10.0).round() / 10.0, (l.weight() * 100.0).round() / 100.0)).collect::<Vec<_>>(), a.phase, a.aim, a.crouch, a.dead,
+                    s.mp_body_state(1).map_or(0.0, |b| b.0[1]), s.mp_body_cc(1));
+            }
+            let path = format!("{stem}_t{t:04}.png");
+            shot(scene, &cam, &path, None, t as f32, opts, false, false, None, None)?;
+        }
+    }
+    Ok(())
+}
+
 fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, time: f32, mut opts: scene::ViewOpts, notex: bool, nofog: bool, menu: Option<&gpu::HudFrame>, movie: Option<&(u32, u32, Vec<u8>)>) -> Result<()> {
     let (w, h) = (1280u32, 720u32);
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -2035,7 +2350,7 @@ struct App {
     /// the snapshot tick + hash and the recorded log) — the app replays it
     /// (`mp_late_join_catchup`) and confirms or refuses. The draw code reads
     /// this for the joining-in-progress page.
-    net_late_handover: Option<(Box<nf_game::mp::MpSettings>, u32, u64, Vec<[nf_net::Input; 4]>)>,
+    net_late_handover: Option<(Box<nf_game::mp::MpSettings>, u32, u64, Vec<[nf_net::Input; nf_net::MAX_AGENTS]>)>,
     /// The next sim tick of the online match (the lockstep counter; render interpolation is
     /// unchanged — `ticked` still marks the frames that advanced it).
     net_tick: u32,
@@ -2055,11 +2370,18 @@ struct App {
     /// mp-join-in-progress: this machine is the late joiner of that slot, still ticking the
     /// replayed slot-0 view until the announced join tick.
     net_late_self: Option<usize>,
+    /// Online rematch: how this machine got into the running match — (hosted, its port / the
+    /// address it dialed) — handed to the debriefing so Continue returns to the online lobby.
+    net_rejoin: Option<(bool, String)>,
+    /// The finished online match's session, kept open while its debriefing is up.
+    net_finished: Option<mpnet::SessionProxy>,
     /// The online match's wall clock (set when its level swaps in): the lockstep runs to
     /// `elapsed · 60` ticks, catching up after a stall instead of dropping the stalled ticks.
     net_clock: Option<std::time::Instant>,
+    /// net-internet: the online tick budget's stall smoothing (`nf_net::pace::TickPacer`).
+    net_pacer: nf_net::pace::TickPacer,
     /// 700v6: the local fire pipeline spawned a round on the last tick (rides the next input).
-    net_shot_pending: bool,
+    net_shot_pending: Option<scene::NetShot>,
     /// The `--net-host` demo arm: the settings waiting for the first client to join (the lobby
     /// pages are task 052's; the flag path starts the match as soon as someone connects).
     net_armed: Option<nf_game::mp::MpSettings>,
@@ -2151,11 +2473,6 @@ pub fn wheel_steps_zoom(zoom_held: bool, weapon_flags: u32, weapon_zoom: f32) ->
 }
 
 impl App {
-    /// One menu action from the keyboard or the mouse (PC mouse support, 2026-10-15): the movie skip, the pause page's
-    /// Back = resume, the page's own handling, then the level request / close the page asked for.
-    /// Test aid (NF_MENU_SCRIPT="ms:step,ms:step,..."): timed menu presses for the two-window MP
-    /// checks, no desktop input. A step is up/down/left/right/confirm/back/side/extra, shot (the F12
-    /// capture) or type=TEXT (the join page's typing); ms counts from the first frame.
     /// net-consolidate: an online match starting adopts the lobby's session as the lockstep
     /// gate. `has_match` is exact: match_start is Some only after the host's arm / the client's
     /// tunnel payload, and a cancelled lobby's core is closed. Called after a menu action AND
@@ -2163,30 +2480,100 @@ impl App {
     /// level request), and adopting only in menu_after left the joiner loading the arena
     /// offline while the host waited on it (the two-window menu check: "player 2 timed out").
     fn adopt_lobby_session(&mut self) {
-        let adopt = self.net_lobby.as_ref().map_or(false, |p| p.has_match() && !p.core_is_closed());
-        if adopt && self.net.is_none() {
+        // mp-online-failures: a late join the player cancelled (Back on the join page while the
+        // handover ran) closed the adopted core — drop it, the menus own the online pages again.
+        if self.net.as_ref().is_some_and(|p| p.core_is_closed())
+            && self.fe.as_ref().is_some_and(|fe| matches!(fe.page, menu::Page::MpMode | menu::Page::MpNetJoin | menu::Page::MpHost))
+        {
+            self.net = None;
+            self.net_late_self = None;
+            self.net_join_pending = None;
+            self.net_late_handover = None;
+        }
+        let kind = self.net_lobby.as_ref().map_or(mpnet::LobbyAdopt::No, |p| p.adopt_kind());
+        if kind != mpnet::LobbyAdopt::No && self.net.is_none() {
             if let Some(p) = self.net_lobby.take() {
+                if let Some(fe) = self.fe.as_ref() {
+                    self.net_rejoin = Some(if fe.mp_hosting { (true, fe.mp_net_port.to_string()) } else { (false, fe.mp_net_addr.trim().to_string()) });
+                }
                 self.net_local_slot = p.0.borrow().local_slot();
                 self.net_tick = 0;
                 self.net = Some(p);
-                self.net_await_load = true;
-                self.net_menu_load = true;
-                eprintln!("[net] adopted the lobby's session for the match");
+                if kind == mpnet::LobbyAdopt::LateJoin {
+                    // mp-online-failures: the menu dial reached a running match — no arena load
+                    // and no load hold: the handover's replay builds the scene (the
+                    // LateJoinHandover arm below), exactly the flag path's late join.
+                    self.net_await_load = false;
+                    self.net_menu_load = false;
+                    eprintln!("[net] adopted the lobby's session for a join in progress");
+                } else {
+                    self.net_await_load = true;
+                    self.net_menu_load = true;
+                    eprintln!("[net] adopted the lobby's session for the match");
+                }
             }
         }
     }
 
+    /// The online pages need their session: the proxy is created lazily on page entry (the
+    /// listen/dial rows re-bind its unbound placeholder core); `net_lobby` holds the same Rc so
+    /// the app can adopt it when the match starts. Not while a session is adopted (a late join
+    /// in progress keeps the join page up — a fresh proxy would orphan it).
+    fn ensure_lobby_session(&mut self) {
+        let Some(fe) = self.fe.as_mut() else { return };
+        if matches!(fe.page, menu::Page::MpHost | menu::Page::MpNetJoin) && self.net_lobby.is_none() && self.net.is_none() {
+            if let Ok(p) = mpnet::SessionProxy::host(0) {
+                // net-p2p: the app's sessions probe internet reachability (UPnP / NAT-PMP /
+                // STUN) on listen and dial; NF_NO_REACH=1 keeps them LAN-only, NF_STUN
+                // ("host:port,host:port") replaces the public STUN list [S net-p2p §1].
+                if let Some(cfg) = reach_config() { p.0.borrow_mut().enable_reach(cfg); }
+                fe.mp_session = Some(Box::new(p.clone()));
+                self.net_lobby = Some(p);
+            }
+        }
+    }
+
+    /// mp-online-failures: this machine leaves the running online match on its own (the pause
+    /// page's QUIT): LEAVE goes out now — the others continue on NEUTRAL for this slot (a client)
+    /// or return to their online pages at once (the host) — instead of the session lingering
+    /// with keepalives and every other machine stalled on this one's missing inputs forever.
+    fn net_leave_match(&mut self) {
+        if let Some(p) = self.net.take() { p.0.borrow_mut().close(); }
+        self.net_lobby = None;
+        self.net_menu_load = false;
+        self.net_late_self = None;
+        self.net_armed = None;
+        self.net_join_pending = None;
+        self.net_late_handover = None;
+        self.net_await_load = false;
+        self.net_rejoin = None;
+        eprintln!("[net] left the online match");
+    }
+
+    /// Test aid (NF_MENU_SCRIPT="ms:step,ms:step,..."): menu presses for the two-window MP checks,
+    /// no desktop input. Each `ms` is the delay after the PREVIOUS step (the first counts from the
+    /// first frame). Steps: up/down/left/right/confirm/back/side/extra (`down*30` repeats), shot
+    /// (the F12 capture), type=TEXT (the join page's typing), page=Name (wait until that page is up
+    /// and no load runs — `page=None` is "in a level, no menu"), sleep (nothing). A wait holds the
+    /// script, so a slow boot or load never lands presses on the wrong page.
     fn menu_script_tick(&mut self) {
         use std::sync::atomic::Ordering::Relaxed;
-        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        static LAST: std::sync::OnceLock<std::sync::Mutex<std::time::Instant>> = std::sync::OnceLock::new();
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let Ok(spec) = std::env::var("NF_MENU_SCRIPT") else { return };
-        let ms = START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64;
+        let last = LAST.get_or_init(|| std::sync::Mutex::new(std::time::Instant::now()));
         let steps: Vec<(u64, &str)> = spec.split(',').filter_map(|s| s.split_once(':')).filter_map(|(a, b)| Some((a.trim().parse().ok()?, b.trim()))).collect();
-        while let Some(&(at, step)) = steps.get(NEXT.load(Relaxed)) {
-            if ms < at { break; }
+        while let Some(&(delay, step)) = steps.get(NEXT.load(Relaxed)) {
+            let since = last.lock().map(|l| l.elapsed().as_millis() as u64).unwrap_or(0);
+            if since < delay { break; }
+            if let Some(want) = step.strip_prefix("page=") {
+                let now = format!("{:?}", self.fe.as_ref().map(|f| f.page)).replace("Some(", "").replace(')', "");
+                if now != want || self.async_load.is_some() || self.pending_level.is_some() { break; }
+            } else if self.async_load.is_some() {
+                break; // no menu input while a level load runs
+            }
             NEXT.fetch_add(1, Relaxed);
-            if self.async_load.is_some() { eprintln!("[menu-script] {at} {step}: skipped (loading)"); continue; }
+            if let Ok(mut l) = last.lock() { *l = std::time::Instant::now(); }
             use menu::Action as MA;
             // "down*30" repeats a press.
             let (step, times) = match step.split_once('*') { Some((s, n)) => (s, n.parse().unwrap_or(1)), None => (step, 1usize) };
@@ -2194,13 +2581,34 @@ impl App {
                 "confirm" => Some(MA::Confirm), "back" => Some(MA::Back), "side" => Some(MA::Side), "extra" => Some(MA::Extra), _ => None };
             if let Some(a) = a { for _ in 0..times { self.menu_input(a); } }
             else if step == "shot" { let m = self.spot_shot(); eprintln!("[spot] {m}"); }
+            // "bksp": the address/port pages' Backspace (the host's port field starts at 27420).
+            else if step == "bksp" { for _ in 0..times { if let Some(fe) = self.fe.as_mut() { fe.mp_net_backspace(); } } }
+            // "lobby": one line with this machine's one-screen lobby model (the two-window
+            // settings check compares the host's and the client's lines) [S test aid].
+            else if step == "lobby" {
+                if let Some(fe) = self.fe.as_ref() { eprintln!("[lobby] {}", fe.mp_one.debug_line()); }
+            }
+            // "row=Enviro(3)": real Up/Down presses until the lobby focus sits on that row id
+            // (the row list shifts with joins and bots, so fixed press counts drift) [S test aid].
+            else if let Some(want) = step.strip_prefix("row=") {
+                for _ in 0..80 {
+                    let Some(fe) = self.fe.as_mut() else { break };
+                    let rows = fe.mp_one.rows();
+                    let Some(at) = rows.iter().position(|r| format!("{:?}", r.id) == want) else { break };
+                    let cur = fe.mp_one.focus;
+                    if cur == at { break; }
+                    self.menu_input(if cur < at { MA::Down } else { MA::Up });
+                }
+            }
             else if let Some(text) = step.strip_prefix("type=") {
                 if let Some(fe) = self.fe.as_mut() { for c in text.chars() { fe.mp_net_type(c); } }
             }
-            eprintln!("[menu-script] {at} {step} -> page {:?}", self.fe.as_ref().map(|f| f.page));
+            eprintln!("[menu-script] +{delay} {step} -> page {:?} net_tick {}", self.fe.as_ref().map(|f| f.page), self.net_tick);
         }
     }
 
+    /// One menu action from the keyboard or the mouse (PC mouse support, 2026-10-15): the movie skip, the pause page's
+    /// Back = resume, the page's own handling, then the level request / close the page asked for.
     fn menu_input(&mut self, a: menu::Action) {
         if self.fe.is_none() { return; }
         use menu::Action as MA;
@@ -2273,24 +2681,14 @@ impl App {
                 });
             }
         }
+        // net-consolidate: the online pages need their session (`ensure_lobby_session`).
+        self.ensure_lobby_session();
+        // mp-online-failures: the pause page's QUIT out of a running online match (the quit
+        // requests the front-end map) leaves the session — LEAVE now, not a lingering socket.
+        let quitting_online = self.net.is_some()
+            && self.fe.as_ref().is_some_and(|fe| fe.requested_level == Some(menu::FRONTEND_LEVEL));
+        if quitting_online { self.net_leave_match(); }
         let Some(fe) = self.fe.as_mut() else { return };
-        // net-consolidate: the online pages need their session. The proxy is
-        // created lazily on page entry (the listen/dial rows replace its
-        // unbound placeholder core); `net_lobby` holds the same Rc so the app
-        // can adopt it when the match starts.
-        if matches!(fe.page, menu::Page::MpHost | menu::Page::MpNetJoin) && self.net_lobby.is_none() {
-            match mpnet::SessionProxy::host(0) {
-                Ok(p) => {
-                    // net-p2p: the app's sessions probe internet reachability (UPnP / NAT-PMP /
-                    // STUN) on listen and dial; NF_NO_REACH=1 keeps them LAN-only, NF_STUN
-                    // ("host:port,host:port") replaces the public STUN list [S net-p2p §1].
-                    if let Some(cfg) = reach_config() { p.0.borrow_mut().enable_reach(cfg); }
-                    fe.mp_session = Some(Box::new(p.clone()));
-                    self.net_lobby = Some(p);
-                }
-                Err(_) => {}
-            }
-        }
         let closed = fe.closed;
         if let Some(code) = fe.requested_level.take() {
             // The menu picked a level: through the same reload path a LOAD_LEVEL uses. A cold pick
@@ -2401,6 +2799,7 @@ impl App {
         self.net_lobby = None;
         self.net_local_slot = 0;
         self.net_tick = 0;
+        self.net_rejoin = Some((true, port.to_string()));
         Ok(())
     }
 
@@ -2415,11 +2814,19 @@ impl App {
         self.net_lobby = None;
         self.net_local_slot = 0; // corrected when the WELCOME lands
         self.net_tick = 0;
+        self.net_rejoin = Some((false, addr.trim().to_string()));
         Ok(())
     }
 
     /// A desync / a lost host / a refused join: the game's message box (the front end's option
     /// box with the port-only string) and the lobby page underneath it; the session is closed.
+    ///
+    /// mp-online-failures: it lands on the ONLINE page this machine came from (the host's port
+    /// page / the client's address page, `net_rejoin`) — the couch Join Game page it used to
+    /// open had no way back online. Out of a running match the front end is rebuilt the
+    /// debriefing's way (`mp_results`: the music statics, the profile session, the runner flow,
+    /// the front-end map requested under the fade) so the arena unloads instead of staying up
+    /// frozen behind the page.
     fn net_fail(&mut self, msg: &str) {
         eprintln!("[net] {msg}");
         if let Some(se) = self.net.as_mut() { se.0.borrow_mut().close(); }
@@ -2430,21 +2837,41 @@ impl App {
         self.net_armed = None;
         self.net_join_pending = None;
         self.net_late_handover = None;
-        let fe = self.fe.get_or_insert_with(menu::FrontEnd::new);
-        // settings-persist: a freshly minted front end (fe was None) boots the option file's
-        // values, not the bare defaults — the pause page's options tabs show what the user set.
+        self.net_await_load = false;
+        let rejoin = self.net_rejoin.take();
+        let in_match = self.scene.sim.is_some() && self.level_code != 0 && self.level_code != menu::FRONTEND_LEVEL;
+        let mut fe = if in_match {
+            let mut fe = menu::FrontEnd::new();
+            if let Some(old) = self.fe.take() {
+                self.profile_session = menu::ProfileSession::from_fe(&old);
+                Self::inherit_music_statics(&mut fe, old.music.bank_flip, old.music.loaded_bank, old.music.music_master);
+            } else {
+                Self::inherit_music_statics(&mut fe, self.music_bank_flip, self.music_loaded_bank, self.music_master);
+            }
+            fe
+        } else {
+            self.fe.take().unwrap_or_else(menu::FrontEnd::new)
+        };
+        // settings-persist: the option file's values, not the bare defaults.
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
         fe.opts = opts;
         // profile-session: keep the standing codename session (the other re-creates' rule).
-        let session = self.profile_session.clone();
-        session.apply_to(fe);
-        fe.net_notice = Some(msg.to_string());
-        fe.page = menu::Page::MpJoin;
-        fe.cursor = 0;
-        fe.closed = false;
-        fe.mp_match_settings = None;
-        for a in fe.mp_join.iter_mut() { a.joined = false; a.ready = false; }
+        self.inherit_profile_session(&mut fe);
+        fe.mp_net_return(rejoin, msg);
+        if in_match {
+            // `mp_results`' order: the runner flow, the front-end map request, the fade on top.
+            fe.flow.stack = vec![menu::ST_RUNNER];
+            fe.flow.current_level = menu::FRONTEND_LEVEL;
+            fe.requested_level = Some(menu::FRONTEND_LEVEL);
+            fe.flow.reset_map_level_to_load(menu::FRONTEND_LEVEL, false, false);
+            fe.flow.push_state(7, 84);
+            // The load tail re-opens the queued page (`reopen_queued_page`): queue the online page.
+            fe.flow.page = fe.page.id();
+        }
+        self.fe = Some(fe);
+        // The online page needs its fresh session now (the first press may be Start/Connect).
+        self.ensure_lobby_session();
         if self.scene.sim.is_some() { self.grab(false); }
     }
 
@@ -2665,6 +3092,7 @@ impl App {
             self.net_await_load = false;
             self.net_tick = 0;
             self.net_clock = Some(std::time::Instant::now());
+            self.net_pacer.reset();
             // The first `input_delay` ticks have no sampled input (nothing ran that many ticks
             // before them): every machine submits NEUTRAL for its own slot there, so tick 0 is ready
             // at once instead of each window waiting on itself (the two-window freeze, 2026-10-18).
@@ -2681,6 +3109,9 @@ impl App {
         if self.net.is_some() && self.net_local_slot != 0 {
             if let Some(sim) = self.scene.sim.as_mut() {
                 sim.swap_local_slot(self.net_local_slot);
+                // The joiner's own slot's loadout (the scenario bonus weapon keys on its team).
+                sim.mp_equip_local();
+                sim.gun.switch_request = sim.gun.weapon;
                 self.cam = Camera { pos: Vec3::new(sim.bond.pos[0], sim.bond.pos[1] + 1.6, sim.bond.pos[2]), yaw: sim.bond.yaw, pitch: 0.0, fov: GAME_FOV };
             }
         }
@@ -2772,6 +3203,23 @@ impl App {
         // already holds the match's choices (the game's manager-side restore is the same data).
         fe.restore_mp_match(&settings);
         fe.show_mp_debriefing(board);
+        // Online: the finished match's session closes (the next match is a fresh lobby on the
+        // same port/address — the debriefing's Continue re-listens / re-dials).
+        if self.net.is_some() {
+            // The finished session stays open (polled, not ticked) while the debriefing is up:
+            // closing it here told a peer still finishing its last ticks that the host had left
+            // (the two-match check's "player 1 left" on the client). It closes when the page goes.
+            self.net_finished = self.net.take();
+            // mp-online-failures: the finished match takes no new peer — a client that pressed
+            // Continue first re-dials this port, and its HELLO must wait for the host's next
+            // lobby, not late-join the match that just ended (it landed in a dead lobby).
+            if let Some(s) = self.net_finished.as_ref() { s.0.borrow_mut().finish_match(); }
+            self.net_lobby = None;
+            self.net_menu_load = false;
+            self.net_late_self = None;
+            self.net_join_pending = None;
+            fe.mp_online_rejoin = self.net_rejoin.take();
+        }
         // The level request + the fade, the game's order [M 0x184bd0:64-78]: the front-end map
         // load pushes first, the fade state lands on top. The sim (the arena) freezes: the tick
         // loop runs only while `fe.is_none()` — the game's GS_PausePlayer per slot.
@@ -3286,6 +3734,14 @@ impl App {
                 self.menu_script_tick();
                 self.movie_tick();
                 self.adopt_lobby_session();
+                if self.net_finished.is_some() {
+                    let on_debrief = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::MpDebriefing);
+                    if on_debrief {
+                        if let Some(s) = self.net_finished.as_ref() { s.0.borrow_mut().poll(); }
+                    } else if let Some(s) = self.net_finished.take() {
+                        s.0.borrow_mut().close();
+                    }
+                }
                 // frontend-music: the menus' own audio (the jingle pair, the credits track), the
                 // page-change transitions and the per-frame pump.
                 self.menu_music_tick();
@@ -3440,21 +3896,26 @@ impl App {
                                     slot + 1, if graceful { "left" } else { "timed out" });
                             }
                             mpnet::CoreEvent::HostTimeout => {
-                                self.net_fail("The host went away\nReturning to the lobby");
+                                self.net_fail("Lost the connection to the host");
+                            }
+                            mpnet::CoreEvent::HostLeft => {
+                                // mp-online-failures: the host quit — every client is told at
+                                // once and lands back on its Join Online page (address kept).
+                                self.net_fail("The host left the match");
                             }
                             mpnet::CoreEvent::LateJoinStarted { slot } => {
                                 // The match runs on untouched; the draw code may show
                                 // "player joining" from this.
                                 eprintln!("[net] late join: serving the run log to slot {slot}");
                             }
-                            mpnet::CoreEvent::LateJoinHandover { slot, settings, snapshot_tick, snapshot_hash, log } => {
+                            mpnet::CoreEvent::LateJoinHandover { slot, settings, snapshot_tick, snapshot_hash, log, joins } => {
                                 // The joiner's handover: the app replays the log headless
                                 // (`mp_late_join_catchup`), compares the hash, then confirms
                                 // or refuses. The replay is seconds of sim — the flag path
                                 // runs it inline here (the draw code may thread it later);
                                 // the main agent's joining page owns the pacing.
                                 eprintln!("[net] late join: slot {slot} handover, replaying {} ticks from the host's log", snapshot_tick + 1);
-                                match crate::mp_late_join_catchup(&self.iso, *settings.clone(), &log, snapshot_tick) {
+                                match crate::mp_late_join_catchup_joins(&self.iso, *settings.clone(), &log, snapshot_tick, &joins) {
                                     Ok((scene, hash)) => {
                                         if hash == snapshot_hash {
                                             eprintln!("[net] late join: replay verified at tick {snapshot_tick}");
@@ -3485,6 +3946,12 @@ impl App {
                                             self.net_local_slot = 0;
                                             self.net_late_self = Some(slot as usize);
                                             if let Some(s) = self.net.as_mut() { s.0.borrow_mut().confirm_late_join(); }
+                                            // mp-online-failures: the menu path's join page closes
+                                            // (the tick loop runs only without a front end) and
+                                            // the arena is the level now.
+                                            self.level_code = settings.level_code;
+                                            if self.fe.is_some() { self.close_front_end(); }
+                                            if self.scene.sim.is_some() { self.grab(true); }
                                         } else {
                                             eprintln!("[net] late join: replay hash mismatch at tick {snapshot_tick} — refusing");
                                             if let Some(s) = self.net.as_mut() { s.0.borrow_mut().late_join_verify_failed(); }
@@ -3508,10 +3975,16 @@ impl App {
                                 eprintln!("[net] late join: slot {slot} arms at tick {join_tick}");
                                 self.net_join_pending = Some((slot, join_tick));
                                 // The joiner had no match clock (it never ran `swap_in_scene`'s
-                                // start): the host stands near the join tick, so the clock reads
-                                // from there and the budget (≤ 4 per frame) catches the replay up.
+                                // start): the host picked the join tick JOIN_MARGIN_TICKS past its
+                                // head, so the clock reads from the host's head and the budget
+                                // fast-forwards the replay gap (net-internet: reading from the join
+                                // tick itself put the clock 1.5 s ahead of every machine for the
+                                // rest of the match — the joiner never paced, it ran whatever had
+                                // arrived each frame and stalled between).
                                 if self.net_late_self == Some(slot as usize) {
-                                    self.net_clock = std::time::Instant::now().checked_sub(std::time::Duration::from_secs_f64(join_tick as f64 / 60.0));
+                                    let head = join_tick.saturating_sub(nf_net::session::JOIN_MARGIN_TICKS);
+                                    self.net_clock = std::time::Instant::now().checked_sub(std::time::Duration::from_secs_f64(head as f64 / 60.0));
+                                    self.net_pacer.reset();
                                 }
                             }
                     }
@@ -3556,22 +4029,28 @@ impl App {
                         None => elapsed,
                     };
                     // Online: the tick budget is the match clock's, not the frame's — ticks a stall
-                    // held back run on the next frames (≤ 4 per frame), so a stall delays the match
-                    // instead of permanently slowing it (the two-window check ran at ~15 Hz).
+                    // held back run on the next frames, so a stall delays the match instead of
+                    // permanently slowing it (the two-window check ran at ~15 Hz). net-internet:
+                    // the backlog is made up at a bounded rate (`TickPacer`: 1.25x real time for a
+                    // short one, 2x up to a second, the old <= 4-per-frame fast-forward beyond) — a
+                    // burst of 4 ticks in one frame was a visible 67 ms jump after every stall.
                     let n_ticks = match (self.net.is_some(), self.net_clock) {
                         (true, Some(c)) => {
                             let target = (c.elapsed().as_secs_f64() * 60.0) as u32;
-                            target.saturating_sub(self.net_tick).min(4)
+                            self.net_pacer.ticks_for_frame(target, self.net_tick, dt as f64, 4)
                         }
                         _ => n_ticks,
                     };
                     self.ticked = n_ticks > 0;
+                    // mp-perf-16: the online ticks this frame actually ran (past the lockstep gate).
+                    let mut net_ran = 0u32;
                     let eye = [self.cam.pos.x, self.cam.pos.y, self.cam.pos.z];
                     let look = self.cam.dir().to_array();
                     // mp-host-match-logic: set inside the tick loop when the match's debriefing
                     // request latched and the host opened the page (the grab waits for this
                     // scope — the sim borrow).
                     let mut debrief_opened = false;
+                    let fp_t0 = std::time::Instant::now();
                     if let Some(sim) = self.scene.sim.as_mut() {
                         for _ in 0..n_ticks {
                             if self.noclip { sim.step(eye, look, self.trigger, self.aiming); continue; }
@@ -3585,9 +4064,24 @@ impl App {
                                 if self.net_await_load { self.ticked = false; break; }
                                 if session.0.borrow_mut().ready_inputs(self.net_tick).is_none() {
                                     NET_STALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                    self.ticked = false;
+                                    // mp-perf-16 (the joiner's "54 ticks/s, 240 stalls/s"): (1) a frame
+                                    // whose earlier iterations RAN ticks keeps `ticked` — the old
+                                    // `false` here threw those ticks' palette/camera snapshots away,
+                                    // and a machine running at the edge of the others' inputs (every
+                                    // frame runs a tick, then stalls on the next) never rebuilt its
+                                    // palette at all (NF_FPSLOG "tick frames 0" on the joiner while
+                                    // it ran 60 ticks/s). (2) The stall pauses the match clock: the
+                                    // clock is re-anchored on the waiting tick, so the time spent
+                                    // waiting is not owed back as a lead. The joiner's clock started
+                                    // at ITS load, ~6 s before the host's first inputs arrived; that
+                                    // lead never drained, so every frame asked for up to 4 ticks,
+                                    // stalled (240 stalls/s at 240 Hz) and NF_NET_RATE's
+                                    // ticks / clock read 54/s while the joiner really ran 60.
+                                    self.ticked = net_ran > 0;
+                                    self.net_clock = std::time::Instant::now().checked_sub(std::time::Duration::from_secs_f64(self.net_tick as f64 / 60.0));
                                     break;
                                 }
+                                net_ran += 1;
                             }
                             // B-5 record/replay: when `--replay` is set, the input comes from the recording, not the
                             // keyboard. The recorded tick drives `step_bond` exactly as it did when recorded; the user
@@ -3643,6 +4137,69 @@ impl App {
                                 .and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
                                 .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick) && (self.net_tick - a) % 12 < 6));
                             if trigger { input.fire = true; }
+                            // Test aid (NF_NET_AUTOMOVE="a-b"): walk and turn on match ticks a..=b (the
+                            // pattern of tests/mp_bots_moving_live.rs) — the two-window moving check
+                            // without a hand on either window.
+                            if self.net.is_some() && std::env::var("NF_NET_AUTOMOVE").ok()
+                                .and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
+                                .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick))
+                            {
+                                let ph = self.net_tick + self.net_local_slot as u32 * 97;
+                                input.forward = if ph % 240 < 200 { 1.0 } else { -0.5 };
+                                input.strafe = if ph % 150 < 30 { 0.8 } else if ph % 150 < 45 { -0.8 } else { 0.0 };
+                                input.turn = if ph % 180 < 60 { 0.03 } else if ph % 180 < 90 { -0.02 } else { 0.0 };
+                                input.look = if ph % 120 < 20 { 0.01 } else if ph % 120 < 40 { -0.01 } else { 0.0 };
+                                input.jump = ph % 211 == 0;
+                                input.crouch = ph % 307 == 0;
+                            }
+                            // Test aid (NF_NET_AUTOPICK="a-b", mp-world-sync): on match ticks a..=b
+                            // steer this player at a live pickup (one of the three nearest, the pick
+                            // rotating every 10 s so a stuck walk moves on) — the two-window pickup
+                            // check without a hand on either window. Input only; the sim is untouched.
+                            if self.net.is_some() && std::env::var("NF_NET_AUTOPICK").ok()
+                                .and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
+                                .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick))
+                            {
+                                let b = &sim.bond;
+                                let mut live: Vec<[f32; 3]> = sim.drones.pickups.iter().filter(|p| !p.gone && !p.hidden)
+                                    .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]]).collect();
+                                let d2 = |p: &[f32; 3]| (p[0] - b.pos[0]).powi(2) + (p[2] - b.pos[2]).powi(2);
+                                live.sort_by(|x, y| d2(x).total_cmp(&d2(y)));
+                                let k = ((self.net_tick / 600) as usize + self.net_local_slot) % live.len().clamp(1, 3);
+                                if let Some(tg) = live.get(k) {
+                                    let want = (tg[0] - b.pos[0]).atan2(tg[2] - b.pos[2]);
+                                    let mut dy = (want - b.yaw) % std::f32::consts::TAU;
+                                    if dy > std::f32::consts::PI { dy -= std::f32::consts::TAU; }
+                                    if dy < -std::f32::consts::PI { dy += std::f32::consts::TAU; }
+                                    input.turn = dy.clamp(-0.08, 0.08);
+                                    input.forward = if dy.abs() < 0.8 { 1.0 } else { 0.2 };
+                                    input.look = (-b.pitch).clamp(-0.05, 0.05);
+                                    input.jump = self.net_tick % 97 == 0;
+                                }
+                            }
+                            // Test aid (NF_NET_SWITCH="tick:id,tick:id,…", ids hex 0x.. or decimal):
+                            // mp-combat-weapons — on each listed match tick this machine equips the
+                            // weapon (its local inventory: three clips, `Player_EquipWeapon`'s give as
+                            // `--give` does) and switches to it through the normal `switch_to` lane;
+                            // the two-window weapon-class check without a hand on the window.
+                            if self.net.is_some() {
+                                if let Ok(v) = std::env::var("NF_NET_SWITCH") {
+                                    for e in v.split(',') {
+                                        let Some((t, id)) = e.trim().split_once(':') else { continue };
+                                        let id = id.strip_prefix("0x").and_then(|h| usize::from_str_radix(h, 16).ok()).or_else(|| id.parse().ok());
+                                        if t.parse::<u32>().ok() == Some(self.net_tick) {
+                                            if let Some(id) = id.filter(|&i| i < 0x72) {
+                                                let wd = sim.weapons.clone();
+                                                let rounds = wd.clip_size(id).max(1);
+                                                sim.drones.inventory.equip_weapon(&wd, id, rounds, true);
+                                                sim.drones.inventory.equip_ammo(&wd, id, (rounds * 3).max(rounds));
+                                                input.switch_to = Some(id as u8);
+                                                eprintln!("[net] test switch to {id:#04x} at tick {}", self.net_tick);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             // weapon-matrix: the dev menu's "Test weapon" run (dev.rs) merges its
                             // inputs into this tick — the same lanes the keyboard uses
                             // (`switch_to`, the trigger, the R edge), never during a replay
@@ -3679,13 +4236,25 @@ impl App {
                                 // 700v6: this player's weapon and whether its own pipeline fired a round
                                 // on the last local tick — every machine resolves that shot identically.
                                 ni.held = sim.gun.weapon;
-                                ni.shot = std::mem::take(&mut self.net_shot_pending);
-                                let lead = session.0.borrow().input_delay();
-                                session.0.borrow_mut().local_input(self.net_tick + lead, ni);
+                                // mp-combat-weapons: the round's description — the fired record,
+                                // the aim ray, the scope flag (every machine runs the round).
+                                if let Some(sh) = self.net_shot_pending.take() {
+                                    ni.shot = true;
+                                    ni.shot_weapon = sh.weapon;
+                                    ni.shot_flags = sh.scoped as u8;
+                                    ni.shot_aim = nf_game::mp::combat::aim_from_dir(sh.dir);
+                                }
+                                // net-internet: the session places it `delay_at(net_tick)` ahead
+                                // (the host's adaptive delay, switched at an announced tick).
+                                session.0.borrow_mut().submit_local(self.net_tick, ni);
                                 let ready = session.0.borrow_mut().ready_inputs(self.net_tick);
                                 match ready {
                                     Some(r) => {
-                                        let li = r[self.net_local_slot.min(3)];
+                                        // mp-world-sync: the row rides into `step_bond` (the remotes
+                                        // move before the local body; every slot's use/shot reaches
+                                        // the shared world).
+                                        sim.net_row = Some(r);
+                                        let li = r[self.net_local_slot.min(nf_net::MAX_AGENTS - 1)];
                                         let view = (input.lift, input.stabilise, input.zoom_cycle);
                                         input = mpnet::to_player_input(&li);
                                         (input.lift, input.stabilise, input.zoom_cycle) = view;
@@ -3696,6 +4265,29 @@ impl App {
                             } else {
                                 (trigger, reload, use_key)
                             };
+                            // mp-join-in-progress: the announced join spawn — every machine creates
+                            // the slot's agent at the same tick (the shared-stream pick is part of
+                            // this deterministic tick); the joiner's own view adopts the slot (the
+                            // camera and the full local path tick it from here on). mp-world-sync:
+                            // BEFORE the tick (`step_bond` now moves the remotes inside it) — the
+                            // late joiner's replay (`mp_late_join_catchup_joins`) spawns before its
+                            // tick too, so both see the same shared-stream order.
+                            let mut swap_after: Option<usize> = None;
+                            if self.net.is_some() && sim.net_row.is_some() {
+                                if let Some((js, jt)) = self.net_join_pending {
+                                    if self.net_tick == jt {
+                                        sim.mp_join_spawn(js as usize);
+                                        if js as usize == self.net_local_slot {
+                                            sim.swap_local_slot(js as usize);
+                                        } else if self.net_late_self == Some(js as usize) {
+                                            // The joiner: this tick runs as slot 0's machine
+                                            // (the host's exact tick); the move follows the hash.
+                                            swap_after = Some(js as usize);
+                                        }
+                                        self.net_join_pending = None;
+                                    }
+                                }
+                            }
                             // B-5 record: capture the exact input passed to step_bond, before the call.
                             if let Some(r) = &mut self.recorder { r.push(replay::TickInput::from_parts(&input, trigger, reload, use_key)); }
                             // The PC-port rapid fire (`--rapid-fire` / the dev Toggles page): local play only —
@@ -3720,32 +4312,14 @@ impl App {
                                     // mp-join-in-progress: the host records the exact transcript
                                     // a late joiner replays (bit-exact by construction).
                                     session.0.borrow_mut().record_run_tick(self.net_tick, net_inputs);
-                                    // mp-join-in-progress: the announced join spawn — every
-                                    // machine creates the slot's agent at the same tick (the
-                                    // shared-stream pick is part of this deterministic tick);
-                                    // the joiner's own view adopts the slot (the camera and
-                                    // the full local path tick it from here on).
-                                    let mut swap_after: Option<usize> = None;
-                                    if let Some((js, jt)) = self.net_join_pending {
-                                        if self.net_tick == jt {
-                                            sim.mp_join_spawn(js as usize);
-                                            if js as usize == slot {
-                                                sim.swap_local_slot(slot);
-                                            } else if self.net_late_self == Some(js as usize) {
-                                                // The joiner: this tick runs as slot 0's machine
-                                                // (the host's exact tick); the move follows the hash.
-                                                swap_after = Some(js as usize);
-                                            }
-                                            self.net_join_pending = None;
-                                        }
-                                    }
+                                    // (The announced join spawn ran before `step_bond` — see there.)
                                     let inputs = net_inputs.map(|i| mpnet::to_player_input(&i));
                                     sim.step_net_remotes(&inputs, slot);
                                     sim.step_net_combat(&net_inputs, slot);
                                     // The local pipeline's shot this tick rides the next submitted input.
-                                    if sim.shot_tick { self.net_shot_pending = true; }
+                                    if let Some(sh) = sim.net_shot.take() { self.net_shot_pending = Some(sh); }
                                     if let Some(m) = sim.mp.as_mut() {
-                                        for sl in 0..4 {
+                                        for sl in 0..nf_net::MAX_AGENTS {
                                             if sl != slot { if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); } }
                                         }
                                         m.set_slot(slot, sim.bond.pos);
@@ -3757,13 +4331,12 @@ impl App {
                                         // parks in mp_bonds[0]; the new agent starts with the
                                         // match's start loadout and its slot's health.
                                         sim.swap_local_slot(js);
-                                        sim.gun = nf_game::gun::Gun::new(2, 7, 41);
-                                        sim.drones.bond_weapon = 2;
+                                        sim.mp_equip_local();
                                         sim.drones.health.health = sim.mp_hp[js];
                                         sim.net_rng = Some(nf_game::drone::Rng::new(0x5eed_0b0b ^ (js as u32).wrapping_mul(0x9e37_79b9)));
                                         self.net_local_slot = js;
                                         self.net_late_self = None;
-                                        self.net_shot_pending = false;
+                                        self.net_shot_pending = None;
                                         self.cam = Camera { pos: Vec3::new(sim.bond.pos[0], sim.bond.pos[1] + 1.6, sim.bond.pos[2]), yaw: sim.bond.yaw, pitch: 0.0, fov: GAME_FOV };
                                         eprintln!("[net] late join: playing slot {js} from tick {}", self.net_tick);
                                     }
@@ -3772,11 +4345,28 @@ impl App {
                                 // NF_NET_RATE: once a second, the ticks run / stalls / frames.
                                 if self.net_tick % 60 == 0 && std::env::var_os("NF_NET_RATE").is_some() {
                                     let c = self.net_clock.map_or(0.0, |c| c.elapsed().as_secs_f64());
-                                    eprintln!("[netrate] tick {} at {:.1} s ({:.1}/s), stalls {}", self.net_tick, c, self.net_tick as f64 / c.max(1e-3), NET_STALLS.swap(0, std::sync::atomic::Ordering::Relaxed));
+                                    let (rtt, delay, bytes, pkts) = session.0.borrow().net_stats();
+                                    eprintln!("[netrate] tick {} at {:.1} s ({:.1}/s), stalls {}, rtt {} ms, delay {} ticks, sent {} B / {} pkts", self.net_tick, c, self.net_tick as f64 / c.max(1e-3), NET_STALLS.swap(0, std::sync::atomic::Ordering::Relaxed), rtt.map_or("-".to_string(), |r| format!("{r:.0}")), delay, bytes, pkts);
                                 }
-                                // Render-check aid (NF_NET_SHOT=<tick>): the F12 capture at that match tick.
-                                if std::env::var("NF_NET_SHOT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(self.net_tick) {
+                                // Render-check aid (NF_NET_SHOT=<tick>[,<tick>…] or <a>-<b>): the F12 capture at
+                                // those match ticks (a range catches the 2-tick muzzle flashes, mp-remote-fx).
+                                let tick = self.net_tick;
+                                if std::env::var("NF_NET_SHOT").ok().is_some_and(|v| v.split(',').any(|x| match x.trim().split_once('-') {
+                                    Some((a, b)) => a.parse::<u32>().ok().zip(b.parse::<u32>().ok()).is_some_and(|(a, b)| (a..=b).contains(&tick)),
+                                    None => x.trim().parse::<u32>().ok() == Some(tick),
+                                })) {
                                     NET_SHOT_DUE.store(true, std::sync::atomic::Ordering::Relaxed);
+                                }
+                                // NF_NET_SHOT_FX=<n> (mp-remote-fx render aid): capture the first n ticks on
+                                // which another slot fired (its muzzle flash is up for this tick's draw).
+                                if let Some(n) = std::env::var("NF_NET_SHOT_FX").ok().and_then(|v| v.parse::<u32>().ok()) {
+                                    let f = sim.drones.frame;
+                                    let fired = (0..nf_net::MAX_AGENTS).any(|sl| sl != sim.mp_local_slot && sim.mp_fx.last_shot[sl] == Some(f));
+                                    if fired && NET_SHOT_FX_TAKEN.load(std::sync::atomic::Ordering::Relaxed) < n {
+                                        NET_SHOT_FX_TAKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                        eprintln!("[mpfx] capture at frame {f} (a remote slot fired)");
+                                        NET_SHOT_DUE.store(true, std::sync::atomic::Ordering::Relaxed);
+                                    }
                                 }
                             }
                             // The lock's rising edge auto-draws the handgun (`Upgrade_Weapon(6)` = 2 [L])
@@ -3919,7 +4509,11 @@ impl App {
                             }
                         }
                     }
+                    // net-internet: the inputs this frame's ticks scheduled leave now, not at the
+                    // next frame's poll (a frame less of latency on every remote input).
+                    if let Some(session) = self.net.as_ref() { session.0.borrow_mut().flush(); }
                     // Dev mode after-tick: god mode / infinite ammo (the game's own state, set the way the game sets it).
+                    frame_part(0, fp_t0.elapsed());
                     if debrief_opened { self.grab(false); } // the menus own the cursor again
                     if let Some(d) = self.dev.as_deref_mut() { d.after_tick(&mut self.scene); }
                     // The mission's end sequence (`Mission_Update` case 4 → `ResetMap_LevelToLoad`
@@ -3998,11 +4592,14 @@ impl App {
                 let vis = g.renderer.cel_visibility(draw_cam.pos.to_array(), vp0, if portal { self.scene.sim.as_ref().map(|s| &s.world) } else { None }, door_closed.as_deref());
                 // G-043: build the palette only when a tick ran, then draw between the last two ticks.
                 let pal_rebuilt = self.ticked || self.pal_cur.is_none();
+                if pal_rebuilt { PAL_REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
                 if pal_rebuilt {
                     // The user (2026-10-18): "culling should only happen on map geometry, no characters
                     // or items" — characters, doors, pickups and props are never room-culled; only the
                     // World draws take the room/portal cull (render()).
+                    let fp_pal = std::time::Instant::now();
                     let new = self.scene.skin_palette(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None);
+                    frame_part(3, fp_pal.elapsed());
                     g.renderer.char_light_centre = self.scene.char_light_centres();
                     self.pal_prev = self.pal_cur.take();
                     // perf-240: the entries that move between the two ticks, and the blend buffer seeded
@@ -4021,6 +4618,7 @@ impl App {
                 }
                 let interp = interp0;
                 let alpha = alpha0;
+                let fp_blend = std::time::Instant::now();
                 if let Some((pal, cols)) = &self.pal_cur {
                     match &self.pal_prev {
                         Some((pp, _)) if interp => {
@@ -4054,6 +4652,7 @@ impl App {
                     // palette is rebuilt (each tick, and the first frame of a scene), not every frame.
                     if pal_rebuilt || self.scene.sim.is_none() { g.renderer.upload_morph_weights(&g.queue, &self.scene); }
                 }
+                frame_part(4, fp_blend.elapsed());
                 let frame = match g.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
                     wgpu::CurrentSurfaceTexture::Outdated => { g.surface.configure(&g.device, &g.config); g.window.request_redraw(); return; }
@@ -4096,6 +4695,8 @@ impl App {
                     && !self.fe.as_ref().is_some_and(|fe| fe.flow.movie_pending);
                 let movie_up = intro_up || flow_up || aux_up || attract_up;
                 let movie_frame = if movie_up { self.movie.as_mut().and_then(|p| p.present()) } else { None };
+                // The MP standings keep a constant on-screen text size (the lobby's view_h rule).
+                hud::set_view_h(g.config.height as f32);
                 let mut hud = if let Some(fe) = self.fe.as_mut() {
                     let lang = self.lang.as_ref().or_else(|| self.scene.sim.as_ref().and_then(|s| s.lang.as_ref()));
                         // fe-60hz: the front end's 60 Hz tick moved into `frame` (the draw half
@@ -4135,6 +4736,7 @@ impl App {
                         if fe.page == menu::Page::Pause {
                             if let Some(sim) = self.scene.sim.as_ref() { fe.pause_objectives = pause_objective_rows(sim); }
                         }
+                        fe.view_h = g.config.height as f32;
                         let mut f = match &self.scene.hud {
                             Some(tables) => menu::menu_overlay(fe, &tables.font, &tables.font_header, lang, &self.scene.hud_textures, aspect),
                             None => overlay_for(&self.scene, aspect),
@@ -4168,9 +4770,14 @@ impl App {
                 hud.append(&self.scene.script_overlay_hud(aspect));
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
+                let fp_enc = std::time::Instant::now();
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
+                let fp_sub = std::time::Instant::now();
+                frame_part(5, fp_sub - fp_enc);
+                frame_part(1, fp_sub - self.frame_start);
                 g.queue.submit([enc.finish()]);
                 g.queue.present(frame);
+                frame_part(2, fp_sub.elapsed());
                 if let Some(w) = self.devwin.as_mut() { w.tick(); }
                 if let Some(fps) = self.fps_cap.filter(|f| *f > 0.0) {
                     let target = std::time::Duration::from_secs_f32(1.0 / fps);
@@ -4523,8 +5130,11 @@ impl App {
             net_await_load: false,
             net_menu_load: false,
             net_late_self: None,
+            net_rejoin: None,
+            net_finished: None,
             net_clock: None,
-            net_shot_pending: false,
+            net_pacer: nf_net::pace::TickPacer::new(),
+            net_shot_pending: None,
             net_join_pending: None,
             net_late_handover: None,
             async_load: None,
@@ -4808,6 +5418,22 @@ pub fn run() -> Result<()> {
         }).collect()).unwrap_or_default();
     let scene = if dev { load_dev(&iso, &level, all)? }
         else if !give_ids.is_empty() { load_weapons(&iso, &level, all, &give_ids)? }
+        else if let Some(i) = args.iter().position(|a| a == "--mp-match") {
+            // Render aid (mp body checks): `--mp-match H,B[,c0,c1,…]` — the online match load with
+            // H humans, B bots and the humans' character words c0.. (the `MP_skins` index), so a
+            // headless `--shot` draws the other slots' bodies (`--mp` carries no settings → no bodies).
+            let v: Vec<u32> = args.get(i + 1).context("--mp-match needs H,B[,chars]")?.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>()?;
+            let code = u32::from_str_radix(level.trim_end_matches(".bin"), 16).unwrap_or(0x0700_0023);
+            let mut st = nf_game::mp::MpSettings::deathmatch(code);
+            st.human_count = v.first().copied().unwrap_or(2).clamp(1, nf_game::mp::MP_MAX_SLOTS as u32);
+            st.bot_count = v.get(1).copied().unwrap_or(0);
+            st.player_count = st.human_count as u16;
+            // mp-perf-16: a windowed `--mp-match` run plays (deathmatch()'s raw 10 ends the match
+            // in 10 s, straight to the debriefing); NF_NET_TIME=seconds as on the flag host.
+            st.time_limit = std::env::var("NF_NET_TIME").ok().and_then(|v| v.parse::<i32>().ok()).unwrap_or(10 * 60);
+            for (slot, &c) in v.iter().skip(2).enumerate() { if slot < nf_game::mp::MP_MAX_SLOTS { st.players[slot].skin = c; } }
+            load_mp_carry(&iso, &level, all, None, st)?
+        }
         else if args.iter().any(|a| a == "--mp") { load_mp(&iso, &level, all)? }
         else { load(&iso, &level, all)? };
     let mut cam = start_camera(&scene);
@@ -4851,6 +5477,15 @@ pub fn run() -> Result<()> {
                 let rgba = w.rgba();
                 if let Some((_, t)) = scene.hud_textures.iter_mut().find(|(h, _)| *h == 0x0300_00db) { if t.rgba.len() == rgba.len() { t.rgba = rgba; } }
             }
+        }
+        // Render aid (mp-body-anim): `--mp-drive "a-b:f=1,s=0,t=0,l=0,c,j,k;…"` drives slot 1's session
+        // input over match ticks a..b (f forward, s strafe, t turn, l look, c crouch held, j jump, k kill
+        // the slot at tick a) through the online tick (`net_slot0_tick`), for `--frame` ticks; `--mp-shots
+        // t1,t2,…` saves an `--mp-look` capture at each listed tick as <shot stem>_tNNNN.png.
+        if let Some(di) = args.iter().position(|a| a == "--mp-drive") {
+            let spec = args.get(di + 1).context("--mp-drive needs a script")?.clone();
+            let out = args.get(i + 1).context("--shot needs a file name")?.clone();
+            return mp_drive_shots(&mut scene, &args, &spec, &out, time as u32, opts);
         }
         if let Some(sim) = scene.sim.as_mut() {
             // `--pull 100,130`: the trigger is pressed on those ticks (one tick each).
@@ -4979,6 +5614,27 @@ pub fn run() -> Result<()> {
             let f = dev::hud(&d, &scene, 1280.0 / 720.0, [[0.0; 4]; 4]);
             menu_frame.get_or_insert_with(|| overlay_for(&scene, 1280.0 / 720.0)).append(&f);
         }
+        // Render aid (mp body checks): `--mp-look slot[,dist[,height[,angle]]]` — after the ticks, the
+        // camera stands `dist` (2.5) from that slot's body, `angle` (0 = in front) around it, `height`
+        // (1.2) above its feet, looking at its chest; the local view model is hidden.
+        if let Some(li) = args.iter().position(|a| a == "--mp-look") {
+            let v: Vec<f32> = args.get(li + 1).context("--mp-look needs slot[,dist,height,angle]")?.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>()?;
+            let slot = v.first().copied().unwrap_or(1.0) as usize;
+            let (dist, height, angle) = (v.get(1).copied().unwrap_or(2.5), v.get(2).copied().unwrap_or(1.2), v.get(3).copied().unwrap_or(0.0));
+            let mut scene = scene;
+            // mp-remote-fx: a dead slot's death body counts too.
+            let st = scene.sim.as_ref().and_then(|s| s.mp_body_state(slot).or_else(|| s.mp_body_death(slot).map(|(p, y, _)| (p, y, 0.0)))).context("--mp-look: that slot has no drawn body")?;
+            let (p, yaw) = (st.0, st.1 + angle);
+            // The body's `pos` is Bond::pos (floor + 1.1) for humans, the bot's eye − BOT_EYE for bots.
+            let feet_y = p[1] - 1.1;
+            let eye = [p[0] + yaw.sin() * dist, feet_y + height, p[2] + yaw.cos() * dist];
+            let target = [p[0], feet_y + 1.0, p[2]];
+            let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+            let cam = Camera { pos: Vec3::new(eye[0], eye[1], eye[2]), yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV };
+            if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
+            eprintln!("--mp-look: slot {slot} body at {p:?} yaw {:.2} held {}", st.1, scene.sim.as_ref().map_or(0, |s| s.mp_held[slot]));
+            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
+        }
         return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
     }
     let event_loop = EventLoop::new()?;
@@ -4992,6 +5648,7 @@ pub fn run() -> Result<()> {
     // `--hold-npcs` (dev): the window run holds every guard in place, still shootable.
     if dev && args.iter().any(|a| a == "--hold-npcs") { if let Some(sim) = scene.sim.as_mut() { sim.drones.hold_npcs = true; } }
     let force_channel = if dev { args.iter().position(|a| a == "--set-channel").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u8>().ok()) } else { None };
+    menu::SAVE_NAMES_FROM_DISK.store(true, std::sync::atomic::Ordering::Relaxed);
     // headless-app-harness: the constructor moved into `App::bare` (the headless harness
     // builds the same skeleton, gfx: None / sound silent); the CLI-only knobs apply on top.
     let mut app = App::bare(iso, scene, cam, opts, choice, time);
@@ -5120,9 +5777,24 @@ pub fn run() -> Result<()> {
         // menu writes minutes × 0x3c [M P_MPCONFIRM]); `deathmatch()`'s raw 10 ended the demo match
         // after 10 seconds — straight to the debriefing (the two-window check, 2026-10-18).
         st.time_limit = 10 * 60;
+        // Test aid (NF_NET_TIME=seconds): a shorter flag-path match (the debriefing checks).
+        if let Some(s) = std::env::var("NF_NET_TIME").ok().and_then(|v| v.parse::<i32>().ok()) { st.time_limit = s; }
         // Test aid (NF_NET_BOTS=n): n bots in the flag host's match (the online bots check).
         if let Some(n) = std::env::var("NF_NET_BOTS").ok().and_then(|v| v.parse::<u32>().ok()) {
-            st.bot_count = n.min(4);
+            st.bot_count = n.min(nf_game::mp::MP_MAX_SLOTS as u32 - 1);
+        }
+        // Test aids (mp-bot-objectives): NF_NET_SCENARIO=<hex scenario word> plays that scenario
+        // on the flag path (the team-game bit derived as `MP_Init` does [M 0x183438:41]) and
+        // NF_NET_TEAMS="t0,t1,…" sets the slots' team words in slot order (humans, then bots).
+        if let Some(sc) = std::env::var("NF_NET_SCENARIO").ok().and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()) {
+            st.scenario = sc;
+            st.gametype_mask = sc;
+            st.team_game = (sc >> 29) & 1;
+        }
+        if let Ok(list) = std::env::var("NF_NET_TEAMS") {
+            for (slot, t) in list.split(',').enumerate().take(nf_game::mp::MP_MAX_SLOTS) {
+                if let Ok(t) = t.trim().parse::<u32>() { st.players[slot].team = t; }
+            }
         }
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(1);
         st.seed = nanos | 1;
@@ -5326,6 +5998,7 @@ fn reach_config() -> Option<nf_net::p2p::ReachConfig> {
 
 /// The NF_NET_SHOT render-check aid's pending capture (set inside the tick loop's sim borrow).
 static NET_SHOT_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NET_SHOT_FX_TAKEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// NF_NET_RATE's stall counter.
 static NET_STALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

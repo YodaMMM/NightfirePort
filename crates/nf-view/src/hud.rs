@@ -398,7 +398,11 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // HUDINFO+0x144 + 0x20·(n − 9)); PCSX2 shows no health swirl in the Micro-Camera view (2026-10-15).
     let paned = s.zoom_target > 1.0 && matches!(zoom_overlay(s.gun.weapon), ZoomOverlay::Camera | ZoomOverlay::Oicw);
     let riding = riding || paned;
-    if armour > 0.0 && !riding {
+    // mp-hud-real: an MP match draws the MP health pane instead (`MPPaneList[1]` = MPHealthPane,
+    // `HUD_UpdateMPHealthPane` 0x19b630 — a horizontal bar, not the SP swirl [M; L PCSX2]) —
+    // drawn by `mp_panes`; the damage glow below is the same in both panes.
+    let mp = s.mp.is_some();
+    if armour > 0.0 && !riding && !mp {
         for k in 0..8 {
             let a = if k == 0 { 1.0 } else if (k as f32) < armour { 0.75 } else { 0.35 };
             let sp = &t.health[k];
@@ -407,12 +411,12 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     }
     let hp = s.drones.health.health.clamp(0.0, 100.0) * 0.07;
     let colour = if hp >= 4.0 { 0x52a88b } else if hp >= 2.0 { 0xc6984e } else { 0x9d1912 };
-    for i in (0..7).filter(|_| !riding) {
+    for i in (0..7).filter(|_| !riding && !mp) {
         let mut a = if (i as f32) < hp { 0.55 } else { 0.15 };
         if i == 0 && hp < 0.5 { a = if frame % 30 < 15 { 0.55 } else { 0.15 }; }
         h.sprite(Anchor::Left, HEALTH_AT, &t.health[8 + i], gs(colour, (a * f * 255.0) as u32));
     }
-    if !riding { h.sprite(Anchor::Left, HEALTH_AT, &t.health[15], gs(colour, (f * 140.0) as u32)); }
+    if !riding && !mp { h.sprite(Anchor::Left, HEALTH_AT, &t.health[15], gs(colour, (f * 140.0) as u32)); }
     // Damage glow (sprites 20–23, `HealthSprInfo[20..24]`): full screen, additive, red at alpha `BL+0x968`,
     // gated per bit of `BL+0x967` — bit 1 → sprite 20 (tex 0x0300018D), bit 2 → 21 (flipped V), bit 4 → 22
     // (tex 0x0300018E), bit 8 → 23 (flipped U) [M HUD_UpdateHealthPane 0x19b9c8:92-113]. `pain_from`
@@ -455,8 +459,15 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // kind-0x1a percent path; D the measured ~31/s drain]. The port's gate: the fire machine on a
     // watch laser with the beam computed this frame (the game's anim+0xF4 == 0xb proxy).
     let laser_held = nf_game::gadget::is_laser_weapon(s.gun.weapon) && s.gun.fire_state && s.laser_beam.is_some();
+    // mp-hud-real: the MP ammo pane (`MPPaneList[0]` = MPAmmoPane 0x2be698, the same update fn
+    // 0x19a7f0 over `MPAmmoSprInfo`'s 3 text sprites) — the count at (496,408), the fire mode /
+    // weapon name at (496,428), no rounds strip (the update gates the strip sprites on the
+    // pane's sprite count > 5 [M 0x19a7f0:247,275]). The pane origin (396,390) is the created
+    // rect: CREATE (512,448) w 100 h 42 through `HUD_ValidateXY`'s right/bottom clamps (flags
+    // 0x18) [L PCSX2 EE snapshot 2026-10-18 pane 0 xy (396,390); sprites (496,408)/(496,428)].
+    let (ammo_at, ammo_tbl) = if mp && t.mp_ammo.len() >= 3 { ((396.0f32, 390.0f32), &t.mp_ammo) } else { (AMMO_AT, &t.ammo) };
     if flags68 & 0x20 == 0 && !switching {
-        let sp = &t.ammo[0];
+        let sp = &ammo_tbl[0];
         // The count text (0x19aad4 percent / 0x19ab18 "%d-%d"): kinds 0x14/0x1a → clip·100/max; kind 0x1f →
         // first transformed to the DEPLETED count clip' = min(max−clip, max−12) of max' = max−12
         // [M 0x19a7f0:129-136] — the Samurai pair's overcharge display; the rest → clip-spare.
@@ -468,9 +479,9 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             0x1f => { let mx = cap.saturating_sub(12); format!("{}", mx.min(cap.saturating_sub(s.gun.clip)) * 100 / mx.max(1)) }
             _ => format!("{}-{}", s.gun.clip, s.gun.spare),
         } };
-        h.text(Anchor::Right, &t.font, sp.layer as i32, &txt, AMMO_AT.0 + sp.x as f32, AMMO_AT.1 + sp.y as f32, true, gs(sp.colour >> 8, sp.colour & 0xff), sp.flags & 0x20 != 0);
+        h.text(Anchor::Right, &t.font, sp.layer as i32, &txt, ammo_at.0 + sp.x as f32, ammo_at.1 + sp.y as f32, true, gs(sp.colour >> 8, sp.colour & 0xff), sp.flags & 0x20 != 0);
     }
-    if let (false, Some(&[bu, bv, bw, hpr])) = (switching, t.bullets.get(ammo_type)) {
+    if let (false, false, Some(&[bu, bv, bw, hpr])) = (mp, switching, t.bullets.get(ammo_type)) {
         // The strips draw the same transformed clip'/max' for kind 0x1f [M 0x19a7f0:129-136 flows into
         // :254-269]: the filled height = clip'·px/round of the full max'·px/round column, and the filled
         // strip's v starts (max'−clip')·px/round down the bullet texture.
@@ -503,9 +514,9 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
         // reads `BL + w*0xC + 0x1BB` and picks `weapon_data[w]+0x30 + mode*4`) (fix-weapon-modes).
         let mode = s.drones.inventory.fire_mode.get(wi).copied().unwrap_or(0) as usize;
         let (idx, id) = if switching { (2, s.weapons.name_label(shown)) } else { (1, s.weapons.fire_mode_label(wi, mode)) };
-        if let (Some(sp), true) = (t.ammo.get(idx), id != u32::MAX && id != 0) {
+        if let (Some(sp), true) = (ammo_tbl.get(idx), id != u32::MAX && id != 0) {
             if let Some(txt) = lang.bind(id).filter(|t| !t.is_empty()) {
-                h.text(Anchor::Right, &t.font, sp.layer as i32, txt, AMMO_AT.0 + sp.x as f32, AMMO_AT.1 + sp.y as f32, true, gs(sp.colour >> 8, 0xff), true);
+                h.text(Anchor::Right, &t.font, 28, txt, ammo_at.0 + sp.x as f32, ammo_at.1 + sp.y as f32, true, gs(sp.colour >> 8, 0xff), true);
             }
         }
     }
@@ -574,6 +585,17 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
         };
         if s.drones.hud_frozen {
             // The pane cannot open while the viewer's +0x2a HUD gate is off [M 0x1b11d8:16-18].
+        } else if let (true, Some(msg)) = (mp, s.hud.info_msgs.front()) {
+            // mp-hud-real: the MP info pane (`MPPaneList[4]` = MPMsgInfoStatusPane 0x2be868,
+            // `HUD_MPUpdateStatusPane` 0x19ca88, `MPInfoStatusSprInfo` 0x2be838): no bar — one
+            // text sprite at (16,88) [L PCSX2 EE snapshot: the created sprite], font 2
+            // left-aligned (style 0x30cc90 = FF 02, no FE justify), colour 0xffffffff with the black
+            // shadow (flag 0x20), layer 0x1e while shown; alpha = time·17 under 15 ticks
+            // [M 0x19ca88:83-97].
+            let a = (msg.time * 17.0).min(255.0) as u32;
+            for (k, l) in t.font.word_wrap(&msg.text, 480.0).split('\n').enumerate() {
+                h.text(Anchor::Left, &t.font, 30, l, 16.0, 88.0 + k as f32 * t.font.line_height(), false, gs(0xffffff, a), true);
+            }
         } else if let Some(msg) = s.hud.info_msgs.front() {
             let a = (msg.time * 17.0).min(255.0) as u32;
             bar(&mut h, bw);
@@ -586,7 +608,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             for (k, l) in lines.iter().enumerate() {
                 h.text(Anchor::Centre, &t.font, 29, l, x0, 129.0 + k as f32 * lh, false, gs(0x7d6d59, a), true);
             }
-        } else if s.hud.info_close > 0.0 {
+        } else if s.hud.info_close > 0.0 && !mp {
             bar(&mut h, s.hud.info_close);
         }
     }
@@ -858,7 +880,299 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             }
         }
     }
+    // The MP match's own panes (radar, clock, team score, standings) — nothing on SP levels.
+    if s.mp.is_some() { mp_panes(&mut h, s, t); }
     h.finish()
+}
+
+// ─── The in-match MP panes (port draw over `nf_game::mp::hud::MpHudSnapshot`) ───────────────
+/// The window height the HUD is shown at (pixels), for the lists that keep a constant on-screen text
+/// size like the online lobby (`FrontEnd::view_h`). The window loop stores it each frame
+/// ([`set_view_h`]); headless renders keep the 720 default (the --shot size).
+static VIEW_H_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x4434_0000); // 720.0
+
+/// Store the window height for the MP standings' constant-size layout.
+pub fn set_view_h(h: f32) {
+    if h > 0.0 { VIEW_H_BITS.store(h.to_bits(), std::sync::atomic::Ordering::Relaxed); }
+}
+
+fn view_h() -> f32 { f32::from_bits(VIEW_H_BITS.load(std::sync::atomic::Ordering::Relaxed)) }
+
+/// The MP-only HUD textures: the radar ring 0x03000088 [L RadarSprInfo[0] @0x2bdd60] and the blip
+/// sheet 0x0300016f [M 0x19f4e8:52]. Loaded for MP scenes only — the SP pane list never creates the
+/// radar (`hud_radar_live` pins that an SP scene has neither).
+pub const MP_TEXTURES: [u32; 15] = [
+    0x0300_0088, RADAR_TEX,
+    // The score pane's icons [L MPScoreInfo @0x2be888 + the update's re-textures M 0x19f0a0/0x19ed10].
+    0x0300_0180, 0x0300_0182, 0x0300_0185, 0x0300_0186, 0x0300_0187, 0x0300_0188, 0x0300_0189, 0x0300_018a, 0x0300_018b, 0x0300_018c,
+    // The MP health pane's backing / bar / armour strip [L MPHealthSprInfo @0x2be6b8].
+    0x0300_0170, 0x0300_0171, 0x0300_0172,
+];
+
+/// The header face's atlas (font 1, `FontTable` 0x2dd8b0[0]) — the MP clock's font (style
+/// 0x30cbd0 = FF 01 FE 03: font 1, centred [L; M `Font_ParseFormat` 0x1ee3e0 cases 4/5]).
+pub const HEADER_FONT_TEX: u32 = 0x0300_0005;
+
+/// The standings list's layout for a participant count, in HUD units (512×448) [S port layout]:
+/// `(scale, row pitch, max rows)`. Up to the game's 8 slots the rows are the HUD font's own size
+/// (scale 1, one font line each). Past 8 (the port's 9–16 player matches) the text keeps a
+/// constant ON-SCREEN size like the online lobby — `k = 720 / view_h` HUD units per 720p unit —
+/// at 0.75 of the 720p row, and the list takes as many rows as fit in `avail` units; the viewer's
+/// own row is always among them ([`nf_game::mp::hud::MpHudSnapshot::board`]).
+pub fn mp_board_layout(participants: usize, line_h: f32, view_h: f32, avail: f32) -> (f32, f32, usize) {
+    if participants <= nf_game::mp::hud::GAME_SLOTS {
+        let pitch = line_h + 1.0;
+        return (1.0, pitch, participants);
+    }
+    let k = (720.0 / view_h.max(1.0)).clamp(0.4, 1.25);
+    let scale = 0.75 * k;
+    let pitch = (line_h + 1.0) * scale;
+    // One row is kept back for the "+N" line when the list is cut.
+    let fit = (avail / pitch).floor().max(2.0) as usize;
+    let rows = if participants <= fit { participants } else { fit - 1 };
+    (scale, pitch, rows)
+}
+
+/// A participant's name for the standings: a human's codename (`MPSettings+slot·0x30+0x00`), a
+/// bot's character short name (the debriefing's label 0x10002e2+character), else "Player N" /
+/// "Bot N" [S].
+pub(crate) fn mp_name(m: &nf_game::mp::MpMatch, lang: Option<&nf_formats::hud::Lang>, slot: usize) -> String {
+    let p = &m.settings.players[slot];
+    if slot < m.settings.human_count as usize {
+        if !p.codename.is_empty() { return p.codename.clone(); }
+        return format!("Player {}", slot + 1);
+    }
+    nf_game::mp::MpMatch::bot_short_name_label(p.skin)
+        .and_then(|l| lang.and_then(|lg| lg.bind(l)))
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("Bot {}", slot + 1 - m.settings.human_count as usize))
+}
+
+/// Cut `s` so its laid-out width at `scale` fits `max_w` HUD units.
+fn fit_text(font: &nf_formats::hud::Font, s: &str, scale: f32, max_w: f32) -> String {
+    let mut out = s.to_string();
+    while !out.is_empty() && font.layout(&out, 0.0, 0.0).1 * scale > max_w { out.pop(); }
+    out
+}
+
+/// Text drawn with the game's flag-0x2000 look: a 1-unit outline in the sprite's colour2 around
+/// the text (the PCSX2 captures show the timer and the score digits ringed in black, the Team
+/// Arena score ringed in its team's red [L 2026-10-18]; `View_DrawSprites` 0x1e5290:166-182 hands
+/// the flag to `Font_DrawText` [M] — the outline shape is the port's reading of the captures [S]).
+#[allow(clippy::too_many_arguments)]
+fn outlined_text(h: &mut Hud, anchor: Anchor, font: &nf_formats::hud::Font, tex: u32, layer: i32, s: &str, x: f32, y: f32, centre: bool, c: [f32; 4], outline: [f32; 4]) {
+    let (_, w) = font.layout(s, 0.0, 0.0);
+    let x0 = if centre { x - w / 2.0 } else { x };
+    for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
+        h.text_scaled_tex(anchor, font, layer + 1, tex, s, x0 + dx, y + dy, false, outline, false, 1.0);
+    }
+    h.text_scaled_tex(anchor, font, layer, tex, s, x0, y, false, c, false, 1.0);
+}
+
+/// The created MP pane rects for one full-screen viewer (HUD units): `HUD_FixMP` 0x19b110 clamps
+/// every MP pane sprite into the viewer rect inset by 16 on each side when one viewer plays
+/// (MPSettings+0x1ac == 1 [M 0x19b110:27-31]) — viewer (0,512,0,448) → (16..496, 16..432)
+/// [L PCSX2 EE snapshot 2026-10-18: viewer0 +0xf0..+0xfc = 0/512/0/448, every pane sprite inside
+/// the inset]. The online port runs one viewer per window, so the 1-viewer layout always applies.
+pub const MP_FIX_INSET: f32 = 16.0;
+
+/// The in-match MP panes from the frame's [`nf_game::mp::hud::MpHudSnapshot`], drawn where the
+/// game draws them (mp-hud-real; every position measured in PCSX2 EE snapshots of a live 1-human
+/// match and re-derived from the create code — docs/systems/mp-hud-data.md §8):
+/// - the score pane (pane 13, [`nf_game::mp::hud::MpScorePane`]): the line icons at x 16, the
+///   text at (40, 13|30) in font 2 with its colour2 outline, the objective icons bottom-left;
+/// - the match clock (`TimeSpr`, `MPTimeInfo` @0x2a4710): font 1 (the header face) centred at
+///   (256, 32), white with a black outline (MP_Start moves it to y 0x20 for one viewer [M
+///   0x183a50:186-200]); shown only with a time limit (MPSettings+0x1a0 != −1 [M 0x184268:138]);
+/// - the status line (`StatusSpr`, `MPStatusInfo`): font 2 centred at (256, 48);
+/// - the radar ring at (432, 16) (RadarSprInfo (512,0) through `HUD_FixMP`) + the blips;
+/// - the MP health pane (pane 1): a 128×16 bar at (16, 416), the armour strip over it;
+/// - more than the game's 8 participants: the port's compact standings list ([`mp_board_layout`]).
+fn mp_panes(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) {
+    let Some(m) = s.mp.as_ref() else { return };
+    let me = s.mp_local_slot.min(nf_game::mp::MP_MAX_SLOTS - 1);
+    let radar_on = m.settings.players[me].radar_on != 0;
+    let snap = nf_game::mp::hud::MpHudSnapshot::build(m, me, radar_on);
+    let font = &t.font;
+    let lh = font.line_height();
+
+    // The radar. The viewer matrix rows from the render camera's axes (`camera_brackets`' build):
+    // the game negates view x and z [M disasm 0x19f888-0x19f8b0]; with row 0 = −right and row 2 =
+    // forward a blip to the right of the viewer lands right of the ring centre and one ahead lands
+    // above it [S — the port's camera-axis mapping onto viewer+0x120].
+    let yaw = s.bond.yaw;
+    let pitch = s.bond.pitch * std::f32::consts::FRAC_PI_2;
+    let fwd = [pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()];
+    let right = [-yaw.cos(), 0.0, yaw.sin()];
+    let up = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]];
+    let rot = [[-right[0], -right[1], -right[2]], up, fwd];
+    let objs: Vec<RadarObj> = snap.radar.iter().map(|o| RadarObj { pos: o.pos, argb: o.argb, kind: o.kind }).collect();
+    let ring_tex = h.tex_dims(0x0300_0088);
+    let ring_tex = if ring_tex.0 > 0.0 { ring_tex } else { (64.0, 64.0) };
+    let viewer = (MP_FIX_INSET, SW - MP_FIX_INSET, MP_FIX_INSET, SH - MP_FIX_INSET);
+    for (layer, tex, c, x, y, w, hh, uv) in radar_frame(rot, s.bond.head(), s.bond.pos[1], ring_tex, viewer, radar_on, &objs) {
+        let uv = if uv[2] == 0.0 && uv[3] == 0.0 { [0.0, 0.0, w, hh] } else { uv };
+        // Flag 0x100 on the blips is the additive blend [M 0x19f4e8:58; ALPHA_1 0x48].
+        let blend = if tex == RADAR_TEX { 1 } else { 0 };
+        h.quad(Anchor::Right, layer, tex, blend, x, y, w, hh, uv, (false, false), c);
+    }
+
+    // mp-lobby-settings: the name tags — the lobby's Radar word (`MPSettings+0x1C4`, or the
+    // Assassin scenario) gates them [M HUD_RadarUpdate 0x19f6e8:177]: every other live player
+    // whose root projects on screen (`View_3DPoint2Screen` > 0), nearer than 100 units, inside the
+    // screen by half its text width and in line of sight (`Collide_LineOfSight`, mask 0x623) gets
+    // its name (`MPSettings+slot·0x30`) over it, FFA 0x1e504b, team 0 0x5a1414 / team 1 0x14145a
+    // [M :178-264]. The port never drew them, so the Radar row did nothing in a match. The tag sits
+    // a little over the head (the game's y clamp keeps it 12 px inside the view) [S placement].
+    if snap.names_on_radar {
+        let eye = s.bond.head();
+        let fov = std::f32::consts::FRAC_PI_3 / s.zoom.max(1e-3);
+        let f = 1.0 / (fov * 0.5).tan();
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let humans = (m.settings.human_count as usize).min(nf_game::mp::MP_MAX_SLOTS);
+        let lang = s.lang.as_ref();
+        for slot in 0..nf_game::mp::MP_MAX_SLOTS {
+            if slot == me || m.game.slots[slot].pos.is_none() || m.game.slots[slot].dead { continue; }
+            let head = if slot < humans {
+                match s.mp_bonds.get(slot).and_then(|b| b.as_ref()) { Some(b) => b.head(), None => continue }
+            } else {
+                match m.bots.iter().find(|b| b.slot == slot && !b.dead) { Some(b) => b.brain.pos, None => continue }
+            };
+            let tag = [head[0], head[1] + 0.45, head[2]];
+            let rel = [tag[0] - eye[0], tag[1] - eye[1], tag[2] - eye[2]];
+            let z = dot(fwd, rel);
+            if z <= 0.0 || dot(rel, rel) >= 100.0 * 100.0 { continue; }
+            if s.world.segment(eye, head).is_some() { continue; }
+            let x = SW / 2.0 + (f / h.aspect) * (dot(right, rel) / z) * (SW / 2.0) * (3.0 / 4.0) * h.aspect;
+            let y = (SH / 2.0 - f * (dot(up, rel) / z) * (SH / 2.0)).clamp(12.0, SH - 12.0);
+            let name = mp_name(m, lang, slot);
+            let (_, tw) = font.layout(&name, 0.0, 0.0);
+            if x - tw / 2.0 < 0.0 || x + tw / 2.0 > SW { continue; }
+            let c = if m.settings.team_game == 0 { gs(0x1e504b, 0xff) }
+                else if m.settings.players[slot].team == 0 { gs(0x5a1414, 0xff) } else { gs(0x14145a, 0xff) };
+            h.text(Anchor::Centre, font, 0x1e, &name, x - tw / 2.0, y, false, c, true);
+        }
+    }
+
+    // The score pane.
+    let viewer_team = m.settings.players[me].team;
+    let pane = nf_game::mp::hud::MpScorePane::build(&snap, m.settings.team_game, m.settings.bit30, viewer_team);
+    for ic in &pane.icons {
+        let (tw, th) = h.tex_dims(ic.tex);
+        let (w, hh) = if tw > 0.0 { (tw, th) } else { (16.0, 16.0) };
+        h.quad(Anchor::Left, ic.layer, ic.tex, u8::from(ic.additive), ic.x, ic.y, w, hh, [0.0, 0.0, w, hh], (false, false), gs(ic.rgba >> 8, ic.rgba & 0xff));
+    }
+    let (tc, oc) = (gs(pane.rgba >> 8, 0xff), gs(pane.outline >> 8, 0xff));
+    for (k, line) in pane.text.split('\n').enumerate() {
+        if line.is_empty() { continue; }
+        outlined_text(h, Anchor::Left, font, FONT_TEX, 29, line, pane.text_x, pane.text_y + k as f32 * lh, false, tc, oc);
+    }
+
+    // The clock: font 1, centred, white (MPTimeInfo colour 0xffffffff — saturating) with the
+    // black colour2 outline [L 0x2a4710]; the time-limit gate [M 0x184268:138].
+    if m.settings.time_limit != -1 {
+        let clock = snap.timer_string();
+        outlined_text(h, Anchor::Centre, &t.font_header, HEADER_FONT_TEX, 1, &clock, SW / 2.0, 32.0, true, gs(0xffffff, 0xff), gs(0, 0xff));
+    }
+    // The status line (the end of the match) [M 0x1848d0 / 0x184bd0 case 2].
+    let parts = nf_game::mp::hud::status_line(m);
+    if !parts.is_empty() {
+        let lang = s.lang.as_ref();
+        let bind = |id: u32| lang.and_then(|l| l.bind(id)).unwrap_or("").to_string();
+        let mut line = String::new();
+        for p in parts {
+            match p {
+                nf_game::mp::hud::StatusPart::Label(id) => line.push_str(&bind(id)),
+                nf_game::mp::hud::StatusPart::Format(id, a) => line.push_str(&lang.map(|l| l.format(id, &[a])).unwrap_or_default()),
+                nf_game::mp::hud::StatusPart::Text(x) => line.push_str(&x),
+            }
+        }
+        outlined_text(h, Anchor::Centre, font, FONT_TEX, 1, &line, SW / 2.0, 48.0, true, gs(0xffffff, 0xff), gs(0, 0xff));
+    }
+
+    // The MP health pane (`HUD_UpdateMPHealthPane` 0x19b630:62-90): sprite 0 the backing
+    // (tex 0x03000172, layer 0x1d), sprite 2 the bar (tex 0x03000171, layer 0x1c) w = uv-w =
+    // health / (100 + the handicap MPSettings+slot·0x30+0x2c) · 128, colour 0x52a88b, < 0.5
+    // 0xc6984e, < 0.2 0x9d1912; sprite 3 the armour strip (tex 0x03000170, layer 0x1b) w =
+    // armour · 2.56, hidden at 0. Rects: (16,416) 128×16 and (24,420) 128×16 for one viewer
+    // [L PCSX2 EE snapshot 2026-10-18 pane 1; M 0x19b390:58-60 — the strip sits at the backing
+    // +8,+4]. The pane hides while a zoom/camera pane is up [M :55-61].
+    let paned = s.zoom_target > 1.0 && matches!(zoom_overlay(s.gun.weapon), ZoomOverlay::Camera | ZoomOverlay::Oicw);
+    if !paned && s.missile_cam.is_none() {
+        let (x0, y0) = (MP_FIX_INSET, SH - MP_FIX_INSET - 16.0);
+        let bonus = m.settings.players[me].armor_bonus as f32;
+        let frac = (s.drones.health.health / (bonus + 100.0)).max(0.0);
+        let bw = (frac * 128.0).floor().min(128.0);
+        let col = if frac < 0.2 { 0x9d1912 } else if frac < 0.5 { 0xc6984e } else { 0x52a88b };
+        h.quad(Anchor::Left, 0x1d, 0x0300_0172, 0, x0, y0, 128.0, 16.0, [0.0, 0.0, 128.0, 16.0], (false, false), gs(0x7f7f7f, 0xff));
+        h.quad(Anchor::Left, 0x1c, 0x0300_0171, 0, x0, y0, bw, 16.0, [0.0, 0.0, bw, 16.0], (false, false), gs(col, 0xff));
+        let armour = s.drones.health.armour;
+        if armour > 0.0 {
+            let aw = (armour * 2.56).floor();
+            h.quad(Anchor::Left, 0x1b, 0x0300_0170, 0, x0 + 8.0, y0 + 4.0, aw, 16.0, [0.0, 0.0, aw, 16.0], (false, false), gs(0x7f7f7f, 0xff));
+        }
+    }
+
+    // More than the game's 8 participants (the port's 9–16 player matches): the compact
+    // standings list [S port-only — the game's layout has no list; ≤ 8 draws none].
+    if snap.compact() {
+        mp_compact_board(h, s, m, &snap, font);
+    }
+}
+
+/// The port-only standings list for 9–16 participant matches [S]: rank, name, display score, the
+/// viewer's row highlighted, constant on-screen size ([`mp_board_layout`]), at the left edge
+/// between the score pane's icons and the health bar.
+fn mp_compact_board(h: &mut Hud, s: &crate::scene::Sim, m: &nf_game::mp::MpMatch, snap: &nf_game::mp::hud::MpHudSnapshot, font: &nf_formats::hud::Font) {
+    let lh = font.line_height();
+    let cream = gs(0x7d6d59, 0xff);
+    let (top, bottom) = (96.0f32, 404.0f32);
+    let n = snap.participants();
+    let (scale, pitch, max_rows) = mp_board_layout(n, lh, view_h(), bottom - top);
+    let board = snap.board(max_rows);
+    let x0 = 16.0f32;
+    let (rank_w, name_w, score_w) = (22.0 * scale, 112.0 * scale, 30.0 * scale);
+    let width = rank_w + name_w + score_w + 6.0 * scale;
+    let rows_drawn = board.rows.len() + usize::from(board.hidden > 0);
+    {
+        let (a, b) = (h.ndc(Anchor::Left, x0 - 4.0, top - 2.0), h.ndc(Anchor::Left, x0 + width + 4.0, top + pitch * rows_drawn as f32 + 2.0));
+        let q = |p: [f32; 2]| HudVertex { p, uv: [0.0, 0.0], c: [0.0; 4] };
+        h.ndc_solid(22, [q([a[0], a[1]]), q([b[0], a[1]]), q([b[0], b[1]]), q([a[0], a[1]]), q([b[0], b[1]]), q([a[0], b[1]])], [0.03, 0.02, 0.02, 0.45]);
+    }
+    let cap = font.glyphs.first().map_or(0.0, |g| (g.h + g.yoff) as f32);
+    let lang = s.lang.as_ref();
+    // Participants sharing a name (the bots past the disc's 4 records cycle them [S mp-16-slots])
+    // number themselves in slot order, the way the menus' repeated rows do ("Guard 2").
+    let names: Vec<(usize, String)> = {
+        let raw: Vec<(usize, String)> = snap.rows.iter().map(|r| (r.slot, mp_name(m, lang, r.slot))).collect();
+        raw.iter().enumerate().map(|(k, (slot, n))| {
+            let total = raw.iter().filter(|(_, x)| x == n).count();
+            if total < 2 { return (*slot, n.clone()); }
+            let nth = raw[..k].iter().filter(|(_, x)| x == n).count() + 1;
+            (*slot, format!("{n} {nth}"))
+        }).collect()
+    };
+    let name_of = |slot: usize| names.iter().find(|(s, _)| *s == slot).map_or_else(String::new, |(_, n)| n.clone());
+    let team_game = m.settings.team_game != 0;
+    for (i, r) in board.rows.iter().enumerate() {
+        let y = top + pitch * i as f32 + cap;
+        let base = if r.viewer { gs(0xc8b400, 0xff) } else { cream };
+        let name_col = if team_game && !r.viewer { gs(radar_team_color_rgb(r.team), 0xff) } else { base };
+        h.text_scaled(Anchor::Left, font, 20, &format!("{}", r.rank + 1), x0 + rank_w - 4.0 * scale, y, true, base, true, scale);
+        let nm = fit_text(font, &name_of(r.slot), scale, name_w - 4.0 * scale);
+        h.text_scaled(Anchor::Left, font, 20, &nm, x0 + rank_w, y, false, name_col, true, scale);
+        h.text_scaled(Anchor::Left, font, 20, &format!("{}", r.score as i32), x0 + width - 2.0 * scale, y, true, base, true, scale);
+    }
+    if board.hidden > 0 {
+        let y = top + pitch * board.rows.len() as f32 + cap;
+        h.text_scaled(Anchor::Left, font, 20, &format!("+{} more", board.hidden), x0 + rank_w, y, false, cream, true, scale);
+    }
+}
+
+/// The team tint as an RGB for the standings' names — the radar's team pair [M 0x189840:58-62].
+fn radar_team_color_rgb(team: u32) -> u32 {
+    nf_game::mp::hud::radar_team_color(1, team) >> 8
 }
 
 // ─── The Micro-Camera's target brackets (CameraPane 11's per-drone sprites) ─────────────────
@@ -995,7 +1309,7 @@ pub fn radar_project(
     objs: &[RadarObj],
 ) -> Vec<RadarBlip> {
     let mut out = Vec::new();
-    for o in objs.iter().take(24) {
+    for o in objs.iter().take(nf_game::mp::hud::RADAR_BLIP_CAP) {
         let d = [o.pos[0] - cam[0], o.pos[1] - cam[1], o.pos[2] - cam[2]];
         let vx = view_rot[0][0] * d[0] + view_rot[0][1] * d[1] + view_rot[0][2] * d[2];
         let vy = view_rot[1][0] * d[0] + view_rot[1][1] * d[1] + view_rot[1][2] * d[2];
@@ -1063,8 +1377,10 @@ pub fn radar_frame(
     let ring = radar_ring_rect(ring_tex.0, ring_tex.1, viewer);
     let layer = radar_ring_layer(radar_on);
     if layer != 0xff {
-        // The ring sprite: RadarSprInfo[0] colour 0x7f7f7fff, full texture [L 0x2bdd60].
-        let ring_col: [f32; 4] = [0x7f as f32, 0x7f as f32, 0x7f as f32, 0xff as f32];
+        // The ring sprite: RadarSprInfo[0] colour 0x7f7f7fff, flags 0 (plain blend), full texture
+        // [L 0x2bdd60] — on the GS scale like every other sprite colour (the raw 127/255 floats
+        // this used to pass blew the dark-red ring out to white; the first live draw showed it).
+        let ring_col = gs(0x7f7f7f, 0xff);
         quads.push((layer, 0x0300_0088, ring_col, ring.0, ring.1, ring.2, ring.3, [0.0, 0.0, 0.0, 0.0]));
     }
     for b in radar_project(view_rot, cam, bond_y, ring, objs) {

@@ -9,20 +9,23 @@
 //! | type | name | payload |
 //! |------|------|---------|
 //! | 1 | HELLO (client→host) | proto u16, build u32, display codename 32B |
-//! | 2 | WELCOME (host→client) | proto u16, build u32, host codename 32B, slot u8, input_delay u8, hash_every u8, rsv u8, seed u32, settings 208B |
+//! | 2 | WELCOME (host→client) | proto u16, build u32, host codename 32B, slot u8, input_delay u8, hash_every u8, rsv u8, seed u32, settings (334 B, protocol 4) |
 //! | 3 | REFUSE (host→client) | reason u8 (1 version, 2 build, 3 started, 4 full), rsv 3B |
-//! | 4 | INPUT | base_tick u32, agent_mask u8, count u8, ack_tick u32, ack_bits u32, count*popcount(mask)*24B inputs |
+//! | 4 | INPUT | base_tick u32, agent_mask u16, count u8, ack_tick u32, ack_bits u32, count*popcount(mask) compact inputs (protocol 5: a word-mask byte + the changed 4-byte words, see [`encode_compact_inputs`]); count 0 = a pure ack; a slot absent from a host→client mask is NEUTRAL over the covered ticks |
 //! | 5 | HASH | tick u32, hash u64, prev_tick u32, prev_hash u64 |
 //! | 6 | KEEPALIVE | seq u32 |
 //! | 7 | LEAVE | slot u8, reason u8, rsv 2B |
-//! | 8 | SLOTMAP | human_slots bitmask u8, rsv 3B |
+//! | 8 | SLOTMAP | human_slots bitmask u16, rsv 2B |
 //! | 9 | GO (host→client) | first_tick u32 |
 //! | 10 | DATA (app tunnel) | len u16 + bytes — opaque app-to-app blob (the lobby's choices); the session never inspects it |
 //! | 11 | JOIN_BEGIN (host→late joiner) | first_tick u32, snapshot_tick u32, snapshot_hash u64 — the late-join handover head: the input log covers `first_tick..snapshot_tick` and the replay must hash to `snapshot_hash` at `snapshot_tick` |
-//! | 12 | JOIN_LOG (host→late joiner) | first_tick u32, tick_count u8, chunk_index u16, chunk_count u16, tick_count × (4 × 24 B inputs) — one chunk of the recorded run log |
+//! | 12 | JOIN_LOG (host→late joiner) | first_tick u32, tick_count u8, chunk_index u16, chunk_count u16, tick_count × (16 × 28 B inputs) — one chunk of the recorded run log |
 //! | 13 | JOIN_ACK (late joiner→host) | chunk_index u16 — all chunks ≤ chunk_index are held |
 //! | 14 | JOIN_READY (late joiner→host) | — the replay verified (hash matched) and the joiner is caught up; the host picks the join tick |
 //! | 15 | JOIN_SLOT (host→all) | slot u8, join_tick u32 — the slot becomes human from join_tick (its inputs start there; before it the slot rides NEUTRAL) |
+//! | 16 | PING | stamp u32 (the sender's ms clock) — answered at once with PONG |
+//! | 17 | PONG | stamp u32 echoed — the sender's RTT sample |
+//! | 18 | DELAY (host→all) | from_tick u32, delay u8 — the input delay from that tick on (protocol 5) |
 //!
 //! INPUT `agent_mask` bit i = slot i has an input in each tick run; inputs
 //! are stored per tick in ascending slot order. The ack fields acknowledge
@@ -49,17 +52,101 @@ pub const PT_JOIN_LOG: u8 = 12;
 pub const PT_JOIN_ACK: u8 = 13;
 pub const PT_JOIN_READY: u8 = 14;
 pub const PT_JOIN_SLOT: u8 = 15;
+pub const PT_PING: u8 = 16;
+pub const PT_PONG: u8 = 17;
+pub const PT_DELAY: u8 = 18;
 
-/// Ticks one JOIN_LOG chunk carries (4 slots × 24 B × 12 = 1152 B — fits
-/// [`MAX_PACKET`] with header room).
-pub const JOIN_LOG_CHUNK_TICKS: usize = 12;
+/// Ticks one JOIN_LOG chunk carries (16 agents × 28 B × 3 = 1344 B — fits
+/// [`MAX_PACKET`] with header room (1357 B with the headers); protocol ≤ 3 carried 12 ticks of 4
+/// agents, the same 1152 B [S mp-16-slots]).
+pub const JOIN_LOG_CHUNK_TICKS: usize = 3;
 
 /// codename field width on the wire (nul-padded).
 pub const CODENAME_WIRE: usize = 32;
-/// How many ticks one INPUT packet may carry client→host (24B each).
-pub const MAX_INPUT_COUNT_C2H: usize = 32;
-/// How many ticks one INPUT packet may carry host→client (3 agents × 24B each).
-pub const MAX_INPUT_COUNT_H2C: usize = 8;
+/// The most ticks one INPUT packet may carry (protocol 5). The inputs are compact
+/// ([`encode_compact_inputs`]), so the real bound is the packet size: the sender adds ticks
+/// while the packet stays within [`MAX_PACKET`] (the worst case — every word of every one of
+/// 15 relayed agents changing — still fits 3 ticks). Protocol 4 capped the relay at 3 ticks
+/// of raw 24-byte inputs, which with its oldest-unacked-first window held a 150 ms link to
+/// ~15 ticks/s [S net-internet].
+pub const MAX_INPUT_TICKS: usize = 64;
+
+/// The INPUT packet's fixed size before the inputs: the 4-byte header + the 15-byte head.
+pub const INPUT_HEAD_LEN: usize = 19;
+
+/// Bytes the compact form of `cur` takes after `prev` (its reference: the same slot's
+/// previous tick in the packet, NEUTRAL for the first): one word-mask byte plus each 4-byte
+/// word of the 24-byte layout that differs.
+pub fn compact_input_len(prev: &Input, cur: &Input) -> usize {
+    let (mut a, mut b) = ([0u8; INPUT_WIRE_SIZE], [0u8; INPUT_WIRE_SIZE]);
+    prev.encode(&mut a, 0);
+    cur.encode(&mut b, 0);
+    1 + (0..INPUT_WIRE_SIZE / 4).filter(|w| a[w * 4..w * 4 + 4] != b[w * 4..w * 4 + 4]).count() * 4
+}
+
+fn neutral_wire() -> [u8; INPUT_WIRE_SIZE] {
+    let mut r = [0u8; INPUT_WIRE_SIZE];
+    crate::input::NEUTRAL.encode(&mut r, 0);
+    r
+}
+
+/// The INPUT body's compact inputs (protocol 5): tick-major, slot-ascending; each input is a
+/// word-mask byte (bit w = 4-byte word w of the 24-byte [`Input`] layout differs from the
+/// reference) followed by the differing words. The reference is the same slot's input in the
+/// previous tick of the packet, NEUTRAL's layout for the first tick — sticks held and buttons
+/// unchanged cost one byte, a turning mouse 9 [S net-internet].
+pub fn encode_compact_inputs(agent_mask: u16, inputs: &[Input], out: &mut Vec<u8>) {
+    let per_tick = agent_mask.count_ones() as usize;
+    if per_tick == 0 {
+        return;
+    }
+    let mut refs = vec![neutral_wire(); per_tick];
+    for (i, inp) in inputs.iter().enumerate() {
+        let j = i % per_tick;
+        let mut b = [0u8; INPUT_WIRE_SIZE];
+        inp.encode(&mut b, 0);
+        let mut m = 0u8;
+        for w in 0..INPUT_WIRE_SIZE / 4 {
+            if b[w * 4..w * 4 + 4] != refs[j][w * 4..w * 4 + 4] {
+                m |= 1 << w;
+            }
+        }
+        out.push(m);
+        for w in 0..INPUT_WIRE_SIZE / 4 {
+            if m & (1 << w) != 0 {
+                out.extend_from_slice(&b[w * 4..w * 4 + 4]);
+            }
+        }
+        refs[j] = b;
+    }
+}
+
+/// Inverse of [`encode_compact_inputs`]; `None` on a truncated or malformed body.
+pub fn decode_compact_inputs(agent_mask: u16, count: usize, body: &[u8]) -> Option<Vec<Input>> {
+    let per_tick = agent_mask.count_ones() as usize;
+    let mut out = Vec::with_capacity(count * per_tick);
+    if per_tick == 0 {
+        return Some(out);
+    }
+    let mut refs = vec![neutral_wire(); per_tick];
+    let mut p = 0usize;
+    for i in 0..count * per_tick {
+        let j = i % per_tick;
+        let m = *body.get(p)?;
+        p += 1;
+        if m >> (INPUT_WIRE_SIZE / 4) != 0 {
+            return None;
+        }
+        for w in 0..INPUT_WIRE_SIZE / 4 {
+            if m & (1 << w) != 0 {
+                refs[j][w * 4..w * 4 + 4].copy_from_slice(body.get(p..p + 4)?);
+                p += 4;
+            }
+        }
+        out.push(Input::decode(&refs[j], 0)?);
+    }
+    Some(out)
+}
 
 /// A decoded packet. Sizes are exact; `inputs` holds
 /// `count * popcount(agent_mask)` entries in tick-major, slot-ascending order.
@@ -85,7 +172,9 @@ pub enum Packet {
     },
     Input {
         base_tick: u32,
-        agent_mask: u8,
+        /// Bit i = slot i carries an input each tick (u16 since protocol 4 —
+        /// 16 agents [S mp-16-slots]; was u8).
+        agent_mask: u16,
         ack_tick: u32,
         ack_bits: u32,
         inputs: Vec<Input>,
@@ -104,7 +193,9 @@ pub enum Packet {
         reason: u8,
     },
     SlotMap {
-        human_slots: u8,
+        /// Bit i = slot i is a live human (u16 since protocol 4 [S
+        /// mp-16-slots]; was u8).
+        human_slots: u16,
     },
     Go {
         first_tick: u32,
@@ -120,6 +211,10 @@ pub enum Packet {
         first_tick: u32,
         snapshot_tick: u32,
         snapshot_hash: u64,
+        /// The earlier late joins (slot, join tick) up to the snapshot — the replay must spawn
+        /// those bodies where the live machines did (mp-online-failures: a second late join, or
+        /// a reconnect of a late joiner, could never verify without them).
+        joins: Vec<(u8, u32)>,
     },
     /// Host → late joiner: one chunk of the recorded run log
     /// (`tick_count × MAX_AGENTS` inputs, tick-major, slot-ascending).
@@ -140,6 +235,21 @@ pub enum Packet {
     JoinSlot {
         slot: u8,
         join_tick: u32,
+    },
+    /// Either way: a round-trip probe; the receiver answers PONG with the same stamp at once
+    /// (net-internet: the RTT the adaptive input delay is chosen from).
+    Ping {
+        stamp: u32,
+    },
+    Pong {
+        stamp: u32,
+    },
+    /// Host → all: from `from_tick` on, the input sampled while running tick `t` is scheduled
+    /// for `t + delay` (net-internet: the adaptive input delay, announced ahead of the
+    /// boundary so every machine switches at the same tick).
+    Delay {
+        from_tick: u32,
+        delay: u8,
     },
 }
 
@@ -195,16 +305,28 @@ pub fn encode(p: &Packet, out: &mut Vec<u8>) {
             out.push(PT_INPUT);
             out.push(0);
             out.extend_from_slice(&base_tick.to_le_bytes());
-            out.push(*agent_mask);
+            out.extend_from_slice(&agent_mask.to_le_bytes());
             let per_tick = agent_mask.count_ones().max(1) as usize;
             out.push((inputs.len() / per_tick) as u8);
             out.extend_from_slice(&ack_tick.to_le_bytes());
             out.extend_from_slice(&ack_bits.to_le_bytes());
-            for inp in inputs {
-                let mut b = [0u8; INPUT_WIRE_SIZE];
-                inp.encode(&mut b, 0);
-                out.extend_from_slice(&b);
-            }
+            encode_compact_inputs(*agent_mask, inputs, out);
+        }
+        Packet::Ping { stamp } => {
+            out.push(PT_PING);
+            out.push(0);
+            out.extend_from_slice(&stamp.to_le_bytes());
+        }
+        Packet::Pong { stamp } => {
+            out.push(PT_PONG);
+            out.push(0);
+            out.extend_from_slice(&stamp.to_le_bytes());
+        }
+        Packet::Delay { from_tick, delay } => {
+            out.push(PT_DELAY);
+            out.push(0);
+            out.extend_from_slice(&from_tick.to_le_bytes());
+            out.push(*delay);
         }
         Packet::Hash { tick, hash, prev_tick, prev_hash } => {
             out.push(PT_HASH);
@@ -229,8 +351,8 @@ pub fn encode(p: &Packet, out: &mut Vec<u8>) {
         Packet::SlotMap { human_slots } => {
             out.push(PT_SLOTMAP);
             out.push(0);
-            out.push(*human_slots);
-            out.extend_from_slice(&[0, 0, 0]);
+            out.extend_from_slice(&human_slots.to_le_bytes());
+            out.extend_from_slice(&[0, 0]);
         }
         Packet::Go { first_tick } => {
             out.push(PT_GO);
@@ -243,12 +365,18 @@ pub fn encode(p: &Packet, out: &mut Vec<u8>) {
             out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
             out.extend_from_slice(bytes);
         }
-        Packet::JoinBegin { first_tick, snapshot_tick, snapshot_hash } => {
+        Packet::JoinBegin { first_tick, snapshot_tick, snapshot_hash, joins } => {
             out.push(PT_JOIN_BEGIN);
             out.push(0);
             out.extend_from_slice(&first_tick.to_le_bytes());
             out.extend_from_slice(&snapshot_tick.to_le_bytes());
             out.extend_from_slice(&snapshot_hash.to_le_bytes());
+            let n = joins.len().min(255);
+            out.push(n as u8);
+            for (slot, tick) in joins.iter().take(n) {
+                out.push(*slot);
+                out.extend_from_slice(&tick.to_le_bytes());
+            }
         }
         Packet::JoinLog { first_tick, tick_count, chunk_index, chunk_count, inputs } => {
             out.push(PT_JOIN_LOG);
@@ -330,30 +458,38 @@ pub fn decode(buf: &[u8]) -> Option<Packet> {
             Some(Packet::Refuse { reason: body[0] })
         }
         PT_INPUT => {
-            if body.len() < 11 {
+            // The 15-byte fixed head (protocol ≤ 3: 14 — the mask was u8).
+            if body.len() < 15 {
                 return None;
             }
             let base_tick = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
-            let agent_mask = body[4];
-            let count = body[5] as usize;
-            let ack_tick = u32::from_le_bytes([body[6], body[7], body[8], body[9]]);
-            let ack_bits = u32::from_le_bytes([body[10], body[11], body[12], body[13]]);
-            if agent_mask == 0 {
+            let agent_mask = u16::from_le_bytes([body[4], body[5]]);
+            let count = body[6] as usize;
+            let ack_tick = u32::from_le_bytes([body[7], body[8], body[9], body[10]]);
+            let ack_bits = u32::from_le_bytes([body[11], body[12], body[13], body[14]]);
+            // count 0 = a pure ack (protocol 5); a mask of 0 = every slot NEUTRAL over the
+            // covered ticks (the relay omits slots it knows are NEUTRAL there).
+            if count > MAX_INPUT_TICKS {
                 return None;
             }
-            let per_tick = agent_mask.count_ones() as usize;
-            if count == 0 || count > MAX_INPUT_COUNT_C2H {
-                return None;
-            }
-            let need = 14 + count * per_tick * INPUT_WIRE_SIZE;
-            if body.len() < need {
-                return None;
-            }
-            let mut inputs = Vec::with_capacity(count * per_tick);
-            for i in 0..count * per_tick {
-                inputs.push(Input::decode(body, 14 + i * INPUT_WIRE_SIZE)?);
-            }
+            let inputs = decode_compact_inputs(agent_mask, count, &body[15..])?;
             Some(Packet::Input { base_tick, agent_mask, ack_tick, ack_bits, inputs })
+        }
+        PT_PING | PT_PONG => {
+            if body.len() < 4 {
+                return None;
+            }
+            let stamp = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+            Some(if ptype == PT_PING { Packet::Ping { stamp } } else { Packet::Pong { stamp } })
+        }
+        PT_DELAY => {
+            if body.len() < 5 {
+                return None;
+            }
+            Some(Packet::Delay {
+                from_tick: u32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                delay: body[4],
+            })
         }
         PT_HASH => {
             if body.len() < 24 {
@@ -385,10 +521,10 @@ pub fn decode(buf: &[u8]) -> Option<Packet> {
             Some(Packet::Leave { slot: body[0], reason: body[1] })
         }
         PT_SLOTMAP => {
-            if body.is_empty() {
+            if body.len() < 2 {
                 return None;
             }
-            Some(Packet::SlotMap { human_slots: body[0] })
+            Some(Packet::SlotMap { human_slots: u16::from_le_bytes([body[0], body[1]]) })
         }
         PT_GO => {
             if body.len() < 4 {
@@ -412,12 +548,26 @@ pub fn decode(buf: &[u8]) -> Option<Packet> {
             if body.len() < 16 {
                 return None;
             }
+            // The join history (mp-online-failures): a count byte + (slot u8, join_tick u32)
+            // per earlier late join; absent = none.
+            let mut joins = Vec::new();
+            if body.len() > 16 {
+                let n = body[16] as usize;
+                if body.len() < 17 + n * 5 {
+                    return None;
+                }
+                for k in 0..n {
+                    let o = 17 + k * 5;
+                    joins.push((body[o], u32::from_le_bytes([body[o + 1], body[o + 2], body[o + 3], body[o + 4]])));
+                }
+            }
             Some(Packet::JoinBegin {
                 first_tick: u32::from_le_bytes([body[0], body[1], body[2], body[3]]),
                 snapshot_tick: u32::from_le_bytes([body[4], body[5], body[6], body[7]]),
                 snapshot_hash: u64::from_le_bytes([
                     body[8], body[9], body[10], body[11], body[12], body[13], body[14], body[15],
                 ]),
+                joins,
             })
         }
         PT_JOIN_LOG => {
@@ -494,7 +644,7 @@ mod tests {
         }
         let p = Packet::Input {
             base_tick: 100,
-            agent_mask: 0b0111,
+            agent_mask: 0b0111u16,
             ack_tick: 97,
             ack_bits: 0b101,
             inputs,
@@ -502,6 +652,126 @@ mod tests {
         let mut b = Vec::new();
         encode(&p, &mut b);
         assert_eq!(decode(&b).unwrap(), p);
+    }
+
+    #[test]
+    fn input_u16_mask_and_size_limits() {
+        // mp-16-slots [S]: a full 16-agent mask roundtrips — bit 15 rides the
+        // high byte the u8 mask could not carry.
+        let inputs = vec![NEUTRAL; 2 * 16];
+        let p = Packet::Input {
+            base_tick: 500,
+            agent_mask: 0xffffu16,
+            ack_tick: 497,
+            ack_bits: 0,
+            inputs,
+        };
+        let mut b = Vec::new();
+        encode(&p, &mut b);
+        assert_eq!(decode(&b).unwrap(), p);
+        assert_eq!(b[8], 0xff, "mask low byte (header 4 + tick 4)");
+        assert_eq!(b[9], 0xff, "mask high byte");
+        // The largest relay packet fits MAX_PACKET: 3 ticks × 15 agents × 28 B
+        // + the 15-byte head + the 4-byte header.
+        let h2c = Packet::Input {
+            base_tick: 0,
+            agent_mask: 0xffffu16 & !(1u16 << 7), // every agent but slot 7
+            ack_tick: u32::MAX,
+            ack_bits: 0,
+            inputs: vec![NEUTRAL; 3 * 15],
+        };
+        encode(&h2c, &mut b);
+        assert!(b.len() <= MAX_PACKET, "the 16-agent H2C relay packet must fit MAX_PACKET: {}", b.len());
+        assert!(decode(&b).is_some());
+    }
+
+    /// net-internet (protocol 5): the compact inputs round-trip bit-exact; unchanged inputs
+    /// cost one byte; the worst case (every word of 15 agents changing every tick) still fits
+    /// 3 ticks in [`MAX_PACKET`]; a truncated body is refused (sister).
+    #[test]
+    fn compact_inputs_roundtrip_and_size() {
+        let mut inputs = Vec::new();
+        for t in 0..5u32 {
+            for s in 0..3u32 {
+                inputs.push(Input {
+                    forward: if s == 1 { 1.0 } else { 0.0 },
+                    turn: (t * 7 + s) as f32 * 0.013,
+                    look: -0.25,
+                    jump: t == 2,
+                    switch_to: if t == 3 { Some(4) } else { None },
+                    held: 2,
+                    shot: t == 4 && s == 0,
+                    ..NEUTRAL
+                });
+            }
+        }
+        let p = Packet::Input { base_tick: 77, agent_mask: 0b1011, ack_tick: 70, ack_bits: 0b11, inputs };
+        let mut b = Vec::new();
+        encode(&p, &mut b);
+        assert_eq!(decode(&b), Some(p.clone()));
+        assert!(decode(&b[..b.len() - 1]).is_none(), "a cut body is refused");
+        // Unchanged inputs: one word-mask byte each.
+        let idle = Packet::Input { base_tick: 0, agent_mask: 0x7fff, ack_tick: 0, ack_bits: 0, inputs: vec![NEUTRAL; 4 * 15] };
+        encode(&idle, &mut b);
+        assert_eq!(b.len(), INPUT_HEAD_LEN + 4 * 15, "NEUTRAL x 60 = 60 bytes");
+        assert_eq!(decode(&b), Some(idle));
+        assert_eq!(compact_input_len(&NEUTRAL, &NEUTRAL), 1);
+        // The worst case: every word differs from the previous tick's.
+        let mut worst = Vec::new();
+        for t in 0..3u32 {
+            for s in 0..15u32 {
+                worst.push(Input {
+                    forward: 0.1 + t as f32,
+                    strafe: 0.2 + t as f32,
+                    turn: 0.3 + t as f32 + s as f32,
+                    look: 0.4 + t as f32,
+                    jump: t % 2 == 0,
+                    crouch: t % 2 == 1,
+                    weapon_cycle: t as i8 + 1,
+                    switch_to: Some(t as u8),
+                    held: t as u8 + 1,
+                    ..NEUTRAL
+                });
+            }
+        }
+        let w = Packet::Input { base_tick: 0, agent_mask: 0x7fff, ack_tick: 0, ack_bits: 0, inputs: worst };
+        encode(&w, &mut b);
+        assert_eq!(b.len(), INPUT_HEAD_LEN + 3 * 15 * 25);
+        assert!(b.len() <= MAX_PACKET, "3 worst-case relay ticks fit: {}", b.len());
+        assert_eq!(decode(&b), Some(w));
+    }
+
+    /// A pure ack (count 0), PING/PONG and DELAY round-trip; a bad word mask is refused.
+    #[test]
+    fn ack_probe_delay_roundtrip() {
+        let mut b = Vec::new();
+        for p in [
+            Packet::Input { base_tick: 9, agent_mask: 1 << 3, ack_tick: 8, ack_bits: 5, inputs: vec![] },
+            Packet::Ping { stamp: 123_456 },
+            Packet::Pong { stamp: 7 },
+            Packet::Delay { from_tick: 600, delay: 9 },
+        ] {
+            encode(&p, &mut b);
+            assert_eq!(decode(&b), Some(p));
+        }
+        encode(&Packet::Delay { from_tick: 1, delay: 2 }, &mut b);
+        assert!(decode(&b[..b.len() - 1]).is_none(), "a cut DELAY is refused");
+        let mut bad = Vec::new();
+        encode(&Packet::Input { base_tick: 0, agent_mask: 1, ack_tick: 0, ack_bits: 0, inputs: vec![NEUTRAL] }, &mut bad);
+        let n = bad.len();
+        bad[n - 1] = 0x80; // a word-mask bit past the 6 words
+        assert!(decode(&bad).is_none(), "an impossible word mask is refused");
+    }
+
+    #[test]
+    fn slotmap_u16_roundtrip() {
+        // mp-16-slots [S]: slot 15's bit survives (u8 could not carry it).
+        let p = Packet::SlotMap { human_slots: 0b1000_0000_0000_0001u16 };
+        let mut b = Vec::new();
+        encode(&p, &mut b);
+        assert_eq!(decode(&b).unwrap(), p);
+        // Sister: a body shorter than the u16 mask must not decode.
+        assert!(decode(&b[..b.len() - 3]).is_none());
     }
 
     #[test]
@@ -531,6 +801,22 @@ mod tests {
         assert!(decode(&b).is_none());
         // Sister assertion: truncated payload must not decode.
         assert!(decode(&b[..3]).is_none());
+    }
+
+    /// mp-online-failures: JOIN_BEGIN carries the join history; an empty one round-trips too,
+    /// and a truncated history is rejected (sister).
+    #[test]
+    fn join_begin_history_roundtrip_and_truncation() {
+        for joins in [vec![], vec![(2u8, 391u32), (5, 77_001)]] {
+            let p = Packet::JoinBegin { first_tick: 0, snapshot_tick: 300, snapshot_hash: 0xDEAD_BEEF_0123, joins };
+            let mut b = Vec::new();
+            encode(&p, &mut b);
+            assert_eq!(decode(&b), Some(p));
+        }
+        let mut b = Vec::new();
+        encode(&Packet::JoinBegin { first_tick: 0, snapshot_tick: 1, snapshot_hash: 2, joins: vec![(1, 9)] }, &mut b);
+        b.pop();
+        assert_eq!(decode(&b), None, "a cut history entry is refused");
     }
 
     #[test]

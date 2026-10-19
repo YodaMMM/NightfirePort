@@ -15,7 +15,7 @@ const HANDLED_NIS_OPS: usize = 20;
 const HANDLED_EVENT_KINDS: usize = 17;
 /// The trigger action codes nf-game/src/triggers.rs `kind` module handles (game dispatches 8).
 const HANDLED_TRIGGER_ACTIONS: usize = 8;
-/// Placement types with any handling: 53 simulated + 8 draw-only (game: 73 spawn cases).
+/// Placement types with any handling: 54 simulated + 8 draw-only (game: 73 spawn cases).
 /// cover-nodes: 0xE5/0xE6 joined the simulated set (nf-game/src/cover.rs `from_placement` +
 /// `build` [M 0x1d4880 case 0/1/2/0xb → 0x1d04f0 case 0xe5/0xe6]; batch-1016c keeps `build`
 /// main-map-only, U-050). ai-points: 0xE9 joined it (nf-game/src/aipoint.rs, `Drone_AIPoint` 0x137550).
@@ -25,8 +25,10 @@ const HANDLED_TRIGGER_ACTIONS: usize = 8;
 /// start-slots: 0x2D joined it (nf-game/src/player.rs `starts_from_placements` — the main map's
 /// 0x24/0x2d placements register with the game's kind at entry+0x22 [M 0x195c00:33, disasm
 /// 0x1d0a00/0x1d0e98]; `Player_Start` 0x190fd0 picks kind-1 only).
+/// lightning: 0x2C joined it (nf-game/src/world_fx.rs `pair_lightning_recs`/`LightningStrike` —
+/// `Lightning_Create` 0x18cde8's pairing and `Lightning_Update` 0x18cf68's visibility).
 /// (batch-1016c: s/hurt-volumes dropped at the merge — 0xE4 stays unhandled.)
-const HANDLED_PLACEMENT_TYPES: usize = 62;
+const HANDLED_PLACEMENT_TYPES: usize = 63;
 
 fn census() -> Option<&'static Census> {
     static C: OnceLock<Option<Census>> = OnceLock::new();
@@ -196,24 +198,28 @@ fn trigger_action_census_matches_the_doc() {
 fn placement_type_census_matches_the_doc() {
     let Some(c) = census() else { eprintln!("skip: NF_ISO not set"); return };
     assert_eq!(c.placements, 7372, "dynamic-eligible placement records (flags bit 0xa000 clear)");
-    // The 11 unhandled-or-ignored types, most-occurring first (docs/systems/script-census.md).
+    // The unhandled-or-ignored types, most-occurring first (docs/systems/script-census.md).
     // cover-nodes: 0xE5 (584) / 0xE6 (384) moved out of this list; ai-points: 0xE9 (162);
     // sensor-volumes: 0x28 (62); music-triggers: 0xFB (15); start-slots: 0x2d (51) — the port now
     // creates and runs them (0x2d registers into the start lists with kind 0); movie-trigger-41:
-    // 0xF4 (1) — the movie-player trigger.
+    // 0xF4 (1) — the movie-player trigger; script-ops-unported: 0x2c (15) — the lightning bolts
+    // (world_fx.rs `pair_lightning_recs` + `LightningStrike::tick`).
     let want: &[(u8, u64)] = &[(0xe4, 64),
-        (0xff, 39), (0x27, 41), (0xdd, 33), (0xf6, 33), (0xf7, 33), (0x2c, 15), (0x39, 8),
-        (0xf3, 8), (0x2b, 3), (0x38, 1)];
+        (0xff, 39), (0x27, 41), (0xdd, 33), (0xf6, 33), (0xf7, 33), (0x38, 1)];
     for (t, n) in want { assert_eq!(c.placement_types.get(t), Some(n), "type 0x{t:02x}"); }
     let unhandled: u64 = want.iter().map(|(_, n)| n).sum();
-    assert_eq!(unhandled, 278, "records on unhandled types (140 game-handled + 138 neither side touches)");
+    assert_eq!(unhandled, 244, "records on unhandled types (the game-handled 0x27/0x38/0xe4 + the 138 neither side touches)");
     assert_eq!(*c.placement_types.get(&0xe5).unwrap(), 584, "cover corner placements");
     assert_eq!(*c.placement_types.get(&0xe6).unwrap(), 384, "cover low placements");
     assert_eq!(*c.placement_types.get(&0xfb).unwrap(), 15, "music trigger placements");
     assert_eq!(*c.placement_types.get(&0x2d).unwrap(), 51, "second start-position set (18 main-map + 33 shell-map dummies)");
+    assert_eq!(*c.placement_types.get(&0x2c).unwrap(), 15, "lightning bolts (11 in 07000001, 4 in 07000041 — now paired strikes)");
+    assert_eq!(*c.placement_types.get(&0x39).unwrap(), 8, "space missiles (ported, space_missile.rs)");
+    assert_eq!(*c.placement_types.get(&0xf3).unwrap(), 8, "trees (ported, world_fx.rs TreeFx)");
+    assert_eq!(*c.placement_types.get(&0x2b).unwrap(), 3, "leaf gens (ported, world_fx.rs LeafGenFx)");
     assert_eq!(c.placement_types.values().sum::<u64>(), 7372, "type histogram covers every record");
-    assert_eq!(HANDLED_PLACEMENT_TYPES, 62, "53 sim + 8 draw-only + 0x2d start-slots (game: 73 spawn cases)");
-    assert_eq!(HANDLED_PLACEMENT_TYPES, 62, "54 sim + 8 draw-only (game: 73 spawn cases; 0xF4 since movie-trigger-41)");
+    assert_eq!(HANDLED_PLACEMENT_TYPES, 63, "54 sim + 8 draw-only + 0x2d start-slots (game: 73 spawn cases)");
+    assert_eq!(HANDLED_PLACEMENT_TYPES, 63, "55 sim + 8 draw-only (game: 73 spawn cases; 0x2c since script-ops-unported)");
 }
 
 #[test]

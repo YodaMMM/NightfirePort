@@ -1523,7 +1523,12 @@ pub enum MpNetError { BadAddress, Busy, Denied }
 
 /// The join side's page state — what PAGE_MP_NETJOIN and PAGE_MP_LOBBY draw [S §2.2].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MpNetState { Idle, Dialing, Refused, TimedOut, InLobby }
+pub enum MpNetState {
+    Idle, Dialing, Refused, TimedOut, InLobby,
+    /// mp-online-failures: the dial reached a match in progress — the late-join handover runs
+    /// (the app replays the host's log and drops the player into the match) [S].
+    Joining,
+}
 
 /// One lobby agent as the session reports it: slot 0 = this machine's agent, slots 1..3 = the
 /// remote panels 2-4 [S §3].
@@ -1604,6 +1609,9 @@ pub trait MpSession {
     fn take_row_edit(&mut self) -> Option<nf_net::LobbyEdit> { None }
     /// Close cleanly (Back / cancel / the match handover's end).
     fn close(&mut self);
+    /// mp-online-failures: the dial reached a match already in progress — the host is serving
+    /// the late-join handover (the join page shows "joining"; no lobby will come). Default false.
+    fn joining_match(&self) -> bool { false }
     /// net-p2p: the internet reachability lines for the online pages (None: not probing — the
     /// fakes, LAN-only builds) [S docs/systems/net-p2p.md §4].
     fn reach(&self) -> Option<MpReach> { None }
@@ -1755,6 +1763,28 @@ impl MpBot {
             (3, 4, 150, 1, 125, 75, 6),   // Max Zorin
         ];
         T[character.min(T.len() - 1)]
+    }
+    /// The 0x12-byte `mpbots` record this menu row stands for — the bytes `MP_Start` 0x183a50 /
+    /// `BOT_init` 0x1249e8 read [M the BotRecord layout]: the character's `default_bot_stats` row
+    /// (the menu-less bytes: +0x09 side, +0x0A weapon class, +0x0C flags, +0x0D editable) with the
+    /// seven menu stats over it, then +0x0E enabled, +0x0F team (1 = MI6), +0x10 character, +0x11
+    /// dirty [M P_MPBOTSETUP 0x211270:17-135's stores; C_SBMPBTCHOOSE 0x210f08:26-43].
+    pub fn record(&self) -> nf_game::mp::bots::BotRecord {
+        let ch = (self.character as usize).min(nf_game::mp::bots::DEFAULT_BOT_STATS_COUNT - 1);
+        let mut r = [0u8; nf_game::mp::bots::BOT_RECORD_SIZE];
+        r[..0x0E].copy_from_slice(&nf_game::mp::bots::DEFAULT_BOT_STATS[ch].0);
+        r[0x00] = self.skill.clamp(0, 255) as u8;
+        r[0x02..0x04].copy_from_slice(&(self.aim.clamp(0, 0xffff) as u16).to_le_bytes());
+        r[0x04..0x06].copy_from_slice(&(self.hit_points.clamp(0, 0xffff) as u16).to_le_bytes());
+        r[0x06] = self.speed.clamp(0, 255) as u8;
+        r[0x07] = self.recovery1.clamp(0, 255) as u8;
+        r[0x08] = self.recovery2.clamp(0, 255) as u8;
+        r[0x0B] = self.trait_id.clamp(0, 255) as u8;
+        r[0x0E] = self.enabled as u8;
+        r[0x0F] = self.team_mi6 as u8;
+        r[0x10] = ch as u8;
+        r[0x11] = self.dirty as u8;
+        nf_game::mp::bots::BotRecord(r)
     }
     /// The presets' stats-editable flag (+0x0D = 1 for characters 0-14) [M P_MPBOTSETUP
     /// 0x211270:23-48 locks the stat rows for character >= 0x0F].
@@ -2243,7 +2273,7 @@ pub struct FrontEnd {
     /// at +2+slot·0x12 (0x2DEEAA in the game); the fields' game offsets are in MpBot]. Fresh
     /// records have the game's default characters 6/7/8/9 [M C_SBMPOPTIONS 0x20e818's msg-0x51
     /// init writes DAT_002deeba=6, 0x2deecc=7, 0x2deede=8, 0x2deef0=9] and enabled = 0.
-    pub mp_bots: [MpBot; 4],
+    pub mp_bots: [MpBot; nf_net::lobby::BOTS],
     /// P_MPSETUP's per-agent state for agent 1: 2 = Choose Team (team games), 3 = Choose
     /// Character (FFA), 4 = Health Handicap, 5 = chosen [M P_MPSETUP 0x20d7a8 sets
     /// mp_stuff+0x360 to 2/3 from the scenario's 0x20000000 bit; C_RBMPSETUP 0x20de58's 0x4b
@@ -2346,6 +2376,15 @@ pub struct FrontEnd {
     pub mp_net_error: Option<MpNetError>,
     /// The Dialing countdown in menu ticks; 0 → TimedOut [S §2.2 — MP_NET_TIMEOUT_TICKS = 10 s].
     pub mp_net_timeout: u32,
+    /// The window's height in pixels (the app sets it each frame): the online lobby keeps its text
+    /// a constant on-screen size, so a taller window shows more rows and a short one scrolls [S].
+    pub view_h: f32,
+    /// Online rematch: the finished online match's way back (the app sets it when the debriefing
+    /// opens): (this machine hosted, the host's port / the address it dialed).
+    pub mp_online_rejoin: Option<(bool, String)>,
+    /// The rejoin in progress after the debriefing's Continue: (host, port/address, tries left,
+    /// cooldown ticks) — the host re-listens, the client re-dials until the host is up [S].
+    pub mp_auto_rejoin: Option<(bool, String, u32, u32)>,
     /// The online session behind the flow — None = offline (the host wires 051's real session,
     /// the tests a fake) [S §3].
     pub mp_session: Option<Box<dyn MpSession>>,
@@ -2641,6 +2680,9 @@ impl FrontEnd {
             mp_net_state: MpNetState::Idle,
             mp_net_error: None,
             mp_net_timeout: 0,
+            view_h: 720.0,
+            mp_online_rejoin: None,
+            mp_auto_rejoin: None,
             mp_session: None,
             // mp-lobby-one-screen: the couch boot words [M the same defaults above; the map
             // starts on MP_MAP_ROWS row 0 — the boot +0x1A8 = 0 is "no map", which the one
@@ -5592,6 +5634,8 @@ impl FrontEnd {
             // The join address page: the typing rides mp_net_type / mp_net_backspace /
             // mp_net_paste (the keyboard layer routes around action()), ✕ = Connect [S §2.2].
             Page::MpNetJoin => {
+                // mp-online-failures: while the late join runs only Back acts (it cancels the join).
+                if self.mp_net_state == MpNetState::Joining && a != Action::Back { return false; }
                 match a {
                     // net-lobby-list: ▲▼ walk the address row (0) and the lobby rows (1..).
                     Action::Up if self.cursor > 0 => { self.cursor -= 1; return true; }
@@ -5974,6 +6018,25 @@ impl FrontEnd {
             Page::MpDebriefing => {
                 // [M C_MPDBG 0x217860:9-10 → 0x44 0x4000001a; the page's 0x4c re-selects the row
                 // of MPSettings+0x1A4 (0x217348:25) — see enter_page.]
+                // Online: Continue (and Replay — the local re-request would run one machine's arena
+                // alone) goes back to the online lobby: the host re-listens on its port and the
+                // client re-dials it, then the host starts the next match [S port design].
+                if matches!(a, Action::Confirm | Action::Extra) {
+                    if let Some((host, target)) = self.mp_online_rejoin.take() {
+                        self.mp_net_state = MpNetState::Idle;
+                        self.mp_net_error = None;
+                        if host {
+                            if let Ok(port) = target.parse::<u32>() { self.mp_net_port = port; }
+                            self.page = Page::MpHost;
+                        } else {
+                            self.mp_net_addr = target.clone();
+                            self.page = Page::MpNetJoin;
+                        }
+                        self.cursor = 0;
+                        self.mp_auto_rejoin = Some((host, target, 40, 0));
+                        return true;
+                    }
+                }
                 if a == Action::Confirm { self.enter_page(Page::MpScenario); return true; }
                 if a == Action::Extra {
                     // C_MPDBG 0x217860:12-16: ResetMap_LevelToLoad(MPSettings+0x1A8) + the fade
@@ -6225,7 +6288,9 @@ impl FrontEnd {
     /// only type-3 entry], unlocked = mask bit 0x3e]. P_MPSCENARIO 0x217348 recomputes it on every
     /// page enter, so a pure read is equivalent. The unlock-everything cheat does NOT set it [M
     /// menu_unlock_everything never touches the bonus words].
-    pub fn mp_explosive_unlocked(&self) -> bool { self.mp_bonus_mask >> 0x3e & 1 != 0 }
+    /// (mp-lobby-settings: the port's unlock-everything default opens it too, like every other
+    /// locked MP row — `MpLobby::explosive_unlocked` [S].)
+    pub fn mp_explosive_unlocked(&self) -> bool { self.unlock_all || self.mp_bonus_mask >> 0x3e & 1 != 0 }
 
     /// [M Menu_UnlockMPSettings 0x1ff698 — decomp work/decomp/ACTION.ELF/001ff698:53-104: the
     /// OR of the four player bonus words (`bonus | DAT_002e1b90 | DAT_002e1b98 | DAT_002e1ba0`
@@ -6347,19 +6412,22 @@ impl FrontEnd {
     /// The same checks as a pure gate for the one-screen lobby's Start [M 0x20e818:50-130 —
     /// mp-lobby-one-screen; 0 = pass, else the error-box label].
     pub fn mp_start_check_error(&self) -> u32 {
-        let humans = self.mp_join.iter().filter(|a| a.joined).count();
+        let hs = self.mp_humans();
+        let humans = hs.len();
         let bots = self.mp_bots.iter().filter(|b| b.enabled).count();
         let team = self.mp_scenario & 0x2000_0000 != 0;
         if !team {
             // FFA: the game refuses more than one "good" (MI6-side) player [M the uVar1 > 1 arm,
             // Txt 0x1000311; the decomp's counting is thin — the string settles the intent].
-            let good = self.mp_join.iter().filter(|a| a.joined && a.team == 1).count();
+            // The online lobby has no FFA team row (the rows' team word is a team-game pick
+            // only), so its stale team words never refuse an FFA start [S].
+            let good = if self.mp_hosting { 0 } else { hs.iter().filter(|h| h.1 == 1).count() };
             if good > 1 { return 0x0100_0311; }
         } else {
             // Team: both sides need someone [M the 0x389 arm with 0x1c7/0x1c8].
-            let blue = self.mp_join.iter().filter(|a| a.joined && a.team == 1).count()
+            let blue = hs.iter().filter(|h| h.1 == 1).count()
                 + self.mp_bots.iter().filter(|b| b.enabled && b.team_mi6).count();
-            let red = self.mp_join.iter().filter(|a| a.joined && a.team == 0).count()
+            let red = hs.iter().filter(|h| h.1 == 0).count()
                 + self.mp_bots.iter().filter(|b| b.enabled && !b.team_mi6).count();
             if blue == 0 || red == 0 { return 0x389; }
         }
@@ -6415,7 +6483,19 @@ impl FrontEnd {
     }
 
     /// The joined humans [M P_MPCONFIRM's compaction counts mpjoin != 0].
-    pub fn mp_human_count(&self) -> usize { self.mp_join.iter().filter(|a| a.joined).count() }
+    pub fn mp_human_count(&self) -> usize { self.mp_humans().len() }
+
+    /// The match's humans as (slot, team, skin, codename): the couch's four join panels, or —
+    /// while hosting the online lobby — the one screen's 16 player rows (the panels hold 4, so a
+    /// 5th..16th human was dropped from the count and the settings) [S mp-16-slots].
+    pub fn mp_humans(&self) -> Vec<(usize, u32, u32, String)> {
+        if self.mp_hosting {
+            return self.mp_one.players.iter().enumerate().filter(|(_, p)| p.joined)
+                .map(|(i, p)| (i, p.team & 1, p.character.min(28), p.codename.clone())).collect();
+        }
+        self.mp_join.iter().enumerate().filter(|(_, a)| a.joined)
+            .map(|(i, a)| (i, a.team, a.skin, a.codename.clone())).collect()
+    }
     /// The enabled bots [M Menu_PrepareBots 0x1f94a0 compacts the enabled records; MPSettings
     /// +0x1B0 = the count, or 0 on Ravine [M :85-88]].
     pub fn mp_bot_count(&self) -> usize {
@@ -6618,15 +6698,44 @@ impl FrontEnd {
         // place (mp-menus.md row 0x1ae) and MP_RegisterBulletHit 0x1857c0:43-57 reads it; the
         // port rebuilds the struct here, so the choice must be mapped or it is dropped.]
         s.friendly_fire = self.mp_friendly_fire;
+        // mp-combat-weapons: the other two Player Mods rows — +0x1BC Professional Mode (the
+        // port's `capture_reward` word) and +0x1C8 Location Damage [M P_MPPLAYERMODS
+        // 0x2104d0:14-15]; the MP pain path reads both [M Player_HandlePain 0x1902c8:62-81].
+        s.capture_reward = self.mp_player_mods[0];
+        s.location_damage = self.mp_player_mods[1];
         // [M P_MPCONFIRM 0x20ec00's msg-0x4b: 0x20f708 andi 1 → 0x20f710 sw — Explosive Scenery
         // masks to 0/1 at match start, so the locked page's stale 0x10 can never arm it]
         self.mp_envmods[2] &= 1;
+        // mp-lobby-settings: the Player Mods / Enviro-Mods words ride the settings — the game's
+        // pages write them straight into MPSettings (+0x1BC/+0x1C8 [M P_MPPLAYERMODS 0x2104d0:14-15],
+        // +0x1C0/+0x1B8/+0x1D4/+0x1D0/+0x1CC [M P_MPENVIROMODS 0x210030]) and the match reads them
+        // there; the port rebuilt the struct here and dropped all seven (no setting on either
+        // page reached a match).
+        s.spawn_policy = self.mp_envmods[0];
+        s.gun_emplacements = self.mp_envmods[1];
+        s.explosive_scenery = self.mp_envmods[2] & 1;
+        s.grapple = self.mp_envmods[3];
+        s.vehicles = self.mp_envmods[4];
+        // `Menu_PrepareBots` 0x1f94a0: the enabled records compacted to the front, slot order
+        // [M]; the match inits one bot per record (the port used the disc's initial records, so
+        // the menu's characters/skills/teams never reached a bot).
+        s.bot_records = if self.mp_level == 0x0700_004b { Vec::new() } else {
+            self.mp_bots.iter().filter(|b| b.enabled).map(|b| b.record()).collect()
+        };
         s.master = 1;                             // [M +0x180 = 1]
         s.total_players = humans as u32 + bots;   // [M MP_Start 0x183a50:164]
         s.team_game = (self.mp_scenario >> 29) & 1;   // [M MP_Init 0x183438:41 — the core re-derives]
-        for (i, slot) in self.mp_join.iter().enumerate().take(4) {
-            if !slot.joined { continue; }
-            s.players[i] = nf_game::mp::MpPlayer { team: slot.team, skin: slot.skin, armor_bonus: 0, radar_on: 1, codename: slot.codename.clone() };
+        for (i, team, skin, codename) in self.mp_humans() {
+            if i >= s.players.len() { continue; }
+            s.players[i] = nf_game::mp::MpPlayer { team, skin, armor_bonus: 0, radar_on: 1, codename };
+        }
+        // mp-bot-objectives: the enabled bots' team bytes (record +0x0F — blue = MI6 = team 1,
+        // the confirm summary's split [M :337-352]) ride the bot slots' team words; the bots follow
+        // the humans in enabled order (`Menu_PrepareBots` 0x1f94a0 compacts them [M]) and the
+        // match's `create_bots` keeps the word in a team game.
+        for (k, b) in self.mp_bots.iter().filter(|b| b.enabled).take(bots as usize).enumerate() {
+            let slot = humans + k;
+            if slot < nf_game::mp::MP_MAX_SLOTS { s.players[slot].team = b.team_mi6 as u32; }
         }
         self.mp_match_settings = Some(s.clone());
         // app-state-parity: the confirm arm writes GameState+0x28 = 1 BEFORE the level request
@@ -6637,6 +6746,15 @@ impl FrontEnd {
         // Menu_RunMiniMission 0x1ffb90:22, Boot_LoadPTPData 0x1c8560:36). The App adopts it
         // through the same channel the difficulty page's pick rides (`menu_after`'s take).
         self.requested_difficulty = Some(1);
+        // mp-lobby-settings: an online match draws its own lockstep seed (the flag path's
+        // `--net-host` does the same); the lobby's matches all ran on seed 0, so the Random weapon
+        // set / turrets / vehicles (seeded from it) were the same every match [S]. The host draws
+        // it once and the settings carry it to every client.
+        if self.mp_hosting {
+            let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(1);
+            s.seed = nanos | 1;
+            self.mp_match_settings = Some(s.clone());
+        }
         // net-online-lobby: while hosting, the settings ride the session — the clients' poll
         // turns them into their own handover [S docs/systems/net-online-lobby.md §2.1].
         if self.mp_hosting {
@@ -6701,6 +6819,7 @@ impl FrontEnd {
         self.mp_weapon_set = s.weapon_set;
         self.mp_radar = s.radar;
         self.mp_friendly_fire = s.friendly_fire;
+        self.mp_player_mods = [s.capture_reward, s.location_damage];
         for (i, slot) in self.mp_join.iter_mut().enumerate().take(4) {
             let joined = (i as u32) < s.human_count;
             slot.joined = joined;
@@ -6841,7 +6960,25 @@ impl FrontEnd {
     /// sprintf "%s %d" @0x30d388 with slot+1].
     /// An online player's shown name: its codename, or "Player N" by slot when it sent none.
     fn mp_net_codename(&self) -> String {
-        self.active_profile.clone().unwrap_or_else(|| "Player 1".into())
+        self.mp_save_name().unwrap_or_else(|| "Player 1".into())
+    }
+
+    /// The online name: the player's single-player save codename — the one picked this session,
+    /// else the most recently saved profile on disk (the user: "use the name attached to their SP
+    /// save"); None with no save at all (the host then names the slot "Player N") [S].
+    pub fn mp_save_name(&self) -> Option<String> {
+        if let Some(n) = self.active_profile.as_ref().filter(|n| !n.trim().is_empty()) { return Some(n.clone()); }
+        // The disk scan is the game's (the app arms it at startup): tests never read the
+        // machine's real profiles.
+        if !SAVE_NAMES_FROM_DISK.load(std::sync::atomic::Ordering::Relaxed) { return None; }
+        let dir = self.profile_dir.clone().or_else(crate::settings::config_dir)?;
+        std::fs::read_dir(dir).ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "profile"))
+            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path().file_stem()?.to_string_lossy().into_owned())))
+            .max_by_key(|(m, _)| *m)
+            .map(|(_, n)| n)
+            .filter(|n| !n.trim().is_empty())
     }
 
     /// Host: the Start Listening row [S §2.1]. Arms host mode: the session binds the port, the
@@ -6916,7 +7053,7 @@ impl FrontEnd {
         }
         // A client without a profile sends no name: the host names it by its slot ("Player 2"…),
         // so two profile-less machines don't both read "Player 1" (the two-window check) [S].
-        let codename = self.active_profile.clone().unwrap_or_default();
+        let codename = self.mp_save_name().unwrap_or_default();
         let Some(sess) = self.mp_session.as_mut() else {
             self.mp_net_error = Some(MpNetError::Denied);
             return false;
@@ -6938,8 +7075,28 @@ impl FrontEnd {
     /// The fake (tests) and the real session (051) both ride this.
     pub fn mp_net_poll(&mut self) {
         if self.mp_session.is_none() { return; }
+        // Online rematch: the host re-listens / the client re-dials (retrying while the host's
+        // listen comes up) until the lobby is back.
+        if let Some((host, target, tries, cool)) = self.mp_auto_rejoin.clone() {
+            if self.page == Page::MpOnlineLobby || tries == 0 {
+                self.mp_auto_rejoin = None;
+            } else if cool > 0 {
+                self.mp_auto_rejoin = Some((host, target, tries, cool - 1));
+            } else if host && self.page == Page::MpHost {
+                let ok = self.mp_host_begin();
+                self.mp_auto_rejoin = if ok { None } else { Some((host, target, tries - 1, 60)) };
+            } else if !host && self.mp_net_state == MpNetState::Joining {
+                // The re-dial reached a match in progress: the late join takes it from here.
+                self.mp_auto_rejoin = None;
+            } else if !host && self.page == Page::MpNetJoin && self.mp_net_state != MpNetState::Dialing {
+                self.mp_net_addr = target.clone();
+                self.mp_net_error = None;
+                let _ = self.mp_net_dial();
+                self.mp_auto_rejoin = Some((host, target, tries - 1, 90));
+            }
+        }
         // net-lobby-list: the Join Online page lists the LAN's lobbies while nothing is dialing.
-        let browsing = self.page == Page::MpNetJoin && self.mp_net_state != MpNetState::Dialing && !self.mp_hosting;
+        let browsing = self.page == Page::MpNetJoin && !matches!(self.mp_net_state, MpNetState::Dialing | MpNetState::Joining) && !self.mp_hosting;
         self.mp_session.as_mut().unwrap().browse(browsing);
         if browsing {
             self.mp_session.as_mut().unwrap().poll();
@@ -6977,6 +7134,12 @@ impl FrontEnd {
                 self.mp_session.as_mut().unwrap().poll();
                 let link = self.mp_session.as_ref().unwrap().link();
                 match link {
+                    // mp-online-failures: the host's match is RUNNING — the HELLO began the
+                    // late-join handover, not a lobby seat. The page stays and says so; the app
+                    // adopts the session (mpnet::LobbyAdopt::LateJoin) and runs the replay.
+                    MpNetLink::Connected if self.mp_session.as_ref().unwrap().joining_match() => {
+                        self.mp_net_state = MpNetState::Joining;
+                    }
                     MpNetLink::Connected => {
                         self.mp_net_state = MpNetState::InLobby;
                         // mp-lobby-one-screen: the client lands on the same ONE screen; its
@@ -7007,10 +7170,21 @@ impl FrontEnd {
             }
             MpNetState::InLobby => {
                 self.mp_session.as_mut().unwrap().poll();
-                // The host went away: back to the address page cleanly [S §2.2].
+                // The host went away: back to the address page cleanly [S §2.2], with the
+                // reason on screen (mp-online-failures: the host's LEAVE lands at once — Lost).
                 if self.mp_session.as_ref().unwrap().link() == MpNetLink::Lost {
                     self.mp_net_cancel();
                     self.page = Page::MpNetJoin;
+                    self.cursor = 0;
+                    self.net_notice = Some("The host left the lobby".into());
+                    return;
+                }
+                // The WELCOME came before the late-join handover's first packet: the lobby
+                // page was a guess — the match is running, the join is in progress.
+                if self.mp_session.as_ref().unwrap().joining_match() {
+                    self.mp_net_state = MpNetState::Joining;
+                    self.page = Page::MpNetJoin;
+                    self.cursor = 0;
                     return;
                 }
                 self.mp_net_mirror_agents();
@@ -7034,7 +7208,51 @@ impl FrontEnd {
                     self.mp_client_start(s.clone());
                 }
             }
+            // mp-online-failures: the late-join handover runs (the app owns the replay and the
+            // drop into the match; it closes this front end when the replay verifies). Here only
+            // the failure: the host went away mid-transfer — back to the address page, said.
+            MpNetState::Joining => {
+                self.mp_session.as_mut().unwrap().poll();
+                if self.mp_session.as_ref().unwrap().link() == MpNetLink::Lost {
+                    self.mp_net_cancel();
+                    self.page = Page::MpNetJoin;
+                    self.cursor = 0;
+                    self.net_notice = Some("The host left the match".into());
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// mp-online-failures: the front end a failed online match lands on — the online page this
+    /// machine came from with the reason on screen (`net_notice`, the modal box): the host's
+    /// port page (port kept, cursor on Start Listening) or the client's address page (address
+    /// kept), else the mode page. Called by the app's `net_fail` (a lost host, a desync, a
+    /// refused/failed join) on a front end it then hands the front-end map load. The lobby
+    /// state resets (the old session is closed by the caller; the app wires a fresh one).
+    pub fn mp_net_return(&mut self, rejoin: Option<(bool, String)>, msg: &str) {
+        self.mp_net_cancel();
+        self.mp_auto_rejoin = None;
+        self.mp_online_rejoin = None;
+        self.mp_match_settings = None;
+        self.requested_level = None;
+        self.closed = false;
+        self.net_notice = Some(msg.to_string());
+        match rejoin {
+            Some((true, port)) => {
+                if let Ok(p) = port.parse::<u32>() { self.mp_net_port = p; }
+                self.enter_page(Page::MpHost);
+                self.cursor = 1;
+            }
+            Some((false, addr)) => {
+                self.mp_net_addr = addr;
+                self.enter_page(Page::MpNetJoin);
+                self.cursor = 0;
+            }
+            None => {
+                self.enter_page(Page::MpMode);
+                self.cursor = 0;
+            }
         }
     }
 
@@ -7078,7 +7296,9 @@ impl FrontEnd {
     /// player rows [S §6.4 — slot 0 stays the host's own row; a gone agent un-joins].
     fn mp_net_mirror_lobby_players(&mut self) {
         let agents: Vec<MpNetAgent> = self.mp_session.as_ref().unwrap().agents();
-        for slot in 1..4usize {
+        // Every client slot (1..16 — this walked the couch's 4 panels, so the 5th..16th joiner
+        // never got a lobby row, a ready toggle or a place in the match) [S mp-16-slots].
+        for slot in 1..nf_net::lobby::SLOTS {
             match agents.iter().find(|a| a.slot == slot) {
                 Some(ag) => {
                     let p = &mut self.mp_one.players[slot];
@@ -7143,7 +7363,7 @@ impl FrontEnd {
     }
 
     /// The one screen's player rows — None off the lobby page [S §6.3].
-    pub fn mp_lobby_players(&self) -> Option<&[crate::mp_lobby::MpLobbyPlayer; 4]> {
+    pub fn mp_lobby_players(&self) -> Option<&[crate::mp_lobby::MpLobbyPlayer; nf_net::lobby::SLOTS]> {
         if self.page != Page::MpOnlineLobby { return None; }
         Some(&self.mp_one.players)
     }
@@ -7172,7 +7392,13 @@ impl FrontEnd {
     /// The client's match handover — the host's confirm-page tail [M mp_confirm_start's
     /// handover] with the settings as the host published them [S §2.2]. Pub for the
     /// app-state-parity test (the arm's difficulty write is pinned there).
-    pub fn mp_client_start(&mut self, s: nf_game::mp::MpSettings) {
+    pub fn mp_client_start(&mut self, mut s: nf_game::mp::MpSettings) {
+        // The wire's settings carry no codenames: the lobby's player rows (the host's published
+        // names) fill them, so the client's HUD/debriefing name every human (the two-window
+        // rematch check showed blank names on the client only) [S].
+        for (i, p) in self.mp_one.players.iter().enumerate() {
+            if p.joined && i < s.players.len() && s.players[i].codename.is_empty() { s.players[i].codename = p.codename.clone(); }
+        }
         self.mp_match_settings = Some(s.clone());
         // app-state-parity: the host's confirm tail writes GameState+0x28 = 1 before the load
         // [M 0x20ec00:150]; the client's handover mirrors that tail, so the difficulty rides it
@@ -7221,6 +7447,7 @@ impl FrontEnd {
                 MpNetState::Dialing => Some("Connecting..."),
                 MpNetState::Refused => Some("Connection refused"),
                 MpNetState::TimedOut => Some("Connection timed out"),
+                MpNetState::Joining => Some("Joining the match in progress..."),
                 _ => err,
             },
             Page::MpLobby => if self.mp_lobby_choices.is_none() { Some("Waiting for the host...") } else { None },
@@ -7622,44 +7849,106 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 let nth = names[..k].iter().filter(|x| *x == n).count() + 1;
                 format!("{n} {nth}")
             }).collect();
-            // The settings column: 18 rows visible, scrolled to keep the focus in view.
-            const VIS: usize = 18;
+            // The lobby keeps its text a constant size on screen (the user: "the ui expands with
+            // resolution so it's a scroll bar when smaller" — the 16-player lobbies): `k` is the
+            // page units per 720p unit, so a taller window fits more rows; a list that overflows its
+            // column scrolls with the focus and draws a scroll bar [S].
+            let k = (720.0 / fe.view_h.max(1.0)).clamp(0.4, 1.25);
+            let scroll_bar = |h: &mut Hud, x: f32, y: f32, hh: f32, first: usize, vis: usize, total: usize| {
+                if total <= vis || total == 0 { return; }
+                plate(h, x, y, 3.0, hh);
+                let th = (hh * vis as f32 / total as f32).max(8.0);
+                let ty = y + (hh - th) * first as f32 / (total - vis) as f32;
+                let c = [0.55, 0.50, 0.38, 0.9];
+                let (a, b) = (h.ndc(Anchor::Centre, mx(x), my(ty)), h.ndc(Anchor::Centre, mx(x + 3.0), my(ty + th)));
+                let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.0, 0.0], c };
+                h.ndc_solid(-1, [p([a[0], a[1]]), p([b[0], a[1]]), p([b[0], b[1]]), p([a[0], a[1]]), p([b[0], b[1]]), p([a[0], b[1]])], c);
+            };
+            // The settings column, scrolled to keep the focus in view.
+            let (col_top, col_h) = (72.0f32, 272.0f32);
+            let rh = 15.0 * k;
+            let vis = ((col_h / rh) as usize).max(3);
             let focus = rows.iter().position(|r| r.focused).unwrap_or(0);
-            let first = focus.saturating_sub(VIS - 3).min(rows.len().saturating_sub(VIS));
-            for (k, r) in rows.iter().enumerate().skip(first).take(VIS) {
-                let y = 72.0 + 15.0 * (k - first) as f32;
-                let name = names[k].clone();
+            let first = focus.saturating_sub(vis.saturating_sub(3)).min(rows.len().saturating_sub(vis));
+            for (n, r) in rows.iter().enumerate().skip(first).take(vis) {
+                let y = col_top + rh * (n - first) as f32;
+                let name = names[n].clone();
                 let value = if r.value_id != 0 { bind(r.value_id) } else { r.value_text.clone() };
                 let col = if r.focused { bright } else if !r.enabled || !r.editable { dim } else { cream };
-                left_text(&mut h, font, &name, mx(66.0), my(y + 6.0), col, true, 0.85);
+                left_text(&mut h, font, &name, mx(66.0), my(y + 6.0 * k), col, true, 0.85 * k);
                 if !value.is_empty() {
                     let shown = if r.focused && r.editable { format!("< {value} >") } else { value };
-                    label(&mut h, font, &shown, 212.0, y - 3.0, 130.0, 12.0, col, true, 0.85);
+                    label(&mut h, font, &shown, 222.0, y - 3.0 * k, 122.0, 12.0 * k, col, true, 0.85 * k);
                 }
             }
-            if first > 0 { label(&mut h, font, "^", 190.0, 52.0, 20.0, 10.0, dim, true, 0.8); }
-            if first + VIS < rows.len() { label(&mut h, font, "v", 190.0, 72.0 + 15.0 * VIS as f32 - 6.0, 20.0, 10.0, dim, true, 0.8); }
+            scroll_bar(&mut h, 346.0, col_top - 4.0, col_h, first, vis, rows.len());
             // The players column.
             left_text(&mut h, font, "Players", mx(366.0), my(70.0), cream, true, 0.95);
             let team_game = fe.mp_one.team_game();
-            for (i, pl) in fe.mp_one.players.iter().enumerate() {
-                let y = 92.0 + 34.0 * i as f32;
-                if !pl.joined {
-                    left_text(&mut h, font, &format!("{}  (open)", i + 1), mx(366.0), my(y), dim, true, 0.85);
-                    continue;
-                }
+            // The players list: as many as fit at the constant text size; it follows a focused
+            // Player row (own-row edits) and scrolls with a bar when the lobby is bigger [S].
+            // 16-player lobbies: one line per JOINED player (name, team, ready, ping), the open slots
+            // summed in one line under them; the list scrolls with a bar when it overflows [S].
+            let (pl_top, pl_h) = (90.0f32, 150.0f32);
+            let ph = 15.0 * k;
+            let joined: Vec<usize> = (0..fe.mp_one.players.len()).filter(|&i| fe.mp_one.players[i].joined).collect();
+            let open = fe.mp_one.players.len() - joined.len();
+            let lines = joined.len() + usize::from(open > 0);
+            let pvis = ((pl_h / ph) as usize).max(1);
+            let pfocus_slot = rows.get(focus).and_then(|r| if let crate::mp_lobby::MpLobbyRowId::Player(i) | crate::mp_lobby::MpLobbyRowId::PlayerTeam(i) = r.id { Some(i) } else { None })
+                .unwrap_or(fe.mp_one.own_slot);
+            let pfocus = joined.iter().position(|&i| i == pfocus_slot).unwrap_or(0);
+            let pfirst = pfocus.saturating_sub(pvis.saturating_sub(1)).min(lines.saturating_sub(pvis));
+            scroll_bar(&mut h, 624.0, pl_top - 6.0, pl_h, pfirst, pvis, lines);
+            for (n, &i) in joined.iter().enumerate().skip(pfirst).take(pvis) {
+                let pl = &fe.mp_one.players[i];
+                let y = pl_top + ph * (n - pfirst) as f32;
                 let col = if pl.ready { cream } else { dim };
-                left_text(&mut h, font, &format!("{}  {}", i + 1, pl.codename), mx(366.0), my(y), col, true, 0.9);
+                left_text(&mut h, font, &format!("{}  {}", i + 1, pl.codename), mx(366.0), my(y), col, true, 0.85 * k);
                 let mut info = Vec::new();
+                // Each player's character on its line (the preview shows the focused one).
+                info.push(bind(MP_CHARACTERS[(pl.character as usize).min(MP_CHARACTERS.len() - 1)].1));
                 if team_game { info.push(if pl.team == 1 { "MI6".to_string() } else { "Phoenix".to_string() }); }
                 info.push(if pl.ready { "Ready".to_string() } else { "Not ready".to_string() });
                 if i != 0 || !fe.mp_hosting { info.push(format!("{} ms", pl.ping_ms)); }
-                left_text(&mut h, font, &info.join("   "), mx(384.0), my(y + 14.0), dim, true, 0.75);
+                left_text(&mut h, font, &info.join("  "), mx(500.0), my(y), dim, true, 0.75 * k);
+            }
+            if open > 0 && lines - 1 >= pfirst && lines - 1 < pfirst + pvis {
+                let y = pl_top + ph * (lines - 1 - pfirst) as f32;
+                let s = if open == 1 { "1 open slot".to_string() } else { format!("{open} open slots") };
+                left_text(&mut h, font, &s, mx(366.0), my(y), dim, true, 0.8 * k);
             }
             let start_line = if fe.mp_hosting {
                 if fe.mp_lobby_start_enabled() { "Everyone is ready - Start the match" } else { "Waiting for every player to be ready" }
             } else { "The host starts the match" };
             left_text(&mut h, font, start_line, mx(366.0), my(250.0), if fe.mp_lobby_start_enabled() { bright } else { dim }, true, 0.8);
+            // The chosen map's picture (the user: "map image needs to be shown on lobby screen"):
+            // the Select Map wheel's own preview texture [the MP_MAP_ROWS preview ids], disc-masked
+            // like that page's emblem, under the players column.
+            // mp-lobby-settings: the character preview beside it (the user: "let each player pick
+            // their own character from their row with a visible preview") — the Bot Choose wheel's
+            // own portrait [MP_CHARACTERS +0x00, the same textures], for the focused player row
+            // (else this machine's own row), or the focused bot row's character [S layout].
+            if let Some(row) = MP_MAP_ROWS.iter().find(|r| r.3 == fe.mp_one.level) {
+                circle_clipped_quad(&mut h, row.0, 372.0, 256.0, 80.0, 80.0, [0.0, 0.0, 128.0, 128.0], gs(0x7f7f7f, 0xff));
+                centred(&mut h, font, -2, &bind(row.1), mx(412.0), my(344.0), cream, true, 0.8);
+            }
+            let focused_id = rows.get(focus).map(|r| (r.id, r.editable));
+            let (pv_char, pv_who, pv_edit) = match focused_id {
+                Some((crate::mp_lobby::MpLobbyRowId::Bot(i) | crate::mp_lobby::MpLobbyRowId::BotSkill(i), _)) if fe.mp_one.bots[i].enabled =>
+                    (fe.mp_one.bots[i].character, format!("Bot {}", i + 1), false),
+                Some((crate::mp_lobby::MpLobbyRowId::Player(i) | crate::mp_lobby::MpLobbyRowId::PlayerTeam(i), ed)) =>
+                    (fe.mp_one.players[i].character, fe.mp_one.players[i].codename.clone(), ed),
+                _ => {
+                    let me = &fe.mp_one.players[fe.mp_one.own_slot.min(fe.mp_one.players.len() - 1)];
+                    (me.character, me.codename.clone(), false)
+                }
+            };
+            let ch = MP_CHARACTERS[(pv_char as usize).min(MP_CHARACTERS.len() - 1)];
+            circle_clipped_quad(&mut h, ch.0, 468.0, 256.0, 80.0, 80.0, [0.0, 0.0, 128.0, 128.0], gs(0x7f7f7f, 0xff));
+            centred(&mut h, font, -2, &bind(ch.1), mx(508.0), my(344.0), cream, true, 0.8);
+            left_text(&mut h, font, &pv_who, mx(554.0), my(276.0), cream, true, 0.75);
+            if pv_edit { left_text(&mut h, font, "< > character", mx(554.0), my(294.0), bright, true, 0.7); }
             // The internet band (net-p2p): the state, the join code (Ctrl+C), the small print.
             if let Some(r) = fe.mp_session.as_ref().and_then(|s| s.reach()) {
                 let line = match &r.code { Some(c) => format!("{}    Code: {}  (Ctrl+C)", r.state, c), None => r.state.clone() };
@@ -7678,33 +7967,88 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         // TEX 0x0300016d. The rows/result come from `MpMatch::debriefing` through the getters
         // (mp-debriefing-data2); the small-table portraits draw [0,0,128,128] like the join page's.]
         Page::MpDebriefing => {
-            centred(&mut h, font, -2, &hint(MP_DEBRIEFING_HEADER, "DEBRIEFING"), mx(50.0 + 188.0), my(48.0), bright, true, 1.25);
+            // mp-hud-real: the header in the header face, left-aligned at the control's x 50
+            // (PCSX2 debriefing 2026-10-18: "Debriefing" bold italic at the top-left, like every
+            // page header) — it was font 2 centred.
+            page_header(&mut h, hfont, &hint(MP_DEBRIEFING_HEADER, "Debriefing"));
             if textures.iter().any(|(hash, _)| *hash == 0x0300_016d) {
                 quad640(&mut h, 0x0300_016d, 434.0, 38.0, 156.0, 43.0, [0.0, 0.0, 256.0, 128.0], gs(0x7f7f7f, 0xff));
             }
             const COL_YS: [f32; 5] = [183.0, 217.0, 250.0, 284.0, 318.0];
+            // More than the game's 4 columns (16-player matches): a ranked table, one line per
+            // participant, sized so every line fits above the result plate [S port layout].
+            let all_rows = fe.mp_debriefing.as_ref().map_or(0, |b| b.rows.len());
+            if all_rows > 4 {
+                let board = fe.mp_debriefing.as_ref().unwrap();
+                let (top, avail) = (112.0f32, 232.0f32);
+                let rh = (avail / all_rows as f32).min(18.0);
+                let s = (rh / 16.0).clamp(0.6, 1.0);
+                let xs = [60.0f32, 170.0, 330.0, 400.0, 470.0, 540.0];
+                centred(&mut h, font, -2, "Rank", mx(xs[0] + 20.0), my(top - 14.0), bright, true, 0.9);
+                for (c, id) in MP_DEBRIEFING_COLS.iter().enumerate() {
+                    let x = if c == 0 { xs[1] + 40.0 } else { xs[c + 1] + 20.0 };
+                    centred(&mut h, font, -2, &bind(*id), mx(x), my(top - 14.0), bright, true, 0.9);
+                }
+                for (n, row) in board.rows.iter().enumerate() {
+                    let y = top + rh * n as f32 + rh * 0.5;
+                    let rank = row.rank as usize;
+                    let rank_txt = if rank < 4 { bind(nf_game::mp::debrief::RANK_LABELS[rank]) } else {
+                        let r = rank + 1;
+                        format!("{r}{}", match (r % 10, r % 100) { (1, x) if x != 11 => "st", (2, x) if x != 12 => "nd", (3, x) if x != 13 => "rd", _ => "th" })
+                    };
+                    let nm = match &row.name {
+                        nf_game::mp::debrief::MpDebriefName::Human(s) => s.clone(),
+                        nf_game::mp::debrief::MpDebriefName::Bot(ch) => nf_game::mp::MpMatch::bot_short_name_label(*ch)
+                            .map(|l| bind(l)).filter(|s| !s.is_empty()).unwrap_or_else(|| "Bot".into()),
+                    };
+                    let col = if n == 0 { bright } else { cream };
+                    centred(&mut h, font, -2, &rank_txt, mx(xs[0] + 20.0), my(y), col, true, s);
+                    left_text(&mut h, font, &nm, mx(xs[1]), my(y), col, true, s);
+                    for (c, v) in [row.points, row.victories, row.deaths, row.total].iter().enumerate() {
+                        centred(&mut h, font, -2, &v.to_string(), mx(xs[c + 2] + 20.0), my(y), cream, false, s);
+                    }
+                }
+            } else {
+            // mp-hud-real: the controls' own rects [L the menu-def page 0x40000033, re-dumped
+            // 2026-10-18 through `nf_formats::menudef`]: the column titles left-aligned in
+            // (52, y, 120×16); per shown slot i the panel box 0x1000015d (176+104i, 94, 96×253),
+            // the portrait 0x10000157 (184+104i, 102, 81×81) with the uv msg 0x2d (32,0)+(64,64),
+            // the rank caption 0x10000156 (187+104i, 103, 72×17) at the portrait's top-left, the
+            // name 0x10000158 (174+104i, 183, 100×16) and the values (185+104i, y, 78×16)
+            // centred in their boxes. The PCSX2 debriefing (2026-10-18, 1 human + 3 bots) shows
+            // exactly this: dark panels behind each column, "1st" over the portrait's top-left.
+            // The port had the portraits 8 units left, the captions centred above them, the
+            // values 9 units left, the titles centred and no panels.
             for (i, id) in MP_DEBRIEFING_COLS.iter().enumerate() {
-                centred(&mut h, font, -2, &bind(*id), mx(52.0 + 60.0), my(COL_YS[i] + 8.0), bright, true, 1.0);
+                left_text(&mut h, font, &bind(*id), mx(52.0), my(COL_YS[i] + 8.0 + 6.0), bright, true, 1.0);
             }
             const PORTRAIT_PLACEHOLDER: [u32; 4] = [0x0300_015d, 0x0300_015c, 0x0300_0156, 0x0300_016b];
             for (i, (rank, name, tex, points, victories, deaths, total)) in fe.mp_debriefing_rows().iter().enumerate() {
-                let px = 176.0 + i as f32 * 104.0;
+                let dx = i as f32 * 104.0;
+                plate(&mut h, mx(176.0 + dx), my(94.0), mx(96.0), my(253.0), gs(0x1e1210, 0x60));
                 let ptex = if *tex != 0 { *tex } else { PORTRAIT_PLACEHOLDER[i] };
-                tex_quad_or_plate(&mut h, textures, ptex, px, 102.0, 81.0, 81.0, [0.0, 0.0, 128.0, 128.0], gs(0x7f7f7f, 0xff));
-                // The rank caption over the portrait [S the exact y — the live render check pins it].
-                centred(&mut h, font, -2, &bind(*rank), mx(px + 36.0), my(96.0), bright, true, 1.0);
+                tex_quad_or_plate(&mut h, textures, ptex, 184.0 + dx, 102.0, 81.0, 81.0, [32.0, 0.0, 64.0, 64.0], gs(0x7f7f7f, 0xff));
+                left_text(&mut h, font, &bind(*rank), mx(187.0 + dx), my(103.0 + 8.5 + 6.0), bright, true, 1.0);
                 let nm = match name {
                     nf_game::mp::debrief::MpDebriefName::Human(s) => s.clone(),
                     nf_game::mp::debrief::MpDebriefName::Bot(ch) => nf_game::mp::MpMatch::bot_short_name_label(*ch)
                         .map(|l| bind(l)).filter(|s| !s.is_empty()).unwrap_or_else(|| "Bot".into()),
                 };
-                centred(&mut h, font, -2, &nm, mx(px + 50.0), my(183.0 + 8.0), bright, false, 1.0);
+                centred(&mut h, font, -2, &nm, mx(174.0 + 50.0 + dx), my(183.0 + 8.0 + 6.0), bright, true, 1.0);
                 for (j, v) in [points, victories, deaths, total].iter().enumerate() {
-                    centred(&mut h, font, -2, &v.to_string(), mx(px + 39.0), my(COL_YS[j + 1] + 8.0), cream, false, 1.0);
+                    centred(&mut h, font, -2, &v.to_string(), mx(185.0 + 39.0 + dx), my(COL_YS[j + 1] + 8.0 + 6.0), cream, true, 1.0);
                 }
             }
-            plate(&mut h, 176.0, 355.0, 408.0, 52.0, gs(0x1e1210, 0x60));
-            let (rl, rarg) = fe.mp_debriefing_result();
+            }
+            plate(&mut h, mx(176.0), my(355.0), mx(408.0), my(52.0), gs(0x1e1210, 0x60));
+            let (rl, mut rarg) = fe.mp_debriefing_result();
+            // A bot winner has no codename in the settings: its name cell's caption stands in
+            // (the line read "%s wins the match." when the Guard bot won the two-window match) [S].
+            if rarg.is_empty() && rl == nf_game::mp::debrief::RESULT_WINS_LABEL {
+                if let Some(nf_game::mp::debrief::MpDebriefName::Bot(ch)) = fe.mp_debriefing.as_ref().and_then(|b| b.rows.first()).map(|r| &r.name) {
+                    rarg = nf_game::mp::MpMatch::bot_short_name_label(*ch).map(|l| bind(l)).filter(|s| !s.is_empty()).unwrap_or_else(|| "Bot".into());
+                }
+            }
             let line = if rarg.is_empty() { bind(rl) } else { bind(rl).replace("%s", &rarg) };
             centred(&mut h, font, -2, &line, mx(178.0 + 202.5), my(369.0 + 12.0), bright, true, 1.0);
             hint_bar(&mut h, font, &hint(MP_DEBRIEFING_HINT, "~A Continue  ~Y Replay"), 50.0, 419.0, cream);
@@ -7969,7 +8313,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                     let shown = if fe.mp_net_addr.is_empty() { "IP:PORT or JOIN CODE" } else { &fe.mp_net_addr };
                     label(&mut h, font, shown, 200.0, y, 240.0, 18.0, if fe.cursor == 0 { bright } else { dim }, true, 1.0);
                     // net-lobby-list: the LAN's lobbies under the address row (▲▼ + ✕ joins).
-                    if fe.mp_net_state != MpNetState::Dialing {
+                    if !matches!(fe.mp_net_state, MpNetState::Dialing | MpNetState::Joining) {
                         if fe.mp_lobby_rows.is_empty() {
                             label(&mut h, font, "Searching the network for games...", 120.0, y + 30.0, 400.0, 14.0, dim, true, 1.0);
                         }
@@ -8155,7 +8499,9 @@ fn tex_quad_or_plate(h: &mut Hud, textures: &[(u32, crate::scene::TextureImage)]
     if textures.iter().any(|(hash, _)| *hash == tex) {
         quad640(h, tex, x, y, w, hh, uv, c);
     } else {
-        plate(h, x, y, w, hh, gs(0x1e1210, 0xd0));
+        // `plate` takes HUD units; the callers pass 640-space rects like `quad640` (the plate
+        // used to land 25% right of its texture's spot — the debriefing's portrait plates).
+        plate(h, mx(x), my(y), mx(w), my(hh), gs(0x1e1210, 0xd0));
     }
 }
 
@@ -8532,6 +8878,10 @@ pub fn mp_textures() -> &'static [u32] {
         let mut v: Vec<u32> = MP_SCENARIO_ROWS.iter().map(|r| r.0).chain(MP_MAP_ROWS.iter().map(|r| r.0))
             .chain(MP_CHARACTERS.iter().map(|r| r.0)).chain(MP_OPTIONS_ROWS.iter().map(|r| r.0)).chain(MP_BOTS_ROWS.iter().map(|r| r.0))
             .chain([0x0300_0199u32, 0x0300_0159, 0x0300_015c, 0x0300_0169, 0x0300_01a0])   // the Join Game panels + slot images [L page 0x40000019]
+            // mp-hud-real: the debriefing's portraits (`mp_characters_small` @0x2df8f8 +0x00, the
+            // handler's msg-0x24 sends [M 0x212198:159-166]) and its placeholders [L page 0x40000033].
+            .chain(MP_CHARACTERS_SMALL.iter().map(|r| r.0))
+            .chain([0x0300_015du32, 0x0300_0156, 0x0300_016b])
             .filter(|h| *h != 0 && !MENU_TEXTURES.contains(h)).collect();
         v.sort_unstable(); v.dedup(); v
     })
@@ -9359,6 +9709,9 @@ mod secret_grid_tests {
         assert_eq!(fe.page, Page::CnMenu);
     }
 }
+
+/// The app arms the online name's profile scan (`FrontEnd::mp_save_name`) at startup.
+pub static SAVE_NAMES_FROM_DISK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// An online agent's lobby name: the codename it sent, or "Player N" by its slot when it has no
 /// profile (the host's own profile-less default is "Player 1"). nf-net's session keeps its own

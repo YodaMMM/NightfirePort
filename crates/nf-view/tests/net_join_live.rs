@@ -155,7 +155,7 @@ fn late_join_three_sims_hashes_agree_after_the_join() {
     // A third machine dials the running match (the match runs on while the
     // host serves the log).
     let mut j = Peer::client(27952, 27950);
-    let mut handover: Option<(MpSettings, u32, u64, Vec<[nf_net::Input; 4]>)> = None;
+    let mut handover: Option<(MpSettings, u32, u64, Vec<[nf_net::Input; nf_net::MAX_AGENTS]>)> = None;
     let deadline = Instant::now() + std::time::Duration::from_secs(30);
     while handover.is_none() {
         ms += 5;
@@ -256,7 +256,7 @@ fn late_join_replay_mismatch_is_refused_with_a_clear_reason() {
     // (a diverged replay's symptom — transfer corruption, a different build
     // or a poked sim all surface the same way: the hash check fails).
     let mut j = Peer::client(27962, 27960);
-    let mut handover: Option<(MpSettings, u32, u64, Vec<[nf_net::Input; 4]>)> = None;
+    let mut handover: Option<(MpSettings, u32, u64, Vec<[nf_net::Input; nf_net::MAX_AGENTS]>)> = None;
     let deadline = Instant::now() + std::time::Duration::from_secs(30);
     while handover.is_none() {
         ms += 5;
