@@ -210,6 +210,13 @@ pub enum Packet {
     /// Host → late joiner: the handover head (see the module table).
     JoinBegin {
         first_tick: u32,
+        /// net-desync-resync: the newest tick the host RAN with the (re)joining
+        /// slot's real inputs — a resyncer's catch-up may use its recorded own
+        /// inputs up to here and must ride NEUTRAL above it (the host's rows in
+        /// between are NEUTRAL: the slot stopped contributing at the serve). A
+        /// fresh late joiner's serve sets it to `snapshot_tick` (its own inputs
+        /// map is empty, so the field is inert there).
+        ran_through: u32,
         snapshot_tick: u32,
         snapshot_hash: u64,
         /// The earlier late joins (slot, join tick) up to the snapshot — the replay must spawn
@@ -379,12 +386,13 @@ pub fn encode(p: &Packet, out: &mut Vec<u8>) {
             out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
             out.extend_from_slice(bytes);
         }
-        Packet::JoinBegin { first_tick, snapshot_tick, snapshot_hash, joins } => {
+        Packet::JoinBegin { first_tick, ran_through, snapshot_tick, snapshot_hash, joins } => {
             out.push(PT_JOIN_BEGIN);
             out.push(0);
             out.extend_from_slice(&first_tick.to_le_bytes());
             out.extend_from_slice(&snapshot_tick.to_le_bytes());
             out.extend_from_slice(&snapshot_hash.to_le_bytes());
+            out.extend_from_slice(&ran_through.to_le_bytes());
             let n = joins.len().min(255);
             out.push(n as u8);
             for (slot, tick) in joins.iter().take(n) {
@@ -565,24 +573,25 @@ pub fn decode(buf: &[u8]) -> Option<Packet> {
             Some(Packet::Data { bytes: body[2..2 + n].to_vec() })
         }
         PT_JOIN_BEGIN => {
-            if body.len() < 16 {
+            if body.len() < 20 {
                 return None;
             }
             // The join history (mp-online-failures): a count byte + (slot u8, join_tick u32)
             // per earlier late join; absent = none.
             let mut joins = Vec::new();
-            if body.len() > 16 {
-                let n = body[16] as usize;
-                if body.len() < 17 + n * 5 {
+            if body.len() > 20 {
+                let n = body[20] as usize;
+                if body.len() < 21 + n * 5 {
                     return None;
                 }
                 for k in 0..n {
-                    let o = 17 + k * 5;
+                    let o = 21 + k * 5;
                     joins.push((body[o], u32::from_le_bytes([body[o + 1], body[o + 2], body[o + 3], body[o + 4]])));
                 }
             }
             Some(Packet::JoinBegin {
                 first_tick: u32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                ran_through: u32::from_le_bytes([body[16], body[17], body[18], body[19]]),
                 snapshot_tick: u32::from_le_bytes([body[4], body[5], body[6], body[7]]),
                 snapshot_hash: u64::from_le_bytes([
                     body[8], body[9], body[10], body[11], body[12], body[13], body[14], body[15],
@@ -828,7 +837,7 @@ mod tests {
     #[test]
     fn join_begin_history_roundtrip_and_truncation() {
         for joins in [vec![], vec![(2u8, 391u32), (5, 77_001)]] {
-            let p = Packet::JoinBegin { first_tick: 0, snapshot_tick: 300, snapshot_hash: 0xDEAD_BEEF_0123, joins };
+            let p = Packet::JoinBegin { first_tick: 0, ran_through: 300, snapshot_tick: 300, snapshot_hash: 0xDEAD_BEEF_0123, joins };
             let mut b = Vec::new();
             encode(&p, &mut b);
             assert_eq!(decode(&b), Some(p));

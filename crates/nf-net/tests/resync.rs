@@ -231,7 +231,7 @@ fn a_diverged_machine_resyncs_over_the_live_connection_and_the_match_runs_on() {
                 Event::LateJoinHandover { slot, first_tick, snapshot_tick, snapshot_hash, log, .. } => {
                     assert_eq!(who, 2, "the handover lands on the diverged machine");
                     assert_eq!(slot, 2);
-                    eprintln!("[dbg] handover: first {first_tick} snapshot {snapshot_tick} log {} rows charlie_next {}", log.len(), clients[1].next_tick);
+                    eprintln!("[dbg] handover: first {first_tick} snapshot {snapshot_tick} log {} rows charlie_next {} | log row 100 slot2 NEUTRAL {} host run_log row 100 slot2 NEUTRAL {}", log.len(), clients[1].next_tick, log.get(100).map_or(false, |r| r[2] == NEUTRAL), host.rows.get(100).map_or(false, |r| r[2] == NEUTRAL));
                     handover = Some((first_tick, snapshot_tick, snapshot_hash, log));
                 }
                 Event::DesyncFatal { tick } => {
@@ -323,13 +323,14 @@ fn a_diverged_machine_resyncs_over_the_live_connection_and_the_match_runs_on() {
                 let mut hdiff = None;
                 for t in 0..hn { if host.hashes[t] != clients[1].hashes[t] { hdiff = Some(t); break; } }
                 let t0 = first.unwrap_or(0);
+                eprintln!("[dbg] t0 {t0}: host rowslot2 NEUTRAL {} charlie {}", host.rows[t0][2] == NEUTRAL, clients[1].rows[t0][2] == NEUTRAL);
                 let (hr, cr) = (&host.rows[t0], &clients[1].rows[t0]);
                 let slots: Vec<String> = (0..4).map(|k| format!("slot {k}: host fwd {:?} fire {} | charlie fwd {:?} fire {}", hr[k].forward, hr[k].fire, cr[k].forward, cr[k].fire)).collect();
                 panic!("no fatal after the resync ({who}: tick {tick}) — first row diff {first:?}, first hash diff {hdiff:?}, rows {}/{} :: {}",
                     host.rows.len(), clients[1].rows.len(), slots.join(" | "));
             }
         }
-        assert!(ms < deadline, "the post-resync run");
+        assert!(ms < deadline, "the post-resync run (host {} c1 {} charlie {} of {end}; ms {ms})", host.next_tick, clients[0].next_tick, clients[1].next_tick);
     }
     assert_eq!(host.rows[join_tick as usize][2], agent_input(2, join_tick), "slot 2 runs Charlie's input from the join tick");
     assert_eq!(host.rows[join_tick as usize - 1][2], NEUTRAL, "slot 2 was NEUTRAL just before the rejoin");

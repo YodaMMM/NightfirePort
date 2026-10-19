@@ -533,6 +533,9 @@ pub struct Session<T: Transport> {
     /// `resend_ms` until a JOIN_BEGIN lands, and `timeout_ms` without a
     /// serve is fatal.
     resync_catchup: bool,
+    /// net-desync-resync: the newest tick the host ran with this machine's real
+    /// inputs (the serve's `ran_through`) — the catch-up's own-slot boundary.
+    resync_ran_through: u32,
     resync_pending: bool,
     /// net-desync-resync: the tick this client froze at (rides the RESYNC
     /// request; the host logs the mismatch from its own Desync event).
@@ -671,6 +674,7 @@ impl<T: Transport> Session<T> {
             // net-desync-resync: no resync in flight at build (both roles).
             resync_pending: false,
             resync_catchup: false,
+            resync_ran_through: 0,
             resync_tick: 0,
             resync_req_ms: 0,
             resync_deadline_ms: 0,
@@ -727,6 +731,7 @@ impl<T: Transport> Session<T> {
             // net-desync-resync: no resync in flight at build (both roles).
             resync_pending: false,
             resync_catchup: false,
+            resync_ran_through: 0,
             resync_tick: 0,
             resync_req_ms: 0,
             resync_deadline_ms: 0,
@@ -836,28 +841,36 @@ impl<T: Transport> Session<T> {
     /// host's relay — the host's materialised NEUTRAL included — so a drop or
     /// a join can never make a client guess differently from the host for a
     /// tick the host already ran [S mp-online-failures].
-    fn tick_input(&self, s: usize, tick: u32) -> Option<Input> {
+    fn tick_input(&mut self, s: usize, tick: u32) -> Option<Input> {
         if s == self.local_slot as usize {
             // net-desync-resync: a resyncing client contributes nothing while it
             // waits for the serve (its own `ready_inputs` is None: never guess,
             // the app freezes on the last ticked frame). During the CATCH-UP
-            // (the replay done, the re-announce not yet landed) its own slot
-            // runs the recorded inputs where they exist — the host ran those
-            // real rows before the freeze — and NEUTRAL where they do not (the
-            // host's post-serve rows are NEUTRAL for the slot too).
+            // (the replay done, the re-announce landed, the machine still below
+            // its rejoin tick) its own slot runs the recorded inputs where they
+            // exist — the host ran those real rows before the freeze — and
+            // NEUTRAL where it does not (the host's post-serve rows are
+            // NEUTRAL for the slot too). The flag clears at the CROSSING: the
+            // re-announce can land mid-catch-up (the JOIN_SLOT arrives while
+            // the machine is still re-running old ticks), so the JOIN_SLOT
+            // must not flip the own-slot rule for ticks below the rejoin tick.
             if self.resync_pending {
                 return None;
             }
             if self.resync_catchup {
-                // Tick-aware: below the re-announced join tick the slot runs the
-                // recorded inputs where they exist (the host ran those real rows
-                // before the freeze) and NEUTRAL where it does not (the host's
-                // post-serve rows are NEUTRAL for the slot too); from the join
-                // tick on, the normal arm (a missing own input stalls).
-                if tick < self.join_from[s] {
+                // The host's `ran_through` is the newest tick it ran with this
+                // machine's real inputs: below it the recorded inputs replay the
+                // host's own rows; above it the host's rows are NEUTRAL (the slot
+                // stopped contributing at the serve) until the re-announced join
+                // tick, where the normal arm resumes (a missing own input stalls).
+                if tick <= self.resync_ran_through {
                     return self.inputs[s].get(&tick).copied().or(Some(NEUTRAL));
                 }
-                return self.inputs[s].get(&tick).copied();
+                if tick >= self.join_from[s] {
+                    self.resync_catchup = false; // crossed the rejoin tick: live again
+                    return self.inputs[s].get(&tick).copied();
+                }
+                return Some(NEUTRAL);
             }
             if self.slot_human[s] && tick >= self.join_from[s] {
                 return self.inputs[s].get(&tick).copied();
@@ -1080,7 +1093,8 @@ impl<T: Transport> Session<T> {
     }
 
     /// Slots missing an input for `tick` (for `Event::Stalled` diagnostics).
-    fn missing_slots(&self, tick: u32) -> Vec<u8> {
+    fn missing_slots(&mut self, tick: u32) -> Vec<u8> {
+        // (&mut self: the resync catch-up clears its flag at the crossing — net-desync-resync)
         let mut miss = Vec::new();
         for s in 0..MAX_AGENTS {
             if self.tick_input(s, tick).is_none() {
@@ -1813,7 +1827,11 @@ impl<T: Transport> Session<T> {
                 if let Some((addr, slot, codename, first_tick, snap, snapshot_hash)) = serve {
                     let joins: Vec<(u8, u32)> =
                         self.join_history.iter().copied().filter(|(_, t)| *t <= snap).collect();
-                    self.send_packet(addr, &Packet::JoinBegin { first_tick, snapshot_tick: snap, snapshot_hash, joins });
+                    // The resyncer's catch-up may reuse its recorded own inputs up to
+                    // the newest tick the host RAN with them (`last_ready` — the stall
+                    // boundary; everything after ran NEUTRAL post-serve).
+                    let ran_through = self.last_ready.unwrap_or(snap).min(snap.max(self.last_ready.unwrap_or(snap)));
+                    self.send_packet(addr, &Packet::JoinBegin { first_tick, ran_through, snapshot_tick: snap, snapshot_hash, joins });
                     events.push(Event::LateJoinStarted { slot, codename: codename.chars().take(31).collect() });
                 }
             }
@@ -2150,7 +2168,7 @@ impl<T: Transport> Session<T> {
         // is not human until the JOIN_SLOT announcement).
         self.send_packet(from, &Packet::SlotMap { human_slots: self.human_mask() });
         let joins: Vec<(u8, u32)> = self.join_history.iter().copied().filter(|(_, t)| *t <= snap).collect();
-        self.send_packet(from, &Packet::JoinBegin { first_tick, snapshot_tick: snap, snapshot_hash, joins });
+        self.send_packet(from, &Packet::JoinBegin { first_tick, ran_through: snap, snapshot_tick: snap, snapshot_hash, joins });
         events.push(Event::LateJoinStarted { slot, codename: codename.chars().take(31).collect() });
     }
 
@@ -2365,7 +2383,7 @@ impl<T: Transport> Session<T> {
                     events.push(Event::SlotMapChanged { human_slots: self.slot_human });
                 }
             }
-            Packet::JoinBegin { first_tick, snapshot_tick, snapshot_hash, joins } => {
+            Packet::JoinBegin { first_tick, ran_through, snapshot_tick, snapshot_hash, joins } => {
                 // mp-join-in-progress: the host began the late-join handover.
                 // The chunks follow; the log assembles on the last one.
                 // net-desync-resync: also the resync serve — the request is
@@ -2373,6 +2391,7 @@ impl<T: Transport> Session<T> {
                 // re-announce arms the slot again).
                 self.resync_pending = false;
                 self.resync_catchup = true;
+                self.resync_ran_through = ran_through;
                 self.join_history = joins;
                 if let Role::Client { host_peer, .. } = &mut self.role {
                     if let Some(p) = host_peer {
@@ -2476,9 +2495,6 @@ impl<T: Transport> Session<T> {
                     self.late_confirm_due = None; // the confirm was answered
                     self.slot_human[slot as usize] = true;
                     self.join_from[slot as usize] = join_tick;
-                    if slot == self.local_slot {
-                        self.resync_catchup = false; // net-desync-resync: playing again
-                    }
                     events.push(Event::LateJoinSlot { slot, join_tick });
                 }
             }
@@ -2637,6 +2653,11 @@ impl<T: Transport> Session<T> {
                                     self.resync_tick = tick;
                                     self.resync_req_ms = 0; // send on this poll
                                     self.resync_deadline_ms = now + timeout;
+                                    // The own slot's join_from becomes the resync marker:
+                                    // every tick is "below the rejoin tick" until the
+                                    // JOIN_SLOT arms it at the real join tick (the catch-up
+                                    // branch above keys on this).
+                                    self.join_from[self.local_slot as usize] = u32::MAX;
                                 }
                             }
                         }
