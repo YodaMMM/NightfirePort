@@ -55,6 +55,17 @@ pub const PT_JOIN_SLOT: u8 = 15;
 pub const PT_PING: u8 = 16;
 pub const PT_PONG: u8 = 17;
 pub const PT_DELAY: u8 = 18;
+/// net-desync-detail: the desync diagnosis exchange (the components for the mismatched tick,
+/// then the first diverging component's items).
+pub const PT_HASHCOMPS: u8 = 19;
+pub const PT_HASHDETAIL: u8 = 20;
+
+/// The component count both the app's fold (`nf_view::scene::NET_HASH_COMPONENTS`) and
+/// `PT_HASHCOMPS`'s payload agree on — the wire contract pins it.
+pub const HASH_COMPONENTS: usize = 7;
+/// The most items one `PT_HASHDETAIL` carries (8 B each — 160 fits [`MAX_PACKET`] with the
+/// headers; a bigger world's items truncate, the desync report names the cap).
+pub const HASH_DETAIL_CAP: usize = 160;
 
 /// Ticks one JOIN_LOG chunk carries (16 agents × 28 B × 3 = 1344 B — fits
 /// [`MAX_PACKET`] with header room (1357 B with the headers); protocol ≤ 3 carried 12 ticks of 4
@@ -251,6 +262,22 @@ pub enum Packet {
         from_tick: u32,
         delay: u8,
     },
+    /// net-desync-detail: on a desync each machine sends the components for the mismatched
+    /// tick — the 7 named component hashes in the fixed fold order
+    /// (`nf_view::scene::NET_HASH_COMPONENT_NAMES`; the order is this packet's contract).
+    HashComps {
+        tick: u32,
+        comps: [u64; HASH_COMPONENTS],
+    },
+    /// net-desync-detail: the first diverging component's per-item hashes for the mismatched
+    /// tick (the item layout per component is documented on
+    /// `nf_view::scene::Sim::net_component_items`; at most [`HASH_DETAIL_CAP`] items ride one
+    /// packet — a bigger world truncates the tail, the report says so).
+    HashDetail {
+        tick: u32,
+        component: u8,
+        items: Vec<u64>,
+    },
 }
 
 fn put_codename(out: &mut Vec<u8>, name: &str) {
@@ -311,6 +338,25 @@ pub fn encode(p: &Packet, out: &mut Vec<u8>) {
             out.extend_from_slice(&ack_tick.to_le_bytes());
             out.extend_from_slice(&ack_bits.to_le_bytes());
             encode_compact_inputs(*agent_mask, inputs, out);
+        }
+        Packet::HashComps { tick, comps } => {
+            out.push(PT_HASHCOMPS);
+            out.push(0);
+            out.extend_from_slice(&tick.to_le_bytes());
+            for c in comps {
+                out.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        Packet::HashDetail { tick, component, items } => {
+            out.push(PT_HASHDETAIL);
+            out.push(0);
+            out.extend_from_slice(&tick.to_le_bytes());
+            out.push(*component);
+            let n = items.len().min(HASH_DETAIL_CAP);
+            out.extend_from_slice(&(n as u16).to_le_bytes());
+            for item in items.iter().take(n) {
+                out.extend_from_slice(&item.to_le_bytes());
+            }
         }
         Packet::Ping { stamp } => {
             out.push(PT_PING);
@@ -489,6 +535,36 @@ pub fn decode(buf: &[u8]) -> Option<Packet> {
             Some(Packet::Delay {
                 from_tick: u32::from_le_bytes([body[0], body[1], body[2], body[3]]),
                 delay: body[4],
+            })
+        }
+        PT_HASHCOMPS => {
+            if body.len() < 4 + HASH_COMPONENTS * 8 {
+                return None;
+            }
+            let mut comps = [0u64; HASH_COMPONENTS];
+            for (i, c) in comps.iter_mut().enumerate() {
+                let o = 4 + i * 8;
+                *c = u64::from_le_bytes(body[o..o + 8].try_into().unwrap());
+            }
+            Some(Packet::HashComps { tick: u32::from_le_bytes([body[0], body[1], body[2], body[3]]), comps })
+        }
+        PT_HASHDETAIL => {
+            if body.len() < 7 {
+                return None;
+            }
+            let n = u16::from_le_bytes([body[5], body[6]]) as usize;
+            if body.len() < 7 + n * 8 {
+                return None;
+            }
+            let mut items = Vec::with_capacity(n);
+            for i in 0..n {
+                let o = 7 + i * 8;
+                items.push(u64::from_le_bytes(body[o..o + 8].try_into().unwrap()));
+            }
+            Some(Packet::HashDetail {
+                tick: u32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                component: body[4],
+                items,
             })
         }
         PT_HASH => {
