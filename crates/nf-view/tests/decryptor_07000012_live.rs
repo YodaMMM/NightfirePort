@@ -85,8 +85,8 @@ fn decryptor_opens_the_kind0_lock_through_the_real_path_and_the_sisters_hold() {
         "an off-target fire never starts the scan");
     assert_eq!(sim.decryptor_target, None, "the gate pick stays empty off-target");
 
-    // --- The chain: aim at the lock, hold fire. The 0x56 needs 389 contact ticks
-    // (161+116+76+36 [M the thresholds]; the aim settle eats some) — 900 ticks is headroom.
+    // --- The chain: aim at the lock, hold fire. The 0x56 needs 425 contact ticks
+    // (161+116+76+36+36 = 425: Lock_Update unlocks only after the 5th crossing — the last digit solves twice [M 0x1ae3d8:183,348-350,364-372]; the aim settle eats some) — 900 ticks is headroom.
     let mut unlocked_tick = None;
     for t in 0..900 {
         // Aim at the lock's CURRENT pos (it settles early); the pin is x/z at Bond's floor y.

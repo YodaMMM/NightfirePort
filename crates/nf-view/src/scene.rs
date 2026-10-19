@@ -7689,7 +7689,7 @@ impl Scene {
                 if let Some((pos, yaw, ticks)) = s.mp_body_death(slot) {
                     let st = nf_formats::mpanim::MpBodyState {
                         mp: true, weapon: 0, substate: 0xd, fwd: 0.0, strafe: 0.0,
-                        phase: MP_WALK_INIT, hold: 0, one_shot_time: 0.0, water_level: -9.9,
+                        phase: MP_WALK_INIT, hold: 0, one_shot_time: 0.0, gravity_y: -9.8,
                     };
                     let script = self.mp_anim_sets.as_ref().map(|sets| nf_formats::mpanim::mp_body_pose(sets, 0, &st).script)
                         .unwrap_or(nf_formats::mpanim::DEATH_SCRIPT);

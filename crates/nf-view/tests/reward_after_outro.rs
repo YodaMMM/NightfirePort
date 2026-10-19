@@ -18,7 +18,7 @@ fn the_reward_page_opens_only_after_the_ending_script_ends() {
     fe.flow.current_level = 0x0700_0013;
     fe.flow.stack = vec![nf_view::menu::ST_RUNNER]; // the host's demo_results boots the runner state [lib.rs]
     fe.mission_ended(Outcome::Complete, Stats::default());
-    // Case 4 queued the page (GameState+0x28 = 0x40000036 [M 0x182c60:72]) — no manager is up.
+    // Case 4 queued the page (GameState+0x1c (Ghidra `_28_4_`, decimal) = 0x40000036 [M 0x182c60:72]) — no manager is up.
     assert_eq!(fe.flow.page, 0x4000_0036, "the page id queued [M 0x182c60:72]");
     assert!(fe.results_queued);
     assert_ne!(fe.page, Page::Results, "the reward is NOT up [M 0x1d6360:160-163]");
