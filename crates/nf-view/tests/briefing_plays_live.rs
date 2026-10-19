@@ -70,13 +70,23 @@ fn walk_to_mission_select(fe: &mut FrontEnd, row: usize, name: &str) {
         if fe.flow.get_state() == ST_RUNNER && fe.flow.current_level == menu::FRONTEND_LEVEL { break; }
     }
     fe.action(Action::Confirm);
-    for _ in 0..3 + menu::ESTHERO_TICKS { fe.tick(); }
+    // The intro's end opens Main through `Menu_ChangePageCloseIris` — the page lands
+    // `CLOSE_IRIS_PAGE_TICKS` later [M 0x202190; G-048(1)].
+    for _ in 0..3 + menu::ESTHERO_TICKS + menu::CLOSE_IRIS_PAGE_TICKS { fe.tick(); }
     assert_eq!(fe.page, Page::Main, "{name}: the intro ran out; Main is up");
     fe.action(Action::Confirm); // NightFire → Codename after the 0x13 delay [M C_GONIGHTFIRE 0x2169b8]
+    // Every page change below rides `Menu_ChangePageCloseIris`: input is blocked until the delayed
+    // 0x44 lands `CLOSE_IRIS_PAGE_TICKS` later [M 0x202190 + 0x21c858:315; G-048(1)], so the walk
+    // waits it out after each confirm, as a player's next press would.
+    let iris = |fe: &mut FrontEnd| for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 1 { fe.tick(); };
     for _ in 0..menu::DELAYED_PAGE_TICKS + menu::MAIN_OPEN_BLOCK { fe.tick(); }
+    iris(fe);
     fe.action(Action::Confirm); // Play without saving (row 1 [M P_NFSELECT 0x20aec0:96-97])
+    iris(fe);
     fe.action(Action::Confirm); // the box
+    iris(fe);
     fe.action(Action::Confirm); // difficulty → the Single Player list
+    iris(fe);
     fe.unlock_all = true;
     fe.cursor = row;
     assert!(fe.action(Action::Confirm), "{name}: the row did not confirm");
