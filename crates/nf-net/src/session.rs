@@ -554,6 +554,8 @@ pub struct Session<T: Transport> {
     /// bandwidth readout).
     recv_bytes: u64,
     recv_packets: u64,
+    /// Diagnostics (net-soak-faults-2): the join/ack-seed/drop stderr trace.
+    trace: bool,
 }
 
 /// net-p2p: at most this many un-taken stray datagrams are held [S port design].
@@ -656,6 +658,7 @@ impl<T: Transport> Session<T> {
             sent_packets: 0,
             recv_bytes: 0,
             recv_packets: 0,
+            trace: false,
         }
     }
 
@@ -706,6 +709,7 @@ impl<T: Transport> Session<T> {
             sent_packets: 0,
             recv_bytes: 0,
             recv_packets: 0,
+            trace: false,
         }
     }
 
@@ -1104,11 +1108,12 @@ impl<T: Transport> Session<T> {
     /// acks both ways and the newest received tick) — what a wedged run prints.
     pub fn debug_state(&self) -> String {
         let mut s = format!(
-            "slot={} started={} last_ready={:?} stalled={} newest_local={:?}",
+            "slot={} started={} last_ready={:?} stalled={} committed={:?} newest_local={:?}",
             self.local_slot,
             self.started,
             self.last_ready,
             self.stalled,
+            self.committed_hi,
             self.inputs[self.local_slot as usize].keys().max()
         );
         let peers: Vec<&Peer> = match &self.role {
@@ -1117,13 +1122,18 @@ impl<T: Transport> Session<T> {
         };
         for p in peers {
             s.push_str(&format!(
-                " | peer slot={} their_ack={:?} our_ack={} recv_max={:?} recv_n={} last_recv={}",
+                " | peer slot={} their_ack={:?} our_ack={} sent_hi={:?} bits={:#x} recv_max={:?} recv_n={} last_recv={} last_send={} prog={} srtt={:?}",
                 p.slot,
                 p.their_ack,
                 p.our_ack,
+                p.sent_hi,
+                p.their_bits,
                 p.recv_ticks.iter().next_back(),
                 p.recv_ticks.len(),
-                p.last_recv_ms
+                p.last_recv_ms,
+                p.last_send_ms,
+                p.progress_ms,
+                (p.rtt_samples > 0).then_some(p.srtt_ms)
             ));
         }
         for sl in 0..MAX_AGENTS {
@@ -1132,6 +1142,47 @@ impl<T: Transport> Session<T> {
             }
         }
         s
+    }
+
+    /// Diagnostics (net-soak-faults-2): when on, the host traces the join/ack-seed/drop
+    /// transitions to stderr — the state walk a wedged reclaim needs. Off by default;
+    /// tests set it on the session they are dissecting.
+    pub fn set_trace(&mut self, on: bool) {
+        self.trace = on;
+    }
+
+    fn tr(&self, msg: String) {
+        if self.trace {
+            eprintln!("[nf-trace ms={}] {msg}", self.now_ms);
+        }
+    }
+
+    /// Diagnostics (net-soak-faults-2): the slots missing an input for `tick` right
+    /// now — the same question [`Session::ready_inputs`] answers implicitly, without
+    /// moving the stall latch (the `Event::Stalled` payload only ever reports the
+    /// FIRST stalled tick's snapshot).
+    pub fn debug_missing_slots(&self, tick: u32) -> Vec<u8> {
+        self.missing_slots(tick)
+    }
+
+    /// Diagnostics (net-soak-faults-2): the host's relay stop — the first tick from
+    /// `head_tick()+1` whose row is incomplete, and which slots are missing there
+    /// (`None` when the match has not started or the next 256 ticks are all
+    /// complete). Read-only: unlike [`Session::relay_horizon`] it never advances
+    /// `committed_hi`.
+    pub fn debug_horizon(&self) -> Option<(u32, Vec<u8>)> {
+        if !matches!(self.role, Role::Host { .. }) || !self.started {
+            return None;
+        }
+        let mut c = self.head_tick().wrapping_add(1);
+        let limit = c.wrapping_add(256);
+        while c != limit && (0..MAX_AGENTS).all(|s| self.tick_input(s, c).is_some()) {
+            c = c.wrapping_add(1);
+        }
+        if c == limit {
+            return None;
+        }
+        Some((c, self.missing_slots(c)))
     }
 
     // ---------- internals ----------
@@ -1537,6 +1588,9 @@ impl<T: Transport> Session<T> {
         if sent {
             let (ack_tick, _) = Self::ack_for(&p.recv_ticks, p.our_ack);
             if ack_tick != u32::MAX {
+                if self.trace && p.our_ack != ack_tick {
+                    self.tr(format!("ack->slot {} our_ack {} -> {ack_tick}", p.slot, p.our_ack));
+                }
                 p.our_ack = ack_tick;
             }
             p.ack_dirty = false;
@@ -1729,6 +1783,7 @@ impl<T: Transport> Session<T> {
                     peers.push(Peer::new(from, slot, codename.chars().take(31).collect(), self.now_ms));
                     self.slot_human[slot as usize] = true;
                 }
+                self.tr(format!("hello new peer slot={slot} addr={from} (pre-GO)"));
                 self.send_welcome_to(from, slot);
                 events.push(Event::ClientJoined { slot, codename: codename.chars().take(31).collect() });
                 self.broadcast_slotmap();
@@ -1870,6 +1925,12 @@ impl<T: Transport> Session<T> {
                 let mut repeat: Option<(SocketAddr, u8, u32)> = None;
                 if let Role::Host { peers, .. } = &mut self.role {
                     if let Some(p) = peers.iter_mut().find(|p| p.addr == from) {
+                        if p.late_serve.is_some() || !p.late_joined {
+                            if self.trace {
+                                eprintln!("[nf-trace ms={}] join_ready DROPPED slot={} serving={} late_joined={}",
+                                    self.now_ms, p.slot, p.late_serve.is_some(), p.late_joined);
+                            }
+                        }
                         if let Some(jt) = p.announced {
                             // A retransmitted JOIN_READY (the joiner resends until a
                             // JOIN_SLOT lands): the SAME tick again, to the joiner only.
@@ -1878,7 +1939,15 @@ impl<T: Transport> Session<T> {
                             // the slot arming at a later tick than first announced).
                             p.last_recv_ms = self.now_ms;
                             repeat = Some((p.addr, p.slot, jt));
+                            if self.trace {
+                                eprintln!("[nf-trace ms={}] join_ready REPEAT slot={} jt={jt} our_ack={}",
+                                    self.now_ms, p.slot, p.our_ack);
+                            }
                         } else if p.late_serve.is_none() && p.late_joined && (p.slot as usize) < MAX_AGENTS {
+                            if self.trace {
+                                eprintln!("[nf-trace ms={}] join_ready SEED slot={} jt={join_tick} our_ack {} -> {join_tick} recv_n={}",
+                                    self.now_ms, p.slot, p.our_ack, p.recv_ticks.len());
+                            }
                             p.announced = Some(join_tick);
                             p.last_recv_ms = self.now_ms;
                             p.our_ack = join_tick;
@@ -1972,6 +2041,7 @@ impl<T: Transport> Session<T> {
             p.late_serve = Some(LateServe { snapshot_tick: snap, snapshot_hash, chunk_count, sent: 0, acked: 0, last_send_ms: 0 });
             p.late_joined = true;
             peers.push(p);
+            self.tr(format!("begin_late_join slot={slot} snap={snap} chunks={chunk_count} our_ack=0 their_ack=Some({snap}) addr={from}"));
             // The slot does NOT flip human here: everyone keeps riding
             // NEUTRAL for it until the JOIN_SLOT announcement.
         }
@@ -2314,6 +2384,12 @@ impl<T: Transport> Session<T> {
             return;
         }
         let s = slot as usize;
+        if let Role::Host { peers, .. } = &self.role {
+            if let Some(p) = peers.iter().find(|p| p.slot == slot) {
+                self.tr(format!("drop_slot slot={slot} reason={reason:?} our_ack={} their_ack={:?} recv_n={} next={}",
+                    p.our_ack, p.their_ack, p.recv_ticks.len(), self.head_tick().wrapping_add(1)));
+            }
+        }
         // The drop tick: every tick up to the last one the host ran used the
         // leaver's real inputs (they keep relaying — a client behind the host
         // still needs them); from the next tick on the slot is NEUTRAL. Only a

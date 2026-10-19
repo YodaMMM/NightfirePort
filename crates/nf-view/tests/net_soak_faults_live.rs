@@ -323,6 +323,7 @@ fn run_soak(long: bool) {
     s.seed = MATCH_SEED;
     host.set_host_match(mp_to_match(&s), s.seed);
     host.start_match(0).unwrap();
+    host.set_trace(true); // net-soak-faults-2: the reclaim/ack-seed walk
     let deadline = Instant::now() + Duration::from_secs(20);
     while !m1.is_started() {
         ms += 5;
@@ -390,9 +391,15 @@ fn run_soak(long: bool) {
         // ── phase boundaries: the fault script, one fault per phase ──
         if t == join5_at {
             j5.dial();
+            if let Some(s) = j5.sess.as_mut() {
+                s.set_trace(true);
+            }
         }
         if t == join11_at {
             j11.dial();
+            if let Some(s) = j11.sess.as_mut() {
+                s.set_trace(true);
+            }
         }
         if t == phase_len * 1 {
             // 5% loss with reordering, every machine's outgoing half.
@@ -478,9 +485,14 @@ fn run_soak(long: bool) {
         // Under faults a missing input re-fires on the retransmit RTO (up to
         // ~1 s logical — 60 game ticks); the wall budget carries that plus
         // the real cost of pumping 4 UDP sessions per iteration.
-        let wall_budget: u64 = if cur_phase == Phase::Stall { 60 } else { 30 };
+        // NF_SOAK_DEADLINE_SECS shortens it for debug runs (the soak's own
+        // deadlines stay 30/60 by default).
+        let wall_budget: u64 = std::env::var("NF_SOAK_DEADLINE_SECS").ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(if cur_phase == Phase::Stall { 60 } else { 30 });
         let deadline = Instant::now() + Duration::from_secs(wall_budget);
         let mut last_missing: Vec<u8> = Vec::new();
+        let mut probed = 0u32;
         loop {
             ms += 5;
             for e in host.poll(ms) {
@@ -504,8 +516,21 @@ fn run_soak(long: bool) {
             if host.ready_inputs(t).is_some() && m1.ready_inputs(t).is_some() {
                 break;
             }
-            assert!(Instant::now() < deadline,
-                "tick {t} never became ready in {wall_budget}s wall ({cur_phase:?}, logical ms {ms}, the host's missing slots {last_missing:?})");
+            // net-soak-faults-2: a heartbeat while the tick is stuck — the true
+            // per-machine missing sets over time (the event payload latches the
+            // first stalled tick only).
+            probed += 1;
+            if probed % 2000 == 0 {
+                eprintln!("[soak][hang] t={t} ms={ms} host missing={:?} horizon={:?} | m1 missing={:?} | j5 playing={} | j11 playing={}",
+                    host.debug_missing_slots(t), host.debug_horizon(),
+                    m1.debug_missing_slots(t),
+                    j5.sess.as_ref().map_or(false, |s| s.debug_missing_slots(t).is_empty()),
+                    j11.sess.as_ref().map_or(false, |s| s.debug_missing_slots(t).is_empty()));
+            }
+            if Instant::now() >= deadline {
+                dump_hang(&mut host, &mut m1, &mut j5, &mut j11, t, &mut ms, cur_phase);
+                panic!("tick {t} never became ready in {wall_budget}s wall ({cur_phase:?}, logical ms {ms}, the host's missing slots {last_missing:?})");
+            }
             std::thread::sleep(Duration::from_millis(1));
         }
         let waited = ms - wait_from;
@@ -564,6 +589,46 @@ fn run_soak(long: bool) {
     // Both late joiners ended on their own slots, in the lockstep to the end.
     assert_eq!(j5.expect_slot, JOIN5_SLOT);
     assert_eq!(j11.expect_slot, JOIN11_SLOT);
+}
+
+/// net-soak-faults-2: the full four-machine dump at a wedged tick (the deadline
+/// path) — a short liveness probe first (receive-count deltas over ~250 ms of
+/// pumping, so a dead link and a live-but-not-progressing link are
+/// distinguishable), then each machine's session cursors, the acks both ways,
+/// the TRUE missing sets at the stuck tick (the event payload latches the first
+/// stalled tick's snapshot only), and the host's relay stop.
+fn dump_hang(host: &mut Session<UdpTransport>, m1: &mut Session<UdpTransport>,
+             j5: &mut Joiner, j11: &mut Joiner, t: u32, ms: &mut u64, phase: Phase) {
+    eprintln!("[soak][dump] === tick {t} wedged ({phase:?}) ===");
+    let before = [host.recv_totals().1, m1.recv_totals().1,
+        j5.sess.as_ref().map_or(0, |s| s.recv_totals().1),
+        j11.sess.as_ref().map_or(0, |s| s.recv_totals().1)];
+    for _ in 0..50 {
+        *ms += 5;
+        let _ = host.poll(*ms);
+        let _ = m1.poll(*ms);
+        let _ = j5.poll(*ms, "slot 5");
+        let _ = j11.poll(*ms, "slot 11");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let after = [host.recv_totals().1, m1.recv_totals().1,
+        j5.sess.as_ref().map_or(0, |s| s.recv_totals().1),
+        j11.sess.as_ref().map_or(0, |s| s.recv_totals().1)];
+    let deltas = [after[0] - before[0], after[1] - before[1], after[2] - before[2], after[3] - before[3]];
+    for (name, sess, d) in [
+        ("host", Some(&mut *host), deltas[0]),
+        ("slot1", Some(&mut *m1), deltas[1]),
+        ("slot5", j5.sess.as_mut(), deltas[2]),
+        ("slot11", j11.sess.as_mut(), deltas[3]),
+    ] {
+        let Some(s) = sess else {
+            eprintln!("[soak][dump] {name}: no session");
+            continue;
+        };
+        eprintln!("[soak][dump] {name}: recv+{d}pkts/250ms {}", s.debug_state());
+        eprintln!("[soak][dump] {name}:   acks={:?} rtts={:?} missing(t)={:?} horizon={:?}",
+            s.peer_acks(), s.peer_rtts(), s.debug_missing_slots(t), s.debug_horizon());
+    }
 }
 
 /// Per-machine payload byte totals, in the fixed order (host, slot 1, slot
