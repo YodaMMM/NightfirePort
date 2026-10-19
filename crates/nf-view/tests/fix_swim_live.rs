@@ -146,10 +146,12 @@ fn the_hut_ladder_grabs_from_the_water_and_climbs_out() {
     let lad = sim.ladders[li].clone();
     assert!(lad.bottom() < 3.5, "the picked ladder does not reach into the pond: bottom {}", lad.bottom());
     // Bond at the ladder's front, in the water at a swim-column root (3.0 — the game's swim pick
-    // [M Player_Collision 0x194df0 case 3] is the LOW capsule ~0.48 under the root, which reaches the
-    // ×1.5 sphere from the water column but not from a bed-hugging root 4 units under the bounds
-    // centre; the 1013 player swam in at column depth, not along the bed); facing the ladder, holding
-    // forward — the grab fires as he crosses the rung plane's reach.
+    // [M Player_Collision 0x194df0 second switch @0x195070, indexed substate−1] is the DEFAULT
+    // arm's capsule (r 0.55, spine pos + 0.275 .. pos + (0.55 − cc) — case 3 is the crouch
+    // substate 4, not the swim 3), which reaches the ×1.5 sphere from the water column but not
+    // from a bed-hugging root 4 units under the bounds centre; the 1013 player swam in at column
+    // depth, not along the bed); facing the ladder, holding forward — the grab fires as he
+    // crosses the rung plane's reach.
     let front = [lad.centre[0] + lad.yaw.sin() * 1.2, 3.0, lad.centre[2] + lad.yaw.cos() * 1.2];
     sim.bond = nf_game::player::Bond::new(front, lad.yaw + std::f32::consts::PI);
     let walk = nf_game::player::Input { forward: 1.0, ..Default::default() };
