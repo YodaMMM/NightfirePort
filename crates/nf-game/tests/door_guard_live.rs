@@ -3,17 +3,27 @@
 //! state is CivilianDoorGuard 0x31 (`DroneTypeSettings` row 22: start 0x31 [L the table dump;
 //! docs/fields/dronetype-tables.md]). The port had the const with no arms (WORKLOG 3969).
 //!
-//! The game's path [M]:
+//! The game's path [M] (corrected by the daily audit 2026-10-17 — the old header called the two
+//! +0x34 gates "yaw" gates and built the plane normal on (0,0,1); both wrong):
 //! - `NDrone2_SetDronePartner(0x16, dc)` 0x141360 at the 0x31 ENTER [M 0x160694]: the nearest
 //!   other mode-0x16 guard (enabled `+0x4F8 & 0x600 == 0 && & 0x100 != 0`, health > 0, class
-//!   != 0x11, not deleted) within 2.0 rad of the caller's yaw (+0x34) and partnerless; the pair is
-//!   mutual (`+0x2BC` each side); `Vec_AngleDifference(my_yaw, atan2(dir))` < 0 marks the CALLER's
-//!   +0x2CC = 0xff and builds three planes on the PARTNER (normal −dir through the partner), else
-//!   the PARTNER gets 0xff and the planes are built on the CALLER (normal +dir) [M 0x141360:115-174].
+//!   != 0x11, not deleted) whose **position Y is within 2.0 of the caller's** — the +0x34 gate
+//!   at :90 is a HEIGHT gate (+0x30 is the position vector, so +0x34 is Y; the yaw is +0x54,
+//!   which is what :121 reads) — and partnerless; the pair is mutual (`+0x2BC` each side);
+//!   `Vec_AngleDifference(my_yaw, atan2(dir))` < 0 marks the CALLER's +0x2CC = 0xff and builds
+//!   the planes on the PARTNER, else the PARTNER gets 0xff and the planes are built on the
+//!   CALLER — in both cases v1 = owner→partner, v2 = (0,1,0) [M disasm 0x14150c-0x141554 /
+//!   0x1415f4-0x141614], anchored at the owner's own position [M 0x141360:115-174].
 //! - `NDrone2_DoorGuardHandler` 0x1416d8 at the 0x31 UPDATE [M 0x160814]: no partner or no
-//!   opponent (+0x170) → 0; the +0x2CC == 0xff holder returns the partner's +0x2CC; the planes'
-//!   owner evaluates: |opp yaw − my yaw| ≥ 2.0 → 0, else plane1/plane2 gates then the plane-0
-//!   bands s0 < −6 → 0, < 0 → 3, < 2 → 2, < 6 → 1, else 0 [M 0x1416d8:16-73].
+//!   opponent (+0x170) → 0; the +0x2CC == 0xff holder returns the partner's +0x2CC (the zone
+//!   the owner's handler tail stored there [M :75-77]); the planes' owner evaluates:
+//!   |opp Y − my Y| ≥ 2.0 → 0 (a HEIGHT gate [M :22 + disasm 0x14170c-0x141738]), else the
+//!   plane1/plane2 gates then the plane-0 bands s0 < −6 → 0, < 0 → 3, < 2 → 2, < 6 → 1, else 0
+//!   [M 0x1416d8:16-73].
+//! - The planes [M 0x141360:115-174 + 0x1e4498]: plane0.n = cross(v0, (0,1,0)) = (−v0.z, 0, v0.x)
+//!   through the OWNER — horizontal; plane1.n = (−n0.z, 0, n0.x) = −v0 through the MIRROR;
+//!   plane2.n = (n0.z, 0, −n0.x) = +v0 through the OWNER. No degenerate zero normal exists (a
+//!   pair along z gives n = (∓1, 0, 0)).
 //! - The 0x31 UPDATE arms [M 0x160648:38-105]: an armed opponent → prop-0x33 shout + Attack;
 //!   zone 1 → face + the idle-anim replay on the step change; zone 2 → anim 0x5f variant 1 + the
 //!   ChooseSFX(0x4f, 0x50) speech (the planes' owner only) + face; zone 3 → ChooseSFX(0x8f, 0x92)
@@ -102,101 +112,114 @@ pub fn idx(sim: &Drones, placement: usize) -> usize {
     sim.list.iter().position(|dr| dr.placement == placement).unwrap_or_else(|| panic!("placement {placement} on the roster"))
 }
 
-/// The door guards reach CivilianDoorGuard 0x31 and pair into mutual nearest-neighbour pairs —
-/// the four ACTIVE guards (404/417/441/442; 448/449 wait for switch channel 21 [D the probe in
-/// the report]) form 2 pairs [M SetDronePartner 0x141360]. Fail-first: the const had no arms,
+/// The door guards reach CivilianDoorGuard 0x31 and pair through `SetDronePartner`'s
+/// sequential ENTER scans [M 0x141360 + 0x160694]. Fail-first: the const had no arms,
 /// `door_partner` never filled.
 #[test]
 fn door_guards_pair_into_mutual_nearest_pairs() {
     let Some(l) = L::load() else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data();
     let (mut sim, _rng) = l.sim();
-    let guards: Vec<usize> = [404usize, 417, 441, 442].iter().map(|&pl| idx(&sim, pl)).collect();
     // Settle two ticks: the started ENTERs, then the pairing pass (the port pairs at the tick
     // boundary after the ENTER [*S one-tick deviation from the in-ENTER pairing]).
     let p = bond_at([-500.0, 0.0, -500.0]);
     sim.tick(&d, &p);
-    for &i in &guards {
+    sim.tick(&d, &p);
+    let (g404, g417, g441, g442) = (idx(&sim, 404), idx(&sim, 417), idx(&sim, 441), idx(&sim, 442));
+    for &i in &[g404, g417, g441, g442] {
         assert_eq!(sim.list[i].state, state::CIVILIAN_DOOR_GUARD,
             "pl {} reached CivilianDoorGuard, state {:#x}", sim.list[i].placement, sim.list[i].state);
     }
-    sim.tick(&d, &p);
-    let mut partners: Vec<(usize, usize)> = Vec::new();
-    for &i in &guards {
-        let Some(pn) = sim.list[i].door_partner else {
-            panic!("pl {} never paired", sim.list[i].placement);
-        };
-        assert!(guards.contains(&pn), "pl {}'s partner is a door guard", sim.list[i].placement);
-        assert_eq!(sim.list[pn].door_partner, Some(i), "the pairing is mutual ({} ↔ {})", sim.list[i].placement, sim.list[pn].placement);
-        // The yaw gate [M 0x141360:90]: |yaw diff| < 2.0.
-        assert!(nf_game::trig::angle_difference(sim.list[i].yaw, sim.list[pn].yaw).abs() < 2.0);
-        // Exactly one of the pair is the planes' owner (door_side != 0xff), the other mirrors.
-        assert!((sim.list[i].door_side == 0xff) ^ (sim.list[pn].door_side == 0xff),
-            "exactly one evaluator per pair: {} {:#x} {} {:#x}", sim.list[i].placement, sim.list[i].door_side, sim.list[pn].placement, sim.list[pn].door_side);
-        // The planes' owner's three planes match the [M] formulas exactly: n0 = cross(v0, (0,0,1))
-        // through the anchor (v0 = ±dir by the angle-difference sign), the derived 0x2F0/0x300
-        // planes per 0x141360:134-173. (Pair 441/442's axis runs along z: the cross with (0,0,1)
-        // is the game's own degenerate zero normal [M 0x1e4498:11-13].)
-        // The non-0xff side owns the planes; the 0xff holder is the mirror.
-        let (owner, mirror) = if sim.list[i].door_side == 0xff { (pn, i) } else { (i, pn) };
-        let dx = sim.list[owner].pos[0] - sim.list[mirror].pos[0];
-        let dy = sim.list[owner].pos[1] - sim.list[mirror].pos[1];
-        let dz = sim.list[owner].pos[2] - sim.list[mirror].pos[2];
-        let len = (dx * dx + dy * dy + dz * dz).sqrt();
-        let dir = [dx / len, dy / len, dz / len];
-        // diff < 0 → the planes on the MIRROR-side's partner... the owner is `mirror`'s partner;
-        // v0 = −dir when the MIRROR's diff < 0 (the planes then live on the mirror), else +dir.
-        // Recover the sign from the owner's position: v0 points owner−mirror when the planes were
-        // built on the mirror (diff < 0 → mirror 0xff, planes on the partner = the owner through
-        // −dir), and mirror−owner when built on the owner (diff ≥ 0, planes through +dir from the
-        // owner's OWN position — the owner IS the anchor). The anchor is whoever owns the planes.
-        let anchor = sim.list[owner].pos;
-        let other = sim.list[mirror].pos;
-        // The owner is the anchor; v0 = +dir −− where dir = normalise(partner − me) for the guard
-        // whose diff decided. When the owner is the mirror's partner (mirror's diff < 0), the
-        // game's `dir` ran from mirror→owner and v0 = −dir = owner−mirror... no: v0 = −dir with
-        // dir = owner−mirror → v0 = mirror−owner. When the owner decided (his diff ≥ 0), dir =
-        // mirror−owner (partner − me) and v0 = +dir. Both give v0 = the direction the owner faces
-        // his partner INVERTED — recover it from which side holds 0xff:
-        let dir_from_owner_to_partner = [ (sim.list[mirror].pos[0] - anchor[0]) / len, (sim.list[mirror].pos[1] - anchor[1]) / len, (sim.list[mirror].pos[2] - anchor[2]) / len ];
-        let _ = dir_from_owner_to_partner;
-        // The decisive guard is the one whose yaw enters Vec_AngleDifference: the 0xff holder ran
-        // the scan (his diff < 0 put the planes on his partner). v0 = −dir(d decisive guard).
-        let decisive = mirror; // the 0xff holder: his diff < 0 built the planes on the partner... OR his diff ≥ 0 put 0xff on the partner — recover from door_side:
-        let _ = decisive;
-        // Simplest exact pin: v0 = −dir when the MIRROR's own angle diff was < 0 — equivalently
-        // the planes' d matches only one of the two signs; try both and demand one matches.
-        let mut matches = 0;
-        for neg in [-1.0f32, 1.0] {
-            let v0 = [neg * dir[0], neg * dir[1], neg * dir[2]];
-            // dir here: owner→mirror; the game's dir ran decisive→its-partner. For decisive =
-            // mirror (mirror 0xff): game dir = mirror→owner?? — covered by the two-norm probe below.
-            let n = [v0[1], -v0[0], 0.0f32];
-            let d0 = -(n[0] * anchor[0] + n[1] * anchor[1] + n[2] * anchor[2]);
-            let (a, b, c) = (n[0], n[1], n[2]);
-            let expect = [
-                [a, b, c, d0],
-                [-c, b, a, d0 + a * anchor[0] + c * other[0] + c * anchor[2] - a * other[2]],
-                [c, b, -a, d0 + (a - c) * anchor[0] + (c + a) * anchor[2]],
-            ];
-            let got = sim.list[owner].door_planes;
-            let close = |x: f32, y: f32| (x - y).abs() < 1e-3 || (x - y).abs() < 1e-3 * x.abs().max(1.0);
-            let all = expect.iter().zip(got.iter()).all(|(e, g)| e.iter().zip(g.iter()).all(|(&x, &y)| close(x, y)));
-            if all { matches += 1; }
-        }
-        assert!(matches >= 1, "the owner's planes match the [M] formula for one sign: got {:?} (anchor {anchor:?} other {other:?})", sim.list[owner].door_planes);
-        partners.push((i.min(pn), i.max(pn)));
+    // The exact partner graph the game's sequential ENTERs leave [M 0x160694 — the 0x31 ENTER
+    // calls SetDronePartner unconditionally; 0x141360:96 — the claim `me->0x2BC = cand` is
+    // written INSIDE the scan; :113 — the mutual write `cand->0x2BC = me` lands after the scan
+    // and overwrites any earlier claim on the candidate]: the list-order scans chain. 404
+    // claims 417; 417's own ENTER still scans (nothing gates the caller) and claims the nearer
+    // partnerless guard 442 (7.6 u vs 8.9 u); 441 finds every candidate already claimed; 442's
+    // own ENTER claims 441. Only 441↔442 ends mutual; 404→417 and 417→442 are the stale claims
+    // the later scans left behind. (The pre-audit test asserted two clean mutual pairs — that
+    // outcome depended on the old wrong yaw gate filtering the cross-pair candidates [M
+    // 0x141360:90 is a HEIGHT gate].)
+    assert_eq!(sim.list[g404].door_partner, Some(g417), "404's ENTER claim");
+    assert_eq!(sim.list[g417].door_partner, Some(g442), "417's own re-scan claim");
+    assert_eq!(sim.list[g441].door_partner, Some(g442), "441's scan finds everything claimed");
+    assert_eq!(sim.list[g442].door_partner, Some(g441), "442's own re-scan claim — the one mutual pair");
+    // The HEIGHT gate [M 0x141360:90]: each claim's two objects' +0x34 (position Y) differ by
+    // less than 2.0. (All six guards stand at Y 44.0 on this level [D the roster dump], so the
+    // gate never separates them here — pin it anyway.) The old test asserted a yaw difference
+    // here — the daily audit 2026-10-17 correction: +0x30 is the position vector, +0x54 the yaw.
+    for (a, b) in [(g404, g417), (g417, g442), (g441, g442)] {
+        assert!((sim.list[a].pos[1] - sim.list[b].pos[1]).abs() < 2.0,
+            "pl {} and pl {} claim only within the 2.0 height gate", sim.list[a].placement, sim.list[b].placement);
     }
-    partners.sort();
-    partners.dedup();
-    assert_eq!(partners.len(), 2, "4 active guards → 2 pairs, got {partners:?}");
+    // The planes [M 0x141360:115-174 + 0x1e4498 + disasm]: each final build is anchored at its
+    // OWNER with v0 = owner→partner of the claim that built it — 404's own ENTER (diff ≥ 0 →
+    // planes on the caller) gives v0 = 404→417; 442's own ENTER (diff < 0 → planes on the
+    // candidate) gives 441 the build with v0 = 441→442; and 442 still holds the planes 417's
+    // ENTER built on her (v0 = 442→417) — unread, because 442 is a 0xff mirror. 417 holds none
+    // (his own build went to 442, 404's went to himself).
+    // plane0.n = cross(v0, (0,1,0)) = (−v0.z, 0, v0.x) — the game's second vector is (0,1,0)
+    // [M disasm 0x14150c-0x141554 / 0x1415f4-0x141614], NOT (0,0,1), so the normal is HORIZONTAL
+    // and the sign is fixed; a pair along z gives n = (∓1, 0, 0) — the old test's "the game's
+    // own degenerate zero normal" never happens. plane1 = −v0 through that build's MIRROR,
+    // plane2 = +v0 through the OWNER [M 0x141360:134-149 / 158-173].
+    for (owner, mirror) in [(g404, g417), (g441, g442), (g442, g417)] {
+        let got = sim.list[owner].door_planes;
+        let (ox, oy, oz) = (sim.list[owner].pos[0], sim.list[owner].pos[1], sim.list[owner].pos[2]);
+        let (mx, my, mz) = (sim.list[mirror].pos[0], sim.list[mirror].pos[1], sim.list[mirror].pos[2]);
+        let dx = mx - ox;
+        let dy = my - oy;
+        let dz = mz - oz;
+        let len = (dx * dx + dy * dy + dz * dz).sqrt();
+        let v0 = [dx / len, dy / len, dz / len];
+        let n = [-v0[2], 0.0f32, v0[0]]; // cross(v0, (0,1,0)) [M 0x1e4498:11-17]
+        let d0 = -(n[0] * ox + n[1] * oy + n[2] * oz);
+        let (a, b, c) = (n[0], n[1], n[2]);
+        let expect = [
+            [a, b, c, d0],
+            // +0x2F0: {−c, b, a, d0 + a·owner.x + c·mirror.x + c·owner.z − a·mirror.z}
+            // [M 0x141360:141-149 / 165-173 — algebraically −n1·mirror]
+            [-c, b, a, d0 + a * ox + c * mx + c * oz - a * mz],
+            // +0x300: {c, b, −a, d0 + (a − c)·owner.x + (c + a)·owner.z}
+            // [M 0x141360:144-145 / 168-169 — algebraically −n2·owner]
+            [c, b, -a, d0 + (a - c) * ox + (c + a) * oz],
+        ];
+        let close = |x: f32, y: f32| (x - y).abs() < 1e-3 || (x - y).abs() < 1e-3 * x.abs().max(1.0);
+        let all = expect.iter().zip(got.iter()).all(|(e, g)| e.iter().zip(g.iter()).all(|(&x, &y)| close(x, y)));
+        assert!(all, "pl {}'s planes match the [M] formula (mirror pl {}): got {got:?}",
+            sim.list[owner].placement, sim.list[mirror].placement);
+        // The normal is horizontal and unit-length — INCLUDING for the 441↔442 build whose axis
+        // runs along z, where the old test expected the game's "degenerate zero normal"
+        // [M disasm 0x14150c-0x141554: n = (∓1, 0, 0) there, never zero].
+        let nlen = (a * a + b * b + c * c).sqrt();
+        assert!((nlen - 1.0).abs() < 1e-3 && b.abs() < 1e-6,
+            "plane0's normal is horizontal unit length: n = ({a},{b},{c}) len {nlen}");
+        // The semantic pin, on the port's STORED planes: plane0 through the owner, plane1
+        // through that build's mirror, plane2 through the owner [M the d-store chains cancel].
+        let side = |pl: [f32; 4], q: [f32; 3]| pl[0] * q[0] + pl[1] * q[1] + pl[2] * q[2] + pl[3];
+        assert!(side(got[0], sim.list[owner].pos).abs() < 1e-2, "plane0 passes through the owner");
+        assert!(side(got[1], sim.list[mirror].pos).abs() < 1e-2, "plane1 passes through the build's mirror");
+        assert!(side(got[2], sim.list[owner].pos).abs() < 1e-2, "plane2 passes through the owner");
+    }
+    // The 0xff markers after the chain [M the branches at 0x141360:123/151 set exactly one side
+    // per build]: 404's build (diff ≥ 0) marked 417; 417's build (diff < 0) marked himself;
+    // 442's build (diff < 0) marked himself — 441 never marked.
+    assert_eq!(sim.list[g404].door_side, 0, "404 owns his build");
+    assert_eq!(sim.list[g417].door_side, 0xff, "417 marked by his own diff<0 build");
+    assert_eq!(sim.list[g441].door_side, 0, "441 owns 442's build");
+    assert_eq!(sim.list[g442].door_side, 0xff, "442 marked by her own diff<0 build");
+    // 417 holds no planes [M the three builds above all landed on 404/442/441].
+    assert!(sim.list[g417].door_planes.iter().all(|p| p.iter().all(|&v| v == 0.0)),
+        "417 never had planes built on him");
 }
 
-/// The zone bands drive the UPDATE arms [M 0x1416d8:55-73 + 0x160648:59-103]. The pairs' plane
-/// normals come out ±Y (the pair axes are horizontal, cross(v, (0,0,1)) [M 0x1e4498]) — s0 is the
-/// standing player's height against the anchor's: s0 ≈ 0 → the challenge band (zone 2: the 0x5f
-/// anim once, the planes' owner speaks); a player seen slightly BELOW the anchor (s0 ∈ [−6, 0))
-/// is zone 3: the mission-fail reason 0xc and the guard goes hostile.
+/// The zone bands drive the UPDATE arms [M 0x1416d8:55-73 + 0x160648:59-103]. With the game's
+/// planes every normal is horizontal, so all three side values are horizontal offsets — none is
+/// a height: s0 is the signed LATERAL offset from the owner↔partner line, s1 ≥ 0 and s2 ≥ 0
+/// select the slab between the two guards (plane1 = −v0 through the mirror, plane2 = +v0 through
+/// the owner [M 0x141360:134-149 / 158-173]). The bands on s0: [−6,0) → 3 (the mission-fail
+/// side), [0,2) → 2 (the challenge: the 0x5f anim once, the planes' owner speaks), [2,6) → 1.
+/// The read only happens within the HEIGHT gate [M 0x1416d8:22]: |opp Y − my Y| ≤ 2.0.
 #[test]
 fn zone_bands_drive_the_challenge_and_the_mission_fail() {
     let Some(l) = L::load() else { eprintln!("skip: NF_ISO not set"); return };
@@ -207,11 +230,13 @@ fn zone_bands_drive_the_challenge_and_the_mission_fail() {
     sim.tick(&d, &p0);
     sim.tick(&d, &p0);
     let side = |pl: [f32; 4], p: [f32; 3]| pl[0] * p[0] + pl[1] * p[1] + pl[2] * p[2] + pl[3];
-    // For each planes' owner, probe standing spots in front of him (along his facing) whose sides
-    // land in the challenge band, with a clear line. (The aim-yaw gate is satisfied by facing the
-    // guard's own way — the RAW gate [M 0x1416d8:22].)
+    // For each planes' owner, probe standing spots in front of him (along his facing) whose
+    // sides land in the challenge band, with a clear line. (The gate is the OPPONENT's height
+    // against the evaluator's own +0x34 [M 0x1416d8:22] — the probe spots stand on the guard's
+    // own floor, and no aim is involved anywhere in the function.)
     let mut challenge: Vec<(usize, [f32; 3])> = Vec::new();
     let mut fail: Vec<(usize, [f32; 3])> = Vec::new();
+    let mut raised: Vec<(usize, [f32; 3])> = Vec::new();
     for &ev in &guards {
         if sim.list[ev].door_side == 0xff { continue; } // the mirror holds no planes
         let planes = sim.list[ev].door_planes;
@@ -222,7 +247,16 @@ fn zone_bands_drive_the_challenge_and_the_mission_fail() {
                 let cand = [anchor[0] + face[0] * k as f32 + dx as f32 * 0.3, anchor[1], anchor[2] + face[2] * k as f32 + dz as f32 * 0.3];
                 let (s0, s1, s2) = (side(planes[0], cand), side(planes[1], cand), side(planes[2], cand));
                 if !d.world.line_of_sight([cand[0], cand[1] + 1.0, cand[2]], [anchor[0], anchor[1] + 1.4, anchor[2]]) { continue; }
-                if (0.0..2.0).contains(&s0) && s1 >= 0.0 && s2 >= 0.0 { challenge.push((ev, cand)); }
+                if (0.0..2.0).contains(&s0) && s1 >= 0.0 && s2 >= 0.0 {
+                    challenge.push((ev, cand));
+                    // The height-gate sister spot: the same spot with Bond 2.5 above the guard's
+                    // floor — past the [M 0x1416d8:22] gate — provided the world ray from the
+                    // raised eye still reaches the guard (so vision cannot mask the gate).
+                    let up = [cand[0], anchor[1] + 2.5, cand[2]];
+                    if d.world.line_of_sight([up[0], up[1] + 1.0, up[2]], [anchor[0], anchor[1] + 1.4, anchor[2]]) {
+                        raised.push((ev, up));
+                    }
+                }
                 if (-6.0..0.0).contains(&s0) && s1 >= 0.0 && s2 >= 0.0 { fail.push((ev, cand)); }
             }
         }
@@ -237,9 +271,7 @@ fn zone_bands_drive_the_challenge_and_the_mission_fail() {
         sim.tick(&d, &p0);
         sim.tick(&d, &p0);
         let ev = idx(&sim, sim.list[guard].placement);
-        let yaw = sim.list[ev].yaw;
-        let aim = [yaw.sin(), 0.0, yaw.cos()];
-        let p = Player { pos, target: [pos[0], pos[1] + 0.5, pos[2]], eye: [pos[0], pos[1] + 1.0, pos[2]], aim, sph: pos, capsule: ([pos[0], pos[1] + 1.086, pos[2]], pos), hanging: false, cel: None };
+        let p = bond_at(pos);
         let mut hostile = false;
         for _ in 0..90 {
             sim.tick(&d, &p);
@@ -251,16 +283,14 @@ fn zone_bands_drive_the_challenge_and_the_mission_fail() {
         assert!(hostile, "the armed opponent never turned the door guard hostile (state {:#x})", sim.list[ev].state);
         assert!(sim.list[ev].door_zone_step != 2, "the armed path must not play the challenge");
     }
-    // The challenge: stand UNARMED Bond there (fists, weapon 1 — outside the armed set), aim his
-    // yaw the guard's way.
+    // The challenge: stand UNARMED Bond there (fists, weapon 1 — outside the armed set). No aim
+    // is set toward the guard — the game's zone read has no aim input [M 0x1416d8:16-73].
     let (mut sim, _rng) = l.sim();
     sim.bond_weapon = 1;
     sim.tick(&d, &p0);
     sim.tick(&d, &p0);
     let ev = idx(&sim, sim.list[guard].placement);
-    let yaw = sim.list[ev].yaw;
-    let aim = [yaw.sin(), 0.0, yaw.cos()];
-    let p = Player { pos, target: [pos[0], pos[1] + 0.5, pos[2]], eye: [pos[0], pos[1] + 1.0, pos[2]], aim, sph: pos, capsule: ([pos[0], pos[1] + 1.086, pos[2]], pos), hanging: false, cel: None };
+    let p = bond_at(pos);
     let mut saw_challenge = false;
     for _ in 0..90 {
         sim.tick(&d, &p);
@@ -270,16 +300,37 @@ fn zone_bands_drive_the_challenge_and_the_mission_fail() {
     assert!(saw_challenge, "the challenge band never fired: zone {} step {} los {}",
         sim.list[ev].door_zone, sim.list[ev].door_zone_step, sim.list[ev].los);
 
-    // The restricted band: a seen player with s0 ∈ [−6, 0) → the fail reason 0xc + hostile.
+    // The HEIGHT-gate sister [M 0x1416d8:22]: the same challenge spot with Bond 2.5 ABOVE the
+    // guard's floor never reads the challenge band — the opponent's |ΔY| against the
+    // evaluator's own +0x34 is past the 2.0 gate — while the vision path still sees him
+    // (`los` true: the zero zone is the height gate's doing, not vision's).
+    if let Some((guard, pos)) = raised.first().cloned() {
+        let (mut sim, _rng) = l.sim();
+        sim.bond_weapon = 1;
+        sim.tick(&d, &p0);
+        sim.tick(&d, &p0);
+        let ev = idx(&sim, sim.list[guard].placement);
+        let p = bond_at(pos);
+        let mut saw_challenge = false;
+        for _ in 0..90 {
+            sim.tick(&d, &p);
+            if sim.list[ev].door_zone == 2 && sim.list[ev].door_zone_step == 2 { saw_challenge = true; break; }
+        }
+        assert!(sim.list[ev].los, "the raised opponent must still be seen (los true) — pl {} at {pos:?}", sim.list[guard].placement);
+        assert!(!saw_challenge, "a Bond 2.5 above the evaluator must not read the challenge band (the 0x1416d8:22 height gate): zone {}", sim.list[ev].door_zone);
+    } else {
+        eprintln!("[sister skipped: no raised challenge spot with a clear line on this level's pairs — the gate itself is [M 0x1416d8:22]]");
+    }
+
+    // The restricted band: a seen player with s0 ∈ [−6, 0) — the mission-fail SIDE of the
+    // owner↔partner line, inside the slab — → the fail reason 0xc + hostile.
     let (mut sim, _rng) = l.sim();
     sim.tick(&d, &p0);
     sim.tick(&d, &p0);
     if let Some((guard, pos)) = fail.first().cloned() {
         let ev = idx(&sim, sim.list[guard].placement);
         sim.bond_weapon = 1; // the zones only run for an unarmed opponent [M NearArmedPerson's gate]
-        let yaw = sim.list[ev].yaw;
-        let aim = [yaw.sin(), 0.0, yaw.cos()];
-        let p = Player { pos, target: [pos[0], pos[1] + 0.5, pos[2]], eye: [pos[0], pos[1] + 1.0, pos[2]], aim, sph: pos, capsule: ([pos[0], pos[1] + 1.086, pos[2]], pos), hanging: false, cel: None };
+        let p = bond_at(pos);
         let mut saw_fail = false;
         for _ in 0..90 {
             sim.tick(&d, &p);

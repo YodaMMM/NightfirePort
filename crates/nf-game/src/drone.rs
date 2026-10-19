@@ -9066,8 +9066,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // ---- SetDronePartner(kind 0x16, dc) [M 0x141360] ----
         // Candidates: drones of the same mode (+0xC5 == 0x16 — the caller passes 0x16), enabled
         // (`+0x4F8 & 0x600 == 0 && & 0x100 != 0`), health > 0, class != 0x11, not deleted
-        // (obj+0xFE & 1 == 0), partnerless, within 2.0 rad of the caller's yaw (+0x34); the
-        // nearest by `Vec_SqDist2D`. The pair is mutual; the sign of
+        // (obj+0xFE & 1 == 0), partnerless, and within 2.0 of the caller's position Y — a HEIGHT
+        // gate, not a yaw gate: 0x141360:90 compares the two objects' +0x34 floats, and +0x34 is
+        // position Y (the position VECTOR is +0x30 — Vec_SqDist2D :91 indexes [0]/[2] = x,z [M
+        // 0x1e2ef8]; the yaw is +0x54, which is what :121 reads) — then the nearest by
+        // `Vec_SqDist2D`. The pair is mutual; the sign of
         // `Vec_AngleDifference(my_yaw, atan2(dir))` picks which side holds the planes (its own
         // `+0x2CC = 0xff`... the OTHER's — see below), and `plane_from_two_vectors_and_point`
         // 0x1e4498 builds three planes on the evaluating guard.
@@ -9087,10 +9090,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if o.mode != mode || o.mode != 0x16 { continue; }
                 if !o.present || o.corpse || !o.enabled || o.health <= 0.0 { continue; }
                 if o.door_partner.is_some() { continue; }
-                // The RAW |yaw − yaw| < 2.0 — not the wrapped angle difference [M 0x141360:90
-                // `ABS(*(float *)(iVar1 + 0x34) - *(float *)(iVar3 + 0x34)) < 2.0`]: the two
-                // 07000007 pairs face ~4.7 rad apart and never cross-pair.
-                if (my_yaw - o.yaw).abs() >= 2.0 { continue; }
+                // The HEIGHT gate [M 0x141360:90 `ABS(me+0x34 − cand+0x34) < 2.0` — +0x34 is
+                // position Y on both sides; see the block comment above. The old port read here
+                // pinned a yaw gate — the daily audit 2026-10-17 correction.]
+                if (my_pos[1] - o.pos[1]).abs() >= 2.0 { continue; }
                 let dx = o.pos[0] - self.list[i].pos[0];
                 let dz = o.pos[2] - self.list[i].pos[2];
                 let sq = dx * dx + dz * dz;
@@ -9120,38 +9123,52 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 self.list[j].door_side = 0xff;
                 (i, self.list[i].pos, self.list[j].pos, 1.0)
             };
-            // plane0 = cross(v0, (0, 0, 1)) through the anchor [M 0x141360:132-133 / 0x1e4498];
-            // v0 = ∓dir. The derived plane1/plane2 formulas are the decompile's own
-            // [M 0x141360:134-149 / 158-173].
+            // plane0 = cross(v0, (0, 1, 0)) = (−v0.z, 0, v0.x) through the anchor — the second
+            // vector is the Y-up axis, stored as 0.0/1.0/0.0 in the disassembly of BOTH builds
+            // [M disasm 0x14150c-0x141554 (if-branch) and 0x1415f4-0x141614 (else-branch);
+            // 0x1e4498:11-17 n = cross(v1,v2), d = −n·point]. The normal is HORIZONTAL — there
+            // is no degenerate zero normal for a pair along z (n = (∓1, 0, 0) there). v0 =
+            // owner→partner in both branches (the if-branch negates dir because the planes move
+            // to the candidate). The derived plane1/plane2 formulas are the decompile's own
+            // [M 0x141360:134-149 / 158-173]: plane1 = −v1 through the MIRROR, plane2 = +v1
+            // through the OWNER.
             let v0 = [neg * dir[0], neg * dir[1], neg * dir[2]];
-            let n = [v0[1], -v0[0], 0.0f32]; // cross(v0, (0,0,1)) [M 0x1e4498:11-13]
+            let n = [-v0[2], 0.0f32, v0[0]]; // cross(v0, (0,1,0)) [M 0x1e4498:11-17]
             let d0 = -(n[0] * anchor[0] + n[1] * anchor[1] + n[2] * anchor[2]);
             let (a, b, c) = (n[0], n[1], n[2]);
             let planes = [
                 [a, b, c, d0],
-                // +0x2F0: {−c, b, a, d0 + a·ax + c·ox + c·az − a·oz} [M 0x141360:141-149]
+                // +0x2F0: {−c, b, a, d0 + a·owner.x + c·mirror.x + c·owner.z − a·mirror.z}
+                // [M 0x141360:141-149 / 165-173 — algebraically −n1·mirror]
                 [-c, b, a, d0 + a * anchor[0] + c * other[0] + c * anchor[2] - a * other[2]],
-                // +0x300: {c, b, −a, d0 + (a − c)·ax + (c + a)·az} [M 0x141360:134-145]
+                // +0x300: {c, b, −a, d0 + (a − c)·owner.x + (c + a)·owner.z}
+                // [M 0x141360:144-145 / 168-169 — algebraically −n2·owner]
                 [c, b, -a, d0 + (a - c) * anchor[0] + (c + a) * anchor[2]],
             ];
             self.list[evaluator].door_planes = planes;
         }
         // ---- DoorGuardHandler [M 0x1416d8] ----
-        // Needs an opponent (+0x170; the port's stand-in: the guard currently sees Bond [S]) whose
-        // yaw is within 2.0 rad of the guard's; the planes' owner evaluates, the 0xff holder
-        // mirrors the partner's value (the game reads the partner's +0x2CC directly).
-        let bond_yaw = atan2_approx(player.aim[0], player.aim[2]);
+        // Needs an opponent (+0x170; the port's stand-in: the guard currently sees Bond [S]);
+        // the height gate below is the game's [M 0x1416d8:22]. The planes' owner evaluates, the
+        // 0xff holder mirrors the partner's value (the game reads the partner's +0x2CC).
         for i in 0..self.list.len() {
             if self.list[i].state != state::CIVILIAN_DOOR_GUARD { continue; }
             let Some(p) = self.list[i].door_partner else { self.list[i].door_zone = 0; continue; };
             if self.list[i].door_side == 0xff {
-                // The mirror: the game returns the partner's +0x2CC [M 0x1416d8:19-21].
-                self.list[i].door_zone = self.list[p].door_side;
+                // The mirror: the game returns the partner's RAW +0x2CC [M 0x1416d8:19-21] — the
+                // zone the owner's handler tail stored [M :75-77], or 0xff when the partner never
+                // evaluated (a 0xff holder's +0x2CC stays 0xff: the mirror path returns early
+                // without storing). The old port read `door_side` (always 0 in the port) and the
+                // audit-time fix read the partner's zone transitively — a mirror-of-a-mirror
+                // (417 → 442 → 441 on 07000007) then copies a zone the game never computes.
+                self.list[i].door_zone = if self.list[p].door_side == 0xff { 0xff } else { self.list[p].door_zone };
                 continue;
             }
-            // The opponent gates [M 0x1416d8:16-24]: +0x170 != 0 and |opp yaw − my yaw| < 2.0.
-            // The RAW |opp yaw − my yaw| < 2.0 gate [M 0x1416d8:22 — the same unwrapped ABS].
-            if !self.list[i].los || (bond_yaw - self.list[i].yaw).abs() >= 2.0 {
+            // The opponent gates [M 0x1416d8:16-24]: +0x170 != 0 (the port's stand-in: the guard
+            // currently sees Bond [S]) and |opp +0x34 − my +0x34| ≤ 2.0 — the OPPONENT's HEIGHT
+            // against the evaluator's own, not an aim yaw [M disasm 0x14170c-0x141738:
+            // `lwc1 0x34($t0)` / `lwc1 0x34($a2)`, `c.olt.s $f3,$f0` + `bc1fl`].
+            if !self.list[i].los || (player.pos[1] - self.list[i].pos[1]).abs() >= 2.0 {
                 self.list[i].door_zone = 0;
                 continue;
             }
