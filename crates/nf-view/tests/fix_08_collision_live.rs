@@ -133,7 +133,7 @@ fn the_scoped_capsule_disagrees_with_the_flat_one_at_the_slab_face() {
     // x 157.5 (inside the room's x band, clear of the side walls).
     let a = [157.5, sim.bond.pos[1] + 0.9, -115.5];
     let b = [157.5, a[1], -121.0];
-    let (flat, _) = sim.world.capsule_push(a, b, 0.55);
+    let (flat, _) = sim.world.capsule_push(a, b, 0.55, false);
     let (scoped, _) = sim.world.capsule_push_scoped(Some(cell), a, b, 0.55);
     eprintln!("flat push {:?} scoped push {:?}", flat, scoped);
     assert!(flat[2] > 0.01,
