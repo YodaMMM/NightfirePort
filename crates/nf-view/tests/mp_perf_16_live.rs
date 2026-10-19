@@ -31,7 +31,7 @@ fn iso() -> Option<String> {
 // Re-pinned for net-desync-detail (700w2): the state hash is now the fixed-order fold of named component
 // hashes, so its value changed while the simulation did not (the same run: kills 90, as bot-nav-pit-ramp's
 // pin; repeatable).
-const PINNED_DIGEST: u64 = 0xe86f_adbc_97cc_f8f7;
+const PINNED_DIGEST: u64 = 0x92e3_34f2_97d1_6830;
 
 const TICKS: u32 = 3600;
 

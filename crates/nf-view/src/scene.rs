@@ -9835,6 +9835,15 @@ impl Sim {
             } else if slot < nf_net::MAX_AGENTS {
                 self.mp_armour[slot] = 50.0;
             }
+            // mp-shot-gate: the taker's shared gate inventory gets the same grant the local
+            // inventory ran (docs/systems/mp-shot-gate.md) — a remote slot's pickups land in
+            // the shared state identically on every machine.
+            if !bot && slot < nf_net::MAX_AGENTS {
+                if let Some(pk) = self.drones.pickups.get(k).cloned() {
+                    let mut armour_scratch = self.mp_armour[slot];
+                    self.mp_combat.gate_take(slot, &pk, &self.weapons, &mut armour_scratch, self.drones.frame);
+                }
+            }
         }
         // 2. The world damage, slot order.
         let mut hits: Vec<(usize, f32, u32, Option<usize>)> = Vec::new();
@@ -10177,6 +10186,10 @@ impl Sim {
         self.mp_combat.fired.clear();
         for shooter in 0..nf_net::MAX_AGENTS {
             let inp = &inputs[shooter];
+            // mp-shot-gate: the slot's gate ticks on every row, shot or not (the held follow, the
+            // reload machine, the refire timer) — docs/systems/mp-shot-gate.md.
+            let script_len = |h: u32| self.scripts.get(&h).map(|s| s.length as u32);
+            self.mp_combat.gate_tick(shooter, inp.held, inp.fire, inp.reload, &self.weapons, &script_len);
             if !inp.shot || self.mp_dead_ticks[shooter] > 0 { continue; }
             let b = if shooter == local { Some(&self.bond) } else { self.mp_bonds[shooter].as_ref() };
             let Some(b) = b else { continue };
@@ -10190,6 +10203,13 @@ impl Sim {
                 let (sp, cp) = (nf_game::trig::sinf(b.pitch), nf_game::trig::cosf(b.pitch));
                 (inp.held, [cp * sy, sp, cp * cy])
             };
+            // mp-shot-gate: the shot is applied only when the game would let the slot fire —
+            // it holds this weapon, has the rounds, the refire interval has run. Dropped shots
+            // draw nothing from the shared stream and show no effects (they never left).
+            if !self.mp_combat.gate_allow(shooter, weapon, &self.weapons) {
+                if std::env::var_os("NF_MPCOMBAT_LOG").is_some() { eprintln!("pcombat] frame {frame}: slot {shooter}'s {weapon:#04x} shot dropped by the gate"); }
+                continue;
+            }
             if std::env::var_os("NF_MPCOMBAT_LOG").is_some() { eprintln!("[mpcombat] frame {frame}: slot {shooter} fires {weapon:#04x} dir {dir:?}"); }
             self.mp_combat.fire(&self.weapons, shooter, weapon, head, dir, &mut self.drones.rng, frame);
             // mp-remote-fx: the shot's effects (muzzle flash, tracer, impact) — draw/audio only. The
@@ -10244,6 +10264,13 @@ impl Sim {
                 // [M 0x185368:74]; the death sequence had switched him to the fists 0x47 [M
                 // 0x190810:61]) — the weapon set's spawn loadout.
                 self.mp_equip_local();
+            }
+            // mp-shot-gate: the respawn re-seeds the slot's shared gate the same way [M the
+            // re-equip above]; the settings clone keeps the borrow split.
+            let settings = self.mp.as_ref().map(|m| m.settings.clone());
+            if let Some(s) = settings {
+                let lf = |w: u8| self.mp_weapon_loaded.get(w as usize).copied().unwrap_or(true);
+                self.mp_combat.gate_equip(slot, &s, &self.weapons, lf);
             }
         }
         // 3. This machine's own health/armour are the slot's (the HUD, the death sequence's start).

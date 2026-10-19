@@ -208,10 +208,23 @@ fn automatic_volley() {
     setup(&mut p, 6.0);
     let r = p.rules();
     let per = cb::mp_damage(&r, f32_at(&p.rec(0x12), 0x0c), cb::part::TORSO);
-    // The Storm M32 on auto: a round every tick for 10 ticks (the sender's pipeline decides the
-    // rate; each release is one shot description).
-    let drop = volley(&mut p, 0x12, 10, 0.2, 4);
-    eprintln!("storm: 10 rounds, drop {drop} (per round {per})");
+    // mp-shot-gate: the shared gate enforces the game's fire rate ([M] Player_WeaponFiring
+    // 0x1a5460: the +0x92c refire timer resets to max(weapon_data+0x40, 1.0) per shot), so the
+    // volley sends its 10 releases at the record's interval (6 frames [D +0x40]) — the cadence
+    // the sender's own pipeline produces, one shot description per release.
+    let interval = u32::from_le_bytes(p.rec(0x12)[0x40..0x44].try_into().unwrap()) as u32;
+    let before = p.hp(1);
+    for k in 0..10u32 {
+        for _ in 0..interval {
+            let dir = aim(p.body(0).head(), p.body(1).pos, 0.2);
+            p.tick(&shot_row(0, 0x12, dir));
+        }
+        let _ = k;
+    }
+    p.idle(4);
+    p.hp_agree();
+    let drop = before - p.hp(1);
+    eprintln!("storm: 10 rounds at the interval, drop {drop} (per round {per})");
     assert!(drop > 0.0 && (drop / per).fract() == 0.0, "whole torso rounds: {drop} / {per}");
     assert!(drop >= per * 8.0, "most of the spread rounds land at 6 u");
 }
