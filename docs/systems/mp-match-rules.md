@@ -168,6 +168,44 @@ mirrors the game's per-type globals (`Flags`[2] @0x317210, `Bases`[2] @0x317330,
   to free where it lies (no re-spawn pick) [M 0x1882d8:147-180].
 - **Deathmatch 0x1 / Team Arena 0x20000002** — no objects; kills only (above).
 
+## Online play — the live contacts and the corrections (mp-scenarios-online, 2026-10-18)
+
+The live load registers every 0x26 placement WITH its model bounds (`register_mp_object_bounds`
+— the placement hashcode's `MapObject` centre/radius/min/max = celglist +0x10/+0x1C/+0x20/+0x30,
+the record the game's object keeps at obj+0xD8 [M `MP_CreateObject` 0x185de8:118]); the host
+ticks `update_objects_live` (the hill mask from the hill's own box, then the object walk). An
+object with bounds runs the game's contact rules inside its update from the shared state alone,
+so every machine agrees:
+
+- `MpMatch::hit_by` = `MP_HitBy` 0x1830e0's stand-in: the first live slot (slot order) of the
+  team word (2 = any) whose body sphere (centre `Bond::pos` y − 0.1267, r 1.0576 [L]) overlaps
+  the object's model sphere [S]. Flags: state 0 enemy-contact take; state 2 own-team return, else
+  enemy take, else the return counter [M 0x1861a8:170-263]. Uplinks: an owner on the terminal
+  blocks the flip; a neutral terminal is claimed by team 0 then team 1 (team 1 wins a tie) [M
+  0x186d98:24-114]. GE items / blueprint: any contact takes a free or dropped item [M
+  0x187568:187-253, 0x1882d8:124-150]; the blueprint scores on contact with its team's base
+  model sphere [M 0x1882d8:68-77]. Carried objects ride the carrier's position.
+- `hill_mask` = `Intersect_SphereBox(0.0, body centre − hill pos, box)` — radius 0.0 [M disasm
+  0x18bc40, 0x186b68/0x186b7c]; the on-hill status bit 0x10 sets/clears [M 0x186ae0:94-115].
+- Corrections against the decomp: the KOTH/Uplink team sums are Σ `(float)(int)` personal
+  scores [M 0x186ae0:124-136, 0x186d98:70-78]; a Demolition/Protection own-goal leaves the hitter
+  at −1 (the −1 REPLACES the +1) [M 0x1870a0:129-140], the HP store is `(short)(int)(hp − dmg)`
+  and only a positive hit records the hitter, whose init is 0xffff (no personal credit without
+  one) [M 0x1870a0:81-91, 0x185de8:130-131]; the GE carrier's death re-picks the item at a random
+  pool spawn (a draw) [M 0x187568:262-306]; the strike's target is a LIVE enemy (`MP_GetTarget(..,
+  1)` — no target, no launch) [M 0x187568:362-366], it dies through `player_killed` (no credit)
+  and lands after the port's 3 s flight [S]; `MP_Start` runs `MP_assassinReset(0)`
+  (`start_assassin`) [M 0x183a50:166-167] — the port never had an assassin before — and the reset
+  picks the TARGET first (excluding the inherited assassin or the old target), then the assassin
+  [M 0x18aa70:24-41]; `MP_Start` writes `total_players = humans + bots` [M 0x183a50:164].
+- The host (scene.rs): the round restart respawns every human (`mp_respawn`) and bot, then resets
+  the per-slot words [M 0x183fc0:55-82]; a match-decided death (the GE strike) reaches the body
+  (online: the per-slot combat's death; offline: health 0, no double count); bots respawn through
+  `MP_ReSpawn`'s gates and resets [M 0x124e38:85, 0x185368:16-57]; online shots damage the
+  Demolition/Protection site when it is the nearest hit on the ray [S].
+- `Sim::net_state_hash` now folds `mp::hash::state_hash` — team scores, end latches, every
+  scenario object, the assassin words (before: the slots only).
+
 ## Deviations (model gaps, marked, not silent rewrites)
 
 - The round clock runs on the fixed 60 Hz tick, not `psiGetTimeIn100ths` (determinism rule).

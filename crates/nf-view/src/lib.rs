@@ -1245,7 +1245,16 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                         0x26 => {
                             let ty = param(p, 0);
                             let cfg: [u32; 7] = std::array::from_fn(|k| param(p, k as u32));
-                            m.register_mp_object(p.translation, p.rotation, ty, cfg, p.hashcode);
+                            // mp-scenarios-online (agent6): the placement model's bounds — the
+                            // celglist the game's object keeps at obj+0xD8 [M MP_CreateObject
+                            // 0x185de8:118] (centre/radius = +0x10/+0x1C, box = +0x20/+0x30 [D
+                            // MapObject]) — give the flags/terminals/items their contact sphere and
+                            // the hill its box.
+                            let bounds = level.by_hash.get(&p.hashcode).map(|&(mi, oi)| {
+                                let o = &level.maps[mi].objects[oi];
+                                nf_game::mp::MpObjBounds { centre: o.centre, radius: o.radius, min: o.min, max: o.max }
+                            });
+                            m.register_mp_object_bounds(p.translation, p.rotation, ty, cfg, p.hashcode, bounds);
                         }
                         _ => {}
                     }
@@ -1299,6 +1308,9 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                 m.game.slots[b.slot].pos = Some(b.brain.pos);
             }
             eprintln!("mp: bots created: {}", m.bots.len());
+            // mp-scenarios-online (agent6): `MP_Start` 0x183a50:166-167 — Assassination picks its
+            // first target and assassin (`MP_assassinReset(0)`) once every player and bot exists.
+            m.start_assassin(&mut sim.drones.rng);
             // The SP mission machine stays off for the match [M 0x182c60:16-18 — Drones::mp_master].
             sim.drones.mp_master = m.settings.master;
             sim.mp = Some(m);

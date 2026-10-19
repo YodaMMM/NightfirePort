@@ -2007,7 +2007,10 @@ impl Sim {
             // flags stay false (KOTH scoring stays the headless rigs'; see the report's left
             // items). Order: `update_objects` then `update`, the headless lockstep rig's recorded
             // order (mp_lockstep drive). The RNG is drawn only by the GE/blueprint re-picks.
-            m.update_objects(1.0 / 60.0, &[false; nf_game::mp::MP_MAX_SLOTS], &mut self.drones.rng);
+            // mp-scenarios-online (agent6): the live walk — the hill occupancy from the hill's own
+            // box (`MP_KOHUpdate` 0x186ae0:88-93) and the objects' contact tests (`MP_HitBy`
+            // 0x1830e0 stand-in) run inside, from the match's shared state only.
+            m.update_objects_live(1.0 / 60.0, &mut self.drones.rng);
             // the shared bit-exact generator — the game's MP_Update draws the global RNG only on
             // the state-6 restart's site re-pick (MP_RestartScenario 0x183fc0)
             m.update(1.0 / 60.0, false, &mut self.drones.rng);
@@ -2025,6 +2028,9 @@ impl Sim {
                 if let Some(b) = b { m.set_slot(slot, b.pos); }
             }
         }
+        // mp-scenarios-online (agent6): the round restart's respawns and the match-decided deaths
+        // reach the bodies before the bots tick.
+        self.step_mp_scenario_sync();
         // mp-bots-in-match: the bots' per-frame driver — the game's `BOT_update` 0x126448 family
         // runs per frame inside the MP flow (the brains + the firing pipeline + respawn/score
         // bookkeeping), exactly like the port's `MP_Update` block above.
@@ -8705,7 +8711,12 @@ impl Sim {
             let Some(m) = self.mp.as_mut() else { return };
             let st = m.game.slots[0].status;
             let killer = if st < 8 { Some(st as usize) } else { None };
-            m.player_killed(0, killer, false, false, &mut self.drones.rng);
+            // mp-scenarios-online (agent6): a death the match itself decided (the GoldenEye
+            // strike's `player_killed` [M 0x187568:98-108]) is already counted — the body's death
+            // sequence only follows it (`step_mp_scenario_sync`).
+            if !m.game.slots[0].dead {
+                m.player_killed(0, killer, false, false, &mut self.drones.rng);
+            }
         }
         // The 5 s respawn gate [M 0x190bb0:41-54: `FRAME_RATE_INT * 5 <= GameState+0x34 -
         // obj+0xec`] — the port's dead-tick counter starts at 0 on the stamp tick.
@@ -8723,6 +8734,79 @@ impl Sim {
         self.drones.health.health = hp;
         self.drones.death = nf_game::death::Death::default();
         m.set_slot(0, self.bond.pos);
+    }
+
+    /// mp-scenarios-online (agent6): the match -> body half of the scenario rules, run every tick
+    /// right after `MP_Update` on every machine (shared state + the shared stream only):
+    ///
+    /// - **the round restart** (`MP_RestartScenario` 0x183fc0:55-75, run by `MP_Update`'s state 6
+    ///   [M 0x184bd0:79-92]): every present human respawns through `MP_ReSpawn` (the policy's
+    ///   pick, the health, the body moves) and every bot through `BOT_respawn`; the slots'
+    ///   last-killer/last-shooter words then reset to 0xffff [M :76-82]. The port only re-picked
+    ///   the site before — Demolition/Protection's next round started with everyone where the
+    ///   last one ended (and the dead still dead).
+    /// - **a death the match decided** (the GoldenEye strike's target [M 0x187568:98-108]): the
+    ///   slot is `dead` in the match but its body is alive — online the per-slot combat starts the
+    ///   death (health 0, the 5 s respawn timer), offline slot 0's health drops to 0 (its death
+    ///   sequence + respawn follow), a bot dies like a shot bot.
+    pub fn step_mp_scenario_sync(&mut self) {
+        let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
+        let frame = self.drones.frame;
+        let local = self.mp_local_slot;
+        let Some(m) = self.mp.as_mut() else { return };
+        if std::mem::take(&mut m.game.restart_pending) {
+            let humans = (m.settings.human_count as usize).min(nf_net::MAX_AGENTS);
+            for slot in 0..humans {
+                let has_body = slot == local || self.mp_bonds[slot].is_some();
+                if !has_body || m.game.slots[slot].pos.is_none() { continue; }
+                let Some((sp_idx, hp)) = m.mp_respawn(slot, &mut self.drones.rng) else { continue };
+                let sp = m.spawns.points[sp_idx as usize];
+                let nb = nf_game::player::Bond::stand_at(&self.world, [sp.pos[0], sp.pos[1], sp.pos[2]], sp.facing[1]);
+                m.set_slot(slot, nb.pos);
+                let was_dead = self.mp_dead_ticks[slot] > 0 || (slot == local && self.drones.death.active);
+                if slot == local {
+                    self.bond = nb;
+                    self.drones.health.health = hp;
+                    if was_dead {
+                        self.drones.death = nf_game::death::Death::default();
+                        self.gun = nf_game::gun::Gun::new(2, 7, 41);
+                        self.drones.bond_weapon = 2;
+                    }
+                } else {
+                    self.mp_bonds[slot] = Some(nb);
+                }
+                self.mp_hp[slot] = hp;
+                self.mp_dead_ticks[slot] = 0;
+            }
+            for b in m.bots.iter_mut() {
+                b.dead = true; // BOT_respawn runs this tick in step_mp_bots (respawn_at = now)
+                b.respawn_at = frame;
+            }
+            for s in m.game.slots.iter_mut() {
+                s.last_killer = 0xffff; // [M 0x183fc0:76-82] — after the respawns
+                s.status = 0xffff;
+            }
+        }
+        for b in m.bots.iter_mut() {
+            if b.slot < m.game.slots.len() && m.game.slots[b.slot].dead && !b.dead {
+                b.dead = true;
+                b.health = 0.0;
+                b.deaths += 1;
+                b.respawn_at = frame + 180; // the bots' death delay (step_mp_bots' kill path) [S]
+            }
+        }
+        if online {
+            let humans = (m.settings.human_count as usize).min(nf_net::MAX_AGENTS);
+            for slot in 0..humans {
+                let has_body = slot == local || self.mp_bonds[slot].is_some();
+                if has_body && m.game.slots[slot].dead && self.mp_dead_ticks[slot] == 0 {
+                    self.mp_hp[slot] = 0.0;
+                    self.mp_dead_ticks[slot] = 1;
+                }
+            }
+        } else if m.game.slots[0].dead && !self.drones.death.active && self.drones.health.health > 0.0 {
+            self.drones.health.health = 0.0;
+        }
     }
 
     pub fn step_mp_bots(&mut self) {
@@ -8763,6 +8847,10 @@ impl Sim {
                 // after the delay. The port stands in 180 ticks (3 s) [S].
                 if frame >= m.bots[i].respawn_at {
                     let slot = m.bots[i].slot;
+                    // mp-scenarios-online (agent6): `BOT_respawn` 0x124e38:85 goes through
+                    // `MP_ReSpawn` — its gates hold for bots too (no respawn while the round is
+                    // over; Top Agent's out-of-lives) [M 0x185368:16-20].
+                    if !m.respawn_allowed(slot) { continue; }
                     let team = m.bots[i].team;
                     // mp-16-slots: more than 4 bots cycle the disc's 4 records (as create_bots does).
                     let rec = nf_game::mp::bots::INITIAL_BOT_RECORDS[i % nf_game::mp::bots::INITIAL_BOT_RECORDS.len()].clone();
@@ -8778,6 +8866,11 @@ impl Sim {
                     m.bots[i].health = m.bots[i].max_health;
                     m.bots[i].dead = false;
                     m.bots[i].respawns += 1;
+                    // mp-scenarios-online (agent6): `MP_ReSpawn`'s slot resets (streak, last
+                    // shooter, status bits, alive) [M 0x185368:55-57] — the bot's slot stayed
+                    // `dead` forever after its first death (KOTH's alive gate, the contacts and
+                    // Top Agent's out-count all read it).
+                    m.do_respawn(slot, sp as u32);
                     m.game.slots[slot].pos = Some(pos);
                 }
                 continue;
@@ -9106,6 +9199,18 @@ impl Sim {
                     }
                 }
             }
+            // mp-scenarios-online (agent6): the Demolition/Protection site takes the shot when it
+            // is the nearest thing on the ray (the site SP's hit damage [M 0x1870a0:81-91]; the
+            // ray-vs-model-sphere test is the port's stand-in [S]).
+            if let Some((c, r)) = self.mp.as_ref().and_then(|m| m.site_sphere()) {
+                if let Some(ts) = ray_body_hit(head, end, c, r) {
+                    let nearer = best.is_some_and(|(th, _)| th < ts) || bot_hit.is_some_and(|(tb, _)| tb < ts);
+                    if !nearer {
+                        if let Some(m) = self.mp.as_mut() { m.damage_site(damage, shooter); }
+                        continue;
+                    }
+                }
+            }
             if let Some((tb, j)) = bot_hit.filter(|(tb, _)| best.is_none_or(|(th, _)| *tb < th)) {
                 let _ = tb;
                 let frame = self.drones.frame;
@@ -9241,6 +9346,11 @@ impl Sim {
             h.i32(m.settings.time_limit);
             h.u32(m.settings.seed);
             h.u32(m.settings.human_count);
+            // mp-scenarios-online (agent6): the WHOLE match state — the team scores, the end
+            // latches, the scenario objects (flag carriers/positions, terminal owners, the hill,
+            // the site HP, the GoldenEye items + strike, the blueprint), the assassin words. The
+            // fold above covered only the slots, so a scenario desync went undetected.
+            h.u64(nf_game::mp::hash::state_hash(m));
         } else {
             h.u32(0xffff_fffe);
         }

@@ -169,7 +169,13 @@ fn uplink_drip_flip_and_team_sum() {
     assert_eq!(m.objects_rt.uplinks[0].state, 0);
     tick(&mut m, 300, &mut rng); // 5 s at 0.2/s
     assert!((m.game.slots[0].score - 1.0).abs() < 1e-4, "the controller drips 0.2/s for 5 s");
-    assert!((m.game.team_scores[0] - 1.0).abs() < 1e-4, "the team score = Σ personals [M :66-80]");
+    // mp-scenarios-online: the team score is the TRUNCATED Σ — `+= (float)(int)score` [M
+    // 0x186d98:70-78] — so at ~1.0 personal (the f32 drip lands just under or over 1.0) the team
+    // shows 0 or 1, never a fraction; half a second more lands it on exactly 1.
+    assert!(m.game.team_scores[0] == 0.0 || m.game.team_scores[0] == 1.0, "the team score is whole points");
+    tick(&mut m, 30, &mut rng);
+    assert_eq!(m.game.team_scores[0], 1.0, "the team score = Σ (int) personals [M :66-80]");
+    assert!(m.game.slots[0].score > 1.05, "the personal score keeps its fraction");
     m.touch_uplink(0, 1); // the enemy flips it at once [M :24-52]
     assert_eq!(m.objects_rt.uplinks[0].state, 1);
     assert_eq!(m.objects_rt.uplinks[0].controller, 1);
@@ -253,7 +259,9 @@ fn demolition_destroy_own_goal_and_restart() {
     og.create_mode_objects(&mut rng);
     og.damage_site(3000.0, 0);
     assert_eq!(og.game.team_scores, [-1.0, 1.0]);
-    assert_eq!(og.game.slots[0].score, 0.0, "the own-goal hands the personal point back");
+    // mp-scenarios-online: the own-goal REPLACES the hitter's +1 with −1 (`fVar10 = -1.0`, then
+    // `score += fVar10` [M 0x1870a0:129-140]) — 402's port added both and asserted 0 here.
+    assert_eq!(og.game.slots[0].score, -1.0, "the own-goal costs the defender a personal point");
 }
 
 /// Protection: the round timeout scores the **defending** team (1) and enters state 6 [M
@@ -295,6 +303,12 @@ fn goldeneye_strike_launch_and_complete() {
     m.player_killed(2, Some(0), false, false, &mut rng); // the mixed carrier dies — the item drops
     assert_eq!(m.objects_rt.ge[1].as_ref().unwrap().state, 2);
     m.touch_ge_item(1, 1); // slot 1 (team 0) picks the dropped item up
+    // mp-scenarios-online: the launch's `MP_GetTarget(.., check=1)` skips dead players [M
+    // 0x1832b8:26-48, 0x187568:362-366 — no target, no launch]: the only team-1 player is still
+    // dead, so both carried items wait…
+    tick(&mut m, 1, &mut rng);
+    assert_eq!(m.objects_rt.ge[0].as_ref().unwrap().state, 1, "no live target — no launch yet");
+    m.do_respawn(2, 0); // …until the target respawns
     tick(&mut m, 1, &mut rng);
     assert_eq!(m.objects_rt.ge[0].as_ref().unwrap().state, 3, "the strike is in flight");
     assert_eq!(m.game.slots[0].score, 1.0, "each carrier +1 [M :368-377]");
@@ -378,7 +392,13 @@ fn koth_drip_ffa_and_team() {
         team.update_objects(DT, &one, &mut rng);
         team.update(DT, false, &mut rng);
     }
-    assert!((team.game.team_scores[0] - 1.0).abs() < 1e-4, "the hill team's score = Σ personals [M :122-137]");
+    // mp-scenarios-online: the truncated Σ (`(float)(int)` [M 0x186ae0:124-136]) — whole points.
+    assert!(team.game.team_scores[0] == 0.0 || team.game.team_scores[0] == 1.0, "whole points only");
+    for _ in 0..30 {
+        team.update_objects(DT, &one, &mut rng);
+        team.update(DT, false, &mut rng);
+    }
+    assert_eq!(team.game.team_scores[0], 1.0, "the hill team's score = Σ (int) personals [M :122-137]");
     assert_eq!(team.game.team_scores[1], 0.0);
 }
 
