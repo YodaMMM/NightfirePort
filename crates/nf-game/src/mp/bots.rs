@@ -1155,21 +1155,48 @@ pub struct BotBrain {
     jump_next: bool,
 }
 
-/// The port's route over the arena AI network [S — the game's `AIRoute` + link creep are
-/// ported in `nav.rs` for the SP drones; the bots use a plain shortest path over the same graph
-/// with a walk-clear shortcut, see `BotBrain::steer_to`].
-#[derive(Clone, Debug, Default, PartialEq)]
+/// The port's route over the arena AI network: the game's `AINetwork_CalcRouteToPosition` →
+/// A* → `OptimiseRoute` node list (`plan_route`) + its `FollowRoute` link creep (`steer_to` /
+/// `follow_route`), the same shape `nav::Route` runs for the SP drones.
+#[derive(Clone, Debug, PartialEq)]
 pub struct BotRoute {
     /// The nav path index and its node list (empty = walk straight to `dest`).
     pub path: usize,
     pub nodes: Vec<u16>,
-    /// The next node to reach.
+    /// The link the creep walks: from `nodes[idx]` to `nodes[idx + 1]` (or to `dest` at the
+    /// last node; past the end the walk is straight at `dest`).
     pub idx: usize,
     /// The destination (body-root space) the route was built for.
     pub dest: [f32; 3],
     /// The tick it was built (re-plans age out).
     pub built: u32,
     pub valid: bool,
+    /// The link creep state (`AIRoute` +0xd0 link from, +0xc0 step vec, +0xb0 step index,
+    /// +0xb2 step count [M `LinkCreep_ForNodes` 0x159810]; body-root space).
+    pub creep_from: [f32; 3],
+    pub creep_vec: [f32; 3],
+    pub creep_steps: i32,
+    pub creep_i: i32,
+    /// This tick's walk target (`route+0x60`), body-root space.
+    pub target: [f32; 3],
+}
+
+impl Default for BotRoute {
+    fn default() -> Self {
+        BotRoute {
+            path: 0,
+            nodes: Vec::new(),
+            idx: 0,
+            dest: [0.0; 3],
+            built: 0,
+            valid: false,
+            creep_from: [0.0; 3],
+            creep_vec: [0.0; 3],
+            creep_steps: 0,
+            creep_i: 0,
+            target: [0.0; 3],
+        }
+    }
 }
 
 /// The walk-clear test between two body roots: the floor+1.0 line (root − 0.1) is clear of the
@@ -1187,6 +1214,23 @@ fn walk_clear(world: &CollisionWorld, a: [f32; 3], b: [f32; 3]) -> bool {
 fn dist2d(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]) * (a[0] - b[0]) + (a[2] - b[2]) * (a[2] - b[2])).sqrt()
 }
+
+/// `LinkCreep_ForNodes` 0x159810's link subdivision: steps of 0.4 (trunc(trunc(|d|) × 2.5)), or
+/// one step of d when |d| ≤ 0.4 — the same math `nav::Creep` runs for the drones. Returns
+/// (link from, step vec, step count).
+fn link_creep(a: [f32; 3], b: [f32; 3]) -> ([f32; 3], [f32; 3], i32) {
+    let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    if len > 0.4 {
+        (a, d.map(|x| x * 0.4 / len), (len.trunc() * 2.5).trunc() as i32)
+    } else {
+        (a, d, 1)
+    }
+}
+
+/// The creep step advance's lookahead (`DCVars` +0x90 in `LinkCreep_Increment` 0x159f28's
+/// `if (+0x90 <= dist) return` gate; the drones' `Route` carries the same 2.0 default).
+const CREEP_LOOKAHEAD: f32 = 2.0;
 
 /// A nav node's body-root height: the node sits at floor + 0.4 (`AIPath_Parse`), the root at
 /// floor + 1.1 (`Player_StandAtNewPosition`).
@@ -2729,13 +2773,12 @@ impl BotBrain {
     }
 
     /// Walk toward `dest` (body-root space) along the arena's AI network: straight when the walk
-    /// is clear, else a shortest path over the network's links between the nearest walk-clear
-    /// nodes, skipping ahead whenever the node after next is already walk-clear [S — the game's
-    /// `AINetwork_CalcRouteToPosition` → A* → `OptimiseRoute` → `FollowRoute` link creep; the
-    /// ported creep (`nav::Route`) is tuned to the drones' anim root motion, so the bots use this
-    /// plain follower over the same graph]. `face` turns the body along the walk (the goal walk;
-    /// the combat moves keep it on the opponent). Returns false when the bot is stuck for good
-    /// (three stuck checks in a row) so the caller can drop the goal.
+    /// is clear, else the game's route follower — a shortest path over the network's links
+    /// (`plan_route`) and its `FollowRoute` link creep (`follow_route`: the walk target creeps
+    /// the current link in 0.4 steps on the link's own line, the advance test 2D-only). `face`
+    /// turns the body along the walk (the goal walk; the combat moves keep it on the opponent).
+    /// Returns false when the bot is stuck for good (three stuck checks in a row) so the caller
+    /// can drop the goal.
     fn steer_to(&mut self, ctx: &BotCtx, dest: [f32; 3], speed: f32, face: bool) -> bool {
         let root = self.root();
         let mut way = dest;
@@ -2749,30 +2792,14 @@ impl BotBrain {
                     self.plan_route(ctx, net, root, dest);
                 }
                 if self.route.valid && !self.route.nodes.is_empty() {
-                    let p = &net.paths[self.route.path];
-                    // Advance past reached nodes; skip ahead one node a tick when the next-but-one
-                    // (or the destination, past the last) is already walk-clear.
-                    while self.route.idx < self.route.nodes.len() {
-                        let n = node_root(p.nodes[self.route.nodes[self.route.idx] as usize].pos);
-                        if dist2d(root, n) < 0.8 && (n[1] - root[1]).abs() < 1.5 {
-                            self.route.idx += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                    if self.route.idx < self.route.nodes.len() {
-                        let after = if self.route.idx + 1 < self.route.nodes.len() {
-                            node_root(p.nodes[self.route.nodes[self.route.idx + 1] as usize].pos)
-                        } else {
-                            dest
-                        };
-                        if walk_clear(ctx.world, root, after) {
-                            self.route.idx += 1;
-                        }
-                    }
-                    if self.route.idx < self.route.nodes.len() {
-                        way = node_root(p.nodes[self.route.nodes[self.route.idx] as usize].pos);
-                    }
+                    // The game's follower (`AINetwork_FollowRoute` 0x15b110 → `LinkCreep_*`).
+                    // The plain node chase this replaced steered straight at the next node with
+                    // no avoidance — on 07000023 it pushed a bot from the pit floor into the
+                    // pit ramp's side below node #95, over 1.5 under the node root, so its
+                    // reached test (2D 0.8 + |dy| 1.5) could never pass [L the demolition
+                    // playtest, mp_bot_objectives_live].
+                    self.follow_route(ctx, net);
+                    way = self.route.target;
                 }
             }
         }
@@ -2788,12 +2815,93 @@ impl BotBrain {
         self.stuck_hits < 3
     }
 
+    /// The point `i` steps along the current link's creep (`route+0xd0 + i × route+0xc0`
+    /// [M `LinkCreep_Handler` 0x15a2c8]).
+    fn creep_point(&self, i: i32) -> [f32; 3] {
+        let (f, v) = (self.route.creep_from, self.route.creep_vec);
+        [f[0] + v[0] * i as f32, f[1] + v[1] * i as f32, f[2] + v[2] * i as f32]
+    }
+
+    /// Seed the creep for route link `k` (`LinkCreep_Calc` 0x159b10 → `LinkCreep_ForNodes`
+    /// 0x159810): the link from `nodes[k]` to the next node (or the destination at the last),
+    /// the target on its first step point. Past the last link: straight at the destination.
+    fn seed_creep(&mut self, net: &crate::nav::Network, k: usize) {
+        let p = &net.paths[self.route.path];
+        let len = self.route.nodes.len();
+        let (from, to) = if k < len {
+            let from = node_root(p.nodes[self.route.nodes[k] as usize].pos);
+            let to = if k + 1 < len {
+                node_root(p.nodes[self.route.nodes[k + 1] as usize].pos)
+            } else {
+                self.route.dest
+            };
+            (from, to)
+        } else {
+            (self.route.dest, self.route.dest)
+        };
+        let (creep_from, creep_vec, creep_steps) = link_creep(from, to);
+        self.route.creep_from = creep_from;
+        self.route.creep_vec = creep_vec;
+        self.route.creep_steps = creep_steps;
+        self.route.creep_i = 0;
+        self.route.target = creep_from;
+    }
+
+    /// `AINetwork_FollowRoute` 0x15b110 → `LinkCreep_Handler` 0x15a2c8 → `LinkCreep_Increment`
+    /// 0x159f28 / `LinkCreep_Decrement` 0x15a148, in body-root space, one call per tick:
+    /// the steps run out → the next route node (`Increment`'s `SetupNextNode(1)`); the target is
+    /// blocked (the walk-clear stand-in for `BoundsNodeTest`, the feet over 1.0² 2D away) → one
+    /// creep step back, or one route node back at step 0 (the drones' port's reading —
+    /// `LinkCreep_Calc`'s backward-creep half is not modelled); otherwise the target advances
+    /// one step when the next step point is within `CREEP_LOOKAHEAD` and (within 0.4 2D or the
+    /// straight walk is clear) [M 0x159f28: `fVar5 < 0.4 || clear` behind the threshold gate].
+    fn follow_route(&mut self, ctx: &BotCtx, net: &crate::nav::Network) {
+        if self.route.idx >= self.route.nodes.len() {
+            self.route.target = self.route.dest;
+            return;
+        }
+        let root = self.root();
+        let dx = root[0] - self.route.target[0];
+        let dz = root[2] - self.route.target[2];
+        if dx * dx + dz * dz >= 1.0 && !walk_clear(ctx.world, root, self.route.target) {
+            // Blocked toward the target: step back (`LinkCreep_Decrement`).
+            if self.route.creep_i >= 1 && walk_clear(ctx.world, root, self.creep_point(self.route.creep_i - 1)) {
+                self.route.creep_i -= 1;
+                self.route.target = self.creep_point(self.route.creep_i);
+                return;
+            }
+            if self.route.creep_i == 0 && self.route.idx > 0 {
+                // [M 0x15a148] at creep step 0 the game calls `AINetwork_SetupNextNode(-1)`;
+                // the port re-creeps the stepped-back link forward (as the drones' port notes).
+                self.route.idx -= 1;
+                self.seed_creep(net, self.route.idx);
+                return;
+            }
+            // Otherwise the target stands: the stuck watch ends a real jam.
+            return;
+        }
+        if self.route.creep_i >= self.route.creep_steps {
+            self.route.idx += 1;
+            self.seed_creep(net, self.route.idx);
+            return;
+        }
+        let q = self.creep_point(self.route.creep_i + 1);
+        let dx = root[0] - q[0];
+        let dz = root[2] - q[2];
+        let d = (dx * dx + dz * dz).sqrt();
+        if d < CREEP_LOOKAHEAD && (d < 0.4 || walk_clear(ctx.world, root, q)) {
+            self.route.creep_i += 1;
+            self.route.target = q;
+        }
+    }
+
     /// The route plan (see `steer_to`): straight when walk-clear; else Dijkstra over the network
     /// links from the nearest walk-clear nodes at the start to the nearest at the destination
-    /// (ties by node index — deterministic). No reachable node → straight (the body slides).
+    /// (ties by node index — deterministic), then `OptimiseRoute`'s end trims, then the link
+    /// creep seeds at the first link. No reachable node → straight (the body slides).
     fn plan_route(&mut self, ctx: &BotCtx, net: &crate::nav::Network, from: [f32; 3], dest: [f32; 3]) {
         let _p = crate::prof::scope("bots: plan_route");
-        self.route = BotRoute { path: 0, nodes: Vec::new(), idx: 0, dest, built: self.tick, valid: true };
+        self.route = BotRoute { dest, built: self.tick, valid: true, ..BotRoute::default() };
         if walk_clear(ctx.world, from, dest) {
             return;
         }
@@ -2868,6 +2976,28 @@ impl BotBrain {
         nodes.reverse();
         self.route.path = pi;
         self.route.nodes = nodes;
+        // `AINetwork_OptimiseRoute` 0x156760 (the drones' `Route::to_position` port): trim the
+        // first / last node when the straight walk to its neighbour is clear, behind the
+        // door/kick node-flag pair gate. The pit bot's #96→#95 stays: the 1.58 dy of the ramp
+        // link fails walk_clear, so the link is walked as authored by the creep.
+        let pair_ok = |x: u16, y: u16| {
+            let (fx, fy) = (p.nodes[x as usize].flags, p.nodes[y as usize].flags);
+            !((fx & 2 != 0 && fy & 2 != 0) || (fx & 4 != 0 && fy & 4 != 0))
+        };
+        if self.route.nodes.len() > 1
+            && pair_ok(self.route.nodes[0], self.route.nodes[1])
+            && walk_clear(ctx.world, from, node_root(p.nodes[self.route.nodes[1] as usize].pos))
+        {
+            self.route.nodes.remove(0);
+        }
+        let m = self.route.nodes.len();
+        if m > 1
+            && pair_ok(self.route.nodes[m - 2], self.route.nodes[m - 1])
+            && walk_clear(ctx.world, dest, node_root(p.nodes[self.route.nodes[m - 2] as usize].pos))
+        {
+            self.route.nodes.pop();
+        }
+        self.seed_creep(net, 0);
     }
 
     /// The body walk: this tick's request (+ the keep-apart push from bodies closer than 1.5)

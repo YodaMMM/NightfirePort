@@ -24,6 +24,13 @@ fn iso() -> Option<String> {
 // the bots with the weapon set's first gun and carries the lobby's bot records); agent 13's
 // optimisations were proven result-identical against its own base (0xe5ac_fd39_a20a_ac80), and the
 // lazy sight line again on the merge (lazy_sight false + the precomputed bit2: the same digest).
+// Re-pinned for bot-nav-pit-ramp (0x001c_313c_9be0_b2e1, kills 90 over 3600 ticks): the bots'
+// follower is the game's `FollowRoute` link creep now (bots.rs `steer_to`/`follow_route`
+// [M 0x15b110/0x159810/0x159f28/0x15a2c8]) — routes end at different ticks, bots die differently;
+// the two machines' hashes still agree every tick.
+// Re-pinned for net-desync-detail (700w2): the state hash is now the fixed-order fold of named component
+// hashes, so its value changed while the simulation did not (the same run: kills 90, as bot-nav-pit-ramp's
+// pin; repeatable).
 // Re-pinned for mp-bot-weapons (776): the weapon layer's fire fix makes the bots actually fire —
 // the port cleared the fire latch in the 0xD0/backoff combat arms (the game never writes +0x3b
 // there [M 0x16f390/0x16fc30]), so every re-entry was a fresh `DroneWeap_Fire` whose
@@ -31,7 +38,8 @@ fn iso() -> Option<String> {
 // beyond the 1-in-3 exit roll's stay [M 0x16f5e8:48-52]: latch set, bots never fired. With the
 // latch persisting the deadline survives and the bots shoot while they move (35→38 kills in the
 // pinned 3600-tick run, the per-tick hashes still agree on both machines).
-const PINNED_DIGEST: u64 = 0x63f8_f23f_4fcb_a70e;
+// PROVISIONAL on the 776b+pit-ramp merged tree (bot-weapons-finish-3): re-measured below.
+const PINNED_DIGEST: u64 = 0x92e3_34f2_97d1_6830;
 
 const TICKS: u32 = 3600;
 

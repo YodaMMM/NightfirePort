@@ -403,7 +403,7 @@ impl Inventory {
     fn cap(w: &WeaponData, t: usize) -> i16 { w.ammo_cap.get(t).copied().unwrap_or(0) }
 
     /// The clip slot a weapon uses: its base's when `+0x05` is set and their ammo types agree.
-    fn clip_slot(w: &WeaponData, id: usize) -> usize {
+    pub(crate) fn clip_slot(w: &WeaponData, id: usize) -> usize {
         let base = w.base(id) as usize;
         if w.shares_base_clip(id) && w.ammo_type(id) == w.ammo_type(base) { base } else { id }
     }

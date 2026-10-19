@@ -1442,10 +1442,15 @@ impl Drone {
             alert_block: alert_props.map_or(0.0, |w| nf_formats::drone::ALERTNESS_LEVELS[d.props.get(0x20, &w) as usize & 3]),
             // fix-cover-remainder: the scary-object flee family (fields on their own lines — merge lesson 4).
             scared: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
-            // fix-anim-events: `+0x45` (the setup's swap id — not parsed from the setup word yet), the
-            // EventFunc outboxes, and `+0x3E` (the anim datum's weapon byte 0x1C / 0x1D, DefaultInit
-            // 0x14b300:801-811; the port keys it on the drone's weapon id — the datum byte's id space).
-            weapon_swap: 0, pending_melee: None, pending_weapon_swap: false,
+            // fix-anim-events: the EventFunc outboxes, and `+0x3E` (the anim datum's weapon byte
+            // 0x1C / 0x1D, DefaultInit 0x14b300:801-811; the port keys it on the drone's weapon id —
+            // the datum byte's id space).
+            // bathhouse-armed-girl: `+0x45` = the setup's weapon-swap id — `*(char *)(iVar3 + 0x45) =
+            // (char)piVar19[0x17]` [M DefaultInit 0x14b300:266; params start at piVar19[13]
+            // (Drone_Create 0x136be0), so piVar19[0x17] = parameter 10]. DrawWeapon's gates read it
+            // [M 0x166000 case 1, AttackNoWeapon 0x14af80]; the 02 bathhouse girls carry 1 — no
+            // drawable gun — [D census #464-466], the guards 0xE.
+            weapon_swap: param(10) as u8, pending_melee: None, pending_weapon_swap: false,
             recoil_weapon: weapon == 0x1c || weapon == 0x1d,
             // glass-breach-guards-4 (own line — merge lesson 4).
             scripted_move: false,
@@ -5486,12 +5491,21 @@ impl Drone {
             // DrawWeapon (0x166000): anim 0x46 → the return state `+0x5A2` (*suggested* InitPatrol when unset, [L] 6 for
             // most 07000005 guards); on exit, still unarmed → `ChangeWeapon(6)`: weapon 6, anim set 4, 16 rounds.
             (DRAW_WEAPON, msg::ENTER) => {
-                let next = if self.return_state != 0 { self.return_state } else { INIT_PATROL };
-                self.call_anim(d, anim_state::DRAW_WEAPON, next, 0);
+                // bathhouse-armed-girl [M NDrone2_DSTATE_DrawWeapon 0x166000 case 1]: without a swap
+                // id (`+0x45` < 2) the state goes straight to CivilianScared (0x12) — no draw anim,
+                // so the arming event (case 2) can never fire for it.
+                if self.weapon_swap < 2 { self.set_state(CIVILIAN_SCARED); }
+                else {
+                    let next = if self.return_state != 0 { self.return_state } else { INIT_PATROL };
+                    self.call_anim(d, anim_state::DRAW_WEAPON, next, 0);
+                }
                 true
             }
             (DRAW_WEAPON, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
-            (DRAW_WEAPON, msg::EXIT) => { if (self.weapon as u8) <= 1 { self.weapon = 6; self.anim_set = 4; self.clip = 16; } true }
+            // The draw event (case 2, [M 0x166000:41-43] `cVar2 < 2 → ChangeWeapon(6)`) arms with
+            // the sidearm only after the draw anim ran for a drone that entered with a swap id —
+            // the ENTER bail (above) leaves by EXIT with `+0x45` < 2 and must not arm here.
+            (DRAW_WEAPON, msg::EXIT) => { if self.weapon_swap > 1 && (self.weapon as u8) <= 1 { self.weapon = 6; self.anim_set = 4; self.clip = 16; } true }
             (SNIPER_RELOAD, msg::ENTER) => { self.vision_on = true; self.stationary = true; self.firing = false; self.timer_c = Some(frame + 20); true }
             (SNIPER_RELOAD, msg::TIMER_C) => { self.call_anim(d, anim_state::RELOAD, SNIPER_FIRE, 0); true }
             (SNIPER_RELOAD, msg::EXIT) => { self.clip = self.clip_max; true }
@@ -5613,12 +5627,14 @@ impl Drone {
                 self.set_state(SURRENDER_ANIM);
                 true
             }
-            // Attack without a gun (weapon byte ≤ 1, after a surrender): `DroneFunc_AttackNoWeapon` (0x14af80) → DrawWeapon
-            // (`+0x45` > 1; [L] 10 for every 07000005 guard).
+            // Attack without a gun (weapon byte ≤ 1, after a surrender): `DroneFunc_AttackNoWeapon`
+            // (0x14af80) RETURNS the next state — CivilianScared (0x12) unless the placement gave a
+            // drawable swap id (`+0x45` > 1 → DrawWeapon 0x66; [L] 10 for every 07000005 guard; the
+            // 02 bathhouse girls carry 1 [D census #464-466] → scared, never armed).
             (ATTACK, msg::ENTER) if (self.weapon as u8) <= 1 => {
                 self.first_attack_done = true;
                 self.alert = 1.0;
-                self.set_state(DRAW_WEAPON);
+                if self.weapon_swap > 1 { self.set_state(DRAW_WEAPON); } else { self.set_state(CIVILIAN_SCARED); }
                 true
             }
             (ATTACK, msg::ENTER) => {

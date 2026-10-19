@@ -30,6 +30,10 @@ use nf_net::{MatchSettings, UdpTransport, MAX_AGENTS};
 
 use crate::menu::{MpNetAgent, MpNetChoices, MpNetError, MpNetLink};
 
+/// net-desync-detail: the component count `PT_HASHCOMPS` carries (the app's fold pins it —
+/// `crate::scene::NET_HASH_COMPONENTS`).
+pub const HASH_COMPONENTS: usize = nf_net::proto::HASH_COMPONENTS;
+
 // ── conversions ──────────────────────────────────────────────────────────────
 
 /// `MpSettings` → the wire's `MatchSettings` (field mapping documented in
@@ -196,7 +200,9 @@ impl MpNetChoices {
     }
 }
 
-fn encode_match_start(m: &MatchSettings, seed: u32) -> Vec<u8> {
+/// net-desync-detail (public: the desync report's `match-settings.bin` is this payload): the
+/// tag-1 match-start payload — the 208-byte MatchSettings + the seed.
+pub fn encode_match_start(m: &MatchSettings, seed: u32) -> Vec<u8> {
     let mut o = vec![1u8];
     let mut buf = [0u8; nf_net::settings::SETTINGS_WIRE_SIZE];
     m.encode(&mut buf);
@@ -205,7 +211,9 @@ fn encode_match_start(m: &MatchSettings, seed: u32) -> Vec<u8> {
     o
 }
 
-fn decode_match_start(b: &[u8]) -> Option<(MatchSettings, u32)> {
+/// net-desync-detail (public: `--bug-replay` of a desync report rebuilds the match from this
+/// payload): decodes the tag-1 match-start payload — the MatchSettings + the seed.
+pub fn decode_match_start(b: &[u8]) -> Option<(MatchSettings, u32)> {
     if b.len() < 1 + nf_net::settings::SETTINGS_WIRE_SIZE + 4 || b[0] != 1 {
         return None;
     }
@@ -228,8 +236,14 @@ pub enum CoreEvent {
     /// A human slot's client left (Neutral policy: the match runs on, the
     /// game's own disconnected-pad shape).
     ClientLeft { slot: u8, graceful: bool },
-    /// The state hashes diverged at `tick` (the app shows the box, back to lobby).
+    /// The state hashes diverged at `tick`. Session keeps running.
     Desync { tick: u32 },
+    /// net-desync-detail: the peer's component hashes for the desync tick arrived
+    /// (`PT_HASHCOMPS`) — the desync watcher pairs them with our own.
+    HashComps { tick: u32, comps: [u64; HASH_COMPONENTS] },
+    /// net-desync-detail: the peer's per-item breakdown of `component` for the desync tick
+    /// arrived (`PT_HASHDETAIL`) — completes the report's slot diagnosis.
+    HashDetail { tick: u32, component: u8, items: Vec<u64> },
     /// Client: the host went silent past the timeout.
     HostTimeout,
     /// Client: the host LEFT (quit the match / closed the lobby) — at once,
@@ -261,6 +275,11 @@ pub enum CoreEvent {
     /// `join_tick` — the app spawns its agent there (`Sim::mp_join_spawn`)
     /// and the joiner adopts the slot as its own view.
     LateJoinSlot { slot: u8, join_tick: u32 },
+    /// net-match-end: a machine ran its own handover — it simulated through its final tick and
+    /// opened the debriefing (`slot`'s own board folds to `board_hash`; `final_tick` is the sim
+    /// frame it stopped at). The host collects these (every human peer, or a departure) before it
+    /// lets the finished session go [S port protocol — the disc has no online].
+    DebriefAck { slot: u8, final_tick: u32, board_hash: u64 },
 }
 
 /// The shared session state: one per match/lobby. See the module docs.
@@ -618,7 +637,13 @@ impl NetCore {
                 Event::Desync { tick, .. } => {
                     self.events.push(CoreEvent::Desync { tick });
                 }
-                Event::Data { bytes, .. } => {
+                Event::HashComps { tick, comps } => {
+                    self.events.push(CoreEvent::HashComps { tick, comps });
+                }
+                Event::HashDetail { tick, component, items } => {
+                    self.events.push(CoreEvent::HashDetail { tick, component, items });
+                }
+                Event::Data { from_slot, bytes } => {
                     match bytes.first() {
                         Some(0) => {
                             self.choices = MpNetChoices::decode(&bytes);
@@ -642,6 +667,13 @@ impl NetCore {
                             if let Some(e) = nf_net::LobbyEdit::decode(&bytes[1..]) {
                                 self.lobby_edits.push(e);
                             }
+                        }
+                        // net-match-end: tag 4 = the debriefing ack (final tick + the board's
+                        // fold) — the host's end wait reads these; every other machine ignores it.
+                        Some(4) if bytes.len() >= 13 => {
+                            let final_tick = u32::from_le_bytes(bytes[1..5].try_into().expect("4 bytes"));
+                            let board_hash = u64::from_le_bytes(bytes[5..13].try_into().expect("8 bytes"));
+                            self.events.push(CoreEvent::DebriefAck { slot: from_slot, final_tick, board_hash });
                         }
                         _ => {}
                     }
@@ -705,6 +737,21 @@ impl NetCore {
         let mut payload = vec![3u8];
         payload.extend_from_slice(&e.encode());
         self.sess.send_data(payload);
+    }
+
+    /// net-match-end: this machine's handover ran — announce the final tick and the board's
+    /// fold (Data tag 4; see docs/systems/net-match-end.md §4) [S port protocol].
+    pub fn send_debrief_ack(&mut self, final_tick: u32, board_hash: u64) {
+        let mut payload = vec![4u8];
+        payload.extend_from_slice(&final_tick.to_le_bytes());
+        payload.extend_from_slice(&board_hash.to_le_bytes());
+        self.sess.send_data(payload);
+    }
+
+    /// net-match-end: the human slots other than this machine's own (the end wait's peer set —
+    /// a departed slot has already left `slot_human` [M Session::drop_slot]).
+    pub fn human_peers(&self) -> Vec<usize> {
+        self.sess.human_slots().into_iter().filter(|&s| s != self.sess.local_slot() as usize).collect()
     }
 
     /// mp-lobby-one-screen: the host drains one arrived client edit [S §6.4].
@@ -813,18 +860,46 @@ impl NetCore {
         self.sess.delay_schedule().to_vec()
     }
 
+    /// net-desync-detail: the recorded run transcript — the base tick and the per-tick rows
+    /// since the match start (the desync report's `match-log.bin` holds a copy).
+    pub fn run_log(&self) -> (u32, Vec<[nf_net::Input; MAX_AGENTS]>) {
+        let (base, log) = self.sess.run_log();
+        (base, log.to_vec())
+    }
+
     /// The input delay in force at `tick`.
     pub fn delay_at(&self, tick: u32) -> u32 {
         self.sess.delay_at(tick)
+    }
+
+    /// net-desync-detail: the hash-exchange cadence (the watcher's detail rows ride it).
+    pub fn hash_every(&self) -> u32 {
+        self.sess.hash_every()
     }
 
     pub fn submit_hash(&mut self, tick: u32, hash: u64) {
         self.sess.submit_hash(tick, hash);
     }
 
+    /// net-desync-detail: send our component hashes for the desync tick (the watcher's first
+    /// exchange packet).
+    pub fn send_hash_comps(&mut self, tick: u32, comps: [u64; HASH_COMPONENTS]) {
+        if !self.closed {
+            self.sess.send_hash_comps(tick, comps);
+        }
+    }
+
+    /// net-desync-detail: send the first diverging component's per-item hashes.
+    pub fn send_hash_detail(&mut self, tick: u32, component: u8, items: Vec<u64>) {
+        if !self.closed {
+            self.sess.send_hash_detail(tick, component, items);
+        }
+    }
+
     /// Host: record the per-tick inputs a tick ran with (the late-join
     /// transcript; the app calls it right after `ready_inputs` returned
-    /// `Some`). Host-only — clients ignore it.
+    /// `Some`). Since net-desync-detail every machine records (the desync
+    /// report's match-log.bin is this log at rest).
     pub fn record_run_tick(&mut self, tick: u32, inputs: [nf_net::Input; MAX_AGENTS]) {
         self.sess.record_run_tick(tick, inputs);
     }
@@ -914,6 +989,10 @@ impl SessionProxy {
     }
     pub fn core_is_closed(&self) -> bool {
         self.0.borrow().closed
+    }
+    /// net-match-end: is this machine the session's host (the end wait runs on it).
+    pub fn is_host(&self) -> bool {
+        self.0.borrow().is_host
     }
     /// True once the match is armed (host) or the match payload arrived
     /// (client) — the app's adoption cue.
