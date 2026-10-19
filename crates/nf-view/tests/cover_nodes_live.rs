@@ -1,12 +1,18 @@
-//! cover-nodes (task 746): the AI cover node placements (0xE5 corner / 0xE6 low) spawn from EVERY
-//! map entry of the level archive, the way the game creates them, and a 07000006 guard under fire
-//! takes one of the game's own cover nodes instead of standing in the open.
+//! cover-nodes (task 746; the sub-map half re-answered by cover-nodes-submap): the AI cover node
+//! placements (0xE5 corner / 0xE6 low) become live nodes from the MAIN MAP's placement block only
+//! — the way the game creates them — and a 07000006 guard under fire takes one of the game's own
+//! cover nodes instead of standing in the open.
 //!
-//! Evidence: the loader dispatches every type-0/1/2/11 entry of the level .bin to
-//! `parsemap_parsemap` (0x1d4880 case 0/1/2/0xb — docs/formats/level-bin.md, *measured*), whose
-//! block walk runs `parsemap_block_map_data_dynamic` 0x1d1b68 per placement and
-//! `parsemap_create_dynamic_objects` 0x1d04f0 case 0xe5 → `Drone_CoverCornerNode` 0x136ff0 /
-//! case 0xe6 → `Drone_CoverLowNode` 0x137340. The port's `cover::build` walked the main map only.
+//! Evidence: `ResetMap_Load` 0x1d6360 creates the live dynamic objects in ONE
+//! `parsemap_block_map_data_dynamic(&DynamicBH, DynamicPtr, 1)` call (the only flag-1 caller);
+//! `DynamicPtr` (0x30cff0) is reset to 0 at every map file's open (`parsemap_parsemap` 0x1d1cf0
+//! state 0, disasm 0x1d1dc8/0x1d1dd0) and records each file's block 0x1a
+//! (`parsemap_handle_block_id` 0x1d1020 case 0x1a, disasm 0x1d121c) — so the create runs over the
+//! LAST-parsed map entry's placements. Every mission archive lists its kind-1 main map LAST
+//! [D — docs/systems/cover-nodes-load.md], so the live list is the main map's 0xE5/0xE6
+//! placements in placement order; the shared sub-map 010000f3's template pair is never
+//! instantiated. The earlier "every map entry" claim (task 746's scan, ignored at merge
+//! batch-1016c) contradicted this chain — the tests below pin the proven behaviour now.
 //! Opt-in: `NF_ISO`.
 
 use nf_view::dev::Dev;
@@ -19,47 +25,74 @@ fn settle(scene: &mut nf_view::scene::Scene, ticks: u32) {
     for _ in 0..ticks { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
 }
 
-/// The game creates a cover node for every 0xE5/0xE6 placement of every map entry
-/// ([M] 0x1d4880 → 0x1d1b68 → 0x1d04f0 case 0xe5/0xe6). 07000006's archive holds 81 corner +
-/// 35 low cover placements across its maps (main map 01000098: 80+34 [D placement bytes,
-/// docs/systems/script-census.md census], shared sub-map 010000f3: 1+1). The port built the main
-/// map only: this failed 114 != 116 before the fix.
+/// The live cover list is the main map's 0xE5/0xE6 placements in placement order
+/// ([M] ResetMap_Load 0x1d6360's single flag-1 create over `DynamicPtr` — the last-parsed map
+/// entry's block 0x1a, the main map on every mission archive [D — docs/systems/cover-nodes-load.md]).
+/// 07000006's main map 01000098 holds 80 corner + 34 low cover placements [D placement bytes,
+/// docs/systems/script-census.md census]; its 010000f3 sub-map holds 1+1 more that the game never
+/// instantiates — the level-wide scan (task 746's) would make 81+35, and this fails 114 != 116
+/// if the scan ever comes back.
 #[test]
-#[ignore = "[S] unverified: the sub-map (010000f3) cover scan was dropped at merge batch-1016c (cover.rs build doc)"]
-fn cover_06_spawns_every_map_s_nodes() {
+fn cover_06_spawns_the_main_map_s_nodes() {
     let mut scene = nf_view::load(&iso(), "07000006.bin", false).expect("load 07000006");
     settle(&mut scene, 5);
     let sim = scene.sim.as_ref().unwrap();
     let corners = sim.covers.iter().filter(|n| n.is_corner()).count();
-    assert_eq!(corners, 81, "corner nodes (0xE5 placements over every map entry)");
-    assert_eq!(sim.covers.len() - corners, 35, "low nodes (0xE6 placements over every map entry)");
+    assert_eq!(corners, 80, "corner nodes = the main map's 0xE5 placements [D]");
+    assert_eq!(sim.covers.len() - corners, 34, "low nodes = the main map's 0xE6 placements [D]");
+    assert!(!sim.covers.iter().any(|n| n.pos == [0.0, 0.0, 0.0]),
+        "a (0,0,0) template node is live — the sub-map scan came back [M 0x1d1cf0 state 0 resets DynamicPtr]");
+    // Sister [D]: the disc really carries 81+35 across all maps (the scan's premise) — the two
+    // extra are 010000f3's template pair (cover_nodes_submap_live pins them per level).
+    let iso_img = nf_formats::iso9660::IsoImage::open(&iso()).unwrap();
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&iso_img).unwrap();
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000006.bin")).unwrap();
+    let data = iso_img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).unwrap();
+    let level = nf_formats::level::Level::parse(&data).unwrap();
+    let all: usize = level.maps.iter().map(|m| m.placements.iter()
+        .filter(|p| matches!(p.flags, 0xe5 | 0xe6)).count()).sum();
+    assert_eq!(all, 116, "0xE5/0xE6 placements across every map entry [D] — the scan's premise");
 }
 
-/// The shared sub-map 010000f3 carries the disc's template pair: "Cover Corner Node" and
-/// "Cover Low Node", both at the placement origin with no parameters ([D] placement bytes).
-/// Through the decompile's default arms: corner flags = 0xC | 0x60 | 0x180 = 0x1EC with angle
-/// 45° = π/4 ([M 0x136ff0:44-88 — p0..p2 not 1/2 take the else arms, p3 = 0 → 0x3f490fdb]) and
-/// depth/offset bytes default 8 × 0.1 ([M 0x136ff0:93-101]); low: p0 = 0 → idle 0x11, aim 0xA,
-/// no flags ([M 0x137340:79-87]). 07000004's main map has NO cover placements, so before the
-/// fix this level's guards had zero nodes — this failed with an empty list.
+/// The shared sub-map 010000f3 carries the disc's template pair — "Cover Corner Node" and
+/// "Cover Low Node", both at the placement origin with no parameters ([D] placement bytes) —
+/// and the game NEVER instantiates it: the create runs over the last-parsed map entry's block
+/// only ([M] ResetMap_Load 0x1d6360; the per-file `DynamicPtr = 0` reset in `parsemap_parsemap`
+/// 0x1d1cf0 state 0), and every mission archive's kind-1 main map is parsed last. 07000004's
+/// main map has NO cover placements, so its live list is EMPTY. The template's field mapping
+/// through the creator's default arms is pinned on the disc placement itself: corner flags =
+/// 0xC | 0x60 | 0x180 = 0x1EC with angle 45° = π/4 ([M 0x136ff0 — p0..p2 not 1/2 take the else
+/// arms, p3 = 0 → 0x3f490fdb]) and depth/offset bytes default 8 × 0.1; low: p0 = 0 → idle 0x11,
+/// aim 0xA, no flags ([M 0x137340]).
 #[test]
-#[ignore = "[S] unverified: the sub-map (010000f3) cover scan was dropped at merge batch-1016c (cover.rs build doc)"]
-fn cover_prefab_template_pair_spawns_from_the_shared_sub_map() {
-    let mut scene = nf_view::load(&iso(), "07000004.bin", false).expect("load 07000004");
-    settle(&mut scene, 5);
-    let sim = scene.sim.as_ref().unwrap();
-    assert_eq!(sim.covers.len(), 2, "07000004's only cover placements are the 010000f3 template pair");
-    let corner = sim.covers.iter().find(|n| n.is_corner()).expect("template corner node");
+fn the_010000f3_template_pair_never_spawns_live() {
+    let iso_img = nf_formats::iso9660::IsoImage::open(&iso()).unwrap();
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&iso_img).unwrap();
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000004.bin")).unwrap();
+    let data = iso_img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).unwrap();
+    let level = nf_formats::level::Level::parse(&data).unwrap();
+    let f3 = level.maps.iter().find(|m| m.name == "010000f3").expect("the shared sub-map is in the archive [D]");
+    let corner_p = f3.placements.iter().find(|p| p.flags == 0xe5).expect("template corner placement [D]");
+    let low_p = f3.placements.iter().find(|p| p.flags == 0xe6).expect("template low placement [D]");
+    assert_eq!(corner_p.translation, [0.0, 0.0, 0.0], "the corner template sits at the origin [D]");
+    assert!(corner_p.params.is_empty() && low_p.params.is_empty(), "the templates carry no params [D]");
+    // The port's mapping of the creator's default arms, pinned on the disc placement [M 0x136ff0/0x137340].
+    let corner = nf_game::cover::CoverNode::from_placement(corner_p).expect("corner template maps");
     assert_eq!(corner.flags, 0x1ec);
     assert!((corner.angle - FRAC_PI_4).abs() < 1e-6, "angle {}", corner.angle);
     assert!((corner.depth - 0.8).abs() < 1e-6 && (corner.offset - 0.8).abs() < 1e-6);
-    assert_eq!(corner.pos, [0.0, 0.0, 0.0]);
     assert_eq!((corner.yaw.to_degrees().round() as i64) % 360, 0);
-    let low = sim.covers.iter().find(|n| !n.is_corner()).expect("template low node");
+    let low = nf_game::cover::CoverNode::from_placement(low_p).expect("low template maps");
     assert_eq!(low.flags & 3, 0, "p0 = 0 → no crouch-only / flag-2 bits");
     assert_eq!(low.idle_anim, 0x11);
     assert_eq!(low.aim_anim, 0xa);
-    assert_eq!(low.pos, [0.0, 0.0, 0.0]);
+    // And the live list: 07000004's main map 010000c5 has no 0xE5/0xE6 placements [D], so the
+    // game — and the port — create zero nodes there.
+    let mut scene = nf_view::load(&iso(), "07000004.bin", false).expect("load 07000004");
+    settle(&mut scene, 5);
+    let sim = scene.sim.as_ref().unwrap();
+    assert_eq!(sim.covers.len(), 0,
+        "07000004 spawns no live cover nodes — the template pair is never instantiated [M 0x1d6360]");
 }
 
 /// A 07000006 guard under fire takes one of the game's own cover nodes: the sound of the shots

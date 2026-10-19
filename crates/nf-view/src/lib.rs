@@ -1167,6 +1167,11 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                 // then p3 == 2 → `Vec_Zero(&WldGravity)` (the spacewalk starts; disasm 0x19151c-
                 // 0x191550 the default, 0x191618 the zero). fix-world-gravity.
                 sim.bond.world_gravity = if s.p3 == 2 { [0.0; 3] } else { [0.0, -9.8, 0.0] };
+                // p3 == 2 also STARTS substate 8: the same `level start == 2` branch calls
+                // `Player_StandAtNewPosition(.., 8)` [M Player_Init 0x1910f8 :178-183 — the
+                // spacewalk spawn enters Player_ZeroG's dispatch case straight away; the daily
+                // audit 2026-10-17: the port kept the walk substate].
+                if s.p3 == 2 { sim.bond.substate = nf_game::player::SS_ZEROG_8; }
                 // p3 == 3 → `Player_StandAtNewPosition(.., 4)` (the crouch substate) and
                 // `BLData+0x90C = 0.45` (0x3ee66666, the full crouch eye drop) [M Player_Init 0x1910f8
                 // :172-176]. 07000014 starts this way inside its crawl vent [L: PCSX2 substate 4,
