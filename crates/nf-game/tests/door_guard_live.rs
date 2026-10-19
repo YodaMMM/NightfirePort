@@ -153,17 +153,19 @@ fn door_guards_pair_into_mutual_nearest_pairs() {
             "pl {} and pl {} claim only within the 2.0 height gate", sim.list[a].placement, sim.list[b].placement);
     }
     // The planes [M 0x141360:115-174 + 0x1e4498 + disasm]: each final build is anchored at its
-    // OWNER with v0 = owner→partner of the claim that built it — 404's own ENTER (diff ≥ 0 →
-    // planes on the caller) gives v0 = 404→417; 442's own ENTER (diff < 0 → planes on the
-    // candidate) gives 441 the build with v0 = 441→442; and 442 still holds the planes 417's
-    // ENTER built on her (v0 = 442→417) — unread, because 442 is a 0xff mirror. 417 holds none
-    // (his own build went to 442, 404's went to himself).
+    // OWNER with v0 = owner→partner of the claim that built it. audit-fix-door-guard-3: the
+    // pairing runs at the deferred watch UPDATE with the [S] watch-across rule (drone.rs
+    // `door_guard_pass`), so every build takes the IF outcome — planes on the CANDIDATE, v0 =
+    // −dir = candidate→caller. The three builds: 404's (flipped) lands on 417 with v0 = 417→404;
+    // 417's own (natural diff < 0 [M 0x141360:121]) lands on 442 with v0 = 442→417; 442's own
+    // (flipped) lands on 441 with v0 = 441→442. 441 owns the last build and evaluates; 404/417/442
+    // hold 0xff (404 and 442 marked by their own flipped builds, 417 by his own natural-IF build).
     // plane0.n = cross(v0, (0,1,0)) = (−v0.z, 0, v0.x) — the game's second vector is (0,1,0)
     // [M disasm 0x14150c-0x141554 / 0x1415f4-0x141614], NOT (0,0,1), so the normal is HORIZONTAL
     // and the sign is fixed; a pair along z gives n = (∓1, 0, 0) — the old test's "the game's
     // own degenerate zero normal" never happens. plane1 = −v0 through that build's MIRROR,
     // plane2 = +v0 through the OWNER [M 0x141360:134-149 / 158-173].
-    for (owner, mirror) in [(g404, g417), (g441, g442), (g442, g417)] {
+    for (owner, mirror) in [(g417, g404), (g442, g417), (g441, g442)] {
         let got = sim.list[owner].door_planes;
         let (ox, oy, oz) = (sim.list[owner].pos[0], sim.list[owner].pos[1], sim.list[owner].pos[2]);
         let (mx, my, mz) = (sim.list[mirror].pos[0], sim.list[mirror].pos[1], sim.list[mirror].pos[2]);
@@ -202,15 +204,16 @@ fn door_guards_pair_into_mutual_nearest_pairs() {
         assert!(side(got[2], sim.list[owner].pos).abs() < 1e-2, "plane2 passes through the owner");
     }
     // The 0xff markers after the chain [M the branches at 0x141360:123/151 set exactly one side
-    // per build]: 404's build (diff ≥ 0) marked 417; 417's build (diff < 0) marked himself;
-    // 442's build (diff < 0) marked himself — 441 never marked.
-    assert_eq!(sim.list[g404].door_side, 0, "404 owns his build");
-    assert_eq!(sim.list[g417].door_side, 0xff, "417 marked by his own diff<0 build");
+    // per build; audit-fix-door-guard-3's [S] watch-across rule routes the diff ≥ 0 builds through
+    // the IF branch]: 404's flipped build marked HIMSELF; 417's own natural-IF build marked
+    // himself; 442's flipped build marked herself — 441 (the last build's candidate) never marked.
+    assert_eq!(sim.list[g404].door_side, 0xff, "404 marked by his own flipped build");
+    assert_eq!(sim.list[g417].door_side, 0xff, "417 marked by his own natural-IF build");
     assert_eq!(sim.list[g441].door_side, 0, "441 owns 442's build");
-    assert_eq!(sim.list[g442].door_side, 0xff, "442 marked by her own diff<0 build");
-    // 417 holds no planes [M the three builds above all landed on 404/442/441].
-    assert!(sim.list[g417].door_planes.iter().all(|p| p.iter().all(|&v| v == 0.0)),
-        "417 never had planes built on him");
+    assert_eq!(sim.list[g442].door_side, 0xff, "442 marked by her own flipped build");
+    // 404 holds no planes [M the three builds above all landed on 417/442/441].
+    assert!(sim.list[g404].door_planes.iter().all(|p| p.iter().all(|&v| v == 0.0)),
+        "404 never had planes built on him");
 }
 
 /// The zone bands drive the UPDATE arms [M 0x1416d8:55-73 + 0x160648:59-103]. With the game's
@@ -354,6 +357,7 @@ fn the_waiting_pair_activates_through_its_channel() {
     let (mut sim, _rng) = l.sim();
     let a = idx(&sim, 448);
     let b = idx(&sim, 449);
+    sim.bond_weapon = 1; // the fists: an UNARMED opponent never trips the 0x31 UPDATE's NearArmedPerson arm [M 0x1787c8] — this test's subject is the channel→pair path, not the armed arm
     let p = bond_at([sim.list[a].pos[0] + 1.0, sim.list[a].pos[1], sim.list[a].pos[2]]);
     for _ in 0..30 {
         sim.tick(&d, &p);

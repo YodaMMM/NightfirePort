@@ -956,6 +956,10 @@ pub struct Drone {
     /// The ENTER ran `SetDronePartner` and the pairing pass has not serviced it yet (the pass runs
     /// at the tick boundary; the game pairs inside the ENTER [S one-tick deviation]).
     pub door_pair_requested: bool,
+    /// audit-fix-door-guard-3: the pairing request is serviced only from the guard's first enabled
+    /// UPDATE in state 0x31 on ([S] the deferral — see `door_guard_pass`'s block comment). The 0x31
+    /// UPDATE arm sets this once; the pass consumes it with the request.
+    pub door_pair_watch: bool,
     /// fix-grenade-types: the LIVE player position, mirrored each tick (`Drones::tick`'s shared pass)
     /// — the stun loop's kept-down test is the game's live `DroneFunc_AnyoneNear` positional query
     /// [M 0x14a718 via 0x1631c0 case 0xc], not the cached opp `dist` (a stunned guard's perception
@@ -1400,6 +1404,7 @@ impl Drone {
             stun_until: 0, player_pos: [0.0; 3],
             down: false,
             door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
+            door_pair_watch: false,
             tase_accum: 0,
             tase_recover: 0,
             dart_recover: 0,
@@ -3091,8 +3096,12 @@ impl Drone {
             // EXIT (case 2): `+0x44 = 1`.
             (CIVILIAN_DOOR_GUARD, msg::EXIT) => { true }
             // UPDATE (case 3): an armed opponent within the game's gates → hostile; else the zone
-            // dispatch (the zone itself is the pre-pass's `door_zone`).
+            // dispatch (the zone itself is the pre-pass's `door_zone`). audit-fix-door-guard-3: the
+            // first enabled UPDATE also establishes the guard's watch (the [S] pairing deferral —
+            // `door_guard_pass`), the game's own per-tick UPDATE dispatch [M 0x1490f0:62
+            // `Drone_SM_SendMsgSelf(3,…)`, gated on the enabled bit at :141-148].
             (CIVILIAN_DOOR_GUARD, msg::UPDATE) => {
+                self.door_pair_watch = true;
                 // `NDrone2_NearArmedPerson(20.0)` 0x1787c8: the opponent exists (+0x228 & 4) and is
                 // armed (`DroneWeap_OpponentHasWeapon`) — the port's stand-in: the guard sees the
                 // player and Bond's weapon is not the fists [S stand-in, the prop-0x3c gate rides
@@ -9138,6 +9147,30 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// pre-pass over the CivilianDoorGuard (0x31) guards. The game pairs inside the ENTER and
     /// reads the zone inside the 0x31 UPDATE [M 0x160694, 0x160814]; the port's `handle` lacks
     /// the list access the two need.
+    ///
+    /// audit-fix-door-guard-3 — the pairing deferral ([S] pending the live check): on 07000007 the
+    /// four hall bouncers (placements 404/417/441/442, `p3 = 0` — no watch channel [D]) boot enabled
+    /// into 0x31 at their placement facings (10/19 ≈ 3.14 south, 28/29 ≈ −1.54 west [D]); a
+    /// spawn-time pairing runs the decomp-exact scans at those facings and cascades (10→19 stale,
+    /// 19↔29, 29↔28 — door_guard_live pins the graph), leaving guard 10 the 10↔19 build whose
+    /// normal points SOUTH — Bond crossing the pair's z-line at the hall door reads zone 3 (the
+    /// intrusion arm, 0x160648:89-94) and the walk-in plate never fires. The game's own walk works,
+    /// so its SetDronePartner cannot run at the spawn facings for this pair. The boot chain is
+    /// decomp-proven down to the ENTER (DefaultInit 0x14b300 → DoModeSettingsNEW 0x14c600 →
+    /// GetDroneTypeAttackTypeFriend 0x14cbd8:104 `+0x5A2 = row start 0x31`; SM_InitObject 0x175838:23
+    /// ENTERs GLOBAL; GLOBAL's ENTER 0x15b830 `SetState(obj+0x5A2)`; no +0x554 start script for
+    /// `p1 = 0x6000000` [M 0x14b300:611-613]) — every static turn source for an unpaired 0x31 guard
+    /// (the zone arms need a partner; the idle danims 282/329/344 carry no end-turn flags [L tables])
+    /// is ruled out, so WHAT establishes the game's pairing-time watch facing is not derivable
+    /// statically. The port therefore defers the request (set at the ENTER [M 0x160694]) to the
+    /// guard's first enabled UPDATE in state 0x31 (`door_pair_watch`, the game's own per-tick UPDATE
+    /// dispatch [M 0x1490f0:62]) and evaluates the decomp's own watch test at that UPDATE: a caller
+    /// whose standing facing fails `Vec_AngleDifference(yaw, atan2(dir)) < 0` [M 0x141360:121-123]
+    /// — the spawn facing, not a watch facing — pairs at the watch facing across the pair axis (the
+    /// IF outcome: planes on the partner, normal toward the watched approach; on 07000007 the 10↔19
+    /// build lands on 417 pointing NORTH and Bond reads the challenge band, not the intrusion arm).
+    /// [S] the deferral's timing and the watch-facing re-establishment both await the live check
+    /// (771b's: the bouncers' +0x2BC/+0x2CC/+0x54 at the pairing instant, fresh boot).
     fn door_guard_pass(&mut self, d: &Data, player: &Player) {
         // ---- SetDronePartner(kind 0x16, dc) [M 0x141360] ----
         // Candidates: drones of the same mode (+0xC5 == 0x16 — the caller passes 0x16), enabled
@@ -9151,12 +9184,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `+0x2CC = 0xff`... the OTHER's — see below), and `plane_from_two_vectors_and_point`
         // 0x1e4498 builds three planes on the evaluating guard.
         for i in 0..self.list.len() {
-            let (requested, mode, my_yaw, my_pos) = {
+            let (requested, watch, mode, my_yaw, my_pos) = {
                 let dr = &self.list[i];
-                (dr.door_pair_requested, dr.mode, dr.yaw, dr.pos)
+                (dr.door_pair_requested, dr.door_pair_watch, dr.mode, dr.yaw, dr.pos)
             };
-            if !requested { continue; }
+            if !requested || !watch { continue; }
             self.list[i].door_pair_requested = false;
+            self.list[i].door_pair_watch = false;
             let mut best: Option<(usize, f32)> = None;
             for j in 0..self.list.len() {
                 if j == i { continue; }
@@ -9192,7 +9226,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if len > 1e-9 { [dx / len, dy / len, dz / len] } else { [0.0, 0.0, 1.0] }
             };
             let diff = angle_difference(my_yaw, atan2_approx(dir[0], dir[2])); // [M 0x141360:121 — this one IS Vec_AngleDifference]
-            let (evaluator, anchor, other, neg) = if diff < 0.0 {
+            // [S] the watch-facing re-establishment (the block comment above): at the deferred
+            // pairing a caller whose standing facing fails the decomp's own watch test (diff ≥ 0 —
+            // the spawn facing, not a watch facing) pairs at the watch facing ACROSS the pair axis:
+            // the IF outcome (planes on the partner, v0 = −dir). The ELSE branch below stays for
+            // the in-ENTER pairing the game runs [M 0x160694] if the deferral is lifted.
+            let watch_across = diff >= 0.0;
+            let (evaluator, anchor, other, neg) = if diff < 0.0 || watch_across {
                 self.list[i].door_side = 0xff;
                 (j, self.list[j].pos, self.list[i].pos, -1.0)
             } else {
@@ -12873,6 +12913,7 @@ mod tests {
             stun_until: 0, player_pos: [0.0; 3],
             down: false,
             door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
+            door_pair_watch: false,
             tase_accum: 0,
             tase_recover: 0,
             dart_recover: 0,
