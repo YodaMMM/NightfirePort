@@ -573,6 +573,9 @@ pub struct Sim {
     /// mp-body-look: per slot, the last nonzero `mp_held` — a timed-out remote is fed `NEUTRAL`
     /// (held 0) every tick, which would blink its body's gun away. Draw-only state.
     pub mp_last_held: [u8; nf_net::MAX_AGENTS],
+    /// mp-lobby-settings: which weapon ids' first-person skins this arena loaded (the load's
+    /// `Player_CheckWeaponsLoaded` stand-in) — the respawn's `MP_EquipPlayer` re-reads it.
+    pub mp_weapon_loaded: Vec<bool>,
     /// fix-render3: the `ambient_at` call counter (a test guard for the posed-vertices hoist).
     pub ambient_lookups: std::cell::Cell<usize>,
     /// light-sun: BLData+0x962 — Bond's head sees the sun this tick (`ramp_char_ambient`).
@@ -6657,8 +6660,27 @@ impl Scene {
         if let Some(m) = level.main_map() {
             const MISC_KINDS: [u8; 15] = [0x2e, 0x30, 0x34, 0x35, 0x3b, 0x71, 0xd5, 0xd8, 0xe1, 0xe3, 0xda, 0xfa, 0xfd, 0xfe, 0x4a];
             let nf_hide = std::env::var("NF_HIDE").ok();
+            // mp-lobby-settings: the MP creates that return no object draw nothing — `GunImp_Create`
+            // 0x131f20:52-55 (Gun Emplacements off), `Destroy_Create` 0x12c318:14 (Explosive
+            // Scenery off), `Car_Create` 0x1305b0:12-17 (Vehicles off, and always on Ravine
+            // 0x0700004b) [M]. Vehicles on: `Car_Create`'s variant — Helicopters (and Random's
+            // 51 %) swap the body to entity 0x2000194 raised 1.5 [M :30-49] with the
+            // 0x2000b4d/0x2000b4e children [M Car_InitBits 0x12fec8:13-23]; the Random roll draws
+            // from the lockstep seed's own stream [S]. The vehicles draw only — the port's MP has
+            // no drivable car (docs/GAPS.md).
+            let ctx_level = drones.map_or(0, |d| d.level_id);
+            let mut car_rng = mp.map(|ms| nf_game::drone::Rng::new(ms.seed ^ 0x4341_5253));
             for p in level.maps[m].placements.iter().filter(|p| MISC_KINDS.contains(&((p.flags & 0xff) as u8))) {
                 let kind = (p.flags & 0xff) as u8;
+                let mut heli = false;
+                if let Some(ms) = mp {
+                    if kind == 0x34 && ms.gun_emplacements == 0 { continue; }
+                    if kind == 0xe1 && ms.explosive_scenery == 0 { continue; }
+                    if kind == 0xda {
+                        if ms.vehicles == 0 || ctx_level == 0x0700_004b { continue; }
+                        heli = match ms.vehicles { 1 => false, 3 => car_rng.as_mut().map_or(true, |r| r.rand(100) < 0x33), _ => true };
+                    }
+                }
                 // 0x3B hidden-until-channel (DynamicObject_Create 0x18dbf8:31, param 0 = the s16 channel).
                 if kind == 0x3b && p.params.iter().find(|(i, _)| *i == 0).is_some_and(|(_, v)| *v != 0) { continue; }
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
@@ -6717,6 +6739,19 @@ impl Scene {
                     let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
                     mul_bytes(cel_ambient(&room_cels, transform(&mx, obj.centre), 0).unwrap_or([0xff; 3]))
                 } else { [1.0; 3] };
+                if heli {
+                    let has_gfx = |(cm, co): (usize, usize)| level.maps[cm].objects[co].gfx.leaves.iter().any(|l| !l.batches.is_empty());
+                    let mut hm = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    hm[3][1] += 1.5;
+                    for (k, h) in [0x0200_0194u32, 0x0200_0b4d, 0x0200_0b4e].into_iter().enumerate() {
+                        let Some(c) = level.by_hash.get(&h).copied().filter(|&c| has_gfx(c)) else { continue };
+                        let mut cm = hm;
+                        if k == 2 { cm[0] = [1.0, 0.0, 0.0, 0.0]; cm[1] = [0.0, 1.0, 0.0, 0.0]; cm[2] = [0.0, 0.0, 1.0, 0.0]; }
+                        add_instance(level, &Instance { map: c.0, object: c.1, matrix: cm, placement: p.clone() }, Layer::World, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        *misc_drawn.entry(0xda).or_default() += 1;
+                    }
+                    continue;
+                }
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                 add_instance(level, &inst, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, mult, &room_cels, u32::MAX, u32::MAX);
                 *misc_drawn.entry(kind).or_default() += 1;
@@ -7046,6 +7081,23 @@ impl Scene {
             // holding the menu's pick [M C_SBNFDFCTY 0x216ca8:15].
             drones.set_difficulty(difficulty);
             drones.attach_level_id(level, d.level_id);
+            // mp-lobby-settings: the MP creates' enviro-mod gates. `GunImp_Create` 0x131f20 returns
+            // 0 in MP while Gun Emplacements (+0x1B8) is off and otherwise mounts
+            // `TurretGuns[weapon set]` (Random: `Rand_Rand(10)`) [M :52-63]; `Destroy_Create`
+            // 0x12c318 creates nothing in MP while Explosive Scenery (+0x1D4) is off [M :14]. The
+            // Random turret draws from the lockstep seed's own stream, not the shared one [S, the
+            // weapon_row note].
+            if let Some(ms) = mp {
+                if ms.gun_emplacements == 0 {
+                    drones.props.gunimps.clear();
+                } else {
+                    let mut trng = nf_game::drone::Rng::new(ms.seed ^ 0x4755_4e49);
+                    for g in drones.props.gunimps.iter_mut() {
+                        g.turret = if ms.weapon_set >= 10 { trng.rand(10) as u8 } else { ms.weapon_set as u8 };
+                    }
+                }
+                if ms.explosive_scenery == 0 { drones.props.destroy.clear(); }
+            }
             crate::phase_mark("b9b nav/cover/volumes/drone creates", t9);
             // fix-door-portal-links (G-035): `build_LinkDoors2Portals` (0x1c8ac8) runs at load — each
             // portal-linked door (placement param 4) takes the portal quad it sits in; the vision
@@ -7111,6 +7163,9 @@ impl Scene {
             // line 459-462: reads from the param buffer at +0x2c..+0x38, NOT the placement's extra words].
             // The model comes from the placement's object (the celglist), not from weapon_data.
             let pickup_models = nf_game::pickup::models(level);
+            // mp-lobby-settings: an MP match's set pickups (kinds 7..11) come from the lobby's
+            // Weapon Set row [M Pickup_CreateFromSet 0x18f1b0:56 — row = MPSettings+0x1B4].
+            let mp_row = mp.map(nf_game::mp::equip::weapon_row);
             let placed_pickups: Vec<nf_game::pickup::Pickup> = level.maps[m].placements.iter()
                 .filter(|p| p.flags & 0xff == 0xf0)
                 .filter_map(|p| {
@@ -7144,7 +7199,11 @@ impl Scene {
                         pickup_models.get(&obj_.hashcode).map(|&m| (obj_.hashcode,
                             nf_game::pickup::Model { centre: obj_.centre, radius: obj_.radius }, (om, oi)))
                     })?;
-                    let mut p2 = nf_game::pickup::Pickup::create_placed(p.translation, p.rotation, type_, id, rounds, switch_channel, sound, respawn as u16, lifetime, model, bounds, &weapons, &pickup_models)?;
+                    let mut p2 = match mp_row {
+                        Some(row) if (7..=11).contains(&type_) && id != 0xFFFF =>
+                            nf_game::pickup::Pickup::create_from_set_row(p.translation, p.rotation, type_, &row, &weapons, &pickup_models)?,
+                        _ => nf_game::pickup::Pickup::create_placed(p.translation, p.rotation, type_, id, rounds, switch_channel, sound, respawn as u16, lifetime, model, bounds, &weapons, &pickup_models)?,
+                    };
                     p2.label = param(6); // the kind-4 label (`Pickup_Create` param_13 → +0x34; 0700000b's item: 0x2000036 [D])
                     p2.obj = Some(obj);
                     Some(p2)
@@ -7157,7 +7216,7 @@ impl Scene {
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), mp_walk: [MP_WALK_INIT; nf_net::MAX_AGENTS], mp_last_held: [2; nf_net::MAX_AGENTS], ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), mp_walk: [MP_WALK_INIT; nf_net::MAX_AGENTS], mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],
@@ -7213,6 +7272,12 @@ impl Scene {
         // bbox-face FindCel approximation (documented deviation; every live load path builds sim).
         if sim.is_none() { build_chains(&mut cel_graph, None); }
         crate::phase_mark("b10 collider index + final assembly", t);
+        if mp.is_some() {
+            // mp-lobby-settings: the enviro-mod creates as built (the settings check reads it).
+            let (g, t, dz) = sim.as_ref().map_or((0, Vec::new(), 0), |s| (s.drones.props.gunimps.len(), s.drones.props.gunimps.iter().map(|g| g.turret).collect::<Vec<_>>(), s.drones.props.destroy.len()));
+            eprintln!("[mp-props] gunimps {g} turrets {t:?} destroy {dz} drawn: guns {} destroy {} vehicles {}",
+                misc_drawn.get(&0x34).copied().unwrap_or(0), misc_drawn.get(&0xe1).copied().unwrap_or(0), misc_drawn.get(&0xda).copied().unwrap_or(0));
+        }
         Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
     }
 
@@ -8624,6 +8689,28 @@ impl Sim {
     /// The load builds every human slot's bond in slot order (deterministic on every machine);
     /// slot 0's lands in `bond`. After the load, each machine moves ITS slot's bond into `bond`
     /// (the camera and the full local path tick it) and parks the old local one back at slot 0.
+    /// mp-lobby-settings: `MP_EquipPlayer` 0x1855f8 for this machine's human — the lobby's Weapon
+    /// Set spawn weapon (+ the grapple enviro-mod, the scenario bonus weapon) into the inventory and
+    /// the gun drawn [M; see nf_game::mp::equip]. Every MP spawn runs it (the load, each respawn,
+    /// the late join); the port used to hand out the P2K (and the load the SP default arm's
+    /// give-everything kit) whatever the set.
+    pub fn mp_equip_local(&mut self) {
+        let Some(m) = self.mp.as_ref() else { return };
+        let row = nf_game::mp::equip::weapon_row(&m.settings);
+        let loaded = &self.mp_weapon_loaded;
+        let lf = |w: u8| loaded.get(w as usize).copied().unwrap_or(true);
+        let req = nf_game::mp::equip::mp_equip_player(&m.settings, &row, self.mp_local_slot, &mut self.drones.inventory, &self.weapons, lf);
+        let wi = req as usize;
+        let clip = self.drones.inventory.clip.get(wi).copied().unwrap_or(0).max(0) as u32;
+        let spare = self.drones.inventory.carried.get(self.weapons.ammo_type(wi)).copied().unwrap_or(0).max(0) as u32;
+        self.gun = nf_game::gun::Gun::new(req, clip, spare);
+        self.drones.bond_weapon = req;
+        if std::env::var_os("NF_MP_EQUIP_LOG").is_some() || std::env::var_os("NF_LOBBY_DBG").is_some() {
+            let owned: Vec<usize> = (0..self.drones.inventory.owned.len()).filter(|&i| self.drones.inventory.owned[i]).collect();
+            eprintln!("[mp-equip] slot {} set {} row {:?} -> weapon {:#x} clip {} spare {} owned {:x?}", self.mp_local_slot, m.settings.weapon_set, row, req, clip, spare, owned);
+        }
+    }
+
     pub fn swap_local_slot(&mut self, slot: usize) {
         if slot == 0 || slot >= nf_net::MAX_AGENTS { return; }
         self.mp_local_slot = slot;
@@ -8753,6 +8840,7 @@ impl Sim {
         let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
         let frame = self.drones.frame;
         let local = self.mp_local_slot;
+        let mut restart_equip = false;
         let Some(m) = self.mp.as_mut() else { return };
         if std::mem::take(&mut m.game.restart_pending) {
             let humans = (m.settings.human_count as usize).min(nf_net::MAX_AGENTS);
@@ -8769,8 +8857,7 @@ impl Sim {
                     self.drones.health.health = hp;
                     if was_dead {
                         self.drones.death = nf_game::death::Death::default();
-                        self.gun = nf_game::gun::Gun::new(2, 7, 41);
-                        self.drones.bond_weapon = 2;
+                        restart_equip = true;
                     }
                 } else {
                     self.mp_bonds[slot] = Some(nb);
@@ -8807,6 +8894,8 @@ impl Sim {
         } else if m.game.slots[0].dead && !self.drones.death.active && self.drones.health.health > 0.0 {
             self.drones.health.health = 0.0;
         }
+        // The restart's `MP_ReSpawn` re-arms a dead local human (`MP_EquipPlayer` [M 0x185368:74]).
+        if restart_equip { self.mp_equip_local(); }
     }
 
     pub fn step_mp_bots(&mut self) {
@@ -8839,6 +8928,7 @@ impl Sim {
         // The humans the bots fight (online: every human slot on every machine; offline slot 0).
         let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
         let local = self.mp_local_slot;
+        let pain = nf_game::mp::equip::MpPainMods::from_tuning(&self.tuning);
 
         for i in 0..m.bots.len() {
             let alive = !m.bots[i].dead;
@@ -8853,13 +8943,17 @@ impl Sim {
                     if !m.respawn_allowed(slot) { continue; }
                     let team = m.bots[i].team;
                     // mp-16-slots: more than 4 bots cycle the disc's 4 records (as create_bots does).
-                    let rec = nf_game::mp::bots::INITIAL_BOT_RECORDS[i % nf_game::mp::bots::INITIAL_BOT_RECORDS.len()].clone();
+                    // mp-lobby-settings: the bot's own prepared record (the lobby's character /
+                    // skill / team), as create_bots used.
+                    let rec = nf_game::mp::MpMatch::bot_record(&m.settings, i);
                     let sp = m.get_spawn_point(team, slot, &mut self.drones.rng) as usize;
                     let p4 = m.spawns.points[sp].pos;
                     let yaw = m.spawns.points[sp].facing[1];
                     let feet = nf_game::player::Bond::stand_at(world, [p4[0], p4[1], p4[2]], yaw).pos;
                     let pos = [feet[0], feet[1] + BOT_EYE, feet[2]];
-                    m.bots[i].brain = nf_game::mp::bots::BotBrain::bot_init(&rec, slot as u8, pos, yaw);
+                    let mut brain = nf_game::mp::bots::BotBrain::bot_init(&rec, slot as u8, pos, yaw);
+                    m.arm_bot(&mut brain);
+                    m.bots[i].brain = brain;
                     // mp-16-slots: the bot's index is its list position (the game's slot − 4 wraps
                     // once bots follow the humans).
                     m.bots[i].brain.vars.bot_index = i as i16;
@@ -8988,6 +9082,9 @@ impl Sim {
                 if let Some((h, _)) = hit_human {
                     let shooter = m.bots[i].slot;
                     if m.register_bullet_hit(h, shooter) {
+                        // mp-lobby-settings: `Player_HandlePain`'s MP arm [M 0x1902c8:51-82]; the
+                        // bot round's chest sphere stands in for a torso part [S].
+                        let dmg = nf_game::mp::equip::mp_pain(&m.settings, &pain, dmg, nf_game::mp::equip::PART_TORSO);
                         if online {
                             // The per-slot online combat owns the health and the death (every machine).
                             self.mp_hp[h] = (self.mp_hp[h] - dmg).max(0.0);
@@ -9002,6 +9099,12 @@ impl Sim {
                     }
                 }
                 if let Some((j, _)) = best {
+                    // mp-lobby-settings: the friendly-fire gate (`MP_RegisterBulletHit` 0x1857c0
+                    // [M :43-45]) and `BOT_handlePain`'s MP arm [M 0x125ed8:48-79] — bot rounds hit
+                    // team-mate bots at full damage before.
+                    let (vs, ks) = (m.bots[j].slot, m.bots[i].slot);
+                    if !m.register_bullet_hit(vs, ks) { continue; }
+                    let dmg = nf_game::mp::equip::mp_pain(&m.settings, &pain, dmg, nf_game::mp::equip::PART_TORSO);
                     m.bots[j].health -= dmg;
                     if m.bots[j].health <= 0.0 {
                         // mp-host-match-logic: the frag goes through the match's real scoring
@@ -9174,21 +9277,25 @@ impl Sim {
             if let Some((t, _, _)) = self.world.segment_surface_bullet(head, end) {
                 end = [head[0] + (end[0] - head[0]) * t, head[1] + (end[1] - head[1]) * t, head[2] + (end[2] - head[2]) * t];
             }
-            let mut best: Option<(f32, usize)> = None;
+            let mut best: Option<(f32, usize, i16)> = None;
             for victim in 0..nf_net::MAX_AGENTS {
                 if victim == shooter || self.mp_dead_ticks[victim] > 0 { continue; }
                 let Some(v) = body(self, victim) else { continue };
                 // The body: a stack of 0.45 spheres from the knees to the head [S stand-in for the
                 // player's hit boxes — `Collide_Jointy` 0x1ec180's per-bone test is the game's].
-                for h in [0.5f32, 1.0, 1.5] {
+                // mp-lobby-settings: the sphere stands in for the joint's part (knees = a lower
+                // limb, hips = the torso, head = part 5) for the MP pain arm's locational factor [S].
+                use nf_game::mp::equip::{PART_HEAD, PART_LOWER_LIMB, PART_TORSO};
+                for (h, part) in [(0.5f32, PART_LOWER_LIMB), (1.0, PART_TORSO), (1.5, PART_HEAD)] {
                     let c = [v.pos[0], v.pos[1] + h, v.pos[2]];
                     if let Some(t) = ray_body_hit(head, end, c, 0.45) {
-                        if best.is_none_or(|(bt, _)| t < bt) { best = Some((t, victim)); }
+                        if best.is_none_or(|(bt, _, _)| t < bt) { best = Some((t, victim, part)); }
                     }
                 }
             }
-            let damage = self.weapons.records.get(inp.held as usize)
+            let raw_damage = self.weapons.records.get(inp.held as usize)
                 .map_or(10.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
+            let pain = nf_game::mp::equip::MpPainMods::from_tuning(&self.tuning);
             // The bots are targets too (nearer than any human wins).
             let mut bot_hit: Option<(f32, usize)> = None;
             if let Some(m) = self.mp.as_ref() {
@@ -9199,22 +9306,34 @@ impl Sim {
                     }
                 }
             }
+            let damage = raw_damage; // the site's hit takes the raw word [M 0x1870a0:81-91]
             // mp-scenarios-online (agent6): the Demolition/Protection site takes the shot when it
             // is the nearest thing on the ray (the site SP's hit damage [M 0x1870a0:81-91]; the
             // ray-vs-model-sphere test is the port's stand-in [S]).
             if let Some((c, r)) = self.mp.as_ref().and_then(|m| m.site_sphere()) {
                 if let Some(ts) = ray_body_hit(head, end, c, r) {
-                    let nearer = best.is_some_and(|(th, _)| th < ts) || bot_hit.is_some_and(|(tb, _)| tb < ts);
+                    let nearer = best.is_some_and(|(th, _, _)| th < ts) || bot_hit.is_some_and(|(tb, _)| tb < ts);
                     if !nearer {
                         if let Some(m) = self.mp.as_mut() { m.damage_site(damage, shooter); }
                         continue;
                     }
                 }
             }
-            if let Some((tb, j)) = bot_hit.filter(|(tb, _)| best.is_none_or(|(th, _)| *tb < th)) {
+            if let Some((tb, j)) = bot_hit.filter(|(tb, _)| best.is_none_or(|(th, _, _)| *tb < th)) {
                 let _ = tb;
                 let frame = self.drones.frame;
                 if let Some(m) = self.mp.as_mut() {
+                    // mp-lobby-settings: the hit registers first (`MP_RegisterBulletHit` 0x1857c0 —
+                    // the friendly-fire gate: a team game's same-side hit does nothing while
+                    // Friendly Fire is off [M :43-45]; the online combat skipped it, so friendly
+                    // fire was always on), then `BOT_handlePain`'s MP arm scales it [M
+                    // 0x125ed8:48-79]. The bot's one body sphere: its upper part (within 0.25 of the
+                    // eye) stands in for the head [S].
+                    let bslot = m.bots[j].slot;
+                    if !m.register_bullet_hit(bslot, shooter) { continue; }
+                    let hit_y = head[1] + (end[1] - head[1]) * tb;
+                    let part = if hit_y > m.bots[j].brain.pos[1] - 0.25 { nf_game::mp::equip::PART_HEAD } else { nf_game::mp::equip::PART_TORSO };
+                    let damage = nf_game::mp::equip::mp_pain(&m.settings, &pain, raw_damage, part);
                     m.bots[j].health -= damage;
                     if m.bots[j].health <= 0.0 && !m.bots[j].dead {
                         let victim_slot = m.bots[j].slot;
@@ -9227,7 +9346,21 @@ impl Sim {
                 }
                 continue;
             }
-            let Some((_, victim)) = best else { continue };
+            let Some((_, victim, part)) = best else { continue };
+            // mp-lobby-settings: `MP_RegisterBulletHit` 0x1857c0's friendly-fire gate, then
+            // `Player_HandlePain`'s MP arm (Plr_DMod_Multi, the locational factor, Player Mod
+            // 0x1ac's ×3) [M 0x1902c8:51-82] — the online combat applied the raw weapon word to
+            // everyone, team-mates included.
+            let damage = match self.mp.as_mut() {
+                Some(m) => {
+                    if !m.register_bullet_hit(victim, shooter) { continue; }
+                    nf_game::mp::equip::mp_pain(&m.settings, &pain, raw_damage, part)
+                }
+                None => raw_damage,
+            };
+            if std::env::var_os("NF_LOBBY_DBG").is_some() {
+                eprintln!("[mp-hit] slot {shooter} -> slot {victim} part {part} raw {raw_damage} dealt {damage} (frame {})", self.drones.frame);
+            }
             self.mp_hp[victim] -= damage;
             if self.mp_hp[victim] <= 0.0 {
                 self.mp_hp[victim] = 0.0;
@@ -9252,11 +9385,10 @@ impl Sim {
             eprintln!("[mp] slot {slot} respawned at spawn {sp_idx} (frame {})", self.drones.frame);
             if slot == local {
                 self.drones.death = nf_game::death::Death::default();
-                // The respawn re-arms the player (`MP_ReSpawn` 0x185368 re-inits the player's weapon
-                // state; the death sequence had switched him to the fists 0x47 [M 0x190810:61]) — the
-                // match's start loadout: the P2K drawn, as at the load.
-                self.gun = nf_game::gun::Gun::new(2, 7, 41);
-                self.drones.bond_weapon = 2;
+                // The respawn re-arms the player (`MP_ReSpawn` 0x185368 → `MP_EquipPlayer` 0x1855f8
+                // [M 0x185368:74]; the death sequence had switched him to the fists 0x47 [M
+                // 0x190810:61]) — the weapon set's spawn loadout.
+                self.mp_equip_local();
             }
         }
         // 3. This machine's own health is the slot's (the HUD, the death sequence's start).

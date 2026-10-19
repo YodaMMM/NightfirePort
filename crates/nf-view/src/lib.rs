@@ -997,9 +997,8 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         let bots = (st.bot_count as usize)
             .min(nf_game::mp::MP_MAX_SLOTS.saturating_sub(humans))
             .min(st.players.len().saturating_sub(humans));
-        let recs = &nf_game::mp::bots::INITIAL_BOT_RECORDS;
         for i in 0..bots {
-            st.players[humans + i].skin = recs[i % recs.len()].character() as u32;
+            st.players[humans + i].skin = nf_game::mp::MpMatch::bot_record(&st, i).character() as u32;
         }
         st
     });
@@ -1244,6 +1243,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                     settings.bot_count = n.min(nf_game::mp::MP_MAX_SLOTS as u32 - settings.human_count.max(1) as u32);
                 }
             }
+            // mp-lobby-settings: one line with every lobby word the match runs on (the two-window
+            // settings check diffs the host's line against each client's).
+            {
+                let st = &settings;
+                let bots: Vec<String> = st.bot_records.iter().map(|r| format!("c{}/s{}/t{}/hp{}", r.character(), r.aggression(), r.team(), r.max_hp())).collect();
+                let hum: Vec<String> = (0..st.human_count as usize).map(|i| format!("{}:t{}/c{}", st.players[i].codename, st.players[i].team, st.players[i].skin)).collect();
+                eprintln!("[mp-settings] level {:#x} scen {:#x} ws {} frag {} time {} ff {} radar {} cap(0x1BC) {} loc(0x1C8) {} spawn(0x1C0) {} guns(0x1B8) {} expl(0x1D4) {} grapple(0x1D0) {} vehicles(0x1CC) {} humans [{}] bots {} [{}] seed {:#x}",
+                    st.level_code, st.scenario, st.weapon_set, st.frag_limit, st.time_limit, st.friendly_fire, st.radar, st.capture_reward,
+                    st.locational_damage, st.spawn_policy, st.gun_emplacements, st.explosive_scenery, st.grapple, st.vehicles,
+                    hum.join(" "), st.bot_count, bots.join(" "), st.seed);
+            }
             let mut m = nf_game::mp::MpMatch::init(settings);
             let map = level.main_map().and_then(|mi| level.maps.get(mi));
             let mut spawn_count = 0usize;
@@ -1316,6 +1326,9 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // The bots' half of `MP_Start` (0x183a50:134-160): after every human's create, one
             // `BOT_init` per enabled record in slot order — the game's order is the humans FIRST,
             // then the bots, so the spawn picks' RNG draws keep the game's sequence.
+            // mp-lobby-settings: the bots start with the Weapon Set's gun [M BOTWEAP_InitWeapon
+            // 0x129e48:44-48].
+            m.bot_start = Some(nf_game::mp::equip::bot_start_weapon(&nf_game::mp::equip::weapon_row(&m.settings), &sim.weapons));
             m.create_bots(&mut sim.drones.rng);
             // The bots stand on the floor like the humans' `Bond::stand_at`: the spawn point's raw
             // height left them floating ~4 units up, firing level over every player [S].
@@ -1341,8 +1354,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         let loaded: Vec<bool> = (0..0x72u32)
             .map(|w| loadout_skins.contains(&sim.weapons.first_person(w as usize))).collect();
         let loaded = |w: u8| loaded.get(w as usize).copied().unwrap_or(false);
-        let req = nf_game::player::init_level_loadout(level_id, save, &mut sim.drones.health,
-            &mut sim.drones.inventory, &mut sim.drones.channels, &sim.weapons, loaded);
+        let req = if sim.mp.is_some() {
+            // mp-lobby-settings: an MP match's `Player_InitWeapon` takes its MP arm — `MP_EquipPlayer`
+            // and nothing else [M 0x1a7ef8:143-145]; the per-level switch below it (whose default
+            // arm handed the arenas the give-everything kit) never runs in MP.
+            sim.mp_weapon_loaded = (0..0x72u8).map(loaded).collect();
+            sim.mp_equip_local();
+            sim.gun.weapon
+        } else {
+            nf_game::player::init_level_loadout(level_id, save, &mut sim.drones.health,
+                &mut sim.drones.inventory, &mut sim.drones.channels, &sim.weapons, loaded)
+        };
         // The switch request is the game's `M_CONTROL+0x63`; the draw machine holsters and draws it
         // (`Player_WeaponSelect` 0x1a2cc0). 0x47 (none) draws nothing.
         sim.gun.switch_request = req;
@@ -2346,6 +2368,25 @@ impl App {
                 "confirm" => Some(MA::Confirm), "back" => Some(MA::Back), "side" => Some(MA::Side), "extra" => Some(MA::Extra), _ => None };
             if let Some(a) = a { for _ in 0..times { self.menu_input(a); } }
             else if step == "shot" { let m = self.spot_shot(); eprintln!("[spot] {m}"); }
+            // "bksp": the address/port pages' Backspace (the host's port field starts at 27420).
+            else if step == "bksp" { for _ in 0..times { if let Some(fe) = self.fe.as_mut() { fe.mp_net_backspace(); } } }
+            // "lobby": one line with this machine's one-screen lobby model (the two-window
+            // settings check compares the host's and the client's lines) [S test aid].
+            else if step == "lobby" {
+                if let Some(fe) = self.fe.as_ref() { eprintln!("[lobby] {}", fe.mp_one.debug_line()); }
+            }
+            // "row=Enviro(3)": real Up/Down presses until the lobby focus sits on that row id
+            // (the row list shifts with joins and bots, so fixed press counts drift) [S test aid].
+            else if let Some(want) = step.strip_prefix("row=") {
+                for _ in 0..80 {
+                    let Some(fe) = self.fe.as_mut() else { break };
+                    let rows = fe.mp_one.rows();
+                    let Some(at) = rows.iter().position(|r| format!("{:?}", r.id) == want) else { break };
+                    let cur = fe.mp_one.focus;
+                    if cur == at { break; }
+                    self.menu_input(if cur < at { MA::Down } else { MA::Up });
+                }
+            }
             else if let Some(text) = step.strip_prefix("type=") {
                 if let Some(fe) = self.fe.as_mut() { for c in text.chars() { fe.mp_net_type(c); } }
             }
@@ -2854,6 +2895,9 @@ impl App {
         if self.net.is_some() && self.net_local_slot != 0 {
             if let Some(sim) = self.scene.sim.as_mut() {
                 sim.swap_local_slot(self.net_local_slot);
+                // The joiner's own slot's loadout (the scenario bonus weapon keys on its team).
+                sim.mp_equip_local();
+                sim.gun.switch_request = sim.gun.weapon;
                 self.cam = Camera { pos: Vec3::new(sim.bond.pos[0], sim.bond.pos[1] + 1.6, sim.bond.pos[2]), yaw: sim.bond.yaw, pitch: 0.0, fov: GAME_FOV };
             }
         }
@@ -4368,8 +4412,7 @@ impl ApplicationHandler for App {
                                         // parks in mp_bonds[0]; the new agent starts with the
                                         // match's start loadout and its slot's health.
                                         sim.swap_local_slot(js);
-                                        sim.gun = nf_game::gun::Gun::new(2, 7, 41);
-                                        sim.drones.bond_weapon = 2;
+                                        sim.mp_equip_local();
                                         sim.drones.health.health = sim.mp_hp[js];
                                         sim.net_rng = Some(nf_game::drone::Rng::new(0x5eed_0b0b ^ (js as u32).wrapping_mul(0x9e37_79b9)));
                                         self.net_local_slot = js;

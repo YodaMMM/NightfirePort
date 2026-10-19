@@ -181,7 +181,12 @@ impl MpLobby {
 
     /// The Explosive-Scenery gate [M Menu_UnlockMPSettings 0x1ff698's kind-3 id-0x3e bit — the
     /// same word the couch model keeps as mp_bonus_mask].
-    pub fn explosive_unlocked(&self) -> bool { self.bonus_mask >> 0x3e & 1 != 0 }
+    ///
+    /// mp-lobby-settings: the port's unlock-everything default (`UNLOCK_ALL`, on unless
+    /// `--locked`) opens it too — it already opens every locked scenario/character row, and
+    /// without it no player could ever reach Explosive Scenery (the bonus word needs the
+    /// campaign's reward) [S].
+    pub fn explosive_unlocked(&self) -> bool { self.unlock_all || self.bonus_mask >> 0x3e & 1 != 0 }
 
     /// The row list in screen order [S §6.3]. Settings rows first, then the bots, then the
     /// players, then Start.
@@ -313,9 +318,12 @@ impl MpLobby {
                 // [M C_SBMPSCEN 0x20c600:40-42]; the one screen refuses the step onto it [S].
                 let cur = MP_SCENARIO_ROWS.iter().position(|r| r.3 == self.scenario).unwrap_or(0);
                 let mut r = cur;
+                // Row 0 (Quick Game, word 0) is the couch's preset shortcut, not a scenario — the
+                // one screen's wheel steps over it (a lobby match on scenario word 0 has no rules)
+                // [S; the couch's Quick Game is `mp_quick_start`].
                 for _ in 0..MP_SCENARIO_ROWS.len() {
                     r = (r as i32 + dir).rem_euclid(MP_SCENARIO_ROWS.len() as i32) as usize;
-                    if !scenario_locked(self.unlock_all, r) { break; }
+                    if MP_SCENARIO_ROWS[r].3 != 0 && !scenario_locked(self.unlock_all, r) { break; }
                 }
                 self.scenario = MP_SCENARIO_ROWS[r].3;
                 true
@@ -377,6 +385,14 @@ impl MpLobby {
                     if !character_locked(self.unlock_all, r as usize) { break; }
                 }
                 b.character = r as u32;
+                // The couch pick's record writes [M C_SBMPBTCHOOSE 0x210f08:26-43]: +0x0F team =
+                // Menu_IsBotGood (the preset's side), the stats reset to the character's preset
+                // (`default_bot_stats`), +0x11 dirty = 0. The lobby's bot team was never written,
+                // so every bot stayed on its fresh record's side in a team game [S].
+                b.team_mi6 = crate::menu::MP_CHARACTER_SIDE_MI6[r as usize];
+                b.dirty = false;
+                let (skill, aim, hp, speed, r1, r2, trait_id) = MpBot::preset(r as usize);
+                (b.skill, b.aim, b.hit_points, b.speed, b.recovery1, b.recovery2, b.trait_id) = (skill, aim, hp, speed, r1, r2, trait_id);
                 true
             }
             MpLobbyRowId::BotSkill(i) => {
@@ -385,6 +401,7 @@ impl MpLobby {
                 let b = &mut self.bots[i.min(nf_net::lobby::BOTS - 1)];
                 let cur = SKILLS.iter().position(|&s| s == b.skill).unwrap_or(0) as i32;
                 b.skill = SKILLS[(cur + dir).rem_euclid(SKILLS.len() as i32) as usize];
+                b.dirty = true; // a hand edit [M P_MPBOTSETUP's store sets +0x11]
                 true
             }
             MpLobbyRowId::Player(i) if i.min(nf_net::lobby::SLOTS - 1) == self.own_slot => {
@@ -422,12 +439,15 @@ impl MpLobby {
                 p.ready = !p.ready;
                 true
             }
-            MpLobbyRowId::Player(_) | MpLobbyRowId::PlayerTeam(_) => false, // not this machine's row
-            MpLobbyRowId::PlayerTeam(i) => {
+            // Confirm on the own team row flips it like ◀ ▶ (this arm sat after the catch-all
+            // below and never ran) [S].
+            MpLobbyRowId::PlayerTeam(i) if i.min(nf_net::lobby::SLOTS - 1) == self.own_slot => {
+                self.own_dirty.1 = true;
                 let t = &mut self.players[i.min(nf_net::lobby::SLOTS - 1)].team;
                 *t ^= 1;
                 true
             }
+            MpLobbyRowId::Player(_) | MpLobbyRowId::PlayerTeam(_) => false, // not this machine's row
             MpLobbyRowId::Bot(i) => {
                 let b = &mut self.bots[i.min(nf_net::lobby::BOTS - 1)];
                 b.enabled = !b.enabled; // the Bot Setup page's own Enabled Yes/No row [M P_MPBOTSETUP row 0]
@@ -461,6 +481,18 @@ impl MpLobby {
     pub fn own_row_words(&self) -> (u32, u32, u32) {
         let p = &self.players[self.own_slot.min(nf_net::lobby::SLOTS - 1)];
         (p.character, p.team, p.ready as u32)
+    }
+
+    /// One comparable line of every setting word + the rows (the menu script's `lobby` step —
+    /// the two-window check diffs the host's line against the client's) [S test aid].
+    pub fn debug_line(&self) -> String {
+        let bots: Vec<String> = self.bots.iter().enumerate().filter(|(_, b)| b.enabled)
+            .map(|(i, b)| format!("b{i}:c{}/s{}/t{}/a{}/hp{}", b.character, b.skill, b.team_mi6 as u8, b.aim, b.hit_points)).collect();
+        let players: Vec<String> = self.players.iter().enumerate().filter(|(_, p)| p.joined)
+            .map(|(i, p)| format!("p{i}:{}/c{}/t{}/r{}", p.codename, p.character, p.team, p.ready as u8)).collect();
+        format!("host={} own={} scen={:#x} map={:#x} ws={} limit={} dur={} ff={} pm={:?} radar={} env={:?} bots=[{}] players=[{}] focus={}",
+            self.host, self.own_slot, self.scenario, self.level, self.weapon_set, self.frag_limit, self.time_limit,
+            self.friendly_fire, self.player_mods, self.radar, self.envmods, bots.join(" "), players.join(" "), self.focus)
     }
 
     /// The wire snapshot [S §6.4].

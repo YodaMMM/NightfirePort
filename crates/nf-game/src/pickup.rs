@@ -20,11 +20,13 @@ const GRAVITY: f32 = -9.8 * (1.0 / 60.0) * (1.0 / 60.0);
 pub const BEST_WEAPON: [u16; 18] = [0x42, 0x32, 0x1a, 0x18, 0x1c, 0x16, 0x15, 0x08, 0x10, 0x0e, 0x0d, 0x0c, 0x12, 0x06, 0x04, 0x02, 0x0a, 0x01];
 
 /// `PickupMatrix` (0x2b9100, 110 bytes) row 0 — the MP weapon-set table `Pickup_CreateFromSet`
-/// (0x18f1b0) reads for kinds 7–11: `PickupMatrix[row][(kind-7)*2]`, row = the u16 at
-/// `MPSettings+0x1B4` (0 in SP [L ee_start_05.bin]; rows of 10 s16 entries). The disc's live row:
-/// set 7 → 0x6, 8 → 0x1e, 9 → 0x2c, 10 → 0x6, 11 → 0x10. The odd columns of the live row
-/// ([0x1c, 0x18, 0x2, 0xa, 0x42]) are not read by 0x18f1b0.
-pub const PICKUP_MATRIX_ROW0: [u16; 5] = [0x6, 0x1e, 0x2c, 0x6, 0x10];
+/// (0x18f1b0) reads for kinds 7–11: `PickupMatrix + (kind-7)·2 + set·10` in BYTES — 11 rows of
+/// 5 s16, row = the u16 at `MPSettings+0x1B4` (0 in SP) [M 0x18f1b0:56; the 110-byte symbol and
+/// `Pickup_MakeRandomWeaponSet` 0x18f098's row-10 fill at +100 agree]. Row 0: set 7 → 6, 8 → 0x1c,
+/// 9 → 0x1e, 10 → 0x18, 11 → 0x2c [D the ELF bytes]. (mp-lobby-settings: this read the table as
+/// rows of 10 s16 and took every other entry — [6, 0x1e, 0x2c, 6, 0x10] — so kinds 8..11 made the
+/// wrong guns.) The full table is `crate::mp::equip::PICKUP_MATRIX`.
+pub const PICKUP_MATRIX_ROW0: [u16; 5] = crate::mp::equip::PICKUP_MATRIX[0];
 
 /// A model's glist bounds (`celglist+0x20`: centre, radius).
 #[derive(Clone, Copy, Debug)]
@@ -194,7 +196,14 @@ impl Pickup {
     /// clip, model 0x20007c4, at +0.1,+0.1, with a 0.5 fall velocity [M :49-62] — the offset/velocity are the
     /// port's unmodelled remainder). State 1 (the set pickups rest where placed).
     pub fn create_from_set(translation: V3, rotation: [f32; 3], set: u16, w: &WeaponData, models: &std::collections::HashMap<u32, Model>) -> Option<Pickup> {
-        let weapon = *PICKUP_MATRIX_ROW0.get((set - 7) as usize)?;
+        Self::create_from_set_row(translation, rotation, set, &PICKUP_MATRIX_ROW0, w, models)
+    }
+
+    /// [`Pickup::create_from_set`] over the match's weapon-set row (`MPSettings+0x1B4`'s row of
+    /// `PickupMatrix`, the Random row once filled) — mp-lobby-settings: the MP arenas' set pickups
+    /// follow the lobby's Weapon Set [M 0x18f1b0:56].
+    pub fn create_from_set_row(translation: V3, rotation: [f32; 3], set: u16, row: &[u16; 5], w: &WeaponData, models: &std::collections::HashMap<u32, Model>) -> Option<Pickup> {
+        let weapon = *row.get((set.checked_sub(7)?) as usize)?;
         let base = w.base(weapon as usize) as u16;
         let model = w.model(base as usize);
         let bounds = *models.get(&model)?;
@@ -674,9 +683,9 @@ mod tests {
         assert!(!Inventory::is_better_weapon(&w, 2, 2), "sister: the same id never re-switches (15 < 15 is false)");
     }
 
-    /// `Pickup_CreateFromSet` (0x18f1b0) with the live row 0 [L MPSettings+0x1B4 = 0,
-    /// PickupMatrix 0x2b9100]: set 9 → weapon 0x2c (the rocket launcher), kind 0, the BASE id,
-    /// `clip_size·2` = 8 rounds; sets 7/8/10/11 → 0x6/0x1e/0x6/0x10.
+    /// `Pickup_CreateFromSet` (0x18f1b0) with row 0 [M the byte-stride read; D PickupMatrix
+    /// 0x2b9100]: set 11 → weapon 0x2c (the rocket launcher), kind 0, the BASE id,
+    /// `clip_size·2` = 8 rounds; sets 7/8/9/10 → 0x6/0x1c/0x1e/0x18.
     #[test]
     fn set_kinds_resolve_through_the_pickup_matrix() {
         let mut w = table();
@@ -688,7 +697,9 @@ mod tests {
         let mut models = models;
         let rocket_model = w.model(0x2c as usize);
         models.insert(rocket_model, Model { centre: [0.0; 3], radius: 0.5 });
-        let p = Pickup::create_from_set([1.0, 2.0, 3.0], [0.0; 3], 9, &w, &models).expect("set 9 creates");
+        // Row 0's rocket is column 4 = kind 11 (the byte-stride table; the old every-other read put
+        // it at kind 9) [M 0x18f1b0:56].
+        let p = Pickup::create_from_set([1.0, 2.0, 3.0], [0.0; 3], 11, &w, &models).expect("set 11 creates");
         assert_eq!((p.kind, p.weapon, p.rounds), (kind::WEAPON, 0x2c, 8), "the rocket set: kind 0, base id, clip·2");
         assert_eq!(p.model, rocket_model, "the WEAPON's glist, not the placement's object");
         assert_eq!((p.state, p.spin), (1, false), "rests where placed, no spin");
