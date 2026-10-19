@@ -38,7 +38,7 @@ fn load() -> Sim {
 }
 
 /// One step through the real path; the level's scripts grab Bond into cut-scenes within seconds,
-/// so each tick carries the game's own skip action like the walkreal walker [M nis.rs].
+/// so each tick carries the game's own skip action like the walkreal walker — [S] unverified (nis.rs is the port's skip plumbing; no decompile line pinned here).
 fn step(sim: &mut Sim, input: nf_game::player::Input) {
     if sim.disabled { sim.drones.scripts.skip_request = true; }
     sim.step_bond(input, false, false, false);
@@ -176,7 +176,7 @@ fn deep_ladder_climb_opens_the_hatch_on_e_and_exits_into_the_bathhouse() {
     }
     let wedged = wedged.expect("the climb never reached the hatch (the wedge)");
     eprintln!("  wedged at +{wedged}, y {:.3}; hatch state {}", sim.bond.pos[1], sim.drones.sss.list[s308].state);
-    // Look up at the hatch (the pitch takes the stick during the climb [M 0x1a1d28/0x1a92e8])
+    // Look up at the hatch (the pitch takes the stick during the climb — [S] unverified: Player_Aiming 0x1a1d28 / Player_ViewClamping 0x1a92e8 have no climb or substate branch)
     // and press E — the game's SS_Activate arm (Player_Activate 0x1a5170 case '%').
     let up = nf_game::player::Input { forward: 1.0, look: 0.2, ..Default::default() };
     for _ in 0..8 { step_use(&mut sim, up); }

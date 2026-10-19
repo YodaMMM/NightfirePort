@@ -7,7 +7,7 @@
 //! - the client cannot edit the host's rows (the editable matrix);
 //! - Start is gated on everyone ready, then the handover rides the session;
 //! - the built MpSettings equals what the couch pages build for the same choices
-//!   [M mp_confirm_start, P_MPCONFIRM 0x20ec00:53-94];
+//!   [M P_MPCONFIRM 0x20ec00:94-157, the msg-0x4b start arm; mp_confirm_start is the port.s name for it];
 //! - the LobbyState / LobbyEdit codec round-trips (nf-net).
 
 use std::cell::RefCell;
@@ -195,7 +195,7 @@ fn host_edit_reaches_the_client_on_the_next_tick() {
     let before = host.mp_one.level;
     assert!(host.mp_one.apply(Action::Left), "the map row is editable for the host");
     assert_ne!(host.mp_one.level, before, "the map word moved");
-    assert_eq!(host.mp_one.level, MP_MAP_ROWS[7].3, "◀ from row 0 wraps to row 7 [M the wheel order]");
+    assert_eq!(host.mp_one.level, MP_MAP_ROWS[7].3, "◀ from row 0 wraps to row 7 — [S] unverified: the port.s wheel walk; no decompile line pinned");
     // The publish rides the tick (the diff path).
     host.tick();
     assert!(net.borrow().lobby.is_some(), "the host published its snapshot");
@@ -284,7 +284,7 @@ fn start_is_gated_on_ready_and_hands_the_match_over() {
 #[test]
 fn the_built_settings_equal_the_couch_build() {
     // The same choices through both paths: the couch walk's mp_confirm_start vs the lobby's
-    // mp_lobby_start [M mp_confirm_start, P_MPCONFIRM 0x20ec00:53-94].
+    // mp_lobby_start [M P_MPCONFIRM 0x20ec00:94-157, the msg-0x4b start arm; mp_confirm_start is the port.s name for it].
     let choices = |fe: &mut FrontEnd| {
         fe.mp_scenario = MP_SCENARIO_ROWS[2].3; // Team Arena (a team game, the team rows exist)
         fe.mp_level = MP_MAP_ROWS[3].3;
@@ -294,7 +294,7 @@ fn the_built_settings_equal_the_couch_build() {
         fe.mp_friendly_fire = 1;
         fe.mp_radar = 0;
     };
-    // The couch path: one joined, ready human + one bot (the two-player minimum [M 0x39e]).
+    // The couch path: one joined, ready human + one bot (the two-player minimum [M C_SBMPOPTIONS 0x20e818:104-109 (humans + bots > 1 sends the 0x44/0x40000049 start); 0x39e is a label id]).
     let mut couch = FrontEnd::new();
     choices(&mut couch);
     couch.mp_join[0] = nf_view::menu::MpJoinAgent {
@@ -340,7 +340,7 @@ fn the_built_settings_equal_the_couch_build() {
     assert_eq!(lobby_s.frag_limit, couch_s.frag_limit, "the limit [M +0x19C]");
     assert_eq!(lobby_s.time_limit, couch_s.time_limit, "the confirmed time (minutes ×60) [M the ×0x3c]");
     assert_eq!(lobby_s.friendly_fire, couch_s.friendly_fire, "friendly fire [M +0x198]");
-    assert_eq!(lobby_s.radar, couch_s.radar, "radar [M +0x1C4]");
+    assert_eq!(lobby_s.radar, couch_s.radar, "radar (the port.s +0x1C4 mapping — [S] unverified; P_MPPLAYERMODS 0x2104d0:16 writes the control-0x1000008d on/off item there)");
     assert_eq!(lobby_s.human_count, couch_s.human_count, "the humans");
     assert_eq!(lobby_s.master, 1, "master = 1 [M +0x180 = 1]");
     assert_eq!(lobby_s.team_game, couch_s.team_game, "the team flag re-derives [M MP_Init 0x183438:41]");

@@ -3,7 +3,7 @@
 //! the five `DSTATE_Astronaut*` states (0xBD-0xC1), the no-gravity float physics
 //! (`Drone_CollisionHandler` flying path: no DoGravity / floor snap, damping ×0.98 while
 //! +0x4F8 & 0x40 [M 0x140968:128-150]), the CombatMove flinch (HandleImpact resume 0xBE
-//! [M 0x174550:38-42]) and the death routing mode 0x1D → 0xBF [M 0x1461c8:47-50].
+//! [M 0x174550:38-42]) and the death routing mode 0x1D → 0xBF [M 0x1461c8:31-53 (the kill table)].
 //! Opt-in: `NF_ISO=<iso>`.
 
 use nf_formats::anim::Script;
@@ -200,7 +200,7 @@ fn astronaut_hit_and_death_variants_fire() {
     dr.hit = Some(Hit { part: 4, ray: [0.0; 3], point: [0.0; 3], damage: 1.0, weapon: 2 });
     dr.send(&d, &mut sim.rng, sim.frame, nf_game::drone::msg::BULLET);
     assert_eq!(sim.list[ai].state, state::ASTRONAUT_COMBAT, "stationary combat does not flinch");
-    // Death [M BulletImpact 0x1461c8:47-50: dtype 0x1d → 0xBF, not 0x44]. Pin the killer 10 units
+    // Death [M BulletImpact 0x1461c8:31-53 (the kill table): dtype 0x1d → 0xBF, not 0x44]. Pin the killer 10 units
     // along +x and a clean velocity so the death impulse's direction is exact.
     let dr = &mut sim.list[ai];
     dr.opp_target = [dr.pos[0] + 10.0, dr.pos[1], dr.pos[2]];

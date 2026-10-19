@@ -27,10 +27,16 @@ fn the_dossier_wheels_rows_open_the_three_pages() {
         fe.page = Page::Dossier;
         fe.cursor = row;
         assert!(fe.action(Action::Confirm), "row {row} confirm opens its page");
-        assert_eq!(fe.page, want, "the wheel's row {row} opens its page [M 0x216eb0:12-31]");
+        // G-048(1): both wheel arms ride Menu_ChangePageCloseIris [M C_SBDOSSIER 0x216eb0:20/:26 →
+        // 0x202190:8-9 — the 0x44 lands 10 ticks out and its processing lifts the input block
+        // 0x21c858:315]. The old immediate-flip assert pinned the pre-G-048 port choice; fixed
+        // with the address (fe-gaps-g048-2).
+        for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
+        assert_eq!(fe.page, want, "the wheel's row {row} opens its page [M 0x216eb0:12-31, 0x202190:8-9]");
         assert_eq!(fe.page.id(), id);
         assert_eq!(fe.cursor, 0, "the page's init msg 0x2e (0,0) resets the scroll [D page data]");
-        // Back returns to the Dossier (the Records page's own mapping).
+        // Back returns to the Dossier (the Records page's own mapping — the sub-pages' Back/0x5f
+        // pops are immediate [M], not CloseIris callers).
         assert!(fe.action(Action::Back));
         assert_eq!(fe.page, Page::Dossier);
     }

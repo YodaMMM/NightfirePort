@@ -225,8 +225,10 @@ fn the_zone_change_fades_at_the_game_rates() {
 
 /// The 0xc023 sentinel through a real level: 07000002 (The Exchange) is the only retail level
 /// with 0xc023 cel placements [D probe census - 5 of them, param 3 = 0/1]. Their env reads back
-/// -26472 (the 0x9898 the game writes, also the allocator fill a classless cel keeps [M
-/// 0x1d00c0/0x1c93f8]); the IOP turns that value into SFXUnderWater + reverb target 0 [M SFX.IRX
+/// -26472 (the 0x9898 the game writes, also the allocator fill a classless cel keeps —
+/// [M 0x1d00c0:115 (the 0xc023 → 0x9898 write); the fill attribution via 0x1c93f8 is
+/// [S] unverified: build_alloc_cel never writes +0x98 and Mem_Malloc 0x1cf688 has no fill]);
+/// the IOP turns that value into SFXUnderWater + reverb target 0 [M SFX.IRX
 /// 0x0db4]. Sister: the level also has ordinary 0xc047 cels, asserted present.
 #[test]
 fn the_07000002_water_cels_send_the_underwater_sentinel() {

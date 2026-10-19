@@ -41,7 +41,7 @@ fn cover_06_spawns_the_main_map_s_nodes() {
     assert_eq!(corners, 80, "corner nodes = the main map's 0xE5 placements [D]");
     assert_eq!(sim.covers.len() - corners, 34, "low nodes = the main map's 0xE6 placements [D]");
     assert!(!sim.covers.iter().any(|n| n.pos == [0.0, 0.0, 0.0]),
-        "a (0,0,0) template node is live — the sub-map scan came back [M 0x1d1cf0 state 0 resets DynamicPtr]");
+        "a (0,0,0) template node is live — the sub-map scan came back [M parsemap_handle_block_id 0x1d1020:82-84 (the last block 0x1a wins) + the single flag-1 create at ResetMap_Load 0x1d6360:146]");
     // Sister [D]: the disc really carries 81+35 across all maps (the scan's premise) — the two
     // extra are 010000f3's template pair (cover_nodes_submap_live pins them per level).
     let iso_img = nf_formats::iso9660::IsoImage::open(&iso()).unwrap();
@@ -61,7 +61,7 @@ fn cover_06_spawns_the_main_map_s_nodes() {
 /// 0x1d1cf0 state 0), and every mission archive's kind-1 main map is parsed last. 07000004's
 /// main map has NO cover placements, so its live list is EMPTY. The template's field mapping
 /// through the creator's default arms is pinned on the disc placement itself: corner flags =
-/// 0xC | 0x60 | 0x180 = 0x1EC with angle 45° = π/4 ([M 0x136ff0 — p0..p2 not 1/2 take the else
+/// 0xC | 0x60 | 0x180 = 0x1EC with angle 45° = π/4 ([M NDrone2_FindAmbushCover 0x152958:127/149 — the ×0.1 scale; 0x136ff0 — p0..p2 not 1/2 take the else
 /// arms, p3 = 0 → 0x3f490fdb]) and depth/offset bytes default 8 × 0.1; low: p0 = 0 → idle 0x11,
 /// aim 0xA, no flags ([M 0x137340]).
 #[test]

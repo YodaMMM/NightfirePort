@@ -165,7 +165,7 @@ fn mp_confirm_start_writes_difficulty_1() {
 fn team_setup_three_prompts_with_labels_images_values() {
     let mut fe = team_setup_fe();
 
-    // Step 1 — Choose Team [M P_MPSETUP binds 0x37c and the Phoenix/MI6 items 0x1c7@0, 0x1c8@1].
+    // Step 1 — Choose Team [M P_MPSETUP binds 0x37c and the Phoenix/MI6 items 0x1c7@0, 0x1c8@1 — C_RBMPSETUP 0x20de58:164-167].
     assert_eq!(fe.mp_setup_prompt_label(), 0x37c, "Choose Team");
     assert_eq!(fe.mp_setup_image(), 0x0300_01a3, "Phoenix's image on selection 0 [M the 0x49/0x54 arm]");
     assert_eq!(fe.mp_setup_value_text(None), "<0x1c7>", "the Phoenix item's label id");

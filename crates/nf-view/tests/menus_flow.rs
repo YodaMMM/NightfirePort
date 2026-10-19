@@ -32,6 +32,17 @@ fn main_confirm(fe: &mut FrontEnd) {
     for _ in 0..menu::DELAYED_PAGE_TICKS + menu::MAIN_OPEN_BLOCK { fe.tick(); }
 }
 
+/// G-048(1): the CloseIris walks land `CLOSE_IRIS_PAGE_TICKS` ticks after the action, with input
+/// blocked from the next tick [M 0x202190:6-9] — the walk helper ticks until the page lands.
+fn iris_confirm(fe: &mut FrontEnd) {
+    assert!(fe.action(Action::Confirm));
+    for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
+}
+fn iris_side(fe: &mut FrontEnd) {
+    assert!(fe.action(Action::Side));
+    for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
+}
+
 #[allow(dead_code)]
 /// Drives the boot path to the title the way `GameFlow_Main` + `ResetMap_Load` would [M 0x1c98c8/0x1d6360].
 fn tick_to_title(fe: &mut FrontEnd) {
@@ -77,8 +88,10 @@ fn the_page_sequence_matches_the_real_game() {
     assert!(fe.action(Action::Confirm));
     assert_eq!(fe.page.id(), 0x4000_004a, "P_PARISENUM");
     assert_eq!(fe.flow.get_state(), ST_RUNNER, "no GameFlow state 6 — a menu background movie [M 0x20a060:24-25]");
-    fe.tick();
-    assert_eq!(fe.page.id(), 0x4000_0043, "P_ESTHERO [M 0x20a648:43]");
+    // G-048(4): the box waits on the card machine [M 0x20a648:36-38 — the 0x50 re-runs the
+    // message box while DAT_002e1b0a is clear; the old one-tick completion was the [S] guess].
+    for _ in 0..32 { fe.tick(); if fe.page.id() == 0x4000_0043 { break; } }
+    assert_eq!(fe.page.id(), 0x4000_0043, "P_ESTHERO [M 0x20a648:43 — the 0x44 fires on DAT_002e1b0a]");
     fe.tick();
     assert!(!fe.intro_movie, "the 1st 0x50 only counts [M 0x20a060:16, :27]");
     fe.tick();
@@ -110,13 +123,15 @@ fn the_page_sequence_matches_the_real_game() {
     assert!(fe.action(Action::Confirm));
     assert!(fe.confirming_default_profile);
     assert!(fe.action(Action::Confirm), "✕ continues through the box");
+    for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); } // [M 0x20aec0:103 CloseIris]
     assert_eq!(fe.page, Page::Difficulty);
     assert_eq!(fe.page.id(), 0x4000_0023, "Select Difficulty [M menu-def page 0x40000023 header Txt 0x1f8]");
     assert_eq!(fe.cursor, 0, "opened from the codename page the wheel 0x100000bf starts on index 0 [M 0x216bf8:10-12]");
     // Confirming the difficulty → the Single Player list [M C_SBNFDFCTY 0x216ca8:10-17 —
     // Menu_ChangePageCloseIris(0x4000001c, …); the order is re-derived from the page handlers,
-    // not the driver's 2026-10-13 transcript, which was not a fresh boot].
-    assert!(fe.action(Action::Confirm));
+    // not the driver's 2026-10-13 transcript, which was not a fresh boot]. G-048(1): the open is
+    // the 10-tick delayed 0x44 [M 0x202190], so the walk goes through the iris window.
+    iris_confirm(&mut fe);
     assert_eq!(fe.page, Page::MissionSelect);
     assert_eq!(fe.page.id(), 0x4000_001c, "Single Player [M menu-def page 0x4000001c header Txt 0x14c]");
     // The campaign is sp_level's 12 rows [M 0x2df2e0, 12 × 0x18-byte records].
@@ -158,8 +173,8 @@ fn locked_missions_cannot_be_scrolled_to_or_picked() {
     start_to_main(&mut fe);
     main_confirm(&mut fe);      // NightFire; the page opens on row 1 = Play without saving [M 0x20aec0:96-97]
     fe.action(Action::Confirm); // arm the confirm box
-    fe.action(Action::Confirm); // through it → difficulty
-    fe.action(Action::Confirm); // difficulty → missions
+    iris_confirm(&mut fe);      // through it → difficulty [M P_NFSELECT 0x20aec0:103 CloseIris]
+    iris_confirm(&mut fe);      // difficulty → missions [M C_SBNFDFCTY 0x216ca8:16 CloseIris]
     assert_eq!(fe.page, Page::MissionSelect);
     // A fresh profile has rows 0 AND 1 unlocked [D sp_level's boot state in ACTION.ELF .data (file
     // offset 0x1d91e0): rows 0-1 hold +0x10 = 1, rows 2-11 hold 0].
@@ -350,7 +365,7 @@ fn cursors_wrap_and_back_walks_up_the_pages() {
     fe.cursor = 0;
     main_confirm(&mut fe);
     fe.action(Action::Confirm); // the confirm box
-    fe.action(Action::Confirm); // through it → difficulty
+    iris_confirm(&mut fe);      // through it → difficulty [M P_NFSELECT 0x20aec0:103 CloseIris]
     assert_eq!(fe.page, Page::Difficulty);
     // fe-audit: the wheel opens on index 0 [M 0x216bf8:10-12] and WRAPS over its three rows —
     // Scroll_Init sets the wrap flag, only msg 0x69 clears it [M 0x2214f0:102-103, 0x221810:136-138;
@@ -364,28 +379,34 @@ fn cursors_wrap_and_back_walks_up_the_pages() {
     fe.action(Action::Down);
     assert_eq!(fe.cursor, 2, "down twice reaches 00 Agent");
     fe.action(Action::Confirm);
+    for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); } // [M 0x216ca8:16 CloseIris]
     assert_eq!(fe.page, Page::MissionSelect);
     assert_eq!(fe.cursor, 11, "the list opens on the highest unlocked row [M 0x20b608:60-64]");
     // Down 12 times on the mission select wraps to the same row.
     for _ in 0..12 { fe.action(Action::Down); }
     assert_eq!(fe.cursor, 11);
-    // The Dossier opens on □/E/Tab (the "~Y Dossier" hint, Txt 0x208) and returns.
-    assert!(fe.action(Action::Side));
+    // The Dossier opens on □/E/Tab (the "~Y Dossier" hint, Txt 0x208) and returns — through the
+    // CloseIris delay [M C_SBNFMAP 0x20b8d8:48, G-048(1)].
+    iris_side(&mut fe);
     assert_eq!(fe.page, Page::Dossier);
-    // fe-audit 1019: the Dossier's Back is the manager's default page pop [M 0x21c858:592-600;
+    // fe-audit 1019: the Dossier's Back is the manager's default page pop [M 0x21c858:592-598;
     // the disc's front-end def binds no msg-99 script on any page — every page's only SCRIPT is
     // id 0x2000000f bound to the 0x4c-open slot 0 by its single MSG 0x21 [D the 08000002 tag
     // stream]] — the mission list it was opened from.
     assert!(fe.action(Action::Back));
     assert_eq!(fe.page, Page::MissionSelect);
     // fe-audit 1019: the list's Back is ROUTE-DEPENDENT. 0x5f runs the page's msg-99 SCRIPT
-    // first [M 0x21c858:588-592] — none is bound [D] — so the pushed SP chain takes the default
-    // pop: reopen the wheel with its saved cursor [M 0x21c858:592-600]. The wheel was pushed by
-    // the confirm's 0x44 b=0 [M C_SBNFDFCTY 0x216ca8:10-17; the push rule 0x21c858 case 0x44].
+    // first [M 0x21c858:604-608] — none is bound [D] — so the pushed SP chain takes the default
+    // pop: reopen the wheel with its saved cursor [M 0x21c858:592-598]. The wheel was pushed by
+    // the confirm's 0x44 carrying b = DAT_002e1adc [M 0x202190:9] — here 0 [S] unverified: the
+    // global is cleared by C_SBNFCN 0x20b390:30 / P_NFSELECT 0x20aec0:65 and set by P_MPJOIN
+    // 0x20ca00:182 / C_SBCNOPTIONS 0x213528:66 / P_CNNAME 0x213790:71 / C_KEYBOARD
+    // 0x213a98:61, so the value depends on which menus ran; C_SBNFDFCTY 0x216ca8:10-17 only
+    // calls Menu_ChangePageCloseIris + the push rule 0x21c858 case 0x44].
     // (On an EMPTY stack — the results/bonus route, opened with b=1 [M 0x208e78:43] — the pop's
     // else reaches P_NFMAP's 99 arm → MAIN [M 0x20b608:67-68]; that route is menu_sp_e2e's.)
     assert!(fe.action(Action::Back));
-    assert_eq!(fe.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-600]");
+    assert_eq!(fe.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-598]");
     assert_eq!(fe.cursor, 2, "the wheel's saved cursor rode the pop [M 0x21c858:600 — 00 Agent was picked]");
 }
 
@@ -1003,8 +1024,9 @@ fn the_dossier_lists_records_rewards_gadgets_weapons() {
         assert_eq!(fe.row_label(Some(&lang), i), lang.bind(n).unwrap(), "row {i} is the table's name label");
         assert!(lang.bind(d).is_some(), "row {i}'s description label binds");
     }
-    // Confirming row 0 opens the Records table [M C_SBDOSSIER 0x216eb0:12-31 index 0 → 0x4000003a].
-    assert!(fe.action(Action::Confirm));
+    // Confirming row 0 opens the Records table [M C_SBDOSSIER 0x216eb0:12-31 index 0 → 0x4000003a]
+    // through the CloseIris delay [M 0x216eb0:20 — G-048(1)].
+    iris_confirm(&mut fe);
     assert_eq!(fe.page, Page::Records);
     assert_eq!(fe.page.id(), 0x4000_003a);
 }
@@ -1234,7 +1256,7 @@ fn the_dossier_wheel_opens_at_records_and_wraps() {
     fe.unlock_all = true;
     fe.page = Page::MissionSelect;
     fe.cursor = 3;
-    assert!(fe.action(Action::Side), "□ opens the Dossier");
+    iris_side(&mut fe); // □ opens the Dossier through the CloseIris delay [M 0x20b8d8:48, G-048(1)]
     assert_eq!(fe.page, Page::Dossier);
     assert_eq!(fe.cursor, 0, "the wheel resets to row 0 on open [M 0x216de0:9-16]");
     let rows: Vec<usize> = fe.wheel().iter().map(|(r, _)| *r).collect();

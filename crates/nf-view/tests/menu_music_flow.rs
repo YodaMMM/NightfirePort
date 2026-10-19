@@ -206,7 +206,12 @@ fn the_front_end_action_walk_sound_tracks_the_page_changes() {
     assert_eq!(fe.music.take_cmds().as_slice(), &[MusicCmd::StopJingles, MusicCmd::StartJingle(0x1d7)]);
     // START, then P_ESTHERO's 2nd 0x50 starts the movie: the pair is removed [M 0x20a060:20-22].
     assert!(fe.action(Action::Confirm));
-    for _ in 0..3 { fe.tick(); }
+    // G-048(4): P_PARISENUM's 0x50 waits on the card machine before P_ESTHERO opens [M
+    // 0x20a648:26-47 — the Menu_EnumSaves pump + DAT_002e1b0a; HandlePS2CardState 0x110b98's
+    // walk; the sceMc latency is the marked [S]] — ≈5 ticks, then the 2nd EstHero 0x50 starts
+    // the movie [M 0x20a060:16-25]. The old fixed 3-tick wait pinned the port's [S] first-0x50
+    // open; the bounded wait keeps the assertion (the movie DOES start through the real path).
+    for _ in 0..16 { if fe.intro_movie { break; } fe.tick(); }
     assert!(fe.intro_movie);
     assert!(fe.music.take_cmds().contains(&MusicCmd::StopJingles));
     assert!(!fe.music.jingles_up);

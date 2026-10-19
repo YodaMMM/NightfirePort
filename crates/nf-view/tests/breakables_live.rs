@@ -87,7 +87,7 @@ fn a_shot_shatters_the_controlroom_pane_and_a_second_bullet_passes() {
     let sim = scene.sim.as_ref().unwrap();
     assert_eq!(broken(sim), vec![FRONT], "the front pane shatters on the first round (health 0 [D], damage > 0 [M 0x12bfd8:36-37])");
     let after_first = count_2e(sim);
-    assert!(after_first >= 1, "Break_Kill's glass sound 0x2e plays [M 0x12b970:65-76], got {after_first}");
+    assert!(after_first >= 1, "Break_Kill's glass sound 0x2e plays (record type 2 only — the other record types play 0x5f2/0x5f3 [M 0x12b970:65-76]), got {after_first}");
 
     // The second round through the same spot: the dead pane registers no hit [M 0x12b970:60] —
     // nothing new breaks, no second glass sound node.

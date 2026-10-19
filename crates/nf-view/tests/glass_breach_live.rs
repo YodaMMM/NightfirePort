@@ -69,7 +69,7 @@ fn the_woken_guards_smash_through_the_entry_hall_glass() {
     // SURVIVES the placed guard g0's replayed intro-script walk-by (the port's replay carries him
     // across the sheet at 0xB+23 — the class-2 drain reads the hitter's +0x30/+0x40 pair, and the
     // movement pass copies +0x30 → +0x40 after the anim/root-motion processing [M 0x1336f8:212],
-    // so a root-motion-carried step drains 0 — crate::breakable::drone_step's scripted-walk gate).
+    // so a root-motion-carried step drains 0 [S] unverified (the movement equivalence is not shown; the premise rests on [D]) — crate::breakable::drone_step's scripted-walk gate).
     // Pin that [D] premise on the real path, watch the squad's charge, and keep the breach itself
     // informational: the port's breach squad currently stalls at the glass line (the port's AI
     // paths them at the closed front door instead of through the pane — the game's runner crosses
