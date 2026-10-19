@@ -544,15 +544,14 @@ fn the_backdrop_pages_keep_one_pair_and_the_list_pages_touch_nothing() {
     let starts = h.drv.starts_of(0x1d7, 0);
     // The mission list IS a backdrop page: leaving and coming back while the pair is up must
     // restart NOTHING (the menu_movie gate [M 0x20b608's if menu_movie == 0; P_MAIN's 0x4c
-    // likewise only restarts when menu_movie == 0, 0x20a7b0:42-48]). fe-audit 1017: Back from
-    // the list opens MAIN [M 0x20b608:67-68], so the round trip is the walk through
-    // NightFire/the box/the wheel again.
+    // likewise only restarts when menu_movie == 0, 0x20a7b0:42-48]). fe-audit 1019: the list
+    // was PUSHED over the wheel (the confirm's 0x44 b=0 [M C_SBNFDFCTY 0x216ca8:10-17 +
+    // 0x21c858 case 0x44]), so Back is the manager's default pop — the wheel, cursor restored
+    // [M 0x21c858:592-600]. (The disc binds no msg-99 script [D the 08000002 tag stream]; the
+    // empty-stack 99 arm → MAIN is the results route, pinned in menu_sp_e2e.)
     assert!(act(&mut h, Action::Back));
-    assert!(h.fe.as_ref().is_some_and(|fe| fe.page == Page::Main));
-    assert!(act(&mut h, Action::Confirm), "NightFire");
-    assert!(act(&mut h, Action::Confirm), "the box arms");
-    assert!(act(&mut h, Action::Confirm), "the box's yes");
-    assert!(act(&mut h, Action::Confirm), "the wheel");
+    assert!(h.fe.as_ref().is_some_and(|fe| fe.page == Page::Difficulty));
+    assert!(act(&mut h, Action::Confirm));
     assert!(h.fe.as_ref().is_some_and(|fe| fe.page == Page::MissionSelect));
     assert_eq!(starts, h.drv.starts_of(0x1d7, 0), "no restart while the pair is up");
     assert_eq!(h.jingles(), 1);

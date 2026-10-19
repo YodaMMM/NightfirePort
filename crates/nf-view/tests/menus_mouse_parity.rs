@@ -610,16 +610,15 @@ fn clicks_never_change_what_they_should_not() {
     }
     // The difficulty ride-along: clicks on the difficulty wheel pick rows only through the
     // page's own confirm — the value lands in requested_difficulty once, not per click.
-    // fe-audit 1017: Back from the mission list opens MAIN [M 0x20b608:67-68], so the wheel is
-    // reached again by the walk, not by Back.
+    // fe-audit 1019: the list was PUSHED over the wheel (the confirm's 0x44 b=0 [M
+    // C_SBNFDFCTY 0x216ca8:10-17 + 0x21c858 case 0x44]), so Back is the default pop — the
+    // wheel, cursor restored [M 0x21c858:592-600]. (No msg-99 script stands on the disc
+    // [D the 08000002 tag stream]; the empty-stack arm → MAIN is the results route, pinned
+    // in menu_sp_e2e.)
     let mut g = FrontEnd::new();
     to_missions(&mut g);
     assert!(act(&mut g, Action::Back));
-    assert_eq!(g.page, Page::Main, "the mission list's △ opens the main menu [M 0x20b608:67-68]");
-    assert!(act(&mut g, Action::Confirm), "NightFire");
-    assert!(act(&mut g, Action::Confirm), "the box arms");
-    assert!(act(&mut g, Action::Confirm), "the box's yes → the wheel");
-    assert_eq!(g.page, Page::Difficulty);
+    assert_eq!(g.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-600]");
     for _ in 0..60 {
         let (x, y) = (rng.f32_in(0.0..640.0), rng.f32_in(0.0..480.0));
         g.mouse_move(x, y);

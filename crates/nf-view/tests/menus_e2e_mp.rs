@@ -238,6 +238,10 @@ fn every_options_subpage_moves_its_values_and_rides_them() {
     assert_eq!(fe.mp_frag_limit, 15, "10 → 15 [M 0x20f790:54-55]");
     assert!(act(&mut fe, Action::Right));
     assert_eq!(fe.mp_frag_limit, 20, "15 → 20 [M 0x20f790:55-56]");
+    // fe-audit 1019: back up to the Duration row — the wrap walk below rides THAT list. (The
+    // Points rows above left the cursor on row 1; without the Up the wrap loop would step the
+    // frag limit and the 0x3ca assertion would read the wrong list.)
+    assert!(act(&mut fe, Action::Up), "the Duration row");
     // fe-audit 1017: BOTH lists wrap at their ends — Scroll_Update's ◀▶ at the max re-enters
     // from the min and vice versa while the wrap flag stands [M 0x221b20:186-194, :202-210]; the
     // flag defaults on (Scroll_Init 0x22214f0:102-103 sets +0x144 = 1; only msg 0x69 clears it
@@ -248,11 +252,19 @@ fn every_options_subpage_moves_its_values_and_rides_them() {
     assert_eq!(fe.mp_time_limit, 1, "the wrap lands on 1 [M 0x221b20:186-194]");
     assert!(act(&mut fe, Action::Left), "Left at 1 wraps back to Unlimited");
     assert_eq!(fe.mp_time_limit, -1, "the mirror wrap [M 0x221b20:202-210]");
+    // fe-audit 1019: step the Duration back to 20 so the ride assertions below keep pinning the
+    // mid-list value the old walk left (1 at idx 0, +11 → idx 11 = 20 [M 0x20f790:21-42]).
+    assert!(act(&mut fe, Action::Right));
+    for _ in 0..11 { assert!(act(&mut fe, Action::Right)); }
+    assert_eq!(fe.mp_time_limit, 20);
     assert!(act(&mut fe, Action::Down), "the Points row");
     for _ in 0..20 { assert!(act(&mut fe, Action::Right)); }  // 20 → … → 120
     assert_eq!(fe.mp_frag_limit, 120, "the list tops at 120 [M 0x20f790:45-76]");
     assert!(act(&mut fe, Action::Right), "Right at 120 wraps to 1");
     assert_eq!(fe.mp_frag_limit, 1, "the Points wrap [M 0x221b20:186-194]");
+    // fe-audit 1019: step Points back to 20 for the ride assertions below (idx 0, +11 → 20).
+    for _ in 0..11 { assert!(act(&mut fe, Action::Right)); }
+    assert_eq!(fe.mp_frag_limit, 20);
     assert!(act(&mut fe, Action::Confirm), "the rules page closes to the hub [M Manager 0x5f]");
     assert_eq!(fe.page, Page::MpOptions);
     // The hub's row is where the Rules page was opened from — 2; Player Mods is the next row.
