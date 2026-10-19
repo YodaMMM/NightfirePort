@@ -5032,6 +5032,8 @@ pub fn run() -> Result<()> {
         // menu writes minutes × 0x3c [M P_MPCONFIRM]); `deathmatch()`'s raw 10 ended the demo match
         // after 10 seconds — straight to the debriefing (the two-window check, 2026-10-18).
         st.time_limit = 10 * 60;
+        // Test aid (NF_NET_TIME=seconds): a shorter flag-path match (the debriefing checks).
+        if let Some(s) = std::env::var("NF_NET_TIME").ok().and_then(|v| v.parse::<i32>().ok()) { st.time_limit = s; }
         // Test aid (NF_NET_BOTS=n): n bots in the flag host's match (the online bots check).
         if let Some(n) = std::env::var("NF_NET_BOTS").ok().and_then(|v| v.parse::<u32>().ok()) {
             st.bot_count = n.min(nf_game::mp::MP_MAX_SLOTS as u32 - 1);
