@@ -1707,11 +1707,14 @@ mod tests {
     use super::*;
     use nf_formats::nis::{Nis, Stream as NisStream};
 
-    /// A no-op `World` for tests: animation length 100, no discrete object 0.
+    /// A no-op `World` for tests: animation length 100; the discrete object 0 pose only for the
+    /// event-6 sister's body-anim hash (every other test's anims keep the old None).
     struct TestWorld;
     impl World for TestWorld {
         fn anim_length(&self, _script: u32) -> Option<u16> { Some(100) }
-        fn discrete0(&self, _skin: u32, _script: u32, _frame: f32) -> Option<Mat4> { None }
+        fn discrete0(&self, _skin: u32, script: u32, _frame: f32) -> Option<Mat4> {
+            (script == 0x0600_0042).then_some([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [2.5, -62.75, 4.25, 1.0]])
+        }
     }
 
     /// Event 0xB (`Script_EventHandler` 0x1d94c0:152-158) writes the weapon byte on the PREVIOUS stream's Anim
@@ -2028,5 +2031,108 @@ mod tests {
             let s = p2.info[0].as_ref().unwrap();
             assert!(s.clock > 1.0, "a zero delay runs the streams again (clock {})", s.clock);
         }
+    }
+
+    /// level-4a-complete sister A: `Script_EventHandler` case 6 snapshots the PREVIOUS stream's
+    /// object matrix even when that object is an ANIM (`Script_GetInterp` case 2 reads the anim
+    /// object's +0x90 discrete pose [M 0x1da158 case 2]; `Mat_Copy(src=obj+0x90, dst=+0x40)`
+    /// [M 0x1d94c0:125-134 with the src/dst order from 0x1e3348]) — 060006d3's arrival scene
+    /// (stream 4's ev06[0], prev stream 3 = the Bond body ANIM) enables Bond at the anim's final
+    /// pose [D pack 0790004a]. Fails on the old code, which matched only `Obj::Entity` and left
+    /// the snapshot `None` (the fallback re-enables Bond at his frozen cab spot).
+    #[test]
+    fn event_6_snapshots_an_anim_stream_object_pose() {
+        let anim_cmd = {
+            let mut v = vec![0x0a];
+            v.extend(0x0600_0042u32.to_le_bytes()); // the TestWorld's known-pose script
+            v.extend(0x0500_0004u32.to_le_bytes()); // skin
+            v.extend(1u32.to_le_bytes());            // start
+            v.push(0);
+            v
+        };
+        let event_cmd = {
+            let mut v = vec![0x12, 0x01, 0x06];
+            v.extend(1u32.to_le_bytes()); // param[0] = mode 1 (the collision-check arm)
+            v.push(0);
+            v
+        };
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_06d3,
+            camera: false,
+            loop_start: 0,
+            length: 100,
+            streams: vec![
+                NisStream { first_key: 0, last_key: 0, commands: anim_cmd },
+                NisStream { first_key: 0, last_key: 0, commands: event_cmd },
+            ],
+            keys: Vec::new(),
+        });
+        let mut script = Script::load(nis, IDENT, 1.0);
+        script.start(false);
+        let mut objs = Objects::default();
+        let mut ch = Channels::default();
+        let mut out = Vec::new();
+        let world = TestWorld;
+        let mut subs = Vec::new();
+        script.update(&mut subs, &Default::default(), &mut objs, &mut ch, &world, 0, &mut out);
+        script.free(&mut subs, &mut objs, &mut out);
+        let at = out.iter().find_map(|r| match r { Request::PlayerEnable { at, mode } => Some((*at, *mode)), _ => None });
+        let (at, mode) = at.expect("free() must push PlayerEnable after the event-6 flag [M 0x1da880:44-47]");
+        assert_eq!(mode, 1, "the event's param rides the enable's collide flag [M 0x1d94c0:133]");
+        let m = at.expect("the anim object's discrete pose is the snapshot — the old code left None");
+        assert!((m[3][1] + 62.75).abs() < 1e-3 && (m[3][0] - 2.5).abs() < 1e-3,
+            "the snapshot is the anim's discrete0 pose, got {:?}", m[3]);
+    }
+
+    /// level-4a-complete sister B: a ZERO-KEY entity stream composes NO script base — its
+    /// `Script_GetInterp` collapses onto the raw pool entry at `first_key` [M 0x1da158], and
+    /// 060006cf's pool[1409] = (1.80, −54.128, −3.453) is the authored WORLD freeze pose [D raw
+    /// pool dump]: the ot25 enable marker must sit ON the held cab, not at base+key
+    /// (1.80, −107.66, −6.83 — a column with no floor [D probe fb6g]). Fails on the old code,
+    /// which applied the base to every entity stream.
+    #[test]
+    fn zero_key_entity_stream_keeps_its_world_key() {
+        // Stream 0: Cmd::Entity { hash: 0, no parent, not spline, obj_type 0x19, no params }
+        // (op 0x07: op, hash u32, has_parent, parent, spline, obj_type, n, [params], pad).
+        let ent_cmd = {
+            let mut v = vec![0x07];
+            v.extend(0u32.to_le_bytes()); // hash 0 — control_create_object(0,0,0,0) [M disasm 0x1d8d24]
+            v.push(0); // has_parent = 0
+            v.push(0); // parent index (unused)
+            v.push(0); // spline = 0
+            v.push(0x19); // obj_type 25 — the enable marker class
+            v.push(0); // n params
+            v.push(0);
+            v
+        };
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_06cf,
+            camera: false,
+            loop_start: 0,
+            length: 575,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: ent_cmd }],
+            keys: vec![nf_formats::nis::Key {
+                pos: [1.8, -54.128, -3.453, 1.0],
+                quat: [0.0, 0.0, 0.0, 1.0],
+                scale: 1.0,
+                w24: [0, 0, 0, 0],
+                w28: 0.0,
+                time: 575.0,
+            }],
+        });
+        // SP #289's base [D placement]: (0, −53.53, −3.38).
+        let base = [[1.0f32, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, -53.53, -3.38, 1.0]];
+        let mut script = Script::load(nis, base, 1.0);
+        script.start(false);
+        let mut objs = Objects::default();
+        let mut ch = Channels::default();
+        let mut out = Vec::new();
+        let world = TestWorld;
+        let mut subs = Vec::new();
+        script.update(&mut subs, &Default::default(), &mut objs, &mut ch, &world, 0, &mut out);
+        let m = objs.list.iter().flatten().find_map(|o| match o { Obj::Entity { matrix, .. } => Some(*matrix), _ => None });
+        let m = m.expect("the marker entity exists");
+        assert!((m[3][1] + 54.128).abs() < 1e-3 && (m[3][2] + 3.453).abs() < 1e-3,
+            "the zero-key marker keeps its world key (the old code composed the base: y −107.66), got {:?}", m[3]);
     }
 }
