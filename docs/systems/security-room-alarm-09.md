@@ -72,3 +72,45 @@ the standing monitor hook turns ch 0x61 into FailLabel 0x4000032 "Alarm Raised" 
 the guarding drone passes 0x3E → 0x89 → 0x8A and ch 0x7D → 0x61 → ch 99 → objective 1 failed;
 sister — Bond at the game's own start for the same window: no guard ever latches seen and no
 alarm channel fires.
+
+## The walk tests under the real rule (security-room-alarm-09-2)
+
+774's merge re-raised the 4 walk tests that were green only while sighted guards froze in
+CivilianHiding. Settlement: **the rule stands; the tests' "the walk must not raise the alarm
+(the switches are never touched)" claim is wrong** — the guard who sees the walking Bond presses
+the switch himself:
+
+1. The six 07000009 guards patrol path-0 through the security room and the lobby [D drone
+   props/path], sight range 12.0, half-FOV π/2 [D]. The walkreal/campaign route (car park →
+   stairwell → the lobby → the panel) passes within that sight of the patrolling lobby guard in
+   the open (probe: the guard latches seen at ~11 units mid-lobby, no door between).
+2. `NearArmedPerson` 0x1787c8:13-22 on 07000009/0A returns 1 on prop 0x3c + the sight flag
+   (`+0x228 & 4`) alone — no armed gate, no radius (the caller's 6.0 is dead) — so an UNARMED
+   walking Bond counts. (Other levels keep the `DroneWeap_OpponentHasWeapon` gate — 0x1787c8:34-41.)
+3. `CivilianPatrol` 0x15d610 case 3: near-armed → `+0x4F8 |= 0x8000000` → (voice ≠ 0x10) →
+   SetState(0x56) — every arm, unarmed guards included [M, cited above].
+4. `FirstSightState` 0x147c48:142-153: prop 0x1A (DoModeSettingsNEW sets it on 09/0A) →
+   state 0x3E CivilianChallenge → `CallAnim(0, 0x3E, follow 0x89)` [M 0x162558] → RunToAlarm
+   0x1736f8 → FindAlarmPoint 0x153008 → PressAlarm 0x168ea8 → `SetMissionFailReason(0x10)`
+   0x13e560 case 0x10 writes `switch_channels[nearest switch] = 1` — ch 0x7D → OR mux #278 →
+   ch 0x61 → objective 1 failed. The switches' only E-writer is Bond's own hand; the ALARM
+   writer is the guard.
+
+So a walk that strolls past the guards in the open raises the alarm in the game too — the
+level's objective is "Don't let the security guards raise the alarm": the player stops the
+press (subdues the guard) or avoids the sight lines. The walk tests do neither; they pin the
+level's OTHER machinery (doors, the panel SP, the cab ride), so they now run under the dev
+NPC hold (`--hold-npcs` [M lib.rs:5763/5901], `Drones::hold_npcs` drone.rs:8353 — the same
+allowance walkreal_07000009's route already uses), with the unheld sight repro kept by
+`security_alarm_09_live::the_panel_guard_raises_the_alarm_and_fails_the_mission`.
+
+The fresh-boot PCSX2 confirmation of the full walk belongs to the main agent (live checks
+below; a save-state resume skips the boot path and would not re-arm the intro's patrol).
+
+## Live checks for the main agent (added 2026-10-19, security-room-alarm-09-2)
+
+- Fresh boot → walk the route car park (3.6, −377, 40) → stairwell door #107 → the stairs →
+  lobby door #97 → the lobby → the panel (−18.1, −367.4, 26.1), hands off the triggers:
+  expected — a lobby guard latches sight mid-lobby and walks 0x14 → 0x56 → 0x3E → 0x89 → 0x8A,
+  and ch 0x7D rises at the security-room switch without Bond ever touching E; ch 0x61 and the
+  "Alarm Raised" fail follow within seconds. (The same run under `--hold-npcs` must stay silent.)
