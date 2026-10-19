@@ -20,6 +20,12 @@
 //! Protocol 2/3 carried 8 records (208 B, the game's own slot count [M]);
 //! protocol 4 (mp-16-slots) carries 16 — the port's agent cap [S]; protocol 5
 //! (mp-combat-weapons) adds the 20th scalar, Location Damage (+0x1C8).
+//! Protocol 7 (mp-lobby-settings) appends the four enviro-mod words the match
+//! reads (+0x1B8 gun emplacements, +0x1CC vehicles, +0x1D0 grapple, +0x1D4
+//! explosive scenery [M the readers named on `nf_game::mp::MpSettings`]) and the
+//! prepared bot records (a count byte + 15 × 0x12-byte `mpbots` records [M
+//! Menu_PrepareBots 0x1f94a0]) — the lobby's bot characters/skills and those mods
+//! never reached a client before [S].
 
 /// The match configuration the host sends in `WELCOME`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,15 +83,27 @@ pub struct MatchSettings {
     pub players: [(u32, u32, u32, u32); crate::MAX_AGENTS],
     /// +0x472 (u16): the registered pickup count (protocol 2).
     pub registered_pickups: u16,
+    /// +0x1B8, +0x1CC, +0x1D0, +0x1D4 (protocol 7): gun emplacements, vehicles,
+    /// grapple, explosive scenery.
+    pub mods: [u32; 4],
+    /// The prepared bot records, slot order (protocol 7) — at most [`BOT_RECORDS`].
+    pub bot_records: Vec<[u8; BOT_RECORD_SIZE]>,
 }
 
 /// Bytes occupied by a [`MatchSettings`] on the wire: 20 u32 scalars +
 /// [`crate::MAX_AGENTS`] × 16-byte records + the u16 registered_pickups
-/// (protocol ≤ 3: 208 with 8 records [M the game's 8-slot block]).
-pub const SETTINGS_WIRE_SIZE: usize = SCALARS * 4 + crate::MAX_AGENTS * 16 + 2;
+/// (protocol ≤ 3: 208 with 8 records [M the game's 8-slot block]) + the protocol-7 tail.
+pub const SETTINGS_WIRE_SIZE: usize = TAIL + 4 * 4 + 1 + BOT_RECORDS * BOT_RECORD_SIZE;
 
 /// The scalar words before the per-player records (protocol 5: 20).
 const SCALARS: usize = 20;
+
+/// One `mpbots` record's size [M 0x2deea8's 0x12 stride].
+pub const BOT_RECORD_SIZE: usize = 0x12;
+/// The wire's bot-record room: the 16-slot cap minus the host [S mp-16-slots].
+pub const BOT_RECORDS: usize = crate::MAX_AGENTS - 1;
+/// Where the protocol-7 tail starts (after the u16 registered_pickups + 2 reserved bytes).
+const TAIL: usize = SCALARS * 4 + crate::MAX_AGENTS * 16 + 4;
 
 impl Default for MatchSettings {
     fn default() -> Self {
@@ -112,6 +130,8 @@ impl Default for MatchSettings {
             location_damage: 1, // the boot value [M bootup_bootup 0x1c7e78 @0x1c7ff8]
             players: [(0, 0, 0, 1); crate::MAX_AGENTS],
             registered_pickups: 0,
+            mods: [0; 4],
+            bot_records: Vec::new(),
         }
     }
 }
@@ -155,6 +175,15 @@ impl MatchSettings {
         // The registered pickup count (u16) in the old reserved tail.
         let tail = SCALARS * 4 + crate::MAX_AGENTS * 16;
         out[tail..tail + 2].copy_from_slice(&self.registered_pickups.to_le_bytes());
+        for (k, v) in self.mods.iter().enumerate() {
+            out[TAIL + k * 4..TAIL + k * 4 + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        let n = self.bot_records.len().min(BOT_RECORDS);
+        out[TAIL + 16] = n as u8;
+        for (k, r) in self.bot_records.iter().take(n).enumerate() {
+            let at = TAIL + 17 + k * BOT_RECORD_SIZE;
+            out[at..at + BOT_RECORD_SIZE].copy_from_slice(r);
+        }
     }
 
     /// Decode from `buf`; `None` if too short.
@@ -172,6 +201,17 @@ impl MatchSettings {
         }
         let tail = SCALARS * 4 + crate::MAX_AGENTS * 16;
         let registered_pickups = u16::from_le_bytes([buf[tail], buf[tail + 1]]);
+        let mods: [u32; 4] = std::array::from_fn(|k| {
+            let a = TAIL + k * 4;
+            u32::from_le_bytes([buf[a], buf[a + 1], buf[a + 2], buf[a + 3]])
+        });
+        let n = (buf[TAIL + 16] as usize).min(BOT_RECORDS);
+        let bot_records = (0..n).map(|k| {
+            let at = TAIL + 17 + k * BOT_RECORD_SIZE;
+            let mut r = [0u8; BOT_RECORD_SIZE];
+            r.copy_from_slice(&buf[at..at + BOT_RECORD_SIZE]);
+            r
+        }).collect();
         Some(MatchSettings {
             started: get(0),
             gametype_mask: get(1),
@@ -195,6 +235,8 @@ impl MatchSettings {
             location_damage: get(19),
             players,
             registered_pickups,
+            mods,
+            bot_records,
         })
     }
 }
@@ -213,6 +255,8 @@ mod tests {
         s.frag_limit = -1;
         s.players[3] = (2, 5, 300, 0);
         s.registered_pickups = 0x1234;
+        s.mods = [1, 3, 1, 1];
+        s.bot_records = vec![[7u8; BOT_RECORD_SIZE], [9u8; BOT_RECORD_SIZE]];
         let mut b = [0u8; SETTINGS_WIRE_SIZE];
         s.encode(&mut b);
         assert_eq!(MatchSettings::decode(&b).unwrap(), s);
@@ -220,8 +264,15 @@ mod tests {
         b[18 * 4] ^= 1; // friendly_fire low bit
         assert_ne!(MatchSettings::decode(&b).unwrap(), s);
         b[18 * 4] ^= 1;
-        let tail = 19 * 4 + crate::MAX_AGENTS * 16;
+        let tail = SCALARS * 4 + crate::MAX_AGENTS * 16;
         b[tail] ^= 1; // registered_pickups low byte
+        assert_ne!(MatchSettings::decode(&b).unwrap(), s);
+        b[tail] ^= 1;
+        // Sister: the protocol-5 tail — a mod word and a bot-record byte both decode.
+        b[TAIL + 8] ^= 1;
+        assert_ne!(MatchSettings::decode(&b).unwrap(), s);
+        b[TAIL + 8] ^= 1;
+        b[TAIL + 17 + BOT_RECORD_SIZE] ^= 1;
         assert_ne!(MatchSettings::decode(&b).unwrap(), s);
     }
 

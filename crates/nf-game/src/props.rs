@@ -116,6 +116,7 @@ impl Props {
                     placement: i, pos: p.translation, yaw_base: p.rotation[1],
                     pitch: 0.0, yaw: 0.0, pitch_s: 0.0, yaw_s: 0.0,
                     active: false, heat: 0.0, cooldown: 0.0, hot: false,
+                    turret: crate::gunimp::SP_TURRET as u8,
                 }),
                 _ => {}
             }

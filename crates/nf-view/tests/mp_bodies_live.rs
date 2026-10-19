@@ -133,9 +133,12 @@ fn drawn_bodies_hold_their_gun_take_the_cel_light_and_walk() {
             if slot == 0 { continue; }
             let Some((_, _, speed)) = s.mp_body_state(slot) else { continue };
             // The held weapon: the attachment of (slot, held) sits on the body (not the FAR park).
+            // Humans spawn with the P2K; the bots with `BOTWEAP_InitWeapon`'s pick, the weapon
+            // set's first gun (mp-lobby-settings, `MpMatch::bot_start`) [M 0x129e48:44-48].
             let held = s.mp_body_held(slot);
-            assert_eq!(held, 2, "tick {t}: slot {slot} holds the spawn P2K");
-            let (&k, _) = scene.mp_body_weapons.iter().find(|(_, &(sl, w))| sl == slot && w == held).expect("a P2K attachment per body");
+            let spawn = if slot < 2 { 2 } else { s.mp.as_ref().and_then(|m| m.bot_start).map_or(2, |b| b.0) };
+            assert_eq!(held, spawn, "tick {t}: slot {slot} holds its spawn weapon");
+            let (&k, _) = scene.mp_body_weapons.iter().find(|(_, &(sl, w))| sl == slot && w == held).expect("a spawn-weapon attachment per body");
             let m = fs.attach[k as usize];
             let body = fs.posed[ci].as_ref().map(|(_, _, m)| m[3]).expect("the body is posed");
             let d = ((m[3][0] - body[0]).powi(2) + (m[3][1] - body[1]).powi(2) + (m[3][2] - body[2]).powi(2)).sqrt();
@@ -153,14 +156,18 @@ fn drawn_bodies_hold_their_gun_take_the_cel_light_and_walk() {
         }
     }
     let s = scene.sim.as_ref().unwrap();
+    let mut lit = 0;
     for &(slot, ci) in &scene.mp_bodies {
         if slot == 0 { continue; }
-        let (p, _, _) = s.mp_body_state(slot).unwrap();
-        let cel = s.ambient_at(p).expect("the body stands in a cel");
+        // A body killed in the run has no live state (the bots start armed since mp-lobby-settings).
+        let Some((p, _, _)) = s.mp_body_state(slot) else { continue };
+        lit += 1;
+        let cel = s.ambient_at(p).unwrap_or_else(|| panic!("slot {slot} at {p:?} stands in a cel"));
         assert_ne!(s.char_ambient[ci], [0xff; 3], "slot {slot}: the body's ambient left the 0xff sentinel");
         let near = (0..3).all(|k| (s.char_ambient[ci][k] as i32 - cel[k] as i32).abs() <= 24);
         assert!(near, "slot {slot}: ambient {:?} ramps toward its cel's {:?}", s.char_ambient[ci], cel);
     }
+    assert!(lit >= 2, "at least two live bodies took the cel light ({lit})");
     // A bot that walked after tick 100 (past the walk script's 86 frames) shows changing poses.
     let mut checked = 0;
     for &slot in &bot_slots {

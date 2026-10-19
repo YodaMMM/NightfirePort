@@ -73,7 +73,10 @@ pub const MAX_AGENTS: usize = 16;
 /// yaw/pitch as i16 angles). JOIN_LOG chunks stay 3 ticks (1344 B of inputs).
 /// 6: net-internet (compact delta inputs, adaptive delay) + mp-combat-weapons (28-byte input)
 /// merged — the compact encoding runs over the 28-byte layout (7 words).
-pub const PROTOCOL_VERSION: u16 = 6;
+/// 7: mp-lobby-settings merged — the settings grow a tail (the four enviro-mod
+/// words + the prepared bot records) so every lobby setting reaches the clients'
+/// matches [S]; Location Damage stays the 20th scalar.
+pub const PROTOCOL_VERSION: u16 = 7;
 
 /// Build id carried in the handshake so mismatched executables refuse cleanly.
 /// The host app sets this (e.g. a build counter); both sides must match exactly.

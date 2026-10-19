@@ -1018,6 +1018,43 @@ fn mp_panes(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) 
         h.quad(Anchor::Right, layer, tex, blend, x, y, w, hh, uv, (false, false), c);
     }
 
+    // mp-lobby-settings: the name tags — the lobby's Radar word (`MPSettings+0x1C4`, or the
+    // Assassin scenario) gates them [M HUD_RadarUpdate 0x19f6e8:177]: every other live player
+    // whose root projects on screen (`View_3DPoint2Screen` > 0), nearer than 100 units, inside the
+    // screen by half its text width and in line of sight (`Collide_LineOfSight`, mask 0x623) gets
+    // its name (`MPSettings+slot·0x30`) over it, FFA 0x1e504b, team 0 0x5a1414 / team 1 0x14145a
+    // [M :178-264]. The port never drew them, so the Radar row did nothing in a match. The tag sits
+    // a little over the head (the game's y clamp keeps it 12 px inside the view) [S placement].
+    if snap.names_on_radar {
+        let eye = s.bond.head();
+        let fov = std::f32::consts::FRAC_PI_3 / s.zoom.max(1e-3);
+        let f = 1.0 / (fov * 0.5).tan();
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let humans = (m.settings.human_count as usize).min(nf_game::mp::MP_MAX_SLOTS);
+        let lang = s.lang.as_ref();
+        for slot in 0..nf_game::mp::MP_MAX_SLOTS {
+            if slot == me || m.game.slots[slot].pos.is_none() || m.game.slots[slot].dead { continue; }
+            let head = if slot < humans {
+                match s.mp_bonds.get(slot).and_then(|b| b.as_ref()) { Some(b) => b.head(), None => continue }
+            } else {
+                match m.bots.iter().find(|b| b.slot == slot && !b.dead) { Some(b) => b.brain.pos, None => continue }
+            };
+            let tag = [head[0], head[1] + 0.45, head[2]];
+            let rel = [tag[0] - eye[0], tag[1] - eye[1], tag[2] - eye[2]];
+            let z = dot(fwd, rel);
+            if z <= 0.0 || dot(rel, rel) >= 100.0 * 100.0 { continue; }
+            if s.world.segment(eye, head).is_some() { continue; }
+            let x = SW / 2.0 + (f / h.aspect) * (dot(right, rel) / z) * (SW / 2.0) * (3.0 / 4.0) * h.aspect;
+            let y = (SH / 2.0 - f * (dot(up, rel) / z) * (SH / 2.0)).clamp(12.0, SH - 12.0);
+            let name = mp_name(m, lang, slot);
+            let (_, tw) = font.layout(&name, 0.0, 0.0);
+            if x - tw / 2.0 < 0.0 || x + tw / 2.0 > SW { continue; }
+            let c = if m.settings.team_game == 0 { gs(0x1e504b, 0xff) }
+                else if m.settings.players[slot].team == 0 { gs(0x5a1414, 0xff) } else { gs(0x14145a, 0xff) };
+            h.text(Anchor::Centre, font, 0x1e, &name, x - tw / 2.0, y, false, c, true);
+        }
+    }
+
     // The score pane.
     let viewer_team = m.settings.players[me].team;
     let pane = nf_game::mp::hud::MpScorePane::build(&snap, m.settings.team_game, m.settings.bit30, viewer_team);

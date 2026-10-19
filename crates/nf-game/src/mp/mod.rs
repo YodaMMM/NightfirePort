@@ -61,6 +61,9 @@ pub mod replay;
 /// GoldenEye items, the blueprint) — see `docs/systems/mp-match-rules.md`.
 pub mod rules;
 pub mod hud;
+/// mp-lobby-settings: the spawn loadout (`MP_EquipPlayer`, the weapon-set matrix) and the MP pain
+/// scaling (`Player_HandlePain`'s MP arm) — see `equip.rs`.
+pub mod equip;
 
 /// mp-combat-weapons: the online match's shared rounds/grenades/blasts and the MP pain rules
 /// (`Player_HandlePain` 0x1902c8's MP arm) — see `docs/systems/mp-combat.md`.
@@ -200,6 +203,28 @@ pub struct MpSettings {
     /// row P_MPPLAYERMODS 0x2104d0:15 [M]) — the MP pain path's per-part multipliers [M
     /// `Player_HandlePain` 0x1902c8:62-78]. Boot value 1 [M bootup_bootup 0x1c7e78 @0x1c7ff8].
     pub location_damage: u32,
+    /// +0x1B8 (Ghidra `_440_`): the Gun Emplacements enviro-mod — `GunImp_Create` 0x131f20 returns
+    /// 0 (no turret) in MP while it is 0, else mounts `TurretGuns[weapon set]` (Random: a
+    /// `Rand_Rand(10)` pick) [M 0x131f20:52-63]. The Enviro-Mods page's row 0x1ab writes it [M
+    /// P_MPENVIROMODS 0x210030].
+    pub gun_emplacements: u32,
+    /// +0x1CC (`_460_`): the vehicles enviro-mod (0 Off / 1 Tanks / 2 Helicopters / 3 Random) —
+    /// `Car_Create` 0x1305b0 [M]. Carried for the lockstep shape; the port's MP match does not
+    /// create the 0xDA vehicles yet (docs/GAPS.md).
+    pub vehicles: u32,
+    /// +0x1D0 (`_464_`): the grapple enviro-mod — `MP_EquipPlayer` 0x1855f8:27-34 equips
+    /// `Upgrade_MPWeapon(slot, 0x50)` (the grapple) on every spawn while it is set [M]. The
+    /// Enviro-Mods page's row 0x328 writes it [M P_MPENVIROMODS 0x210030].
+    pub grapple: u32,
+    /// +0x1D4 (`_468_`): Explosive Scenery — `Destroy_Create` 0x12c318 creates the class-0x18
+    /// destroyable objects in MP only while it is set [M 0x12c318:14]; the confirm masks it to 0/1
+    /// [M P_MPCONFIRM 0x20ec00's andi 1].
+    pub explosive_scenery: u32,
+    /// The prepared bot records in slot order — `Menu_PrepareBots` 0x1f94a0 compacts the enabled
+    /// `mpbots` records (0x12 bytes each) to the front and `MP_Start` 0x183a50:134-160 inits one
+    /// bot per record [M]. Empty = the port's direct-load default (the disc's initial records,
+    /// cycled — `MpMatch::create_bots`) [S].
+    pub bot_records: Vec<crate::mp::bots::BotRecord>,
     /// Port-only ([S], no game field): the deterministic lockstep seed — every machine in an
     /// online match builds the level from the same seed (net-match-host). The game's local flow
     /// keeps the level-build constant the port used before (0x1234_5678 equivalent: seed 0 keeps
@@ -235,6 +260,11 @@ impl MpSettings {
             registered_pickups: 0,
             friendly_fire: 0,
             location_damage: 1,
+            gun_emplacements: 0,
+            vehicles: 0,
+            grapple: 0,
+            explosive_scenery: 0,
+            bot_records: Vec::new(),
             seed: 0,
         }
     }
@@ -490,6 +520,10 @@ pub struct MpMatch {
     /// 0xb4)` [M 0x188f70:100-107]. Presentation only (never hashed, never read by the sim): the
     /// HUD drains the entries addressed to its own slot (`hud::KILL_MSG_LABEL`).
     pub kill_msgs: Vec<(usize, usize)>,
+    /// mp-lobby-settings: the bots' start weapon and rounds — `BOTWEAP_InitWeapon` 0x129e48:44-48
+    /// (`base(PickupMatrix[set][0])`, `clip_size·2`) [M]; the loader fills it from the weapon
+    /// table (`equip::bot_start_weapon`). None = the brain's own P2K default.
+    pub bot_start: Option<(u8, i16)>,
 }
 
 /// One MP bot: the ported brain (`BOT_vars` stand-in) plus the per-slot bookkeeping the match
@@ -554,6 +588,7 @@ impl MpMatch {
             assassin_target: None,
             kill_msgs: Vec::new(),
             bots: Vec::new(),
+            bot_start: None,
         }
     }
 
@@ -571,6 +606,28 @@ impl MpMatch {
     /// humans use). Draw order: the game picks the humans FIRST, then the bots — the caller keeps
     /// that order (create_bots runs after the humans' picks in the load).
     pub fn create_bots(&mut self, rng: &mut Rng) {
+        self.create_bots_inner(rng)
+    }
+
+    /// `BOTWEAP_InitWeapon` 0x129e48's start weapon on a fresh brain (the create and every
+    /// `BOT_respawn`) when the loader set [`MpMatch::bot_start`] [M :44-48].
+    pub fn arm_bot(&self, brain: &mut crate::mp::bots::BotBrain) {
+        if let Some((w, rounds)) = self.bot_start {
+            if w != 0 {
+                brain.vars.weapon_id = w;
+                brain.vars.clip_rounds = rounds.max(1) as _;
+            }
+        }
+    }
+
+    /// The record a bot slot's `i`-th bot inits from (the prepared records, else the disc's
+    /// initial records cycled) — the loader's body skins read the same pick [S].
+    pub fn bot_record(settings: &MpSettings, i: usize) -> crate::mp::bots::BotRecord {
+        use crate::mp::bots::INITIAL_BOT_RECORDS;
+        settings.bot_records.get(i).copied().unwrap_or_else(|| INITIAL_BOT_RECORDS[i % INITIAL_BOT_RECORDS.len()])
+    }
+
+    fn create_bots_inner(&mut self, rng: &mut Rng) {
         use crate::mp::bots::{BotRecord, INITIAL_BOT_RECORDS};
         let humans = self.settings.human_count as usize;
         let count = (self.settings.bot_count as usize)
@@ -583,8 +640,12 @@ impl MpMatch {
         // [M] — the port's menu writes the count only, so the enabled set is the first `count`
         // records here ([S]: the Quick Start's defaults are the disc's INITIAL records; beyond
         // record 3 the port cycles them — rows 4..14 do not exist on the disc [S mp-16-slots]).
+        // mp-lobby-settings: the menu's prepared records when the settings carry them (the
+        // couch/online confirm — `MpSettings::bot_records`); the direct-load default keeps the
+        // disc's records cycled.
         let records: Vec<BotRecord> = (0..count)
-            .map(|i| INITIAL_BOT_RECORDS[i % INITIAL_BOT_RECORDS.len()].clone())
+            .map(|i| self.settings.bot_records.get(i).copied()
+                .unwrap_or_else(|| INITIAL_BOT_RECORDS[i % INITIAL_BOT_RECORDS.len()]))
             .collect();
         for (i, rec) in records.iter().enumerate() {
             let slot = humans + i;
@@ -603,6 +664,7 @@ impl MpMatch {
             // bot at 0/0 — the port gives it 100 [S, the record's field attribution is open].
             let max_hp = if rec.max_hp() == 0 { 100.0 } else { rec.max_hp() as f32 };
             let mut brain = crate::mp::bots::BotBrain::bot_init(rec, slot as u8, pos, yaw);
+            self.arm_bot(&mut brain);
             // mp-16-slots: the bot's index is its list position (the game's slot − 4 wraps once
             // bots follow the humans — the visit stamps were indexed at 254).
             brain.vars.bot_index = i as i16;

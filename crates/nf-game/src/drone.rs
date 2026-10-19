@@ -10025,7 +10025,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             g.cooldown -= 1.0;
         }
         if !fire || self.props.gunimps[gi].cooldown > 0.0 { return; }
-        let tg = &crate::gunimp::TURRET_GUNS[crate::gunimp::SP_TURRET];
+        let tg = &crate::gunimp::TURRET_GUNS[(self.props.gunimps[gi].turret as usize).min(crate::gunimp::TURRET_GUNS.len() - 1)];
         {
             let g = &mut self.props.gunimps[gi];
             // the refill [M 0x1320d8:324 — `piVar2[0x25] = TurretGuns[+0x14]`], the heat [M

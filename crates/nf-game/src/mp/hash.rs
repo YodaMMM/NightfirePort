@@ -185,6 +185,15 @@ fn hash_settings(h: &mut Hasher, m: &MpMatch) {
     h.u32(s.radar);
     h.u16(s.registered_pickups);
     h.u32(s.friendly_fire);
+    h.u32(s.gun_emplacements);
+    h.u32(s.location_damage);
+    h.u32(s.vehicles);
+    h.u32(s.grapple);
+    h.u32(s.explosive_scenery);
+    h.usize(s.bot_records.len());
+    for r in &s.bot_records {
+        for &b in r.0.iter() { h.u32(b as u32); }
+    }
 }
 
 fn hash_game(h: &mut Hasher, m: &MpMatch) {

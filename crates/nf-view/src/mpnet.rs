@@ -59,6 +59,8 @@ pub fn mp_to_match(s: &MpSettings) -> MatchSettings {
         location_damage: s.location_damage,
         players: s.players.each_ref().map(|p| (p.team, p.skin, p.armor_bonus, p.radar_on)),
         registered_pickups: s.registered_pickups,
+        mods: [s.gun_emplacements, s.vehicles, s.grapple, s.explosive_scenery],
+        bot_records: s.bot_records.iter().map(|r| r.0).collect(),
     }
 }
 
@@ -91,6 +93,11 @@ pub fn match_to_mp(m: &MatchSettings, seed: u32) -> MpSettings {
         registered_pickups: m.registered_pickups,
         friendly_fire: m.friendly_fire,
         location_damage: m.location_damage,
+        gun_emplacements: m.mods[0],
+        vehicles: m.mods[1],
+        grapple: m.mods[2],
+        explosive_scenery: m.mods[3],
+        bot_records: m.bot_records.iter().map(|r| nf_game::mp::bots::BotRecord(*r)).collect(),
         seed,
     }
 }
