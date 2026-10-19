@@ -25,6 +25,9 @@ table (the record's +0x10 character index). The bodies run the PLAYER animation 
   < 4.5 walk, else run. The time is `Script::time_at(frame)`. The matrix is `object_matrix([0, yaw, 0], pos)` with
   the drones' hip height. This is a stand-in until 700v7 ports the player anim set.
 - **Not yet:** the held weapon in the body's hands (needs each slot's weapon, 700v6), death / hit reactions.
+- **Death / shots (mp-remote-fx):** a dead slot's body plays `DEATH_SCRIPT` (substate 0xd) until the respawn, without
+  its gun (`Sim::mp_body_death`; a dead bot's `mp_body_state` is now None). The body's muzzle flash, trails, impacts
+  and sounds: docs/systems/mp-remote-fx.md.
 
 ## Checks
 

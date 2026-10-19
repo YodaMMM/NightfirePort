@@ -223,27 +223,30 @@ impl PlayerHealth {
     /// attacker's height over the eye — the same x rule exactly; the y rule is [S] (the world-up
     /// projection of a pitch-rotated frame). Returns the grunt roll (see `apply`).
     pub fn pain_from(&mut self, rng: &mut crate::drone::Rng, damage: f32, difficulty: u32, level: u32, attacker: [f32; 3], eye: [f32; 3], yaw: f32) -> bool {
+        self.dir_bits = Self::hit_dir_bits(attacker, eye, yaw);
+        self.pain(rng, damage, difficulty, level)
+    }
+
+    /// The `BL+0x967` direction bits of `Player_DealWithObjHit` 0x194458:201-226 alone (no pain,
+    /// no RNG): `pain_from`'s rule, also used by the MP remote-hit feedback (mp-remote-fx).
+    pub fn hit_dir_bits(attacker: [f32; 3], eye: [f32; 3], yaw: f32) -> u8 {
         let d = [attacker[0] - eye[0], attacker[1] - eye[1], attacker[2] - eye[2]];
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        self.dir_bits = 0;
-        if len > 1e-4 {
-            let (x, y) = (d[0] / len, d[1] / len);
-            // The port's object frame has +X = screen-left (see `Sim::crosshair`), so the view's x axis is
-            // (−cos yaw, 0, sin yaw); x < 0 = the attacker on the screen's left → bit 4 (sprite 22).
-            let (rx, rz) = (-yaw.cos(), yaw.sin());
-            let vx = (d[0] / len) * rx + (d[2] / len) * rz;
-            let vy = y;
-            let (ax, ay) = (vx.abs(), vy.abs());
-            if ax >= 0.5 || ay >= 0.5 {
-                if ay < ax { self.dir_bits = if vx < 0.0 { 0x4 } else { 0x8 }; }
-                else { self.dir_bits = if vy < 0.0 { 0x1 } else { 0x2 }; }
-            } else {
-                // Neither axis reaches 0.5 (a shot from straight ahead or behind, e.g. the 07000005 sniper):
-                // both sides glow [M 0x194458:202 `bVar8 = 0xc`]. The port left 0 here: no glow at all.
-                self.dir_bits = 0xC;
-            }
+        if len <= 1e-4 { return 0; }
+        let y = d[1] / len;
+        // The port's object frame has +X = screen-left (see `Sim::crosshair`), so the view's x axis is
+        // (−cos yaw, 0, sin yaw); x < 0 = the attacker on the screen's left → bit 4 (sprite 22).
+        let (rx, rz) = (-yaw.cos(), yaw.sin());
+        let vx = (d[0] / len) * rx + (d[2] / len) * rz;
+        let vy = y;
+        let (ax, ay) = (vx.abs(), vy.abs());
+        if ax >= 0.5 || ay >= 0.5 {
+            if ay < ax { if vx < 0.0 { 0x4 } else { 0x8 } } else if vy < 0.0 { 0x1 } else { 0x2 }
+        } else {
+            // Neither axis reaches 0.5 (a shot from straight ahead or behind, e.g. the 07000005 sniper):
+            // both sides glow [M 0x194458:202 `bVar8 = 0xc`].
+            0xC
         }
-        self.pain(rng, damage, difficulty, level)
     }
 }
 
