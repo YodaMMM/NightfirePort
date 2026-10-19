@@ -986,7 +986,11 @@ impl Script {
                 }
                 m = mul(&m, &self.matrix);
                 let rgb = self.key_rgb(i);
-                let r = scale * self.scale;
+                // G-049: `keys` already returns key scale × SCRIPTINFO+0x94 — the game applies the
+                // script scale ONCE (`*param_7 = key_scale * scale` [M 0x1da158:177]); the port
+                // multiplied again: 08's rocket blast lit at radius 768 where PCSX2's light record
+                // reads 96 [L LightList 0x2c74cc +0x3C, a live 08 blast 2026-10-18].
+                let r = scale;
                 if let Some(Some(Obj::Light { pos, radius, rgb: c, live, .. })) = objs.list.get_mut(o) {
                     *pos = [m[3][0], m[3][1], m[3][2]];
                     *radius = r;
@@ -1012,7 +1016,11 @@ impl Script {
             let i0 = idx as usize;
             (i0, i0 + 1, (c - k[i0].time) / (k[i0 + 1].time - k[i0].time))
         } else { (n, n, 0.0) };
-        Some([0, 1, 2].map(|j| {
+        // G-049: `Script_GetInterp` packs key +0x26 << 24 | +0x25 << 16 | +0x24 << 8 [M 0x1da158:174]
+        // and `Script_Interp` case 6 stores bits 24..31 into the light's +0x44 (R), 16..23 into +0x45,
+        // 8..15 into +0x46 [M 0x1d9a08:244-246] — so R is the key's byte +0x26 (w24[2]). The port
+        // read them in order: the blast's warm (255,197,134) [L the live 08 light record] drew blue.
+        Some([2, 1, 0].map(|j| {
             let (x, y) = (k[i0].w24[j] as f32, k[i1].w24[j] as f32);
             let v = x + (y - x) * t;
             let v = if y >= x { v.min(y) } else { v.max(y) };

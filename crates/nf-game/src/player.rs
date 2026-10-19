@@ -25,13 +25,15 @@ pub const ROOT_HEIGHT: f32 = 1.0347183;
 pub const CROUCH_ROOT_HEIGHT: f32 = 0.55;
 /// Capsule radius (`HITTEST+0x8C`).
 pub const RADIUS: f32 = 0.55;
-/// The WALK arm's pick radius (`Player_Collision` 0x194df0 case 0/6 writes the radius slot
-/// `+0x7CC = 0x3e8ccccd` = 0.275 — the swim/crouch/default arms write 0x3f0ccccd = 0.55). The walk
-/// grab's reach past the ladder's rung plane is the WALK capsule's 0.275, not the swim arm's 0.55:
-/// the game's `Player_CollLadder` 0x196118 fires from the walking HITTEST's mesh refine only when
-/// the walk capsule (r 0.275, segment A = pos + up·0.55, B = pos + up·(+0x7CC − cc)) touches the
-/// ladder glist (`Collide_Update` 0x1ea398:84-93 → `Collide_Intersect` 0x1ebaa8), so a walker or a
-/// just-dismounted stander 0.5+ off the plane never re-grabs. fix-ladder-water2.
+/// The CLIMB/CREEP hittest arm's radius: `Player_Collision` 0x194df0's substate switch maps the
+/// substates 1 (climb) and 7 (creep) to the narrow arm — the radius slot `+0x7CC = 0x3e8ccccd` =
+/// 0.275, segment A = pos + up·0.55, B = pos + up·(+0x7CC − cc) [M the jump table @0x2fc0d0 (case
+/// 0 = substate 1, case 6 = substate 7) + 0x1950a0]. The WALK substate 0 is NOT in that arm: the
+/// switch indexes substate−1, walk 0 → −1 → the unsigned bounds check fails → the DEFAULT arm (r
+/// 0.55) [M 0x1953f4]. The port's walk GRAB rides the default arm (`Ladder::capsule_hits_default`);
+/// this const stays for the climb/creep arm's shape (`Ladder::capsule_hits`) — the port's climb
+/// tick runs no grab scan (the game's `Player_CollLadder` 0x196118 excludes substates 1/2), so the
+/// narrow arm's remaining role is documentation + the unit pins of the switch's own geometry.
 pub const WALK_PICK_RADIUS: f32 = 0.275;
 /// `BL+0x908` on land.
 pub const EYE: f32 = 0.7;
@@ -178,10 +180,32 @@ pub struct LadderCtx<'a> {
     /// thud 0xA3. The Sim sets it per level once the byte is identified (live check in
     /// docs/systems/sound-coverage.md); default false = the 0xA3 arm.
     pub level_bump_5fb: bool,
+    /// The cels Bond's pick capsule straddles this tick — `Collide_StraddleCels` 0x1eac98's BFS from
+    /// the HITTEST home cel through the capsule-touching portals [M Collide_Pick 0x1eb320:125-134
+    /// admits a candidate object only from a straddled cel's chain]. The Sim fills it from
+    /// `CollisionWorld::debug_straddle` with the current substate's pick arm (`Bond::pick_arm`);
+    /// EMPTY = no scoping (no cel graph — unit tests, MP remotes), every ladder tested.
+    pub straddle: &'a [usize],
 }
 
 impl Default for LadderCtx<'_> {
-    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false } }
+    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] } }
+}
+
+/// The current substate's pick arm — the HITTEST the game builds for `Player_Collision` 0x194df0's
+/// capsule switch (indexes on substate−1 [M disasm 0x195070, jump table @0x2fc0d0]): returns
+/// `(segment A offset, segment B offset, radius)` as upward offsets from the object position, the
+/// same numbers `Ladder::capsule_hits*` pin [M 0x1950a0 the climb/creep arm, 0x1953f4 the default
+/// arm, 0x194df0 case 3 the crouch arm]. One source of truth for the pick shape; the straddle walk
+/// feeds the same capsule to `Collide_StraddleCels` [M 0x1eac98 takes the pick's HITTEST].
+pub fn pick_arm(substate: u8, crouched: bool, cc: f32) -> (f32, f32, f32) {
+    if substate == SS_CLIMB || substate == SS_CREEP {
+        (0.55, WALK_PICK_RADIUS - cc, WALK_PICK_RADIUS) // 0x1950a0: r 0.275, B reads the radius slot
+    } else if crouched {
+        (0.1 - (cc - 0.55), 0.45 - cc, 0.55) // 0x194df0 case 3 = substate 4 (crouch)
+    } else {
+        (0.275, 0.55 - cc, 0.55) // 0x1953f4: the walk 0, the swim 3, every other grab-eligible substate
+    }
 }
 
 /// One tick of player input as game actions: `forward` (action 2), `strafe` (action 1; + = left), `turn` (radians
@@ -387,6 +411,18 @@ pub struct Bond {
     /// the walk yaw/pitch on the first zero-g tick, dropped on leaving the substates). Field on
     /// its own line (merge lesson 4).
     pub zero_g_active: bool,
+    /// The post-integration, pre-push-out position — the game's hittest build point [M
+    /// `Player_Collision` 0x194df0 builds BLData+0x760 from obj+0x30 AFTER `Player_Update`'s
+    /// integration 0x193600:284-295 (:361); the refine runs on it in the collision pass
+    /// (`Collide_Update` 0x1ea398 from `control_movement_object_handler` 0x1336f8:238), and the
+    /// +0x750 push-out lands on obj+0x30 only inside `Player_CollisionHandler` 0x1949a8:136-140,
+    /// right before the hit dispatch]. The ladder grab's pick tests THIS spot: `Player_CollLadder`
+    /// 0x196118 runs no distance test — the grab rides the hit's EXISTENCE, decided by the refine
+    /// on the pre-push-out segment. A free-standing ladder's own collision triangles hold the
+    /// pushed-out body at exactly RADIUS (0.55) — that spot sits ON the strict refine boundary [M
+    /// Intersect_CylGeom 0x109da0:447 `dist < radius`] and never grabs, while the game's pre-push
+    /// segment (the tick's inward move included) does. Field on its own line (merge lesson 4).
+    pub pre_collide: V3,
 }
 
 impl Bond {
@@ -399,6 +435,7 @@ impl Bond {
             icon_ctx: 0xff,
             cel: None,
             prev_pos: pos,
+            pre_collide: pos,
             creep: None,
             world_gravity: [0.0, -9.8, 0.0],
             zero_g_rot: [[0.0; 3]; 3],
@@ -462,17 +499,23 @@ impl Bond {
     }
 
     /// The capsule ends (top A, bottom B) for the current stance, off the dynamic root height `cc`
-    /// (`Player_Collision` 0x194df0: standing `0.275` / `0.55 − cc`; crouched `0.65 − cc` / `0.45 − cc`).
-    /// The swim substate (3) builds its own pair [M 0x194df0 case 3:228-253]: spheres at
-    /// `0.1 − (cc − 0.55)` = `0.65 − cc` and `0.45 − cc` with `+0x7cc` (the radius slot) 0.55 — a
-    /// low-slung 0.2-long spine hanging under the root, so at the swim equilibrium (root = surface − 0.3)
-    /// the capsule's top stays ~0.13 under the water plane and never touches a pond floor that sits at
-    /// the surface (the 07000002 garden pond [D probe_vent_swim]).
+    /// (`Player_Collision` 0x194df0: standing (default arm) `0.275` / `0.55 − cc`; the crouch/swim
+    /// case 3 `0.1 − (cc − 0.55)` / `0.45000002 − cc`, stores to BLData+0x760/+0x770 with the radius
+    /// slot +0x7cc = 0x3f0ccccd 0.55 [M 0x194df0:235/248 + the tail store :405-408]). The constants
+    /// are the game's f32 literals evaluated in the game's order — NOT the algebraic simplifications:
+    /// `0.65 − 0.55f32` = 0.1000000238418579 but the game's `0.1 − (0.55 − 0.55)` = 0.1f32, and
+    /// `0.45f32 − cc` = −0.10000002384185791 but the game's `0.45000002f32 − cc` (0x3EE66667) =
+    /// −0.09999999403953552. The 3e-8 difference is the crouch grounded band: the feet-point ray is
+    /// built from the B arm (see the physics_tick comment), so the port's lower B hung the crouch
+    /// rest EXACTLY on `Player_FeetOnPoint`'s band edge and the push dither flickered Bond ungrounded
+    /// at every hard-floor crouch rest (probe14_ground.rs, the 07000014 crawl-vent start). The swim
+    /// pair is the same case-3 arm [M 0x194df0 case 3] — a low-slung 0.2-long spine hanging under the
+    /// root, so at the swim equilibrium (root = surface − 0.3) the capsule's top stays ~0.13 under the
+    /// water plane and never touches a pond floor that sits at the surface (the 07000002 garden pond
+    /// [D probe_vent_swim]).
     fn capsule(&self) -> (V3, V3) {
-        let (a, b) = if self.substate == SS_SWIM {
-            (0.65 - self.cc, 0.45 - self.cc)
-        } else if self.crouched {
-            (0.65 - self.cc, 0.45 - self.cc)
+        let (a, b) = if self.substate == SS_SWIM || self.crouched {
+            (0.1 - (self.cc - 0.55), 0.450_000_02 - self.cc)
         } else {
             (0.275, 0.55 - self.cc)
         };
@@ -604,23 +647,45 @@ impl Bond {
         // (both underwater and dry: the underwater path jumps past the gravity straight into this
         // switch [M disasm 0x194f4c-0x194f70: `cel+0x90 > obj+0x34` → `bc1fl 0x195070`]). The
         // underwater ladder softlock (750a): the swim grab ran the CROUCH arm here, whose LOW spine
-        // (A = −0.385) misses rungs the game's default arm reaches. The WALK grab keeps the shipped
-        // 0.275 arm (the walk-on reach fix-ladder-water2 pinned through playtests) — the arm-mapping
-        // question for the walk substate is a documented divergence, not changed here.
-        let swim = self.substate == SS_SWIM;
+        // (A = −0.385) misses rungs the game's default arm reaches.
+        //
+        // ladder-0c: the WALK arm is the DEFAULT arm, pinned by the switch's own jump table [M
+        // Player_Collision 0x194df0 second switch @0x195070: the index is substate−1 (`lhu 0xf6($s3)`,
+        // `addiu −1`, `sltiu $v1, $a0, 0xf` bounds, the table @0x2fc0d0) — walk 0 → −1 → 0xffffffff
+        // fails the unsigned bounds → the default arm @0x1953f4 (r +0x7CC = 0x3f0ccccd = 0.55, A =
+        // up·0.275 = 0x3e8ccccd, B = up·(0.55 − cc)); only the substates 1 (climb) and 7 (creep) take
+        // the narrow 0.275 arm (@0x1950a0). fix-ladder-water2's "case 0/6 = substate 0 (walk)" mapped
+        // the switch on the raw substate — the table maps case 0 → substate 1. The 0.275 arm left the
+        // 0700000c yard ladder #164 unclimbable: Bond's walk capsule stops him 0.4985 from its rung
+        // plane (the silo wall sits ~0.05 behind the plane [D probes]) and 0.4985 > 0.275 never
+        // touches — the game's 0.55 arm does (0.4985 < 0.55), and the dismount escape still clears:
+        // the dismount hop −0.05 [M Player_Climb 0x196310:88-96, consumed the same tick by the
+        // integration Player_Update 0x193600:284-295] puts the stander 0.55 out, the refine's strict
+        // `dist < radius` [M Intersect_CylGeom 0x109da0:447] rejects the exact touch, and the swim
+        // escape's drift (0.5 + 0.05 + 0.2 > 0.55) still clears.
         for (i, lad) in ctx.ladders.iter().enumerate() {
-            let hit = if swim {
-                // The swim substate 3 rides the switch's DEFAULT arm [M 0x195070 default].
-                lad.capsule_hits_default(self.pos, RADIUS, self.cc)
-            } else if self.crouched {
+            // The straddled-cel scoping [M Collide_Pick 0x1eb320:125-134]: the pick admits only
+            // objects linked to a cel the HITTEST straddles — the ladder's link is its centre's cel
+            // [M build_LinkToRoom 0x1c9680] and the straddle set is the Sim's portal BFS over the
+            // pick capsule. An empty set (no cel graph) scopes nothing.
+            if !ctx.straddle.is_empty() {
+                match lad.cell {
+                    Some(c) if ctx.straddle.contains(&(c as usize)) => {}
+                    _ => continue,
+                }
+            }
+            // The pick runs on the PRE-push-out spot [M — see the `pre_collide` field doc]: the
+            // game's grab rides the hit existence from the hittest built at the integrated
+            // position, before the handler's push-out.
+            let pick = self.pre_collide;
+            let hit = if self.crouched {
                 // The crouched walk is the game's substate 4 (the port folds the crouch into
                 // substate 0 + the flag) — the switch's case 3, the LOW arm [M 0x194df0 case 3].
-                lad.capsule_hits_crouch(self.pos, RADIUS, self.cc)
-            } else if self.substate == SS_WALK {
-                // [S] the shipped walk pick (fix-ladder-water2's 0.275 walk-on reach) — see above.
-                lad.capsule_hits(self.pos, WALK_PICK_RADIUS, self.cc)
+                lad.capsule_hits_crouch(pick, RADIUS, self.cc)
             } else {
-                lad.capsule_hits_default(self.pos, RADIUS, self.cc)
+                // The walk 0, the swim 3 and every other grab-eligible substate ride the switch's
+                // DEFAULT arm [M 0x1953f4 via the jump table @0x2fc0d0].
+                lad.capsule_hits_default(pick, RADIUS, self.cc)
             };
             if !hit { continue; }
             let diff = wrap_pi(lad.yaw - self.yaw); // Vec_AngleDifference(player, ladder) [M 0x1e2b78]
@@ -786,12 +851,29 @@ impl Bond {
         let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS);
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
-        let ray = self.cc + 0.6;
         // The floor test reads the same HITTEST (`Player_CollisionHandler` 0x1949a8 →
-        // `Player_FeetOnPoint(param_1, BLData+0x740, …)`), so it shares the per-cel scope.
-        let floor = world.segment_hit_scoped(self.cel, self.pos, [self.pos[0], self.pos[1] - ray, self.pos[2]]);
-        self.grounded = walkable || floor.is_some_and(|(t, _)| t * ray - 0.1 <= self.cc);
-        if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
+        // `Player_FeetOnPoint(param_1, BLData+0x740, …)`), so it shares the per-cel scope. The ray
+        // and the band are the game's own: to = capsuleB + up·(−(cc+0.6)) [M Player_FeetOnPoint
+        // 0x194188:89-98 — HITTEST+0x30 = BLData+0x770, the climb B arm pos + up·(0x7cc − cc) from
+        // Player_Collision 0x194df0 case 0 + the tail store :405-408], and HITDATA+0xC =
+        // |from − hit| with hit = from + t·dir [M Intersect_RayGeom 0x10a8c8:176-179/252-256/
+        // 312-325]; band `hit − 0.1 <= cc` [M 0x194188:106]. See the walk tick's comment.
+        let ray = self.cc + 0.6;
+        let to = [b[0], b[1] + -ray, b[2]];
+        let floor = world.segment_hit_scoped(self.cel, self.pos, to);
+        let band = floor.as_ref().map_or(false, |(t, _)| {
+            let d_y = to[1] - self.pos[1];
+            let hit_y = self.pos[1] + t * d_y;
+            let dy = self.pos[1] - hit_y;
+            (dy * dy).sqrt() - 0.1 <= self.cc
+        });
+        self.grounded = walkable || band;
+        // floor_ny is the band-gated BLData+0x110 [M Player_FeetOnPoint 0x194188:85/:106-109;
+        // 0x194df0:104] — see the walk tick's comment.
+        self.floor_ny = match floor.as_ref() {
+            Some((_, n)) if band => n[1],
+            _ => 1.0,
+        };
     }
 
     /// `Player_ClearInertia` 0x195e08 [M]: the four velocity triples (`BLData+0x10/+0x20/+0x30/+0x40`)
@@ -1416,8 +1498,16 @@ self.local = [vs / k, vf / k];
         // `self.cel` is the Sim's per-tick relink (obj+0x20); `None` falls back to the flat world.
         let (a, b) = self.capsule();
         let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS);
+        // The floor ray: from = obj+0x30, to = capsuleB + up·(−(cc+0.6)) [M Player_FeetOnPoint
+        // 0x194188:89-98 loads HITTEST+0x30 = BLData+0x770 — the B arm Player_Collision 0x194df0
+        // stores at :405-408 — adds the matrix up scaled −(cc+0.6) (:92, one negation of the f32
+        // sum), and passes obj+0x30 as the from]. Upright the up is (0,1,0), so the multiplies are
+        // exact and the endpoint is B.y − (cc+0.6); the port's old `pos − (cc+0.6)` skipped the B
+        // hop and shortened the crouch ray to 1.15 where the game's is exactly −1.25 (probe14_ground
+        // d_y 0xbfa00000).
         let ray = self.cc + 0.6;
-        let mut floor = world.segment_hit_scoped(self.cel, self.pos, [self.pos[0], self.pos[1] - ray, self.pos[2]]);
+        let to = [b[0], b[1] + -ray, b[2]];
+        let mut floor = world.segment_hit_scoped(self.cel, self.pos, to);
         // The game's pass never lands over a void: `build_FindCel` 0x1c8cb0 relinks obj+0x20 by
         // tie-break rays against each candidate's own chain geometry, so the actor's cel always
         // carries the geometry under him. The port's buckets are coarser than the game's cels [S]:
@@ -1433,11 +1523,49 @@ self.local = [vs / k, vf / k];
             let (fp, fw) = world.capsule_push(a, b, RADIUS);
             push = fp;
             walkable = fw;
-            floor = world.segment_hit(self.pos, [self.pos[0], self.pos[1] - ray, self.pos[2]]);
+            floor = world.segment_hit(self.pos, to);
         }
-        self.grounded = walkable || floor.is_some_and(|(t, _)| t * ray - 0.1 <= self.cc);
-        if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
+        // The contact-distance band [M Player_FeetOnPoint 0x194188:106 `*(float *)(hit + 0xc) - 0.1
+        // <= cc`] reads HITDATA+0xC, which Intersect_RayGeom 0x10a8c8 fills with the ABSOLUTE
+        // distance |from − hit| — hit = from + t·dir (:176-179 the dir·t product and the from add;
+        // :252-256 the store to HITDATA+0x40), dir = to − from recomputed f32 [M Collide_Intersect
+        // 0x1ebaa8's 0x201 branch], and the sqrt-of-squares store :312-325 — NOT t·raylen, which is
+        // what the port multiplied here. For the upright ray the x/z deltas are exactly 0 (the
+        // endpoint's x/z equal pos), so the VU's pairwise-add collapse leaves the single y term.
+        // With the game's own B arm and ray the crouched rest grounds through the push dither with
+        // no epsilon: the rest contact (0.09999999403953552 + 0.55f32 below the root) lands 1 ulp
+        // under the band's f32 edge (0x3f266667, where `hit − 0.1f32` rounds to exactly cc), while
+        // the port's old 0.45f32 arm sat exactly ON the edge and the t·ray multiply tipped it over
+        // (probe14_ground.rs: the rest y dithered ±3 ulps and grounded flickered) [L: the crouched
+        // Bond crawls out of the 07000014 vent on PCSX2].
+        let band = floor.as_ref().map_or(false, |(t, _)| {
+            let d_y = to[1] - self.pos[1];
+            let hit_y = self.pos[1] + t * d_y;
+            let dy = self.pos[1] - hit_y;
+            (dy * dy).sqrt() - 0.1 <= self.cc
+        });
+        self.grounded = walkable || band;
+        // `BLData+0x110` — the port's floor_ny — is the band's OTHER output, and it is band-GATED:
+        // FeetOnPoint writes `*param_3 = 1.0f` first [M 0x194188:85] and overwrites it with the
+        // band-passed hit's +0x14 only inside the band [M :106-109]; the gravity gate reads that
+        // value (`flag8 == 0 || BL+0x110 < 0.5` → gravity [M Player_Collision 0x194df0:104]). The
+        // port's old floor_ny took the hit normal REGARDLESS of the band, so the B-hop ray's far
+        // hits — geometry past the band that master's `pos − (cc+0.6)` ray never reached — fed
+        // steep normals into the gravity gate on ticks Bond was otherwise grounded: on the
+        // 07000005 upper ledge he rested walkable-grounded over a ny 0.45 slope ~1.85 below the
+        // root, floor_ny went 0.45, the < 0.5 gravity branch fired every tick and he slid off the
+        // ledge (interact_07000005_live::the_ledge_plate_plays_the_sound_trigger; master's short
+        // ray missed that geometry — floor=None — and floor_ny stayed 1.0). In the game the band
+        // fails there, so BL+0x110 stays 1.0 and the gate never opens [M 0x194df0:104].
+        self.floor_ny = match floor.as_ref() {
+            Some((_, n)) if band => n[1],
+            _ => 1.0,
+        };
         self.head_bump = push[1] < -1e-4;
+        // The pre-push-out snapshot: the game's ladder-grab pick sees the segment built HERE (the
+        // hittest from the integrated obj+0x30 [M 0x194df0:361]; the +0x750 push lands in the
+        // handler 0x1949a8:136-140, after the refine) — see the `pre_collide` field doc.
+        self.pre_collide = self.pos;
         for k in 0..3 { self.pos[k] += push[k]; }
         self.grounded_history = (self.grounded_history >> 1) | if self.grounded { 8 } else { 0 };
         // Fall damage: ticks falling with no ground for 4 ticks; on landing, over 60 → (timer − 60) if ≥ 10.
@@ -2074,7 +2202,7 @@ mod tests {
     fn the_ladder_grab_gate_excludes_only_climb_and_grapple() {
         let world = CollisionWorld::from_triangles(Vec::new());
         let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
-        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false };
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] };
         // SWIM grabs: one tick in the water context attaches (pre-fix it stayed SS_SWIM).
         let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
         b.substate = SS_SWIM;
@@ -2091,6 +2219,41 @@ mod tests {
         assert!(b.pos[1] >= lad.bottom() + 0.02 - 1e-4, "the grab dropped the swimmer below the rungs: {}", b.pos[1]);
     }
 
+    /// ladder-mesh-refine: the straddled-cel scoping [M `Collide_Pick` 0x1eb320:125-134 admits a
+    /// candidate object only from a straddled cel's chain; the ladder's link is its centre's cel
+    /// [M `build_LinkToRoom` 0x1c9680 → build_FindCel → control_link_object_to_cel]]. A ladder
+    /// whose cell is NOT in the pick capsule's straddle set is never admitted — even with the
+    /// capsule dead on the rungs (the old unscoped pick grabbed through the cel wall, the
+    /// 07000008 playtest's through-the-wall zipline arm). Sister: the same shape with the
+    /// ladder's OWN cell in the set grabs, and an EMPTY set (no cel graph — unit tests, MP
+    /// remotes) scopes nothing.
+    #[test]
+    fn the_ladder_pick_only_admits_ladders_of_the_straddled_cels() {
+        let world = CollisionWorld::from_triangles(Vec::new());
+        let mut lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
+        lad.cell = Some(3);
+        let grab = |straddle: &[usize]| {
+            let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
+            b.substate = SS_SWIM;
+            b.tick_ctx(&world, &LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle }, &Input { forward: 1.0, ..Default::default() });
+            b.substate
+        };
+        // The ladder's cel NOT in the straddle set: no grab (the pick never admitted it).
+        assert_eq!(grab(&[5]), SS_SWIM, "a ladder of a non-straddled cel grabbed — the scoping is off");
+        // Sister that fails without the scoping: the same capsule dead on the rungs grabs the
+        // moment the ladder's own cel is in the set.
+        assert_eq!(grab(&[3]), SS_CLIMB, "the ladder's own cel in the set must grab");
+        // The unresolved link (cell None) is the game's unlinked object: never admitted.
+        let mut unlinked = lad.clone();
+        unlinked.cell = None;
+        let mut b2 = Bond::new([10.0, 3.0, 20.5], unlinked.yaw + std::f32::consts::PI);
+        b2.substate = SS_SWIM;
+        b2.tick_ctx(&world, &LadderCtx { ladders: &[unlinked], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[3] }, &Input { forward: 1.0, ..Default::default() });
+        assert_eq!(b2.substate, SS_SWIM, "an unlinked ladder (cell None) must not grab while scoping is active");
+        // The empty set scopes nothing (no cel graph): the grab goes through.
+        assert_eq!(grab(&[]), SS_CLIMB, "the no-graph path must keep the unscoped pick");
+    }
+
     /// fix-swim: the swim stroke rides the LOOK direction [M `Player_Move` 0x191dd0:149-165 —
     /// `RotMatrixX(obj+0x50 − BL+0x8a8·π/2)` + `Mat_GetDir`] and the case-3 tail clamps the rise at
     /// `surface − 0.3` [M 0x193600:201-220]. No crouch/jump input exists in swim [M case 3 reads
@@ -2098,7 +2261,7 @@ mod tests {
     #[test]
     fn swim_moves_along_the_look_direction_and_the_surface_clamps() {
         let world = CollisionWorld::from_triangles(Vec::new());
-        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: Some(3.0), sink: false, creepwalls: &[], level_bump_5fb: false };
+        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: Some(3.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] };
         let mut b = Bond::new([0.0, 2.7, 0.0], 0.0); // below surface − 0.3? 2.7 < 2.7 is false — at the ceiling
         b.substate = SS_SWIM;
         // Look down-ish (pitch −0.5: dir = (0, −sin π/4, cos π/4)), swim forward: the position must
@@ -2129,7 +2292,7 @@ mod tests {
     fn climb_look_turns_within_the_ladder_window_and_pitch_is_free() {
         let world = CollisionWorld::from_triangles(Vec::new());
         let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
-        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false };
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] };
         let mut b = Bond::new([10.0, 3.0, 20.0 + 0.5], lad.yaw + std::f32::consts::PI);
         b.substate = SS_CLIMB;
         b.ladder = Some(0);

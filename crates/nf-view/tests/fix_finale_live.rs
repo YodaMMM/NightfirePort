@@ -72,7 +72,13 @@ fn the_07000016_chasers_defeat_completes_the_final_mission() {
     // Player_SetHealth(0), MissionState 3, LevelToEndTo 0x7000048 [M 0x182c60:21-43] — outranks
     // it). So the game's player leaves the pit during the launch; the test walks the same route:
     // once the cinema hands control back, Bond is re-seated on the upper floor the descent came
-    // from, outside the volume, for the rest of the chain.
+    // from, outside the volume, for the rest of the chain. U-051 ANSWERED (docs/systems/
+    // hurt-volumes.md §U-051): the game's re-enable is the pit floor — the cinema's stream-8
+    // single key (3.57, −22.76, −179.55) [D pack_cinema_16_live] teleported by Player_Enable
+    // 0x195498 [M] — and the survival is the PACK FLIGHT in the 861-tick window (the pit door's
+    // ch 0xf0 opens at 2180, after the pulse [D]). The port has no jetpack substate; this re-seat
+    // is the documented stand-in for that flight [S], needed only because the test fires ch 0x81
+    // from the upper floor instead of walking Bond to the pack.
     let chaser = {
         let mut found = None;
         let mut re_seated = false;

@@ -32,8 +32,11 @@ override NOFOG: f32 = 0.0;   // debug: 1.0 = skip the fog pass entirely
 // fog: rgb + enabled; fogk: N1, (F1 − N1)·n/(f − n), f, gain.
 // lp0/lp1: the frame's two closest lights' positions (psiLight_SetLights 0x10e588's TLight, w = 1);
 // lc0/lc1: their TColor rows (rgb·intensity in the game's byte scale, w = 1/r²), fix-lighting.
-struct U { vp: mat4x4<f32>, fog: vec4<f32>, fogk: vec4<f32>, lp0: vec4<f32>, lp1: vec4<f32>, lc0: vec4<f32>, lc1: vec4<f32> };
-@group(0) @binding(0) var<uniform> u: U;
+// frame-240: one flat vec4 array, bound once per frame. us[0..4] = view_proj's columns, us[4..8] =
+// view_proj_rot's (the camera-rotation sky), us[8] = fog, us[9] = fogk; then one 5-vec4 slot per
+// draw, picked by the draw's instance index (slot 0 = the eye's own, the snow pass): lp0, lp1, lc0,
+// lc1, sel (sel.x > 0.5 → the rotation-only matrix).
+@group(0) @binding(0) var<storage, read> us: array<vec4<f32>>;
 // G-043 GPU skinning: the frame's matrix palette and colour table (`Scene::skin_palette`).
 @group(0) @binding(1) var<storage, read> pal: array<mat4x4<f32>>;
 @group(0) @binding(2) var<storage, read> cols: array<vec4<f32>>;
@@ -65,7 +68,12 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
 }
 @vertex fn vs(@location(0) p0: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) c0: vec4<f32>,
               @location(3) sa: vec2<u32>, @location(4) sw: f32, @location(5) sc: u32, @location(6) n0: vec4<f32>,
-              @location(7) mtb: i32, @location(8) mm: vec2<u32>, @location(9) tend: u32) -> VO {
+              @location(7) mtb: i32, @location(8) mm: vec2<u32>, @location(9) tend: u32,
+              @builtin(instance_index) iid: u32) -> VO {
+    let b = 10u + 5u * iid;
+    let lp0 = us[b]; let lp1 = us[b + 1u]; let lc0 = us[b + 2u]; let lc1 = us[b + 3u];
+    var vp = mat4x4<f32>(us[0], us[1], us[2], us[3]);
+    if (us[b + 4u].x > 0.5) { vp = mat4x4<f32>(us[4], us[5], us[6], us[7]); }
     var o: VO;
     var p = p0;
     var c = c0;
@@ -98,8 +106,8 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
         let n2 = dot(n, n);
         if (n2 > 1e-6) {
             for (var i: u32 = 0u; i < 2u; i = i + 1u) {
-                let lp = select(u.lp0, u.lp1, i == 1u);
-                let lc = select(u.lc0, u.lc1, i == 1u);
+                let lp = select(lp0, lp1, i == 1u);
+                let lc = select(lc0, lc1, i == 1u);
                 if (lc.w <= 0.0 || (lc.x + lc.y + lc.z) <= 0.0) { continue; }
                 let d = lp.xyz - p;
                 let d2 = dot(d, d);
@@ -110,7 +118,7 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
             }
         }
     }
-    o.p = u.vp * vec4<f32>(p, 1.0);
+    o.p = vp * vec4<f32>(p, 1.0);
     o.d = o.p.w;
     if (FAR > 0.5) { o.p.z = o.p.w; }
     // view-model-last: the list-2 gun after `psiClearZ` — its depth squashed toward the eye so it covers
@@ -121,24 +129,26 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
     return o;
 }
 @fragment fn fs(i: VO) -> @location(0) vec4<f32> {
+    let fog = us[8];
+    let fogk = us[9];
     let s = textureSample(tex, samp, i.uv);
     let t = select(s, vec4<f32>(1.0, 1.0, 1.0, 1.0), NOTEX > 0.5);
     let o = t * i.c;
     if (AGREATER > 0.5) { if (o.a <= AREF) { discard; } } else if (o.a < AREF) { discard; }
     var rgb = min(o.rgb, vec3<f32>(1.0));
     var a = clamp(o.a, 0.0, 1.0);
-    if (FOG > 0.5 && u.fog.w > 0.5 && NOFOG < 0.5) {
-        let zb = u.fogk.x + u.fogk.y * (u.fogk.z / max(i.d, 0.001) - 1.0);
+    if (FOG > 0.5 && fog.w > 0.5 && NOFOG < 0.5) {
+        let zb = fogk.x + fogk.y * (fogk.z / max(i.d, 0.001) - 1.0);
         if (FOG < 1.5) {
             // The GS's fog factor is fixed-point and wraps; clamp to [0,1] so a small zb can't collapse the frame to
             // the fog colour (the "ghostly white" symptom on levels with a bright fog, e.g. 0700000c) [M render.md].
             let f = clamp(floor(zb / 256.0) / 128.0, 0.0, 1.0);
-            if (zb < 32767.0) { rgb = u.fog.rgb + (rgb - u.fog.rgb) * f; }
+            if (zb < 32767.0) { rgb = fog.rgb + (rgb - fog.rgb) * f; }
         } else {
             a = a * min(floor(zb / 128.0), 255.0) / 255.0;
         }
     }
-    return vec4<f32>(min(rgb * u.fogk.w, vec3<f32>(1.0)), a);
+    return vec4<f32>(min(rgb * fogk.w, vec3<f32>(1.0)), a);
 }
 "#;
 
@@ -241,6 +251,11 @@ pub fn alpha_shaped(rgba: &[u8]) -> bool {
 }
 
 /// One indexed draw: its layer, pass, pipeline, texture bind group, index range and the object's world centre + radius.
+/// batch-draws: the bindless world bind group, the snow texture's index in it, the indirect-args
+/// buffer and its per-frame staging (5 u32 per draw: index_count, instance_count, first_index,
+/// base_vertex, first_instance).
+struct Batch { bg: wgpu::BindGroup, snow_tex: u32, indirect: wgpu::Buffer, args: Vec<u32> }
+
 #[derive(Clone, Copy)]
 struct DrawCall { layer: crate::scene::Layer, pass: u8, pipeline: usize, tex: usize, first: u32, count: u32, centre: [f32; 3], radius: f32, cel: Option<u16>, chain: u32, node: u32, lflags: u16, skin: Option<(u32, Option<u32>)> }
 
@@ -270,8 +285,14 @@ pub struct Renderer {
     uniform: wgpu::Buffer,
     uniform_bg: wgpu::BindGroup,
     /// View-projection without the camera translation (sky objects that follow the viewer).
-    uniform_rot: wgpu::Buffer,
-    uniform_rot_bg: wgpu::BindGroup,
+    /// The per-frame uniform staging, reused (frame-240: no per-frame allocation).
+    staged: Vec<f32>,
+    /// portal-orphans: per cel-graph node, true when no portal touches it and no room's chain owns it.
+    orphan_nodes: Vec<bool>,
+    /// batch-draws: the world pass with every texture in one bound array (the draw's texture index
+    /// rides its per-draw slot) and one `multi_draw_indexed_indirect` per run of equal pipelines, in
+    /// the draw order — None = the per-draw path (no adapter support, or `NF_NOBINDLESS`).
+    batch: Option<Batch>,
     vbuf: wgpu::Buffer,
     skin_buf: wgpu::Buffer,
     snow_skin: wgpu::Buffer,
@@ -281,6 +302,10 @@ pub struct Renderer {
     /// The last uploaded palette's translations — a skinned draw's live world position for its light
     /// pick (`DrawCall::skin`; the game's obj+0x80 sphere follows the object [M 0x1e69a0:73-81]).
     skin_pos: std::cell::RefCell<Vec<[f32; 3]>>,
+    /// Per character: the light-pick centre when the palette's root slot is not where the
+    /// character is drawn (`Scene::char_light_centres` — the script actors, whose object sits at
+    /// the origin while the sequence root carries the body). Set with each palette build.
+    pub char_light_centre: Vec<Option<[f32; 3]>>,
     /// fix-gpu-facial-morphs: the per-character facial-weight blocks (per frame) and the static
     /// morph-target buffer.
     wts_buf: wgpu::Buffer,
@@ -331,14 +356,32 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, scene: &Scene, notex: bool, nofog: bool) -> Renderer {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("nf-view"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+        // batch-draws: the bindless decision comes first — it picks the shader variant and the layout.
+        let n_world_tex = 2 + scene.textures.iter().map(|t| 1 + t.more.len()).sum::<usize>();
+        let want = wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING | wgpu::Features::INDIRECT_FIRST_INSTANCE;
+        let bindless = device.features().contains(want)
+            && (n_world_tex as u32) <= device.limits().max_binding_array_elements_per_shader_stage
+            && std::env::var_os("NF_NOBINDLESS").is_none();
+        let src = if bindless {
+            let s = (String::from("enable wgpu_binding_array;
+") + SHADER)
+                .replace("@group(1) @binding(0) var tex: texture_2d<f32>;", "@group(1) @binding(0) var texs: binding_array<texture_2d<f32>>;")
+                .replace("struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32 };",
+                         "struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32, @location(3) @interpolate(flat) ti: u32 };")
+                .replace("    o.uv = uv;\n    o.c = c * (255.0 / 128.0);", "    o.uv = uv;\n    o.ti = u32(us[b + 4u].y);\n    o.c = c * (255.0 / 128.0);")
+                .replace("let s = textureSample(tex, samp, i.uv);", "let s = textureSample(texs[i.ti], samp, i.uv);");
+            assert!(s.contains("texs[i.ti]") && s.contains("o.ti = ") && s.contains("binding_array"), "the bindless shader edits must all apply");
+            s
+        } else { SHADER.to_string() };
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("nf-view"), source: wgpu::ShaderSource::Wgsl(src.into()) });
         let ubgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                // fix-lighting: one 256-byte slot per draw (dynamic offset) — the game uploads a
-                // per-object light pair (`Lights_CalcClosestLights` + `psiLight_SetLights` per object/cel).
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: None },
+                // fix-lighting: one 256-byte slot per draw — the game uploads a per-object light pair
+                // (`Lights_CalcClosestLights` + `psiLight_SetLights` per object/cel). frame-240: a storage
+                // array indexed by instance, not a dynamic-offset uniform.
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
                 count: None,
             },
             wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::VERTEX, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
@@ -358,7 +401,18 @@ impl Renderer {
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
             ],
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&ubgl), Some(&tbgl)], immediate_size: 0 });
+        let wtbgl = bindless.then(|| device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("world textures (bindless)"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: std::num::NonZeroU32::new(n_world_tex as u32),
+                },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+            ],
+        }));
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&ubgl), Some(wtbgl.as_ref().unwrap_or(&tbgl))], immediate_size: 0 });
         // World: depth-tested. Sky pass: painted first in slot order without depth (`View_DrawSky` before the world).
         // One pipeline per draw state: blend (ALPHA_1), depth write (ZBUF_1), alpha test (TEST_1) and fog as shader
         // overrides; the pre-world sky pass ignores depth, the post-fog sky is pinned to the far plane (drawn only where
@@ -464,17 +518,16 @@ impl Renderer {
         let mtg_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("morph targets"), contents: &mtg_contents, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST });
         let slots = (scene.materials.len() + 2) as u64;
         let make_uniform = || {
-            let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: UNIFORM_SLOT as u64 * slots, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &ubgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buf, offset: 0, size: Some(std::num::NonZero::new(UNIFORM_SLOT as u64).unwrap()) }) }, wgpu::BindGroupEntry { binding: 1, resource: pal_buf.as_entire_binding() }, wgpu::BindGroupEntry { binding: 2, resource: col_buf.as_entire_binding() }, wgpu::BindGroupEntry { binding: 3, resource: wts_buf.as_entire_binding() }, wgpu::BindGroupEntry { binding: 4, resource: mtg_buf.as_entire_binding() }] });
+            let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: UNIFORM_SLOT as u64 * slots, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &ubgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }, wgpu::BindGroupEntry { binding: 1, resource: pal_buf.as_entire_binding() }, wgpu::BindGroupEntry { binding: 2, resource: col_buf.as_entire_binding() }, wgpu::BindGroupEntry { binding: 3, resource: wts_buf.as_entire_binding() }, wgpu::BindGroupEntry { binding: 4, resource: mtg_buf.as_entire_binding() }] });
             (buf, bg)
         };
         let (uniform, uniform_bg) = make_uniform();
-        let (uniform_rot, uniform_rot_bg) = make_uniform();
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat, address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default()
         });
-        let make_tex =|w: u32, h: u32, rgba: &[u8]| {
+        let make_tex2 =|w: u32, h: u32, rgba: &[u8]| {
             let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
             let t = device.create_texture(&wgpu::TextureDescriptor {
                 label: None, size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
@@ -484,12 +537,18 @@ impl Renderer {
                 wgpu::TexelCopyTextureInfo { texture: &t, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 rgba, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) }, size);
             let view = t.create_view(&Default::default());
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None, layout: &tbgl,
                 entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) }],
-            })
+            });
+            (bg, view)
         };
-        let mut tex_bgs = vec![make_tex(1, 1, &[255, 255, 255, 255])];
+        let make_tex = |w: u32, h: u32, rgba: &[u8]| make_tex2(w, h, rgba).0;
+        // batch-draws: the world textures' views, index-aligned with `tex_bgs` (the bindless array).
+        let mut tex_views: Vec<wgpu::TextureView> = Vec::new();
+        let (bg0, v0) = make_tex2(1, 1, &[255, 255, 255, 255]);
+        tex_views.push(v0);
+        let mut tex_bgs = vec![bg0];
         let mut tex_frames = vec![(0, 1, 1)];
         let hud_bgs = std::iter::once(make_tex(1, 1, &[255, 255, 255, 255])).chain(scene.hud_textures.iter().map(|(_, t)| make_tex(t.width, t.height, &t.rgba))).collect();
         // The burning woman's texture (0x030000db, crate::woman): its own updatable texture — the frame loop rewrites its
@@ -514,8 +573,9 @@ impl Renderer {
         });
         for t in &scene.textures {
             tex_frames.push((tex_bgs.len(), 1 + t.more.len() as u32, t.rate));
-            tex_bgs.push(make_tex(t.width, t.height, &t.rgba));
-            for f in &t.more { tex_bgs.push(make_tex(t.width, t.height, f)); }
+            let (bg, v) = make_tex2(t.width, t.height, &t.rgba);
+            tex_bgs.push(bg); tex_views.push(v);
+            for f in &t.more { let (bg, v) = make_tex2(t.width, t.height, f); tex_bgs.push(bg); tex_views.push(v); }
         }
         let material_tex: Vec<usize> = scene.materials.iter()
             .map(|m| m.key.and_then(|k| scene.textures.iter().position(|t| t.key == k)).map_or(0, |i| i + 1)).collect();
@@ -557,7 +617,19 @@ impl Renderer {
         let fog = scene.fog;
         let snow_pipeline = make_pipeline(Draw { pass: 5, blend: 1, zwrite: false, atest: 0, fog: 0 });
         let snow_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let snow_bg = match &scene.snow_texture { Some(t) => make_tex(t.width, t.height, &t.rgba), None => make_tex(1, 1, &[255, 255, 255, 255]) };
+        let (snow_bg, snow_view) = match &scene.snow_texture { Some(t) => make_tex2(t.width, t.height, &t.rgba), None => make_tex2(1, 1, &[255, 255, 255, 255]) };
+        let batch = wtbgl.as_ref().map(|l| {
+            let snow_tex = tex_views.len() as u32;
+            let mut refs: Vec<&wgpu::TextureView> = tex_views.iter().collect();
+            refs.push(&snow_view);
+            assert_eq!(refs.len(), n_world_tex, "the bindless array holds exactly the counted textures");
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("world textures (bindless)"), layout: l,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureViewArray(&refs) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) }],
+            });
+            let indirect = device.create_buffer(&wgpu::BufferDescriptor { label: Some("draw args"), size: 20 * (scene.materials.len() as u64 + 1), usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            Batch { bg, snow_tex, indirect, args: Vec::new() }
+        });
         let order_cap = draws.len();
         let cel_boxes = scene.cels.iter().map(|c| (c.min, c.max)).collect();
         let cel_graph = scene.cel_graph.clone();
@@ -580,7 +652,14 @@ impl Renderer {
         // movies.md §Presentation], so the quad draws BEFORE the HUD runs (under the page
         // controls); state 6 suppresses the overlay while its movie plays, so the draw position
         // is equivalent there.
-        Renderer { woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, uniform_rot, uniform_rot_bg, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        let orphan_nodes: Vec<bool> = {
+            let n = cel_graph.cells.len();
+            let mut reached = vec![false; n];
+            for p in &cel_graph.portals { if p.cel_a < n { reached[p.cel_a] = true; } if p.cel_b < n { reached[p.cel_b] = true; } }
+            for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
+            reached.iter().map(|r| !r).collect()
+        };
+        Renderer { woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -615,7 +694,7 @@ impl Renderer {
 
     pub fn cel_visibility(&mut self, eye: [f32; 3], view_proj: [[f32; 4]; 4], world: Option<&nf_game::world::CollisionWorld>, doors: Option<&[bool]>) -> Option<Vec<bool>> {
         let planes = extract_frustum(view_proj);
-        let portal_enabled = std::env::var_os("NF_NOPORTAL").is_none();
+        let portal_enabled = room_cull_enabled() && std::env::var_os("NF_NOPORTAL").is_none();
         // The cell-level game mask (`View_AddCels` 0x1e6ba0: the VisCelList plus the +0x18 chain
         // pass under `Vision_InView`) gates the World draws; the strict VisCelList mask gates the
         // rooms/objects (`View_DrawObjList` 0x1e69a0 walks the VisCelList cels' object lists —
@@ -641,6 +720,22 @@ impl Renderer {
                 None => (None, None),
             }
         } else { (None, None) };
+        // cull-relax (the user's playtest, 2026-10-17: objects and rooms vanished in doorways and
+        // between areas): every cel one portal beyond the walk's set draws too, so a room being
+        // stepped into or looked through is never cut at the threshold. Port choice, not the game's
+        // walk — the walk is exact only where the port's cel attribution is, and the user ranks
+        // nothing-missing above the culled frames (the draws stay frustum-culled per draw).
+        let widen = |m: Option<Vec<bool>>| m.map(|mut v| {
+            let seed = v.clone();
+            for pe in &self.cel_graph.portals {
+                if pe.cel_a < seed.len() && pe.cel_b < seed.len() {
+                    if seed[pe.cel_a] { v[pe.cel_b] = true; }
+                    if seed[pe.cel_b] { v[pe.cel_a] = true; }
+                }
+            }
+            v
+        });
+        let (cell_vis, strict_vis) = (widen(cell_vis), widen(strict_vis));
         self.last_cell_vis = cell_vis;
         let vis = strict_vis.map(|cell_vis| self.cel_graph.room_to_cell.iter().map(|m| m.map(|c| cell_vis[c]).unwrap_or(true)).collect::<Vec<bool>>());
         let vis = vis.unwrap_or_else(|| self.cel_boxes.iter().map(|&(min, max)| !box_outside(&planes, min, max)).collect());
@@ -658,6 +753,9 @@ impl Renderer {
         self.upload_morph_weights(queue, scene);
     }
 
+    /// The shot path's companion to `update_skin` (it takes `&self`): the per-character light centres.
+    pub fn set_char_light_centres(&mut self, scene: &Scene) { self.char_light_centre = scene.char_light_centres(); }
+
     /// fix-gpu-facial-morphs: one frame's facial morph weights into the weight buffer (the GPU half
     /// of `SkinIt` 0x10bf30's Morph_Weight marshalling). No-op on scenes without morph bearers.
     pub fn upload_morph_weights(&self, queue: &wgpu::Queue, scene: &Scene) {
@@ -668,7 +766,7 @@ impl Renderer {
     /// Upload an already-built (possibly interpolated) palette and colour table.
     pub fn upload_skin(&self, queue: &wgpu::Queue, pal: &[nf_formats::anim::Mat4], cols: &[[f32; 4]]) {
         if !pal.is_empty() { queue.write_buffer(&self.pal_buf, 0, bytemuck::cast_slice(pal)); }
-        *self.skin_pos.borrow_mut() = pal.iter().map(|m| [m[3][0], m[3][1], m[3][2]]).collect();
+        { let mut sp = self.skin_pos.borrow_mut(); sp.clear(); sp.extend(pal.iter().map(|m| [m[3][0], m[3][1], m[3][2]])); }
         if !cols.is_empty() { queue.write_buffer(&self.col_buf, 0, bytemuck::cast_slice(cols)); }
     }
 
@@ -707,58 +805,6 @@ impl Renderer {
             None => ([0.0; 3], 0.0, 0.0),
         };
         let extra = [fog_rgb[0], fog_rgb[1], fog_rgb[2], fog_on, 8.0, k, 16_777_216.0, GAIN];
-        // Per-draw uniform slots (fix-lighting): the game uploads the ≤2 closest lights per object
-        // (`View_DrawObjList` 0x1e69a0 / `View_DrawCelGlist` 0x1e6538 → `Lights_CalcClosestLights`
-        // 0x1cb2e0 + `psiLight_SetLights` 0x10e588). Slot 0 = the eye's own sphere (the snow pass — the
-        // game's particle path inherits the previous upload and the flakes have no normals, so the
-        // pick is inert); slot k+1 = draw k. fix-lighting2: the per-draw flags are the source object's
-        // glist flags word (`Control_SetGList` 0x134960 → obj+0xF0 / cel+0x94), not the hardcoded 0x80
-        // that let the kind-0 ambient radiators crowd the muzzle light off the world draws; the sky
-        // draws upload NO lights (`View_DrawSky` 0x1e5ad0 / `View_DrawSprites` 0x1e5290 call
-        // `psiLight_SetLights(0,0,0,0,0)`).
-        let slot_f = UNIFORM_SLOT / 4;
-        let n_draws = self.draws.len();
-        let mut staged = vec![0f32; slot_f * (n_draws + 1)];
-        {
-            let s = &mut staged[..slot_f];
-            s[16..24].copy_from_slice(&extra);
-            let (lp, lc) = self.lights.pick2([eye[0], eye[1], eye[2], 2.0], 0x80);
-            for (i, v) in lp.iter().chain(lc.iter()).enumerate() { s[24 + i * 4..28 + i * 4].copy_from_slice(v); }
-        }
-        for (k, dc) in self.draws.iter().enumerate() {
-            let s = &mut staged[(k + 1) * slot_f..][..slot_f];
-            s[16..24].copy_from_slice(&extra);
-            if matches!(dc.layer, crate::scene::Layer::SkyCamera | crate::scene::Layer::SkyFixed) {
-                // The game zeroes the light slots for the sky and sprite passes [M 0x1e5ad0:89].
-                continue;
-            }
-            // The view model takes no point lights (the list-2 pass after the zeroing; `VIEW_MODEL_NODE`).
-            if dc.node == crate::scene::VIEW_MODEL_NODE && dc.layer != crate::scene::Layer::World { continue; }
-            // A skinned draw picks its lights at its owner's LIVE root (the palette slot the GPU skins
-            // with) — the game's per-object obj+0x80 sphere [M 0x1e69a0:73-81]; a hidden owner (the FAR
-            // collapse) picks none. Static draws keep their build centre.
-            let centre = match dc.skin {
-                Some((ci, att)) => {
-                    let idx = match att { None => self.skin_layout.char_base.get(ci as usize).copied(), Some(a) => Some(self.skin_layout.attach_base + a) };
-                    match idx.and_then(|i| self.skin_pos.borrow().get(i as usize).copied()) {
-                        Some(p) if p[1] > -9000.0 => p,
-                        Some(_) => continue,
-                        None => dc.centre,
-                    }
-                }
-                None => dc.centre,
-            };
-            let (lp, lc) = self.lights.pick2([centre[0], centre[1], centre[2], dc.radius], dc.lflags as u32);
-            for (i, v) in lp.iter().chain(lc.iter()).enumerate() { s[24 + i * 4..28 + i * 4].copy_from_slice(v); }
-        }
-        for (m, vp) in [(&self.uniform, view_proj), (&self.uniform_rot, view_proj_rot)] {
-            let mut u = staged.clone();
-            for slot in 0..=n_draws {
-                let s = &mut u[slot * slot_f..][..slot_f];
-                for r in 0..4 { for c in 0..4 { s[r * 4 + c] = vp[r][c]; } }
-            }
-            queue.write_buffer(m, 0, bytemuck::cast_slice(&u));
-        }
         // The frame starts as fog (what the fog pass covers where nothing was drawn: zb 0); the
         // pillar-box clears black so the sides of a cut-scene frame are the void around the game's
         // 4:3 picture (the fog pass repaints the band's background itself).
@@ -805,9 +851,105 @@ impl Renderer {
                         ord
                     })
             } else { None };
+            // fix-render2: the World draws' bounding spheres are exact — static geometry through the
+            // placement matrix (scene.rs add_instance) — so they cull always. Everything posed per
+            // frame keeps its build-time centre (doors swinging, pickups, the truck, searchlight
+            // parts, muzzle flashes, tracers — the Character/Effect layers) and the sky follows the
+            // viewer, so those only cull under the NF_CULL test override. The HUD draws from its own
+            // buffer below and is never in this list. This was A-11's vanish bug: the full cull made
+            // the truck and the HUD disappear by view direction (user playtest); scoping the cull to
+            // the static World layer keeps every moving thing drawn while still skipping the bulk —
+            // 07000006's start view submits ~4k draws unculled (render2_live counts them).
+            let test_cull = std::env::var_os("NF_CULL").is_some();
+            // blood-puff-render: the rule moved to `Layer::frustum_cullable` (the Effect pools'
+            // build-time sphere is the identity-matrix origin — culling it dropped every puff the
+            // moment the origin left the frustum, wherever they were posed).
+            let cull = |dc: &DrawCall| dc.layer.frustum_cullable(test_cull);
+            // Counters for the worklog (env-gated; no per-frame cost otherwise).
+            let trace = std::env::var_os("NF_DRAWS").is_some();
+            let (mut submitted, mut culled) = (0usize, 0usize);
+            // fix-render3: the room-cel visibility test (`View_AddCels` 0x1e6ba0's `Vision_InView`
+            // per cel bbox). Computed once per frame — ~200 sphere tests; a World draw whose cel is
+            // out is skipped before the pipeline/bind work. The eye's own cel always passes (its
+            // bbox contains the eye, so its sphere can never be outside the frustum).
+            let cel_cull = room_cull_enabled() && std::env::var_os("NF_NOCELCULL").is_none();
+            // fix-perf-level: the visibility set is the game's own portal walk
+            // (`Vision_Portal_Recurse` 0x1e86e8 → `Vision_Recurse` 0x1e82e0, the GfxList set) from the
+            // eye's room cel, with the depth-0 pyramid = the frustum's four side planes + near (the
+            // game's five `Vision_Calculate_View_Fustrum` 0x1e7df8 planes). Cels the walk cannot run
+            // for (no graph / no portals / eye outside every cel) keep the fix-render3 box test.
+            // fix-portal: the walk is the default again (the collapse is fixed: the viewer cel is
+            // `Camera_CheckLocation` 0x1bae90's persistent state and the depth-0 pyramid is the
+            // game's [M 0x1e7df8]); `NF_NOPORTAL` disables it. The mask is computed once per frame
+            // by `cel_visibility` (the skin palette shares it) — reuse it when fresh.
+            let cel_visible: Vec<bool> = if cel_cull {
+                // The lazy fallback never fires in the live paths (cel_visibility runs first — lib.rs 1496 / shot());
+                // it has no `world` here, so the FindCel tie-break degrades to the approximation.
+                self.last_vis.clone().unwrap_or_else(|| self.cel_visibility(eye, view_proj, None, None).unwrap())
+            } else { Vec::new() };
+            // fix-portal2: the cell-level game mask. A cel placement's glist draws when ITS cel is
+            // visible (`View_AddCels` 0x1e6ba0 — the VisCelList cel itself or a `+0x18` chain node
+            // under `Vision_InView`); `Material::node` = the placement's own cell for every
+            // creates_cel placement (u32::MAX = the distance-keyed objects, gated by their
+            // containing room as before).
+            let cell_visible: Option<&Vec<bool>> = self.last_cell_vis.as_ref();
+            // portal-orphans (the user's 07000015 F12 004: the silo tunnel walls missing): a node no
+            // room's chain owns and no portal reaches can never be marked by the walk, so the cel
+            // cull dropped it from every position. The game draws its unlinked objects from the
+            // forced list (`View_AddForcedObjects` 0x1e5fb8) — they take only the frustum test.
+            let orphan = &self.orphan_nodes;
+            let mut cel_culled = 0usize;
+            // Skip redundant `set_pipeline` calls (A-11e). The group-0 bind now carries a per-draw
+            // dynamic offset (fix-lighting: each draw's own light pair), so it is issued every draw.
+            let mut last_pipeline: Option<usize> = None;
+            let mut last_tex: Option<usize> = None;
+            let (mut __pipe_sw, mut __tex_sw) = (0usize, 0usize);
+            // Debug: `NF_SKIP_MAT=i,j,..` skips those material indices (bisecting a wrong-looking surface).
+            static SKIP: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
+            let skip = SKIP.get_or_init(|| std::env::var("NF_SKIP_MAT").map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default());
             // Reuse the cached `order` Vec (A-11e): clear + refill, no per-frame alloc.
             self.order.clear();
-            self.order.extend(self.draws.iter().enumerate().map(|(k, dc)| {
+            // frame-240: the cull runs BEFORE the sort and the uniform staging, so the per-frame
+            // work (light picks, uniform slots, the sort) scales with the submitted draws, not with
+            // every draw the level owns (the effect pools alone are thousands of parked slots).
+            let draws = &self.draws;
+            let parked_pos = self.skin_pos.borrow();
+            let layout = &self.skin_layout;
+            self.order.extend(draws.iter().enumerate().filter(|&(k, dc)| {
+                if skip.contains(&k) { return false; }
+                // perf-240: a skinned draw whose owner slot holds the FAR park matrix (an empty effect /
+                // projectile pool slot, a room-culled character — `skin_palette`'s FAR: zero 3×3,
+                // 10000 below the world) draws only a degenerate point far under the map: skip it.
+                // The same test the light pick uses (`p[1] > -9000`).
+                if let Some((ci, att)) = dc.skin {
+                    let idx = match att { None => layout.char_base.get(ci as usize).copied(), Some(a) => Some(layout.attach_base + a) };
+                    if idx.and_then(|i| parked_pos.get(i as usize)).is_some_and(|p| p[1] <= -9000.0) {
+                        if trace { culled += 1; }
+                        return false;
+                    }
+                }
+                // Sky after the fog pass (pass 4) follows the viewer and is never culled.
+                if cull(dc) && dc.pass != 4 && sphere_outside(&planes, dc.centre, dc.radius) {
+                    if trace { culled += 1; }
+                    return false;
+                }
+                if cel_cull && dc.layer == Layer::World {
+                    let hidden = match (cell_visible, dc.node) {
+                        (Some(cv), n) if n != u32::MAX => !cv[n as usize] && !orphan.get(n as usize).copied().unwrap_or(false),
+                        _ => dc.cel.is_some_and(|c| !cel_visible[c as usize]),
+                    };
+                    if hidden {
+                        if trace { cel_culled += 1; }
+                        // Dev diagnostic: `NF_CULLDIFF=1` names the near, in-frustum World draws the room
+                        // cull removes (the cel/node the walk failed to reach).
+                        if std::env::var_os("NF_CULLDIFF").is_some() && d2(dc.centre) < 400.0 + dc.radius * dc.radius && !sphere_outside(&planes, dc.centre, dc.radius) {
+                            eprintln!("[culldiff] draw {k} node {} cel {:?} chain {} centre {:?} r {:.2}", dc.node, dc.cel, dc.chain, dc.centre, dc.radius);
+                        }
+                        return false;
+                    }
+                }
+                true
+            }).map(|(k, dc)| {
                 // List 0 (pass 1): the room cels' −90000 + 10·k (`View_AddCels` 0x1e6ba0 over the
                 // per-frame depth-sorted chain, `Material::node` → k; `chain` = the build-time
                 // parse-rank fallback when the walk cannot run), every distance-keyed entry (the
@@ -838,99 +980,136 @@ impl Renderer {
                 let slot = match dc.pass { 4 => 3, p => p * 2 };
                 (slot, key, k)
             }));
+            drop(parked_pos);
             self.order.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
-            // fix-render2: the World draws' bounding spheres are exact — static geometry through the
-            // placement matrix (scene.rs add_instance) — so they cull always. Everything posed per
-            // frame keeps its build-time centre (doors swinging, pickups, the truck, searchlight
-            // parts, muzzle flashes, tracers — the Character/Effect layers) and the sky follows the
-            // viewer, so those only cull under the NF_CULL test override. The HUD draws from its own
-            // buffer below and is never in this list. This was A-11's vanish bug: the full cull made
-            // the truck and the HUD disappear by view direction (user playtest); scoping the cull to
-            // the static World layer keeps every moving thing drawn while still skipping the bulk —
-            // 07000006's start view submits ~4k draws unculled (render2_live counts them).
-            let test_cull = std::env::var_os("NF_CULL").is_some();
-            // blood-puff-render: the rule moved to `Layer::frustum_cullable` (the Effect pools'
-            // build-time sphere is the identity-matrix origin — culling it dropped every puff the
-            // moment the origin left the frustum, wherever they were posed).
-            let cull = |dc: &DrawCall| dc.layer.frustum_cullable(test_cull);
-            // Counters for the worklog (env-gated; no per-frame cost otherwise).
-            let trace = std::env::var_os("NF_DRAWS").is_some();
-            let (mut submitted, mut culled) = (0usize, 0usize);
-            // fix-render3: the room-cel visibility test (`View_AddCels` 0x1e6ba0's `Vision_InView`
-            // per cel bbox). Computed once per frame — ~200 sphere tests; a World draw whose cel is
-            // out is skipped before the pipeline/bind work. The eye's own cel always passes (its
-            // bbox contains the eye, so its sphere can never be outside the frustum).
-            let cel_cull = std::env::var_os("NF_NOCELCULL").is_none();
-            // fix-perf-level: the visibility set is the game's own portal walk
-            // (`Vision_Portal_Recurse` 0x1e86e8 → `Vision_Recurse` 0x1e82e0, the GfxList set) from the
-            // eye's room cel, with the depth-0 pyramid = the frustum's four side planes + near (the
-            // game's five `Vision_Calculate_View_Fustrum` 0x1e7df8 planes). Cels the walk cannot run
-            // for (no graph / no portals / eye outside every cel) keep the fix-render3 box test.
-            // fix-portal: the walk is the default again (the collapse is fixed: the viewer cel is
-            // `Camera_CheckLocation` 0x1bae90's persistent state and the depth-0 pyramid is the
-            // game's [M 0x1e7df8]); `NF_NOPORTAL` disables it. The mask is computed once per frame
-            // by `cel_visibility` (the skin palette shares it) — reuse it when fresh.
-            let cel_visible: Vec<bool> = if cel_cull {
-                // The lazy fallback never fires in the live paths (cel_visibility runs first — lib.rs 1496 / shot());
-                // it has no `world` here, so the FindCel tie-break degrades to the approximation.
-                self.last_vis.clone().unwrap_or_else(|| self.cel_visibility(eye, view_proj, None, None).unwrap())
-            } else { Vec::new() };
-            // fix-portal2: the cell-level game mask. A cel placement's glist draws when ITS cel is
-            // visible (`View_AddCels` 0x1e6ba0 — the VisCelList cel itself or a `+0x18` chain node
-            // under `Vision_InView`); `Material::node` = the placement's own cell for every
-            // creates_cel placement (u32::MAX = the distance-keyed objects, gated by their
-            // containing room as before).
-            let cell_visible: Option<&Vec<bool>> = self.last_cell_vis.as_ref();
-            let mut cel_culled = 0usize;
-            // Skip redundant `set_pipeline` calls (A-11e). The group-0 bind now carries a per-draw
-            // dynamic offset (fix-lighting: each draw's own light pair), so it is issued every draw.
-            let mut last_pipeline: Option<usize> = None;
-            // Debug: `NF_SKIP_MAT=i,j,..` skips those material indices (bisecting a wrong-looking surface).
-            static SKIP: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
-            let skip = SKIP.get_or_init(|| std::env::var("NF_SKIP_MAT").map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default());
-            for &(_, _, k) in &self.order {
-                if skip.contains(&k) { continue; }
-                let dc = self.draws[k];
-                // Sky after the fog pass (pass 4) follows the viewer and is never culled.
-                if cull(&dc) && dc.pass != 4 && sphere_outside(&planes, dc.centre, dc.radius) {
-                    if trace { culled += 1; }
-                    continue;
+            // Per-draw uniform slots (fix-lighting): the game uploads the ≤2 closest lights per object
+            // (`View_DrawObjList` 0x1e69a0 / `View_DrawCelGlist` 0x1e6538 → `Lights_CalcClosestLights`
+            // 0x1cb2e0 + `psiLight_SetLights` 0x10e588). Slot 0 = the eye's own sphere (the snow pass — the
+            // game's particle path inherits the previous upload and the flakes have no normals, so the
+            // pick is inert); slot j+1 = the j-th SUBMITTED draw (frame-240: compact, one buffer — a
+            // camera-rotation sky draw carries view_proj_rot in its own slot). fix-lighting2: the per-draw
+            // flags are the source object's glist flags word (`Control_SetGList` 0x134960 → obj+0xF0 /
+            // cel+0x94), not the hardcoded 0x80 that let the kind-0 ambient radiators crowd the muzzle
+            // light off the world draws; the sky draws upload NO lights (`View_DrawSky` 0x1e5ad0 /
+            // `View_DrawSprites` 0x1e5290 call `psiLight_SetLights(0,0,0,0,0)`).
+            {
+                const HEAD: usize = 40;
+                const SLOT: usize = 20;
+                let mut staged = std::mem::take(&mut self.staged);
+                staged.clear();
+                staged.resize(HEAD + SLOT * (self.order.len() + 1), 0.0);
+                for c in 0..4 { staged[c * 4..c * 4 + 4].copy_from_slice(&view_proj[c]); staged[16 + c * 4..20 + c * 4].copy_from_slice(&view_proj_rot[c]); }
+                staged[32..40].copy_from_slice(&extra);
+                {
+                    let s = &mut staged[HEAD..HEAD + SLOT];
+                    // batch-draws: slot 0 (the snow pass) samples the snow texture from the array.
+                    s[17] = self.batch.as_ref().map_or(0.0, |b| b.snow_tex as f32);
+                    let (lp, lc) = self.lights.pick2([eye[0], eye[1], eye[2], 2.0], 0x80);
+                    for (i, v) in lp.iter().chain(lc.iter()).enumerate() { s[i * 4..i * 4 + 4].copy_from_slice(v); }
                 }
-                if cel_cull && dc.layer == Layer::World {
-                    let hidden = match (cell_visible, dc.node) {
-                        (Some(cv), n) if n != u32::MAX => !cv[n as usize],
-                        _ => dc.cel.is_some_and(|c| !cel_visible[c as usize]),
-                    };
-                    if hidden {
-                        if trace { cel_culled += 1; }
+                let skin_pos = self.skin_pos.borrow();
+                for (j, &(_, _, k)) in self.order.iter().enumerate() {
+                    let dc = &self.draws[k];
+                    let s = &mut staged[HEAD + (j + 1) * SLOT..][..SLOT];
+                    if dc.layer == Layer::SkyCamera { s[16] = 1.0; }
+                    // batch-draws: the draw's texture (animated frames included) as an index into the array.
+                    { let (fb, nf, rate) = self.tex_frames[dc.tex]; s[17] = (fb + ((ticks / rate) % nf) as usize) as f32; }
+                    if matches!(dc.layer, Layer::SkyCamera | Layer::SkyFixed) {
+                        // The game zeroes the light slots for the sky and sprite passes [M 0x1e5ad0:89].
                         continue;
                     }
+                    // light-viewmodel: the view model IS lit. `Game_Draw` zeroes the lights before list 2
+                    // [M 0x1e6f50:150], but every animated object draws through `AnimObjectDraw`
+                    // [M 0x1c4490:117-122], which re-picks: `View_SetupRenderModes` at the object's
+                    // sphere [M 0x1e78b0:21-23] or `View_SetupRenderModes2` at the viewer's camera with
+                    // radius 2.0 [M 0x1e7908:28-36]. The hands and gun sit at the eye either way — the
+                    // pick centres on the eye, radius 2.0, with the draw's own flags word.
+                    if dc.node == crate::scene::VIEW_MODEL_NODE && dc.layer != Layer::World {
+                        let (lp, lc) = self.lights.pick2([eye[0], eye[1], eye[2], 2.0], dc.lflags as u32);
+                        for (i, v) in lp.iter().chain(lc.iter()).enumerate() { s[i * 4..i * 4 + 4].copy_from_slice(v); }
+                        continue;
+                    }
+                    // A skinned draw picks its lights at its owner's LIVE root (the palette slot the GPU skins
+                    // with) — the game's per-object obj+0x80 sphere [M 0x1e69a0:73-81]; a hidden owner (the FAR
+                    // collapse) picks none. Static draws keep their build centre.
+                    let centre = match dc.skin {
+                        Some((ci, att)) => {
+                            let idx = match att { None => self.skin_layout.char_base.get(ci as usize).copied(), Some(a) => Some(self.skin_layout.attach_base + a) };
+                            match idx.and_then(|i| skin_pos.get(i as usize).copied()) {
+                                // light-actors: a script actor's object sits at the origin while its
+                                // sequence root carries the body [Script_AnimStart 0x1d8f40's origin
+                                // create; AnimSeqTick 0x1c28d0 root motion] — the game's per-object
+                                // sphere (obj+0x80) follows the body, so the pick centres there.
+                                Some(p) if p[1] > -9000.0 => match att {
+                                    None => self.char_light_centre.get(ci as usize).copied().flatten().unwrap_or(p),
+                                    Some(_) => p,
+                                },
+                                Some(_) => continue,
+                                None => dc.centre,
+                            }
+                        }
+                        None => dc.centre,
+                    };
+                    let (lp, lc) = self.lights.pick2([centre[0], centre[1], centre[2], dc.radius], dc.lflags as u32);
+                    for (i, v) in lp.iter().chain(lc.iter()).enumerate() { s[i * 4..i * 4 + 4].copy_from_slice(v); }
                 }
-                if trace { submitted += 1; }
-                let (layer, first, count) = (dc.layer, dc.first, dc.count);
-                let (uniform, off) = if layer == Layer::SkyCamera {
-                    (&self.uniform_rot_bg, (k + 1) as u32 * UNIFORM_SLOT as u32)
-                } else {
-                    (&self.uniform_bg, (k + 1) as u32 * UNIFORM_SLOT as u32)
-                };
-                if last_pipeline != Some(dc.pipeline) {
-                    pass.set_pipeline(&self.pipelines[dc.pipeline].1);
-                    last_pipeline = Some(dc.pipeline);
+                drop(skin_pos);
+                queue.write_buffer(&self.uniform, 0, bytemuck::cast_slice(&staged));
+                self.staged = staged;
+            }
+            pass.set_bind_group(0, &self.uniform_bg, &[]);
+            if let Some(b) = self.batch.as_mut() {
+                // batch-draws: every texture is bound at once, so only a pipeline change splits the
+                // stream; each run of equal pipelines (in the draw order — the blend order is kept) is
+                // ONE indirect multi-draw whose per-draw first_instance selects the uniform slot.
+                pass.set_bind_group(1, &b.bg, &[]);
+                b.args.clear();
+                for (j, &(_, _, k)) in self.order.iter().enumerate() {
+                    let dc = &self.draws[k];
+                    b.args.extend_from_slice(&[dc.count, 1, dc.first, 0, j as u32 + 1]);
                 }
-                pass.set_bind_group(0, uniform, &[off]);
-                let (first_bg, n_frames, rate) = self.tex_frames[dc.tex];
-                pass.set_bind_group(1, &self.tex_bgs[first_bg + ((ticks / rate) % n_frames) as usize], &[]);
-                pass.draw_indexed(first..first + count, 0, 0..1);
+                if !b.args.is_empty() { queue.write_buffer(&b.indirect, 0, bytemuck::cast_slice(&b.args)); }
+                let mut start = 0usize;
+                while start < self.order.len() {
+                    let pl = self.draws[self.order[start].2].pipeline;
+                    let mut end = start + 1;
+                    while end < self.order.len() && self.draws[self.order[end].2].pipeline == pl { end += 1; }
+                    pass.set_pipeline(&self.pipelines[pl].1);
+                    pass.multi_draw_indexed_indirect(&b.indirect, start as u64 * 20, (end - start) as u32);
+                    if trace { __pipe_sw += 1; }
+                    start = end;
+                }
+                if trace { submitted = self.order.len(); }
+            } else {
+                for (j, &(_, _, k)) in self.order.iter().enumerate() {
+                    let dc = self.draws[k];
+                    if trace { submitted += 1; }
+                    let (first, count) = (dc.first, dc.count);
+                    if trace && last_pipeline != Some(dc.pipeline) { __pipe_sw += 1; }
+                    if last_pipeline != Some(dc.pipeline) {
+                        pass.set_pipeline(&self.pipelines[dc.pipeline].1);
+                        last_pipeline = Some(dc.pipeline);
+                    }
+                    let (first_bg, n_frames, rate) = self.tex_frames[dc.tex];
+                    // frame-240: a texture bind only when it changes (the sort keeps a material's draws together).
+                    let tbg = first_bg + ((ticks / rate) % n_frames) as usize;
+                    if trace && last_tex != Some(tbg) { __tex_sw += 1; }
+                    if last_tex != Some(tbg) {
+                        pass.set_bind_group(1, &self.tex_bgs[tbg], &[]);
+                        last_tex = Some(tbg);
+                    }
+                    pass.draw_indexed(first..first + count, 0, (j as u32 + 1)..(j as u32 + 2));
+                }
             }
             if trace {
-                eprintln!("render: {submitted} draws submitted, {culled} frustum-culled, {cel_culled} cel-culled ({} total, {:.1}% skipped)",
+                eprintln!("render: pipe switches {__pipe_sw} tex switches {__tex_sw}; {submitted} draws submitted, {culled} frustum-culled, {cel_culled} cel-culled ({} total, {:.1}% skipped)",
                     submitted + culled + cel_culled, 100.0 * (culled + cel_culled) as f32 / (submitted + culled + cel_culled).max(1) as f32);
             }
             // `DrawDrops` runs after the fog pass, the alpha list and the shards.
             if ns > 0 {
                 pass.set_pipeline(&self.snow_pipeline);
-                pass.set_bind_group(0, &self.uniform_bg, &[0]);
-                pass.set_bind_group(1, &self.snow_bg, &[]);
+                pass.set_bind_group(0, &self.uniform_bg, &[]);
+                match self.batch.as_ref() { Some(b) => pass.set_bind_group(1, &b.bg, &[]), None => pass.set_bind_group(1, &self.snow_bg, &[]) }
                 pass.set_vertex_buffer(0, self.snow_vbuf.slice(..));
                 pass.set_vertex_buffer(1, self.snow_skin.slice(..));
                 pass.draw(0..ns as u32, 0..1);
@@ -1083,3 +1262,11 @@ mod shader_tests {
         assert!(!super::SHADER.contains("term / 128.0"), "the old 2× over-add must stay gone");
     }
 }
+
+/// The room/portal cull is ON for the MAP GEOMETRY only (cull-on, 2026-10-18; characters and items are
+/// never room-culled — the user's rule): Nightfire's maps overlap rooms in space and the portal walk is
+/// what keeps them apart — with it off, 07000011's stairwell drew a neighbouring room's
+/// brown wall slab straight across the corridor (the user's playtest F12s 003-005, "the map cutting
+/// into itself"). The walk is widened one portal (cull-relax) so a room being stepped into is never
+/// cut at the threshold. `NF_NOROOMCULL=1` turns it off (debug only).
+pub fn room_cull_enabled() -> bool { std::env::var_os("NF_NOROOMCULL").is_none() }

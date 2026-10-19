@@ -209,8 +209,12 @@ impl crate::drone::Drones {
             self.death.pane_on = true; // HUD_DisableAll + HUD_Enable(pane 12, 1, 0) [M 0x190bb0:23-25]
             self.death.script_time = 1.0; // AnimScriptInit 0x1c1600 (+0x90 = 1.0) on `AnimScriptAdd`
             self.death.events.clear();
-            self.channels.set(0x5e, 1, frame); // [M 0x190810:40]
-            self.music.event(6, 1);            // [M 0x190810:41] (once — the old port replayed it every tick)
+            // SP only: an MP death raises no 0x5e and no death sting [M 0x190810:39-42 — the
+            // `MPSettings._384_4_ == 0` arm; see Drones::mp_master].
+            if self.mp_master == 0 {
+                self.channels.set(0x5e, 1, frame); // [M 0x190810:40]
+                self.music.event(6, 1);            // [M 0x190810:41] (once — the old port replayed it every tick)
+            }
             self.bond_weapon = 0x47;           // Player_WeaponNone — the fists [M 0x190810:61]
             // The death sound 0x89 at Bond [M 0x190810:88].
             if let Some(t) = d.sfx { self.play_sound(bond, t.get(0x89)); }
@@ -225,6 +229,9 @@ impl crate::drone::Drones {
         // and nothing gates the anim afterwards (ch 0x62 / the menu do not stop it).
         self.death_script_events(d, bond);
         if !self.death.covered && self.death.ticks >= RED_FADE_TICKS { self.death.covered = true; }
+        // MP: no ch 0x62 / fail menu — `Player_HandleDeath`'s MP arm only waits out the 5 s and
+        // respawns (`Sim::step_mp_death_respawn`) [M 0x190bb0:20 (`_384_4_ == 0` = the SP arm), 37-54].
+        if self.mp_master != 0 { return; }
         if self.death.ch62 { return; } // raised once — the menu path takes over from here
         if self.death.covered || self.bond_fire {
             self.death.ch62 = true;

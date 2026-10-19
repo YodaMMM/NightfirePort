@@ -276,6 +276,9 @@ pub struct DroneContext {
     pub level_id: u32,
     /// net-match-host: the online match's lockstep seed (0 = the pre-net constant, local play).
     pub mp_seed: u32,
+    /// The MP bodies: one skin hashcode per player slot (0..4 humans, 4..8 bots; 0 = none) —
+    /// `nf_game::mp::slot_skin` of the match settings.
+    pub mp_body_skins: [u32; 8],
     pub weapons: Option<nf_formats::weapon::WeaponData>,
     pub props: Option<nf_formats::drone::PropertyTables>,
     /// The level's tuning (`ReadTuningVars` applied), hit boxes and sound hearing data.
@@ -286,6 +289,12 @@ pub struct DroneContext {
     pub voices: Option<Vec<nf_formats::sfx::VoiceLine>>,
     /// The HUD's sprite tables and font (docs/systems/hud.md).
     pub hud: Option<nf_formats::hud::HudTables>,
+    /// mp-character-data: the `MP_skins` per-character table (ACTION.ELF 0x26d488, 29 × 0x10) [D].
+    /// Only the MP body build and the pose consume it.
+    pub mp_skins: Option<nf_formats::mpanim::MpSkins>,
+    /// mp-character-data: the 16 animation-set descriptors (ACTION.ELF 0x2b91b0..0x2b9430) [D] —
+    /// the ids `mp_body_pose` returns.
+    pub mp_anims: Option<nf_formats::mpanim::MpAnimSets>,
 }
 
 /// The running game simulation (nf-game): drones plus the data they consult, and which character mesh shows which
@@ -353,6 +362,23 @@ pub struct Sim {
     /// panels are four `Player_Init` objects; the port keeps one full local machine (the
     /// weapons/view path) and ticks the remotes' movement through the same `Bond::tick_ctx`.
     pub mp_bonds: [Option<nf_game::player::Bond>; 4],
+    /// The slot this machine plays (its body is the camera, never drawn) — `swap_local_slot` sets it.
+    pub mp_local_slot: usize,
+    /// Draw-only: each MP slot's horizontal speed (units/s) over the last tick, from its position
+    /// change — the body's idle/walk/run pick (never hashed, never read by the sim).
+    pub mp_body_speed: [f32; 8],
+    /// Online (700v6): this machine's PRIVATE generator. In an online match the shared bit-exact
+    /// stream (`drones.rng`, hashed) is drawn only by the parts every machine runs identically —
+    /// the MP rules, the bots and the per-slot MP combat; the local player's own tick (view model,
+    /// its bullets' spread / impacts / effects) runs on this one, so one machine's firing can no
+    /// longer desync the match [S port design — the PS2 had no online play]. None = offline.
+    pub net_rng: Option<nf_game::drone::Rng>,
+    net_rng_shared: Option<nf_game::drone::Rng>,
+    /// Online combat (700v6): each human slot's health, and the ticks since its death (0 = alive).
+    pub mp_hp: [f32; 4],
+    pub mp_dead_ticks: [u32; 4],
+    /// Each human slot's held weapon (the session's `Input::held`; the local slot reads `gun.weapon`).
+    pub mp_held: [u8; 8],
     /// Aim mode's cursor (`BL+0x118 / +0x11C`) and its smoothed copy (`+0x120 / +0x124`), −1…1 across half the screen.
     pub cursor: [f32; 2],
     pub cross: [f32; 2],
@@ -445,6 +471,12 @@ pub struct Sim {
     /// `Some(true)` = the aim ray met a live guard within weapon_data+0x1c (the shot spawns and the
     /// taser beam draws), `Some(false)` = no target (no bullet, no beam), `None` = not holding fire.
     pub stunner_target: Option<bool>,
+    /// The Q-Decryptor's gate pick this tick — the lock index the use gate passed on
+    /// [M Player_WeaponFiring 0x1a5460:551-578], `None` = the gate failed (or no decryptor out).
+    pub decryptor_target: Option<usize>,
+    /// The lock the previous tick's decryptor shot scanned (the decay's skip marker —
+    /// docs/systems/decryptor.md's port model).
+    pub decryptor_scanned: Option<usize>,
     /// The laser watch's held-meter charge, 0–100 [S stand-in; M HUD_UpdateAmmoPane 0x19a7f0:160-176
     /// — the state-0xb pane reads a 0–100 value, not the clip percent; D the measured ~31/s drain].
     pub laser_charge: f32,
@@ -528,6 +560,8 @@ pub struct Sim {
     pub view_model_chars: Vec<usize>,
     /// fix-render3: the `ambient_at` call counter (a test guard for the posed-vertices hoist).
     pub ambient_lookups: std::cell::Cell<usize>,
+    /// light-sun: BLData+0x962 — Bond's head sees the sun this tick (`ramp_char_ambient`).
+    pub sun_seen: bool,
     /// The language string table (`USATxt.dat`, the NTSC-U default `FNames[SelLang]`) — the source of the
     /// HUD's label text (`Txt_BindLabel` 0x1cad60). Loaded in `nf_view::load`.
     pub lang: Option<nf_formats::hud::Lang>,
@@ -1763,9 +1797,24 @@ impl Sim {
 
     /// One `Lights_CalcAmbientLight` pass over the characters: the view models follow Bond's cel, drone-backed
     /// characters their drone's cel, script characters their entity matrix; characters with none keep the value
-    /// snapped at build. The 0x10000 doubled targets (night vision, `glb_blokes+0x962`) are not ported — the
+    /// snapped at build. The 0x10000 doubled targets (`glb_blokes+0x962` = Bond sees the sun, light-sun) apply to the view models — the
     /// goggles are not in the port yet, so the flag can never set.
     pub fn ramp_char_ambient(&mut self) {
+        // light-sun: `HUD_UpdateLensFlarePane` 0x19d770:64-90 sets BLData+0x962 each frame when the
+        // `SunVector` is non-zero and the head → sun line of sight is clear; it is
+        // the gate of the 0x10000 doubled ambient below (the old note called it night vision — it is
+        // the "Bond sees the sun" flag: 1 at the 0700000c start [L PCSX2 BLData+0x962]).
+        let sv = self.drones.sun_vector;
+        self.sun_seen = sv != [0.0; 3] && {
+            let h = self.bond.head();
+            // `Collide_LineOfSight(head, head − SunVector, cel, obj, 0, 8)` [M 0x19d770:84-85]: mask
+            // 8 | 4 — bit 0x8 is the node-pass skip the bullet ray carries (`segment_bullet`'s class);
+            // the raw segment stopped on the 0700000c start's invisible boundary at y 40.
+            self.world.segment_surface_bullet(h, [h[0] - sv[0], h[1] - sv[1], h[2] - sv[2]]).is_none()
+        };
+        // The view model shares Bond's linked cel (obj+0x20 — the same cel on both objects at the
+        // 0700000c start [L PCSX2]); `Lights_CalcAmbientLight` reads THAT cel, not a fresh bbox find.
+        let bond_room = self.bond.cel.and_then(|cell| self.room_cell.iter().position(|c| *c == Some(cell)));
         // Positions first (the borrow of `self` ends before the mutable ambient walk).
         let positions: Vec<Option<[f32; 3]>> = (0..self.char_ambient.len()).map(|ci| {
             if self.view_model_chars.contains(&ci) {
@@ -1778,7 +1827,21 @@ impl Sim {
                 self.characters_script_pos(ci)
             }
         }).collect();
-        let targets: Vec<Option<[u8; 3]>> = positions.iter().map(|p| p.and_then(|p| self.ambient_at(p))).collect();
+        let mut targets: Vec<Option<[u8; 3]>> = positions.iter().map(|p| p.and_then(|p| self.ambient_at(p))).collect();
+        for &vm in &self.view_model_chars {
+            let Some(t) = targets.get_mut(vm) else { continue };
+            if let Some(r) = bond_room {
+                let c = &self.cels[r];
+                let off = *self.drones.channels.v.get(c.zone as usize).unwrap_or(&0);
+                *t = Some(c.ambient[(off as usize).min(1)]);
+            }
+            // The 0x10000 doubled target [M 0x1cb178:20-35, each byte ×2 clamped to 0xff]: the view
+            // model's flags word carries it (obj+0xF0 = 0x1a8a0 at the 0700000c start [L PCSX2]; Bond's
+            // own body 0x880 does not).
+            if self.sun_seen {
+                if let Some(a) = t.as_mut() { for k in 0..3 { a[k] = (a[k] as u32 * 2).min(0xff) as u8; } }
+            }
+        }
         for (ci, amb) in self.char_ambient.iter_mut().enumerate() {
             let Some(target) = targets[ci] else { continue };
             if *amb == [0xff, 0xff, 0xff] {
@@ -1932,15 +1995,25 @@ impl Sim {
             // reads the live `obj+0x30` per comparison [M 0x185098:123-129]) — the net path set
             // these per tick already; the local path never did, so the spawn policy and the rules
             // saw the load-time positions.
-            m.set_slot(0, self.bond.pos);
-            for slot in 1..4 {
-                if let Some(b) = &self.mp_bonds[slot] { m.set_slot(slot, b.pos); }
+            // By SLOT: the local body is `bond` at `mp_local_slot`, the others `mp_bonds` — a joiner
+            // (local slot 1..3) wrote its own position into slot 0 here, so the match's rules and
+            // the spawn picker saw a different world on every client mid-tick (the late join's
+            // spawn pick diverged on the other client: the three-window check's desync).
+            let local = self.mp_local_slot;
+            for slot in 0..4 {
+                let b = if slot == local { Some(&self.bond) } else { self.mp_bonds[slot].as_ref() };
+                if let Some(b) = b { m.set_slot(slot, b.pos); }
             }
         }
         // mp-bots-in-match: the bots' per-frame driver — the game's `BOT_update` 0x126448 family
         // runs per frame inside the MP flow (the brains + the firing pipeline + respawn/score
         // bookkeeping), exactly like the port's `MP_Update` block above.
         self.step_mp_bots();
+        // 700v6: online, the rest of the tick (the local player's own pipeline and its effects)
+        // draws this machine's private generator; the shared one comes back at the tick's end.
+        if let Some(r) = self.net_rng.take() {
+            self.net_rng_shared = Some(std::mem::replace(&mut self.drones.rng, r));
+        }
         // `Game_Run` 0x1c9790:33 runs `Light_Update` before the object movement each tick (fix-lighting):
         // lifetimes (the muzzle light of the previous tick dies here), the script-channel gate and the
         // flicker state machine. The flicker's RNG re-seeds ride the shared generator before this tick's draws.
@@ -2015,6 +2088,18 @@ impl Sim {
         }
         self.laser_beam = None;
         self.stunner_target = None;
+        self.decryptor_target = None;
+        // The decrypt scan's decay [M Lock_Update 0x1ae3d8:327-344]: a lock in state 5 with NO
+        // contact bullet loses 4/tick (at 0 the scan resets). The port's scan contact runs on the
+        // shot tick (the fire block below), so the locks not scanned in the PREVIOUS tick decay
+        // here — one-tick-late at the release edge [S].
+        let scanned_prev = self.decryptor_scanned.take();
+        for (i, l) in self.drones.locks.iter_mut().enumerate() {
+            if l.scanning && scanned_prev != Some(i) {
+                let ch = &mut self.drones.channels;
+                l.decrypt_tick(0, false, ch, self.drones.frame);
+            }
+        }
         self.smoke.retain(|s| !s.dead());
         let (trigger, reload) = if self.disabled { input = Default::default(); (false, false) } else { (trigger, reload) };
         // fix-death-restart: a dead Bond gets no input — `Player_Update` 0x193600 runs only the anim
@@ -2024,6 +2109,15 @@ impl Sim {
         let menu_pause = self.drones.fail_menu_open();
         self.drones.bond_fire = trigger && !menu_pause;
         let (mut input, trigger, reload, use_key) = if self.drones.death.active || menu_pause {
+            (Default::default(), false, false, false)
+        } else { (input, trigger, reload, use_key) };
+        // gunimp: while a mounted gun owns the player (`GunImp_Activate` 0x132f00 — the 0xc
+        // substate, cam mode 0xe, `Player_Disable(player, 1)`, `Player_WeaponNone`), the imp reads
+        // the raw stick and the fire action; the use key is the dismount action 0xe
+        // [M `GunImp_Update` 0x1320d8:119-131]. Bond stands — the port zeroes his input for the
+        // rest of the tick (the game's disabled player runs only the imp).
+        let (mut input, trigger, reload, use_key) = if self.drones.props.gunimps.iter().any(|g| g.active) {
+            self.drones.gunimp_tick(&self.weapons, input.look, input.turn, trigger || input.fire, use_key);
             (Default::default(), false, false, false)
         } else { (input, trigger, reload, use_key) };
         // fix-aim-raise: the aim BIT, not the raw button — a raise-script weapon defers it to the
@@ -2316,7 +2410,19 @@ impl Sim {
             let water = bond_cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
                 .map(|r| self.cels[r].water).filter(|w| *w > -400.0);
             let sink = input.crouch;
-            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false };
+            // The pick capsule's straddle set [M Collide_StraddleCels 0x1eac98 runs on the pick's
+            // HITTEST; Collide_Pick 0x1eb320:125-134 scopes the candidates to its cels]: the BFS
+            // from the player's runtime cel (obj+0x20 — the same stateful one-tick-stale link the
+            // game reads) through the portals the current substate's pick arm capsule touches
+            // (`Bond::pick_arm`'s segment + radius, anchored at the last integrated pre-push-out
+            // spot [S: the game builds the HITTEST at THIS tick's integrated position — one tick
+            // apart at most; the portal walk's own permissiveness covers the difference]).
+            let (ao, bo, ar) = nf_game::player::pick_arm(self.bond.substate, self.bond.crouched, self.bond.cc);
+            let pc = self.bond.pre_collide;
+            let straddle_cells = bond_cel
+                .map(|c| self.world.debug_straddle(c, [pc[0], pc[1] + ao, pc[2]], [pc[0], pc[1] + bo, pc[2]], ar))
+                .unwrap_or_default();
+            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells };
             // The third-icon context [M ThirdIcon_Update 0x196e80 + Player_CollisionHandler 0x1949a8:22]:
             // the tick starts with +0x95F = 0xFF (none), then every ENABLED icon (its param-1 channel on,
             // or param 1 == 0 = always [M ThirdIcon_Create 0x197070:27-32]) whose straddle-cel set holds
@@ -2719,6 +2825,9 @@ impl Sim {
             }
         }
         self.first_person = !self.disabled;
+        if let Some(shared) = self.net_rng_shared.take() {
+            self.net_rng = Some(std::mem::replace(&mut self.drones.rng, shared));
+        }
     }
 
     /// drive-ptp: the ACTION→DRIVING handover for a `0x0730xxxx` interlude — the port of
@@ -3649,6 +3758,42 @@ impl Sim {
             }
             if release {
                 'shot: {
+                // The Q-Decryptor's use tick [M Player_WeaponFiring 0x1a5460:551-578]: the gate runs
+                // BEFORE `Player_RoundToFire` — the aim target (the 50-unit crosshair ray's first
+                // hit, `Check_Target` 0x1a7810) must be a lock (type 0x3a) of record kind 0/2 in
+                // state 0/5, within the weapon's own `weapon_data+0x1C` (2.0/4.0 [L]); else the
+                // function returns and the decryptor does NOTHING — the playtest 1017 symptom. On
+                // the pass the shot runs (the scan bullet, class 5 [M Bullet_init 0x12c5a0:87]) and
+                // `Lock_Update`'s contact scan decodes (docs/systems/decryptor.md). The port's
+                // stand-in: the pick below, then one +1/+3 scan tick [S — one contact bullet; the
+                // game's count varies with the bullet lifetime]. The spend `update_with` already
+                // made is refunded on a FAILED gate (the game never reaches the spend; the refund is
+                // the stunner's miss-arm shape [M 0x1a4bf0:193-199]). No bullet spawns: the record
+                // carries no beam bits (+0x6C = 0 [L]) and the lock side consumes the pulse.
+                if nf_game::gadget::is_decryptor(self.gun.weapon) {
+                    let range = self.weapons.records.get(self.gun.weapon as usize).map_or(2.0, |r| f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap()));
+                    let upgraded = self.gun.weapon == 0x57;
+                    let root = self.bond.pos;
+                    // Check_Target's ray is the VIEW matrix's dir, not the fired bullet's aim point —
+                    // no auto-aim offsets ride on it [M 0x1a7810:117-121 Mat_GetDir of the head
+                    // matrix vs Player_GetAimingPoint's offsets in the bullet path].
+                    let vdir = self.bond.look();
+                    let pick = nf_game::gadget::pick_decryptor_lock(camera, vdir, root, &self.drones.locks, &self.world, range);
+                    match pick {
+                        Some(i) => {
+                            let frame = self.drones.frame + 1;
+                            self.drones.locks[i].decrypt_tick(1, upgraded, &mut self.drones.channels, frame);
+                            self.decryptor_scanned = Some(i);
+                            self.decryptor_target = Some(i);
+                        }
+                        None => {
+                            let clip_size = self.weapons.clip_size(self.gun.weapon as usize).max(1) as u32;
+                            let spend = u32::from(self.weapons.records.get(self.gun.weapon as usize).map_or(1u8, |r| r[0x91]).max(1));
+                            self.gun.clip = (self.gun.clip + spend).min(clip_size);
+                        }
+                    }
+                    break 'shot;
+                }
                 // `Player_WeaponInitBullet` 0x1a4bf0's FIRST branch [M disasm 0x1a4c30-0x1a4cd4]: a record
                 // whose +0x68 carries 0x20000 — the Remote Mine's detonator 0x38 (+0x68 = 0x00020010
                 // [L ee_start_05.bin]; the mine 0x37 = 0x00014090 lacks the bit; 0x39 is the inert
@@ -4067,6 +4212,26 @@ impl Sim {
                 self.drones.channels = ch;
                 if hit { eprintln!("[ss] SS #{i} (placement {}) activated by the use key", self.drones.sss.list[i].placement); }
             }
+            // `Player_Activate` 0x1a5170's class walk also reaches class 0x47 — the mounted guns
+            // (`GunImp_Create` 0x131f20, `GunImp_Activate` 0x132f00). The same head-ray reach
+            // shape as the SS arm (the game's pick is one head-ray class walk; the port's 2.2 is
+            // the SS arm's reach stand-in).
+            let mut gbest: Option<(f32, usize)> = None;
+            for (i, g) in self.drones.props.gunimps.iter().enumerate() {
+                if g.active { continue; }
+                let to = [g.pos[0] - head[0], g.pos[1] - head[1], g.pos[2] - head[2]];
+                let proj = to[0] * look[0] + to[1] * look[1] + to[2] * look[2];
+                if proj < 0.0 { continue; }
+                let cl = [head[0] + look[0] * proj, head[1] + look[1] * proj, head[2] + look[2] * proj];
+                let dd = ((g.pos[0] - cl[0]).powi(2) + (g.pos[1] - cl[1]).powi(2) + (g.pos[2] - cl[2]).powi(2)).sqrt();
+                if dd > 2.2 { continue; }
+                if gbest.map_or(true, |(bd, _)| dd < bd) { gbest = Some((dd, i)); }
+            }
+            if let Some((_, i)) = gbest {
+                let placement = self.drones.props.gunimps[i].placement;
+                self.drones.gunimp_activate(i);
+                eprintln!("[gunimp] #{i} (placement {placement}) mounted — GunImp_Activate 0x132f00");
+            }
             }
         }
         // `Check_Target` (0x1a7810, every 6th frame — `GameState+0x52 % 6`): Bond's 50-unit view ray (mask
@@ -4121,7 +4286,8 @@ impl Sim {
         // respawns (`Player_HandleDeath` 0x190bb0:41-54 → `MP_ReSpawn` 0x185368).
         let mp_death_was_active = self.drones.death.active;
         self.drones.tick(&d, &player);
-        self.step_mp_death_respawn(mp_death_was_active);
+        // Online, death + respawn belong to the per-slot MP combat (every machine, shared stream).
+        if self.net_rng.is_none() && self.net_rng_shared.is_none() { self.step_mp_death_respawn(mp_death_was_active); }
         // fix-script-objects: the script-created AI volumes (`Drone_AIVolume_Create` 0x1376c0 via
         // `Script_CreateEntity` 0x1d8968's 0xF5 arm) join the level's volume list the tick their
         // script creates them (the game's `LList_Add` 0x2706c8 registration), and their matrix
@@ -4469,6 +4635,16 @@ impl Sim {
     /// "no" mark on a non-enemy target (`Check_Target` 0x1a7810:181-182). fix-player2.
     pub fn crosshair_state(&self) -> u8 { self.cross_state }
 
+    /// The decryptor's scan state for the draw code (the watch face, `Player_WeaponFiring`
+    /// 0x1a5460:155-194): the scanning lock's index, progress (`obj+0xf6`, the +1/+3 accumulator)
+    /// and solved digit count (`DAT_002a37e3`) — `None` when no scan runs. The unsolved digits'
+    /// randomization is the game's `Rand_Rand(10)` cosmetic [M 0x1ae3d8:351-363] — the port does
+    /// not draw it (no RNG draws added; the main agent's render compares against PCSX2).
+    pub fn decryptor_scan(&self) -> Option<(usize, u32, u8)> {
+        self.drones.locks.iter().position(|l| l.scanning)
+            .map(|i| (i, self.drones.locks[i].scan_progress, self.drones.locks[i].scan_solved))
+    }
+
     /// The held weapon's laser sight this tick — the getter the draw code reads. The tuple is
     /// (beam start = the FP model's bone-4 sight datum, beam end = the aim-trace hit or the far
     /// end, dot = Some((pos, normal)) when the trace met a surface) [M Player_LaserPointer
@@ -4778,9 +4954,46 @@ pub const NPC_POOL: usize = 3;
 #[derive(Clone)]
 pub struct NpcSlot { pub key: [u32; 3], pub skin: u32, pub params: Vec<(u32, u32)>, pub chars: Vec<usize> }
 
+/// One MP body (mp-character-data): the third-person character one MP slot drives — a human
+/// (slots 0..3) or a bot (4..7). The data is the game's own tables: `Player_Init` 0x1910f8 builds
+/// the body's anim object from `MP_skins[MPSettings+slot*0x30+0x24]` [M 0x1910f8:108-117] and the
+/// body runs the descriptor set `PlayerAnimSetInitNormal`/`InitCrouch` pick per weapon class
+/// [M 0x18fcd8/0x18fea0]. Parked hidden (the meshes sit at the sentinel translation, below the
+/// world) until the draw moves them — `frame_state_for`'s hidden pass skips a parked body.
+pub struct MpBody {
+    /// The MP slot (0..3 human, 4..7 bot).
+    pub slot: usize,
+    /// `MPSettings+slot*0x30+0x24`: the MP character index (the `MP_skins` row).
+    pub char_index: u32,
+    /// `MP_skins[char_index]+0x00`: the skin (anim object) hash [M 0x1913d4].
+    pub skin: u32,
+    /// `MP_skins[char_index]+0x04`: the skin's DATA file hash [M 0x120ca0].
+    pub file: u32,
+    /// `MP_skins[char_index]+0x08`: the sleeve variant (→ `BLData+0x965`, the first-person arms
+    /// when this slot is the local view) [M 0x1913e0].
+    pub sleeve: u32,
+    /// The skin's skeleton id — `Scene::sequences`' bucket key and `mp_body_pose`'s draw filter.
+    pub skeleton: u8,
+    /// The parked characters (one per main mesh, in the skin's `main` order) — hidden until the
+    /// draw moves their matrices.
+    pub chars: Vec<usize>,
+    /// The body's sequence set: every anim SCRIPT id the descriptors/transitions/death can put on
+    /// the body (`MpAnimSets::all_body_scripts`) resolved through the arena's kind-5 scripts →
+    /// `(first script frame, last script frame, index into Scene::sequences[skeleton])` — the
+    /// `StartAnim` resolution. Scripts the arena doesn't carry are absent.
+    pub scripts: HashMap<u32, Vec<(u16, u16, usize)>>,
+}
+
 pub struct Scene {
     /// Hidden NPC copies the dev panel can bring to life (`dev::spawn_npc`).
     pub npc_pool: Vec<NpcSlot>,
+    /// The MP bodies (mp-character-data), one per human slot and per bot — parked hidden until the
+    /// draw moves them (mp-character-data's loader API; the pose comes from
+    /// `nf_formats::mpanim::mp_body_pose` over `sim.mp`'s live slots).
+    pub mp_char_bodies: Vec<MpBody>,
+    /// mp-character-data: the animation-set descriptors (ACTION.ELF 0x2b91b0) the drawn MP bodies
+    /// pick their script from each frame (`nf_formats::mpanim::mp_body_pose`).
+    pub mp_anim_sets: Option<nf_formats::mpanim::MpAnimSets>,
     /// The level's room cels (`parse_room_cels`), kept for the static-draw cel cull
     /// (`View_AddCels` 0x1e6ba0 frustum-tests each cel's bbox; `cel_sphere`/`cel_index_at`).
     pub cels: Vec<Cel>,
@@ -4795,6 +5008,10 @@ pub struct Scene {
     /// weapon id, built at scene build time. The active one is selected each frame in `animate` from
     /// `sim.gun.weapon`.
     pub view_models: HashMap<u8, usize>,
+    /// The MP bodies: (player slot, character index) — see `Scene::build`'s MP-body block.
+    pub mp_bodies: Vec<(usize, usize)>,
+    /// The MP bodies' weapon attachments: attachment index → (slot, weapon id).
+    pub mp_body_weapons: HashMap<u32, (usize, u8)>,
     /// The snow flake texture (`DrawDrops`: 0x03000045).
     pub snow_texture: Option<TextureImage>,
     /// Streamed effects: `STREAMS.LUT` entries and `STREAMS.BIN` (set by the loader).
@@ -5292,11 +5509,20 @@ impl Scene {
         let flash = if h.flashbang <= 0.0 || h.flash_total <= 0.0 { 0.0 }
             else if h.flashbang > h.flash_total * 0.5 { h.flash_alpha }
             else { h.flash_alpha * (h.flashbang / (h.flash_total * 0.5)) };
-        crate::hud::script_overlay(sim.drones.view_fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash)
+        // level-exit-fade: the exit hold rides the same overlay as the script fade — in the game
+        // BOTH are the viewer's fade object (`Game_Draw` 0x1e6f50:203-209 draws one
+        // `psiFadeView(R+0x230, G+0x231, B+0x232, A+0x233)` per viewer), and `GameFlow_PushState`
+        // ABORTS a push while a fade is already in flight [M 0x1c9f88 `beqz $v0` → no push], so
+        // the two can never run at once: `view_fade` wins when a script owns the fade, the exit
+        // hold otherwise.
+        let fade = sim.drones.view_fade.or_else(|| sim.drones.exit_fade_view());
+        crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash)
     }
 
     /// `skeletons`: every skeleton on the disc by id; `sequences`: the level's animation archive, grouped by skeleton.
-    pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, sequences: HashMap<u8, Vec<Sequence>>, drones: Option<&DroneContext>, difficulty: u32) -> Scene {
+    /// `mp`: the MP match settings on an MP load (`--mp`/net) — the body slots the scene parks
+    /// (mp-character-data); `None` on every campaign load (no bodies).
+    pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, sequences: HashMap<u8, Vec<Sequence>>, drones: Option<&DroneContext>, difficulty: u32, mp: Option<&nf_game::mp::MpSettings>) -> Scene {
         let mut t = std::time::Instant::now();
         // cross-process-determinism: the buckets are walked in ASCENDING skeleton id, not HashMap
         // order — a hashcode present under two buckets resolves to the highest-id bucket's entry
@@ -5653,6 +5879,76 @@ impl Scene {
                 }
             }
         }
+        // mp-character-data: the MP bodies — one per human slot and per bot, parked hidden. The
+        // game builds each slot's body at `Player_Init`/`BOT_init` from `MP_skins[settings skin]`
+        // [M 0x1910f8:108-117, 0x1249e8:100]; every MP arena's map pack carries ALL 29 skins +
+        // their data files (the load-time `MP_NeedSkin`/`MP_NeedFile` filter picks the selected
+        // ones — 0x1c block discard 0x1d12e8 / skin gate 0x1bdf40), so the arena archive the port
+        // parsed IS the source; nothing to merge (the G-021 session pattern has no MP gap: the
+        // game loads no other archive for MP characters — `MP_PostLoad_Init` 0x183718 inits the
+        // game-mode objects, no loads [M]).
+        let mut mp_char_bodies: Vec<MpBody> = Vec::new();
+        // The 16 descriptors for the draw's per-frame pick (`mp_body_pose`).
+        let mp_anim_sets = drones.and_then(|d| d.mp_anims.as_ref()).map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets });
+        if let (Some(mp_set), Some(d)) = (mp, drones) {
+            if let (Some(skins), Some(anim_sets)) = (d.mp_skins.as_ref(), d.mp_anims.as_ref()) {
+                let humans = (mp_set.human_count as usize).clamp(1, 4);
+                let bots = (mp_set.bot_count as usize).min(4);
+                let mut slot_ids: Vec<usize> = (0..humans).collect();
+                slot_ids.extend(4..4 + bots);
+                for slot in slot_ids {
+                    let char_idx = mp_set.players[slot].skin as usize;
+                    let Some(entry) = skins.entries.get(char_idx) else {
+                        eprintln!("mp body: slot {slot} character index {char_idx} is outside MP_skins (29 entries) — no body");
+                        continue;
+                    };
+                    let Some(skin) = level.skins.get(&entry.skin) else {
+                        eprintln!("mp body: slot {slot} skin {:08x} is not in this arena's archive", entry.skin);
+                        continue;
+                    };
+                    let Some(skeleton) = skeletons.get(&skin.skeleton) else {
+                        eprintln!("mp body: slot {slot} skin {:08x} skeleton {} not on the disc", entry.skin, skin.skeleton);
+                        continue;
+                    };
+                    // The parked translation: the NPC-pool sentinel scale (y <= -999_000.0), one
+                    // x-slot per body so the draw can tell them apart until it moves them.
+                    let tr = [-1.0e6 - slot as f32, -1.0e6, -1.0e6];
+                    let matrix = nf_formats::placement::object_matrix([0.0, 0.0, 0.0], tr);
+                    let placement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
+                    let mut chars = Vec::new();
+                    for mh in skin.main.iter().flatten() {
+                        let Some(&(map, object)) = level.by_hash.get(mh) else { continue };
+                        let obj = &level.maps[map].objects[object];
+                        if !obj.gfx.is_skinned() || skin.inverse_bind.is_empty() { continue; }
+                        let mut p2 = placement.clone();
+                        p2.translation = tr;
+                        p2.params = vec![(0, entry.skin)];
+                        let inst = Instance { map, object, matrix, placement: p2 };
+                        add_instance(level, &inst, Layer::Character, Some((characters.len() as u32, None)), &mut groups, Some(&mut bounds), None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        let morph_of_main = skin.main.iter().flatten()
+                            .filter_map(|mh2| level.by_hash.get(mh2).and_then(|&(m2, o2)| level.maps[m2].objects[o2].morph_targets.clone()))
+                            .next();
+                        characters.push(Character { matrix, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones: obj.gfx.slot_bones.clone(), start: None, role: drone::SpawnRole::Placed, floor: None, script: None, morph_targets: obj.morph_targets.clone().or(morph_of_main) });
+                        chars.push(characters.len() - 1);
+                    }
+                    if chars.is_empty() {
+                        eprintln!("mp body: slot {slot} skin {:08x} has no drawable main mesh in this arena", entry.skin);
+                        continue;
+                    }
+                    // The body's sequence set: every script id the pose can return, resolved
+                    // through the arena's kind-5 scripts (the StartAnim resolution).
+                    let mut body_scripts = HashMap::new();
+                    for id in anim_sets.all_body_scripts() {
+                        let Some(script) = d.scripts.get(&id) else { continue };
+                        let seqs = script.sequences()
+                            .filter_map(|(a, b, q)| by_hash.get(&q).filter(|(sk, _)| *sk == skin.skeleton).map(|&(_, i)| (a, b, i))).collect();
+                        body_scripts.insert(id, seqs);
+                    }
+                    mp_char_bodies.push(MpBody { slot, char_index: char_idx as u32, skin: entry.skin, file: entry.file, sleeve: entry.sleeve, skeleton: skin.skeleton, chars, scripts: body_scripts });
+                }
+                eprintln!("mp bodies: {} parked ({} humans, {} bots)", mp_char_bodies.len(), humans, bots);
+            }
+        }
         // The first-person gun models: one character per owned weapon with a first-person skin (`weapon_data+0xDC`),
         // drawn with a sleeve mesh and rigid parts on their bones. The active one is selected each frame
         // in `animate` from `sim.gun.weapon`. The P2K (weapon 2) is always first; others follow the owned list [M].
@@ -5760,6 +6056,55 @@ impl Scene {
                 }
                 characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones: level.maps[map].objects[object].gfx.slot_bones.clone(), start: None, role: drone::SpawnRole::Placed, floor: None, script: None , morph_targets: None });
                 view_models.insert(wid, ci as usize);
+            }
+        }
+        // MP bodies (the user's two-window check: "they cant see eachother"): one character per used
+        // player slot with the slot's `MP_skins` body [M Player_Init 0x1910f8:111], parked at the origin
+        // and posed each frame from the slot's movement (`Scene::mp_body_state`).
+        let mut mp_bodies: Vec<(usize, usize)> = Vec::new();
+        let mut mp_body_weapons: HashMap<u32, (usize, u8)> = HashMap::new();
+        if let Some(d) = drones {
+            let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
+            let placement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
+            for (slot, &sh) in d.mp_body_skins.iter().enumerate() {
+                if sh == 0 { continue; }
+                let (Some(skin), Some(skeleton)) = (level.skins.get(&sh), level.skins.get(&sh).and_then(|k| skeletons.get(&k.skeleton))) else { continue };
+                let ci = characters.len() as u32;
+                let mut slot_bones = Vec::new();
+                let mut morph = None;
+                for &mh in skin.main.iter().flatten() {
+                    let Some(&(map, object)) = level.by_hash.get(&mh) else { continue };
+                    let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
+                    add_instance(level, &inst, Layer::Character, Some((ci, None)), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    slot_bones = level.maps[map].objects[object].gfx.slot_bones.clone();
+                    morph = level.maps[map].objects[object].morph_targets.clone();
+                }
+                for &(bone, part) in &skin.extra {
+                    let Some(&(map, object)) = part.and_then(|ph| level.by_hash.get(&ph)) else { continue };
+                    let pinst = Instance { map, object, matrix: ident, placement: placement.clone() };
+                    add_instance(level, &pinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+                }
+                characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones, start: None, role: drone::SpawnRole::Placed, floor: None, script: None, morph_targets: morph });
+                mp_bodies.push((slot, ci as usize));
+                // The held weapon (`AnimObjectDraw`): weapon_data[w]+0x80 on the datum +0x50 names, as a
+                // guard holds his (the drone block above) — one attachment per weapon the level carries,
+                // shown only while the slot holds it (`mp_body_weapons`).
+                if let Some(wd) = d.weapons.as_ref() {
+                    for w in 1u8..0x73 {
+                        let Some((mesh, datum_id)) = wd.third_person(w) else { continue };
+                        let datum_id = if datum_id == 0xff { 0 } else { datum_id as u32 };
+                        let Some(dt) = skin.datums.iter().find(|x| x.id == datum_id && x.bone >= 0) else { continue };
+                        let Some(&(map, object)) = level.by_hash.get(&mesh) else { continue };
+                        let winst = Instance { map, object, matrix: ident, placement: placement.clone() };
+                        add_instance(level, &winst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        mp_body_weapons.insert(attachments.len() as u32, (slot, w));
+                        attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+                    }
+                }
+            }
+            if d.mp_body_skins.iter().any(|&s| s != 0) {
+                eprintln!("mp: bodies {:?} (slot, character) from skins {:x?}", mp_bodies, d.mp_body_skins);
             }
         }
         // Script objects (docs/systems/script-player.md): every animation and drawn entity the main map's script players
@@ -6085,6 +6430,28 @@ impl Scene {
                     let sinst = Instance { map: m, object: o, matrix: ident, placement: splacement.clone() };
                     add_instance(level, &sinst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                     attachments.push(Attachment { character: 0, bone: 0, local: sinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((6, slot, DRONE_SCAN)), silencer: false, quiver_bolt: None });
+                }
+            }
+        }
+        // rain-drops: `DrawDrops` 0x18cb90 for DropType 1 [M disasm] — every live drop draws the
+        // rain-streak MESH 0x02000290 with an identity rotation translated to the drop (Mat_Identity,
+        // row 3 = DropVector, psiDrawObjectMatrix), and on 07000009..0700000b a second pass draws
+        // 0x02000039 per drop with the viewer's rotation (Mat_CopyRot viewer+0x1A0) under
+        // psiSetTweakARGB(36, 32, 32, 32). Effect kinds 7 / 8, one slot per drop (the rain cap is
+        // 0x80 on 09-0b, 0x40 elsewhere — 128 slots cover both [M InitDrops]).
+        // Only a rain level gets the pool: a SNOW_gen placement (type 0xDF) with DropType (param 0) = 1,
+        // the same placement `Drones` builds its weather from — elsewhere the 128 slots were dead weight.
+        let rains = level.maps.iter().flat_map(|m| m.placements.iter())
+            .any(|p| p.flags & 0xff == 0xdf && p.params.iter().find(|(i, _)| *i == 0).is_some_and(|&(_, v)| v as u8 == 1));
+        if drones.is_some() && rains {
+            for (kind, mesh) in [(7u8, 0x0200_0290u32)] {
+                let Some(&(m, o)) = level.by_hash.get(&mesh) else { continue };
+                let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
+                let rplacement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
+                for slot in 0..RAIN_SLOTS {
+                    let rinst = Instance { map: m, object: o, matrix: ident, placement: rplacement.clone() };
+                    add_instance(level, &rinst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    attachments.push(Attachment { character: 0, bone: 0, local: rinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((kind, slot, mesh)), silencer: false, quiver_bolt: None });
                 }
             }
         }
@@ -6535,6 +6902,38 @@ impl Scene {
             // the port has not ported (the next session's item, with the live check).
             let instances = level.instances(true).0;
             let mut world = nf_game::world::CollisionWorld::build_scoped(level, &instances, Some(scope_graph(&cel_graph)));
+            // The parse-wide cell counter replay of `parse_cel_graph` (sub-maps first, main last),
+            // paired with the `instances(true)` resolution so each pushed object (`stat.owners`'
+            // source, in push order) maps to its placement's OWN graph cell — replicating
+            // `build_scoped`'s push filter (collision present, not the 0x1000 missile flag).
+            let inst_cells: Vec<usize> = {
+                let main = level.main_map();
+                let mut v = Vec::new();
+                let mut cell_counter = 0usize;
+                for (mi, map) in level.maps.iter().enumerate() {
+                    for p in &map.placements {
+                        if !p.creates_cel() { continue; }
+                        if Some(mi) == main {
+                            let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < map.objects.len() { Some((mi, p.index as usize)) } else { None };
+                            if let Some((om, oi)) = target {
+                                let obj = &level.maps[om].objects[oi];
+                                if obj.collision.is_some() && obj.flags & 0x1000 == 0 { v.push(cell_counter); }
+                            }
+                        }
+                        cell_counter += 1;
+                    }
+                }
+                v
+            };
+            // The owner pick below measures each candidate room's OWN collision
+            // (`Collide_SphereIntersect` 0x1ec940 scoped to the room [M 0x1c9150]). `build_scoped`
+            // keys its buckets by push ordinal, which is not the graph cell index once sub-maps
+            // add cels first — the pick then measured other rooms' geometry: 07000002's bathhouse
+            // floor (generic placement 270) hung on the big room 13 instead of the bathhouse room
+            // [L 2026-10-17 fresh-boot snapshot: generic cel 0x17086f0 rides the +0x18 chain of room
+            // 0x17087b0, sphere (−38.15, 7.24, 7.97) r 6.11 = the port's cell 185], so the floor
+            // vanished through the doorway. Key the buckets by each object's own cell first.
+            world.attribute_scope(&inst_cells.iter().map(|&c| Some(c as u32)).collect::<Vec<_>>());
             // fix-portal4: the +0x18 chains hang by the game's build_FindCel (0x1c8cb0) owner pick
             // over each generic's sphere centre — needs the scoped world for the tie-break rays.
             build_chains(&mut cel_graph, Some(&world));
@@ -6552,35 +6951,14 @@ impl Scene {
             // (the outdoor room) stood [L ee_start_05.bin: the trench room's chain holds all 58
             // trench generics; the outdoor room's 41 hold none near it].
             {
-                let main = level.main_map();
                 let mut node_owner: Vec<Option<u32>> = vec![None; cel_graph.cells.len()];
                 for (o, ch) in cel_graph.chains.iter().enumerate() {
                     for &n in ch { if (n as usize) < node_owner.len() { node_owner[n as usize] = Some(o as u32); } }
                 }
-                // The parse-wide cell counter replay of `parse_cel_graph` (sub-maps first, main
-                // last), paired with the `instances(true)` resolution so the pushed-object index
-                // (`stat.owners`' source) maps to its placement's cell — replicating
-                // `build_scoped`'s push filter (collision present, not the 0x1000 missile flag).
-                let mut instance_cell: Vec<Option<u32>> = Vec::new();
-                let mut cell_counter = 0usize;
-                for (mi, map) in level.maps.iter().enumerate() {
-                    for p in &map.placements {
-                        if !p.creates_cel() { continue; }
-                        if Some(mi) == main {
-                            let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < map.objects.len() { Some((mi, p.index as usize)) } else { None };
-                            if let Some((om, oi)) = target {
-                                let obj = &level.maps[om].objects[oi];
-                                if obj.collision.is_some() && obj.flags & 0x1000 == 0 {
-                                    let c = cell_counter;
-                                    let f16 = cel_graph.cells.get(c).map(|n| n.flags & 0xffff).unwrap_or(0);
-                                    let owner = if matches!(f16, 0xc023 | 0xc047) { Some(c as u32) } else { node_owner.get(c).copied().flatten() };
-                                    instance_cell.push(owner);
-                                }
-                            }
-                        }
-                        cell_counter += 1;
-                    }
-                }
+                let instance_cell: Vec<Option<u32>> = inst_cells.iter().map(|&c| {
+                    let f16 = cel_graph.cells.get(c).map(|n| n.flags & 0xffff).unwrap_or(0);
+                    if matches!(f16, 0xc023 | 0xc047) { Some(c as u32) } else { node_owner.get(c).copied().flatten() }
+                }).collect();
                 world.attribute_scope(&instance_cell);
             }
             crate::phase_mark("b9a collision world + scope", t); let mut t9 = std::time::Instant::now();
@@ -6643,6 +7021,15 @@ impl Scene {
             // sphere comes from the placement's object glist bounds, like the game's
             // `Control_BuildWorldSph` 0x133070.
             let ladders = nf_game::ladder::all(level);
+            // The ladders' runtime cel link [M build_LinkToRoom 0x1c9680:
+            // build_FindCel(world-sphere centre) → control_link_object_to_cel] — the pick admits a
+            // ladder only from a straddled cel's chain [M Collide_Pick 0x1eb320:125-134], so the
+            // per-tick straddle set tests against THIS cel. Unresolved (None) = the game's
+            // unlinked object: never admitted while scoping is active.
+            let mut ladders = ladders;
+            for lad in ladders.iter_mut() {
+                lad.cell = world.find_cel(lad.centre).map(|c| c as u32);
+            }
             // Wires (`Wire_Create` 0x1981d8, placement type 0x3E): the level's zip wires, resolved
             // against their map objects like the ladders (fix-wire: the world sphere replaces the
             // hardcoded 4.0 length; the endpoints derive at grab time per the atlas).
@@ -6743,9 +7130,16 @@ impl Scene {
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), ambient_lookups: std::cell::Cell::new(0), lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [None, None, None, None],
-                wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, laser_charge: 100.0, missile_cam: None,
+            mp_local_slot: 0,
+            mp_body_speed: [0.0; 8],
+            net_rng: None,
+            net_rng_shared: None,
+            mp_hp: [100.0; 4],
+            mp_dead_ticks: [0; 4],
+            mp_held: [2; 8],
+                wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
                 prev_aiming: false,
@@ -6790,7 +7184,7 @@ impl Scene {
         // bbox-face FindCel approximation (documented deviation; every live load path builds sim).
         if sim.is_none() { build_chains(&mut cel_graph, None); }
         crate::phase_mark("b10 collider index + final assembly", t);
-        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
+        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -6828,10 +7222,29 @@ impl Scene {
     /// character's skin matrices, bone world matrices and object matrix (None = unposed), every attachment's
     /// matrix, and which characters are hidden (collapsed to their object origin).
     pub fn frame_state(&self, choice: Option<usize>, ticks: f32, opts: ViewOpts) -> FrameState {
-        let mut cache: HashMap<(u32, usize, u32), (Vec<Mat4>, Vec<Mat4>, f32)> = HashMap::new();
+        self.frame_state_for(choice, ticks, opts, false)
+    }
+
+    /// `frame_state` for the GPU palette (frame-240): with `skip_hidden`, a hidden character is not
+    /// posed at all (`posed[ci] = None`). The palette collapses every hidden character's bones to its
+    /// placement point without reading the pose, and its attachments collapse to a zero-size point
+    /// (`collapse`) — drawn nothing either way — so the pose was pure cost: on the pool-heavy levels
+    /// most of the ~150 characters are parked reinforcements.
+    pub fn frame_state_for(&self, choice: Option<usize>, ticks: f32, opts: ViewOpts, skip_hidden: bool) -> FrameState {
+        let hidden = |c: &Character, ci: usize| {
+            if choice.is_some() {
+                match c.script {
+                    Some(src) => self.sim.as_ref().and_then(|s| s.script_anim(src, c.skin.hashcode)).is_none(),
+                    None => false,
+                }
+            } else {
+                self.char_hidden(ci, opts)
+            }
+        };
         // With the AI running (and no sequence browsing), each guard shows its drone's animation, yaw and position.
         let drone_of = |ci: usize| choice.is_none().then(|| self.sim.as_ref().and_then(|s| s.char_drone[ci].map(|di| (s, di)))).flatten();
-        let posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>> = self.characters.iter().enumerate().map(|(ci, c)| {
+        let pose_one = |ci: usize, c: &Character, cache: &mut HashMap<(u32, usize, u32), (Vec<Mat4>, Vec<Mat4>, f32)>| -> Option<(Vec<Mat4>, Vec<Mat4>, Mat4)> {
+            if skip_hidden && hidden(c, ci) { return None; }
             // Drones: the simulation's pose — blended scripts, fractional frames, upper-body aim — the same one the hit
             // boxes use (`Drone::object_pose`).
             if let Some((s, di)) = drone_of(ci) {
@@ -6860,6 +7273,43 @@ impl Scene {
                 // render showed the intro room with NO characters at all.
                 return Some((anim::skin_matrices(&world, &c.skin), world, c.matrix));
             }
+            // MP bodies: the guards' movement scripts (idle / walk / run by speed) at the slot's
+            // position and yaw [S stand-in until 700v7 ports the player anim set, PlayerAnimSetInit*
+            // 0x18fcd8 — the game's MP bodies run the PLAYER set, not the drone tables].
+            if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
+                let s = self.sim.as_ref()?;
+                let (pos, yaw, speed) = s.mp_body_state(slot)?;
+                // The PLAYER anim set the game's MP body runs, through 700v7's port: the set by the
+                // held weapon's class and the stance (`PlayerAnimSetInitNormal`/`InitCrouch`
+                // 0x18fcd8/0x18fea0), the idle/walk pick by forward speed (`AnimSetUpdate`
+                // 0x1c0938) — `nf_formats::mpanim::mp_body_pose` [M, D the descriptors].
+                let held = s.mp_held.get(slot).copied().unwrap_or(2);
+                let class = nf_formats::mpanim::weapon_anim_class(&s.weapons, held);
+                let substate = if slot < 4 { s.mp_bonds[slot].as_ref().map_or(0, |b| b.substate) } else { 0 };
+                let pick = self.mp_anim_sets.as_ref().map_or(0, |sets| {
+                    let st = nf_formats::mpanim::MpBodyState {
+                        mp: true, weapon: held, substate, fwd: speed / 60.0, strafe: 0.0,
+                        phase: 0.37, hold: 0, one_shot_time: 0.0, water_level: -9.9,
+                    };
+                    nf_formats::mpanim::mp_body_pose(sets, class, &st).script
+                });
+                let player_script = Some(pick).filter(|h| s.scripts.contains_key(h));
+                let st = if speed < 0.5 { nf_game::drone::anim_state::STAND_IDLE } else if speed < 4.5 { nf_game::drone::anim_state::WALK } else { nf_game::drone::anim_state::RUN };
+                let danim = s.tables.danim_for_state(st, 0);
+                // Fallback when the arena lacks the player script: the drone set [S].
+                let script = player_script.or_else(|| danim.filter(|&d| d >= 0).and_then(|d| (0..27u16).filter_map(|set| s.tables.script_for(d as u16, set)).find(|h| s.scripts.contains_key(h))));
+                if std::env::var_os("NF_MPBODY_DBG").is_some() && s.drones.frame % 60 == 0 {
+                    eprintln!("[mpbody] slot {slot} pos {pos:?} yaw {yaw:.2} speed {speed:.2} state {st:#x} danim {danim:?} script {script:x?} has {}", script.is_some_and(|h| s.scripts.contains_key(&h)));
+                }
+                let script = script?;
+                let time = 1.0 + s.scripts.get(&script)?.time_at(s.drones.frame as f32);
+                let mut local = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time)?;
+                let hip = local.first().map_or(0.0, |r| r.0[1]);
+                if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
+                let world = anim::world_pose(&local, &c.skin);
+                let m = nf_formats::placement::object_matrix([0.0, yaw, 0.0], [pos[0], pos[1] - 1.0 + drone_height(hip), pos[2]]);
+                return Some((anim::skin_matrices(&world, &c.skin), world, m));
+            }
             let view = self.sim.as_ref().and_then(|s| self.view_models.get(&s.gun.weapon).filter(|&&v| v == ci)).and(self.sim.as_ref());
             let (i, frame) = match (view, drone_of(ci)) {
                 (Some(s), _) => s.view_frame(c.skin.skeleton)?,
@@ -6886,24 +7336,17 @@ impl Scene {
             let a0 = drone_height(hip);
             m[3][1] = match c.floor { Some(f) => f + a0, None => c.matrix[3][1] + a0 - 1.0 };
             Some((mats, world, m))
-        }).collect();
+        };
+        // One memo across the characters: the crowds share (mesh, sequence, frame) poses.
+        let mut cache = HashMap::new();
+        let posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>> = self.characters.iter().enumerate().map(|(ci, c)| pose_one(ci, c, &mut cache)).collect();
         // Held back: spawner reinforcements and drones disabled while they wait for a switch channel (object flags
         // 0x30, `NDrone2_Enable(0)`); R shows them. The inspect path (`choice`) pins a drone-backed
         // character visible; script actors keep their liveness gate either way.
-        let hidden = |c: &Character, ci: usize| {
-            if choice.is_some() {
-                match c.script {
-                    Some(src) => self.sim.as_ref().and_then(|s| s.script_anim(src, c.skin.hashcode)).is_none(),
-                    None => false,
-                }
-            } else {
-                self.char_hidden(ci, opts)
-            }
-        };
         // A matrix that collapses a mesh to one point: its triangles become degenerate and draw nothing.
         let collapse = |at: &Mat4| -> Mat4 { [[0.0; 4], [0.0; 4], [0.0; 4], [at[3][0], at[3][1], at[3][2], 1.0]] };
         // Attached meshes: datum local · bone world · object (bind world when the character has no animation).
-        let attach: Vec<Mat4> = self.attachments.iter().enumerate().map(|(k, a)| {
+        let att_one = |k: usize, a: &Attachment| -> Mat4 {
             // The gas puffs: a camera billboard with the puff's scale and spin (the game's draw path is
             // `View_DrawObjectGlist`'s obj+0xF0 & 8 billboard: viewer rotation · the object's angles, scaled
             // by obj+0xE8 [M 0x1e6780:43-65]); free slots collapse like the tracers.
@@ -7172,6 +7615,23 @@ impl Scene {
                     // The DroneScan bracket: at the candidate's root (`obj+0x30` [M 0x1a12d8:53]), no rotation
                     // (control_create_object's null angles) — its glist flag 8 makes `View_DrawObjectGlist` 0x1e6780
                     // billboard it (the viewer's rotation), scale 1.
+                    7 | 8 => match s.drones.env.as_ref().filter(|e| e.kind == 1) {
+                        // rain-drops: the live drop at this slot [M DrawDrops 0x18cb90: DropState == 1].
+                        Some(e) if e.alive.get(slot).copied().unwrap_or(false) => {
+                            // The second pass is level-gated: GameState+12 − 0x07000009 < 3 [M].
+                            if kind == 8 && !matches!(s.level.wrapping_sub(0x0700_0009), 0..=2) { return far; }
+                            let p = e.drops[slot];
+                            let mut m = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [p[0], p[1], p[2], 1.0]];
+                            if kind == 8 {
+                                // Mat_CopyRot(viewer+0x1A0): the camera's rotation — right / up / forward rows.
+                                let (r, u) = (opts.right, opts.up);
+                                let f = [r[1] * u[2] - r[2] * u[1], r[2] * u[0] - r[0] * u[2], r[0] * u[1] - r[1] * u[0]];
+                                m[0] = [r[0], r[1], r[2], 0.0]; m[1] = [u[0], u[1], u[2], 0.0]; m[2] = [f[0], f[1], f[2], 0.0];
+                            }
+                            m
+                        }
+                        _ => far,
+                    },
                     6 => match crate::hud::camera_scan_roots(s).get(slot) {
                         Some(p) => {
                             let (r, u) = (opts.right, opts.up);
@@ -7244,6 +7704,10 @@ impl Scene {
                     ]
                 }).unwrap_or(far);
             }
+            // An MP body's weapon draws only while its slot holds that weapon.
+            if let Some(&(slot, w)) = self.mp_body_weapons.get(&(k as u32)) {
+                if self.sim.as_ref().is_none_or(|s| s.mp_held.get(slot) != Some(&w)) { return far; }
+            }
             if a.dropped {
                 // fix-objects: `!p.gone` — a TAKEN drop stays in the list as a tombstone (drone.rs
                 // `update_pickups` keeps the Vec indices stable for the draw slots) and must not be
@@ -7252,6 +7716,10 @@ impl Scene {
                 return p.map_or(far, |p| p.m);
             }
             let c = &self.characters[a.character as usize];
+            // A hidden owner's attachments collapse at its placement point (frame-240: the palette path
+            // no longer poses hidden characters; the collapsed mesh draws nothing wherever it sits, and
+            // the CPU path collapses at the same point so the two stay vertex-equal).
+            if hidden(c, a.character as usize) { return collapse(&c.matrix); }
             let datum = match &posed[a.character as usize] {
                 Some((_, world, m)) => anim::mul(&anim::mul(&a.local, &world[a.bone]), m),
                 None => {
@@ -7260,7 +7728,6 @@ impl Scene {
                     anim::mul(&anim::mul(&a.local, &bind), &c.matrix)
                 }
             };
-            if hidden(c, a.character as usize) { return collapse(&datum); }
             // Dropped: the drone holds nothing (`anim+0x62` = 0).
             // Unarmed (dropped, or surrendered: `ChangeWeapon(1)`): no gun. *Deviation*: a drawn sidearm (weapon 6) still
             // shows the original weapon's mesh.
@@ -7367,7 +7834,8 @@ impl Scene {
             let tick = ticks as u32 + 3 * a.character;
             if !opts.firing || tick % 8 >= 2 { return collapse(&datum); }
             muzzle_flash_matrix(&datum, (tick / 8) ^ (k as u32).wrapping_mul(0x9e37_79b9))
-        }).collect();
+        };
+        let attach: Vec<Mat4> = self.attachments.iter().enumerate().map(|(k, a)| att_one(k, a)).collect();
         let mut hidden: Vec<bool> = self.characters.iter().enumerate().map(|(ci, c)| hidden(c, ci)).collect();
         // fix-sentinel-camera-play: the guided ride draws no view model — the game's player
         // substate 10 cleared the anim set [M `Player_ChangeSubState(10)`, `Player_Update`
@@ -7399,7 +7867,22 @@ impl Scene {
     /// hidden unless R asks for the reinforcements.
     pub fn char_hidden(&self, ci: usize, opts: ViewOpts) -> bool {
         let Some(s) = self.sim.as_ref() else { return false };
+        // A first-person view model that is not the held weapon's is never drawn: only the held
+        // one is placed at the eye (`frame_state`'s view arm); the rest sat at their load matrix
+        // near the world origin — the "all the weapons in one spot, seen through the map" cluster
+        // (user F12 0700000a 003, 2026-10-17).
+        if self.view_models.values().any(|&v| v == ci) {
+            return self.view_models.get(&s.gun.weapon) != Some(&ci);
+        }
+        if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
+            return s.mp_body_state(slot).is_none();
+        }
         let c = &self.characters[ci];
+        // mp-character-data: a parked MP body is hidden — the draw moves the Character matrix to
+        // the slot's live position to reveal it (the sentinel is the NPC-pool scale).
+        if self.mp_char_bodies.iter().any(|b| b.chars.contains(&ci)) && c.matrix[3][1] <= -999_000.0 {
+            return true;
+        }
         match c.script {
             Some(src) => s.script_anim(src, c.skin.hashcode).is_none(),
             None => !opts.reinforcements && match s.char_drone.get(ci).copied().flatten() {
@@ -7676,6 +8159,16 @@ impl Scene {
     /// positions resolved against their searchlight parts. Per draw the renderer picks the ≤2
     /// closest within the draw's bounding sphere — the game's
     /// `Lights_CalcClosestLights` 0x1cb2e0 / `psiLight_SetLights` 0x10e588 per object/cel.
+    /// light-actors: per character, the light-pick centre when it is NOT the palette root slot —
+    /// the script actors' drawn root (`Sim::characters_script_pos`, the same point the ambient ramp
+    /// samples); None = the root slot's translation is right (drones, view models, props).
+    pub fn char_light_centres(&self) -> Vec<Option<[f32; 3]>> {
+        let Some(s) = self.sim.as_ref() else { return Vec::new() };
+        self.characters.iter().enumerate()
+            .map(|(ci, c)| c.script.and_then(|_| s.characters_script_pos(ci)))
+            .collect()
+    }
+
     pub fn frame_lights(&self) -> nf_game::light::ResolvedLights {
         let Some(s) = self.sim.as_ref() else { return Default::default() };
         s.drones.lights.resolve(&|i: u32| s.drones.searchlights.parts.get(i as usize).map(|p| p.pos).unwrap_or([0.0; 3]))
@@ -7691,7 +8184,7 @@ impl Scene {
     /// the forced list, `View_AddForcedObjects` 0x1e5fb8). `None` = the walk is off (`NF_NOPORTAL`).
     pub fn skin_palette(&self, l: &SkinLayout, choice: Option<usize>, time: f32, opts: ViewOpts, vis: Option<&[bool]>) -> (Vec<Mat4>, Vec<[f32; 4]>) {
         const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
-        let fs = self.frame_state(choice, time, opts);
+        let fs = self.frame_state_for(choice, time, opts, true);
         let collapse = |at: &Mat4| -> Mat4 { [[0.0; 4], [0.0; 4], [0.0; 4], [at[3][0], at[3][1], at[3][2], 1.0]] };
         // fix-dev-spawn-visible: a LIVE drone's character (present + enabled — the dev NPC spawns, and
         // the placed guards while they fight) must not vanish when the strict portal walk drops the
@@ -8068,6 +8561,7 @@ impl Sim {
     /// (the camera and the full local path tick it) and parks the old local one back at slot 0.
     pub fn swap_local_slot(&mut self, slot: usize) {
         if slot == 0 || slot >= 4 { return; }
+        self.mp_local_slot = slot;
         if let Some(mut mine) = self.mp_bonds[slot].take() {
             mine = std::mem::replace(&mut self.bond, mine);
             self.mp_bonds[0] = Some(mine);
@@ -8086,27 +8580,21 @@ impl Sim {
     fn bot_others(&self) -> [nf_game::mp::bots::OtherPlayer; 8] {
         let mut others: [nf_game::mp::bots::OtherPlayer; 8] = Default::default();
         if let Some(m) = self.mp.as_ref() {
-            // The humans: slot 0 = the live `bond`, the rest the parked `mp_bonds` (a swapped
-            // local parks the old body at slot 0 — `swap_local_slot`).
-            let human_alive = self.drones.health.health > 0.0;
-            others[0] = nf_game::mp::bots::OtherPlayer {
-                pos: self.bond.pos,
-                alive: human_alive,
-                index: 0,
-                team: m.settings.players[0].team,
-                flags: 0,
-                dist2: 0.0,
-                health: self.drones.health.health,
-                score: m.game.slots[0].score,
-            };
-            for slot in 1..4 {
-                if let Some(b) = self.mp_bonds[slot].as_ref() {
-                    others[slot] = nf_game::mp::bots::OtherPlayer {
-                        pos: b.pos, alive: true, index: slot,
-                        team: m.settings.players[slot].team, flags: 0, dist2: 0.0,
-                        health: self.drones.health.health, score: m.game.slots[slot].score,
-                    };
-                }
+            // The humans, by SLOT: the local slot is the live `bond`, the others the parked
+            // `mp_bonds` (`swap_local_slot` parks the old local body at slot 0). Online every
+            // machine must build the same view (the bots draw the shared stream from it), so the
+            // health is the per-slot online combat's; offline slot 0 is the local health.
+            let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
+            for slot in 0..4 {
+                let body = if slot == self.mp_local_slot { Some(&self.bond) } else { self.mp_bonds[slot].as_ref() };
+                let Some(b) = body else { continue };
+                let health = if online { self.mp_hp[slot] } else if slot == 0 { self.drones.health.health } else { 100.0 };
+                let alive = if online { self.mp_dead_ticks[slot] == 0 && health > 0.0 } else { health > 0.0 };
+                others[slot] = nf_game::mp::bots::OtherPlayer {
+                    pos: b.pos, alive, index: slot,
+                    team: m.settings.players[slot].team, flags: 0, dist2: 0.0,
+                    health, score: m.game.slots[slot].score,
+                };
             }
             // The bots (positions snapshotted this tick — the brain's own row is skipped by index).
             for (i, b) in m.bots.iter().enumerate() {
@@ -8184,8 +8672,9 @@ impl Sim {
         let scenario = m.settings.scenario;
         let world = &self.world;
         let wdata = &self.weapons;
-        // The human's live state the bots read/fight (slot 0).
-        let human = others[0];
+        // The humans the bots fight (online: every human slot on every machine; offline slot 0).
+        let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
+        let local = self.mp_local_slot;
 
         for i in 0..m.bots.len() {
             let alive = !m.bots[i].dead;
@@ -8237,7 +8726,13 @@ impl Sim {
             m.bots[i].shots += new_shots.len() as u32;
             m.bots[i].brain.shots.clear();
             let bot_pos = m.bots[i].brain.pos;
-            m.game.slots[m.bots[i].slot].pos = Some(bot_pos);
+            let bslot = m.bots[i].slot;
+            // The bot body's held weapon: its latest shot's (the brain has no weapon id of its own).
+            if let Some(s0) = new_shots.last() { if bslot < 8 { self.mp_held[bslot] = s0.weapon; } }
+            if let Some(prev) = m.game.slots[bslot].pos {
+                if bslot < 8 { self.mp_body_speed[bslot] = ((bot_pos[0] - prev[0]).powi(2) + (bot_pos[2] - prev[2]).powi(2)).sqrt() * 60.0; }
+            }
+            m.game.slots[bslot].pos = Some(bot_pos);
 
             // The shots: real bullets at the human (the shared pipeline damages him), and the
             // body-sphere sweep at the other bots (the shared system cannot hit non-drones).
@@ -8268,11 +8763,29 @@ impl Sim {
                 // (`MP_RegisterBulletHit` 0x1857c0 — the friendly-fire gate + the last-shooter
                 // word the kill credit later resolves; the port has no HitByList), and a blocked
                 // hit deals no damage — the game's own order.
-                let hits_human = human.alive && ray_body_hit(shot.pos, end, human.pos, 0.6).is_some();
-                if hits_human {
+                let mut hit_human: Option<(usize, f32)> = None;
+                for h in 0..4 {
+                    let o = &others[h];
+                    if !o.alive || o.index != h { continue; }
+                    if !online && h != 0 { continue; }
+                    if let Some(t) = ray_body_hit(shot.pos, end, o.pos, 0.6) {
+                        if hit_human.is_none_or(|(_, bt)| t < bt) { hit_human = Some((h, t)); }
+                    }
+                }
+                if let Some((h, _)) = hit_human {
                     let shooter = m.bots[i].slot;
-                    if m.register_bullet_hit(0, shooter) {
-                        self.drones.health.health = (self.drones.health.health - dmg).max(0.0);
+                    if m.register_bullet_hit(h, shooter) {
+                        if online {
+                            // The per-slot online combat owns the health and the death (every machine).
+                            self.mp_hp[h] = (self.mp_hp[h] - dmg).max(0.0);
+                            if self.mp_hp[h] <= 0.0 && self.mp_dead_ticks[h] == 0 {
+                                self.mp_dead_ticks[h] = 1;
+                                m.player_killed(h, Some(shooter), false, false, &mut self.drones.rng);
+                            }
+                            if h == local { self.drones.health.health = self.mp_hp[h]; }
+                        } else {
+                            self.drones.health.health = (self.drones.health.health - dmg).max(0.0);
+                        }
                     }
                 }
                 if let Some((j, _)) = best {
@@ -8326,13 +8839,161 @@ impl Sim {
         for slot in 0..4 {
             if slot == local || slot >= 4 { continue; }
             let Some(b) = self.mp_bonds[slot].as_mut() else { continue };
+            let before = b.pos;
             let input = inputs[slot];
             let ctx = nf_game::player::LadderCtx {
                 ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims),
                 water: None, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
+                straddle: &[], // MP remotes carry no per-body cel link yet — no scoping.
             };
             b.tick_ctx(&self.world, &ctx, &input);
+            self.mp_body_speed[slot] = ((b.pos[0] - before[0]).powi(2) + (b.pos[2] - before[2]).powi(2)).sqrt() * 60.0;
         }
+    }
+
+    /// An MP body's (position, yaw, horizontal speed per second) now, None = not drawn (the local
+    /// slot, an empty slot, no match).
+    pub fn mp_body_state(&self, slot: usize) -> Option<([f32; 3], f32, f32)> {
+        let s = self;
+        let m = s.mp.as_ref()?;
+        if slot < 4 {
+            if slot == s.mp_local_slot || s.mp_dead_ticks[slot] > 0 { return None; }
+            let b = s.mp_bonds[slot].as_ref()?;
+            Some((b.pos, b.yaw, s.mp_body_speed[slot]))
+        } else {
+            let bot = m.bots.iter().find(|b| b.slot == slot)?;
+            Some((bot.brain.pos, bot.brain.yaw, s.mp_body_speed[slot]))
+        }
+    }
+
+    /// Online combat (700v6) [S port design — the PS2 had no online play]: every machine resolves
+    /// every human slot's shot from the session's inputs, in slot order, on the shared stream. A
+    /// shot (`Input::shot`, the sender's own fire pipeline decided it) is a hit test from the
+    /// shooter's head along its aim, stopped by the world, against the other slots' bodies; the
+    /// damage is the held weapon's record +0x0C. Death scores through `player_killed` [M
+    /// MP_PlayerKilled 0x188f70], the respawn waits 5 s [M Player_HandleDeath 0x190bb0:41-54] and
+    /// takes `mp_respawn`'s spawn pick + health [M MP_ReSpawn 0x185368]. The local slot's health
+    /// drives this machine's HUD and death sequence.
+    pub fn step_net_combat(&mut self, inputs: &[nf_net::Input; 4], local: usize) {
+        if self.mp.is_none() { return; }
+        let body = |s: &Sim, slot: usize| -> Option<nf_game::player::Bond> {
+            if slot == local { Some(s.bond.clone()) } else { s.mp_bonds[slot].clone() }
+        };
+        for s in 0..4 { self.mp_held[s] = if s == local { self.gun.weapon } else { inputs[s].held }; }
+        // 1. The shots, in slot order (the bodies as they stand this tick).
+        for shooter in 0..4 {
+            let inp = &inputs[shooter];
+            if !inp.shot || self.mp_dead_ticks[shooter] > 0 { continue; }
+            let Some(b) = body(self, shooter) else { continue };
+            let head = b.head();
+            let (sy, cy) = b.yaw.sin_cos();
+            let (sp, cp) = b.pitch.sin_cos();
+            let dir = [cp * sy, sp, cp * cy];
+            let range = 200.0;
+            let mut end = [head[0] + dir[0] * range, head[1] + dir[1] * range, head[2] + dir[2] * range];
+            if let Some((t, _, _)) = self.world.segment_surface_bullet(head, end) {
+                end = [head[0] + (end[0] - head[0]) * t, head[1] + (end[1] - head[1]) * t, head[2] + (end[2] - head[2]) * t];
+            }
+            let mut best: Option<(f32, usize)> = None;
+            for victim in 0..4 {
+                if victim == shooter || self.mp_dead_ticks[victim] > 0 { continue; }
+                let Some(v) = body(self, victim) else { continue };
+                // The body: a stack of 0.45 spheres from the knees to the head [S stand-in for the
+                // player's hit boxes — `Collide_Jointy` 0x1ec180's per-bone test is the game's].
+                for h in [0.5f32, 1.0, 1.5] {
+                    let c = [v.pos[0], v.pos[1] + h, v.pos[2]];
+                    if let Some(t) = ray_body_hit(head, end, c, 0.45) {
+                        if best.is_none_or(|(bt, _)| t < bt) { best = Some((t, victim)); }
+                    }
+                }
+            }
+            let damage = self.weapons.records.get(inp.held as usize)
+                .map_or(10.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
+            // The bots are targets too (nearer than any human wins).
+            let mut bot_hit: Option<(f32, usize)> = None;
+            if let Some(m) = self.mp.as_ref() {
+                for (j, bt) in m.bots.iter().enumerate() {
+                    if bt.dead { continue; }
+                    if let Some(t) = ray_body_hit(head, end, bt.brain.pos, 0.6) {
+                        if bot_hit.is_none_or(|(b, _)| t < b) { bot_hit = Some((t, j)); }
+                    }
+                }
+            }
+            if let Some((tb, j)) = bot_hit.filter(|(tb, _)| best.is_none_or(|(th, _)| *tb < th)) {
+                let _ = tb;
+                let frame = self.drones.frame;
+                if let Some(m) = self.mp.as_mut() {
+                    m.bots[j].health -= damage;
+                    if m.bots[j].health <= 0.0 && !m.bots[j].dead {
+                        let victim_slot = m.bots[j].slot;
+                        m.bots[j].health = 0.0;
+                        m.bots[j].dead = true;
+                        m.bots[j].deaths += 1;
+                        m.bots[j].respawn_at = frame + 180;
+                        m.player_killed(victim_slot, Some(shooter), false, false, &mut self.drones.rng);
+                    }
+                }
+                continue;
+            }
+            let Some((_, victim)) = best else { continue };
+            self.mp_hp[victim] -= damage;
+            if self.mp_hp[victim] <= 0.0 {
+                self.mp_hp[victim] = 0.0;
+                self.mp_dead_ticks[victim] = 1;
+                if let Some(m) = self.mp.as_mut() { m.player_killed(victim, Some(shooter), false, false, &mut self.drones.rng); }
+                eprintln!("[mp] slot {shooter} killed slot {victim} (frame {})", self.drones.frame);
+            }
+        }
+        // 2. The dead wait 5 s, then respawn at the policy's pick.
+        for slot in 0..4 {
+            if self.mp_dead_ticks[slot] == 0 { continue; }
+            self.mp_dead_ticks[slot] += 1;
+            if self.mp_dead_ticks[slot] < 300 { continue; }
+            let Some(m) = self.mp.as_mut() else { continue };
+            let Some((sp_idx, hp)) = m.mp_respawn(slot, &mut self.drones.rng) else { continue };
+            let sp = m.spawns.points[sp_idx as usize];
+            let nb = nf_game::player::Bond::stand_at(&self.world, [sp.pos[0], sp.pos[1], sp.pos[2]], sp.facing[1]);
+            m.set_slot(slot, nb.pos);
+            if slot == local { self.bond = nb; } else { self.mp_bonds[slot] = Some(nb); }
+            self.mp_hp[slot] = hp;
+            self.mp_dead_ticks[slot] = 0;
+            eprintln!("[mp] slot {slot} respawned at spawn {sp_idx} (frame {})", self.drones.frame);
+            if slot == local {
+                self.drones.death = nf_game::death::Death::default();
+                // The respawn re-arms the player (`MP_ReSpawn` 0x185368 re-inits the player's weapon
+                // state; the death sequence had switched him to the fists 0x47 [M 0x190810:61]) — the
+                // match's start loadout: the P2K drawn, as at the load.
+                self.gun = nf_game::gun::Gun::new(2, 7, 41);
+                self.drones.bond_weapon = 2;
+            }
+        }
+        // 3. This machine's own health is the slot's (the HUD, the death sequence's start).
+        self.drones.health.health = self.mp_hp[local];
+    }
+
+    /// mp-join-in-progress: create the late joiner's agent at the announced join tick — the
+    /// game's own MP create shape, run on EVERY machine at the same tick (the shared stream's
+    /// spawn pick is part of the deterministic tick): `MP_GetSpawnPoint(team, NULL)` before
+    /// `Player_Init(slot, pos, facing, …)` [M 0x183a50:120-127; `Player_Init` 0x1910f8 refuses
+    /// only an occupied slot and creates the obj — a free slot mid-match is the game's own
+    /// path; `MP_ReSpawn` 0x185368 only re-positions an EXISTING obj]. The port's `Player_Init`
+    /// shape is the load's spawn loop (`Bond::stand_at`, lib.rs) — one new slot of it here.
+    /// A slot that already holds a body (a dropped peer's agent, `DropPolicy::Neutral`) is a
+    /// RECONNECT: no spawn, the real input just resumes. Returns whether a body was created.
+    pub fn mp_join_spawn(&mut self, slot: usize) -> bool {
+        if slot == 0 || slot >= 4 { return false; }
+        if self.mp_bonds[slot].is_some() { return false; }
+        let Some(m) = self.mp.as_mut() else { return false };
+        let team = m.settings.players[slot].team as u16;
+        let sp = m.get_spawn_point(team, slot, &mut self.drones.rng) as usize;
+        let ent = m.spawns.points[sp];
+        let b = nf_game::player::Bond::stand_at(&self.world, [ent.pos[0], ent.pos[1], ent.pos[2]], ent.facing[1]);
+        m.set_slot(slot, b.pos);
+        self.mp_bonds[slot] = Some(b);
+        // The online combat's per-slot state starts fresh for the new agent (700v6).
+        self.mp_hp[slot] = 100.0;
+        self.mp_dead_ticks[slot] = 0;
+        true
     }
 
     /// The per-tick state hash sent every N ticks (the app calls it; the nf-net session compares).
@@ -8340,8 +9001,20 @@ impl Sim {
     /// slot reads `bond`, the others `mp_bonds`), then the MP match state. An empty slot folds a
     /// sentinel so the shape is total and equal on every machine.
     pub fn net_state_hash(&self, local: usize) -> u64 {
+        // NF_NET_HASHDBG="a-b": dump frames a..=b (any other value: 0-17).
+        let dbg = std::env::var("NF_NET_HASHDBG").ok().map(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))).unwrap_or((0, 17)));
+        if dbg.is_some_and(|(a, b)| (a..=b).contains(&self.drones.frame)) {
+            let b = |s: usize| if s == local { Some(&self.bond) } else { self.mp_bonds[s].as_ref() };
+            eprintln!("[hashdbg] frame {} rng {:x}/{:x}/{} bonds {:?} mp {:?}", self.drones.frame, self.drones.rng.x, self.drones.rng.y, self.drones.rng.draws,
+                (0..4).map(|s| b(s).map(|b| (b.pos, b.yaw, b.pitch, b.substate, b.crouched))).collect::<Vec<_>>(),
+                self.mp.as_ref().map(|m| (m.game.state, m.game.clock, m.game.limit, m.game.slots.iter().take(4).map(|s| (s.pos, s.timers, s.score, s.kills, s.deaths, s.dead)).collect::<Vec<_>>(),
+                    (m.settings.level_code, m.settings.scenario, m.settings.frag_limit, m.settings.time_limit, m.settings.seed, m.settings.human_count))));
+            eprintln!("[hashdbg]   hp {:?} dead {:?}", self.mp_hp, self.mp_dead_ticks);
+        }
         let mut h = nf_net::hash::Hasher::new();
         h.u32(self.drones.frame);
+        // 700v6: the online combat's per-slot state.
+        for s in 0..4 { h.f32(self.mp_hp[s]); h.u32(self.mp_dead_ticks[s]); }
         h.u32(self.drones.rng.x);
         h.u32(self.drones.rng.y);
         h.u64(self.drones.rng.draws);
@@ -8424,3 +9097,6 @@ mod tests {
         assert!((0..3).any(|k| (efar[k] - b[k]).abs() > 0.05), "the euler build should miss: {efar:?}");
     }
 }
+
+/// rain-drops: the per-level rain-mesh slots (`InitDrops`' rain cap: 0x80 on 07000009-0b, 0x40 elsewhere).
+pub const RAIN_SLOTS: usize = 128;

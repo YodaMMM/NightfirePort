@@ -248,15 +248,16 @@ impl ResolvedLights {
             // Kind 2 measures against the LIVE tracked position (the spot object); every upload reads
             // the node's static +0x10 [M 0x1cb2e0 vs 0x10e588].
             let dp = if l.kind == 2 { l.track_pos } else { l.pos };
+            // The flag gates first: kind 0 needs flags & 0x80, kind 1 is skipped under flags & 0x100,
+            // kind 2 needs flags & 0x80 and takes the 2D test against the tracked spot. Every OTHER
+            // light — kinds 0 and 1 included, once past their gate — falls through to the 3D range
+            // test `d ≤ sphere.r + light.r` [M 0x1cb2e0: the final else, Vec_Dist3D at :50-51].
+            // light-pick-range: the port accepted kinds 0/1 at ANY distance, so on a level with 100+
+            // lamps the first 30 in list order crowded out the near ones (0700000b's start: the two
+            // r-6 lamps 5.9/6.5 units from Bond lost to the list head [L PCSX2 LightList walk]).
             let d = match l.kind {
-                0 => {
-                    if flags & 0x80 == 0 { continue; }
-                    dist3(dp, sphere)
-                }
-                1 => {
-                    if flags & 0x100 != 0 { continue; }
-                    dist3(dp, sphere)
-                }
+                0 if flags & 0x80 == 0 => continue,
+                1 if flags & 0x100 != 0 => continue,
                 2 => {
                     if flags & 0x80 == 0 { continue; }
                     let dx = dp[0] - sphere[0];
@@ -274,7 +275,8 @@ impl ResolvedLights {
             // The falloff `d / (radius · 0.5)` [M 0x1cb448/0x1cb44c]; radius = 1/sqrt(inv_r2).
             let radius = l.inv_r2.recip().sqrt();
             out.push((i, d / (radius * 0.5)));
-            if out.len() > 30 { break; }
+            // The walk stops once 30 are accepted (`0x1d < count` [M 0x1cb2e0:68]).
+            if out.len() >= 30 { break; }
         }
         out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         out
@@ -441,6 +443,37 @@ mod tests {
         // an object AT the spot would get no light at all.
         let old_style_d = ((10.0 - 70.0f32).powi(2) + (10.0 - 10.0f32).powi(2)).sqrt();
         assert!(old_style_d > 4.0, "the pre-fix reading is exactly the bug");
+    }
+
+    fn lamp(pos: [f32; 3], radius: f32) -> Light {
+        Light {
+            pos, life: 0, channel: 0, flicker_period: 0, flicker_base: 0, flicker_count: 0, flicker_mask: 0,
+            sound: 0, track: None, radius, intensity: 1.0, falloff: 0.0, rgb: [208, 212, 192], kind: 0, active: true,
+        }
+    }
+
+    #[test]
+    fn kind0_lights_take_the_range_test_and_the_walk_caps_at_30() {
+        // [M 0x1cb2e0: kinds 0/1 pass their flag gate, then the final else's Vec_Dist3D test
+        // `d ≤ sphere.r + light.r`; the walk stops when `0x1d < count`]. 0700000b's start [L PCSX2
+        // LightList walk]: 113 lamps, the two r-6 lamps 5.9/6.5 units from Bond — the port took the
+        // first 31 in list order (no range test on kind 0) and never reached them.
+        let mut l = LightList::default();
+        for k in 0..40 { l.lights.push(lamp([200.0 + k as f32, 0.0, 0.0], 6.0)); } // far: list head
+        l.lights.push(lamp([31.96, 16.36, 23.85], 6.0));
+        l.lights.push(lamp([23.57, 16.36, 32.13], 6.0));
+        let r = l.resolve(&|_| [0.0; 3]);
+        let eye = [28.92, 15.78, 28.67, 2.0];
+        let picked: Vec<usize> = r.closest(eye, 0x8a0).iter().map(|&(i, _)| i).collect();
+        assert_eq!(picked, vec![40, 41], "the two near lamps, nearest first; the far list head is out of range");
+        // Sister: just past sphere.r + light.r (2 + 6) is rejected; just inside is accepted.
+        let edge = |d: f32| { let mut m = LightList::default(); m.lights.push(lamp([d, 0.0, 0.0], 6.0)); m.resolve(&|_| [0.0; 3]).closest([0.0, 0.0, 0.0, 2.0], 0x80).len() };
+        assert_eq!(edge(7.99), 1);
+        assert_eq!(edge(8.01), 0);
+        // The cap: 40 lamps all in range → 30 accepted.
+        let mut m = LightList::default();
+        for k in 0..40 { m.lights.push(lamp([k as f32 * 0.01, 0.0, 0.0], 6.0)); }
+        assert_eq!(m.resolve(&|_| [0.0; 3]).closest([0.0, 0.0, 0.0, 1.0], 0x80).len(), 30);
     }
 
     #[test]

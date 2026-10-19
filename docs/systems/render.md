@@ -76,6 +76,30 @@ the earlier /128 over an Unorm8x4 colour was 2× the game's add). Tint (`obj+0x1
 ambient with flag 0x800); environment map on 31 objects (box flag +0x34 bit 0, e.g.
 `OBJECT_windows`): UV ≈ 0.5 + rot·n/256 [S].
 
+### Light-pick corrections (2026-10-17, light-fixes) [M, L]
+
+- **Range test for every kind but 2.** `Lights_CalcClosestLights` 0x1cb2e0: kinds 0/1 pass their
+  flag gate (0x80 / not 0x100) and then take the 3D test `d ≤ sphere.r + light.r`; the walk stops at
+  30 accepted, then sorts by falloff. The port had accepted kinds 0/1 at any distance, so on a level
+  with 100+ lamps the first 30 in list order won (0700000b start: two r-6 lamps 5.9/6.5 u from Bond
+  lost to the list head — the PS2 `LightList` (0x2c74cc: head +0, next at node+4, 0x50-byte records)
+  walked live through PINE matched the port's list 114/115).
+- **The view model is lit.** `Game_Draw` zeroes the lights before list 2 [M 0x1e6f50:150], but every
+  animated object draws through `AnimObjectDraw` [M 0x1c4490:117-122], which re-picks via
+  `View_SetupRenderModes` 0x1e78b0 (the object's sphere) or `View_SetupRenderModes2` 0x1e7908 (the
+  viewer's camera, radius 2.0). The port picks at the eye, radius 2.0.
+- **Script actors pick at their drawn root.** They are created at the origin and carried by the
+  sequence root; the pick (like the ambient ramp) uses `Sim::characters_script_pos`
+  (`Scene::char_light_centres`), not the palette root slot.
+- **The sun doubling.** BLData+0x962 is set by `HUD_UpdateLensFlarePane` 0x19d770:64-90 when
+  `SunVector` (0x2d88a0, from the env placement: param 9 enables, `Vec_Spherical_2_Cartesian(1000,
+  p10°, −p11°)` [M Env_Create 0x17b968:116-121]) is non-zero and `Collide_LineOfSight(head, head −
+  SunVector, …, 8)` is clear (mask 8|4: the bullet-class node skip). `Lights_CalcAmbientLight`
+  doubles the target (clamped 0xff) for 0x10000 objects while it is set [M 0x1cb178:20-35]. The view
+  model carries 0x10000 (obj+0xF0 0x1a8a0 [L]) and reads Bond's linked cel: at the 0700000c start
+  Bond = (60,60,60), the view model = (120,120,120) [L PCSX2]. Only 0700000c's env enables the sun
+  among the levels checked (01/04/05/0b/11/14 = 0) [D].
+
 ## Characters: the room they stand in (fix-character-room-light) [M, D]
 
 A character's ambient is its **linked cel's** triple. `Control_CreateObjEx` 0x1343c8:39 links at

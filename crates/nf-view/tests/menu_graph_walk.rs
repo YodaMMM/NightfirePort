@@ -292,6 +292,9 @@ fn apply(fe: &mut FrontEnd, e: Edge, armed: &mut Option<u32>, problems: &mut Vec
                 o,
                 Stats { shots_fired: 120, shots_hit: 40, accuracy_pct: 33, time_s: 754 },
             );
+            // reward-after-outro: a COMPLETE end queues the page — the load tail's
+            // MenuManager_Create opens it [M 0x1d6360:160-163] (the BFS stands in for the host).
+            if o == Outcome::Complete { fe.reopen_queued_page(); }
             settle(fe, problems);
         }
         Edge::HostEnter => match fe.page {
@@ -398,6 +401,7 @@ fn apply_raw(fe: &mut FrontEnd, e: Edge) {
         }
         Edge::MissionEnded(o) => {
             fe.mission_ended(o, Stats::default());
+            if o == Outcome::Complete { fe.reopen_queued_page(); } // the load tail [M 0x1d6360:160-163]
             fe.tick();
         }
         Edge::HostEnter => {

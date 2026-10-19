@@ -238,6 +238,20 @@ pub fn capsule_hits_tris(a: V3, b: V3, r: f32, tris: &[[V3; 3]]) -> bool {
     })
 }
 
+/// The object-collision REFINE boundary: strict `dist < radius` [M Intersect_CylGeom 0x109da0:447
+/// pushes only while `fVar30 < *(hittest+0x8C)` and :524 tracks the minimum only while
+/// `fVar30 < fVar19` with the minimum seeded AT the radius — a triangle at exactly the radius is
+/// never tracked, the candidate distance stays 1e8 and `Collide_Intersect` 0x1ebaa8:320 returns no
+/// hit]. The ladder pick's stage 2 rides this (`Ladder`'s refine); the inclusive
+/// `capsule_hits_tris` stays for the hurt volumes and the world objects, whose [M] citations
+/// measure an `<=` contact.
+pub fn capsule_hits_tris_strict(a: V3, b: V3, r: f32, tris: &[[V3; 3]]) -> bool {
+    tris.iter().any(|t| {
+        segment_hits_triangle(a, b, t) || point_triangle(a, t) < r || point_triangle(b, t) < r
+            || (0..3).any(|k| segment_segment(a, b, t[k], t[(k + 1) % 3]) < r)
+    })
+}
+
 /// Whether the segment a–b crosses triangle t.
 fn segment_hits_triangle(a: V3, b: V3, t: &[V3; 3]) -> bool {
     let d = sub(b, a);

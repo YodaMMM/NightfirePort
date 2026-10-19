@@ -39,12 +39,15 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // static World draw for the posed door/SS slot space (a broken one stops drawing — `Break_Kill`
 // 0x12b970), so 01/02/14's World materials merge into per-slot Character groups: vertices and
 // triangles unchanged, materials and the Character-vertex split move; 05 and 0c carry no 0x20.
+// Re-pinned at the rain streaks (main-agent render check, 0700000b): a level whose SNOW_gen (0xDF)
+// placement has DropType 1 gets 128 rain-mesh slots (`DrawDrops` 0x18cb90, mesh 0x02000290) —
+// 01 and 02 are rain levels: +128 attachments, +6400 vertices, +12288 indices each; 05/0c/14 unchanged.
 const BASELINE: &[(&str, &str)] = &[
-    ("07000002.bin", "d7e8f00ded57dd1f 4477259 9358977 5347 4339965 81 9682 205 28 25 8"),
+    ("07000002.bin", "31d5bf43e19366ce 4483659 9371265 5347 4346365 81 9810 205 28 25 8"),
     ("07000005.bin", "6a43ad2ce9dee894 4377695 9151611 3576 4293354 73 9731 106 19 16 6"),
     ("0700000c.bin", "15de2f0294792a8a 4871632 10240830 8177 4680808 96 10996 170 22 40 15"),
     ("07000014.bin", "b4011376b5d7991f 7208306 14968956 6767 7055181 111 13430 173 41 37 32"),
-    ("07000001.bin", "d50702caf2606dc5 4389613 9198819 3484 4316311 76 9696 101 11 20 6"),
+    ("07000001.bin", "ff9ab612c1051461 4396013 9211107 3484 4322711 76 9824 101 11 20 6"),
 ];
 
 #[test]

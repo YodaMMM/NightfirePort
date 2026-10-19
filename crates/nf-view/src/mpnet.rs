@@ -115,6 +115,9 @@ pub fn to_net_input(i: &player::Input, trigger: bool, reload: bool, use_key: boo
         weapon_cycle: i.weapon_cycle,
         gadget_cycle: i.gadget_cycle,
         switch_to: i.switch_to,
+        // 700v6: the caller fills `held` / `shot` from the local weapon pipeline (lib.rs).
+        held: 0,
+        shot: false,
     }
 }
 
@@ -218,6 +221,26 @@ pub enum CoreEvent {
     HostTimeout,
     /// Client: the host refused the join.
     Refused,
+    /// mp-join-in-progress. Host: a HELLO arrived after GO; the run-log
+    /// transfer to that peer began (the match runs on untouched).
+    LateJoinStarted { slot: u8 },
+    /// mp-join-in-progress. The late joiner's log transfer completed: the app
+    /// loads the level from `settings` (the WELCOME's handover), replays
+    /// `log` headless (ticks `0..=snapshot_tick` —
+    /// `crate::mp_late_join_catchup`), and MUST produce `snapshot_hash` at
+    /// `snapshot_tick` — then `NetCore::confirm_late_join` (or
+    /// `late_join_verify_failed` on a mismatch).
+    LateJoinHandover {
+        slot: u8,
+        settings: Box<MpSettings>,
+        snapshot_tick: u32,
+        snapshot_hash: u64,
+        log: Vec<[nf_net::Input; 4]>,
+    },
+    /// mp-join-in-progress. All machines: `slot` becomes human from
+    /// `join_tick` — the app spawns its agent there (`Sim::mp_join_spawn`)
+    /// and the joiner adopts the slot as its own view.
+    LateJoinSlot { slot: u8, join_tick: u32 },
 }
 
 /// The shared session state: one per match/lobby. See the module docs.
@@ -243,6 +266,23 @@ pub struct NetCore {
     /// the host repeats it every `START_RESEND_EVERY` polls for `START_RESEND_POLLS` polls and
     /// the client keeps the first copy [S port protocol].
     start_resend: Option<(Vec<u8>, u32)>,
+    /// net-p2p: internet reachability — None until the app enables it (`enable_reach`); tests that
+    /// build cores directly never probe the LAN gateway or a public STUN server.
+    reach_cfg: Option<nf_net::p2p::ReachConfig>,
+    reach_host: Option<nf_net::p2p::HostReach>,
+    reach_join: Option<nf_net::p2p::JoinReach>,
+    /// The last reach status line printed to the console.
+    reach_line: Option<String>,
+    /// net-lobby-list: what this host answers discovery queries with (None = not advertising).
+    advert: Option<nf_net::discovery::LobbyInfo>,
+    /// net-lobby-list: the joiner's LAN browser while the Join Online page is up.
+    browse: Option<nf_net::discovery::LobbyList>,
+    /// The next REGISTER to the lobby directory (ms on the core's clock).
+    dir_next_ms: u64,
+    /// mp-lobby-one-screen: the host's last published snapshot / the client's last received
+    /// one, and the arrived client edits the host has not drained [S §6.4].
+    lobby: Option<nf_net::LobbyState>,
+    lobby_edits: Vec<nf_net::LobbyEdit>,
 }
 
 /// The host repeats the match-start payload every this many polls …
@@ -269,6 +309,15 @@ impl NetCore {
             closed: false,
             events: Vec::new(),
             start_resend: None,
+            reach_cfg: None,
+            reach_host: None,
+            reach_join: None,
+            reach_line: None,
+            advert: None,
+            browse: None,
+            dir_next_ms: 0,
+            lobby: None,
+            lobby_edits: Vec::new(),
         })))
     }
 
@@ -282,6 +331,10 @@ impl NetCore {
         self.sess = Session::new_host(session_cfg(), tr, MatchSettings::default(), 0);
         self.is_host = true;
         self.epoch = Instant::now();
+        self.drop_reach();
+        if let Some(cfg) = self.reach_cfg.clone() {
+            self.reach_host = Some(nf_net::p2p::HostReach::start(port, cfg, reach_seed()));
+        }
         self.match_start = None;
         self.choices = None;
         self.refused = false;
@@ -298,6 +351,7 @@ impl NetCore {
         self.sess = Session::new_client(session_cfg(), tr, addr);
         self.is_host = false;
         self.epoch = Instant::now();
+        self.drop_reach();
         self.match_start = None;
         self.choices = None;
         self.refused = false;
@@ -322,12 +376,145 @@ impl NetCore {
             closed: false,
             events: Vec::new(),
             start_resend: None,
+            reach_cfg: None,
+            reach_host: None,
+            reach_join: None,
+            reach_line: None,
+            advert: None,
+            browse: None,
+            dir_next_ms: 0,
+            lobby: None,
+            lobby_edits: Vec::new(),
         })))
+    }
+
+    /// net-p2p: probe internet reachability on every later listen / dial (the app's real
+    /// sessions; never the tests' direct cores).
+    pub fn enable_reach(&mut self, cfg: nf_net::p2p::ReachConfig) {
+        self.reach_cfg = Some(cfg);
+    }
+
+    /// Client: dial a typed target — a join code or `a.b.c.d:port` — on the SAME core, starting
+    /// "my code" discovery when reach is enabled.
+    pub fn dial(&mut self, typed: &str) -> Result<(), String> {
+        let jc = nf_net::p2p::parse_target(typed).map_err(|e| format!("{e:?}"))?;
+        self.rebind_client(std::net::SocketAddr::V4(jc.addr))?;
+        if let Some(cfg) = self.reach_cfg.clone() {
+            self.reach_join = nf_net::p2p::JoinReach::start(typed, &cfg, reach_seed()).ok();
+        }
+        Ok(())
+    }
+
+    /// net-p2p: stop probing; a host's mapping is deleted on a background thread (the UPnP/NAT-PMP
+    /// exchange blocks for up to a few seconds).
+    fn drop_reach(&mut self) {
+        if let Some(mut r) = self.reach_host.take() {
+            std::thread::spawn(move || r.close());
+        }
+        self.reach_join = None;
+    }
+
+    /// net-p2p: the online pages' reachability lines.
+    pub fn reach(&self) -> Option<crate::menu::MpReach> {
+        use nf_net::p2p::{HostState, MapMethod};
+        if let Some(r) = self.reach_host.as_ref() {
+            let s = r.status();
+            let state = match s.state {
+                HostState::Probing => "Internet: opening the port...".to_string(),
+                HostState::Mapped(MapMethod::Upnp) => "Internet: open (UPnP)".to_string(),
+                HostState::Mapped(MapMethod::NatPmp) => "Internet: open (NAT-PMP)".to_string(),
+                HostState::StunOnly => "Internet: no port forward - Ctrl+V a friend's code".to_string(),
+                HostState::Failed => "Internet: unavailable (LAN only)".to_string(),
+            };
+            let note = match s.state {
+                HostState::StunOnly if s.symmetric => "Your router changes ports per peer: direct play may fail".to_string(),
+                HostState::StunOnly => {
+                    let n = s.punches.len();
+                    if n == 0 { "Friends send you their code from Join Online".to_string() } else { format!("Opening a path to {n} friend(s)") }
+                }
+                HostState::Failed => format!("Forward UDP {} on your router to play online", s.local_port),
+                _ => String::new(),
+            };
+            return Some(crate::menu::MpReach { hosting: true, state, code: s.code, my_code: None, note });
+        }
+        if let Some(j) = self.reach_join.as_ref() {
+            let s = j.status(self.epoch.elapsed().as_millis() as u64);
+            let (state, note) = if s.symmetric_both {
+                ("Both routers block direct play".to_string(), "A relay would be needed (not supported)".to_string())
+            } else if s.host_needs_punch {
+                ("The host has no port forward".to_string(), "Send the host your code (Ctrl+C copies it)".to_string())
+            } else {
+                (String::new(), String::new())
+            };
+            return Some(crate::menu::MpReach { hosting: false, state, code: None, my_code: s.my_code, note });
+        }
+        None
+    }
+
+    /// net-p2p: the host pasted a joiner's code.
+    pub fn expect_peer(&mut self, code: &str) -> bool {
+        self.reach_host.as_mut().is_some_and(|r| r.expect_peer(code).is_ok())
     }
 
     /// Pump the transport once per frame: receive, timers, events → state.
     pub fn poll(&mut self) {
         let now = self.epoch.elapsed().as_millis() as u64;
+        // net-p2p: STUN replies and punches share the game socket (the session hands back
+        // what is not a session packet); the reachability layer sends through it too.
+        // net-lobby-list: a host answers discovery queries on its game socket (in the lobby and
+        // in progress — the record says which).
+        if let Some(b) = self.browse.as_mut() { b.poll(now); }
+        let strays = self.sess.take_stray();
+        if self.is_host && !self.closed {
+            // The internet directory: REGISTER from the game socket every few seconds (the server
+            // lists the source address — this socket's public mapping).
+            if let (Some(dir), Some(info)) = (self.reach_cfg.as_ref().and_then(|c| c.directory), self.advert.as_ref()) {
+                if now >= self.dir_next_ms {
+                    self.dir_next_ms = now + nf_net::directory::REGISTER_EVERY_MS;
+                    let pkt = nf_net::directory::register_packet(info);
+                    self.sess.send_raw(dir, &pkt);
+                }
+            }
+            if let Some(info) = self.advert.as_mut() {
+                info.in_progress = self.match_start.is_some();
+                info.port = self.sess.local_addr().port();
+                for (from, d) in &strays {
+                    if let Some(r) = nf_net::discovery::answer(d, info) { self.sess.send_raw(*from, &r); }
+                }
+            }
+        }
+        if self.reach_host.is_some() || self.reach_join.is_some() {
+            for (from, d) in strays {
+                if let Some(r) = self.reach_host.as_mut() { r.on_packet(from, &d); }
+                if let Some(r) = self.reach_join.as_mut() { r.on_packet(from, &d); }
+            }
+            let mut out: Vec<(std::net::SocketAddr, Vec<u8>)> = Vec::new();
+            if let Some(r) = self.reach_host.as_mut() { r.poll(now, &mut |to, d| out.push((to, d.to_vec()))); }
+            if let Some(r) = self.reach_join.as_mut() { r.poll(now, &mut |to, d| out.push((to, d.to_vec()))); }
+            for (to, d) in out { self.sess.send_raw(to, &d); }
+            // net-p2p §3a: the host answered our LAN probe — dial its LAN address instead of the
+            // public one (no hairpin needed), keeping the join reach and the codename.
+            let redirect = if self.sess.local_slot() == 0 && self.match_start.is_none() {
+                self.reach_join.as_mut().and_then(|r| r.take_redirect())
+            } else {
+                None
+            };
+            if let Some(a) = redirect {
+                eprintln!("[net] same network: dialing the host's LAN address {a}");
+                let name = self.display_name();
+                if let Ok(tr) = UdpTransport::bind("0.0.0.0:0") {
+                    self.sess = Session::new_client(session_cfg(), tr, a);
+                    if !name.is_empty() { self.sess.set_display_name(&name); }
+                }
+            }
+            // The console line the CLI path (--net-host / --net-join) reads: the state and the
+            // code once, and again when they change.
+            let line = self.reach().map(|r| format!("{} | code {} | my code {} | {}", r.state, r.code.unwrap_or_default(), r.my_code.unwrap_or_default(), r.note));
+            if line.is_some() && line != self.reach_line {
+                if let Some(l) = &line { eprintln!("[net] {l}"); }
+                self.reach_line = line;
+            }
+        }
         if self.is_host && !self.closed {
             if let Some((bytes, left)) = self.start_resend.as_mut() {
                 *left = left.saturating_sub(1);
@@ -338,9 +525,26 @@ impl NetCore {
         }
         for ev in self.sess.poll(now) {
             match ev {
-                Event::Refused { .. } => {
+                Event::Refused { reason } => {
+                    eprintln!("[net] refused by the host: {reason:?}");
                     self.refused = true;
                     self.events.push(CoreEvent::Refused);
+                }
+                Event::LateJoinStarted { slot, .. } => {
+                    self.events.push(CoreEvent::LateJoinStarted { slot });
+                }
+                Event::LateJoinHandover { slot, seed, settings, first_tick: _, snapshot_tick, snapshot_hash, log } => {
+                    let s = match_to_mp(&settings, seed);
+                    self.events.push(CoreEvent::LateJoinHandover {
+                        slot,
+                        settings: Box::new(s),
+                        snapshot_tick,
+                        snapshot_hash,
+                        log,
+                    });
+                }
+                Event::LateJoinSlot { slot, join_tick } => {
+                    self.events.push(CoreEvent::LateJoinSlot { slot, join_tick });
                 }
                 Event::ClientJoined { slot, .. } => {
                     self.events.push(CoreEvent::AgentJoined { slot });
@@ -376,11 +580,24 @@ impl NetCore {
                                 self.events.push(CoreEvent::MatchStarted(Box::new(s)));
                             }
                         }
+                        // mp-lobby-one-screen: tag 2 = the one-screen snapshot, tag 3 = a
+                        // client's own-row edit [S docs/systems/net-online-lobby.md §6.4].
+                        Some(2) => {
+                            if let Some(st) = nf_net::LobbyState::decode(&bytes[1..]) {
+                                self.lobby = Some(st);
+                            }
+                        }
+                        Some(3) => {
+                            if let Some(e) = nf_net::LobbyEdit::decode(&bytes[1..]) {
+                                self.lobby_edits.push(e);
+                            }
+                        }
                         _ => {}
                     }
                 }
                 Event::Listening | Event::Connected { .. } | Event::SlotMapChanged { .. }
-                | Event::Stalled { .. } | Event::Resumed { .. } | Event::MatchEnded { .. } => {}
+                | Event::Stalled { .. } | Event::Resumed { .. } | Event::MatchEnded { .. }
+                | Event::ClientJoined { .. } | Event::MatchStarted { .. } => {}
             }
         }
     }
@@ -419,6 +636,31 @@ impl NetCore {
         self.choices.clone()
     }
 
+    /// mp-lobby-one-screen: the client reads the host's last snapshot [S §6.4].
+    pub fn lobby_state(&self) -> Option<nf_net::LobbyState> {
+        self.lobby.clone()
+    }
+
+    /// mp-lobby-one-screen: the host stores + pushes the whole snapshot [S §6.4].
+    pub fn publish_lobby(&mut self, st: &nf_net::LobbyState) {
+        self.lobby = Some(st.clone());
+        let mut payload = vec![2u8];
+        payload.extend_from_slice(&st.encode());
+        self.sess.send_data(payload);
+    }
+
+    /// mp-lobby-one-screen: a client pushes one own-row edit [S §6.4].
+    pub fn push_row_edit(&mut self, e: &nf_net::LobbyEdit) {
+        let mut payload = vec![3u8];
+        payload.extend_from_slice(&e.encode());
+        self.sess.send_data(payload);
+    }
+
+    /// mp-lobby-one-screen: the host drains one arrived client edit [S §6.4].
+    pub fn take_row_edit(&mut self) -> Option<nf_net::LobbyEdit> {
+        if self.lobby_edits.is_empty() { None } else { Some(self.lobby_edits.remove(0)) }
+    }
+
     pub fn publish_choices(&mut self, c: &MpNetChoices) {
         self.choices = Some(c.clone());
         self.sess.send_data(c.encode());
@@ -432,6 +674,7 @@ impl NetCore {
         if !self.closed {
             self.sess.leave();
             self.closed = true;
+            self.drop_reach();
         }
     }
 
@@ -457,8 +700,34 @@ impl NetCore {
         self.sess.local_input(tick, input);
     }
 
+    /// The match's input lead (see `nf_net::Session::input_delay`).
+    pub fn input_delay(&self) -> u32 {
+        self.sess.input_delay()
+    }
+
     pub fn submit_hash(&mut self, tick: u32, hash: u64) {
         self.sess.submit_hash(tick, hash);
+    }
+
+    /// Host: record the per-tick inputs a tick ran with (the late-join
+    /// transcript; the app calls it right after `ready_inputs` returned
+    /// `Some`). Host-only — clients ignore it.
+    pub fn record_run_tick(&mut self, tick: u32, inputs: [nf_net::Input; 4]) {
+        self.sess.record_run_tick(tick, inputs);
+    }
+
+    /// Late joiner: the replay verified — the host picks the join tick and
+    /// every machine arms the slot at it (JOIN_SLOT →
+    /// [`CoreEvent::LateJoinSlot`]).
+    pub fn confirm_late_join(&mut self) {
+        self.sess.confirm_late_join();
+    }
+
+    /// Late joiner: the replay hash disagreed with the host's snapshot —
+    /// leave with the explicit reason (the host reports
+    /// `ClientLeft { JoinVerifyFailed }`; the match never sees this joiner).
+    pub fn late_join_verify_failed(&mut self) {
+        self.sess.leave_with(nf_net::LeaveReason::JoinVerifyFailed);
     }
 
     pub fn local_slot(&self) -> usize {
@@ -548,11 +817,11 @@ impl crate::menu::MpSession for SessionProxy {
     }
     fn connect(&mut self, addr: &str) -> Result<(), MpNetError> {
         let name = self.0.borrow().display_name();
-        let parsed = addr.parse::<std::net::SocketAddr>();
-        let r = match parsed {
-            Ok(a) => self.0.borrow_mut().rebind_client(a),
-            Err(_) => return Err(MpNetError::BadAddress),
-        };
+        // net-p2p: a join code or `a.b.c.d:port` (nf_net::p2p::parse_target).
+        if nf_net::p2p::parse_target(addr).is_err() {
+            return Err(MpNetError::BadAddress);
+        }
+        let r = self.0.borrow_mut().dial(addr);
         match r {
             Ok(()) => {
                 if let Some(f) = self.1 {
@@ -570,5 +839,44 @@ impl crate::menu::MpSession for SessionProxy {
     fn start_match(&mut self, s: &nf_game::mp::MpSettings) { self.0.borrow_mut().start_match(s); }
     fn match_started(&self) -> Option<nf_game::mp::MpSettings> { self.0.borrow().match_started() }
     fn set_codename(&mut self, name: &str) { self.0.borrow_mut().set_codename(name); }
+    fn local_slot(&self) -> usize { self.0.borrow().local_slot() }
+    fn lobby_state(&self) -> Option<nf_net::LobbyState> { self.0.borrow().lobby_state() }
+    fn publish_lobby(&mut self, s: &nf_net::LobbyState) { self.0.borrow_mut().publish_lobby(s); }
+    fn push_row_edit(&mut self, e: &nf_net::LobbyEdit) { self.0.borrow_mut().push_row_edit(e); }
+    fn take_row_edit(&mut self) -> Option<nf_net::LobbyEdit> { self.0.borrow_mut().take_row_edit() }
     fn close(&mut self) { self.0.borrow_mut().close(); }
+    fn reach(&self) -> Option<crate::menu::MpReach> { self.0.borrow().reach() }
+    fn browse(&mut self, on: bool) {
+        let mut c = self.0.borrow_mut();
+        if on && c.browse.is_none() {
+            let mut l = nf_net::discovery::LobbyList::open(nf_net::PROTOCOL_VERSION, nf_net::DEFAULT_BUILD_ID, reach_seed() as u32);
+            l.set_directory(c.reach_cfg.as_ref().and_then(|r| r.directory));
+            c.browse = Some(l);
+        } else if !on {
+            c.browse = None;
+        }
+    }
+    fn browse_rows(&self) -> Vec<crate::menu::MpLobbyRow> {
+        self.0.borrow().browse.as_ref().map_or(Vec::new(), |b| b.rows().into_iter().map(|e| crate::menu::MpLobbyRow {
+            name: e.info.name, host: e.info.host, level: e.info.level_code, scenario: e.info.scenario,
+            players: e.info.players, max_players: e.info.max_players, in_progress: e.info.in_progress,
+            ping_ms: e.ping_ms, joinable: e.joinable, addr: e.addr.to_string(),
+        }).collect())
+    }
+    fn set_lobby(&mut self, name: &str, level: u32, scenario: u32, players: u8) {
+        let mut c = self.0.borrow_mut();
+        let host = c.display_name();
+        let port = c.sess.local_addr().port();
+        let in_progress = c.match_start.is_some();
+        c.advert = Some(nf_net::discovery::LobbyInfo {
+            name: name.to_string(), host, level_code: level, scenario, players, max_players: nf_net::MAX_AGENTS as u8,
+            in_progress, protocol: nf_net::PROTOCOL_VERSION, build: nf_net::DEFAULT_BUILD_ID, port,
+        });
+    }
+    fn expect_peer(&mut self, code: &str) -> bool { self.0.borrow_mut().expect_peer(code) }
+}
+
+/// A per-run seed for STUN transaction ids / punch nonces (not security relevant).
+fn reach_seed() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64)
 }

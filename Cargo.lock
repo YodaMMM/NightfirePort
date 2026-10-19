@@ -1032,6 +1032,7 @@ version = "0.0.1"
 name = "nf-view"
 version = "0.0.1"
 dependencies = [
+ "ab_glyph",
  "anyhow",
  "bytemuck",
  "cpal",

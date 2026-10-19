@@ -1,7 +1,9 @@
-//! view-model-unlit: the first-person view model takes no point lights. `Game_Draw` 0x1e6f50 draws it in
-//! the list-2 pass after `psiLight_SetLights(0, …)` zeroed the slots, and an animated object's draw
-//! (`AnimObjectDraw` 0x1c4490) never re-uploads them [M View_DrawObjList 0x1e69a0:75-98]. The port
-//! tags the view model's draws with `VIEW_MODEL_NODE`, and the renderer zeroes their light slots.
+//! view-model tagging: the first-person view model's draws carry `VIEW_MODEL_NODE` (the list-2 pass,
+//! drawn after `psiClearZ`). light-viewmodel corrected the old premise that it takes no point lights:
+//! `Game_Draw` 0x1e6f50:150 zeroes the slots before list 2, but `AnimObjectDraw` 0x1c4490:117-122
+//! re-picks them through `View_SetupRenderModes` 0x1e78b0 (the object's sphere) or
+//! `View_SetupRenderModes2` 0x1e7908 (the viewer's camera, radius 2.0) — the renderer lights the
+//! tagged draws from the eye. The tag must stay off World draws (node drives the World cel cull).
 //! Opt-in: set `NF_ISO` to the disc image.
 use nf_view::scene::{Layer, VIEW_MODEL_NODE};
 

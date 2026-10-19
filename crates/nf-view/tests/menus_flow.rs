@@ -98,8 +98,10 @@ fn the_page_sequence_matches_the_real_game() {
     assert_eq!(fe.page.id(), 0x4000_0025, "Select Codename [M menu-def page 0x40000025 header Txt 0x1f2]");
     // Opened from Main the page selects row 1 "Play without saving" [M P_NFSELECT 0x20aec0:83,
     // :96-97]. Its ✕ pops the confirm box, ✕ continues → Select Difficulty [M C_SBNFCN
-    // 0x20b390:19-21; P_NFSELECT 0x20aec0:100-104]. (△ cancels the box [S: the driver's
-    // transcript — Menu_UpdateOptionBox is not decoded].)
+    // 0x20b390:19-21; P_NFSELECT 0x20aec0:100-104]. (△ cancels the box [M Scroll_Update
+    // 0x221b20:454-458 — action 0x22/△ plays sound 9 and sends msg 0x6d; the box's own handler
+    // C_LBMSGOPTIONS 0x2022a0:12-17 stores option_return = 2 ("No") and pops on 0x6d; ✕ keeps the
+    // selected row's value [M :8-11]. Menu_UpdateOptionBox 0x202280 only returns the stored value.])
     assert_eq!(fe.cursor, 1, "the codename page opens on Play without saving [M 0x20aec0:96-97]");
     assert!(fe.action(Action::Confirm));
     assert!(fe.confirming_default_profile, "the first confirm arms the box");
@@ -111,8 +113,9 @@ fn the_page_sequence_matches_the_real_game() {
     assert_eq!(fe.page, Page::Difficulty);
     assert_eq!(fe.page.id(), 0x4000_0023, "Select Difficulty [M menu-def page 0x40000023 header Txt 0x1f8]");
     assert_eq!(fe.cursor, 0, "opened from the codename page the wheel 0x100000bf starts on index 0 [M 0x216bf8:10-12]");
-    // Confirming the difficulty → the Single Player list [M C_SBNFDFCTY 0x216ca8:10-17 opens
-    // 0x4000001c; the driver's observed order Select Difficulty → Single Player].
+    // Confirming the difficulty → the Single Player list [M C_SBNFDFCTY 0x216ca8:10-17 —
+    // Menu_ChangePageCloseIris(0x4000001c, …); the order is re-derived from the page handlers,
+    // not the driver's 2026-10-13 transcript, which was not a fresh boot].
     assert!(fe.action(Action::Confirm));
     assert_eq!(fe.page, Page::MissionSelect);
     assert_eq!(fe.page.id(), 0x4000_001c, "Single Player [M menu-def page 0x4000001c header Txt 0x14c]");
@@ -183,6 +186,10 @@ fn locked_missions_cannot_be_scrolled_to_or_picked() {
     let mut progress = nf_game::progress::Progress::default();
     progress.set_nightfire_status(0x3); // the fresh profile's boot bits [D sp_level .data rows 0-1]
     fe.results_enter(&mut progress, 0x0700_0005, 6, 2, None);
+    // reward-after-outro [M 0x182c60:72 / 0x1d6360:160-163]: the complete arm QUEUES the page and
+    // the load tail's MenuManager_Create opens it — the modeled load completes, so re-open before
+    // walking the list (the queued window swallows input).
+    fe.reopen_queued_page();
     assert!(fe.unlocked_row(2), "completing row i unlocks row i+1");
     // Back on the mission list, Down walks onto the newly unlocked row.
     fe.page = Page::MissionSelect;
@@ -260,8 +267,16 @@ fn the_results_pages_split_complete_from_failed() {
     // +0x1c = 0x40000036 and pushes a 60-frame fade].
     fe.mission_ended(Outcome::Complete, Stats { shots_fired: 120, shots_hit: 40, accuracy_pct: 33, time_s: 754 });
     assert_eq!(fe.flow.page, 0x4000_0036);
-    assert_eq!(fe.page, Page::Results);
+    // reward-after-outro [M 0x182c60:72-74 / 0x1d6360:160-163]: the page QUEUES at the end — no
+    // MenuManager runs until the load's tail (the old assert pinned the playtest bug: the reward
+    // page before the ending cut-scene).
+    assert!(fe.results_queued, "the page queues at the end [M 0x182c60:72]");
+    assert_eq!(fe.page, Page::Start, "no manager is up during the load [M 0x1d6360:160-163]");
     assert_eq!(fe.flow.get_state(), ST_FADE_HOLD, "the fade hold is pushed [M 0x182c60:74]");
+    // The modeled plain front-end load (05 has no outro — the default arm [M 0x182c60:89-116])
+    // completes; its tail re-opens the queued page [M 0x1d6360:160-163].
+    assert!(fe.reopen_queued_page(), "the load tail opens the results page");
+    assert_eq!(fe.page, Page::Results);
     assert_eq!(fe.outcome, Outcome::Complete);
     // The COMPLETED page is P_NFRESULTS 0x208e78: no row list [L page 0x40000036's controls];
     // Confirm continues to the mission list [M 0x208e78:39-44 — Manager_SendMessage(0x44,
@@ -316,15 +331,20 @@ fn cursors_wrap_and_back_walks_up_the_pages() {
     let mut fe = FrontEnd::new();
     fe.unlock_all = true; // the walk visits the mission list freely
     start_to_main(&mut fe);
-    // Main's Up/Down wrap over its three rows [S unverified — the control type of 0x100000ed is not
-    // checked; out of pass/fail]. Back from Main → the title is the port's [S] (P_MAIN has no 99 arm).
+    // Main's Up/Down wrap over its three rows [S unverified — out of pass/fail: the rows are
+    // M_BUTTONs (the def's page 40000002 binds ctrls 10000002/3/4, kind byte 1 [D 08000002 in
+    // 07000048.bin]; Menu_Update 0x1f1dc0 dispatches kind 1 to Button_Update), so Scroll_Init's
+    // wrap flag never enters and the button focus walk is not visible in the decompile's C.
+    // Back from Main → the title is the port's [S] (P_MAIN 0x20a7b0 has only the 0x4c/0x50 arms
+    // [M] — no Back arm at all).
     fe.action(Action::Up);
     fe.action(Action::Down);
     fe.cursor = 0;
     main_confirm(&mut fe);
     assert_eq!(fe.page, Page::Codename);
     assert_eq!(fe.cursor, 1, "opened from Main on Play without saving [M 0x20aec0:96-97]");
-    // Back to Main [S unverified — the page's △ target is menu-def script data].
+    // Back to Main [S unverified — P_NFSELECT 0x20aec0 has no decoded △ arm this pass; the
+    // port pops to Main].
     assert!(fe.action(Action::Back));
     assert_eq!(fe.page, Page::Main);
     fe.cursor = 0;
@@ -352,11 +372,21 @@ fn cursors_wrap_and_back_walks_up_the_pages() {
     // The Dossier opens on □/E/Tab (the "~Y Dossier" hint, Txt 0x208) and returns.
     assert!(fe.action(Action::Side));
     assert_eq!(fe.page, Page::Dossier);
+    // fe-audit 1019: the Dossier's Back is the manager's default page pop [M 0x21c858:592-600;
+    // the disc's front-end def binds no msg-99 script on any page — every page's only SCRIPT is
+    // id 0x2000000f bound to the 0x4c-open slot 0 by its single MSG 0x21 [D the 08000002 tag
+    // stream]] — the mission list it was opened from.
     assert!(fe.action(Action::Back));
     assert_eq!(fe.page, Page::MissionSelect);
-    // Back from the mission select returns to the difficulty [S unverified — P_NFMAP's 99 arm sends
-    // 0x40000002 (0x20b608:67-68); the △ pop target is the page stack].
-    fe.action(Action::Back);
+    // fe-audit 1019: the list's Back is ROUTE-DEPENDENT. 0x5f runs the page's msg-99 SCRIPT
+    // first [M 0x21c858:588-592] — none is bound [D] — so the pushed SP chain takes the default
+    // pop: reopen the wheel with its saved cursor [M 0x21c858:592-600]. The wheel was pushed by
+    // the confirm's 0x44 b=0 [M C_SBNFDFCTY 0x216ca8:10-17; the push rule 0x21c858 case 0x44].
+    // (On an EMPTY stack — the results/bonus route, opened with b=1 [M 0x208e78:43] — the pop's
+    // else reaches P_NFMAP's 99 arm → MAIN [M 0x20b608:67-68]; that route is menu_sp_e2e's.)
+    assert!(fe.action(Action::Back));
+    assert_eq!(fe.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-600]");
+    assert_eq!(fe.cursor, 2, "the wheel's saved cursor rode the pop [M 0x21c858:600 — 00 Agent was picked]");
 }
 
 #[test]

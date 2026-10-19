@@ -238,6 +238,101 @@ impl Rotor {
     }
 }
 
+/// Mine (placement 0xFE → `Mine_Create` 0x17ce28, class 0x4B): the floating laser tripbomb —
+/// 07000015's nine `Tripbomb_3rd_*` cels. `Mine_Update` 0x17c930:
+/// - the body bobs: `obj+0x34 = pos.y + sin(GameState+0x52·(param2·0.0002))·(param4·0.1)`
+///   [M 0x17c930:9-30 — inst+0x10 = param2·0.0002 the rate, inst+0x18 = param4·0.1 the amplitude,
+///   the clock is the game's global `GameState+0x52` tick — the port's fixed 60 Hz frame, no RNG];
+/// - the explode arm: when the object's HITDATA list (`obj+0xD0`, the collide pass's contact list
+///   [M docs/atlas/object.md +0xD0]) holds an entry whose +0x58 references another object, the
+///   mine explodes [M 0x17c930:31-45's walk]: `Camera_Shake(param1)` when param1 ≥ 0.5, then an
+///   Explode object (class 0xF) built from the mine's instance: damage = inst+0x1C = param 0
+///   (float), radius/shake/blast-script-scale = inst+0x20 = param 1, blast script = inst+0x24 =
+///   param 5 (07000015: 0x06000052, the standard blast), lifetime = the script's +0xAB0 u16, the
+///   script scale `SCRIPTINFO+0x94 = param1`, `obj+0xE8 = param1·0.0667` [M disasm 0x17ca74-0x17cb10],
+///   and `obj+0xFE |= 1` deletes the mine that tick [M 0x17cb7c-0x17cb88].
+///
+/// `Mine_Create` 0x17ce28 reads no RNG. The contact surface is the mine cel's own collision —
+/// 07000015's long mine carries 1240 tris spanning ±0.23 x, ±0.10 y, 0..−4.34 local z (the beam)
+/// [D probe census_07000015::probe_07000015_mine_objects].
+#[derive(Clone, Debug)]
+pub struct Mine {
+    /// The main-map placement index.
+    pub placement: usize,
+    /// obj+0x30: the placement translation (the bob wobbles obj+0x34, the y, off this).
+    pub pos: V3,
+    /// inst+0x1C = param 0 (float): the blast damage.
+    pub damage: f32,
+    /// inst+0x20 = param 1 (float): the blast radius, the camera shake and the blast-script scale.
+    pub radius: f32,
+    /// inst+0x10 = param 2 · 0.0002: the bob clock rate (rad per tick).
+    pub bob_rate: f32,
+    /// inst+0x18 = param 4 · 0.1: the bob amplitude.
+    pub bob_amp: f32,
+    /// inst+0x24 = param 5: the blast script hash.
+    pub script: u32,
+    /// The mine cel's collision triangles in world space (the contact test's surface — the game's
+    /// hit list fills from the collide pass over the same cel).
+    pub tris: Vec<[V3; 3]>,
+    pub lo: [f32; 3],
+    pub hi: [f32; 3],
+    /// obj+0xFE bit 0: exploded; the delete pass removes the object that tick.
+    pub exploded: bool,
+    /// The live posed y (obj+0x34) — the draw-side getter for the bob.
+    pub posed_y: f32,
+}
+
+impl Mine {
+    /// `Mine_Create` 0x17ce28 over the main map's placements (placement order). No RNG [M].
+    /// `tris_of` resolves the placement's object collision (the same closure shape the other
+    /// creators take).
+    pub fn create(
+        placements: &[nf_formats::placement::Placement],
+        tris_of: impl Fn(&nf_formats::placement::Placement) -> Vec<[V3; 3]>,
+    ) -> Vec<Mine> {
+        let mut out = Vec::new();
+        for (i, p) in placements.iter().enumerate() {
+            if p.flags & 0xff != 0xfe { continue; }
+            let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v);
+            let tris = tris_of(p);
+            let (mut lo, mut hi) = ([f32::MAX; 3], [-f32::MAX; 3]);
+            for t in &tris { for v in t { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
+            out.push(Mine {
+                placement: i,
+                pos: p.translation,
+                damage: param(0) as i32 as f32,
+                radius: param(1) as i32 as f32,
+                bob_rate: param(2) as i32 as f32 * 0.0002,
+                bob_amp: param(4) as i32 as f32 * 0.1,
+                script: param(5),
+                lo, hi,
+                tris,
+                exploded: false,
+                posed_y: p.translation[1],
+            });
+        }
+        out
+    }
+
+    /// The bob half of `Mine_Update` 0x17c930:9-30 — `posed_y = pos.y + sin(t·rate)·amp` over the
+    /// fixed 60 Hz frame counter (the game's GameState+0x52 clock; deterministic, no RNG).
+    pub fn bob(&mut self, frame: u32) {
+        self.posed_y = self.pos[1] + (frame as f32 * self.bob_rate).sin() * self.bob_amp;
+    }
+
+    /// The explode arm's contact test: the collide pass gives the mine a HITDATA entry when a
+    /// touching object's capsule (the player body, feet `a` → head `b`, radius `r`; the drones'
+    /// 0.4 spheres the same way) meets the mine cel's collision tris [M 0x17c930's hit-list walk +
+    /// docs/atlas/object.md +0xD0]. The port's static world already holds the same tris, so a
+    /// walked-in Bond rests AT contact distance — the game's own sphere-vs-cel query radius is the
+    /// capsule radius, matched here (+0.03 graze epsilon [S]).
+    pub fn touching(&self, a: V3, b: V3, r: f32) -> bool {
+        if self.tris.is_empty() { return false; }
+        if (0..3).any(|k| (a[k] < self.lo[k] - r && b[k] < self.lo[k] - r) || (a[k] > self.hi[k] + r && b[k] > self.hi[k] + r)) { return false; }
+        crate::triggers::capsule_hits_tris(a, b, r + 0.03, &self.tris)
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct WorldObjects {
     pub rotors: Vec<Rotor>,

@@ -374,11 +374,16 @@ pub fn hud(dev: &Dev, scene: &Scene, aspect: f32, view_proj: [[f32; 4]; 4]) -> H
     let mut h = Hud { quads: Vec::new(), aspect, textures: &scene.hud_textures };
     if dev.overlay { ai_overlay(&mut h, scene, view_proj); }
     if dev.menu { menu(&mut h, dev, scene); }
-    // The Toggles page's fps display (top right; wall-clock — a dev readout, never in the Sim).
-    if dev.show_fps && dev.fps > 0.0 {
-        if let Some(t) = scene.hud.as_ref() {
-            h.text(Anchor::Right, &t.font, 69, &format!("{:.0} fps", dev.fps), 508.0, 4.0, true, [0.9, 0.9, 0.7, 1.0], true);
-        }
+    // The fps readout moved to the always-on counter (`fps_counter_hud`, drawn every frame).
+    let _ = dev.show_fps;
+    h.finish()
+}
+
+/// The always-on frame counter, top right (the user's 240 Hz target): presented frames per second.
+pub fn fps_counter_hud(scene: &Scene, aspect: f32, fps: f32) -> HudFrame {
+    let mut h = Hud { quads: Vec::new(), aspect, textures: &scene.hud_textures };
+    if let Some(t) = scene.hud.as_ref() {
+        h.text(Anchor::Right, &t.font, 69, &format!("{:.0} fps", fps), 508.0, 14.0, true, [0.9, 0.9, 0.7, 1.0], true);
     }
     h.finish()
 }
