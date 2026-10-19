@@ -374,9 +374,10 @@ impl Drop for Player {
             if tm.audio_clocked { "audio" } else { "wall" }, if self.ended { "" } else { " (stopped early)" });
         eprint!("{line}");
         if nf_audio::silent() { return; } // tests never write next to their binaries
-        if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        {
             use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("movie-timing.log")) { let _ = f.write_all(line.as_bytes()); }
+            let path = crate::settings::output_dir().join("movie-timing.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) { let _ = f.write_all(line.as_bytes()); }
         }
     }
 }
