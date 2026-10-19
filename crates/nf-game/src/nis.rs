@@ -467,7 +467,7 @@ impl Script {
                         let (Some(&n), Some(&kind)) = (cmds.get(pc + 1), cmds.get(pc + 2)) else { self.streams[i].pc = None; return };
                         let p: Vec<u32> = (0..n as usize).filter_map(|k| rd(2 + 4 * k, 4)).collect();
                         next = pc + 3 + 4 * n as usize + 1;
-                        self.event(i, kind, p, objs, ch, frame, out);
+                        self.event(i, kind, p, objs, ch, w, frame, out);
                     }
                     0x16 => {
                         // `Script_SoundStart` (0x1d8820): 2-D when asked or when the object stream has no object.
@@ -784,7 +784,7 @@ impl Script {
     /// `Script_EventHandler` (0x1d94c0). Events 3/4/5/6/7/8/9/0xB/0xC/0xD/0xE/0x10/0x11/0x12/0x13 measured there;
     /// event 5 (`Drone_EnableAll(0, hash)`) and event 7 (flag 0x80) are the drone-freeze pair.
     #[allow(clippy::too_many_arguments)]
-    fn event(&mut self, i: usize, kind: u8, p: Vec<u32>, objs: &Objects, ch: &mut Channels, frame: u32, out: &mut Vec<Request>) {
+    fn event(&mut self, i: usize, kind: u8, p: Vec<u32>, objs: &Objects, ch: &mut Channels, w: &dyn World, frame: u32, out: &mut Vec<Request>) {
         // NF_SCRIPTLOG=1 (or NF_LEVELLOG=1): every script event (op 0x12) fired — tick (script clock), game frame,
         // owning ScriptPlayer's placement index, script hashcode, stream, event kind, params. Lets the user see
         // e.g. that 07000005's EndLevel script (0x06000A23) fires event 0x11 → ch 0x1D, or that the truck script
@@ -807,7 +807,17 @@ impl Script {
             6 => {
                 self.flags |= 0x100;
                 let prev = i.checked_sub(1).map(|j| &self.streams[j]).filter(|s| matches!(s.kind, 1 | 2)).and_then(|s| s.obj);
-                self.player_at = prev.and_then(|o| match objs.list.get(o) { Some(Some(Obj::Entity { matrix, .. })) => Some(*matrix), _ => None });
+                // The snapshot reads the object's +0x90 matrix [M 0x1d94c0:125-134, Mat_Copy(src,dst)
+                // 0x1e3348]. An entity stream's object carries the keyed matrix at +0x90; an ANIM
+                // stream's object carries its discrete frame-0 pose there (`Script_GetInterp` case 2
+                // copies obj+0x90 as the source [M 0x1da158 case 2], `AnimObjectUpdate` keys it) —
+                // 060006d3 (the 0700004a lobby-arrival scene) snapshots its stream-3 body anim this
+                // way, so the enable pose is the anim's final pose, not Bond's frozen cab spot.
+                self.player_at = prev.and_then(|o| match objs.list.get(o) {
+                    Some(Some(Obj::Entity { matrix, .. })) => Some(*matrix),
+                    Some(Some(Obj::Anim { skin, script, frame, .. })) => w.discrete0(*skin, *script, *frame),
+                    _ => None,
+                });
                 self.player_mode = g(0) as u8;
                 // fix-final-blockers2 diagnostic: which stream/object the snapshot came from (the game's iVar5
                 // = record(i−1)+0x10 gated on record(i−1)+0x24 kind ∈ {1,2}, fallback `glb_players+0x90`
@@ -898,9 +908,23 @@ impl Script {
                 // at a parent-chain end" per the case-1 tail-Concat structure [M 0x1d9a08:106-133] — it
                 // REVERTED: 07000014's fusebox wire and 07000008's safe entities key LOCAL offsets and are
                 // render-verified with the base applied, so the game composes the base for unparented
-                // streams too (the decompile loses the step). See the report: #289's marker stays the
-                // open question (base-composed −107.66 = void on its column; raw −54.13 = the freeze pose;
-                // the game's mode-1 SphereIntersect rescue is the live check).)
+                // streams too (the decompile loses the step).)
+                // level-4a-complete EXCEPTion — a zero-key entity stream composes NO base: its
+                // `Script_GetInterp` collapses onto the raw pool entry at `first_key`
+                // [M 0x1da158: the zero-width search lands on key[first_key]], and those pool-tail
+                // keys are authored WORLD poses, not base-relative ones — 060006cf's stream 25
+                // (the ot25 enable marker, zero keys) reads pool[1409] = (1.80, −54.128, −3.453),
+                // Bond's freeze pose ON the held cab [D raw key dump; the SP #289 base is
+                // (0, −53.53, −3.38) [D placement]], while the SAME script's keyed stream 13
+                // carries local offsets (y 0.99 → −5.33 [D]) that NEED the base. Composing the
+                // base into the marker puts the enable at (1.80, −107.66, −6.83) — a column with
+                // no floor from −52 to −160 [D probe fb6g] — and `Player_Enable` 0x195498's
+                // mode-1 SphereIntersect only dispatches wire/creepwall hits, it does not push
+                // the player onto geometry [M 0x195498:90-111], so the base reading is
+                // unplayable. [S] unverified: the live check (gdbwatch SCRIPTINFO+0x40 + Bond's
+                // y through the −52 landing in a fresh-boot PCSX2) settles which matrix the game
+                // really hands `Player_Enable`.
+                let keyed = self.streams[i].last_key > self.streams[i].first_key;
                 let mut p = s.parent;
                 let mut n = 0;
                 while p >= 0 && (p as usize) < self.streams.len() && n < self.streams.len() {
@@ -908,7 +932,7 @@ impl Script {
                     p = self.streams[p as usize].parent;
                     n += 1;
                 }
-                m = mul(&m, &self.matrix);
+                if keyed { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
             4 => {
@@ -1348,19 +1372,15 @@ impl Player {
                     self.activated = true;
                     if let Some(s) = self.info[self.cur].as_mut() { s.delay = 0; }
                 }
-                // script-negative-delay [S stand-in, docs/levels/0700004a.md §6]: the Tower-2 lift
-                // (SP #42: mask 1, out 0x22 [D placement]) resumes ONLY while ch 0x22 is on — the
-                // game's case-2 rule above — and its script HOLDS itself at t1611 (stream 4's
-                // event 3 p0 = 0 → the −1 delay [D 0x06000571]). The disc carries no ch-0x22
-                // writer the port's scans reach (the 11 scripts' 0xD/0x11 events, the placements,
-                // the 13 TouchOnce plates — the same "no writer found" shape as ch 0x4a below),
-                // so the port marks the play the doc's reading ("the ch-0x22 SP out marks the
-                // play"): the channel rises when the hold engages, and the mask&1 rule then
-                // releases the hold through `SP_UnPause` — the game's path, not a delay override.
-                if w.level() == 0x0700_004a && self.scripts[self.cur] == 0x0600_0571
-                    && self.info[self.cur].as_ref().is_some_and(|s| s.delay < 0) {
-                    ch.set(0x22, 1, frame);
-                }
+                // The Tower-2 lift's hold (0x06000571's t1611 event 3 [D]) releases through ch 0x22
+                // — and the channel's WRITER is the landing cut-scene 0x060006cf's stream-27 event
+                // 0xD [34, 1] at the scene's last tick [D pack 0780004a.bin; switch_channels[34] =
+                // ch 0x22, SP #42's out [D placement]]: the cab holds the whole scene (Bond
+                // disabled on it), then the scene's end unpauses the lift. The old port stand-in
+                // ("the channel rises when the hold engages", docs/levels/0700004a.md §6) resumed
+                // the cab one tick into the hold — the pack script's event was invisible to the
+                // level-bin channel scans that justified it. The scans now cover the packs; the
+                // real writer exists, so the stand-in is gone (level-4a-complete).
                 // The skip [M 0x1dbda8:129-141]: `Input_Action(-1, 0x19, 1)` — any player pressing the skip
                 // action — fast-forwards the current script via `Script_FFwd(cur, 1)`, unless the script is one
                 // of the three death NISs (`Script_IsDeathNIS` reads slot A's hash, always +0x1C).
@@ -1370,14 +1390,15 @@ impl Player {
                     }
                 }
                 if !self.info[self.cur].as_ref().is_some_and(Script::playing) {
-                    // fix-finale-blockers [S, docs/levels/0700004a.md §6]: the Tower-2 lift — the
-                    // 0x06000571 script's last key parks the platform entity 150 units down at the
-                    // lobby. The game's own ch-0x4a writer ("the lift's lobby arrival") is not in
-                    // the data the port reaches (no mux, trigger, script event or SP writes it —
-                    // the scans), so the port completes the objective at the lift script's end.
-                    if w.level() == 0x0700_004a && self.scripts[self.cur] == 0x0600_0571 {
-                        ch.set(0x4a, 1, frame);
-                    }
+                    // level-4a-complete: the old ch-0x4a stand-in ("the lift's lobby arrival
+                    // completes the objective at the script's end") is GONE — the real writer is
+                    // 07000013's spawn TouchOnce #153, whose ch 0x4A completes 4a's "Gain access
+                    // to lobby" through the late AND [D 07000013 trigger #153; M 0x1827d8 the
+                    // enable+complete AND; docs/levels/07000013.md §2 already records the late
+                    // AND]. No 0700004a-resident writer exists ([D] the level's triggers, its
+                    // scripts and BOTH pack scripts 060006cf/060006d3 — their only 0xD targets
+                    // are 0x40 and 0x22), so the row completes on the next level's spawn, the
+                    // same shape as 12's objective completing on 4a's plate #277.
                     if self.stay { self.state = 5; } else {
                         if self.other().is_some() { self.cur ^= 1; self.load(lib, objs, ch, w, frame, out); }
                         self.state = 3;
