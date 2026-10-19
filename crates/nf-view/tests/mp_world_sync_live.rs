@@ -16,6 +16,10 @@ fn settings(level: u32, humans: u32, bots: u32) -> MpSettings {
     s.bot_count = bots;
     s.total_players = humans + bots;
     s.seed = 0x0bed_0bad;
+    // The Explosive Scenery enviro-mod on: `Destroy_Create` 0x12c318 builds the class-0x18
+    // destroyables in MP only while it is set [M :14] (mp-lobby-settings), and this test syncs every
+    // object family — 07000025's doors open through its destroyable chain (off: 0 door ticks).
+    s.explosive_scenery = 1;
     s.time_limit = 10 * 60;
     s
 }
