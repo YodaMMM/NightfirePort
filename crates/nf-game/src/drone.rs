@@ -2406,6 +2406,12 @@ impl Drone {
             UNSURRENDER_ANIM | DRAW_WEAPON => (0, false),
             AIM_CROUCH | AIM_STAND_RELOAD | AIM_CROUCH_RELOAD | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_DRONE_AHEAD
                 | GO_TO_GOAL | DRONE_STUCK => (0, false),
+            // The scare-flight family: case 8 forwards `HandleImpact(0x88, 0)` and the
+            // 7/9/0x17/0x18/0x19 group `HandleImpact(0x88, 1)` [M 0x168aa8 case 8 + the case-7
+            // fallthrough group; 0x168d18:57-65] — bullets resume through Recover 0x88 with no
+            // stagger; on msg 9 the allow is raised in `on_explosion` (the DSTATE's own group arm).
+            // Recover 0x88 itself (0x173658) carries no case 8/9 — no arm here, the message drops.
+            RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT => (RECOVER_FROM_SCARY_OBJECT, false),
             // The mission states (fix-party-mission, playtest: bullets on party guests did nothing):
             // PartyGirl 0x160140 case 8 → HandleImpact(0x12, 0); Civilian 0x15d118 case 8 → (0x12, 0);
             // CivilianHiding 0x15d520 case 8 → (0x12, 0); CivilianScared 0x15d3a0 case 8 → (+0x118, 0);
@@ -2528,11 +2534,32 @@ impl Drone {
             self.set_state(EXPLOSIVE_IMPACT);
             return true;
         }
+        // The ninja states' own case 9 [L NDrone2_StateFuncs 0x29b300 st→fn; M each DSTATE's case 9]
+        // — Stand 0xa6 (0x16b990), Attack 0xa7 (0x16bb50), LongRange 0xa8 (0x16bfc0), MidRange 0xa9
+        // (0x16c248), ShortRange 0xaa (0x16c650), Sword 0xac (0x16d100), Somersault 0xad (0x16d298),
+        // Backflip 0xae (0x16d430), SideflipLeft 0xb0 (0x16cdd0), SideflipRight 0xb1 (0x16cf68),
+        // StandFire 0xb2 (0x16d5b8), NoRoute 0xb3 (0x16d878) — every arm calls
+        // `NDrone2_ExplosiveImpact(impact, 0, 1)` DIRECTLY (no HandleImpact resume stamp, no 0x54
+        // entry; ExplosiveImpact stamps +0x118 itself from the current state [M 0x146480:164-177]).
+        // GetClose 0xab (0x16cb70) and the jump-init 0xaf (0x173e08) carry no case 9 — the blast
+        // drops there, as in any state without the arm (the GLOBAL fallback has none either [M
+        // 0x15b830:49-60]). The daily-audit GLOBAL drop stays: the port's victims take the blast
+        // through THESE arms — the state-0 fallback re-call (send's unhandled route) is dropped,
+        // exactly the game's ProcessStateMachine(0) → DSTATE_Global [M-dis 0x171df8:103-109].
+        if matches!(s, crate::kiko::NINJA_STAND_FIRE | crate::kiko::NINJA_NO_ROUTE
+                | crate::kiko::NINJA_ATTACK | crate::kiko::NINJA_LONG_RANGE | crate::kiko::NINJA_MID_RANGE
+                | crate::kiko::NINJA_SHORT_RANGE | crate::kiko::NINJA_SWORD | crate::kiko::NINJA_SOMERSAULT
+                | crate::kiko::NINJA_BACKFLIP | crate::kiko::NINJA_SIDEFLIP_LEFT | crate::kiko::NINJA_SIDEFLIP_RIGHT)
+            || s == 0xa6 {
+            self.explosive_impact(d, rng, frame, 0, true);
+            return true;
+        }
         let Some((resume, allow)) = Self::impact_args(s) else { return false };
         // The case-9 allow is the DSTATE's own arm, not the msg-8 pair: Idle/Alert/Patrol's
         // 7/9/0x17/0x18/0x19 group passes (0x56, 1) while case 8 alone passes (0x56, 0) [M
         // 0x15bf18:100-110 / 0x15c248:68-77 / 0x15c498:65-74] — the surviving guard staggers.
-        let allow = allow || matches!(s, IDLE | ALERT | PATROL);
+        // The scare-flight family's group arm does the same [M 0x168aa8 / 0x168d18:57-65].
+        let allow = allow || matches!(s, IDLE | ALERT | PATROL | RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT);
         if allow {
             // 0x1469b8:178-193: stamp the resume (the 0x53-0x55 impact states are excluded), then
             // state 0x54 — its ENTER re-runs the impact with allow = 1 (the stagger anim).
