@@ -4661,6 +4661,12 @@ impl App {
                                     // the last 600 ticks of components plus, at the exchange
                                     // cadence, the per-item rows the desync exchange diagnoses
                                     // from (a desync is only ever detected at an exchanged tick).
+                                    // Test aid (NF_NET_PERTURB_AT=<tick>): nudge this machine's own body once at that net tick
+                                    // — the live desync check (the fail box, the diagnosis, the report zip).
+                                    if std::env::var("NF_NET_PERTURB_AT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(self.net_tick) {
+                                        sim.bond.pos[0] += 0.01;
+                                        eprintln!("[net] test aid: perturbed this machine's body at net tick {}", self.net_tick);
+                                    }
                                     let comps = sim.net_component_hashes(slot);
                                     let h = crate::scene::fold_component_hashes(&comps);
                                     self.desync_watch.on_tick(self.net_tick, comps);
