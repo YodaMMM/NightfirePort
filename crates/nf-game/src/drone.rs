@@ -216,6 +216,8 @@ pub mod state {
     pub const HOSTAGE_SAVED: u8 = 0x0c;
     /// The real `NDrone2_DSTATE_HostageIdle` (0x15ce60) — `NDrone2_StateFuncs[0x0d]` [L 0x29b300].
     pub const HOSTAGE_IDLE: u8 = 0x0d;
+    /// HostageHide [L NDrone2_StateFuncs 0x29b300 state 0x0e = 0x15cfe0].
+    pub const HOSTAGE_HIDE: u8 = 0x0e;
     /// `NDrone2_DSTATE_AllyLeadInit` (0x15e4f0) — `NDrone2_StateFuncs[0x1c]` [L 0x29b300] and
     /// `DroneTypeSettings[12].start` [L 0x29aee8+12·12]: the escort lead's entry (07000001's Mayhew).
     pub const ALLY_LEAD_INIT: u8 = 0x1c;
@@ -956,6 +958,10 @@ pub struct Drone {
     /// The ENTER ran `SetDronePartner` and the pairing pass has not serviced it yet (the pass runs
     /// at the tick boundary; the game pairs inside the ENTER [S one-tick deviation]).
     pub door_pair_requested: bool,
+    /// audit-fix-door-guard-3: the pairing request is serviced only from the guard's first enabled
+    /// UPDATE in state 0x31 on ([S] the deferral — see `door_guard_pass`'s block comment). The 0x31
+    /// UPDATE arm sets this once; the pass consumes it with the request.
+    pub door_pair_watch: bool,
     /// fix-grenade-types: the LIVE player position, mirrored each tick (`Drones::tick`'s shared pass)
     /// — the stun loop's kept-down test is the game's live `DroneFunc_AnyoneNear` positional query
     /// [M 0x14a718 via 0x1631c0 case 0xc], not the cached opp `dist` (a stunned guard's perception
@@ -1400,6 +1406,7 @@ impl Drone {
             stun_until: 0, player_pos: [0.0; 3],
             down: false,
             door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
+            door_pair_watch: false,
             tase_accum: 0,
             tase_recover: 0,
             dart_recover: 0,
@@ -2404,6 +2411,12 @@ impl Drone {
             UNSURRENDER_ANIM | DRAW_WEAPON => (0, false),
             AIM_CROUCH | AIM_STAND_RELOAD | AIM_CROUCH_RELOAD | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_DRONE_AHEAD
                 | GO_TO_GOAL | DRONE_STUCK => (0, false),
+            // The scare-flight family: case 8 forwards `HandleImpact(0x88, 0)` and the
+            // 7/9/0x17/0x18/0x19 group `HandleImpact(0x88, 1)` [M 0x168aa8 case 8 + the case-7
+            // fallthrough group; 0x168d18:57-65] — bullets resume through Recover 0x88 with no
+            // stagger; on msg 9 the allow is raised in `on_explosion` (the DSTATE's own group arm).
+            // Recover 0x88 itself (0x173658) carries no case 8/9 — no arm here, the message drops.
+            RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT => (RECOVER_FROM_SCARY_OBJECT, false),
             // The mission states (fix-party-mission, playtest: bullets on party guests did nothing):
             // PartyGirl 0x160140 case 8 → HandleImpact(0x12, 0); Civilian 0x15d118 case 8 → (0x12, 0);
             // CivilianHiding 0x15d520 case 8 → (0x12, 0); CivilianScared 0x15d3a0 case 8 → (+0x118, 0);
@@ -2431,38 +2444,65 @@ impl Drone {
 
     /// Msg 0x18 in state `s` — `DroneFunc_HandleImpact` case 0x18 (0x1469b8:250-313): prop 0x1C is
     /// immune (the game plays the 0x57/0x11/0x19 flinch anims — not modelled); every other drone
-    /// enters StunGrenadeImpact 0x4D. No state gate in the game's arm — a WaitSwitch drone reaches
-    /// it through the unhandled→GLOBAL fallback [M 0x15b960 `return 0` + the SM fallback], so the
-    /// port intercepts before the state match exactly like msg 8/6/7.
-    fn on_flash(&mut self, d: &Data, _rng: &mut Rng, _frame: u32, _s: u8) -> bool {
-        // tranq-gun: DSTATE_StunDartImpact has NO case 0x18 — a flash during the sleep-fall is
-        // unhandled → GLOBAL → dropped [M 0x163430 switch]. The LOOP/RECOVER states forward 0x18 to
-        // HandleImpact (→ 0x4D) — the fall-through below reaches the same SetState.
-        if _s == state::STUN_DART_IMPACT { return true; }
+    /// enters StunGrenadeImpact 0x4D — through ITS OWN DSTATE's case 0x18 only (the state gate
+    /// below; daily-audit 2026-10-17).
+    /// The states whose DSTATE carries a case 0x18 [L NDrone2_StateFuncs 0x29b300 (state →
+    /// DSTATE fn) + a case-0x18 scan of every table DSTATE's decomp, 2026-10-19]. The flash
+    /// reaches drones ONLY as msg 0x18 (`Drone_MessageObjVicinity(20.0, 0x18, …)` [M
+    /// 0x12d890:365]); a state without the case returns 0 and the SM's fallback re-calls the
+    /// dispatcher with the state arg 0 [M-dis Drone_SM_RouteMsgDCV 0x171df8:103-109], whose
+    /// DSTATE is Global — state 0 = 0x15b830 [L 0x29b300] — and DSTATE_Global handles only
+    /// 0/1/10/0x1d [M 0x15b830:59-61]. So the flash does NOTHING to an as-loaded WaitSwitch
+    /// guard (its handler takes only 0/1/3/0xe [M 0x15b960:40-42]) — nor to a full-combat
+    /// Attack 0x56 guard (0x164210 has no case 0x18) — the daily-audit 2026-10-17 item.
+    const FLASH_HANDLING: [u8; 116] = [
+    0x03, 0x04, 0x05, 0x07, 0x08, 0x09, 0x0a, 0x0c, 0x0d, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x16,
+    0x17, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26,
+    0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x38,
+    0x3a, 0x3c, 0x3d, 0x3e, 0x41, 0x4b, 0x4e, 0x4f, 0x51, 0x52, 0x59, 0x5a, 0x5c, 0x5e, 0x5f,
+    0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70,
+    0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7e, 0x7f, 0x81, 0x82, 0x83,
+    0x84, 0x86, 0x87, 0x8a, 0x8c, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9c, 0x9e, 0x9f,
+    0xa3, 0xa4, 0xa5, 0xc5, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe7, 0xe8,
+    ];
+    fn on_flash(&mut self, d: &Data, _rng: &mut Rng, _frame: u32, s: u8) -> bool {
+        // The fallback: the dispatcher re-calls with the state arg 0 → DSTATE_Global, which has
+        // NO case 0x18 [M 0x15b830:59-61; L 0x29b300 state 0 = 0x15b830] — the flash is dropped,
+        // not delivered. (The old code stunned here — the wrong rule the audit caught.)
+        if s == state::GLOBAL { return true; }
+        // DSTATE_StunDartImpact 0x50 has no case 0x18 [M 0x163430 switch]; it is absent from the
+        // whitelist like every other non-handling state — the STUN_DART_LOOP/RECOVER 0x51/0x52
+        // carry the case and stay in it [M 0x163570/0x163700].
+        if !Self::FLASH_HANDLING.contains(&s) { return false; } // unhandled → GLOBAL → dropped
         if self.prop(d, 0x1c) { return true; }
-        // A flashed WaitSwitch guard responds to the real event: the port's `drawn = enabled &&
-        // visible` [S — the game's obj+0xF0 & 0x30 re-enable path for a flashed waiter is unpinned;
-        // live check below] would otherwise freeze him invisible and unhittable for the whole stun.
+        // A flashed guard responds to the real event: the port's `drawn = enabled && visible`
+        // [S — the game's obj+0xF0 & 0x30 re-enable path for a flashed waiter is unpinned;
+        // live check below] would otherwise freeze him invisible and unhittable for the stun.
         self.enabled = true;
         self.set_state(state::STUN_GRENADE_IMPACT);
         true
     }
 
-    /// Msg 9 in state `s` — `DroneFunc_HandleImpact` case 9 (0x1469b8:173-201). The per-state
-    /// (resume, allow) pairs are the msg-8 table's: every DSTATE that carries a case 9 passes the
-    /// same resume/allow it passes case 8 (a scan of the decomps, 2026-10-16 — Idle/Alert/Patrol/
-    /// AlertToPosition/SearchArea/HeardNoise*/RunForCover → (0x56, 0); AimStand/Backoff/Step/Strafe/
-    /// Dodge/Roll → (0x68, 1); AimStandFire/AimCrouchFire/CombatNoMove/CombatNoRoute/SniperFire →
-    /// (current, 1); AimCrouch/Reloads/OutOfRange/NoSight/Wait/GoToGoal → (current, 0); the mission
-    /// states their own). The stun families keep their own case-9 arms (8/9 → Death_Anim 0x44
-    /// [M 0x172bb0/0x1631c0/0x163350]; the taser family the same [M 0x162eb0 case 8/9]), the KO
-    /// states too [M 0x172a30], `Surrender_Anim`'s case 9 sets Death_Anim directly [M 0x1626a0:65],
-    /// `PunchImpact` replays as (0, 1) [M 0x172ee0], `BulletImpact` sets 0x54 outright [M
-    /// 0x173098 case 9], and states without a case 9 (Attack/Combat/WaitSwitch/…) drop the message
-    /// (the GLOBAL fallback has none either [M 0x15b830] — a frag next to a pure-Attack guard does
-    /// nothing, the game's own routing).
+    /// Msg 9 in state `s` — `DroneFunc_HandleImpact` case 9 (0x1469b8:173-201). The resume comes
+    /// from the msg-8 table (the case-9 arms pass the same resume their case 8 passes); the ALLOW
+    /// is the DSTATE's own case-9 arm and DIFFERS from case 8 where the decomp splits the group:
+    /// Idle/Alert/Patrol pass `HandleImpact(0x56, 1)` on msgs 7/9/0x17/0x18/0x19 and `(0x56, 0)`
+    /// on case 8 only [M 0x15bf18:100-110, 0x15c248:68-77, 0x15c498:65-74] — a surviving guard
+    /// takes the 0x54 stagger (daily-audit 2026-10-17). The stun families keep their own case-9
+    /// arms (8/9 → Death_Anim 0x44 [M 0x172bb0/0x1631c0/0x163350]; the taser family the same [M
+    /// 0x162eb0 case 8/9]), the KO states too [M 0x172a30], `Surrender_Anim`'s case 9 sets
+    /// Death_Anim directly [M 0x1626a0:65], `PunchImpact` replays as (0, 1) [M 0x172ee0],
+    /// `BulletImpact` sets 0x54 outright [M 0x173098 case 9], and states without a case 9
+    /// (Attack/Combat/WaitSwitch/…) drop the message: the GLOBAL fallback has none either [M
+    /// 0x15b830:59-61; L 0x29b300 state 0 = 0x15b830] — a frag next to a pure-Attack or
+    /// as-loaded-WaitSwitch guard does nothing, the game's own routing.
     fn on_explosion(&mut self, d: &Data, rng: &mut Rng, frame: u32, s: u8) -> bool {
         use state::*;
+        // The fallback: DSTATE_Global (state 0 [L 0x29b300]) has NO case 9 [M 0x15b830:59-61] —
+        // an unhandled blast is dropped, not applied. (The old table arm damaged here — the
+        // merged frag_at_the_waitswitch pin only held because its 120 ticks never ran the
+        // 210-tick fuse out.)
+        if s == GLOBAL { return false; }
         if matches!(s, STUN_GRENADE_IMPACT | STUN_GRENADE_LOOP | STUN_GRENADE_RECOVER
                 | TASER | STUNNED | STUNNED_RECOVER | KNOCKED_OUT_ANIM | KNOCKED_OUT
                 | SURRENDER_ANIM | SURRENDERED) {
@@ -2491,7 +2531,40 @@ impl Drone {
             self.explosive_impact(d, rng, frame, 0, false);
             return true;
         }
+        if s == HOSTAGE_IDLE || s == HOSTAGE_HIDE {
+            // 0x15ce60 / 0x15cfe0 case 9 → HandleImpact(0, 1): the resume stamps the current
+            // hostage state and the surviving geisha takes the 0x54 stagger [M 0x15cfe0:34-40].
+            let u10 = self.state;
+            if u10 != 0 && !(0x53..=0x55).contains(&u10) { self.impact_resume = u10; }
+            self.set_state(EXPLOSIVE_IMPACT);
+            return true;
+        }
+        // The ninja states' own case 9 [L NDrone2_StateFuncs 0x29b300 st→fn; M each DSTATE's case 9]
+        // — Stand 0xa6 (0x16b990), Attack 0xa7 (0x16bb50), LongRange 0xa8 (0x16bfc0), MidRange 0xa9
+        // (0x16c248), ShortRange 0xaa (0x16c650), Sword 0xac (0x16d100), Somersault 0xad (0x16d298),
+        // Backflip 0xae (0x16d430), SideflipLeft 0xb0 (0x16cdd0), SideflipRight 0xb1 (0x16cf68),
+        // StandFire 0xb2 (0x16d5b8), NoRoute 0xb3 (0x16d878) — every arm calls
+        // `NDrone2_ExplosiveImpact(impact, 0, 1)` DIRECTLY (no HandleImpact resume stamp, no 0x54
+        // entry; ExplosiveImpact stamps +0x118 itself from the current state [M 0x146480:164-177]).
+        // GetClose 0xab (0x16cb70) and the jump-init 0xaf (0x173e08) carry no case 9 — the blast
+        // drops there, as in any state without the arm (the GLOBAL fallback has none either [M
+        // 0x15b830:49-60]). The daily-audit GLOBAL drop stays: the port's victims take the blast
+        // through THESE arms — the state-0 fallback re-call (send's unhandled route) is dropped,
+        // exactly the game's ProcessStateMachine(0) → DSTATE_Global [M-dis 0x171df8:103-109].
+        if matches!(s, crate::kiko::NINJA_STAND_FIRE | crate::kiko::NINJA_NO_ROUTE
+                | crate::kiko::NINJA_ATTACK | crate::kiko::NINJA_LONG_RANGE | crate::kiko::NINJA_MID_RANGE
+                | crate::kiko::NINJA_SHORT_RANGE | crate::kiko::NINJA_SWORD | crate::kiko::NINJA_SOMERSAULT
+                | crate::kiko::NINJA_BACKFLIP | crate::kiko::NINJA_SIDEFLIP_LEFT | crate::kiko::NINJA_SIDEFLIP_RIGHT)
+            || s == 0xa6 {
+            self.explosive_impact(d, rng, frame, 0, true);
+            return true;
+        }
         let Some((resume, allow)) = Self::impact_args(s) else { return false };
+        // The case-9 allow is the DSTATE's own arm, not the msg-8 pair: Idle/Alert/Patrol's
+        // 7/9/0x17/0x18/0x19 group passes (0x56, 1) while case 8 alone passes (0x56, 0) [M
+        // 0x15bf18:100-110 / 0x15c248:68-77 / 0x15c498:65-74] — the surviving guard staggers.
+        // The scare-flight family's group arm does the same [M 0x168aa8 / 0x168d18:57-65].
+        let allow = allow || matches!(s, IDLE | ALERT | PATROL | RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT);
         if allow {
             // 0x1469b8:178-193: stamp the resume (the 0x53-0x55 impact states are excluded), then
             // state 0x54 — its ENTER re-runs the impact with allow = 1 (the stagger anim).
@@ -3091,8 +3164,12 @@ impl Drone {
             // EXIT (case 2): `+0x44 = 1`.
             (CIVILIAN_DOOR_GUARD, msg::EXIT) => { true }
             // UPDATE (case 3): an armed opponent within the game's gates → hostile; else the zone
-            // dispatch (the zone itself is the pre-pass's `door_zone`).
+            // dispatch (the zone itself is the pre-pass's `door_zone`). audit-fix-door-guard-3: the
+            // first enabled UPDATE also establishes the guard's watch (the [S] pairing deferral —
+            // `door_guard_pass`), the game's own per-tick UPDATE dispatch [M 0x1490f0:62
+            // `Drone_SM_SendMsgSelf(3,…)`, gated on the enabled bit at :141-148].
             (CIVILIAN_DOOR_GUARD, msg::UPDATE) => {
+                self.door_pair_watch = true;
                 // `NDrone2_NearArmedPerson(20.0)` 0x1787c8: the opponent exists (+0x228 & 4) and is
                 // armed (`DroneWeap_OpponentHasWeapon`) — the port's stand-in: the guard sees the
                 // player and Bond's weapon is not the fists [S stand-in, the prop-0x3c gate rides
@@ -6042,23 +6119,38 @@ impl Drone {
             // HostageSaved (0x15ccf0 — state 0x0c [L 0x29b300]) ENTER [M 0x15ccf0:16-44]:
             // `Drone_AlertStatusSet(0)`, clear the captor link, `Music_Event(0x10, 1)` (the port
             // has no music-event consumer in Sim — skipped), then `DroneFunc_HostageSaved`
-            // 0x1441c0: write the placement's out channel (+0x135 = placement param 6 — the port's
+            // 0x1441c0: raise the placement's out channel (+0x135 = placement param 6 — the port's
             // `second_channel`) with the stamp and count the save [M 0x1441c0:11-18]. The raise
-            // rides `self.raise`, the `Drones` tick's channel writer. Then `FindRunToPoint` →
-            // state 0x64 HostageGoToGoalPosition; the resume-cower arm (0x5A4 ≠ 0 with the channel
-            // already on) is the WaitSwitch resume path — the port reaches the save only fresh.
+            // rides `self.raise`, the `Drones` tick's channel writer. Then the fresh-save arm:
+            // the resume arm (+0x5a4 != 0 && +0x135 == 0 → 0xe with nobody armed near / 0xd) is
+            // unreachable here (the port reaches the state only fresh, and +0x135 is the
+            // placement's rescue channel — 0x49/0x4A on 07000002 [D]): FindRunToPoint → none:
+            // SetState(0x0e HostageHide); some: +0x5a2 = 0xe and state 0x64 [M 0x15ccf0:37-44].
+            // The old else arm cowered into 0x0d — the resume arm's state, never reachable on
+            // this path (daily-audit 2026-10-17).
             (HOSTAGE_SAVED, msg::ENTER) => {
                 self.alert = 0.0;
                 self.captor = None;
                 if self.second_channel != 0 && self.raise.is_none() { self.raise = Some(self.second_channel); }
                 if self.find_run_to_point(d) {
+                    self.return_state = HOSTAGE_HIDE; // +0x5a2 = 0xe [M 0x15ccf0:42]
                     self.set_state(HOSTAGE_GO_TO_GOAL);
                 } else {
-                    self.call_anim(d, anim_state::COWER, 0, 0);
-                    self.set_state(HOSTAGE_IDLE);
+                    self.set_state(HOSTAGE_HIDE);
                 }
                 true
             }
+            // HostageHide (0x15cfe0 — state 0x0e [L 0x29b300]) ENTER: +0x4f8 |= 0x4000000 (the
+            // drawn-flag bit the port keys on `enabled`), +0x50c = 1.0, alert 2, the cower anim
+            // 0x19 [M 0x15cfe0:12-16]; case 3 → nobody armed within 20 → HostageIdle 0x0d [M
+            // 0x15cfe0:23-29 — the port's msg-3 clock is not modelled, [S] the UPDATE-less hold].
+            (HOSTAGE_HIDE, msg::ENTER) => {
+                self.enabled = true;
+                self.alert = self.alert.max(0.66); // AlertStatusSet(2) [M 0x15cfe0:15]
+                self.call_anim(d, anim_state::COWER, 0, 0);
+                true
+            }
+            (HOSTAGE_HIDE, msg::BULLET) => self.on_bullet_resume(d, rng, frame, 0, false),
             // AllyLead (0x15e4f0 / 0x15e698 / 0x15eda8 / 0x15f2e8): the escort lead — 07000001's Mayhew
             // (mode 12, `DroneTypeSettings[12].start` = 0x1c [L 0x29aee8]) leads Bond along the mission
             // AI path to the bunker plate. Minimal port: the entry, the lead loop (the port's
@@ -9190,22 +9282,50 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// pre-pass over the CivilianDoorGuard (0x31) guards. The game pairs inside the ENTER and
     /// reads the zone inside the 0x31 UPDATE [M 0x160694, 0x160814]; the port's `handle` lacks
     /// the list access the two need.
+    ///
+    /// audit-fix-door-guard-3 — the pairing deferral ([S] pending the live check): on 07000007 the
+    /// four hall bouncers (placements 404/417/441/442, `p3 = 0` — no watch channel [D]) boot enabled
+    /// into 0x31 at their placement facings (10/19 ≈ 3.14 south, 28/29 ≈ −1.54 west [D]); a
+    /// spawn-time pairing runs the decomp-exact scans at those facings and cascades (10→19 stale,
+    /// 19↔29, 29↔28 — door_guard_live pins the graph), leaving guard 10 the 10↔19 build whose
+    /// normal points SOUTH — Bond crossing the pair's z-line at the hall door reads zone 3 (the
+    /// intrusion arm, 0x160648:89-94) and the walk-in plate never fires. The game's own walk works,
+    /// so its SetDronePartner cannot run at the spawn facings for this pair. The boot chain is
+    /// decomp-proven down to the ENTER (DefaultInit 0x14b300 → DoModeSettingsNEW 0x14c600 →
+    /// GetDroneTypeAttackTypeFriend 0x14cbd8:104 `+0x5A2 = row start 0x31`; SM_InitObject 0x175838:23
+    /// ENTERs GLOBAL; GLOBAL's ENTER 0x15b830 `SetState(obj+0x5A2)`; no +0x554 start script for
+    /// `p1 = 0x6000000` [M 0x14b300:611-613]) — every static turn source for an unpaired 0x31 guard
+    /// (the zone arms need a partner; the idle danims 282/329/344 carry no end-turn flags [L tables])
+    /// is ruled out, so WHAT establishes the game's pairing-time watch facing is not derivable
+    /// statically. The port therefore defers the request (set at the ENTER [M 0x160694]) to the
+    /// guard's first enabled UPDATE in state 0x31 (`door_pair_watch`, the game's own per-tick UPDATE
+    /// dispatch [M 0x1490f0:62]) and evaluates the decomp's own watch test at that UPDATE: a caller
+    /// whose standing facing fails `Vec_AngleDifference(yaw, atan2(dir)) < 0` [M 0x141360:121-123]
+    /// — the spawn facing, not a watch facing — pairs at the watch facing across the pair axis (the
+    /// IF outcome: planes on the partner, normal toward the watched approach; on 07000007 the 10↔19
+    /// build lands on 417 pointing NORTH and Bond reads the challenge band, not the intrusion arm).
+    /// [S] the deferral's timing and the watch-facing re-establishment both await the live check
+    /// (771b's: the bouncers' +0x2BC/+0x2CC/+0x54 at the pairing instant, fresh boot).
     fn door_guard_pass(&mut self, d: &Data, player: &Player) {
         // ---- SetDronePartner(kind 0x16, dc) [M 0x141360] ----
         // Candidates: drones of the same mode (+0xC5 == 0x16 — the caller passes 0x16), enabled
         // (`+0x4F8 & 0x600 == 0 && & 0x100 != 0`), health > 0, class != 0x11, not deleted
-        // (obj+0xFE & 1 == 0), partnerless, within 2.0 rad of the caller's yaw (+0x34); the
-        // nearest by `Vec_SqDist2D`. The pair is mutual; the sign of
+        // (obj+0xFE & 1 == 0), partnerless, and within 2.0 of the caller's position Y — a HEIGHT
+        // gate, not a yaw gate: 0x141360:90 compares the two objects' +0x34 floats, and +0x34 is
+        // position Y (the position VECTOR is +0x30 — Vec_SqDist2D :91 indexes [0]/[2] = x,z [M
+        // 0x1e2ef8]; the yaw is +0x54, which is what :121 reads) — then the nearest by
+        // `Vec_SqDist2D`. The pair is mutual; the sign of
         // `Vec_AngleDifference(my_yaw, atan2(dir))` picks which side holds the planes (its own
         // `+0x2CC = 0xff`... the OTHER's — see below), and `plane_from_two_vectors_and_point`
         // 0x1e4498 builds three planes on the evaluating guard.
         for i in 0..self.list.len() {
-            let (requested, mode, my_yaw, my_pos) = {
+            let (requested, watch, mode, my_yaw, my_pos) = {
                 let dr = &self.list[i];
-                (dr.door_pair_requested, dr.mode, dr.yaw, dr.pos)
+                (dr.door_pair_requested, dr.door_pair_watch, dr.mode, dr.yaw, dr.pos)
             };
-            if !requested { continue; }
+            if !requested || !watch { continue; }
             self.list[i].door_pair_requested = false;
+            self.list[i].door_pair_watch = false;
             let mut best: Option<(usize, f32)> = None;
             for j in 0..self.list.len() {
                 if j == i { continue; }
@@ -9215,10 +9335,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if o.mode != mode || o.mode != 0x16 { continue; }
                 if !o.present || o.corpse || !o.enabled || o.health <= 0.0 { continue; }
                 if o.door_partner.is_some() { continue; }
-                // The RAW |yaw − yaw| < 2.0 — not the wrapped angle difference [M 0x141360:90
-                // `ABS(*(float *)(iVar1 + 0x34) - *(float *)(iVar3 + 0x34)) < 2.0`]: the two
-                // 07000007 pairs face ~4.7 rad apart and never cross-pair.
-                if (my_yaw - o.yaw).abs() >= 2.0 { continue; }
+                // The HEIGHT gate [M 0x141360:90 `ABS(me+0x34 − cand+0x34) < 2.0` — +0x34 is
+                // position Y on both sides; see the block comment above. The old port read here
+                // pinned a yaw gate — the daily audit 2026-10-17 correction.]
+                if (my_pos[1] - o.pos[1]).abs() >= 2.0 { continue; }
                 let dx = o.pos[0] - self.list[i].pos[0];
                 let dz = o.pos[2] - self.list[i].pos[2];
                 let sq = dx * dx + dz * dz;
@@ -9241,45 +9361,65 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if len > 1e-9 { [dx / len, dy / len, dz / len] } else { [0.0, 0.0, 1.0] }
             };
             let diff = angle_difference(my_yaw, atan2_approx(dir[0], dir[2])); // [M 0x141360:121 — this one IS Vec_AngleDifference]
-            let (evaluator, anchor, other, neg) = if diff < 0.0 {
+            // [S] the watch-facing re-establishment (the block comment above): at the deferred
+            // pairing a caller whose standing facing fails the decomp's own watch test (diff ≥ 0 —
+            // the spawn facing, not a watch facing) pairs at the watch facing ACROSS the pair axis:
+            // the IF outcome (planes on the partner, v0 = −dir). The ELSE branch below stays for
+            // the in-ENTER pairing the game runs [M 0x160694] if the deferral is lifted.
+            let watch_across = diff >= 0.0;
+            let (evaluator, anchor, other, neg) = if diff < 0.0 || watch_across {
                 self.list[i].door_side = 0xff;
                 (j, self.list[j].pos, self.list[i].pos, -1.0)
             } else {
                 self.list[j].door_side = 0xff;
                 (i, self.list[i].pos, self.list[j].pos, 1.0)
             };
-            // plane0 = cross(v0, (0, 0, 1)) through the anchor [M 0x141360:132-133 / 0x1e4498];
-            // v0 = ∓dir. The derived plane1/plane2 formulas are the decompile's own
-            // [M 0x141360:134-149 / 158-173].
+            // plane0 = cross(v0, (0, 1, 0)) = (−v0.z, 0, v0.x) through the anchor — the second
+            // vector is the Y-up axis, stored as 0.0/1.0/0.0 in the disassembly of BOTH builds
+            // [M disasm 0x14150c-0x141554 (if-branch) and 0x1415f4-0x141614 (else-branch);
+            // 0x1e4498:11-17 n = cross(v1,v2), d = −n·point]. The normal is HORIZONTAL — there
+            // is no degenerate zero normal for a pair along z (n = (∓1, 0, 0) there). v0 =
+            // owner→partner in both branches (the if-branch negates dir because the planes move
+            // to the candidate). The derived plane1/plane2 formulas are the decompile's own
+            // [M 0x141360:134-149 / 158-173]: plane1 = −v1 through the MIRROR, plane2 = +v1
+            // through the OWNER.
             let v0 = [neg * dir[0], neg * dir[1], neg * dir[2]];
-            let n = [v0[1], -v0[0], 0.0f32]; // cross(v0, (0,0,1)) [M 0x1e4498:11-13]
+            let n = [-v0[2], 0.0f32, v0[0]]; // cross(v0, (0,1,0)) [M 0x1e4498:11-17]
             let d0 = -(n[0] * anchor[0] + n[1] * anchor[1] + n[2] * anchor[2]);
             let (a, b, c) = (n[0], n[1], n[2]);
             let planes = [
                 [a, b, c, d0],
-                // +0x2F0: {−c, b, a, d0 + a·ax + c·ox + c·az − a·oz} [M 0x141360:141-149]
+                // +0x2F0: {−c, b, a, d0 + a·owner.x + c·mirror.x + c·owner.z − a·mirror.z}
+                // [M 0x141360:141-149 / 165-173 — algebraically −n1·mirror]
                 [-c, b, a, d0 + a * anchor[0] + c * other[0] + c * anchor[2] - a * other[2]],
-                // +0x300: {c, b, −a, d0 + (a − c)·ax + (c + a)·az} [M 0x141360:134-145]
+                // +0x300: {c, b, −a, d0 + (a − c)·owner.x + (c + a)·owner.z}
+                // [M 0x141360:144-145 / 168-169 — algebraically −n2·owner]
                 [c, b, -a, d0 + (a - c) * anchor[0] + (c + a) * anchor[2]],
             ];
             self.list[evaluator].door_planes = planes;
         }
         // ---- DoorGuardHandler [M 0x1416d8] ----
-        // Needs an opponent (+0x170; the port's stand-in: the guard currently sees Bond [S]) whose
-        // yaw is within 2.0 rad of the guard's; the planes' owner evaluates, the 0xff holder
-        // mirrors the partner's value (the game reads the partner's +0x2CC directly).
-        let bond_yaw = atan2_approx(player.aim[0], player.aim[2]);
+        // Needs an opponent (+0x170; the port's stand-in: the guard currently sees Bond [S]);
+        // the height gate below is the game's [M 0x1416d8:22]. The planes' owner evaluates, the
+        // 0xff holder mirrors the partner's value (the game reads the partner's +0x2CC).
         for i in 0..self.list.len() {
             if self.list[i].state != state::CIVILIAN_DOOR_GUARD { continue; }
             let Some(p) = self.list[i].door_partner else { self.list[i].door_zone = 0; continue; };
             if self.list[i].door_side == 0xff {
-                // The mirror: the game returns the partner's +0x2CC [M 0x1416d8:19-21].
-                self.list[i].door_zone = self.list[p].door_side;
+                // The mirror: the game returns the partner's RAW +0x2CC [M 0x1416d8:19-21] — the
+                // zone the owner's handler tail stored [M :75-77], or 0xff when the partner never
+                // evaluated (a 0xff holder's +0x2CC stays 0xff: the mirror path returns early
+                // without storing). The old port read `door_side` (always 0 in the port) and the
+                // audit-time fix read the partner's zone transitively — a mirror-of-a-mirror
+                // (417 → 442 → 441 on 07000007) then copies a zone the game never computes.
+                self.list[i].door_zone = if self.list[p].door_side == 0xff { 0xff } else { self.list[p].door_zone };
                 continue;
             }
-            // The opponent gates [M 0x1416d8:16-24]: +0x170 != 0 and |opp yaw − my yaw| < 2.0.
-            // The RAW |opp yaw − my yaw| < 2.0 gate [M 0x1416d8:22 — the same unwrapped ABS].
-            if !self.list[i].los || (bond_yaw - self.list[i].yaw).abs() >= 2.0 {
+            // The opponent gates [M 0x1416d8:16-24]: +0x170 != 0 (the port's stand-in: the guard
+            // currently sees Bond [S]) and |opp +0x34 − my +0x34| ≤ 2.0 — the OPPONENT's HEIGHT
+            // against the evaluator's own, not an aim yaw [M disasm 0x14170c-0x141738:
+            // `lwc1 0x34($t0)` / `lwc1 0x34($a2)`, `c.olt.s $f3,$f0` + `bc1fl`].
+            if !self.list[i].los || (player.pos[1] - self.list[i].pos[1]).abs() >= 2.0 {
                 self.list[i].door_zone = 0;
                 continue;
             }
@@ -13042,6 +13182,7 @@ mod tests {
             stun_until: 0, player_pos: [0.0; 3],
             down: false,
             door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
+            door_pair_watch: false,
             tase_accum: 0,
             tase_recover: 0,
             dart_recover: 0,
