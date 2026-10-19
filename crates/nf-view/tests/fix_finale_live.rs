@@ -244,12 +244,27 @@ fn the_0700004a_lift_ride_reaches_the_lobby() {
     // [M 0x1da880:44-47 + 0x1d94c0:125-134].
     let mut fired = Vec::new();
     let mut disabled_seen = false;
+    // The hold model (the walkreal's): the script clock freezes between the landing scene's
+    // tick-0 disable and its ch-0x22 end, so the re-seat line must freeze with it — the raw
+    // line would teleport Bond 17 units BELOW the held cab during the scene.
+    let mut hold: f32 = 0.0;
+    let mut freeze: Option<u32> = None;
+    let mut ch22_tick: Option<u32> = None;
     for t in 0..6300u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
         scene.sim.as_mut().unwrap().drones.health.health = 100.0;
+        let sim = scene.sim.as_ref().unwrap();
+        if sim.disabled && freeze.is_none() && ch22_tick.is_none() { freeze = Some(t); }
+        if ch22_tick.is_none() && sim.drones.channels.on(0x22) { ch22_tick = Some(t); }
+        hold = match (freeze, ch22_tick) {
+            (Some(a), Some(b)) => (b - a) as f32,
+            (Some(a), None) => (t - a) as f32,
+            _ => 0.0,
+        };
+        drop(sim);
         if t % 30 == 0 {
             let sim = scene.sim.as_mut().unwrap();
-            let py = (y0 - ((t as f32 - 90.0).max(0.0)) * (150.0 / 4950.0)).max(y0 - 150.0);
+            let py = (y0 - ((t as f32 - 90.0 - hold).max(0.0)) * (150.0 / 4950.0)).max(y0 - 150.0);
             sim.bond.pos = [3.0, py + 1.2, -3.4];
         }
         let sim = scene.sim.as_ref().unwrap();
@@ -262,7 +277,7 @@ fn the_0700004a_lift_ride_reaches_the_lobby() {
                 "sister: ch 0x4a never fires on 0700004a — the completion is 07000013's spawn plate #153 (the late AND [M 0x1827d8; D #153])");
             assert!(sim.bond.pos[1] < y0 - 30.0, "Bond is riding the platform down (y {} from {y0})", sim.bond.pos[1]);
         }
-        if sim.drones.channels.on(0x84) { break; }
+        if scene.sim.as_ref().unwrap().drones.channels.on(0x84) { break; }
     }
     {
         let sim = scene.sim.as_ref().unwrap();
