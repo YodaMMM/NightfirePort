@@ -717,4 +717,31 @@ mod tests {
         assert!(is_valid_weapon(0x45) && !is_valid_weapon(0x46) && is_valid_weapon(0x52));
         assert!(punch_is_better_if_close(0x3b) && !punch_is_better_if_close(0x16) && !punch_is_better_if_close(0x38));
     }
+
+    /// `BOTSTATE_isPreferredWeapon` 0x129580: the fists (1) and the P2K (6) are always preferred
+    /// whatever the record's class pref (`BOT_vars+0xAA`), pref 0 prefers everything, prefs 1/2/4/5
+    /// test the weapon's class byte (`weapon_data+0x06`), pref 3 is the hardcoded gadget set
+    /// {3, 7, 0x14, 0x24, 0x25}, an unmapped pref refuses [M 0x129580:8-52].
+    #[test]
+    fn is_preferred_weapon_table() {
+        let t = table();
+        // the always-preferred ids and the everything pref [M :10-16]
+        for pref in 0..=8u8 {
+            assert!(is_preferred_weapon(&t, pref, 1), "the fists are always preferred (pref {pref})");
+            assert!(is_preferred_weapon(&t, pref, 6), "the P2K is always preferred (pref {pref})");
+        }
+        assert!(is_preferred_weapon(&t, 0, 0x2c), "pref 0 prefers everything");
+        // the class prefs against the fixture's classes (0x16 class 2, 0x2c class 4)
+        assert!(is_preferred_weapon(&t, 2, 0x16));
+        assert!(!is_preferred_weapon(&t, 1, 0x16), "class 2 is not pref 1");
+        assert!(is_preferred_weapon(&t, 5, 0x2c));
+        assert!(!is_preferred_weapon(&t, 2, 0x2c), "class 4 is not pref 2");
+        // pref 3's hardcoded set [M :34-44]
+        for w in [3u8, 7, 0x14, 0x24, 0x25] {
+            assert!(is_preferred_weapon(&t, 3, w), "pref 3 gadget {w:#x}");
+        }
+        assert!(!is_preferred_weapon(&t, 3, 0x16), "the AR is not a pref-3 gadget");
+        // Sister (can fail): an unmapped class pref prefers nothing but the fists/P2K.
+        assert!(!is_preferred_weapon(&t, 6, 0x16));
+    }
 }

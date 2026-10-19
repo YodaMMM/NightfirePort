@@ -24,7 +24,14 @@ fn iso() -> Option<String> {
 // the bots with the weapon set's first gun and carries the lobby's bot records); agent 13's
 // optimisations were proven result-identical against its own base (0xe5ac_fd39_a20a_ac80), and the
 // lazy sight line again on the merge (lazy_sight false + the precomputed bit2: the same digest).
-const PINNED_DIGEST: u64 = 0x78cd_537a_a62b_b300;
+// Re-pinned for mp-bot-weapons (776): the weapon layer's fire fix makes the bots actually fire —
+// the port cleared the fire latch in the 0xD0/backoff combat arms (the game never writes +0x3b
+// there [M 0x16f390/0x16fc30]), so every re-entry was a fresh `DroneWeap_Fire` whose
+// `NextBulletTime` re-pushed the bullet deadline (≥ 60 ticks for weapon 6, [M 0x179d40:26-47])
+// beyond the 1-in-3 exit roll's stay [M 0x16f5e8:48-52]: latch set, bots never fired. With the
+// latch persisting the deadline survives and the bots shoot while they move (35→38 kills in the
+// pinned 3600-tick run, the per-tick hashes still agree on both machines).
+const PINNED_DIGEST: u64 = 0x63f8_f23f_4fcb_a70e;
 
 const TICKS: u32 = 3600;
 

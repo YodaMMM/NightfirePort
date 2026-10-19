@@ -52,6 +52,16 @@ struct Tally {
     reloads: u32,
     non_start_kills_weapons: std::collections::BTreeSet<u8>,
     weapons_seen: std::collections::BTreeSet<u8>,
+    /// mp-bot-weapons: shots fired while holding the start weapon 6 (the P2K) — the
+    /// "0xD4 strafe, latch set, never fires" defect's negative.
+    w6_shots: u32,
+    /// The smallest gap in ticks between two consecutive weapon-6 shots of one bot — the
+    /// game's 60-tick interval floor for weapon 6 [M DroneWeap_NextBulletTime 0x179d40:26-47].
+    w6_min_gap: u32,
+    /// Weapon ids a bot picked up during the run (held-set growth after the arming tick).
+    taken_weapons: std::collections::BTreeSet<u8>,
+    /// Shots fired with a picked-up weapon — the take → switch → fire chain.
+    taken_used_shots: u32,
 }
 
 fn run(humans: usize, bots: u32, ticks: u32) -> Option<Tally> {
@@ -66,8 +76,12 @@ fn run(humans: usize, bots: u32, ticks: u32) -> Option<Tally> {
         eprintln!("arena pickups (kind, weapon, rounds, respawn): {kinds:x?}");
     }
     let mut tally = Tally::default();
+    tally.w6_min_gap = u32::MAX; // the min-gap accumulator: raise from "no gap seen" 
     let mut prev_weapon: Vec<u8> = Vec::new();
     let mut prev_arsenal: Vec<(i32, u32, u8)> = Vec::new();
+    let mut prev_held: Vec<Vec<bool>> = Vec::new();
+    let mut prev_shots_by_weapon: Vec<Vec<u32>> = Vec::new();
+    let mut last_w6_tick: Vec<u32> = Vec::new();
     let mut prev_pickups: Vec<(bool, u8)> = Vec::new();
     for t in 0..ticks {
         let row: [nf_net::Input; nf_net::MAX_AGENTS] = std::array::from_fn(|sl| if sl < humans { walk(t, sl) } else { NEUTRAL });
@@ -100,10 +114,47 @@ fn run(humans: usize, bots: u32, ticks: u32) -> Option<Tally> {
         if prev_weapon.is_empty() {
             prev_weapon = m.bots.iter().map(|b| b.brain.vars.weapon_id).collect();
             prev_arsenal = vec![(0, 0, 0); m.bots.len()];
+            prev_held = m.bots.iter()
+                .map(|b| b.brain.vars.arsenal.held.to_vec()).collect();
+            last_w6_tick = vec![u32::MAX; m.bots.len()];
+        }
+        for (i, bot) in m.bots.iter().enumerate() {
+            // the take pins: a held-set growth after the arming tick is the pickup (the
+            // preference choice arms the bot with the taken weapon — `BotArsenal::take_pickup`).
+            for (w, (&now, &was)) in bot.brain.vars.arsenal.held.iter().zip(prev_held[i].iter()).enumerate() {
+                if now && !was && bot.brain.tick > 2 {
+                    tally.taken_weapons.insert(w as u8);
+                }
+            }
+            prev_held[i] = bot.brain.vars.arsenal.held.to_vec();
         }
         for (i, bot) in m.bots.iter().enumerate() {
             let v = &bot.brain.vars;
             tally.weapons_seen.insert(v.weapon_id);
+            // the per-weapon shot tally (the scene drains the brain's shot log this tick):
+            // a new 6-shot stamps the tick for the interval-floor gap, a new taken-weapon
+            // shot counts the take → switch → fire chain.
+            let sbw = &m.bots[i].shots_by_weapon;
+            if prev_shots_by_weapon.len() != m.bots.len() {
+                prev_shots_by_weapon = (0..m.bots.len()).map(|_| vec![0u32; sbw.len()]).collect();
+            }
+            if prev_shots_by_weapon[i].len() == sbw.len() {
+                for (w, (&now, &was)) in sbw.iter().zip(prev_shots_by_weapon[i].iter()).enumerate() {
+                    if now > was {
+                        if w == 6 {
+                            tally.w6_shots += now - was;
+                            if last_w6_tick[i] != u32::MAX {
+                                tally.w6_min_gap = tally.w6_min_gap.min(t.wrapping_sub(last_w6_tick[i]));
+                            }
+                            last_w6_tick[i] = t;
+                        }
+                        if tally.taken_weapons.contains(&(w as u8)) {
+                            tally.taken_used_shots += now - was;
+                        }
+                    }
+                }
+            }
+            prev_shots_by_weapon[i] = sbw.clone();
             if v.weapon_id != prev_weapon[i] && v.arsenal.armed && bot.brain.tick > 2 {
                 tally.switches += 1;
                 eprintln!("t{t} bot{i} switches {:#x} -> {:#x} (state {:#x}, opp dist {:.1})", prev_weapon[i], v.weapon_id, bot.brain.state, v.opp_dist);
@@ -145,8 +196,11 @@ fn run(humans: usize, bots: u32, ticks: u32) -> Option<Tally> {
         tally.kills, tally.kills as f32 / mins, tally.takes_bots, tally.switches, tally.reloads, tally.weapons_seen);
     for (i, bot) in m.bots.iter().enumerate() {
         let v = &bot.brain.vars;
-        eprintln!("  bot{i}: weapon {:#x} held {:x?} armour {} hp {:.0} deaths {} shots {}", v.weapon_id,
-            (0..0x53u8).filter(|&w| v.arsenal.held[w as usize]).collect::<Vec<_>>(), v.arsenal.armour, bot.health, bot.deaths, bot.shots);
+        let by_w: Vec<(usize, u32)> = bot.shots_by_weapon.iter().enumerate()
+            .filter(|(_, &c)| c > 0).map(|(w, &c)| (w, c)).collect();
+        eprintln!("  bot{i}: weapon {:#x} held {:x?} armour {} hp {:.0} deaths {} shots {} by-weapon {:x?}",
+            v.weapon_id,
+            (0..0x53u8).filter(|&w| v.arsenal.held[w as usize]).collect::<Vec<_>>(), v.arsenal.armour, bot.health, bot.deaths, bot.shots, by_w);
     }
     // Sister: the comparison can fail — a bot's armour is in the hash.
     let sb = b.sim.as_mut().unwrap();
@@ -168,4 +222,18 @@ fn bots_fight_take_pickups_and_switch_in_lockstep() {
     assert!(t.switches > 0, "a bot switched weapons: {t:?}");
     assert!(t.kills > 0, "kills happen: {t:?}");
     assert!(t.weapons_seen.len() >= 2, "more than the start weapon was used: {t:?}");
+}
+
+/// mp-bot-weapons: the start weapon 6 fires (the reported "bot in 0xD4 with the fire latch set
+/// never fires" does not reproduce on the merged tree) and honours the game's interval floor:
+/// no two weapon-6 shots of one bot land within 60 ticks [M DroneWeap_NextBulletTime
+/// 0x179d40:26-47 — the min-60 clamp for weapons 6/0xA/0xE..0x10]. Sister: a picked-up weapon
+/// is not only taken but fired — the preference choice leads the take → switch → fire chain.
+#[test]
+fn weapon6_fires_and_honours_the_interval_floor() {
+    let Some(t) = run(2, 4, 3 * 3600) else { eprintln!("skip: NF_ISO not set"); return };
+    assert!(t.w6_shots > 0, "a bot holding weapon 6 fires: {t:?}");
+    assert!(t.w6_min_gap >= 60, "weapon 6's 60-tick floor holds (min gap {}): {t:?}", t.w6_min_gap);
+    assert!(!t.taken_weapons.is_empty(), "a bot picked up a weapon: {t:?}");
+    assert!(t.taken_used_shots > 0, "a taken weapon was fired: {t:?}");
 }

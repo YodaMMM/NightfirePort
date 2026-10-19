@@ -9474,13 +9474,18 @@ impl Sim {
                     m.bots[i].brain.pos, m.bots[i].brain.trace.len(),
                     m.bots[i].brain.route.idx, m.bots[i].brain.route.nodes.len(), m.bots[i].brain.route.valid, m.bots[i].brain.route.dest, m.bots[i].brain.stuck_hits);
                 let v = &m.bots[i].brain.vars;
-                eprintln!("[botlog]   fire latch {} empty {} next {:.2} unseen {} clip {} yaw {:.2} tick {} weapon {} interval {} burst {} hp {:.0}/{:.0} deaths {}",
+                eprintln!("[botlog]   fire latch {} empty {} next {:.2} unseen {} clip {} yaw {:.2} tick {} weapon {} interval {} burst {} hp {:.0}/{:.0} deaths {} | state {:#x} nlst {} bl {} shots {}",
                     v.fire_latch, v.burst_empty, v.next_bullet_at, v.unseen_ticks, v.clip_rounds, m.bots[i].brain.yaw, m.bots[i].brain.tick,
-                    v.weapon_id, m.bots[i].brain.weapon.interval, m.bots[i].brain.weapon.burst, m.bots[i].health, m.bots[i].max_health, m.bots[i].deaths);
+                    v.weapon_id, m.bots[i].brain.weapon.interval, m.bots[i].brain.weapon.burst, m.bots[i].health, m.bots[i].max_health, m.bots[i].deaths,
+                    m.bots[i].brain.state, v.next_shot_tick, v.burst_left, m.bots[i].shots);
             }
             let new_shots: Vec<nf_game::mp::bots::BotShot> =
                 m.bots[i].brain.shots[before..].to_vec();
             m.bots[i].shots += new_shots.len() as u32;
+            for s in &new_shots {
+                let w = s.weapon as usize;
+                if w < m.bots[i].shots_by_weapon.len() { m.bots[i].shots_by_weapon[w] += 1; }
+            }
             m.bots[i].brain.shots.clear();
             let bot_pos = m.bots[i].brain.pos;
             let bslot = m.bots[i].slot;

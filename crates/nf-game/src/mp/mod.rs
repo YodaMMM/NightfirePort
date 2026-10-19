@@ -556,6 +556,9 @@ pub struct MpBot {
     /// spawn point; the death handler's delay — the port stands in 180 ticks / 3 s [S]).
     pub dead: bool,
     pub respawn_at: u32,
+    /// mp-bot-weapons: per-weapon shot tally (index = the weapon id) — bookkeeping like
+    /// `shots`, never hashed. The tests read it to pin the per-weapon fire behaviour.
+    pub shots_by_weapon: Vec<u32>,
 }
 
 fn sq_dist3d(a: [f32; 4], b: [f32; 3]) -> f32 {
@@ -695,6 +698,7 @@ impl MpMatch {
                 respawns: 0,
                 dead: false,
                 respawn_at: 0,
+                shots_by_weapon: vec![0; crate::mp::botweap::BOT_WEAPONS],
             });
         }
     }

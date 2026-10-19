@@ -2903,19 +2903,6 @@ impl BotBrain {
         };
     }
 
-    /// The spent burst's re-pull inside a combat move (the 0xD2 re-arm stand-in, see
-    /// `route_vision_block`) [S].
-    fn rearm_burst(&mut self, rng: &mut Rng) {
-        if self.vars.burst_empty != 0 {
-            let interval = (self.weapon.interval.max(20)) as u32;
-            if self.tick.wrapping_sub(self.vars.burst_done_tick) >= interval {
-                self.vars.fire_latch = 0;
-                self.vars.burst_empty = 0;
-                self.bot_attack_fire_enter(rng);
-            }
-        }
-    }
-
     /// 0xD4/0xD5 BotAttackStrafeAim{Left,Right} msg 3 [M 0x16f850/0x16f9b8]: no opponent →
     /// 0xD3; aim; `CanStrafe` failing → `chooseCombatMove` (none → 0xCF); out of sight 16+ ticks
     /// → 0xD0 run; the timer (msg 0xC) → 0xCF. The strafe walk itself is the anim's root motion
@@ -2943,7 +2930,6 @@ impl BotBrain {
         // drift in when far, out when inside the too-close band [S]
         let fwd = if dist > self.vars.combat_range[1] * 0.5 { 0.35 } else if dist < self.vars.combat_range[0] * 2.0 { -0.35 } else { 0.0 };
         self.side_walk(side, fwd, 1.0);
-        self.rearm_burst(rng);
     }
 
     /// 0xDB/0xDC BotAttackStepAim{Left,Right} msg 3 [M 0x174e88/0x174fa8]: no opponent → 0xD3;
@@ -2964,7 +2950,6 @@ impl BotBrain {
                 self.set_state(mv);
             }
         }
-        self.rearm_burst(rng);
     }
 
     fn bot_goto_goal_msg3(&mut self, ctx: &BotCtx) {
@@ -3101,7 +3086,13 @@ impl BotBrain {
             return;
         }
         if dist < self.vars.combat_range[1] && self.vars.sighted & 4 != 0 && self.vars.unseen_ticks < 0x10 {
-            self.vars.fire_latch = 0;
+            // No latch write here [M 0x16f390:86-91, :102 — the 0xCF hand-over reads +0x3b
+            // nowhere]: the fire latch and its bullet deadline survive the combat-state bounce
+            // (0xD0/0xCF/the moves), so the per-tick pipeline fires at the deadline from any
+            // combat state — the game's bots shoot while they move. Clearing the latch made
+            // every re-entry a fresh `DroneWeap_Fire` whose `NextBulletTime` re-pushed the
+            // deadline (≥ 60 ticks for weapon 6 [M 0x179d40:26-47]) beyond the 1-in-3 exit
+            // roll's stay [M 0x16f5e8:48-52] — the latch was set and the bot never fired.
             self.set_state(state::BOT_ATTACK); // [M :86-91]
             return;
         }
@@ -3124,7 +3115,8 @@ impl BotBrain {
             return;
         };
         if o.dist2.sqrt() > self.vars.combat_range[0] + 1.0 || ctx.stationary || self.stuck_hits > 0 {
-            self.vars.fire_latch = 0;
+            // No latch write [M 0x16fc30 — the backoff reads +0x3b (the enter's skip-Fire, the
+            // msg3's aim gate) and never writes it]: see the 0xD0 arm above.
             self.set_state(state::BOT_ATTACK);
             return;
         }
@@ -3151,17 +3143,13 @@ impl BotBrain {
             self.set_state(state::BOT_ATTACK_RUN);
             return;
         }
-        // The game leaves 0xD2 through its combat moves (strafe/step, `chooseCombatMove`), which
-        // re-enter the fire state; those are not ported, so a spent burst re-arms here after the
-        // weapon's interval [S].
-        if self.vars.burst_empty != 0 {
-            let interval = (self.weapon.interval.max(20)) as u32;
-            if self.tick.wrapping_sub(self.vars.burst_done_tick) >= interval {
-                self.vars.fire_latch = 0;
-                self.vars.burst_empty = 0;
-                self.set_state(state::BOT_ATTACK);
-            }
-        }
+        // The spent burst re-arms in the per-tick pipeline itself (`DoFiring`'s `+0xbc0 == 0`
+        // arm → `NextBulletTime(1, 0)` [M 0x17a080:11-13]); the game's 0xD2 msg 3 has no
+        // re-arm and no latch write [M 0x16f5e8:56-93]. The port's interval-based re-arm here
+        // cleared the latch, so the next 0xD2/move enter was a fresh `DroneWeap_Fire` whose
+        // `NextBulletTime` pushed the bullet deadline out again — with weapon 6's 60-tick
+        // minimum and the 1-in-3 exit roll the deadline always receded and the bot never
+        // fired (the playtest's "0xD4 strafe, latch set, never fires" wedge).
     }
 
     /// `DroneWeap_NextBulletTime` 0x179d40 (the port's lift): the interval from the weapon
@@ -3606,6 +3594,31 @@ impl BotBrain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// mp-bot-weapons: the interval floor — `DroneWeap_NextBulletTime` 0x179d40:26-47 clamps the
+    /// record interval (`weapon_data+0x40`) to 60 ticks for weapons 6, 0xA and 0xE..0x10 only; a
+    /// weapon outside the set keeps its record value. The non-start call (`NextBulletTime(0, 0)`,
+    /// the per-burst-member re-arm) sets `Drone+0xBC4 = max(last_shot + interval, now)` [M :131-135].
+    #[test]
+    fn next_bullet_time_interval_floor() {
+        let record = INITIAL_BOT_RECORDS[0].clone();
+        let mut brain = BotBrain::bot_init(&record, 4, [0.0, 1.6, 0.0], 0.0);
+        let mut rng = Rng::new(0x5eed_0001);
+        // weapon 6 with a record interval of 8 ticks: the deadline lands 60 ticks after the shot.
+        brain.vars.weapon_id = 6;
+        brain.weapon = BotWeapon { interval: 8, burst: 1, aggression_mul: 1.0 };
+        brain.vars.last_shot_tick = 1000;
+        brain.tick = 1001;
+        brain.next_bullet_time_mp(&mut rng, false);
+        assert_eq!(brain.vars.next_shot_tick, 1060, "weapon 6's 60-tick floor [M 0x179d40:26-47]");
+        // Sister (can fail): weapon 0x19 is outside the floor set — its record interval passes
+        // through, so a sub-60 interval is NOT clamped.
+        brain.vars.weapon_id = 0x19;
+        brain.weapon = BotWeapon { interval: 15, burst: 1, aggression_mul: 1.0 };
+        brain.vars.last_shot_tick = 1000;
+        brain.next_bullet_time_mp(&mut rng, false);
+        assert_eq!(brain.vars.next_shot_tick, 1015, "no floor outside the 6/0xA/0xE..0x10 set");
+    }
 
     /// Golden: the 29 presets are byte-exact against the EE snapshot reads
     /// (spot rows + the structural invariants every row must satisfy).
