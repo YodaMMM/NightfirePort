@@ -704,6 +704,13 @@ impl<T: Transport> Session<T> {
         self.local_slot
     }
 
+    /// net-match-end: the slots currently held by humans (a departed slot has already left
+    /// `slot_human` [M `drop_slot`]) — the app's end wait counts these as the peers that must
+    /// ack the final tick or depart.
+    pub fn human_slots(&self) -> Vec<usize> {
+        (0..MAX_AGENTS).filter(|&s| self.slot_human[s]).collect()
+    }
+
     /// Set this machine's lobby display codename (rides HELLO / WELCOME;
     /// never compared — the compatibility gate is protocol + build).
     pub fn set_display_name(&mut self, name: &str) {
