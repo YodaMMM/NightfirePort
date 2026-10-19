@@ -708,6 +708,14 @@ pub struct BotCtx<'a> {
     /// The attack states' stationary gate: behaviour prop 0x40 / `Drone+0x4F8` bit 0x10
     /// [M 0x16f198:42-45, 0x16f5e8:56-60]. The "stand" preset maps here [S — see the report].
     pub stationary: bool,
+    /// mp-perf-16: the caller left the seen bits (0x6) of `others` unset and `find_opponent` runs
+    /// the sight line itself — the bot's eye (`pos`) to the other's chest (eye − 0.4), clear of the
+    /// bullet-class world (`segment_surface_bullet` = `segment_bullet_clear`) — only for the
+    /// candidates whose answer can change the pick (nearer than the best so far). The flags are
+    /// read nowhere else in a way the answer changes (the 0xA melee gate and the trait-5 0x10 test
+    /// see the same values with bits 0x6 clear or set), so the pick is bit-identical to the
+    /// precomputed pass while the per-pair segments fall away [S port optimisation].
+    pub lazy_sight: bool,
 }
 
 
@@ -1025,7 +1033,7 @@ impl BotBrain {
                     // round goes): an eye-to-eye line over a ledge lip saw a bot on the storey
                     // below whom no round could reach, and the pair stood firing into the lip
                     // all match instead of running the route round [S the CanSeeObject stand-in].
-                    let clear = ctx.world.segment(self.pos, [t.pos[0], t.pos[1] - 0.3, t.pos[2]]).is_none();
+                    let clear = ctx.world.segment_clear(self.pos, [t.pos[0], t.pos[1] - 0.3, t.pos[2]]);
                     if clear {
                         self.vars.sighted |= 4; // Drone+0x228 bit 2 [M]
                         self.vars.unseen_ticks = 0; // Drone+0x274
@@ -1040,7 +1048,7 @@ impl BotBrain {
                 }
             }
         }
-        self.find_opponent(ctx); // [M 0x1490f0:167]
+        { let _p = crate::prof::scope("bots: find_opponent"); self.find_opponent(ctx); } // [M 0x1490f0:167]
         // 1. the forced-to-0xC5 heartbeat [M 0x171df8:78-86]
         self.bot_global_msg3(ctx);
         // 2. msg 3 to the current state (unknown states do not consume → nothing, like the
@@ -1640,7 +1648,14 @@ impl BotBrain {
             if o.index == ctx.my_index || !o.alive {
                 continue;
             }
-            if o.flags & 0x6 != 0x6 {
+            if ctx.lazy_sight {
+                // mp-perf-16: a candidate no nearer than the best cannot change the pick (the
+                // comparison below keeps the earlier one on a tie) — skip its sight line.
+                if best.is_some_and(|(_, d)| o.dist2 >= d) { continue; }
+                let chest = [o.pos[0], o.pos[1] - 0.4, o.pos[2]];
+                let seen = o.flags & 0x6 == 0x6 || ctx.world.segment_bullet_clear(self.pos, chest);
+                if !seen { continue; }
+            } else if o.flags & 0x6 != 0x6 {
                 continue; // bit1 candidate + bit2 seen (the game's CanSeeObject bit [S — the
                           // vision query's range/params are not lifted; the caller supplies it])
             }
@@ -1967,6 +1982,7 @@ impl BotBrain {
     /// links from the nearest walk-clear nodes at the start to the nearest at the destination
     /// (ties by node index — deterministic). No reachable node → straight (the body slides).
     fn plan_route(&mut self, ctx: &BotCtx, net: &crate::nav::Network, from: [f32; 3], dest: [f32; 3]) {
+        let _p = crate::prof::scope("bots: plan_route");
         self.route = BotRoute { path: 0, nodes: Vec::new(), idx: 0, dest, built: self.tick, valid: true };
         if walk_clear(ctx.world, from, dest) {
             return;
@@ -2049,6 +2065,7 @@ impl BotBrain {
     /// into the body's forward/strafe sticks. With no world (the unit rigs) the walk is a plane
     /// move at the body's top speed.
     fn walk_body(&mut self, ctx: &BotCtx) {
+        let _p = crate::prof::scope("bots: walk_body");
         let want = self.move_want.take();
         let (mut dir, mut speed) = want.unwrap_or(([0.0, 0.0], 0.0));
         dir = [dir[0] * speed, dir[1] * speed];
@@ -2779,6 +2796,7 @@ mod brain_tests {
                 health: 100.0,
                 max_health: 100.0,
                 stationary,
+                lazy_sight: false,
             }
         }
 

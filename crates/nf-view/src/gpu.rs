@@ -909,6 +909,7 @@ impl Renderer {
             let skip = SKIP.get_or_init(|| std::env::var("NF_SKIP_MAT").map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default());
             // Reuse the cached `order` Vec (A-11e): clear + refill, no per-frame alloc.
             self.order.clear();
+            let prof_cull = nf_game::prof::scope("enc: cull filter");
             // frame-240: the cull runs BEFORE the sort and the uniform staging, so the per-frame
             // work (light picks, uniform slots, the sort) scales with the submitted draws, not with
             // every draw the level owns (the effect pools alone are thousands of parked slots).
@@ -981,6 +982,8 @@ impl Renderer {
                 (slot, key, k)
             }));
             drop(parked_pos);
+            drop(prof_cull);
+            let prof_sort = nf_game::prof::scope("enc: sort");
             self.order.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
             // Per-draw uniform slots (fix-lighting): the game uploads the ≤2 closest lights per object
             // (`View_DrawObjList` 0x1e69a0 / `View_DrawCelGlist` 0x1e6538 → `Lights_CalcClosestLights`
@@ -992,6 +995,8 @@ impl Renderer {
             // cel+0x94), not the hardcoded 0x80 that let the kind-0 ambient radiators crowd the muzzle
             // light off the world draws; the sky draws upload NO lights (`View_DrawSky` 0x1e5ad0 /
             // `View_DrawSprites` 0x1e5290 call `psiLight_SetLights(0,0,0,0,0)`).
+            drop(prof_sort);
+            let prof_lights = nf_game::prof::scope("enc: uniforms + light picks");
             {
                 const HEAD: usize = 40;
                 const SLOT: usize = 20;
@@ -1057,6 +1062,8 @@ impl Renderer {
                 queue.write_buffer(&self.uniform, 0, bytemuck::cast_slice(&staged));
                 self.staged = staged;
             }
+            drop(prof_lights);
+            let _prof_rec = nf_game::prof::scope("enc: record draws");
             pass.set_bind_group(0, &self.uniform_bg, &[]);
             if let Some(b) = self.batch.as_mut() {
                 // batch-draws: every texture is bound at once, so only a pipeline change splits the

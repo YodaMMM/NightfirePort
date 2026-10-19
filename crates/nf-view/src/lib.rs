@@ -1533,6 +1533,18 @@ impl FpsMeter {
     }
 }
 
+/// mp-perf-16 (`NF_FPSLOG`): this frame's tick-loop time and its CPU time up to the submit /
+/// the present call, folded into the once-a-second `[fps]` line (avg / worst of each).
+static PAL_REBUILDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static FRAME_PARTS: std::sync::Mutex<[f64; 12]> = std::sync::Mutex::new([0.0; 12]);
+fn frame_part(i: usize, d: std::time::Duration) {
+    if let Ok(mut p) = FRAME_PARTS.lock() {
+        let ms = d.as_secs_f64() * 1000.0;
+        p[i * 2] += ms;
+        p[i * 2 + 1] = p[i * 2 + 1].max(ms);
+    }
+}
+
 fn fps_log(frame: std::time::Duration) {
     use std::sync::Mutex;
     static ACC: Mutex<Option<(std::time::Instant, u32, f64, f64)>> = Mutex::new(None);
@@ -1541,7 +1553,10 @@ fn fps_log(frame: std::time::Duration) {
     let a = acc.get_or_insert((std::time::Instant::now(), 0, 0.0, 0.0));
     a.1 += 1; a.2 += ms; a.3 = a.3.max(ms);
     if a.0.elapsed().as_secs_f64() >= 1.0 {
-        { let __m = format!("[fps] {} frames, avg {:.2} ms, worst {:.2} ms", a.1, a.2 / a.1 as f64, a.3); std::thread::spawn(move || eprintln!("{__m}")); }
+        let parts = FRAME_PARTS.lock().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default();
+        let n = a.1.max(1) as f64;
+        { let __m = format!("[fps] {} frames, avg {:.2} ms, worst {:.2} ms | ticks avg {:.2} worst {:.2} | to submit avg {:.2} worst {:.2} | submit+present avg {:.2} worst {:.2} | palette build avg {:.2} worst {:.2} | blend+upload avg {:.2} worst {:.2} | render encode avg {:.2} worst {:.2} | tick frames {}", a.1, a.2 / a.1 as f64, a.3,
+            parts[0] / n, parts[1], parts[2] / n, parts[3], parts[4] / n, parts[5], parts[6] / n, parts[7], parts[8] / n, parts[9], parts[10] / n, parts[11], PAL_REBUILDS.swap(0, std::sync::atomic::Ordering::Relaxed)); std::thread::spawn(move || eprintln!("{__m}")); }
         *acc = None;
     }
 }
@@ -4213,12 +4228,15 @@ impl ApplicationHandler for App {
                         _ => n_ticks,
                     };
                     self.ticked = n_ticks > 0;
+                    // mp-perf-16: the online ticks this frame actually ran (past the lockstep gate).
+                    let mut net_ran = 0u32;
                     let eye = [self.cam.pos.x, self.cam.pos.y, self.cam.pos.z];
                     let look = self.cam.dir().to_array();
                     // mp-host-match-logic: set inside the tick loop when the match's debriefing
                     // request latched and the host opened the page (the grab waits for this
                     // scope — the sim borrow).
                     let mut debrief_opened = false;
+                    let fp_t0 = std::time::Instant::now();
                     if let Some(sim) = self.scene.sim.as_mut() {
                         for _ in 0..n_ticks {
                             if self.noclip { sim.step(eye, look, self.trigger, self.aiming); continue; }
@@ -4232,9 +4250,24 @@ impl ApplicationHandler for App {
                                 if self.net_await_load { self.ticked = false; break; }
                                 if session.0.borrow_mut().ready_inputs(self.net_tick).is_none() {
                                     NET_STALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                    self.ticked = false;
+                                    // mp-perf-16 (the joiner's "54 ticks/s, 240 stalls/s"): (1) a frame
+                                    // whose earlier iterations RAN ticks keeps `ticked` — the old
+                                    // `false` here threw those ticks' palette/camera snapshots away,
+                                    // and a machine running at the edge of the others' inputs (every
+                                    // frame runs a tick, then stalls on the next) never rebuilt its
+                                    // palette at all (NF_FPSLOG "tick frames 0" on the joiner while
+                                    // it ran 60 ticks/s). (2) The stall pauses the match clock: the
+                                    // clock is re-anchored on the waiting tick, so the time spent
+                                    // waiting is not owed back as a lead. The joiner's clock started
+                                    // at ITS load, ~6 s before the host's first inputs arrived; that
+                                    // lead never drained, so every frame asked for up to 4 ticks,
+                                    // stalled (240 stalls/s at 240 Hz) and NF_NET_RATE's
+                                    // ticks / clock read 54/s while the joiner really ran 60.
+                                    self.ticked = net_ran > 0;
+                                    self.net_clock = std::time::Instant::now().checked_sub(std::time::Duration::from_secs_f64(self.net_tick as f64 / 60.0));
                                     break;
                                 }
+                                net_ran += 1;
                             }
                             // B-5 record/replay: when `--replay` is set, the input comes from the recording, not the
                             // keyboard. The recorded tick drives `step_bond` exactly as it did when recorded; the user
@@ -4587,6 +4620,7 @@ impl ApplicationHandler for App {
                     // next frame's poll (a frame less of latency on every remote input).
                     if let Some(session) = self.net.as_ref() { session.0.borrow_mut().flush(); }
                     // Dev mode after-tick: god mode / infinite ammo (the game's own state, set the way the game sets it).
+                    frame_part(0, fp_t0.elapsed());
                     if debrief_opened { self.grab(false); } // the menus own the cursor again
                     if let Some(d) = self.dev.as_deref_mut() { d.after_tick(&mut self.scene); }
                     // The mission's end sequence (`Mission_Update` case 4 → `ResetMap_LevelToLoad`
@@ -4632,11 +4666,14 @@ impl ApplicationHandler for App {
                 let vis = g.renderer.cel_visibility(draw_cam.pos.to_array(), vp0, if portal { self.scene.sim.as_ref().map(|s| &s.world) } else { None }, door_closed.as_deref());
                 // G-043: build the palette only when a tick ran, then draw between the last two ticks.
                 let pal_rebuilt = self.ticked || self.pal_cur.is_none();
+                if pal_rebuilt { PAL_REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
                 if pal_rebuilt {
                     // The user (2026-10-18): "culling should only happen on map geometry, no characters
                     // or items" — characters, doors, pickups and props are never room-culled; only the
                     // World draws take the room/portal cull (render()).
+                    let fp_pal = std::time::Instant::now();
                     let new = self.scene.skin_palette(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None);
+                    frame_part(3, fp_pal.elapsed());
                     g.renderer.char_light_centre = self.scene.char_light_centres();
                     self.pal_prev = self.pal_cur.take();
                     // perf-240: the entries that move between the two ticks, and the blend buffer seeded
@@ -4655,6 +4692,7 @@ impl ApplicationHandler for App {
                 }
                 let interp = interp0;
                 let alpha = alpha0;
+                let fp_blend = std::time::Instant::now();
                 if let Some((pal, cols)) = &self.pal_cur {
                     match &self.pal_prev {
                         Some((pp, _)) if interp => {
@@ -4688,6 +4726,7 @@ impl ApplicationHandler for App {
                     // palette is rebuilt (each tick, and the first frame of a scene), not every frame.
                     if pal_rebuilt || self.scene.sim.is_none() { g.renderer.upload_morph_weights(&g.queue, &self.scene); }
                 }
+                frame_part(4, fp_blend.elapsed());
                 let frame = match g.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
                     wgpu::CurrentSurfaceTexture::Outdated => { g.surface.configure(&g.device, &g.config); g.window.request_redraw(); return; }
@@ -4812,9 +4851,14 @@ impl ApplicationHandler for App {
                 hud.append(&self.scene.script_overlay_hud(aspect));
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
+                let fp_enc = std::time::Instant::now();
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
+                let fp_sub = std::time::Instant::now();
+                frame_part(5, fp_sub - fp_enc);
+                frame_part(1, fp_sub - self.frame_start);
                 g.queue.submit([enc.finish()]);
                 g.queue.present(frame);
+                frame_part(2, fp_sub.elapsed());
                 if let Some(w) = self.devwin.as_mut() { w.tick(); }
                 if let Some(fps) = self.fps_cap.filter(|f| *f > 0.0) {
                     let target = std::time::Duration::from_secs_f32(1.0 / fps);
@@ -4956,6 +5000,9 @@ pub fn run() -> Result<()> {
             st.human_count = v.first().copied().unwrap_or(2).clamp(1, nf_game::mp::MP_MAX_SLOTS as u32);
             st.bot_count = v.get(1).copied().unwrap_or(0);
             st.player_count = st.human_count as u16;
+            // mp-perf-16: a windowed `--mp-match` run plays (deathmatch()'s raw 10 ends the match
+            // in 10 s, straight to the debriefing); NF_NET_TIME=seconds as on the flag host.
+            st.time_limit = std::env::var("NF_NET_TIME").ok().and_then(|v| v.parse::<i32>().ok()).unwrap_or(10 * 60);
             for (slot, &c) in v.iter().skip(2).enumerate() { if slot < nf_game::mp::MP_MAX_SLOTS { st.players[slot].skin = c; } }
             load_mp_carry(&iso, &level, all, None, st)?
         }

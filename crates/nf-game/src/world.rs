@@ -1068,6 +1068,48 @@ impl CollisionWorld {
         best
     }
 
+    /// mp-perf-16: whether ANY triangle of the sets blocks `from → to` — the exact predicate
+    /// `segment_in_sets_drop_pass(..).is_none()` evaluates (same sets, same pass drop, the same
+    /// Möller–Trumbore arithmetic term for term), but it stops at the first blocking triangle
+    /// instead of searching on for the nearest. The boolean callers (`line_of_sight`, the bots'
+    /// sight lines) only ask "is there a hit", so the answer is bit-identical and the work is the
+    /// prefix up to the first hit [S port optimisation].
+    fn segment_blocked(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool) -> bool {
+        let d = sub(to, from);
+        let dynamic = self.dynamic.read().unwrap();
+        let sets: [Option<&Geo>; 3] = [Some(&self.stat), with_missile.then_some(&self.missile), Some(&dynamic.geo)];
+        for g in sets.into_iter().flatten() {
+            for o in along(g, from, to) {
+                for k in o.tris.clone() {
+                    if drop_pass && g.bullet_pass(k) { continue; }
+                    let t = &g.tris[k];
+                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                    if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                    let p = cross(d, e2);
+                    let det = dot(e1, p);
+                    if det.abs() < 1e-12 { continue; }
+                    let inv = 1.0 / det;
+                    let s = sub(from, t[0]);
+                    let u = dot(s, p) * inv;
+                    if !(0.0..=1.0).contains(&u) { continue; }
+                    let q = cross(s, e1);
+                    let v = dot(d, q) * inv;
+                    if v < 0.0 || u + v > 1.0 { continue; }
+                    let tt = dot(e2, q) * inv;
+                    if (0.0..=1.0).contains(&tt) { return true; }
+                }
+            }
+        }
+        false
+    }
+
+    /// `segment(from, to).is_none()`, early-out (see `segment_blocked`).
+    pub fn segment_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked(from, to, true, false) }
+
+    /// `segment_surface_bullet(from, to).is_none()` (= `segment_bullet(..).is_none()`: the same
+    /// sets, pass drop and triangle test), early-out (see `segment_blocked`).
+    pub fn segment_bullet_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked(from, to, true, true) }
+
     /// First hit along `from → to`: the fraction in [0, 1] and the unit normal of the triangle hit (facing `from`).
     /// The player's GROUNDING variant: water surfaces (material 0xE) never ground him — the cel scoping
     /// of `Player_FeetOnPoint` 0x194188 (the ray tests only the current cel `obj+0x20`; the water planes
@@ -1306,7 +1348,7 @@ impl CollisionWorld {
     }
 
     /// Clear line between two points (`Collide_LineOfSight` stand-in: collision geometry, moving objects included).
-    pub fn line_of_sight(&self, a: V3, b: V3) -> bool { self.segment(a, b).is_none() }
+    pub fn line_of_sight(&self, a: V3, b: V3) -> bool { self.segment_clear(a, b) }
 
     /// Height of the first collision surface straight below `p` within `depth` (starting 0.5 above it).
     pub fn floor_below(&self, p: V3, depth: f32) -> Option<f32> {

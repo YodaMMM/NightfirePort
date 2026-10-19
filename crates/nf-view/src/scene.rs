@@ -315,6 +315,14 @@ pub struct MissileCam {
     pub riding: bool,
 }
 
+/// mp-perf-16: a debug env flag read once per process (the per-body / per-bot / per-tick reads
+/// were a `GetEnvironmentVariableW` round trip each, every tick).
+static ENV_MPBODY_DBG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static ENV_BOTLOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+fn env_flag(cell: &'static std::sync::OnceLock<bool>, name: &str) -> bool {
+    *cell.get_or_init(|| std::env::var_os(name).is_some())
+}
+
 pub struct Sim {
     pub drones: nf_game::drone::Drones,
     pub tables: DroneAnimData,
@@ -575,6 +583,10 @@ pub struct Sim {
     pub mp_last_held: [u8; nf_net::MAX_AGENTS],
     /// fix-render3: the `ambient_at` call counter (a test guard for the posed-vertices hoist).
     pub ambient_lookups: std::cell::Cell<usize>,
+    /// mp-perf-16: the MP bodies' draw memo — the whole-frame bone samples
+    /// (`nf_game::anim::PoseSampleCache`) and the walk scripts' distance tables (built once per
+    /// walk sequence instead of per body per ticked frame). Draw-only, never read by the sim.
+    pub mp_draw_cache: std::cell::RefCell<(nf_game::anim::PoseSampleCache, HashMap<u32, Option<nf_game::anim::DistanceTable>>)>,
     /// light-sun: BLData+0x962 — Bond's head sees the sun this tick (`ramp_char_ambient`).
     pub sun_seen: bool,
     /// The language string table (`USATxt.dat`, the NTSC-U default `FNames[SelLang]`) — the source of the
@@ -2034,7 +2046,7 @@ impl Sim {
         // mp-bots-in-match: the bots' per-frame driver — the game's `BOT_update` 0x126448 family
         // runs per frame inside the MP flow (the brains + the firing pipeline + respawn/score
         // bookkeeping), exactly like the port's `MP_Update` block above.
-        self.step_mp_bots();
+        { let _p = nf_game::prof::scope("mp: step_mp_bots"); self.step_mp_bots(); }
         // 700v6: online, the rest of the tick (the local player's own pipeline and its effects)
         // draws this machine's private generator; the shared one comes back at the tick's end.
         if let Some(r) = self.net_rng.take() {
@@ -7176,7 +7188,7 @@ impl Scene {
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), mp_walk: [MP_WALK_INIT; nf_net::MAX_AGENTS], mp_last_held: [2; nf_net::MAX_AGENTS], ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), mp_walk: [MP_WALK_INIT; nf_net::MAX_AGENTS], mp_last_held: [2; nf_net::MAX_AGENTS], ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],
@@ -7296,6 +7308,7 @@ impl Scene {
             // Drones: the simulation's pose — blended scripts, fractional frames, upper-body aim — the same one the hit
             // boxes use (`Drone::object_pose`).
             if let Some((s, di)) = drone_of(ci) {
+                let _pd = nf_game::prof::scope("fs: drone pose");
                 let dr = &s.drones.list[di];
                 let (world, hip) = dr.object_pose(&s.data())?;
                 let m = nf_formats::placement::object_matrix([0.0, dr.yaw, 0.0], [dr.pos[0], dr.draw_y(hip), dr.pos[2]]);
@@ -7325,6 +7338,7 @@ impl Scene {
             // position and yaw [S stand-in until 700v7 ports the player anim set, PlayerAnimSetInit*
             // 0x18fcd8 — the game's MP bodies run the PLAYER set, not the drone tables].
             if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
+                let _pm = nf_game::prof::scope("fs: mp body (total)");
                 let s = self.sim.as_ref()?;
                 let (pos, yaw, speed) = s.mp_body_state(slot)?;
                 // The PLAYER anim set the game's MP body runs, through 700v7's port: the set by the
@@ -7346,7 +7360,7 @@ impl Scene {
                 let danim = s.tables.danim_for_state(st, 0);
                 // Fallback when the arena lacks the player script: the drone set [S].
                 let script = player_script.or_else(|| danim.filter(|&d| d >= 0).and_then(|d| (0..27u16).filter_map(|set| s.tables.script_for(d as u16, set)).find(|h| s.scripts.contains_key(h))));
-                if std::env::var_os("NF_MPBODY_DBG").is_some() && s.drones.frame % 60 == 0 {
+                if s.drones.frame % 60 == 0 && env_flag(&ENV_MPBODY_DBG, "NF_MPBODY_DBG") {
                     eprintln!("[mpbody] slot {slot} held {} raw {:?} pos {pos:?} yaw {yaw:.2} speed {speed:.2} state {st:#x} danim {danim:?} script {script:x?} has {}", s.mp_body_held(slot), s.mp_held.get(slot), script.is_some_and(|h| s.scripts.contains_key(&h)));
                 }
                 let script = script?;
@@ -7358,26 +7372,31 @@ impl Scene {
                 // NON-looping scripts — 060009de is 86 frames, looping 0 [D]) froze every moving body in
                 // the walk's last frame 1.4 s into the match (renders before_bot2_f200/f215: same pose).
                 let walking = posed.is_some_and(|(p, set)| p.blend > 0.0 && p.script == script && set.walk == script);
+                // mp-perf-16: the samples and the walk tables come through the draw memo — the
+                // same values (`PoseSampleCache`, a table is a pure function of its sequence).
+                let mut memo = s.mp_draw_cache.borrow_mut();
+                let (poses, tables) = &mut *memo;
                 let mut local = if walking {
                     let (p, set) = posed.unwrap();
                     let walk_q = s.scripts.get(&script)?.sequences().next().and_then(|(_, _, q)| s.seqs.get(&q))?;
-                    let table = nf_game::anim::DistanceTable::build(walk_q, 4, true)?;
+                    let table = tables.entry(walk_q.hashcode).or_insert_with(|| nf_game::anim::DistanceTable::build(walk_q, 4, true)).as_ref()?;
                     let mut w = s.mp_walk.get(slot).copied().unwrap_or(MP_WALK_INIT);
                     let frame_a = table.distance_to_frame(&mut w, 0.0, true).max(1.0);
-                    let mut pose = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, frame_a)?;
+                    let mut pose = nf_game::anim::script_pose_drone_cached(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, frame_a, poses)?;
                     // The run, synced to the walk's normalised time (mode 2: Δ = (Mt−1)/(Ml−1) − (t−1)/(l−1)).
                     let len_a = s.scripts.get(&script)?.length.max(2) as f32;
                     if let Some(len_b) = s.scripts.get(&set.run).map(|r| r.length.max(2) as f32).filter(|_| set.run != script) {
                         let frame_b = 1.0 + (frame_a - 1.0) / (len_a - 1.0) * (len_b - 1.0);
-                        if let Some(run) = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, set.run, frame_b) {
+                        if let Some(run) = nf_game::anim::script_pose_drone_cached(&s.scripts, &s.seqs, &c.skeleton, &c.skin, set.run, frame_b, poses) {
                             nf_game::anim::blend(&mut pose, &run, p.blend.clamp(0.0, 1.0));
                         }
                     }
                     pose
                 } else {
                     let time = 1.0 + s.scripts.get(&script)?.time_at(s.drones.frame as f32);
-                    nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time)?
+                    nf_game::anim::script_pose_drone_cached(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time, poses)?
                 };
+                drop(memo);
                 let hip = local.first().map_or(0.0, |r| r.0[1]);
                 if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
                 let world = anim::world_pose(&local, &c.skin);
@@ -7413,7 +7432,9 @@ impl Scene {
         };
         // One memo across the characters: the crowds share (mesh, sequence, frame) poses.
         let mut cache = HashMap::new();
+        let prof_pose = nf_game::prof::scope("fs: pose characters");
         let posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>> = self.characters.iter().enumerate().map(|(ci, c)| pose_one(ci, c, &mut cache)).collect();
+        drop(prof_pose);
         // Held back: spawner reinforcements and drones disabled while they wait for a switch channel (object flags
         // 0x30, `NDrone2_Enable(0)`); R shows them. The inspect path (`choice`) pins a drone-backed
         // character visible; script actors keep their liveness gate either way.
@@ -8258,7 +8279,10 @@ impl Scene {
     /// the forced list, `View_AddForcedObjects` 0x1e5fb8). `None` = the walk is off (`NF_NOPORTAL`).
     pub fn skin_palette(&self, l: &SkinLayout, choice: Option<usize>, time: f32, opts: ViewOpts, vis: Option<&[bool]>) -> (Vec<Mat4>, Vec<[f32; 4]>) {
         const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
+        let prof_fs = nf_game::prof::scope("pal: frame_state_for");
         let fs = self.frame_state_for(choice, time, opts, true);
+        drop(prof_fs);
+        let _prof_rest = nf_game::prof::scope("pal: palette fill");
         let collapse = |at: &Mat4| -> Mat4 { [[0.0; 4], [0.0; 4], [0.0; 4], [at[3][0], at[3][1], at[3][2], 1.0]] };
         // fix-dev-spawn-visible: a LIVE drone's character (present + enabled — the dev NPC spawns, and
         // the placed guards while they fight) must not vanish when the strict portal walk drops the
@@ -8284,6 +8308,7 @@ impl Scene {
             vis.map_or(true, |v| self.cel_index_at(pos).map_or(true, |r| v.get(r).copied().unwrap_or(true)))
         };
         let mut p = vec![FAR; l.n_mats as usize];
+        let pch = nf_game::prof::scope("pal: chars+attach+objects");
         for (ci, c) in self.characters.iter().enumerate() {
             // A character added after the layout was built (the dev spawn) has no palette slots
             // until the renderer is rebuilt.
@@ -8363,7 +8388,10 @@ impl Scene {
                 p[l.pick_base as usize + k] = pk.map_or(FAR, |q| q.m);
             }
         }
-        let (mults, pickup_mult, attach_mult) = self.colour_mults();
+        drop(pch);
+        let pcm = nf_game::prof::scope("pal: colour_mults");
+        let (mults, pickup_mult, attach_mult) = self.colour_mults_dense();
+        drop(pcm);
         let mut cols = vec![[1.0f32; 4]; l.col_one as usize + 1];
         let has = !mults.is_empty();
         let rgb = |m: [f32; 3]| [m[0], m[1], m[2], 1.0];
@@ -8379,8 +8407,8 @@ impl Scene {
         }
         if has {
             for (ci, m) in mults.iter().enumerate() { cols[ci] = rgb(*m); }
-            for (a, m) in &attach_mult { if let Some(c) = cols.get_mut((l.col_att + a) as usize) { *c = rgb(*m); } }
-            for (pk, m) in &pickup_mult { if let Some(c) = cols.get_mut((l.col_pick + *pk as u32) as usize) { *c = rgb(*m); } }
+            for (a, m) in attach_mult.iter().enumerate() { if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { *c = rgb(*m); } }
+            for (pk, m) in pickup_mult.iter().enumerate() { if let Some(c) = cols.get_mut((l.col_pick + pk as u32) as usize) { *c = rgb(*m); } }
         }
         // blood-puff-render: the gas puffs' draw colour IS the pool's live rgba — the game's
         // `View_SetupRenderModes_Tweak` 0x1e5888:46-49 feeds the gas object's obj+0x103..0x106 bytes
@@ -8446,6 +8474,18 @@ impl Scene {
     /// The per-object colour multipliers of one frame (`View_SetupRenderModes_Tweak`'s TAmbient): per character,
     /// per placed pickup and per attachment. Shared by the CPU path (`posed_vertices`) and the GPU palette.
     pub fn colour_mults(&self) -> (Vec<[f32; 3]>, std::collections::HashMap<u16, [f32; 3]>, std::collections::HashMap<u32, [f32; 3]>) {
+        let (mults, pickups, attach) = self.colour_mults_dense();
+        let pickup_mult = pickups.into_iter().enumerate().map(|(k, m)| (k as u16, m)).collect();
+        let attach_mult = attach.into_iter().enumerate().map(|(k, m)| (k as u32, m)).collect();
+        (mults, pickup_mult, attach_mult)
+    }
+
+    /// `colour_mults` with the pickup / attachment multipliers as dense vectors (index = the
+    /// pickup / attachment slot; both empty without a sim) — the same values. mp-perf-16: the GPU
+    /// palette reads them by index; hashing every one of the 16-body arena's attachment slots into
+    /// a map each ticked frame was a millisecond of the 240 Hz budget.
+    pub fn colour_mults_dense(&self) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>) {
+        let pm = nf_game::prof::scope("cm: char mults");
         let mults: Vec<[f32; 3]> = self.sim.as_ref()
             .map(|s| (0..self.characters.len()).map(|ci| s.char_multiplier(ci)).collect())
             .unwrap_or_default();
@@ -8462,18 +8502,20 @@ impl Scene {
         // Preallocated to the loop bounds (frame-cost-guard): one entry per pickup and per
         // attachment slot is inserted unconditionally below, so the maps can be sized up front
         // instead of rehash-growing to 12k+ entries every ticked frame.
-        let mut pickup_mult: std::collections::HashMap<u16, [f32; 3]> = std::collections::HashMap::with_capacity(self.sim.as_ref().map_or(0, |s| s.drones.pickups.len()));
-        let mut attach_mult: std::collections::HashMap<u32, [f32; 3]> = std::collections::HashMap::with_capacity(self.attachments.len());
+        let mut pickup_mult: Vec<[f32; 3]> = Vec::with_capacity(self.sim.as_ref().map_or(0, |s| s.drones.pickups.len()));
+        let mut attach_mult: Vec<[f32; 3]> = Vec::with_capacity(self.attachments.len());
         // The lag fix (the user's "very laggy" playtest): the keys were collected by walking EVERY character
         // vertex — the effect pools (decal/casing/debris/gas/projectile slots, 8561 attachments on 07000005)
         // made that 34 ms of a 52 ms frame. The multiplier depends only on the key, so it is computed once per
         // pickup and per attachment; keys no vertex carries are never read (the palette's colour slot and
         // `posed_vertices`' lookup are both per-vertex), so the results the vertices see are unchanged.
+        drop(pm);
+        let pp = nf_game::prof::scope("cm: pickups");
         if let Some(s) = self.sim.as_ref() {
             for pk in 0..s.drones.pickups.len().min(u16::MAX as usize + 1) as u32 {
                 let pk = pk as u16;
                 {
-                    pickup_mult.entry(pk).or_insert_with(|| {
+                    pickup_mult.push((|| {
                         match s.drones.pickups.get(pk as usize) {
                             Some(p) if tintable(p) => amb_at(s, &p.m),
                             // Armour glow (fix-player3): kind 3 carries the 0x80000 "close-up flash" flag
@@ -8492,12 +8534,14 @@ impl Scene {
                             }
                             _ => one(),
                         }
-                    });
+                    })());
                 }
             }
+            drop(pp);
+            let _pa = nf_game::prof::scope("cm: attachments");
             for ai in 0..self.attachments.len() as u32 {
                 {
-                    attach_mult.entry(ai).or_insert_with(|| {
+                    attach_mult.push((|| {
                         let Some(a) = self.attachments.get(ai as usize) else { return one() };
                         if a.flash.is_some() || a.tracer.is_some() { return one(); }
                         // rocket-swoosh: a swoosh's tint bytes stay at control_init_object's 0xFF
@@ -8529,7 +8573,7 @@ impl Scene {
                             };
                         }
                         mults.get(a.character as usize).copied().unwrap_or_else(one)
-                    });
+                    })());
                 }
             }
         }
@@ -8904,13 +8948,16 @@ impl Sim {
             // too"; blocked 704's item 2) [S the vision cone/range stand-in: LOS only].
             let me = m.bots[i].brain.pos;
             let mut seen = others;
+            // mp-perf-16: the eye-to-chest sight line (`segment_surface_bullet`, eye = `me`, chest =
+            // the other's eye − 0.4) is no longer run for every pair here (14 bots × 15 others =
+            // 210 segments a tick, 75% of the 16-participant tick): `find_opponent` — its only
+            // reader whose result depends on it — runs it lazily for the candidates that can
+            // change its pick (`BotCtx::lazy_sight`; the pinned digest in mp_perf_16_live proves
+            // the match bit-identical).
             for o in seen.iter_mut() {
                 if !o.alive || o.index == m.bots[i].slot { continue; }
                 let d = [o.pos[0] - me[0], o.pos[1] - me[1], o.pos[2] - me[2]];
                 o.dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-                let eye = me;
-                let chest = [o.pos[0], o.pos[1] - 0.4, o.pos[2]];
-                if world.segment_surface_bullet(eye, chest).is_none() { o.flags |= 0x6; }
             }
             let ctx = nf_game::mp::bots::BotCtx {
                 now: 0.0, // the brain's own tick counter is the clock (net-lockstep F4)
@@ -8924,14 +8971,15 @@ impl Sim {
                 health,
                 max_health,
                 stationary: false,
+                lazy_sight: true,
             };
             let before = m.bots[i].brain.shots.len();
-            m.bots[i].brain.step(&ctx, &mut self.drones.rng, true);
+            { let _p = nf_game::prof::scope("bots: brain.step"); m.bots[i].brain.step(&ctx, &mut self.drones.rng, true); }
             stamps.push((i, m.bots[i].brain.last_visit_stamp));
             // (The brain's body walks the world itself — the player's movement core: collision,
             // floors, gravity — so the old per-tick re-stand, which could snap a bot onto a
             // lower floor, is gone.)
-            if std::env::var_os("NF_BOTLOG").is_some() && frame % 60 == 0 {
+            if frame % 60 == 0 && env_flag(&ENV_BOTLOG, "NF_BOTLOG") {
                 eprintln!("[botlog] f{} bot{} state {:#x} pending {:?} opp {:?} goals {:?} pos {:.1?} trace {}",
                     frame, i, m.bots[i].brain.state, m.bots[i].brain.trace.last(),
                     m.bots[i].brain.vars.opponent,
@@ -9002,7 +9050,7 @@ impl Sim {
                 let tt = th.min(tb);
                 if tt < f32::MAX {
                     let p = [shot.pos[0] + (end[0] - shot.pos[0]) * tt, shot.pos[1] + (end[1] - shot.pos[1]) * tt, shot.pos[2] + (end[2] - shot.pos[2]) * tt];
-                    if world.segment(shot.pos, p).is_some() { best = None; hit_human = None; }
+                    if !world.segment_clear(shot.pos, p) { best = None; hit_human = None; }
                 }
                 if let Some((h, _)) = hit_human {
                     let shooter = m.bots[i].slot;
@@ -9084,6 +9132,7 @@ impl Sim {
     }
 
     pub fn step_net_remotes(&mut self, inputs: &[nf_game::player::Input; nf_net::MAX_AGENTS], local: usize) {
+        let _p = nf_game::prof::scope("net: step_net_remotes");
         for slot in 0..nf_net::MAX_AGENTS {
             if slot == local { continue; }
             let Some(b) = self.mp_bonds[slot].as_mut() else { continue };
@@ -9174,6 +9223,7 @@ impl Sim {
     /// takes `mp_respawn`'s spawn pick + health [M MP_ReSpawn 0x185368]. The local slot's health
     /// drives this machine's HUD and death sequence.
     pub fn step_net_combat(&mut self, inputs: &[nf_net::Input; nf_net::MAX_AGENTS], local: usize) {
+        let _p = nf_game::prof::scope("net: step_net_combat");
         if self.mp.is_none() { return; }
         let body = |s: &Sim, slot: usize| -> Option<nf_game::player::Bond> {
             if slot == local { Some(s.bond.clone()) } else { s.mp_bonds[slot].clone() }
@@ -9312,8 +9362,11 @@ impl Sim {
     /// slot reads `bond`, the others `mp_bonds`), then the MP match state. An empty slot folds a
     /// sentinel so the shape is total and equal on every machine.
     pub fn net_state_hash(&self, local: usize) -> u64 {
+        let _p = nf_game::prof::scope("net: net_state_hash");
         // NF_NET_HASHDBG="a-b": dump frames a..=b (any other value: 0-17).
-        let dbg = std::env::var("NF_NET_HASHDBG").ok().map(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))).unwrap_or((0, 17)));
+        // mp-perf-16: the env var is read once per process, not once per tick.
+        static HASHDBG: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
+        let dbg = *HASHDBG.get_or_init(|| std::env::var("NF_NET_HASHDBG").ok().map(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))).unwrap_or((0, 17))));
         if dbg.is_some_and(|(a, b)| (a..=b).contains(&self.drones.frame)) {
             let b = |s: usize| if s == local { Some(&self.bond) } else { self.mp_bonds[s].as_ref() };
             eprintln!("[hashdbg] frame {} rng {:x}/{:x}/{} bonds {:?} mp {:?}", self.drones.frame, self.drones.rng.x, self.drones.rng.y, self.drones.rng.draws,
