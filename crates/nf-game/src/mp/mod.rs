@@ -58,7 +58,7 @@ pub mod replay;
 pub mod rules;
 pub mod hud;
 
-pub use rules::{MpObjState, MpObjectsRt, Winner};
+pub use rules::{MpObjBounds, MpObjState, MpObjectsRt, Winner};
 
 /// `MP_skins` (ACTION.ELF 0x26d488, 29 records × 16 B: skin hashcode, name label, a small count,
 /// 0) — the character index `MPSettings+slot*0x30+0x24` → the body's skin hashcode
@@ -282,6 +282,9 @@ pub struct MpObjectRecord {
     pub config: [u32; 7],
     /// The placement's cel-record pointer (the game stores the raw `level_tag*`).
     pub cel: u32,
+    /// mp-scenarios-online: the placement model's bounds (`celglist+0x10/+0x1C/+0x20/+0x30` —
+    /// the contact sphere and the hill box); `None` from the plain [`MpMatch::register_mp_object`].
+    pub bounds: Option<MpObjBounds>,
 }
 
 /// The per-type stores `MP_RegisterMPObject` fills (the phase-1 stand-ins for the game's globals):
@@ -647,6 +650,14 @@ impl MpMatch {
     /// config = the 0x1c bytes at the params block+0x2c (the type word first) — the port carries it
     /// as the first 7 param-block words (type at word 0).
     pub fn register_mp_object(&mut self, pos: [f32; 3], facing: [f32; 3], mp_type: u32, config: [u32; 7], cel: u32) {
+        self.register_mp_object_bounds(pos, facing, mp_type, config, cel, None);
+    }
+
+    /// mp-scenarios-online: [`MpMatch::register_mp_object`] with the placement model's bounds (the
+    /// live load passes the placement hashcode's `MapObject` centre/radius/min/max — the game's
+    /// object keeps the celglist at `obj+0xD8` [M `MP_CreateObject` 0x185de8:118]), so the
+    /// scenario objects get their contact sphere and the hill its box.
+    pub fn register_mp_object_bounds(&mut self, pos: [f32; 3], facing: [f32; 3], mp_type: u32, config: [u32; 7], cel: u32, bounds: Option<MpObjBounds>) {
         if self.settings.master == 0 {
             return; // the dispatch's own gate [M 0x1d04f0 case 0x26]
         }
@@ -658,7 +669,7 @@ impl MpMatch {
             [0.0, 0.0, 0.0, 0.0],
             [pos[0], pos[1], pos[2], 1.0],
         ];
-        let rec = MpObjectRecord { matrix, config, cel };
+        let rec = MpObjectRecord { matrix, config, cel, bounds };
         let s = self.settings.scenario;
         match mp_type {
             0 | 1 if s == scenario::CAPTURE_THE_FLAG => self.objects.created.push(rec),
@@ -751,6 +762,12 @@ impl MpMatch {
         // Deathmatch start draws nothing [M 0x183a50:77-113] — phase 1 re-registers nothing either
         // (the records were stored at registration; the game re-picks a "place" per start).
         let _ = rng;
+        // mp-scenarios-online: `MPSettings+0x194 = humans + bots` [M 0x183a50:164] — the Top Agent
+        // elimination's `(total − 1) <= outs` reads it [M 0x184268:120]; the menu writes the same
+        // sum, a direct load (`--mp`) left it 0. The bot count is the port's clamp (create_bots).
+        let humans = self.settings.human_count as usize;
+        let bots = (self.settings.bot_count as usize).min(MP_MAX_SLOTS.saturating_sub(humans));
+        self.settings.total_players = (humans + bots) as u32;
         self.game.pause_stamp = -1.0; // 0xbf800000 [M 0x183a50:206]
         self.settings.started = true; // [M 0x183a50:207]
     }
