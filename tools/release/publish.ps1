@@ -37,7 +37,7 @@ $zip = Join-Path $out "NightfirePort-$tag-windows.zip"
 
 $Notes = "$Notes`n`n**New here?** Download the zip, unzip it anywhere you can write to, and run NightfirePort.exe. You need your own 007: Nightfire (PS2, USA, SLUS-20579) disc image. Existing installs update themselves on launch."
 $notesFile = Join-Path $out "notes-$tag.md"
-Set-Content -Encoding utf8 $notesFile $Notes
+[IO.File]::WriteAllText($notesFile, $Notes, (New-Object System.Text.UTF8Encoding $false))  # no BOM (5.1's utf8 adds one)
 $ghArgs = @("release", "create", $tag, $zip, "$zip.sha256", "--repo", $repo, "--target", $head, "--title", "NightfirePort $Version", "--notes-file", $notesFile)
 if ($Draft) { $ghArgs += "--draft" }
 & gh @ghArgs
