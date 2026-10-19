@@ -228,8 +228,13 @@ pub enum CoreEvent {
     /// A human slot's client left (Neutral policy: the match runs on, the
     /// game's own disconnected-pad shape).
     ClientLeft { slot: u8, graceful: bool },
-    /// The state hashes diverged at `tick` (the app shows the box, back to lobby).
-    Desync { tick: u32 },
+    /// The state hashes diverged at `tick` (both hashes ride for the log; the
+    /// session's resync policy decides recover-vs-fatal — net-desync-resync).
+    Desync { tick: u32, local: u64, remote: u64 },
+    /// net-desync-resync: the desync is not recoverable (a second mismatch
+    /// inside the 60 s window, an unserved request, an unanswered watch) — the
+    /// app shows the pre-resync box and returns to the lobby.
+    DesyncFatal { tick: u32 },
     /// Client: the host went silent past the timeout.
     HostTimeout,
     /// Client: the host LEFT (quit the match / closed the lobby) — at once,
@@ -615,8 +620,11 @@ impl NetCore {
                     self.host_left = true;
                     self.events.push(CoreEvent::HostLeft);
                 }
-                Event::Desync { tick, .. } => {
-                    self.events.push(CoreEvent::Desync { tick });
+                Event::Desync { tick, local, remote } => {
+                    self.events.push(CoreEvent::Desync { tick, local, remote });
+                }
+                Event::DesyncFatal { tick } => {
+                    self.events.push(CoreEvent::DesyncFatal { tick });
                 }
                 Event::Data { bytes, .. } => {
                     match bytes.first() {

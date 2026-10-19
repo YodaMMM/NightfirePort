@@ -55,6 +55,7 @@ pub const PT_JOIN_SLOT: u8 = 15;
 pub const PT_PING: u8 = 16;
 pub const PT_PONG: u8 = 17;
 pub const PT_DELAY: u8 = 18;
+pub const PT_RESYNC: u8 = 19;
 
 /// Ticks one JOIN_LOG chunk carries (16 agents × 28 B × 3 = 1344 B — fits
 /// [`MAX_PACKET`] with header room (1357 B with the headers); protocol ≤ 3 carried 12 ticks of 4
@@ -251,6 +252,14 @@ pub enum Packet {
         from_tick: u32,
         delay: u8,
     },
+    /// net-desync-resync: client → host, a state-hash mismatch happened and
+    /// this machine is resyncing — the host re-serves the late-join family
+    /// (JOIN_BEGIN + JOIN_LOG + JOIN_SLOT) to it on the live connection. The
+    /// desync's tick and both hashes ride the app's log (the Desync event
+    /// carries them); the request only needs the tick it froze at.
+    Resync {
+        tick: u32,
+    },
 }
 
 fn put_codename(out: &mut Vec<u8>, name: &str) {
@@ -327,6 +336,11 @@ pub fn encode(p: &Packet, out: &mut Vec<u8>) {
             out.push(0);
             out.extend_from_slice(&from_tick.to_le_bytes());
             out.push(*delay);
+        }
+        Packet::Resync { tick } => {
+            out.push(PT_RESYNC);
+            out.push(0);
+            out.extend_from_slice(&tick.to_le_bytes());
         }
         Packet::Hash { tick, hash, prev_tick, prev_hash } => {
             out.push(PT_HASH);
@@ -490,6 +504,12 @@ pub fn decode(buf: &[u8]) -> Option<Packet> {
                 from_tick: u32::from_le_bytes([body[0], body[1], body[2], body[3]]),
                 delay: body[4],
             })
+        }
+        PT_RESYNC => {
+            if body.len() < 4 {
+                return None;
+            }
+            Some(Packet::Resync { tick: u32::from_le_bytes([body[0], body[1], body[2], body[3]]) })
         }
         PT_HASH => {
             if body.len() < 24 {

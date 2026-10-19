@@ -2393,6 +2393,14 @@ struct App {
     net_clock: Option<std::time::Instant>,
     /// net-internet: the online tick budget's stall smoothing (`nf_net::pace::TickPacer`).
     net_pacer: nf_net::pace::TickPacer,
+    /// net-desync-resync: this machine is resyncing after a state-hash mismatch —
+    /// it asked the host to re-serve the match state and replays the host's log
+    /// headless (`mp_late_join_catchup_joins`) until the re-announce arms its
+    /// slot again. The draw code renders the "Resyncing…" note from the getter
+    /// (`App::net_resyncing`); cleared when the machine plays its own slot again
+    /// (the late-join slot swap) or on `net_fail`. NOT in the Sim — the session
+    /// policy (the 60 s window, the 8 s watch) lives in nf-net's logical clock.
+    net_resyncing: bool,
     /// 700v6: the local fire pipeline spawned a round on the last tick (rides the next input).
     net_shot_pending: Option<scene::NetShot>,
     /// The `--net-host` demo arm: the settings waiting for the first client to join (the lobby
@@ -2511,6 +2519,7 @@ impl App {
                 }
                 self.net_local_slot = p.0.borrow().local_slot();
                 self.net_tick = 0;
+                self.net_resyncing = false; // net-desync-resync: a fresh adoption starts clean
                 self.net = Some(p);
                 if kind == mpnet::LobbyAdopt::LateJoin {
                     // mp-online-failures: the menu dial reached a running match — no arena load
@@ -2840,6 +2849,18 @@ impl App {
     /// debriefing's way (`mp_results`: the music statics, the profile session, the runner flow,
     /// the front-end map requested under the fade) so the arena unloads instead of staying up
     /// frozen behind the page.
+    /// net-desync-resync: the draw code's "Resyncing..." read — true while this
+    /// machine is recovering from a state-hash mismatch (it asked the host to
+    /// re-serve the match state; the machine replays the host's log headless
+    /// and rejoins at the re-announce). The main agent renders the note; the
+    /// text lives beside it so draw and tests share one string.
+    pub fn net_resyncing(&self) -> bool {
+        self.net_resyncing
+    }
+
+    /// The resync note's text (one string for the draw code and the tests).
+    pub const NET_RESYNC_TEXT: &str = "Resyncing\u{2026}";
+
     fn net_fail(&mut self, msg: &str) {
         eprintln!("[net] {msg}");
         if let Some(se) = self.net.as_mut() { se.0.borrow_mut().close(); }
@@ -2851,6 +2872,7 @@ impl App {
         self.net_join_pending = None;
         self.net_late_handover = None;
         self.net_await_load = false;
+        self.net_resyncing = false; // net-desync-resync: the note dies with the match
         let rejoin = self.net_rejoin.take();
         let in_match = self.scene.sim.is_some() && self.level_code != 0 && self.level_code != menu::FRONTEND_LEVEL;
         let mut fe = if in_match {
@@ -3963,7 +3985,23 @@ impl App {
                             mpnet::CoreEvent::Refused => {
                                 self.net_fail("Refused: a different build or the match is full");
                             }
-                            mpnet::CoreEvent::Desync { tick } => {
+                            mpnet::CoreEvent::Desync { tick, local, remote } => {
+                                // net-desync-resync: the session decided the policy —
+                                // a mismatching CLIENT has already asked for a resync
+                                // (its `ready_inputs` is None: it freezes on the last
+                                // ticked frame) and the host re-serves the late-join
+                                // family on the live connection; the machine replays
+                                // the host's log (the LateJoinHandover arm below) and
+                                // rejoins at the re-announce. A fatal desync (a second
+                                // one inside 60 s, a request never served, a peer that
+                                // never asked) arrives as `DesyncFatal`. Log the tick
+                                // and both hashes (700w2 adds the component detail).
+                                eprintln!("[net] state desync at tick {tick}: local {local:016x} remote {remote:016x} — resyncing (the diverged machine replays the host's log)");
+                                if self.net.is_some() {
+                                    self.net_resyncing = true; // the draw code's "Resyncing…" note
+                                }
+                            }
+                            mpnet::CoreEvent::DesyncFatal { tick } => {
                                 self.net_fail(&format!("State desync at tick {tick}\nReturning to the lobby"));
                             }
                             mpnet::CoreEvent::ClientLeft { slot, graceful } => {
@@ -4431,8 +4469,11 @@ impl App {
                                         self.net_local_slot = js;
                                         self.net_late_self = None;
                                         self.net_shot_pending = None;
+                                        // net-desync-resync: the resyncing machine is playing its
+                                        // own slot again — the note comes down.
+                                        let was_resync = std::mem::take(&mut self.net_resyncing);
                                         self.cam = Camera { pos: Vec3::new(sim.bond.pos[0], sim.bond.pos[1] + 1.6, sim.bond.pos[2]), yaw: sim.bond.yaw, pitch: 0.0, fov: GAME_FOV };
-                                        eprintln!("[net] late join: playing slot {js} from tick {}", self.net_tick);
+                                        eprintln!("[net] late join: playing slot {js} from tick {}{}", self.net_tick, if was_resync { " (resync complete)" } else { "" });
                                     }
                                 }
                                 self.net_tick += 1;
@@ -5241,6 +5282,7 @@ impl App {
             net_finished: None,
             net_clock: None,
             net_pacer: nf_net::pace::TickPacer::new(),
+            net_resyncing: false,
             net_shot_pending: None,
             net_join_pending: None,
             net_late_handover: None,

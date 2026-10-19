@@ -129,6 +129,12 @@ pub enum Event {
     Resumed { tick: u32 },
     /// Both: state hashes disagree at `tick`. Session keeps running.
     Desync { tick: u32, local: u64, remote: u64 },
+    /// net-desync-resync: the desync is NOT recoverable on this machine — a
+    /// second mismatch inside the resync window, a resync that never got
+    /// served inside `timeout_ms`, or a second slot desyncing while one
+    /// resync is in flight. The app ends the match for everyone (the
+    /// pre-resync behaviour).
+    DesyncFatal { tick: u32 },
     /// Both: a human slot's client left (timeout or graceful).
     ClientLeft { slot: u8, reason: LeaveReason },
     /// Client: no packets from the host for `Config::timeout_ms`.
@@ -283,6 +289,11 @@ struct Peer {
     /// longer than `hello_retry_ms` sends two) gets the SAME tick again. A
     /// second pick moved the join tick on some machines and not others.
     announced: Option<u32>,
+    /// net-desync-resync: this CONNECTED peer is resyncing — its slot rides
+    /// NEUTRAL from the serve until the re-announce (`join_from` holds the
+    /// pending marker), and the JOIN_READY arms it back at the new join tick
+    /// without a `join_history` entry (its body never left the match).
+    resyncing: bool,
     /// net-internet send state: the newest tick sent to this peer …
     sent_hi: Option<u32>,
     /// … a data INPUT arrived since our last INPUT to this peer (our ack must reach it even
@@ -329,6 +340,7 @@ impl Peer {
             late_serve: None,
             late_joined: false,
             announced: None,
+            resyncing: false,
             sent_hi: None,
             ack_dirty: false,
             last_input_ms: 0,
@@ -446,6 +458,11 @@ enum Role {
 /// How many JOIN_LOG chunks stay in flight to a late joiner
 /// (16 × [`proto::JOIN_LOG_CHUNK_TICKS`] ticks).
 const JOIN_LOG_WINDOW: u16 = 16;
+
+/// net-desync-resync: the resync window — a machine that desyncs again
+/// within 60 s of its last resync request falls back to ending the match
+/// (the task's fallback rule; the session's logical clock, not the Sim's).
+const RESYNC_RETRY_WINDOW_MS: u64 = 60_000;
 /// Ticks between the host's live head and the announced join tick: the
 /// joiner — already caught up at JOIN_READY — schedules its inputs there and
 /// every peer runs the join-spawn at that boundary.
@@ -509,6 +526,29 @@ pub struct Session<T: Transport> {
     /// Client: the JOIN_READY retransmit deadline (the confirm is unacked —
     /// it resends until the host's JOIN_SLOT answers it).
     late_confirm_due: Option<u64>,
+    /// net-desync-resync: this client detected a hash mismatch and asked the
+    /// host to re-serve the match state — it stops contributing inputs (its
+    /// own `ready_inputs` is None: never guess) until the re-serve's
+    /// JOIN_SLOT arms its slot again. The request retransmits every
+    /// `resend_ms` until a JOIN_BEGIN lands, and `timeout_ms` without a
+    /// serve is fatal.
+    resync_pending: bool,
+    /// net-desync-resync: the tick this client froze at (rides the RESYNC
+    /// request; the host logs the mismatch from its own Desync event).
+    resync_tick: u32,
+    /// net-desync-resync: the last RESYNC request send (the retransmit base).
+    resync_req_ms: u64,
+    /// net-desync-resync: when the request dies (`timeout_ms` without a
+    /// JOIN_BEGIN — the host never served).
+    resync_deadline_ms: u64,
+    /// net-desync-resync: the last resync REQUEST (the 60 s window — a
+    /// second mismatch inside it is fatal, per the task's fallback rule).
+    last_resync_ms: Option<u64>,
+    /// net-desync-resync: host — the desync we are watching: (slot, tick,
+    /// deadline). The offending client is expected to request a resync; the
+    /// watch expires at `timeout_ms` (the session's own silent-peer rule)
+    /// and is fatal — the pre-resync behaviour for a peer that never asks.
+    resync_watch: Option<(u8, u32, u64)>,
     local_slot: u8,
     local_hashes: HashMap<u32, u64>,
     compared: HashSet<u32>,
@@ -627,6 +667,13 @@ impl<T: Transport> Session<T> {
             welcomed: None,
             late_joined: false,
             late_confirm_due: None,
+            // net-desync-resync: no resync in flight at build (both roles).
+            resync_pending: false,
+            resync_tick: 0,
+            resync_req_ms: 0,
+            resync_deadline_ms: 0,
+            last_resync_ms: None,
+            resync_watch: None,
             local_slot: 0,
             local_hashes: HashMap::new(),
             compared: HashSet::new(),
@@ -675,6 +722,13 @@ impl<T: Transport> Session<T> {
             welcomed: None,
             late_joined: false,
             late_confirm_due: None,
+            // net-desync-resync: no resync in flight at build (both roles).
+            resync_pending: false,
+            resync_tick: 0,
+            resync_req_ms: 0,
+            resync_deadline_ms: 0,
+            last_resync_ms: None,
+            resync_watch: None,
             local_slot: 0,
             local_hashes: HashMap::new(),
             compared: HashSet::new(),
@@ -781,6 +835,12 @@ impl<T: Transport> Session<T> {
     /// tick the host already ran [S mp-online-failures].
     fn tick_input(&self, s: usize, tick: u32) -> Option<Input> {
         if s == self.local_slot as usize {
+            // net-desync-resync: a resyncing client contributes nothing — it is
+            // about to rewind to the host's log, so its own `ready_inputs` is
+            // None (never guess) and its app freezes on the last ticked frame.
+            if self.resync_pending {
+                return None;
+            }
             if self.slot_human[s] && tick >= self.join_from[s] {
                 return self.inputs[s].get(&tick).copied();
             }
@@ -1295,8 +1355,28 @@ impl<T: Transport> Session<T> {
                 self.late_confirm_due = Some(now_ms + self.cfg.hello_retry_ms.max(1));
             }
         }
+        // 3c. net-desync-resync (client): the RESYNC request retransmits until
+        // a JOIN_BEGIN lands (the serve), and `timeout_ms` without a serve is
+        // fatal — the host never picked the request up.
+        if self.resync_pending {
+            if now_ms >= self.resync_deadline_ms {
+                self.resync_pending = false;
+                events.push(Event::DesyncFatal { tick: self.resync_tick });
+            } else if now_ms.saturating_sub(self.resync_req_ms) >= self.cfg.resend_ms {
+                self.send_packet(self.host_addr(), &Packet::Resync { tick: self.resync_tick });
+                self.resync_req_ms = now_ms;
+            }
+        }
         // 4. Timeouts.
         self.check_timeouts(now_ms, &mut events);
+        // 4b. net-desync-resync (host): the desynced peer never requested a
+        // resync inside `timeout_ms` — the pre-resync behaviour (end the match).
+        if let Some((_slot, tick, deadline)) = self.resync_watch {
+            if now_ms >= deadline {
+                self.resync_watch = None;
+                events.push(Event::DesyncFatal { tick });
+            }
+        }
         // 5. Stall/resume transitions.
         self.detect_stall(&mut events);
         events
@@ -1643,6 +1723,75 @@ impl<T: Transport> Session<T> {
 
     fn handle_packet_host(&mut self, from: SocketAddr, pkt: Packet, events: &mut Vec<Event>) {
         match pkt {
+            Packet::Resync { tick: _ } => {
+                // net-desync-resync: a connected client's hash mismatched and it
+                // asked to resync. Re-serve the late-join family on the LIVE
+                // connection: pick the newest verifiable snapshot (prefer a tick
+                // the peer's hash AGREES with — its state was right up to there),
+                // mark the slot non-contributing until the re-announce, and send
+                // JOIN_BEGIN + the run log; JOIN_READY then re-arms the slot.
+                if !self.started {
+                    return;
+                }
+                let log_end = self.log_base + self.run_log.len() as u32;
+                let head = self.last_ready.unwrap_or(0).min(log_end);
+                let local_hashes = self.local_hashes.clone();
+                let serve = {
+                    let Role::Host { peers, .. } = &mut self.role else { return };
+                    let Some(p) = peers.iter_mut().find(|p| p.addr == from && p.connected) else { return };
+                    p.last_recv_ms = self.now_ms;
+                    if p.resyncing {
+                        return; // a retransmitted request: the transfer state machine is ack-driven
+                    }
+                    // Walk back from the head: the newest tick BOTH sides hashed
+                    // and AGREED on; failing that the newest tick both hashed
+                    // (the replay's verification decides — the host's state is
+                    // the one the log produces, so the resyncer converges to it).
+                    let mut agree = None;
+                    let mut both = None;
+                    let mut t = head;
+                    while t > self.log_base {
+                        let l = local_hashes.get(&t).copied();
+                        let r = p.remote_hashes.get(&t).copied();
+                        if let (Some(l), Some(r)) = (l, r) {
+                            if both.is_none() {
+                                both = Some(t);
+                            }
+                            if l == r {
+                                agree = Some(t);
+                                break;
+                            }
+                        }
+                        t -= 1;
+                    }
+                    let Some(snap) = agree.or(both) else {
+                        // Nothing comparable in the hash window: do not serve —
+                        // the client's request deadline falls back to the lobby.
+                        return;
+                    };
+                    let snapshot_hash = local_hashes[&snap];
+                    let first_tick = self.log_base;
+                    let ticks = snap.saturating_sub(first_tick) as usize + 1; // inclusive
+                    let chunk_count = ((ticks + proto::JOIN_LOG_CHUNK_TICKS - 1) / proto::JOIN_LOG_CHUNK_TICKS) as u16;
+                    // The slot stops contributing from NOW (`join_from` past every
+                    // tick → `host_slot_required` false → NEUTRAL, the same shape
+                    // a dropped peer rides under `DropPolicy::Neutral`) until the
+                    // JOIN_READY re-announce moves it to the new join tick.
+                    self.join_from[p.slot as usize] = u32::MAX;
+                    p.their_ack = Some(snap);
+                    p.sent_hi = Some(snap);
+                    p.resyncing = true;
+                    p.announced = None;
+                    p.late_serve = Some(LateServe { snapshot_tick: snap, snapshot_hash, chunk_count, sent: 0, acked: 0, last_send_ms: 0 });
+                    Some((p.addr, p.slot, p.codename.clone(), first_tick, snap, snapshot_hash))
+                };
+                if let Some((addr, slot, codename, first_tick, snap, snapshot_hash)) = serve {
+                    let joins: Vec<(u8, u32)> =
+                        self.join_history.iter().copied().filter(|(_, t)| *t <= snap).collect();
+                    self.send_packet(addr, &Packet::JoinBegin { first_tick, snapshot_tick: snap, snapshot_hash, joins });
+                    events.push(Event::LateJoinStarted { slot, codename: codename.chars().take(31).collect() });
+                }
+            }
             Packet::Hello { proto, build, codename } => {
                 let refuse = if proto != self.cfg.protocol_version {
                     Some(RefuseReason::Version)
@@ -1858,14 +2007,24 @@ impl<T: Transport> Session<T> {
                             // the slot arming at a later tick than first announced).
                             p.last_recv_ms = self.now_ms;
                             repeat = Some((p.addr, p.slot, jt));
-                        } else if p.late_serve.is_none() && p.late_joined && (p.slot as usize) < MAX_AGENTS {
+                        } else if p.late_serve.is_none() && (p.late_joined || p.resyncing) && (p.slot as usize) < MAX_AGENTS {
+                            let resyncing = p.resyncing;
                             p.announced = Some(join_tick);
                             p.last_recv_ms = self.now_ms;
                             p.our_ack = join_tick;
                             self.slot_human[p.slot as usize] = true;
                             self.join_from[p.slot as usize] = join_tick;
+                            p.resyncing = false;
                             announce = Some((p.addr, p.slot, join_tick));
-                            self.join_history.push((p.slot, join_tick));
+                            // net-desync-resync: the resyncing body never left the
+                            // match — no join_history entry (a FUTURE late joiner's
+                            // replay spawns it once, at its original join tick; the
+                            // resync gap ran NEUTRAL, which the log's rows carry).
+                            if !resyncing {
+                                self.join_history.push((p.slot, join_tick));
+                            } else if self.resync_watch.map(|(s, _, _)| s) == Some(p.slot) {
+                                self.resync_watch = None; // the resync completed
+                            }
                         }
                     }
                 }
@@ -1998,6 +2157,9 @@ impl<T: Transport> Session<T> {
             return; // clients talk to the host only
         }
         match pkt {
+            // net-desync-resync: a RESYNC arriving at a client is a stray (only
+            // the host serves one); ignore it.
+            Packet::Resync { .. } => {}
             Packet::Welcome { proto, build, codename, slot, input_delay, hash_every, seed, settings } => {
                 if let Role::Client { slot: s, host_peer, .. } = &mut self.role {
                     if s.is_some() {
@@ -2176,6 +2338,9 @@ impl<T: Transport> Session<T> {
             Packet::JoinBegin { first_tick, snapshot_tick, snapshot_hash, joins } => {
                 // mp-join-in-progress: the host began the late-join handover.
                 // The chunks follow; the log assembles on the last one.
+                // net-desync-resync: also the resync serve — the request is
+                // answered (the deadline stops; the handover re-arms the slot).
+                self.resync_pending = false;
                 self.join_history = joins;
                 if let Role::Client { host_peer, .. } = &mut self.role {
                     if let Some(p) = host_peer {
@@ -2294,6 +2459,12 @@ impl<T: Transport> Session<T> {
             return;
         }
         let s = slot as usize;
+        // net-desync-resync: a resync watch on a slot that LEFT dies with it —
+        // the match runs on over the slot's NEUTRAL (the Neutral policy), the
+        // watch must not end the match for a peer that is already gone.
+        if self.resync_watch.map(|(ws, _, _)| ws) == Some(slot) {
+            self.resync_watch = None;
+        }
         // The drop tick: every tick up to the last one the host ran used the
         // leaver's real inputs (they keep relaying — a client behind the host
         // still needs them); from the next tick on the slot is NEUTRAL. Only a
@@ -2369,14 +2540,18 @@ impl<T: Transport> Session<T> {
 
     /// Compare our local hashes against every peer's remote hashes.
     fn check_desync(&mut self, events: &mut Vec<Event>) {
-        let peers_hashes: Vec<HashMap<u32, u64>> = match &mut self.role {
-            Role::Host { peers, .. } => peers.iter().map(|p| p.remote_hashes.clone()).collect(),
+        // (slot, hashes) per peer: the host arms its resync watch per slot; a
+        // client has only the host peer.
+        let peers_hashes: Vec<(u8, HashMap<u32, u64>)> = match &mut self.role {
+            Role::Host { peers, .. } => peers.iter().map(|p| (p.slot, p.remote_hashes.clone())).collect(),
             Role::Client { host_peer, .. } => host_peer
                 .as_ref()
-                .map(|p| vec![p.remote_hashes.clone()])
+                .map(|p| vec![(p.slot, p.remote_hashes.clone())])
                 .unwrap_or_default(),
         };
-        for remote in peers_hashes {
+        let now = self.now_ms;
+        let timeout = self.cfg.timeout_ms;
+        for (slot, remote) in peers_hashes {
             // cross-process-determinism: the ticks are compared in ascending order, not the
             // HashMap's per-process random order — the sim state is untouched, but WHICH desync
             // tick gets reported first (the diagnostic the user sees) must not depend on the
@@ -2391,6 +2566,37 @@ impl<T: Transport> Session<T> {
                 if let Some(lhash) = self.local_hashes.get(&tick) {
                     self.compared.insert(tick);
                     if *lhash != rhash {
+                        // net-desync-resync: the host is the authority (it owns
+                        // the input log a resync replays), so a mismatching
+                        // CLIENT resyncs — it asks and replays; the host arms
+                        // its watch and keeps playing. The fallbacks: a second
+                        // mismatch inside the resync window (client), a request
+                        // never served inside `timeout_ms` (client), a watch
+                        // that never got its request (host), or a second slot
+                        // desyncing while one resync is in flight (host) — all
+                        // fatal, the pre-resync behaviour.
+                        match &self.role {
+                            Role::Host { .. } => match self.resync_watch {
+                                None => self.resync_watch = Some((slot, tick, now + timeout)),
+                                Some((s, _, _)) if s == slot => {}
+                                Some(_) => events.push(Event::DesyncFatal { tick }),
+                            },
+                            Role::Client { .. } => {
+                                let within = self
+                                    .last_resync_ms
+                                    .map(|t| now.saturating_sub(t) < RESYNC_RETRY_WINDOW_MS)
+                                    .unwrap_or(false);
+                                if within || self.resync_pending {
+                                    events.push(Event::DesyncFatal { tick });
+                                } else {
+                                    self.last_resync_ms = Some(now);
+                                    self.resync_pending = true;
+                                    self.resync_tick = tick;
+                                    self.resync_req_ms = 0; // send on this poll
+                                    self.resync_deadline_ms = now + timeout;
+                                }
+                            }
+                        }
                         events.push(Event::Desync { tick, local: *lhash, remote: rhash });
                     }
                 }
