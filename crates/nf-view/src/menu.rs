@@ -7431,6 +7431,40 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 quad640(&mut h, 0x0300_016d, 434.0, 38.0, 156.0, 43.0, [0.0, 0.0, 256.0, 128.0], gs(0x7f7f7f, 0xff));
             }
             const COL_YS: [f32; 5] = [183.0, 217.0, 250.0, 284.0, 318.0];
+            // More than the game's 4 columns (16-player matches): a ranked table, one line per
+            // participant, sized so every line fits above the result plate [S port layout].
+            let all_rows = fe.mp_debriefing.as_ref().map_or(0, |b| b.rows.len());
+            if all_rows > 4 {
+                let board = fe.mp_debriefing.as_ref().unwrap();
+                let (top, avail) = (112.0f32, 232.0f32);
+                let rh = (avail / all_rows as f32).min(18.0);
+                let s = (rh / 16.0).clamp(0.6, 1.0);
+                let xs = [60.0f32, 170.0, 330.0, 400.0, 470.0, 540.0];
+                centred(&mut h, font, -2, "Rank", mx(xs[0] + 20.0), my(top - 14.0), bright, true, 0.9);
+                for (c, id) in MP_DEBRIEFING_COLS.iter().enumerate() {
+                    let x = if c == 0 { xs[1] + 40.0 } else { xs[c + 1] + 20.0 };
+                    centred(&mut h, font, -2, &bind(*id), mx(x), my(top - 14.0), bright, true, 0.9);
+                }
+                for (n, row) in board.rows.iter().enumerate() {
+                    let y = top + rh * n as f32 + rh * 0.5;
+                    let rank = row.rank as usize;
+                    let rank_txt = if rank < 4 { bind(nf_game::mp::debrief::RANK_LABELS[rank]) } else {
+                        let r = rank + 1;
+                        format!("{r}{}", match (r % 10, r % 100) { (1, x) if x != 11 => "st", (2, x) if x != 12 => "nd", (3, x) if x != 13 => "rd", _ => "th" })
+                    };
+                    let nm = match &row.name {
+                        nf_game::mp::debrief::MpDebriefName::Human(s) => s.clone(),
+                        nf_game::mp::debrief::MpDebriefName::Bot(ch) => nf_game::mp::MpMatch::bot_short_name_label(*ch)
+                            .map(|l| bind(l)).filter(|s| !s.is_empty()).unwrap_or_else(|| "Bot".into()),
+                    };
+                    let col = if n == 0 { bright } else { cream };
+                    centred(&mut h, font, -2, &rank_txt, mx(xs[0] + 20.0), my(y), col, true, s);
+                    left_text(&mut h, font, &nm, mx(xs[1]), my(y), col, true, s);
+                    for (c, v) in [row.points, row.victories, row.deaths, row.total].iter().enumerate() {
+                        centred(&mut h, font, -2, &v.to_string(), mx(xs[c + 2] + 20.0), my(y), cream, false, s);
+                    }
+                }
+            } else {
             for (i, id) in MP_DEBRIEFING_COLS.iter().enumerate() {
                 centred(&mut h, font, -2, &bind(*id), mx(52.0 + 60.0), my(COL_YS[i] + 8.0), bright, true, 1.0);
             }
@@ -7450,6 +7484,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 for (j, v) in [points, victories, deaths, total].iter().enumerate() {
                     centred(&mut h, font, -2, &v.to_string(), mx(px + 39.0), my(COL_YS[j + 1] + 8.0), cream, false, 1.0);
                 }
+            }
             }
             plate(&mut h, 176.0, 355.0, 408.0, 52.0, gs(0x1e1210, 0x60));
             let (rl, mut rarg) = fe.mp_debriefing_result();
