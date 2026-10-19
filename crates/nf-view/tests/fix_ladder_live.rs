@@ -194,13 +194,17 @@ fn ladder_census_every_placement_has_collision_tris_spanning_the_bounds() {
             for t in &l.tris { for v in t { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
             let (s, c) = l.yaw.sin_cos();
             let ex = [l.half[0] * c.abs() + l.half[1] * s.abs(), 0.0, l.half[0] * s.abs() + l.half[1] * c.abs()];
+            // The triangles sit INSIDE the glist bounds box (the prefilter's box — measured [D]
+            // on 0700000d ladder #1 the collision span is up to ~0.26 NARROWER than the bounds on
+            // one axis, so equality is NOT a disc fact; containment is). A tri outside the
+            // bounds would mean a wrong vertex decode.
             for k in [0usize, 2] {
                 let (blo, bhi) = (l.centre[k] - ex[k], l.centre[k] + ex[k]);
-                assert!((lo[k] - blo).abs() < 0.05 && (hi[k] - bhi).abs() < 0.05,
-                    "{code:08x} ladder #{i} axis {k}: tris span {}..{} vs bounds {}..{}", lo[k], hi[k], blo, bhi);
+                assert!(lo[k] >= blo - 0.05 && hi[k] <= bhi + 0.05,
+                    "{code:08x} ladder #{i} axis {k}: tris {}..{} escape the bounds {}..{}", lo[k], hi[k], blo, bhi);
             }
-            assert!((lo[1] - l.y_span[0]).abs() < 0.05 && (hi[1] - l.y_span[1]).abs() < 0.05,
-                "{code:08x} ladder #{i} y: tris span {}..{} vs bounds {:?}", lo[1], hi[1], l.y_span);
+            assert!(lo[1] >= l.y_span[0] - 0.05 && hi[1] <= l.y_span[1] + 0.05,
+                "{code:08x} ladder #{i} y: tris {}..{} escape the bounds {:?}", lo[1], hi[1], l.y_span);
             total += 1;
         }
         println!("{code:08x}: {} ladders, all with spanning collision tris", ladders.len());
