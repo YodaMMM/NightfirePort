@@ -21,6 +21,7 @@ pub mod canvas;
 pub mod config;
 pub mod platform;
 pub mod ui;
+pub mod update;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -86,11 +87,55 @@ pub fn run() -> Result<()> {
     if let Some(out) = flag("--shot") { return shot(&args, Path::new(&out)); }
     let arg_iso = args.iter().find(|a| !a.starts_with("--")).map(PathBuf::from);
     let fonts = Fonts::load().context("no usable system font (Bahnschrift, Segoe UI, Arial or DejaVu Sans)")?;
-    let ui = initial_ui(arg_iso.as_deref());
+    let mut ui = initial_ui(arg_iso.as_deref());
+    // The self-update (update.rs): leftovers of the last swap go, then a release build checks for a newer one in the
+    // background; PLAY waits while an update downloads and installs (the user's choice: automatic on launch).
+    // Right after an update the previous launcher may still be exiting (its `.old` file still locked): retry briefly.
+    if let Some(dir) = update::install_dir() {
+        std::thread::spawn(move || for _ in 0..20 { update::cleanup_old(&dir); std::thread::sleep(Duration::from_millis(500)); });
+    }
+    let update_rx = (update::current_version().is_some() && std::env::var_os("NF_NO_UPDATE").is_none()).then(|| {
+        ui.updating = true;
+        ui.update_note = Some("Checking for updates\u{2026}".into());
+        spawn_update()
+    });
     let el = EventLoop::new()?;
-    let mut app = App { fonts, ui, gfx: None, canvas: Canvas::new(1, 1), bg: Canvas::new(1, 1), bg_key: (0, 0, 0), rgba: Vec::new(), cursor: (0.0, 0.0), start: Instant::now(), child: None, launched_at: None, shown: false };
+    let mut app = App { fonts, ui, gfx: None, canvas: Canvas::new(1, 1), bg: Canvas::new(1, 1), bg_key: (0, 0, 0), rgba: Vec::new(), cursor: (0.0, 0.0), start: Instant::now(), child: None, launched_at: None, shown: false, update_rx, autoplayed: false };
     el.run_app(&mut app)?;
     Ok(())
+}
+
+/// The update thread's reports.
+enum UpdateMsg {
+    Note(String),
+    /// Nothing newer (or the check failed: the note says so); PLAY is free.
+    Done(Option<String>),
+    /// The new files are in place: restart as the new launcher.
+    Restart,
+}
+
+/// Runs check → download → install on a thread (update.rs).
+fn spawn_update() -> std::sync::mpsc::Receiver<UpdateMsg> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let msg = match update::check() {
+            Ok(None) => UpdateMsg::Done(None),
+            Err(e) => UpdateMsg::Done(Some(format!("Couldn't check for updates ({e})."))),
+            Ok(Some(rel)) => {
+                let _ = tx.send(UpdateMsg::Note(format!("Downloading update {}\u{2026}", rel.tag)));
+                match update::download(&rel).and_then(|stage| {
+                    let _ = tx.send(UpdateMsg::Note(format!("Installing update {}\u{2026}", rel.tag)));
+                    let dir = update::install_dir().ok_or("the launcher's folder is unknown")?;
+                    update::install(&stage, &dir)
+                }) {
+                    Ok(()) => UpdateMsg::Restart,
+                    Err(e) => UpdateMsg::Done(Some(format!("Update {} failed: {e}. Playing the installed version.", rel.tag))),
+                }
+            }
+        };
+        let _ = tx.send(msg);
+    });
+    rx
 }
 
 /// Headless render of one launcher frame to a PNG (`--shot`).
@@ -108,13 +153,14 @@ fn shot(args: &[String], out: &Path) -> Result<()> {
             ui.error = Some(Disc::check(&bad).err().unwrap_or_else(|| "That disc image is \"SOMETHING_ELSE\", not 007: Nightfire.".into()));
         }
         "drop" => ui.drop_hover = true,
-        "ready" | "starting" | "hover" => {
+        "ready" | "starting" | "hover" | "updating" => {
             let p = iso.context("--state ready needs --iso <path> (or a remembered disc)")?;
             ui.disc = Some(Disc::check(&p).map_err(|e| anyhow::anyhow!("{}: {e}", p.display()))?);
             ui.launching = state == "starting";
             if state == "hover" { ui.hover = Some(Btn::Play); }
+            if state == "updating" { ui.updating = true; ui.update_note = Some("Downloading update v0.1.8\u{2026}".into()); }
         }
-        other => anyhow::bail!("unknown --state {other} (first|ready|error|drop|starting|hover)"),
+        other => anyhow::bail!("unknown --state {other} (first|ready|error|drop|starting|hover|updating)"),
     }
     let (w, h) = ((ui::W * scale).round() as u32, (ui::H * scale).round() as u32);
     let mut bg = Canvas::new(w, h);
@@ -244,6 +290,9 @@ struct App {
     child: Option<std::process::Child>,
     launched_at: Option<Instant>,
     shown: bool,
+    update_rx: Option<std::sync::mpsc::Receiver<UpdateMsg>>,
+    /// NF_LAUNCHER_AUTOPLAY pressed PLAY already.
+    autoplayed: bool,
 }
 
 impl App {
@@ -275,6 +324,7 @@ impl App {
     }
 
     fn play(&mut self) {
+        if self.ui.updating { return; }
         let Some(d) = &self.ui.disc else { return self.select() };
         let iso = d.path.clone();
         let exe = match platform::game_exe() { Ok(e) => e, Err(e) => { self.ui.error = Some(e); return; } };
@@ -317,6 +367,26 @@ impl App {
         self.canvas.to_rgba(&mut self.rgba);
         g.present(&self.rgba, w, h);
         if !self.shown { g.window.set_visible(true); g.window.focus_window(); self.shown = true; }
+    }
+
+    /// The update thread's progress; a finished install restarts the launcher as the new version.
+    fn poll_update(&mut self, el: &ActiveEventLoop) {
+        let Some(rx) = &self.update_rx else { return };
+        while let Ok(m) = rx.try_recv() {
+            match m {
+                UpdateMsg::Note(n) => self.ui.update_note = Some(n),
+                UpdateMsg::Done(note) => { self.ui.updating = false; self.ui.update_note = note; self.update_rx = None; return; }
+                UpdateMsg::Restart => {
+                    let args: Vec<String> = std::env::args().skip(1).collect();
+                    match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(&args).spawn()) {
+                        Ok(_) => el.exit(),
+                        Err(e) => { self.ui.updating = false; self.ui.update_note = Some(format!("Updated \u{2014} restart the launcher to use it ({e}).")); }
+                    }
+                    self.update_rx = None;
+                    return;
+                }
+            }
+        }
     }
 
     /// After PLAY: close once the game's window is up; report it if the game stops first.
@@ -407,6 +477,13 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        self.poll_update(el);
+        // Test aid (NF_LAUNCHER_AUTOPLAY=1): press PLAY once any update has finished — the end-to-end release check
+        // drives install → update → restart → game start with no clicks.
+        if !self.ui.updating && self.child.is_none() && self.ui.disc.is_some() && self.ui.error.is_none()
+            && std::env::var_os("NF_LAUNCHER_AUTOPLAY").is_some() && !std::mem::replace(&mut self.autoplayed, true) {
+            self.play();
+        }
         self.poll_child(el);
         let Some(g) = &self.gfx else { return };
         if g.window.is_minimized().unwrap_or(false) {

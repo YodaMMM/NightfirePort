@@ -75,6 +75,10 @@ pub struct Ui {
     pub launching: bool,
     /// Seconds since the launcher opened (animation clock).
     pub t: f32,
+    /// An update is being checked / downloaded / installed (PLAY waits).
+    pub updating: bool,
+    /// The update line in the footer ("Downloading update v0.1.8…", a failure), if any.
+    pub update_note: Option<String>,
 }
 
 impl Ui {
@@ -86,7 +90,7 @@ impl Ui {
         v
     }
     pub fn hit(&self, lx: f32, ly: f32) -> Option<Btn> {
-        if self.launching { return None; }
+        if self.launching || self.updating { return None; }
         self.buttons().into_iter().find(|(_, r)| r.contains(lx, ly)).map(|(b, _)| b)
     }
     /// The action Enter / Space takes.
@@ -200,7 +204,7 @@ pub fn paint(c: &mut Canvas, bg: &Canvas, fonts: &Fonts, ui: &Ui, scale: f32) {
     let ph = (t % period) / period;
     let sx = b.x - 0.3 * b.w + ph * b.w * 1.9;
     sheen(c, b, rad, sx, 70.0 * s, if ui.launching { 0.28 } else { 0.16 });
-    let label = if ui.launching { "STARTING\u{2026}" } else if primary == Btn::Play { "PLAY" } else { "SELECT DISC IMAGE" };
+    let label = if ui.updating { "UPDATING\u{2026}" } else if ui.launching { "STARTING\u{2026}" } else if primary == Btn::Play { "PLAY" } else { "SELECT DISC IMAGE" };
     let ls = if primary == Btn::Play && !ui.launching { 23.0 * s } else { 18.0 * s };
     let track = if primary == Btn::Play && !ui.launching { 9.0 * s } else { 4.0 * s };
     let base = b.y + b.h * 0.5 + ascent(&fonts.bold, ls) * 0.36;
@@ -231,8 +235,14 @@ pub fn paint(c: &mut Canvas, bg: &Canvas, fonts: &Fonts, ui: &Ui, scale: f32) {
 
     // ── Footer ──────────────────────────────────────────────────────────────────────────────────────────
     let fy = (H - 18.0) * s;
-    let ver = format!("v{}", env!("CARGO_PKG_VERSION"));
-    c.text(&fonts.regular, 11.5 * s, 24.0 * s, fy, &ver, FAINT, 1.0, 0.3 * s);
+    let ver = super::update::display_version();
+    // `text` returns the advance (width), so the note starts after the version plus a gap.
+    let vw = c.text(&fonts.regular, 11.5 * s, 24.0 * s, fy, &ver, FAINT, 1.0, 0.3 * s);
+    if let Some(n) = &ui.update_note {
+        let nx = 24.0 * s + vw + 18.0 * s;
+        let note = ellipsize_middle(&fonts.regular, 11.5 * s, n, (W - 24.0) * s - nx);
+        c.text(&fonts.regular, 11.5 * s, nx, fy, &note, DIM, 1.0, 0.2 * s);
+    }
 }
 
 /// A soft diagonal light band across a rounded rect (additive).
