@@ -5139,6 +5139,22 @@ impl Drone {
                 if let Some(n) = self.look_for_opponent(d) { self.set_state(n) }
                 true
             }
+            // `NDrone2_DSTATE_PlayScript` 0x15ba68 cases 0x11/0x12/0x14/0x15/0x16/0x1e (the alert family,
+            // gunfire sounds 0x14 included): `DroneVision_EnemyAlerts` → a non-zero result leaves the
+            // script (`SetState`) — a scripted guard HEARS just like the idle states [M 0x15ba68:180-195].
+            // The full-alert sight gate ([M 0x177ed0:12-14]) does not cover these: the sound path is how
+            // the game's alarm-heard scripted guards reach combat (cover_nodes_live's 06 gunfire).
+            (PLAY_SCRIPT, msg::SOUND) => {
+                if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n) }
+                true
+            }
+            (PLAY_SCRIPT, msg::ALARM) => {
+                // 0x15ba68 case 0x1e → `DroneVision_EnemyAlerts` 0x177c18 case 0x1e: Attack, with the
+                // same save-return-state/home first step the idle states' ALARM arm runs.
+                if !self.investigating { self.resume_state = s; self.home = self.feet(); }
+                self.set_state(ATTACK);
+                true
+            }
             (WAIT_SWITCH, msg::ENTER) => { self.enabled = false; self.vision_on = false; self.watching = false; true }
             (WAIT_SWITCH, msg::UPDATE) => { if self.channel_on { self.enabled = true; let s = self.start_state(d); self.set_state(s) } true }
             (WAIT_SWITCH, msg::ENABLE) => { self.enabled = true; let s = self.start_state(d); self.set_state(s); true }
@@ -6829,6 +6845,13 @@ impl Drone {
     /// `DroneVision_EnemyLookForOpponent` (Attack when seen and the drone may react to the player).
     /// `DroneVision_EnemyLookForOpponent` (0x177ed0): Attack when Bond is seen (prop 0x3C) and the drone is alert
     /// (≥ 0.66) or has prop 0x51; the first such sighting marks it as the drone's own (`+0x4F8 |= 0xC000000`).
+    /// The FIRST gate (0x177ed0:12-14) sits before all of that: a drone whose current AI state is
+    /// PlayScript (3) at alertness ≥ 1.0 returns 0 — a fully-alert scripted drone never sight-interrupts,
+    /// his start script plays to its end (07000001's first guard: alertness 1.0 from behaviour prop 0x20
+    /// [D placement #158 words 18-20], state 3 for the whole scripted walk with Bond in his view cone
+    /// [L tests/traces/01-doors.trace lines 0-150]; the script's own end directs AimStandFire, DSTATE_
+    /// PlayScript 0x15ba68 case 5). At alertness < 1.0 the gate is open and the script CAN be
+    /// interrupted (the eval passes +0xcdc = 1 for every script, 0x15ba68 case 1).
     /// Friendly drones (`+0x44 == 3`, team 3: civilians, hostages, allies — dtype 10/0xb/0xd/0xe) never attack:
     /// the game returns 0 before the sight check [M 0x177ed0:31-38].
     fn look_for_opponent(&mut self, d: &Data) -> Option<u8> {
@@ -6840,6 +6863,13 @@ impl Drone {
         if self.team == 2 || self.team == 3 {
             if std::env::var_os("NF_AILOG").is_some() {
                 eprintln!("[ailog] guard {} look_for_opponent: team {} — no player opponent", self.index, self.team);
+            }
+            return None;
+        }
+        // [M 0x177ed0:12-14] the PlayScript full-alert gate: `if (SM state == 3 && 1.0 <= +0x50c) return 0`.
+        if self.state == state::PLAY_SCRIPT && self.alert >= 1.0 {
+            if std::env::var_os("NF_AILOG").is_some() {
+                eprintln!("[ailog] guard {} look_for_opponent: state 3 at alert {:.2} — the script is not interrupted [M 0x177ed0:12-14]", self.index, self.alert);
             }
             return None;
         }
