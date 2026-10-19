@@ -278,6 +278,42 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
     eprintln!("[escort] the contact settled at ({:.1},{:.1},{:.1}) after {} distance checks",
         settled[0], settled[1], settled[2], checked);
 
+    // The last stretch's guards: the stair-head/gallery trigger starts the gallery's window guard
+    // (and the stairwell pair) only when the lead is already at the route's end, AFTER the leg's
+    // own stall-recovery stopped running — the game's AllyLeadHide parks the contact while an
+    // armed, started guard stands within 14 [M 0x15ec08 case 3 → NDrone2_NotNearArmedDrone(14.0)],
+    // and only a dead guard un-parks him. The real player kills them before walking in (the
+    // walkreal-a clearing rule the leg already runs); the same rule here, for the same reason.
+    for _round in 0..6 {
+        let cp = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
+        let guards: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (0..sim.drones.list.len()).filter(|&i| {
+                let d = &sim.drones.list[i];
+                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled
+                    && walker::dxz(d.pos, cp) < 14.0 && !cleared.contains(&i)
+            }).collect()
+        };
+        if guards.is_empty() { break; }
+        for g in guards {
+            let (gpos, los_clear) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g];
+                let bp = sim.bond.pos;
+                let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                (d.pos, sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none())
+            };
+            let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
+            if walker::dxz(gpos, bpos) > 9.0 || !los_clear {
+                w.walk_nav_to(gpos, &format!("approach guard {g}"), 3.0);
+            }
+            if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare < 8 { w.resupply("ammo"); }
+            let killed = w.shoot(g, &format!("guard {g}")) || { w.resupply("ammo retry"); w.shoot(g, &format!("guard {g}")) };
+            let sim = w.scene.sim.as_ref().unwrap();
+            if killed || sim.drones.list[g].corpse || sim.drones.list[g].health <= 0.0 { cleared.insert(g); }
+        }
+    }
+
     // ── the exit's condition: BOTH bodies on the plate fire the transition ─────────────────────
     // Bond walks the last leg onto the plate (the stairwell descent anchor walkreal-a uses).
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
@@ -286,6 +322,13 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
     let sim = w.scene.sim.as_ref().unwrap();
     let on_plate = sim.bond.pos[0] < -32.0 && sim.bond.pos[2] > 12.0;
     assert!(on_plate, "Bond must walk onto the LoadPointActivator plate (at {:?})", sim.bond.pos);
+    if std::env::var_os("NF_ESCORT_DUMP").is_some() {
+        eprintln!("[escort-dump] plate centre {:?}", walker::trigger_centre(&sim, walker::trigger_kind::TOUCH, 0x10));
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            eprintln!("[escort-dump] drone {i}: skin {:#x} team {} state {:#x} corpse {} enabled {} started {} health {:.1} pos ({:.1},{:.1},{:.1})",
+                d.skin, d.team, d.state, d.corpse, d.enabled, d.started, d.health, d.pos[0], d.pos[1], d.pos[2]);
+        }
+    }
     assert!(sim.drones.channels.on(0x10), "the AND plate must fire with Bond AND the contact inside [M Trigger_Hit 0x1b1fc8]");
     assert_eq!(sim.drones.level_exit, Some(0x0700_0002), "the exit fires to 07000002 under the game's condition");
     eprintln!("[escort] level_exit 07000002 at tick {}", w.total_ticks);
