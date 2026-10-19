@@ -242,13 +242,14 @@ impl Clone for PhaseStats {
 impl Copy for PhaseStats {}
 
 /// The full soak. `long` = the 30-game-minute match (NF_SOAK_LONG=1); the
-/// default is the suite's 10 game-minutes.
+/// default is the suite's 5 game-minutes (the main agent, 2026-10-19: the 10-minute default
+/// took 939 s on the merge PC, over the suite's 900 s per-binary limit; that run passed all 8
+/// phases, worst input-wait 2.9 s in the 2 s stall phase).
 fn run_soak(long: bool) {
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
-    let scale: u32 = if long { 3 } else { 1 };
-    let phase_len: u32 = 4500 * scale; // 8 phases → 36000 / 108000 ticks
+    let phase_len: u32 = if long { 13500 } else { 2250 }; // 8 phases → 108000 / 18000 ticks
     let total: u32 = phase_len * 8;
-    let time_limit_min: i32 = if long { 30 } else { 10 };
+    let time_limit_min: i32 = if long { 30 } else { 5 };
     eprintln!("[soak] {} ticks ({} game-min), phase = {} ticks",
         total, time_limit_min, phase_len);
 
