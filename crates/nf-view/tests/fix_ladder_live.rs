@@ -164,3 +164,46 @@ fn ladder_and_water_counts_per_level() {
         if code == 0x07000002 { assert!(ladders.len() >= 4, "07000002 lost its ladders"); }
     }
 }
+
+/// ladder-mesh-refine: the pick's stage 2 refines against the object's own 0x2E collision
+/// triangles [M Collide_Update 0x1ea398:84-93 → Collide_Intersect 0x1ebaa8 → Intersect_CylGeom
+/// 0x109da0 over the glist's collision data; a ladder with no collision tree picks nothing
+/// [M 0x109da0:587 — no boxes → the candidate distance stays 1e8]]. Census: every ladder
+/// placement of every story level carries a 0x2E block, and its triangles span the glist bounds
+/// box the port prefilters with (the same box the previous stand-in measured). Sister: the
+/// tri-span assert fails on any parse regression (a missing block or a wrong vertex decode).
+#[test]
+fn ladder_census_every_placement_has_collision_tris_spanning_the_bounds() {
+    use nf_formats::{disc, level::Level, iso9660::IsoImage};
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let iso = IsoImage::open(&iso).unwrap();
+    let (entries, bin) = disc::files_bin_entries(&iso).unwrap();
+    let mut total = 0usize;
+    for code in [0x07000002u32, 0x07000003, 0x07000005, 0x07000008, 0x0700000a, 0x0700000c, 0x0700000d, 0x07000015, 0x07000016] {
+        let name = format!("{code:08x}.bin");
+        let Some(fe) = entries.iter().find(|e| e.name.eq_ignore_ascii_case(&name)) else { continue };
+        let data = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).unwrap();
+        let level = Level::parse(&data).unwrap();
+        let ladders = nf_game::ladder::all(&level);
+        if ladders.is_empty() { continue; }
+        for (i, l) in ladders.iter().enumerate() {
+            assert!(!l.tris.is_empty(), "{code:08x} ladder #{i} at {:?} has NO 0x2E collision triangles — the game's refine would never hit it", l.centre);
+            // The triangles span the bounds box (the prefilter's box [M Intersect_CylGeom
+            // 0x109da0:147-173 runs Intersect_BoxBox over the same mesh's tree]).
+            let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for t in &l.tris { for v in t { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
+            let (s, c) = l.yaw.sin_cos();
+            let ex = [l.half[0] * c.abs() + l.half[1] * s.abs(), 0.0, l.half[0] * s.abs() + l.half[1] * c.abs()];
+            for k in [0usize, 2] {
+                let (blo, bhi) = (l.centre[k] - ex[k], l.centre[k] + ex[k]);
+                assert!((lo[k] - blo).abs() < 0.05 && (hi[k] - bhi).abs() < 0.05,
+                    "{code:08x} ladder #{i} axis {k}: tris span {}..{} vs bounds {}..{}", lo[k], hi[k], blo, bhi);
+            }
+            assert!((lo[1] - l.y_span[0]).abs() < 0.05 && (hi[1] - l.y_span[1]).abs() < 0.05,
+                "{code:08x} ladder #{i} y: tris span {}..{} vs bounds {:?}", lo[1], hi[1], l.y_span);
+            total += 1;
+        }
+        println!("{code:08x}: {} ladders, all with spanning collision tris", ladders.len());
+    }
+    assert!(total >= 20, "the census lost the levels' ladders (total {total})");
+}

@@ -39,6 +39,20 @@ pub struct Ladder {
     pub half: [f32; 2],
     /// The same box's world y span `[min, max]` (translation.y + min.y / max.y × scale).
     pub y_span: [f32; 2],
+    /// The object's 0x2E collision triangles in WORLD space (`MapObject.collision` →
+    /// `Collision::triangles()`, object space `s16·scale + origin`, through the placement's yaw-only
+    /// matrix + per-axis scale + translation — the same convention `create` uses for the bounds).
+    /// The pick's stage 2 refines against THESE [M Collide_Update 0x1ea398:84-93 →
+    /// Collide_Intersect 0x1ebaa8 → Intersect_CylGeom 0x109da0 over the glist's collision data];
+    /// a ladder whose object carries no 0x2E block has NO pickable mesh, like the game's
+    /// (no collision tree → the candidate distance stays 1e8 → no hit [M 0x109da0:587]).
+    pub tris: Vec<[V3; 3]>,
+    /// The runtime cel the ladder is linked to — `build_LinkToRoom` 0x1c9680 [M]:
+    /// `build_FindCel(world-sphere centre)` → `control_link_object_to_cel`; the pick only admits
+    /// objects on a straddled cel's chain [M Collide_Pick 0x1eb320:125-134]. Resolved by the
+    /// scene at load (`world.find_cel(centre)`); `None` = unresolved (never picked while scoping
+    /// is active).
+    pub cell: Option<u32>,
 }
 
 impl Ladder {
@@ -65,13 +79,30 @@ impl Ladder {
             0.5 * (o.max[2] - o.min[2]) * scale[2].abs(),
         ];
         let y_span = [p.translation[1] + o.min[1] * scale[1].abs(), p.translation[1] + o.max[1] * scale[1].abs()];
-        Some(Ladder { centre, radius: o.radius * s_max, yaw, channel: param1(p), half, y_span })
+        let sc = [scale[0].abs(), scale[1].abs(), scale[2].abs()];
+        // The 0x2E collision triangles to world: the object matrix's yaw rows (row0 = (cos,0,−sin),
+        // row2 = (sin,0,cos) — the convention the bounds centre above already rides) times the
+        // per-axis scale, plus the translation. The game transforms the collision vertices through
+        // the full object matrix (obj+0x90) [M Collide_Intersect 0x1ebaa8:106 Mat_Copy(obj+0x90)].
+        let tris = o.collision.as_ref().map(|col| {
+            col.triangles().into_iter().map(|t| t.map(|v| [
+                p.translation[0] + v[0] * sc[0] * c + v[2] * sc[2] * s,
+                p.translation[1] + v[1] * sc[1],
+                p.translation[2] - v[0] * sc[0] * s + v[2] * sc[2] * c,
+            ])).collect()
+        }).unwrap_or_default();
+        Some(Ladder { centre, radius: o.radius * s_max, yaw, channel: param1(p), half, y_span, tris, cell: None })
     }
 
     /// A hand-built ladder for unit tests: a rung box ±0.354 wide, ±0.06 deep (the shipped ladder
-    /// meshes' footprint [M 07000002]) spanning the sphere's height.
+    /// meshes' footprint [M 07000002]) spanning the sphere's height, as a closed 12-triangle box
+    /// mesh — the refine's stage 2 measures the capsule against the TRIANGLES, so the unit pins
+    /// exercise the same geometry the bounds box described.
     pub fn simple(centre: V3, radius: f32, yaw: f32) -> Ladder {
-        Ladder { centre, radius, yaw, channel: 0, half: [0.354, 0.06], y_span: [centre[1] - radius, centre[1] + radius] }
+        let half = [0.354, 0.06];
+        let y_span = [centre[1] - radius, centre[1] + radius];
+        let tris = box_mesh(centre, half, y_span, yaw);
+        Ladder { centre, radius, yaw, channel: 0, half, y_span, tris, cell: None }
     }
 
     /// `BLData+0x8A0` = `centre.y + radius + 0.85` — the top dismount threshold [M Player_CollLadder
@@ -151,7 +182,7 @@ impl Ladder {
         // Strictly inside: the game's pick rejects when `(r·1.5 + cap)² <= dist²` [M Collide_PickObj
         // 0x1eae80:166 `if (fVar12 * fVar12 <= fVar11) return;`].
         if (cx * cx + cy * cy + cz * cz).sqrt() >= self.radius * 1.5 + capsule_radius { return false; }
-        self.in_mesh_box(pos, a_off.max(b_off), a_off.min(b_off), capsule_radius)
+        self.refine(a, b, capsule_radius)
     }
 
     /// The CROUCH form of the pick (`Player_Collision` 0x194df0's capsule switch case 3 [M] — the
@@ -166,32 +197,41 @@ impl Ladder {
         self.pick_hit(pos, 0.1 - (cc - 0.55), 0.45 - cc, capsule_radius)
     }
 
-    /// Stage 2, shared by every pick form: the capsule (the vertical segment pos.y + lo ..
-    /// pos.y + hi, radius `capsule_radius`) against the ladder mesh's bounds box in the ladder's frame
-    /// (`fwd(yaw) = (sin, ·, cos)`, the grab snap's convention [M 0x196118:36-44]; lateral = the rungs'
-    /// width, frontal = their depth) — the stand-in for the glist refine (`Collide_Update`
-    /// 0x1ea398:84-93 → `Collide_Intersect` 0x1ebaa8 → `Intersect_CylGeom` 0x109da0, not ported) and
-    /// the straddled-cel scoping. The box is the mesh's own [M `half`/`y_span`]; the boundary is
-    /// STRICT: the game's cylinder refine tracks a triangle only when its distance is strictly below
-    /// the capsule radius [M Intersect_CylGeom 0x109da0:447 `if (fVar30 < *(float *)(param_1[8] +
-    /// 0xc))`] — the touch at exactly the radius is no hit, which is what keeps the just-dismounted
-    /// stander (snap 0.5 + the one-tick hop −0.05 [M Player_Climb 0x196310:88-96 + Player_Update
-    /// 0x193600:284-295]) 0.55 off a FLAT rung plane (the 0700000c yard ladder's mesh is z-degenerate
-    /// [D bounds]) from re-grabbing. The pre-1016 port used a guessed ±0.4 rail span with
-    /// zero depth, which reached 0.95 sideways for the swim's 0.55 capsule where the mesh gives 0.904 —
-    /// the 02 hut-pocket swimmer at 0.955 slid along that edge and grabbed where the PS2 swims past
-    /// (PCSX2 2026-10-16, yaw 0.4/0.7 from (-76.27, 3.17, 22.14)). See `capsule_hits_default`'s doc
-    /// for the walk-arm mapping.
-    fn in_mesh_box(&self, pos: V3, hi: f32, lo: f32, capsule_radius: f32) -> bool {
-        let dx = pos[0] - self.centre[0];
-        let dz = pos[2] - self.centre[2];
+    /// Stage 2, the REAL refine (ladder-mesh-refine; was a capsule-vs-bounds-box stand-in
+    /// `in_mesh_box`): the capsule (the arm's segment `a..b`, radius `capsule_radius`) against the
+    /// ladder's 0x2E collision triangles, with the game's two gates:
+    ///
+    /// * the box prefilter — the segment AABB inflated by radius + 0.1 vs the mesh's bounds [M
+    ///   Intersect_CylGeom 0x109da0:147-173 builds exactly that AABB and feeds it to
+    ///   `Intersect_BoxBox` over the object's collision box tree; the port's bounds box IS the
+    ///   measured tri-span box];
+    /// * the STRICT boundary — a triangle is tracked only while `dist < radius` [M 0x109da0:447
+    ///   `if (fVar30 < *(float *)(param_1[8] + 0xc))` push gate, :524 `if (fVar30 < fVar19)` track
+    ///   gate with the minimum seeded at the radius; no tracked triangle → the candidate distance
+    ///   stays 1e8 → `Collide_Intersect` 0x1ebaa8:320 returns no hit] —
+    ///   `crate::triggers::capsule_hits_tris_strict`.
+    ///
+    /// The game also depenetrates per tracked triangle (0x109da0:447-470 pushes the segment out by
+    /// `radius − dist` along the closest-point direction); that resolves the HITDATA point, which
+    /// the ladder grab never reads — the pick's boolean is `min dist < radius`, measured here
+    /// without the pushes [S: the push order changes later triangles' measured distance by at most
+    /// one penetration depth; the boolean gate is the radius compare either way]. The boundary is
+    /// what keeps the just-dismounted stander (snap 0.5 + the one-tick hop −0.05 [M Player_Climb
+    /// 0x196310:88-96 + Player_Update 0x193600:284-295]) 0.55 off a FLAT rung plane from
+    /// re-grabbing, and the swim escape's drift (0.5 + 0.05 + 0.2 > 0.55) clearing.
+    fn refine(&self, a: V3, b: V3, capsule_radius: f32) -> bool {
+        if self.tris.is_empty() { return false; }
+        // The prefilter: segment AABB + radius + 0.1 [M 0x109da0:147 fVar28 = radius + 0.1] vs the
+        // mesh bounds (the port's `half`/`y_span` box, measured off the same triangles).
+        let pad = capsule_radius + 0.1;
+        let lo = [a[0].min(b[0]) - pad, a[1].min(b[1]) - pad, a[2].min(b[2]) - pad];
+        let hi = [a[0].max(b[0]) + pad, a[1].max(b[1]) + pad, a[2].max(b[2]) + pad];
+        let (dx, dz) = (self.centre[0], self.centre[2]);
         let (s, c) = self.yaw.sin_cos();
-        let frontal = dx * s + dz * c;
-        let lateral = dx * c - dz * s;
-        let ox = (lateral.abs() - self.half[0]).max(0.0);
-        let oz = (frontal.abs() - self.half[1]).max(0.0);
-        let oy = (self.y_span[0] - (pos[1] + hi)).max((pos[1] + lo) - self.y_span[1]).max(0.0);
-        ox * ox + oz * oz + oy * oy < capsule_radius * capsule_radius
+        let ex = [self.half[0] * c.abs() + self.half[1] * s.abs(), 0.0, self.half[0] * s.abs() + self.half[1] * c.abs()];
+        if hi[0] < dx - ex[0] || lo[0] > dx + ex[0] || hi[2] < dz - ex[2] || lo[2] > dz + ex[2]
+            || hi[1] < self.y_span[0] || lo[1] > self.y_span[1] { return false; }
+        crate::triggers::capsule_hits_tris_strict(a, b, capsule_radius, &self.tris)
     }
 }
 
@@ -199,6 +239,36 @@ impl Ladder {
 /// `level_tag+0x2C+4k` addressed by INDEX (docs/systems/levels.md §2 pickup note); `Ladder_Create` reads
 /// the word at `level_tag+0x30` = param 1].
 fn param1(p: &Placement) -> u16 { p.params.iter().find(|(i, _)| *i == 1).map_or(0, |&(_, v)| v as u16) }
+
+/// A closed 12-triangle box mesh in WORLD space: the ladder-frame footprint `half` = `[lateral,
+/// frontal]` about `centre`, the world y span `y_span`, yawed by `yaw` with the grab snap's basis
+/// (`fwd(yaw) = (sin, ·, cos)`, right = (cos, ·, −sin) [M 0x196118:36-44's forward offset]). The
+/// unit-test mesh behind `Ladder::simple` — the shipped ladders instead carry their own 0x2E
+/// triangles.
+fn box_mesh(centre: V3, half: [f32; 2], y_span: [f32; 2], yaw: f32) -> Vec<[V3; 3]> {
+    let (s, c) = yaw.sin_cos();
+    // corner(l, f, y): centre + right·l + fwd·f at height y (right = (cos, ·, −sin), fwd = (sin, ·, cos)).
+    let corner = |l: f32, f: f32, y: f32| [
+        centre[0] + l * c + f * s,
+        y,
+        centre[2] - l * s + f * c,
+    ];
+    let (y0, y1) = (y_span[0], y_span[1]);
+    let quad = |a: V3, b: V3, cc: V3, d: V3| vec![[a, b, cc], [a, cc, d]];
+    let mut out = Vec::with_capacity(12);
+    // The eight corners: bottom (y0) and top (y1), lateral ±half[0], frontal ±half[1].
+    let (b_ll, b_lp) = (corner(-half[0], -half[1], y0), corner(-half[0], half[1], y0));
+    let (b_rl, b_rp) = (corner(half[0], -half[1], y0), corner(half[0], half[1], y0));
+    let (t_ll, t_lp) = (corner(-half[0], -half[1], y1), corner(-half[0], half[1], y1));
+    let (t_rl, t_rp) = (corner(half[0], -half[1], y1), corner(half[0], half[1], y1));
+    out.extend(quad(b_ll, b_lp, t_lp, t_ll)); // −lateral face
+    out.extend(quad(b_rl, b_rp, t_rp, t_rl)); // +lateral face
+    out.extend(quad(b_ll, b_rl, t_rl, t_ll)); // −frontal face (the rung plane)
+    out.extend(quad(b_lp, b_rp, t_rp, t_lp)); // +frontal face
+    out.extend(quad(b_ll, b_rl, b_rp, b_lp)); // bottom
+    out.extend(quad(t_ll, t_rl, t_rp, t_lp)); // top
+    out
+}
 
 /// Every ladder placement of a level (`flags & 0xff == 0x22`), resolved against its map object.
 /// Mirrors the wire sweep in nf-view's `Scene::build` [M 0x1d04f0 case 0x22 → Ladder_Create].
@@ -295,6 +365,8 @@ mod tests {
             channel: 0,
             half: [0.576195, 0.0],
             y_span: [-0.20724726, 11.260439],
+            tris: box_mesh([9.669741, 5.526596, -187.3427], [0.576195, 0.0], [-0.20724726, 11.260439], 0.5934119),
+            cell: None,
         };
         // The walker's stop: the port's walk capsule (r 0.55) rests Bond at frontal 0.4985 (the wall
         // recess behind the plane) — the default arm's stage 2 reaches it (0.4985 < 0.55) [M
@@ -375,3 +447,60 @@ mod tests {
         assert!(!l.capsule_hits_default([10.0, 3.0, 20.62], crate::player::RADIUS, cc));
     }
 }
+
+    /// ladder-mesh-refine: stage 2 measures the TRIANGLES, not the bounds box. Two ladders with
+    /// the SAME bounds (`half` [0.9, 0.06] — the prefilter admits both) but different meshes:
+    /// a frontal rung plane spanning only ±0.354 laterally vs one spanning the full ±0.9. The
+    /// capsule 0.91 off the axis reaches the wide plane (0.91 − 0.9 = 0.01 < 0.55) but not the
+    /// strip (0.91 − 0.354 = 0.556 > 0.55) — the old bounds-box stand-in hit BOTH (the box only
+    /// knows the bounds), so the sister pair pins the refine to the mesh.
+    #[test]
+    fn the_refine_measures_the_triangles_not_the_bounds_box() {
+        let cc = 1.0347f32;
+        let r = crate::player::RADIUS;
+        let mk = |strip: f32| Ladder {
+            centre: [10.0, 3.0, 20.0],
+            radius: 1.5,
+            yaw: 0.0,
+            channel: 0,
+            half: [0.9, 0.06],
+            y_span: [1.5, 4.5],
+            tris: box_mesh([10.0, 3.0, 20.0], [strip, 0.06], [1.5, 4.5], 0.0),
+            cell: None,
+        };
+        let narrow = mk(0.354);
+        let wide = mk(0.9);
+        // 0.91 lateral, on the plane depth-wise, mid height: the prefilter (bounds ±0.9 + pad)
+        // admits both; the triangles decide.
+        let spot = [10.91, 3.0, 20.0];
+        assert!(wide.capsule_hits_default(spot, r, cc), "the full-span plane must reach 0.01 past its edge");
+        assert!(!narrow.capsule_hits_default(spot, r, cc),
+            "the strip mesh's edge is 0.556 away — the refine must reject where the box stand-in hit");
+        // Sister at the strip's own reach: 0.85 lateral is 0.496 from the strip edge — hit.
+        assert!(narrow.capsule_hits_default([10.85, 3.0, 20.0], r, cc));
+        // And the deep walk segment reaches the strip from below through stage 1 (the sphere).
+        assert!(narrow.capsule_hits_default([10.0, 0.9, 20.0], r, cc));
+    }
+
+    /// The refine's boundary is the STRICT `dist < radius` compare [M Intersect_CylGeom
+    /// 0x109da0:447 `if (fVar30 < *(float *)(param_1[8] + 0xc))` — the push gate; :524
+    /// `if (fVar30 < fVar19)` tracks the minimum seeded AT the radius; no tracked triangle → the
+    /// candidate distance stays 1e8 → Collide_Intersect 0x1ebaa8:320 returns no hit]. The probe
+    /// distances sit clearly either side of the radius: an exact-touch pin would test this
+    /// helper's own f32 rounding, not the game's rule — the exact landing is the live tests' job
+    /// (the just-dismounted stander at exactly 0.55 must not re-grab, PCSX2-pinned via
+    /// ladder_underwater_02_live).
+    #[test]
+    fn the_strict_refine_boundary_sits_below_the_radius() {
+        // A triangle in the z = 0 plane; the probe segment degenerate at a chosen height.
+        let tri: [[V3; 3]; 1] = [[[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]];
+        let at = |z: f32| -> V3 { [0.0, 0.0, z] };
+        // 0.4999 from the plane with radius 0.5: inside — tracked.
+        assert!(crate::triggers::capsule_hits_tris_strict(at(0.4999), at(0.4999), 0.5, &tri));
+        // 0.5001: outside the strict boundary — the candidate distance stays 1e8, no hit.
+        assert!(!crate::triggers::capsule_hits_tris_strict(at(0.5001), at(0.5001), 0.5, &tri),
+            "the refine's boundary is `dist < radius` [M 0x109da0:447/524]");
+        // Sister: at 0.5001 the INCLUSIVE contact (the hurt volumes' rule) also rejects — the
+        // boundary the two rules share; the ladder pick rides the strict one.
+        assert!(!crate::triggers::capsule_hits_tris(at(0.5001), at(0.5001), 0.5, &tri));
+    }
