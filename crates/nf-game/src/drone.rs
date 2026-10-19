@@ -216,6 +216,8 @@ pub mod state {
     pub const HOSTAGE_SAVED: u8 = 0x0c;
     /// The real `NDrone2_DSTATE_HostageIdle` (0x15ce60) — `NDrone2_StateFuncs[0x0d]` [L 0x29b300].
     pub const HOSTAGE_IDLE: u8 = 0x0d;
+    /// HostageHide [L NDrone2_StateFuncs 0x29b300 state 0x0e = 0x15cfe0].
+    pub const HOSTAGE_HIDE: u8 = 0x0e;
     /// `NDrone2_DSTATE_AllyLeadInit` (0x15e4f0) — `NDrone2_StateFuncs[0x1c]` [L 0x29b300] and
     /// `DroneTypeSettings[12].start` [L 0x29aee8+12·12]: the escort lead's entry (07000001's Mayhew).
     pub const ALLY_LEAD_INIT: u8 = 0x1c;
@@ -2409,6 +2411,12 @@ impl Drone {
             UNSURRENDER_ANIM | DRAW_WEAPON => (0, false),
             AIM_CROUCH | AIM_STAND_RELOAD | AIM_CROUCH_RELOAD | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_DRONE_AHEAD
                 | GO_TO_GOAL | DRONE_STUCK => (0, false),
+            // The scare-flight family: case 8 forwards `HandleImpact(0x88, 0)` and the
+            // 7/9/0x17/0x18/0x19 group `HandleImpact(0x88, 1)` [M 0x168aa8 case 8 + the case-7
+            // fallthrough group; 0x168d18:57-65] — bullets resume through Recover 0x88 with no
+            // stagger; on msg 9 the allow is raised in `on_explosion` (the DSTATE's own group arm).
+            // Recover 0x88 itself (0x173658) carries no case 8/9 — no arm here, the message drops.
+            RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT => (RECOVER_FROM_SCARY_OBJECT, false),
             // The mission states (fix-party-mission, playtest: bullets on party guests did nothing):
             // PartyGirl 0x160140 case 8 → HandleImpact(0x12, 0); Civilian 0x15d118 case 8 → (0x12, 0);
             // CivilianHiding 0x15d520 case 8 → (0x12, 0); CivilianScared 0x15d3a0 case 8 → (+0x118, 0);
@@ -2436,38 +2444,65 @@ impl Drone {
 
     /// Msg 0x18 in state `s` — `DroneFunc_HandleImpact` case 0x18 (0x1469b8:250-313): prop 0x1C is
     /// immune (the game plays the 0x57/0x11/0x19 flinch anims — not modelled); every other drone
-    /// enters StunGrenadeImpact 0x4D. No state gate in the game's arm — a WaitSwitch drone reaches
-    /// it through the unhandled→GLOBAL fallback [M 0x15b960 `return 0` + the SM fallback], so the
-    /// port intercepts before the state match exactly like msg 8/6/7.
-    fn on_flash(&mut self, d: &Data, _rng: &mut Rng, _frame: u32, _s: u8) -> bool {
-        // tranq-gun: DSTATE_StunDartImpact has NO case 0x18 — a flash during the sleep-fall is
-        // unhandled → GLOBAL → dropped [M 0x163430 switch]. The LOOP/RECOVER states forward 0x18 to
-        // HandleImpact (→ 0x4D) — the fall-through below reaches the same SetState.
-        if _s == state::STUN_DART_IMPACT { return true; }
+    /// enters StunGrenadeImpact 0x4D — through ITS OWN DSTATE's case 0x18 only (the state gate
+    /// below; daily-audit 2026-10-17).
+    /// The states whose DSTATE carries a case 0x18 [L NDrone2_StateFuncs 0x29b300 (state →
+    /// DSTATE fn) + a case-0x18 scan of every table DSTATE's decomp, 2026-10-19]. The flash
+    /// reaches drones ONLY as msg 0x18 (`Drone_MessageObjVicinity(20.0, 0x18, …)` [M
+    /// 0x12d890:365]); a state without the case returns 0 and the SM's fallback re-calls the
+    /// dispatcher with the state arg 0 [M-dis Drone_SM_RouteMsgDCV 0x171df8:103-109], whose
+    /// DSTATE is Global — state 0 = 0x15b830 [L 0x29b300] — and DSTATE_Global handles only
+    /// 0/1/10/0x1d [M 0x15b830:59-61]. So the flash does NOTHING to an as-loaded WaitSwitch
+    /// guard (its handler takes only 0/1/3/0xe [M 0x15b960:40-42]) — nor to a full-combat
+    /// Attack 0x56 guard (0x164210 has no case 0x18) — the daily-audit 2026-10-17 item.
+    const FLASH_HANDLING: [u8; 116] = [
+    0x03, 0x04, 0x05, 0x07, 0x08, 0x09, 0x0a, 0x0c, 0x0d, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x16,
+    0x17, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26,
+    0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x38,
+    0x3a, 0x3c, 0x3d, 0x3e, 0x41, 0x4b, 0x4e, 0x4f, 0x51, 0x52, 0x59, 0x5a, 0x5c, 0x5e, 0x5f,
+    0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70,
+    0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7e, 0x7f, 0x81, 0x82, 0x83,
+    0x84, 0x86, 0x87, 0x8a, 0x8c, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9c, 0x9e, 0x9f,
+    0xa3, 0xa4, 0xa5, 0xc5, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe7, 0xe8,
+    ];
+    fn on_flash(&mut self, d: &Data, _rng: &mut Rng, _frame: u32, s: u8) -> bool {
+        // The fallback: the dispatcher re-calls with the state arg 0 → DSTATE_Global, which has
+        // NO case 0x18 [M 0x15b830:59-61; L 0x29b300 state 0 = 0x15b830] — the flash is dropped,
+        // not delivered. (The old code stunned here — the wrong rule the audit caught.)
+        if s == state::GLOBAL { return true; }
+        // DSTATE_StunDartImpact 0x50 has no case 0x18 [M 0x163430 switch]; it is absent from the
+        // whitelist like every other non-handling state — the STUN_DART_LOOP/RECOVER 0x51/0x52
+        // carry the case and stay in it [M 0x163570/0x163700].
+        if !Self::FLASH_HANDLING.contains(&s) { return false; } // unhandled → GLOBAL → dropped
         if self.prop(d, 0x1c) { return true; }
-        // A flashed WaitSwitch guard responds to the real event: the port's `drawn = enabled &&
-        // visible` [S — the game's obj+0xF0 & 0x30 re-enable path for a flashed waiter is unpinned;
-        // live check below] would otherwise freeze him invisible and unhittable for the whole stun.
+        // A flashed guard responds to the real event: the port's `drawn = enabled && visible`
+        // [S — the game's obj+0xF0 & 0x30 re-enable path for a flashed waiter is unpinned;
+        // live check below] would otherwise freeze him invisible and unhittable for the stun.
         self.enabled = true;
         self.set_state(state::STUN_GRENADE_IMPACT);
         true
     }
 
-    /// Msg 9 in state `s` — `DroneFunc_HandleImpact` case 9 (0x1469b8:173-201). The per-state
-    /// (resume, allow) pairs are the msg-8 table's: every DSTATE that carries a case 9 passes the
-    /// same resume/allow it passes case 8 (a scan of the decomps, 2026-10-16 — Idle/Alert/Patrol/
-    /// AlertToPosition/SearchArea/HeardNoise*/RunForCover → (0x56, 0); AimStand/Backoff/Step/Strafe/
-    /// Dodge/Roll → (0x68, 1); AimStandFire/AimCrouchFire/CombatNoMove/CombatNoRoute/SniperFire →
-    /// (current, 1); AimCrouch/Reloads/OutOfRange/NoSight/Wait/GoToGoal → (current, 0); the mission
-    /// states their own). The stun families keep their own case-9 arms (8/9 → Death_Anim 0x44
-    /// [M 0x172bb0/0x1631c0/0x163350]; the taser family the same [M 0x162eb0 case 8/9]), the KO
-    /// states too [M 0x172a30], `Surrender_Anim`'s case 9 sets Death_Anim directly [M 0x1626a0:65],
-    /// `PunchImpact` replays as (0, 1) [M 0x172ee0], `BulletImpact` sets 0x54 outright [M
-    /// 0x173098 case 9], and states without a case 9 (Attack/Combat/WaitSwitch/…) drop the message
-    /// (the GLOBAL fallback has none either [M 0x15b830] — a frag next to a pure-Attack guard does
-    /// nothing, the game's own routing).
+    /// Msg 9 in state `s` — `DroneFunc_HandleImpact` case 9 (0x1469b8:173-201). The resume comes
+    /// from the msg-8 table (the case-9 arms pass the same resume their case 8 passes); the ALLOW
+    /// is the DSTATE's own case-9 arm and DIFFERS from case 8 where the decomp splits the group:
+    /// Idle/Alert/Patrol pass `HandleImpact(0x56, 1)` on msgs 7/9/0x17/0x18/0x19 and `(0x56, 0)`
+    /// on case 8 only [M 0x15bf18:100-110, 0x15c248:68-77, 0x15c498:65-74] — a surviving guard
+    /// takes the 0x54 stagger (daily-audit 2026-10-17). The stun families keep their own case-9
+    /// arms (8/9 → Death_Anim 0x44 [M 0x172bb0/0x1631c0/0x163350]; the taser family the same [M
+    /// 0x162eb0 case 8/9]), the KO states too [M 0x172a30], `Surrender_Anim`'s case 9 sets
+    /// Death_Anim directly [M 0x1626a0:65], `PunchImpact` replays as (0, 1) [M 0x172ee0],
+    /// `BulletImpact` sets 0x54 outright [M 0x173098 case 9], and states without a case 9
+    /// (Attack/Combat/WaitSwitch/…) drop the message: the GLOBAL fallback has none either [M
+    /// 0x15b830:59-61; L 0x29b300 state 0 = 0x15b830] — a frag next to a pure-Attack or
+    /// as-loaded-WaitSwitch guard does nothing, the game's own routing.
     fn on_explosion(&mut self, d: &Data, rng: &mut Rng, frame: u32, s: u8) -> bool {
         use state::*;
+        // The fallback: DSTATE_Global (state 0 [L 0x29b300]) has NO case 9 [M 0x15b830:59-61] —
+        // an unhandled blast is dropped, not applied. (The old table arm damaged here — the
+        // merged frag_at_the_waitswitch pin only held because its 120 ticks never ran the
+        // 210-tick fuse out.)
+        if s == GLOBAL { return false; }
         if matches!(s, STUN_GRENADE_IMPACT | STUN_GRENADE_LOOP | STUN_GRENADE_RECOVER
                 | TASER | STUNNED | STUNNED_RECOVER | KNOCKED_OUT_ANIM | KNOCKED_OUT
                 | SURRENDER_ANIM | SURRENDERED) {
@@ -2496,7 +2531,40 @@ impl Drone {
             self.explosive_impact(d, rng, frame, 0, false);
             return true;
         }
+        if s == HOSTAGE_IDLE || s == HOSTAGE_HIDE {
+            // 0x15ce60 / 0x15cfe0 case 9 → HandleImpact(0, 1): the resume stamps the current
+            // hostage state and the surviving geisha takes the 0x54 stagger [M 0x15cfe0:34-40].
+            let u10 = self.state;
+            if u10 != 0 && !(0x53..=0x55).contains(&u10) { self.impact_resume = u10; }
+            self.set_state(EXPLOSIVE_IMPACT);
+            return true;
+        }
+        // The ninja states' own case 9 [L NDrone2_StateFuncs 0x29b300 st→fn; M each DSTATE's case 9]
+        // — Stand 0xa6 (0x16b990), Attack 0xa7 (0x16bb50), LongRange 0xa8 (0x16bfc0), MidRange 0xa9
+        // (0x16c248), ShortRange 0xaa (0x16c650), Sword 0xac (0x16d100), Somersault 0xad (0x16d298),
+        // Backflip 0xae (0x16d430), SideflipLeft 0xb0 (0x16cdd0), SideflipRight 0xb1 (0x16cf68),
+        // StandFire 0xb2 (0x16d5b8), NoRoute 0xb3 (0x16d878) — every arm calls
+        // `NDrone2_ExplosiveImpact(impact, 0, 1)` DIRECTLY (no HandleImpact resume stamp, no 0x54
+        // entry; ExplosiveImpact stamps +0x118 itself from the current state [M 0x146480:164-177]).
+        // GetClose 0xab (0x16cb70) and the jump-init 0xaf (0x173e08) carry no case 9 — the blast
+        // drops there, as in any state without the arm (the GLOBAL fallback has none either [M
+        // 0x15b830:49-60]). The daily-audit GLOBAL drop stays: the port's victims take the blast
+        // through THESE arms — the state-0 fallback re-call (send's unhandled route) is dropped,
+        // exactly the game's ProcessStateMachine(0) → DSTATE_Global [M-dis 0x171df8:103-109].
+        if matches!(s, crate::kiko::NINJA_STAND_FIRE | crate::kiko::NINJA_NO_ROUTE
+                | crate::kiko::NINJA_ATTACK | crate::kiko::NINJA_LONG_RANGE | crate::kiko::NINJA_MID_RANGE
+                | crate::kiko::NINJA_SHORT_RANGE | crate::kiko::NINJA_SWORD | crate::kiko::NINJA_SOMERSAULT
+                | crate::kiko::NINJA_BACKFLIP | crate::kiko::NINJA_SIDEFLIP_LEFT | crate::kiko::NINJA_SIDEFLIP_RIGHT)
+            || s == 0xa6 {
+            self.explosive_impact(d, rng, frame, 0, true);
+            return true;
+        }
         let Some((resume, allow)) = Self::impact_args(s) else { return false };
+        // The case-9 allow is the DSTATE's own arm, not the msg-8 pair: Idle/Alert/Patrol's
+        // 7/9/0x17/0x18/0x19 group passes (0x56, 1) while case 8 alone passes (0x56, 0) [M
+        // 0x15bf18:100-110 / 0x15c248:68-77 / 0x15c498:65-74] — the surviving guard staggers.
+        // The scare-flight family's group arm does the same [M 0x168aa8 / 0x168d18:57-65].
+        let allow = allow || matches!(s, IDLE | ALERT | PATROL | RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT);
         if allow {
             // 0x1469b8:178-193: stamp the resume (the 0x53-0x55 impact states are excluded), then
             // state 0x54 — its ENTER re-runs the impact with allow = 1 (the stagger anim).
@@ -6051,23 +6119,38 @@ impl Drone {
             // HostageSaved (0x15ccf0 — state 0x0c [L 0x29b300]) ENTER [M 0x15ccf0:16-44]:
             // `Drone_AlertStatusSet(0)`, clear the captor link, `Music_Event(0x10, 1)` (the port
             // has no music-event consumer in Sim — skipped), then `DroneFunc_HostageSaved`
-            // 0x1441c0: write the placement's out channel (+0x135 = placement param 6 — the port's
+            // 0x1441c0: raise the placement's out channel (+0x135 = placement param 6 — the port's
             // `second_channel`) with the stamp and count the save [M 0x1441c0:11-18]. The raise
-            // rides `self.raise`, the `Drones` tick's channel writer. Then `FindRunToPoint` →
-            // state 0x64 HostageGoToGoalPosition; the resume-cower arm (0x5A4 ≠ 0 with the channel
-            // already on) is the WaitSwitch resume path — the port reaches the save only fresh.
+            // rides `self.raise`, the `Drones` tick's channel writer. Then the fresh-save arm:
+            // the resume arm (+0x5a4 != 0 && +0x135 == 0 → 0xe with nobody armed near / 0xd) is
+            // unreachable here (the port reaches the state only fresh, and +0x135 is the
+            // placement's rescue channel — 0x49/0x4A on 07000002 [D]): FindRunToPoint → none:
+            // SetState(0x0e HostageHide); some: +0x5a2 = 0xe and state 0x64 [M 0x15ccf0:37-44].
+            // The old else arm cowered into 0x0d — the resume arm's state, never reachable on
+            // this path (daily-audit 2026-10-17).
             (HOSTAGE_SAVED, msg::ENTER) => {
                 self.alert = 0.0;
                 self.captor = None;
                 if self.second_channel != 0 && self.raise.is_none() { self.raise = Some(self.second_channel); }
                 if self.find_run_to_point(d) {
+                    self.return_state = HOSTAGE_HIDE; // +0x5a2 = 0xe [M 0x15ccf0:42]
                     self.set_state(HOSTAGE_GO_TO_GOAL);
                 } else {
-                    self.call_anim(d, anim_state::COWER, 0, 0);
-                    self.set_state(HOSTAGE_IDLE);
+                    self.set_state(HOSTAGE_HIDE);
                 }
                 true
             }
+            // HostageHide (0x15cfe0 — state 0x0e [L 0x29b300]) ENTER: +0x4f8 |= 0x4000000 (the
+            // drawn-flag bit the port keys on `enabled`), +0x50c = 1.0, alert 2, the cower anim
+            // 0x19 [M 0x15cfe0:12-16]; case 3 → nobody armed within 20 → HostageIdle 0x0d [M
+            // 0x15cfe0:23-29 — the port's msg-3 clock is not modelled, [S] the UPDATE-less hold].
+            (HOSTAGE_HIDE, msg::ENTER) => {
+                self.enabled = true;
+                self.alert = self.alert.max(0.66); // AlertStatusSet(2) [M 0x15cfe0:15]
+                self.call_anim(d, anim_state::COWER, 0, 0);
+                true
+            }
+            (HOSTAGE_HIDE, msg::BULLET) => self.on_bullet_resume(d, rng, frame, 0, false),
             // AllyLead (0x15e4f0 / 0x15e698 / 0x15eda8 / 0x15f2e8): the escort lead — 07000001's Mayhew
             // (mode 12, `DroneTypeSettings[12].start` = 0x1c [L 0x29aee8]) leads Bond along the mission
             // AI path to the bunker plate. Minimal port: the entry, the lead loop (the port's
