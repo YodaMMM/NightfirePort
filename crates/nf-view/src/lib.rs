@@ -963,10 +963,18 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // `MPSettings+slot*0x30+0x24` (and reads the body's skin from `MP_skins[rec[0x10]]`,
     // 0x1249e8:100). The port's `MpMatch::create_bots` repeats the write when the match starts;
     // the scene build parks the bodies earlier, so it happens here off the same records.
+    // mp-body-look: the bots sit at `human_count + i` with the records cycled (`MpMatch::create_bots`,
+    // mp-16-slots); this mirror still wrote slots 4.. from the first 4 records, so with 2 humans
+    // the bot bodies (slots 2, 3) drew character 0 (Bond) instead of their records' characters
+    // (Snow Guard 6 / Black Ops 7) — render before_bot2_f200.png.
     let mp_settings = mp_settings.map(|mut st| {
-        let bots = (st.bot_count as usize).min(4);
-        for (i, rec) in nf_game::mp::bots::INITIAL_BOT_RECORDS.iter().take(bots).enumerate() {
-            st.players[4 + i].skin = rec.character() as u32;
+        let humans = st.human_count as usize;
+        let bots = (st.bot_count as usize)
+            .min(nf_game::mp::MP_MAX_SLOTS.saturating_sub(humans))
+            .min(st.players.len().saturating_sub(humans));
+        let recs = &nf_game::mp::bots::INITIAL_BOT_RECORDS;
+        for i in 0..bots {
+            st.players[humans + i].skin = recs[i % recs.len()].character() as u32;
         }
         st
     });
@@ -4723,6 +4731,19 @@ pub fn run() -> Result<()> {
         }).collect()).unwrap_or_default();
     let scene = if dev { load_dev(&iso, &level, all)? }
         else if !give_ids.is_empty() { load_weapons(&iso, &level, all, &give_ids)? }
+        else if let Some(i) = args.iter().position(|a| a == "--mp-match") {
+            // Render aid (mp body checks): `--mp-match H,B[,c0,c1,…]` — the online match load with
+            // H humans, B bots and the humans' character words c0.. (the `MP_skins` index), so a
+            // headless `--shot` draws the other slots' bodies (`--mp` carries no settings → no bodies).
+            let v: Vec<u32> = args.get(i + 1).context("--mp-match needs H,B[,chars]")?.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>()?;
+            let code = u32::from_str_radix(level.trim_end_matches(".bin"), 16).unwrap_or(0x0700_0023);
+            let mut st = nf_game::mp::MpSettings::deathmatch(code);
+            st.human_count = v.first().copied().unwrap_or(2).clamp(1, nf_game::mp::MP_MAX_SLOTS as u32);
+            st.bot_count = v.get(1).copied().unwrap_or(0);
+            st.player_count = st.human_count as u16;
+            for (slot, &c) in v.iter().skip(2).enumerate() { if slot < nf_game::mp::MP_MAX_SLOTS { st.players[slot].skin = c; } }
+            load_mp_carry(&iso, &level, all, None, st)?
+        }
         else if args.iter().any(|a| a == "--mp") { load_mp(&iso, &level, all)? }
         else { load(&iso, &level, all)? };
     let mut cam = start_camera(&scene);
@@ -4893,6 +4914,26 @@ pub fn run() -> Result<()> {
             let d = dev::Dev { menu: true, page, ..Default::default() };
             let f = dev::hud(&d, &scene, 1280.0 / 720.0, [[0.0; 4]; 4]);
             menu_frame.get_or_insert_with(|| overlay_for(&scene, 1280.0 / 720.0)).append(&f);
+        }
+        // Render aid (mp body checks): `--mp-look slot[,dist[,height[,angle]]]` — after the ticks, the
+        // camera stands `dist` (2.5) from that slot's body, `angle` (0 = in front) around it, `height`
+        // (1.2) above its feet, looking at its chest; the local view model is hidden.
+        if let Some(li) = args.iter().position(|a| a == "--mp-look") {
+            let v: Vec<f32> = args.get(li + 1).context("--mp-look needs slot[,dist,height,angle]")?.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>()?;
+            let slot = v.first().copied().unwrap_or(1.0) as usize;
+            let (dist, height, angle) = (v.get(1).copied().unwrap_or(2.5), v.get(2).copied().unwrap_or(1.2), v.get(3).copied().unwrap_or(0.0));
+            let mut scene = scene;
+            let st = scene.sim.as_ref().and_then(|s| s.mp_body_state(slot)).context("--mp-look: that slot has no drawn body")?;
+            let (p, yaw) = (st.0, st.1 + angle);
+            // The body's `pos` is Bond::pos (floor + 1.1) for humans, the bot's eye − BOT_EYE for bots.
+            let feet_y = p[1] - 1.1;
+            let eye = [p[0] + yaw.sin() * dist, feet_y + height, p[2] + yaw.cos() * dist];
+            let target = [p[0], feet_y + 1.0, p[2]];
+            let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+            let cam = Camera { pos: Vec3::new(eye[0], eye[1], eye[2]), yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV };
+            if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
+            eprintln!("--mp-look: slot {slot} body at {p:?} yaw {:.2} held {}", st.1, scene.sim.as_ref().map_or(0, |s| s.mp_held[slot]));
+            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
         }
         return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
     }

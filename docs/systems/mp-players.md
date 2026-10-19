@@ -188,6 +188,18 @@ mechanism the port's drone held-weapons use. The muzzle offset for effects is `w
   for death/transitions (the draw owns both clocks: phase += fwd·0.5 per tick from 0.37; the
   death/transition script time advances ×speed).
 
+### The drawn bodies (`Scene::mp_bodies`, mp-body-look)
+
+- Held weapon: `Sim::mp_body_held(slot)` — a bot's brain `weapon_id` (BOT_vars+0x768), a human's
+  session `held` (last nonzero while the remote is fed NEUTRAL). The attachment per weapon shows
+  only for the held one.
+- Light: the bodies ramp to their cel's ambient (`Sim::mp_body_chars` in `ramp_char_ambient`).
+- Walk: distance-driven — `Sim::mp_walk[slot]` += |speed|/60 × 0.5 per tick (init 0.37), the
+  walk frame from its z-only looping `DistanceTable`, the run synced and blended at t. Idle keeps
+  the clock read (holds its last frame). Strafe overlay / backwards walk not ported.
+- Render aids: `nf-view <iso> 07000023.bin --mp-match 2,2,0,9 --frame 60 --mp-look 1,2.6,1.3,0.6
+  --shot out.png`.
+
 ## Live checks for the main agent
 
 1. `MP_skins` bytes [D already — the ELF is the evidence]; the disc-vs-snapshot flag column:

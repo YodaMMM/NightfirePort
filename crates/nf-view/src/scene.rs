@@ -563,6 +563,16 @@ pub struct Sim {
     /// The scene character indices of the first-person view models (`Scene::view_models` values) — they follow
     /// Bond's cel instead of a drone's.
     pub view_model_chars: Vec<usize>,
+    /// mp-body-look: the MP bodies (slot, scene character index) — `Scene::mp_bodies`, so the
+    /// ambient ramp links each body to the cel it stands in like any other drawn object.
+    pub mp_body_chars: Vec<(usize, usize)>,
+    /// mp-body-look: per slot, the body's walk-cycle distance (`ANIMOBJ+0xdc`) — `AnimSetUpdate`
+    /// 0x1c0938 plays the locomotion pair distance-driven, accumulating `fwd × 0.5` per tick
+    /// [M, mp-players.md §3]. Draw-only state (never read by the sim, not in the lockstep hash).
+    pub mp_walk: [f32; nf_net::MAX_AGENTS],
+    /// mp-body-look: per slot, the last nonzero `mp_held` — a timed-out remote is fed `NEUTRAL`
+    /// (held 0) every tick, which would blink its body's gun away. Draw-only state.
+    pub mp_last_held: [u8; nf_net::MAX_AGENTS],
     /// fix-render3: the `ambient_at` call counter (a test guard for the posed-vertices hoist).
     pub ambient_lookups: std::cell::Cell<usize>,
     /// light-sun: BLData+0x962 — Bond's head sees the sun this tick (`ramp_char_ambient`).
@@ -1824,6 +1834,11 @@ impl Sim {
         let positions: Vec<Option<[f32; 3]>> = (0..self.char_ambient.len()).map(|ci| {
             if self.view_model_chars.contains(&ci) {
                 Some(self.bond.sphere_centre())
+            } else if let Some(&(slot, _)) = self.mp_body_chars.iter().find(|(_, c)| *c == ci) {
+                // mp-body-look: an MP body is a drawn object like a drone — `Lights_CalcAmbientLight`
+                // 0x1cb178 ramps its obj+0x100..0x102 toward the cel it stands in. Without this the
+                // bodies kept the 0xff sentinel: drawn at 1.0 where the arena cel says 0x46 (07000023).
+                self.mp_body_state(slot).map(|(p, _, _)| p)
             } else if let Some(di) = self.char_drone[ci] {
                 let d = &self.drones.list[di];
                 Some([d.pos[0], d.pos[1], d.pos[2]])
@@ -4344,6 +4359,22 @@ impl Sim {
         // `Lights_CalcAmbientLight` (0x1cb178) runs per moving object from `control_movement_object_handler`
         // (0x1336f8) — the last step of the tick, before the draw reads obj+0x100..0x102.
         self.ramp_char_ambient();
+        self.advance_mp_walk();
+    }
+
+    /// mp-body-look: each MP body's walk-cycle distance, once per tick (`AnimSetUpdate` 0x1c0938:96
+    /// writes `ANIMOBJ+0xd4 = fwd × set+0x28` and the distance clock adds it [M]). A body not drawn
+    /// (dead, the local slot) restarts at the set-init phase, as the respawn's set rebuild does
+    /// (`MP_ReSpawn` 0x185368 → `PlayerAnimSetInit` [M mp-players.md §3]). Draw-only state.
+    fn advance_mp_walk(&mut self) {
+        if self.mp.is_none() || self.mp_body_chars.is_empty() { return; }
+        for slot in 0..nf_net::MAX_AGENTS {
+            if self.mp_held[slot] != 0 { self.mp_last_held[slot] = self.mp_held[slot]; }
+            self.mp_walk[slot] = match self.mp_body_state(slot) {
+                Some((_, _, speed)) => self.mp_walk[slot] + speed / 60.0 * MP_WALK_STRIDE,
+                None => MP_WALK_INIT,
+            };
+        }
     }
 
     /// The HUD's per-tick state (`fix-hud`). Runs from the tick path (the game's HUD update is per
@@ -7115,7 +7146,7 @@ impl Scene {
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), mp_walk: [MP_WALK_INIT; nf_net::MAX_AGENTS], mp_last_held: [2; nf_net::MAX_AGENTS], ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],
@@ -7164,6 +7195,7 @@ impl Scene {
             // index-pairing away from a real divergence.
             sim.view_model_chars = (1..=0x72u8).filter_map(|wid| view_models.get(&wid).copied()).collect();
         }
+        if let Some(sim) = sim.as_mut() { sim.mp_body_chars = mp_bodies.clone(); }
         let models_0x800: HashMap<u32, bool> = level.maps.iter()
             .flat_map(|m| m.objects.iter().map(|o| (o.hashcode, o.flags & 0x800 != 0))).collect();
         // fix-portal4: sim-less loads never built a world — the chains fall back to the
@@ -7269,16 +7301,16 @@ impl Scene {
                 // held weapon's class and the stance (`PlayerAnimSetInitNormal`/`InitCrouch`
                 // 0x18fcd8/0x18fea0), the idle/walk pick by forward speed (`AnimSetUpdate`
                 // 0x1c0938) — `nf_formats::mpanim::mp_body_pose` [M, D the descriptors].
-                let held = s.mp_held.get(slot).copied().unwrap_or(2);
+                let held = s.mp_body_held(slot);
                 let class = nf_formats::mpanim::weapon_anim_class(&s.weapons, held);
                 let substate = s.mp_bonds.get(slot).and_then(|b| b.as_ref()).map_or(0, |b| b.substate);
-                let pick = self.mp_anim_sets.as_ref().map_or(0, |sets| {
-                    let st = nf_formats::mpanim::MpBodyState {
-                        mp: true, weapon: held, substate, fwd: speed / 60.0, strafe: 0.0,
-                        phase: 0.37, hold: 0, one_shot_time: 0.0, water_level: -9.9,
-                    };
-                    nf_formats::mpanim::mp_body_pose(sets, class, &st).script
-                });
+                let fwd = speed / 60.0;
+                let body_st = nf_formats::mpanim::MpBodyState {
+                    mp: true, weapon: held, substate, fwd, strafe: 0.0,
+                    phase: MP_WALK_INIT, hold: 0, one_shot_time: 0.0, water_level: -9.9,
+                };
+                let posed = self.mp_anim_sets.as_ref().map(|sets| (nf_formats::mpanim::mp_body_pose(sets, class, &body_st), sets.set(class, substate == 4)));
+                let pick = posed.map_or(0, |(p, _)| p.script);
                 let player_script = Some(pick).filter(|h| s.scripts.contains_key(h));
                 let st = if speed < 0.5 { nf_game::drone::anim_state::STAND_IDLE } else if speed < 4.5 { nf_game::drone::anim_state::WALK } else { nf_game::drone::anim_state::RUN };
                 let danim = s.tables.danim_for_state(st, 0);
@@ -7288,8 +7320,34 @@ impl Scene {
                     eprintln!("[mpbody] slot {slot} pos {pos:?} yaw {yaw:.2} speed {speed:.2} state {st:#x} danim {danim:?} script {script:x?} has {}", script.is_some_and(|h| s.scripts.contains_key(&h)));
                 }
                 let script = script?;
-                let time = 1.0 + s.scripts.get(&script)?.time_at(s.drones.frame as f32);
-                let mut local = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time)?;
+                // mp-body-look: the walk/run pair is distance-driven, not clock-driven. `AnimSetUpdate`
+                // 0x1c0938 appends the walk with flags |= 0x8d000000 and `+0xb4 = 1` (the distance-table
+                // clock, `AnimDistanceTableDistanceToFrame2` 0x1c4270, fed `ANIMOBJ+0xd4 = fwd × 0.5`),
+                // the run with `+0xb4 = 2` synced to the walk (`+0x4c`) at crossfade weight t (`+0x88`)
+                // [M 0x1c0938:160-190; mp-players.md §3]. The old clock read (`time_at(frame)` on these
+                // NON-looping scripts — 060009de is 86 frames, looping 0 [D]) froze every moving body in
+                // the walk's last frame 1.4 s into the match (renders before_bot2_f200/f215: same pose).
+                let walking = posed.is_some_and(|(p, set)| p.blend > 0.0 && p.script == script && set.walk == script);
+                let mut local = if walking {
+                    let (p, set) = posed.unwrap();
+                    let walk_q = s.scripts.get(&script)?.sequences().next().and_then(|(_, _, q)| s.seqs.get(&q))?;
+                    let table = nf_game::anim::DistanceTable::build(walk_q, 4, true)?;
+                    let mut w = s.mp_walk.get(slot).copied().unwrap_or(MP_WALK_INIT);
+                    let frame_a = table.distance_to_frame(&mut w, 0.0, true).max(1.0);
+                    let mut pose = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, frame_a)?;
+                    // The run, synced to the walk's normalised time (mode 2: Δ = (Mt−1)/(Ml−1) − (t−1)/(l−1)).
+                    let len_a = s.scripts.get(&script)?.length.max(2) as f32;
+                    if let Some(len_b) = s.scripts.get(&set.run).map(|r| r.length.max(2) as f32).filter(|_| set.run != script) {
+                        let frame_b = 1.0 + (frame_a - 1.0) / (len_a - 1.0) * (len_b - 1.0);
+                        if let Some(run) = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, set.run, frame_b) {
+                            nf_game::anim::blend(&mut pose, &run, p.blend.clamp(0.0, 1.0));
+                        }
+                    }
+                    pose
+                } else {
+                    let time = 1.0 + s.scripts.get(&script)?.time_at(s.drones.frame as f32);
+                    nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time)?
+                };
                 let hip = local.first().map_or(0.0, |r| r.0[1]);
                 if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
                 let world = anim::world_pose(&local, &c.skin);
@@ -7692,7 +7750,7 @@ impl Scene {
             }
             // An MP body's weapon draws only while its slot holds that weapon.
             if let Some(&(slot, w)) = self.mp_body_weapons.get(&(k as u32)) {
-                if self.sim.as_ref().is_none_or(|s| s.mp_held.get(slot) != Some(&w)) { return far; }
+                if self.sim.as_ref().is_none_or(|s| s.mp_body_held(slot) != w) { return far; }
             }
             if a.dropped {
                 // fix-objects: `!p.gone` — a TAKEN drop stays in the list as a tombstone (drone.rs
@@ -8536,6 +8594,11 @@ impl Scene {
 /// bot's `brain.pos` and every human row in its view sit at head height, so distances, sight lines
 /// and aimed rounds compare like with like [S].
 pub const BOT_EYE: f32 = nf_game::player::EYE;
+/// The walk-cycle distance a player's anim set starts at (`ANIMOBJ+0xdc` = 0.37 at `AnimSetInit`,
+/// passed by `PlayerAnimSetInitNormal` 0x18fcd8) [M mp-players.md §3, 0x1c6a48 disasm 0x1c6b58].
+pub const MP_WALK_INIT: f32 = 0.37;
+/// The set's stride factor (`set+0x28` = 0.5): `ANIMOBJ+0xd4 = fwd × 0.5` per tick [M 0x1c0938:96].
+pub const MP_WALK_STRIDE: f32 = 0.5;
 
 fn ray_body_hit(a: [f32; 3], b: [f32; 3], center: [f32; 3], radius: f32) -> Option<f32> {
     let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
@@ -8929,6 +8992,22 @@ impl Sim {
             // The bot's position is its eye (BOT_EYE above the feet); the body draws from the feet.
             let p = bot.brain.pos;
             Some(([p[0], p[1] - BOT_EYE, p[2]], bot.brain.yaw, s.mp_body_speed[slot]))
+        }
+    }
+
+    /// The weapon an MP body holds in its hand (the third-person mesh `weapon_data[w]+0x80` on datum
+    /// `+0x50`, `AnimObjectDraw` 0x1c4490:256-266): a bot's is its brain's current weapon
+    /// (`BOT_vars+0x768`, the id its shots fire — `bot_init` gives the P2K at spawn); a human's rides
+    /// the session input (`mp_held`). The bots have no session input — `step_net_combat` copies the
+    /// empty row's 0 into their `mp_held` every tick, which hid every bot's gun (the user's "bots
+    /// spawn with no weapon visible").
+    pub fn mp_body_held(&self, slot: usize) -> u8 {
+        if let Some(b) = self.mp.as_ref().and_then(|m| m.bots.iter().find(|b| b.slot == slot)) {
+            return b.brain.vars.weapon_id;
+        }
+        match self.mp_held.get(slot).copied() {
+            Some(0) | None => self.mp_last_held.get(slot).copied().unwrap_or(2),
+            Some(w) => w,
         }
     }
 
