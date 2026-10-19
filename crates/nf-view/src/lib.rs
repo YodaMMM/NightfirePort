@@ -5027,7 +5027,7 @@ pub fn run() -> Result<()> {
         st.time_limit = 10 * 60;
         // Test aid (NF_NET_BOTS=n): n bots in the flag host's match (the online bots check).
         if let Some(n) = std::env::var("NF_NET_BOTS").ok().and_then(|v| v.parse::<u32>().ok()) {
-            st.bot_count = n.min(4);
+            st.bot_count = n.min(nf_game::mp::MP_MAX_SLOTS as u32 - 1);
         }
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(1);
         st.seed = nanos | 1;

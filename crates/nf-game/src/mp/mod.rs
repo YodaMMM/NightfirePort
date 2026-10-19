@@ -577,7 +577,10 @@ impl MpMatch {
             // A record reading 0 hit points (the second INITIAL record) would make an unkillable
             // bot at 0/0 — the port gives it 100 [S, the record's field attribution is open].
             let max_hp = if rec.max_hp() == 0 { 100.0 } else { rec.max_hp() as f32 };
-            let brain = crate::mp::bots::BotBrain::bot_init(rec, slot as u8, pos, yaw);
+            let mut brain = crate::mp::bots::BotBrain::bot_init(rec, slot as u8, pos, yaw);
+            // mp-16-slots: the bot's index is its list position (the game's slot − 4 wraps once
+            // bots follow the humans — the visit stamps were indexed at 254).
+            brain.vars.bot_index = i as i16;
             let weapon = rec.preferred_weapon_class();
             self.game.slots[slot].pos = Some(pos);
             self.bots.push(MpBot {

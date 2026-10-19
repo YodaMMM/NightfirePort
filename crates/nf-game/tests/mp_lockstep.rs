@@ -180,7 +180,7 @@ fn build_sim(scen: u32, seed: u32, humans_only: bool) -> Sim {
             weapon_id: 0,
             mp_class: 0,
             is_obj_flag2: false,
-            visit: [0.0; 4],
+            visit: [0.0; 16],
         })
         .collect();
     let rec = bot_record();

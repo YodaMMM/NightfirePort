@@ -8668,7 +8668,7 @@ impl Sim {
                 .collect();
             if live.len() != self.mp_bot_pickups.len() {
                 self.mp_bot_pickups = live.iter().map(|&(pos, w, c)| nf_game::mp::bots::BotPickup {
-                    pos, weapon_id: w, mp_class: c, is_obj_flag2: false, visit: [0.0; 4],
+                    pos, weapon_id: w, mp_class: c, is_obj_flag2: false, visit: [0.0; 16],
                 }).collect();
             } else {
                 for (b, &(pos, w, c)) in self.mp_bot_pickups.iter_mut().zip(live.iter()) {
@@ -8695,13 +8695,17 @@ impl Sim {
                 if frame >= m.bots[i].respawn_at {
                     let slot = m.bots[i].slot;
                     let team = m.bots[i].team;
-                    let rec = nf_game::mp::bots::INITIAL_BOT_RECORDS[i].clone();
+                    // mp-16-slots: more than 4 bots cycle the disc's 4 records (as create_bots does).
+                    let rec = nf_game::mp::bots::INITIAL_BOT_RECORDS[i % nf_game::mp::bots::INITIAL_BOT_RECORDS.len()].clone();
                     let sp = m.get_spawn_point(team, slot, &mut self.drones.rng) as usize;
                     let p4 = m.spawns.points[sp].pos;
                     let yaw = m.spawns.points[sp].facing[1];
                     let feet = nf_game::player::Bond::stand_at(world, [p4[0], p4[1], p4[2]], yaw).pos;
                     let pos = [feet[0], feet[1] + BOT_EYE, feet[2]];
                     m.bots[i].brain = nf_game::mp::bots::BotBrain::bot_init(&rec, slot as u8, pos, yaw);
+                    // mp-16-slots: the bot's index is its list position (the game's slot − 4 wraps
+                    // once bots follow the humans).
+                    m.bots[i].brain.vars.bot_index = i as i16;
                     m.bots[i].health = m.bots[i].max_health;
                     m.bots[i].dead = false;
                     m.bots[i].respawns += 1;
@@ -8859,7 +8863,7 @@ impl Sim {
         // The visit stamps the brains left (`set_pickup_visit_time`'s MP_PICKUP+0x80 write).
         let mut pickups = pickups;
         for (i, (idx, t)) in stamps {
-            if let Some(p) = pickups.get_mut(idx) { if i < 4 { p.visit[i] = t; } }
+            if let Some(p) = pickups.get_mut(idx) { if i < p.visit.len() { p.visit[i] = t; } }
         }
         self.mp_bot_pickups = pickups;
     }

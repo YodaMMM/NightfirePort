@@ -650,7 +650,7 @@ pub struct BotPickup {
     /// `MPOBJECT+0x20` (s16) == 2 — the "only ≥ 5.0 away" special [M 0x126b88:420-421].
     pub is_obj_flag2: bool,
     /// +0x80 — the per-bot visit stamps [f32; 4] by bot index [M 0x129958:10-15].
-    pub visit: [f32; 4],
+    pub visit: [f32; 16],
 }
 
 
@@ -1292,7 +1292,7 @@ impl BotBrain {
                 if dist > dist_limit || dist <= 0.0 {
                     continue; // [M :397]
                 }
-                let visit = p.visit[self.vars.bot_index as usize];
+                let visit = p.visit.get(self.vars.bot_index as usize).copied().unwrap_or(0.0);
                 if pass < 3 {
                     if visit != 0.0 && g0.pref_byte & 0x20 == 0 {
                         continue; // [M :404-417 — visited pickups skipped until the last pass]
@@ -2222,7 +2222,7 @@ mod brain_tests {
                     weapon_id: 0x10,
                     mp_class: 0,
                     is_obj_flag2: false,
-                    visit: [0.0; 4],
+                    visit: [0.0; 16],
                 }],
                 others: vec![
                     OtherPlayer { index: 0, pos: [10.0, 1.6, 0.0], alive: true, team: 0, flags: 0, dist2: 0.0, health: 100.0, score: 0.0 },
@@ -2379,7 +2379,7 @@ mod brain_tests {
             weapon_id: 0x11,
             mp_class: 0,
             is_obj_flag2: false,
-            visit: [0.0; 4],
+            visit: [0.0; 16],
         });
         // first pick: the near pickup 0 wins (both class 0, weights equal → the highest score)
         r.step();
