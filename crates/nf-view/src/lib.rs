@@ -2184,6 +2184,8 @@ struct App {
     /// The online match's wall clock (set when its level swaps in): the lockstep runs to
     /// `elapsed · 60` ticks, catching up after a stall instead of dropping the stalled ticks.
     net_clock: Option<std::time::Instant>,
+    /// net-internet: the online tick budget's stall smoothing (`nf_net::pace::TickPacer`).
+    net_pacer: nf_net::pace::TickPacer,
     /// 700v6: the local fire pipeline spawned a round on the last tick (rides the next input).
     net_shot_pending: bool,
     /// The `--net-host` demo arm: the settings waiting for the first client to join (the lobby
@@ -2877,6 +2879,7 @@ impl App {
             self.net_await_load = false;
             self.net_tick = 0;
             self.net_clock = Some(std::time::Instant::now());
+            self.net_pacer.reset();
             // The first `input_delay` ticks have no sampled input (nothing ran that many ticks
             // before them): every machine submits NEUTRAL for its own slot there, so tick 0 is ready
             // at once instead of each window waiting on itself (the two-window freeze, 2026-10-18).
@@ -4143,10 +4146,16 @@ impl ApplicationHandler for App {
                                 eprintln!("[net] late join: slot {slot} arms at tick {join_tick}");
                                 self.net_join_pending = Some((slot, join_tick));
                                 // The joiner had no match clock (it never ran `swap_in_scene`'s
-                                // start): the host stands near the join tick, so the clock reads
-                                // from there and the budget (≤ 4 per frame) catches the replay up.
+                                // start): the host picked the join tick JOIN_MARGIN_TICKS past its
+                                // head, so the clock reads from the host's head and the budget
+                                // fast-forwards the replay gap (net-internet: reading from the join
+                                // tick itself put the clock 1.5 s ahead of every machine for the
+                                // rest of the match — the joiner never paced, it ran whatever had
+                                // arrived each frame and stalled between).
                                 if self.net_late_self == Some(slot as usize) {
-                                    self.net_clock = std::time::Instant::now().checked_sub(std::time::Duration::from_secs_f64(join_tick as f64 / 60.0));
+                                    let head = join_tick.saturating_sub(nf_net::session::JOIN_MARGIN_TICKS);
+                                    self.net_clock = std::time::Instant::now().checked_sub(std::time::Duration::from_secs_f64(head as f64 / 60.0));
+                                    self.net_pacer.reset();
                                 }
                             }
                     }
@@ -4191,12 +4200,15 @@ impl ApplicationHandler for App {
                         None => elapsed,
                     };
                     // Online: the tick budget is the match clock's, not the frame's — ticks a stall
-                    // held back run on the next frames (≤ 4 per frame), so a stall delays the match
-                    // instead of permanently slowing it (the two-window check ran at ~15 Hz).
+                    // held back run on the next frames, so a stall delays the match instead of
+                    // permanently slowing it (the two-window check ran at ~15 Hz). net-internet:
+                    // the backlog is made up at a bounded rate (`TickPacer`: 1.25x real time for a
+                    // short one, 2x up to a second, the old <= 4-per-frame fast-forward beyond) — a
+                    // burst of 4 ticks in one frame was a visible 67 ms jump after every stall.
                     let n_ticks = match (self.net.is_some(), self.net_clock) {
                         (true, Some(c)) => {
                             let target = (c.elapsed().as_secs_f64() * 60.0) as u32;
-                            target.saturating_sub(self.net_tick).min(4)
+                            self.net_pacer.ticks_for_frame(target, self.net_tick, dt as f64, 4)
                         }
                         _ => n_ticks,
                     };
@@ -4330,8 +4342,9 @@ impl ApplicationHandler for App {
                                 // on the last local tick — every machine resolves that shot identically.
                                 ni.held = sim.gun.weapon;
                                 ni.shot = std::mem::take(&mut self.net_shot_pending);
-                                let lead = session.0.borrow().input_delay();
-                                session.0.borrow_mut().local_input(self.net_tick + lead, ni);
+                                // net-internet: the session places it `delay_at(net_tick)` ahead
+                                // (the host's adaptive delay, switched at an announced tick).
+                                session.0.borrow_mut().submit_local(self.net_tick, ni);
                                 let ready = session.0.borrow_mut().ready_inputs(self.net_tick);
                                 match ready {
                                     Some(r) => {
@@ -4422,7 +4435,8 @@ impl ApplicationHandler for App {
                                 // NF_NET_RATE: once a second, the ticks run / stalls / frames.
                                 if self.net_tick % 60 == 0 && std::env::var_os("NF_NET_RATE").is_some() {
                                     let c = self.net_clock.map_or(0.0, |c| c.elapsed().as_secs_f64());
-                                    eprintln!("[netrate] tick {} at {:.1} s ({:.1}/s), stalls {}", self.net_tick, c, self.net_tick as f64 / c.max(1e-3), NET_STALLS.swap(0, std::sync::atomic::Ordering::Relaxed));
+                                    let (rtt, delay, bytes, pkts) = session.0.borrow().net_stats();
+                                    eprintln!("[netrate] tick {} at {:.1} s ({:.1}/s), stalls {}, rtt {} ms, delay {} ticks, sent {} B / {} pkts", self.net_tick, c, self.net_tick as f64 / c.max(1e-3), NET_STALLS.swap(0, std::sync::atomic::Ordering::Relaxed), rtt.map_or("-".to_string(), |r| format!("{r:.0}")), delay, bytes, pkts);
                                 }
                                 // Render-check aid (NF_NET_SHOT=<tick>): the F12 capture at that match tick.
                                 if std::env::var("NF_NET_SHOT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(self.net_tick) {
@@ -4569,6 +4583,9 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+                    // net-internet: the inputs this frame's ticks scheduled leave now, not at the
+                    // next frame's poll (a frame less of latency on every remote input).
+                    if let Some(session) = self.net.as_ref() { session.0.borrow_mut().flush(); }
                     // Dev mode after-tick: god mode / infinite ammo (the game's own state, set the way the game sets it).
                     if debrief_opened { self.grab(false); } // the menus own the cursor again
                     if let Some(d) = self.dev.as_deref_mut() { d.after_tick(&mut self.scene); }
@@ -5150,7 +5167,7 @@ pub fn run() -> Result<()> {
     let mut app = App { sound, scene, cam, gfx: None, keys: HashSet::new(), grabbed: false, trigger: false, aiming: false, last: std::time::Instant::now(), choice, anim_time: time, paused: false, opts, noclip: false, just: HashSet::new(), turn: 0.0, look: 0.0, weapon_cycle: 0, gadget_cycle: 0, weapon_switch_to: None, zoom: false, dev: dev.then(|| Box::new(dev::Dev { infinite_ammo: true, ..Default::default() })), notex, nofog, iso, pending_level: None, pending_weapon_assets: None, entry_save: None, all, recorder: None, replay: None, replay_idx: 0, prev_lock_ch: false, ticked: false, frame_ticks: 0, menu_clock: 0.0, fe_clock: 0.0, selected_difficulty: 2, zoom_cycle: 0, pending_mission_end: false, pending_mp_debrief: None, force_channel, cam_prev: None, cam_cur: None, pal_prev: None, pal_cur: None, pal_blend: Vec::new(), pal_moving: Vec::new(), fps_cap, fps_meter: FpsMeter::default(), frame_start: std::time::Instant::now(), panel: None, panel_level: 0, panel_frames: 0, fe: None, level_code: 0, fe_music_page: None, menu_handle: 0, lang: None, profile_session: menu::ProfileSession::default(), #[cfg(feature = "gamepad")] pad: pad_backend,
         movie: None, devwin: None,
         audio_paused: false, loading_art: None, loading_hint: Default::default(), menu_pointer: None,
-        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_menu_load: false, net_late_self: None, net_rejoin: None, net_finished: None, net_clock: None, net_shot_pending: false, net_armed: None,
+        net: None, net_lobby: None, net_local_slot: 0, net_tick: 0, pending_mp_settings: None, net_await_load: false, net_menu_load: false, net_late_self: None, net_rejoin: None, net_finished: None, net_clock: None, net_pacer: nf_net::pace::TickPacer::new(), net_shot_pending: false, net_armed: None,
         net_join_pending: None, net_late_handover: None,
         async_load: None,
         music_bank_flip: false,

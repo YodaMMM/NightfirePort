@@ -192,6 +192,18 @@ pub struct Config {
     pub resend_ms: u64,
     /// Dropped-client behaviour (see [`DropPolicy`]).
     pub drop_policy: DropPolicy,
+    /// net-internet: the host measures every peer's RTT (PING/PONG) and picks the input delay
+    /// so a remote input normally arrives before its tick runs; the choice is announced
+    /// (DELAY) ahead of a tick boundary and every machine switches there. Off = `input_delay`
+    /// for the whole match. The app must schedule through [`Session::submit_local`] (it
+    /// follows the schedule); `local_input` callers keep their own fixed lead.
+    pub adaptive_delay: bool,
+    /// The adaptive delay's range, in ticks.
+    pub min_delay: u32,
+    pub max_delay: u32,
+    /// PING interval per peer (0 = never; the RTT then stays unknown). Pings also keep the
+    /// link alive, so with pings on the keepalive rarely fires.
+    pub ping_ms: u64,
 }
 
 impl Default for Config {
@@ -200,16 +212,37 @@ impl Default for Config {
             protocol_version: PROTOCOL_VERSION,
             build_id: crate::DEFAULT_BUILD_ID,
             input_delay: 3,
-            redundancy: 4,
+            redundancy: 2,
             hash_every: 30,
-            timeout_ms: 5000,
+            // net-internet: 8 s — a Wi-Fi roam or a home router's hiccup lasts seconds; 5 s
+            // dropped players a real link brings back [S].
+            timeout_ms: 8000,
             keepalive_ms: 250,
             hello_retry_ms: 400,
             resend_ms: 33,
             drop_policy: DropPolicy::Neutral,
+            adaptive_delay: false,
+            min_delay: 2,
+            max_delay: 15,
+            ping_ms: 250,
         }
     }
 }
+
+/// One tick in ms (the game's fixed 60 Hz).
+const TICK_MS: f64 = 1000.0 / 60.0;
+/// The adaptive delay is re-evaluated every this many ticks of the host's head …
+const DELAY_EVAL_TICKS: u32 = 30;
+/// … a change takes effect this many ticks past the host's head (every machine — clients
+/// run behind the host — hears of it before it runs that tick) …
+const DELAY_LEAD_TICKS: u32 = 30;
+/// … and a lower delay needs this many evaluations in a row asking for it (≈ 3 s; a rise
+/// is immediate — a stall costs more than a tick of extra latency).
+const DELAY_LOWER_EVALS: u32 = 6;
+/// Extra ticks over the measured need (srtt + 2·rttvar).
+const DELAY_SLACK: u32 = 1;
+/// PINGs per loss-estimate window (20 × 250 ms = 5 s).
+const LOSS_WINDOW: u32 = 20;
 
 /// Errors from explicit session calls.
 #[derive(Debug)]
@@ -250,6 +283,133 @@ struct Peer {
     /// longer than `hello_retry_ms` sends two) gets the SAME tick again. A
     /// second pick moved the join tick on some machines and not others.
     announced: Option<u32>,
+    /// net-internet send state: the newest tick sent to this peer …
+    sent_hi: Option<u32>,
+    /// … a data INPUT arrived since our last INPUT to this peer (our ack must reach it even
+    /// when we have nothing new to send — see `plan_inputs`) …
+    ack_dirty: bool,
+    /// … when we last sent this peer an INPUT …
+    last_input_ms: u64,
+    /// … and when its ack of our sends last advanced (the retransmit timer's base).
+    progress_ms: u64,
+    /// Smoothed RTT and its mean deviation (ms; TCP's estimator, RFC 6298), from PONGs.
+    srtt_ms: f64,
+    rttvar_ms: f64,
+    rtt_samples: u32,
+    last_ping_ms: u64,
+    /// Host: when the current DELAY announcement last went to this peer.
+    delay_sent_ms: u64,
+    /// The peer's ack bitmap for the ticks past its contiguous ack (fast retransmit).
+    their_bits: u32,
+    /// The first fresh tick of each of our last `redundancy - 1` fresh packets (the
+    /// reach-back of the next one).
+    fresh_starts: std::collections::VecDeque<u32>,
+    /// PINGs sent / PONGs back in the current window, and the round-trip loss of the last
+    /// full window (per mille) — the link's measured loss raises this peer's redundancy.
+    pings_sent: u32,
+    pongs_back: u32,
+    rt_loss_pm: u32,
+}
+
+impl Peer {
+    fn new(addr: SocketAddr, slot: u8, codename: String, now_ms: u64) -> Peer {
+        Peer {
+            addr,
+            slot,
+            codename,
+            connected: true,
+            last_recv_ms: now_ms,
+            last_send_ms: now_ms,
+            their_ack: None,
+            our_ack: 0,
+            recv_ticks: BTreeSet::new(),
+            remote_hashes: HashMap::new(),
+            go_confirmed: false,
+            last_go_ms: 0,
+            late_serve: None,
+            late_joined: false,
+            announced: None,
+            sent_hi: None,
+            ack_dirty: false,
+            last_input_ms: 0,
+            progress_ms: now_ms,
+            srtt_ms: 0.0,
+            rttvar_ms: 0.0,
+            rtt_samples: 0,
+            last_ping_ms: 0,
+            delay_sent_ms: 0,
+            their_bits: 0,
+            fresh_starts: std::collections::VecDeque::new(),
+            pings_sent: 0,
+            pongs_back: 0,
+            rt_loss_pm: 0,
+        }
+    }
+
+    /// Packets each fresh tick rides for this peer: the configured redundancy, +1 when the
+    /// smoothed round-trip loss is 4 % or more (≈ 2 % each way), +2 at 12 % or more.
+    fn redundancy(&self, base: u32) -> u32 {
+        base.max(1) + match self.rt_loss_pm {
+            0..=39 => 0,
+            40..=119 => 1,
+            _ => 2,
+        }
+    }
+
+    /// One PING went out; every `LOSS_WINDOW` pings the window's PONG count becomes the
+    /// round-trip loss estimate.
+    fn ping_sent(&mut self) {
+        if self.pings_sent >= LOSS_WINDOW {
+            // The last PING's PONG may still be in flight: count the window one short.
+            let n = self.pings_sent - 1;
+            let back = self.pongs_back.min(n);
+            let window = 1000 - back * 1000 / n.max(1);
+            // Smoothed over windows (one unlucky window does not raise the redundancy for
+            // long; a lossy link reaches its level within a couple of windows).
+            self.rt_loss_pm = (self.rt_loss_pm + window) / 2;
+            self.pings_sent = 0;
+            self.pongs_back = self.pongs_back.saturating_sub(back);
+        }
+        self.pings_sent += 1;
+    }
+
+    /// The ack the peer sent (monotonic: a reordered older packet never moves it back —
+    /// protocol 4 let a late datagram rewind it, one half of the loopback wedge).
+    fn take_ack(&mut self, ack_tick: u32, ack_bits: u32, now_ms: u64) {
+        if ack_tick == u32::MAX {
+            return;
+        }
+        match self.their_ack {
+            Some(a) if ack_tick < a => {}
+            Some(a) if ack_tick == a => self.their_bits |= ack_bits,
+            _ => {
+                self.their_ack = Some(ack_tick);
+                self.their_bits = ack_bits;
+                self.progress_ms = now_ms;
+            }
+        }
+    }
+
+    fn rtt_sample(&mut self, rtt: f64) {
+        if self.rtt_samples == 0 {
+            self.srtt_ms = rtt;
+            self.rttvar_ms = rtt / 2.0;
+        } else {
+            self.rttvar_ms = 0.75 * self.rttvar_ms + 0.25 * (self.srtt_ms - rtt).abs();
+            self.srtt_ms = 0.875 * self.srtt_ms + 0.125 * rtt;
+        }
+        self.rtt_samples += 1;
+    }
+
+    /// The retransmit timeout for an unacked input (RFC 6298's srtt + 4·rttvar, plus a tick
+    /// for the peer's frame pacing), clamped to [2·resend, 1 s]; 250 ms before any sample.
+    fn rto_ms(&self, resend_ms: u64) -> u64 {
+        let floor = (2 * resend_ms).max(30);
+        if self.rtt_samples == 0 {
+            return 250u64.max(floor);
+        }
+        ((self.srtt_ms + 4.0 * self.rttvar_ms + TICK_MS) as u64).clamp(floor, 1000)
+    }
 }
 
 /// Host: the per-peer late-join transfer state.
@@ -289,7 +449,7 @@ const JOIN_LOG_WINDOW: u16 = 16;
 /// Ticks between the host's live head and the announced join tick: the
 /// joiner — already caught up at JOIN_READY — schedules its inputs there and
 /// every peer runs the join-spawn at that boundary.
-const JOIN_MARGIN_TICKS: u32 = 90;
+pub const JOIN_MARGIN_TICKS: u32 = 90;
 
 /// A lockstep session. See the module docs for the API contract.
 pub struct Session<T: Transport> {
@@ -370,6 +530,25 @@ pub struct Session<T: Transport> {
     /// [`Session::take_stray`] so the reachability layer can share the game socket (its public
     /// mapping IS the game port's). Capped at [`STRAY_CAP`]; the oldest are dropped.
     stray: Vec<(SocketAddr, Vec<u8>)>,
+    /// net-internet: the input-delay schedule, (from_tick, delay) ascending — the host's
+    /// announcements (DELAY); empty = `cfg.input_delay` throughout.
+    delay_sched: Vec<(u32, u32)>,
+    /// The next own-slot tick with no scheduled input (`submit_local` / `local_input`).
+    sched_next: Option<u32>,
+    /// A sample `submit_local` could not place (the delay dropped: its tick was already
+    /// scheduled) — its one-shot lanes merge into the next sample.
+    carry: Option<Input>,
+    /// Host: the newest tick relayed to the clients — every tick up to it has every input
+    /// (`relay_horizon`), which can run ahead of `last_ready`: the relay leaves as soon as a
+    /// tick is complete, not when the host's own clock reaches it.
+    committed_hi: Option<u32>,
+    /// Host: the next head tick the adaptive delay is re-evaluated at, and how many
+    /// evaluations in a row asked for a lower delay.
+    delay_eval_tick: u32,
+    lower_streak: u32,
+    /// Bytes / datagrams this session sent (diagnostics: the app's bytes/s readout).
+    sent_bytes: u64,
+    sent_packets: u64,
 }
 
 /// net-p2p: at most this many un-taken stray datagrams are held [S port design].
@@ -383,9 +562,42 @@ fn slot0_human() -> [bool; MAX_AGENTS] {
     m
 }
 
-/// The all-agents bitmask over [`MAX_AGENTS`] (16 bits set [S mp-16-slots]).
-fn all_agents_mask() -> u16 {
-    ((1u32 << MAX_AGENTS) - 1) as u16
+/// A fill tick's input (the delay rose): the held lanes of `inp` only — no mouse delta, no
+/// one-shot press, no fired round, so nothing happens twice.
+fn held_lanes(inp: &Input) -> Input {
+    Input {
+        turn: 0.0,
+        look: 0.0,
+        jump: false,
+        crouch: false,
+        mode_switch: false,
+        reload: false,
+        use_key: false,
+        weapon_cycle: 0,
+        gadget_cycle: 0,
+        switch_to: None,
+        shot: false,
+        ..*inp
+    }
+}
+
+/// A dropped sample (the delay fell) merged into the next: the mouse deltas add, presses
+/// and a fired round survive; held lanes are the newer sample's.
+fn merge_carry(c: &Input, n: &Input) -> Input {
+    Input {
+        turn: c.turn + n.turn,
+        look: c.look + n.look,
+        jump: c.jump || n.jump,
+        crouch: c.crouch || n.crouch,
+        mode_switch: c.mode_switch || n.mode_switch,
+        reload: c.reload || n.reload,
+        use_key: c.use_key || n.use_key,
+        weapon_cycle: c.weapon_cycle.saturating_add(n.weapon_cycle),
+        gadget_cycle: c.gadget_cycle.saturating_add(n.gadget_cycle),
+        switch_to: n.switch_to.or(c.switch_to),
+        shot: c.shot || n.shot,
+        ..*n
+    }
 }
 
 impl<T: Transport> Session<T> {
@@ -429,6 +641,14 @@ impl<T: Transport> Session<T> {
             listen_emitted: false,
             match_ended: false,
             stray: Vec::new(),
+            delay_sched: Vec::new(),
+            sched_next: None,
+            carry: None,
+            committed_hi: None,
+            delay_eval_tick: 0,
+            lower_streak: 0,
+            sent_bytes: 0,
+            sent_packets: 0,
         }
     }
 
@@ -469,6 +689,14 @@ impl<T: Transport> Session<T> {
             listen_emitted: false,
             match_ended: false,
             stray: Vec::new(),
+            delay_sched: Vec::new(),
+            sched_next: None,
+            carry: None,
+            committed_hi: None,
+            delay_eval_tick: 0,
+            lower_streak: 0,
+            sent_bytes: 0,
+            sent_packets: 0,
         }
     }
 
@@ -570,8 +798,49 @@ impl<T: Transport> Session<T> {
     /// so nothing is lost.
     /// The match's input lead: the app submits the input sampled while running tick `t` for
     /// tick `t + input_delay()` (the host's config; a client takes it from the WELCOME).
+    /// With the adaptive delay this is the delay for the next tick to run (the schedule's
+    /// entry in force there).
     pub fn input_delay(&self) -> u32 {
-        self.cfg.input_delay
+        self.delay_at(self.next_run_tick())
+    }
+
+    /// The input delay in force at `tick` (the schedule's last entry at or before it).
+    pub fn delay_at(&self, tick: u32) -> u32 {
+        self.delay_sched.iter().rev().find(|(f, _)| *f <= tick).map_or(self.cfg.input_delay, |(_, d)| *d)
+    }
+
+    /// The input-delay schedule (from_tick, delay) — identical on every machine that heard
+    /// every announcement in time (net-internet; the agreement test compares them).
+    pub fn delay_schedule(&self) -> &[(u32, u32)] {
+        &self.delay_sched
+    }
+
+    fn next_run_tick(&self) -> u32 {
+        self.last_ready.map_or(self.start_tick, |t| t.wrapping_add(1))
+    }
+
+    /// The smoothed RTT to each peer in ms, by slot (`None` before the first PONG).
+    pub fn peer_rtts(&self) -> Vec<(u8, Option<f64>)> {
+        let peers: Vec<&Peer> = match &self.role {
+            Role::Host { peers, .. } => peers.iter().filter(|p| p.connected).collect(),
+            Role::Client { host_peer, .. } => host_peer.iter().collect(),
+        };
+        peers.iter().map(|p| (p.slot, (p.rtt_samples > 0).then_some(p.srtt_ms))).collect()
+    }
+
+    /// Diagnostics: each peer's ack of our input sends, by slot (`None` = nothing acked).
+    pub fn peer_acks(&self) -> Vec<(u8, Option<u32>)> {
+        let peers: Vec<&Peer> = match &self.role {
+            Role::Host { peers, .. } => peers.iter().filter(|p| p.connected).collect(),
+            Role::Client { host_peer, .. } => host_peer.iter().collect(),
+        };
+        peers.iter().map(|p| (p.slot, p.their_ack)).collect()
+    }
+
+    /// Bytes and datagrams this session has sent (payload; add the 28-byte UDP/IPv4 header
+    /// per datagram for the link's view).
+    pub fn sent_totals(&self) -> (u64, u64) {
+        (self.sent_bytes, self.sent_packets)
     }
 
     pub fn local_input(&mut self, tick: u32, input: Input) {
@@ -579,6 +848,49 @@ impl<T: Transport> Session<T> {
             return;
         }
         self.inputs[self.local_slot as usize].insert(tick, input);
+        let next = tick.wrapping_add(1);
+        if self.sched_next.map_or(true, |n| next > n) {
+            self.sched_next = Some(next);
+        }
+    }
+
+    /// net-internet: schedule the local input sampled while running `run_tick` — it lands on
+    /// `run_tick + delay_at(run_tick)`, following the (adaptive) delay schedule. When the
+    /// delay rose, the ticks the old lead never reached are filled with this sample's held
+    /// lanes (sticks, aim, trigger, the held weapon — no mouse delta and no one-shot press,
+    /// so nothing doubles); when it fell, the sample's tick was already scheduled, so its
+    /// one-shot lanes (mouse delta, presses, a fired round) carry into the next sample.
+    /// Never overwrites a scheduled tick (it may already be on the wire).
+    pub fn submit_local(&mut self, run_tick: u32, input: Input) {
+        if let Role::Client { slot: None, .. } = &self.role {
+            return;
+        }
+        let target = run_tick.wrapping_add(self.delay_at(run_tick));
+        let mut inp = input;
+        if let Some(c) = self.carry.take() {
+            inp = merge_carry(&c, &inp);
+        }
+        let slot = self.local_slot as usize;
+        if let Some(next) = self.sched_next {
+            if target < next {
+                self.carry = Some(inp);
+                return;
+            }
+            let fill = held_lanes(&inp);
+            for t in next..target {
+                self.inputs[slot].insert(t, fill);
+            }
+        }
+        self.inputs[slot].insert(target, inp);
+        self.sched_next = Some(target.wrapping_add(1));
+    }
+
+    /// Send what is due now without draining the socket — the app calls it right after its
+    /// ticks, so the inputs just scheduled leave this frame instead of at the next poll.
+    pub fn flush(&mut self, now_ms: u64) {
+        self.now_ms = now_ms;
+        self.transport.set_now(now_ms);
+        self.pump_peers(now_ms);
     }
 
     /// Host: record the per-tick inputs a tick actually RAN with (the app
@@ -722,6 +1034,13 @@ impl<T: Transport> Session<T> {
             }
             Role::Client { .. } => return Err(SessionError::NotHost),
         };
+        // net-internet: the first delay comes from the lobby's RTT samples (the pings ran
+        // while the players picked); the DELAY announcement rides the next pumps.
+        if self.cfg.adaptive_delay {
+            let d0 = self.needed_delay().unwrap_or(self.cfg.input_delay);
+            self.delay_sched = vec![(first_tick, d0)];
+            self.delay_eval_tick = first_tick + DELAY_EVAL_TICKS;
+        }
         let pkt = Packet::Go { first_tick };
         for a in addrs {
             self.send_packet(a, &pkt);
@@ -750,6 +1069,8 @@ impl<T: Transport> Session<T> {
     /// net-p2p: send a raw datagram from the session's own socket (STUN binding requests, hole
     /// punches) — the NAT mapping the peer must reach is this socket's.
     pub fn send_raw(&mut self, to: SocketAddr, data: &[u8]) {
+        self.sent_bytes += data.len() as u64;
+        self.sent_packets += 1;
         self.transport.send(to, data);
     }
 
@@ -763,6 +1084,40 @@ impl<T: Transport> Session<T> {
         self.transport.local_addr()
     }
 
+    /// Diagnostics: a one-line dump of the lockstep cursors (last ready tick, per peer the
+    /// acks both ways and the newest received tick) — what a wedged run prints.
+    pub fn debug_state(&self) -> String {
+        let mut s = format!(
+            "slot={} started={} last_ready={:?} stalled={} newest_local={:?}",
+            self.local_slot,
+            self.started,
+            self.last_ready,
+            self.stalled,
+            self.inputs[self.local_slot as usize].keys().max()
+        );
+        let peers: Vec<&Peer> = match &self.role {
+            Role::Host { peers, .. } => peers.iter().collect(),
+            Role::Client { host_peer, .. } => host_peer.iter().collect(),
+        };
+        for p in peers {
+            s.push_str(&format!(
+                " | peer slot={} their_ack={:?} our_ack={} recv_max={:?} recv_n={} last_recv={}",
+                p.slot,
+                p.their_ack,
+                p.our_ack,
+                p.recv_ticks.iter().next_back(),
+                p.recv_ticks.len(),
+                p.last_recv_ms
+            ));
+        }
+        for sl in 0..MAX_AGENTS {
+            if let Some(m) = self.inputs[sl].keys().max() {
+                s.push_str(&format!(" in[{sl}]max={m}"));
+            }
+        }
+        s
+    }
+
     // ---------- internals ----------
     fn send_to_peers(&mut self, pkt: &Packet) {
         let mut buf = Vec::new();
@@ -772,11 +1127,15 @@ impl<T: Transport> Session<T> {
                 for p in peers.iter() {
                     if p.connected {
                         self.transport.send(p.addr, &buf);
+                        self.sent_bytes += buf.len() as u64;
+                        self.sent_packets += 1;
                     }
                 }
             }
             Role::Client { host, .. } => {
                 self.transport.send(*host, &buf);
+                self.sent_bytes += buf.len() as u64;
+                self.sent_packets += 1;
             }
         }
     }
@@ -784,7 +1143,98 @@ impl<T: Transport> Session<T> {
     fn send_packet(&mut self, to: SocketAddr, pkt: &Packet) {
         let mut buf = Vec::new();
         proto::encode(pkt, &mut buf);
+        self.sent_bytes += buf.len() as u64;
+        self.sent_packets += 1;
         self.transport.send(to, &buf);
+    }
+
+    /// Host: the adaptive delay for the peers' measured RTTs — a remote input sampled `d`
+    /// ticks ahead must cover a round trip (the client's sample reaches the host, the
+    /// host's relay reaches every client: the worst client's RTT bounds both) plus its
+    /// jitter (2·rttvar) plus a tick of frame pacing. `None` before any RTT sample.
+    fn needed_delay(&self) -> Option<u32> {
+        let Role::Host { peers, .. } = &self.role else { return None };
+        let worst = peers
+            .iter()
+            .filter(|p| p.connected && p.rtt_samples > 0)
+            .map(|p| p.srtt_ms + 2.0 * p.rttvar_ms)
+            .fold(None, |a: Option<f64>, v| Some(a.map_or(v, |a| a.max(v))))?;
+        let d = (worst / TICK_MS).ceil() as u32 + DELAY_SLACK;
+        Some(d.clamp(self.cfg.min_delay.max(1), self.cfg.max_delay.max(self.cfg.min_delay.max(1))))
+    }
+
+    /// Host: re-evaluate the adaptive delay every `DELAY_EVAL_TICKS` of the head; a change is
+    /// scheduled `DELAY_LEAD_TICKS` past the head and announced (re-sent by `pump_peers`).
+    fn adapt_delay(&mut self) {
+        if !self.cfg.adaptive_delay || !self.started || !matches!(self.role, Role::Host { .. }) {
+            return;
+        }
+        let head = self.head_tick();
+        if head < self.delay_eval_tick {
+            return;
+        }
+        self.delay_eval_tick = head + DELAY_EVAL_TICKS;
+        let Some(need) = self.needed_delay() else { return };
+        let cur = self.delay_sched.last().map_or(self.cfg.input_delay, |e| e.1);
+        let pick = if need > cur {
+            self.lower_streak = 0;
+            Some(need)
+        } else if need + 1 < cur {
+            self.lower_streak += 1;
+            if self.lower_streak >= DELAY_LOWER_EVALS {
+                self.lower_streak = 0;
+                Some(need + 1)
+            } else {
+                None
+            }
+        } else {
+            self.lower_streak = 0;
+            None
+        };
+        if let Some(d) = pick {
+            let from = head + DELAY_LEAD_TICKS;
+            self.delay_sched.retain(|e| e.0 < from);
+            self.delay_sched.push((from, d));
+            // Bounded history: only the entries a future tick can still need (and the one in
+            // force now) are kept.
+            let now_tick = self.next_run_tick();
+            while self.delay_sched.len() > 2 && self.delay_sched[1].0 <= now_tick {
+                self.delay_sched.remove(0);
+            }
+            if let Role::Host { peers, .. } = &mut self.role {
+                for p in peers.iter_mut() {
+                    p.delay_sent_ms = 0; // announce at once
+                }
+            }
+        }
+    }
+
+    /// Host: the newest tick the match has reached — run or relayed.
+    fn head_tick(&self) -> u32 {
+        match (self.last_ready, self.committed_hi) {
+            (Some(a), Some(b)) => a.max(b),
+            (Some(a), None) | (None, Some(a)) => a,
+            (None, None) => self.start_tick,
+        }
+    }
+
+    /// Host: extend `committed_hi` over every tick whose inputs are all known (bounded),
+    /// returning the newest tick the clients can be sent.
+    fn relay_horizon(&mut self) -> Option<u32> {
+        let mut c = match (self.last_ready, self.committed_hi) {
+            (Some(a), Some(b)) => a.max(b).wrapping_add(1),
+            (Some(a), None) | (None, Some(a)) => a.wrapping_add(1),
+            (None, None) => self.start_tick,
+        };
+        let limit = c.wrapping_add(256);
+        while c != limit && (0..MAX_AGENTS).all(|s| self.tick_input(s, c).is_some()) {
+            self.committed_hi = Some(c);
+            c = c.wrapping_add(1);
+        }
+        match (self.last_ready, self.committed_hi) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     fn human_mask(&self) -> u16 {
@@ -801,6 +1251,7 @@ impl<T: Transport> Session<T> {
     pub fn poll(&mut self, now_ms: u64) -> Vec<Event> {
         let mut events = Vec::new();
         self.now_ms = now_ms;
+        self.transport.set_now(now_ms);
         if !self.listen_emitted {
             self.listen_emitted = true;
             events.push(Event::Listening);
@@ -833,7 +1284,9 @@ impl<T: Transport> Session<T> {
                 }
             }
         }
-        // 3. Per-peer work (input windows, GO retransmit, keepalives).
+        // 3. Per-peer work (input windows, GO retransmit, pings, keepalives), after the
+        //    host's adaptive-delay evaluation (net-internet).
+        self.adapt_delay();
         self.pump_peers(now_ms);
         // 3b. The late-join confirm retransmit (client).
         if let Some(due) = self.late_confirm_due {
@@ -850,82 +1303,59 @@ impl<T: Transport> Session<T> {
     }
 
     fn pump_peers(&mut self, now_ms: u64) {
-        struct PeerSnap {
-            addr: SocketAddr,
-            slot: u8,
-            their_ack: Option<u32>,
-            our_ack: u32,
-            recv_ticks: Vec<u32>,
-            idle_for_ms: u64,
-            late_serving: bool,
-        }
-        // Phase 1: snapshot peers and build packets against &self.
-        let snaps: Vec<PeerSnap> = match &self.role {
-            Role::Host { peers, .. } => peers
-                .iter()
-                .filter(|p| p.connected)
-                .map(|p| PeerSnap {
-                    addr: p.addr,
-                    slot: p.slot,
-                    their_ack: p.their_ack,
-                    our_ack: p.our_ack,
-                    recv_ticks: p.recv_ticks.iter().copied().collect(),
-                    idle_for_ms: now_ms.saturating_sub(p.last_send_ms),
-                    late_serving: p.late_serve.is_some(),
-                })
-                .collect(),
-            Role::Client { host_peer, .. } => host_peer
-                .as_ref()
-                .map(|p| {
-                    vec![PeerSnap {
-                        addr: p.addr,
-                        slot: p.slot,
-                        their_ack: p.their_ack,
-                        our_ack: p.our_ack,
-                        recv_ticks: p.recv_ticks.iter().copied().collect(),
-                        idle_for_ms: now_ms.saturating_sub(p.last_send_ms),
-                        late_serving: false,
-                    }]
-                })
-                .unwrap_or_default(),
+        // Take the peers out for the pass: planning reads the session (`&self`) while it
+        // updates each peer's send state. Nothing in here dispatches packets in, so the
+        // peers cannot be needed elsewhere meanwhile; they go back at the end.
+        let mut peers: Vec<Peer> = match &mut self.role {
+            Role::Host { peers, .. } => std::mem::take(peers),
+            Role::Client { host_peer, .. } => host_peer.take().into_iter().collect(),
+        };
+        let is_host = matches!(self.role, Role::Host { .. });
+        // The newest tick each peer can be sent: host — the relay horizon (every input
+        // known); client — its own newest scheduled input.
+        let newest: Option<u32> = if !self.started {
+            None
+        } else if is_host {
+            self.relay_horizon()
+        } else {
+            self.client_newest()
         };
         let mut plans: Vec<(SocketAddr, Packet)> = Vec::new();
-        for s in &snaps {
+        for p in peers.iter_mut().filter(|p| p.connected) {
+            let before = plans.len();
             // A late-join transfer in flight suppresses the live input relay
             // to that peer: the log covers the history, and the relay's ack
             // base resumes at the snapshot on handover.
-            let serving = s.late_serving;
-            if self.started && !serving {
-                if let Some(pkt) = self.build_input_packet(s.slot, s.their_ack, s.our_ack, &s.recv_ticks) {
-                    if let Packet::Input { ack_tick, .. } = &pkt {
-                        if let Role::Host { peers, .. } = &mut self.role {
-                            if let Some(p) = peers.iter_mut().find(|p| p.addr == s.addr) {
-                                if *ack_tick != u32::MAX {
-                                    p.our_ack = *ack_tick;
-                                }
-                            }
-                        } else if let Role::Client { host_peer, .. } = &mut self.role {
-                            if let Some(p) = host_peer {
-                                if *ack_tick != u32::MAX {
-                                    p.our_ack = *ack_tick;
-                                }
-                            }
-                        }
+            if self.started && p.late_serve.is_none() {
+                self.plan_inputs(p, newest, now_ms, &mut plans);
+            }
+            // RTT probes (they double as keepalives).
+            if self.cfg.ping_ms > 0 && now_ms.saturating_sub(p.last_ping_ms) >= self.cfg.ping_ms {
+                plans.push((p.addr, Packet::Ping { stamp: now_ms as u32 }));
+                p.last_ping_ms = now_ms;
+                p.ping_sent();
+            }
+            // The adaptive delay's announcement (host): re-sent every 100 ms until the host is
+            // well past the boundary, then once a second (a peer that missed every copy still
+            // converges; correctness never depends on it — see `submit_local`).
+            if is_host && self.cfg.adaptive_delay {
+                if let Some(&(from, d)) = self.delay_sched.last() {
+                    let every = if self.head_tick() < from.saturating_add(60) { 100 } else { 1000 };
+                    if p.delay_sent_ms == 0 || now_ms.saturating_sub(p.delay_sent_ms) >= every {
+                        plans.push((p.addr, Packet::Delay { from_tick: from, delay: d.min(255) as u8 }));
+                        p.delay_sent_ms = now_ms.max(1);
                     }
-                    plans.push((s.addr, pkt));
                 }
             }
-            if s.idle_for_ms >= self.cfg.keepalive_ms {
-                plans.push((s.addr, Packet::Keepalive { seq: self.keepalive_seq }));
+            if plans.len() == before && now_ms.saturating_sub(p.last_send_ms) >= self.cfg.keepalive_ms {
+                plans.push((p.addr, Packet::Keepalive { seq: self.keepalive_seq }));
+                self.keepalive_seq = self.keepalive_seq.wrapping_add(1);
             }
-        }
-        if !plans.is_empty() {
-            self.keepalive_seq = self.keepalive_seq.wrapping_add(1);
         }
         // Late-join log chunks (host): the recorded run log rides JOIN_LOG
         // chunks, a windowed transfer re-sent on the `resend_ms` cadence
         // until the JOIN_ACKs advance (loss-safe; the ack completes it).
-        if let Role::Host { peers, .. } = &mut self.role {
+        if is_host {
             for p in peers.iter_mut() {
                 if !p.connected {
                     continue;
@@ -959,136 +1389,203 @@ impl<T: Transport> Session<T> {
             }
         }
         // GO retransmit (host, until each client's inputs prove it started).
-        if self.started {
-            let go_addrs: Vec<SocketAddr> = match &self.role {
-                Role::Host { peers, .. } => peers
-                    .iter()
-                    .filter(|p| p.connected && !p.go_confirmed
-                        && now_ms.saturating_sub(p.last_go_ms) >= self.cfg.resend_ms)
-                    .map(|p| p.addr)
-                    .collect(),
-                _ => Vec::new(),
-            };
-            for a in go_addrs {
-                plans.push((a, Packet::Go { first_tick: self.start_tick }));
-                if let Role::Host { peers, .. } = &mut self.role {
-                    if let Some(p) = peers.iter_mut().find(|p| p.addr == a) {
-                        p.last_go_ms = now_ms;
-                    }
+        if self.started && is_host {
+            for p in peers.iter_mut() {
+                if p.connected && !p.go_confirmed && now_ms.saturating_sub(p.last_go_ms) >= self.cfg.resend_ms {
+                    plans.push((p.addr, Packet::Go { first_tick: self.start_tick }));
+                    p.last_go_ms = now_ms;
                 }
             }
         }
-        // Phase 2: send, then mark peers as sent-to.
+        // Send, then mark the peers sent-to (the keepalive's idle clock).
         for (addr, pkt) in plans {
             self.send_packet(addr, &pkt);
+            if let Some(p) = peers.iter_mut().find(|p| p.addr == addr) {
+                p.last_send_ms = now_ms;
+            }
         }
         match &mut self.role {
-            Role::Host { peers, .. } => {
-                for p in peers.iter_mut() {
-                    if p.connected && now_ms.saturating_sub(p.last_send_ms) >= self.cfg.keepalive_ms {
-                        p.last_send_ms = now_ms;
-                    }
-                }
-            }
-            Role::Client { host_peer, .. } => {
-                if let Some(p) = host_peer {
-                    if now_ms.saturating_sub(p.last_send_ms) >= self.cfg.keepalive_ms {
-                        p.last_send_ms = now_ms;
-                    }
-                }
-            }
+            Role::Host { peers: slot, .. } => *slot = peers,
+            Role::Client { host_peer, .. } => *host_peer = peers.pop(),
         }
     }
 
-    /// Build the INPUT packet for a peer. Host: everything that client needs
-    /// (all slots but its own), from its ack cursor up to the newest
-    /// fully-ready tick. Client: the client's own inputs from the host's ack
-    /// cursor up to the newest sampled input.
-    fn build_input_packet(&self, peer_slot: u8, their_ack: Option<u32>, our_ack: u32, recv_ticks: &[u32]) -> Option<Packet> {
-        let (mask, newest): (u16, u32) = match &self.role {
-            Role::Host { .. } => {
-                let newest = self.last_ready?;
-                // Every agent but the receiver's own slot (the receiver knows
-                // its own input) — 15 of the 16 bits [S mp-16-slots; the game
-                // relayed 3 of 4, mask 0b1111 & !(1 << peer_slot)].
-                let mask = all_agents_mask() & !(1u16 << peer_slot);
-                (mask, newest)
-            }
-            Role::Client { .. } => {
-                let slot = self.local_slot as usize;
-                let newest = match self.inputs[slot].keys().max() {
-                    Some(n) => *n,
-                    None => {
-                        // A late joiner before its join tick has no own
-                        // inputs yet — its acks still need a carrier, so the
-                        // packet rides its own slot's truthful NEUTRAL (the
-                        // agent does not exist before the join tick; the
-                        // host's join_from gate keeps it out of the sim).
-                        let lr = self.last_ready?;
-                        if !self.slot_human[slot] || lr < self.join_from[slot] {
-                            lr
-                        } else {
-                            return None;
-                        }
+    /// Client: the newest tick of its own slot it can send (its newest scheduled input; a
+    /// late joiner before its join tick rides its truthful NEUTRAL up to the newest ready
+    /// tick so its acks have a carrier).
+    fn client_newest(&self) -> Option<u32> {
+        let slot = self.local_slot as usize;
+        if let Some(n) = self.sched_next.filter(|_| !self.inputs[slot].is_empty()) {
+            return Some(n.wrapping_sub(1));
+        }
+        if let Some(n) = self.inputs[slot].keys().max() {
+            return Some(*n);
+        }
+        let lr = self.last_ready?;
+        if !self.slot_human[slot] || lr < self.join_from[slot] {
+            Some(lr)
+        } else {
+            None
+        }
+    }
+
+    /// net-internet: what INPUT packets go to `p` now. Three reasons to send, each with its
+    /// own window (protocol 4 sent the whole unacked window every poll, oldest first and at
+    /// most 3 relay ticks — a 150 ms link ran at ~15 ticks/s — and acks rode only on data, so
+    /// a peer with nothing new to send never repaired a lost ack: the loopback wedge):
+    /// * **fresh ticks** (newer than any sent): sent at once, each packet reaching back over
+    ///   up to `redundancy - 1` already-sent unacked ticks, so an isolated loss costs nothing;
+    /// * **retransmit**: the peer's ack has not moved for an RTO while ticks are unacked —
+    ///   the window is re-sent from the oldest unacked tick;
+    /// * **ack**: a data packet arrived since our last INPUT and nothing else is going out —
+    ///   a pure ack (count 0), so the peer's window always learns what we hold.
+    fn plan_inputs(&self, p: &mut Peer, newest: Option<u32>, now_ms: u64, plans: &mut Vec<(SocketAddr, Packet)>) {
+        let is_host = matches!(self.role, Role::Host { .. });
+        let mut sent = false;
+        if let Some(newest) = newest {
+            let floor = if is_host { self.start_tick } else { self.start_tick.min(newest) };
+            let unacked_from = match p.their_ack {
+                Some(a) if a.wrapping_add(1) > floor => a.wrapping_add(1),
+                _ => floor,
+            };
+            if newest >= unacked_from {
+                let rto = p.rto_ms(self.cfg.resend_ms);
+                let in_flight = p.sent_hi.is_some_and(|s| s >= unacked_from);
+                let stuck_ms = now_ms.saturating_sub(p.progress_ms);
+                // Fast retransmit: the peer's ack bitmap shows ticks past a hole — the hole
+                // was lost (or is a jitter swap: wait out rttvar + a tick first) — re-send the
+                // hole without waiting a whole RTO.
+                let fast = in_flight
+                    && p.their_bits != 0
+                    && stuck_ms as f64 >= (p.rttvar_ms + TICK_MS).max(self.cfg.resend_ms as f64);
+                // Retransmit (the oldest unacked first).
+                if in_flight && (fast || stuck_ms >= rto) {
+                    let hi = p.sent_hi.unwrap_or(newest).min(newest);
+                    let hi = if fast {
+                        // Up to the first tick the peer holds past the hole.
+                        hi.min(unacked_from.wrapping_add(p.their_bits.trailing_zeros()))
+                    } else {
+                        hi
+                    };
+                    if let Some((pkt, _end)) = self.build_input_range(p, unacked_from, hi) {
+                        plans.push((p.addr, pkt));
+                        sent = true;
                     }
-                };
-                (1u16 << slot, newest)
+                    p.progress_ms = now_ms;
+                }
+                // Fresh ticks, each packet reaching back to where the packet `redundancy - 1`
+                // sends ago began (still unacked): every tick rides `redundancy` packets even
+                // when several turn fresh at once (a reach-back counted in TICKS left a batch's
+                // first ticks in one packet only — the 150 ms run's 300 ms hole).
+                let fresh = p.sent_hi.map_or(unacked_from, |s| s.wrapping_add(1).max(unacked_from));
+                if fresh <= newest {
+                    if !in_flight {
+                        p.progress_ms = now_ms; // the retransmit clock starts with the window
+                        p.fresh_starts.clear();
+                    }
+                    let keep = p.redundancy(self.cfg.redundancy) as usize - 1;
+                    let mut start = p.fresh_starts.iter().copied().min().unwrap_or(fresh).min(fresh).max(unacked_from);
+                    for _ in 0..4 {
+                        let Some((pkt, end)) = self.build_input_range(p, start, newest) else { break };
+                        plans.push((p.addr, pkt));
+                        sent = true;
+                        let first_new = p.sent_hi.map_or(start, |s| s.wrapping_add(1).max(start));
+                        p.sent_hi = Some(p.sent_hi.map_or(end, |s| s.max(end)));
+                        if keep > 0 {
+                            p.fresh_starts.push_back(first_new);
+                            while p.fresh_starts.len() > keep {
+                                p.fresh_starts.pop_front();
+                            }
+                        }
+                        if end >= newest {
+                            break;
+                        }
+                        start = end.wrapping_add(1);
+                    }
+                }
             }
-        };
-        let per_tick = mask.count_ones() as usize;
-        if per_tick == 0 {
+        }
+        // The pure ack (at most once per resend/2 — a peer sending every frame is answered
+        // every frame while we have nothing of our own).
+        if !sent && p.ack_dirty && now_ms.saturating_sub(p.last_input_ms) >= (self.cfg.resend_ms / 2).max(1) {
+            let (ack_tick, ack_bits) = Self::ack_for(&p.recv_ticks, p.our_ack);
+            let mask = if is_host { 1u16 } else { 1u16 << self.local_slot };
+            let base = newest.map_or(self.start_tick, |n| n.wrapping_add(1));
+            plans.push((p.addr, Packet::Input { base_tick: base, agent_mask: mask, ack_tick, ack_bits, inputs: Vec::new() }));
+            sent = true;
+        }
+        if sent {
+            let (ack_tick, _) = Self::ack_for(&p.recv_ticks, p.our_ack);
+            if ack_tick != u32::MAX {
+                p.our_ack = ack_tick;
+            }
+            p.ack_dirty = false;
+            p.last_input_ms = now_ms;
+        }
+    }
+
+    /// One INPUT packet for `p`: ticks `start..` up to `newest`, as many as fit
+    /// [`crate::MAX_PACKET`] (compact inputs), with our current ack. Host → client: every
+    /// slot but the receiver's that is not NEUTRAL somewhere in the window (absent = NEUTRAL;
+    /// slot 0 — the host, always human — keeps the mask non-empty). Client → host: its own
+    /// slot. Returns the packet and its last tick; `None` if `start` has no input yet.
+    fn build_input_range(&self, p: &Peer, start: u32, newest: u32) -> Option<(Packet, u32)> {
+        let is_host = matches!(self.role, Role::Host { .. });
+        let span_end = newest.min(start.wrapping_add(proto::MAX_INPUT_TICKS as u32 - 1));
+        if span_end < start {
             return None;
         }
-        let cap = if let Role::Host { .. } = self.role {
-            proto::MAX_INPUT_COUNT_H2C
-        } else {
-            proto::MAX_INPUT_COUNT_C2H
-        };
-        let floor = if let Role::Host { .. } = self.role {
-            self.start_tick
-        } else {
-            self.start_tick.min(newest)
-        };
-        // Send window (see the module docs): the full unacked span when it
-        // fits the packet; when it overflows the cap, the OLDEST unacked
-        // ticks go first with the window END truncated — the peer's ack can
-        // always advance, so nothing is ever silently skipped; plus
-        // redundancy reach-back (the last N inputs ride along) when there
-        // is room under the cap.
-        let n = (self.cfg.redundancy as usize).max(1);
-        let unacked_from = match their_ack {
-            Some(a) if a.wrapping_add(1) > floor => a.wrapping_add(1),
-            _ => floor,
-        };
-        if newest < unacked_from {
-            return None; // nothing unacked; keepalives cover liveness
-        }
-        let (start, end) = {
-            let span = newest.wrapping_sub(unacked_from) as usize + 1;
-            if span > cap {
-                let end = unacked_from.wrapping_add(cap as u32 - 1).min(newest);
-                (unacked_from, end)
-            } else {
-                let reach = ((n - 1) as u32).min(cap as u32 - span as u32);
-                let start = unacked_from.saturating_sub(reach).max(floor);
-                (start, newest)
-            }
-        };
-        let (ack_tick, ack_bits) = self.ack_for(recv_ticks, our_ack);
-        let count = (end.wrapping_sub(start) + 1) as usize;
-        let mut inputs = Vec::with_capacity(count * per_tick);
-        for t in start..=end {
-            for s in 0..MAX_AGENTS {
-                if mask & (1u16 << s) == 0 {
+        let mask: u16 = if is_host {
+            let mut m = 1u16;
+            for s in 1..MAX_AGENTS {
+                if s == p.slot as usize {
                     continue;
                 }
-                match self.slot_input_for_send(s, t) {
-                    Some(v) => inputs.push(v),
-                    None => return None,
+                let live = (start..=span_end).any(|t| self.slot_input_for_send(s, t) != Some(NEUTRAL));
+                if live {
+                    m |= 1 << s;
                 }
             }
+            m & !(1u16 << p.slot)
+        } else {
+            1u16 << self.local_slot
+        };
+        let slots: Vec<usize> = (0..MAX_AGENTS).filter(|s| mask & (1u16 << s) != 0).collect();
+        let mut prev = vec![NEUTRAL; slots.len()];
+        let mut size = proto::INPUT_HEAD_LEN;
+        let mut inputs: Vec<Input> = Vec::new();
+        let mut end = None;
+        let mut t = start;
+        loop {
+            let mut row = Vec::with_capacity(slots.len());
+            let mut cost = 0;
+            for (j, &s) in slots.iter().enumerate() {
+                match self.slot_input_for_send(s, t) {
+                    Some(v) => {
+                        cost += proto::compact_input_len(&prev[j], &v);
+                        row.push(v);
+                    }
+                    None => break,
+                }
+            }
+            if row.len() < slots.len() {
+                break; // an input not known yet: the packet ends before it
+            }
+            if end.is_some() && size + cost > crate::MAX_PACKET {
+                break;
+            }
+            size += cost;
+            prev.copy_from_slice(&row);
+            inputs.extend(row);
+            end = Some(t);
+            if t >= span_end {
+                break;
+            }
+            t = t.wrapping_add(1);
         }
-        Some(Packet::Input { base_tick: start, agent_mask: mask, ack_tick, ack_bits, inputs })
+        let end = end?;
+        let (ack_tick, ack_bits) = Self::ack_for(&p.recv_ticks, p.our_ack);
+        Some((Packet::Input { base_tick: start, agent_mask: mask, ack_tick, ack_bits, inputs }, end))
     }
 
     /// Input to broadcast for slot `s` at tick `t` (host materialises NEUTRAL
@@ -1122,7 +1619,7 @@ impl<T: Transport> Session<T> {
     /// from our sliding base `our_ack`, plus a 32-tick bitmap past it
     /// (u32::MAX = nothing acked yet). The base slides with the ack so old
     /// pruned ticks can never break contiguity.
-    fn ack_for(&self, recv_ticks: &[u32], our_ack: u32) -> (u32, u32) {
+    fn ack_for(recv_ticks: &BTreeSet<u32>, our_ack: u32) -> (u32, u32) {
         let mut t = our_ack;
         while recv_ticks.contains(&t) {
             t = t.wrapping_add(1);
@@ -1209,23 +1706,7 @@ impl<T: Transport> Session<T> {
                     }
                 };
                 if let Role::Host { peers, .. } = &mut self.role {
-                    peers.push(Peer {
-                        addr: from,
-                        slot,
-                        codename: codename.chars().take(31).collect(),
-                        connected: true,
-                        last_recv_ms: self.now_ms,
-                        last_send_ms: self.now_ms,
-                        their_ack: None,
-                        our_ack: 0,
-                        recv_ticks: BTreeSet::new(),
-                        remote_hashes: HashMap::new(),
-                        go_confirmed: false,
-                        last_go_ms: 0,
-                        late_serve: None,
-                        late_joined: false,
-                        announced: None,
-                    });
+                    peers.push(Peer::new(from, slot, codename.chars().take(31).collect(), self.now_ms));
                     self.slot_human[slot as usize] = true;
                 }
                 self.send_welcome_to(from, slot);
@@ -1233,18 +1714,24 @@ impl<T: Transport> Session<T> {
                 self.broadcast_slotmap();
             }
             Packet::Input { base_tick, agent_mask, ack_tick, ack_bits, inputs } => {
+                let _ = ack_bits;
+                let now = self.now_ms;
                 let peer_slot = match &mut self.role {
                     Role::Host { peers, .. } => {
                         let idx = peers.iter().position(|p| p.addr == from);
                         match idx {
                             Some(i) => {
                                 let p = &mut peers[i];
-                                p.last_recv_ms = self.now_ms;
+                                p.last_recv_ms = now;
                                 p.go_confirmed = true;
-                                p.their_ack = if ack_tick == u32::MAX { None } else { Some(ack_tick) };
+                                p.take_ack(ack_tick, ack_bits, now);
                                 let per_tick = agent_mask.count_ones().max(1) as usize;
-                                for k in 0..inputs.len() / per_tick.max(1) {
+                                let count = inputs.len() / per_tick;
+                                for k in 0..count {
                                     p.recv_ticks.insert(base_tick.wrapping_add(k as u32));
+                                }
+                                if count > 0 {
+                                    p.ack_dirty = true;
                                 }
                                 peers[i].slot
                             }
@@ -1285,6 +1772,26 @@ impl<T: Transport> Session<T> {
                 if let Role::Host { peers, .. } = &mut self.role {
                     if let Some(p) = peers.iter_mut().find(|p| p.addr == from) {
                         p.last_recv_ms = self.now_ms;
+                    }
+                }
+            }
+            Packet::Ping { stamp } => {
+                let now = self.now_ms;
+                let known = match &mut self.role {
+                    Role::Host { peers, .. } => peers.iter_mut().find(|p| p.addr == from).map(|p| p.last_recv_ms = now).is_some(),
+                    _ => false,
+                };
+                if known {
+                    self.send_packet(from, &Packet::Pong { stamp });
+                }
+            }
+            Packet::Pong { stamp } => {
+                let now = self.now_ms;
+                if let Role::Host { peers, .. } = &mut self.role {
+                    if let Some(p) = peers.iter_mut().find(|p| p.addr == from) {
+                        p.last_recv_ms = now;
+                        p.pongs_back += 1;
+                        p.rtt_sample((now as u32).wrapping_sub(stamp) as f64);
                     }
                 }
             }
@@ -1336,7 +1843,8 @@ impl<T: Transport> Session<T> {
                 // there on EVERY machine (the JOIN_SLOT broadcast), and seed
                 // the ack base — the joiner's inputs start at the join tick,
                 // so everything before it is implicitly covered.
-                let host_head = self.last_ready.unwrap_or(0);
+                // The head counts relayed ticks too (they run ahead of `last_ready`).
+                let host_head = self.head_tick();
                 let join_tick = host_head.saturating_add(JOIN_MARGIN_TICKS);
                 let mut announce: Option<(SocketAddr, u8, u32)> = None;
                 let mut repeat: Option<(SocketAddr, u8, u32)> = None;
@@ -1434,26 +1942,16 @@ impl<T: Transport> Session<T> {
         let ticks = snap.saturating_sub(first_tick) as usize + 1; // inclusive
         let chunk_count = ((ticks + proto::JOIN_LOG_CHUNK_TICKS - 1) / proto::JOIN_LOG_CHUNK_TICKS) as u16;
         if let Role::Host { peers, .. } = &mut self.role {
-            peers.push(Peer {
-                addr: from,
-                slot,
-                codename: codename.chars().take(31).collect(),
-                connected: true,
-                last_recv_ms: self.now_ms,
-                last_send_ms: self.now_ms,
-                // The joiner holds the whole log through the snapshot: the
-                // live relay resumes at snapshot+1 (its own acks cannot say
-                // so yet — it sends no inputs before its join tick).
-                their_ack: Some(snap),
-                our_ack: 0,
-                recv_ticks: BTreeSet::new(),
-                remote_hashes: HashMap::new(),
-                go_confirmed: true, // never a GO for a late joiner
-                last_go_ms: 0,
-                late_serve: Some(LateServe { snapshot_tick: snap, snapshot_hash, chunk_count, sent: 0, acked: 0, last_send_ms: 0 }),
-                late_joined: true,
-                announced: None,
-            });
+            let mut p = Peer::new(from, slot, codename.chars().take(31).collect(), self.now_ms);
+            // The joiner holds the whole log through the snapshot: the
+            // live relay resumes at snapshot+1 (its own acks cannot say
+            // so yet — it sends no inputs before its join tick).
+            p.their_ack = Some(snap);
+            p.sent_hi = Some(snap);
+            p.go_confirmed = true; // never a GO for a late joiner
+            p.late_serve = Some(LateServe { snapshot_tick: snap, snapshot_hash, chunk_count, sent: 0, acked: 0, last_send_ms: 0 });
+            p.late_joined = true;
+            peers.push(p);
             // The slot does NOT flip human here: everyone keeps riding
             // NEUTRAL for it until the JOIN_SLOT announcement.
         }
@@ -1513,24 +2011,8 @@ impl<T: Transport> Session<T> {
                     *s = Some(slot);
                     self.local_slot = slot;
                     self.welcomed = Some((seed, settings.clone()));
-                    *host_peer = Some(Peer {
-                        addr: from,
-                        slot: 0,
-                        // The WELCOME payload is the HOST's display codename.
-                        codename: codename.chars().take(31).collect(),
-                        connected: true,
-                        last_recv_ms: self.now_ms,
-                        last_send_ms: self.now_ms,
-                        their_ack: None,
-                        our_ack: 0,
-                        recv_ticks: BTreeSet::new(),
-                        remote_hashes: HashMap::new(),
-                        go_confirmed: false,
-                        last_go_ms: 0,
-                        late_serve: None,
-                        late_joined: false,
-                        announced: None,
-                    });
+                    // The WELCOME payload is the HOST's display codename.
+                    *host_peer = Some(Peer::new(from, 0, codename.chars().take(31).collect(), self.now_ms));
                     // The host's delay is the match's (both sides schedule the same lead).
                     self.cfg.input_delay = input_delay as u32;
                     events.push(Event::Connected {
@@ -1562,28 +2044,78 @@ impl<T: Transport> Session<T> {
                 }
             }
             Packet::Input { base_tick, agent_mask, ack_tick, ack_bits, inputs } => {
+                let _ = ack_bits;
+                let now = self.now_ms;
+                let per_tick = agent_mask.count_ones().max(1) as usize;
+                let count = inputs.len() / per_tick;
                 if let Role::Client { host_peer, .. } = &mut self.role {
                     if let Some(p) = host_peer {
-                        p.last_recv_ms = self.now_ms;
-                        p.their_ack = if ack_tick == u32::MAX { None } else { Some(ack_tick) };
-                        let per_tick = agent_mask.count_ones().max(1) as usize;
-                        for k in 0..inputs.len() / per_tick.max(1) {
+                        p.last_recv_ms = now;
+                        p.take_ack(ack_tick, ack_bits, now);
+                        for k in 0..count {
                             p.recv_ticks.insert(base_tick.wrapping_add(k as u32));
+                        }
+                        if count > 0 {
+                            p.ack_dirty = true;
                         }
                     }
                 }
-                let per_tick = agent_mask.count_ones().max(1) as usize;
-                for k in 0..inputs.len() / per_tick.max(1) {
+                for k in 0..count {
                     let t = base_tick.wrapping_add(k as u32);
-                    for (j, s) in (0..MAX_AGENTS as u8).filter(|s| agent_mask & (1u16 << s) != 0).enumerate() {
-                        if s as usize == self.local_slot as usize {
+                    let mut j = 0;
+                    for s in 0..MAX_AGENTS {
+                        let present = agent_mask & (1u16 << s) != 0;
+                        let v = if present {
+                            let v = inputs.get(k * per_tick + j).copied();
+                            j += 1;
+                            v
+                        } else {
+                            // protocol 5: a slot the relay left out is NEUTRAL over the
+                            // covered ticks (the host omits slots it knows are NEUTRAL).
+                            Some(NEUTRAL)
+                        };
+                        if s == self.local_slot as usize {
                             continue;
                         }
-                        let idx = k * per_tick + j;
-                        if let Some(v) = inputs.get(idx) {
-                            self.inputs[s as usize].insert(t, *v);
+                        if let Some(v) = v {
+                            self.inputs[s].insert(t, v);
                         }
                     }
+                }
+            }
+            Packet::Ping { stamp } => {
+                if let Role::Client { host_peer: Some(p), .. } = &mut self.role {
+                    p.last_recv_ms = self.now_ms;
+                }
+                self.send_packet(from, &Packet::Pong { stamp });
+            }
+            Packet::Pong { stamp } => {
+                let now = self.now_ms;
+                if let Role::Client { host_peer: Some(p), .. } = &mut self.role {
+                    p.last_recv_ms = now;
+                    p.pongs_back += 1;
+                    p.rtt_sample((now as u32).wrapping_sub(stamp) as f64);
+                }
+            }
+            Packet::Delay { from_tick, delay } => {
+                // net-internet: the host's delay announcement (re-sent until well past the
+                // boundary — keep the first copy; an entry for the same tick is replaced).
+                if let Role::Client { host_peer: Some(p), .. } = &mut self.role {
+                    p.last_recv_ms = self.now_ms;
+                }
+                let d = (delay as u32).max(1);
+                match self.delay_sched.iter().position(|e| e.0 >= from_tick) {
+                    Some(i) if self.delay_sched[i].0 == from_tick => self.delay_sched[i].1 = d,
+                    Some(i) => {
+                        // An announcement older than one we hold arrived late: entries after it
+                        // superseded it — keep them; insert it in order.
+                        self.delay_sched.insert(i, (from_tick, d));
+                    }
+                    None => self.delay_sched.push((from_tick, d)),
+                }
+                let now_tick = self.next_run_tick();
+                while self.delay_sched.len() > 4 && self.delay_sched[1].0 <= now_tick {
+                    self.delay_sched.remove(0);
                 }
             }
             Packet::Hash { tick, hash, prev_tick, prev_hash } => {
@@ -1767,7 +2299,13 @@ impl<T: Transport> Session<T> {
         // still needs them); from the next tick on the slot is NEUTRAL. Only a
         // slot that WAS human moves the boundary (a late joiner that never
         // reached its join tick drove nothing).
-        let next = self.last_ready.map_or(self.start_tick, |t| t.wrapping_add(1));
+        // The relay may already carry ticks past `last_ready` (`relay_horizon`): those went
+        // out with the leaver's real inputs, so the boundary is past them too.
+        let next = if self.last_ready.is_some() || self.committed_hi.is_some() {
+            self.head_tick().wrapping_add(1)
+        } else {
+            self.start_tick
+        };
         if self.slot_human[s] {
             self.left_at[s] = next.max(self.join_from[s]);
         }
@@ -1905,5 +2443,11 @@ impl Session<crate::net::UdpTransport> {
     /// own `set_loss`/`set_latency`; this is the real-socket equivalent.
     pub fn inject_link_fault(&mut self, seed: u64, drop_per_mille: u32, reorder_per_mille: u32) {
         self.transport.inject_fault(seed, drop_per_mille, reorder_per_mille);
+    }
+
+    /// net-internet: the fault line with a one-way delay and jitter (ms on the session's
+    /// clock) — this machine's outgoing half of a simulated internet path.
+    pub fn inject_link_delay(&mut self, seed: u64, drop_per_mille: u32, reorder_per_mille: u32, delay_ms: u64, jitter_ms: u64) {
+        self.transport.inject_link(seed, drop_per_mille, reorder_per_mille, delay_ms, jitter_ms);
     }
 }
