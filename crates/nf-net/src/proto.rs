@@ -922,7 +922,7 @@ mod tests {
             assert_eq!(decode(&b), Some(p));
         }
         let mut b = Vec::new();
-        encode(&Packet::JoinBegin { first_tick: 0, snapshot_tick: 1, snapshot_hash: 2, joins: vec![(1, 9)] }, &mut b);
+        encode(&Packet::JoinBegin { first_tick: 0, ran_through: 300, snapshot_tick: 1, snapshot_hash: 2, joins: vec![(1, 9)] }, &mut b);
         b.pop();
         assert_eq!(decode(&b), None, "a cut history entry is refused");
     }

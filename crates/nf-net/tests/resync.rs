@@ -339,9 +339,10 @@ fn a_diverged_machine_resyncs_over_the_live_connection_and_the_match_runs_on() {
     // No join_history entry: a FUTURE late joiner's JOIN_BEGIN lists only joins
     // at or before its snapshot and none were added — the host served no new
     // history (the body never left). observable: the session's agents count is
-    // unchanged and no LateJoinStarted for a NEW slot fired (the serve carried
-    // slot 2's own).
-    assert_eq!(host.sess.agents().len(), 3, "host + Alpha + Charlie, nobody left");
+    // unchanged (host + THREE clients — the handshake took slots 1..3) and no
+    // LateJoinStarted for a NEW slot fired (the serve carried the resyncer's
+    // own slot).
+    assert_eq!(host.sess.agents().len(), 4, "host + Alpha + Bravo + Charlie, nobody left");
 }
 
 /// Sister: with no corruption nothing resyncs — no desync, no serve, no
@@ -377,23 +378,17 @@ fn a_second_divergence_within_the_window_is_fatal() {
     }
     // First divergence → the resync completes (the main test's flow).
     clients[1].corrupt_from = Some(120);
-    let mut handover = false;
-    let deadline = ms + 30_000;
-    while !handover {
-        for (_, e) in frame_all(&shim, &mut host, &mut clients, &mut ms) {
-            if matches!(e, Event::LateJoinHandover { .. }) { handover = true; }
-        }
-        assert!(ms < deadline, "the first resync's handover");
-    }
     let (mut first_tick, mut snapshot_tick, mut snapshot_hash, mut log) = (0u32, 0u32, 0u64, Vec::new());
     let deadline = ms + 30_000;
     while snapshot_tick == 0 {
+        // One pass grabs the handover's fields — the event fires ONCE (the
+        // loop's frames consume it), so a second waiting loop never sees it.
         for (_, e) in frame_all(&shim, &mut host, &mut clients, &mut ms) {
             if let Event::LateJoinHandover { first_tick: f, snapshot_tick: s, snapshot_hash: h, log: l, .. } = e {
                 (first_tick, snapshot_tick, snapshot_hash, log) = (f, s, h, l);
             }
         }
-        assert!(ms < deadline, "the handover captured");
+        assert!(ms < deadline, "the first resync's handover");
     }
     clients[1].corrupt_from = None; // the replay replaces the perturbed state
     clients[1].next_tick = first_tick;
@@ -413,7 +408,9 @@ fn a_second_divergence_within_the_window_is_fatal() {
     let deadline = ms + 30_000;
     while rejoined.is_none() {
         for (_, e) in frame_all(&shim, &mut host, &mut clients, &mut ms) {
-            if let Event::LateJoinSlot { slot: 1, join_tick } = e { rejoined = Some(join_tick); }
+            // The resyncer is clients[1] = Bravo = slot 2 (the handshake takes
+            // slots 1.. in name order).
+            if let Event::LateJoinSlot { slot: 2, join_tick } = e { rejoined = Some(join_tick); }
         }
         assert!(ms < deadline, "the first resync's re-announce");
     }
@@ -430,7 +427,8 @@ fn a_second_divergence_within_the_window_is_fatal() {
     while fatal.is_none() {
         for (who, e) in frame_all(&shim, &mut host, &mut clients, &mut ms) {
             if let Event::DesyncFatal { tick } = e {
-                assert_eq!(who, 1, "the fatal lands on the twice-diverged machine");
+                // who: 0 = the host, 1 = Alpha, 2 = Bravo (the resyncer).
+                assert_eq!(who, 2, "the fatal lands on the twice-diverged machine");
                 fatal = Some(tick);
             }
         }

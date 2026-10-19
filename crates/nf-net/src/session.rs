@@ -1774,8 +1774,28 @@ impl<T: Transport> Session<T> {
     /// from our sliding base `our_ack`, plus a 32-tick bitmap past it
     /// (u32::MAX = nothing acked yet). The base slides with the ack so old
     /// pruned ticks can never break contiguity.
+    ///
+    /// net-desync-resync: the join/re-sync re-seed parks `our_ack` at the
+    /// announced join tick — AHEAD of what the peer has sent so far (its
+    /// first post-rejoin input is the join tick itself). When the base sits
+    /// ahead of receipt, the walk must RESUME at the first received tick past
+    /// it, never fall back to `base − 1`: a lower ack would walk the base
+    /// DOWN (one send at a time) until it strands below a lost tick the peer
+    /// will never re-send (its own window starts past the re-seed — it was
+    /// told everything before the join tick is covered), and the peer's
+    /// window then never slides again — every later loss is unrepaired and
+    /// the match stalls (the resync.rs 353/362 freeze). A base ahead of
+    /// receipt only ever claims what the seed already promised (the replay
+    /// covers everything before the join tick), so resuming there is sound.
     fn ack_for(recv_ticks: &BTreeSet<u32>, our_ack: u32) -> (u32, u32) {
-        let mut t = our_ack;
+        // The walk start: the base itself when it was received, else the
+        // first received tick past it; nothing received past the base →
+        // nothing to ack beyond the seed (u32::MAX keeps `take_ack` from
+        // moving the peer's window on a promise the seed already made).
+        let mut t = match recv_ticks.range(our_ack..).next() {
+            Some(&first) => first,
+            None => return (u32::MAX, 0),
+        };
         while recv_ticks.contains(&t) {
             t = t.wrapping_add(1);
         }
@@ -1867,6 +1887,14 @@ impl<T: Transport> Session<T> {
                     // the newest tick the host RAN with them (`last_ready` — the stall
                     // boundary; everything after ran NEUTRAL post-serve).
                     let ran_through = self.last_ready.unwrap_or(snap).min(snap.max(self.last_ready.unwrap_or(snap)));
+                    // net-desync-resync-2: the WELCOME rides again — the resyncer's own
+                    // welcome is its LOBBY handshake's, captured before the match existed
+                    // (its settings hold level 0, and the handover's replay loaded
+                    // 00000000.bin: "no 00000000.bin in FILES.BIN"). A fresh late joiner
+                    // gets its welcome with the live match settings (`begin_late_join`);
+                    // the resyncer needs the same re-serve. The client refreshes its
+                    // stored welcome when it is resyncing (its Welcome arm).
+                    self.send_welcome_to(addr, slot);
                     self.send_packet(addr, &Packet::JoinBegin { first_tick, ran_through, snapshot_tick: snap, snapshot_hash, joins });
                     events.push(Event::LateJoinStarted { slot, codename: codename.chars().take(31).collect() });
                 }
@@ -1961,7 +1989,7 @@ impl<T: Transport> Session<T> {
                                 if count > 0 {
                                     p.ack_dirty = true;
                                 }
-                                peers[i].slot
+                                p.slot
                             }
                             None => return,
                         }
@@ -2255,6 +2283,15 @@ impl<T: Transport> Session<T> {
             Packet::Welcome { proto, build, codename, slot, input_delay, hash_every, seed, settings } => {
                 if let Role::Client { slot: s, host_peer, .. } = &mut self.role {
                     if s.is_some() {
+                        // net-desync-resync-2: the RESYNC serve's WELCOME refreshes the
+                        // match settings this machine's handover replay loads the arena
+                        // with — the welcome this client stored at its LOBBY handshake
+                        // predates the match (level 0). The peer state (the ack windows,
+                        // the codename) stays as it is; only the settings ride.
+                        if self.resync_pending || self.resync_catchup {
+                            self.welcomed = Some((seed, settings.clone()));
+                            self.cfg.input_delay = input_delay as u32;
+                        }
                         return; // already connected
                     }
                     let ok = proto == self.cfg.protocol_version && build == self.cfg.build_id;
