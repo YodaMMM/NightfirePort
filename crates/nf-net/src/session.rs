@@ -231,6 +231,13 @@ impl Default for Config {
 
 /// One tick in ms (the game's fixed 60 Hz).
 const TICK_MS: f64 = 1000.0 / 60.0;
+/// net-soak-faults-2 [S]: the input-progress watch's bound. A peer whose inputs stop
+/// arriving is dropped this long after its newest received input tick — even while its
+/// pings keep the silence timeout quiet. The bound must sit ABOVE any legitimate lag (a
+/// client that is merely behind still sends no NEW input ticks — a slow machine or the
+/// test harness's held frames look identical to a wedge for a while), and far below
+/// forever; 30 s is ~30× the worst retransmit round-trip the fault suite produces.
+const INPUT_PROGRESS_TIMEOUT_MS: u64 = 30_000;
 /// The adaptive delay is re-evaluated every this many ticks of the host's head …
 const DELAY_EVAL_TICKS: u32 = 30;
 /// … a change takes effect this many ticks past the host's head (every machine — clients
@@ -309,6 +316,15 @@ struct Peer {
     pings_sent: u32,
     pongs_back: u32,
     rt_loss_pm: u32,
+    /// net-soak-faults-2 [S]: input-progress watch — the newest tick held in `recv_ticks`
+    /// (None until the peer's first input), and the session clock when it last advanced.
+    /// A peer whose INPUTS stop arriving while its pings keep flowing never trips the
+    /// total-silence timeout; this is the clock that does (see `check_timeouts`).
+    input_recv_hi: Option<u32>,
+    input_progress_ms: u64,
+    /// net-soak-faults-2 [S]: the watch is armed — normal peers at GO, a late joiner when
+    /// the host's head reaches its join tick (its inputs only become due there).
+    input_watch: bool,
 }
 
 impl Peer {
@@ -343,6 +359,9 @@ impl Peer {
             pings_sent: 0,
             pongs_back: 0,
             rt_loss_pm: 0,
+            input_recv_hi: None,
+            input_progress_ms: now_ms,
+            input_watch: false,
         }
     }
 
@@ -556,6 +575,13 @@ pub struct Session<T: Transport> {
     recv_packets: u64,
     /// Diagnostics (net-soak-faults-2): the join/ack-seed/drop stderr trace.
     trace: bool,
+    /// net-soak-faults-2 [S]: the session clock when `last_ready` last advanced — the
+    /// client-side lockstep-freeze watch's base (see `check_timeouts`).
+    last_ready_ms: u64,
+    /// net-soak-faults-2 [S]: the host's departure broadcasts still being retransmitted
+    /// (packet, retransmit-until ms). A LEAVE lost on a lossy link used to freeze every
+    /// client that missed it forever — the drop must be loss-safe.
+    pending_leaves: Vec<(Packet, u64)>,
 }
 
 /// net-p2p: at most this many un-taken stray datagrams are held [S port design].
@@ -659,6 +685,8 @@ impl<T: Transport> Session<T> {
             recv_bytes: 0,
             recv_packets: 0,
             trace: false,
+            last_ready_ms: 0,
+            pending_leaves: Vec::new(),
         }
     }
 
@@ -710,6 +738,8 @@ impl<T: Transport> Session<T> {
             recv_bytes: 0,
             recv_packets: 0,
             trace: false,
+            last_ready_ms: 0,
+            pending_leaves: Vec::new(),
         }
     }
 
@@ -1003,6 +1033,9 @@ impl<T: Transport> Session<T> {
                 self.pending_resume = Some(tick);
             }
             self.last_ready = Some(tick);
+            // net-soak-faults-2 [S]: the lockstep made progress — the client-side
+            // freeze watch's clock restarts.
+            self.last_ready_ms = self.now_ms;
             Some(out)
         } else {
             if !self.stalled {
@@ -1050,6 +1083,11 @@ impl<T: Transport> Session<T> {
             Role::Host { peers, .. } => {
                 self.started = true;
                 self.start_tick = first_tick;
+                for p in peers.iter_mut().filter(|p| p.connected) {
+                    // net-soak-faults-2 [S]: the input-progress watch arms at GO.
+                    p.input_watch = true;
+                    p.input_progress_ms = self.now_ms;
+                }
                 peers.iter().filter(|p| p.connected).map(|p| p.addr).collect()
             }
             Role::Client { .. } => return Err(SessionError::NotHost),
@@ -1423,6 +1461,20 @@ impl<T: Transport> Session<T> {
                 self.keepalive_seq = self.keepalive_seq.wrapping_add(1);
             }
         }
+        // Departure retransmits (host, net-soak-faults-2 [S]): the LEAVE + SLOTMAP pair of
+        // every recent drop, until the window lapses.
+        if is_host && !self.pending_leaves.is_empty() {
+            self.pending_leaves.retain(|(pkt, until)| {
+                if now_ms <= *until {
+                    for p in peers.iter().filter(|p| p.connected) {
+                        plans.push((p.addr, pkt.clone()));
+                    }
+                    true
+                } else {
+                    false
+                }
+            });
+        }
         // Late-join log chunks (host): the recorded run log rides JOIN_LOG
         // chunks, a windowed transfer re-sent on the `resend_ms` cadence
         // until the JOIN_ACKs advance (loss-safe; the ack completes it).
@@ -1587,11 +1639,20 @@ impl<T: Transport> Session<T> {
         }
         if sent {
             let (ack_tick, _) = Self::ack_for(&p.recv_ticks, p.our_ack);
-            if ack_tick != u32::MAX {
-                if self.trace && p.our_ack != ack_tick {
-                    self.tr(format!("ack->slot {} our_ack {} -> {ack_tick}", p.slot, p.our_ack));
-                }
+            // net-soak-faults-2: the ack base only ever moves FORWARD. `ack_for` answers
+            // `base - 1` when nothing at or past the base is held; the late-join seed
+            // (`our_ack = join_tick`, the joiner's recv set still empty until its first
+            // input lands) made that answer write the base DOWN one tick per send —
+            // through the whole pre-join history to 0, where `ack_for(0)` wraps to
+            // u32::MAX and the base stuck forever. The joiner's acks never advanced
+            // again, its retransmit window froze on [join_tick..join_tick+63], and the
+            // first fresh-send loss past that window (a 5%-loss link) starved the host's
+            // row for that tick forever — the phase-1 soak deadlock, no desync, no
+            // timeout, no recovery (pings kept every peer "alive").
+            if ack_tick != u32::MAX && ack_tick.wrapping_sub(p.our_ack) < u32::MAX / 2 {
                 p.our_ack = ack_tick;
+            } else if self.trace && ack_tick != u32::MAX {
+                self.tr(format!("ack->slot {} REFUSED backward ack {ack_tick} (base {}) — the late-join ratchet", p.slot, p.our_ack));
             }
             p.ack_dirty = false;
             p.last_input_ms = now_ms;
@@ -1783,6 +1844,9 @@ impl<T: Transport> Session<T> {
                     peers.push(Peer::new(from, slot, codename.chars().take(31).collect(), self.now_ms));
                     self.slot_human[slot as usize] = true;
                 }
+                // The slot is occupied again: its departure retransmits would wipe the
+                // re-armed human state on the clients (net-soak-faults-2).
+                self.pending_leaves.retain(|(pkt, _)| !matches!(pkt, Packet::Leave { slot: s, .. } if *s == slot));
                 self.tr(format!("hello new peer slot={slot} addr={from} (pre-GO)"));
                 self.send_welcome_to(from, slot);
                 events.push(Event::ClientJoined { slot, codename: codename.chars().take(31).collect() });
@@ -1804,6 +1868,13 @@ impl<T: Transport> Session<T> {
                                 let count = inputs.len() / per_tick;
                                 for k in 0..count {
                                     p.recv_ticks.insert(base_tick.wrapping_add(k as u32));
+                                }
+                                // net-soak-faults-2 [S]: the input-progress watch — only NEW
+                                // ticks count (a stuck retransmit window re-inserts old ones).
+                                let hi = p.recv_ticks.iter().next_back().copied();
+                                if hi > p.input_recv_hi {
+                                    p.input_recv_hi = hi;
+                                    p.input_progress_ms = now;
                                 }
                                 if count > 0 {
                                     p.ack_dirty = true;
@@ -1951,6 +2022,11 @@ impl<T: Transport> Session<T> {
                             p.announced = Some(join_tick);
                             p.last_recv_ms = self.now_ms;
                             p.our_ack = join_tick;
+                            // The input-progress watch stays DISARMED here: the joiner's inputs
+                            // start at the join tick, which is still join-ticks ahead — the
+                            // watch arms in check_timeouts when the head reaches the join tick
+                            // (arming at the seed killed a slow replaying joiner: the phase-2
+                            // rejoin test's Bravo was dropped mid-backlog).
                             self.slot_human[p.slot as usize] = true;
                             self.join_from[p.slot as usize] = join_tick;
                             announce = Some((p.addr, p.slot, join_tick));
@@ -2041,6 +2117,9 @@ impl<T: Transport> Session<T> {
             p.late_serve = Some(LateServe { snapshot_tick: snap, snapshot_hash, chunk_count, sent: 0, acked: 0, last_send_ms: 0 });
             p.late_joined = true;
             peers.push(p);
+            // The slot is occupied again: its departure retransmits would wipe the
+            // re-armed human state on the clients (net-soak-faults-2).
+            self.pending_leaves.retain(|(pkt, _)| !matches!(pkt, Packet::Leave { slot: s, .. } if *s == slot));
             self.tr(format!("begin_late_join slot={slot} snap={snap} chunks={chunk_count} our_ack=0 their_ack=Some({snap}) addr={from}"));
             // The slot does NOT flip human here: everyone keeps riding
             // NEUTRAL for it until the JOIN_SLOT announcement.
@@ -2078,6 +2157,7 @@ impl<T: Transport> Session<T> {
         let pkt = Packet::SlotMap { human_slots: self.human_mask() };
         self.send_to_peers(&pkt);
     }
+
 
     fn handle_packet_client(&mut self, from: SocketAddr, pkt: Packet, events: &mut Vec<Event>) {
         let host = match &self.role {
@@ -2412,10 +2492,14 @@ impl<T: Transport> Session<T> {
         match self.cfg.drop_policy {
             DropPolicy::Neutral => {
                 events.push(Event::ClientLeft { slot, reason });
-                // Relay the departure to the remaining clients.
+                // Relay the departure to the remaining clients — LOSS-SAFE (net-soak-faults-2
+                // [S]): the broadcast rides a retransmit window (2× the silence timeout), so a
+                // client that misses the first copy still frees the slot and runs on.
                 let pkt = Packet::Leave { slot, reason: reason.to_wire() };
                 self.send_to_peers(&pkt);
                 self.broadcast_slotmap();
+                let until = self.now_ms + 2 * self.cfg.timeout_ms;
+                self.pending_leaves.push((pkt, until));
             }
             DropPolicy::EndMatch => {
                 self.match_ended = true;
@@ -2431,12 +2515,32 @@ impl<T: Transport> Session<T> {
         if timeout == 0 {
             return;
         }
-        // Host: drop silent clients.
+        // Host: drop silent clients — TOTAL silence past `timeout`, or no INPUT progress
+        // for as long while the pings still flow (net-soak-faults-2 [S]: a peer whose
+        // inputs stop arriving must reach the timeout path within a bounded time, never
+        // wait forever — the phase-1 soak deadlock ran on healthy pings for its whole
+        // budget). The watch arms at the match's start (pre-GO peers send no inputs) and,
+        // for a late joiner, at its JOIN_SLOT (its inputs start at the join tick).
+        let head = self.head_tick();
         if let Role::Host { peers, .. } = &mut self.role {
             let now = now_ms;
+            // A late joiner's inputs become due when the head reaches its join tick: arm
+            // its input-progress watch there (arming at the seed killed a slow replaying
+            // joiner — the rejoin test's Bravo was dropped mid-backlog).
+            for p in peers.iter_mut().filter(|p| p.connected && !p.input_watch) {
+                if p.announced.is_some_and(|jt| head >= jt) {
+                    p.input_watch = true;
+                    p.input_progress_ms = now;
+                }
+            }
             let mut dropped: Vec<(u8, String, LeaveReason)> = Vec::new();
             peers.retain(|p| {
-                if p.connected && now.saturating_sub(p.last_recv_ms) > timeout {
+                let silent = p.connected && now.saturating_sub(p.last_recv_ms) > timeout;
+                let inputs_stalled = self.started
+                    && p.connected
+                    && p.input_watch
+                    && now.saturating_sub(p.input_progress_ms) > INPUT_PROGRESS_TIMEOUT_MS;
+                if silent || inputs_stalled {
                     dropped.push((p.slot, p.codename.clone(), LeaveReason::Timeout));
                     false
                 } else {
@@ -2448,16 +2552,21 @@ impl<T: Transport> Session<T> {
             }
             return;
         }
-        // Client: host silence after connection.
+        // Client: host silence after connection (total) — and the lockstep itself
+        // frozen for twice that while packets still flow (net-soak-faults-2 [S]: the
+        // mirror of the host's input-progress watch — a host that keeps pinging but
+        // never relays another row must surface as HostTimeout within a bounded time;
+        // twice the host's own drop bound so the host's recovery lands first).
         if !self.host_timed_out && !self.host_left {
             if let Role::Client { host_peer, slot, .. } = &mut self.role {
-                if slot.is_some() {
-                    if let Some(p) = host_peer {
-                        if now_ms.saturating_sub(p.last_recv_ms) > timeout {
-                            self.host_timed_out = true;
-                            events.push(Event::HostTimeout);
-                        }
-                    }
+                let link_silent = host_peer.as_ref().is_some_and(|p| now_ms.saturating_sub(p.last_recv_ms) > timeout);
+                let lockstep_frozen = self.started
+                    && slot.is_some()
+                    && self.last_ready.is_some()
+                    && now_ms.saturating_sub(self.last_ready_ms) > 2 * timeout;
+                if link_silent || lockstep_frozen {
+                    self.host_timed_out = true;
+                    events.push(Event::HostTimeout);
                 }
             }
         }
