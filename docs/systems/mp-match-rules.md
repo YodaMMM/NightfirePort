@@ -206,6 +206,72 @@ so every machine agrees:
 - `Sim::net_state_hash` now folds `mp::hash::state_hash` — team scores, end latches, every
   scenario object, the assassin words (before: the slots only).
 
+## Bots and the objectives (mp-bot-objectives, 2026-10-18)
+
+Before: the bots' goal picker only scored pickups and opponents — `pickGoal`'s Phase A was a stub,
+so in every scenario the bots played deathmatch. Now (crates/nf-game/src/mp/bots.rs §7,
+`BotBrain::objective_scan`, the driver `Sim::step_mp_bots`):
+
+- **The objective scan** = `BOTSTATE_pickGoal` 0x126b88 Phase A [M :143-313], run by BotIdle's
+  `setGoalPickPrefs(0,0,0,1.0, slot 1)` + `pickGoal(1)` [M 0x171b80:73-79]. Each candidate scores
+  `((u8)+0x47 + 1 − dist)·+0x38` when `dist ≤ +0x47`, ties to the nearer [M :284-301] (route
+  distance → straight line, the pickup scoring's same *Deviation*). Inputs: my team word, my
+  status word `MPGame+slot·0x30+0x26` (1 flag, 2 blueprint, 4/8 GE item 0/1, 0x10 on the hill —
+  the `MP_setPlayerStatus` 0x18a518 callers [M 0x1861a8:178, 0x1882d8:128, 0x187568:232/235,
+  0x186ae0:115]) and my team's status `MPGame+team·2+0x1a8` (bit0 flag/blueprint/GE item 0, bit1
+  GE item 1 [M 0x18a518:107-161]); the port derives both from the objects' carriers
+  (`MpMatch::bot_objectives`). Arms: CTF — carrying → own base (subtype 2), else (team carries
+  nothing) the enemy flag wherever it is (1); Demolition/Protection — the site (8);
+  Espionage — carrying → the best of the base's 4 approach points `MP_getEsponageBaseObj(team, k)`
+  (sphere centre + (r+0.1)·(sin, cos)(k·π/2) [M 0x18a338:26-36], yaw 0 [S]) (5), else the
+  blueprint wherever it is (4); GoldenEye — free/dropped items not already the team's (masks
+  {1,2} [L ee_snapshot 0x30ca88]), another bot's objective kept as the `Rand_Rand(100) & 0x20`
+  fallback (3); Uplink — terminals not owned by the team (`MP_getUplinkObj(−n, team)` [M
+  0x18b9c8]), the `Rand_Rand(bots) == n` fallback (6); KOTH/team KOTH — on the hill → hold (no
+  goal, no pickup fall-through: `iVar18 = −3` [M :237-243, :491-493]), else the hill (7).
+  `isObjAlreadyAnotherTeamObjective` 0x1297b8 compares the asker's team word with itself (any
+  other bot counts) [M :17-19] — ported as written.
+- **The objective goal** is goal type 2 in slot 1 (`initGoal` + `gotoGoal(.., 0xF9)` [M
+  :508-510]); the walk follows moving objects (a dropped flag, a carried blueprint). Arrival [S]:
+  the body sphere touching the object's sphere (the contact the rules react to), the base point on
+  the floor plan (the CTF capture is sq-dist 2.0 of base + 1 y [M 0x1861a8:74-86]), the site within
+  3.0, the hill with the body centre inside its box. Validity each tick [S]: the object must still
+  pass the scan's gate — the port's form of `processGoals`' `(team status & mask) == 0` [M
+  0x127c78:73-84] and the 0x3D `cancelGoalToObj` broadcasts [M 0x18a518:111-127].
+- **Demolition/Protection**: defenders (Demolition team 0, Protection team 1) in a goal walk latch
+  `+0x771` when their sphere centre is within 3.0 of the site's box (`Intersect_SphereBox(3.0, …)`)
+  and stop; BotIdle holds them while the latch re-tests [M 0x16e060:244-268, 0x171b80:66-96].
+  Attackers (Protection team 0, Demolition team 1 [M 0x129a60]) with no player opponent take the
+  standing site as their opponent within sq-dist 16, in the cone and visible, and send themselves
+  0x3B (goal complete) [M 0x1424e0:519-560]; the site rides the `OBJ_ROW` row of the bots' others
+  table so the attack/fire states aim at it, and a bot round that reaches the site sphere first
+  damages it (`damage_site`) [S, the human combat's same stand-in].
+- **Team awareness**: the rows carry `setOtherPlayerInfo`'s bits — 0x2 every present player, 0x8
+  the team-mate in the team view (team games and Assassination compare team words; FFA compares
+  against team 3, so no one) [M 0x125390:62-102]; `FindOpponent` skips 0x8 [M 0x1424e0:364] and
+  scores an objective carrier (status & 0xF) at a quarter of its distance [M :367-369]; the trait
+  picks read 0x8 (they compared raw team words — in FFA every word is 0, so traits 4/5/8 found no
+  enemy); trait 5's candidate test was `& 0x10 != 2` (never true) → `& 0xA != 2`. Sight: range
+  `Drone+0xE8` 24.0 and the ±90° cone `Drone+0xE4` (π/2), the 360° stat bit → 300.0 and no cone
+  [M 0x14b300:386,427, 0x1424e0:277-300] — the bots' own `DefaultInit` arm is not confirmed, the
+  default row is the port's pick [S]. Before, a bot saw and fought everyone in line of sight across
+  the arena and no objective was ever reached.
+- **Assassination**: the assassin's opponent pick is always the target (`MP_IsAssasin` →
+  `MP_getAssassinTarget` [M 0x128b50:80-86]) → the grudge hunt; the non-assassins share team word 0
+  [M 0x18aa70:38-41], so in the team view they fight only the assassin.
+- **Bot teams**: `create_bots` keeps the slot's settings team word in a team game (the menu writes
+  the enabled bots' team bytes there, `mp_confirm_start`) — the port's records are the disc's
+  INITIAL ones (team 0), so every bot played team 0 before [S: `P_MPBOTSETUP_Handler` 0x211270's
+  record copy is not routed].
+- **Bot walk**: the walk-clear test adds a knee line (floor + 0.35) — the floor + 1.0 line passed
+  over 07000023's pit-ramp side wall and bots pushed into its edge for good [S].
+- Not ported: the own dropped flag has no goal in the game's scan either (a team-mate's contact
+  returns it [M 0x1861a8:195-221]); `NDrone2_CanSeeObject`'s one-row-per-tick refresh
+  (`+0x767`); the port's blueprint rules still set status bit 1 (the game sets 2 — the bots'
+  snapshot derives the bits from the carriers instead).
+- Test aids: NF_NET_SCENARIO=<hex>, NF_NET_TEAMS="t0,t1,…" (flag host); NF_BOTLOG also prints the
+  scenario objects/scores and each bot's slot-1 goal once a second.
+
 ## Deviations (model gaps, marked, not silent rewrites)
 
 - The round clock runs on the fixed 60 Hz tick, not `psiGetTimeIn100ths` (determinism rule).

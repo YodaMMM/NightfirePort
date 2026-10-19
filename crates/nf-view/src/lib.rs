@@ -5238,6 +5238,19 @@ pub fn run() -> Result<()> {
         if let Some(n) = std::env::var("NF_NET_BOTS").ok().and_then(|v| v.parse::<u32>().ok()) {
             st.bot_count = n.min(nf_game::mp::MP_MAX_SLOTS as u32 - 1);
         }
+        // Test aids (mp-bot-objectives): NF_NET_SCENARIO=<hex scenario word> plays that scenario
+        // on the flag path (the team-game bit derived as `MP_Init` does [M 0x183438:41]) and
+        // NF_NET_TEAMS="t0,t1,…" sets the slots' team words in slot order (humans, then bots).
+        if let Some(sc) = std::env::var("NF_NET_SCENARIO").ok().and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()) {
+            st.scenario = sc;
+            st.gametype_mask = sc;
+            st.team_game = (sc >> 29) & 1;
+        }
+        if let Ok(list) = std::env::var("NF_NET_TEAMS") {
+            for (slot, t) in list.split(',').enumerate().take(nf_game::mp::MP_MAX_SLOTS) {
+                if let Ok(t) = t.trim().parse::<u32>() { st.players[slot].team = t; }
+            }
+        }
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(1);
         st.seed = nanos | 1;
         app.net_armed = Some(st);

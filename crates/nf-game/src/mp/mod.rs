@@ -566,7 +566,16 @@ impl MpMatch {
             .collect();
         for (i, rec) in records.iter().enumerate() {
             let slot = humans + i;
-            let team = rec.team() as u16; // +0x0F, the team byte [M 0x183a50:143-145]
+            // +0x0F, the team byte [M 0x183a50:143-145]. mp-bot-objectives: the port's records
+            // are the disc's INITIAL ones (team 0) — the menu's per-bot team (the bot setup's
+            // record +0x0F) reaches the match as the slot's settings team word, so a team game
+            // keeps the caller's word [S: the menu → record copy `P_MPBOTSETUP_Handler` 0x211270
+            // is not routed through the records]. Without it every bot played team 0.
+            let team = if self.settings.team_game != 0 {
+                self.settings.players[slot].team.min(1) as u16
+            } else {
+                rec.team() as u16
+            };
             self.settings.players[slot].team = team as u32;
             // `BOT_init` 0x1249e8:160 writes the record's character byte (+0x10) into the bot
             // slot's settings skin word (`*(uint *)(MPSettings + slot*0x30 + 0x24) = rec[0x10]`)
