@@ -24,7 +24,7 @@ fn load_level(iso: &IsoImage<std::fs::File>, name: &str) -> Level {
 /// `ResetMap_Load` creates the live objects [M]), 010000f3 sits among the earlier sub-maps
 /// carrying the cover template pair (0xe5 + 0xe6 at (0,0,0), no params) [D], and the main map's
 /// 0xE5/0xE6 placement counts are the live node counts the port builds (cover.rs is main-map
-/// only [M chain]). Sister: the main map is never the FIRST map entry — the sub-maps the scan
+/// only [M parsemap_handle_block_id 0x1d1020:82-84 (the last block 0x1a wins) + ResetMap_Load 0x1d6360:146 (the single flag-1 create)]). Sister: the main map is never the FIRST map entry — the sub-maps the scan
 /// would have added are really there, ahead of it.
 #[test]
 fn every_mission_archive_parses_the_main_map_last() {
@@ -93,7 +93,7 @@ fn the_live_list_is_the_main_map_s_placements_in_order() {
     assert!((sim.covers[1].pos[0] - 59.11).abs() < 0.01 && (sim.covers[1].pos[1] - 26.04).abs() < 0.01
         && (sim.covers[1].pos[2] - 98.69).abs() < 0.01, "node 1 — the chase-trace node [L]: {:?}", sim.covers[1].pos);
     assert!(!sim.covers.iter().any(|n| n.pos == [0.0, 0.0, 0.0]),
-        "the (0,0,0) template pair is not live [M 0x1d1cf0 state 0]");
+        "the (0,0,0) template pair is not live [M parsemap_handle_block_id 0x1d1020:82-84 + ResetMap_Load 0x1d6360:146]");
     // Sister [D]: the scan's premise — two more cover placements live in 010000f3.
     let f3 = level.maps.iter().find(|m| m.name == "010000f3").unwrap();
     let extra = f3.placements.iter().filter(|p| matches!(p.flags, 0xe5 | 0xe6)).count();

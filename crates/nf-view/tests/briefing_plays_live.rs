@@ -81,7 +81,7 @@ fn walk_to_mission_select(fe: &mut FrontEnd, row: usize, name: &str) {
     let iris = |fe: &mut FrontEnd| for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 1 { fe.tick(); };
     for _ in 0..menu::DELAYED_PAGE_TICKS + menu::MAIN_OPEN_BLOCK { fe.tick(); }
     iris(fe);
-    fe.action(Action::Confirm); // Play without saving (row 1 [M P_NFSELECT 0x20aec0:96-97])
+    fe.action(Action::Confirm); // Play without saving (row 1 — [S] unverified: P_NFSELECT 0x20aec0:96-97 only pre-selects the default codename (the 0x2e send at :97); no line there names the row)
     iris(fe);
     fe.action(Action::Confirm); // the box
     iris(fe);
@@ -159,7 +159,7 @@ fn outro_row(row: &Row) {
     fe.mission_ended(Outcome::Complete, Stats::default());
     assert_eq!(fe.requested_level.take(), Some(code),
         "{}: Mission_Update case 6 maps the end level {:#x} to the outro [M 0x182e60-0x182eb4]", row.name, row.end);
-    assert!(fe.flow.movie_pending, "{}: the 0x73 code wraps to a movie [M 0x1d3800's switch]", row.name);
+    assert!(fe.flow.movie_pending, "{}: the 0x73 code wraps to a movie [M ResetMap_Load 0x1d6360:39 (the GS+8 & 0xff0000 movie decision) + :101 (the state-6 push)]", row.name);
     assert_eq!(fe.flow.page, menu::PAGE_RESULTS, "{}: the results page queued [M 0x182c60:72]", row.name);
     assert!(fe.results_queued, "{}: the page waits for the load tail [M 0x1d6360:160-163]", row.name);
     assert_ne!(fe.page, Page::Results, "{}: no manager while the movie is due [M 0x1d6360:160-163]", row.name);

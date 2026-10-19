@@ -273,7 +273,7 @@ fn run_e2e(path: &str, fault: Option<(u64, u32, u32)>) {
     let start = feh.mp_lobby_rows().unwrap().iter()
         .position(|r| r.id == nf_view::mp_lobby::MpLobbyRowId::Start).unwrap();
     feh.mp_one.focus = start;
-    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "Start builds the settings and hands over [M mp_confirm_start]");
+    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "Start builds the settings and hands over [M P_MPCONFIRM 0x20ec00:94-157, the msg-0x4b start arm; mp_confirm_start is the port.s name for it]");
     let hs = feh.mp_match_settings.clone().expect("the host's settings ride the request");
     assert_eq!(feh.requested_level, Some(ARENA), "the host requests the arena");
 

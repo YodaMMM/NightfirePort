@@ -59,7 +59,7 @@ fn walk_from_the_airlock_to_the_player_plate() {
     // The chain the channel arms, pinned to the disc: the drone plate #99 is UNLOCKED (its lock is
     // 0x6e [D #99]) — the port's lock model keeps the armed gate; and nothing else moved.
     assert_eq!(sim.drones.level_exit, None, "the wrapper has no level-exit trigger [D dump]");
-    assert_eq!(sim.drones.mission_end, None, "no mission record → no mission end [M Mission::monitor's base-map lookup]");
+    assert_eq!(sim.drones.mission_end, None, "no mission record → no mission end [M Mission_Init 0x182270:53-56 — with no mission row, BaseMap = −1 and InternalState = 5]");
     assert_eq!(sim.drones.list.len(), 0, "no placed drones at load [D main-map dump]");
 }
 
@@ -124,7 +124,7 @@ fn the_armed_drone_plate_has_no_disc_toucher() {
     assert!(sim.drones.channels.on(0x6e), "the touch armed the chain");
     assert!(!sim.drones.channels.on(1), "the drone plate #99 never fires without a disc toucher [D]");
     assert_eq!(sim.drones.level_exit, None, "no exit request [D dump]");
-    assert_eq!(sim.drones.mission_end, None, "no mission end [M]");
+    assert_eq!(sim.drones.mission_end, None, "no mission end [M Mission_Init 0x182270:53-56 (BaseMap = −1, InternalState = 5)]");
 }
 
 /// The movie-player trigger #81 (type 0xF4, params (0, 4, 0) [D #81]) through the REAL E path:

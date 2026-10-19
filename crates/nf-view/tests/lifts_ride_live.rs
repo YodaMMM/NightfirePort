@@ -8,8 +8,9 @@
 //!    `Script_Play(si, 1)` (looping) and sets the state word 6 — the cab cycles FROM LEVEL LOAD.
 //!    The script (0x06000048 [D nis dump]) creates entity 0x2000367 and keys it y 11 → 48.44 →
 //!    11 over 1239 ticks, holding itself 499 ticks at each end (stream 3: `Event{kind 3, params
-//!    [0x1f4]}` at t0 and t630; event 3 → the SCRIPTINFO delay = p0 − 1 [M 0x1da998's
-//!    negative-delay arm]). Bond standing on the cab is carried [M `Control_InheritVelocity`
+//!    [0x1f4]}` at t0 and t630; event 3 → the SCRIPTINFO delay = p0 − 1 [M Script_EventHandler
+//!    0x1d94c0:98-100 (case 3: +0x9c = p0 − 1), only while +0xab5 bit 0 is clear]). Bond
+//!    standing on the cab is carried [M `Control_InheritVelocity`
 //!    0x133e88]. `lift_stop_trigger` #245 (the roof-deck touch volume, out ch 0x75 [D trigger
 //!    dump]) is the channel SP_Update 0x1dbda8's case-2 rule consumes: mask bit 0 + the out
 //!    channel ON → `SP_UnPause` 0x1dca58 clears SCRIPTINFO+0x9C every tick — the self-holds
@@ -53,7 +54,7 @@ fn the_paternoster_carries_bond_from_load() {
         assert!(info.play & 8 != 0 && info.play & 1 != 0, "Script_Play(si, 1): playing + looping [M 0x1dbc08 mode-8 arm]");
     }
     // The cab exists at its key-0 pose (y 11 [D nis dump]) and HOLDS there: the t0 self-hold
-    // (event 3, p0 = 0x1f4 → delay 499 [M 0x1da998]) counts down before the first key moves.
+    // (event 3, p0 = 0x1f4 → delay 499 [M Script_EventHandler 0x1d94c0:98-100]) counts down before the first key moves.
     // The negative sister: the delay is NOT released while ch 0x75 is off (no writer on this
     // level fires it before the roof).
     {
@@ -98,7 +99,7 @@ fn the_paternoster_carries_bond_from_load() {
 
     // The roof touch: lift_stop_trigger #245 (the roof-deck volume, out ch 0x75 [D trigger
     // dump]) is a re-firing Touch — the port's calc clears every TOUCH out each frame and sets
-    // it on the hit (the game's re-firing arm [M 0x1b2318:23-33]) — so the channel is high
+    // it on the hit (the game's re-firing arm [M Trigger_Update 0x1b1a78:72-74 + :83-87 — case 1's per-frame hit write; 0x1b2318:23-33 is Trigger_Activate's use-key path, not this]) — so the channel is high
     // exactly on the ticks Bond stands in the volume. Deliver him there the way the game's roof
     // cut-scene does (its event 6 lands Bond at [-14.71, 58.00, -2.06], inside #245's box x
     // -18.9..-9.1, y 56.8..63.8, z -1.9..2.2 [D pack 0790000b + trigger dump]).

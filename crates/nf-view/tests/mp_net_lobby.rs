@@ -190,13 +190,13 @@ fn host_flow_listen_agents_choices_and_start() {
     // The host edits on the ONE screen: the map row steps (row 0 → row 7, the wheel wraps).
     fe.mp_one.focus = 1; // the Map row (row 0 = Scenario)
     assert!(fe.mp_one.apply(Action::Left), "the map row is the host's to edit");
-    assert_eq!(fe.mp_one.level, MP_MAP_ROWS[7].3, "◀ from row 0 wraps to row 7 [M the wheel order]");
+    assert_eq!(fe.mp_one.level, MP_MAP_ROWS[7].3, "◀ from row 0 wraps to row 7 — [S] unverified: the port.s wheel walk; no decompile line pinned");
     // The publish diff rides the tick.
     fe.tick();
     let st = fake.borrow().lobby.clone().expect("the host published its lobby snapshot");
     assert_eq!(st.level, MP_MAP_ROWS[7].3, "the snapshot carries the edit");
     assert_eq!(st.players[1].codename, "Alec", "the snapshot carries the player rows");
-    // Start the match — the settings ride the session through the couch build [M mp_confirm_start].
+    // Start the match — the settings ride the session through the couch build [M P_MPCONFIRM 0x20ec00:94-157, the msg-0x4b start arm; mp_confirm_start is the port.s name for it].
     // (The fake's join_remote marks the agent ready; the not-ready gate is pinned in
     // mp_lobby_one_screen.rs, where the fake joins not-ready clients.)
     let start_idx = fe.mp_lobby_rows().unwrap().iter().position(|r| r.id == MpLobbyRowId::Start).unwrap();

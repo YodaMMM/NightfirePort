@@ -123,8 +123,7 @@ fn esc_opens_the_pause_page_and_the_sim_stands_still_until_it_closes() {
     // 0x21d508:27-38: the manager's close action (+0x1c8 = Create's param_5, the pause's 0x1e
     // [M 0x193600:73-75]) must differ from the fail menu's 0x28 [M 0x182c60:78] and be pressed;
     // the manager+0x7b == 7 in :35-38 is the CREATE-time sentinel [M 0x21b908:131 — the only
-    // writer in the decompile], always true for a live manager and vacuous; the delete runs
-    // GS_PauseGame(0) [M 0x21c2b0:11-15]].
+    // writer in the decompile], always true for a live manager and vacuous; the delete runs GS_PauseGame(0) [M MenuManager_Delete 0x21c2b0:17-22 — only when the close action is 0x1e; :11-15 are the SFX unpause]].
     let closed = {
         let fe = fe.as_mut().unwrap();
         assert!(act(fe, Action::Back), "Esc/Back resumes");

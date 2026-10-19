@@ -548,9 +548,9 @@ fn the_backdrop_pages_keep_one_pair_and_the_list_pages_touch_nothing() {
     // The mission list IS a backdrop page: leaving and coming back while the pair is up must
     // restart NOTHING (the menu_movie gate [M 0x20b608's if menu_movie == 0; P_MAIN's 0x4c
     // likewise only restarts when menu_movie == 0, 0x20a7b0:42-48]). fe-audit 1019: the list
-    // was PUSHED over the wheel (the confirm's 0x44 b=0 [M C_SBNFDFCTY 0x216ca8:10-17 +
-    // 0x21c858 case 0x44]), so Back is the manager's default pop — the wheel, cursor restored
-    // [M 0x21c858:592-600]. (The disc binds no msg-99 script [D the 08000002 tag stream]; the
+    // was PUSHED over the wheel (the confirm's 0x44 carries b = DAT_002e1adc [M 0x202190:9] — here 0 [S] unverified: the global is cleared by C_SBNFCN 0x20b390:30 / P_NFSELECT 0x20aec0:65 and set by P_MPJOIN 0x20ca00:182 / C_SBCNOPTIONS 0x213528:66 / P_CNNAME 0x213790:71 / C_KEYBOARD 0x213a98:61, so the value depends on which menus ran; C_SBNFDFCTY 0x216ca8:10-17 only calls Menu_ChangePageCloseIris
+    // + the push rule 0x21c858 case 0x44]), so Back is the manager's default pop — the wheel, cursor restored
+    // [M 0x21c858:592-598]. (The disc binds no msg-99 script [D the 08000002 tag stream]; the
     // empty-stack 99 arm → MAIN is the results route, pinned in menu_sp_e2e.)
     assert!(act(&mut h, Action::Back));
     assert!(h.fe.as_ref().is_some_and(|fe| fe.page == Page::Difficulty));
