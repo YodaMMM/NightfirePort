@@ -855,7 +855,7 @@ impl Bond {
         // OWN list (`*(cel + 0x18)`) — walls hanging on other rooms' cels never block. `self.cel`
         // is that relink (obj+0x20; the Sim refreshes it off the position each tick, the
         // `build_LinkToRoom` 0x1c9680 order); `None` falls back to the flat world.
-        let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS);
+        let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS, false);
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
         // The floor test reads the same HITTEST (`Player_CollisionHandler` 0x1949a8 →
@@ -1504,7 +1504,12 @@ self.local = [vs / k, vf / k];
         // per-cel attribution (fix-08-collision): walls hanging on other rooms' cels never block.
         // `self.cel` is the Sim's per-tick relink (obj+0x20); `None` falls back to the flat world.
         let (a, b) = self.capsule();
-        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS);
+        // The game's push-tail q-span guard rides the SWIM path only: it is [M]-evidenced there
+        // (Intersect_CylGeom 0x109da0's `dot(q − A, B − A) > 0` gate + the 02 fin wedge the PS2
+        // rounds [L]); the port's walk/NPC paths still depend on the unguarded through-push
+        // (escort_follow_07000001_live regressed with it on) — the port divergence is documented
+        // in the report.
+        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming);
         // The floor ray: from = obj+0x30, to = capsuleB + up·(−(cc+0.6)) [M Player_FeetOnPoint
         // 0x194188:89-98 loads HITTEST+0x30 = BLData+0x770 — the B arm Player_Collision 0x194df0
         // stores at :405-408 — adds the matrix up scaled −(cc+0.6) (:92, one negation of the f32
@@ -1527,7 +1532,7 @@ self.local = [vs / k, vf / k];
         // the fix-08-collision slab band the floor stays in the room's bucket while the exterior
         // wall stays out of it.
         if floor.is_none() {
-            let (fp, fw) = world.capsule_push(a, b, RADIUS);
+            let (fp, fw) = world.capsule_push(a, b, RADIUS, swimming);
             push = fp;
             walkable = fw;
             floor = world.segment_hit(self.pos, to);

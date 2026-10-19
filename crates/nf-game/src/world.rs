@@ -600,9 +600,9 @@ impl CollisionWorld {
 
     /// The actor capsule against the straddle cells' static geometry (`capsule_push` over the cel
     /// scope; falls back to the flat world when there is no scope or the query's cell is unmapped).
-    pub fn capsule_push_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32) -> (V3, bool) {
-        let Some(cell) = cell else { return self.capsule_push(a, b, r) };
-        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_push(a, b, r) };
+    pub fn capsule_push_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool) -> (V3, bool) {
+        let Some(cell) = cell else { return self.capsule_push(a, b, r, top_guard) };
+        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_push(a, b, r, top_guard) };
         let dynamic = self.dynamic.read().unwrap();
         let (mut a, mut b) = (a, b);
         let mut total = [0f32; 3];
@@ -637,6 +637,20 @@ impl CollisionWorld {
                 };
                 let (q, on_edge) = closest_on_triangle(p, t);
                 if on_edge { p = closest_on_segment(*a, *b, q); }
+                // The game's push-tail guard [M Intersect_CylGeom 0x109da0 push tail: `v = q − A`,
+                // `if (0.0 < dot(v, B − A))` gates the whole `dist < r` push]: a triangle whose closest
+                // point lies at/beyond the capsule's TOP end A never pushes. Without it the real-capsule
+                // math pushes THROUGH thin slabs: the 02 hut deck's SW corner fin's far (NE) face has
+                // its closest edge 0.42 ABOVE the swim capsule's top (q y 3.732 vs A y 3.308 at the pin)
+                // and produced the anti-motion DOWN push (−0.036,−0.060,−0.034) that cancelled the swim
+                // step every tick — the hut-pocket pin at (−74.01, 3.03, 23.26) where the PS2 rounds
+                // the corner [L probe_swim_pocket PUSHDBG]. The far face is geometry behind the near
+                // face; the near face's own push (and the bed's) still ground and slide the capsule.
+                // The horizontal faces ride the game's SEPARATE unguarded head-on path [M the
+                // `0.7 < |dot(n, axis)|` re-push block after the guarded push] — the pocket's
+                // hut ceiling above the swimmer caps the settle at 3.17 [L swim_height_02_live]
+                // through it; the q-span exclusion is for the oblique/vertical faces only.
+                if top_guard && n[1].abs() <= 0.7 && dot(sub(q, *a), sub(*b, *a)) <= 0.0 { return; }
                 let v = sub(p, q);
                 let dist = dot(v, v).sqrt();
                 if dist >= r { return; }
@@ -1253,7 +1267,7 @@ impl CollisionWorld {
     /// face's horizontality (|n·y| > 0.7 ≈ the game's 0.999/1.31 cone) with the capsule's top end `a` as
     /// the side reference — [S] approximation of the cull, walls and steep slopes stay double-sided as in
     /// the game's non-head-on path.
-    pub fn capsule_push(&self, a: V3, b: V3, r: f32) -> (V3, bool) {
+    pub fn capsule_push(&self, a: V3, b: V3, r: f32, top_guard: bool) -> (V3, bool) {
         let (mut a, mut b) = (a, b);
         let mut total = [0f32; 3];
         let mut walkable = false;
@@ -1293,6 +1307,9 @@ impl CollisionWorld {
                 };
                 let (q, on_edge) = closest_on_triangle(p, t);
                 if on_edge { p = closest_on_segment(a, b, q); }
+                // The same push-tail guard as capsule_push_scoped [M Intersect_CylGeom 0x109da0].
+                // The same face-class split as capsule_push_scoped (horizontal faces unguarded).
+                if top_guard && n[1].abs() <= 0.7 && dot(sub(q, a), sub(b, a)) <= 0.0 { return; }
                 let v = sub(p, q);
                 let dist = dot(v, v).sqrt();
                 if dist >= r { return; }
@@ -1405,9 +1422,9 @@ mod tests {
         let w = mk(graph.clone(), scope_cells.clone());
         // The capsule stands in cell 0, 1 unit west of the wall: the flat world pushes it out; the
         // scoped one does not (cell 1 is portal-unreachable).
-        let (flat, _) = w.capsule_push([1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55);
+        let (flat, _) = w.capsule_push([1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false);
         assert!(flat[0] < -0.1, "flat: pushed west of the wall {flat:?}");
-        let (scoped, _) = w.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55);
+        let (scoped, _) = w.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false);
         assert_eq!(scoped, [0.0; 3], "scoped: the portal-unreachable wall is not tested");
         // The floor ray behaves the same way: a ray THROUGH the wall plane.
         assert!(w.segment_hit([1.5, 1.0, 0.0], [2.5, 1.0, 0.0]).is_some(), "flat segment_hit still sees the wall");
@@ -1416,7 +1433,7 @@ mod tests {
         graph.portals.push(ScopePortal { tris: [[[1.8, 0.0, -4.0], [1.8, 4.0, -4.0], [1.8, 4.0, 4.0]], [[1.8, 0.0, -4.0], [1.8, 4.0, 4.0], [1.8, 0.0, 4.0]]], a: 0, b: 1, centre: [1.8, 2.0, 0.0] });
         scope_cells[1].push(0);
         let w2 = mk(graph, scope_cells);
-        let (scoped2, _) = w2.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55);
+        let (scoped2, _) = w2.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false);
         assert!(scoped2[0] < -0.1, "with the straddled portal the wall blocks again {scoped2:?}");
         // The take ray's surface filter: a mat-0xd triangle in the START cell is skipped by
         // segment_take_scoped (the 0x721 bit 0x1) while the flat segment_actor still hits it.
