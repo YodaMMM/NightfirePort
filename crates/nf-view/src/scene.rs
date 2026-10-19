@@ -8682,6 +8682,7 @@ impl Sim {
         let frame = self.drones.frame;
         let scenario = m.settings.scenario;
         let world = &self.world;
+        let nav = &self.nav;
         let wdata = &self.weapons;
         // The humans the bots fight (online: every human slot on every machine; offline slot 0).
         let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
@@ -8739,6 +8740,7 @@ impl Sim {
                 pickups: &pickups,
                 others: &seen,
                 world,
+                nav: Some(nav),
                 health,
                 max_health,
                 stationary: false,
@@ -8746,14 +8748,10 @@ impl Sim {
             let before = m.bots[i].brain.shots.len();
             m.bots[i].brain.step(&ctx, &mut self.drones.rng, true);
             stamps.push((i, m.bots[i].brain.last_visit_stamp));
-            // The walk stays on the floor: the brain's straight-line mover moves in the plane
-            // (or straight through floors toward a goal), so the bot re-stands each tick [S].
-            {
-                let p = m.bots[i].brain.pos;
-                let feet = nf_game::player::Bond::stand_at(world, [p[0], p[1] - BOT_EYE + 0.6, p[2]], m.bots[i].brain.yaw).pos;
-                m.bots[i].brain.pos[1] = feet[1] + BOT_EYE;
-            }
-            if std::env::var_os("NF_BOTLOG").is_some() && frame % 600 == 0 {
+            // (The brain's body walks the world itself — the player's movement core: collision,
+            // floors, gravity — so the old per-tick re-stand, which could snap a bot onto a
+            // lower floor, is gone.)
+            if std::env::var_os("NF_BOTLOG").is_some() && frame % 60 == 0 {
                 eprintln!("[botlog] f{} bot{} state {:#x} pending {:?} opp {:?} goals {:?} pos {:.1?} trace {}",
                     frame, i, m.bots[i].brain.state, m.bots[i].brain.trace.last(),
                     m.bots[i].brain.vars.opponent,

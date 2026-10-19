@@ -27,7 +27,6 @@ fn quick_game() -> MpSettings {
     s
 }
 
-#[ignore = "704 in progress: the brains tick but stay in BotIdle — the goal picker starves on an empty pickup table (the arena's MP pickups are not lifted into BotPickup yet) and find_opponent never acquires; the next session feeds both — see the report"]
 #[test]
 fn quick_game_bots_play_the_match() {
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
@@ -88,4 +87,68 @@ fn bots_disabled_leaves_only_the_human() {
     let sim = scene.sim.as_ref().unwrap();
     assert_eq!(sim.mp_bot_count(), 0, "still no bots after 600 ticks");
     assert!(sim.drones.health.health > 0.0, "the human stands alone and unhurt");
+}
+
+/// The bots roam and hunt (the user's "bots dont move"): 2 bots + the idle human on the first
+/// arena, 3600 ticks. Per bot: the path length, the farthest point from its spawn, the distinct
+/// 4-unit grid cells it stood in, and the closest it came to the human. No tick's step may pass
+/// through a wall (the eye-height segment between consecutive positions stays world-clear).
+#[test]
+fn bots_roam_and_hunt() {
+    let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
+    let mut s = quick_game();
+    s.bot_count = 2;
+    let arena = format!("{:08x}.bin", s.level_code);
+    let mut scene = nf_view::load_mp_carry(&path, &arena, false, None, s).expect("arena loads");
+    let bots = scene.sim.as_ref().unwrap().mp_bot_count();
+    assert_eq!(bots, 2);
+    let nav_paths = scene.sim.as_ref().unwrap().nav.paths.len();
+    eprintln!("nav paths {nav_paths}: {:?}", scene.sim.as_ref().unwrap().nav.paths.iter().map(|p| (p.name.clone(), p.kind, p.nodes.len())).collect::<Vec<_>>());
+    let start = scene.sim.as_ref().unwrap().mp_bot_positions();
+    let mut last = start.clone();
+    let mut walked = vec![0.0f32; bots];
+    let mut far = vec![0.0f32; bots];
+    let mut near_human = vec![f32::MAX; bots];
+    let mut cells: Vec<std::collections::BTreeSet<(i32, i32, i32)>> = vec![Default::default(); bots];
+    let mut through_wall = 0u32;
+    let mut big_drop = 0u32;
+    for t in 0..3600u32 {
+        let respawns: Vec<u32> = (0..bots).map(|i| scene.sim.as_ref().unwrap().mp_bot_respawns(i)).collect();
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        let sim = scene.sim.as_ref().unwrap();
+        let cur = sim.mp_bot_positions();
+        let human = sim.bond.pos;
+        for i in 0..bots {
+            if sim.mp_bot_respawns(i) != respawns[i] { last[i] = cur[i]; continue; }
+            let step = ((cur[i][0] - last[i][0]).powi(2) + (cur[i][2] - last[i][2]).powi(2)).sqrt();
+            walked[i] += step;
+            if step > 0.0 && sim.world.segment(last[i], cur[i]).is_some() { through_wall += 1; }
+            if (cur[i][1] - last[i][1]).abs() > 1.0 { big_drop += 1; }
+            far[i] = far[i].max(((cur[i][0] - start[i][0]).powi(2) + (cur[i][2] - start[i][2]).powi(2)).sqrt());
+            cells[i].insert(((cur[i][0] / 4.0).floor() as i32, (cur[i][1] / 2.0).floor() as i32, (cur[i][2] / 4.0).floor() as i32));
+            let dh = ((cur[i][0] - human[0]).powi(2) + (cur[i][2] - human[2]).powi(2)).sqrt();
+            near_human[i] = near_human[i].min(dh);
+        }
+        if t % 600 == 599 {
+            eprintln!("t{} human {:.1?} bots {:.1?}", t + 1, human, cur);
+        }
+        last = cur;
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    for i in 0..bots {
+        eprintln!("bot {i}: walked {:.1}, farthest {:.1}, cells {}, closest to human {:.1}, shots {}, deaths {}, score {}",
+            walked[i], far[i], cells[i].len(), near_human[i], sim.mp_bot_shots(i), sim.mp_bot_deaths(i), sim.mp_bot_score(i));
+    }
+    eprintln!("steps through a wall {through_wall}, height jumps > 1 unit {big_drop}");
+    // Before the body walk (one straight-line stand-in step, then standing fire): 5.2 and 9.9
+    // units walked, 2 and 4 cells. The bots now roam the arena and come to the human.
+    for i in 0..bots {
+        assert!(walked[i] > 100.0, "bot {i} roams the arena (walked {:.1} units in 60 s)", walked[i]);
+        assert!(far[i] > 15.0, "bot {i} leaves its spawn area (farthest {:.1})", far[i]);
+        assert!(cells[i].len() >= 20, "bot {i} covers ground ({} cells)", cells[i].len());
+        assert!(sim.mp_bot_shots(i) > 0, "bot {i} fires");
+    }
+    assert!(near_human.iter().any(|&d| d < 8.0), "a bot comes to the idle human (closest {near_human:?})");
+    assert_eq!(through_wall, 0, "no bot step crosses world geometry");
+    assert_eq!(big_drop, 0, "no bot height snaps by more than a unit in one tick");
 }

@@ -698,6 +698,9 @@ pub struct BotCtx<'a> {
     pub others: &'a [OtherPlayer],
     /// The collision world (the LOS/cel stand-in).
     pub world: &'a CollisionWorld,
+    /// The arena's AI network (map block 0x05 — `AINetwork_CalcRouteToPosition`'s graph); `None`
+    /// = no routes (the bots steer straight, as the unit rigs' empty worlds do).
+    pub nav: Option<&'a crate::nav::Network>,
     /// The bot's health (`Drone+0xAC`).
     pub health: f32,
     /// The bot's max HP (`BOT_vars+0xA4`).
@@ -847,7 +850,66 @@ pub struct BotBrain {
     pub last_visit_stamp: (usize, f32),
     /// The pending SetState (`SM+0x0C` + the flag [M 0x1758c0:53-55]).
     pending: Option<u8>,
+    /// The bot's walking body: the player's movement core (`Bond::tick_ctx` — the capsule
+    /// push-out, the floor ray, gravity, steps) stands in for the drone mover
+    /// (`NDrone2_MoveToGoalPosition`'s anim-driven root motion + `Collide`) [S]. `pos` is this
+    /// body's root + `player::EYE`. Unused (the plane walk) when the world has no triangles —
+    /// the unit rigs' empty worlds.
+    pub body: crate::player::Bond,
+    /// The route the body follows (`AINetwork_CalcRouteToPosition` / `FollowRoute`'s port
+    /// stand-in over the arena's AI network) [S].
+    pub route: BotRoute,
+    /// This tick's walk request (world x/z unit direction, speed 0..1) — the states write it, the
+    /// body walk at the end of `step` consumes it.
+    move_want: Option<([f32; 2], f32)>,
+    /// The combat move's end tick (`Drone+0xCC4` — the strafe's `(Rand(8)+2)·FRAME_RATE_INT`
+    /// timer [M 0x16f850]; the step's anim length stand-in [S]).
+    pub combat_move_until: u32,
+    /// The stuck watch: (root position, tick) of the last check, and the consecutive stuck checks.
+    stuck_ref: ([f32; 3], u32),
+    pub stuck_hits: u8,
+    /// One jump on the next body tick (the stuck recovery [S]).
+    jump_next: bool,
 }
+
+/// The port's route over the arena AI network [S — the game's `AIRoute` + link creep are
+/// ported in `nav.rs` for the SP drones; the bots use a plain shortest path over the same graph
+/// with a walk-clear shortcut, see `BotBrain::steer_to`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BotRoute {
+    /// The nav path index and its node list (empty = walk straight to `dest`).
+    pub path: usize,
+    pub nodes: Vec<u16>,
+    /// The next node to reach.
+    pub idx: usize,
+    /// The destination (body-root space) the route was built for.
+    pub dest: [f32; 3],
+    /// The tick it was built (re-plans age out).
+    pub built: u32,
+    pub valid: bool,
+}
+
+/// The walk-clear test between two body roots: the floor+1.0 line (root − 0.1) is clear of the
+/// world and the height step is one a walk can take [S — the game's `NDrone2_MoveTest` reads the
+/// boundary walls + portals; the collision world stands in, as `nav::Network::move_test` does].
+fn walk_clear(world: &CollisionWorld, a: [f32; 3], b: [f32; 3]) -> bool {
+    (b[1] - a[1]).abs() < 1.5
+        && world.line_of_sight([a[0], a[1] - 0.1, a[2]], [b[0], b[1] - 0.1, b[2]])
+}
+
+fn dist2d(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]) * (a[0] - b[0]) + (a[2] - b[2]) * (a[2] - b[2])).sqrt()
+}
+
+/// A nav node's body-root height: the node sits at floor + 0.4 (`AIPath_Parse`), the root at
+/// floor + 1.1 (`Player_StandAtNewPosition`).
+fn node_root(p: [f32; 3]) -> [f32; 3] {
+    [p[0], p[1] + 0.7, p[2]]
+}
+
+/// The body's top forward step per tick (`Player_Move`'s 0.1·f² + 0.005 at full stick) — the
+/// plane walk (no world) moves at the same speed.
+const BODY_STEP: f32 = 0.105;
 
 
 /// `BOTSTATE_getStateType` is already above; the states the port dispatches to.
@@ -901,6 +963,15 @@ impl BotBrain {
             last_visit_stamp: (usize::MAX, 0.0),
             pending: Some(state::BOT_IDLE), // the BotInit chain's SetState(0xF9) [M 0x1748c8:18],
             // committed by the first `step` (the game's PostLoad_Init → msg 1 → SetState order)
+            // The body stands at the root under the eye; Bond's yaw convention (forward =
+            // (sin, cos)) is the brain's (forward = (cos, sin)) mirrored about 45°.
+            body: crate::player::Bond::new([pos[0], pos[1] - crate::player::EYE, pos[2]], crate::trig::HALF_PI - yaw),
+            route: BotRoute::default(),
+            move_want: None,
+            combat_move_until: 0,
+            stuck_ref: ([pos[0], pos[1] - crate::player::EYE, pos[2]], 0),
+            stuck_hits: 0,
+            jump_next: false,
         };
         // The spawn loadout: weapon pickups are not taken by bots yet, so a bot holding nothing
         // (weapon 0) starts with the match's start weapon, the P2K (2), and its clip — with
@@ -912,7 +983,7 @@ impl BotBrain {
         brain
     }
 
-    fn enter_state(&mut self, next: u8, rng: &mut Rng) {
+    fn enter_state(&mut self, next: u8, ctx: &BotCtx, rng: &mut Rng) {
         // the commit: the state flips, +0x766 := the type [M 0x16e060:605], ENTER msg 1 runs below
         let prev = self.state;
         self.state = next;
@@ -922,11 +993,13 @@ impl BotBrain {
         match next {
             state::BOT_IDLE => self.bot_idle_enter(),
             state::BOT_GOTO_GOAL_POSITION => {} // walk anim 0x1E [M 0x171240:20]
-            state::BOT_ATTACK => self.bot_attack_enter(rng),
+            state::BOT_ATTACK => self.bot_attack_enter(ctx, rng),
             state::BOT_ATTACK_FIRE => self.bot_attack_fire_enter(rng), // the trigger pull [M 0x16f5e8:19-26]
             st::BOT_SEEN_OPPONENT => {
                 self.set_state(state::BOT_ATTACK); // the 0xEC stub ENTER [M 0x175268:9-13]
             }
+            st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT
+            | st::BOT_ATTACK_STEP_AIM_LEFT | st::BOT_ATTACK_STEP_AIM_RIGHT => self.bot_attack_move_enter(next, rng),
             _ => {} // 0xF2/0xF6/0xD3… not ported (the report lists the gap)
         }
     }
@@ -948,7 +1021,11 @@ impl BotBrain {
         if let Some(o) = self.vars.opponent {
             if let Some(t) = ctx.others.get(o) {
                 if t.alive {
-                    let clear = ctx.world.segment(self.pos, t.pos).is_none();
+                    // The line to the aim point (the chest, eye − 0.3 — where `handle_firing`'s
+                    // round goes): an eye-to-eye line over a ledge lip saw a bot on the storey
+                    // below whom no round could reach, and the pair stood firing into the lip
+                    // all match instead of running the route round [S the CanSeeObject stand-in].
+                    let clear = ctx.world.segment(self.pos, [t.pos[0], t.pos[1] - 0.3, t.pos[2]]).is_none();
                     if clear {
                         self.vars.sighted |= 4; // Drone+0x228 bit 2 [M]
                         self.vars.unseen_ticks = 0; // Drone+0x274
@@ -978,18 +1055,39 @@ impl BotBrain {
             state::BOT_ATTACK_RUN => self.bot_attack_run_msg3(ctx),
             state::BOT_ATTACK_BACKOFF => self.bot_attack_backoff_msg3(ctx),
             state::BOT_ATTACK_NO_OPPONENT => self.set_state(state::BOT_IDLE),
+            st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT => self.bot_attack_strafe_msg3(ctx, rng),
+            st::BOT_ATTACK_STEP_AIM_LEFT | st::BOT_ATTACK_STEP_AIM_RIGHT => self.bot_attack_step_msg3(ctx, rng),
             _ => {}
+        }
+        // The lost opponent: an attack state with the opponent out of sight for 5 s gives up and
+        // goes back to its goals [S — the game's attack-route failure path (0xD1 BotAttackNoRoute,
+        // the heartbeat's combat block) is not lifted; without it a bot chased a hidden opponent
+        // forever].
+        if self.vars.state_type == 4 && self.vars.unseen_ticks != u32::MAX && self.vars.unseen_ticks > 300 {
+            self.vars.opponent = None;
+            self.vars.fire_latch = 0;
+            self.set_state(state::BOT_IDLE);
+        }
+        // `DroneWeap_AimTarget_IsOpponent` [M 0x16f850 / 0x174e88 msg 3]: the combat states keep
+        // the body turned on the opponent while they move.
+        if self.vars.state_type == 4 {
+            if let Some(t) = self.vars.opponent.and_then(|o| ctx.others.get(o)) {
+                let t = t.pos;
+                self.turn_toward(t, 0.2);
+            }
         }
         // 3. the per-tick firing pipeline [M 0x1490f0:231 `DroneWeap_HandleFiring`]
         if weapon_fire {
             self.handle_firing(ctx, rng);
         }
+        // The body walk (the drone mover's place in `Drone_Control`, after the state's msg 3).
+        self.walk_body(ctx);
         // 4. the commit [M 0x171df8:119-203]: EXIT msg 2 is a no-op for the ported states, the
         //    commit, the synthetic 0x2E (the +0x766 type write is the ported part [M 0x16e060:605]),
         //    then ENTER msg 1 — the loop repeats while ENTERs chain more SetStates [M :119-203].
         while let Some(next) = self.pending.take() {
             self.vars.state_type = state_type(next as u32);
-            self.enter_state(next, rng);
+            self.enter_state(next, ctx, rng);
         }
     }
 
@@ -1064,6 +1162,15 @@ impl BotBrain {
         h.u8(self.state);
         h.f32_slice(&self.pos);
         h.f32(self.yaw);
+        // the walking body + its route (sim state: the next tick's walk reads them)
+        h.f32_slice(&self.body.pos);
+        h.f32_slice(&self.body.vel);
+        h.f32_slice(&self.body.local);
+        h.u8(self.body.grounded as u8);
+        h.usize(self.route.nodes.len());
+        h.usize(self.route.idx);
+        h.u32(self.combat_move_until);
+        h.u8(self.stuck_hits);
         h.u32(self.tick);
         h.i16(self.weapon.interval);
         h.u16(self.weapon.burst);
@@ -1554,11 +1661,12 @@ impl BotBrain {
         suggested
     }
 
-    /// `BOTSTATE_chooseCombatMove` 0x129218 via `checkAttackMove`: `Rand_Rand(4)` →
-    /// 0xD4/0xD5/0xDB/0xDC [M 0x129218:14], gated by `checkAttackMove`'s validity [S — the
-    /// strafe/step states are not ported; the validity gate keeps the bot in 0xCF so the roll
-    /// still consumes the shared RNG in the game's order].
-    fn choose_combat_move(&mut self, rng: &mut Rng) -> Option<u8> {
+    /// `BOTSTATE_chooseCombatMove` 0x129218 via `checkAttackMove` 0x126a40: `Rand_Rand(4)` →
+    /// 0xD5 (1) / 0xD4 (0) / 0xDB (2) / 0xDC (3) [M 0x129218], each gated by its `NDrone2_Can*`
+    /// test [M 0x126a40: 0xD4 CanStrafeLeft, 0xD5 CanStrafeRight, 0xDB CanStepLeft, 0xDC
+    /// CanStepRight — the port's `can_side_move`]. `BOTSTATE_EvasiveMove` and
+    /// `BOT_getMovePossibility(drone, 2)` are not lifted (taken as no evasive move / possible) [S].
+    fn choose_combat_move(&mut self, ctx: &BotCtx, rng: &mut Rng) -> Option<u8> {
         let roll = rng.rand(4);
         let mv = match roll {
             0 => st::BOT_ATTACK_STRAFE_AIM_LEFT,
@@ -1566,7 +1674,11 @@ impl BotBrain {
             2 => st::BOT_ATTACK_STEP_AIM_LEFT,
             _ => st::BOT_ATTACK_STEP_AIM_RIGHT,
         };
-        None // checkAttackMove's stand-in: no move state is ported yet (the report lists it)
+        if ctx.stationary {
+            return None; // the stand preset never moves
+        }
+        let reach = if matches!(mv, st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT) { 1.5 } else { 1.0 };
+        self.can_side_move(ctx, Self::move_side(mv), reach).then_some(mv)
     }
 
     // ------------------------------------------------------------------
@@ -1637,6 +1749,30 @@ impl BotBrain {
         self.set_state(state::BOT_ATTACK); // [M :45-49]
     }
 
+    /// The hunt goal on the nearest live opponent (slot 0, type 3 → subtype 9 — the same goal
+    /// the grudge hunt builds [M 0x126b88:327-342]). Opponents: another team, or everyone when
+    /// every live player shares mine (deathmatch's all-team-0 table). Returns true when set.
+    fn hunt_nearest(&mut self, ctx: &BotCtx, rng: &mut Rng) -> bool {
+        // (the goal target is the row position — the rows sit at their slot index)
+        let live = || ctx.others.iter().enumerate().filter(|(_, o)| o.index != ctx.my_index && o.alive);
+        let one_team = live().all(|(_, o)| o.team == ctx.my_team);
+        let mut best: Option<(usize, f32)> = None;
+        for (i, o) in live() {
+            if !one_team && o.team == ctx.my_team {
+                continue;
+            }
+            let d = dist2d(o.pos, self.pos) + (o.pos[1] - self.pos[1]).abs();
+            if best.is_none_or(|(_, b)| d < b) {
+                best = Some((i, d));
+            }
+        }
+        let Some((idx, _)) = best else { return false };
+        let p = ctx.others[idx].pos;
+        self.uninit_goal(0);
+        self.init_goal(0, 3, [p[0], p[1], p[2], 0.0], idx, 9);
+        self.goto_goal(ctx, rng, 0, state::BOT_IDLE)
+    }
+
     fn bot_idle_msg3(&mut self, ctx: &BotCtx, rng: &mut Rng) {
         let pick = self.trait_pick_opponent(ctx); // [M :54]
         self.vars.grudge = pick; // +0x76B [M :55]
@@ -1652,8 +1788,24 @@ impl BotBrain {
         if self.vars.attack_latch == 0
             || !matches!(ctx.scenario, 0x2000_0080 | 0x2000_0040)
         {
-            self.set_goal_pick_prefs(0.0, 0.0, 0.0, 1.0, 1, 0, 0, ctx.health, 1.0, 1.0);
-            if self.pick_goal(ctx, rng, 1) {
+            // The hunt fallback [S]: with every pickup visited inside its 45 s cooldown (or none
+            // registered) the bot hunts the nearest live opponent instead of re-walking a stale
+            // pickup — the game's deathmatch bots roam into their opponents; its own source of
+            // that (the objective/route scoring of `pickGoal` Phase A, the `NDrone2_FindOpponent`
+            // search sweep) is not lifted. Without it the bots stood once the table was spent.
+            let now = self.tick as f32 / 60.0;
+            let idx = self.vars.bot_index as usize;
+            let fresh = ctx.pickups.iter().enumerate().any(|(i, p)| {
+                i as i8 != self.vars.last_pickup && p.visit.get(idx).is_some_and(|&v| v == 0.0 || v < now)
+            });
+            if fresh {
+                self.set_goal_pick_prefs(0.0, 0.0, 0.0, 1.0, 1, 0, 0, ctx.health, 1.0, 1.0);
+                if self.pick_goal(ctx, rng, 1) {
+                    self.set_state(state::BOT_GOTO_GOAL_POSITION);
+                    return;
+                }
+            }
+            if self.hunt_nearest(ctx, rng) {
                 self.set_state(state::BOT_GOTO_GOAL_POSITION);
             }
         } else {
@@ -1691,26 +1843,398 @@ impl BotBrain {
             let c = self.vars.goals[slot].celpos;
             [c[0], c[1], c[2]]
         };
-        let dx = target[0] - self.pos[0];
+        // The arrival: within 1.0 on the floor plan and on the same storey (the body walks the
+        // floors, so the eye never meets an item's height) [S the `dist < Drone+0x8EC` stand-in].
         let dy = target[1] - self.pos[1];
-        let dz = target[2] - self.pos[2];
-        let d = (dx * dx + dy * dy + dz * dz).sqrt();
-        if d < 1.0 {
+        if dist2d(self.pos, target) < 1.0 && dy.abs() < 2.0 {
             return 3; // arrived
         }
         if ctx.stationary {
             return 1; // the stationary gate holds the bot in place [M 0x16f198:42-45 pattern; 0xEB arm [S]]
         }
+        // The goal walk: a hunt target's root is its eye − EYE; an item's is its floor + 1.1.
+        let hunt = self.vars.goals[slot].goal_type == 3;
+        let dest = if hunt {
+            [target[0], target[1] - crate::player::EYE, target[2]]
+        } else {
+            self.item_root(ctx, target)
+        };
         let mul = [0.7f32, 1.0, 1.3][(self.vars.speed as usize).min(2)]; // the speed mult [M atlas §4]
-        let step = 0.05 * mul;
-        self.pos[0] += dx / d * step;
-        self.pos[1] += dy / d * step;
-        self.pos[2] += dz / d * step;
-        // the game's own ATAN2_APPROX (0x1e4528), not std libm: std's atan2/sin/cos differ by
-        // ulps across libm versions/platforms, which would desync lockstep peers at the aim-cone
-        // gate (dot <= 0.9998). Same convention: tangent dz/dx, same quadrants.
-        self.yaw = crate::trig::atan2_approx(dz, dx); // face the target
+        if !self.steer_to(ctx, dest, mul.min(1.0), true) {
+            return 0xC; // no route and stuck: the route failed (validateRoute → the goal ends)
+        }
         1
+    }
+
+    /// An item's standing spot: the floor under it + 1.1 (the body root), else its own height.
+    fn item_root(&self, ctx: &BotCtx, p: [f32; 3]) -> [f32; 3] {
+        if self.route.valid && dist2d(self.route.dest, p) < 0.01 {
+            return self.route.dest;
+        }
+        match ctx.world.floor_below([p[0], p[1] + 0.5, p[2]], 3.0) {
+            Some(f) => [p[0], f + 1.1, p[2]],
+            None => [p[0], p[1] + 0.6, p[2]],
+        }
+    }
+
+    /// Turn the facing toward a point by at most `rate` rad (the game's ATAN2_APPROX, not std
+    /// libm — std's atan2 differs by ulps across libms and would desync lockstep peers).
+    fn turn_toward(&mut self, p: [f32; 3], rate: f32) {
+        let dx = p[0] - self.pos[0];
+        let dz = p[2] - self.pos[2];
+        if dx * dx + dz * dz < 1e-6 {
+            return;
+        }
+        self.turn_to_yaw(crate::trig::atan2_approx(dz, dx), rate);
+    }
+
+    fn turn_to_yaw(&mut self, want: f32, rate: f32) {
+        let pi = std::f32::consts::PI;
+        let mut delta = want - self.yaw;
+        while delta > pi { delta -= 2.0 * pi; }
+        while delta < -pi { delta += 2.0 * pi; }
+        self.yaw += delta.clamp(-rate, rate);
+        while self.yaw > pi { self.yaw -= 2.0 * pi; }
+        while self.yaw < -pi { self.yaw += 2.0 * pi; }
+    }
+
+    /// The body root (the feet's floor + 1.1).
+    fn root(&self) -> [f32; 3] {
+        [self.pos[0], self.pos[1] - crate::player::EYE, self.pos[2]]
+    }
+
+    /// Walk toward `dest` (body-root space) along the arena's AI network: straight when the walk
+    /// is clear, else a shortest path over the network's links between the nearest walk-clear
+    /// nodes, skipping ahead whenever the node after next is already walk-clear [S — the game's
+    /// `AINetwork_CalcRouteToPosition` → A* → `OptimiseRoute` → `FollowRoute` link creep; the
+    /// ported creep (`nav::Route`) is tuned to the drones' anim root motion, so the bots use this
+    /// plain follower over the same graph]. `face` turns the body along the walk (the goal walk;
+    /// the combat moves keep it on the opponent). Returns false when the bot is stuck for good
+    /// (three stuck checks in a row) so the caller can drop the goal.
+    fn steer_to(&mut self, ctx: &BotCtx, dest: [f32; 3], speed: f32, face: bool) -> bool {
+        let root = self.root();
+        let mut way = dest;
+        if ctx.world.triangle_count() > 0 {
+            if let Some(net) = ctx.nav {
+                let stale = !self.route.valid
+                    || dist2d(self.route.dest, dest) > 3.0
+                    || (dest[1] - self.route.dest[1]).abs() > 1.5
+                    || self.tick.wrapping_sub(self.route.built) > 240;
+                if stale && (!self.route.valid || self.tick.wrapping_sub(self.route.built) >= 20) {
+                    self.plan_route(ctx, net, root, dest);
+                }
+                if self.route.valid && !self.route.nodes.is_empty() {
+                    let p = &net.paths[self.route.path];
+                    // Advance past reached nodes; skip ahead one node a tick when the next-but-one
+                    // (or the destination, past the last) is already walk-clear.
+                    while self.route.idx < self.route.nodes.len() {
+                        let n = node_root(p.nodes[self.route.nodes[self.route.idx] as usize].pos);
+                        if dist2d(root, n) < 0.8 && (n[1] - root[1]).abs() < 1.5 {
+                            self.route.idx += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if self.route.idx < self.route.nodes.len() {
+                        let after = if self.route.idx + 1 < self.route.nodes.len() {
+                            node_root(p.nodes[self.route.nodes[self.route.idx + 1] as usize].pos)
+                        } else {
+                            dest
+                        };
+                        if walk_clear(ctx.world, root, after) {
+                            self.route.idx += 1;
+                        }
+                    }
+                    if self.route.idx < self.route.nodes.len() {
+                        way = node_root(p.nodes[self.route.nodes[self.route.idx] as usize].pos);
+                    }
+                }
+            }
+        }
+        let dx = way[0] - root[0];
+        let dz = way[2] - root[2];
+        let d = (dx * dx + dz * dz).sqrt();
+        if d > 1e-4 {
+            self.move_want = Some(([dx / d, dz / d], speed));
+            if face {
+                self.turn_to_yaw(crate::trig::atan2_approx(dz, dx), 0.25);
+            }
+        }
+        self.stuck_hits < 3
+    }
+
+    /// The route plan (see `steer_to`): straight when walk-clear; else Dijkstra over the network
+    /// links from the nearest walk-clear nodes at the start to the nearest at the destination
+    /// (ties by node index — deterministic). No reachable node → straight (the body slides).
+    fn plan_route(&mut self, ctx: &BotCtx, net: &crate::nav::Network, from: [f32; 3], dest: [f32; 3]) {
+        self.route = BotRoute { path: 0, nodes: Vec::new(), idx: 0, dest, built: self.tick, valid: true };
+        if walk_clear(ctx.world, from, dest) {
+            return;
+        }
+        let Some(pi) = net.nav_path_for(from) else { return };
+        let p = &net.paths[pi];
+        let n = p.nodes.len();
+        if n == 0 {
+            return;
+        }
+        // The nearest few walk-clear nodes around a point (2D order, ties by index).
+        let near = |at: [f32; 3]| -> Vec<(usize, f32)> {
+            let mut c: Vec<(f32, usize)> = (0..n)
+                .map(|i| (dist2d(node_root(p.nodes[i].pos), at), i))
+                .filter(|&(d, i)| d < 30.0 && (node_root(p.nodes[i].pos)[1] - at[1]).abs() < 3.0)
+                .collect();
+            c.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            c.into_iter()
+                .take(10)
+                .filter(|&(_, i)| walk_clear(ctx.world, at, node_root(p.nodes[i].pos)))
+                .take(3)
+                .map(|(d, i)| (i, d))
+                .collect()
+        };
+        let starts = near(from);
+        let goals = near(dest);
+        if starts.is_empty() || goals.is_empty() {
+            return;
+        }
+        let mut dist = vec![f32::INFINITY; n];
+        let mut prev = vec![u16::MAX; n];
+        let mut done = vec![false; n];
+        for &(i, d) in &starts {
+            if d < dist[i] {
+                dist[i] = d;
+            }
+        }
+        loop {
+            let mut cur = usize::MAX;
+            for i in 0..n {
+                if !done[i] && dist[i].is_finite() && (cur == usize::MAX || dist[i] < dist[cur]) {
+                    cur = i;
+                }
+            }
+            if cur == usize::MAX {
+                break;
+            }
+            done[cur] = true;
+            for &li in &p.adj[cur] {
+                let l = &p.links[li as usize];
+                let nb = if l.a as usize == cur { l.b } else { l.a } as usize;
+                let c = dist[cur] + l.len;
+                if c < dist[nb] {
+                    dist[nb] = c;
+                    prev[nb] = cur as u16;
+                }
+            }
+        }
+        let mut best: Option<(usize, f32)> = None;
+        for &(g, d) in &goals {
+            let total = dist[g] + d;
+            if total.is_finite() && best.is_none_or(|(_, b)| total < b) {
+                best = Some((g, total));
+            }
+        }
+        let Some((g, _)) = best else { return };
+        let mut nodes = vec![g as u16];
+        let mut k = g;
+        while prev[k] != u16::MAX && nodes.len() <= n {
+            k = prev[k] as usize;
+            nodes.push(k as u16);
+        }
+        nodes.reverse();
+        self.route.path = pi;
+        self.route.nodes = nodes;
+    }
+
+    /// The body walk: this tick's request (+ the keep-apart push from bodies closer than 1.5)
+    /// through the player's movement core, facing the brain's yaw — the walk direction splits
+    /// into the body's forward/strafe sticks. With no world (the unit rigs) the walk is a plane
+    /// move at the body's top speed.
+    fn walk_body(&mut self, ctx: &BotCtx) {
+        let want = self.move_want.take();
+        let (mut dir, mut speed) = want.unwrap_or(([0.0, 0.0], 0.0));
+        dir = [dir[0] * speed, dir[1] * speed];
+        // Keep apart [S — the game's drone-vs-drone `Collide` pushes bodies apart; the port's
+        // bot bodies are not collision objects]: a push away from every live body within 1.5.
+        let mut pushed = false;
+        for o in ctx.others {
+            if o.index == ctx.my_index || !o.alive || (o.pos[1] - self.pos[1]).abs() > 2.0 {
+                continue;
+            }
+            let ax = self.pos[0] - o.pos[0];
+            let az = self.pos[2] - o.pos[2];
+            let d = (ax * ax + az * az).sqrt();
+            if d < 1.5 {
+                let k = (1.5 - d) / 1.5;
+                if d > 1e-4 {
+                    dir[0] += ax / d * k;
+                    dir[1] += az / d * k;
+                } else {
+                    // stacked exactly: split by slot order (deterministic)
+                    let s = if ctx.my_index < o.index { 1.0 } else { -1.0 };
+                    dir[0] += s * k;
+                }
+                pushed = true;
+            }
+        }
+        let len = (dir[0] * dir[0] + dir[1] * dir[1]).sqrt();
+        if len > 1e-4 {
+            speed = len.min(1.0).max(if pushed { 0.6 } else { 0.0 });
+            dir = [dir[0] / len, dir[1] / len];
+        } else {
+            speed = 0.0;
+        }
+        if ctx.world.triangle_count() == 0 {
+            // The plane walk (no world to stand on).
+            if speed > 0.0 && !ctx.stationary {
+                self.pos[0] += dir[0] * speed * BODY_STEP;
+                self.pos[2] += dir[1] * speed * BODY_STEP;
+            }
+            return;
+        }
+        let mut input = crate::player::Input::default();
+        let byaw = crate::trig::HALF_PI - self.yaw;
+        self.body.yaw = byaw;
+        if speed > 0.0 && !ctx.stationary {
+            let (s, c) = (crate::trig::sinf(byaw), crate::trig::cosf(byaw));
+            // Bond's forward is (sin, cos), his strafe (+) (cos, −sin) [M Player_Move's
+            // `pos += c·vs + s·vf, −s·vs + c·vf`]. The forward stick is quadratic (0.1·f²), so
+            // its share is the square root of the wanted component.
+            let f = dir[0] * s + dir[1] * c;
+            let r = dir[0] * c - dir[1] * s;
+            input.forward = if f > 0.0 { (f * speed).sqrt() } else { -(-f * speed).sqrt() };
+            input.strafe = r * speed * 1.4;
+        }
+        input.jump = std::mem::take(&mut self.jump_next);
+        self.body.cel = None;
+        self.body.tick_ctx(ctx.world, &crate::player::LadderCtx::default(), &input);
+        self.body.sfx_out.clear();
+        self.body.yaw = byaw;
+        self.pos = [self.body.pos[0], self.body.pos[1] + crate::player::EYE, self.body.pos[2]];
+        // The stuck watch: every 45 ticks of wanting to walk, under 0.4 covered → one jump and a
+        // re-plan; three in a row tell the walker's caller to give the goal up [S].
+        if want.is_some_and(|w| w.1 > 0.3) && !ctx.stationary {
+            if self.tick.wrapping_sub(self.stuck_ref.1) >= 45 {
+                let r = self.root();
+                if dist2d(r, self.stuck_ref.0) < 0.4 {
+                    self.stuck_hits = self.stuck_hits.saturating_add(1);
+                    self.jump_next = true;
+                    self.route.valid = false;
+                } else {
+                    self.stuck_hits = 0;
+                }
+                self.stuck_ref = (r, self.tick);
+            }
+        } else {
+            self.stuck_ref = (self.root(), self.tick);
+            self.stuck_hits = 0;
+        }
+    }
+
+    /// `NDrone2_CanStrafeLeft/Right` / `CanStepLeft/Right` / `CanBackoff` [S — the game's tests
+    /// (0x14f9e8…) sweep the drone's bounds; the port: the side spot `dist` away is walk-clear
+    /// and has a floor under it].
+    fn can_side_move(&self, ctx: &BotCtx, side: f32, dist: f32) -> bool {
+        let r = self.root();
+        // left (side +1) = (−sin, cos) of the brain's facing (cos, sin)
+        let lx = -crate::trig::sinf(self.yaw) * side;
+        let lz = crate::trig::cosf(self.yaw) * side;
+        let to = [r[0] + lx * dist, r[1], r[2] + lz * dist];
+        walk_clear(ctx.world, r, to) && ctx.world.floor_below([to[0], to[1] - 1.1, to[2]], 0.9).is_some()
+    }
+
+    /// The side a combat move walks: +1 left, −1 right.
+    fn move_side(state: u8) -> f32 {
+        match state {
+            st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STEP_AIM_LEFT => 1.0,
+            _ => -1.0,
+        }
+    }
+
+    /// Walk sideways (relative to the facing) at `speed`, drifting in (`fwd` > 0) or out.
+    fn side_walk(&mut self, side: f32, fwd: f32, speed: f32) {
+        let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
+        let x = -s * side + c * fwd;
+        let z = c * side + s * fwd;
+        let l = (x * x + z * z).sqrt().max(1e-6);
+        self.move_want = Some(([x / l, z / l], speed));
+    }
+
+    /// The combat moves' ENTER [M 0x16f850 msg 1 (strafe): the trigger pull when the latch is
+    /// clear, the `(Rand(8)+2)·FRAME_RATE_INT` timer; 0x174e88 msg 1 (step): the trigger pull,
+    /// the step anim 0x5A — its length stands in as 30 ticks [S]].
+    fn bot_attack_move_enter(&mut self, next: u8, rng: &mut Rng) {
+        if self.vars.fire_latch == 0 {
+            self.bot_attack_fire_enter(rng);
+        }
+        self.combat_move_until = match next {
+            st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT => {
+                self.tick + (rng.rand(8) + 2) * FRAME_RATE_INT
+            }
+            _ => self.tick + 30,
+        };
+    }
+
+    /// The spent burst's re-pull inside a combat move (the 0xD2 re-arm stand-in, see
+    /// `route_vision_block`) [S].
+    fn rearm_burst(&mut self, rng: &mut Rng) {
+        if self.vars.burst_empty != 0 {
+            let interval = (self.weapon.interval.max(20)) as u32;
+            if self.tick.wrapping_sub(self.vars.burst_done_tick) >= interval {
+                self.vars.fire_latch = 0;
+                self.vars.burst_empty = 0;
+                self.bot_attack_fire_enter(rng);
+            }
+        }
+    }
+
+    /// 0xD4/0xD5 BotAttackStrafeAim{Left,Right} msg 3 [M 0x16f850/0x16f9b8]: no opponent →
+    /// 0xD3; aim; `CanStrafe` failing → `chooseCombatMove` (none → 0xCF); out of sight 16+ ticks
+    /// → 0xD0 run; the timer (msg 0xC) → 0xCF. The strafe walk itself is the anim's root motion
+    /// in the game (anim 0xC); the port walks the body sideways at the strafe stick [S].
+    fn bot_attack_strafe_msg3(&mut self, ctx: &BotCtx, rng: &mut Rng) {
+        let Some(o) = self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive) else {
+            self.set_state(st::BOT_ATTACK_NO_OPPONENT);
+            return;
+        };
+        let dist = o.dist2.sqrt();
+        if self.tick >= self.combat_move_until {
+            self.set_state(state::BOT_ATTACK); // the timer's msg 0xC [M]
+            return;
+        }
+        let side = Self::move_side(self.state);
+        if !self.can_side_move(ctx, side, 1.5) {
+            let mv = self.choose_combat_move(ctx, rng).unwrap_or(state::BOT_ATTACK);
+            self.set_state(mv);
+            return;
+        }
+        if self.vars.unseen_ticks >= 0x10 {
+            self.set_state(state::BOT_ATTACK_RUN);
+            return;
+        }
+        // drift in when far, out when inside the too-close band [S]
+        let fwd = if dist > self.vars.combat_range[1] * 0.5 { 0.35 } else if dist < self.vars.combat_range[0] * 2.0 { -0.35 } else { 0.0 };
+        self.side_walk(side, fwd, 1.0);
+        self.rearm_burst(rng);
+    }
+
+    /// 0xDB/0xDC BotAttackStepAim{Left,Right} msg 3 [M 0x174e88/0x174fa8]: no opponent → 0xD3;
+    /// the step anim over → 0xD2; aim; `Rand(5) == 3` → `chooseCombatMove` (none → stay).
+    fn bot_attack_step_msg3(&mut self, ctx: &BotCtx, rng: &mut Rng) {
+        if self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive).is_none() {
+            self.set_state(st::BOT_ATTACK_NO_OPPONENT);
+            return;
+        }
+        if self.tick >= self.combat_move_until {
+            self.set_state(state::BOT_ATTACK_FIRE); // `CanDoAnimState(0x5A)` fails → 0xD2 [M]
+            return;
+        }
+        let side = Self::move_side(self.state);
+        self.side_walk(side, 0.0, 0.8);
+        if rng.rand(5) == 3 {
+            if let Some(mv) = self.choose_combat_move(ctx, rng) {
+                self.set_state(mv);
+            }
+        }
+        self.rearm_burst(rng);
     }
 
     fn bot_goto_goal_msg3(&mut self, ctx: &BotCtx) {
@@ -1754,10 +2278,10 @@ impl BotBrain {
     // State 0xCF BotAttack [M 0x16f198]
     // ------------------------------------------------------------------
 
-    fn bot_attack_enter(&mut self, rng: &mut Rng) {
+    fn bot_attack_enter(&mut self, ctx: &BotCtx, rng: &mut Rng) {
         // anim 10, the attack message, InvalidateAttackRoute, then the 1-in-3 roll [M :18-28,91]
         if rng.rand(3) == 0 {
-            if let Some(mv) = self.choose_combat_move(rng) {
+            if let Some(mv) = self.choose_combat_move(ctx, rng) {
                 self.set_state(mv); // [M :26-28]
             }
         }
@@ -1818,7 +2342,7 @@ impl BotBrain {
                 return; // keep firing [M :48-50]
             }
             // the fall-through → chooseCombatMove [M :51 → LAB_0016f818]
-            if let Some(mv) = self.choose_combat_move(rng) {
+            if let Some(mv) = self.choose_combat_move(ctx, rng) {
                 self.set_state(mv);
             }
             return;
@@ -1826,50 +2350,51 @@ impl BotBrain {
         self.route_vision_block(ctx, dist, rng); // 3C != 0 → the block [M :52]
     }
 
-    /// One straight-line step toward (`sign` 1) or away from (−1) a point, facing the opponent —
-    /// the goal walk's stand-in mover (`move_to_goal_position`) reused by the attack states [S].
-    fn attack_step(&mut self, target: [f32; 3], sign: f32) {
-        let dx = target[0] - self.pos[0];
-        let dz = target[2] - self.pos[2];
-        let d = (dx * dx + dz * dz).sqrt();
-        if d < 1e-3 { return; }
-        let mul = [0.7f32, 1.0, 1.3][(self.vars.speed as usize).min(2)];
-        let step = 0.05 * mul * sign;
-        self.pos[0] += dx / d * step;
-        self.pos[2] += dz / d * step;
-        self.yaw = crate::trig::atan2_approx(dz, dx);
-    }
-
-    /// 0xD0 BotAttackRun [M 0x16F390 — not lifted; the stand-in]: close in on the opponent, then
-    /// back to BotAttack once in engage range and in sight. Unported, the bot sat in 0xD0 forever
-    /// (the two-window bots) [S].
+    /// 0xD0 BotAttackRun [M 0x16f390]: no opponent → 0xD3 (the port: idle); the route to the
+    /// opponent (`NDrone2_MoveToObject` — the port's `steer_to` over the AI network); inside
+    /// the too-close range → 0xD7 backoff; inside the engage range (+0xF0) and sighted → react
+    /// → 0xCF. A route that fails for good (the stuck watch) → 0xD1's place: drop the opponent
+    /// and go back to the goals [S].
     fn bot_attack_run_msg3(&mut self, ctx: &BotCtx) {
         let Some(o) = self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive) else {
             self.set_state(state::BOT_IDLE);
             return;
         };
         let dist = o.dist2.sqrt();
-        if dist < self.vars.combat_range[1] && self.vars.unseen_ticks < 0x10 {
-            self.vars.fire_latch = 0;
-            self.set_state(state::BOT_ATTACK);
+        let target = o.pos;
+        if dist <= self.vars.combat_range[0] {
+            self.set_state(state::BOT_ATTACK_BACKOFF); // [M :72-76]
             return;
         }
-        if !ctx.stationary { self.attack_step(o.pos, 1.0); }
+        if dist < self.vars.combat_range[1] && self.vars.sighted & 4 != 0 && self.vars.unseen_ticks < 0x10 {
+            self.vars.fire_latch = 0;
+            self.set_state(state::BOT_ATTACK); // [M :86-91]
+            return;
+        }
+        if ctx.stationary {
+            return;
+        }
+        let dest = [target[0], target[1] - crate::player::EYE, target[2]];
+        if !self.steer_to(ctx, dest, 1.0, true) {
+            self.vars.opponent = None;
+            self.stuck_hits = 0;
+            self.set_state(state::BOT_IDLE);
+        }
     }
 
-    /// 0xD7 BotAttackBackoff [M 0x16FC30 — not lifted; the stand-in]: step away until past the
-    /// close range, then back to BotAttack [S].
+    /// 0xD7 BotAttackBackoff [M 0x16fc30 — not lifted; the stand-in]: walk back (facing the
+    /// opponent) until past the close range, then back to BotAttack [S].
     fn bot_attack_backoff_msg3(&mut self, ctx: &BotCtx) {
         let Some(o) = self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive) else {
             self.set_state(state::BOT_IDLE);
             return;
         };
-        if o.dist2.sqrt() > self.vars.combat_range[0] + 1.0 || ctx.stationary {
+        if o.dist2.sqrt() > self.vars.combat_range[0] + 1.0 || ctx.stationary || self.stuck_hits > 0 {
             self.vars.fire_latch = 0;
             self.set_state(state::BOT_ATTACK);
             return;
         }
-        self.attack_step(o.pos, -1.0);
+        self.side_walk(0.0, -1.0, 0.8);
     }
 
     /// BotAttackFire's route/vision block [M 0x16f5e8:56-93].
@@ -1882,7 +2407,7 @@ impl BotBrain {
             return;
         }
         if self.vars.unseen_ticks >= 0x10 {
-            if let Some(mv) = self.choose_combat_move(rng) {
+            if let Some(mv) = self.choose_combat_move(ctx, rng) {
                 self.set_state(mv); // [M :77]
             }
             return;
@@ -2250,6 +2775,7 @@ mod brain_tests {
                 pickups,
                 others,
                 world,
+                nav: None,
                 health: 100.0,
                 max_health: 100.0,
                 stationary,
@@ -2419,5 +2945,74 @@ mod brain_tests {
         assert_eq!(a.brain.vars.goals[a.brain.vars.active_goal as usize].target,
                    b.brain.vars.goals[b.brain.vars.active_goal as usize].target,
                    "the pickup pick consumes no RNG (subtype 0 → no gotoGoal roll)");
+    }
+
+    /// A 100×100 floor at y 0 (+ optionally a 4-wide, 3-high wall across the walk at x 3, both
+    /// faces). The bot stands on it: eye = floor + 1.1 (root) + EYE.
+    fn floor_world(wall: bool) -> CollisionWorld {
+        let mut t = vec![
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
+        ];
+        if wall {
+            let (a, b, c, d) = ([3.0, 0.0, -2.0], [3.0, 0.0, 2.0], [3.0, 3.0, 2.0], [3.0, 3.0, -2.0]);
+            t.extend([[a, b, c], [a, c, d], [a, c, b], [a, d, c]]);
+        }
+        CollisionWorld::from_triangles(t)
+    }
+
+    fn floor_rig(wall: bool) -> Rig {
+        let mut r = Rig::new();
+        r.world = floor_world(wall);
+        let eye = 1.1 + crate::player::EYE;
+        let mut rec = INITIAL_BOT_RECORDS[0].clone();
+        rec.0[0x0E] = 1;
+        r.brain = BotBrain::bot_init(&rec, 4, [0.0, eye, 0.0], 0.0);
+        r.brain.weapon = BotWeapon { interval: 6, burst: 3, aggression_mul: 1.0 };
+        r.brain.vars.weapon_id = 0x02;
+        r.brain.vars.clip_rounds = 50;
+        r.pickups[0].pos = [6.0, 0.3, 0.0];
+        r.others[0].pos = [10.0, eye, 0.0];
+        r.others[1].pos = [0.0, eye, 0.0];
+        r
+    }
+
+    /// The body walk on real geometry: the bot walks the floor to the pickup (the height holds —
+    /// no re-stand, no sinking), and the walk is the body's (it moved at walking pace).
+    #[test]
+    fn body_walks_the_floor_to_the_pickup() {
+        let mut r = floor_rig(false);
+        let eye = r.brain.pos[1];
+        let mut arrived = None;
+        for t in 0..400 {
+            r.step();
+            assert!((r.brain.pos[1] - eye).abs() < 0.05, "tick {t}: the body stays on the floor, eye {:?}", r.brain.pos);
+            if arrived.is_none() && r.brain.visited_pickups.contains(&0) {
+                arrived = Some(t);
+            }
+        }
+        let t = arrived.expect("the bot reaches the pickup");
+        // 5 units at ≤ 0.105 a tick (+ the turn and the stick ease) — not instant, not stalled
+        assert!(t >= 45 && t <= 200, "arrival tick {t}");
+    }
+
+    /// Sister: a wall across the walk holds the body (the capsule push) — the bot never passes
+    /// x = 3 while it is inside the wall's z span — and it keeps moving (no frozen stand).
+    #[test]
+    fn body_never_walks_through_a_wall() {
+        let mut r = floor_rig(true);
+        let start = r.brain.pos;
+        let mut walked = 0.0;
+        let mut last = start;
+        for t in 0..600 {
+            r.step();
+            let p = r.brain.pos;
+            if p[2].abs() < 1.5 {
+                assert!(p[0] < 3.0, "tick {t}: the body passed the wall, pos {p:?}");
+            }
+            walked += ((p[0] - last[0]).powi(2) + (p[2] - last[2]).powi(2)).sqrt();
+            last = p;
+        }
+        assert!(walked > 2.0, "the bot walked up to the wall, walked {walked}");
     }
 }
