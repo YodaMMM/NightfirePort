@@ -127,6 +127,9 @@ fn local_deathmatch_kill_scores_respawns_and_ends_into_the_debriefing() {
     assert_eq!(board_rows, 2, "the board carries the human and the bot (the settings' counts)");
     let mut fe = FrontEnd::new();
     fe.open_mp_debriefing(sim.mp.as_ref().unwrap());
+    // G-048(3): the match end only QUEUES +0x1c = 0x40000033 [M 0x184bd0:63]; the page lands at
+    // the load's MenuManager_Create [M 0x1d6360:160-163] — the port's load-tail reopen.
+    assert!(fe.reopen_queued_page(), "the load tail's create opens the queued debriefing");
     // [M 0x212198 msg 0x4c; Who-won 0x1848d0:79-84] the board ranks by points, deaths per slot
     assert_eq!(fe.page, Page::MpDebriefing, "the handover lands on the debriefing page");
     let board = fe.mp_debriefing.as_ref().expect("the board built");

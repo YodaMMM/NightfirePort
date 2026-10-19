@@ -405,6 +405,10 @@ fn run_e2e(path: &str, fault: Option<(u64, u32, u32)>) {
     // 0x40000033] and the boards agree on the numbers ──
     feh.open_mp_debriefing(hscene.sim.as_ref().unwrap().mp.as_ref().unwrap());
     fec.open_mp_debriefing(cscene.sim.as_ref().unwrap().mp.as_ref().unwrap());
+    // G-048(3): the match end only QUEUES +0x1c = 0x40000033 [M 0x184bd0:63]; the page lands at
+    // the load's MenuManager_Create [M 0x1d6360:160-163] — the port's load-tail reopen.
+    assert!(feh.reopen_queued_page(), "the host's load tail opens the queued debriefing");
+    assert!(fec.reopen_queued_page(), "the client's load tail opens the queued debriefing");
     assert_eq!(feh.page, Page::MpDebriefing, "the host lands on the debriefing");
     assert_eq!(fec.page, Page::MpDebriefing, "the client lands on the debriefing");
     let rh = feh.mp_debriefing_rows();
