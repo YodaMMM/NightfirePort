@@ -92,6 +92,7 @@ fn setup_ffa_then_options_then_rules_back_out() {
     join_agent1(&mut fe);
     fe.mp_scenario_row = 1; // Arena (FFA)
     fe.action(Action::Confirm);
+    iris_wait(&mut fe); // [M C_SBMPSCEN 0x20c600:45 Menu_ChangePageCloseIris — G-048(1); the walk must land before the map row's confirm]
     fe.mp_map_row = 0;
     fe.action(Action::Confirm);
     assert_eq!(fe.mp_setup_state, 3, "FFA asks Choose Character [M P_MPSETUP's mp_stuff state 3]");
@@ -165,6 +166,7 @@ fn bots_flow_picks_and_counts() {
     join_agent1(&mut fe);
     fe.mp_scenario_row = 1;
     fe.action(Action::Confirm);
+    iris_wait(&mut fe); // [M C_SBMPSCEN 0x20c600:45 — G-048(1)]
     fe.mp_map_row = 1; // Fort Knox — bots allowed
     fe.action(Action::Confirm);
     fe.action(Action::Confirm); // FFA character pick → the handicap
@@ -208,6 +210,7 @@ fn start_checks_refuse_single_player() {
     join_agent1(&mut fe);
     fe.mp_scenario_row = 1;
     fe.action(Action::Confirm);
+    iris_wait(&mut fe); // [M C_SBMPSCEN 0x20c600:45 — G-048(1)]
     fe.mp_map_row = 1;
     fe.action(Action::Confirm);
     fe.action(Action::Confirm); // character → handicap
@@ -273,6 +276,7 @@ fn team_scenario_asks_team_then_character() {
     // Team Arena (row 2, scenario 0x20000002) has the team bit.
     fe.mp_scenario_row = 2;
     fe.action(Action::Confirm);
+    iris_wait(&mut fe); // [M C_SBMPSCEN 0x20c600:45 — G-048(1)]
     fe.mp_map_row = 1;
     fe.action(Action::Confirm);
     assert_eq!(fe.mp_setup_state, 2, "a team game asks Choose Team [M P_MPSETUP's state 2]");

@@ -84,14 +84,28 @@ fn a_menu_started_mission_rides_state6_back_to_the_level_load() {
     // START → P_PARISENUM → P_ESTHERO plays 0x073B0048 as a menu background movie — GameFlow stays
     // in state 2, no state 6 [M 0x20a648:43, 0x20a060:16-25] — and Main opens when it ends (:28-45).
     fe.action(Action::Confirm);
-    for _ in 0..3 + menu::ESTHERO_TICKS { fe.tick(); assert_eq!(fe.flow.get_state(), ST_RUNNER, "no GameFlow movie state during the intro"); }
-    assert_eq!(fe.page, Page::Main, "the intro ran out; Main is up");
+    // G-048(4): P_PARISENUM's 0x50 pumps the card machine before P_ESTHERO opens [M 0x20a648:26-47
+    // — HandlePS2CardState 0x110b98's walk; the sceMc latency is the marked [S]] — the intro
+    // runs ≈5 ticks later than the old [S] first-0x50 open the fixed offset pinned. Bounded
+    // wait on the arrival, the ST_RUNNER sister kept per tick (fe-gaps-g048-2).
+    let mut on_main = false;
+    for _ in 0..menu::ESTHERO_TICKS + 16 {
+        fe.tick();
+        assert_eq!(fe.flow.get_state(), ST_RUNNER, "no GameFlow movie state during the intro");
+        if fe.page == Page::Main { on_main = true; break; }
+    }
+    assert!(on_main, "the intro ran out; Main is up");
     fe.action(Action::Confirm); // NightFire → Codename after the 0x13 delay [M C_GONIGHTFIRE 0x2169b8:29-37]
     for _ in 0..menu::DELAYED_PAGE_TICKS + menu::MAIN_OPEN_BLOCK { fe.tick(); }
     assert_eq!(fe.cursor, 1, "row 1 = Play without saving [M P_NFSELECT 0x20aec0:96-97]");
     fe.action(Action::Confirm); // Codename → the confirm box armed
     fe.action(Action::Confirm); // the box → Select Difficulty
+    // G-048(1): the box's resolve and the difficulty confirm both ride Menu_ChangePageCloseIris
+    // [M P_NFSELECT 0x20aec0:103, C_SBNFDFCTY 0x216ca8:16 → 0x202190:8-9] — wait out each 10-tick
+    // 0x44 before the next input.
+    for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
     fe.action(Action::Confirm); // Difficulty → Single Player
+    for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); } // [M 0x216ca8:16]
     fe.unlock_all = true;
     fe.cursor = 1;
     assert!(fe.action(Action::Confirm)); // The Exchange (0x07000005)
