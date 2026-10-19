@@ -153,7 +153,7 @@ transition when the previous substate was the other stance, and latches `BLData+
 ticks; `Player_SSWalk`/`SSCrouch` skip `AnimSetUpdate` while it counts down [M].
 
 **Death** — substates 0xd (ground) / 0xe (drown; picked by `ANIMOBJ+0x60 & 0x100`): the set is
-deleted and ONE script plays — 0x60008e0 when the water-level global `DAT_002d8894` == 0.0, else
+deleted and ONE script plays — 0x60008e0 when the gravity vector's Y `DAT_002d8894` (`WldGravity.y`, −9.8 at `Player_Init`) == 0.0 (zero-g), else
 0x6000151 (`Player_Init` initialises it to −9.9) [M 0x190630 cases 0xd/0xe]. MP respawn comes
 300 ticks later via `MP_ReSpawn` 0x185368 (re-equip → set rebuild → substate 0) [M 0x190bb0:41-55].
 

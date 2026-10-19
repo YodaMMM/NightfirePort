@@ -629,7 +629,7 @@ fn clicks_never_change_what_they_should_not() {
         } else {
             // A wheel-row ✕ picks the hovered row — the tier's stored value is the boot table's
             // +0xc lane: 1/2/3 [D ACTION.ELF .data 0x2df4c0, records 0..2]; the store is
-            // GameState+0x40 = difficulty[i*0x18+0xc] [M 0x216ca8:15]. Nothing else may pick.
+            // GameState+0x28 (Ghidra `_40_4_`, decimal) = difficulty[i*0x18+0xc] [M 0x216ca8:15]. Nothing else may pick.
             assert!(matches!(g.requested_difficulty, Some(1..=3)),
                 "only a wheel row's ✕ picks — got {:?}", g.requested_difficulty);
             break;
