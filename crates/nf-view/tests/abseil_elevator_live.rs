@@ -42,7 +42,7 @@ fn the_07000011_abseilers_run_the_rope_chain() {
         assert_eq!(d.anim_set, 0xf, "the rope set 0xf [M 0x14b300:626]");
         assert_eq!(d.start_script, 0, "the 0x06000892 word is consumed, not a script");
         assert!(d.saved_anim_set != 0, "the skin's own set is saved at +0xdc");
-        assert_eq!(d.descend_speed, 0.05, "DefaultInit 0x14b300:772-774");
+        assert_eq!(d.descend_speed, 0.075, "DefaultInit 0x14b300:772-774 stores 0x3d99999a = 0.075 when the placement left +0x50 zero (the daily audit 2026-10-17: the old 0.05 contradicted the store)");
         assert_eq!(d.rope[1], rope_top[idx.iter().position(|&x| x == i).unwrap()][1], "the rope point = the placement [M 0x169610:32-35]");
     }
     assert!(sim.drones.list.iter().filter(|d| d.enabled).all(|d| d.mode != 0x1b), "no 0x1b drone on disc [D]");
@@ -66,7 +66,8 @@ fn the_07000011_abseilers_run_the_rope_chain() {
     let h = hang_at.expect("the empty-rope chain reaches the Hang");
     assert!(h <= 61, "Init (timer ≤ Rand_Rand(60)) → Slide → Hang by tick {h}");
     // The hung drone holds the placement (the rope point never tracked an opponent; only the Init
-    // window's 0.05-speed creep moved it) and keeps the rope flag + set 0xf.
+    // window's 0.075-speed creep moved it — the DefaultInit default, 0x14b300:772-774) and keeps
+    // the rope flag + set 0xf.
     for (&i, top) in idx.iter().zip(&rope_top) {
         let d = &sim.drones.list[i];
         assert_eq!(d.state, state::ABSEIL_HANG);
@@ -103,9 +104,9 @@ fn the_rope_follows_the_opponent_down_and_lands() {
     let d = &sim.drones.list[i];
     assert_eq!(d.state, state::ABSEIL_SLIDE, "the opponent 20 below resumes the slide [M 0x169940:42-47]");
     assert_eq!(d.rope[1], d.player_pos[1], "the rope point tracked the opponent's Y [M 0x169730:52-54]");
-    assert_eq!(d.descend_speed, 6.5, "the slide's +0x50 [M 0x169730:22]");
+    assert_eq!(d.descend_speed, 6.9, "the slide's +0x50 = 0x40dccccd [M 0x169730:22]");
     // Descending: within 40 ticks the drone must have dropped well past the rope top (the
-    // acceleration reaches 6.5 u/s after a second).
+    // acceleration reaches 6.9 u/s after a second).
     let y0 = d.pos[1];
     for _ in 0..40 { sim.step_bond(Input::default(), false, false, false); }
     let d = &sim.drones.list[i];

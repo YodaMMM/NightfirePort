@@ -1445,8 +1445,12 @@ impl Drone {
             dr.anim_set = 0xf;
             dr.mode = if p1 == 0x0600_0892 { 0x1c } else { 0x1b };
             dr.air = true;
-            // DefaultInit 0x14b300:772-774: `+0x50 = 0.05` when the placement left it 0.
-            dr.descend_speed = 0.05;
+            // DefaultInit 0x14b300:772-774 (LAB_0014c370): `if (+0x50 == 0.0) +0x50 = 0x3d99999a`
+            // = 0.075 — the rope-descent scalar's default (the daily audit 2026-10-17: the old
+            // 0.05 contradicted the store; the decompile's store sits in DefaultInit's common
+            // tail for every kind — this arm keeps it on the abseil placements, the only port
+            // path that reads the field, NDrone2_Move 0x14eff8:59's rope branch).
+            dr.descend_speed = 0.075;
         }
         dr.captain_setup(d);
         // DefaultInit kind 0x18: health = DroneInit_TakeXHits(dmg, 0x33) — the weapon_data[0x33]
@@ -6700,11 +6704,12 @@ impl Drone {
             // Timer C (case 0xc) → AbseilSlide 0x8f [M :53-55].
             (state::ABSEIL_INIT, msg::TIMER_C) => { self.set_state(state::ABSEIL_SLIDE); true }
             // AbseilSlide 0x8f (0x169730). ENTER: flag 0x10000, CallAnim(3) (the slide pose), +0x23 = 1,
-            // +0x50 = 6.5; mode 0x1b drops the rope point to −1000 [M case 1].
+            // +0x50 = 0x40dccccd = 6.9 (the daily audit 2026-10-17: the old 6.5 contradicted the
+            // store); mode 0x1b drops the rope point to −1000 (0xc47a0000) [M case 1].
             (state::ABSEIL_SLIDE, msg::ENTER) => {
                 self.call_anim(d, 3, 0, 0);
                 self.air = true;
-                self.descend_speed = 6.5;
+                self.descend_speed = 6.9;
                 if self.mode == 0x1b { self.rope[1] = -1000.0; }
                 true
             }
