@@ -5825,8 +5825,12 @@ impl Scene {
         // `psiFadeView(R+0x230, G+0x231, B+0x232, A+0x233)` per viewer), and `GameFlow_PushState`
         // ABORTS a push while a fade is already in flight [M 0x1c9f88 `beqz $v0` → no push], so
         // the two can never run at once: `view_fade` wins when a script owns the fade, the exit
-        // hold otherwise.
-        let fade = sim.drones.view_fade.or_else(|| sim.drones.exit_fade_view());
+        // hold otherwise. doublecross-transitions: `Player_Init`'s entry fade arms the same ONE
+        // fade object on every spawn [M 0x1910f8:45] — the port keeps the three sources separate
+        // and chains them script → exit → entry (a script that fades during an intro wins, the
+        // same latest-writer-wins shape [S: the port's sources are separate, the game's object is
+        // one]).
+        let fade = sim.drones.view_fade.or_else(|| sim.drones.exit_fade_view()).or_else(|| sim.drones.spawn_fade_view());
         crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash)
     }
 

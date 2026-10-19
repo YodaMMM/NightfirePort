@@ -71,6 +71,27 @@ pub fn resolve_exit_code(code: u32) -> u32 {
     }
 }
 
+/// `ResetMap_LevelToLoad__FUiScSc` 0x1d3800's wrap switch (no_intro == 0) [M 0x1d3800:27-101;
+/// jump table 0x305030, 74 slots for 0x07000001-0x0700004a, 24 `lui 0x710`/`ori` pairs]: every
+/// story code loads through its 0x0710000N briefing code — identity on the low byte for
+/// 0x07000001..0x07000016, plus the two special cases 0x0700001b → 0x07100018 (the Equinox
+/// briefing is movie 18; 0x0710001b is not on the disc [D /MOVIES/30_FPS]) and 0x0700004a →
+/// 0x0710004a. Every other code — the wrappers 0x07000041/43/46/49, the front end 0x07000048,
+/// the 0x0720/0x0730 movie codes — has no case and loads unwrapped [M]. The trigger exits pass
+/// no_intro = 0 [M 0x1b2318:111]; the only no_intro = 1 callers are P_ENDMISSION's restart rows
+/// [M 0x216618:16,20]. The loader's phase 2 then resolves the wrapped code back
+/// (`GetLevelToLoadFromMovieCode` 0x1d3560 → `resolve_exit_code`); a code whose briefing is not
+/// in `UsingMovie` 0x107eb8 never starts a movie, so state 6 pops on its first tick [M
+/// 0x1c98c8 case 6] and the straight load stands.
+pub fn wrap_intro(code: u32) -> u32 {
+    match code {
+        0x0700_0001..=0x0700_0016 => 0x0710_0000 | (code & 0xff),
+        0x0700_001b => 0x0710_0018,
+        0x0700_004a => 0x0710_004a,
+        _ => code,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Trigger {
     /// Position in the main map's placement list (objects update in reverse placement order).
@@ -852,5 +873,49 @@ mod tests {
         assert_eq!(resolve_exit_code(0x0700_0007), 0x0700_0007, "a plain exit hashcode passes through");
         // Sister: the 0x720004a request the 4a SP actually fires is resolvable end to end.
         assert_eq!(resolve_exit_code(0x0720_004a), 0x0700_0013);
+    }
+
+    /// `ResetMap_LevelToLoad`'s wrap switch (no_intro == 0) [M 0x1d3800:27-101]: the Double Cross
+    /// parts wrap to their 0x0710000N briefing codes (identity on the low byte), the Equinox
+    /// special case and 4a wrap, and everything outside the jump table's 74 slots (0x07000001-4a)
+    /// — the wrappers, the front end, the 0x0720/0x0730 movie codes — loads unwrapped.
+    #[test]
+    fn wrap_intro_follows_the_level_to_load_switch() {
+        // The Double Cross chain [D: the parts' 0xE8 param-0s are exactly these codes].
+        assert_eq!(wrap_intro(0x0700_0001), 0x0710_0001, "[M 0x1d3800:29-31]");
+        assert_eq!(wrap_intro(0x0700_0002), 0x0710_0002, "[M 0x1d3800:33-36]");
+        assert_eq!(wrap_intro(0x0700_0003), 0x0710_0003, "[M 0x1d3800:37-40]");
+        assert_eq!(wrap_intro(0x0700_0004), 0x0710_0004, "[M 0x1d3800:41-44]");
+        // The two special cases [M 0x1d3800:95-99].
+        assert_eq!(wrap_intro(0x0700_001b), 0x0710_0018, "the Equinox briefing is movie 18");
+        assert_eq!(wrap_intro(0x0700_004a), 0x0710_004a);
+        // Outside the table: the wrappers, the front end, the movie codes load unwrapped [M].
+        assert_eq!(wrap_intro(0x0700_0048), 0x0700_0048, "the front end has no wrap case");
+        assert_eq!(wrap_intro(0x0700_0043), 0x0700_0043, "the wrappers load unwrapped");
+        assert_eq!(wrap_intro(0x0720_004a), 0x0720_004a, "the 0x0720 cut-scene codes skip the wrap");
+        assert_eq!(wrap_intro(0x0730_0013), 0x0730_0013, "the 0x0730 interlude codes skip the wrap");
+        // Sister: a code inside the table's range but past the last case (0x0700001c-0x0700001a
+        // gap — 0x1c..0x49 have no case [M 0x1d3800's table]) stays unwrapped.
+        assert_eq!(wrap_intro(0x0700_001c), 0x0700_001c);
+    }
+
+    /// The Double Cross hops wrap and resolve straight back: `wrap_intro` (0x1d3800's switch)
+    /// maps each part to its briefing code and phase 2 (`GetLevelToLoadFromMovieCode`
+    /// 0x1d3560:97-98) strips the middle byte back off — the net code the loader finally loads is
+    /// the part itself. The briefing codes 0x07100002/03/04 are NOT in `UsingMovie` 0x107eb8 [M
+    /// :8-85 — only 0x07100001/05/09/0c/11/14/18], so no movie starts and state 6 pops on its
+    /// first tick [M 0x1c98c8 case 6]; the whitelist intersection itself is pinned against the
+    /// port's `nf_view::movie::USING_MOVIE` in the nf-view tests (the constant lives there).
+    /// Sister: the mission-start code 0x07000001 wraps to 0x07100001, the one whitelisted Double
+    /// Cross briefing.
+    #[test]
+    fn a_double_cross_hop_wraps_and_resolves_straight_back() {
+        for (part, wrapped) in [(0x0700_0002, 0x0710_0002), (0x0700_0003, 0x0710_0003), (0x0700_0004, 0x0710_0004)] {
+            assert_eq!(wrap_intro(part), wrapped, "[M 0x1d3800]");
+            assert_eq!(resolve_exit_code(wrapped), part, "phase 2 strips the wrap back to the part [M 0x1d3560:97-98]");
+        }
+        // Sister: the mission-start briefing wrap is a different code (and the only Double Cross
+        // one in UsingMovie — pinned against the port's whitelist in nf-view).
+        assert_eq!(wrap_intro(0x0700_0001), 0x0710_0001);
     }
 }
