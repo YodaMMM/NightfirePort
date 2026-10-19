@@ -50,6 +50,12 @@ struct Fault {
     now_ms: u64,
     /// (release ms, to, bytes) — unsorted (jitter); released by `pump`.
     queue: Vec<(u64, SocketAddr, Vec<u8>)>,
+    /// net-soak-faults [S]: while `now_ms < stall_until_ms` every send is
+    /// swallowed (the machine's uplink is down); sends resume unchanged
+    /// after — the unacked window retransmits recover the gap (the RTO
+    /// re-send, session.rs's send path), so a bounded stall must never
+    /// deadlock the lockstep. 0 = never stalled.
+    stall_until_ms: u64,
 }
 
 impl UdpTransport {
@@ -85,7 +91,38 @@ impl UdpTransport {
             jitter_ms,
             now_ms,
             queue: Vec::new(),
+            stall_until_ms: 0,
         });
+    }
+
+    /// net-soak-faults [S]: swallow every send for the next `stall_ms` of the
+    /// session's logical clock (a total uplink stall, then recovery — the
+    /// stalled datagrams are LOST, not queued: the recovery is the protocol's
+    /// own retransmit, which is the robustness the soak proves). Installs a
+    /// clean fault record when the link had none.
+    pub fn stall_sends_for(&mut self, stall_ms: u64) {
+        if self.fault.is_none() {
+            self.fault = Some(Fault {
+                rng: 0,
+                drop_per_mille: 0,
+                reorder_per_mille: 0,
+                held: None,
+                delay_ms: 0,
+                jitter_ms: 0,
+                now_ms: 0,
+                queue: Vec::new(),
+                stall_until_ms: 0,
+            });
+        }
+        if let Some(f) = self.fault.as_mut() {
+            f.stall_until_ms = f.now_ms + stall_ms;
+        }
+    }
+
+    /// net-soak-faults [S]: true while the send stall is active (the soak's
+    /// phase bookkeeping reads it).
+    pub fn send_stalled(&self) -> bool {
+        self.fault.as_ref().is_some_and(|f| f.now_ms < f.stall_until_ms)
     }
 
     fn fault_rand(rng: &mut u64) -> u64 {
@@ -125,6 +162,11 @@ impl UdpTransport {
 impl Transport for UdpTransport {
     fn send(&mut self, to: SocketAddr, data: &[u8]) {
         if let Some(f) = self.fault.as_mut() {
+            // net-soak-faults [S]: the uplink stall swallows everything (no
+            // dice, no queueing — nothing leaves) until the stall lifts.
+            if f.now_ms < f.stall_until_ms {
+                return;
+            }
             if f.drop_per_mille > 0 && (Self::fault_rand(&mut f.rng) % 1000) < f.drop_per_mille as u64 {
                 return; // lost
             }

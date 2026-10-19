@@ -549,6 +549,11 @@ pub struct Session<T: Transport> {
     /// Bytes / datagrams this session sent (diagnostics: the app's bytes/s readout).
     sent_bytes: u64,
     sent_packets: u64,
+    /// net-soak-faults [S]: bytes / datagrams this session received (payload,
+    /// the same accounting as `sent_bytes` — the soak's per-machine receive
+    /// bandwidth readout).
+    recv_bytes: u64,
+    recv_packets: u64,
 }
 
 /// net-p2p: at most this many un-taken stray datagrams are held [S port design].
@@ -649,6 +654,8 @@ impl<T: Transport> Session<T> {
             lower_streak: 0,
             sent_bytes: 0,
             sent_packets: 0,
+            recv_bytes: 0,
+            recv_packets: 0,
         }
     }
 
@@ -697,6 +704,8 @@ impl<T: Transport> Session<T> {
             lower_streak: 0,
             sent_bytes: 0,
             sent_packets: 0,
+            recv_bytes: 0,
+            recv_packets: 0,
         }
     }
 
@@ -841,6 +850,13 @@ impl<T: Transport> Session<T> {
     /// per datagram for the link's view).
     pub fn sent_totals(&self) -> (u64, u64) {
         (self.sent_bytes, self.sent_packets)
+    }
+
+    /// net-soak-faults [S]: bytes and datagrams this session has received (payload, the
+    /// same accounting as [`Session::sent_totals`] — every datagram `poll` drains,
+    /// decoded or not).
+    pub fn recv_totals(&self) -> (u64, u64) {
+        (self.recv_bytes, self.recv_packets)
     }
 
     pub fn local_input(&mut self, tick: u32, input: Input) {
@@ -1258,6 +1274,10 @@ impl<T: Transport> Session<T> {
         }
         // 1. Drain the network.
         while let Some((from, data)) = self.transport.try_recv() {
+            // net-soak-faults [S]: the receive-side counter counts every drained
+            // datagram (decoded or stray — the link's bytes hit the socket either way).
+            self.recv_bytes += data.len() as u64;
+            self.recv_packets += 1;
             if let Some(pkt) = proto::decode(&data) {
                 self.handle_packet(from, pkt, &mut events);
             } else {
@@ -2449,5 +2469,17 @@ impl Session<crate::net::UdpTransport> {
     /// clock) — this machine's outgoing half of a simulated internet path.
     pub fn inject_link_delay(&mut self, seed: u64, drop_per_mille: u32, reorder_per_mille: u32, delay_ms: u64, jitter_ms: u64) {
         self.transport.inject_link(seed, drop_per_mille, reorder_per_mille, delay_ms, jitter_ms);
+    }
+
+    /// net-soak-faults [S]: swallow this machine's every send for the next `stall_ms`
+    /// of the session's clock (a total uplink stall, then recovery — the recovery is
+    /// the retransmit path's own, which is what the soak proves).
+    pub fn inject_send_stall(&mut self, stall_ms: u64) {
+        self.transport.stall_sends_for(stall_ms);
+    }
+
+    /// net-soak-faults [S]: true while this machine's send stall is active.
+    pub fn send_stalled(&self) -> bool {
+        self.transport.send_stalled()
     }
 }
