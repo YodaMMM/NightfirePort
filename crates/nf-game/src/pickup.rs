@@ -26,6 +26,11 @@ pub const BEST_WEAPON: [u16; 18] = [0x42, 0x32, 0x1a, 0x18, 0x1c, 0x16, 0x15, 0x
 /// ([0x1c, 0x18, 0x2, 0xa, 0x42]) are not read by 0x18f1b0.
 pub const PICKUP_MATRIX_ROW0: [u16; 5] = [0x6, 0x1e, 0x2c, 0x6, 0x10];
 
+/// `Pickup_CreateFromSet` (0x18f1b0) creates its pickup with respawn 3 (`Pickup_Create`'s arg 11,
+/// stored at PICKUPINFO+0x2C: `FRAME_RATE_INT · 3 · 10` = 30 s hidden after a take) [M disasm
+/// 0x18f25c `sw s6(=3),16(sp)`; 0x18dda0:129].
+pub const SET_RESPAWN: u16 = 3;
+
 /// A model's glist bounds (`celglist+0x20`: centre, radius).
 #[derive(Clone, Copy, Debug)]
 pub struct Model { pub centre: V3, pub radius: f32 }
@@ -203,9 +208,13 @@ impl Pickup {
         Some(Pickup {
             kind: kind::WEAPON, weapon: base, rounds, model, bounds, m,
             start: translation, vel: [0.0; 3], state: 1, lifetime: 0,
-            switch_channel: 0, sound: None,
+            // mp-bot-weapons: the stack args of the `Pickup_Create` call — sound 0xF5 (arg 9,
+            // sp+0) and respawn 3 (arg 11, sp+16 → PICKUPINFO+0x2C = 30 s) [M disasm
+            // 0x18f240-0x18f264; Pickup_Create 0x18dda0:85,129]. The port had sound none and
+            // respawn 0, so every MP weapon pickup vanished for good on its first take.
+            switch_channel: 0, sound: Some(SOUND),
             hidden: false, gone: false, from: None, obj: None,
-            respawn: 0, respawn_ticks: 0, spin: false,
+            respawn: SET_RESPAWN, respawn_ticks: 0, spin: false,
             label: 0,
         })
     }
@@ -692,6 +701,7 @@ mod tests {
         assert_eq!((p.kind, p.weapon, p.rounds), (kind::WEAPON, 0x2c, 8), "the rocket set: kind 0, base id, clip·2");
         assert_eq!(p.model, rocket_model, "the WEAPON's glist, not the placement's object");
         assert_eq!((p.state, p.spin), (1, false), "rests where placed, no spin");
+        assert_eq!((p.respawn, p.sound), (3, Some(SOUND)), "respawn 3 (30 s) and sound 0xF5 — the call's stack args");
         assert!(Pickup::create_from_set([0.0; 3], [0.0; 3], 12, &w, &models).is_none(), "sister: kind 12 is not a set");
     }
 

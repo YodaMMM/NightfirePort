@@ -8174,6 +8174,10 @@ pub struct Drones {
     /// the options save carries it (LS_MakePlrSettings 0x1cd418 bit; the port's persisted
     /// `PlayerOptions::auto_equip_best`, profile.rs). The port's runtime default is the game's.
     pub auto_switch: bool,
+    /// mp-bot-weapons: an MP match takes its pickups in the shared slot-order pass
+    /// (`Sim::step_mp_pickups` — `Pickup_Update` 0x18e148's humans-then-bots loop, every taker on
+    /// every machine), so `update_pickups` skips its own player touch. Port-only [S].
+    pub mp_shared_pickups: bool,
     /// The grapple points (placement 0x3A, `Grapple_Create` 0x198298; fix-gadgets).
     pub grapple_points: Vec<crate::gadget::GrapplePoint>,
     /// The animated SimpleScripts (`SS_Create` 0x1a9c58 / `SS_Update` 0x1a9948; map-tower2): the
@@ -8404,6 +8408,8 @@ impl Drones {
             // pickups-g029: the option gate, the game's default (Input_Init 0x17edd8 writes 1;
             // live 1 [L ee_start_05 0x2a38d2]). Fields on their own lines — merge lesson 4.
             auto_switch: true,
+            // mp-bot-weapons (own line — merge lesson 4).
+            mp_shared_pickups: false,
             worldobjs: Default::default(),
             // fix-world-fx: the presentation FX (fields on their own lines — merge lesson 4).
             fx: Default::default(),
@@ -10355,61 +10361,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // game takes hidden pickups: the AR drop's invisible 0x1B grenade pile (`DroneWeap_DropWeapon`
             // 0x17a2a0 creates it with obj+0xF0 |= 0x10) is collected walking over the drop. The state-2
             // wait above still gates the respawn-hidden pickups (0x10 is set WITH state 2 there).
-            if alive && p.touches(d.world, player.cel, player.pos, player.sph) {
-                let loaded = d.skins.contains_key(&d.weapons.first_person(p.weapon as usize));
-                // `Pickup_Handler`: the armour case writes `BLData+0x8B0`; the clock is `GameState+0x52`
-                // (the 10 → 0xC remap gate) — the port's tick count stands in for it.
-                let clock = frame;
-                let res = self.inventory.take(d.weapons, p, loaded, &mut self.health.armour, clock);
-                // `NF_PICKUPLOG=1`: the take result and why (fix-player2's drop diagnostics; shared file —
-                // one env-gated line only).
-                if std::env::var_os("NF_PICKUPLOG").is_some() {
-                    eprintln!("[take] tick {} weapon {:#x} kind {} rounds {} loaded {} → {:?}", frame, p.weapon, p.kind, p.rounds, loaded, res);
-                }
-                if let Some(t) = res {
-                    // The respawn tail [M 0x18e650:338-348]: respawn 0 → deleted; -1 (0xFFFF) → stays
-                    // takeable; else hidden (obj+0xF0 |= 0x10), state 2, until
-                    // `FRAME_RATE_INT · respawn · 10` ticks pass. The port used to delete unconditionally.
-                    match p.respawn {
-                        0 => p.gone = true,
-                        0xFFFF => {}
-                        r => { p.hidden = true; p.state = 2; p.respawn_ticks = 60 * r as u32 * 10; }
-                    }
-                    // `Player_EquipWeapon`'s tail [M 0x1a8a58]: on a WEAPON equip (not the ammo path —
-                    // `Player_EquipAmmo` has no switch), the per-player auto-switch flag (live 1 [L]) ∧
-                    // `Player_IsBetterWeapon` writes `anim+0x63 = the upgraded id`. The port's `bond_weapon`
-                    // is the view's held weapon (one tick stale at most). pickups-g029: the flag is
-                    // now READ — `(&DAT_002a38d2)[idx·0x158] != 0` [M 0x1a8a58:76] — instead of
-                    // standing in as always-on.
-                    if self.auto_switch && matches!(t, crate::pickup::Taken::Weapon { .. }) {
-                        let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
-                        if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
-                            self.weapon_switch_request = Some(id);
-                        }
-                    }
-                    // `PlrStat_LogBondBonus(0)` 0x1999e0 — `Pickup_Handler` case 6 0x18e650:234-236
-                    // logs the bonus pickup in the take-effect switch (fix-progress).
-                    if matches!(t, crate::pickup::Taken::Bonus) { self.progress.log_bond_bonus(self.mission.status()); }
-                    // `if (+0x28) switch_channels[+0x28] = 1` (+ time stamp) [M 0x18e650:330-333].
-                    if p.switch_channel != 0 { self.channels.set(p.switch_channel as u32, 1, frame); }
-                    // `Pickup_Handler` overwrites `+0x2A` with the per-kind sound at take time —
-                    // 0xF5 for kinds 0 AND 1 (the message switch's cases 0/1 both land on
-                    // LAB_0018ee80: `*(ushort*)(info+0x2a) = 0xf5`), 0x141 armour, 0x14C Bond bonus
-                    // [M 0x18e650:290-300, 319-321]. The placement's own sound word is NOT played for
-                    // weapon/ammo takes: the disc places them with 0x13F (the 07000002 sniper, the
-                    // 07000008 rockets, the 07000005/01 id-6 boxes) and 0xFFFF (the 0700000c/d 0x1f
-                    // boxes) — the game still plays 0xF5. fix-pickups-ammo: the port used to play
-                    // `p.sound` (0x13F, or nothing) for kinds 0/1.
-                    let take_sound = match t {
-                        crate::pickup::Taken::Weapon { .. } | crate::pickup::Taken::Ammo { .. } => Some(0xF5),
-                        crate::pickup::Taken::Bonus => Some(0x14C),
-                        crate::pickup::Taken::Armour => Some(0x141),
-                        _ => p.sound,
-                    };
-                    let (at, sound) = ([p.m[3][0], p.m[3][1], p.m[3][2]], take_sound);
-                    self.taken.push((frame, t));
-                    if let (Some(id), Some(sfx)) = (sound, d.sfx) { self.play_sound(at, sfx.get(id)); }
-                }
+            if alive && !self.mp_shared_pickups && p.touches(d.world, player.cel, player.pos, player.sph) {
+                self.take_pickup(d, k, frame, false);
                 continue;
             }
             if p.lifetime != 0 {
@@ -10425,6 +10378,85 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // every later slot by one on the first take, so meshes were drawn at other pickups' and
         // drops' matrices (the user's "007 model at the armour spot" / "wrong model at the drop").
         // Every consumer already filters `gone`/`hidden`.
+    }
+
+    /// `Pickup_Handler` 0x18e650 for the local player on pickup `k` (the touch already passed):
+    /// the inventory take, the respawn tail, the auto-switch, the switch channel and the take
+    /// sound — `update_pickups`' take, split out for the MP shared pass (mp-bot-weapons). With
+    /// `force` a refused take still consumes the pickup (the online pass: the local inventory is
+    /// per-machine, the pickup state is shared — [S]). Returns the take.
+    pub fn take_pickup(&mut self, d: &Data, k: usize, frame: u32, force: bool) -> Option<crate::pickup::Taken> {
+        let p = &mut self.pickups[k];
+        let loaded = d.skins.contains_key(&d.weapons.first_person(p.weapon as usize));
+        // `Pickup_Handler`: the armour case writes `BLData+0x8B0`; the clock is `GameState+0x52`
+        // (the 10 → 0xC remap gate) — the port's tick count stands in for it.
+        let clock = frame;
+        let res = self.inventory.take(d.weapons, p, loaded, &mut self.health.armour, clock);
+        // `NF_PICKUPLOG=1`: the take result and why (fix-player2's drop diagnostics; shared file —
+        // one env-gated line only).
+        if std::env::var_os("NF_PICKUPLOG").is_some() {
+            eprintln!("[take] tick {} weapon {:#x} kind {} rounds {} loaded {} → {:?}", frame, p.weapon, p.kind, p.rounds, loaded, res);
+        }
+        if let Some(t) = res {
+            // The respawn tail [M 0x18e650:338-348]: respawn 0 → deleted; -1 (0xFFFF) → stays
+            // takeable; else hidden (obj+0xF0 |= 0x10), state 2, until
+            // `FRAME_RATE_INT · respawn · 10` ticks pass. The port used to delete unconditionally.
+            match p.respawn {
+                0 => p.gone = true,
+                0xFFFF => {}
+                r => { p.hidden = true; p.state = 2; p.respawn_ticks = 60 * r as u32 * 10; }
+            }
+            // `Player_EquipWeapon`'s tail [M 0x1a8a58]: on a WEAPON equip (not the ammo path —
+            // `Player_EquipAmmo` has no switch), the per-player auto-switch flag (live 1 [L]) ∧
+            // `Player_IsBetterWeapon` writes `anim+0x63 = the upgraded id`. The port's `bond_weapon`
+            // is the view's held weapon (one tick stale at most). pickups-g029: the flag is
+            // now READ — `(&DAT_002a38d2)[idx·0x158] != 0` [M 0x1a8a58:76] — instead of
+            // standing in as always-on.
+            if self.auto_switch && matches!(t, crate::pickup::Taken::Weapon { .. }) {
+                let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
+                    self.weapon_switch_request = Some(id);
+                }
+            }
+            // `PlrStat_LogBondBonus(0)` 0x1999e0 — `Pickup_Handler` case 6 0x18e650:234-236
+            // logs the bonus pickup in the take-effect switch (fix-progress).
+            if matches!(t, crate::pickup::Taken::Bonus) { self.progress.log_bond_bonus(self.mission.status()); }
+            // `if (+0x28) switch_channels[+0x28] = 1` (+ time stamp) [M 0x18e650:330-333].
+            if p.switch_channel != 0 { self.channels.set(p.switch_channel as u32, 1, frame); }
+            // `Pickup_Handler` overwrites `+0x2A` with the per-kind sound at take time —
+            // 0xF5 for kinds 0 AND 1 (the message switch's cases 0/1 both land on
+            // LAB_0018ee80: `*(ushort*)(info+0x2a) = 0xf5`), 0x141 armour, 0x14C Bond bonus
+            // [M 0x18e650:290-300, 319-321]. The placement's own sound word is NOT played for
+            // weapon/ammo takes: the disc places them with 0x13F (the 07000002 sniper, the
+            // 07000008 rockets, the 07000005/01 id-6 boxes) and 0xFFFF (the 0700000c/d 0x1f
+            // boxes) — the game still plays 0xF5. fix-pickups-ammo: the port used to play
+            // `p.sound` (0x13F, or nothing) for kinds 0/1.
+            let take_sound = match t {
+                crate::pickup::Taken::Weapon { .. } | crate::pickup::Taken::Ammo { .. } => Some(0xF5),
+                crate::pickup::Taken::Bonus => Some(0x14C),
+                crate::pickup::Taken::Armour => Some(0x141),
+                _ => p.sound,
+            };
+            let (at, sound) = ([p.m[3][0], p.m[3][1], p.m[3][2]], take_sound);
+            self.taken.push((frame, t));
+            if let (Some(id), Some(sfx)) = (sound, d.sfx) { self.play_sound(at, sfx.get(id)); }
+        }
+        if res.is_none() && force {
+            self.consume_pickup(k, frame);
+        }
+        res
+    }
+
+    /// `Pickup_Handler`'s take tail [M 0x18e650:338-348] for a taker the inventory path does not
+    /// cover (a bot, a remote human — mp-bot-weapons): respawn 0 → deleted, −1 → stays, else
+    /// hidden in the state-2 wait for `FRAME_RATE_INT · respawn · 10` ticks.
+    pub fn consume_pickup(&mut self, k: usize, _frame: u32) {
+        let Some(p) = self.pickups.get_mut(k) else { return };
+        match p.respawn {
+            0 => p.gone = true,
+            0xFFFF => {}
+            r => { p.hidden = true; p.state = 2; p.respawn_ticks = 60 * r as u32 * 10; }
+        }
     }
 
     /// Turns a switch channel on (callers and tests).

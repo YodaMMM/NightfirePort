@@ -37,6 +37,10 @@ use crate::world::CollisionWorld;
 /// the sim calls it yet; the dispatch is behind the `mp-bots` feature.
 pub mod bots;
 
+/// The bots' weapon layer (mp-bot-weapons): `BOTWEAP_*`, the weapon choice, the bot pickup take and
+/// `BOT_handlePain`'s damage arithmetic — see `botweap.rs` and `docs/systems/mp-bot-weapons.md`.
+pub mod botweap;
+
 /// The debriefing data builder (mp-debriefing-data2, ported from 621): `MpMatch::get_mp_score` /
 /// `MpMatch::debriefing` — the `P_MPDEBRIEFING_Handler` 0x212198 msg-0x4c rows, ranks and result
 /// line. See `docs/systems/mp-debriefing.md` §4.

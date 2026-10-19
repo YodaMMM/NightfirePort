@@ -381,6 +381,14 @@ pub struct Sim {
     /// driver mirrors from `last_visit_stamp` (blocked 704's item 1 — the driver passed none, so
     /// a bot with nobody in sight never left its spawn).
     pub mp_bot_pickups: Vec<nf_game::mp::bots::BotPickup>,
+    /// mp-bot-weapons: the bots' `weapon_data` lift (`botweap::BotWeaponTable` — the disc's table
+    /// and which first-person skins this arena loaded), built on the first MP tick. Same disc and
+    /// arena on every machine → the same table.
+    pub mp_bot_weapons: Option<nf_game::mp::botweap::BotWeaponTable>,
+    /// mp-bot-weapons: each human slot's armour in an online match (the shared stand-in for
+    /// `BL+0x8B0`: the armour pickups and the MP pain read it on every machine). Offline the
+    /// local player's own `drones.health.armour` is the armour.
+    pub mp_armour: [f32; nf_net::MAX_AGENTS],
     pub mp_dead_ticks: [u32; nf_net::MAX_AGENTS],
     /// Each human slot's held weapon (the session's `Input::held`; the local slot reads `gun.weapon`).
     pub mp_held: [u8; nf_net::MAX_AGENTS],
@@ -2035,6 +2043,9 @@ impl Sim {
         // runs per frame inside the MP flow (the brains + the firing pipeline + respawn/score
         // bookkeeping), exactly like the port's `MP_Update` block above.
         self.step_mp_bots();
+        // mp-bot-weapons: the shared pickup take (humans by slot, then the bots), before any body
+        // moves this tick.
+        self.step_mp_pickups();
         // 700v6: online, the rest of the tick (the local player's own pipeline and its effects)
         // draws this machine's private generator; the shared one comes back at the tick's end.
         if let Some(r) = self.net_rng.take() {
@@ -7165,6 +7176,8 @@ impl Scene {
             net_rng_shared: None,
             mp_hp: [100.0; nf_net::MAX_AGENTS],
             mp_bot_pickups: Vec::new(),
+            mp_bot_weapons: None,
+            mp_armour: [0.0; nf_net::MAX_AGENTS],
             mp_dead_ticks: [0; nf_net::MAX_AGENTS],
             mp_held: [2; nf_net::MAX_AGENTS],
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
@@ -8776,6 +8789,7 @@ impl Sim {
                     self.mp_bonds[slot] = Some(nb);
                 }
                 self.mp_hp[slot] = hp;
+                self.mp_armour[slot] = 0.0; // mp-bot-weapons [S]
                 self.mp_dead_ticks[slot] = 0;
             }
             for b in m.bots.iter_mut() {
@@ -8814,19 +8828,26 @@ impl Sim {
         let others = self.bot_others(); // the immutable pass ends before the match is taken &mut
         {
             use nf_game::pickup::kind;
-            let live: Vec<([f32; 3], u16, u8)> = self.drones.pickups.iter()
+            // mp-bot-weapons: `available` = the pickup stands takeable (not in the state-2
+            // respawn wait, not deleted) — `pickGoal` scores only the registered, present ones.
+            let live: Vec<([f32; 3], u16, u8, bool)> = self.drones.pickups.iter()
                 .filter(|p| matches!(p.kind, kind::WEAPON | kind::AMMO | kind::ARMOUR))
-                .map(|p| ([p.m[3][0], p.m[3][1], p.m[3][2]], p.weapon, p.kind as u8))
+                .map(|p| ([p.m[3][0], p.m[3][1], p.m[3][2]], p.weapon, p.kind as u8, !p.gone && p.state != 2))
                 .collect();
             if live.len() != self.mp_bot_pickups.len() {
-                self.mp_bot_pickups = live.iter().map(|&(pos, w, c)| nf_game::mp::bots::BotPickup {
-                    pos, weapon_id: w, mp_class: c, is_obj_flag2: false, visit: [0.0; 16],
+                self.mp_bot_pickups = live.iter().map(|&(pos, w, c, a)| nf_game::mp::bots::BotPickup {
+                    pos, weapon_id: w, mp_class: c, is_obj_flag2: false, visit: [0.0; 16], available: a,
                 }).collect();
             } else {
-                for (b, &(pos, w, c)) in self.mp_bot_pickups.iter_mut().zip(live.iter()) {
-                    b.pos = pos; b.weapon_id = w; b.mp_class = c;
+                for (b, &(pos, w, c, a)) in self.mp_bot_pickups.iter_mut().zip(live.iter()) {
+                    b.pos = pos; b.weapon_id = w; b.mp_class = c; b.available = a;
                 }
             }
+        }
+        // mp-bot-weapons: the weapon table, once per arena.
+        if self.mp_bot_weapons.is_none() {
+            let (wd, skins) = (&self.weapons, &self.skins);
+            self.mp_bot_weapons = Some(nf_game::mp::botweap::BotWeaponTable::from_weapon_data(wd, |w| skins.contains_key(&wd.first_person(w))));
         }
         let pickups = std::mem::take(&mut self.mp_bot_pickups);
         let Some(m) = self.mp.as_mut() else { self.mp_bot_pickups = pickups; return };
@@ -8836,6 +8857,9 @@ impl Sim {
         let world = &self.world;
         let nav = &self.nav;
         let wdata = &self.weapons;
+        let wtable = self.mp_bot_weapons.as_ref();
+        let start_weapon = wtable.map_or(0, |t| t.start_weapon(m.settings.weapon_set));
+        let multi = self.tuning.Plr_DMod_Multi;
         // The humans the bots fight (online: every human slot on every machine; offline slot 0).
         let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
         let local = self.mp_local_slot;
@@ -8905,9 +8929,16 @@ impl Sim {
                 health,
                 max_health,
                 stationary: false,
+                weapons: wtable,
+                start_weapon,
             };
             let before = m.bots[i].brain.shots.len();
+            let held_before = m.bots[i].brain.vars.weapon_id;
             m.bots[i].brain.step(&ctx, &mut self.drones.rng, true);
+            if std::env::var_os("NF_BOTLOG").is_some() && held_before != m.bots[i].brain.vars.weapon_id && m.bots[i].brain.tick > 2 {
+                eprintln!("[botlog] f{} bot{} switches {:#x} -> {:#x} (state {:#x}, opp dist {:.1})", frame, i, held_before,
+                    m.bots[i].brain.vars.weapon_id, m.bots[i].brain.state, m.bots[i].brain.vars.opp_dist);
+            }
             stamps.push((i, m.bots[i].brain.last_visit_stamp));
             // (The brain's body walks the world itself — the player's movement core: collision,
             // floors, gravity — so the old per-tick re-stand, which could snap a bot onto a
@@ -8988,21 +9019,28 @@ impl Sim {
                 if let Some((h, _)) = hit_human {
                     let shooter = m.bots[i].slot;
                     if m.register_bullet_hit(h, shooter) {
+                        // mp-bot-weapons: `Player_HandlePain`'s MP arm — × Plr_DMod_Multi (4.0 on
+                        // the arenas), the armour first (`botweap::player_pain_mp`).
                         if online {
                             // The per-slot online combat owns the health and the death (every machine).
-                            self.mp_hp[h] = (self.mp_hp[h] - dmg).max(0.0);
+                            nf_game::mp::botweap::player_pain_mp(&mut self.mp_hp[h], &mut self.mp_armour[h], dmg, multi);
                             if self.mp_hp[h] <= 0.0 && self.mp_dead_ticks[h] == 0 {
                                 self.mp_dead_ticks[h] = 1;
                                 m.player_killed(h, Some(shooter), false, false, &mut self.drones.rng);
+                                if std::env::var_os("NF_BOTLOG").is_some() { eprintln!("[botlog] f{frame} kill: slot {shooter} (weapon {:#x}) killed slot {h}", shot.weapon); }
                             }
-                            if h == local { self.drones.health.health = self.mp_hp[h]; }
+                            if h == local { self.drones.health.health = self.mp_hp[h]; self.drones.health.armour = self.mp_armour[h]; }
                         } else {
-                            self.drones.health.health = (self.drones.health.health - dmg).max(0.0);
+                            let hb = &mut self.drones.health;
+                            nf_game::mp::botweap::player_pain_mp(&mut hb.health, &mut hb.armour, dmg, multi);
                         }
                     }
                 }
                 if let Some((j, _)) = best {
-                    m.bots[j].health -= dmg;
+                    // mp-bot-weapons: `BOT_handlePain` — × Plr_DMod_Multi, the armour (+0x769) first.
+                    let (loss, armour) = nf_game::mp::botweap::bot_pain(dmg, multi, 0, 0, m.bots[j].brain.vars.arsenal.armour, false, false);
+                    m.bots[j].brain.vars.arsenal.armour = armour;
+                    m.bots[j].health -= loss;
                     if m.bots[j].health <= 0.0 {
                         // mp-host-match-logic: the frag goes through the match's real scoring
                         // (`MP_PlayerKilled` 0x188f70 — the killer/streak/team-score rules and
@@ -9015,6 +9053,7 @@ impl Sim {
                         m.bots[j].deaths += 1;
                         m.bots[j].respawn_at = frame + 180;
                         m.player_killed(victim_slot, Some(killer_slot), false, false, &mut self.drones.rng);
+                        if std::env::var_os("NF_BOTLOG").is_some() { eprintln!("[botlog] f{frame} kill: slot {killer_slot} (weapon {:#x}) killed slot {victim_slot}", shot.weapon); }
                     }
                 }
             }
@@ -9025,6 +9064,111 @@ impl Sim {
             if let Some(p) = pickups.get_mut(idx) { if i < p.visit.len() { p.visit[i] = t; } }
         }
         self.mp_bot_pickups = pickups;
+    }
+
+    /// mp-bot-weapons: `Pickup_Update` 0x18e148's taker loop for an MP match, run on every machine
+    /// at one point of the tick (right after the bots, before any body moves — every taker's
+    /// position is last tick's on every machine). Per pickup, in list order: the humans by slot,
+    /// then the bots by slot; the first whose body is within the pickup radius + 1.1 with a clear
+    /// line takes it, one taker a tick [M :147-208]. The humans: the local slot runs the full
+    /// `Pickup_Handler` (`Drones::take_pickup` — inventory, auto-switch, sound); online a refused
+    /// weapon/ammo take still consumes (the inventories are per machine, the pickups shared [S]),
+    /// a remote human consumes weapon/ammo and takes armour by the shared `mp_armour` (refused at
+    /// 50, the game's armour rule [M 0x18e650:220-225]). The bots: `Pickup_Handler`'s class-2 arm
+    /// (`BotBrain::take_pickup`) and its visit stamp [M 0x18e650:34-130]; kinds other than
+    /// weapon/ammo/armour are left to the humans [S]. Pickups taken here skip `update_pickups`'
+    /// own touch (`Drones::mp_shared_pickups`).
+    pub fn step_mp_pickups(&mut self) {
+        use nf_game::pickup::kind;
+        let Some(m) = self.mp.as_ref() else { return };
+        self.drones.mp_shared_pickups = true;
+        let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
+        let local = self.mp_local_slot;
+        let humans = (m.settings.human_count as usize).min(nf_net::MAX_AGENTS);
+        let frame = self.drones.frame;
+        enum Taker { Local, Remote(usize), Bot(usize) }
+        for k in 0..self.drones.pickups.len() {
+            let taker = {
+                let p = &self.drones.pickups[k];
+                if p.gone || p.state == 2 { continue; }
+                let Some(m) = self.mp.as_ref() else { return };
+                let mut taker = None;
+                for slot in 0..humans {
+                    let body = if slot == local { Some(&self.bond) } else { self.mp_bonds[slot].as_ref() };
+                    let Some(b) = body else { continue };
+                    let alive = if online {
+                        self.mp_dead_ticks[slot] == 0 && self.mp_hp[slot] > 0.0
+                    } else {
+                        slot != local || self.drones.health.health > 0.0
+                    };
+                    if !alive { continue; }
+                    if p.touches(&self.world, b.cel, b.pos, b.sphere_centre()) {
+                        taker = Some(if slot == local { Taker::Local } else { Taker::Remote(slot) });
+                        break;
+                    }
+                }
+                if taker.is_none() && matches!(p.kind, kind::WEAPON | kind::AMMO | kind::ARMOUR) {
+                    for (i, bot) in m.bots.iter().enumerate() {
+                        if bot.dead { continue; }
+                        // The bot's `obj+0x30` for both the distance and the line [M :180-200] —
+                        // the port's body root (the player-shaped `obj+0x30`) [S].
+                        let root = bot.brain.body.pos;
+                        if p.touches(&self.world, bot.brain.body.cel, root, root) {
+                            taker = Some(Taker::Bot(i));
+                            break;
+                        }
+                    }
+                }
+                taker
+            };
+            let Some(taker) = taker else { continue };
+            let (pkind, pweapon, prounds) = {
+                let p = &self.drones.pickups[k];
+                (p.kind, p.weapon, p.rounds)
+            };
+            match taker {
+                Taker::Local => {
+                    if online { self.drones.health.armour = self.mp_armour[local]; }
+                    let force = online && pkind != kind::ARMOUR;
+                    let d = nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
+                        ai_points: &self.ai_points };
+                    self.drones.take_pickup(&d, k, frame, force);
+                    if online { self.mp_armour[local] = self.drones.health.armour; }
+                }
+                Taker::Remote(slot) => {
+                    if pkind == kind::ARMOUR {
+                        if self.mp_armour[slot] < 50.0 {
+                            self.mp_armour[slot] = 50.0;
+                            self.drones.consume_pickup(k, frame);
+                        }
+                    } else {
+                        self.drones.consume_pickup(k, frame);
+                    }
+                }
+                Taker::Bot(i) => {
+                    let Some(t) = self.mp_bot_weapons.as_ref() else { continue };
+                    let Some(m) = self.mp.as_mut() else { return };
+                    let team = m.settings.players.get(m.bots[i].slot).map_or(0, |p| p.team);
+                    let mut health = m.bots[i].health;
+                    let r = m.bots[i].brain.take_pickup(t, pkind, pweapon, prounds, team, &mut health);
+                    m.bots[i].health = health;
+                    if r == nf_game::mp::botweap::BotTake::Refused { continue; }
+                    // the visit stamp (`setPickupVisitTime` [M 0x18e650:126-127]) into the
+                    // bots' pickup row (the kind-filtered list `step_mp_bots` builds)
+                    let row = self.drones.pickups[..k].iter()
+                        .filter(|p| matches!(p.kind, kind::WEAPON | kind::AMMO | kind::ARMOUR)).count();
+                    let stamp = m.bots[i].brain.pickup_visit_stamp(row);
+                    if let Some(bp) = self.mp_bot_pickups.get_mut(row) {
+                        if i < bp.visit.len() { bp.visit[i] = stamp; }
+                    }
+                    if std::env::var_os("NF_BOTLOG").is_some() {
+                        eprintln!("[botlog] f{} bot{} took pickup {} (kind {} weapon {:#x} rounds {}) → weapon {:#x} armour {} hp {:.0}",
+                            frame, i, k, pkind, pweapon, prounds, m.bots[i].brain.vars.weapon_id, m.bots[i].brain.vars.arsenal.armour, health);
+                    }
+                    self.drones.consume_pickup(k, frame);
+                }
+            }
+        }
     }
 
     // The bots' observation API (the live tests read the per-bot table through these).
@@ -9214,8 +9358,12 @@ impl Sim {
             if let Some((tb, j)) = bot_hit.filter(|(tb, _)| best.is_none_or(|(th, _)| *tb < th)) {
                 let _ = tb;
                 let frame = self.drones.frame;
+                let multi = self.tuning.Plr_DMod_Multi;
                 if let Some(m) = self.mp.as_mut() {
-                    m.bots[j].health -= damage;
+                    // mp-bot-weapons: `BOT_handlePain` — × Plr_DMod_Multi, the armour first.
+                    let (loss, armour) = nf_game::mp::botweap::bot_pain(damage, multi, 0, 0, m.bots[j].brain.vars.arsenal.armour, false, false);
+                    m.bots[j].brain.vars.arsenal.armour = armour;
+                    m.bots[j].health -= loss;
                     if m.bots[j].health <= 0.0 && !m.bots[j].dead {
                         let victim_slot = m.bots[j].slot;
                         m.bots[j].health = 0.0;
@@ -9223,12 +9371,15 @@ impl Sim {
                         m.bots[j].deaths += 1;
                         m.bots[j].respawn_at = frame + 180;
                         m.player_killed(victim_slot, Some(shooter), false, false, &mut self.drones.rng);
+                        if std::env::var_os("NF_BOTLOG").is_some() { eprintln!("[botlog] f{frame} kill: slot {shooter} killed slot {victim_slot}"); }
                     }
                 }
                 continue;
             }
             let Some((_, victim)) = best else { continue };
-            self.mp_hp[victim] -= damage;
+            // mp-bot-weapons: `Player_HandlePain`'s MP arm (× Plr_DMod_Multi, the shared armour).
+            let multi = self.tuning.Plr_DMod_Multi;
+            nf_game::mp::botweap::player_pain_mp(&mut self.mp_hp[victim], &mut self.mp_armour[victim], damage, multi);
             if self.mp_hp[victim] <= 0.0 {
                 self.mp_hp[victim] = 0.0;
                 self.mp_dead_ticks[victim] = 1;
@@ -9248,6 +9399,7 @@ impl Sim {
             m.set_slot(slot, nb.pos);
             if slot == local { self.bond = nb; } else { self.mp_bonds[slot] = Some(nb); }
             self.mp_hp[slot] = hp;
+            self.mp_armour[slot] = 0.0; // mp-bot-weapons: the respawned body has no armour [S]
             self.mp_dead_ticks[slot] = 0;
             eprintln!("[mp] slot {slot} respawned at spawn {sp_idx} (frame {})", self.drones.frame);
             if slot == local {
@@ -9261,6 +9413,7 @@ impl Sim {
         }
         // 3. This machine's own health is the slot's (the HUD, the death sequence's start).
         self.drones.health.health = self.mp_hp[local];
+        self.drones.health.armour = self.mp_armour[local]; // mp-bot-weapons: the shared armour
     }
 
     /// mp-join-in-progress: create the late joiner's agent at the announced join tick — the
@@ -9284,6 +9437,7 @@ impl Sim {
         self.mp_bonds[slot] = Some(b);
         // The online combat's per-slot state starts fresh for the new agent (700v6).
         self.mp_hp[slot] = 100.0;
+        self.mp_armour[slot] = 0.0;
         self.mp_dead_ticks[slot] = 0;
         true
     }
@@ -9307,6 +9461,24 @@ impl Sim {
         h.u32(self.drones.frame);
         // 700v6: the online combat's per-slot state.
         for s in 0..nf_net::MAX_AGENTS { h.f32(self.mp_hp[s]); h.u32(self.mp_dead_ticks[s]); }
+        // mp-bot-weapons: the shared armour, the pickups' take state (the shared take pass) and
+        // the bots (health, the whole brain — the arsenal included).
+        for s in 0..nf_net::MAX_AGENTS { h.f32(self.mp_armour[s]); }
+        h.u32(self.drones.pickups.len() as u32);
+        for p in &self.drones.pickups {
+            h.bool(p.gone);
+            h.bool(p.hidden);
+            h.u32(p.state as u32);
+            h.u32(p.respawn_ticks);
+        }
+        if let Some(m) = &self.mp {
+            for b in &m.bots {
+                h.f32(b.health);
+                h.bool(b.dead);
+                h.u32(b.respawn_at);
+                h.u64(b.brain.state_hash());
+            }
+        }
         h.u32(self.drones.rng.x);
         h.u32(self.drones.rng.y);
         h.u64(self.drones.rng.draws);
