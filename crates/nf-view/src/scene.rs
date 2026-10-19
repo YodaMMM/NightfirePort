@@ -39,7 +39,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 /// Per-weapon op-1 sound id remap (docs/systems/sound.md §7 line 313): the first-person gun's animation script
 /// emits a sound id that the game replaces based on the player's weapon (`+0xDC → +0x62`). The P2K (weapon 2) has no
 /// remap — 0x403 plays as-is. Other weapons' fire sounds are remapped so they do not all sound like the P2K [M].
-fn remap_op1_sound(id: u32, weapon: u8) -> u32 {
+pub(crate) fn remap_op1_sound(id: u32, weapon: u8) -> u32 {
     match (id, weapon) {
         (1, 7) | (1, 9) => 2,
         (0x403, 3) | (0x403, 5) => 2,
@@ -297,6 +297,18 @@ pub struct DroneContext {
     pub mp_anims: Option<nf_formats::mpanim::MpAnimSets>,
 }
 
+/// mp-combat-weapons: one released round as the local fire pipeline produced it — what the
+/// session input's shot description carries (`nf_net::Input::shot_weapon/shot_flags/shot_aim`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NetShot {
+    /// The fired record (`gun.weapon` at the release — the twin id carries the fire mode).
+    pub weapon: u8,
+    /// The release's aim ray (free aim, auto-aim, the scope included).
+    pub dir: [f32; 3],
+    /// Fired through a zoomed scope (`aiming ∧ +0x68 & 0x40`).
+    pub scoped: bool,
+}
+
 /// The running game simulation (nf-game): drones plus the data they consult, and which character mesh shows which
 /// drone. Stepped at the game's fixed 60 Hz by the app; `animate` reads it.
 /// fix-weapon-fire-modes: the guided-missile camera ride (`Player_PositionCamera` case 0xc's view
@@ -313,6 +325,14 @@ pub struct MissileCam {
     pub restore: u16,
     /// A live guided bullet still exists (`BLData+0x878 != 0`).
     pub riding: bool,
+}
+
+/// mp-perf-16: a debug env flag read once per process (the per-body / per-bot / per-tick reads
+/// were a `GetEnvironmentVariableW` round trip each, every tick).
+static ENV_MPBODY_DBG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static ENV_BOTLOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+fn env_flag(cell: &'static std::sync::OnceLock<bool>, name: &str) -> bool {
+    *cell.get_or_init(|| std::env::var_os(name).is_some())
 }
 
 pub struct Sim {
@@ -390,8 +410,34 @@ pub struct Sim {
     /// local player's own `drones.health.armour` is the armour.
     pub mp_armour: [f32; nf_net::MAX_AGENTS],
     pub mp_dead_ticks: [u32; nf_net::MAX_AGENTS],
+    /// mp-world-sync (agent 9): the session's input row for the tick `step_bond` is about to run
+    /// (the caller sets it — the live loop and `nf_view::net_tick`; `step_bond` consumes it). With
+    /// it, `step_bond` moves the remote bodies BEFORE the local body (the same collision world for
+    /// every body — the doors and script objects join it at the drones' tick), the world's contact
+    /// passes see every body, and every slot's use key and shot reach the shared world.
+    pub net_row: Option<[nf_net::Input; nf_net::MAX_AGENTS]>,
+    /// mp-world-sync: `step_bond` already moved the remotes this tick (the callers' later
+    /// `step_net_remotes` call is then a no-op).
+    net_remotes_done: bool,
+    /// mp-world-sync: each human slot's armour (`BLData+0x8B0`) — the armour pickup's shared
+    /// state (set to 50 on the take [M Pickup_Handler 0x18e650:220-225], cleared on death).
+    pub mp_armour: [f32; nf_net::MAX_AGENTS],
+    /// mp-world-sync: the latest online tick's pickup takes (pickup index, slot, bot) — what
+    /// `step_net_world` applied (the tests and the dev log read it; never hashed).
+    pub net_last_takes: Vec<(usize, usize, bool)>,
+    /// mp-combat-weapons: the online match's shared rounds / grenades / blasts / guided rides
+    /// (`nf_game::mp::combat`) — every machine runs every agent's rounds from the shot
+    /// descriptions in the session inputs. Shared, hashed.
+    pub mp_combat: nf_game::mp::combat::MpCombat,
+    /// mp-combat-weapons: the shot the local pipeline released during the latest `step_bond`
+    /// (the fired record, the aim ray, through a zoomed scope) — the app puts it into the next
+    /// session input. Local only.
+    pub net_shot: Option<NetShot>,
     /// Each human slot's held weapon (the session's `Input::held`; the local slot reads `gun.weapon`).
     pub mp_held: [u8; nf_net::MAX_AGENTS],
+    /// mp-remote-fx: the other players' and the bots' shot effects/sounds (draw/audio state, not
+    /// hashed — `crate::mpfx`).
+    pub mp_fx: crate::mpfx::MpFx,
     /// Aim mode's cursor (`BL+0x118 / +0x11C`) and its smoothed copy (`+0x120 / +0x124`), −1…1 across half the screen.
     pub cursor: [f32; 2],
     pub cross: [f32; 2],
@@ -574,15 +620,26 @@ pub struct Sim {
     /// mp-body-look: the MP bodies (slot, scene character index) — `Scene::mp_bodies`, so the
     /// ambient ramp links each body to the cel it stands in like any other drawn object.
     pub mp_body_chars: Vec<(usize, usize)>,
-    /// mp-body-look: per slot, the body's walk-cycle distance (`ANIMOBJ+0xdc`) — `AnimSetUpdate`
-    /// 0x1c0938 plays the locomotion pair distance-driven, accumulating `fwd × 0.5` per tick
-    /// [M, mp-players.md §3]. Draw-only state (never read by the sim, not in the lockstep hash).
-    pub mp_walk: [f32; nf_net::MAX_AGENTS],
+    /// mp-body-anim: per slot, the body's script list and clocks (`nf_game::mp::body_anim` — the
+    /// game's `AnimSetUpdate` 0x1c0938 / `Player_ChangeSubState` 0x190630 list: idle, the
+    /// distance-driven walk/run, the strafe overlay, the stance transitions, the death, the aim
+    /// ease) [M, mp-players.md §3]. Ticked once per sim tick by `advance_mp_anim` from shared
+    /// state; draw-only (never read by the sim, not in the lockstep hash).
+    pub mp_anim: Vec<nf_game::mp::body_anim::MpBodyAnim>,
+    /// The 16 player anim-set descriptors (ACTION.ELF 0x2b91b0) the body clocks pick from [D].
+    pub mp_anim_sets: Option<nf_formats::mpanim::MpAnimSets>,
     /// mp-body-look: per slot, the last nonzero `mp_held` — a timed-out remote is fed `NEUTRAL`
     /// (held 0) every tick, which would blink its body's gun away. Draw-only state.
     pub mp_last_held: [u8; nf_net::MAX_AGENTS],
+    /// mp-lobby-settings: which weapon ids' first-person skins this arena loaded (the load's
+    /// `Player_CheckWeaponsLoaded` stand-in) — the respawn's `MP_EquipPlayer` re-reads it.
+    pub mp_weapon_loaded: Vec<bool>,
     /// fix-render3: the `ambient_at` call counter (a test guard for the posed-vertices hoist).
     pub ambient_lookups: std::cell::Cell<usize>,
+    /// mp-perf-16: the MP bodies' draw memo — the whole-frame bone samples
+    /// (`nf_game::anim::PoseSampleCache`) and the walk scripts' distance tables (built once per
+    /// walk sequence instead of per body per ticked frame). Draw-only, never read by the sim.
+    pub mp_draw_cache: std::cell::RefCell<(nf_game::anim::PoseSampleCache, HashMap<u32, Option<nf_game::anim::DistanceTable>>)>,
     /// light-sun: BLData+0x962 — Bond's head sees the sun this tick (`ramp_char_ambient`).
     pub sun_seen: bool,
     /// The language string table (`USATxt.dat`, the NTSC-U default `FNames[SelLang]`) — the source of the
@@ -1846,7 +1903,7 @@ impl Sim {
                 // mp-body-look: an MP body is a drawn object like a drone — `Lights_CalcAmbientLight`
                 // 0x1cb178 ramps its obj+0x100..0x102 toward the cel it stands in. Without this the
                 // bodies kept the 0xff sentinel: drawn at 1.0 where the arena cel says 0x46 (07000023).
-                self.mp_body_state(slot).map(|(p, _, _)| p)
+                self.mp_body_state(slot).map(|(p, _, _)| p).or_else(|| self.mp_body_death(slot).map(|(p, _, _)| p))
             } else if let Some(di) = self.char_drone[ci] {
                 let d = &self.drones.list[di];
                 Some([d.pos[0], d.pos[1], d.pos[2]])
@@ -2042,10 +2099,22 @@ impl Sim {
         // mp-bots-in-match: the bots' per-frame driver — the game's `BOT_update` 0x126448 family
         // runs per frame inside the MP flow (the brains + the firing pipeline + respawn/score
         // bookkeeping), exactly like the port's `MP_Update` block above.
-        self.step_mp_bots();
-        // mp-bot-weapons: the shared pickup take (humans by slot, then the bots), before any body
-        // moves this tick.
-        self.step_mp_pickups();
+        { let _p = nf_game::prof::scope("mp: step_mp_bots"); self.step_mp_bots(); }
+        // mp-world-sync (agent 9): with the session's row (online), the remote bodies move HERE —
+        // after the shared prologue, before the local body — so every body of the tick moves
+        // against the same collision world (the doors and script objects join it at the drones'
+        // tick, later in this tick) and the world's contact passes below see every body at its
+        // new position on every machine. The old order (remotes after `step_bond`) let the local
+        // body collide with the last tick's doors and the remotes with this tick's: a body in a
+        // moving door split the machines. The callers' later `step_net_remotes` is a no-op.
+        self.net_remotes_done = false;
+        let net_row = self.net_row.take().filter(|_| self.net_rng.is_some() || self.net_rng_shared.is_some());
+        if let Some(row) = net_row.as_ref() {
+            let inputs = std::array::from_fn(|i| crate::mpnet::to_player_input(&row[i]));
+            let local = self.mp_local_slot;
+            self.step_net_remotes_inner(&inputs, Some(row), local);
+            self.net_remotes_done = true;
+        }
         // 700v6: online, the rest of the tick (the local player's own pipeline and its effects)
         // draws this machine's private generator; the shared one comes back at the tick's end.
         if let Some(r) = self.net_rng.take() {
@@ -2067,13 +2136,28 @@ impl Sim {
             }).collect();
         }
         self.shot_tick = false;
+        self.net_shot = None;
+        // mp-combat-weapons: online (the private generator swapped in above) the shared combat
+        // owns the guided ride — see `step_net_combat`.
+        let online = self.net_rng_shared.is_some();
+        self.drones.net_no_self_hurt = online;
         // fix-weapon-fire-modes: the guided-missile camera ride. While it is up, Bond's own arms do
         // not run — the game's player substate 10 arm is ONLY the restore countdown [M
         // `Player_Update` 0x193600:242-256; `Player_ChangeSubState(10)` cleared the anim set] — and
         // the look input steers the missile instead [M `Bullet_update` 0x12e7b0:177-244, gated on
         // `owner+0xF6 == 10`]. The steering runs here, before the drones' tick moves the bullet
         // along its (now steered) direction.
-        if let Some(cam) = self.missile_cam.as_mut() {
+        if online && self.missile_cam.is_some() {
+            // mp-combat-weapons: the shared ride (every machine zeroes this slot's movement on
+            // the same ticks — `MpCombat::riding`); the local visual rocket steers alongside.
+            const K: f32 = 0.024_543_693;
+            if let Some(b) = self.drones.player_bullets.iter_mut().find(|b| b.guided_cam && !b.dead) {
+                let yaw_in = (-input.turn / K).clamp(-1.0, 1.0);
+                let pitch_in = (-input.look * nf_game::trig::HALF_PI / K).clamp(-1.0, 1.0);
+                nf_game::drone::steer_missile(&mut b.dir, yaw_in, pitch_in);
+            }
+            input = nf_game::player::Input::default();
+        } else if let Some(cam) = self.missile_cam.as_mut() {
             let live = self.drones.player_bullets.iter_mut().find(|b| b.guided_cam && !b.dead);
             if let Some(b) = live {
                 // `steer_missile` takes the game's analog units (full stick = 1.0 → π/128 per tick). The
@@ -2415,14 +2499,17 @@ impl Sim {
             // 0x12e7b0:158; L: 50.0 for 0x50, 100.0 for 0x51]. The enter tick swallows the fire — it runs
             // BEFORE the bond tick so a release tick's fire cannot re-latch in the same tick.
             let mut trigger = trigger;
+            // mp-world-sync: online the claw is the session's held weapon (`Input::held`) — the
+            // value every machine's replica of this body latches on (`step_net_remotes`).
+            let claw = net_row.as_ref().map_or(self.gun.weapon, |r| r[self.mp_local_slot].held);
             if trigger
                 && self.bond.substate == nf_game::player::SS_WALK
                 && self.bond.grapple.is_none()
-                && nf_game::gadget::is_grapple(self.gun.weapon)
+                && nf_game::gadget::is_grapple(claw)
             {
                 let head = self.bond.head();
                 let dir = self.bond.look();
-                if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, self.gun.weapon)) {
+                if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, claw)) {
                     self.bond.grapple = Some(nf_game::gadget::GrappleState { point, phase: 1, pull: 0.0 });
                     self.bond.substate = nf_game::player::SS_GRAPPLE;
                     self.bond.vel = [0.0; 3];
@@ -2452,7 +2539,19 @@ impl Sim {
             let water = bond_cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
                 .map(|r| self.cels[r].water).filter(|w| *w > -400.0);
             let sink = input.crouch;
-            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false };
+            // The pick capsule's straddle set [M Collide_StraddleCels 0x1eac98 runs on the pick's
+            // HITTEST; Collide_Pick 0x1eb320:125-134 scopes the candidates to its cels]: the BFS
+            // from the player's runtime cel (obj+0x20 — the same stateful one-tick-stale link the
+            // game reads) through the portals the current substate's pick arm capsule touches
+            // (`Bond::pick_arm`'s segment + radius, anchored at the last integrated pre-push-out
+            // spot [S: the game builds the HITTEST at THIS tick's integrated position — one tick
+            // apart at most; the portal walk's own permissiveness covers the difference]).
+            let (ao, bo, ar) = nf_game::player::pick_arm(self.bond.substate, self.bond.crouched, self.bond.cc);
+            let pc = self.bond.pre_collide;
+            let straddle_cells = bond_cel
+                .map(|c| self.world.debug_straddle(c, [pc[0], pc[1] + ao, pc[2]], [pc[0], pc[1] + bo, pc[2]], ar))
+                .unwrap_or_default();
+            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells };
             // The third-icon context [M ThirdIcon_Update 0x196e80 + Player_CollisionHandler 0x1949a8:22]:
             // the tick starts with +0x95F = 0xFF (none), then every ENABLED icon (its param-1 channel on,
             // or param 1 == 0 = always [M ThirdIcon_Create 0x197070:27-32]) whose straddle-cel set holds
@@ -2659,7 +2758,10 @@ impl Sim {
             // `Player_MonitorAir` 0x191a70's drown damage: `Player_HandlePain(0.5, type 7)` [M 0x191a70:136-143]
             // — the FULL pipeline (difficulty factor, no armour for type 7 [M 0x1902c8:84-104], the pain
             // flash +0x968 and the both-sides bits +0x967 = 0xC), not a bare subtraction.
-            if let Some(dmg) = self.bond.drown_damage {
+            // mp-world-sync: online the drown/hurt/fall damage is the shared world pass's
+            // (`step_net_world`, every body into its slot's health) — applied here it would reach
+            // only this machine's health block and could start the local death sequence alone.
+            if let Some(dmg) = self.bond.drown_damage.filter(|_| net_row.is_none()) {
                 if self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, 7) {
                     let p = self.bond.pos;
                     self.drones.play_pain_grunt(p);
@@ -2672,7 +2774,7 @@ impl Sim {
             // class-0x27 hit calls `Player_HandlePain(pain + Hurt_GetDamage, …, Hurt_GetType, −1)`,
             // the same full pipeline as the drown tick (difficulty factor, no armour for types 1..7
             // [M 0x1902c8:84-104]). The gate follows `Hurt_Update` 0x17e5d0's disabled bit.
-            for h in self.hurts.iter_mut() {
+            for h in self.hurts.iter_mut().filter(|_| net_row.is_none()) {
                 if let Some((dmg, ty)) = h.update(self.drones.channels.on(h.gate as u32), self.bond.pos) {
                     if self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, ty as u32) {
                         let p = self.bond.pos;
@@ -2758,7 +2860,7 @@ impl Sim {
         // The landing damage: `Player_CollisionHandler` 0x1949a8:117-126 calls `Player_HandlePain(timer - 60,
         // type 6)` — the full pipeline: the difficulty factor, NO armour (types 1..7 bypass it [M
         // 0x1902c8:84-104]), the pain flash +0x968 and the vertical direction bits +0x967 = 2.
-        if let Some(dmg) = self.bond.fall_damage {
+        if let Some(dmg) = self.bond.fall_damage.filter(|_| net_row.is_none()) {
             if self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, 6) {
                 let p = self.bond.pos;
                 self.drones.play_pain_grunt(p);
@@ -2781,7 +2883,19 @@ impl Sim {
         // aim-on edge and queue the raise twice.
         // fix-aims20-modes-lights: the analog-deflection half of the idle-counter gate [M 0x17ee88:80-84].
         let stick = input.forward != 0.0 || input.strafe != 0.0 || input.turn != 0.0 || input.look != 0.0;
+        // mp-world-sync: online the world's contact passes see every body (`Drones::net_bodies`)
+        // and every slot's use key runs in slot order (`net_use_pass`) — the local E no longer
+        // reaches the world alone.
+        let use_key = match net_row.as_ref() {
+            Some(row) => {
+                self.drones.net_bodies = Some(self.net_bodies_now());
+                self.net_use_pass(row);
+                false
+            }
+            None => use_key,
+        };
         self.run(self.bond.pos, self.bond.sphere_centre(), head, look, aim, trigger, input.aiming || input.scope, reload, use_key, stick);
+        self.drones.net_bodies = None;
         // `Player_Zoom` (0x1a1a70): the scope zoom. Right mouse (mouse-first) zooms in; releasing returns to 1.0.
         // The zoom interpolates toward the target at the game's rate (1.025× per tick zooming in, 1.15× out).
         // The FOV is divided by the zoom factor. Scoped weapons only (`weapon_data+0x68 & 0x40`).
@@ -2858,6 +2972,11 @@ impl Sim {
         if let Some(shared) = self.net_rng_shared.take() {
             self.net_rng = Some(std::mem::replace(&mut self.drones.rng, shared));
         }
+        // mp-world-sync: the shared world's per-body consequences, on the shared stream.
+        if let Some(row) = net_row { self.step_net_world(&row); }
+        // mp-remote-fx: offline (split/bots) the bots' shot effects flush here; online the flush
+        // runs after the per-slot combat (`step_net_combat`).
+        if self.net_rng.is_none() { self.flush_mp_fx(); }
     }
 
     /// drive-ptp: the ACTION→DRIVING handover for a `0x0730xxxx` interlude — the port of
@@ -3858,6 +3977,9 @@ impl Sim {
                     let weapons = &self.weapons;
                     let has = nf_game::gun::Gun::has_ammo(base_u8, &carried, &clip, |t| weapons.ammo_type(t as usize), |t| weapons.flags(t as usize),
                         |x| nf_game::gun::Gun::ammo_in_gun_slot(x, |y| weapons.base(y as usize) as u8, |y| weapons.ammo_type(y as usize) as u8));
+                    // mp-combat-weapons: the detonator press rides the session input too (every
+                    // machine re-arms this slot's shared mines).
+                    self.net_shot = Some(NetShot { weapon: self.gun.weapon, dir, scoped: false });
                     if has {
                         self.gun.switch_request = base_u8; // BL+0x63 = the mine [M 0x1a4cb8]
                     } else {
@@ -3987,6 +4109,9 @@ impl Sim {
                     // 0x12c5a0:212-215] — it pops almost at once into its long 3600-tick cloud
                     // (the Sim's smoke arm re-arms by type).
                     let fuse = if wt == 0x69 { 5.0 } else { fuse };
+                    // mp-combat-weapons: the throw rides the session input (the shared combat
+                    // throws the same record from the slot's head on every machine).
+                    self.net_shot = Some(NetShot { weapon: self.gun.weapon, dir, scoped: self.aiming && flags & 0x40 != 0 });
                     // The blast damage: `weapon_data+0x0C` [M 0x12cd98 disasm: `lwc1 $f14, 12($v0)` →
                     // Explode_Create's f14 → EXPLODEINFO+0x28 (Explode_CollisionHandler 0x17cde0:13-15);
                     // radius = $f12/$f13 = weapon_data+0x08]. The `addiu $t2, $zero, 0x64` (100) is the
@@ -4080,6 +4205,8 @@ impl Sim {
                     if spawn_shot {
                         self.last_shot = Some(self.drones.frame);
                         self.shot_tick = true;
+                        // mp-combat-weapons: the round's description for the session input.
+                        self.net_shot = Some(NetShot { weapon: self.gun.weapon, dir, scoped: self.aiming && flags & 0x40 != 0 });
                         // The hearing sound: the P2K's 0x403 by default, or the remapped op-1 id for other weapons.
                         // The drones' hearing list uses the sfx table's entry for this id.
                         // fix-melee: the melee swings are NOT gunshots — the fists' fire scripts' op-1 is
@@ -4132,7 +4259,7 @@ impl Sim {
                         // fix-weapon-fire-modes [M Bullet_init 0x12c5a0:248-253]: a `+0x6C & 4` shot hands
                         // the view to the projectile — `Player_ChangeSubState(owner, 10)`, `BLData+0x878 =
                         // the bullet`, `Player_SetCamMode(BLData, 0xc)`, `BLData+0x944 = 0`.
-                        if flags6c & 0x4 != 0 {
+                        if flags6c & 0x4 != 0 && self.net_rng_shared.is_none() {
                             if let Some(b) = self.drones.player_bullets.last() {
                                 self.missile_cam = Some(MissileCam { pos: b.pos, dir: b.dir, restore: 0, riding: true });
                             }
@@ -4381,21 +4508,75 @@ impl Sim {
         // `Lights_CalcAmbientLight` (0x1cb178) runs per moving object from `control_movement_object_handler`
         // (0x1336f8) — the last step of the tick, before the draw reads obj+0x100..0x102.
         self.ramp_char_ambient();
-        self.advance_mp_walk();
+        // Online the remotes move after this (`step_net_remotes`, `step_net_combat`): their body
+        // clocks tick at the end of `step_net_combat`, on this tick's movement.
+        if self.net_rng.is_none() && self.net_rng_shared.is_none() { self.advance_mp_anim(); }
     }
 
-    /// mp-body-look: each MP body's walk-cycle distance, once per tick (`AnimSetUpdate` 0x1c0938:96
-    /// writes `ANIMOBJ+0xd4 = fwd × set+0x28` and the distance clock adds it [M]). A body not drawn
-    /// (dead, the local slot) restarts at the set-init phase, as the respawn's set rebuild does
-    /// (`MP_ReSpawn` 0x185368 → `PlayerAnimSetInit` [M mp-players.md §3]). Draw-only state.
-    fn advance_mp_walk(&mut self) {
+    /// mp-body-anim: each drawn MP body's script list, once per tick (`nf_game::mp::body_anim`), fed
+    /// from state every machine shares: a human's remote `Bond` (`BLData+0x18`/`+0x10` = `local`,
+    /// the stance, the view pitch), a bot's walking body and its brain's opponent, the held weapon,
+    /// the slot's life. A slot without a drawn body (the local slot, an empty slot) starts over —
+    /// its next body begins at the set init, as the respawn's rebuild does (`MP_ReSpawn` 0x185368
+    /// → `PlayerAnimSetInit` [M mp-players.md §3]). Draw-only state.
+    fn advance_mp_anim(&mut self) {
         if self.mp.is_none() || self.mp_body_chars.is_empty() { return; }
         for slot in 0..nf_net::MAX_AGENTS {
             if self.mp_held[slot] != 0 { self.mp_last_held[slot] = self.mp_held[slot]; }
-            self.mp_walk[slot] = match self.mp_body_state(slot) {
-                Some((_, _, speed)) => self.mp_walk[slot] + speed / 60.0 * MP_WALK_STRIDE,
-                None => MP_WALK_INIT,
+            let Some(inp) = self.mp_body_input(slot) else {
+                if slot < self.mp_anim.len() { self.mp_anim[slot] = nf_game::mp::body_anim::MpBodyAnim::new(); }
+                continue;
             };
+            let (Some(sets), Some(a)) = (self.mp_anim_sets.as_ref(), self.mp_anim.get_mut(slot)) else { continue };
+            let scripts = &self.scripts;
+            let lens = |id: u32| scripts.get(&id).map(|s| (s.length, s.looping));
+            a.tick(sets, &lens, &inp);
+        }
+    }
+
+    /// The body clocks' input for one slot (None = no drawn body): see `advance_mp_anim`.
+    pub fn mp_body_input(&self, slot: usize) -> Option<nf_game::mp::body_anim::MpBodyInput> {
+        let m = self.mp.as_ref()?;
+        self.mp_body_state(slot)?;
+        let weapon = self.mp_body_held(slot);
+        let class = nf_formats::mpanim::weapon_anim_class(&self.weapons, weapon);
+        if slot < m.settings.human_count as usize {
+            let b = self.mp_bonds.get(slot)?.as_ref()?;
+            // The aim point is head + aim·256 (`Player_GetAimingPoint` 0x1a4a98, the MP player's
+            // `AnimObjectSetAiming` target BLData+0x60 [M 0x190d88:122]): body-relative, the view
+            // pitch (the body faces the view yaw — no twist).
+            Some(nf_game::mp::body_anim::MpBodyInput {
+                alive: self.mp_dead_ticks[slot] == 0, weapon, class, crouch: b.crouched,
+                fwd: b.local[1], strafe: b.local[0], aim: Some([0.0, b.pitch * std::f32::consts::FRAC_PI_2]),
+            })
+        } else {
+            let bot = m.bots.iter().find(|b| b.slot == slot)?;
+            let body = &bot.brain.body;
+            // A bot aims at its opponent (the drone tracking's `AnimObjectSetAiming` on the target,
+            // `NDrone2_DoTracking` 0x1479d8:53 [M]): the target's head from the bot's head, relative
+            // to the drawn body yaw.
+            let aim = bot.brain.vars.opponent.and_then(|o| self.mp_slot_head(o)).map(|t| {
+                let e = bot.brain.pos;
+                let (dx, dy, dz) = (t[0] - e[0], t[1] - e[1], t[2] - e[2]);
+                let h = (dx * dx + dz * dz).sqrt().max(1e-3);
+                let yaw_to = dx.atan2(dz);
+                [nf_game::trig::angle_difference(body.yaw, yaw_to), dy.atan2(h)]
+            });
+            Some(nf_game::mp::body_anim::MpBodyInput {
+                alive: !bot.dead, weapon, class, crouch: body.crouched,
+                fwd: body.local[1], strafe: body.local[0], aim,
+            })
+        }
+    }
+
+    /// A slot's head position (a human's `Bond::head`, a bot's `brain.pos`), None = no body.
+    fn mp_slot_head(&self, slot: usize) -> Option<[f32; 3]> {
+        let m = self.mp.as_ref()?;
+        if slot < m.settings.human_count as usize {
+            let b = if slot == self.mp_local_slot { Some(&self.bond) } else { self.mp_bonds.get(slot)?.as_ref() }?;
+            Some(b.head())
+        } else {
+            m.bots.iter().find(|b| b.slot == slot).map(|b| b.brain.pos)
         }
     }
 
@@ -4458,6 +4639,25 @@ impl Sim {
                 let mut m = Msg::new(text, time);
                 m.label = label;
                 self.hud.info_msgs.push_back(m);
+            }
+        }
+        // mp-hud-real: the kill messages addressed to this machine's slot (`MP_PlayerKilled`
+        // 0x188f70:100-107 → `Text_AddMsg(killer, 0, 1, label 0x200004d % the victim's name, 0,
+        // 0xb4)` [M]) — the MP info pane draws them (`HUD_MPUpdateStatusPane` 0x19ca88).
+        let me = self.mp_local_slot;
+        if let Some(m) = self.mp.as_mut() {
+            if m.kill_msgs.iter().any(|&(to, _)| to == me) {
+                let mine: Vec<usize> = m.kill_msgs.iter().filter(|&&(to, _)| to == me).map(|&(_, v)| v).collect();
+                m.kill_msgs.retain(|&(to, _)| to != me);
+                for victim in mine {
+                    let name = crate::hud::mp_name(m, lang.as_ref(), victim);
+                    let text = lang.as_ref().map(|l| l.format(nf_game::mp::hud::KILL_MSG_LABEL, &[name])).unwrap_or_default();
+                    if !text.is_empty() {
+                        let mut msg = Msg::new(text, nf_game::mp::hud::KILL_MSG_TICKS as f32);
+                        msg.label = nf_game::mp::hud::KILL_MSG_LABEL;
+                        self.hud.info_msgs.push_back(msg);
+                    }
+                }
             }
         }
         for (_, t) in self.drones.taken.iter().skip(self.hud.taken_seen) {
@@ -5489,6 +5689,8 @@ pub const VIEW_MODEL_NODE: u32 = u32::MAX - 1;
 
 /// Tracer slots (bullets drawn at once).
 const TRACER_SLOTS: usize = 32;
+/// mp-remote-fx: the MP trail slots start here (after the gadget/laser beam slots TRACER_SLOTS..+6).
+const MP_TRACER_BASE: usize = TRACER_SLOTS + 16;
 
 /// A unit-axis matrix (rows = axes) whose z row points along `dir` at `pos`, x kept horizontal
 /// (up × z; world x when `dir` is vertical). sg5-laser-draw: the yaw/pitch euler the tripbomb beam
@@ -5536,6 +5738,73 @@ const DEBRIS_SLOTS: usize = 128;
 
 /// The drone's height state after `DroneAnim_PreTransCallback` (0x13b490): `Drone+0xA0` = hip height − 0.02, at least
 /// 0.2 (it starts at 1.0 and keeps its value while the hip height is 0).
+/// mp-body-anim: the upper-body aim, `AnimObjectAimAt` 0x1bfe58 as `psiBuildMatrixPalette` 0x111498
+/// runs it on bone 2 (object space, before the object matrix). The game's geometry [M]: axis A =
+/// unit(bone 2 − its parent) (the spine), the gun direction G = the weapon datum's −X row, axis B =
+/// unit(A × G); the pitch is the rotation about B that brings the gun line onto the aim point, the
+/// twist (drone-class objects only — the bots) the rotation about A; clamps: a class-3 player
+/// [−π/2, 1.2708] on the pitch (positive = down about B) and no twist, a drone ±0.9 on both; the
+/// rotation `q_A(twist) ⊗ q_B(pitch)` premultiplies bone 2's world rotation, so bone 2 and its whole
+/// subtree turn about bone 2's position. [S]: the aim point is far (head + aim·256 for a player) so
+/// the gun is turned PARALLEL to the target direction — the game's line/sphere intersection reduces
+/// to that at range; `aim` = the eased body-relative (twist, pitch) of the target direction, pitch
+/// positive up. Returns the applied (pitch about B, twist about A).
+pub fn mp_body_aim(world: &mut [Mat4], skin: &nf_formats::character::Skin, gun: Option<(usize, Mat4)>, aim: [f32; 2], drone: bool) -> Option<(f32, f32)> {
+    if world.len() <= 2 { return None; }
+    let (gbone, glocal) = gun.filter(|(b, _)| *b < world.len())?;
+    let parent = skin.parent(2)?;
+    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let unit = |a: [f32; 3]| { let l = dot(a, a).sqrt(); if l > 1e-6 { Some([a[0] / l, a[1] / l, a[2] / l]) } else { None } };
+    let t = |m: &Mat4| [m[3][0], m[3][1], m[3][2]];
+    let axis_a = unit(sub(t(&world[2]), t(&world[parent])))?;
+    let gw = nf_formats::anim::mul(&glocal, &world[gbone]);
+    let g = unit([-gw[0][0], -gw[0][1], -gw[0][2]])?;
+    let axis_b = unit(cross(axis_a, g))?;
+    // The target direction in object space (forward +Z, left +X — the object matrix's frame).
+    let (st, ct) = aim[0].sin_cos();
+    let (sp, cp) = aim[1].sin_cos();
+    let target = [st * cp, sp, ct * cp];
+    // The signed rotation about `axis` taking `from` onto `to`, both projected off the axis.
+    let signed = |axis: [f32; 3], from: [f32; 3], to: [f32; 3]| -> f32 {
+        let kf = dot(from, axis);
+        let kt = dot(to, axis);
+        let pf = sub(from, [axis[0] * kf, axis[1] * kf, axis[2] * kf]);
+        let pt = sub(to, [axis[0] * kt, axis[1] * kt, axis[2] * kt]);
+        dot(cross(pf, pt), axis).atan2(dot(pf, pt))
+    };
+    let (pitch, twist) = if drone {
+        (signed(axis_b, g, target).clamp(-0.9, 0.9), signed(axis_a, g, target).clamp(-0.9, 0.9))
+    } else {
+        (signed(axis_b, g, target).clamp(-std::f32::consts::FRAC_PI_2, f32::from_bits(0x3fa2_a974)), 0.0)
+    };
+    // Row-vector rotation (v' = v·Rᵀ for the column rotation R about `k` by θ, right-handed).
+    let rot_row = |k: [f32; 3], th: f32| -> Mat4 {
+        let (sn, cs) = th.sin_cos();
+        let v = 1.0 - cs;
+        let r = [
+            [cs + k[0] * k[0] * v, k[0] * k[1] * v - k[2] * sn, k[0] * k[2] * v + k[1] * sn],
+            [k[1] * k[0] * v + k[2] * sn, cs + k[1] * k[1] * v, k[1] * k[2] * v - k[0] * sn],
+            [k[2] * k[0] * v - k[1] * sn, k[2] * k[1] * v + k[0] * sn, cs + k[2] * k[2] * v],
+        ];
+        [[r[0][0], r[1][0], r[2][0], 0.0], [r[0][1], r[1][1], r[2][1], 0.0], [r[0][2], r[1][2], r[2][2], 0.0], [0.0, 0.0, 0.0, 1.0]]
+    };
+    // q_A ⊗ q_B: the pitch applies first, then the twist.
+    let rot = nf_formats::anim::mul(&rot_row(axis_b, pitch), &rot_row(axis_a, twist));
+    let pivot = t(&world[2]);
+    let below = |b: usize| { let mut p = Some(b); while let Some(x) = p { if x == 2 { return true; } p = skin.parent(x); } false };
+    for b in 0..world.len() {
+        if !below(b) { continue; }
+        let mut w = world[b];
+        for k in 0..3 { w[3][k] -= pivot[k]; }
+        let mut r = nf_formats::anim::mul(&w, &rot);
+        for k in 0..3 { r[3][k] += pivot[k]; }
+        world[b] = r;
+    }
+    Some((pitch, twist))
+}
+
 fn drone_height(hip: f32) -> f32 {
     if hip == 0.0 { 1.0 } else { (hip - 0.02).max(0.2) }
 }
@@ -6147,6 +6416,20 @@ impl Scene {
                         add_instance(level, &winst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                         mp_body_weapons.insert(attachments.len() as u32, (slot, w));
                         attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+                        // mp-remote-fx: its muzzle flash — the guards' `DroneWeap_FireWeapon` flash (mesh
+                        // weapon_data+0x4C on the datum id + 1, the muzzle [M]); shown 2 ticks per shot of
+                        // the slot (`Sim::mp_fx.last_shot`). The PS2's human players draw theirs on the
+                        // first-person view model only (`Draw_MuzzleFlash` 0x1a3fe0); the opponent's
+                        // third-person flash is the port's [S] so the other machine sees the shot.
+                        if let Some((fmesh, rgb)) = wd.muzzle_flash(w) {
+                            let muzzle = skin.datums.iter().find(|x| x.id == datum_id + 1 && x.bone >= 0);
+                            if let (Some(&(fmap, fobject)), Some(md)) = (level.by_hash.get(&fmesh), muzzle) {
+                                let finst = Instance { map: fmap, object: fobject, matrix: ident, placement: placement.clone() };
+                                add_instance(level, &finst, Layer::Effect, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                                mp_body_weapons.insert(attachments.len() as u32, (slot, w));
+                                attachments.push(Attachment { character: ci, bone: md.bone as usize, local: anim::quat_trans_to_mat(md.q, md.t), flash: Some(rgb), tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+                            }
+                        }
                     }
                 }
             }
@@ -6282,6 +6565,13 @@ impl Scene {
             for slot in 1..TRACER_SLOTS {
                 pool_replay(&mut groups, &rec, Some(attachments.len() as u32));
                 attachments.push(Attachment { character: 0, bone: 0, local: tinst.matrix, flash: None, tracer: Some(slot), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+            }
+            // mp-remote-fx: the other players' / bots' trails (`Sim::mp_tracer`), MP only.
+            if mp.is_some() {
+                for k in 0..crate::mpfx::MP_TRACER_SLOTS {
+                    pool_replay(&mut groups, &rec, Some(attachments.len() as u32));
+                    attachments.push(Attachment { character: 0, bone: 0, local: tinst.matrix, flash: None, tracer: Some(MP_TRACER_BASE + k), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
+                }
             }
             // fix-gadgets-live: the gadget BEAM draws the game's own sprites, not the trail stand-in —
             // `Draw_LaserBeam` 0x1a4560 sets the beam object's gfx to 0x2000131 "lazer" (the class-'N'
@@ -6668,8 +6958,27 @@ impl Scene {
         if let Some(m) = level.main_map() {
             const MISC_KINDS: [u8; 15] = [0x2e, 0x30, 0x34, 0x35, 0x3b, 0x71, 0xd5, 0xd8, 0xe1, 0xe3, 0xda, 0xfa, 0xfd, 0xfe, 0x4a];
             let nf_hide = std::env::var("NF_HIDE").ok();
+            // mp-lobby-settings: the MP creates that return no object draw nothing — `GunImp_Create`
+            // 0x131f20:52-55 (Gun Emplacements off), `Destroy_Create` 0x12c318:14 (Explosive
+            // Scenery off), `Car_Create` 0x1305b0:12-17 (Vehicles off, and always on Ravine
+            // 0x0700004b) [M]. Vehicles on: `Car_Create`'s variant — Helicopters (and Random's
+            // 51 %) swap the body to entity 0x2000194 raised 1.5 [M :30-49] with the
+            // 0x2000b4d/0x2000b4e children [M Car_InitBits 0x12fec8:13-23]; the Random roll draws
+            // from the lockstep seed's own stream [S]. The vehicles draw only — the port's MP has
+            // no drivable car (docs/GAPS.md).
+            let ctx_level = drones.map_or(0, |d| d.level_id);
+            let mut car_rng = mp.map(|ms| nf_game::drone::Rng::new(ms.seed ^ 0x4341_5253));
             for p in level.maps[m].placements.iter().filter(|p| MISC_KINDS.contains(&((p.flags & 0xff) as u8))) {
                 let kind = (p.flags & 0xff) as u8;
+                let mut heli = false;
+                if let Some(ms) = mp {
+                    if kind == 0x34 && ms.gun_emplacements == 0 { continue; }
+                    if kind == 0xe1 && ms.explosive_scenery == 0 { continue; }
+                    if kind == 0xda {
+                        if ms.vehicles == 0 || ctx_level == 0x0700_004b { continue; }
+                        heli = match ms.vehicles { 1 => false, 3 => car_rng.as_mut().map_or(true, |r| r.rand(100) < 0x33), _ => true };
+                    }
+                }
                 // 0x3B hidden-until-channel (DynamicObject_Create 0x18dbf8:31, param 0 = the s16 channel).
                 if kind == 0x3b && p.params.iter().find(|(i, _)| *i == 0).is_some_and(|(_, v)| *v != 0) { continue; }
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
@@ -6728,6 +7037,19 @@ impl Scene {
                     let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
                     mul_bytes(cel_ambient(&room_cels, transform(&mx, obj.centre), 0).unwrap_or([0xff; 3]))
                 } else { [1.0; 3] };
+                if heli {
+                    let has_gfx = |(cm, co): (usize, usize)| level.maps[cm].objects[co].gfx.leaves.iter().any(|l| !l.batches.is_empty());
+                    let mut hm = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    hm[3][1] += 1.5;
+                    for (k, h) in [0x0200_0194u32, 0x0200_0b4d, 0x0200_0b4e].into_iter().enumerate() {
+                        let Some(c) = level.by_hash.get(&h).copied().filter(|&c| has_gfx(c)) else { continue };
+                        let mut cm = hm;
+                        if k == 2 { cm[0] = [1.0, 0.0, 0.0, 0.0]; cm[1] = [0.0, 1.0, 0.0, 0.0]; cm[2] = [0.0, 0.0, 1.0, 0.0]; }
+                        add_instance(level, &Instance { map: c.0, object: c.1, matrix: cm, placement: p.clone() }, Layer::World, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        *misc_drawn.entry(0xda).or_default() += 1;
+                    }
+                    continue;
+                }
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                 add_instance(level, &inst, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, mult, &room_cels, u32::MAX, u32::MAX);
                 *misc_drawn.entry(kind).or_default() += 1;
@@ -7057,6 +7379,23 @@ impl Scene {
             // holding the menu's pick [M C_SBNFDFCTY 0x216ca8:15].
             drones.set_difficulty(difficulty);
             drones.attach_level_id(level, d.level_id);
+            // mp-lobby-settings: the MP creates' enviro-mod gates. `GunImp_Create` 0x131f20 returns
+            // 0 in MP while Gun Emplacements (+0x1B8) is off and otherwise mounts
+            // `TurretGuns[weapon set]` (Random: `Rand_Rand(10)`) [M :52-63]; `Destroy_Create`
+            // 0x12c318 creates nothing in MP while Explosive Scenery (+0x1D4) is off [M :14]. The
+            // Random turret draws from the lockstep seed's own stream, not the shared one [S, the
+            // weapon_row note].
+            if let Some(ms) = mp {
+                if ms.gun_emplacements == 0 {
+                    drones.props.gunimps.clear();
+                } else {
+                    let mut trng = nf_game::drone::Rng::new(ms.seed ^ 0x4755_4e49);
+                    for g in drones.props.gunimps.iter_mut() {
+                        g.turret = if ms.weapon_set >= 10 { trng.rand(10) as u8 } else { ms.weapon_set as u8 };
+                    }
+                }
+                if ms.explosive_scenery == 0 { drones.props.destroy.clear(); }
+            }
             crate::phase_mark("b9b nav/cover/volumes/drone creates", t9);
             // fix-door-portal-links (G-035): `build_LinkDoors2Portals` (0x1c8ac8) runs at load — each
             // portal-linked door (placement param 4) takes the portal quad it sits in; the vision
@@ -7068,6 +7407,15 @@ impl Scene {
             // sphere comes from the placement's object glist bounds, like the game's
             // `Control_BuildWorldSph` 0x133070.
             let ladders = nf_game::ladder::all(level);
+            // The ladders' runtime cel link [M build_LinkToRoom 0x1c9680:
+            // build_FindCel(world-sphere centre) → control_link_object_to_cel] — the pick admits a
+            // ladder only from a straddled cel's chain [M Collide_Pick 0x1eb320:125-134], so the
+            // per-tick straddle set tests against THIS cel. Unresolved (None) = the game's
+            // unlinked object: never admitted while scoping is active.
+            let mut ladders = ladders;
+            for lad in ladders.iter_mut() {
+                lad.cell = world.find_cel(lad.centre).map(|c| c as u32);
+            }
             // Wires (`Wire_Create` 0x1981d8, placement type 0x3E): the level's zip wires, resolved
             // against their map objects like the ladders (fix-wire: the world sphere replaces the
             // hardcoded 4.0 length; the endpoints derive at grab time per the atlas).
@@ -7122,6 +7470,9 @@ impl Scene {
             // line 459-462: reads from the param buffer at +0x2c..+0x38, NOT the placement's extra words].
             // The model comes from the placement's object (the celglist), not from weapon_data.
             let pickup_models = nf_game::pickup::models(level);
+            // mp-lobby-settings: an MP match's set pickups (kinds 7..11) come from the lobby's
+            // Weapon Set row [M Pickup_CreateFromSet 0x18f1b0:56 — row = MPSettings+0x1B4].
+            let mp_row = mp.map(nf_game::mp::equip::weapon_row);
             let placed_pickups: Vec<nf_game::pickup::Pickup> = level.maps[m].placements.iter()
                 .filter(|p| p.flags & 0xff == 0xf0)
                 .filter_map(|p| {
@@ -7155,7 +7506,11 @@ impl Scene {
                         pickup_models.get(&obj_.hashcode).map(|&m| (obj_.hashcode,
                             nf_game::pickup::Model { centre: obj_.centre, radius: obj_.radius }, (om, oi)))
                     })?;
-                    let mut p2 = nf_game::pickup::Pickup::create_placed(p.translation, p.rotation, type_, id, rounds, switch_channel, sound, respawn as u16, lifetime, model, bounds, &weapons, &pickup_models)?;
+                    let mut p2 = match mp_row {
+                        Some(row) if (7..=11).contains(&type_) && id != 0xFFFF =>
+                            nf_game::pickup::Pickup::create_from_set_row(p.translation, p.rotation, type_, &row, &weapons, &pickup_models)?,
+                        _ => nf_game::pickup::Pickup::create_placed(p.translation, p.rotation, type_, id, rounds, switch_channel, sound, respawn as u16, lifetime, model, bounds, &weapons, &pickup_models)?,
+                    };
                     p2.label = param(6); // the kind-4 label (`Pickup_Create` param_13 → +0x34; 0700000b's item: 0x2000036 [D])
                     p2.obj = Some(obj);
                     Some(p2)
@@ -7168,7 +7523,7 @@ impl Scene {
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), mp_walk: [MP_WALK_INIT; nf_net::MAX_AGENTS], mp_last_held: [2; nf_net::MAX_AGENTS], ambient_lookups: std::cell::Cell::new(0), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],
@@ -7179,7 +7534,14 @@ impl Scene {
             mp_bot_weapons: None,
             mp_armour: [0.0; nf_net::MAX_AGENTS],
             mp_dead_ticks: [0; nf_net::MAX_AGENTS],
+            net_row: None,
+            net_remotes_done: false,
+            mp_armour: [0.0; nf_net::MAX_AGENTS],
+            net_last_takes: Vec::new(),
+            mp_combat: Default::default(),
+            net_shot: None,
             mp_held: [2; nf_net::MAX_AGENTS],
+            mp_fx: Default::default(),
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
@@ -7226,6 +7588,12 @@ impl Scene {
         // bbox-face FindCel approximation (documented deviation; every live load path builds sim).
         if sim.is_none() { build_chains(&mut cel_graph, None); }
         crate::phase_mark("b10 collider index + final assembly", t);
+        if mp.is_some() {
+            // mp-lobby-settings: the enviro-mod creates as built (the settings check reads it).
+            let (g, t, dz) = sim.as_ref().map_or((0, Vec::new(), 0), |s| (s.drones.props.gunimps.len(), s.drones.props.gunimps.iter().map(|g| g.turret).collect::<Vec<_>>(), s.drones.props.destroy.len()));
+            eprintln!("[mp-props] gunimps {g} turrets {t:?} destroy {dz} drawn: guns {} destroy {} vehicles {}",
+                misc_drawn.get(&0x34).copied().unwrap_or(0), misc_drawn.get(&0xe1).copied().unwrap_or(0), misc_drawn.get(&0xda).copied().unwrap_or(0));
+        }
         Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
     }
 
@@ -7290,6 +7658,7 @@ impl Scene {
             // Drones: the simulation's pose — blended scripts, fractional frames, upper-body aim — the same one the hit
             // boxes use (`Drone::object_pose`).
             if let Some((s, di)) = drone_of(ci) {
+                let _pd = nf_game::prof::scope("fs: drone pose");
                 let dr = &s.drones.list[di];
                 let (world, hip) = dr.object_pose(&s.data())?;
                 let m = nf_formats::placement::object_matrix([0.0, dr.yaw, 0.0], [dr.pos[0], dr.draw_y(hip), dr.pos[2]]);
@@ -7315,67 +7684,78 @@ impl Scene {
                 // render showed the intro room with NO characters at all.
                 return Some((anim::skin_matrices(&world, &c.skin), world, c.matrix));
             }
-            // MP bodies: the guards' movement scripts (idle / walk / run by speed) at the slot's
-            // position and yaw [S stand-in until 700v7 ports the player anim set, PlayerAnimSetInit*
-            // 0x18fcd8 — the game's MP bodies run the PLAYER set, not the drone tables].
+            // MP bodies (mp-body-anim): the PLAYER anim set the game's MP body runs, from the slot's
+            // script list (`Sim::mp_anim`, ticked by `advance_mp_anim` — idle, the distance-driven
+            // walk/run, the strafe overlay, the stance transitions, the death [M AnimSetUpdate
+            // 0x1c0938, Player_ChangeSubState 0x190630]) composed as `AnimFrameResolve` blends, then
+            // the upper-body aim on bone 2 (`AnimObjectAimAt` 0x1bfe58). Fallback when the arena lacks
+            // the player scripts: the drone set by speed [S].
             if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
+                let _pm = nf_game::prof::scope("fs: mp body (total)");
                 let s = self.sim.as_ref()?;
-                let (pos, yaw, speed) = s.mp_body_state(slot)?;
-                // The PLAYER anim set the game's MP body runs, through 700v7's port: the set by the
-                // held weapon's class and the stance (`PlayerAnimSetInitNormal`/`InitCrouch`
-                // 0x18fcd8/0x18fea0), the idle/walk pick by forward speed (`AnimSetUpdate`
-                // 0x1c0938) — `nf_formats::mpanim::mp_body_pose` [M, D the descriptors].
-                let held = s.mp_body_held(slot);
-                let class = nf_formats::mpanim::weapon_anim_class(&s.weapons, held);
-                let substate = s.mp_bonds.get(slot).and_then(|b| b.as_ref()).map_or(0, |b| b.substate);
-                let fwd = speed / 60.0;
-                let body_st = nf_formats::mpanim::MpBodyState {
-                    mp: true, weapon: held, substate, fwd, strafe: 0.0,
-                    phase: MP_WALK_INIT, hold: 0, one_shot_time: 0.0, water_level: -9.9,
-                };
-                let posed = self.mp_anim_sets.as_ref().map(|sets| (nf_formats::mpanim::mp_body_pose(sets, class, &body_st), sets.set(class, substate == 4)));
-                let pick = posed.map_or(0, |(p, _)| p.script);
-                let player_script = Some(pick).filter(|h| s.scripts.contains_key(h));
-                let st = if speed < 0.5 { nf_game::drone::anim_state::STAND_IDLE } else if speed < 4.5 { nf_game::drone::anim_state::WALK } else { nf_game::drone::anim_state::RUN };
-                let danim = s.tables.danim_for_state(st, 0);
-                // Fallback when the arena lacks the player script: the drone set [S].
-                let script = player_script.or_else(|| danim.filter(|&d| d >= 0).and_then(|d| (0..27u16).filter_map(|set| s.tables.script_for(d as u16, set)).find(|h| s.scripts.contains_key(h))));
-                if std::env::var_os("NF_MPBODY_DBG").is_some() && s.drones.frame % 60 == 0 {
-                    eprintln!("[mpbody] slot {slot} pos {pos:?} yaw {yaw:.2} speed {speed:.2} state {st:#x} danim {danim:?} script {script:x?} has {}", script.is_some_and(|h| s.scripts.contains_key(&h)));
+                // mp-remote-fx: a dead slot's body plays the death script (substate 0xd) from its
+                // death tick, held on the last frame until the respawn [M Player_CheckForDeath
+                // 0x190810:89-93, Player_ChangeSubState 0x190630 case 0xd — `mp_body_pose`'s arm 1].
+                if let Some((pos, yaw, ticks)) = s.mp_body_death(slot) {
+                    let st = nf_formats::mpanim::MpBodyState {
+                        mp: true, weapon: 0, substate: 0xd, fwd: 0.0, strafe: 0.0,
+                        phase: MP_WALK_INIT, hold: 0, one_shot_time: 0.0, gravity_y: -9.8,
+                    };
+                    let script = self.mp_anim_sets.as_ref().map(|sets| nf_formats::mpanim::mp_body_pose(sets, 0, &st).script)
+                        .unwrap_or(nf_formats::mpanim::DEATH_SCRIPT);
+                    let sc = s.scripts.get(&script)?;
+                    let time = (ticks as f32).min(sc.length.max(1) as f32);
+                    let mut local = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time)?;
+                    let hip = local.first().map_or(0.0, |r| r.0[1]);
+                    if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
+                    let world = anim::world_pose(&local, &c.skin);
+                    let m = nf_formats::placement::object_matrix([0.0, yaw, 0.0], [pos[0], pos[1] - 1.0 + drone_height(hip), pos[2]]);
+                    return Some((anim::skin_matrices(&world, &c.skin), world, m));
                 }
-                let script = script?;
-                // mp-body-look: the walk/run pair is distance-driven, not clock-driven. `AnimSetUpdate`
-                // 0x1c0938 appends the walk with flags |= 0x8d000000 and `+0xb4 = 1` (the distance-table
-                // clock, `AnimDistanceTableDistanceToFrame2` 0x1c4270, fed `ANIMOBJ+0xd4 = fwd × 0.5`),
-                // the run with `+0xb4 = 2` synced to the walk (`+0x4c`) at crossfade weight t (`+0x88`)
-                // [M 0x1c0938:160-190; mp-players.md §3]. The old clock read (`time_at(frame)` on these
-                // NON-looping scripts — 060009de is 86 frames, looping 0 [D]) froze every moving body in
-                // the walk's last frame 1.4 s into the match (renders before_bot2_f200/f215: same pose).
-                let walking = posed.is_some_and(|(p, set)| p.blend > 0.0 && p.script == script && set.walk == script);
-                let mut local = if walking {
-                    let (p, set) = posed.unwrap();
-                    let walk_q = s.scripts.get(&script)?.sequences().next().and_then(|(_, _, q)| s.seqs.get(&q))?;
-                    let table = nf_game::anim::DistanceTable::build(walk_q, 4, true)?;
-                    let mut w = s.mp_walk.get(slot).copied().unwrap_or(MP_WALK_INIT);
-                    let frame_a = table.distance_to_frame(&mut w, 0.0, true).max(1.0);
-                    let mut pose = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, frame_a)?;
-                    // The run, synced to the walk's normalised time (mode 2: Δ = (Mt−1)/(Ml−1) − (t−1)/(l−1)).
-                    let len_a = s.scripts.get(&script)?.length.max(2) as f32;
-                    if let Some(len_b) = s.scripts.get(&set.run).map(|r| r.length.max(2) as f32).filter(|_| set.run != script) {
-                        let frame_b = 1.0 + (frame_a - 1.0) / (len_a - 1.0) * (len_b - 1.0);
-                        if let Some(run) = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, set.run, frame_b) {
-                            nf_game::anim::blend(&mut pose, &run, p.blend.clamp(0.0, 1.0));
-                        }
+                let (pos, yaw, speed) = s.mp_body_state(slot)?;
+                let local = match s.mp_body_local_pose(slot, &c.skeleton, &c.skin) {
+                    Some(p) => p,
+                    None => {
+                        let st = if speed < 0.5 { nf_game::drone::anim_state::STAND_IDLE } else if speed < 4.5 { nf_game::drone::anim_state::WALK } else { nf_game::drone::anim_state::RUN };
+                        let danim = s.tables.danim_for_state(st, 0);
+                        let script = danim.filter(|&d| d >= 0).and_then(|d| (0..27u16).filter_map(|set| s.tables.script_for(d as u16, set)).find(|h| s.scripts.contains_key(h)))?;
+                        let time = 1.0 + s.scripts.get(&script)?.time_at(s.drones.frame as f32);
+                        nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time)?
                     }
-                    pose
-                } else {
-                    let time = 1.0 + s.scripts.get(&script)?.time_at(s.drones.frame as f32);
-                    nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time)?
                 };
+                if std::env::var_os("NF_MPBODY_DBG").is_some() && s.drones.frame % 60 == 0 {
+                    let a = s.mp_anim.get(slot);
+                    eprintln!("[mpbody] slot {slot} pos {pos:?} yaw {yaw:.2} speed {speed:.2} layers {:?} phase {:?} aim {:?}",
+                        a.map(|a| a.layers.iter().map(|l| (l.kind, l.time, l.weight())).collect::<Vec<_>>()), a.map(|a| a.phase), a.map(|a| a.aim));
+                }
+                let mut local = local;
                 let hip = local.first().map_or(0.0, |r| r.0[1]);
                 if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
-                let world = anim::world_pose(&local, &c.skin);
-                let m = nf_formats::placement::object_matrix([0.0, yaw, 0.0], [pos[0], pos[1] - 1.0 + drone_height(hip), pos[2]]);
+                let mut world = anim::world_pose(&local, &c.skin);
+                if let Some(a) = s.mp_anim.get(slot).filter(|a| !a.dead) {
+                    let held = s.mp_body_held(slot);
+                    // `AnimObjectAimAt` returns for an MP weapon of class 0 (fists, grenades, gadgets)
+                    // and without a weapon datum [M 0x1bfe58: AnimDatumGetWeaponInfo < 0].
+                    if nf_formats::mpanim::weapon_anim_class(&s.weapons, held) != 0 {
+                        // The gun line: `AnimGetBoneWorldTrans2(obj, weapon datum, 3 or 1)` — the body
+                        // skin's datum id + 3 when it exists (`AnimDatumGetIndex`), else id + 1 (the
+                        // muzzle, as `DroneWeap_FireWeapon`'s lookup) — its −X row [M 0x1bfe58].
+                        let gun = s.weapons.third_person(held).and_then(|(_, id)| {
+                            if id == 0xff { return None; }
+                            let id = id as u32;
+                            let find = |k: u32| c.skin.datums.iter().find(|d| d.id == k && d.bone >= 0);
+                            find(id + 3).or_else(|| find(id + 1)).map(|d| (d.bone as usize, anim::quat_trans_to_mat(d.q, d.t)))
+                        });
+                        // Humans are class-3 player objects (pitch only, [−π/2, 1.2708]); the bots are
+                        // the game's class-0x11 drones (twist and pitch, ±0.9) [M 0x1bfe58 uStack_16c].
+                        let is_bot = s.mp.as_ref().is_some_and(|m| slot >= m.settings.human_count as usize);
+                        mp_body_aim(&mut world, &c.skin, gun, a.aim, is_bot);
+                    }
+                }
+                // The feet: the body root (`obj+0x30`) stands `cc` above them (the crouched capsule's
+                // 0.55, standing 1.0347); the skin's hip rides on the feet as before.
+                let feet = pos[1] - s.mp_body_cc(slot);
+                let m = nf_formats::placement::object_matrix([0.0, yaw, 0.0], [pos[0], feet + nf_game::player::ROOT_HEIGHT - 1.0 + drone_height(hip), pos[2]]);
                 return Some((anim::skin_matrices(&world, &c.skin), world, m));
             }
             let view = self.sim.as_ref().and_then(|s| self.view_models.get(&s.gun.weapon).filter(|&&v| v == ci)).and(self.sim.as_ref());
@@ -7407,7 +7787,9 @@ impl Scene {
         };
         // One memo across the characters: the crowds share (mesh, sequence, frame) poses.
         let mut cache = HashMap::new();
+        let prof_pose = nf_game::prof::scope("fs: pose characters");
         let posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>> = self.characters.iter().enumerate().map(|(ci, c)| pose_one(ci, c, &mut cache)).collect();
+        drop(prof_pose);
         // Held back: spawner reinforcements and drones disabled while they wait for a switch channel (object flags
         // 0x30, `NDrone2_Enable(0)`); R shows them. The inspect path (`choice`) pins a drone-backed
         // character visible; script actors keep their liveness gate either way.
@@ -7435,6 +7817,19 @@ impl Scene {
                 ];
             }
             if let Some(slot) = a.tracer {
+                if slot >= MP_TRACER_BASE {
+                    // mp-remote-fx: a remote shot's trail — `tracer_matrix`'s convention (+Z along the
+                    // flight, scaled by one tick of travel, cut at the contact).
+                    let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
+                    let Some(t) = self.sim.as_ref().and_then(|s| s.mp_tracer(slot - MP_TRACER_BASE)) else { return far };
+                    let d = t.dir;
+                    let yaw = d[0].atan2(d[2]);
+                    let pitch = -d[1].atan2((d[0] * d[0] + d[2] * d[2]).sqrt());
+                    let mut m = nf_formats::placement::object_matrix([pitch, yaw, 0.0], t.pos);
+                    let len = t.speed.min(t.left.max(0.0));
+                    for c in 0..3 { m[2][c] *= len; }
+                    return m;
+                }
                 // fix-laser-beam: the gadget BEAM (Draw_LaserBeam / Draw_TaserBeam via
                 // Player_MuzzleFlash 0x1a4298:107-137 — one stretched sprite from the muzzle to the
                 // crosshair-ray hit). fix-gadgets-live: slots TRACER_SLOTS / +1 carry the game's own
@@ -7775,6 +8170,9 @@ impl Scene {
             // An MP body's weapon draws only while its slot holds that weapon.
             if let Some(&(slot, w)) = self.mp_body_weapons.get(&(k as u32)) {
                 if self.sim.as_ref().is_none_or(|s| s.mp_body_held(slot) != w) { return far; }
+                // mp-remote-fx: the dead body holds nothing — `Player_CheckForDeath` 0x190810 drops
+                // the gun as a pickup and runs `Player_WeaponNone` [M :43-63].
+                if self.sim.as_ref().is_some_and(|s| s.mp_body_death(slot).is_some()) { return far; }
             }
             if a.dropped {
                 // fix-objects: `!p.gone` — a TAKEN drop stays in the list as a tombstone (drone.rs
@@ -7889,6 +8287,16 @@ impl Scene {
                     None => collapse(&datum),
                 };
             }
+            // mp-remote-fx: an MP body's flash (the held weapon's — the gate above) lives 2 ticks
+            // after each of the slot's shots, as the guards' (`DroneWeap_FireWeapon`).
+            if let Some(&(slot, _)) = self.mp_body_weapons.get(&(k as u32)) {
+                let Some(s) = self.sim.as_ref() else { return collapse(&datum) };
+                let now = s.drones.frame;
+                return match s.mp_fx.last_shot.get(slot).copied().flatten().filter(|&f| now.saturating_sub(f) < 2) {
+                    Some(f) => muzzle_flash_matrix(&datum, f ^ (k as u32).wrapping_mul(0x9e37_79b9)),
+                    None => collapse(&datum),
+                };
+            }
             // AI-driven: the flash object lives 2 ticks after each shot (`DroneWeap_FireWeapon`).
             if let Some((s, di)) = drone_of(a.character as usize) {
                 let now = s.drones.frame;
@@ -7943,7 +8351,7 @@ impl Scene {
             return self.view_models.get(&s.gun.weapon) != Some(&ci);
         }
         if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
-            return s.mp_body_state(slot).is_none();
+            return s.mp_body_state(slot).is_none() && s.mp_body_death(slot).is_none();
         }
         let c = &self.characters[ci];
         // mp-character-data: a parked MP body is hidden — the draw moves the Character matrix to
@@ -8252,7 +8660,10 @@ impl Scene {
     /// the forced list, `View_AddForcedObjects` 0x1e5fb8). `None` = the walk is off (`NF_NOPORTAL`).
     pub fn skin_palette(&self, l: &SkinLayout, choice: Option<usize>, time: f32, opts: ViewOpts, vis: Option<&[bool]>) -> (Vec<Mat4>, Vec<[f32; 4]>) {
         const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
+        let prof_fs = nf_game::prof::scope("pal: frame_state_for");
         let fs = self.frame_state_for(choice, time, opts, true);
+        drop(prof_fs);
+        let _prof_rest = nf_game::prof::scope("pal: palette fill");
         let collapse = |at: &Mat4| -> Mat4 { [[0.0; 4], [0.0; 4], [0.0; 4], [at[3][0], at[3][1], at[3][2], 1.0]] };
         // fix-dev-spawn-visible: a LIVE drone's character (present + enabled — the dev NPC spawns, and
         // the placed guards while they fight) must not vanish when the strict portal walk drops the
@@ -8278,6 +8689,7 @@ impl Scene {
             vis.map_or(true, |v| self.cel_index_at(pos).map_or(true, |r| v.get(r).copied().unwrap_or(true)))
         };
         let mut p = vec![FAR; l.n_mats as usize];
+        let pch = nf_game::prof::scope("pal: chars+attach+objects");
         for (ci, c) in self.characters.iter().enumerate() {
             // A character added after the layout was built (the dev spawn) has no palette slots
             // until the renderer is rebuilt.
@@ -8357,7 +8769,10 @@ impl Scene {
                 p[l.pick_base as usize + k] = pk.map_or(FAR, |q| q.m);
             }
         }
-        let (mults, pickup_mult, attach_mult) = self.colour_mults();
+        drop(pch);
+        let pcm = nf_game::prof::scope("pal: colour_mults");
+        let (mults, pickup_mult, attach_mult) = self.colour_mults_dense();
+        drop(pcm);
         let mut cols = vec![[1.0f32; 4]; l.col_one as usize + 1];
         let has = !mults.is_empty();
         let rgb = |m: [f32; 3]| [m[0], m[1], m[2], 1.0];
@@ -8373,8 +8788,8 @@ impl Scene {
         }
         if has {
             for (ci, m) in mults.iter().enumerate() { cols[ci] = rgb(*m); }
-            for (a, m) in &attach_mult { if let Some(c) = cols.get_mut((l.col_att + a) as usize) { *c = rgb(*m); } }
-            for (pk, m) in &pickup_mult { if let Some(c) = cols.get_mut((l.col_pick + *pk as u32) as usize) { *c = rgb(*m); } }
+            for (a, m) in attach_mult.iter().enumerate() { if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { *c = rgb(*m); } }
+            for (pk, m) in pickup_mult.iter().enumerate() { if let Some(c) = cols.get_mut((l.col_pick + pk as u32) as usize) { *c = rgb(*m); } }
         }
         // blood-puff-render: the gas puffs' draw colour IS the pool's live rgba — the game's
         // `View_SetupRenderModes_Tweak` 0x1e5888:46-49 feeds the gas object's obj+0x103..0x106 bytes
@@ -8440,6 +8855,18 @@ impl Scene {
     /// The per-object colour multipliers of one frame (`View_SetupRenderModes_Tweak`'s TAmbient): per character,
     /// per placed pickup and per attachment. Shared by the CPU path (`posed_vertices`) and the GPU palette.
     pub fn colour_mults(&self) -> (Vec<[f32; 3]>, std::collections::HashMap<u16, [f32; 3]>, std::collections::HashMap<u32, [f32; 3]>) {
+        let (mults, pickups, attach) = self.colour_mults_dense();
+        let pickup_mult = pickups.into_iter().enumerate().map(|(k, m)| (k as u16, m)).collect();
+        let attach_mult = attach.into_iter().enumerate().map(|(k, m)| (k as u32, m)).collect();
+        (mults, pickup_mult, attach_mult)
+    }
+
+    /// `colour_mults` with the pickup / attachment multipliers as dense vectors (index = the
+    /// pickup / attachment slot; both empty without a sim) — the same values. mp-perf-16: the GPU
+    /// palette reads them by index; hashing every one of the 16-body arena's attachment slots into
+    /// a map each ticked frame was a millisecond of the 240 Hz budget.
+    pub fn colour_mults_dense(&self) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>) {
+        let pm = nf_game::prof::scope("cm: char mults");
         let mults: Vec<[f32; 3]> = self.sim.as_ref()
             .map(|s| (0..self.characters.len()).map(|ci| s.char_multiplier(ci)).collect())
             .unwrap_or_default();
@@ -8456,18 +8883,20 @@ impl Scene {
         // Preallocated to the loop bounds (frame-cost-guard): one entry per pickup and per
         // attachment slot is inserted unconditionally below, so the maps can be sized up front
         // instead of rehash-growing to 12k+ entries every ticked frame.
-        let mut pickup_mult: std::collections::HashMap<u16, [f32; 3]> = std::collections::HashMap::with_capacity(self.sim.as_ref().map_or(0, |s| s.drones.pickups.len()));
-        let mut attach_mult: std::collections::HashMap<u32, [f32; 3]> = std::collections::HashMap::with_capacity(self.attachments.len());
+        let mut pickup_mult: Vec<[f32; 3]> = Vec::with_capacity(self.sim.as_ref().map_or(0, |s| s.drones.pickups.len()));
+        let mut attach_mult: Vec<[f32; 3]> = Vec::with_capacity(self.attachments.len());
         // The lag fix (the user's "very laggy" playtest): the keys were collected by walking EVERY character
         // vertex — the effect pools (decal/casing/debris/gas/projectile slots, 8561 attachments on 07000005)
         // made that 34 ms of a 52 ms frame. The multiplier depends only on the key, so it is computed once per
         // pickup and per attachment; keys no vertex carries are never read (the palette's colour slot and
         // `posed_vertices`' lookup are both per-vertex), so the results the vertices see are unchanged.
+        drop(pm);
+        let pp = nf_game::prof::scope("cm: pickups");
         if let Some(s) = self.sim.as_ref() {
             for pk in 0..s.drones.pickups.len().min(u16::MAX as usize + 1) as u32 {
                 let pk = pk as u16;
                 {
-                    pickup_mult.entry(pk).or_insert_with(|| {
+                    pickup_mult.push((|| {
                         match s.drones.pickups.get(pk as usize) {
                             Some(p) if tintable(p) => amb_at(s, &p.m),
                             // Armour glow (fix-player3): kind 3 carries the 0x80000 "close-up flash" flag
@@ -8486,12 +8915,14 @@ impl Scene {
                             }
                             _ => one(),
                         }
-                    });
+                    })());
                 }
             }
+            drop(pp);
+            let _pa = nf_game::prof::scope("cm: attachments");
             for ai in 0..self.attachments.len() as u32 {
                 {
-                    attach_mult.entry(ai).or_insert_with(|| {
+                    attach_mult.push((|| {
                         let Some(a) = self.attachments.get(ai as usize) else { return one() };
                         if a.flash.is_some() || a.tracer.is_some() { return one(); }
                         // rocket-swoosh: a swoosh's tint bytes stay at control_init_object's 0xFF
@@ -8523,7 +8954,7 @@ impl Scene {
                             };
                         }
                         mults.get(a.character as usize).copied().unwrap_or_else(one)
-                    });
+                    })());
                 }
             }
         }
@@ -8624,6 +9055,26 @@ pub const MP_WALK_INIT: f32 = 0.37;
 /// The set's stride factor (`set+0x28` = 0.5): `ANIMOBJ+0xd4 = fwd × 0.5` per tick [M 0x1c0938:96].
 pub const MP_WALK_STRIDE: f32 = 0.5;
 
+/// mp-world-sync: the segment `a→b`'s entry parameter into the box `lo..hi` grown by `g` (the
+/// slab test; 0 when `a` starts inside), None = a miss [S the shared shot's box contact].
+fn seg_aabb(a: [f32; 3], b: [f32; 3], lo: [f32; 3], hi: [f32; 3], g: f32) -> Option<f32> {
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for k in 0..3 {
+        let d = b[k] - a[k];
+        let (l, h) = (lo[k] - g, hi[k] + g);
+        if d.abs() < 1e-9 {
+            if a[k] < l || a[k] > h { return None; }
+            continue;
+        }
+        let (mut ta, mut tb) = ((l - a[k]) / d, (h - a[k]) / d);
+        if ta > tb { std::mem::swap(&mut ta, &mut tb); }
+        t0 = t0.max(ta);
+        t1 = t1.min(tb);
+        if t0 > t1 { return None; }
+    }
+    Some(t0)
+}
+
 fn ray_body_hit(a: [f32; 3], b: [f32; 3], center: [f32; 3], radius: f32) -> Option<f32> {
     let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
@@ -8637,6 +9088,28 @@ impl Sim {
     /// The load builds every human slot's bond in slot order (deterministic on every machine);
     /// slot 0's lands in `bond`. After the load, each machine moves ITS slot's bond into `bond`
     /// (the camera and the full local path tick it) and parks the old local one back at slot 0.
+    /// mp-lobby-settings: `MP_EquipPlayer` 0x1855f8 for this machine's human — the lobby's Weapon
+    /// Set spawn weapon (+ the grapple enviro-mod, the scenario bonus weapon) into the inventory and
+    /// the gun drawn [M; see nf_game::mp::equip]. Every MP spawn runs it (the load, each respawn,
+    /// the late join); the port used to hand out the P2K (and the load the SP default arm's
+    /// give-everything kit) whatever the set.
+    pub fn mp_equip_local(&mut self) {
+        let Some(m) = self.mp.as_ref() else { return };
+        let row = nf_game::mp::equip::weapon_row(&m.settings);
+        let loaded = &self.mp_weapon_loaded;
+        let lf = |w: u8| loaded.get(w as usize).copied().unwrap_or(true);
+        let req = nf_game::mp::equip::mp_equip_player(&m.settings, &row, self.mp_local_slot, &mut self.drones.inventory, &self.weapons, lf);
+        let wi = req as usize;
+        let clip = self.drones.inventory.clip.get(wi).copied().unwrap_or(0).max(0) as u32;
+        let spare = self.drones.inventory.carried.get(self.weapons.ammo_type(wi)).copied().unwrap_or(0).max(0) as u32;
+        self.gun = nf_game::gun::Gun::new(req, clip, spare);
+        self.drones.bond_weapon = req;
+        if std::env::var_os("NF_MP_EQUIP_LOG").is_some() || std::env::var_os("NF_LOBBY_DBG").is_some() {
+            let owned: Vec<usize> = (0..self.drones.inventory.owned.len()).filter(|&i| self.drones.inventory.owned[i]).collect();
+            eprintln!("[mp-equip] slot {} set {} row {:?} -> weapon {:#x} clip {} spare {} owned {:x?}", self.mp_local_slot, m.settings.weapon_set, row, req, clip, spare, owned);
+        }
+    }
+
     pub fn swap_local_slot(&mut self, slot: usize) {
         if slot == 0 || slot >= nf_net::MAX_AGENTS { return; }
         self.mp_local_slot = slot;
@@ -8766,6 +9239,7 @@ impl Sim {
         let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
         let frame = self.drones.frame;
         let local = self.mp_local_slot;
+        let mut restart_equip = false;
         let Some(m) = self.mp.as_mut() else { return };
         if std::mem::take(&mut m.game.restart_pending) {
             let humans = (m.settings.human_count as usize).min(nf_net::MAX_AGENTS);
@@ -8782,8 +9256,7 @@ impl Sim {
                     self.drones.health.health = hp;
                     if was_dead {
                         self.drones.death = nf_game::death::Death::default();
-                        self.gun = nf_game::gun::Gun::new(2, 7, 41);
-                        self.drones.bond_weapon = 2;
+                        restart_equip = true;
                     }
                 } else {
                     self.mp_bonds[slot] = Some(nb);
@@ -8821,6 +9294,8 @@ impl Sim {
         } else if m.game.slots[0].dead && !self.drones.death.active && self.drones.health.health > 0.0 {
             self.drones.health.health = 0.0;
         }
+        // The restart's `MP_ReSpawn` re-arms a dead local human (`MP_EquipPlayer` [M 0x185368:74]).
+        if restart_equip { self.mp_equip_local(); }
     }
 
     pub fn step_mp_bots(&mut self) {
@@ -8863,6 +9338,29 @@ impl Sim {
         // The humans the bots fight (online: every human slot on every machine; offline slot 0).
         let online = self.net_rng.is_some() || self.net_rng_shared.is_some();
         let local = self.mp_local_slot;
+        let pain = nf_game::mp::equip::MpPainMods::from_tuning(&self.tuning);
+        // mp-bot-objectives: the scenario view the bots' objective goals read (the mode objects,
+        // the status words, the roles, the other bots' objective goals — refreshed per bot below,
+        // the game's bots read each other live in slot order).
+        let mut objectives = m.bot_objectives();
+        // The team view of `BOT_setOtherPlayerInfo` 0x125390:62-73: team games and Assassination
+        // compare the team words; FFA compares against team 3 (no one is a team-mate) [M].
+        let team_view = m.settings.team_game != 0 || scenario == nf_game::mp::scenario::ASSASSIN;
+        if std::env::var_os("NF_BOTLOG").is_some() && frame % 60 == 0 {
+            // mp-bot-objectives: the scenario objects + scores once a second (log only)
+            eprintln!("[botlog] f{} objectives: team scores {:?} slot scores {:?} flags {:?} uplinks {:?} hill-status {:?} site {:?} ge {:?} bp {:?}",
+                frame, m.game.team_scores, m.game.slots.iter().map(|s| s.score).collect::<Vec<_>>(),
+                m.objects_rt.flags.iter().flatten().map(|f| (f.state, f.carrier)).collect::<Vec<_>>(),
+                m.objects_rt.uplinks.iter().map(|u| (u.state, u.controller)).collect::<Vec<_>>(),
+                m.game.slots.iter().map(|s| s.status_bits & 0x10 != 0).collect::<Vec<_>>(),
+                m.objects_rt.site.as_ref().map(|x| (x.state, x.sub)),
+                m.objects_rt.ge.iter().flatten().map(|g| (g.state, g.carrier)).collect::<Vec<_>>(),
+                m.objects_rt.blueprint.as_ref().map(|b| (b.state, b.carrier)));
+            for b in &m.bots {
+                let g = &b.brain.vars.goals[1];
+                eprintln!("[botlog]   slot {} team {} goal1 type {} target {:#x} state {:#x} opp {:?}", b.slot, b.team, g.goal_type, g.target, b.brain.state, b.brain.vars.opponent);
+            }
+        }
 
         for i in 0..m.bots.len() {
             let alive = !m.bots[i].dead;
@@ -8877,13 +9375,17 @@ impl Sim {
                     if !m.respawn_allowed(slot) { continue; }
                     let team = m.bots[i].team;
                     // mp-16-slots: more than 4 bots cycle the disc's 4 records (as create_bots does).
-                    let rec = nf_game::mp::bots::INITIAL_BOT_RECORDS[i % nf_game::mp::bots::INITIAL_BOT_RECORDS.len()].clone();
+                    // mp-lobby-settings: the bot's own prepared record (the lobby's character /
+                    // skill / team), as create_bots used.
+                    let rec = nf_game::mp::MpMatch::bot_record(&m.settings, i);
                     let sp = m.get_spawn_point(team, slot, &mut self.drones.rng) as usize;
                     let p4 = m.spawns.points[sp].pos;
                     let yaw = m.spawns.points[sp].facing[1];
                     let feet = nf_game::player::Bond::stand_at(world, [p4[0], p4[1], p4[2]], yaw).pos;
                     let pos = [feet[0], feet[1] + BOT_EYE, feet[2]];
-                    m.bots[i].brain = nf_game::mp::bots::BotBrain::bot_init(&rec, slot as u8, pos, yaw);
+                    let mut brain = nf_game::mp::bots::BotBrain::bot_init(&rec, slot as u8, pos, yaw);
+                    m.arm_bot(&mut brain);
+                    m.bots[i].brain = brain;
                     // mp-16-slots: the bot's index is its list position (the game's slot − 4 wraps
                     // once bots follow the humans).
                     m.bots[i].brain.vars.bot_index = i as i16;
@@ -8908,14 +9410,34 @@ impl Sim {
             // ever acquired anyone and they idled in 0xF9 all match (the user: "bots need to work
             // too"; blocked 704's item 2) [S the vision cone/range stand-in: LOS only].
             let me = m.bots[i].brain.pos;
-            let mut seen = others;
+            let mut seen: Vec<nf_game::mp::bots::OtherPlayer> = others.to_vec();
+            // mp-perf-16: the eye-to-chest sight line (`segment_surface_bullet`, eye = `me`, chest =
+            // the other's eye − 0.4) is not run for every pair here (14 bots × 15 others = 210
+            // segments a tick, 75% of the 16-participant tick): `find_opponent` — its only reader
+            // whose result depends on it — runs it lazily for the candidates that can change its
+            // pick (`BotCtx::lazy_sight`). The cheap bits (candidate, team-mate) stay precomputed.
             for o in seen.iter_mut() {
                 if !o.alive || o.index == m.bots[i].slot { continue; }
                 let d = [o.pos[0] - me[0], o.pos[1] - me[1], o.pos[2] - me[2]];
                 o.dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-                let eye = me;
-                let chest = [o.pos[0], o.pos[1] - 0.4, o.pos[2]];
-                if world.segment_surface_bullet(eye, chest).is_none() { o.flags |= 0x6; }
+                // bit1 candidate for every present player [M 0x125390:99-101], bit3 the team-mate
+                // in the team view [M :100-102] (mp-bot-objectives), bit2 seen (lazily, in `find_opponent`)
+                o.flags |= 0x2;
+                if team_view && o.team == my_team { o.flags |= 0x8; }
+            }
+            // mp-bot-objectives: the standing Demolition/Protection site rides the objective row
+            // (`OBJ_ROW`) — the attackers take it as their opponent (`NDrone2_FindOpponent`
+            // 0x1424e0:519-560 sets the site obj as `Drone+0x170` [M]); the row's position is the
+            // site sphere centre + 0.3 so the brain's chest aim (−0.3) lands on the centre [S].
+            if let Some(site) = objectives.site.filter(|s| s.radius > 0.0) {
+                let c = site.centre;
+                let d = [c[0] - me[0], c[1] - me[1], c[2] - me[2]];
+                let clear = world.segment_surface_bullet(me, c).is_none();
+                seen.push(nf_game::mp::bots::OtherPlayer {
+                    pos: [c[0], c[1] + 0.3, c[2]], alive: true, index: nf_game::mp::bots::OBJ_ROW,
+                    team: objectives.site_defenders, flags: 0x2 | if clear { 0x4 } else { 0 },
+                    dist2: d[0] * d[0] + d[1] * d[1] + d[2] * d[2], health: site.state as f32, score: 0.0,
+                });
             }
             let ctx = nf_game::mp::bots::BotCtx {
                 now: 0.0, // the brain's own tick counter is the clock (net-lockstep F4)
@@ -8929,26 +9451,33 @@ impl Sim {
                 health,
                 max_health,
                 stationary: false,
+                lazy_sight: true,
+                objectives: Some(&objectives),
                 weapons: wtable,
                 start_weapon,
             };
             let before = m.bots[i].brain.shots.len();
             let held_before = m.bots[i].brain.vars.weapon_id;
-            m.bots[i].brain.step(&ctx, &mut self.drones.rng, true);
+            { let _p = nf_game::prof::scope("bots: brain.step"); m.bots[i].brain.step(&ctx, &mut self.drones.rng, true); }
             if std::env::var_os("NF_BOTLOG").is_some() && held_before != m.bots[i].brain.vars.weapon_id && m.bots[i].brain.tick > 2 {
                 eprintln!("[botlog] f{} bot{} switches {:#x} -> {:#x} (state {:#x}, opp dist {:.1})", frame, i, held_before,
                     m.bots[i].brain.vars.weapon_id, m.bots[i].brain.state, m.bots[i].brain.vars.opp_dist);
+            }
+            if let Some(g) = objectives.bot_goals.get_mut(i) {
+                let g1 = &m.bots[i].brain.vars.goals[1];
+                *g = (m.bots[i].slot, g1.goal_type, g1.target);
             }
             stamps.push((i, m.bots[i].brain.last_visit_stamp));
             // (The brain's body walks the world itself — the player's movement core: collision,
             // floors, gravity — so the old per-tick re-stand, which could snap a bot onto a
             // lower floor, is gone.)
-            if std::env::var_os("NF_BOTLOG").is_some() && frame % 60 == 0 {
-                eprintln!("[botlog] f{} bot{} state {:#x} pending {:?} opp {:?} goals {:?} pos {:.1?} trace {}",
+            if frame % 60 == 0 && env_flag(&ENV_BOTLOG, "NF_BOTLOG") {
+                eprintln!("[botlog] f{} bot{} state {:#x} pending {:?} opp {:?} goals {:?} pos {:.1?} trace {} route {}/{} valid {:?} dest {:.1?} stuck {}",
                     frame, i, m.bots[i].brain.state, m.bots[i].brain.trace.last(),
                     m.bots[i].brain.vars.opponent,
                     m.bots[i].brain.vars.goals.iter().map(|g| (g.active, g.goal_type, g.target)).collect::<Vec<_>>(),
-                    m.bots[i].brain.pos, m.bots[i].brain.trace.len());
+                    m.bots[i].brain.pos, m.bots[i].brain.trace.len(),
+                    m.bots[i].brain.route.idx, m.bots[i].brain.route.nodes.len(), m.bots[i].brain.route.valid, m.bots[i].brain.route.dest, m.bots[i].brain.stuck_hits);
                 let v = &m.bots[i].brain.vars;
                 eprintln!("[botlog]   fire latch {} empty {} next {:.2} unseen {} clip {} yaw {:.2} tick {} weapon {} interval {} burst {} hp {:.0}/{:.0} deaths {}",
                     v.fire_latch, v.burst_empty, v.next_bullet_at, v.unseen_ticks, v.clip_rounds, m.bots[i].brain.yaw, m.bots[i].brain.tick,
@@ -9012,35 +9541,61 @@ impl Sim {
                 let th = hit_human.map_or(f32::MAX, |h| h.1);
                 if th <= tb { best = None; } else { hit_human = None; }
                 let tt = th.min(tb);
+                // mp-bot-objectives: the Demolition/Protection site takes the round when it is the
+                // nearest thing on the ray and the world is clear up to it (the human combat's
+                // site test, `step_net_combat`; the site SP's hit damage [M 0x1870a0:81-91]) [S].
+                if let Some((c, r)) = m.site_sphere() {
+                    if let Some(ts) = ray_body_hit(shot.pos, end, c, r) {
+                        let p = [shot.pos[0] + (end[0] - shot.pos[0]) * ts, shot.pos[1] + (end[1] - shot.pos[1]) * ts, shot.pos[2] + (end[2] - shot.pos[2]) * ts];
+                        if ts < tt && world.segment(shot.pos, p).is_none() {
+                            let shooter = m.bots[i].slot;
+                            m.damage_site(dmg, shooter);
+                            continue;
+                        }
+                    }
+                }
                 if tt < f32::MAX {
                     let p = [shot.pos[0] + (end[0] - shot.pos[0]) * tt, shot.pos[1] + (end[1] - shot.pos[1]) * tt, shot.pos[2] + (end[2] - shot.pos[2]) * tt];
-                    if world.segment(shot.pos, p).is_some() { best = None; hit_human = None; }
+                    if !world.segment_clear(shot.pos, p) { best = None; hit_human = None; }
+                }
+                // mp-remote-fx: the resolved round for the effects pass (draw/audio only).
+                {
+                    use crate::mpfx::{MpShot, MpShotHit};
+                    let at = |t: f32| [shot.pos[0] + (end[0] - shot.pos[0]) * t, shot.pos[1] + (end[1] - shot.pos[1]) * t, shot.pos[2] + (end[2] - shot.pos[2]) * t];
+                    let (hit, fend) = if let Some((h, t)) = hit_human { (MpShotHit::Human(h), at(t)) }
+                        else if let Some((j, t)) = best { (MpShotHit::Bot(m.bots[j].slot), at(t)) }
+                        else if let Some((t, normal, material)) = world.segment_surface_bullet(shot.pos, end) { (MpShotHit::World { normal, material }, at(t)) }
+                        else { (MpShotHit::Miss, end) };
+                    self.mp_fx.events.push(MpShot { shooter: m.bots[i].slot, bot: true, weapon: shot.weapon, from: shot.pos, dir: shot.dir, end: fend, hit, damage: dmg });
                 }
                 if let Some((h, _)) = hit_human {
                     let shooter = m.bots[i].slot;
                     if m.register_bullet_hit(h, shooter) {
-                        // mp-bot-weapons: `Player_HandlePain`'s MP arm — × Plr_DMod_Multi (4.0 on
-                        // the arenas), the armour first (`botweap::player_pain_mp`).
+                        // mp-lobby-settings: `Player_HandlePain`'s MP arm [M 0x1902c8:51-82]; the
+                        // bot round's chest sphere stands in for a torso part [S].
+                        let dmg = nf_game::mp::equip::mp_pain(&m.settings, &pain, dmg, nf_game::mp::equip::PART_TORSO);
                         if online {
                             // The per-slot online combat owns the health and the death (every machine).
-                            nf_game::mp::botweap::player_pain_mp(&mut self.mp_hp[h], &mut self.mp_armour[h], dmg, multi);
+                            self.mp_hp[h] = (self.mp_hp[h] - dmg).max(0.0);
                             if self.mp_hp[h] <= 0.0 && self.mp_dead_ticks[h] == 0 {
                                 self.mp_dead_ticks[h] = 1;
                                 m.player_killed(h, Some(shooter), false, false, &mut self.drones.rng);
                                 if std::env::var_os("NF_BOTLOG").is_some() { eprintln!("[botlog] f{frame} kill: slot {shooter} (weapon {:#x}) killed slot {h}", shot.weapon); }
                             }
-                            if h == local { self.drones.health.health = self.mp_hp[h]; self.drones.health.armour = self.mp_armour[h]; }
+                            if h == local { self.drones.health.health = self.mp_hp[h]; }
                         } else {
-                            let hb = &mut self.drones.health;
-                            nf_game::mp::botweap::player_pain_mp(&mut hb.health, &mut hb.armour, dmg, multi);
+                            self.drones.health.health = (self.drones.health.health - dmg).max(0.0);
                         }
                     }
                 }
                 if let Some((j, _)) = best {
-                    // mp-bot-weapons: `BOT_handlePain` — × Plr_DMod_Multi, the armour (+0x769) first.
-                    let (loss, armour) = nf_game::mp::botweap::bot_pain(dmg, multi, 0, 0, m.bots[j].brain.vars.arsenal.armour, false, false);
-                    m.bots[j].brain.vars.arsenal.armour = armour;
-                    m.bots[j].health -= loss;
+                    // mp-lobby-settings: the friendly-fire gate (`MP_RegisterBulletHit` 0x1857c0
+                    // [M :43-45]) and `BOT_handlePain`'s MP arm [M 0x125ed8:48-79] — bot rounds hit
+                    // team-mate bots at full damage before.
+                    let (vs, ks) = (m.bots[j].slot, m.bots[i].slot);
+                    if !m.register_bullet_hit(vs, ks) { continue; }
+                    let dmg = nf_game::mp::equip::mp_pain(&m.settings, &pain, dmg, nf_game::mp::equip::PART_TORSO);
+                    m.bots[j].health -= dmg;
                     if m.bots[j].health <= 0.0 {
                         // mp-host-match-logic: the frag goes through the match's real scoring
                         // (`MP_PlayerKilled` 0x188f70 — the killer/streak/team-score rules and
@@ -9209,6 +9764,18 @@ impl Sim {
     }
 
     pub fn step_net_remotes(&mut self, inputs: &[nf_game::player::Input; nf_net::MAX_AGENTS], local: usize) {
+        let _p = nf_game::prof::scope("net: step_net_remotes");
+        // mp-world-sync: `step_bond` already moved them this tick (it had the session's row).
+        if std::mem::take(&mut self.net_remotes_done) { return; }
+        self.step_net_remotes_inner(inputs, None, local);
+    }
+
+    /// The remotes' movement tick. `row` (the session's raw inputs, when the caller has them)
+    /// adds the parts the local pipeline drives from the fire lane: the Q-Claw's latch on the
+    /// held claw + the trigger (`Player_SetGrapplePoint` 0x195da0 — the local path's arm in
+    /// `step_bond`, with the same session `held` weapon) and the reel's release on the trigger
+    /// (the local body's `input.fire = trigger`) — a grapple was the local machine's alone.
+    fn step_net_remotes_inner(&mut self, inputs: &[nf_game::player::Input; nf_net::MAX_AGENTS], row: Option<&[nf_net::Input; nf_net::MAX_AGENTS]>, local: usize) {
         for slot in 0..nf_net::MAX_AGENTS {
             if slot == local { continue; }
             let Some(b) = self.mp_bonds[slot].as_mut() else { continue };
@@ -9219,7 +9786,9 @@ impl Sim {
             // froze: the two-window "desync when I move" with bots (a bot kill, then any input).
             if self.mp_dead_ticks[slot] > 0 { self.mp_body_speed[slot] = 0.0; continue; }
             let before = b.pos;
-            let input = inputs[slot];
+            // mp-combat-weapons: a slot riding its guided rocket runs no arms — the local body's
+            // `step_bond` zeroes its input on the same ticks (the shared `MpCombat::ride`).
+            let input = if self.mp_combat.riding(slot) { nf_game::player::Input::default() } else { inputs[slot] };
             // The local body's movement core, step for step (`step_bond`): the ground ride, the
             // stateful cel relink on the last tick's move segment (the collision queries are
             // scoped to `cel` — a replica that kept its spawn cel collided differently from the
@@ -9244,15 +9813,276 @@ impl Sim {
             let water = cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
                 .map(|r| self.cels[r].water).filter(|w| *w > -400.0);
             b.cel = cel;
+            let mut input = input;
+            if let Some(r) = row {
+                let mut trigger = r[slot].trigger;
+                if trigger && b.substate == nf_game::player::SS_WALK && b.grapple.is_none()
+                    && nf_game::gadget::is_grapple(r[slot].held)
+                {
+                    let (head, dir) = (b.head(), b.look());
+                    if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, r[slot].held)) {
+                        b.grapple = Some(nf_game::gadget::GrappleState { point, phase: 1, pull: 0.0 });
+                        b.substate = nf_game::player::SS_GRAPPLE;
+                        b.vel = [0.0; 3];
+                        trigger = false;
+                    }
+                }
+                input.fire = trigger;
+            }
             let ctx = nf_game::player::LadderCtx {
                 ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims),
                 water, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
+                straddle: &[], // MP remotes carry no per-body cel link yet — no scoping.
             };
             b.tick_ctx(&self.world, &ctx, &input);
-            b.sfx_out.clear();
+            // mp-remote-fx: the body's jump launch / head bump sounds play at the flush.
+            self.mp_fx.body_sounds.extend(b.sfx_out.drain(..));
             b.prev_pos = prev_tick_pos;
             self.mp_body_speed[slot] = ((b.pos[0] - before[0]).powi(2) + (b.pos[2] - before[2]).powi(2)).sqrt() * 60.0;
         }
+    }
+
+    // ── mp-world-sync (agent 9): the arenas' world interactions online ─────────────────────────
+    // [S port design — the PS2's four players were one machine's objects, and the game's own
+    // object walks already treat every player alike]. Online every machine runs the world from
+    // the same bodies: `Drones::net_bodies` (the pickup take, the trigger touchers, the doors'
+    // actors), `net_use_pass` (every slot's use key) and `step_net_world` (every slot's world
+    // damage and its shots at the breakables/destroyables); `net_state_hash` folds the world's
+    // state so a divergence is detected. Docs: docs/systems/net-world-sync.md.
+
+    /// The body of a human slot (the local slot's `bond`, the others' parked replicas).
+    fn net_body(&self, slot: usize) -> Option<&nf_game::player::Bond> {
+        if slot == self.mp_local_slot { Some(&self.bond) } else { self.mp_bonds.get(slot)?.as_ref() }
+    }
+
+    /// Every body the shared world sees now: the human slots in slot order, then the bots in
+    /// list order (`Pickup_Update` 0x18e148's own order — the players' loop, then the bots').
+    pub fn net_bodies_now(&self) -> Vec<nf_game::drone::NetBody> {
+        let cel_of = |p: [f32; 3]| self.cel_at(p).and_then(|room| self.room_cell.get(room).copied().flatten());
+        let mut v = Vec::new();
+        for slot in 0..nf_net::MAX_AGENTS {
+            let Some(b) = self.net_body(slot) else { continue };
+            v.push(nf_game::drone::NetBody {
+                slot, bot: false, local: slot == self.mp_local_slot,
+                alive: self.mp_dead_ticks[slot] == 0 && self.mp_hp[slot] > 0.0,
+                pos: b.pos, sph: b.sphere_centre(), head: b.head(), cel: cel_of(b.pos),
+                hanging: matches!(b.substate, nf_game::player::SS_WIRE | nf_game::player::SS_ZIPLINE),
+                armour: self.mp_armour[slot],
+            });
+        }
+        if let Some(m) = self.mp.as_ref() {
+            for bt in &m.bots {
+                let e = bt.brain.pos;
+                let pos = [e[0], e[1] - BOT_EYE, e[2]];
+                v.push(nf_game::drone::NetBody {
+                    slot: bt.slot, bot: true, local: false, alive: !bt.dead,
+                    pos, sph: pos, head: e, cel: cel_of(pos), hanging: false, armour: 0.0,
+                });
+            }
+        }
+        v
+    }
+
+    /// Every slot's use key this tick, in slot order (`Player_Activate` 0x1a5170 per player):
+    /// the doors its sphere meets (`Door_Activate`), the deferred trigger half, the class-0x25
+    /// SS pick (`SS_Activate` 0x1a9ea8) — the same reach stand-ins the local path uses in `run`.
+    /// The mounted guns are not created in an MP match (`GunImp_Create` 0x131f20:56-58 returns
+    /// unless `MPSettings+0x1B8`), so no slot can mount one.
+    fn net_use_pass(&mut self, row: &[nf_net::Input; nf_net::MAX_AGENTS]) {
+        let frame = self.drones.frame;
+        for slot in 0..nf_net::MAX_AGENTS {
+            if !row[slot].use_key || self.mp_dead_ticks[slot] > 0 { continue; }
+            let Some(b) = self.net_body(slot) else { continue };
+            let (head, look) = (b.head(), b.look());
+            let (evs, _) = self.drones.doors.player_use(head, look, &mut self.drones.channels, frame);
+            for (id, pos) in evs { self.drones.audio.play3d(id as u32, pos, None); }
+            self.drones.net_use_triggers.push((head, look));
+            let mut best: Option<(f32, usize)> = None;
+            for (i, s) in self.drones.sss.list.iter().enumerate() {
+                if s.state == 0 || s.mask & 4 == 0 { continue; }
+                let p = s.pos();
+                let to = [p[0] - head[0], p[1] - head[1], p[2] - head[2]];
+                let proj = to[0] * look[0] + to[1] * look[1] + to[2] * look[2];
+                if proj < 0.0 { continue; }
+                let cl = [head[0] + look[0] * proj, head[1] + look[1] * proj, head[2] + look[2] * proj];
+                let dd = ((p[0] - cl[0]).powi(2) + (p[1] - cl[1]).powi(2) + (p[2] - cl[2]).powi(2)).sqrt();
+                if dd > 2.2 { continue; }
+                if best.map_or(true, |(bd, _)| dd < bd) { best = Some((dd, i)); }
+            }
+            if let Some((_, i)) = best {
+                let mut ch = std::mem::take(&mut self.drones.channels);
+                self.drones.sss.list[i].activate(&mut ch, frame);
+                self.drones.channels = ch;
+            }
+        }
+    }
+
+    /// One world-damage application to a human slot's shared health (`Player_HandlePain`
+    /// 0x1902c8's body: × the level's damage factor, armour absorbing only for pain type 0
+    /// [M 0x1902c8:84-104]); a death goes through `MP_PlayerKilled` 0x188f70 like the combat's
+    /// (the credit is the attacker when another slot caused it; `explosive` = pain types 4..7).
+    fn net_world_pain(&mut self, slot: usize, damage: f32, pain_type: u32, killer: Option<usize>) {
+        if self.mp_dead_ticks[slot] > 0 || self.mp_hp[slot] <= 0.0 || damage <= 0.0 { return; }
+        let d = damage * nf_game::bullet::damage_factor(self.level, self.drones.difficulty);
+        let absorbed = if pain_type == 0 { d.min(self.mp_armour[slot]) } else { 0.0 };
+        self.mp_armour[slot] -= absorbed;
+        self.mp_hp[slot] = (self.mp_hp[slot] - (d - absorbed)).max(0.0);
+        if slot == self.mp_local_slot {
+            // The pain flash (presentation; `Player_HandlePain`'s +0x968 write).
+            self.drones.health.flash = (self.drones.health.flash + (d * 21.333).min(128.0)).min(255.0);
+        }
+        if self.mp_hp[slot] <= 0.0 {
+            self.mp_dead_ticks[slot] = 1;
+            let k = killer.filter(|&k| k != slot);
+            let explosive = (4..=7).contains(&pain_type);
+            if let Some(m) = self.mp.as_mut() { m.player_killed(slot, k, explosive, false, &mut self.drones.rng); }
+            eprintln!("[mp] slot {slot} died to the world (pain type {pain_type}, frame {})", self.drones.frame);
+        }
+    }
+
+    /// The shared world's per-body consequences of the tick, on the shared stream (the end of
+    /// `step_bond`, online):
+    /// 1. the pickup takes' shared effects — a human's armour pickup sets the slot's armour to 50
+    ///    [M Pickup_Handler 0x18e650:220-225]; a bot's raises its health by 20 to its max (the
+    ///    bot arm's case 3) — the bots' weapon/ammo inventory is not modelled [S];
+    /// 2. every live body's hurt-volume contact (`Player_DealWithObjHit` 0x194458's class-0x27
+    ///    arm), landing damage (type 6, `Player_CollisionHandler` 0x1949a8:117-126) and drowning
+    ///    (type 7, `Player_MonitorAir` 0x191a70:136-143) into its slot's health;
+    /// 3. every slot's shot (`Input::shot`, the same ray `step_net_combat` casts) against the
+    ///    breakables (`Break_Update` 0x12bfd8 — the damage subtracts; < 0 dies) and destroyables
+    ///    (`Destroy_CollisionHandler` 0x12bd48; the death writes its channel and, for a non-zero
+    ///    type byte, `Destroy_Smash` 0x12bb60's blast — `Explode_Propagate` onto every body).
+    ///    The object takes the shot only when it is nearer than every body the combat's sphere
+    ///    test would hit — the combat itself is untouched [S the ray-vs-box contact];
+    /// 4. a dead slot loses its armour (`MP_ReSpawn` 0x185368 re-inits the player).
+    fn step_net_world(&mut self, row: &[nf_net::Input; nf_net::MAX_AGENTS]) {
+        if self.mp.is_none() { return; }
+        // 1. The takes.
+        self.net_last_takes = std::mem::take(&mut self.drones.net_takes);
+        for &(k, slot, bot) in &self.net_last_takes.clone() {
+            let Some(kind) = self.drones.pickups.get(k).map(|p| p.kind) else { continue };
+            eprintln!("[mp-world] frame {}: {} {slot} took pickup {k} (kind {kind})", self.drones.frame, if bot { "bot" } else { "slot" });
+            if kind != nf_game::pickup::kind::ARMOUR { continue; }
+            if bot {
+                if let Some(bt) = self.mp.as_mut().and_then(|m| m.bots.iter_mut().find(|b| b.slot == slot)) {
+                    bt.health = (bt.health + 20.0).min(bt.max_health);
+                }
+            } else if slot < nf_net::MAX_AGENTS {
+                self.mp_armour[slot] = 50.0;
+            }
+        }
+        // 2. The world damage, slot order.
+        let mut hits: Vec<(usize, f32, u32, Option<usize>)> = Vec::new();
+        for slot in 0..nf_net::MAX_AGENTS {
+            if self.mp_dead_ticks[slot] > 0 { continue; }
+            let Some(b) = self.net_body(slot) else { continue };
+            let (pos, fall, drown) = (b.pos, b.fall_damage, b.drown_damage);
+            for h in self.hurts.iter_mut() {
+                if let Some((dmg, ty)) = h.update(self.drones.channels.on(h.gate as u32), pos) {
+                    hits.push((slot, dmg, ty as u32, None));
+                }
+            }
+            if let Some(d) = fall { hits.push((slot, d, 6, None)); }
+            if let Some(d) = drown { hits.push((slot, d, 7, None)); }
+        }
+        for (slot, d, ty, k) in hits.drain(..) { self.net_world_pain(slot, d, ty, k); }
+        // 3. The shots at the breakables / destroyables.
+        let frame = self.drones.frame;
+        for shooter in 0..nf_net::MAX_AGENTS {
+            if !row[shooter].shot || self.mp_dead_ticks[shooter] > 0 { continue; }
+            let Some(b) = self.net_body(shooter) else { continue };
+            let head = b.head();
+            let (sy, cy) = b.yaw.sin_cos();
+            let (sp, cp) = b.pitch.sin_cos();
+            let dir = [cp * sy, sp, cp * cy];
+            let range = 200.0;
+            let mut end = [head[0] + dir[0] * range, head[1] + dir[1] * range, head[2] + dir[2] * range];
+            if let Some((t, _, _)) = self.world.segment_surface_bullet(head, end) {
+                end = [head[0] + (end[0] - head[0]) * t, head[1] + (end[1] - head[1]) * t, head[2] + (end[2] - head[2]) * t];
+            }
+            // The nearest body on the ray (the combat's spheres) — a body in front takes the shot.
+            let mut body_t = f32::MAX;
+            for victim in 0..nf_net::MAX_AGENTS {
+                if victim == shooter || self.mp_dead_ticks[victim] > 0 { continue; }
+                let Some(v) = self.net_body(victim) else { continue };
+                for hgt in [0.5f32, 1.0, 1.5] {
+                    if let Some(t) = ray_body_hit(head, end, [v.pos[0], v.pos[1] + hgt, v.pos[2]], 0.45) { body_t = body_t.min(t); }
+                }
+            }
+            if let Some(m) = self.mp.as_ref() {
+                for bt in m.bots.iter().filter(|b| !b.dead) {
+                    if let Some(t) = ray_body_hit(head, end, bt.brain.pos, 0.6) { body_t = body_t.min(t); }
+                }
+            }
+            // The nearest live breakable / destroyable box (grown 0.1, the props' contact rule).
+            let mut best: Option<(f32, bool, usize)> = None; // (t, destroyable, index)
+            for (i, br) in self.drones.breaks.list.iter().enumerate().filter(|(_, b)| !b.dead) {
+                if br.filter != 0 && br.filter & (1u16 << (row[shooter].held & 15)) != 0 { continue; }
+                if let Some(t) = seg_aabb(head, end, br.lo, br.hi, 0.1) { if best.is_none_or(|(bt, _, _)| t < bt) { best = Some((t, false, i)); } }
+            }
+            for (i, de) in self.drones.props.destroy.iter().enumerate().filter(|(_, d)| !d.dead) {
+                if let Some(t) = seg_aabb(head, end, de.lo, de.hi, 0.1) { if best.is_none_or(|(bt, _, _)| t < bt) { best = Some((t, true, i)); } }
+            }
+            let Some((t, destroyable, i)) = best else { continue };
+            if t > body_t { continue; }
+            let damage = self.weapons.records.get(row[shooter].held as usize)
+                .map_or(10.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
+            if !destroyable {
+                let br = &mut self.drones.breaks.list[i];
+                br.health -= damage;
+                if br.health < 0.0 {
+                    br.dead = true;
+                    let pos = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
+                    let sound: u16 = if br.kind == 2 { 0x2E } else { 0x5F3 };
+                    let (placement, kind) = (br.placement, br.kind);
+                    self.drones.break_kills.push((placement, kind, sound));
+                    self.drones.audio.play3d(u32::from(sound), pos, None);
+                }
+                continue;
+            }
+            let de = &mut self.drones.props.destroy[i];
+            de.health -= damage;
+            if de.health >= 0.0 { continue; }
+            de.dead = true;
+            let (channel, kind, blast_damage, lo, hi) = (de.channel, de.kind, de.blast_damage, de.lo, de.hi);
+            self.drones.channels.set(channel as u32, 1, frame);
+            if kind == 0 { continue; }
+            // `Destroy_Smash` 0x12bb60's blast (the props' radius/script stand-ins, props.rs).
+            let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
+            let ext = [(hi[0] - lo[0]) / 2.0, (hi[1] - lo[1]) / 2.0, (hi[2] - lo[2]) / 2.0];
+            let radius = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() * match kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
+            let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
+            // The look only (damage 0): the drones' blast pass plays the script next tick.
+            self.drones.pending_blasts.push((c, radius, 0.0, usize::MAX, 0, script, radius));
+            let bots: Vec<(usize, [f32; 3], f32)> = self.mp.as_ref().map_or(Vec::new(), |m| m.bots.iter().enumerate()
+                .filter(|(_, b)| !b.dead).map(|(j, b)| (j, [b.brain.pos[0], b.brain.pos[1] - BOT_EYE, b.brain.pos[2]], 0.4)).collect());
+            for slot in 0..nf_net::MAX_AGENTS {
+                if self.mp_dead_ticks[slot] > 0 { continue; }
+                let Some(v) = self.net_body(slot) else { continue };
+                let hits = nf_game::explode::propagate(c, radius, blast_damage, shooter,
+                    &nf_game::explode::Targets { drones: &[], player: v.pos, breaks: &[], destroys: &[] });
+                if let Some(ph) = hits.player { self.net_world_pain(slot, ph, 0, Some(shooter)); }
+            }
+            let hits = nf_game::explode::propagate(c, radius, blast_damage, shooter,
+                &nf_game::explode::Targets { drones: &bots, player: [0.0, -1.0e9, 0.0], breaks: &[], destroys: &[] });
+            for (j, dmg) in hits.drones {
+                let Some(m) = self.mp.as_mut() else { break };
+                let bt = &mut m.bots[j];
+                if bt.dead { continue; }
+                bt.health -= dmg;
+                if bt.health <= 0.0 {
+                    let victim_slot = bt.slot;
+                    bt.health = 0.0;
+                    bt.dead = true;
+                    bt.deaths += 1;
+                    bt.respawn_at = frame + 180;
+                    m.player_killed(victim_slot, Some(shooter), false, false, &mut self.drones.rng);
+                }
+            }
+        }
+        // 4. The dead lose their armour; this machine's HUD armour is its slot's.
+        for slot in 0..nf_net::MAX_AGENTS { if self.mp_dead_ticks[slot] > 0 { self.mp_armour[slot] = 0.0; } }
+        self.drones.health.armour = self.mp_armour[self.mp_local_slot];
     }
 
     /// An MP body's (position, yaw, horizontal speed per second) now, None = not drawn (the local
@@ -9263,15 +10093,75 @@ impl Sim {
         let humans = m.settings.human_count as usize;
         if slot < humans {
             if slot >= nf_net::MAX_AGENTS { return None; }
-            if slot == s.mp_local_slot || s.mp_dead_ticks[slot] > 0 { return None; }
+            // A dead slot's body stays drawn where it fell (the death script, mp-body-anim) until the
+            // respawn moves it (`step_net_combat`).
+            if slot == s.mp_local_slot { return None; }
             let b = s.mp_bonds[slot].as_ref()?;
             Some((b.pos, b.yaw, s.mp_body_speed[slot]))
         } else {
             let bot = m.bots.iter().find(|b| b.slot == slot)?;
+            // mp-remote-fx: a dead bot lies in its death pose (`Sim::mp_body_death`), not standing.
+            if bot.dead { return None; }
             // The bot's position is its eye (BOT_EYE above the feet); the body draws from the feet.
             let p = bot.brain.pos;
-            Some(([p[0], p[1] - BOT_EYE, p[2]], bot.brain.yaw, s.mp_body_speed[slot]))
+            // The draw's yaw is Bond's convention (forward = (sin, cos), `object_matrix`'s frame);
+            // the brain's is the drone atan2(dz, dx) one (forward = (cos, sin)) — its walking body
+            // carries HALF_PI − yaw (`BotBrain::walk_body`). Drawing the brain yaw mirrored every
+            // bot's facing about the diagonal (a bot walking +x faced +z).
+            Some(([p[0], p[1] - BOT_EYE, p[2]], nf_game::trig::HALF_PI - bot.brain.yaw, s.mp_body_speed[slot]))
         }
+    }
+
+    /// The body root's height above its feet (`obj+0xCC`: standing `ROOT_HEIGHT`, crouched 0.55) —
+    /// a human's remote `Bond::cc`, a bot's walking body's.
+    pub fn mp_body_cc(&self, slot: usize) -> f32 {
+        let standing = nf_game::player::ROOT_HEIGHT;
+        let Some(m) = self.mp.as_ref() else { return standing };
+        if slot < m.settings.human_count as usize {
+            self.mp_bonds.get(slot).and_then(|b| b.as_ref()).map_or(standing, |b| b.cc)
+        } else {
+            m.bots.iter().find(|b| b.slot == slot).map_or(standing, |b| if b.brain.body.cc > 0.0 { b.brain.body.cc } else { standing })
+        }
+    }
+
+    /// mp-body-anim: one MP body's local pose from its script list (`mp_anim[slot]`), composed as
+    /// `AnimFrameResolve` 0x1c35f8 blends — the layers in stamp order, `result = first`, then
+    /// `result = blend(result, next, 1 − weight(previous))`. A walk layer's frame comes from the walk
+    /// sequence's z-only distance table at the body's walk distance (`AnimDistanceTableDistanceToFrame2`
+    /// 0x1c4270; a negative step plays it backwards) and its run is synced to it (mode 2) at the run
+    /// weight. None when the list is empty or a script is missing (the caller's fallback).
+    pub fn mp_body_local_pose(&self, slot: usize, skel: &nf_formats::character::Skeleton, skin: &nf_formats::character::Skin) -> Option<nf_game::anim::Pose> {
+        use nf_game::mp::body_anim::LayerKind;
+        let a = self.mp_anim.get(slot)?;
+        if a.layers.is_empty() { return None; }
+        let factors = a.blend_factors();
+        let mut out: Option<nf_game::anim::Pose> = None;
+        for (l, &f) in a.layers.iter().zip(&factors) {
+            let pose = match l.kind {
+                LayerKind::Idle(id) | LayerKind::Strafe(id) | LayerKind::OneShot(id) =>
+                    nf_game::anim::script_pose_drone(&self.scripts, &self.seqs, skel, skin, id, l.time)?,
+                LayerKind::Walk { walk, run, run_weight } => {
+                    let walk_q = self.scripts.get(&walk)?.sequences().next().and_then(|(_, _, q)| self.seqs.get(&q))?;
+                    let table = nf_game::anim::DistanceTable::build(walk_q, 4, true)?;
+                    let mut w = a.phase.rem_euclid(table.total.max(1e-3));
+                    let frame_a = table.distance_to_frame(&mut w, 0.0, true).max(1.0);
+                    let mut pose = nf_game::anim::script_pose_drone(&self.scripts, &self.seqs, skel, skin, walk, frame_a)?;
+                    let len_a = self.scripts.get(&walk)?.length.max(2) as f32;
+                    if let Some(len_b) = self.scripts.get(&run).map(|r| r.length.max(2) as f32).filter(|_| run != walk) {
+                        let frame_b = 1.0 + (frame_a - 1.0) / (len_a - 1.0) * (len_b - 1.0);
+                        if let Some(rp) = nf_game::anim::script_pose_drone(&self.scripts, &self.seqs, skel, skin, run, frame_b) {
+                            nf_game::anim::blend(&mut pose, &rp, run_weight.clamp(0.0, 1.0));
+                        }
+                    }
+                    pose
+                }
+            };
+            match out.as_mut() {
+                None => out = Some(pose),
+                Some(r) => nf_game::anim::blend(r, &pose, f.clamp(0.0, 1.0)),
+            }
+        }
+        out
     }
 
     /// The weapon an MP body holds in its hand (the third-person mesh `weapon_data[w]+0x80` on datum
@@ -9290,102 +10180,183 @@ impl Sim {
         }
     }
 
-    /// Online combat (700v6) [S port design — the PS2 had no online play]: every machine resolves
-    /// every human slot's shot from the session's inputs, in slot order, on the shared stream. A
-    /// shot (`Input::shot`, the sender's own fire pipeline decided it) is a hit test from the
-    /// shooter's head along its aim, stopped by the world, against the other slots' bodies; the
-    /// damage is the held weapon's record +0x0C. Death scores through `player_killed` [M
-    /// MP_PlayerKilled 0x188f70], the respawn waits 5 s [M Player_HandleDeath 0x190bb0:41-54] and
-    /// takes `mp_respawn`'s spawn pick + health [M MP_ReSpawn 0x185368]. The local slot's health
-    /// drives this machine's HUD and death sequence.
-    pub fn step_net_combat(&mut self, inputs: &[nf_net::Input; nf_net::MAX_AGENTS], local: usize) {
-        if self.mp.is_none() { return; }
-        let body = |s: &Sim, slot: usize| -> Option<nf_game::player::Bond> {
-            if slot == local { Some(s.bond.clone()) } else { s.mp_bonds[slot].clone() }
+    /// mp-combat-weapons: every MP body as the shared combat hits it — the human slots (the local
+    /// slot's `bond`, the parked `mp_bonds`; a dead slot is not a target) and the bots (their
+    /// eye `brain.pos`, the body BOT_EYE below it), in slot order.
+    pub fn mp_combat_bodies(&self, local: usize) -> Vec<nf_game::mp::combat::Body> {
+        let mut v = Vec::new();
+        for slot in 0..nf_net::MAX_AGENTS {
+            let b = if slot == local { Some(&self.bond) } else { self.mp_bonds[slot].as_ref() };
+            let Some(b) = b else { continue };
+            v.push(nf_game::mp::combat::Body { slot, pos: b.pos, head_y: b.head()[1], yaw: b.yaw, alive: self.mp_dead_ticks[slot] == 0 && self.mp_hp[slot] > 0.0 });
+        }
+        if let Some(m) = self.mp.as_ref() {
+            for bt in &m.bots {
+                let p = bt.brain.pos;
+                v.push(nf_game::mp::combat::Body { slot: bt.slot, pos: [p[0], p[1] - BOT_EYE, p[2]], head_y: p[1], yaw: bt.brain.yaw, alive: !bt.dead });
+            }
+        }
+        v
+    }
+
+    /// mp-combat-weapons: one damage event of the shared combat through the game's MP pain path.
+    ///
+    /// A human victim: a round's hit first registers (`Player_DealWithObjHit` 0x194458 case 5 →
+    /// `MP_RegisterBulletHit` 0x1857c0 — the team game's friendly-fire gate, the last-shooter
+    /// word); a blast reaches `Player_Hurt` 0x196060 directly (no gate). The assassination rule
+    /// [M 0x194458:44-74]: the assassin's round on the target kills outright on the head (part 5)
+    /// and on parts 1..4 from within 70° of the target's back. Then `Player_HandlePain` 0x1902c8:
+    /// the MP multipliers (`mp_damage`), armour first, health below 1 → 0, the pain grunt's
+    /// `Rand_Rand(4)` on the shared stream [M :111]. A bot victim: `BOT_handlePain` 0x125ed8's
+    /// identical multipliers (the bots carry no armour here). A kill scores through
+    /// `player_killed` [M MP_PlayerKilled 0x188f70] with the round/blast owner as the killer.
+    pub fn mp_hurt(&mut self, h: nf_game::mp::combat::Hurt, local: usize) {
+        use nf_game::mp::combat::{self as cb, Hurt};
+        let frame = self.drones.frame;
+        let Some(m) = self.mp.as_mut() else { return };
+        let rules = cb::PainRules::new(&self.tuning, m.settings.location_damage != 0, m.settings.capture_reward != 0);
+        let (victim, attacker, mut amount, part, dir, located) = match h {
+            Hurt::Site { attacker, amount } => { m.damage_site(amount, attacker); return; }
+            Hurt::Bullet { victim, attacker, amount, part, dir, .. } => (victim, attacker, amount, part, dir, true),
+            Hurt::Blast { victim, attacker, amount, .. } => (victim, attacker, amount, cb::part::NONE, [0.0; 3], false),
         };
+        // A bot.
+        if let Some(j) = m.bots.iter().position(|b| b.slot == victim) {
+            if m.bots[j].dead { return; }
+            if located && !m.register_bullet_hit(victim, attacker) { return; }
+            let d = cb::mp_damage(&rules, amount, part);
+            m.bots[j].health -= d;
+            if m.bots[j].health <= 0.0 {
+                m.bots[j].health = 0.0;
+                m.bots[j].dead = true;
+                m.bots[j].deaths += 1;
+                m.bots[j].respawn_at = frame + 180;
+                m.player_killed(victim, Some(attacker), false, false, &mut self.drones.rng);
+            }
+            return;
+        }
+        if victim >= nf_net::MAX_AGENTS || self.mp_dead_ticks[victim] > 0 || self.mp_hp[victim] <= 0.0 { return; }
+        // mp-remote-fx: a human hit is an effects event too (the victim's hit flash / sound /
+        // direction glow on its own machine, the blood on the others) — draw/audio only.
+        if let Some(v) = (if victim == local { Some(&self.bond) } else { self.mp_bonds[victim].as_ref() }).map(|b| b.pos) {
+            let chest = [v[0], v[1] + 1.0, v[2]];
+            let from = [chest[0] - dir[0], chest[1] - dir[1], chest[2] - dir[2]];
+            self.mp_fx.events.push(crate::mpfx::MpShot { shooter: attacker, bot: false, weapon: 0, from, dir, end: chest,
+                hit: crate::mpfx::MpShotHit::Human(victim), damage: amount });
+        }
+        if located {
+            if !m.register_bullet_hit(victim, attacker) { return; }
+            // The assassination rule [M 0x194458:44-74].
+            if m.settings.scenario == nf_game::mp::scenario::ASSASSIN && m.assassin == Some(attacker) && m.assassin_target == Some(victim) {
+                let vyaw = if victim == local { self.bond.yaw } else { self.mp_bonds[victim].as_ref().map_or(0.0, |b| b.yaw) };
+                if part == cb::part::HEAD {
+                    amount = self.mp_hp[victim];
+                } else if (1..5).contains(&part) {
+                    let a = nf_game::trig::atan2_approx(dir[0], dir[2]);
+                    if (nf_game::trig::angle_difference(a, vyaw) * 57.295776).abs() < 70.0 { amount = self.mp_hp[victim]; }
+                }
+            }
+        }
+        let d = cb::mp_damage(&rules, amount, part);
+        if !(d > 0.0) { return; }
+        let (hp, armour) = cb::apply_pain(self.mp_hp[victim], self.mp_armour[victim], d);
+        if std::env::var_os("NF_MPCOMBAT_LOG").is_some() {
+            eprintln!("[mpcombat] frame {frame}: slot {attacker} -> slot {victim} {} part {part} raw {amount} dealt {d} hp {} -> {hp}", if located { "round" } else { "blast" }, self.mp_hp[victim]);
+        }
+        self.mp_hp[victim] = hp;
+        self.mp_armour[victim] = armour;
+        let _grunt = self.drones.rng.rand(4); // `Rand_Rand(4)` [M 0x1902c8:111] — the shared stream
+        if victim == local {
+            // The local HUD's flash and hit-direction glow (`BL+0x968` / `+0x967` [M 0x1902c8:120-134;
+            // 0x194458:199-232 — the hit direction in the viewer's frame]) — this machine's view only.
+            let hl = &mut self.drones.health;
+            hl.flash = (hl.flash + (d * 21.333).min(128.0)).min(255.0);
+            hl.dir_bits = 0xC;
+            if located {
+                // The source side: back along the round's travel direction.
+                let sl = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-6);
+                let sv = [-dir[0] / sl, -dir[1] / sl, -dir[2] / sl];
+                let (rx, rz) = (-self.bond.yaw.cos(), self.bond.yaw.sin());
+                let vx = sv[0] * rx + sv[2] * rz;
+                let vy = sv[1];
+                if vx.abs() >= 0.5 || vy.abs() >= 0.5 {
+                    hl.dir_bits = if vy.abs() < vx.abs() { if vx < 0.0 { 0x4 } else { 0x8 } } else if vy < 0.0 { 0x1 } else { 0x2 };
+                }
+            }
+        }
+        if self.mp_hp[victim] <= 0.0 {
+            self.mp_hp[victim] = 0.0;
+            self.mp_dead_ticks[victim] = 1;
+            if let Some(m) = self.mp.as_mut() { m.player_killed(victim, Some(attacker), false, false, &mut self.drones.rng); }
+            eprintln!("[mp] slot {attacker} killed slot {victim} (frame {})", self.drones.frame);
+        }
+    }
+
+    /// Online combat (700v6, every weapon since mp-combat-weapons) [S port design — the PS2 had
+    /// no online play]: every machine runs every human slot's shots from the session's inputs, in
+    /// slot order, on the shared stream. A shot (`Input::shot` — the sender's own fire pipeline
+    /// decided the release: rate, burst, clip, the release frame) carries its description (the
+    /// fired record `shot_weapon`, the aim `shot_aim`); the shared combat (`nf_game::mp::combat`)
+    /// spawns the record's rounds / grenade from the shooter's head (`Bullet_init` 0x12c5a0),
+    /// flies them (`Bullet_update` 0x12e7b0), resolves contacts and blasts (`Explode_Propagate`
+    /// 0x17c518) and the damage goes through the game's MP pain path ([`Sim::mp_hurt`]). Death
+    /// scores through `player_killed` [M MP_PlayerKilled 0x188f70], the respawn waits 5 s [M
+    /// Player_HandleDeath 0x190bb0:41-54] and takes `mp_respawn`'s spawn pick + health [M
+    /// MP_ReSpawn 0x185368]. The local slot's health drives this machine's HUD and death sequence.
+    pub fn step_net_combat(&mut self, inputs: &[nf_net::Input; nf_net::MAX_AGENTS], local: usize) {
+        let _p = nf_game::prof::scope("net: step_net_combat");
+        if self.mp.is_none() { return; }
         for s in 0..nf_net::MAX_AGENTS { self.mp_held[s] = if s == local { self.gun.weapon } else { inputs[s].held }; }
-        // 1. The shots, in slot order (the bodies as they stand this tick).
+        let frame = self.drones.frame;
+        // 1. The new shots, in slot order (the bodies as they stand this tick).
+        self.mp_combat.fired.clear();
         for shooter in 0..nf_net::MAX_AGENTS {
             let inp = &inputs[shooter];
             if !inp.shot || self.mp_dead_ticks[shooter] > 0 { continue; }
-            let Some(b) = body(self, shooter) else { continue };
+            let b = if shooter == local { Some(&self.bond) } else { self.mp_bonds[shooter].as_ref() };
+            let Some(b) = b else { continue };
             let head = b.head();
-            let (sy, cy) = b.yaw.sin_cos();
-            let (sp, cp) = b.pitch.sin_cos();
-            let dir = [cp * sy, sp, cp * cy];
-            let range = 200.0;
-            let mut end = [head[0] + dir[0] * range, head[1] + dir[1] * range, head[2] + dir[2] * range];
-            if let Some((t, _, _)) = self.world.segment_surface_bullet(head, end) {
-                end = [head[0] + (end[0] - head[0]) * t, head[1] + (end[1] - head[1]) * t, head[2] + (end[2] - head[2]) * t];
-            }
-            let mut best: Option<(f32, usize)> = None;
-            for victim in 0..nf_net::MAX_AGENTS {
-                if victim == shooter || self.mp_dead_ticks[victim] > 0 { continue; }
-                let Some(v) = body(self, victim) else { continue };
-                // The body: a stack of 0.45 spheres from the knees to the head [S stand-in for the
-                // player's hit boxes — `Collide_Jointy` 0x1ec180's per-bone test is the game's].
-                for h in [0.5f32, 1.0, 1.5] {
-                    let c = [v.pos[0], v.pos[1] + h, v.pos[2]];
-                    if let Some(t) = ray_body_hit(head, end, c, 0.45) {
-                        if best.is_none_or(|(bt, _)| t < bt) { best = Some((t, victim)); }
-                    }
+            // A shot without a description (shot_weapon 0) fires the held record along the
+            // body's view — the 700v6 shape the older test rows send.
+            let (weapon, dir) = if inp.shot_weapon != 0 {
+                (inp.shot_weapon, nf_game::mp::combat::dir_from_aim(inp.shot_aim))
+            } else {
+                let (sy, cy) = (nf_game::trig::sinf(b.yaw), nf_game::trig::cosf(b.yaw));
+                let (sp, cp) = (nf_game::trig::sinf(b.pitch), nf_game::trig::cosf(b.pitch));
+                (inp.held, [cp * sy, sp, cp * cy])
+            };
+            if std::env::var_os("NF_MPCOMBAT_LOG").is_some() { eprintln!("[mpcombat] frame {frame}: slot {shooter} fires {weapon:#04x} dir {dir:?}"); }
+            self.mp_combat.fire(&self.weapons, shooter, weapon, head, dir, &mut self.drones.rng, frame);
+            // mp-remote-fx: the shot's effects (muzzle flash, tracer, impact) — draw/audio only. The
+            // impact sits where the line first meets the world; agent 10's shared rounds own the
+            // damage.
+            {
+                let range = 200.0;
+                let mut end = [head[0] + dir[0] * range, head[1] + dir[1] * range, head[2] + dir[2] * range];
+                let mut hit = crate::mpfx::MpShotHit::Miss;
+                if let Some((t, normal, material)) = self.world.segment_surface_bullet(head, end) {
+                    end = [head[0] + (end[0] - head[0]) * t, head[1] + (end[1] - head[1]) * t, head[2] + (end[2] - head[2]) * t];
+                    hit = crate::mpfx::MpShotHit::World { normal, material };
                 }
+                self.mp_fx.events.push(crate::mpfx::MpShot { shooter, bot: false, weapon, from: head, dir, end, hit, damage: 0.0 });
             }
-            let damage = self.weapons.records.get(inp.held as usize)
-                .map_or(10.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
-            // The bots are targets too (nearer than any human wins).
-            let mut bot_hit: Option<(f32, usize)> = None;
-            if let Some(m) = self.mp.as_ref() {
-                for (j, bt) in m.bots.iter().enumerate() {
-                    if bt.dead { continue; }
-                    if let Some(t) = ray_body_hit(head, end, bt.brain.pos, 0.6) {
-                        if bot_hit.is_none_or(|(b, _)| t < b) { bot_hit = Some((t, j)); }
-                    }
-                }
-            }
-            // mp-scenarios-online (agent6): the Demolition/Protection site takes the shot when it
-            // is the nearest thing on the ray (the site SP's hit damage [M 0x1870a0:81-91]; the
-            // ray-vs-model-sphere test is the port's stand-in [S]).
-            if let Some((c, r)) = self.mp.as_ref().and_then(|m| m.site_sphere()) {
-                if let Some(ts) = ray_body_hit(head, end, c, r) {
-                    let nearer = best.is_some_and(|(th, _)| th < ts) || bot_hit.is_some_and(|(tb, _)| tb < ts);
-                    if !nearer {
-                        if let Some(m) = self.mp.as_mut() { m.damage_site(damage, shooter); }
-                        continue;
-                    }
-                }
-            }
-            if let Some((tb, j)) = bot_hit.filter(|(tb, _)| best.is_none_or(|(th, _)| *tb < th)) {
-                let _ = tb;
-                let frame = self.drones.frame;
-                let multi = self.tuning.Plr_DMod_Multi;
-                if let Some(m) = self.mp.as_mut() {
-                    // mp-bot-weapons: `BOT_handlePain` — × Plr_DMod_Multi, the armour first.
-                    let (loss, armour) = nf_game::mp::botweap::bot_pain(damage, multi, 0, 0, m.bots[j].brain.vars.arsenal.armour, false, false);
-                    m.bots[j].brain.vars.arsenal.armour = armour;
-                    m.bots[j].health -= loss;
-                    if m.bots[j].health <= 0.0 && !m.bots[j].dead {
-                        let victim_slot = m.bots[j].slot;
-                        m.bots[j].health = 0.0;
-                        m.bots[j].dead = true;
-                        m.bots[j].deaths += 1;
-                        m.bots[j].respawn_at = frame + 180;
-                        m.player_killed(victim_slot, Some(shooter), false, false, &mut self.drones.rng);
-                        if std::env::var_os("NF_BOTLOG").is_some() { eprintln!("[botlog] f{frame} kill: slot {shooter} killed slot {victim_slot}"); }
-                    }
-                }
-                continue;
-            }
-            let Some((_, victim)) = best else { continue };
-            // mp-bot-weapons: `Player_HandlePain`'s MP arm (× Plr_DMod_Multi, the shared armour).
-            let multi = self.tuning.Plr_DMod_Multi;
-            nf_game::mp::botweap::player_pain_mp(&mut self.mp_hp[victim], &mut self.mp_armour[victim], damage, multi);
-            if self.mp_hp[victim] <= 0.0 {
-                self.mp_hp[victim] = 0.0;
-                self.mp_dead_ticks[victim] = 1;
-                if let Some(m) = self.mp.as_mut() { m.player_killed(victim, Some(shooter), false, false, &mut self.drones.rng); }
-                eprintln!("[mp] slot {shooter} killed slot {victim} (frame {})", self.drones.frame);
-            }
+        }
+        // 2. The flight, the contacts, the blasts — against every live body (humans + bots).
+        let bodies = self.mp_combat_bodies(local);
+        let steer: [(f32, f32); nf_game::mp::MP_MAX_SLOTS] = std::array::from_fn(|s| if s < nf_net::MAX_AGENTS { (inputs[s].turn, inputs[s].look) } else { (0.0, 0.0) });
+        let site = self.mp.as_ref().and_then(|m| m.site_sphere());
+        let hurts = self.mp_combat.step(&self.world, &self.weapons, &bodies, site, &steer, &mut self.drones.rng, frame);
+        for h in hurts { self.mp_hurt(h, local); }
+        // The guided ride: this machine's camera follows its own slot's shared rocket, and the
+        // local body holds still exactly while the shared ride says so (`step_bond`'s online arm).
+        if self.mp_combat.riding(local) {
+            let ride = self.mp_combat.ride[local];
+            let cam = self.mp_combat.ridden_round(local).map(|r| (r.pos, r.dir));
+            let prev = self.missile_cam;
+            let (pos, dir) = cam.or(prev.map(|c| (c.pos, c.dir))).unwrap_or((self.bond.head(), self.bond.look()));
+            self.missile_cam = Some(MissileCam { pos, dir, restore: ride.restore as u16, riding: ride.riding });
+        } else {
+            self.missile_cam = None;
         }
         // 2. The dead wait 5 s, then respawn at the policy's pick.
         for slot in 0..nf_net::MAX_AGENTS {
@@ -9399,21 +10370,24 @@ impl Sim {
             m.set_slot(slot, nb.pos);
             if slot == local { self.bond = nb; } else { self.mp_bonds[slot] = Some(nb); }
             self.mp_hp[slot] = hp;
-            self.mp_armour[slot] = 0.0; // mp-bot-weapons: the respawned body has no armour [S]
+            self.mp_armour[slot] = 0.0; // [M MP_ReSpawn 0x185368:69 — BL+0x8B0 = 0]
             self.mp_dead_ticks[slot] = 0;
             eprintln!("[mp] slot {slot} respawned at spawn {sp_idx} (frame {})", self.drones.frame);
             if slot == local {
                 self.drones.death = nf_game::death::Death::default();
-                // The respawn re-arms the player (`MP_ReSpawn` 0x185368 re-inits the player's weapon
-                // state; the death sequence had switched him to the fists 0x47 [M 0x190810:61]) — the
-                // match's start loadout: the P2K drawn, as at the load.
-                self.gun = nf_game::gun::Gun::new(2, 7, 41);
-                self.drones.bond_weapon = 2;
+                // The respawn re-arms the player (`MP_ReSpawn` 0x185368 → `MP_EquipPlayer` 0x1855f8
+                // [M 0x185368:74]; the death sequence had switched him to the fists 0x47 [M
+                // 0x190810:61]) — the weapon set's spawn loadout.
+                self.mp_equip_local();
             }
         }
-        // 3. This machine's own health is the slot's (the HUD, the death sequence's start).
+        // 3. This machine's own health/armour are the slot's (the HUD, the death sequence's start).
         self.drones.health.health = self.mp_hp[local];
-        self.drones.health.armour = self.mp_armour[local]; // mp-bot-weapons: the shared armour
+        self.drones.health.armour = self.mp_armour[local];
+        // mp-remote-fx: this tick's shot effects / sounds (draw/audio only, after every hashed write).
+        self.flush_mp_fx();
+        // mp-body-anim: the drawn bodies' clocks on this tick's final movement and life (draw-only).
+        self.advance_mp_anim();
     }
 
     /// mp-join-in-progress: create the late joiner's agent at the announced join tick — the
@@ -9447,8 +10421,11 @@ impl Sim {
     /// slot reads `bond`, the others `mp_bonds`), then the MP match state. An empty slot folds a
     /// sentinel so the shape is total and equal on every machine.
     pub fn net_state_hash(&self, local: usize) -> u64 {
+        let _p = nf_game::prof::scope("net: net_state_hash");
         // NF_NET_HASHDBG="a-b": dump frames a..=b (any other value: 0-17).
-        let dbg = std::env::var("NF_NET_HASHDBG").ok().map(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))).unwrap_or((0, 17)));
+        // mp-perf-16: the env var is read once per process, not once per tick.
+        static HASHDBG: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
+        let dbg = *HASHDBG.get_or_init(|| std::env::var("NF_NET_HASHDBG").ok().map(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))).unwrap_or((0, 17))));
         if dbg.is_some_and(|(a, b)| (a..=b).contains(&self.drones.frame)) {
             let b = |s: usize| if s == local { Some(&self.bond) } else { self.mp_bonds[s].as_ref() };
             eprintln!("[hashdbg] frame {} rng {:x}/{:x}/{} bonds {:?} mp {:?}", self.drones.frame, self.drones.rng.x, self.drones.rng.y, self.drones.rng.draws,
@@ -9461,9 +10438,12 @@ impl Sim {
         h.u32(self.drones.frame);
         // 700v6: the online combat's per-slot state.
         for s in 0..nf_net::MAX_AGENTS { h.f32(self.mp_hp[s]); h.u32(self.mp_dead_ticks[s]); }
-        // mp-bot-weapons: the shared armour, the pickups' take state (the shared take pass) and
-        // the bots (health, the whole brain — the arsenal included).
+        // mp-combat-weapons: the armour and the shared rounds/grenades/rides.
         for s in 0..nf_net::MAX_AGENTS { h.f32(self.mp_armour[s]); }
+        self.mp_combat.hash_into(&mut |v| h.u32(v));
+        // mp-bot-weapons: the pickups' take state (the shared take pass) and the bots
+        // (health, the whole brain — the arsenal included), so a bot-weapon divergence trips
+        // the two-machine hash too.
         h.u32(self.drones.pickups.len() as u32);
         for p in &self.drones.pickups {
             h.bool(p.gone);
@@ -9523,10 +10503,79 @@ impl Sim {
             // the site HP, the GoldenEye items + strike, the blueprint), the assassin words. The
             // fold above covered only the slots, so a scenario desync went undetected.
             h.u64(nf_game::mp::hash::state_hash(m));
+            // The bots' brains (their state, goals, route, body, weapon/fire state —
+            // `BotBrain::state_hash`) and their health/death: a bot desync shows at once instead
+            // of only once it moved a body (the brains were never folded in).
+            for b in &m.bots {
+                h.u64(b.brain.state_hash());
+                h.f32(b.health);
+                h.bool(b.dead);
+            }
         } else {
             h.u32(0xffff_fffe);
         }
+        // mp-world-sync (agent 9): the shared world — the pickups (taken/hidden/respawn timers),
+        // the slots' armour, the doors, the triggers, the world channels, the destroyables, the
+        // breakables, the SS objects, the hurt volumes. Before this fold a take, a door or a
+        // broken object on one machine only went undetected (pickups were not in the hash).
+        self.net_world_fold(&mut h);
         h.finish()
+    }
+
+    /// mp-world-sync: the shared world's hashed state (see `net_state_hash`). Fixed order; the
+    /// world channels are the ones the world's own objects read or write (the trigger outs, the
+    /// doors' open/lock, the destroyables', the pickups' and the SS channels, the hurt gates) —
+    /// never the local-only writers (the death sequence's 0x62, the wire/creep channel).
+    fn net_world_fold(&self, h: &mut nf_net::hash::Hasher) {
+        let d = &self.drones;
+        for s in 0..nf_net::MAX_AGENTS { h.f32(self.mp_armour[s]); }
+        h.u32(d.pickups.len() as u32);
+        for p in &d.pickups {
+            h.bool(p.gone);
+            h.bool(p.hidden);
+            h.u32(p.state as u32);
+            h.u32(p.respawn_ticks);
+            h.u32(p.lifetime as u32);
+            for k in 0..3 { h.f32(p.m[3][k]); }
+        }
+        for x in &d.doors.list {
+            h.u32(x.state as u32);
+            h.f32(x.pos01);
+            h.i32(x.timer as i32);
+            h.u32(x.open_timer as u32);
+        }
+        for t in &d.triggers { h.bool(t.gone); }
+        let mut chs: Vec<u32> = Vec::new();
+        chs.extend(d.triggers.iter().map(|t| t.out as u32));
+        chs.extend(d.doors.list.iter().flat_map(|x| [x.ch_open as u32, x.ch_lock as u32]));
+        chs.extend(d.props.destroy.iter().map(|x| x.channel as u32));
+        chs.extend(d.pickups.iter().map(|p| p.switch_channel as u32));
+        chs.extend(d.sss.list.iter().map(|x| x.channel as u32));
+        chs.extend(self.hurts.iter().map(|x| x.gate as u32));
+        for c in chs { h.u32(d.channels.v.get(c as usize).copied().unwrap_or(0) as u32); }
+        for x in &d.props.destroy { h.f32(x.health); h.bool(x.dead); }
+        for x in &d.breaks.list { h.f32(x.health); h.bool(x.dead); }
+        for x in &d.sss.list { h.u32(x.state as u32); h.f32(x.t); }
+        for x in &self.hurts { h.bool(x.disabled); h.bool(x.fired); }
+    }
+
+    /// mp-world-sync: the shared world's fields as text (the desync hunts' field-by-field diff).
+    pub fn net_world_fields(&self) -> Vec<(String, String)> {
+        let d = &self.drones;
+        let mut v = vec![("armour".to_string(), format!("{:?}", self.mp_armour))];
+        for (i, p) in d.pickups.iter().enumerate() {
+            v.push((format!("pickup{i}"), format!("gone {} hidden {} state {} respawn {} at {:?}", p.gone, p.hidden, p.state, p.respawn_ticks, [p.m[3][0], p.m[3][1], p.m[3][2]])));
+        }
+        for (i, x) in d.doors.list.iter().enumerate() {
+            v.push((format!("door{i}"), format!("state {:#x} pos {} timer {} open {}", x.state, x.pos01, x.timer, x.open_timer)));
+        }
+        v.push(("triggers".into(), format!("{:?}", d.triggers.iter().map(|t| t.gone).collect::<Vec<_>>())));
+        v.push(("channels".into(), format!("{:?}", d.channels.v.iter().enumerate().filter(|(_, c)| **c != 0).map(|(i, c)| (i, *c)).collect::<Vec<_>>())));
+        v.push(("destroy".into(), format!("{:?}", d.props.destroy.iter().map(|x| (x.health, x.dead)).collect::<Vec<_>>())));
+        v.push(("breaks".into(), format!("{:?}", d.breaks.list.iter().map(|x| (x.health, x.dead)).collect::<Vec<_>>())));
+        v.push(("sss".into(), format!("{:?}", d.sss.list.iter().map(|x| (x.state, x.t)).collect::<Vec<_>>())));
+        v.push(("hurts".into(), format!("{:?}", self.hurts.iter().map(|x| (x.disabled, x.fired)).collect::<Vec<_>>())));
+        v
     }
 }
 

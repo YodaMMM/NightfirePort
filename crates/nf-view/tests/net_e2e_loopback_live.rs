@@ -197,17 +197,6 @@ fn scripted_kill(host: &mut nf_view::scene::Scene, client: &mut nf_view::scene::
     }
 }
 
-/// The per-tick MP drive the app's frame loop owns (scene.rs:1853 runs it
-/// inside step_bond; this harness ticks the movement core directly, so the
-/// update runs explicitly — both machines, the same draws).
-fn mp_update(s: &mut nf_view::scene::Scene) {
-    let sim = s.sim.as_mut().expect("the match sim");
-    let (mp, rng) = (&mut sim.mp, &mut sim.drones.rng);
-    if let Some(m) = mp {
-        m.update(DT, false, rng);
-    }
-}
-
 /// The full flow, parameterised by the link fault (`None` = clean loopback,
 /// `Some((seed, drop‰, reorder‰))` = the 5%-loss variant). Returns nothing —
 /// every step asserts.
@@ -273,7 +262,7 @@ fn run_e2e(path: &str, fault: Option<(u64, u32, u32)>) {
     let start = feh.mp_lobby_rows().unwrap().iter()
         .position(|r| r.id == nf_view::mp_lobby::MpLobbyRowId::Start).unwrap();
     feh.mp_one.focus = start;
-    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "Start builds the settings and hands over [M mp_confirm_start]");
+    assert!(act(&mut feh, Some(&mut fec), Action::Confirm), "Start builds the settings and hands over [M P_MPCONFIRM 0x20ec00:94-157, the msg-0x4b start arm; mp_confirm_start is the port.s name for it]");
     let hs = feh.mp_match_settings.clone().expect("the host's settings ride the request");
     assert_eq!(feh.requested_level, Some(ARENA), "the host requests the arena");
 
@@ -320,6 +309,14 @@ fn run_e2e(path: &str, fault: Option<(u64, u32, u32)>) {
     });
     hscene.sim.as_mut().expect("host sim").swap_local_slot(0);
     cscene.sim.as_mut().expect("client sim").swap_local_slot(1);
+    // The match start's per-machine generator (lib.rs's online start: `net_rng` seeded by slot) —
+    // `step_bond` takes the online world path (every body takes pickups, triggers, doors) only
+    // with it. Without it each machine ran the single-player world: its own body took the
+    // pickups and the remote bodies never did — the 2026-10-19 "pickup11 hidden on the client
+    // only" divergence whenever the seed's spawns walked over one.
+    for (s, slot) in [(&mut hscene, 0u32), (&mut cscene, 1u32)] {
+        s.sim.as_mut().unwrap().net_rng = Some(nf_game::drone::Rng::new(0x5eed_0b0b ^ slot.wrapping_mul(0x9e37_79b9)));
+    }
     assert!(hscene.sim.as_ref().unwrap().mp.as_ref().unwrap().settings.started, "the host's match started [M MP_Start 0x183a50:207]");
     assert!(cscene.sim.as_ref().unwrap().mp.as_ref().unwrap().settings.started, "the client's match started");
 
@@ -329,34 +326,31 @@ fn run_e2e(path: &str, fault: Option<(u64, u32, u32)>) {
     let mut last_h = 0u64;
     let mut last_c = 0u64;
     let mut kill_scores_checked = 0usize;
+    let mut first_row_diff: Option<String> = None;
+    let (mut takes_h, mut takes_c): (Vec<(u32, usize, usize)>, Vec<(u32, usize, usize)>) = (Vec::new(), Vec::new());
     for t in 0..TICKS {
         hp.0.borrow_mut().local_input(t, scripted_input(t, 0));
         cp.0.borrow_mut().local_input(t, scripted_input(t, 1));
         pump_till(&hp, &cp, t);
         let hi = hp.0.borrow_mut().ready_inputs(t).unwrap();
         let ci = cp.0.borrow_mut().ready_inputs(t).unwrap();
-        let hi = std::array::from_fn(|i| nf_view::mpnet::to_player_input(&hi[i]));
-        let ci = std::array::from_fn(|i| nf_view::mpnet::to_player_input(&ci[i]));
-        let hsim = hscene.sim.as_mut().unwrap();
-        hsim.step_net_remotes(&hi, 0);
-        let ladder = nf_game::player::LadderCtx::default();
-        hsim.bond.tick_ctx(&hsim.world, &ladder, &hi[0]);
-        let csim = cscene.sim.as_mut().unwrap();
-        csim.step_net_remotes(&ci, 1);
-        csim.bond.tick_ctx(&csim.world, &ladder, &ci[1]);
-        if let Some(m) = hsim.mp.as_mut() {
-            m.set_slot(0, hsim.bond.pos);
-            if let Some(b) = &hsim.mp_bonds[1] { m.set_slot(1, b.pos); }
+        if first_row_diff.is_none() && format!("{:?}", &hi[..2]) != format!("{:?}", &ci[..2]) {
+            first_row_diff = Some(format!("tick {t}: host row {:?} | client row {:?}", &hi[..2], &ci[..2]));
         }
-        if let Some(m) = csim.mp.as_mut() {
-            m.set_slot(1, csim.bond.pos);
-            if let Some(b) = &csim.mp_bonds[0] { m.set_slot(0, b.pos); }
+        // The live tick (`nf_view::net_tick` — what the app runs on every machine: the remotes
+        // move inside `step_bond`, then the shared combat, the slot positions and the MP update).
+        // The old harness stepped the host's own body with a bare `tick_ctx` and the remote
+        // bodies through `step_net_remotes` — two different movement paths, so a spawn where they
+        // differ (a slope, water) desynced the TEST, not the game (2026-10-19: ~1 run in 3, tick
+        // 75/720 by the lobby seed's spawn).
+        nf_view::net_tick(hscene.sim.as_mut().unwrap(), &hi, 0);
+        nf_view::net_tick(cscene.sim.as_mut().unwrap(), &ci, 1);
+        for (log, s) in [(&mut takes_h, hscene.sim.as_ref().unwrap()), (&mut takes_c, cscene.sim.as_ref().unwrap())] {
+            for &(k, slot, _) in &s.net_last_takes { log.push((t, k, slot)); }
         }
         if t == KILL_TICK || t == KILL_TICK2 {
             scripted_kill(&mut hscene, &mut cscene);
         }
-        mp_update(&mut hscene);
-        mp_update(&mut cscene);
         if t == KILL_TICK {
             kill_scores_checked += 1;
             for (name, s) in [("host", hscene.sim.as_ref().unwrap()), ("client", cscene.sim.as_ref().unwrap())] {
@@ -380,7 +374,27 @@ fn run_e2e(path: &str, fault: Option<(u64, u32, u32)>) {
         if t % 15 == 0 {
             last_h = hscene.sim.as_ref().unwrap().net_state_hash(0);
             last_c = cscene.sim.as_ref().unwrap().net_state_hash(1);
-            assert_eq!(last_h, last_c, "tick {t}: the sims' states agree");
+            if last_h != last_c {
+                // Name the diverging fields (the world fold's parts + both bodies + the shared rng).
+                let (sa, sb) = (hscene.sim.as_ref().unwrap(), cscene.sim.as_ref().unwrap());
+                let mut fa = sa.net_world_fields();
+                let mut fb = sb.net_world_fields();
+                for (f, s, local) in [(&mut fa, sa, 0usize), (&mut fb, sb, 1usize)] {
+                    for sl in 0..2 {
+                        let b = if sl == local { Some(&s.bond) } else { s.mp_bonds[sl].as_ref() };
+                        f.push((format!("body{sl}"), format!("{:?}", b.map(|x| (x.pos, x.yaw, x.pitch, x.substate, x.crouched)))));
+                        f.push((format!("hp{sl}"), format!("{} {} {}", s.mp_hp[sl], s.mp_armour[sl], s.mp_dead_ticks[sl])));
+                    }
+                    f.push(("rng".into(), format!("{:x}/{:x}/{}", s.drones.rng.x, s.drones.rng.y, s.drones.rng.draws)));
+                }
+                let diff: Vec<String> = fa.iter().zip(fb.iter()).filter(|(x, y)| x.1 != y.1).map(|(x, y)| format!("{}: host {} | client {}", x.0, x.1, y.1)).collect();
+                panic!("tick {t}: the sims' states disagree ({last_h:x} vs {last_c:x}):
+{}
+first input-row difference: {first_row_diff:?}
+takes (tick, pickup, slot) host {takes_h:?}
+client {takes_c:?}", diff.join("
+"));
+            }
             hp.0.borrow_mut().submit_hash(t, last_h);
             cp.0.borrow_mut().submit_hash(t, last_c);
         }
@@ -405,6 +419,10 @@ fn run_e2e(path: &str, fault: Option<(u64, u32, u32)>) {
     // 0x40000033] and the boards agree on the numbers ──
     feh.open_mp_debriefing(hscene.sim.as_ref().unwrap().mp.as_ref().unwrap());
     fec.open_mp_debriefing(cscene.sim.as_ref().unwrap().mp.as_ref().unwrap());
+    // G-048(3): the match end only QUEUES +0x1c = 0x40000033 [M 0x184bd0:63]; the page lands at
+    // the load's MenuManager_Create [M 0x1d6360:160-163] — the port's load-tail reopen.
+    assert!(feh.reopen_queued_page(), "the host's load tail opens the queued debriefing");
+    assert!(fec.reopen_queued_page(), "the client's load tail opens the queued debriefing");
     assert_eq!(feh.page, Page::MpDebriefing, "the host lands on the debriefing");
     assert_eq!(fec.page, Page::MpDebriefing, "the client lands on the debriefing");
     let rh = feh.mp_debriefing_rows();

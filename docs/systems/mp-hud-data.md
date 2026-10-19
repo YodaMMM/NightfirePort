@@ -180,5 +180,87 @@ in-match MP draw (`nf_view::hud::mp_panes`, called from `overlay` when `Sim::mp`
   720p row; the window loop stores the height via `hud::set_view_h`), as many rows as fit.
 - Render aid: `NF_MP_BOTS=n` adds n bots to the local `--mp` default match (headless `--shot`).
 
-Open: decode MPScoreInfo + `HUD_MPUpdatePane` 0x19f0a0's sprite use and replace the port's
-clock/list placement with the game's pane; a PCSX2 side-by-side of an MP match HUD.
+That self-chosen placement is superseded by §8 (mp-hud-real): the clock and the list now sit
+where the game puts its own sprites, and the list draws only past 8 participants.
+
+## 8. The game's MP HUD, decoded and measured (mp-hud-real, 2026-10-18)
+
+How measured: the real game in PCSX2 driven only by PINE writes (no menus, no input) — `tools/trace/mp_goto.py`
+does P_MPCONFIRM 0x20ec00's accept from outside: MPSettings players
+/ globals (Quick Game values, +0x1ac = 1 human, bot records 0x2deeaa with `mpbots` = 1),
+`GameState+0x54 = 1` (`ResetMap_GameInit` 0x1d5080 copies it into MPSettings+0x180 — writing
++0x180 alone is overwritten [M 0x1d5080:7]), the `MP_setLoadingSkins` flags
+(`MP_skins+0xc`), then `goto_level.py`'s ResetMap push. EE snapshots of a 1-human Arena and a
+Team Arena match on 07000023 were walked from `BLData+0x7e0` (HUD) → pane k at
+`HUD+8+k·0x20` → its sprite array (runtime sprite: +0x10 colour, +0x14 colour2, +0x18 text,
++0x22 flags, +0x24/+0x26 x/y, +0x2c/+0x2e w/h, +0x38 layer) [L]. Every number below is that
+runtime rect, re-derived from the create code [M].
+
+**`HUD_FixMP` 0x19b110** clamps every MP pane sprite into the viewer rect; with one viewer
+(MPSettings+0x1ac == 1) the rect is inset 16 on all sides → x 16..496, y 16..432 [M :27-31; L
+viewer0 +0xf0..+0xfc = 0/512/0/448]. Split screen (2–4 viewers) insets per side — not used by
+the port (one viewer per window).
+
+**Score pane (MPPaneList[13], create 0x19ed10, update 0x19f0a0, `MPScoreInfo` 0x2be888)** —
+`nf_game::mp::hud::MpScorePane`:
+
+| sprite | what | tex | FFA rect [L] | team / bit30 / 0x400 [L Team Arena] |
+|---|---|---|---|---|
+| 0 | text, font 2 (style 0x30cc90 = FF 02), white, colour2 outline (flag 0x2000) | — | (40,13) "\n<kills>\n<deaths>" | (40,30) "<own> - <other>\n<kills>\n<deaths>" |
+| 3 | team star | 0x03000188 | hidden (y −1) | (16,16) |
+| 4 | gun = kills | 0x03000187 | (16,17) | (16,34) |
+| 5 | skull = deaths | 0x03000186 | (16,35) | (16,52) |
+| 1/2/6 | objective icons 32×32 | per scenario | (16,376)/(16,376)/(16,400) | Assassin (16,384)/(16,368); Uplink (16,352)/(32,352)/(48,352) tex 0x03000185 |
+
+The text colour2 is black in FFA and the TEAM's colour with a team line — 0xff0000ff team 0,
+0x0000ffff otherwise [M 0x19f0a0:52-70: the store is +0x14]; the capture shows white digits ringed
+red. Scenario 0x400 / 0x40000800 print score/kills/deaths (3 lines) [M 0x189730]. Icons: CTF —
+sprite 1 = 0x03000182 while carrying the other team's flag, tinted that flag's colour; Assassin —
+1 = 0x03000180 (I am the assassin), 2 = 0x03000189 (I am the target); Uplink — 1/2/6 tinted by
+`MP_getUplinkStatus(0..2)` (red/blue/grey); GoldenEye (0x0300018b/c) and Espionage (0x0300018a)
+icons are decoded but NOT drawn yet (the snapshot carries no per-viewer GE/blueprint holder) —
+open. Icons 3/4/5 are additive (flag 0x100) [L 0x2be888].
+
+**Clock** — `TimeSpr` (`MPTimeInfo` 0x2a4710, a separate sprite made by `MP_Start` 0x183a50, not
+a pane): font 1 (the header face, style 0x30cbd0 = FF 01 FE 03 → centred), (256,32) for one viewer
+(MP_Start moves y to 0x20 [M :186-200]), white with a black outline; only when MPSettings+0x1a0 !=
+−1 [M 0x184268:138]. **Status line** — `StatusSpr` (`MPStatusInfo` 0x2a4740): font 2 centred at
+(256,48): "Game Over :" + name + " Won" / "Game Over :" + "A Draw" / "Time Up!" + "Press START" /
+0x10's "Player %s Won" [M 0x1848d0, 0x184bd0 case 2] → `nf_game::mp::hud::status_line`.
+
+**Radar ring** — RadarSprInfo (512,0) through FixMP → **(432,16)** 64×64 [L] (the port drew
+(448,0)).
+
+**MP health pane (MPPaneList[1], 0x19b390 / 0x19b630, `MPHealthSprInfo` 0x2be6b8)** — no SP swirl:
+backing 0x03000172 (16,416) 128×16 layer 0x1d; bar 0x03000171 same rect, width = uv width =
+health/(100 + handicap)·128, colour 0x52a88b / <0.5 0xc6984e / <0.2 0x9d1912, layer 0x1c; armour
+strip 0x03000170 at (24,420) width armour·2.56, layer 0x1b, hidden at 0 [M :62-90; L]. Sprites
+4–7 are the same damage-direction glow as the SP pane's 20–23.
+
+**MP ammo pane (MPPaneList[0], `MPAmmoPane` 0x2be698, update 0x19a7f0, `MPAmmoSprInfo`)** — pane
+origin (396,390); the count at (496,408), the fire mode / weapon name at (496,428), right-aligned
+font 2; no rounds strip (the update gates the strip on the pane's sprite count) [L; M
+0x19a7f0:247,275].
+
+**Kill message** — `MP_PlayerKilled` 0x188f70:100-107 posts `Text_AddMsg(last shooter, 0, 1,
+"Killed %s" (0x200004d) % victim name, 0, 0xb4)`; the MP info pane (MPPaneList[4],
+`HUD_MPUpdateStatusPane` 0x19ca88, `MPInfoStatusSprInfo` 0x2be838) shows it as one white text at
+(16,88), font 2, black shadow, no bar; alpha = time·17 under 15 ticks [M; L the sprite rect].
+The port queues `MpMatch::kill_msgs` (recipient, victim) — presentation only, not hashed — and
+the recipient is the credited killer, not the +0x20 last-shooter word [S: bot-vs-bot rounds do not
+go through `register_bullet_hit`, so that word can be stale in the port].
+
+Port: `nf_view::hud::mp_panes` (score pane, clock, status, radar, MP health),
+`overlay`'s MP branches (no SP swirl/strip, MP ammo origin, MP info text). The compact standings
+list stays only for > 8 participants [S]. Render aids: `NF_MP_SCENARIO=<hex>`, `NF_MP_TIME=<s>`,
+`NF_MP_KILLMSG=<victim slot>` on a local `--mp` render. Tests: `nf-game/tests/mp_hud_pane.rs`
+(layout, texts, kill queue, status line), `nf-view/tests/mp_hud_real_live.rs` (the drawn rects,
+no swirl/strip in MP, the kill message reaches the INFO queue).
+
+Side-by-sides (agent15 scratch, port left / PCSX2 right): `sbs_hud_ffa.png`, `sbs_hud_team.png`
+(+ the port's kill message), `sbs_debrief2.png`. Layout and presence match; the port's 16:9 window
+spreads the left/right anchored panes wider than PCSX2's 4:3. The PCSX2 CRT filter makes colours
+non-comparable.
+
+Open: the flag-0x2000 text outline is the port's reading of the captures (one-unit ring in
+colour2) [S]; GoldenEye/Espionage pane icons; split-screen FixMP insets.

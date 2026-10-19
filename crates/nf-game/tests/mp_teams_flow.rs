@@ -20,7 +20,7 @@ fn join_picked(m: &mut MpMatch, slot: usize, team: u32) {
 fn team_match() -> MpMatch {
     let mut s = MpSettings::deathmatch(0x07000011);
     s.scenario = scenario::TEAM_DEATHMATCH;
-    s.friendly_fire = 0; // the couch default: same-team bullet hits block [M 0x1857c0:43-57]
+    s.friendly_fire = 0; // [S] unverified as a couch default: 0x1857c0:43-44 only shows the gate (MPSettings._408_4_ == 0 → block); no decompile line sets the default — the port's choice
     let mut m = MpMatch::init(s);
     m.start(&mut Rng::new(1));
     m
@@ -44,7 +44,8 @@ fn the_picked_teams_score_per_the_game() {
     join_picked(&mut m, 0, 0); // Phoenix pick
     join_picked(&mut m, 1, 1); // MI6 pick
     // Phoenix kills MI6: the enemy kill → the attacker's (Phoenix, team 0) score += |Δ| where Δ is
-    // the victim's score delta; a fresh victim pays 1 → +0x180 (team 0) [M 0x188f70:246-274].
+    // the KILLER's personal delta (1 for an enemy kill, −1 suicide, 2 the bonus case) → +0x180
+    // (team 0) [M 0x188f70:166-178, 266-271] (was "the victim's delta" — daily audit 2026-10-19).
     m.player_killed(1, Some(0), false, false, &mut rng);
     assert_eq!(m.game.team_scores[0], 1.0, "the Phoenix pick's team scores the enemy kill");
     assert_eq!(m.game.team_scores[1], 0.0);
@@ -104,8 +105,7 @@ fn the_spawn_table_splits_per_the_picked_team() {
 }
 
 /// Sister: the picks survive the match's slot records — the HUD/debrief read the same
-/// `players[slot].team` (the score rows and the team result line) [M mp-hud-data.md,
-/// mp-debriefing.md; the game reads `MPSettings + slot·0x30 + 0x20` everywhere].
+/// `players[slot].team` (the score rows and the team result line) [M MP_PlayerKilled 0x188f70:158 + MP_RegisterBulletHit 0x1857c0:37 — the game reads the +0x20 team field].
 #[test]
 fn the_picks_reach_the_hud_and_debrief_view() {
     let mut rng = Rng::new(11);

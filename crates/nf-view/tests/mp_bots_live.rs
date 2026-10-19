@@ -98,6 +98,10 @@ fn bots_roam_and_hunt() {
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     let mut s = quick_game();
     s.bot_count = 2;
+    // No time limit: the default's limit runs out inside the 60 s and `MP_ReSpawn`'s gate then
+    // holds a killed bot down [M 0x185368:16-20] — with the armed bots (mp-lobby-settings) bot 1
+    // died just before the time-up and stood dead for the rest of the run.
+    s.time_limit = -1;
     let arena = format!("{:08x}.bin", s.level_code);
     let mut scene = nf_view::load_mp_carry(&path, &arena, false, None, s).expect("arena loads");
     let bots = scene.sim.as_ref().unwrap().mp_bot_count();

@@ -228,6 +228,38 @@ pub fn script_pose(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>
 /// drone-port-check #3) counts as full-coverage when its channels cover the skeleton. Never panics:
 /// each window poses only the bones its channels reach (`local_pose_bones`).
 pub fn script_pose_drone(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>, skel: &Skeleton, skin: &Skin, hash: u32, time: f32) -> Option<Pose> {
+    script_pose_drone_with(scripts, seqs, skel, skin, hash, time, &mut |seq, f, n| nf_formats::anim::local_pose_bones(seq, skel, skin, f, n))
+}
+
+/// mp-perf-16: a memo of whole-frame bone samples (`local_pose_bones`) keyed by (sequence,
+/// skin, frame, bone count) — the render's MP bodies re-sample the same integer frames tick
+/// after tick (a fractional frame blends two of them, the walk advances ~half a frame a tick),
+/// and the PS2-rounded channel sums are the bulk of a body's palette cost. A sample is a pure
+/// function of its key (`local_pose_bones` reads only the sequence, skeleton and skin), so a
+/// cached pose is the identical pose. Render-only: the sim's drone poses keep the direct path.
+#[derive(Default)]
+pub struct PoseSampleCache {
+    map: HashMap<(u32, u16, u32, u32, [u32; 3], u32, usize), Pose>,
+}
+
+impl PoseSampleCache {
+    /// The cap: past it the memo starts over (a 16-body arena keeps a few hundred live entries).
+    const CAP: usize = 4096;
+    pub fn sample(&mut self, seq: &Sequence, skel: &Skeleton, skin: &Skin, frame: u32, bones: usize) -> Pose {
+        if self.map.len() >= Self::CAP { self.map.clear(); }
+        let key = (seq.hashcode, seq.frames, skin.hashcode, skel.id as u32, skin.scale.map(f32::to_bits), frame, bones);
+        self.map.entry(key)
+            .or_insert_with(|| nf_formats::anim::local_pose_bones(seq, skel, skin, frame, bones))
+            .clone()
+    }
+}
+
+/// `script_pose_drone` through the memo (see [`PoseSampleCache`]) — the same pose.
+pub fn script_pose_drone_cached(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>, skel: &Skeleton, skin: &Skin, hash: u32, time: f32, cache: &mut PoseSampleCache) -> Option<Pose> {
+    script_pose_drone_with(scripts, seqs, skel, skin, hash, time, &mut |seq, f, n| cache.sample(seq, skel, skin, f, n))
+}
+
+fn script_pose_drone_with(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>, skel: &Skeleton, skin: &Skin, hash: u32, time: f32, sample: &mut dyn FnMut(&Sequence, u32, usize) -> Pose) -> Option<Pose> {
     let script = scripts.get(&hash)?;
     let t = time.floor().max(1.0) as u16;
     let wins: Vec<(u16, u32)> = script.sequences().filter(|(a, _, _)| *a <= t).map(|(a, _, q)| (a, q)).collect();
@@ -258,18 +290,26 @@ pub fn script_pose_drone(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Seq
     let (base_first, base_q) = wins[base_i];
     let base_f = (time - base_first as f32 + 1.0).max(1.0);
     let base_seq = seqs.get(&base_q)?;
-    let mut acc = sequence_pose_n(base_seq, skel, skin, base_f, base_n);
+    let mut acc = sequence_pose_n_with(base_seq, base_f, base_n, sample);
+    // mp-perf-16: the base window's own pass below re-sampled the very same (sequence, frame,
+    // bone count) — the identical values; keep them instead of decoding the sequence twice (the
+    // PS2-rounded channel sums are the bulk of an MP body's palette cost).
+    let base_vals: Vec<_> = acc.iter().take(base_n).copied().collect();
     if acc.len() < skel.bones as usize {
         while acc.len() < skel.bones as usize { acc.push(*acc.last().unwrap()); }
     }
     // Then every started window in command order overwrites the bones it reaches — the last one
     // wins; the base's own pass (first pass over its bones) is its place in that order.
-    for (first, q) in &wins {
+    for (wi, (first, q)) in wins.iter().enumerate() {
+        if wi == base_i {
+            for (i, v) in base_vals.iter().enumerate() { acc[i] = *v; }
+            continue;
+        }
         let n = covered(*q);
         if n == 0 { continue; }
         let Some(seq) = seqs.get(q) else { continue };
         let f = (time - *first as f32 + 1.0).max(1.0);
-        let p = sequence_pose_n(seq, skel, skin, f, n);
+        let p = sequence_pose_n_with(seq, f, n, sample);
         for (i, v) in p.iter().enumerate().take(n) { acc[i] = *v; }
     }
     Some(acc)
@@ -362,12 +402,17 @@ pub fn script_pose_together(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, 
 /// `sequence_pose` for the first `bones` bones only (a narrow sequence — the face tracks — whose
 /// channel list `local_pose` would read past).
 pub fn sequence_pose_n(seq: &Sequence, skel: &Skeleton, skin: &Skin, frame: f32, bones: usize) -> Pose {
+    sequence_pose_n_with(seq, frame, bones, &mut |seq, f, n| nf_formats::anim::local_pose_bones(seq, skel, skin, f, n))
+}
+
+/// `sequence_pose_n` with the whole-frame sampler supplied (`local_pose_bones` or its memo).
+fn sequence_pose_n_with(seq: &Sequence, frame: f32, bones: usize, sample: &mut dyn FnMut(&Sequence, u32, usize) -> Pose) -> Pose {
     let last = seq.frames.max(1) as u32;
     let f0 = (frame.floor() as u32).clamp(1, last);
     let frac = (frame - frame.floor()).clamp(0.0, 1.0);
-    let mut p = nf_formats::anim::local_pose_bones(seq, skel, skin, f0, bones);
+    let mut p = sample(seq, f0, bones);
     if frac > 0.0002 && f0 < last {
-        let q = nf_formats::anim::local_pose_bones(seq, skel, skin, f0 + 1, bones);
+        let q = sample(seq, f0 + 1, bones);
         blend(&mut p, &q, frac);
     }
     p

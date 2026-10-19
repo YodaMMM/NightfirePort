@@ -18,12 +18,12 @@ fn the_reward_page_opens_only_after_the_ending_script_ends() {
     fe.flow.current_level = 0x0700_0013;
     fe.flow.stack = vec![nf_view::menu::ST_RUNNER]; // the host's demo_results boots the runner state [lib.rs]
     fe.mission_ended(Outcome::Complete, Stats::default());
-    // Case 4 queued the page (GameState+0x28 = 0x40000036 [M 0x182c60:72]) — no manager is up.
+    // Case 4 queued the page (GameState+0x1c (Ghidra `_28_4_`, decimal) = 0x40000036 [M 0x182c60:72]) — no manager is up.
     assert_eq!(fe.flow.page, 0x4000_0036, "the page id queued [M 0x182c60:72]");
     assert!(fe.results_queued);
     assert_ne!(fe.page, Page::Results, "the reward is NOT up [M 0x1d6360:160-163]");
     assert_eq!(fe.requested_level.take(), Some(0x0730_0013), "LevelToEndTo [M 0x182c60:109-110]");
-    assert!(fe.flow.movie_pending, "the 0x73 code wraps to a movie [M 0x1d3800's switch]");
+    assert!(fe.flow.movie_pending, "the 0x73 code wraps to a movie [M ResetMap_Load 0x1d6360:39 (the GS+8 & 0xff0000 movie decision) + :101 (the state-6 push)]");
     assert!(!fe.action(Action::Confirm), "no menu handlers while the manager is down [M 0x1d6360:160-163]");
     // The outro plays: the fade pops, the loader's phase 0 pushes state 6 with the movie code
     // [M 0x1d6360:101-112]; the decoder holds it (BGFMVPlaying = 1 [M 0x1081a8]).

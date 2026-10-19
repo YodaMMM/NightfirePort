@@ -180,10 +180,32 @@ pub struct LadderCtx<'a> {
     /// thud 0xA3. The Sim sets it per level once the byte is identified (live check in
     /// docs/systems/sound-coverage.md); default false = the 0xA3 arm.
     pub level_bump_5fb: bool,
+    /// The cels Bond's pick capsule straddles this tick — `Collide_StraddleCels` 0x1eac98's BFS from
+    /// the HITTEST home cel through the capsule-touching portals [M Collide_Pick 0x1eb320:125-134
+    /// admits a candidate object only from a straddled cel's chain]. The Sim fills it from
+    /// `CollisionWorld::debug_straddle` with the current substate's pick arm (`Bond::pick_arm`);
+    /// EMPTY = no scoping (no cel graph — unit tests, MP remotes), every ladder tested.
+    pub straddle: &'a [usize],
 }
 
 impl Default for LadderCtx<'_> {
-    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false } }
+    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] } }
+}
+
+/// The current substate's pick arm — the HITTEST the game builds for `Player_Collision` 0x194df0's
+/// capsule switch (indexes on substate−1 [M disasm 0x195070, jump table @0x2fc0d0]): returns
+/// `(segment A offset, segment B offset, radius)` as upward offsets from the object position, the
+/// same numbers `Ladder::capsule_hits*` pin [M 0x1950a0 the climb/creep arm, 0x1953f4 the default
+/// arm, 0x194df0 case 3 the crouch arm]. One source of truth for the pick shape; the straddle walk
+/// feeds the same capsule to `Collide_StraddleCels` [M 0x1eac98 takes the pick's HITTEST].
+pub fn pick_arm(substate: u8, crouched: bool, cc: f32) -> (f32, f32, f32) {
+    if substate == SS_CLIMB || substate == SS_CREEP {
+        (0.55, WALK_PICK_RADIUS - cc, WALK_PICK_RADIUS) // 0x1950a0: r 0.275, B reads the radius slot
+    } else if crouched {
+        (0.1 - (cc - 0.55), 0.45 - cc, 0.55) // 0x194df0 case 3 = substate 4 (crouch)
+    } else {
+        (0.275, 0.55 - cc, 0.55) // 0x1953f4: the walk 0, the swim 3, every other grab-eligible substate
+    }
 }
 
 /// One tick of player input as game actions: `forward` (action 2), `strafe` (action 1; + = left), `turn` (radians
@@ -486,13 +508,20 @@ impl Bond {
     /// −0.09999999403953552. The 3e-8 difference is the crouch grounded band: the feet-point ray is
     /// built from the B arm (see the physics_tick comment), so the port's lower B hung the crouch
     /// rest EXACTLY on `Player_FeetOnPoint`'s band edge and the push dither flickered Bond ungrounded
-    /// at every hard-floor crouch rest (probe14_ground.rs, the 07000014 crawl-vent start). The swim
-    /// pair is the same case-3 arm [M 0x194df0 case 3] — a low-slung 0.2-long spine hanging under the
-    /// root, so at the swim equilibrium (root = surface − 0.3) the capsule's top stays ~0.13 under the
-    /// water plane and never touches a pond floor that sits at the surface (the 07000002 garden pond
-    /// [D probe_vent_swim]).
+    /// at every hard-floor crouch rest (probe14_ground.rs, the 07000014 crawl-vent start).
+    ///
+    /// The arms follow the hittest switch's own table [M Player_Collision 0x194df0, second switch
+    /// @0x195070 indexed substate−1, jump table @0x2fc0d0]: the crouch substate 4 alone takes the
+    /// LOW arm (case 3: A = pos + up·(0.1 − (cc − 0.55)), B = pos + up·(0.45 − cc)); the DEFAULT
+    /// arm (A = pos + up·0.275, B = pos + up·(0.55 − cc), r 0.55) covers the walk 0 AND the swim 3
+    /// — the underwater path jumps past the gravity straight into this switch [M disasm
+    /// 0x194f4c-0x194f70]. The swim pair rode the LOW arm pre-fix (the same misread 750a made for
+    /// the swim grab pick): its lowest point sat cc + 0.10 under the root against the game's cc, so
+    /// the pond-bed push-out parked the swimmer ~0.1 high (the 02-pond playtest: 3.60/3.70 settles
+    /// against the PS2's 3.48/3.17 [L]; docs/systems/swim.md). The grab pick's own swim arm is the
+    /// default one [M ladder.rs::capsule_hits_default] — the pair now agrees with it.
     fn capsule(&self) -> (V3, V3) {
-        let (a, b) = if self.substate == SS_SWIM || self.crouched {
+        let (a, b) = if self.crouched {
             (0.1 - (self.cc - 0.55), 0.450_000_02 - self.cc)
         } else {
             (0.275, 0.55 - self.cc)
@@ -642,6 +671,16 @@ impl Bond {
         // `dist < radius` [M Intersect_CylGeom 0x109da0:447] rejects the exact touch, and the swim
         // escape's drift (0.5 + 0.05 + 0.2 > 0.55) still clears.
         for (i, lad) in ctx.ladders.iter().enumerate() {
+            // The straddled-cel scoping [M Collide_Pick 0x1eb320:125-134]: the pick admits only
+            // objects linked to a cel the HITTEST straddles — the ladder's link is its centre's cel
+            // [M build_LinkToRoom 0x1c9680] and the straddle set is the Sim's portal BFS over the
+            // pick capsule. An empty set (no cel graph) scopes nothing.
+            if !ctx.straddle.is_empty() {
+                match lad.cell {
+                    Some(c) if ctx.straddle.contains(&(c as usize)) => {}
+                    _ => continue,
+                }
+            }
             // The pick runs on the PRE-push-out spot [M — see the `pre_collide` field doc]: the
             // game's grab rides the hit existence from the hittest built at the integrated
             // position, before the handler's push-out.
@@ -816,7 +855,7 @@ impl Bond {
         // OWN list (`*(cel + 0x18)`) — walls hanging on other rooms' cels never block. `self.cel`
         // is that relink (obj+0x20; the Sim refreshes it off the position each tick, the
         // `build_LinkToRoom` 0x1c9680 order); `None` falls back to the flat world.
-        let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS);
+        let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS, false);
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
         // The floor test reads the same HITTEST (`Player_CollisionHandler` 0x1949a8 →
@@ -1465,7 +1504,12 @@ self.local = [vs / k, vf / k];
         // per-cel attribution (fix-08-collision): walls hanging on other rooms' cels never block.
         // `self.cel` is the Sim's per-tick relink (obj+0x20); `None` falls back to the flat world.
         let (a, b) = self.capsule();
-        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS);
+        // The game's push-tail q-span guard rides the SWIM path only: it is [M]-evidenced there
+        // (Intersect_CylGeom 0x109da0's `dot(q − A, B − A) > 0` gate + the 02 fin wedge the PS2
+        // rounds [L]); the port's walk/NPC paths still depend on the unguarded through-push
+        // (escort_follow_07000001_live regressed with it on) — the port divergence is documented
+        // in the report.
+        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming);
         // The floor ray: from = obj+0x30, to = capsuleB + up·(−(cc+0.6)) [M Player_FeetOnPoint
         // 0x194188:89-98 loads HITTEST+0x30 = BLData+0x770 — the B arm Player_Collision 0x194df0
         // stores at :405-408 — adds the matrix up scaled −(cc+0.6) (:92, one negation of the f32
@@ -1488,7 +1532,7 @@ self.local = [vs / k, vf / k];
         // the fix-08-collision slab band the floor stays in the room's bucket while the exterior
         // wall stays out of it.
         if floor.is_none() {
-            let (fp, fw) = world.capsule_push(a, b, RADIUS);
+            let (fp, fw) = world.capsule_push(a, b, RADIUS, swimming);
             push = fp;
             walkable = fw;
             floor = world.segment_hit(self.pos, to);
@@ -2170,7 +2214,7 @@ mod tests {
     fn the_ladder_grab_gate_excludes_only_climb_and_grapple() {
         let world = CollisionWorld::from_triangles(Vec::new());
         let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
-        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false };
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] };
         // SWIM grabs: one tick in the water context attaches (pre-fix it stayed SS_SWIM).
         let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
         b.substate = SS_SWIM;
@@ -2187,6 +2231,41 @@ mod tests {
         assert!(b.pos[1] >= lad.bottom() + 0.02 - 1e-4, "the grab dropped the swimmer below the rungs: {}", b.pos[1]);
     }
 
+    /// ladder-mesh-refine: the straddled-cel scoping [M `Collide_Pick` 0x1eb320:125-134 admits a
+    /// candidate object only from a straddled cel's chain; the ladder's link is its centre's cel
+    /// [M `build_LinkToRoom` 0x1c9680 → build_FindCel → control_link_object_to_cel]]. A ladder
+    /// whose cell is NOT in the pick capsule's straddle set is never admitted — even with the
+    /// capsule dead on the rungs (the old unscoped pick grabbed through the cel wall, the
+    /// 07000008 playtest's through-the-wall zipline arm). Sister: the same shape with the
+    /// ladder's OWN cell in the set grabs, and an EMPTY set (no cel graph — unit tests, MP
+    /// remotes) scopes nothing.
+    #[test]
+    fn the_ladder_pick_only_admits_ladders_of_the_straddled_cels() {
+        let world = CollisionWorld::from_triangles(Vec::new());
+        let mut lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
+        lad.cell = Some(3);
+        let grab = |straddle: &[usize]| {
+            let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
+            b.substate = SS_SWIM;
+            b.tick_ctx(&world, &LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle }, &Input { forward: 1.0, ..Default::default() });
+            b.substate
+        };
+        // The ladder's cel NOT in the straddle set: no grab (the pick never admitted it).
+        assert_eq!(grab(&[5]), SS_SWIM, "a ladder of a non-straddled cel grabbed — the scoping is off");
+        // Sister that fails without the scoping: the same capsule dead on the rungs grabs the
+        // moment the ladder's own cel is in the set.
+        assert_eq!(grab(&[3]), SS_CLIMB, "the ladder's own cel in the set must grab");
+        // The unresolved link (cell None) is the game's unlinked object: never admitted.
+        let mut unlinked = lad.clone();
+        unlinked.cell = None;
+        let mut b2 = Bond::new([10.0, 3.0, 20.5], unlinked.yaw + std::f32::consts::PI);
+        b2.substate = SS_SWIM;
+        b2.tick_ctx(&world, &LadderCtx { ladders: &[unlinked], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[3] }, &Input { forward: 1.0, ..Default::default() });
+        assert_eq!(b2.substate, SS_SWIM, "an unlinked ladder (cell None) must not grab while scoping is active");
+        // The empty set scopes nothing (no cel graph): the grab goes through.
+        assert_eq!(grab(&[]), SS_CLIMB, "the no-graph path must keep the unscoped pick");
+    }
+
     /// fix-swim: the swim stroke rides the LOOK direction [M `Player_Move` 0x191dd0:149-165 —
     /// `RotMatrixX(obj+0x50 − BL+0x8a8·π/2)` + `Mat_GetDir`] and the case-3 tail clamps the rise at
     /// `surface − 0.3` [M 0x193600:201-220]. No crouch/jump input exists in swim [M case 3 reads
@@ -2194,7 +2273,7 @@ mod tests {
     #[test]
     fn swim_moves_along_the_look_direction_and_the_surface_clamps() {
         let world = CollisionWorld::from_triangles(Vec::new());
-        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: Some(3.0), sink: false, creepwalls: &[], level_bump_5fb: false };
+        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: Some(3.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] };
         let mut b = Bond::new([0.0, 2.7, 0.0], 0.0); // below surface − 0.3? 2.7 < 2.7 is false — at the ceiling
         b.substate = SS_SWIM;
         // Look down-ish (pitch −0.5: dir = (0, −sin π/4, cos π/4)), swim forward: the position must
@@ -2217,6 +2296,35 @@ mod tests {
         assert!((b.pos[1] - y_at).abs() < 1e-3, "crouch/jump moved the swimmer (y {} -> {})", y_at, b.pos[1]);
     }
 
+    /// swim-height-02: the hittest capsule arms follow the switch's own table [M
+    /// `Player_Collision` 0x194df0 second switch @0x195070, indexed substate−1, jump table
+    /// @0x2fc0d0]: the SWIM 3 rides the DEFAULT arm (A = pos + up·0.275, B = pos + up·(0.55 − cc),
+    /// r 0.55 — lowest point exactly cc under the root), and only the crouch substate 4 takes the
+    /// LOW arm (case 3: A = pos + up·(0.1 − (cc − 0.55)), B = pos + up·(0.45 − cc)). Pre-fix the
+    /// port gave the swim the LOW arm, hanging the lowest point cc + 0.10 under the root — the
+    /// pond-bed push-out parked the swimmer ~0.1 high (the 02-pond 3.60/3.70 settles vs the PS2's
+    /// 3.48/3.17 [L]). The grab pick's swim arm is the default one [M ladder.rs
+    /// `capsule_hits_default`] — the pair must agree.
+    #[test]
+    fn swim_capsule_is_the_switch_default_arm_and_crouch_keeps_the_low_arm() {
+        let mut b = Bond::new([0.0, 3.0, 0.0], 0.0);
+        b.substate = SS_SWIM;
+        let (a, c) = b.capsule();
+        assert!((a[1] - 3.275).abs() < 1e-6, "the swim capsule's A rode the wrong arm: {}", a[1]);
+        assert!((c[1] - (3.0 + 0.55 - b.cc)).abs() < 1e-6, "the swim capsule's B rode the wrong arm: {}", c[1]);
+        // Sister: the crouch stance keeps the LOW arm (case 3 [M 0x195070 case 3]).
+        let mut b4 = Bond::new([0.0, 3.0, 0.0], 0.0);
+        b4.crouched = true;
+        let (a4, c4) = b4.capsule();
+        assert!((a4[1] - (3.0 + 0.1 - (b4.cc - 0.55))).abs() < 1e-6, "the crouch A left the LOW arm: {}", a4[1]);
+        assert!((c4[1] - (3.0 + 0.450_000_02 - b4.cc)).abs() < 1e-6, "the crouch B left the LOW arm: {}", c4[1]);
+        // Sister: the LOW arm's lowest point hangs exactly 0.1 deeper than the default's
+        // (cc + 0.10 vs cc) — the pre-fix excess that rode the bed.
+        let low = b4.cc - c4[1] - 0.55;
+        let def = b.cc - c[1] - 0.55;
+        assert!((low - def - 0.1).abs() < 1e-4, "the arm depth gap moved: {low} vs {def}");
+    }
+
     /// fix-ladder2: the climb look [M Player_Climb 0x196310 + Player_Update 0x193600 + ViewClamping
     /// 0x1a92e8]. The turn input moves the yaw inside the eased ±90° window around `ladder.yaw + π`,
     /// and the pitch offset takes the stick (free, clamped ±1). Before the fix neither input reached
@@ -2225,7 +2333,7 @@ mod tests {
     fn climb_look_turns_within_the_ladder_window_and_pitch_is_free() {
         let world = CollisionWorld::from_triangles(Vec::new());
         let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
-        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false };
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] };
         let mut b = Bond::new([10.0, 3.0, 20.0 + 0.5], lad.yaw + std::f32::consts::PI);
         b.substate = SS_CLIMB;
         b.ladder = Some(0);

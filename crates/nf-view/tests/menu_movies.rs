@@ -212,7 +212,9 @@ fn the_start_intro_plays_then_the_main_menu_and_skips_past_the_grace() {
     assert!(fe.action(Action::Confirm), "START");
     assert!(fe.intro_playing, "the intro run is up");
     assert_eq!(fe.page, Page::ParisEnum, "START opens P_PARISENUM 0x4000004a [S unverified: menu-def script]");
-    fe.tick(); // P_PARISENUM's 0x50 → P_ESTHERO [M 0x20a648:43]
+    // G-048(4): P_PARISENUM's 0x50s wait on the card machine before the 0x44 fires
+    // [M 0x20a648:36-47; the old single-tick transition was the [S] guess].
+    for _ in 0..32 { fe.tick(); if fe.page == Page::EstHero { break; } }
     fe.tick(); // P_ESTHERO's 1st 0x50 counts [M 0x20a060:27]
     fe.tick(); // the 2nd starts the movie [M 0x20a060:16-24]
     assert!(fe.intro_movie);
@@ -234,15 +236,35 @@ fn the_start_intro_plays_then_the_main_menu_and_skips_past_the_grace() {
     fe.tick();
     assert!(!fe.intro_playing);
     assert_eq!(fe.page, Page::Main);
-    // Sister: without a skip the run ends by itself at the budget.
+    // Sister: without a skip the run ends by itself at the budget (the card walk's ticks ride
+    // the same budget loop — G-048(4)).
     let mut fe = FrontEnd::new();
     for _ in 0..8 { fe.tick(); }
     fe.action(Action::Confirm);
-    for _ in 0..3 + nf_view::menu::ESTHERO_TICKS - 1 { fe.tick(); }
+    for _ in 0..32 { fe.tick(); if fe.page == Page::EstHero { break; } }
+    for _ in 0..2 + nf_view::menu::ESTHERO_TICKS - 1 { fe.tick(); }
     assert_eq!(fe.page, Page::EstHero, "one tick before the budget runs out");
     fe.tick();
     assert!(!fe.intro_playing, "the run ends when the movie ends [M 0x20a060:28-45]");
     assert_eq!(fe.page, Page::Main);
+}
+
+/// fe-audit 1017: the ESTHERO budget's disc sister. The flow test above only compares
+/// ESTHERO_TICKS with itself (`intro_frames == ESTHERO_TICKS`); this counts 0x073B0048's own
+/// pictures on the disc, the way the INTRO_MOVIES test pins the boot pair [D the PSS picture
+/// stream]. The slim on-foot ISO stubs its PSS data, so this skips there like the other
+/// movie-data tests.
+#[cfg(feature = "movies")]
+#[test]
+fn the_esthero_budget_matches_the_disc_pictures() {
+    let Some(iso) = iso() else { eprintln!("skip: NF_MOVIE_ISO/NF_ISO not set"); return };
+    let m = match nf_view::movie::Movie::load(&iso, "073B0048") { Ok(m) => m, Err(e) => { eprintln!("skip: {e:#}"); return } };
+    let n = nf_formats::mpeg2::picture_counts(&m.demuxed.video).0;
+    eprintln!("073B0048: {n} pictures = {} s at 30 fps", n as f64 / 30.0);
+    // The headless budget = the movie at 30 fps, one frame per two 60 Hz ticks.
+    assert_eq!(nf_view::menu::ESTHERO_TICKS, (n as u32) * 2, "the budget = the disc movie's length");
+    // Sister: the pin is not a constant — the boot pair's budget differs from ESTHERO's alone.
+    assert_ne!(nf_view::menu::INTRO_TICKS, nf_view::menu::ESTHERO_TICKS, "the boot pair runs a different length");
 }
 
 /// The boot P_INTRO run (`start_boot_intro`, the window's boot): the EA logo 0x07370048 then MGM

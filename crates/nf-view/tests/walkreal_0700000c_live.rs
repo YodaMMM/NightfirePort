@@ -225,7 +225,7 @@ fn walk_start_to_the_st1_plate_and_the_photograph() {
     for _ in 0..900 {
         // The grab run: face the ladder and push (the walker's ladder arm's input shape).
         let sim = w.scene.sim.as_mut().unwrap();
-        // yaw = atan2(dx, dz) — forward = (sin yaw, cos yaw) [M Bond::look].
+        // yaw = atan2(dx, dz) — forward = (sin yaw, cos yaw) — [S] unverified (Bond::look is the port's look maths; the game's heading convention is not pinned here).
         let desired = (9.669741f32 - sim.bond.pos[0]).atan2(-187.3427f32 - sim.bond.pos[2]);
         let err = walker::wrap_pi(desired - sim.bond.yaw);
         let input = nf_game::player::Input {
@@ -240,7 +240,7 @@ fn walk_start_to_the_st1_plate_and_the_photograph() {
     assert!(climbed,
         "walking into the yard ladder #164 never grabbed it — the walk substate must ride the switch's DEFAULT arm r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]; the 0x275 climb arm leaves this ladder unclimbable (the playtest's broken ladder)");
     // Climb for real: hold forward until the mantle fires (the dismount at pos.y > climb_top
-    // 12.139 [M Player_Climb 0x196310:54-62 + Player_CollLadder 0x196118's +0x85 top]) and the
+    // 12.139 [M Player_Climb 0x196310:54-62 + Player_CollLadder 0x196118's +0.85 top]) and the
     // walk resumes, then keep the stick forward through the lunge (+0.6 [M 0x196310:56]) so Bond
     // walks onto the circle walkway strip (11.086 [D probes], 0.67 off the plane — outside the
     // 0.55 arm, no re-grab [M Intersect_CylGeom 0x109da0:447 strict]).
@@ -366,7 +366,7 @@ fn ladder495_walk_grab_and_climb_to_the_top() {
     for _ in 0..900 {
         let sim = w.scene.sim.as_mut().unwrap();
         if sim.bond.substate == nf_game::player::SS_CLIMB { climbed = true; break; }
-        // yaw = atan2(dx, dz) — forward = (sin yaw, cos yaw) [M Bond::look].
+        // yaw = atan2(dx, dz) — forward = (sin yaw, cos yaw) — [S] unverified (Bond::look is the port's look maths; the game's heading convention is not pinned here).
         let desired = (-6.422f32 - sim.bond.pos[0]).atan2(-177.391f32 - sim.bond.pos[2]);
         let err = walker::wrap_pi(desired - sim.bond.yaw);
         let input = nf_game::player::Input {

@@ -56,8 +56,11 @@ pub fn mp_to_match(s: &MpSettings) -> MatchSettings {
         spawn_policy: s.spawn_policy,
         radar: s.radar,
         friendly_fire: s.friendly_fire,
+        location_damage: s.location_damage,
         players: s.players.each_ref().map(|p| (p.team, p.skin, p.armor_bonus, p.radar_on)),
         registered_pickups: s.registered_pickups,
+        mods: [s.gun_emplacements, s.vehicles, s.grapple, s.explosive_scenery],
+        bot_records: s.bot_records.iter().map(|r| r.0).collect(),
     }
 }
 
@@ -89,6 +92,12 @@ pub fn match_to_mp(m: &MatchSettings, seed: u32) -> MpSettings {
         radar: m.radar,
         registered_pickups: m.registered_pickups,
         friendly_fire: m.friendly_fire,
+        location_damage: m.location_damage,
+        gun_emplacements: m.mods[0],
+        vehicles: m.mods[1],
+        grapple: m.mods[2],
+        explosive_scenery: m.mods[3],
+        bot_records: m.bot_records.iter().map(|r| nf_game::mp::bots::BotRecord(*r)).collect(),
         seed,
     }
 }
@@ -115,9 +124,13 @@ pub fn to_net_input(i: &player::Input, trigger: bool, reload: bool, use_key: boo
         weapon_cycle: i.weapon_cycle,
         gadget_cycle: i.gadget_cycle,
         switch_to: i.switch_to,
-        // 700v6: the caller fills `held` / `shot` from the local weapon pipeline (lib.rs).
+        // 700v6: the caller fills `held` / `shot` from the local weapon pipeline (lib.rs);
+        // mp-combat-weapons: and the shot description.
         held: 0,
         shot: false,
+        shot_weapon: 0,
+        shot_flags: 0,
+        shot_aim: [0, 0],
     }
 }
 
@@ -300,7 +313,9 @@ const START_RESEND_EVERY: u32 = 4;
 const START_RESEND_POLLS: u32 = 120;
 
 fn session_cfg() -> Config {
-    Config { hash_every: 15, ..Default::default() } // NET_HASH_EVERY's cadence
+    // NET_HASH_EVERY's cadence; net-internet: the host measures every peer's RTT and adapts
+    // the input delay (the app schedules through `submit_local`, which follows it).
+    Config { hash_every: 15, adaptive_delay: true, ..Default::default() }
 }
 
 impl NetCore {
@@ -768,6 +783,41 @@ impl NetCore {
         self.sess.input_delay()
     }
 
+    /// net-internet: schedule the local input sampled while running `run_tick` (it lands
+    /// `delay_at(run_tick)` ticks ahead — the host's adaptive delay; see
+    /// `nf_net::Session::submit_local`).
+    pub fn submit_local(&mut self, run_tick: u32, input: nf_net::Input) {
+        self.sess.submit_local(run_tick, input);
+    }
+
+    /// net-internet: send what the frame's ticks just scheduled now (no receive, no events) —
+    /// the app calls it after its tick loop, so its inputs leave this frame, not the next.
+    pub fn flush(&mut self) {
+        if self.closed {
+            return;
+        }
+        let now = self.epoch.elapsed().as_millis() as u64;
+        self.sess.flush(now);
+    }
+
+    /// net-internet diagnostics: (the worst peer RTT in ms, the delay in force, bytes and
+    /// datagrams sent so far).
+    pub fn net_stats(&self) -> (Option<f64>, u32, u64, u64) {
+        let rtt = self.sess.peer_rtts().into_iter().filter_map(|(_, r)| r).fold(None, |a: Option<f64>, r| Some(a.map_or(r, |a| a.max(r))));
+        let (b, n) = self.sess.sent_totals();
+        (rtt, self.sess.input_delay(), b, n)
+    }
+
+    /// net-internet: the session's input-delay schedule (from_tick, delay).
+    pub fn delay_schedule(&self) -> Vec<(u32, u32)> {
+        self.sess.delay_schedule().to_vec()
+    }
+
+    /// The input delay in force at `tick`.
+    pub fn delay_at(&self, tick: u32) -> u32 {
+        self.sess.delay_at(tick)
+    }
+
     pub fn submit_hash(&mut self, tick: u32, hash: u64) {
         self.sess.submit_hash(tick, hash);
     }
@@ -814,6 +864,12 @@ impl NetCore {
     /// core's UDP sends. See `nf_net::Session::inject_link_fault`.
     pub fn inject_link_fault(&mut self, seed: u64, drop_per_mille: u32, reorder_per_mille: u32) {
         self.sess.inject_link_fault(seed, drop_per_mille, reorder_per_mille);
+    }
+
+    /// Test-only (net-internet): the fault line plus a one-way delay and jitter in ms on
+    /// this core's sends — half of a simulated internet path.
+    pub fn inject_link_delay(&mut self, seed: u64, drop_per_mille: u32, delay_ms: u64, jitter_ms: u64) {
+        self.sess.inject_link_delay(seed, drop_per_mille, 0, delay_ms, jitter_ms);
     }
 }
 

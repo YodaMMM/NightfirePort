@@ -17,11 +17,17 @@
 //!
 //! Enemies are DISABLED for the walk only in the walkreal sense: damage is suppressed
 //! (top_up_health, the walker's allowance). Opt-in via NF_ISO (the slim ISO is enough).
+//!
+//! UPDATE (audit-fix-abseil-zerog, 2026-10-19): the p3 == 2 spawn now ENTERS substate 8 [M
+//! Player_Init 0x1910f8 :160-165 — the port followed the wrong start]. The walking legs force
+//! the ground substate back with an [S] premise: no decompile path from 8 to a ground substate
+//! after the arrival NIS is pinned (the only proven 1b change is the slit zone's 0x4b → 9 [M
+//! 0x216388], past these routes) and the port wires no substate-changing handler.
 
 #[path = "common/walker.rs"]
 mod walker;
 
-use nf_game::player::{Input, SS_ZEROG_9};
+use nf_game::player::{Input, SS_WALK, SS_ZEROG_8, SS_ZEROG_9};
 use walker::Walker;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
@@ -34,6 +40,11 @@ fn walk_arrival_and_the_east_deck_to_the_slit_edge() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
     w.wait_enabled(3000, "the shuttle arrival");
+    // [S] unverified — NOT a game assertion: the p3 == 2 spawn enters substate 8 [M Player_Init
+    // 0x1910f8 :160-165, now ported], but no decompile path back to a ground substate after the
+    // arrival NIS is pinned and the port wires no substate-changing handler. This leg pins the
+    // port's WALK route, so the substate is forced back to the ground path.
+    w.scene.sim.as_mut().unwrap().bond.substate = SS_WALK;
     w.wait(120);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -74,6 +85,9 @@ fn the_slit_float_carries_bond_west_without_a_fall() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
     w.wait_enabled(3000, "the shuttle arrival");
+    // [S] unverified — the same ground-substate premise as leg 1 (the p3 == 2 spawn enters
+    // substate 8 [M 0x1910f8 :160-165]; this leg pins the port's WALK route).
+    w.scene.sim.as_mut().unwrap().bond.substate = SS_WALK;
     for wp in [[20.0f32, -1.9, 1.0], [17.0, -1.9, -1.0], [13.0, -1.9, -1.0], [10.0, -1.9, -1.0]] {
         let _ = w.try_walk_to(walker::Wp::new(wp[0], wp[1], wp[2]).r(1.2), "the deck west");
     }
@@ -169,6 +183,9 @@ fn the_fight_gate_spawns_drake_from_the_deck() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
     w.wait_enabled(3000, "the shuttle arrival");
+    // [S] unverified — the same ground-substate premise as leg 1 (the p3 == 2 spawn enters
+    // substate 8 [M 0x1910f8 :160-165]; this test pins the spawner, not the substate).
+    w.scene.sim.as_mut().unwrap().bond.substate = SS_WALK;
     for wp in [[20.0f32, -1.9, 1.0], [17.0, -1.9, -1.0], [14.0, -1.9, -4.0], [12.0, -1.9, -6.5]] {
         let _ = w.try_walk_to(walker::Wp::new(wp[0], wp[1], wp[2]).r(1.3), "the deck south-west");
     }
@@ -195,15 +212,20 @@ fn the_fight_gate_spawns_drake_from_the_deck() {
 }
 
 
-/// Sister walk: the mapped east-deck leg never enters a scripted zero-G set piece — Bond's
-/// substate stays a ground substate the whole way (the station's zero-G is script-driven,
-/// C_CHCHZEROG_Handler 0x216388 msg 0x4b [M]; the SLIT itself is the zone and is past this
-/// route's end).
+/// Sister walk: the east-deck leg adds no substate change of its own. The p3 == 2 spawn starts
+/// IN the zero-G substate 8 [M Player_Init 0x1910f8 :160-165 — asserted; the daily audit
+/// 2026-10-17: the old "never enters zero-G" doc contradicted the start], and the only proven
+/// 1b substate change is the slit zone's C_CHCHZEROG 0x216388 msg 0x4b → 9 — past this route's
+/// end. Driven under the legs' [S] ground-substate premise, no tick of the route enters 8/9.
 #[test]
-fn the_east_deck_route_never_enters_zero_g() {
+fn the_east_deck_route_adds_no_substate_change() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
     w.wait_enabled(3000, "the shuttle arrival");
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.substate, SS_ZEROG_8,
+        "the p3 == 2 start is substate 8 [M Player_Init 0x1910f8 :160-165]");
+    // [S] unverified — the same ground-substate premise as the legs above.
+    w.scene.sim.as_mut().unwrap().bond.substate = SS_WALK;
     let mut zerog_ticks = 0u32;
     for wp in [[20.0f32, -1.9, 1.0], [17.0, -1.9, -1.0], [13.0, -1.9, -1.0], [10.0, -1.9, -1.0]] {
         let _ = w.try_walk_to(walker::Wp::new(wp[0], wp[1], wp[2]).r(1.2), "the deck west");
@@ -213,5 +235,5 @@ fn the_east_deck_route_never_enters_zero_g() {
         w.tick(Default::default(), false);
         if matches!(w.scene.sim.as_ref().unwrap().bond.substate, 8 | 9) { zerog_ticks += 1; }
     }
-    assert_eq!(zerog_ticks, 0, "no zero-G substate on the east-deck route [M 0x216388 — script-driven only]");
+    assert_eq!(zerog_ticks, 0, "the east-deck route enters no zero-G substate of its own [S] unverified — 0x216388 is C_CHCHZEROG_Handler (its msg-0x4b arm sets substate 9 or 0); nothing there ties it to a slit zone or the route's end");
 }

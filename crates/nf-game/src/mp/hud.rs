@@ -442,3 +442,153 @@ impl MpHudSnapshot {
         rows
     }
 }
+
+// ─── The per-viewer score pane (`MPScorePane` 13: `HUD_CreateMPScorePane` 0x19ed10 +
+//     `HUD_MPUpdatePane` 0x19f0a0, `MPScoreInfo` 0x2be888, 7 sprites) ─────────────────────────
+//
+// The positions are the created runtime rects for one full-screen viewer, measured in the real
+// game [L PCSX2 EE snapshots 2026-10-18 of a 1-human Arena (FFA) and Team Arena match on
+// 07000023: pane 13's sprite array at `HUD+8+13·0x20+8`] and re-derived from the create code:
+// every sprite is created at its template (0,0) / (0,448) and `HUD_FixMP` 0x19b110 clamps it into
+// the viewer rect inset by 16 (MPSettings+0x1ac == 1 [M 0x19b110:27-31]) → (16,16) / (16,432−h);
+// then 0x19ed10 moves them per scenario [M 0x19ed10:58-123].
+
+/// One icon sprite of the score pane, in HUD units (512×448).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MpPaneIcon {
+    /// The pane sprite index (1/2/6 = the objective icons, 3/4/5 = the line icons).
+    pub sprite: usize,
+    /// The texture hash (`hashtable_set_sprite` [M 0x19f0a0] or the template's [L 0x2be888]).
+    pub tex: u32,
+    pub x: f32,
+    pub y: f32,
+    /// The sprite colour 0xRRGGBBAA [M 0x19f0a0 / L 0x2be888: 0x7f7f7fff].
+    pub rgba: u32,
+    /// The draw layer (0x1e — `HUD_MPUpdatePane` writes 0x1e to every shown icon [M]).
+    pub layer: i32,
+    /// Flag 0x100 (additive): the line icons 3/4/5 carry it, the objective icons not [L 0x2be888].
+    pub additive: bool,
+}
+
+/// The score pane for one viewer: the text sprite (0) + the icons drawn this frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MpScorePane {
+    /// The text, '\n'-separated lines (line 1 may be empty: the FFA player string starts "\n").
+    pub text: String,
+    /// The text sprite's pen (x, y): (40, 13) when the team line is suppressed, else (40, 30)
+    /// [L; M 0x19ed10:101-118 — +0x18 x, −3 y, then +0x11 y unless FFA + not bit30 + not 0x400].
+    pub text_x: f32,
+    pub text_y: f32,
+    /// The text colour (0x7f7f7fff [L MPScoreInfo[0]]) and its outline colour = the sprite's
+    /// colour2 (+0x14): black, or with a team line the team's (team 0 `0xff0000ff`, else
+    /// `0x0000ffff`) [M 0x19f0a0:52-70 — the store goes to +0x14, not the text colour; L the
+    /// Team Arena capture: white digits, red outline for team 0].
+    pub rgba: u32,
+    pub outline: u32,
+    pub icons: Vec<MpPaneIcon>,
+}
+
+/// The template textures [L MPScoreInfo @0x2be888]: 3 = 0x03000188 (the team star),
+/// 4 = 0x03000187 (the gun = kills), 5 = 0x03000186 (the skull = deaths).
+pub const SCORE_ICON_TEX: [u32; 3] = [0x0300_0188, 0x0300_0187, 0x0300_0186];
+
+impl MpScorePane {
+    /// `HUD_CreateMPScorePane` + `HUD_MPUpdatePane` for the snapshot's viewer (team
+    /// `viewer_team`), the single full-screen viewer layout. `team_game`/`bit30` are
+    /// MPSettings+0x18c/+0x190.
+    pub fn build(snap: &MpHudSnapshot, team_game: u32, bit30: u32, viewer_team: u32) -> MpScorePane {
+        let sc = snap.scenario;
+        // The create's text move [M 0x19ed10:101-118]: x += 0x18, y −= 3, then y += 0x11 unless
+        // (team_game == 0 && bit30 == 0 && scenario != 0x400) — where sprite 3 hides instead
+        // (FuckOffSprite3 = 1, its y −= 0x11).
+        let suppressed = team_game == 0 && bit30 == 0 && sc != scenario::ASSASSIN;
+        let (text_y, s3_y) = if suppressed { (13.0, -1.0) } else { (30.0, 16.0) };
+        // Sprites 4/5 follow 3 at +0x12 each [M 0x19ed10:120-123].
+        let mut icons = Vec::new();
+        for (k, tex) in SCORE_ICON_TEX.iter().enumerate() {
+            if k == 0 && suppressed { continue; } // layer 0xff [M 0x19f0a0:44-46]
+            icons.push(MpPaneIcon { sprite: 3 + k, tex: *tex, x: 16.0, y: s3_y + 18.0 * k as f32, rgba: 0x7f7f_7fff, layer: 0x1e, additive: true });
+        }
+        // The text [M 0x19f0a0:47-70; MP_GetTeamScore 0x18b338, MP_GetPlayerScore 0x189730].
+        let row = snap.rows.iter().find(|r| r.slot == snap.viewer_slot);
+        let (score, kills, deaths) = row.map_or((0.0, 0, 0), |r| (r.score, r.kills, r.deaths));
+        let player = if sc == scenario::ASSASSIN || sc == scenario::KOTH_FFA {
+            format!("{}\n{}\n{}", score as i32, kills, deaths)
+        } else if team_game == 0 {
+            format!("\n{kills}\n{deaths}")
+        } else {
+            format!("{kills}\n{deaths}")
+        };
+        let (text, outline) = if team_game != 0 {
+            let t = (viewer_team as usize).min(1);
+            let team = format!("{} - {}", snap.team_scores[t] as i32, snap.team_scores[1 - t] as i32);
+            (format!("{team}\n{player}"), if viewer_team == 0 { 0xff00_00ff } else { 0x0000_ffff })
+        } else {
+            (player, 0x0000_00ff)
+        };
+        // The objective icons 1/2/6 [M 0x19f0a0:71-180; positions M 0x19ed10:58-96 + L].
+        let me = snap.viewer_slot;
+        let icon = |sprite: usize, tex: u32, x: f32, y: f32, rgba: u32| MpPaneIcon { sprite, tex, x, y, rgba, layer: 0x1e, additive: false };
+        match sc {
+            scenario::CAPTURE_THE_FLAG => {
+                // MP_HasTeamFlag(obj, team == 0): carrying the other team's flag, tinted with that
+                // flag's colour (viewer team 0 → 0x0040ffff, else 0xff0000ff) [M :89-100].
+                let other = if viewer_team == 0 { 1 } else { 0 };
+                if snap.flags[other] == Some(me) {
+                    icons.push(icon(1, 0x0300_0182, 16.0, 376.0, if viewer_team == 0 { 0x0040_ffff } else { 0xff00_00ff }));
+                }
+            }
+            scenario::ASSASSIN => {
+                if snap.assassin == Some(me) { icons.push(icon(1, 0x0300_0180, 16.0, 384.0, 0x7f7f_7fff)); }
+                if snap.target == Some(me) { icons.push(icon(2, 0x0300_0189, 16.0, 368.0, 0x7f7f_7fff)); }
+            }
+            scenario::UPLINK => {
+                // All three shown, tinted by `MP_getUplinkStatus(0..2)` [M :134-180]; the create
+                // re-textures them 0x03000185 and lines them up at x 16/32/48, y 352 [M 0x19ed10:76-96].
+                for (k, sprite) in [1usize, 2, 6].iter().enumerate() {
+                    let owner = snap.uplinks.iter().find(|u| u.index == k).map_or(2, |u| u.owner);
+                    let rgba = match owner { 0 => 0xd22d_35ff, 1 => 0x2d61_d2ff, _ => 0x7f7f_7fff };
+                    icons.push(icon(*sprite, 0x0300_0185, 16.0 + 16.0 * k as f32, 352.0, rgba));
+                }
+            }
+            _ => {}
+        }
+        MpScorePane { text, text_x: 40.0, text_y, rgba: 0x7f7f_7fff, outline, icons }
+    }
+}
+
+/// One piece of [`status_line`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum StatusPart {
+    Label(u32),
+    /// A label used as a `%s` format with one argument.
+    Format(u32, String),
+    Text(String),
+}
+
+/// The MP status line (`StatusSpr`, `MPStatusInfo` @0x2a4740: (256,48), font 2 centred, white
+/// [L]) as `MP_SortOutWhoWon` 0x1848d0 / `MP_Update` 0x184bd0 case 2 write it, in print order
+/// (the caller binds and concatenates). Empty while playing.
+pub fn status_line(m: &MpMatch) -> Vec<StatusPart> {
+    use super::MpEndStatus;
+    if m.game.state < 3 { return Vec::new(); }
+    let lives = m.settings.scenario == scenario::DEATH_LIMIT_FFA;
+    match &m.game.end_status {
+        // 0x10: "Player %s Won" 0x2000022 [M :21-41]; else "%s%s %s" (0x2000024, name, 0x2000027) [M :62-70].
+        MpEndStatus::Won(n) if lives => vec![StatusPart::Format(0x0200_0022, n.clone())],
+        MpEndStatus::Won(n) => vec![StatusPart::Label(0x0200_0024), StatusPart::Text(n.clone()), StatusPart::Text(" ".into()), StatusPart::Label(0x0200_0027)],
+        // "%s%s" (0x2000024, 0x2000023) [M :72-90]; 0x10 alone: 0x2000023 [M :43-52].
+        MpEndStatus::Draw if lives => vec![StatusPart::Label(0x0200_0023)],
+        MpEndStatus::Draw => vec![StatusPart::Label(0x0200_0024), StatusPart::Label(0x0200_0023)],
+        // Time up outside 0x10: case 2 prints "%s%s" (0x2000028, 0x1c9) and skips the sort [M 0x184bd0:42-50].
+        MpEndStatus::None => vec![StatusPart::Label(0x0200_0028), StatusPart::Label(0x1c9)],
+    }
+}
+
+/// The kill message `MP_PlayerKilled` 0x188f70:100-107 posts: `Text_AddMsg(recipient, 0, 1,
+/// sprintf(Txt_BindLabel(0x200004d), victim's name), 0, 0xb4)` — to the victim's last shooter
+/// (`MPGame + victim·0x30 + 0x20`) when that is not the victim. Shown by the MP info pane
+/// (`MPMsgInfoStatusPane`, `HUD_MPUpdateStatusPane` 0x19ca88).
+pub const KILL_MSG_LABEL: u32 = 0x0200_004d;
+/// Its life in ticks (0xb4 = 180).
+pub const KILL_MSG_TICKS: u32 = 0xb4;

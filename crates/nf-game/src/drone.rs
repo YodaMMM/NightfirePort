@@ -1244,6 +1244,16 @@ pub struct Drone {
     /// zeroed heap allocations, so a respawn (a fresh struct) counts again. Outboxed like the
     /// other `PlrStat_Log*` outboxes and folded into `Drones.progress` by the tick.
     pub detected_logged: bool,
+    /// glass-breach-guards-4: this tick's position change was carried by the anim root motion
+    /// (`root_motion` applied a delta) rather than the AI steering step. The game's class-2 pane
+    /// drain reads `Vec_SqDist3D(hitter+0x30, hitter+0x40)` — the movement pass copies +0x30 →
+    /// +0x40 per object AFTER its anim/root-motion processing in the same walk [M 0x1336f8:212],
+    /// so a root-motion-carried step reads 0 (no drain) while the AI steering step shows in
+    /// +0x30−+0x40. [D task 750p + the port's instrumented run: pane 130 survives g0's scripted
+    /// walk-by (the port's replay demonstrably crosses the sheet at 0xB+23) yet the breach squad's
+    /// charge shatters it at 0xB+911.] Reset at the head of `Drones::tick_inner`, set in
+    /// `root_motion`.
+    pub scripted_move: bool,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1430,6 +1440,8 @@ impl Drone {
             // 0x14b300:801-811; the port keys it on the drone's weapon id — the datum byte's id space).
             weapon_swap: 0, pending_melee: None, pending_weapon_swap: false,
             recoil_weapon: weapon == 0x1c || weapon == 0x1d,
+            // glass-breach-guards-4 (own line — merge lesson 4).
+            scripted_move: false,
         };
         dr.init_properties(d, &param);
         dr.type_setup(d);
@@ -1445,8 +1457,12 @@ impl Drone {
             dr.anim_set = 0xf;
             dr.mode = if p1 == 0x0600_0892 { 0x1c } else { 0x1b };
             dr.air = true;
-            // DefaultInit 0x14b300:772-774: `+0x50 = 0.05` when the placement left it 0.
-            dr.descend_speed = 0.05;
+            // DefaultInit 0x14b300:772-774 (LAB_0014c370): `if (+0x50 == 0.0) +0x50 = 0x3d99999a`
+            // = 0.075 — the rope-descent scalar's default (the daily audit 2026-10-17: the old
+            // 0.05 contradicted the store; the decompile's store sits in DefaultInit's common
+            // tail for every kind — this arm keeps it on the abseil placements, the only port
+            // path that reads the field, NDrone2_Move 0x14eff8:59's rope branch).
+            dr.descend_speed = 0.075;
         }
         dr.captain_setup(d);
         // DefaultInit kind 0x18: health = DroneInit_TakeXHits(dmg, 0x33) — the weapon_data[0x33]
@@ -2316,6 +2332,12 @@ impl Drone {
         if let (Some([lx, lz]), Some(_)) = (delta, root) {
             let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
             let step = [lx * c + lz * s, -lx * s + lz * c];
+            // glass-breach-guards-4: the movement was carried by the anim root motion — the game's
+            // movement pass copies +0x30 → +0x40 AFTER the anim/root-motion processing in the same
+            // per-object walk [M 0x1336f8:212], so such a step reads SqDist(pos, prev) = 0 in the
+            // pane drain (Break_Update 0x12bfd8:26-27) and never damages the glass. The AI steering
+            // step (NDrone2_Move → the port's slide/steer moves) is the move that shows in the pair.
+            self.scripted_move = true;
             if self.free_root {
                 // Unblocked, with the vertical change; the slide target moves along.
                 let ly = match (root, self.root_prev, restarted, wrap_end) {
@@ -5139,6 +5161,68 @@ impl Drone {
                 if let Some(n) = self.look_for_opponent(d) { self.set_state(n) }
                 true
             }
+            // `NDrone2_DSTATE_PlayScript` 0x15ba68 cases 0x11/0x12/0x14/0x15/0x16/0x1e (the alert family,
+            // gunfire sounds 0x14 included): `DroneVision_EnemyAlerts` → a non-zero result leaves the
+            // script (`SetState`) — a scripted guard HEARS just like the idle states [M 0x15ba68:180-195].
+            // The full-alert sight gate ([M 0x177ed0:12-14]) does not cover these: the sound path is how
+            // the game's alarm-heard scripted guards reach combat (cover_nodes_live's 06 gunfire).
+            (PLAY_SCRIPT, msg::SOUND) => {
+                // 0x15ba68 case 0x14 → `DroneVision_EnemyAlerts` case 0x14 → `DroneVision_AlertSound`
+                // 0x177800. The ENTER case sets `+0x4F8 |= 0x400000` for start scripts 0x6000169 and
+                // 0x60007ac [M 0x15ba68:36-44], and AlertSound returns 0 while it is set [M
+                // 0x177800:19-21] — those scripted guards are DEAF to gunfire while the script plays
+                // (the flag clears when the script ends, 0x15ba68 case 5; the port's start_script
+                // zeroes at the same point, the PLAY_SCRIPT msg::ANIM_DONE arm).
+                if self.start_script == 0x6000_169 || self.start_script == 0x6000_7ac {
+                    if std::env::var_os("NF_AILOG").is_some() {
+                        eprintln!("[ailog] guard {} PlayScript SOUND: script {:#x} holds +0x4F8 0x400000 — deaf to gunfire [M 0x177800:19-21]", self.index, self.start_script);
+                    }
+                    return true;
+                }
+                // [M 0x177800:76-100] the mode switch: modes 9/0x12/0x13/0x16 alert only above
+                // alertness 0.7 (→ Attack 0x56); every other mode (the escort/civilian rows among
+                // them) takes the HeardNoise branch (0xa2 when share > 0.2 or alert > 0.66). The
+                // level-0x0700000c/0xd skin-kind-5/6 shortcut of 0x177800:24-33 is level-specific
+                // and unmodelled here.
+                if std::env::var_os("NF_AILOG").is_some() {
+                    eprintln!("[ailog] guard {} PlayScript SOUND: mode {:#x} alert {:.2} dist {:.1} share {:.2} prop1f {} script {:#x}",
+                        self.index, self.mode, self.alert, self.dist, self.sound_share, self.prop(d, 0x1f), self.start_script);
+                }
+                if matches!(self.mode, 9 | 0x12 | 0x13 | 0x16) {
+                    if self.alert > 0.7 {
+                        if !self.investigating { self.resume_state = s; self.home = self.feet(); }
+                        self.set_state(ATTACK);
+                    }
+                    true
+                } else if let Some(n) = self.enemy_alerts(d, s) {
+                    self.set_state(n);
+                    true
+                } else {
+                    true
+                }
+            }
+            (PLAY_SCRIPT, msg::ALARM) => {
+                // 0x15ba68 case 0x1e → `DroneVision_EnemyAlerts` 0x177c18 case 0x1e: the
+                // friendly/civilian modes 9 and 0x12 return 0 [M 0x177c18:113-117] — the scripted
+                // escort (dtype 10/0xb/0xd/0xe below full alertness remaps to 9, or 0x12 for the
+                // female row, GetDTYPENEW 0x14c938) NEVER takes the alarm. Mode 0x1e is the bot row:
+                // in SP the ambush drones (dtype 0x10 → 0x1e) fail MP_areObjectsOnSameTeam with
+                // Bond [M 0x177c18:121-126], so the alarm does nothing for them either; the bot
+                // arm (alertness = 1.0 → BOT_reactToDroneAlertMsg → 0xcf) is the MP bot path, not
+                // ported here. The rest → Attack, with the same save-return-state/home first step
+                // the idle states' ALARM arm runs.
+                if std::env::var_os("NF_AILOG").is_some() {
+                    eprintln!("[ailog] guard {} PlayScript ALARM: mode {:#x} alert {:.2} script {:#x}",
+                        self.index, self.mode, self.alert, self.start_script);
+                }
+                if matches!(self.mode, 9 | 0x12 | 0x1e) {
+                    true
+                } else {
+                    if !self.investigating { self.resume_state = s; self.home = self.feet(); }
+                    self.set_state(ATTACK);
+                    true
+                }
+            }
             (WAIT_SWITCH, msg::ENTER) => { self.enabled = false; self.vision_on = false; self.watching = false; true }
             (WAIT_SWITCH, msg::UPDATE) => { if self.channel_on { self.enabled = true; let s = self.start_state(d); self.set_state(s) } true }
             (WAIT_SWITCH, msg::ENABLE) => { self.enabled = true; let s = self.start_state(d); self.set_state(s); true }
@@ -6700,11 +6784,12 @@ impl Drone {
             // Timer C (case 0xc) → AbseilSlide 0x8f [M :53-55].
             (state::ABSEIL_INIT, msg::TIMER_C) => { self.set_state(state::ABSEIL_SLIDE); true }
             // AbseilSlide 0x8f (0x169730). ENTER: flag 0x10000, CallAnim(3) (the slide pose), +0x23 = 1,
-            // +0x50 = 6.5; mode 0x1b drops the rope point to −1000 [M case 1].
+            // +0x50 = 0x40dccccd = 6.9 (the daily audit 2026-10-17: the old 6.5 contradicted the
+            // store); mode 0x1b drops the rope point to −1000 (0xc47a0000) [M case 1].
             (state::ABSEIL_SLIDE, msg::ENTER) => {
                 self.call_anim(d, 3, 0, 0);
                 self.air = true;
-                self.descend_speed = 6.5;
+                self.descend_speed = 6.9;
                 if self.mode == 0x1b { self.rope[1] = -1000.0; }
                 true
             }
@@ -6831,6 +6916,13 @@ impl Drone {
     /// (≥ 0.66) or has prop 0x51; the first such sighting marks it as the drone's own (`+0x4F8 |= 0xC000000`).
     /// Friendly drones (`+0x44 == 3`, team 3: civilians, hostages, allies — dtype 10/0xb/0xd/0xe) never attack:
     /// the game returns 0 before the sight check [M 0x177ed0:31-38].
+    /// The FIRST gate (0x177ed0:12-14) sits before all of that: a drone whose current AI state is
+    /// PlayScript (3) at alertness ≥ 1.0 returns 0 — a fully-alert scripted drone never sight-interrupts,
+    /// his start script plays to its end (07000001's first guard: alertness 1.0 from behaviour prop 0x20
+    /// [D placement #158 words 18-20], state 3 for the whole scripted walk with Bond in his view cone
+    /// [L tests/traces/01-doors.trace lines 0-150]; the script's own end directs AimStandFire, DSTATE_
+    /// PlayScript 0x15ba68 case 5). At alertness < 1.0 the gate is open and the script CAN be
+    /// interrupted (the eval passes +0xcdc = 1 for every script, 0x15ba68 case 1).
     fn look_for_opponent(&mut self, d: &Data) -> Option<u8> {
         // [M NDrone2_FindOpponent 0x1424e0:101] the opponent-vs-player set is gated on
         // `+0x44 != 2`: a team-2 (ally) drone NEVER takes the player as its opponent — its
@@ -6840,6 +6932,13 @@ impl Drone {
         if self.team == 2 || self.team == 3 {
             if std::env::var_os("NF_AILOG").is_some() {
                 eprintln!("[ailog] guard {} look_for_opponent: team {} — no player opponent", self.index, self.team);
+            }
+            return None;
+        }
+        // [M 0x177ed0:12-14] the PlayScript full-alert gate: `if (SM state == 3 && 1.0 <= +0x50c) return 0`.
+        if self.state == state::PLAY_SCRIPT && self.alert >= 1.0 {
+            if std::env::var_os("NF_AILOG").is_some() {
+                eprintln!("[ailog] guard {} look_for_opponent: state 3 at alert {:.2} — the script is not interrupted [M 0x177ed0:12-14]", self.index, self.alert);
             }
             return None;
         }
@@ -7929,6 +8028,11 @@ pub struct Drones {
     /// Bond's bullets in flight, what they hit this tick, the global flinch stamp (`DAT_00298FC0`) and whether Bond
     /// aims (L1).
     pub player_bullets: Vec<PlayerBullet>,
+    /// mp-combat-weapons: an online match runs the human's damage in the shared combat
+    /// (`nf_game::mp::combat`); this machine's own visual blasts must not hurt its local player
+    /// (the shared health is written back every tick, but a local zero would start the death
+    /// sequence on one machine only). Set by the app's Sim while online. Local only.
+    pub net_no_self_hurt: bool,
     /// fix-0c-hatch-latches2 (rebased onto the grate-02 machine): this tick's player-bullet Operate
     /// contacts against the SS parts, per SS index (bit 1 = a bullet) — recorded by
     /// `update_player_bullets` from each bullet's flight segment (dead or alive: in the game the
@@ -8286,6 +8390,45 @@ pub struct Drones {
     /// The 07000041 wrapper-end countdown (ticks since the approach chain's ch 1 rose): the port's
     /// [S] stand-in for the wrapper's end into 0x0700001b — see the tick_inner arm for the evidence.
     pub wrapper_end_timer: Option<u32>,
+    /// mp-world-sync (agent 9): online, every body the shared world sees this tick (the human
+    /// slots in slot order, then the bots), set by the Sim before `tick`. `Some` switches the
+    /// world's player-contact passes (the pickup take, `Trigger_Calc`'s player touchers, the
+    /// doors' actor list) from the one local player to these bodies, so every machine's world
+    /// reacts to every body identically [S port design — the PS2's four `glb_players` are one
+    /// machine's objects; the game's own walks already loop over all of them, e.g. `Pickup_Update`
+    /// 0x18e148's player loop + the MP bot loop]. `None` offline (the single-player path).
+    pub net_bodies: Option<Vec<NetBody>>,
+    /// mp-world-sync: the pickup takes of the latest online tick — (pickup index, the taker's
+    /// slot, the taker is a bot). The Sim applies the takers' shared effects (armour, a bot's health).
+    pub net_takes: Vec<(usize, usize, bool)>,
+    /// mp-world-sync: online, every slot's use-key trigger half (head, look) in slot order —
+    /// the deferred `Player_Activate` trigger arm of `use_trigger_request`, one per pressing body.
+    pub net_use_triggers: Vec<(V3, V3)>,
+}
+
+/// mp-world-sync (agent 9): one body as the online shared world sees it (see `Drones::net_bodies`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NetBody {
+    /// The MP slot (humans 0..; a bot's own slot).
+    pub slot: usize,
+    /// A bot (`Drone_tag` class in the game — the drone toucher, the bot pickup arm).
+    pub bot: bool,
+    /// This machine's own player (its take also fills the real inventory).
+    pub local: bool,
+    /// Alive (the game's `obj+0xF4 == 1` gate in `Pickup_Update` 0x18e148).
+    pub alive: bool,
+    /// The object position (`obj+0x30`, the port's `Bond::pos`; a bot's eye minus `EYE`).
+    pub pos: V3,
+    /// The world-sphere centre (`obj+0x80` — the pickup LOS origin).
+    pub sph: V3,
+    /// The head (a bot's eye) — the drone toucher's top.
+    pub head: V3,
+    /// The runtime cel the queries start from (as `Player::cel`).
+    pub cel: Option<usize>,
+    /// Hanging on a wire/zipline (no volume contacts).
+    pub hanging: bool,
+    /// The slot's shared armour (`BLData+0x8B0`) — the armour pickup's refusal gate.
+    pub armour: f32,
 }
 
 /// `NDrone2_DefaultInit` (0x14b300): the voice set `+0xD8` from the character id (skin 0x05000000 + id).
@@ -8366,7 +8509,7 @@ impl Drones {
         // `Drone_SM_InitObject` numbers state machines in creation order (the base is not known: 0 here).
         for (i, dr) in list.iter_mut().enumerate() { dr.sm_id = i as u32; dr.index = i; }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             movie_request: None,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
@@ -8448,6 +8591,10 @@ impl Drones {
             wrapper_end_timer: None,
             // mayhew-end-transition: no hold at build (own line — merge lesson 4).
             exit_hold: None,
+            // mp-world-sync: offline until the Sim sets the bodies (own lines — merge lesson 4).
+            net_bodies: None,
+            net_takes: Vec::new(),
+            net_use_triggers: Vec::new(),
     };
         drones
     }
@@ -8993,7 +9140,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let hits = crate::explode::propagate(pos, radius, damage, owner,
             &crate::explode::Targets { drones: &drones, player: player_pos, breaks: &[], destroys: &[] });
         // Bond: `Player_Hurt` (the difficulty factor is applied in `explode_propagate`).
-        if let Some(ph) = hits.player {
+        if let Some(ph) = hits.player.filter(|_| !self.net_no_self_hurt) {
             let before = self.health.health;
             // `Explode_Propagate` → `Player_Hurt` → `Player_HandlePain` (type 0): BL+0x967 = 0xC
             // (both sides) [M 0x1902c8:124-130]. The pain grunt rides the 1-in-4 roll [M 0x1902c8:110-119].
@@ -9305,7 +9452,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the class-5 contact subtracts its damage; Break_Kill 0x12b970 sets obj+0xFE bit 0
             // and plays the kill sound; no channel is written]). The kill records queue for the
             // view (sound + shatter/debris presentation).
-            for k in self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage) {
+            // mp-world-sync (agent 9): online the breakables and destroyables take every slot's
+            // shot in the Sim's shared world pass (`Sim::step_net_world`), on every machine —
+            // this machine's own bullet must not break them here alone.
+            let net_world = self.net_bodies.is_some();
+            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage) } {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
                 // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
@@ -9326,7 +9477,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let m = self.monitors.list.iter().find(|m| m.state == 3).map(|m| m.pos);
                 if let Some(p) = m { self.pending_blasts.push((p, 3.0, 200.0, usize::MAX, 0, 0x0600_0027, 3.0)); }
             }
-            for (pos, radius, damage, kind) in self.props.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.channels, frame) {
+            for (pos, radius, damage, kind) in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.channels, frame) } {
                 let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
                 // fix-blast-scripts2: Destroy_Smash's f12 reads the tag's +0x8c [M 0x12bcdc `lwc1
                 // $f12, 140($16)`] — the port keeps the historical scale = radius here (no disc
@@ -9979,7 +10130,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             g.cooldown -= 1.0;
         }
         if !fire || self.props.gunimps[gi].cooldown > 0.0 { return; }
-        let tg = &crate::gunimp::TURRET_GUNS[crate::gunimp::SP_TURRET];
+        let tg = &crate::gunimp::TURRET_GUNS[(self.props.gunimps[gi].turret as usize).min(crate::gunimp::TURRET_GUNS.len() - 1)];
         {
             let g = &mut self.props.gunimps[gi];
             // the refill [M 0x1320d8:324 — `piVar2[0x25] = TurretGuns[+0x14]`], the heat [M
@@ -10459,6 +10610,92 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
+    /// mp-world-sync (agent 9): `Pickup_Update` 0x18e148 online — the same per-pickup walk
+    /// (the state-2 respawn wait, the spin, the fall, the touch, the lifetime) with the game's
+    /// own taker order: every human slot in slot order (the `glb_players[0..4]` loop: alive
+    /// `obj+0xF4 == 1`, `dist²(pickup+0x80, player+0x30) < (r + 1.1)²`, the LOS from the
+    /// player's `+0x80`), then — only when no human touched — the bots (the `MPSettings+0x184`
+    /// loop over `MPGame` slots 4..7, the LOS from the bot's `+0x30`); the first qualifying
+    /// body gets `Pickup_Handler` 0x18e650 and the walk returns for that pickup [M 0x18e148:203-246].
+    ///
+    /// The take decision rides only state every machine holds: the armour pickup is refused at
+    /// the taker's shared armour ≥ 50 [M 0x18e650:220-225]; a weapon/ammo pickup is consumed by
+    /// the first touching body even when that player's ammo is full **[S deviation]** — the
+    /// game refuses a full player there (`Player_EquipAmmo` returning 0), but that player's ammo
+    /// lives only on its own machine, so no other machine could decide the same way. The local
+    /// taker's real inventory still takes the item (`Inventory::take`, the auto-switch, the
+    /// tally) — only the consumption is shared. The consumption tail is the game's: the sound,
+    /// the switch channel, then respawn 0 → deleted, 0xFFFF → stays, else hidden in state 2 for
+    /// `FRAME_RATE_INT · respawn · 10` ticks [M 0x18e650:322-348] — every machine counts the
+    /// same timer, so the respawns agree. `net_takes` lists the takes for the Sim's shared
+    /// effects (armour, a bot's health).
+    fn update_pickups_net(&mut self, d: &Data, bodies: &[NetBody], frame: u32) {
+        self.net_takes.clear();
+        for k in 0..self.pickups.len() {
+            {
+                let p = &mut self.pickups[k];
+                if p.gone { continue; }
+                if p.state == 2 { p.respawn_wait(); continue; }
+                p.spin_tick();
+                p.fall(d.world);
+            }
+            let p = &self.pickups[k];
+            let touching = |b: &NetBody| b.alive && p.touches(d.world, b.cel, b.pos, if b.bot { b.pos } else { b.sph });
+            let taker = bodies.iter().position(|b| !b.bot && touching(b))
+                .or_else(|| bodies.iter().position(|b| b.bot && touching(b)));
+            if let Some(bi) = taker {
+                let b = bodies[bi];
+                let kind = self.pickups[k].kind;
+                // The armour refusal is the only shared refusal (the pickup stays; the walk still
+                // returns for this pickup, so its lifetime does not run this tick [M 0x18e148:238]).
+                // The bot arm never refuses armour (health +20, armour +rounds capped — 0x18e650:
+                // case 3 of the class-2 branch).
+                if !b.bot && kind == crate::pickup::kind::ARMOUR && b.armour >= 50.0 { continue; }
+                let clock = frame;
+                if b.local {
+                    let p = self.pickups[k].clone();
+                    let loaded = d.skins.contains_key(&d.weapons.first_person(p.weapon as usize));
+                    let mut armour = b.armour;
+                    let taken = self.inventory.take(d.weapons, &p, loaded, &mut armour, clock);
+                    if std::env::var_os("NF_PICKUPLOG").is_some() {
+                        eprintln!("[take-net] tick {} slot {} weapon {:#x} kind {} → {:?}", frame, b.slot, p.weapon, p.kind, taken);
+                    }
+                    if self.auto_switch && matches!(taken, Some(crate::pickup::Taken::Weapon { .. })) {
+                        let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                        if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
+                            self.weapon_switch_request = Some(id);
+                        }
+                    }
+                    if matches!(taken, Some(crate::pickup::Taken::Bonus)) { self.progress.log_bond_bonus(self.mission.status()); }
+                    if let Some(t) = taken { self.taken.push((frame, t)); }
+                }
+                let p = &mut self.pickups[k];
+                if p.switch_channel != 0 { self.channels.set(p.switch_channel as u32, 1, frame); }
+                // The per-kind take sound [M 0x18e650:290-321] — local presentation only.
+                let sound = match kind {
+                    crate::pickup::kind::WEAPON | crate::pickup::kind::AMMO => Some(0xF5),
+                    crate::pickup::kind::BOND_BONUS => Some(0x14C),
+                    crate::pickup::kind::ARMOUR => Some(0x141),
+                    _ => p.sound,
+                };
+                match p.respawn {
+                    0 => p.gone = true,
+                    0xFFFF => {}
+                    r => { p.hidden = true; p.state = 2; p.respawn_ticks = 60 * r as u32 * 10; }
+                }
+                let at = [p.m[3][0], p.m[3][1], p.m[3][2]];
+                if let (Some(id), Some(sfx)) = (sound, d.sfx) { self.play_sound(at, sfx.get(id)); }
+                self.net_takes.push((k, b.slot, b.bot));
+                continue;
+            }
+            let p = &mut self.pickups[k];
+            if p.lifetime != 0 {
+                p.lifetime -= 1;
+                if p.lifetime == 0 { p.gone = true; }
+            }
+        }
+    }
+
     /// Turns a switch channel on (callers and tests).
     pub fn set_channel(&mut self, c: u8) { let f = self.frame; self.channels.set(c as u32, 1, f); }
 
@@ -10485,6 +10722,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // positions; at the tick's tail every mover tests its squared step against the level's
         // glass (only on GameState+0x12 == 0x0700001, only kind 2 — crate::breakable).
         let drone_from: Vec<V3> = self.list.iter().map(|d| d.pos).collect();
+        // glass-breach-guards-4: the root-motion flag is this tick's movement-source mark — clear
+        // it before anything moves (root_motion sets it when it applies a delta).
+        for dr in self.list.iter_mut() { dr.scripted_move = false; }
         let _prof_all = crate::prof::scope("drones.tick (total)");
         let prof_pre = crate::prof::scope("drones: shared passes");
         self.frame += 1;
@@ -11108,7 +11348,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // stand-in's remaining known miss (07000002's bunker plate 0x80 below the floor) is
         // unchanged in kind — floor plates between 0.4 and 0.557 below the reference now fire, as
         // the game's do.
-        let touchers: Vec<crate::triggers::Toucher> = std::iter::once(crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) })
+        // mp-world-sync (agent 9): online every live human body is a player toucher (the same
+        // stand-in reach) and every live bot a drone toucher (the bot is a `Drone_tag` — the
+        // drone-class contact bit), in slot order, so a door plate or trigger sees every body
+        // on every machine [S the per-body touchers; the reach laws are the ones above].
+        let player_touchers: Vec<crate::triggers::Toucher> = match &self.net_bodies {
+            None => vec![crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) }],
+            Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| if b.bot {
+                crate::triggers::Toucher { a: [b.pos[0], b.pos[1] - 1.0, b.pos[2]], b: b.head, r: 0.4, drone: true, skin: 0, contain: true }
+            } else {
+                crate::triggers::Toucher { contain: !b.hanging, ..crate::triggers::Toucher::player([b.pos[0], b.pos[1] - 0.6, b.pos[2]]) }
+            }).collect(),
+        };
+        let touchers: Vec<crate::triggers::Toucher> = player_touchers.into_iter()
             .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true }))
             .collect();
         drop(prof_pre);
@@ -11118,6 +11370,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // muxes' updates in the same walk [M 0x1336f8's loop; Player_Activate 0x1a5170]. Consumed
         // here so the written channel survives to the mux walk (0700000c's secret door).
         if let Some((head, look)) = self.use_trigger_request.take() {
+            self.player_use_triggers(head, look, frame);
+        }
+        // mp-world-sync: online, every pressing body's trigger half, in slot order.
+        for (head, look) in std::mem::take(&mut self.net_use_triggers) {
             self.player_use_triggers(head, look, frame);
         }
         // `switch_channels_prev` is snapshotted right after `Trigger_Calc`, BEFORE the object walk [M 0x1336f8:52-53
@@ -11253,7 +11509,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .collect();
         order.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         // Pickups are created at run time, so they head the control list: `Pickup_Update` before the placed objects.
-        self.update_pickups(d, player, frame);
+        // mp-world-sync: online the take walk sees every body (`update_pickups_net`).
+        match self.net_bodies.take() {
+            Some(bodies) => { self.update_pickups_net(d, &bodies, frame); self.net_bodies = Some(bodies); }
+            None => self.update_pickups(d, player, frame),
+        }
         // The actor list `Door_Update`'s proximity test (`dist² < (r1+r2)²·2` over classes
         // 2/3/0x12, skipping `obj+0xF0 & 0x10` candidates [M 0x136678-0x136684]) sees: the player
         // first (`glb_players`, the activator of every auto-activation) with radius 0.4, then every
@@ -11261,7 +11521,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // modelled CLEAR for both — the 07000005 player reads 0x880 [L ee_start_05.bin]; the drones'
         // 07000005 value is not in the snapshots and the bit's writer is unported (door-port-check #2:
         // on 07000001 both are SET [L], which the port cannot reproduce yet).
-        let actors: Vec<crate::door::DoorActor> = std::iter::once((player.pos, 0.4, false))
+        // mp-world-sync: online the actor list is every live body (humans in slot order, then
+        // the bots — `Door_Update`'s scan covers classes 2/3/0x12, every player object [M
+        // 0x136678]) instead of the one local player.
+        let player_actors: Vec<crate::door::DoorActor> = match &self.net_bodies {
+            None => vec![(player.pos, 0.4, false)],
+            Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| (b.pos, 0.4, false)).collect(),
+        };
+        let actors: Vec<crate::door::DoorActor> = player_actors.into_iter()
             .chain(self.list.iter().filter(|x| x.present && !x.corpse).map(|x| (x.pos, 0.4, false)))
             .collect();
         // fix-casings-16: the straddle walk-in runs EVERY tick, once, on this actor list (the game's
@@ -12730,7 +12997,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let level_01 = d.level == 0x0700_0001;
         for (dr, from) in self.list.iter().zip(drone_from) {
             if !dr.present || dr.corpse { continue; }
-            for k in self.breaks.drone_step(from, dr.pos, level_01) {
+            for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move) {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 let id = u32::from(k.sound);
                 self.audio.play3d(id, k.pos, None);
@@ -12850,6 +13117,7 @@ mod tests {
             elevator_latch: false,
             // fix-cover-remainder: the scary-object flee family (own line — merge lesson 4).
             scared: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
+            scripted_move: false,
         };
         dr
     }
