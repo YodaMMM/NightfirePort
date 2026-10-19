@@ -170,10 +170,11 @@ pub fn crouch2stand_script(class: u32) -> u32 {
     }
 }
 
-/// The death body scripts (`Player_ChangeSubState` 0x190630 cases 0xd/0xe): the water-level
+/// The death body scripts (`Player_ChangeSubState` 0x190630 cases 0xd/0xe): the gravity-Y
 /// global `DAT_002d8894` == 0.0 picks 0x60008e0, anything else 0x6000151 [M]. `Player_Init`
-/// initialises the global to −9.9 (0xc11ccccd) [M 0x1910f8 line 153], so the normal death body
-/// is 0x6000151. (The variant's semantic — water/drown — is [S]; the branch itself is [M].)
+/// initialises it to −9.8 (0xc11ccccd, `WldGravity.y`) [M 0x1910f8:152-154], so the normal death
+/// body is 0x6000151; the 0x60008e0 variant is the zero-gravity death [M — the global is the gravity
+/// vector's Y; the old "water-level / −9.9" reading was wrong, daily audit 2026-10-19].
 pub const DEATH_SCRIPT: u32 = 0x6000_151;
 pub const DEATH_SCRIPT_WATER_ZERO: u32 = 0x6000_8e0;
 
@@ -246,9 +247,11 @@ pub struct MpBodyState {
     /// The body's one-shot clock in script frames (the death/transition script's playback time —
     /// the draw advances it; the game's scripts start at time 1 and advance × speed per tick).
     pub one_shot_time: f32,
-    /// The water-level global `DAT_002d8894` (−9.9 at `Player_Init`) [M 0x1910f8 line 153] — the
-    /// death script pick compares it against 0.0 [M 0x190630 case 0xd/0xe].
-    pub water_level: f32,
+    /// The gravity vector's Y, `WldGravity.y` = `DAT_002d8894` (0xc11ccccd = −9.8 at `Player_Init`,
+    /// after `WldGravity = 0` [M 0x1910f8:152-154]) — the death script pick compares it against
+    /// 0.0: zero-g picks 0x60008e0 [M 0x190630 case 0xd/0xe]. (Was misnamed `water_level` / −9.9;
+    /// daily audit 2026-10-19.)
+    pub gravity_y: f32,
 }
 
 /// One body pose: the anim SCRIPT id the game would play (0x06xxxxxx — the ids the descriptors
@@ -280,7 +283,7 @@ pub const STRAFE_MAX: f32 = 0.075;
 /// The pure body pose for one MP body ([M] throughout — `Player_ChangeSubState` 0x190630 +
 /// `AnimSetUpdate` 0x1c0938):
 ///
-/// 1. substate 0xd/0xe (death): the water-level pick, no set ([M 0x190630 cases 0xd/0xe —
+/// 1. substate 0xd/0xe (death): the gravity-Y pick, no set ([M 0x190630 cases 0xd/0xe —
 ///    `AnimSetDeleteAll` then the one script]).
 /// 2. `hold != 0`: the crouch↔stand transition for the current stance — substate 4 (crouched
 ///    now) plays stand2crouch, substate 0 plays crouch2stand ([M 0x190630 case 0/4: the set is
@@ -297,7 +300,7 @@ pub const STRAFE_MAX: f32 = 0.075;
 pub fn mp_body_pose(sets: &MpAnimSets, class: u32, st: &MpBodyState) -> MpBodyPose {
     // 1. Death: the substate-0xd/0xe scripts [M 0x190630].
     if st.substate == 0xd || st.substate == 0xe {
-        let script = if st.water_level == 0.0 { DEATH_SCRIPT_WATER_ZERO } else { DEATH_SCRIPT };
+        let script = if st.gravity_y == 0.0 { DEATH_SCRIPT_WATER_ZERO } else { DEATH_SCRIPT };
         return MpBodyPose { script, time: st.one_shot_time, blend: 0.0 };
     }
     // 2. The crouch↔stand transition hold [M 0x190630 case 0/4 + 0x192310/0x1924c0's skip].

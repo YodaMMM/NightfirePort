@@ -7289,7 +7289,7 @@ impl Scene {
                 let pick = self.mp_anim_sets.as_ref().map_or(0, |sets| {
                     let st = nf_formats::mpanim::MpBodyState {
                         mp: true, weapon: held, substate, fwd: speed / 60.0, strafe: 0.0,
-                        phase: 0.37, hold: 0, one_shot_time: 0.0, water_level: -9.9,
+                        phase: 0.37, hold: 0, one_shot_time: 0.0, gravity_y: -9.8,
                     };
                     nf_formats::mpanim::mp_body_pose(sets, class, &st).script
                 });

@@ -110,15 +110,20 @@ fn disc_bath_hatch_chain_over_the_deep_ladder() {
     // No trigger drives the hatch's channel 2 [D — the full main-map trigger list].
     assert!(!trig.iter().any(|t| t.out == 2), "a trigger writes the hatch's channel 2 — the use-key premise is wrong");
     // And no script stream writes it either: every Nis of the level's packs, every decoded
-    // command — the only channel-set events (kind 0xD [M Script_EventHandler 0x1d94c0]) carry
-    // other channels (the intro's lone write is [0x47, 1] [D 0x06000084, hatch-02-intro]).
+    // command — the channel-set events (kind 0xD, and kind 0x11 which writes params[1] or, when
+    // params[0]'s channel is off, params[2] [M Script_EventHandler 0x1d94c0:180-188]) carry other
+    // channels (the intro's lone write is [0x47, 1] [D 0x06000084, hatch-02-intro]).
     let sim = load();
     for (hash, nis) in sim.drones.scripts.lib.iter() {
         for (si, s) in nis.streams.iter().enumerate() {
             for cmd in s.decode() {
-                if let nf_formats::nis::Cmd::Event { kind: 0xd, params } = cmd {
+                if let nf_formats::nis::Cmd::Event { kind: 0xd, params } = &cmd {
                     assert!(params.first() != Some(&2),
                         "script {hash:08x} stream {si} writes the hatch's channel 2 [D] — the use-key premise is wrong");
+                }
+                if let nf_formats::nis::Cmd::Event { kind: 0x11, params } = &cmd {
+                    assert!(params.get(1) != Some(&2) && params.get(2) != Some(&2),
+                        "script {hash:08x} stream {si} kind 0x11 can write the hatch's channel 2 [D] — the use-key premise is wrong");
                 }
             }
         }
@@ -247,7 +252,10 @@ fn the_hatch_stays_shut_without_the_use_key() {
     sim.bond.pitch = 1.0;
     for _ in 0..300 { step(&mut sim, fwd); }
     let s = &sim.drones.sss.list[s308];
-    // [M 0x1a9ea8: only SS_Activate arms the sweep; [D #396: the plates write 101, not 2]
+    // SS_Activate arms the sweep [M 0x1a9ea8], and so does SS_Update in state 0x40 whenever
+    // SS_Operate returns 1 — its channel (ch 2) on, or a toucher matching its mask [M 0x1a9948
+    // state 0x40 arm; 0x1a9df8 tail]. Neither holds here: nothing writes ch 2 [D the trigger list
+    // + the script scan above; #396's plates write 101, not 2] (daily audit 2026-10-19).
     assert_eq!((s.state, s.t), (0x40, 0.0),
         "the hatch opened without the use key (state {} t {:.3}) — something drives ch 2", s.state, s.t);
     assert!(!sim.drones.channels.on(2), "ch 2 rose without the use key");
