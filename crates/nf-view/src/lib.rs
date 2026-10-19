@@ -2008,6 +2008,102 @@ pub fn movie_iso_name(iso_path: &str) -> String {
 
 /// Renders one frame offscreen and writes it as a PNG. `menu` = a front-end overlay frame (fix-menus2:
 /// `--shot` on the front-end boot draws the menu pages too, so the main agent can compare with PCSX2).
+/// The `--mp-look slot[,dist,height,angle]` camera: `dist` (2.5) from that slot's body, `angle` (0 = in
+/// front) around its yaw, `height` (1.2) above its feet, looking at its chest.
+fn mp_look_camera(scene: &scene::Scene, v: &[f32]) -> Option<Camera> {
+    let slot = v.first().copied().unwrap_or(1.0) as usize;
+    let (dist, height, angle) = (v.get(1).copied().unwrap_or(2.5), v.get(2).copied().unwrap_or(1.2), v.get(3).copied().unwrap_or(0.0));
+    let s = scene.sim.as_ref()?;
+    let st = s.mp_body_state(slot)?;
+    let (p, yaw) = (st.0, st.1 + angle);
+    let feet_y = p[1] - s.mp_body_cc(slot);
+    let eye = [p[0] + yaw.sin() * dist, feet_y + height, p[2] + yaw.cos() * dist];
+    let target = [p[0], feet_y + 1.0, p[2]];
+    let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+    Some(Camera { pos: Vec3::new(eye[0], eye[1], eye[2]), yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV })
+}
+
+/// `--mp-drive` (see the `--shot` path): scripted slot-1 inputs through the online tick, captures at
+/// the `--mp-shots` ticks with the `--mp-look` camera (fixed to the body's yaw at the first capture
+/// unless `--mp-look-follow`).
+fn mp_drive_shots(scene: &mut scene::Scene, args: &[String], spec: &str, out: &str, ticks: u32, opts: scene::ViewOpts) -> Result<()> {
+    struct Seg { a: u32, b: u32, f: f32, s: f32, t: f32, l: f32, c: bool, j: bool, k: bool }
+    let mut segs = Vec::new();
+    for part in spec.split(';').map(str::trim).filter(|p| !p.is_empty()) {
+        let (range, keys) = part.split_once(':').unwrap_or((part, ""));
+        let (a, b) = range.split_once('-').context("--mp-drive: a segment needs a-b")?;
+        let mut sg = Seg { a: a.trim().parse()?, b: b.trim().parse()?, f: 0.0, s: 0.0, t: 0.0, l: 0.0, c: false, j: false, k: false };
+        for kv in keys.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+            let (k, v) = kv.split_once('=').unwrap_or((kv, "1"));
+            let v: f32 = v.trim().parse()?;
+            match k.trim() { "f" => sg.f = v, "s" => sg.s = v, "t" => sg.t = v, "l" => sg.l = v, "c" => sg.c = v != 0.0, "j" => sg.j = v != 0.0, "k" => sg.k = v != 0.0, o => anyhow::bail!("--mp-drive: unknown key {o:?}") }
+        }
+        segs.push(sg);
+    }
+    let shots: Vec<u32> = match args.iter().position(|a| a == "--mp-shots") {
+        Some(i) => args.get(i + 1).context("--mp-shots needs ticks")?.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>()?,
+        None => vec![ticks],
+    };
+    let look: Vec<f32> = match args.iter().position(|a| a == "--mp-look") {
+        Some(i) => args.get(i + 1).context("--mp-look needs slot[,dist,height,angle]")?.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>()?,
+        None => vec![1.0],
+    };
+    let follow = args.iter().any(|a| a == "--mp-look-follow");
+    let stem = out.trim_end_matches(".png");
+    if let Some(sim) = scene.sim.as_mut() { net_slot0_setup(sim); }
+    let mut fixed: Option<Camera> = None;
+    for t in 1..=ticks {
+        let mut row = [nf_net::input::NEUTRAL; nf_net::MAX_AGENTS];
+        let held = scene.sim.as_ref().map_or(2, |s| s.gun.weapon);
+        row[0].held = held;
+        row[1].held = 2;
+        for sg in segs.iter().filter(|sg| (sg.a..=sg.b).contains(&t)) {
+            row[1].forward = sg.f;
+            row[1].strafe = sg.s;
+            row[1].turn = sg.t;
+            row[1].look = sg.l;
+            row[1].crouch = sg.c;
+            row[1].jump = sg.j;
+            if sg.k && t == sg.a {
+                if let Some(s) = scene.sim.as_mut() {
+                    s.mp_hp[1] = 0.0;
+                    s.mp_dead_ticks[1] = 1;
+                    if let Some(m) = s.mp.as_mut() { m.player_killed(1, Some(0), false, false, &mut s.drones.rng); }
+                }
+            }
+        }
+        net_slot0_tick(scene.sim.as_mut().context("no sim")?, &row);
+        if shots.contains(&t) {
+            let cam = if follow { mp_look_camera(scene, &look) } else { fixed.or_else(|| mp_look_camera(scene, &look)) };
+            let Some(cam) = cam else { eprintln!("--mp-shots: tick {t}: slot has no drawn body"); continue };
+            if !follow && fixed.is_none() { fixed = Some(cam); }
+            // A fixed camera keeps its spot but re-aims at the body, which may have walked.
+            let cam = if follow { cam } else {
+                let s = scene.sim.as_ref().context("no sim")?;
+                match s.mp_body_state(look.first().copied().unwrap_or(1.0) as usize) {
+                    Some((p, _, _)) => {
+                        let slot = look.first().copied().unwrap_or(1.0) as usize;
+                        let target = [p[0], p[1] - s.mp_body_cc(slot) + 1.0, p[2]];
+                        let d = [target[0] - cam.pos.x, target[1] - cam.pos.y, target[2] - cam.pos.z];
+                        Camera { pos: cam.pos, yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV }
+                    }
+                    None => cam,
+                }
+            };
+            if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
+            if let Some(s) = scene.sim.as_ref() {
+                let a = &s.mp_anim[1];
+                eprintln!("--mp-shots t{t}: slot 1 layers {:?} phase {:.3} aim {:?} crouch {} dead {} root y {:.3} cc {:.3}",
+                    a.layers.iter().map(|l| (l.kind, (l.time * 10.0).round() / 10.0, (l.weight() * 100.0).round() / 100.0)).collect::<Vec<_>>(), a.phase, a.aim, a.crouch, a.dead,
+                    s.mp_body_state(1).map_or(0.0, |b| b.0[1]), s.mp_body_cc(1));
+            }
+            let path = format!("{stem}_t{t:04}.png");
+            shot(scene, &cam, &path, None, t as f32, opts, false, false, None, None)?;
+        }
+    }
+    Ok(())
+}
+
 fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, time: f32, mut opts: scene::ViewOpts, notex: bool, nofog: bool, menu: Option<&gpu::HudFrame>, movie: Option<&(u32, u32, Vec<u8>)>) -> Result<()> {
     let (w, h) = (1280u32, 720u32);
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -5185,6 +5281,15 @@ pub fn run() -> Result<()> {
                 let rgba = w.rgba();
                 if let Some((_, t)) = scene.hud_textures.iter_mut().find(|(h, _)| *h == 0x0300_00db) { if t.rgba.len() == rgba.len() { t.rgba = rgba; } }
             }
+        }
+        // Render aid (mp-body-anim): `--mp-drive "a-b:f=1,s=0,t=0,l=0,c,j,k;…"` drives slot 1's session
+        // input over match ticks a..b (f forward, s strafe, t turn, l look, c crouch held, j jump, k kill
+        // the slot at tick a) through the online tick (`net_slot0_tick`), for `--frame` ticks; `--mp-shots
+        // t1,t2,…` saves an `--mp-look` capture at each listed tick as <shot stem>_tNNNN.png.
+        if let Some(di) = args.iter().position(|a| a == "--mp-drive") {
+            let spec = args.get(di + 1).context("--mp-drive needs a script")?.clone();
+            let out = args.get(i + 1).context("--shot needs a file name")?.clone();
+            return mp_drive_shots(&mut scene, &args, &spec, &out, time as u32, opts);
         }
         if let Some(sim) = scene.sim.as_mut() {
             // `--pull 100,130`: the trigger is pressed on those ticks (one tick each).

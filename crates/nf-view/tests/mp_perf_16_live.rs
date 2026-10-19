@@ -19,7 +19,10 @@ fn iso() -> Option<String> {
 
 /// The digest of the 3600-tick fixed run's per-tick hashes, measured on the pre-optimisation
 /// code (420ecfe8 + profiling scopes only) [L this test, 2026-10-18].
-const PINNED_DIGEST: u64 = 0xe5ac_fd39_a20a_ac80;
+// Re-pinned on the merged MP branch (agents 8/9/10/11/12 changed the simulated result on purpose:
+// bot objectives, shared world interactions, shared rounds, bot brains in the hash); agent 13's
+// optimisations were proven result-identical against its own base (0xe5ac_fd39_a20a_ac80).
+const PINNED_DIGEST: u64 = 0x12a0_37e9_0d96_4679;
 
 const TICKS: u32 = 3600;
 

@@ -179,7 +179,7 @@ impl Sim {
         let due: Vec<(u32, usize, u32)> = self.mp_fx.due.iter().copied().filter(|d| d.0 <= frame).collect();
         self.mp_fx.due.retain(|d| d.0 > frame);
         for (_, slot, id) in due {
-            if let Some(p) = self.mp_slot_head(slot) { self.mpfx_play3d(id, p, slot); }
+            if let Some(p) = self.mpfx_slot_head(slot) { self.mpfx_play3d(id, p, slot); }
         }
         // 4. The remote bodies' own movement sounds (jump launch / head bump).
         for (id, pos) in body_sounds { self.mpfx_play3d(id, pos, usize::MAX); }
@@ -225,7 +225,7 @@ impl Sim {
     }
 
     /// A slot's head (the human's eye, the bot's eye), for the sounds that follow the shooter.
-    fn mp_slot_head(&self, slot: usize) -> Option<V3> {
+    fn mpfx_slot_head(&self, slot: usize) -> Option<V3> {
         if slot == self.mp_local_slot { return None; }
         if let Some(b) = self.mp_bonds.get(slot).and_then(|b| b.as_ref()) { return Some(b.head()); }
         self.mp.as_ref()?.bots.iter().find(|b| b.slot == slot).map(|b| b.brain.pos)
@@ -341,7 +341,7 @@ impl Sim {
                 // [M :229-236]. A human victim shows no flesh puff: the body's hit carries material
                 // 0 (`Collide_Jointy` 0x1ec180:125/173) and `Effect_Create` returns [M 0x1ce688:52].
                 // The health itself is the hashed `mp_hp` (the combat already took it).
-                let shooter_at = self.mp_slot_head(shot.shooter).unwrap_or(shot.from);
+                let shooter_at = self.mpfx_slot_head(shot.shooter).unwrap_or(shot.from);
                 let h = &mut self.drones.health;
                 h.dir_bits = nf_game::bullet::PlayerHealth::hit_dir_bits(shooter_at, self.bond.head(), self.bond.yaw);
                 h.flash = (h.flash + (shot.damage * 21.333).min(128.0)).min(255.0);

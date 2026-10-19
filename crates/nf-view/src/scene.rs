@@ -612,10 +612,14 @@ pub struct Sim {
     /// mp-body-look: the MP bodies (slot, scene character index) — `Scene::mp_bodies`, so the
     /// ambient ramp links each body to the cel it stands in like any other drawn object.
     pub mp_body_chars: Vec<(usize, usize)>,
-    /// mp-body-look: per slot, the body's walk-cycle distance (`ANIMOBJ+0xdc`) — `AnimSetUpdate`
-    /// 0x1c0938 plays the locomotion pair distance-driven, accumulating `fwd × 0.5` per tick
-    /// [M, mp-players.md §3]. Draw-only state (never read by the sim, not in the lockstep hash).
-    pub mp_walk: [f32; nf_net::MAX_AGENTS],
+    /// mp-body-anim: per slot, the body's script list and clocks (`nf_game::mp::body_anim` — the
+    /// game's `AnimSetUpdate` 0x1c0938 / `Player_ChangeSubState` 0x190630 list: idle, the
+    /// distance-driven walk/run, the strafe overlay, the stance transitions, the death, the aim
+    /// ease) [M, mp-players.md §3]. Ticked once per sim tick by `advance_mp_anim` from shared
+    /// state; draw-only (never read by the sim, not in the lockstep hash).
+    pub mp_anim: Vec<nf_game::mp::body_anim::MpBodyAnim>,
+    /// The 16 player anim-set descriptors (ACTION.ELF 0x2b91b0) the body clocks pick from [D].
+    pub mp_anim_sets: Option<nf_formats::mpanim::MpAnimSets>,
     /// mp-body-look: per slot, the last nonzero `mp_held` — a timed-out remote is fed `NEUTRAL`
     /// (held 0) every tick, which would blink its body's gun away. Draw-only state.
     pub mp_last_held: [u8; nf_net::MAX_AGENTS],
@@ -4481,21 +4485,75 @@ impl Sim {
         // `Lights_CalcAmbientLight` (0x1cb178) runs per moving object from `control_movement_object_handler`
         // (0x1336f8) — the last step of the tick, before the draw reads obj+0x100..0x102.
         self.ramp_char_ambient();
-        self.advance_mp_walk();
+        // Online the remotes move after this (`step_net_remotes`, `step_net_combat`): their body
+        // clocks tick at the end of `step_net_combat`, on this tick's movement.
+        if self.net_rng.is_none() && self.net_rng_shared.is_none() { self.advance_mp_anim(); }
     }
 
-    /// mp-body-look: each MP body's walk-cycle distance, once per tick (`AnimSetUpdate` 0x1c0938:96
-    /// writes `ANIMOBJ+0xd4 = fwd × set+0x28` and the distance clock adds it [M]). A body not drawn
-    /// (dead, the local slot) restarts at the set-init phase, as the respawn's set rebuild does
-    /// (`MP_ReSpawn` 0x185368 → `PlayerAnimSetInit` [M mp-players.md §3]). Draw-only state.
-    fn advance_mp_walk(&mut self) {
+    /// mp-body-anim: each drawn MP body's script list, once per tick (`nf_game::mp::body_anim`), fed
+    /// from state every machine shares: a human's remote `Bond` (`BLData+0x18`/`+0x10` = `local`,
+    /// the stance, the view pitch), a bot's walking body and its brain's opponent, the held weapon,
+    /// the slot's life. A slot without a drawn body (the local slot, an empty slot) starts over —
+    /// its next body begins at the set init, as the respawn's rebuild does (`MP_ReSpawn` 0x185368
+    /// → `PlayerAnimSetInit` [M mp-players.md §3]). Draw-only state.
+    fn advance_mp_anim(&mut self) {
         if self.mp.is_none() || self.mp_body_chars.is_empty() { return; }
         for slot in 0..nf_net::MAX_AGENTS {
             if self.mp_held[slot] != 0 { self.mp_last_held[slot] = self.mp_held[slot]; }
-            self.mp_walk[slot] = match self.mp_body_state(slot) {
-                Some((_, _, speed)) => self.mp_walk[slot] + speed / 60.0 * MP_WALK_STRIDE,
-                None => MP_WALK_INIT,
+            let Some(inp) = self.mp_body_input(slot) else {
+                if slot < self.mp_anim.len() { self.mp_anim[slot] = nf_game::mp::body_anim::MpBodyAnim::new(); }
+                continue;
             };
+            let (Some(sets), Some(a)) = (self.mp_anim_sets.as_ref(), self.mp_anim.get_mut(slot)) else { continue };
+            let scripts = &self.scripts;
+            let lens = |id: u32| scripts.get(&id).map(|s| (s.length, s.looping));
+            a.tick(sets, &lens, &inp);
+        }
+    }
+
+    /// The body clocks' input for one slot (None = no drawn body): see `advance_mp_anim`.
+    pub fn mp_body_input(&self, slot: usize) -> Option<nf_game::mp::body_anim::MpBodyInput> {
+        let m = self.mp.as_ref()?;
+        self.mp_body_state(slot)?;
+        let weapon = self.mp_body_held(slot);
+        let class = nf_formats::mpanim::weapon_anim_class(&self.weapons, weapon);
+        if slot < m.settings.human_count as usize {
+            let b = self.mp_bonds.get(slot)?.as_ref()?;
+            // The aim point is head + aim·256 (`Player_GetAimingPoint` 0x1a4a98, the MP player's
+            // `AnimObjectSetAiming` target BLData+0x60 [M 0x190d88:122]): body-relative, the view
+            // pitch (the body faces the view yaw — no twist).
+            Some(nf_game::mp::body_anim::MpBodyInput {
+                alive: self.mp_dead_ticks[slot] == 0, weapon, class, crouch: b.crouched,
+                fwd: b.local[1], strafe: b.local[0], aim: Some([0.0, b.pitch * std::f32::consts::FRAC_PI_2]),
+            })
+        } else {
+            let bot = m.bots.iter().find(|b| b.slot == slot)?;
+            let body = &bot.brain.body;
+            // A bot aims at its opponent (the drone tracking's `AnimObjectSetAiming` on the target,
+            // `NDrone2_DoTracking` 0x1479d8:53 [M]): the target's head from the bot's head, relative
+            // to the drawn body yaw.
+            let aim = bot.brain.vars.opponent.and_then(|o| self.mp_slot_head(o)).map(|t| {
+                let e = bot.brain.pos;
+                let (dx, dy, dz) = (t[0] - e[0], t[1] - e[1], t[2] - e[2]);
+                let h = (dx * dx + dz * dz).sqrt().max(1e-3);
+                let yaw_to = dx.atan2(dz);
+                [nf_game::trig::angle_difference(body.yaw, yaw_to), dy.atan2(h)]
+            });
+            Some(nf_game::mp::body_anim::MpBodyInput {
+                alive: !bot.dead, weapon, class, crouch: body.crouched,
+                fwd: body.local[1], strafe: body.local[0], aim,
+            })
+        }
+    }
+
+    /// A slot's head position (a human's `Bond::head`, a bot's `brain.pos`), None = no body.
+    fn mp_slot_head(&self, slot: usize) -> Option<[f32; 3]> {
+        let m = self.mp.as_ref()?;
+        if slot < m.settings.human_count as usize {
+            let b = if slot == self.mp_local_slot { Some(&self.bond) } else { self.mp_bonds.get(slot)?.as_ref() }?;
+            Some(b.head())
+        } else {
+            m.bots.iter().find(|b| b.slot == slot).map(|b| b.brain.pos)
         }
     }
 
@@ -5657,6 +5715,73 @@ const DEBRIS_SLOTS: usize = 128;
 
 /// The drone's height state after `DroneAnim_PreTransCallback` (0x13b490): `Drone+0xA0` = hip height − 0.02, at least
 /// 0.2 (it starts at 1.0 and keeps its value while the hip height is 0).
+/// mp-body-anim: the upper-body aim, `AnimObjectAimAt` 0x1bfe58 as `psiBuildMatrixPalette` 0x111498
+/// runs it on bone 2 (object space, before the object matrix). The game's geometry [M]: axis A =
+/// unit(bone 2 − its parent) (the spine), the gun direction G = the weapon datum's −X row, axis B =
+/// unit(A × G); the pitch is the rotation about B that brings the gun line onto the aim point, the
+/// twist (drone-class objects only — the bots) the rotation about A; clamps: a class-3 player
+/// [−π/2, 1.2708] on the pitch (positive = down about B) and no twist, a drone ±0.9 on both; the
+/// rotation `q_A(twist) ⊗ q_B(pitch)` premultiplies bone 2's world rotation, so bone 2 and its whole
+/// subtree turn about bone 2's position. [S]: the aim point is far (head + aim·256 for a player) so
+/// the gun is turned PARALLEL to the target direction — the game's line/sphere intersection reduces
+/// to that at range; `aim` = the eased body-relative (twist, pitch) of the target direction, pitch
+/// positive up. Returns the applied (pitch about B, twist about A).
+pub fn mp_body_aim(world: &mut [Mat4], skin: &nf_formats::character::Skin, gun: Option<(usize, Mat4)>, aim: [f32; 2], drone: bool) -> Option<(f32, f32)> {
+    if world.len() <= 2 { return None; }
+    let (gbone, glocal) = gun.filter(|(b, _)| *b < world.len())?;
+    let parent = skin.parent(2)?;
+    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let unit = |a: [f32; 3]| { let l = dot(a, a).sqrt(); if l > 1e-6 { Some([a[0] / l, a[1] / l, a[2] / l]) } else { None } };
+    let t = |m: &Mat4| [m[3][0], m[3][1], m[3][2]];
+    let axis_a = unit(sub(t(&world[2]), t(&world[parent])))?;
+    let gw = nf_formats::anim::mul(&glocal, &world[gbone]);
+    let g = unit([-gw[0][0], -gw[0][1], -gw[0][2]])?;
+    let axis_b = unit(cross(axis_a, g))?;
+    // The target direction in object space (forward +Z, left +X — the object matrix's frame).
+    let (st, ct) = aim[0].sin_cos();
+    let (sp, cp) = aim[1].sin_cos();
+    let target = [st * cp, sp, ct * cp];
+    // The signed rotation about `axis` taking `from` onto `to`, both projected off the axis.
+    let signed = |axis: [f32; 3], from: [f32; 3], to: [f32; 3]| -> f32 {
+        let kf = dot(from, axis);
+        let kt = dot(to, axis);
+        let pf = sub(from, [axis[0] * kf, axis[1] * kf, axis[2] * kf]);
+        let pt = sub(to, [axis[0] * kt, axis[1] * kt, axis[2] * kt]);
+        dot(cross(pf, pt), axis).atan2(dot(pf, pt))
+    };
+    let (pitch, twist) = if drone {
+        (signed(axis_b, g, target).clamp(-0.9, 0.9), signed(axis_a, g, target).clamp(-0.9, 0.9))
+    } else {
+        (signed(axis_b, g, target).clamp(-std::f32::consts::FRAC_PI_2, f32::from_bits(0x3fa2_a974)), 0.0)
+    };
+    // Row-vector rotation (v' = v·Rᵀ for the column rotation R about `k` by θ, right-handed).
+    let rot_row = |k: [f32; 3], th: f32| -> Mat4 {
+        let (sn, cs) = th.sin_cos();
+        let v = 1.0 - cs;
+        let r = [
+            [cs + k[0] * k[0] * v, k[0] * k[1] * v - k[2] * sn, k[0] * k[2] * v + k[1] * sn],
+            [k[1] * k[0] * v + k[2] * sn, cs + k[1] * k[1] * v, k[1] * k[2] * v - k[0] * sn],
+            [k[2] * k[0] * v - k[1] * sn, k[2] * k[1] * v + k[0] * sn, cs + k[2] * k[2] * v],
+        ];
+        [[r[0][0], r[1][0], r[2][0], 0.0], [r[0][1], r[1][1], r[2][1], 0.0], [r[0][2], r[1][2], r[2][2], 0.0], [0.0, 0.0, 0.0, 1.0]]
+    };
+    // q_A ⊗ q_B: the pitch applies first, then the twist.
+    let rot = nf_formats::anim::mul(&rot_row(axis_b, pitch), &rot_row(axis_a, twist));
+    let pivot = t(&world[2]);
+    let below = |b: usize| { let mut p = Some(b); while let Some(x) = p { if x == 2 { return true; } p = skin.parent(x); } false };
+    for b in 0..world.len() {
+        if !below(b) { continue; }
+        let mut w = world[b];
+        for k in 0..3 { w[3][k] -= pivot[k]; }
+        let mut r = nf_formats::anim::mul(&w, &rot);
+        for k in 0..3 { r[3][k] += pivot[k]; }
+        world[b] = r;
+    }
+    Some((pitch, twist))
+}
+
 fn drone_height(hip: f32) -> f32 {
     if hip == 0.0 { 1.0 } else { (hip - 0.02).max(0.2) }
 }
@@ -7310,7 +7435,7 @@ impl Scene {
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), mp_walk: [MP_WALK_INIT; nf_net::MAX_AGENTS], mp_last_held: [2; nf_net::MAX_AGENTS], ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), mp_last_held: [2; nf_net::MAX_AGENTS], ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],
@@ -7463,9 +7588,12 @@ impl Scene {
                 // render showed the intro room with NO characters at all.
                 return Some((anim::skin_matrices(&world, &c.skin), world, c.matrix));
             }
-            // MP bodies: the guards' movement scripts (idle / walk / run by speed) at the slot's
-            // position and yaw [S stand-in until 700v7 ports the player anim set, PlayerAnimSetInit*
-            // 0x18fcd8 — the game's MP bodies run the PLAYER set, not the drone tables].
+            // MP bodies (mp-body-anim): the PLAYER anim set the game's MP body runs, from the slot's
+            // script list (`Sim::mp_anim`, ticked by `advance_mp_anim` — idle, the distance-driven
+            // walk/run, the strafe overlay, the stance transitions, the death [M AnimSetUpdate
+            // 0x1c0938, Player_ChangeSubState 0x190630]) composed as `AnimFrameResolve` blends, then
+            // the upper-body aim on bone 2 (`AnimObjectAimAt` 0x1bfe58). Fallback when the arena lacks
+            // the player scripts: the drone set by speed [S].
             if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
                 let _pm = nf_game::prof::scope("fs: mp body (total)");
                 let s = self.sim.as_ref()?;
@@ -7489,66 +7617,49 @@ impl Scene {
                     return Some((anim::skin_matrices(&world, &c.skin), world, m));
                 }
                 let (pos, yaw, speed) = s.mp_body_state(slot)?;
-                // The PLAYER anim set the game's MP body runs, through 700v7's port: the set by the
-                // held weapon's class and the stance (`PlayerAnimSetInitNormal`/`InitCrouch`
-                // 0x18fcd8/0x18fea0), the idle/walk pick by forward speed (`AnimSetUpdate`
-                // 0x1c0938) — `nf_formats::mpanim::mp_body_pose` [M, D the descriptors].
-                let held = s.mp_body_held(slot);
-                let class = nf_formats::mpanim::weapon_anim_class(&s.weapons, held);
-                let substate = s.mp_bonds.get(slot).and_then(|b| b.as_ref()).map_or(0, |b| b.substate);
-                let fwd = speed / 60.0;
-                let body_st = nf_formats::mpanim::MpBodyState {
-                    mp: true, weapon: held, substate, fwd, strafe: 0.0,
-                    phase: MP_WALK_INIT, hold: 0, one_shot_time: 0.0, water_level: -9.9,
-                };
-                let posed = self.mp_anim_sets.as_ref().map(|sets| (nf_formats::mpanim::mp_body_pose(sets, class, &body_st), sets.set(class, substate == 4)));
-                let pick = posed.map_or(0, |(p, _)| p.script);
-                let player_script = Some(pick).filter(|h| s.scripts.contains_key(h));
-                let st = if speed < 0.5 { nf_game::drone::anim_state::STAND_IDLE } else if speed < 4.5 { nf_game::drone::anim_state::WALK } else { nf_game::drone::anim_state::RUN };
-                let danim = s.tables.danim_for_state(st, 0);
-                // Fallback when the arena lacks the player script: the drone set [S].
-                let script = player_script.or_else(|| danim.filter(|&d| d >= 0).and_then(|d| (0..27u16).filter_map(|set| s.tables.script_for(d as u16, set)).find(|h| s.scripts.contains_key(h))));
-                if s.drones.frame % 60 == 0 && env_flag(&ENV_MPBODY_DBG, "NF_MPBODY_DBG") {
-                    eprintln!("[mpbody] slot {slot} held {} raw {:?} pos {pos:?} yaw {yaw:.2} speed {speed:.2} state {st:#x} danim {danim:?} script {script:x?} has {}", s.mp_body_held(slot), s.mp_held.get(slot), script.is_some_and(|h| s.scripts.contains_key(&h)));
-                }
-                let script = script?;
-                // mp-body-look: the walk/run pair is distance-driven, not clock-driven. `AnimSetUpdate`
-                // 0x1c0938 appends the walk with flags |= 0x8d000000 and `+0xb4 = 1` (the distance-table
-                // clock, `AnimDistanceTableDistanceToFrame2` 0x1c4270, fed `ANIMOBJ+0xd4 = fwd × 0.5`),
-                // the run with `+0xb4 = 2` synced to the walk (`+0x4c`) at crossfade weight t (`+0x88`)
-                // [M 0x1c0938:160-190; mp-players.md §3]. The old clock read (`time_at(frame)` on these
-                // NON-looping scripts — 060009de is 86 frames, looping 0 [D]) froze every moving body in
-                // the walk's last frame 1.4 s into the match (renders before_bot2_f200/f215: same pose).
-                let walking = posed.is_some_and(|(p, set)| p.blend > 0.0 && p.script == script && set.walk == script);
-                // mp-perf-16: the samples and the walk tables come through the draw memo — the
-                // same values (`PoseSampleCache`, a table is a pure function of its sequence).
-                let mut memo = s.mp_draw_cache.borrow_mut();
-                let (poses, tables) = &mut *memo;
-                let mut local = if walking {
-                    let (p, set) = posed.unwrap();
-                    let walk_q = s.scripts.get(&script)?.sequences().next().and_then(|(_, _, q)| s.seqs.get(&q))?;
-                    let table = tables.entry(walk_q.hashcode).or_insert_with(|| nf_game::anim::DistanceTable::build(walk_q, 4, true)).as_ref()?;
-                    let mut w = s.mp_walk.get(slot).copied().unwrap_or(MP_WALK_INIT);
-                    let frame_a = table.distance_to_frame(&mut w, 0.0, true).max(1.0);
-                    let mut pose = nf_game::anim::script_pose_drone_cached(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, frame_a, poses)?;
-                    // The run, synced to the walk's normalised time (mode 2: Δ = (Mt−1)/(Ml−1) − (t−1)/(l−1)).
-                    let len_a = s.scripts.get(&script)?.length.max(2) as f32;
-                    if let Some(len_b) = s.scripts.get(&set.run).map(|r| r.length.max(2) as f32).filter(|_| set.run != script) {
-                        let frame_b = 1.0 + (frame_a - 1.0) / (len_a - 1.0) * (len_b - 1.0);
-                        if let Some(run) = nf_game::anim::script_pose_drone_cached(&s.scripts, &s.seqs, &c.skeleton, &c.skin, set.run, frame_b, poses) {
-                            nf_game::anim::blend(&mut pose, &run, p.blend.clamp(0.0, 1.0));
-                        }
+                let local = match s.mp_body_local_pose(slot, &c.skeleton, &c.skin) {
+                    Some(p) => p,
+                    None => {
+                        let st = if speed < 0.5 { nf_game::drone::anim_state::STAND_IDLE } else if speed < 4.5 { nf_game::drone::anim_state::WALK } else { nf_game::drone::anim_state::RUN };
+                        let danim = s.tables.danim_for_state(st, 0);
+                        let script = danim.filter(|&d| d >= 0).and_then(|d| (0..27u16).filter_map(|set| s.tables.script_for(d as u16, set)).find(|h| s.scripts.contains_key(h)))?;
+                        let time = 1.0 + s.scripts.get(&script)?.time_at(s.drones.frame as f32);
+                        nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time)?
                     }
-                    pose
-                } else {
-                    let time = 1.0 + s.scripts.get(&script)?.time_at(s.drones.frame as f32);
-                    nf_game::anim::script_pose_drone_cached(&s.scripts, &s.seqs, &c.skeleton, &c.skin, script, time, poses)?
                 };
-                drop(memo);
+                if std::env::var_os("NF_MPBODY_DBG").is_some() && s.drones.frame % 60 == 0 {
+                    let a = s.mp_anim.get(slot);
+                    eprintln!("[mpbody] slot {slot} pos {pos:?} yaw {yaw:.2} speed {speed:.2} layers {:?} phase {:?} aim {:?}",
+                        a.map(|a| a.layers.iter().map(|l| (l.kind, l.time, l.weight())).collect::<Vec<_>>()), a.map(|a| a.phase), a.map(|a| a.aim));
+                }
+                let mut local = local;
                 let hip = local.first().map_or(0.0, |r| r.0[1]);
                 if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
-                let world = anim::world_pose(&local, &c.skin);
-                let m = nf_formats::placement::object_matrix([0.0, yaw, 0.0], [pos[0], pos[1] - 1.0 + drone_height(hip), pos[2]]);
+                let mut world = anim::world_pose(&local, &c.skin);
+                if let Some(a) = s.mp_anim.get(slot).filter(|a| !a.dead) {
+                    let held = s.mp_body_held(slot);
+                    // `AnimObjectAimAt` returns for an MP weapon of class 0 (fists, grenades, gadgets)
+                    // and without a weapon datum [M 0x1bfe58: AnimDatumGetWeaponInfo < 0].
+                    if nf_formats::mpanim::weapon_anim_class(&s.weapons, held) != 0 {
+                        // The gun line: `AnimGetBoneWorldTrans2(obj, weapon datum, 3 or 1)` — the body
+                        // skin's datum id + 3 when it exists (`AnimDatumGetIndex`), else id + 1 (the
+                        // muzzle, as `DroneWeap_FireWeapon`'s lookup) — its −X row [M 0x1bfe58].
+                        let gun = s.weapons.third_person(held).and_then(|(_, id)| {
+                            if id == 0xff { return None; }
+                            let id = id as u32;
+                            let find = |k: u32| c.skin.datums.iter().find(|d| d.id == k && d.bone >= 0);
+                            find(id + 3).or_else(|| find(id + 1)).map(|d| (d.bone as usize, anim::quat_trans_to_mat(d.q, d.t)))
+                        });
+                        // Humans are class-3 player objects (pitch only, [−π/2, 1.2708]); the bots are
+                        // the game's class-0x11 drones (twist and pitch, ±0.9) [M 0x1bfe58 uStack_16c].
+                        let is_bot = s.mp.as_ref().is_some_and(|m| slot >= m.settings.human_count as usize);
+                        mp_body_aim(&mut world, &c.skin, gun, a.aim, is_bot);
+                    }
+                }
+                // The feet: the body root (`obj+0x30`) stands `cc` above them (the crouched capsule's
+                // 0.55, standing 1.0347); the skin's hip rides on the feet as before.
+                let feet = pos[1] - s.mp_body_cc(slot);
+                let m = nf_formats::placement::object_matrix([0.0, yaw, 0.0], [pos[0], feet + nf_game::player::ROOT_HEIGHT - 1.0 + drone_height(hip), pos[2]]);
                 return Some((anim::skin_matrices(&world, &c.skin), world, m));
             }
             let view = self.sim.as_ref().and_then(|s| self.view_models.get(&s.gun.weapon).filter(|&&v| v == ci)).and(self.sim.as_ref());
@@ -9664,7 +9775,9 @@ impl Sim {
         let humans = m.settings.human_count as usize;
         if slot < humans {
             if slot >= nf_net::MAX_AGENTS { return None; }
-            if slot == s.mp_local_slot || s.mp_dead_ticks[slot] > 0 { return None; }
+            // A dead slot's body stays drawn where it fell (the death script, mp-body-anim) until the
+            // respawn moves it (`step_net_combat`).
+            if slot == s.mp_local_slot { return None; }
             let b = s.mp_bonds[slot].as_ref()?;
             Some((b.pos, b.yaw, s.mp_body_speed[slot]))
         } else {
@@ -9673,8 +9786,64 @@ impl Sim {
             if bot.dead { return None; }
             // The bot's position is its eye (BOT_EYE above the feet); the body draws from the feet.
             let p = bot.brain.pos;
-            Some(([p[0], p[1] - BOT_EYE, p[2]], bot.brain.yaw, s.mp_body_speed[slot]))
+            // The draw's yaw is Bond's convention (forward = (sin, cos), `object_matrix`'s frame);
+            // the brain's is the drone atan2(dz, dx) one (forward = (cos, sin)) — its walking body
+            // carries HALF_PI − yaw (`BotBrain::walk_body`). Drawing the brain yaw mirrored every
+            // bot's facing about the diagonal (a bot walking +x faced +z).
+            Some(([p[0], p[1] - BOT_EYE, p[2]], nf_game::trig::HALF_PI - bot.brain.yaw, s.mp_body_speed[slot]))
         }
+    }
+
+    /// The body root's height above its feet (`obj+0xCC`: standing `ROOT_HEIGHT`, crouched 0.55) —
+    /// a human's remote `Bond::cc`, a bot's walking body's.
+    pub fn mp_body_cc(&self, slot: usize) -> f32 {
+        let standing = nf_game::player::ROOT_HEIGHT;
+        let Some(m) = self.mp.as_ref() else { return standing };
+        if slot < m.settings.human_count as usize {
+            self.mp_bonds.get(slot).and_then(|b| b.as_ref()).map_or(standing, |b| b.cc)
+        } else {
+            m.bots.iter().find(|b| b.slot == slot).map_or(standing, |b| if b.brain.body.cc > 0.0 { b.brain.body.cc } else { standing })
+        }
+    }
+
+    /// mp-body-anim: one MP body's local pose from its script list (`mp_anim[slot]`), composed as
+    /// `AnimFrameResolve` 0x1c35f8 blends — the layers in stamp order, `result = first`, then
+    /// `result = blend(result, next, 1 − weight(previous))`. A walk layer's frame comes from the walk
+    /// sequence's z-only distance table at the body's walk distance (`AnimDistanceTableDistanceToFrame2`
+    /// 0x1c4270; a negative step plays it backwards) and its run is synced to it (mode 2) at the run
+    /// weight. None when the list is empty or a script is missing (the caller's fallback).
+    pub fn mp_body_local_pose(&self, slot: usize, skel: &nf_formats::character::Skeleton, skin: &nf_formats::character::Skin) -> Option<nf_game::anim::Pose> {
+        use nf_game::mp::body_anim::LayerKind;
+        let a = self.mp_anim.get(slot)?;
+        if a.layers.is_empty() { return None; }
+        let factors = a.blend_factors();
+        let mut out: Option<nf_game::anim::Pose> = None;
+        for (l, &f) in a.layers.iter().zip(&factors) {
+            let pose = match l.kind {
+                LayerKind::Idle(id) | LayerKind::Strafe(id) | LayerKind::OneShot(id) =>
+                    nf_game::anim::script_pose_drone(&self.scripts, &self.seqs, skel, skin, id, l.time)?,
+                LayerKind::Walk { walk, run, run_weight } => {
+                    let walk_q = self.scripts.get(&walk)?.sequences().next().and_then(|(_, _, q)| self.seqs.get(&q))?;
+                    let table = nf_game::anim::DistanceTable::build(walk_q, 4, true)?;
+                    let mut w = a.phase.rem_euclid(table.total.max(1e-3));
+                    let frame_a = table.distance_to_frame(&mut w, 0.0, true).max(1.0);
+                    let mut pose = nf_game::anim::script_pose_drone(&self.scripts, &self.seqs, skel, skin, walk, frame_a)?;
+                    let len_a = self.scripts.get(&walk)?.length.max(2) as f32;
+                    if let Some(len_b) = self.scripts.get(&run).map(|r| r.length.max(2) as f32).filter(|_| run != walk) {
+                        let frame_b = 1.0 + (frame_a - 1.0) / (len_a - 1.0) * (len_b - 1.0);
+                        if let Some(rp) = nf_game::anim::script_pose_drone(&self.scripts, &self.seqs, skel, skin, run, frame_b) {
+                            nf_game::anim::blend(&mut pose, &rp, run_weight.clamp(0.0, 1.0));
+                        }
+                    }
+                    pose
+                }
+            };
+            match out.as_mut() {
+                None => out = Some(pose),
+                Some(r) => nf_game::anim::blend(r, &pose, f.clamp(0.0, 1.0)),
+            }
+        }
+        out
     }
 
     /// The weapon an MP body holds in its hand (the third-person mesh `weapon_data[w]+0x80` on datum
@@ -9900,6 +10069,8 @@ impl Sim {
         self.drones.health.armour = self.mp_armour[local];
         // mp-remote-fx: this tick's shot effects / sounds (draw/audio only, after every hashed write).
         self.flush_mp_fx();
+        // mp-body-anim: the drawn bodies' clocks on this tick's final movement and life (draw-only).
+        self.advance_mp_anim();
     }
 
     /// mp-join-in-progress: create the late joiner's agent at the announced join tick — the

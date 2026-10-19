@@ -37,6 +37,10 @@ use crate::world::CollisionWorld;
 /// the sim calls it yet; the dispatch is behind the `mp-bots` feature.
 pub mod bots;
 
+/// The third-person MP body's animation clocks (mp-body-anim; draw-only, never hashed): the game's
+/// per-body script list from `AnimSetUpdate` 0x1c0938 / `Player_ChangeSubState` 0x190630.
+pub mod body_anim;
+
 /// The debriefing data builder (mp-debriefing-data2, ported from 621): `MpMatch::get_mp_score` /
 /// `MpMatch::debriefing` — the `P_MPDEBRIEFING_Handler` 0x212198 msg-0x4c rows, ranks and result
 /// line. See `docs/systems/mp-debriefing.md` §4.
