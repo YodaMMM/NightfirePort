@@ -99,6 +99,7 @@ pub fn run() -> Result<()> {
     if let Some(dir) = update::install_dir() {
         // v0.1.0 shipped the game as a second exe; the game is now this program (`--game`).
         let _ = std::fs::remove_file(dir.join(platform::LEGACY_GAME_EXE));
+        if update::current_version().is_some() { update::write_notices(); }
         std::thread::spawn(move || for _ in 0..20 { update::cleanup_old(&dir); std::thread::sleep(Duration::from_millis(500)); });
     }
     let update_rx = (update::current_version().is_some() && std::env::var_os("NF_NO_UPDATE").is_none()).then(|| {
