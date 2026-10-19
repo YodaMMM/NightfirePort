@@ -5,7 +5,7 @@
 //! [L]. The port drew radius 768 (the script scale applied twice — `keys` already returns key scale
 //! × SCRIPTINFO+0x94 [M Script_GetInterp 0x1da158:177]) and (134, 197, 255) (the key bytes read in
 //! order — `Script_GetInterp` packs +0x26 << 24 [M 0x1da158:174] and `Script_Interp` case 6 stores
-//! bits 24..31 at +0x44 [M 0x1d9a08:244-246]).
+//! bits 24..31 at +0x44 [M 0x1d9a08:248-250]).
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
@@ -14,7 +14,7 @@ fn the_rocket_blast_light_has_the_games_radius_and_colour() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000008.bin", false).expect("load 07000008");
     // The launcher's blast: `Explode_Create` plays 0x06000052 at scale = weapon_data[0x2d]+0x08
-    // (the 0x4 arm's f12 [M disasm 0x12ce1c-0x12ce2c]).
+    // (the 0x4 arm's f12 — [S] unverified: disasm-only cite 0x12ce1c-0x12ce2c, no .c lines to check).
     let scale = {
         let sim = scene.sim.as_ref().unwrap();
         let r = sim.weapons.records.get(0x2d).expect("the launcher record");

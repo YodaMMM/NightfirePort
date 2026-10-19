@@ -399,7 +399,7 @@ fn back_out_of_every_page_and_walk_forward_again_team() {
     to_scenario(&mut fe);
     // The scenario page's Back returns to Main [M P_MPSCENARIO 0x217348:28-30 — the 99 arm is
     // Manager_SendMessage(0x44, 0x40000002, 0), with no cursor read anywhere in the handler;
-    // msg 99 arrives from the manager's pop [M 0x21c858:588]]. The cursor 1 is the port's [S —
+    // msg 99 arrives from the manager's pop [M 0x21c858:604-608]]. The cursor 1 is the port's [S —
     // P_MAIN's 0x4c writes only the write-only DAT_002a3cce (0x20a7b0:39, no reader in the
     // whole .text); nothing in the decompile pins Main's landing row].
     assert!(act(&mut fe, Action::Back), "scenario Back → Main");

@@ -245,14 +245,14 @@ fn back_walks_every_single_player_step_to_the_title() {
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::MissionSelect);
     // fe-audit 1019: the list's Back is ROUTE-DEPENDENT. 0x5f runs the page's msg-99 SCRIPT
-    // first [M 0x21c858:588-592] — the disc's front-end def binds no msg-99 script on any page
+    // first [M 0x21c858:604-608] — the disc's front-end def binds no msg-99 script on any page
     // (every page's only SCRIPT is 0x2000000f on the 0x4c-open slot 0 [D the 08000002 tag
     // stream]) — so the pushed SP chain takes the manager's default pop: reopen the wheel with
-    // its saved cursor [M 0x21c858:592-600]. (The empty-stack results route is P_NFMAP's 99 arm
+    // its saved cursor [M 0x21c858:592-598]. (The empty-stack results route is P_NFMAP's 99 arm
     // → MAIN [M 0x20b608:67-68] — pinned in a_completed_mission_routes… below.)
     assert!(act(&mut fe, Action::Back));
-    assert_eq!(fe.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-600]");
-    assert_eq!(fe.cursor, 0, "the wheel re-opens on the chosen difficulty (Operative) [M 0x21c858:600]");
+    assert_eq!(fe.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-598]");
+    assert_eq!(fe.cursor, 0, "the wheel re-opens on the chosen difficulty (Operative) [M 0x21c858:598]");
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::Codename);
     assert_eq!(fe.cursor, 0);
@@ -386,11 +386,11 @@ fn each_difficulty_reaches_the_mission_list() {
         // C_SBCNOPTIONS 0x213528:66 / P_CNNAME 0x213790:71 / C_KEYBOARD 0x213a98:61, so the
         // value depends on which menus ran — pushed it [M the push rule 0x21c858 case 0x44;
         // C_SBNFDFCTY 0x216ca8:10-17 only calls Menu_ChangePageCloseIris], and the pop
-        // reopens the saved page AND cursor [M 0x21c858:592-600]. (No msg-99 script stands on
+        // reopens the saved page AND cursor [M 0x21c858:592-598]. (No msg-99 script stands on
         // the disc [D the 08000002 tag stream] — the 99 arm only fires on an empty stack.)
         assert!(act(&mut fe, Action::Back));
-        assert_eq!(fe.page, Page::Difficulty, "the pop re-opens the wheel [M 0x21c858:592-600]");
-        assert_eq!(fe.cursor, d, "Back re-opens the wheel on the chosen row [M 0x21c858:600]");
+        assert_eq!(fe.page, Page::Difficulty, "the pop re-opens the wheel [M 0x21c858:592-598]");
+        assert_eq!(fe.cursor, d, "Back re-opens the wheel on the chosen row [M 0x21c858:598]");
     }
 }
 

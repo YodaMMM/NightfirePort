@@ -10,7 +10,7 @@
 //! Sisters (each can fail): the gate REFUSES a fire that is not aimed at a decryptor-kind lock
 //! (no scan, no channel — the pre-fix symptom: the decryptor did nothing at all); a mid-scan
 //! release decays the scan −4/tick to a full reset [M :327-344]; a laser-kind (record 0 == 1)
-//! lock ignores the decryptor entirely [M the gate's `== 0 || == 2`, :562].
+//! lock ignores the decryptor entirely [M the gate's `== 0 || == 2`, :558].
 //!
 //! Evidence tags: [M] decompile, [D] disc bytes, [L] EE snapshot. The teleport to the lock is the
 //! walkreal's documented stand-in (the operation itself runs through the real aim + fire input).

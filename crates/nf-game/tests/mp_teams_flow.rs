@@ -20,7 +20,7 @@ fn join_picked(m: &mut MpMatch, slot: usize, team: u32) {
 fn team_match() -> MpMatch {
     let mut s = MpSettings::deathmatch(0x07000011);
     s.scenario = scenario::TEAM_DEATHMATCH;
-    s.friendly_fire = 0; // the couch default: same-team bullet hits block [M 0x1857c0:43-57]
+    s.friendly_fire = 0; // [S] unverified as a couch default: 0x1857c0:43-44 only shows the gate (MPSettings._408_4_ == 0 → block); no decompile line sets the default — the port's choice
     let mut m = MpMatch::init(s);
     m.start(&mut Rng::new(1));
     m
@@ -105,8 +105,7 @@ fn the_spawn_table_splits_per_the_picked_team() {
 }
 
 /// Sister: the picks survive the match's slot records — the HUD/debrief read the same
-/// `players[slot].team` (the score rows and the team result line) [M mp-hud-data.md,
-/// mp-debriefing.md; the game reads `MPSettings + slot·0x30 + 0x20` everywhere].
+/// `players[slot].team` (the score rows and the team result line) [M MP_PlayerKilled 0x188f70:158 + MP_RegisterBulletHit 0x1857c0:37 — the game reads the +0x20 team field].
 #[test]
 fn the_picks_reach_the_hud_and_debrief_view() {
     let mut rng = Rng::new(11);

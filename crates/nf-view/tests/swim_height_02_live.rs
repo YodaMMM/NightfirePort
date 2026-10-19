@@ -37,7 +37,7 @@ fn load() -> Sim {
 }
 
 /// One step through the real path; the level's scripts grab Bond into cut-scenes within seconds,
-/// so each tick carries the game's own skip action like the walkreal walker [M nis.rs].
+/// so each tick carries the game's own skip action like the walkreal walker — [S] unverified (nis.rs is the port's skip plumbing; no decompile line pinned here).
 fn step(sim: &mut Sim, input: nf_game::player::Input) {
     if sim.disabled { sim.drones.scripts.skip_request = true; }
     sim.step_bond(input, false, false, false);

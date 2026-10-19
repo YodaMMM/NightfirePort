@@ -6,7 +6,7 @@
 //! - the 13 TouchOnce plates by walk-in (mask 8 [D]), incl. the reveal plate #277 (ch 0x4d);
 //! - the −52 landing doors #110/#111 by the script's unlock (ch 0x40 at t1610 [D keys]) and
 //!   Door_Update's lock rising edge [M 0x1363c8], and a lower unlocked pair by the rider's
-//!   straddle walk-in [M Door_Update's straddle arm, ported door.rs straddle_walkin];
+//!   straddle walk-in [M Door_Update 0x1363c8 — the Door_Activate(glb_players) arms at :72/:84/:105/:149; which arm is the straddle walk-in is the port's straddle_walkin — [S] unverified];
 //! - the two Shooters by their watch channels [M Shooter_Update 0x17d0c0];
 //! - the hint marker by the car's pass [M Hint_Update 0x1b3380];
 //! - the floor spawner by its floor plate's channel [M DroneSpawner_Control 0x137e68];
@@ -85,7 +85,7 @@ fn the_floor_plates_fire_as_the_lift_descends() {
     {
         let sim = r.w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x4d),
-            "the reveal plate #277 fires ch 0x4d as the car descends through its volume [D #277; M mask 8 walk-in]");
+            "the reveal plate #277 fires ch 0x4d as the car descends through its volume [D #277; M Trigger_Hit 0x1b1fc8:56 (the 0x18 player|drone mask gate) + Trigger_Update 0x1b1a78:72-74 (case 1)]");
     }
     for _ in 0..700 { r.step(Input::default()); } // t 1000, car ≈ y0 − 27.6
     {
@@ -97,7 +97,7 @@ fn the_floor_plates_fire_as_the_lift_descends() {
     {
         let sim = r.w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x17),
-            "the car's pass fires #234's ch 0x17 [M Trigger_TouchOnce through the ride]");
+            "the car's pass fires #234's ch 0x17 [M Trigger_Update 0x1b1a78:72-74 + :83-87 (the per-frame hit write and time stamp)]");
         assert!(sim.drones.channels.on(0x3d),
             "the first descent plate #264 (ch 0x3d, y −29.96) fired earlier on the same ride [D #264]");
     }

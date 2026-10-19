@@ -616,13 +616,13 @@ fn clicks_never_change_what_they_should_not() {
     // C_SBCNOPTIONS 0x213528:66 / P_CNNAME 0x213790:71 / C_KEYBOARD 0x213a98:61, so the
     // value depends on which menus ran; C_SBNFDFCTY 0x216ca8:10-17 only calls
     // Menu_ChangePageCloseIris + the push rule 0x21c858 case 0x44]), so Back is the default
-    // pop — the wheel, cursor restored [M 0x21c858:592-600]. (No msg-99 script stands on the
+    // pop — the wheel, cursor restored [M 0x21c858:592-598]. (No msg-99 script stands on the
     // disc [D the 08000002 tag stream]; the empty-stack arm → MAIN is the results route, pinned
     // in menu_sp_e2e.)
     let mut g = FrontEnd::new();
     to_missions(&mut g);
     assert!(act(&mut g, Action::Back));
-    assert_eq!(g.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-600]");
+    assert_eq!(g.page, Page::Difficulty, "the pushed chain pops to the wheel [M 0x21c858:592-598]");
     for _ in 0..60 {
         let (x, y) = (rng.f32_in(0.0..640.0), rng.f32_in(0.0..480.0));
         g.mouse_move(x, y);
