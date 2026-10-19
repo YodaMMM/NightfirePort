@@ -65,6 +65,15 @@ fn walk_tower_a_start_to_finish() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000009.bin", false).expect("load 07000009"));
     w.top_up_health = true;
+    // The guards are HELD for this walk (the renderer's --hold-npcs dev hold [M lib.rs:5511]):
+    // the walk's job is the interactive chain — the arrival plate, the panel SP, the muxes, the
+    // lift doors, the exit — not the guard AI. With the alarm chain working
+    // (security-room-alarm-09: CivilianPatrol 0x15d610 → Attack → FirstSightState 0x147c48 prop
+    // 0x1a → CivilianChallenge 0x162558 → RunToAlarm → PressAlarm) the patrolling guards catch a
+    // scripted walker (the east-stair pinch at 3.5u; the stair head is permanently patrolled) —
+    // the game is a stealth level and a live-guard walk is a stealth exercise, not a chain test.
+    // The alarm coverage lives in security_alarm_09_live.rs.
+    w.scene.sim.as_mut().unwrap().drones.hold_npcs = true;
     w.wait(10);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -219,6 +228,7 @@ fn walk_tower_a_start_to_finish() {
         w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
     for f in &w.report.falls { eprintln!("[09] fall: {f}"); }
 }
+
 
 fn elevator_sp_state(sim: &nf_view::scene::Sim) -> u16 {
     sim.drones.scripts.players.iter().find(|p| p.out == 0x39).map(|p| p.state).unwrap_or(0xff)

@@ -209,6 +209,10 @@ pub mod state {
     pub const CIVILIAN_HIDING: u8 = 0x13;
     pub const CIVILIAN_PATROL: u8 = 0x14;
     pub const CIVILIAN_MISSION: u8 = 0x16;
+    /// `NDrone2_DSTATE_CivilianChallenge` 0x162558 — state 0x3E of `NDrone2_StateFuncs` (EE
+    /// 0x29b300 [L]): the unarmed guard's challenge — the 0x3E point anim chains to RunToAlarm
+    /// 0x89. 0x3E is already listed as a state id in FLASH_HANDLING below, so the id space agrees.
+    pub const CIVILIAN_CHALLENGE: u8 = 0x3e;
     /// The real `NDrone2_DSTATE_Hostage` (0x15cb78) — `NDrone2_StateFuncs[0x0a]` [L 0x29b300]; the
     /// captive cower the castle geishas sit in while their captor lives.
     pub const HOSTAGE: u8 = 0x0a;
@@ -2425,6 +2429,9 @@ impl Drone {
             // TruckDriverIdle 0x160ed0 case 8 → (0x12, 0).
             PARTY_GIRL | CIVILIAN | CIVILIAN_HIDING | TRUCK_DRIVER_IDLE => (CIVILIAN_SCARED, false),
             CIVILIAN_MISSION | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD => (ATTACK, false),
+            // CivilianChallenge 0x162558 cases 6/8 → HandleImpact(0x89, 0); 7/9/0x17/0x18/0x19 →
+            // (0x89, 1) [M 0x162558:44-60].
+            CIVILIAN_CHALLENGE => (crate::kiko::RUN_TO_ALARM, false),
             TRUCK_DRIVER_INIT => (TRUCK_DRIVER_INIT_ALERT, false),
             CIVILIAN_SCARED => (0, false),
             // Astronaut: Launch/Combat/Hit/Death pass resume 0 — surviving a bullet changes no
@@ -2684,6 +2691,7 @@ impl Drone {
             TRUCK_DRIVER_INIT_ALERT => (0, false),
             TRUCK_DRIVER_IDLE | PARTY_GIRL | CIVILIAN | CIVILIAN_SCARED | CIVILIAN_HIDING => (CIVILIAN_SCARED, false),
             CIVILIAN_MISSION | CIVILIAN_GUARD | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD => (ATTACK, false), // 0x15d860 case 6 tail: HandleImpact(0x56, 0)
+            CIVILIAN_CHALLENGE => (crate::kiko::RUN_TO_ALARM, false), // 0x162558 case 6: HandleImpact(0x89, 0)
             HOSTAGE_IDLE => (0, false),
             _ => return self.on_impact(d, rng, frame, s, true),
         };
@@ -2867,7 +2875,13 @@ impl Drone {
     /// (`bond_armed`) [0x178874].
     /// `NDrone2_NearDrone` (0x14a6e8): is an armed opponent/person within the radius.
     fn near_armed_person(&self, d: &Data) -> bool {
-        self.kind != 0xd && self.prop(d, 0x3c) && self.seen && self.bond_armed
+        // 07000009/0A: prop 0x3c + the sight flag ONLY — the game returns before the voice-0xD
+        // check and has no armed gate there (the security guards react to any intruder) [M
+        // 0x1787c8:14-21]. Other levels: voice 0xD exempt, prop 0x3c + seen + armed [M 0x1787c8:30-42].
+        if matches!(d.level, 0x0700_0009 | 0x0700_000a) {
+            return self.prop(d, 0x3c) && self.seen;
+        }
+        self.voice_type != 0xd && self.prop(d, 0x3c) && self.seen && self.bond_armed
     }
 
     /// `NDrone2_BulletImpact` (0x1461c8): damage; dead → Death_Anim; alive with `allow` and no flinch for 2 s (this
@@ -5162,6 +5176,7 @@ impl Drone {
         if m == msg::EXPLOSIVE && !matches!(s, UNDER_COVER_FIRE | UNDER_COVER_SNIPER_FIRE | UNDER_COVER_SNIPER_RELOAD | AMBUSH_WAIT | GRENADE_THROW
                 | TASER | STUNNED | STUNNED_RECOVER) {
             let resume = if matches!(s, RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT) { RECOVER_FROM_SCARY_OBJECT }
+                else if s == CIVILIAN_CHALLENGE { crate::kiko::RUN_TO_ALARM } // 0x162558 case 0x21: ConsiderExplosive(…, 0x89) [M]
                 else if matches!(s, PARTY_GIRL | CIVILIAN | CIVILIAN_MISSION | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD | CIVILIAN_SCARED | CIVILIAN_HIDING) { 0 }
                 else { ATTACK };
             self.take_explosive_msg(d, frame, resume);
@@ -5580,6 +5595,28 @@ impl Drone {
                 self.goal = Some(self.home);
                 self.croute = None;
                 self.set_state(GO_TO_GOAL);
+                true
+            }
+            // `DroneFunc_FirstAttack` (0x148010) → `DroneFunc_FirstSightState` (0x147c48): the own-sight
+            // first-sight states run BEFORE the alternate state (0x148010 checks the 0x8000000 bit
+            // first). Prop 0x1A — `DoModeSettingsNEW` sets it with 0x56 on 07000009/0A — returns 0x3E
+            // CivilianChallenge on 09/0A (0x3C Interogate on 07/41) before SeenPlayerTalk and the
+            // 0x1B/0x18/0x19 rolls [M 0x147c48:142-153]. The 09 security guards raise the alarm from
+            // here: the challenge plays anim 0x3E with the follow-on 0x89 RunToAlarm [M 0x162558].
+            // (Prop 0x1A is not set on 07/41 drones by DoModeSettingsNEW; a placement-set 0x1A there
+            // would take the 0x3C Interogate arm, which this port does not carry — [S] no such
+            // placement is known.)
+            (ATTACK, msg::ENTER) if !self.first_attack_done && self.own_sight && self.prop(d, 0x1a) => {
+                // The FirstSightState-return arm of FirstAttack 0x148010: the first-attack stamps,
+                // alertness 1.0, the sight widening, `+0x13a` (second_tag) and the second switch cleared.
+                self.first_attack_done = true;
+                self.alert = 1.0;
+                self.second_tag = 0;
+                self.second_channel = 0;
+                if self.attack_frame == 0 { self.attack_frame = frame; }
+                self.sight_range = self.sight_range.max(self.combat_range);
+                self.half_fov = 0.0;
+                self.set_state(CIVILIAN_CHALLENGE);
                 true
             }
             // `DroneFunc_FirstAttack` with an alternate state (`+0x5A4`) and no second switch: take the alternate mode
@@ -6046,17 +6083,45 @@ impl Drone {
                 self.update_patrol_route(d, rng, frame);
                 if self.near_armed_person(d) {
                     self.sighted = true;
-                    // The female scream 0x48 before the scare-state switch (`Drone+0x15` != 0; the
-                    // game's CivilianInit carve-out `+0xd8 == 0x10` has no port counterpart — the
-                    // port's CIVILIAN_PATROL is never entered from CIVILIAN_INIT) [M 0x15d610:60].
+                    self.own_sight = true; // +0x4F8 |= 0x8000000 before the state switch [M 0x15d610 case 3]
+                    // Prop 0x33 once-broadcast: `+0x4FC |= 1`, `DroneAlertToObject(20, 20, 0.75,
+                    // msg 0x11, Bond)`, `+0x4F8 |= 0x200000` [M 0x15d610 case 3] — the same shout
+                    // the PARTY_GIRL scare models.
+                    if self.prop(d, 0x33) && !self.scare_shouted {
+                        self.scare_shouted = true;
+                        self.pending_shout = Some((msg::SHOUT, self.target.pos)); // the alert source is BOND
+                    }
+                    // Voice 0x10 (the game's CivilianInit carve-out): `+0x44 = 1` then Attack
+                    // [M 0x15d610 case 3]. The 09 guards are voice 0x17 — the default arm runs.
+                    if self.voice_type == 0x10 { self.alert_bits |= 1; self.set_state(ATTACK); return true; }
+                    // The female scream 0x48 before the state switch (`Drone+0x15` != 0) [M 0x15d610:50].
                     if self.female { self.foley_reqs.push(0x48); }
-                    self.set_state(CIVILIAN_SCARED);
+                    // SetState(0x56 Attack) in EVERY near-armed arm — the unarmed 09 security
+                    // guards reach the alarm chain through Attack's FirstAttack, not the scare
+                    // states (the old CIVILIAN_SCARED reroute froze them in CivilianHiding) [M
+                    // 0x15d610 case 3 → LAB_0015d838].
+                    self.set_state(ATTACK);
                 } // 0x15d610:32 — dead arg [M 0x1787c8]
                 true
             }
             (CIVILIAN_PATROL, msg::BULLET) => self.on_bullet_resume(d, rng, frame, ATTACK, false), // HandleImpact(0x56, 0)
             (CIVILIAN_PATROL, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
             (CIVILIAN_PATROL, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
+            // CivilianChallenge 0x3E (`NDrone2_DSTATE_CivilianChallenge` 0x162558): ENTER —
+            // `+0x4F8 |= 0x10000`, `+0x4FC |= 0x20` (the interrogate flag — no port reader; not
+            // modelled), `CallAnim(0, 0x3E, follow 0x89 RunToAlarm)` then the challenge bark
+            // `SpeechSFX(0xC3 + Rand(9), 0, 0, 0)` — the Rand draw is the game's [M :17-21].
+            // msg 3 (UPDATE) faces the opponent (`SetAngleToObj`) [M :34-37]; case 2
+            // (EndInterogate) has no port counterpart. The anim-done follow enters RunToAlarm,
+            // whose FindAlarmPoint → PressAlarm chain raises the nearest switch's channel.
+            (CIVILIAN_CHALLENGE, msg::ENTER) => {
+                self.vision_on = true;
+                self.call_anim(d, 0x3e, crate::kiko::RUN_TO_ALARM, 0);
+                let roll = rng.rand(9) as usize;
+                self.talks.push((0xc3 + roll, false));
+                true
+            }
+            (CIVILIAN_CHALLENGE, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
             // Civilian (0x15d118) ENTER: stand idle; the scare radius `+0xCF8` = 10 on 07000007, else 20.
             // UPDATE: armed person within it → CivilianScared.
             (CIVILIAN, msg::ENTER) => {
