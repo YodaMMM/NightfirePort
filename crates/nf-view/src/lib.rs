@@ -429,18 +429,26 @@ pub fn net_slot0_setup(sim: &mut scene::Sim) {
 /// `step_bond` on its session input, the remotes, the online combat, the slots' positions, the
 /// state hash. The hashed state is the same on every machine whatever its local slot.
 pub fn net_slot0_tick(sim: &mut scene::Sim, row: &[nf_net::Input; nf_net::MAX_AGENTS]) -> u64 {
-    let li = row[0];
+    net_tick(sim, row, 0)
+}
+
+/// One online tick as the machine playing `local` runs it (the live loop's shape, the join
+/// handling left out): the local slot's full `step_bond` on its session input, the remotes, the
+/// online combat, the slots' positions, the state hash. Every machine must reach the same hash.
+pub fn net_tick(sim: &mut scene::Sim, row: &[nf_net::Input; nf_net::MAX_AGENTS], local: usize) -> u64 {
+    let li = row[local];
     sim.step_bond(mpnet::to_player_input(&li), li.trigger, li.reload, li.use_key);
     let inputs = std::array::from_fn(|i| mpnet::to_player_input(&row[i]));
-    sim.step_net_remotes(&inputs, 0);
-    sim.step_net_combat(row, 0);
+    sim.step_net_remotes(&inputs, local);
+    sim.step_net_combat(row, local);
     if let Some(m) = sim.mp.as_mut() {
-        for sl in 1..nf_net::MAX_AGENTS {
+        for sl in 0..nf_net::MAX_AGENTS {
+            if sl == local { continue; }
             if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); }
         }
-        m.set_slot(0, sim.bond.pos);
+        m.set_slot(local, sim.bond.pos);
     }
-    sim.net_state_hash(0)
+    sim.net_state_hash(local)
 }
 
 pub fn mp_late_join_catchup(
@@ -4089,6 +4097,21 @@ impl ApplicationHandler for App {
                                 .and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
                                 .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick) && (self.net_tick - a) % 12 < 6));
                             if trigger { input.fire = true; }
+                            // Test aid (NF_NET_AUTOMOVE="a-b"): walk and turn on match ticks a..=b (the
+                            // pattern of tests/mp_bots_moving_live.rs) — the two-window moving check
+                            // without a hand on either window.
+                            if self.net.is_some() && std::env::var("NF_NET_AUTOMOVE").ok()
+                                .and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
+                                .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick))
+                            {
+                                let ph = self.net_tick + self.net_local_slot as u32 * 97;
+                                input.forward = if ph % 240 < 200 { 1.0 } else { -0.5 };
+                                input.strafe = if ph % 150 < 30 { 0.8 } else if ph % 150 < 45 { -0.8 } else { 0.0 };
+                                input.turn = if ph % 180 < 60 { 0.03 } else if ph % 180 < 90 { -0.02 } else { 0.0 };
+                                input.look = if ph % 120 < 20 { 0.01 } else if ph % 120 < 40 { -0.01 } else { 0.0 };
+                                input.jump = ph % 211 == 0;
+                                input.crouch = ph % 307 == 0;
+                            }
                             // weapon-matrix: the dev menu's "Test weapon" run (dev.rs) merges its
                             // inputs into this tick — the same lanes the keyboard uses
                             // (`switch_to`, the trigger, the R edge), never during a replay
@@ -4131,7 +4154,7 @@ impl ApplicationHandler for App {
                                 let ready = session.0.borrow_mut().ready_inputs(self.net_tick);
                                 match ready {
                                     Some(r) => {
-                                        let li = r[self.net_local_slot.min(3)];
+                                        let li = r[self.net_local_slot.min(nf_net::MAX_AGENTS - 1)];
                                         let view = (input.lift, input.stabilise, input.zoom_cycle);
                                         input = mpnet::to_player_input(&li);
                                         (input.lift, input.stabilise, input.zoom_cycle) = view;
@@ -4191,7 +4214,7 @@ impl ApplicationHandler for App {
                                     // The local pipeline's shot this tick rides the next submitted input.
                                     if sim.shot_tick { self.net_shot_pending = true; }
                                     if let Some(m) = sim.mp.as_mut() {
-                                        for sl in 0..4 {
+                                        for sl in 0..nf_net::MAX_AGENTS {
                                             if sl != slot { if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); } }
                                         }
                                         m.set_slot(slot, sim.bond.pos);

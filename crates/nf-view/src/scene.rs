@@ -2113,7 +2113,12 @@ impl Sim {
         // the death's skip gate while dying (action 25 [M 0x190bb0:30]); the menu eats it.
         let menu_pause = self.drones.fail_menu_open();
         self.drones.bond_fire = trigger && !menu_pause;
-        let (mut input, trigger, reload, use_key) = if self.drones.death.active || menu_pause {
+        // Online, the slot's dead state (`mp_dead_ticks`, the same on every machine at this point
+        // of the tick) freezes the body too: the local death sequence starts a tick or two later
+        // (`death_tick` inside the drones' tick), and the other machines' replica of this slot
+        // (`step_net_remotes`) stops on the shared state — so must the local body.
+        let net_dead = self.net_dead();
+        let (mut input, trigger, reload, use_key) = if self.drones.death.active || menu_pause || net_dead {
             (Default::default(), false, false, false)
         } else { (input, trigger, reload, use_key) };
         // gunimp: while a mounted gun owns the player (`GunImp_Activate` 0x132f00 — the 0xc
@@ -2561,7 +2566,7 @@ impl Sim {
             // `AnimObjectUpdate` 0x1befd8 / `AnimSeqTick` 0x1c28d0 / `AnimFrameResolve` 0x1c35f8
             // have no obj+0x30 writes). The pre-fix port kept ticking the walk physics, so a death
             // in the air kept falling (the probe: −3.06 units over ~55 ticks).
-            if !self.drones.death.active {
+            if !self.drones.death.active && !net_dead {
                 self.bond.tick_ctx(&self.world, &ctx, &input);
             }
             // audit-sound-calls: drain the jump launch / head-bump sounds into the Sim's sound
@@ -8898,17 +8903,56 @@ impl Sim {
     /// docs/systems/net-match-host.md's *Deviations*). `water` is `None` for the remotes (no swim
     /// state machine on a remote body yet) — the same `None` on every machine, so the lockstep
     /// holds.
+    /// Online: this machine's own slot is dead in the per-slot combat state (`mp_dead_ticks`),
+    /// which every machine holds identically. Offline (no private generator) always false.
+    pub fn net_dead(&self) -> bool {
+        (self.net_rng.is_some() || self.net_rng_shared.is_some())
+            && self.mp_dead_ticks.get(self.mp_local_slot).is_some_and(|&d| d > 0)
+    }
+
     pub fn step_net_remotes(&mut self, inputs: &[nf_game::player::Input; nf_net::MAX_AGENTS], local: usize) {
         for slot in 0..nf_net::MAX_AGENTS {
             if slot == local { continue; }
             let Some(b) = self.mp_bonds[slot].as_mut() else { continue };
+            // A dead slot's body stands where it died until the respawn, on every machine — the
+            // local machine's own body freezes on the same `mp_dead_ticks` (`Sim::net_dead`; the
+            // game's dead branch moves no body [M `Player_Update` 0x193600:316-319]). The remote
+            // replica used to keep walking on the dead player's live input while the owner's body
+            // froze: the two-window "desync when I move" with bots (a bot kill, then any input).
+            if self.mp_dead_ticks[slot] > 0 { self.mp_body_speed[slot] = 0.0; continue; }
             let before = b.pos;
             let input = inputs[slot];
+            // The local body's movement core, step for step (`step_bond`): the ground ride, the
+            // stateful cel relink on the last tick's move segment (the collision queries are
+            // scoped to `cel` — a replica that kept its spawn cel collided differently from the
+            // owner's body: the second two-window divergence, a crouch-walk along a wall, 0.004
+            // units in one tick), the water level from that cel, `tick_ctx`, the `prev_pos` copy.
+            let prev_tick_pos = b.pos;
+            {
+                let p = b.pos;
+                if let Some(g) = self.world.ground_motion(p, [p[0], p[1] - 1.6347, p[2]]) {
+                    let (sn, cs) = g.turn.sin_cos();
+                    let (x, z) = (p[0] + g.delta[0] - g.pivot[0], p[2] + g.delta[2] - g.pivot[2]);
+                    b.pos = [g.pivot[0] + x * cs + z * sn, p[1] + g.delta[1], g.pivot[2] - x * sn + z * cs];
+                    b.yaw += g.turn;
+                }
+            }
+            let cel = if (0..3).any(|k| (b.pos[k] - b.prev_pos[k]).abs() > 3.0) {
+                b.prev_pos = b.pos;
+                self.world.find_cel(b.pos)
+            } else {
+                self.world.player_cel_relink(b.cel, b.prev_pos, b.pos, b.pos)
+            };
+            let water = cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
+                .map(|r| self.cels[r].water).filter(|w| *w > -400.0);
+            b.cel = cel;
             let ctx = nf_game::player::LadderCtx {
                 ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims),
-                water: None, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
+                water, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
             };
             b.tick_ctx(&self.world, &ctx, &input);
+            b.sfx_out.clear();
+            b.prev_pos = prev_tick_pos;
             self.mp_body_speed[slot] = ((b.pos[0] - before[0]).powi(2) + (b.pos[2] - before[2]).powi(2)).sqrt() * 60.0;
         }
     }
