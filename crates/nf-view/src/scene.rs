@@ -4449,6 +4449,25 @@ impl Sim {
                 self.hud.info_msgs.push_back(m);
             }
         }
+        // mp-hud-real: the kill messages addressed to this machine's slot (`MP_PlayerKilled`
+        // 0x188f70:100-107 → `Text_AddMsg(killer, 0, 1, label 0x200004d % the victim's name, 0,
+        // 0xb4)` [M]) — the MP info pane draws them (`HUD_MPUpdateStatusPane` 0x19ca88).
+        let me = self.mp_local_slot;
+        if let Some(m) = self.mp.as_mut() {
+            if m.kill_msgs.iter().any(|&(to, _)| to == me) {
+                let mine: Vec<usize> = m.kill_msgs.iter().filter(|&&(to, _)| to == me).map(|&(_, v)| v).collect();
+                m.kill_msgs.retain(|&(to, _)| to != me);
+                for victim in mine {
+                    let name = crate::hud::mp_name(m, lang.as_ref(), victim);
+                    let text = lang.as_ref().map(|l| l.format(nf_game::mp::hud::KILL_MSG_LABEL, &[name])).unwrap_or_default();
+                    if !text.is_empty() {
+                        let mut msg = Msg::new(text, nf_game::mp::hud::KILL_MSG_TICKS as f32);
+                        msg.label = nf_game::mp::hud::KILL_MSG_LABEL;
+                        self.hud.info_msgs.push_back(msg);
+                    }
+                }
+            }
+        }
         for (_, t) in self.drones.taken.iter().skip(self.hud.taken_seen) {
             let Some(lang) = lang.as_ref() else { break };
             let text = match t {

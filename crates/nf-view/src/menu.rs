@@ -7501,7 +7501,10 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         // TEX 0x0300016d. The rows/result come from `MpMatch::debriefing` through the getters
         // (mp-debriefing-data2); the small-table portraits draw [0,0,128,128] like the join page's.]
         Page::MpDebriefing => {
-            centred(&mut h, font, -2, &hint(MP_DEBRIEFING_HEADER, "DEBRIEFING"), mx(50.0 + 188.0), my(48.0), bright, true, 1.25);
+            // mp-hud-real: the header in the header face, left-aligned at the control's x 50
+            // (PCSX2 debriefing 2026-10-18: "Debriefing" bold italic at the top-left, like every
+            // page header) — it was font 2 centred.
+            page_header(&mut h, hfont, &hint(MP_DEBRIEFING_HEADER, "Debriefing"));
             if textures.iter().any(|(hash, _)| *hash == 0x0300_016d) {
                 quad640(&mut h, 0x0300_016d, 434.0, 38.0, 156.0, 43.0, [0.0, 0.0, 256.0, 128.0], gs(0x7f7f7f, 0xff));
             }
@@ -7540,28 +7543,38 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                     }
                 }
             } else {
+            // mp-hud-real: the controls' own rects [L the menu-def page 0x40000033, re-dumped
+            // 2026-10-18 through `nf_formats::menudef`]: the column titles left-aligned in
+            // (52, y, 120×16); per shown slot i the panel box 0x1000015d (176+104i, 94, 96×253),
+            // the portrait 0x10000157 (184+104i, 102, 81×81) with the uv msg 0x2d (32,0)+(64,64),
+            // the rank caption 0x10000156 (187+104i, 103, 72×17) at the portrait's top-left, the
+            // name 0x10000158 (174+104i, 183, 100×16) and the values (185+104i, y, 78×16)
+            // centred in their boxes. The PCSX2 debriefing (2026-10-18, 1 human + 3 bots) shows
+            // exactly this: dark panels behind each column, "1st" over the portrait's top-left.
+            // The port had the portraits 8 units left, the captions centred above them, the
+            // values 9 units left, the titles centred and no panels.
             for (i, id) in MP_DEBRIEFING_COLS.iter().enumerate() {
-                centred(&mut h, font, -2, &bind(*id), mx(52.0 + 60.0), my(COL_YS[i] + 8.0), bright, true, 1.0);
+                left_text(&mut h, font, &bind(*id), mx(52.0), my(COL_YS[i] + 8.0 + 6.0), bright, true, 1.0);
             }
             const PORTRAIT_PLACEHOLDER: [u32; 4] = [0x0300_015d, 0x0300_015c, 0x0300_0156, 0x0300_016b];
             for (i, (rank, name, tex, points, victories, deaths, total)) in fe.mp_debriefing_rows().iter().enumerate() {
-                let px = 176.0 + i as f32 * 104.0;
+                let dx = i as f32 * 104.0;
+                plate(&mut h, mx(176.0 + dx), my(94.0), mx(96.0), my(253.0), gs(0x1e1210, 0x60));
                 let ptex = if *tex != 0 { *tex } else { PORTRAIT_PLACEHOLDER[i] };
-                tex_quad_or_plate(&mut h, textures, ptex, px, 102.0, 81.0, 81.0, [0.0, 0.0, 128.0, 128.0], gs(0x7f7f7f, 0xff));
-                // The rank caption over the portrait [S the exact y — the live render check pins it].
-                centred(&mut h, font, -2, &bind(*rank), mx(px + 36.0), my(96.0), bright, true, 1.0);
+                tex_quad_or_plate(&mut h, textures, ptex, 184.0 + dx, 102.0, 81.0, 81.0, [32.0, 0.0, 64.0, 64.0], gs(0x7f7f7f, 0xff));
+                left_text(&mut h, font, &bind(*rank), mx(187.0 + dx), my(103.0 + 8.5 + 6.0), bright, true, 1.0);
                 let nm = match name {
                     nf_game::mp::debrief::MpDebriefName::Human(s) => s.clone(),
                     nf_game::mp::debrief::MpDebriefName::Bot(ch) => nf_game::mp::MpMatch::bot_short_name_label(*ch)
                         .map(|l| bind(l)).filter(|s| !s.is_empty()).unwrap_or_else(|| "Bot".into()),
                 };
-                centred(&mut h, font, -2, &nm, mx(px + 50.0), my(183.0 + 8.0), bright, false, 1.0);
+                centred(&mut h, font, -2, &nm, mx(174.0 + 50.0 + dx), my(183.0 + 8.0 + 6.0), bright, true, 1.0);
                 for (j, v) in [points, victories, deaths, total].iter().enumerate() {
-                    centred(&mut h, font, -2, &v.to_string(), mx(px + 39.0), my(COL_YS[j + 1] + 8.0), cream, false, 1.0);
+                    centred(&mut h, font, -2, &v.to_string(), mx(185.0 + 39.0 + dx), my(COL_YS[j + 1] + 8.0 + 6.0), cream, true, 1.0);
                 }
             }
             }
-            plate(&mut h, 176.0, 355.0, 408.0, 52.0, gs(0x1e1210, 0x60));
+            plate(&mut h, mx(176.0), my(355.0), mx(408.0), my(52.0), gs(0x1e1210, 0x60));
             let (rl, mut rarg) = fe.mp_debriefing_result();
             // A bot winner has no codename in the settings: its name cell's caption stands in
             // (the line read "%s wins the match." when the Guard bot won the two-window match) [S].
@@ -8020,7 +8033,9 @@ fn tex_quad_or_plate(h: &mut Hud, textures: &[(u32, crate::scene::TextureImage)]
     if textures.iter().any(|(hash, _)| *hash == tex) {
         quad640(h, tex, x, y, w, hh, uv, c);
     } else {
-        plate(h, x, y, w, hh, gs(0x1e1210, 0xd0));
+        // `plate` takes HUD units; the callers pass 640-space rects like `quad640` (the plate
+        // used to land 25% right of its texture's spot — the debriefing's portrait plates).
+        plate(h, mx(x), my(y), mx(w), my(hh), gs(0x1e1210, 0xd0));
     }
 }
 
@@ -8397,6 +8412,10 @@ pub fn mp_textures() -> &'static [u32] {
         let mut v: Vec<u32> = MP_SCENARIO_ROWS.iter().map(|r| r.0).chain(MP_MAP_ROWS.iter().map(|r| r.0))
             .chain(MP_CHARACTERS.iter().map(|r| r.0)).chain(MP_OPTIONS_ROWS.iter().map(|r| r.0)).chain(MP_BOTS_ROWS.iter().map(|r| r.0))
             .chain([0x0300_0199u32, 0x0300_0159, 0x0300_015c, 0x0300_0169, 0x0300_01a0])   // the Join Game panels + slot images [L page 0x40000019]
+            // mp-hud-real: the debriefing's portraits (`mp_characters_small` @0x2df8f8 +0x00, the
+            // handler's msg-0x24 sends [M 0x212198:159-166]) and its placeholders [L page 0x40000033].
+            .chain(MP_CHARACTERS_SMALL.iter().map(|r| r.0))
+            .chain([0x0300_015du32, 0x0300_0156, 0x0300_016b])
             .filter(|h| *h != 0 && !MENU_TEXTURES.contains(h)).collect();
         v.sort_unstable(); v.dedup(); v
     })

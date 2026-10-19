@@ -469,6 +469,11 @@ pub struct MpMatch {
     /// sim drives (the ported `BotBrain` = the game's BOT_update family); creation is the caller's
     /// [`MpMatch::create_bots`] right after the humans' spawn picks, like the game's order.
     pub bots: Vec<MpBot>,
+    /// The kill messages `MP_PlayerKilled` posted this match, oldest first, as (recipient slot,
+    /// victim slot) — the game's `Text_AddMsg(recipient, 0, 1, label 0x200004d % victim name, 0,
+    /// 0xb4)` [M 0x188f70:100-107]. Presentation only (never hashed, never read by the sim): the
+    /// HUD drains the entries addressed to its own slot (`hud::KILL_MSG_LABEL`).
+    pub kill_msgs: Vec<(usize, usize)>,
 }
 
 /// One MP bot: the ported brain (`BOT_vars` stand-in) plus the per-slot bookkeeping the match
@@ -531,6 +536,7 @@ impl MpMatch {
             objects_rt: MpObjectsRt::default(),
             assassin: None,
             assassin_target: None,
+            kill_msgs: Vec::new(),
             bots: Vec::new(),
         }
     }

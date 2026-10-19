@@ -257,6 +257,22 @@ task) [M :8-16]:
 - The debriefing page's DRAW is still the main agent's (the menu-def's plate/rows render from
   the getters above; `Page::MpDebriefing` draws nothing yet — reported, with the widget table
   in §4).
+- mp-hud-real (2026-10-18) — the draw checked against the real game: PCSX2 debriefing of a
+  1-human + 3-bot Team Arena (reached by a natural time-up through `tools/trace/mp_goto.py`)
+  vs the port's `--page mpdebrief` render (the same participants). Fixed from the menu-def rects
+  (re-dumped through `nf_formats::menudef`): the header in the header face left at x 50; the
+  column titles left-aligned at x 52; per slot the panel box 0x1000015d (176+104i, 94, 96×253)
+  (was missing); the portrait at (184+104i, 102) with the control's uv msg 0x2d = (32,0)+(64,64)
+  (was x 176+104i and uv 0..128 — and its textures, `mp_characters_small`, were never loaded:
+  added to `menu::mp_textures`); the rank caption left in (187+104i, 103) (was centred above);
+  names / values centred in their boxes (174+104i / 185+104i). `tex_quad_or_plate`'s plate
+  fallback drew in HUD units at 640-space coordinates (25% off) — fixed. Side-by-side:
+  agent15 scratch `sbs_debrief2.png`. Open: the column titles, the values and the rank captions
+  draw ≈1.3× wider / ≈1.45× taller in PCSX2 than the port's font 2 (the names and the hint bar
+  match) — a different face or scale on those controls, not identified (the menu-def parser
+  lossy-decodes the controls' NAME format strings, so their font codes are not readable yet);
+  the fiery backdrop is the page's aux FMV 0x07350048 (headless renders without the `movies`
+  feature show the dark plate).
 
 ## 6. Live checks for the main agent (PCSX2; none runnable here)
 
