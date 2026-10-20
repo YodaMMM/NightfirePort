@@ -561,7 +561,11 @@ pub struct Session<T: Transport> {
     resync_watch: Option<(u8, u32, u64)>,
     local_slot: u8,
     local_hashes: HashMap<u32, u64>,
-    compared: HashSet<u32>,
+    /// The (slot, tick) hash pairs already compared — PER PEER: a global set
+    /// let the first peer's hash for a tick mark it compared, and a second
+    /// peer's divergent hash for the same tick was never compared at all (the
+    /// live 3-machine test: the host never saw the resyncer's desync).
+    compared: HashSet<(u8, u32)>,
     last_hash: Option<(u32, u64)>,
     last_ready: Option<u32>,
     stalled: bool,
@@ -2699,11 +2703,11 @@ impl<T: Transport> Session<T> {
             ticks.sort_unstable();
             for tick in ticks {
                 let rhash = remote[&tick];
-                if self.compared.contains(&tick) {
+                if self.compared.contains(&(slot, tick)) {
                     continue;
                 }
                 if let Some(lhash) = self.local_hashes.get(&tick) {
-                    self.compared.insert(tick);
+                    self.compared.insert((slot, tick));
                     if *lhash != rhash {
                         // net-desync-resync: the host is the authority (it owns
                         // the input log a resync replays), so a mismatching
@@ -2779,7 +2783,7 @@ impl<T: Transport> Session<T> {
                 m.retain(|k, _| *k >= cutoff);
             }
             self.local_hashes.retain(|k, _| *k >= cutoff);
-            self.compared.retain(|k| *k >= cutoff);
+            self.compared.retain(|(_, k)| *k >= cutoff);
             if let Role::Host { peers, .. } = &mut self.role {
                 for p in peers.iter_mut() {
                     p.remote_hashes.retain(|k, _| *k >= cutoff);

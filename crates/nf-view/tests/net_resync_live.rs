@@ -88,7 +88,12 @@ impl Live {
             self.hashes.push((t, self.hash));
             self.next = t + 1;
         }
-        for ev in self.p.0.borrow_mut().take_app_events() {
+        // Drain into an owned local first: the `for` head's temporaries (the
+        // RefMut among them) live across the whole loop body, and the
+        // handover arm's `confirm_late_join` borrows the session again
+        // (RefCell panic — latent until the replay started succeeding).
+        let evs: Vec<CoreEvent> = self.p.0.borrow_mut().take_app_events();
+        for ev in evs {
             match ev {
                 CoreEvent::Desync { tick, local, remote } => self.saw.desyncs.push((tick, local, remote)),
                 CoreEvent::DesyncFatal { tick } => self.saw.fatals.push(tick),
