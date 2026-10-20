@@ -6159,28 +6159,22 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 invisible += 1;
             }
             if skipped { continue; }
-            // floating-rifle-02: the BAKED identity-rotation 0x8019/0x8018 statics do not draw.
-            // `parseentity_fixup_entity` 0x1d00c0:152-166 (reached from the static parse
-            // `parsemap_block_map_data_static` 0x1d1998:110 for every 0x8000-class placement):
-            // the 0x8019/0x8018 arms set flags bit 0x8000000 when the record's matrix rows 1 and 2
-            // equal the identity (`Vec_IsEqual(row+0x60/+0x70, 0x2d6200)` — the artist's bake mark:
-            // the art already lives in the room's cel geometry, the record is a marker). The port
-            // drew them a second time: 07000002's `bath-sandalorange`/`bath-sandalblue`
-            // (kind 0x8019, rotation [0,0,0], art at (−39.07, 5.40, 9.96)/(−39.10, 5.39, 11.27)
-            // [D placements + glist]) floated over the wall right of the bathhouse doorway in
-            // every render (the user's F12 005-07000002 frame 4206; the driver's --bond
-            // −43.11,6.46,10.37,2.305,0 --frame 300) while PCSX2 shows nothing there
-            // [L 2026-10-20]. Rotated 0x19s keep drawing — a yaw-π record has row 1 identity but
-            // row 2 [0,0,−1], so the game's AND fails and the art is a live inner-node static
-            // (07000009's visible `liftswitch_fake` dressing, yaw π [D placements; L visible]).
-            // The 0x8018 arm carries the same bake rule in the same block [M 0x1d00c0:168-179;
-            // no live anchor yet — marked [S] for that kind alone].
-            if matches!(inst.placement.flags & 0xffff, 0x8019 | 0x8018) {
-                let m = nf_formats::placement::object_matrix(inst.placement.rotation, inst.placement.translation);
-                let ident = [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-                let row_id = |r: usize| (0..3).all(|c| (m[r][c] - ident[r - 1][c]).abs() < 1e-4);
-                if row_id(1) && row_id(2) { continue; }
-            }
+            // floating-rifle-02-2: NO bake skip. 786 read `parseentity_fixup_entity` 0x1d00c0's
+            // 0x8019/0x8018 flag bit 0x8000000 as "baked, not drawn" and skipped every 0x8019/0x8018
+            // placement whose matrix rows 1+2 looked identity — that broke decal_order_live (07000007's
+            // hall_shadows*/OBJECT_banistershadows* dropped, their textures never loaded) and the
+            // decompile does not support the reading: the bit is set when the placement's TRANSLATION
+            // and ROTATION vectors (cel+0x60/+0x70, the placement record's two float triples) are BOTH
+            // exactly zero (`Vec_IsEqual` with epsilon 0.0f against the zero vector at 0x2d6200 —
+            // disasm of 0x1d02e0-0x1d0324), and its only consumers are the collision identity fast
+            // paths `Collide_Pick` 0x1eb320:166,249 / `Collide_Intersect` 0x1ebaa8:142 (`Ident`). No
+            // draw path tests it: `View_AddCels` 0x1e6ba0 walks every inner-chain cel (gated on
+            // glist+0x44 bit 0x10, the 0x8018-vs-0xc023 special case and Vision_InView) and
+            // `View_DrawCelGlist` 0x1e6538 draws it at Rot(cel+0x70)·Trans(cel+0x60) behind
+            // psiSetTweakARGB(cel+0xa3-derived alpha, 0xff, 0xff, 0xff). The game DRAWS the flagged
+            // records — 07000002's sandals (t=r=0 [D]) at their absolute art coords, 07000007's shadow
+            // decals with them. docs/systems/baked-statics.md holds the full chain + the open
+            // visibility question at the doorway eye.
             // Searchlight parts are dynamic objects (`Searchlight_Update` moves them every tick): drawn from
             // the simulation below, not from their placements.
             if inst.placement.flags & 0xff == 0xde { continue; }
