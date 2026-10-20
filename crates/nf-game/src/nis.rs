@@ -36,7 +36,11 @@ pub enum Obj {
     /// 0x2d6200 [L ACTION.ELF: (0,0,0)]): the kind byte b2 (the call's `b2 == 1` argument) and the
     /// stream's parent pair (b0/b1 → +0x25). Deleted by `Script_KillStream` case 6 unless the script
     /// keeps its objects (flag 0x10) [M 0x1d9860:104-113].
-    Light { kind: u8, src: (u32, u8) },
+    /// `Script_Interp` case 6 keys it every frame [M 0x1d9a08:235-279]: the light's +0x10 position = the
+    /// interpolated matrix's translation (parent chain, then the script base), +0x3C radius = the key scale ×
+    /// SCRIPTINFO+0x94, +0x44..46 rgb = the keys' +0x24..26 colour bytes lerped (`Script_GetInterp` 0x1da158
+    /// case 6). `live` = keyed at least once. Intensity stays the create's 1.0 (census site 14).
+    Light { kind: u8, src: (u32, u8), pos: [f32; 3], radius: f32, rgb: [u8; 3], live: bool },
 }
 
 /// A request the script made this tick for the caller to carry out.
@@ -59,6 +63,13 @@ pub enum Request {
     Event { kind: u8, params: Vec<u32> },
     /// Event 4: `Player_Disable` — the player stops (the script runs a cut-scene).
     PlayerDisable,
+    /// Event 9: `Player_Cam2Mode(0, mode)` [M Script_EventHandler 0x1d94c0 case 9 — player 0, the
+    /// event's param 0]. Mode 3 → `Player_SetCamMode(BL, 2)` [M Player_Cam2Mode 0x195fc8:7-9] — the
+    /// cut-scene behind-Bond orbit (`Player_PositionCamera` 0x18f5d8 case 2); anything else → the
+    /// exit arm: `BL+0x8a8 = 0`, `SetCamMode(0)`, `Player_ChangeSubState(player, 0)` [M 0x195fc8:11-16].
+    /// Drained on the view side with the other player hand-offs (`player_events`): the orbit needs
+    /// the viewer's Bond, which lives in the view's Sim.
+    Cam2Mode { mode: u32 },
     /// `Script_Free` after event 6: `Player_Enable` at this matrix (`None`: where the player is), with `+0xAB6`.
     PlayerEnable { at: Option<Mat4>, mode: u8 },
     /// Event 0x12: `ResetMap_LevelToLoad(level, 1, 0)` — the script-driven level transition
@@ -90,6 +101,21 @@ pub enum Request {
     /// time)` — a HUD message from the text bank shown for `time` frames [M 0x1db2b8:9-12]. The raw
     /// label travels (the Lang table lives above nf-game); nf-view binds it like the pickup messages.
     Text { label: u32, time: u16 },
+    /// Event 8: `Drone_CoderCreate(prev_obj+0xC0, prev_obj+0x50, p0, p1, p2, p3, 4)` [M
+    /// `Script_EventHandler` 0x1d94c0 case 8, disasm 0x1d96d4-0x1d96f4] — the coder/gadget drone
+    /// spawn at the PREVIOUS stream object's position/rotation (the same record(i−1) gate as events
+    /// 6/0xB/0xF [M 0x1d94c0:75-96]); a NULL object skips the call entirely (`beq s5,zero`
+    /// @0x1d96d4). The 7th argument is hard-coded 4 (`addiu t2,zero,4` @0x1d96ec) = the drone's
+    /// start state IDLE (`DCVars+0x5A2`, 0x13a1a0). Event params: p0 = the skin hash, p1 = the
+    /// start script, p2 = DEAD (CoderCreate never reads its 5th argument — no t0 use in
+    /// 0x13a108-0x1cc [M]), p3 = the setup/weapon selector. Drained by `Drones::drain_script_requests`.
+    CoderCreate { obj: Option<usize>, skin: u32, script: u32, setup: u32 },
+    /// Event 0xa: `Break_DoBreak(prev_obj+0xC0)` [M `Script_EventHandler` case 0xa, disasm
+    /// 0x1d96bc-0x1d96c8] — the script-driven breakable break at the PREVIOUS stream object's
+    /// position (the event itself passes none — the disc's single firing is `Event(0x0a, [])` [D
+    /// script-census]); a NULL object skips the call (`beq s5,zero` @0x1d96bc). Drained by
+    /// `Drones::drain_script_requests`.
+    DoBreak { at: Option<usize> },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -210,6 +236,10 @@ pub struct PendingPickup {
     pub rounds: i16,
     pub switch_ch: u16,
     pub sound: u32,
+    /// Param 5 — `record+0x40`, the respawn word `Pickup_Create` receives [M 0x1d8bfc
+    /// `lhu $v0, 0x40($v1)` → `sw $v0, 0x10($sp)`]. pickups-g029: the fresh-spawn arm used to
+    /// drop it (respawn 0 deletes the pickup on take; the reserved arm already carried it).
+    pub respawn: u16,
     /// The stream's posed matrix at the creation tick (the game's scratch VECTOR 0x2d6200).
     pub matrix: Mat4,
 }
@@ -309,11 +339,20 @@ impl Script {
             }
         }
         if self.play & 1 == 0 { return; }
-        // `Script_Update` 0x1da998:17-18,112-114: the streams run while the delay is 0; only a
-        // POSITIVE delay decrements and skips the tick — a negative one (event 3's `p0 − 1` with
-        // p0 = 0, the lift script's 0x06000571 t1611 [D]) runs like 0 in the game. The port
-        // blocked on it forever, so the lift never finished (fix-finale-blockers).
-        if self.delay > 0 { self.delay -= 1; return; }
+        // `Script_Update`'s delay gate [M disasm 0x1da9c4-0x1da9dc: `lw $v0,156($s0)` (SCRIPTINFO+0x9c);
+        // `beql $v0,$zero,0x1da9e0` → delay == 0 RUNS the streams; `blez $v0,0x1dac68` → delay < 0
+        // branches straight to the epilogue — a HOLD, no store, no decrement; the fall-through stores
+        // `$v0-1` — only a POSITIVE delay counts down and skips the tick]. A negative delay (event 3's
+        // `p0 − 1` with p0 = 0, the 0700001b panels' 0x06000832 stream 11 [D]) HOLDS the script until
+        // `SP_UnPause` 0x1dca58 zeroes it (the panels: SP_Update's damage path; the 0700004a lift
+        // 0x06000571: the state-2 mask&1/out-channel rule). The fix-finale-blockers version ran a
+        // negative delay like 0 — that made every solar panel shatter at t5 (GAPS G-047) and was the
+        // wrong reading of 0x1da9c4: the lift had never blocked on the delay itself but waits on its
+        // channel (see the state-2 unpause below).
+        if self.delay != 0 {
+            if self.delay > 0 { self.delay -= 1; }
+            return;
+        }
         if !self.playing() { return; }
         // The game's loop guard is only `Script_IsPlaying`; a looping script (play & 8) would spin forever, and
         // the data never skips one — bound the iterations (a guard, not a behaviour change: a non-looping script
@@ -545,7 +584,7 @@ impl Script {
                         let (Some(&b0), Some(&b1), Some(&b2)) = (cmds.get(pc + 1), cmds.get(pc + 2), cmds.get(pc + 3)) else { self.streams[i].pc = None; return };
                         self.streams[i].parent = if b0 == 0 { -1 } else { b1 as i8 };
                         if self.streams[i].obj.is_none() {
-                            objs.list.push(Some(Obj::Light { kind: b2, src: (self.nis.hashcode, i as u8) }));
+                            objs.list.push(Some(Obj::Light { kind: b2, src: (self.nis.hashcode, i as u8), pos: [0.0; 3], radius: 255.0, rgb: [255, 2, 3], live: false }));
                             self.streams[i].obj = Some(objs.list.len() - 1);
                         }
                         self.streams[i].kind = 6;
@@ -639,6 +678,8 @@ impl Script {
                     script: self.nis.hashcode, stream: i as u8, hash,
                     kind: p(0) as u16, id: p(1) as u16, rounds: p(2) as u16 as i16,
                     switch_ch: p(3) as u16, sound: p(4), matrix: *matrix,
+                    // pickups-g029: param 5 rides like the reserved arm's [M 0x1d8bfc].
+                    respawn: p(5) as u16,
                 });
             }
         }
@@ -794,12 +835,12 @@ impl Script {
                 if let Some(o) = prev { self.pending_weapon.push((o, w)); }
             }
             0xc => self.flags |= 0x10,
-            0xd => if g(0) != 0 { ch.set(g(0), g(1) as u8, frame); },
+            0xd => if g(0) != 0 { ch.set_script(g(0), g(1) as u8, frame); ch.script_channels.insert(g(0) as u8); },
             0xe => self.streams[i].flags |= 1,
             0x10 => self.flags |= 0x20,
             0x11 => {
                 let (c, v) = if ch.on(g(0)) { (g(1), g(3)) } else { (g(2), g(3)) };
-                if c != 0 { ch.set(c, v as u8, frame); }
+                if c != 0 { ch.set_script(c, v as u8, frame); ch.script_channels.insert(c as u8); }
             }
             // Event 0x12: `ResetMap_LevelToLoad(level, 1, 0)` — the script-driven level transition (e.g. the truck
             // parking at the end of 07000005) [M Script_EventHandler 0x1d94c0:189-199]. `g(0)` is the next level's
@@ -818,6 +859,27 @@ impl Script {
                 if let Some(obj) = prev {
                     out.push(Request::WireRegister { player: self.player, obj, group: g(0) as u16 });
                 }
+            }
+            // Event 9 (cam2mode) [M Script_EventHandler 0x1d94c0 case 9: `Player_Cam2Mode(0,
+            // iStack_c0)` — player 0, the event's param 0]: `Player_Cam2Mode` 0x195fc8 — mode 3
+            // → `Player_SetCamMode(BL, 2)` = `Player_PositionCamera` 0x18f5d8 case 2 →
+            // `camera_track_XZ_pos_behind` 0x1bc260 + `camera_track_Y_pos` 0x1bc1f0 (the
+            // cut-scene behind-Bond orbit); anything else → `BL+0x8a8 = 0` + `SetCamMode(0)` +
+            // `Player_ChangeSubState(player, 0)` [M 0x195fc8:7-16]. Drained by the view's
+            // player_events loop (the orbit needs the viewer's Bond).
+            9 => out.push(Request::Cam2Mode { mode: g(0) }),
+            // Event 8 (`Drone_CoderCreate` 0x13a108): the coder-drone spawn — see `Request::CoderCreate`.
+            // The previous-stream object is the position source; `kind` must be 1/2 else the game's
+            // object pointer stays NULL and the whole call is skipped [M 0x1d94c0:75-96 + 0x1d96d4].
+            8 => {
+                let prev = i.checked_sub(1).map(|j| &self.streams[j]).filter(|s| matches!(s.kind, 1 | 2)).and_then(|s| s.obj);
+                out.push(Request::CoderCreate { obj: prev, skin: g(0), script: g(1), setup: g(3) });
+            }
+            // Event 0xa (`Break_DoBreak` 0x12c168): the script-driven break at the previous stream
+            // object's position — see `Request::DoBreak`. Same NULL skip [M 0x1d96bc].
+            0xa => {
+                let prev = i.checked_sub(1).map(|j| &self.streams[j]).filter(|s| matches!(s.kind, 1 | 2)).and_then(|s| s.obj);
+                out.push(Request::DoBreak { at: prev });
             }
             _ => out.push(Request::Event { kind, params: p }),
         }
@@ -909,8 +971,61 @@ impl Script {
                     }
                 }
             }
+            6 => {
+                // `Script_Interp` case 6 [M 0x1d9a08:235-279] (see `Obj::Light`): the keys' matrix with the
+                // parent chain and the script base (case 1's composition), its translation the position;
+                // radius = key scale × the script's scale; the colour bytes from the keys.
+                let Some(o) = self.streams[i].obj else { return };
+                let Some((mut m, scale, _)) = self.keys(i) else { return };
+                let mut p = self.streams[i].parent;
+                let mut n = 0;
+                while p >= 0 && (p as usize) < self.streams.len() && n < self.streams.len() {
+                    if let Some(pm) = self.stream_matrix(p as usize, objs, w) { m = mul(&m, &pm); }
+                    p = self.streams[p as usize].parent;
+                    n += 1;
+                }
+                m = mul(&m, &self.matrix);
+                let rgb = self.key_rgb(i);
+                // G-049: `keys` already returns key scale × SCRIPTINFO+0x94 — the game applies the
+                // script scale ONCE (`*param_7 = key_scale * scale` [M 0x1da158:177]); the port
+                // multiplied again: 08's rocket blast lit at radius 768 where PCSX2's light record
+                // reads 96 [L LightList 0x2c74cc +0x3C, a live 08 blast 2026-10-18].
+                let r = scale;
+                if let Some(Some(Obj::Light { pos, radius, rgb: c, live, .. })) = objs.list.get_mut(o) {
+                    *pos = [m[3][0], m[3][1], m[3][2]];
+                    *radius = r;
+                    if let Some(rgb) = rgb { *c = rgb; }
+                    *live = true;
+                }
+            }
             _ => {}
         }
+    }
+
+    /// `Script_GetInterp` case 6's colour [M 0x1da158:133-170]: the keys' +0x24..26 bytes lerped by the
+    /// stream's weight and clamped not to overshoot the next key's byte.
+    fn key_rgb(&self, i: usize) -> Option<[u8; 3]> {
+        let s = &self.streams[i];
+        let (a, b) = (s.first_key as usize, s.last_key as usize);
+        if b < a || b >= self.nis.keys.len() { return None; }
+        let k = &self.nis.keys[a..=b];
+        let n = k.len() - 1;
+        let c = s.clock.floor();
+        let idx = k.iter().take_while(|x| x.time <= c + 0.001).count() as isize - 1;
+        let (i0, i1, t) = if idx < 0 { (0, 0, 0.0) } else if (idx as usize) < n {
+            let i0 = idx as usize;
+            (i0, i0 + 1, (c - k[i0].time) / (k[i0 + 1].time - k[i0].time))
+        } else { (n, n, 0.0) };
+        // G-049: `Script_GetInterp` packs key +0x26 << 24 | +0x25 << 16 | +0x24 << 8 [M 0x1da158:174]
+        // and `Script_Interp` case 6 stores bits 24..31 into the light's +0x44 (R), 16..23 into +0x45,
+        // 8..15 into +0x46 [M 0x1d9a08:244-246] — so R is the key's byte +0x26 (w24[2]). The port
+        // read them in order: the blast's warm (255,197,134) [L the live 08 light record] drew blue.
+        Some([2, 1, 0].map(|j| {
+            let (x, y) = (k[i0].w24[j] as f32, k[i1].w24[j] as f32);
+            let v = x + (y - x) * t;
+            let v = if y >= x { v.min(y) } else { v.max(y) };
+            v as u8
+        }))
     }
 
     /// A parent stream's matrix (`Script_GetInterp` without the script matrix): its keys, or for an animation its
@@ -995,6 +1110,32 @@ pub struct Player {
     /// owning player's, indexed by the parent stream's `sub` handle; `None` = freed
     /// (`Script_KillStream` case 7 [M 0x1d9860:115-123]).
     pub subs: Vec<Option<Script>>,
+    /// SP+0x14: the hit points — placement param 7 int→float [M SP_CreateScriptPlayer 0x1db9a8:
+    /// `puVar2[5] = (float)(int)*(uint *)(placement + 0x48)`]. A HELD script on a player with hit
+    /// points unpauses when the accumulated bullet damage reaches them (SP_Update's damage tail —
+    /// GAPS G-047: the 0700001b solar panels carry 20).
+    pub hit_points: f32,
+    /// SP+0x18: the accumulated hit damage. `SP_Update` adds `SP_GetHitDamage` while held; on the
+    /// threshold `SP_UnPause` fires and the threshold is SUBTRACTED, keeping the remainder
+    /// [M 0x1dc2f8-0x1dc318].
+    pub damage: f32,
+    /// The tick's bullet damage gathered on this player's current stream objects by the port's
+    /// bullet pass (the game's Collide pass fills the objects' +0xD0 HITDATA chains and
+    /// `SP_GetHitDamage` 0x1dc5f8 sums them). Cleared at the bullet pass's head (the game's
+    /// Collide_Update clears every hit list each frame), consumed by `update_player`.
+    pub tick_damage: f32,
+    /// `SCRIPTPLAYER_tag+0x36` — the disabled byte [M SP_Update 0x1dbda8:57-59 returns while it is
+    /// set; its only writer is `SP_HideObj` 0x1dcbf0 (the campaign copter's hide channel)]. The
+    /// game's one level-load-hidden SP is 07000005's 0x16ddb40 looping pair (+0x36 = 1 [L]; setter
+    /// unknown, a live check) — the port keys that stand-in on the SP's own identity below.
+    pub hidden: bool,
+    /// The placement's model hash (`Placement::hashcode` when `by_hash()`, else 0) — the SP's own
+    /// art. `SCRIPTPLAYER_Elevators`' panel model is baked absolute in it (gfx bounds
+    /// [−18.38,−368.53,24.83]..[−17.78,−367.92,25.20] [D placements dump]). Use-target FALLBACK
+    /// only [S]: the game's use pick hits the class-0 script ENTITIES (`entity_use_targets`) —
+    /// the class-0x1B SP body is inert to it [M 0x1a5170:121-122] — so this stands in only when
+    /// no entity sphere resolves (elevator-buttons-09).
+    pub model: u32,
 }
 
 impl Player {
@@ -1010,6 +1151,12 @@ impl Player {
             info: [None, None], deleted: false,
             live_matrix: matrix,
             subs: Vec::new(),
+            hit_points: g(7) as i32 as f32,
+            damage: 0.0,
+            tick_damage: 0.0,
+            // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
+            hidden: false,
+            model: if p.by_hash() { p.hashcode } else { 0 },
         })
     }
 
@@ -1035,6 +1182,44 @@ impl Player {
             && !(self.scripts[self.cur] == 0x0600_0994 && gate.music2 != 0)
     }
 
+    /// The SP's live entity use targets — the class-0, `obj+0xE4`-carrying script entities of the
+    /// CURRENT SCRIPTINFO. `Player_Activate` 0x1a5170:121-122 dispatches `SP_Activate` only on a
+    /// hit object with `obj+0xE4 != 0 && obj+0xFF == 0`; `obj+0xE4` is the owner-SP handle
+    /// `Script_EntityStart` 0x1d8d78:108-110 stores on every script-created entity. Each target is
+    /// the entity's world sphere: `World::glist_sphere(hash)` (the model's local bounding sphere)
+    /// transformed by the stream matrix — `Control_BuildWorldSph` 0x133070's inputs, the same math
+    /// `Scripts::held_hit_targets` uses for the bullet pass. `SCRIPTPLAYER_Elevators` (07000009
+    /// #70) is reachable exactly this way: its mode-64 preload runs the t=0 Entity op, so entity
+    /// 0x020005EA exists at the panel from level load (docs/systems/elevator-button.md).
+    pub fn entity_use_targets(&self, objects: &Objects, w: &dyn World) -> Vec<([f32; 3], f32)> {
+        self.entity_use_targets_dir(objects, w).into_iter().map(|(c, r, _)| (c, r)).collect()
+    }
+
+    /// The same targets with each entity's facing (the stream matrix's direction basis, the
+    /// game's `Mat_GetDir(obj+0x90)` input): `SP_Activate` 0x1dc338's type-0x39 arm dots it
+    /// against `activator+0xC0 − obj+0xC0` before `Switch_Activate`. The basis is the stored
+    /// matrix's z row — the same column math `entity_use_targets` transforms centres with.
+    pub fn entity_use_targets_dir(&self, objects: &Objects, w: &dyn World) -> Vec<([f32; 3], f32, [f32; 3])> {
+        let mut out = Vec::new();
+        if self.deleted { return out; }
+        let Some(s) = self.info[self.cur].as_ref() else { return out };
+        for st in &s.streams {
+            if st.kind != 1 { continue; }
+            let Some(o) = st.obj else { continue };
+            let Some(Some(Obj::Entity { hash, matrix, .. })) = objects.list.get(o) else { continue };
+            let Some((c, r)) = w.glist_sphere(*hash) else { continue };
+            let centre = [
+                matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
+                matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
+                matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2],
+            ];
+            // The facing basis (the game's `Mat_GetDir(obj+0x90)`): the matrix's z basis row.
+            let dir = [matrix[2][0], matrix[2][1], matrix[2][2]];
+            out.push((centre, r, dir));
+        }
+        out
+    }
+
     /// `SP_CreateScriptPlayer@0x1db9a8:81-86`'s load beat: mode A ∉ {0, 1} loads the script immediately and
     /// `SP_LoadScript@0x1dbc08:41-55`'s mode dispatch leaves it **primed in state 1 after having run once**
     /// (mode 64's arm is play+update+stop; mode 8 plays looping and leaves state 6) [M]. The game does this
@@ -1042,11 +1227,19 @@ impl Player {
     /// the 07000005 EndLevel SP (script 0x6000A23, mode 64) is primed in state 1 with its clock at 2.0 at level
     /// start, and the disabled looping pair (modes 8, mask 0) already plays].
     fn prime(&mut self, lib: &HashMap<u32, Arc<Nis>>, objs: &mut Objects, ch: &mut Channels, w: &dyn World, frame: u32, out: &mut Vec<Request>) {
-        // Mask 0 (state 6) SPs also load at create in the game — the disabled looping pair on 07000005
-        // (0x16ddb40, modes 8,8, mask 0) is loaded and playing behind its `+0x36` freeze [L]. The port has
-        // no disabled byte (port-check §9), so priming those would set a frozen-in-the-game script running;
-        // only mask ≠ 0 SPs are primed (the live EndLevel case: mask 1, mode 64, state 1, clock 2.0 [L]).
-        if self.mask == 0 { return; }
+        // `SP_CreateScriptPlayer` 0x1db9a8 primes EVERY placed SP whose mode A ∉ {0, 1} at create,
+        // regardless of the trigger mask: mask 0 only selects the state word (0x2e == 0 → state 6,
+        // :72-76 — "mask 0 → state 6" [L ee_start_05.bin, both looping pairs]) and `SP_LoadScript`
+        // 0x1dbc08 then loads + `Script_Play`s the looping pair. `SP_Update` 0x1dbda8 ticks
+        // `Script_Update` for every state — the ONLY thing that stops it is the +0x36 disabled byte
+        // (:57-59), which nothing in the level-load path sets (`SP_HideObj` 0x1dcbf0 is its only
+        // writer and only the campaign copter calls it). The port used to skip mask-0 SPs here
+        // (pickup-port-check §9's disabled-byte stand-in), which froze the multiplayer gondolas:
+        // Skyrail's carriage (placement [4], script 0x06000058, mode 8, mask 0) never loaded and
+        // the playtest 1016-1355 sees no gondolas. The one SP the game really keeps frozen is
+        // 07000005's 0x16ddb40 looping pair (+0x36 = 1 [L], setter unknown — its twin 0x16df360
+        // reads 0 and plays); that pair's freeze is the hidden-field stand-in below.
+        if self.hidden { return; }
         if self.state != 0 && self.state != 6 { return; }
         let m = self.modes[0];
         if m == 0 || m == 1 { return; }
@@ -1078,7 +1271,8 @@ impl Player {
     /// objects (2, 8, 0x10, `SP_Hit`) are not modelled yet. `skip` is the game's `Input_Action(-1, 0x19, 1)` —
     /// any player pressed the skip action this tick (`Scripts::skip_request`, set by the viewer's key handler).
     pub fn update(&mut self, lib: &HashMap<u32, Arc<Nis>>, objs: &mut Objects, ch: &mut Channels, w: &dyn World, frame: u32, out: &mut Vec<Request>, skip: bool, gate: SpStart) {
-        if self.deleted || (self.gate != 0 && !ch.on(self.gate as u32)) { return; }
+        // The disabled byte gates the WHOLE update — including `Script_Update` [M 0x1dbda8:57-59].
+        if self.hidden || self.deleted || (self.gate != 0 && !ch.on(self.gate as u32)) { return; }
         if let Some(s) = self.info[self.cur].as_mut() {
             s.update(&mut self.subs, lib, objs, ch, w, frame, out);
             // `Script_Interp` 0x1d9a08:106-133 keys the SP object's `obj+0x90` from stream 0 every
@@ -1162,6 +1356,19 @@ impl Player {
                     self.activated = true;
                     if let Some(s) = self.info[self.cur].as_mut() { s.delay = 0; }
                 }
+                // script-negative-delay [S stand-in, docs/levels/0700004a.md §6]: the Tower-2 lift
+                // (SP #42: mask 1, out 0x22 [D placement]) resumes ONLY while ch 0x22 is on — the
+                // game's case-2 rule above — and its script HOLDS itself at t1611 (stream 4's
+                // event 3 p0 = 0 → the −1 delay [D 0x06000571]). The disc carries no ch-0x22
+                // writer the port's scans reach (the 11 scripts' 0xD/0x11 events, the placements,
+                // the 13 TouchOnce plates — the same "no writer found" shape as ch 0x4a below),
+                // so the port marks the play the doc's reading ("the ch-0x22 SP out marks the
+                // play"): the channel rises when the hold engages, and the mask&1 rule then
+                // releases the hold through `SP_UnPause` — the game's path, not a delay override.
+                if w.level() == 0x0700_004a && self.scripts[self.cur] == 0x0600_0571
+                    && self.info[self.cur].as_ref().is_some_and(|s| s.delay < 0) {
+                    ch.set(0x22, 1, frame);
+                }
                 // The skip [M 0x1dbda8:129-141]: `Input_Action(-1, 0x19, 1)` — any player pressing the skip
                 // action — fast-forwards the current script via `Script_FFwd(cur, 1)`, unless the script is one
                 // of the three death NISs (`Script_IsDeathNIS` reads slot A's hash, always +0x1C).
@@ -1216,7 +1423,31 @@ impl Player {
             7 => self.load(lib, objs, ch, w, frame, out),
             _ => {}
         }
-        if self.out != 0 && trig { ch.set(self.out as u32, value as u8, frame); }
+        if self.out != 0 && trig { ch.set_script(self.out as u32, value as u8, frame); ch.script_channels.insert(self.out as u8); }
+        // `SP_Update`'s damage tail [M 0x1dc1c0-0x1dc330, after the mode switch and the out-channel
+        // write]: a HELD current script (`SCRIPTINFO+0x9c != 0`) on a player with hit points
+        // (`SP+0x14 != 0`) adds the tick's bullet damage on its stream objects (`SP_GetHitDamage`
+        // 0x1dc5f8 — the port's bullet pass gathered it into `tick_damage`) into `SP+0x18`; when the
+        // sum reaches the hit points, `SP_UnPause` 0x1dca58 fires — the one-tick `+0x2c` flag (the
+        // port's `activated`, gathered as trigger bit 4 next tick) and `SCRIPTINFO+0x9c = 0` — and
+        // the threshold is SUBTRACTED, keeping the remainder [M 0x1dc2f8-0x1dc318]. GAPS G-047: the
+        // 0700001b solar panels (param 7 = 20) resume and their stream 1-10 debris plays.
+        if let Some(s) = self.info[self.cur].as_ref() {
+            if s.delay != 0 && self.hit_points != 0.0 {
+                let dmg = std::mem::take(&mut self.tick_damage);
+                if dmg != 0.0 {
+                    self.damage += dmg;
+                    // The game's scenery-shot stat (`PlrStat_LogShotHitScenery(0)` for scripts
+                    // 0x60007e2..0x60007ea but 0x60007e3 [M 0x1dc290-0x1dc2c8]) has no port-side
+                    // PlrStat to call [*deviation*].
+                    if self.hit_points <= self.damage {
+                        self.damage -= self.hit_points;
+                        self.activated = true;
+                        if let Some(s) = self.info[self.cur].as_mut() { s.delay = 0; }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1295,9 +1526,64 @@ impl Scripts {
                 // Merge drift (fix-searchlight-alarm × walkreal-b2's field): the identity, like the matrix.
                 live_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
                 subs: Vec::new(),
+                hit_points: 0.0,
+                damage: 0.0,
+                tick_damage: 0.0,
+                // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
+                hidden: false,
+                // Scripts::new's synthetic copter player has no placement model.
+                model: 0,
             });
         }
         Scripts { lib, players, objects: Objects::default(), requests: Vec::new(), primed: false, skip_request: false }
+    }
+
+    /// `SP_GetHitDamage` 0x1dc5f8's read set: the current script's stream objects of every player
+    /// whose script is HELD (`SCRIPTINFO+0x9c != 0`) on a hit-point player [M SP_Update's damage
+    /// tail 0x1dc1c0-0x1dc330 gates the accumulation on exactly that; `Script_GetObj` 0x1db688
+    /// walks the records with kind 1/2]. Returns `(player index, world centre, radius)`; the
+    /// centre is the entity matrix through the glist sphere's local centre, the radius the
+    /// glist's — the game's `Control_BuildWorldSph` volume [M 0x133070:36-40, the same shape the
+    /// SP_Hit blast test sweeps]; an anim object keeps its stream matrix's translation with
+    /// radius 0 [S] (the port carries no anim volume).
+    pub fn held_hit_targets(&self, w: &dyn World) -> Vec<(usize, [f32; 3], f32)> {
+        let mut out = Vec::new();
+        for (pi, p) in self.players.iter().enumerate() {
+            if p.deleted || p.hit_points == 0.0 { continue; }
+            let Some(s) = p.info[p.cur].as_ref() else { continue };
+            if s.delay == 0 { continue; }
+            for i in 0..s.streams.len() {
+                if !matches!(s.streams[i].kind, 1 | 2) { continue; }
+                let Some(o) = s.streams[i].obj else { continue };
+                let Some(Some(obj)) = self.objects.list.get(o) else { continue };
+                match obj {
+                    Obj::Entity { hash, matrix, .. } => {
+                        let (c, r) = w.glist_sphere(*hash).unwrap_or(([0.0; 3], 0.0));
+                        let centre = [
+                            matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
+                            matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
+                            matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]];
+                        out.push((pi, centre, r));
+                    }
+                    _ => {
+                        if let Some(m) = s.stream_matrix(i, &self.objects, w) {
+                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.0));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// One bullet contact's damage on a player's stream objects this tick (`Collide_Update`
+    /// 0x1ea398 fills the object's +0xD0 HITDATA chain; `SP_GetHitDamage` sums it — the port
+    /// gathers per contact in the bullet pass). All damage types count: `SP_Update` calls
+    /// `SP_GetHitDamage` with filter 0 (`Collide_FilterBullets` drops nothing at mask 0
+    /// [M 0x1ece30:24-31 — only a non-zero mask zeroes a hit's damage]) and
+    /// `Collide_GetDamageNObjects` sums every record [M 0x1ee220].
+    pub fn add_hit_damage(&mut self, player: usize, dmg: f32) {
+        if let Some(p) = self.players.get_mut(player) { p.tick_damage += dmg; }
     }
 
     /// A synthetic one-shot player (fix-objects2): mode 1 (plays once from spawn), no gate, no
@@ -1310,12 +1596,41 @@ impl Scripts {
     /// `spawn_once` with the script scale: `Explode_Create` (0x17cbd0:106) plays the explosion script
     /// with scale = radius·0.06666667 — the port's `Player.scale` multiplies the key translations and
     /// key scales [M nis.rs keys/interp], the same object field the game's script player carries.
+    /// The keyed script lights this frame: (position, radius, rgb, kind byte).
+    pub fn lights(&self) -> Vec<([f32; 3], f32, [u8; 3], u8)> {
+        self.objects.list.iter().filter_map(|o| match o {
+            Some(Obj::Light { pos, radius, rgb, kind, live: true, .. }) => Some((*pos, *radius, *rgb, *kind)),
+            _ => None,
+        }).collect()
+    }
+
+    /// laser-scripts: every live script entity — `(script hash, stream, object hashcode, world
+    /// matrix, alpha)`. The laser-grid beams are exactly these (`Script_CreateEntity` 0x1d8968:170-173
+    /// creates the class-0 object with the hash's glist; `Script_Interp` 0x1d9a08 poses it; the
+    /// laser art glists are modelled in world space, so the matrix stays the script base), so this
+    /// is the per-beam state the draw code reads: which art variant (ON / OFF / AMBER — the
+    /// hashcode) is alive, where, at what alpha (`Script_GetInterp` 0x1da158's `*param_8`), and
+    /// under which script/stream (the `src` the render attachments resolve through). Read-only.
+    pub fn entities(&self) -> Vec<(u32, u8, u32, Mat4, f32)> {
+        self.objects.list.iter().filter_map(|o| match o {
+            Some(Obj::Entity { hash, matrix, alpha, src: (sh, st), .. }) => Some((*sh, *st, *hash, *matrix, *alpha)),
+            _ => None,
+        }).collect()
+    }
+
     pub fn spawn_once_scaled(&mut self, placement: usize, script: u32, matrix: Mat4, scale: f32) {
         self.players.push(Player {
             placement, scripts: [script, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0,
             scale, matrix, cur: 0, state: 7, activated: false, countdown: 0, info: [None, None], deleted: false,
             live_matrix: matrix,
             subs: Vec::new(),
+            hit_points: 0.0,
+            damage: 0.0,
+            tick_damage: 0.0,
+            // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
+            hidden: false,
+            // The runtime spawn has no placement model.
+            model: 0,
         });
     }
 
@@ -1433,6 +1748,54 @@ mod tests {
         assert_eq!(weapon, Some(6), "Event 0xB should set the Anim's weapon byte to 6 (Handgun)");
     }
 
+    /// nis-event9-cnis: Event 9 is `Player_Cam2Mode(0, param0)` [M `Script_EventHandler` 0x1d94c0
+    /// case 9] — the request carries the event's param 0 verbatim (mode 3 = the behind-Bond orbit
+    /// enter, anything else = the exit arm [M `Player_Cam2Mode` 0x195fc8:7-16]). Fails on the old
+    /// tree, where kind 9 fell to the generic `Request::Event` arm and was consumed by nothing.
+    #[test]
+    fn event_9_requests_cam2mode_with_the_events_param() {
+        // Stream 0: Cmd::Event { kind: 9, params: [3] } (op 0x12: op, n, kind, param[0], pad).
+        let enter = {
+            let mut v = vec![0x12, 0x01, 0x09];
+            v.extend(3u32.to_le_bytes());
+            v.push(0);
+            v
+        };
+        // Same, params [0] — the exit arm.
+        let exit = {
+            let mut v = vec![0x12, 0x01, 0x09];
+            v.extend(0u32.to_le_bytes());
+            v.push(0);
+            v
+        };
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_0074,
+            camera: false,
+            loop_start: 0,
+            length: 100,
+            streams: vec![
+                NisStream { first_key: 0, last_key: 0, commands: enter },
+                NisStream { first_key: 0, last_key: 0, commands: exit },
+            ],
+            keys: Vec::new(),
+        });
+        let mut script = Script::load(nis, IDENT, 1.0);
+        script.start(false);
+        let mut objs = Objects::default();
+        let mut ch = Channels::default();
+        let mut out = Vec::new();
+        let world = TestWorld;
+        for frame in 0..3 {
+            let mut subs = Vec::new(); script.update(&mut subs, &Default::default(), &mut objs, &mut ch, &world, frame, &mut out);
+        }
+        let modes: Vec<u32> = out.iter().filter_map(|r| match r {
+            Request::Cam2Mode { mode } => Some(*mode),
+            Request::Event { kind: 9, .. } => panic!("event 9 fell to the unhandled Event arm"),
+            _ => None,
+        }).collect();
+        assert_eq!(modes, vec![3, 0], "event 9 → Player_Cam2Mode(0, param0) [M 0x1d94c0 case 9]");
+    }
+
     /// The eight unhandled opcodes (0x13 fade, 0x14/0x15 sprite, 0x18/0x1A light, 0x1B/0x1D subscript,
     /// 0x1E text) consume their arguments and the stream CONTINUES — the game has handlers for all of them
     /// (`Script_Run` 0x1d8548:80-118) [M; port-check §5]. Before the fix the stream halted (`pc = None`) and
@@ -1507,6 +1870,12 @@ mod tests {
         let mut p = Player { placement: 0, scripts: [0x0600_0421, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0, matrix: IDENT, cur: 0, state: 0, activated: false, countdown: 0, info: [None, None], deleted: false,
             live_matrix: IDENT,
             subs: Vec::new(),
+            hit_points: 0.0,
+            damage: 0.0,
+            tick_damage: 0.0,
+            // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
+            hidden: false,
+            model: 0,
         };
         let mut lib = HashMap::new();
         lib.insert(0x0600_0421u32, nis);
@@ -1544,6 +1913,12 @@ mod tests {
         let mut p2 = Player { placement: 0, scripts: [0x0600_0952, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0, matrix: IDENT, cur: 0, state: 0, activated: false, countdown: 0, info: [None, None], deleted: false,
             live_matrix: IDENT,
             subs: Vec::new(),
+            hit_points: 0.0,
+            damage: 0.0,
+            tick_damage: 0.0,
+            // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
+            hidden: false,
+            model: 0,
         };
         let mut objs2 = Objects::default();
         p2.load(&lib, &mut objs2, &mut ch, &world, 0, &mut out);
@@ -1553,5 +1928,92 @@ mod tests {
         let s2 = p2.info[0].as_ref().unwrap();
         assert_eq!(s2.fade_flags & 1, 0, "a death NIS never arms the skip");
         assert!(s2.play & 2 == 0 || s2.clock < 100.0, "the death NIS was not fast-forwarded (clock {} play {:#x})", s2.clock, s2.play);
+    }
+
+    /// The held-script rule (GAPS G-047, task 732): a NEGATIVE delay HOLDS — the streams stop,
+    /// the clock freezes, the delay does not count down — and a held entity sits at its FIRST
+    /// KEY's position [M Script_Update 0x1da9c4-0x1da9dc: `blez` → the epilogue, no store, no
+    /// decrement; Script_EntityStart 0x1d8d78 tails with `Script_Interp`, so the object is
+    /// placed at creation — the game's held panels never stack at an identity matrix]. Sister:
+    /// a positive delay still counts down one per tick and releases the script.
+    #[test]
+    fn negative_delay_holds_and_the_held_entity_takes_its_first_key() {
+        // Stream 0: op 7 creates glist 0x2000A42 at t0 (10-byte head: op, hash, has_parent,
+        // parent, spline, type, n... the port reads head[0..5] at pc+5 — head = cmds[pc+5..pc+10]).
+        let mut cmds = vec![7u8];
+        cmds.extend(0x0200_0A42u32.to_le_bytes());
+        cmds.extend([0u8, 0, 0, 2, 0]); // no parent, no spline, type 2, no params
+        cmds.push(0);
+        cmds.extend([0x04, 0xff, 0xff]); // stream end (held on it)
+        // Stream 1: event 3 with p0 = 0 → SCRIPTINFO+0x9c = −1 [M Script_EventHandler 0x1d94c0:100].
+        let mut ev = vec![0x12u8, 1, 3];
+        ev.extend(0u32.to_le_bytes());
+        ev.push(0);
+        // One key at t5, position (7, 8, 9), identity rotation [x,y,z,w].
+        let key = nf_formats::nis::Key { pos: [7.0, 8.0, 9.0, 1.0], quat: [0.0, 0.0, 0.0, 1.0], scale: 1.0, w24: [0; 4], w28: 0.0, time: 5.0 };
+        let mk = |hash: u32| Arc::new(Nis {
+            hashcode: hash, camera: false, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: cmds.clone() }, NisStream { first_key: 0, last_key: 0, commands: ev.clone() }],
+            keys: vec![key],
+        });
+        let mut lib = HashMap::new();
+        lib.insert(0x0600_0832u32, mk(0x0600_0832));
+        let mut objs = Objects::default();
+        let mut ch = Channels::default();
+        let world = TestWorld;
+        let mut out = Vec::new();
+        let mut p = Player { placement: 0, scripts: [0x0600_0832, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0, matrix: IDENT, cur: 0, state: 7, activated: false, countdown: 0, info: [None, None], deleted: false,
+            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, model: 0 };
+        p.load(&lib, &mut objs, &mut ch, &world, 0, &mut out);
+        {
+            let s = p.info[0].as_ref().unwrap();
+            assert_eq!(s.delay, -1, "event 3 with p0 = 0 sets the delay to −1 [M 0x1d94c0:100]");
+        }
+        // Ten ticks held: the clock must not move and the delay must not count down.
+        for frame in 0..10 { p.update(&lib, &mut objs, &mut ch, &world, frame, &mut out, false, crate::nis::SpStart::default()); }
+        {
+            let s = p.info[0].as_ref().unwrap();
+            assert_eq!(s.delay, -1, "a NEGATIVE delay holds without decrementing [M 0x1da9d0 blez → the epilogue]");
+            assert_eq!(s.clock, 1.0, "the held script's clock froze at the load beat (1.0), not {} — the streams do not run", s.clock);
+        }
+        // The held entity sits at its first key's position — created ONCE with Script_Interp's
+        // placement [M Script_EntityStart 0x1d8d78 tail], never the identity matrix.
+        let idx = objs.list.iter().position(|o| matches!(o.as_ref(), Some(Obj::Entity { hash: 0x0200_0A42, .. }))).expect("the held script's entity exists");
+        let Some(Some(Obj::Entity { matrix, .. })) = objs.list.get(idx) else { unreachable!() };
+        let t = (matrix[3][0], matrix[3][1], matrix[3][2]);
+        assert!((t.0 - 7.0).abs() < 0.01 && (t.1 - 8.0).abs() < 0.01 && (t.2 - 9.0).abs() < 0.01,
+            "the held entity takes its FIRST KEY's position (7, 8, 9), got {t:?} — not the identity/origin");
+
+        // Sister: a positive delay counts down. p0 = 5 → delay 4 → 3 → 2 → 1 → the streams run.
+        let mut ev5 = vec![0x12u8, 1, 3];
+        ev5.extend(5u32.to_le_bytes());
+        ev5.push(0);
+        lib.insert(0x0600_0833u32, Arc::new(Nis {
+            hashcode: 0x0600_0833, camera: false, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: cmds.clone() }, NisStream { first_key: 0, last_key: 0, commands: ev5.clone() }],
+            keys: vec![nf_formats::nis::Key { pos: [1.0, 2.0, 3.0, 1.0], quat: [0.0, 0.0, 0.0, 1.0], scale: 1.0, w24: [0; 4], w28: 0.0, time: 0.0 }],
+        }));
+        let mut objs2 = Objects::default();
+        let mut p2 = Player { placement: 0, scripts: [0x0600_0833, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0, matrix: IDENT, cur: 0, state: 7, activated: false, countdown: 0, info: [None, None], deleted: false,
+            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, model: 0 };
+        p2.load(&lib, &mut objs2, &mut ch, &world, 0, &mut out);
+        {
+            let s = p2.info[0].as_ref().unwrap();
+            assert_eq!(s.delay, 4, "event 3 with p0 = 5 sets the delay to p0 − 1 = 4 [M 0x1d94c0:100]");
+            assert_eq!(s.clock, 1.0, "the load beat ran once");
+        }
+        // The stream object's matrix at t0 IS placed (the first key, time 0) — then the delay
+        // counts down without the streams running.
+        for frame in 0..4 { p2.update(&lib, &mut objs2, &mut ch, &world, frame, &mut out, false, crate::nis::SpStart::default()); }
+        {
+            let s = p2.info[0].as_ref().unwrap();
+            assert_eq!(s.delay, 0, "the positive delay counted down 4 → 0 over four ticks [M 0x1da9d8 sw $v0,156($s0)]");
+            assert_eq!(s.clock, 1.0, "the skipped ticks never advanced the clock");
+        }
+        p2.update(&lib, &mut objs2, &mut ch, &world, 5, &mut out, false, crate::nis::SpStart::default());
+        {
+            let s = p2.info[0].as_ref().unwrap();
+            assert!(s.clock > 1.0, "a zero delay runs the streams again (clock {})", s.clock);
+        }
     }
 }

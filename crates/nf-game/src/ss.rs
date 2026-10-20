@@ -53,8 +53,10 @@ pub struct Ss {
     pub hash: u32,
     /// ext+0x08 = param 5 — the sweep's rest point in key units, snapped to whole steps
     /// (`SS_Create` tail: `step * (int)((float)param5 / step)` [M 0x1a9dc8-0x1a9dd8 disasm]).
-    /// Every SS on the shipped levels carries 0, so the landing window (below) never fires and
-    /// the wrap ends every sweep.
+    /// The shipped raw values are 0/15/30/45/60 — ticks-scale words on a key-scale playhead — so
+    /// after the snap NONE lands inside its sweep (e.g. 07000001 #16: step 0.14, rest 45 → 44.94,
+    /// last key 7 [D census, docs/systems/ss-sweep.md]): the landing window below never fires and
+    /// the wrap ends every sweep on shipped content.
     pub rest: f32,
     /// ext+0x24 = param 1 — the wrap flag: 0 → the wrap re-arms to 0x40 (re-operable), non-zero →
     /// the wrap disarms to 0 [M 0x1a9948:121-126].
@@ -134,36 +136,64 @@ impl SsList {
     ///   [M 0x1a9948:119-128]). States 0/0x40 never re-pose the matrix, so **the object holds its
     ///   last posed pose after the wrap** — a one-shot grate (p1=1) ends disarmed at state 0 with
     ///   the open pose held; a looping prop (p1=0) re-arms at 0x40.
-    /// * state **0x40** (armed rest): re-sweeps only while `SS_Operate` returns non-zero — the
-    ///   presence bits (mask 0x2/0x8/0x10 vs the obj+0xD0 contact chain [M 0x1a9df8:12-46]) or the
-    ///   channel path (channel word ≠ 0 and `switch_channels[ch]` ≠ 0 [M 0x1a9df8:47-51]). The
-    ///   port has no contact chain, so only the channel half is live; every mask-0x2/0x8/0x10 SS
-    ///   rests until its channel (if any) is set.
+    /// * state **0x40** (armed rest): on one `SS_Operate` non-zero it LATCHES state 1 [M 0x1a9948's
+    ///   0x40 arm] and the state-1 sweep then runs the whole travel without further operate (until
+    ///   the wrap) — the operate sources are the presence bits (mask 0x2/0x8/0x10 vs the obj+0xD0
+    ///   contact chain [M 0x1a9df8:12-46]) or the channel path (channel word ≠ 0 and
+    ///   `switch_channels[ch]` ≠ 0 [M 0x1a9df8:47-51]). The
+    ///   contacts argument carries the port's collision-pass product per SS part: bit 0 = the
+    ///   player's capsule (the game's class-3 byte → mask 0x8), bit 1 = a player-bullet flight
+    ///   (class 5 → 0x2), bit 2 = a drone (class 2 → 0x10; unported — no disc SS carries a 0x10
+    ///   mask [D census, fix-0c-hatch-latches]). fix-0c-hatch-latches2: the 0c winches
+    ///   (#351/#364/#377, mask 0x2 [D], ch 0) are bullet-driven, never channel-driven.
     /// * state **8**: the infinite loop — pose, advance, wrap `t` to 0 past the last key, stay 8
     ///   [M 0x1a9948:48-71].
     /// * every other state: nothing (the pose stays) [M 0x1a9948:74-83].
     ///
     /// The channel is an OUTPUT, never a playhead driver: with mask bit 0 clear and the channel
     /// word non-zero, `SS_Update` writes the operate result into a 0-valued channel
-    /// [M 0x1a9948:20-23] — unported here (it needs the presence result; the E latch in
+    /// [M 0x1a9948:18-23]. Ported here on the same contacts (fix-0c-hatch-latches2; the E latch in
     /// `activate` covers the ch≠0 write the game makes there [M 0x1a9ea8:11-13]).
     ///
     /// The per-tick step is `SS_Create`'s ext+0x04 = **`(key count − 1) / rate`**, computed once at
     /// create [M 0x1a9c58:51], so the rate word is the sweep's whole duration in ticks:
     /// 0700000c's `ventmesh-front` #138 (6 keys, rate 50 [D]) reaches its last key in 50 ticks
     /// (fix-0c-hatch; the old 1/rate model was five times slow).
-    pub fn tick(&mut self, ch: &Channels) {
-        for s in &mut self.list {
+    pub fn tick(&mut self, ch: &mut Channels, contacts: &[u8], frame: u32) {
+        for (i, s) in self.list.iter_mut().enumerate() {
             if s.keys.len() < 2 { continue; }
             let last = (s.keys.len() - 1) as u16;
             let step = last as f32 / s.rate as f32;
-            // `SS_Operate` 0x1a9df8, channel half (the presence half needs the obj+0xD0 contact
-            // chain — unported; see the module report). Channel word 0 means "no channel" [M
-            // 0x1a9df8:47-48 — the `== 0` short-circuit], so a ch-0 SS never re-arms here.
-            let operate = s.channel != 0 && ch.on(s.channel as u32);
+            // `SS_Operate` 0x1a9df8 — the presence half: the obj+0xD0 contact chain's class bytes
+            // (3 player → 0x8, 2 drone → 0x10, 5 bullet → 0x2) OR'd, then AND'd with the mask word
+            // (ext+0x1E = param 2 [M 0x1a9df8:12-45]); non-zero → operate 1. The port feeds bit 0
+            // = the player's capsule, bit 1 = a player-bullet flight, bit 2 = a drone (unported;
+            // no disc SS carries 0x10 [D census]).
+            let c = contacts.get(i).copied().unwrap_or(0);
+            let presence = (s.mask & 0x8 != 0 && c & 1 != 0)
+                || (s.mask & 0x2 != 0 && c & 2 != 0)
+                || (s.mask & 0x10 != 0 && c & 4 != 0);
+            // The channel half [M 0x1a9df8:46-51]: channel word 0 short-circuits to 0.
+            let operate = presence || (s.channel != 0 && ch.on(s.channel as u32));
+            // The latch write [M 0x1a9948:18-23]: mask bit 0 CLEAR, the channel word non-zero and
+            // the channel value 0 → the operate result goes into the channel.
+            if s.mask & 1 == 0 && s.channel != 0 && !ch.on(s.channel as u32) {
+                ch.set(s.channel as u32, operate as u8, frame);
+            }
             match s.state {
                 1 => Self::sweep(s, last, step),
-                0x40 if operate => Self::sweep(s, last, step), // the sound arm [M 0x1a9948:86-89] is unplayed
+                0x40 if operate => {
+                    // The 0x40 arm LATCHES state 1 before the shared sweep body [M 0x1a9948's
+                    // 0x40 arm: `*(ext+0x22) = 1` right after the Sound_Play3D call] — one
+                    // operate tick then sweeps the WHOLE travel in state 1 (no further operate
+                    // needed) until the wrap re-arms 0x40 / disarms 0. This is what makes a
+                    // single bullet drive the winch's full sweep: the contact chain is rebuilt
+                    // per tick [M Collide_Update 0x1ea398:10-27 clears obj+0xD0 each pass], so
+                    // a re-required operate stalled the render at t = one step (task 787's
+                    // shot-winch follow-up).
+                    s.state = 1;
+                    Self::sweep(s, last, step); // the sound arm [M 0x1a9948:86-89] is unplayed
+                }
                 8 => {
                     // The loop: pose, advance, wrap t to 0 past the last key, stay 8.
                     if let Some(m) = interp(&s.keys, 0, last, s.t, s.spline) { s.matrix = m; }

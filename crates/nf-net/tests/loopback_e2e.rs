@@ -107,7 +107,7 @@ fn agent_input(slot: u8, tick: u32) -> nf_net::Input {
 
 /// The fake deterministic sim: a hash chain over all 4 agents' inputs —
 /// same inputs on every machine = same hash; one flipped bit changes it.
-fn sim_hash(tick: u32, inputs: &[nf_net::Input; 4], prev: u64) -> u64 {
+fn sim_hash(tick: u32, inputs: &[nf_net::Input; nf_net::MAX_AGENTS], prev: u64) -> u64 {
     let mut h = prev ^ 0xC0FF_EE00;
     for (s, i) in inputs.iter().enumerate() {
         h = h.rotate_left(17) ^ (i.forward.to_bits() as u64).wrapping_add(s as u64 + 1);
@@ -200,7 +200,10 @@ fn run_600(corrupt_client: Option<usize>, corrupt_tick: u32, port: u16) -> (Peer
             while p.scheduled > p.executed {
                 match p.sess.ready_inputs(p.executed) {
                     Some(mut inputs) => {
-                        if corrupt_client == Some(slot - 1) && slot > 0 && p.executed == corrupt_tick {
+                        // net-e2e-loopback: the `slot > 0` guard MUST come first —
+                        // slot 0 is the host (the chain's head) and `slot - 1`
+                        // used to underflow before the guard was evaluated.
+                        if slot > 0 && corrupt_client == Some(slot - 1) && p.executed == corrupt_tick {
                             let ls = p.sess.local_slot() as usize;
                             inputs[ls].fire = !inputs[ls].fire;
                         }
@@ -234,6 +237,12 @@ fn run_600(corrupt_client: Option<usize>, corrupt_tick: u32, port: u16) -> (Peer
             }
         } else if !desyncs.is_empty() {
             break;
+        }
+    }
+    if corrupt_client.is_none() && (host.executed < target || clients.iter().any(|c| c.executed < target)) {
+        eprintln!("WEDGED at ms={ms}: host exec={} {}", host.executed, host.sess.debug_state());
+        for c in clients.iter() {
+            eprintln!("  client exec={} {}", c.executed, c.sess.debug_state());
         }
     }
     (host, clients, desyncs)

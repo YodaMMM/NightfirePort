@@ -326,3 +326,36 @@ Two workers built two UDP sessions in parallel (051 `nf-net`, 053 `nf_game::net`
   (two real MP sims, 1000 ticks, per-tick hash equality; forced desync; disconnect keeps the
   match running on NEUTRAL — the game's own dead-pad shape [M `psiInput_PollDevices` 0x10ca78],
   replacing 053's terminal PeerLost).
+
+## 10. The app's online match loop — what the two-window check fixed (2026-10-18, main agent) [S]
+
+The first real two-window run on one PC (host + joiner, `--net-host` / `--net-join`) froze, then desynced; each
+cause and its fix (crates/nf-view/src/lib.rs unless noted):
+
+1. **Input lead.** The app gated tick `t` on `ready_inputs(t)` and only THEN submitted its own input for `t` —
+   no machine ever had its own input; every window froze. Now the input sampled while running `t` is submitted
+   for `t + input_delay()` (the host's config; the client stores the WELCOME's value), the tick runs on the
+   SESSION's input for the local slot (the one every machine sees; the local-only view lanes — zero-g lift /
+   stabilise, the wheel's zoom steps — stay local), and when the match level swaps in the app submits NEUTRAL
+   for its own slot on ticks `0..input_delay` (nothing ran that many ticks earlier).
+2. **The joiner's body.** The load spawns every human in slot order with slot 0's body in `sim.bond`;
+   `Sim::swap_local_slot` existed but nothing called it — the joiner played slot 0's spawn and had no body for
+   the host (desync at tick 0). `swap_in_scene` calls it for a non-zero local slot.
+3. **No tick before the match level.** The host ran match ticks on its pre-match scene, then the load restarted
+   the sim at frame 1 with `net_tick` still advanced — every later hash compared different frames.
+   `net_await_load` holds the lockstep from the arm until `swap_in_scene`, which zeroes `net_tick`.
+4. **A double RefCell borrow** in the hash submit (an `if let` keeps its scrutinee's borrow for the body) —
+   latent until 1 let a tick run.
+5. **The SP machinery stays off in MP:** `Mission_Update` returns while `MPSettings+0x180` (the port's
+   `MpSettings::master`) is set [M 0x182c60:16-18] — the arena's empty objective list read as "complete" and
+   ran the SP outro + results; the death sequence's SP arm (ch 0x5e, the sting, ch 0x62 → the fail menu) is
+   skipped [M 0x190810:39-42, 0x190bb0:20].
+6. **The tick budget is the match clock** (`elapsed × 60`, ≤ 4 per frame): a stall now delays the match; before,
+   the frame's stalled ticks were dropped and the two-window match crawled at ~12-15 ticks/s (60 now).
+7. **The pause page** no longer stops one machine (the others would stall): the match runs on under the menu
+   with that player idle.
+
+Still open (queued): every human slot must run the full player (weapons, damage, death) on every machine —
+a shot desyncs today (700v6); the bodies use the drone idle/walk/run scripts until the player anim set lands
+(700v7). Diagnostics: `NF_NET_HASHDBG=a-b` (per-frame state dump), `NF_NET_RATE` (ticks/stalls per second),
+`NF_MP_FACE_OTHER`, `NF_NET_SHOT=<tick>` (render-check aids).

@@ -28,6 +28,7 @@ fn bare_sound(scene: &mut nf_view::scene::Scene) -> nf_audio::sfx::Sound {
     let mut snd = nf_audio::sfx::Sound {
         driver: Default::default(),
         output: None,
+        captured: None,
         music_files: None,
         music: None,
         music_pending: Vec::new(),

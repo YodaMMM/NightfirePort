@@ -6,7 +6,7 @@
 //! C_SBDSWPSCROLL 0x20bab0; the tables ds_weapons 0x2dfec8 / ds_gadgets 0x2e0150 (24 B rows:
 //! preview +0, wheel label +4, description +8, upgrade object +0xc) and RewardsTable 0x2bc920
 //! (64 B entries: descriptors +4..+0x14, bonus captions +0x1c..+0x28, stamp textures +0x30..+0x3c);
-//! the scroll rules of Scroll_Update 0x2221b20 / Scroll_SendMessage 0x222810; the upgrade walk of
+//! the scroll rules of Scroll_Update 0x221b20 / Scroll_SendMessage 0x221810; the upgrade walk of
 //! Menu_GetObjectUpgradeLevel 0x2025f8. Disc reads are ISO-gated (NF_ISO), each with a sister
 //! assertion that runs headless.
 
@@ -27,34 +27,45 @@ fn the_dossier_wheels_rows_open_the_three_pages() {
         fe.page = Page::Dossier;
         fe.cursor = row;
         assert!(fe.action(Action::Confirm), "row {row} confirm opens its page");
-        assert_eq!(fe.page, want, "the wheel's row {row} opens its page [M 0x216eb0:12-31]");
+        // G-048(1): both wheel arms ride Menu_ChangePageCloseIris [M C_SBDOSSIER 0x216eb0:20/:26 →
+        // 0x202190:8-9 — the 0x44 lands 10 ticks out and its processing lifts the input block
+        // 0x21c858:315]. The old immediate-flip assert pinned the pre-G-048 port choice; fixed
+        // with the address (fe-gaps-g048-2).
+        for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
+        assert_eq!(fe.page, want, "the wheel's row {row} opens its page [M 0x216eb0:12-31, 0x202190:8-9]");
         assert_eq!(fe.page.id(), id);
         assert_eq!(fe.cursor, 0, "the page's init msg 0x2e (0,0) resets the scroll [D page data]");
-        // Back returns to the Dossier (the Records page's own mapping).
+        // Back returns to the Dossier (the Records page's own mapping — the sub-pages' Back/0x5f
+        // pops are immediate [M], not CloseIris callers).
         assert!(fe.action(Action::Back));
         assert_eq!(fe.page, Page::Dossier);
     }
 }
 
-// --- the scroll: clamp, no wrap [M Scroll_Update 0x2221b20:186-210 — +0x144 never set] ---
+// --- the scroll: one step per press. fe-audit: the old "clamp, +0x144 never set" reading was
+// inverted — Scroll_Init sets the wrap flag +0x144 = 1 [M 0x2214f0:102-103] and only msg 0x69 clears
+// it [M Scroll_SendMessage 0x221810:136-138]. Whether these three lists are M_SCROLLs (and so wrap)
+// is not checked: their end behaviour is [S unverified] and out of pass/fail here. ---
 
 #[test]
-fn the_three_pages_scroll_with_clamp_and_their_own_row_counts() {
+fn the_three_pages_scroll_one_step_and_their_own_row_counts() {
     let mut fe = FrontEnd::new();
     fe.page = Page::Rewards;
     assert_eq!(fe.rows(), 12, "the Rewards list is the 12 sp_level rows [M P_DSREWARDS 0x2172c8:11-13]");
-    assert!(!fe.action(Action::Up), "Up at row 0 is a no-op [M 0x2221b20:202-210]");
+    let _ = fe.action(Action::Up); // the list's end [S unverified]
+    fe.cursor = 0;
     assert!(fe.action(Action::Down) && fe.cursor == 1);
     fe.cursor = 11;
-    assert!(!fe.action(Action::Down), "Down at the last row clamps [M 0x2221b20:186-194]");
+    let _ = fe.action(Action::Down); // the list's end [S unverified]
+    fe.cursor = 11;
     assert!(fe.action(Action::Up) && fe.cursor == 10);
 
     fe.page = Page::Gadgets;
     fe.cursor = 0; // the page's own init msg 0x2e (0,0) [D page data]
     assert_eq!(fe.rows(), 14, "the gadgets wheel's range is [0, 0xd] [M C_SBDSGTSCROLL 0x20bcc0:64-67]");
-    assert!(!fe.action(Action::Up));
+    let _ = fe.action(Action::Up); // the list's end [S unverified]
     fe.cursor = 13;
-    assert!(!fe.action(Action::Down), "no wrap at the gadgets' last row");
+    let _ = fe.action(Action::Down); // the list's end [S unverified]
     assert!(fe.action(Action::Back) && fe.page == Page::Dossier);
 
     fe.page = Page::Weapons;
@@ -62,7 +73,7 @@ fn the_three_pages_scroll_with_clamp_and_their_own_row_counts() {
     assert_eq!(fe.rows(), 27, "the weapons wheel's range is [0, 0x1a] [M C_SBDSWPSCROLL 0x20bab0:64-68]");
     assert!(!fe.action(Action::Confirm), "Confirm does nothing — no handler arm [M 0x20bab0]");
     fe.cursor = 26;
-    assert!(!fe.action(Action::Down), "no wrap at the weapons' last row");
+    let _ = fe.action(Action::Down); // the list's end [S unverified]
     // Sister (headless): the wheel rows bind the tables' +0x04 labels.
     assert_eq!(menu::GADGETS_TABLE.len(), 14);
     assert_eq!(menu::WEAPONS_TABLE.len(), 27);

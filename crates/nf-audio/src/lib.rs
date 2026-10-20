@@ -195,7 +195,7 @@ impl Mixer {
                 while self.music.frac >= 1.0 && !self.music.queue.is_empty() { self.music.frac -= 1.0; self.music.queue.pop_front(); self.music.front += 1; }
             }
         }
-        for x in out.iter_mut() { *x = x.clamp(-1.0, 1.0); }
+        for x in out.iter_mut() { *x = (*x * OUTPUT_GAIN).clamp(-1.0, 1.0); }
         s.ended.extend(ended);
         s.playing = self.voices.iter().map(|v| v.id).collect();
         s.music_played = self.music.front;
@@ -307,6 +307,11 @@ pub fn resample_gauss(data: &[i16], pos: f64) -> i16 {
         + (g(i) * new as i32 >> 15);
     out.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
+
+/// The port's overall output level, applied to everything that reaches the speakers (the game mixer here and the
+/// movie player's stream, nf-view movie.rs) after the game's own volume math (the user, 2026-10-19: "need to lower
+/// the volume by 75%"). A port choice, not the game's: the PS2's levels stay as they are inside the mix.
+pub const OUTPUT_GAIN: f32 = 0.25;
 
 /// `NF_SILENT` is set (any value): open no audio device. The test runner (tools/test/suite.py) sets it.
 pub fn silent() -> bool { std::env::var_os("NF_SILENT").is_some() }

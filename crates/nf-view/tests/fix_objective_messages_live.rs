@@ -82,18 +82,27 @@ impl Rows {
     }
 }
 
-/// ── Item 2: a cold load of 07000007 announces ONLY 07000007's objective ────────────────────────
-/// The port used to stack 07000005's "Breach the castle walls" and 07000006's "Find a way inside
-/// to the party" in front of it (the fabricated fresh-boot states + case 0's `level <= current`).
+/// ── Item 2 (as originally written): a level start announcing other levels' objectives ──────────
+/// The 2026-10-17 re-pin (objectives-0b-start): the disc ships every objective record STATE 0
+/// ([D] ACTION.ELF `.data`, all 24 rows' 55 records), `Mission_Init` leaves prior parts
+/// untouched ([M 0x182270:92-95, 120-121] — the mode-1/4 arms never write a record) and the
+/// monitor's case 0 announces every state-0 record whose `record.level <= GameState._12_4_`
+/// ([M 0x1827d8:41-54]). So at a COLD boot the game DOES announce the prior parts' objectives —
+/// [L] the main agent's PCSX2 fresh load of 0700000b shows part-0/1 records announcing over the
+/// first ~520 frames, and fix_objective_banner_live's harness already called it "the game's own
+/// cold-load behaviour". The old test asserted the opposite from the warm-arrival snapshot
+/// ([L ee_start_0700000a.bin @ 0x2a3f78: states 2/3/4]) — that state belongs to a WARM arrival,
+/// which the port carries via the mission snapshot + `restore` (map-tower2). The test now pins
+/// the cold boot's true sequence: the priors first, in the monitor's table order.
 #[test]
-fn cold_07000007_announces_only_its_own_objective() {
+fn cold_07000007_announces_the_prior_parts_then_its_own() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load");
     let lang = scene.sim.as_ref().unwrap().lang.as_ref().expect("USATxt.dat loaded").clone();
     let text = |id: u32| lang.bind(id).expect("the objective text binds").to_string();
     let (breach, inside, rendezvous) = (text(0x0400_0000), text(0x0400_0001), text(0x0400_0002));
     let mut seen: Vec<String> = Vec::new();
-    for _ in 0..240 {
+    for _ in 0..700 {
         let sim = scene.sim.as_mut().unwrap();
         sim.step_bond(Input::default(), false, false, false);
         for m in &sim.hud.objective_msgs {
@@ -101,14 +110,20 @@ fn cold_07000007_announces_only_its_own_objective() {
         }
     }
     eprintln!("[obj-msg] cold 07000007 banners: {seen:?}");
-    assert!(!seen.iter().any(|t| *t == breach), "07000005's objective {breach:?} must not announce at 07000007");
-    assert!(!seen.iter().any(|t| *t == inside), "07000006's objective {inside:?} must not announce at 07000007");
+    // The monitor's table order [M 0x1827d8:22-97]: 07000005's record (row 0) first, 07000006's
+    // (row 1) second, then 07000007's own (its enable 0x47 fires from the level's start scripts).
+    assert_eq!(seen.first(), Some(&breach), "07000005's objective announces first at the cold boot (disc state 0 + case 0 [D][M 0x1827d8:41-54])");
+    assert_eq!(seen.get(1), Some(&inside), "07000006's objective announces second (table order)");
     assert!(seen.iter().any(|t| *t == rendezvous), "07000007's own objective {rendezvous:?} announces (its enable 0x47 fires from the level's start scripts)");
+    // Sister: no fail prefix — mission 07000005 has no flags-2 record ([D] rows 0-3: flags 0),
+    // and the case-0 announce is the plain format anyway [M 0x1827d8:43-45].
+    assert!(seen.iter().all(|t| !t.contains("Fail:")), "no Fail-prefixed banner in the announce set");
 }
 
-/// Sister: 07000008 (the mission's part 3) — only its own two objectives may announce.
+/// Sister: 07000008 (the mission's part 3) — the same cold-boot shape: the prior parts' four
+/// records announce first (table order), then its own (the touch-#15 enable).
 #[test]
-fn cold_07000008_announces_only_its_own_objectives() {
+fn cold_07000008_announces_the_prior_parts_then_its_own() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000008.bin", false).expect("load");
     let lang = scene.sim.as_ref().unwrap().lang.as_ref().expect("USATxt.dat loaded").clone();
@@ -131,8 +146,10 @@ fn cold_07000008_announces_only_its_own_objectives() {
         }
     }
     eprintln!("[obj-msg] cold 07000008 banners: {seen:?}");
-    for t in &earlier {
-        assert!(!seen.contains(t), "the earlier objective {t:?} must not announce at 07000008");
+    // The priors lead, in the monitor's table order [M 0x1827d8:22-97] — rows 0..2's four records
+    // announce at the first tick (case 0, disc states 0 [D]); the touch's own announce follows.
+    for (k, t) in earlier.iter().enumerate() {
+        assert_eq!(seen.get(k), Some(t), "the prior objective {t:?} announces at position {k} (table order [M 0x1827d8], disc states 0 [D])");
     }
     assert!(seen.contains(&own[0]), "07000008's own objective {:?} announces once its enable 0x49 fires (touch #15)", own[0]);
 }
@@ -223,6 +240,7 @@ fn every_objective_text_wraps_inside_the_banner_box() {
                         text: line, time: 300.0, status: 0x0200_0051, failed: false, life: 300.0, opened: true, second: true,
                         label: 0, // fix-context-hints added the provenance id (0 = pre-bound text)
                         script: false, // fix-ladder-water added the script-subtitle flag (this is an objective line, not a subtitle)
+                        sfx1: true, // objective-banner-timing: the case-3 chime already fired (second: true pairs with it)
                     });
                 }
                 let frame = nf_view::hud::overlay(&scene, aspect);

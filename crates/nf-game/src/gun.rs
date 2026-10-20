@@ -52,6 +52,13 @@ pub struct Gun {
     /// `cand`, clearing the marker. So with the P2K silencer equipped (`BL+0x1BC[0x02] = 1`) cycling to the
     /// pistol hands the SILENCED 0x03 twin while it has ammo [M]. Indexed by weapon id (base only).
     pub twin_skip: Vec<i8>,
+    /// `BLData+0x964`: the sight-laser latch. `Player_SetWeaponAnim` 0x1a9338:21-26 writes it from
+    /// `weapon_data[w]+0x68 & 0x8` on every completed draw/switch (the port sets it wherever the
+    /// swap commits the new weapon); `Player_LaserPointer` 0x1a65d8:93 returns while it is 0, so
+    /// the SG5's beam lives only while the semi twin 0x17 (the record with the bit) is held [D].
+    /// The anim-script toggle (`AnimProcessScriptCmds` 0x1c1b38 case 1) can flip it outside the
+    /// draw path — the port does not port that command (no scripted user known); [S] noted.
+    pub laser_on: bool,
 }
 
 impl Gun {
@@ -386,7 +393,7 @@ pub fn reload_ticks(start: u32, reload: u32, flags68: u32, script_len: &impl Fn(
 
 impl Gun {
     /// Bond's start on 07000005 (`Player_InitWeapon`): weapon 2 with 7 in the clip and 41 spare [L].
-    pub fn new(weapon: u8, clip: u32, spare: u32) -> Gun { Gun { weapon, clip, spare, timer: 0.0, pending: 0, held: false, reload_state: 0, reload_ticks: 0, reload_loop_restarted: false, switch_request: weapon, saved_weapon: weapon, prev_weapon: 0, prev_gadget: 0, switch_state: 0, fire_state: false, latch: false, alt_fire_toggle: 0, twin_skip: vec![0i8; 0x72] } }
+    pub fn new(weapon: u8, clip: u32, spare: u32) -> Gun { Gun { weapon, clip, spare, timer: 0.0, pending: 0, held: false, reload_state: 0, reload_ticks: 0, reload_loop_restarted: false, switch_request: weapon, saved_weapon: weapon, prev_weapon: 0, prev_gadget: 0, switch_state: 0, fire_state: false, latch: false, alt_fire_toggle: 0, twin_skip: vec![0i8; 0x72], laser_on: false } }
 
     /// One tick with the trigger (action 9) `pressed` (no reload key, gun idle).
     pub fn update(&mut self, pressed: bool, p: GunParams) -> bool { self.update_with(pressed, false, false, p) }
@@ -410,12 +417,15 @@ impl Gun {
             return false;
         }
         let can_reload = !busy && self.spare > 0 && self.clip < p.clip;
-        // Branch A: the reload key (action 14). Branch B: the auto-reload — the game's condition is
-        // "the fire key is NOT newly pressed this frame" (`Input_Action(player, 9, 1) == 0`, an edge test
-        // [M 0x1a5460:442-445 disasm 0x1a61d0]), so holding the trigger still reloads; only a fresh press
-        // diverts to the fire path. Branch B also zeroes the refire timer (`BLData+0x92C = 0`, 0x1a6244);
-        // branch A leaves it (disasm 0x1a5f50-0x1a5f84 — no +0x92C store).
-        let auto_reload = !pressed || self.held; // ¬(pressed && !held): not a fresh fire press
+        // Branch A: the reload key (action 14). Branch B: the auto-reload — the game's arm sits in
+        // the trigger's RELEASE path: `Input_Action(player, 9, 1) == 0` is the fire trigger's
+        // LEVEL read as 0 (Input_Update 0x17ee88 writes the action byte 0x01 while held, 0x05 on
+        // the fresh press, 0 on release — disasm 0x17f084-0x17f100; `Player_SetWeaponAnimObj`'s
+        // case-6 shell interrupt reads the same mask as "held" [M 0x1a2e38:360]), so a HELD
+        // trigger with an empty clip reloads nothing until it releases [M 0x1a5460 disasm
+        // 0x1a5fe8 → 0x1a61d0]. Branch B also zeroes the refire timer (`BLData+0x92C = 0`,
+        // 0x1a6244); branch A leaves it (disasm 0x1a5f50-0x1a5f84 — no +0x92C store).
+        let auto_reload = !pressed; // the trigger's level 0 [M 0x1a5fe8 → 0x1a61d0]
         if can_reload && (reload || (auto_reload && self.clip < p.ammo_per_shot)) {
             if !reload { self.timer = 0.0; } // branch B: `BLData+0x92C = 0` [M 0x1a6244]
             // `Player_WeaponFiring` sets anim+0xF4 = 6 and queues +0xA4 at 1.35× — from frame 6 for

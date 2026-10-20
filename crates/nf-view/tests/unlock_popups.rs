@@ -76,7 +76,9 @@ fn win_movie_end_opens_credits_from_the_win_page() {
 
     f.win_enter();
     f.win_movie_vol = 700;
-    assert!(!f.action(Action::Confirm), "the win page consumes no input");
+    // Non-skip input reaches nothing [M P_WINGAME 0x215100 has only the 0x4c/0x50 cases; its
+    // 0x68/1 blocks the dispatcher, :21].
+    assert!(!f.action(Action::Up), "the win page takes no page input");
     assert_eq!(f.page, Page::WinGame);
 
     assert!(f.win_movie_finished());
@@ -86,8 +88,30 @@ fn win_movie_end_opens_credits_from_the_win_page() {
     assert!(!f.win_movie_finished(), "a second call is inert (the movie flag is down)");
 }
 
-/// P_CHEATMEDAL case 0x4b [M 0x2086b0:21-45]: row 0 the fail-channel arm (no grant), rows 1..5
-/// grant 999/1/2/3/4 into `medal_from_cheat` 0x30cc74.
+/// fe-audit: the win movie is skippable at once — P_WINGAME's 0x4c sets DAT_002e1c49 = 1 and the
+/// grace DAT_002e1c4c = 0 [M 0x215100:13-15], so the skip action 0x19 stops it (Menu_StopMovie
+/// 0x215a50:6 via MenuManager_Update 0x21c3d8:37-43) and the next 0x50 opens the credits [M :23-48].
+#[test]
+fn a_skip_ends_the_win_movie_and_opens_the_credits() {
+    let mut f = fe();
+    f.page = Page::WinGame;
+    f.win_enter();
+    assert!(f.action(Action::Confirm), "the skip stops the win movie");
+    assert_eq!(f.page, Page::Credits, "the next 0x50 opens the credits [M 0x215100:48]");
+    assert_eq!(f.credits_from, Some(Page::WinGame));
+    // Sister: before the movie ran (no win_enter) the skip does nothing.
+    let mut g = fe();
+    g.page = Page::WinGame;
+    assert!(!g.action(Action::Confirm), "no movie, no skip");
+    assert_eq!(g.page, Page::WinGame);
+}
+
+/// P_CHEATMEDAL case 0x4b [M 0x2086b0:19-45]: the press reads the row's 0x35 VALUE
+/// (`__Menu_Send(param_1, 0x1000021c, 0x35, 0, 0)` [M :19-21]) and switches on it — row value 0
+/// the fail-channel arm (no grant), values 1..5 grant 999/1/2/3/4 into `medal_from_cheat`
+/// 0x30cc74 [M :22-43]. The DISC carries no row values: the mission def 08000001's page
+/// 0x4000004c binds control 0x1000021c with NO msg-0x11 rows [D — walked 2026-10-17], so the
+/// port's value == index mapping is an assumption, not disc data [S unverified].
 #[test]
 fn cheat_medal_rows_grant_the_game_medal_values() {
     let mut f = fe();
@@ -107,8 +131,9 @@ fn cheat_medal_rows_grant_the_game_medal_values() {
     }
 }
 
-/// The list walks 6 rows with wrap (the game's list control semantics; the handler switches the
-/// selection 0..5 [M 0x2086b0:21-40]).
+/// The list walks 6 rows with wrap. The 6 rows come from the handler's six value arms 0..5 [M
+/// 0x2086b0:21-43]; the wrap is the port's list-control semantics — the handler has none and the
+/// disc data has no rows to pin it [S unverified].
 #[test]
 fn cheat_medal_selection_wraps() {
     let mut f = fe();

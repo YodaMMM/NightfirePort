@@ -9,12 +9,14 @@
 //! (`crates/nf-view/src/scene.rs:1818`: `trigger`, `reload`, `use_key`),
 //! which are not part of that struct [M].
 //!
-//! Layout (24 bytes, little-endian): the four f32s are sent as raw `u32` bit
+//! Layout (28 bytes, little-endian): the four f32s are sent as raw `u32` bit
 //! patterns so the bytes are bit-exact on both machines — no quantisation,
 //! no float parsing differences. Two flag bytes, two cycle bytes and a
-//! `switch_to` byte follow; unused bits are zero.
+//! `switch_to` byte follow, then `held`, the shot description (online
+//! combat: the fired record, the shot flags, the aim as two i16 angles);
+//! unused bits are zero.
 
-/// A 24-byte per-agent, per-tick input.
+/// A 28-byte per-agent, per-tick input.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Input {
     pub forward: f32,
@@ -35,6 +37,22 @@ pub struct Input {
     pub gadget_cycle: i8,
     /// `None` maps to `0xFF` on the wire.
     pub switch_to: Option<u8>,
+    /// 700v6 (online combat): the weapon this agent HOLDS this tick (`gun.weapon`, 0 = none) —
+    /// byte 21. The sending machine's own weapon pipeline is authoritative for its player; every
+    /// machine resolves that player's shot with this weapon's record.
+    pub held: u8,
+    /// 700v6: a round actually left this agent's weapon this tick (the sender's fire pipeline
+    /// decided: rate, ammo, the trigger) — flag-1 bit 2. Every machine resolves it identically.
+    pub shot: bool,
+    /// mp-combat-weapons: the weapon record the release fired (byte 22; the twin id carries the
+    /// fire mode — the MGL 'Delay' 0x2B, the Sentinel 'Unguided' 0x2D …). Only read with `shot`.
+    pub shot_weapon: u8,
+    /// mp-combat-weapons: shot flags (byte 23): bit 0 = fired through a zoomed scope.
+    pub shot_flags: u8,
+    /// mp-combat-weapons: the shot's aim (bytes 24..28) as `[yaw, pitch]` — yaw in TAU/65536
+    /// units, pitch in (π/2)/32767 units — the release's own aim ray (free aim, auto-aim and
+    /// scope included), decoded identically on every machine (`nf_game::mp::combat`).
+    pub shot_aim: [i16; 2],
 }
 
 /// The game's disconnected-pad shape: buttons 0, sticks centred. The PS2
@@ -62,10 +80,15 @@ pub const NEUTRAL: Input = Input {
     weapon_cycle: 0,
     gadget_cycle: 0,
     switch_to: None,
+    held: 0,
+    shot: false,
+    shot_weapon: 0,
+    shot_flags: 0,
+    shot_aim: [0, 0],
 };
 
 /// Bytes occupied by one [`Input`] on the wire.
-pub const INPUT_WIRE_SIZE: usize = 24;
+pub const INPUT_WIRE_SIZE: usize = 28;
 
 const FLAG0_JUMP: u8 = 1 << 0;
 const FLAG0_CROUCH: u8 = 1 << 1;
@@ -78,6 +101,7 @@ const FLAG0_TRIGGER: u8 = 1 << 7;
 
 const FLAG1_RELOAD: u8 = 1 << 0;
 const FLAG1_USE_KEY: u8 = 1 << 1;
+const FLAG1_SHOT: u8 = 1 << 2;
 
 fn f32_to_bits(v: f32) -> u32 {
     v.to_bits()
@@ -133,14 +157,19 @@ impl Input {
         if self.use_key {
             f1 |= FLAG1_USE_KEY;
         }
+        if self.shot {
+            f1 |= FLAG1_SHOT;
+        }
         out[p + 16] = f0;
         out[p + 17] = f1;
         out[p + 18] = self.weapon_cycle as u8;
         out[p + 19] = self.gadget_cycle as u8;
         out[p + 20] = self.switch_to.unwrap_or(0xFF);
-        out[p + 21] = 0;
-        out[p + 22] = 0;
-        out[p + 23] = 0;
+        out[p + 21] = self.held;
+        out[p + 22] = self.shot_weapon;
+        out[p + 23] = self.shot_flags;
+        out[p + 24..p + 26].copy_from_slice(&self.shot_aim[0].to_le_bytes());
+        out[p + 26..p + 28].copy_from_slice(&self.shot_aim[1].to_le_bytes());
     }
 
     /// Decode from `buf` at `off`. Returns `None` if the slice is too short.
@@ -170,6 +199,11 @@ impl Input {
             weapon_cycle: buf[off + 18] as i8,
             gadget_cycle: buf[off + 19] as i8,
             switch_to: if sw == 0xFF { None } else { Some(sw) },
+            held: buf[off + 21],
+            shot: f1 & FLAG1_SHOT != 0,
+            shot_weapon: buf[off + 22],
+            shot_flags: buf[off + 23],
+            shot_aim: [i16::from_le_bytes([buf[off + 24], buf[off + 25]]), i16::from_le_bytes([buf[off + 26], buf[off + 27]])],
         })
     }
 }
@@ -206,12 +240,21 @@ mod tests {
             weapon_cycle: -3,
             gadget_cycle: 2,
             switch_to: Some(7),
+            held: 0x2d,
+            shot: true,
+            shot_weapon: 0x2c,
+            shot_flags: 1,
+            shot_aim: [-12345, 4321],
         };
         let mut b = [0u8; INPUT_WIRE_SIZE];
         inp.encode(&mut b, 0);
         assert_eq!(Input::decode(&b, 0).unwrap(), inp);
         // Sister assertion: a flipped wire byte must not decode to the same input.
         b[0] ^= 0x01;
+        assert_ne!(Input::decode(&b, 0).unwrap(), inp);
+        // Sister: the shot aim's bytes are carried (a flipped aim byte decodes differently).
+        b[0] ^= 0x01;
+        b[25] ^= 0x01;
         assert_ne!(Input::decode(&b, 0).unwrap(), inp);
     }
 

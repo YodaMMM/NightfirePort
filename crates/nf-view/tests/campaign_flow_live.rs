@@ -79,8 +79,19 @@ fn shoot_gadget_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32,
 /// the documented SP-activation blocker → the AND mux completes obj 2 → the lift doors' SSs
 /// open → the cab → the real TOUCH_ONCE #67 → ch 0x32 → the real LOAD_LEVEL exit → 0700000a.
 /// (The runner's old self-loop "exit" — blocker 3 — is never touched: the walked cab exit wins.)
+/// The NPCs are held (the renderer's --hold-npcs dev hold [M lib.rs:5763]): a walking Bond IS
+/// seen by the patrolling lobby guard, and the game's sighted-guard chain — NearArmedPerson
+/// 0x1787c8:13-22 (no armed gate on 09/0A) → CivilianPatrol 0x15d610 case 3 SetState(0x56) →
+/// FirstSightState 0x147c48 prop 0x1A → CivilianChallenge 0x162558 → RunToAlarm → PressAlarm
+/// 0x168ea8 → SetMissionFailReason 0x13e560 case 0x10 — ends with the GUARD pressing the
+/// nearest switch (ch 0x7D → mux → ch 0x61 → objective 1 failed). The old "the walk must not
+/// raise the alarm (the switches are never touched)" claim was green only while the port froze
+/// sighted guards in CivilianHiding. The unheld sight repro is
+/// security_alarm_09_live::the_panel_guard_raises_the_alarm_and_fails_the_mission
+/// (docs/systems/security-room-alarm-09.md §"The walk tests under the real rule").
 fn drive_09(w: &mut Walker) -> String {
     let mut note = String::from("real drive 09: ");
+    w.scene.sim.as_mut().unwrap().drones.hold_npcs = true;
     w.wait(60);
     assert!(w.scene.sim.as_ref().unwrap().drones.scripts.players.iter().any(|p| p.out == 0x39),
         "SP #70 SCRIPTPLAYER_Elevators (out ch 0x39) [D placement]");
@@ -634,7 +645,7 @@ fn the_mission_layer_re_arms_on_a_warm_transition() {
 // does: Mission_Update case 4 (mission_ended) → the outro movie wrap (the loader's phase 0/2) →
 // the results page 0x40000036 on the map [M 0x1d6360:160-163] → P_NFRESULTS case 0x4c (the
 // fields + Menu_SetLevelBonus 0x1ffa10) → Confirm → the mission list 0x4000001c [M 0x208e78:43]
-// → the next mission's row confirmed [M C_SBNFMAP 0x20b8d8:18-41]. From 01's end to 05's start.
+// → the next mission's row confirmed [M C_SBNFMAP 0x20b8d8:18-41; the lock gate :21-23]. From 01's end to 05's start.
 
 use nf_view::menu::{self, Action, CAMPAIGN, FrontEnd, Outcome, Page, Stats};
 
@@ -670,7 +681,7 @@ fn front_end_chain_01_to_05() {
     for (mi, &m) in CHAIN.iter().enumerate() {
         if mi > 0 {
             // The mission list offers the next mission: its row unlocked, confirmed, and the
-            // game's mission start riding the request [M C_SBNFMAP 0x20b8d8:18-41].
+            // game's mission start riding the request [M C_SBNFMAP 0x20b8d8:18-41; the lock gate :21-23].
             let rowi = CAMPAIGN.iter().position(|c| c.3 == m).unwrap();
             assert!(fe.unlocked_row(rowi), "the mission page lists 0x{m:08x} (unlocked by the previous award)");
             fe.cursor = rowi;
@@ -717,9 +728,15 @@ fn front_end_chain_01_to_05() {
             if let Some(r) = fe.flow.phase2_resolved.take() { resolved = Some(r); break; }
         }
         assert_eq!(resolved, Some(menu::FRONTEND_LEVEL), "the outro routes to the front end");
-        assert_eq!(fe.flow.page, menu::PAGE_RESULTS, "phase 2 sets +0x28 = 0x40000036 [M 0x1d6360]");
+        assert_eq!(fe.flow.page, menu::PAGE_RESULTS, "phase 2 sets +0x1c = 0x40000036 [M 0x1d6360]");
         fe.tick();
         assert_eq!(fe.flow.current_level, menu::FRONTEND_LEVEL, "the front-end map loads [M 0x1d6360 phase 3]");
+        // reward-after-outro [M 0x182c60:72 / 0x1d6360:160-163]: the complete arm QUEUES the page;
+        // G-048(3): the load tail's MenuManager_Create lands the queued page — nothing was open
+        // between the mission end and here [M 0x1d6360:160-163, 0x182c60:72-75]. One reopen is
+        // the create; the second would be a no-op on an already-open page.
+        assert!(fe.reopen_queued_page(), "the manager create opens the queued results page");
+        assert_eq!(fe.page, Page::Results);
         // P_NFRESULTS case 0x4c against the live layer: the fields + the award.
         let difficulty = progress.difficulty;
         assert!(fe.results_enter(&mut progress, m, 6, difficulty, lang.as_ref()),
@@ -790,7 +807,7 @@ fn front_end_chain_01_to_05() {
     assert_eq!(status, 0b1111_0111, "01-04's awards + the boot rows rode the saves");
     // The mission page offers 05: confirming its row starts the mission.
     fe.cursor = row5;
-    assert!(fe.action(Action::Confirm), "05's unlocked row confirms [M C_SBNFMAP 0x20b8d8:18-41]");
+    assert!(fe.action(Action::Confirm), "05's unlocked row confirms [M C_SBNFMAP 0x20b8d8:18-41; the lock gate :21-23]");
     assert_eq!(fe.requested_level, Some(0x0700_0011), "05's start is requested");
     let _ = std::fs::remove_dir_all(&dir);
 }

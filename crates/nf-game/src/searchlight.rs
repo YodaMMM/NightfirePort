@@ -120,20 +120,26 @@ fn dot3(a: V3, b: V3) -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] }
 fn cross3(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]] }
 
 /// `Mat_Align2Dir` (0x1df2a8) [M; cross order pinned against the live beam matrix 016e0130, L]:
-/// row 2 = normalize(dir), row 0 = normalize(cross(up, row2)), row 1 = normalize(cross(row2, row0)). The
-/// fallback replaces `up` when |up·row2| > 0.999; a degenerate cross leaves the last good axis.
+/// row 2 = normalize(dir), row 0 = normalize(cross(up, row2)), row 1 = normalize(cross(row2, row0)).
+/// The fallback replaces `up` when |up·row2| > 0x3f7fbe77 (0.998993 — `lui at,3f7f; ori at,at,be77`
+/// [M 0x1df2a8 disasm 0x1df320-0x1df354], not 0.999). A degenerate vector ZEROES the row — the
+/// game's sqrt(x)==0 arms store 0.0 to all three components [M 0x1df2a8 disasm 0x1df2d8-0x1df310 /
+/// 0x1df3a8-0x1df3e0: swc1 f3(=0.0) to the vector's slots] — the old [1,0,0]/[0,1,0] stand-ins
+/// snapped the beam basis onto the world axes where the game's own math keeps the (exact-FP)
+/// cross direction sound and continuous, the playtest's "flip on its side". Normalization multiplies
+/// by the reciprocal [M 0x1df2f4/0x1df3c4: div.s f0,1.0,len; the VMUL], it does not divide.
 pub fn align2dir(dir: V3, up: V3, fallback: V3) -> Mat4 {
     let len = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2];
-    let z = if len == 0.0 { [0.0, 0.0, 1.0] } else { [dir[0] / len.sqrt(), dir[1] / len.sqrt(), dir[2] / len.sqrt()] };
+    let z = if len == 0.0 { [0.0, 0.0, 0.0] } else { let r = 1.0 / len.sqrt(); [dir[0] * r, dir[1] * r, dir[2] * r] };
     let ulen = up[0] * up[0] + up[1] * up[1] + up[2] * up[2];
-    let un = if ulen == 0.0 { [0.0, 1.0, 0.0] } else { [up[0] / ulen.sqrt(), up[1] / ulen.sqrt(), up[2] / ulen.sqrt()] };
-    let u = if (dot3(un, z)).abs() > 0.999 { fallback } else { un };
+    let un = if ulen == 0.0 { [0.0, 0.0, 0.0] } else { let r = 1.0 / ulen.sqrt(); [up[0] * r, up[1] * r, up[2] * r] };
+    let u = if dot3(un, z).abs() > f32::from_bits(0x3f7f_be77) { fallback } else { un };
     let r0 = cross3(u, z);
     let r0l = r0[0] * r0[0] + r0[1] * r0[1] + r0[2] * r0[2];
-    let r0 = if r0l < 1e-20 { [1.0, 0.0, 0.0] } else { [r0[0] / r0l.sqrt(), r0[1] / r0l.sqrt(), r0[2] / r0l.sqrt()] };
+    let r0 = if r0l == 0.0 { [0.0, 0.0, 0.0] } else { let r = 1.0 / r0l.sqrt(); [r0[0] * r, r0[1] * r, r0[2] * r] };
     let r1 = cross3(z, r0);
     let r1l = r1[0] * r1[0] + r1[1] * r1[1] + r1[2] * r1[2];
-    let r1 = if r1l < 1e-20 { [0.0, 1.0, 0.0] } else { [r1[0] / r1l.sqrt(), r1[1] / r1l.sqrt(), r1[2] / r1l.sqrt()] };
+    let r1 = if r1l == 0.0 { [0.0, 0.0, 0.0] } else { let r = 1.0 / r1l.sqrt(); [r1[0] * r, r1[1] * r, r1[2] * r] };
     [[r0[0], r0[1], r0[2], 0.0], [r1[0], r1[1], r1[2], 0.0], [z[0], z[1], z[2], 0.0], [0.0, 0.0, 0.0, 0.0]]
     // Row 3 stays zeroed as in the live matrix [L]: `Mat_Align2Dir` writes only the rotation rows and
     // `Mat_SetTrans` the translation's x/y/z — the w slot keeps its cleared value. The port's `transform`
@@ -250,9 +256,17 @@ impl Searchlights {
                 let dx = player.pos[0] - pos[0];
                 let dy = player.pos[1] - pos[1];
                 let dz = player.pos[2] - pos[2];
-                // libm atan2f (not ATAN2_APPROX); last-ulp differences only steer a frame differently.
-                let t_yaw = dx.atan2(dz);
-                let t_pitch = -(dy - 1.0).atan2((dx * dx + dz * dz).sqrt());
+                // G-046: the game's steer targets are the PS2 libm atan2f [M Searchlight_Update 0x1cb900:150
+                // atan2f(dx, dz); :166 atan2f((py − sy) − 1.0, SQRT(dx² + dz²)) — the products/sums EE, the √
+                // sqrt.s] — not host atan2, and not ATAN2_APPROX.
+                let t_yaw = crate::trig::atan2f_libm(dx, dz);
+                let t_pitch = -crate::trig::atan2f_libm(
+                    crate::trig::ee_sub(dy, 1.0),
+                    nf_formats::ps2float::sqrt(crate::trig::ee_add(
+                        nf_formats::ps2float::mul(dx, dx),
+                        nf_formats::ps2float::mul(dz, dz),
+                    )),
+                );
                 h.yaw += angle_difference(h.yaw, t_yaw) * STEER;
                 h.pitch += angle_difference(h.pitch, t_pitch) * STEER;
                 // Clamped to the sweep cone: yaw within base ± half, pitch within mid ± half.
@@ -320,8 +334,53 @@ impl Searchlights {
             // The player's pick sphere: centre `obj+0x80` (the `Player.sph` the port fills from
             // `Bond::sphere_centre`), radius `M_CONTROL+0x8C` = 1.0576 [L ee_start_05.bin].
             const PLAYER_SPH_R: f32 = 1.0576;
-            let (mut t_hit, mut n_hit) = match d.world.segment_surface(pos, end, false) {
-                Some((t, n, _)) => (Some(t), Some(n)),
+            // The game excludes the head's OWN cel and object from the spot ray (`Collide_RayIntersect`
+            // carries the source object, and `Collide_PickObj` 0x1eae80:57-59 refuses param_3 == param_2
+            // plus the hittest's two extra exclusion slots [M]). The port's ray origin sits inside the
+            // head's own platform/housing geometry, so the port skips everything the ray crosses before
+            // it exits the head's own gfx box — the same "not my own housing" effect [S for the box
+            // stand-in, M for the exclusion itself]. The box is the part's LOCAL-space bounds (the
+            // bullet stand-in tests it after the matrix's world→local transform), so the slab test runs
+            // in that local space too — the rotation preserves lengths, so the slab's t is the same
+            // parameter the world ray carries (`pos + dir·t`, |dir| = 100, t ∈ [0, 1] over the ray).
+            let mut skip = 0.0f32; // the skipped fraction of the 100-unit ray
+            {
+                let h = &self.parts[head];
+                let to_local = |v: V3| {
+                    let d = [v[0] - h.matrix[3][0], v[1] - h.matrix[3][1], v[2] - h.matrix[3][2]];
+                    [0, 1, 2].map(|k| d[0] * h.matrix[k][0] + d[1] * h.matrix[k][1] + d[2] * h.matrix[k][2])
+                };
+                let o = to_local(pos);
+                let dv = to_local([pos[0] + dir[0], pos[1] + dir[1], pos[2] + dir[2]]);
+                let (bmin, bmax) = (&h.box_min, &h.box_max);
+                let (mut t_near, mut t_far) = (f32::NEG_INFINITY, f32::INFINITY);
+                let mut inside = true;
+                for k in 0..3 {
+                    let d = dv[k] - o[k];
+                    if d.abs() < 1e-9 {
+                        if o[k] < bmin[k] || o[k] > bmax[k] { inside = false; }
+                    } else {
+                        let mut t1 = (bmin[k] - o[k]) / d;
+                        let mut t2 = (bmax[k] - o[k]) / d;
+                        if t1 > t2 { std::mem::swap(&mut t1, &mut t2); }
+                        t_near = t_near.max(t1);
+                        t_far = t_far.min(t2);
+                        if o[k] < bmin[k] || o[k] > bmax[k] { inside = false; }
+                    }
+                }
+                // Origin inside the box: skip to the exit; outside: skip the entry face. The cap keeps
+                // a wrong stand-in from pushing the start past the ray's end (the housing is a ~0.5-unit
+                // box [L ee_start_05.bin head 016dfe70]; 4 world units of skip is generous).
+                let skip_t = if inside { t_far } else if t_near <= t_far && t_near > 0.0 { t_near } else { 0.0 };
+                if skip_t.is_finite() { skip = (skip_t / 100.0).clamp(0.0, 0.04); }
+            }
+            let (skip_pos, skip_end) = if skip > 0.0 {
+                ([pos[0] + dir[0] * skip, pos[1] + dir[1] * skip, pos[2] + dir[2] * skip], end)
+            } else { (pos, end) };
+            let (mut t_hit, mut n_hit) = match d.world.segment_surface(skip_pos, skip_end, false) {
+                // t is the SUB-segment's fraction ([skip, 1] of the full ray): rebase it, so t_hit stays
+                // in the dir parametrization the player-sphere test below shares.
+                Some((t, n, _)) => (Some(skip + t * (1.0 - skip)), Some(n)),
                 None => (None, None),
             };
             {

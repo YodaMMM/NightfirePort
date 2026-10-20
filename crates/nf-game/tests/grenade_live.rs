@@ -61,7 +61,7 @@ impl Level02 {
         let weapons = WeaponData::from_action_elf(&elf).unwrap();
         let world = nf_game::world::CollisionWorld::build(&level, &level.instances(true).0);
         let nav = nf_game::nav::Network::build(level.maps[level.main_map().unwrap()].ai_network.as_ref().unwrap(), &world, 0x0700_0002);
-        let covers = nf_game::cover::build(&level.maps[level.main_map().unwrap()].placements, &nav, &world);
+        let covers = nf_game::cover::build(&level, &nav, &world);
         let hitboxes = nf_formats::hitbox::CollisionBones::from_action_elf(&elf).unwrap();
         let volumes = nf_game::aivolume::build(&level, 0x0700_0002);
         let models = nf_game::pickup::models(&level);
@@ -75,7 +75,9 @@ impl Level02 {
     }
 
     fn data(&self) -> Data<'_> {
-        Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: 0x0700_0002, sequences: &self.sequences, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: None, difficulty: 1 }
+        Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: 0x0700_0002, sequences: &self.sequences, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: None, difficulty: 1,
+            ai_points: &[],
+        }
     }
 
     fn drones(&self) -> (Vec<Drone>, Rng) {
@@ -86,7 +88,7 @@ impl Level02 {
         (drones, rng)
     }
 
-    fn sim(&self, drones: Vec<Drone>, rng: Rng) -> Drones { let mut s = Drones::new(drones, rng); s.attach_level(&self.level); s }
+    fn sim(&self, drones: Vec<Drone>, rng: Rng) -> Drones { let mut s = Drones::new(drones, rng); s.attach_level_id(&self.level, 0x0700_0002); s }
 }
 
 fn bond_at(p: [f32; 3]) -> Player { Player { pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], ..Default::default() } }
@@ -167,9 +169,11 @@ fn guard_throws_a_grenade_on_level_02() {
     assert!(sim2.grenades.len() == grenades_before, "guard out of range (dist 30) does not throw");
 }
 
-/// Unforced: a grenade guard on 07000009, Bond in range (15 m), run 1800 ticks (30 s at 60 Hz).
-/// The guard should decide to throw through its own decision tree, with the game's RNG.
-/// On 07000009, guards have dtype=0xd, mode_normal=0 → mode 9 (HostageKillerAttack — a combat guard).
+/// Unforced: a grenade guard on 07000002 (the test loads Level02 — the old doc said 07000009), Bond in
+/// range (15 m), run 1800 ticks (30 s at 60 Hz). The guard should decide to throw through its own
+/// decision tree, with the game's RNG. [S unverified: the dtype=0xd / mode 9 note below was written
+/// for 07000009 and is not re-checked for 07000002.]
+/// (07000009 note: guards have dtype=0xd, mode_normal=0 → mode 9 (HostageKillerAttack — a combat guard).)
 /// Sister: Bond at 30 m (out of range) → no throw in the same number of ticks.
 #[test]
 fn guard_decides_to_throw_grenade_unforced() {

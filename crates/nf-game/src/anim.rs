@@ -19,10 +19,13 @@ pub fn slerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     let neg = d < 0.0;
     if neg { d = -d; }
     let (s0, s1) = if 0.01 < 1.0 - d {
-        let w = d.acos();
-        let wt = w * t;
-        let inv = 1.0 / crate::trig::sinf(w);
-        (crate::trig::sinf(w - wt) * inv, crate::trig::sinf(wt) * inv)
+        // G-046: the game's slerp weights are Spline_Interp 0x1e1858:285-300 [M]: acosf (0x232c48 →
+        // __ieee754_acosf 0x233228), wt = angle·t (mul.s), and the weights are PS2Sinf(wt)·(1/PS2Sinf(angle))
+        // — a div.s reciprocal then mul.s, not a per-weight division.
+        let w = crate::trig::acosf_libm(d);
+        let wt = nf_formats::ps2float::mul(w, t);
+        let inv = nf_formats::ps2float::div(1.0, crate::trig::sinf(w));
+        (crate::trig::sinf(crate::trig::ee_sub(w, wt)) * inv, crate::trig::sinf(wt) * inv)
     } else {
         (1.0 - t, t)
     };
@@ -200,8 +203,11 @@ pub fn script_pose(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>
     // `seq.skeleton`. Shared human tracks ride on other rigs' ids: 07000004's seated target
     // (skin 0x0500001e, skeleton 8) plays 0x0400028a, whose record byte is skeleton 0 — the
     // strict filter left him with no palette and no hit boxes (the bullets could never land).
-    // [S the game's use of the seq's +0x3c byte is unverified; the channel-count guard keeps
-    // short tracks (a 22-channel face track on a body need) rejected.]
+    // [The game's playback confirms the cross-rig read: `AnimFrameCopy` 0x1c5668 takes the walk's
+    // skeleton from the SEQUENCE tag's +0xa9 byte (:52) and gates the writes on the SKIN's bone
+    // flags (param_4+0x24) — ninja-boss-cutscene. The port's skin-skeleton walk is the standing
+    // [S] convention; the channel-count guard keeps short tracks (a 22-channel face track on a
+    // body need) rejected.]
     let seq = seqs.get(&q).filter(|s| {
         s.skeleton == skin.skeleton
             || {
@@ -225,6 +231,38 @@ pub fn script_pose(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>
 /// drone-port-check #3) counts as full-coverage when its channels cover the skeleton. Never panics:
 /// each window poses only the bones its channels reach (`local_pose_bones`).
 pub fn script_pose_drone(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>, skel: &Skeleton, skin: &Skin, hash: u32, time: f32) -> Option<Pose> {
+    script_pose_drone_with(scripts, seqs, skel, skin, hash, time, &mut |seq, f, n| nf_formats::anim::local_pose_bones(seq, skel, skin, f, n))
+}
+
+/// mp-perf-16: a memo of whole-frame bone samples (`local_pose_bones`) keyed by (sequence,
+/// skin, frame, bone count) — the render's MP bodies re-sample the same integer frames tick
+/// after tick (a fractional frame blends two of them, the walk advances ~half a frame a tick),
+/// and the PS2-rounded channel sums are the bulk of a body's palette cost. A sample is a pure
+/// function of its key (`local_pose_bones` reads only the sequence, skeleton and skin), so a
+/// cached pose is the identical pose. Render-only: the sim's drone poses keep the direct path.
+#[derive(Default)]
+pub struct PoseSampleCache {
+    map: HashMap<(u32, u16, u32, u32, [u32; 3], u32, usize), Pose>,
+}
+
+impl PoseSampleCache {
+    /// The cap: past it the memo starts over (a 16-body arena keeps a few hundred live entries).
+    const CAP: usize = 4096;
+    pub fn sample(&mut self, seq: &Sequence, skel: &Skeleton, skin: &Skin, frame: u32, bones: usize) -> Pose {
+        if self.map.len() >= Self::CAP { self.map.clear(); }
+        let key = (seq.hashcode, seq.frames, skin.hashcode, skel.id as u32, skin.scale.map(f32::to_bits), frame, bones);
+        self.map.entry(key)
+            .or_insert_with(|| nf_formats::anim::local_pose_bones(seq, skel, skin, frame, bones))
+            .clone()
+    }
+}
+
+/// `script_pose_drone` through the memo (see [`PoseSampleCache`]) — the same pose.
+pub fn script_pose_drone_cached(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>, skel: &Skeleton, skin: &Skin, hash: u32, time: f32, cache: &mut PoseSampleCache) -> Option<Pose> {
+    script_pose_drone_with(scripts, seqs, skel, skin, hash, time, &mut |seq, f, n| cache.sample(seq, skel, skin, f, n))
+}
+
+fn script_pose_drone_with(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>, skel: &Skeleton, skin: &Skin, hash: u32, time: f32, sample: &mut dyn FnMut(&Sequence, u32, usize) -> Pose) -> Option<Pose> {
     let script = scripts.get(&hash)?;
     let t = time.floor().max(1.0) as u16;
     let wins: Vec<(u16, u32)> = script.sequences().filter(|(a, _, _)| *a <= t).map(|(a, _, q)| (a, q)).collect();
@@ -255,18 +293,26 @@ pub fn script_pose_drone(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Seq
     let (base_first, base_q) = wins[base_i];
     let base_f = (time - base_first as f32 + 1.0).max(1.0);
     let base_seq = seqs.get(&base_q)?;
-    let mut acc = sequence_pose_n(base_seq, skel, skin, base_f, base_n);
+    let mut acc = sequence_pose_n_with(base_seq, base_f, base_n, sample);
+    // mp-perf-16: the base window's own pass below re-sampled the very same (sequence, frame,
+    // bone count) — the identical values; keep them instead of decoding the sequence twice (the
+    // PS2-rounded channel sums are the bulk of an MP body's palette cost).
+    let base_vals: Vec<_> = acc.iter().take(base_n).copied().collect();
     if acc.len() < skel.bones as usize {
         while acc.len() < skel.bones as usize { acc.push(*acc.last().unwrap()); }
     }
     // Then every started window in command order overwrites the bones it reaches — the last one
     // wins; the base's own pass (first pass over its bones) is its place in that order.
-    for (first, q) in &wins {
+    for (wi, (first, q)) in wins.iter().enumerate() {
+        if wi == base_i {
+            for (i, v) in base_vals.iter().enumerate() { acc[i] = *v; }
+            continue;
+        }
         let n = covered(*q);
         if n == 0 { continue; }
         let Some(seq) = seqs.get(q) else { continue };
         let f = (time - *first as f32 + 1.0).max(1.0);
-        let p = sequence_pose_n(seq, skel, skin, f, n);
+        let p = sequence_pose_n_with(seq, f, n, sample);
         for (i, v) in p.iter().enumerate().take(n) { acc[i] = *v; }
     }
     Some(acc)
@@ -304,18 +350,38 @@ pub fn script_pose_together(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, 
     // `script_pose_drone` uses it too (fix-facial3's channel-count probe was the stand-in;
     // one rule, the game's own).
     let is_facial = |q: u32| seqs.get(&q).is_some_and(|s| s.flags & 0x8 != 0);
-    // The base: the widest started non-facial window on this skeleton (the body track), at its own
-    // frame — it also stands in for the bones no window reaches.
+    // ninja-boss-cutscene: the window-acceptance rule, one with `script_pose`/`script_pose_drone`'s
+    // channel-count guard. `AnimFrameCopy` 0x1c5668 reads the channel stream positionally over the
+    // SEQUENCE's own record skeleton (`iVar6 = pSkeletons[*(byte *)(sAnimSeq + 0xa9)]`, :52; the
+    // translation-mask test :190, the stand-in offsets :194-198) and gates each bone's write on the
+    // SKIN's bone-flag bytes (`param_4 + 0x24`, :186-189) — no id equality anywhere. Shipped
+    // cut-scenes ride cross-rig: 07000004's ninja (skin 0x0500001e, skeleton byte 8) plays 0x06000507
+    // whose only window is 0x0400047a (record byte 0; both skeletons 73 bones, mask 0x1/0/0) [D
+    // 07000004.bin kind-7/5, 07F00004.bin kind-4] — the strict `s.skeleton == skin.skeleton` filter
+    // found no base window and the cut-scene's ninja actor never posed (the user's "ninja boss is
+    // missing from last cutscene", playtest 1017). The gameplay path has posed the same pairing since
+    // its own fix (see `script_pose`'s comment). A guarded window covers the skin skeleton's FULL walk
+    // or nothing (a short track — a face track past the flags rule — still never poses bones).
+    let full_need: usize = (0..skel.bones as usize).map(|b| if skel.has_translation(b) { 6 } else { 3 }).sum();
+    // The base: the widest started non-facial window that can pose the skin, at its own frame — it
+    // also stands in for the bones no window reaches. A matching window keeps the old `fits` gate
+    // (a lone narrow track hides — kept); a guarded window needs the full walk.
     let (base_i, base_n) = wins.iter().enumerate()
-        .filter_map(|(i, (_, q))| seqs.get(q).filter(|s| s.skeleton == skin.skeleton && !is_facial(*q)).map(|s| (i, nf_formats::anim::bones_covered(s, skel))))
+        .filter_map(|(i, (_, q))| {
+            let Some(s) = seqs.get(q) else { return None };
+            if is_facial(*q) { return None; }
+            let n = if s.skeleton == skin.skeleton {
+                (nf_formats::anim::fits(s, skel)).then(|| nf_formats::anim::bones_covered(s, skel)).unwrap_or(0)
+            } else {
+                (s.channels.len() >= full_need).then_some(skel.bones as usize).unwrap_or(0)
+            };
+            (n > 0).then_some((i, n))
+        })
         .max_by_key(|&(_, n)| n)?;
     if base_n == 0 { return None; }
     let (base_first, base_q) = wins[base_i];
     let base_f = (time - base_first as f32 + 1.0).max(1.0);
-    // A single window that does not fit the skeleton (the old `fits` filter — e.g. a lone narrow
-    // track): the character hid before this function existed; keep that.
     let Some(base_seq) = seqs.get(&base_q) else { return None };
-    if !nf_formats::anim::fits(base_seq, skel) { return None; }
     let mut acc = sequence_pose_n(base_seq, skel, skin, base_f, base_n);
     if acc.len() < skel.bones as usize {
         // Pad to the full bone count with the base's last bone pose (never read: the body covers all).
@@ -341,11 +407,17 @@ pub fn script_pose_together(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, 
     for (first, q) in &wins {
         if *q == base_q { continue; }
         let Some(seq) = seqs.get(q) else { continue };
-        if seq.skeleton != skin.skeleton { continue; }
         // A facial window is the morph-weight source (above) — it owns no bones. The classifier is
         // the flags bit 0x8, the game's own, everywhere (fix-cutscene-faces; see the base picker).
         if is_facial(*q) { continue; }
-        let n = nf_formats::anim::bones_covered(seq, skel).min(base_n);
+        // Matching windows keep the old narrow fill (`bones_covered` leading bones — the ledge's
+        // narrow pairs); guarded windows fill all-or-nothing, the same rule as the base picker.
+        let n = if seq.skeleton == skin.skeleton {
+            nf_formats::anim::bones_covered(seq, skel)
+        } else {
+            (seq.channels.len() >= full_need).then_some(skel.bones as usize).unwrap_or(0)
+        }
+        .min(base_n);
         if n == 0 { continue; }
         let f = (time - *first as f32 + 1.0).max(1.0);
         let p = sequence_pose_n(seq, skel, skin, f, n);
@@ -359,12 +431,17 @@ pub fn script_pose_together(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, 
 /// `sequence_pose` for the first `bones` bones only (a narrow sequence — the face tracks — whose
 /// channel list `local_pose` would read past).
 pub fn sequence_pose_n(seq: &Sequence, skel: &Skeleton, skin: &Skin, frame: f32, bones: usize) -> Pose {
+    sequence_pose_n_with(seq, frame, bones, &mut |seq, f, n| nf_formats::anim::local_pose_bones(seq, skel, skin, f, n))
+}
+
+/// `sequence_pose_n` with the whole-frame sampler supplied (`local_pose_bones` or its memo).
+fn sequence_pose_n_with(seq: &Sequence, frame: f32, bones: usize, sample: &mut dyn FnMut(&Sequence, u32, usize) -> Pose) -> Pose {
     let last = seq.frames.max(1) as u32;
     let f0 = (frame.floor() as u32).clamp(1, last);
     let frac = (frame - frame.floor()).clamp(0.0, 1.0);
-    let mut p = nf_formats::anim::local_pose_bones(seq, skel, skin, f0, bones);
+    let mut p = sample(seq, f0, bones);
     if frac > 0.0002 && f0 < last {
-        let q = nf_formats::anim::local_pose_bones(seq, skel, skin, f0 + 1, bones);
+        let q = sample(seq, f0 + 1, bones);
         blend(&mut p, &q, frac);
     }
     p
@@ -403,12 +480,18 @@ impl Outgoing {
 pub fn root_yaw(q: [f32; 4]) -> f32 {
     let [x, y, z, w] = q;
     let f = [2.0 * (x * z + w * y), 1.0 - 2.0 * (x * x + y * y)];
-    f[0].atan2(f[1])
+    // G-046: Vec_DirToRot 0x1e3218:8 is the PS2 libm atan2f [M], not host atan2.
+    crate::trig::atan2f_libm(f[0], f[1])
 }
 
 /// Removes `yaw` about +Y from a root rotation (pre-multiplies by the inverse turn).
 pub fn unyaw(q: [f32; 4], yaw: f32) -> [f32; 4] {
-    let (s, c) = ((-yaw * 0.5).sin(), (-yaw * 0.5).cos());
+    // G-046: the inverse-turn quat is the game's AA2Q idiom — w = PS2Sinf(θ/2 + 1.5707964), y =
+    // PS2Sinf(θ/2) [M Quat_AxisAngleToQuat 0x1e3f20's PS2Sinf2 lanes; the θ = −yaw mapping [S] — the
+    // game counterpart of this helper is otherwise unresolved (G-046's UNCLEAR note)].
+    let ha = -yaw * 0.5;
+    let s = crate::trig::sinf(ha);
+    let c = crate::trig::sinf(crate::trig::ee_add(ha, crate::trig::HALF_PI));
     let r = [0.0, s, 0.0, c];
     // r ⊗ q
     [r[3] * q[0] + r[0] * q[3] + r[1] * q[2] - r[2] * q[1],

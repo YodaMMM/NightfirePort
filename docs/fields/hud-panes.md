@@ -76,17 +76,17 @@ RadarSprInfo, **1·24**) · 17 OICW · 18 Ronin · 19 Laser; rest NULL.
 | LensFlareSprInfo | 0x2BD8D8 | 308 | 7 | pane 8 → 0x19d770 | – |
 | RedeemerSprInfo | 0x2BDA30 | 484 | 11 | pane 9 → 0x19e178 | – |
 | RCCarSprInfo | 0x2BDC38 | 264 | 6 | pane 10 → 0x1a15a0 | – |
-| RadarSprInfo | 0x2BDD60 | 44 | 1 | MP pane 14 → 0x19f6e8 (+24 blips) | – |
+| RadarSprInfo | 0x2BDD60 | 44 | 1 | MP pane 14 → 0x19f6e8 (+24 blips) | ✓ (`HudTables::radar`; runtime ring (432,16) — mp-hud-data.md §8) |
 | XraySprInfo | 0x2BDDB0 | 220 | 5 | pane 15 → 0x1a1410 | – |
 | SecCamSprInfo | 0x2BDEB0 | 308 | 7 | pane 16 → 0x1a1538 | – |
 | OICWSprInfo | 0x2BE008 | 308 | 7 | pane 17 → 0x19cef8 | – |
 | RoninSprInfo | 0x2BE160 | 264 | 6 | pane 18 → 0x1a12d0 | – |
 | LaserSprInfo | 0x2BE288 | 264 | 6 | pane 19 → 0x1a12d0 | – |
-| SpaceSprInfo | 0x2BE3B0 | 484 | 11 | pane 20 → 0x19d3b8 | – |
-| MPAmmoSprInfo | 0x2BE610 | 132 | 3 | MP pane 0 → 0x19a7f0 | – |
-| MPHealthSprInfo | 0x2BE6B8 | 352 | 8 | MP pane 1 → 0x19b630 | – |
+| SpaceSprInfo | 0x2BE3B0 | 484 | 11 | pane 20 → 0x19d3b8 | ✓ (fix-space-pane: `nf_view::hud::space_pane`; `MissileDeploy` not modelled) |
+| MPAmmoSprInfo | 0x2BE610 | 132 | 3 | MP pane 0 → 0x19a7f0 | ✓ (`HudTables::mp_ammo`) |
+| MPHealthSprInfo | 0x2BE6B8 | 352 | 8 | MP pane 1 → 0x19b630 | ✓ (`HudTables::mp_health`) |
 | MPInfoStatusSprInfo | 0x2BE838 | 44 | 1 | MP pane 4 → 0x19ca88 | – |
-| MPScoreInfo | 0x2BE888 | 308 | 7 | MP pane 13 → 0x19f0a0 | – |
+| MPScoreInfo | 0x2BE888 | 308 | 7 | MP pane 13 → 0x19f0a0 | ✓ (`nf_game::mp::hud::MpScorePane`) |
 | MissionStatusSprInfo (BSS) | 0x319580 | 132 | 3 | pane 2 → 0x19c310 | – |
 | ObjectiveStatusSprInfo (BSS) | 0x319608 | 264 | 6 | pane 3 → 0x19c310 | – |
 | InfoStatusSprInfo (BSS) | 0x319730 | 220 | 5 | pane 4 → 0x19c310 | – |
