@@ -613,10 +613,19 @@ fn print_table(m: u32, rows: &[Row]) {
     for r in rows { eprintln!("{}", r.cells()); }
 }
 
+/// Opt-in scope limiter for the story-flow runs: `NF_FLOW_MISSION=0x07000005` plays just that
+/// mission (the full-suite runs leave it unset and play every story mission). A scoped run still
+/// drives every level of the mission in order with the real carries.
+fn flow_scope() -> Option<u32> {
+    std::env::var("NF_FLOW_MISSION").ok().map(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).expect("NF_FLOW_MISSION hex"))
+}
+
 #[test]
 fn campaign_flow_story_missions_1_to_3() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let scope = flow_scope();
     for (m, levels, story) in missions().into_iter().filter(|(m, _, _)| [0x07000001, 0x07000005, 0x07000009].contains(m)) {
+        if scope.is_some() && scope != Some(m) { continue; }
         assert!(story, "mission 0x{m:08x} should be a story mission");
         let rows = play_mission(&iso, m, &levels);
         print_table(m, &rows);
@@ -626,7 +635,9 @@ fn campaign_flow_story_missions_1_to_3() {
 #[test]
 fn campaign_flow_story_missions_4_to_7() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let scope = flow_scope();
     for (m, levels, story) in missions().into_iter().filter(|(m, _, _)| [0x0700000c, 0x07000011, 0x07000014, 0x0700001b].contains(m)) {
+        if scope.is_some() && scope != Some(m) { continue; }
         assert!(story, "mission 0x{m:08x} should be a story mission");
         let rows = play_mission(&iso, m, &levels);
         print_table(m, &rows);

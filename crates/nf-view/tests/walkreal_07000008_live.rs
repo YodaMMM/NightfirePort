@@ -226,6 +226,14 @@ fn walk_the_gondola_ride_to_the_end() {
     ] {
         w.walk_nav_to(at, name, 1.5);
     }
+    // Sister: the descent was WALKED — the walkway's zone plates (TouchOnces out 42/43/44, the
+    // ambush spawners' start channels [D placements; M Trigger_Hit 0x1b1fc8 walk-in mask 8])
+    // fired on the way down; a teleport to the landing would leave them off.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x2a) || sim.drones.channels.on(0x2b) || sim.drones.channels.on(0x2c),
+            "the walked descent crossed the walkway ambush plates (42/43/44) [D]");
+    }
     // ── the gondola: the descent to the floor plate ─────────────────────────────────────────────
     // The outbound descent follows path 2's own link chain ([D the path-2 dump]): the landing
     // east (147.3/149.3/151.2/153, y 42.4, z −120.5) → the north ramp (153.1, 41.15, −115.95) →
