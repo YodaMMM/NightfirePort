@@ -63,17 +63,21 @@ fn rocket_spam_fires_at_the_launcher_rate_and_stops_when_dry() {
     assert_eq!(total_rounds, 8, "the Sentinel's clip 4 + carried 4 [D +0x92]");
     // A rocket every tick, fire held (the cheat the stress test exposed), aimed high so the
     // blasts never touch the shooter (no death → no respawn re-equip muddies the count).
+    // The held spam empties the CLIP and stops there: the game's auto-reload arm sits in the
+    // trigger's RELEASE path (`Input_Action(9,1) == 0`, [M] 0x1a5460 disasm 0x1a5fe8 →
+    // 0x1a61d0), so a never-released trigger reloads nothing. (The old pin expected the full 8
+    // — the reload-while-held rule the decompile contradicts; fixed with that address.)
     let spam = |t: u32| {
         let mut i = NEUTRAL;
         i.held = 0x2d;
-        i.fire = true;
-        i.shot = true;
+        i.fire = t < 200; // held through the clip, released after — the release starts the reload
+        i.shot = true; // the sender keeps claiming shots; the gate keeps the rate/ammo floor
         i.shot_weapon = 0x2d;
         i.shot_aim = cb::aim_from_dir([0.0, 0.95, 0.05]);
         let _ = t;
         i
     };
-    let ticks = 700u32;
+    let ticks = 900u32;
     let mut accepted_a: Vec<u32> = Vec::new();
     let mut accepted_b: Vec<u32> = Vec::new();
     for t in 0..ticks {
@@ -88,8 +92,12 @@ fn rocket_spam_fires_at_the_launcher_rate_and_stops_when_dry() {
         if fb > 0 { accepted_b.push(t); }
     }
     assert_eq!(accepted_a.len(), total_rounds as usize,
-        "the spam fires exactly the seeded rounds (accepted at {accepted_a:?})");
+        "the spam fires exactly the seeded rounds — the clip, then the released trigger's reload (accepted at {accepted_a:?})");
     assert_eq!(accepted_a.first().copied(), Some(0), "the first shot leaves immediately");
+    // The held window stopped at the clip: nothing between the clip's last round and the release
+    // at t=200 (the held trigger reloads nothing [M 0x1a5fe8 → 0x1a61d0]).
+    assert!(accepted_a.iter().all(|&t| t < 130 || t > 200),
+        "the held spam dries at the clip ({accepted_a:?}) and the reload's rounds come only after the release");
     // The rate: no two accepted shots closer than the record's interval.
     for w in accepted_a.windows(2) {
         assert!((w[1] - w[0]) as i32 >= interval, "shots {w:?} are at least {interval} apart");
@@ -134,13 +142,10 @@ fn p2k_through_two_clips_keeps_every_shot_and_agrees() {
     // The lockstep warmup: the same neutral ticks on both machines until the draw is done
     // (the gate follows the wire held byte and seeds itself on the first one).
     let neutral: [nf_net::Input; N] = std::array::from_fn(|_| NEUTRAL);
-    let mut warm = 0;
-    while warm < 300 {
+    for warm in 0..160 {
         let ha = nf_view::net_tick(a.sim.as_mut().unwrap(), &neutral, 0);
         let hb = nf_view::net_tick(b.sim.as_mut().unwrap(), &neutral, 1);
         assert_eq!(ha, hb, "warmup tick {warm}: the hashes agree");
-        warm += 1;
-        if a.sim.as_ref().unwrap().gun.weapon == 0x02 && warm > 12 { break; }
     }
     assert_eq!(a.sim.as_ref().unwrap().gun.weapon, 0x02, "the body must hold the P2K after the draw");
     // The tap cadence: the trigger pressed 2 of every 12 ticks (past the 8-tick interval), and
@@ -240,6 +245,96 @@ fn normal_rate_loses_no_shots() {
     for (k, &t) in accepted.iter().enumerate() {
         assert_eq!(t, k as u32 * interval as u32, "shot {k} leaves on its cadence tick");
     }
+}
+
+/// The held-trigger repro (docs/systems/mp-shot-gate-reload.md): the 7th tap's press never
+/// releases. The game's auto-reload arm sits in the trigger's RELEASE path
+/// (`Input_Action(9,1) == 0` — the level, [M] 0x1a5460 disasm 0x1a5fe8 → 0x1a61d0), so a held
+/// trigger with an empty clip reloads nothing and fires nothing; one released tick starts the
+/// reload on both the gate and the pipeline, and the still-held trigger re-fires through the
+/// state-6 clear ([M] `Input_ClearAction(9)`, LAB_001a3678) once the reload is done.
+#[test]
+fn held_trigger_through_the_boundary_reloads_only_on_release() {
+    let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
+    let s = settings();
+    let mut a = machine(&path, &s, 0);
+    let mut b = machine(&path, &s, 1);
+    let rounds = seed_rounds(a.sim.as_ref().unwrap(), 0x02);
+    assert_eq!(rounds, 14, "the P2K's spawn rounds: two clips");
+    {
+        let sim = a.sim.as_mut().unwrap();
+        let wd = sim.weapons.clone();
+        sim.drones.inventory.equip_weapon(&wd, 0x02 as usize, rounds as i16, true);
+        sim.gun.switch_request = 0x02;
+    }
+    let neutral: [nf_net::Input; N] = std::array::from_fn(|_| NEUTRAL);
+    for warm in 0..160 {
+        let ha = nf_view::net_tick(a.sim.as_mut().unwrap(), &neutral, 0);
+        let hb = nf_view::net_tick(b.sim.as_mut().unwrap(), &neutral, 1);
+        assert_eq!(ha, hb, "warmup tick {warm}: the hashes agree");
+    }
+    assert_eq!(a.sim.as_ref().unwrap().gun.weapon, 0x02, "the body must hold the P2K after the draw");
+    // The cadence: taps to t<72 (6 shots), then the 7th press at t=72 NEVER RELEASES until
+    // t=372 — the held-through-boundary window. One released tick at t=372, then held again
+    // (the reload + the state-6 clear re-fire), then the taps bring the total to 14.
+    let fire_at = |t: u32| {
+        if t < 72 { t % 12 < 2 }
+        else if t < 372 { true }
+        else if t == 372 { false }
+        else if t < 490 { true }
+        else { t % 12 < 2 }
+    };
+    let mut accepted: Vec<u32> = Vec::new();
+    let mut pipeline_fires: Vec<u32> = Vec::new();
+    let mut desc_pending = false;
+    let mut prev_ls = a.sim.as_ref().unwrap().last_shot;
+    for t in 0..620u32 {
+        let mut i = NEUTRAL;
+        i.held = 0x02;
+        i.trigger = fire_at(t);
+        i.fire = fire_at(t);
+        if desc_pending {
+            i.shot = true;
+            i.shot_weapon = 0x02;
+            i.shot_aim = cb::aim_from_dir([0.0, 0.9, 0.1]);
+        }
+        let row: [nf_net::Input; N] = std::array::from_fn(|sl| if sl == 0 { i } else { NEUTRAL });
+        let h0 = nf_view::net_tick(a.sim.as_mut().unwrap(), &row, 0);
+        let h1 = nf_view::net_tick(b.sim.as_mut().unwrap(), &row, 1);
+        assert_eq!(h0, h1, "tick {t}: the two machines agree (the sister)");
+        let fa = a.sim.as_ref().unwrap().mp_combat.fired.len();
+        assert_eq!(fa, b.sim.as_ref().unwrap().mp_combat.fired.len(), "tick {t}: both machines accept alike");
+        if fa > 0 { accepted.push(t); }
+        let ls = a.sim.as_ref().unwrap().last_shot;
+        if ls != prev_ls && ls.is_some() {
+            pipeline_fires.push(t);
+            desc_pending = true;
+        } else {
+            desc_pending = false;
+        }
+        prev_ls = ls;
+        // THE REPRO: through the held window nothing reloads and nothing fires — the 7th shot at
+        // t=72 (the hold's own fresh press, its description accepted at t=73) was the last until
+        // the release at t=372. The old ¬fresh-press rule reloaded while held and re-fired
+        // through the state-6 clear mid-hold (~t=200).
+        if t > 80 && t < 370 {
+            assert_eq!(pipeline_fires.len(), 7, "tick {t}: the held trigger fires nothing after the 7th [M 0x1a5fe8]");
+            assert_eq!(accepted.len(), 7, "tick {t}: nothing else is accepted while nothing reloads");
+        }
+    }
+    // After the release: the reload ran, the still-held trigger re-fired through the clear, and
+    // the taps finished the second clip. Every legitimate shot is in the shared stream.
+    assert_eq!(pipeline_fires.len(), rounds as usize, "both clips' worth fired ({pipeline_fires:?})");
+    assert_eq!(accepted.len(), pipeline_fires.len(),
+        "no legitimate shot lost (accepted at {accepted:?}, fired at {pipeline_fires:?})");
+    for w in accepted.windows(2) {
+        assert!((w[1] - w[0]) as i32 >= 8, "shots {w:?} are at least 8 apart [D +0x40]");
+    }
+    let sa = a.sim.as_ref().unwrap();
+    let g = &sa.mp_combat.gates[0];
+    let cs = sa.weapons.base(0x02 as usize) as usize;
+    assert_eq!(g.inv.clip.get(cs).copied(), Some(0), "the shared clip is empty at the end");
+    assert_eq!(g.inv.carried.get(sa.weapons.ammo_type(0x02 as usize)).copied(), Some(0), "the shared spare is empty at the end");
 }
 
 #[test]
