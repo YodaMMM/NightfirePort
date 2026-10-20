@@ -232,11 +232,14 @@ impl MpLobby {
              if self.friendly_fire != 0 { 0x1b7 } else { 0x1b6 }, String::new(),
              host_can, true, &mut self.focus);
         for i in 0..2u8 {
-            push(MpLobbyRowId::PlayerMod(i), 0x1ac, "Player Mod",
+            // The couch Player Mods page's own labels [L USATxt]: 0x1ac "Professional Mode", 0x24e "Location Damage"
+            // (the lobby showed "Professional Mode 1/2" — the user, 2026-10-19: "no fucking clue what enviromods mean").
+            push(MpLobbyRowId::PlayerMod(i), [0x1ac, 0x24e][i as usize], "Player Mod",
                  if self.player_mods[i as usize] != 0 { 0x1b7 } else { 0x1b6 }, String::new(),
                  host_can, true, &mut self.focus);
         }
-        push(MpLobbyRowId::Radar, 0, "Radar",
+        // The couch page labels this setting 0x1e5 "Team ID" [L USATxt; P_MPPLAYERMODS row 5].
+        push(MpLobbyRowId::Radar, 0x1e5, "Radar",
              if self.radar != 0 { 0x1b7 } else { 0x1b6 }, String::new(),
              host_can, true, &mut self.focus);
         for i in 0..5u8 {
@@ -247,7 +250,9 @@ impl MpLobby {
                 3 => (if self.envmods[3] != 0 { 0x1b7 } else { 0x1b6 }, true),
                 _ => ([0x1b6, 0x0100_02d8, 0x0100_02d9, 0x1b2][self.envmods[4].min(3) as usize], true),
             };
-            push(MpLobbyRowId::Enviro(i), 0, "Enviro-Mod", vid, String::new(), host_can, enabled, &mut self.focus);
+            // The couch Enviro-Mods page's labels [L USATxt]: Respawn, Fixed Gun Emplacements, Explosive Scenery,
+            // Grapple, Mini Vehicles (the lobby showed "Enviro-Mod 1..5").
+            push(MpLobbyRowId::Enviro(i), [0x1af, 0x1ab, 0x1aa, 0x328, 0x5b9][i as usize], "Enviro-Mod", vid, String::new(), host_can, enabled, &mut self.focus);
         }
         // Ravine takes no bots: the game locks the AI Bots row there [M P_MPMAP 0x217678:20-25] and the match start
         // zeroes them [M Menu_PrepareBots 0x1f94a0:85-88] (`FrontEnd::mp_bot_count`). The lobby used to let the host
