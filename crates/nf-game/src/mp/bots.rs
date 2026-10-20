@@ -651,6 +651,10 @@ pub struct BotPickup {
     pub is_obj_flag2: bool,
     /// +0x80 — the per-bot visit stamps [f32; 4] by bot index [M 0x129958:10-15].
     pub visit: [f32; 16],
+    /// mp-bot-weapons: the pickup stands takeable (not in its state-2 respawn wait, not deleted).
+    /// `pickGoal` skips a row whose registered object is gone [M 0x126b88:386-387 — the
+    /// `MPpickups[i] == 0` / `+0x10 == 0` gate]; the port skips the hidden respawn wait too [S].
+    pub available: bool,
 }
 
 
@@ -720,6 +724,14 @@ pub struct BotCtx<'a> {
     /// per-slot/per-team status words, the assassin roles, the other bots' objective goals) —
     /// `None` = no scenario objects (the unit rigs; the brain then plays deathmatch only).
     pub objectives: Option<&'a BotObjectives>,
+    /// mp-bot-weapons: the arena's `weapon_data` lift (`botweap::BotWeaponTable`). `Some` arms
+    /// the bot with the game's weapon layer on its first tick (`BOTWEAP_InitWeapon`) — the
+    /// arsenal, the per-weapon fire timing, the reload/change states, the weapon choice. `None`
+    /// keeps the old stand-in (one weapon, an endless 12-round clip) for the unit rigs [S].
+    pub weapons: Option<&'a crate::mp::botweap::BotWeaponTable>,
+    /// mp-bot-weapons: the match's `startweap` (`weapon_data[PickupMatrix[set·10]].base`
+    /// [M 0x129e48:44-45]) — `BotWeaponTable::start_weapon(settings.weapon_set)`.
+    pub start_weapon: u8,
 }
 
 // ============================================================================
@@ -1005,6 +1017,9 @@ pub struct BotVars {
     pub opponent: Option<usize>, // Drone+0x170 (index into ctx.others)
     pub sighted: u32,            // Drone+0x228 (bit 2 = opponent visible)
     pub unseen_ticks: u32,       // Drone+0x274 (ticks since the last LOS tick)
+    /// Drone+0x270 — the seen-arm counter `ProcessDroneSight` increments while the vision chain
+    /// holds, `HaveOpponentSight` gates the bit-2 ack on [M 0x175ef0:41-44].
+    pub seen_ticks: u32,
     pub sight_stamp: f32,        // Drone+0x238 (last-sight stamp; heartbeat's 5 s latch)
     pub combat_range: [f32; 3],  // Drone+0xEC/0xF0/0xFC (too-close / engage / too-far)
     pub fire_latch: u8,          // Drone+0x3B
@@ -1014,6 +1029,17 @@ pub struct BotVars {
     pub burst_done_tick: u32,    // [S] the tick the last burst emptied (the re-arm stand-in)
     pub burst_left: u32,         // Drone+0xBC0
     pub resume_state: u16,       // Drone+0x5A6 (the 0xF6 door-detour resume marker)
+    // mp-bot-weapons (botweap.rs)
+    pub character: u8,           // +0x764 (the record's character — `BOTWEAP_InitWeapon`'s 0x1A test)
+    pub arsenal: crate::mp::botweap::BotArsenal, // +0x144/+0x146 per weapon, +0x698 pools, +0x769 armour
+    pub last_shot_tick: u32,     // Drone+0xBC8 (the last bullet's GameState stamp [M 0x178f68:261])
+    pub next_shot_tick: u32,     // Drone+0xBC4 (the next bullet's deadline, ticks [M 0x179d40:131-135])
+    pub reload_until: u32,       // [S] the reload anim 0x52's end (0xDD → 0xCF)
+    pub pickup_choice: Option<bool>, // the pending `pickupWeaponChangeChoice` (has-weapon flag) from a take
+    pub ammo_summary: (f32, f32), // (`getWeaponAmmoAmount`, `getWeaponClipSize`) of +0x768 — setGoalPickPrefs' inputs
+    pub opp_dist: f32,           // Drone+0x1A0 (the distance to the opponent; MAX = none)
+    pub prev_opponent: Option<usize>, // [S] last tick's Drone+0x170 (the `SetOpponent` msg-0x45 edge)
+    pub prev_visible: bool,      // [S] last tick's Drone+0x228 bit 2 (the `HaveOpponentSight` edge)
 }
 
 
@@ -1047,6 +1073,7 @@ impl Default for BotVars {
             opponent: None,
             sighted: 0,
             unseen_ticks: u32::MAX,
+            seen_ticks: 0,
             sight_stamp: f32::NEG_INFINITY,
             combat_range: [2.0, 20.0, 40.0],
             fire_latch: 0,
@@ -1056,6 +1083,16 @@ impl Default for BotVars {
             burst_done_tick: 0,
             burst_left: 0,
             resume_state: 0,
+            character: 0,
+            arsenal: crate::mp::botweap::BotArsenal::default(),
+            last_shot_tick: 0,
+            next_shot_tick: 0,
+            reload_until: 0,
+            pickup_choice: None,
+            ammo_summary: (1.0, 1.0),
+            opp_dist: f32::MAX,
+            prev_opponent: None,
+            prev_visible: false,
         }
     }
 }
@@ -1234,6 +1271,7 @@ impl BotBrain {
         vars.weapon_class = stats[0x0A];
         vars.trait_id = stats[0x0B];
         vars.flags = stats[0x0C];
+        vars.character = record.character(); // +0x764 [M 0x1249e8:160]
         vars.slot = slot as i16;
         vars.bot_index = (slot - 4) as i16;
         vars.grudge = -1; // 0xFF [M 0x1249e8:163]
@@ -1294,6 +1332,8 @@ impl BotBrain {
             }
             st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT
             | st::BOT_ATTACK_STEP_AIM_LEFT | st::BOT_ATTACK_STEP_AIM_RIGHT => self.bot_attack_move_enter(next, rng),
+            state::BOT_ATTACK_RELOAD => self.bot_attack_reload_enter(ctx),
+            state::BOT_ATTACK_CHANGE_WEAPON => self.bot_attack_change_weapon_enter(ctx),
             _ => {} // 0xF2/0xF6/0xD3… not ported (the report lists the gap)
         }
     }
@@ -1305,38 +1345,80 @@ impl BotBrain {
         }
     }
 
+    /// `DroneVision_OpponentVisibility` 0x175af0 with the bots' constants: sight 24.0 (the
+    /// drones' default-case +0xE8 = 0x41c00000 [M 0x14b300:386]; the bots' own arm is not
+    /// confirmed — [S], the same constant `find_opponent` squares), half-FOV π/2 [M 0x14b300
+    /// LAB_0014bb44], alertness 0 (the bots never raise +0x50c in the port) and light 1.0
+    /// ([S] the bots run no AI-volume factor). The ≥ 0.7 score is `SeekOpponentLOS` 0x175cb8's
+    /// gate before its raycast.
+    fn opponent_visibility(&self, t: &OtherPlayer) -> f32 {
+        let dx = t.pos[0] - self.pos[0];
+        let dy = t.pos[1] - self.pos[1];
+        let dz = t.pos[2] - self.pos[2];
+        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+        if dist < 2.0 {
+            return 1.0;
+        }
+        let r = 24.0f32; // sight × (2·alertness + 1), alertness 0
+        let mut vis = 0.7 - (dist - r) / r;
+        let yaw_to_opp = crate::trig::atan2_approx(dx, dz);
+        let margin = crate::trig::HALF_PI + 0.392_699_1 - crate::trig::angle_difference(self.yaw, yaw_to_opp).abs();
+        if margin < 0.0 {
+            return 0.0;
+        }
+        vis *= crate::trig::sinf(margin / crate::trig::HALF_PI * crate::trig::HALF_PI);
+        vis.max(0.0)
+    }
+
     /// One drone-control tick [M 0x1490f0:81 + 0x171df8:78-86,119-203]: heartbeat to 0xC5, msg 3
     /// to the current state, the firing pipeline, then the pending commit (0x2E + ENTER).
     pub fn step(&mut self, ctx: &BotCtx, rng: &mut Rng, weapon_fire: bool) {
         self.tick += 1;
         // 0. the perception pass [M 0x1490f0:164-167 — setOtherPlayerInfo then FindOpponent]:
-        // the LOS/sight bookkeeping (the port's `CanSeeObject` = the collision-world segment)
+        // the LOS/sight bookkeeping (the port's `CanSeeObject` = the collision-world segment).
+        // The bit-2 sight the heartbeat's react and the combat states read is the DRONE vision
+        // chain's ack, not a bare segment: `DroneVision_OpponentVisibility` 0x175af0 scores the
+        // cone + range band (≥ 0.7 before any raycast — `SeekOpponentSight` 0x175cb8), and
+        // `HaveOpponentSight` 0x175ef0 sets +0x228 bit 2 only once the seen counter (+0x270)
+        // passes `DroneFunc_ReactionTime` 0x14ac60 (10 ticks off the five SP levels; MP
+        // 0x07000023 lands in the default arm). Without the cone a goal-running bot "saw" the
+        // opponent it was walking AWAY from (the segment ignores facing), the heartbeat reacted
+        // every tick, and a carrier could never break contact to deliver (bot-weapons-finish-2).
         self.vars.sighted &= !4;
         if let Some(o) = self.vars.opponent {
             if let Some(t) = ctx.others.get(o) {
                 if t.alive {
-                    // The line to the aim point (the chest, eye − 0.3 — where `handle_firing`'s
-                    // round goes): an eye-to-eye line over a ledge lip saw a bot on the storey
-                    // below whom no round could reach, and the pair stood firing into the lip
-                    // all match instead of running the route round [S the CanSeeObject stand-in].
-                    let clear = ctx.world.segment_clear(self.pos, [t.pos[0], t.pos[1] - 0.3, t.pos[2]]);
-                    if clear {
-                        self.vars.sighted |= 4; // Drone+0x228 bit 2 [M]
+                    // The line to the aim point — where `handle_firing`'s round goes now that the
+                    // aim targets the opponent's position [M 0x125b30/0x178f68] (the old chest
+                    // −0.3 line matched the old chest aim; the pair must agree or a bot "sees"
+                    // along one line and shoots along another — the ledge-lip case this once
+                    // patched is the same line again). [S the CanSeeObject stand-in.]
+                    let clear = ctx.world.segment_clear(self.pos, t.pos);
+                    if clear && self.opponent_visibility(t) >= 0.7 {
+                        self.vars.seen_ticks = self.vars.seen_ticks.saturating_add(1); // +0x270 [M 0x176a28 seen arm]
                         self.vars.unseen_ticks = 0; // Drone+0x274
-                        // the brain's canonical clock: its own tick counter (60 Hz), NOT the
-                        // driver-supplied ctx.now — a lockstep host's wall-clock accumulation
-                        // must not reach sim state (net-lockstep finding F4). next_bullet_at is
-                        // already tick-derived; this aligns every time read with it.
-                        self.vars.sight_stamp = self.tick as f32 / 60.0; // Drone+0x238
+                        if self.vars.seen_ticks >= 10 {
+                            // HaveOpponentSight's ack [M 0x175ef0:41-67 — bit 2 + the +0x238 stamp]
+                            self.vars.sighted |= 4; // Drone+0x228 bit 2 [M]
+                            // the brain's canonical clock: its own tick counter (60 Hz), NOT the
+                            // driver-supplied ctx.now — a lockstep host's wall-clock accumulation
+                            // must not reach sim state (net-lockstep finding F4). next_bullet_at is
+                            // already tick-derived; this aligns every time read with it.
+                            self.vars.sight_stamp = self.tick as f32 / 60.0; // Drone+0x238
+                        }
                     } else {
+                        self.vars.seen_ticks = 0; // the lost arm zeroes +0x270 [M 0x176a28]
                         self.vars.unseen_ticks = self.vars.unseen_ticks.saturating_add(1);
                     }
                 }
             }
         }
         { let _p = crate::prof::scope("bots: find_opponent"); self.find_opponent(ctx); } // [M 0x1490f0:167]
+        // mp-bot-weapons: the weapon layer's per-tick part (arming, the opponent distance, a
+        // pending pickup weapon choice) — botweap.rs.
+        self.weapons_tick(ctx, rng);
         // 1. the forced-to-0xC5 heartbeat [M 0x171df8:78-86]
-        self.bot_global_msg3(ctx);
+        self.bot_global_msg3(ctx, rng);
         // 2. msg 3 to the current state (unknown states do not consume → nothing, like the
         //    unported handlers returning 0 with the BotGlobal fallback consumed above)
         match self.state {
@@ -1349,6 +1431,7 @@ impl BotBrain {
             state::BOT_ATTACK_RUN => self.bot_attack_run_msg3(ctx),
             state::BOT_ATTACK_BACKOFF => self.bot_attack_backoff_msg3(ctx),
             state::BOT_ATTACK_NO_OPPONENT => self.set_state(state::BOT_IDLE),
+            state::BOT_ATTACK_RELOAD => self.bot_attack_reload_msg3(),
             st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT => self.bot_attack_strafe_msg3(ctx, rng),
             st::BOT_ATTACK_STEP_AIM_LEFT | st::BOT_ATTACK_STEP_AIM_RIGHT => self.bot_attack_step_msg3(ctx, rng),
             _ => {}
@@ -1372,7 +1455,10 @@ impl BotBrain {
         }
         // 3. the per-tick firing pipeline [M 0x1490f0:231 `DroneWeap_HandleFiring`]
         if weapon_fire {
-            self.handle_firing(ctx, rng);
+            match ctx.weapons {
+                Some(t) if self.vars.arsenal.armed => self.handle_firing_armed(ctx, rng, t),
+                _ => self.handle_firing(ctx, rng),
+            }
         }
         // The body walk (the drone mover's place in `Drone_Control`, after the state's msg 3).
         self.walk_body(ctx);
@@ -1445,6 +1531,7 @@ impl BotBrain {
         }
         h.u32(v.sighted);
         h.u32(v.unseen_ticks);
+        h.u32(v.seen_ticks);
         h.f32(v.sight_stamp);
         h.f32_slice(&v.combat_range);
         h.u8(v.fire_latch);
@@ -1453,6 +1540,17 @@ impl BotBrain {
         h.f32(v.next_bullet_at);
         h.u32(v.burst_left);
         h.u16(v.resume_state);
+        h.u8(v.character);
+        v.arsenal.hash_into(&mut h);
+        h.u32(v.last_shot_tick);
+        h.u32(v.next_shot_tick);
+        h.u32(v.reload_until);
+        match v.pickup_choice { None => h.u8(0), Some(b) => { h.u8(1); h.bool(b); } }
+        h.f32(v.ammo_summary.0);
+        h.f32(v.ammo_summary.1);
+        h.f32(v.opp_dist);
+        match v.prev_opponent { None => h.u8(0), Some(o) => { h.u8(1); h.usize(o); } }
+        h.bool(v.prev_visible);
         h.u8(self.state);
         h.f32_slice(&self.pos);
         h.f32(self.yaw);
@@ -1561,6 +1659,9 @@ impl BotBrain {
             // the auto-derive [M 0x128298:24-28]
             let hp = health.max(1.0);
             h = (1.0 - 1.0 / (self.vars.max_hp as f32 / hp)) * 25.0;
+            // mp-bot-weapons: an armed bot's own `getWeaponAmmoAmount` / `getWeaponClipSize` of
+            // +0x768 [M :29-30] (the callers' 1.0/1.0 stand-in made the ammo weight always 0).
+            let (ammo, clip) = if self.vars.arsenal.armed { self.vars.ammo_summary } else { (ammo, clip) };
             if ammo < clip {
                 let denom = clip.max(1.0);
                 a = (1.0 - 1.0 / (denom / ammo.max(1.0))) * 25.0;
@@ -1699,8 +1800,8 @@ impl BotBrain {
         let mut best: Option<(usize, f32, f32)> = None; // (index, score, dist)
         for pass in 0..passes {
             for (i, p) in ctx.pickups.iter().enumerate() {
-                if i as i8 == self.vars.last_pickup {
-                    continue; // [M :397]
+                if i as i8 == self.vars.last_pickup || !p.available {
+                    continue; // [M :386-387, :397]
                 }
                 let mut dist = ((self.pos[0] - p.pos[0]).powi(2)
                     + (self.pos[1] - p.pos[1]).powi(2)
@@ -1726,16 +1827,29 @@ impl BotBrain {
                 // the class filters, pass 0 [M :431-477]
                 if pass == 0 {
                     match p.mp_class {
+                        0 if self.vars.arsenal.armed => {
+                            // weapons: pass 0 scores only a preferred weapon the bot lacks
+                            // (`isPreferredWeapon` ∧ !`hasWeapon` [M :431-441]; the demolition
+                            // explosive double-score arm is not modelled [S])
+                            let w = p.weapon_id.min(0xff) as u8;
+                            let a = &self.vars.arsenal;
+                            if !ctx.weapons.is_some_and(|t| crate::mp::botweap::is_preferred_weapon(t, self.vars.weapon_class, w)) || a.has_weapon(w) {
+                                continue;
+                            }
+                        }
                         0 => {
-                            // weapons: skip the held weapon id (the !hasWeapon gate's port form [S];
-                            // the full isPreferredWeapon read is the report's remaining work).
-                            // Game forms: `BOTSTATE_hasWeapon` (0x129658) skips any held weapon
-                            // (`BOTWEAP_hasWeapon` 0x12af78); the port only has the current one.
+                            // the unarmed stand-in (no weapon table): skip the held weapon id [S]
                             if p.weapon_id != 0 && p.weapon_id as u8 == self.vars.weapon_id {
                                 continue;
                             }
                         }
-                        1 => continue, // ammo needs the owned-weapon scan — not lifted, [S]
+                        // ammo: pass 0 only for a weapon the bot has (`hasWeapon` [M :459-464])
+                        1 if self.vars.arsenal.armed => {
+                            if !self.vars.arsenal.has_weapon(p.weapon_id.min(0xff) as u8) {
+                                continue;
+                            }
+                        }
+                        1 => continue, // the unarmed stand-in has no owned-weapon scan [S]
                         3 => {}
                         _ => continue, // class 2 and others never score [M :474-475]
                     }
@@ -2202,10 +2316,45 @@ impl BotBrain {
     /// health > 0]; the full score/history selection is not lifted — [S], see the report).
     /// Team reads are `MP_getObjectTeam` (0x18b6c0).
     pub fn find_opponent(&mut self, ctx: &BotCtx) {
-        // keep the current opponent while it lives and is not (now) a team-mate (Assassination's
-        // roles move between deaths)
-        if self.vars.opponent.is_some_and(|i| ctx.others.get(i).is_some_and(|o| o.alive && o.flags & 8 == 0)) {
-            return;
+        // The hold [M 0x1424e0:355-365]: the current opponent survives only while it is valid
+        // (alive, not a team-mate in the Assassination role shuffle) and the unseen counter is
+        // within FRAME_RATE × aggression_mul × 20 — `BOT_getAggressionMul` 0x126468 (0.3..1.0
+        // by the aggression byte, × up to 3 inside 2.5u) — then it clears and the scan re-picks.
+        // Holding until death kept a carrier chasing an enemy that had broken line of sight
+        // instead of resuming the objective (bot-weapons-finish-2).
+        if let Some(i) = self.vars.opponent {
+            // The validity arm is class-gated [M 0x1424e0:357-365]: class 1 clears outright,
+            // class 2 (a drone) runs the alive/enabled check, any OTHER class (the demolition/
+            // protection site pseudo-opponent) skips it. The port's site opponent (index
+            // OBJ_ROW and above, not a ctx.others row) is that other class, and the perception
+            // pass never ticks +0x274 for it — the port keeps it for the goal's lifetime (the
+            // attackers shoot the standing site; bot-weapons-finish-2's hold regressed
+            // demolition/protection and the site-ack chain needs its own task).
+            if i >= OBJ_ROW {
+                return;
+            }
+            let (valid, dist) = if i < OBJ_ROW {
+                let o = ctx.others.get(i);
+                (o.is_some_and(|o| o.alive && o.flags & 8 == 0), o.map(|o| o.dist2.sqrt()))
+            } else {
+                (true, None)
+            };
+            let mut mul = match self.vars.aggression {
+                0 => 0.3,
+                1 => 0.5,
+                2 => 0.7,
+                3 => 0.85,
+                _ => 1.0,
+            };
+            if let Some(d) = dist {
+                if d < 2.5 {
+                    mul = (mul * ((2.5 - d) + 1.0)).min(3.0); // [M 0x126468:22-30]
+                }
+            }
+            let hold = (mul * 20.0) as u32; // FRAME_RATE is 1 at the fixed 60 Hz
+            if !valid || self.vars.unseen_ticks > hold {
+                self.vars.opponent = None; // NDrone2_SetOpponent(0) [M 0x1424e0 LAB_0014277c]
+            }
         }
         let mut best: Option<(usize, f32)> = None;
         for o in ctx.others {
@@ -2244,15 +2393,33 @@ impl BotBrain {
             }
             if ctx.lazy_sight {
                 // mp-perf-16: only a candidate that would take the pick pays for its sight line —
-                // the same answer as the precomputed bit2, without the per-pair segments.
-                let chest = [o.pos[0], o.pos[1] - 0.4, o.pos[2]];
-                let seen = o.flags & 0x6 == 0x6 || ctx.world.segment_bullet_clear(self.pos, chest);
+                // the same answer as the precomputed bit2, without the per-pair segments. The test
+                // is the perception ack's own chain (bot-weapons-finish-3): the segment to the aim
+                // point plus the `OpponentVisibility` ≥ 0.7 cone+range score. A looser bare
+                // segment kept re-picking an opponent the sight chain never acked, which starved
+                // the scan tail's site arm: the protection attackers stood "attacking" a defender
+                // they could not sight and never shot the site.
+                let seen = o.flags & 0x6 == 0x6
+                    || (ctx.world.segment_clear(self.pos, o.pos) && self.opponent_visibility(o) >= 0.7);
                 if !seen { continue; }
             }
             best = Some((o.index, d));
         }
-        self.vars.opponent = best.map(|(i, _)| i);
-        if self.vars.opponent.is_none() {
+        // The pick: the port overwrites the held opponent with this tick's scan result — the
+        // game's hold (the block above) bounds a held opponent to ~aggression×20 unseen frames
+        // anyway, so the port's stricter re-acquire lands within the same window [*S* port
+        // choice: the decompile's scan-miss keeps the held opponent (0x1424e0's tail returns
+        // without SetOpponent(0)), but the game's vision-chain re-acquire gates make the
+        // effective lifetime near-identical; the overwrite ends the chases the moment the
+        // segment check fails, which the carriers' delivery windows need]. A miss still runs
+        // the tail's site arm — its own gate is `site != +0x170`, not "no opponent" [M
+        // 0x1424e0:541].
+        if let Some((i, _)) = best {
+            if self.vars.opponent != Some(i) && i >= OBJ_ROW {
+                self.vars.unseen_ticks = 0; // the site pick starts its hold fresh
+            }
+            self.vars.opponent = Some(i);
+        } else {
             self.find_site_opponent(ctx);
         }
     }
@@ -2264,6 +2431,9 @@ impl BotBrain {
     /// (`MP_sendBotMessage(.., 0x3b, 1, 0)` → `setGoalComplete(1)`) [M]. The cone half-angle
     /// (`Drone+0xE4`) is not lifted — 90° [S]; the sight is the driver's seen bit on the row.
     fn find_site_opponent(&mut self, ctx: &BotCtx) {
+        if self.vars.opponent.is_some_and(|i| i >= OBJ_ROW) {
+            return; // the site is already the opponent [M 0x1424e0:541 `iVar7 != +0x170`]
+        }
         let Some(ob) = ctx.objectives else { return };
         let Some(site) = ob.site else { return };
         let team = ob.teams.get(ctx.my_index).copied().unwrap_or(ctx.my_team);
@@ -2320,7 +2490,7 @@ impl BotBrain {
     // BotGlobal — state 0xC5, the forced heartbeat arm [M 0x16e060:84-519]
     // ------------------------------------------------------------------
 
-    fn bot_global_msg3(&mut self, ctx: &BotCtx) {
+    fn bot_global_msg3(&mut self, ctx: &BotCtx, rng: &mut Rng) {
         // SM current state == 0 → 0xF9 [M :86-87]
         if self.state == 0 {
             self.set_state(state::BOT_IDLE);
@@ -2363,9 +2533,18 @@ impl BotBrain {
             }
         }
         match ty {
-            1 | 2 | 4 => {
-                // types 1/2 → the tail return [M :517-519]; type 4 → the combat block [M :290-495]
-                // (the port keeps the fire latch state; the weapon re-choice chain is the report's work)
+            4 => {
+                // type 4 → the combat block [M :290-495]: mp-bot-weapons ports its weapon half
+                // (the empty gun → reload/change, the fists up close, the explosives' ranges);
+                // the combat-move half stays the states' own [S].
+                if let Some(t) = ctx.weapons {
+                    if self.vars.arsenal.armed {
+                        self.combat_weapon_block(ctx, t, rng);
+                    }
+                }
+            }
+            1 | 2 => {
+                // types 1/2 → the tail return [M :517-519]
             }
             10 => {}
             _ => {
@@ -2891,7 +3070,10 @@ impl BotBrain {
         self.body.yaw = byaw;
         self.pos = [self.body.pos[0], self.body.pos[1] + crate::player::EYE, self.body.pos[2]];
         // The stuck watch: every 45 ticks of wanting to walk, under 0.4 covered → one jump and a
-        // re-plan; three in a row tell the walker's caller to give the goal up [S].
+        // re-plan; three in a row tell the walker's caller to give the goal up [S]. The xz
+        // measure false-triggers on stair climbs (bot-weapons-finish-2) — the jump+re-plan it
+        // drives is kept: the jump is the wedge escape that un-wedges the carriers at the
+        // stairwell mouths.
         if want.is_some_and(|w| w.1 > 0.3) && !ctx.stationary {
             if self.tick.wrapping_sub(self.stuck_ref.1) >= 45 {
                 let r = self.root();
@@ -2954,19 +3136,6 @@ impl BotBrain {
         };
     }
 
-    /// The spent burst's re-pull inside a combat move (the 0xD2 re-arm stand-in, see
-    /// `route_vision_block`) [S].
-    fn rearm_burst(&mut self, rng: &mut Rng) {
-        if self.vars.burst_empty != 0 {
-            let interval = (self.weapon.interval.max(20)) as u32;
-            if self.tick.wrapping_sub(self.vars.burst_done_tick) >= interval {
-                self.vars.fire_latch = 0;
-                self.vars.burst_empty = 0;
-                self.bot_attack_fire_enter(rng);
-            }
-        }
-    }
-
     /// 0xD4/0xD5 BotAttackStrafeAim{Left,Right} msg 3 [M 0x16f850/0x16f9b8]: no opponent →
     /// 0xD3; aim; `CanStrafe` failing → `chooseCombatMove` (none → 0xCF); out of sight 16+ ticks
     /// → 0xD0 run; the timer (msg 0xC) → 0xCF. The strafe walk itself is the anim's root motion
@@ -2994,7 +3163,6 @@ impl BotBrain {
         // drift in when far, out when inside the too-close band [S]
         let fwd = if dist > self.vars.combat_range[1] * 0.5 { 0.35 } else if dist < self.vars.combat_range[0] * 2.0 { -0.35 } else { 0.0 };
         self.side_walk(side, fwd, 1.0);
-        self.rearm_burst(rng);
     }
 
     /// 0xDB/0xDC BotAttackStepAim{Left,Right} msg 3 [M 0x174e88/0x174fa8]: no opponent → 0xD3;
@@ -3015,7 +3183,6 @@ impl BotBrain {
                 self.set_state(mv);
             }
         }
-        self.rearm_burst(rng);
     }
 
     fn bot_goto_goal_msg3(&mut self, ctx: &BotCtx) {
@@ -3103,7 +3270,11 @@ impl BotBrain {
         }
         self.vars.fire_latch = 1; // DroneWeap_Fire [M 0x17a8c0:15-17]
         self.vars.burst_empty = 0;
-        self.next_bullet_time(rng); // → DroneWeap_NextBulletTime [M :25]
+        if self.vars.arsenal.armed {
+            self.next_bullet_time_mp(rng, true); // `NextBulletTime(0, 1)` in MP [M 0x17a8c0:11-13]
+        } else {
+            self.next_bullet_time(rng); // → DroneWeap_NextBulletTime [M :25]
+        }
     }
 
     fn bot_attack_fire_msg3(&mut self, ctx: &BotCtx, rng: &mut Rng) {
@@ -3148,7 +3319,13 @@ impl BotBrain {
             return;
         }
         if dist < self.vars.combat_range[1] && self.vars.sighted & 4 != 0 && self.vars.unseen_ticks < 0x10 {
-            self.vars.fire_latch = 0;
+            // No latch write here [M 0x16f390:86-91, :102 — the 0xCF hand-over reads +0x3b
+            // nowhere]: the fire latch and its bullet deadline survive the combat-state bounce
+            // (0xD0/0xCF/the moves), so the per-tick pipeline fires at the deadline from any
+            // combat state — the game's bots shoot while they move. Clearing the latch made
+            // every re-entry a fresh `DroneWeap_Fire` whose `NextBulletTime` re-pushed the
+            // deadline (≥ 60 ticks for weapon 6 [M 0x179d40:26-47]) beyond the 1-in-3 exit
+            // roll's stay [M 0x16f5e8:48-52] — the latch was set and the bot never fired.
             self.set_state(state::BOT_ATTACK); // [M :86-91]
             return;
         }
@@ -3171,7 +3348,8 @@ impl BotBrain {
             return;
         };
         if o.dist2.sqrt() > self.vars.combat_range[0] + 1.0 || ctx.stationary || self.stuck_hits > 0 {
-            self.vars.fire_latch = 0;
+            // No latch write [M 0x16fc30 — the backoff reads +0x3b (the enter's skip-Fire, the
+            // msg3's aim gate) and never writes it]: see the 0xD0 arm above.
             self.set_state(state::BOT_ATTACK);
             return;
         }
@@ -3198,17 +3376,13 @@ impl BotBrain {
             self.set_state(state::BOT_ATTACK_RUN);
             return;
         }
-        // The game leaves 0xD2 through its combat moves (strafe/step, `chooseCombatMove`), which
-        // re-enter the fire state; those are not ported, so a spent burst re-arms here after the
-        // weapon's interval [S].
-        if self.vars.burst_empty != 0 {
-            let interval = (self.weapon.interval.max(20)) as u32;
-            if self.tick.wrapping_sub(self.vars.burst_done_tick) >= interval {
-                self.vars.fire_latch = 0;
-                self.vars.burst_empty = 0;
-                self.set_state(state::BOT_ATTACK);
-            }
-        }
+        // The spent burst re-arms in the per-tick pipeline itself (`DoFiring`'s `+0xbc0 == 0`
+        // arm → `NextBulletTime(1, 0)` [M 0x17a080:11-13]); the game's 0xD2 msg 3 has no
+        // re-arm and no latch write [M 0x16f5e8:56-93]. The port's interval-based re-arm here
+        // cleared the latch, so the next 0xD2/move enter was a fresh `DroneWeap_Fire` whose
+        // `NextBulletTime` pushed the bullet deadline out again — with weapon 6's 60-tick
+        // minimum and the 1-in-3 exit roll the deadline always receded and the bot never
+        // fired (the playtest's "0xD4 strafe, latch set, never fires" wedge).
     }
 
     /// `DroneWeap_NextBulletTime` 0x179d40 (the port's lift): the interval from the weapon
@@ -3285,9 +3459,16 @@ impl BotBrain {
         if dot <= 0.9998 {
             return;
         }
-        // FireWeapon [M 0x179d40→0x17a080:11] — the round aims at the target's height too (a level
-        // round passed over a player on another floor) [S the aim's vertical half].
-        let dy = target.pos[1] - 0.3 - self.pos[1];
+        // FireWeapon [M 0x178f68] — the bullet leaves the weapon fire bone's world position
+        // (`AnimGetBoneWorldTrans` → `Bullet_init(.., &bone_pos, dir)`) and, with the opponent
+        // held, its direction is `normalise(aim_point − bone_pos)` where the aim point is the
+        // opponent's obj position + the aim wobble (`BOT_opponentTargetting` 0x125b30 stores
+        // opp+0x30 [+0x210 wobble] into +0x1f0; the wobble is 0 once the aim settles). The port
+        // has no model bones: its single-point stand-in is the bot's own pos for the muzzle, so
+        // the shot aims AT the target's pos — level for a standing target on the same floor, the
+        // right vertical for a target on another floor. (The old `- 0.3` chest offset was a port
+        // guess [S]; the decompile's aim point is the opponent's position itself.)
+        let dy = target.pos[1] - self.pos[1];
         let len = (d * d + dy * dy).sqrt().max(1e-6);
         let aim = [dx / len, dy / len, dz / len];
         let _ = dir;
@@ -3305,12 +3486,379 @@ impl BotBrain {
 }
 
 // ============================================================================
+// mp-bot-weapons: the weapon layer's brain half (`botweap.rs` holds the records)
+// ============================================================================
+
+/// [S] The reload anim 0x52's length (`BotAttackReload` 0x170190 plays it through
+/// `DroneAnim_CallAnim` and moves on to 0xCF when it ends; the anim is not lifted).
+pub const RELOAD_TICKS: u32 = 45;
+
+impl BotBrain {
+    /// The legacy fire params (`self.weapon`) follow +0x768 — `weapon_data+0x40/+0x2C`.
+    fn apply_weapon_params(&mut self, t: &crate::mp::botweap::BotWeaponTable) {
+        let r = t.row(self.vars.weapon_id);
+        self.weapon.interval = r.interval;
+        self.weapon.burst = r.burst;
+        self.weapon.aggression_mul = self.aggression_mul();
+    }
+
+    /// `BOT_getAggressionMul` 0x126468: by `Drone+0xB5` — the record's AIM byte (`BOT_setDroneStats`
+    /// 0x126318:13 copies stats[2] there) — 0.3 / 0.5 / 0.7 / 0.85 / 1.0; in MP × (2.5 − dist + 1,
+    /// at most 3) while the opponent is inside 2.5 [M :8-31].
+    pub fn aggression_mul(&self) -> f32 {
+        let mut m = match self.vars.aim {
+            0 => 0.3,
+            1 => 0.5,
+            2 => 0.7,
+            3 => 0.85,
+            _ => 1.0,
+        };
+        if self.vars.opponent.is_some() && self.vars.opp_dist < 2.5 {
+            m *= ((2.5 - self.vars.opp_dist) + 1.0).min(3.0);
+        }
+        m
+    }
+
+    /// The opponent is visible (`Drone+0x228 & 4` — `combatWeaponChangeChoice`'s gate [M disasm
+    /// 0x128768-0x128778]).
+    fn opponent_visible(&self) -> bool {
+        self.vars.opponent.is_some() && self.vars.sighted & 4 != 0
+    }
+
+    /// `BOTSTATE_changeWeapon(bot, 0, p3, 1)`'s choice half — `combatWeaponChangeChoice` with
+    /// p4 = 1 (no announce).
+    fn weapon_choice(&self, t: &crate::mp::botweap::BotWeaponTable) -> u8 {
+        self.vars.arsenal.combat_choice(t, self.opponent_visible(), self.vars.opp_dist, self.vars.trait_id, self.vars.weapon_class)
+    }
+
+    /// The weapon layer's per-tick part, after the perception pass: `Drone+0x1A0`, the arming
+    /// (`BOTWEAP_InitWeapon` 0x129e48 — the game runs it from the bot's init; the port arms on
+    /// the first tick a table is present, which every machine does on the same tick), a pending
+    /// `pickupWeaponChangeChoice` 0x129728 from last tick's take, and `setGoalPickPrefs`' ammo
+    /// inputs.
+    fn weapons_tick(&mut self, ctx: &BotCtx, _rng: &mut Rng) {
+        self.vars.opp_dist = self.vars.opponent.and_then(|o| ctx.others.get(o)).map_or(f32::MAX, |o| o.dist2.sqrt());
+        let Some(t) = ctx.weapons else { return };
+        if !self.vars.arsenal.armed {
+            let w = self.vars.arsenal.init(t, ctx.start_weapon, ctx.scenario, ctx.my_team, self.vars.character);
+            self.vars.weapon_id = w; // +0x768 [M 0x129e48:49,61]
+            // Drone+0xBBC: the drawn weapon's loaded rounds (`BOTWEAP_changeWeapon`'s write
+            // [M 0x12a028:48-52]; the init path's own write is not lifted [S]).
+            self.vars.clip_rounds = self.vars.arsenal.change_weapon(t, w).unwrap_or(0);
+            self.apply_weapon_params(t);
+        }
+        // The choice points (each `combatWeaponChangeChoice(opp, 1, 0, 0)` → msg 0x42 → 0xDE):
+        // a new opponent (`NDrone2_SetOpponent` 0x1422d0:21-23 sends msg 0x45, whose `BotGlobal`
+        // arm runs the choice [M 0x16e060:730-731]); the opponent coming into sight
+        // (`DroneVision_HaveOpponentSight` 0x175ef0:48-54); a take last tick
+        // (`pickupWeaponChangeChoice(w, has, 0)` — the has-weapon gate holds after a take).
+        let visible = self.opponent_visible();
+        let new_opp = self.vars.opponent.is_some() && self.vars.opponent != self.vars.prev_opponent;
+        let sighted = visible && !self.vars.prev_visible;
+        let took = self.vars.pickup_choice.take().is_some();
+        self.vars.prev_opponent = self.vars.opponent;
+        self.vars.prev_visible = visible;
+        if new_opp || sighted || took {
+            self.announce_weapon_choice(t);
+        }
+        let w = self.vars.weapon_id;
+        self.vars.ammo_summary = (self.vars.arsenal.weapon_ammo_amount(t, w) as f32, t.row(w).clip as f32);
+    }
+
+    /// `combatWeaponChangeChoice(opp, 1, 0, …)`'s announce tail [M disasm 0x128ad8-0x128b10]: a
+    /// pick that differs from +0x768 goes out as `MP_sendBotMessage(0x42, w)`; the bot's own
+    /// `BotGlobal` msg 0x42 stores it in +0x76A and enters 0xDE [M 0x16e060:652-655]. The port
+    /// delivers the message at once [S].
+    fn announce_weapon_choice(&mut self, t: &crate::mp::botweap::BotWeaponTable) {
+        let w = self.weapon_choice(t);
+        if w != 0 && w != self.vars.weapon_id {
+            self.vars.announced_weapon = w;
+            self.set_state(state::BOT_ATTACK_CHANGE_WEAPON);
+        }
+    }
+
+    /// The scene's take (`Pickup_Handler` 0x18e650's class-2 arm, `botweap::BotArsenal::take_pickup`):
+    /// a taken weapon/ammo the bot can fire queues `pickupWeaponChangeChoice` for the next tick.
+    pub fn take_pickup(&mut self, t: &crate::mp::botweap::BotWeaponTable, kind: u16, id: u16, rounds: i16, team: u32, health: &mut f32) -> crate::mp::botweap::BotTake {
+        let r = self.vars.arsenal.take_pickup(t, kind, id, rounds, team, health, self.vars.max_hp);
+        if let crate::mp::botweap::BotTake::Taken { choice: Some(has) } = r {
+            self.vars.pickup_choice = Some(has);
+        }
+        r
+    }
+
+    /// `BOTSTATE_setPickupVisitTime` 0x129958 without a ctx (the take path's call [M 0x18e650:126-127]):
+    /// returns the stamp (`now + 45.0`) the caller writes into `MP_PICKUP+0x80 + idx·4`.
+    pub fn pickup_visit_stamp(&mut self, pickup: usize) -> f32 {
+        let mut t = self.tick as f32 / 60.0 + 45.0;
+        if t == 0.0 {
+            t += 0.1;
+        }
+        self.visited_pickups.push(pickup);
+        self.last_visit_stamp = (pickup, t);
+        t
+    }
+
+    /// `BotGlobal`'s combat block, the weapon half [M 0x16e060:290-495] (types 4 outside
+    /// 0xDD/0xDE): an empty gun reloads (0xDD) or, with nothing left for it, changes weapon
+    /// (0xDE); up close and facing the opponent the bot goes to its fists (1 in 200 a tick, or
+    /// at once for the grenades/mines/gadgets — `punchIsBetterIfClose`), and back out of
+    /// reach; an explosive held too close changes away, a loaded explosive whose min range the
+    /// opponent is beyond is drawn. The combat-move half (backoff, `reallyWantACombatMove`) is
+    /// the states' own [S].
+    fn combat_weapon_block(&mut self, ctx: &BotCtx, t: &crate::mp::botweap::BotWeaponTable, rng: &mut Rng) {
+        use crate::mp::botweap::{punch_is_better_if_close, FISTS};
+        if matches!(self.state, state::BOT_ATTACK_RELOAD | state::BOT_ATTACK_CHANGE_WEAPON) {
+            return; // `iVar3 - 0xddU < 2` [M :293]
+        }
+        let cur = self.vars.weapon_id;
+        let row = t.row(cur);
+        // The empty gun [M :295-306]: `Drone+0xBBC < 1`. [S] also an empty clip slot (the
+        // Ready2Fire `AmmoInGun < 1` refusal would otherwise hold a bot that switched to an
+        // empty gun forever); the ammo-less weapons (type 0 — the fists) never run dry here
+        // (the game's melee is 0xDF's anims, not the bullet pipeline).
+        let empty = row.ammo_type != 0
+            && (self.vars.clip_rounds < 1 || self.vars.arsenal.ammo_in_gun(t, cur) < 1);
+        if empty {
+            if !self.vars.arsenal.weapon_has_ammo(t, cur) {
+                self.vars.announced_weapon = self.weapon_choice(t);
+                self.set_state(state::BOT_ATTACK_CHANGE_WEAPON);
+            } else {
+                self.set_state(state::BOT_ATTACK_RELOAD);
+            }
+            return;
+        }
+        let dist = self.vars.opp_dist;
+        // The fists up close [M :310-345]: within 1.5 and in front (|Drone+0x1D4| < π/2 — the
+        // port: the facing·direction dot > 0).
+        let facing = self.vars.opponent.and_then(|o| ctx.others.get(o)).is_some_and(|o| {
+            let (dx, dz) = (o.pos[0] - self.pos[0], o.pos[2] - self.pos[2]);
+            crate::trig::cosf(self.yaw) * dx + crate::trig::sinf(self.yaw) * dz > 0.0
+        });
+        if dist <= 1.5 && facing && cur != FISTS {
+            let go = if self.vars.flags & 4 == 0 {
+                rng.rand(200) == 199 || punch_is_better_if_close(cur)
+            } else {
+                true
+            };
+            if go {
+                self.vars.announced_weapon = FISTS;
+                self.set_state(state::BOT_ATTACK_CHANGE_WEAPON);
+                return;
+            }
+        }
+        // The fists out of reach → the choice [M :378-385].
+        if cur == FISTS && dist > 1.5 {
+            self.vars.announced_weapon = self.weapon_choice(t);
+            self.set_state(state::BOT_ATTACK_CHANGE_WEAPON);
+            return;
+        }
+        // The explosives [M :462-483].
+        if self.vars.opponent.is_some() {
+            if row.class == 4 {
+                if self.vars.arsenal.too_close_for_weapon(t, cur, dist, self.vars.trait_id) {
+                    self.vars.announced_weapon = self.weapon_choice(t);
+                    self.set_state(state::BOT_ATTACK_CHANGE_WEAPON);
+                }
+            } else {
+                let e = self.vars.arsenal.explosive_for_range(t, dist);
+                if e != 0 {
+                    self.vars.announced_weapon = e;
+                    self.set_state(state::BOT_ATTACK_CHANGE_WEAPON);
+                }
+            }
+        }
+    }
+
+    /// 0xDE `BotAttackChangeWeapon` ENTER [M 0x1750c8:16-30]: the burst count and the fire latch
+    /// clear, `BOTSTATE_changeWeapon(+0x76A, 1, 0)` (+0x76A = 0 asks the choice; a pick equal to
+    /// +0x768 changes nothing; `BOTWEAP_changeWeapon` refuses a weapon not held), then 0xCF. The
+    /// team message 0x44 is not modelled [S].
+    fn bot_attack_change_weapon_enter(&mut self, ctx: &BotCtx) {
+        self.vars.burst_left = 0;
+        self.vars.fire_latch = 0;
+        if let Some(t) = ctx.weapons.filter(|_| self.vars.arsenal.armed) {
+            let mut w = self.vars.announced_weapon;
+            if w == 0 {
+                w = self.weapon_choice(t);
+            }
+            if w != 0 && w != self.vars.weapon_id {
+                if let Some(g) = self.vars.arsenal.change_weapon(t, w) {
+                    self.vars.weapon_id = w;
+                    self.vars.clip_rounds = g;
+                    self.apply_weapon_params(t);
+                }
+            }
+        }
+        self.set_state(state::BOT_ATTACK);
+    }
+
+    /// 0xDD `BotAttackReload` ENTER [M 0x170190:21-48]: the burst count and the latch clear;
+    /// `BOTWEAP_ReloadAmmoType` — nothing to load → 0xDE; else the reload anim 0x52 (when the
+    /// weapon has one) and then 0xCF, or 0xD7 when the opponent is inside the too-close range.
+    fn bot_attack_reload_enter(&mut self, ctx: &BotCtx) {
+        self.vars.burst_left = 0;
+        self.vars.fire_latch = 0;
+        let Some(t) = ctx.weapons.filter(|_| self.vars.arsenal.armed) else {
+            self.set_state(state::BOT_ATTACK);
+            return;
+        };
+        let cur = self.vars.weapon_id;
+        let (ok, rounds) = self.vars.arsenal.reload(t, cur, false);
+        if !ok {
+            self.set_state(state::BOT_ATTACK_CHANGE_WEAPON);
+            return;
+        }
+        if let Some(g) = rounds {
+            self.vars.clip_rounds = g; // Drone+0xBBC [M 0x129d28:46-49]
+        }
+        if crate::mp::botweap::reload_anim_for_weapon(cur) {
+            self.vars.reload_until = self.tick + RELOAD_TICKS;
+        } else {
+            self.vars.reload_until = self.tick;
+        }
+    }
+
+    /// 0xDD msg 3: the reload anim's end → 0xCF (0xD7 inside the too-close range) — the
+    /// `CallAnim` next-state [M 0x170190:31-40].
+    fn bot_attack_reload_msg3(&mut self) {
+        if self.tick >= self.vars.reload_until {
+            let next = if self.vars.opp_dist <= self.vars.combat_range[0] { state::BOT_ATTACK_BACKOFF } else { state::BOT_ATTACK };
+            self.set_state(next);
+        }
+    }
+
+    /// `DroneWeap_NextBulletTime` 0x179d40, the MP path [M :47-49, :111-135]: the interval
+    /// `weapon_data+0x40` (at least 60 for 6/0xA/0xE..0x10 [M :26-47]) from the last shot; a
+    /// burst start also sets the count `+0x2C × aggression` (at least 1) and the reaction delay
+    /// `Rand(15) + 60/aggression` from now — the later of the two deadlines wins.
+    fn next_bullet_time_mp(&mut self, rng: &mut Rng, start: bool) {
+        let w = self.vars.weapon_id;
+        let min = if matches!(w, 6 | 0xA | 0xE..=0x10) { 60 } else { 0 };
+        let iv = (self.weapon.interval as i32).max(min);
+        let interval = (iv as f32 * 1.0 + 0.5) as u32; // × FRAME_RATE_DIV (1.0 at 60 Hz)
+        let mut delay = 0u32;
+        if start {
+            let mut count = (self.weapon.burst as i16 as i32).max(1); // [M :52, :93-96]
+            let aggr = self.aggression_mul();
+            delay = rng.rand(15) + (60.0 / aggr) as u32; // [M :113-116]
+            let f = count as f32 * aggr;
+            count = if f > 1.0 { f as i32 } else { 1 }; // [M :117-121]
+            self.vars.burst_left = count as u32;
+            self.weapon.aggression_mul = aggr;
+        }
+        let a = self.vars.last_shot_tick.wrapping_add(interval);
+        let b = self.tick.wrapping_add(delay);
+        self.vars.next_shot_tick = if a < b { b } else { a }; // [M :131-135]
+    }
+
+    /// `DroneWeap_HandleFiring` 0x17a180 → `DoFiring` 0x17a080 → `Ready2Fire` 0x178c48 →
+    /// `FireWeapon` 0x178f68, the armed bot's form. MP drones fire burst after burst while the
+    /// latch holds (`DroneWeap_Fire` clears +0x3D, so HandleFiring re-zeroes +0x3C every tick and
+    /// `DoFiring` starts the next burst when the count is spent [M 0x17a180:28-31, 0x17a080:17-20]).
+    /// Ready2Fire: the opponent alive, rounds in the gun (`AmmoInGun ≥ 1`), the aim within 20°
+    /// (`dot > 0.9998 || acos(dot) < 0.349` — the port compares the dot with cos 20°). FireWeapon:
+    /// `weapon_data+0x18` bullets, each spread by `+0x24 × Drone+0xC0` (the record's aggression,
+    /// `BOT_setDroneStats` 0x126318:16) through `Bullet_init`'s cone; the last-shot stamp; the
+    /// gun's count − 1 and `BOTWEAP_decrRounds(1)` [M 0x178f68:248-272].
+    fn handle_firing_armed(&mut self, ctx: &BotCtx, rng: &mut Rng, t: &crate::mp::botweap::BotWeaponTable) {
+        if self.vars.fire_latch == 0 {
+            return;
+        }
+        if self.vars.burst_empty != 0 && self.tick != self.vars.burst_done_tick {
+            self.vars.burst_empty = 0; // +0x3D == 0 → +0x3C := 0 [M 0x17a180:28-30]
+        }
+        if self.vars.burst_left == 0 {
+            self.next_bullet_time_mp(rng, true); // `NextBulletTime(1, 0)` [M 0x17a080:17-20]
+        }
+        if self.vars.unseen_ticks >= 0x10 {
+            self.vars.burst_empty = 1; // DoFiring → 0 → +0x3C := 1 [M 0x17a080:22-30, 0x17a180:41-43]
+            self.vars.burst_done_tick = self.tick;
+            return;
+        }
+        if self.tick < self.vars.next_shot_tick {
+            return;
+        }
+        let Some(target) = self.vars.opponent.and_then(|o| ctx.others.get(o)).copied() else { return };
+        if !target.alive {
+            return;
+        }
+        let cur = self.vars.weapon_id;
+        let row = t.row(cur);
+        if row.ammo_type != 0 && self.vars.arsenal.ammo_in_gun(t, cur) < 1 {
+            return; // [M 0x178c48:73-79]
+        }
+        let dx = target.pos[0] - self.pos[0];
+        let dz = target.pos[2] - self.pos[2];
+        let d = (dx * dx + dz * dz).sqrt().max(1e-6);
+        // the aim turn (see `handle_firing`)
+        let want = crate::trig::atan2_approx(dz, dx);
+        let pi = std::f32::consts::PI;
+        let mut delta = want - self.yaw;
+        while delta > pi { delta -= 2.0 * pi; }
+        while delta < -pi { delta += 2.0 * pi; }
+        self.yaw += delta.clamp(-0.2, 0.2);
+        let facing = [crate::trig::cosf(self.yaw), 0.0, crate::trig::sinf(self.yaw)];
+        let dot = facing[0] * dx / d + facing[2] * dz / d;
+        const COS_20: f32 = 0.939_692_6; // cos(0.34906587) — `acosf(dot) < 0.349` [M 0x178c48:117-124]
+        if dot <= COS_20 {
+            return;
+        }
+        let dy = target.pos[1] - 0.3 - self.pos[1];
+        let len = (d * d + dy * dy).sqrt().max(1e-6);
+        let aim = [dx / len, dy / len, dz / len];
+        let spread = row.spread * self.vars.aggression as f32;
+        for _ in 0..row.bullets {
+            let dir = crate::bullet::spread(aim, spread, row.flags, rng);
+            self.shots.push(BotShot { tick: self.tick, pos: self.pos, dir, weapon: cur });
+        }
+        self.vars.last_shot_tick = self.tick; // Drone+0xBC8 [M 0x178f68:261]
+        self.vars.clip_rounds = self.vars.clip_rounds.wrapping_sub(1); // Drone+0xBBC [M :265-270]
+        if row.ammo_type != 0 {
+            self.vars.arsenal.decr_rounds(t, cur, 1); // [M :271-273]
+        }
+        self.vars.burst_left = self.vars.burst_left.saturating_sub(1); // [M 0x17a080:29]
+        if self.vars.burst_left == 0 {
+            self.vars.burst_empty = 1;
+            self.vars.burst_done_tick = self.tick;
+        } else {
+            self.next_bullet_time_mp(rng, false); // `NextBulletTime(0, 0)` [M 0x17a080:33]
+        }
+    }
+}
+
+// ============================================================================
 // 5. Tests — the golden table checks and the dispatch test
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// mp-bot-weapons: the interval floor — `DroneWeap_NextBulletTime` 0x179d40:26-47 clamps the
+    /// record interval (`weapon_data+0x40`) to 60 ticks for weapons 6, 0xA and 0xE..0x10 only; a
+    /// weapon outside the set keeps its record value. The non-start call (`NextBulletTime(0, 0)`,
+    /// the per-burst-member re-arm) sets `Drone+0xBC4 = max(last_shot + interval, now)` [M :131-135].
+    #[test]
+    fn next_bullet_time_interval_floor() {
+        let record = INITIAL_BOT_RECORDS[0].clone();
+        let mut brain = BotBrain::bot_init(&record, 4, [0.0, 1.6, 0.0], 0.0);
+        let mut rng = Rng::new(0x5eed_0001);
+        // weapon 6 with a record interval of 8 ticks: the deadline lands 60 ticks after the shot.
+        brain.vars.weapon_id = 6;
+        brain.weapon = BotWeapon { interval: 8, burst: 1, aggression_mul: 1.0 };
+        brain.vars.last_shot_tick = 1000;
+        brain.tick = 1001;
+        brain.next_bullet_time_mp(&mut rng, false);
+        assert_eq!(brain.vars.next_shot_tick, 1060, "weapon 6's 60-tick floor [M 0x179d40:26-47]");
+        // Sister (can fail): weapon 0x19 is outside the floor set — its record interval passes
+        // through, so a sub-60 interval is NOT clamped.
+        brain.vars.weapon_id = 0x19;
+        brain.weapon = BotWeapon { interval: 15, burst: 1, aggression_mul: 1.0 };
+        brain.vars.last_shot_tick = 1000;
+        brain.next_bullet_time_mp(&mut rng, false);
+        assert_eq!(brain.vars.next_shot_tick, 1015, "no floor outside the 6/0xA/0xE..0x10 set");
+    }
 
     /// Golden: the 29 presets are byte-exact against the EE snapshot reads
     /// (spot rows + the structural invariants every row must satisfy).
@@ -3529,6 +4077,7 @@ mod brain_tests {
                     mp_class: 0,
                     is_obj_flag2: false,
                     visit: [0.0; 16],
+                    available: true,
                 }],
                 others: vec![
                     OtherPlayer { index: 0, pos: [10.0, 1.6, 0.0], alive: true, team: 0, flags: 0, dist2: 0.0, health: 100.0, score: 0.0 },
@@ -3562,6 +4111,8 @@ mod brain_tests {
                 stationary,
                 lazy_sight: false,
                 objectives: None,
+                weapons: None,
+                start_weapon: 0,
             }
         }
 
@@ -3689,6 +4240,7 @@ mod brain_tests {
             mp_class: 0,
             is_obj_flag2: false,
             visit: [0.0; 16],
+            available: true,
         });
         // first pick: the near pickup 0 wins (both class 0, weights equal → the highest score)
         r.step();

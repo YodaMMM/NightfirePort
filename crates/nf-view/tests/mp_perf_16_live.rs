@@ -31,7 +31,20 @@ fn iso() -> Option<String> {
 // Re-pinned for net-desync-detail (700w2): the state hash is now the fixed-order fold of named component
 // hashes, so its value changed while the simulation did not (the same run: kills 90, as bot-nav-pit-ramp's
 // pin; repeatable).
-const PINNED_DIGEST: u64 = 0x92e3_34f2_97d1_6830;
+// Re-pinned for mp-bot-weapons (776): the weapon layer's fire fix makes the bots actually fire —
+// the port cleared the fire latch in the 0xD0/backoff combat arms (the game never writes +0x3b
+// there [M 0x16f390/0x16fc30]), so every re-entry was a fresh `DroneWeap_Fire` whose
+// `NextBulletTime` re-pushed the bullet deadline (≥ 60 ticks for weapon 6, [M 0x179d40:26-47])
+// beyond the 1-in-3 exit roll's stay [M 0x16f5e8:48-52]: latch set, bots never fired. With the
+// latch persisting the deadline survives and the bots shoot while they move (35→38 kills in the
+// pinned 3600-tick run, the per-tick hashes still agree on both machines).
+// Re-pinned for bot-weapons-finish-3 (0xe371_90cd_8fd7_4271, kills 36 over 3600 ticks): 776b's
+// fire fix lands on the merged tree and the bots' sight lines follow the game's aim — the shot
+// targets the opponent's position [M 0x125b30/0x178f68; the old −0.3 chest guess is gone], the
+// scan's lazy sight runs the perception ack's own chain (segment + vis ≥ 0.7), and the site row
+// lost its +0.3 compensation. Bots pick opponents a little more strictly (38→36 kills); the two
+// machines' hashes still agree every tick.
+const PINNED_DIGEST: u64 = 0xe371_90cd_8fd7_4271;
 
 const TICKS: u32 = 3600;
 

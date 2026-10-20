@@ -713,6 +713,7 @@ mod tests {
         assert_eq!((p.kind, p.weapon, p.rounds), (kind::WEAPON, 0x2c, 8), "the rocket set: kind 0, base id, clip·2");
         assert_eq!(p.model, rocket_model, "the WEAPON's glist, not the placement's object");
         assert_eq!((p.state, p.spin), (1, false), "rests where placed, no spin");
+        assert_eq!((p.respawn, p.sound), (3, Some(SOUND)), "respawn 3 (30 s) and sound 0xF5 — the call's stack args");
         assert!(Pickup::create_from_set([0.0; 3], [0.0; 3], 12, &w, &models).is_none(), "sister: kind 12 is not a set");
     }
 

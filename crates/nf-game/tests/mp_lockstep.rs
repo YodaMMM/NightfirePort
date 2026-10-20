@@ -181,6 +181,7 @@ fn build_sim(scen: u32, seed: u32, humans_only: bool) -> Sim {
             mp_class: 0,
             is_obj_flag2: false,
             visit: [0.0; 16],
+            available: true,
         })
         .collect();
     let rec = bot_record();
@@ -248,6 +249,8 @@ fn drive(sim: &mut Sim, _t: u32, input: &MpTickInput) -> (u64, u64) {
             stationary: false,
             lazy_sight: false,
             objectives: None,
+            weapons: None,
+            start_weapon: 0,
         };
         sim.brains[bi].step(&ctx, &mut sim.rng, true);
     }

@@ -37,6 +37,10 @@ use crate::world::CollisionWorld;
 /// the sim calls it yet; the dispatch is behind the `mp-bots` feature.
 pub mod bots;
 
+/// The bots' weapon layer (mp-bot-weapons): `BOTWEAP_*`, the weapon choice, the bot pickup take and
+/// `BOT_handlePain`'s damage arithmetic — see `botweap.rs` and `docs/systems/mp-bot-weapons.md`.
+pub mod botweap;
+
 /// The third-person MP body's animation clocks (mp-body-anim; draw-only, never hashed): the game's
 /// per-body script list from `AnimSetUpdate` 0x1c0938 / `Player_ChangeSubState` 0x190630.
 pub mod body_anim;
@@ -552,6 +556,9 @@ pub struct MpBot {
     /// spawn point; the death handler's delay — the port stands in 180 ticks / 3 s [S]).
     pub dead: bool,
     pub respawn_at: u32,
+    /// mp-bot-weapons: per-weapon shot tally (index = the weapon id) — bookkeeping like
+    /// `shots`, never hashed. The tests read it to pin the per-weapon fire behaviour.
+    pub shots_by_weapon: Vec<u32>,
 }
 
 fn sq_dist3d(a: [f32; 4], b: [f32; 3]) -> f32 {
@@ -691,6 +698,7 @@ impl MpMatch {
                 respawns: 0,
                 dead: false,
                 respawn_at: 0,
+                shots_by_weapon: vec![0; crate::mp::botweap::BOT_WEAPONS],
             });
         }
     }
