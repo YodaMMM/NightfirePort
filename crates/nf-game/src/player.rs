@@ -428,14 +428,14 @@ pub struct Bond {
     /// 0x10a664-0x10a6a0]. No code writes it statically (the full-.text sdc2/sw scan at imm 0x790
     /// found nothing); its only writer is the DeltaP add-back [M Collide_Intersect 0x1ebaa8:353-373
     /// adds the world DeltaP to +0x10/+0x20/+0x30/+0x50/+0x60 per object pass with a hit], so it
-    /// is the LIFETIME push accumulator starting at 0 [M Player_Init 0x1910f8 creates the object
-    /// fresh; control_create_object's allocation is zeroed]. The bit's dot2 therefore reads
-    /// `acc < b_pre` (the tick's own pushes cancel between the two operands — see world.rs
-    /// `capsule_pick_contact_scoped`), which makes the game's pick arm die on low/negative-floor
-    /// levels (0700004a's shaft: acc 0 vs b_pre ≈ −7.5 → no bit → Bond falls off the lobby edge)
-    /// and stay live on high ones (0700000c's balcony: acc ≈ the landing pen vs b_pre ≈ 14).
-    /// Accumulated next to the position's push-out in both ticks. Field on its own line
-    /// (merge lesson 4).
+    /// is READ by the bit's dot2 [M 0x10a664-0x10a6a0] but its lifetime semantics are [S]:
+    /// the accumulator reading (0c3) rests on "no static writer" plus the bit word's per-tick
+    /// clear being unpinned (the decompile's `*(u16*)(BLData+0x7d8)` store resolves to
+    /// HITTEST+0x98 raw, `sh $s3, 0x70c($a0)` @0x194ff4, base+0xcc — not the +0x9c bit). As
+    /// built the `acc < b_pre` collapse moved every body on positive-floor levels (the held
+    /// merge's 3 failures), so hatch-crouch-0c4 keeps the accumulator FED [M Collide_Intersect
+    /// 0x1ebaa8:353-373] but does NOT gate `grounded` on the pick arm; the main agent's live
+    /// pin of the bit block decides when it returns. Field on its own line (merge lesson 4).
     pub pick_ref: V3,
 }
 
@@ -871,17 +871,25 @@ impl Bond {
         // is that relink (obj+0x20; the Sim refreshes it off the position each tick, the
         // `build_LinkToRoom` 0x1c9680 order); `None` falls back to the flat world.
         let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS, false);
-        // The game's pick-contact arm: `Player_FeetOnPoint` 0x194188:176-185 grounds on
-        // `HITTEST+0x9c != 0` — the pick's contact bit (`Intersect_CylGeom` 0x10a72c) — alongside
-        // the floor-ray tolerance. The port's walkable alone missed the up-push contacts (the
-        // 0700000c pier ramp ride); the bit is the push-has-upward-component signal
-        // (`capsule_tri_contact`'s `pick`, the decompile's dot2 arm).
+        // The pick-contact bit is measured but NOT gated into `grounded` (hatch-crouch-0c4):
+        // `Player_FeetOnPoint` 0x194188's tail does ground on `HITTEST+0x9c != 0` alongside the
+        // band [M 0x1943a8-0x1943bc], but the port's dot2 model — the bit needs
+        // `pick_ref_y < b_pre_y` with `pick_ref` a lifetime push accumulator — is [S]: the
+        // collapse rests on HITTEST+0x50 being never-reinitialized, and the bit word's per-tick
+        // clear is not pinned (the decompile's `*(u16*)(BLData+0x7d8) = 0` store resolves to
+        // HITTEST+0x98, base+0xcc raw — `sh $s3, 0x70c($a0)` @0x194ff4 — not the +0x9c bit).
+        // As built (0c3) the arm fired on positive-floor levels wherever an up-facing contact
+        // met the band's miss and moved EVERY body (the held-merge failures: mp_world_sync's
+        // sub-pen plate walk, escort_follow's stairwell, the four-human digest). The 0c hatch
+        // set — including the real walked route — is green WITHOUT the arm, so the grounded
+        // rule stays master's until the main agent pins the game's bit. See world.rs
+        // `capsule_pick_contact_scoped` and the report's live checks.
         let pick = world.capsule_pick_contact_scoped(self.cel, a, b, CLIMB_RADIUS, self.pick_ref[1]);
+        let _ = pick;
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
-        // The DeltaP add-back rides the climb tick too: every applied push accumulates into
-        // HITTEST+0x50 [M Collide_Intersect 0x1ebaa8:353-373 — the adds run per object pass with
-        // a hit, and the climb runs the same Collide_Update pick]. See the `pick_ref` field doc.
+        // The DeltaP add-back bookkeeping rides the climb tick too [M Collide_Intersect
+        // 0x1ebaa8:353-373]; `pick_ref` stays documented-but-unused for grounding (see above).
         for k in 0..3 { self.pick_ref[k] += push[k]; }
         // The floor test reads the same HITTEST (`Player_CollisionHandler` 0x1949a8 →
         // `Player_FeetOnPoint(param_1, BLData+0x740, …)`), so it shares the per-cel scope. The ray
@@ -900,8 +908,8 @@ impl Bond {
             (dy * dy).sqrt() - 0.1 <= self.cc
         });
         // The pick-contact arm rides the climb tick too (the same FeetOnPoint rule — see the
-        // walk tick's comment).
-        self.grounded = walkable || pick || band;
+        // walk tick's comment) — NOT gated: [S] unverified, see the pick call above.
+        self.grounded = walkable || band;
         // floor_ny is the band-gated BLData+0x110 [M Player_FeetOnPoint 0x194188:85/:106-109;
         // 0x194df0:104] — see the walk tick's comment.
         self.floor_ny = match floor.as_ref() {
@@ -1566,17 +1574,17 @@ self.local = [vs / k, vf / k];
             pick = world.capsule_pick_contact(a, b, RADIUS, self.pick_ref[1]);
             floor = world.segment_hit(self.pos, to);
         }
-        // The game's pick-contact arm: `Player_FeetOnPoint` 0x194188:176-185 grounds on
-        // `HITTEST+0x9c != 0` — the pick's contact bit. The bit block is three gates [M
-        // Intersect_CylGeom 0x109da0 disasm 0x10a5e0-0x10a734]: dot1 = dot(face normal, axis) >
-        // 0.7 (0x10a650-0x10a674, up-facing faces only), dot2 = dot(HITTEST+0x50 − (B + push),
-        // axis) < 0 (0x10a66c-0x10a6a0), dot3 = dot(normalize(R), axis) < 0.7 (0x10a6a8-0x10a734,
-        // vacuous when dot2 holds — R·axis < 0 ⟹ R·axis/|R| < 0). HITTEST+0x50 is the lifetime
-        // push accumulator (see the `pick_ref` field doc), so dot2 reduces to `acc < b_pre` and
-        // the whole arm dies wherever the accumulator sits at/above the capsule bottom's world
-        // y — 0700004a's shaft (acc 0 vs b_pre ≈ −7.5) never picks, which is what lets Bond walk
-        // off the lobby edge and fall into the plates; the port models it with the `pick_ref`
-        // accumulator fed next to the push-out below.
+        let _ = pick;
+        // The game's pick-contact bit block [M Intersect_CylGeom 0x109da0 disasm 0x10a5e0-0x10a734]:
+        // dot1 = dot(face normal, axis) > 0.7 (0x10a650-0x10a674, up-facing faces only), dot2 =
+        // dot(HITTEST+0x50 − (B + push), axis) < 0 (0x10a66c-0x10a6a0), dot3 = dot(normalize(R),
+        // axis) < 0.7 (0x10a6a8-0x10a734). The port's dot2 MODEL — HITTEST+0x50 as a lifetime push
+        // accumulator, so the arm reduces to `pick_ref_y < b_pre_y` — is [S] (the 0c3 reading; the
+        // bit word's per-tick clear is not pinned, and as built the arm moved every body on
+        // positive-floor levels: the held-merge failures). The pick result is MEASURED here but
+        // does NOT gate `grounded` (hatch-crouch-0c4): the 0c hatch set, the real walked route and
+        // the 0700004a descent are all green on master's `walkable || band` rule alone. Feeding
+        // the accumulator stays [M Collide_Intersect 0x1ebaa8:353-373] for when the arm returns.
         // The contact-distance band [M Player_FeetOnPoint 0x194188:106 `*(float *)(hit + 0xc) - 0.1
         // <= cc`] reads HITDATA+0xC, which Intersect_RayGeom 0x10a8c8 fills with the ABSOLUTE
         // distance |from − hit| — hit = from + t·dir (:176-179 the dir·t product and the from add;
@@ -1596,7 +1604,8 @@ self.local = [vs / k, vf / k];
             let dy = self.pos[1] - hit_y;
             (dy * dy).sqrt() - 0.1 <= self.cc
         });
-        self.grounded = walkable || pick || band;
+        // The pick arm is NOT gated into grounded: [S] unverified — see the pick bit block above.
+        self.grounded = walkable || band;
         // `BLData+0x110` — the port's floor_ny — is the band's OTHER output, and it is band-GATED:
         // FeetOnPoint writes `*param_3 = 1.0f` first [M 0x194188:85] and overwrites it with the
         // band-passed hit's +0x14 only inside the band [M :106-109]; the gravity gate reads that

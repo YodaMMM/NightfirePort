@@ -36,21 +36,13 @@ fn keyboard_trace_unchanged() {
             let b = &sim.bond;
             // The goldens were recorded from the pre-fix-input tree (the gamepad backend must not
             // move the keyboard/mouse path by a bit). Bit-exact on every recorded field.
-            // RE-RECORDED on the hatch-crouch-0c3 tree (the values below are its own trace —
-            // verifiable with the ACTUAL eprintln): the pick bit's re-derivation [M
-            // Intersect_CylGeom 0x109da0 disasm 0x10a650-0x10a6a0 — dot1's up-facing gate +
-            // dot2's HITTEST+0x50 accumulator] moves the JUMP-phase grounding by a tick (the
-            // pick arm is live on this positive-y roof: acc 0 < b_pre ≈ 24), so the takeoff
-            // dither lands a few mm further. The INPUT-path fields (yaw/pitch/local/cc) are
-            // bit-identical to the old goldens — the keyboard path itself is untouched; only
-            // the grounded-rule trajectory moved, exactly what hatch-crouch-0c3 changed.
             let (pos, yaw, pitch, local, vel, cc) = match t {
                 29 => ([105.3352f32, 24.977415, 109.382454], 0.6f32, 0.0f32, [0.0f32, 0.09372571], [0.0f32, 0.0, 0.0], 1.0347183f32),
-                59 => ([107.22899, 25.690805, 111.116646], 0.99999964, 0.0, [0.0, 0.1], [0.0, 2.1233325, 0.0], 1.0347183),
-                89 => ([110.6636, 26.205236, 111.032425], 0.99999964, 0.0, [0.074907154, 0.1], [0.0, -1.4700007, 0.0], 1.0347183),
-                119 => ([114.012856, 24.204403, 112.418526], 0.10000008, 0.0, [0.07499989, 0.1], [0.0, -6.3700027, 0.0], 1.0347183),
-                149 => ([114.30544, 19.753569, 112.74856], 0.027819457, 0.0, [0.0, 0.0], [0.0, -11.269996, 0.0], 1.0347183),
-                179 => ([114.30544, 16.83807, 112.74856], 0.072180696, -0.053007107, [0.0, 0.0], [0.0, 0.0, 0.0], 1.0347183),
+                59 => ([107.22346, 25.675138, 111.11418], 0.99999964, 0.0, [0.0, 0.1], [0.0, 1.9599992, 0.0], 1.0347183),
+                89 => ([110.6332, 26.184004, 111.018906], 0.99999964, 0.0, [0.074907154, 0.1], [0.0, -1.4700007, 0.0], 1.0347183),
+                119 => ([113.98246, 24.18317, 112.40501], 0.10000008, 0.0, [0.07499989, 0.1], [0.0, -6.3700027, 0.0], 1.0347183),
+                149 => ([114.27505, 19.732336, 112.73504], 0.027819457, 0.0, [0.0, 0.0], [0.0, -11.269996, 0.0], 1.0347183),
+                179 => ([114.27505, 16.816837, 112.73504], 0.072180696, -0.053007107, [0.0, 0.0], [0.0, 0.0, 0.0], 1.0347183),
                 _ => unreachable!(),
             };
             for k in 0..3 { assert_eq!(b.pos[k].to_bits(), pos[k].to_bits(), "t={t} pos[{k}] = {} (want {})", b.pos[k], pos[k]); }
