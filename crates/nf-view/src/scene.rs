@@ -7513,9 +7513,19 @@ impl Scene {
                 })
                 .collect();
             let (reserved, sim_slots) = script_pickup_reservations(level, &weapons, &pickup_models, d.level_id);
+            let placed_len = placed_pickups.len();
             drones.pickups.extend(placed_pickups);
             drones.pickups.extend(reserved);
-            drones.script_pickup_slots = sim_slots.into_iter().collect();
+            // dc-items: the slot indices are RESERVATION-relative (`out.len()` inside the function) but
+            // `drones.pickups` holds the placed pickups FIRST — the drain (`Script_CreateEntity`'s 0xF0 arm,
+            // drone.rs) would look up `pickups[0]` (the first PLACED pickup) and, once that one is taken
+            // (gone), convert it into the script's pickup instead of activating the reservation — and the
+            // reservation itself stayed a gone zombie (07000003's keycard spawned as a duplicate push while
+            // slot (0x06000563,1) pointed at the armour). Offset by the placed count so the slot points at
+            // the reservation actually appended. [Port bug — the game creates a fresh object every spawn
+            // (Pickup_Create 0x18dda0 via Script_CreateEntity 0x1d8968's 0xF0 arm); the slot reuse is the
+            // port's fix-safe08 stand-in and must at least point at the right entry.]
+            drones.script_pickup_slots = sim_slots.into_iter().map(|(k, v)| (k, v + placed_len)).collect();
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
