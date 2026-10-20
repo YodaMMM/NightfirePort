@@ -18,6 +18,7 @@ fn bare_sound() -> nf_audio::sfx::Sound {
     nf_audio::sfx::Sound {
         driver: Default::default(),
         output: None,
+        captured: None,
         music_files: None,
         music: None,
         music_pending: Vec::new(),

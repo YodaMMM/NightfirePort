@@ -360,7 +360,7 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
         let output = nf_audio::Output::open();
         if output.is_none() { eprintln!("audio: no output device; running silent"); }
         let music_files = scene.music_files.take().map(|(t, smf, ssd)| (t, smf, std::sync::Arc::new(ssd)));
-        nf_audio::sfx::Sound { driver, output, music_files, music: None, music_pending: Vec::new() }
+        nf_audio::sfx::Sound { driver, output, captured: None, music_files, music: None, music_pending: Vec::new() }
     });
     if let (Some(sim), Some((mm, vars))) = (scene.sim.as_mut(), scene.music_tables.take()) {
         if sim.drones.music.table.is_empty() {
