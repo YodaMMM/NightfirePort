@@ -10423,16 +10423,29 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
-    /// `GunImp_Update` 0x1320d8 while state 1: the mounted aim + fire. `look`/`turn` are the raw
-    /// stick axes (the game's `Input_Actionf(slot, 4/3, 1)`), `fire` action 9, `use_key` action
-    /// 0xe (the dismount). The laser round is the player's own bullet (`Bullet_init`'s owner is
-    /// the player object [M 0x1320d8:327-331]) and flies the player-bullet flight, so its class-5
-    /// contacts drain the C5 `Destroy` leaves (`Destroy_CollisionHandler` 0x12bd48).
-    pub fn gunimp_tick(&mut self, weapons: &nf_formats::weapon::WeaponData, look: f32, turn: f32, fire: bool, use_key: bool) {
+    /// `GunImp_Update` 0x1320d8 while state 1: the mounted aim + fire, and — gunimp-mounted-pose
+    /// — the player carry. `look`/`turn` are the raw stick axes (the game's `Input_Actionf(slot,
+    /// 4/3, 1)`), `fire` action 9, `use_key` action 0xe (the dismount). Every mounted tick the
+    /// game writes the PLAYER object: the matrix ← base·RotY(yaw_s) [M 0x1320d8:175], the
+    /// position ← base·RotY(yaw_s)·(0,0,seat) + base translation [M 0x1320d8:176-192 — the
+    /// +0xC0 write then the +0x30..+0x3C copy], the view pitch `BLData+0x8A8 = −pitch_s·0.5`
+    /// [M 0x1320d8:194] — the port writes `bond.pos/yaw/pitch` the same tick. The dismount
+    /// (`GunImp_Deactivate` 0x132c18) restores control (cam mode 0, the saved substate,
+    /// `Player_Enable`, `Camera_CalcViewAngles`) and KEEPS the carried pose — Bond stays at the
+    /// mount; the port zeroes his velocity (the game's BL+0x50/+0x10 zeroing [M 0x132c18:44-45])
+    /// and the view's walk resumes from the carried pose. The laser round is the player's own
+    /// bullet (`Bullet_init`'s owner is the player object [M 0x1320d8:327-331]) and flies the
+    /// player-bullet flight, so its class-5 contacts drain the C5 `Destroy` leaves
+    /// (`Destroy_CollisionHandler` 0x12bd48).
+    pub fn gunimp_tick(&mut self, weapons: &nf_formats::weapon::WeaponData, look: f32, turn: f32, fire: bool, use_key: bool, bond: &mut crate::player::Bond) {
         let Some(gi) = self.props.gunimps.iter().position(|g| g.active) else { return };
         if use_key {
-            // `Input_Action(slot, 0xe, 4)` → `GunImp_Deactivate` 0x132c18 [M 0x1320d8:119-123].
+            // `Input_Action(slot, 0xe, 4)` → `GunImp_Deactivate` 0x132c18 [M 0x1320d8:119-123]:
+            // the control restore (the view's walk resumes — the port's mounted gate below) and
+            // the pose KEPT [M 0x132c18:33-47 writes no object position]. The velocity zeroes
+            // with the game's BL+0x50/+0x10 [M 0x132c18:44-45].
             self.props.gunimps[gi].active = false;
+            bond.vel = [0.0; 3];
             return;
         }
         {
@@ -10447,6 +10460,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             g.yaw_s += (g.yaw - g.yaw_s) * 0.15;
             // the cooldown drains every tick regardless of state [M 0x1320d8:107-112]
             g.cooldown -= 1.0;
+            // The player carry [M 0x1320d8:175-194]: the pose rides the smoothed turret (Bond's
+            // yaw = the turret body's yaw, his position the seat through base·RotY, his view
+            // pitch −pitch_s·0.5); the velocity zeroes — the game's disabled player runs no walk
+            // (Player_Disable [M 0x132f00]; GunImp_Update moves the object itself).
+            let (pos, yaw, pitch) = g.mounted_pose();
+            bond.pos = pos;
+            bond.yaw = yaw;
+            bond.pitch = pitch;
+            bond.vel = [0.0; 3];
         }
         if !fire || self.props.gunimps[gi].cooldown > 0.0 { return; }
         let tg = &crate::gunimp::TURRET_GUNS[(self.props.gunimps[gi].turret as usize).min(crate::gunimp::TURRET_GUNS.len() - 1)];

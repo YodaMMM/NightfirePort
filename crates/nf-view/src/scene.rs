@@ -2268,7 +2268,7 @@ impl Sim {
         // [M `GunImp_Update` 0x1320d8:119-131]. Bond stands — the port zeroes his input for the
         // rest of the tick (the game's disabled player runs only the imp).
         let (mut input, trigger, reload, use_key) = if self.drones.props.gunimps.iter().any(|g| g.active) {
-            self.drones.gunimp_tick(&self.weapons, input.look, input.turn, trigger || input.fire, use_key);
+            self.drones.gunimp_tick(&self.weapons, input.look, input.turn, trigger || input.fire, use_key, &mut self.bond);
             (Default::default(), false, false, false)
         } else { (input, trigger, reload, use_key) };
         // fix-aim-raise: the aim BIT, not the raw button — a raise-script weapon defers it to the
@@ -2722,7 +2722,11 @@ impl Sim {
             // `AnimObjectUpdate` 0x1befd8 / `AnimSeqTick` 0x1c28d0 / `AnimFrameResolve` 0x1c35f8
             // have no obj+0x30 writes). The pre-fix port kept ticking the walk physics, so a death
             // in the air kept falling (the probe: −3.06 units over ~55 ticks).
-            if !self.drones.death.active && !net_dead {
+            // gunimp-mounted-pose: the mounted player runs no walk either — `Player_Disable`
+            // [M 0x132f00] takes the player out of the update and `GunImp_Update` moves the
+            // object itself [M 0x1320d8:175-194, the carry above]; cam mode 0xe is the SAME
+            // first-person case as mode 0 [M 0x18f5d8:96-97], so the carried pose IS the view.
+            if !self.drones.death.active && !net_dead && !self.drones.props.gunimps.iter().any(|g| g.active) {
                 self.bond.tick_ctx(&self.world, &ctx, &input);
             }
             // audit-sound-calls: drain the jump launch / head-bump sounds into the Sim's sound
