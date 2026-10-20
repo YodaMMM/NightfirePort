@@ -302,14 +302,21 @@ impl Sim {
                         surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty,
                         ai_points: &[],
                     };
-                    self.drones.fire_remote_cosmetic(&d, shot.from, shot.dir, shot.weapon, &mut rng);
+                    // The remote body's gun, not its eye (the main agent's two-window render, 2026-10-20: the smoke
+                    // and the casing started at the shooter's head while the flash was out at arm's length). The
+                    // drawn muzzle datum lives on the render side, so the sim takes the same spot from the shot
+                    // ray: forward along the aim, to the gun side and down to hand height [S, matched by eye to the
+                    // render's flash]. The bullet's own trajectory stays the eye ray (the damage is the shared
+                    // combat's); only these cosmetic effects move.
+                    let muzzle = remote_muzzle(shot.from, shot.dir);
+                    self.drones.fire_remote_cosmetic(&d, muzzle, shot.dir, shot.weapon, &mut rng);
                     // The muzzle smoke: `Player_MuzzleFlash` 0x1a4298's `Gas_Init(0.05, 0.1, …,
                     // 0x2000039, 7, 0x48403080, life 128)` with its `Rand_FRand(2π)` draw, under the
                     // same +0x68 & 0x2000 no-smoke gate as SP [M; the game's own MP mode skips the
                     // puff (MPSettings+0x180) — the port matches SP instead, the user's ask [S]].
                     if rec_u32(&rec, 0xdc) != 0 && rec_u32(&rec, 0x48) != 0 && rec_u32(&rec, 0x68) & 0x2000 == 0 {
                         let _angle = rng.frand(6.2831854820251465);
-                        self.drones.gas.init_ex(nf_game::gas::SMOKE_QUAD, shot.from, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
+                        self.drones.gas.init_ex(nf_game::gas::SMOKE_QUAD, muzzle, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
                     }
                 }
             }
@@ -390,4 +397,14 @@ impl Sim {
             _ => {}
         }
     }
+}
+
+/// A remote body's gun muzzle from its shot ray: `from` (the eye) + 0.55 forward along the aim, 0.30 to the gun side
+/// and 0.35 down [S — the third-person gun's place in the render; the drawn muzzle datum is render-side only].
+fn remote_muzzle(from: [f32; 3], dir: [f32; 3]) -> [f32; 3] {
+    let l = (dir[0] * dir[0] + dir[2] * dir[2]).sqrt().max(1e-6);
+    let (fx, fz) = (dir[0] / l, dir[2] / l);
+    // The side vector on the floor plane: the aim turned a quarter right.
+    let (sx, sz) = (-fz, fx);
+    [from[0] + dir[0] * 0.55 + sx * 0.30, from[1] + dir[1] * 0.55 - 0.35, from[2] + dir[2] * 0.55 + sz * 0.30]
 }
