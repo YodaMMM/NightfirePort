@@ -4346,7 +4346,12 @@ impl Sim {
             }
         }
         if use_key && !crept {
-            self.drones.player_use_doors(&d, camera, look, self.drones.frame);
+            // garage-lift-calls: the SP arm of `Player_Activate` picks from Bond's HEAD
+            // (`Player_GetHeadPos` [M 0x1a5170:100]), not the render camera — the camera hangs
+            // ~2.5 behind Bond and its sphere fell short of the 07000009 lift-call stations'
+            // entities. The doors/triggers/monitors keep the camera origin their reaches were
+            // tuned to (see player_use_doors).
+            self.drones.player_use_doors(&d, camera, look, self.drones.frame, self.bond.head());
             // `Player_Activate` 0x1a5170 case '%': the pick's class-0x25 SS objects activate
             // (`SS_Activate` 0x1a9ea8 — state + mask gate, then the channel latch). The game's
             // pick is a 1.0-radius sphere at head+look vs the SS's mesh; the port takes the
