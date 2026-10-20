@@ -2191,7 +2191,10 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let (vp_shot, _) = cam.view_proj(proj_aspect);
     // The doors' `Door_IsClosed` snapshot for the walk's portal gate (fix-door-portal-links).
     let door_closed = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
-    let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, scene.sim.as_ref().map(|s| &s.world), door_closed.as_deref());
+    // Render aid (NF_NO_PORTAL_CULL): draw every cel — the dev panel's portal-culling OFF — for shots from a `--bond`
+    // spot the eye's cel walk doesn't resolve (the main agent's pickup render checks, 2026-10-19).
+    let world = if std::env::var_os("NF_NO_PORTAL_CULL").is_some() { None } else { scene.sim.as_ref().map(|s| &s.world) };
+    let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, world, door_closed.as_deref());
     // Objects are never room-culled (see the live path).
     r.update_skin(&queue, scene, choice, time, opts, None);
     r.set_char_light_centres(scene);
@@ -6086,6 +6089,16 @@ pub fn run() -> Result<()> {
             let cam = Camera { pos: Vec3::new(eye[0], eye[1], eye[2]), yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV };
             if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
             eprintln!("--mp-look: slot {slot} body at {p:?} yaw {:.2} held {}", st.1, scene.sim.as_ref().map_or(0, |s| s.mp_held[slot]));
+            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
+        }
+        // Render aid (NF_SHOT_AT_PICKUP=k): frame pickup k from its DRAWN matrix (`Pickup::m`, what the renderer
+        // places), 1.8 units out on x and z and 1.2 up — no coordinate guessing (the main agent's pickup checks).
+        if let Some(k) = std::env::var("NF_SHOT_AT_PICKUP").ok().and_then(|v| v.parse::<usize>().ok()) {
+            let p = scene.sim.as_ref().and_then(|s| s.drones.pickups.get(k)).map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]]).context("NF_SHOT_AT_PICKUP: no such pickup")?;
+            let eye = [p[0] + 1.8, p[1] + 1.2, p[2] + 1.8];
+            let d = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
+            let cam = Camera { pos: Vec3::new(eye[0], eye[1], eye[2]), yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV };
+            if let Some(s) = scene.sim.as_ref() { let q = &s.drones.pickups[k]; eprintln!("NF_SHOT_AT_PICKUP {k}: drawn at {p:?}, weapon {:#x}, hidden {} gone {}", q.weapon, q.hidden, q.gone); }
             return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
         }
         return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
