@@ -34,19 +34,22 @@ fn bare_sound(scene: &mut nf_view::scene::Scene) -> nf_audio::sfx::Sound {
     snd
 }
 
-/// One real-path tick with the stand-in's end report; returns the batch's commands.
-fn tick(scene: &mut nf_view::scene::Scene, snd: &mut nf_audio::sfx::Sound) -> Vec<nf_audio::Cmd> {
+/// One real-path tick with the stand-in's end report; returns (live ids BEFORE the stand-in reaps
+/// the one-tick stream items, the batch's commands).
+fn tick(scene: &mut nf_view::scene::Scene, snd: &mut nf_audio::sfx::Sound) -> (Vec<u32>, Vec<nf_audio::Cmd>) {
     let sim = scene.sim.as_mut().unwrap();
     sim.step_bond(Input::default(), false, false, false);
     nf_view::sound_tick(snd, sim);
+    let ids = snd.driver.ids();
     let keep = snd.driver.looping_voice_ids();
     let ended: Vec<u32> = (0..nf_audio::sfx::HW_VOICES as u32).filter(|v| !keep.contains(v)).collect();
     let mut out = Vec::new();
     snd.driver.update(&mut out, &ended);
-    match snd.captured.as_ref() {
+    let cmds = match snd.captured.as_ref() {
         Some(c) => { let mut g = c.lock().unwrap(); std::mem::take(&mut *g) }
         None => Vec::new(),
-    }
+    };
+    (ids, cmds)
 }
 
 /// The loudest stream-pitch Play in a batch: (left, right).
@@ -67,12 +70,12 @@ fn the_bunker_trio_shout_reaches_the_mixer_with_the_ambients_live() {
     let mut snd = bare_sound(&mut scene);
     let cap: std::sync::Arc<std::sync::Mutex<Vec<nf_audio::Cmd>>> = Default::default();
     snd.captured = Some(cap.clone());
-    for _ in 0..3000 { tick(&mut scene, &mut snd); if !scene.sim.as_ref().unwrap().disabled { break; } }
+    for _ in 0..3000 { let _ = tick(&mut scene, &mut snd); if !scene.sim.as_ref().unwrap().disabled { break; } }
     {
         let sim = scene.sim.as_mut().unwrap();
         sim.drones.scripts.skip_request = true;
     }
-    for _ in 0..300 { tick(&mut scene, &mut snd); }
+    for _ in 0..300 { let _ = tick(&mut scene, &mut snd); }
     assert!(!scene.sim.as_ref().unwrap().disabled, "Bond is free after the intro");
 
     // The tunnel route's order: step on the bunker plate with ch 0x66 clear.
@@ -89,8 +92,7 @@ fn the_bunker_trio_shout_reaches_the_mixer_with_the_ambients_live() {
     // Stand with the trio for up to 20 s; the shout's start-tick batch carries the stream Play.
     let mut shout: Option<(u32, usize, f32, f32)> = None;
     for f in 0..1200 {
-        let cmds = tick(&mut scene, &mut snd);
-        let ids = snd.driver.ids();
+        let (ids, cmds) = tick(&mut scene, &mut snd);
         if let Some(&want) = ids.iter().find(|id| (111..=115).contains(*id)) {
             if let Some((l, r)) = stream_play(&cmds) {
                 shout = Some((want, f, l, r));
@@ -102,7 +104,7 @@ fn the_bunker_trio_shout_reaches_the_mixer_with_the_ambients_live() {
     assert!(l > 0.0 && r > 0.0, "shout id {id} reached the mixer silent (l={l}, r={r}) at tick {f}");
     // Sister: the ambients keep their voices where the game keeps them — through the shout the
     // budget never steals them (their 4-8 voices sit far below the game's 15-voice budget) [M 0x4220].
-    let ids = snd.driver.ids();
+    let (ids, _) = tick(&mut scene, &mut snd);
     for want in [36u32, 41, 92, 135] {
         assert!(ids.contains(&want), "map ambient {want} kept its voice through the shout (live: {ids:?})");
     }
@@ -121,12 +123,12 @@ fn the_bathhouse_floor_guards_shout_reaches_the_mixer_too() {
     let mut snd = bare_sound(&mut scene);
     let cap: std::sync::Arc<std::sync::Mutex<Vec<nf_audio::Cmd>>> = Default::default();
     snd.captured = Some(cap.clone());
-    for _ in 0..3000 { tick(&mut scene, &mut snd); if !scene.sim.as_ref().unwrap().disabled { break; } }
+    for _ in 0..3000 { let _ = tick(&mut scene, &mut snd); if !scene.sim.as_ref().unwrap().disabled { break; } }
     {
         let sim = scene.sim.as_mut().unwrap();
         sim.drones.scripts.skip_request = true;
     }
-    for _ in 0..300 { tick(&mut scene, &mut snd); }
+    for _ in 0..300 { let _ = tick(&mut scene, &mut snd); }
     assert!(!scene.sim.as_ref().unwrap().disabled, "Bond is free after the intro");
     let c = {
         let sim = scene.sim.as_mut().unwrap();
@@ -144,8 +146,7 @@ fn the_bathhouse_floor_guards_shout_reaches_the_mixer_too() {
             sim.bond.pos = if k % 2 == 1 { [-47.0, 6.0, -23.3] } else { c };
         }
         for _ in 0..300 {
-            let cmds = tick(&mut scene, &mut snd);
-            let ids = snd.driver.ids();
+            let (ids, cmds) = tick(&mut scene, &mut snd);
             if let Some(&want) = ids.iter().find(|id| (111..=115).contains(*id)) {
                 if let Some((l, r)) = stream_play(&cmds) {
                     shout = Some((want, k, l, r));
