@@ -379,7 +379,7 @@ fn the_address_gate_and_bad_address_report() {
     assert!(!fe.action(Action::Confirm), "a portless address refuses");
     assert_eq!(fe.page, Page::MpNetJoin);
     assert_eq!(fe.mp_net_state, MpNetState::Idle, "no dial started");
-    assert_eq!(fe.mp_net_status(), Some("Enter IP:PORT or a join code"));
+    assert_eq!(fe.mp_net_status(), Some("Enter a 4-character code, IP:PORT, or a join code"));
 }
 
 #[test]
@@ -488,5 +488,5 @@ fn a_join_code_types_and_dials() {
     for c in bad { fe.mp_net_type(c); }
     assert!(!fe.action(Action::Confirm));
     assert_eq!(fake.borrow().dialed, None);
-    assert_eq!(fe.mp_net_status(), Some("Enter IP:PORT or a join code"));
+    assert_eq!(fe.mp_net_status(), Some("Enter a 4-character code, IP:PORT, or a join code"));
 }

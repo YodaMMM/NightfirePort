@@ -198,6 +198,24 @@ impl Mach {
     }
 }
 
+/// The main agent, 2026-10-19: after the fixed-step loop, pump until all three have run `to` (bounded). UDP delivery is
+/// asynchronous, so a step can leave a machine behind — and a machine behind never submitted the ticks it missed
+/// (`submit` sends its CURRENT tick), so it submits its current tick here too. Without this the "all three ran the
+/// same ticks" asserts failed 1-2 runs in 3 under load.
+fn catch_up(mh: &mut Mach, m1: &mut Mach, m2: &mut Mach, to: u32) {
+    let t0 = Instant::now();
+    while (mh.tick, m1.tick, m2.tick) != (to, to, to) && t0.elapsed() < Duration::from_secs(5) {
+        for m in [&mut *mh, &mut *m1, &mut *m2] { if m.tick < to { m.submit(); } }
+        mh.pump();
+        m1.pump();
+        m2.pump();
+        mh.advance(&[]);
+        m1.advance(&[]);
+        m2.advance(&[]);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 /// The three-machine lobby walk + match start: the host listens on `port`, both clients join,
 /// `limit_left` steps the Limit row and `duration_left` the Duration row (the real rows path
 /// [M P_MPRULES 0x20f790:21-76's lists]), then Start hands every machine its settings.
@@ -480,22 +498,7 @@ fn a_host_departure_mid_match_is_still_host_left() {
         }
         std::thread::sleep(Duration::from_millis(1));
     }
-    // Catch-up (the main agent, 2026-10-19: this assert failed 1 run in 3 under load): every input up to tick 200 is
-    // already submitted, but UDP delivery is asynchronous, so a step can leave a machine a tick behind. Pump until all
-    // three have run tick 200 (bounded). A machine that fell behind in the loop never submitted the ticks it missed
-    // (`submit` sends the machine's CURRENT tick), so a machine below 200 submits its current tick here too — without
-    // that the others wait on it until the timeout (the 1-in-4 failure that survived the first fix).
-    let t0 = std::time::Instant::now();
-    while (mh.tick, m1.tick, m2.tick) != (200, 200, 200) && t0.elapsed() < Duration::from_secs(5) {
-        for m in [&mut mh, &mut m1, &mut m2] { if m.tick < 200 { m.submit(); } }
-        mh.pump();
-        m1.pump();
-        m2.pump();
-        mh.advance(&[]);
-        m1.advance(&[]);
-        m2.advance(&[]);
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    catch_up(&mut mh, &mut m1, &mut m2, 200);
     assert_eq!((mh.tick, m1.tick, m2.tick), (200, 200, 200), "all three ran the same ticks (host, c1, c2)");
     eprintln!("[sister] closing the host's session");
     mh.sess.0.borrow_mut().close();
@@ -535,7 +538,8 @@ fn a_client_departure_mid_match_still_runs_the_match_on() {
         m2.advance(&[]);
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert_eq!((mh.tick, m1.tick, m2.tick), (200, 200, 200), "all three ran the same ticks");
+    catch_up(&mut mh, &mut m1, &mut m2, 200);
+    assert_eq!((mh.tick, m1.tick, m2.tick), (200, 200, 200), "all three ran the same ticks (host, c1, c2)");
     m1.sess.0.borrow_mut().close();
     let deadline = Instant::now() + Duration::from_secs(10);
     while !mh.events.iter().any(|e| e.contains("ClientLeft")) {
