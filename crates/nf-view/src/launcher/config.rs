@@ -18,6 +18,8 @@ const FILE_NAME: &str = "launcher.toml";
 pub struct LauncherConfig {
     /// The disc image PLAY starts the game with.
     pub iso: Option<PathBuf>,
+    /// Dev mode: PLAY starts the game with `--dev` (the dev tools window, debug keys).
+    pub dev: bool,
 }
 
 /// `<config dir>/launcher.toml`.
@@ -85,6 +87,7 @@ impl LauncherConfig {
     pub fn to_text(&self) -> String {
         let mut s = String::from("# NightfirePort launcher: the disc image PLAY starts the game with.\n");
         if let Some(p) = &self.iso { s.push_str(&format!("iso = {}\n", quote(&p.to_string_lossy()))); }
+        if self.dev { s.push_str("dev = true\n"); }
         s
     }
 
@@ -95,6 +98,10 @@ impl LauncherConfig {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with('[') { continue; }
             let (k, v) = line.split_once('=').ok_or_else(|| format!("line {}: expected `key = value`", n + 1))?;
+            if k.trim() == "dev" {
+                cfg.dev = v.split('#').next().unwrap_or("").trim() == "true";
+                continue;
+            }
             if k.trim() == "iso" {
                 let s = unquote(v).map_err(|e| format!("line {}: {e}", n + 1))?;
                 cfg.iso = (!s.is_empty()).then(|| PathBuf::from(s));
@@ -126,7 +133,7 @@ mod tests {
             "/home/q/Spiel – Nachtfeuer ✓/nf.iso",
             "C:\\tab\there\\x.iso",
         ] {
-            let cfg = LauncherConfig { iso: Some(PathBuf::from(p)) };
+            let cfg = LauncherConfig { iso: Some(PathBuf::from(p)), dev: p.len() % 2 == 0 };
             let text = cfg.to_text();
             assert_eq!(LauncherConfig::parse(&text), Ok(cfg.clone()), "{text}");
         }
@@ -144,7 +151,7 @@ mod tests {
         assert!(LauncherConfig::parse("iso = \"a\" junk").is_err(), "trailing text");
         assert!(LauncherConfig::parse("just words").is_err());
         // Sister: a different path must not compare equal after a round trip.
-        let a = LauncherConfig { iso: Some(PathBuf::from(r"C:\a.iso")) };
+        let a = LauncherConfig { iso: Some(PathBuf::from(r"C:\a.iso")), dev: false };
         assert_ne!(LauncherConfig::parse(&a.to_text()).unwrap().iso, Some(PathBuf::from(r"C:\b.iso")));
     }
 
@@ -153,7 +160,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nf-launcher-cfg-{}", std::process::id()));
         let path = dir.join("sub").join(FILE_NAME);
         assert_eq!(LauncherConfig::load(&path), LauncherConfig::default(), "missing file = first run");
-        let cfg = LauncherConfig { iso: Some(PathBuf::from(r"E:\PS2\007 - Nightfire (USA).iso")) };
+        let cfg = LauncherConfig { iso: Some(PathBuf::from(r"E:\PS2\007 - Nightfire (USA).iso")), dev: false };
         cfg.save(&path).unwrap();
         assert_eq!(LauncherConfig::load(&path), cfg);
         std::fs::write(&path, "iso = \"broken").unwrap();

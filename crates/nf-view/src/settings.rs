@@ -32,20 +32,20 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::menu::{default_opts, AV_ROWS, MP_ROWS, ADV_ROWS, OptKind, OptRow};
+use crate::menu::{default_opts, AV_ROWS, CN_CONTROLS_ROWS, MP_ROWS, ADV_ROWS, OptKind, OptRow};
 
 /// The file's name inside the config dir.
 const FILE_NAME: &str = "settings.toml";
 /// The three page sections, in the port's row-table order.
-const SECTIONS: [&str; 3] = ["adv", "mp", "av"];
+const SECTIONS: [&str; 4] = ["adv", "mp", "av", "cn"];
 
 /// One page's persisted rows: (label key, value) in write order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PageSettings(pub Vec<(String, i32)>);
 
-/// The whole file's model: one [`PageSettings`] per option page (adv / mp / av).
+/// The whole file's model: one [`PageSettings`] per option page (adv / mp / av / cn).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Settings(pub [PageSettings; 3]);
+pub struct Settings(pub [PageSettings; 4]);
 
 /// The config directory: `NF_CONFIG_DIR` wins (the tests' override), then the platform's
 /// user config dir + `NightfirePort`. std only — the workspace has no `dirs` crate.
@@ -118,14 +118,14 @@ pub fn collect(opts: &HashMap<u32, i32>) -> Settings {
             Some((label_key(r.label), v))
         }).collect(),
     );
-    Settings([page(ADV_ROWS), page(MP_ROWS), page(AV_ROWS)])
+    Settings([page(ADV_ROWS), page(MP_ROWS), page(AV_ROWS), page(CN_CONTROLS_ROWS)])
 }
 
 /// Writes the file's rows back onto the model's map — by label through the CURRENT row
 /// tables, so a file saved before a reorder still lands on its row. Unknown labels are
 /// ignored; out-of-range values are clamped ([`clamp_to_row`]).
 pub fn apply(settings: &Settings, opts: &mut HashMap<u32, i32>) {
-    let pages = [ADV_ROWS, MP_ROWS, AV_ROWS];
+    let pages = [ADV_ROWS, MP_ROWS, AV_ROWS, CN_CONTROLS_ROWS];
     for (i, page) in settings.0.iter().enumerate() {
         let rows = pages[i];
         for (key, v) in &page.0 {
