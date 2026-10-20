@@ -278,6 +278,31 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
     eprintln!("[escort] the contact settled at ({:.1},{:.1},{:.1}) after {} distance checks",
         settled[0], settled[1], settled[2], checked);
 
+    // break-debris-shatter-2: the harness must not end the level before the final walk. The
+    // game's plate is a kind-0xEB TOUCH trigger, out 0x10, mask 0x18, filter [0xE, 0x0500004F]
+    // [D the 07000001 placement — player AND the 0x0500004F contact both inside its volume],
+    // box x −33.8..−32.4, y 0.64..3.96, z 12.17..18.68; the LOAD_LEVEL (0xE8) trigger's gate is
+    // ch 0x10 [M Trigger_Update case 10 0x1b1a78:162-166] — the contact STANDS in the box once
+    // settled, so the level ends the moment Bond's clearing-phase walk crosses it [M Trigger_Hit
+    // 0x1b1fc8]. 785's kill draws are the game's own (Debris_Create's eight shared-stream draws
+    // per piece [M 0x1aaa00:30-50] and the shatter's split draws [M 0x12b270:348-372], the same
+    // global SEED_X/SEED_Y pair every AI draw uses [M 0x1e36f0/0x1e3738; Bullet_init's spread
+    // 0x12c5a0]) — the escort's timeline legitimately moves with every breakable the walk kills,
+    // so the choreography keeps Bond out of the plate: the reserve is topped up here (harness
+    // setup, not game behaviour) so the low-ammo resupply — whose only route descends the
+    // stairwell THROUGH the plate — never runs. The trail sister below pins the avoidance.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        // The durable pool (the reload source; gun.spare resyncs from it on the weapon events)...
+        let at = sim.weapons.ammo_type(sim.gun.weapon as usize);
+        if at < sim.drones.inventory.carried.len() {
+            sim.drones.inventory.carried[at] = sim.drones.inventory.carried[at].max(120);
+        }
+        // ...and the synced view the harness's low-ammo check reads before the next sync.
+        sim.gun.spare = sim.gun.spare.max(120);
+    }
+    let trail_at_clear = w.trail_points().len();
+
     // The last stretch's guards: the stair-head/gallery trigger starts the gallery's window guard
     // (and the stairwell pair) only when the lead is already at the route's end, AFTER the leg's
     // own stall-recovery stopped running — the game's AllyLeadHide parks the contact while an
@@ -315,6 +340,19 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
     }
 
     // ── the exit's condition: BOTH bodies on the plate fire the transition ─────────────────────
+    // Sister (break-debris-shatter-2): the clearing phase stayed out of the plate's touch box —
+    // the contact is inside it, so one crossing ends the level (can-fail: the pre-785 harness's
+    // low-ammo resupply descended the stairwell through the box and fired the exit mid-clearing).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let box_ = sim.drones.triggers.iter()
+            .find(|t| t.kind == nf_game::triggers::kind::TOUCH && t.out == 0x10 && !t.tris.is_empty())
+            .map(|t| (t.lo, t.hi)).expect("the AND-touch plate");
+        let trail = w.trail_points();
+        let from = trail_at_clear.min(trail.len());
+        let crossed = trail[from..].iter().position(|p| (0..3).all(|ax| p[ax] >= box_.0[ax] && p[ax] <= box_.1[ax]));
+        assert!(crossed.is_none(), "the clearing phase crossed the plate's touch box at trail +{crossed:?} ({:?}) — the game would end the level there", trail[from..].get(crossed.unwrap_or(0)));
+    }
     // Bond walks the last leg onto the plate (the stairwell descent anchor walkreal-a uses).
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
     w.walk_nav_to(plate, "the plate", 1.2);

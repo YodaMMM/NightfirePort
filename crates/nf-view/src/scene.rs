@@ -10290,15 +10290,20 @@ impl Sim {
             let damage = self.weapons.records.get(row[shooter].held as usize)
                 .map_or(10.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
             if !destroyable {
-                let br = &mut self.drones.breaks.list[i];
-                br.health -= damage;
-                if br.health < 0.0 {
-                    br.dead = true;
-                    let pos = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
-                    let sound: u16 = if br.kind == 2 { 0x2E } else { 0x5F3 };
-                    let (placement, kind) = (br.placement, br.kind);
-                    self.drones.break_kills.push((placement, kind, sound));
-                    self.drones.audio.play3d(u32::from(sound), pos, None);
+                let dead = {
+                    let br = &mut self.drones.breaks.list[i];
+                    br.health -= damage;
+                    br.health < 0.0
+                };
+                if dead {
+                    // Break_Kill 0x12b970 through the shared kill path — the kill spawns the
+                    // pieces (crate::shatter, docs/systems/break-debris.md) and returns the
+                    // effect (the silent-kill case with no collision records returns None
+                    // [M 0x12b970:59-63]).
+                    if let Some(k) = self.drones.breaks.kill(i, head, end, &mut self.drones.rng) {
+                        self.drones.break_kills.push((k.placement, k.kind, k.sound));
+                        self.drones.audio.play3d(u32::from(k.sound), k.pos, None);
+                    }
                 }
                 continue;
             }
