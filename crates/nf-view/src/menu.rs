@@ -1642,6 +1642,29 @@ pub trait MpSession {
     /// net-short-codes: the joiner's short-code status line for the join page ("Looking up
     /// ABCD...", "Code ABCD was not found...", ...) — None when there is nothing to say [S].
     fn join_code_note(&self) -> Option<String> { None }
+    /// net-cloud-lobby: the public-lobby list rows now (the page refreshes every 5 s while it is
+    /// open through `browse`; empty when the service is off) [S docs/systems/net-cloud-lobby.md].
+    fn cloud_lobbies(&self) -> Vec<MpCloudLobby> { Vec::new() }
+    /// net-cloud-lobby: the host's public/private flag (public lists, private is code only;
+    /// lobbies are public by default) [S].
+    fn public_lobby(&self) -> bool { true }
+    /// net-cloud-lobby: the host flips the public/private toggle [S].
+    fn set_public_lobby(&mut self, _public: bool) {}
+}
+
+/// net-cloud-lobby: one row of the Join Online page's Public lobbies list (the cloud service's
+/// live public lobbies; display fields only — the address comes from the code lookup) [S
+/// docs/systems/net-cloud-lobby.md].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MpCloudLobby {
+    /// The lobby's 4-character join code (choosing the row joins by it).
+    pub code: String,
+    pub name: String,
+    /// The arena's level code (the draw maps it to the arena name).
+    pub level: u32,
+    pub scenario: u32,
+    pub players: u8,
+    pub max_players: u8,
 }
 
 /// net-lobby-list: one row of the Join Online page's lobby list [S docs/systems/net-lobby-list.md].

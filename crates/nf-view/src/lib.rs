@@ -2605,7 +2605,8 @@ impl App {
                 // net-p2p: the app's sessions probe internet reachability (UPnP / NAT-PMP /
                 // STUN) on listen and dial; NF_NO_REACH=1 keeps them LAN-only, NF_STUN
                 // ("host:port,host:port") replaces the public STUN list [S net-p2p §1].
-                if let Some(cfg) = reach_config() { p.0.borrow_mut().enable_reach(cfg); }
+                // net-cloud-lobby: the cloud meeting point rides along (nf-lobbyd overrides).
+                enable_net_services(&p);
                 fe.mp_session = Some(Box::new(p.clone()));
                 self.net_lobby = Some(p);
             }
@@ -2870,7 +2871,7 @@ impl App {
         // net-p2p: an ephemeral placeholder, reach on, then the real port — so the mapping /
         // STUN probe starts for it (the console prints the join code once known).
         let p = mpnet::SessionProxy::host(0)?;
-        if let Some(cfg) = reach_config() { p.0.borrow_mut().enable_reach(cfg); }
+        enable_net_services(&p);
         p.0.borrow_mut().rebind_host(port)?;
         // net-lobby-list: the flag host advertises too (the lobby page's host sets it each tick).
         { let mut q = p.clone(); menu::MpSession::set_lobby(&mut q, "Bond's game", self.net_armed.as_ref().map_or(0x0700_0023, |s| s.level_code), 1, 1); }
@@ -2886,7 +2887,7 @@ impl App {
     pub fn net_join(&mut self, addr: &str) -> Result<(), String> {
         // net-p2p: `addr` may be a join code too.
         let s = mpnet::SessionProxy::host(0)?;
-        if let Some(cfg) = reach_config() { s.0.borrow_mut().enable_reach(cfg); }
+        enable_net_services(&s);
         s.0.borrow_mut().dial(addr)?;
         s.0.borrow_mut().set_codename("Bond");
         self.net = Some(s);
@@ -6395,6 +6396,28 @@ fn reach_config() -> Option<nf_net::p2p::ReachConfig> {
         s.to_socket_addrs().ok()?.find(|a| a.is_ipv4())
     });
     Some(cfg)
+}
+
+/// net-cloud-lobby: the lobby service's URL — `NF_LOBBY_SERVICE`, else the `lobby_service = <url>`
+/// line of <config dir>/net.txt, else the built-in constant (empty until the user deploys = off).
+/// A player-set `nf-lobbyd` (`lobby_server =`) overrides it: None when the directory is set [S].
+fn cloud_service_url(directory_set: bool) -> Option<String> {
+    if directory_set { return None; }
+    let raw = std::env::var("NF_LOBBY_SERVICE").ok().or_else(|| {
+        let text = std::fs::read_to_string(settings::config_dir()?.join("net.txt")).ok()?;
+        text.lines().find_map(|l| l.split_once('=').filter(|(k, _)| k.trim() == "lobby_service").map(|(_, v)| v.trim().trim_matches('"').to_string()))
+    }).unwrap_or_else(|| nf_net::cloud::LOBBY_SERVICE_URL.to_string());
+    let raw = raw.trim().to_string();
+    (!raw.is_empty()).then_some(raw)
+}
+
+/// The real sessions' net services: reachability (net-p2p) + the cloud meeting point
+/// (net-cloud-lobby, unless a player-set nf-lobbyd overrides it) [S].
+fn enable_net_services(p: &mpnet::SessionProxy) {
+    let cfg = reach_config();
+    if let Some(c) = &cfg { p.0.borrow_mut().enable_reach(c.clone()); }
+    let dir_set = cfg.as_ref().is_some_and(|c| c.directory.is_some());
+    p.0.borrow_mut().enable_cloud(cloud_service_url(dir_set));
 }
 
 /// The NF_NET_SHOT render-check aid's pending capture (set inside the tick loop's sim borrow).
