@@ -26,18 +26,13 @@ Published netfire-lobby (0.01 sec)
   https://netfire-lobby.<your-subdomain>.workers.dev
 ```
 
-## Tell the game the URL
+## The URL in the game
 
-Every player puts the URL in their `%APPDATA%\NightfirePort\net.txt` (create the file if it does not
-exist; the same file the `lobby_server =` line rides):
-
-```
-lobby_service = https://netfire-lobby.<your-subdomain>.workers.dev
-```
-
-(or set the `NF_LOBBY_SERVICE` environment variable — the env var wins). While no URL is set the
-service is simply off: hosts show their long self-contained join code and the Join Online page lists
-LAN lobbies only, exactly as before.
+The deployed URL is built into every exe: `LOBBY_SERVICE_URL` in `crates/nf-net/src/cloud.rs`, currently
+`https://netfire-lobby.netfire-lobby-worker.workers.dev` (deployed 2026-10-19 on the user's account). Players set
+nothing. A player may override it with a `lobby_service = <url>` line in `%APPDATA%\NightfirePort\net.txt` or the
+`NF_LOBBY_SERVICE` environment variable (the env var wins; an empty value turns the service off: long codes and LAN
+lobbies only).
 
 ## What it costs
 
