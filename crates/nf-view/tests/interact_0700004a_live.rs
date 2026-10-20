@@ -194,10 +194,17 @@ fn the_shaft_shooters_fire_on_their_channels() {
         assert!(!sim.drones.worldobjs.shooters.iter().any(|s| s.arm == 0x4f && s.fired),
             "#287 has not fired before the −124 plate — the temporal sister");
     }
-    for _ in 0..2400 { r.step(Input::default()); } // ride to the end (0x4a)
+    // Ride to the script's end: the lift SP deletes (stay=1 → state 5 [M 0x1dbda8 case 2]) ~t5616
+    // wall-clock (the script's clock freezes through the −52 landing scene's 576 ticks). The old
+    // marker here was ch 0x4a — the removed nis.rs stand-in; the real writer is 07000013's spawn
+    // touch #153 [D; walk_07000013_live] and NOTHING writes it on 0700004a
+    // (docs/systems/tower2-lift-ride.md §2 steps 8-10).
+    let mut lift_deleted = false;
+    for _ in 0..3400 { r.step(Input::default()); if r.w.scene.sim.as_ref().unwrap().drones.scripts.players.iter().any(|p| p.scripts[0] == 0x0600_0571 && p.deleted) { lift_deleted = true; break; } }
     {
         let sim = r.w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x4a), "the ride reached the lobby (the harness works)");
+        assert!(lift_deleted, "the ride reached the lobby (the harness works: the lift script's end)");
+        assert!(!sim.drones.channels.on(0x4a), "ch 0x4a is OFF on 0700004a (the real writer is on 07000013) — sister");
         assert!(sim.drones.worldobjs.shooters.iter().find(|s| s.arm == 0x4f).unwrap().fired,
             "#287 fired when the car passed plate #281's ch 0x4f [M 0x17d0c0]");
         assert!(sim.drones.worldobjs.shooters.iter().find(|s| s.arm == 0x22).unwrap().fired,
