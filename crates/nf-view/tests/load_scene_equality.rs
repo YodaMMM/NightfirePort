@@ -44,12 +44,12 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // 01 and 02 are rain levels: +128 attachments, +6400 vertices, +12288 indices each; 05/0c/14 unchanged.
 const BASELINE: &[(&str, &str)] = &[
     // Re-pinned for silencer-white-artifact (700y3, 2026-10-20): the silenced weapons' duplicate suppressor extra
-    // (the record's +0x7C view-entity, drawn by the datum-0 attach instead) is no longer built — 4 meshes, 600 tris.
+    // (the record's +0x7C view-entity, drawn by the datum-0 attach instead) is no longer built (4-6 meshes per level); every pinned level re-pinned.
     ("07000002.bin", "d96046ef6be529e6 4483059 9370089 5343 4345765 81 9802 205 28 25 8"),
-    ("07000005.bin", "6a43ad2ce9dee894 4377695 9151611 3576 4293354 73 9731 106 19 16 6"),
-    ("0700000c.bin", "15de2f0294792a8a 4871632 10240830 8177 4680808 96 10996 170 22 40 15"),
-    ("07000014.bin", "b4011376b5d7991f 7208306 14968956 6767 7055181 111 13430 173 41 37 32"),
-    ("07000001.bin", "ff9ab612c1051461 4396013 9211107 3484 4322711 76 9824 101 11 20 6"),
+    ("07000005.bin", "a330bb32173ad130 4376991 9150171 3570 4292650 73 9721 106 19 16 6"),
+    ("0700000c.bin", "833e69b7b2f30ba1 4871032 10239654 8173 4680208 96 10988 170 22 40 15"),
+    ("07000014.bin", "15e19617e5183f33 7207602 14967516 6761 7054477 111 13420 173 41 37 32"),
+    ("07000001.bin", "2327deefebff4cfa 4395413 9209931 3480 4322111 76 9816 101 11 20 6"),
 ];
 
 #[test]
