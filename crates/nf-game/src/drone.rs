@@ -209,6 +209,10 @@ pub mod state {
     pub const CIVILIAN_HIDING: u8 = 0x13;
     pub const CIVILIAN_PATROL: u8 = 0x14;
     pub const CIVILIAN_MISSION: u8 = 0x16;
+    /// `NDrone2_DSTATE_CivilianChallenge` 0x162558 — state 0x3E of `NDrone2_StateFuncs` (EE
+    /// 0x29b300 [L]): the unarmed guard's challenge — the 0x3E point anim chains to RunToAlarm
+    /// 0x89. 0x3E is already listed as a state id in FLASH_HANDLING below, so the id space agrees.
+    pub const CIVILIAN_CHALLENGE: u8 = 0x3e;
     /// The real `NDrone2_DSTATE_Hostage` (0x15cb78) — `NDrone2_StateFuncs[0x0a]` [L 0x29b300]; the
     /// captive cower the castle geishas sit in while their captor lives.
     pub const HOSTAGE: u8 = 0x0a;
@@ -2436,6 +2440,9 @@ impl Drone {
             // TruckDriverIdle 0x160ed0 case 8 → (0x12, 0).
             PARTY_GIRL | CIVILIAN | CIVILIAN_HIDING | TRUCK_DRIVER_IDLE => (CIVILIAN_SCARED, false),
             CIVILIAN_MISSION | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD => (ATTACK, false),
+            // CivilianChallenge 0x162558 cases 6/8 → HandleImpact(0x89, 0); 7/9/0x17/0x18/0x19 →
+            // (0x89, 1) [M 0x162558:44-60].
+            CIVILIAN_CHALLENGE => (crate::kiko::RUN_TO_ALARM, false),
             TRUCK_DRIVER_INIT => (TRUCK_DRIVER_INIT_ALERT, false),
             CIVILIAN_SCARED => (0, false),
             // Astronaut: Launch/Combat/Hit/Death pass resume 0 — surviving a bullet changes no
@@ -2695,6 +2702,7 @@ impl Drone {
             TRUCK_DRIVER_INIT_ALERT => (0, false),
             TRUCK_DRIVER_IDLE | PARTY_GIRL | CIVILIAN | CIVILIAN_SCARED | CIVILIAN_HIDING => (CIVILIAN_SCARED, false),
             CIVILIAN_MISSION | CIVILIAN_GUARD | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD => (ATTACK, false), // 0x15d860 case 6 tail: HandleImpact(0x56, 0)
+            CIVILIAN_CHALLENGE => (crate::kiko::RUN_TO_ALARM, false), // 0x162558 case 6: HandleImpact(0x89, 0)
             HOSTAGE_IDLE => (0, false),
             _ => return self.on_impact(d, rng, frame, s, true),
         };
@@ -2878,7 +2886,13 @@ impl Drone {
     /// (`bond_armed`) [0x178874].
     /// `NDrone2_NearDrone` (0x14a6e8): is an armed opponent/person within the radius.
     fn near_armed_person(&self, d: &Data) -> bool {
-        self.kind != 0xd && self.prop(d, 0x3c) && self.seen && self.bond_armed
+        // 07000009/0A: prop 0x3c + the sight flag ONLY — the game returns before the voice-0xD
+        // check and has no armed gate there (the security guards react to any intruder) [M
+        // 0x1787c8:14-21]. Other levels: voice 0xD exempt, prop 0x3c + seen + armed [M 0x1787c8:30-42].
+        if matches!(d.level, 0x0700_0009 | 0x0700_000a) {
+            return self.prop(d, 0x3c) && self.seen;
+        }
+        self.voice_type != 0xd && self.prop(d, 0x3c) && self.seen && self.bond_armed
     }
 
     /// `NDrone2_BulletImpact` (0x1461c8): damage; dead → Death_Anim; alive with `allow` and no flinch for 2 s (this
@@ -5173,6 +5187,7 @@ impl Drone {
         if m == msg::EXPLOSIVE && !matches!(s, UNDER_COVER_FIRE | UNDER_COVER_SNIPER_FIRE | UNDER_COVER_SNIPER_RELOAD | AMBUSH_WAIT | GRENADE_THROW
                 | TASER | STUNNED | STUNNED_RECOVER) {
             let resume = if matches!(s, RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT) { RECOVER_FROM_SCARY_OBJECT }
+                else if s == CIVILIAN_CHALLENGE { crate::kiko::RUN_TO_ALARM } // 0x162558 case 0x21: ConsiderExplosive(…, 0x89) [M]
                 else if matches!(s, PARTY_GIRL | CIVILIAN | CIVILIAN_MISSION | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD | CIVILIAN_SCARED | CIVILIAN_HIDING) { 0 }
                 else { ATTACK };
             self.take_explosive_msg(d, frame, resume);
@@ -5600,6 +5615,28 @@ impl Drone {
                 self.goal = Some(self.home);
                 self.croute = None;
                 self.set_state(GO_TO_GOAL);
+                true
+            }
+            // `DroneFunc_FirstAttack` (0x148010) → `DroneFunc_FirstSightState` (0x147c48): the own-sight
+            // first-sight states run BEFORE the alternate state (0x148010 checks the 0x8000000 bit
+            // first). Prop 0x1A — `DoModeSettingsNEW` sets it with 0x56 on 07000009/0A — returns 0x3E
+            // CivilianChallenge on 09/0A (0x3C Interogate on 07/41) before SeenPlayerTalk and the
+            // 0x1B/0x18/0x19 rolls [M 0x147c48:142-153]. The 09 security guards raise the alarm from
+            // here: the challenge plays anim 0x3E with the follow-on 0x89 RunToAlarm [M 0x162558].
+            // (Prop 0x1A is not set on 07/41 drones by DoModeSettingsNEW; a placement-set 0x1A there
+            // would take the 0x3C Interogate arm, which this port does not carry — [S] no such
+            // placement is known.)
+            (ATTACK, msg::ENTER) if !self.first_attack_done && self.own_sight && self.prop(d, 0x1a) => {
+                // The FirstSightState-return arm of FirstAttack 0x148010: the first-attack stamps,
+                // alertness 1.0, the sight widening, `+0x13a` (second_tag) and the second switch cleared.
+                self.first_attack_done = true;
+                self.alert = 1.0;
+                self.second_tag = 0;
+                self.second_channel = 0;
+                if self.attack_frame == 0 { self.attack_frame = frame; }
+                self.sight_range = self.sight_range.max(self.combat_range);
+                self.half_fov = 0.0;
+                self.set_state(CIVILIAN_CHALLENGE);
                 true
             }
             // `DroneFunc_FirstAttack` with an alternate state (`+0x5A4`) and no second switch: take the alternate mode
@@ -6068,17 +6105,45 @@ impl Drone {
                 self.update_patrol_route(d, rng, frame);
                 if self.near_armed_person(d) {
                     self.sighted = true;
-                    // The female scream 0x48 before the scare-state switch (`Drone+0x15` != 0; the
-                    // game's CivilianInit carve-out `+0xd8 == 0x10` has no port counterpart — the
-                    // port's CIVILIAN_PATROL is never entered from CIVILIAN_INIT) [M 0x15d610:60].
+                    self.own_sight = true; // +0x4F8 |= 0x8000000 before the state switch [M 0x15d610 case 3]
+                    // Prop 0x33 once-broadcast: `+0x4FC |= 1`, `DroneAlertToObject(20, 20, 0.75,
+                    // msg 0x11, Bond)`, `+0x4F8 |= 0x200000` [M 0x15d610 case 3] — the same shout
+                    // the PARTY_GIRL scare models.
+                    if self.prop(d, 0x33) && !self.scare_shouted {
+                        self.scare_shouted = true;
+                        self.pending_shout = Some((msg::SHOUT, self.target.pos)); // the alert source is BOND
+                    }
+                    // Voice 0x10 (the game's CivilianInit carve-out): `+0x44 = 1` then Attack
+                    // [M 0x15d610 case 3]. The 09 guards are voice 0x17 — the default arm runs.
+                    if self.voice_type == 0x10 { self.alert_bits |= 1; self.set_state(ATTACK); return true; }
+                    // The female scream 0x48 before the state switch (`Drone+0x15` != 0) [M 0x15d610:50].
                     if self.female { self.foley_reqs.push(0x48); }
-                    self.set_state(CIVILIAN_SCARED);
+                    // SetState(0x56 Attack) in EVERY near-armed arm — the unarmed 09 security
+                    // guards reach the alarm chain through Attack's FirstAttack, not the scare
+                    // states (the old CIVILIAN_SCARED reroute froze them in CivilianHiding) [M
+                    // 0x15d610 case 3 → LAB_0015d838].
+                    self.set_state(ATTACK);
                 } // 0x15d610:32 — dead arg [M 0x1787c8]
                 true
             }
             (CIVILIAN_PATROL, msg::BULLET) => self.on_bullet_resume(d, rng, frame, ATTACK, false), // HandleImpact(0x56, 0)
             (CIVILIAN_PATROL, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
             (CIVILIAN_PATROL, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
+            // CivilianChallenge 0x3E (`NDrone2_DSTATE_CivilianChallenge` 0x162558): ENTER —
+            // `+0x4F8 |= 0x10000`, `+0x4FC |= 0x20` (the interrogate flag — no port reader; not
+            // modelled), `CallAnim(0, 0x3E, follow 0x89 RunToAlarm)` then the challenge bark
+            // `SpeechSFX(0xC3 + Rand(9), 0, 0, 0)` — the Rand draw is the game's [M :17-21].
+            // msg 3 (UPDATE) faces the opponent (`SetAngleToObj`) [M :34-37]; case 2
+            // (EndInterogate) has no port counterpart. The anim-done follow enters RunToAlarm,
+            // whose FindAlarmPoint → PressAlarm chain raises the nearest switch's channel.
+            (CIVILIAN_CHALLENGE, msg::ENTER) => {
+                self.vision_on = true;
+                self.call_anim(d, 0x3e, crate::kiko::RUN_TO_ALARM, 0);
+                let roll = rng.rand(9) as usize;
+                self.talks.push((0xc3 + roll, false));
+                true
+            }
+            (CIVILIAN_CHALLENGE, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
             // Civilian (0x15d118) ENTER: stand idle; the scare radius `+0xCF8` = 10 on 07000007, else 20.
             // UPDATE: armed person within it → CivilianScared.
             (CIVILIAN, msg::ENTER) => {
@@ -8518,6 +8583,18 @@ pub struct Drones {
     /// mp-world-sync: online, every slot's use-key trigger half (head, look) in slot order —
     /// the deferred `Player_Activate` trigger arm of `use_trigger_request`, one per pressing body.
     pub net_use_triggers: Vec<(V3, V3)>,
+    /// doublecross-transitions: the entry fade from black — `Player_Init` 0x1910f8:45 arms
+    /// `Camera_SetFade(player, -45.0f, 0xff, 1)` on every player spawn [M; the loading screen
+    /// ends at `ResetMap_Load` phase 3's tail 0x1d6360:169-170, so the fade covers the first
+    /// gameplay frames], stored as `(frames_left, total)` — alpha = left/total, black
+    /// (`Camera_SetFade`'s negative-duration rule: alpha starts 1.0, falls 1/45 per tick [M
+    /// 0x1bbdd8 disasm 0x1bbe8c-0x1bbefc]). Armed at build (the port's `Player_Init` stand-in:
+    /// phase 3 runs `Player_Start` on every level load [M 0x1d6360:152]), ticked in `tick`, read
+    /// by the draw code through `spawn_fade_view`. doublecross-transitions-2: the object belongs
+    /// to the PLAYER's viewer and never DRAWS while a script camera owns the view (the viewer
+    /// rule in `spawn_fade_view`'s doc); the raw state still advances per tick. See
+    /// docs/systems/doublecross-transitions.md §6/§7.
+    pub spawn_fade: Option<(u32, u32)>,
 }
 
 /// mp-world-sync (agent 9): one body as the online shared world sees it (see `Drones::net_bodies`).
@@ -8709,6 +8786,10 @@ impl Drones {
             net_bodies: None,
             net_takes: Vec::new(),
             net_use_triggers: Vec::new(),
+            // doublecross-transitions: the entry fade arms on every level load (the game arms it
+            // in `Player_Init` on every `Player_Start` [M 0x1910f8:45, 0x1d6360:152]) — own line
+            // (merge lesson 4).
+            spawn_fade: Some((45, 45)),
     };
         drones
     }
@@ -8744,6 +8825,33 @@ impl Drones {
         self.exit_hold.as_ref().map(|h| ViewFade {
             alpha: 1.0 - h.fade_frames as f32 / h.total as f32,
             rate: 1.0 / h.total as f32,
+        })
+    }
+
+    /// doublecross-transitions: the entry fade as the same viewer-fade overlay the draw code
+    /// already renders — `Player_Init` 0x1910f8:45's `Camera_SetFade(-45, 0xff, 1)` is the game's
+    /// ONE fade object too [M 0x1e6f50:203-209 draws one `psiFadeView` per viewer]: alpha starts
+    /// 1.0 (the byte 255 [M 0x1bbe8c-0x1bbefc — a negative rate arms alpha 1.0]) and falls 1/45
+    /// per tick, so the port's per-tick alpha is `left/total` (45 → 0).
+    ///
+    /// doublecross-transitions-2: the fade object lives on the PLAYER's viewer — `Camera_SetFade`
+    /// indexes `(&glb_viewer)[param_2]` [M 0x1bbdd8:9] and `Player_Init` passes the player's
+    /// viewer id [M 0x1910f8:44-45]. A script camera DISABLES the gameplay viewers
+    /// (`Script_CameraStart` 0x1d9140: `Camera_Enable(v, 0, 0, 0)` for v 0..6 clears the +0x2a
+    /// draw flag [M Camera_Enable 0x1b9920:31-32]) and draws viewer 4 only, which never carries
+    /// the entry fade (`Script_FadeStart` 0x1db3d0:10 arms the SCRIPT fade there); `Game_Draw`
+    /// draws `psiFadeView` per viewer from that viewer's own fade bytes [M 0x1e6f50:186-212].
+    /// So while a script camera owns the view the entry fade never draws — the PS2 shows
+    /// 07000002's opening cut-scene at full brightness [L, the main agent's GDB-build capture].
+    /// The RAW state still advances per Game_Run tick (`Camera_UpdateAll` 0x1bbd68 runs
+    /// unconditionally in Game_Run 0x1c9790:43; [L] FRAME_RATE_MUL = 1.0, ee_snapshot
+    /// 0x0030d0d8) — `tick` keeps the decrement. Camera_PushStates/PopStates save only the
+    /// +0x29/+0x2a pair [M 0x1bbc60/0x1bbcd0], so no cut-scene resurrects it.
+    pub fn spawn_fade_view(&self) -> Option<ViewFade> {
+        if self.scripts.camera().is_some() { return None; }
+        self.spawn_fade.as_ref().map(|&(left, total)| ViewFade {
+            alpha: left as f32 / total as f32,
+            rate: -(1.0 / total as f32),
         })
     }
 
@@ -9229,6 +9337,61 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         // Heard by the drones; the audible shot comes from the gun's fire script (op 1), played by the player's owner.
         if !sound.looped { self.sounds.push(Sound { id: sound.id, pos: from, inner: sound.inner, outer: sound.outer, weight: sound.weight }); }
+    }
+
+    /// mp-shot-effects: the cosmetic bullet spawn for a REMOTE slot's shot — `fire_player`'s spawn
+    /// arm (`Bullet_init` 0x12c5a0 / `Player_WeaponInitBullet` 0x1a4bf0's per-pellet loop) with the
+    /// caller's generator for the spread draws, so the shared stream is never touched (the flush
+    /// runs in the shared-stream context) and every machine spawns the same shells [S port design —
+    /// the PS2 had no networked MP; the port presents the shooter's SP effect set everywhere]. The
+    /// bullets fly, trail, whiz and impact through the SAME `update_player_bullets` path the
+    /// shooter's own rounds ride; the shared MP combat owns the damage (the cosmetic round deals
+    /// none: in MP the guards' list is empty, the breakables take the shared world pass's shots
+    /// (`net_world` gate) and the player-bullet path never checks a player volume). No hearing
+    /// entry (the remote shot's audible sound is its fire script's op-1, already played) and no
+    /// `PlrStat_LogShotFired` (the shooter's own machine logs its own shots).
+    /// mp-shot-effects: the flight segments this tick (`bullet_paths` is private draw bookkeeping;
+    /// the tests count the per-pellet segments).
+    pub fn bullet_paths_len(&self) -> usize {
+        self.bullet_paths.len()
+    }
+
+    pub fn fire_remote_cosmetic(&mut self, d: &Data, from: V3, dir: V3, weapon: u8, rng: &mut Rng) {
+        let Some(w) = d.weapons.records.get(weapon as usize) else { return };
+        let w = &w[..];
+        let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+        let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+        // The grenade-ammo launch whoosh [M Bullet_init 0x12c5a0:285-291 — the +0x90 == 0x0e arm],
+        // the same effect the shooter's machine plays; no rng.
+        let whoosh = if w[0x90] == 0x0e { self.audio.play3d(0x10e, from, None) } else { 0 };
+        for _ in 0..u32::from_le_bytes(w[0x18..0x1c].try_into().unwrap()).clamp(1, 16) {
+            let dir = crate::bullet::spread(dir, f(0x24), flags68, rng);
+            let flags6c = u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap());
+            let speed = f(0x20) * if flags6c & 0x200 != 0 { 0.25 } else { 1.0 };
+            // The 0x10000 ribbon [M Bullet_init 0x12c5a0:116-133], as fire_player spawns it.
+            let swoosh_seg = {
+                let base = u16::from_le_bytes([w[0x02], w[0x03]]);
+                if flags6c & 0x1_0000 != 0 && !matches!(base, 0x33 | 0x6a | 0x6e) {
+                    self.swoosh_create(from, from, i16::from_le_bytes([w[0x76], w[0x77]]), 0x0200_0918, 1)
+                } else { None }
+            };
+            self.player_bullets.push(PlayerBullet {
+                pos: from, dir, speed, travelled: 0.0, range: f(0x1c), damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
+                homing: flags6c & 0x2_0000 != 0,
+                target: None,
+                gravity: flags6c & 0x8 != 0,
+                guided_cam: flags6c & 0x4 != 0,
+                snd: whoosh,
+                swoosh: swoosh_seg,
+                born: self.frame,
+            });
+        }
+        // The shell: `Bullet_init_casing` 0x12fde0's one-per-shot eject — at the shooter's body
+        // (no view model to pose; [S] the head stands in for the gun bone), from the caller's
+        // generator so every machine ejects the same shell.
+        let yaw = dir[0].atan2(dir[2]);
+        let pitch = dir[1].clamp(-1.0, 1.0).asin();
+        self.casings.eject(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1], rng);
     }
 
     /// `Explode_Create` 0x17cbd0's blast, shared by the fuse death (`Bullet_handle_object_destruction`
@@ -10266,16 +10429,29 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
-    /// `GunImp_Update` 0x1320d8 while state 1: the mounted aim + fire. `look`/`turn` are the raw
-    /// stick axes (the game's `Input_Actionf(slot, 4/3, 1)`), `fire` action 9, `use_key` action
-    /// 0xe (the dismount). The laser round is the player's own bullet (`Bullet_init`'s owner is
-    /// the player object [M 0x1320d8:327-331]) and flies the player-bullet flight, so its class-5
-    /// contacts drain the C5 `Destroy` leaves (`Destroy_CollisionHandler` 0x12bd48).
-    pub fn gunimp_tick(&mut self, weapons: &nf_formats::weapon::WeaponData, look: f32, turn: f32, fire: bool, use_key: bool) {
+    /// `GunImp_Update` 0x1320d8 while state 1: the mounted aim + fire, and — gunimp-mounted-pose
+    /// — the player carry. `look`/`turn` are the raw stick axes (the game's `Input_Actionf(slot,
+    /// 4/3, 1)`), `fire` action 9, `use_key` action 0xe (the dismount). Every mounted tick the
+    /// game writes the PLAYER object: the matrix ← base·RotY(yaw_s) [M 0x1320d8:175], the
+    /// position ← base·RotY(yaw_s)·(0,0,seat) + base translation [M 0x1320d8:176-192 — the
+    /// +0xC0 write then the +0x30..+0x3C copy], the view pitch `BLData+0x8A8 = −pitch_s·0.5`
+    /// [M 0x1320d8:194] — the port writes `bond.pos/yaw/pitch` the same tick. The dismount
+    /// (`GunImp_Deactivate` 0x132c18) restores control (cam mode 0, the saved substate,
+    /// `Player_Enable`, `Camera_CalcViewAngles`) and KEEPS the carried pose — Bond stays at the
+    /// mount; the port zeroes his velocity (the game's BL+0x50/+0x10 zeroing [M 0x132c18:44-45])
+    /// and the view's walk resumes from the carried pose. The laser round is the player's own
+    /// bullet (`Bullet_init`'s owner is the player object [M 0x1320d8:327-331]) and flies the
+    /// player-bullet flight, so its class-5 contacts drain the C5 `Destroy` leaves
+    /// (`Destroy_CollisionHandler` 0x12bd48).
+    pub fn gunimp_tick(&mut self, weapons: &nf_formats::weapon::WeaponData, look: f32, turn: f32, fire: bool, use_key: bool, bond: &mut crate::player::Bond) {
         let Some(gi) = self.props.gunimps.iter().position(|g| g.active) else { return };
         if use_key {
-            // `Input_Action(slot, 0xe, 4)` → `GunImp_Deactivate` 0x132c18 [M 0x1320d8:119-123].
+            // `Input_Action(slot, 0xe, 4)` → `GunImp_Deactivate` 0x132c18 [M 0x1320d8:119-123]:
+            // the control restore (the view's walk resumes — the port's mounted gate below) and
+            // the pose KEPT [M 0x132c18:33-47 writes no object position]. The velocity zeroes
+            // with the game's BL+0x50/+0x10 [M 0x132c18:44-45].
             self.props.gunimps[gi].active = false;
+            bond.vel = [0.0; 3];
             return;
         }
         {
@@ -10290,6 +10466,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             g.yaw_s += (g.yaw - g.yaw_s) * 0.15;
             // the cooldown drains every tick regardless of state [M 0x1320d8:107-112]
             g.cooldown -= 1.0;
+            // The player carry [M 0x1320d8:175-194]: the pose rides the smoothed turret (Bond's
+            // yaw = the turret body's yaw, his position the seat through base·RotY, his view
+            // pitch −pitch_s·0.5); the velocity zeroes — the game's disabled player runs no walk
+            // (Player_Disable [M 0x132f00]; GunImp_Update moves the object itself).
+            let (pos, yaw, pitch) = g.mounted_pose();
+            bond.pos = pos;
+            bond.yaw = yaw;
+            bond.pitch = pitch;
+            bond.vel = [0.0; 3];
         }
         if !fire || self.props.gunimps[gi].cooldown > 0.0 { return; }
         let tg = &crate::gunimp::TURRET_GUNS[(self.props.gunimps[gi].turret as usize).min(crate::gunimp::TURRET_GUNS.len() - 1)];
@@ -10331,7 +10516,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// calls `Trigger_Activate` (0x1b2318) — routes b and c on 07000005 (the on-foot gate door and the zip-wire
     /// exit). The port's `player_use_doors` handled only doors; this adds the trigger path so pressing E on a
     /// LOAD_LEVEL or TouchOnce trigger fires it immediately [M 0x1a5170:100-108,128, 0x1b2318:34-111].
-    pub fn player_use_doors(&mut self, d: &Data, head: V3, look: V3, frame: u32) {
+    pub fn player_use_doors(&mut self, d: &Data, head: V3, look: V3, frame: u32, sp_head: V3) {
         let (evs, _hits) = self.doors.player_use(head, look, &mut self.channels, frame);
         for (id, pos) in evs {
             match d.sfx {
@@ -10355,7 +10540,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // switches (0x29, `Switch_Activate` 0x1b02a8) and the Q-Worm PCs (0x35,
         // `PCQWorm_Activate` 0x1b0840) — crate::useobj. The SP reach is the class-0 ENTITY path
         // [M 0x1a5170:121-122]: `w` supplies the glist spheres (elevator-buttons-09).
-        self.useobjs.player_activate(&mut self.scripts, &mut self.channels, head, look, frame, d);
+        // garage-lift-calls: the pick ORIGIN for the SP arm is Bond's HEAD — `Player_GetHeadPos`
+        // [M 0x1a5170:100], not the render camera. The game's sphere (radius 1.0 at head + 1×the
+        // viewer direction [M 0x1a5170:101-108]) reaches ~2.4 units from the eye; from the camera
+        // (which hangs ~2.5 behind Bond) it falls ~2.5 short — the 07000009 car-park lift-call
+        // stations (the mask-4 SCRIPT_liftSCRIPTPLAYER pair #21/#22's entities at the shaft
+        // mouths, z ≈ 26.3) sat just outside the camera-based sphere and the buttons never
+        // responded. The doors/trigger/monitor arms above keep the camera origin their reaches
+        // were tuned to (the game builds them from the same head ray [M 0x1a5170]; unifying them
+        // re-tunes every door reach and is its own task).
+        self.useobjs.player_activate(&mut self.scripts, &mut self.channels, sp_head, look, frame, d);
         // `Player_Activate`'s class-0x38 monitor path (`Monitor_Activate` 0x1b0058): the use
         // sphere's nearest monitor within reach activates (or, while viewing, the same 0xE edge
         // cycles/exits). Reach: the door rule (head+look sphere 1.0 vs the object's sphere) —
@@ -11565,6 +11759,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         if let Some(f) = self.view_fade.as_mut() {
             if f.rate > 0.0 { f.alpha = (f.alpha + f.rate).min(1.0); }
             else if f.rate < 0.0 { f.alpha = (f.alpha + f.rate).max(0.0); }
+        }
+        // doublecross-transitions: `Player_Init`'s entry fade counts down each tick (the exit
+        // hold's documented deviation — the game advances the fade object on the render path,
+        // docs/systems/level-exit-fade.md §4); expired = None, the overlay stops.
+        if let Some((left, _)) = self.spawn_fade.as_mut() {
+            *left = left.saturating_sub(1);
+            if *left == 0 { self.spawn_fade = None; }
         }
         // The hand-back: when the script camera stops, a fade running on the cut-scene viewer ends with it — the
         // game draws it on that viewer only (`Camera_SetFade(.., 0)`), the gameplay viewer never had it.

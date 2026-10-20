@@ -16,8 +16,8 @@ function svc() {
   };
 }
 
-function hostBody({ version = "8.1", name = "Bond's game", pub = true, port = 27420, lan = "192.168.1.10:27420", players = 1 } = {}) {
-  return JSON.stringify({ version, name, map: 0x07000023, scenario: 1, players, max: 4, public: pub, lan, port });
+function hostBody({ version = "8.1", name = "Bond's game", pub = true, port = 27420, lan = "192.168.1.10:27420", players = 1, code } = {}) {
+  return JSON.stringify({ version, name, map: 0x07000023, scenario: 1, players, max: 4, public: pub, lan, port, ...(code !== undefined ? { code } : {}) });
 }
 
 test("a host registers and gets a 4-character unambiguous code", () => {
@@ -133,4 +133,47 @@ test("a private lobby resolves by code but never lists", () => {
   const code = s.call("POST", "/v1/host", { body: hostBody({ pub: false }) }).json.code;
   assert.equal(s.call("GET", "/v1/lobbies", { query: "version=8.1" }).json.lobbies.length, 0);
   assert.equal(s.call("GET", `/v1/code/${code}`).status, 200, "code join still works");
+});
+
+// net-cloud-code-stable: the advert's port can change mid-session (the STUN-observed mapping lands
+// around the lobby → match hand-over), and the entry is keyed by ip:port — so the client re-sends
+// its code and the service moves the same host's entry instead of assigning a new code.
+test("a port-change re-register carries the code: one entry, one code, for the session", () => {
+  const s = svc();
+  const a = s.call("POST", "/v1/host", { body: hostBody() }).json.code;
+  const b = s.call("POST", "/v1/host", { body: hostBody({ port: 51234, code: a }), now: T0 + 30_000 }).json.code;
+  assert.equal(b, a, "the code survives the port change");
+  const r = s.call("GET", `/v1/code/${a}`, { ip: "198.51.100.9", now: T0 + 30_000 });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.public_addr, "203.0.113.5:51234", "the lookup answers the new endpoint");
+  const list = s.call("GET", "/v1/lobbies", { query: "version=8.1", now: T0 + 30_000 }).json.lobbies;
+  assert.equal(list.length, 1, "one entry per session — the stale pre-change entry moved, not doubled");
+  // A lowercase ask normalizes to the same code.
+  const c = s.call("POST", "/v1/host", { body: hostBody({ port: 27421, code: a.toLowerCase() }), now: T0 + 60_000 }).json.code;
+  assert.equal(c, a, "the ask is case-insensitive");
+});
+
+test("a code owned by another host is never stolen; two different hosts still differ", () => {
+  const s = svc();
+  const a = s.call("POST", "/v1/host", { body: hostBody() }).json.code; // host 203.0.113.5
+  const b = s.call("POST", "/v1/host", { body: hostBody({ port: 27421, code: a }), ip: "203.0.113.6" }).json.code;
+  assert.notEqual(b, a, "a different address asking with someone else's code gets a fresh one");
+  const r = s.call("GET", `/v1/code/${a}`, { ip: "198.51.100.9" });
+  assert.equal(r.json.public_addr, "203.0.113.5:27420", "the owner's entry is untouched");
+  // And the plain sister: two hosts, no asks, still get different codes.
+  const c = s.call("POST", "/v1/host", { body: hostBody({ port: 27422 }), ip: "203.0.113.7" }).json.code;
+  assert.notEqual(c, a);
+  assert.notEqual(c, b);
+});
+
+test("an unknown or malformed requested code falls back to a fresh one, not an error", () => {
+  const s = svc();
+  const a = s.call("POST", "/v1/host", { body: hostBody() }).json.code;
+  const b = s.call("POST", "/v1/host", { body: hostBody({ port: 27421, code: "AA0I" }), now: T0 + 30_000 }).json.code; // 0/I are not in the alphabet
+  assert.equal(b.length, 4);
+  assert.notEqual(b, a);
+  const c = s.call("POST", "/v1/host", { body: hostBody({ port: 27422, code: "ZZZZ9" }), now: T0 + 60_000 }).json.code; // 5 chars
+  assert.equal(c.length, 4, "a malformed ask is ignored, never a 4xx");
+  const d = s.call("POST", "/v1/host", { body: hostBody({ port: 27423, code: 42 }), now: T0 + 90_000 }).json.code; // not a string
+  assert.equal(d.length, 4);
 });

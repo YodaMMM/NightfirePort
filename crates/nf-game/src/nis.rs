@@ -1192,6 +1192,14 @@ impl Player {
     /// #70) is reachable exactly this way: its mode-64 preload runs the t=0 Entity op, so entity
     /// 0x020005EA exists at the panel from level load (docs/systems/elevator-button.md).
     pub fn entity_use_targets(&self, objects: &Objects, w: &dyn World) -> Vec<([f32; 3], f32)> {
+        self.entity_use_targets_dir(objects, w).into_iter().map(|(c, r, _)| (c, r)).collect()
+    }
+
+    /// The same targets with each entity's facing (the stream matrix's direction basis, the
+    /// game's `Mat_GetDir(obj+0x90)` input): `SP_Activate` 0x1dc338's type-0x39 arm dots it
+    /// against `activator+0xC0 − obj+0xC0` before `Switch_Activate`. The basis is the stored
+    /// matrix's z row — the same column math `entity_use_targets` transforms centres with.
+    pub fn entity_use_targets_dir(&self, objects: &Objects, w: &dyn World) -> Vec<([f32; 3], f32, [f32; 3])> {
         let mut out = Vec::new();
         if self.deleted { return out; }
         let Some(s) = self.info[self.cur].as_ref() else { return out };
@@ -1200,14 +1208,14 @@ impl Player {
             let Some(o) = st.obj else { continue };
             let Some(Some(Obj::Entity { hash, matrix, .. })) = objects.list.get(o) else { continue };
             let Some((c, r)) = w.glist_sphere(*hash) else { continue };
-            out.push((
-                [
-                    matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
-                    matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
-                    matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2],
-                ],
-                r,
-            ));
+            let centre = [
+                matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
+                matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
+                matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2],
+            ];
+            // The facing basis (the game's `Mat_GetDir(obj+0x90)`): the matrix's z basis row.
+            let dir = [matrix[2][0], matrix[2][1], matrix[2][2]];
+            out.push((centre, r, dir));
         }
         out
     }

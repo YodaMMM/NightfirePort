@@ -98,12 +98,39 @@ impl Svc {
                 };
                 let port = port as u64 as u16;
                 let key = format!("{ip}:{port}");
+                // net-cloud-code-stable: the mock mirrors the worker — the body may carry the code
+                // the host already holds; a new key moves the same host's entry instead of minting
+                // a new code. (4 alphabet symbols, case-insensitive; anything else is no ask.)
+                let asked = match get("code") {
+                    Some(Json::Str(s)) if s.len() == 4 => {
+                        let up = s.to_uppercase();
+                        if up.bytes().all(|b| SHORT_CODE_ALPHABET.contains(&b)) { up } else { String::new() }
+                    }
+                    _ => String::new(),
+                };
                 let code = match self.entries.get(&key) {
                     Some(e) => e.code.clone(),
                     None => {
-                        let c = self.next_code();
-                        self.codes.insert(c.clone(), key.clone());
-                        c
+                        if !asked.is_empty() {
+                            if let Some(owner_key) = self.codes.get(&asked).cloned() {
+                                if owner_key != key {
+                                    if let Some(owner) = self.entries.get(&owner_key) {
+                                        if owner.ip == ip {
+                                            self.entries.remove(&owner_key);
+                                            self.codes.remove(&asked);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !asked.is_empty() && !self.codes.contains_key(&asked) {
+                            self.codes.insert(asked.clone(), key.clone());
+                            asked
+                        } else {
+                            let c = self.next_code();
+                            self.codes.insert(c.clone(), key.clone());
+                            c
+                        }
                     }
                 };
                 self.entries.insert(
@@ -285,6 +312,54 @@ fn info(name: &str) -> nf_net::discovery::LobbyInfo {
 }
 
 // ── the tests ────────────────────────────────────────────────────────────────────────────────
+
+/// net-cloud-code-stable: the advert's dial port can change mid-session (the STUN-observed mapping
+/// lands around the lobby → match hand-over) and the service keys entries by ip:port — so the same
+/// CloudHost re-registers under the new port carrying its code, and the service must answer the
+/// SAME code (it moves the entry), with the lookup resolving the new endpoint.
+#[test]
+fn the_code_survives_the_port_change_re_register() {
+    let svc = Service::start();
+    let mut h = CloudHost::new(svc.url());
+    h.set_advert(advert("Bond's game", true, 27420, &nf_net::cloud::game_version()));
+    wait_until(|| {
+        h.poll(0);
+        !h.busy()
+    });
+    h.poll(1);
+    let code = h.code(1).expect("registered").to_string();
+
+    // The STUN mapping is known now: the next period's POST names the new dial port. The client
+    // sends the same advert through the same CloudHost — the body now also carries `code`.
+    h.set_advert(advert("Bond's game", true, 51234, &nf_net::cloud::game_version()));
+    wait_until(|| {
+        h.poll(CLOUD_REFRESH_MS);
+        !h.busy()
+    });
+    h.poll(CLOUD_REFRESH_MS + 1);
+    assert_eq!(h.code(CLOUD_REFRESH_MS + 1), Some(code.as_str()), "the code survives the port change");
+
+    // The joiner's lookup now answers the NEW endpoint (the entry moved, not doubled).
+    let mut lk = CloudLookup::new(svc.url(), &code);
+    wait_until(|| {
+        lk.poll();
+        lk.finished()
+    });
+    let f = lk.result().expect("finished").as_ref().expect("found").clone();
+    assert_eq!(f.public.port(), 51234, "the service recorded the new dial port");
+    assert_eq!(f.name, "Bond's game");
+
+    // Sister: a second host (its own session, no code held) still gets its own, different code.
+    let mut h2 = CloudHost::new(svc.url());
+    h2.set_advert(advert("Other host", true, 27421, &nf_net::cloud::game_version()));
+    wait_until(|| {
+        h2.poll(CLOUD_REFRESH_MS);
+        !h2.busy()
+    });
+    let _ = h2.poll(CLOUD_REFRESH_MS + 1);
+    let other = h2.code(CLOUD_REFRESH_MS + 1).expect("the second host's code");
+    assert_ne!(other, code, "two different hosts never share a code");
+}
 
 #[test]
 fn host_registers_gets_a_code_and_the_refresh_keeps_it() {

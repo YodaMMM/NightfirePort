@@ -112,12 +112,44 @@ impl Props {
                 // `GunImp_Create` 0x131f20 (placement 0x34, class 0x47): the SP arm mounts the
                 // TurretGuns[0xb] hardware (the laser) [M 0x131f20:52-63]; the base transform is
                 // the placement's (0x225's rotation is identity [D]).
-                0x34 => props.gunimps.push(crate::gunimp::GunImp {
-                    placement: i, pos: p.translation, yaw_base: p.rotation[1],
-                    pitch: 0.0, yaw: 0.0, pitch_s: 0.0, yaw_s: 0.0,
-                    active: false, heat: 0.0, cooldown: 0.0, hot: false,
-                    turret: crate::gunimp::SP_TURRET as u8,
-                }),
+                0x34 => {
+                    // The seat offset's source word: the glist's +0x28 float = the object record's
+                    // min.z (the bounds block copies at the +8 shift; see gunimp.rs's seat doc)
+                    // [M GunImp_Create 0x131f20:77-81; D #225 min.z = -1.4362069]. The by-hash
+                    // map alone is not enough: the load's session mesh merge re-points shared
+                    // hashes at foreign objects with sentinel-scale bounds, so the candidates are
+                    // scanned for the sane-bounds art (the placement's own box [D]: |min.z| < 2).
+                    let seat = {
+                        let by_ref = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { None };
+                        let mut seat = 0.0f32;
+                        if let Some(o) = if p.by_hash() { None } else { level.maps[m].objects.get(p.index as usize) } {
+                            seat = o.min[2] * 0.75;
+                        } else {
+                            for mp in &level.maps {
+                                for o in &mp.objects {
+                                    if o.hashcode == p.hashcode && o.min.iter().all(|v| v.abs() < 100.0) {
+                                        seat = o.min[2] * 0.75;
+                                        break;
+                                    }
+                                }
+                                if seat != 0.0 { break; }
+                            }
+                            if seat == 0.0 {
+                                if let Some((mm, oo)) = by_ref {
+                                    seat = level.maps[mm].objects[oo].min[2] * 0.75;
+                                }
+                            }
+                        }
+                        seat
+                    };
+                    props.gunimps.push(crate::gunimp::GunImp {
+                        placement: i, pos: p.translation, yaw_base: p.rotation[1],
+                        pitch: 0.0, yaw: 0.0, pitch_s: 0.0, yaw_s: 0.0,
+                        active: false, heat: 0.0, cooldown: 0.0, hot: false,
+                        turret: crate::gunimp::SP_TURRET as u8,
+                        seat,
+                    });
+                }
                 _ => {}
             }
         }
