@@ -115,6 +115,24 @@ impl Default for Death {
     }
 }
 
+impl Death {
+    /// The draw's death phase: 0 none, 1 the sequence is running, 2 the full cover (`HUD_State
+    /// (pane 12) != 0`, the pane's state word [M `HUD_UpdateBloodPane` 0x19a6a8:23-25]). Phase 2
+    /// is SP-only: the MP respawn gate (300 ticks [M `Player_HandleDeath` 0x190bb0:41-54]) ends
+    /// the sequence before the 448-tick cover [M 0x19f4e8:33].
+    pub fn phase(&self) -> u8 {
+        if !self.active { 0 } else if self.covered { 2 } else { 1 }
+    }
+
+    /// The blood pane's grown height in px — the red fade's alpha source for the draw. The pane
+    /// enables on the death tick (`Player_HandleDeath` 0x190bb0:23-25 SP / :38-40 MP) and both
+    /// sprites grow 1 px per tick (`FRAME_RATE_MUL` [M `HUD_UpdateBloodPane` 0x19a6a8:27-30]) to
+    /// the 448 cover [M 0x19f4e8:33]; 0 while the pane is off.
+    pub fn pane_px(&self) -> u32 {
+        if !self.pane_on { 0 } else { self.ticks.min(RED_FADE_TICKS) }
+    }
+}
+
 impl crate::drone::Drones {
     /// One dead tick's slice of the death script's command run — `AnimScriptTick` 0x1c2630 →
     /// `AnimProcessScriptCmds` 0x1c1b38 over the (from, to] window the dead-tick clock just
