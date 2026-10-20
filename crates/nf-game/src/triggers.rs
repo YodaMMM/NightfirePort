@@ -568,6 +568,38 @@ pub fn build(level: &Level) -> Vec<Trigger> {
     out
 }
 
+/// The level exit's real use target, resolved the way `Player_Activate` 0x1a5170's pick and the
+/// level's own wiring see it, for the campaign/flow legs and any caller that wants to stand where
+/// the player stands at an exit:
+///
+/// 1. **the LOAD_LEVEL trigger itself** when it owns collision — the game's E-use pick is a
+///    radius-1.0 sphere at head+look vs COLLISION geometry (`Collide_SphereIntersect` [M
+///    0x1a5170:100-108]), hits dispatch on the object's class byte — `Trigger_Create` stamps 0x1d
+///    on every trigger [M 0x1b1720:93] — and the class-0x1d arm runs `Trigger_Activate` [M
+///    0x1a5170:134-137]. With a mesh, E at the 0xE8 fires it (the gate-off fallback arm still
+///    loads [M 0x1b2318:96-111]).
+/// 2. **else the Touch plate that feeds its gate channel** (`out == ` the 0xE8's `gate`) whose
+///    bounds are real: a disc 0xE8 record can carry NO collision at all — 07000001 #18 "Load
+///    Point" resolves to an object with a gfx box but `collision None` [D placements dump], so
+///    the port's tris are empty and the game's E-sphere can never reach the 0xE8 either. The
+///    level's exit then runs by PRESENCE: the plate's `Trigger_Hit` raises the gate channel [M
+///    0x1b1a78:162-166 case 10; 07000001 #180 "LoadPointActivator" out 0x10 == the exit's gate
+///    [D]], and the player's part is standing on the plate. E on that plate is REFUSED by the
+///    game's `mask & 4` gate (0x18 & 4 = 0 [D #180 mask; M 0x1b2318:23-25]).
+///
+/// Returns `(trigger, e_can_fire)`. The fallback choice itself is the port's survey mechanic
+/// (`// [S] unverified` as a resolution rule); every fact it rests on is tagged above. `None`
+/// when the level has no LOAD_LEVEL exit, or a mesh-less one with no reachable gate plate.
+pub fn exit_use_target(triggers: &[Trigger]) -> Option<(&Trigger, bool)> {
+    let exit = triggers.iter().find(|t| t.kind == kind::LOAD_LEVEL && t.next_level != 0)?;
+    if !exit.tris.is_empty() {
+        return Some((exit, true));
+    }
+    let plate = triggers.iter()
+        .find(|t| t.kind == kind::TOUCH && !t.tris.is_empty() && t.out as u32 == exit.gate as u32)?;
+    Some((plate, false))
+}
+
 /// `Trigger_Calc` (0x1B1900): level latches, then the Touch triggers (their channels cleared, then OR-ed).
 pub fn calc(level: u32, triggers: &mut [Trigger], ch: &mut Channels, touchers: &[Toucher], frame: u32) {
     if level == 0x0700_0005 && ch.on(0xa4) { ch.set(0x6f, 1, frame); }
@@ -691,6 +723,67 @@ mod tests {
         // Stays gone.
         exit.update(&mut ch, &touchers, 3);
         assert!(exit.gone);
+    }
+
+    /// The exit's use-target resolution (`exit_use_target`), pinned on the 07000001 shape:
+    /// the disc's #18 "Load Point" has NO collision (its object record carries a gfx box but
+    /// `collision None` [D placements dump]) — the game's E-sphere hits collision only [M
+    /// 0x1a5170:106-108], so the mesh-less 0xE8 can never be an E target, and the resolution
+    /// falls to the gate plate (#180 "LoadPointActivator", Touch out 0x10 == the 0xE8's gate,
+    /// 44 collision tris [D]). Sister: a plate wired to another channel is not the exit's target.
+    #[test]
+    fn meshless_exit_resolves_to_its_gate_plate() {
+        // The 07000001 shapes: a mesh-less LOAD_LEVEL (gate 0x10, → 0x07000002) and the Touch plate.
+        let exit = Trigger { kind: kind::LOAD_LEVEL, gate: 0x10, next_level: 0x0700_0002, tris: Vec::new(), lo: [f32::INFINITY; 3], hi: [f32::NEG_INFINITY; 3], ..plate(kind::LOAD_LEVEL, 0, 8, vec![]) };
+        let mut gate_plate = plate(kind::TOUCH, 0x10, 0x18, vec![]);
+        gate_plate.tris = vec![[[-33.8, 0.64, 12.17], [-32.41, 0.64, 12.17], [-32.41, 0.64, 18.68]]];
+        gate_plate.lo = [-33.8, 0.64, 12.17];
+        gate_plate.hi = [-32.41, 0.64, 18.68];
+        let triggers = vec![exit, gate_plate];
+        let (target, e_can_fire) = exit_use_target(&triggers).expect("the gate plate resolves");
+        assert_eq!(target.kind, kind::TOUCH, "the resolved target is the Touch plate, not the mesh-less 0xE8 [D collision None]");
+        assert_eq!(target.out, 0x10, "the plate feeds the 0xE8's gate ch 0x10 [D #180 out]");
+        assert!((target.lo[0] - -33.8).abs() < 1e-4, "the resolved bounds are the plate's real ones [D #180 box]");
+        assert!(!e_can_fire, "E on the plate is refused by the game's mask & 4 gate [M 0x1b2318:23-25; #180 mask 0x18 [D]]");
+        // Sister: a Touch plate wired to another channel does not resolve — the exit has no real
+        // use target (the caller keeps its honest skip).
+        let wrong_plate = Trigger { out: 0x11, ..triggers[1].clone() };
+        assert!(exit_use_target(&[triggers[0].clone(), wrong_plate]).is_none(),
+            "a plate that does not feed the gate is not the exit's use target");
+    }
+
+    /// A LOAD_LEVEL exit that OWNS collision is its own E target: the game's E-sphere hits its
+    /// mesh and `Trigger_Activate`'s type-10 arm loads the level (07000005's zip-wire exit shape).
+    /// Sister: the same trigger with the tris stripped resolves to no plate → None.
+    #[test]
+    fn exit_with_mesh_is_its_own_e_target() {
+        // plate() builds its own quad — strip it for the mesh-less sister, then restore.
+        let mut exit = Trigger { kind: kind::LOAD_LEVEL, gate: 0, next_level: 0x0700_0066, tris: Vec::new(), lo: [f32::INFINITY; 3], hi: [f32::NEG_INFINITY; 3], ..plate(kind::LOAD_LEVEL, 0, 8, vec![]) };
+        assert!(exit_use_target(&[exit.clone()]).is_none(), "no tris and no gate plate → None");
+        exit.tris = vec![[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0]]];
+        exit.lo = [0.0, 0.0, 0.0];
+        exit.hi = [1.0, 0.0, 1.0];
+        let exits = vec![exit];
+        let (target, e_can_fire) = exit_use_target(&exits).expect("the exit itself resolves");
+        assert_eq!(target.kind, kind::LOAD_LEVEL, "the mesh-less fallback is not consulted for a meshed exit");
+        assert!(e_can_fire, "E fires it: the class-0x1d hit runs Trigger_Activate's load arm [M 0x1a5170:134-137]");
+    }
+
+    /// The E-refusal on the LoadPointActivator shape, pinned at the request surface the port's
+    /// E-path calls: mask 0x18 (Bond AND the contact, [D #180 p1]) lacks bit 4, so `Trigger_Activate`
+    /// returns before any write [M 0x1b2318:23-25] — holding E on the plate can never raise the
+    /// exit's gate channel. Sister: the same plate with bit 4 set fires the out write (the gate is
+    /// the deciding bit, not the plate's presence).
+    #[test]
+    fn e_on_the_loadpointactivator_shape_is_refused() {
+        let ch = Channels::default();
+        let plate0x18 = plate(kind::TOUCH, 0x10, 0x18, vec![]);
+        let (sets, next) = plate0x18.activate_request(&ch);
+        assert!(sets.is_empty() && next.is_none(), "mask 0x18 & 4 == 0 → Trigger_Activate refuses [M 0x1b2318:23-25]");
+        let plate0x1c = plate(kind::TOUCH, 0x10, 0x1c, vec![]);
+        let (sets, next) = plate0x1c.activate_request(&ch);
+        assert_eq!(sets, vec![(0x10, 1)], "sister: with bit 4 the same plate writes its out channel");
+        assert!(next.is_none(), "a Touch never loads a level");
     }
 
     /// `Trigger_Activate` (the E-key path, routes b/c on 07000005): pressing E on a LOAD_LEVEL trigger fires it
