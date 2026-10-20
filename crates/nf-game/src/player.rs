@@ -423,6 +423,20 @@ pub struct Bond {
     /// Intersect_CylGeom 0x109da0:447 `dist < radius`] and never grabs, while the game's pre-push
     /// segment (the tick's inward move included) does. Field on its own line (merge lesson 4).
     pub pre_collide: V3,
+    /// `HITTEST+0x50` (BLData+0x790) — the pick-bit block's reference vector [M Intersect_CylGeom
+    /// 0x109da0:478-480 loads it for `R = +0x50 − (B + push)`, bit ⟺ `R·axis < 0`, disasm
+    /// 0x10a664-0x10a6a0]. No code writes it statically (the full-.text sdc2/sw scan at imm 0x790
+    /// found nothing); its only writer is the DeltaP add-back [M Collide_Intersect 0x1ebaa8:353-373
+    /// adds the world DeltaP to +0x10/+0x20/+0x30/+0x50/+0x60 per object pass with a hit], so it
+    /// is the LIFETIME push accumulator starting at 0 [M Player_Init 0x1910f8 creates the object
+    /// fresh; control_create_object's allocation is zeroed]. The bit's dot2 therefore reads
+    /// `acc < b_pre` (the tick's own pushes cancel between the two operands — see world.rs
+    /// `capsule_pick_contact_scoped`), which makes the game's pick arm die on low/negative-floor
+    /// levels (0700004a's shaft: acc 0 vs b_pre ≈ −7.5 → no bit → Bond falls off the lobby edge)
+    /// and stay live on high ones (0700000c's balcony: acc ≈ the landing pen vs b_pre ≈ 14).
+    /// Accumulated next to the position's push-out in both ticks. Field on its own line
+    /// (merge lesson 4).
+    pub pick_ref: V3,
 }
 
 impl Bond {
@@ -436,6 +450,7 @@ impl Bond {
             cel: None,
             prev_pos: pos,
             pre_collide: pos,
+            pick_ref: [0.0; 3],
             creep: None,
             world_gravity: [0.0, -9.8, 0.0],
             zero_g_rot: [[0.0; 3]; 3],
@@ -861,9 +876,13 @@ impl Bond {
         // the floor-ray tolerance. The port's walkable alone missed the up-push contacts (the
         // 0700000c pier ramp ride); the bit is the push-has-upward-component signal
         // (`capsule_tri_contact`'s `pick`, the decompile's dot2 arm).
-        let pick = world.capsule_pick_contact_scoped(self.cel, a, b, CLIMB_RADIUS);
+        let pick = world.capsule_pick_contact_scoped(self.cel, a, b, CLIMB_RADIUS, self.pick_ref[1]);
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
+        // The DeltaP add-back rides the climb tick too: every applied push accumulates into
+        // HITTEST+0x50 [M Collide_Intersect 0x1ebaa8:353-373 — the adds run per object pass with
+        // a hit, and the climb runs the same Collide_Update pick]. See the `pick_ref` field doc.
+        for k in 0..3 { self.pick_ref[k] += push[k]; }
         // The floor test reads the same HITTEST (`Player_CollisionHandler` 0x1949a8 →
         // `Player_FeetOnPoint(param_1, BLData+0x740, …)`), so it shares the per-cel scope. The ray
         // and the band are the game's own: to = capsuleB + up·(−(cc+0.6)) [M Player_FeetOnPoint
@@ -1539,20 +1558,25 @@ self.local = [vs / k, vf / k];
         // scoped pass always finds the room's own floor, so the redo never fires there: across
         // the fix-08-collision slab band the floor stays in the room's bucket while the exterior
         // wall stays out of it.
-        let mut pick = world.capsule_pick_contact_scoped(self.cel, a, b, RADIUS);
+        let mut pick = world.capsule_pick_contact_scoped(self.cel, a, b, RADIUS, self.pick_ref[1]);
         if floor.is_none() {
             let (fp, fw) = world.capsule_push(a, b, RADIUS, swimming);
             push = fp;
             walkable = fw;
-            pick = world.capsule_pick_contact(a, b, RADIUS);
+            pick = world.capsule_pick_contact(a, b, RADIUS, self.pick_ref[1]);
             floor = world.segment_hit(self.pos, to);
         }
         // The game's pick-contact arm: `Player_FeetOnPoint` 0x194188:176-185 grounds on
-        // `HITTEST+0x9c != 0` — the pick's contact bit (`Intersect_CylGeom` 0x10a72c-0x10a734:
-        // the contact's push has an upward component, the decompile's dot2 arm) — alongside the
-        // floor-ray tolerance. The port's walkable alone missed the up-push contacts (the
-        // 0700000c pier ramp ride bounced ungrounded — hatch-crouch-0c); the reverted
-        // `push != 0` arm over-grounded (any wall touch grounded — 6 master movement failures).
+        // `HITTEST+0x9c != 0` — the pick's contact bit. The bit block is three gates [M
+        // Intersect_CylGeom 0x109da0 disasm 0x10a5e0-0x10a734]: dot1 = dot(face normal, axis) >
+        // 0.7 (0x10a650-0x10a674, up-facing faces only), dot2 = dot(HITTEST+0x50 − (B + push),
+        // axis) < 0 (0x10a66c-0x10a6a0), dot3 = dot(normalize(R), axis) < 0.7 (0x10a6a8-0x10a734,
+        // vacuous when dot2 holds — R·axis < 0 ⟹ R·axis/|R| < 0). HITTEST+0x50 is the lifetime
+        // push accumulator (see the `pick_ref` field doc), so dot2 reduces to `acc < b_pre` and
+        // the whole arm dies wherever the accumulator sits at/above the capsule bottom's world
+        // y — 0700004a's shaft (acc 0 vs b_pre ≈ −7.5) never picks, which is what lets Bond walk
+        // off the lobby edge and fall into the plates; the port models it with the `pick_ref`
+        // accumulator fed next to the push-out below.
         // The contact-distance band [M Player_FeetOnPoint 0x194188:106 `*(float *)(hit + 0xc) - 0.1
         // <= cc`] reads HITDATA+0xC, which Intersect_RayGeom 0x10a8c8 fills with the ABSOLUTE
         // distance |from − hit| — hit = from + t·dir (:176-179 the dir·t product and the from add;
@@ -1590,6 +1614,10 @@ self.local = [vs / k, vf / k];
             _ => 1.0,
         };
         self.head_bump = push[1] < -1e-4;
+        // The DeltaP add-back [M Collide_Intersect 0x1ebaa8:353-373]: every applied push
+        // accumulates into HITTEST+0x50 (+0x10 feeds the handler's obj+0x30 add at
+        // 0x1949a8:136-140 — the port's `pos += push` — and +0x50 feeds the pick bit's dot2).
+        for k in 0..3 { self.pick_ref[k] += push[k]; }
         // The pre-push-out snapshot: the game's ladder-grab pick sees the segment built HERE (the
         // hittest from the integrated obj+0x30 [M 0x194df0:361]; the +0x750 push lands in the
         // handler 0x1949a8:136-140, after the refine) — see the `pre_collide` field doc.

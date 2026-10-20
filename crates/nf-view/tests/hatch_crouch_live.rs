@@ -108,26 +108,34 @@ fn crouch_walking_the_balcony_south_reaches_the_far_walkway() {
     eprintln!("reached the far walkway at tick {tick}: ({:.2}, {:.2}, {:.2})", p[0], p[1], p[2]);
 }
 
-/// The fix's regression: riding the balcony's south pier ramp (14.61 → 16.49 over z −121..−122,
-/// a ~58° face [D probes]) the crouched capsule STAYS GROUNDED (the pick-contact arm of the
-/// game's grounded rule) and rides up; before the fix it bounced ungrounded (y 15.31..15.62,
-/// never past z −120.85) — the playtest's "can't crouch through" soft-lock.
+/// The decompile re-pin (hatch-crouch-0c3). 680's ride test pinned the no-dot1 pick arm — the
+/// deviation the 680b report itself marked "the one deliberate deviation [S]". The bit block's
+/// dot1 gate is real [M Intersect_CylGeom 0x109da0 disasm 0x10a650-0x10a674: the bit requires
+/// `dot(face normal, capsule axis) > 0.7`]: the pier's ~58° face (normal·axis ≈ 0.53 [D probes])
+/// can NEVER set the game's pick bit, and the ray band fails at that slope too (the skin-rest
+/// gap exceeds cc + 0.1 — hatch-crouch-0c's own math), so the crouch does NOT ride the pier:
+/// Bond stalls/bounces at its base (the 680-era y 15.31..15.62, never past z −120.85 [D
+/// probes]). The verified south route is the balcony's east half (x 10-14 — the test above).
 #[test]
-fn the_south_pier_ramp_ride_stays_grounded_and_climbs() {
+fn the_south_pier_ramp_face_never_grounds_the_crouch() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_at([5.8, 15.7, -116.0], std::f32::consts::PI);
     let sim = scene.sim.as_mut().unwrap();
     sim.step_bond(Input { crouch: true, ..Default::default() }, false, false, false);
-    let mut rode = None;
-    for tick in 1..=400u32 {
+    let mut rode = false;
+    let mut min_z = f32::MAX;
+    let mut max_y = f32::MIN;
+    for _ in 1..=400u32 {
         sim.step_bond(Input { forward: 1.0, ..Default::default() }, false, false, false);
         let p = sim.bond.pos;
-        if p[2] < -121.3 && p[1] > 16.3 && sim.bond.grounded { rode = Some((tick, p)); break; }
+        min_z = min_z.min(p[2]);
+        max_y = max_y.max(p[1]);
+        if p[2] < -121.3 && p[1] > 16.3 && sim.bond.grounded { rode = true; }
     }
-    let (tick, p) = rode.expect("the crouch rides the ramp face grounded past z −121.3 and y 16.3 \
-        (the pre-fix bounce never left z −120.85 / y 15.62)");
-    assert!(sim.bond.grounded, "grounded on the ramp contact");
-    eprintln!("riding the ramp at tick {tick}: ({:.2}, {:.2}, {:.2})", p[0], p[1], p[2]);
+    assert!(!rode, "the pier ride is dot1-impossible [M 0x10a650-0x10a674] on the 0.53 face — got a grounded ride to {min_z:.2}/{max_y:.2}");
+    assert!(min_z > -121.0, "Bond never crosses the pier base (z −121): min z {:.2}", min_z);
+    assert!(max_y < 16.0, "Bond never climbs the face: max y {:.2}", max_y);
+    eprintln!("pier attempt floor: min z {min_z:.2}, max y {max_y:.2}");
 }
 
 /// The sister: STANDING is blocked at the south pier (the slim standing capsule gets no lift off

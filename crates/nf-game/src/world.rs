@@ -314,7 +314,13 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let push = [dir[0] * (r - dist), dir[1] * (r - dist), dir[2] * (r - dist)];
     for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
     if n[1].abs() > 0.7 && q[1] < b[1] { *walkable = true; }
-    if push[1] > 0.0 { *pick = true; }
+    // The pick bit's dot1 gate [M Intersect_CylGeom 0x109da0 disasm 0x10a650-0x10a674: the bit
+    // block requires `dot(face normal, capsule axis) > 0.7` — up-facing faces only; a wall's
+    // horizontal normal and a ceiling's down normal never set the bit]. The dot2 gate
+    // (`+0x50 − (B + push)` — 0x10a66c-0x10a6a0) is pass-global, not per-contact: HITTEST+0x50
+    // is the lifetime push accumulator and the tick's pushes cancel between its operands, so
+    // the queries apply it once as `pick_ref_y < b_pre_y` (see capsule_pick_contact_scoped).
+    if n[1] > 0.7 { *pick = true; }
     true
 }
 
@@ -707,9 +713,21 @@ impl CollisionWorld {
     /// 0x10a72c-0x10a734). Scoped like `capsule_push_scoped`; falls back to the flat world.
     /// Runs UNGUARDED (`top_guard = false`): the game's bit block rides the head-on re-push
     /// path, which master's swim push-tail guard explicitly does not gate.
-    pub fn capsule_pick_contact_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32) -> bool {
-        let Some(cell) = cell else { return self.capsule_pick_contact(a, b, r) };
-        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_pick_contact(a, b, r) };
+    ///
+    /// `pick_ref_y` is the caller's `HITTEST+0x50` accumulator (Bond.pick_ref[1]). The bit's
+    /// dot2 gate [M Intersect_CylGeom 0x109da0 disasm 0x10a664-0x10a6a0: `dot(+0x50 − (B + push),
+    /// axis) < 0`] is pass-global: +0x50 is the lifetime DeltaP accumulator [M Collide_Intersect
+    /// 0x1ebaa8:353-373; no static writer — the full-.text sdc2/sw scan], and the tick's own
+    /// pushes appear on BOTH operands (the accumulator already includes them, and the resolved
+    /// bottom B+push carries the same adds), so per contact dot2 collapses to
+    /// `acc_y < b_pre_y` with b_pre = the pass's starting bottom — the world-y comparison that
+    /// kills the arm on low/negative-floor levels and keeps it on high ones. dot3
+    /// (0x10a6a8-0x10a734, `normalize(R)·axis < 0.7`) is vacuous once dot2 holds
+    /// (R·axis < 0 ⟹ R·axis/|R| < 0) and is not ported as a separate test.
+    pub fn capsule_pick_contact_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32, pick_ref_y: f32) -> bool {
+        let b_pre_y = b[1];
+        let Some(cell) = cell else { return self.capsule_pick_contact(a, b, r, pick_ref_y) };
+        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_pick_contact(a, b, r, pick_ref_y) };
         let dynamic = self.dynamic.read().unwrap();
         let (mut a, mut b) = (a, b);
         let mut total = [0f32; 3];
@@ -731,11 +749,14 @@ impl CollisionWorld {
                 for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false); }
             }
         }
-        pick
+        // dot2 pass-global [M 0x10a66c-0x10a6a0; the collapse argument in the doc above]: the
+        // bit needs the resolved bottom ABOVE the +0x50 accumulator's y.
+        pick && pick_ref_y < b_pre_y
     }
 
     /// The flat-world `capsule_pick_contact_scoped` (no cel scope).
-    pub fn capsule_pick_contact(&self, a: V3, b: V3, r: f32) -> bool {
+    pub fn capsule_pick_contact(&self, a: V3, b: V3, r: f32, pick_ref_y: f32) -> bool {
+        let b_pre_y = b[1];
         let (mut a, mut b) = (a, b);
         let mut total = [0f32; 3];
         let mut walkable = false;
@@ -747,7 +768,7 @@ impl CollisionWorld {
         self.near_actor(lo, hi, |t, mat| {
             capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false);
         });
-        pick
+        pick && pick_ref_y < b_pre_y
     }
 
     /// The floor ray against the straddle cells' static geometry (the walk's `segment_hit`).
