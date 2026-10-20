@@ -38,9 +38,18 @@ pub mod state {
     pub const COMBAT_OUT_OF_RANGE: u8 = 0x5a;
     pub const COMBAT_NEW_SIGHTING: u8 = 0x5b;
     pub const COMBAT_NO_SIGHT: u8 = 0x5c;
-    pub const COMBAT_DRONE_AHEAD: u8 = 0x5e;
+    /// `NDrone2_DSTATE_CombatWait` 0x164960 — `NDrone2_StateFuncs[0x5e]` 0x29b300 [ELF]. The port called
+    /// it COMBAT_WAIT (the state a mover parks in when `DroneMove_NoBunching` flags a drone
+    /// ahead, `DroneAnim_SetCombatMoveAnim` 0x13cfb0:35-39); the game's table names it CombatWait.
+    pub const COMBAT_WAIT: u8 = 0x5e;
     pub const COMBAT_NO_ROUTE: u8 = 0x5f;
+    /// `NDrone2_DSTATE_NoOpponent` 0x1650a0 (`NDrone2_StateFuncs[0x60]`).
     pub const NO_OPPONENT: u8 = 0x60;
+    /// `NDrone2_DSTATE_HostageDead` 0x172628 (`NDrone2_StateFuncs[0x0f]`): a hostage's death (SpecialDeath
+    /// routes mode-5 drones here instead of Dead 0x47 [M 0x163c68:93-98]).
+    pub const HOSTAGE_DEAD: u8 = 0x0f;
+    /// `NDrone2_DSTATE_AltAttack` 0x167488 (`NDrone2_StateFuncs[0x72]`): the close-range alternate attack.
+    pub const ALT_ATTACK: u8 = 0x72;
     pub const DRONE_STUCK: u8 = 0x7f;
     pub const GO_TO_GOAL: u8 = 0x63;
     /// `NDrone2_DSTATE_HostageGoToGoalPosition` 0x165a68 (state 100): the hostages'/scared civilians'
@@ -885,6 +894,9 @@ pub struct Drone {
     /// Lent by `Drones`: Bond holds a gun (`DroneWeap_OpponentHasWeapon` / `NDrone2_ObjectIsArmed`: weapon byte 2–0x46
     /// or 0x6A–0x71). `+0x1D0`: AngleDiff(Bond's yaw, bearing Bond → drone).
     pub bond_armed: bool,
+    /// Lent by `Drones` each tick: `PlrStat_OkToUpdate` 0x1993e0 — MP master set (`MPSettings+0x180`)
+    /// → true; else `Mission_Status` 0x1830d0 in 0..=1 (the mission still running) [M 0x1993e0].
+    pub stat_ok: bool,
     pub opp_facing: f32,
     /// Bond's chest (`Player::target`) for this drone's own line-of-sight tests.
     pub opp_target: V3,
@@ -1406,7 +1418,7 @@ impl Drone {
             health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: !matches!(skin, 0x0500_003b | 0x0500_003c | 0x0500_0053), kind: setup.kind,
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0,
             blast: None,
-            global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
+            global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false,
             mission_wait_channel: 0,
             armed_peer_exit_dist: f32::MAX,
@@ -2417,6 +2429,8 @@ impl Drone {
             AIM_STAND | AIM_BACKOFF | STEP_AIM_LEFT | STEP_AIM_RIGHT | STRAFE_AIM_LEFT | STRAFE_AIM_RIGHT | STRAFE_DODGE_LEFT
                 | STRAFE_DODGE_RIGHT | ROLL_LEFT_CROUCH | ROLL_RIGHT_CROUCH => (AIM_STAND_FIRE, true),
             AIM_STAND_FIRE | AIM_CROUCH_FIRE | COMBAT_NO_MOVE | COMBAT_NO_ROUTE | SNIPER_FIRE => (0, true),
+            // AltAttack 0x167488 case 8: `HandleImpact(0x68, 0)`.
+            ALT_ATTACK => (AIM_STAND_FIRE, false),
             SNIPER_IDLE => (SNIPER_AIM, false),
             SNIPER_AIM => (SNIPER_FIRE, true),
             SNIPER_RELOAD => (SNIPER_FIRE, false),
@@ -2424,7 +2438,7 @@ impl Drone {
             // `HandleImpact(0, 0)`; DrawWeapon *suggested* the same.
             SURRENDER_ANIM | SURRENDERED => (DEATH_ANIM, false),
             UNSURRENDER_ANIM | DRAW_WEAPON => (0, false),
-            AIM_CROUCH | AIM_STAND_RELOAD | AIM_CROUCH_RELOAD | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_DRONE_AHEAD
+            AIM_CROUCH | AIM_STAND_RELOAD | AIM_CROUCH_RELOAD | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_WAIT
                 | GO_TO_GOAL | DRONE_STUCK => (0, false),
             // The scare-flight family: case 8 forwards `HandleImpact(0x88, 0)` and the
             // 7/9/0x17/0x18/0x19 group `HandleImpact(0x88, 1)` [M 0x168aa8 case 8 + the case-7
@@ -2874,7 +2888,7 @@ impl Drone {
         if self.holstered { return false; }
         if !((2..=0x46).contains(&self.weapon) || (0x6a..=0x71).contains(&self.weapon)) { return false; }
         matches!(self.state, SNIPER_AIM | SNIPER_FIRE | COMBAT | COMBAT_NO_MOVE | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT
-            | COMBAT_NO_ROUTE | COMBAT_DRONE_AHEAD | AIM_STAND | AIM_STAND_FIRE | AIM_STAND_RELOAD | AIM_BACKOFF
+            | COMBAT_NO_ROUTE | COMBAT_WAIT | AIM_STAND | AIM_STAND_FIRE | AIM_STAND_RELOAD | AIM_BACKOFF
             | AIM_CROUCH | AIM_CROUCH_FIRE | AIM_CROUCH_RELOAD | STEP_AIM_LEFT | STEP_AIM_RIGHT | STRAFE_AIM_LEFT | STRAFE_AIM_RIGHT)
     }
 
@@ -3107,7 +3121,9 @@ impl Drone {
                     self.pos[1] += crate::damage::drone_height(hip) - 1.0;
                     self.free_root = true;
                     self.bounded = false;
-                    self.play_script(d, self.special_death, anim_state::DEATH, 0xbf, DEAD, msg::ANIM_DONE);
+                    // The follow-on: `+0x596 = 0x47` Dead, or 0x0f HostageDead when the mode byte +0xC5 is 5 [M 0x163c68:49-51].
+                    let after = if self.mode == 5 { HOSTAGE_DEAD } else { DEAD };
+                    self.play_script(d, self.special_death, anim_state::DEATH, 0xbf, after, msg::ANIM_DONE);
                     self.timer_c = Some(frame + 60);
                     return Some(true);
                 }
@@ -4852,14 +4868,14 @@ impl Drone {
                 | PARTY_GIRL | CIVILIAN_GUARD | CIVILIAN_DOOR_GUARD | TRUCK_DRIVER_INIT | TRUCK_DRIVER_INIT_ALERT
                 | TRUCK_DRIVER_IDLE | TRUCK_DRIVER_MISSION | AMBUSH_WAIT | SURRENDER_ANIM | SURRENDERED
                 | UNSURRENDER_ANIM | STUNNED_RECOVER | STUN_GRENADE_RECOVER | PUNCH_IMPACT | COMBAT_NO_MOVE
-                | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_DRONE_AHEAD | COMBAT_NO_ROUTE | ALERT_TO_POSITION
+                | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_WAIT | COMBAT_NO_ROUTE | ALERT_TO_POSITION
                 | GO_TO_GOAL | SEARCH_AREA | DRAW_WEAPON | AIM_STAND | AIM_STAND_FIRE | AIM_STAND_RELOAD | AIM_BACKOFF
                 | AIM_CROUCH | AIM_CROUCH_FIRE | AIM_CROUCH_RELOAD | STEP_AIM_LEFT | STEP_AIM_RIGHT | STRAFE_AIM_LEFT
                 | STRAFE_AIM_RIGHT | STRAFE_DODGE_LEFT | STRAFE_DODGE_RIGHT | ROLL_LEFT_CROUCH | ROLL_RIGHT_CROUCH
                 | DRONE_STUCK | OPEN_DOOR | KICK_OBJECT | ACTION_ANIM | STAND_FIDDLE | RUN_AWAY_FROM_OBJECT
                 | HIDE_FROM_SCARY_OBJECT | RUN_FOR_COVER | UNDER_COVER_INIT | UNDER_COVER_IDLE | UNDER_COVER_AIM
                 | UNDER_COVER_FIRE | UNDER_COVER_SNIPER_FIRE | UNDER_COVER_SNIPER_RELOAD | UNDER_COVER_RETURN
-                | UNDER_COVER_LEAVE_NOW | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT) {
+                | UNDER_COVER_LEAVE_NOW | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | ALT_ATTACK) {
             return false;
         }
         // `PlrStat_LogShotHitEnemy(0)` — UNCONDITIONAL here (no team gate; the msg-8 route's gate
@@ -5711,7 +5727,7 @@ impl Drone {
             // `NDrone2_DSTATE_Combat` (0x1731b8, state 0x58): alert 1.0 on entry.
             (COMBAT, msg::ENTER) => { self.alert = 1.0; true }
             (COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT, msg::ENTER) => { self.alert = 1.0; self.vision_on = true; true }
-            (COMBAT | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_DRONE_AHEAD, msg::UPDATE) => {
+            (COMBAT | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT, msg::UPDATE) => {
                 let n = self.combat_state(d, rng, frame, s);
                 self.set_state(n);
                 true
@@ -5810,8 +5826,75 @@ impl Drone {
                 self.set_state(if crouch { AIM_CROUCH_FIRE } else { AIM_STAND_FIRE });
                 true
             }
-            (AIM_STAND, msg::ENTER) => { self.call_anim(d, anim_state::AIM_STAND, 0, msg::ANIM_DONE); self.firing = false; true }
+            // `NDrone2_DSTATE_AimStand` 0x166178 (state 0x67) [M]. ENTER (case 1): `+0x4F8 |= 0x10000`,
+            // `Drone_AlertStatusSet(1)` (the status byte +0x51C; status 1's level in the 0x2f5cc8 table is
+            // 0.0 — the status byte itself is 845's `Drone_AlertStatus` port, so the port's `alert` level is
+            // left as is); an unarmed drone (`NDrone2_ObjectIsArmed(self)` 0) -> DrawWeapon 0x66;
+            // `NDrone2_CanAltAttack(0)` -> AltAttack 0x72; else a captain (`Drone+0x19`) holding weapon 0x19
+            // swaps to 0x18, the aim anim 10 with done-message 5, and the fire request off (+0x3b = 0)
+            // [M 0x166178:14-46].
+            (AIM_STAND, msg::ENTER) => {
+                let armed = !self.holstered && ((2..=0x46).contains(&self.weapon) || (0x6a..=0x71).contains(&self.weapon));
+                if !armed { self.set_state(DRAW_WEAPON); return true; }
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x166178:16]
+                if self.can_alt_attack(d, 0) { self.set_state(ALT_ATTACK); return true; }
+                if self.captain && self.weapon == 0x19 { self.weapon = 0x18; }
+                self.call_anim(d, anim_state::AIM_STAND, 0, msg::ANIM_DONE);
+                self.firing = false;
+                true
+            }
+            // Case 5 (the aim anim done): seen within 16 ticks (`+0x274 < 0x10`) -> AimStandFire 0x68, else
+            // CombatNoSight 0x5c [M 0x166178:54-60]. Case 3 is `NDrone2_SeenAndAttacking` (the shared
+            // combat-state seen pass); impacts -> `HandleImpact(0x68, 1)` (`impact_args`); case 0x21 ->
+            // `ConsiderExplosive(..., 0x68)`.
             (AIM_STAND, msg::ANIM_DONE) => { self.set_state(if self.unseen_ticks < 16 { AIM_STAND_FIRE } else { COMBAT_NO_SIGHT }); true }
+            // `NDrone2_DSTATE_AltAttack` 0x167488 (state 0x72) [M]: ENTER `+0x4F8 |= 0x10000` and the alt
+            // attack anim 0x3D (variant `Rand_Rand(4)`) with the follow-on state 0x68 AimStandFire
+            // [M 0x167488:15-19]; UPDATE `SeenAndAttacking` + `DroneWeap_AimTarget_IsOpponent(1, 1)` (face the
+            // opponent) [M :24-27]; impacts `HandleImpact(0x68, 0/1)` (`impact_args`).
+            (ALT_ATTACK, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x167488:16]
+                let v = rng.rand(4) as u16;
+                self.call_anim_variant(d, 0x3d, v, AIM_STAND_FIRE, 0);
+                true
+            }
+            (ALT_ATTACK, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
+            // Case 0x21 -> `DroneFunc_ConsiderExplosive(..., 0x68)` [M 0x167488 case 0x21; AimStand 0x166178 case 0x21].
+            (ALT_ATTACK | AIM_STAND, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, AIM_STAND_FIRE); true }
+            // CombatWait case 0x21 -> `ConsiderExplosive(..., the current state)` [M 0x164960 case 0x21].
+            (COMBAT_WAIT, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, COMBAT_WAIT); true }
+            // `NDrone2_DSTATE_CombatWait` 0x164960 (state 0x5e) [M] (the port's former "COMBAT_DRONE_AHEAD").
+            // ENTER: `AlertStatusSet(1)`, `+0x4F8 |= 0x10000`, `+0x50C = 1.0`, the alert-idle anim 0x21,
+            // timer C = 3 s (`FRAME_RATE_INT * 3`), `DroneWeap_Fire(1)` then the fire request off
+            // (+0x3b = 0) [M 0x164960:20-31] - the same entry shape as CombatNoRoute's.
+            (COMBAT_WAIT, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x164960:22]
+                self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
+                self.timer_c = Some(frame + 180);
+                self.fire(d, rng, frame, true);
+                self.firing = false;
+                true
+            }
+            // UPDATE (case 3) [M 0x164960:36-58]: `SeenAndAttacking`; `DroneMove_TurnToObj(0.5236)` at the
+            // opponent; not in sight (`+0x228 & 4` == 0) -> fire off + alert idle; in sight -> the aim
+            // anim 10 and fire.
+            (COMBAT_WAIT, msg::UPDATE) => {
+                self.turn_to_opponent(0.5235988);
+                if !self.seen {
+                    self.firing = false;
+                    self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
+                } else {
+                    self.call_anim(d, anim_state::AIM_STAND, 0, 0);
+                    self.fire(d, rng, frame, true);
+                }
+                true
+            }
+            // Timer C (case 0xC) [M 0x164960:76-86]: `DroneFunc_CombatState`; 0 -> wait another 3 s, else go.
+            (COMBAT_WAIT, msg::TIMER_C) => {
+                let n = self.combat_state(d, rng, frame, COMBAT_WAIT);
+                if n == 0 { self.timer_c = Some(frame + 180); } else { self.set_state(n); }
+                true
+            }
             (AIM_STAND_FIRE, msg::ENTER) => {
                 // Non-snipers talk (`+0xC5` ≠ 2; `+0x4F8 & 0x10` and prop 0x40 not modelled).
                 if !self.stationary { self.attack_talk(d, rng); }
@@ -5924,7 +6007,44 @@ impl Drone {
                 self.set_state(m);
                 true
             }
-            (NO_OPPONENT, msg::ENTER) => { self.set_state(IDLE); true }
+            // `NDrone2_DSTATE_NoOpponent` 0x1650a0 (state 0x60) [M]. ENTER: `AlertStatusSet(0)`, the alert-idle
+            // anim 0x21, and (SP - `MPSettings+0x388` 0; this port's drone AI is SP-only) timer C = 1 s
+            // (`FRAME_RATE_DIV * 60`) [M 0x1650a0:13-22]. UPDATE (SP) and timer C: an opponent object
+            // (`+0x170`; the port's stand-in is `ever_seen`) -> Attack 0x56; timer C with none re-arms 1 s
+            // [M :24-42]. (The port used to drop straight to Idle.)
+            (NO_OPPONENT, msg::ENTER) => {
+                self.alert = 0.0;
+                self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
+                self.timer_c = Some(frame + 60);
+                true
+            }
+            (NO_OPPONENT, msg::UPDATE) => { if self.ever_seen { self.set_state(ATTACK); } true }
+            (NO_OPPONENT, msg::TIMER_C) => {
+                if self.ever_seen { self.set_state(ATTACK); } else { self.timer_c = Some(frame + 60); }
+                true
+            }
+            // `NDrone2_DSTATE_HostageDead` 0x172628 (state 0x0f) [M]. ENTER: `AlertStatusSet(3)` (level 1.0),
+            // `NDrone2_SetAsDead` (the corpse, health 0, the weapon drop - as Dead's), prop 0x53 ->
+            // `DroneFunc_SetMissionFailReason(9)`, `+0x4F8 &= ~0x8000`, timer C = `DAT_00298F58`
+            // (10 * FRAME_RATE_INT) [M 0x172628:13-26]; UPDATE `DroneFunc_DeadDrone` (Dead's tick);
+            // timer C -> Fade 0x48 [M :28-35].
+            (HOSTAGE_DEAD, msg::ENTER) => {
+                self.alert = 1.0;
+                self.drop_weapon(d, rng);
+                self.corpse = true;
+                self.health = 0.0;
+                self.vision_on = false;
+                self.firing = false;
+                if self.prop(d, 0x53) { self.fail_reason = Some(crate::ally::mission_fail_reason(9)); }
+                self.timer_c = Some(frame + 300);
+                true
+            }
+            (HOSTAGE_DEAD, msg::UPDATE) => {
+                if !self.drawn { self.present = false; self.enabled = false; return true; }
+                if self.cull { self.set_state(FADE_FAST); }
+                true
+            }
+            (HOSTAGE_DEAD, msg::TIMER_C) => { self.set_state(FADE); true }
             // ---- the mission-state family (docs/WORKLOG fix-drone3). The `NDrone2_StateFuncs` table 0x29b300 maps
             // state 0x32 → `NDrone2_DSTATE_TruckDriverInit` 0x160bd0, 0x33 → InitAlert 0x160d98, 0x34 → Idle 0x160ed0,
             // 0x2e/0x2f → PartyGirlInit 0x1728c0 / PartyGirl 0x160140, 0x30 → CivilianGuard 0x1603a8, 0x10..0x14 →
@@ -7183,6 +7303,15 @@ impl Drone {
     }
 
     /// `DroneAnim_CanDoAnimState`: the anim state's own danim has a script in our anim set (or set 0).
+    /// `NDrone2_CanAltAttack` 0x1549e0 [M]: outside MP (`MPSettings+0x388` 0) with `PlrStat_OkToUpdate`
+    /// false -> no; else the drone can play anim state 0x3D and the opponent is within 1.5 (`+0x1A0`).
+    /// (The variant argument, `min(v, 3)` or 0, only selects which 0x3D variant `CanDoAnimState` checks;
+    /// the port's `can_do` checks the state's script for the drone's anim set.)
+    fn can_alt_attack(&self, d: &Data, _v: u16) -> bool {
+        if !self.stat_ok { return false; }
+        self.can_do(d, 0x3d) && self.dist <= 1.5
+    }
+
     pub fn can_do(&self, d: &Data, anim: u16) -> bool {
         d.tables.states.get(anim as usize).is_some_and(|(own, _)| d.tables.script_for(*own, self.anim_set).is_some())
     }
@@ -7247,7 +7376,7 @@ impl Drone {
         use state::*;
         // 0x13cfb0:35-39 — `DroneAnim_SetCombatMoveAnim`'s FIRST check precedes every combat
         // move-anim choice, the option list included: a drone directly ahead → state 0x5E.
-        if self.no_bunching & 2 != 0 { return state::COMBAT_DRONE_AHEAD; }
+        if self.no_bunching & 2 != 0 { return state::COMBAT_WAIT; }
         if self.stays(d) { return 0; }
         // The gate's "opponent is aiming at me" is `DroneWeap_OpponentIsAimingAtMe` [M 0x17a500:12-29]:
         // armed Bond AND the +0x2A threat latch `Check_Target` stamps [M 0x1a7810:149-150] — the port's
@@ -7321,7 +7450,7 @@ impl Drone {
                 self.face_and_aim(d);
                 0
             }
-            COMBAT_DRONE_AHEAD => {
+            COMBAT_WAIT => {
                 if routed { return COMBAT; }
                 self.face_and_aim(d);
                 0
@@ -7458,7 +7587,7 @@ impl Drone {
         use anim_state::*;
         // 0x13cfb0:35-39, FIRST: a drone directly ahead (`DroneMove_NoBunching`'s +0x31C bit 2)
         // parks the mover in `DSTATE_CombatDroneAhead` (0x5E) instead of a move anim.
-        if self.no_bunching & 2 != 0 { self.set_state(state::COMBAT_DRONE_AHEAD); return; }
+        if self.no_bunching & 2 != 0 { self.set_state(state::COMBAT_WAIT); return; }
         let Some(route) = self.croute.as_ref() else { self.call_anim(d, RUN, 0, 0); return };
         let t = route.target;
         let next = route.next_node_turn(d.nav, self.feet());
@@ -11402,7 +11531,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         if self.npc_enabled {
             let light = crate::aivolume::visibility_factor(d.volumes, player.pos, false);
             let armed = (2..0x47).contains(&self.bond_weapon) || (0x6a..=0x71).contains(&self.bond_weapon);
-            for dr in self.list.iter_mut().filter(|x| x.present) { dr.light = light; dr.opponent_info(player); dr.player_pos = player.pos; dr.seen = false; dr.bond_armed = armed; }
+            // `PlrStat_OkToUpdate` 0x1993e0: MP master → 1; else Mission_Status < 2 (0 or 1) → 1 [M 0x1993e0].
+            let stat_ok = self.mp_master != 0 || self.mission.status() < 2;
+            for dr in self.list.iter_mut().filter(|x| x.present) { dr.light = light; dr.opponent_info(player); dr.player_pos = player.pos; dr.seen = false; dr.bond_armed = armed; dr.stat_ok = stat_ok; }
         }
         self.update_player_bullets(d, player.pos);
         // The use objects' per-tick halves (`PCQWorm_Update` 0x1aee20's bullet install +
@@ -13571,7 +13702,7 @@ mod tests {
             health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: true, kind: 0,
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0,
             blast: None,
-            global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
+            global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,

@@ -284,7 +284,7 @@ fn drone_directly_ahead_parks_the_mover_in_0x5e() {
     let mut parked = None;
     for f in 0..400u32 {
         sim.tick(&d, &player);
-        if sim.list[gi].log.iter().any(|&(_, s)| s == state::COMBAT_DRONE_AHEAD) { parked = Some(f); break; }
+        if sim.list[gi].log.iter().any(|&(_, s)| s == state::COMBAT_WAIT) { parked = Some(f); break; }
     }
     assert!(parked.is_some(), "the rear guard must park in 0x5E with the front guard dead ahead (pre-fix: nothing ever enters 0x5E)");
     // Sister: the flags never fire without an obstacle within 3.0 — Bond alone beyond the pair leaves the mover free.
