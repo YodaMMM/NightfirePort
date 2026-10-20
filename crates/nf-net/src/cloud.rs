@@ -28,10 +28,11 @@ use std::sync::mpsc;
 
 use crate::directory::{SHORT_CODE_ALPHABET, SHORT_CODE_LEN};
 
-/// The deployed service's URL — **empty until the user deploys the worker (docs/tools/cloud-lobby.md),
-/// which means the feature is off**; overridable per player by `NF_LOBBY_SERVICE` or the
-/// `lobby_service =` line of `%APPDATA%\NightfirePort\net.txt` [S].
-pub const LOBBY_SERVICE_URL: &str = "";
+/// The deployed service's URL, built into every exe (the user's choice, 2026-10-19: "go with the cloudflare lobby";
+/// deployed on their account the same day — the live probe hosted, listed, looked up and removed a lobby). Players
+/// set nothing; `NF_LOBBY_SERVICE` or a `lobby_service =` line in `%APPDATA%\NightfirePort\net.txt` overrides it
+/// (empty = off).
+pub const LOBBY_SERVICE_URL: &str = "https://netfire-lobby.netfire-lobby-worker.workers.dev";
 /// The host refreshes every 30 s (the entry expires after 90 s) [S].
 pub const CLOUD_REFRESH_MS: u64 = 30_000;
 /// The host shows the service's code while its last refresh succeeded within this window: the 90 s
