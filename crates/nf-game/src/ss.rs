@@ -53,8 +53,10 @@ pub struct Ss {
     pub hash: u32,
     /// ext+0x08 = param 5 — the sweep's rest point in key units, snapped to whole steps
     /// (`SS_Create` tail: `step * (int)((float)param5 / step)` [M 0x1a9dc8-0x1a9dd8 disasm]).
-    /// Every SS on the shipped levels carries 0, so the landing window (below) never fires and
-    /// the wrap ends every sweep.
+    /// The shipped raw values are 0/15/30/45/60 — ticks-scale words on a key-scale playhead — so
+    /// after the snap NONE lands inside its sweep (e.g. 07000001 #16: step 0.14, rest 45 → 44.94,
+    /// last key 7 [D census, docs/systems/ss-sweep.md]): the landing window below never fires and
+    /// the wrap ends every sweep on shipped content.
     pub rest: f32,
     /// ext+0x24 = param 1 — the wrap flag: 0 → the wrap re-arms to 0x40 (re-operable), non-zero →
     /// the wrap disarms to 0 [M 0x1a9948:121-126].
