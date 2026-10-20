@@ -1,5 +1,7 @@
 //! Join codes (docs/systems/net-p2p.md §2) [S port design]: a public IPv4 endpoint + protocol
-//! version + flags + CRC-16, as 16 Crockford base32 symbols `XXXX-XXXX-XXXX-XXXX`.
+//! version + flags + CRC-16, as 16 Crockford base32 symbols `XXXX-XXXX-XXXX-XXXX`. The join box
+//! also accepts the server-assigned 4-character short code (docs/systems/net-short-codes.md [S])
+//! and a raw `a.b.c.d:port` — [`parse_join_target`] tells them apart.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -118,6 +120,33 @@ impl JoinCode {
     }
 }
 
+/// What the join box typed: a long join code, a server-assigned 4-character short code, or a
+/// raw `a.b.c.d:port`. A raw address carries no flags (it is assumed reachable) [S].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JoinTarget {
+    Code(JoinCode),
+    /// The canonical 4 symbols (alphabet of `directory::SHORT_CODE_ALPHABET`).
+    Short([u8; crate::directory::SHORT_CODE_LEN]),
+    Address(SocketAddrV4),
+}
+
+/// The join box's parse: dashes and whitespace are ignored, typing is case-insensitive; 4
+/// symbols of the short alphabet are a short code (so I/L/O/U/0/1 cannot be one — a 4-symbol
+/// string with them is malformed), anything else goes through the long-code / address parse [S].
+pub fn parse_join_target(s: &str) -> Result<JoinTarget, CodeError> {
+    let t = s.trim();
+    if let Ok(a) = t.parse::<SocketAddrV4>() {
+        if a.port() == 0 {
+            return Err(CodeError::Malformed);
+        }
+        return Ok(JoinTarget::Address(a));
+    }
+    if let Some(code) = crate::directory::normalize_short_code(t) {
+        return Ok(JoinTarget::Short(code));
+    }
+    JoinCode::decode(t).map(JoinTarget::Code)
+}
+
 /// What the join page typed: a join code or a raw `a.b.c.d:port`. A raw address carries no
 /// flags (it is assumed reachable).
 pub fn parse_target(s: &str) -> Result<JoinCode, CodeError> {
@@ -166,5 +195,24 @@ mod tests {
         assert_eq!(parse_target("192.168.1.20:0"), Err(CodeError::Malformed));
         let jc = JoinCode::new("198.51.100.2:5000".parse().unwrap(), 0);
         assert_eq!(parse_target(&jc.encode()), Ok(jc));
+    }
+
+    #[test]
+    fn join_target_kinds() {
+        use crate::directory::normalize_short_code;
+        // The three accepted forms.
+        assert_eq!(parse_join_target(" 192.168.1.20:27420 "), Ok(JoinTarget::Address("192.168.1.20:27420".parse().unwrap())));
+        assert_eq!(parse_join_target("abcd"), normalize_short_code("abcd").map(JoinTarget::Short).ok_or(CodeError::Malformed));
+        let jc = JoinCode::new("198.51.100.2:5000".parse().unwrap(), 0);
+        assert_eq!(parse_join_target(&jc.encode()), Ok(JoinTarget::Code(jc)));
+        // Case-insensitive, dashes and spaces ignored (the long code keeps its own handling).
+        assert_eq!(parse_join_target("a b-c d"), parse_join_target("ABCD"));
+        assert_eq!(parse_join_target(&jc.encode().to_lowercase()), Ok(JoinTarget::Code(jc)));
+        // The ambiguous symbols cannot be a short code — a 4-symbol string with them is malformed.
+        assert_eq!(parse_join_target("ILOU"), Err(CodeError::Malformed));
+        assert_eq!(parse_join_target("a01o"), Err(CodeError::Malformed));
+        // The long-code parse still rejects junk and wrong lengths.
+        assert_eq!(parse_join_target("ABC"), Err(CodeError::Malformed));
+        assert_eq!(parse_join_target("192.168.1.20:0"), Err(CodeError::Malformed));
     }
 }

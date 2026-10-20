@@ -1635,6 +1635,13 @@ pub trait MpSession {
     fn browse_rows(&self) -> Vec<MpLobbyRow> { Vec::new() }
     /// net-lobby-list: what this host advertises (name, arena, scenario, joined players).
     fn set_lobby(&mut self, _name: &str, _level: u32, _scenario: u32, _players: u8) {}
+    /// net-short-codes: the code the lobby shows — the server's 4-character one while it keeps
+    /// answering, else the long self-contained code (what `MpReach.code` carries) [S
+    /// docs/systems/net-short-codes.md]. Default None (the fakes show nothing).
+    fn join_code_display(&self) -> Option<String> { None }
+    /// net-short-codes: the joiner's short-code status line for the join page ("Looking up
+    /// ABCD...", "Code ABCD was not found...", ...) — None when there is nothing to say [S].
+    fn join_code_note(&self) -> Option<String> { None }
 }
 
 /// net-lobby-list: one row of the Join Online page's lobby list [S docs/systems/net-lobby-list.md].
@@ -1671,6 +1678,15 @@ pub struct MpReach {
 
 /// The join timeout: 600 menu ticks = 10 s at the fixed 60 Hz [S §2.2].
 pub const MP_NET_TIMEOUT_TICKS: u32 = 600;
+
+/// net-short-codes: what the join box accepts, for its hint line — `mpnet::join_accepted_forms`
+/// returns this [S docs/systems/net-short-codes.md].
+pub const JOIN_ACCEPTED_FORMS: &str = "a 4-character code, IP:PORT, or a 16-symbol join code";
+
+/// net-short-codes: the accepted-forms getter the draw code reads [S].
+pub fn join_accepted_forms() -> &'static str {
+    JOIN_ACCEPTED_FORMS
+}
 
 /// The address gate: "host:port" with host = 1-4 dot-separated digit parts each ≤ 255 and port =
 /// 1..65535 [S §2.2 — the typed set is digits, dots, colon (the task's own list); no hostnames].
@@ -7466,7 +7482,7 @@ impl FrontEnd {
     /// pages, so the strings are the port's own literals].
     pub fn mp_net_status(&self) -> Option<&'static str> {
         let err = match self.mp_net_error {
-            Some(MpNetError::BadAddress) => Some("Enter IP:PORT or a join code"),
+            Some(MpNetError::BadAddress) => Some("Enter a 4-character code, IP:PORT, or a join code"),
             Some(MpNetError::Busy) => Some("Port already in use"),
             Some(MpNetError::Denied) => Some("No network session is wired"),
             None => None,
