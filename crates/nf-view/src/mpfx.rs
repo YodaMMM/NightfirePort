@@ -279,12 +279,44 @@ impl Sim {
                     if f <= 1 { self.mpfx_play3d(id, shot.from, shot.shooter); }
                     else { self.mp_fx.due.push((frame + f - 1, shot.shooter, id)); }
                 }
+                // mp-shot-effects: the shot's own effects now ride the SP bullet pipeline — the
+                // same code the shooter's machine runs in `step_bond`'s 'shot block [S docs/
+                // systems/mp-shot-effects.md]. The cosmetic rounds (`Drones::fire_remote_cosmetic`,
+                // `Bullet_init` 0x12c5a0's per-pellet spawn) fly, trail, whiz and impact through
+                // `update_player_bullets` — the trail per the same +0x6C gates (`Bullet_DoTrails`
+                // 0x12d890), the contact through the SP world impact (`flush_world_impacts`:
+                // `Effect_Bullet`'s decal / gas / debris / emitter, the `EffectInfo+0x14` impact
+                // sound, the ricochet) — and the shell ejects through the same casings pool
+                // (`Bullet_init_casing` 0x12fde0). The shared MP combat owns the damage; these
+                // rounds draw and sound only. The synthetic hit-feedback events (weapon 0, from
+                // `mp_hurt`) spawn nothing — their presentation is the victim's own arm below.
+                if shot.weapon != 0 {
+                    // Disjoint field borrows: the immutable Data fields while `drones` is borrowed
+                    // mutably (the Sim::data() helper would hold the whole `self`).
+                    let difficulty = self.drones.difficulty;
+                    let d = nf_game::drone::Data {
+                        tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons,
+                        world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins,
+                        skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning,
+                        hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models,
+                        surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty,
+                        ai_points: &[],
+                    };
+                    self.drones.fire_remote_cosmetic(&d, shot.from, shot.dir, shot.weapon, &mut rng);
+                    // The muzzle smoke: `Player_MuzzleFlash` 0x1a4298's `Gas_Init(0.05, 0.1, …,
+                    // 0x2000039, 7, 0x48403080, life 128)` with its `Rand_FRand(2π)` draw, under the
+                    // same +0x68 & 0x2000 no-smoke gate as SP [M; the game's own MP mode skips the
+                    // puff (MPSettings+0x180) — the port matches SP instead, the user's ask [S]].
+                    if rec_u32(&rec, 0xdc) != 0 && rec_u32(&rec, 0x48) != 0 && rec_u32(&rec, 0x68) & 0x2000 == 0 {
+                        let _angle = rng.frand(6.2831854820251465);
+                        self.drones.gas.init_ex(nf_game::gas::SMOKE_QUAD, shot.from, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
+                    }
+                }
             }
-            // The bullet trail: `Bullet_update` 0x12e7b0 state 0 sets `GUN_BULLET_TRAIL`
-            // 0x2000123 when `weapon_data+0x6C & 0x1010` and (the owner is a drone — class 2 — or
-            // `+0x6C & 0x1000`) [M :140-152]: the bots' rounds trail for every 0x10/0x1000
-            // weapon, a player's only for the 0x1000 ones.
-            if flags6c & 0x1010 != 0 && (shot.bot || flags6c & 0x1000 != 0) {
+            // The bots keep the bespoke trail slot (their shots are the game's drone path, not the
+            // player pipeline); a remote HUMAN's trail now comes from its cosmetic bullet through
+            // the SP trail pass (`update_player_bullets` / `Bullet_DoTrails` 0x12d890's +0x6C gates).
+            if shot.bot && flags6c & 0x1010 != 0 {
                 let speed = rec_f32(&rec, 0x20).max(0.01);
                 let d = [shot.end[0] - shot.from[0], shot.end[1] - shot.from[1], shot.end[2] - shot.from[2]];
                 let left = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
@@ -293,13 +325,16 @@ impl Sim {
             }
         }
         match shot.hit {
-            MpShotHit::World { normal, material } if !own => {
-                // `Bullet_CollisionHandler` 0x12ce80 → `Effect_Create` / `Effect_Bullet`: the
-                // impact sound `EffectInfo+0x14` only with the effects bit (+0x70 & 2) and never
-                // for the laser kind (+0x6C & 0x100) [M :186-192, Effect_Bullet 0x1ce8a8:86-90];
-                // then the decal / gas / debris / emitter stack of the surface (`Effects::
-                // bullet_impact`, the player's own world-hit path). The ricochet re-aim is not
-                // followed (no remote bullet object) [S].
+            MpShotHit::World { normal, material } if shot.bot => {
+                // A bot's round: `Bullet_CollisionHandler` 0x12ce80 → `Effect_Create` /
+                // `Effect_Bullet` at the flush — the impact sound `EffectInfo+0x14` only with the
+                // effects bit (+0x70 & 2) and never for the laser kind (+0x6C & 0x100) [M
+                // :186-192, Effect_Bullet 0x1ce8a8:86-90]; then the decal / gas / debris / emitter
+                // stack of the surface (`Effects::bullet_impact`, the player's own world-hit
+                // path). A remote HUMAN's world impact now comes from its cosmetic bullet through
+                // the SP collision instead (mp-shot-effects) — one tick after the shot, like the
+                // shooter's own [S]. The ricochet re-aim is not followed (no remote bullet object)
+                // [S].
                 let laser = flags6c & 0x100 != 0;
                 if !laser && flags70 & 2 != 0 {
                     let id = self.surfaces.as_ref().and_then(|s| nf_formats::sfx::SurfaceSounds::get(&s.impact, material));
