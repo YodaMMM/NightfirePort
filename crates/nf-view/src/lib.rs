@@ -1378,7 +1378,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                             // the hill its box.
                             let bounds = level.by_hash.get(&p.hashcode).map(|&(mi, oi)| {
                                 let o = &level.maps[mi].objects[oi];
-                                nf_game::mp::MpObjBounds { centre: o.centre, radius: o.radius, min: o.min, max: o.max }
+                                nf_game::mp::MpObjBounds { centre: o.centre, radius: o.radius, min: o.min, max: o.max, sphere_off: [0.0; 3] }
                             });
                             m.register_mp_object_bounds(p.translation, p.rotation, ty, cfg, p.hashcode, bounds);
                         }
@@ -1393,6 +1393,13 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // `create_mode_objects` themselves; the live host must too, or no scenario object ever
             // exists (`update_objects` runs on an empty `objects_rt`).
             m.create_mode_objects(&mut sim.drones.rng);
+            // mp-goldeneye-strike: the strike's flight length is the SP script 0x0600003e's own
+            // length — the arena's type-7 entry (`SP_Create` 0x1dc7e0's script, `SP_Update`
+            // 0x1dbda8 plays it to its end → the game's landed test `SP_GetState` 0x1dc900 == 2
+            // [M 0x187568:96]; 299 ticks on 07000023 [D]). 0 = the arena has no strike script:
+            // the ScriptPlayer never plays and the strike never lands [M Script_Load 0x1d8248's
+            // failed-lookup arm].
+            m.objects_rt.ge_flight_ticks = level.nis.get(&0x0600_003e).map_or(0, |n| n.length);
             // Every human's pick: `MP_Start` calls `MP_GetSpawnPoint(team, NULL)` BEFORE
             // `Player_Init` creates the obj [M 0x183a50:120-123] — no slots exist yet, so every used
             // point is a 9999-distance candidate (policy-dependent pick, empty slots). net-match-host:

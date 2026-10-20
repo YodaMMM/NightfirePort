@@ -28,10 +28,10 @@ pub const PLAYER_SPHERE_RADIUS: f32 = 1.0576;
 /// The player's world-sphere centre height relative to `Bond::pos` (`M_CONTROL+0x80` y = −0.1267
 /// [L ee_start_05]; the small horizontal offset is yaw-dependent and the match keeps no yaw — [S]).
 pub const PLAYER_SPHERE_DY: f32 = -0.1267;
-/// The GoldenEye strike's flight time — the frames from the launch (`SP_Create(.., 0x600003e, ..)`
-/// [M 0x187568:378]) until the strike SP reports state 2 [M :96]. The SP's own timeline is not
-/// ported; 3 s is the port's stand-in [S].
-pub const GE_STRIKE_FRAMES: u16 = (FRAME_RATE_INT * 3) as u16;
+/// The GoldenEye strike's flight length on the arenas whose script carries it — 07000023's
+/// `0600003e` entry is 299 ticks [D the archive entry's length field; the live load reads the
+/// arena's own copy through `level.nis`, so this constant is only the headless rigs' value].
+pub const GE_STRIKE_FRAMES: u16 = 299;
 
 /// mp-scenarios-online: an MP object's model bounds — the placement's celglist record (`obj+0xD8`):
 /// +0x10 the local sphere centre, +0x1C its radius (`Control_BuildWorldSph` 0x133070 → obj+0x80 /
@@ -45,6 +45,12 @@ pub struct MpObjBounds {
     pub radius: f32,
     pub min: [f32; 3],
     pub max: [f32; 3],
+    /// mp-hitby-contacts: the port's derived field — the local sphere centre through the
+    /// placement's rotation (`cel+0x10 · M(obj+0x90)`, the translation row excluded):
+    /// `Control_BuildWorldSph` 0x133070:25-36 through `RotMatrix` 0x1e2368 [M]. Computed once in
+    /// `register_mp_object_bounds`; `[0,0,0]` for an unrotated placement or a bare registration.
+    /// The contact sphere's world centre is `pos + sphere_off` [M 0x133070].
+    pub sphere_off: [f32; 3],
 }
 
 /// One MP object's live state — the port's stand-in for `obj_tag+0xF4/+0xF6` and the
@@ -110,8 +116,20 @@ pub struct MpObjectsRt {
     pub bases_bounds: [Option<MpObjBounds>; 2],
     pub esp_bases_bounds: [Option<MpObjBounds>; 2],
     /// mp-scenarios-online: the frames the GoldenEye strike has been in flight (state 3) — the
-    /// strike completes at [`GE_STRIKE_FRAMES`] [S stand-in for the SP's state 2 [M 0x187568:96]].
+    /// strike completes at [`MpObjectsRt::ge_flight_ticks`] (the SP's state 2 [M 0x187568:96]).
     pub ge_strike_timer: u16,
+    /// mp-goldeneye-strike: the strike's flight length in ticks — the SP script 0x0600003e's own
+    /// length (299 on 07000023 [D the archive entry]; `SP_Update` 0x1dbda8 sends the state to 5
+    /// when `Script_IsPlaying` 0x1db630 reads the play byte done, and `SP_GetState` 0x1dc900
+    /// reports 2 — the game's landed test). The live load fills it from the arena's `level.nis`;
+    /// 0 = the arena carries no strike script: the ScriptPlayer never plays and the strike never
+    /// lands (the game's own failed-lookup soft-lock [M Script_Load 0x1d8248]).
+    pub ge_flight_ticks: u16,
+    /// mp-goldeneye-strike: the tracked beam position — Some(the item's pos) at the launch
+    /// (`SP_Create`'s pos [M 0x187568:383-384]), Some((target.x, target.y − 1.0, target.z)) on
+    /// every in-flight tick (`MP_GoldenEyeUpdate`'s `SP_SetPos` [M :87-95]), None at the impact
+    /// (the strike global clears [M :121-122]). Hashed with [`MpObjectsRt::ge_target`].
+    pub ge_strike_pos: Option<[f32; 3]>,
 }
 
 impl MpObjectsRt {
@@ -144,6 +162,20 @@ pub enum Winner {
 fn sq_dist(a: [f32; 3], b: [f32; 3]) -> f32 {
     let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+}
+
+/// mp-goldeneye-strike: the strike's draw state (`MpMatch::ge_strike_view`) — the phase IS the
+/// Option: None = no strike in flight, Some = the script 0x0600003e is playing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GeStrikeView {
+    /// The target slot (`MP_GetTarget`'s random opposing pick [M 0x187568:362-367]).
+    pub target: usize,
+    /// The tracked beam position — the target's `(x, y − 1.0, z)` from the first update tick,
+    /// the item obj's `+0x30` on the launch tick itself [M 0x187568:87-95, :383-384].
+    pub pos: [f32; 3],
+    /// The ticks left of the flight (the script's length minus the in-flight count [D the
+    /// length field; `SP_GetState` 0x1dc900 reports the impact at 0]).
+    pub ticks_left: u16,
 }
 
 impl MpMatch {
@@ -441,6 +473,7 @@ impl MpMatch {
         s.status = 0xfffe;
         s.status_bits = 0;
         s.dead = false;
+        s.spawn_tick = self.tick; // [M 0x185368:90 — obj+0xEC = GameState+0x52]
         self.settings.players[slot].armor_bonus as f32 + 100.0
     }
 
@@ -651,6 +684,9 @@ impl MpMatch {
         if self.settings.master == 0 || !self.settings.started {
             return;
         }
+        // mp-hitby-contacts: the frame counter the spawn window reads [M 0x1830e0:36-39] — the
+        // port's `GameState+0x52` stand-in, one advance per object walk (the fixed 60 Hz).
+        self.tick = self.tick.wrapping_add(1);
         self.uplink_update(dt);
         self.koth_update(dt, on_hill);
         self.site_update();
@@ -679,11 +715,14 @@ impl MpMatch {
 
     /// `MP_HitBy(obj, team, exclude, ..)` 0x1830e0 — the first live player in contact with the
     /// object whose team word matches (`team == 2` = any) [M :32-35], skipping the dead [M
-    /// :41-75 — the port's `dead` marker]. The game walks the object's HITDATA collision list
-    /// (`obj+0xD0`, filled by `Collide_Update`); the port's contact is the two world spheres
-    /// overlapping — the object's (`celglist+0x10/+0x1C` [M 0x133070]) and the body's
-    /// ([`PLAYER_SPHERE_RADIUS`]) — tested in slot order [S]. The game's 4-frame spawn window
-    /// [M :36-39] is not modeled [S].
+    /// :41-75 — the port's `dead` marker] and any body within the 4-frame spawn window [M
+    /// :36-39 — `|GameState+0x52 − obj+0xEC| < 4`; the port's counter is [`MpMatch::tick`], the
+    /// stamps `MpSlot::spawn_tick`]. The game's contact is the frame's HITDATA list (`obj+0xD0`,
+    /// rebuilt by `Collide_Update` 0x1ea398); the port's contact is the pick's sphere law — the
+    /// body's world sphere against the object's (`pos + sphere_off`, the placement rotation
+    /// applied [M `Control_BuildWorldSph` 0x133070; `Collide_PickObj` 0x1eae80:221-228, STRICT
+    /// `<`]) — tested in slot order [S the frame's sort cannot order all-overlapping contacts:
+    /// every body sphere's refined distance is 0, 0x1ebaa8:269-271].
     pub fn hit_by(&self, centre: [f32; 3], radius: f32, team: u32, exclude: Option<usize>) -> Option<usize> {
         let reach = radius + PLAYER_SPHERE_RADIUS;
         for slot in 0..self.game.slots.len() {
@@ -694,6 +733,11 @@ impl MpMatch {
             if team != 2 && self.settings.players[slot].team != team {
                 continue;
             }
+            // the spawn window [M 0x1830e0:36-39 — the abs diff against the body's +0xEC stamp]
+            let diff = (self.tick as i32).wrapping_sub(s.spawn_tick as i32);
+            if diff.abs() < 4 {
+                continue;
+            }
             let c = self.slot_centre(slot).unwrap();
             if sq_dist(c, centre) < reach * reach {
                 return Some(slot);
@@ -702,12 +746,13 @@ impl MpMatch {
         None
     }
 
-    /// `MP_HitBy` against one scenario object (its world sphere = position + the model's local
-    /// sphere centre; the arena objects are placed unrotated — the rotation is not applied [S]).
-    /// `None` when the object has no bounds.
+    /// `MP_HitBy` against one scenario object — the contact sphere's world centre is
+    /// `pos + sphere_off` (the local centre through the placement rotation [M
+    /// `Control_BuildWorldSph` 0x133070:25-36]), radius `bounds.radius` (the placement scale is
+    /// 1.0 [M 0x134630:19, 0x133070:37-38]). `None` when the object has no bounds.
     fn obj_hit_by(&self, o: &MpObjState, team: u32) -> Option<usize> {
         let b = o.bounds?;
-        let c = [o.pos[0] + b.centre[0], o.pos[1] + b.centre[1], o.pos[2] + b.centre[2]];
+        let c = [o.pos[0] + b.sphere_off[0], o.pos[1] + b.sphere_off[1], o.pos[2] + b.sphere_off[2]];
         self.hit_by(c, b.radius, team, None)
     }
 
@@ -1032,7 +1077,17 @@ impl MpMatch {
         let in_flight = self.objects_rt.ge.iter().flatten().any(|it| it.state == 3);
         if in_flight {
             self.objects_rt.ge_strike_timer = self.objects_rt.ge_strike_timer.saturating_add(1);
-            if self.objects_rt.ge_strike_timer >= GE_STRIKE_FRAMES {
+            // The strike SP's beam tracks the target: the target obj's position with y − 1.0, the
+            // redraw flag set — the game's per-tick `SP_SetPos` before its landed check [M
+            // 0x187568:87-95]. Tick 0's launch position is the item obj's `+0x30` (`SP_Create`'s
+            // pos [M :383-384]); from the first update tick the tracker owns the position.
+            self.objects_rt.ge_strike_pos = self.objects_rt.ge_target.and_then(|t| self.game.slots[t].pos).map(|p| [p[0], p[1] - 1.0, p[2]]);
+            // The impact: the SP's script 0x0600003e ends — `SP_Update` 0x1dbda8's state-5 arm
+            // (Script_IsPlaying 0x1db630 reads the play byte done), `SP_GetState` 0x1dc900 then
+            // reports 2 [M 0x187568:96] — after the script's own length in ticks [D 07000023.bin
+            // 0600003e: 299]. ge_flight_ticks 0 = the arena has no script: the ScriptPlayer never
+            // plays and the strike never lands [M Script_Load 0x1d8248's failed-lookup arm].
+            if self.objects_rt.ge_flight_ticks > 0 && self.objects_rt.ge_strike_timer >= self.objects_rt.ge_flight_ticks {
                 self.ge_strike_complete(rng);
             }
             return; // state 3 does nothing else [M :258-261]
@@ -1107,8 +1162,29 @@ impl MpMatch {
                     self.objects_rt.ge[i].as_mut().unwrap().state = 3; // [M :379-384]
                 }
                 self.objects_rt.ge_strike_timer = 0;
+                // The strike ScriptPlayer is created at the carried item obj's `+0x30` position
+                // (`SP_Create(.., 0x600003e, ..)` [M :383-384]) — the tracked position until the
+                // first update tick re-sets it onto the target.
+                self.objects_rt.ge_strike_pos = Some(self.objects_rt.ge[0].as_ref().map_or([0.0; 3], |it| it.pos));
             }
         }
+    }
+
+    /// mp-goldeneye-strike: the strike's draw state (docs/systems/mp-goldeneye-strike.md) —
+    /// None when no strike is in flight. The blast renders at the last tracked position on the
+    /// tick this view vanishes; the beam/light visuals ride the script's own streams (already in
+    /// `level.nis` for the renderer).
+    pub fn ge_strike_view(&self) -> Option<GeStrikeView> {
+        if !self.objects_rt.ge.iter().flatten().any(|it| it.state == 3) {
+            return None;
+        }
+        let target = self.objects_rt.ge_target?;
+        let pos = self.objects_rt.ge_strike_pos?;
+        Some(GeStrikeView {
+            target,
+            pos,
+            ticks_left: self.objects_rt.ge_flight_ticks.saturating_sub(self.objects_rt.ge_strike_timer),
+        })
     }
 
     /// `MP_GoldenEyeUpdate` 0x187568:86-179 — the strike completes: the target dies through the
@@ -1122,6 +1198,7 @@ impl MpMatch {
             return;
         }
         self.objects_rt.ge_strike_timer = 0;
+        self.objects_rt.ge_strike_pos = None; // the strike global clears [M 0x187568:121-122]
         if let Some(t) = self.objects_rt.ge_target.take() {
             if !self.game.slots[t].dead {
                 self.player_killed(t, None, false, false, rng); // [M 0x187568:98-108]
@@ -1190,7 +1267,7 @@ impl MpMatch {
                 let Some(Some(base)) = self.objects_rt.esp_bases.get(team).copied() else { return };
                 let reached = match self.objects_rt.esp_bases_bounds.get(team).copied().flatten() {
                     Some(b) => {
-                        let centre = [base[0] + b.centre[0], base[1] + b.centre[1], base[2] + b.centre[2]];
+                        let centre = [base[0] + b.sphere_off[0], base[1] + b.sphere_off[1], base[2] + b.sphere_off[2]];
                         let reach = b.radius + PLAYER_SPHERE_RADIUS;
                         self.slot_centre(c).is_some_and(|sc| sq_dist(sc, centre) < reach * reach)
                     }

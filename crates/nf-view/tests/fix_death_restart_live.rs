@@ -208,6 +208,9 @@ fn restart_of_a_cold_loaded_level_restores_the_post_load_entry_checkpoint() {
         z
     };
     assert_eq!(save.health, 100.0, "a cold load's buffer holds Player_Init's health 100 [M 0x1910f8:138, 0x1a7ef8:325]");
+    // release the first load before the second — two live arena scenes overflow this sandbox
+    // (memory hygiene only; the asserts are unchanged)
+    drop(scene);
     // Kill → the sequence → the auto-restart, through the real input path.
     let mut scene = load(&iso, "07000005.bin");
     let (lv, cold) = {

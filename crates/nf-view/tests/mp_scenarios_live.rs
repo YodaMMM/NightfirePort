@@ -301,6 +301,9 @@ fn a_scenario_object_desync_is_detected() {
     let r = row(None, 2);
     let [(sa, la), (sb, lb)] = p.sims();
     assert_ne!(machine(sa, la, &r), machine(sb, lb, &r), "a flag-counter difference shows in the hash");
+    // release the pair before the next load — four live arena scenes overflow this sandbox
+    // (memory hygiene only; the asserts are unchanged)
+    drop(p);
     // and a team score
     let Some(mut q) = start(settings(scenario::TEAM_DEATHMATCH, 5, -1, [0, 1])) else { return };
     q.b.sim.as_mut().unwrap().mp.as_mut().unwrap().game.team_scores[1] = 1.0;
@@ -375,7 +378,9 @@ fn uplink_online() {
     let away1 = far_from(&p, &elsewhere, 1);
     place(&mut p, 1, away1, 0.0);
     place(&mut p, 0, term, 0.0);
-    ticks(&mut p, 2, &row(None, 2));
+    // mp-hitby-contacts: the take lands past the spawn window [M 0x1830e0:36-39 — a body within
+    // 4 frames of its spawn stamp is not hit; both bodies stamped at the start]
+    ticks(&mut p, 6, &row(None, 2));
     assert_eq!((p.m().objects_rt.uplinks[0].state, p.m().objects_rt.uplinks[0].controller), (0, 0), "team 0 claims it");
     place(&mut p, 1, term, 0.0);
     ticks(&mut p, 120, &row(None, 2));
@@ -493,7 +498,8 @@ fn espionage_online() {
     let away = far_from(&p, &[bp, base0], 1);
     place(&mut p, 1, away, 0.0);
     place(&mut p, 0, bp, 0.0);
-    ticks(&mut p, 2, &row(None, 2));
+    // mp-hitby-contacts: the take lands past the spawn window [M 0x1830e0:36-39]
+    ticks(&mut p, 6, &row(None, 2));
     assert_eq!(p.m().objects_rt.blueprint.as_ref().unwrap().carrier, Some(0), "the contact takes the blueprint");
     place(&mut p, 0, base0, 0.0);
     ticks(&mut p, 2, &row(None, 2));
@@ -505,38 +511,66 @@ fn espionage_online() {
 
 /// GoldenEye Strike (0x20000200): slot 0 (team 0) takes both items by contact [M
 /// 0x187568:389-400]; one team holding both launches the strike — each carried item +1 to its
-/// carrier, a random live enemy targeted [M :356-384]; the strike lands (the port's 3 s flight
-/// [S]) and kills the target through the death path, the opposite team +1, both items re-pick
-/// [M :96-179]; the target's body dies and respawns 5 s later on both machines.
+/// carrier, a random live enemy targeted [M :356-384]; the strike flies the SP script
+/// 0x0600003e's own length (299 ticks on 07000023 [D the archive entry; the live load reads
+/// `level.nis`]) while its beam tracks the target's `(x, y − 1.0, z)` every tick [M :87-95],
+/// then lands (the SP's state 2 [M :96]) and kills the target through the death path, the
+/// opposite team +1, both items re-pick [M :96-179]; the target's body dies and respawns 5 s
+/// later on both machines.
 #[test]
 fn goldeneye_online() {
     let Some(mut p) = start(settings(scenario::GOLDENEYE, 2, -1, [0, 1])) else { eprintln!("skip: NF_ISO not set"); return };
+    // mp-goldeneye-strike: the flight length is the arena's own script (0x0600003e, 299 ticks
+    // [D 07000023.bin's entry]) — the live load reads `level.nis` [M SP_Update 0x1dbda8's play-
+    // to-end → `SP_GetState` 0x1dc900 == 2, 0x187568:96].
+    assert_eq!(p.m().objects_rt.ge_flight_ticks, 299, "the strike script's length [D 07000023.bin 0600003e]");
+    assert_eq!(p.m().ge_strike_view(), None, "no strike before the launch");
     let (i0, i1) = (p.m().objects_rt.ge[0].as_ref().unwrap().pos, p.m().objects_rt.ge[1].as_ref().unwrap().pos);
     let away = far_from(&p, &[i0, i1], 1);
     place(&mut p, 1, away, 0.0);
     place(&mut p, 0, i0, 0.0);
-    ticks(&mut p, 2, &row(None, 2));
+    // mp-hitby-contacts: the takes land past the spawn window [M 0x1830e0:36-39]
+    ticks(&mut p, 6, &row(None, 2));
     place(&mut p, 0, i1, 0.0);
-    ticks(&mut p, 2, &row(None, 2));
+    ticks(&mut p, 6, &row(None, 2));
     let o = &p.m().objects_rt;
     assert!(o.ge.iter().all(|g| g.as_ref().unwrap().state == 3), "both carried by team 0 → the strike flies");
     assert_eq!(o.ge_target, Some(1), "the only enemy is the target");
     assert_eq!(p.m().game.slots[0].score, 2.0, "+1 per carried item");
+    assert!(p.m().ge_strike_view().is_some(), "the strike is in flight (the draw getter)");
     // the carrier steps away from every item spawn (the re-picked items must stay free)
     let spawns: Vec<[f32; 3]> = p.m().objects.goldeneye.iter().flatten().map(|r| [r.matrix[3][0], r.matrix[3][1], r.matrix[3][2]]).collect();
     let park = far_from(&p, &spawns, 0);
     place(&mut p, 0, park, 0.0);
+    // the strike's timer already ran while the carrier parked [M :1053-1055 the state-3 walk] —
+    // the flight the loop sees is GE_STRIKE_FRAMES minus the timer's head start
+    let started = p.m().objects_rt.ge_strike_timer as u32;
     let mut flight = 0u32;
+    let flight_ticks = p.m().objects_rt.ge_flight_ticks as u32;
     while p.m().game.team_scores[0] == 0.0 {
         tick(&mut p, &row(None, 2));
         flight += 1;
-        assert!(flight <= nf_game::mp::rules::GE_STRIKE_FRAMES as u32 + 1, "the strike lands");
+        assert!(flight <= flight_ticks + 1, "the strike lands");
+        // mp-goldeneye-strike: the beam tracks the target — the parked slot 1's position with
+        // y − 1.0, identically on both machines [M 0x187568:87-95]. The impact tick itself
+        // clears the position ([M :121-122]), so the asserts ride the still-flying ticks.
+        for s in p.sims() {
+            let m = s.0.mp.as_ref().unwrap();
+            if !m.objects_rt.ge.iter().flatten().any(|it| it.state == 3) { continue; }
+            let t = m.game.slots[1].pos.expect("the target's body stands");
+            assert_eq!(m.objects_rt.ge_strike_pos, Some([t[0], t[1] - 1.0, t[2]]), "the tracked beam position");
+            let v = m.ge_strike_view().expect("in flight");
+            assert_eq!(v.target, 1, "the view's target");
+            assert_eq!(v.pos, [t[0], t[1] - 1.0, t[2]], "the view's position");
+        }
     }
-    assert!(flight + 2 >= nf_game::mp::rules::GE_STRIKE_FRAMES as u32, "after the flight time ({flight} ticks)");
+    assert!(flight + started + 2 >= flight_ticks, "after the flight time ({flight} ticks, {started} already run)");
     let m = p.m();
     assert_eq!(m.game.team_scores, [1.0, 0.0], "the strike scores the opposite team");
     assert_eq!(m.game.slots[1].deaths, 1, "the target died");
     assert!(m.objects_rt.ge.iter().all(|g| g.as_ref().unwrap().state == 0), "both items free again");
+    assert_eq!(m.ge_strike_view(), None, "the strike's view is gone at the impact [M 0x187568:121-122]");
+    assert_eq!(m.objects_rt.ge_strike_pos, None, "the tracked position cleared");
     assert!(p.a.sim.as_ref().unwrap().mp_dead_ticks[1] > 0 && p.b.sim.as_ref().unwrap().mp_dead_ticks[1] > 0,
         "the target's body dies on both machines");
     ticks(&mut p, 300, &row(None, 2));
@@ -599,4 +633,164 @@ fn koth_team_online() {
     }
     assert_eq!(p.m().game.team_scores, [1.0, 0.0], "team 0 = (int) its king's score");
     run_to_end(&mut p, 20);
+}
+
+// ------------------------------------------------------------------ mp-hitby-contacts
+
+/// A CTF match with one flag placement built through the real registration path (the live host's
+/// 0x26 hook, `register_mp_object_bounds`): facing yaw 90°, the model's local sphere centre
+/// (2.0, 0.25, 0.0) off the yaw axis, radius 0.5 — team 1's flag at `pos`. The rotation swings
+/// the centre to (0, 0.25, −2.0) [M RotMatrix 0x1e2368's rows + `Control_BuildWorldSph`
+/// 0x133070:25-36]; the game's contact law is `Collide_PickObj` 0x1eae80:221-228's STRICT `<`
+/// sphere test against it [M].
+fn rotated_flag_match() -> nf_game::mp::MpMatch {
+    let mut m = nf_game::mp::MpMatch::init(settings(scenario::CAPTURE_THE_FLAG, 5, -1, [0, 1]));
+    m.register_mp_object_bounds(
+        [10.0, 0.0, 10.0],
+        [0.0, std::f32::consts::FRAC_PI_2, 0.0],
+        0,
+        [0, 1, 0, 0, 0, 0, 0], // flag, team 1
+        0x1234,
+        Some(nf_game::mp::MpObjBounds {
+            centre: [2.0, 0.25, 0.0],
+            radius: 0.5,
+            min: [-0.5, 0.0, -0.5],
+            max: [0.5, 1.0, 0.5],
+            sphere_off: [0.0; 3],
+        }),
+    );
+    let mut rng = nf_game::drone::Rng::new(1);
+    m.start(&mut rng); // stamps every slot's spawn_tick [S the Player_Init frame alignment]
+    m.create_mode_objects(&mut rng);
+    m
+}
+
+/// The flag's game-law sphere: the world centre offset and the contact reach against the body
+/// sphere (`PLAYER_SPHERE_RADIUS` [L ee_start_05 — `M_CONTROL+0x8C` 1.0576]).
+fn flag_sphere(m: &nf_game::mp::MpMatch) -> ([f32; 3], [f32; 3], f32) {
+    let f = m.objects_rt.flags[1].as_ref().unwrap();
+    let b = f.bounds.unwrap();
+    let reach = b.radius + nf_game::mp::rules::PLAYER_SPHERE_RADIUS;
+    (f.pos, b.sphere_off, reach)
+}
+
+/// A slot position whose body-sphere centre (`PLAYER_SPHERE_DY` under the slot position
+/// [L ee_start_05]) sits `dist` from `centre` along `dir` (horizontal).
+fn body_at(centre: [f32; 3], dir: [f32; 3], dist: f32) -> [f32; 3] {
+    let dy = -nf_game::mp::rules::PLAYER_SPHERE_DY;
+    [centre[0] + dir[0] * dist, centre[1] + dy, centre[2] + dir[2] * dist]
+}
+
+/// The game's contact law through the real registration path: a body at the rotated flag's
+/// game-law contact point takes the flag; the same reach from the UNROTATED centre — inside the
+/// pre-mp-hitby-contacts stand-in's sphere, outside the game's — never takes. The sister fails if
+/// the rotation regresses to the unrotated stand-in.
+#[test]
+fn a_rotated_flag_base_takes_by_the_game_sphere() {
+    let mut m = rotated_flag_match();
+    let (pos, off, reach) = flag_sphere(&m);
+    // the rotation swings the x-offset to −z [M RotMatrix 0x1e2368; yaw 90° exact lanes]
+    assert!(
+        off[0].abs() < 1e-4 && (off[1] - 0.25).abs() < 1e-4 && (off[2] + 2.0).abs() < 1e-4,
+        "the rotated sphere offset {off:?}"
+    );
+    let mut rng = nf_game::drone::Rng::new(1);
+    let centre = [pos[0] + off[0], pos[1] + off[1], pos[2] + off[2]];
+    m.set_slot(0, body_at(centre, [1.0, 0.0, 0.0], reach * 0.99));
+    for _ in 0..5 {
+        m.update_objects(1.0 / 60.0, &[false; 16], &mut rng);
+    }
+    let f = m.objects_rt.flags[1].as_ref().unwrap();
+    assert_eq!((f.state, f.carrier), (1, Some(0)), "the game-law contact takes the flag");
+
+    // sister: reach·0.95 from the UNROTATED centre (pos + the raw local centre), on the side
+    // AWAY from the rotated centre — inside the old stand-in's sphere, outside the game's.
+    let mut m2 = rotated_flag_match();
+    let (pos2, off2, reach2) = flag_sphere(&m2);
+    let old_centre = [pos2[0] + 2.0, pos2[1] + 0.25, pos2[2]];
+    let away = [2.0 - off2[0], 0.0, -off2[2]];
+    let l = (away[0] * away[0] + away[2] * away[2]).sqrt().max(1e-6);
+    let dir = [away[0] / l, 0.0, away[2] / l];
+    let mut rng2 = nf_game::drone::Rng::new(1);
+    m2.set_slot(0, body_at(old_centre, dir, reach2 * 0.95));
+    for _ in 0..5 {
+        m2.update_objects(1.0 / 60.0, &[false; 16], &mut rng2);
+    }
+    let f2 = m2.objects_rt.flags[1].as_ref().unwrap();
+    assert_eq!((f2.state, f2.carrier), (0, None), "inside the stand-in sphere but outside the game's: no take");
+}
+
+/// The 4-frame spawn window [M MP_HitBy 0x1830e0:36-39 — `|GameState+0x52 − obj+0xEC| < 4`
+/// rejects; the stamps are `control_init_object` 0x134630:15 / `MP_ReSpawn` 0x185368:90 /
+/// `BOT_respawn` 0x124e38:91]. The same game-law contact point: no take on ticks 1..3 (the diff
+/// against the start stamp is still < 4), the take lands on tick 4 — the sister that fails if
+/// the window regresses (too wide, too narrow or gone).
+#[test]
+fn a_body_within_the_spawn_window_is_not_hit() {
+    let mut m = rotated_flag_match();
+    let (pos, off, reach) = flag_sphere(&m);
+    let mut rng = nf_game::drone::Rng::new(1);
+    let centre = [pos[0] + off[0], pos[1] + off[1], pos[2] + off[2]];
+    m.set_slot(0, body_at(centre, [1.0, 0.0, 0.0], reach * 0.99));
+    for t in 1..=3 {
+        m.update_objects(1.0 / 60.0, &[false; 16], &mut rng);
+        assert_eq!(m.tick, t);
+        assert!(m.objects_rt.flags[1].as_ref().unwrap().carrier.is_none(), "tick {t}: inside the spawn window");
+    }
+    m.update_objects(1.0 / 60.0, &[false; 16], &mut rng);
+    assert_eq!(m.tick, 4, "the window's edge");
+    assert_eq!(m.objects_rt.flags[1].as_ref().unwrap().carrier, Some(0), "tick 4: the first hittable frame");
+}
+
+/// The real arena's rotated flag base — 07000025's flags face arbitrary yaws with off-axis local
+/// centres [D the placements: flag local centre (0.351, 0.220, 0.018), yaw 0.9603 → world offset
+/// (0.216, 0.220, −0.278)]: the game-law contact point takes the flag; a body inside the
+/// unrotated stand-in sphere but outside the game's does not — the sister. Law:
+/// `Collide_PickObj` 0x1eae80:221-228 against `Control_BuildWorldSph` 0x133070's centre [M].
+#[test]
+fn the_real_rotated_flag_base_takes_by_the_game_sphere() {
+    let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
+    let mut s = settings(scenario::CAPTURE_THE_FLAG, 5, -1, [0, 1]);
+    s.level_code = 0x0700_0025;
+    let mut scene = nf_view::load_mp_carry(&path, &format!("{:08x}.bin", s.level_code), false, None, s).expect("loads");
+    let m = scene.sim.as_mut().unwrap().mp.as_mut().unwrap();
+    let (fpos, off, reach) = {
+        let f = m.objects_rt.flags[1].as_ref().unwrap();
+        let b = f.bounds.expect("the arena's flag carries bounds");
+        (f.pos, b.sphere_off, b.radius + nf_game::mp::rules::PLAYER_SPHERE_RADIUS)
+    };
+    // the rotation must move the centre for this test to mean anything [D the 07000025 placement]
+    let old = {
+        let f = m.objects_rt.flags[1].as_ref().unwrap();
+        f.bounds.unwrap().centre
+    };
+    assert!((off[0] - old[0]).abs() > 0.05 || (off[2] - old[2]).abs() > 0.05,
+        "the flag's placement is rotated: offset {off:?} vs local {old:?}");
+    let mut rng = nf_game::drone::Rng::new(1);
+    let centre = [fpos[0] + off[0], fpos[1] + off[1], fpos[2] + off[2]];
+    m.set_slot(0, body_at(centre, [1.0, 0.0, 0.0], reach * 0.99));
+    for _ in 0..5 {
+        m.update_objects(1.0 / 60.0, &[false; 16], &mut rng);
+    }
+    assert_eq!(m.objects_rt.flags[1].as_ref().unwrap().carrier, Some(0), "the game-law contact takes the real flag");
+
+    // sister: reach·0.95 from the UNROTATED centre, pushed away from the rotated one — no take.
+    let mut s2 = settings(scenario::CAPTURE_THE_FLAG, 5, -1, [0, 1]);
+    s2.level_code = 0x0700_0025;
+    let mut scene2 = nf_view::load_mp_carry(&path, &format!("{:08x}.bin", s2.level_code), false, None, s2).expect("loads");
+    let m2 = scene2.sim.as_mut().unwrap().mp.as_mut().unwrap();
+    let (fpos2, old2) = {
+        let f = m2.objects_rt.flags[1].as_ref().unwrap();
+        (f.pos, f.bounds.unwrap().centre)
+    };
+    let away = [old2[0] - off[0], 0.0, old2[2] - off[2]];
+    let l = (away[0] * away[0] + away[2] * away[2]).max(1e-8).sqrt();
+    let dir = [away[0] / l, 0.0, away[2] / l];
+    let mut rng2 = nf_game::drone::Rng::new(1);
+    m2.set_slot(0, body_at([fpos2[0] + old2[0], fpos2[1] + old2[1], fpos2[2] + old2[2]], dir, reach * 0.95));
+    for _ in 0..5 {
+        m2.update_objects(1.0 / 60.0, &[false; 16], &mut rng2);
+    }
+    let f2 = m2.objects_rt.flags[1].as_ref().unwrap();
+    assert_eq!((f2.state, f2.carrier), (0, None), "inside the stand-in sphere, outside the game's: no take");
 }
