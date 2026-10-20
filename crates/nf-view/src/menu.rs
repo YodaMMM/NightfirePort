@@ -8692,7 +8692,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         // main agent's draw pass.
         Page::CnControls => {
             page_header(&mut h, hfont, &bind(0x1f3));
-            opt_list(&mut h, fe, font, lang);
+            cn_controls_rows(&mut h, fe, font, lang);
             hint_bar(&mut h, font, &hint(0x497, "~A Confirm  ~H Change  ~B Back"), 50.0, 419.0, cream);
             logo_stamp(&mut h);
         }
@@ -9234,6 +9234,42 @@ fn desc_block(h: &mut Hud, font: &nf_formats::hud::Font, text: &str, c: [f32; 4]
 /// tall), the value controls at x 348-351 (219 wide; the sliders' bars (365,86/114,187×16)), the description plate
 /// (50,355,540×40); the selected row 0x7d6d59ff, the others 0x73330fc0 (the controls' msg 0x1b / 0x1c)]. PCSX2
 /// m32/m38/m40 (2026-10-15): the ◀ ▶ arrows at x 357 / 555 around the selected row's value.
+/// The Controller Setup page's two controls side by side, at the page data's own rects [L the
+/// 0x40000022 dump, docs/systems/cn-controls-page.md]: the style list 0x10000025 (60,109,316,24)
+/// showing the selected style's name, and the Y-Axis row — the label 1170 (0x492) at (376,113) and
+/// the value control 0x100000c9 at (461,109,99,25) ("Normal"/"Inverted"). The generic `opt_list`
+/// stacks rows in one label/value column pair, which drew these two on top of each other.
+fn cn_controls_rows(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Option<&Lang>) {
+    let bind = |id: u32| -> String { lang.and_then(|l| l.bind(id)).unwrap_or("").to_string() };
+    let on = gs(CREAM, 0xff);
+    let off = gs(0x73330f, 0xc0);
+    let yellow = gs(0xfec43e, 0xff);
+    let sc = 1.3;
+    let arrow = |h: &mut Hud, cx: f32, cy: f32, left: bool| {
+        let (a, b, d) = if left { ((cx + 7.0, cy - 7.0), (cx + 7.0, cy + 7.0), (cx - 7.0, cy)) } else { ((cx - 7.0, cy - 7.0), (cx - 7.0, cy + 7.0), (cx + 7.0, cy)) };
+        let q = |p: (f32, f32), h: &Hud| HudVertex { p: h.ndc(Anchor::Centre, mx(p.0), my(p.1)), uv: [0.0, 0.0], c: yellow };
+        let v = [q(a, h), q(b, h), q(d, h), q(a, h), q(d, h), q(d, h)];
+        h.ndc_solid(-3, v, yellow);
+    };
+    let rows = fe.opt_rows();
+    let value_txt = |i: usize| -> String {
+        let Some(r) = rows.get(i) else { return String::new() };
+        let v = fe.opt_value(r.ctrl);
+        r.items.iter().find(|it| it.2 == v).or(r.items.first()).map_or(String::new(), |it| if it.0 != 0 { bind(it.0) } else { it.1.to_string() })
+    };
+    // The style list: the name centred in its 316×24 box.
+    let (sel0, sel1) = (fe.cursor == 0, fe.cursor == 1);
+    let mid0 = 109.0 + 12.0;
+    centred(h, font, -2, &value_txt(0), mx(60.0 + 158.0), my(mid0 + 6.0), if sel0 { on } else { off }, true, sc);
+    if sel0 { arrow(h, 70.0, mid0, true); arrow(h, 356.0, mid0, false); }
+    // The Y-Axis label and its value control.
+    let mid1 = 109.0 + 12.5;
+    let c1 = if sel1 { on } else { off };
+    if let Some(r) = rows.get(1) { left_text(h, font, &bind(r.label), mx(376.0), my(mid1 + 6.0), c1, true, sc); }
+    centred(h, font, -2, &value_txt(1), mx(461.0 + 49.5), my(mid1 + 6.0), c1, true, sc);
+    if sel1 { arrow(h, 455.0, mid1, true); arrow(h, 566.0, mid1, false); }
+}
+
 fn opt_list(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Option<&Lang>) {
     let bind = |id: u32| -> String { lang.and_then(|l| l.bind(id)).unwrap_or("").to_string() };
     let rows = fe.opt_rows();
