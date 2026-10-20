@@ -6791,6 +6791,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if let Some(surf) = &dc.surfaces {
                 let mut decal_meshes: Vec<u32> = surf.effects.iter().map(|r| r.decal).filter(|m| *m != 0).collect();
                 let mut debris_meshes: Vec<u32> = surf.effects.iter().map(|r| r.debris_mesh).filter(|m| *m != 0).collect();
+                // break-debris draw: a killed breakable's pieces are the same `Debris_Create` class,
+                // models from `EffectInfo[mat & 0x3f]+0x74` (nf_game::shatter::EFFECT_INFO) — they share
+                // the debris slots (slot k ≥ effects.debris.len() poses breaks.shatter.debris).
+                debris_meshes.extend(nf_game::shatter::EFFECT_INFO.iter().map(|e| e.model).filter(|m| *m != 0));
                 let mut casing_meshes: Vec<u32> = surf.ammo.casing_mesh.iter().copied().filter(|m| *m != 0).collect();
                 // The gas puffs (`Gas_Init` 0x1aacc8): one draw slot per pool index for each mesh a puff can carry —
                 // SMOKE_QUAD (muzzle smoke, searchlight smoke, trails) and every `EffectInfo` gas mesh (the impact
@@ -8145,7 +8149,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             for r in 0..3 { for k in 0..3 { m[r][k] *= d.scale; } }
                             m
                         }
-                        _ => far,
+                        Some(_) => far,
+                        // A killed breakable's pieces (`Break_Kill` 0x12b970 → `Debris_Create`): the
+                        // same class and draw — euler `rot` (the accumulated spin [M 0x1aac00:49-52]) at
+                        // obj+0x30, scaled by obj+0xe8 (`Control_GetObjMatrix` 0x134210:25-33).
+                        None => match s.drones.breaks.shatter.debris.get(slot - s.drones.effects.debris.len()) {
+                            Some(d) if d.model == mesh => {
+                                let mut m = nf_formats::placement::object_matrix(d.rot, d.pos);
+                                for r in 0..3 { for k in 0..3 { m[r][k] *= d.e8; } }
+                                m
+                            }
+                            _ => far,
+                        },
                     },
                     // fix-grenade-throw: the smoke grenade's cloud (`Occlude_Create` 0x17ea80) — a
                     // static object at `obj+0x30`, no rotation (`Occlude_Update` 0x17eba0 only counts
