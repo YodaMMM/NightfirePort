@@ -287,16 +287,28 @@ fn with_the_portalled_doors_open_the_07000001_walk_returns_the_old_set() {
     for (i, (_, di)) in linked.iter().enumerate() {
         let (eye_i, _, cell_i) = eye_at_portal(&scene.cel_graph, &edges[i]).expect("the door-side cel resolves");
         assert!(cell_i == edges[i].cel_a || cell_i == edges[i].cel_b, "the eye for door {di} lands in its portal's endpoint cel");
-        let dpos = scene.sim.as_ref().unwrap().drones.doors.list[*di as usize].pos;
-        let l = [dpos[0] - eye_i[0], 0.0, dpos[2] - eye_i[2]];
+        // Stand 1.2 out on the door's through-axis, square-on — inside the use sphere's mesh
+        // reach [M 0x1a5170:100-133; doors_remainder_live T1's pin]. The portal-edge eye is
+        // outside it for the mesh pick (the sphere misses the leaf by ~0.05 there) — that stand
+        // was tuned for the old placement-distance stand-in.
+        let d = &scene.sim.as_ref().unwrap().drones.doors.list[*di as usize];
+        let n = |v: [f32; 3]| { let l = (v[0] * v[0] + v[2] * v[2]).sqrt().max(1e-6); [v[0] / l, 0.0, v[2] / l] };
+        let r0 = n([d.matrix[0][0], 0.0, d.matrix[0][2]]);
+        let r2 = n([d.matrix[2][0], 0.0, d.matrix[2][2]]);
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[2] * b[2];
+        let off = [d.sph.0[0] - d.pos[0], 0.0, d.sph.0[2] - d.pos[2]];
+        let through = if dot(off, r0).abs() >= dot(off, r2).abs() { r2 } else { r0 };
+        let side = if (eye_i[0] - d.sph.0[0]) * through[0] + (eye_i[2] - d.sph.0[2]) * through[2] < 0.0 { -1.0 } else { 1.0 };
+        let stand = [d.sph.0[0] + through[0] * 1.2 * side, d.sph.0[1], d.sph.0[2] + through[2] * 1.2 * side];
+        let l = [d.sph.0[0] - stand[0], 0.0, d.sph.0[2] - stand[2]];
         let len = (l[0] * l[0] + l[2] * l[2]).sqrt().max(1e-4);
         let look = [l[0] / len, 0.0, l[2] / len];
-        let head = [eye_i[0], dpos[1] + 1.1, eye_i[2]];
+        let head = [stand[0], d.sph.0[1] + 1.1, stand[2]];
         uses.push((head, look, *di));
     }
     for (head, look, di) in &uses {
         let s = scene.sim.as_mut().unwrap();
-        let (snd, hits) = s.drones.doors.player_use(*head, *look, &mut s.drones.channels, s.drones.frame);
+        let (snd, hits) = s.drones.doors.player_use(*head, *look, &mut s.drones.channels, s.drones.frame, &s.world);
         assert!(hits >= 1, "door {di}: the use sphere meets the door");
         eprintln!("[01] door {di} use hits {hits} sounds {:?}", snd.iter().map(|s| s.0).collect::<Vec<_>>());
     }

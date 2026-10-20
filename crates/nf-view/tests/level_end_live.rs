@@ -127,8 +127,18 @@ fn door_e_opens_then_e_closes_on_07000001() {
         .expect("a slide door exists on 07000001");
     let door_pos = scene.sim.as_ref().unwrap().drones.doors.list[door_idx].pos;
     eprintln!("[door] slide door #{} at {:?}", door_idx, door_pos);
+    // The player's stand: 1.6 out on the door's through axis (the leaf spans world z, the
+    // approach normal is world x — the 820 probe), facing the door. The old stand (0.5 along
+    // the span from the placement) puts Bond INSIDE the leaf's sweep: the game's anti-crush
+    // (`Door_ReactToHit` 0x135980: a closing kind-2 door that meets an actor reopens) reverses
+    // the E-close at +1 tick, and the E-close itself reaches only the door's LIVE world sphere
+    // [M Collide_PickObj 0x1eae80; the moved pass rebuilds obj+0x80 0x1336f8:209] — the open
+    // leaf's sphere slides 1.6 along the span, out of the in-doorway point's reach. Both E
+    // presses fire from the same out-of-sweep stand, as a player does.
+    let stand = [door_pos[0] + 1.6, door_pos[1], door_pos[2]];
+    let yaw = std::f32::consts::FRAC_PI_2 * -1.0; // face the door (the door is at x − 1.6)
     // Bond at the door, presses E to open.
-    step_at(&mut scene, [door_pos[0], door_pos[1], door_pos[2] - 0.5], 0.0, true);
+    step_at(&mut scene, stand, yaw, true);
     // Tick a few frames for the door to start opening.
     tick(&mut scene, 5);
     let state_after_open = scene.sim.as_ref().unwrap().drones.doors.list[door_idx].state;
@@ -140,7 +150,7 @@ fn door_e_opens_then_e_closes_on_07000001() {
     eprintln!("[door] after 120 ticks: state = 0x{:x} (expect OPEN=4)", state_open);
     assert_eq!(state_open, 4, "the door should be fully open (state 4)");
     // Press E again to close.
-    step_at(&mut scene, [door_pos[0], door_pos[1], door_pos[2] - 0.5], 0.0, true);
+    step_at(&mut scene, stand, yaw, true);
     tick(&mut scene, 5);
     let state_after_close = scene.sim.as_ref().unwrap().drones.doors.list[door_idx].state;
     eprintln!("[door] after second E: state = 0x{:x} (expect CLOSING=0x10)", state_after_close);
@@ -149,7 +159,7 @@ fn door_e_opens_then_e_closes_on_07000001() {
     // Sister: a door left open without E stays open (for at least a few ticks).
     let mut scene2 = load(&iso, "07000001.bin");
     let door_pos2 = scene2.sim.as_ref().unwrap().drones.doors.list[door_idx].pos;
-    step_at(&mut scene2, [door_pos2[0], door_pos2[1], door_pos2[2] - 0.5], 0.0, true);
+    step_at(&mut scene2, [door_pos2[0] + 1.6, door_pos2[1], door_pos2[2]], yaw, true);
     tick(&mut scene2, 120);
     let open_state = scene2.sim.as_ref().unwrap().drones.doors.list[door_idx].state;
     assert_eq!(open_state, 4, "the door should be open after one E (no second E)");
@@ -188,7 +198,31 @@ fn the_walkin_leaves_a_closing_straddle_door_alone_on_07000016() {
     assert_eq!(scene.sim.as_ref().unwrap().drones.doors.list[door_idx].state, 4, "open after the walk-in");
     // E starts the close; then NO E for 40 ticks. The door may pass through 0x10 -> 2; it must
     // NEVER show 8/4 before it has shown 2 (pre-fix the reopen happened immediately).
-    step_at(&mut scene, [door_pos[0], door_pos[1], door_pos[2] - 0.5], 0.0, true);
+    // The E2 stand: 2.0 out on the approach normal (z−2), settled, and AIMED at the open leaf.
+    // Two game facts shape it: the door is a vertical-lift slide — the open leaf's live world
+    // sphere (obj+0x80, rebuilt by the moved pass [M 0x1336f8:209]) rides 2.28 UP (1.02 → 3.30,
+    // probe), so the E candidate [M Collide_PickObj 0x1eae80's 0x100/0x101 arm] is only touched
+    // with the look pitched up at the leaf; and Bond must stand clear of the leaf's descent
+    // sweep — `Door_ReactToHit` 0x135980's kind-2 arm reopens a CLOSING door that meets an
+    // actor, so the old in-doorway stand (0.5 from the placement, capsule overlapping the leaf
+    // plane) reversed the close at +1 tick. A player closing a lift door steps back and looks
+    // up; this stand is that, with the poke standing in for the transit.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [door_pos[0], door_pos[1], door_pos[2] - 2.0];
+        sim.bond.yaw = 0.0;
+        sim.bond.pitch = 0.0;
+    }
+    tick(&mut scene, 2);
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let (c, _r) = sim.drones.doors.list[door_idx].live_sph();
+        let head = sim.bond.head();
+        let to = [c[0] - head[0], c[1] - head[1], c[2] - head[2]];
+        sim.bond.yaw = to[0].atan2(to[2]);
+        sim.bond.pitch = (to[1] / to[0].hypot(to[2])).atan() / std::f32::consts::FRAC_PI_2;
+    }
+    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, true);
     let mut saw_closing = false;
     let mut saw_closed = false;
     let mut reopened_early = None;
