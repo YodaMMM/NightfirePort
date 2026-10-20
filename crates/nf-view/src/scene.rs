@@ -5043,11 +5043,14 @@ impl Sim {
 
 
     /// The world matrix of the live script entity `hash` from `src`.
-    pub fn script_entity(&self, src: (u32, u8), hash: u32) -> Option<Mat4> {
-        self.drones.scripts.objects.list.iter().flatten().rev().find_map(|o| match o {
+    pub fn script_entity(&self, src: (u32, u8), hash: u32) -> Option<Mat4> { self.script_entity_k(src, hash, 0) }
+
+    /// The k-th live script entity `hash` from `src` (newest first, the order `script_entity` reads).
+    pub fn script_entity_k(&self, src: (u32, u8), hash: u32, k: usize) -> Option<Mat4> {
+        self.drones.scripts.objects.list.iter().flatten().rev().filter_map(|o| match o {
             nf_game::nis::Obj::Entity { hash: h, matrix, src: o, .. } if *o == src && *h == hash => Some(*matrix),
             _ => None,
-        })
+        }).nth(k)
     }
     /// The game data the simulation consults, borrowed from this Sim.
     pub fn data(&self) -> nf_game::drone::Data<'_> {
@@ -5173,7 +5176,10 @@ pub struct Attachment {
     /// The character's gun once dropped (`DroneWeap_DropWeapon`): drawn at the pickup's matrix while it lies there.
     pub dropped: bool,
     /// A script entity (script hash, stream, entity hash): drawn at the simulation object's matrix while it exists.
-    pub script: Option<(u32, u8, u32)>,
+    /// `(script, stream, entity hash, instance k)` — k picks the k-th live entity with that
+    /// src/hash (several ScriptPlayers can run one script: 07000014's vent lids, nine SPs on
+    /// 0x06000A3B).
+    pub script: Option<(u32, u8, u32, u8)>,
     /// `Some(bone)`: one of the AIMS-20's four side lights (`Player_WeaponFiring` 0x1a5460:256-360
     /// attaches mesh 0x2000132 to the view model's bones 8..0xB every tick — the user's "row of RED
     /// lights, lit"). fix-gadgets-live; the blink/off arms live in `frame_state`.
@@ -6724,10 +6730,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 let Some(&(map, object)) = level.by_hash.get(&hash) else { continue };
                                 // The billboard set: glist flags bit 0x8 (`View_DrawObjectGlist`'s test).
                                 if level.maps[map].objects[object].flags & 0x8 != 0 { script_billboards.insert(hash); }
+                                // One draw slot per ScriptPlayer running this script: every SP creates its own
+                                // copy of the stream's entities (07000014's three vent lids are nine SPs on
+                                // 0x06000A3B — one slot drew only the newest lid; the hatch under the spawn
+                                // stayed invisible while it opened [the user, 1016-1355 vent14k]).
+                                let copies = players.iter().filter(|p| p.scripts.contains(&h)).count().clamp(1, 16);
                                 let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
-                                add_instance(level, &inst, Layer::Character, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                                attachments.push(Attachment { character: 0, bone: 0, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: Some((h, si as u8, hash)), gas: None, effect: None, silencer: false, quiver_bolt: None });
-                                script_objects += 1;
+                                for k in 0..copies {
+                                    add_instance(level, &inst, Layer::Character, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                                    attachments.push(Attachment { character: 0, bone: 0, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: Some((h, si as u8, hash, k as u8)), gas: None, effect: None, silencer: false, quiver_bolt: None });
+                                    script_objects += 1;
+                                }
                             }
                             _ => {}
                         }
@@ -8325,8 +8338,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 };
             }
             let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
-            if let Some((h, si, hash)) = a.script {
-                return self.sim.as_ref().and_then(|s| s.script_entity((h, si), hash)).map(|m| {
+            if let Some((h, si, hash, k)) = a.script {
+                return self.sim.as_ref().and_then(|s| s.script_entity_k((h, si), hash, k as usize)).map(|m| {
                     // The billboard entities (`View_DrawObjectGlist` 0x1e6780:43-65): the glist flags
                     // bit 0x8 (reached via `Control_SetGList` 0x134960's `obj+0xF0 = glist+0x44`)
                     // replaces the drawn ROTATION with the viewer's — `Mat_CopyRot(viewer+0x1a0)` —
@@ -9128,11 +9141,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 _ => one(),
                             };
                         }
-                        if let Some((h, si, hash)) = a.script {
+                        if let Some((h, si, hash, k)) = a.script {
                             // A script entity is its own object (the truck: nine 0x8880 objects [L]):
                             // 0x800-glist entities dim by the ambient at their live matrix; the others
                             // (coronas, triggers) draw untinted — not character 0's ambient.
-                            return match s.script_entity((h, si), hash).map(|m4| amb_at(s, &m4)) {
+                            return match s.script_entity_k((h, si), hash, k as usize).map(|m4| amb_at(s, &m4)) {
                                 Some(m) if self.models_0x800.get(&hash).copied().unwrap_or(false) => m,
                                 _ => one(),
                             };
