@@ -131,7 +131,7 @@ fn the_use_pick_respects_the_leaf_mesh() {
 /// 0x0200_0003 fires on a lock channel's rising edge through the real path (`Door_Update`
 /// 0x1363c8:101-107 pushes it where the door self-activates and clears DI+0x68). The aim-hint
 /// show/latch/locked branches of `Check_Target`'s door arm (0x1a7810:186-193 + `Door_DoMsg`
-/// 0x135f18) are wired (doors.aim_msg) but NOT pinned here: every head position this probe
+/// 0x135f18) are wired (Doors::pick_target + Doors::do_msg, scene.rs's Check_Target block) but NOT pinned here: every head position this probe
 /// tried near 07000001's doors has a STATIC world-segment hit 0.03-0.06 from the eye (the
 /// port's first-hit gate [M 0x1a7810:113-116 reads only the ray's first hit] kills the hint
 /// before the door rules run) — the exact numbers are in the report under "Live checks".
@@ -163,12 +163,12 @@ fn door_labels_fire_per_the_decompile_rules() {
         let mut doors = sim.drones.doors.clone();
         doors.list[dj].ch_lock = 200;
         let mut ch = nf_game::triggers::Channels::default();
-        let mut evs: Vec<(u32, u16)> = Vec::new();
+        let mut evs: Vec<(u32, f32)> = Vec::new();
         for f in 1..=12u32 {
             if f == 5 { ch.v[200] = 1; } // the rising edge
             for i in 0..doors.list.len() { doors.update(i, &mut ch, &[( [0.0; 3], 0.4, false )], f); }
             doors.calc();
-            evs.extend(doors.label_msgs.drain(..));
+            evs.extend(doors.labels.drain(..));
         }
         (evs, doors.list[dj].state & 0xc != 0 && doors.list[dj].ch_lock == 0)
     };

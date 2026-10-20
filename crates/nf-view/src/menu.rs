@@ -160,6 +160,10 @@ pub const PAGE_CN_NAME: u32 = 0x4000_0020;
 pub const PAGE_CN_ADVANCED: u32 = 0x4000_002d;
 /// Multiplayer Options [L page 0x4000002e; P_CNMPOPTIONS_Handler 0x2144d8].
 pub const PAGE_CN_MP: u32 = 0x4000_002e;
+/// The codename wheel's row 1 — Controls [M C_SBCNOPTIONS_Handler 0x213528:38-39 case 1 →
+/// 0x40000022 → Manager 0x44; L page 0x40000022 aux 0x7350048 kind 3, 52 controls]. Model:
+/// docs/systems/cn-controls-page.md.
+pub const PAGE_CN_CONTROLS: u32 = 0x4000_0022;
 /// Screen Adjust — the picture-offset subscreen of AV Options [L page 0x40000047; C_SBCNOPTIONS
 /// 0x213528's row 0x10000137 → Manager 0x44 0x40000047 [M 0x214818:117-126]]. Aux movie 0 [L PAGE record].
 pub const PAGE_SCREEN_ADJUST: u32 = 0x4000_0047;
@@ -633,7 +637,7 @@ pub fn aux_movie_for(page_id: u32) -> u32 {
     match page_id {
         PAGE_MAIN => 0x0733_0048,
         PAGE_LANGUAGE | PAGE_CODENAME | PAGE_DIFFICULTY | PAGE_MISSION_SELECT | PAGE_DOSSIER | PAGE_RESULTS
-        | PAGE_CN_SELECT | PAGE_CN_MENU | PAGE_CN_ADVANCED | PAGE_CN_MP | PAGE_CN_AV => 0x0735_0048,
+        | PAGE_CN_SELECT | PAGE_CN_MENU | PAGE_CN_ADVANCED | PAGE_CN_MP | PAGE_CN_AV | PAGE_CN_CONTROLS => 0x0735_0048,
         // mp-menu-flow: every MP page's PAGE record carries the same list backdrop (the menu-def
         // dump 2026-10-15: all 13 MP pages aux 0x07350048 [L]).
         PAGE_MP_JOIN | PAGE_MP_SCENARIO | PAGE_MP_MAP | PAGE_MP_SETUP | PAGE_MP_OPTIONS | PAGE_MP_RULES
@@ -726,7 +730,7 @@ pub const ESTHERO_GRACE: u32 = 0xb4;
 /// Which front-end page is up. The ids are the game's own (the constants above); the enum is the
 /// dispatcher the port drives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Page { Start, Main, Codename, Difficulty, MissionSelect, Dossier, Records, Rewards, Gadgets, Weapons, Options, Pause, Results, Stats, CnSelect, CnMenu, CnName, CnAdvanced, CnMp, CnAv, ScreenAdjust,
+pub enum Page { Start, Main, Codename, Difficulty, MissionSelect, Dossier, Records, Rewards, Gadgets, Weapons, Options, Pause, Results, Stats, CnSelect, CnMenu, CnControls, CnName, CnAdvanced, CnMp, CnAv, ScreenAdjust,
     // mp-menu-flow: the multiplayer front end (page ids in the PAGE_MP_* constants below).
     MpJoin, MpScenario, MpMap, MpSetup, MpOptions, MpRules, MpPlayerMods, MpEnviroMods, MpBots, MpBotChoose, MpBotSetup, MpConfirm, MpDebriefing,
     // net-online-lobby: the port-only online pages (ids in the PAGE_MP_* constants below).
@@ -747,7 +751,7 @@ impl Page {
             Page::Rewards => PAGE_REWARDS, Page::Gadgets => PAGE_GADGETS, Page::Weapons => PAGE_WEAPONS,
             Page::Options => PAGE_OPTIONS, Page::Pause => PAGE_PAUSE, Page::Results => PAGE_RESULTS,
             Page::Stats => PAGE_STATS,
-            Page::CnSelect => PAGE_CN_SELECT, Page::CnMenu => PAGE_CN_MENU, Page::CnName => PAGE_CN_NAME, Page::CnAdvanced => PAGE_CN_ADVANCED,
+            Page::CnSelect => PAGE_CN_SELECT, Page::CnMenu => PAGE_CN_MENU, Page::CnControls => PAGE_CN_CONTROLS, Page::CnName => PAGE_CN_NAME, Page::CnAdvanced => PAGE_CN_ADVANCED,
             Page::CnMp => PAGE_CN_MP, Page::CnAv => PAGE_CN_AV, Page::ScreenAdjust => PAGE_SCREEN_ADJUST,
             Page::MpJoin => PAGE_MP_JOIN, Page::MpScenario => PAGE_MP_SCENARIO, Page::MpMap => PAGE_MP_MAP,
             Page::MpSetup => PAGE_MP_SETUP, Page::MpOptions => PAGE_MP_OPTIONS, Page::MpRules => PAGE_MP_RULES,
@@ -770,7 +774,7 @@ impl Page {
             PAGE_REWARDS => Page::Rewards, PAGE_GADGETS => Page::Gadgets, PAGE_WEAPONS => Page::Weapons,
             PAGE_OPTIONS => Page::Options, PAGE_PAUSE => Page::Pause, PAGE_RESULTS => Page::Results,
             PAGE_STATS => Page::Stats,
-            PAGE_CN_SELECT => Page::CnSelect, PAGE_CN_MENU => Page::CnMenu, PAGE_CN_NAME => Page::CnName, PAGE_CN_ADVANCED => Page::CnAdvanced,
+            PAGE_CN_SELECT => Page::CnSelect, PAGE_CN_MENU => Page::CnMenu, PAGE_CN_CONTROLS => Page::CnControls, PAGE_CN_NAME => Page::CnName, PAGE_CN_ADVANCED => Page::CnAdvanced,
             PAGE_CN_MP => Page::CnMp, PAGE_CN_AV => Page::CnAv, PAGE_SCREEN_ADJUST => Page::ScreenAdjust,
             PAGE_MP_JOIN => Page::MpJoin, PAGE_MP_SCENARIO => Page::MpScenario, PAGE_MP_MAP => Page::MpMap,
             PAGE_MP_SETUP => Page::MpSetup, PAGE_MP_OPTIONS => Page::MpOptions, PAGE_MP_RULES => Page::MpRules,
@@ -1140,9 +1144,24 @@ pub const AV_ROWS: &[OptRow] = &[
     OptRow { ctrl: 0x1000_0138, label: 0x198, y: 312.0, items: &[], kind: OptKind::Action },
     OptRow { ctrl: 0x1000_0222, label: 0x550, y: 340.0, items: &[], kind: OptKind::Action },
 ];
-/// The option pages' descriptions per (row control, current value) — i32::MIN matches any value, the first matching
-/// record wins [L ee_snapshot 0x2e4610..0x2e4c28: 12-byte {control, value, label} records, 0xf0f0f0f0 = any; the main
-/// menu rows, the MP rules / player-mods / enviro-mods / bot-setup rows, then the codename option pages'].
+/// Codename Controls [M P_CNCONTROLS_Handler 0x213cd0 + C_RBCONTROL_Handler 0x217908; L page
+/// 0x40000022]: row 0 is the controller-style spinner — the list control 0x10000025 the open
+/// handler fills with the 8 style names 0x82/0x91/0xa0/0xaf/0xbe/0xcd/0x100018b/0x100019a
+/// [M 0x213cd0:12-27]; its value is the style byte PlayerSetting+0xE (0..7, the 8-way display
+/// jump [M 0x1f3558]) committed by Menu_ChangeControllerStyle [M 0x217908:13-14]. Row 1 is the
+/// Y-Axis (look inversion) toggle — the value control 0x100000c9 [L the dump, ctrl[48] at
+/// (461,109), disc label 518 = 0x206], the label text 1170 [L ctrl[50] at (376,113)]; the staged
+/// bit's labels are 0x3bd "Normal" / 0x206 "Inverted" [M 0x213cd0:31-38]. Defaults [M Input_Init
+/// 0x17edd8: style 0, inversion 0]. The style items carry the game's own name ids; the English
+/// fallbacks are empty here — the pause tab's PC-port draw documents only style 7 ("Classic
+/// Bond" 0x100019a), the other seven names are the lang's USATxt rows [S unverified].
+pub const CN_CONTROLS_ROWS: &[OptRow] = &[
+    OptRow { ctrl: 0x1000_0025, label: 0x1f3, y: 109.0, items: &[(0x82, "", 0), (0x91, "", 1), (0xa0, "", 2), (0xaf, "", 3), (0xbe, "", 4), (0xcd, "", 5), (0x1000_018b, "", 6), (0x1000_019a, "", 7)], kind: OptKind::List },
+    OptRow { ctrl: 0x1000_00c9, label: 0x492, y: 113.0, items: &[(0x3bd, "Normal", 0), (0x206, "Inverted", 1)], kind: OptKind::List },
+];
+/// The 8 controller-style name labels, in style order [M P_CNCONTROLS_Handler 0x213cd0:12-27 —
+/// the list rows' Txt_BindLabel ids; the same ids P_PAUSE_Handler 0x203c28 binds].
+pub const CN_CONTROLS_STYLES: [u32; 8] = [0x82, 0x91, 0xa0, 0xaf, 0xbe, 0xcd, 0x1000_018b, 0x1000_019a];
 const OPT_DESC: &[(u32, i32, u32)] = &[
     (0x1000_0002, i32::MIN, 0x100_0000), (0x1000_0003, i32::MIN, 0x100_0001), (0x1000_0004, i32::MIN, 0x100_0002), (0x1000_0008, 0, 0x100_002f),
     (0x1000_00f6, 0, 0x100_002f), (0x1000_0081, 1, 0x100_0021), (0x1000_0081, 0, 0x100_0022), (0x1000_0084, 0, 0x100_0023),
@@ -1187,7 +1206,10 @@ pub fn opt_desc(ctrl: u32, value: i32) -> Option<u32> {
 pub fn default_opts() -> std::collections::HashMap<u32, i32> {
     [(0x1000_011a, 1), (0x1000_011b, 1), (0x1000_0124, 1), (0x1000_0125, 1), (0x1000_0126, 0), (0x1000_01cb, 1), (0x1000_0226, 2),
      (0x1000_023b, 0), (0x1000_0128, 1), (0x1000_011c, 0), (0x1000_0129, 0), (0x1000_0135, 80), (0x1000_0134, 100), (0x1000_0136, 0),
-     (0x1000_019a, 0), (0x1000_0198, 1), (0x1000_0223, 0)].into_iter().collect()
+     (0x1000_019a, 0), (0x1000_0198, 1), (0x1000_0223, 0),
+     // cn-controls-page: the Controls page's two rows — Input_Init's fresh-boot values [M
+     // 0x17edd8:8-27: the style byte +0xE = 0, the inversion bit +0x0 = 0 (the memset)].
+     (0x1000_0025, 0), (0x1000_00c9, 0)].into_iter().collect()
 }
 /// The "Edit <name>" wheel's rows {preview, label, description} [L ee_snapshot table 0x2dfc28].
 pub const CN_MENU: [(u32, u32, u32); 7] = [
@@ -2948,6 +2970,7 @@ impl FrontEnd {
             Page::CnAdvanced => ADV_ROWS.len(),
             Page::CnMp => MP_ROWS.len(),
             Page::CnAv => AV_ROWS.len(),
+            Page::CnControls => CN_CONTROLS_ROWS.len(),
             // credits-data: the credits page has no wheel rows (the two list controls are the
             // roll itself) [M P_CREDITS_Handler 0x2152b0 has no cursor code].
             Page::Credits => 0,
@@ -3033,7 +3056,7 @@ impl FrontEnd {
             Page::CnSelect => bind([0x29b, 0x211][row.min(1)]),   // def_codename 0x2e1b18 [L docs/reports/fix-save-profile.md]
             Page::CnMenu => bind(CN_MENU[row.min(CN_MENU.len() - 1)].1),
             Page::CnName => String::new(), // the grid has no row labels (the model draws its own)
-            Page::CnAdvanced | Page::CnMp | Page::CnAv => self.opt_rows().get(row).map_or(String::new(), |r| bind(r.label)),
+            Page::CnAdvanced | Page::CnMp | Page::CnAv | Page::CnControls => self.opt_rows().get(row).map_or(String::new(), |r| bind(r.label)),
             // credits-data: no rows — the roll's text lives in fe.credits.visible() [M].
             Page::Credits => String::new(),
             Page::Intro | Page::ParisEnum | Page::EstHero => String::new(),
@@ -3158,7 +3181,7 @@ impl FrontEnd {
     /// puts its middle at 259, so y0 = 251.
     fn list_rows_y(&self) -> Option<Vec<f32>> {
         Some(match self.page {
-            Page::CnAdvanced | Page::CnMp | Page::CnAv => self.opt_rows().iter().map(|r| r.y).collect(),
+            Page::CnAdvanced | Page::CnMp | Page::CnAv | Page::CnControls => self.opt_rows().iter().map(|r| r.y).collect(),
             Page::MpRules => vec![191.0, 223.0],
             Page::MpPlayerMods => vec![143.0, 175.0, 207.0, 239.0, 271.0],
             Page::MpEnviroMods => vec![143.0, 177.0, 209.0, 241.0, 273.0],
@@ -3330,7 +3353,7 @@ impl FrontEnd {
         if let Some(ys) = self.list_rows_y() {
             if !ys.iter().any(|&y0| y >= y0 - 6.0 && y < y0 + 22.0) { return false; }
             let is_action = match self.page {
-                Page::CnAdvanced | Page::CnMp | Page::CnAv => self.opt_rows().get(self.cursor).is_some_and(|r| r.kind == OptKind::Action),
+                Page::CnAdvanced | Page::CnMp | Page::CnAv | Page::CnControls => self.opt_rows().get(self.cursor).is_some_and(|r| r.kind == OptKind::Action),
                 // The mode page's rows, the host Start row and the join address row are actions (a
                 // click confirms); the host's port row keeps the value columns [S §4]. The Options
                 // page's three rows are actions too — the stubs' ✕ is the keyboard's no-op [M
@@ -3406,7 +3429,27 @@ impl FrontEnd {
 
     /// The option page's rows (empty off the option pages).
     pub fn opt_rows(&self) -> &'static [OptRow] {
-        match self.page { Page::CnAdvanced => ADV_ROWS, Page::CnMp => MP_ROWS, Page::CnAv => AV_ROWS, _ => &[] }
+        match self.page { Page::CnAdvanced => ADV_ROWS, Page::CnMp => MP_ROWS, Page::CnAv => AV_ROWS, Page::CnControls => CN_CONTROLS_ROWS, _ => &[] }
+    }
+
+    /// The committed codename-player settings the Controls page edits: (controller style 0..7,
+    /// look inversion) [M PlayerSetting+0xE / +0x0 — Input_ChangeControllerStyle 0x17f5f0,
+    /// Input_Update 0x17ee88:50-53]. The committed map is what the pad consumes; the page's own
+    /// edits while it is open are the ordinary opts entries behind the enter snapshot.
+    pub fn cn_player_settings(opts: &std::collections::HashMap<u32, i32>) -> (u16, bool) {
+        let style = opts.get(&0x1000_0025).copied().unwrap_or(0).clamp(0, 7) as u16;
+        let invert = opts.get(&0x1000_00c9).copied().unwrap_or(0) != 0;
+        (style, invert)
+    }
+
+    /// Writes the committed Controls-page values onto the pad config the driver maps with
+    /// (`PadConfig.style` / `invert_look` — the game's PlayerSetting+0xE/+0x0 reach the input
+    /// pass the same way [M 0x17f5f0, 0x17ee88:50-53]). The windowed host calls this beside the
+    /// AV volumes' boot apply; `PadDriver.cfg` is public.
+    pub fn apply_cn_pad(cfg: &mut nf_game::input::PadConfig, opts: &std::collections::HashMap<u32, i32>) {
+        let (style, invert) = Self::cn_player_settings(opts);
+        cfg.style = style;
+        cfg.invert_look = invert;
     }
 
     // --- The picture offset (AV Options → Screen Adjust) [M docs/systems/screen-adjust.md §3] ---
@@ -4852,6 +4895,7 @@ impl FrontEnd {
         // grid cursor; elsewhere they keep the old Back / Confirm meaning. The MP wheels
         // (scenario/map/options/bots) keep the remap.
         let a = match (a, matches!(self.page, Page::CnAdvanced | Page::CnMp | Page::CnAv | Page::CnName
+            | Page::CnControls
             | Page::MpJoin | Page::MpHost | Page::MpSetup | Page::MpRules | Page::MpPlayerMods | Page::MpEnviroMods | Page::MpBotSetup | Page::ScreenAdjust | Page::Pause
             // mp-lobby-one-screen: the one screen's ◀ ▶ step values like the MP value pages [S §6.2].
             | Page::MpOnlineLobby)) {
@@ -4925,6 +4969,10 @@ impl FrontEnd {
                 Action::Confirm => {
                     match self.cursor {
                         0 => { self.opts_saved = Some(self.opts.clone()); self.av_screen_snapshot(); self.cn_open(PAGE_CN_MENU); self.cursor = 0; return true; }
+                        // Row 1 → Controls [M C_SBCNOPTIONS 0x213528:38-39 case 1 → Manager 0x44
+                        // 0x40000022]. The enter snapshot is the staged pair the page commits or
+                        // discards [M C_RBCONTROL 0x217908:11-17 commit / no 0x4d arm].
+                        1 => { self.opts_saved = Some(self.opts.clone()); self.av_screen_snapshot(); self.enter_page(Page::CnControls); self.cursor = 0; return true; }
                         3 => { self.opts_saved = Some(self.opts.clone()); self.av_screen_snapshot(); self.enter_page(Page::CnAdvanced); self.cursor = 0; return true; }
                         4 => { self.opts_saved = Some(self.opts.clone()); self.av_screen_snapshot(); self.enter_page(Page::CnMp); self.cursor = 0; return true; }
                         5 => { self.opts_saved = Some(self.opts.clone()); self.av_screen_snapshot(); self.enter_page(Page::CnAv); self.cursor = 0; return true; }
@@ -5058,6 +5106,34 @@ impl FrontEnd {
                         // (idempotent when it already holds them; repairs a missing/corrupt file).
                         self.settings_save_pending = true;
                         self.enter_page(Page::CnMenu); self.cursor = back_row; return true;
+                    }
+                    _ => return false,
+                }
+            }
+            // The codename Controls page [M P_CNCONTROLS_Handler 0x213cd0 + C_RBCONTROL_Handler
+            // 0x217908; docs/systems/cn-controls-page.md]: row 0 the style spinner (its value is
+            // the committed style [M 0x217908:13-14]), row 1 the Y-Axis flip (the game's single
+            // 0x5e toggle [M :24-33]). ✕ commits both and closes to the wheel ([M :11-17 —
+            // cn_modified_flag = 1, PlayerSetting+0x0 = was_inverted, Manager 0x5f]; the port's
+            // edits already stand in the map, so the commit drops the snapshot and saves the
+            // file). ○/Back discards ([M the handler has no 0x4d arm — the next open re-stages
+            // was_inverted = PlayerSetting, 0x213cd0:30]).
+            Page::CnControls => {
+                let rows = self.opt_rows();
+                match a {
+                    Action::Up if self.cursor > 0 => { self.cursor -= 1; return self.focus_moved(); }
+                    Action::Down if self.cursor + 1 < rows.len() => { self.cursor += 1; return self.focus_moved(); }
+                    Action::Left => { let r = &rows[self.cursor]; self.opt_step(r, -1); return true; }
+                    Action::Right => { let r = &rows[self.cursor]; self.opt_step(r, 1); return true; }
+                    Action::Confirm if self.cursor == 1 => { self.opt_step(&rows[1], 1); return true; }
+                    Action::Confirm => {
+                        self.opts_saved = None;
+                        self.settings_save_pending = true;
+                        self.enter_page(Page::CnMenu); self.cursor = 1; return true;
+                    }
+                    Action::Back => {
+                        if let Some(o) = self.opts_saved.take() { self.opts = o; }
+                        self.enter_page(Page::CnMenu); self.cursor = 1; return true;
                     }
                     _ => return false,
                 }
@@ -8608,6 +8684,18 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             hint_bar(&mut h, font, &hint(0x217, "~A Confirm  ~V Scroll  ~H Change  ~B Back"), 50.0, 419.0, cream);
             logo_stamp(&mut h);
         }
+        // cn-controls-page: the same option-page bones — the header 499 (0x1f3, the wheel row's
+        // own label [L the dump ctrl[39]]) and the hint 1175 (0x497 [L ctrl[43]]); the rows are
+        // the style spinner + the Y-Axis toggle (opt_list renders them from CN_CONTROLS_ROWS with
+        // the live opts — the style row's value is bind(CN_CONTROLS_STYLES[v])). The pad diagram
+        // (the 0x10000061 line art, tex 50331714 [L]) and the per-style display jumps are the
+        // main agent's draw pass.
+        Page::CnControls => {
+            page_header(&mut h, hfont, &bind(0x1f3));
+            cn_controls_rows(&mut h, fe, font, lang);
+            hint_bar(&mut h, font, &hint(0x497, "~A Confirm  ~H Change  ~B Back"), 50.0, 419.0, cream);
+            logo_stamp(&mut h);
+        }
         Page::ScreenAdjust => {
             // The Screen Adjust page's own controls [L page 0x40000047 walk 2026-10-15]: the
             // fullscreen reference picture TEX 0x3000074 (the msg-0x24 control (0,0,640,480)); the
@@ -9146,6 +9234,42 @@ fn desc_block(h: &mut Hud, font: &nf_formats::hud::Font, text: &str, c: [f32; 4]
 /// tall), the value controls at x 348-351 (219 wide; the sliders' bars (365,86/114,187×16)), the description plate
 /// (50,355,540×40); the selected row 0x7d6d59ff, the others 0x73330fc0 (the controls' msg 0x1b / 0x1c)]. PCSX2
 /// m32/m38/m40 (2026-10-15): the ◀ ▶ arrows at x 357 / 555 around the selected row's value.
+/// The Controller Setup page's two controls side by side, at the page data's own rects [L the
+/// 0x40000022 dump, docs/systems/cn-controls-page.md]: the style list 0x10000025 (60,109,316,24)
+/// showing the selected style's name, and the Y-Axis row — the label 1170 (0x492) at (376,113) and
+/// the value control 0x100000c9 at (461,109,99,25) ("Normal"/"Inverted"). The generic `opt_list`
+/// stacks rows in one label/value column pair, which drew these two on top of each other.
+fn cn_controls_rows(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Option<&Lang>) {
+    let bind = |id: u32| -> String { lang.and_then(|l| l.bind(id)).unwrap_or("").to_string() };
+    let on = gs(CREAM, 0xff);
+    let off = gs(0x73330f, 0xc0);
+    let yellow = gs(0xfec43e, 0xff);
+    let sc = 1.3;
+    let arrow = |h: &mut Hud, cx: f32, cy: f32, left: bool| {
+        let (a, b, d) = if left { ((cx + 7.0, cy - 7.0), (cx + 7.0, cy + 7.0), (cx - 7.0, cy)) } else { ((cx - 7.0, cy - 7.0), (cx - 7.0, cy + 7.0), (cx + 7.0, cy)) };
+        let q = |p: (f32, f32), h: &Hud| HudVertex { p: h.ndc(Anchor::Centre, mx(p.0), my(p.1)), uv: [0.0, 0.0], c: yellow };
+        let v = [q(a, h), q(b, h), q(d, h), q(a, h), q(d, h), q(d, h)];
+        h.ndc_solid(-3, v, yellow);
+    };
+    let rows = fe.opt_rows();
+    let value_txt = |i: usize| -> String {
+        let Some(r) = rows.get(i) else { return String::new() };
+        let v = fe.opt_value(r.ctrl);
+        r.items.iter().find(|it| it.2 == v).or(r.items.first()).map_or(String::new(), |it| if it.0 != 0 { bind(it.0) } else { it.1.to_string() })
+    };
+    // The style list: the name centred in its 316×24 box.
+    let (sel0, sel1) = (fe.cursor == 0, fe.cursor == 1);
+    let mid0 = 109.0 + 12.0;
+    centred(h, font, -2, &value_txt(0), mx(60.0 + 158.0), my(mid0 + 6.0), if sel0 { on } else { off }, true, sc);
+    if sel0 { arrow(h, 70.0, mid0, true); arrow(h, 356.0, mid0, false); }
+    // The Y-Axis label and its value control.
+    let mid1 = 109.0 + 12.5;
+    let c1 = if sel1 { on } else { off };
+    if let Some(r) = rows.get(1) { left_text(h, font, &bind(r.label), mx(376.0), my(mid1 + 6.0), c1, true, sc); }
+    centred(h, font, -2, &value_txt(1), mx(461.0 + 49.5), my(mid1 + 6.0), c1, true, sc);
+    if sel1 { arrow(h, 455.0, mid1, true); arrow(h, 566.0, mid1, false); }
+}
+
 fn opt_list(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Option<&Lang>) {
     let bind = |id: u32| -> String { lang.and_then(|l| l.bind(id)).unwrap_or("").to_string() };
     let rows = fe.opt_rows();

@@ -17,9 +17,10 @@ pub fn game_exe() -> Result<PathBuf, String> {
 pub const LEGACY_GAME_EXE: &str = "NightfirePort-game.exe";
 
 /// Starts the game (`<exe> <iso> --game`) on `iso`. Its output goes to `log`; no window but the game's appears.
-pub fn launch(exe: &Path, iso: &Path, log: Option<&Path>) -> Result<Child, String> {
+pub fn launch(exe: &Path, iso: &Path, log: Option<&Path>, dev: bool) -> Result<Child, String> {
     let mut cmd = Command::new(exe);
     cmd.arg(iso).arg("--game").stdin(Stdio::null());
+    if dev { cmd.arg("--dev"); }
     if let Some(dir) = exe.parent() { cmd.current_dir(dir); }
     match log.and_then(|p| { if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); } std::fs::File::create(p).ok() }) {
         Some(f) => {

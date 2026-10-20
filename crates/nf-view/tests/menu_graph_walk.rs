@@ -781,10 +781,10 @@ fn probe_home(name: &str, prologue: &[Edge], path: &[Edge], host_edges: bool, fi
 // ── the deterministic BFS test ────────────────────────────────────────────────────────────────
 
 /// Every ported page, for the coverage line and the known-id check.
-const ALL_PAGES: [Page; 45] = [
+const ALL_PAGES: [Page; 46] = [
     Page::Start, Page::Main, Page::Codename, Page::Difficulty, Page::MissionSelect, Page::Dossier,
     Page::Records, Page::Rewards, Page::Gadgets, Page::Weapons, Page::Options, Page::Pause,
-    Page::Results, Page::Stats, Page::CnSelect, Page::CnMenu, Page::CnName, Page::CnAdvanced,
+    Page::Results, Page::Stats, Page::CnSelect, Page::CnMenu, Page::CnControls, Page::CnName, Page::CnAdvanced,
     Page::CnMp, Page::CnAv, Page::ScreenAdjust, Page::MpJoin, Page::MpScenario, Page::MpMap,
     Page::MpSetup, Page::MpOptions, Page::MpRules, Page::MpPlayerMods, Page::MpEnviroMods,
     Page::MpBots, Page::MpBotChoose, Page::MpBotSetup, Page::MpConfirm, Page::MpDebriefing,

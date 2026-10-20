@@ -1,5 +1,9 @@
 # NightfirePort
 
+> [!WARNING]
+> ## This port is not finished.
+> NightfirePort is a work in progress. Expect bugs, missing features, and levels that don't yet play like the original. The driving missions are not ported at all yet. If you hit a problem, press **F10** in game (or **Report crash** in the launcher) to send a report.
+
 A native Rust port of *007: Nightfire* (PlayStation 2, NTSC-U SLUS-20579), rebuilt from the game's own data and logic, with mouse and keyboard as first-class input.
 
 ![The Alps castle exterior on level 07000005 at night, rendered by the port](docs/readme/img/level05.png)

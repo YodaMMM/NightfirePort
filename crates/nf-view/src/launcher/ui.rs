@@ -32,6 +32,8 @@ const BARREL: (f32, f32, f32) = (232.0, 270.0, 162.0);
 const CARD_R: Rect = Rect::new(COL_X, 270.0, COL_W, 100.0);
 const PRIMARY_R: Rect = Rect::new(COL_X, 388.0, COL_W, 60.0);
 const SECOND_Y: f32 = 476.0;
+/// The footer's dev-mode toggle (bottom right, opposite the version).
+const DEV_R: Rect = Rect::new(W - 24.0 - 130.0, H - 36.0, 130.0, 26.0);
 
 /// A disc image that passed the identity check.
 #[derive(Clone, Debug, PartialEq)]
@@ -60,7 +62,7 @@ impl Disc {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Btn { Select, Play, Change, ReportCrash, Quit }
+pub enum Btn { Select, Play, Change, ReportCrash, Quit, Dev }
 
 #[derive(Clone, Debug, Default)]
 pub struct Ui {
@@ -81,6 +83,8 @@ pub struct Ui {
     pub update_note: Option<String>,
     /// A crash report waiting to be sent (bugreport.rs: the zip and the panic's first line) — "Report crash".
     pub crash: Option<(PathBuf, String)>,
+    /// Dev mode on: PLAY passes `--dev` (the footer toggle, saved in launcher.toml).
+    pub dev: bool,
 }
 
 impl Ui {
@@ -90,6 +94,7 @@ impl Ui {
         if self.disc.is_some() { v.push((Btn::Change, Rect::new(COL_X - 6.0, SECOND_Y - 18.0, 120.0, 28.0))); }
         if self.crash.is_some() { v.push((Btn::ReportCrash, Rect::new(COL_X + COL_W * 0.5 - 60.0, SECOND_Y - 18.0, 120.0, 28.0))); }
         v.push((Btn::Quit, Rect::new(COL_X + COL_W - 60.0, SECOND_Y - 18.0, 66.0, 28.0)));
+        v.push((Btn::Dev, DEV_R));
         v
     }
     pub fn hit(&self, lx: f32, ly: f32) -> Option<Btn> {
@@ -215,6 +220,17 @@ pub fn paint(c: &mut Canvas, bg: &Canvas, fonts: &Fonts, ui: &Ui, scale: f32) {
 
     // ── Secondary row ───────────────────────────────────────────────────────────────────────────────────
     for (btn, r) in ui.buttons() {
+        if btn == Btn::Dev {
+            let hot = ui.hover == Some(btn) && !ui.launching;
+            let label = if ui.dev { "Dev mode: On" } else { "Dev mode: Off" };
+            let size = 11.5 * s;
+            let lw = measure(&fonts.regular, size, label, 0.3 * s);
+            let lx = (r.x + r.w) * s - lw;
+            let col = if ui.dev { GOLD } else if hot { TEXT } else { FAINT };
+            c.text(&fonts.regular, size, lx, (H - 18.0) * s, label, col, 1.0, 0.3 * s);
+            if hot { c.fill_rrect(Rect::new(lx, (H - 14.0) * s, lw, 1.0 * s), 0.0, GOLD, 0.9); }
+            continue;
+        }
         let label = match btn { Btn::Change => "Change disc", Btn::ReportCrash => "Report crash", Btn::Quit => "Quit", _ => continue };
         let hot = ui.hover == Some(btn) && !ui.launching;
         let col = if hot { TEXT } else if btn == Btn::ReportCrash { GOLD } else { DIM };
