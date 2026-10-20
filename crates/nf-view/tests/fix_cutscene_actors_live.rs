@@ -186,7 +186,7 @@ fn the_impact_effect_script_models_build() {
         want.dedup();
         assert!(!want.is_empty(), "{level}: the impact script has drawn entity streams");
         for (si, hash) in &want {
-            assert!(scene.attachments.iter().any(|a| a.script == Some((0x0600_07c4, *si, *hash))),
+            assert!(scene.attachments.iter().any(|a| matches!(a.script, Some((0x0600_07c4, s, h, _)) if s == *si && h == *hash)),
                 "{level}: the impact-effect entity {hash:08x} (stream {si}) has no built instance — the model is missing");
         }
     }

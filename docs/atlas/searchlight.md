@@ -214,3 +214,17 @@ integers in degrees, either order.
   observed @0x1cb89c region) and `Rand_Rand(0x1e0)`'s exact range.
 - What creates the missing 5 spots late (if anything) — see G-036 above; needs a trace or the
   loader/spawner code path.
+
+## G-036 item 1 settled (2026-10-20, searchlight-late-spots)
+
+**Nothing creates the missing 5 spots — ever.** The whole-FILES.BIN placement sweep carries
+exactly 7 heads / 2 spots / 7 discs / 6 beams / 7 bulbs on 07000005 (07000006: 4 full sets;
+07000041: 1; no other archive has a 0xDE placement) [D]. `Searchlight_Create` 0x1cb4f8's only
+caller is the placement hook `parsemap_create_dynamic_objects` 0x1d04f0 [M]; the dynamic walk
+0x1d1b68 runs twice per load (`parsemap_parsemap` 0x1d1cf0:65, `ResetMap_Load` 0x1d6360:146)
+and never later [M]; `Script_CreateEntity` 0x1d8968's dispatch creates Switch/Destroy/Trigger/
+Pickup/Break/Ladder/AIVolume and no class 0x22 [M]; `DroneSpawner_SpawnDrone` 0x137cb0 spawns
+drones [M]. The 6 orphan heads (placements 194, 199, 205, 210, 230, 261 [D]) sweep in state 0
+forever and can never arm — the arm test is spot-only [M 0x1cbf14] — in the game exactly as in
+the port. Tests: crates/nf-view/tests/searchlight_late_spots_live.rs (census + 1-linked start,
+no growth in 700 ticks, the spot-only arm law with a link-poke sister).
