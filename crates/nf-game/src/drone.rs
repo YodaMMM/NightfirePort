@@ -9236,6 +9236,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// (`net_world` gate) and the player-bullet path never checks a player volume). No hearing
     /// entry (the remote shot's audible sound is its fire script's op-1, already played) and no
     /// `PlrStat_LogShotFired` (the shooter's own machine logs its own shots).
+    /// mp-shot-effects: the flight segments this tick (`bullet_paths` is private draw bookkeeping;
+    /// the tests count the per-pellet segments).
+    pub fn bullet_paths_len(&self) -> usize {
+        self.bullet_paths.len()
+    }
+
     pub fn fire_remote_cosmetic(&mut self, d: &Data, from: V3, dir: V3, weapon: u8, rng: &mut Rng) {
         let Some(w) = d.weapons.records.get(weapon as usize) else { return };
         let w = &w[..];
