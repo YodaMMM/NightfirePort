@@ -683,7 +683,8 @@ pub struct Msg {
     pub opened: bool,
     pub second: bool,
     /// The posting `Txt_BindLabel` id (0 for the queues that post pre-bound text — the INFO
-    /// pane's tests pin it) [M Text_AddMsg 0x1b0c30 stores the bound string; the id is the
+    /// pane's tests pin it; the objective queue carries the objective's own text id since
+    /// objectives-0b-start) [M Text_AddMsg 0x1b0c30 stores the bound string; the id is the
     /// port's provenance for the game-label assertions].
     pub label: u32,
     /// A script op-0x1e subtitle (`Text_AddMsg` type 4): the game's `Text_FlushAllSubtitles`
@@ -4798,8 +4799,8 @@ impl Sim {
                     // scales the life by the wrapped/orig length [M 0x1b0c30's +0x18 store]. The
                     // port wraps at draw time — the font lives in the scene's HudTables, which the
                     // Sim-side drain doesn't hold; the life scaling is not ported, see the report.)
-                    self.hud.objective_msgs.push_back(Msg { text, time: ticks as f32, status, failed, life: ticks as f32, opened: false, second: false, label: 0, script: false,
-                        sfx1: false });
+                    self.hud.objective_msgs.push_back(Msg { text, time: ticks as f32, status, failed, life: ticks as f32, opened: false, second: false, label, script: false,
+                        sfx1: false }); // objectives-0b-start: the label rides the Msg (the port's provenance for the game-label pins, `Text_AddMsg` 0x1b0c30 stores the bound string's id)
                 }
                 nf_game::mission::Event::FailLabel(l) => {
                     self.hud.fail_label = l;
@@ -5353,6 +5354,9 @@ pub struct Scene {
     pub fog: Option<([u8; 3], f32)>,
     /// The HUD's textures by hash (docs/systems/hud.md), from any map of the archive, and its tables from ACTION.ELF.
     pub hud_textures: Vec<(u32, TextureImage)>,
+    /// break-shards draw: a kind-2 breakable's face draw word (its batch texture) → the index into
+    /// `textures` of `(the pane object's map, word)`, so a shard binds the pane's own texture.
+    pub shard_tex: HashMap<u32, usize>,
     /// The pause/fail menus' burning woman (`psiDecompressWoman` 0x1202a8): decoded into 0x030000db's HUD texture
     /// while a paused page shows it. Set by the loader from the level archive's kind-16 "woman" entry.
     pub woman: Option<crate::woman::Woman>,
@@ -5888,6 +5892,31 @@ fn drone_height(hip: f32) -> f32 {
 }
 
 impl Scene {
+    /// break-shards draw: the live glass shards as world triangles grouped by texture — `(index into
+    /// textures, vertices)`. `DrawAllShards` 0x12bef8 draws every shard with `lifetime > 0` through
+    /// `psiDrawShard` 0x122ae8: the shard's matrix (rotation from `rot`, translation `pos`, scale 1
+    /// [M 0x122ae8: rows' w zeroed, +0x3c = 1.0]), the face's texture (`GetTextureFromDMA` of the draw
+    /// word), and the alpha `min(lifetime·FRAME_RATE·10, 255)` through `psiSetTweakA` [M 0x12bef8:50-56].
+    /// The tweak scales the face's own vertex alpha (255 → the pane as it was) [S: the tweak's exact
+    /// use in the shard microcode is unread]. A shard still in its peel delay draws at its spawn spot.
+    pub fn shard_draws(&self) -> Vec<(usize, Vec<Vertex>)> {
+        let Some(sim) = self.sim.as_ref() else { return Vec::new() };
+        let sh = &sim.drones.breaks.shatter;
+        let mut groups: Vec<(usize, Vec<Vertex>)> = Vec::new();
+        for s in sh.shards.iter().filter(|s| s.lifetime > 0.0) {
+            let Some(&ti) = self.shard_tex.get(&s.material) else { continue };
+            let a = (sh.shard_alpha(s) / 255.0).clamp(0.0, 1.0);
+            let m = nf_formats::placement::object_matrix(s.rot, s.pos);
+            let g = match groups.iter().position(|(t, _)| *t == ti) { Some(k) => k, None => { groups.push((ti, Vec::new())); groups.len() - 1 } };
+            for v in &s.verts {
+                let p = v.pos;
+                let w = [0, 1, 2].map(|c| m[0][c] * p[0] + m[1][c] * p[1] + m[2][c] * p[2] + m[3][c]);
+                groups[g].1.push(Vertex { pos: w, uv: v.uv, rgba: [v.rgba[0].clamp(0.0, 255.0) as u8, v.rgba[1].clamp(0.0, 255.0) as u8, v.rgba[2].clamp(0.0, 255.0) as u8, (v.rgba[3] * a).clamp(0.0, 255.0) as u8], nrm: [0; 4] });
+            }
+        }
+        groups
+    }
+
     /// The script player's overlay (fix-script-commands): the fade, the letterbox borders and the
     /// op-0x14 sprites — see `hud::script_overlay`. Appended to the HUD frame OUTSIDE the cut-scene
     /// gate (the game draws these over the blanked HUD). fix-grenade-types: the flashbang whiteout
@@ -6216,6 +6245,22 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 invisible += 1;
             }
             if skipped { continue; }
+            // floating-rifle-02-2: NO bake skip. 786 read `parseentity_fixup_entity` 0x1d00c0's
+            // 0x8019/0x8018 flag bit 0x8000000 as "baked, not drawn" and skipped every 0x8019/0x8018
+            // placement whose matrix rows 1+2 looked identity — that broke decal_order_live (07000007's
+            // hall_shadows*/OBJECT_banistershadows* dropped, their textures never loaded) and the
+            // decompile does not support the reading: the bit is set when the placement's TRANSLATION
+            // and ROTATION vectors (cel+0x60/+0x70, the placement record's two float triples) are BOTH
+            // exactly zero (`Vec_IsEqual` with epsilon 0.0f against the zero vector at 0x2d6200 —
+            // disasm of 0x1d02e0-0x1d0324), and its only consumers are the collision identity fast
+            // paths `Collide_Pick` 0x1eb320:166,249 / `Collide_Intersect` 0x1ebaa8:142 (`Ident`). No
+            // draw path tests it: `View_AddCels` 0x1e6ba0 walks every inner-chain cel (gated on
+            // glist+0x44 bit 0x10, the 0x8018-vs-0xc023 special case and Vision_InView) and
+            // `View_DrawCelGlist` 0x1e6538 draws it at Rot(cel+0x70)·Trans(cel+0x60) behind
+            // psiSetTweakARGB(cel+0xa3-derived alpha, 0xff, 0xff, 0xff). The game DRAWS the flagged
+            // records — 07000002's sandals (t=r=0 [D]) at their absolute art coords, 07000007's shadow
+            // decals with them. docs/systems/baked-statics.md holds the full chain + the open
+            // visibility question at the doorway eye.
             // Searchlight parts are dynamic objects (`Searchlight_Update` moves them every tick): drawn from
             // the simulation below, not from their placements.
             if inst.placement.flags & 0xff == 0xde { continue; }
@@ -6820,6 +6865,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if let Some(surf) = &dc.surfaces {
                 let mut decal_meshes: Vec<u32> = surf.effects.iter().map(|r| r.decal).filter(|m| *m != 0).collect();
                 let mut debris_meshes: Vec<u32> = surf.effects.iter().map(|r| r.debris_mesh).filter(|m| *m != 0).collect();
+                // break-debris draw: a killed breakable's pieces are the same `Debris_Create` class,
+                // models from `EffectInfo[mat & 0x3f]+0x74` (nf_game::shatter::EFFECT_INFO) — they share
+                // the debris slots (slot k ≥ effects.debris.len() poses breaks.shatter.debris).
+                debris_meshes.extend(nf_game::shatter::EFFECT_INFO.iter().map(|e| e.model).filter(|m| *m != 0));
                 let mut casing_meshes: Vec<u32> = surf.ammo.casing_mesh.iter().copied().filter(|m| *m != 0).collect();
                 // The gas puffs (`Gas_Init` 0x1aacc8): one draw slot per pool index for each mesh a puff can carry —
                 // SMOKE_QUAD (muzzle smoke, searchlight smoke, trails) and every `EffectInfo` gas mesh (the impact
@@ -7358,7 +7407,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // non-07000005 level would explain "ghostly white": texture × white vertex × GAIN → white.
         let untextured = materials.iter().filter(|m| m.key.is_none()).count();
         if untextured > 0 { eprintln!("render: {untextured} of {} materials have no texture (white fallback)", materials.len()); }
-        let textures = keys.into_iter().map(|key| {
+        let textures: Vec<TextureImage> = keys.into_iter().map(|key| {
             TextureImage::from_texture(key.0, &level.maps[key.0].textures[key.1 as usize])
         }).collect();
         let mut hud_textures: Vec<(u32, TextureImage)> = crate::hud::TEXTURES.iter().chain(crate::menu::MENU_TEXTURES.iter()).chain(crate::menu::mp_textures().iter()).filter_map(|&h| level.maps.iter().enumerate().find_map(|(mi, m)| m.textures.iter().find(|t| t.hashcode == h).map(|t| {
@@ -7707,7 +7756,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             eprintln!("[mp-props] gunimps {g} turrets {t:?} destroy {dz} drawn: guns {} destroy {} vehicles {}",
                 misc_drawn.get(&0x34).copied().unwrap_or(0), misc_drawn.get(&0xe1).copied().unwrap_or(0), misc_drawn.get(&0xda).copied().unwrap_or(0));
         }
-        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
+        // break-shards draw: each glass pane's face words → the pane map's loaded texture.
+        let mut shard_tex: HashMap<u32, usize> = HashMap::new();
+        if let (Some(sm), Some(main)) = (sim.as_ref(), level.main_map()) {
+            for b in sm.drones.breaks.list.iter().filter(|b| b.kind == 2) {
+                let Some(p) = level.maps[main].placements.get(b.placement) else { continue };
+                let map = if p.by_hash() { level.by_hash.get(&p.hashcode).map_or(main, |&(m, _)| m) } else { main };
+                for g in &b.src.glass {
+                    if let Some(i) = textures.iter().position(|t: &TextureImage| t.key == (map, g.material)) { shard_tex.entry(g.material).or_insert(i); }
+                }
+            }
+        }
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -8174,7 +8234,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             for r in 0..3 { for k in 0..3 { m[r][k] *= d.scale; } }
                             m
                         }
-                        _ => far,
+                        Some(_) => far,
+                        // A killed breakable's pieces (`Break_Kill` 0x12b970 → `Debris_Create`): the
+                        // same class and draw — euler `rot` (the accumulated spin [M 0x1aac00:49-52]) at
+                        // obj+0x30, scaled by obj+0xe8 (`Control_GetObjMatrix` 0x134210:25-33).
+                        None => match s.drones.breaks.shatter.debris.get(slot - s.drones.effects.debris.len()) {
+                            Some(d) if d.model == mesh => {
+                                let mut m = nf_formats::placement::object_matrix(d.rot, d.pos);
+                                for r in 0..3 { for k in 0..3 { m[r][k] *= d.e8; } }
+                                m
+                            }
+                            _ => far,
+                        },
                     },
                     // fix-grenade-throw: the smoke grenade's cloud (`Occlude_Create` 0x17ea80) — a
                     // static object at `obj+0x30`, no rotation (`Occlude_Update` 0x17eba0 only counts
@@ -10273,15 +10344,20 @@ impl Sim {
             let damage = self.weapons.records.get(row[shooter].held as usize)
                 .map_or(10.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
             if !destroyable {
-                let br = &mut self.drones.breaks.list[i];
-                br.health -= damage;
-                if br.health < 0.0 {
-                    br.dead = true;
-                    let pos = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
-                    let sound: u16 = if br.kind == 2 { 0x2E } else { 0x5F3 };
-                    let (placement, kind) = (br.placement, br.kind);
-                    self.drones.break_kills.push((placement, kind, sound));
-                    self.drones.audio.play3d(u32::from(sound), pos, None);
+                let dead = {
+                    let br = &mut self.drones.breaks.list[i];
+                    br.health -= damage;
+                    br.health < 0.0
+                };
+                if dead {
+                    // Break_Kill 0x12b970 through the shared kill path — the kill spawns the
+                    // pieces (crate::shatter, docs/systems/break-debris.md) and returns the
+                    // effect (the silent-kill case with no collision records returns None
+                    // [M 0x12b970:59-63]).
+                    if let Some(k) = self.drones.breaks.kill(i, head, end, &mut self.drones.rng) {
+                        self.drones.break_kills.push((k.placement, k.kind, k.sound));
+                        self.drones.audio.play3d(u32::from(k.sound), k.pos, None);
+                    }
                 }
                 continue;
             }
