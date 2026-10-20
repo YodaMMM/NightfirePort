@@ -1,0 +1,14 @@
+# The lobby service (docs/tools/cloud-lobby.md) [S port design]: a Worker + one Durable Object, free tier.
+# Deploy: npx wrangler login && npx wrangler deploy — the printed *.workers.dev URL goes into the
+# players' %APPDATA%\NightfirePort\net.txt (`lobby_service = <url>`). No secrets, nothing at rest.
+name = "netfire-lobby"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[[durable_objects.bindings]]
+name = "LOBBY"
+class_name = "Lobby"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Lobby"]

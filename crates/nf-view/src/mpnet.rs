@@ -333,6 +333,21 @@ pub struct NetCore {
     /// net-short-codes: the joiner's short-code status line for the join page (the note getter
     /// hands it to the draw code) [S].
     short_note: Option<String>,
+    /// net-cloud-lobby: the lobby service's URL when the cloud meeting point is on (None = off —
+    /// unset, or a player-set nf-lobbyd overrides it) [S docs/systems/net-cloud-lobby.md].
+    cloud_cfg: Option<String>,
+    /// net-cloud-lobby: the host's register/refresh/leave client (None until the first refresh
+    /// period; the code shows while the service keeps answering) [S].
+    cloud_host: Option<nf_net::cloud::CloudHost>,
+    /// net-cloud-lobby: the next POST /v1/host (ms on the core's clock).
+    cloud_next_ms: u64,
+    /// net-cloud-lobby: the joiner's public-lobby list while the Join Online page is open [S].
+    cloud_browse: Option<nf_net::cloud::CloudBrowse>,
+    /// net-cloud-lobby: the joiner's code lookup through the service, before any dial [S].
+    cloud_pending: Option<nf_net::cloud::CloudLookup>,
+    /// net-cloud-lobby: the host's public/private toggle — public lists, private is code only
+    /// (lobbies are public by default) [S].
+    pub_lobby: bool,
     /// mp-lobby-one-screen: the host's last published snapshot / the client's last received
     /// one, and the arrived client edits the host has not drained [S §6.4].
     lobby: Option<nf_net::LobbyState>,
@@ -376,6 +391,12 @@ impl NetCore {
             dir_code: None,
             pending_join: None,
             short_note: None,
+            cloud_cfg: None,
+            cloud_host: None,
+            cloud_next_ms: 0,
+            cloud_browse: None,
+            cloud_pending: None,
+            pub_lobby: true,
             lobby: None,
             lobby_edits: Vec::new(),
         })))
@@ -414,6 +435,13 @@ impl NetCore {
         self.dir_code = None;
         self.pending_join = None;
         self.short_note = None;
+        // net-cloud-lobby: the same for the cloud entry (keyed by our IP + port) — a fresh code
+        // arrives with the next refresh period; a leave for the old entry would delete the new
+        // one, so the client object is dropped without a DELETE (it expires server-side anyway).
+        self.cloud_host = None;
+        self.cloud_next_ms = 0;
+        self.cloud_pending = None;
+        self.cloud_browse = None;
         Ok(())
     }
 
@@ -445,6 +473,8 @@ impl NetCore {
         self.lobby_edits.clear();
         self.pending_join = None;
         self.short_note = None;
+        self.cloud_pending = None;
+        self.cloud_browse = None;
         Ok(())
     }
 
@@ -474,6 +504,12 @@ impl NetCore {
             dir_code: None,
             pending_join: None,
             short_note: None,
+            cloud_cfg: None,
+            cloud_host: None,
+            cloud_next_ms: 0,
+            cloud_browse: None,
+            cloud_pending: None,
+            pub_lobby: true,
             lobby: None,
             lobby_edits: Vec::new(),
         })))
@@ -485,13 +521,38 @@ impl NetCore {
         self.reach_cfg = Some(cfg);
     }
 
+    /// net-cloud-lobby: the cloud meeting point's URL (None = off — unset, or a player-set
+    /// nf-lobbyd overrides it). Tests point it at their local mock server [S].
+    pub fn enable_cloud(&mut self, url: Option<String>) {
+        self.cloud_cfg = url;
+        self.cloud_host = None;
+        self.cloud_next_ms = 0;
+    }
+
+    /// net-cloud-lobby: the host's public/private toggle (public lists, private is code only).
+    pub fn set_public_lobby(&mut self, public: bool) {
+        self.pub_lobby = public;
+    }
+
+    pub fn public_lobby(&self) -> bool {
+        self.pub_lobby
+    }
+
     /// Client: dial a typed target — a 4-character code, a join code or `a.b.c.d:port` — on the
     /// SAME core, starting "my code" discovery when reach is enabled. A 4-character code is not
-    /// dialled here: the LOOKUP to the player's lobby server runs in `poll` and dials what it
-    /// found (net-short-codes) [S].
+    /// dialled here: the lookup (the cloud service first, else the player's nf-lobbyd) runs in
+    /// `poll` and dials what it found (net-short-codes, net-cloud-lobby) [S].
     pub fn dial(&mut self, typed: &str) -> Result<(), String> {
         match nf_net::p2p::parse_join_target(typed).map_err(|e| format!("{e:?}"))? {
             nf_net::p2p::JoinTarget::Short(code) => {
+                let code_s = nf_net::directory::short_code_string(&code);
+                // net-cloud-lobby: the cloud service is the default meeting point — a 4-character
+                // code is looked up over HTTPS and dialled when the answer lands (in poll) [S].
+                if let Some(url) = self.cloud_cfg.clone() {
+                    self.short_note = Some(format!("Looking up {code_s} on the lobby service..."));
+                    self.cloud_pending = Some(nf_net::cloud::CloudLookup::new(url, &code_s));
+                    return Ok(());
+                }
                 let server = self
                     .reach_cfg
                     .as_ref()
@@ -530,10 +591,13 @@ impl NetCore {
         self.reach_join = None;
     }
 
-    /// net-short-codes: the code the lobby shows — the server's 4-character one while it keeps
-    /// answering, else the long self-contained code [S].
+    /// net-cloud-lobby: the code the lobby shows — the cloud service's while it keeps answering,
+    /// then the nf-lobbyd short code, then the long self-contained code [S].
     pub fn join_code_display(&self) -> Option<String> {
         let now = self.epoch.elapsed().as_millis() as u64;
+        if let Some(c) = self.cloud_host.as_ref().and_then(|h| h.code(now)) {
+            return Some(c.to_string());
+        }
         if let Some(c) = self.dir_code.as_ref().and_then(|sc| sc.code(now)) {
             return Some(c);
         }
@@ -544,6 +608,12 @@ impl NetCore {
     /// is nothing to say) [S].
     pub fn join_code_note(&self) -> Option<String> {
         self.short_note.clone()
+    }
+
+    /// net-cloud-lobby: the public-lobby list rows now (empty when the page is closed, the
+    /// service is off, or no answer has landed yet) [S].
+    pub fn cloud_lobbies(&self) -> Vec<nf_net::cloud::CloudLobby> {
+        self.cloud_browse.as_ref().map_or(Vec::new(), |b| b.rows().to_vec())
     }
 
     /// net-p2p: the online pages' reachability lines.
@@ -597,6 +667,8 @@ impl NetCore {
         // in progress — the record says which).
         if let Some(b) = self.browse.as_mut() { b.poll(now); }
         let strays = self.sess.take_stray();
+        // net-cloud-lobby: the joiner's public-lobby list refreshes while the page drives it [S].
+        if let Some(cb) = self.cloud_browse.as_mut() { cb.poll(now); }
         if self.is_host && !self.closed {
             // The internet directory: REGISTER from the game socket every few seconds (the server
             // lists the source address — this socket's public mapping). net-short-codes: the
@@ -618,6 +690,38 @@ impl NetCore {
                     if let Some(r) = nf_net::discovery::answer(d, info) { self.sess.send_raw(*from, &r); }
                     if let Some(sc) = self.dir_code.as_mut() { sc.on_packet(d, now); }
                 }
+            }
+            // net-cloud-lobby: POST /v1/host every CLOUD_REFRESH_MS while hosting + advertising —
+            // the body's port is the STUN-observed public UDP port when reachability knows one,
+            // else the game port; the service records (our public IP as it saw it, that port) [S].
+            if let Some(url) = self.cloud_cfg.clone() {
+                if self.advert.is_some() && now >= self.cloud_next_ms {
+                    self.cloud_next_ms = now + nf_net::cloud::CLOUD_REFRESH_MS;
+                    let info = self.advert.clone().expect("advert checked");
+                    let public_port = self
+                        .reach_host
+                        .as_ref()
+                        .map(|r| r.status())
+                        .and_then(|s| s.public)
+                        .map(|p| p.port())
+                        .unwrap_or_else(|| self.sess.local_addr().port());
+                    let lan = nf_net::p2p::local_ipv4()
+                        .map(|ip| format!("{ip}:{}", self.sess.local_addr().port()))
+                        .unwrap_or_default();
+                    let ch = self.cloud_host.get_or_insert_with(|| nf_net::cloud::CloudHost::new(url));
+                    ch.set_advert(nf_net::cloud::CloudAdvert {
+                        version: nf_net::cloud::game_version(),
+                        name: info.name,
+                        map: info.level_code,
+                        scenario: info.scenario,
+                        players: info.players,
+                        max_players: info.max_players,
+                        public: self.pub_lobby,
+                        lan,
+                        port: public_port,
+                    });
+                }
+                if let Some(ch) = self.cloud_host.as_mut() { ch.poll(now); }
             }
         }
         // net-short-codes: the joiner's 4-character code is being looked up; the found endpoint
@@ -665,6 +769,46 @@ impl NetCore {
                 }
             } else {
                 self.pending_join = Some(lk);
+            }
+        }
+        // net-cloud-lobby: the joiner's 4-character code is being looked up over HTTPS; the found
+        // endpoint is dialled exactly as a long code's (rebind + JoinReach, the LAN endpoint as a
+        // probe hint). Any failure leaves a clear note for the join page [S].
+        if self.cloud_pending.is_some() {
+            let mut lk = self.cloud_pending.take().expect("cloud_pending checked");
+            lk.poll();
+            if let Some(r) = lk.result() {
+                match r {
+                    Ok(f) => {
+                        let public = std::net::SocketAddr::V4(f.public);
+                        eprintln!("[net] code {}: the service knows {}", lk.code(), public);
+                        let name = self.display_name();
+                        if let Err(e) = self.rebind_client(public) {
+                            eprintln!("[net] code {}: dial failed: {e}", lk.code());
+                            self.short_note = Some("Could not open a socket to dial the host".to_string());
+                            return;
+                        }
+                        if !name.is_empty() { self.sess.set_display_name(&name); }
+                        if let Some(cfg) = self.reach_cfg.clone() {
+                            let mut jr = nf_net::p2p::JoinReach::start(&public.to_string(), &cfg, reach_seed()).ok();
+                            if let Some(j) = jr.as_mut() {
+                                j.set_lan_hint(f.lan.map(|a| std::net::SocketAddr::V4(a)));
+                            }
+                            self.reach_join = jr;
+                        }
+                        self.short_note = None;
+                    }
+                    Err(nf_net::cloud::CloudLookupError::NotFound) => {
+                        eprintln!("[net] code {}: not found on the service", lk.code());
+                        self.short_note = Some(format!("Code {} was not found", lk.code()));
+                    }
+                    Err(nf_net::cloud::CloudLookupError::Unreachable) => {
+                        eprintln!("[net] code {}: the service is unreachable", lk.code());
+                        self.short_note = Some("The lobby service is unreachable - check lobby_service in net.txt".to_string());
+                    }
+                }
+            } else {
+                self.cloud_pending = Some(lk);
             }
         }
         if self.reach_host.is_some() || self.reach_join.is_some() {
@@ -898,10 +1042,15 @@ impl NetCore {
         if !self.closed {
             self.sess.leave();
             self.closed = true;
+            // net-cloud-lobby: the service's entry goes at once (fire and forget; a lost DELETE
+            // expires out server-side within 90 s) [S].
+            if let Some(h) = self.cloud_host.as_mut() { h.leave(); }
             self.drop_reach();
             self.release_socket();
             self.advert = None;
             self.browse = None;
+            self.cloud_browse = None;
+            self.cloud_pending = None;
         }
     }
 
@@ -1220,6 +1369,15 @@ impl crate::menu::MpSession for SessionProxy {
         } else if !on {
             c.browse = None;
         }
+        // net-cloud-lobby: the Join Online page drives the public list too, when the service is
+        // on (the same on/off as the LAN browse; the rows refresh in the core's poll) [S].
+        if on {
+            if let (Some(url), None) = (&c.cloud_cfg, &c.cloud_browse) {
+                c.cloud_browse = Some(nf_net::cloud::CloudBrowse::open(url.clone(), nf_net::cloud::game_version()));
+            }
+        } else {
+            c.cloud_browse = None;
+        }
     }
     fn browse_rows(&self) -> Vec<crate::menu::MpLobbyRow> {
         self.0.borrow().browse.as_ref().map_or(Vec::new(), |b| b.rows().into_iter().map(|e| crate::menu::MpLobbyRow {
@@ -1241,9 +1399,201 @@ impl crate::menu::MpSession for SessionProxy {
     fn expect_peer(&mut self, code: &str) -> bool { self.0.borrow_mut().expect_peer(code) }
     fn join_code_display(&self) -> Option<String> { self.0.borrow().join_code_display() }
     fn join_code_note(&self) -> Option<String> { self.0.borrow().join_code_note() }
+    fn cloud_lobbies(&self) -> Vec<crate::menu::MpCloudLobby> {
+        self.0.borrow().cloud_lobbies().into_iter().map(|l| crate::menu::MpCloudLobby {
+            code: l.code, name: l.name, level: l.map, scenario: l.scenario, players: l.players, max_players: l.max_players,
+        }).collect()
+    }
+    fn public_lobby(&self) -> bool { self.0.borrow().public_lobby() }
+    fn set_public_lobby(&mut self, public: bool) { self.0.borrow_mut().set_public_lobby(public); }
 }
 
 /// A per-run seed for STUN transaction ids / punch nonces (not security relevant).
 fn reach_seed() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64)
+}
+
+#[cfg(test)]
+mod cloud_tests {
+    //! net-cloud-lobby's NetCore-level golden path: the host's register/refresh through the core's
+    //! poll shows the service's 4-character code, and a joiner dials a typed 4-character code
+    //! through the service into a real loopback session (the same mock service shape as
+    //! nf-net's tests/cloud_lobby.rs, std-only) [S docs/systems/net-cloud-lobby.md].
+
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+
+    struct Entry {
+        code: String,
+        ip: String,
+        port: u16,
+        version: String,
+        public: bool,
+        seen: u64,
+    }
+
+    #[derive(Default)]
+    struct Svc {
+        entries: BTreeMap<String, Entry>,
+        codes: BTreeMap<String, String>,
+        rng: u64,
+    }
+
+    fn next_code(s: &mut Svc) -> String {
+        loop {
+            let mut code = String::new();
+            s.rng = s.rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let mut x = s.rng;
+            for _ in 0..4 {
+                x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                code.push(nf_net::directory::SHORT_CODE_ALPHABET[(x >> 33) as usize % 30] as char);
+            }
+            if !s.codes.contains_key(&code) {
+                return code;
+            }
+        }
+    }
+
+    fn handle(s: &mut Svc, method: &str, path: &str, ip: &str, body: Option<&str>) -> (u16, String) {
+        match (method, path) {
+            ("POST", "/v1/host") => {
+                let v = body.and_then(nf_net::cloud::json_parse).expect("a body");
+                let g = |k: &str| v.get(k).cloned();
+                let (Some(nf_net::cloud::Json::Str(version)), Some(nf_net::cloud::Json::Num(port))) = (g("version"), g("port")) else {
+                    return (400, "{\"error\":\"bad\"}".into());
+                };
+                let public = g("public") != Some(nf_net::cloud::Json::Bool(false));
+                let port = port as u64 as u16;
+                let key = format!("{ip}:{port}");
+                let code = match s.entries.get(&key) {
+                    Some(e) => e.code.clone(),
+                    None => {
+                        let c = next_code(s);
+                        s.codes.insert(c.clone(), key.clone());
+                        c
+                    }
+                };
+                s.entries.insert(key, Entry { code: code.clone(), ip: ip.to_string(), port, version, public, seen: 0 });
+                (200, format!("{{\"code\":\"{code}\",\"public_addr\":\"{ip}:{port}\"}}"))
+            }
+            ("GET", p) if p.starts_with("/v1/code/") => {
+                let code = p["/v1/code/".len()..].to_uppercase();
+                match s.codes.get(&code).and_then(|k| s.entries.get(k)) {
+                    Some(e) => (200, format!("{{\"code\":\"{}\",\"public_addr\":\"{}:{}\",\"lan_addr\":\"\",\"name\":\"L\"}}", e.code, e.ip, e.port)),
+                    None => (404, "{\"error\":\"not found\"}".into()),
+                }
+            }
+            _ => (404, "{\"error\":\"no route\"}".into()),
+        }
+    }
+
+    /// The mock service on 127.0.0.1:0 (its clock is irrelevant here — the entries never expire
+    /// inside a test run).
+    fn service() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let svc = Arc::new(std::sync::Mutex::new(Svc::default()));
+        let svc2 = svc.clone();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut st) = conn else { continue };
+                let svc = svc2.clone();
+                std::thread::spawn(move || {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        let Ok(n) = st.read(&mut chunk) else { return };
+                        if n == 0 { return; }
+                        buf.extend_from_slice(&chunk[..n]);
+                        if buf.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    }
+                    let head_end = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4).unwrap_or(buf.len());
+                    let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+                    let mut lines = head.lines();
+                    let mut it = lines.next().unwrap_or_default().split_whitespace();
+                    let (method, target) = (it.next().unwrap_or("").to_string(), it.next().unwrap_or("").to_string());
+                    let mut cl = 0;
+                    for l in lines {
+                        if let Some(v) = l.to_ascii_lowercase().strip_prefix("content-length:") {
+                            cl = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = buf[head_end..].to_vec();
+                    while body.len() < cl {
+                        let Ok(n) = st.read(&mut chunk) else { break };
+                        if n == 0 { break; }
+                        body.extend_from_slice(&chunk[..n]);
+                    }
+                    let body = String::from_utf8_lossy(&body).trim().to_string();
+                    let ip = st.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+                    let (status, json) = handle(&mut svc.lock().unwrap(), &method, &target, &ip, (!body.is_empty()).then_some(body.as_str()));
+                    let resp = format!("HTTP/1.1 {status} S\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", json.len(), json);
+                    let _ = st.write_all(resp.as_bytes());
+                    let _ = st.flush();
+                });
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    fn wait_until(mut done: impl FnMut() -> bool) {
+        let t0 = std::time::Instant::now();
+        while !done() {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(10), "timed out");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn the_host_shows_the_service_code_and_the_joiner_dials_a_short_code_through_it() {
+        let url = service();
+
+        // The host: a real core, advertising, cloud service on, public toggle on.
+        let host = NetCore::host(0).unwrap();
+        host.borrow_mut().enable_cloud(Some(url.clone()));
+        host.borrow_mut().set_public_lobby(true);
+        crate::menu::MpSession::set_lobby(&mut SessionProxy(host.clone(), None), "Cloud game", 0x0700_0023, 1, 1);
+        let mut code = String::new();
+        wait_until(|| {
+            host.borrow_mut().poll();
+            code = host.borrow().join_code_display().unwrap_or_default();
+            code.len() == 4 && code.bytes().all(|b| nf_net::directory::SHORT_CODE_ALPHABET.contains(&b))
+        });
+        assert!(host.borrow().public_lobby(), "the getter exposes the toggle");
+        assert!(code.bytes().all(|b| nf_net::directory::SHORT_CODE_ALPHABET.contains(&b)), "the service's code shows: {code}");
+
+        // The joiner: a second core dials the 4-character code; the cloud lookup lands, the core
+        // re-binds and the real handshake connects (the long-code path's own shape).
+        let joiner = NetCore::host(0).unwrap();
+        joiner.borrow_mut().enable_cloud(Some(url.clone()));
+        joiner.borrow_mut().set_codename("Guest");
+        joiner.borrow_mut().dial(&code).expect("the lookup starts");
+        let want_note = format!("Looking up {code} on the lobby service...");
+        assert_eq!(joiner.borrow().join_code_note().as_deref(), Some(want_note.as_str()));
+        wait_until(|| {
+            host.borrow_mut().poll();
+            joiner.borrow_mut().poll();
+            joiner.borrow().link() == MpNetLink::Connected
+        });
+        assert_eq!(joiner.borrow().join_code_note(), None, "the note clears once connected");
+        host.borrow_mut().close();
+        joiner.borrow_mut().close();
+    }
+
+    #[test]
+    fn an_unknown_cloud_code_leaves_a_clear_note() {
+        let url = service();
+        let joiner = NetCore::host(0).unwrap();
+        joiner.borrow_mut().enable_cloud(Some(url));
+        joiner.borrow_mut().dial("ZZ9V").unwrap();
+        wait_until(|| {
+            joiner.borrow_mut().poll();
+            joiner.borrow().join_code_note().is_some_and(|n| n.contains("was not found"))
+        });
+        assert_eq!(joiner.borrow().join_code_note().as_deref(), Some("Code ZZ9V was not found"));
+        joiner.borrow_mut().close();
+    }
 }
