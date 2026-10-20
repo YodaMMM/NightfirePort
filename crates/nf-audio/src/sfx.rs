@@ -795,6 +795,21 @@ impl Driver {
 
     /// The ids of the live items (tests).
     pub fn ids(&self) -> Vec<u32> { self.items.iter().map(|it| it.id).collect() }
+
+    /// The hardware voices of live LOOPED items (tests, bathhouse-voices-02b): the headless stand-in
+    /// ends every non-looping voice each tick (the stream slots free for the next start) but must
+    /// keep the looped ambients the game keeps (a looped sample never reports its end on hardware).
+    pub fn looping_voice_ids(&self) -> Vec<u32> {
+        let mut out = Vec::new();
+        for it in &self.items {
+            if it.vh.iter().flatten().any(|&v| self.voices[v].as_ref().is_some_and(|x| x.looping)) {
+                for v in it.vh.iter().flatten() {
+                    if let Some(x) = self.voices[*v].as_ref() { out.push(x.front); if let Some(r) = x.rear { out.push(r); } }
+                }
+            }
+        }
+        out
+    }
 }
 
 /// The driver plus the sound output, fed by the EE layer's commands once per game tick.
@@ -834,8 +849,8 @@ impl Sound {
             // `ES_MusicSetVolume`: music ducks to `DuckerCurrentVolume` and fades with `FadeMusicVolume` [M §5.5].
             out.push(Cmd::MusicGain(p.gain(self.driver.music_master, self.driver.ducker_current, self.driver.fade_music_volume)));
         }
-        if let Some(o) = &self.output { o.send(out); }
         if let Some(c) = &self.captured { c.lock().unwrap().extend(out.iter().cloned()); }
+        if let Some(o) = &self.output { o.send(out); }
     }
 
     /// The pause page's sound hold: `MenuManager_Create` with `pause_sound` runs `SFXPause` (op 9) +
