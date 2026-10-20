@@ -1,7 +1,9 @@
 # Releases and the launcher's self-update
 
-The user's rule (2026-10-19): a public GitHub release goes out after every fully green merge batch, and players'
-launchers install it automatically on launch.
+The user's rule (2026-10-19, revised the same evening — "Might be putting releases out too frequently"): green
+batches merge to master all day, and **one public GitHub release goes out each evening (~9 pm MST)** with everything
+that passed since the last one. An urgent fix for something badly broken may go out sooner. Players' launchers
+install it automatically on launch.
 
 ## What a release is
 
