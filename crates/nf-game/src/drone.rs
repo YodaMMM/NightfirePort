@@ -9225,6 +9225,61 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         if !sound.looped { self.sounds.push(Sound { id: sound.id, pos: from, inner: sound.inner, outer: sound.outer, weight: sound.weight }); }
     }
 
+    /// mp-shot-effects: the cosmetic bullet spawn for a REMOTE slot's shot — `fire_player`'s spawn
+    /// arm (`Bullet_init` 0x12c5a0 / `Player_WeaponInitBullet` 0x1a4bf0's per-pellet loop) with the
+    /// caller's generator for the spread draws, so the shared stream is never touched (the flush
+    /// runs in the shared-stream context) and every machine spawns the same shells [S port design —
+    /// the PS2 had no networked MP; the port presents the shooter's SP effect set everywhere]. The
+    /// bullets fly, trail, whiz and impact through the SAME `update_player_bullets` path the
+    /// shooter's own rounds ride; the shared MP combat owns the damage (the cosmetic round deals
+    /// none: in MP the guards' list is empty, the breakables take the shared world pass's shots
+    /// (`net_world` gate) and the player-bullet path never checks a player volume). No hearing
+    /// entry (the remote shot's audible sound is its fire script's op-1, already played) and no
+    /// `PlrStat_LogShotFired` (the shooter's own machine logs its own shots).
+    /// mp-shot-effects: the flight segments this tick (`bullet_paths` is private draw bookkeeping;
+    /// the tests count the per-pellet segments).
+    pub fn bullet_paths_len(&self) -> usize {
+        self.bullet_paths.len()
+    }
+
+    pub fn fire_remote_cosmetic(&mut self, d: &Data, from: V3, dir: V3, weapon: u8, rng: &mut Rng) {
+        let Some(w) = d.weapons.records.get(weapon as usize) else { return };
+        let w = &w[..];
+        let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+        let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+        // The grenade-ammo launch whoosh [M Bullet_init 0x12c5a0:285-291 — the +0x90 == 0x0e arm],
+        // the same effect the shooter's machine plays; no rng.
+        let whoosh = if w[0x90] == 0x0e { self.audio.play3d(0x10e, from, None) } else { 0 };
+        for _ in 0..u32::from_le_bytes(w[0x18..0x1c].try_into().unwrap()).clamp(1, 16) {
+            let dir = crate::bullet::spread(dir, f(0x24), flags68, rng);
+            let flags6c = u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap());
+            let speed = f(0x20) * if flags6c & 0x200 != 0 { 0.25 } else { 1.0 };
+            // The 0x10000 ribbon [M Bullet_init 0x12c5a0:116-133], as fire_player spawns it.
+            let swoosh_seg = {
+                let base = u16::from_le_bytes([w[0x02], w[0x03]]);
+                if flags6c & 0x1_0000 != 0 && !matches!(base, 0x33 | 0x6a | 0x6e) {
+                    self.swoosh_create(from, from, i16::from_le_bytes([w[0x76], w[0x77]]), 0x0200_0918, 1)
+                } else { None }
+            };
+            self.player_bullets.push(PlayerBullet {
+                pos: from, dir, speed, travelled: 0.0, range: f(0x1c), damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
+                homing: flags6c & 0x2_0000 != 0,
+                target: None,
+                gravity: flags6c & 0x8 != 0,
+                guided_cam: flags6c & 0x4 != 0,
+                snd: whoosh,
+                swoosh: swoosh_seg,
+                born: self.frame,
+            });
+        }
+        // The shell: `Bullet_init_casing` 0x12fde0's one-per-shot eject — at the shooter's body
+        // (no view model to pose; [S] the head stands in for the gun bone), from the caller's
+        // generator so every machine ejects the same shell.
+        let yaw = dir[0].atan2(dir[2]);
+        let pitch = dir[1].clamp(-1.0, 1.0).asin();
+        self.casings.eject(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1], rng);
+    }
+
     /// `Explode_Create` 0x17cbd0's blast, shared by the fuse death (`Bullet_handle_object_destruction`
     /// 0x12e1c0), the impact explode (`Bullet_CollisionHandler` 0x12d068-0x12d0bc [M, disassembled])
     /// and the grenade contact. `Explode_Propagate` 0x17c518 through `explode::propagate`: the full
