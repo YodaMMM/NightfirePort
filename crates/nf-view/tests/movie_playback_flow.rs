@@ -9,7 +9,7 @@
 //! case 6 (the level → outro-code switch, lui/ori pairs at 0x182e60-0x182eb4 [L ee_snapshot]),
 //! `UsingMovie__FUi` 0x107eb8 (the 23-hash whitelist), `psiStartBackgroundMovie__FUiScUi` 0x1081a8.
 
-use nf_view::menu::{self, Action, FrontEnd, Outcome, Page, Stats, ST_MAPLOAD, ST_MOVIE, ST_RUNNER};
+use nf_view::menu::{self, Action, FrontEnd, Outcome, Page, Stats, ST_FADE_HOLD, ST_MAPLOAD, ST_MOVIE, ST_RUNNER};
 use nf_view::movie::{self, StartError};
 
 /// Drives the boot path to the title the way `GameFlow_Main` + `ResetMap_Load` would.
@@ -84,19 +84,37 @@ fn a_menu_started_mission_rides_state6_back_to_the_level_load() {
     // START → P_PARISENUM → P_ESTHERO plays 0x073B0048 as a menu background movie — GameFlow stays
     // in state 2, no state 6 [M 0x20a648:43, 0x20a060:16-25] — and Main opens when it ends (:28-45).
     fe.action(Action::Confirm);
-    for _ in 0..3 + menu::ESTHERO_TICKS { fe.tick(); assert_eq!(fe.flow.get_state(), ST_RUNNER, "no GameFlow movie state during the intro"); }
-    assert_eq!(fe.page, Page::Main, "the intro ran out; Main is up");
+    // G-048(4): P_PARISENUM's 0x50 pumps the card machine before P_ESTHERO opens [M 0x20a648:26-47
+    // — HandlePS2CardState 0x110b98's walk; the sceMc latency is the marked [S]] — the intro
+    // runs ≈5 ticks later than the old [S] first-0x50 open the fixed offset pinned. Bounded
+    // wait on the arrival, the ST_RUNNER sister kept per tick (fe-gaps-g048-2).
+    let mut on_main = false;
+    for _ in 0..menu::ESTHERO_TICKS + 16 {
+        fe.tick();
+        assert_eq!(fe.flow.get_state(), ST_RUNNER, "no GameFlow movie state during the intro");
+        if fe.page == Page::Main { on_main = true; break; }
+    }
+    assert!(on_main, "the intro ran out; Main is up");
     fe.action(Action::Confirm); // NightFire → Codename after the 0x13 delay [M C_GONIGHTFIRE 0x2169b8:29-37]
     for _ in 0..menu::DELAYED_PAGE_TICKS + menu::MAIN_OPEN_BLOCK { fe.tick(); }
     assert_eq!(fe.cursor, 1, "row 1 = Play without saving [M P_NFSELECT 0x20aec0:96-97]");
     fe.action(Action::Confirm); // Codename → the confirm box armed
     fe.action(Action::Confirm); // the box → Select Difficulty
+    // G-048(1): the box's resolve and the difficulty confirm both ride Menu_ChangePageCloseIris
+    // [M P_NFSELECT 0x20aec0:103, C_SBNFDFCTY 0x216ca8:16 → 0x202190:8-9] — wait out each 10-tick
+    // 0x44 before the next input.
+    for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
     fe.action(Action::Confirm); // Difficulty → Single Player
+    for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); } // [M 0x216ca8:16]
     fe.unlock_all = true;
     fe.cursor = 1;
     assert!(fe.action(Action::Confirm)); // The Exchange (0x07000005)
     assert_eq!(fe.flow.level_to_load, 0x0710_0005);
     assert!(fe.flow.movie_pending, "the host must hold the level load until phase 2 [M 0x1d6360 phase 0]");
+    // C_SBNFMAP's 84-frame fade rides the loader [M 0x20ba50]; the load starts when it pops.
+    assert_eq!(fe.flow.get_state(), ST_FADE_HOLD);
+    let fade_ticks = fe.flow.fade_frames + 1;
+    for _ in 0..fade_ticks { fe.flow.main_tick(); }
     assert!(!fe.flow.load_tick(), "phase 0: the movie wrap");
     assert_eq!(fe.flow.movie_code, 0x0710_0005, "GameState+0x10 [M 0x1d6360]");
     assert_eq!(fe.flow.get_state(), ST_MOVIE, "state 6 pushed [M]");
@@ -188,14 +206,16 @@ fn a_failed_mission_returns_to_the_map_without_a_movie() {
 
 /// The `UsingMovie` whitelist [M 0x107eb8]: an unlisted code never starts (the game's
 /// psiStartBackgroundMovie returns before opening anything, so state 6 exits on frame 1), whatever
-/// image is mounted. The check runs before any file IO, so this needs no ISO.
+/// image is mounted. The check runs before any file IO, so this needs no ISO. The volume arg is
+/// the boot `SfxMasterVolume` 100 [L 0x30c95c] — irrelevant to the gate, which runs first [M
+/// 0x1081a8: the whitelist check precedes the MovieVolume store].
 #[test]
 fn unwhitelisted_codes_never_start_a_movie() {
-    assert!(matches!(movie::Player::start("/nonexistent/no.iso", 0x0710_0002), Err(StartError::NotWhitelisted)),
+    assert!(matches!(movie::Player::start("/nonexistent/no.iso", 0x0710_0002, 100), Err(StartError::NotWhitelisted)),
         "0x7100002 is not in UsingMovie [M 0x107eb8]");
-    assert!(matches!(movie::Player::start("/nonexistent/no.iso", 0x0730_000f), Err(StartError::NotWhitelisted)),
+    assert!(matches!(movie::Player::start("/nonexistent/no.iso", 0x0730_000f, 100), Err(StartError::NotWhitelisted)),
         "0x730000f is not whitelisted — level 0x0f's silent outro [M]");
-    assert!(matches!(movie::Player::start("/nonexistent/no.iso", 0x0710_0005), Err(StartError::NoMovieData(_))),
+    assert!(matches!(movie::Player::start("/nonexistent/no.iso", 0x0710_0005, 100), Err(StartError::NoMovieData(_))),
         "a whitelisted code passes the gate and reaches the file open [M 0x1081a8]");
 }
 
@@ -207,7 +227,7 @@ fn unwhitelisted_codes_never_start_a_movie() {
 fn the_briefing_movie_plays_from_the_retail_image() {
     let Some(path) = std::env::var_os("NF_MOVIE_ISO") else { eprintln!("skip: NF_MOVIE_ISO (a retail image with movie data) is not set"); return };
     let iso = nf_formats::iso9660::IsoImage::open(&path).unwrap();
-    let mut p = match movie::Player::start(path.to_string_lossy().as_ref(), 0x0710_0001) {
+    let mut p = match movie::Player::start(path.to_string_lossy().as_ref(), 0x0710_0001, 100) {
         Ok(p) => p,
         Err(StartError::NoMovieData(_)) => { eprintln!("skip: this image has no movie data"); return; }
         Err(e) => panic!("start failed: {e:?}"),
@@ -239,7 +259,7 @@ fn the_stubbed_image_declines_real_playback() {
     let iso = nf_formats::iso9660::IsoImage::open(&path).unwrap();
     let probe = iso.find("/MOVIES/30_FPS/07100005.PSS");
     match probe.map(|e| e.size) {
-        Some(0) => assert!(matches!(movie::Player::start(path.to_string_lossy().as_ref(), 0x0710_0005), Err(StartError::NoMovieData(_))),
+        Some(0) => assert!(matches!(movie::Player::start(path.to_string_lossy().as_ref(), 0x0710_0005, 100), Err(StartError::NoMovieData(_))),
             "the 0-byte stub is refused (the game would hang in strFileOpen [M 0x108cc0])"),
         Some(_) => { let _ = iso; eprintln!("this image has movie data — nothing to assert here"); }
         None => eprintln!("no movie directory on this image"),

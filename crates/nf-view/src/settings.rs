@@ -65,6 +65,19 @@ pub fn config_dir() -> Option<PathBuf> {
     }
 }
 
+/// Where the game writes its side files: screenshots (`nf-shots/`), `movie-timing.log`, `nf-view-crash.log`. A release
+/// build writes them to the config dir (the user, 2026-10-19: a NightfirePort.exe run from the Desktop left
+/// movie-timing.log there); a dev build keeps the working folder (the playtest tools read `nf-shots/` there).
+pub fn output_dir() -> PathBuf {
+    if crate::launcher::update::current_version().is_some() {
+        if let Some(d) = config_dir() {
+            let _ = std::fs::create_dir_all(&d);
+            return d;
+        }
+    }
+    PathBuf::from(".")
+}
+
 /// The settings file's full path (`<config dir>/settings.toml`), or None when no config dir
 /// can be resolved (no HOME and no override).
 pub fn default_path() -> Option<PathBuf> { config_dir().map(|d| d.join(FILE_NAME)) }

@@ -92,8 +92,23 @@ impl Hasher {
     }
 }
 
-use super::rules::MpObjState;
+use super::rules::{MpObjBounds, MpObjState};
 use super::{MpMatch, MpObjectRecord};
+
+/// mp-scenarios-online: the model bounds (static per object, but they decide every contact — a
+/// peer that registered different bounds must show as a desync, not drift silently).
+fn hash_bounds(h: &mut Hasher, b: &Option<MpObjBounds>) {
+    match b {
+        None => h.u8(0),
+        Some(b) => {
+            h.u8(1);
+            h.f32_slice(&b.centre);
+            h.f32(b.radius);
+            h.f32_slice(&b.min);
+            h.f32_slice(&b.max);
+        }
+    }
+}
 
 fn hash_object_record(h: &mut Hasher, r: &MpObjectRecord) {
     for row in &r.matrix {
@@ -103,6 +118,7 @@ fn hash_object_record(h: &mut Hasher, r: &MpObjectRecord) {
         h.u32(c);
     }
     h.u32(r.cel);
+    hash_bounds(h, &r.bounds);
 }
 
 fn hash_spawn_points(h: &mut Hasher, m: &MpMatch) {
@@ -169,6 +185,15 @@ fn hash_settings(h: &mut Hasher, m: &MpMatch) {
     h.u32(s.radar);
     h.u16(s.registered_pickups);
     h.u32(s.friendly_fire);
+    h.u32(s.gun_emplacements);
+    h.u32(s.location_damage);
+    h.u32(s.vehicles);
+    h.u32(s.grapple);
+    h.u32(s.explosive_scenery);
+    h.usize(s.bot_records.len());
+    for r in &s.bot_records {
+        for &b in r.0.iter() { h.u32(b as u32); }
+    }
 }
 
 fn hash_game(h: &mut Hasher, m: &MpMatch) {
@@ -220,6 +245,7 @@ fn hash_obj_state(h: &mut Hasher, s: &MpObjState) {
     h.u16(s.team);
     h.f32_slice(&s.pos);
     h.f32_slice(&s.home);
+    hash_bounds(h, &s.bounds);
 }
 
 fn hash_opt_obj(h: &mut Hasher, s: &Option<MpObjState>) {
@@ -264,12 +290,19 @@ fn hash_objects_rt(h: &mut Hasher, m: &MpMatch) {
         Some(v) => {
             h.u8(1);
             h.usize(v);
+            // mp-goldeneye-strike: the tracked beam position rides the target's arm — the non-GE
+            // scenarios' fold bytes are unchanged (ge_target is always None there).
+            hash_opt_pos(h, &o.ge_strike_pos);
         }
     }
     hash_opt_obj(h, &o.blueprint);
     for b in &o.esp_bases {
         hash_opt_pos(h, b);
     }
+    for b in o.bases_bounds.iter().chain(o.esp_bases_bounds.iter()) {
+        hash_bounds(h, b);
+    }
+    h.u16(o.ge_strike_timer);
 }
 
 /// The per-tick lockstep hash of the whole MP match state. Pure function of the state bits:

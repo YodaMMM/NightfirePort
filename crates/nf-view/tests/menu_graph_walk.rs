@@ -292,6 +292,9 @@ fn apply(fe: &mut FrontEnd, e: Edge, armed: &mut Option<u32>, problems: &mut Vec
                 o,
                 Stats { shots_fired: 120, shots_hit: 40, accuracy_pct: 33, time_s: 754 },
             );
+            // reward-after-outro: a COMPLETE end queues the page — the load tail's
+            // MenuManager_Create opens it [M 0x1d6360:160-163] (the BFS stands in for the host).
+            if o == Outcome::Complete { fe.reopen_queued_page(); }
             settle(fe, problems);
         }
         Edge::HostEnter => match fe.page {
@@ -398,6 +401,7 @@ fn apply_raw(fe: &mut FrontEnd, e: Edge) {
         }
         Edge::MissionEnded(o) => {
             fe.mission_ended(o, Stats::default());
+            if o == Outcome::Complete { fe.reopen_queued_page(); } // the load tail [M 0x1d6360:160-163]
             fe.tick();
         }
         Edge::HostEnter => {
@@ -633,8 +637,10 @@ fn mission_prologue() -> Vec<Edge> {
         Edge::Act(Action::Confirm), // NightFire → Select Codename (0x13 ticks later [M 0x2169b8:36-37])
         Edge::Wait,                 // the delay + P_NFSELECT's open block [M 0x20aec0:75-76]
         Edge::Act(Action::Confirm), // row 1 = Play without saving [M 0x20aec0:96-97]: arm the box
-        Edge::Act(Action::Confirm), // ✕ through it → Select Difficulty
-        Edge::Act(Action::Confirm), // the difficulty (row 0 [M 0x216bf8:12]) → Single Player
+        Edge::Act(Action::Confirm), // ✕ through it → Select Difficulty [G-048(1): CloseIris, M 0x20aec0:103]
+        Edge::Wait,                 // the CloseIris 0x44 lands 10 ticks out [M 0x202190:8-9]
+        Edge::Act(Action::Confirm), // the difficulty (row 0 [M 0x216bf8:12]) → Single Player [M 0x216ca8:16 CloseIris]
+        Edge::Wait,                 // the CloseIris 0x44 lands 10 ticks out [M 0x202190:8-9]
         Edge::Act(Action::Confirm), // the list opens on row 1, the highest unlocked [M 0x20b608:60-64]: 07000005
         Edge::LoadTake,             // the host pumps the load and takes the request
     ]);
@@ -662,8 +668,10 @@ fn win_prologue() -> Vec<Edge> {
         Edge::Act(Action::Confirm), // NightFire → Select Codename (delayed [M 0x2169b8:36-37])
         Edge::Wait,
         Edge::Act(Action::Confirm), // Play without saving (the opened row [M 0x20aec0:96-97]): the box
-        Edge::Act(Action::Confirm), // → Select Difficulty
-        Edge::Act(Action::Confirm), // → Single Player
+        Edge::Act(Action::Confirm), // → Select Difficulty [G-048(1): CloseIris, M 0x20aec0:103]
+        Edge::Wait,                 // the CloseIris 0x44 [M 0x202190:8-9]
+        Edge::Act(Action::Confirm), // → Single Player [M 0x216ca8:16 CloseIris]
+        Edge::Wait,                 // the CloseIris 0x44 [M 0x202190:8-9]
     ]);
     // The list opens on the highest unlocked row — row 11, the final mission, with every row
     // unlocked [M 0x20b608:60-64].

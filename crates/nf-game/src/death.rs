@@ -115,6 +115,24 @@ impl Default for Death {
     }
 }
 
+impl Death {
+    /// The draw's death phase: 0 none, 1 the sequence is running, 2 the full cover (`HUD_State
+    /// (pane 12) != 0`, the pane's state word [M `HUD_UpdateBloodPane` 0x19a6a8:23-25]). Phase 2
+    /// is SP-only: the MP respawn gate (300 ticks [M `Player_HandleDeath` 0x190bb0:41-54]) ends
+    /// the sequence before the 448-tick cover [M 0x19f4e8:33].
+    pub fn phase(&self) -> u8 {
+        if !self.active { 0 } else if self.covered { 2 } else { 1 }
+    }
+
+    /// The blood pane's grown height in px — the red fade's alpha source for the draw. The pane
+    /// enables on the death tick (`Player_HandleDeath` 0x190bb0:23-25 SP / :38-40 MP) and both
+    /// sprites grow 1 px per tick (`FRAME_RATE_MUL` [M `HUD_UpdateBloodPane` 0x19a6a8:27-30]) to
+    /// the 448 cover [M 0x19f4e8:33]; 0 while the pane is off.
+    pub fn pane_px(&self) -> u32 {
+        if !self.pane_on { 0 } else { self.ticks.min(RED_FADE_TICKS) }
+    }
+}
+
 impl crate::drone::Drones {
     /// One dead tick's slice of the death script's command run — `AnimScriptTick` 0x1c2630 →
     /// `AnimProcessScriptCmds` 0x1c1b38 over the (from, to] window the dead-tick clock just
@@ -209,8 +227,12 @@ impl crate::drone::Drones {
             self.death.pane_on = true; // HUD_DisableAll + HUD_Enable(pane 12, 1, 0) [M 0x190bb0:23-25]
             self.death.script_time = 1.0; // AnimScriptInit 0x1c1600 (+0x90 = 1.0) on `AnimScriptAdd`
             self.death.events.clear();
-            self.channels.set(0x5e, 1, frame); // [M 0x190810:40]
-            self.music.event(6, 1);            // [M 0x190810:41] (once — the old port replayed it every tick)
+            // SP only: an MP death raises no 0x5e and no death sting [M 0x190810:39-42 — the
+            // `MPSettings._384_4_ == 0` arm; see Drones::mp_master].
+            if self.mp_master == 0 {
+                self.channels.set(0x5e, 1, frame); // [M 0x190810:40]
+                self.music.event(6, 1);            // [M 0x190810:41] (once — the old port replayed it every tick)
+            }
             self.bond_weapon = 0x47;           // Player_WeaponNone — the fists [M 0x190810:61]
             // The death sound 0x89 at Bond [M 0x190810:88].
             if let Some(t) = d.sfx { self.play_sound(bond, t.get(0x89)); }
@@ -225,6 +247,9 @@ impl crate::drone::Drones {
         // and nothing gates the anim afterwards (ch 0x62 / the menu do not stop it).
         self.death_script_events(d, bond);
         if !self.death.covered && self.death.ticks >= RED_FADE_TICKS { self.death.covered = true; }
+        // MP: no ch 0x62 / fail menu — `Player_HandleDeath`'s MP arm only waits out the 5 s and
+        // respawns (`Sim::step_mp_death_respawn`) [M 0x190bb0:20 (`_384_4_ == 0` = the SP arm), 37-54].
+        if self.mp_master != 0 { return; }
         if self.death.ch62 { return; } // raised once — the menu path takes over from here
         if self.death.covered || self.bond_fire {
             self.death.ch62 = true;

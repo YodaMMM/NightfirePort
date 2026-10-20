@@ -10,7 +10,7 @@
 use nf_game::drone::Rng;
 use nf_game::mp::debrief::{MpDebriefName, RESULT_DRAW_LABEL, RESULT_WINS_LABEL, TEAM_MI6_LABEL};
 use nf_game::mp::{MpMatch, MpSettings, scenario};
-use nf_view::menu::{
+use nf_view::menu::{self,
     Action, FrontEnd, Page, MP_BOTS_ROWS, MP_CHARACTERS_SMALL, MP_DEBRIEFING_COLS,
     MP_DEBRIEFING_HEADER, MP_DEBRIEFING_HINT,
 };
@@ -25,23 +25,24 @@ fn finished_match() -> MpMatch {
     s.total_players = 4;
     s.frag_limit = 10;
     s.time_limit = 600;
+    // mp-16-slots: the bots follow the humans (slots 2 and 3 with 2 humans) [S].
     let mut m = MpMatch::init(s);
     m.start(&mut Rng::new(7));
     m.settings.players[0].codename = "Bond".into();
     m.settings.players[1].codename = "Drake".into();
-    m.settings.players[4].skin = 6; // Snow Guard preset
-    m.settings.players[5].skin = 2; // Rook preset
+    m.settings.players[2].skin = 6; // Snow Guard preset
+    m.settings.players[3].skin = 2; // Rook preset
     m.game.slots[0].kills = 9;
     m.game.slots[0].score = 9.0;
     m.game.slots[1].kills = 8;
     m.game.slots[1].score = 8.0;
-    m.game.slots[4].kills = 8;
-    m.game.slots[4].score = 8.0;
-    m.game.slots[5].kills = 2;
-    m.game.slots[5].score = 2.0;
+    m.game.slots[2].kills = 8;
+    m.game.slots[2].score = 8.0;
+    m.game.slots[3].kills = 2;
+    m.game.slots[3].score = 2.0;
     m.game.slots[1].deaths = 3;
-    m.game.slots[4].deaths = 5;
-    m.game.slots[5].deaths = 7;
+    m.game.slots[2].deaths = 5;
+    m.game.slots[3].deaths = 7;
     m
 }
 
@@ -51,11 +52,16 @@ fn the_handover_opens_the_page_with_the_rows() {
     let mut fe = FrontEnd::new();
     fe.page = Page::MpScenario; // anywhere in the MP flow; the handover sets the page itself
     fe.open_mp_debriefing(&m);
+    // G-048(3): the match end only QUEUES the page [M MP_Update 0x184bd0:62-78]; the load tail's
+    // MenuManager_Create lands it [M 0x1d6360:160-163].
+    assert_eq!(fe.flow.page, menu::PAGE_MP_DEBRIEFING, "case 4 queues +0x1c = 0x40000033 [M 0x184bd0:63]");
+    assert_eq!(fe.up_page(), None, "nothing is up over the paused arena");
+    assert!(fe.reopen_queued_page(), "the load tail's create opens the debriefing");
     assert_eq!(fe.page, Page::MpDebriefing, "the case-4 navigation lands on 0x40000033 [M 0x184bd0:63]");
     assert_eq!(fe.page.id(), 0x4000_0033);
     let rows = fe.mp_debriefing_rows();
     // Sort by TOTAL (kills in Arena): Bond 9, then the two 8s (slot 1 built before slot 4 —
-    // the game's stable bubble sort [M 0x212198:112-130]), then Rook-bot 2.
+    // the game's stable bubble sort [M 0x212198:112-130]; slot 1 before the bot's slot 2), then Rook-bot 2.
     assert_eq!(rows[0], (0x0100_0297, MpDebriefName::Human("Bond".into()), 0x0300_0154, 9, 9, 0, 9), "rank 1st + Bond's small-table portrait [L 0x2df8f8 row 0]");
     assert_eq!(rows[1].0, 0x0100_0298, "the 8s start the \"2nd\" rank [M 0x212198:135-137]");
     assert_eq!(rows[1].1, MpDebriefName::Human("Drake".into()));
@@ -89,6 +95,7 @@ fn confirm_returns_to_the_scenario_page() {
     let m = finished_match();
     let mut fe = FrontEnd::new();
     fe.open_mp_debriefing(&m);
+    assert!(fe.reopen_queued_page()); // the load tail's create [G-048(3), M 0x1d6360:160-163]
     assert!(fe.action(Action::Confirm), "Confirm (~A) is handled [M C_MPDBG 0x4b]");
     assert_eq!(fe.page, Page::MpScenario, "C_MPDBG msg 0x44 -> 0x4000001a [M 0x217860:8-11]");
     assert_eq!(fe.page.id(), 0x4000_001a);
@@ -103,10 +110,11 @@ fn extra_rematch_rerequests_the_arena() {
     let m = finished_match();
     let mut fe = FrontEnd::new();
     fe.open_mp_debriefing(&m);
+    assert!(fe.reopen_queued_page()); // the load tail's create [G-048(3), M 0x1d6360:160-163]
     fe.mp_level = 0x0700_0027; // Fort Knox was the arena [L mp_level row 1]
     fe.mp_match_settings = Some(nf_game::mp::MpSettings::deathmatch(0x0700_0027));
     fe.tick(); // the flow machine must be live for the load push [M the confirm-start's pattern]
-    assert!(fe.action(Action::Extra), "the ~Y arm is handled [M C_MPDBG 0x5d]");
+    assert!(fe.action(Action::Extra), "the 0x5d arm is handled [M C_MPDBG 0x217860:12-16; the pad's action 0x20 = □ sends msg 0x5d — Button_Update 0x1ef948:80-87,123-127 — not △/~Y: △ is action 0x22, the manager's pop — CORRECTED cite: Scroll_Update 0x221b20:453 reads action 0x22 and :457-458 only play sound 9 and send msg 0x6d to the scroll control; the pop wording is [S] unverified]");
     assert_eq!(fe.requested_level, Some(0x0700_0027), "ResetMap_LevelToLoad(MPSettings+0x1A8) [M 0x217860:12-14]");
     assert!(fe.mp_match_settings.is_some(), "the config stays for the host (the rematch)");
     // Sister: the confirm arm does NOT touch the level request.

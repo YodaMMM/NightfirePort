@@ -17,6 +17,7 @@ winit = "0.30.13"
 wgpu = "30.0.1"
 pollster = "1.0.1"
 glam = "0.34.1"
+ab_glyph = "0.2.32"  # launcher: system-font text (already in the lock via sctk-adwaita)
 gilrs = { version = "0.11.2", optional = true }
 cpal = "=0.18.2"  # fix-movie-playback: the movie PCM stream (the game plays it through the SPU2; the port mixes through cpal)
 

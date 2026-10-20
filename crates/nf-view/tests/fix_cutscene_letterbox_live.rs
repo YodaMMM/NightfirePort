@@ -97,7 +97,15 @@ fn no_letterbox_bars_before_the_scene_starts() {
     };
     assert!(!scene.sim.as_ref().unwrap().drones.letterbox, "the letterbox flag starts down");
     let frame = nf_view::shot_hud(&scene, 16.0 / 9.0, None);
-    assert!(!frame.runs.iter().any(|&(t, _, _, _)| t == tex_pos + 1), "no script bars before a script camera runs");
+    // The bars are the TWO border sprites Script_CameraStart creates [M 0x1d9140:49-61; L
+    // SpriteInfo 0x2c9468] — one 12-vertex run, the same shape `bar_verts` finds above. The
+    // matcher pins that run shape, not "any strip-textured quad": the overlay's full-screen fade
+    // quad rides the same 0x03000002 handle (hud.rs SCOPE_STRIP_TEX), and 779b's entry-fade chain
+    // (overlay_for → spawn_fade_view) legitimately draws it here — the game arms and draws this
+    // very fade on a no-intro load [M Player_Init 0x1910f8:45 + Game_Draw 0x1e6f50:186-212]. A
+    // 6-vertex run is the fade quad, 12 is the bars; a letterbox regression still fails this.
+    assert!(!frame.runs.iter().any(|&(t, _, _, c)| t == tex_pos + 1 && c == 12),
+        "no script bars before a script camera runs");
 }
 
 /// (2) The extent. `cutscene_frame` frames the cut-scene at the game's own 4:3: a 16:9 window

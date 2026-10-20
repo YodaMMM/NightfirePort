@@ -83,7 +83,7 @@ fn setup_through(fe: &mut FrontEnd, team: bool) {
     if team {
         assert!(act(fe, Action::Confirm), "the team");
         assert_eq!(fe.mp_setup_state, 3, "then the character [M 2 → 3]");
-        assert_eq!(fe.mp_join[0].team, 0, "the selection IS the team [M mpjoin+4]");
+        assert_eq!(fe.mp_join[0].team, 1, "the selection IS the team [M mpjoin+4] — and the fresh join page's default team is MI6 [M P_MPJOIN 0x20ca00's 0x4c: DAT_002dee6c = 1]");
     }
     assert!(act(fe, Action::Confirm), "the character");
     assert_eq!(fe.mp_setup_state, 4, "then the Health Handicap [M 3 → 4]");
@@ -159,7 +159,10 @@ fn every_scenario_row_opens_the_map_or_refuses() {
             assert!(fe.mp_match_settings.is_some());
             assert!(!act(&mut fe, Action::Confirm), "a second ✕ is refused [M MenuManager_Delete]");
             assert_eq!(fe.requested_level, Some(want));
-            assert_eq!(want, MP_MAP_ROWS[0].3, "the quick start samples row 0 (Skyrail) [S the headless stand-in for Rand_Random % 7]");
+            assert_eq!(want, MP_MAP_ROWS[0].3, "the quick start samples row 0 (Skyrail) [S the
+                headless stand-in: the game samples Rand_Random() % 7 over mp_level rows 0..6
+                [M C_SBMPSCEN 0x20c600:62-63], so Skyrail is 1 of 7 and Ravine (row 7) is
+                excluded — the port takes row 0 for determinism]");
             continue;
         }
         assert_eq!(fe.page, Page::MpMap, "row {row}: the map wheel opens [M → 0x40000013]");
@@ -235,6 +238,33 @@ fn every_options_subpage_moves_its_values_and_rides_them() {
     assert_eq!(fe.mp_frag_limit, 15, "10 → 15 [M 0x20f790:54-55]");
     assert!(act(&mut fe, Action::Right));
     assert_eq!(fe.mp_frag_limit, 20, "15 → 20 [M 0x20f790:55-56]");
+    // fe-audit 1019: back up to the Duration row — the wrap walk below rides THAT list. (The
+    // Points rows above left the cursor on row 1; without the Up the wrap loop would step the
+    // frag limit and the 0x3ca assertion would read the wrong list.)
+    assert!(act(&mut fe, Action::Up), "the Duration row");
+    // fe-audit 1017: BOTH lists wrap at their ends — Scroll_Update's ◀▶ at the max re-enters
+    // from the min and vice versa while the wrap flag stands [M 0x221b20:186-194, :202-210]; the
+    // flag defaults on (Scroll_Init 0x22214f0:102-103 sets +0x144 = 1; only msg 0x69 clears it
+    // [M 0x221810:136-138]) and nothing sends 0x69 to the rules page. The old port clamped here.
+    for _ in 0..9 { assert!(act(&mut fe, Action::Right)); }   // 20 → … → 60 → Unlimited
+    assert_eq!(fe.mp_time_limit, -1, "the 0x3ca Unlimited item [M 0x20f790:38-42]");
+    assert!(act(&mut fe, Action::Right), "Right at Unlimited wraps to the first item");
+    assert_eq!(fe.mp_time_limit, 1, "the wrap lands on 1 [M 0x221b20:186-194]");
+    assert!(act(&mut fe, Action::Left), "Left at 1 wraps back to Unlimited");
+    assert_eq!(fe.mp_time_limit, -1, "the mirror wrap [M 0x221b20:202-210]");
+    // fe-audit 1019: step the Duration back to 20 so the ride assertions below keep pinning the
+    // mid-list value the old walk left (1 at idx 0, +11 → idx 11 = 20 [M 0x20f790:21-42]).
+    assert!(act(&mut fe, Action::Right));
+    for _ in 0..11 { assert!(act(&mut fe, Action::Right)); }
+    assert_eq!(fe.mp_time_limit, 20);
+    assert!(act(&mut fe, Action::Down), "the Points row");
+    for _ in 0..20 { assert!(act(&mut fe, Action::Right)); }  // 20 → … → 120
+    assert_eq!(fe.mp_frag_limit, 120, "the list tops at 120 [M 0x20f790:45-76]");
+    assert!(act(&mut fe, Action::Right), "Right at 120 wraps to 1");
+    assert_eq!(fe.mp_frag_limit, 1, "the Points wrap [M 0x221b20:186-194]");
+    // fe-audit 1019: step Points back to 20 for the ride assertions below (idx 0, +11 → 20).
+    for _ in 0..11 { assert!(act(&mut fe, Action::Right)); }
+    assert_eq!(fe.mp_frag_limit, 20);
     assert!(act(&mut fe, Action::Confirm), "the rules page closes to the hub [M Manager 0x5f]");
     assert_eq!(fe.page, Page::MpOptions);
     // The hub's row is where the Rules page was opened from — 2; Player Mods is the next row.
@@ -353,7 +383,7 @@ fn every_options_subpage_moves_its_values_and_rides_them() {
     assert_eq!(s.bot_count, 2);
     assert_eq!(s.human_count, 1);
     assert_eq!(s.team_game, 0, "Arena is FFA [M MP_Init's (scenario >> 29) & 1]");
-    assert_eq!(s.players[0].team, 0, "the setup's team pick rides");
+    assert_eq!(s.players[0].team, 1, "the setup's team pick rides — the re-seated default MI6 [M P_MPJOIN 0x20ca00's 0x4c: DAT_002dee6c = 1]");
     assert_eq!(s.players[0].skin, 0, "the setup's character pick rides");
     assert_eq!(fe.mp_envmods[2], 0, "the stale locked node masks off at start [M 0x20f708 andi 1]");
     assert_eq!(fe.mp_bots[0].character, 11, "Ninja stays in slot 1");
@@ -367,19 +397,24 @@ fn every_options_subpage_moves_its_values_and_rides_them() {
 fn back_out_of_every_page_and_walk_forward_again_team() {
     let mut fe = FrontEnd::new();
     to_scenario(&mut fe);
-    // The scenario page's Back returns to Main on the Multiplayer row [M P_MPSCENARIO:29]. The
-    // join page re-entry: an already-ready panel's ✕ does nothing and ✕ un-joins [M C_RBMPSTART's
-    // state arms], so the walk forward re-joins through the codename list.
+    // The scenario page's Back returns to Main [M P_MPSCENARIO 0x217348:28-30 — the 99 arm is
+    // Manager_SendMessage(0x44, 0x40000002, 0), with no cursor read anywhere in the handler;
+    // msg 99 arrives from the manager's pop [M 0x21c858:604-608]]. The cursor 1 is the port's [S —
+    // P_MAIN's 0x4c writes only the write-only DAT_002a3cce (0x20a7b0:39, no reader in the
+    // whole .text); nothing in the decompile pins Main's landing row].
     assert!(act(&mut fe, Action::Back), "scenario Back → Main");
     assert_eq!(fe.page, Page::Main);
-    assert_eq!(fe.cursor, 1, "back on the Multiplayer row");
+    assert_eq!(fe.cursor, 1, "back on the Multiplayer row [S the port's choice]");
     assert!(act(&mut fe, Action::Confirm), "Multiplayer");
     assert!(act(&mut fe, Action::Confirm), "Local");
     assert_eq!(fe.page, Page::MpJoin);
-    assert!(!act(&mut fe, Action::Confirm), "a ready panel's ✕ falls through");
-    assert!(act(&mut fe, Action::Back), "✕ un-joins [M C_RBMPSTART's 0x6b arm]");
-    assert_eq!(fe.mp_join[0].state, 0);
-    assert!(act(&mut fe, Action::Confirm), "join again");
+    // The re-entered join page is a FRESH join [M P_MPJOIN 0x20ca00's 0x4c — the enter memsets
+    // the mpjoin array and zeroes the per-agent states on every 0x4c]: the stale ready panel a
+    // back-out left must not survive it (playtest 1015-2231's forward-again walk).
+    assert_eq!(fe.mp_join[0].state, 0, "the re-entered page resets the agent");
+    assert!(!fe.mp_join[0].ready);
+    // [M P_MPJOIN 0x20ca00's 0x4c: the re-entered join page memsets mpjoin, so the panel's âœ• joins again]
+    assert!(act(&mut fe, Action::Confirm), "the fresh panel's ✕ joins");
     assert_eq!(fe.mp_join[0].state, 1);
     assert!(act(&mut fe, Action::Right), "the codename list moves");
     assert_eq!(fe.mp_join[0].codename_row, 1);
@@ -404,9 +439,12 @@ fn back_out_of_every_page_and_walk_forward_again_team() {
     assert_eq!(fe.page, Page::MpSetup);
     assert_eq!(fe.mp_setup_state, 2, "the team bit re-enters on the team prompt");
     // Back at the character prompt returns to the team list in a team game [M 0x6b's 3 → 2];
-    // forward again.
+    // forward again. The prompt re-seats on the stored (default MI6) team — step left to pick
+    // Phoenix so the Alura bot below supplies the other side [M C_SBMPOPTIONS' both-sides check].
+    assert!(act(&mut fe, Action::Left), "◀ to Phoenix");
     assert!(act(&mut fe, Action::Confirm), "the team (Phoenix)");
     assert_eq!(fe.mp_setup_state, 3);
+    assert_eq!(fe.mp_join[0].team, 0, "the pick is Phoenix [M mpjoin+4]");
     assert!(act(&mut fe, Action::Back), "the character prompt's Back");
     assert_eq!(fe.mp_setup_state, 2, "a team game walks back to the team list");
     assert!(act(&mut fe, Action::Confirm), "the team again");
@@ -491,7 +529,7 @@ fn back_out_of_every_page_and_walk_forward_again_team() {
     let s = fe.mp_match_settings.as_ref().unwrap();
     assert_eq!(s.scenario, 0x2000_0002, "Team Arena's word rides");
     assert_eq!(s.team_game, 1, "the team bit derives [M MP_Init 0x183438:41]");
-    assert_eq!(s.players[0].team, 0, "the human's Phoenix pick rides");
+    assert_eq!(s.players[0].team, 0, "the human's Phoenix pick rides (◀ from the re-seated MI6 default [M P_MPJOIN 0x20ca00's 0x4c: DAT_002dee6c = 1])");
     assert_eq!(s.bot_count, 1);
 }
 

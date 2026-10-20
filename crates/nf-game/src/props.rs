@@ -62,12 +62,15 @@ pub struct Destroy {
 pub struct Props {
     pub subjects: Vec<CamSubject>,
     pub destroy: Vec<Destroy>,
+    /// The mounted-gun implementations (`GunImp_Create` 0x131f20, placement 0x34). Own line
+    /// (merge lesson 4).
+    pub gunimps: Vec<crate::gunimp::GunImp>,
 }
 
 /// One placement's target object's bounds placed by the placement transform (the game's contact
 /// is against the placed glist), in placement order. Objects whose gfx bounds are unset (anim-only
 /// meshes: min/max stay at the parser's ±1e7 sentinel) fall back to their collision triangles.
-fn bounds(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> (V3, V3) {
+pub fn bounds(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> (V3, V3) {
     let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
         else { level.maps[m].objects.get(p.index as usize) };
     let Some(o) = obj else { return ([0.0; 3], [0.0; 3]) };
@@ -106,6 +109,47 @@ impl Props {
                 // (as f32; the tag holds a float the handler subtracts into), tag+0x16 (kind) =
                 // param 2's low byte, tag+0x08 (smash blast damage) = param 5 [M disasm].
                 0xe1 => props.destroy.push(Destroy { placement: i, lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32 }),
+                // `GunImp_Create` 0x131f20 (placement 0x34, class 0x47): the SP arm mounts the
+                // TurretGuns[0xb] hardware (the laser) [M 0x131f20:52-63]; the base transform is
+                // the placement's (0x225's rotation is identity [D]).
+                0x34 => {
+                    // The seat offset's source word: the glist's +0x28 float = the object record's
+                    // min.z (the bounds block copies at the +8 shift; see gunimp.rs's seat doc)
+                    // [M GunImp_Create 0x131f20:77-81; D #225 min.z = -1.4362069]. The by-hash
+                    // map alone is not enough: the load's session mesh merge re-points shared
+                    // hashes at foreign objects with sentinel-scale bounds, so the candidates are
+                    // scanned for the sane-bounds art (the placement's own box [D]: |min.z| < 2).
+                    let seat = {
+                        let by_ref = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { None };
+                        let mut seat = 0.0f32;
+                        if let Some(o) = if p.by_hash() { None } else { level.maps[m].objects.get(p.index as usize) } {
+                            seat = o.min[2] * 0.75;
+                        } else {
+                            for mp in &level.maps {
+                                for o in &mp.objects {
+                                    if o.hashcode == p.hashcode && o.min.iter().all(|v| v.abs() < 100.0) {
+                                        seat = o.min[2] * 0.75;
+                                        break;
+                                    }
+                                }
+                                if seat != 0.0 { break; }
+                            }
+                            if seat == 0.0 {
+                                if let Some((mm, oo)) = by_ref {
+                                    seat = level.maps[mm].objects[oo].min[2] * 0.75;
+                                }
+                            }
+                        }
+                        seat
+                    };
+                    props.gunimps.push(crate::gunimp::GunImp {
+                        placement: i, pos: p.translation, yaw_base: p.rotation[1],
+                        pitch: 0.0, yaw: 0.0, pitch_s: 0.0, yaw_s: 0.0,
+                        active: false, heat: 0.0, cooldown: 0.0, hot: false,
+                        turret: crate::gunimp::SP_TURRET as u8,
+                        seat,
+                    });
+                }
                 _ => {}
             }
         }
@@ -174,6 +218,7 @@ mod tests {
             subjects: vec![CamSubject { placement: 0, lo: [4.0, 7.0, -111.0], hi: [6.0, 9.0, -109.0], channel: 0x1c, hit: false }],
             destroy: vec![Destroy { placement: 1, lo: [133.0, 4.0, -270.0], hi: [137.0, 7.0, -268.0], channel: 0x1f, health: 100.0, dead: false,
             kind: 1, blast_damage: 100.0 }],
+            gunimps: Vec::new(),
         }
     }
 

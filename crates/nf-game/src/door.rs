@@ -72,7 +72,7 @@ fn rigid_inverse(m: &Mat4) -> Mat4 {
 }
 
 /// Quaternion → matrix (`Spline_Interp`'s tail): `m00 = 1−(2y·y+2z·z)` and so on, translation in row 3 [L].
-fn quat_matrix(q: [f32; 4], t: V3) -> Mat4 {
+pub(crate) fn quat_matrix(q: [f32; 4], t: V3) -> Mat4 {
     let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
     let (yy, zz, xx) = (y + y, z + z, x + x);
     [
@@ -90,9 +90,12 @@ fn slerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     let neg = dot < 0.0;
     if neg { dot = -dot; }
     let (w0, w1) = if 0.01 < 1.0 - dot {
-        let angle = dot.acos();
-        let s = sinf(angle);
-        (sinf(angle - t * angle) / s, sinf(t * angle) / s)
+        // G-046: Spline_Interp 0x1e1858:285-300 [M] — acosf (0x232c48), wt = angle·t (mul.s), the weights
+        // PS2Sinf(wt)·(1/PS2Sinf(angle)) with the EE sub in sinf(angle − wt).
+        let angle = crate::trig::acosf_libm(dot);
+        let wt = nf_formats::ps2float::mul(angle, t);
+        let recip = nf_formats::ps2float::div(1.0, sinf(angle));
+        (sinf(crate::trig::ee_sub(angle, wt)) * recip, sinf(wt) * recip)
     } else { (1.0 - t, t) };
     let w0 = if neg { -w0 } else { w0 };
     [w0 * a[0] + w1 * b[0], w0 * a[1] + w1 * b[1], w0 * a[2] + w1 * b[2], w0 * a[3] + w1 * b[3]]
@@ -345,10 +348,12 @@ impl Doors {
         if new & 0x10 != 0 && old & 0x10 == 0 && sc != 0xffff { sounds.push((sc, pos)); }
         if ch != 0 {
             // `Door_SetState` (0x135618:26): the channel mirrors the OLD state's "in motion" bits (0xc), timestamped
-            // every motion transition. The game reads `+0xf4 & 0xc` BEFORE writing the new state [M].
+            // every motion transition. The game reads `+0xf4 & 0xc` BEFORE writing the new state [M]. channel-persistence:
+            // this goes through `Channels::set` — the game's write lands in `switch_channels` and stamps
+            // `switch_channels_time` exactly when the mirrored bits are nonzero (set's nonzero stamp), and the port's
+            // writer census sees it like every other write.
             let moving = (old & 0xc) != 0;
-            channels.v[ch as usize] = moving as u8;
-            if moving { channels.time[ch as usize] = frame; }
+            channels.set(ch as u32, moving as u8, frame);
         }
         let d = &mut self.list[i];
         d.state = new;
@@ -646,6 +651,14 @@ impl Doors {
         // Stand-in shape [S — the game's straddle test function is not pinned]: a closed straddle
         // door activates (from_player — the lock guards hold) when the player's feet stand inside
         // its threshold (xz 1.4, the leaf's half-width plus the capsule; y within the door band).
+        // CORRECTION (level-15-complete): the "every 07000015 kind-2 door carries it" and
+        // "door[32] is E-dead" claims above are DISPROVEN by the disc — none of 07000015's
+        // corridor doors [29]/[32]/[49]/[50]/[51]/[52] carries a par-4 (parsed `straddle=false`,
+        // probe walkreal_probe15), and door[32] opens with the plain E path once the player
+        // stands in reach: the walkreal-c stop was the ROUTE (the console placement map54 #145
+        // walls the south-east corner; the nav graph's own lane reaches the doorway from the
+        // north — walkreal_07000015_live now walks it green). The arm stays for the
+        // 07000016-arrival-door shape [S] and changes no E-path behaviour.
         for i in 0..self.list.len() {
             let d = &self.list[i];
             if !d.straddle || d.kind == 0 || d.state & 0xc != 0 { continue; }

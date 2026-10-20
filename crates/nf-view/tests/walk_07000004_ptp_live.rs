@@ -27,6 +27,25 @@ fn settle(scene: &mut nf_view::scene::Scene) {
     panic!("the intro + story scenes must settle");
 }
 
+/// The lethal blast, repeated at the target's current position until he is a corpse (batch-1016b:
+/// the assassin is mode 0xd, health 100.0 [M NDrone2_DefaultInit 0x14b300:749, :776]).
+fn blast_until_dead(sim: &mut nf_view::scene::Sim, target_i: usize) {
+    for _ in 0..10 {
+        if sim.drones.list[target_i].corpse { return; }
+        let pos = sim.drones.list[target_i].pos;
+        sim.drones.grenades.push(nf_game::grenade::Grenade {
+            pos: [pos[0], pos[1] + 0.5, pos[2]], velocity: [0.0, 0.0, 0.0], speed: 0.0,
+            travelled: 0.0, range: 60.0, damage: 100.0, radius: 3.0, weapon_type: 0x34, mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false,
+            stuck: false, seek_target: None,
+            phase: None,
+        });
+        for _ in 0..60u32 {
+            sim.step_bond(Default::default(), false, false, false);
+            if sim.drones.list[target_i].corpse { return; }
+        }
+    }
+}
+
 /// Kill the target and step through the mission-complete banner until the handover runs. The
 /// per-step `hud_tick` drains `mission_events` (scene.rs 3847), so the LevelEnd arm — and with it
 /// `ptp_handover` — fires inside `step_bond` itself; the test polls the result it leaves.
@@ -34,14 +53,8 @@ fn run_to_handover(scene: &mut nf_view::scene::Scene) {
     {
         let sim = scene.sim.as_mut().unwrap();
         let target_i = sim.drones.list.iter().position(|d| d.skin == 0x0500_001e).expect("the target drone exists");
-        let pos = sim.drones.list[target_i].pos;
         // The grenade at his feet (the game's own Explode_Propagate path [M 0x17c518]).
-        sim.drones.grenades.push(nf_game::grenade::Grenade {
-            pos: [pos[0], pos[1] + 0.5, pos[2]], velocity: [0.0, 0.0, 0.0], speed: 0.0,
-            travelled: 0.0, range: 60.0, damage: 100.0, radius: 3.0, weapon_type: 0x34, mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false,
-            stuck: false, seek_target: None,
-            phase: None,
-        });
+        blast_until_dead(sim, target_i);
     }
     for _ in 0..3000u32 {
         scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
@@ -130,10 +143,16 @@ fn the_twelve_stat_slots_ride_the_handover() {
     // The apply mirror (lib.rs runs it after the reload): MissionState + the slots.
     let mut mission = nf_game::mission::Mission::new();
     let mut carried = nf_game::ptp::DrivingStats::default();
-    ret.apply(&mut mission, &mut carried);
+    let mut difficulty = 0u32;
+    ret.apply(&mut mission, &mut carried, &mut difficulty);
     assert_eq!(mission.status(), 6);
     assert_eq!(carried.values[0], 12, "the slots survive the round trip [M 0x199ac8/0x199b18]");
     assert_eq!(carried.values[11], 3);
+    // app-state-parity: the return carries the leaving sim's difficulty (the block's +0x144)
+    // and apply restores it [M 0x1c8198:15-20, 0x1c8560:35-36] — the handover built the block
+    // from this sim's Drones::difficulty.
+    assert_eq!(ret.difficulty, sim.drones.difficulty);
+    assert_eq!(difficulty, ret.difficulty);
 }
 
 /// The interlude map is the one `Mission_Update` case 6 emits [M 0x182c60:88-116] — a live walk

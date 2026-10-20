@@ -20,6 +20,12 @@
 //!                                          switch away/back; the mark table + aggregates + red
 //!                                          cells. `levels` = comma list (e.g. 07000005,07000011)
 //!                                          to run a subset. Needs no NF_ISO (the iso argument).
+//! nf-extract coll-scan <iso> <level> x y z [r]   every collision triangle (block 0x2E, placement
+//!                                          transform applied) whose plane sits within r (default
+//!                                          1.5) of the point and whose grown AABB holds it — the
+//!                                          owner questions ("which object owns this plane?"):
+//!                                          map/object/name/hashcode/glist flags + the placement's
+//!                                          type, create-cel and cel-pass-skips.
 //! ```
 
 use anyhow::{bail, Context, Result};
@@ -57,8 +63,14 @@ fn main() -> Result<()> {
         "triggers" => triggers(&IsoImage::open(a(1)?)?, a(2)?),
         "nis" => nis(&IsoImage::open(a(1)?)?, a(2)?, args.get(3).map(|h| u32::from_str_radix(h, 16)).transpose()?),
         "placements" => placements(&IsoImage::open(a(1)?)?, a(2)?, u32::from_str_radix(a(3)?, 16)?),
+        "placements-all" => placements_all(&IsoImage::open(a(1)?)?, a(2)?),
         "sfx" => sfx(&IsoImage::open(a(1)?)?, &args[2..]),
         "coll-probe" => coll_probe(&IsoImage::open(a(1)?)?, a(2)?),
+        "coll-scan" => {
+            let f = |i: usize| -> Result<f32> { Ok(a(i)?.parse()?) };
+            coll_scan(&IsoImage::open(a(1)?)?, a(2)?, [f(3)?, f(4)?, f(5)?], args.get(6).and_then(|s| s.parse().ok()).unwrap_or(1.5))
+        }
+        "coll-obj" => coll_obj(&IsoImage::open(a(1)?)?, a(2)?, usize::from_str_radix(a(3)?, 10)?, usize::from_str_radix(a(4)?, 10)?),
         "coll-check" => coll_check(&IsoImage::open(a(1)?)?),
         "coll-floor" => coll_floor(&IsoImage::open(a(1)?)?, a(2)?),
         "drone-props" => drone_props(&IsoImage::open(a(1)?)?, a(2)?),
@@ -568,7 +580,7 @@ fn ai_sim(iso: &IsoImage, level_name: &str, bond: [f32; 3], frames: u32) -> Resu
     let skeletons: HashMap<u8, nf_formats::character::Skeleton> = lb.entries.iter().filter(|e| e.kind == 6).filter_map(|e| nf_formats::character::parse_skeleton(lb.data(&data, e)).ok()).map(|k| (k.id as u8, k)).collect();
     let m = level.main_map().context("no main map")?;
     let nav = nf_game::nav::Network::build(level.maps[m].ai_network.as_ref().unwrap_or(&Default::default()), &world, level_id);
-    let covers = nf_game::cover::build(&level.maps[m].placements, &nav, &world);
+    let covers = nf_game::cover::build(&level, &nav, &world);
     let mut tuning = nf_formats::tuning::Tuning::from_action_elf(&elf)?;
     nf_game::tuning::read_tuning_vars(&mut tuning, level_id);
     let hitboxes = nf_formats::hitbox::CollisionBones::from_action_elf(&elf)?;
@@ -577,12 +589,12 @@ fn ai_sim(iso: &IsoImage, level_name: &str, bond: [f32; 3], frames: u32) -> Resu
     let models = nf_game::pickup::models(&level);
     // Headless trace: no surface/voice sound tables (their paths draw no RNG — WORKLOG 0069 —
     // so the shared stream is unaffected; the speech/footstep sounds simply do not play).
-    let d = Data { tables: &tables, props: &props, scripts: &scripts, weapons: &weapons, world: &world, level: level_id, sequences: &sequences, skins: &level.skins, skeletons: &skeletons, nav: &nav, covers: &covers, tuning: &tuning, hitboxes: &hitboxes, volumes: &volumes, sfx: Some(&sfx_table), models: &models, surfaces: None, voices: None, difficulty: 1 };
+    let d = Data { tables: &tables, props: &props, scripts: &scripts, weapons: &weapons, world: &world, level: level_id, sequences: &sequences, skins: &level.skins, skeletons: &skeletons, nav: &nav, covers: &covers, tuning: &tuning, hitboxes: &hitboxes, volumes: &volumes, sfx: Some(&sfx_table), models: &models, surfaces: None, voices: None, difficulty: 1, ai_points: &[] };
     let mut rng = Rng::new(std::env::var("NF_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(0x1234_5678));
     let mut lights = nf_game::light::LightList::default();
     let drones = nf_game::drone::level_drones(&d, &level, &mut rng, &mut lights);
     let mut sim = Drones::new(drones, rng);
-    sim.attach_level(&level);
+    sim.attach_level_id(&level, level_id);
     // NF_SWITCHES=22,a4: switch channels on from the start (hex).
     for c in std::env::var("NF_SWITCHES").unwrap_or_default().split(',').filter_map(|c| u8::from_str_radix(c.trim(), 16).ok()) { sim.set_channel(c); }
     // NF_AIM_YAW: Bond's facing (radians; the game's obj+0x54), else −x.
@@ -672,6 +684,26 @@ fn ai_sim(iso: &IsoImage, level_name: &str, bond: [f32; 3], frames: u32) -> Resu
 
 /// The main map's placements of one type (flags word, hex): translation, rotation, the raw words +0x24..+0x47, the
 /// parameters, and the referenced object's glist boxes.
+/// `placements-all <iso> <level>`: every placement of every map, kind = flags & 0xff, with params
+/// (the interactables census dump; the filter-free companion of `placements`).
+fn placements_all(iso: &IsoImage, level_name: &str) -> Result<()> {
+    let (entries, bin) = disc::files_bin_entries(iso)?;
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case(level_name)).context("no such level")?;
+    let data = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64)?;
+    let level = nf_formats::level::Level::parse(&data)?;
+    let main = level.main_map().context("no main map")?;
+    for m in 0..level.maps.len() {
+        if m != main && std::env::var_os("NF_ALL_MAPS").is_none() { continue; }
+        for (i, p) in level.maps[m].placements.iter().enumerate() {
+            let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { Some((m, p.index as usize)) };
+            let obj = target.and_then(|(om, oi)| level.maps[om].objects.get(oi));
+            println!("map {m} placement {i}: kind {:02x} flags {:08x} t {:?} r {:?} params {:?} object {:?} hash {:08x} idx {}",
+                p.flags & 0xff, p.flags, p.translation, p.rotation, p.params, obj.map(|o| &o.name), p.hashcode, p.index);
+        }
+    }
+    Ok(())
+}
+
 fn placements(iso: &IsoImage, level_name: &str, kind: u32) -> Result<()> {
     let (entries, bin) = disc::files_bin_entries(iso)?;
     let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case(level_name)).context("no such level")?;
@@ -804,6 +836,128 @@ fn coll_probe(iso: &IsoImage, level_name: &str) -> Result<()> {
                 shown += 1;
             }
         }
+    }
+    Ok(())
+}
+
+/// Every collision triangle (map block 0x2E) whose plane sits within `r` of the point and whose
+/// grown AABB holds it, with the owning object and its placement — the "which object owns this
+/// plane?" probe (rocket-stop-plane-08). Reads the same parse the world build reads
+/// (`Level::parse` + `MapObject::collision`, docs/formats/collision.md), so an object absent
+/// here is absent from `world.rs` too (unless its instance is skipped — the placement columns
+/// show that: type, create-cel, cel-pass flag, draw-skip flag).
+fn coll_scan(iso: &IsoImage, level_name: &str, p: [f32; 3], r: f32) -> Result<()> {
+    use nf_formats::level::Level;
+    let (entries, bin) = disc::files_bin_entries(iso)?;
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case(level_name)).context("no such level")?;
+    let data = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64)?;
+    let lvl = Level::parse(&data)?;
+    let (instances, missing) = lvl.instances(false);
+    eprintln!("instances(false): {} placed, {} unresolvable placements", instances.len(), missing);
+    let mut hits = 0;
+    for (ii, inst) in instances.iter().enumerate() {
+        let Some(c) = &lvl.maps[inst.map].objects[inst.object].collision else { continue };
+        let o = &lvl.maps[inst.map].objects[inst.object];
+        let pl = &inst.placement;
+        let m = &inst.matrix;
+        let tf = |v: [f32; 3]| -> [f32; 3] {
+            let w = m[3];
+            [m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2] + w[0],
+             m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2] + w[1],
+             m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2] + w[2]]
+        };
+        for (tri, mat) in c.triangles_with_material() {
+            let v = tri.map(tf);
+            // Plane distance (world-space winding normal) + grown AABB gate.
+            let e1 = [v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]];
+            let e2 = [v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]];
+            let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            if len < 1e-6 { continue; }
+            let d = ((n[0] * (p[0] - v[0][0]) + n[1] * (p[1] - v[0][1]) + n[2] * (p[2] - v[0][2])) / len).abs();
+            if d > r { continue; }
+            let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for vt in &v { for k in 0..3 { lo[k] = lo[k].min(vt[k]); hi[k] = hi[k].max(vt[k]); } }
+            if (0..3).any(|k| p[k] < lo[k] - r || p[k] > hi[k] + r) { continue; }
+            hits += 1;
+            println!("hit {}\tmap {}\tobj {}\t{}\thash {:#010x}\tglist {:#x}\tmat {:#04x}\tplane_d {:.3}\tv ({:.2} {:.2} {:.2}) ({:.2} {:.2} {:.2}) ({:.2} {:.2} {:.2})\tplacement type {:#04x} flags {:#010x} cel {} cel_pass_skip {} by_hash {}",
+                hits, inst.map, inst.object, o.name.trim(), o.hashcode, o.flags, mat, d,
+                v[0][0], v[0][1], v[0][2], v[1][0], v[1][1], v[1][2], v[2][0], v[2][1], v[2][2],
+                pl.flags & 0xff, pl.flags, pl.creates_cel(), o.skipped_by_cel_pass(), pl.by_hash());
+        }
+    }
+    // The raw pass: every map's every object's collision UNPLACED — the objects no placement
+    // reaches (LOD targets, script/Destroy_Smash targets, by-hash leftovers) still carry their
+    // disc-space triangles; if the missing plane lives here, the world's instance walk can't see it.
+    for (mi, map) in lvl.maps.iter().enumerate() {
+        for (oi, o) in map.objects.iter().enumerate() {
+            let Some(c) = &o.collision else { continue };
+            for (tri, mat) in c.triangles_with_material() {
+                let v = tri;
+                let e1 = [v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]];
+                let e2 = [v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]];
+                let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+                let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                if len < 1e-6 { continue; }
+                let d = ((n[0] * (p[0] - v[0][0]) + n[1] * (p[1] - v[0][1]) + n[2] * (p[2] - v[0][2])) / len).abs();
+                if d > r { continue; }
+                let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                for vt in &v { for k in 0..3 { lo[k] = lo[k].min(vt[k]); hi[k] = hi[k].max(vt[k]); } }
+                if (0..3).any(|k| p[k] < lo[k] - r || p[k] > hi[k] + r) { continue; }
+                hits += 1;
+                println!("raw {}\tmap {}\tobj {}\t{}\thash {:#010x}\tglist {:#x}\tmat {:#04x}\tplane_d {:.3}\tv ({:.2} {:.2} {:.2}) ({:.2} {:.2} {:.2}) ({:.2} {:.2} {:.2})",
+                    hits, mi, oi, o.name.trim(), o.hashcode, o.flags, mat, d,
+                    v[0][0], v[0][1], v[0][2], v[1][0], v[1][1], v[1][2], v[2][0], v[2][1], v[2][2]);
+            }
+        }
+    }
+    eprintln!("{} triangles within {r} of ({:.2} {:.2} {:.2}) (placed + raw)", hits, p[0], p[1], p[2]);
+    // The draw pass: which object's RENDERED vertices sit near the point (the pane may draw where
+    // its collision is missing — the owner question needs both columns).
+    let mut gfx: std::collections::BTreeMap<(usize, usize), (usize, [f32; 3])> = Default::default();
+    for inst in &instances {
+        let o = &lvl.maps[inst.map].objects[inst.object];
+        let m = &inst.matrix;
+        let tf = |v: [f32; 3]| -> [f32; 3] {
+            let w = m[3];
+            [m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2] + w[0],
+             m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2] + w[1],
+             m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2] + w[2]]
+        };
+        for leaf in &o.gfx.leaves {
+            for b in &leaf.batches {
+                for vt in &b.verts {
+                    let v = tf(vt.pos);
+                    if (0..3).all(|k| (v[k] - p[k]).abs() <= r) {
+                        let e = gfx.entry((inst.map, inst.object)).or_insert((0, v));
+                        e.0 += 1;
+                    }
+                }
+            }
+        }
+    }
+    for ((mi, oi), (n, v)) in gfx {
+        let o = &lvl.maps[mi].objects[oi];
+        println!("gfx\tmap {mi}\tobj {oi}\t{}\thash {:#010x}\tglist {:#x}\tverts {n}\tnear ({:.2} {:.2} {:.2})", o.name.trim(), o.hashcode, o.flags, v[0], v[1], v[2]);
+    }
+    Ok(())
+}
+
+/// One object's whole collision block (map 0x2E) raw: every triangle with its surface byte — the
+/// per-object owner questions ("what does DOOR_Shutter_2's collision cover?").
+fn coll_obj(iso: &IsoImage, level_name: &str, map_idx: usize, obj_idx: usize) -> Result<()> {
+    use nf_formats::level::Level;
+    let (entries, bin) = disc::files_bin_entries(iso)?;
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case(level_name)).context("no such level")?;
+    let data = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64)?;
+    let lvl = Level::parse(&data)?;
+    let o = &lvl.maps[map_idx].objects[obj_idx];
+    println!("object {} map {map_idx} idx {obj_idx} hash {:#010x} glist {:#x}", o.name.trim(), o.hashcode, o.flags);
+    let Some(c) = &o.collision else { println!("no collision block"); return Ok(()) };
+    println!("collision: version {} boxes {} tris {}", c.version, c.boxes.len(), c.tris.len());
+    for (ti, (tri, mat)) in c.triangles_with_material().into_iter().enumerate() {
+        println!("tri {ti}\tmat {mat:#04x}\tv ({:.3} {:.3} {:.3}) ({:.3} {:.3} {:.3}) ({:.3} {:.3} {:.3})",
+            tri[0][0], tri[0][1], tri[0][2], tri[1][0], tri[1][1], tri[1][2], tri[2][0], tri[2][1], tri[2][2]);
     }
     Ok(())
 }
@@ -1210,7 +1364,7 @@ fn covers(iso: &IsoImage, level_name: &str) -> Result<()> {
     let m = level.main_map().context("no main map")?;
     let world = nf_game::world::CollisionWorld::build(&level, &level.instances(true).0);
     let nav = nf_game::nav::Network::build(level.maps[m].ai_network.as_ref().unwrap_or(&Default::default()), &world, u32::from_str_radix(&level_name[..8], 16)?);
-    for (i, c) in nf_game::cover::build(&level.maps[m].placements, &nav, &world).iter().enumerate() {
+    for (i, c) in nf_game::cover::build(&level, &nav, &world).iter().enumerate() {
         println!("cover {i}: kind {} pos ({:.3}, {:.3}, {:.3}) yaw {:.4} flags {:#x} angle {:.3} depth {:.1} offset {:.1} on {:#x} off {:#x} path {:?} reachable {}/{}",
             c.kind, c.pos[0], c.pos[1], c.pos[2], c.yaw, c.flags, c.angle, c.depth, c.offset, c.on, c.off, c.path, c.dist.iter().filter(|&&x| x != 0xff).count(), c.dist.len());
     }

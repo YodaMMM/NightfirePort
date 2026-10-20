@@ -10,9 +10,12 @@
 //! first monitor tick: N× "OBJECTIVE COMPLETE" banners stack at the arrival while the mission is
 //! still open — the playtest's "mission complete thing … still couldn't continue".
 //!
-//! The fix: `Mission::init` marks a prior-part record whose condition already holds COMPLETE (4)
-//! — the earlier level's monitor folded it [M 0x1827d8:78-85] — announced (3) / fail (2)
-//! otherwise, exactly the snapshot's shape.
+//! The fix (as of 2026-10-13) was `Mission::init`'s prior-part fabricator. objectives-0b-start
+//! (2026-10-17) REPLACED it: the fabricator contradicted the disc ([D] every record ships state
+//! 0 — a cold boot must announce the priors, the main agent's PCSX2 fresh 0700000b load) and the
+//! warm arrivals it modelled now carry the real snapshot (`with_mission` + `restore`, the game's
+//! persisted `.data` [M 0x1cd720/0x1cd880]). This test's carry therefore rides the snapshot —
+//! the same assertions, the game-faithful shape.
 //!
 //! Tests: the 07000016 arrival with the carried 07000014/15 chain posts exactly ONE "OBJECTIVE
 //! COMPLETE" (the spawn plate's ch 0x8e completing record 21) and no type-3 "Mission Complete"
@@ -26,10 +29,22 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 fn carry(on: &[u32]) -> RamSave {
     let mut ch = nf_game::triggers::Channels::default();
     for &c in on { ch.set(c, 1, 0); }
-    // A fresh Bond with only the carried gates — and NO mission snapshot: the cold-load shape the
-    // fabricator owns (the warm exit's RamSave rides `with_mission`; this is the pause-Restart /
-    // pre-map-tower2 shape the playtest hit).
+    // A fresh Bond with only the carried gates — and the mission snapshot the game's own warm
+    // exit carries (`Player_RamSave`'s mission block, LS_MakeMission's shape [M 0x1cd720];
+    // objectives-0b-start: the old channels-only shape leant on the removed `Mission::init`
+    // fabricator — the snapshot IS the game's persisted `.data` at a real arrival, the same
+    // states the [L ee_start_0700000a.bin] shape holds: 07000014's five records folded COMPLETE
+    // during 07000014's play (their condition channels 0x47/0x48/0x4a/0x54/0xce ride the save
+    // [L c07000014]), 07000015's announced (its ch 0x8e still unfired — the spawn plate's fold
+    // is what this test watches), 07000016's sitting at the init shape (1/1, enable-gated).
+    let mut m = nf_game::mission::Mission::new();
+    m.base_map = 0x0700_0014;
+    m.order = 2;
+    m.states[20] = vec![4; 5];
+    m.states[21] = vec![3];
+    m.states[22] = vec![1, 1];
     RamSave::capture(&Default::default(), 0, &nf_game::pickup::Inventory::level_start(0x73, 34), &ch)
+        .with_mission(&m)
 }
 
 /// The arrival: the carried chain (0x47/0x48/0x4a/0x54/0xce + 0x4b) rides the save; the spawn
@@ -96,8 +111,21 @@ fn the_real_end_condition_posts_the_mission_complete_banner() {
     }
     let chaser = {
         let mut found = None;
+        // The launch exhaust gate: 0x0600090a stream 6 raises ch 0xf3 (243) at script tick 1611 and
+        // drops it at 2170 [D scriptlog], BEFORE the spawner writes (ch 0xf0 at 2180 [D]) — the
+        // #309 HurtPoly (gate 0xf3, 1000 [D]) is live in between, and the cinema's snap leaves Bond
+        // inside it on the silo floor. The mission only completes from a live Bond (Mission_Update
+        // 0x182c60 case 1: the ch-0x62 fail arm — Player_SetHealth(0), MissionState 3
+        // [M 0x182c60:21-43] — outranks the ch-100 completion arm), so the game's player leaves the
+        // pit during the launch; the test re-seats her on the upper floor once the cinema hands
+        // control back, the same route the descent came up.
+        let mut re_seated = false;
         for _ in 0..4000u32 {
             scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+            if !re_seated && !scene.sim.as_ref().unwrap().disabled {
+                re_seated = true;
+                scene.sim.as_mut().unwrap().bond.pos = [2.5, 1.2, -153.9];
+            }
             let sim = scene.sim.as_ref().unwrap();
             if !sim.hud.mission_msgs.is_empty() { banner_before_end += 1; }
             if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && d.death_channel == 0x90) {

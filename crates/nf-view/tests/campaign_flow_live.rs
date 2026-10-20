@@ -79,8 +79,19 @@ fn shoot_gadget_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32,
 /// the documented SP-activation blocker → the AND mux completes obj 2 → the lift doors' SSs
 /// open → the cab → the real TOUCH_ONCE #67 → ch 0x32 → the real LOAD_LEVEL exit → 0700000a.
 /// (The runner's old self-loop "exit" — blocker 3 — is never touched: the walked cab exit wins.)
+/// The NPCs are held (the renderer's --hold-npcs dev hold [M lib.rs:5763]): a walking Bond IS
+/// seen by the patrolling lobby guard, and the game's sighted-guard chain — NearArmedPerson
+/// 0x1787c8:13-22 (no armed gate on 09/0A) → CivilianPatrol 0x15d610 case 3 SetState(0x56) →
+/// FirstSightState 0x147c48 prop 0x1A → CivilianChallenge 0x162558 → RunToAlarm → PressAlarm
+/// 0x168ea8 → SetMissionFailReason 0x13e560 case 0x10 — ends with the GUARD pressing the
+/// nearest switch (ch 0x7D → mux → ch 0x61 → objective 1 failed). The old "the walk must not
+/// raise the alarm (the switches are never touched)" claim was green only while the port froze
+/// sighted guards in CivilianHiding. The unheld sight repro is
+/// security_alarm_09_live::the_panel_guard_raises_the_alarm_and_fails_the_mission
+/// (docs/systems/security-room-alarm-09.md §"The walk tests under the real rule").
 fn drive_09(w: &mut Walker) -> String {
     let mut note = String::from("real drive 09: ");
+    w.scene.sim.as_mut().unwrap().drones.hold_npcs = true;
     w.wait(60);
     assert!(w.scene.sim.as_ref().unwrap().drones.scripts.players.iter().any(|p| p.out == 0x39),
         "SP #70 SCRIPTPLAYER_Elevators (out ch 0x39) [D placement]");
@@ -720,6 +731,12 @@ fn front_end_chain_01_to_05() {
         assert_eq!(fe.flow.page, menu::PAGE_RESULTS, "phase 2 sets +0x1c = 0x40000036 [M 0x1d6360]");
         fe.tick();
         assert_eq!(fe.flow.current_level, menu::FRONTEND_LEVEL, "the front-end map loads [M 0x1d6360 phase 3]");
+        // reward-after-outro [M 0x182c60:72 / 0x1d6360:160-163]: the complete arm QUEUES the page;
+        // G-048(3): the load tail's MenuManager_Create lands the queued page — nothing was open
+        // between the mission end and here [M 0x1d6360:160-163, 0x182c60:72-75]. One reopen is
+        // the create; the second would be a no-op on an already-open page.
+        assert!(fe.reopen_queued_page(), "the manager create opens the queued results page");
+        assert_eq!(fe.page, Page::Results);
         // P_NFRESULTS case 0x4c against the live layer: the fields + the award.
         let difficulty = progress.difficulty;
         assert!(fe.results_enter(&mut progress, m, 6, difficulty, lang.as_ref()),

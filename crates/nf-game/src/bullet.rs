@@ -52,9 +52,15 @@ fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
 /// the offset's components are added to x, z, y in that order.
 pub fn spread(dir: V3, spread: f32, flags68: u32, rng: &mut crate::drone::Rng) -> V3 {
     let s = if flags68 & 0x40_0000 != 0 { 0.0 } else { spread };
-    let r = (rng.frand(2.0 * s) - s) * 0.0014;
+    let r = nf_formats::ps2float::mul(rng.frand(2.0 * s) - s, 0.0014);
     let (th, ph) = (rng.frand(crate::trig::TAU), rng.frand(crate::trig::PI));
-    let off = [r * ph.sin() * th.cos(), r * ph.sin() * th.sin(), r * ph.cos()];
+    // G-046 ps2sinf-remaining: the game's cone is Vec_Spherical_2_Cartesian 0x1e3948 [M]: PS2Sinf2
+    // (0x11f968) lane pairs — the port's old form had θ/φ's roles swapped and sin(ph)·sin(th) in z.
+    // out = ((r·sinθ)·cosφ, r·sinφ, (r·cosθ)·cosφ), every product an EE mul.s [M disasm 0x1e39a4-0x1e39d4];
+    // Bullet_init 0x12c5a0:171-180 then adds them x, z, y (add.s) and normalises twice.
+    let (sth, cth) = (crate::trig::sinf(th), crate::trig::cosf(th));
+    let (sph, cph) = (crate::trig::sinf(ph), crate::trig::cosf(ph));
+    let off = [nf_formats::ps2float::mul(nf_formats::ps2float::mul(r, sth), cph), nf_formats::ps2float::mul(r, sph), nf_formats::ps2float::mul(nf_formats::ps2float::mul(r, cth), cph)];
     let d = norm(dir);
     norm([d[0] + off[0], d[1] + off[2], d[2] + off[1]])
 }
@@ -217,27 +223,30 @@ impl PlayerHealth {
     /// attacker's height over the eye — the same x rule exactly; the y rule is [S] (the world-up
     /// projection of a pitch-rotated frame). Returns the grunt roll (see `apply`).
     pub fn pain_from(&mut self, rng: &mut crate::drone::Rng, damage: f32, difficulty: u32, level: u32, attacker: [f32; 3], eye: [f32; 3], yaw: f32) -> bool {
+        self.dir_bits = Self::hit_dir_bits(attacker, eye, yaw);
+        self.pain(rng, damage, difficulty, level)
+    }
+
+    /// The `BL+0x967` direction bits of `Player_DealWithObjHit` 0x194458:201-226 alone (no pain,
+    /// no RNG): `pain_from`'s rule, also used by the MP remote-hit feedback (mp-remote-fx).
+    pub fn hit_dir_bits(attacker: [f32; 3], eye: [f32; 3], yaw: f32) -> u8 {
         let d = [attacker[0] - eye[0], attacker[1] - eye[1], attacker[2] - eye[2]];
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        self.dir_bits = 0;
-        if len > 1e-4 {
-            let (x, y) = (d[0] / len, d[1] / len);
-            // The port's object frame has +X = screen-left (see `Sim::crosshair`), so the view's x axis is
-            // (−cos yaw, 0, sin yaw); x < 0 = the attacker on the screen's left → bit 4 (sprite 22).
-            let (rx, rz) = (-yaw.cos(), yaw.sin());
-            let vx = (d[0] / len) * rx + (d[2] / len) * rz;
-            let vy = y;
-            let (ax, ay) = (vx.abs(), vy.abs());
-            if ax >= 0.5 || ay >= 0.5 {
-                if ay < ax { self.dir_bits = if vx < 0.0 { 0x4 } else { 0x8 }; }
-                else { self.dir_bits = if vy < 0.0 { 0x1 } else { 0x2 }; }
-            } else {
-                // Neither axis reaches 0.5 (a shot from straight ahead or behind, e.g. the 07000005 sniper):
-                // both sides glow [M 0x194458:202 `bVar8 = 0xc`]. The port left 0 here: no glow at all.
-                self.dir_bits = 0xC;
-            }
+        if len <= 1e-4 { return 0; }
+        let y = d[1] / len;
+        // The port's object frame has +X = screen-left (see `Sim::crosshair`), so the view's x axis is
+        // (−cos yaw, 0, sin yaw); x < 0 = the attacker on the screen's left → bit 4 (sprite 22).
+        let (rx, rz) = (-yaw.cos(), yaw.sin());
+        let vx = (d[0] / len) * rx + (d[2] / len) * rz;
+        let vy = y;
+        let (ax, ay) = (vx.abs(), vy.abs());
+        if ax >= 0.5 || ay >= 0.5 {
+            if ay < ax { if vx < 0.0 { 0x4 } else { 0x8 } } else if vy < 0.0 { 0x1 } else { 0x2 }
+        } else {
+            // Neither axis reaches 0.5 (a shot from straight ahead or behind, e.g. the 07000005 sniper):
+            // both sides glow [M 0x194458:202 `bVar8 = 0xc`].
+            0xC
         }
-        self.pain(rng, damage, difficulty, level)
     }
 }
 

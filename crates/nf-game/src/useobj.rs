@@ -37,6 +37,16 @@
 use crate::triggers::Channels;
 use crate::world::V3;
 
+/// A test World: no anims; the model table only knows hash 0x11 (a panel at (5,0,0), r 0.5).
+struct TestWorld;
+impl crate::nis::World for TestWorld {
+    fn anim_length(&self, _script: u32) -> Option<u16> { None }
+    fn discrete0(&self, _skin: u32, _script: u32, _frame: f32) -> Option<nf_formats::anim::Mat4> { None }
+    fn glist_sphere(&self, hash: u32) -> Option<([f32; 3], f32)> {
+        match hash { 0x11 => Some(([5.0, 0.0, 0.0], 0.5)), _ => None }
+    }
+}
+
 /// Whether the segment a→b passes within `r` of `c` (the bullet-through-contact test).
 fn seg_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
@@ -61,6 +71,10 @@ pub struct PcQworm {
     pub armed: bool,
     /// `obj+0xF4`: 0 idle, 1 installing, ≥2 done [M 0x1aee20].
     pub state: u8,
+    /// The object's world-sphere radius (obj+0x8C): 0 until `set_pc_spheres` refines it from the
+    /// object's glist bounds — `Player_Activate` 0x1a5170 picks sphere-vs-sphere against the hit
+    /// object's world sphere, not a point. The sphere rides the placement position (`pos`).
+    pub radius: f32,
 }
 
 /// One switch (`Switch_Create` 0x1adcc0's ext: +0x12 = param0 channel, +0x10 = param2 auto-delay,
@@ -87,6 +101,14 @@ pub struct SwitchObj {
     pub latch: u8,
     /// The auto-return frame counter (`obj+0xF6`) [M 0x1adea8].
     pub auto_ct: u16,
+    /// The switch's main-map placement index (the walk order `UseObjects::create` consumed).
+    pub placement: usize,
+    /// The embedded ScriptPlayer's index in `Drones::scripts.players` — `Switch_Create` 0x1adcc0:44-46
+    /// stores `SP_Create(pos, rot, param 1, 0, 8, 0, obj, 0)`'s handle at ext+0x0C. `None` = the
+    /// switch carries no script param (the SP handle is then 0 and every `SP_*` call on it is a
+    /// no-op [M SP_GetState 0x1dc900:8-10]). Set by `Drones::attach_level` (crate::drone) after the
+    /// players are mounted (laser-scripts).
+    pub sp: Option<usize>,
 }
 
 /// The level's use objects, in placement order.
@@ -97,6 +119,18 @@ pub struct UseObjects {
 }
 
 impl UseObjects {
+    /// `Switch_GetNearest` (0x1b0398) + `Switch_GetSwitchChannel` (0x1b0430): the nearest switch
+    /// object's channel (squared 3-D distance to the given position; the game walks the SwitchList in
+    /// creation order). 0 when there is no switch.
+    pub fn nearest_switch_channel(&self, pos: V3) -> u8 {
+        let mut best = None;
+        for s in &self.switches {
+            let d = (s.pos[0] - pos[0]).powi(2) + (s.pos[1] - pos[1]).powi(2) + (s.pos[2] - pos[2]).powi(2);
+            if best.is_none_or(|(b, _)| d < b) { best = Some((d, s.ch)); }
+        }
+        best.map_or(0, |(_, ch)| ch)
+    }
+
     /// `Switch_Create` 0x1adcc0:39-43's load beat: `switch_channels[param0] = param3` (+ the time
     /// stamp) at level load. The Tower switches all carry rest 0 (no-op) — ported for fidelity.
     pub fn init_channels(&self, ch: &mut Channels, frame: u32) {
@@ -111,13 +145,13 @@ impl UseObjects {
     /// `parsemap_create_dynamic_objects` 0x1d04f0 cases 0x35 / 0x29, in placement order.
     pub fn create(ps: &[nf_formats::placement::Placement]) -> UseObjects {
         let mut u = UseObjects::default();
-        for p in ps {
+        for (pi, p) in ps.iter().enumerate() {
             if p.flags & 0xff != 0x35 && p.flags & 0xff != 0x29 { continue; }
             let par = |k: u32| p.params.iter().find(|(i, _)| *i == k).map_or(0, |&(_, v)| v);
             let pos = p.translation;
             if p.flags & 0xff == 0x35 {
                 // PCQWorm_Create 0x1b07a8: ext[1] = param 1 (the channel), ext[2] byte = param 2.
-                u.pcs.push(PcQworm { pos, ch: par(1) as u8, e_usable: par(2) as u8, armed: par(3) != 0, state: 0 });
+                u.pcs.push(PcQworm { pos, ch: par(1) as u8, e_usable: par(2) as u8, armed: par(3) != 0, state: 0, radius: 0.0 });
             } else {
                 // Switch_Create 0x1adcc0: +0x12 = param 0, +0x10 = param 2, +0x16 = param 3,
                 // +0x19 = param 4, +0x14 = param 5; obj+0xF4 starts at param 3.
@@ -125,17 +159,45 @@ impl UseObjects {
                     pos, ch: par(0) as u8, gate: par(5) as u8, rest: par(3) as u8, busy: par(4) != 0,
                     auto_delay: par(2) as u16, value: par(3) as u8, auto_ct: 0,
                     latch: 0,
+                    placement: pi,
+                    sp: None,
                 });
             }
         }
         u
     }
 
+    /// Refine each PC's world-sphere RADIUS from its object's glist bounds (`props::bounds`):
+    /// the half-diagonal — the port's stand-in for the game's obj+0x8C [M Player_Activate
+    /// 0x1a5170's sphere pick; the same quantity `Control_BuildWorldSph` derives for script
+    /// entities, 0x1d8d78:113]. The CENTRE stays the placement transform: the port's obj+0x30
+    /// world position. 715a first moved the centre to the bounds centre, which broke the 0a
+    /// Q-Worm install's geometry (the live test anchors Bond to `pc.pos`; at the bounds centre
+    /// he spawns inside the desk's collision and is pushed ~2.5 from the PC, out of the bullet's
+    /// reach — probe 715c) for no live consumer: the E pick is the only sphere reader, and its
+    /// reach (view sphere r 1.0 + this radius) covers the object either way. Called once after
+    /// `create` by the level build (the placements alone carry no model bounds).
+    pub fn set_pc_spheres(&mut self, level: &nf_formats::level::Level, m: usize) {
+        let mut it = self.pcs.iter_mut();
+        let Some(first) = it.next() else { return };
+        let mut pcs: Vec<&mut PcQworm> = vec![first];
+        pcs.extend(it);
+        let mut k = 0usize;
+        for p in &level.maps[m].placements {
+            if p.flags & 0xff != 0x35 { continue; }
+            let Some(pc) = pcs.get_mut(k) else { break };
+            let (lo, hi) = crate::props::bounds(level, m, p);
+            pc.radius = (((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt()) / 2.0;
+            k += 1;
+        }
+    }
+
     /// `PCQWorm_Update` 0x1aee20 + `Switch_Update` 0x1adea8, once per tick. `bullets` are this
     /// tick's player-bullet shots as (from, to, weapon) — the game reads the PC's class-5 contact
     /// list (a bullet with weapon 0x58 entering the object's box); the port's equivalent is the
-    /// segment-vs-sphere test over each bullet's path [M 0x1aee20's 0x58 test].
-    pub fn tick(&mut self, bullets: &[(V3, V3, u16)], ch: &mut Channels, frame: u32) {
+    /// segment-vs-sphere test over each bullet's path [M 0x1aee20's 0x58 test]. `scripts` carries
+    /// the level's ScriptPlayers so the switch's embedded one can be unpaused (laser-scripts).
+    pub fn tick(&mut self, bullets: &[(V3, V3, u16)], ch: &mut Channels, frame: u32, scripts: &mut crate::nis::Scripts) {
         for pc in self.pcs.iter_mut() {
             match pc.state {
                 0 => {
@@ -166,14 +228,29 @@ impl UseObjects {
             if s.value != cur {
                 s.value = cur;
                 s.latch = s.latch.saturating_add(1);
+                // The channel-mirror arm unpauses the embedded player [M 0x1adea8:23
+                // `SP_UnPause(inst+0x0C)` = the +0x2c flag plus `SCRIPTINFO+0x9c = 0`,
+                // SP_UnPause 0x1dca58:10-14] — the laser show resumes from its hold.
+                if let Some(idx) = s.sp {
+                    if let Some(p) = scripts.players.get_mut(idx) {
+                        p.activated = true;
+                        if let Some(sc) = p.info[p.cur].as_mut() { sc.delay = 0; }
+                    }
+                }
             }
             // The auto-return [M 0x1adea8's second block]: after param2 frames off the rest
-            // value, flip the channel back.
+            // value, flip the channel back. Its fire unpauses the player too [M 0x1adea8:29-30].
             if s.auto_delay != 0 && cur != s.rest {
                 s.auto_ct += 1;
                 if s.auto_ct > s.auto_delay {
                     let v = if cur != 0 { 0u8 } else { 1u8 };
                     ch.set(s.ch as u32, v, frame);
+                    if let Some(idx) = s.sp {
+                        if let Some(p) = scripts.players.get_mut(idx) {
+                            p.activated = true;
+                            if let Some(sc) = p.info[p.cur].as_mut() { sc.delay = 0; }
+                        }
+                    }
                     s.auto_ct = 0;
                 }
             } else {
@@ -185,25 +262,133 @@ impl UseObjects {
     /// The E-use dispatch (`Player_Activate` 0x1a5170's class walk): SPs (mask & 4, via
     /// `SP_Activate` 0x1dc338) and switches (class 0x39, `Switch_Activate` 0x1b02a8) within the
     /// use sphere (radius 1.0 at head + look [M 0x1a5170's `Collide_SphereIntersect(1.0, …)`]).
-    /// `scripts` are the level's ScriptPlayers (`Drones::scripts`). Returns whether anything
-    /// activated (the game's `bVar3` — it gates nothing else in the port).
+    /// `scripts` are the level's ScriptPlayers (`Drones::scripts`); `w` is the level data (for the
+    /// entity/model sphere lookups). Returns whether anything activated (the game's `bVar3` — it
+    /// gates nothing else in the port).
+    ///
+    /// The SP reach (elevator-buttons-09): the game dispatches `SP_Activate` only on a hit object
+    /// with `obj+0xE4 != 0 && class == 0` [M 0x1a5170:121-122] — a script ENTITY of that SP
+    /// (`Script_EntityStart` 0x1d8d78:108-110 stores the owner handle). The SP body (class 0x1B)
+    /// is inert to the pick. So each mask-4 SP tests:
+    ///   1. its live entity spheres (`Player::entity_use_targets`) [M];
+    ///   2. else its own model sphere (`model` — e.g. the elevator panel, whose art is baked
+    ///      absolute in the model [D gfx bounds]) [S stand-in];
+    ///   3. else its placement matrix (the original stand-in, for SPs whose scripts have created
+    ///      nothing yet) [S stand-in].
     pub fn player_activate(
-        &mut self, scripts: &mut crate::nis::Scripts, ch: &mut Channels, head: V3, look: V3, _frame: u32,
+        &mut self, scripts: &mut crate::nis::Scripts, ch: &mut Channels, head: V3, look: V3, frame: u32,
+        w: &dyn crate::nis::World,
     ) -> bool {
         let p = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let near = |q: V3| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2) <= 1.0;
+        let in_sphere = |c: [f32; 3], r: f32| {
+            let d = (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2);
+            d <= (1.0 + r) * (1.0 + r)
+        };
         let mut used = false;
         // SP_Activate 0x1dc338: mask & 4, the gate channel, and the out-channel gate when
         // mask & 1; then `ext+0x2C = 1` — the SP's own update plays it and holds its out.
-        for sp in scripts.players.iter_mut() {
-            if sp.deleted || sp.mask & 4 == 0 { continue; }
-            if sp.gate != 0 && !ch.on(sp.gate as u32) { continue; }
-            if sp.mask & 1 != 0 && !ch.on(sp.out as u32) { continue; }
-            let m = sp.matrix;
-            if near([m[3][0], m[3][1], m[3][2]]) {
-                sp.activated = true;
-                used = true;
+        for spi in 0..scripts.players.len() {
+            {
+                let sp = &mut scripts.players[spi];
+                if sp.deleted || sp.mask & 4 == 0 { continue; }
+                if sp.gate != 0 && !ch.on(sp.gate as u32) { continue; }
+                if sp.mask & 1 != 0 && !ch.on(sp.out as u32) { continue; }
+                // 1. The entity targets [M 0x1a5170:121-122 + 0x1d8d78:108-110].
+                let targets = sp.entity_use_targets(&scripts.objects, w);
+                let hit = if !targets.is_empty() {
+                    targets.iter().any(|&(c, r)| in_sphere(c, r))
+                } else if let Some((c, r)) = (sp.model != 0)
+                    .then(|| w.glist_sphere(sp.model))
+                    .flatten() {
+                    // 2. The SP's own model sphere [S stand-in — see the doc above]. Exclusive:
+                    // a resolved model IS the SP's world body, the (often origin) placement
+                    // matrix must not add a second chance.
+                    in_sphere(c, r)
+                } else {
+                    // 3. The placement matrix (the original stand-in).
+                    let m = sp.matrix;
+                    near([m[3][0], m[3][1], m[3][2]])
+                };
+                if hit {
+                    sp.activated = true;
+                    // SP_Activate 0x1dc338:84-86's second write: the current SCRIPTINFO's
+                    // `+0x9C = 0` (the port's `delay`). Without it a script held by an event 3
+                    // (`+0x9C = p0 − 1` [M 0x1d94c0:98-117]) never resumes: 0x0600059B's stream 1
+                    // carries `Event{kind 3, p0 = 0}` at t=0 [D nis dump], so the preload leaves
+                    // the hold latched and the activation must clear it for the FX to play.
+                    if let Some(s) = sp.info[sp.cur].as_mut() { s.delay = 0; }
+                    used = true;
+                }
             }
+        }
+        // The switch-through-SP route [M Switch_Create 0x1adcc0:60-66 + SP_Activate 0x1dc338:44-53]:
+        // Switch_Create builds each switch's embedded ScriptPlayer at the switch's own position
+        // with the switch object as its LINK (record[0]), so a use-pick hit on that SP's class-0
+        // entity dispatches `SP_Activate` — whose linked-type-0x39 arm runs the facing dot-check
+        // and then `Switch_Activate` on the switch, RETURNING before any mask read or activation
+        // tail. This is the only pick route to a switch in `Player_Activate` 0x1a5170 (its class
+        // walk has no 0x39 case), so a scripted-position switch — 07000009's laser switch #71
+        // sits at the world origin [D placement] while its show positions the art — is reached
+        // through the SP's live targets, not the placement transform. Targets are the SP's own
+        // ladder: entity spheres [M], then the model / placement-matrix stand-ins [S].
+        for sidx in 0..self.switches.len() {
+            let Some(spi) = self.switches[sidx].sp else { continue };
+            let sp = &scripts.players[spi];
+            if sp.deleted { continue; }
+            // 1. The entity targets, each with its facing basis [M 0x1dc338's `Mat_GetDir`
+            //    dot: `dot(dir, activator − obj) < 0` → behind the switch → refuse]. The
+            //    activator position stands in as the head (the game reads the player object's
+            //    matrix origin; the sign is horizontal-dominated at a wall panel) [S stand-in].
+            let targets = sp.entity_use_targets_dir(&scripts.objects, w);
+            let mut hit = targets.iter().any(|&(c, r, dir)| {
+                let to_p = [head[0] - c[0], head[1] - c[1], head[2] - c[2]];
+                dir[0] * to_p[0] + dir[1] * to_p[1] + dir[2] * to_p[2] >= 0.0 && in_sphere(c, r)
+            });
+            // 2./3. The model sphere, then the placement matrix — no facing data [S stand-ins].
+            if !hit {
+                hit = if let Some((c, r)) = (sp.model != 0)
+                    .then(|| w.glist_sphere(sp.model))
+                    .flatten() {
+                    in_sphere(c, r)
+                } else {
+                    let m = sp.matrix;
+                    near([m[3][0], m[3][1], m[3][2]])
+                };
+            }
+            if !hit { continue; }
+            // `Switch_Activate` 0x1b02a8's gate chain — identical to the direct walk below
+            // (the game's two routes share it). The value gate also debounces the double
+            // dispatch: after the toggle the direct walk's value match fails.
+            let s = &mut self.switches[sidx];
+            if s.busy && s.latch != 0 { continue; }
+            // The inhibit gate: usable while the gate channel is OFF [M 0x1b02a8:22].
+            if s.gate != 0 && ch.on(s.gate as u32) { continue; }
+            if s.ch == 0 { continue; } // [M 0x1b02a8:24]
+            if s.ch == 0x61 { continue; } // [M 0x1b02a8:20-21 — a class-3 activator never toggles the alarm]
+            // The script-idle gate [M 0x1b02a8:23 `SP_GetState(inst+0x0C) == 0`]: toggle
+            // allowed while the embedded script holds (delay ≠ 0) or is not loaded.
+            if let Some(idx) = s.sp {
+                let busy_running = scripts.players.get(idx)
+                    .and_then(|p| p.info[p.cur].as_ref())
+                    .is_some_and(|sc| sc.delay == 0);
+                if busy_running { continue; }
+            }
+            let cur = ch.v.get(s.ch as usize).copied().unwrap_or(0);
+            if s.value != cur { continue; }
+            let v = if cur != 0 { 0u8 } else { 1u8 };
+            ch.set(s.ch as u32, v, frame);
+            s.value = v;
+            s.latch = s.latch.saturating_add(1);
+            // The mirror arm's unpause lands here, where the game's next `Switch_Update`
+            // mirror read does it [M 0x1adea8:20-24 `SP_UnPause`; SP_UnPause 0x1dca58:10-14].
+            if let Some(idx) = s.sp {
+                if let Some(p) = scripts.players.get_mut(idx) {
+                    p.activated = true;
+                    if let Some(sc) = p.info[p.cur].as_mut() { sc.delay = 0; }
+                }
+            }
+            used = true;
         }
         // Switch_Activate 0x1b02a8: gate on, value matches the channel, idle; a class-3
         // activator never toggles ch 0x61 — the port's use path is always the player (class 3),
@@ -214,22 +399,42 @@ impl UseObjects {
             if s.gate != 0 && ch.on(s.gate as u32) { continue; }
             if s.ch == 0 { continue; } // [M 0x1b02a8:24 — a channel-less switch never activates]
             if s.ch == 0x61 { continue; }
+            // The script-idle gate [M 0x1b02a8:23 `SP_GetState(inst+0x0C) == 0`, SP_GetState
+            // 0x1dc900:13-20 = `SCRIPTINFO+0x9c == 0` → toggle allowed only while the embedded
+            // script is NOT running its delay-0 update path — i.e. held (delay ≠ 0) or not yet
+            // loaded (SP_GetState's null-SCRIPTINFO arm returns false = allowed)].
+            if let Some(idx) = s.sp {
+                let busy_running = scripts.players.get(idx)
+                    .and_then(|p| p.info[p.cur].as_ref())
+                    .is_some_and(|sc| sc.delay == 0);
+                if busy_running { continue; }
+            }
             let cur = ch.v.get(s.ch as usize).copied().unwrap_or(0);
             if s.value != cur { continue; }
             if near(s.pos) {
                 let v = if cur != 0 { 0u8 } else { 1u8 };
-                ch.set(s.ch as u32, v, _frame);
+                ch.set(s.ch as u32, v, frame);
                 s.value = v;
                 // The toggle's mirror mismatch bumps +0x18 next Update [M 0x1adea8:20-23]; the
-                // port syncs the mirror here, so it bumps the latch at the same point.
+                // port syncs the mirror here, so it bumps the latch at the same point — and
+                // unpauses the embedded player here, where the game's next Switch_Update mirror
+                // arm does it (0x1adea8:23 `SP_UnPause`; SP_UnPause 0x1dca58:10-14).
                 s.latch = s.latch.saturating_add(1);
+                if let Some(idx) = s.sp {
+                    if let Some(p) = scripts.players.get_mut(idx) {
+                        p.activated = true;
+                        if let Some(sc) = p.info[p.cur].as_mut() { sc.delay = 0; }
+                    }
+                }
                 used = true;
             }
         }
         // PCQWorm_Activate 0x1b0840: only when param 2 != 0 (the Tower PCs: 0 → E does nothing).
+        // The pick is the game's sphere-vs-sphere [M 0x1a5170]: the view sphere (r 1.0) against the
+        // PC's own world sphere (obj+0x80 centre, obj+0x8C radius; radius 0 = the unrefined point).
         for pc in self.pcs.iter_mut() {
             if pc.e_usable == 0 || pc.state != 0 { continue; }
-            if near(pc.pos) {
+            if in_sphere(pc.pos, pc.radius) {
                 pc.state = 1;
                 used = true;
             }
@@ -260,24 +465,25 @@ mod tests {
     #[test]
     fn pcqworm_installs_on_qworm_bullet_only() {
         let ps = [placement(0x35, [10.0, 1.0, 10.0], &[(0, 0), (1, 0x48), (2, 0), (3, 1)])];
+        let mut scripts = crate::nis::Scripts::default();
+        let mut scripts2 = crate::nis::Scripts::default();
         let mut u = UseObjects::create(&ps);
         let mut ch = chans(&[]);
         let bullets = [( [10.0, 1.0, 10.4], [10.0, 1.0, 12.0], 0x58u16 )];
-        u.tick(&bullets, &mut ch, 1);
-        u.tick(&[], &mut ch, 2);
+        u.tick(&bullets, &mut ch, 1, &mut scripts);
+        u.tick(&[], &mut ch, 2, &mut scripts);
         assert!(ch.on(0x48), "the Q-Worm bullet installs the virus (ch 0x48) [M 0x1aee20]");
         // Sister: a rifle bullet must not.
         let mut u2 = UseObjects::create(&ps);
         let mut ch2 = chans(&[]);
         let rifle = [( [10.0, 1.0, 10.4], [10.0, 1.0, 12.0], 2u16 )];
-        u2.tick(&rifle, &mut ch2, 1);
-        u2.tick(&[], &mut ch2, 2);
+        u2.tick(&rifle, &mut ch2, 1, &mut scripts2);
+        u2.tick(&[], &mut ch2, 2, &mut scripts2);
         assert!(!ch2.on(0x48), "a normal bullet does not install [M 0x1aee20's 0x58 test]");
         // E with param 2 = 0 does nothing either.
-        let mut scripts = crate::nis::Scripts::default();
         let mut u3 = UseObjects::create(&ps);
         let mut ch3 = chans(&[]);
-        u3.player_activate(&mut scripts, &mut ch3, [9.0, 1.0, 10.0], [1.0, 0.0, 0.0], 0);
+        u3.player_activate(&mut scripts, &mut ch3, [9.0, 1.0, 10.0], [1.0, 0.0, 0.0], 0, &TestWorld);
         assert!(!ch3.on(0x48) && u3.pcs[0].state == 0, "E cannot install when param 2 = 0 [M 0x1b0840]");
     }
 
@@ -295,14 +501,14 @@ mod tests {
         let mut scripts = crate::nis::Scripts::default();
         let mut ch = chans(&[]);
         // E on the keycard lock (ch 9).
-        assert!(u.player_activate(&mut scripts, &mut ch, [0.0, 1.6, 0.0], [0.0, -1.0, 0.0], 1));
+        assert!(u.player_activate(&mut scripts, &mut ch, [0.0, 1.6, 0.0], [0.0, -1.0, 0.0], 1, &TestWorld));
         assert!(ch.on(9), "the switch toggles ch 9 [M 0x1b02a8]");
         assert!(!ch.on(0x7c), "the alarm pull is out of reach here");
         // E at the alarm pull (ch 0x7C): the player CAN raise the alarm with it.
-        assert!(u.player_activate(&mut scripts, &mut ch, [5.0, 1.6, 0.0], [0.0, -1.0, 0.0], 2));
+        assert!(u.player_activate(&mut scripts, &mut ch, [5.0, 1.6, 0.0], [0.0, -1.0, 0.0], 2, &TestWorld));
         assert!(ch.on(0x7c), "the alarm pull toggles ch 0x7C for the player [M 0x1b02a8]");
         // A switch whose channel IS 0x61 refuses the class-3 player [M 0x1b02a8's first gate].
-        assert!(!u.player_activate(&mut scripts, &mut ch, [10.0, 1.6, 0.0], [0.0, -1.0, 0.0], 3));
+        assert!(!u.player_activate(&mut scripts, &mut ch, [10.0, 1.6, 0.0], [0.0, -1.0, 0.0], 3, &TestWorld));
         assert!(!ch.on(0x61), "the player cannot toggle a ch-0x61 switch");
     }
 
@@ -311,20 +517,14 @@ mod tests {
     #[test]
     fn sp_activation_gates_and_fires() {
         // A mask-4 SP with out ch 0x39 at the use point, and a gated twin.
-        let sp = |out: u16, gate: u16, mask: u16| crate::nis::Player {
-            placement: 0, scripts: [1, 0], modes: [64, 0], stay: false, mask, out, gate,
-            scale: 1.0, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
-            cur: 0, state: 1, activated: false, countdown: 0, info: [None, None], deleted: false,
-            live_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
-        subs: Vec::new(),
-        };
+        let sp = |out: u16, gate: u16, mask: u16| sp_with_model(out, gate, mask, 0);
         let mut scripts = crate::nis::Scripts::default();
         scripts.players = vec![sp(0x39, 0, 4), sp(0x40, 0x50, 4)];
         let ps: [nf_formats::placement::Placement; 0] = [];
         let mut u = UseObjects::create(&ps);
         let mut ch = chans(&[]);
         // In front of the first SP's matrix origin, looking at it.
-        assert!(u.player_activate(&mut scripts, &mut ch, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1));
+        assert!(u.player_activate(&mut scripts, &mut ch, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld));
         assert!(scripts.players[0].activated, "the mask-4 SP activates [M 0x1dc338]");
         assert!(!scripts.players[1].activated, "the gated SP is out of reach anyway");
         // The gated twin, reached with its gate OFF: refused.
@@ -332,40 +532,141 @@ mod tests {
         scripts2.players = vec![sp(0x40, 0x50, 4)];
         let mut u2 = UseObjects::create(&ps);
         let mut ch2 = chans(&[]);
-        u2.player_activate(&mut scripts2, &mut ch2, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1);
+        u2.player_activate(&mut scripts2, &mut ch2, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld);
         assert!(!scripts2.players[0].activated, "gate ch 0x50 off → no activation [M 0x1dc338]");
         // And with the gate ON: activates.
         let mut ch3 = chans(&[0x50]);
-        u2.player_activate(&mut scripts2, &mut ch3, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1);
+        u2.player_activate(&mut scripts2, &mut ch3, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld);
         assert!(scripts2.players[0].activated, "gate on → activates");
     }
+
+    /// The model-sphere fallback [S stand-in, elevator-buttons-09]: a mask-4 SP whose placement
+    /// matrix is the origin (like 07000009's #70) activates through its own model's world-baked
+    /// sphere instead — and NOT through a model the World cannot resolve.
+    #[test]
+    fn sp_model_sphere_fallback_replaces_origin_matrix() {
+        // model 0x11 = the panel at (5,0,0) r 0.5 (TestWorld).
+        let mut scripts = crate::nis::Scripts::default();
+        scripts.players = vec![sp_with_model(0x39, 0, 4, 0x11)];
+        let ps: [nf_formats::placement::Placement; 0] = [];
+        let mut u = UseObjects::create(&ps);
+        let mut ch = chans(&[]);
+        // Near the panel (the use point head+look lands within 1.0 + 0.5 of (5,0,0)), NOT near
+        // the origin matrix.
+        assert!(u.player_activate(&mut scripts, &mut ch, [5.0, 0.3, 0.4], [0.0, 0.0, 1.0], 1, &TestWorld),
+            "the model-baked panel is the use target");
+        assert!(scripts.players[0].activated);
+        // Far from the panel: no activation.
+        let mut scripts2 = crate::nis::Scripts::default();
+        scripts2.players = vec![sp_with_model(0x39, 0, 4, 0x11)];
+        let mut u2 = UseObjects::create(&ps);
+        let mut ch2 = chans(&[]);
+        assert!(!u2.player_activate(&mut scripts2, &mut ch2, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld),
+            "the origin placement matrix must NOT activate a model-baked SP");
+        assert!(!scripts2.players[0].activated);
+        // An SP whose model the World cannot resolve falls back to the placement matrix (the
+        // original stand-in — the existing behaviour the older SPs rely on).
+        let mut scripts3 = crate::nis::Scripts::default();
+        scripts3.players = vec![sp_with_model(0x39, 0, 4, 0xdead)];
+        let mut u3 = UseObjects::create(&ps);
+        let mut ch3 = chans(&[]);
+        assert!(u3.player_activate(&mut scripts3, &mut ch3, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld),
+            "no model sphere → the placement matrix stand-in holds");
+    }
+
+    /// The switch-through-SP route [M Switch_Create 0x1adcc0:60-66 + SP_Activate 0x1dc338:44-53]:
+    /// a switch whose embedded ScriptPlayer carries the pick target (model stand-in here; 09's
+    /// #71 has the placement at the world origin [D]) toggles through the SP hit — Switch_Activate's
+    /// gate chain rides along [M 0x1b02a8]. Sisters: the inhibit gate blocks; ch 0x61 refuses; the
+    /// value gate debounces a second press.
+    #[test]
+    fn switch_embedded_sp_route_toggles_and_gates() {
+        // The switch sits at the ORIGIN (like #71 [D]); its SP's model is the panel at (5,0,0).
+        let mut u = UseObjects::default();
+        u.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false,
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+        let mut scripts = crate::nis::Scripts::default();
+        scripts.players = vec![sp_with_model(0, 0, 1, 0x11)];
+        let ps: [nf_formats::placement::Placement; 0] = [];
+        let mut ch = chans(&[]);
+        // E at the panel (head+look lands within 1.0 + 0.5 of (5,0,0)), nowhere near the origin.
+        assert!(u.player_activate(&mut scripts, &mut ch, [5.0, 0.3, 0.9], [0.0, 0.0, -1.0], 1, &TestWorld),
+            "the SP-routed hit toggles the switch");
+        assert!(ch.on(0x37), "ch 0x37 toggles through the SP route [M 0x1dc338 → 0x1b02a8]");
+        assert_eq!(u.switches[0].value, 1, "the stored value follows the toggle");
+        assert!(scripts.players[0].activated, "the show's mirror unpause lands on the embedded player");
+        // Sister 1: the toggle is per press [M 0x1b02a8's value-match + flip] — the second
+        // press at the panel flips ch 0x37 back off (the mirror resynced, the gate allows).
+        assert!(u.player_activate(&mut scripts, &mut ch, [5.0, 0.3, 0.9], [0.0, 0.0, -1.0], 2, &TestWorld),
+            "the second press re-toggles [M 0x1b02a8]");
+        assert!(!ch.on(0x37) && u.switches[0].value == 0, "the toggle is per press");
+        // Sister 2: the inhibit gate ON blocks the SP route [M 0x1b02a8:22].
+        let mut u2 = UseObjects::default();
+        u2.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 7, rest: 0, busy: false,
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+        let mut scripts2 = crate::nis::Scripts::default();
+        scripts2.players = vec![sp_with_model(0, 0, 1, 0x11)];
+        let mut ch2 = chans(&[7]);
+        assert!(!u2.player_activate(&mut scripts2, &mut ch2, [5.0, 0.3, 0.9], [0.0, 0.0, -1.0], 1, &TestWorld),
+            "the gate ON refuses the SP-routed toggle");
+        assert!(!ch2.on(0x37), "no channel write under the gate");
+        // Sister 3: a ch-0x61 switch refuses through the SP route too [M 0x1b02a8:20-21].
+        let mut u3 = UseObjects::default();
+        u3.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x61, gate: 0, rest: 0, busy: false,
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+        let mut scripts3 = crate::nis::Scripts::default();
+        scripts3.players = vec![sp_with_model(0, 0, 1, 0x11)];
+        let mut ch3 = chans(&[]);
+        assert!(!u3.player_activate(&mut scripts3, &mut ch3, [5.0, 0.3, 0.9], [0.0, 0.0, -1.0], 1, &TestWorld),
+            "the alarm channel refuses the player activator");
+        assert!(!ch3.on(0x61), "ch 0x61 never toggles from the player's E");
+    }
+
+    /// A Player literal with a tunable model hash (the SP test's constructor, field on its own
+    /// line per the merge discipline).
+    fn sp_with_model(out: u16, gate: u16, mask: u16, model: u32) -> crate::nis::Player {
+        crate::nis::Player {
+            placement: 0, scripts: [1, 0], modes: [64, 0], stay: false, mask, out, gate,
+            scale: 1.0, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            cur: 0, state: 1, activated: false, countdown: 0, info: [None, None], deleted: false,
+            live_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            subs: Vec::new(),
+            hit_points: 0.0,
+            damage: 0.0,
+            tick_damage: 0.0,
+            // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
+            hidden: false,
+            model,
+        }
+    }
+
     /// docs/fields/switch.md +0x14: the inhibit gate is usable while the channel is OFF
     /// [M 0x1b02a8:22]. Fail-first: the old port required the channel ON.
     #[test]
     fn switch_inhibit_gate_blocks_only_while_on() {
         let mut u = UseObjects::default();
         u.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 7, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0 });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
         // Gate channel OFF: the switch activates.
         let mut scripts = crate::nis::Scripts::default();
         let mut ch = Channels::default();
-        let used = u.player_activate(&mut scripts, &mut ch, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1);
+        let used = u.player_activate(&mut scripts, &mut ch, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld);
         assert!(used && ch.on(9), "gate channel OFF → the switch activates");
         // Sister: the same switch with its gate channel ON never activates.
         let mut u2 = UseObjects::default();
         u2.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 7, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0 });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
         let mut scripts2 = crate::nis::Scripts::default();
         let mut ch2 = chans(&[7]);
-        let used2 = u2.player_activate(&mut scripts2, &mut ch2, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1);
+        let used2 = u2.player_activate(&mut scripts2, &mut ch2, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld);
         assert!(!used2 && !ch2.on(9), "gate channel ON → blocked");
         // Sister 2: gate 0 always allows.
         let mut u3 = UseObjects::default();
         u3.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 0, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0 });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
         let mut scripts3 = crate::nis::Scripts::default();
         let mut ch3 = Channels::default();
-        assert!(u3.player_activate(&mut scripts3, &mut ch3, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1),
+        assert!(u3.player_activate(&mut scripts3, &mut ch3, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld),
             "no gate → activates");
     }
 
@@ -376,18 +677,18 @@ mod tests {
     fn switch_busy_is_one_shot_never_rearms() {
         let mut u = UseObjects::default();
         u.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 0, rest: 0, busy: true,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0 });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
         let mut scripts = crate::nis::Scripts::default();
         let mut ch = Channels::default();
         let head = [0.0, 0.5, -0.5]; let look = [0.0, 0.0, 1.0];
-        assert!(u.player_activate(&mut scripts, &mut ch, head, look, 1), "first use activates");
+        assert!(u.player_activate(&mut scripts, &mut ch, head, look, 1, &TestWorld), "first use activates");
         // Let the tick see the channel change (the game's mirror test bumps +0x18).
-        u.tick(&[], &mut ch, 2);
+        u.tick(&[], &mut ch, 2, &mut scripts);
         assert_eq!(u.switches[0].latch, 1, "the channel change bumped the latch");
-        assert!(!u.player_activate(&mut scripts, &mut ch, head, look, 3), "second use blocked");
+        assert!(!u.player_activate(&mut scripts, &mut ch, head, look, 3, &TestWorld), "second use blocked");
         // After 61 ticks the game is still dead (the latch never resets).
-        for f in 4..70 { u.tick(&[], &mut ch, f); }
-        assert!(!u.player_activate(&mut scripts, &mut ch, head, look, 70),
+        for f in 4..70 { u.tick(&[], &mut ch, f, &mut scripts); }
+        assert!(!u.player_activate(&mut scripts, &mut ch, head, look, 70, &TestWorld),
             "a busy switch never re-arms");
     }
 }

@@ -146,3 +146,128 @@ the transitions) implements `MpSession`:
 - join side: typed address (digits/dots/colon, Backspace, paste) → Connect → Connecting… →
   connected → the lobby mirrors the host's choices → match start hands over;
 - refused / timed-out / Back-cancels-cleanly on both sides, page ids of the port-only pages.
+
+## 6. The one-screen lobby (mp-lobby-one-screen, 2026-10-18)
+
+The user: "we need a custom lobby screen where all the settings can be set on one screen." The
+online path stops walking the couch pages; it gets **one page** that holds every MpSettings field
+the couch pages set, the per-player rows and the Start. The LOCAL couch flow is untouched — every
+couch page, handler and test stays exactly as it is [M the couch pages are the game's own; see §2
+for the walk they keep].
+
+Evidence note: the couch map wheel is NOT filtered per scenario — nothing in P_MPMAP 0x217468 or
+C_SBMPMAP 0x217538 reads MPSettings+0x1A4 [M P_MPMAP 0x217468:19 selects the current
+`MPSettings._424_4_` in the 0x2df400 wheel, C_SBMPMAP 0x217538 only locks/unlocks + confirms;
+docs/systems/mp-menus.md states it]. The lobby's Map row therefore offers all 8 rows at every
+scenario; the only map-dependent gate the game has is Ravine's AI-Bots lock [M P_MPOPTIONS
+0x217678:20-25], which the lobby carries (below).
+
+### 6.1 The page
+
+`PAGE_MP_ONLINE_LOBBY 0x5000_0005` (`Page::MpOnlineLobby`) — a spare id next to the §2 block, so
+the game's `0x4000_00xx` and the old port-only ids stay untouched [S]. Both roles share the page:
+
+    Main row 1 → PAGE_MP_MODE
+      row 1 Host Online → PAGE_MP_HOST (port + Start Listening, unchanged §2.1)
+                        → PAGE_MP_ONLINE_LOBBY (everything on one screen; host edits all)
+      row 2 Join Online → PAGE_MP_NETJOIN (address, unchanged §2.2)
+                        → PAGE_MP_ONLINE_LOBBY (the same screen; the client edits only its own row)
+
+The old walk (Join Game as the host lobby → Scenario → Map → Setup → Options → Confirm) and the
+old client mirror page (PAGE_MP_LOBBY §2.2) are no longer on the online path [S — this task
+replaces it]; their code and tests stay for the couch flow's sake.
+
+### 6.2 The model (`MpLobby`, crates/nf-view/src/mp_lobby.rs)
+
+One struct owns the screen [S]; every field cites the couch page that sets the same word [M]:
+
+- Scenario = MPSettings+0x1A4, the 13 MP_SCENARIO_ROWS words [M C_SBMPSCEN's confirm store;
+  locked rows (the reward column) refuse edits, the game's own confirm refuses them at
+  C_SBMPSCEN 0x20c600:40-42 — the port maps the refusal onto the ◀ ▶ step [S]].
+- Map = MPSettings+0x1A8, the 8 MP_MAP_ROWS codes, not filtered (see the evidence note) [M].
+- Weapon Set = +0x1B4, 0..10 wrapping [M P_MPPLAYERMODS 0x2104d0:13, 26-49].
+- Limit = +0x1BC... no: +0x19C, the MP_RULES_POINTS list [M P_MPRULES 0x20f790:45-76]; the row's
+  unit is "Lives" for scenario 0x10 else "Points" [M 0x20f790:78-95].
+- Duration = +0x1A0, the MP_RULES_DURATIONS list [M 0x20f790:21-42].
+- Friendly Fire = +0x198, On/Off [M P_MPPLAYERMODS 0x2104d0:12]; Radar = +0x1C4 [M :16];
+  the two further Player-Mods rows = +0x1BC / +0x1C8, On/Off [M :14-15].
+- Enviro-Mods = the five rows in page order (view distance 0/1/2 [M P_MPENVIROMODS 0x210030:12-16],
+  +0x1B8 On/Off, Explosive Scenery with the reward gate — locked shows the single 0x10 node and
+  steps do nothing [M :35-61 + Menu_UnlockMPSettings 0x1ff698], +0x1D0 On/Off, vehicles 0..3).
+- Bots = the four mpbots records [M mpbots 0x2deea8, layout in MpBot]: per bot an Enabled toggle
+  (the Bot Setup page's own Yes/No row [M P_MPBOTSETUP 0x211270 row 0]), the character wheel
+  (MP_CHARACTERS, locked refuse [M C_SBMPBTCHOOSE 0x210f08:18-20]; a pick applies the preset stats
+  and side [M :26-43]) and a Skill row (Poor 8 / Average 5 / Good 3 / Very Good 1 [M 0x211270:49-59]).
+- Per-player rows ×4: codename (display), character (the MP_CHARACTERS wheel), team (only when the
+  scenario has the team bit 0x2000_0000 [M P_MPSETUP 0x20d7a8's state-2 arm], 0 Phoenix / 1 MI6
+  [M C_RBMPSETUP 0x20de58]), ready flag, ping (display, the session's RTT [S]).
+- Start row: host-only. Enabled when every joined human is ready and at least one human is in
+  [S — the task's gate; the game's own ready gate is per-panel Menu_MPAreWeReady 0x1f78d8]. Press
+  it and the lobby runs the game's own start checks [M C_SBMPOPTIONS 0x20e818:50-130 — the
+  FFA good-side cap, the both-sides team gate, the two-player minimum] and then builds the
+  MpSettings exactly as the couch confirm builds it [M P_MPCONFIRM 0x20ec00:53-94 — the port
+  copies the model back into the front end's mp_* fields and calls mp_confirm_start, so the built
+  struct is the same by construction].
+
+Navigation is the pad pattern: Up/Down move the focus over the row list, ◀ ▶ step the focused
+row's value, Confirm acts (toggle / start), Back cancels the lobby (session close, panels reset,
+mode page [S §2]). The rows the getters hand out carry `editable` — the host's rows are editable
+only for the host; a player row is editable only by that row's owner [S]. Mouse support follows
+§4's contract (the draw code maps the hit rows; the model only consumes the mapped actions).
+
+### 6.3 Getters (what the draw code calls)
+
+- `MpLobby::rows(&self) -> Vec<MpLobbyRow>` — the row list in screen order: label (the game's Txt
+  id where one exists — the confirm page's own pair ids 0x3d4/0x3d5/0x24d/0x3d8-0x3d7/0x3d6/0x3da
+  [M P_MPCONFIRM's enter builds these; the rest are the couch pages' row labels], port-only rows
+  carry the port's literal [S]), value (Txt id or text), `editable`, `focused`.
+- `MpLobby::players(&self) -> &[MpLobbyPlayer; 4]` — the per-player rows (codename, character,
+  team, ready, ping).
+- `MpLobby::start_enabled(&self) -> bool` — the Start gate.
+- `FrontEnd::mp_lobby_rows()` / `mp_lobby_players()` / `mp_lobby_start_enabled()` — the
+  front-end delegates (None/empty off the lobby page).
+
+### 6.4 Session messages
+
+The lobby state crosses the session as a tagged DATA tunnel blob, exactly like the §3 choices
+tunnel (`crates/nf-view/src/mpnet.rs`'s encode/decode over `nf_net::Packet::Data`). The codec —
+`LobbyState` (host→clients, the full snapshot) and `LobbyEdit` (client→host, one own-row edit) —
+lives in `crates/nf-net/src/lobby.rs` [S, numbers/ids only: u32 words, u8 flags, 32-byte
+codenames; the layout is its own doc comment]. The `MpSession` trait gains four default methods
+(`lobby_state` / `publish_lobby` / `push_row_edit` / `take_row_edit`) so existing impls compile
+unchanged; `SessionProxy` implements them over the tunnel [S]. Host edits publish on the next
+tick (the §3 publish-diff pattern); a client's edit rides to the host, merges into the host's
+model, and reaches every other client with the next publish.
+
+### 6.5 Tests
+
+`crates/nf-view/tests/mp_lobby_one_screen.rs` — headless loopback (no ISO, no sockets), numbers
+and ids only, every test with a sister assertion that can fail:
+- host edit → the client's rows show it on the next tick (the publish-diff path);
+- the client cannot edit host rows (the editable matrix, both the getter and the action);
+- Start is gated on ready (a not-ready client holds Start; readying through the client's own row
+  opens it; the start hands the match over the session to the client);
+- the built MpSettings equals what the couch pages build for the same choices [M mp_confirm_start]
+  — the same words through both paths produce equal structs;
+- the `LobbyState` / `LobbyEdit` codec round-trips.
+
+## 7. The failure paths (mp-online-failures, 2026-10-18) [S — port-only design]
+
+The PS2 game has no online mode, so every rule here is the port's own [S]; the one game fact
+leaned on is the dead-pad NEUTRAL a dropped slot rides (`psiInput_PollDevices` 0x10ca78 [M],
+net-lockstep.md "Disconnects").
+
+| Path | Before | Now | Test |
+|---|---|---|---|
+| A client leaves mid-match | The pause page's QUIT never closed the session: the leaver kept sending keepalives, so nobody timed it out and every other machine stalled on its missing inputs **forever**. A clean LEAVE desynced any client that was behind the host (it ran the leaver's last ticks NEUTRAL, the host had run them with its real input) | QUIT closes the session (`App::net_leave_match`, LEAVE at once); a dropped core sends LEAVE (`impl Drop for NetCore` — the window closing). The host keeps relaying the leaver's REAL inputs for every tick it ran (`left_at`, the drop tick) and a client takes every other slot from the host's relay — never its own guess | `drop_rejoin::a_client_leaving_mid_match_never_desyncs_the_others`, `…_crashing_…` (both FAIL on the old session: desync at tick 150) |
+| The leaver comes back | Late join to the lowest free slot | A HELLO whose (non-empty) codename matches a slot's departed human takes THAT slot (its body still stands → the reconnect path of `Sim::mp_join_spawn`, no second body) | `drop_rejoin::a_reconnect_takes_its_own_slot_back_and_plays_on_in_sync`, `mp_online_failures::join_in_progress_from_the_menus_then_leave_and_reconnect` [ISO] |
+| The host leaves mid-match | Clients logged "player 1 left" and froze; a host that quit to its menus kept its keepalives flowing, so the 5 s `HostTimeout` never fired; when it did, `net_fail` opened the couch Join Game page over the frozen arena | The host's LEAVE is `Event::HostLeft` → `CoreEvent::HostLeft` at once; `net_fail` lands on the page this machine came from (`FrontEnd::mp_net_return`: a client's Join Online with the address kept, a host's port page with Start focused) with the reason in the notice box, and the arena unloads (the debriefing's front-end rebuild) | `mp_online_failures::the_host_leaving_mid_match_reaches_every_client_at_once` |
+| The host backs out of the lobby | The client sat on the lobby until the 5 s timeout | The client is back on Join Online within the link latency, "The host left the lobby" | `mp_online_failures::the_host_leaving_the_lobby_returns_the_client_at_once` |
+| Join a running match from the menus | The dial reached the late-join handover but the page went to the one-screen lobby ("Waiting for the host…") forever: the handover event sat in the lobby core nobody drained | `MpNetState::Joining` ("Joining the match in progress…", only Back acts); the app adopts the lobby session as `mpnet::LobbyAdopt::LateJoin` (no arena load, no load hold), runs the handover's replay, confirms and closes the front end — the flag path's late join | `mp_online_failures::join_in_progress_from_the_menus_then_leave_and_reconnect` [ISO] |
+| Rematch, a client presses Continue before the host | The re-dial hit the host's finished match (still open under its debriefing) and LATE-JOINED it — a dead lobby | `NetCore::finish_match` (`mp_results`): the finished session answers no new HELLO; the client's HELLO retries until the host's next lobby listens on the port | `mp_online_failures::three_machines_rematch_through_the_lobby` (host + 2 clients; the clients press Continue first, then the second match starts) |
+| Back on the lobby, then host the same port | "Port already in use": the closed session kept its socket until the whole core dropped (the app keeps it in `net_lobby`) | `NetCore::close` swaps in an ephemeral loopback placeholder (the port is free when it returns); `rebind_host` releases the old socket before binding | `mp_online_failures::back_releases_the_socket_and_the_same_port_rehosts_at_once` |
+
+The app glue (`crates/nf-view/src/lib.rs`): `adopt_lobby_session` (the `LobbyAdopt` decision; a
+late join cancelled with Back drops the adopted core), `ensure_lobby_session` (the online pages'
+proxy — not while a session is adopted, and wired at once by `net_fail`), `net_leave_match`,
+`net_fail`, the `HostLeft` arm, the `LateJoinHandover` arm closing the join page.

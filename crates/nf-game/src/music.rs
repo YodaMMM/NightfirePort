@@ -67,6 +67,10 @@ pub struct Music {
     temp2: i32,
     temp3: i32,
     temp4: bool,
+    /// The EE's `SFXPaused` 0x30c92c — set by the pause page's `SFXPause` (batch op 9) [M
+    /// 0x116b70:11-13; `MenuManager_Create` 0x21b908:121-124 pause_sound=1]. While it stands,
+    /// `UpdateMusicalEvents` returns before every event but the level-start restart [M 0x114e70:61-64].
+    pub sfx_paused: bool,
     /// `SfxNisMusicTrigger` 0x30c8b4 [M 0x115a68:18-20]: set when a sound with id 0x172 (the NIS music
     /// stream) starts — the cut-scene's own music tells the level updater to jump to its NIS section.
     pub nis_trigger: bool,
@@ -82,7 +86,7 @@ impl Default for Music {
     fn default() -> Music {
         Music { table: Vec::new(), entry: None, events: [0; 64], out: Vec::new(), nis_playing: false, nis_quitten: 0, delay_timer: 0, last_jump: 0,
             last_request: -1, wait_for_end: false, under_attack: false, count: 0, count2: 0, bonus: 0, which_combat: 0, which_stealth: 0,
-            temp1: false, temp2: 0, temp3: 0, temp4: false, nis_trigger: false, c_temp1: 0, c_temp2: 0, c_temp4: false }
+            temp1: false, temp2: 0, temp3: 0, temp4: false, sfx_paused: false, nis_trigger: false, c_temp1: 0, c_temp2: 0, c_temp4: false }
     }
 }
 
@@ -91,6 +95,15 @@ impl Music {
 
     /// `Music_Event(i, v)`.
     pub fn event(&mut self, i: usize, v: u32) { if i < 64 { self.events[i] = v; } }
+
+    /// Whether a level track entry is active (the `entry` gate `UpdateMusicalEvents`'s per-frame
+    /// logic runs under).
+    pub fn has_entry(&self) -> bool { self.entry.is_some() }
+
+    /// The alarm hysteresis the event-2 slot drives (`UpdateMusicalEvents`'s
+    /// `e[2] == 2 → bonus = 600, under_attack = true` and its decay — music.rs's port of
+    /// 0x114e70): `(under_attack, bonus)`.
+    pub fn alarm_state(&self) -> (bool, i32) { (self.under_attack, self.bonus) }
 
     /// The IOP's op-0x19 pair (`NisPlaying`, `NisQuitten`): `UpdateMusicalEvents` keeps `NisPlaying` while a
     /// script camera runs and counts `NisQuitten` down from 5 after the quit event [M sound.md §6 step 3].
@@ -139,6 +152,11 @@ impl Music {
                 self.entry = Some(m);
             }
         }
+        // `UpdateMusicalEvents` 0x114e70:61-64: while the EE's `SFXPaused` stands (the pause page's
+        // `SFXPause` batch op 9 [M 0x116b70:11-13; MenuManager_Create 0x21b908:121-124 pause_sound=1])
+        // every event and the whole per-frame logic below is frozen — the events persist. The
+        // level-start restart above is the one path that runs before this gate [M 0x114e70:43-54].
+        if self.sfx_paused { return; }
         let t = self.delay_timer - 1;
         if self.delay_timer < 0 { self.last_jump = iop_section; }
         if e[0xb] != 0 { self.nis_playing = true; }
@@ -158,11 +176,32 @@ impl Music {
         self.delay_timer = t;
         if e[6] != 0 { self.jump(m.on_death, true); self.out.push(Cmd::FadeDown { music: false }); self.wait_for_end = true; }
         if e[7] != 0 { self.jump(m.on_fail, true); self.out.push(Cmd::FadeDown { music: false }); self.wait_for_end = true; }
-        // The per-level updaters: CastleC/CastleD gate their own blocks (the NIS/level-end jumps run even
-        // while `wait_for_end` holds [M 0x113188:5 / 0x1133b8:8-21]), so they sit outside the gate.
-        if m.level == 0x0700_0007 { self.castle_c(&e, &m); }
-        if m.level == 0x0700_0008 { self.castle_d(&e, &m); }
+        // The dispatcher's own gate [M disasm 0x1153c4-0x1153c8: `lw v0,-32144(gp)` (MusicWaitForEnd
+        // 0x30c8e0); `bne v0,zero,0x115554` skips the whole per-level switch]: with the end-wait
+        // standing NO updater runs — the exit sting is the last section the board ever requests
+        // this level. The 07/08/1b handlers below previously ran unconditionally; the game runs
+        // them under the same gate (their internal `MusicWaitForEnd` checks — 0x113188:40,
+        // 0x114d60:40 — guard blocks INSIDE the handlers, which the dispatcher already excludes).
         if !self.wait_for_end {
+            // The shared level-exit block, ported from every unported level updater [M 0x113558:9-33
+            // (TowerA, 07000009); the same block in 0x111ed8 MayhewA/07000001:9-, 0x112270 MayhewB/02,
+            // 0x112730 MayhewC/03, 0x112bf8 MayhewD/04, 0x1137b0 TowerB/0700000a, 0x113a20 TowerC/0b
+            // (:70), 0x113c18 PowerStationA1/0c, 0x113fc0 PowerStationA2/0d, 0x14250 Tower2A/11,
+            // 0x14348 Tower2B/12, 0x14640 Tower2C/13, 0x14728 EvilBase/14, 0x14a38 EvilSilo/15,
+            // 0x14b38 EvilBaseC/16, 0x14528 Tower2Elevator/0700004a:9-34 — all `DAT_002d3518 ||
+            // DAT_002d3504` = e[8] (mission success, 0x182c60:31) || e[3] (the Trigger_Activate
+            // LOAD_LEVEL exit, 0x1b2318:109)]: the +0x24 combat-set scan picks the end marker
+            // (+0x14 end_combat when MusicLastJump is a combat section, else +0x18 end_calm), the
+            // jump is INSTANT, `SFXFadeDown(0)` (the SFX bus — the streamed music follows
+            // FadeMusicVolume, untouched by flag 0 [M sound.md §5.5]), `MusicWaitForEnd = 1`.
+            // 06's updater (CastleB 0x113060) has NO such block — its SFXFadeDown (:37) rides the
+            // 0x6000071 NIS event — so 06 is absent here [M].
+            if matches!(m.level, 0x0700_0001..=0x0700_0004 | 0x0700_0009..=0x0700_000d | 0x0700_0011..=0x0700_0016 | 0x0700_004a) {
+                self.exit_block(&e, &m);
+            }
+            if m.level == 0x0700_0007 { self.castle_c(&e, &m); }
+            if m.level == 0x0700_0008 { self.castle_d(&e, &m); }
+            if m.level == 0x0700_001b { self.space_station_d(&e, &m); }
             if m.level == 0x0700_0005 { self.castle_a(&e, &m); }
             // `UpdateMFX_01CastleB` 0x113060 (07000006): the NIS-trigger half (DAT_002d3524 == 0x6000071 → the
             // MapMusicData+0x14/+0x18 marker jump) needs the MapMusic marker fields the port doesn't parse yet
@@ -173,7 +212,42 @@ impl Music {
         self.events = [0; 64];
     }
 
+    /// The shared level-exit block — see the dispatch site for the per-handler addresses.
+    fn exit_block(&mut self, e: &[u32; 64], m: &MapMusic) {
+        if e[3] == 0 && e[8] == 0 { return; }
+        let found = m.combat.iter().any(|&s| s == self.last_jump);
+        let s = if found { m.end_combat } else { m.end_calm };
+        self.jump(s, true);
+        self.out.push(Cmd::FadeDown { music: false });
+        self.wait_for_end = true;
+    }
+
+    /// `UpdateMFX_HT_Level_SpaceStationD` 0x114d60 (0700001b, the space-station finale). The
+    /// alert/combat pair (`DAT_002d3518`/`DAT_002d3504` = the port's e[8]/e[3] by the EventList slot
+    /// map — DAT_002d34fc+4k ↔ e[k+1], the e[0xb] NisPlaying precedent) fades the level's music down
+    /// and waits for the end; the intro cinema's end (`Script_KillStream` of 0x0600085c [M 0x1d9860:74]
+    /// posts the hash into `DAT_002d3528` = e[0xc]) restarts the track at section 0 while no end-wait
+    /// holds. 1b's combat list is EMPTY on disc [D MapMusic row 20], so the scan always takes the
+    /// end_calm arm.
+    fn space_station_d(&mut self, e: &[u32; 64], m: &MapMusic) {
+        if e[8] != 0 || e[3] != 0 {
+            // The combat-set scan [M 0x114d60:10-25]: MusicLastJump in the combat list jumps
+            // end_combat, else end_calm — instant [M 0x114d60:27-34].
+            let found = m.combat.iter().any(|&s| s == self.last_jump);
+            let s = if found { m.end_combat } else { m.end_calm };
+            self.last_request = s;
+            self.jump(s, true);
+            if m.level != 0x0700_0006 { self.out.push(Cmd::FadeDown { music: false }); }  // [M 0x114d60:35-37]
+            self.wait_for_end = true;
+        }
+        if !self.wait_for_end && e[0xc] == 0x6000_085c {
+            self.last_request = 0;
+            self.jump(0, false);   // SFXJumpToMusicMarker(0, 0) — not instant [M 0x114d60:40-43]
+        }
+    }
+
     /// `UpdateMFX_01CastleA` (07000005).
+
     fn castle_a(&mut self, e: &[u32; 64], m: &MapMusic) {
         let in_combat = |x: i32| m.combat.contains(&x);
         if e[2] == 3 && !self.temp4 { self.temp4 = true; self.temp3 = 1200; self.pick_combat(false); return; }
@@ -325,5 +399,155 @@ mod tests {
         m.out.clear();
         for _ in 0..40 { m.update(0); }
         assert!(m.out.is_empty(), "a quiet 07000006 picks no section");
+    }
+
+    /// 07000009's MapMusic row [D disc MapMusic table 0x24f4d8, level 0x07000009; parsed by
+    /// nf-formats::music — the live test reads the real row]. Combat set non-empty so both scan
+    /// arms are exercisable.
+    fn tower_a() -> MapMusic {
+        MapMusic { level: 0x0700_0009, track: 20, start: 0, on_death: 14, on_fail: 13, end_combat: 12, end_calm: 15, alert_frames: 10, calm_frames: 160, combat: vec![4, 12, 16], stealth: vec![2, 6, 18] }
+    }
+
+    /// The 09 lift-exit's music arm [M 0x1b2318:109 `Music_Event(3,1)` → 0x113558:9-33]: event 3
+    /// jumps the level's end marker INSTANTLY, queues `SFXFadeDown(0)` and holds the end-wait —
+    /// the "music fades" the playtest misses (the port previously had no updater for 09, so the
+    /// event died on the board). The combat-set scan: MusicLastJump outside the set → end_calm.
+    /// Sister: with MusicLastJump INSIDE the set the same event picks end_combat instead — the
+    /// scan is the only difference, so a wrong marker (or a non-instant jump, or a missing
+    /// FadeDown) fails one arm while the other passes.
+    #[test]
+    fn the_09_exit_event_jumps_the_end_marker_and_fades_down() {
+        let mut m = Music::new(vec![tower_a()]);
+        m.event(0, 0x0700_0009); m.event(1, 1);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Start { track: 20, section: 0 }), "the level start: {:?}", m.out);
+        m.out.clear();
+        // The exit trigger's event 3 (Trigger_Activate 0x1b2318:109); MusicLastJump is the level
+        // start section 0 — outside the combat set → end_calm.
+        m.event(3, 1);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 15, instant: true }), "end_calm 15 instant: {:?}", m.out);
+        assert!(m.out.contains(&Cmd::FadeDown { music: false }), "SFXFadeDown(0) [M 0x113558:31]");
+        assert!(m.wait_for_end, "MusicWaitForEnd = 1 [M 0x113558:33]");
+        // The dispatcher gate [M 0x1153c4-8]: with the end-wait standing a SECOND exit event does
+        // nothing — the sting is the board's last request.
+        m.out.clear();
+        m.event(3, 1);
+        m.update(0);
+        assert!(m.out.is_empty(), "no updater runs while the end-wait stands: {:?}", m.out);
+        // Sister: a combat section playing (the IOP reports 4) picks end_combat 12, not 15.
+        let mut m = Music::new(vec![tower_a()]);
+        m.event(0, 0x0700_0009); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.last_jump = 4;
+        m.event(3, 1);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 12, instant: true }), "end_combat 12 instant: {:?}", m.out);
+        assert!(!m.out.contains(&Cmd::Jump { section: 15, instant: true }), "never end_calm from a combat section");
+    }
+
+    /// Sister (the death/fail exit keeps its own path): event 6 (the death pulse, death.rs's
+    /// `Music_Event(6,1)` [M 0x190810:41]) jumps `on_death`, NOT the exit block's end marker, on
+    /// the same board — and event 7 (the mission-fail pulse [M 0x182c60:31]) jumps `on_fail`.
+    #[test]
+    fn the_09_death_and_fail_events_keep_their_own_markers() {
+        let mut m = Music::new(vec![tower_a()]);
+        m.event(0, 0x0700_0009); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(6, 1);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 14, instant: true }), "on_death 14 instant: {:?}", m.out);
+        assert!(m.out.contains(&Cmd::FadeDown { music: false }) && m.wait_for_end, "the death arm fades down and waits too [M 0x114e70's e[6] arm]");
+        assert!(!m.out.iter().any(|c| matches!(c, Cmd::Jump { section: 15, .. }) || matches!(c, Cmd::Jump { section: 12, .. })), "no exit marker on death");
+        let mut m = Music::new(vec![tower_a()]);
+        m.event(0, 0x0700_0009); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(7, 1);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 13, instant: true }), "on_fail 13 instant: {:?}", m.out);
+        assert!(!m.out.iter().any(|c| matches!(c, Cmd::Jump { section: 15, .. }) || matches!(c, Cmd::Jump { section: 12, .. })), "no exit marker on fail");
+    }
+
+    /// 1b's MapMusic row [D MapMusic table 0x24f4d8 row 20]: track 35, start 4, end_calm 10, EMPTY
+    /// combat/stealth lists.
+    fn space_station() -> MapMusic {
+        MapMusic { level: 0x0700_001b, track: 35, start: 4, on_death: 3, on_fail: 2, end_combat: 10, end_calm: 10, alert_frames: 10, calm_frames: 160, combat: vec![], stealth: vec![] }
+    }
+
+    /// `UpdateMusicalEvents` 0x114e70:61-64: while `SFXPaused` stands (the pause page's `SFXPause`
+    /// op 9 [M 0x116b70:11-13; `MenuManager_Create` 0x21b908:121-124 pause_sound=1 — the task's
+    /// "the pause entry's music calls"]), every music event is frozen and PERSISTS. The one
+    /// exception is the level-start restart, which runs before the gate [M 0x114e70:43-54].
+    /// Sister: unpaused, the same events process.
+    #[test]
+    fn the_pause_freezes_the_music_board_but_the_level_start_still_restarts() {
+        let mut m = Music::new(vec![space_station()]);
+        m.event(0, 0x0700_001b); m.event(1, 1);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Start { track: 35, section: 4 }), "the level start starts the track: {:?}", m.out);
+        // The pause page's op 9: SFXPaused stands.
+        m.sfx_paused = true;
+        m.out.clear();
+        // The alert/combat pair (e[8], the port's slot for DAT_002d3518) and the intro cinema's
+        // end hash (e[0xc], DAT_002d3528): both frozen while paused.
+        m.event(8, 1); m.event(0xc, 0x6000_085c);
+        m.update(0);
+        assert!(m.out.is_empty(), "paused the music board emits nothing: {:?}", m.out);
+        assert_eq!(m.events[8], 1, "paused the events persist (the game's return skips the clear) [M 0x114e70:61-64]");
+        assert!(!m.wait_for_end, "paused the alert arm never ran");
+        // The exception: the level-start restart still runs while paused [M 0x114e70:43-54].
+        m.event(0, 0x0700_001b); m.event(1, 1);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Start { track: 35, section: 4 }), "the level start restarts while paused: {:?}", m.out);
+        // Unpaused: the same persisted events process now.
+        m.sfx_paused = false;
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 10, instant: true }), "unpaused the alert arm jumps end_calm 10: {:?}", m.out);
+        assert!(m.out.contains(&Cmd::FadeDown { music: false }), "unpaused the alert arm fades down [M 0x114d60:35-37]");
+        assert!(m.wait_for_end, "unpaused the alert arm sets the end-wait");
+    }
+
+    /// `UpdateMFX_HT_Level_SpaceStationD` 0x114d60 (0700001b): the intro cinema's end
+    /// (`Script_KillStream` of 0x0600085c [M 0x1d9860:74] → DAT_002d3528 = e[0xc]) restarts the
+    /// track at section 0, NOT instant, while no end-wait holds [M 0x114d60:40-43]; the alert pair
+    /// (e[8]/e[3]) jumps end_calm 10 instant with the empty combat list and holds the end-wait.
+    /// Sister: another level's board (05, whose updater is CastleA 0x112d78) does nothing on the
+    /// same events.
+    #[test]
+    fn space_station_d_restarts_the_music_when_the_intro_cinema_ends() {
+        let mut m = Music::new(vec![space_station()]);
+        m.event(0, 0x0700_001b); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        // The intro cinema 0x0600085c ends (SP #147's kill-stream hash).
+        m.event(0xc, 0x6000_085c);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0, instant: false }), "the cinema end restarts at section 0, not instant: {:?}", m.out);
+        assert_eq!(m.last_request, 0, "MusicLastJumpRequest = 0 [M 0x114d60:41]");
+        // The alert pair with the EMPTY combat list: the scan misses → end_calm 10, instant.
+        let mut m = Music::new(vec![space_station()]);
+        m.event(0, 0x0700_001b); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(8, 1);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 10, instant: true }) && m.out.contains(&Cmd::FadeDown { music: false }), "the alert arm: end_calm 10 instant + fade down: {:?}", m.out);
+        assert!(m.wait_for_end);
+        // With the end-wait standing the cinema-end restart is suppressed [M 0x114d60:40].
+        m.out.clear();
+        m.event(0xc, 0x6000_085c);
+        m.update(0);
+        assert!(!m.out.iter().any(|c| matches!(c, Cmd::Jump { section: 0, .. })), "no restart while the end-wait holds: {:?}", m.out);
+        // Sister: 05's board ignores 1b's events (its updater is CastleA).
+        let mut m = Music::new(vec![castle()]);
+        m.event(0, 0x0700_0005); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(0xc, 0x6000_085c); m.event(8, 1);
+        m.update(0);
+        assert!(!m.out.iter().any(|c| matches!(c, Cmd::Jump { section: 0, .. })), "05 does not restart at section 0 on 1b's cinema hash");
     }
 }

@@ -8,7 +8,7 @@
 //! confirm (P_MPCONFIRM 0x20ec00:53-94) hands the match over. Each step keeps a sister assertion
 //! that can fail.
 
-use nf_view::menu::{Action, FrontEnd, Page, MP_MAP_ROWS, MP_OPTIONS_ROWS, MP_SCENARIO_ROWS};
+use nf_view::menu::{self, Action, FrontEnd, Page, MP_MAP_ROWS, MP_OPTIONS_ROWS, MP_SCENARIO_ROWS};
 
 /// Main menu → Multiplayer → Local → Join (the main menu's row 1 confirm; net-online-lobby put
 /// the port's Local / Host Online / Join Online choice between them, and row 0 Local keeps the
@@ -28,6 +28,12 @@ fn enter_mp(fe: &mut FrontEnd) {
 }
 
 /// The keyboard join: agent 1 joins, picks the default codename, readies.
+
+/// G-048(1): the CloseIris walks land 10 ticks after the action [M 0x202190:8-9].
+fn iris_wait(fe: &mut FrontEnd) {
+    for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
+}
+
 fn join_agent1(fe: &mut FrontEnd) {
     fe.cursor = 0;
     assert!(fe.action(Action::Confirm), "✕ joins agent 1");
@@ -61,6 +67,7 @@ fn scenario_confirm_moves_to_map_and_back_out() {
     // Walk to a real scenario (row 1 = Arena / Deathmatch) and confirm.
     fe.mp_scenario_row = 1;
     assert!(fe.action(Action::Confirm), "the scenario confirm navigates");
+    iris_wait(&mut fe); // [M C_SBMPSCEN 0x20c600:45 Menu_ChangePageCloseIris — G-048(1)]
     assert_eq!(fe.page, Page::MpMap, "C_SBMPSCEN's confirm opens the map page [M → 0x40000013]");
     assert_eq!(fe.mp_scenario, 1, "the confirm stores the scenario word [M MPSettings+0x1A4]");
     // Sister: the map confirm stores the level code and lands on the setup page.
@@ -74,8 +81,8 @@ fn scenario_confirm_moves_to_map_and_back_out() {
     assert!(fe.action(Action::Back));
     assert_eq!(fe.page, Page::MpScenario, "map's Back returns to the scenario page");
     assert!(fe.action(Action::Back));
-    assert_eq!(fe.page, Page::Main, "scenario's Back returns to the main menu [M → 0x40000002]");
-    assert_eq!(fe.cursor, 1, "back on the Multiplayer row");
+    assert_eq!(fe.page, Page::Main, "scenario's Back returns to the main menu [M 0x217348:28-30 — the 99 arm opens 0x40000002]");
+    assert_eq!(fe.cursor, 1, "back on the Multiplayer row [S — P_MAIN's 0x4c writes only the write-only DAT_002a3cce (0x20a7b0:39); the landing row is the port's choice]");
 }
 
 #[test]
@@ -85,6 +92,7 @@ fn setup_ffa_then_options_then_rules_back_out() {
     join_agent1(&mut fe);
     fe.mp_scenario_row = 1; // Arena (FFA)
     fe.action(Action::Confirm);
+    iris_wait(&mut fe); // [M C_SBMPSCEN 0x20c600:45 Menu_ChangePageCloseIris — G-048(1); the walk must land before the map row's confirm]
     fe.mp_map_row = 0;
     fe.action(Action::Confirm);
     assert_eq!(fe.mp_setup_state, 3, "FFA asks Choose Character [M P_MPSETUP's mp_stuff state 3]");
@@ -135,6 +143,7 @@ fn locked_scenario_and_ravine_bots_gate() {
     // Sister: the unlock_all shortcut opens Uplink [M the gate's other arm].
     fe.unlock_all = true;
     assert!(fe.action(Action::Confirm));
+    iris_wait(&mut fe); // [M C_SBMPSCEN 0x20c600:45]
     assert_eq!(fe.page, Page::MpMap);
     fe.unlock_all = false;   // back to the fresh profile for the Ravine checks
     // Ravine (row 7) hides the AI Bots row.
@@ -157,6 +166,7 @@ fn bots_flow_picks_and_counts() {
     join_agent1(&mut fe);
     fe.mp_scenario_row = 1;
     fe.action(Action::Confirm);
+    iris_wait(&mut fe); // [M C_SBMPSCEN 0x20c600:45 — G-048(1)]
     fe.mp_map_row = 1; // Fort Knox — bots allowed
     fe.action(Action::Confirm);
     fe.action(Action::Confirm); // FFA character pick → the handicap
@@ -200,6 +210,7 @@ fn start_checks_refuse_single_player() {
     join_agent1(&mut fe);
     fe.mp_scenario_row = 1;
     fe.action(Action::Confirm);
+    iris_wait(&mut fe); // [M C_SBMPSCEN 0x20c600:45 — G-048(1)]
     fe.mp_map_row = 1;
     fe.action(Action::Confirm);
     fe.action(Action::Confirm); // character → handicap
@@ -225,7 +236,9 @@ fn quick_game_lands_on_confirm_with_three_bots() {
     let mut fe = FrontEnd::new();
     enter_mp(&mut fe);
     join_agent1(&mut fe);
-    // Quick Game is row 0 — straight to the confirm page [M C_SBMPSCEN:48-145].
+    // Quick Game is row 0 — straight to the confirm page [M C_SBMPSCEN 0x20c600:48-145]. The
+    // arena is the game's Rand_Random() % 7 sample over mp_level rows 0..6 [M 0x20c600:62-63];
+    // the port takes row 0 (Skyrail) for headless determinism [S — see mp_quick_start].
     fe.mp_scenario_row = 0;
     assert!(fe.action(Action::Confirm));
     assert_eq!(fe.page, Page::MpConfirm, "Quick Game skips the setup pages [M → 0x40000049]");
@@ -250,8 +263,9 @@ fn quick_game_lands_on_confirm_with_three_bots() {
     assert_eq!(s.players[0].team, 1, "the quick start's slot-0 team is MI6 [M disasm 0x20c7f8]");
     assert_eq!(fe.requested_level, Some(fe.mp_level), "the arena request rides the loader");
     // The flow machine runs the load to the arena [M ResetMap_LevelToLoad + the phases; the
-    // confirm's fade hold (8 headless frames) sits on top of the load state].
-    for _ in 0..16 { fe.tick(); }
+    // confirm's fade hold sits on top of the load state: P_MPCONFIRM's PushState(84.0f, 7) — 84
+    // frames + the finished-frame pop (gameflow-state-stack) [M 0x20ec00, 0x1bada0]].
+    for _ in 0..=84 { fe.tick(); }
     while fe.flow.get_state() == nf_view::menu::ST_MAPLOAD { fe.flow.load_tick(); }
     assert_eq!(fe.flow.current_level, fe.mp_level, "the loader reaches the arena");
 }
@@ -264,6 +278,7 @@ fn team_scenario_asks_team_then_character() {
     // Team Arena (row 2, scenario 0x20000002) has the team bit.
     fe.mp_scenario_row = 2;
     fe.action(Action::Confirm);
+    iris_wait(&mut fe); // [M C_SBMPSCEN 0x20c600:45 — G-048(1)]
     fe.mp_map_row = 1;
     fe.action(Action::Confirm);
     assert_eq!(fe.mp_setup_state, 2, "a team game asks Choose Team [M P_MPSETUP's state 2]");

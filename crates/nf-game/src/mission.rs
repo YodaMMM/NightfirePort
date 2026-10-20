@@ -115,7 +115,9 @@ pub enum Event {
     /// A type-2 objective notice [M 0x1827d8:41-84]: `label` = the text (0x04000000-style) or
     /// 0x2000053 ("OBJECTIVE COMPLETE"); `is_new` = the game's `ThisOrderNum <= record.part` arg;
     /// `ticks` = the message's life (300 announce / 180 complete+fail); `failed` = the game's
-    /// `"%s: %s"` Fail-prefix format (0x30cbb8) instead of plain "%s" (0x30cbb0).
+    /// `"%s: %s"` Fail-prefix format (0x30cbb8) instead of plain "%s" (0x30cbb0) — the case-2
+    /// fail notice ONLY [M 0x1827d8:72-74; the case-0/1 announces bind the plain format
+    /// 0x1827d8:43-45, 58-60].
     Objective { label: u32, is_new: bool, ticks: u32, failed: bool },
     /// `FailLabel` changed [M 0x1827d8 case 5 + the 0x60/0x61/level hooks]: the mission banner's
     /// second line (0x4000032 "Alarm Raised", 0x4000033 "Cover Lost", 0x4000034 "Killed Civilians",
@@ -204,38 +206,29 @@ impl Mission {
         for (i, l) in LEVELS.iter().enumerate() {
             if l.mission != self.base_map { continue; }
             // The game's modes: part < current → 1 (cold) / 4 (warm), part == current → 2, part >
-            // current → 0 [M 0x182270:73-84]. Modes 1 and 4 both skip the reset (previous parts keep
-            // their state); only modes 0 and 2 run the body below.
-            if l.part < self.order {
-                // fix-objective-messages: the game's record states live in `.data` and NO load path
-                // reinitialises them (`ResetMap_GameInit` 0x1d5080 only calls `Mission_Init`, which
-                // touches current + future parts [M 0x182270:68-129]) — at any real arrival the prior
-                // parts sit ANNOUNCED: [L work/ee_start_0700000a.bin @ 0x2a3f78 — mission 07000009's
-                // rec1 (condition 0x46, still unfired) is state 3 at 0700000a's start]. The port's
-                // fresh `Mission::new()` fabricates 0 there, and case 0 then announces every prior
-                // record whose `level <= current` at the new level (07000007 stacked 07000005/06's
-                // banners; the restart re-announced them). Mark those fabricated 0s announced — the
-                // monitor's own 0→2/3 transition [M 0x1827d8:47-51], without queueing a message.
-                // spurious-complete-16: a prior-part record whose condition ALREADY holds sits
-                // COMPLETE in the game's `.data`, not announced — the earlier level's monitor
-                // folded it [M 0x1827d8:78-85]: [L ee_start_0700000a.bin @ 0x2a3f90+0x14 = 4 —
-                // 07000009's ch-0x47 record (fired in 07000009) at 0700000a's start]. Fabricating 3
-                // re-completed every carried record on the first monitor tick — N× "OBJECTIVE
-                // COMPLETE" stacked at the arrival while the mission stayed open (playtest
-                // 1013-1825's "a mission complete thing popped up for some reason"): every load
-                // without a mission snapshot (the pause-menu Restart, the driving return, boot
-                // level-select) burst. Fail records keep 2 either way: the channel-ON case is the
-                // standing hooks' / the state-2 arm's fail, which the first tick re-arms exactly
-                // like the game's own record would [M 0x1827d8:68-77, 98-117].
-                for (j, o) in l.objectives.iter().enumerate() {
-                    if self.states[i][j] == 0 {
-                        if o.flags & 2 != 0 { self.states[i][j] = 2; continue; }
-                        let raw = ch.v.get(o.channel as usize).copied().unwrap_or(0);
-                        self.states[i][j] = if raw != 0 { 4 } else { 3 };
-                    }
-                }
-                continue;
-            }
+            // current → 0 [M 0x182270:73-84]. Modes 1 and 4 both SKIP the body below (previous
+            // parts keep their states) — the decompile's mode-1/mode-4 arms only read the record
+            // count [M 0x182270:92-95, 120-121 `uVar5 = *puVar12`], they never write a record.
+            if l.part < self.order { continue; }
+            // objectives-0b-start: the prior parts' states are whatever the layer holds — on a
+            // cold load that is the pristine `.data`, and the DISC ships every record STATE 0
+            // ([D] ACTION.ELF .data: all 24 rows' 55 records carry +0x14 = 0, mission 07000009's
+            // rows 8/9/10 @ 0x2a3f78/0x2a3fc0/0x2a4008 included), so the monitor's case-0 arm
+            // (`record.level <= GameState._12_4_` [M 0x1827d8:41-54]) announces the earlier
+            // parts' objectives at the fresh boot: [L] the main agent's PCSX2 fresh load of
+            // 0700000b (tools/trace/goto_level.py, warm reset 0) shows "Get to the lobby…"
+            // (0x04000017), "Take main elevator…" (0x04000018) and "Install Q-Worm on office
+            // computer systems" (0x04000019 — part 1's record) announcing over the first ~520
+            // frames. `fix-objective-banner_live`'s harness already called this "the game's own
+            // cold-load behaviour". The old `fix-objective-messages` fabricator (prior parts →
+            // 3/2) contradicted it everywhere it applied: the snapshots prove the warm arrivals
+            // it modelled ([L ee_start_0700000a.bin @ 0x2a3f78: states 2/3/4]) are carried by
+            // the mission snapshot + `restore` today (map-tower2), the pause Restart reloads
+            // BaseMap = part 0 (no prior parts at all [M C_GCPAUSE_Handler 0x204408:139
+            // `ResetMap_LevelToLoad(BaseMap, 0, 1)`]), the driving return is a fresh ACTION boot
+            // (pristine `.data` [M Boot_LoadPTPData 0x1c8560 sets BaseMap + MissionState only —
+            // no record-state restore; the port's own scene.rs comment]) and the boot
+            // level-select is the cold path this fix restores.
             for (j, o) in l.objectives.iter().enumerate() {
                 self.states[i][j] = if o.enable != 0 { 1 } else { 0 }; // [M 0x182270:98-105]
                 if o.channel != 0 {
@@ -386,18 +379,22 @@ impl Mission {
                 all &= cond;
                 match self.states[i][j] {
                     0 => {
-                        // [M 0x1827d8:41-54: announce once the record's level is reached]
+                        // [M 0x1827d8:41-54: announce once the record's level is reached. The
+                        // message is the plain "%s" format (DAT_0030cbb0) for BOTH flag arms —
+                        // the "%s: %s" fail format is case 2's only [M 0x1827d8:72-74]; the
+                        // flags only pick the landing state (2 fail-armed / 3 announced).]
                         if l.level <= level {
                             let failed = o.flags & 2 != 0;
-                            out.push(Event::Objective { label: o.text, is_new, ticks: 300, failed });
+                            out.push(Event::Objective { label: o.text, is_new, ticks: 300, failed: false });
                             self.states[i][j] = if failed { 2 } else { 3 };
                         }
                     }
                     1 => {
-                        // [M 0x1827d8:55-67: the enable channel fires → announce]
+                        // [M 0x1827d8:55-67: the enable channel fires → announce — the same
+                        // plain "%s" text, state 2/3 by the flags.]
                         if o.enable != 0 && o.enable != 0xff && ch.on(o.enable as u32) {
                             let failed = o.flags & 2 != 0;
-                            out.push(Event::Objective { label: o.text, is_new, ticks: 300, failed });
+                            out.push(Event::Objective { label: o.text, is_new, ticks: 300, failed: false });
                             self.states[i][j] = if failed { 2 } else { 3 };
                         }
                     }
@@ -497,31 +494,111 @@ mod tests {
     use super::*;
     use crate::triggers::Channels;
 
-    /// spurious-complete-16: the fabricator's shape matches the game's own `.data` at a
-    /// mid-mission arrival [L ee_start_0700000a.bin @ 0x2a3f78 — 07000009's rec at 0700000a's
-    /// start: the fired ch-0x47 record state 4, the unfired ch-0x46 record state 3, the fail
-    /// record state 2].
+    /// objectives-0b-start re-pin (2026-10-17): the old test pinned `Mission::init`'s prior-part
+    /// fabricator, which the disc disproves — every objective record ships STATE 0 ([D] ACTION.ELF
+    /// `.data`, all 24 rows' 55 records), `Mission_Init`'s mode-1/4 arms never write a prior-part
+    /// record ([M 0x182270:92-95, 120-121]), and the monitor's case 0 then announces the priors at
+    /// the fresh boot ([M 0x1827d8:41-54]; [L] the main agent's PCSX2 fresh 0700000b load shows
+    /// part-0/1 records announcing). The warm-arrival shape the fabricator approximated is the
+    /// snapshot's restore ([L ee_start_0700000a.bin @ 0x2a3f78: 07000009's records sit 2/3/4 at
+    /// 0700000a's start]), pinned below through `snapshot`/`restore` [M LS_MakeMission/LS_LoadMission
+    /// 0x1cd720/0x1cd880].
     #[test]
-    fn prior_parts_fabricate_complete_when_their_condition_already_holds() {
-        // 07000016's cold-load shape: the carried 07000014/15 chain (the five part-0 channels ON,
-        // 0x8e still unfired — the spawn plate #252 owns it).
+    fn cold_init_keeps_prior_parts_at_their_data_states_and_resets_the_current_one() {
+        // 07000016's cold-load shape: the carried 07000014/15 channels ride the save (0x8e still
+        // unfired — the spawn plate #252 owns it).
         let mut ch = Channels::default();
         for &c in &[0x47u32, 0x48, 0x4a, 0x54, 0xce] { ch.set(c, 1, 0); }
         let mut m = Mission::new();
         m.init(0x0700_0016, false, &mut ch, 0);
-        assert!(m.states[20].iter().all(|&s| s == 4),
-            "the carried part-0 records sit COMPLETE (the earlier level's monitor folded them [M 0x1827d8:78-85]), got {:?}", m.states[20]);
-        assert_eq!(m.states[21][0], 3, "the unfired prior record sits announced [L the snapshot's ch-0x46 record]");
-        assert_eq!(m.states[22][0], 1, "the current part waits on its enable channel");
+        assert!(m.states[20].iter().all(|&s| s == 0),
+            "prior parts keep their `.data` state — the disc ships 0 [D]; Mission_Init's mode-1 arm never writes a record [M 0x182270:92-95], got {:?}", m.states[20]);
+        assert_eq!(m.states[21][0], 0, "the unfired prior record keeps its `.data` 0");
+        assert_eq!(m.states[22][0], 1, "the current part waits on its enable channel [M 0x182270:98-105]");
         assert_eq!(m.states[22][1], 1);
-        // The fail record (07000009's alarm, the 0700000a arrival's shape): announced-fail either
-        // way — the channel-ON case re-arms through the state-2 arm / the standing hooks [M
-        // 0x1827d8:68-77, 98-117], never through a fabricated complete.
+        // The monitor's first tick announces the priors (case 0: record.level <= current
+        // [M 0x1827d8:41-54]) — here as plain texts (the fail record arms 2, the rest 3).
+        let mut out = Vec::new();
+        m.update(&mut ch, 1, 0x0700_0016, false, &mut out);
+        assert_eq!(m.states[20][0], 3, "the prior record announces through case 0 [M 0x1827d8:41-54]");
+        // The fail record (07000009's alarm) at a cold 0700000a init with ch 0x61 pre-set: the
+        // prior keeps its `.data` 0 through init, case 0 arms it 2 (the plain-text announce
+        // [M 0x1827d8:43-45, 47-51]) and the channel-ON case fails it on the next tick
+        // [M 0x1827d8:68-77] — the standing ch-0x61 hook alongside [M 0x1827d8:98-104].
         let mut ch2 = Channels::default();
         ch2.set(0x61, 1, 0);
         let mut m2 = Mission::new();
         m2.init(0x0700_000a, false, &mut ch2, 0);
-        assert_eq!(m2.states[8][0], 2, "the fail record stays announced-fail");
-        assert_eq!(m2.states[8][1], 3, "the unfired record stays announced");
+        assert_eq!(m2.states[8][0], 0, "no fabrication: the prior fail record keeps its `.data` 0 through init");
+        m2.update(&mut ch2, 1, 0x0700_000a, false, &mut out);
+        assert_eq!(m2.states[8][0], 2, "case 0 arms the fail record 2 [M 0x1827d8:47-51]");
+        // The standing ch-0x61 hook fires on the SAME tick (the monitor walks the records, then
+        // the hooks [M 0x1827d8:98-104]) — ch 99 rises and `Mission_Update` leaves internal 1 for
+        // the fail sequence, so the state-2 arm's own fold never runs here [M 0x182c60:30-33].
+        assert!(ch2.on(99), "the standing hook raised the fail channel [M 0x1827d8:101]");
+        assert_eq!(m2.internal, 2, "the mission entered the fail sequence [M 0x182c60:30-33]");
+        assert!(out.iter().any(|e| matches!(e, Event::FailLabel(0x0400_0032))), "FailLabel = Alarm Raised [M 0x1827d8:100]");
+        // The WARM arrival the snapshots prove ([L ee_start_0700000a.bin @ 0x2a3f78]): init resets
+        // current + future, the carried snapshot puts the priors' runtime states back [M
+        // LS_LoadMission 0x1cd880; the drone.rs latch restores after init].
+        let mut m3 = Mission::new();
+        let mut ch3 = Channels::default();
+        m3.init(0x0700_000a, true, &mut ch3, 0);
+        let mut s = m3.snapshot();
+        // 07000009's three records at the flattened indices 14..17 (rows 0-7 hold 14 records).
+        s.states[14] = 2; s.states[15] = 3; s.states[16] = 4;
+        m3.restore(&s);
+        assert_eq!(m3.states[8], vec![2, 3, 4], "the carried priors' runtime states ride the snapshot restore [L the snapshot's shape]");
+        assert_eq!(m3.states[9], vec![1, 1, 1], "the current part re-arms to the enable shape [M 0x182270:98-105]");
+    }
+
+    /// objectives-all-levels: the census — every on-foot level's objective record can complete
+    /// through `Mission_MonitorObjectives` (0x1827d8), and the AND of every condition gates
+    /// ch 100 → `Mission_Update` 0x182c60 case 6 (MissionState 6, MissionComplete). Each level is
+    /// initialised cold (`Mission_Init` 0x182270), then every condition channel of its mission is
+    /// set the way a writer would (normal records ON; the fail record's channel stays OFF — its
+    /// condition is the channel being OFF [M 0x1827d8:32-38]; channel 0 is a real index for the
+    /// monitor — the game has no ch-0 guard [M 0x1827d8:32-38, 0700000f/07000010's records]).
+    #[test]
+    fn every_level_objectives_complete_through_the_monitor_and_gate_ch_100() {
+        for l in LEVELS.iter() {
+            let mut ch = Channels::default();
+            let mut m = Mission::new();
+            m.init(l.level, false, &mut ch, 0);
+            for ll in LEVELS.iter().filter(|x| x.mission == l.mission) {
+                for o in ll.objectives {
+                    if o.flags & 2 != 0 { continue; } // the fail record's channel stays OFF
+                    ch.set(o.channel as u32, 1, 1);   // channel 0 included: a real index [M]
+                    // the reveal writer: enable-gated records announce only when their enable
+                    // channel fires [M 0x1827d8:55-67]
+                    if o.enable != 0 && o.enable != 0xff { ch.set(o.enable as u32, 1, 1); }
+                }
+            }
+            let mut out = Vec::new();
+            m.update(&mut ch, 2, l.level, false, &mut out); // monitor tick: announce (0/1 → 3)
+            m.update(&mut ch, 3, l.level, false, &mut out); // fold 3 → 4; `all` → ch 100; case 6
+            assert!(ch.on(100), "level {:x}: ch 100 must fire once every condition holds", l.level);
+            assert!(
+                out.iter().any(|e| matches!(e, Event::MissionComplete { .. })),
+                "level {:x}: MissionComplete missing", l.level
+            );
+            assert_eq!(m.state, 6, "level {:x}: MissionState 6", l.level);
+            for (i, ll) in LEVELS.iter().enumerate() {
+                if ll.mission != l.mission { continue; }
+                for (j, o) in ll.objectives.iter().enumerate() {
+                    let s = m.states[i][j];
+                    if ll.level <= l.level {
+                        // a record announced on the completing tick sits at 3: the monitor's `all`
+                        // fires ch 100 the same tick and `Mission_Update` leaves internal 1 (case 1
+                        // → ch 100 → case 6 [M 0x182c60:23-28]), so the 3→4 fold's next monitor
+                        // tick never runs. 4/2 = announced earlier and folded/failed.
+                        assert!(s == 2 || s == 3 || s == 4,
+                            "level {:x}: record {:x} (ch {:x}) state {} != announced/complete", l.level, o.text, o.channel, s);
+                    }
+                    // future records: the state-1 enable arm has no level gate [M 0x1827d8:55-67],
+                    // so a future record whose enable fired sits announced — not a census claim.
+                }
+            }
+        }
     }
 }

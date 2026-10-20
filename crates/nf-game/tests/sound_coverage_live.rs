@@ -69,7 +69,7 @@ impl Level02 {
         let weapons = WeaponData::from_action_elf(&elf).unwrap();
         let world = nf_game::world::CollisionWorld::build(&level, &level.instances(true).0);
         let nav = nf_game::nav::Network::build(level.maps[level.main_map().unwrap()].ai_network.as_ref().unwrap(), &world, 0x0700_0002);
-        let covers = nf_game::cover::build(&level.maps[level.main_map().unwrap()].placements, &nav, &world);
+        let covers = nf_game::cover::build(&level, &nav, &world);
         let hitboxes = nf_formats::hitbox::CollisionBones::from_action_elf(&elf).unwrap();
         let volumes = nf_game::aivolume::build(&level, 0x0700_0002);
         let models = nf_game::pickup::models(&level);
@@ -81,7 +81,9 @@ impl Level02 {
     }
 
     fn data(&self) -> Data<'_> {
-        Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: 0x0700_0002, sequences: &self.sequences, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: None, difficulty: 1 }
+        Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: 0x0700_0002, sequences: &self.sequences, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: None, difficulty: 1,
+            ai_points: &[],
+        }
     }
 
     fn sim(&self) -> Drones {
@@ -90,7 +92,7 @@ impl Level02 {
         let mut lights = nf_game::light::LightList::default();
         let drones = nf_game::drone::level_drones(&d, &self.level, &mut rng, &mut lights);
         let mut s = Drones::new(drones, rng);
-        s.attach_level(&self.level);
+        s.attach_level_id(&self.level, 0x0700_0002);
         s
     }
 }
@@ -160,7 +162,7 @@ fn lock_burn_through_plays_0x249_and_0x5dd() {
     let mut sim = l.sim();
     // A lock on the bullet's path: the watch shot flies -x from Bond's head.
     let lock_pos = [10.0, 1.5, 10.0];
-    sim.locks.push(nf_game::lock::Lock { placement: 0, pos: lock_pos, radius: 1.0, out: 0, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false });
+    sim.locks.push(nf_game::lock::Lock { placement: 0, pos: lock_pos, radius: 1.0, out: 0, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false, kind: 1, code: 0, scan_progress: 0, scan_solved: 0, scanning: false });
     let hearing = nf_formats::sfx::SfxHearing { id: 0x403, inner: 0.0, outer: 0.0, weight: 0.0, looped: false, cull: false };
     sim.fire_player(&d, [14.0, 1.5, 10.0], [-1.0, 0.0, 0.0], 0x4f, hearing);
     let bond = bond_at([14.0, 1.0, 10.0]);

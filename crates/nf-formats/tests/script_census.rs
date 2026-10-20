@@ -12,11 +12,23 @@ use std::sync::OnceLock;
 /// The NIS command opcodes `Script::run` (nf-game/src/nis.rs `Script_Run` 0x1d8548 port) dispatches.
 const HANDLED_NIS_OPS: usize = 20;
 /// The event kinds `Script::event` (`Script_EventHandler` 0x1d94c0 port) handles.
-const HANDLED_EVENT_KINDS: usize = 14;
+const HANDLED_EVENT_KINDS: usize = 17;
 /// The trigger action codes nf-game/src/triggers.rs `kind` module handles (game dispatches 8).
-const HANDLED_TRIGGER_ACTIONS: usize = 7;
-/// Placement types with any handling: 48 simulated + 8 draw-only (game: 73 spawn cases).
-const HANDLED_PLACEMENT_TYPES: usize = 56;
+const HANDLED_TRIGGER_ACTIONS: usize = 8;
+/// Placement types with any handling: 54 simulated + 8 draw-only (game: 73 spawn cases).
+/// cover-nodes: 0xE5/0xE6 joined the simulated set (nf-game/src/cover.rs `from_placement` +
+/// `build` [M 0x1d4880 case 0/1/2/0xb → 0x1d04f0 case 0xe5/0xe6]; batch-1016c keeps `build`
+/// main-map-only, U-050). ai-points: 0xE9 joined it (nf-game/src/aipoint.rs, `Drone_AIPoint` 0x137550).
+/// sensor-volumes: 0x28 joined it (crate::sensor, `Sensor_Create` 0x1af010).
+/// music-triggers: 0xFB joined it (nf-game/src/worldobj.rs `MusicTrigger` — `MusicTrigger_Create`
+/// 0x1b30e0's gates and `MusicTrigger_Update` 0x1b31a0's countdown / `Music_Event(p2, 2)`).
+/// start-slots: 0x2D joined it (nf-game/src/player.rs `starts_from_placements` — the main map's
+/// 0x24/0x2d placements register with the game's kind at entry+0x22 [M 0x195c00:33, disasm
+/// 0x1d0a00/0x1d0e98]; `Player_Start` 0x190fd0 picks kind-1 only).
+/// lightning: 0x2C joined it (nf-game/src/world_fx.rs `pair_lightning_recs`/`LightningStrike` —
+/// `Lightning_Create` 0x18cde8's pairing and `Lightning_Update` 0x18cf68's visibility).
+/// (batch-1016c: s/hurt-volumes dropped at the merge — 0xE4 stays unhandled.)
+const HANDLED_PLACEMENT_TYPES: usize = 63;
 
 fn census() -> Option<&'static Census> {
     static C: OnceLock<Option<Census>> = OnceLock::new();
@@ -160,11 +172,14 @@ fn event_kind_census_matches_the_doc_and_the_handled_set() {
     assert_eq!(bmap(&c.event_kinds.iter().map(|(&k, &v)| (k as u64, v)).collect::<Vec<_>>().as_slice()),
         bmap(&[(3, 303), (4, 36), (5, 35), (6, 31), (7, 29), (8, 1), (9, 1), (10, 1), (11, 23), (12, 65), (13, 195), (15, 119), (17, 10), (18, 2)]),
         "per-kind counts (docs/systems/script-census.md)");
-    // The three kinds the port drops (game: Drone_CoderCreate 0x13a108 / Player_Cam2Mode 0x195fc8 /
-    // Break_DoBreak 0x12c168) occur exactly once each — all in script 0600005b of 07000001.
-    for kind in [8u8, 9, 10] { assert_eq!(*c.event_kinds.get(&kind).unwrap(), 1, "unhandled kind {kind:#x}"); }
-    assert_eq!(c.event_kinds.len(), 14, "14 distinct kinds seen; the port handles 11 of them");
-    assert_eq!(HANDLED_EVENT_KINDS, 14, "Script_EventHandler arms (8/9/0xa land in the default arm)");
+    // Kinds 8 (Drone_CoderCreate 0x13a108) and 0xa (Break_DoBreak 0x12c168) are ported since
+    // movie-trigger-41 — each occurs exactly once, both in script 0600005b of 07000001 (the
+    // event-8 firing is the game's own no-op: its previous stream record creates no object, and
+    // case 8 skips on a NULL object [M 0x1d94c0:75-96 + 0x1d96d4]). Kind 9 is `Player_Cam2Mode`
+    // 0x195fc8 since nis-event9-cnis.
+    for kind in [8u8, 10] { assert_eq!(*c.event_kinds.get(&kind).unwrap(), 1, "kind {kind:#x} (0600005b's lone firing)"); }
+    assert_eq!(c.event_kinds.len(), 14, "14 distinct kinds seen; the port now handles all 14 (17 arms with 0x09/0x0a/0x11)");
+    assert_eq!(HANDLED_EVENT_KINDS, 17, "Script_EventHandler arms (8 = CoderCreate, 0xa = DoBreak since movie-trigger-41; 9 = Cam2Mode)");
 }
 
 #[test]
@@ -172,26 +187,39 @@ fn trigger_action_census_matches_the_doc() {
     let Some(c) = census() else { eprintln!("skip: NF_ISO not set"); return };
     assert_eq!(bmap(&c.trigger_actions.iter().map(|(&k, &v)| (k as u64, v)).collect::<Vec<_>>().as_slice()),
         bmap(&[(1, 348), (2, 178), (3, 46), (4, 21), (5, 5), (10, 16), (12, 28), (13, 1)]),
-        "action codes from placements (1/2/3/4/5/10/12 handled; 13 = the 07000041 movie trigger; \
-         action 2 = 0xEB x175 + raw 0xDC x3)");
+        "action codes from placements (1/2/3/4/5/10/12/13 handled — 13 = the 07000041 movie trigger, \
+         ported since movie-trigger-41; action 2 = 0xEB x175 + raw 0xDC x3)");
     assert_eq!(c.raw_dc_triggers, 33, "0xDC placements with no authored action (inert by design)");
     assert_eq!(c.trigger_actions.values().sum::<u64>() + c.raw_dc_triggers, 676, "trigger placements total");
-    assert_eq!(HANDLED_TRIGGER_ACTIONS, 7, "triggers::kind arms");
+    assert_eq!(HANDLED_TRIGGER_ACTIONS, 8, "triggers::kind arms (13 = movie since movie-trigger-41)");
 }
 
 #[test]
 fn placement_type_census_matches_the_doc() {
     let Some(c) = census() else { eprintln!("skip: NF_ISO not set"); return };
     assert_eq!(c.placements, 7372, "dynamic-eligible placement records (flags bit 0xa000 clear)");
-    // The 18 unhandled-or-ignored types, most-occurring first (docs/systems/script-census.md).
-    let want: &[(u8, u64)] = &[(0xe5, 584), (0xe6, 384), (0xe9, 162), (0xe4, 64), (0x28, 62), (0x2d, 51),
-        (0xff, 39), (0x27, 41), (0xdd, 33), (0xf6, 33), (0xf7, 33), (0xfb, 15), (0x2c, 15), (0x39, 8),
-        (0xf3, 8), (0x2b, 3), (0x38, 1), (0xf4, 1)];
+    // The unhandled-or-ignored types, most-occurring first (docs/systems/script-census.md).
+    // cover-nodes: 0xE5 (584) / 0xE6 (384) moved out of this list; ai-points: 0xE9 (162);
+    // sensor-volumes: 0x28 (62); music-triggers: 0xFB (15); start-slots: 0x2d (51) — the port now
+    // creates and runs them (0x2d registers into the start lists with kind 0); movie-trigger-41:
+    // 0xF4 (1) — the movie-player trigger; script-ops-unported: 0x2c (15) — the lightning bolts
+    // (world_fx.rs `pair_lightning_recs` + `LightningStrike::tick`).
+    let want: &[(u8, u64)] = &[(0xe4, 64),
+        (0xff, 39), (0x27, 41), (0xdd, 33), (0xf6, 33), (0xf7, 33), (0x38, 1)];
     for (t, n) in want { assert_eq!(c.placement_types.get(t), Some(n), "type 0x{t:02x}"); }
     let unhandled: u64 = want.iter().map(|(_, n)| n).sum();
-    assert_eq!(unhandled, 1537, "records on unhandled types (1399 game-handled + 138 neither side touches)");
+    assert_eq!(unhandled, 244, "records on unhandled types (the game-handled 0x27/0x38/0xe4 + the 138 neither side touches)");
+    assert_eq!(*c.placement_types.get(&0xe5).unwrap(), 584, "cover corner placements");
+    assert_eq!(*c.placement_types.get(&0xe6).unwrap(), 384, "cover low placements");
+    assert_eq!(*c.placement_types.get(&0xfb).unwrap(), 15, "music trigger placements");
+    assert_eq!(*c.placement_types.get(&0x2d).unwrap(), 51, "second start-position set (18 main-map + 33 shell-map dummies)");
+    assert_eq!(*c.placement_types.get(&0x2c).unwrap(), 15, "lightning bolts (11 in 07000001, 4 in 07000041 — now paired strikes)");
+    assert_eq!(*c.placement_types.get(&0x39).unwrap(), 8, "space missiles (ported, space_missile.rs)");
+    assert_eq!(*c.placement_types.get(&0xf3).unwrap(), 8, "trees (ported, world_fx.rs TreeFx)");
+    assert_eq!(*c.placement_types.get(&0x2b).unwrap(), 3, "leaf gens (ported, world_fx.rs LeafGenFx)");
     assert_eq!(c.placement_types.values().sum::<u64>(), 7372, "type histogram covers every record");
-    assert_eq!(HANDLED_PLACEMENT_TYPES, 56, "48 sim + 8 draw-only (game: 73 spawn cases)");
+    assert_eq!(HANDLED_PLACEMENT_TYPES, 63, "54 sim + 8 draw-only + 0x2d start-slots (game: 73 spawn cases)");
+    assert_eq!(HANDLED_PLACEMENT_TYPES, 63, "55 sim + 8 draw-only (game: 73 spawn cases; 0x2c since script-ops-unported)");
 }
 
 #[test]

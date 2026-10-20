@@ -134,6 +134,7 @@ fn the_guards_wake_from_their_zone_pads_and_take_damage() {
             skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
             hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
             surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+            ai_points: &sim.ai_points,
         };
         let boxes = sim.drones.list[si].hit_boxes(&data);
         let torso = boxes.iter().find(|b| b.part == 4).expect("the torso box");
@@ -145,7 +146,7 @@ fn the_guards_wake_from_their_zone_pads_and_take_damage() {
         let dir = [dv[0] / l, dv[1] / l, dv[2] / l];
         sim.drones.player_bullets.push(nf_game::drone::PlayerBullet {
             pos: from, dir, speed: 4.0, travelled: 0.0, range: 80.0, damage: 3.5, weapon: 2,
-            first: true, dead: false, bounces: 0, homing: false, target: None, gravity: false, guided_cam: false, snd: 0,
+            first: true, dead: false, bounces: 0, homing: false, target: None, gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0,
         });
     }
     for _ in 0..40 { step(&mut sim, Default::default()); }

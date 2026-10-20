@@ -113,7 +113,7 @@ trigger placements (the 0xE8/0xEA-0xEF/0xF4 families plus raw 0xDC).
 | 07A00016.bin | 07000016 | 1 | 16 |
 
 
-Placement types the port handles (56 values: 48 simulated + 8 draw-only) and the game handles
+Placement types the port handles (57 values: 49 simulated + 8 draw-only) and the game handles
 (73 values, `parsemap_create_dynamic_objects` 0x1d04f0 — 72 spawn cases plus the 0xDC trigger
 raw-action form) overlap except for the rows below: 14 types the game handles and the port
 does not act on, plus 4 one-per-level marker types neither side touches. (The game's
@@ -121,25 +121,34 @@ does not act on, plus 4 one-per-level marker types neither side touches. (The ga
 
 ### Placement types on the disc that the port does not act on
 
+(0xE5 cover corner 584 and 0xE6 cover low 384 were listed here by the original census; the port
+has spawned them since — `nf-game/src/cover.rs` `from_placement`/`build`, `Drone_CoverCornerNode`
+0x136ff0 / `Drone_CoverLowNode` 0x137340, from EVERY map entry per the loader dispatch
+[task cover-nodes, 2026-10-17].)
+(0x2c lightning 15 was listed here by the original census; the port now pairs the records into
+strikes and runs `Lightning_Update` — `nf-game/src/world_fx.rs` `pair_lightning_recs` +
+`LightningStrike::tick`, `Lightning_Create` 0x18cde8 / `Lightning_Update` 0x18cf68
+[task script-ops-unported, 2026-10-18].)
+(0xFB music trigger 15 was listed here by the original census; the port now creates the trigger
+and runs its update — `nf-game/src/worldobj.rs` `MusicTrigger`, `MusicTrigger_Create` 0x1b30e0 /
+`MusicTrigger_Update` 0x1b31a0 [task music-triggers, 2026-10-17].)
+(0x2d start-slot 51 was listed here by the original census; the port now registers the second
+start set with the game's kind 0 — `nf-game/src/player.rs` `starts_from_placements`,
+`Player_AddNewStartPos` 0x195c00's u16 at entry+0x22 [task start-slot-0x2d, 2026-10-17].)
+
 | type | count | port | game spawn fn |
 |---|---|---|---|
 | 0x27 | 41 | — | GT_Create 0x17ffa0 |
-| 0x28 | 62 | — | Sensor_Create 0x1af010 |
-| 0x2b | 3 | — | LeafGen_Create 0x1acbd0 |
-| 0x2c | 15 | — | Lightning_Create 0x18cde8 |
-| 0x2d | 51 | — | Player_AddNewStartPos(,0) 0x195c00 |
+| 0x2b | 3 | PORTED (world_fx.rs `LeafGenFx`) | LeafGen_Create 0x1acbd0 |
+| 0x2c | 15 | PORTED (world_fx.rs `LightningStrike`, script-ops-unported) | Lightning_Create 0x18cde8 |
 | 0x38 | 1 | — | Create_SpaceLaser 0x1aa8b8 |
-| 0x39 | 8 | — | Create_SpaceMissile 0x1a9ef0 |
+| 0x39 | 8 | PORTED (space_missile.rs, drone.rs 0x39 walk) | Create_SpaceMissile 0x1a9ef0 |
 | 0xdd | 33 | — | — none (game ignores) |
 | 0xe4 | 64 | — | Hurt_Create 0x17e870 |
-| 0xe5 | 584 | — | Drone_CoverCornerNode 0x136ff0 |
-| 0xe6 | 384 | — | Drone_CoverLowNode 0x137340 |
-| 0xe9 | 162 | — | Drone_AIPoint 0x137550 |
-| 0xf3 | 8 | — | Env_Tree_Create 0x17c200 |
-| 0xf4 | 1 | — | Trigger_MoviePlayer 0x1b2a08 |
+| 0xe9 | 162 | PORTED (aipoint.rs, task ai-points) | Drone_AIPoint 0x137550 |
+| 0xf3 | 8 | PORTED (world_fx.rs `TreeFx`) | Env_Tree_Create 0x17c200 |
 | 0xf6 | 33 | — | — none (game ignores) |
 | 0xf7 | 33 | — | — none (game ignores) |
-| 0xfb | 15 | — | MusicTrigger_Create 0x1b30e0 |
 | 0xff | 39 | — | — none (game ignores) |
 
 ### NIS command opcodes (all 20 that occur are handled)
@@ -171,7 +180,7 @@ reads Marker's u16 but discards it [M 0x1d8548 case 6].
 | 0x07 | Entity | 4985 | nf-game `Script::run` arm | `Script_Run` 0x1d8548 |
 | 0x09 | EntityEnd | 3038 | nf-game `Script::run` arm | `Script_Run` 0x1d8548 |
 
-### NIS event kinds (851 events across 14 kinds; 11 handled, 3 unhandled; the game's table has 17 slots)
+### NIS event kinds (851 events across 14 kinds; 12 handled, 2 unhandled; the game's table has 17 slots)
 
 | event kind | count | port | game behavior |
 |---|---|---|---|
@@ -180,9 +189,9 @@ reads Marker's u16 but discards it [M 0x1d8548 case 6].
 | 0x05 | 35 | yes | Drone_EnableAll(0) |
 | 0x06 | 31 | yes | return-matrix snapshot |
 | 0x07 | 29 | yes | flag 0x80 |
-| 0x08 | 1 | **NO** | Drone_CoderCreate 0x13a108 |
-| 0x09 | 1 | **NO** | Player_Cam2Mode 0x195fc8 |
-| 0x0a | 1 | **NO** | Break_DoBreak 0x12c168 |
+| 0x08 | 1 | yes (movie-trigger-41) | Drone_CoderCreate 0x13a108 |
+| 0x09 | 1 | yes (nis-event9-cnis) | Player_Cam2Mode 0x195fc8 — mode 3 = the behind-Bond orbit, else the exit arm; the disc's single firing is mode 1 (the exit) |
+| 0x0a | 1 | yes (movie-trigger-41) | Break_DoBreak 0x12c168 |
 | 0x0b | 23 | yes | weapon byte |
 | 0x0c | 65 | yes | flag 0x10 |
 | 0x0d | 195 | yes | switch channel write |
@@ -190,24 +199,38 @@ reads Marker's u16 but discards it [M 0x1d8548 case 6].
 | 0x11 | 10 | yes | conditional channel write |
 | 0x12 | 2 | yes | RamSave+level load |
 
-Event kinds 0x0e, 0x10 and 0x13 never occur on the disc. The three the port drops — 0x08, 0x09,
-0x0a — each occur exactly once, all in script **0600005b** of **07000001.bin** (12 streams):
+Event kinds 0x0e, 0x10 and 0x13 never occur on the disc. The three single-firing kinds of script
+**0600005b** of **07000001.bin** (12 streams) — 0x08, 0x09, 0x0a — are all ported now (0x09 since
+nis-event9-cnis; 0x08/0x0a since movie-trigger-41):
 
 - stream 9: `Event(0x08, [0x0500001b, 0x060000a6, 0x10, 1])` → `Drone_CoderCreate` 0x13a108 —
-  spawns the gadget/coder drone (the Q-claw drone intro of the first mission) at the stream's
-  object, with skin 0x0500001b and anim 0x060000a6.
-- stream 4: `Event(0x09, [1])` → `Player_Cam2Mode(0, 1)` 0x195fc8 — player camera mode override.
-- stream 8: `Event(0x0a, [])` → `Break_DoBreak` 0x12c168 at the current object — script-driven
-  breakable trigger.
+  spawns the gadget/coder drone (skin 0x0500001b, start script 0x060000a6, setup 1, state IDLE)
+  at the PREVIOUS stream object (0x1d96d4-0x1d96f4). For THIS firing the game itself no-ops: the
+  previous record is stream 8, which creates no object, and case 8 skips on a NULL object [M
+  0x1d94c0:75-96] — the coder drone never spawns from the disc's own firing. The port mirrors
+  the gate (and spawns through the same param map when an object exists [M 0x13a108: slot 0 =
+  skin, slot 1 = start script, slot 9 = setup; param 2 is dead]).
+- stream 4: `Event(0x09, [1])` → `Player_Cam2Mode(0, 1)` 0x195fc8 — the camera-mode override's
+  exit arm (`SetCamMode(0)` + `ChangeSubState(0)` [M 0x195fc8:11-16]; mode 3 would enter the
+  behind-Bond orbit, which no disc script fires [D nis_event9_census]).
+- stream 8: `Event(0x0a, [])` → `Break_DoBreak(prev_obj+0xC0)` 0x12c168 at stream 7's anim
+  object's position [M 0x1d96bc-0x1d96c8] — the first class-0x20 object whose world sphere
+  contains it dies (Break_Kill 0x12b970: delete + the glass/wood sound + shatter/debris). The
+  port scans its script-entity store (the placed 0x20 glass panels are not simulated — the
+  disc's firing finds no script-side 0x20 either way).
 
 ### Trigger action codes (8 the game dispatches; port handles 7)
 
-The port's `triggers::kind` module (nf-game/src/triggers.rs:10-18) covers 1, 2, 3, 4, 5, 10
-(0xa), 12 (0xc). The game additionally dispatches **0xd (movie)** in `Trigger_Update` 0x1b1a78
-and `Trigger_Activate` 0x1b2318: when its input channel fires it clears the channel, latches
-the output channel into `GameState+0x16` and pushes GameFlow states 6/7 (movie + fade)
-[M 0x1b1a78 case 0xd]. On disc this is exactly one placement: type **0xF4** in **07000041.bin**
-(`Trigger_MoviePlayer` 0x1b2a08 writes action 0xd).
+The port's `triggers::kind` module covers 1, 2, 3, 4, 5, 10 (0xa), 12 (0xc) and — since
+movie-trigger-41 — **0xd (movie)**: `Trigger_Update` 0x1b1a78 case 0xd fires when the FIRST input
+slot is non-zero AND its channel is on, clears the channel, latches the OUT slot's full u32 into
+`GameState+0x10` (0x1b1f60-0x1b1f78) and pushes GameFlow states 6/8; `Trigger_Activate` 0x1b2318:53-61
+(the E-key path) gates on `mask & 4` and pushes the same states (fade 300.0f). NOTE: nothing on
+this path starts a movie or loads a level — state 6 pops the same tick when `BGFMVPlaying == 0`
+(psiMovieFinished 0x1082e8) and only `ResetMap_Load` phase 2 reads `GameState+0x10` (phase 0
+overwrites it first). On disc this is exactly one placement: type **0xF4** in **07000041.bin**
+(placement #81, params (0, 4, 0) [D] — out 0, mask 4, input 0 — so its update path is inert by
+design and only the E-path can push the request, with movie code 0).
 
 Action codes by occurrence (the placement families plus raw 0xDC with an authored param 0):
 
@@ -220,7 +243,7 @@ Action codes by occurrence (the placement families plus raw 0xDC with an authore
 | 5 OUT | 5 | 0xEE | yes | `Trigger_MultiplexOut` 0x1b2ed8 |
 | 10 (0xa) load level | 16 | 0xE8 | yes | `Trigger_LoadLevelCreate` 0x1b2950 |
 | 12 (0xc) OR | 28 | 0xEF | yes | `Trigger_MultiplexOrIn` 0x1b2d38 |
-| 13 (0xd) movie | 1 | 0xF4 (07000041) | **NO** | `Trigger_MoviePlayer` 0x1b2a08 |
+| 13 (0xd) movie | 1 | 0xF4 (07000041) | yes (movie-trigger-41) | `Trigger_MoviePlayer` 0x1b2a08 |
 
 Raw 0xDC triggers: 36 placed; only 3 carry an authored action param (value 2 = Touch, counted
 above); the other 33 have no param 0, so the game's zeroed param buffer gives them action 0 —
@@ -292,17 +315,17 @@ player scripts, so its real gameplay reach is narrower than its 12,947 count.
 | 3 | placement 0xE6 cover low | 384 | `Drone_CoverLowNode` 0x137340 | guards crouch behind low cover |
 | 4 | placement 0xE9 AI point | 162 | `Drone_AIPoint` 0x137550 | patrol/waypoint graph points |
 | 5 | placement 0xE4 hurt volume | 64 | `Hurt_Create` 0x17e870 | damage volumes (hazards) |
-| 6 | placement 0x28 sensor | 62 | `Sensor_Create` 0x1af010 | channel trip volumes drive world logic |
-| 7 | placement 0x2D start-pos slot 0 | 51 | `Player_AddNewStartPos(...,0)` 0x195c00 | second start-position set |
+| — | placement 0x28 sensor | 62 | PORTED (sensor.rs, 2026-10-17): `Sensor_Create` 0x1af010 | security cameras; out channel after 2 s of player sight |
+| 7 | placement 0x2D start-pos slot 0 | 51 | PORTED (nf-game/src/player.rs, 2026-10-17): `starts_from_placements` — `Player_AddNewStartPos(...,0)` 0x195c00 kind 0 | second start-position set |
 | 8 | placement 0x27 GT | 41 | `GT_Create` 0x17ffa0 (+ Update/Activate/TakeControl) | controllable special object |
 | 9 | placement 0xFB music trigger | 15 | `MusicTrigger_Create` 0x1b30e0 / `_Update` 0x1b31a0 | `Music_Event(id,2)` countdown music |
-| 10 | placement 0x2C lightning | 15 | `Lightning_Create` 0x18cde8 | storm lightning in 07000001/07000041 |
+| 10 | placement 0x2C lightning | 15 | PORTED (nf-game/src/world_fx.rs, 2026-10-18): `pair_lightning_recs` — `Lightning_Create` 0x18cde8's class-0x33 pairing (the finder is the master) + `Lightning_Update` 0x18cf68's visibility/reflicker + `FractalThing` 0x1a94d8; the storm side (the 0x2a sky timers + `SuperHappyLightningFlag`) is sky.rs's, not driven by the sim yet | storm bolts in 07000001/07000041 — data + state for the render pass |
 | 11 | anim op-4 kinds 1/3/7 | 109 | flag toggle / `Sound_StopAllWithId` / weapon transform [M 0x1c1b38] | minor audio/anim polish |
-| 12 | placement 0x39 space missile | 8 | `Create_SpaceMissile` 0x1a9ef0 | 0700001b set piece |
-| 13 | placement 0xF3 tree | 8 | `Env_Tree_Create` 0x17c200 | trees in 07000002/07000004 |
-| 14 | placement 0x2B leaf gen | 3 | `LeafGen_Create` 0x1acbd0 | leaf particle emitters |
+| 12 | placement 0x39 space missile | 8 | PORTED (nf-game/src/space_missile.rs, drone.rs 0x39 walk) | 0700001b set piece |
+| 13 | placement 0xF3 tree | 8 | PORTED (nf-game/src/world_fx.rs `TreeFx`) | trees in 07000002/07000004 |
+| 14 | placement 0x2B leaf gen | 3 | PORTED (nf-game/src/world_fx.rs `LeafGenFx`) | leaf particle emitters |
 | 15 | NIS event 0x08 coder drone | 1 | `Drone_CoderCreate` 0x13a108 | 07000001 gadget-drone intro |
-| 16 | NIS event 0x09 cam mode | 1 | `Player_Cam2Mode` 0x195fc8 | 07000001 camera mode |
+| 16 | NIS event 0x09 cam mode | 1 | `Player_Cam2Mode` 0x195fc8 | 07000001 camera mode — **ported (nis-event9-cnis)** |
 | 17 | NIS event 0x0a break | 1 | `Break_DoBreak` 0x12c168 | 07000001 script breakable |
 | 18 | placement 0x38 space laser | 1 | `Create_SpaceLaser` 0x1aa8b8 | 0700001b set piece |
 | 19 | trigger action 0xD movie | 1 | `Trigger_MoviePlayer` 0x1b2a08 / 0x1b1a78 case 0xd | 07000041 movie push |
@@ -316,24 +339,42 @@ records (165), NIS op none, anim ops 2/3 (0), event kinds 0x0e/0x10/0x13 (0), en
 
 ## Top 10 ready-to-queue tasks
 
-1. **AI cover nodes (0xE5 + 0xE6, 968 placements, every mission level).** Port
-   `Drone_CoverCornerNode` 0x136ff0 and `Drone_CoverLowNode` 0x137340 into the drone AI: nodes
-   bind to the cover graph guards query when engaging. Verify: guard in 07000006 (81+35 nodes)
-   retreats to a corner node when fired on instead of standing in the open. Highest occurrence
-   count of any placement family the game spawns for.
+1. **AI cover nodes (0xE5 + 0xE6, 968 placements, every mission level).** ~~Port~~ **DONE
+   (task cover-nodes, 2026-10-17):** the nodes spawn from every map entry (`cover.rs` `build`),
+   07000006 pins 81+35, and a guard under fire takes a game cover node (`cover_nodes_live.rs`).
+   The original task text: port `Drone_CoverCornerNode` 0x136ff0 and `Drone_CoverLowNode`
+   0x137340 into the drone AI: nodes bind to the cover graph guards query when engaging.
 2. **AI waypoints (0xE9, 162).** `Drone_AIPoint` 0x137550: patrol graph points. Port the record
    (params unknown — check `Drone_AIPoint` reads) and wire into patrol pathing. Verify: 07000007
    has 34; guards patrol through them.
 3. **Hurt volumes (0xE4, 64).** `Hurt_Create` 0x17e870: damage volumes (params carry damage
    kind/rate — read the decomp). Verify: standing in one drains Bond's armour/health; 07000005
    has 13 (the Alpine incursion? verify level name at render time).
-4. **Sensor volumes (0x28, 62).** `Sensor_Create` 0x1af010: trip-by-anything volumes writing
-   switch channels (not player-only like 0xEA/0xEB). Verify: a drone walking through sets the
-   sensor's out channel; drives doors/alarm logic the port currently needs touch triggers for.
+4. ~~**Sensor volumes (0x28, 62).**~~ PORTED 2026-10-17 (branch s/sensor-volumes, crate::sensor).
+   Correction to the plan text: `Sensor_Update` 0x1af618 detects **glb_players[0] only**
+   (disasm 0x1af644 loads 0x2d88e0; both `Sensor_InCone` calls 0x1af97c/0x1afae0 pass it; no
+   switch_channels writer is NPC-driven) — a cone detector with range + `Intersect_ConeSphere`
+   0x1ee100 + LOS, alert after 32 in-cone ticks, out channel 1 after 2 s of continuous sight
+   (0x1af618:154-157), disable channel (param 4) parks it in state 3. Not "trip-by-anything".
 5. **Music triggers (0xFB, 15).** `MusicTrigger_Create` 0x1b30e0 + `MusicTrigger_Update`
    0x1b31a0: `Music_Event(id, 2)` while its countdown runs. Verify: entering the volume starts
    the combat music stinger; leaving lets it expire.
-6. **Lightning (0x2C, 15; 07000001 ×11, 07000041 ×4).** `Lightning_Create` 0x18cde8: storm
+4. **Sensor volumes (0x28, 62).** `Sensor_Create` 0x1af010: trip-by-anything volumes writing
+   switch channels (not player-only like 0xEA/0xEB). Verify: a drone walking through sets the
+   sensor's out channel; drives doors/alarm logic the port currently needs touch triggers for.
+5. **Music triggers (0xFB, 15).** ~~Port~~ **DONE (task music-triggers, 2026-10-17):** the
+   trigger is created with the game's gates and its update runs each control-object pass
+   (`worldobj.rs` `MusicTrigger`); 07000001 pins the real path — channel 13 on fires
+   `Music_Event(2, 2)` into the alarm hysteresis, clearing it lets the 0x1e countdown expire.
+   The original task text: `MusicTrigger_Create` 0x1b30e0 + `MusicTrigger_Update` 0x1b31a0.
+6. **Lightning (0x2C, 15; 07000001 ×11, 07000041 ×4).** ~~Port~~ **DONE (task
+   script-ops-unported, 2026-10-18):** `world_fx.rs` `pair_lightning_recs`/`LightningStrike` —
+   the pairing (the finder of the key match is the master, 07000001 chains 9 strikes off its
+   two ladders), the hide/draw arms reading the port's `LightningGlobals` copy, and
+   `fractal_thing` 0x1a94d8 with caller-supplied draws (the 21 shared-stream `Rand_FRand`s
+   stay out of the sim's stream — the counter-hash stand-in [S]). `lightning_live.rs` pins
+   both levels. The storm timers (sky.rs `Sky`) are NOT sim-driven yet — the bolts rest hidden
+   until the sky pass lands. The original task text: `Lightning_Create` 0x18cde8: storm
    flashes. Visual — needs the main agent's render pass to confirm the flash/timing model.
 7. **NIS event kinds 0x08/0x09/0x0a (script 0600005b, 07000001).** Three single-line handlers:
    `Drone_CoderCreate` 0x13a108 (spawn coder drone: params skin 0x0500001b, anim 0x060000a6,
@@ -343,10 +384,16 @@ records (165), NIS op none, anim ops 2/3 (0), event kinds 0x0e/0x10/0x13 (0), en
    `GT_Activate`/`GT_TakeControl`: a controllable special object [UNCERTAIN semantics — needs
    an EE probe of the object it builds before queuing the port]. Two per MP map suggests
    objective equipment.
-9. **Start-position slot 0 (0x2D, 51, one per level incl. every MP map).**
-   `Player_AddNewStartPos(...,0)` 0x195c00 vs the port's 0x24-only registration
-   (nf-view/src/lib.rs:1141): the port may be spawning Bond at the wrong start where a level
-   ships both (07000007 ships 5 of type 0x2D).
+9. ~~**Start-position slot 0 (0x2D, 51, one per level incl. every MP map).**~~ PORTED 2026-10-17
+   (branch s/start-slot-0x2d, `nf-game/src/player.rs` `starts_from_placements` + `pick_start`).
+   Correction to the plan text: the "may be spawning Bond at the wrong start" worry is REFUTED —
+   `Player_Start` 0x190fd0 only ever picks the kind-1 entries (both passes `bne v0, 1` on
+   entry+0x22, disasm 0x191028/0x1910b0), so the 0x2D set (kind 0) is written by
+   `Player_AddNewStartPos` 0x195c00 and read by nothing in the on-foot runtime (no other function
+   touches `player_start` in the decompile; MP humans spawn from `MP_Start` 0x183a50's
+   `MP_GetSpawnPoint`). 07000007's five 0x2D records are one kind-0 shell-map (0,0,0) dummy plus
+   four main-map hall spots that must never win the pick — pinned by start_slot_0x2d_live, whose
+   sister level 0700000b ships a real 0x2D FIRST in parse order ahead of its only 0x24.
 10. **Movie trigger (0xF4 / action 0xD, 1, 07000041).** `Trigger_MoviePlayer` 0x1b2a08 +
     `Trigger_Update` case 0xd: input channel clears, `GameState+0x16 = out`, GameFlow push 6/7
     (movie + fade). Wire into the port's `resolve_exit_code` path like LOAD_LEVEL does.
@@ -358,7 +405,7 @@ menus; kind-15 icon — cosmetic; anim op-4 kinds 1/3/7 — 109 commands, minor.
 
 `crates/nf-formats/tests/script_census.rs` (added by this task) re-runs the census through the
 port's own parsers on every 07* archive and pins the handled sets and the headline counts as
-constants: 20 NIS opcodes handled, 14 event kinds, 7 trigger actions, 56 placement types; and
+constants: 20 NIS opcodes handled, 14 event kinds, 7 trigger actions, 63 placement types; and
 the disc totals (468 NIS scripts, 5,263 streams, 851 events with 3 on unhandled kinds, 18,231
 anim scripts, 50,279 anim commands, 7,372 dynamic placements, 676 triggers, 1 movie trigger).
 A regression that stops handling something, or a newly handled opcode, changes a constant and

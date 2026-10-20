@@ -251,30 +251,31 @@ fn top_agent_elimination_and_the_fewest_deaths_sort() {
 }
 
 #[test]
-fn the_debriefing_board_sorts_ranks_and_caps_at_four() {
+fn the_debriefing_board_sorts_ranks_and_carries_every_participant() {
     let mut m = arena(2, 2);
-    // Slots 0-1 humans, 4-5 bots. TOTAL = kills in Arena. The kills/scores are written
+    // Slots 0-1 humans, 2-3 bots (the port's bots follow the humans [S mp-16-slots]; the
+    // game's fixed base was 4). TOTAL = kills in Arena. The kills/scores are written
     // directly (the credit rules themselves are the tests above).
     m.settings.players[0].codename = "Bond".into();
     m.settings.players[1].codename = "Drake".into();
-    m.settings.players[4].skin = 1;
-    m.settings.players[5].skin = 2;
+    m.settings.players[2].skin = 1;
+    m.settings.players[3].skin = 2;
     m.game.slots[0].kills = 8;
     m.game.slots[1].kills = 8;
-    m.game.slots[4].kills = 3;
-    m.game.slots[5].kills = 1;
+    m.game.slots[2].kills = 3;
+    m.game.slots[3].kills = 1;
     m.game.slots[0].score = 8.0;
     m.game.slots[1].score = 8.0;
-    m.game.slots[4].score = 3.0;
-    m.game.slots[5].score = 1.0;
+    m.game.slots[2].score = 3.0;
+    m.game.slots[3].score = 1.0;
     let b = m.debriefing();
-    assert_eq!(b.rows.len(), 4, "four rows render (the cap) [decomp line 219]");
+    assert_eq!(b.rows.len(), 4, "every participant gets a row (4 here; the game's RENDER cap was 4 [decomp line 219], the port's DATA board carries up to 16 [S mp-16-slots])");
     // The sort is by TOTAL (Menu_GetMPScore): the two 8-kill slots first (stable: slot 0 built
     // before slot 1), then the bots by their kills.
     assert_eq!(b.rows[0].slot, 0);
     assert_eq!(b.rows[1].slot, 1);
-    assert_eq!(b.rows[2].slot, 4);
-    assert_eq!(b.rows[3].slot, 5);
+    assert_eq!(b.rows[2].slot, 2);
+    assert_eq!(b.rows[3].slot, 3);
     // Tied totals share the rank [M 0x212198:131-143].
     assert_eq!(&b.rows[0].rank, &b.rows[1].rank, "ties share the rank");
     assert_eq!(RANK_LABELS[0], 0x0100_0297, "\"1st\" [L 0x309520]");

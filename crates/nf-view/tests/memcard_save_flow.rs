@@ -143,6 +143,7 @@ fn the_results_commit_writes_once_with_the_synced_contents() {
     let map = 0x0700_0005;
     fe.mission_ended(Outcome::Complete, Stats { shots_fired: 30, shots_hit: 20, accuracy_pct: 66, time_s: 100 });
     fe.requested_level = None; // the headless leg skips the outro wrap
+    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
     fe.sync_profile_progress(&progress);
     assert!(fe.results_enter(&mut progress, map, 6, 2, None), "the fields build [M 0x208e78:77]");
     assert!(fe.results_improved, "the commit improved (first completion) [M PlrStats_DoneBetter]");
@@ -188,6 +189,7 @@ fn the_results_no_answer_never_writes() {
     fe.mission_ended(Outcome::Complete, Stats::default());
     fe.sync_profile_progress(&progress);
     fe.requested_level = None;
+    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
     assert!(fe.results_enter(&mut progress, 0x0700_0005, 6, 2, None));
     assert!(fe.action(Action::Confirm));
     assert!(fe.results_box, "the prompt stands");
@@ -205,6 +207,7 @@ fn the_results_no_answer_never_writes() {
     fe.mission_ended(Outcome::Complete, Stats::default());
     fe.sync_profile_progress(&progress);
     fe.requested_level = None;
+    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
     assert!(fe.results_enter(&mut progress, 0x0700_0005, 6, 2, None));
     assert!(!fe.results_improved, "no improvement [M DoneBetter]");
     assert!(fe.action(Action::Confirm));
@@ -235,6 +238,7 @@ fn a_write_failure_surfaces_the_save_failed_page() {
     fe.mission_ended(Outcome::Complete, Stats::default());
     fe.sync_profile_progress(&progress);
     fe.requested_level = None;
+    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
     assert!(fe.results_enter(&mut progress, 0x0700_0005, 6, 2, None));
     assert!(fe.action(Action::Confirm), "the prompt opens");
     assert!(fe.action(Action::Confirm), "Yes requests the save");
@@ -277,6 +281,7 @@ fn the_enumeration_and_the_defaults_never_write() {
     let mut progress = nf_game::progress::Progress::default();
     fe.mission_ended(Outcome::Complete, Stats::default());
     fe.requested_level = None;
+    fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
     assert!(fe.results_enter(&mut progress, 0x0700_0005, 6, 2, None));
     assert!(fe.action(Action::Confirm));
     assert!(!fe.results_box, "no prompt without a saved codename [M DAT_002e1ae0 > 1]");

@@ -9,7 +9,7 @@
 //! .data file offset 0x1d91e0: rows 0-1 = 1], C_SBNFMAP 0x20b8d8 case 0x4b's on-foot/driving
 //! split, ResetMap_LevelToLoad 0x1d3800:104-108 (state 9), Menu_IsDrivingLevel 0x202750.
 
-use nf_view::menu::{Action, FrontEnd, Page, ST_LAUNCH_DRIVING, ST_MAPLOAD, ST_RUNNER};
+use nf_view::menu::{Action, FrontEnd, Page, ST_FADE_HOLD, ST_LAUNCH_DRIVING, ST_MAPLOAD, ST_RUNNER};
 
 /// A scratch card dir per test (the port's memory card).
 fn card_dir(tag: &str) -> std::path::PathBuf {
@@ -36,8 +36,14 @@ fn to_mission_select(fe: &mut FrontEnd) {
     assert_eq!(fe.cursor, 1, "opened from Main on Play without saving [M P_NFSELECT 0x20aec0:96-97]");
     assert!(fe.action(Action::Confirm), "pop the confirm box");
     assert!(fe.action(Action::Confirm), "confirm it → Difficulty");
+    // G-048(1): the option-box resolve rides Menu_ChangePageCloseIris [M P_NFSELECT
+    // 0x20aec0:103 → 0x202190:8-9, the 10-tick delayed 0x44] — the old immediate-flip assert
+    // pinned the pre-G-048 port choice; fixed with the address (fe-gaps-g048-2).
+    for _ in 0..nf_view::menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
     assert_eq!(fe.page, Page::Difficulty);
     assert!(fe.action(Action::Confirm), "Difficulty → MissionSelect");
+    // G-048(1): C_SBNFDFCTY's confirm is a CloseIris caller too [M 0x216ca8:16].
+    for _ in 0..nf_view::menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
     assert_eq!(fe.page, Page::MissionSelect);
 }
 
@@ -152,7 +158,14 @@ fn sp_confirm_splits_on_foot_from_driving() {
     assert!(fe.action(Action::Confirm));
     assert_eq!(fe.requested_level, Some(0x0700_0005), "the on-foot pick requests the level");
     assert_eq!(fe.launching_driving(), None, "sister: the getter clears off state 9");
-    assert_eq!(fe.flow.get_state(), ST_MAPLOAD, "the on-foot branch pushed the loader [M :107]");
+    // The on-foot branch pushes the loader, then C_SBNFMAP's 84-frame fade lands on top [M
+    // 0x20ba50-5c: PushState(84.0f, 7) after ResetMap_LevelToLoad — the loader runs when the
+    // fade pops, GameFlow_Main only ticks the top state].
+    assert_eq!(fe.flow.get_state(), ST_FADE_HOLD, "the menu exit fade rides the loader [M 0x20ba50]");
+    assert_eq!(fe.flow.fade_frames, 84, "C_SBNFMAP's 0x42a00000 = 84.0f");
+    let fade_ticks = fe.flow.fade_frames + 1;
+    for _ in 0..fade_ticks { fe.flow.main_tick(); }
+    assert_eq!(fe.flow.get_state(), ST_MAPLOAD, "the loader under the popped fade [M :107]");
 }
 
 /// The driving-level gate is exactly `Menu_IsDrivingLevel` 0x202750's set — the campaign's five
