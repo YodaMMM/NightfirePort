@@ -59,19 +59,20 @@ pub struct HttpResponse {
     pub body: String,
 }
 
-fn system_tool(name: &str) -> std::path::PathBuf {
+fn system_tool() -> std::path::PathBuf {
     if cfg!(windows) {
         let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
-        let p = root.join("System32").join(name);
+        let p = root.join("System32").join("curl.exe");
         if p.exists() { return p; }
+        return std::path::PathBuf::from("curl.exe");
     }
-    std::path::PathBuf::from(name)
+    std::path::PathBuf::from("curl")
 }
 
 /// One blocking HTTPS exchange through the system curl — background threads only. The status rides the
 /// output's last line (`-w`), so 404/429 answers come back as statuses instead of transport errors.
 pub fn http_send(req: HttpRequest) -> Result<HttpResponse, String> {
-    let mut cmd = Command::new(system_tool("curl.exe"));
+    let mut cmd = Command::new(system_tool());
     cmd.args(["-sS", "--max-time", &req.max_secs.to_string(), "-H", "User-Agent: NightfirePort-lobby",
         "-H", "Accept: application/json", "-w", "\n%{http_code}", "-X", req.method, "-o", "-"]);
     if let Some(b) = &req.body {
@@ -452,6 +453,11 @@ impl CloudBrowse {
     /// The rows now (the last answer's; empty until one lands) [S].
     pub fn rows(&self) -> &[CloudLobby] {
         &self.rows
+    }
+
+    /// A list request is out (the tests wait for it).
+    pub fn busy(&self) -> bool {
+        self.inflight.is_some()
     }
 
     pub fn poll(&mut self, now_ms: u64) {

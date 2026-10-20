@@ -1404,3 +1404,187 @@ impl crate::menu::MpSession for SessionProxy {
 fn reach_seed() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64)
 }
+
+#[cfg(test)]
+mod cloud_tests {
+    //! net-cloud-lobby's NetCore-level golden path: the host's register/refresh through the core's
+    //! poll shows the service's 4-character code, and a joiner dials a typed 4-character code
+    //! through the service into a real loopback session (the same mock service shape as
+    //! nf-net's tests/cloud_lobby.rs, std-only) [S docs/systems/net-cloud-lobby.md].
+
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+
+    struct Entry {
+        code: String,
+        ip: String,
+        port: u16,
+        version: String,
+        public: bool,
+        seen: u64,
+    }
+
+    #[derive(Default)]
+    struct Svc {
+        entries: BTreeMap<String, Entry>,
+        codes: BTreeMap<String, String>,
+        rng: u64,
+    }
+
+    fn next_code(s: &mut Svc) -> String {
+        loop {
+            let mut code = String::new();
+            s.rng = s.rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let mut x = s.rng;
+            for _ in 0..4 {
+                x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                code.push(nf_net::directory::SHORT_CODE_ALPHABET[(x >> 33) as usize % 30] as char);
+            }
+            if !s.codes.contains_key(&code) {
+                return code;
+            }
+        }
+    }
+
+    fn handle(s: &mut Svc, method: &str, path: &str, ip: &str, body: Option<&str>) -> (u16, String) {
+        match (method, path) {
+            ("POST", "/v1/host") => {
+                let v = body.and_then(nf_net::cloud::json_parse).expect("a body");
+                let g = |k: &str| v.get(k).cloned();
+                let (Some(nf_net::cloud::Json::Str(version)), Some(nf_net::cloud::Json::Num(port))) = (g("version"), g("port")) else {
+                    return (400, "{\"error\":\"bad\"}".into());
+                };
+                let public = g("public") != Some(nf_net::cloud::Json::Bool(false));
+                let port = port as u64 as u16;
+                let key = format!("{ip}:{port}");
+                let code = match s.entries.get(&key) {
+                    Some(e) => e.code.clone(),
+                    None => {
+                        let c = next_code(s);
+                        s.codes.insert(c.clone(), key.clone());
+                        c
+                    }
+                };
+                s.entries.insert(key, Entry { code: code.clone(), ip: ip.to_string(), port, version, public, seen: 0 });
+                (200, format!("{{\"code\":\"{code}\",\"public_addr\":\"{ip}:{port}\"}}"))
+            }
+            ("GET", p) if p.starts_with("/v1/code/") => {
+                let code = p["/v1/code/".len()..].to_uppercase();
+                match s.codes.get(&code).and_then(|k| s.entries.get(k)) {
+                    Some(e) => (200, format!("{{\"code\":\"{}\",\"public_addr\":\"{}:{}\",\"lan_addr\":\"\",\"name\":\"L\"}}", e.code, e.ip, e.port)),
+                    None => (404, "{\"error\":\"not found\"}".into()),
+                }
+            }
+            _ => (404, "{\"error\":\"no route\"}".into()),
+        }
+    }
+
+    /// The mock service on 127.0.0.1:0 (its clock is irrelevant here — the entries never expire
+    /// inside a test run).
+    fn service() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let svc = Arc::new(std::sync::Mutex::new(Svc::default()));
+        let svc2 = svc.clone();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut st) = conn else { continue };
+                let svc = svc2.clone();
+                std::thread::spawn(move || {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        let Ok(n) = st.read(&mut chunk) else { return };
+                        if n == 0 { return; }
+                        buf.extend_from_slice(&chunk[..n]);
+                        if buf.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    }
+                    let head_end = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4).unwrap_or(buf.len());
+                    let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+                    let mut lines = head.lines();
+                    let mut it = lines.next().unwrap_or_default().split_whitespace();
+                    let (method, target) = (it.next().unwrap_or("").to_string(), it.next().unwrap_or("").to_string());
+                    let mut cl = 0;
+                    for l in lines {
+                        if let Some(v) = l.to_ascii_lowercase().strip_prefix("content-length:") {
+                            cl = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = buf[head_end..].to_vec();
+                    while body.len() < cl {
+                        let Ok(n) = st.read(&mut chunk) else { break };
+                        if n == 0 { break; }
+                        body.extend_from_slice(&chunk[..n]);
+                    }
+                    let body = String::from_utf8_lossy(&body).trim().to_string();
+                    let ip = st.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+                    let (status, json) = svc.lock().unwrap().handle(&method, &target, &ip, (!body.is_empty()).then_some(body.as_str()));
+                    let resp = format!("HTTP/1.1 {status} S\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", json.len(), json);
+                    let _ = st.write_all(resp.as_bytes());
+                    let _ = st.flush();
+                });
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    fn wait_until(mut done: impl FnMut() -> bool) {
+        let t0 = std::time::Instant::now();
+        while !done() {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(10), "timed out");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn the_host_shows_the_service_code_and_the_joiner_dials_a_short_code_through_it() {
+        let url = service();
+
+        // The host: a real core, advertising, cloud service on, public toggle on.
+        let host = NetCore::host(0).unwrap();
+        host.borrow_mut().enable_cloud(Some(url.clone()));
+        host.borrow_mut().set_public_lobby(true);
+        crate::menu::MpSession::set_lobby(&mut SessionProxy(host.clone(), None), "Cloud game", 0x0700_0023, 1, 1);
+        let mut code = String::new();
+        wait_until(|| {
+            host.borrow_mut().poll();
+            code = host.borrow().join_code_display().unwrap_or_default();
+            code.len() == 4 && code.bytes().all(|b| nf_net::directory::SHORT_CODE_ALPHABET.contains(&b))
+        });
+        assert!(host.borrow().public_lobby(), "the getter exposes the toggle");
+        assert!(code.bytes().all(|b| nf_net::directory::SHORT_CODE_ALPHABET.contains(&b)), "the service's code shows: {code}");
+
+        // The joiner: a second core dials the 4-character code; the cloud lookup lands, the core
+        // re-binds and the real handshake connects (the long-code path's own shape).
+        let joiner = NetCore::host(0).unwrap();
+        joiner.borrow_mut().enable_cloud(Some(url.clone()));
+        joiner.borrow_mut().set_codename("Guest");
+        joiner.borrow_mut().dial(&code).expect("the lookup starts");
+        let want_note = format!("Looking up {code} on the lobby service...");
+        assert_eq!(joiner.borrow().join_code_note().as_deref(), Some(want_note.as_str()));
+        wait_until(|| {
+            joiner.borrow_mut().poll();
+            joiner.borrow().link() == MpNetLink::Connected
+        });
+        assert_eq!(joiner.borrow().join_code_note(), None, "the note clears once connected");
+        host.borrow_mut().close();
+        joiner.borrow_mut().close();
+    }
+
+    #[test]
+    fn an_unknown_cloud_code_leaves_a_clear_note() {
+        let url = service();
+        let joiner = NetCore::host(0).unwrap();
+        joiner.borrow_mut().enable_cloud(Some(url));
+        joiner.borrow_mut().dial("ZZ9V").unwrap();
+        wait_until(|| {
+            joiner.borrow_mut().poll();
+            joiner.borrow().join_code_note().is_some_and(|n| n.contains("was not found"))
+        });
+        assert_eq!(joiner.borrow().join_code_note().as_deref(), Some("Code ZZ9V was not found"));
+        joiner.borrow_mut().close();
+    }
+}
