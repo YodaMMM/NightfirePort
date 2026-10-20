@@ -236,8 +236,13 @@ pub enum CoreEvent {
     /// A human slot's client left (Neutral policy: the match runs on, the
     /// game's own disconnected-pad shape).
     ClientLeft { slot: u8, graceful: bool },
-    /// The state hashes diverged at `tick`. Session keeps running.
-    Desync { tick: u32 },
+    /// The state hashes diverged at `tick` (both hashes ride for the log; the
+    /// session's resync policy decides recover-vs-fatal — net-desync-resync).
+    Desync { tick: u32, local: u64, remote: u64 },
+    /// net-desync-resync: the desync is not recoverable (a second mismatch
+    /// inside the 60 s window, an unserved request, an unanswered watch) — the
+    /// app shows the pre-resync box and returns to the lobby.
+    DesyncFatal { tick: u32 },
     /// net-desync-detail: the peer's component hashes for the desync tick arrived
     /// (`PT_HASHCOMPS`) — the desync watcher pairs them with our own.
     HashComps { tick: u32, comps: [u64; HASH_COMPONENTS] },
@@ -748,8 +753,11 @@ impl NetCore {
                     self.host_left = true;
                     self.events.push(CoreEvent::HostLeft);
                 }
-                Event::Desync { tick, .. } => {
-                    self.events.push(CoreEvent::Desync { tick });
+                Event::Desync { tick, local, remote } => {
+                    self.events.push(CoreEvent::Desync { tick, local, remote });
+                }
+                Event::DesyncFatal { tick } => {
+                    self.events.push(CoreEvent::DesyncFatal { tick });
                 }
                 Event::HashComps { tick, comps } => {
                     self.events.push(CoreEvent::HashComps { tick, comps });

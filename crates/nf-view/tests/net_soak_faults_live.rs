@@ -525,8 +525,8 @@ fn run_soak(long: bool) {
                 eprintln!("[soak][hang] t={t} ms={ms} host missing={:?} horizon={:?} | m1 missing={:?} | j5 playing={} | j11 playing={}",
                     host.debug_missing_slots(t), host.debug_horizon(),
                     m1.debug_missing_slots(t),
-                    j5.sess.as_ref().map_or(false, |s| s.debug_missing_slots(t).is_empty()),
-                    j11.sess.as_ref().map_or(false, |s| s.debug_missing_slots(t).is_empty()));
+                    j5.sess.as_mut().map_or(false, |s| s.debug_missing_slots(t).is_empty()),
+                    j11.sess.as_mut().map_or(false, |s| s.debug_missing_slots(t).is_empty()));
             }
             if Instant::now() >= deadline {
                 dump_hang(&mut host, &mut m1, &mut j5, &mut j11, t, &mut ms, cur_phase);
