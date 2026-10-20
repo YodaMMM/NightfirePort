@@ -9035,7 +9035,11 @@ impl Drones {
         });
         // Weather: `Env_Create` (placement 0xDF, parameter 0 = drop type) and the `RainBox_Create` volumes (0x32: the
         // glist bounds at the placement translation).
-        self.map_sounds = crate::sound::MapSounds::new(level.maps[m].sounds.clone());
+        // bathhouse-voices-02b: the game's GMapSounds global — the LAST block-0x28 parsed wins, not the
+        // main map's (`Sound_LoadMapSounds` 0x1ddff8 resets and refills it for EVERY map's block during
+        // the create pass, `parsemap_handle_block_id` 0x1d1020 case 0x28). 07000002's block is on map 51
+        // (the waterfall id 0x5c); the main map's is empty, which silenced every map ambient here.
+        self.map_sounds = crate::sound::MapSounds::new(level.map_sounds.clone());
         // The sound triggers (`SoundTrigger_Create` 0x1b2628, placement 0xF9; fix-06-alarm) —
         // 07000006's four oSoundTrigger cubes, the alarm siren among them. No RNG at create [M].
         self.sound_triggers = crate::sound::SoundTriggers::create(&level.maps[m].placements, self.difficulty);

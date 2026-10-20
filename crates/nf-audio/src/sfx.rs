@@ -801,6 +801,10 @@ impl Driver {
 pub struct Sound {
     pub driver: Driver,
     pub output: Option<Output>,
+    /// bathhouse-voices-02b test hook: when set, every batch's commands are appended here too (the
+    /// real path with `output: None` drops them) — the mixer's Play/Set volumes per voice, asserted
+    /// as "what reaches the mixer" ([M] the mixer's gain for a voice is exactly these fields).
+    pub captured: Option<std::sync::Arc<std::sync::Mutex<Vec<Cmd>>>>,
     /// The level's music: track number, marker file and SSD; the stream player once started; the EE's music
     /// commands of the last frame (sent with this frame's batch).
     pub music_files: Option<(i32, nf_formats::music::Smf, std::sync::Arc<Vec<u8>>)>,
@@ -831,6 +835,7 @@ impl Sound {
             out.push(Cmd::MusicGain(p.gain(self.driver.music_master, self.driver.ducker_current, self.driver.fade_music_volume)));
         }
         if let Some(o) = &self.output { o.send(out); }
+        if let Some(c) = &self.captured { c.lock().unwrap().extend(out.iter().cloned()); }
     }
 
     /// The pause page's sound hold: `MenuManager_Create` with `pause_sound` runs `SFXPause` (op 9) +

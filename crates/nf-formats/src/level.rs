@@ -281,6 +281,12 @@ pub struct Level {
     pub by_hash: HashMap<u32, (usize, usize)>,
     /// Level scripts (type-7 entries, docs/formats/nis-script.md) by hashcode; ones `Script_Load` refuses are left out.
     pub nis: HashMap<u32, crate::nis::Nis>,
+    /// The map ambient sounds the game's `GMapSounds` global holds (`Sound_LoadMapSounds` 0x1ddff8): the
+    /// block-0x28 payload of the LAST archive map that carries one — every map's block overwrites the
+    /// global during the create pass (`parsemap_handle_block_id` 0x1d1020 case 0x28, reached per block by
+    /// `parsemap_parsenextblock` 0x1d12e8 from `parsemap_parsemap` 0x1d1cf0's whole-archive loop). 07000002's
+    /// block lives on map 51 (the waterfall id 0x5c among its four); map 0's is empty. bathhouse-voices-02b.
+    pub map_sounds: Vec<MapSound>,
 }
 
 /// `AnimPostLoadInit` (ACTION.ELF 0x1be1a8): when skin 0x05000007 is loaded, every skin on skeleton 0 or 1 takes its
@@ -302,6 +308,9 @@ impl Level {
     pub fn parse(archive: &[u8]) -> Result<Level> {
         let lb = LevelBin::parse(archive)?;
         let mut maps = Vec::new();
+        // The game's GMapSounds: the last block-0x28 parsed wins (`Sound_LoadMapSounds` resets the global
+        // and copies its records every time; maps parse in archive order) [M 0x1ddff8 + 0x1d1020].
+        let mut map_sounds = Vec::new();
         for (entry, e) in lb.entries.iter().enumerate().filter(|(_, e)| matches!(e.kind, 0 | 1 | 2 | 11)) {
             let data = lb.data(archive, e);
             let mf = MapFile::parse(data)?;
@@ -339,7 +348,7 @@ impl Level {
                     }
                     id::MAP_DATA_STATIC => placements = placement::parse(blk.payload(data))?,
                     0x05 => ai_network = Some(crate::aipath::AiNetwork::parse(blk.payload(data))?),
-                    0x28 => sounds = MapSound::parse_block(blk.payload(data))?,
+                    0x28 => { sounds = MapSound::parse_block(blk.payload(data))?; map_sounds = sounds.clone(); }
                     0x19 => path_data.push(blk.payload(data).to_vec()),
                     id::PORTAL_DATA => portals.extend(PortalQuad::parse_block(blk.payload(data))?),
                     // `parsemap_block_LOD` 0x1d1f10: per cel entry an 8-byte record; the first dword is the next
@@ -372,7 +381,10 @@ impl Level {
         let nis = lb.entries.iter().filter(|e| e.kind == 7)
             .filter_map(|e| u32::from_str_radix(&e.name, 16).ok().and_then(|h| crate::nis::Nis::parse(h, lb.data(archive, e)).ok()).map(|n| (n.hashcode, n)))
             .collect();
-        Ok(Level { maps, skins, by_hash, nis })
+        Ok(Level { maps, skins, by_hash, nis,
+            // bathhouse-voices-02b: the game's GMapSounds source (last block 0x28), not map 0's.
+            map_sounds,
+        })
     }
 
     /// Characters: main-map placements whose parameter 0 is a skin hashcode (prefix 05) found in this archive (`oDrone`,
