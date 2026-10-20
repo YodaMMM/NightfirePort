@@ -40,11 +40,15 @@ fn stand_armed_at(sim: &mut nf_view::scene::Sim, at: [f32; 3], to: [f32; 3]) {
 /// fires) — and his START SCRIPT (placement param 1 = 0600011d, 880 frames) plays FROM TruckDriverInit
 /// [M 0x160bd0 case 1 script branch: SetScript(+0x554, 0x24, 0x11a, 0x1e, 0, 5, 0), state held]. He is
 /// in 0x32 the whole 700-frame window of the 05-truck recording's 07000006 segment [L drone 13], then
-/// steps into TruckDriverIdle (0x34) when the script's done [M 0x160bd0 case 5 with the +0x9f2 path
-/// counter clear], and an unarmed driver never carries the aim flag [M AnimObjectAimAt 0x1bfe58:
-/// `AnimDatumGetWeaponInfo < 0` returns]. (The old reading — script-less into 0x34 within 2 ticks — is
-/// what the pre-PlayScript port did; the driver's param 1 is 0600011d, so the game takes the scripted
-/// branch.)
+/// steps into TruckDriverMission (0x35) when the script's done — case 5 reads `+0x9f2` (InitAIPath
+/// 0x153720's node count; prop 0x1d is set for the 0x600011d driver [M 0x14c600/0x14e348] and
+/// AssignAIPath(8) 0x154190 finds path 10's node 0 at his park spot, so it is NOT clear) — [L
+/// 06-firstsight.trace frame 148014: state 50 → 53 (0x35) at the sit's done, then the continuous walk
+/// 148014..148247], and the mission's arrival (UpdateMissionRoute result 3) lands him in
+/// TruckDriverIdle [M 0x161030 case 3]. An unarmed driver never carries the aim flag [M
+/// AnimObjectAimAt 0x1bfe58: `AnimDatumGetWeaponInfo < 0` returns]. (The old reading — script done
+/// into 0x34 — is what the pre-rook-door-06-2 port did; the walk-start fix rook-door-06-2 ported the
+/// game's gate, and this file's pin is re-derived onto the [L] evidence.)
 #[test]
 fn the_truck_driver_reaches_his_idle_state_and_never_twists() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -55,10 +59,18 @@ fn the_truck_driver_reaches_his_idle_state_and_never_twists() {
     assert_eq!(sim.drones.list[di].state, 0x32,
         "the driver enters TruckDriverInit and holds it while his start script plays [M 0x160bd0 case 1 script branch; L 05-truck's 07000006 drone 13 in 0x32 for 700 frames]");
     // Through the script (880 frames, the sit-in-truck one-shot [D nf-extract script-info 0600011d]),
-    // then the script-less idle: case 5 → TruckDriverIdle [M 0x160bd0 case 5, +0x9f2 clear].
+    // then the mission walk: case 5 → TruckDriverMission [L 06-firstsight.trace 148014; M 0x160bd0
+    // case 5 with the kind-8 route assigned], and the route's end → TruckDriverIdle [M 0x161030
+    // case 3 result 3].
     tick_idle(sim, 920);
-    assert_eq!(sim.drones.list[di].state, 0x34,
-        "the driver steps into TruckDriverIdle when the start script ends [M 0x160bd0 case 5]");
+    assert_eq!(sim.drones.list[di].state, 0x35,
+        "the driver steps into TruckDriverMission when the start script ends [L 06-firstsight.trace 148014; M 0x160bd0 case 5] — got {:#x}", sim.drones.list[di].state);
+    let mut arrived = false;
+    for _ in 0..12000u32 {
+        tick_idle(sim, 1);
+        if sim.drones.list[di].state == 0x34 { arrived = true; break; }
+    }
+    assert!(arrived, "the mission route ends into TruckDriverIdle [M 0x161030 case 3 result 3] — still {:#x}", sim.drones.list[di].state);
     // Walk armed Bond up to the driver: TruckDriverIdle's NearArmedPerson scares him into CivilianScared →
     // CivilianHiding [M 0x160ed0 case 3 → 0x1787c8], and the old build additionally twisted his torso all the
     // while. fix-party-mission: NearArmedPerson is prop 0x3c + Bond IN SIGHT (+0x228 & 4) + ObjectIsArmed
@@ -72,9 +84,9 @@ fn the_truck_driver_reaches_his_idle_state_and_never_twists() {
         "the driver reacts to armed Bond within 8 through TruckDriverIdle's scare [M 0x160ed0 case 3] — got {:#x}", dr.state);
     assert!(dr.aim_yaw.abs() < 1e-4,
         "an unarmed driver never aims his torso [M AnimObjectAimAt weapon gate] — aim_yaw {}", dr.aim_yaw);
-    // Sister: he holds his truck-bed height (gravity keeps him standing on it — the old build's scripted
-    // no-gravity stand-in would have let him drift).
-    assert!((dr.pos[1] - dp[1]).abs() < 0.05, "the driver holds his truck-bed height ({} vs {})", dr.pos[1], dp[1]);
+    // Sister: he stays grounded — gravity keeps pos.y at the floor + the standing hip through the
+    // scare (the old build's scripted no-gravity stand-in would have let him drift).
+    assert!((dr.pos[1] - dp[1]).abs() < 0.05, "the driver stays grounded through the scare ({} vs {})", dr.pos[1], dp[1]);
 }
 
 /// The 07000005 patrol look: "a patrolling guard walks one way while his upper body looks the opposite
