@@ -6,8 +6,10 @@
 //! key line). The walk is therefore: board (the spawn), RIDE SP #42 "SCRIPTPLAYER_Lift" (mode 1
 //! [D], 0x06000571: the platform descends 150 units t90→t5040 [D keys]) with no input, the floor
 //! plates firing on the way (the first plate #277's ch 0x4d reveals the objective), and at the
-//! bottom WALK north off the platform into the lobby. The script's end completes "Gain access to
-//! lobby" (ch 0x4a — the documented nis.rs stand-in, docs/levels/0700004a.md §6).
+//! bottom WALK north off the platform into the lobby. The ride's end writes NO channel: the ride
+//! holds at the −52 landing for the landing cut-scene (SP #289, pack 0780004a — its end event
+//! writes ch 0x22 [D]) and the script's end is silent; "Gain access to lobby" (ch 0x4a) completes
+//! on 07000013's spawn touch #153 [D; walk_07000013_live]. docs/systems/tower2-lift-ride.md.
 //!
 //! The shaft doors' auto-open on the lift's approach is the KNOWN GAP (§6): fix_finale_live had
 //! to re-seat Bond every 30 ticks because the closed leaves scraped him off mid-ride. THIS test
@@ -129,10 +131,10 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
         assert!(scrape.is_none(),
             "the ride holds the script's key line (no shaft-door scrape) — left it at t{}, y {:.2} want {:.2}, fired {fired:?}",
             scrape.map(|s| s.0).unwrap_or(0), scrape.map(|s| s.1).unwrap_or(0.0), scrape.map(|s| s.2).unwrap_or(0.0));
-        assert!(sim.drones.channels.on(0x4a),
-            "the lift's lobby arrival completes the objective [L record 4a; nis.rs stand-in] — rode {ride_ticks} ticks, y {:.2} (boarded {y_board}), fired {fired:?}",
+        assert!(!sim.drones.channels.on(0x4a),
+            "ch 0x4a never fires on 0700004a — the writer is 07000013's spawn touch #153 [D; walk_07000013_live] — rode {ride_ticks} ticks, y {:.2} (boarded {y_board}), fired {fired:?}",
             sim.bond.pos[1]);
-        assert_eq!(sim.drones.mission.states[17][0], 4, "the monitor completes 'Gain access to lobby'");
+        assert_eq!(sim.drones.mission.states[17][0], 3, "the objective stays revealed through the ride's end [L record 4a]");
         assert!(sim.bond.pos[1] < y_board - 140.0, "the ride covered the shaft (y {:.2} from {y_board})", sim.bond.pos[1]);
     }
 
