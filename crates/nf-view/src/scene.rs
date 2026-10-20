@@ -683,7 +683,8 @@ pub struct Msg {
     pub opened: bool,
     pub second: bool,
     /// The posting `Txt_BindLabel` id (0 for the queues that post pre-bound text — the INFO
-    /// pane's tests pin it) [M Text_AddMsg 0x1b0c30 stores the bound string; the id is the
+    /// pane's tests pin it; the objective queue carries the objective's own text id since
+    /// objectives-0b-start) [M Text_AddMsg 0x1b0c30 stores the bound string; the id is the
     /// port's provenance for the game-label assertions].
     pub label: u32,
     /// A script op-0x1e subtitle (`Text_AddMsg` type 4): the game's `Text_FlushAllSubtitles`
@@ -4798,8 +4799,8 @@ impl Sim {
                     // scales the life by the wrapped/orig length [M 0x1b0c30's +0x18 store]. The
                     // port wraps at draw time — the font lives in the scene's HudTables, which the
                     // Sim-side drain doesn't hold; the life scaling is not ported, see the report.)
-                    self.hud.objective_msgs.push_back(Msg { text, time: ticks as f32, status, failed, life: ticks as f32, opened: false, second: false, label: 0, script: false,
-                        sfx1: false });
+                    self.hud.objective_msgs.push_back(Msg { text, time: ticks as f32, status, failed, life: ticks as f32, opened: false, second: false, label, script: false,
+                        sfx1: false }); // objectives-0b-start: the label rides the Msg (the port's provenance for the game-label pins, `Text_AddMsg` 0x1b0c30 stores the bound string's id)
                 }
                 nf_game::mission::Event::FailLabel(l) => {
                     self.hud.fail_label = l;
