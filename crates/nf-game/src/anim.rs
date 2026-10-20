@@ -203,8 +203,11 @@ pub fn script_pose(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>
     // `seq.skeleton`. Shared human tracks ride on other rigs' ids: 07000004's seated target
     // (skin 0x0500001e, skeleton 8) plays 0x0400028a, whose record byte is skeleton 0 — the
     // strict filter left him with no palette and no hit boxes (the bullets could never land).
-    // [S the game's use of the seq's +0x3c byte is unverified; the channel-count guard keeps
-    // short tracks (a 22-channel face track on a body need) rejected.]
+    // [The game's playback confirms the cross-rig read: `AnimFrameCopy` 0x1c5668 takes the walk's
+    // skeleton from the SEQUENCE tag's +0xa9 byte (:52) and gates the writes on the SKIN's bone
+    // flags (param_4+0x24) — ninja-boss-cutscene. The port's skin-skeleton walk is the standing
+    // [S] convention; the channel-count guard keeps short tracks (a 22-channel face track on a
+    // body need) rejected.]
     let seq = seqs.get(&q).filter(|s| {
         s.skeleton == skin.skeleton
             || {
@@ -347,18 +350,38 @@ pub fn script_pose_together(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, 
     // `script_pose_drone` uses it too (fix-facial3's channel-count probe was the stand-in;
     // one rule, the game's own).
     let is_facial = |q: u32| seqs.get(&q).is_some_and(|s| s.flags & 0x8 != 0);
-    // The base: the widest started non-facial window on this skeleton (the body track), at its own
-    // frame — it also stands in for the bones no window reaches.
+    // ninja-boss-cutscene: the window-acceptance rule, one with `script_pose`/`script_pose_drone`'s
+    // channel-count guard. `AnimFrameCopy` 0x1c5668 reads the channel stream positionally over the
+    // SEQUENCE's own record skeleton (`iVar6 = pSkeletons[*(byte *)(sAnimSeq + 0xa9)]`, :52; the
+    // translation-mask test :190, the stand-in offsets :194-198) and gates each bone's write on the
+    // SKIN's bone-flag bytes (`param_4 + 0x24`, :186-189) — no id equality anywhere. Shipped
+    // cut-scenes ride cross-rig: 07000004's ninja (skin 0x0500001e, skeleton byte 8) plays 0x06000507
+    // whose only window is 0x0400047a (record byte 0; both skeletons 73 bones, mask 0x1/0/0) [D
+    // 07000004.bin kind-7/5, 07F00004.bin kind-4] — the strict `s.skeleton == skin.skeleton` filter
+    // found no base window and the cut-scene's ninja actor never posed (the user's "ninja boss is
+    // missing from last cutscene", playtest 1017). The gameplay path has posed the same pairing since
+    // its own fix (see `script_pose`'s comment). A guarded window covers the skin skeleton's FULL walk
+    // or nothing (a short track — a face track past the flags rule — still never poses bones).
+    let full_need: usize = (0..skel.bones as usize).map(|b| if skel.has_translation(b) { 6 } else { 3 }).sum();
+    // The base: the widest started non-facial window that can pose the skin, at its own frame — it
+    // also stands in for the bones no window reaches. A matching window keeps the old `fits` gate
+    // (a lone narrow track hides — kept); a guarded window needs the full walk.
     let (base_i, base_n) = wins.iter().enumerate()
-        .filter_map(|(i, (_, q))| seqs.get(q).filter(|s| s.skeleton == skin.skeleton && !is_facial(*q)).map(|s| (i, nf_formats::anim::bones_covered(s, skel))))
+        .filter_map(|(i, (_, q))| {
+            let Some(s) = seqs.get(q) else { return None };
+            if is_facial(*q) { return None; }
+            let n = if s.skeleton == skin.skeleton {
+                (nf_formats::anim::fits(s, skel)).then(|| nf_formats::anim::bones_covered(s, skel)).unwrap_or(0)
+            } else {
+                (s.channels.len() >= full_need).then_some(skel.bones as usize).unwrap_or(0)
+            };
+            (n > 0).then_some((i, n))
+        })
         .max_by_key(|&(_, n)| n)?;
     if base_n == 0 { return None; }
     let (base_first, base_q) = wins[base_i];
     let base_f = (time - base_first as f32 + 1.0).max(1.0);
-    // A single window that does not fit the skeleton (the old `fits` filter — e.g. a lone narrow
-    // track): the character hid before this function existed; keep that.
     let Some(base_seq) = seqs.get(&base_q) else { return None };
-    if !nf_formats::anim::fits(base_seq, skel) { return None; }
     let mut acc = sequence_pose_n(base_seq, skel, skin, base_f, base_n);
     if acc.len() < skel.bones as usize {
         // Pad to the full bone count with the base's last bone pose (never read: the body covers all).
@@ -384,11 +407,17 @@ pub fn script_pose_together(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, 
     for (first, q) in &wins {
         if *q == base_q { continue; }
         let Some(seq) = seqs.get(q) else { continue };
-        if seq.skeleton != skin.skeleton { continue; }
         // A facial window is the morph-weight source (above) — it owns no bones. The classifier is
         // the flags bit 0x8, the game's own, everywhere (fix-cutscene-faces; see the base picker).
         if is_facial(*q) { continue; }
-        let n = nf_formats::anim::bones_covered(seq, skel).min(base_n);
+        // Matching windows keep the old narrow fill (`bones_covered` leading bones — the ledge's
+        // narrow pairs); guarded windows fill all-or-nothing, the same rule as the base picker.
+        let n = if seq.skeleton == skin.skeleton {
+            nf_formats::anim::bones_covered(seq, skel)
+        } else {
+            (seq.channels.len() >= full_need).then_some(skel.bones as usize).unwrap_or(0)
+        }
+        .min(base_n);
         if n == 0 { continue; }
         let f = (time - *first as f32 + 1.0).max(1.0);
         let p = sequence_pose_n(seq, skel, skin, f, n);
