@@ -444,7 +444,13 @@ impl Doors {
         let mut posed = false;
         let (kind, state) = (self.list[i].kind, self.list[i].state);
         if kind == 0 {
-            if state & 8 == 0 || (0.0 <= f && f <= 1.0) {
+            // The game's ends are UNCONDITIONAL range clamps [M Door_Interp 0x135738:33-61]: pos01
+            // += speed·dir, then `pos01 < 0 → 0` / `pos01 > 1 → 1.0` with the state switch,
+            // whatever the state — the old port gate (`state & 8 == 0 ||` in range) skipped the
+            // clamp for a leaf whose dir pointed outward while not OPENING, and pos01 ran away
+            // unbounded (the 06 guardhouse log: pos01 9.0). The 0.5 close-snap keeps its CLOSING
+            // gate [M 0x135738:40-43].
+            if (0.0..=1.0).contains(&f) {
                 if state & 0x10 != 0 && (0.5 - self.list[i].pos01).abs() <= speed {
                     self.list[i].pos01 = 0.5;
                     self.set_state(i, CLOSED, channels, frame, sounds);
