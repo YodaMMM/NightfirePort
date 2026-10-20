@@ -77,7 +77,7 @@ fn aim_and_fire(w: &mut Walker, target: [f32; 3], weapon: u8, fire_ticks: u32) {
 }
 
 /// The walked stretch that completes on the current tree: the intro, the fusebox, the safe, the
-/// briefcase (objective 1 → 4), and the descent to the gondola mouth.
+/// briefcase (objective 1 → 4) — the descent continues in walk_the_gondola_ride_to_the_end.
 #[test]
 fn walk_the_gondola_to_the_briefcase_and_back() {
     let iso = iso();
@@ -180,9 +180,10 @@ fn walk_the_gondola_to_the_briefcase_and_back() {
     eprintln!("[08] the walked stretch done in {} ticks; falls {:?}", w.total_ticks, w.report.falls);
 }
 
-/// The ride continuation: board the parked cabin (the floor plate ch 4 → mux → ch 1), ride the
-/// carriage (ch 83 at tick 1410), the bottom cinematic (ch 5), the helicopter (ch 0x4B) →
-/// ch 100 → level_exit 0x0730008.
+/// The ride continuation: the WALKED route from the intro plate down the station and the walkway
+/// to the floor plate (no teleports after the spawn; the briefcase chain stands in as the ch 0x4A
+/// channel — walk_the_gondola_to_the_briefcase_and_back drives it through the real path), then the
+/// boarding, the ride, the cinematic, the copter, and the mission end.
 /// The cabin boards from the WEST: the east face carries the script-entity glass panes
 /// (obj_type 0x20 → Break_Create [M 0x1d8968:88-90] — the cabin's windows), the west doorway is
 /// open; the floor plate's box is x 111.10..112.92, y 26.77..29.21, z −128.10..−126.75 [D the
@@ -199,17 +200,33 @@ fn walk_the_gondola_ride_to_the_end() {
     w.wait_enabled(3000, "the station start");
     // The briefcase chain is prerequisite for the ride (mux #235 ANDs ch 0x4A with the floor ch 4):
     // the channel stands in for the walked chain (walk_the_gondola_to_the_briefcase_and_back
-    // drives it through the real path); the teleport lands Bond at the lower landing — the spot
-    // the walked route reaches — and the DESCENT and the boarding run through the real input.
+    // drives it through the real path); the WALKED ROUTE below covers the descent and the boarding
+    // with no teleports: the intro plate → the station → the walkway → the lower landing, then the
+    // descent along path 2's link chain.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         let f = sim.drones.frame;
         sim.drones.channels.set(0x4a, 1, f);
-        sim.bond.pos = [150.0, 43.5, -116.0];
-        sim.bond.grounded = true;
     }
     w.wait(30);
-    // ── the gondola: the floor plate → mux → the ride script ────────────────────────────────────
+    // The station stretch (the same legs the briefcase walk uses): the intro plate first.
+    w.walk_nav_to([139.2, 49.5, -81.2], "to the intro plate", 1.3);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x49), "the intro plate #237 fired ch 0x49 [D placements]");
+    }
+    w.wait_enabled(4500, "the station-intro scene");
+    w.wait(60);
+    for (name, at) in [
+        ("the station hall", [139.0f32, 49.5, -93.0]),
+        ("the station doors", [139.5, 49.5, -97.5]),
+        ("the walkway head", [144.0, 46.0, -105.0]),
+        ("the walkway mid", [145.5, 45.0, -108.6]),
+        ("the lower landing", [150.0, 43.5, -116.0]),
+    ] {
+        w.walk_nav_to(at, name, 1.5);
+    }
+    // ── the gondola: the descent to the floor plate ─────────────────────────────────────────────
     // The outbound descent follows path 2's own link chain ([D the path-2 dump]): the landing
     // east (147.3/149.3/151.2/153, y 42.4, z −120.5) → the north ramp (153.1, 41.15, −115.95) →
     // (153.16, 39.65, −111.63) → (148.29, 38.4, −110.84) → the mid level (143.32, 36.4, −111.43)

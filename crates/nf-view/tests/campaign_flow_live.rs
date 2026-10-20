@@ -229,13 +229,62 @@ fn drive_08(w: &mut Walker) -> String {
     note.push_str("intro plate real; ");
     let floor = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
         .find(|t| t.kind == nf_game::triggers::kind::TOUCH && t.out == 4).map(|t| t.centre()).expect("cable-car floor Touch #236 [D]");
-    let _walked = w.try_walk_to(Wp::new(floor[0], floor[1] + 0.2, floor[2]).r(1.5), "onto the cable-car floor");
-    if !w.scene.sim.as_ref().unwrap().drones.channels.on(4) {
-        // The walkway descent has no walked route yet (walk_07000008 teleports; no walkreal
-        // covers 08) — place Bond on the floor plate for the touch and note it.
-        let f = [floor[0], floor[1] + 0.2, floor[2]];
-        w.scene.sim.as_mut().unwrap().bond = nf_game::player::Bond::new(f, 0.0);
-        note.push_str("placed on the floor plate (no walked route down the walkway yet); ");
+    // The WALKED route down the walkway (walkreal_07000008's walked route, no teleports): the
+    // station legs → the walkway → the lower landing → the descent along path 2's link chain
+    // ([D the path-2 dump]) → the stairwell → the west ledge → the cabin's west doorway → the
+    // floor plate → ch 4.
+    for (name, at) in [
+        ("the station hall", [139.0f32, 49.5, -93.0]),
+        ("the station doors", [139.5, 49.5, -97.5]),
+        ("the walkway head", [144.0, 46.0, -105.0]),
+        ("the walkway mid", [145.5, 45.0, -108.6]),
+        ("the lower landing", [150.0, 43.5, -116.0]),
+        ("the landing east", [151.2f32, 42.5, -120.5]),
+        ("through the door", [153.0, 42.5, -120.7]),
+        ("the landing east", [151.2, 42.5, -120.5]),
+        ("the ramp south", [153.1, 41.2, -116.0]),
+        ("the ramp mid", [153.2, 39.7, -111.7]),
+        ("the ramp turn", [148.3, 38.5, -110.9]),
+        ("the mid level", [143.3, 36.5, -111.5]),
+        ("the mid doors", [135.5, 36.5, -112.2]),
+        ("the mid west", [132.1, 36.2, -112.3]),
+        ("the long link", [120.5, 34.1, -112.5]),
+        ("the hall y33", [118.2, 33.9, -111.0]),
+        ("the hall y33 west", [118.2, 33.9, -107.9]),
+        ("the hall y33 south", [113.2, 33.7, -106.4]),
+        ("the stairwell top", [108.2, 31.5, -106.3]),
+    ] {
+        w.walk_nav_to(at, name, 1.5);
+    }
+    w.climb_stairs([107.25, 27.7, -119.5], "the stairwell down", 1.6, 4200);
+    // The boarding from the WEST ([D the floor probe]): the side ledges (x 110/114) run south at
+    // y 26.75 past the parked cabin's mouth; east through the open west doorway onto the plate.
+    for (name, at) in [
+        ("the lower level east", [110.7f32, 27.7, -121.5]),
+        ("the gondola mouth", [112.0, 27.4, -122.0]),
+        ("the platform west", [110.3, 27.3, -122.2]),
+        ("the west ledge south", [110.0, 27.0, -124.5]),
+        ("the west ledge at the cabin", [110.0, 27.0, -126.3]),
+    ] {
+        w.walk_nav_to(at, name, 1.4);
+    }
+    {
+        // East into the open west doorway, polling for the plate (its own centre from the [D] bbox).
+        let target = [floor[0], floor[1], floor[2] + 0.4];
+        let mut last = [0.0f32, 0.0];
+        let mut still = 0u32;
+        for t in 0..1200u32 {
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(4) { break; }
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let use_key = if (p[0] - last[0]).abs() < 0.01 && (p[2] - last[1]).abs() < 0.01 {
+                still += 1; still % 30 == 0
+            } else { still = 0; last = [p[0], p[2]]; false };
+            let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let input = Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() > 1.0 { 0.0 } else { 1.0 }, ..Default::default() };
+            w.tick(input, use_key);
+        }
     }
     w.wait(10);
     {
@@ -256,7 +305,7 @@ fn drive_08(w: &mut Walker) -> String {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(1), "AND mux #235: 0x4A AND ch 4 → ch 1 starts the ride SP [D]");
     }
-    note.push_str("floor touch real; mux ch 1; ");
+    note.push_str("walkway descent walked to the floor plate; mux ch 1; ");
     // The ride: SP #295 (mask 1 on ch 1) plays 0x0600004C from the LEVEL BIN — the carriage
     // stream carries the cab (and Bond on its floor) down to (112.0, 18.0, −179.4), fires
     // ch 83 at t1410; ch 83 starts the pack cinematic SP #296 → ch 5 → the copter writes 0x4B.
