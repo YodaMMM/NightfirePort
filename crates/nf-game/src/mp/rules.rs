@@ -28,10 +28,10 @@ pub const PLAYER_SPHERE_RADIUS: f32 = 1.0576;
 /// The player's world-sphere centre height relative to `Bond::pos` (`M_CONTROL+0x80` y = −0.1267
 /// [L ee_start_05]; the small horizontal offset is yaw-dependent and the match keeps no yaw — [S]).
 pub const PLAYER_SPHERE_DY: f32 = -0.1267;
-/// The GoldenEye strike's flight time — the frames from the launch (`SP_Create(.., 0x600003e, ..)`
-/// [M 0x187568:378]) until the strike SP reports state 2 [M :96]. The SP's own timeline is not
-/// ported; 3 s is the port's stand-in [S].
-pub const GE_STRIKE_FRAMES: u16 = (FRAME_RATE_INT * 3) as u16;
+/// The GoldenEye strike's flight length on the arenas whose script carries it — 07000023's
+/// `0600003e` entry is 299 ticks [D the archive entry's length field; the live load reads the
+/// arena's own copy through `level.nis`, so this constant is only the headless rigs' value].
+pub const GE_STRIKE_FRAMES: u16 = 299;
 
 /// mp-scenarios-online: an MP object's model bounds — the placement's celglist record (`obj+0xD8`):
 /// +0x10 the local sphere centre, +0x1C its radius (`Control_BuildWorldSph` 0x133070 → obj+0x80 /
@@ -110,8 +110,20 @@ pub struct MpObjectsRt {
     pub bases_bounds: [Option<MpObjBounds>; 2],
     pub esp_bases_bounds: [Option<MpObjBounds>; 2],
     /// mp-scenarios-online: the frames the GoldenEye strike has been in flight (state 3) — the
-    /// strike completes at [`GE_STRIKE_FRAMES`] [S stand-in for the SP's state 2 [M 0x187568:96]].
+    /// strike completes at [`MpObjectsRt::ge_flight_ticks`] (the SP's state 2 [M 0x187568:96]).
     pub ge_strike_timer: u16,
+    /// mp-goldeneye-strike: the strike's flight length in ticks — the SP script 0x0600003e's own
+    /// length (299 on 07000023 [D the archive entry]; `SP_Update` 0x1dbda8 sends the state to 5
+    /// when `Script_IsPlaying` 0x1db630 reads the play byte done, and `SP_GetState` 0x1dc900
+    /// reports 2 — the game's landed test). The live load fills it from the arena's `level.nis`;
+    /// 0 = the arena carries no strike script: the ScriptPlayer never plays and the strike never
+    /// lands (the game's own failed-lookup soft-lock [M Script_Load 0x1d8248]).
+    pub ge_flight_ticks: u16,
+    /// mp-goldeneye-strike: the tracked beam position — Some(the item's pos) at the launch
+    /// (`SP_Create`'s pos [M 0x187568:383-384]), Some((target.x, target.y − 1.0, target.z)) on
+    /// every in-flight tick (`MP_GoldenEyeUpdate`'s `SP_SetPos` [M :87-95]), None at the impact
+    /// (the strike global clears [M :121-122]). Hashed with [`MpObjectsRt::ge_target`].
+    pub ge_strike_pos: Option<[f32; 3]>,
 }
 
 impl MpObjectsRt {
@@ -144,6 +156,20 @@ pub enum Winner {
 fn sq_dist(a: [f32; 3], b: [f32; 3]) -> f32 {
     let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+}
+
+/// mp-goldeneye-strike: the strike's draw state (`MpMatch::ge_strike_view`) — the phase IS the
+/// Option: None = no strike in flight, Some = the script 0x0600003e is playing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GeStrikeView {
+    /// The target slot (`MP_GetTarget`'s random opposing pick [M 0x187568:362-367]).
+    pub target: usize,
+    /// The tracked beam position — the target's `(x, y − 1.0, z)` from the first update tick,
+    /// the item obj's `+0x30` on the launch tick itself [M 0x187568:87-95, :383-384].
+    pub pos: [f32; 3],
+    /// The ticks left of the flight (the script's length minus the in-flight count [D the
+    /// length field; `SP_GetState` 0x1dc900 reports the impact at 0]).
+    pub ticks_left: u16,
 }
 
 impl MpMatch {
@@ -1032,7 +1058,17 @@ impl MpMatch {
         let in_flight = self.objects_rt.ge.iter().flatten().any(|it| it.state == 3);
         if in_flight {
             self.objects_rt.ge_strike_timer = self.objects_rt.ge_strike_timer.saturating_add(1);
-            if self.objects_rt.ge_strike_timer >= GE_STRIKE_FRAMES {
+            // The strike SP's beam tracks the target: the target obj's position with y − 1.0, the
+            // redraw flag set — the game's per-tick `SP_SetPos` before its landed check [M
+            // 0x187568:87-95]. Tick 0's launch position is the item obj's `+0x30` (`SP_Create`'s
+            // pos [M :383-384]); from the first update tick the tracker owns the position.
+            self.objects_rt.ge_strike_pos = self.objects_rt.ge_target.and_then(|t| self.game.slots[t].pos).map(|p| [p[0], p[1] - 1.0, p[2]]);
+            // The impact: the SP's script 0x0600003e ends — `SP_Update` 0x1dbda8's state-5 arm
+            // (Script_IsPlaying 0x1db630 reads the play byte done), `SP_GetState` 0x1dc900 then
+            // reports 2 [M 0x187568:96] — after the script's own length in ticks [D 07000023.bin
+            // 0600003e: 299]. ge_flight_ticks 0 = the arena has no script: the ScriptPlayer never
+            // plays and the strike never lands [M Script_Load 0x1d8248's failed-lookup arm].
+            if self.objects_rt.ge_flight_ticks > 0 && self.objects_rt.ge_strike_timer >= self.objects_rt.ge_flight_ticks {
                 self.ge_strike_complete(rng);
             }
             return; // state 3 does nothing else [M :258-261]
@@ -1107,8 +1143,29 @@ impl MpMatch {
                     self.objects_rt.ge[i].as_mut().unwrap().state = 3; // [M :379-384]
                 }
                 self.objects_rt.ge_strike_timer = 0;
+                // The strike ScriptPlayer is created at the carried item obj's `+0x30` position
+                // (`SP_Create(.., 0x600003e, ..)` [M :383-384]) — the tracked position until the
+                // first update tick re-sets it onto the target.
+                self.objects_rt.ge_strike_pos = Some(self.objects_rt.ge[0].as_ref().map_or([0.0; 3], |it| it.pos));
             }
         }
+    }
+
+    /// mp-goldeneye-strike: the strike's draw state (docs/systems/mp-goldeneye-strike.md) —
+    /// None when no strike is in flight. The blast renders at the last tracked position on the
+    /// tick this view vanishes; the beam/light visuals ride the script's own streams (already in
+    /// `level.nis` for the renderer).
+    pub fn ge_strike_view(&self) -> Option<GeStrikeView> {
+        if !self.objects_rt.ge.iter().flatten().any(|it| it.state == 3) {
+            return None;
+        }
+        let target = self.objects_rt.ge_target?;
+        let pos = self.objects_rt.ge_strike_pos?;
+        Some(GeStrikeView {
+            target,
+            pos,
+            ticks_left: self.objects_rt.ge_flight_ticks.saturating_sub(self.objects_rt.ge_strike_timer),
+        })
     }
 
     /// `MP_GoldenEyeUpdate` 0x187568:86-179 — the strike completes: the target dies through the
@@ -1122,6 +1179,7 @@ impl MpMatch {
             return;
         }
         self.objects_rt.ge_strike_timer = 0;
+        self.objects_rt.ge_strike_pos = None; // the strike global clears [M 0x187568:121-122]
         if let Some(t) = self.objects_rt.ge_target.take() {
             if !self.game.slots[t].dead {
                 self.player_killed(t, None, false, false, rng); // [M 0x187568:98-108]
