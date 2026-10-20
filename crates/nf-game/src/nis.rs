@@ -1192,14 +1192,16 @@ impl Player {
     /// #70) is reachable exactly this way: its mode-64 preload runs the t=0 Entity op, so entity
     /// 0x020005EA exists at the panel from level load (docs/systems/elevator-button.md).
     pub fn entity_use_targets(&self, objects: &Objects, w: &dyn World) -> Vec<([f32; 3], f32)> {
-        self.entity_use_targets_dir(objects, w).into_iter().map(|(c, r, _)| (c, r)).collect()
+        self.entity_use_targets_dir(objects, w).into_iter().map(|(c, r, _, _)| (c, r)).collect()
     }
 
     /// The same targets with each entity's facing (the stream matrix's direction basis, the
-    /// game's `Mat_GetDir(obj+0x90)` input): `SP_Activate` 0x1dc338's type-0x39 arm dots it
-    /// against `activator+0xC0 − obj+0xC0` before `Switch_Activate`. The basis is the stored
-    /// matrix's z row — the same column math `entity_use_targets` transforms centres with.
-    pub fn entity_use_targets_dir(&self, objects: &Objects, w: &dyn World) -> Vec<([f32; 3], f32, [f32; 3])> {
+    /// game's `Mat_GetDir(obj+0x90)` input) and its matrix TRANSLATION (obj+0xC0 — the game's
+    /// `obj+0x90` matrix's position row, which `SP_Activate` 0x1dc338:51-53 dots the activator
+    /// against; NOT the posed sphere centre, which the baked-absolute art pulls away from the
+    /// matrix origin): `(centre, radius, dir, pos)`. The basis is the stored matrix's z row —
+    /// the same column math `entity_use_targets` transforms centres with.
+    pub fn entity_use_targets_dir(&self, objects: &Objects, w: &dyn World) -> Vec<([f32; 3], f32, [f32; 3], [f32; 3])> {
         let mut out = Vec::new();
         if self.deleted { return out; }
         let Some(s) = self.info[self.cur].as_ref() else { return out };
@@ -1215,7 +1217,10 @@ impl Player {
             ];
             // The facing basis (the game's `Mat_GetDir(obj+0x90)`): the matrix's z basis row.
             let dir = [matrix[2][0], matrix[2][1], matrix[2][2]];
-            out.push((centre, r, dir));
+            // obj+0xC0: the matrix's translation row (Script_EntityStart 0x1d8d78:118 copies it
+            // to obj+0x40/0x30 — the entity's object position).
+            let pos = [matrix[3][0], matrix[3][1], matrix[3][2]];
+            out.push((centre, r, dir, pos));
         }
         out
     }
