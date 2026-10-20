@@ -455,9 +455,9 @@ fn drive_4a(w: &mut Walker) -> String {
         assert_eq!(sim.drones.mission.states[i12][1], 4,
             "12's 'Escape through the elevator shaft' folds on 0700004a via touch #277's ch 0x4d (the late AND) [D census §2; M 0x1827d8 case 3]");
         assert_eq!(sim.drones.mission.states[i12][0], 4,
-            "sister: 12's override objective stays complete through the fold [M 0x182270 keeps previous parts]");
-        assert_eq!(sim.drones.mission.states[i4a][0], 4,
-            "4a's own 'Gain access to lobby' folded at the ride's end (ch 0x4a) [M 0x1827d8 case 3]");
+            "sister: 12's override objective stays complete through the fold [M 0x182270 keeps previous parts — the disassembly's previous-part arms (0x182488-0x1824a4) fall through with no store]");
+        assert_eq!(sim.drones.mission.states[i4a][0], 3,
+            "4a's own 'Gain access to lobby' ANNOUNCES here (enable 0x4d [L ee_start_05.bin @ 0x2a41e8] via touch #277 [D]) and does NOT fold: nothing on 0700004a writes ch 0x4a [D census, tower2-lift-ride.md §2.8] — the fold is 07000013's spawn touch #153 [D; walk_07000013_live pins states[4a][0]==4 there] (M 0x1827d8 case 3 = the mechanism; M 0x1827d8 has no case 4, folded records stay folded)");
     }
     note
 }
