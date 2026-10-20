@@ -232,7 +232,32 @@ fn the_walkin_leaves_a_closing_straddle_door_alone_on_07000016() {
     // Door_ReactToHit 0x135980) reverses a closing leaf while a contact stands in it, which is the
     // RULE now, not the walk-in bug this test guarded (the walk-in's own guarantee is its
     // `state != CLOSED` gate in door.rs [M Door_Update's scan is the auto-close only]).
-    step_at(&mut scene, [door_pos[0], door_pos[1], door_pos[2] - 2.4], 0.0, true);
+    step_at(&mut scene, [door_pos[0], door_pos[1], door_pos[2] - 2.4], 0.0, false);
+    // The 16 arrival door is a vertical-lift slide: the OPEN leaf's live world sphere (obj+0x80,
+    // rebuilt by the moved pass [M 0x1336f8:209]) rides ~2.28 UP, so the use candidate — the
+    // Player_Activate 0x1a5170 sphere (r 1.0 at head + viewer dir · 1.0) vs the door's live sphere
+    // [M Collide_PickObj 0x1eae80's 0x100/0x101 arm] — is only touched with the look PITCHED UP at
+    // the leaf. Aim through the look input (the walker's converged-aim pattern: per-tick clamped
+    // look until the view is on the sphere centre), then one fresh press and release
+    // [M 0x1a5ea8-0x1a5ee8: a held use key activates ONCE — the press edge is the event].
+    for _ in 0..40 {
+        let (turn, look, on) = {
+            let sim = scene.sim.as_ref().unwrap();
+            let (c, _r) = sim.drones.doors.list[door_idx].live_sph();
+            let head = sim.bond.head();
+            let to = [c[0] - head[0], c[1] - head[1], c[2] - head[2]];
+            let want_yaw = to[0].atan2(to[2]);
+            let want_pitch = (to[1] / to[0].hypot(to[2])).atan() / std::f32::consts::FRAC_PI_2;
+            let yerr = want_yaw - sim.bond.yaw;
+            let perr = want_pitch - sim.bond.pitch;
+            (yerr.clamp(-0.08, 0.08), perr.clamp(-0.08, 0.08),
+             yerr.abs() < 0.05 && perr.abs() < 0.028)
+        };
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { turn, look, ..Default::default() }, false, false, false);
+        if on { break; }
+    }
+    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, true);
+    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
     let mut saw_closing = false;
     let mut saw_closed = false;
     for _ in 0..40 {
