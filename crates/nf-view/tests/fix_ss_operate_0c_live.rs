@@ -38,6 +38,16 @@ fn the_bullet_driven_winch_sweeps_on_a_shot_and_holds_without_one() {
     assert!(!wins.is_empty(), "the disc's mask-0x2 winch SSs exist [D #351/#364/#377]");
     let (wi, wpl, wpos) = wins[0];
     eprintln!("[ssop] winch ss[{wi}] placement {wpl} at {wpos:?}");
+    // The winch's disc record [D #351/#364/#377: obj_stor*_pully*, state 0x40, wrap 0 (re-arm),
+    // mask 0x2 (bullet), channel 0 (no channel half), sound 0xffff (none), rest 0, spline 1,
+    // rate 75] — the render contract the sweep plays out (docs/systems/ss-sweep.md).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let s = &sim.drones.sss.list[wi];
+        assert_eq!((s.state, s.wrap_flag, s.mask, s.channel, s.sound), (0x40, 0, 0x2, 0, 0xffff),
+            "the winch's disc params [D #351/#364/#377]");
+        assert_eq!((s.rest, s.spline, s.rate), (0.0, true, 75), "rest 0, the spline interp, rate 75 [D]");
+    }
     for _ in 0..300 { w.tick(nf_game::player::Input::default(), false); }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -97,7 +107,43 @@ fn the_bullet_driven_winch_sweeps_on_a_shot_and_holds_without_one() {
         assert_eq!(s.state, if wrap_flag == 0 { 0x40 } else { 0 },
             "the wrap re-arms (wrap_flag 0) or disarms [M 0x1a9948:119-128]");
     }
+    // The visible outcome the render compares: the held matrix after the wrap is the LAST key's
+    // transform (states 0/0x40 never re-pose [M 0x1a9948]; `interp` clamps past the last key).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let s = &sim.drones.sss.list[wi];
+        let end = nf_game::door::interp(&s.keys, 0, last as u16, last, s.spline).expect("the end pose interpolates");
+        assert_eq!(s.matrix, end,
+            "the winch ss[{wi}] holds the last key's pose after the wrap (the render's end frame)");
+        assert_ne!(s.matrix, nf_game::door::interp(&s.keys, 0, last as u16, 0.0, s.spline).unwrap(),
+            "the end pose differs from key 0 — the winch visibly moved");
+    }
+    // The re-arm is operable: a second shot snaps the pose to key 0 (the wrap reset t) and replays
+    // the sweep [M the 0x40 arm reads t as it stands; the wrap set t = 0, 0x1a9948:119-128]. The
+    // pose lags the playhead by one step (sweep poses at t, then advances).
+    let fired2 = shoot_sweeping(&mut w, [wpos[0], wpos[1], wpos[2]], 120.0, 2400, wi);
+    assert!(fired2, "the re-armed winch ss[{wi}] ignored the second shot");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let s = &sim.drones.sss.list[wi];
+        assert_eq!(s.state, 1, "the second shot re-latches state 1 [M 0x1a9948's 0x40 arm]");
+        let n = (s.t / step).round();
+        assert!(n >= 1.0 && (n * step - s.t).abs() < 1e-3 && n <= 3.0,
+            "the replay just started in whole steps (t {}, step {step})", s.t);
+        let posed_at = ((n - 1.0) * step).max(0.0);
+        assert_eq!(s.matrix,
+            nf_game::door::interp(&s.keys, 0, last as u16, posed_at, s.spline).unwrap(),
+            "the replay's pose tracks the replayed playhead (posed one step behind t)");
+        assert_ne!(s.matrix, end_pose_guard(&sim, wi, last as u16, s.spline),
+            "the replay left the end pose — the winch visibly snapped back");
+    }
     eprintln!("[ssop] done in {} ticks", w.total_ticks);
+}
+
+/// The end-pose matrix of SS `wi` (the last key's transform on its own keys/spline).
+fn end_pose_guard(sim: &nf_view::scene::Sim, wi: usize, last: u16, spline: bool) -> nf_game::door::Mat4 {
+    let s = &sim.drones.sss.list[wi];
+    nf_game::door::interp(&s.keys, 0, last, last as f32, spline).expect("the end pose interpolates")
 }
 
 /// Aim at `target` and fire through the real trigger path until the SS index `wi` moves.
