@@ -2437,8 +2437,9 @@ impl Drone {
             // CivilianHiding 0x15d520 case 8 → (0x12, 0); CivilianScared 0x15d3a0 case 8 → (+0x118, 0);
             // CivilianMission 0x15d860 case 8 → (0x56, 0); CivilianPatrol 0x15d610 case 8 → (0x56, 0);
             // CivilianDoorGuard 0x160648 case 8 → (0x56, 0); TruckDriverInit 0x160bd0 case 8 → (0x33, 0);
-            // TruckDriverIdle 0x160ed0 case 8 → (0x12, 0).
-            PARTY_GIRL | CIVILIAN | CIVILIAN_HIDING | TRUCK_DRIVER_IDLE => (CIVILIAN_SCARED, false),
+            // TruckDriverIdle 0x160ed0 case 8 → (0x12, 0); TruckDriverMission 0x161030 case 8 →
+            // (0x12, 0).
+            PARTY_GIRL | CIVILIAN | CIVILIAN_HIDING | TRUCK_DRIVER_IDLE | TRUCK_DRIVER_MISSION => (CIVILIAN_SCARED, false),
             CIVILIAN_MISSION | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD => (ATTACK, false),
             // CivilianChallenge 0x162558 cases 6/8 → HandleImpact(0x89, 0); 7/9/0x17/0x18/0x19 →
             // (0x89, 1) [M 0x162558:44-60].
@@ -2700,7 +2701,7 @@ impl Drone {
         let (resume, allow) = match s {
             TRUCK_DRIVER_INIT => (TRUCK_DRIVER_INIT_ALERT, false), // 0x160bd0 case 6: HandleImpact(0x33, 0)
             TRUCK_DRIVER_INIT_ALERT => (0, false),
-            TRUCK_DRIVER_IDLE | PARTY_GIRL | CIVILIAN | CIVILIAN_SCARED | CIVILIAN_HIDING => (CIVILIAN_SCARED, false),
+            TRUCK_DRIVER_IDLE | TRUCK_DRIVER_MISSION | PARTY_GIRL | CIVILIAN | CIVILIAN_SCARED | CIVILIAN_HIDING => (CIVILIAN_SCARED, false),
             CIVILIAN_MISSION | CIVILIAN_GUARD | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD => (ATTACK, false), // 0x15d860 case 6 tail: HandleImpact(0x56, 0)
             CIVILIAN_CHALLENGE => (crate::kiko::RUN_TO_ALARM, false), // 0x162558 case 6: HandleImpact(0x89, 0)
             HOSTAGE_IDLE => (0, false),
@@ -5959,11 +5960,19 @@ impl Drone {
                 self.set_state(TRUCK_DRIVER_IDLE);
                 true
             }
-            // 0x160bd0 case 5 (the script's done): the AI-path counter `+0x9f2` (InitAIPath 0x153720's
-            // node cursor — the port models no per-node path walk, and the game's driver is never shown
-            // leaving on a mission path in the traces) → 0x34; only a running mission path would take
-            // 0x35. The driver steps into TruckDriverIdle ("hands behind back", the user's C1).
-            (TRUCK_DRIVER_INIT, msg::ANIM_DONE) => { self.hip_anim = 1.0; self.set_state(TRUCK_DRIVER_IDLE); true }
+            // 0x160bd0 case 5 (the script's done): `+0x9f2 != 0` — the kind-8 route Init case 1
+            // assigned (`AssignAIPath(8)`, the port's route slot is the same gate, cf. PARTY_GIRL_INIT)
+            // — → TruckDriverMission (0x35, he walks his mission route); else → TruckDriverIdle (0x34).
+            // The port hard-coded Idle here: the 05-truck trace's 700-frame window only ever showed
+            // him still IN 0x32 (the sit script playing), so the case-5 branch was never seen — and
+            // rook-door-06's 70k-tick probe then showed the walk never starts at all (0 movers). The
+            // pre-fix run of rook_door_06_walk_live parks him at (66.12, 39.6, 28.9) in 0x34 forever.
+            (TRUCK_DRIVER_INIT, msg::ANIM_DONE) => {
+                self.hip_anim = 1.0;
+                if self.route.is_some() { self.set_state(TRUCK_DRIVER_MISSION); }
+                else { self.set_state(TRUCK_DRIVER_IDLE); }
+                true
+            }
             // fix-06-driver: the game's arm is msgs 0x11/0x12/0x13/0x16/0x1e → 0x33 [M 0x160bd0:97-105] —
             // msg 0x14 (SOUND, DroneFunc_HandleSoundAlerts' dispatch) has NO arm (default → unhandled):
             // the driver never reacts to heard gunfire. The port's SOUND half sent him into the guard
@@ -5990,6 +5999,35 @@ impl Drone {
             // anim set 12 → 4) — the playtest's guard-death symptom. The scare path is NearArmedBond (case 3).
             (TRUCK_DRIVER_IDLE, msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
             (TRUCK_DRIVER_IDLE, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
+            // TruckDriverMission (0x161030): ENTER clears the sit ready bits and plays the walk
+            // (`CallAnim(0, 0x37, …)`) + the BondTalk timer (+0xcc0=1, +0xcc4=60 ticks, +0xcc8=0 —
+            // bookkeeping the port models like CivilianMission's) [M 0x161030:16-28]; UPDATE (case 3):
+            // `NDrone2_UpdateMissionRoute` 0x154a80 → `NDrone2_FollowRoute`; result 3 = arrived → the
+            // prop clears → TruckDriverIdle; blocked (creep mode 9/0xc at +0x974) → speed <0.66 stand
+            // idle else CallAnim(0x21); else keep walking [M 0x161030:30-56]. No in-tick armed-person
+            // scan in the game's case 3 (unlike CivilianMission 0x15d860) — the scare path is the
+            // message arms: 0x11/0x12/0x15/0x16/0x1e → EnemyAlerts, 0x1f forced attack, 0x21 explosive,
+            // impacts resume 0x12 [M 0x161030:58-107].
+            (TRUCK_DRIVER_MISSION, msg::ENTER) => {
+                self.call_anim(d, anim_state::WALK, 0, 0);
+                true
+            }
+            (TRUCK_DRIVER_MISSION, msg::UPDATE) => {
+                if self.route.is_some() {
+                    let arrived = self.update_mission_route(d, rng, frame, self.walk_anim(d));
+                    if arrived && self.next_state.is_none() {
+                        d.props.set(0x1d, &mut self.props, 0);
+                        self.set_state(TRUCK_DRIVER_IDLE);
+                    }
+                } else {
+                    d.props.set(0x1d, &mut self.props, 0);
+                    self.set_state(TRUCK_DRIVER_IDLE);
+                }
+                true
+            }
+            (TRUCK_DRIVER_MISSION, msg::BULLET) => self.on_bullet_resume(d, rng, frame, CIVILIAN_SCARED, false),
+            (TRUCK_DRIVER_MISSION, msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (TRUCK_DRIVER_MISSION, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // PartyGirlInit (0x1728c0) ENTER: prop 0x1d → AssignAIPath(8) — with a route → CivilianMission
             // (0x16, the walkers); else the prop clears and PartyGirl (0x2f) [M 0x1728c0:17-25]. The game's NIS
             // script link (`+0x9f2` there is the route count — InitAIPath 0x153720 fills it) makes the mask-8
@@ -11264,6 +11302,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         if let Some(env) = self.env.as_mut() {
             self.rng.rand(20000);
             env.update(&mut self.rng, &mut self.fill_rng, player.eye, atan2_approx(player.aim[0], player.aim[2]));
+        }
+        // objective-77: `Lock_Update` case 1 (0x1ae3d8:192-196 — `case 1:
+        // switch_channels[puVar1[4]] = 1; switch_channels_time[...] = GameState._52_4_`) writes the
+        // unlocked lock's out channel EVERY tick — the create-time one-shot hold in `Drones::create`
+        // is only the cold-load shortcut, and a warm load's carried channels restore AFTER it, so
+        // the held channel sat dead (07000012's Operative warm leg: locks #656/#694 unlocked, ch
+        // 0xa = 0 forever, the Q-Decryptor burn route unreachable). The game's object pass re-holds
+        // it every frame; the port does the same here (the object-handler slot, after Env_Update).
+        for l in self.locks.iter().filter(|l| (l.unlocked || l.burned) && l.out != 0) {
+            self.channels.set(l.out as u32, 1, frame);
         }
         // The presentation FX tick (ripples/flicker/clouds/apocalypse/emitters, fix-world-fx): the
         // game's object handler updates them per frame in the same control pass. The impact

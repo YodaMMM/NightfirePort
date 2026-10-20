@@ -20,8 +20,19 @@
 //!
 //! The fix: `TruckDriverInit` (0x160bd0 case 1) sets the sitting hip 0.2 while the start script
 //! plays (the state the game sits in — [L] state 0x32 for the whole trace window), restored to the
-//! standing 1.0 on the exits (ANIM_DONE → 0x34, ALARM → 0x33); `Drone_CollisionHandler` runs the
-//! game's soft settle toward `floor + hip` instead of the snap.
+//! standing 1.0 on the exits (ANIM_DONE → 0x35 TruckDriverMission when the kind-8 route stands,
+//! else 0x34 [M 0x160bd0 case 5; L 06-firstsight.trace frames 147176→148014: 0x32 → 53 (0x35) at
+//! the script's done, then he walks]; ALARM → 0x33); `Drone_CollisionHandler` runs the game's soft
+//! settle toward `floor + hip` instead of the snap.
+//!
+//! rook-door-06-3 re-derivation: the pre-06-2 "ANIM_DONE → 0x34" pins contradicted the game —
+//! [L 06-firstsight.trace] (a fresh-boot PCSX2 recording on 07000006) shows the driver IN 0x32 from
+//! frame 147176, stepping into 53 = 0x35 at 148014 (+838, the script's done) and walking
+//! continuously (66.65 → 70.88 by 148247, ~0.9 u/s) until armed Bond 2.4 away scares him into
+//! 0x13. The gate is the game's own: case 5 reads `*(short*)(drone+0x9f2)` — InitAIPath 0x153720's
+//! node count, filled when case 1's prop 0x1d (set for the 0x600011d driver [M DoModeSettingsNEW
+//! 0x14c600 + init_DMODE_TruckDriver 0x14e348]) sent `AssignAIPath(8)` 0x154190 hunting a mask-8
+//! route node within 0.3 — and path 10's node 0 sits at his park spot [L the walk itself].
 //!
 //! Run: `NF_ISO=… cargo test -p nf-view --test fix_driver_air_live -- --nocapture --test-threads=1`
 
@@ -35,7 +46,8 @@ fn tick_idle(sim: &mut nf_view::scene::Sim, n: u32) {
 
 /// The driver sits ON his crate seat at the game's height: pos.y = crate top + 0.2 (the clamp),
 /// reached through the game's soft settle, and the rendered pelvis rides at the game's 39.2.
-/// Sisters: he holds x/z through the traced window and steps into TruckDriverIdle after the script.
+/// Sisters: he holds x/z through the traced window and steps into TruckDriverMission after the
+/// script (the game's own post-sit state — [L 06-firstsight.trace 148014]).
 #[test]
 fn the_sitting_driver_rests_on_his_seat_at_the_game_height() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -68,13 +80,17 @@ fn the_sitting_driver_rests_on_his_seat_at_the_game_height() {
 
     // Sisters: he holds his seat through the traced window (the game's x span 0.024 over 700 frames
     // [L]; the port's consumed-root drift is the facial3 known gap, bounded here), and the script's
-    // end steps him into TruckDriverIdle at the standing hip.
+    // end steps him into TruckDriverMission at the standing hip ([L 06-firstsight.trace 148014]).
     tick_idle(sim, 640); // tick 700
     let dr = &sim.drones.list[di];
     assert!((dr.pos[0] - 66.118).abs() < 0.1, "the sit holds x (the game's 66.118 [L]) — got {}", dr.pos[0]);
     tick_idle(sim, 220); // tick 920, the 880-frame script done
     let dr = &sim.drones.list[di];
-    assert_eq!(dr.state, 0x34, "the driver steps into TruckDriverIdle when the sit script ends [M 0x160bd0 case 5]");
+    // The game's post-sit state: the route stands (path 10's node 0 at his park spot), so case 5
+    // reads +0x9f2 != 0 → TruckDriverMission — [L 06-firstsight.trace frame 148014: 50 → 53 (0x35)
+    // exactly at the sit's done, then the continuous walk 148014..148247]; [M 0x160bd0 case 5] +
+    // [M 0x154190/0x153720] (the route hunt) + [M 0x14c600] (prop 0x1d set for 0x600011d).
+    assert_eq!(dr.state, 0x35, "the driver steps into TruckDriverMission when the sit script ends [L 06-firstsight.trace 148014; M 0x160bd0 case 5 with the kind-8 route assigned] — got {:#x}", dr.state);
 }
 
 /// Sister: the soft settle is the game's rate — the SITTING driver (the 0.2 animated hip, the state
@@ -103,9 +119,12 @@ fn the_floor_settle_runs_at_the_games_one_eighth_rate() {
     assert!((after - (steady + 0.15 - 0.15 * 0.125)).abs() < 0.005,
         "the sitting driver settles correction × 0.125 per tick [M 0x140968 tail; L the trace's 39.305→39.289] — {} → {}", steady + 0.15, after);
     // Sister: the STANDING driver (the script done, hip restored to 1.0 [M 0x160bd0 case 5]) lifted 0.15
-    // is NOT settled — the gate needs correction < 0.5 − 1.0 = −0.5 — and takes the port's snap.
+    // is NOT settled — the gate needs correction < 0.5 − 1.0 = −0.5 — and takes the port's snap. He is
+    // in TruckDriverMission now ([L 06-firstsight.trace 148014]) — the settle gate is the hip's, not
+    // the state's [M 0x140968 tail + 0x140e30-48], so the measurement stands on the walking driver's
+    // first route tick (the walk moves x/z; the floor under the park spot is the flat crate top).
     tick_idle(sim, 820); // tick 920: the sit done
-    assert_eq!(sim.drones.list[di].state, 0x34, "the driver idles");
+    assert_eq!(sim.drones.list[di].state, 0x35, "the driver walks his mission route [L 06-firstsight.trace 148014; M 0x160bd0 case 5]");
     let floor = {
         let g = &sim.drones.list[di];
         let from = g.pos;
