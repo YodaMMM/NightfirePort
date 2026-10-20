@@ -417,12 +417,15 @@ impl Gun {
             return false;
         }
         let can_reload = !busy && self.spare > 0 && self.clip < p.clip;
-        // Branch A: the reload key (action 14). Branch B: the auto-reload — the game's condition is
-        // "the fire key is NOT newly pressed this frame" (`Input_Action(player, 9, 1) == 0`, an edge test
-        // [M 0x1a5460:442-445 disasm 0x1a61d0]), so holding the trigger still reloads; only a fresh press
-        // diverts to the fire path. Branch B also zeroes the refire timer (`BLData+0x92C = 0`, 0x1a6244);
-        // branch A leaves it (disasm 0x1a5f50-0x1a5f84 — no +0x92C store).
-        let auto_reload = !pressed || self.held; // ¬(pressed && !held): not a fresh fire press
+        // Branch A: the reload key (action 14). Branch B: the auto-reload — the game's arm sits in
+        // the trigger's RELEASE path: `Input_Action(player, 9, 1) == 0` is the fire trigger's
+        // LEVEL read as 0 (Input_Update 0x17ee88 writes the action byte 0x01 while held, 0x05 on
+        // the fresh press, 0 on release — disasm 0x17f084-0x17f100; `Player_SetWeaponAnimObj`'s
+        // case-6 shell interrupt reads the same mask as "held" [M 0x1a2e38:360]), so a HELD
+        // trigger with an empty clip reloads nothing until it releases [M 0x1a5460 disasm
+        // 0x1a5fe8 → 0x1a61d0]. Branch B also zeroes the refire timer (`BLData+0x92C = 0`,
+        // 0x1a6244); branch A leaves it (disasm 0x1a5f50-0x1a5f84 — no +0x92C store).
+        let auto_reload = !pressed; // the trigger's level 0 [M 0x1a5fe8 → 0x1a61d0]
         if can_reload && (reload || (auto_reload && self.clip < p.ammo_per_shot)) {
             if !reload { self.timer = 0.0; } // branch B: `BLData+0x92C = 0` [M 0x1a6244]
             // `Player_WeaponFiring` sets anim+0xF4 = 6 and queues +0xA4 at 1.35× — from frame 6 for
