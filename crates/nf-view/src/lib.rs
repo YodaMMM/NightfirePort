@@ -4869,8 +4869,18 @@ impl App {
                             if sim.drones.exit_hold.is_some() {
                                 sim.drones.level_exit = Some(next);
                             } else {
-                                let resolved = nf_game::triggers::resolve_exit_code(next);
-                                if resolved != next { eprintln!("level: exit {next:08x} resolves to {resolved:08x} [M 0x1d3560]"); }
+                                // doublecross-transitions: the exit rides the game's real path —
+                                // `ResetMap_LevelToLoad(next, 1, 0)` WRAPS the story code to its
+                                // 0x0710000N briefing code [M 0x1d3800:27-101, 102-103], then the
+                                // loader's phase 2 resolves it (`GetLevelToLoadFromMovieCode`
+                                // 0x1d3560; a briefing not in `UsingMovie` never starts a movie —
+                                // state 6 pops on its first tick [M 0x1c98c8 case 6] — and phase 2
+                                // strips the wrap back). A Double Cross hop therefore loads the raw
+                                // part code by the wrapped route; the whitelisted briefings/outros
+                                // ride the front-end/mission paths (`movie_pending`, `mission_ended`).
+                                let wrapped = nf_game::triggers::wrap_intro(next);
+                                let resolved = nf_game::triggers::resolve_exit_code(wrapped);
+                                if resolved != next { eprintln!("level: exit {next:08x} wraps to {wrapped:08x} and resolves to {resolved:08x} [M 0x1d3800 + 0x1d3560]"); }
                                 eprintln!("level: exit trigger fired → loading {resolved:08x}");
                                 self.pending_level = Some(resolved);
                             }
