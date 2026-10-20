@@ -226,7 +226,9 @@ fn a_foreign_weapons_fire_and_reload_sounds_start_voices_on_07000005() {
 }
 
 /// The sweep: every weapon record on 07000005 — draw, fire, and (where the level bank lacks the reload
-/// ids) reload — requests its ids and each starts a voice with the owning bank's sample.
+/// ids) reload — requests its ids and each starts a voice with the owning bank's sample. Every cell
+/// is an independent first give (level-start inventory + gun restored per cell — see the reset note
+/// in the body), so no weapon's window depends on the previous cell's reload/pool state.
 #[test]
 fn every_weapon_on_07000005_draws_fires_and_reloads_with_sounds() {
     let Some(mut scene) = load("07000005.bin") else { eprintln!("NF_ISO not set — skipping"); return };
@@ -235,7 +237,27 @@ fn every_weapon_on_07000005_draws_fires_and_reloads_with_sounds() {
     let mut seen = HashMap::new();
     let mut given = 0usize;
     let mut failures: Vec<String> = Vec::new();
+    // Each cell starts from the level-start inventory + gun (mp-shot-gate-reload-2). The old sweep
+    // chained every weapon's ammo/switch state into the next cell, which under the game's
+    // held-trigger reload rule (794: the auto-reload arm sits in the trigger's RELEASE path — a
+    // held trigger never reloads [M 0x1a5460 disasm 0x1a5fe8 → 0x1a61d0]) left the clip-slot twins
+    // (e.g. the AIMS-20 0x1b, whose base 0x1a is already owned, so `equip_weapon`'s owned arm adds
+    // carried rounds and touches no clip [M Player_EquipWeapon]; the switch reads 0x1b's OWN slot —
+    // the pair's ammo types differ, 5 vs 12 [L ee_snapshot weapon_data]) drawing with clip 0 into
+    // a held fire window: nothing fired, no sound started. The give the sweep models is the dev
+    // give — `equip_weapon`'s first-give arm fills the clip [M]; resetting to the level-start state
+    // makes every cell exactly that first give (port choice in the harness, not a game claim), so
+    // each weapon's window is independent of the previous one.
+    let (inv0, gun0, bond0, death0, health0) = {
+        let sim = scene.sim.as_ref().unwrap();
+        (sim.drones.inventory.clone(), sim.gun.clone(), sim.bond.clone(), sim.drones.death.clone(), sim.drones.health)
+    };
     for w in 0x01..=0x71usize {
+        // The health pool rides with it (the death check reads `Drones.health` [M Player_CheckForDeath
+        // 0x190810] — a dead Bond re-dies on the first tick and `Player_WeaponNone` 0x1a9858 re-routes
+        // the switch request to hands, wedging the cell on 0x47): mine blasts and stray fire must not
+        // leak across cells.
+        { let sim = scene.sim.as_mut().unwrap(); sim.drones.inventory = inv0.clone(); sim.gun = gun0.clone(); sim.bond = bond0.clone(); sim.drones.death = death0.clone(); sim.drones.health = health0; }
         let reload_ids: &[u32] = match w { 0x1a => &[0x40a, 0x40d], 0x2c => &[0x10c, 0x10d], _ => &[] };
         if !equip(&mut scene, w) { eprintln!("weapon {w:#04x}: refused (no first-person model — 100a's asset gap)"); continue; }
         given += 1;
@@ -243,13 +265,13 @@ fn every_weapon_on_07000005_draws_fires_and_reloads_with_sounds() {
         // first-person model, so `Player_WeaponSelect` variant-swaps through state 8 — no draw sound
         // there either [M 0x1a2cc0 lines 13-29].
         let start_weapon_or_variant = w == 0x02 || w == 0x03;
-        // fix-weapon-anims2: the wait must cover the CHAINED correct-rate switch — the previous
-        // cell's reload tail (its +0xA4 script at 1.35 [M 0x1a6250-0x1a631c]) + its holster (+0xC4 at
-        // 1.25 [M 0x1a2e38 case 1:220-223]) + this draw (+0xC0 at 1.25 [M case 3:287-288]). Measured:
+        // The wait covers this cell's own switch: the level-start P2K's holster (+0xC4 at 1.25
+        // [M 0x1a2e38 case 1:220-223]) + this draw (+0xC0 at 1.25 [M case 3:287-288]). Measured:
         // the Q-Worm 0x41 draws ~180 frames (drawn_at 190 from the P2K start), the MGL 0x42 ~150 —
         // fix-weapon-anims's 240 cap was tuned to the double-advance bug's 2x-fast draws and timed out
         // mid-draw, so the fire window below ran while still switching (the game's fire block) and the
-        // fire-script op-1s (0x27f/0x41b/0x5ce at frame 2) never played. 600 covers the longest chain.
+        // fire-script op-1s (0x27f/0x41b/0x5ce at frame 2) never played. 600 covers the longest draw
+        // with margin (the per-cell reset removed the old chained reload tail).
         until_drawn(&mut scene, &mut sound, &mut seen, w, 600);
         // The draw sound (weapon 0x282, gadget 0x281 [M 0x1a2e38]) must have started with the owning
         // bank's sample.
@@ -294,6 +316,20 @@ fn every_weapon_on_07000005_draws_fires_and_reloads_with_sounds() {
                 scene.sim.as_mut().unwrap().step_bond(Input::default(), false, true, false);
                 tick(&mut sound, &mut scene, &mut seen);
                 if reload_ids.iter().all(|id| seen.contains_key(id)) { break; }
+            }
+        }
+        // The mine 0x37's detonation sound 0x458 is the mine's own fuse arming the blast at Bond's
+        // feet — the plant's shell (0x37's row is [0x458] alone, and 0x59's row rides the accumulated
+        // 0x458). The blast kills Bond, so under the per-cell reset it must land inside THIS cell
+        // (before the death state is cleared for the next one) or the sound never reaches `seen`.
+        // Measured: the mine detonates ~360 ticks after the plant; the death it starts (`Player_WeaponNone`
+        // 0x1a9858 on the death tick [M 0x190810:61]) is reset away with everything else at the next
+        // cell top.
+        if w == 0x37 {
+            for _ in 0..2400 {
+                if seen.contains_key(&0x458) { break; }
+                scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+                tick(&mut sound, &mut scene, &mut seen);
             }
         }
     }
