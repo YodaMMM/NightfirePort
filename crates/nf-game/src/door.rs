@@ -34,6 +34,16 @@ pub const OPEN: u16 = 4;
 pub const OPENING: u16 = 8;
 pub const CLOSING: u16 = 0x10;
 
+/// `Txt_BindLabel(0x2000003, 0)` — "Door Unlocked" [D USATxt.dat]: `Door_Update` 0x1363c8's lock-channel
+/// rising-edge message, `Text_AddMsg(0, 0, 1, …, 0, 0xb4)` — the type-1 INFO bar, 180 ticks — before the
+/// unlock `Door_Activate` [M 0x1363c8 decompile lines 101-107; the level gate 0x7000014/0x700004a is
+/// the caller's (Doors does not know the level)].
+pub const LABEL_DOOR_UNLOCKED: u32 = 0x2000003;
+/// `Txt_BindLabel(0x200000b, 0)` — "Press Action to open door" [D USATxt.dat]: `Door_DoMsg` 0x135f18's
+/// aim-ray hint via `Check_Target` 0x1a7810 (once per door, `DoorMsg` 0x30cd04 < 3 per boot, dist < 5.0)
+/// [M 0x1a79e8-0x1a7bc8 disasm, 0x135f18].
+pub const LABEL_DOOR_HINT: u32 = 0x200000b;
+
 /// One key of a door anim (a 0x19 block payload): 28 bytes — `f32[3]` position at +0, quaternion (x, y, z, w)
 /// at +0xC [M: `Spline_Interp` 0x1e1858 addresses keys at `list + 0x1c·k`; L: `Door_UNLocked`'s 3 keys].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -213,6 +223,10 @@ impl Door {
     }
     /// `Door_SetupSwing`'s closed pose: `Spline_Interp(0.5 · frames)`.
     fn closed_pose(&self) -> Option<Mat4> { self.pose_at(0.5, true) }
+
+    /// The LIVE world sphere (`obj+0x80`/`obj+0x8C`): the gfx centre transformed by this tick's matrix —
+    /// the same sphere the auto-close scan uses.
+    pub fn live_sph(&self) -> (V3, f32) { (transform(&self.matrix, self.sph_centre), self.sph.1) }
 }
 
 /// All doors of a level, in placement (creation) order.
@@ -224,10 +238,15 @@ pub struct Doors {
     /// The previous tick's `switch_channels` (`switch_channels_prev`) for the lock channel's rising edge.
     prev_channels: [u8; 256],
     hold_channels: [u8; 256],
+    /// door-text-labels: the 0x2000003 "Door Unlocked" raises this tick — `(label, ticks)` pairs queued by
+    /// `update` on the lock channel's rising edge, drained by Sim into the type-1 INFO queue
+    /// (`Text_AddMsg(0, 0, 1, Txt_BindLabel(0x2000003, 0), 0, 0xb4)` [M 0x1363c8:101-107]).
+    pub labels: Vec<(u32, f32)>,
 }
 
 impl Default for Doors {
-    fn default() -> Doors { Doors { list: Vec::new(), group_states: [0; 101], prev_channels: [0; 256], hold_channels: [0; 256] } }
+    fn default() -> Doors { Doors { list: Vec::new(), group_states: [0; 101], prev_channels: [0; 256], hold_channels: [0; 256],
+        labels: Vec::new() } }
 }
 
 /// The main map's door placements in creation order (create and nf-view).
@@ -327,7 +346,7 @@ impl Doors {
             }
             list.push(d);
         }
-        Doors { list, group_states: [0; 101], prev_channels: [0; 256], hold_channels: [0; 256] }
+        Doors { list, group_states: [0; 101], prev_channels: [0; 256], hold_channels: [0; 256], labels: Vec::new() }
     }
 
     /// A door that starts open sets its open channel at create (`Door_Create`'s tail).
@@ -402,6 +421,58 @@ impl Doors {
         }
     }
 
+    /// `Door_DoMsg` 0x135f18 [M]: the aim-ray door hint. The game's order — the `+0x74` latch sets
+    /// BEFORE any check (one attempt per door ever, a locked door burns it), then the lock-channel
+    /// gate (a wired channel that is OFF fails), then the state gate (`== 4` OPEN fails; grouped
+    /// doors read `DoorGroupsStates[g]`) — returns `Txt_BindLabel(0x200000b, 0)` or 0.
+    /// `mp` is `MPSettings+0x388 != 0` [M 0x135f18:13]: no hints in a match.
+    pub fn do_msg(&mut self, i: usize, mp: bool, channels: &Channels) -> Option<u32> {
+        if mp { return None; }
+        if self.list[i].msg_shown { return None; }
+        self.list[i].msg_shown = true;
+        let d = &self.list[i];
+        if d.ch_lock != 0 && !channels.on(u32::from(d.ch_lock)) { return None; }
+        let state = if d.group != 0 {
+            self.group_states.get(d.group as usize).copied().unwrap_or(0)
+        } else {
+            d.state
+        };
+        if state != OPEN { Some(LABEL_DOOR_HINT) } else { None }
+    }
+
+    /// The aim ray's door pick (`Check_Target` 0x1a7810's `Collide_RayIntersect` arm) [M disasm
+    /// 0x1a79ec-0x1a7a20: a0 = HITDATA+0x58, the hit object; class `obj+0xff` == 0x1c]. **[S
+    /// unverified as to shape]** — the game's ray hits the door's collision MESH and reports the
+    /// object; the port's `world.segment` returns no object id, so the pick tests each door's LIVE
+    /// world sphere (obj+0x80, radius obj+0x8C) and is wall-occluded like
+    /// `gadget::pick_decryptor_lock` (the caller's static-segment fraction `wall_t` caps it).
+    /// Returns `(door index, hit fraction)` of the nearest touch, or None.
+    pub fn pick_target(&self, eye: V3, dir: V3, wall_t: f32) -> Option<(usize, f32)> {
+        let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        if l < 1e-9 { return None; }
+        let d = [dir[0] / l, dir[1] / l, dir[2] / l];
+        let mut best: Option<(f32, usize)> = None;
+        for (i, door) in self.list.iter().enumerate() {
+            if door.glist == 0 { continue; }
+            let (c, r) = door.live_sph();
+            let ap = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+            let t = ap[0] * d[0] + ap[1] * d[1] + ap[2] * d[2];
+            if t < 0.0 { continue; }
+            let closest = [eye[0] + d[0] * t, eye[1] + d[1] * t, eye[2] + d[2] * t];
+            let d2 = (closest[0] - c[0]).powi(2) + (closest[1] - c[1]).powi(2) + (closest[2] - c[2]).powi(2);
+            if d2 > r * r { continue; }
+            // The ray-sphere entry point (closest approach t minus the half-chord). An eye already
+            // inside the sphere (the player stands against the leaf) enters at 0 — the game's mesh
+            // ray still reports the door [S stand-in].
+            let half = (r * r - d2).sqrt();
+            let entry = (t - half).max(0.0);
+            let tf = entry / 50.0; // the ray is the 50-unit Check_Target ray [M 0x1a7810:114-116]
+            if tf < 0.0 || tf >= wall_t { continue; }
+            if best.is_none_or(|(bt, _)| tf < bt) { best = Some((tf, i)); }
+        }
+        best.map(|(tf, i)| (i, tf))
+    }
+
     /// `Door_Update` for one door, in the control list's order. `actors`: the objects the proximity tests see —
     /// the game scans classes 2 (the player), 3 and 0x12 (drones) by bounding sphere, skipping every candidate
     /// whose `obj+0xF0` carries 0x10 [M 0x136678-0x136684]; **`actors[0]` is the activator** (`glb_players` in
@@ -430,11 +501,15 @@ impl Doors {
                 self.list[i].open_timer = 0;
             }
         }
-        // The lock channel's rising edge: unlock for good (the game also shows text label 0x2000003).
+        // The lock channel's rising edge: the game's message block FIRST, then unlock for good. The
+        // message: level-gated (0x7000014/0x700004a — the caller's gate; Doors doesn't know the level)
+        // `Text_AddMsg(0, 0, 1, Txt_BindLabel(0x2000003, 0), 0, 0xb4)` — 180 ticks [M 0x1363c8:101-107];
+        // then `Door_Activate(obj, glb_players, 0)`, `+0x68 = 0`, busy marker [M :105-107].
         if ch_lock != 0 {
             let was = self.prev_channels[ch_lock as usize] != 0;
             let now = channels.on(ch_lock as u32);
             if !was && now {
+                self.labels.push((LABEL_DOOR_UNLOCKED, 180.0));
                 self.activate(i, actors, false, channels, frame, &mut sounds);
                 let d = &mut self.list[i];
                 d.ch_lock = 0;

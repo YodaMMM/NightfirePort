@@ -752,6 +752,12 @@ pub struct HudState {
     /// The last non-0xFF context id the icon showed (the runtime sprite keeps its texture through
     /// the fade — the port re-derives it since the fade path runs after the id is gone).
     pub last_icon_ctx: u8,
+    /// door-text-labels: the game's `DoorMsg` global (0x30cd04, .sdata): the aim-ray door hint counter,
+    /// `Check_Target` shows the 0x200000b hint only while `DoorMsg < 3` and never resets it — at most
+    /// 3 door hints per boot [M 0x1a7b88-0x1a7bc0; the full gp-relative scan finds no other writer].
+    /// [S port architecture: the port's Sim is per level, so the count resets with the level; the
+    /// game's .sdata survives level loads.]
+    pub door_msg: u32,
 }
 
 impl HudState {
@@ -4450,9 +4456,9 @@ impl Sim {
                 .filter_map(|(i, dr)| {
                     let vol = nf_game::bullet::PlayerVolume { feet: [dr.pos[0], dr.pos[1] - 1.0, dr.pos[2]], height: 1.8, radius: 0.4 };
                     nf_game::bullet::segment_cylinder(camera, far, &vol).filter(|&t| t < wall).map(|t| (i, t))
-                }).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| i);
+                }).min_by(|a, b| a.1.total_cmp(&b.1));
             self.cross_state = match hit {
-                Some(i) if self.drones.list[i].team != 1 => {
+                Some((i, _)) if self.drones.list[i].team != 1 => {
                     // civilian-no-shoot [M 0x1a7810:152-183]: the no-shoot mark is ALSO keyed on the
                     // held weapon id (animData+0x62) and the level. Weapon ids {1, 0x35, 0x36, 0x43,
                     // 0x44} — the fists and the throw family (grenades 0x35/0x36; 0x43/0x44 the other
@@ -4466,6 +4472,25 @@ impl Sim {
                 }
                 _ => 2,
             };
+            // door-text-labels: the SAME ray's class-0x1C door arm [M 0x1a79e8-0x1a7bc8]. The game's ONE
+            // hitlist decides: the nearest hit object takes the hit, so a drone in front of the door
+            // (its 0.4 cylinder, the ported drone pick above) leaves the door silent. Gates: hit dist
+            // < 5.0 [M 0x1a7b6c-0x1a7b84], level != 0x700004a [M 0x1a7b58-0x1a7b64], the boot-global
+            // `DoorMsg` 0x30cd04 < 3 [M 0x1a7b88-0x1a7b90], then `Door_DoMsg` 0x135f18 → on a nonzero
+            // label `DoorMsg++` and `Text_AddMsg(BL+0x94e, 0, 1, label, 0, 0xb4)` — 180 ticks [M
+            // 0x1a7b98-0x1a7bc8]. The port: the sphere pick [S, see Doors::pick_target] and the
+            // info_labels queue bound in hud_tick (the game binds at post time, before the pane).
+            if let Some((di, dt)) = self.drones.doors.pick_target(camera, look, wall) {
+                let drone_in_front = hit.map_or(false, |(_, t)| t < dt);
+                if !drone_in_front && dt * 50.0 < 5.0 && self.level != 0x0700_004a
+                    && self.hud.door_msg < 3 {
+                    let mp = self.mp.is_some(); // MPSettings+0x388 — the SP/MP discriminator [S port mapping]
+                    if let Some(label) = self.drones.doors.do_msg(di, mp, &self.drones.channels) {
+                        self.hud.door_msg += 1;
+                        self.hud.info_labels.push_back((label, 180.0));
+                    }
+                }
+            }
         }
         // The object handler (`control_movement_object_handler`) runs whenever `GS_IsPaused(-1) == 0` — ScriptCam
         // plays NO role [M Game_Run 0x1c9790:30-35]: `ScriptCam` only picks `Text_Update2Line` vs `Text_Update`
@@ -4554,6 +4579,19 @@ impl Sim {
         // `PlarStat_LogUpdateElapsedTime(0)` 0x1995a0 — `Player_Update` 0x193600:132 calls it once per
         // tick; `now` is the port's frame-derived 1/100 s clock (deterministic; fix-progress).
         self.drones.progress.log_update_elapsed(nf_game::progress::PlrMissionStats::now_100ths(self.drones.frame));
+        // door-text-labels: `Door_Update`'s unlock message (`Text_AddMsg(0, 0, 1,
+        // Txt_BindLabel(0x2000003, 0), 0, 0xb4)` [M 0x1363c8:101-103]) posts straight into the
+        // type-1 INFO list in the game; here `Doors::update` queued it and Sim applies the level
+        // gate the game checks inline (`GameState != 0x7000014 && != 0x700004a` [M :101]) — on
+        // those two levels the door still unlocks, silently. The activate/clear/busy steps ran in
+        // `Doors::update` regardless, exactly like the game.
+        if self.level == 0x0700_0014 || self.level == 0x0700_004a {
+            self.drones.doors.labels.clear();
+        } else {
+            for (label, time) in self.drones.doors.labels.drain(..) {
+                self.hud.info_labels.push_back((label, time));
+            }
+        }
         // The HUD's per-frame state: the weapon-name timer, the crouch-icon timer, the pickup messages
         // (`Text_UpdateMsg` 0x1b11d8 runs from the HUD/status-pane update at frame rate).
         self.hud_tick();
