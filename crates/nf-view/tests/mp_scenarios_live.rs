@@ -301,6 +301,9 @@ fn a_scenario_object_desync_is_detected() {
     let r = row(None, 2);
     let [(sa, la), (sb, lb)] = p.sims();
     assert_ne!(machine(sa, la, &r), machine(sb, lb, &r), "a flag-counter difference shows in the hash");
+    // release the pair before the next load — four live arena scenes overflow this sandbox
+    // (memory hygiene only; the asserts are unchanged)
+    drop(p);
     // and a team score
     let Some(mut q) = start(settings(scenario::TEAM_DEATHMATCH, 5, -1, [0, 1])) else { return };
     q.b.sim.as_mut().unwrap().mp.as_mut().unwrap().game.team_scores[1] = 1.0;
@@ -530,13 +533,16 @@ fn goldeneye_online() {
     let spawns: Vec<[f32; 3]> = p.m().objects.goldeneye.iter().flatten().map(|r| [r.matrix[3][0], r.matrix[3][1], r.matrix[3][2]]).collect();
     let park = far_from(&p, &spawns, 0);
     place(&mut p, 0, park, 0.0);
+    // the strike's timer already ran while the carrier parked [M :1053-1055 the state-3 walk] —
+    // the flight the loop sees is GE_STRIKE_FRAMES minus the timer's head start
+    let started = p.m().objects_rt.ge_strike_timer as u32;
     let mut flight = 0u32;
     while p.m().game.team_scores[0] == 0.0 {
         tick(&mut p, &row(None, 2));
         flight += 1;
         assert!(flight <= nf_game::mp::rules::GE_STRIKE_FRAMES as u32 + 1, "the strike lands");
     }
-    assert!(flight + 2 >= nf_game::mp::rules::GE_STRIKE_FRAMES as u32, "after the flight time ({flight} ticks)");
+    assert!(flight + started + 2 >= nf_game::mp::rules::GE_STRIKE_FRAMES as u32, "after the flight time ({flight} ticks, {started} already run)");
     let m = p.m();
     assert_eq!(m.game.team_scores, [1.0, 0.0], "the strike scores the opposite team");
     assert_eq!(m.game.slots[1].deaths, 1, "the target died");
@@ -674,11 +680,11 @@ fn a_rotated_flag_base_takes_by_the_game_sphere() {
     assert_eq!((f.state, f.carrier), (1, Some(0)), "the game-law contact takes the flag");
 
     // sister: reach·0.95 from the UNROTATED centre (pos + the raw local centre), on the side
-    // away from the rotated centre — inside the old stand-in's sphere, outside the game's.
+    // AWAY from the rotated centre — inside the old stand-in's sphere, outside the game's.
     let mut m2 = rotated_flag_match();
     let (pos2, off2, reach2) = flag_sphere(&m2);
     let old_centre = [pos2[0] + 2.0, pos2[1] + 0.25, pos2[2]];
-    let away = [off2[0] - 2.0, 0.0, off2[2]];
+    let away = [2.0 - off2[0], 0.0, -off2[2]];
     let l = (away[0] * away[0] + away[2] * away[2]).sqrt().max(1e-6);
     let dir = [away[0] / l, 0.0, away[2] / l];
     let mut rng2 = nf_game::drone::Rng::new(1);
@@ -753,7 +759,7 @@ fn the_real_rotated_flag_base_takes_by_the_game_sphere() {
         let f = m2.objects_rt.flags[1].as_ref().unwrap();
         (f.pos, f.bounds.unwrap().centre)
     };
-    let away = [off[0] - old2[0], 0.0, off[2] - old2[2]];
+    let away = [old2[0] - off[0], 0.0, old2[2] - off[2]];
     let l = (away[0] * away[0] + away[2] * away[2]).max(1e-8).sqrt();
     let dir = [away[0] / l, 0.0, away[2] / l];
     let mut rng2 = nf_game::drone::Rng::new(1);
