@@ -1521,7 +1521,7 @@ mod cloud_tests {
                     }
                     let body = String::from_utf8_lossy(&body).trim().to_string();
                     let ip = st.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
-                    let (status, json) = svc.lock().unwrap().handle(&method, &target, &ip, (!body.is_empty()).then_some(body.as_str()));
+                    let (status, json) = handle(&mut svc.lock().unwrap(), &method, &target, &ip, (!body.is_empty()).then_some(body.as_str()));
                     let resp = format!("HTTP/1.1 {status} S\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", json.len(), json);
                     let _ = st.write_all(resp.as_bytes());
                     let _ = st.flush();
@@ -1566,6 +1566,7 @@ mod cloud_tests {
         let want_note = format!("Looking up {code} on the lobby service...");
         assert_eq!(joiner.borrow().join_code_note().as_deref(), Some(want_note.as_str()));
         wait_until(|| {
+            host.borrow_mut().poll();
             joiner.borrow_mut().poll();
             joiner.borrow().link() == MpNetLink::Connected
         });
