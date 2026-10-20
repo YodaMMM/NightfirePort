@@ -388,6 +388,12 @@ pub struct MpSlot {
     /// filters read [M 0x1830e0:66-75] (*Deviation*: the port's players have no BLData pipeline
     /// yet, so the death path is a flag).
     pub dead: bool,
+    /// mp-hitby-contacts: the body's spawn stamp — the port's `obj+0xEC`, written with the frame
+    /// counter at object init (`control_init_object` 0x134630:15), every respawn (`MP_ReSpawn`
+    /// 0x185368:90) and the bot's spawn (`BOT_respawn` 0x124e38:91) [M]. `MP_HitBy` rejects a body
+    /// while `|GameState+0x52 − obj+0xEC| < 4` [M 0x1830e0:36-39] — the port's counter is
+    /// [`MpMatch::tick`].
+    pub spawn_tick: u32,
 }
 
 /// `MPGame` @0x2a4980 (0x1d0 bytes) — the live match state [M atlas §2; the writes in
@@ -470,6 +476,7 @@ impl MpGame {
                 streak: 0,
                 status_bits: 0,
                 dead: false,
+                spawn_tick: 0,
             }),
             team_scores: [0.0; 2],
             state: 0,
@@ -528,6 +535,12 @@ pub struct MpMatch {
     /// (`base(PickupMatrix[set][0])`, `clip_size·2`) [M]; the loader fills it from the weapon
     /// table (`equip::bot_start_weapon`). None = the brain's own P2K default.
     pub bot_start: Option<(u8, i16)>,
+    /// mp-hitby-contacts: the match's frame counter — the port's `GameState+0x52` stand-in, the
+    /// counter `MP_HitBy`'s spawn window reads against `obj+0xEC` [M 0x1830e0:36-39]. The game's
+    /// counter runs from boot; the port's starts at the match creation and advances once per
+    /// [`MpMatch::update_objects`] (the fixed 60 Hz) — only differences inside the 4-frame window
+    /// read it [S alignment]. Zero on the struct literal path.
+    pub tick: u32,
 }
 
 /// One MP bot: the ported brain (`BOT_vars` stand-in) plus the per-slot bookkeeping the match
@@ -596,6 +609,7 @@ impl MpMatch {
             kill_msgs: Vec::new(),
             bots: Vec::new(),
             bot_start: None,
+            tick: 0,
         }
     }
 
@@ -745,6 +759,31 @@ impl MpMatch {
         }
     }
 
+    /// `RotMatrix` 0x1e2368 — the placement's rotation vector through the game's matrix build:
+    /// the two `PS2Sinf3` sine lanes per axis pair [M 0x1e2368:28-31] and the row products of the
+    /// decompile's nine stores [M 0x1e2368:32-40]. The sines go through the port's `PS2Sinf` lane
+    /// (`crate::trig::sinf` — the pickup-spin precedent, G-046); `PS2Sinf3` 0x11fc20 is the
+    /// 3-lane variant of the same reduce+polynomial [S the lane identity for non-special angles —
+    /// the 90° placements the tests use are exact].
+    pub fn rot_matrix(rot: [f32; 3]) -> [[f32; 4]; 4] {
+        use crate::trig::{cosf, sinf};
+        let (sx, cx) = (sinf(rot[0]), cosf(rot[0]));
+        let (sy, cy) = (sinf(rot[1]), cosf(rot[1]));
+        let (sz, cz) = (sinf(rot[2]), cosf(rot[2]));
+        // `param_2[k]` of the decompile — row-major, translation row zeroed (`Mat_SetTrans` fills it).
+        let mut m = [[0.0f32; 4]; 4];
+        m[0][0] = cy * cz;
+        m[0][1] = sx * sy * cz + cx * sz;
+        m[0][2] = sx * sz - cx * sy * cz;
+        m[1][0] = -cy * sz;
+        m[1][1] = cx * cz - sx * sy * sz;
+        m[1][2] = sx * cz + cx * sy * sz;
+        m[2][0] = sy;
+        m[2][1] = -sx * cy;
+        m[2][2] = cx * cy;
+        m
+    }
+
     /// `MP_RegisterMPObject` 0x185990 (the placement 0x26 hook): the dispatch on the placement's
     /// param 0 (the MP object type 0..9), each type gated on its scenario and capped at 8; the
     /// protection site swaps the config's +0x34 ↔ +0x40 words first [M 0x185990:133-135]. The
@@ -757,11 +796,19 @@ impl MpMatch {
     /// mp-scenarios-online: [`MpMatch::register_mp_object`] with the placement model's bounds (the
     /// live load passes the placement hashcode's `MapObject` centre/radius/min/max — the game's
     /// object keeps the celglist at `obj+0xD8` [M `MP_CreateObject` 0x185de8:118]), so the
-    /// scenario objects get their contact sphere and the hill its box.
+    /// scenario objects get their contact sphere and the hill its box. mp-hitby-contacts: the
+    /// bounds' `sphere_off` is the local sphere centre through the placement's rotation —
+    /// `Control_BuildWorldSph` 0x133070:25-36's row products against `RotMatrix` 0x1e2368's rows
+    /// [M] — so the contact sphere lands where the game's does.
     pub fn register_mp_object_bounds(&mut self, pos: [f32; 3], facing: [f32; 3], mp_type: u32, config: [u32; 7], cel: u32, bounds: Option<MpObjBounds>) {
         if self.settings.master == 0 {
             return; // the dispatch's own gate [M 0x1d04f0 case 0x26]
         }
+        let bounds = bounds.map(|mut b| {
+            let m = Self::rot_matrix(facing);
+            b.sphere_off = [0, 1, 2].map(|k| b.centre[0] * m[0][k] + b.centre[1] * m[1][k] + b.centre[2] * m[2][k]);
+            b
+        });
         // RotMatrix(facing) + Mat_SetTrans(pos): the placement matrix. The port stores the
         // translation and facing words (the full matrix build is the renderer's; phase 1 stores).
         let matrix = [
@@ -871,6 +918,14 @@ impl MpMatch {
         self.settings.total_players = (humans + bots) as u32;
         self.game.pause_stamp = -1.0; // 0xbf800000 [M 0x183a50:206]
         self.settings.started = true; // [M 0x183a50:207]
+        // mp-hitby-contacts: every body's spawn stamp — the game's `control_init_object`
+        // 0x134630:15 writes `obj+0xEC = GameState+0x52` at the Player_Init creation, the same
+        // start frame as these picks [S the port's frame alignment]. The window that stamp opens
+        // is `MP_HitBy`'s own [M 0x1830e0:36-39].
+        let now = self.tick;
+        for s in &mut self.game.slots {
+            s.spawn_tick = now;
+        }
     }
 
     /// Registers a player's slot (the port's `Player_Init` link: `MPGame + slot·0x30 + 0x1c = obj`
