@@ -237,7 +237,13 @@ fn the_hint_bar_draws_at_the_pane_rect_y113() {
     let pix = |ndc_y: f32| (1.0 - ndc_y) * (448.0 / 2.0);
     let ys: Vec<f32> = f.v.iter()
         .filter(|v| v.uv[0] >= 184.0 / 256.0 && v.uv[0] <= 196.0 / 256.0 && v.uv[1] <= 56.0 / 256.0)
-        .map(|v| pix(v.p[1])).collect();
+        .map(|v| pix(v.p[1]))
+        // The objective banner draws the same sheet column at the top of the screen (hud.rs: the
+        // banner's middle u 190 / caps u 185, 191) — and a fresh 07000008 load announces the queued
+        // objectives in its first ticks [M Mission_MonitorObjectives 0x1827d8:41-54; L the
+        // objectives-0b-start PCSX2 frames], so at tick 40 it is up. The INFO bar is the pane at
+        // y 113; the banner's quads (y < 100) are not part of this measurement.
+        .filter(|&y| y >= 100.0).collect();
     assert!(ys.len() >= 4, "the info bar draws (found {} sheet-column vertices)", ys.len());
     let ymin = ys.iter().cloned().fold(f32::INFINITY, f32::min);
     let ymax = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
