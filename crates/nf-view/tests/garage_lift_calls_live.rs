@@ -199,5 +199,8 @@ fn without_the_call_the_lift_stays_parked() {
     assert!((cab[3][1] + 368.19).abs() < 0.05, "the cab stayed parked at the lobby deck [D t0 keys; L probe]");
     let door = ent_near(sim, (SCRIPT_22, 7), 0x0200_06a8, [-2.22, -375.92, 26.32]).expect("the car-park door");
     assert!((door[3][0] + 2.22).abs() < 0.02, "the outer door never moved (x −2.22) [D t0 key]");
-    assert!(!sim.drones.channels.on(0x39) && !sim.drones.channels.on(0x61), "no channels moved [M out 0]");
+    // The lift writes no channel (out 0). Ch 0x61 is not the lift's: idling 1200 ticks beside the
+    // security-room panel, a guard raises the alarm — the game does that too (774: fresh-boot PCSX2,
+    // Bond at the panel, a guard raised ch 0x61 within seconds [L 2026-10-17]; 774b's rule).
+    assert!(!sim.drones.channels.on(0x39), "no channels moved [M out 0]");
 }
