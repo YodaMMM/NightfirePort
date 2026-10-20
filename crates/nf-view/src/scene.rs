@@ -9233,6 +9233,18 @@ impl Sim {
         self.drones.health.health = hp;
         self.drones.death = nf_game::death::Death::default();
         m.set_slot(0, self.bond.pos);
+        // mp-respawn-ammo: `MP_ReSpawn`'s human arm re-runs `MP_EquipPlayer` 0x185368:74 — the
+        // inventory is wiped and the set's spawn kit re-granted (`clip_size·2` rounds [M
+        // 0x1855f8:26-29]); the death sequence had left the fists 0x47 [M 0x190810:61] and the
+        // spent rounds. The online path re-equips the same way in `step_net_combat`.
+        self.mp_equip_local();
+        // mp-shot-gate: the shared gate re-seeds with the same equip (the settings clone keeps
+        // the borrow split) — the hashed rounds must agree on every machine [M 0x185368:74].
+        let settings = self.mp.as_ref().map(|m| m.settings.clone());
+        if let Some(s) = settings {
+            let lf = |w: u8| self.mp_weapon_loaded.get(w as usize).copied().unwrap_or(true);
+            self.mp_combat.gate_equip(0, &s, &self.weapons, lf);
+        }
     }
 
     /// mp-scenarios-online (agent6): the match -> body half of the scenario rules, run every tick
@@ -9253,6 +9265,7 @@ impl Sim {
         let frame = self.drones.frame;
         let local = self.mp_local_slot;
         let mut restart_equip = false;
+        let mut restart_slots: Vec<usize> = Vec::new();
         let Some(m) = self.mp.as_mut() else { return };
         if std::mem::take(&mut m.game.restart_pending) {
             let humans = (m.settings.human_count as usize).min(nf_net::MAX_AGENTS);
@@ -9260,6 +9273,7 @@ impl Sim {
                 let has_body = slot == local || self.mp_bonds[slot].is_some();
                 if !has_body || m.game.slots[slot].pos.is_none() { continue; }
                 let Some((sp_idx, hp)) = m.mp_respawn(slot, &mut self.drones.rng) else { continue };
+                restart_slots.push(slot);
                 let sp = m.spawns.points[sp_idx as usize];
                 let nb = nf_game::player::Bond::stand_at(&self.world, [sp.pos[0], sp.pos[1], sp.pos[2]], sp.facing[1]);
                 m.set_slot(slot, nb.pos);
@@ -9269,8 +9283,11 @@ impl Sim {
                     self.drones.health.health = hp;
                     if was_dead {
                         self.drones.death = nf_game::death::Death::default();
-                        restart_equip = true;
                     }
+                    // mp-respawn-ammo: the restart's `MP_ReSpawn` re-arms EVERY present human —
+                    // the full arm keys on obj+0xff ∈ {3, 0x12} and 3 is the live state too
+                    // [M 0x185368:74, 0x183fc0:55-75], so a surviving local re-equips as well.
+                    restart_equip = true;
                 } else {
                     self.mp_bonds[slot] = Some(nb);
                 }
@@ -9307,8 +9324,19 @@ impl Sim {
         } else if m.game.slots[0].dead && !self.drones.death.active && self.drones.health.health > 0.0 {
             self.drones.health.health = 0.0;
         }
-        // The restart's `MP_ReSpawn` re-arms a dead local human (`MP_EquipPlayer` [M 0x185368:74]).
+        // The restart's `MP_ReSpawn` re-arms every present human (`MP_EquipPlayer` [M
+        // 0x183fc0:55-75 → 0x185368:74]) and the shared gates re-seed the same way — the hashed
+        // rounds must agree on every machine.
         if restart_equip { self.mp_equip_local(); }
+        if !restart_slots.is_empty() {
+            let settings = self.mp.as_ref().map(|m| m.settings.clone());
+            if let Some(s) = settings {
+                let lf = |w: u8| self.mp_weapon_loaded.get(w as usize).copied().unwrap_or(true);
+                for slot in restart_slots {
+                    self.mp_combat.gate_equip(slot, &s, &self.weapons, lf);
+                }
+            }
+        }
     }
 
     pub fn step_mp_bots(&mut self) {
