@@ -2229,6 +2229,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let hud_owned = shot_hud(scene, proj_aspect, menu);
     let hud = &hud_owned;
     let movie_arg = movie.map(|(w, h, rgba)| (*w, *h, rgba.as_slice()));
+    r.set_shards(&queue, &scene.shard_draws());
     let mut enc = r.render(&device, &queue, &view, &depth, vp, vp_rot, cam.pos.to_array(), time as u32, &snow, hud, movie_arg, if cut { Some(band) } else { None });
     let row = (4 * w).next_multiple_of(256);
     let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
@@ -5207,6 +5208,7 @@ impl App {
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
                 let fp_enc = std::time::Instant::now();
+                g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
                 let fp_sub = std::time::Instant::now();
                 frame_part(5, fp_sub - fp_enc);

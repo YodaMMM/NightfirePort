@@ -5324,6 +5324,9 @@ pub struct Scene {
     pub fog: Option<([u8; 3], f32)>,
     /// The HUD's textures by hash (docs/systems/hud.md), from any map of the archive, and its tables from ACTION.ELF.
     pub hud_textures: Vec<(u32, TextureImage)>,
+    /// break-shards draw: a kind-2 breakable's face draw word (its batch texture) → the index into
+    /// `textures` of `(the pane object's map, word)`, so a shard binds the pane's own texture.
+    pub shard_tex: HashMap<u32, usize>,
     /// The pause/fail menus' burning woman (`psiDecompressWoman` 0x1202a8): decoded into 0x030000db's HUD texture
     /// while a paused page shows it. Set by the loader from the level archive's kind-16 "woman" entry.
     pub woman: Option<crate::woman::Woman>,
@@ -5859,6 +5862,31 @@ fn drone_height(hip: f32) -> f32 {
 }
 
 impl Scene {
+    /// break-shards draw: the live glass shards as world triangles grouped by texture — `(index into
+    /// textures, vertices)`. `DrawAllShards` 0x12bef8 draws every shard with `lifetime > 0` through
+    /// `psiDrawShard` 0x122ae8: the shard's matrix (rotation from `rot`, translation `pos`, scale 1
+    /// [M 0x122ae8: rows' w zeroed, +0x3c = 1.0]), the face's texture (`GetTextureFromDMA` of the draw
+    /// word), and the alpha `min(lifetime·FRAME_RATE·10, 255)` through `psiSetTweakA` [M 0x12bef8:50-56].
+    /// The tweak scales the face's own vertex alpha (255 → the pane as it was) [S: the tweak's exact
+    /// use in the shard microcode is unread]. A shard still in its peel delay draws at its spawn spot.
+    pub fn shard_draws(&self) -> Vec<(usize, Vec<Vertex>)> {
+        let Some(sim) = self.sim.as_ref() else { return Vec::new() };
+        let sh = &sim.drones.breaks.shatter;
+        let mut groups: Vec<(usize, Vec<Vertex>)> = Vec::new();
+        for s in sh.shards.iter().filter(|s| s.lifetime > 0.0) {
+            let Some(&ti) = self.shard_tex.get(&s.material) else { continue };
+            let a = (sh.shard_alpha(s) / 255.0).clamp(0.0, 1.0);
+            let m = nf_formats::placement::object_matrix(s.rot, s.pos);
+            let g = match groups.iter().position(|(t, _)| *t == ti) { Some(k) => k, None => { groups.push((ti, Vec::new())); groups.len() - 1 } };
+            for v in &s.verts {
+                let p = v.pos;
+                let w = [0, 1, 2].map(|c| m[0][c] * p[0] + m[1][c] * p[1] + m[2][c] * p[2] + m[3][c]);
+                groups[g].1.push(Vertex { pos: w, uv: v.uv, rgba: [v.rgba[0].clamp(0.0, 255.0) as u8, v.rgba[1].clamp(0.0, 255.0) as u8, v.rgba[2].clamp(0.0, 255.0) as u8, (v.rgba[3] * a).clamp(0.0, 255.0) as u8], nrm: [0; 4] });
+            }
+        }
+        groups
+    }
+
     /// The script player's overlay (fix-script-commands): the fade, the letterbox borders and the
     /// op-0x14 sprites — see `hud::script_overlay`. Appended to the HUD frame OUTSIDE the cut-scene
     /// gate (the game draws these over the blanked HUD). fix-grenade-types: the flashbang whiteout
@@ -7333,7 +7361,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // non-07000005 level would explain "ghostly white": texture × white vertex × GAIN → white.
         let untextured = materials.iter().filter(|m| m.key.is_none()).count();
         if untextured > 0 { eprintln!("render: {untextured} of {} materials have no texture (white fallback)", materials.len()); }
-        let textures = keys.into_iter().map(|key| {
+        let textures: Vec<TextureImage> = keys.into_iter().map(|key| {
             TextureImage::from_texture(key.0, &level.maps[key.0].textures[key.1 as usize])
         }).collect();
         let mut hud_textures: Vec<(u32, TextureImage)> = crate::hud::TEXTURES.iter().chain(crate::menu::MENU_TEXTURES.iter()).chain(crate::menu::mp_textures().iter()).filter_map(|&h| level.maps.iter().enumerate().find_map(|(mi, m)| m.textures.iter().find(|t| t.hashcode == h).map(|t| {
@@ -7682,7 +7710,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             eprintln!("[mp-props] gunimps {g} turrets {t:?} destroy {dz} drawn: guns {} destroy {} vehicles {}",
                 misc_drawn.get(&0x34).copied().unwrap_or(0), misc_drawn.get(&0xe1).copied().unwrap_or(0), misc_drawn.get(&0xda).copied().unwrap_or(0));
         }
-        Scene { cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
+        // break-shards draw: each glass pane's face words → the pane map's loaded texture.
+        let mut shard_tex: HashMap<u32, usize> = HashMap::new();
+        if let (Some(sm), Some(main)) = (sim.as_ref(), level.main_map()) {
+            for b in sm.drones.breaks.list.iter().filter(|b| b.kind == 2) {
+                let Some(p) = level.maps[main].placements.get(b.placement) else { continue };
+                let map = if p.by_hash() { level.by_hash.get(&p.hashcode).map_or(main, |&(m, _)| m) } else { main };
+                for g in &b.src.glass {
+                    if let Some(i) = textures.iter().position(|t: &TextureImage| t.key == (map, g.material)) { shard_tex.entry(g.material).or_insert(i); }
+                }
+            }
+        }
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
