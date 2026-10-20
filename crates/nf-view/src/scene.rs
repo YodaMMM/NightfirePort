@@ -10221,7 +10221,7 @@ impl Sim {
             if !row[slot].use_key || self.mp_dead_ticks[slot] > 0 { continue; }
             let Some(b) = self.net_body(slot) else { continue };
             let (head, look) = (b.head(), b.look());
-            let (evs, _) = self.drones.doors.player_use(head, look, &mut self.drones.channels, frame);
+            let (evs, _) = self.drones.doors.player_use(head, look, &mut self.drones.channels, frame, &self.world);
             for (id, pos) in evs { self.drones.audio.play3d(id as u32, pos, None); }
             self.drones.net_use_triggers.push((head, look));
             let mut best: Option<(f32, usize)> = None;

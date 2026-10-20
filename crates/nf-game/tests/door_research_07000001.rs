@@ -95,7 +95,7 @@ fn door_research_07000001() {
     for i in 0..doors.list.len() {
         let sph = doors.list[i].sph;
         let head = [sph.0[0], sph.0[1], sph.0[2] - 1.0];
-        let _ = doors.player_use(head, [0.0, 0.0, 1.0], &mut ch, 0);
+        let _ = doors.player_use(head, [0.0, 0.0, 1.0], &mut ch, 0, &world);
     }
     doors.calc();
     // Tick N times with no actor nearby — far away.
@@ -133,10 +133,15 @@ fn door_autoclose_blocked_diagnostic_07000001() {
     });
     let mut ch = Channels::default();
 
+    // The mesh use pick (`fix-doors-remainder`) needs the live collision world, built exactly
+    // like fn 1 above does (instances(true): cels only — door collision enters via set_dynamic).
+    let (instances, _) = level.instances(true);
+    let world = CollisionWorld::build(&level, &instances);
+
     // Open door 0 (placement 13, SlidingDoor) by activating it from the front.
     let sph0 = doors.list[0].sph;
     let head = [sph0.0[0], sph0.0[1], sph0.0[2] - 1.0];
-    let _ = doors.player_use(head, [0.0, 0.0, 1.0], &mut ch, 0);
+    let _ = doors.player_use(head, [0.0, 0.0, 1.0], &mut ch, 0, &world);
     doors.calc();
 
     // SCENARIO 1 — Bond stands 0.5 units from door 0's sphere centre (inside the

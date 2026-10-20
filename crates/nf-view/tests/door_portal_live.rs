@@ -169,18 +169,36 @@ fn a_shut_portalled_door_hides_the_room_behind_it_on_07000001() {
         assert!(!vis_i[dest_i], "door {di}'s shut portal hides cell {dest_i} from cell {cell_i}");
         eprintln!("[door{di}] eye cell {cell_i} -> dest {dest_i} hidden while shut");
     }
-    // OPEN: the real use path — `Player_Activate`'s door arm (head one unit in front of the door,
-    // look at it) → `Door_Activate` → `Door_Interp` to state OPEN.
+    // OPEN: the real use path — `Player_Activate`'s door arm [M 0x1a5170:100-110]: a radius-1.0
+    // sphere at `head + Mat_GetDir·1.0`, and every hit with `obj+0xff == 0x1c` runs
+    // `Door_Activate(obj, player, 1)` [:113-133]. The pick tests the door's collision MESH
+    // (doors-remainder's mesh pick), so the stand spot must sit inside the sphere's reach: 1.2
+    // out on the through-axis, square-on — the sphere overlaps the leaf by ~0.8 and opens
+    // (doors_remainder_live's T1 pin [M 0x1a5170:113-133]). The portal-edge `eye` the shut
+    // asserts above stand on is NOT in reach for the mesh pick (the sphere misses the leaf by
+    // ~0.05 there) — that stand was tuned for the old placement-distance stand-in, and the game
+    // opens from a step-in toward the door, not from the portal edge.
     let (head, look) = {
         let d = &scene.sim.as_ref().unwrap().drones.doors.list[0];
-        let l = [d.pos[0] - eye[0], 0.0, d.pos[2] - eye[2]];
+        let off = [d.sph.0[0] - d.pos[0], 0.0, d.sph.0[2] - d.pos[2]];
+        let n = |v: [f32; 3]| { let l = (v[0] * v[0] + v[2] * v[2]).sqrt().max(1e-6); [v[0] / l, 0.0, v[2] / l] };
+        let r0 = n([d.matrix[0][0], 0.0, d.matrix[0][2]]);
+        let r2 = n([d.matrix[2][0], 0.0, d.matrix[2][2]]);
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[2] * b[2];
+        // The through-axis: the horizontal matrix row the leaf does NOT span (the sphere centre
+        // sits offset from the placement along the leaf span — doors_remainder_live's derivation).
+        let through = if dot(off, r0).abs() >= dot(off, r2).abs() { r2 } else { r0 };
+        // Stand on the eye's side so the swing opens away from the viewer, as before.
+        let side = if (eye[0] - d.sph.0[0]) * through[0] + (eye[2] - d.sph.0[2]) * through[2] < 0.0 { -1.0 } else { 1.0 };
+        let stand = [d.sph.0[0] + through[0] * 1.2 * side, d.sph.0[1], d.sph.0[2] + through[2] * 1.2 * side];
+        let l = [d.sph.0[0] - stand[0], 0.0, d.sph.0[2] - stand[2]];
         let len = (l[0] * l[0] + l[2] * l[2]).sqrt().max(1e-4);
         let look = [l[0] / len, 0.0, l[2] / len];
-        ([eye[0], d.pos[1] + 1.1, eye[2]], look)
+        ([stand[0], d.sph.0[1] + 1.1, stand[2]], look)
     };
     {
         let s = scene.sim.as_mut().unwrap();
-        let (snd, hits) = s.drones.doors.player_use(head, look, &mut s.drones.channels, s.drones.frame);
+        let (snd, hits) = s.drones.doors.player_use(head, look, &mut s.drones.channels, s.drones.frame, &s.world);
         eprintln!("[door0] use hits {hits}, sounds {:?}", snd.iter().map(|s| s.0).collect::<Vec<_>>());
         assert!(hits >= 1, "the use sphere meets the door");
     }
