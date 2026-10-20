@@ -8017,6 +8017,26 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 }
             }
             scroll_bar(&mut h, 346.0, col_top - 4.0, col_h, first, vis, rows.len());
+            // The focused setting's own one-line description, as the couch pages show it (`opt_desc` by the couch
+            // page's control id) — the user, 2026-10-19: "no fucking clue what enviromods mean".
+            if let Some(r) = rows.get(focus) {
+                use crate::mp_lobby::MpLobbyRowId as R;
+                let m = &fe.mp_one;
+                let cv: Option<(u32, i32)> = match r.id {
+                    R::FriendlyFire => Some((0x1000_0081, m.friendly_fire as i32)),
+                    R::WeaponSet => Some((0x1000_0084, m.weapon_set as i32)),
+                    R::PlayerMod(0) => Some((0x1000_0080, m.player_mods[0] as i32)),
+                    R::PlayerMod(_) => Some((0x1000_008c, m.player_mods[1] as i32)),
+                    R::Radar => Some((0x1000_008d, m.radar as i32)),
+                    R::Enviro(i) => Some(([0x1000_00a2, 0x1000_009f, 0x1000_019b, 0x1000_0227, 0x1000_0228][(i as usize).min(4)], m.envmods[(i as usize).min(4)] as i32)),
+                    _ => None,
+                };
+                if let Some(text) = cv.and_then(|(c, v)| opt_desc(c, v)).map(bind).filter(|s| !s.is_empty()) {
+                    for (n, line) in wrap_px(&text, font, mx(560.0)).iter().take(2).enumerate() {
+                        centred(&mut h, font, -2, line, mx(320.0), my(362.0 + n as f32 * 13.0), cream, true, 0.9);
+                    }
+                }
+            }
             // The players column.
             left_text(&mut h, font, "Players", mx(366.0), my(70.0), cream, true, 0.95);
             let team_game = fe.mp_one.team_game();

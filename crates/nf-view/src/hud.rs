@@ -268,7 +268,11 @@ impl Hud<'_> {
                 let gx = x0 + p.x * scale + dx;
                 let gw = g.w as f32 * scale;
                 let gh = g.h as f32 * scale;
-                self.quad(anchor, layer, tex, 0, gx, p.y + dx, gw, gh, [g.u as f32, g.v as f32, g.w as f32, g.h as f32], (false, false), col);
+                // The glyph's own offset from the line (p.y − y, native units) scales with the text — it was left at
+                // native size, so below scale 1 the letters jumped up and down within a word (the user, 2026-10-19:
+                // "all of the rows arent uniform with their text"; the scoreboard's "Pla yer", "Ga lore").
+                let gy = y + (p.y - y) * scale;
+                self.quad(anchor, layer, tex, 0, gx, gy + dx, gw, gh, [g.u as f32, g.v as f32, g.w as f32, g.h as f32], (false, false), col);
             }
         }
     }
