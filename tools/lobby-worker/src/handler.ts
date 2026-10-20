@@ -84,6 +84,15 @@ function badReq(msg) { return resp(400, { error: msg }); }
 
 const LAN_RE = /^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$/;
 
+/** The body's requested code, normalized: 4 alphabet symbols (case-insensitive) or "" when absent /
+ *  malformed (an ask is a preference — it is never an error). */
+export function askedCode(raw) {
+  if (typeof raw !== "string" || raw.length !== CODE_LEN) return "";
+  const up = raw.toUpperCase();
+  for (const c of up) if (!ALPHABET.includes(c)) return "";
+  return up;
+}
+
 /** Validates and normalizes the POST /v1/host body. Returns {ok, body|error}. */
 export function parseHostBody(raw) {
   let b;
@@ -97,7 +106,8 @@ export function parseHostBody(raw) {
   if (typeof b.port !== "number" || !Number.isInteger(b.port) || b.port < 1 || b.port > 65535) return { ok: false, error: "bad port" };
   if (b.lan !== undefined && b.lan !== "" && (typeof b.lan !== "string" || !LAN_RE.test(b.lan))) return { ok: false, error: "bad lan" };
   return { ok: true, body: { version: b.version, name: filterName(b.name), map: b.map, scenario: b.scenario,
-    players: b.players, max: b.max, public: b.public !== false, lan: b.lan || "", port: b.port } };
+    players: b.players, max: b.max, public: b.public !== false, lan: b.lan || "", port: b.port,
+    code: askedCode(b.code) } };
 }
 
 function publicRow(e) {
@@ -119,9 +129,24 @@ export function handle(ctx, store) {
     const key = `${ip}:${p.body.port}`;
     let code = store.entries.get(key)?.code;
     if (!code) {
-      if ([...store.entries.values()].filter((e) => e.ip === ip).length >= MAX_ENTRIES_PER_IP)
-        return resp(429, { error: "too many lobbies from this address" });
-      code = assignCode(store);
+      // The code is keyed to ip:port, and a host's dial port can change mid-session (the STUN
+      // mapping lands around the lobby → match hand-over). A new key must not mean a new code:
+      // the client re-sends the code it holds (net-cloud-code-stable), and the same host's entry
+      // MOVES — one entry, one code, for the whole session — while any other address's code stays
+      // untouchable and a malformed ask just falls through to a fresh one.
+      const asked = p.body.code;
+      const ownerKey = asked ? store.codes.get(asked) : undefined;
+      if (ownerKey) {
+        const owner = store.entries.get(ownerKey);
+        if (owner && owner.ip === ip) { store.entries.delete(ownerKey); store.codes.delete(asked); }
+      }
+      if (asked && !store.codes.has(asked)) {
+        code = asked; // free (or just moved here): the session keeps its code
+      } else {
+        if ([...store.entries.values()].filter((e) => e.ip === ip).length >= MAX_ENTRIES_PER_IP)
+          return resp(429, { error: "too many lobbies from this address" });
+        code = assignCode(store);
+      }
     }
     store.entries.set(key, newEntry(key, code, p.body, ip, now));
     store.codes.set(code, key);

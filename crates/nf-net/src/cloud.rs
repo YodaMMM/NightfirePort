@@ -364,7 +364,10 @@ impl CloudHost {
     }
 
     /// Sets this refresh period's body (the next poll POSTs it). The same while refreshed = the same
-    /// entry = the same code (the service keys the entry by the requester's IP + our port) [S].
+    /// entry = the same code. When the dial port changes mid-session (the STUN-observed mapping lands
+    /// around the lobby → match hand-over) the key changes too — so the POST also carries the last
+    /// code this host holds, and the service moves the same host's entry to the new key instead of
+    /// assigning a new code (net-cloud-code-stable) [S].
     pub fn set_advert(&mut self, a: CloudAdvert) {
         self.advert = Some(a);
     }
@@ -401,9 +404,12 @@ impl CloudHost {
         }
         if self.inflight.is_none() && self.advert.is_some() {
             let a = self.advert.as_ref().expect("advert checked");
+            // The held code rides every register (null before the first answer): a port-change
+            // re-register must keep the session's code, not mint a new one [S net-cloud-code-stable].
+            let code_field = self.code.as_deref().map(json_str).unwrap_or_else(|| "null".to_string());
             let body = format!(
-                "{{\"version\":{},\"name\":{},\"map\":{},\"scenario\":{},\"players\":{},\"max\":{},\"public\":{},\"lan\":{},\"port\":{}}}",
-                json_str(&a.version), json_str(&a.name), a.map, a.scenario, a.players, a.max_players, a.public, json_str(&a.lan), a.port);
+                "{{\"version\":{},\"name\":{},\"map\":{},\"scenario\":{},\"players\":{},\"max\":{},\"public\":{},\"lan\":{},\"port\":{},\"code\":{}}}",
+                json_str(&a.version), json_str(&a.name), a.map, a.scenario, a.players, a.max_players, a.public, json_str(&a.lan), a.port, code_field);
             let url = format!("{}/v1/host", self.url.trim_end_matches('/'));
             self.inflight = Some(spawn_http(HttpRequest { method: "POST", url, body: Some(body), max_secs: CLOUD_TIMEOUT_SECS }));
             self.advert = None; // one POST per period; the caller sets a fresh advert next period
