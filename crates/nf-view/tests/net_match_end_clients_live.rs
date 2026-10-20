@@ -482,9 +482,12 @@ fn a_host_departure_mid_match_is_still_host_left() {
     }
     // Catch-up (the main agent, 2026-10-19: this assert failed 1 run in 3 under load): every input up to tick 200 is
     // already submitted, but UDP delivery is asynchronous, so a step can leave a machine a tick behind. Pump until all
-    // three have run tick 200 (bounded), with no new submits.
+    // three have run tick 200 (bounded). A machine that fell behind in the loop never submitted the ticks it missed
+    // (`submit` sends the machine's CURRENT tick), so a machine below 200 submits its current tick here too — without
+    // that the others wait on it until the timeout (the 1-in-4 failure that survived the first fix).
     let t0 = std::time::Instant::now();
     while (mh.tick, m1.tick, m2.tick) != (200, 200, 200) && t0.elapsed() < Duration::from_secs(5) {
+        for m in [&mut mh, &mut m1, &mut m2] { if m.tick < 200 { m.submit(); } }
         mh.pump();
         m1.pump();
         m2.pump();
@@ -493,7 +496,7 @@ fn a_host_departure_mid_match_is_still_host_left() {
         m2.advance(&[]);
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert_eq!((mh.tick, m1.tick, m2.tick), (200, 200, 200), "all three ran the same ticks");
+    assert_eq!((mh.tick, m1.tick, m2.tick), (200, 200, 200), "all three ran the same ticks (host, c1, c2)");
     eprintln!("[sister] closing the host's session");
     mh.sess.0.borrow_mut().close();
     eprintln!("[sister] closed; waiting for the client's HostLeft");
