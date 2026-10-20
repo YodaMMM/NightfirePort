@@ -8882,7 +8882,19 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
 
     pub fn frame_lights(&self) -> nf_game::light::ResolvedLights {
         let Some(s) = self.sim.as_ref() else { return Default::default() };
-        s.drones.lights.resolve(&|i: u32| s.drones.searchlights.parts.get(i as usize).map(|p| p.pos).unwrap_or([0.0; 3]))
+        let mut r = s.drones.lights.resolve(&|i: u32| s.drones.searchlights.parts.get(i as usize).map(|p| p.pos).unwrap_or([0.0; 3]));
+        // A kind-2 record's psiLight node dies with its tracked spot part: the kill and break arms free
+        // the node (`psiLight_Delete` [M Searchlight_Update 0x1cb900:107,432]) and the port marks that as
+        // `part.light = None` — a tracked part without a node is an inactive light (the game's list no
+        // longer holds it, so it can never be picked).
+        for l in r.lights.iter_mut() {
+            if let Some(t) = l.track {
+                if let Some(p) = s.drones.searchlights.parts.get(t as usize) {
+                    if p.light.is_none() { l.active = false; }
+                }
+            }
+        }
+        r
     }
 
     /// One frame's palette and colour table for `skin_layout` (the GPU replacement for `posed_vertices`).

@@ -8535,8 +8535,12 @@ pub struct Drones {
     /// 0x1b2790; fix-06-alarm): the level's channel-gated emitters — 07000006's courtyard alarm
     /// siren (placement 702: ch 55 → the looped 2-D klaxon 329) lives here.
     pub sound_triggers: crate::sound::SoundTriggers,
-    /// Bond's bullet segments of this tick (`from`, `to`): the searchlights' break check (U-041 stand-in).
+    /// Bond's bullet segments of this tick (`from`, `to`): the draw paths and crate::useobj's 0x58 install.
     bullet_paths: Vec<([f32; 3], [f32; 3])>,
+    /// The same segments as the searchlights' class-5 contact feed (U-041 ported): each with the
+    /// HITTEST's damage float and pick mode `Collide_Update` redistributes onto the hit objects'
+    /// `obj+0xD0` lists [M 0x1ea398:160-215; Bullet_update 0x12e7b0's per-tick HITTEST writes].
+    sl_shots: Vec<crate::searchlight::Shot>,
     /// The mission layer (`Mission_Update` 0x182c60, docs/systems/mission.md). `inited` latches the
     /// per-level `Mission_Init` (0x182270, from `ResetMap_GameInit`) on this level's first tick.
     pub mission: crate::mission::Mission,
@@ -8765,7 +8769,7 @@ impl Drones {
             movie_request: None,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), props: Default::default(), breaks: Default::default(), break_kills: Vec::new(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             // fix-06-alarm (fields on their own lines — merge lesson 4).
             sound_triggers: Default::default(),
             // fix-0c-hatch-latches2: the per-tick player-bullet SS Operate contacts (see the field).
@@ -8992,7 +8996,10 @@ impl Drones {
         self.searchlights = crate::searchlight::Searchlights::create(&level.maps[m].placements, &mut self.rng, |p| {
             let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
                 else { level.maps[m].objects.get(p.index as usize) };
-            obj.map_or(([0.0; 3], [0.0; 3]), |o| (o.min, o.max))
+            // The gfx box (the spot ray's own-housing skip stand-in) and the glist bounding sphere
+            // (centre/radius — `Control_BuildWorldSph` 0x133070's +0x10/+0x1C, the bullet pick's world
+            // sphere [M]; the doors' `sph_centre` fields carry the same map-object values).
+            obj.map_or(([0.0; 3], [0.0; 3], [0.0; 3], 0.0), |o| (o.min, o.max, o.centre, o.radius))
         });
         // `Searchlight_Create`'s kind-2 light record (0x1cb4f8:150-172): white, radius 500, intensity 1.0,
         // kind 2, permanent. The node's position (+0x10) is the PLACEMENT position written before the
@@ -9738,6 +9745,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.player_impacts.clear();
         self.bullet_paths.clear();
         self.bullet_path_weapons.clear();
+        self.sl_shots.clear();
         // `Collide_Update` 0x1ea398's first loop clears every hit list at the head of the frame —
         // the fusebox wires' hit flags are per-tick only.
         for fb in &mut self.fuseboxes { fb.clear_hits(); }
@@ -9814,6 +9822,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let ray = [b.dir[0] * l, b.dir[1] * l, b.dir[2] * l];
             let end = [b.pos[0] + ray[0], b.pos[1] + ray[1], b.pos[2] + ray[2]];
             self.bullet_paths.push((b.pos, end));
+            // The searchlight contact feed (U-041 ported): the segment, the HITTEST's damage (the
+            // weapon's contact damage — `Bullet_update` 0x12e7b0's per-tick +0x90 write) and the pick
+            // mode (the slow-tick point arm when the raw step is under the 0.125 threshold — the
+            // bullet obj's 0.1 world radius floored at 0.25, halved [M 0x12e7b0 disasm
+            // 0x12f0c8-0x12f134]; the ids 0x2C-0x31/0x62/0x6D force the threshold 0, always segment).
+            let point = step < 0.125 && !matches!(b.weapon, 0x2c..=0x31 | 0x62 | 0x6d);
+            self.sl_shots.push(crate::searchlight::Shot {
+                from: b.pos, to: end,
+                damage: d.weapons.bullet_contact_damage(b.weapon),
+                segment: !point,
+            });
             // fix-0c-hatch-latches2: the flight segment's SS Operate contacts (bit 1) — the game's
             // bullet registers on every object its flight touches this tick, the death inclusive
             // [M 0x1a9df8:35-39 the class-5 bit; the contact list is the collision pass's product].
@@ -12093,7 +12112,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if what == 3 { let _pw = crate::prof::scope("ctl: kind 3");
                 // `Searchlight_Update` (docs/systems/world-objects.md): channels, sweep/tracking, the parts, the
                 // break check; its `Sound_Play3D` events (0xE5 relay, 0xE6 glass) enter the pool and the hearing list.
-                let evs = self.searchlights.update(d, player, &mut self.channels, index, &self.bullet_paths, &mut self.rng, frame);
+                let evs = self.searchlights.update(d, player, &mut self.channels, index, &self.sl_shots, &mut self.rng, frame);
                 for (id, pos) in evs {
                     match d.sfx {
                         Some(t) => { let h = t.get(id); self.play_sound_handle(pos, h); }

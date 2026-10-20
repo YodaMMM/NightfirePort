@@ -2,9 +2,13 @@
 //! `Searchlight_Update` 0x1cb900, ported from the disassembly [M] and checked against the live layout in
 //! `work/ee_start_05.bin` [L] (29 parts on 07000005: 7 mounts, 7 heads, 6 beams, 7 coronas, 2 spots).
 //!
-//! Not ported yet (G-033): the spot's dynamic light (illumination is renderer work), `Gas_Init` smoke for
-//! broken lights (no particle system; its 6 RNG draws per puff are therefore not consumed either), and the
-//! bullet child-list (`obj+0xD0`, U-041) — bullets are tested against the solid parts' boxes instead.
+//! The bullet contact path (U-041, docs/systems/searchlight-bullet.md): a flying bullet's HITTEST picks the
+//! head's world sphere each tick and the head's update breaks on a class-5 contact with damage > 0.0 [M].
+//!
+//! Not ported yet (G-033): the spot's dynamic light (illumination is renderer work) and `Gas_Init` smoke
+//! for broken lights (no particle system; its 6 RNG draws per puff are therefore not consumed either).
+//! `Control_NextLOD`'s damaged-model swap on kill/break (obj+0xD8 ← glist+0x40 [M 0x1cb900:138,454]) is
+//! visual — the port keeps the intact model (a renderer note for the main agent).
 
 use crate::drone::{Data, Player, Rng};
 use crate::trig::{angle_difference, atan2_approx, sinf, PI, TAU};
@@ -57,8 +61,16 @@ pub struct Part {
     pub light: Option<u32>,
     /// Coronas: the alpha byte (`obj+0x106`) and scale (`obj+0xE8`).
     pub alpha: u8, pub scale: f32,
-    /// Heads and mounts: the object's gfx box (bullet stand-in; the game's child-list path is U-041).
+    /// Heads and mounts: the object's gfx box (the spot ray's own-housing skip stand-in still uses it;
+    /// the bullet path tests the sphere below, U-041 ported).
     pub box_min: V3, pub box_max: V3,
+    /// The part's glist bounding sphere, LOCAL (`glist+0x10` centre / `+0x1C` radius — the map object's
+    /// `centre`/`radius` [D measured on AI_ShadowVolume: centre (0,1.5,0), radius 2.598 = the box half
+    /// diagonal]). `Control_BuildWorldSph` 0x133070 poses it: world centre = obj matrix · +0x10, radius
+    /// = +0x1C · |obj+0xE8| with obj+0xE8 = 1.0 from control_init_object 0x134630:17 [M] — the sphere
+    /// the flying bullet's pick tests (Collide_PickObj 0x1eae80 type 0x201) and what a bullet contact on
+    /// the head's `obj+0xD0` list is made of (U-041).
+    pub sph_centre: V3, pub sph_radius: f32,
     /// The placement translation BEFORE the kind-2 −10000 move — the psiLight node's static +0x10,
     /// the light's upload position for the part's whole life [M 0x1cb4f8:154-167 writes the node
     /// from obj+0x30 before the move; psiLight_SetLights 0x10e588 uploads node+0x10].
@@ -73,6 +85,22 @@ pub struct Part {
 #[derive(Clone, Debug, Default)]
 pub struct Searchlights {
     pub parts: Vec<Part>,
+}
+
+/// One flying bullet's per-tick pick, as `Collide_Update` sees it: the flight segment [from, to] (the
+/// HITTEST's +0x20/+0x30 — the game writes A = obj+0x30 and B = obj+0x30 + dir·step with the step
+/// clamped to the range and floored at 1.0 [M Bullet_update 0x12e7b0 tail, disasm 0x12efd8-0x12f188]),
+/// the contact damage the HITTEST carries (+0x90 = `weapon_data[w]+0x0C` with the id overrides [M],
+/// `WeaponData::bullet_contact_damage`), and the pick MODE (+0x94: 0x201 = the segment test, 0x101 =
+/// the point test the slow-tick arm takes when the raw step < 0.125 and the weapon id is not one of
+/// the always-segment ids 0x2C-0x31/0x62/0x6D [M 0x12e7b0 disasm 0x12f0c8-0x12f134]).
+pub struct Shot {
+    pub from: V3,
+    pub to: V3,
+    pub damage: f32,
+    /// True = the 0x201 segment pick; false = the 0x101 point pick at `from` with margin 0.25 + the
+    /// object's radius.
+    pub segment: bool,
 }
 
 /// `Searchlight_Create`'s part kinds for a placement list, in creation order (used by create and nf-view).
@@ -152,14 +180,15 @@ impl Searchlights {
     /// the shared stream, in this order [M, critical]. The linking walk sees the parts created so far (the cel
     /// list, newest first): a spot created before its head is moved −10000 by its own create and can never link
     /// (the measured orphan rule, L: spot 016e8ec0 on 07000005).
-    pub fn create(placements: &[Placement], rng: &mut Rng, bounds: impl Fn(&Placement) -> (V3, V3)) -> Searchlights {
+    pub fn create(placements: &[Placement], rng: &mut Rng,
+                  bounds: impl Fn(&Placement) -> (V3, V3, V3, f32)) -> Searchlights {
         let mut s = Searchlights::default();
         for i in part_placements(placements) {
             let p = &placements[i];
             let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
             let kind = param(0) as u8;
             let phase = rng.rand(480) as f32;
-            let (box_min, box_max) = bounds(p);
+            let (box_min, box_max, sph_centre, sph_radius) = bounds(p);
             let mut part = Part {
                 placement: i, kind, pos: p.translation, base_yaw: p.rotation[1],
                 on: param(1) as u8, off: param(2) as u8, alarm: param(3) as u8,
@@ -168,6 +197,7 @@ impl Searchlights {
                 state: if param(1) != 0 { 3 } else { 0 },
                 pitch: 0.0, yaw: p.rotation[1], links: [None; 5], killed: false,
                 light: None, alpha: 0xff, scale: 1.0, box_min, box_max,
+                sph_centre, sph_radius,
                 spawn_pos: p.translation,
                 created: 0,
             };
@@ -211,9 +241,10 @@ impl Searchlights {
 
     /// `Searchlight_Update` for one head, in the control list's order (called from `Drones::tick`). Returns the
     /// `Sound_Play3D` events (id at position): 0xE5 the relay clunk when a channel re-lights the head, 0xE6 the
-    /// glass break when a bullet kills it [M].
+    /// glass break when a bullet kills it [M]. `shots` = this tick's flying player bullets (the class-5 contacts
+    /// `Collide_Update` distributes onto the head's `obj+0xD0` list the same frame [M 0x1ea398:160-215]).
     pub fn update(&mut self, d: &Data, player: &Player, channels: &mut crate::triggers::Channels, head: usize,
-                  bullets: &[(V3, V3)], rng: &mut Rng, frame: u32) -> Vec<(u32, V3)> {
+                  shots: &[Shot], rng: &mut Rng, frame: u32) -> Vec<(u32, V3)> {
         let mut sounds = Vec::new();
         let (pos, base_yaw, half, mid, on, off) = {
             let h = &self.parts[head];
@@ -276,7 +307,9 @@ impl Searchlights {
                 if dpitch > half { h.pitch = mid - half; } else if dpitch < -half { h.pitch = mid + half; }
                 parts_now = true;
             }
-            // State 2: broken — the head droops, nothing else updates [M].
+            // State 2: broken — the head droops, nothing else updates [M]. The game's state-2 arm returns on
+            // every path before the contact walk [M 0x1cb900:373-393]; the walk's own state-2 gate below makes
+            // that fall-through a no-op here.
             2 => {
                 let h = &mut self.parts[head];
                 if h.pitch < 0.8 { h.pitch += 0.05; }
@@ -296,8 +329,8 @@ impl Searchlights {
             }
         }
         if !parts_now {
-            // The bullet check still runs in states 0/1/3 (the tail of the update) [M].
-            self.bullet_check(head, bullets, &mut sounds);
+            // The contact walk still runs in state 3 (with or without the relight) [M 0x1cb900:399-406].
+            self.bullet_check(head, shots, &mut sounds);
             return sounds;
         }
         // The mount follows the head's yaw [M; L: mount 016dffd0's yaw = its head's].
@@ -475,39 +508,100 @@ impl Searchlights {
                 corona.matrix = object_matrix([0.0; 3], corona_pos);
             }
         }
-        // The tail's bullet check (states 0/1/3) [M].
-        self.bullet_check(head, bullets, &mut sounds);
+        // The tail's contact walk (states 0/1/3) [M 0x1cb900:406-462].
+        self.bullet_check(head, shots, &mut sounds);
         sounds
     }
 
-    /// The child-list walk's stand-in (U-041): a player bullet segment crossing the head's or mount's box
-    /// breaks the light — state 2, the light deleted, the parts hidden, the glass sound [M for the effects].
-    fn bullet_check(&mut self, head: usize, bullets: &[(V3, V3)], sounds: &mut Vec<(u32, V3)>) {
-        if bullets.is_empty() { return; }
+    /// The head's contact walk (U-041 ported) [M `Searchlight_Update` 0x1cb900:406-462]. The game's
+    /// `Collide_Update` distributes each flying bullet's pick onto the hit object's `obj+0xD0` list as a
+    /// 0x60-byte node {next +4, damage f32 +8, param +0xC, hit data +0x10.., attacker obj +0x58} [M
+    /// 0x1ea398:160-215]; the head's tail then walks its own list: every entry whose attacker's class byte
+    /// (`obj+0xFF`) is 5 (a bullet) and whose damage float is > 0.0 breaks the light [M 0x1cb900:411-417].
+    /// The break: state 2 [M :418]; the spot's psiLight node freed (`psiLight_Delete` + the pool return)
+    /// [M :419-433]; the spot, beam and corona objects marked deleted (`obj+0xFE |= 1`) and their link
+    /// slots cleared — the MOUNT (`links[0]`) untouched [M :438-453]; `Control_NextLOD` (the damaged
+    /// model swap — visual, not ported) [M :454]; `Sound_Play3D(0xE6)` at the head [M :455-456]; the walk
+    /// continues, so a second qualifying contact re-runs the block (state 2 again, another 0xE6) [M :457].
+    fn bullet_check(&mut self, head: usize, shots: &[Shot], sounds: &mut Vec<(u32, V3)>) {
+        // The broken head never reads contacts: the game's state-2 arm returns on every path before the
+        // walk [M 0x1cb900:373-393].
+        if self.parts[head].state == 2 { return; }
+        if shots.is_empty() { return; }
         let pos = self.parts[head].pos;
-        let mut hit = false;
-        for &k in [head].iter().chain(self.parts[head].links[0].iter()) {
-            let p = &self.parts[k];
-            // The segment against the part's oriented box: world → local (the matrix is a rotation and a
-            // translation, so the inverse is the transposed rotation with the negated translation).
-            let to_local = |v: V3| {
-                let d = [v[0] - p.matrix[3][0], v[1] - p.matrix[3][1], v[2] - p.matrix[3][2]];
-                [0, 1, 2].map(|k| d[0] * p.matrix[k][0] + d[1] * p.matrix[k][1] + d[2] * p.matrix[k][2])
+        // The head's world sphere (obj+0x80/0x8C): `Control_BuildWorldSph` 0x133070 poses the glist's
+        // local bounds by the object's matrix — centre = matrix · sph_centre, radius = sph_radius ·
+        // |obj+0xE8| (obj+0xE8 = 1.0 from control_init_object 0x134630:17 [M]). The head must be PICKABLE:
+        // the game's object walk requires a glist (obj+0xD8 with glist+8 ≠ 0, or obj+0xFA & 8) [M
+        // 0x1eae80:88-90] — Searchlight_Create sets obj+0xD8 = the part's glist [M 0x1cb4f8:73-76].
+        // Only the HEAD object's contacts matter: the mount is its own class-0x22 object whose update
+        // returns before the walk (`if (*psVar2 != 1) return` [M 0x1cb900:89]), so its contacts — like the
+        // head's from a non-bullet attacker — are never read. The old stand-in tested the head's AND the
+        // mount's gfx boxes; the game does not.
+        let (centre, radius) = {
+            let h = &self.parts[head];
+            let m = &h.matrix;
+            let c = [m[0][0] * h.sph_centre[0] + m[0][1] * h.sph_centre[1] + m[0][2] * h.sph_centre[2] + m[3][0],
+                     m[1][0] * h.sph_centre[0] + m[1][1] * h.sph_centre[1] + m[1][2] * h.sph_centre[2] + m[3][1],
+                     m[2][0] * h.sph_centre[0] + m[2][1] * h.sph_centre[1] + m[2][2] * h.sph_centre[2] + m[3][2]];
+            (c, h.sph_radius)
+        };
+        // The bullet's pick [M Collide_PickObj 0x1eae80:92-141, the type-0x201 arm reached with
+        // hittest+0x94 = 0x201 from Bullet_update's flying tick]: the closest point on the flight segment
+        // to the sphere centre (`vecutil_calculate_closest_point_on_line` 0x1df7e0 clamps t to [0,1]),
+        // hit iff its squared distance < the radius squared. The slow-tick arm (hittest+0x94 = 0x101,
+        // raw step < 0.125) tests the POINT hittest+0x60 = the pre-move position with the margin
+        // hittest+0x6C (0.25 — the bullet obj's own 0.1 world radius floored at 0.25 [M 0x133070:23-31])
+        // + the object's radius [M 0x1eae80:226-228, disasm 001eb028-001eb068]. A hit leaves one contact
+        // per bullet per tick [M 0x1ea398's per-node redistribution; the node's +0x58 carries the
+        // attacker], with the HITTEST's damage float at +8.
+        let mut contacts: Vec<f32> = Vec::new();
+        for s in shots {
+            let hit = if s.segment {
+                seg_sphere_hit(s.from, s.to, centre, radius)
+            } else {
+                let d = [s.from[0] - centre[0], s.from[1] - centre[1], s.from[2] - centre[2]];
+                let d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                let m = 0.25 + radius;
+                d2 < m * m
             };
-            for &(from, to) in bullets {
-                if seg_box(to_local(from), to_local(to), p.box_min, p.box_max) { hit = true; }
-            }
+            if hit { contacts.push(s.damage); }
         }
-        if hit {
+        // The walk [M 0x1cb900:406-462]: entries in list order, class-5 attackers only (the port's
+        // contacts are all class-5 player bullets), damage > 0.0 breaks. Each qualifying entry re-runs
+        // the break block — after the first break the links are already cleared, so later entries only
+        // re-write state 2 and re-play 0xE6 [M the goto at :457 continues the loop].
+        for &damage in &contacts {
+            if damage <= 0.0 { continue; }
             let links = self.parts[head].links;
             self.parts[head].state = 2;
-            for p in links.into_iter().flatten() {
-                self.parts[p].drawn = false;
-                if self.parts[p].kind == 2 { self.parts[p].light = None; }
+            // links[2]: free the light node, delete the spot object, clear the slot [M :419-439].
+            if let Some(sp) = links[2] {
+                self.parts[sp].drawn = false; // the game's obj+0xFE |= 1: the movement pass deletes it
+                self.parts[sp].light = None;  // the psiLight node freed (psiLight_Delete) [M :430-433]
+                self.parts[head].links[2] = None;
             }
+            // links[3] (the beam) and links[4] (the corona): delete + clear [M :440-453].
+            if let Some(b) = links[3] { self.parts[b].drawn = false; self.parts[head].links[3] = None; }
+            if let Some(c) = links[4] { self.parts[c].drawn = false; self.parts[head].links[4] = None; }
+            // Control_NextLOD (the damaged model) is visual — see the module doc.
             sounds.push((0xe6, pos));
         }
     }
+}
+
+/// The game's type-0x201 pick primitive [M `Collide_PickObj` 0x1eae80:92-141]: the closest point on the
+/// segment `a → b` to the sphere centre (`vecutil_calculate_closest_point_on_line` 0x1df7e0 clamps t to
+/// [0,1] — an endpoint when the sphere is past either end), hit iff its squared distance is under the
+/// radius squared (strict — `c.olt.s` on the squared compare).
+fn seg_sphere_hit(a: V3, b: V3, centre: V3, radius: f32) -> bool {
+    let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    let p = [centre[0] - a[0], centre[1] - a[1], centre[2] - a[2]];
+    let t = if dd < 1e-20 { 0.0 } else { ((p[0] * d[0] + p[1] * d[1] + p[2] * d[2]) / dd).clamp(0.0, 1.0) };
+    let q = [p[0] - d[0] * t, p[1] - d[1] * t, p[2] - d[2] * t];
+    let q2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2];
+    q2 < radius * radius
 }
 
 /// A segment against an axis-aligned box (both endpoints transformed into the box's frame by the caller).
@@ -613,6 +707,151 @@ mod tests {
         assert!(!seg_box([-5.0, 2.0, 0.0], [5.0, 2.0, 0.0], min, max));
         assert!(seg_box([0.5, 0.5, 0.5], [3.0, 3.0, 3.0], min, max), "starts inside");
         assert!(!seg_box([2.0, 0.0, 0.0], [3.0, 0.0, 0.0], min, max), "past it");
+    }
+
+    #[test]
+    fn seg_sphere_hits_and_misses() {
+        let (c, r) = ([0.0, 0.0, 0.0], 1.0);
+        assert!(seg_sphere_hit([-5.0, 0.0, 0.0], [5.0, 0.0, 0.0], c, r), "through the centre");
+        assert!(seg_sphere_hit([-5.0, 0.99, 0.0], [5.0, 0.99, 0.0], c, r), "grazes inside");
+        assert!(!seg_sphere_hit([-5.0, 1.01, 0.0], [5.0, 1.01, 0.0], c, r), "grazes outside");
+        assert!(seg_sphere_hit([-0.5, 0.0, 0.0], [3.0, 0.0, 0.0], c, r), "starts inside, exits through +x");
+        assert!(!seg_sphere_hit([1.5, 0.0, 0.0], [3.0, 0.0, 0.0], c, r), "the clamped endpoint (t=0) at 1.5 is outside");
+        // Sister: the unclamped infinite-line answer would differ — the segment ends before the sphere.
+        assert!(!seg_sphere_hit([5.0, 0.5, 0.0], [6.0, 0.5, 0.0], c, r), "behind the segment");
+    }
+
+    /// The contact walk [M 0x1cb900:406-462]: a class-5 contact with damage > 0.0 on the head's world
+    /// sphere breaks the light like the game — state 2, the spot/beam/corona deleted (links[2..4]
+    /// cleared), the MOUNT untouched [M :438-453], the glass 0xE6 at the head [M :455-456]. The old
+    /// stand-in (U-041) tested the head's AND the mount's gfx boxes and hid every link including the
+    /// mount — both differences this test pins.
+    #[test]
+    fn a_damaging_bullet_contact_breaks_the_head_like_the_game() {
+        let mut sl = Searchlights::default();
+        // Head at the origin, sphere radius 1 centred on it; a mount 1.5 below (its own box); spot/beam/corona linked.
+        let part = |kind: u8, pos: V3| Part {
+            placement: 0, kind, pos, base_yaw: 0.0, on: 1, off: 0, alarm: 55, half: 0.0, mid: 0.0,
+            phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [pos[0], pos[1], pos[2], 0.0]],
+            state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
+            alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0,
+        };
+        sl.parts = vec![part(0, [0.0, -1.5, 0.0]), part(1, [0.0, 0.0, 0.0]), part(2, [0.0, -10000.0, 0.0]), part(3, [0.0, 0.0, 0.0]), part(4, [0.0, 0.4, 0.0])];
+        sl.parts[1].links = [Some(0), None, Some(2), Some(3), Some(4)];
+        sl.parts[2].light = Some(7);
+        // The shot crosses the head's sphere but NOT its gfx box: the sphere's radius 1 covers the box
+        // half-diagonal only up to ~0.866 per axis, so the aim 0.95 off-axis is inside the sphere, outside
+        // the box — the game's pick (the sphere) contacts, the old stand-in's box test would not.
+        let shot = Shot { from: [-3.0, 0.0, 0.95], to: [3.0, 0.0, 0.95], damage: 3.5, segment: true };
+        let mut sounds = Vec::new();
+        sl.bullet_check(1, &[shot], &mut sounds);
+        assert_eq!(sl.parts[1].state, 2, "the head breaks (state 2) [M 0x1cb900:418]");
+        assert_eq!(sounds, vec![(0xe6, [0.0, 0.0, 0.0])], "the glass sound at the head [M 0x1cb900:455-456]");
+        assert!(!sl.parts[2].drawn && !sl.parts[3].drawn && !sl.parts[4].drawn, "spot/beam/corona deleted [M 0x1cb900:438-453]");
+        assert_eq!(sl.parts[1].links[2..4], [None, None], "links[2..4] cleared");
+        assert_eq!(sl.parts[2].light, None, "the psiLight node freed [M 0x1cb900:430-433]");
+        // The mount survives: drawn, still linked [M 0x1cb900:438-453 never touches links[0]].
+        assert!(sl.parts[0].drawn, "the mount is NOT deleted — the game keeps links[0]");
+        assert_eq!(sl.parts[1].links[0], Some(0), "the mount link stays");
+    }
+
+    /// Sister of the break test: a shot through the MOUNT's volume but outside the head's sphere does NOT
+    /// break the light — the mount is its own class-0x22 object whose update returns before the contact
+    /// walk [M 0x1cb900:89], so nobody reads its contacts. The old stand-in walked the mount's box and
+    /// broke here (the task's U-041 symptom).
+    #[test]
+    fn a_mount_only_contact_does_not_break_the_head() {
+        let mut sl = Searchlights::default();
+        let part = |kind: u8, pos: V3| Part {
+            placement: 0, kind, pos, base_yaw: 0.0, on: 1, off: 0, alarm: 55, half: 0.0, mid: 0.0,
+            phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [pos[0], pos[1], pos[2], 0.0]],
+            state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
+            alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0,
+        };
+        sl.parts = vec![part(0, [0.0, -3.0, 0.0]), part(1, [0.0, 0.0, 0.0])];
+        sl.parts[1].links = [Some(0), None, None, None, None];
+        // Through the mount's box (its centre), 3 units below the head's sphere centre.
+        let shot = Shot { from: [-3.0, -3.0, 0.0], to: [3.0, -3.0, 0.0], damage: 3.5, segment: true };
+        let mut sounds = Vec::new();
+        sl.bullet_check(1, &[shot], &mut sounds);
+        assert!(sounds.is_empty(), "no glass sound — the mount's contact is unread");
+        assert_eq!(sl.parts[1].state, 0, "the head keeps sweeping");
+        assert!(sl.parts[0].drawn && sl.parts[1].drawn, "nothing hidden");
+    }
+
+    /// The break gate is the CONTACT DAMAGE, not the geometry [M 0x1cb900:417 `if (0.0 < damage)`]: a
+    /// class-5 contact with damage 0.0 (the throwables' forced value — `Bullet_update` 0x12e7b0's
+    /// override switch, ids 0x2B/0x34-0x37/0x3A-0x40) hits the sphere and does not break.
+    #[test]
+    fn the_break_gate_is_the_contact_damage_float() {
+        let mut sl = Searchlights::default();
+        let part = |kind: u8| Part {
+            placement: 0, kind, pos: [0.0; 3], base_yaw: 0.0, on: 1, off: 0, alarm: 55, half: 0.0, mid: 0.0,
+            phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
+            state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
+            alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0,
+        };
+        sl.parts = vec![part(1)];
+        let through = Shot { from: [-3.0, 0.0, 0.0], to: [3.0, 0.0, 0.0], damage: 0.0, segment: true };
+        let mut sounds = Vec::new();
+        sl.bullet_check(0, &[through], &mut sounds);
+        assert!(sounds.is_empty() && sl.parts[0].state == 0, "damage 0.0 never breaks [M 0x1cb900:417]");
+        let grazing = Shot { from: [-3.0, 0.0, 0.0], to: [3.0, 0.0, 0.0], damage: 0.25, segment: true };
+        sl.bullet_check(0, &[grazing], &mut sounds);
+        assert_eq!(sl.parts[0].state, 2, "any positive damage breaks");
+        assert_eq!(sounds.len(), 1, "one contact, one 0xE6");
+    }
+
+    /// A broken head ignores further contacts: the game's state-2 arm returns on every path before the
+    /// walk [M 0x1cb900:373-393] — no second 0xE6, no state churn.
+    #[test]
+    fn a_broken_head_ignores_further_contacts() {
+        let mut sl = Searchlights::default();
+        let part = |kind: u8| Part {
+            placement: 0, kind, pos: [0.0; 3], base_yaw: 0.0, on: 1, off: 0, alarm: 55, half: 0.0, mid: 0.0,
+            phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
+            state: 2, pitch: 0.4, yaw: 0.0, links: [None; 5], killed: false, light: None,
+            alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0,
+        };
+        sl.parts = vec![part(1)];
+        let shot = Shot { from: [-3.0, 0.0, 0.0], to: [3.0, 0.0, 0.0], damage: 3.5, segment: true };
+        let mut sounds = Vec::new();
+        sl.bullet_check(0, &[shot], &mut sounds);
+        assert!(sounds.is_empty(), "the broken head never re-plays 0xE6 [M 0x1cb900:373-393]");
+        assert_eq!(sl.parts[0].state, 2, "stays broken");
+    }
+
+    /// The slow-tick arm (hittest+0x94 = 0x101) tests the POINT with the 0.25 + radius margin [M
+    /// Bullet_update 0x12e7b0's raw-step < 0.125 arm; Collide_PickObj 0x1eae80:226-228]: a hovering slow
+    /// round within the margin contacts even though its floored 1-unit segment points away and misses the
+    /// segment test. The segment-mode sister with the same start misses (the pick mode is what differs).
+    #[test]
+    fn the_slow_point_pick_uses_the_point_with_the_margin() {
+        let mut sl = Searchlights::default();
+        let part = |kind: u8| Part {
+            placement: 0, kind, pos: [0.0; 3], base_yaw: 0.0, on: 1, off: 0, alarm: 55, half: 0.0, mid: 0.0,
+            phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
+            state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
+            alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0,
+        };
+        sl.parts = vec![part(1)];
+        // 1.2 from the centre: inside the 0.25 + 1.0 point margin, outside the 1.0 sphere.
+        let point = Shot { from: [1.2, 0.0, 0.0], to: [2.2, 0.0, 0.0], damage: 3.5, segment: false };
+        let mut sounds = Vec::new();
+        sl.bullet_check(0, &[point], &mut sounds);
+        assert_eq!(sl.parts[0].state, 2, "the point pick reaches 1.2 < 1.25");
+        // Sister: the same start in segment mode misses (the closest point on the segment is the start,
+        // 1.2 > the radius).
+        sl.parts[0].state = 0;
+        let seg = Shot { from: [1.2, 0.0, 0.0], to: [2.2, 0.0, 0.0], damage: 3.5, segment: true };
+        let mut sounds2 = Vec::new();
+        sl.bullet_check(0, &[seg], &mut sounds2);
+        assert!(sounds2.is_empty() && sl.parts[0].state == 0, "the segment pick misses (1.2 > 1.0)");
     }
 
     /// The spot disc's orientation [M 0x1cb900 hit branch + 0x134210/0x1e5168]: the disc mesh lies in

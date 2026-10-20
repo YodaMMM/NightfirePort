@@ -68,13 +68,13 @@ impl Level05 {
 
 fn bond_at(p: [f32; 3]) -> Player { Player { pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], ..Default::default() } }
 
-/// The parts created exactly as `attach_level` does (the level's object boxes for the bullet stand-in).
+/// The parts created exactly as `attach_level` does (the level's object boxes + the glist spheres).
 fn parts(l: &Level05, rng: &mut Rng) -> Searchlights {
     let m = l.level.main_map().unwrap();
     Searchlights::create(&l.level.maps[m].placements, rng, |p| {
         let obj = if p.by_hash() { l.level.by_hash.get(&p.hashcode).map(|&(map, object)| &l.level.maps[map].objects[object]) }
             else { l.level.maps[m].objects.get(p.index as usize) };
-        obj.map_or(([0.0; 3], [0.0; 3]), |o| (o.min, o.max))
+        obj.map_or(([0.0; 3], [0.0; 3], [0.0; 3], 0.0), |o| (o.min, o.max, o.centre, o.radius))
     })
 }
 
@@ -184,11 +184,23 @@ fn channels_and_tracking_behave() {
     let m = s.parts[beam].matrix;
     let aim = nf_game::searchlight::spherical(1.0, s.parts[h].yaw, -s.parts[h].pitch);
     for k in 0..3 { assert!((m[2][k] - aim[k]).abs() < 1e-5, "beam row 2 = aim"); }
-    // A bullet through the head's box breaks it: state 2, parts hidden, the glass sound.
-    let hp = s.parts[h].pos;
-    let evs = s.update(&d, &far_away, &mut channels, h, &[(hp, [hp[0] + 5.0, hp[1], hp[2]])], &mut rrng, 2);
+    // A bullet through the head's WORLD SPHERE breaks it: state 2, parts hidden, the glass sound. The
+    // game's pick tests the sphere (obj+0x80/0x8C = the posed glist bounds [M Control_BuildWorldSph
+    // 0x133070], the pick type 0x201 segment test [M Collide_PickObj 0x1eae80:92-141]) — the aim goes
+    // through the posed centre (the old box aim is the pre-U-041 stand-in's, fixed with the address).
+    let hpos = s.parts[h].pos;
+    let (centre, radius) = {
+        let hp = &s.parts[h];
+        let m = &hp.matrix;
+        ([m[0][0] * hp.sph_centre[0] + m[0][1] * hp.sph_centre[1] + m[0][2] * hp.sph_centre[2] + m[3][0],
+          m[1][0] * hp.sph_centre[0] + m[1][1] * hp.sph_centre[1] + m[1][2] * hp.sph_centre[2] + m[3][1],
+          m[2][0] * hp.sph_centre[0] + m[2][1] * hp.sph_centre[1] + m[2][2] * hp.sph_centre[2] + m[3][2]], hp.sph_radius)
+    };
+    assert!(radius > 0.0, "the head's glist sphere has a radius");
+    let shot = nf_game::searchlight::Shot { from: [centre[0] - 5.0, centre[1], centre[2]], to: [centre[0] + 5.0, centre[1], centre[2]], damage: 3.5, segment: true };
+    let evs = s.update(&d, &far_away, &mut channels, h, &[shot], &mut rrng, 2);
     assert_eq!(s.parts[h].state, 2);
-    assert_eq!(evs, vec![(0xe6, hp)]);
+    assert_eq!(evs, vec![(0xe6, hpos)]);
     assert!(!s.parts[beam].drawn);
     // The dark head re-lights on its channel with the relay clunk.
     let dark: Vec<usize> = s.parts.iter().enumerate().filter(|(_, p)| p.kind == 1 && p.on == 164).map(|(i, _)| i).collect();
