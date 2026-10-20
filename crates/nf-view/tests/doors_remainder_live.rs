@@ -66,7 +66,8 @@ fn door_axis(d: &nf_game::door::Door) -> [f32; 3] {
     if dot(off, r0).abs() >= dot(off, r2).abs() { norm_h(r2) } else { norm_h(r0) }
 }
 
-/// The first door the mesh pick can act on: a loaded shape, unlocked, no approach gate (07000001's doors are all kind-2 slides).
+/// The first door the use pick can act on: a resolved glist (the world-sphere candidate needs
+/// only obj+0xd8 [M 0x1eae80's gate]; has_shape keeps the pick grounded on a loaded level), unlocked, no approach gate (07000001's doors are all kind-2 slides).
 fn pickable_door(w: &Walker) -> Option<usize> {
     let sim = w.scene.sim.as_ref().unwrap();
     sim.drones.doors.list.iter().position(|d| {
@@ -75,24 +76,32 @@ fn pickable_door(w: &Walker) -> Option<usize> {
     })
 }
 
-/// (a) The use pick is the game's mesh pick: a 1.0-radius sphere one unit ahead of Bond's HEAD
-/// (`Player_GetHeadPos` + `Mat_GetDir(glb_viewer)` [M 0x1a5170:100-108]), tested against the
-/// door's live leaf mesh with NO occlusion test — `Collide_SphereIntersect` returns every
-/// intersecting object and the walk activates every class-0x1C one (walls do not stop it) [M
-/// 0x1a5170:113-133]. Pins, on the through-axis (the leaf-span row is the OTHER one — the probe
-/// dump in the report): 2.3 out the sphere falls 0.3 short of the plane (the pre-fix 2.5
-/// placement stand-in opened there); 1.2 out it overlaps 0.8 and opens; and from beside the
-/// doorway at 2.3 along the leaf's span (in the wall plane, the stand-in's 3.2 placement
-/// distance out of reach) the sphere still clips the leaf's edge tris through the wall — the
-/// game's no-occlusion pick.
+/// (a) The use pick's candidate is the game's SPHERE-VS-SPHERE: a 1.0-radius sphere one unit
+/// ahead of Bond's HEAD (`Player_GetHeadPos` + `Mat_GetDir(glb_viewer)` [M 0x1a5170:100-108])
+/// against each door's live world sphere (obj+0x80 centre, obj+0x8C radius — `Control_
+/// BuildWorldSph` 0x133070 poses the glist bounds by the object matrix; the moved pass rebuilds
+/// it [M 0x1336f8:209]). `Collide_PickObj` 0x1eae80's 0x100/0x101 arm (and `Collide_Pick`
+/// 0x1eb320's linked-object arm) admit the object when
+/// `|pick_centre − obj+0x80|² < (1.0 + obj+0x8C)²`; the `Collide_Intersect` mesh refinement that
+/// follows CANNOT remove the node (`Collide_SphereIntersect` 0x1ec940 ignores its return for
+/// param_10 = 0), and `Player_Activate`'s class walk dispatches `Door_Activate` on every
+/// class-0x1c node with NO distance gate [M 0x1a5170:113-137] — with no occlusion test anywhere
+/// in the chain. Pins, on the through-axis (the leaf-span row is the OTHER one): 4.0 out the use
+/// point lands ~3.0 from the sphere centre — past the 1.0+r reach (the pre-sphere 2.5 placement
+/// stand-in opened at 2.3 there); 1.2 out the point is ~0.2 from the centre and the door opens;
+/// and from beside the doorway at 2.3 along the leaf's span (in the wall plane) the sphere is
+/// still touched — the game's no-occlusion pick opens the door through the wall. (The 820b
+/// predecessor of this test pinned a leaf-MESH gate — "2.3 out must not open" — read off
+/// 0x1a5170 alone; the pick chain below it disproves that gate, and the three master E tests it
+/// failed are the behavioural proof. The stands here are the decompile's numbers.)
 #[test]
-fn the_use_pick_respects_the_leaf_mesh() {
+fn the_use_pick_is_the_world_sphere_candidate() {
     if std::env::var_os("NF_ISO").is_none() { eprintln!("skip: NF_ISO not set"); return; }
     let mut w = Walker::new(nf_view::load(&iso(), "07000001.bin", false).unwrap());
     w.wait_enabled(3000, "level start");
     w.wait(30);
     let di = pickable_door(&w).expect("07000001 has a shape-backed door");
-    let (centre, through, span) = {
+    let (centre, through, span, reach) = {
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.doors.list[di];
         // The through-axis from the leaf-span offset, and the span axis itself (for the edge case).
@@ -100,29 +109,33 @@ fn the_use_pick_respects_the_leaf_mesh() {
         let r0 = [d.matrix[0][0], d.matrix[0][1], d.matrix[0][2]];
         let r2 = [d.matrix[2][0], d.matrix[2][1], d.matrix[2][2]];
         let (through, span) = if dot(off, r0).abs() >= dot(off, r2).abs() { (r2, r0) } else { (r0, r2) };
-        (d.sph.0, norm_h(through), norm_h(span))
+        (d.sph.0, norm_h(through), norm_h(span), 1.0 + d.sph.1)
     };
+    eprintln!("[pick] door #{di} sphere centre {centre:?} reach {reach:.2}");
 
-    // Square-on 2.3 out: the pick sphere (r 1 at head + look) reaches only 1.3 from the leaf
-    // plane — 0.3 short. The old stand-in (placement distance < 2.5) opened here.
-    aim_and_use(&mut w, [centre[0] + through[0] * 2.3, centre[1], centre[2] + through[2] * 2.3], centre, 30);
+    // Square-on 4.0 out: the pick sphere's centre lands ~3.0 from the door's world-sphere
+    // centre — past the 1.0+obj+0x8C reach. The old placement stand-in (distance < 2.5 from the
+    // use point to the door pos) opened at 2.3 out; the sphere route is the game's bound.
+    aim_and_use(&mut w, [centre[0] + through[0] * 4.0, centre[1], centre[2] + through[2] * 4.0], centre, 30);
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.doors.list[di].state, door::CLOSED,
-        "E 2.3 out on the through-axis must not reach the leaf (the sphere falls 0.3 short)");
+        "E 4.0 out on the through-axis is past the 1.0+obj+0x8C reach (state {:#x})",
+        w.scene.sim.as_ref().unwrap().drones.doors.list[di].state);
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.doors.list[di].pos01, 0.0, "the leaf never moved");
 
-    // Sister: square-on 1.2 out — the sphere overlaps the leaf by ~0.8; the door opens.
+    // Sister: square-on 1.2 out — the use point is ~0.2 from the sphere centre, well inside the
+    // 1.0+r candidate; the door opens.
     aim_and_use(&mut w, [centre[0] + through[0] * 1.2, centre[1], centre[2] + through[2] * 1.2], centre, 30);
     let st = w.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
     assert!(st & 0xc != 0, "E 1.2 out square-on opens the door (state {st:#x})");
 
     // The edge/through-wall case: 2.3 out ALONG the leaf span (beside the doorway, in the wall
-    // plane — the old stand-in's placement distance is ~3.2, out of its 2.5 reach). The pick
-    // sphere's centre lands just past the leaf's edge ON the leaf plane, and the game's pick
-    // (no occlusion [M 0x1a5170:113-133]) opens the door through the wall. Bond settles out of
-    // the wall to either face; both leave the sphere on the edge.
+    // plane — the old stand-in's placement distance is ~3.2, out of its 2.5 reach). The use
+    // point lands ~1.3 from the sphere centre — inside the candidate — and the pick chain has no
+    // occlusion test [M 0x1a5170:100-137], so the game opens the door through the wall. Bond
+    // settles out of the wall to either face; both leave the sphere touched.
     aim_and_use(&mut w, [centre[0] + span[0] * 2.3, centre[1], centre[2] + span[2] * 2.3], centre, 30);
     let st = w.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
-    assert!(st & 0xc != 0, "E beside the doorway (2.3 along the span) clips the leaf edge through the wall (state {st:#x})");
+    assert!(st & 0xc != 0, "E beside the doorway (2.3 along the span) opens through the wall — no occlusion (state {st:#x})");
 }
 
 /// (b) The door labels: the ids bind from USATxt.dat (bank 2: `Txt_BindLabel` 0x1cad60's

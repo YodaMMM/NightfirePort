@@ -136,13 +136,28 @@ fn waiting_room_door_opens_on_use() {
     // Walk to its front. The direct walk from the exec-floor spot crosses the boardroom's
     // furniture row (x 4-6, z 22-20, blocked at every height [D probe, walkreal's pinned
     // blocker]) — the documented stand-in transit reaches the door's front; the E is the real
-    // input.
+    // input. The poke's slope drops Bond ~1 unit during the settle (probe: y 46.8 → 45.95,
+    // still sliding), so the aim converges on the door AFTER the settle — the stand-in for the
+    // player's aim. The candidate the E must touch is the door's LIVE world sphere (obj+0x80,
+    // obj+0x8C) [M Collide_PickObj 0x1eae80's 0x100/0x101 arm — the pick sphere (r 1.0 at
+    // head + viewer dir [M 0x1a5170:100-108]) vs the sphere; the Collide_Intersect refinement
+    // cannot remove the node (0x1ec940 ignores its return for param_10 = 0) and the class walk
+    // has no distance gate (0x1a5170:113-137)].
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [dpos[0], 46.8, dpos[2] + 1.6];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(10);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let d = &sim.drones.doors.list[di];
+        let centre = [dpos[0], dpos[1] + 1.0, dpos[2]];
+        let head = sim.bond.head();
+        let to = [centre[0] - head[0], centre[1] - head[1], centre[2] - head[2]];
+        sim.bond.yaw = to[0].atan2(to[2]);
+        sim.bond.pitch = (to[1] / to[0].hypot(to[2])).atan() / std::f32::consts::FRAC_PI_2;
+    }
     w.use_door(di, "the waiting-room door");
     let st = w.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
     assert!(st & 0xc != 0, "the unlocked door opens on the E [M Door_Activate], state {st:#x}");

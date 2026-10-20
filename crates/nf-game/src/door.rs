@@ -775,14 +775,36 @@ impl Doors {
     /// `Player_Activate`'s door part (0x1a5310): the use sphere — radius 1 at one unit ahead of the head —
     /// activates every door it meets (the game walks the whole hit list; walls do not stop it). `head` is also
     /// the activator's position for the side tests.
-    pub fn player_use(&mut self, head: V3, look: V3, channels: &mut Channels, frame: u32, world: &CollisionWorld) -> (Vec<SoundEvent>, usize) {
+    pub fn player_use(&mut self, head: V3, look: V3, channels: &mut Channels, frame: u32, _world: &CollisionWorld) -> (Vec<SoundEvent>, usize) {
         // `Player_Activate` (0x1a5170:100-133): the pick is `Collide_SphereIntersect(1.0, head +
-        // Mat_GetDir(viewer)·1.0, player cel, player, body obj, …)` — a real mesh pick against the
-        // cel-linked objects' collision, results distance-sorted into the HITDATA list, and every
-        // type-0x1c entry calls `Door_Activate(obj, player, 1)`. The port sphere-tests the same
-        // sphere against each door's live leaf mesh (`shape(glist)` × the door's `obj+0x90`
-        // matrix — the leaf the collide pass sees, via `set_dynamic`); doors whose glist hash the
-        // world never loaded keep the placement-distance stand-in (they have no mesh to test).
+        // Mat_GetDir(viewer)·1.0, player cel, player, body obj, &list, 0, 0, 0, 0)`, and the walk
+        // dispatches `Door_Activate(obj, player, 1)` on EVERY class-0x1c node — no distance gate
+        // [M 0x1a5170:113-137]. The candidate that puts a node in the list is SPHERE-VS-SPHERE,
+        // not a mesh test:
+        //   - `Collide_SphereIntersect` 0x1ec940 fills the HITTEST (mask +0x94 = 0x101 — param 8
+        //     is 0 — the pick centre at +0x60, the radius at +0x6c) and calls `Collide_Pick`
+        //     0x1eb320; the post-pick loop then runs `Collide_Intersect` per node but uses its
+        //     return ONLY for the `param_10 & 0x10` early-out (param_10 is 0 here) — a failed
+        //     refinement NEVER removes the node [M 0x1ec940's do/while after `Collide_Pick`].
+        //   - `Collide_Pick` 0x1eb320 walks the straddled cels; for mask 0x101 its linked-object
+        //     arm tests `|pick_centre − obj+0x80|² < (pick_radius + obj+0x8C)²` (the AABB variant
+        //     only when obj+0x3c & 0x8000000), and its object walk calls `Collide_PickObj`
+        //     0x1eae80, whose 0x100/0x101 arm tail is the same sphere test from the pick centre
+        //     [M 0x1eae80: `fVar11 = SqMagnitude(centre − obj+0x80); fVar12 = hittest+0x6c +
+        //     obj+0x8c; hit iff fVar11 < fVar12²`] — the glist gate (`obj+0xd8 != 0`) only
+        //     ADMITS the object to the pick, it does not shape it.
+        //   - `obj+0x80`/`obj+0x8C` is the object's world sphere: the glist bounds centre/radius
+        //     posed by the object matrix (`Control_BuildWorldSph` 0x133070: obj+0x80 = glist+0x10
+        //     × the matrix rows, obj+0x8C = glist+0x1c · |obj+0xe8|; the moved pass rebuilds it
+        //     [M 0x1336f8:209]) — the port's `live_sph()`.
+        // So the game's E reach is the use sphere touching the door's live world sphere, and the
+        // leaf mesh never gates the activation. (The 820b leaf-mesh pick was a misread of the
+        // chain — its own T1 "2.3-out must not open" pin rested on that misread; the master
+        // merge's full suite failed the three real-path E tests because the mesh, a thin plane,
+        // sits 1.2-3.0 from those use points while the door's world sphere is touched. See
+        // docs/systems/door-use.md and docs/reports/doors-remainder-4.md.)
+        // Doors whose glist the port never resolved (glist 0 — no obj+0xd8 in the game's terms)
+        // keep the pre-sphere placement-distance stand-in (they have no world sphere either).
         let mut sounds = Vec::new();
         let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let mut hits = 0;
@@ -792,17 +814,23 @@ impl Doors {
             let dy = use_point[1] - d.pos[1];
             let dz = use_point[2] - d.pos[2];
             // Broad phase: the placement's bounding sphere can hardly exceed ~3 — 6 clears the
-            // mesh scan for far doors (the game's `Collide_Pick` does the same by cel proximity).
+            // scan for far doors (the game's `Collide_Pick` does the same by cel proximity).
             if dx * dx + dy * dy + dz * dz > 36.0 { continue; }
-            let tris = if d.glist != 0 { world.shape(d.glist) } else { None };
-            let contact = match tris {
-                Some(tris) => tris.iter().any(|t| {
-                    let tri = [transform(&d.matrix, t[0]), transform(&d.matrix, t[1]), transform(&d.matrix, t[2])];
-                    sphere_tri_dist2(use_point, &tri) < 1.0
-                }),
-                // No mesh loaded: the pre-mesh stand-in — distance to the door's placement position
-                // < 2.5 (covers the door's extent + use radius) [M 0x1a5170:100-108,128].
-                None => dx * dx + dy * dy + dz * dz < 6.25,
+            let contact = if d.glist != 0 {
+                // The candidate: the use sphere (r 1.0 at head + viewer dir) vs the door's live
+                // world sphere (obj+0x80 centre, obj+0x8C radius) [M Collide_PickObj 0x1eae80's
+                // 0x100/0x101 arm; Collide_Pick 0x1eb320's linked-object arm]. Strict `<`: the
+                // game returns (no node) when `radius² <= sqdist` [M both sites].
+                let (c, r) = d.live_sph();
+                let sx = use_point[0] - c[0];
+                let sy = use_point[1] - c[1];
+                let sz = use_point[2] - c[2];
+                let reach = 1.0 + r;
+                sx * sx + sy * sy + sz * sz < reach * reach
+            } else {
+                // Never-loaded glist: the pre-sphere stand-in — distance to the door's placement
+                // position < 2.5 (covers the door's extent + use radius) [S stand-in].
+                dx * dx + dy * dy + dz * dz < 6.25
             };
             if contact {
                 self.activate(i, &[(head, 0.0, false)], true, channels, frame, &mut sounds);
