@@ -6015,7 +6015,11 @@ pub fn run() -> Result<()> {
                 if let Some(id) = first { sim.gun.switch_request = id; }
             }
             sim.rapid_fire = RAPID_FIRE.load(std::sync::atomic::Ordering::Relaxed);
+            // Render aid (death-blood-pane): `NF_KILL_AT=t` deals Bond a fatal hit on tick t, so `--frame`
+            // past it renders the blood pane at that many dead ticks.
+            let kill_at: Option<u32> = std::env::var("NF_KILL_AT").ok().and_then(|v| v.parse().ok());
             for t in 1..=time as u32 {
+                if kill_at == Some(t) { let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng); h.pain_generic(r, 500.0, 1, 0x0700_0005, 0); }
                 if skip_cuts && sim.disabled { sim.drones.scripts.skip_request = true; }
                 // `--mode 70,90`: the fire-mode press (the B key) on those ticks.
                 let mode_now = modes.contains(&t);

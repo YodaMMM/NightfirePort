@@ -17,7 +17,7 @@ const SH: f32 = 448.0;
 /// the table's other four ids never resolve in `hashtable_set_sprite` and the icon stays hidden].
 /// fix-space-pane added the 0700001b missile-status pane's five (0x03000177..7B [M SpaceSprInfo 0x2be3b0 +
 /// `HUD_UpdateSpacePane` 0x19d3b8; D 0700001b.bin entry 61 sub 0..4]).
-pub const TEXTURES: [u32; 31] = [0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
+pub const TEXTURES: [u32; 32] = [0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
     0x0300_0177, 0x0300_0178, 0x0300_0179, 0x0300_017a, 0x0300_017b];
 
 /// The 0700001b missile-status pane (pane 20: `SpacePane` 0x2be598 = {x 0, y 0, flags 0, create
@@ -133,6 +133,21 @@ pub fn script_overlay(fade: Option<nf_game::drone::ViewFade>, letterbox: bool, s
 pub(crate) enum Anchor { Left, Centre, Right, Stretch }
 
 pub(crate) struct Hud<'a> { pub(crate) quads: Vec<Quad>, pub(crate) aspect: f32, pub(crate) textures: &'a [(u32, crate::scene::TextureImage)] }
+
+/// The blood pane (pane 12, `BloodSprInfo` 0x2bcfd8 [L ACTION.ELF]: two sprites, layer 9, flags 0x200
+/// = subtractive, colour 0x007f7fff — cyan taken off the scene, which leaves it red). `HUD_UpdateBloodPane`
+/// 0x19a6a8 [M] grows both by 1 px per tick from the top of the 448-line view: sprite 1 (the solid fill
+/// 0x03000002) is `d` tall from the top (:27); sprite 0 (the drip edge 0x0300005a, 512×32) sits at
+/// `y = d` and is `d` tall too (:26, :37) — in MP capped at the distance left to the bottom (:31-35).
+fn blood_pane(h: &mut Hud, d: f32, mp: bool) {
+    if d <= 0.0 { return; }
+    let c = gs(0x007f7f, 0xff);
+    let (tw, th) = h.tex_dims(0x0300_0002);
+    h.quad(Anchor::Stretch, 9, 0x0300_0002, 2, 0.0, 0.0, SW, d.min(SH), [0.0, 0.0, tw.max(1.0), th.max(1.0)], (false, false), c);
+    let edge = if mp { d.min(SH - d) } else { d };
+    let (ew, eh) = h.tex_dims(0x0300_005a);
+    if d < SH { h.quad(Anchor::Stretch, 9, 0x0300_005a, 2, 0.0, d, SW, edge, [0.0, 0.5, ew, (eh - 1.0).max(1.0)], (false, false), c); }
+}
 
 /// A colour 0xRRGGBB on the GS scale (0x80 = 1.0) with an alpha byte (drawn as A >> 1, 0x80 = opaque).
 fn gs(rgb: u32, a: u32) -> [f32; 4] {
@@ -337,6 +352,13 @@ fn ndc_rect(x0: f32, y0: f32, x1: f32, y1: f32) -> [crate::gpu::HudVertex; 6] {
 pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     let mut h = Hud { quads: Vec::new(), aspect, textures: &scene.hud_textures };
     let sim = scene.sim.as_ref();
+    // The death blood pane (pane 12). SP hides the rest of the HUD under it (`HUD_DisableAll`
+    // [M 0x190bb0:24]); MP keeps the HUD up and draws the pane over it [M :39].
+    let death = sim.and_then(|s| s.local_death_fx());
+    if let Some(fx) = death {
+        blood_pane(&mut h, fx.pane_px as f32, !fx.hud_hidden);
+        if fx.hud_hidden { return h.finish(); }
+    }
     // Crosshair: (W/2 · (1 + cx), H/2 · (1 − cy)) from the smoothed offset; the cell from
     // `Check_Target`'s state (BLData+0x133): 2 normal, 3 = the red "no" mark on a non-enemy target
     // [M 0x1a7810:181-182 + HUD_UpdateCrossHair 0x19e6d0:69-79]; in aim mode non-scope weapons force

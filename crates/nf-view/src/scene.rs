@@ -4468,6 +4468,11 @@ impl Sim {
         // respawns (`Player_HandleDeath` 0x190bb0:41-54 → `MP_ReSpawn` 0x185368).
         let mp_death_was_active = self.drones.death.active;
         self.drones.tick(&d, &player);
+        // death-blood-pane: `Player_CheckForDeath` runs `Player_WeaponNone` 0x1a9858 on the death
+        // tick [M 0x190810:61] — the held id becomes 'G' (0x47) at once, no holster cycle — so the
+        // first-person gun is gone for the whole sequence (PCSX2: no gun from the 40th dead frame on).
+        // MP re-equips at the respawn (`mp_equip_local`).
+        if !mp_death_was_active && self.drones.death.active && self.gun.weapon != 0x47 { self.gun.go_to_hands(); }
         // Online, death + respawn belong to the per-slot MP combat (every machine, shared stream).
         if self.net_rng.is_none() && self.net_rng_shared.is_none() { self.step_mp_death_respawn(mp_death_was_active); }
         // fix-script-objects: the script-created AI volumes (`Drone_AIVolume_Create` 0x1376c0 via
