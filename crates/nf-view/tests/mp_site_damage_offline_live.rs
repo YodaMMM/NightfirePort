@@ -246,109 +246,72 @@ fn an_explosive_damages_and_destroys_the_site_offline() {
 
 // ------------------------------------------------------------------ the online agreement
 
-/// The online pair machinery (the mp_scenarios_live shape, trimmed): two machines, the shared
-/// combat owns the site, the hashes agree.
-struct Pair {
-    a: Scene,
-    b: Scene,
-    t: u32,
-}
-
-fn start_online(s: MpSettings) -> Option<Pair> {
-    let path = iso()?;
-    let arena = format!("{:08x}.bin", s.level_code);
-    let mut a = nf_view::load_mp_carry(&path, &arena, false, None, s.clone()).expect("machine A loads");
-    let mut b = nf_view::load_mp_carry(&path, &arena, false, None, s).expect("machine B loads");
-    nf_view::net_slot0_setup(a.sim.as_mut().unwrap());
-    let sb = b.sim.as_mut().unwrap();
-    sb.swap_local_slot(1);
-    sb.net_rng = Some(nf_game::drone::Rng::new(0x5eed_0b0b ^ 1u32.wrapping_mul(0x9e37_79b9)));
-    Some(Pair { a, b, t: 0 })
-}
-
-fn machine(sim: &mut Sim, local: usize, row: &[nf_net::Input; N]) -> u64 {
-    let li = row[local];
-    sim.net_row = Some(*row);
-    sim.step_bond(to_player_input(&li), li.trigger, li.reload, li.use_key);
-    let inputs = std::array::from_fn(|i| to_player_input(&row[i]));
-    sim.step_net_remotes(&inputs, local);
-    sim.step_net_combat(row, local);
-    if let Some(m) = sim.mp.as_mut() {
-        for sl in 0..N {
-            if sl != local {
-                if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); }
-            }
-        }
-        m.set_slot(local, sim.bond.pos);
-    }
-    sim.net_state_hash(local)
-}
-
-fn online_tick(p: &mut Pair, r: &[nf_net::Input; N]) {
-    let t = p.t;
-    let sa = p.a.sim.as_mut().unwrap();
-    let ha = machine(sa, 0, r);
-    let sb = p.b.sim.as_mut().unwrap();
-    let hb = machine(sb, 1, r);
-    assert_eq!(ha, hb, "tick {t}: the two machines' states agree");
-    p.t += 1;
-}
-
-fn online_row_at(p: &Pair, shooter: usize, held: u8, target: [f32; 3]) -> [nf_net::Input; N] {
-    let s = p.a.sim.as_ref().unwrap();
-    let b = if shooter == s.mp_local_slot { s.bond.clone() } else { s.mp_bonds[shooter].clone().unwrap() };
-    let h = b.head();
-    let d = [target[0] - h[0], target[1] - h[1], target[2] - h[2]];
-    let mut r = [nf_net::NEUTRAL; N];
-    for i in r.iter_mut() { i.held = held; }
-    r[shooter].shot = true;
-    r[shooter].shot_weapon = held;
-    r[shooter].shot_aim = nf_game::mp::combat::aim_from_dir(d);
-    r
-}
-
 /// The online path still agrees: one shared-combat shot takes exactly ONE round's damage off
 /// the site (the strongest plain bullet's +0x0C word) — the local pipeline's visual bullets
-/// never feed it (the offline gate holds online), and the machines' hashes agree every tick.
+/// never feed it online (the offline gate holds there; without it every online shot would
+/// apply twice). One machine: the cross-machine hash agreement is the suite's
+/// `demolition_online`; the OOM ceiling of this sandbox can't hold two arena sims.
 #[test]
 fn online_shot_takes_exactly_one_round_of_site_damage() {
-    let Some(mut p) = start_online(settings(scenario::DEMOLITION, [1, 0])) else { eprintln!("skip: NF_ISO not set"); return };
+    let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
+    let mut scene = nf_view::load_mp_carry(&path, &format!("{ARENA:08x}.bin"), false, None, settings(scenario::DEMOLITION, [1, 0])).expect("loads");
+    nf_view::net_slot0_setup(scene.sim.as_mut().unwrap());
     let held = {
-        let sim = p.a.sim.as_ref().unwrap();
+        let sim = scene.sim.as_ref().unwrap();
         strongest_weapon(sim)
     };
-    let (centre, _r) = p.a.sim.as_ref().unwrap().mp.as_ref().unwrap().site_sphere().expect("the live site");
-    // Slot 1 (the other machine's local) stands far away; slot 0 at a clear firing spot.
-    let spot = firing_spot(p.a.sim.as_ref().unwrap(), centre, 4.0);
-    for (scene, slot) in [(&mut p.a, 0usize), (&mut p.b, 1usize)] {
+    let (centre, _r) = scene.sim.as_ref().unwrap().mp.as_ref().unwrap().site_sphere().expect("the live site");
+    // Slot 0 (this machine's local) at a clear firing spot; slot 1 parked far away.
+    let spot = {
+        let sim = scene.sim.as_ref().unwrap();
+        firing_spot(sim, centre, 4.0)
+    };
+    {
         let sim = scene.sim.as_mut().unwrap();
-        let mut b = nf_game::player::Bond::stand_at(&sim.world, if slot == 0 { spot } else { [centre[0] + 30.0, centre[1] + 0.5, centre[2]] }, 0.0);
-        if slot == 0 {
-            let head = b.head();
-            let dx = centre[0] - spot[0];
-            let dz = centre[2] - spot[2];
-            b.yaw = dx.atan2(dz);
-            let dy = centre[1] - head[1];
-            b.pitch = (dy / dx.hypot(dz)).atan2(1.0) / std::f32::consts::FRAC_PI_2;
+        let mut b = nf_game::player::Bond::stand_at(&sim.world, spot, 0.0);
+        let head = b.head();
+        let dx = centre[0] - spot[0];
+        let dz = centre[2] - spot[2];
+        b.yaw = dx.atan2(dz);
+        let dy = centre[1] - head[1];
+        b.pitch = (dy / dx.hypot(dz)).atan2(1.0) / std::f32::consts::FRAC_PI_2;
+        sim.bond = b;
+        if let Some(bb) = sim.mp_bonds[1].as_mut() {
+            let far = [centre[0] + 30.0, centre[1] + 0.5, centre[2]];
+            let away = nf_game::player::Bond::stand_at(&sim.world, far, 0.0);
+            *bb = away;
         }
-        if slot == 0 {
-            sim.bond = b;
-        } else {
-            sim.mp_bonds[slot] = Some(b);
+    }
+    // The online tick shape: the shared combat owns the rounds (the mp_scenarios_live machine()).
+    let mut row = [nf_net::NEUTRAL; N];
+    for i in row.iter_mut() { i.held = held; }
+    let tick_online = |scene: &mut Scene, r: &[nf_net::Input; N]| {
+        let li = r[0];
+        let sim = scene.sim.as_mut().unwrap();
+        sim.net_row = Some(*r);
+        sim.step_bond(to_player_input(&li), li.trigger, li.reload, li.use_key);
+        let inputs = std::array::from_fn(|i| to_player_input(&r[i]));
+        sim.step_net_remotes(&inputs, 0);
+        sim.step_net_combat(r, 0);
+        if let Some(m) = sim.mp.as_mut() {
+            for sl in 0..N {
+                if sl != 0 { if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); } }
+            }
+            m.set_slot(0, sim.bond.pos);
         }
-        let m = sim.mp.as_mut().unwrap();
-        m.set_slot(slot, if slot == 0 { sim.bond.pos } else { sim.mp_bonds[slot].as_ref().unwrap().pos });
-    }
-    online_tick(&mut p, &[nf_net::NEUTRAL; N]);
-    let before = p.a.sim.as_ref().unwrap().mp.as_ref().unwrap().objects_rt.site.as_ref().unwrap().state;
-    let r = online_row_at(&p, 0, held, centre);
-    for _ in 0..12 {
-        online_tick(&mut p, &r);
-    }
-    let after = p.a.sim.as_ref().unwrap().mp.as_ref().unwrap().objects_rt.site.as_ref().unwrap().state;
+    };
+    // Settle, snapshot the HP, fire one aimed shot, let the round fly and die.
+    for _ in 0..3 { tick_online(&mut scene, &row); }
+    let before = site_hp(&scene);
+    row[0].shot = true;
+    row[0].shot_weapon = held;
+    row[0].shot_aim = nf_game::mp::combat::aim_from_dir([centre[0] - scene.sim.as_ref().unwrap().bond.head()[0], centre[1] - scene.sim.as_ref().unwrap().bond.head()[1], centre[2] - scene.sim.as_ref().unwrap().bond.head()[2]]);
+    for _ in 0..12 { tick_online(&mut scene, &row); }
+    let after = site_hp(&scene);
     let dmg = {
-        let w = &p.a.sim.as_ref().unwrap().weapons;
+        let w = &scene.sim.as_ref().unwrap().weapons;
         f32::from_le_bytes(w.records[held as usize][0x0c..0x10].try_into().unwrap())
     };
-    assert_eq!(before - after, dmg as i16, "one round's damage, once");
+    assert_eq!(before - after, dmg as i16, "one round's damage, once (local visual bullets must not feed the site online)");
+    assert_eq!(last_hitter(&scene), 0);
 }
