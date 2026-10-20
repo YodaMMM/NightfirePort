@@ -6282,14 +6282,28 @@ impl Scene {
                 let (map, object) = level.by_hash[&sleeve];
                 let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
                 add_instance(level, &inst, Layer::Character, Some((ci, None)), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
+                // silencer-white-artifact: the record's +0x7C view-entity (the silencer mesh, records
+                // whose +0x68 flags carry 0x800 — the pair's bare record shares the mesh [L the golden
+                // weapon table 2fd48d6d]) is owned by the DATUM-0 attach below. The game hides the
+                // weapon-slot objects EVERY tick before the attach (32 `View_SetDrawInNoViews` calls,
+                // `Player_WeaponFiring` 0x1a5460 — the loop over BL+0x7ec..+0x86c and +0x86c), and the
+                // fp skin's extra list carries the SAME mesh on its suppressor bone (0x05000088's
+                // extra bone 43 = 0x02000842 [D]; likewise 05000047→0x020001f2, 05000050→0x020005b2,
+                // 050000a8→0x0200099d, 050000a9→0x020009a3, all bone 43). Drawing it here as well as
+                // the datum attach doubled the mesh's additive sheen batch (ALPHA_1 0x7f00000048 [D])
+                // — the user's "weird white thing" on attachments. Skip the extra whose hash is the
+                // record's +0x7C; the twin arm (0x1a5460:111-118) and the datum attach keep the bare
+                // twin bare and the silenced twin with exactly one suppressor.
+                let r = &wd.records[wid as usize];
+                let ventity = u32::from_le_bytes(r[0x7c..0x80].try_into().unwrap());
                 for &(bone, part) in &skin.extra {
+                    if ventity != 0 && part == Some(ventity) { continue; }
                     let Some(&(pmap, pobject)) = part.and_then(|h| level.by_hash.get(&h)) else { continue };
                     let pinst = Instance { map: pmap, object: pobject, matrix: ident, placement: placement.clone() };
                     add_instance(level, &pinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
                     attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
                 }
                 // The muzzle flash (`Player_MuzzleFlash`): mesh `weapon+0x48` on datum 0, colour (+0x56, +0x55, +0x54).
-                let r = &wd.records[wid as usize];
                 let flash = u32::from_le_bytes(r[0x48..0x4c].try_into().unwrap());
                 if let (Some(&(fmap, fobject)), Some(dt)) = (level.by_hash.get(&flash), skin.datums.iter().find(|d| d.id == 0 && d.bone >= 0)) {
                     let finst = Instance { map: fmap, object: fobject, matrix: ident, placement: placement.clone() };
