@@ -127,7 +127,7 @@ fn the_blast_puffs_draw_camera_facing() {
     for h in [0x0200_021au32, 0x0200_03d7] {
         assert!(scene.script_billboards.contains(&h), "blast mesh {h:#010x} must billboard (its glist flags carry 0x8)");
     }
-    assert!(scene.attachments.iter().any(|a| matches!(a.script, Some((0x0600_0052, _, _)))),
+    assert!(scene.attachments.iter().any(|a| matches!(a.script, Some((0x0600_0052, _, _, _)))),
         "the scene builds attachments for the blast script's entity streams");
     // Throw at the floor and wait for the explosion.
     scene.sim.as_mut().unwrap().bond.pitch = -1.4;
@@ -145,7 +145,7 @@ fn the_blast_puffs_draw_camera_facing() {
     let fs = scene.frame_state(None, 0.0, opts);
     let mut checked = 0;
     for (ai, a) in scene.attachments.iter().enumerate() {
-        let Some((h, _si, hash)) = a.script else { continue };
+        let Some((h, _si, hash, _k)) = a.script else { continue };
         if h != 0x0600_0052 { continue; }
         let m = fs.attach[ai];
         eprintln!("[blast-attach] ai={ai} hash={hash:#010x} t=[{:.2},{:.2},{:.2}] |c0|={:.4}", m[3][0], m[3][1], m[3][2], (m[0][0]*m[0][0]+m[1][0]*m[1][0]+m[2][0]*m[2][0]).sqrt());
