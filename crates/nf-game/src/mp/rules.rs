@@ -45,6 +45,12 @@ pub struct MpObjBounds {
     pub radius: f32,
     pub min: [f32; 3],
     pub max: [f32; 3],
+    /// mp-hitby-contacts: the port's derived field — the local sphere centre through the
+    /// placement's rotation (`cel+0x10 · M(obj+0x90)`, the translation row excluded):
+    /// `Control_BuildWorldSph` 0x133070:25-36 through `RotMatrix` 0x1e2368 [M]. Computed once in
+    /// `register_mp_object_bounds`; `[0,0,0]` for an unrotated placement or a bare registration.
+    /// The contact sphere's world centre is `pos + sphere_off` [M 0x133070].
+    pub sphere_off: [f32; 3],
 }
 
 /// One MP object's live state — the port's stand-in for `obj_tag+0xF4/+0xF6` and the
@@ -467,6 +473,7 @@ impl MpMatch {
         s.status = 0xfffe;
         s.status_bits = 0;
         s.dead = false;
+        s.spawn_tick = self.tick; // [M 0x185368:90 — obj+0xEC = GameState+0x52]
         self.settings.players[slot].armor_bonus as f32 + 100.0
     }
 
@@ -677,6 +684,9 @@ impl MpMatch {
         if self.settings.master == 0 || !self.settings.started {
             return;
         }
+        // mp-hitby-contacts: the frame counter the spawn window reads [M 0x1830e0:36-39] — the
+        // port's `GameState+0x52` stand-in, one advance per object walk (the fixed 60 Hz).
+        self.tick = self.tick.wrapping_add(1);
         self.uplink_update(dt);
         self.koth_update(dt, on_hill);
         self.site_update();
@@ -705,11 +715,14 @@ impl MpMatch {
 
     /// `MP_HitBy(obj, team, exclude, ..)` 0x1830e0 — the first live player in contact with the
     /// object whose team word matches (`team == 2` = any) [M :32-35], skipping the dead [M
-    /// :41-75 — the port's `dead` marker]. The game walks the object's HITDATA collision list
-    /// (`obj+0xD0`, filled by `Collide_Update`); the port's contact is the two world spheres
-    /// overlapping — the object's (`celglist+0x10/+0x1C` [M 0x133070]) and the body's
-    /// ([`PLAYER_SPHERE_RADIUS`]) — tested in slot order [S]. The game's 4-frame spawn window
-    /// [M :36-39] is not modeled [S].
+    /// :41-75 — the port's `dead` marker] and any body within the 4-frame spawn window [M
+    /// :36-39 — `|GameState+0x52 − obj+0xEC| < 4`; the port's counter is [`MpMatch::tick`], the
+    /// stamps `MpSlot::spawn_tick`]. The game's contact is the frame's HITDATA list (`obj+0xD0`,
+    /// rebuilt by `Collide_Update` 0x1ea398); the port's contact is the pick's sphere law — the
+    /// body's world sphere against the object's (`pos + sphere_off`, the placement rotation
+    /// applied [M `Control_BuildWorldSph` 0x133070; `Collide_PickObj` 0x1eae80:221-228, STRICT
+    /// `<`]) — tested in slot order [S the frame's sort cannot order all-overlapping contacts:
+    /// every body sphere's refined distance is 0, 0x1ebaa8:269-271].
     pub fn hit_by(&self, centre: [f32; 3], radius: f32, team: u32, exclude: Option<usize>) -> Option<usize> {
         let reach = radius + PLAYER_SPHERE_RADIUS;
         for slot in 0..self.game.slots.len() {
@@ -720,6 +733,11 @@ impl MpMatch {
             if team != 2 && self.settings.players[slot].team != team {
                 continue;
             }
+            // the spawn window [M 0x1830e0:36-39 — the abs diff against the body's +0xEC stamp]
+            let diff = (self.tick as i32).wrapping_sub(s.spawn_tick as i32);
+            if diff.abs() < 4 {
+                continue;
+            }
             let c = self.slot_centre(slot).unwrap();
             if sq_dist(c, centre) < reach * reach {
                 return Some(slot);
@@ -728,12 +746,13 @@ impl MpMatch {
         None
     }
 
-    /// `MP_HitBy` against one scenario object (its world sphere = position + the model's local
-    /// sphere centre; the arena objects are placed unrotated — the rotation is not applied [S]).
-    /// `None` when the object has no bounds.
+    /// `MP_HitBy` against one scenario object — the contact sphere's world centre is
+    /// `pos + sphere_off` (the local centre through the placement rotation [M
+    /// `Control_BuildWorldSph` 0x133070:25-36]), radius `bounds.radius` (the placement scale is
+    /// 1.0 [M 0x134630:19, 0x133070:37-38]). `None` when the object has no bounds.
     fn obj_hit_by(&self, o: &MpObjState, team: u32) -> Option<usize> {
         let b = o.bounds?;
-        let c = [o.pos[0] + b.centre[0], o.pos[1] + b.centre[1], o.pos[2] + b.centre[2]];
+        let c = [o.pos[0] + b.sphere_off[0], o.pos[1] + b.sphere_off[1], o.pos[2] + b.sphere_off[2]];
         self.hit_by(c, b.radius, team, None)
     }
 
@@ -1248,7 +1267,7 @@ impl MpMatch {
                 let Some(Some(base)) = self.objects_rt.esp_bases.get(team).copied() else { return };
                 let reached = match self.objects_rt.esp_bases_bounds.get(team).copied().flatten() {
                     Some(b) => {
-                        let centre = [base[0] + b.centre[0], base[1] + b.centre[1], base[2] + b.centre[2]];
+                        let centre = [base[0] + b.sphere_off[0], base[1] + b.sphere_off[1], base[2] + b.sphere_off[2]];
                         let reach = b.radius + PLAYER_SPHERE_RADIUS;
                         self.slot_centre(c).is_some_and(|sc| sq_dist(sc, centre) < reach * reach)
                     }

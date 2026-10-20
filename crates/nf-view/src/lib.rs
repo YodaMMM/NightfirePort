@@ -1378,7 +1378,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                             // the hill its box.
                             let bounds = level.by_hash.get(&p.hashcode).map(|&(mi, oi)| {
                                 let o = &level.maps[mi].objects[oi];
-                                nf_game::mp::MpObjBounds { centre: o.centre, radius: o.radius, min: o.min, max: o.max }
+                                nf_game::mp::MpObjBounds { centre: o.centre, radius: o.radius, min: o.min, max: o.max, sphere_off: [0.0; 3] }
                             });
                             m.register_mp_object_bounds(p.translation, p.rotation, ty, cfg, p.hashcode, bounds);
                         }
