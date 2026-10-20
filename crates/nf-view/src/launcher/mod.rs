@@ -59,6 +59,7 @@ fn initial_ui(arg_iso: Option<&Path>) -> Ui {
         if ui.disc.is_some() { return ui; }
     }
     let cfg = cfg_path.as_deref().map(LauncherConfig::load).unwrap_or_default();
+    ui.dev = cfg.dev;
     if let Some(p) = cfg.iso {
         match Disc::check(&p) {
             Ok(d) => ui.disc = Some(d),
@@ -72,7 +73,10 @@ fn initial_ui(arg_iso: Option<&Path>) -> Ui {
 fn remember(iso: &Path, cfg_path: Option<&Path>) -> Option<String> {
     let path = cfg_path?;
     let iso = std::fs::canonicalize(iso).map(strip_verbatim).unwrap_or_else(|_| iso.to_path_buf());
-    LauncherConfig { iso: Some(iso) }.save(path).err()
+    // Only the disc changes: the other remembered settings (dev mode) stay.
+    let mut cfg = LauncherConfig::load(path);
+    cfg.iso = Some(iso);
+    cfg.save(path).err()
 }
 
 /// `\\?\C:\x` → `C:\x` (canonicalize's verbatim prefix; the game's arg parsing and the dialog prefer the plain form).
@@ -152,7 +156,7 @@ fn shot(args: &[String], out: &Path) -> Result<()> {
     let fonts = Fonts::load().context("no usable system font")?;
     let scale: f32 = flag("--scale").and_then(|v| v.parse().ok()).unwrap_or(1.0);
     let state = flag("--state").unwrap_or_else(|| "ready".into());
-    let mut ui = Ui { t: flag("--t").and_then(|v| v.parse().ok()).unwrap_or(1.0), ..Ui::default() };
+    let mut ui = Ui { t: flag("--t").and_then(|v| v.parse().ok()).unwrap_or(1.0), dev: args.iter().any(|a| a == "--dev-on"), ..Ui::default() };
     let iso = flag("--iso").map(PathBuf::from).or_else(|| config::default_path().and_then(|p| LauncherConfig::load(&p).iso));
     match state.as_str() {
         "first" => {}
@@ -342,7 +346,7 @@ impl App {
         let Some(d) = &self.ui.disc else { return self.select() };
         let iso = d.path.clone();
         let exe = match platform::game_exe() { Ok(e) => e, Err(e) => { self.ui.error = Some(e); return; } };
-        match platform::launch(&exe, &iso, game_log_path().as_deref()) {
+        match platform::launch(&exe, &iso, game_log_path().as_deref(), self.ui.dev) {
             Ok(child) => { self.child = Some(child); self.launched_at = Some(Instant::now()); self.ui.launching = true; self.ui.error = None; self.ui.hover = None; }
             Err(e) => self.ui.error = Some(e),
         }
@@ -354,6 +358,14 @@ impl App {
             Btn::Select | Btn::Change => self.select(),
             Btn::ReportCrash => self.report_crash(),
             Btn::Quit => el.exit(),
+            Btn::Dev => {
+                self.ui.dev = !self.ui.dev;
+                if let Some(p) = config::default_path() {
+                    let mut cfg = LauncherConfig::load(&p);
+                    cfg.dev = self.ui.dev;
+                    if let Err(e) = cfg.save(&p) { self.ui.error = Some(e); }
+                }
+            }
         }
         if let Some(g) = &self.gfx { g.window.request_redraw(); }
     }
