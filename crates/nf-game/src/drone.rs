@@ -8225,6 +8225,29 @@ pub struct Drones {
     /// slot) replays the HITDATA walk from it; `end = start + ray` recomputes the flight segment
     /// bit-for-bit and the revive reuses the raw ray (the inline walk's `b.pos += ray`).
     pub pending_world_impacts: Vec<(usize, V3, V3)>,
+    /// mp-site-damage-offline: the scenario site's contact sphere (centre, radius) this tick —
+    /// the driver sets it from `MpMatch::site_sphere` before the tick, only on an offline load
+    /// (online the shared combat owns the site; the local bullets are its visual shadow there).
+    /// None = no live site (no match, not Demolition/Protection, or the site is done).
+    pub site_sphere: Option<(V3, f32)>,
+    /// mp-site-damage-offline: this tick's player-bullet contacts on the site, summed — the game
+    /// fills the site SP's stream objects' `obj+0xD0` HITDATA chains during the collision pass and
+    /// `MP_DemolitionProtectionUpdate` 0x1870a0:81-91 sums each frame's chain into ONE
+    /// `(short)(int)((float)(int)hp − sum)` store. Contacts whose weapon's category word
+    /// (`weapon_data+0x10`, u16) ANDs the game's mask 1 are dropped before the sum
+    /// [M `Collide_FilterBullets` 0x1ece30:24-31 — the disc's bit-0 records are the fists and the
+    /// 0x63-0x66 melee specials only]. The hitter is Bond (the local slot — the port's local
+    /// pipeline fires no other rounds [S]). Cleared each tick at the flight pass's head; the
+    /// driver drains it into `MpMatch::damage_site` after the tick.
+    pub site_bullet_damage: f32,
+    /// mp-site-damage-offline: this tick's local blasts that reach the site, as `(falloff, owner
+    /// key)` — `Explode_Propagate`'s case 0x35 calls `MP_ApplyDamage(falloff, mpobj, owner)`
+    /// DIRECTLY, one truncating store per blast, no chain [M 0x17c518:187, 0x18b2c8:20-25]. The
+    /// owner key is `usize::MAX` for Bond's throw (the established key), a drone index otherwise;
+    /// the driver maps the player key to the local slot. Cleared each tick at the flight pass's
+    /// head; the driver drains it after the tick, the blasts BEFORE the bullet sum (the game's
+    /// frame order — the blast fires mid-frame, the MP update reads the chain at the frame's end).
+    pub site_blast_hits: Vec<(f32, usize)>,
     pub last_flinch: Option<u32>,
     /// The level's `light_tag` records (`LightList` 0x2c74c0): level placements, ambient radiators,
     /// the searchlights' kind-2 beams and the muzzle flashes (fix-lighting).
@@ -8709,6 +8732,10 @@ impl Drones {
             // fix-nav-remainder (fields on their own lines — merge lesson 4).
             node_kicks: None,
             kicked_nodes: Default::default(),
+            // mp-site-damage-offline (fields on their own lines — merge lesson 4).
+            site_sphere: None,
+            site_bullet_damage: 0.0,
+            site_blast_hits: Vec::new(),
             gas: Default::default(),
             swooshes: Vec::new(),
             // fix-death-restart: the death sequence + the fail-menu policy (fields on their own lines
@@ -9408,6 +9435,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // open live check in the report).
         let drones: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
             .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, 0.4)).collect();
+        // mp-site-damage-offline: the blast reaches the scenario site — `Explode_Propagate`'s
+        // case 0x35 applies `MP_ApplyDamage(falloff, mpobj, owner)` directly, one store per blast,
+        // the falloff the shared exact form [M 0x17c518:82-85,:187]. Queued for the driver (the
+        // blast fires mid-frame, before the frame's MP update reads the bullets' chain — the
+        // driver drains the blasts before the bullet sum).
+        if let Some((c, r)) = self.site_sphere {
+            let a = crate::mp::combat::blast_falloff(pos, radius, damage, c, r);
+            if a > 0.0 { self.site_blast_hits.push((a, owner)); }
+        }
         let hits = crate::explode::propagate(pos, radius, damage, owner,
             &crate::explode::Targets { drones: &drones, player: player_pos, breaks: &[], destroys: &[] });
         // Bond: `Player_Hurt` (the difficulty factor is applied in `explode_propagate`).
@@ -9659,8 +9695,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for fb in &mut self.fuseboxes { fb.clear_hits(); }
         // The script objects' hit chains clear with them (the same Collide head): the SP damage
         // accumulation's per-tick gather (`tick_damage`, consumed by `Player::update`'s damage
-        // tail [M SP_Update 0x1dc1c0-0x1dc330]) starts empty each frame.
+        // tail [M SP_Update 0x1dc1c0-0x1dc330]) starts empty each frame. The site's per-tick
+        // feeds start empty with them (the driver drains into `damage_site` after the tick).
         for p in &mut self.scripts.players { p.tick_damage = 0.0; }
+        self.site_bullet_damage = 0.0;
+        self.site_blast_hits.clear();
         // The held hit-point scripts' stream objects — `SP_GetHitDamage` 0x1dc5f8's read set
         // (GAPS G-047: the 0700001b solar panels). Each bullet contact below adds its damage.
         let held_targets = self.scripts.held_hit_targets(d);
@@ -9833,6 +9872,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for (pi, c, r) in &held_targets {
                 if Self::segment_hits_sphere(b.pos, end, *c, *r) {
                     self.scripts.add_hit_damage(*pi, b.damage);
+                }
+            }
+            // mp-site-damage-offline: the site takes the bullet this tick — the game's collision
+            // pass appends the contact to the site SP's stream objects' `obj+0xD0` chain and the
+            // frame's `MP_DemolitionProtectionUpdate` 0x1870a0:81-91 sums the chain into one HP
+            // store. The filter first [M `Collide_FilterBullets` 0x1ece30:24-31]: the game's
+            // mask-1 read drops contacts whose weapon's category word (`weapon_data+0x10`, u16)
+            // ANDs non-zero — the disc's bit-0 records are the fists and the 0x63-0x66 melee
+            // specials only [D census]. The contact test is the held_targets shape (the segment
+            // vs the site sphere, no world gate — the sphere is the port's stand-in for the site
+            // SP's stream objects [S]; the online combat and the bot rounds use the same sphere).
+            if let Some((c, r)) = self.site_sphere {
+                let cat = d.weapons.records.get(b.weapon as usize)
+                    .map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+                if cat & 1 == 0 && Self::segment_hits_sphere(b.pos, end, c, r) {
+                    self.site_bullet_damage += b.damage;
                 }
             }
             // The lazer watch's beam burns the locks (`Lock_Update` 0x1ae3d8 case 0, record word 1):

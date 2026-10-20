@@ -4485,8 +4485,37 @@ impl Sim {
         // brackets the death's start tick — `MP_PlayerKilled` 0x188f70 fires from
         // `Player_CheckForDeath` 0x190810:91 exactly when the health runs out, then the 5 s gate
         // respawns (`Player_HandleDeath` 0x190bb0:41-54 → `MP_ReSpawn` 0x185368).
+        // mp-site-damage-offline: the offline local pipeline's site feed — the sphere only on an
+        // offline load (online the shared combat owns the site; the local bullets are its visual
+        // shadow there, and a second feed would apply every online shot twice [S port
+        // architecture]). The offline gate is the Sim's own online marker pair — the same
+        // predicate `step_mp_death_respawn` runs under.
+        self.drones.site_sphere = if self.net_rng.is_none() && self.net_rng_shared.is_none() {
+            self.mp.as_ref().and_then(|m| m.site_sphere())
+        } else {
+            None
+        };
         let mp_death_was_active = self.drones.death.active;
         self.drones.tick(&d, &player);
+        // mp-site-damage-offline: the local pipeline's site contacts land the game's way — the
+        // frame's blasts first (the case-0x35 direct `MP_ApplyDamage` per blast [M 0x17c518:187]),
+        // then the frame's bullet sum as ONE store (the game's `SP_GetHitDamage` chain read
+        // [M 0x1870a0:81-91]; the first contact's hitter names the last-hitter slot — the port's
+        // local rounds are all Bond's). The truncate-per-store order matches the game's frame;
+        // `damage_site`'s own gates (scenario, the done flag) stand.
+        {
+            let blasts = std::mem::take(&mut self.drones.site_blast_hits);
+            let bullets = std::mem::replace(&mut self.drones.site_bullet_damage, 0.0);
+            if let Some(m) = self.mp.as_mut() {
+                let local = self.mp_local_slot;
+                for (dmg, owner) in blasts {
+                    // The owner key: `usize::MAX` = Bond's throw → the local slot; a drone-index
+                    // key has no MP slot (the MP bots are not drones) and is skipped [S].
+                    if owner == usize::MAX { m.damage_site(dmg, local); }
+                }
+                if bullets > 0.0 { m.damage_site(bullets, local); }
+            }
+        }
         // death-blood-pane: `Player_CheckForDeath` runs `Player_WeaponNone` 0x1a9858 on the death
         // tick [M 0x190810:61] — the held id becomes 'G' (0x47) at once, no holster cycle — so the
         // first-person gun is gone for the whole sequence (PCSX2: no gun from the 40th dead frame on).
