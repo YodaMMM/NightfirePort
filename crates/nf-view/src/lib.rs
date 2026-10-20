@@ -495,6 +495,24 @@ pub fn net_tick(sim: &mut scene::Sim, row: &[nf_net::Input; nf_net::MAX_AGENTS],
     crate::scene::fold_component_hashes(&net_tick_comps(sim, row, local))
 }
 
+/// GAPS G-053 item 4: every active slot's match record takes its body's post-move
+/// position, written in ONE place for the live loop and `net_tick` (docs/systems/
+/// net-slot-positions.md §3). The two sites drifted once — net-match-host's live loop
+/// wrote `for sl in 0..4` while the tick path wrote every slot — and a 5th+ human's
+/// record then froze on the other machines while its own machine held the post-move
+/// position (both `net_state_hash` folds read the record: the bodies' and the match's).
+/// One shared writer keeps that class of drift impossible; the order is the slots
+/// ascending with the local slot last, the shape every machine runs.
+pub fn write_net_slot_positions(sim: &mut scene::Sim, local: usize) {
+    if let Some(m) = sim.mp.as_mut() {
+        for sl in 0..nf_net::MAX_AGENTS {
+            if sl == local { continue; }
+            if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); }
+        }
+        m.set_slot(local, sim.bond.pos);
+    }
+}
+
 /// net-desync-detail: `net_tick` with the named component hashes returned — the desync watcher's
 /// per-tick feed (the combined hash the session compares is their fixed-order fold).
 pub fn net_tick_comps(sim: &mut scene::Sim, row: &[nf_net::Input; nf_net::MAX_AGENTS], local: usize) -> [u64; crate::scene::NET_HASH_COMPONENTS] {
@@ -506,13 +524,7 @@ pub fn net_tick_comps(sim: &mut scene::Sim, row: &[nf_net::Input; nf_net::MAX_AG
     let inputs = std::array::from_fn(|i| mpnet::to_player_input(&row[i]));
     sim.step_net_remotes(&inputs, local);
     sim.step_net_combat(row, local);
-    if let Some(m) = sim.mp.as_mut() {
-        for sl in 0..nf_net::MAX_AGENTS {
-            if sl == local { continue; }
-            if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); }
-        }
-        m.set_slot(local, sim.bond.pos);
-    }
+    write_net_slot_positions(sim, local);
     sim.net_component_hashes(local)
 }
 
@@ -4718,12 +4730,9 @@ impl App {
                                     sim.step_net_combat(&net_inputs, slot);
                                     // The local pipeline's shot this tick rides the next submitted input.
                                     if let Some(sh) = sim.net_shot.take() { self.net_shot_pending = Some(sh); }
-                                    if let Some(m) = sim.mp.as_mut() {
-                                        for sl in 0..nf_net::MAX_AGENTS {
-                                            if sl != slot { if let Some(b) = &sim.mp_bonds[sl] { m.set_slot(sl, b.pos); } }
-                                        }
-                                        m.set_slot(slot, sim.bond.pos);
-                                    }
+                                    // GAPS G-053 item 4: the same every-slot post-move write the tick
+                                    // path runs — one shared writer, no fixed 4.
+                                    write_net_slot_positions(sim, slot);
                                     // net-desync-detail: the named component hashes — the
                                     // session compares their fixed-order fold; the watcher keeps
                                     // the last 600 ticks of components plus, at the exchange
