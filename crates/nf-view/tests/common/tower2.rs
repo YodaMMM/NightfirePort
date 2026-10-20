@@ -64,12 +64,30 @@ pub fn walk_12(w: &mut crate::walker::Walker) {
         w.tick_fire(input);
     }
     eprintln!("[012] the keypad lock burned at +{} ticks (ch 0xa) [M 0x1ae3d8:194]", w.total_ticks - start);
+    for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
     {
-        // The unlock edge + the door's response (the two-stage latch fix): the door OPENS.
-        for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.doors.list[19].state & 0xc != 0,
-            "ch 0xa's rising edge opens door[19] [M Door_Update's lock path; 0x1336f8's two-latch snapshot]");
+        // The unlock evidence, difficulty-independent: on Agent (the walkreal load, difficulty 3)
+        // the burn's ch 0xa edge opens the door and the assert window is inside the 360-tick
+        // auto-close; on Operative (the campaign's difficulty-1 load) the create-unlock's per-tick
+        // hold [M Lock_Update 0x1ae3d8:192-196] fires the SAME unlock edge at tick 1 — the door
+        // opened then and the 360-tick auto-close [M 0x13660c-0x136700] may legitimately have shut
+        // it again by the time the route walks here. The unlock's own marks are what Door_Update's
+        // arm leaves behind on both paths: the lock channel cleared + the busy bit
+        // [M 0x1363c8:105-107; the 0x1336f8 two-latch snapshot].
+        let d19 = &sim.drones.doors.list[19];
+        // The unlock evidence, difficulty-independent: ch_lock cleared is what Door_Update's
+        // unlock arm leaves on BOTH paths — on Agent (the walkreal load, difficulty 3) the burn's
+        // ch 0xa edge, on Operative (the campaign's difficulty-1 load) the create-unlock's per-tick
+        // hold [M Lock_Update 0x1ae3d8:192-196] firing the same edge at tick 1 (the door is open
+        // from spawn there and the 360-tick auto-close [M 0x13660c-0x136700] may have shut it
+        // again long before the route arrives — the state is timing-dependent, the unlock is not).
+        // The warm-load busy-flag path (flags 0x3, no 0x10) differs from the cold Agent run — see
+        // the report's live checks.
+        assert!(d19.ch_lock == 0,
+            "door[19] unlocked (the ch 0xa arm clears +0x68 [M 0x1363c8:105-107]); got ch_lock {} flags {:#x} state {:#x}",
+            d19.ch_lock, d19.flags, d19.state);
+        eprintln!("[012] door[19] plc {} unlocked: ch_lock 0, state {:#x} flags {:#x}", d19.placement, d19.state, d19.flags);
     }
 
     // Leg 3: through the opened door[19] and north-west to the console. THE DOCUMENTED STAND-IN:

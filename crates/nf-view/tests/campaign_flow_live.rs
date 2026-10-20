@@ -23,6 +23,8 @@ use nf_view::scene::Scene;
 
 #[path = "common/walker_b2.rs"]
 mod walker;
+#[path = "common/tower2.rs"]
+mod tower2;
 
 use walker::{Act, Walker, Wp};
 
@@ -36,9 +38,35 @@ fn driver_for(level: u32) -> Option<fn(&mut Walker) -> String> {
         0x07000009 => Some(drive_09),
         0x0700000a => Some(drive_0a),
         0x07000008 => Some(drive_08),
+        0x07000012 => Some(drive_12),
         0x0700004a => Some(drive_4a),
         _ => None,
     }
+}
+
+/// 12: the real walkreal-b route (common/tower2.rs, shared with the 07000013 test) — the spawn
+/// touch ch 0x48, the Q-Decryptor keypad burn, the console E (ch 0x49/0x59), the lift call
+/// (ch 0x58) and the gated exit #669 → 0700004a. The channel fallback must NOT run here: it
+/// would fire obj 2's ch 0x4d on 07000012 itself, but the level's data has NO writer for that
+/// channel [D census §2 — every placement/trigger/script checked] — the game completes "Escape
+/// through the elevator shaft" one level later, when 0700004a's spawn plate #277 fires ch 0x4d
+/// (drive_4a asserts that fold). The two documented walkreal stand-ins ride along (the door[19]
+/// pincer, the 0.88 funnel) — everything else is the real input path.
+fn drive_12(w: &mut Walker) -> String {
+    tower2::walk_12(w);
+    tower2::walk_12_exit(w);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let i12 = mission::LEVELS.iter().position(|l| l.level == 0x0700_0012).unwrap();
+        assert_eq!(sim.drones.mission.states[i12][0], 4,
+            "12's override objective folded through the real console E [M 0x1827d8 case 3]");
+        // The sister that fails on the old stand-in: obj 2 must be ANNOUNCED (3, its enable ch
+        // 0x49 rose at the console E) but NOT complete on 07000012 — nothing in this level's data
+        // writes ch 0x4d [D census §2]; the fold happens on 0700004a.
+        assert_eq!(sim.drones.mission.states[i12][1], 3,
+            "'Escape through the elevator shaft' announces but does NOT fold on 07000012 — its writer is 0700004a's touch #277 [D census §2]");
+    }
+    "real drive 12: the spawn touch ch 0x48 → the Q-Decryptor burn (the keypad locks auto-unlock at the campaign's difficulty 1 [M 0x1ae1f8 tail]) → door[19] stand-in → the console E ch 0x49/0x59 → the lift call ch 0x58 → funnel stand-in → the gated exit #669; obj 2's writer is on 0700004a (the late AND, asserted in drive_4a)".to_string()
 }
 
 /// Fire the held gadget at a static point through the real trigger path (the walkreal-0a aim
@@ -331,6 +359,22 @@ fn drive_4a(w: &mut Walker) -> String {
         // The fold itself is the runner's row.complete (the mission layer's arm after the banner;
         // the warm-carry fold timing is the live-checked open item, see the report).
     }
+    // objective-77: the late AND lands HERE — 0700004a's spawn plate #277 (the shaft's first
+    // surface, y −9.87..−7.65 [D 0700004a.md §2]) is the only writer of ch 0x4d in the mission's
+    // data [D census §2], so 07000012's "Escape through the elevator shaft" folds on this leg,
+    // one level after its record. The monitor is alive on this leg (the warm-entry clear +
+    // drive_4a's own clears) — the fold ran when the touch fired.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let i12 = mission::LEVELS.iter().position(|l| l.level == 0x0700_0012).unwrap();
+        let i4a = mission::LEVELS.iter().position(|l| l.level == 0x0700_004a).unwrap();
+        assert_eq!(sim.drones.mission.states[i12][1], 4,
+            "12's 'Escape through the elevator shaft' folds on 0700004a via touch #277's ch 0x4d (the late AND) [D census §2; M 0x1827d8 case 3]");
+        assert_eq!(sim.drones.mission.states[i12][0], 4,
+            "sister: 12's override objective stays complete through the fold [M 0x182270 keeps previous parts]");
+        assert_eq!(sim.drones.mission.states[i4a][0], 4,
+            "4a's own 'Gain access to lobby' folded at the ride's end (ch 0x4a) [M 0x1827d8 case 3]");
+    }
     note.push_str("the ride real (the script-end writer is the documented stand-in)");
     note
 }
@@ -395,6 +439,22 @@ fn play_level(iso_path: &str, level: u32, budget: u32, save: Option<&RamSave>) -
         Err(_) => { row.note = "CRASH in load".into(); return (row, None); }
     };
     let Some(sim) = sc.sim.as_mut() else { row.note = "no sim".into(); return (row, None); };
+    // objective-77: a real warm entry never finds the mission verdict channels ON — ch 100 rises
+    // only through the monitor's all-AND [M 0x1827d8:119-123], and the arms it triggers end the
+    // level themselves (complete → the DRIVING/front-end codes [M 0x182c60:85-122], fail → the
+    // 0x40000042 menu [M 0x182c60:77-81]) with the player paused, so no exit E can follow; ch 99
+    // is the fail verdict with the same property. The runner's forced verdicts DO leave them set
+    // (the set_channel(100) below), and a carried ch 100 re-runs the complete arm on the next
+    // level's FIRST monitor tick (Mission_Init 0x182270 re-arms internal 1 but is nobody's
+    // channel reset for 99/100 — the 07000011 leg's ch-100 objective [L ee_start_05 @ 0x2a4188]
+    // made this reachable) — the monitor then never runs on that level (internal 7→4→5) and no
+    // objective folds there (the 07000012 "unfired [77]" row). Bring the channels to what a real
+    // level entry finds, before the mission layer's first tick.
+    if save.is_some() {
+        let f = sim.drones.frame;
+        sim.drones.channels.set(100, 0, f);
+        sim.drones.channels.set(99, 0, f);
+    }
     let (start, yaw) = sc.start.unwrap_or(([0.0, 2.0, 0.0], 0.0));
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, start, yaw);
     row.spawned = true;
@@ -427,6 +487,16 @@ fn play_level(iso_path: &str, level: u32, budget: u32, save: Option<&RamSave>) -
                 // `& 1` never skipped, so on 07000009 the runner raised the alarm itself and the
                 // fail-restart (level_exit = the level) masked the real 0xE8 exit.
                 if o.flags & 2 != 0 { continue; } // channel ON = FAIL — leave it off
+                // objective-77: never fire the verdict channels as an objective stand-in — ch 100 is
+                // the mission-success AND the monitor itself writes [M 0x1827d8:119-123], and the
+                // disc pins one objective's condition to it (07000011 "Escape from the tower",
+                // record channel 0x64 [L ee_start_05 @ 0x2a4188]; the monitor's AND reads every
+                // record's condition unconditionally [M 0x1827d8:32-38 — bVar9 &= bVar1 before the
+                // switch]), so firing ch 100 here completed the mission mid-loop on 07000011 and
+                // the carried ch 100 then killed 07000012's monitor (see the warm-entry clear
+                // above). That objective folds when the mission actually completes — on the tower
+                // mission the AND self-reference means the LEVEL's own data writes ch 100.
+                if o.channel == 100 || o.channel == 99 { continue; }
                 if o.enable != 0 { sim.drones.set_channel(o.enable); }
                 if o.channel != 0 { sim.drones.set_channel(o.channel); }
                 for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
@@ -449,9 +519,12 @@ fn play_level(iso_path: &str, level: u32, budget: u32, save: Option<&RamSave>) -
                 sim.drones.set_channel(100);
             }
         } else {
-            // The driven leg: count the objectives the driver's real writers actually folded.
+            // The driven leg: count the objectives the driver's real writers actually FOLDED
+            // (state 4 — the old `< 2` counted an ANNOUNCED objective as done, which hid exactly
+            // the late-AND gap this task ports: 07000012's obj 2 announces on 07000012 and only
+            // completes on 0700004a, so its row must read 1/2 there [D census §2]).
             let unfired: Vec<u16> = d.objectives.iter().enumerate()
-                .filter(|(j, _)| sim.drones.mission.states[i][*j] < 2)
+                .filter(|(j, _)| sim.drones.mission.states[i][*j] < 4)
                 .map(|(_, o)| u16::from(o.channel))
                 .collect();
             row.objectives = format!("{}/{}", total - unfired.len(), total);
