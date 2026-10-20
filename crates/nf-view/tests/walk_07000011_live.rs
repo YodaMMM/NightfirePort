@@ -99,6 +99,9 @@ fn e_at_the_load_point_exits_to_07000012() {
     // Sister: E far from any exit must not end the level.
     for _ in 0..3 { sim.step_bond(Input::default(), false, false, true); }
     assert_eq!(sim.drones.level_exit, None, "E in the open must not fire an exit");
+    // door-react-path5: release before the real press — the game's use fires once per press edge
+    // [M 0x1a5ea8-0x1a5ee8 + 0x17f084-0x17f090]; the teleport under a held key re-fires nothing.
+    for _ in 0..3 { sim.step_bond(Input::default(), false, false, false); }
     // Walk (teleport) up to the Load Point #158 [D (14.58, 16.41, −3.94), a plate only 0.05 thick in
     // z] and press E facing −z: the use sphere (head + look·1.0 [M 0x1a5170]) must meet the volume.
     let exit = sim.drones.triggers.iter()

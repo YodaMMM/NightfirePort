@@ -229,6 +229,13 @@ fn castle_b_exit_is_locked_until_the_gate_then_loads_07000003_through_the_wrap()
             sim.bond.yaw = 0.0;
             sim.bond.pitch = 0.0;
         }
+        // door-react-path5: release tick then press — the game's use fires once per press edge
+        // [M 0x1a5ea8-0x1a5ee8 + 0x17f084-0x17f090]; the loop's presses must each be fresh (the
+        // sister's press and the earlier iterations' presses must not bleed into this one). The
+        // gate re-raises AFTER the release tick — the real writer is AND #480's recomputed output
+        // [D], reclaimed within one tick of a one-shot write.
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        scene.sim.as_mut().unwrap().drones.set_channel(key_gate);
         scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, true);
         if scene.sim.as_ref().unwrap().drones.level_exit.is_some() { fired = Some(i); break; }
     }
@@ -282,6 +289,10 @@ fn castle_c_exit_is_locked_until_the_gate_then_loads_07000004_through_the_wrap()
             sim.bond.yaw = 0.0;
             sim.bond.pitch = 0.0;
         }
+        // door-react-path5: release tick then press — see the castle_b loop (the press edge [M
+        // 0x1a5ea8-0x1a5ee8 + 0x17f084-0x17f090]); the gate re-raises after the release tick.
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        scene.sim.as_mut().unwrap().drones.set_channel(key_gate);
         scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, true);
         if scene.sim.as_ref().unwrap().drones.level_exit.is_some() { fired = Some(i); break; }
     }

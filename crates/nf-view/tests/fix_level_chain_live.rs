@@ -94,9 +94,13 @@ fn sweep_use(sim: &mut nf_view::scene::Sim, lo: [f32; 3], hi: [f32; 3], ticks: u
     let c = [(lo[0] + hi[0]) * 0.5, lo[1] + 0.1, (lo[2] + hi[2]) * 0.5];
     for k in 0..4u32 {
         sim.bond = nf_game::player::Bond::new(c, k as f32 * std::f32::consts::FRAC_PI_2);
+        // door-react-path5: press-release pairs — the game's use fires once per press edge
+        // [M 0x1a5ea8-0x1a5ee8 + 0x17f084-0x17f090], so the sweep's every tick must be a fresh
+        // press (a held key across the Bond::new re-placements re-fires nothing).
         for _ in 0..ticks {
             sim.step_bond(Default::default(), false, false, true);
             if sim.drones.level_exit.is_some() { return sim.drones.level_exit; }
+            sim.step_bond(Default::default(), false, false, false);
         }
     }
     sim.drones.level_exit
@@ -122,7 +126,13 @@ fn the_0700000a_balcony_exit_needs_the_key_and_chains_to_0700000b() {
     // load. 0x48/0x49's own writers are the Q-Worm script player (SP out 72 [D levels.md §5.2]) and
     // the security-centre zone — per-level walkthrough material (campaign-flow blocker 6) — and
     // whatever reclaims them per tick, so the test holds them across the sweep the way their live
-    // writers would.
+    // writers would. door-react-path5: raise the inputs and give ONE settle tick so the mux pass
+    // lifts 0x4a before the first press (the use pick reads the channel before the same tick's
+    // trigger pass), then press-FIRST pairs — Bond::new drops him onto the plate and the fall
+    // leaves the bbox's reach within ~2 ticks, so the presses must start at tick one.
+    sim.drones.set_channel(0x48);
+    sim.drones.set_channel(0x49);
+    sim.step_bond(Default::default(), false, false, false);
     for k in 0..4u32 {
         let c = [(exit.lo[0] + exit.hi[0]) * 0.5, exit.lo[1] + 0.1, (exit.lo[2] + exit.hi[2]) * 0.5];
         sim.bond = nf_game::player::Bond::new(c, k as f32 * std::f32::consts::FRAC_PI_2);
@@ -130,8 +140,13 @@ fn the_0700000a_balcony_exit_needs_the_key_and_chains_to_0700000b() {
         for _ in 0..120 {
             sim.drones.set_channel(0x48);
             sim.drones.set_channel(0x49);
+            // door-react-path5: every press is fresh — press then release [M 0x1a5ea8-0x1a5ee8
+            // + 0x17f084-0x17f090].
             sim.step_bond(Default::default(), false, false, true);
             if sim.drones.level_exit.is_some() { seen = sim.drones.level_exit; break; }
+            sim.drones.set_channel(0x48);
+            sim.drones.set_channel(0x49);
+            sim.step_bond(Default::default(), false, false, false);
         }
         if seen.is_some() { assert_eq!(seen, Some(0x0700_000b), "the keyed E-path loads 0700000b [M 0x1b2318:111-116]"); return; }
     }

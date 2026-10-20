@@ -223,11 +223,20 @@ fn drive_0a(w: &mut Walker) -> String {
     w.scene.sim.as_mut().unwrap().drones.set_channel(0x30);
     w.wait(2);
     w.scene.sim.as_mut().unwrap().bond = nf_game::player::Bond::new([-10.6, 0.4, -19.3], 0.0);
-    for _ in 0..400 { w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, true); }
+    // door-react-path5: press-release pairs — the use fires once per press edge [M 0x1a5ea8-0x1a5ee8
+    // + 0x17f084-0x17f090], and a press on the unlock-auto-opened door (the rising edge's own
+    // Door_Activate [M 0x1363c8]) re-closes it [M 0x135be0's state-4/8 arm]; the player's taps
+    // re-open it. The placements below carry Bond past the door either way.
+    for _ in 0..200 { w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, true);
+                      w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     w.total_ticks += 400;
     w.scene.sim.as_mut().unwrap().bond = nf_game::player::Bond::new([-9.7, 0.4, -19.3], 0.0);
     w.scene.sim.as_mut().unwrap().bond = nf_game::player::Bond::new([21.72, 1.12, 19.4], 0.0);
-    for _ in 0..600 { w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, true); }
+    // door-react-path5: press-release pairs at the hatch too — each pair is a fresh E press
+    // [M 0x1a5ea8-0x1a5ee8].
+    for _ in 0..300 { w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, true);
+                      if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
+                      w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     w.total_ticks += 600;
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.level_exit, Some(0x0700_000b), "the hatch loads 0700000b [D]");
     note.push_str("the hatch E → the real exit to 0b");
@@ -635,8 +644,12 @@ fn play_level(iso_path: &str, level: u32, budget: u32, save: Option<&RamSave>) -
                     // (ch 0x4a) is an AND mux's output the mux recomputes every tick, so a one-shot
                     // write is reclaimed before the E-path reads it.
                     if key_gate != 0 { sim.drones.set_channel(key_gate); }
-                    sim.step_bond(Default::default(), false, false, true); // the use key held
+                    // door-react-path5: press then release — each iteration is a fresh press edge
+                    // [M 0x1a5ea8-0x1a5ee8 + 0x17f084-0x17f090]; the earlier facings' keys must not
+                    // swallow this facing's presses.
+                    sim.step_bond(Default::default(), false, false, true); // the use key pressed
                     if sim.drones.level_exit.is_some() { break 'facing; }
+                    sim.step_bond(Default::default(), false, false, false);
                 }
             }
         } else if !row.complete {
