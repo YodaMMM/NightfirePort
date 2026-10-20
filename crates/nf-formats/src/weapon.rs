@@ -97,6 +97,26 @@ impl WeaponData {
         self.records.get(weapon).map_or(0, |r| u32::from_le_bytes(r[0x6c..0x70].try_into().unwrap()))
     }
 
+    /// The damage a flying bullet of this weapon carries in its HITTEST (`hittest+0x90`, the contact float the
+    /// hit object's list receives): `weapon_data[w]+0x0C`, with the per-id overrides `Bullet_update` applies every
+    /// flying tick [M 0x12e7b0 tail, disasm 0x12f05c-0x12f0b8: `lwc1 f0, 0xC(weapon_def)` → `swc1 f0, 0xE0(instance)`
+    /// — the override switch runs only when `weapon_def+0x08` as f32 > 0; ids 0x2A/0x2C-0x2F (the impact-explode
+    /// rockets) are forced 1.0, ids 0x2B/0x34-0x37/0x3A-0x40 (the throwables) are forced 0.0].
+    pub fn bullet_contact_damage(&self, weapon: u16) -> f32 {
+        let Some(r) = self.records.get(weapon as usize) else { return 0.0 };
+        let dmg = f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap());
+        let gate = f32::from_le_bytes(r[0x08..0x0c].try_into().unwrap());
+        if gate > 0.0 {
+            match weapon {
+                0x2a | 0x2c..=0x2f => return 1.0,
+                0x2b | 0x34..=0x37 | 0x3a..=0x40 => return 0.0,
+                _ => {}
+            }
+        }
+        dmg
+    }
+
+
     /// `+0x6C & 0x40000`: whether this weapon's bullets emit a fly-by sound [M].
     pub fn flyby(&self, weapon: usize) -> bool { self.bullet_flags(weapon) & 0x40_000 != 0 }
 
