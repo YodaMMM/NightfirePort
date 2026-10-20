@@ -25,7 +25,23 @@ Global (enter) → WaitSwitch (1) / PlayScript (3) / `Drone+0x5A2` = Idle (4), o
 (no path → Idle). WaitSwitch ENTER calls `NDrone2_Enable(0)` [M 0x15b960:14-17 → 0x149dd0:8-15: `obj+0xF0 |= 0x10|0x20`
 (not drawn, not picked — Collide_PickObj 0x1eae80:26-30, View_AddObjects 0x1e62d8:33), `+0x4F8 &= ~0x1801A0` (no anim/AI)] —
 **a ch-waiter is an invisible statue until its channel fires** (its UPDATE polls the live channel, 0x15b960:21-37; the
-wake re-enables and starts 0x32/3/`+0x5A2`). A level NIS freezes every drone the same way: `Drone_EnableAll(0)` walks the
+wake re-enables and starts 0x32/3/`+0x5A2`).
+
+The freeze does not stop the poll: the per-frame wake message is the drone's own — `NDrone2_ControlSTANDARD` 0x1490f0:81
+self-sends **msg 3** every frame, and `Drone_Control` 0x139268 gates only on `NPCGlobals`/`Drone_bDisableSystem`/the MP
+slot, never on the enable flag — so a frozen waiter still samples `switch_channels[+0x134]` from its own control run every
+frame. (The dispatcher is one function per state: `Drone_SM_InitObject` 0x175838 wires `NDrone2_ProcessStateMachine`
+0x175778 at smi+0x28, which indexes `NDrone2_StateFuncs[state]`; an unconsumed message retries with state index 0 —
+`NDrone2_DSTATE_Global` — which is the port's `handle(state)` → `handle(GLOBAL)` fallback.)
+
+Two facts pin the entry and the re-entry. `NDrone2_DefaultInit` 0x14b300:466-468 latches `+0x134` = the placement's
+switch channel and `+0x136` = **`switch_channels[+0x134]` at creation time**; `NDrone2_DSTATE_Global` 0x15b830 msg-1
+sends a channel-armed drone to WaitSwitch only while `+0x136 == 0` — the snapshot, not the live channel — so a drone
+created with its channel already on skips WaitSwitch entirely. And the states a wake lands in consume msg-1 (Patrol
+0x15c498 case 1 falls to `caseD_0` → returns 1), which is why Global's msg-1 WaitSwitch entry does not re-fire on the
+post-wake state change. `NDrone2_Enable(1)` (the wake's re-enable) proceeds only while `+0x4F8 & 0x200` is CLEAR and
+restores `+0x4F8 |= 0x801A0` + `obj+0xF0 &= ~0x30` [M-dis 0x149dd0-0x149e4c — the decompile's masks and its
+`0x4f8 & 0x200 == 0` early-return are inverted]. A level NIS freezes every drone the same way: `Drone_EnableAll(0)` walks the
 llist calling `NDrone2_Enable(0)` per drone and clears `NPCGlobals` [M 0x1383e8:13-23]; `Script_Free`'s 0x80 flag
 re-enables all EXCEPT state-1 drones [M 0x1da880:41-43, 0x1383e8:14], and `Drone_CollisionHandler` returns while
 `NPCGlobals == 0` — frozen drones take no damage [M 0x140968:62]. Idle/Alert/Patrol on msg 3 call
@@ -110,6 +126,42 @@ alertness 0 or 1 (property 0x20 → {0, 0, 0.66, 1.0} at 0x2f5cc8, verified); al
   → AimStandFire (burst) → StepAimLeft (113 ticks) …; later, with the crosshair off, AimCrouch → AimCrouchFire. The
   port: Attack → step (112 ticks) → burst → step …
 
+## Cover [M, L] (WORKLOG 0023/0079; order + tests fix-search-cover-g028)
+
+Full node/usability/anim tables: docs/systems/drone-cover.md. The selection chain, with addresses:
+
+- **Tick order**: `Drone_InitComms` (0x139520) refreshes the cover-node usability FIRST — `Drone_ProcessCoverNodes`
+  (0x138e78: every 5th frame, counter −2 / < 1 → 10; the 8 target slots share one round-robin cursor over the
+  nodes and each slot's walk stops at the first node whose check casts a sight ray, so only the crossed nodes
+  get fresh bits and the rest keep their previous ones) —
+  then `Drone_ProcessOpponents` (0x1390c0) and `DroneVision_ProcessDroneSight` (0x176a28). The pass's inputs
+  (switch channels, the target-slot position snapshot taken at :127-149, the collision world, the node owners)
+  are not written by the passes in between, so the order is a conformance fact rather than a data dependency.
+- **Choosing**: `DroneFunc_CombatState` (0x148338:83,143,211,238) calls `NDrone2_CoverAvailable(needLos=1)`
+  (0x155a38: prop 0x30 off → no; already claimed `+0x4F8 & 0x800` → yes; opponent visible and closer than 4 →
+  no) → `NDrone2_FindCover` (0x152548): over the unoccupied nodes on the drone's nav network with an emitter
+  distance byte ≠ 0xFF, the **smallest byte, strictly less (first wins ties)**, only with byte² ≤ (opponent
+  distance)² and `NDrone2_CoverNodeOK(node, 0, needLos)` ≠ 0 — 0x151d68: a usable side (bits & 0xE), the LOS
+  bits (& 0x70) when needLos, the node ≥ 2.0 from the opponent (≤ 1.5× combat range with prop 0x44), the anim
+  predicates, and no other drone within 1.5. The claim writes the owner (+0x14, flag 0x10), the side (+0xBB8),
+  the approach point (`NDrone2_GetPosForCornerCover` 0x152028, approach 1) as the goal and the in-cover point
+  (approach 0) to +0x830, `+0x4F8 |= 0x800 | 0x1000`; `DisownCover` 0x155858 clears them.
+- **Stance**: the corner flags (+0xC: 4 crouch, 8 stand, 0x20 step-out, 0x40 lean) and the guard's anim set
+  decide the cover type in `UnderCoverInit`'s `CoverAnim(6)` (0x13c078; crouch forced when prop 0x10 or a
+  corner without 8; else Rand(n) among the candidates), and the type fixes crouch vs stand for the episode
+  (only 0x9A's `CoverAnim(7)` changes it). Low nodes (flag bit 0) are as-low cover for guards with prop 0xF.
+- **Enter / leave**: Combat → OutOfRange/NoSight → `RunForCover` 0x8C → `UnderCoverInit` 0x93 → `Idle` 0x94 ⇄
+  `Aim` 0x95 → `Fire` 0x96; leave via `Return` 0x99 / `TypeChange` 0x9A / `Leave` 0x9B → `LeaveNow` 0x9C
+  (disown) → Attack. State behaviours: docs/systems/drone-cover.md's table. RNG inside the episode, in game
+  order: the idle re-arm `FRand(150)`, the idle timer's `Rand(5)` re-cover roll (before the LOS re-aim check),
+  the fire state's `Rand(3)` duck roll, and `CoverAnim(6/7)`'s `Rand(n)` type draw.
+- **Port**: `cover.rs` (nodes, usability, positions, `CCModes`) + `drone.rs` (`find_cover`, `cover_node_ok`,
+  `cover_available`, the 0x8C–0x9C / 0x97 / 0x98 / 0x37 / 0x38 arms). The usability walk now sits before the
+  opponents/vision passes as in the game (the port models single-player target slot 0 only — the game walks
+  all 8 slots, unallocated ones cast nothing). Tests: `cover_selection_live.rs` (the scoring rule — a
+  gate-less replication picks node 3 over the trace's node 1, so the side/LOS gates are load-bearing — and
+  the stance flags both ways), `ai_live.rs::guard_takes_cover_like_the_game` (the live chase trace).
+
 ## Bullets [M, L]
 
 `DroneWeap_FireWeapon` → `DoBulletAccuracy` (hit roll; misses aim at a deterministic wobble) → `Bullet_init`
@@ -130,9 +182,12 @@ upper-body aim angle; animation calls through `DroneAnimStates` / `Drone_AnimInf
 live trace (`crates/nf-game/tests/ai_live.rs`): Attack at tick 61, 3-shot bursts 4 ticks apart.
 
 Since then: combat moves and bullets (WORKLOG 0020), drone-to-drone alerts and the upper-body aim, patrols and
-routes (0021), combat movement, start-up properties and WaitSwitch (0022): docs/systems/drone-navigation.md. Not yet
-(G-026/27/28): cover, grenades, hearing and noise, head tracking, AI volumes, level triggers (switch channels), drone
-hit reactions and deaths, the game's random generator.
+routes (0021), combat movement, start-up properties and WaitSwitch (0022): docs/systems/drone-navigation.md.
+Cover — selection, states and the tick order — is ported and documented above and in docs/systems/drone-cover.md
+(WORKLOG 0023/0079, fix-cover-remainder, fix-search-cover-g028); grenades (0080), AI volumes (0032), head
+tracking and the aim bone (fix-ai-remainder), deaths and hit reactions are ported too. Still open from
+G-026/27/28: hearing beyond the sound-alert chain, per-target cover slots (only Bond is modelled), the
+`RecoverFromScaryObject` (0x86) flee route update and U-030's RunForCover route shape.
 
 ## Firing [M, L]
 

@@ -13,33 +13,115 @@
 //! - The port's `Lock::burn` (fix-objects2) models the burn timer as already expired (the level's
 //!   create-time base is 0 [M 0x1ae1f8]), so one tick of beam contact completes it.
 //!
-//! Port status: the laser-family beam (the ray, the lock burn, the endpoints for the renderer). The
-//! grapple (substate 2) and the decryptor scan mode (substate 5) are not started.
+//! Port status: the laser-family beam (the ray, the lock burn, the endpoints for the renderer) and
+//! the Q-Claw's grapple (the fire-time latch, the substate 2 reel/hang, `scene.rs`'s fire gate).
+//! The decryptor scan mode (substate 5) is not started.
+//!
+//! The gadget ids, settled from the disc (fix-qclaw; the old hardcoded table had them shifted — it
+//! put the laser on 0x50/0x51 and the claw on 0x4A/0x4C): [L ee_start_05.bin @ weapon_data 0x2bf150
+//! + USATxt.dat] **0x4A/0x4C Stunner** (the watch taser, clip 100), **0x4E/0x4F Laser** (the only
+//! records whose +0x68 carries the laser-pointer flag 0x2), **0x50/0x51 Grapple — the Q-Claw**
+//! (the bank's own name "Grapple", label 0x05000044; `+0x70 & 0x40` = the grapple-bolt flag
+//! `Bullet_Delete` 0x12e660:33 latches on; range +0x1C = 50.0/100.0; clip 0; damage 0),
+//! **0x54/0x55 Micro-Camera** (the watch; its aim-gated beam per `Player_WeaponFiring`
+//! 0x1a5460:512-514), **0x56/0x57 Decryptor**.
 
 use crate::lock::Lock;
 use crate::triggers::Channels;
 use crate::world::V3;
-
-/// The weapon ids whose equipped state runs the laser beam: the Q-Laser (0x50/0x51) and the laser
-/// watch (0x54; its taser variant 0x55 saves as 0x54 in the selection) [D weapon_data: the 0x54
-/// record's +0x68 has the scoped flag 0x40; the beam weapon ids the locks read are 0x56/0x57
-/// [M 0x1ae3d8:162]].
+/// The weapon ids whose shots carry the LASER BEAM bit `weapon_data+0x6C & 0x100` [M
+/// Player_MuzzleFlash 0x1a4298:131 → `Draw_LaserBeam`]: the Laser 0x4E and its upgrade 0x4F
+/// [D weapon_data records: 0x4E +0x6C = 0x900 (0x800|0x100), 0x4F = 0x900; the disc names them
+/// 0x05000043 "Laser" [L USATxt.dat]. The old set (0x50/0x51/0x54/0x55) was the Grapple and the
+/// Micro-Camera — their records carry 0x4000/0 in +0x6C, no beam bits].
 pub fn is_laser_weapon(w: u8) -> bool {
-    matches!(w, 0x50 | 0x51 | 0x54 | 0x55)
+    matches!(w, 0x4e | 0x4f)
 }
 
-/// The weapons whose equipped state runs the LOCK beam: the laser family plus the Q-Decryptor
-/// (0x4E/0x4F — `Lock_Update` 0x1ae3d8 case 0 reads them off the contact list at :57-63, the burn
-/// 3/tick vs the laser family's 10/tick; the port's `Lock::burn` completes in one tick either way
-/// [M 0x1ae1f8's zero create-time base]).
+/// The weapons whose SHOT draws a beam: the Laser family (the 0x100 bit → `Draw_LaserBeam`) and
+/// the Stunner 0x4A/0x4C (the `weapon_data+0x6C & 0x80` bit → `Draw_TaserBeam` [M 0x1a4298:134];
+/// their records: +0x6C = 0x880 [L], the disc name 0x05000042 "Stunner" [L USATxt.dat]).
 pub fn runs_beam(w: u8) -> bool {
-    is_laser_weapon(w) || matches!(w, 0x4e | 0x4f)
+    is_laser_weapon(w) || matches!(w, 0x4a | 0x4c)
 }
 
-/// One tick of the laser beam: the ray from `head` along `dir` (unit), 100.0 units [M 0x1a65d8],
+/// The Q-Claw's ids: **0x50 (base) and 0x51 (upgrade)**. Evidence: the bank's own name "Grapple"
+/// on both records [L USATxt +0x38 = 0x05000044]; `weapon_data+0x70 & 0x40` — the grapple-bolt flag
+/// `Bullet_Delete` 0x12e660:33 branches on (the claw bolt's death IS the latch: the hit object's
+/// hitdata +0x58 straddler must be class 'Q' = 0x51, then `Player_SetGrapplePoint` 0x195da0);
+/// `Bullet_CollisionHandler` 0x12ce80's `weapon_data+0x02 - 0x50 < 2` band; `Player_GrappleSetRope`
+/// 0x192728's `BLData+0xdc+0x62 - 0x50 < 2` gate (the rope draws only with the claw out); and the
+/// level loadouts granting 0x50 (07000005's start [L Inventory::level_start]).
+pub fn is_grapple(w: u8) -> bool {
+    matches!(w, 0x50 | 0x51)
+}
+
+/// The Q-Decryptor's ids: **0x56 (base) and 0x57 (upgrade)**. Evidence: the disc records
+/// (label 0x0500004e, range +0x1C = 2.0/4.0, +0x6C = 0 — NO beam bits, so the shot is a plain
+/// bullet [L ee_start_05.bin @ weapon_data 0x2bf150]); `Player_WeaponFiring` 0x1a5460's
+/// `uVar6 − 0x56 < 2` bands (:155 the watch-face digits, :551 the use gate) and `Lock_Update`
+/// 0x1ae3d8's `− 0x56 < 2` contact band (:162, case 0) with the 0x56→+1 / 0x57→+3 decode rates
+/// (:305-315, case 5).
+pub fn is_decryptor(w: u8) -> bool {
+    matches!(w, 0x56 | 0x57)
+}
+
+/// The decryptor's use-gate pick [M Player_WeaponFiring 0x1a5460:551-578 + Check_Target
+/// 0x1a7810]: the 50-unit crosshair ray (0x42480000 [M 0x1a7810:114-116]) must hit the lock
+/// (the game's `Collide_RayIntersect` object hit stored to BLData+0x880, then the gate re-checks
+/// the type byte 0x3a and the kind/state), and the player-to-lock distance must be within the
+/// weapon's own `weapon_data+0x1C` (2.0/4.0 [L]). The port's stand-in [S, as laser_tick's]: the
+/// ray's closest approach within the lock's world sphere, no world hit before it, and the
+/// distance gate. Returns the lock index.
+pub fn pick_decryptor_lock(
+    eye: V3,
+    dir: V3,
+    root: V3,
+    locks: &[Lock],
+    world: &crate::world::CollisionWorld,
+    range: f32,
+) -> Option<usize> {
+    const RAY_LEN: f32 = 50.0; // [M 0x1a7810:114-116]
+    let end = [eye[0] + dir[0] * RAY_LEN, eye[1] + dir[1] * RAY_LEN, eye[2] + dir[2] * RAY_LEN];
+    let world_t = world.segment(eye, end).unwrap_or(1.0) * RAY_LEN; // the fraction → units
+    let ab2 = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2];
+    if ab2 < 1e-9 { return None; }
+    let mut best: Option<(f32, usize)> = None;
+    let dbg = std::env::var_os("NF_DECPICK_DEBUG").is_some();
+    for (i, lock) in locks.iter().enumerate() {
+        if lock.burned || lock.unlocked { continue; }
+        if lock.kind != 0 && lock.kind != 2 { continue; } // the gate's kind test [M 0x1a5460:562]
+        let ap = [lock.pos[0] - eye[0], lock.pos[1] - eye[1], lock.pos[2] - eye[2]];
+        let t = (ap[0] * dir[0] + ap[1] * dir[1] + ap[2] * dir[2]) / ab2;
+        if t < 0.0 || t * ab2.sqrt() > RAY_LEN { if dbg { eprintln!("decpick {i}: REJ ray t={t}"); } continue; }
+        let closest = [eye[0] + dir[0] * t, eye[1] + dir[1] * t, eye[2] + dir[2] * t];
+        let d2 = (closest[0] - lock.pos[0]).powi(2) + (closest[1] - lock.pos[1]).powi(2) + (closest[2] - lock.pos[2]).powi(2);
+        if d2 > lock.radius * lock.radius { if dbg { eprintln!("decpick {i}: REJ sphere d={:?}", d2.sqrt()); } continue; }
+        // A wall in FRONT of the lock blocks [M 0x1a7810:121] — but the lock's own plate sits
+        // flush on the wall it is mounted on, and the port's lock carries no collision box of its
+        // own (only the 0.132 keypad sphere), so the mount wall's face lands within the sphere's
+        // tolerance. The occlusion test therefore floors the margin at 0.5 [S — the game's ray
+        // hits the lock object itself in Collide_RayIntersect; the port cannot separate the mount
+        // geometry from the lock's own bounds].
+        if world_t < t - lock.radius.max(0.5) { continue; }
+        // The distance gate is the PLAYER ROOT to the lock [M 0x1a5460:574-577 — `iVar18+0x30`].
+        let dist = ((lock.pos[0] - root[0]).powi(2) + (lock.pos[1] - root[1]).powi(2) + (lock.pos[2] - root[2]).powi(2)).sqrt();
+        if dist > range { continue; }
+        if best.is_none_or(|(bt, _)| t < bt) { best = Some((t, i)); }
+    }
+    best.map(|(_, i)| i)
+}
+
+
+/// One tick of the laser beam (the Laser 0x4E/0x4F and the watch 0x54/0x55): the ray from `head`
+/// along `dir` (unit), 100.0 units [M 0x1a65d8],
 /// against the world segment and the locks' world spheres. A lock whose sphere the ray touches
 /// (the ray's closest point within its radius — the game's contact-list stand-in) burns; its out
 /// channel is written on completion [M 0x1ae3d8:194-195].
+/// `head`/`dir` are THE CROSSHAIR RAY the caller fires bullets down (the game's shot ray runs from
+/// `Player_GetHeadPos` through `Player_GetAimingPoint` [M Player_WeaponInitBullet 0x1a4bf0:152-159],
+/// and the beam draws from the muzzle to that ray's re-cast hit [M 0x1a4298:107-132]) — the old
+/// `bond.look()` ray was the user's "the laser isn't accurate" on the 0700000c display vent.
 /// Returns the beam's endpoints (the hand end is the caller's; here the head) and the hit point
 /// for the renderer.
 pub fn laser_tick(
@@ -80,6 +162,28 @@ pub fn laser_tick(
     (head, hit)
 }
 
+/// The laser watch's held-meter constants and tick [M HUD_UpdateAmmoPane 0x19a7f0:160-176 — while
+/// the player's view state is 0xb (the laser watch's held state, `Player_WeaponFiring` 0x1a5460's
+/// `+0x6C & 0x400` arm) the ammo pane reads a 0–100 value at the beam bullet's instance +0x110
+/// (u16) / +0x104 (f32), NOT the kind-0x1a clip percentage]. The measured drain while held:
+/// ~31/s ≈ 0.5/frame [D docs/live/2026-10-14-weapon-measurements-pcsx2.md "The laser watch 0x4e":
+/// 100 → 59 over ~1.3 s]. The game's writer of those instance fields is unlocated in the decompile
+/// (the pane reads them through the bullet walk; live check in the report) — the port stands the
+/// value in as `Sim::laser_charge`. The refill stands in the game's gadget clip regen shape (+1 per
+/// 4 frames [M Player_Update 0x193600 disasm 0x193f18-58]) — [S] for the charge itself.
+pub const LASER_CHARGE_DRAIN_PER_TICK: f32 = 31.0 / 60.0;
+pub const LASER_CHARGE_REFILL_PER_TICK: f32 = 0.25;
+
+/// One tick of the held meter: `beam_on` (the beam drew this tick) drains, an idle tick refills;
+/// clamped to 0..100.
+pub fn laser_charge_tick(charge: &mut f32, beam_on: bool) {
+    if beam_on {
+        *charge = (*charge - LASER_CHARGE_DRAIN_PER_TICK).max(0.0);
+    } else {
+        *charge = (*charge + LASER_CHARGE_REFILL_PER_TICK).min(100.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,7 +196,8 @@ mod tests {
         let mut ch = Channels::default();
         let world = empty_world();
         let mut locks = vec![Lock {
-            placement: 0, pos: [99.5, 0.0, 0.0], radius: 1.0, out: 134, key_channels: [0xffff; 2], burn: 0, burned: false,
+            placement: 0, pos: [99.5, 0.0, 0.0], radius: 1.0, out: 134, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
+            kind: 1, code: 0, scan_progress: 0, scan_solved: 0, scanning: false,
         }];
         let (a, b) = laser_tick([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], &mut locks, &world, &mut ch, 10);
         assert!(locks[0].burned, "the aim line passes 0.5 from the lock's centre — within 1.0+0.25");
@@ -106,7 +211,8 @@ mod tests {
         let mut ch = Channels::default();
         let world = empty_world();
         let mut locks = vec![Lock {
-            placement: 0, pos: [99.5, 4.0, 0.0], radius: 1.0, out: 135, key_channels: [0xffff; 2], burn: 0, burned: false,
+            placement: 0, pos: [99.5, 4.0, 0.0], radius: 1.0, out: 135, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
+            kind: 1, code: 0, scan_progress: 0, scan_solved: 0, scanning: false,
         }];
         let _ = laser_tick([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], &mut locks, &world, &mut ch, 10);
         assert!(!locks[0].burned, "the aim line passes 4 units off the lock's centre — no contact");
@@ -114,18 +220,146 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn laser_charge_tick_drains_and_refills_the_measured_rates() {
+        let mut c = 100.0f32;
+        // 60 beam ticks = ~31 drained [D the measured ~31/s]; the floor is 0.
+        for _ in 0..60 { laser_charge_tick(&mut c, true); }
+        assert!((100.0 - c - 31.0).abs() < 0.01, "60 beam ticks drain ~31 (drained {:.2})", 100.0 - c);
+        for _ in 0..600 { laser_charge_tick(&mut c, true); }
+        assert_eq!(c, 0.0, "the charge floors at 0");
+        // 4 idle ticks = +1 (the game's +1-per-4-frames regen shape [M 0x193600]), capped at 100.
+        for _ in 0..4 { laser_charge_tick(&mut c, false); }
+        assert!((c - 1.0).abs() < 0.001, "4 idle ticks refill 1 (got {c:.3})");
+        for _ in 0..600 { laser_charge_tick(&mut c, false); }
+        assert_eq!(c, 100.0, "the charge caps at 100");
+    }
+
     fn is_laser_weapon_matches_the_laser_family() {
-        for w in [0x50u8, 0x51, 0x54, 0x55] { assert!(is_laser_weapon(w), "{w:#x} is a laser weapon"); }
-        for w in [0x4Au8, 0x52, 0x02] { assert!(!is_laser_weapon(w), "{w:#x} is not"); }
+        // The disc records settle the ids: 0x4E/0x4F carry +0x6C & 0x100 (Draw_LaserBeam) and the
+        // name label 0x05000043 "Laser"; 0x50/0x51 are the Grapple (0x4000) and 0x54/0x55 the
+        // Micro-Camera (0) [L weapon_data + USATxt.dat].
+        for w in [0x4eu8, 0x4f] { assert!(is_laser_weapon(w), "{w:#x} is a laser weapon"); }
+        for w in [0x50u8, 0x51, 0x54, 0x55, 0x4a, 0x4c, 0x02] { assert!(!is_laser_weapon(w), "{w:#x} is not"); }
     }
 
     #[test]
-    fn runs_beam_adds_the_decryptor() {
-        for w in [0x4eu8, 0x4f] { assert!(runs_beam(w), "{w:#x} runs the lock beam [M 0x1ae3d8:57-63]"); }
-        assert!(!runs_beam(0x52), "the camera does not");
+    fn is_grapple_matches_the_q_claw_records() {
+        for w in [0x50u8, 0x51] { assert!(is_grapple(w), "{w:#x} is the Q-Claw [L bank 'Grapple'; +0x70 & 0x40]"); }
+        for w in [0x4Au8, 0x4c, 0x4e, 0x52, 0x54] { assert!(!is_grapple(w), "{w:#x} is not"); }
+    }
+
+    #[test]
+    fn runs_beam_is_the_laser_and_the_stunner() {
+        // +0x6C & 0x180 routes the shot's beam draw: 0x4E/0x4F → 0x900 (the laser), 0x4A/0x4C →
+        // 0x880 (the taser) [L weapon_data; M 0x1a4298:131/134].
+        for w in [0x4eu8, 0x4f, 0x4a, 0x4c] { assert!(runs_beam(w), "{w:#x} runs the beam"); }
+        for w in [0x50u8, 0x54, 0x52] { assert!(!runs_beam(w), "{w:#x} does not"); }
+    }
+
+    #[test]
+    fn is_decryptor_matches_the_q_decryptor_records() {
+        // The disc records: 0x56/0x57 label 0x0500004e, +0x6C = 0 (no beam bits) [L ee_start_05.bin];
+        // the −0x56 < 2 bands in Player_WeaponFiring 0x1a5460:155/551 and Lock_Update 0x1ae3d8:162/305.
+        for w in [0x56u8, 0x57] { assert!(is_decryptor(w), "{w:#x} is the Decryptor"); }
+        for w in [0x4eu8, 0x4f, 0x50u8, 0x54u8, 0x55u8, 0x58u8, 0x02u8] { assert!(!is_decryptor(w), "{w:#x} is not"); }
+    }
+
+    fn dec_lock(kind: u16, out: u16) -> Lock {
+        Lock {
+            placement: 0, pos: [10.0, 0.0, 0.0], radius: 1.0, out, key_channels: [0xffff; 2],
+            burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
+            kind, code: 7, scan_progress: 0, scan_solved: 0, scanning: false,
+        }
+    }
+
+    #[test]
+    fn decrypt_scan_solves_the_four_digits_at_the_game_thresholds_then_writes_the_channel() {
+        // The base 0x56: +1/tick. Digit i solves when progress > (4−i)·0x28 — 160/120/80/40
+        // [M Lock_Update 0x1ae3d8:347-364]; a solve resets the progress to 5 [M :367]; the unlock
+        // lands at 4 of 4 (the disasm's bne v1,v0 0x1aebec) and writes the out channel
+        // [M Lock_Unlock 0x1b0650 → case 1 :193-196].
+        let mut ch = Channels::default();
+        let mut l = dec_lock(0, 90);
+        let mut ticks = 0u32;
+        let mut solved_at = [0u32; 4];
+        let mut last = false;
+        while !l.unlocked && ticks < 100_000 {
+            ticks += 1;
+            let was = l.scan_solved;
+            last = l.decrypt_tick(1, false, &mut ch, ticks);
+            if l.scan_solved != was && (l.scan_solved as usize) <= 4 { solved_at[(l.scan_solved - 1) as usize] = ticks; }
+        }
+        assert!(l.unlocked, "4 of 4 digits unlock the lock");
+        assert!(last, "decrypt_tick returned true exactly on the unlock tick");
+        assert!(ch.on(90), "the unlock writes the lock's out switch channel");
+        // The 0x56's own timeline: 161 + 116 + 76 + 36 = 389 ticks of continuous contact
+        // (161 to exceed 160 from 0, then 116 to exceed 120 from 5, 76 from 5 past 80, 36 past 40).
+        assert_eq!(ticks, 389, "the 0x56's per-tick +1 must take exactly 389 ticks (got {ticks})");
+        assert_eq!(solved_at, [161, 277, 353, 389], "the per-digit solve ticks");
+    }
+
+    #[test]
+    fn decrypt_upgrade_runs_three_times_faster() {
+        // The 0x57 adds 3/tick [M 0x1ae3d8:309-314]: from 0 to >160 needs 54 ticks (53·3=159),
+        // from 5 to >120 39 (5+38·3=119), from 5 to >80 26 (5+25·3=80 is not > 80; 83 is),
+        // from 5 to >40 12 (5+11·3=38, 5+12·3=41) — 54+39+26+12 = 131 ticks.
+        let mut ch = Channels::default();
+        let mut l = dec_lock(0, 91);
+        let mut ticks = 0u32;
+        while !l.unlocked && ticks < 100_000 { ticks += 1; l.decrypt_tick(1, true, &mut ch, ticks); }
+        assert!(l.unlocked && ch.on(91));
+        assert_eq!(ticks, 131, "the 0x57's +3/tick takes 131 ticks (got {ticks})");
+    }
+
+    #[test]
+    fn decrypt_scan_decays_four_per_tick_and_resets_completely() {
+        // No contact bullet: −4/tick [M 0x1ae3d8:328-339]; at 0 the scan resets — state back to 0,
+        // the solved digits lost [M :340-344].
+        let mut ch = Channels::default();
+        let mut l = dec_lock(0, 92);
+        for _ in 0..100 { l.decrypt_tick(1, false, &mut ch, 1); }
+        assert!(l.scanning && l.scan_progress > 0, "scanning after 100 ticks");
+        for _ in 0..30 { l.decrypt_tick(0, false, &mut ch, 1); }
+        assert!(!l.scanning && l.scan_solved == 0 && l.scan_progress == 0,
+            "30 ticks of −4 fully reset the scan (progress now {})", l.scan_progress);
+        // And the reset scan re-accumulates from scratch (the game restarts the digits).
+        for _ in 0..50 { l.decrypt_tick(1, false, &mut ch, 1); }
+        assert_eq!(l.scan_progress, 50, "re-contact accumulates from 0 again");
+    }
+
+    #[test]
+    fn decrypt_scan_ignores_a_laser_kind_lock_and_an_unlocked_one() {
+        // The sister: record[0] == 1 is the LASER-burn lock — the decryptor never scans it
+        // [M the use gate 0x1a5460:562 == 0 || == 2; Lock_Update case 0's kind-1 arm reads 0x4e/0x4f only].
+        let mut ch = Channels::default();
+        let mut l = dec_lock(1, 93);
+        for _ in 0..500 { l.decrypt_tick(1, false, &mut ch, 1); }
+        assert!(!l.scanning && !l.unlocked && !ch.on(93), "the laser-kind lock ignores the decryptor");
+        let mut l2 = dec_lock(0, 94);
+        l2.unlocked = true;
+        for _ in 0..10 { assert!(!l2.decrypt_tick(1, false, &mut ch, 1)); }
+        assert!(!ch.on(94), "an already-unlocked lock stays quiet");
+    }
+
+    #[test]
+    fn decrypt_pick_gates_on_the_ray_the_world_and_the_range() {
+        let world = empty_world();
+        // A decryptor-kind lock 1.5 ahead; eye and root colocated for the unit test.
+        let locks = vec![dec_lock(0, 95)];
+        assert_eq!(pick_decryptor_lock([8.5, 0.0, 0.0], [1.0, 0.0, 0.0], [8.5, 0.0, 0.0], &locks, &world, 2.0), Some(0));
+        // The gate is the DISTANCE root→lock, not the ray [M 0x1a5460:574-577].
+        assert_eq!(pick_decryptor_lock([7.0, 0.0, 0.0], [1.0, 0.0, 0.0], [7.0, 0.0, 0.0], &locks, &world, 2.0), None,
+            "3.0 from the lock is beyond the base decryptor's 2.0 range");
+        // The 0x57's 4.0 reaches it.
+        assert_eq!(pick_decryptor_lock([7.0, 0.0, 0.0], [1.0, 0.0, 0.0], [7.0, 0.0, 0.0], &locks, &world, 4.0), Some(0));
+        // Off the ray: no pick.
+        assert_eq!(pick_decryptor_lock([8.5, 3.0, 0.0], [0.0, 1.0, 0.0], [8.5, 3.0, 0.0], &locks, &world, 4.0), None);
+        // The laser-kind lock is not a target.
+        let laser_locks = vec![dec_lock(1, 96)];
+        assert_eq!(pick_decryptor_lock([8.5, 0.0, 0.0], [1.0, 0.0, 0.0], [8.5, 0.0, 0.0], &laser_locks, &world, 4.0), None);
     }
 }
-
 // ---- the Q-Claw grapple (0x4A/0x4C, substate 2) ----------------------------------------------------
 
 /// A grapple point (placement 0x3A, `Grapple_Create` 0x198298 — the class-0x51 object, the world
@@ -182,9 +416,13 @@ pub fn pick_grapple_point(points: &[GrapplePoint], from: V3, dir: V3, max_dist: 
     best.map(|(_, pos)| pos)
 }
 
-/// The claw bolt's range: `weapon_data+0x1c` (the Q-Claw 0x4a 5.0, the upgrade 0x4c 10.0
-/// [D weapon_data_live.bin — the fists 1.75 / P2K 50 / sniper 1200 scale confirms the unit]).
-pub fn grapple_range(w: u8) -> f32 { if w == 0x4c { 10.0 } else { 5.0 } }
+/// The claw bolt's range: the weapon's own `weapon_data+0x1c` — the game's bolt-death cap
+/// [M Bullet_update 0x12e7b0:158] — read off the record: 50.0 for the Q-Claw 0x50, 100.0 for the
+/// upgrade 0x51 [L ee_start_05.bin; the fists 1.75 / P2K 50 / sniper 1200 scale confirms the unit.
+/// The old 5.0/10.0 were the STUNNER 0x4A/0x4C's ranges — the hardcoded table's shift].
+pub fn grapple_range(wd: &nf_formats::weapon::WeaponData, w: u8) -> f32 {
+    wd.records.get(w as usize).map_or(5.0, |r| f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap()))
+}
 
 fn ray_closest_t(a: V3, dir: V3, p: V3, max_dist: f32) -> Option<f32> {
     let ab2 = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2];
@@ -262,14 +500,21 @@ mod grapple_tests {
         let dir = [10.0f32, 1.2, 0.0].map(|v| v / (10.0f32 * 10.0 + 1.2 * 1.2).sqrt());
         assert!(pick_grapple_point(&points, [0.0, 0.0, 0.0], dir, 100.0).is_some(),
             "the bolt sweep (radius 1.0) accepts a 1.2-unit pass");
-        // The range is weapon_data+0x1c [M 0x12e7b0:158]: 5.0 for the claw, 10.0 for the upgrade.
-        assert_eq!(grapple_range(0x4a), 5.0);
-        assert_eq!(grapple_range(0x4c), 10.0);
+        // The range is the record's own weapon_data+0x1c [M 0x12e7b0:158; L ee_start_05.bin]:
+        // 50.0 for the claw (0x50), 100.0 for the upgrade (0x51).
+        let mut records = vec![[0u8; 0x10c]; 0x60];
+        for (i, rng) in [(0x4ausize, 5.0f32), (0x4c, 10.0), (0x50, 50.0), (0x51, 100.0)] {
+            records[i][0x1c..0x20].copy_from_slice(&rng.to_le_bytes());
+        }
+        let wd = nf_formats::weapon::WeaponData { records, ammo_cap: Vec::new(), ammo_raw: Vec::new() };
+        assert_eq!(grapple_range(&wd, 0x50), 50.0);
+        assert_eq!(grapple_range(&wd, 0x51), 100.0);
+        assert_eq!(grapple_range(&wd, 0x4a), 5.0, "the Stunner's own range — the old claw claim");
         // Beyond the range the bolt dies mid-flight — no pick.
         let far = [10.0f32, 0.0, 0.0];
         let far_dir = [1.0f32, 0.0, 0.0];
-        assert!(pick_grapple_point(&points, [0.0, 0.0, 0.0], far_dir, grapple_range(0x4a)).is_none()
-            || (far[0] - 0.0) <= grapple_range(0x4a), "the point within the range still picks");
+        assert!(pick_grapple_point(&points, [0.0, 0.0, 0.0], far_dir, grapple_range(&wd, 0x50)).is_none()
+            || (far[0] - 0.0) <= grapple_range(&wd, 0x50), "the point within the range still picks");
     }
 
     #[test]

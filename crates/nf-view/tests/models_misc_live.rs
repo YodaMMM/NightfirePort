@@ -14,6 +14,22 @@ use std::collections::BTreeMap;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
+/// faster-live-tests: the misc census per archive, computed at most once per process. The census
+/// tests read ONLY `scene.misc_drawn` off a fresh `nf_view::load` — the binary did 80 loads of 34
+/// unique archives — and the suite runs binaries with `--test-threads=1`, so a process-wide map
+/// has no cross-test state to leak: each caller clones its entry out and never shares the Scene.
+/// The three FX tests below that MUTATE the sim (muzzle smoke, searchlight, grenade blast) keep
+/// their own fresh `nf_view::load` and do not use this cache.
+fn misc_drawn_cached(iso: &str, name: &str) -> Result<BTreeMap<u8, usize>, String> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<BTreeMap<String, BTreeMap<u8, usize>>>> =
+        std::sync::OnceLock::new();
+    let mut cache = CACHE.get_or_init(|| std::sync::Mutex::new(BTreeMap::new())).lock().unwrap();
+    if let Some(got) = cache.get(name) { return Ok(got.clone()); }
+    let scene = nf_view::load(iso, name, false).map_err(|e| e.to_string())?;
+    cache.insert(name.to_string(), scene.misc_drawn.clone());
+    Ok(scene.misc_drawn)
+}
+
 /// Parse a level archive straight off the disc image (the same data `nf_view::load` reads).
 fn parse_level(iso: &str, name: &str) -> nf_formats::level::Level {
     let img = nf_formats::iso9660::IsoImage::open(iso).unwrap();
@@ -38,6 +54,19 @@ fn expected_misc(level: &nf_formats::level::Level, kinds: &[u8]) -> BTreeMap<u8,
             else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
         let Some((om, oi)) = target else { continue };
         let o = &level.maps[om].objects[oi];
+        // fix-striped-boxes2: the game's no-draw bit — `View_AddObjects` 0x1e62d8:33 submits a dynamic
+        // object only when `(obj+0xF0 & 0x8010) == 0`, and obj+0xF0 is the creator's copy of
+        // `celglist+0x44` for exactly the FLAGS_COPYING kinds (every creator verified in scene.rs's
+        // gate comment: Monitor_Create 0x1b08b0:26, GunImp_Create 0x131f20:68, PCQWorm_Create
+        // 0x1b07a8:12, DynamicObject_Create 0x18dbf8:21-23, rotor_init 0x18f4b8:25, Car_Create
+        // 0x1305b0:24, Destroy_Create 0x12c318:23 — which also zeroes the smash target when the bit is
+        // set (0x12c318:57-59) —, Flicker_Create 0x1acb00:52, ThirdIcon_Create 0x197070:34-37,
+        // CamSubject_Create 0x1bc5d8:20, Apocalypse_Create 0x18dcc0:24). Nothing clears the bit later
+        // for these kinds (no Update/Activate writes obj+0xF0; 0x3b's channel restore stores back the
+        // captured glist word). Non-copying kinds (0x2e Lock, 0xd5 OneSided, 0xd8 RB, 0xfe Mine — no
+        // obj+0xF0 write at create) draw their flagged meshes in the game and stay ungated.
+        const FLAGS_COPYING: [u8; 11] = [0x30, 0x34, 0x35, 0x3b, 0x71, 0xda, 0xe1, 0xe3, 0xfa, 0xfd, 0x4a];
+        if o.flags & 0x10 != 0 && FLAGS_COPYING.contains(&kind) { continue; }
         if !o.gfx.leaves.iter().any(|l| !l.batches.is_empty()) || o.flags & 0x400 != 0 { continue; }
         *out.entry(kind).or_default() += 1;
     }
@@ -62,10 +91,10 @@ fn misc_static_entities_match_the_census_on_every_level() {
         "07000023.bin", "07000024.bin", "07000025.bin", "07000026.bin", "07000027.bin", "07000028.bin",
         "07000029.bin", "07000043.bin", "07000046.bin", "07000049.bin"];
     for name in levels {
-        let scene = nf_view::load(&iso, name, false).unwrap_or_else(|e| panic!("load {name}: {e}"));
+        let census = misc_drawn_cached(&iso, name).unwrap_or_else(|e| panic!("load {name}: {e}"));
         let level = parse_level(&iso, name);
         let expect = expected_misc(&level, &MISC_KINDS);
-        let mut got: BTreeMap<u8, usize> = scene.misc_drawn.clone();
+        let mut got: BTreeMap<u8, usize> = census.clone();
         // The cars' two children add to the 0xDA count in the sweep (body + 0x2000502 + 0x2000505 each);
         // the census expectation counts bodies, so subtract the drawn children for the comparison.
         let car_children = level.main_map().map(|m| level.by_hash.get(&0x0200_0502).is_some_and(|&(cm, co)| {
@@ -77,26 +106,36 @@ fn misc_static_entities_match_the_census_on_every_level() {
         assert_eq!(got, expect, "{name}: misc draw census mismatch");
         // Spot checks against the disc census (docs/models/misc.md): 0700000c carries 5 locks and 5 dynamic
         // objects; 0700000d carries 5 dynamic objects, 1 gun imp and 9 draw-able destroyables. The grapple
-        // points (0c: 5, 0d: 3 [D placements]) draw NOTHING since fix-gadgets2 [M 0x198298: no gfx attach].
+        // points (0c: 5, 0d: 3 [D placements]) stay out of THIS census: fix-grapple-hook corrected
+        // fix-gadgets2's "never draw" — the game does draw their pulley (`Grapple_Create` 0x198298 keeps
+        // the placement's glist argument at obj+0xD8; `View_DrawObjectGlist` renders it), and the port's
+        // grapple sweep draws it under `grapple_hooks_drawn`, not the misc sweep — so 0x3a stays absent
+        // from `misc_drawn` here.
         if name == "0700000c.bin" {
-            assert_eq!(scene.misc_drawn.get(&0x2e), Some(&5));
-            assert_eq!(scene.misc_drawn.get(&0x3b), Some(&5));
-            assert_eq!(scene.misc_drawn.get(&0x3a), None, "the grapple points' marker meshes never draw [M 0x198298]");
+            assert_eq!(census.get(&0x2e), Some(&5));
+            assert_eq!(census.get(&0x3b), Some(&5));
+            assert_eq!(census.get(&0x3a), None, "the grapple points draw via grapple_hooks_drawn, not the misc sweep [M fix-grapple-hook]");
         }
         if name == "0700000d.bin" {
-            // One of the five hides until its channel (param 0 = 43 [D placements dump]) — 4 draw.
-            assert_eq!(scene.misc_drawn.get(&0x3b), Some(&4));
-            assert_eq!(scene.misc_drawn.get(&0x3a), None, "the grapple points never draw [M 0x198298]");
-            assert_eq!(scene.misc_drawn.get(&0x34), Some(&1));
-            assert_eq!(scene.misc_drawn.get(&0xe1), Some(&9));
+            // One of the five hides until its channel (param 0 = 43 [D placements dump]) and
+            // WallHug_Blocker1_Long carries the no-draw bit 0x10 [D placements; gate above] — 3 draw.
+            assert_eq!(census.get(&0x3b), Some(&3));
+            assert_eq!(census.get(&0x3a), None, "the grapple points draw via grapple_hooks_drawn, not the misc sweep [M fix-grapple-hook]");
+            assert_eq!(census.get(&0x34), Some(&1));
+            assert_eq!(census.get(&0xe1), Some(&9));
         }
         // 07000014 carries 45 dynamic objects, 23 of them hidden until their switch channel (param 0 ≠ 0
-        // [D placements; M DynamicObject_Create 0x18dbf8:31]) — 22 draw; 12 monitors. Its 11 Apocalypse
-        // placements resolve to collision-only glists, which the game draws as nothing [M 0x18dcc0:20].
+        // [D placements; M DynamicObject_Create 0x18dbf8:31]) — 22 draw; its 12 monitors are SWITCH_
+        // Consoles_Evilbase placements whose glist flags are 0x50 (bit 0x10 set — the game's no-draw
+        // gate, View_AddObjects 0x1e62d8:33, hides them all; the visible consoles are baked geometry),
+        // and 19 of its 48 destroyables are 0x10-flagged DESTROY_BoxSatellite brushes the game never
+        // draws (Destroy_Create 0x12c318:57-59 zeroes their smash target). Its 11 Apocalypse placements
+        // resolve to collision-only glists, which the game draws as nothing [M 0x18dcc0:20].
         if name == "07000014.bin" {
-            assert_eq!(scene.misc_drawn.get(&0x3b), Some(&22));
-            assert_eq!(scene.misc_drawn.get(&0x30), Some(&12));
-            assert_eq!(scene.misc_drawn.get(&0x4a), None);
+            assert_eq!(census.get(&0x3b), Some(&22));
+            assert_eq!(census.get(&0x30), None, "all 12 monitors carry the no-draw bit");
+            assert_eq!(census.get(&0xe1), Some(&29), "48 destroyables − 19 no-draw-bit brushes");
+            assert_eq!(census.get(&0x4a), None);
         }
     }
 }
@@ -112,11 +151,12 @@ fn meshless_kinds_never_draw() {
     // attaches one); 0700000b carries 17 mesh-ful rainboxes; 07000009 12. If any of these draw, the
     // sweep is wrong, not merely silent.
     for name in ["0700001b.bin", "0700000b.bin", "07000009.bin", "0700000c.bin"] {
-        let scene = nf_view::load(&iso, name, false).unwrap_or_else(|e| panic!("load {name}: {e}"));
-        // fix-gadgets2 adds 0x3a (grapple points, 5 on 0c [D]) and 0x3f (creep walls) — the creators
-        // attach no gfx [M 0x198298, 0x196fc8], the user's red/yellow marker boxes.
+        let census = misc_drawn_cached(&iso, name).unwrap_or_else(|e| panic!("load {name}: {e}"));
+        // fix-gadgets2 adds 0x3f (creep walls) to this list — the creator attaches no gfx [M 0x196fc8],
+        // the user's red marker boxes. 0x3a stays: the grapple points draw via `grapple_hooks_drawn`
+        // (fix-grapple-hook), never through this misc sweep.
         for bad in [0x29u8, 0x31, 0x32, 0x27, 0x38, 0x39, 0xf2, 0xd4, 0x3a, 0x3f] {
-            assert_eq!(scene.misc_drawn.get(&bad), None, "{name}: kind {bad:#x} must not draw");
+            assert_eq!(census.get(&bad), None, "{name}: kind {bad:#x} must not draw");
         }
         // The sister: the same levels really do carry those placements, so the assertion above has teeth.
         let level = parse_level(&iso, name);
@@ -138,15 +178,15 @@ fn meshless_kinds_never_draw() {
 #[test]
 fn cars_draw_body_and_two_fixed_parts() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
-    let scene = nf_view::load(&iso, "07000024.bin", false).unwrap();
-    assert_eq!(scene.misc_drawn.get(&0xda), Some(&12), "4 cars × (body + 2 children)");
+    let census = misc_drawn_cached(&iso, "07000024.bin").unwrap();
+    assert_eq!(census.get(&0xda), Some(&12), "4 cars × (body + 2 children)");
     let level = parse_level(&iso, "07000024.bin");
     for &h in &[0x0200_0502u32, 0x0200_0505] {
         assert!(level.by_hash.contains_key(&h), "car part {h:#x} missing from the hash table");
     }
     // Sister: a level without cars draws none.
-    let scene = nf_view::load(&iso, "0700000d.bin", false).unwrap();
-    assert_eq!(scene.misc_drawn.get(&0xda), None);
+    let census = misc_drawn_cached(&iso, "0700000d.bin").unwrap();
+    assert_eq!(census.get(&0xda), None);
 }
 
 /// The sky clouds (`Cloud_Create` 0x18d620:26-27 → `View_AddSkyObj`, slot = param 4) ride the sky pass:
@@ -156,7 +196,7 @@ fn cars_draw_body_and_two_fixed_parts() {
 fn clouds_ride_the_sky_pass() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     for name in ["07000041.bin", "07000006.bin"] {
-        let data = nf_view::load(&iso, name, false).unwrap();
+        let census = misc_drawn_cached(&iso, name).unwrap();
         let level = parse_level(&iso, name);
         let m = level.main_map().unwrap();
         let clouds: Vec<_> = level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0xd4).collect();
@@ -164,7 +204,7 @@ fn clouds_ride_the_sky_pass() {
         let sky = level.sky_instances();
         let cloud_obj = if clouds[0].by_hash() { level.by_hash.get(&clouds[0].hashcode).copied() } else { Some((m, clouds[0].index as usize)) };
         assert!(cloud_obj.is_some_and(|c| sky.iter().any(|i| (i.0.map, i.0.object) == c)), "{name}: cloud not in the sky pass");
-        assert_eq!(data.misc_drawn.get(&0xd4), None, "the cloud must not also draw in the world sweep");
+        assert_eq!(census.get(&0xd4), None, "the cloud must not also draw in the world sweep");
     }
 }
 
@@ -175,7 +215,9 @@ fn clouds_ride_the_sky_pass() {
 #[test]
 fn lod_block_parses_and_destroy_swap_targets_resolve() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
-    nf_view::load(&iso, "0700000d.bin", false).unwrap();
+    // faster-live-tests: the old vestigial `nf_view::load("0700000d")` here was discarded unused —
+    // every assertion reads the raw archive parse below, and 0700000d's load is already pinned by
+    // the census tests that share this binary.
     let level = parse_level(&iso, "0700000d.bin");
     let m = level.maps.iter().position(|mp| mp.name == "010000cf").expect("map 010000cf");
     assert_eq!(level.maps[m].lod_target(6), Some(7));
@@ -209,16 +251,22 @@ fn misc_census_golden() {
         "07000048.bin", "07000049.bin", "0700004a.bin", "0700004b.bin"];
     let mut lines = Vec::new();
     for name in levels {
-        let scene = match nf_view::load(&iso, name, false) { Ok(s) => s, Err(e) => { eprintln!("skip {name}: {e}"); continue } };
+        let census = match misc_drawn_cached(&iso, name) { Ok(c) => c, Err(e) => { eprintln!("skip {name}: {e}"); continue } };
         let mut line = format!("{name}\t");
-        for (k, n) in &scene.misc_drawn { line.push_str(&format!("{k:#04x}:{n} ")); }
+        for (k, n) in &census { line.push_str(&format!("{k:#04x}:{n} ")); }
         lines.push(line.trim_end().to_string());
         eprintln!("{}", lines.last().unwrap());
     }
     let h = sha1_lines(&lines);
-    // Re-pinned for fix-gadgets2: 0x3A grapple points and 0x3F creep walls left the sweep (their
-    // creators attach no gfx [M 0x198298, 0x196fc8] — the user's red/yellow marker boxes).
-    let expected = "bb66b783b7500c3912098cd57daa1449d725b60b";
+    // Re-pinned for fix-striped-boxes2: the misc sweep applies the game's no-draw-bit gate
+    // (View_AddObjects 0x1e62d8:33, obj+0xF0 = the creators' copy of celglist+0x44) — the census now
+    // excludes the FLAGS_COPYING-kind objects whose glist carries 0x10. Per-level diff vs the
+    // previous pin (bb66b783b7500c3912098cd57daa1449d725b60b): 05 `0x3b:2 0xfa:2` → (empty, both
+    // WallHug blockers + both third icons hidden); 08 `0xe1:4`→`0xe1:3`; 0d `0x3b:4`→`0x3b:3`;
+    // 11 `0xfa:2` dropped; 12 `0x35:1 0xe1:1 0xfa:1` dropped (the 0x30:1 stays — no bit); 14
+    // `0x30:12 0xe1:48 0xfa:3`→`0xe1:29`; 15 `0xe1:11`→`0xe1:8`; 1b `0x4a:8 0xe1:6`→`0xe1:3`;
+    // 41's 0xfa:2 and 0a's 0x35:3 keep drawing (their glists carry no 0x10 — the gate is per-object).
+    let expected = "c2dc182372e5d06d1eada9041c439489e2da3cb7";
     assert_eq!(h, expected, "misc census golden — if a count legitimately changed, re-pin");
 }
 
@@ -232,14 +280,14 @@ fn misc_census_golden() {
 #[test]
 fn frontend_level_loads_and_resolves() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
-    let scene = nf_view::load(&iso, "07000048.bin", false).unwrap();
+    let census = misc_drawn_cached(&iso, "07000048.bin").unwrap();
     let level = parse_level(&iso, "07000048.bin");
     let m = level.main_map().expect("07000048 main map");
     assert_eq!(level.maps.len(), 5, "4 geometry maps + the texture main map");
     assert_eq!(level.maps[m].placements.len(), 1);
     let p = &level.maps[m].placements[0];
     assert_eq!(p.flags & 0xff, 0x31, "the only placement is a fusebox (meshless creator)");
-    assert_eq!(scene.misc_drawn.get(&0x31), None, "and it correctly draws nothing");
+    assert_eq!(census.get(&0x31), None, "and it correctly draws nothing");
     // The kind-8 menu-def entry exists in the archive (`LoaderProcess` 0x1d4880 case 8).
     let img = nf_formats::iso9660::IsoImage::open(&iso).unwrap();
     let (entries, bin) = nf_formats::disc::files_bin_entries(&img).unwrap();
@@ -287,14 +335,16 @@ fn firing_spawns_a_muzzle_smoke_puff_that_fades_and_dies() {
     // The spawn y is the eye at spawn time (pos + 1.5) minus the aim drop; Bond keeps settling after
     // the shot, so compare against the pre-fire pos with a unit window.
     assert!((g0.pos[1] - (spawn_y + 1.45)).abs() < 1.0, "the puff sits at the muzzle height, got {} vs {}", g0.pos[1], spawn_y + 1.45);
-    // It fades and dies (8 ticks [S], the decomp drops the game's life arg).
+    // It fades and dies: life 128 ticks [M Player_MuzzleFlash 0x1a4298 — the decomp drops Gas_Init's 11th
+    // argument; the disassembly loads it at 0x1a43f8 `li $v0, 0x80` and stores it at 0x1a442c] (the old
+    // 8 here was [S], the test audit's UNPROVEN row; rocket-trail-gas measured the real value).
     let mut ticks = 0;
     while sim.drones.gas.puffs.iter().any(|g| g.kind == 7) {
         sim.step_bond(Input::default(), false, false, false);
         ticks += 1;
-        assert!(ticks < 20, "the puff outlived its life");
+        assert!(ticks < 200, "the puff outlived its life");
     }
-    assert_eq!(ticks, 7, "life 8, one tick spent before capture: gone after 7 more");
+    assert_eq!(ticks, 127, "life 128, one tick spent before capture: gone after 127 more");
     // The sister: not firing spawns no muzzle smoke (fix-world-fx: the pool legitimately carries
     // the ripples' type-6 rings, so the check is the type-7 count).
     for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
@@ -365,7 +415,9 @@ fn a_grenade_blast_plays_the_explosion_script_entities() {
     let mesh = sim.weapons.model(0x35);
     sim.drones.grenades.push(nf_game::grenade::Grenade {
         pos: at, velocity: [0.05, 0.0, 0.0], speed: 0.05, travelled: 0.0, range: 10.0,
-        damage: 100.0, radius: 5.0, weapon_type: 0x34, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, mesh,
+        damage: 100.0, radius: 5.0, weapon_type: 0x34, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false, mesh,
+        stuck: false, seek_target: None,
+        phase: None,
     });
     let mut blasted = false;
     for _ in 0..40 { sim.step_bond(Input::default(), false, false, false); if !sim.drones.explosions.is_empty() { blasted = true; break; } }

@@ -32,6 +32,9 @@ fn the_gun_tilt_divides_by_the_zoom() {
         sim.gun.weapon = 0x24; // the sniper: flags 0x4080D0 (scoped), zoom 10 [L weapon_data]
         sim.gun.switch_request = 0x24; // clear the loadout's pending switch (it would take the slot back)
         sim.aiming = true;
+        // The pad's aim (free-aim: the cursor window) — the crosshair offset below is the pad's; the mouse never
+        // enters free-aim (mouse_scope_live).
+        sim.free_aim = true;
         // The smoothed crosshair offset (BL+0x120/0x124) with the raw cursor (BL+0x118/0x11C) equal to
         // it, so `Player_AutoAim`'s ease toward the cursor holds it still while the zoom ramps.
         sim.cursor = [0.25, -0.2];
@@ -102,8 +105,10 @@ fn each_zoomable_weapon_draws_its_own_zoom_overlay() {
 }
 
 /// The selection itself, per weapon id (the game's switch at 0x19e6d0:112-147): 0x1a/0x1b → OICW,
-/// 0x32/0x33 → Laser, 0x54/0x55 (and the mission-layer micro camera 0x52/0x53) → Camera, everything
-/// else → the Sight scope. Pure — no ISO.
+/// 0x32/0x33 → Laser, 0x54/0x55 → Camera, everything else → the Sight scope. The 0x52/0x53 mapping
+/// changed in fix-zoom-overlays: the name table [L ee_start_05/07000001/0700000a weapon_data+0x38
+/// over USATxt.dat] names them "Phoenix Ronin" (the Micro-Camera is 0x54/0x55), and the switch has
+/// no case 0x38/0x39 — they fall to the default scope. Pure — no ISO.
 #[test]
 fn the_zoom_overlay_selection_follows_the_weapon_id() {
     use nf_view::hud::{zoom_overlay, ZoomOverlay};
@@ -115,6 +120,6 @@ fn the_zoom_overlay_selection_follows_the_weapon_id() {
     assert_eq!(zoom_overlay(0x33), ZoomOverlay::Laser, "the Ronin twin variant");
     assert_eq!(zoom_overlay(0x54), ZoomOverlay::Camera);
     assert_eq!(zoom_overlay(0x55), ZoomOverlay::Camera, "the watch's taser twin (the game rewrites it to 0x54)");
-    assert_eq!(zoom_overlay(0x52), ZoomOverlay::Camera, "the micro camera gadget");
-    assert_eq!(zoom_overlay(0x53), ZoomOverlay::Camera, "the briefcase twin");
+    assert_eq!(zoom_overlay(0x52), ZoomOverlay::Sight, "the Phoenix Ronin — the switch's default (fix-zoom-overlays)");
+    assert_eq!(zoom_overlay(0x53), ZoomOverlay::Sight, "the Phoenix Ronin twin");
 }

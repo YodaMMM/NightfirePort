@@ -12,7 +12,7 @@
 //!   row 0 → `ResetMap_LevelToLoad(GameState._12_4_, 1, 1)` + `Player_RamLoad(Bond, 1)`
 //!   (0x216618:19-21) — the CURRENT level (GameState+0xC), `IsWarmReset = 1`, no 0x70→0x71 remap;
 //!   row 1 → `ResetMap_LevelToLoad(Mission_BaseMapHCode(), 0, 1)` (BaseMap, cold, :15-17);
-//!   row 2 → `GameState+0x28 = 0x4000001c` + `ResetMap_LevelToLoad(0x7000048, 0, 0)` (the front end).
+//!   row 2 → `GameState+0x1c = 0x4000001c` + `ResetMap_LevelToLoad(0x7000048, 0, 0)` (the front end).
 //! - The warm reload keeps the switch channels (`Init_SwitchChannels` only runs `IsWarmReset == 0`,
 //!   0x1d5080:48-50) and `Player_RamLoad` restores them from the RamSave (0x1957a8:17-20). The
 //!   RamSave the restart restores is the ENTRY checkpoint — `Player_RamSave` ran at the previous
@@ -108,9 +108,9 @@ fn restart_restores_the_entry_checkpoint_with_the_health_floor() {
         let sim = scene.sim.as_mut().unwrap();
         tick(sim, 10);
         sim.drones.set_channel(0x45);
-        sim.drones.health.pain_generic(37.0, 1, 0x0700_0007, 0);
+        let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng); h.pain_generic(r, 37.0, 1, 0x0700_0007, 0);
         tick(sim, 2);
-        sim.drones.health.pain_generic(500.0, 1, 0x0700_0007, 0);
+        let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng); h.pain_generic(r, 500.0, 1, 0x0700_0007, 0);
         tick_fire(sim, 2);
         tick(sim, 4);
         exit(sim)

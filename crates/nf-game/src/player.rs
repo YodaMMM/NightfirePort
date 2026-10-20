@@ -25,6 +25,16 @@ pub const ROOT_HEIGHT: f32 = 1.0347183;
 pub const CROUCH_ROOT_HEIGHT: f32 = 0.55;
 /// Capsule radius (`HITTEST+0x8C`).
 pub const RADIUS: f32 = 0.55;
+/// The CLIMB/CREEP hittest arm's radius: `Player_Collision` 0x194df0's substate switch maps the
+/// substates 1 (climb) and 7 (creep) to the narrow arm — the radius slot `+0x7CC = 0x3e8ccccd` =
+/// 0.275, segment A = pos + up·0.55, B = pos + up·(+0x7CC − cc) [M the jump table @0x2fc0d0 (case
+/// 0 = substate 1, case 6 = substate 7) + 0x1950a0]. The WALK substate 0 is NOT in that arm: the
+/// switch indexes substate−1, walk 0 → −1 → the unsigned bounds check fails → the DEFAULT arm (r
+/// 0.55) [M 0x1953f4]. The port's walk GRAB rides the default arm (`Ladder::capsule_hits_default`);
+/// this const stays for the climb/creep arm's shape (`Ladder::capsule_hits`) — the port's climb
+/// tick runs no grab scan (the game's `Player_CollLadder` 0x196118 excludes substates 1/2), so the
+/// narrow arm's remaining role is documentation + the unit pins of the switch's own geometry.
+pub const WALK_PICK_RADIUS: f32 = 0.275;
 /// `BL+0x908` on land.
 pub const EYE: f32 = 0.7;
 const GRAVITY: f32 = -9.8;
@@ -47,6 +57,105 @@ pub const SS_CREEP: u8 = 7;
 /// `Player_Zipline` 0x197f50 — the zipline ride (wire type 2) [M dispatch case 0xF].
 pub const SS_ZIPLINE: u8 = 0xf;
 
+/// The zero-g substates (dispatch cases 8/9 share the `Player_ZeroG` 0x192ab0 body [M 0x193600:
+/// 238-241]). 9 is the one the game ever sets: the 0700001b spacewalk's script handler answers its
+/// 0x4b event with `ChangeSubState(glb_players, 9 | 0)` [M C_CHCHZEROG 0x216388 — 9 when its msg
+/// 0x40 query returns nonzero, else 0]; no caller or store writes 8 anywhere in ACTION.ELF. Only
+/// substate 9 runs the movement anim set [M 0x192ab0:201 `if (obj+0xF6 == 9)`], so 8 is the anim
+/// quiet twin the dispatch still honours.
+pub const SS_ZEROG_8: u8 = 8;
+pub const SS_ZEROG_9: u8 = 9;
+
+/// `RotMatrix` 0x1e2368 for the zero-g rate vector (x pitch, y yaw, z roll — ZeroG always passes
+/// roll 0 [M 0x192ab0:91 `BL+0x38 = 0`]): the row-major rows of Rx(x)·Ry(y)·Rz(z) in the game's
+/// row-vector basis (rows = right/up/forward, `Bond::look`'s convention). The sine/cosines go
+/// through the port's PS2Sinf/PS2Cosf — `RotMatrix` calls PS2Sinf3/PS2Cosf3 [M 0x1e2368:28-40].
+fn rot_matrix(pitch_x: f32, yaw_y: f32, roll_z: f32) -> [[f32; 3]; 3] {
+    let (sx, cx) = (crate::trig::sinf(pitch_x), crate::trig::cosf(pitch_x));
+    let (sy, cy) = (crate::trig::sinf(yaw_y), crate::trig::cosf(yaw_y));
+    let (sz, cz) = (crate::trig::sinf(roll_z), crate::trig::cosf(roll_z));
+    [
+        [cy * cz, sx * sy * cz + cx * sz, sx * sz - cx * sy * cz],
+        [-cy * sz, cx * cz - sx * sy * sz, sx * cz + cx * sy * sz],
+        [sy, -sx * cy, cx * cy],
+    ]
+}
+
+/// `Concat(a, ab)` 0x1e4a90 ⇒ ab := a·ab [M 0x1e4a90:13-49] — Player_ZeroG calls it as
+/// `Concat(obj+0x90, R)`, so each tick's look rotation lands in the BODY frame.
+fn mat3_mul(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let mut out = [[0.0f32; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+        }
+    }
+    out
+}
+
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn norm3(v: [f32; 3]) -> [f32; 3] {
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if l > 0.0 { [v[0] / l, v[1] / l, v[2] / l] } else { v }
+}
+
+/// `Mat_Align2Up(m, up, dir)` 0x1df4b0: rebuild the rotation with the up row = `up` and the
+/// forward row over `dir` — row0 = norm(up × dir), row2 = norm(row0 × up) [M 0x1df4b0; the ZeroG
+/// caller passes CONSTANT_UP1 = (0,1,0), .data 0x2d6210 written at boot 0x1c7e78].
+fn mat_align_up(dir: [f32; 3]) -> [[f32; 3]; 3] {
+    let up = [0.0f32, 1.0, 0.0];
+    let r0 = norm3(cross3(up, dir));
+    [r0, up, norm3(cross3(r0, up))]
+}
+
+/// `Quat_MatrixToQuaternion` 0x1e0600 — q = [w, x, y, z]; the trace branch's w = −√/2 sign and the
+/// per-diagonal branches verbatim (the decompile's param_2 floats i·4+j = m[i][j]).
+fn quat_from_matrix(m: &[[f32; 3]; 3]) -> [f32; 4] {
+    let (m00, m11, m22) = (m[0][0], m[1][1], m[2][2]);
+    let tr = m00 + m11 + m22;
+    if tr >= 0.0 {
+        let s = (tr + 1.0).sqrt();
+        let k = 0.5 / s;
+        [-0.5 * s, (m[2][1] - m[1][2]) * k, (m[0][2] - m[2][0]) * k, (m[1][0] - m[0][1]) * k]
+    } else if m00 >= m11 && m00 >= m22 {
+        let s = (m00 - (m11 + m22) + 1.0).sqrt();
+        let k = 0.5 / s;
+        [(m[1][2] - m[2][1]) * k, 0.5 * s, (m[0][1] + m[1][0]) * k, (m[2][0] + m[0][2]) * k]
+    } else if m11 >= m22 {
+        let s = (m11 - (m22 + m00) + 1.0).sqrt();
+        let k = 0.5 / s;
+        [(m[2][0] - m[0][2]) * k, (m[0][1] + m[1][0]) * k, 0.5 * s, (m[1][2] + m[2][1]) * k]
+    } else {
+        let s = (m22 - (m00 + m11) + 1.0).sqrt();
+        let k = 0.5 / s;
+        [(m[0][1] - m[1][0]) * k, (m[2][0] + m[0][2]) * k, (m[1][2] + m[2][1]) * k, 0.5 * s]
+    }
+}
+
+/// `Quat_QuaternionToMatrix` 0x1e02a0 — the rotation floats in the game's row-major slots.
+fn quat_to_matrix(q: &[f32; 4]) -> [[f32; 3]; 3] {
+    let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
+    [
+        [2.0 * (x * x + w * w) - 1.0, 2.0 * (x * y + z * w), 2.0 * (x * z - y * w)],
+        [2.0 * (x * y - z * w), 2.0 * (y * y + w * w) - 1.0, 2.0 * (y * z + x * w)],
+        [2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 2.0 * (z * z + w * w) - 1.0],
+    ]
+}
+
+/// `Mat_Normalize` 0x1df5f8 — orthonormalise the rows: fwd = norm(row2); right = norm(up × fwd);
+/// up = norm(fwd × right). Each cross result is normalized, so the VU0 pair's doubled cross terms
+/// wash out; a zero row stays zero (the game's degenerate arm).
+fn mat_normalize(mut m: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    m[2] = norm3(m[2]);
+    m[1] = norm3(m[1]);
+    m[0] = norm3(cross3(m[1], m[2]));
+    m[1] = norm3(cross3(m[2], m[0]));
+    m
+}
+
 /// The per-tick ladder/wire/water context the Sim hands `Bond::tick_ctx` (the game reads the ladder and
 /// the wire through `BLData+0x884` and the water surface through the player's cel, `obj+0x20 → cel+0x90`).
 pub struct LadderCtx<'a> {
@@ -66,10 +175,37 @@ pub struct LadderCtx<'a> {
     pub sink: bool,
     /// The level's creepwall objects (class 0x2B '+', placement 0x3F), in placement order.
     pub creepwalls: &'a [crate::creepwall::CreepWall],
+    /// The head-bump sound gate: `Player_HandleJump` 0x1916b0:196-198 picks the metal clang 0x5FB
+    /// when `level_tag+0x50` (a byte the port's loader does not read) is 0xD/0xE, else the flesh
+    /// thud 0xA3. The Sim sets it per level once the byte is identified (live check in
+    /// docs/systems/sound-coverage.md); default false = the 0xA3 arm.
+    pub level_bump_5fb: bool,
+    /// The cels Bond's pick capsule straddles this tick — `Collide_StraddleCels` 0x1eac98's BFS from
+    /// the HITTEST home cel through the capsule-touching portals [M Collide_Pick 0x1eb320:125-134
+    /// admits a candidate object only from a straddled cel's chain]. The Sim fills it from
+    /// `CollisionWorld::debug_straddle` with the current substate's pick arm (`Bond::pick_arm`);
+    /// EMPTY = no scoping (no cel graph — unit tests, MP remotes), every ladder tested.
+    pub straddle: &'a [usize],
 }
 
 impl Default for LadderCtx<'_> {
-    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[] } }
+    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] } }
+}
+
+/// The current substate's pick arm — the HITTEST the game builds for `Player_Collision` 0x194df0's
+/// capsule switch (indexes on substate−1 [M disasm 0x195070, jump table @0x2fc0d0]): returns
+/// `(segment A offset, segment B offset, radius)` as upward offsets from the object position, the
+/// same numbers `Ladder::capsule_hits*` pin [M 0x1950a0 the climb/creep arm, 0x1953f4 the default
+/// arm, 0x194df0 case 3 the crouch arm]. One source of truth for the pick shape; the straddle walk
+/// feeds the same capsule to `Collide_StraddleCels` [M 0x1eac98 takes the pick's HITTEST].
+pub fn pick_arm(substate: u8, crouched: bool, cc: f32) -> (f32, f32, f32) {
+    if substate == SS_CLIMB || substate == SS_CREEP {
+        (0.55, WALK_PICK_RADIUS - cc, WALK_PICK_RADIUS) // 0x1950a0: r 0.275, B reads the radius slot
+    } else if crouched {
+        (0.1 - (cc - 0.55), 0.45 - cc, 0.55) // 0x194df0 case 3 = substate 4 (crouch)
+    } else {
+        (0.275, 0.55 - cc, 0.55) // 0x1953f4: the walk 0, the swim 3, every other grab-eligible substate
+    }
 }
 
 /// One tick of player input as game actions: `forward` (action 2), `strafe` (action 1; + = left), `turn` (radians
@@ -96,6 +232,10 @@ pub struct Input {
     pub switch_to: Option<u8>,
     /// Right mouse held: zoom the scope (`Player_Zoom` 0x1a1a70, mouse-first like the game's aim button).
     pub zoom: bool,
+    /// The mouse's scope/aim button (the right button, held): drives the aim bit — the raise, then the zoom —
+    /// like the pad's aim button, but never the free-aim cursor window (PLAN.md D-002: the mouse aims
+    /// directly). The pad keeps `aiming` (aim) and `zoom` (its own zoom axis).
+    pub scope: bool,
     /// The fire action held this tick (action 9; the substates read it directly — the grapple's
     /// reel/hang/release [M Player_SSGrapple 0x192860's Input_Action(9, 1)]). The weapon fire path
     /// gets the same bit through its own parameter.
@@ -105,12 +245,36 @@ pub struct Input {
     /// records without a twin link, or switches to the twin variant (weapon_data +0x05) when set.
     /// Keyboard: M (documented in the HUD help).
     pub mode_switch: bool,
+    /// One mouse-wheel notch while the aim (right) button is held: +1 zooms in a step, −1 out
+    /// (microcam-wheel-zoom). The zoom target steps ×2 / ÷2 within the held weapon's own range
+    /// [1.0, weapon_data+0x88] [M Player_Weapon 0x1a24c8:156-187's clamp]; when the aim is not
+    /// held the wheel keeps switching weapons (the window routes it to `weapon_cycle` instead).
+    /// Local view state — NOT part of the net input packet (the remote path never runs the
+    /// zoom pipeline; `Sim::step_net_remotes` ticks `Bond::tick_ctx` only), so the wire format
+    /// is unchanged and `unpack_input` always yields 0.
+    pub zoom_cycle: i8,
+    /// The zero-g vertical thruster: the combined (action 7 − action 8) analog [M Player_ZeroG
+    /// 0x192ab0:136-138 — `Input_Action(7,1) − Input_Action(8,1)`, a HELD read, not the walk
+    /// edges: jump thrusts up, crouch thrusts down]. The walk/swim paths ignore it. Local view
+    /// state, not net-encoded (the `zoom_cycle` precedent — substate 8/9 never runs on the
+    /// remote tick path today).
+    pub lift: f32,
+    /// The action-0xe read this tick (the pad's R2 — the game's "Action"): arms the zero-g
+    /// auto-stabiliser's 90-tick window [M Player_ZeroG 0x192ab0:163-166; the game reads flag 4
+    /// per tick, so a hold keeps re-arming]. The Sim ORs its use-key and reload edges into it
+    /// (both are action 0xe on the pad). Local view state, not net-encoded (the `zoom_cycle`
+    /// precedent).
+    pub stabilise: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct Bond {
     /// `obj+0x30`.
     pub pos: V3,
+    /// `obj+0x40` — the previous position the movement pass copies after the cel change
+    /// (`control_movement_object_handler` 0x1336f8:212), so the next `control_handle_cel_change`
+    /// 0x133288 relinks on the last tick's move segment. fix-swim-entry.
+    pub prev_pos: V3,
     /// `obj+0x54` (0 faces +Z; a larger yaw turns left).
     pub yaw: f32,
     /// `BL+0x8A8`: units of π/2, ±1, + = up.
@@ -216,6 +380,49 @@ pub struct Bond {
     /// nearest wire when the jump is pressed with 3 (the cable context). The Sim (scene.rs) owns the
     /// reset + the icon writes.
     pub icon_ctx: u8,
+    /// The level's `WldGravity` (0x2d8890..0x2d889c, 16 B [M work/action-symtab.tsv]). The game's
+    /// `Player_Init` 0x1910f8 writes the default (0, −9.8, 0) at every spawn (disasm 0x19151c-
+    /// 0x191550: `sw zero` → x, `swc1 f0` with 0xc11ccccd → y, `sw zero` → z), then zeroes the
+    /// WHOLE vector when the player-start placement's param 3 == 2 (`jal Vec_Zero(&WldGravity)`,
+    /// disasm 0x1915f4-0x19161c; the 0xB0 block `Player_Start` 0x190fd0 hands over, p3 at
+    /// +0x38). Readers in scope: `Player_Collision` 0x194df0:107/161 (the fall,
+    /// `vel += WldGravity·REC_FRAME_RATE`) and `Player_ChangeSubState` 0x190630 case 0xd/0xe
+    /// (the death-anim pick, see `death_script`). fix-world-gravity.
+    pub world_gravity: [f32; 3],
+    /// audit-sound-calls: the jump sounds this tick produced, `(id, pos)` — the launch 0xA3 and
+    /// the head bump 0xA3/0x5FB [`Player_HandleJump` 0x1916b0:184, 195-198]. Drained by the Sim
+    /// into `drones.audio` (the Sim's sound list) and cleared there. Field on its own line
+    /// (merge lesson 4).
+    pub sfx_out: Vec<(u32, V3)>,
+    /// The zero-g orientation: obj+0x90's rotation rows (right/up/forward, the game's row-vector
+    /// convention). `Player_ZeroG` composes the look rates body-frame (`m := m·R`, Concat [M
+    /// 0x1e4a90]) and the auto-stabiliser slerps it world-up [M 0x192ab0:160-199]; the walk
+    /// yaw/pitch scalars build it on entry (ChangeSubState 9 touches no rotation [M 0x190630]).
+    /// Field on its own line (merge lesson 4).
+    pub zero_g_rot: [[f32; 3]; 3],
+    /// `BL+0x24`: the vertical thruster's smoother — the (action 7 − action 8)·0.1 target eased
+    /// at the game's 0.04 factor [M Player_ZeroG 0x192ab0:136-159]; the third lane the walk's
+    /// `local` pair (+0x20/+0x28) doesn't cover. Field on its own line (merge lesson 4).
+    pub zero_g_lift: f32,
+    /// `BL+0xd0`: the auto-stabiliser's tick window, armed to FRAME_RATE·1.5 = 90 by the
+    /// action-0xe read [M Player_ZeroG 0x192ab0:163-168]. Field on its own line (merge lesson 4).
+    pub stabiliser: u16,
+    /// Port bookkeeping [S]: whether `zero_g_rot` is live for the current 8/9 spell (built from
+    /// the walk yaw/pitch on the first zero-g tick, dropped on leaving the substates). Field on
+    /// its own line (merge lesson 4).
+    pub zero_g_active: bool,
+    /// The post-integration, pre-push-out position — the game's hittest build point [M
+    /// `Player_Collision` 0x194df0 builds BLData+0x760 from obj+0x30 AFTER `Player_Update`'s
+    /// integration 0x193600:284-295 (:361); the refine runs on it in the collision pass
+    /// (`Collide_Update` 0x1ea398 from `control_movement_object_handler` 0x1336f8:238), and the
+    /// +0x750 push-out lands on obj+0x30 only inside `Player_CollisionHandler` 0x1949a8:136-140,
+    /// right before the hit dispatch]. The ladder grab's pick tests THIS spot: `Player_CollLadder`
+    /// 0x196118 runs no distance test — the grab rides the hit's EXISTENCE, decided by the refine
+    /// on the pre-push-out segment. A free-standing ladder's own collision triangles hold the
+    /// pushed-out body at exactly RADIUS (0.55) — that spot sits ON the strict refine boundary [M
+    /// Intersect_CylGeom 0x109da0:447 `dist < radius`] and never grabs, while the game's pre-push
+    /// segment (the tick's inward move included) does. Field on its own line (merge lesson 4).
+    pub pre_collide: V3,
 }
 
 impl Bond {
@@ -227,8 +434,27 @@ impl Bond {
             water_fade: 0.0, air_tick: 0, push_fwd: 0.0, wire: None, auto_drop: 0.0, wire_anim: 0, wire_anim_time: 0.0, wire_anim_rate: 1.0, cam_mode: 0, fall_speed: 0.0, grapple: None,
             icon_ctx: 0xff,
             cel: None,
+            prev_pos: pos,
+            pre_collide: pos,
             creep: None,
+            world_gravity: [0.0, -9.8, 0.0],
+            zero_g_rot: [[0.0; 3]; 3],
+            zero_g_lift: 0.0,
+            stabiliser: 0,
+            zero_g_active: false,
+            // audit-sound-calls: the jump launch / head-bump sounds outbox (drained by the Sim
+            // into `drones.audio`); `Player_HandleJump` 0x1916b0 plays 0xA3 at launch (:184) and
+            // 0xA3/0x5FB at the head bump (:195-198).
+            sfx_out: Vec::new(),
         }
+    }
+
+    /// The death-anim pick the main agent's death branch calls: `Player_ChangeSubState`
+    /// 0x190630 case 0xd/0xe [M :68-73] — `WldGravity.y == 0.0` (the exact float test, the
+    /// zero-g write is `Vec_Zero`) plays 0x60008e0 (the space death), else 0x6000151 (the
+    /// ground death). `Player_HandleDeath` 0x190bb0:15 shares the same test.
+    pub fn death_script(&self) -> u32 {
+        if self.world_gravity[1] == 0.0 { 0x6000_8e0 } else { 0x6000_151 }
     }
 
     /// On the floor below `p` (within 10 units), as a level start places him.
@@ -250,30 +476,53 @@ impl Bond {
     pub fn sphere_centre(&self) -> V3 {
         // [L] M_CONTROL+0x80 (ee_start_05.bin, player 0 standing).
         const LOCAL: V3 = [-0.1347, -0.1267, 0.2402];
-        let (s, c) = self.yaw.sin_cos();
+        let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw)); // G-046: the matrix rows are PS2Sinf-built [M 0x133070]
         // The object matrix rows [cos,0,−sin / 0,1,0 / sin,0,cos] (+ translation = pos), as read live
         // [L 0x16cefe0+0x90..0xc8] and matching `Bond::look`'s convention.
         [self.pos[0] + LOCAL[0] * c + LOCAL[2] * s, self.pos[1] + LOCAL[1], self.pos[2] - LOCAL[0] * s + LOCAL[2] * c]
     }
 
-    /// The view direction (pitch applied to the forward axis).
+    /// The view direction (pitch applied to the forward axis). In the zero-g substates the whole
+    /// orientation lives in the object matrix — ZeroG zeroes the scalar pitch BL+0x8a8 EVERY tick
+    /// [M Player_ZeroG 0x192ab0:74] — so the view rides the matrix's forward row.
     pub fn look(&self) -> V3 {
-        let p = self.pitch * std::f32::consts::FRAC_PI_2;
-        [p.cos() * self.yaw.sin(), p.sin(), p.cos() * self.yaw.cos()]
+        if self.zero_g_active {
+            return self.zero_g_rot[2];
+        }
+        // G-046: the game's dir is RotMatrixX(view pitch) · Mat_GetDir — PS2Sinf2 lanes, EE products
+        // [M RotMatrixX 0x1e46a0:16-24; the pitch arg `BL+0x8a8·π/2` a mul.s].
+        let p = nf_formats::ps2float::mul(self.pitch, crate::trig::HALF_PI);
+        let (sp, cp) = (crate::trig::sinf(p), crate::trig::cosf(p));
+        let (sy, cy) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
+        let mul = nf_formats::ps2float::mul;
+        [mul(cp, sy), sp, mul(cp, cy)]
     }
 
     /// The capsule ends (top A, bottom B) for the current stance, off the dynamic root height `cc`
-    /// (`Player_Collision` 0x194df0: standing `0.275` / `0.55 − cc`; crouched `0.65 − cc` / `0.45 − cc`).
-    /// The swim substate (3) builds its own pair [M 0x194df0 case 3:228-253]: spheres at
-    /// `0.1 − (cc − 0.55)` = `0.65 − cc` and `0.45 − cc` with `+0x7cc` (the radius slot) 0.55 — a
-    /// low-slung 0.2-long spine hanging under the root, so at the swim equilibrium (root = surface − 0.3)
-    /// the capsule's top stays ~0.13 under the water plane and never touches a pond floor that sits at
-    /// the surface (the 07000002 garden pond [D probe_vent_swim]).
+    /// (`Player_Collision` 0x194df0: standing (default arm) `0.275` / `0.55 − cc`; the crouch/swim
+    /// case 3 `0.1 − (cc − 0.55)` / `0.45000002 − cc`, stores to BLData+0x760/+0x770 with the radius
+    /// slot +0x7cc = 0x3f0ccccd 0.55 [M 0x194df0:235/248 + the tail store :405-408]). The constants
+    /// are the game's f32 literals evaluated in the game's order — NOT the algebraic simplifications:
+    /// `0.65 − 0.55f32` = 0.1000000238418579 but the game's `0.1 − (0.55 − 0.55)` = 0.1f32, and
+    /// `0.45f32 − cc` = −0.10000002384185791 but the game's `0.45000002f32 − cc` (0x3EE66667) =
+    /// −0.09999999403953552. The 3e-8 difference is the crouch grounded band: the feet-point ray is
+    /// built from the B arm (see the physics_tick comment), so the port's lower B hung the crouch
+    /// rest EXACTLY on `Player_FeetOnPoint`'s band edge and the push dither flickered Bond ungrounded
+    /// at every hard-floor crouch rest (probe14_ground.rs, the 07000014 crawl-vent start).
+    ///
+    /// The arms follow the hittest switch's own table [M Player_Collision 0x194df0, second switch
+    /// @0x195070 indexed substate−1, jump table @0x2fc0d0]: the crouch substate 4 alone takes the
+    /// LOW arm (case 3: A = pos + up·(0.1 − (cc − 0.55)), B = pos + up·(0.45 − cc)); the DEFAULT
+    /// arm (A = pos + up·0.275, B = pos + up·(0.55 − cc), r 0.55) covers the walk 0 AND the swim 3
+    /// — the underwater path jumps past the gravity straight into this switch [M disasm
+    /// 0x194f4c-0x194f70]. The swim pair rode the LOW arm pre-fix (the same misread 750a made for
+    /// the swim grab pick): its lowest point sat cc + 0.10 under the root against the game's cc, so
+    /// the pond-bed push-out parked the swimmer ~0.1 high (the 02-pond playtest: 3.60/3.70 settles
+    /// against the PS2's 3.48/3.17 [L]; docs/systems/swim.md). The grab pick's own swim arm is the
+    /// default one [M ladder.rs::capsule_hits_default] — the pair now agrees with it.
     fn capsule(&self) -> (V3, V3) {
-        let (a, b) = if self.substate == SS_SWIM {
-            (0.65 - self.cc, 0.45 - self.cc)
-        } else if self.crouched {
-            (0.65 - self.cc, 0.45 - self.cc)
+        let (a, b) = if self.crouched {
+            (0.1 - (self.cc - 0.55), 0.450_000_02 - self.cc)
         } else {
             (0.275, 0.55 - self.cc)
         };
@@ -304,9 +553,21 @@ impl Bond {
             SS_WIRE => self.wire_tick(world, ctx, input),
             SS_CREEP => self.creep_tick(world, ctx, input),
             SS_ZIPLINE => self.zipline_tick(world, ctx, input),
+            SS_ZEROG_8 | SS_ZEROG_9 => self.zerog_tick(world, ctx, input),
             _ => self.walk_tick(world, ctx, input),
         }
+        if !(SS_ZEROG_8..=SS_ZEROG_9).contains(&self.substate) {
+            self.zero_g_active = false;
+        }
         self.monitor_air(ctx);
+    }
+
+    /// `Player_ZeroG` 0x192ab0 — the spacewalk substate (the dispatch runs cases 8 and 9 into the
+    /// same body [M 0x193600:238-241]; the script only ever sets 9 [M C_CHCHZEROG 0x216388], and
+    /// only 9 plays the movement anim set [M 0x192ab0:201]). The body rides `physics_tick`'s
+    /// collision tail with the walk/swim move + gravity replaced.
+    fn zerog_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
+        self.physics_tick(world, ctx, input, false, true);
     }
 
     /// `Player_SSWalk` 0x192310 / `Player_SSCrouch` 0x1924c0 (the walk/crouch substates share this body in
@@ -317,7 +578,7 @@ impl Bond {
     /// 0x2D to `Player_CollLadder` 0x196118.
     fn walk_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
         if self.enter_water(ctx) { return; }
-        self.physics_tick(world, ctx, input, false);
+        self.physics_tick(world, ctx, input, false, false);
         self.ladder_grab(ctx);
     }
 
@@ -346,7 +607,7 @@ impl Bond {
     /// Bond's y is below the water surface [M the default case jumps past `WldGravity` to the substate
     /// capsule switch when `cel+0x90 > obj+0x34`].
     fn swim_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
-        self.physics_tick(world, ctx, input, true);
+        self.physics_tick(world, ctx, input, true, false);
         let Some(w) = ctx.water else { self.substate = SS_WALK; return };
         if self.grounded && w <= self.pos[1] - 0.3 {
             // Leave the water [M case 3: `(AnimObj+0x60 & 8) && cel+0x90 <= pos.y − 0.3` → substate 0].
@@ -354,12 +615,11 @@ impl Bond {
             self.ladder = None;
             return;
         }
-        // Vertical swim [S — the game's vertical swim input is not resolved in this pass; enter/leave,
-        // the surface clamp and drowning are [M]]. Jump rises, crouch sinks. This is the ONLY vertical
-        // integration this tick (the physics pass skipped the y velocity for swimming).
-        self.vel[1] = if input.jump { 2.4 } else if input.crouch || ctx.sink { -2.4 } else { 0.0 };
-        // The surface clamp [M]: `pos.y < surface − 0.3` → `vel.y = min(vel.y, surface − 0.3 − pos.y)`
-        // (world-up); else any upward velocity is zeroed.
+        // The vertical comes from the look-directed forward (physics_tick's swim branch [M
+        // 0x191dd0:149-165]) — NOT from crouch/jump: the game's case 3 reads no such input (the old
+        // `±2.4` on jump/crouch was [S] fiction; dive = look down + forward, surface = look up +
+        // forward). The surface clamp [M 0x193600:201-220]: `pos.y < surface − 0.3` → the world-Y
+        // move is clamped so Bond rises AT MOST to `surface − 0.3`; else any upward move is zeroed.
         if self.pos[1] < w - 0.3 {
             self.vel[1] = self.vel[1].min((w - 0.3 - self.pos[1]) * 60.0);
         } else if self.vel[1] > 0.0 {
@@ -380,9 +640,61 @@ impl Bond {
     /// velocity (`obj+0x50/+0x58 = 0`), mode `+0x94D = 1`, `+0x130 = 2`, `ChangeSubState(1)`,
     /// `Player_WeaponNone` (the Sim holsters to fists), `BLData+0x884 = ladder`.
     fn ladder_grab(&mut self, ctx: &LadderCtx) {
-        if self.substate != SS_WALK || self.regrab != 0 { return; }
+        // The game's guards [M 0x196118:16-17]: substate must not be 1 (climb) or 2 (grapple) — swim
+        // (3), crouch (4) and walk (0) all grab; plus the regrab lockout (+0x951) and health. The old
+        // `!= SS_WALK` gate silently killed the swim-grab call swim_tick already made (the user's "I
+        // can't latch onto it and climb it" at the 02 pond hut ladder).
+        if matches!(self.substate, SS_CLIMB | SS_GRAPPLE) || self.regrab != 0 { return; }
+        // The pick shape follows the substate's HITTEST arm. The switch indexes on substate−1 [M
+        // disasm 0x19506c-0x195098: `lhu 0xf6($s3)`, `addiu −1`, the jump table — so 0x194df0's
+        // "case 0" is the CLIMB substate 1 (r 0.275, A = up·0.55, B = up·(0.275 − cc)) and its
+        // "case 3" is the CROUCH substate 4 (the LOW short segment A = up·(0.1 − (cc − 0.55)),
+        // B = up·(0.45 − cc), r 0.55); the switch's DEFAULT arm (r 0.55, A = up·0.275,
+        // B = up·(0.55 − cc)) covers every other substate — INCLUDING the walk 0 and the SWIM 3
+        // (both underwater and dry: the underwater path jumps past the gravity straight into this
+        // switch [M disasm 0x194f4c-0x194f70: `cel+0x90 > obj+0x34` → `bc1fl 0x195070`]). The
+        // underwater ladder softlock (750a): the swim grab ran the CROUCH arm here, whose LOW spine
+        // (A = −0.385) misses rungs the game's default arm reaches.
+        //
+        // ladder-0c: the WALK arm is the DEFAULT arm, pinned by the switch's own jump table [M
+        // Player_Collision 0x194df0 second switch @0x195070: the index is substate−1 (`lhu 0xf6($s3)`,
+        // `addiu −1`, `sltiu $v1, $a0, 0xf` bounds, the table @0x2fc0d0) — walk 0 → −1 → 0xffffffff
+        // fails the unsigned bounds → the default arm @0x1953f4 (r +0x7CC = 0x3f0ccccd = 0.55, A =
+        // up·0.275 = 0x3e8ccccd, B = up·(0.55 − cc)); only the substates 1 (climb) and 7 (creep) take
+        // the narrow 0.275 arm (@0x1950a0). fix-ladder-water2's "case 0/6 = substate 0 (walk)" mapped
+        // the switch on the raw substate — the table maps case 0 → substate 1. The 0.275 arm left the
+        // 0700000c yard ladder #164 unclimbable: Bond's walk capsule stops him 0.4985 from its rung
+        // plane (the silo wall sits ~0.05 behind the plane [D probes]) and 0.4985 > 0.275 never
+        // touches — the game's 0.55 arm does (0.4985 < 0.55), and the dismount escape still clears:
+        // the dismount hop −0.05 [M Player_Climb 0x196310:88-96, consumed the same tick by the
+        // integration Player_Update 0x193600:284-295] puts the stander 0.55 out, the refine's strict
+        // `dist < radius` [M Intersect_CylGeom 0x109da0:447] rejects the exact touch, and the swim
+        // escape's drift (0.5 + 0.05 + 0.2 > 0.55) still clears.
         for (i, lad) in ctx.ladders.iter().enumerate() {
-            if !lad.capsule_hits(self.pos, RADIUS) { continue; }
+            // The straddled-cel scoping [M Collide_Pick 0x1eb320:125-134]: the pick admits only
+            // objects linked to a cel the HITTEST straddles — the ladder's link is its centre's cel
+            // [M build_LinkToRoom 0x1c9680] and the straddle set is the Sim's portal BFS over the
+            // pick capsule. An empty set (no cel graph) scopes nothing.
+            if !ctx.straddle.is_empty() {
+                match lad.cell {
+                    Some(c) if ctx.straddle.contains(&(c as usize)) => {}
+                    _ => continue,
+                }
+            }
+            // The pick runs on the PRE-push-out spot [M — see the `pre_collide` field doc]: the
+            // game's grab rides the hit existence from the hittest built at the integrated
+            // position, before the handler's push-out.
+            let pick = self.pre_collide;
+            let hit = if self.crouched {
+                // The crouched walk is the game's substate 4 (the port folds the crouch into
+                // substate 0 + the flag) — the switch's case 3, the LOW arm [M 0x194df0 case 3].
+                lad.capsule_hits_crouch(pick, RADIUS, self.cc)
+            } else {
+                // The walk 0, the swim 3 and every other grab-eligible substate ride the switch's
+                // DEFAULT arm [M 0x1953f4 via the jump table @0x2fc0d0].
+                lad.capsule_hits_default(pick, RADIUS, self.cc)
+            };
+            if !hit { continue; }
             let diff = wrap_pi(lad.yaw - self.yaw); // Vec_AngleDifference(player, ladder) [M 0x1e2b78]
             if diff.abs() <= std::f32::consts::FRAC_PI_2 { continue; }
             let (top, bottom) = (lad.top(), lad.bottom());
@@ -390,9 +702,13 @@ impl Bond {
             self.climb_bottom = bottom;
             self.pos[1] = self.pos[1].max(bottom + 0.02);
             if !(bottom < self.pos[1] && self.pos[1] < top) { continue; }
-            let (s, c) = lad.yaw.sin_cos();
-            self.pos[0] = lad.centre[0] + s * 0.5;
-            self.pos[2] = lad.centre[2] + c * 0.5;
+            // G-046: Player_CollLadder 0x196118:31-38 [M]: a = lad.yaw + 3.1415927 (add.s); x = centre −
+            // PS2Sinf(a)·0.5, z = centre − PS2Sinf(a + 1.5707964)·0.5 (EE mul.s/sub.s) — the game's own
+            // sine arguments, not sin/cos of the raw yaw.
+            let a = crate::trig::ee_add(lad.yaw, crate::trig::PI);
+            let mul = nf_formats::ps2float::mul;
+            self.pos[0] = crate::trig::ee_sub(lad.centre[0], mul(crate::trig::sinf(a), 0.5));
+            self.pos[2] = crate::trig::ee_sub(lad.centre[2], mul(crate::trig::sinf(crate::trig::ee_add(a, crate::trig::HALF_PI)), 0.5));
             self.vel[0] = 0.0;
             self.vel[2] = 0.0;
             self.mode = 1;
@@ -417,7 +733,7 @@ impl Bond {
     fn climb_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
         let li = match self.ladder {
             Some(li) if ctx.ladders.get(li).is_some() => li,
-            _ => { self.substate = SS_WALK; self.ladder = None; self.physics_tick(world, ctx, input, false); return; }
+            _ => { self.substate = SS_WALK; self.ladder = None; self.physics_tick(world, ctx, input, false, false); return; }
         };
         let lad = &ctx.ladders[li];
         // The yaw clamp+ease [M 0x196310:18-33]: target = ladder.yaw + π (facing the ladder). The ease
@@ -468,8 +784,21 @@ impl Bond {
                 if self.head_bump && fwd > 0.0 { fwd = 0.0; }
                 // A hit below (flag 8) with a down-push dismounts [M]; the port reads the floor under
                 // Bond's feet within 1.2 units as "hit below" [S — the game's hit comes from the
-                // CollisionHandler's climb scan; see docs/atlas/ladder.md].
-                let floor_below = world.floor_below(self.pos, 1.2).is_some();
+                // CollisionHandler's climb scan; see docs/atlas/ladder.md]. The read is the CEL-SCOPED
+                // straddle ray (the game's player collision tests only the cels the straddle walk
+                // keeps from obj+0x20 [M Player_FeetOnPoint 0x194188 → Collide_StraddleCels
+                // 0x1eac98]): a climb-down over the pond from the garden cel does not see the water
+                // cel's bed, so the climb keeps going UNDER the surface to the bottom threshold
+                // (centre.y − radius + 1.0 [M 0x196118]) and the dismount lands the swimmer below
+                // the grab window instead of dropping him onto the bed right above it (the ladder-02
+                // "infinitely latching onto the ladder" — the flat read dismounted the climb on the
+                // pond bed mid-column, and the swimmer settled inside the grab column; the ladder's
+                // authored mesh was measured to reach the settle spot, so the bed-hit path is the
+                // divergence). No cel (the unit-test signature) falls back to the flat water-
+                // filtered ray (segment_hit drops the mat-0xE planes).
+                let floor_below = world
+                    .segment_hit_scoped(self.cel, [self.pos[0], self.pos[1] + 0.5, self.pos[2]], [self.pos[0], self.pos[1] - 1.2, self.pos[2]])
+                    .is_some();
                 if !floor_below || fwd >= 0.0 {
                     self.vel[1] = fwd * 0.02 * 60.0; // +0x14 += fwd·0.02 per tick → 1.2·fwd u/s
                     self.physics_tick_climb(world);
@@ -506,14 +835,52 @@ impl Bond {
         // The climb velocity integrates first (the game's wish plumbing lands it in the position before
         // the collision pass).
         for k in 0..3 { self.pos[k] += self.vel[k] / 60.0; }
-        let (a, b) = self.capsule();
-        let (push, walkable) = world.capsule_push(a, b, RADIUS);
+        // The climb substate's OWN capsule [M Player_Collision 0x194df0 case 0 — the switch indexes
+        // on substate−1 (disasm 0x195070), so case 0 IS the climb 1]: radius +0x7CC = 0x3e8ccccd
+        // (0.275 — HALF the 0.55 stance radius), A = pos + up·0x3f0ccccd (0.55),
+        // B = pos + up·(+0x7CC − cc). The 750a softlock: the climb ran the fat 0.55 stance capsule
+        // and WEDGED in the undergarden shaft above 07000002's deep ladder (−50.35, 5.50 [D]) —
+        // head_bump every tick ate the up-push [M Player_Climb 0x196310:69-71] and Bond hung on the
+        // ladder forever, unable to climb out (the user's "ladder on 02 underwater … softlocks the
+        // game").
+        let a_off = 0.55f32;
+        let b_off = 0.275 - self.cc;
+        let a = [self.pos[0], self.pos[1] + a_off, self.pos[2]];
+        let b = [self.pos[0], self.pos[1] + b_off, self.pos[2]];
+        const CLIMB_RADIUS: f32 = 0.275; // 0x3e8ccccd [M 0x194df0 case 0]
+        // The pass is the actor's own cel's object lists (fix-08-collision): `Player_Collision`
+        // 0x194df0 stores obj+0x20 (the relinked cel) into the BLData+0x740 HITTEST's start-cel
+        // field (`*(BLData+0x7c0) = *(obj+0x20)`, the function's first store), and `Collide_Pick`
+        // 0x1eb320 walks `Collide_StraddleCels` 0x1eac98's result, testing each straddled cel's
+        // OWN list (`*(cel + 0x18)`) — walls hanging on other rooms' cels never block. `self.cel`
+        // is that relink (obj+0x20; the Sim refreshes it off the position each tick, the
+        // `build_LinkToRoom` 0x1c9680 order); `None` falls back to the flat world.
+        let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS, false);
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
+        // The floor test reads the same HITTEST (`Player_CollisionHandler` 0x1949a8 →
+        // `Player_FeetOnPoint(param_1, BLData+0x740, …)`), so it shares the per-cel scope. The ray
+        // and the band are the game's own: to = capsuleB + up·(−(cc+0.6)) [M Player_FeetOnPoint
+        // 0x194188:89-98 — HITTEST+0x30 = BLData+0x770, the climb B arm pos + up·(0x7cc − cc) from
+        // Player_Collision 0x194df0 case 0 + the tail store :405-408], and HITDATA+0xC =
+        // |from − hit| with hit = from + t·dir [M Intersect_RayGeom 0x10a8c8:176-179/252-256/
+        // 312-325]; band `hit − 0.1 <= cc` [M 0x194188:106]. See the walk tick's comment.
         let ray = self.cc + 0.6;
-        let floor = world.segment_hit(self.pos, [self.pos[0], self.pos[1] - ray, self.pos[2]]);
-        self.grounded = walkable || floor.is_some_and(|(t, _)| t * ray - 0.1 <= self.cc);
-        if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
+        let to = [b[0], b[1] + -ray, b[2]];
+        let floor = world.segment_hit_scoped(self.cel, self.pos, to);
+        let band = floor.as_ref().map_or(false, |(t, _)| {
+            let d_y = to[1] - self.pos[1];
+            let hit_y = self.pos[1] + t * d_y;
+            let dy = self.pos[1] - hit_y;
+            (dy * dy).sqrt() - 0.1 <= self.cc
+        });
+        self.grounded = walkable || band;
+        // floor_ny is the band-gated BLData+0x110 [M Player_FeetOnPoint 0x194188:85/:106-109;
+        // 0x194df0:104] — see the walk tick's comment.
+        self.floor_ny = match floor.as_ref() {
+            Some((_, n)) if band => n[1],
+            _ => 1.0,
+        };
     }
 
     /// `Player_ClearInertia` 0x195e08 [M]: the four velocity triples (`BLData+0x10/+0x20/+0x30/+0x40`)
@@ -620,10 +987,17 @@ impl Bond {
     /// `±0.0542·(cos yaw, −sin yaw)` [M the PS2Sinf2(−yaw+π/2, −yaw) pairs; the per-add signs follow
     /// the decompile's tree]) and sets `oldhash`/time/rate.
     fn wire_anim_add(&mut self, hash: u32, rate: f32, sway_sign: f32, closest: V3, hang: f32) {
-        let (sin, cos) = self.yaw.sin_cos();
-        self.pos[0] = closest[0] + sway_sign * 0.0542 * cos;
+        // G-046: the sway's two sines are the game's own lanes — PS2Sinf2(−yaw + 1.5707964, −yaw) [M
+        // Player_Wire 0x197658:194-204, Player_CollWire 0x197130:228] — then `pos −= lane·(−sway_sign·0.0542)`
+        // (EE mul.s/sub.s; the per-add immediate ±0.0542 follows the decompile's tree).
+        let ny = -self.yaw;
+        let lane1 = crate::trig::sinf(crate::trig::ee_add(ny, crate::trig::HALF_PI));
+        let lane2 = crate::trig::sinf(ny);
+        let mul = nf_formats::ps2float::mul;
+        let c = -sway_sign * 0.0542;
+        self.pos[0] = crate::trig::ee_sub(closest[0], mul(lane1, c));
         self.pos[1] = closest[1] - hang;
-        self.pos[2] = closest[2] - sway_sign * 0.0542 * sin;
+        self.pos[2] = crate::trig::ee_sub(closest[2], mul(lane2, c));
         self.wire_anim = hash;
         self.wire_anim_time = 1.0;
         self.wire_anim_rate = rate;
@@ -635,7 +1009,7 @@ impl Bond {
     fn wire_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
         let wi = match self.wire {
             Some(wi) if ctx.wires.get(wi).is_some() => wi,
-            _ => { self.substate = SS_WALK; self.wire = None; self.physics_tick(world, ctx, input, false); return; }
+            _ => { self.substate = SS_WALK; self.wire = None; self.physics_tick(world, ctx, input, false, false); return; }
         };
         let wire = ctx.wires[wi].clone();
         let hang = 1.0207f32;
@@ -774,11 +1148,16 @@ impl Bond {
     fn creep_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
         let Some(wi) = self.creep else { self.substate = SS_WALK; return };
         let Some(w) = ctx.creepwalls.get(wi) else { self.substate = SS_WALK; self.creep = None; return };
-        let crawl_yaw = w.yaw + std::f32::consts::PI;
+        let crawl_yaw = crate::trig::ee_add(w.yaw, crate::trig::PI); // [M 0x1969d0:118 add.s, stored to obj+0x54]
         self.yaw = crawl_yaw;
         let closest = w.closest_point(self.pos);
-        let (s, c) = crawl_yaw.sin_cos();
-        self.pos = [closest[0] + s * 0.275, self.pos[1], closest[2] + c * 0.275];
+        // G-046: pos = closest + PS2Sinf(yaw)·0.275 / PS2Sinf(yaw + 1.5707964)·0.275 [M 0x1969d0:120-125].
+        let mul = nf_formats::ps2float::mul;
+        self.pos = [
+            crate::trig::ee_add(closest[0], mul(crate::trig::sinf(crawl_yaw), 0.275)),
+            self.pos[1],
+            crate::trig::ee_add(closest[2], mul(crate::trig::sinf(crate::trig::ee_add(crawl_yaw, crate::trig::HALF_PI)), 0.275)),
+        ];
         // The ends: A = pos + fwd(yaw+π/2)·len, B = pos − fwd(yaw+π/2)·len [M 0x1969d0:91-105].
         let (a, b) = w.endpoints();
         let d2 = |p: V3, q: V3| (p[0] - q[0]) * (p[0] - q[0]) + (p[2] - q[2]) * (p[2] - q[2]);
@@ -830,7 +1209,7 @@ impl Bond {
     fn zipline_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, _input: &Input) {
         let wi = match self.wire {
             Some(wi) if ctx.wires.get(wi).is_some() => wi,
-            _ => { self.substate = SS_WALK; self.wire = None; self.physics_tick(world, ctx, _input, false); return; }
+            _ => { self.substate = SS_WALK; self.wire = None; self.physics_tick(world, ctx, _input, false, false); return; }
         };
         let wire = ctx.wires[wi].clone();
         if self.mode == 9 {
@@ -882,6 +1261,7 @@ impl Bond {
             self.regrab = 5;      // (u8)(FRAME_RATE_DIV·5) [M]
             self.vel[0] = 0.0;    // obj+0x50 = 0 [M]
             self.vel[2] = 0.0;    // obj+0x58 = 0 [M]
+            self.local[0] = 0.0;  // Vec_Zero(BL+0x20): the strafe smoother clears too [M 0x195e50 disasm]
             self.mode = 0;
             self.ladder = None;
         }
@@ -903,13 +1283,16 @@ impl Bond {
         self.underwater = head < surface && surface > -400.0;
         self.water_fade = if self.underwater { (self.water_fade + (1.0 - self.water_fade) / 60.0).min(1.0) }
             else { (self.water_fade - self.water_fade / 120.0).max(0.0) };
-        if self.underwater {
+        if self.underwater && !(SS_ZEROG_8..=SS_ZEROG_9).contains(&self.substate) {
             self.air -= 5.0 / 60.0;
             if self.air < 1.0 {
                 self.air_tick += 1;
                 if self.air_tick >= 30 { self.air_tick = 0; self.drown_damage = Some(2.0); }
             }
         } else {
+            // The zero-g substates never drain: `Player_MonitorAir`'s drain enable is false for
+            // 7 < substate < 10, so the suit's air refills even under the surface [M 0x191a70:57,
+            // :98 the refill].
             self.air = (self.air + 20.0 / 60.0).min(100.0);
             self.air_tick = 0;
         }
@@ -919,13 +1302,15 @@ impl Bond {
     /// One 60 Hz physics tick (the port's `Player_Move` + `Player_Collision` walk body). `swimming`
     /// selects the swim-substate differences: no `Player_HandleJump` (case 3 doesn't call it [M]) and no
     /// gravity (`Player_Collision`'s water path skips `WldGravity` [M]).
-    fn physics_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input, swimming: bool) {
+    fn physics_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input, swimming: bool, zero_g: bool) {
         let prev = self.pos;
         self.fall_damage = None;
         // `Player_SSWalk` / `Player_SSCrouch`: the lockout runs down (*deviation*: the transition animation that may
         // end it early is not played).
         self.lockout = self.lockout.saturating_sub(1);
-        let k = if self.crouched { 0.75 } else { 1.0 };
+        // Case 3 calls `Player_Move(1.0, …)` [M 0x193600:181-182] — the swim multiplier is ALWAYS 1.0
+        // (the 0.75 is `Player_SSCrouch`'s own call argument 0x1924c0:58, not a crouched flag read).
+        let k = if swimming { 1.0 } else if self.crouched { 0.75 } else { 1.0 };
         // `Player_Move`: aim mode zeroes forward (and the pad's turn action, which the caller leaves out of `turn`:
         // with a mouse the view turns past the aim box's edge, D-002).
         let (fwd, turn) = if input.aiming { (0.0, input.turn) } else { (input.forward.clamp(-1.0, 1.0), input.turn) };
@@ -938,10 +1323,22 @@ impl Bond {
             if target.abs() <= 0.0002 && v.abs() < 0.01 { v = 0.0; }
             v.clamp(-0.1, 0.1)
         };
-        let (vs, vf0) = (axis(self.local[0], target_s) * k, axis(self.local[1], target_f) * k);
+        let (vs, vf0) = if zero_g {
+            // Zero-g eases its own smoothers below (the 0.04 factor, the ±0.05 cap [M 0x192ab0:
+            // 92-159]) — the walk's `Player_Move` ease (0.2, the ±0.1 cap, the dead-zone) must
+            // not touch the shared BL+0x20/+0x28 slots this tick.
+            (0.0, 0.0)
+        } else {
+            (axis(self.local[0], target_s) * k, axis(self.local[1], target_f) * k)
+        };
         // `Player_HandleJump`: crouch (toggle) and jump. Case 3 (swim) doesn't call it [M].
         let headroom = |w: &CollisionWorld| w.line_of_sight(self.pos, [prev[0], prev[1] + 0.95, prev[2]]);
         if swimming {
+        } else if zero_g {
+            // No `Player_HandleJump` here: the jump/crouch actions ARE the vertical thruster in
+            // zero-g (the held analog pair) [M 0x192ab0:136-138]; the crouch toggle, the jump grab
+            // and the headroom checks are walk-only [M 0x193600 dispatch — HandleJump is
+            // SSWalk's; case 8/9 reads none of it].
         } else if !self.crouched && self.jump == 0 && input.crouch && self.lockout == 0 {
             self.crouched = true;
             self.cc = CROUCH_ROOT_HEIGHT;
@@ -970,36 +1367,217 @@ impl Bond {
             self.jump = 1;
             self.land_delay = 4;
             self.grounded = false;
+            // [M Player_HandleJump 0x1916b0:184]: the launch plays 0xA3 at the player.
+            self.sfx_out.push((0xa3, self.pos));
         }
         // The matrix turns first, then the position moves along the new axes. The climb's one-tick
         // local-forward push (Player_Climb's ±0x18 write) rides along once.
         let vf = vf0 + self.push_fwd;
         self.push_fwd = 0.0;
+        if zero_g {
+            // ===== Player_ZeroG 0x192ab0 (the spacewalk body) =====
+            // First tick of the spell builds the orientation from the walk yaw/pitch:
+            // ChangeSubState 9 touches no rotation [M 0x190630:59-63]; the walk matrix is
+            // RotMatrix(−pitch·π/2, yaw, 0) [M 0x1e2368 — Bond::look's rows].
+            if !self.zero_g_active {
+                self.zero_g_rot =
+                    rot_matrix(-self.pitch * std::f32::consts::FRAC_PI_2, self.yaw, 0.0);
+                self.zero_g_active = true;
+                self.stabiliser = 0;
+            }
+            // :71 `Vec_Zero(BLData+0x50)` — the world velocity zeroes EVERY tick: no gravity, no
+            // momentum in `vel`; the whole move is the local thruster quad through the object
+            // matrix (the caller's `pos += M·(+0x10 quad)` [M 0x193600:284-295]). :72-74 zero
+            // BL+0x957 / +0x130 (the weapon-raise re-trigger) / +0x8a8 — the scalar view pitch is
+            // dead here (`Bond::look` returns the matrix's forward row instead).
+            self.vel = [0.0; 3];
+            // The look rates [M :76-90]: the pitch action → the x angle, the turn action → the y
+            // angle, roll 0 — `RotMatrix` then `Concat(obj, R)` ⇒ m := m·R [M 0x1e4a90:13-49],
+            // the BODY frame (a pitched yaw drifts the up — what the auto-stabiliser repairs).
+            // The port's `turn`/`look` are already per-tick deltas (mouse-direct, pad-ramped,
+            // D-002); the game's own pad constant is 1.2566371·REC_FRAME_RATE rad/tick, `look`
+            // riding in π/2 units.
+            let r = rot_matrix(-input.look * std::f32::consts::FRAC_PI_2, turn, 0.0);
+            self.zero_g_rot = mat3_mul(&self.zero_g_rot, &r);
+            // The thruster smoothers [M :92-159]: targets strafe = action 1·0.1, forward =
+            // action 2·0.1, vertical = (action 7 − action 8)·0.1; each eases
+            // `v += (target − v)·FRAME_RATE_MUL·0.04` (FRAME_RATE_MUL = 1.0 at 60 Hz [M .sdata
+            // 0x30d0d8]) with an overshoot snap and a ±FRAME_RATE_MUL·0.05 clamp — and NO
+            // Player_Move dead-zone (the walk's `target≈0 → v=0` snap is 0x191dd0's; ZeroG has
+            // none). The smoothers are BL+0x20/+0x28 — walk's own `local` slots — and +0x24, and
+            // nothing clears them on the way in or out [M ChangeSubState 0x190630]: releasing the
+            // thrust decays at 0.96^n — the drift inertia the playtest missed.
+            let ease = |last: f32, target: f32| -> f32 {
+                let mut v = last + (target - last) * 0.04;
+                if (target - last) * (target - v) < 0.0 { v = target; }
+                v.clamp(-0.05, 0.05)
+            };
+            self.local[0] = ease(self.local[0], input.strafe * 0.1);
+            self.zero_g_lift = ease(self.zero_g_lift, input.lift * 0.1);
+            self.local[1] = ease(self.local[1], input.forward * 0.1);
+            // The auto-stabilisers [M :163-199]: the action-0xe read ("Press Action to activate
+            // spacesuit auto-stabilizers") arms BL+0xd0 = FRAME_RATE·1.5 = 90; while it counts
+            // down, the orientation slerps toward `Mat_Align2Up(m, (0,1,0), fwd − (0,1,0)·
+            // (fwd·(0,1,0)))` — world up, same heading (the ±0.995 degenerate arms swap in
+            // ∓up [M :177-184]) — at Quat_Slerp_Acc t = REC_FRAME_RATE·3.0 = 0.05 per tick [M
+            // :196], then `Mat_Normalize` [M :199].
+            if input.stabilise { self.stabiliser = 90; }
+            if self.stabiliser != 0 {
+                self.stabiliser -= 1;
+                let fwd = self.zero_g_rot[2];
+                let d = fwd[1];
+                let dir = if d > 0.995 {
+                    [-self.zero_g_rot[1][0], -self.zero_g_rot[1][1], -self.zero_g_rot[1][2]]
+                } else if d < -0.995 {
+                    self.zero_g_rot[1]
+                } else {
+                    [fwd[0], fwd[1] - d, fwd[2]]
+                };
+                let target = mat_align_up(dir);
+                let q = crate::anim::slerp(
+                    quat_from_matrix(&self.zero_g_rot),
+                    quat_from_matrix(&target),
+                    0.05,
+                );
+                self.zero_g_rot = mat_normalize(quat_to_matrix(&q));
+            }
+            // The move [M 0x193600:284-295]: pos += local.x·row0 + local.y·row1 + local.z·row2 —
+            // the +0x10 quad's lanes (x strafe, y the vertical thruster, z forward) against the
+            // matrix's right/up/forward rows. Pitched forward + forward thrust FLIES along the
+            // look.
+            let v = [self.local[0], self.zero_g_lift, self.local[1]];
+            for k in 0..3 {
+                self.pos[k] += v[0] * self.zero_g_rot[0][k]
+                    + v[1] * self.zero_g_rot[1][k]
+                    + v[2] * self.zero_g_rot[2][k];
+            }
+            // The port keeps obj+0x54's heading in `yaw` for the readers outside the substate
+            // (sphere_centre, the death pick) [S — the game derives it elsewhere; only the matrix
+            // is authoritative in zero-g].
+            self.yaw = self.zero_g_rot[2][0].atan2(self.zero_g_rot[2][2]);
+        } else {
         self.yaw += turn;
         self.pitch = (self.pitch + input.look).clamp(-1.0, 1.0);
-        let (s, c) = (self.yaw.sin(), self.yaw.cos());
-        self.pos[0] += c * vs + s * vf;
-        self.pos[2] += -s * vs + c * vf;
-        self.local = [vs / k, vf / k];
+        let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw)); // G-046: View_RotTransMatrix 0x1e5168:33-36 / RotMatrixX 0x1e46a0 PS2Sinf2 lanes [M]
+        if swimming {
+            // `Player_Move` 0x191dd0:149-165 [M]: in swim the forward speed rides the LOOK direction
+            // (`RotMatrixX(obj+0x50 − BL+0x8a8·π/2)` + `Mat_GetDir`, obj+0x50 zeroed on entry — the
+            // view pitch IS BL+0x8a8), so looking down + forward DIVES and looking up + forward
+            // SURFACES; strafe stays on the horizontal local X (the game overwrites the X lane with
+            // the strafe speed after the dir add). `Bond::look` is the same convention (pitch +1 = up
+            // = the game's dir.y = sin(0x8a8·π/2)). No crouch/jump input exists in swim [M case 3 of
+            // 0x193600 reads none; Player_HandleJump 0x1916b0 is only called from SSWalk].
+            let ld = self.look();
+            self.pos[0] += c * vs + ld[0] * vf;
+            self.pos[2] += -s * vs + ld[2] * vf;
+            // The world-Y component rides as this tick's vertical velocity; the swim tail clamps it
+            // against `surface − 0.3` before integrating (case 3 tail [M 0x193600:201-220]).
+            self.vel[1] = ld[1] * vf * 60.0;
+        } else {
+            self.pos[0] += c * vs + s * vf;
+            self.pos[2] += -s * vs + c * vf;
+        }
+self.local = [vs / k, vf / k];
+        }
         // `Player_Collision`: gravity unless standing on a gentle floor (jumping keeps the velocity).
         // The water path skips `WldGravity` entirely [M 0x194df0 default case]. The vertical velocity
         // integration is also the swim tail's job alone (it clamps first) — skip it here when swimming.
         if swimming {
+        } else if zero_g {
+            // `vel` (BL+0x50) is zeroed every zero-g tick [M 0x192ab0:71] — WldGravity has no
+            // reader left and nothing integrates; the tick's whole move was the matrix·thruster
+            // add above.
         } else if !self.grounded || self.floor_ny < 0.5 {
-            self.vel[1] += GRAVITY / 60.0;
+            // The fall rides the level's `WldGravity` [M Player_Collision 0x194df0:107/161,
+            // `vel += WldGravity · REC_FRAME_RATE`] — −9.8/60 per tick on the default levels,
+            // 0 on the p3==2 (spacewalk) starts (fix-world-gravity).
+            self.vel[1] += self.world_gravity[1] / 60.0;
         } else if self.jump != 1 {
             self.vel = [0.0; 3];
         }
         self.vel[1] = self.vel[1].clamp(-45.0, 45.0);
         for k in 0..3 { if !(swimming && k == 1) { self.pos[k] += self.vel[k] / 60.0; } }
-        // `Player_CollisionHandler`: the floor ray first, then the capsule's push.
+        // `Player_CollisionHandler`: the floor ray first, then the capsule's push. Both read the
+        // one BLData+0x740 HITTEST, whose start cel is the actor's own obj+0x20 [M
+        // `Player_Collision` 0x194df0's first store `*(BLData+0x7c0) = *(obj+0x20)`;
+        // `Collide_Pick` 0x1eb320 tests each `Collide_StraddleCels` cel's own +0x18 list] — the
+        // per-cel attribution (fix-08-collision): walls hanging on other rooms' cels never block.
+        // `self.cel` is the Sim's per-tick relink (obj+0x20); `None` falls back to the flat world.
         let (a, b) = self.capsule();
-        let (push, walkable) = world.capsule_push(a, b, RADIUS);
+        // The game's push-tail q-span guard rides the SWIM path only: it is [M]-evidenced there
+        // (Intersect_CylGeom 0x109da0's `dot(q − A, B − A) > 0` gate + the 02 fin wedge the PS2
+        // rounds [L]); the port's walk/NPC paths still depend on the unguarded through-push
+        // (escort_follow_07000001_live regressed with it on) — the port divergence is documented
+        // in the report.
+        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming);
+        // The floor ray: from = obj+0x30, to = capsuleB + up·(−(cc+0.6)) [M Player_FeetOnPoint
+        // 0x194188:89-98 loads HITTEST+0x30 = BLData+0x770 — the B arm Player_Collision 0x194df0
+        // stores at :405-408 — adds the matrix up scaled −(cc+0.6) (:92, one negation of the f32
+        // sum), and passes obj+0x30 as the from]. Upright the up is (0,1,0), so the multiplies are
+        // exact and the endpoint is B.y − (cc+0.6); the port's old `pos − (cc+0.6)` skipped the B
+        // hop and shortened the crouch ray to 1.15 where the game's is exactly −1.25 (probe14_ground
+        // d_y 0xbfa00000).
         let ray = self.cc + 0.6;
-        let floor = world.segment_hit(self.pos, [self.pos[0], self.pos[1] - ray, self.pos[2]]);
-        self.grounded = walkable || floor.is_some_and(|(t, _)| t * ray - 0.1 <= self.cc);
-        if let Some((_, n)) = floor { self.floor_ny = n[1]; } else if walkable { self.floor_ny = 1.0; }
+        let to = [b[0], b[1] + -ray, b[2]];
+        let mut floor = world.segment_hit_scoped(self.cel, self.pos, to);
+        // The game's pass never lands over a void: `build_FindCel` 0x1c8cb0 relinks obj+0x20 by
+        // tie-break rays against each candidate's own chain geometry, so the actor's cel always
+        // carries the geometry under him. The port's buckets are coarser than the game's cels [S]:
+        // over 07000002's ladder head the scoped pass sees no floor at all (the garden-floor rim
+        // sits in a bucket the straddle walk doesn't keep) and Bond fell down the shaft he had
+        // just climbed (fix_ladder_live); on 07000009 the car-park stairwell steps hung outside
+        // the straddle set too (walkreal_07000009_live) — a wall push in the set does not put a
+        // floor under Bond, so the redo fires on the missing floor alone. On the ground the
+        // scoped pass always finds the room's own floor, so the redo never fires there: across
+        // the fix-08-collision slab band the floor stays in the room's bucket while the exterior
+        // wall stays out of it.
+        if floor.is_none() {
+            let (fp, fw) = world.capsule_push(a, b, RADIUS, swimming);
+            push = fp;
+            walkable = fw;
+            floor = world.segment_hit(self.pos, to);
+        }
+        // The contact-distance band [M Player_FeetOnPoint 0x194188:106 `*(float *)(hit + 0xc) - 0.1
+        // <= cc`] reads HITDATA+0xC, which Intersect_RayGeom 0x10a8c8 fills with the ABSOLUTE
+        // distance |from − hit| — hit = from + t·dir (:176-179 the dir·t product and the from add;
+        // :252-256 the store to HITDATA+0x40), dir = to − from recomputed f32 [M Collide_Intersect
+        // 0x1ebaa8's 0x201 branch], and the sqrt-of-squares store :312-325 — NOT t·raylen, which is
+        // what the port multiplied here. For the upright ray the x/z deltas are exactly 0 (the
+        // endpoint's x/z equal pos), so the VU's pairwise-add collapse leaves the single y term.
+        // With the game's own B arm and ray the crouched rest grounds through the push dither with
+        // no epsilon: the rest contact (0.09999999403953552 + 0.55f32 below the root) lands 1 ulp
+        // under the band's f32 edge (0x3f266667, where `hit − 0.1f32` rounds to exactly cc), while
+        // the port's old 0.45f32 arm sat exactly ON the edge and the t·ray multiply tipped it over
+        // (probe14_ground.rs: the rest y dithered ±3 ulps and grounded flickered) [L: the crouched
+        // Bond crawls out of the 07000014 vent on PCSX2].
+        let band = floor.as_ref().map_or(false, |(t, _)| {
+            let d_y = to[1] - self.pos[1];
+            let hit_y = self.pos[1] + t * d_y;
+            let dy = self.pos[1] - hit_y;
+            (dy * dy).sqrt() - 0.1 <= self.cc
+        });
+        self.grounded = walkable || band;
+        // `BLData+0x110` — the port's floor_ny — is the band's OTHER output, and it is band-GATED:
+        // FeetOnPoint writes `*param_3 = 1.0f` first [M 0x194188:85] and overwrites it with the
+        // band-passed hit's +0x14 only inside the band [M :106-109]; the gravity gate reads that
+        // value (`flag8 == 0 || BL+0x110 < 0.5` → gravity [M Player_Collision 0x194df0:104]). The
+        // port's old floor_ny took the hit normal REGARDLESS of the band, so the B-hop ray's far
+        // hits — geometry past the band that master's `pos − (cc+0.6)` ray never reached — fed
+        // steep normals into the gravity gate on ticks Bond was otherwise grounded: on the
+        // 07000005 upper ledge he rested walkable-grounded over a ny 0.45 slope ~1.85 below the
+        // root, floor_ny went 0.45, the < 0.5 gravity branch fired every tick and he slid off the
+        // ledge (interact_07000005_live::the_ledge_plate_plays_the_sound_trigger; master's short
+        // ray missed that geometry — floor=None — and floor_ny stayed 1.0). In the game the band
+        // fails there, so BL+0x110 stays 1.0 and the gate never opens [M 0x194df0:104].
+        self.floor_ny = match floor.as_ref() {
+            Some((_, n)) if band => n[1],
+            _ => 1.0,
+        };
         self.head_bump = push[1] < -1e-4;
+        // The pre-push-out snapshot: the game's ladder-grab pick sees the segment built HERE (the
+        // hittest from the integrated obj+0x30 [M 0x194df0:361]; the +0x750 push lands in the
+        // handler 0x1949a8:136-140, after the refine) — see the `pre_collide` field doc.
+        self.pre_collide = self.pos;
         for k in 0..3 { self.pos[k] += push[k]; }
         self.grounded_history = (self.grounded_history >> 1) | if self.grounded { 8 } else { 0 };
         // Fall damage: ticks falling with no ground for 4 ticks; on landing, over 60 → (timer − 60) if ≥ 10.
@@ -1010,7 +1588,13 @@ impl Bond {
             self.fall_timer = 0;
         }
         // Jump: a head bump ends the rise; landing after the delay.
-        if self.jump == 1 && self.head_bump { self.vel = [0.0; 3]; self.jump = 2; }
+        if self.jump == 1 && self.head_bump {
+            self.vel = [0.0; 3];
+            self.jump = 2;
+            // [M Player_HandleJump 0x1916b0:195-198]: the bump zeroes the velocity and plays
+            // 0x5FB on levels whose `level_tag+0x50` byte is 0xD/0xE, else 0xA3.
+            self.sfx_out.push((if ctx.level_bump_5fb { 0x5fb } else { 0xa3 }, self.pos));
+        }
         self.land_delay = self.land_delay.saturating_sub(1);
         if self.jump != 0 && self.land_delay == 0 && self.grounded && self.vel[1] <= 0.0 { self.vel = [0.0; 3]; self.jump = 0; }
         if self.grounded && self.jump == 0 { self.vel[1] = 0.0; }
@@ -1076,6 +1660,19 @@ pub struct RamSave {
     pub mission: Option<crate::mission::MissionSave>,
 }
 
+/// `ContinueHealthBoostEasy` / `ContinueHealthBoostMedium` / `ContinueHealthBoostHard`
+/// (0x30cc34 / 0x30cc38 / 0x30cc3c) [L ee_start_05.bin 0x30cc34..3c — all three 50.0 on the
+/// retail build].
+pub const CONTINUE_HEALTH_BOOST: [f32; 3] = [50.0; 3];
+
+/// `Player_RamLoad` 0x1957a8:21-33's boost pick: the difficulty global `GameState+0x40`
+/// (0x2a37a8 — the port's `Progress::difficulty` mirror) selects the table entry — 1 → Easy,
+/// 2 → Medium, anything else (0/3/4) → Hard [M]. All three are 50.0 on retail [L], so the pick
+/// is only observable against a non-retail table.
+pub fn continue_health_boost(difficulty: u32) -> f32 {
+    match difficulty { 1 => CONTINUE_HEALTH_BOOST[0], 2 => CONTINUE_HEALTH_BOOST[1], _ => CONTINUE_HEALTH_BOOST[2] }
+}
+
 impl RamSave {
     /// The save `Trigger_Activate` makes on the way out of a level, after the success/fallback channel
     /// write [M 0x1b2318:97-116].
@@ -1101,11 +1698,36 @@ impl RamSave {
         self
     }
 
+    /// `Player_RamLoad`'s boost arm (0x1957a8:21-34), the second argument non-zero [M]: the saved
+    /// health is floored at the difficulty's `ContinueHealthBoost*` — a MAX, written back into the
+    /// buffer (`swc1 $f12, 0x5fc` at 0x1958e4) before `Player_SetHealth` (jal 0x1960b8 at 0x1958e8)
+    /// applies it; armour is untouched (restored separately from the save's +0x1536 [M :36]). The
+    /// game's call sites: the fail/death menu's Restart row 0 passes 1 [M `P_ENDMISSION_Handler`
+    /// 0x216618:21]; `Player_InitWeapon` 0x1a7ef8 passes 0 on all EIGHT of its `Player_RamLoad`
+    /// calls [M :158-305] — the trigger-exit warm load never boosts. The port's boost-1 call site
+    /// is the restart serve (`nf_view::fail_restart_save`, the handler's position in the reload
+    /// flow); the trigger-exit capture never calls this.
+    pub fn continue_boost(&mut self, difficulty: u32) {
+        self.health = self.health.max(continue_health_boost(difficulty));
+    }
+
+    /// Attaches a pre-built mission snapshot — `fail_restart_save`'s serve carries the states in the
+    /// shape the game's `Mission_Init(level, 1)` leaves the `.data` in (previous parts kept,
+    /// current + future reset [M 0x182270:68-129]) because the port applies the carried snapshot
+    /// AFTER its `Mission_Init` latch (drone.rs), while the game's `Player_RamLoad` never touches
+    /// the states.
+    pub fn with_mission_snapshot(mut self, m: crate::mission::MissionSave) -> RamSave {
+        self.mission = Some(m);
+        self
+    }
+
     /// `Player_RamLoad` (0x1957a8), `IsWarmReset != 0` arm [M]: the whole body is gated on the warm flag,
     /// so a cold load (`save = None`) restores nothing. Restores health (`Player_SetHealth`), armour
-    /// (+0x8B0), the saved weapon id (+0x934) and the four channel arrays. The `boost` argument (the death
-    /// retry's health floor, `P_ENDMISSION_Handler` 0x216618) is not ported — the port has no death-retry
-    /// reload path (WORKLOG fix-level2).
+    /// (+0x8B0), the saved weapon id (+0x934) and the four channel arrays. The `boost` argument is the
+    /// buffer-side max `RamSave::continue_boost` (0x1957a8:21-34): the fail-menu Restart's serve applies
+    /// it before the reload reads the buffer — exactly the game's write-back into RamSave+0x5FC
+    /// (`swc1 $f12, 0x5fc` 0x1958e4) before `Player_SetHealth` (jal 0x1960b8 0x1958e8) — so `restore`
+    /// itself applies whatever the buffer holds.
     pub fn restore(&self, health: &mut crate::bullet::PlayerHealth, inv: &mut crate::pickup::Inventory, ch: &mut Channels) -> u8 {
         health.health = self.health;
         health.armour = self.armour;
@@ -1124,19 +1746,71 @@ impl RamSave {
     }
 }
 
-/// One registered player start (`player_start` entry, 0xE0 bytes): position, yaw, and the gate switch
+/// One registered player start (`player_start` entry, 0xE0 bytes): position, yaw, the gate switch
 /// channel — placement type 0x24's parameter 0 [M `parsemap_create_dynamic_objects` 0x1d04f0 case 0x24 →
 /// `Player_AddNewStartPos` 0x195c00: param block +0x2C lands at entry+0x50].
 #[derive(Clone, Copy, Debug)]
-pub struct LevelStart { pub pos: V3, pub yaw: f32, pub gate: u16 }
+pub struct LevelStart {
+    pub pos: V3,
+    pub yaw: f32,
+    pub gate: u16,
+    /// The placement's param 3 (level_tag+0x38) — the zero-g selector `Player_Init` 0x1910f8
+    /// switches on (== 2 → `Vec_Zero(&WldGravity)`; else the default (0, −9.8, 0)) [M].
+    pub p3: u32,
+    /// The registration kind — `Player_AddNewStartPos`'s u16 third argument, stored at entry+0x22
+    /// [M 0x195c00:33]: type-0x24 placements pass 1, type-0x2D pass 0 [M 0x1d04f0 case 0x24 →
+    /// disasm 0x1d0a00 `addiu a2,$zero,1`; case 0x2d → disasm 0x1d0e98 `move a2,$zero`].
+    /// `Player_Start` 0x190fd0 only ever picks kind-1 entries (disasm 0x191028/0x1910b0:
+    /// `bne v0, 1` skips the entry); the kind-0 records are written but never read by the game's
+    /// on-foot runtime — no other function touches `player_start` in the decompile.
+    pub kind: u16,
+}
 
-/// `Player_Start` (0x190fd0) [M]: pass 1 — the first entry with kind 1 whose gate is 0 or whose channel is
-/// on; pass 2 (fallback) — the first kind-1 entry (the game zeroes its gate so a later `Player_Start` in
-/// the same level cannot re-pick it; the port runs one `Player_Start` per load). Index order = placement
-/// order [M 0x195c00 appends]. Returns the entry index, or None with no entries.
+/// The registration: the main map's placements, in parse order, through
+/// `parsemap_create_dynamic_objects` 0x1d04f0's start-pos arms [M]. The game parses the main map's
+/// dynamic block with `n != 0` (`ResetMap_Load` 0x1d6360:150 — `parsemap_block_map_data_dynamic
+/// (0x30cfe8, DynamicPtr, 1)`; `n != 0` = the main parse, the port's `main_map` convention), only
+/// records with `(flags & 0xa000) == 0` reach the dispatch [M 0x1d1b68:93], and both arms sit
+/// behind the MP gate `MPSettings._384_4_ == 0` [M disasm 0x1d09e0-0x1d09e8 / 0x1d0e78-0x1d0e80 —
+/// the port's single-player path is that case]:
+/// - case 0x24 → `Player_AddNewStartPos(pos, rot, 1, level_tag)` [M 0x1d04f0:91-98, disasm 0x1d0a00];
+/// - case 0x2d → the same with 0 [M 0x1d04f0:154-161, disasm 0x1d0e98].
+///
+/// The game also skips placements whose object lookup failed (`beqz a3` before the call
+/// [M 0x1d1c90]) — every 0x24/0x2d placement on the disc's main maps resolves in the port's
+/// assembly (checked by start_slot_0x2d_live's sweep), so the port keeps the data-level rule.
+/// Yaw = the placement's rotation[1], the pinned convention (party07-start-rules); gate = param 0,
+/// p3 = param 3 (level_starts' parse, unchanged).
+pub fn starts_from_placements(placements: &[nf_formats::placement::Placement]) -> Vec<LevelStart> {
+    placements.iter()
+        .filter(|p| p.flags & 0xa000 == 0)
+        .filter_map(|p| match p.flags & 0xff {
+            0x24 => Some((1u16, p)),
+            0x2d => Some((0u16, p)),
+            _ => None,
+        })
+        .map(|(kind, p)| LevelStart {
+            pos: p.translation,
+            yaw: p.rotation[1],
+            gate: p.params.iter().find(|(i, _)| *i == 0).map_or(0, |&(_, v)| v as u16),
+            p3: p.params.iter().find(|(i, _)| *i == 3).map_or(0, |&(_, v)| v),
+            kind,
+        })
+        .collect()
+}
+
+/// `Player_Start` (0x190fd0) [M]: pass 1 — the first kind-1 entry whose gate is 0 or whose channel is
+/// on; pass 2 (fallback) — the first kind-1 entry (the game zeroes its gate so a later `Player_Start`
+/// in the same level cannot re-pick it; the port runs one `Player_Start` per load). Kind-0 entries
+/// (the 0x2D set) never win either pass [M disasm 0x191028 and 0x1910b0: both loops `bne v0, 1` on
+/// entry+0x22]. Index order = placement order [M 0x195c00 appends]. Returns the entry index, or None
+/// with no kind-1 entry (the MP maps' human spawns come from `MP_Start` 0x183a50's `MP_GetSpawnPoint`,
+/// not `player_start` [M 0x183a50:118-128]).
 pub fn pick_start(starts: &[LevelStart], ch: &Channels) -> Option<usize> {
-    if let Some(i) = starts.iter().position(|s| s.gate == 0 || ch.on(s.gate as u32)) { return Some(i); }
-    starts.iter().position(|_| true)
+    if let Some(i) = starts.iter().position(|s| s.kind == 1 && (s.gate == 0 || ch.on(s.gate as u32))) {
+        return Some(i);
+    }
+    starts.iter().position(|s| s.kind == 1)
 }
 
 /// `Player_InitAmmoWeapons` (0x1a17f8) with the boot flag `DAT_002a373c == 0`: carried = 0, clip = 0,
@@ -1161,25 +1835,53 @@ fn equip(inv: &mut crate::pickup::Inventory, w: &nf_formats::weapon::WeaponData,
     inv.equip_weapon(w, id as usize, rounds, loaded(id as u8));
 }
 
-/// `Player_InitWeapon` (0x1a7ef8) — the per-level loadout switch on `GameState+0x0C`, the part the
-/// campaign's first mission walks through. `save = Some(…)` = a warm transition (`IsWarmReset != 0`, the
-/// only way a `LOAD_LEVEL`/script-event-0x12 transition loads [M 0x1d3800, 0x1b24cc]); `None` = cold
+/// `Player_InitWeapon` (0x1a7ef8) — the per-level loadout switch on `GameState+0x0C`, the whole
+/// jump table (`sltiu v1,a0,74` 001a8268: the level ids 0x0700001..0x070004a; anything else is the
+/// default arm). `save = Some(…)` = a warm transition (`IsWarmReset != 0`, the only way a
+/// `LOAD_LEVEL`/script-event-0x12 transition loads [M 0x1d3800, 0x1b24cc]); `None` = cold
 /// (`Player_RamLoad`'s whole body is skipped [M 0x1957a8:9]).
 ///
 /// Returns the switch request the game writes to `M_CONTROL+0x63` (the draw machine then holsters and
 /// draws it). Cases [M 0x1a7ef8:148-317]:
+/// - 0x0700001 (fresh, and the fallback of 02/03/04): P2K 48 rounds, taser 999, **0x5b 999** (the
+///   60 Hz pick — 0x59 is the 50 Hz one, disasm `001a8244 movz s4,v0,a0`); request = `Upgrade_Weapon(6)`
+///   = 2 [L UpgradedHandguns 0x2bee08 = [2,4,6,8], Upgrades 0].
+/// - 0x0700002/3/4: `Player_RamLoad`; request = the saved weapon; if the P2K is not owned → the fresh
+///   01 kit (`switchD_001a8284_caseD_7000001`).
 /// - 0x0700005 (fresh, and the fallback of 06): P2K 48 rounds, taser 999, laser 0, watch 0, + the common
-///   tail; request = `Upgrade_Weapon(6)` = 2 [L UpgradedHandguns 0x2bee08 = [2,4,6,8], Upgrades 0].
+///   tail; request = 2.
 /// - 0x0700006: `Player_RamLoad`; request = the saved weapon; if the P2K is not owned → the fresh 05 case.
 /// - 0x0700007: `Player_RamLoad`, `Player_InitAmmoWeapons`, armour = 0, P2K 48 / taser 999 / laser 0 /
 ///   watch 0, request = **1 (fists)** — the party disguise.
 /// - 0x0700008: `Player_RamLoad`; request = the saved weapon; if the P2K is not owned → the 07 case.
-/// - default (levels outside the switch, e.g. 07000001): the [L] 07000005 start loadout
-///   (`Inventory::level_start`), request = 2.
+/// - 0x0700009 (fresh, and the fallback of 0a/0b): P2K 48 / taser 999 / decryptor 0x56 0 / Q-Worm 0x58 0 /
+///   laser 0x50 0 / dart gun 0x43 999 / 0x5b 999; request = 0x43.
+/// - 0x070000c (fresh, and the fallback of 0d): P2K 48 / sniper 0x1e 999 / taser 999 / 0x50 / 0x54 /
+///   0x58 at 0; request = 0x1e.
+/// - 0x070000d: `Player_RamLoad`; request = the saved weapon; the continuation gate reads
+///   `owned[Upgrade_Weapon(6)]` = owned[2] like every RamLoad case (the shared `iVar8*0xC + BL+0x1BA`
+///   read — the disasm's `lbu 442(v1)` with v1 = s0*12+BL, s0 = 2 [M 001a82a0-1a82b4]); when unowned →
+///   the fresh 0c kit.
+/// - 0x0700011 (fresh, and the fallback of 12/13/4a): **0x10 with 7 rounds** and the laser 0x50 at 0 —
+///   no P2K; request = 0x10.
+/// - 0x0700012/13/4a: `Player_RamLoad`; request = the saved weapon; the gate reads `owned[0x10]`
+///   (`iVar13 + 0x27a` = BL+0x1BA + 0x10·0xC); when unowned → the fresh 11 kit.
+/// - 0x0700014 (fresh, and the fallback of 15/16/17): P2K 48, **crossbow 0x11 12 rounds**, frag 0x34 5,
+///   mine 0x37 5, taser 999, laser 0x50 0, camera 0x54 0, decryptor 0x56 0; request = **0x11** — the
+///   Delta Repeater starts in hand [L the 2026-10-14 measurement].
+/// - 0x0700015/16/17: `Player_RamLoad`; request = the saved weapon; if the P2K is not owned → the fresh
+///   14 kit (`switchD_001a8284_caseD_7000014`).
+/// - 0x0700018/19/1a/1b (fresh): `Player_InitAmmoWeapons`, **0x33 999 only**, armour = 50.0
+///   (`0x42480000` [M]); request = 0x33.
+/// - default (ids outside the jump table): the give-everything list (equips 6/0x12/0x18/0x46/0x37/
+///   0x36/0x35/0x34/0x3a/0x52/0x2c/0x2e/0x30/0x4a + 0x50@0 + 0x1e + EquipAmmo(0x1f,10) + 0x24 +
+///   EquipAmmo(0x25,999) + 0xe/0x10 + 0x54@0 + 0x1c/0x15/10/0xd + 0x56@0/0x58@0 + 0x41/0x59/0x3b +
+///   0x1a + EquipAmmo(0x1b,999) + 0x33/0x11/2/0x2a/0x42/0x43/0x45, then 0x16 999), request = 2.
 ///
-/// Common tail [M 0x1a7ef8:318-325]: equip laser 0x4E 999, equip fists 1 with 0 rounds, re-save. The
-/// "current weapon's ammo type unowned → request 1" check (:321-324) and the final `Player_RamSave` are
-/// the caller's (the port re-captures at the next exit).
+/// Common tail [M 0x1a7ef8:318-325]: equip laser 0x4E 999, equip fists 1 with 0 rounds,
+/// `Player_CheckWeaponsLoaded` (0x1a97c8 — a selectable weapon whose first-person skin +0xDC is missing
+/// from the hashtable loses owned), the request falling to 1 when its base is unowned
+/// (`owned[weapon_data[req].+0x02] == 0 → request = 1`, disasm 001a89c4-001a89fc), and the re-save.
 pub fn init_level_loadout(
     level: u32,
     save: Option<&RamSave>,
@@ -1205,10 +1907,20 @@ pub fn init_level_loadout(
     // `Player_RamLoad` (0x1957a8): the saved health/armour/weapon/inventory/channels.
     let saved_weapon = save.map(|s| s.restore(health, inv, ch)).unwrap_or(0);
     let p2k_owned = |inv: &crate::pickup::Inventory| inv.owned.get(HANDGUN as usize).copied().unwrap_or(false);
+    let up = |id: u16| crate::pickup::Inventory::upgrade_weapon(id, 0, 0);
+    // [M 0x1a7ef8 case 0x7000001 → LAB_001a8980]: P2K 48, taser 999, then the shared tail-label equip
+    // of uVar11 = 0x5b (the 60 Hz pick) with 999; held = s0 = 2.
+    let fresh_01 = |inv: &mut crate::pickup::Inventory, health: &mut crate::bullet::PlayerHealth| {
+        init_ammo_weapons(inv, w, loaded);
+        equip(inv, w, HANDGUN, 0x30, loaded);
+        equip(inv, w, up(0x4a), 999, loaded);
+        equip(inv, w, 0x5b, 999, loaded);
+        let _ = health;
+    };
     let fresh_05 = |inv: &mut crate::pickup::Inventory, health: &mut crate::bullet::PlayerHealth| {
         init_ammo_weapons(inv, w, loaded);
         equip(inv, w, HANDGUN, 0x30, loaded);
-        equip(inv, w, 0x4a, 999, loaded);
+        equip(inv, w, up(0x4a), 999, loaded);
         equip(inv, w, 0x50, 0, loaded);
         equip(inv, w, 0x54, 0, loaded);
         let _ = health;
@@ -1217,91 +1929,146 @@ pub fn init_level_loadout(
         init_ammo_weapons(inv, w, loaded);
         *armour_in(health) = 0.0;
         equip(inv, w, HANDGUN, 0x30, loaded);
-        equip(inv, w, 0x4a, 999, loaded);
+        equip(inv, w, up(0x4a), 999, loaded);
         equip(inv, w, 0x50, 0, loaded);
         equip(inv, w, 0x54, 0, loaded);
     };
+    // [M 0x1a7ef8 case 0x7000009]: the Nightfire loadout — `Upgrade_Weapon(6)` (the handgun,
+    // 48), `Upgrade_Weapon(0x4a)` (the Stunner, 999), `Upgrade_Weapon(0x56)` (the Decryptor, 0),
+    // **0x58 (the Q-Worm, 0)**, 0x50 (the Grapple, 0), `Upgrade_Weapon(0x43)` (the dart gun, 999)
+    // and 0x5b (the Shaver, 999), selecting the dart gun. The upgrade level is the boot `Upgrades`
+    // (0), so every `Upgrade_Weapon` is its base record here.
+    let fresh_09 = |inv: &mut crate::pickup::Inventory| {
+        init_ammo_weapons(inv, w, loaded);
+        equip(inv, w, up(6), 0x30, loaded);
+        equip(inv, w, up(0x4a), 999, loaded);
+        equip(inv, w, up(0x56), 0, loaded);
+        equip(inv, w, 0x58, 0, loaded);
+        equip(inv, w, 0x50, 0, loaded);
+        equip(inv, w, up(0x43), 999, loaded);
+        equip(inv, w, 0x5b, 999, loaded);
+    };
+    // [M 0x1a7ef8 case 0x700000c]: the power station — P2K 48, `Upgrade_Weapon(0x1e)` (the sniper,
+    // 999), `Upgrade_Weapon(0x4a)` (the Stunner, 999) and the gadgets 0x50/0x54/0x58 at 0, selecting
+    // the sniper (`+0x63 = uVar3`).
+    let fresh_0c = |inv: &mut crate::pickup::Inventory| {
+        init_ammo_weapons(inv, w, loaded);
+        equip(inv, w, HANDGUN, 0x30, loaded);
+        equip(inv, w, up(0x1e), 999, loaded);
+        equip(inv, w, up(0x4a), 999, loaded);
+        equip(inv, w, 0x50, 0, loaded);
+        equip(inv, w, 0x54, 0, loaded);
+        equip(inv, w, 0x58, 0, loaded);
+    };
+    // [M 0x1a7ef8 case 0x7000011]: 0x10 with 7 rounds and the Grapple 0x50 at 0 — no handgun, no
+    // tail-request change: held = 0x10.
+    let fresh_11 = |inv: &mut crate::pickup::Inventory| {
+        init_ammo_weapons(inv, w, loaded);
+        equip(inv, w, 0x10, 7, loaded);
+        equip(inv, w, 0x50, 0, loaded);
+    };
+    // [M 0x1a7ef8 case 0x7000014]: the evil-base kit — P2K 48, the Delta Repeater 0x11 with 12
+    // rounds, frag 0x34 5, mine 0x37 5, Stunner 999, Grapple/camera/decryptor at 0; held = 0x11
+    // (the crossbow starts in hand [L the 2026-10-14 measurement]).
+    let fresh_14 = |inv: &mut crate::pickup::Inventory| {
+        init_ammo_weapons(inv, w, loaded);
+        equip(inv, w, HANDGUN, 0x30, loaded);
+        equip(inv, w, 0x11, 0xc, loaded);
+        equip(inv, w, 0x34, 5, loaded);
+        equip(inv, w, 0x37, 5, loaded);
+        equip(inv, w, up(0x4a), 999, loaded);
+        equip(inv, w, 0x50, 0, loaded);
+        equip(inv, w, 0x54, 0, loaded);
+        equip(inv, w, up(0x56), 0, loaded);
+    };
     match level {
+        0x0700_0001 => { fresh_01(inv, health); req = HANDGUN as u8; }
+        // [M 0x1a7ef8 cases 0x7000002/3/4]: RamLoad keeps the carry and re-selects the saved weapon;
+        // without the P2K the fresh 01 kit re-runs (switchD_001a8284_caseD_7000001).
+        0x0700_0002 | 0x0700_0003 | 0x0700_0004 => {
+            req = saved_weapon;
+            if !p2k_owned(inv) { fresh_01(inv, health); req = HANDGUN as u8; }
+        }
         0x0700_0005 => fresh_05(inv, health),
         0x0700_0006 => {
             req = saved_weapon;
             if !p2k_owned(inv) { fresh_05(inv, health); req = HANDGUN as u8; }
         }
         0x0700_0007 => { party(inv, health); req = 1; }
-        // [M 0x1a7ef8 case 0x7000009]: the Nightfire loadout — `Upgrade_Weapon(6)` (the handgun,
-        // 48), `Upgrade_Weapon(0x4a)` (the Stunner, 999), `Upgrade_Weapon(0x56)` (the Decryptor, 0),
-        // **0x58 (the Q-Worm, 0)**, 0x50 (the Q-Claw, 0), `Upgrade_Weapon(0x43)` (the dart gun, 999)
-        // and 0x5b (the Shaver, 999), selecting the dart gun. The upgrade level is the boot `Upgrades`
-        // (0), so every `Upgrade_Weapon` is its base record here.
-        0x0700_0009 => {
-            init_ammo_weapons(inv, w, loaded);
-            let up = |id: u16| crate::pickup::Inventory::upgrade_weapon(id, 0, 0);
-            equip(inv, w, up(6), 0x30, loaded);
-            equip(inv, w, up(0x4a), 999, loaded);
-            equip(inv, w, up(0x56), 0, loaded);
-            equip(inv, w, 0x58, 0, loaded);
-            equip(inv, w, 0x50, 0, loaded);
-            equip(inv, w, up(0x43), 999, loaded);
-            equip(inv, w, 0x5b, 999, loaded);
-            req = up(0x43) as u8;
+        0x0700_0008 => {
+            req = saved_weapon;
+            if !p2k_owned(inv) { party(inv, health); req = 1; }
         }
+        0x0700_0009 => { fresh_09(inv); req = up(0x43) as u8; }
         // [M 0x1a7ef8 cases 0x700000a/0x700000b]: `Player_RamLoad` keeps the carry and re-selects the
         // saved weapon; when the handgun record is unowned the 0x0700009 loadout re-runs (the island's
         // Q-Worm arrives here — the user's "no Q-Worm" symptom had no grant at all).
         0x0700_000a | 0x0700_000b => {
             req = saved_weapon;
-            if !p2k_owned(inv) {
-                init_ammo_weapons(inv, w, loaded);
-                let up = |id: u16| crate::pickup::Inventory::upgrade_weapon(id, 0, 0);
-                equip(inv, w, up(6), 0x30, loaded);
-                equip(inv, w, up(0x4a), 999, loaded);
-                equip(inv, w, up(0x56), 0, loaded);
-                equip(inv, w, 0x58, 0, loaded);
-                equip(inv, w, 0x50, 0, loaded);
-                equip(inv, w, up(0x43), 999, loaded);
-                equip(inv, w, 0x5b, 999, loaded);
-                req = up(0x43) as u8;
-            }
+            if !p2k_owned(inv) { fresh_09(inv); req = up(0x43) as u8; }
         }
-        0x0700_0008 => {
-            req = saved_weapon;
-            if !p2k_owned(inv) { party(inv, health); req = 1; }
-        }
-        // The power station [M 0x1a7ef8 cases 0x700000c/0x700000d]: a cold 0x070000c runs
-        // `Player_InitAmmoWeapons` then equips the handgun (2, 48), `Upgrade_Weapon(0x1e)` (the
-        // sniper, 999), `Upgrade_Weapon(0x4a)` (the Q-Claw, 999) and the gadgets 0x50/0x54/0x58 at 0,
-        // selecting the sniper (`+0x63 = uVar3`). 0x070000d is the 06/08 shape: `Player_RamLoad`
-        // keeps the carry and re-selects the saved weapon; when the sniper is missing the 0c
-        // loadout re-runs.
-        0x0700_000c => {
-            init_ammo_weapons(inv, w, loaded);
-            equip(inv, w, HANDGUN, 0x30, loaded);
-            equip(inv, w, crate::pickup::Inventory::upgrade_weapon(0x1e, 0, 0), 999, loaded);
-            equip(inv, w, crate::pickup::Inventory::upgrade_weapon(0x4a, 0, 0), 999, loaded);
-            equip(inv, w, 0x50, 0, loaded);
-            equip(inv, w, 0x54, 0, loaded);
-            equip(inv, w, 0x58, 0, loaded);
-            req = crate::pickup::Inventory::upgrade_weapon(0x1e, 0, 0) as u8;
-        }
+        0x0700_000c => { fresh_0c(inv); req = up(0x1e) as u8; }
+        // [M 0x1a7ef8 case 0x700000d]: RamLoad keeps the carry and re-selects the saved weapon; the
+        // continuation gate is owned[2] like every RamLoad case (the shared `iVar8*0xC + 0x1BA` read,
+        // not the sniper's slot); when unowned the 0c loadout re-runs.
         0x0700_000d => {
             req = saved_weapon;
-            let sniper = crate::pickup::Inventory::upgrade_weapon(0x1e, 0, 0);
-            if !inv.owned.get(sniper as usize).copied().unwrap_or(false) {
-                init_ammo_weapons(inv, w, loaded);
-                equip(inv, w, HANDGUN, 0x30, loaded);
-                equip(inv, w, sniper, 999, loaded);
-                equip(inv, w, crate::pickup::Inventory::upgrade_weapon(0x4a, 0, 0), 999, loaded);
-                equip(inv, w, 0x50, 0, loaded);
-                equip(inv, w, 0x54, 0, loaded);
-                equip(inv, w, 0x58, 0, loaded);
-                req = sniper as u8;
-            }
+            if !p2k_owned(inv) { fresh_0c(inv); req = up(0x1e) as u8; }
         }
-        _ => { *inv = crate::pickup::Inventory::level_start(inv.clip.len(), inv.carried.len()); req = HANDGUN as u8; }
+        0x0700_0011 => { fresh_11(inv); req = 0x10; }
+        // [M 0x1a7ef8 cases 0x7000012/13/0x700004a]: RamLoad keeps the carry; the gate reads
+        // owned[0x10] (`iVar13 + 0x27a`); when unowned the 11 kit re-runs.
+        0x0700_0012 | 0x0700_0013 | 0x0700_004a => {
+            req = saved_weapon;
+            if !inv.owned.get(0x10).copied().unwrap_or(false) { fresh_11(inv); req = 0x10; }
+        }
+        0x0700_0014 => { fresh_14(inv); req = 0x11; }
+        // [M 0x1a7ef8 cases 0x7000015/16/17]: RamLoad keeps the carry and re-selects the saved
+        // weapon; when the P2K is unowned the fresh 14 kit re-runs (switchD_001a8284_caseD_7000014).
+        0x0700_0015 | 0x0700_0016 | 0x0700_0017 => {
+            req = saved_weapon;
+            if !p2k_owned(inv) { fresh_14(inv); req = 0x11; }
+        }
+        // [M 0x1a7ef8 cases 0x7000018/19/1a/1b]: the space-station kit — 0x33 999 only, armour 50.0,
+        // held = 0x33.
+        0x0700_0018 | 0x0700_0019 | 0x0700_001a | 0x0700_001b => {
+            init_ammo_weapons(inv, w, loaded);
+            equip(inv, w, 0x33, 999, loaded);
+            *armour_in(health) = 50.0; // `BLData+0x8B0 = 0x42480000` [M 0x1a7ef8 case 0x7000018]
+            req = 0x33;
+        }
+        // [M 0x1a7ef8 default] (the 001a86f0 arm, also the jump-table's out-of-range target): the
+        // give-everything list, then the shared tail-label equip of 0x16 999 (disasm 001a897c
+        // `addiu a1,zero,22`), holding the P2K.
+        _ => {
+            init_ammo_weapons(inv, w, loaded);
+            for (id, rounds) in [(6u16, 999i16), (0x12, 999), (0x18, 999), (0x46, 999), (0x37, 999),
+                (0x36, 999), (0x35, 999), (0x34, 999), (0x3a, 999), (0x52, 999), (0x2c, 999),
+                (0x2e, 999), (0x30, 999), (0x4a, 999), (0x50, 0), (0x1e, 999), (0x24, 999),
+                (0xe, 999), (0x10, 999), (0x54, 0), (0x1c, 999), (0x15, 999), (10, 999), (0xd, 999),
+                (0x56, 0), (0x58, 0), (0x41, 999), (0x59, 999), (0x3b, 999), (0x1a, 999),
+                (0x33, 999), (0x11, 999), (2, 999), (0x2a, 999), (0x42, 999), (0x43, 999), (0x45, 999)] {
+                equip(inv, w, id, rounds, loaded);
+            }
+            inv.equip_ammo(w, 0x1f, 10);
+            inv.equip_ammo(w, 0x25, 999);
+            inv.equip_ammo(w, 0x1b, 999);
+            equip(inv, w, 0x16, 999, loaded);
+            req = HANDGUN as u8;
+        }
     }
     // Common tail [M 0x1a7ef8:318-319].
     equip(inv, w, 0x4e, 999, loaded);
     equip(inv, w, 1, 0, loaded);
+    // `Player_CheckWeaponsLoaded` (0x1a97c8): a selectable weapon whose first-person skin (+0xDC)
+    // misses the hashtable loses owned — the RamLoad restore can carry owned across a level boundary
+    // the skins did not cross.
+    for id in 0..inv.owned.len().min(0x72) {
+        if inv.owned[id] && !loaded(id as u8) && w.selectable(id as u8) { inv.owned[id] = false; }
+    }
+    // [M 0x1a7ef8:321-324, disasm 001a89c4-001a89fc]: an unowned request falls to the fists (1) —
+    // `owned[weapon_data[req].base(+0x02)] == 0`.
+    if !inv.owned.get(w.base(req as usize) as usize).copied().unwrap_or(false) { req = 1; }
     req
 }
 
@@ -1336,9 +2103,227 @@ pub fn weapon_lock_auto_draw(level: u32, on: bool, prev: bool) -> bool {
     level == WEAPON_LOCK_LEVEL && on && !prev
 }
 
+/// A hint marker (placement kind 0x33, `Hint_Create` 0x1b3248 → class 0x43): the one-shot text
+/// markers the game scatters next to usable things ("Hint: Use Watch Laser" at the 07000008 safe).
+/// `Hint_Create` builds a 0x10-byte instance off the placement's params:
+/// `inst+0x00` = param 1 (**the sound id** — `Sound_Play(100.0, sound, 0, 0)` on fire; 0 = silent),
+/// `inst+0x04` = param 0 (**the text label** — `Txt_BindLabel(param 0)`; the safe's is 0x1000336
+/// [D USATxt.dat entry 1822]), `inst+0x08` = param 3 (**the on-channel** — the hint only fires
+/// while the channel is 0 (never armed) or on), `inst+0x0C` = param 4 (**the off-channel** — when
+/// it is non-zero and ON the hint stays silent) [M 0x1b3248:33-37, 0x1b3380:17-22].
+///
+/// `Hint_Update` 0x1b3380 fires it once: with a class-3 object (the player) in the marker's
+/// obj+0xD0 chain (the same straddle-cel occupancy the third icons arm through — the marker's
+/// world sphere is its map object's bounds, `Control_BuildWorldSph` 0x133070 via
+/// `build_LinkToRoom` 0x1c9680:40, resolved like `wire::icons`) it plays the sound, posts
+/// `Text_AddMsg(BL+0x94e, 0, 1, label, 0, 0xb4)` — TXTMSG **type 1 = the INFO pane**, life 0xB4 =
+/// 180 ticks — and sets obj+0xFE bit 0, the delete flag [M 0x1b3380:24-42; obj-tag.md +0xFE bit 0
+/// = delete me]. `Hint_Create`'s stage gate (param 2: 0 = always; 5/6/7 = only on game states
+/// 1/2/3 [S — the GameState+0x40 compare]) is 0 on every hint marker found on the disc so far.
+///
+/// The label id rides in the struct; the message text binds at drain (`USATxt.dat`, the scene's
+/// `lang`), so the tests can pin the game's ids without disc text.
+#[derive(Clone, Debug)]
+pub struct Hint {
+    /// The placement translation (the marker object's position).
+    pub pos: V3,
+    /// `obj+0x80..0x8C`: the world-sphere centre through the placement's yaw matrix (the same
+    /// resolution as `wire::icons` [M Control_BuildWorldSph 0x133070]).
+    pub centre: V3,
+    /// `obj+0x8C`: the world-sphere radius (the object's glist bounds — the trigger volume the
+    /// player's pick fills the obj+0xD0 chain through).
+    pub radius: f32,
+    /// Param 0: the hint's text label (`Txt_BindLabel` id).
+    pub label: u32,
+    /// Param 1: the sound id played on fire (0 = none).
+    pub sound: u32,
+    /// Param 3: the on-channel (0 = always armed).
+    pub on_channel: u32,
+    /// Param 4: the off-channel (when non-zero and ON the hint never fires).
+    pub off_channel: u32,
+    /// Param 2: the difficulty stage gate (`Hint_Create` 0x1b3248:12-25): 0 = always; 1..=4 =
+    /// a difficulty CEILING (the hint is refused when `stage < difficulty`, so stage 1 shows
+    /// on Operative only and stage 3 everywhere); 5/6/7 = exactly Operative/Agent/00 Agent [M].
+    pub stage: u32,
+}
+
+/// `Hint_Create`'s stage gate, verbatim [M 0x1b3248:12-25]: `stage != 0 && stage < difficulty`
+/// refuses, then 5/6/7 refuse unless the difficulty is exactly 1/2/3 (the DAT_002a37cc master
+/// gate is a bootup-set 1 — always on in the shipped game, not difficulty-dependent).
+pub fn hint_stage_gates(stage: u32, difficulty: u32) -> bool {
+    if stage != 0 && stage < difficulty { return false; }
+    if stage == 5 && difficulty != 1 { return false; }
+    if stage == 6 && difficulty != 2 { return false; }
+    if stage == 7 && difficulty != 3 { return false; }
+    true
+}
+
+/// Every hint marker of a level (placement kind 0x33, `parsemap_create_dynamic_objects` 0x1d04f0
+/// case 0x33 → `Hint_Create`), in placement order, resolved against its map object exactly like
+/// `wire::icons` (an unresolved placement never creates an object, so it is skipped).
+pub fn hints(level: &nf_formats::level::Level, difficulty: u32) -> Vec<Hint> {
+    let mut out = Vec::new();
+    for (mi, m) in level.maps.iter().enumerate() {
+        for p in &m.placements {
+            if p.flags & 0xff != 0x33 { continue; }
+            let stage = p.params.iter().find(|(j, _)| *j == 2).map_or(0, |&(_, v)| v);
+            if !hint_stage_gates(stage, difficulty) { continue; }
+            let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                else if (p.index as usize) < m.objects.len() { Some((mi, p.index as usize)) } else { None };
+            let obj = obj.and_then(|(om, oi)| level.maps.get(om).and_then(|map| map.objects.get(oi)));
+            let Some(o) = obj else { continue };
+            let yaw = p.rotation[1];
+            let (s, c) = yaw.sin_cos();
+            let centre = [
+                p.translation[0] + o.centre[0] * c + o.centre[2] * s,
+                p.translation[1] + o.centre[1],
+                p.translation[2] - o.centre[0] * s + o.centre[2] * c,
+            ];
+            let scale = p.scale();
+            let s_max = scale.iter().fold(1.0f32, |a, &v| a * v.max(1e-6).abs());
+            out.push(Hint {
+                pos: p.translation,
+                centre,
+                radius: o.radius * s_max,
+                label: param_of(p, 0),
+                sound: param_of(p, 1),
+                on_channel: param_of(p, 3),
+                off_channel: param_of(p, 4),
+                stage,
+            });
+        }
+    }
+    out
+}
+
+/// The placement's param k (the word at +0x2C + k·4); 0 when the record omits it (the same
+/// default `wire::icons` reads through [M 0x1d04f0's param-buffer reads]).
+fn param_of(p: &nf_formats::placement::Placement, k: u32) -> u32 {
+    p.params.iter().find(|(i, _)| *i == k).map_or(0, |&(_, v)| v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// fix-swim: the grab gate [M `Player_CollLadder` 0x196118:16-17] excludes ONLY substates 1
+    /// (climb) and 2 (grapple) — swim (3) and crouch (4) grab. Pre-fix the port's `substate !=
+    /// SS_WALK` gate made swim_tick's grab call dead code (the user's "I can't latch onto it and
+    /// climb it" at the 02 pond hut ladder). No NF_ISO needed: a hand-built ladder context.
+    #[test]
+    fn the_ladder_grab_gate_excludes_only_climb_and_grapple() {
+        let world = CollisionWorld::from_triangles(Vec::new());
+        let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] };
+        // SWIM grabs: one tick in the water context attaches (pre-fix it stayed SS_SWIM).
+        let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
+        b.substate = SS_SWIM;
+        b.tick_ctx(&world, &ctx, &Input { forward: 1.0, ..Default::default() });
+        assert_eq!(b.substate, SS_CLIMB, "the swim grab never attached (substate {})", b.substate);
+        assert_eq!(b.ladder, Some(0), "the grab did not latch the ladder");
+        assert!((b.pos[2] - (lad.centre[2] + 0.5)).abs() < 1e-3, "the grab snap left the axis: {:?}", b.pos);
+        // Sister: the crouch stance (4) grabs too — the game's gate passes it.
+        let mut b4 = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
+        b4.substate = 4; // SS_CROUCH (no named const in this port; the dispatch default arm)
+        b4.tick_ctx(&world, &ctx, &Input { forward: 1.0, ..Default::default() });
+        assert_eq!(b4.substate, SS_CLIMB, "the crouch grab never attached (substate {})", b4.substate);
+        // Sister: the water grab's y-snap holds the swimmer at the rungs (never BELOW bottom+0.02).
+        assert!(b.pos[1] >= lad.bottom() + 0.02 - 1e-4, "the grab dropped the swimmer below the rungs: {}", b.pos[1]);
+    }
+
+    /// ladder-mesh-refine: the straddled-cel scoping [M `Collide_Pick` 0x1eb320:125-134 admits a
+    /// candidate object only from a straddled cel's chain; the ladder's link is its centre's cel
+    /// [M `build_LinkToRoom` 0x1c9680 → build_FindCel → control_link_object_to_cel]]. A ladder
+    /// whose cell is NOT in the pick capsule's straddle set is never admitted — even with the
+    /// capsule dead on the rungs (the old unscoped pick grabbed through the cel wall, the
+    /// 07000008 playtest's through-the-wall zipline arm). Sister: the same shape with the
+    /// ladder's OWN cell in the set grabs, and an EMPTY set (no cel graph — unit tests, MP
+    /// remotes) scopes nothing.
+    #[test]
+    fn the_ladder_pick_only_admits_ladders_of_the_straddled_cels() {
+        let world = CollisionWorld::from_triangles(Vec::new());
+        let mut lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
+        lad.cell = Some(3);
+        let grab = |straddle: &[usize]| {
+            let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
+            b.substate = SS_SWIM;
+            b.tick_ctx(&world, &LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle }, &Input { forward: 1.0, ..Default::default() });
+            b.substate
+        };
+        // The ladder's cel NOT in the straddle set: no grab (the pick never admitted it).
+        assert_eq!(grab(&[5]), SS_SWIM, "a ladder of a non-straddled cel grabbed — the scoping is off");
+        // Sister that fails without the scoping: the same capsule dead on the rungs grabs the
+        // moment the ladder's own cel is in the set.
+        assert_eq!(grab(&[3]), SS_CLIMB, "the ladder's own cel in the set must grab");
+        // The unresolved link (cell None) is the game's unlinked object: never admitted.
+        let mut unlinked = lad.clone();
+        unlinked.cell = None;
+        let mut b2 = Bond::new([10.0, 3.0, 20.5], unlinked.yaw + std::f32::consts::PI);
+        b2.substate = SS_SWIM;
+        b2.tick_ctx(&world, &LadderCtx { ladders: &[unlinked], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[3] }, &Input { forward: 1.0, ..Default::default() });
+        assert_eq!(b2.substate, SS_SWIM, "an unlinked ladder (cell None) must not grab while scoping is active");
+        // The empty set scopes nothing (no cel graph): the grab goes through.
+        assert_eq!(grab(&[]), SS_CLIMB, "the no-graph path must keep the unscoped pick");
+    }
+
+    /// fix-swim: the swim stroke rides the LOOK direction [M `Player_Move` 0x191dd0:149-165 —
+    /// `RotMatrixX(obj+0x50 − BL+0x8a8·π/2)` + `Mat_GetDir`] and the case-3 tail clamps the rise at
+    /// `surface − 0.3` [M 0x193600:201-220]. No crouch/jump input exists in swim [M case 3 reads
+    /// none]. Pre-fix the port moved planar-only and sank/rose ±2.4/tick on crouch/jump ([S] fiction).
+    #[test]
+    fn swim_moves_along_the_look_direction_and_the_surface_clamps() {
+        let world = CollisionWorld::from_triangles(Vec::new());
+        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: Some(3.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] };
+        let mut b = Bond::new([0.0, 2.7, 0.0], 0.0); // below surface − 0.3? 2.7 < 2.7 is false — at the ceiling
+        b.substate = SS_SWIM;
+        // Look down-ish (pitch −0.5: dir = (0, −sin π/4, cos π/4)), swim forward: the position must
+        // DROP and move along the look dir (the dive).
+        b.pitch = -0.5;
+        let y0 = b.pos[1];
+        for _ in 0..60 { b.tick_ctx(&world, &ctx, &Input { forward: 1.0, ..Default::default() }); }
+        assert!(b.pos[1] < y0 - 0.5, "looking down + forward did not dive (y {} -> {})", y0, b.pos[1]);
+        assert!(b.pos[2] > 0.5, "the dive did not move forward along the look dir (z {})", b.pos[2]);
+        // Look up hard, swim forward: the rise stops AT surface − 0.3 (the clamp), never past it.
+        b.pitch = 1.0;
+        for _ in 0..240 { b.tick_ctx(&world, &ctx, &Input { forward: 1.0, ..Default::default() }); }
+        assert!(b.pos[1] <= 3.0 - 0.3 + 1e-3, "the swim rose past surface − 0.3: {}", b.pos[1]);
+        assert!(b.pos[1] > y0 - 0.5, "looking up + forward did not surface (y {})", b.pos[1]);
+        // Sister: crouch/jump do NOTHING in swim (the game reads no such input in case 3). Neutral
+        // look so the look-dir vertical is out of the picture.
+        b.pitch = 0.0;
+        let y_at = b.pos[1];
+        for _ in 0..30 { b.tick_ctx(&world, &ctx, &Input { jump: true, crouch: true, ..Default::default() }); }
+        assert!((b.pos[1] - y_at).abs() < 1e-3, "crouch/jump moved the swimmer (y {} -> {})", y_at, b.pos[1]);
+    }
+
+    /// swim-height-02: the hittest capsule arms follow the switch's own table [M
+    /// `Player_Collision` 0x194df0 second switch @0x195070, indexed substate−1, jump table
+    /// @0x2fc0d0]: the SWIM 3 rides the DEFAULT arm (A = pos + up·0.275, B = pos + up·(0.55 − cc),
+    /// r 0.55 — lowest point exactly cc under the root), and only the crouch substate 4 takes the
+    /// LOW arm (case 3: A = pos + up·(0.1 − (cc − 0.55)), B = pos + up·(0.45 − cc)). Pre-fix the
+    /// port gave the swim the LOW arm, hanging the lowest point cc + 0.10 under the root — the
+    /// pond-bed push-out parked the swimmer ~0.1 high (the 02-pond 3.60/3.70 settles vs the PS2's
+    /// 3.48/3.17 [L]). The grab pick's swim arm is the default one [M ladder.rs
+    /// `capsule_hits_default`] — the pair must agree.
+    #[test]
+    fn swim_capsule_is_the_switch_default_arm_and_crouch_keeps_the_low_arm() {
+        let mut b = Bond::new([0.0, 3.0, 0.0], 0.0);
+        b.substate = SS_SWIM;
+        let (a, c) = b.capsule();
+        assert!((a[1] - 3.275).abs() < 1e-6, "the swim capsule's A rode the wrong arm: {}", a[1]);
+        assert!((c[1] - (3.0 + 0.55 - b.cc)).abs() < 1e-6, "the swim capsule's B rode the wrong arm: {}", c[1]);
+        // Sister: the crouch stance keeps the LOW arm (case 3 [M 0x195070 case 3]).
+        let mut b4 = Bond::new([0.0, 3.0, 0.0], 0.0);
+        b4.crouched = true;
+        let (a4, c4) = b4.capsule();
+        assert!((a4[1] - (3.0 + 0.1 - (b4.cc - 0.55))).abs() < 1e-6, "the crouch A left the LOW arm: {}", a4[1]);
+        assert!((c4[1] - (3.0 + 0.450_000_02 - b4.cc)).abs() < 1e-6, "the crouch B left the LOW arm: {}", c4[1]);
+        // Sister: the LOW arm's lowest point hangs exactly 0.1 deeper than the default's
+        // (cc + 0.10 vs cc) — the pre-fix excess that rode the bed.
+        let low = b4.cc - c4[1] - 0.55;
+        let def = b.cc - c[1] - 0.55;
+        assert!((low - def - 0.1).abs() < 1e-4, "the arm depth gap moved: {low} vs {def}");
+    }
 
     /// fix-ladder2: the climb look [M Player_Climb 0x196310 + Player_Update 0x193600 + ViewClamping
     /// 0x1a92e8]. The turn input moves the yaw inside the eased ±90° window around `ladder.yaw + π`,
@@ -1347,8 +2332,8 @@ mod tests {
     #[test]
     fn climb_look_turns_within_the_ladder_window_and_pitch_is_free() {
         let world = CollisionWorld::from_triangles(Vec::new());
-        let lad = Ladder { centre: [10.0, 3.0, 20.0], radius: 2.0, yaw: 0.0, channel: 0 };
-        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[] };
+        let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[] };
         let mut b = Bond::new([10.0, 3.0, 20.0 + 0.5], lad.yaw + std::f32::consts::PI);
         b.substate = SS_CLIMB;
         b.ladder = Some(0);
@@ -1430,6 +2415,129 @@ mod tests {
         // Sister: stopping takes ~11 ticks, not one.
         for _ in 0..5 { b.tick(&w, &Input::default()); }
         assert!(b.local[0] != 0.0);
+    }
+
+    #[test]
+    fn zero_g_thrusts_along_the_look_and_glides_when_the_thruster_stops() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], 0.0);
+        b.substate = SS_ZEROG_9;
+        b.pitch = 0.5; // the entry matrix takes the walk pitch [M ChangeSubState 9: no rotation]
+        let entered_look = b.look();
+        let start = b.pos;
+        for _ in 0..60 { b.tick(&w, &Input { forward: 1.0, ..Default::default() }); }
+        let moved = [b.pos[0] - start[0], b.pos[1] - start[1], b.pos[2] - start[2]];
+        let n = (moved[0] * moved[0] + moved[1] * moved[1] + moved[2] * moved[2]).sqrt();
+        assert!(n > 1.0, "moved along the look: {:?}", b.pos);
+        // The move rides the matrix [M 0x193600:284-295]: parallel to the entry look (up +
+        // forward at pitch 0.5), never straight up or straight ahead.
+        let c = cross3(moved, entered_look);
+        assert!(c[0].abs() < 1e-3 && c[1].abs() < 1e-3 && c[2].abs() < 1e-3,
+            "parallel to the look: {:?} vs {:?}", moved, entered_look);
+        assert!(moved[1] > 0.0 && moved[2] > 0.0);
+        // The ±0.05 smoother cap [M 0x192ab0:110-112].
+        let p0 = b.pos;
+        b.tick(&w, &Input { forward: 1.0, ..Default::default() });
+        let step = dist3_sq(b.pos, p0).sqrt();
+        assert!(step <= 0.05 + 1e-4, "smoother cap: {}", step);
+        // Inertia [M :92-135 — the 0.04 ease, no Player_Move dead-zone]: 30 released ticks later
+        // Bond is STILL gliding (the walk ease snaps inside ~11); and decaying, not holding.
+        for _ in 0..30 { b.tick(&w, &Input::default()); }
+        let p1 = b.pos;
+        b.tick(&w, &Input::default());
+        let step2 = dist3_sq(b.pos, p1).sqrt();
+        assert!(step2 > 0.01, "still gliding: {}", step2);
+        assert!(step2 < step, "decaying: {} < {}", step2, step);
+    }
+
+    #[test]
+    fn zero_g_vertical_thruster_rides_the_body_up_and_vel_stays_zero() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], 0.0);
+        b.substate = SS_ZEROG_9;
+        // Level attitude: the lift thruster rides the body's UP row [M 0x193600:284-295, the y
+        // lane against row1] — straight up at pitch 0. The rise saturates at the ±0.05 smoother
+        // cap [M 0x192ab0:110-112].
+        for _ in 0..40 { b.tick(&w, &Input { lift: 1.0, ..Default::default() }); }
+        assert!(b.pos[1] > 2.0, "risen: {:?}", b.pos);
+        assert!(b.pos[0].abs() < 1e-4 && (b.pos[2] + 14.0).abs() < 1e-4,
+            "no horizontal drift: {:?}", b.pos);
+        // BL+0x50 zeroes every tick [M 0x192ab0:71] — hanging in the air, nothing integrates.
+        assert_eq!(b.vel, [0.0; 3]);
+        // Released, the lift smoother's own inertia keeps the drift decaying [M :92-159 — the
+        // 0.04 ease, no dead-zone]: it settles, and then Bond HANGS (no gravity pulls him).
+        for _ in 0..120 { b.tick(&w, &Input::default()); }
+        let p = b.pos;
+        b.tick(&w, &Input::default());
+        assert!(dist3_sq(b.pos, p) < 1.0e-6, "settled: {:?} vs {:?}", b.pos, p);
+        assert_eq!(b.vel, [0.0; 3]);
+        // Pitched down, the same lift pushes along the TILTED body up (forward + up), not world
+        // up — the matrix basis, not a scalar vertical.
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], 0.0);
+        b.substate = SS_ZEROG_9;
+        b.pitch = -0.5;
+        let start = b.pos;
+        for _ in 0..40 { b.tick(&w, &Input { lift: 1.0, ..Default::default() }); }
+        let moved = [b.pos[0] - start[0], b.pos[1] - start[1], b.pos[2] - start[2]];
+        assert!(moved[2] > 0.5 && moved[1] > 0.5 && moved[0].abs() < 1e-3,
+            "body-up with pitch: {:?}", moved);
+    }
+
+    #[test]
+    fn zero_g_stabiliser_slerps_world_up_for_its_window_then_stops() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], 0.0);
+        b.substate = SS_ZEROG_9;
+        b.pitch = 0.5;
+        b.tick(&w, &Input::default()); // the entry matrix is live now
+        let heading = b.yaw;
+        let f0 = b.look()[1];
+        // Sister: without the Action read the attitude holds [M :163-168 — the window only arms
+        // on it].
+        for _ in 0..30 { b.tick(&w, &Input::default()); }
+        assert!((b.look()[1] - f0).abs() < 1e-5,
+            "no drift without the press: {}", b.look()[1]);
+        // One press arms 90 ticks [M :165]; the slerp parameter is REC_FRAME_RATE·3.0 = 0.05 per
+        // tick [M :196], so the pitch angle decays ×0.95 exactly (same-axis slerp) and the
+        // heading is preserved [M Mat_Align2Up 0x1df4b0].
+        b.tick(&w, &Input { stabilise: true, ..Default::default() });
+        for k in 1..=89 {
+            b.tick(&w, &Input::default());
+            let want = (0.5f32 * std::f32::consts::FRAC_PI_2 * 0.95f32.powi(k as i32 + 1)).sin();
+            assert!((b.look()[1] - want).abs() < 0.003,
+                "slerp tick {}: {} vs {}", k, b.look()[1], want);
+            assert!((b.yaw - heading).abs() < 1e-4, "heading kept: {}", b.yaw);
+        }
+        let fy = b.look()[1];
+        for _ in 0..20 { b.tick(&w, &Input::default()); }
+        assert!((b.look()[1] - fy).abs() < 1e-5,
+            "the 90-tick window expired: {} vs {}", b.look()[1], fy);
+    }
+
+    #[test]
+    fn zero_g_refills_air_even_underwater_like_the_game() {
+        let w = room();
+        let ctx = LadderCtx { water: Some(2.0), ..Default::default() }; // the head sits under 2.0
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], 0.0);
+        b.air = 50.0;
+        b.substate = SS_ZEROG_9;
+        b.tick_ctx(&w, &ctx, &Input::default());
+        assert!((b.air - (50.0 + 20.0 / 60.0)).abs() < 1e-4, "refill in zero-g: {}", b.air);
+        // Sister: the walk substate still drains — the gate is the substate, not the suit [M
+        // Player_MonitorAir 0x191a70:57, :98].
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], 0.0);
+        b.air = 50.0;
+        b.tick_ctx(&w, &ctx, &Input::default());
+        assert!((b.air - (50.0 - 5.0 / 60.0)).abs() < 1e-4, "walk drains: {}", b.air);
+    }
+
+    #[test]
+    fn walk_ignores_the_zero_g_lift_and_stabilise_bits() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], 0.0);
+        for _ in 0..30 { b.tick(&w, &Input { lift: 1.0, stabilise: true, ..Default::default() }); }
+        assert_eq!(b.substate, SS_WALK);
+        assert!(b.grounded && b.pos[1] < 1.2, "no lift on foot: {:?}", b.pos);
     }
 
     #[test]

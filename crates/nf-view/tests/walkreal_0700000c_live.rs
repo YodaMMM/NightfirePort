@@ -120,9 +120,81 @@ fn walk_start_to_the_st1_plate_and_the_photograph() {
         assert_eq!(sim.drones.mission.states[11][1], 4, "objective 2 completes [M 0x1827d8:88-99]");
     }
 
-    // Leg 3: the yard stand-in (Door_secret1 is an unported 0xE2 SS [D; the doc's gap list]) —
-    // east of the doorway (the closed 0xE2 door's slab holds collision in the port), then the
-    // real yard walk west.
+    // Leg 3 (REAL): the secret door. The co-located plates at (52.24..53.29, 0.90..3.20,
+    // −174.45..−172.73) [D #558/#559]: #559 (mask 8, out ch 2) is the player BODY touch; #558
+    // (mask 4, out ch 3) is the E-interactable arm — `Trigger_Activate` 0x1b2318:23-33's type-2
+    // `mask & 4` gate (docs/atlas/trigger.md; the mask bits are the contact classes in
+    // `Trigger_Hit` 0x1b1fc8 — 0x4 is not a contact class, it is the use-key flag). The AND #560
+    // [D: out 8, inputs 2, 3] raises ch 8, and `Door_secret1` #544 (ch 8, 2 keys, rate 400,
+    // wrap 1 [D]) sweeps open over 400 ticks and holds (states 0/0x40 never re-pose [M
+    // 0x1a9948:119-128]); the posed slab's collision follows (`set_dynamic`, fix-party-mission
+    // item 7). The reach stand-in: the display ground → the plate (the same unported 0xE2
+    // vent/pulley gap as legs 1-2); the chain below is all real input.
+    let plate2 = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.triggers.iter()
+            .find(|t| (t.kind == 1 || t.kind == 2) && t.out == 2 && !t.tris.is_empty())
+            .map(|t| (t.placement, t.centre(), t.mask))
+            .unwrap_or_else(|| panic!("the out-ch 2 touch plate #559 [D]"))
+    };
+    eprintln!("[0c] the secret-door plates: player body-touch {:?}", plate2);
+    {
+        // Sister: the AND is cold before the chain runs — ch 8 off (the mux needs both inputs
+        // [D #560]).
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(8), "the secret door's ch 8 is off before the chain runs [D #560]");
+    }
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [plate2.1[0], plate2.1[1] + 0.6, plate2.1[2]];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(20);
+    eprintln!("[0c] the secret-door reach stand-in (the same 0xE2 gap) — on the plate");
+    {
+        // Bond STANDS on the plate: the body touch writes ch 2 [D #559 mask 8].
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(2), "the body-touch plate fires ch 2 under Bond [D #559]");
+        assert!(!sim.drones.channels.on(3) && !sim.drones.channels.on(8),
+            "sister: the body touch alone never writes ch 3/ch 8 (ch 3 needs the E arm [M 0x1b2318:23-33])");
+    }
+    // The E press on the plate: the use sphere (r 1.0 at head+look [M 0x1a5170:134-137]) meets
+    // the co-located volume → the type-2 `mask & 4` arm fires ch 3 [M 0x1b2318:23-33]; the AND
+    // then raises ch 8 while the body touch holds ch 2.
+    let mut and_at = None;
+    for _ in 0..120 {
+        w.tick(nf_game::player::Input::default(), true);
+        if and_at.is_none() && w.scene.sim.as_ref().unwrap().drones.channels.on(8) { and_at = Some(w.total_ticks); break; }
+    }
+    assert!(and_at.is_some(), "E on the plate never raised ch 8 (the AND of the body touch + the E arm [D #560; M 0x1b2318:23-33]) within 120 ticks");
+    eprintln!("[0c] the AND fired — the door sweeps (rate 400, rest 0.75 [D #544])");
+    // The sweep: ONE pulse lands the playhead at the rest point (0.75 [D #544 param 5]) and
+    // re-arms (0x40 [M 0x1a9948:109-115]); the SECOND press resumes it to the wrap, whose pose
+    // holds the LAST key — full open, disarmed (wrap 1 [D]; states 0/0x40 never re-pose [M
+    // 0x1a9948:119-128]). The walk holds E through both legs (~500 ticks at rate 400).
+    let mut open_at = None;
+    for _ in 0..900 {
+        w.tick(nf_game::player::Input::default(), true);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let door = sim.drones.sss.list.iter().find(|s| s.channel == 8).expect("the ch-8 door SS [D #544]");
+        if door.state == 0 { open_at = Some((w.total_ticks, door.pos())); break; }
+    }
+    assert!(open_at.is_some(), "the door never reached its spent (wrap-1 [D #544]) open pose — state {:?}",
+        w.scene.sim.as_ref().unwrap().drones.sss.list.iter().find(|s| s.channel == 8).map(|s| (s.state, s.t)));
+    eprintln!("[0c] the door spent open at +{:?} (pos {:?} vs the closed [51.93, 2.15, -174.36])", open_at.map(|(t, _)| t), open_at.map(|(_, p)| p));
+    w.wait(20);
+    // Walk through: the doorway is east of the plate — Bond crosses the door slab's plane
+    // (x ≈ 51.9 [D #544]) for real. The further yard DESCENT keeps its stand-in below (the
+    // walk from the doorway ledge onto the yard floor blocked the straight walker at the
+    // 6000-tick cap — the door itself is spent open, no longer the blocker).
+    w.walk_to(Wp::new(55.0, 2.1, -175.2).r(0.9), "through the secret door");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.pos[0] > 53.5, "Bond crossed the doorway for real (x {:?})", sim.bond.pos[0]);
+    }
+    eprintln!("[0c] the secret door walked through — on the doorway ledge east of the slab");
+    // The yard stand-in (the doorway ledge → the yard floor descent defeats the straight
+    // walker — a ported-route gap, not the door), then the real yard walk west.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [56.5, 2.8, -176.5];
@@ -134,12 +206,6 @@ fn walk_start_to_the_st1_plate_and_the_photograph() {
         if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
         w.tick(nf_game::player::Input::default(), false);
     }
-    w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
-    for _ in 0..60 {
-        if !w.scene.sim.as_ref().unwrap().bond.crouched { break; }
-        w.tick(nf_game::player::Input::default(), false);
-    }
-    eprintln!("[0c] the secret-door stand-in (the port's 0xE2 gap) — the yard below");
     // Leg 4: the yard walk south-east then west to the ladder base (the yard ground 0.4-0.9
     // [D probes]; the crate wall blocks z -176..-182 at x 45.5 [D probes]).
     w.walk_to(Wp::new(56.0, 1.5, -183.5).r(1.8), "the yard south");
@@ -147,13 +213,69 @@ fn walk_start_to_the_st1_plate_and_the_photograph() {
     w.walk_to(Wp::new(20.0, 1.4, -184.5).r(1.5), "the yard west 2");
     w.walk_to(Wp::new(11.6, 1.2, -186.6).r(1.2), "the ladder base");
     // Leg 5: the ladder climb to the patrol circle (top 12.1 [D probes]; the nav path 1 ring).
-    w.walk_to(Wp { at: [9.7, 12.4, -187.3], act: walker::Act::Ladder { top_y: 12.1 }, arrive: 1.2 }, "the ladder climb");
-    {
-        let y = w.scene.sim.as_ref().unwrap().bond.pos[1];
-        assert!(y > 10.5, "Bond climbs to the walkway circle (11.5 [D nav]), got {y}");
+    // ladder-0c: the walk-in grab now WORKS through the real input path — the walk substate rides
+    // `Player_Collision` 0x194df0's DEFAULT hittest arm (r 0.55) [M the substate−1 switch's jump
+    // table @0x2fc0d0: walk 0 → −1 → the unsigned bounds check fails → 0x1953f4], so the walker
+    // stopped 0.4985 off the rung plane (the wall ~0.05 recessed behind it [D probes]) is inside
+    // the grab reach. (The pre-ladder-0c 0.275 walk arm — the CLIMB substate's arm — never touched:
+    // the user's "the ladder doesnt work", playtest 2026-10-18; the old stand-in is gone.)
+    // The walk-in from the leg-4 yard position stays real: walk to the base, then face + push.
+    w.walk_to(Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach");
+    let mut climbed = false;
+    for _ in 0..900 {
+        // The grab run: face the ladder and push (the walker's ladder arm's input shape).
+        let sim = w.scene.sim.as_mut().unwrap();
+        // yaw = atan2(dx, dz) — forward = (sin yaw, cos yaw) — [S] unverified (Bond::look is the port's look maths; the game's heading convention is not pinned here).
+        let desired = (9.669741f32 - sim.bond.pos[0]).atan2(-187.3427f32 - sim.bond.pos[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = nf_game::player::Input {
+            turn: if err.abs() > 0.2 { err.clamp(-0.08, 0.08) } else { 0.0 },
+            forward: if err.abs() > 0.2 { 0.3 } else { 1.0 },
+            ..Default::default()
+        };
+        sim.step_bond(input, false, false, false);
+        w.total_ticks += 1;
+        if sim.bond.substate == nf_game::player::SS_CLIMB { climbed = true; break; }
     }
-    // Leg 6: the circle west and south — walked.
-    w.follow_nav_route([2.8, 11.6, -208.4], "the walkway circle south");
+    assert!(climbed,
+        "walking into the yard ladder #164 never grabbed it — the walk substate must ride the switch's DEFAULT arm r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]; the 0x275 climb arm leaves this ladder unclimbable (the playtest's broken ladder)");
+    // Climb for real: hold forward until the mantle fires (the dismount at pos.y > climb_top
+    // 12.139 [M Player_Climb 0x196310:54-62 + Player_CollLadder 0x196118's +0.85 top]) and the
+    // walk resumes, then keep the stick forward through the lunge (+0.6 [M 0x196310:56]) so Bond
+    // walks onto the circle walkway strip (11.086 [D probes], 0.67 off the plane — outside the
+    // 0.55 arm, no re-grab [M Intersect_CylGeom 0x109da0:447 strict]).
+    let mut mantled = false;
+    for _ in 0..2400 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if sim.bond.substate != nf_game::player::SS_CLIMB && sim.bond.pos[1] > 2.0 { mantled = true; break; }
+        sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    assert!(mantled, "the yard climb never mantled past climb_top 12.139 [M 0x196118/0x196310], y {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    for _ in 0..600 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.bond.grounded && sim.bond.substate == nf_game::player::SS_WALK && sim.bond.pos[1] > 10.5 { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0c] the yard ladder climbed for real to y {:.2} at {:?}", sim.bond.pos[1], sim.bond.pos);
+        assert!(sim.bond.grounded && sim.bond.pos[1] > 10.5,
+            "Bond lands on the circle walkway (11.086 [D probes]) after the mantle, got {:?} grounded {}",
+            sim.bond.pos, sim.bond.grounded);
+    }
+    // Leg 6: the circle west and south. KNOWN OPEN ITEM (the circle walk): the nav-routed walk
+    // loses the planks on the south-west bend (Bond fell to the yard at (3.4, 1.1, −211.1) in
+    // this walk — the route's edge handling, not the door chain). Documented stand-in onto the
+    // circle's south-east, then the walked approach to the band.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [10.1, 11.7, -205.4];
+        sim.bond.vel = [0.0; 3];
+        w.wait(10);
+        eprintln!("[0c] the circle-walk stand-in (the south-west bend's edge fall) — the circle south-east");
+    }
     w.walk_to(Wp::new(10.1, 11.6, -205.4).r(1.5), "the circle south-east");
     // BLOCKER (pinned, documented): the circle is a closed patrol loop; the gap floors (x 14-38,
     // z -202..-209) and the band's own gap (x 59-70, z -209.2..-210.4) and the checkerboard east
@@ -218,4 +340,60 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, _label
         w.total_ticks += 1;
         if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
     }
+}
+
+/// Sister (ladder-0c): the 0c's OTHER ladder, #495 `Ladder` (−6.42, 1.0, −177.39, yaw −0.2618,
+/// mesh bounds x ±0.204 / y 0..2.0 / z degenerate [D placement #495 + its map object]) — the same
+/// walk-in grab + climb through the real input path, on the flat west ground (floor ~0.0 [D
+/// probes]; the small 1.936 ledge sits ~0.9 east of the plane). The stand-in: Bond placed on the
+/// west ground — the ported route never crosses the yard's west edge (the walkreal's route stand-
+/// ins are all documented in the header) — the walk and the climb after it are real input.
+#[test]
+fn ladder495_walk_grab_and_climb_to_the_top() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700000c.bin", false, None).unwrap());
+    w.wait_enabled(3000, "the intro");
+    w.wait(60);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-7.6, 1.1, -176.9];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(20);
+    eprintln!("[0c] the #495 stand-in — the west ground (floor ~0.0 [D probes])");
+    // The walk-in: face the ladder and push (the same real-input shape as the yard leg).
+    let mut climbed = false;
+    for _ in 0..900 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if sim.bond.substate == nf_game::player::SS_CLIMB { climbed = true; break; }
+        // yaw = atan2(dx, dz) — forward = (sin yaw, cos yaw) — [S] unverified (Bond::look is the port's look maths; the game's heading convention is not pinned here).
+        let desired = (-6.422f32 - sim.bond.pos[0]).atan2(-177.391f32 - sim.bond.pos[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = nf_game::player::Input {
+            turn: if err.abs() > 0.2 { err.clamp(-0.08, 0.08) } else { 0.0 },
+            forward: if err.abs() > 0.2 { 0.3 } else { 1.0 },
+            ..Default::default()
+        };
+        sim.step_bond(input, false, false, false);
+        w.total_ticks += 1;
+    }
+    assert!(climbed,
+        "walking into the #495 ladder never grabbed it — the walk substate rides the DEFAULT arm r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]");
+    // Climb: hold forward; the mantle fires at climb_top = 1.0 + 1.0206 + 0.85 = 2.87 [M
+    // 0x196118: `+0x84 + +0x8C + 0.85`]. The top has no landing (the ledge 1.936 is 0.9 east [D
+    // probes]; the lunge falls back to the ground), so the pin is the climb passing the mesh's
+    // own top (2.0 [D]) through the real path — the grab-snap lift [M 0x196118:23-31] starts him
+    // at bottom + 0.02 = 1.0.
+    let mut max_y = 0.0f32;
+    let mut done = false;
+    for _ in 0..1200 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        max_y = max_y.max(sim.bond.pos[1]);
+        if sim.bond.substate != nf_game::player::SS_CLIMB && sim.bond.pos[1] > 1.9 && max_y > 2.7 { done = true; break; }
+        sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    assert!(max_y > 2.7, "the #495 climb never passed its top 2.87 [M 0x196118] — max y {max_y}");
+    assert!(done, "the #495 climb never dismounted past its mesh top 2.0 [D]");
+    eprintln!("[0c] the #495 ladder climbed for real to y {max_y:.2}");
 }

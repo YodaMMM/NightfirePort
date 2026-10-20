@@ -137,6 +137,22 @@ impl Network {
         self.bounds_test(a, b, near, want_hit)
     }
 
+    /// `DroneMove_ObjectMissionPathDistance`'s node qualification (0x153f50:100-121): 3D distance
+    /// ≤ 30 (DAT_002c7954 = 900.0, `Drone_PostLoad_Init` 0x136938:62), |dy| ≤ 4.0 (DAT_002c794c),
+    /// the slope band (DAT_002c7948 < |dy| ⇒ |atan2(dy, horiz)| ≤ DAT_002c7944 — the
+    /// PostLoad_Init 1.5·/2.0 + 0.7854/0.8727 pair this Network carries), then the BOUNDARY test
+    /// ONLY (`AINetwork_BoundsTest`, gated on the boundary count DAT_002c8774 = `self.bounds`) —
+    /// the game's scan has NO collision-world line of sight (furniture must not disqualify a
+    /// route node).
+    pub fn node_scan_ok(&self, feet: V3, np: V3) -> bool {
+        let dy = np[1] - feet[1];
+        let h2 = (np[0] - feet[0]).powi(2) + (np[2] - feet[2]).powi(2);
+        if h2 + dy * dy > 900.0 || dy.abs() > 4.0 { return false; }
+        if dy.abs() > self.slope_dy && dy.abs().atan2(h2.sqrt()) > self.max_slope { return false; }
+        if !self.bounds { return true; }
+        self.bounds_test(feet, np, false, false).0 == 1
+    }
+
     /// `AINetwork_BoundsTest` over every wall (one cel).
     pub fn bounds_test(&self, a: V3, b: V3, near: bool, want_hit: bool) -> (i32, Option<V3>) {
         let mut best: Option<(f32, V3)> = None;
@@ -205,6 +221,9 @@ impl Network {
 
     /// `AINetwork_NodesForPosition` for one path (mode 0): the first candidate with `MoveTestFromNode(node → pos)`
     /// = 1 is found; the first failure is the fallback.
+    /// `AINetwork_NodesForPosition` + `AINetwork_BuildAITarget` (0x15ac78) — the drone-alert
+    /// target node set; also the port form of `NDrone2_NearestNode` (0x1558d8) / `NearestNodeDCV`
+    /// (0x155958)'s nearest-node ask.
     pub fn target_nodes(&self, world: &CollisionWorld, path: usize, pos: V3, r2: f32) -> TargetNodes {
         let mut t = TargetNodes::default();
         for i in self.candidates(path, pos, r2) {
@@ -294,6 +313,9 @@ impl Network {
     /// `AINetwork_EmitPath(limit 255)` (0x158cf8): path distances from `pos` to every node of `path` (a flood from the
     /// first reachable node, link cost len × (used + 1), the same list quirks as A*), stored as bytes:
     /// trunc(g × 255 / 256) capped at 254, 0xFF = not reached.
+    /// The `AIEmitter` scratch walk (`AINetwork_InitEmitter2` 0x15b2b8 / `AllocEmitter` 0x15b390 /
+    /// `FreeEmitter` 0x15b3d8) — the port allocates per-drone scratch instead of the game's shared
+    /// emitter pool at 0x29aa20 [S deviation, drone.rs links_used].
     pub fn emit(&self, world: &CollisionWorld, path: usize, pos: V3) -> Vec<u8> {
         let p = &self.paths[path];
         let n = p.nodes.len();
@@ -329,6 +351,41 @@ impl Network {
 /// Goal nodes of a target in one path (`AITarget` found / fallback flags).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TargetNodes { pub found: Option<u16>, pub fallback: Option<u16> }
+
+/// The game's per-link flag halfword (`MAPLINK+4`): the dynamic hazard flags 0x100 / 0x200
+/// (`AINetwork_SetLinksFlagInCircle` 0x15b548) and the creep marker 0x10 (`LinkCreep_ForNodes`
+/// 0x159810). The game keeps them on the shared links array next to the used counter (`MAPLINK+6`,
+/// the port's `used` slices); the port mirrors the same per-path slices swapped into the active
+/// drone (`Drones.link_flags` / `Drone.link_flags`).
+pub type LinkFlags = Vec<Vec<u16>>;
+
+impl Network {
+    /// `AINetwork_ClearLinkFlags(mask)` (0x15b498): clear `mask` from every link of every path. The
+    /// game's walk also zeroes each link's used counter in the same pass [M 0x15b498:24-27]; the
+    /// port resets those in the `Drones.used` rebuild at the InitComms pass (drone.rs).
+    pub fn clear_link_flags(&self, flags: &mut LinkFlags, mask: u16) {
+        for fl in flags.iter_mut() { for f in fl.iter_mut() { *f &= !mask; } }
+    }
+
+    /// `AINetwork_SetLinksFlagInCircle(pos, net, radius, set, clear)` (0x15b548, float in f12, masks
+    /// in a2/a3 — call sites 0x138d58/0x138ddc/0x138e4c): clear `clear` from EVERY link first (when
+    /// non-zero [M 0x15b548:31-33]), then set `set` on each link whose height range overlaps
+    /// pos.y ± 2 [M 0x15b548:51-63] and whose closest point on the segment is within `radius`
+    /// squared, 2D [M 0x15b548:65-77]. Walks every path (the game loops the per-cel networks at
+    /// 0x2c7964; the port is one cel — the header's deviation note).
+    pub fn set_links_flag_in_circle(&self, flags: &mut LinkFlags, pos: V3, radius: f32, set: u16, clear: u16) {
+        if clear != 0 { self.clear_link_flags(flags, clear); }
+        for (p, fl) in self.paths.iter().zip(flags.iter_mut()) {
+            for (li, l) in p.links.iter().enumerate() {
+                let (a, b) = (p.nodes[l.a as usize].pos, p.nodes[l.b as usize].pos);
+                let (lo, hi) = if a[1] < b[1] { (a[1], b[1]) } else { (b[1], a[1]) };
+                if lo > pos[1] + 2.0 || pos[1] - 2.0 > hi { continue; }
+                let q = closest_on_segment(a, b, pos);
+                if (q[0] - pos[0]).powi(2) + (q[2] - pos[2]).powi(2) <= radius * radius { fl[li] |= set; }
+            }
+        }
+    }
+}
 
 fn closest_on_segment(a: V3, b: V3, p: V3) -> V3 {
     let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
@@ -482,6 +539,10 @@ impl Route {
 
     /// A combat route to `dest` (`AINetwork_CalcRoute`): direct when `MoveTest(start, dest, near)` passes, else A* +
     /// `OptimiseRoute`. Err = the failure code (4/5/6/8).
+    /// `AINetwork_SetupRouteToObject` (0x158948) / `AINetwork_SetupRouteToPosition` (0x158b10) /
+    /// `AINetwork_CalcRouteToObject` (0x15aee8, via `NDrone2_MoveToObject` 0x151618) — the port's
+    /// single route build. The game's `AlterDestFor_DROUTE_Nearest` (0x156088) dest pull-back for
+    /// unreachable goals is not ported (gap, docs/systems/uncited-audit.md).
     pub fn to_position(net: &Network, world: &CollisionWorld, path: Option<usize>, start: V3, dest: V3, goal: &TargetNodes, used: &[u16]) -> Result<(u8, Route), u8> {
         if net.move_test(world, start, dest, true, false).0 == 1 {
             let mut r = Route::new(path.unwrap_or(0), RouteMode::OneWay, Vec::new(), Vec::new(), start, dest);
@@ -528,6 +589,7 @@ impl Route {
     }
 
     /// `AINetwork_SetupNextNode(±1)`.
+    /// `AINetwork_RouteNodeOffset` (0x15a820): flag&7 — 2 loops, 3 bounces (not ported), else clamp.
     fn next_node(&mut self, net: &Network, dir: i32) {
         let count = self.nodes.len() as i32;
         self.index += dir;
@@ -558,6 +620,7 @@ impl Route {
     }
 
     /// `GetRouteDistance`.
+    /// `AINetwork_GetRouteDistance` — the 3D variant `AINetwork_GetRouteDistance3D` (0x156540).
     pub fn distance(&self, net: &Network, feet: V3) -> f32 {
         let next = (self.index + 1).max(0) as usize;
         if next >= self.nodes.len() { return dist2d(feet, self.dest); }
@@ -569,7 +632,7 @@ impl Route {
 
     /// `AINetwork_FollowRoute` + `LinkCreep_Handler`: updates the move target. Returns the result code and the node
     /// reached when a special node was reached this tick (`NDrone2_ReachedDestNode`).
-    pub fn follow(&mut self, net: &Network, feet: V3) -> (u8, Option<u16>) {
+    pub fn follow(&mut self, net: &Network, feet: V3, near_pos: &dyn Fn(V3) -> bool) -> (u8, Option<u16>) {
         self.remaining = self.distance(net, feet);
         let count = self.nodes.len() as i32;
         if self.index >= count && self.mode != RouteMode::Loop && self.remaining < self.radius { return (follow::ARRIVED, None); }
@@ -577,7 +640,12 @@ impl Route {
         if let Some(node) = self.creep.special {
             let pos = net.paths[self.path].nodes[node as usize].pos;
             self.target = pos;
-            if dist2d(feet, pos) >= 0.4 { return (follow::MOVING, None); }
+            // `LinkCreep_AtSpecialNode` 0x159dd0: d < 0.4 → at the node; 0.4 ≤ d < 1.0 →
+            // `NDrone2_DroneNearPos` 0x143e68 decides; d ≥ 1.0 → not yet. The old port only had
+            // the first tier, so a drone blocked at a closed door (the panel stops the body in
+            // the 0.4-1.0 band) never reached its own door node and never opened the door.
+            let dd = dist2d(feet, pos);
+            if dd >= 0.4 && (dd >= 1.0 || !near_pos(pos)) { return (follow::MOVING, None); }
             self.creep.special = None;
             reached = Some(node);
         }
@@ -587,6 +655,17 @@ impl Route {
             if self.creep.step >= 1 && net.bounds_node_test(0.1, feet, self.creep.point(self.creep.step - 1)) {
                 self.creep.step -= 1;
                 self.target = self.creep.point(self.creep.step);
+                return (follow::MOVING, reached);
+            }
+            // [M 0x15a148 LinkCreep_Decrement] at creep step 0 the game does NOT hard-block: it calls
+            // `AINetwork_SetupNextNode(-1)` — the route steps back one node and `LinkCreep_Calc`
+            // re-creeps it, so the drone re-approaches (root motion slides it past grazed corners
+            // while the creep holds). Only an index already past the start (`route+0x80 < 0`) fails,
+            // and that is what surfaces as the follow's 9/0xc through the route+2 latch [M 0x15b110].
+            // (The game's `LinkCreep_Calc(.., back = dir < 1)` flag's backward-creep half is not
+            // modelled — the port re-creeps the stepped-back node forward; *suggested*.)
+            if self.creep.step == 0 && self.index > 0 {
+                self.next_node(net, -1);
                 return (follow::MOVING, reached);
             }
             return (follow::BLOCKED, reached);
@@ -641,6 +720,51 @@ mod tests {
         assert_eq!(n.astar(&w, 0, [0.0; 3], [1.0; 3], &TargetNodes::default(), &[0; 6]).unwrap_err(), 4);
     }
 
+    /// `AINetwork_SetLinksFlagInCircle` 0x15b548 + `AINetwork_ClearLinkFlags` 0x15b498: the flag
+    /// lands on the links whose closest point is inside the radius (2D), the ±2 height gate holds
+    /// [M 0x15b548:51-63], the clear-then-set order of one call holds [M 0x15b548:31-33], and the
+    /// cycle reset (0x310 = 0x100 | 0x200 [M `Drone_InitComms` 0x139520:125]) wipes both bits.
+    #[test]
+    fn scary_links_flag_inside_the_radius_and_the_cycle_clears_them() {
+        let n = net(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 0.0, 10.0], [0.0, 0.0, 10.0]], &[(0, 1), (1, 2), (2, 3), (3, 0)], 2);
+        // A hazard at the midpoint of link 0-1, radius 4: only that link is inside.
+        let mut flags: LinkFlags = vec![vec![0; 4]];
+        n.set_links_flag_in_circle(&mut flags, [5.0, 0.0, 0.0], 4.0, 0x100, 0);
+        assert_eq!(flags[0], vec![0x100, 0, 0, 0]);
+        // Height gate: 3.0 above the link (|3.0| > 2.0) → nothing flagged.
+        let mut flags: LinkFlags = vec![vec![0; 4]];
+        n.set_links_flag_in_circle(&mut flags, [5.0, 3.0, 0.0], 4.0, 0x100, 0);
+        assert_eq!(flags[0], vec![0, 0, 0, 0]);
+        // Closest-point gate: the hazard sits 5 from the whole segment although node 1's x is close.
+        let mut flags: LinkFlags = vec![vec![0; 4]];
+        n.set_links_flag_in_circle(&mut flags, [5.0, 0.0, -5.0], 4.0, 0x100, 0);
+        assert_eq!(flags[0], vec![0, 0, 0, 0]);
+        // Clear-then-set: clear 0x100 everywhere, set 0x200 in-circle, in ONE call.
+        let mut flags: LinkFlags = vec![vec![0x100; 4]];
+        n.set_links_flag_in_circle(&mut flags, [5.0, 0.0, 0.0], 4.0, 0x200, 0x100);
+        assert_eq!(flags[0], vec![0x200, 0, 0, 0]);
+        // The cycle reset with the game's mask.
+        n.clear_link_flags(&mut flags, 0x310);
+        assert_eq!(flags[0], vec![0, 0, 0, 0]);
+    }
+
+    /// Sister: the A* must NOT avoid scary-flagged links — the game's route search reads only the
+    /// link's used counter (+6), endpoints (+8/+0xa) and length (+0xc) [M `AINetwork_DoAStarPath`
+    /// 0x1571b0 edge loop, disasm 0x1575e4-0x1575e8; the write-only census covers every net+0x3c
+    /// accessor in ACTION.ELF]. A future "honour the flags" change to the A* contradicts the
+    /// decompile and fails here.
+    #[test]
+    fn astar_still_walks_a_scary_flagged_link() {
+        let n = net(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 0.0, 10.0], [0.0, 0.0, 10.0], [-20.0, 0.0, 30.0]], &[(0, 1), (1, 2), (2, 3), (3, 0), (0, 4), (4, 2)], 2);
+        let w = CollisionWorld::empty();
+        let goal = TargetNodes { found: Some(2), fallback: None };
+        let mut flags: LinkFlags = vec![vec![0; 6]];
+        n.set_links_flag_in_circle(&mut flags, [5.0, 0.0, 0.0], 4.0, 0x100, 0);
+        assert_eq!(flags[0][0], 0x100, "the short way is the flagged way");
+        let (res, nodes, _) = n.astar(&w, 0, [0.0, 0.0, -1.0], [10.0, 0.0, 9.5], &goal, &[0; 6]).unwrap();
+        assert_eq!((res, nodes), (0, vec![0, 1, 2]), "through the 0x100 link, like the game");
+    }
+
     #[test]
     fn walls_block_moves_and_the_creep_walks_a_loop() {
         let mut n = net(&[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 0.0, 4.0], [0.0, 0.0, 4.0]], &[(0, 1), (1, 2), (2, 3), (3, 0)], 4);
@@ -661,7 +785,7 @@ mod tests {
         let mut feet = [0.0, 0.0, 0.0];
         let mut visited = vec![];
         for _ in 0..400 {
-            r.follow(&n, feet);
+            r.follow(&n, feet, &|_| false);
             feet = r.target;
             if !visited.contains(&r.index) { visited.push(r.index) }
         }

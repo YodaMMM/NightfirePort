@@ -15,10 +15,21 @@
 //! nf-extract bigf-extract <iso> <archive> <out-dir>   unpack one BIGF archive (e.g. /DRIVING/MISC.VIV)
 //! nf-extract symtab <elf>                  an ELF's .symtab as TSV (stdout)
 //! nf-extract drivingsym <iso>              DRIVING/DRIVING.SYM as TSV (stdout)
+//! nf-extract weapon-matrix <iso> [levels]  the weapon matrix (task 100d): every on-foot level ×
+//!                                          every weapon — load, give, draw, fire ×3, reload,
+//!                                          switch away/back; the mark table + aggregates + red
+//!                                          cells. `levels` = comma list (e.g. 07000005,07000011)
+//!                                          to run a subset. Needs no NF_ISO (the iso argument).
+//! nf-extract coll-scan <iso> <level> x y z [r]   every collision triangle (block 0x2E, placement
+//!                                          transform applied) whose plane sits within r (default
+//!                                          1.5) of the point and whose grown AABB holds it — the
+//!                                          owner questions ("which object owns this plane?"):
+//!                                          map/object/name/hashcode/glist flags + the placement's
+//!                                          type, create-cel and cel-pass-skips.
 //! ```
 
 use anyhow::{bail, Context, Result};
-use nf_formats::{disc, elf::Elf, iso9660::IsoImage, png, sha1, symfile};
+use nf_formats::{bigf, carmodel, crp, disc, elf::Elf, iso9660::IsoImage, png, refpack, sha1, symfile};
 use std::path::Path;
 
 fn main() -> Result<()> {
@@ -52,8 +63,14 @@ fn main() -> Result<()> {
         "triggers" => triggers(&IsoImage::open(a(1)?)?, a(2)?),
         "nis" => nis(&IsoImage::open(a(1)?)?, a(2)?, args.get(3).map(|h| u32::from_str_radix(h, 16)).transpose()?),
         "placements" => placements(&IsoImage::open(a(1)?)?, a(2)?, u32::from_str_radix(a(3)?, 16)?),
+        "placements-all" => placements_all(&IsoImage::open(a(1)?)?, a(2)?),
         "sfx" => sfx(&IsoImage::open(a(1)?)?, &args[2..]),
         "coll-probe" => coll_probe(&IsoImage::open(a(1)?)?, a(2)?),
+        "coll-scan" => {
+            let f = |i: usize| -> Result<f32> { Ok(a(i)?.parse()?) };
+            coll_scan(&IsoImage::open(a(1)?)?, a(2)?, [f(3)?, f(4)?, f(5)?], args.get(6).and_then(|s| s.parse().ok()).unwrap_or(1.5))
+        }
+        "coll-obj" => coll_obj(&IsoImage::open(a(1)?)?, a(2)?, usize::from_str_radix(a(3)?, 10)?, usize::from_str_radix(a(4)?, 10)?),
         "coll-check" => coll_check(&IsoImage::open(a(1)?)?),
         "coll-floor" => coll_floor(&IsoImage::open(a(1)?)?, a(2)?),
         "drone-props" => drone_props(&IsoImage::open(a(1)?)?, a(2)?),
@@ -62,6 +79,19 @@ fn main() -> Result<()> {
         "scripts" => scripts(&IsoImage::open(a(1)?)?),
         "pose-check" => pose_check(&IsoImage::open(a(1)?)?, a(2)?, a(3)?),
         "weapons" => weapons(&IsoImage::open(a(1)?)?, args.get(2).map(String::as_str)),
+        "weapon-matrix" => {
+            let levels: Option<Vec<String>> = args.get(2).map(|l| l.split(',').map(|s| {
+                let s = s.trim();
+                if s.contains('.') { s.to_string() } else { format!("{s}.bin") }
+            }).collect());
+            let mut quiet = |s: &str| eprintln!("{s}");
+            let rows = nf_view::matrix::run(a(1)?, levels.as_deref(), &mut quiet)?;
+            print!("{}", nf_view::matrix::mark_table(&rows));
+            print!("\n{}", nf_view::matrix::aggregate_table(&rows));
+            let red = nf_view::matrix::red_cells(&rows);
+            if !red.is_empty() { print!("\nred cells (mark level weapon reason, the numbers behind them):\n{red}"); }
+            Ok(())
+        }
         "script-digest" => { print!("{}", disc::script_digest(&IsoImage::open(a(1)?)?)?); Ok(()) }
         "ai-path-digest" => { print!("{}", disc::ai_path_digest(&IsoImage::open(a(1)?)?)?); Ok(()) }
         "drone-digest" => { print!("{}", disc::drone_start_digest(&IsoImage::open(a(1)?)?)?); Ok(()) }
@@ -70,6 +100,8 @@ fn main() -> Result<()> {
         "gfx-boxes" => gfx_boxes(&IsoImage::open(a(1)?)?),
         "gfx-export" => gfx_export(&IsoImage::open(a(1)?)?, Path::new(a(2)?), args.get(3).map(String::as_str)),
         "bigf-extract" => bigf_extract(&IsoImage::open(a(1)?)?, a(2)?, Path::new(a(3)?)),
+        "crp-mesh" => crp_mesh(a(1)?, a(2)?, Path::new(a(3)?)),
+        "crp-mesh-digest" => crp_mesh_digest(a(1)?),
         "symtab" => symtab(Path::new(a(1)?)),
         "drivingsym" => {
             let iso = IsoImage::open(a(1)?)?;
@@ -80,6 +112,7 @@ fn main() -> Result<()> {
         "level-survey" => level_survey(&IsoImage::open(a(1)?)?),
         "level-mesh-audit" => level_mesh_audit(&IsoImage::open(a(1)?)?, a(2)?),
         "kind-census" => kind_census(&IsoImage::open(a(1)?)?),
+        "carmodels" => carmodels(a(1)?, args.get(2).map(std::path::PathBuf::from).as_deref()),
         "char-textures" => char_textures(&IsoImage::open(a(1)?)?, a(2)?),
         other => bail!("unknown command {other:?} (see the module doc)"),
     }
@@ -121,6 +154,110 @@ fn bigf_extract(iso: &IsoImage, archive: &str, out: &Path) -> Result<()> {
     }
     println!("{} entries -> {}", g.entries.len(), out.display());
     Ok(())
+}
+
+/// `crp-mesh <iso-or-DRIVING-dir> <viv> <out-dir>` — the driving track `.crp`'s mesh layer (task
+/// drive-track-mesh): decompresses the archive's `data\track\*.crp`, parses the CARP pool,
+/// relocates the embedded ELFd+ELFr module and writes per-article TSVs (`<track>-articles.tsv`:
+/// name/bbox/parts/sr refs; `<track>-module.tsv`: sections/symbols/relocations/collision census).
+/// Prints one summary row. The first argument is either a disc image (`<iso>`) or the extracted
+/// `DRIVING/` folder (the slim test image ships without it; the tests use the folder form).
+fn crp_mesh(source: &str, viv: &str, out: &Path) -> Result<()> {
+    let (entry_name, row) = crp_mesh_row(source, viv, Some(out))?;
+    println!("{row}");
+    println!("# wrote TSVs for {entry_name} -> {}", out.display());
+    Ok(())
+}
+
+/// `crp-mesh-digest <iso-or-DRIVING-dir>` — the canonical per-track digest rows (numbers only) for
+/// all 8 mission tracks: the golden form (golden/crp_mesh_golden.tsv).
+fn crp_mesh_digest(source: &str) -> Result<()> {
+    for viv in MISSION_VIVS {
+        println!("{}", crp_mesh_row(source, viv, None)?.1);
+    }
+    Ok(())
+}
+
+const MISSION_VIVS: [&str; 8] =
+    ["MIS01.VIV", "MIS11.VIV", "MIS13A.VIV", "MIS13B.VIV", "MIS13C.VIV", "MIS3.VIV", "MIS4.VIV", "RACE.VIV"];
+
+/// One archive's bytes: either from the disc image or straight from the DRIVING folder.
+fn driving_archive_bytes(source: &str, viv: &str) -> Result<Vec<u8>> {
+    let p = std::path::Path::new(source);
+    if p.is_dir() {
+        return Ok(std::fs::read(p.join(viv)).with_context(|| format!("reading {}", p.join(viv).display()))?);
+    }
+    let iso = IsoImage::open(p)?;
+    let path = format!("/DRIVING/{viv}");
+    let e = iso.find(&path).with_context(|| format!("no {path} on the disc"))?;
+    Ok(iso.read_file(e)?)
+}
+
+/// Loads one mission VIV's track `.crp`, computes the mesh summary; with `out` set, writes the
+/// per-article and module TSVs. Returns `(entry name, summary row)`.
+fn crp_mesh_row(source: &str, viv: &str, out: Option<&Path>) -> Result<(String, String)> {
+    use nf_formats::crp::Crp as CrpFile;
+    use nf_formats::crp_mesh::TrackModule;
+
+    let data = driving_archive_bytes(source, viv)?;
+    let g = nf_formats::bigf::Bigf::parse(&data, data.len() as u64)?;
+    let (idx, entry) = g.entries.iter().enumerate()
+        .find(|(_, x)| {
+            let n = x.name.to_ascii_lowercase();
+            n.starts_with("data\\track\\") && n.ends_with(".crp")
+        })
+        .with_context(|| format!("{viv}: no data\\track\\*.crp entry"))?;
+    let idx = idx;
+    let entry_name = entry.name.clone();
+    let blob = data[entry.offset as usize..(entry.offset + entry.size) as usize].to_vec();
+    let dec = if nf_formats::refpack::is_refpack(&blob) {
+        nf_formats::refpack::decompress(&blob)?
+    } else {
+        blob
+    };
+    let crp = CrpFile::parse(&dec)?;
+    let track = crp.track_name()?.unwrap_or("-").to_owned();
+    let articles = crp.track_articles()?;
+    let module = TrackModule::load(&crp)?;
+    let coll = crp.collision_census()?;
+    let model_symbols = module.symbols.iter().filter(|s| s.name.starts_with("__Model:::")).count();
+    let geoprims = module.geoprim_names().len();
+    let parts: usize = articles.iter().map(|a| a.parts.len()).sum();
+    let image_sha1: String = nf_formats::sha1::sha1(&module.image).iter().map(|b| format!("{b:02x}")).collect();
+    let row = format!(
+        "{viv}#{idx}\t{entry_name}\t{track}\t{}\t{parts}\t{model_symbols}\t{geoprims}\t{}\t{}\t{}\t{image_sha1}",
+        articles.len(), module.relocations, coll.ci_total_items, coll.cn_records,
+    );
+    if let Some(out) = out {
+        std::fs::create_dir_all(out)?;
+        let stem = track.replace(['/', '\\'], "_");
+        let mut art = String::from("name\tbbox_min\tbbox_max\tparts\n");
+        for a in &articles {
+            let fmt = |v: &[f32; 3]| format!("{:.4},{:.4},{:.4}", v[0], v[1], v[2]);
+            let refs = if a.parts.is_empty() {
+                "-".to_owned()
+            } else {
+                a.parts.iter()
+                    .map(|p| match p.sr_index {
+                        Some(sr) => format!("as#{}->sr#{}", p.as_instance, sr),
+                        None => format!("as#{}->-", p.as_instance),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|")
+            };
+            art.push_str(&format!("{}\t{}\t{}\t{}\n", a.name, fmt(&a.bbox_min), fmt(&a.bbox_max), refs));
+        }
+        std::fs::write(out.join(format!("{stem}-articles.tsv")), art)?;
+        let mut mods = String::from("section\ttype\toffset\tsize\tentsize\n");
+        for s in &module.sections {
+            mods.push_str(&format!("{}\t{:#x}\t{:#x}\t{}\t{:#x}\n", s.name, s.sh_type, s.offset, s.size, s.entsize));
+        }
+        mods.push_str(&format!("# symbols={}\n", module.symbols.len()));
+        mods.push_str(&format!("# relocations={} (R_MIPS_32)\n", module.relocations));
+        mods.push_str(&format!("# collision: grd={} ci={} ci_items={} cn={}\n", coll.grd_records, coll.ci_records, coll.ci_total_items, coll.cn_records));
+        std::fs::write(out.join(format!("{stem}-module.tsv")), mods)?;
+    }
+    Ok((entry_name, row))
 }
 
 fn files_extract(iso: &IsoImage, out: &Path) -> Result<()> {
@@ -443,7 +580,7 @@ fn ai_sim(iso: &IsoImage, level_name: &str, bond: [f32; 3], frames: u32) -> Resu
     let skeletons: HashMap<u8, nf_formats::character::Skeleton> = lb.entries.iter().filter(|e| e.kind == 6).filter_map(|e| nf_formats::character::parse_skeleton(lb.data(&data, e)).ok()).map(|k| (k.id as u8, k)).collect();
     let m = level.main_map().context("no main map")?;
     let nav = nf_game::nav::Network::build(level.maps[m].ai_network.as_ref().unwrap_or(&Default::default()), &world, level_id);
-    let covers = nf_game::cover::build(&level.maps[m].placements, &nav, &world);
+    let covers = nf_game::cover::build(&level, &nav, &world);
     let mut tuning = nf_formats::tuning::Tuning::from_action_elf(&elf)?;
     nf_game::tuning::read_tuning_vars(&mut tuning, level_id);
     let hitboxes = nf_formats::hitbox::CollisionBones::from_action_elf(&elf)?;
@@ -452,12 +589,12 @@ fn ai_sim(iso: &IsoImage, level_name: &str, bond: [f32; 3], frames: u32) -> Resu
     let models = nf_game::pickup::models(&level);
     // Headless trace: no surface/voice sound tables (their paths draw no RNG — WORKLOG 0069 —
     // so the shared stream is unaffected; the speech/footstep sounds simply do not play).
-    let d = Data { tables: &tables, props: &props, scripts: &scripts, weapons: &weapons, world: &world, level: level_id, sequences: &sequences, skins: &level.skins, skeletons: &skeletons, nav: &nav, covers: &covers, tuning: &tuning, hitboxes: &hitboxes, volumes: &volumes, sfx: Some(&sfx_table), models: &models, surfaces: None, voices: None, difficulty: 1 };
+    let d = Data { tables: &tables, props: &props, scripts: &scripts, weapons: &weapons, world: &world, level: level_id, sequences: &sequences, skins: &level.skins, skeletons: &skeletons, nav: &nav, covers: &covers, tuning: &tuning, hitboxes: &hitboxes, volumes: &volumes, sfx: Some(&sfx_table), models: &models, surfaces: None, voices: None, difficulty: 1, ai_points: &[] };
     let mut rng = Rng::new(std::env::var("NF_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(0x1234_5678));
     let mut lights = nf_game::light::LightList::default();
     let drones = nf_game::drone::level_drones(&d, &level, &mut rng, &mut lights);
     let mut sim = Drones::new(drones, rng);
-    sim.attach_level(&level);
+    sim.attach_level_id(&level, level_id);
     // NF_SWITCHES=22,a4: switch channels on from the start (hex).
     for c in std::env::var("NF_SWITCHES").unwrap_or_default().split(',').filter_map(|c| u8::from_str_radix(c.trim(), 16).ok()) { sim.set_channel(c); }
     // NF_AIM_YAW: Bond's facing (radians; the game's obj+0x54), else −x.
@@ -547,6 +684,26 @@ fn ai_sim(iso: &IsoImage, level_name: &str, bond: [f32; 3], frames: u32) -> Resu
 
 /// The main map's placements of one type (flags word, hex): translation, rotation, the raw words +0x24..+0x47, the
 /// parameters, and the referenced object's glist boxes.
+/// `placements-all <iso> <level>`: every placement of every map, kind = flags & 0xff, with params
+/// (the interactables census dump; the filter-free companion of `placements`).
+fn placements_all(iso: &IsoImage, level_name: &str) -> Result<()> {
+    let (entries, bin) = disc::files_bin_entries(iso)?;
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case(level_name)).context("no such level")?;
+    let data = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64)?;
+    let level = nf_formats::level::Level::parse(&data)?;
+    let main = level.main_map().context("no main map")?;
+    for m in 0..level.maps.len() {
+        if m != main && std::env::var_os("NF_ALL_MAPS").is_none() { continue; }
+        for (i, p) in level.maps[m].placements.iter().enumerate() {
+            let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { Some((m, p.index as usize)) };
+            let obj = target.and_then(|(om, oi)| level.maps[om].objects.get(oi));
+            println!("map {m} placement {i}: kind {:02x} flags {:08x} t {:?} r {:?} params {:?} object {:?} hash {:08x} idx {}",
+                p.flags & 0xff, p.flags, p.translation, p.rotation, p.params, obj.map(|o| &o.name), p.hashcode, p.index);
+        }
+    }
+    Ok(())
+}
+
 fn placements(iso: &IsoImage, level_name: &str, kind: u32) -> Result<()> {
     let (entries, bin) = disc::files_bin_entries(iso)?;
     let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case(level_name)).context("no such level")?;
@@ -679,6 +836,128 @@ fn coll_probe(iso: &IsoImage, level_name: &str) -> Result<()> {
                 shown += 1;
             }
         }
+    }
+    Ok(())
+}
+
+/// Every collision triangle (map block 0x2E) whose plane sits within `r` of the point and whose
+/// grown AABB holds it, with the owning object and its placement — the "which object owns this
+/// plane?" probe (rocket-stop-plane-08). Reads the same parse the world build reads
+/// (`Level::parse` + `MapObject::collision`, docs/formats/collision.md), so an object absent
+/// here is absent from `world.rs` too (unless its instance is skipped — the placement columns
+/// show that: type, create-cel, cel-pass flag, draw-skip flag).
+fn coll_scan(iso: &IsoImage, level_name: &str, p: [f32; 3], r: f32) -> Result<()> {
+    use nf_formats::level::Level;
+    let (entries, bin) = disc::files_bin_entries(iso)?;
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case(level_name)).context("no such level")?;
+    let data = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64)?;
+    let lvl = Level::parse(&data)?;
+    let (instances, missing) = lvl.instances(false);
+    eprintln!("instances(false): {} placed, {} unresolvable placements", instances.len(), missing);
+    let mut hits = 0;
+    for (ii, inst) in instances.iter().enumerate() {
+        let Some(c) = &lvl.maps[inst.map].objects[inst.object].collision else { continue };
+        let o = &lvl.maps[inst.map].objects[inst.object];
+        let pl = &inst.placement;
+        let m = &inst.matrix;
+        let tf = |v: [f32; 3]| -> [f32; 3] {
+            let w = m[3];
+            [m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2] + w[0],
+             m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2] + w[1],
+             m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2] + w[2]]
+        };
+        for (tri, mat) in c.triangles_with_material() {
+            let v = tri.map(tf);
+            // Plane distance (world-space winding normal) + grown AABB gate.
+            let e1 = [v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]];
+            let e2 = [v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]];
+            let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            if len < 1e-6 { continue; }
+            let d = ((n[0] * (p[0] - v[0][0]) + n[1] * (p[1] - v[0][1]) + n[2] * (p[2] - v[0][2])) / len).abs();
+            if d > r { continue; }
+            let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for vt in &v { for k in 0..3 { lo[k] = lo[k].min(vt[k]); hi[k] = hi[k].max(vt[k]); } }
+            if (0..3).any(|k| p[k] < lo[k] - r || p[k] > hi[k] + r) { continue; }
+            hits += 1;
+            println!("hit {}\tmap {}\tobj {}\t{}\thash {:#010x}\tglist {:#x}\tmat {:#04x}\tplane_d {:.3}\tv ({:.2} {:.2} {:.2}) ({:.2} {:.2} {:.2}) ({:.2} {:.2} {:.2})\tplacement type {:#04x} flags {:#010x} cel {} cel_pass_skip {} by_hash {}",
+                hits, inst.map, inst.object, o.name.trim(), o.hashcode, o.flags, mat, d,
+                v[0][0], v[0][1], v[0][2], v[1][0], v[1][1], v[1][2], v[2][0], v[2][1], v[2][2],
+                pl.flags & 0xff, pl.flags, pl.creates_cel(), o.skipped_by_cel_pass(), pl.by_hash());
+        }
+    }
+    // The raw pass: every map's every object's collision UNPLACED — the objects no placement
+    // reaches (LOD targets, script/Destroy_Smash targets, by-hash leftovers) still carry their
+    // disc-space triangles; if the missing plane lives here, the world's instance walk can't see it.
+    for (mi, map) in lvl.maps.iter().enumerate() {
+        for (oi, o) in map.objects.iter().enumerate() {
+            let Some(c) = &o.collision else { continue };
+            for (tri, mat) in c.triangles_with_material() {
+                let v = tri;
+                let e1 = [v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]];
+                let e2 = [v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]];
+                let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+                let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                if len < 1e-6 { continue; }
+                let d = ((n[0] * (p[0] - v[0][0]) + n[1] * (p[1] - v[0][1]) + n[2] * (p[2] - v[0][2])) / len).abs();
+                if d > r { continue; }
+                let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                for vt in &v { for k in 0..3 { lo[k] = lo[k].min(vt[k]); hi[k] = hi[k].max(vt[k]); } }
+                if (0..3).any(|k| p[k] < lo[k] - r || p[k] > hi[k] + r) { continue; }
+                hits += 1;
+                println!("raw {}\tmap {}\tobj {}\t{}\thash {:#010x}\tglist {:#x}\tmat {:#04x}\tplane_d {:.3}\tv ({:.2} {:.2} {:.2}) ({:.2} {:.2} {:.2}) ({:.2} {:.2} {:.2})",
+                    hits, mi, oi, o.name.trim(), o.hashcode, o.flags, mat, d,
+                    v[0][0], v[0][1], v[0][2], v[1][0], v[1][1], v[1][2], v[2][0], v[2][1], v[2][2]);
+            }
+        }
+    }
+    eprintln!("{} triangles within {r} of ({:.2} {:.2} {:.2}) (placed + raw)", hits, p[0], p[1], p[2]);
+    // The draw pass: which object's RENDERED vertices sit near the point (the pane may draw where
+    // its collision is missing — the owner question needs both columns).
+    let mut gfx: std::collections::BTreeMap<(usize, usize), (usize, [f32; 3])> = Default::default();
+    for inst in &instances {
+        let o = &lvl.maps[inst.map].objects[inst.object];
+        let m = &inst.matrix;
+        let tf = |v: [f32; 3]| -> [f32; 3] {
+            let w = m[3];
+            [m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2] + w[0],
+             m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2] + w[1],
+             m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2] + w[2]]
+        };
+        for leaf in &o.gfx.leaves {
+            for b in &leaf.batches {
+                for vt in &b.verts {
+                    let v = tf(vt.pos);
+                    if (0..3).all(|k| (v[k] - p[k]).abs() <= r) {
+                        let e = gfx.entry((inst.map, inst.object)).or_insert((0, v));
+                        e.0 += 1;
+                    }
+                }
+            }
+        }
+    }
+    for ((mi, oi), (n, v)) in gfx {
+        let o = &lvl.maps[mi].objects[oi];
+        println!("gfx\tmap {mi}\tobj {oi}\t{}\thash {:#010x}\tglist {:#x}\tverts {n}\tnear ({:.2} {:.2} {:.2})", o.name.trim(), o.hashcode, o.flags, v[0], v[1], v[2]);
+    }
+    Ok(())
+}
+
+/// One object's whole collision block (map 0x2E) raw: every triangle with its surface byte — the
+/// per-object owner questions ("what does DOOR_Shutter_2's collision cover?").
+fn coll_obj(iso: &IsoImage, level_name: &str, map_idx: usize, obj_idx: usize) -> Result<()> {
+    use nf_formats::level::Level;
+    let (entries, bin) = disc::files_bin_entries(iso)?;
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case(level_name)).context("no such level")?;
+    let data = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64)?;
+    let lvl = Level::parse(&data)?;
+    let o = &lvl.maps[map_idx].objects[obj_idx];
+    println!("object {} map {map_idx} idx {obj_idx} hash {:#010x} glist {:#x}", o.name.trim(), o.hashcode, o.flags);
+    let Some(c) = &o.collision else { println!("no collision block"); return Ok(()) };
+    println!("collision: version {} boxes {} tris {}", c.version, c.boxes.len(), c.tris.len());
+    for (ti, (tri, mat)) in c.triangles_with_material().into_iter().enumerate() {
+        println!("tri {ti}\tmat {mat:#04x}\tv ({:.3} {:.3} {:.3}) ({:.3} {:.3} {:.3}) ({:.3} {:.3} {:.3})",
+            tri[0][0], tri[0][1], tri[0][2], tri[1][0], tri[1][1], tri[1][2], tri[2][0], tri[2][1], tri[2][2]);
     }
     Ok(())
 }
@@ -1085,7 +1364,7 @@ fn covers(iso: &IsoImage, level_name: &str) -> Result<()> {
     let m = level.main_map().context("no main map")?;
     let world = nf_game::world::CollisionWorld::build(&level, &level.instances(true).0);
     let nav = nf_game::nav::Network::build(level.maps[m].ai_network.as_ref().unwrap_or(&Default::default()), &world, u32::from_str_radix(&level_name[..8], 16)?);
-    for (i, c) in nf_game::cover::build(&level.maps[m].placements, &nav, &world).iter().enumerate() {
+    for (i, c) in nf_game::cover::build(&level, &nav, &world).iter().enumerate() {
         println!("cover {i}: kind {} pos ({:.3}, {:.3}, {:.3}) yaw {:.4} flags {:#x} angle {:.3} depth {:.1} offset {:.1} on {:#x} off {:#x} path {:?} reachable {}/{}",
             c.kind, c.pos[0], c.pos[1], c.pos[2], c.yaw, c.flags, c.angle, c.depth, c.offset, c.on, c.off, c.path, c.dist.iter().filter(|&&x| x != 0xff).count(), c.dist.len());
     }
@@ -1431,5 +1710,92 @@ fn char_textures(iso: &IsoImage, level_name: &str) -> Result<()> {
         }
     }
     if dupes == 0 { println!("\t(no duplicate main-mesh hashcodes)"); }
+    Ok(())
+}
+
+/// `nf-extract carmodels <file.crp | file.viv> [out-dir]` — decodes the driving missions' car
+/// models (docs/formats/car-model.md). Reads a car `.crp` directly, or a `DRIVING/*.VIV`
+/// archive and every `data\car\model\*.crp` in it; RefPack-decompresses when flagged
+/// (`10fb`, `nf_formats::refpack`). Prints a TSV census per car and, with an out-dir, writes
+/// the per-buffer bytes + an OBJ (vertices only — the triangle connectivity is the remaining
+/// unknown, see the doc). Nothing it writes is committed.
+fn carmodels(path: &str, out: Option<&std::path::Path>) -> anyhow::Result<()> {
+    let raw = std::fs::read(path)?;
+    let mut cars: Vec<(String, Vec<u8>)> = Vec::new();
+    if raw.starts_with(b"BIGF") {
+        let g = bigf::Bigf::parse(&raw, raw.len() as u64)?;
+        for e in &g.entries {
+            if !e.name.contains("car\\model") || !e.name.ends_with(".crp") { continue; }
+            let mut bytes = raw[e.offset as usize..(e.offset + e.size) as usize].to_vec();
+            if refpack::is_refpack(&bytes) { bytes = refpack::decompress(&bytes)?; }
+            cars.push((e.name.rsplit('\\').next().unwrap_or(&e.name).to_string(), bytes));
+        }
+        if cars.is_empty() { bail!("no data\\car\\model\\*.crp entries in {path}"); }
+    } else {
+        cars.push((std::path::Path::new(path).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), raw));
+    }
+    if let Some(out) = out { std::fs::create_dir_all(out)?; }
+    println!("car\tarticle\tparts\tsheet\tmodels\tvariant.lod\tvertices\tgroups\tbuffer_sha1");
+    for (name, bytes) in &cars {
+        let m = carmodel::CarModel::parse(bytes)
+            .with_context(|| format!("{name}: not a car .crp"))?;
+        let article = m.name()?.unwrap_or("-").to_string();
+        let sk = m.skel()?;
+        let parts = sk.as_ref().map(|s| s.parts.join(",")).unwrap_or_default();
+        let sheet = m.sheet_name()?.unwrap_or("-").to_string();
+        let module = m.module_bytes()?;
+        let cm = carmodel::CarModule::parse(module)
+            .with_context(|| format!("{name}: embedded module"))?;
+        for (vi, li, v) in cm.vertices_per_model() {
+            let groups: usize = cm.models.iter().find(|x| x.variant == vi && x.lod == li)
+                .map(|x| x.groups.iter().map(|g| g.buffers.len()).sum()).unwrap_or(0);
+            println!("{name}\t{article}\t{parts}\t{sheet}\t{}\t{vi}.{li}\t{v}\t{groups}\t-",
+                cm.models.len());
+        }
+        // per-buffer rows
+        let modl = cm.models.len();
+        for b in &cm.buffers {
+            println!("{name}\t{article}\t{parts}\t{sheet}\t{modl}\t-\t{}\t-\t{}", b.census.vertices(), b.sha1);
+        }
+        if let Some(out) = out {
+            let stem = name.trim_end_matches(".crp");
+            let od = out.join(stem);
+            std::fs::create_dir_all(&od)?;
+            for b in &cm.buffers {
+                std::fs::write(od.join(format!("buf_{:05x}.bin", b.offset)), &b.bytes)?;
+            }
+            write_obj(&od.join("model.obj"), &cm)?;
+        }
+    }
+    Ok(())
+}
+
+/// OBJ with the decoded V4_32 (x,y,z,1.0) position quads of every draw buffer. Faces are
+/// omitted: the per-triangle index list is the remaining unknown (docs/formats/car-model.md).
+fn write_obj(path: &std::path::Path, cm: &carmodel::CarModule) -> anyhow::Result<()> {
+    use std::fmt::Write as _;
+    let mut s = String::from("# driving car model: vertices only (see docs/formats/car-model.md)\n");
+    for b in &cm.buffers {
+        writeln!(&mut s, "o buf_{:05x}", b.offset)?;
+        let mut i = 0x18usize;
+        let list = &b.bytes[0x18..];
+        let packets = match nf_formats::vif::parse_vif(list) { Ok(p) => p, Err(_) => continue };
+        for p in packets {
+            if !p.is_unpack() || p.vn() != 3 || p.vl() != 0 { continue; }
+            let d = p.data;
+            for q in 0..(d.len() / 16) {
+                let x = f32::from_le_bytes(d[q*16..q*16+4].try_into()?);
+                let y = f32::from_le_bytes(d[q*16+4..q*16+8].try_into()?);
+                let z = f32::from_le_bytes(d[q*16+8..q*16+12].try_into()?);
+                let w = f32::from_le_bytes(d[q*16+12..q*16+16].try_into()?);
+                if w == 1.0 && x.abs() < 1e5 && y.abs() < 1e5 && z.abs() < 1e5 {
+                    let _ = writeln!(&mut s, "v {x:.6} {y:.6} {z:.6}");
+                }
+            }
+            i = 0;
+        }
+        let _ = i;
+    }
+    std::fs::write(path, s)?;
     Ok(())
 }

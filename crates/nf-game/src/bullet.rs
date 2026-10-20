@@ -52,9 +52,15 @@ fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
 /// the offset's components are added to x, z, y in that order.
 pub fn spread(dir: V3, spread: f32, flags68: u32, rng: &mut crate::drone::Rng) -> V3 {
     let s = if flags68 & 0x40_0000 != 0 { 0.0 } else { spread };
-    let r = (rng.frand(2.0 * s) - s) * 0.0014;
+    let r = nf_formats::ps2float::mul(rng.frand(2.0 * s) - s, 0.0014);
     let (th, ph) = (rng.frand(crate::trig::TAU), rng.frand(crate::trig::PI));
-    let off = [r * ph.sin() * th.cos(), r * ph.sin() * th.sin(), r * ph.cos()];
+    // G-046 ps2sinf-remaining: the game's cone is Vec_Spherical_2_Cartesian 0x1e3948 [M]: PS2Sinf2
+    // (0x11f968) lane pairs — the port's old form had θ/φ's roles swapped and sin(ph)·sin(th) in z.
+    // out = ((r·sinθ)·cosφ, r·sinφ, (r·cosθ)·cosφ), every product an EE mul.s [M disasm 0x1e39a4-0x1e39d4];
+    // Bullet_init 0x12c5a0:171-180 then adds them x, z, y (add.s) and normalises twice.
+    let (sth, cth) = (crate::trig::sinf(th), crate::trig::cosf(th));
+    let (sph, cph) = (crate::trig::sinf(ph), crate::trig::cosf(ph));
+    let off = [nf_formats::ps2float::mul(nf_formats::ps2float::mul(r, sth), cph), nf_formats::ps2float::mul(r, sph), nf_formats::ps2float::mul(nf_formats::ps2float::mul(r, cth), cph)];
     let d = norm(dir);
     norm([d[0] + off[0], d[1] + off[2], d[2] + off[1]])
 }
@@ -90,6 +96,12 @@ impl Bullet {
         if self.travelled > self.range { step -= self.travelled - self.range; }
         let l = step.max(1.0);
         let end = [self.pos[0] + self.dir[0] * l, self.pos[1] + self.dir[1] * l, self.pos[2] + self.dir[2] * l];
+        // fix-foliage-bullets: the flight trace reports pass-flagged hits like any other (the
+        // shell of a 0x41-flagged tree node reaches the handler); the caller's HITDATA walk then
+        // carries the round past them (`Collide_Update` 0x1ea398:216-229 keeps pass-flagged hits
+        // in the walk, `Bullet_CollisionHandler` 0x12ce80 sets state 1 past them). The one trace
+        // the game runs with the bit-0x8 DROP is the homing LOS (`Bullet_homing` 0x12f358:92,
+        // flags 8) — the port's `segment_bullet` there.
         let tw = world.segment(self.pos, end);
         let tp = segment_cylinder(self.pos, end, player);
         let at = |t: f32| [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
@@ -134,29 +146,61 @@ pub dir_bits: u8,
 /// Bullet_DoTrails 0x12d890:349] — set per blast by the dist (5→90 u) × facing × LOS falloff [M
 /// 0x12e014-0x12e0b8], decayed 1/60·10·f per tick (the BL amount [*suggested*: the game's exact fade
 /// is the view's `Camera_SetFade`, not modelled]). fix-explosions.
-pub flashbang: f32 }
+pub flashbang: f32,
+/// fix-grenade-types: `BL+0x91C` — the flash's TOTAL time in ticks (`FRAME_RATE·f·10` = 600·f at the
+/// 60 Hz FRAME_RATE [D docs/systems/input.md:126]), fixed at the blast. `Player_Update`'s fade gate
+/// compares the remaining time's half against it [M 0x193600:340-352].
+pub flash_total: f32,
+/// fix-grenade-types: the flash's peak alpha as f/255 of `BL+0x963` (the byte `Player_SetFlashBang`
+/// stores [M 0x196040]). The renderer paints the whiteout at this alpha until the half point, then
+/// fades it with the remaining time [M 0x193600:328-352; GlobalBlur rides the same byte].
+pub flash_alpha: f32,
+/// `BL+0x910`: the melee hit-push — `Player_DealWithObjHit` 0x194458:239-253 writes ±0.1 per
+/// melee hit (weapon 0x65 → −0.1, 0x66/99 → +0.1, gated on the record's u16 `+0x10 & 1`),
+/// `Player_Update` decays it ×0.9/tick [M disasm 0x1937a4-0x1937d8] and adds it to the move vec's
+/// Y before `obj+0x50 += move` [M disasm 0x193ccc-0x193cf0]. fix-bond-damage.
+pub hit_push: f32 }
 
-impl Default for PlayerHealth { fn default() -> Self { PlayerHealth { health: 100.0, armour: 0.0, flash: 0.0, dir_bits: 0, flashbang: 0.0 } } }
+impl Default for PlayerHealth {
+    fn default() -> Self {
+        PlayerHealth {
+            health: 100.0,
+            armour: 0.0,
+            flash: 0.0,
+            dir_bits: 0,
+            flashbang: 0.0,
+            hit_push: 0.0,
+            flash_total: 0.0,
+            flash_alpha: 0.0,
+        }
+    }
+}
 
 impl PlayerHealth {
     /// `Player_HandlePain` (single player, damage type 0): × the level's damage factor for the difficulty
     /// (`Plr_DMod_*`, `ReadTuningVars`; 4 → ×2), armour absorbs first, health floors at 0 (below 1 → 0);
     /// flash += min(d · 21.333, 128), capped at 255. [L] 07000005 at difficulty 1: SG5 hits cost 1.65 = 2.75 × 0.6.
-    pub fn pain(&mut self, damage: f32, difficulty: u32, level: u32) {
-        self.apply(damage, difficulty, level, 1.0);
+    /// Returns true when the game's 1-in-4 pain-grunt roll hits (the caller plays 0x88).
+    pub fn pain(&mut self, rng: &mut crate::drone::Rng, damage: f32, difficulty: u32, level: u32) -> bool {
+        self.apply(rng, damage, difficulty, level, 1.0)
     }
 
     /// The shared `Player_HandlePain` body. `armour_frac` is the pain type's armour fraction
     /// [M 0x1902c8:84-104]: the type switch sets 1.0 for the default/bullet arm and 0.0 for types
     /// 1..7 (the MP kill-feed writes in the 5/6/7 arms fall through to the same 0.0).
-    fn apply(&mut self, damage: f32, difficulty: u32, level: u32, armour_frac: f32) {
-        if self.health <= 0.0 || damage <= 0.0 { return; }
+    /// Returns true when the pain grunt rolls. The grunt draw sits exactly where the game puts it:
+    /// after the armour/health math, before the `+0x967`/`+0x968` writes [M 0x1902c8:110-119]. The
+    /// game skips the roll only for pain type 7 with `CheatInfo != 0` (never in SP) — the port is
+    /// single-player, so every non-early-outed pain draws.
+    fn apply(&mut self, rng: &mut crate::drone::Rng, damage: f32, difficulty: u32, level: u32, armour_frac: f32) -> bool {
+        if self.health <= 0.0 || damage <= 0.0 { return false; }
         let d = damage * damage_factor(level, difficulty);
         let absorbed = (d * armour_frac).min(self.armour);
         self.armour -= absorbed;
         self.health = (self.health - (d - absorbed)).max(0.0);
-        if self.health < 1.0 { self.health = 0.0; }
+        let grunt = rng.rand(4) == 0; // Rand_Rand(4) [M 0x1902c8:111]
         self.flash = (self.flash + (d * 21.333).min(128.0)).min(255.0);
+        grunt
     }
 
     /// `Player_HandlePain` 0x1902c8:124-130 also writes `BL+0x967`: the generic pain paths set 0xC (both
@@ -166,10 +210,10 @@ impl PlayerHealth {
     /// The armour gate follows the game's pain-type switch [M 0x1902c8:84-104]: ONLY type 0 (the
     /// default/bullet arm) lets armour absorb; types 1..7 set armourFraction 0.0 — falls (6,
     /// `Player_CollisionHandler` 0x1949a8:120), drowning (7, `Player_MonitorAir` 0x191a70:142) and
-    /// the hurt-volume types drain health alone.
-    pub fn pain_generic(&mut self, damage: f32, difficulty: u32, level: u32, pain_type: u32) {
+    /// the hurt-volume types drain health alone. Returns the grunt roll (see `apply`).
+    pub fn pain_generic(&mut self, rng: &mut crate::drone::Rng, damage: f32, difficulty: u32, level: u32, pain_type: u32) -> bool {
         self.dir_bits = if pain_type == 6 { 2 } else { 0xC };
-        self.apply(damage, difficulty, level, if (1..=7).contains(&pain_type) { 0.0 } else { 1.0 });
+        self.apply(rng, damage, difficulty, level, if (1..=7).contains(&pain_type) { 0.0 } else { 1.0 })
     }
 
     /// `Player_DealWithObjHit` 0x194458:201-226: the attacker position transformed into the viewer's frame,
@@ -177,37 +221,55 @@ impl PlayerHealth {
     /// The game reads the matrix at `glb_viewer+0x160`; the port rebuilds the two axes from Bond's yaw
     /// (right = (cos yaw, 0, −sin yaw), forward = (sin yaw, 0, cos yaw)) and takes the view's y as the
     /// attacker's height over the eye — the same x rule exactly; the y rule is [S] (the world-up
-    /// projection of a pitch-rotated frame).
-    pub fn pain_from(&mut self, damage: f32, difficulty: u32, level: u32, attacker: [f32; 3], eye: [f32; 3], yaw: f32) {
+    /// projection of a pitch-rotated frame). Returns the grunt roll (see `apply`).
+    pub fn pain_from(&mut self, rng: &mut crate::drone::Rng, damage: f32, difficulty: u32, level: u32, attacker: [f32; 3], eye: [f32; 3], yaw: f32) -> bool {
+        self.dir_bits = Self::hit_dir_bits(attacker, eye, yaw);
+        self.pain(rng, damage, difficulty, level)
+    }
+
+    /// The `BL+0x967` direction bits of `Player_DealWithObjHit` 0x194458:201-226 alone (no pain,
+    /// no RNG): `pain_from`'s rule, also used by the MP remote-hit feedback (mp-remote-fx).
+    pub fn hit_dir_bits(attacker: [f32; 3], eye: [f32; 3], yaw: f32) -> u8 {
         let d = [attacker[0] - eye[0], attacker[1] - eye[1], attacker[2] - eye[2]];
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        self.dir_bits = 0;
-        if len > 1e-4 {
-            let (x, y) = (d[0] / len, d[1] / len);
-            // The port's object frame has +X = screen-left (see `Sim::crosshair`), so the view's x axis is
-            // (−cos yaw, 0, sin yaw); x < 0 = the attacker on the screen's left → bit 4 (sprite 22).
-            let (rx, rz) = (-yaw.cos(), yaw.sin());
-            let vx = (d[0] / len) * rx + (d[2] / len) * rz;
-            let vy = y;
-            let (ax, ay) = (vx.abs(), vy.abs());
-            if ax >= 0.5 || ay >= 0.5 {
-                if ay < ax { self.dir_bits = if vx < 0.0 { 0x4 } else { 0x8 }; }
-                else { self.dir_bits = if vy < 0.0 { 0x1 } else { 0x2 }; }
-            } else {
-                // Neither axis reaches 0.5 (a shot from straight ahead or behind, e.g. the 07000005 sniper):
-                // both sides glow [M 0x194458:202 `bVar8 = 0xc`]. The port left 0 here: no glow at all.
-                self.dir_bits = 0xC;
-            }
+        if len <= 1e-4 { return 0; }
+        let y = d[1] / len;
+        // The port's object frame has +X = screen-left (see `Sim::crosshair`), so the view's x axis is
+        // (−cos yaw, 0, sin yaw); x < 0 = the attacker on the screen's left → bit 4 (sprite 22).
+        let (rx, rz) = (-yaw.cos(), yaw.sin());
+        let vx = (d[0] / len) * rx + (d[2] / len) * rz;
+        let vy = y;
+        let (ax, ay) = (vx.abs(), vy.abs());
+        if ax >= 0.5 || ay >= 0.5 {
+            if ay < ax { if vx < 0.0 { 0x4 } else { 0x8 } } else if vy < 0.0 { 0x1 } else { 0x2 }
+        } else {
+            // Neither axis reaches 0.5 (a shot from straight ahead or behind, e.g. the 07000005 sniper):
+            // both sides glow [M 0x194458:202 `bVar8 = 0xc`].
+            0xC
         }
-        self.pain(damage, difficulty, level);
     }
 }
 
-/// `Plr_DMod_Easy/Normal/Hard` per level (`ReadTuningVars`): 0x7000001–04 0.5/0.7/1.2, 0x7000005–08 0.6/0.7/1.0,
-/// otherwise the ELF defaults 0.75/1.0/1.25; difficulty 4 doubles.
+/// `Plr_DMod_Easy/Normal/Hard` per level (`ReadTuningVars` 0x1d3a80 — the per-level jump-table groups
+/// 0x1d3c44-0x1d4878; the ELF statics 0x30cc50/54/58 = 0.75/1.0/1.25 serve the levels no group covers):
+/// 0x7000001–04 0.5/0.7/1.2 [0x1d3e00], 05–08 0.6/0.7/1.0 [0x1d3c44], 09–0B 0.6/0.8/1.0 [0x1d3f5c],
+/// 0C–0D 0.4/0.7/1.2 [0x1d40f4], 11–13+4A 0.5/0.6/1.0 [0x1d42bc], 14–16 0.4/0.6/1.0 [0x1d4424],
+/// 1B 0.6/0.7/1.0 [0x1d458c]; 21–29+4B+4C and every unlisted level keep the statics (their groups
+/// write no Plr_DMod — 0x1d46ec/0x1d4878). Difficulty 4 doubles [M Player_HandlePain 0x190470].
 pub fn damage_factor(level: u32, difficulty: u32) -> f32 {
-    let (e, n, h) = match level & 0xff { 0x01..=0x04 => (0.5, 0.7, 1.2), 0x05..=0x08 => (0.6, 0.7, 1.0), _ => (0.75, 1.0, 1.25) };
-    match difficulty { 1 => e, 2 => n, 3 => h, 4 => 2.0, _ => 1.0 }
+    let (e, n, h) = match level & 0xff {
+        0x01..=0x04 => (0.5, 0.7, 1.2),
+        0x05..=0x08 => (0.6, 0.7, 1.0),
+        0x09..=0x0b => (0.6, 0.8, 1.0),
+        0x0c | 0x0d => (0.4, 0.7, 1.2),
+        0x11..=0x13 | 0x4a => (0.5, 0.6, 1.0),
+        0x14..=0x16 => (0.4, 0.6, 1.0),
+        0x1b => (0.6, 0.7, 1.0),
+        _ => (0.75, 1.0, 1.25),
+    };
+    // Difficulty 0/other picks Normal, not a no-op [M Player_HandlePain 0x190404-0x190470:
+    // 1 → Easy, 2 and every unmatched value → Normal, 3 → Hard, 4 → the ×2 add.s f20,f20,f20].
+    match difficulty { 1 => e, 3 => h, 4 => 2.0, _ => n }
 }
 
 #[cfg(test)]
@@ -220,19 +282,20 @@ mod tests {
     #[test]
     fn armour_bypass_by_pain_type() {
         // 07000005 at difficulty 1: damage_factor 0.6, so 30.0 -> 18.0 effective.
-        let mut h = PlayerHealth { health: 100.0, armour: 50.0, flash: 0.0, dir_bits: 0, flashbang: 0.0 };
-        h.pain_generic(30.0, 1, 0x0700_0005, 6); // fall damage
+        let mut h = PlayerHealth { health: 100.0, armour: 50.0, flash: 0.0, dir_bits: 0, flashbang: 0.0, hit_push: 0.0, flash_total: 0.0, flash_alpha: 0.0 };
+        let mut rng = crate::drone::Rng::new(0);
+        h.pain_generic(&mut rng, 30.0, 1, 0x0700_0005, 6); // fall damage
         assert_eq!(h.armour, 50.0, "a fall must not drain armour [M 0x1902c8:84-104]");
         assert!((h.health - 82.0).abs() < 1e-4, "the fall still costs the full 18 health");
         assert_eq!(h.dir_bits, 2, "pain type 6 sets the vertical bits");
         h.health = 100.0; h.flash = 0.0;
-        h.pain_generic(30.0, 1, 0x0700_0005, 7); // drowning
+        h.pain_generic(&mut rng, 30.0, 1, 0x0700_0005, 7); // drowning
         assert_eq!(h.armour, 50.0, "drowning must not drain armour either");
         assert_eq!(h.dir_bits, 0xC);
         // Sister: type 0 (bullets, `pain`) DOES absorb — armour first, then health. Armour 10 <
         // the effective 18: it empties and the remainder 8 reaches health.
         h.health = 100.0; h.flash = 0.0; h.dir_bits = 0; h.armour = 10.0;
-        h.pain(30.0, 1, 0x0700_0005);
+        h.pain(&mut rng, 30.0, 1, 0x0700_0005);
         assert!((h.armour - 0.0).abs() < 1e-4, "bullets drain the armour first");
         assert!((h.health - 92.0).abs() < 1e-4, "the remainder 18 - 10 reaches health");
     }
@@ -244,7 +307,8 @@ mod tests {
         assert!(segment_cylinder([-5.0, 2.5, 0.0], [5.0, 2.5, 0.0], &v).is_none(), "over his head");
         assert!(segment_cylinder([-5.0, 1.0, 1.0], [5.0, 1.0, 1.0], &v).is_none(), "beside him");
         let mut h = PlayerHealth::default();
-        h.pain(2.75, 1, 0x0700_0005);
+        let mut rng = crate::drone::Rng::new(0);
+        h.pain(&mut rng, 2.75, 1, 0x0700_0005);
         assert!((h.health - (100.0 - 1.65)).abs() < 1e-4, "live: 1.65 per SG5 hit");
         assert!((h.flash - 1.65 * 21.333).abs() < 1e-3);
     }

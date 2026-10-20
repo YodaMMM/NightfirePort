@@ -65,10 +65,19 @@ impl TickInput {
             weapon_cycle: self.weapon_cycle, gadget_cycle: self.gadget_cycle,
             switch_to: if self.switch_to < 0 { None } else { Some(self.switch_to as u8) },
             zoom: self.zoom,
+            // Replays record the mouse's right button as `zoom`; it also drives the aim bit (`scope`).
+            scope: self.zoom,
             fire: self.trigger,
             // The mode press is not part of the replay format (replays predate it); no recorded
             // replay presses it (fix-weapon-modes).
             mode_switch: false,
+            // Zero-g's lift/stabilise lanes are local view state (the zoom_cycle precedent); the
+            // replay format is unchanged.
+            lift: 0.0,
+            stabilise: false,
+            // microcam-wheel-zoom: the wheel's zoom steps are not part of the replay format either
+            // (local view input; a replayed run holds the recorded zoom as it was recorded).
+            zoom_cycle: 0,
         };
         (input, self.trigger, self.reload, self.use_key)
     }
@@ -322,8 +331,10 @@ impl Writer {
     }
 }
 
-/// nf-view's git revision at build time (or "unknown" if git is unavailable). Captured once when a recording starts.
-fn git_hash() -> String {
+/// nf-view's git revision: baked in by the release build (`NF_GIT_HASH`, tools/release/make-release.ps1 — players have
+/// no git), else asked of git at run time (dev builds run from the checkout), else "unknown".
+pub fn git_hash() -> String {
+    if let Some(h) = option_env!("NF_GIT_HASH").filter(|h| !h.is_empty()) { return h.to_string(); }
     match std::process::Command::new("git").args(["rev-parse", "HEAD"]).output() {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
         _ => "unknown".to_string(),

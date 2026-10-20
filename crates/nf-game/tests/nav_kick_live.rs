@@ -48,7 +48,7 @@ impl LevelX {
         let skeletons = lb.entries.iter().filter(|e| e.kind == 6).filter_map(|e| nf_formats::character::parse_skeleton(lb.data(&data, e)).ok()).map(|k| (k.id as u8, k)).collect();
         let m = level.main_map().unwrap();
         let nav = nf_game::nav::Network::build(level.maps[m].ai_network.as_ref().unwrap(), &world, code);
-        let covers = nf_game::cover::build(&level.maps[m].placements, &nav, &world);
+        let covers = nf_game::cover::build(&level, &nav, &world);
         let volumes = nf_game::aivolume::build(&level, code);
         Some(LevelX {
             tables: drone::DroneAnimData::from_action_elf(&elf).unwrap(),
@@ -70,7 +70,7 @@ impl LevelX {
         Data {
             tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: code,
             sequences: &self.sequences, skins: &self.level.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes,
-            sfx: Some(&self.sfx), models: &self.models, surfaces: Some(&self.surfaces), voices: Some(&self.voices), difficulty: 1,
+            sfx: Some(&self.sfx), models: &self.models, surfaces: Some(&self.surfaces), voices: Some(&self.voices), difficulty: 1, ai_points: &[],
         }
     }
 
@@ -108,7 +108,7 @@ fn kick_node_pair_enters_kick_object_and_unpauses_the_scripted_prop() {
     let d = l.data(L12);
     let (drones, rng) = l.drones(L12);
     let mut sim = Drones::new(drones, rng);
-    sim.attach_level(&l.level);
+    sim.attach_level_id(&l.level, L12);
     let sp = sim.scripts.players.iter().position(|p| p.scripts[0] == 0x0600_05bb || p.scripts[1] == 0x0600_05bb).expect("the 0x60005bb ScriptPlayer (#662) must exist");
     // The guard nearest the pair drives the route through it.
     let (gi, start) = sim.list.iter().enumerate()
@@ -190,7 +190,7 @@ fn kick_pair_level_0c_data() {
     // + the attached SP set] — the game's node+0x28 binding is null, `NDrone2_KickObject` no-ops.
     let (drones2, rng2) = l.drones(L0C);
     let mut full = Drones::new(drones2, rng2);
-    full.attach_level(&l.level);
+    full.attach_level_id(&l.level, L0C);
     assert!(!full.scripts.players.iter().any(|sp| sp.scripts[0] == 0x0600_05bb || sp.scripts[1] == 0x0600_05bb),
         "0700000c has no 0x60005bb ScriptPlayer — the game's binding is null");
     // A start guard DOES pin the DoorOpen path — but its in-play route to the pair is DIRECT
@@ -245,7 +245,7 @@ fn dbg_0c_sp() {
     let Some(l) = LevelX::load(L0C) else { return };
     let (drones, rng) = l.drones(L0C);
     let mut sim = Drones::new(drones, rng);
-    sim.attach_level(&l.level);
+    sim.attach_level_id(&l.level, L0C);
     for (i, sp) in sim.scripts.players.iter().enumerate() {
         if sp.scripts[0] == 0x0600_05bb || sp.scripts[1] == 0x0600_05bb {
             let t = sp.matrix;
@@ -262,7 +262,7 @@ const L05: u32 = 0x0700_0005;
 /// 07000005 guards on one line, Bond beyond them (both see him → Attack → the rear guard's combat
 /// move runs the anim choice with the front guard as the obstacle).
 #[test]
-#[ignore = "the +0x31C flag computation is suspended (fix-nav-remainder session end): the per-tick scan regressed 07000001's death-drop tests (a_death_draws_its_drop — green on master 0cda458 and at the kick commit, red with the scan). The 0x5E gates (0x13cfb0:35 in both choosers) stay in place and were verified with the scan live: the staged mover parked in 0x5E with the patroller dead ahead (run logged nb 0xa/0x12, entered 0x5E). Root-causing the scan's regression is the next session's first item"]
+#[ignore = "the +0x31C scan is root-caused and fixed (fix-nav-remainder2: the game's +0x314 obstacle is drone-only — EvaluateObstacle 0x14e6f0:58-65 writes it only for param_2 != 0, the player call passes 0 at 0x14eba8:98-99, the 0xb fallback 0x14eba8:180-214 loops drones; the old scan's player term was the death-drop regression) but HELD INERT behind NB_SCAN_LIVE=false in drone.rs: with the scan live every named regression is green (a_death_draws_its_drop, dropped_guns_dim, this drive test, ai_traces_live 4/4) EXCEPT walkreal_07000001_live — the west mezzanine guard outlives the test's fixed 12-round budget and the contact parks in LEAD_HIDE. Flip NB_SCAN_LIVE and un-ignore this together after that re-pin (run-verified green here on 2026-10-14)"]
 fn drone_directly_ahead_parks_the_mover_in_0x5e() {
     let Some(l) = LevelX::load(L05) else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data(L05);
@@ -278,7 +278,7 @@ fn drone_directly_ahead_parks_the_mover_in_0x5e() {
     let oi = drones.iter().position(|dr| dr.present && dr.enabled && (dr.pos[0] - 50.85).abs() < 0.05).expect("the patroller at x 50.85");
     drones[oi].pos = [drones[mi].pos[0] + 1.7, mover_y, mover_z];
     let mut sim = Drones::new(drones, rng);
-    sim.attach_level(&l.level);
+    sim.attach_level_id(&l.level, L05);
     let gi = mi;
     let player = bond_at([67.31, mover_y, mover_z - 0.03]);
     let mut parked = None;

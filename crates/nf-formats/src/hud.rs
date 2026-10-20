@@ -53,6 +53,40 @@ impl Font {
         }
         (out, pen - x)
     }
+
+    /// The drawn line advance for a '\n' in a multi-line string: `__Font_DrawText` 0x1ee598:65-71 adds
+    /// `*(u16*)(glyph_table + 6) + Font+0x14 + 1.0` — the table's first glyph's h plus the font's line
+    /// gap plus 1 — per newline (× the y scale, 1 here).
+    pub fn line_height(&self) -> f32 {
+        self.glyphs.first().map_or(0.0, |g| g.h as f32) + self.gap + 1.0
+    }
+
+    /// `Font_WordWrapString` 0x1ef178 as `Text_AddMsg` 0x1b0c30 uses it: greedy word wrap at `max_w`
+    /// HUD pixels (`TextMsgFormats[type]`'s maxWidth — 480 for the type-2 objective text [L
+    /// 0x2bf108+0x14]), the lines joined with '\n' — the string the game stores, which
+    /// `__Font_DrawText`'s newline branch then lays out. Words that alone exceed `max_w` keep their
+    /// own line.
+    pub fn word_wrap(&self, text: &str, max_w: f32) -> String {
+        let mut out = String::new();
+        let mut line = String::new();
+        let mut line_w = 0.0f32;
+        for word in text.split(' ') {
+            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            let (_, w) = self.layout(&candidate, 0.0, 0.0);
+            if !line.is_empty() && w > max_w {
+                out.push_str(&line);
+                out.push('\n');
+                line = word.to_string();
+                line_w = self.layout(word, 0.0, 0.0).1;
+            } else {
+                line = candidate;
+                line_w = w;
+            }
+        }
+        let _ = line_w;
+        out.push_str(&line);
+        out
+    }
 }
 
 /// The HUD tables.
@@ -62,10 +96,33 @@ pub struct HudTables {
     pub ammo: Vec<SpriteInfo>,
     /// The air/oxygen pane's 3 sprites (`HUD_UpdateAirPane` 0x1a11c8, `AirSprInfo` 0x2bd490).
     pub air: Vec<SpriteInfo>,
+    /// The guided-missile camera's pane 9 (`HUD_CreateRedeemer` 0x19dec0 / `HUD_UpdateRedeemerPane` 0x19e178,
+    /// `RedeemerSprInfo` 0x2bda30, 11 sprites).
+    pub redeemer: Vec<SpriteInfo>,
+    /// The 0700001b missile-status pane 20 (`SpacePane` 0x2be598 → `HUD_UpdateSpacePane` 0x19d3b8,
+    /// `SpaceSprInfo` 0x2be3b0, 11 sprites): the "T" body, the 8 missile lamps, the 2 top boxes.
+    pub space: Vec<SpriteInfo>,
+    /// The MP radar pane's ring sprite (`RadarPane` → `HUD_CreateRadar` 0x19f4e8 / `HUD_RadarUpdate`
+    /// 0x19f6e8, `RadarSprInfo` 0x2bdd60, 1 sprite) — empty when the ELF lacks the symbol.
+    pub radar: Vec<SpriteInfo>,
+    /// The MP score pane's 7 sprites (`MPScorePane` → `HUD_MPUpdatePane` 0x19f0a0, `MPScoreInfo`
+    /// 0x2be888) — empty when the ELF lacks the symbol.
+    pub mp_score: Vec<SpriteInfo>,
+    /// The MP health pane's 8 sprites (`MPHealthPane` → `HUD_CreateMPHealthPane` 0x19b390 /
+    /// `HUD_UpdateMPHealthPane` 0x19b630, `MPHealthSprInfo` 0x2be6b8) — empty when absent.
+    pub mp_health: Vec<SpriteInfo>,
+    /// The MP ammo pane's 3 text sprites (`MPAmmoPane` → `HUD_UpdateAmmoPane` 0x19a7f0,
+    /// `MPAmmoSprInfo` 0x2be610) — empty when absent.
+    pub mp_ammo: Vec<SpriteInfo>,
     /// Per ammo type: u, v, width, pixels per round.
     pub bullets: Vec<[f32; 4]>,
     /// Font 2 (`FONTSerpLight`, the HUD's).
     pub font: Font,
+    /// Font 1 (`FONTNFont2`, the menu page headers' bold-italic face) [L FontTable 0x2dd8b0[0] =
+    /// {tex 0x03000005, ptr 0x305a58}; the front-end header controls' page-def format strings are
+    /// "\xff\x01" (font select 1) [L the page dump 2026-10-14; M MenuManager_Create 0x21b908:255-274
+    /// sends the NAME tag as msg 0x23, Label_SendMessage 0x218890:100-104 applies it].
+    pub font_header: Font,
 }
 
 impl HudTables {
@@ -95,24 +152,34 @@ impl HudTables {
         let bb = Buf(at(ba)?);
         let bullets = (0..bsize as usize / 16).map(|k| Ok([bb.f32(k * 16)?, bb.f32(k * 16 + 4)?, bb.f32(k * 16 + 8)?, bb.f32(k * 16 + 12)?])).collect::<Result<_>>()?;
         // Font header: +8 first / last char, +0xC glyph count, +0x10 glyph table, +0x14 line gap, +0x18 space advance.
-        let (fa, _) = sym("FONTSerpLight")?;
-        let fh = Buf(at(fa)?);
-        let (first, last, count, table) = (fh.u16(8)?, fh.u16(10)?, fh.u32(0xc)? as usize, fh.u32(0x10)?);
-        let gb = Buf(at(table)?);
-        let glyphs = (0..count).map(|k| {
-            let o = k * 0x18;
-            let s = |d: usize| gb.u16(o + d).map(|v| v as i16);
-            let (nk, kp) = (gb.u16(o + 0xe)? as usize, gb.u32(o + 0x10)?);
-            // `Font_GetKernAdjust`: 6-byte pairs, the next character at +2, the adjustment (signed byte) at +4.
-            let kerns = if nk == 0 || kp == 0 { Vec::new() } else {
-                let kb = Buf(at(kp)?);
-                (0..nk).map(|j| Ok((kb.u16(j * 6 + 2)?, kb.u8(j * 6 + 4)? as i8))).collect::<Result<_>>()?
-            };
-            Ok(Glyph { u: s(0)?, v: s(2)?, w: s(4)?, h: s(6)?, yoff: s(8)?, pre: s(0xa)?, post: s(0xc)?, code: gb.u16(o + 0x14)?, kerns })
-        }).collect::<Result<_>>()?;
-        let font = Font { first, last, gap: fh.f32(0x14)?, space: fh.f32(0x18)?, glyphs };
+        let parse_font = |name: &str| -> Result<Font> {
+            let (fa, _) = sym(name)?;
+            let fh = Buf(at(fa)?);
+            let (first, last, count, table) = (fh.u16(8)?, fh.u16(10)?, fh.u32(0xc)? as usize, fh.u32(0x10)?);
+            let gb = Buf(at(table)?);
+            let glyphs = (0..count).map(|k| {
+                let o = k * 0x18;
+                let s = |d: usize| gb.u16(o + d).map(|v| v as i16);
+                let (nk, kp) = (gb.u16(o + 0xe)? as usize, gb.u32(o + 0x10)?);
+                // `Font_GetKernAdjust`: 6-byte pairs, the next character at +2, the adjustment (signed byte) at +4.
+                let kerns = if nk == 0 || kp == 0 { Vec::new() } else {
+                    let kb = Buf(at(kp)?);
+                    (0..nk).map(|j| Ok((kb.u16(j * 6 + 2)?, kb.u8(j * 6 + 4)? as i8))).collect::<Result<_>>()?
+                };
+                Ok(Glyph { u: s(0)?, v: s(2)?, w: s(4)?, h: s(6)?, yoff: s(8)?, pre: s(0xa)?, post: s(0xc)?, code: gb.u16(o + 0x14)?, kerns })
+            }).collect::<Result<_>>()?;
+            Ok(Font { first, last, gap: fh.f32(0x14)?, space: fh.f32(0x18)?, glyphs })
+        };
+        let font = parse_font("FONTSerpLight")?;
+        let font_header = parse_font("FONTNFont2")?;
         let air = sprites("AirSprInfo")?;
-        Ok(HudTables { health: sprites("HealthSprInfo")?, ammo: sprites("AmmoSprInfo")?, air, bullets, font })
+        let redeemer = sprites("RedeemerSprInfo")?;
+        let space = sprites("SpaceSprInfo")?;
+        let radar = sprites("RadarSprInfo").unwrap_or_default();
+        let mp_score = sprites("MPScoreInfo").unwrap_or_default();
+        let mp_health = sprites("MPHealthSprInfo").unwrap_or_default();
+        let mp_ammo = sprites("MPAmmoSprInfo").unwrap_or_default();
+        Ok(HudTables { health: sprites("HealthSprInfo")?, ammo: sprites("AmmoSprInfo")?, air, redeemer, space, radar, mp_score, mp_health, mp_ammo, bullets, font, font_header })
     }
 }
 

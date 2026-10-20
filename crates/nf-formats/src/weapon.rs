@@ -9,6 +9,7 @@ use crate::elf::Elf;
 pub const RECORD: usize = 0x10c;
 
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub struct WeaponData {
     pub records: Vec<[u8; RECORD]>,
     /// `ammo_data` (0x2C69B8, 12-byte records) `+0x02`: the most rounds of each ammo type Bond carries
@@ -77,6 +78,15 @@ impl WeaponData {
     /// `+0x68`: flags (0x10: a pickup fills an empty clip first, `Player_EquipAmmo`).
     pub fn flags(&self, weapon: usize) -> u32 {
         self.records.get(weapon).map_or(0, |r| u32::from_le_bytes(r[0x68..0x6c].try_into().unwrap()))
+    }
+
+    /// `+0x68` bit 0x8: the record carries a laser sight. `Player_SetWeaponAnim` 0x1a9338:21-26
+    /// latches it into `BLData+0x964` on every weapon draw/switch, and `Player_LaserPointer`
+    /// 0x1a65d8:93-99 gates the sight beam on that latch (re-checking the bit on the record OR its
+    /// `+0x05` twin). The SG5's semi-auto twin 0x17 carries it (`+0x68` = 0x00000088), the
+    /// full-auto 0x16 does not (0x00000080) [D weapon_data 0x2bf150] — the playtest 1015-1738 sight.
+    pub fn has_laser_sight(&self, weapon: usize) -> bool {
+        self.flags(weapon) & 0x08 != 0
     }
 
     /// `+0x6C`: bullet-type flags. Bit `0x40000` = the weapon's bullets play a fly-by (whiz) sound in
@@ -209,6 +219,22 @@ impl WeaponData {
     /// `+0xB4`: the fire-on-last-round script hashcode.
     pub fn fire_last_script(&self, weapon: usize) -> u32 {
         self.records.get(weapon).map_or(0, |r| u32::from_le_bytes(r[0xb4..0xb8].try_into().unwrap()))
+    }
+
+    /// `+0xB8`: the aim-raise script hashcode (`Player_Weapon` 0x1a24c8:148-150 queues it at 1.25×
+    /// on the aim-on edge — the game's view state 0xF; `Player_SetWeaponAnimObj` case 0xf
+    /// 0x1a2e38:554-561 sets the aim bit only when it stops). 0 = the weapon aims with no raise
+    /// anim [M 0x1a24c8:117-119]. The Winter Covert Sniper 0x24 → 0x060007b9, the AIMS-20 0x1a →
+    /// 0x060007bf, the watch pair 0x54/0x55 → 0x060005a4/0x060005a8; the P2K 0x02 → 0 [L census].
+    pub fn raise_script(&self, weapon: usize) -> u32 {
+        self.records.get(weapon).map_or(0, |r| u32::from_le_bytes(r[0xb8..0xbc].try_into().unwrap()))
+    }
+
+    /// `+0xBC`: the aim-lower script hashcode (queued at 1.25× on the aim-off edge — view state
+    /// 0x10 [M 0x1a24c8:121-138]). When 0 the raise script plays REVERSED
+    /// (`AnimScriptAddReverse`, disasm 0x1a26f0: `jal AnimScriptAddReverse`).
+    pub fn lower_script(&self, weapon: usize) -> u32 {
+        self.records.get(weapon).map_or(0, |r| u32::from_le_bytes(r[0xbc..0xc0].try_into().unwrap()))
     }
 
     /// `+0xC4`: the holster (put-away) script hashcode (`Player_SetWeaponAnimObj` case 1, played at 1.25x)

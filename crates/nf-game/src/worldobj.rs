@@ -193,11 +193,154 @@ impl ThirdCam {
 /// The four families, created from the main map's placements in placement order (the game creates
 /// in `parsemap_block_map_data_dynamic` 0x1d1b68's walk order; no RNG in any of the four creates).
 #[derive(Clone, Debug, Default)]
+/// MusicTrigger (placement 0xfb → `MusicTrigger_Create` 0x1b30e0, class 0xc): while switch
+/// channel `ch_on` (p0) is on it re-arms a 30-tick countdown; every tick the countdown runs fires
+/// `Music_Event(event_id, 2)` [M 0x1b31a0:19-27] — so the event keeps firing for up to 30 ticks
+/// after the channel clears. `ch_flag` (p1) is an optional second channel and `flag_byte` (p3) a
+/// byte that also set the game's obj+0xfe bit 0 (`playing` here — no port-side reader found;
+/// [M 0x1b31a0:15,26-27] for the writers).
+pub struct MusicTrigger {
+    /// p2 — the `Music_Event` board slot ([D] 07000001: 2, 07000002: 31/32, 07000007: 13 …).
+    pub event_id: u32,
+    /// p0 — the switch channel that re-arms the countdown (create skips the object when 0).
+    pub ch_on: u16,
+    /// p1 — optional second channel driving `playing`.
+    pub ch_flag: u16,
+    /// p3.
+    pub flag_byte: u8,
+    /// The game's countdown short at inst+8 (`0x1e` armed, drained per tick).
+    pub countdown: i16,
+    /// The game's obj+0xfe bit 0.
+    pub playing: bool,
+}
+
+/// Rotor (placement 0x71 → `rotor_init` 0x18f4b8, `rotor_update` 0x18f568, class 7): a spinning
+/// fan. inst+0x00..0x0B holds the placement's ROT vector (spin per tick per axis — 07000001's
+/// `comroom_fanblades` carry rot y = 0.0349 rad [D placements]); inst+0x10 = param 1 (u8) is the
+/// gate channel. `rotor_update` 0x18f568: when the gate is 0 or the channel reads 0, the object
+/// matrix rotation (obj+0x50) += spin·FRAME_RATE_MUL (1.0 at the port's fixed 60 Hz) and
+/// obj+0xFA |= 0x20 (redraw). Param 0's slot is decompiler-dropped at the 0x1d04f0 call [S].
+#[derive(Clone, Debug)]
+pub struct Rotor {
+    /// The placement ROT vector (radians per tick per axis).
+    pub spin: V3,
+    /// inst+0x10 — param 1: the gate channel (0 = always spins).
+    pub gate: u16,
+    /// The accumulated obj+0x50 rotation — the getter the draw code applies to the fan object.
+    pub angle: V3,
+}
+
+impl Rotor {
+    /// `rotor_update` 0x18f568.
+    pub fn tick(&mut self, channels: &crate::triggers::Channels) {
+        if self.gate != 0 && channels.on(self.gate as u32) { return; }
+        for k in 0..3 { self.angle[k] += self.spin[k]; }
+    }
+}
+
+/// Mine (placement 0xFE → `Mine_Create` 0x17ce28, class 0x4B): the floating laser tripbomb —
+/// 07000015's nine `Tripbomb_3rd_*` cels. `Mine_Update` 0x17c930:
+/// - the body bobs: `obj+0x34 = pos.y + sin(GameState+0x52·(param2·0.0002))·(param4·0.1)`
+///   [M 0x17c930:9-30 — inst+0x10 = param2·0.0002 the rate, inst+0x18 = param4·0.1 the amplitude,
+///   the clock is the game's global `GameState+0x52` tick — the port's fixed 60 Hz frame, no RNG];
+/// - the explode arm: when the object's HITDATA list (`obj+0xD0`, the collide pass's contact list
+///   [M docs/atlas/object.md +0xD0]) holds an entry whose +0x58 references another object, the
+///   mine explodes [M 0x17c930:31-45's walk]: `Camera_Shake(param1)` when param1 ≥ 0.5, then an
+///   Explode object (class 0xF) built from the mine's instance: damage = inst+0x1C = param 0
+///   (float), radius/shake/blast-script-scale = inst+0x20 = param 1, blast script = inst+0x24 =
+///   param 5 (07000015: 0x06000052, the standard blast), lifetime = the script's +0xAB0 u16, the
+///   script scale `SCRIPTINFO+0x94 = param1`, `obj+0xE8 = param1·0.0667` [M disasm 0x17ca74-0x17cb10],
+///   and `obj+0xFE |= 1` deletes the mine that tick [M 0x17cb7c-0x17cb88].
+///
+/// `Mine_Create` 0x17ce28 reads no RNG. The contact surface is the mine cel's own collision —
+/// 07000015's long mine carries 1240 tris spanning ±0.23 x, ±0.10 y, 0..−4.34 local z (the beam)
+/// [D probe census_07000015::probe_07000015_mine_objects].
+#[derive(Clone, Debug)]
+pub struct Mine {
+    /// The main-map placement index.
+    pub placement: usize,
+    /// obj+0x30: the placement translation (the bob wobbles obj+0x34, the y, off this).
+    pub pos: V3,
+    /// inst+0x1C = param 0 (float): the blast damage.
+    pub damage: f32,
+    /// inst+0x20 = param 1 (float): the blast radius, the camera shake and the blast-script scale.
+    pub radius: f32,
+    /// inst+0x10 = param 2 · 0.0002: the bob clock rate (rad per tick).
+    pub bob_rate: f32,
+    /// inst+0x18 = param 4 · 0.1: the bob amplitude.
+    pub bob_amp: f32,
+    /// inst+0x24 = param 5: the blast script hash.
+    pub script: u32,
+    /// The mine cel's collision triangles in world space (the contact test's surface — the game's
+    /// hit list fills from the collide pass over the same cel).
+    pub tris: Vec<[V3; 3]>,
+    pub lo: [f32; 3],
+    pub hi: [f32; 3],
+    /// obj+0xFE bit 0: exploded; the delete pass removes the object that tick.
+    pub exploded: bool,
+    /// The live posed y (obj+0x34) — the draw-side getter for the bob.
+    pub posed_y: f32,
+}
+
+impl Mine {
+    /// `Mine_Create` 0x17ce28 over the main map's placements (placement order). No RNG [M].
+    /// `tris_of` resolves the placement's object collision (the same closure shape the other
+    /// creators take).
+    pub fn create(
+        placements: &[nf_formats::placement::Placement],
+        tris_of: impl Fn(&nf_formats::placement::Placement) -> Vec<[V3; 3]>,
+    ) -> Vec<Mine> {
+        let mut out = Vec::new();
+        for (i, p) in placements.iter().enumerate() {
+            if p.flags & 0xff != 0xfe { continue; }
+            let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v);
+            let tris = tris_of(p);
+            let (mut lo, mut hi) = ([f32::MAX; 3], [-f32::MAX; 3]);
+            for t in &tris { for v in t { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
+            out.push(Mine {
+                placement: i,
+                pos: p.translation,
+                damage: param(0) as i32 as f32,
+                radius: param(1) as i32 as f32,
+                bob_rate: param(2) as i32 as f32 * 0.0002,
+                bob_amp: param(4) as i32 as f32 * 0.1,
+                script: param(5),
+                lo, hi,
+                tris,
+                exploded: false,
+                posed_y: p.translation[1],
+            });
+        }
+        out
+    }
+
+    /// The bob half of `Mine_Update` 0x17c930:9-30 — `posed_y = pos.y + sin(t·rate)·amp` over the
+    /// fixed 60 Hz frame counter (the game's GameState+0x52 clock; deterministic, no RNG).
+    pub fn bob(&mut self, frame: u32) {
+        self.posed_y = self.pos[1] + (frame as f32 * self.bob_rate).sin() * self.bob_amp;
+    }
+
+    /// The explode arm's contact test: the collide pass gives the mine a HITDATA entry when a
+    /// touching object's capsule (the player body, feet `a` → head `b`, radius `r`; the drones'
+    /// 0.4 spheres the same way) meets the mine cel's collision tris [M 0x17c930's hit-list walk +
+    /// docs/atlas/object.md +0xD0]. The port's static world already holds the same tris, so a
+    /// walked-in Bond rests AT contact distance — the game's own sphere-vs-cel query radius is the
+    /// capsule radius, matched here (+0.03 graze epsilon [S]).
+    pub fn touching(&self, a: V3, b: V3, r: f32) -> bool {
+        if self.tris.is_empty() { return false; }
+        if (0..3).any(|k| (a[k] < self.lo[k] - r && b[k] < self.lo[k] - r) || (a[k] > self.hi[k] + r && b[k] > self.hi[k] + r)) { return false; }
+        crate::triggers::capsule_hits_tris(a, b, r + 0.03, &self.tris)
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct WorldObjects {
+    pub rotors: Vec<Rotor>,
     pub inverters: Vec<Inverter>,
     pub shooters: Vec<Shooter>,
     pub dynobjs: Vec<DynObject>,
     pub thirdcams: Vec<ThirdCam>,
+    pub music_triggers: Vec<MusicTrigger>,
 }
 
 impl WorldObjects {
@@ -259,6 +402,26 @@ impl WorldObjects {
                     let keys = path_blocks.get(index).map(|b| crate::door::parse_keys(b)).unwrap_or_default();
                     w.thirdcams.push(ThirdCam { cam_id: param(0) as u16, keys, key_count: count, flag: param(1) as u8 });
                 }
+                0x71 => {
+                    // rotor_init 0x18f4b8: the ROT vector is the spin, param 1 (u8) the gate.
+                    w.rotors.push(Rotor { spin: p.rotation, gate: param(1) as u16, angle: [0.0; 3] });
+                }
+                0xfb => {
+                    // MusicTrigger_Create 0x1b30e0:12-16: p2 == 0xff or p0 == 0 → no object
+                    // (07000011's placement, params (18, 0, 255, 0), is inert by this gate
+                    // [D placement bytes]).
+                    let (id, ch) = (param(2), param(0));
+                    if id != 0xff && ch != 0 {
+                        w.music_triggers.push(MusicTrigger {
+                            event_id: id,
+                            ch_on: ch as u16,
+                            ch_flag: param(1) as u16,
+                            flag_byte: param(3) as u8,
+                            countdown: 0,
+                            playing: false,
+                        });
+                    }
+                }
                 _ => {}
             }
         }
@@ -276,9 +439,13 @@ impl WorldObjects {
         rng: &mut crate::drone::Rng,
         bullets: &mut Vec<crate::bullet::Bullet>,
         frame: u32,
+        music: &mut crate::music::Music,
     ) {
         for inv in &self.inverters {
             inv.tick(channels, frame);
+        }
+        for r in &mut self.rotors {
+            r.tick(channels);
         }
         for sh in &mut self.shooters {
             sh.tick(channels, weapons, rng, bullets);
@@ -287,5 +454,83 @@ impl WorldObjects {
             ob.tick(viewer, channels);
         }
         self.dynobjs.retain(|ob| !ob.dead);
+        // MusicTrigger_Update 0x1b31a0, in its order: the p1 flag arm, the p0 re-arm
+        // (`countdown = 0x1e`), then the drain (`countdown != 0` → decrement, `Music_Event(id, 2)`,
+        // the p3 flag) — the event board slot reads 2 while the countdown runs and stops 30 ticks
+        // after the channel clears.
+        for t in &mut self.music_triggers {
+            if t.ch_flag != 0 && channels.on(t.ch_flag as u32) { t.playing = true; }
+            if t.ch_on != 0 && channels.on(t.ch_on as u32) { t.countdown = 30; }
+            if t.countdown != 0 {
+                t.countdown -= 1;
+                music.event(t.event_id as usize, 2);
+                if t.flag_byte != 0 { t.playing = true; }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod music_trigger_tests {
+    use super::*;
+    use crate::triggers::Channels;
+
+    fn place(flags: u32, params: &[(u32, u32)]) -> nf_formats::placement::Placement {
+        nf_formats::placement::Placement { index: 0, hashcode: u32::MAX, flags, translation: [0.0; 3], rotation: [0.0; 3], params: params.to_vec(), extra: [0; 9] }
+    }
+
+    /// The create gates [M 0x1b30e0:12-16]: p2 == 0xff or p0 == 0 → no object. 07000001's real
+    /// record is params (13, 0, 2, 1) and 07000011's is (18, 0, 255, 0) [D placement bytes].
+    #[test]
+    fn create_gates_and_param_map() {
+        let w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3]));
+        assert_eq!(w.music_triggers.len(), 1);
+        let t = &w.music_triggers[0];
+        assert_eq!((t.event_id, t.ch_on, t.ch_flag, t.flag_byte), (2, 13, 0, 1));
+        assert_eq!(t.countdown, 0);
+        assert!(WorldObjects::create(&[place(0xfb, &[(0, 18), (1, 0), (2, 255), (3, 0)])], &[], |_| (0, [0.0; 3])).music_triggers.is_empty(), "p2 == 0xff → no object");
+        assert!(WorldObjects::create(&[place(0xfb, &[(0, 0), (1, 0), (2, 5), (3, 0)])], &[], |_| (0, [0.0; 3])).music_triggers.is_empty(), "p0 == 0 → no object");
+    }
+
+    /// `MusicTrigger_Update` 0x1b31a0: the channel re-arms 0x1e; each tick the countdown runs fires
+    /// `Music_Event(id, 2)`; after the channel clears the event keeps for the remaining countdown
+    /// (≤ 30 ticks) and then stops.
+    #[test]
+    fn countdown_rearms_fires_and_expires() {
+        let mut w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3]));
+        let mut ch = Channels::default();
+        let mut music = crate::music::Music::default();
+        let mut rng = crate::drone::Rng::new(1);
+        let (mut weapons, mut bullets) = (nf_formats::weapon::WeaponData::default(), Vec::new());
+        // One frame: the control-object pass writes the board, then `UpdateMusicalEvents` consumes
+        // and clears it (music.rs's update — the game's EventList is per-frame).
+        let mut tick = |w: &mut WorldObjects, ch: &mut Channels, music: &mut crate::music::Music, rng: &mut crate::drone::Rng, bullets: &mut Vec<crate::bullet::Bullet>, f: u32| {
+            w.tick(ch, [0.0; 3], &weapons, rng, bullets, f, music);
+        };
+        let mut consume = |music: &mut crate::music::Music| music.update(0);
+        // Channel off: no countdown, no event.
+        tick(&mut w, &mut ch, &mut music, &mut rng, &mut bullets, 1);
+        assert_eq!(music.events[2], 0);
+        consume(&mut music);
+        // Channel on: the countdown re-arms every tick; the event fires.
+        ch.set(13, 1, 2);
+        for f in 2..6 {
+            tick(&mut w, &mut ch, &mut music, &mut rng, &mut bullets, f);
+            assert_eq!(music.events[2], 2, "the event fires while the channel holds");
+            consume(&mut music);
+        }
+        assert!(w.music_triggers[0].countdown > 0 && w.music_triggers[0].countdown < 30);
+        assert!(w.music_triggers[0].playing, "p3 = 1 sets the game's obj+0xfe bit 0");
+        // Channel off: the countdown drains and the event fires until it hits 0 (the armed 0x1e
+        // [M 0x1b31a0:20] — the last fire is the tick the countdown reaches 0).
+        ch.set(13, 0, 6);
+        let mut last_fire = 0u32;
+        for f in 6..50 {
+            tick(&mut w, &mut ch, &mut music, &mut rng, &mut bullets, f);
+            if music.events[2] == 2 { last_fire = f; }
+            consume(&mut music);
+        }
+        assert_eq!(w.music_triggers[0].countdown, 0, "the countdown expired at the game's tick");
+        assert_eq!(last_fire, 6 + 28, "the event stops 0x1e ticks after the re-arm stops");
     }
 }

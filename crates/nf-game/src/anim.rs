@@ -19,10 +19,13 @@ pub fn slerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     let neg = d < 0.0;
     if neg { d = -d; }
     let (s0, s1) = if 0.01 < 1.0 - d {
-        let w = d.acos();
-        let wt = w * t;
-        let inv = 1.0 / crate::trig::sinf(w);
-        (crate::trig::sinf(w - wt) * inv, crate::trig::sinf(wt) * inv)
+        // G-046: the game's slerp weights are Spline_Interp 0x1e1858:285-300 [M]: acosf (0x232c48 →
+        // __ieee754_acosf 0x233228), wt = angle·t (mul.s), and the weights are PS2Sinf(wt)·(1/PS2Sinf(angle))
+        // — a div.s reciprocal then mul.s, not a per-weight division.
+        let w = crate::trig::acosf_libm(d);
+        let wt = nf_formats::ps2float::mul(w, t);
+        let inv = nf_formats::ps2float::div(1.0, crate::trig::sinf(w));
+        (crate::trig::sinf(crate::trig::ee_sub(w, wt)) * inv, crate::trig::sinf(wt) * inv)
     } else {
         (1.0 - t, t)
     };
@@ -200,8 +203,11 @@ pub fn script_pose(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>
     // `seq.skeleton`. Shared human tracks ride on other rigs' ids: 07000004's seated target
     // (skin 0x0500001e, skeleton 8) plays 0x0400028a, whose record byte is skeleton 0 — the
     // strict filter left him with no palette and no hit boxes (the bullets could never land).
-    // [S the game's use of the seq's +0x3c byte is unverified; the channel-count guard keeps
-    // short tracks (a 22-channel face track on a body need) rejected.]
+    // [The game's playback confirms the cross-rig read: `AnimFrameCopy` 0x1c5668 takes the walk's
+    // skeleton from the SEQUENCE tag's +0xa9 byte (:52) and gates the writes on the SKIN's bone
+    // flags (param_4+0x24) — ninja-boss-cutscene. The port's skin-skeleton walk is the standing
+    // [S] convention; the channel-count guard keeps short tracks (a 22-channel face track on a
+    // body need) rejected.]
     let seq = seqs.get(&q).filter(|s| {
         s.skeleton == skin.skeleton
             || {
@@ -225,11 +231,53 @@ pub fn script_pose(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>
 /// drone-port-check #3) counts as full-coverage when its channels cover the skeleton. Never panics:
 /// each window poses only the bones its channels reach (`local_pose_bones`).
 pub fn script_pose_drone(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>, skel: &Skeleton, skin: &Skin, hash: u32, time: f32) -> Option<Pose> {
+    script_pose_drone_with(scripts, seqs, skel, skin, hash, time, &mut |seq, f, n| nf_formats::anim::local_pose_bones(seq, skel, skin, f, n))
+}
+
+/// mp-perf-16: a memo of whole-frame bone samples (`local_pose_bones`) keyed by (sequence,
+/// skin, frame, bone count) — the render's MP bodies re-sample the same integer frames tick
+/// after tick (a fractional frame blends two of them, the walk advances ~half a frame a tick),
+/// and the PS2-rounded channel sums are the bulk of a body's palette cost. A sample is a pure
+/// function of its key (`local_pose_bones` reads only the sequence, skeleton and skin), so a
+/// cached pose is the identical pose. Render-only: the sim's drone poses keep the direct path.
+#[derive(Default)]
+pub struct PoseSampleCache {
+    map: HashMap<(u32, u16, u32, u32, [u32; 3], u32, usize), Pose>,
+}
+
+impl PoseSampleCache {
+    /// The cap: past it the memo starts over (a 16-body arena keeps a few hundred live entries).
+    const CAP: usize = 4096;
+    pub fn sample(&mut self, seq: &Sequence, skel: &Skeleton, skin: &Skin, frame: u32, bones: usize) -> Pose {
+        if self.map.len() >= Self::CAP { self.map.clear(); }
+        let key = (seq.hashcode, seq.frames, skin.hashcode, skel.id as u32, skin.scale.map(f32::to_bits), frame, bones);
+        self.map.entry(key)
+            .or_insert_with(|| nf_formats::anim::local_pose_bones(seq, skel, skin, frame, bones))
+            .clone()
+    }
+}
+
+/// `script_pose_drone` through the memo (see [`PoseSampleCache`]) — the same pose.
+pub fn script_pose_drone_cached(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>, skel: &Skeleton, skin: &Skin, hash: u32, time: f32, cache: &mut PoseSampleCache) -> Option<Pose> {
+    script_pose_drone_with(scripts, seqs, skel, skin, hash, time, &mut |seq, f, n| cache.sample(seq, skel, skin, f, n))
+}
+
+fn script_pose_drone_with(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>, skel: &Skeleton, skin: &Skin, hash: u32, time: f32, sample: &mut dyn FnMut(&Sequence, u32, usize) -> Pose) -> Option<Pose> {
     let script = scripts.get(&hash)?;
     let t = time.floor().max(1.0) as u16;
     let wins: Vec<(u16, u32)> = script.sequences().filter(|(a, _, _)| *a <= t).map(|(a, _, q)| (a, q)).collect();
+    // fix-facial3 / fix-cutscene-faces: a face track is NOT a bone pose — `AnimFacialBlend`
+    // 0x1be648 samples those channels as the morph weights [M]. The classifier is the game's own:
+    // the SEQUENCE's flags byte bit 0x8 [M `AnimProcessScriptCmds` 0x1c1b38:
+    // `*(int *)(lVar6 + 0xc) >> 3 & 1`], not the channel count (the counts match by construction:
+    // [D measured] 07000007's face seq 0x04000467, flags 0x08, 22 channels == skin 0x0500003b's
+    // facial count; measured on the disc: 07000006's driver face track 04000065 channels 0..2
+    // reach ~1.0 — weight values the old bone read turned into root/face-bone translations, the
+    // weights-as-bones bug). One rule everywhere (the count probe was fix-facial3's stand-in).
+    let is_face = |q: u32| -> bool { seqs.get(&q).is_some_and(|s| s.flags & 0x8 != 0) };
     // The bones a window's channels reach; the shared-track arm mirrors `script_pose`'s filter.
     let covered = |q: u32| -> usize {
+        if is_face(q) { return 0; }
         let Some(s) = seqs.get(&q) else { return 0 };
         if s.skeleton == skel.id as u8 {
             nf_formats::anim::bones_covered(s, skel)
@@ -245,18 +293,26 @@ pub fn script_pose_drone(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Seq
     let (base_first, base_q) = wins[base_i];
     let base_f = (time - base_first as f32 + 1.0).max(1.0);
     let base_seq = seqs.get(&base_q)?;
-    let mut acc = sequence_pose_n(base_seq, skel, skin, base_f, base_n);
+    let mut acc = sequence_pose_n_with(base_seq, base_f, base_n, sample);
+    // mp-perf-16: the base window's own pass below re-sampled the very same (sequence, frame,
+    // bone count) — the identical values; keep them instead of decoding the sequence twice (the
+    // PS2-rounded channel sums are the bulk of an MP body's palette cost).
+    let base_vals: Vec<_> = acc.iter().take(base_n).copied().collect();
     if acc.len() < skel.bones as usize {
         while acc.len() < skel.bones as usize { acc.push(*acc.last().unwrap()); }
     }
     // Then every started window in command order overwrites the bones it reaches — the last one
     // wins; the base's own pass (first pass over its bones) is its place in that order.
-    for (first, q) in &wins {
+    for (wi, (first, q)) in wins.iter().enumerate() {
+        if wi == base_i {
+            for (i, v) in base_vals.iter().enumerate() { acc[i] = *v; }
+            continue;
+        }
         let n = covered(*q);
         if n == 0 { continue; }
         let Some(seq) = seqs.get(q) else { continue };
         let f = (time - *first as f32 + 1.0).max(1.0);
-        let p = sequence_pose_n(seq, skel, skin, f, n);
+        let p = sequence_pose_n_with(seq, f, n, sample);
         for (i, v) in p.iter().enumerate().take(n) { acc[i] = *v; }
     }
     Some(acc)
@@ -278,28 +334,90 @@ pub fn script_pose_together(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, 
     let script = scripts.get(&hash)?;
     let t = time.floor().max(1.0) as u16;
     let wins: Vec<(u16, u32)> = script.sequences().filter(|(a, _, _)| *a <= t).map(|(a, _, q)| (a, q)).collect();
-    // The base: the widest started window on this skeleton (the body track), at its own frame — it
-    // also stands in for the bones no window reaches.
+    // The game's facial window: the SEQUENCE's flags byte bit 0x8 [M `AnimProcessScriptCmds`
+    // 0x1c1b38: `uVar5 = *(int *)(lVar6 + 0xc) >> 3 & 1` on the raw sequence record — a facial
+    // window sets the script node's 0x40000 flag and plays in its +0x54 facial slot,
+    // docs/systems/anim-engine.md "+0x50 / +0x54 (body; facial)"]. A facial seq's channels are
+    // the skin's facial MORPH weights, never a bone pose: `AnimFacialBlend` 0x1be648 reads the
+    // playing sequence's frame buffer as the weight array, and the counts match by construction —
+    // [D measured on this scene] skin 0x0500003b's facial count 22 == face seq 0x04000467's 22
+    // channels (flags 0x08) whose values stay in [0, 1], while the body seq 0x04000332 (flags
+    // 0x00) carries 222 = 3·73 + 3·1 channels (the skeleton's per-bone walk) whose root channels
+    // hold the actor's world position (83..91, 43.7, −35..−31). Read as bones, the face track's
+    // leading [0,1] weights zero the root — the missing-cast bug. The window picker here must
+    // never hand a facial window to the bone walk; the weights path (`Scene::facial_weights_now`)
+    // is what consumes it. This flags rule (fix-cutscene-faces) is THE classifier everywhere —
+    // `script_pose_drone` uses it too (fix-facial3's channel-count probe was the stand-in;
+    // one rule, the game's own).
+    let is_facial = |q: u32| seqs.get(&q).is_some_and(|s| s.flags & 0x8 != 0);
+    // ninja-boss-cutscene: the window-acceptance rule, one with `script_pose`/`script_pose_drone`'s
+    // channel-count guard. `AnimFrameCopy` 0x1c5668 reads the channel stream positionally over the
+    // SEQUENCE's own record skeleton (`iVar6 = pSkeletons[*(byte *)(sAnimSeq + 0xa9)]`, :52; the
+    // translation-mask test :190, the stand-in offsets :194-198) and gates each bone's write on the
+    // SKIN's bone-flag bytes (`param_4 + 0x24`, :186-189) — no id equality anywhere. Shipped
+    // cut-scenes ride cross-rig: 07000004's ninja (skin 0x0500001e, skeleton byte 8) plays 0x06000507
+    // whose only window is 0x0400047a (record byte 0; both skeletons 73 bones, mask 0x1/0/0) [D
+    // 07000004.bin kind-7/5, 07F00004.bin kind-4] — the strict `s.skeleton == skin.skeleton` filter
+    // found no base window and the cut-scene's ninja actor never posed (the user's "ninja boss is
+    // missing from last cutscene", playtest 1017). The gameplay path has posed the same pairing since
+    // its own fix (see `script_pose`'s comment). A guarded window covers the skin skeleton's FULL walk
+    // or nothing (a short track — a face track past the flags rule — still never poses bones).
+    let full_need: usize = (0..skel.bones as usize).map(|b| if skel.has_translation(b) { 6 } else { 3 }).sum();
+    // The base: the widest started non-facial window that can pose the skin, at its own frame — it
+    // also stands in for the bones no window reaches. A matching window keeps the old `fits` gate
+    // (a lone narrow track hides — kept); a guarded window needs the full walk.
     let (base_i, base_n) = wins.iter().enumerate()
-        .filter_map(|(i, (_, q))| seqs.get(q).filter(|s| s.skeleton == skin.skeleton).map(|s| (i, nf_formats::anim::bones_covered(s, skel))))
+        .filter_map(|(i, (_, q))| {
+            let Some(s) = seqs.get(q) else { return None };
+            if is_facial(*q) { return None; }
+            let n = if s.skeleton == skin.skeleton {
+                (nf_formats::anim::fits(s, skel)).then(|| nf_formats::anim::bones_covered(s, skel)).unwrap_or(0)
+            } else {
+                (s.channels.len() >= full_need).then_some(skel.bones as usize).unwrap_or(0)
+            };
+            (n > 0).then_some((i, n))
+        })
         .max_by_key(|&(_, n)| n)?;
     if base_n == 0 { return None; }
     let (base_first, base_q) = wins[base_i];
     let base_f = (time - base_first as f32 + 1.0).max(1.0);
-    // A single window that does not fit the skeleton (the old `fits` filter — e.g. a lone narrow
-    // track): the character hid before this function existed; keep that.
     let Some(base_seq) = seqs.get(&base_q) else { return None };
-    if !nf_formats::anim::fits(base_seq, skel) { return None; }
     let mut acc = sequence_pose_n(base_seq, skel, skin, base_f, base_n);
     if acc.len() < skel.bones as usize {
         // Pad to the full bone count with the base's last bone pose (never read: the body covers all).
         while acc.len() < skel.bones as usize { acc.push(*acc.last().unwrap()); }
     }
-    let mut owned = vec![false; base_n];
+    // fix-cutscene-draw: the base (widest, `fits`) track OWNS the bones it covers. The game maps
+    // each window's channels to bones through the skin's channel table (`AnimFrameCopy` is passed
+    // the sAnimSkin [M AnimFrameResolve 0x1c35f8 → AnimFrameCopy; psiBuildMatrixPalette 0x111498
+    // reads sAnimObject+0x24 = the skin (decompile line 110, `*(int *)(iVar7 + 0x24)` → the
+    // pSkeletons/parents/matrices reads); the +0x94 skin reads sit on other bases —
+    // (obj+0xdc)+0x94 in AnimListBuild 0x1c0fc0:114, obj+0x94 in AnimObjectDraw 0x1c4490:117]),
+    // so a pack cut-scene's narrow 22-channel face track
+    // reaches only the face bones and never the body's root — the 222-channel body track (whose
+    // root channel carries the actor's absolute world position, `AnimGetFirstTrans` 0x1c7348
+    // initialises obj+0x30 from its frame-0 root) covers every bone and wins them. The port's
+    // sequential channel walk cannot express that sparse map: letting the face window fill first
+    // ("first-writer-wins", fix-cutscenes2) handed bones 0..5 of the body track to the face
+    // track's leading channels — the root collapsed to identity-at-the-origin and every script
+    // actor drew as a mannequin at the world origin, off-camera (the missing cut-scene cast).
+    // Narrow windows now fill only the bones the base does not reach (none when a full body
+    // track runs; the ledge's narrow pairs without a full track keep the first-writer fill).
+    let mut owned = vec![true; base_n];
     for (first, q) in &wins {
+        if *q == base_q { continue; }
         let Some(seq) = seqs.get(q) else { continue };
-        if seq.skeleton != skin.skeleton { continue; }
-        let n = nf_formats::anim::bones_covered(seq, skel).min(base_n);
+        // A facial window is the morph-weight source (above) — it owns no bones. The classifier is
+        // the flags bit 0x8, the game's own, everywhere (fix-cutscene-faces; see the base picker).
+        if is_facial(*q) { continue; }
+        // Matching windows keep the old narrow fill (`bones_covered` leading bones — the ledge's
+        // narrow pairs); guarded windows fill all-or-nothing, the same rule as the base picker.
+        let n = if seq.skeleton == skin.skeleton {
+            nf_formats::anim::bones_covered(seq, skel)
+        } else {
+            (seq.channels.len() >= full_need).then_some(skel.bones as usize).unwrap_or(0)
+        }
+        .min(base_n);
         if n == 0 { continue; }
         let f = (time - *first as f32 + 1.0).max(1.0);
         let p = sequence_pose_n(seq, skel, skin, f, n);
@@ -313,12 +431,17 @@ pub fn script_pose_together(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, 
 /// `sequence_pose` for the first `bones` bones only (a narrow sequence — the face tracks — whose
 /// channel list `local_pose` would read past).
 pub fn sequence_pose_n(seq: &Sequence, skel: &Skeleton, skin: &Skin, frame: f32, bones: usize) -> Pose {
+    sequence_pose_n_with(seq, frame, bones, &mut |seq, f, n| nf_formats::anim::local_pose_bones(seq, skel, skin, f, n))
+}
+
+/// `sequence_pose_n` with the whole-frame sampler supplied (`local_pose_bones` or its memo).
+fn sequence_pose_n_with(seq: &Sequence, frame: f32, bones: usize, sample: &mut dyn FnMut(&Sequence, u32, usize) -> Pose) -> Pose {
     let last = seq.frames.max(1) as u32;
     let f0 = (frame.floor() as u32).clamp(1, last);
     let frac = (frame - frame.floor()).clamp(0.0, 1.0);
-    let mut p = nf_formats::anim::local_pose_bones(seq, skel, skin, f0, bones);
+    let mut p = sample(seq, f0, bones);
     if frac > 0.0002 && f0 < last {
-        let q = nf_formats::anim::local_pose_bones(seq, skel, skin, f0 + 1, bones);
+        let q = sample(seq, f0 + 1, bones);
         blend(&mut p, &q, frac);
     }
     p
@@ -357,12 +480,18 @@ impl Outgoing {
 pub fn root_yaw(q: [f32; 4]) -> f32 {
     let [x, y, z, w] = q;
     let f = [2.0 * (x * z + w * y), 1.0 - 2.0 * (x * x + y * y)];
-    f[0].atan2(f[1])
+    // G-046: Vec_DirToRot 0x1e3218:8 is the PS2 libm atan2f [M], not host atan2.
+    crate::trig::atan2f_libm(f[0], f[1])
 }
 
 /// Removes `yaw` about +Y from a root rotation (pre-multiplies by the inverse turn).
 pub fn unyaw(q: [f32; 4], yaw: f32) -> [f32; 4] {
-    let (s, c) = ((-yaw * 0.5).sin(), (-yaw * 0.5).cos());
+    // G-046: the inverse-turn quat is the game's AA2Q idiom — w = PS2Sinf(θ/2 + 1.5707964), y =
+    // PS2Sinf(θ/2) [M Quat_AxisAngleToQuat 0x1e3f20's PS2Sinf2 lanes; the θ = −yaw mapping [S] — the
+    // game counterpart of this helper is otherwise unresolved (G-046's UNCLEAR note)].
+    let ha = -yaw * 0.5;
+    let s = crate::trig::sinf(ha);
+    let c = crate::trig::sinf(crate::trig::ee_add(ha, crate::trig::HALF_PI));
     let r = [0.0, s, 0.0, c];
     // r ⊗ q
     [r[3] * q[0] + r[0] * q[3] + r[1] * q[2] - r[2] * q[1],
@@ -536,4 +665,132 @@ pub fn facial_blend(out: &mut [f32], slot0: Option<&[f32]>, slot1: Option<&[f32]
     };
     write_lid(out, eyes[0], 14, 13); // animObject+0x97
     write_lid(out, eyes[1], 11, 12); // animObject+0x98
+}
+
+/// `AnimFacialUpdate` (0x1be310) — the idle/blink driver, one call per skinned object per frame
+/// (`AnimObjectUpdate` 0x1befd8:127-136, gated on the skin's facial count, the big-skeleton flag
+/// and `AnimObjectIsClose(obj, 0xc)`; frozen under `ScriptCam` and the +0x58 bit-0x10000 facial-off
+/// flag). Pure state half: the state byte (low 7 bits, bit 0x80 = the female double-blink flag)
+/// and the u16 frame timer live on the anim object at sub+0x99/sub+0x92.
+///
+/// Per state [M decomp 0x1be310, disasm 0x1be3e0-0x1be5cc]:
+/// state 0 (init): the state stores 1 BEFORE the draw; one `Rand_Rand(180)` → timer = d + 90
+/// (90..269 frames); the caller appends the table[0] idle face (marker 0xe0000000).
+/// state 1 (idle/blink): an alert-level change re-appends the alert row's idle face and returns
+/// (0 draws); the timer counts down unless the drone's alert level is 3 (combat — blinking frozen);
+/// on wrap: one `Rand_Rand(120)` → timer = d + 120 (calm) / d + 60 (alerted), the caller appends
+/// table[4] (the blink, marker 0xe0000001); a female then rolls `Rand_Rand(100)`: ≤ 50 done,
+/// 51..75 → `Rand_Rand(6)` → timer = d + 6 (the double-blink comes at once, bit 0x80 set),
+/// ≥ 76 → `Rand_FRand(0.2) + 0.2` = the blink script's start-time offset (0.2..0.4 s); with bit
+/// 0x80 already set the next wrap clears it and rolls nothing.
+/// state 2 (talk): stay while a talk script (marker 0xe0000002) plays; else state 1 + the alert
+/// changed flag (0 draws — the next frame re-appends the idle face).
+///
+/// The game's gender select is anim-object flag bit 10 (raw+0xC8 & 0x400); the port passes its
+/// `Drone+0x15` female byte (the skin-mask stand-in — flagged in the report). Returns the table
+/// rows to append this frame.
+#[derive(Debug, Default, PartialEq)]
+pub struct FacialCmd {
+    /// Append the idle face, table row (marker 0xe0000000) — the init's row 0 or the alert row.
+    pub idle_row: Option<usize>,
+    /// Append the blink, table[4] (marker 0xe0000001).
+    pub blink: bool,
+    /// The blink script's start-time offset (`Rand_FRand(0.2) + 0.2`, the ≥ 76 female roll) —
+    /// seconds; 0.0 when the blink starts at once.
+    pub blink_delay: f32,
+}
+
+pub fn facial_update(
+    state: &mut u8, timer: &mut u16, female: bool, alert: u8, alert_changed: &mut bool, talking: bool,
+    rng: &mut crate::drone::Rng,
+) -> FacialCmd {
+    let mut cmd = FacialCmd::default();
+    match *state & 0x7f {
+        0 => {
+            *state = 1; // stored BEFORE the draw [M disasm 0x1be3e0 → the jal 0x1be3f0]
+            *timer = (rng.rand(180) + 90) as u16;
+            cmd.idle_row = Some(0);
+        }
+        1 => {
+            if *alert_changed {
+                *alert_changed = false;
+                cmd.idle_row = Some(alert as usize);
+                return cmd;
+            }
+            // The timer counts down unless the drone's alert level is 3 (combat freeze).
+            if alert != 3 {
+                if *timer == 0 {
+                    // The wrap: the blink. One `Rand_Rand(120)`, timer = d + 120 (calm) / d + 60.
+                    let d = rng.rand(120);
+                    *timer = (if alert != 0 { 60 + d } else { 120 + d }) as u16;
+                    cmd.blink = true;
+                    // The female double-blink roll [M disasm 0x1be52c-0x1be5cc].
+                    if female {
+                        if *state & 0x80 == 0 {
+                            let r = rng.rand(100);
+                            if r > 50 {
+                                if r <= 75 {
+                                    let d2 = rng.rand(6);
+                                    *timer = (6 + d2) as u16;
+                                    *state |= 0x80;
+                                } else {
+                                    cmd.blink_delay = rng.frand(0.2) + 0.2;
+                                }
+                            }
+                        } else {
+                            *state &= !0x80;
+                        }
+                    }
+                } else {
+                    *timer -= 1;
+                }
+            }
+        }
+        2 => {
+            // Stay while a talk script plays; else back to idle and re-append the face next frame.
+            if !talking { *state = 1; *alert_changed = true; }
+        }
+        _ => {}
+    }
+    cmd
+}
+
+#[cfg(test)]
+mod facial3_tests {
+    use super::*;
+
+    /// `facial_update` (0x1be310, fix-facial3): the state machine's transitions and the draw
+    /// accounting — the init's state-before-draw, the wrap's `Rand(120)` + the female rolls.
+    #[test]
+    fn facial_update_state_machine_and_draws() {
+        let mut rng = crate::drone::Rng::new(0x1234_5678);
+        // State 0 (init): state stores 1 BEFORE the draw; one Rand(180) → timer 90..269; row 0.
+        let (mut st, mut tm) = (0u8, 0u16);
+        let cmd = facial_update(&mut st, &mut tm, false, 0, &mut false, false, &mut rng);
+        assert_eq!(st, 1);
+        assert!((90..=269).contains(&tm), "timer = Rand(180)+90, got {tm}");
+        assert_eq!(cmd, FacialCmd { idle_row: Some(0), blink: false, blink_delay: 0.0 });
+        // State 1, alert changed: the idle row re-appends with 0 draws (the timer untouched).
+        let mut changed = true;
+        let cmd = facial_update(&mut st, &mut tm, false, 2, &mut changed, false, &mut rng);
+        assert_eq!(cmd.idle_row, Some(2));
+        assert!(!changed);
+        // State 2 (talk): stay while talking; exit sets state 1 + the re-append flag, 0 draws.
+        let mut st2 = 2u8;
+        facial_update(&mut st2, &mut tm, false, 0, &mut false, true, &mut rng);
+        assert_eq!(st2, 2);
+        facial_update(&mut st2, &mut tm, false, 0, &mut false, false, &mut rng);
+        assert_eq!(st2, 1);
+        // State 1 wrap: force the timer to 0 → the blink; the calm timer = Rand(120)+120.
+        let mut stf = 1u8;
+        let mut tmf = 0u16;
+        let cmd = facial_update(&mut stf, &mut tmf, true, 0, &mut false, false, &mut rng);
+        assert!(cmd.blink, "the wrap blinks");
+        assert!((120..=239).contains(&tmf), "the calm wrap timer = Rand(120)+120, got {tmf}");
+        // The combat freeze: alert 3 never wraps (0 draws, the timer frozen).
+        let mut stc = 1u8;
+        let mut tmc = 0u16;
+        let cmd = facial_update(&mut stc, &mut tmc, false, 3, &mut false, false, &mut rng);
+        assert!(!cmd.blink && tmc == 0, "alert 3 freezes the blink");
+    }
 }

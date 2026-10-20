@@ -15,6 +15,81 @@ pub mod kind {
     pub const OUT: u8 = 5;
     pub const LOAD_LEVEL: u8 = 10;
     pub const OR: u8 = 0xc;
+    /// The movie-player trigger (`Trigger_MoviePlayer` 0x1b2a08 writes action 0xd into slot 0).
+    pub const MOVIE: u8 = 0xd;
+}
+
+/// `GetLevelToLoadFromMovieCode` (0x1d3560), disasm-checked against the decomp: the movie-code →
+/// next-level table the load pipeline's phase 2 consults (`ResetMap_Load` 0x1d6360:173). The 0x72xxxx
+/// codes are the story cut-scene movies that play BETWEEN levels (a level's script event 0x12 requests
+/// them: 0700004a's pack script 0x060006d3 stream 9 fires `0x12 [0x0720004a]` — its own archive holds
+/// no 0xE8 and no other chain); the 0x73xxxx codes are the DRIVING.ELF interludes, and the table sends
+/// every one of them to the front-end map 0x07000048. Any other code (including the 0x71xxxx briefing
+/// wrappers and plain 0x0700xxxx levels) falls through to `GameState+8 & 0xff00ffff` — the pending
+/// load with its stream byte (bits 16-23) masked off [M 0x1d3560:97-98]; the caller passes it.
+pub fn movie_code_next_level(code: u32, fallback: u32) -> u32 {
+    match code {
+        // The story cut-scenes [M 0x1d3560:52-96 — every arm of the binary search tree].
+        0x0720_0001 => 0x0710_0002,
+        0x0720_0002 => 0x0710_0003,
+        0x0720_0003 => 0x0710_0004,
+        0x0720_0005 => 0x0710_0006,
+        0x0720_0006 => 0x0710_0007,
+        0x0720_0007 => 0x0710_0008,
+        0x0720_0009 => 0x0710_000a,
+        0x0720_000a => 0x0710_000b,
+        0x0720_000c => 0x0710_000d,
+        0x0720_000e => 0x0710_000f,
+        0x0720_0011 => 0x0710_0012,
+        0x0720_0012 => 0x0710_004a,
+        0x0720_0014 => 0x0710_0015,
+        0x0720_0015 => 0x0710_0016,
+        0x0720_004a => 0x0710_0013,
+        // The driving interludes → the front end [M 0x1d3560:24-50].
+        0x0730_0004 | 0x0730_0008 | 0x0730_000b | 0x0730_000d | 0x0730_000f | 0x0730_0010
+        | 0x0730_0013 | 0x0730_0017 | 0x0730_001b => 0x0700_0048,
+        _ => fallback,
+    }
+}
+
+/// The level-exit request's resolve: the port's stand-in for `ResetMap_LevelToLoad` (0x1d3800) +
+/// `ResetMap_Load`'s phase-0/phase-2 cycle compressed to the archive the port finally loads [M
+/// 0x1d6360:29-36, 173-182]. A plain 0x0700xxxx code loads as-is. A 0x0720xxxx cut-scene code runs
+/// phase 2 (`GetLevelToLoadFromMovieCode` → a 0x0710xxxx briefing code) and then the second cycle's
+/// phase-2 fallback masks it to the playable level (0x1d3560:97-98: `GameState+8 & 0xff00ffff`).
+/// A 0x0730xxxx driving code resolves straight to its front-end landing (the table has every driving
+/// code → 0x07000048; the port cannot run DRIVING.ELF, so the interlude is skipped — the game's own
+/// X-skip shortens it to nothing observable too [M docs/systems/movies.md §Skipping]). A 0x0710xxxx
+/// briefing wrapper masks directly.
+pub fn resolve_exit_code(code: u32) -> u32 {
+    let masked = code & 0xff00_ffff;
+    match (code >> 20) & 0xf {
+        1 => masked, // 0x0710xxxx briefing wrapper → its level
+        2 => movie_code_next_level(code, masked) & 0xff00_ffff, // 0x0720xxxx cut-scene movie
+        3 => movie_code_next_level(code, masked),               // 0x0730xxxx driving interlude
+        _ => code,   // a plain 0x0700xxxx hashcode loads as-is
+    }
+}
+
+/// `ResetMap_LevelToLoad__FUiScSc` 0x1d3800's wrap switch (no_intro == 0) [M 0x1d3800:27-101;
+/// jump table 0x305030, 74 slots for 0x07000001-0x0700004a, 24 `lui 0x710`/`ori` pairs]: every
+/// story code loads through its 0x0710000N briefing code — identity on the low byte for
+/// 0x07000001..0x07000016, plus the two special cases 0x0700001b → 0x07100018 (the Equinox
+/// briefing is movie 18; 0x0710001b is not on the disc [D /MOVIES/30_FPS]) and 0x0700004a →
+/// 0x0710004a. Every other code — the wrappers 0x07000041/43/46/49, the front end 0x07000048,
+/// the 0x0720/0x0730 movie codes — has no case and loads unwrapped [M]. The trigger exits pass
+/// no_intro = 0 [M 0x1b2318:111]; the only no_intro = 1 callers are P_ENDMISSION's restart rows
+/// [M 0x216618:16,20]. The loader's phase 2 then resolves the wrapped code back
+/// (`GetLevelToLoadFromMovieCode` 0x1d3560 → `resolve_exit_code`); a code whose briefing is not
+/// in `UsingMovie` 0x107eb8 never starts a movie, so state 6 pops on its first tick [M
+/// 0x1c98c8 case 6] and the straight load stands.
+pub fn wrap_intro(code: u32) -> u32 {
+    match code {
+        0x0700_0001..=0x0700_0016 => 0x0710_0000 | (code & 0xff),
+        0x0700_001b => 0x0710_0018,
+        0x0700_004a => 0x0710_004a,
+        _ => code,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +133,14 @@ pub struct Trigger {
     pub success: u8,
     /// `LOAD_LEVEL` fallback channel (`Trigger_Activate` 0x1b2318:92-98): param 3 — set when the key gate blocks. [M]
     pub fallback: u8,
+    /// Movie trigger (0xF4): the OUT slot's FULL 32-bit value — `Trigger_MoviePlayer` 0x1b2a08 copies
+    /// old param 0 into slot 1 (`sw v0,48(s0)` @0x1b2a6c) and `Trigger_Create` 0x1b1720:68 takes it as a
+    /// u32 into ext+0x20 (`__s[8] = *(undefined4 *)(param_3 + 0x30)`), the word both case-0xd paths
+    /// latch into `GameState+0x10` (0x1b1f68 / 0x1b2318:58). The port's `out: u8` would truncate it.
+    pub movie_code: u32,
+    /// Movie trigger: case 0xd fired this tick (its input channel was armed and on — the channel clear
+    /// already applied). The control-list walk drains it into `Drones::movie_request` [M 0x1b1f24-0x1b1f78].
+    pub movie_fired: bool,
 }
 
 /// A body that can touch triggers: capsule axis from `a` to `b`, radius, drone (true) or Bond, drone skin hash.
@@ -72,18 +155,52 @@ impl Toucher {
 
 /// The channel table (`switch_channels`) with the frame each channel was last set (`switch_channels_time`).
 #[derive(Clone, Debug)]
-pub struct Channels { pub v: Vec<u8>, pub time: Vec<u32> }
+pub struct Channels { pub v: Vec<u8>, pub time: Vec<u32>,
+    /// channel-persistence: when `Some`, every `set` (and the direct `v[..]` writers) records
+    /// `(channel, value, frame, source)` — the per-tick writer census's probe. Source 0 = an object
+    /// writer (the trigger/door/sensor/flicker/emitter families), 1 = the script path (the script
+    /// event 0xD / 0x11 writes and the SP out — data-driven from the disc's own scripts [M
+    /// 0x1d94c0]). `None` otherwise (no cost).
+    pub writes: Option<Vec<(u8, u8, u32, u8)>>,
+    /// channel-persistence: every channel a script op has ever written in this level — the script
+    /// event 0xD / 0x11 writes (`Script_EventHandler` 0x1d94c0) and the SP out writes — accumulated
+    /// so the census can tell script-owned channels (data-driven from the disc's own scripts) from
+    /// a port-only writer. The [S] stand-ins deliberately do NOT land here.
+    pub script_channels: std::collections::BTreeSet<u8> }
 
-impl Default for Channels { fn default() -> Channels { Channels { v: vec![0; 256], time: vec![0; 256] } } }
+impl Default for Channels { fn default() -> Channels { Channels { v: vec![0; 256], time: vec![0; 256], writes: None, script_channels: std::collections::BTreeSet::new() } } }
 
 impl Channels {
-    pub fn on(&self, c: u32) -> bool { c != 0 && self.v.get(c as usize).is_some_and(|&x| x != 0) }
+    /// channel-persistence: the script-path write — the game's `Script_EventHandler` 0x1d94c0 case
+    /// 0xD / 0x11 and the SP out write (`SP_Update`'s tail). Same array write + nonzero stamp as
+    /// `set` (the script path stamps [M 0x1d94c0:112]), recorded with source 1.
+    pub fn set_script(&mut self, c: u32, value: u8, frame: u32) {
+        self.set(c, value, frame);
+        if let Some(w) = &mut self.writes { if let Some(last) = w.last_mut() { last.3 = 1; } }
+    }
+
+    /// Channel 0 is a real channel: the game's readers index `switch_channels[ch]` directly —
+    /// `SS_Update` 0x1a9948:20-23 reads AND writes `switch_channels[ss.ch]` for any channel word
+    /// including 0 (the 0c pulley winches #351/#364/#377 listen on ch 0 [D]), and the trigger/AND
+    /// writers copy Out into the array unconditionally [M 0x1b1a78]. The old port skipped ch 0 in
+    /// both `set` and `on`, so a ch-0 SS could never run.
+    pub fn on(&self, c: u32) -> bool { self.v.get(c as usize).is_some_and(|&x| x != 0) }
     pub fn set(&mut self, c: u32, value: u8, frame: u32) {
-        if c == 0 || c > 255 { return; }
+        if c > 255 { return; }
+        // channel-persistence: the NF_CHWATCH write watch — env holds the channel number; every
+        // matching write prints the value and a backtrace (the writer hunt's probe; additive).
+        {
+            static WATCH: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+            let w = *WATCH.get_or_init(|| std::env::var("NF_CHWATCH").ok().and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()));
+            if w == Some(c) {
+                eprintln!("[chwatch] frame {frame} set ch 0x{c:02x} = {value} from\n{}", std::backtrace::Backtrace::force_capture());
+            }
+        }
         // The game stamps `switch_channels_time` on EVERY nonzero write in its trigger and script paths
         // [M 0x1b1a78:87,107,188-189 — the type-2 OR, the AND write, the Out copy; Script_EventHandler 0xD],
         // not only on the rising edge (trigger-port-check #4): a re-set channel refreshes its SEQ_AND window.
         if value != 0 { self.time[c as usize] = frame; }
+        if let Some(w) = &mut self.writes { w.push((c as u8, value, frame, 0)); }
         // NF_LEVELLOG=1: every switch-channel write that turns a channel on (rising edge), with the frame
         // and the new value. Lets the user trace e.g. ch 0x1D being set by the EndLevel script's event 0x11.
         if std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1") && value != 0 && self.v[c as usize] == 0 {
@@ -131,6 +248,31 @@ fn segment_segment(p1: V3, q1: V3, p2: V3, q2: V3) -> f32 {
     dot(sub(c1, c2), sub(c1, c2)).sqrt()
 }
 
+/// The capsule-vs-mesh contact the trigger `contains` uses, shared with the hurt volumes
+/// (the game's object collision picks a class-0x27 hurt volume's glist cels with the player's
+/// capsule [M Player_DealWithObjHit 0x194458:95-103; the exact BL pick rule is the port's
+/// trigger-contact approximation]).
+pub fn capsule_hits_tris(a: V3, b: V3, r: f32, tris: &[[V3; 3]]) -> bool {
+    tris.iter().any(|t| {
+        segment_hits_triangle(a, b, t) || point_triangle(a, t) <= r || point_triangle(b, t) <= r
+            || (0..3).any(|k| segment_segment(a, b, t[k], t[(k + 1) % 3]) <= r)
+    })
+}
+
+/// The object-collision REFINE boundary: strict `dist < radius` [M Intersect_CylGeom 0x109da0:447
+/// pushes only while `fVar30 < *(hittest+0x8C)` and :524 tracks the minimum only while
+/// `fVar30 < fVar19` with the minimum seeded AT the radius — a triangle at exactly the radius is
+/// never tracked, the candidate distance stays 1e8 and `Collide_Intersect` 0x1ebaa8:320 returns no
+/// hit]. The ladder pick's stage 2 rides this (`Ladder`'s refine); the inclusive
+/// `capsule_hits_tris` stays for the hurt volumes and the world objects, whose [M] citations
+/// measure an `<=` contact.
+pub fn capsule_hits_tris_strict(a: V3, b: V3, r: f32, tris: &[[V3; 3]]) -> bool {
+    tris.iter().any(|t| {
+        segment_hits_triangle(a, b, t) || point_triangle(a, t) < r || point_triangle(b, t) < r
+            || (0..3).any(|k| segment_segment(a, b, t[k], t[(k + 1) % 3]) < r)
+    })
+}
+
 /// Whether the segment a–b crosses triangle t.
 fn segment_hits_triangle(a: V3, b: V3, t: &[V3; 3]) -> bool {
     let d = sub(b, a);
@@ -165,6 +307,13 @@ impl Trigger {
             // p1 (key) and p2 (gate) are read back by `Trigger_Activate` (+0x26/+0x28) — the list keeps p1..p4.
             // [M Trigger_Update 0x1b1a78:162-166, Trigger_Activate 0x1b2318:64-111, 0x1b2950].
             kind::LOAD_LEVEL => (0, 0xE, (1..=4).map(&q).collect(), q(10), q(11) != 0, q(0), q(2) as u8, q(1) as u8, q(4) as u8, q(3) as u8),
+            // `Trigger_MoviePlayer` 0x1b2a08 (disasm): backs the 0x84-byte param block up to TmpParam
+            // (0x319b88), then writes slot 0 = 0xd (@0x1b2a58), slot 1 = TmpParam[0] = old p0 (@0x1b2a6c),
+            // slot 2 = TmpParam[2] = old p2 (@0x1b2a74) and slot 9 = TmpParam[1] = old p1 (@0x1b2a7c) —
+            // NOT the mux shift (slot 2 keeps old p2, and slot 9 is REWRITTEN with old p1). Slots 3-8 and
+            // 10-11 keep the placement's raw p3..p8/p10/p11. `Trigger_Create` reads out = slot 1 (u32),
+            // inputs = slots 2..8, mask = slot 9, lock = slot 10, hide = slot 11 [M 0x1b1720:67-88].
+            kind::MOVIE => (q(0), q(1), (2..=8).map(&q).collect(), q(9), q(10) != 0, 0, 0, 0, 0, 0),
             // The mux family (0xEC AND / 0xED SEQ_AND / 0xEE Out / 0xEF OR): the wrapper backs the params up and
             // writes slot[k] = p(k-1) for k = 2..7 ONLY — the loop bound is `while (uVar3 < 8)` [M 0x1b2c68], so
             // slot 8 keeps raw p8 and slots 9-11 are never touched. `Trigger_Create` copies 7 input ushorts from
@@ -176,7 +325,8 @@ impl Trigger {
         let mask = if mask == 0 { 2 } else { mask };
         if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) && out_ch == 0x7d { return None; }
         let filter_gate = if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) { list.get(4).copied().unwrap_or(0) as u8 } else { 0 };
-        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback };
+        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false };
+        if kind == kind::MOVIE { t.movie_code = out_ch; }
         t.set_tris(tris);
         Some(t)
     }
@@ -230,10 +380,7 @@ impl Trigger {
             && (0..3).all(|k| c.b[k] >= self.lo[k] && c.b[k] <= self.hi[k]) {
             return true;
         }
-        self.tris.iter().any(|t| {
-            segment_hits_triangle(c.a, c.b, t) || point_triangle(c.a, t) <= c.r || point_triangle(c.b, t) <= c.r
-                || (0..3).any(|k| segment_segment(c.a, c.b, t[k], t[(k + 1) % 3]) <= c.r)
-        })
+        capsule_hits_tris(c.a, c.b, c.r, &self.tris)
     }
 
     /// `Trigger_Hit` (0x1B1FC8) for a Touch / TouchOnce trigger. The 0x18 branch is an AND-chain [M 0x1b1fc8:56-123]:
@@ -371,6 +518,27 @@ impl Trigger {
                 if self.success != 0 { ch.set(self.success as u32, 1, frame); }
                 self.gone = true;
             }
+            // `Trigger_Update` case 0xd [M 0x1b1a78 case 0xd, disasm 0x1b1f24-0x1b1f78]: fires only when
+            // the FIRST input slot (ext+0x26) is non-zero AND that channel is on; then it CLEARS the
+            // channel (`sb zero,0(a0)` @0x1b1f48), latches ext+0x20 (the out/movie code) into
+            // `GameState+0x10` and 0 into `GameState+0x14` (0x1b1f60/0x1b1f68 — GameState = 0x2a3768
+            // [L symtab]), and pushes GameFlow states 6 (movie; f12 = 0.0) and 7 (→ `Camera_SetFade(6,
+            // 30.0, 1)` + state 8, `GameFlow_PushState` 0x1c9f38:16-22) — 0x41f00000 = 30.0f @0x1b1f6c.
+            // NOTHING on this path starts a movie or loads a level: state 6's body pops immediately
+            // when `BGFMVPlaying == 0` (`psiMovieFinished` 0x1082e8) and only `ResetMap_Load` phase 2
+            // (0x1d6360:173) ever reads `GameState+0x10` — with phase 0 overwriting it first
+            // (0x1d6360:103). The two state pushes are the view's business; the port carries the
+            // code in `Drones::movie_request` via `movie_fired`. The game has NO spent latch here —
+            // a re-armed input fires again (`gone` stays false). The disc's single record (07000041
+            // #81: params (0, 4, 0) [D]) has input slot 0 → the FIRST guard fails every frame —
+            // inert from this path by design.
+            kind::MOVIE => {
+                let input = self.list.first().copied().unwrap_or(0);
+                if input != 0 && ch.on(input) {
+                    ch.set(input, 0, frame);
+                    self.movie_fired = true;
+                }
+            }
             _ => {}
         }
     }
@@ -384,7 +552,7 @@ pub fn build(level: &Level) -> Vec<Trigger> {
     for (i, p) in map.placements.iter().enumerate() {
         let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
         let kind = match p.flags { 0xea => kind::TOUCH_ONCE, 0xeb => kind::TOUCH, 0xec => kind::AND, 0xed => kind::SEQ_AND, 0xee => kind::OUT,
-            0xef => kind::OR, 0xe8 => kind::LOAD_LEVEL, 0xdc => param(0) as u8, _ => continue };
+            0xef => kind::OR, 0xe8 => kind::LOAD_LEVEL, 0xf4 => kind::MOVIE, 0xdc => param(0) as u8, _ => continue };
         // Every trigger family — typed 0xEA-0xEF wrappers and the raw 0xDC alike — shares one param
         // layout: the type byte at p0 (the typed wrappers overwrite it), out = p1, inputs = p2..p8,
         // mask = p9, lock = p10, hide = p11 [M Trigger_Create 0x1b1720:61-91; the 0xEA-0xEF wrappers
@@ -416,7 +584,7 @@ mod tests {
     fn plate(kind: u8, out: u8, mask: u32, list: Vec<u32>) -> Trigger {
         // A 2 × 2 horizontal quad at y = 0 around the origin.
         let (a, b, c, d) = ([-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]);
-        Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, b, c], [a, c, d]], lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0 }
+        Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, b, c], [a, c, d]], lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false }
     }
 
     #[test]
@@ -440,6 +608,68 @@ mod tests {
         let drone_plate = plate(kind::TOUCH_ONCE, 0x30, 0x10, vec![]);
         assert!(!drone_plate.hit(&ch, &on));
         assert!(drone_plate.hit(&ch, &[Toucher { drone: true, ..on[0] }]));
+    }
+
+    /// The movie trigger (0xF4 → action 0xd), `Trigger_Update` case 0xd [M 0x1b1a78:190-201, disasm
+    /// 0x1b1f24-0x1b1f78]: fires only when the FIRST input slot is non-zero AND its channel is on;
+    /// the fire CLEARS that channel (so it cannot re-fire until something re-arms it) and raises
+    /// `movie_fired` for the walk to carry into `Drones::movie_request` (the game latches ext+0x20
+    /// into GameState+0x10 and pushes states 6/8 — no level load, no spent latch).
+    /// Sister 1: the input slot zero → the first guard (`lhu v0,38(s0); beq v0,zero` @0x1b1f24-28)
+    /// fails even with the channel itself armed — the disc's only 0xF4 record (07000041 #81,
+    /// params (0, 4, 0) [D]) is in this shape, so its update path is inert by design.
+    /// Sister 2: input slot armed but the channel off → the second guard
+    /// (`lbu v1,0(a0); beq v1,zero` @0x1b1f3c-40) fails; the channel is NOT cleared.
+    #[test]
+    fn movie_trigger_fires_on_armed_input_and_the_discs_record_cannot() {
+        let mut ch = Channels::default();
+        // A movie trigger whose input slot is armed (the game's ext+0x26 = the placement's p2).
+        let mut movie = plate(kind::MOVIE, 0, 4, vec![0x2a]);
+        movie.movie_code = 0x0720_004a;
+        let touchers: [Toucher; 0] = [];
+        // Sister 2 first: the channel off → nothing (and the channel is not cleared).
+        movie.update(&mut ch, &touchers, 2);
+        assert!(!movie.movie_fired, "channel off → no fire");
+        // Fire: the channel on → cleared + the movie code carried.
+        ch.set(0x2a, 1, 1);
+        movie.update(&mut ch, &touchers, 3);
+        assert!(movie.movie_fired, "input slot non-zero + channel on → case 0xd fires [M 0x1b1f24-0x1b1f48]");
+        assert!(!ch.on(0x2a), "the fire clears the input channel [M 0x1b1f48 `sb zero,0(a0)`]");
+        assert_eq!(movie.movie_code, 0x0720_004a, "the out slot's full u32 rides (ext+0x20 → GameState+0x10 [M 0x1b1f68])");
+        assert!(!movie.gone, "case 0xd has no spent latch — the trigger stays [M: no ext+0x38=99 write in the arm]");
+        // The port's re-arm rule: the walk drains `movie_fired`; a re-armed channel fires again.
+        movie.movie_fired = false;
+        ch.set(0x2a, 1, 4);
+        movie.update(&mut ch, &touchers, 5);
+        assert!(movie.movie_fired, "re-armed → fires again (no latch in the game's arm)");
+        // Sister 1: the disc's record shape — input slot 0 (p2 = 0 [D]) — never fires, even with
+        // channel 0 armed (channel 0 is a real channel, but the SLOT guard fails first).
+        let mut discs = plate(kind::MOVIE, 0, 4, vec![0]);
+        discs.movie_code = 0;
+        ch.set(0, 1, 6);
+        discs.update(&mut ch, &touchers, 7);
+        assert!(!discs.movie_fired, "input slot 0 → the first guard fails [M 0x1b1f24-0x1b1f28] — the 07000041 record's update path is inert");
+        assert!(ch.on(0), "channel 0 untouched (the clear only runs on a fire)");
+    }
+
+    /// The E-key path: `Trigger_Activate` 0x1b2318's type-0xd arm [M :53-61] — the `mask & 4` gate
+    /// (the port models as: activate_request's `_` arm writes nothing, and the walk checks the kind
+    /// + mask itself, 0x1b2318 has NO cancel-channel, key-gate or channel-write arm for 0xd and NO
+    /// spent latch). Sister: a mask without bit 4 → nothing.
+    #[test]
+    fn movie_trigger_activate_gates_on_mask_bit4() {
+        let ch = Channels::default();
+        let mut movie = plate(kind::MOVIE, 0, 4, vec![0]);
+        movie.movie_code = 0;
+        // The port's contract: the `_` arm of activate_request returns no writes and no level for
+        // action 0xd — the movie request is raised by the walk's kind check (mask & 4 [M 0x1b2318:55]).
+        let (sets, next) = movie.activate_request(&ch);
+        assert!(sets.is_empty() && next.is_none(), "action 0xd writes no channel and loads no level [M 0x1b2318:53-61]");
+        assert_eq!(movie.movie_code, 0, "the disc's record carries movie code 0 [D placement params]");
+        // The walk's gate shape, pinned directly: mask & 4 decides.
+        assert!(movie.mask & 4 != 0, "the disc's mask (p1 = 4 [D]) passes the gate");
+        let blocked = Trigger { mask: 8, ..movie.clone() };
+        assert!(blocked.mask & 4 == 0, "sister: mask 8 fails the `mask & 4` gate [M 0x1b2318:55-57]");
     }
 
     /// `LOAD_LEVEL` (0xE8): `Trigger_Update` case 10 fires when `switch_channels[gate]` is non-zero — no touch check.
@@ -603,5 +833,89 @@ mod tests {
         let mut keep = Trigger { glist_0x10: false, ..plate(kind::TOUCH_ONCE, 0x50, 8, vec![]) };
         keep.update(&mut ch2, &away, 2);
         assert!(!keep.gone, "no glist 0x10: the trigger survives");
+    }
+
+    /// `GetLevelToLoadFromMovieCode` (0x1d3560): the story cut-scene codes map to the NEXT level's
+    /// briefing code, the driving interludes map to the front end, and everything else falls back to
+    /// `GameState+8 & 0xff00ffff` [M the decomp's every arm]. The numbers are the task's chain table:
+    /// 06→07, 09→0a, 0a→0b, 11→12, 12→4a, 4a→13 ride exactly these pairs.
+    #[test]
+    fn movie_code_table_matches_the_decomp() {
+        // The story cut-scene pairs (the movie AFTER level N loads level N+1) [M 0x1d3560:52-96].
+        for (code, want) in [
+            (0x0720_0001u32, 0x0710_0002), (0x0720_0002, 0x0710_0003), (0x0720_0003, 0x0710_0004),
+            (0x0720_0005, 0x0710_0006), (0x0720_0006, 0x0710_0007), (0x0720_0007, 0x0710_0008),
+            (0x0720_0009, 0x0710_000a), (0x0720_000a, 0x0710_000b), (0x0720_000c, 0x0710_000d),
+            (0x0720_000e, 0x0710_000f), (0x0720_0011, 0x0710_0012), (0x0720_0012, 0x0710_004a),
+            (0x0720_0014, 0x0710_0015), (0x0720_0015, 0x0710_0016), (0x0720_004a, 0x0710_0013),
+        ] {
+            assert_eq!(movie_code_next_level(code, 0x0bad_f00d), want, "movie {code:08x}");
+        }
+        // The driving interludes all land on the front end [M 0x1d3560:24-50].
+        for code in [0x0730_0004u32, 0x0730_0008, 0x0730_000b, 0x0730_000d, 0x0730_000f, 0x0730_0010, 0x0730_0013, 0x0730_0017, 0x0730_001b] {
+            assert_eq!(movie_code_next_level(code, 0x0bad_f00d), 0x0700_0048, "driving {code:08x}");
+        }
+        // Sisters: an unknown code and a plain level code fall back to the masked pending load.
+        assert_eq!(movie_code_next_level(0x0720_0099, 0x0700_0004), 0x0700_0004, "unknown 0x72 → the masked fallback");
+        assert_eq!(movie_code_next_level(0x0710_0006, 0), 0, "0x71 codes have no arm — the caller's fallback");
+    }
+
+    /// `resolve_exit_code`: the port's compression of `ResetMap_LevelToLoad` + `ResetMap_Load`'s
+    /// phase-0/phase-2 cycle [M 0x1d3800/0x1d6360/0x1d3560]. The numbers are the task's chains:
+    /// 4a's cut-scene request lands on 13, a driving exit lands on the front end, and a plain
+    /// 0xE8 hashcode passes through untouched.
+    #[test]
+    fn resolve_exit_code_walks_the_game_pipeline() {
+        assert_eq!(resolve_exit_code(0x0720_004a), 0x0700_0013, "4a's cut-scene movie → 13 (0x720004a → 0x7100013 → masked)");
+        assert_eq!(resolve_exit_code(0x0720_0006), 0x0700_0007, "06's cut-scene movie would land on 07");
+        assert_eq!(resolve_exit_code(0x0730_0013), 0x0700_0048, "13's driving interlude → the front end");
+        assert_eq!(resolve_exit_code(0x0710_0006), 0x0700_0006, "a briefing wrapper masks to its level");
+        assert_eq!(resolve_exit_code(0x0700_0007), 0x0700_0007, "a plain exit hashcode passes through");
+        // Sister: the 0x720004a request the 4a SP actually fires is resolvable end to end.
+        assert_eq!(resolve_exit_code(0x0720_004a), 0x0700_0013);
+    }
+
+    /// `ResetMap_LevelToLoad`'s wrap switch (no_intro == 0) [M 0x1d3800:27-101]: the Double Cross
+    /// parts wrap to their 0x0710000N briefing codes (identity on the low byte), the Equinox
+    /// special case and 4a wrap, and everything outside the jump table's 74 slots (0x07000001-4a)
+    /// — the wrappers, the front end, the 0x0720/0x0730 movie codes — loads unwrapped.
+    #[test]
+    fn wrap_intro_follows_the_level_to_load_switch() {
+        // The Double Cross chain [D: the parts' 0xE8 param-0s are exactly these codes].
+        assert_eq!(wrap_intro(0x0700_0001), 0x0710_0001, "[M 0x1d3800:29-31]");
+        assert_eq!(wrap_intro(0x0700_0002), 0x0710_0002, "[M 0x1d3800:33-36]");
+        assert_eq!(wrap_intro(0x0700_0003), 0x0710_0003, "[M 0x1d3800:37-40]");
+        assert_eq!(wrap_intro(0x0700_0004), 0x0710_0004, "[M 0x1d3800:41-44]");
+        // The two special cases [M 0x1d3800:95-99].
+        assert_eq!(wrap_intro(0x0700_001b), 0x0710_0018, "the Equinox briefing is movie 18");
+        assert_eq!(wrap_intro(0x0700_004a), 0x0710_004a);
+        // Outside the table: the wrappers, the front end, the movie codes load unwrapped [M].
+        assert_eq!(wrap_intro(0x0700_0048), 0x0700_0048, "the front end has no wrap case");
+        assert_eq!(wrap_intro(0x0700_0043), 0x0700_0043, "the wrappers load unwrapped");
+        assert_eq!(wrap_intro(0x0720_004a), 0x0720_004a, "the 0x0720 cut-scene codes skip the wrap");
+        assert_eq!(wrap_intro(0x0730_0013), 0x0730_0013, "the 0x0730 interlude codes skip the wrap");
+        // Sister: a code inside the table's range but past the last case (0x0700001c-0x0700001a
+        // gap — 0x1c..0x49 have no case [M 0x1d3800's table]) stays unwrapped.
+        assert_eq!(wrap_intro(0x0700_001c), 0x0700_001c);
+    }
+
+    /// The Double Cross hops wrap and resolve straight back: `wrap_intro` (0x1d3800's switch)
+    /// maps each part to its briefing code and phase 2 (`GetLevelToLoadFromMovieCode`
+    /// 0x1d3560:97-98) strips the middle byte back off — the net code the loader finally loads is
+    /// the part itself. The briefing codes 0x07100002/03/04 are NOT in `UsingMovie` 0x107eb8 [M
+    /// :8-85 — only 0x07100001/05/09/0c/11/14/18], so no movie starts and state 6 pops on its
+    /// first tick [M 0x1c98c8 case 6]; the whitelist intersection itself is pinned against the
+    /// port's `nf_view::movie::USING_MOVIE` in the nf-view tests (the constant lives there).
+    /// Sister: the mission-start code 0x07000001 wraps to 0x07100001, the one whitelisted Double
+    /// Cross briefing.
+    #[test]
+    fn a_double_cross_hop_wraps_and_resolves_straight_back() {
+        for (part, wrapped) in [(0x0700_0002, 0x0710_0002), (0x0700_0003, 0x0710_0003), (0x0700_0004, 0x0710_0004)] {
+            assert_eq!(wrap_intro(part), wrapped, "[M 0x1d3800]");
+            assert_eq!(resolve_exit_code(wrapped), part, "phase 2 strips the wrap back to the part [M 0x1d3560:97-98]");
+        }
+        // Sister: the mission-start briefing wrap is a different code (and the only Double Cross
+        // one in UsingMovie — pinned against the port's whitelist in nf-view).
+        assert_eq!(wrap_intro(0x0700_0001), 0x0710_0001);
     }
 }

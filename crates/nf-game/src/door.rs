@@ -4,7 +4,7 @@
 //! checked against the live layout in `work/ee_start_05.bin` [L] (5 doors on 07000005: 4 `Door_Locked_3/4`
 //! sliders without an anim and lock channel 200, 1 `Door_UNLocked` swing door with a 3-key anim).
 //!
-//! Not ported: the door→portal links (`Door_Link2Portal`, block 0x21), the text labels 0x2000003 / 0x200000b
+//! Not ported: the text labels 0x2000003 / 0x200000b
 //! (`Door_Update`'s unlock note, `Door_DoMsg` — no text system yet), and the collision-proxy list of
 //! `Door_ReactToHit` (`obj+0xD0`, as U-041): the proxy scan is stood in for by the same bounding-sphere test
 //! `Door_Update`'s proximity check uses.
@@ -137,7 +137,7 @@ fn rigid_inverse(m: &Mat4) -> Mat4 {
 }
 
 /// Quaternion → matrix (`Spline_Interp`'s tail): `m00 = 1−(2y·y+2z·z)` and so on, translation in row 3 [L].
-fn quat_matrix(q: [f32; 4], t: V3) -> Mat4 {
+pub(crate) fn quat_matrix(q: [f32; 4], t: V3) -> Mat4 {
     let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
     let (yy, zz, xx) = (y + y, z + z, x + x);
     [
@@ -155,9 +155,12 @@ fn slerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     let neg = dot < 0.0;
     if neg { dot = -dot; }
     let (w0, w1) = if 0.01 < 1.0 - dot {
-        let angle = dot.acos();
-        let s = sinf(angle);
-        (sinf(angle - t * angle) / s, sinf(t * angle) / s)
+        // G-046: Spline_Interp 0x1e1858:285-300 [M] — acosf (0x232c48), wt = angle·t (mul.s), the weights
+        // PS2Sinf(wt)·(1/PS2Sinf(angle)) with the EE sub in sinf(angle − wt).
+        let angle = crate::trig::acosf_libm(dot);
+        let wt = nf_formats::ps2float::mul(angle, t);
+        let recip = nf_formats::ps2float::div(1.0, sinf(angle));
+        (sinf(crate::trig::ee_sub(angle, wt)) * recip, sinf(wt) * recip)
     } else { (1.0 - t, t) };
     let w0 = if neg { -w0 } else { w0 };
     [w0 * a[0] + w1 * b[0], w0 * a[1] + w1 * b[1], w0 * a[2] + w1 * b[2], w0 * a[3] + w1 * b[3]]
@@ -256,6 +259,19 @@ pub struct Door {
 }
 
 impl Door {
+    /// `Door_IsClosed` (0x1367b0) [M]: a kind-1 door (`obj+0xF6`) always reads closed; a grouped
+    /// door (ext+0x6A != 0) reads `DoorGroupsStates[g] == 2` (the `Doors_Calc` OR); the rest read
+    /// `obj+0xF4 == CLOSED` exactly — OPENING/CLOSING leaves do not block. `group_states` is
+    /// `Doors::group_states` (the game's 0xCA-byte `DoorGroupsStates`); a group past the table
+    /// reads open (the game would read past its own table — none exists on our levels).
+    pub fn is_closed(&self, group_states: &[u16]) -> bool {
+        if self.kind == 1 { return true; }
+        if self.group != 0 {
+            return group_states.get(self.group as usize).copied().unwrap_or(0) == CLOSED;
+        }
+        self.state == CLOSED
+    }
+
     /// The pose at `pos01` (`Door_Interp`'s write; the create path always takes the spline mode).
     fn pose_at(&self, pos01: f32, spline: bool) -> Option<Mat4> {
         self.keys.as_ref().and_then(|k| interp(k, 0, self.frames, pos01 * self.frames as f32, spline))
@@ -323,6 +339,13 @@ fn visible_actors(actors: &[DoorActor]) -> impl Iterator<Item = (V3, f32)> + '_ 
 pub type SoundEvent = (u16, V3);
 
 impl Doors {
+    /// The per-door `Door_IsClosed` (0x1367b0) snapshot, indexed by `list` position — what the cel
+    /// walk consumes each frame through the portal links (`Vision_Recurse` 0x1e82e0 reads
+    /// `Door_IsClosed(portal+0xC)`; fix-door-portal-links).
+    pub fn closed_flags(&self) -> Vec<bool> {
+        self.list.iter().map(|d| d.is_closed(&self.group_states)).collect()
+    }
+
     /// `Door_Create` over the main map's placements. `path_blocks` is the level's 0x19 payloads (its
     /// `path_blocks()`); `object` resolves a placement to `(glist hashcode, gfx sphere centre, radius)`.
     pub fn create(
@@ -403,10 +426,12 @@ impl Doors {
         if new & 0x10 != 0 && old & 0x10 == 0 && sc != 0xffff { sounds.push((sc, pos)); }
         if ch != 0 {
             // `Door_SetState` (0x135618:26): the channel mirrors the OLD state's "in motion" bits (0xc), timestamped
-            // every motion transition. The game reads `+0xf4 & 0xc` BEFORE writing the new state [M].
+            // every motion transition. The game reads `+0xf4 & 0xc` BEFORE writing the new state [M]. channel-persistence:
+            // this goes through `Channels::set` — the game's write lands in `switch_channels` and stamps
+            // `switch_channels_time` exactly when the mirrored bits are nonzero (set's nonzero stamp), and the port's
+            // writer census sees it like every other write.
             let moving = (old & 0xc) != 0;
-            channels.v[ch as usize] = moving as u8;
-            if moving { channels.time[ch as usize] = frame; }
+            channels.set(ch as u32, moving as u8, frame);
         }
         let d = &mut self.list[i];
         d.state = new;
@@ -798,6 +823,14 @@ impl Doors {
         // Stand-in shape [S — the game's straddle test function is not pinned]: a closed straddle
         // door activates (from_player — the lock guards hold) when the player's feet stand inside
         // its threshold (xz 1.4, the leaf's half-width plus the capsule; y within the door band).
+        // CORRECTION (level-15-complete): the "every 07000015 kind-2 door carries it" and
+        // "door[32] is E-dead" claims above are DISPROVEN by the disc — none of 07000015's
+        // corridor doors [29]/[32]/[49]/[50]/[51]/[52] carries a par-4 (parsed `straddle=false`,
+        // probe walkreal_probe15), and door[32] opens with the plain E path once the player
+        // stands in reach: the walkreal-c stop was the ROUTE (the console placement map54 #145
+        // walls the south-east corner; the nav graph's own lane reaches the doorway from the
+        // north — walkreal_07000015_live now walks it green). The arm stays for the
+        // 07000016-arrival-door shape [S] and changes no E-path behaviour.
         for i in 0..self.list.len() {
             let d = &self.list[i];
             if !d.straddle || d.kind == 0 || d.state & 0xc != 0 { continue; }
@@ -809,6 +842,62 @@ impl Doors {
             hits += 1;
         }
         (sounds, hits)
+    }
+
+    /// The straddle walk-in, EVERY tick (fix-casings-16). The E-path arm above only runs while the
+    /// use key is held, but the game's straddle doors open with no E at all — on 07000016 the
+    /// arrival walkway's first door (glist 0x803f00a0, kind 2, straddle, ch_open 0,
+    /// ch_lock 0, flags 0x3 → closed at create [M Door_Create 0x136100: state 4 only when
+    /// doorinfo+0x4c|+0x50 bit 2]) blocks the only path, and neither `Door_Update` (a ch_open==0
+    /// door skips every channel arm [M 0x1363c8: `(state & 6) == 0` / `uVar2 == 0 → LAB_00136550`])
+    /// nor `Door_ReactToHit` (0x135980 reverses only MOVING leaves: kind 0 needs `state & 0x18`,
+    /// kind 2 needs `state & 0x10`) ever opens a closed idle one. The game opens it through the
+    /// collide-contact path the port has not rebuilt (U-041); until then the stand-in drives the
+    /// SAME activation from `Door_Update`'s per-tick actor list, with the game's own proximity
+    /// metric — `Vec_SqDist3D(door+0x80, actor+0x80) < (door+0x8C + actor+0x8C)² · 2`
+    /// [M 0x1363c8 @0x136678-0x136684, the scan `Door_Update` itself runs for the auto-close] —
+    /// so the open lands where the game's contact would. The lock guards hold: `activate`
+    /// (from_player) rejects a locked door (the 320 thud) and the `state & 0xc` skip keeps a
+    /// moving leaf alone. Swing doors (kind 0) stay E/ReactToHit-only, as in the E arm.
+    ///
+    /// 102j2-fix-casings-16b — the gate narrowed to the game's scan domain. `Door_Update`'s
+    /// proximity scan exists ONLY as the auto-close: both of its arms sit behind an OPEN-door
+    /// test — `(state & 2) == 0` inside the `(state & 6) != 0` branch [M 0x1363c8 @0x136678,
+    /// the ch_open-went-off arm] and `uVar7 & 4` [M 0x1363c8 @0x136610, the open_timer arm] —
+    /// and its only action is one `Door_Activate` to close. The scan never touches a moving
+    /// leaf: a CLOSING (0x10) door is left to finish. The old `state & 0xc != 0` skip read only
+    /// bits 2–3 (OPEN|OPENING), so a CLOSING straddle door passed the gate and the walk-in
+    /// re-`activate`d it every tick — the port's slide `activate` turns 0x10 into OPENING
+    /// [M Door_Activate 0x135be0: `state & 0x12` → SetState(8)], and a leaf barely off its open
+    /// end snaps straight back to OPEN. That broke 07000001's
+    /// `door_e_opens_then_e_closes_on_07000001` (after the second E the state read 0x4, not
+    /// 0x10). The stand-in is the scan's open-side complement: it acts on a CLOSED IDLE door
+    /// only (`state == CLOSED`), never on a moving one. Two more narrowing arms, same
+    /// principle: a ch_open door is `Door_Update`'s own channel arm's job [M 0x1363c8: channel
+    /// on → `Door_Activate`], so the stand-in covers only the channel-less doors (16's arrival
+    /// door, ch_open 0 [M 0x136100 + glist 0x803f00a0]); and the lock pre-check is silent —
+    /// the game's per-tick scan plays no lock sound (the ch_lock thud is `Door_Activate`'s
+    /// E-path arm [M 0x135be0]), so the walk-in skips before `activate` instead of thudding
+    /// every tick.
+    pub fn straddle_walkin(&mut self, actors: &[DoorActor], channels: &mut Channels, frame: u32) -> Vec<SoundEvent> {
+        let mut sounds = Vec::new();
+        for i in 0..self.list.len() {
+            let (straddle, kind, state) = { let d = &self.list[i]; (d.straddle, d.kind, d.state) };
+            if !straddle || kind == 0 || state != CLOSED { continue; }
+            let (ch_open, ch_lock, locked) =
+                { let d = &self.list[i]; (d.ch_open, d.ch_lock, d.locked_flag) };
+            if ch_open != 0 { continue; }
+            if locked != 0 || (ch_lock != 0 && !channels.on(ch_lock as u32)) { continue; }
+            let (sc, sr) = self.list[i].sph;
+            let near = actors.iter().filter(|a| !a.2).any(|a| {
+                let dx = sc[0] - a.0[0]; let dy = sc[1] - a.0[1]; let dz = sc[2] - a.0[2];
+                let th = (sr + a.1) * (sr + a.1) * 2.0;
+                dx * dx + dy * dy + dz * dz < th
+            });
+            if !near { continue; }
+            self.activate(i, actors, true, channels, frame, &mut sounds);
+        }
+        sounds
     }
 
     /// Snapshot the channels for this tick's lock-edge test (`switch_channels_prev`). The game

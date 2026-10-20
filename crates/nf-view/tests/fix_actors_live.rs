@@ -29,7 +29,9 @@ fn free(sim: &mut nf_view::scene::Sim, ticks: u32) -> bool {
 fn grenade_at(sim: &mut nf_view::scene::Sim, pos: [f32; 3]) {
     sim.drones.grenades.push(nf_game::grenade::Grenade {
         pos, velocity: [0.0, 0.0, 0.0], speed: 0.0,
-        travelled: 0.0, range: 60.0, damage: 100.0, radius: 3.0, weapon_type: 0x34, mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false,
+        travelled: 0.0, range: 60.0, damage: 100.0, radius: 3.0, weapon_type: 0x34, mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false,
+        stuck: false, seek_target: None,
+        phase: None,
     });
 }
 
@@ -96,7 +98,8 @@ fn killing_a_protected_guest_fails_the_mission_but_scaring_him_does_not() {
 #[test]
 fn the_spawner_arrives_on_its_channels() {
     let iso = iso();
-    let mut scene = nf_view::load(&iso, "07000011.bin", false).expect("load 07000011");
+    // the 00-Agent load: the scenario was calibrated on the full roster, which Drone_Create's min-difficulty gate [M 0x136be0:49] makes the 00-Agent roster (the game holds back the param2>=2 placements at 1/2): the group-1 templates are param2>=2 placements, absent from an Operative load.
+    let mut scene = nf_view::load_with_carry_difficulty(&iso, "07000011.bin", false, None, 3).expect("load 07000011");
     {
         let sim = scene.sim.as_mut().unwrap();
         assert!(free(sim, 400));
@@ -156,12 +159,22 @@ fn the_assassin_dies_and_completes_his_objective() {
     assert_ne!(st[i][0], 4, "a miss does not complete 'Defeat the assassin'");
     assert!(scene.sim.as_ref().unwrap().drones.list[boss].health <= hp0, "the blast reached him or not — the objective stays open either way");
     // The kill.
-    let bp = scene.sim.as_ref().unwrap().drones.list[boss].pos;
-    grenade_at(scene.sim.as_mut().unwrap(), [bp[0], bp[1] + 0.5, bp[2]]);
+    // batch-1016b (ninja-melee): the assassin is mode 0xd, whose DefaultInit arm sets health
+    // 100.0 [M 0x14b300:749, +0xB0 = +0xAC at :776] — one at-the-feet blast no longer kills him,
+    // so the harness repeats the blast at his current position until he falls.
     let mut dead = false;
-    for _ in 0..300u32 {
+    'blasts: for _ in 0..10 {
+        let bp = scene.sim.as_ref().unwrap().drones.list[boss].pos;
+        grenade_at(scene.sim.as_mut().unwrap(), [bp[0], bp[1] + 0.5, bp[2]]);
+        for _ in 0..60u32 {
+            scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+            if scene.sim.as_ref().unwrap().drones.list[boss].corpse { dead = true; break 'blasts; }
+        }
+    }
+    for _ in 0..240u32 {
+        if dead { break; }
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
-        if scene.sim.as_ref().unwrap().drones.list[boss].corpse { dead = true; break; }
+        if scene.sim.as_ref().unwrap().drones.list[boss].corpse { dead = true; }
     }
     assert!(dead, "the explosion kills the assassin");
     let mut done = false;

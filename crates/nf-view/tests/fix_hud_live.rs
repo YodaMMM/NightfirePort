@@ -72,7 +72,7 @@ fn taking_an_armour_pickup_shows_the_message_bar_then_it_fades() {
     let expected = match &tk {
         Taken::Armour => lang.bind(0x200_000F).unwrap_or("").to_string(),
         Taken::Bonus => lang.bind(0x200_004A).unwrap_or("").to_string(),
-        Taken::Label => String::new(), // fix-objects2: kind 4 has no label on the disc data so far [M 0x18e650 case 4]
+        Taken::Label { label } => if *label != 0 { lang.bind(*label).unwrap_or("").to_string() } else { String::new() }, // fix-pickups-ammo: the kind-4 label message (0700000b's item: 0x2000036 [D])
         Taken::Message => lang.bind(0x200_0013).unwrap_or("").to_string(), // case 5 [M 0x18e650:229-233]
         Taken::Key { .. } => lang.bind(0x200_0010).unwrap_or("").to_string(),
         Taken::Weapon { weapon } => lang.format(0x200_000D, &[lang.bind(sim.weapons.name_label(*weapon as usize)).unwrap_or("").to_string()]),
@@ -86,7 +86,17 @@ fn taking_an_armour_pickup_shows_the_message_bar_then_it_fades() {
     assert!((sim.hud.bar_close - 256.0).abs() < 1e-4);
     let f = nf_view::hud::overlay(&scene, 4.0 / 3.0);
     assert!(!tex_runs(&scene, &f, 0x0300_007a).is_empty(), "the bar quad draws while the message is up");
-    // 180 ticks of text (fade = the last 15), then the 16 px/tick close.
+    // 180 ticks of text, then the close. Evidence [M]: the pickup message's life 180 is
+    // `Pickup_Handler` 0x18e650's `fVar22 = 180.0` → `Text_AddMsg(...,6,str,0,180)` (90 in MP); the
+    // life float drains 1/tick (`Text_UpdateMsg` 0x1b11d8:49, −FRAME_RATE_MUL; = 1.0 at 60 Hz [M
+    // GS_SetRefreshRate 0x17d2b8:15, L ee_snapshot 0x30d0d8]); the pane fades alpha = life·17 while
+    // life < 15 (`HUD_UpdateStatusPane` 0x19c310:262-268) — so the fade is the LAST 15 ticks; and the
+    // close is the pane state +0xc decrement: `HUD_CreatePickupStatusPane` 0x1a1140:10 writes 0x10
+    // (16) into the pickup pane's rate (`HUD_CreateInfoStatusPane` 0x1a10b8:10 and
+    // `HUD_CreateObjectiveStatusPane` 0x1a1070:10 write the same 0x10; the mission pane 0x1a1028:10
+    // writes 0x20), which `HUD_UpdateStatusPane` 0x19c310:331 (the field read at :37, `piVar4[3]`)
+    // subtracts from the bar's countdown ushort each state-4 tick — 16 per tick, the port's
+    // `bar_close`.
     for _ in 0..185 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     let sim = scene.sim.as_ref().unwrap();
     assert!(sim.hud.msgs.is_empty(), "the message expired");
@@ -143,20 +153,21 @@ fn damage_direction_glow_lights_the_attacker_side() {
     // view-space x<0 → bit 4 (sprite 22, tex 0x0300018E), x>0 → bit 8 (sprite 23, flipped U),
     // y<0 → bit 1 (sprite 20, tex 0x0300018D), y>0 → bit 2 (sprite 21, flipped V).
     let mut h = nf_game::bullet::PlayerHealth::default();
+    let mut rng = nf_game::drone::Rng::new(0);
     let eye = [0.0, 1.5, 0.0];
     // The port's object frame has +X = screen-left (`Sim::crosshair`), so an attacker on the +X side of a
     // yaw-0 Bond (facing +Z) is on the screen's LEFT → bit 4 (sprite 22); −X = screen right → bit 8.
-    h.pain_from(5.0, 1, 0x0700_0005, [4.0, 1.5, 0.0], eye, 0.0);
+    h.pain_from(&mut rng, 5.0, 1, 0x0700_0005, [4.0, 1.5, 0.0], eye, 0.0);
     assert_eq!(h.dir_bits, 0x4, "an attacker on the screen's LEFT sets bit 4");
-    h.pain_from(5.0, 1, 0x0700_0005, [-4.0, 1.5, 0.0], eye, 0.0);
+    h.pain_from(&mut rng, 5.0, 1, 0x0700_0005, [-4.0, 1.5, 0.0], eye, 0.0);
     assert_eq!(h.dir_bits, 0x8, "an attacker on the screen's RIGHT sets bit 8");
-    h.pain_from(5.0, 1, 0x0700_0005, [0.0, 4.0, 0.0], eye, 0.0);
+    h.pain_from(&mut rng, 5.0, 1, 0x0700_0005, [0.0, 4.0, 0.0], eye, 0.0);
     assert_eq!(h.dir_bits, 0x2, "an attacker ABOVE sets bit 2");
-    h.pain_from(5.0, 1, 0x0700_0005, [0.0, -1.0, 0.0], eye, 0.0);
+    h.pain_from(&mut rng, 5.0, 1, 0x0700_0005, [0.0, -1.0, 0.0], eye, 0.0);
     assert_eq!(h.dir_bits, 0x1, "an attacker BELOW sets bit 1");
     // The generic pain path writes 0xC (both sides) [M Player_HandlePain 0x1902c8:124-130].
     let mut g = nf_game::bullet::PlayerHealth::default();
-    g.pain_generic(5.0, 1, 0x0700_0005, 0);
+    g.pain_generic(&mut rng, 5.0, 1, 0x0700_0005, 0);
     assert_eq!(g.dir_bits, 0xC);
     // The HUD: bit 4 lights sprite 22 (tex 0x0300018E, unflipped) and nothing else.
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };

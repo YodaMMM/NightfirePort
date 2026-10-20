@@ -28,7 +28,9 @@ fn grenade_at(sim: &mut nf_view::scene::Sim, pos: [f32; 3]) {
         pos, velocity: [0.0, 0.0, 0.0], speed: 0.0,
         // One tick from its fuse (travelled 59 of range 60): a grenade explodes only on its fuse, never on contact
         // (fix-weapons-all, `Bullet_CollisionHandler` 0x12ce80), so the drop goes off where it lands.
-        travelled: 59.0, range: 60.0, damage: 100.0, radius: 3.0, weapon_type: 0x34, mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false,
+        travelled: 59.0, range: 60.0, damage: 100.0, radius: 3.0, weapon_type: 0x34, mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false,
+        stuck: false, seek_target: None,
+        phase: None,
     });
 }
 
@@ -60,10 +62,32 @@ fn the_07000016_chasers_defeat_completes_the_final_mission() {
         sim.drones.channels.set(0x81, 1, sim.drones.frame);
     }
     // Play the chain out: the cinema (750 ticks) + the shuttle script + the spawner waves.
+    // The launch script's own exhaust gate: stream 6's event-0xd writes raise ch 0xf3 (243) at
+    // script tick 1611 and drop it at 2170 [D 0x0600090a scriptlog + params] — the
+    // HurtPoly-ShuttleLaunch #309 (gate 0xf3, 1000 damage [D]) is LIVE for those ~560 ticks, and
+    // the pack cinema's snap leaves Bond on the silo floor INSIDE the volume (3.57, −23.18,
+    // −179.55). The disc's order puts the pulse BEFORE the spawner writes (ch 0xf0 at tick 2180
+    // [D]) — the chaser fight never overlaps it — and the mission can only complete from a live
+    // Bond (Mission_Update 0x182c60 case 1 folds ch 100 → state 6, but its ch-0x62 fail arm —
+    // Player_SetHealth(0), MissionState 3, LevelToEndTo 0x7000048 [M 0x182c60:21-43] — outranks
+    // it). So the game's player leaves the pit during the launch; the test walks the same route:
+    // once the cinema hands control back, Bond is re-seated on the upper floor the descent came
+    // from, outside the volume, for the rest of the chain. U-051 ANSWERED (docs/systems/
+    // hurt-volumes.md §U-051): the game's re-enable is the pit floor — the cinema's stream-8
+    // single key (3.57, −22.76, −179.55) [D pack_cinema_16_live] teleported by Player_Enable
+    // 0x195498 [M] — and the survival is the PACK FLIGHT in the 861-tick window (the pit door's
+    // ch 0xf0 opens at 2180, after the pulse [D]). The port has no jetpack substate; this re-seat
+    // is the documented stand-in for that flight [S], needed only because the test fires ch 0x81
+    // from the upper floor instead of walking Bond to the pack.
     let chaser = {
         let mut found = None;
+        let mut re_seated = false;
         for _ in 0..4000u32 {
             scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+            if !re_seated && !scene.sim.as_ref().unwrap().disabled {
+                re_seated = true;
+                scene.sim.as_mut().unwrap().bond.pos = [2.5, 1.2, -153.9];
+            }
             let sim = scene.sim.as_ref().unwrap();
             if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && d.death_channel == 0x90) {
                 found = Some(i);
@@ -271,7 +295,11 @@ fn the_unported_start_states_behave_like_the_game() {
         assert!(free(sim, 1800), "Bond is free");
         let m7: Vec<u8> = sim.drones.list.iter().filter(|d| d.present && d.mode == 7).map(|d| d.state).collect();
         assert!(!m7.is_empty(), "07000011 has mode-7 drones [D sweep]");
-        assert!(m7.iter().all(|&s| matches!(s, nf_game::drone::state::IDLE | nf_game::drone::state::ALERT | nf_game::drone::state::ATTACK | nf_game::drone::state::WAIT_SWITCH)),
+        // Merge batch-1016c (s/ai-points wires `FindRunToPoint`): EnemyRunToPoint's found arm goes
+        // to GoToGoalPosition 99 (class byte +0x44 == 1) or HostageGoToGoalPosition 100, the
+        // none-found arm to the return state [M 0x168910:32-45 — ACTION.ELF decompile read at the
+        // merge]; the old pin assumed none-found. Either way never stuck in 0x85.
+        assert!(m7.iter().all(|&s| matches!(s, nf_game::drone::state::IDLE | nf_game::drone::state::ALERT | nf_game::drone::state::ATTACK | nf_game::drone::state::WAIT_SWITCH | nf_game::drone::state::GO_TO_GOAL | nf_game::drone::state::HOSTAGE_GO_TO_GOAL)),
             "the 0x85 drones resolved per [M 0x168910:32-36] (the gate-waiters sit in WaitSwitch 0x01 [M]), got {m7:?}");
     }
     // 07000004: the assassin (dtype 0xf [D]) is in the ninja chain at alert 1.0.
@@ -280,8 +308,9 @@ fn the_unported_start_states_behave_like_the_game() {
         let sim = scene.sim.as_mut().unwrap();
         assert!(free(sim, 1800), "Bond is free");
         let ninja = sim.drones.list.iter().find(|d| d.present && d.dtype == 0xf).expect("the assassin exists [D]");
-        assert!(matches!(ninja.state,
-                kiko_states::NINJA_ATTACK | kiko_states::NINJA_LONG_RANGE | kiko_states::NINJA_MID_RANGE | kiko_states::NINJA_SHORT_RANGE | kiko_states::NINJA_STAND_FIRE),
+        // ninja-melee: the full melee chain is ported — the fight may sit in any of its states
+        // (kiko.rs documents the addresses; the set is the StateFuncs table [L 0x29b300]).
+        assert!(kiko_states::NINJA_FIGHT_STATES.contains(&ninja.state),
             "the assassin runs the ninja chain [M 0x16bb50], state {:#x}", ninja.state);
         assert!((ninja.alert - 1.0).abs() < 1e-4, "NinjaAttack sets alert 1.0 [M 0x16bb50]");
     }

@@ -42,6 +42,245 @@ pub fn sinf(x: f32) -> f32 { nf_formats::anim::sinf(x) }
 /// Cosine as the game takes it: `PS2Sinf(θ + 1.5707964)`.
 pub fn cosf(x: f32) -> f32 { sinf(add(x, f32::from_bits(0x3fc9_0fdb))) }
 
+/// EE FPU add / sub as shared helpers for sites that replay the game's float code outside this
+/// module (the same `add_noguard(…, true)` model this file's private `add`/`sub` use).
+pub fn ee_add(a: f32, b: f32) -> f32 { add(a, b) }
+pub fn ee_sub(a: f32, b: f32) -> f32 { sub(a, b) }
+
+/// The PS2 libm's `atanf` (ACTION.ELF 0x235310, fdlibm s_atanf), ported operation for operation:
+/// every mul/div is an EE product chopped toward zero and every add/sub loses its guard bits
+/// (`ps2float`), constants as their exact f32 bit patterns ([L ee_snapshot.bin 0x30ba08 atanhi,
+/// 0x30ba18 atanlo, 0x30ba28 the interleaved T/C poly table, 0x30ba58 huge]).
+pub fn atanf_libm(x: f32) -> f32 {
+    use nf_formats::ps2float::{div as ee_div, mul};
+    const ATANHI: [f32; 4] = [
+        f32::from_bits(0x3eed_6338), // atan(0.5)hi
+        f32::from_bits(0x3f49_0fda), // atan(1.0)hi
+        f32::from_bits(0x3f7b_985e), // atan(1.5)hi
+        f32::from_bits(0x3fc9_0fda), // atan(inf)hi
+    ];
+    const ATANLO: [f32; 4] = [
+        f32::from_bits(0x31ac_3769),
+        f32::from_bits(0x3322_2168),
+        f32::from_bits(0x3314_0fb4),
+        f32::from_bits(0x33a2_2168),
+    ];
+    // The game stores the two Horner chains interleaved: T0, C0, T1, C1, …, T5 ([L 0x30ba28-0x30ba50]).
+    const T: [f32; 6] = [
+        f32::from_bits(0x3eaa_aaab),
+        f32::from_bits(0x3e12_4925),
+        f32::from_bits(0x3dba_2e6e),
+        f32::from_bits(0x3d88_6b35),
+        f32::from_bits(0x3d4b_da59),
+        f32::from_bits(0x3c85_69d7),
+    ];
+    const C: [f32; 5] = [
+        f32::from_bits(0xbe4c_cccd),
+        f32::from_bits(0xbde3_8e38),
+        f32::from_bits(0xbd9d_8795),
+        f32::from_bits(0xbd6e_f16b),
+        f32::from_bits(0xbd15_a221),
+    ];
+    const HUGE: f32 = f32::from_bits(0x7149_f2ca); // 1e30 [L 0x30ba58]
+    let ix = x.to_bits() & 0x7fff_ffff;
+    // |x| ≥ 2^34: atanf(x) = π/2 (atanhi[3] + atanlo[3]); NaN → x + x [M 0x235310:14-22].
+    if ix >= 0x5080_0000 {
+        if ix > 0x7f80_0000 { return add(x, x); }
+        return if x > 0.0 { add(ATANHI[3], ATANLO[3]) } else { sub(-ATANHI[3], ATANLO[3]) };
+    }
+    // The tiny-|x| early-out: huge + x > 1.0 holds for every |x| < 2^-126, so it returns x [M :26-29].
+    if ix < 0x3ee0_0000 {
+        if ix < 0x0080_0000 && HUGE + x > 1.0 { return x; }
+        let z = mul(x, x);
+        let p = poly(z, &T, &C);
+        return sub(x, mul(x, p)); // id = −1: x − x·(p1 + p2) [M :68]
+    }
+    let mut id;
+    let mut w = x.abs();
+    if ix < 0x3f98_0000 {
+        if ix < 0x3f30_0000 {
+            id = 0;
+            w = ee_div(sub(add(w, w), 1.0), add(w, 2.0)); // (2|x| − 1)/(|x| + 2) [M :39]
+        } else {
+            id = 1;
+            w = ee_div(sub(w, 1.0), add(w, 1.0)); // (|x| − 1)/(|x| + 1) [M :43]
+        }
+    } else if ix < 0x401c_0000 {
+        id = 2;
+        w = ee_div(sub(w, 1.5), add(mul(w, 1.5), 1.0)); // (|x| − 1.5)/(1.5|x| + 1) [M :49]
+    } else {
+        id = 3;
+        w = ee_div(-1.0, w); // −1/|x| [M :53]
+    }
+    let z = mul(w, w);
+    let p = poly(z, &T, &C);
+    // atanhi[id] − ((w·(p1 + p2) − atanlo[id]) − w), negated for x < 0 [M :71-75].
+    let r = sub(ATANHI[id as usize], sub(sub(mul(w, p), ATANLO[id as usize]), w));
+    if x < 0.0 { -r } else { r }
+}
+
+/// The two Horner chains of `atanf` (0x235310:59-66), in the game's evaluation order with EE ops:
+/// p1 = z·(T0 + s·(T1 + … + s·T5)), p2 = s·(C0 + s·(C1 + … + s·C4)) — z = w², s = z² — returned as
+/// p1 + p2, so the caller's w·(p1 + p2) is the w³/3 + w⁵/5 − … of the atan series.
+fn poly(z: f32, t: &[f32; 6], c: &[f32; 5]) -> f32 {
+    use nf_formats::ps2float::mul;
+    let s = mul(z, z);
+    let mut h = mul(s, t[5]);
+    h = add(t[4], h); h = mul(s, h);
+    h = add(t[3], h); h = mul(s, h);
+    h = add(t[2], h); h = mul(s, h);
+    h = add(t[1], h); h = mul(s, h);
+    h = add(t[0], h);
+    let p1 = mul(z, h); // fVar6 = fVar6 * (aT + …) — the game multiplies by z [M 0x235310:63]
+    let mut g = mul(s, c[4]);
+    g = add(c[3], g); g = mul(s, g);
+    g = add(c[2], g); g = mul(s, g);
+    g = add(c[1], g); g = mul(s, g);
+    g = add(c[0], g);
+    let p2 = mul(s, g);
+    add(p1, p2)
+}
+
+/// The PS2 libm's `atan2f` core (ACTION.ELF `__ieee754_atan2f` 0x2339f8, fdlibm e_atan2f; the
+/// 0x232e48 wrapper only routes (0,0) through matherr/errno and returns the core's value), ported
+/// operation for operation on the EE FPU. `vecutil_cartesian_to_spherical_acc` 0x1e3a70 calls this
+/// one (jal 0x232e48), NOT `ATAN2_APPROX` 0x1e4528 [M 0x1e3aa0/0x1e3ab0].
+pub fn atan2f_libm(y: f32, x: f32) -> f32 {
+    use nf_formats::ps2float::div as ee_div;
+    const PI_DOWN: f32 = f32::from_bits(0x4049_0fda); // the π the sign adjustments subtract [M 0x233bb8]
+    const PIO2_UP: f32 = f32::from_bits(0x3fc9_0fdc); // the |y|≫|x| cap [M 0x233bf8]
+    const ATANLO0: f32 = f32::from_bits(0x3422_2168); // 1.50995788e-07 [L ee_snapshot.bin 0x30b530]
+    const NEG_ZERO: f32 = f32::from_bits(0x8000_0000); // [L ee_snapshot.bin 0x30b534]
+    let iy = y.to_bits() & 0x7fff_ffff;
+    let ix = x.to_bits() & 0x7fff_ffff;
+    // m = sign(y) | sign(x) << 1 [M 0x2339f8:21]
+    let m = ((y.to_bits() >> 31) & 1) | (((x.to_bits() >> 31) & 1) << 1);
+    if ix > 0x7f80_0000 || iy > 0x7f80_0000 { return add(x, y); } // NaN [M :14-16]
+    if x == 1.0 { return atanf_libm(y); } // [M :17-20]
+    if iy == 0 {
+        // y = ±0: ±0 for x > 0, ±π for x < 0 [M :22-34]
+        return match m {
+            2 => PI_DOWN,
+            3 => -PI_DOWN,
+            _ => y,
+        };
+    }
+    if ix != 0 {
+        if ix == 0x7f80_0000 {
+            // x = ±Inf [M :36-73]
+            return match m {
+                0 => 0.0,
+                1 => NEG_ZERO,
+                2 => PI_DOWN,
+                3 => -PI_DOWN,
+                _ => unreachable!(),
+            };
+        }
+        if iy != 0x7f80_0000 {
+            // Both finite: the atanf(|y/x|) core with the fdlibm exponent-difference gates [M :74-96].
+            let z = {
+                let k = ((iy as i32).wrapping_sub(ix as i32)) >> 23;
+                if k < 0x3d {
+                    if x.to_bits() & 0x8000_0000 == 0 || k > -0x3d {
+                        atanf_libm(ee_div(y.abs(), x.abs()))
+                    } else {
+                        0.0
+                    }
+                } else {
+                    PIO2_UP
+                }
+            };
+            return match m {
+                0 => z,
+                1 => f32::from_bits(z.to_bits() ^ 0x8000_0000),
+                2 => sub(PI_DOWN, sub(z, ATANLO0)),
+                _ => sub(sub(z, ATANLO0), PI_DOWN),
+            };
+        }
+    }
+    // x = ±0 or y = ±Inf: ±π/2 (nearest) by the sign of y [M :35-34, 98-103]
+    if y < 0.0 { f32::from_bits(0xbfc9_0fdb) } else { f32::from_bits(0x3fc9_0fdb) }
+}
+
+/// The PS2 libm's `acosf` (`__ieee754_acosf` 0x233228, fdlibm e_acosf — `acosf` 0x232c48 is its errno
+/// wrapper), ported operation for operation on the EE FPU from the decompile: |x| = 1 → 0 / π (0x40490fda,
+/// fdlibm's pi [L ee_snapshot 0x2841b4]); |x| > 1 → (x−x)/(x−x); |x| < 2⁻²⁴ → π/2 (0x3fc90fdb); |x| < 0.5 →
+/// π/2_hi 0x3fc90fda − (x − (π/2_lo 0x33a22168 − x·P/Q)) [L the coefficient table 0x30b4b8-0x30b4dc: pS0
+/// 0x3e2aaaab, pS1 0xbea6b090, pS2 0x3e4e0aa8, pS3 0xbd241146, pS4 0x3a4f7f04, pS5 0x3811ef08, qS1
+/// 0xc019d139, qS2 0x4001572d, qS3 0xbf303361, qS4 0x3d9dc62e; π/2_hi/lo at 0x30b4b0/0x30b4b4]; x < −0.5 →
+/// π − (s + (r·s − π/2_lo) + (s + (r·s − π/2_lo))) with s = √((x+1)/2); x > 0.5 → 2·(df + r·s + (z − df²)/(s +
+/// df)) with z = (1−x)/2, s = √z, df = s with its low 12 mantissa bits cleared [M the decompile's compiled
+/// Horner order: P = t·(t·(t·(t·(t·(t·pS5 + pS4) + pS3) + pS2) + pS1) + pS0), Q = (t·(t·(t·(t·qS4 + qS3) + qS2)
+/// + qS1)) + 1.0, every mul an EE product and every sum guard-less].
+pub fn acosf_libm(x: f32) -> f32 {
+    use nf_formats::ps2float::{div as ee_div, mul, sqrt};
+    const PIO2: f32 = f32::from_bits(0x3fc9_0fdb);
+    const PIO2_HI: f32 = f32::from_bits(0x3fc9_0fda);
+    const PIO2_LO: f32 = f32::from_bits(0x33a2_2168);
+    const PI: f32 = f32::from_bits(0x4049_0fda);
+    const PS: [f32; 6] = [
+        f32::from_bits(0x3e2a_aaab),
+        f32::from_bits(0xbea6_b090),
+        f32::from_bits(0x3e4e_0aa8),
+        f32::from_bits(0xbd24_1146),
+        f32::from_bits(0x3a4f_7f04),
+        f32::from_bits(0x3811_ef08),
+    ];
+    const QS: [f32; 4] = [
+        f32::from_bits(0xc019_d139),
+        f32::from_bits(0x4001_572d),
+        f32::from_bits(0xbf30_3361),
+        f32::from_bits(0x3d9d_c62e),
+    ];
+    // P/Q at t (the game's compiled Horner order, [M 0x233228]).
+    let pq = |t: f32| -> (f32, f32) {
+        let mut p = mul(t, PS[5]);
+        p = add(p, PS[4]); p = mul(t, p);
+        p = add(p, PS[3]); p = mul(t, p);
+        p = add(p, PS[2]); p = mul(t, p);
+        p = add(p, PS[1]); p = mul(t, p);
+        p = add(p, PS[0]); p = mul(t, p);
+        let mut q = mul(t, QS[3]);
+        q = add(q, QS[2]); q = mul(t, q);
+        q = add(q, QS[1]); q = mul(t, q);
+        q = add(q, QS[0]); q = mul(t, q);
+        q = add(q, 1.0);
+        (p, q)
+    };
+    let ax = f32::from_bits(x.to_bits() & 0x7fff_ffff);
+    if ax == 1.0 {
+        // [M 0x233228]: acos(−1) = π — the decompile's folded `pi + 2·pio2_lo` (0x40490fda + 1.5e-7
+        // rounds up) = 0x40490fdb.
+        return if x < 0.0 { f32::from_bits(0x4049_0fdb) } else { 0.0 };
+    }
+    if ax.to_bits() >= 0x3f80_0001 {
+        return ee_div(sub(x, x), sub(x, x));
+    }
+    if ax.to_bits() < 0x3f00_0000 {
+        if ax.to_bits() < 0x2300_0001 {
+            return PIO2;
+        }
+        let t = mul(x, x);
+        let (p, q) = pq(t);
+        let r = ee_div(p, q);
+        return sub(PIO2_HI, sub(x, sub(PIO2_LO, mul(x, r))));
+    }
+    if x < 0.0 {
+        let z = mul(add(x, 1.0), 0.5);
+        let s = sqrt(z);
+        let (p, q) = pq(z);
+        let sw = add(s, sub(mul(ee_div(p, q), s), PIO2_LO));
+        return sub(PI, add(sw, sw));
+    }
+    let z = mul(sub(1.0, x), 0.5);
+    let s = sqrt(z);
+    let df = f32::from_bits(s.to_bits() & 0xffff_f000);
+    let (p, q) = pq(z);
+    let w = add(mul(ee_div(p, q), s), ee_div(sub(z, mul(df, df)), add(s, df)));
+    let dw = add(df, w);
+    add(dw, dw)
+}
+
 /// `Vec_AngleDifference(a, b)` (0x1e2b78): b − a wrapped to (−π, π], both first normalised to [0, 2π).
 pub fn angle_difference(a: f32, b: f32) -> f32 {
     // Only values outside [0, 2π) go through `fmodf` (libm, exact like Rust's `%`); the adds are EE FPU adds.
@@ -145,6 +384,65 @@ mod tests {
             r
         };
         assert!(LIVE_ATAN.iter().any(|&(a, b, g)| chopped(f32::from_bits(a), f32::from_bits(b)).to_bits() != g), "sister");
+    }
+
+    #[test]
+    fn acosf_libm_tracks_host_libm_and_differs_from_it() {
+        // G-046 ps2sinf-remaining: the fdlibm float core (0x233228) stays within ~2 ulp of Rust's
+        // correctly-rounded acos; the port's sites (Spline_Interp's slerp weights, the head-track
+        // measurement) need the game's own value, so the test also asserts real divergence exists.
+        let mut differs = 0;
+        let mut state = 0x9e37_79b9u32;
+        let mut next = || { state ^= state << 13; state ^= state >> 17; state ^= state << 5; (state >> 8) as f32 / (1 << 24) as f32 };
+        for _ in 0..2000 {
+            let x = next() * 1.999 - 0.9995;
+            let g = acosf_libm(x);
+            let h = x.acos();
+            assert!((g - h).abs() <= 2.0 * (h.abs() + 1e-30) * f32::EPSILON + 1e-6, "acosf {x}: {g} vs {h}");
+            if g.to_bits() != h.to_bits() { differs += 1; }
+        }
+        assert!(differs > 0, "acosf_libm must differ from host somewhere (it is fdlibm, not correctly rounded)");
+    }
+
+    #[test]
+    fn atanf_libm_tracks_host_libm_and_differs_from_it() {
+        // Sanity: the fdlibm float core stays within 2 ulp of Rust's correctly-rounded atanf.
+        let mut differs = 0;
+        let mut state = 0x9e37_79b9u32;
+        let mut next = || { state ^= state << 13; state ^= state >> 17; state ^= state << 5; (state >> 8) as f32 / (1 << 24) as f32 };
+        for _ in 0..2000 {
+            let x = (next() - 0.5) * 400.0;
+            let g = atanf_libm(x);
+            assert!((g - x.atan()).abs() <= 2.0 * (x.atan().abs() + 1e-30) * f32::EPSILON + 1e-30, "atanf {x}: {g} vs {}", x.atan());
+            if g.to_bits() != x.atan().to_bits() { differs += 1; }
+        }
+        // The game's core is NOT the host's correctly-rounded atanf: it must differ somewhere.
+        assert!(differs > 0, "sister: game atanf == host atanf on all 2000 samples");
+        assert_eq!(atanf_libm(0.0).to_bits(), 0.0f32.to_bits());
+        assert!((atanf_libm(f32::INFINITY) - 1.5707963).abs() < 1e-6);
+    }
+
+    #[test]
+    fn atan2f_libm_tracks_host_libm_and_differs_from_it() {
+        let mut differs = 0;
+        let mut state = 0x853c_42e1u32;
+        let mut next = || { state ^= state << 13; state ^= state >> 17; state ^= state << 5; (state >> 8) as f32 / (1 << 24) as f32 };
+        for _ in 0..2000 {
+            let (y, x) = ((next() - 0.5) * 400.0, (next() - 0.5) * 400.0);
+            let g = atan2f_libm(y, x);
+            assert!((g - y.atan2(x)).abs() <= 3.0 * (y.atan2(x).abs() + 1e-30) * f32::EPSILON + 1e-30, "atan2f({y},{x}): {g} vs {}", y.atan2(x));
+            if g.to_bits() != y.atan2(x).to_bits() { differs += 1; }
+        }
+        assert!(differs > 0, "sister: game atan2f == host atan2 on all 2000 samples");
+        // The vecutil pitch formula on a unit vector: atan2f(y, √(x²+z²)) — the game's shape.
+        let (yv, xv, zv) = (0.3f32, 0.5, -0.8);
+        let r2 = nf_formats::ps2float::add(nf_formats::ps2float::mul(xv, xv), nf_formats::ps2float::mul(zv, zv));
+        let pitch = atan2f_libm(yv, nf_formats::ps2float::sqrt(r2));
+        assert!((pitch - yv.atan2((xv * xv + zv * zv).sqrt())).abs() < 1e-6);
+        // Special cases per the decompile.
+        assert_eq!(atan2f_libm(0.0, -1.0).to_bits(), 0x4049_0fda);
+        assert_eq!(atan2f_libm(0.0, 2.0).to_bits(), 0.0f32.to_bits());
+        assert_eq!(atan2f_libm(-0.0, -1.0).to_bits(), 0xc049_0fda_u32);
     }
 
     #[test]

@@ -64,7 +64,9 @@ fn frag_blast_kills_the_guard_next_to_it_and_the_stun_touches_nobody() {
         pos: [gp[0], gp[1] + 0.4, gp[2]], velocity: [0.0; 3], speed: 0.0, travelled: 0.0, range: 12.0,
         damage: f32::from_le_bytes(sim.weapons.records[0x34][0x0c..0x10].try_into().unwrap()),
         radius: f32::from_le_bytes(sim.weapons.records[0x34][0x08..0x0c].try_into().unwrap()),
-        weapon_type: 0x34, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false,
+        weapon_type: 0x34, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false, resting: false,
+        stuck: false, seek_target: None,
+        phase: None,
     });
     let mut blasted = false;
     for _ in 0..40 { sim.step_bond(Input::default(), false, false, false); if !sim.drones.explosions.is_empty() { blasted = true; break; } }
@@ -84,7 +86,9 @@ fn frag_blast_kills_the_guard_next_to_it_and_the_stun_touches_nobody() {
             pos: [gp[0], gp[1] + 0.4, gp[2]], velocity: [0.0; 3], speed: 0.0, travelled: 0.0, range: 12.0,
             damage: f32::from_le_bytes(sim.weapons.records[0x35][0x0c..0x10].try_into().unwrap()),
             radius: f32::from_le_bytes(sim.weapons.records[0x35][0x08..0x0c].try_into().unwrap()),
-            weapon_type: 0x35, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false,
+            weapon_type: 0x35, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false, resting: false,
+        stuck: false, seek_target: None,
+        phase: None,
         });
         let mut hurt = false;
         for _ in 0..40 {
@@ -115,7 +119,9 @@ fn stun_grenade_stuns_without_damage_and_a_shot_kills_the_stunned() {
     // 0x35 — its `+0x70 & 0x2000` [L 0x2280] routes the death into the flash branch.
     sim.drones.grenades.push(nf_game::grenade::Grenade {
         pos: [gp[0], gp[1] + 0.5, gp[2]], velocity: [0.0; 3], speed: 0.0, travelled: 0.0, range: 5.0,
-        damage: 0.0, radius: 0.0, weapon_type: 0x35, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false,
+        damage: 0.0, radius: 0.0, weapon_type: 0x35, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false, resting: false,
+        stuck: false, seek_target: None,
+        phase: None,
     });
     let mut stunned = false;
     for _ in 0..40 {
@@ -135,7 +141,8 @@ fn stun_grenade_stuns_without_damage_and_a_shot_kills_the_stunned() {
         world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
         skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
         hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
-        surfaces: None, voices: None, difficulty: 1 
+        surfaces: None, voices: None, difficulty: 1,
+        ai_points: &sim.ai_points,
     };
     sim.drones.list[gi].send(&data, &mut sim.drones.rng, sim.drones.frame, nf_game::drone::msg::BULLET);
     assert_eq!(sim.drones.list[gi].state, nf_game::drone::state::DEATH_ANIM, "the stunned guard shot → 0x44 [M 0x172bb0 case 8/9]");

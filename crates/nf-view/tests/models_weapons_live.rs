@@ -192,9 +192,14 @@ fn golden_weapon_models_resolve_on_every_story_level() {
         actual.push('\n');
     }
     eprintln!("---- actual table ----\n{actual}---- end ----");
-    // The pinned golden (numbers only, measured with the session union above). The four nonzero
+    // The pinned golden (numbers only, measured with the session union above). The nonzero
     // miss columns are the game's own artifacts, each measured:
-    // - 07000001/03 proj_miss 1: the stun-throwing guards (param 11 selects weapon 0x36 [M
+    // - proj/proj_miss (re-measured 2026-10-15, fix-start-loadouts): the proj lanes count the
+    //   START LOADOUT's own projectile meshes (Player_InitAmmoWeapons 0x1a17f8 + the per-level
+    //   Player_InitWeapon 0x1a7ef8 kit) on top of the placements'; the misses are kit meshes the
+    //   session union has not loaded by that level — `Bullet_update` skips the draw when the
+    //   hashtable misses (the `iVar14 == 0` arm [M 0x12e7b0]), so the port skips them too.
+    // - 07000001/03's guard proj_miss: the stun-throwing guards (param 11 selects weapon 0x36 [M
     //   NDrone2_DefaultInit 0x14b300]) whose stun mesh 0x0200071f is on NO archive the session has
     //   loaded by those levels [D scan] — `Bullet_update` skips the draw when the hashtable misses
     //   (the `iVar14 == 0` arm [M 0x12e7b0]), so the port skips it too.
@@ -203,45 +208,45 @@ fn golden_weapon_models_resolve_on_every_story_level() {
     //   guard unarmed.
     let expected = format!("{GOLDEN_HEADER}
 \
-07000001	20	19	0	19	0	6	0	0	1	19
+07000001	20	19	0	19	0	6	0	10	7	19
 \
-07000002	25	21	0	21	0	8	0	1	0	19
+07000002	25	21	0	21	0	8	0	10	7	19
 \
-07000003	20	17	0	17	0	5	0	0	1	19
+07000003	20	17	0	17	0	5	0	10	7	19
 \
-07000004	1	0	1	1	0	4	0	1	0	20
+07000004	1	0	1	1	0	4	0	10	7	20
 \
-07000005	16	16	0	13	0	6	0	0	0	22
+07000005	16	16	0	13	0	6	0	10	7	22
 \
-07000006	32	31	0	23	0	11	0	0	0	22
+07000006	32	31	0	23	0	11	0	10	7	22
 \
-07000007	58	8	0	8	0	3	0	0	0	15
+07000007	58	8	0	8	0	3	0	10	7	15
 \
-07000008	26	26	0	26	0	8	0	1	0	18
+07000008	26	26	0	26	0	8	0	10	7	18
 \
-07000009	6	0	0	0	0	3	0	0	0	19
+07000009	6	0	0	0	0	3	0	10	7	19
 \
-0700000a	20	0	0	0	0	5	0	0	0	19
+0700000a	20	0	0	0	0	5	0	10	7	19
 \
-0700000b	10	10	0	10	0	5	0	1	0	25
+0700000b	10	10	0	10	0	5	0	10	7	25
 \
-0700000c	40	40	0	40	0	15	0	1	0	23
+0700000c	40	40	0	40	0	15	0	12	5	23
 \
-0700000d	41	41	0	41	0	16	0	0	0	23
+0700000d	41	41	0	41	0	16	0	12	5	23
 \
-07000011	37	32	0	32	0	13	0	4	0	11
+07000011	37	32	0	32	0	13	0	14	3	11
 \
-07000012	32	28	0	28	0	18	0	5	0	15
+07000012	32	28	0	28	0	18	0	14	3	15
 \
-07000013	12	12	0	12	0	7	0	3	0	16
+07000013	12	12	0	12	0	7	0	15	2	16
 \
-07000014	61	61	0	61	0	32	0	7	0	19
+07000014	61	61	0	61	0	32	0	18	1	19
 \
-07000015	20	20	0	20	0	12	0	2	0	20
+07000015	20	20	0	20	0	12	0	16	1	20
 \
-07000016	20	16	2	18	0	17	0	3	0	20
+07000016	20	16	2	18	0	17	0	16	1	20
 \
-0700001b	20	19	0	18	0	7	0	2	0	2
+0700001b	20	19	0	18	0	7	0	17	1	2
 ");
     let diffs = nf_formats::golden::diff_tsv(&expected, &actual);
     assert!(diffs.is_empty(), "the weapon-model golden changed:\n{}\nactual:\n{actual}", diffs.join("\n"));
@@ -250,7 +255,7 @@ fn golden_weapon_models_resolve_on_every_story_level() {
 
 
 
-/// The frag grenade's drawn body (`weapon_data[0x35]+0x5C` = 0x02000726 [L ee_start_05.bin @0x2bf150
+/// The stun grenade's drawn body (`weapon_data[0x35]+0x5C` = 0x02000726 [L ee_start_05.bin @0x2bf150
 /// + 0x35·0x10C + 0x5C]): `Bullet_update` state 0 sets the mesh on the bullet object
 /// (`hashtable_set_object_to_entity_gfx` disasm 0x12e8f0-0x12e900 [M]) and `View_SetDrawInAllViews`
 /// draws it at the flight matrix every tick. Driven through the real input path: the panel gives the
@@ -259,16 +264,16 @@ fn golden_weapon_models_resolve_on_every_story_level() {
 fn a_thrown_grenade_draws_its_weapon_mesh() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
-    // Give Bond the frag grenade (the panel's `do=weapon` command — the dev path a player uses) and
+    // Give Bond the stun grenade (the panel's `do=weapon` command — the dev path a player uses) and
     // switch to it the way the viewer does (`Input.switch_to` → the holster/draw cycle).
     let (status, switch) = nf_view::panel::apply(&mut scene, &[("do".into(), "weapon".into()), ("id".into(), "53".into())]);
     eprintln!("[panel] {status}");
-    assert!(scene.view_models.contains_key(&0x35), "the frag grenade got a view model");
+    assert!(scene.view_models.contains_key(&0x35), "the stun grenade got a view model");
     assert_eq!(switch, Some(0x35));
     let sim = scene.sim.as_mut().unwrap();
     let mut input = nf_game::player::Input { switch_to: switch, ..Default::default() };
     for _ in 0..90 { sim.step_bond(input, false, false, false); if sim.gun.weapon == 0x35 { break; } input = Default::default(); }
-    assert_eq!(sim.gun.weapon, 0x35, "the frag grenade is drawn");
+    assert_eq!(sim.gun.weapon, 0x35, "the stun grenade is drawn");
     // Pull the trigger until the grenade spawns (the fire anim runs first; the round spawns when the
     // fire script's frame reaches `fire_anim_len` +0x44 [M Player_SetWeaponAnimObj case 9]).
     let mut thrown = false;
@@ -277,17 +282,17 @@ fn a_thrown_grenade_draws_its_weapon_mesh() {
         if !sim.drones.grenades.is_empty() { thrown = true; break; }
     }
     assert!(thrown, "the throw spawned a grenade");
-    // The scene must carry the projectile-mesh instances (the frag mesh + the stun's, resolved here).
+    // The scene must carry the projectile-mesh instances (the stun's mesh + the frag's 0x020002af both land in the pool — the walk covers every weapon).
     let slot0 = scene.attachments.iter().find_map(|a| a.projectile.map(|(s, _)| s))
         .expect("projectile mesh instances built");
     assert_eq!(slot0, 0, "slot 0 is the first grenade slot");
-    let frag = sim.weapons.projectile_mesh(0x35);
-    assert_eq!(frag, 0x0200_0726, "the frag's +0x5C mesh [L]");
-    assert!(scene.attachments.iter().any(|a| a.projectile == Some((0, frag))), "a frag-mesh instance for grenade slot 0");
+    let stun = sim.weapons.projectile_mesh(0x35);
+    assert_eq!(stun, 0x0200_0726, "the stun's +0x5C mesh [L] (0x35 = Stun Grenade; the frag is 0x34 → 0x020002af)");
+    assert!(scene.attachments.iter().any(|a| a.projectile == Some((0, stun))), "a stun-mesh instance for grenade slot 0");
     // While the grenade flies, its instance is posed AT the grenade (not collapsed to the FAR point).
     let (gpos, att) = {
         let g = &sim.drones.grenades[0];
-        (g.pos, scene.attachments.iter().position(|a| a.projectile == Some((0, frag))).unwrap())
+        (g.pos, scene.attachments.iter().position(|a| a.projectile == Some((0, stun))).unwrap())
     };
     let fs = scene.frame_state(None, 0.0, nf_view::scene::ViewOpts::default());
     let m = fs.attach[att];
@@ -327,7 +332,11 @@ fn tower_2_guards_get_their_muzzle_flashes_from_the_session() {
     // Sister: the local resolutions are untouched — the first map/object indices still resolve to the
     // same objects (the merge only appends maps and fills by_hash gaps).
     let stats = scene.stats.clone();
-    assert!(!stats.contains("0 weapons held"), "the scene still holds its weapons: {stats}");
+    // The held-weapon count (the number before " weapons held"): a plain `contains("0 weapons held")` also
+    // matched counts ending in 0 (3470 after fix-gadgets-live's AIMS-20 light attachments).
+    let held: usize = stats.split(" weapons held").next().and_then(|h| h.rsplit(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse().ok()).unwrap_or(0);
+    assert!(held > 0, "the scene still holds its weapons ({held}): {stats}");
 }
 
 /// Folded 190-fix-dev2: with `--dev`, EVERY selectable weapon has a first-person view model on
