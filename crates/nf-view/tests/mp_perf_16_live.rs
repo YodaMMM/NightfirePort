@@ -44,7 +44,10 @@ fn iso() -> Option<String> {
 // scan's lazy sight runs the perception ack's own chain (segment + vis ≥ 0.7), and the site row
 // lost its +0.3 compensation. Bots pick opponents a little more strictly (38→36 kills); the two
 // machines' hashes still agree every tick.
-const PINNED_DIGEST: u64 = 0xe371_90cd_8fd7_4271;
+// Re-pinned for mp-pickups-visible (700y1): the arena's set pickups now carry the match weapon set's guns
+// [M Pickup_CreateFromSet 0x18f1b0] and spin, so the bots take different weapons — kills 36, repeatable; the two
+// machines' per-tick hashes still agree.
+const PINNED_DIGEST: u64 = 0xf966_f9e3_9d01_eaf9;
 
 const TICKS: u32 = 3600;
 

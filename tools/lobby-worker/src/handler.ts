@@ -66,6 +66,8 @@ export function filterName(raw) {
 
 function dropExpired(store, now) {
   for (const [key, e] of store.entries) if (now - e.seen > ENTRY_TTL_MS) { store.entries.delete(key); store.codes.delete(e.code); }
+  // Rate windows of addresses that went quiet go too (the table otherwise grows with every address ever seen).
+  for (const [k, ts] of store.rate) if (!ts.length || now - ts[ts.length - 1] > 60_000) store.rate.delete(k);
 }
 
 function rateLimited(store, cls, ip, now) {

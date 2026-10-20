@@ -7170,6 +7170,13 @@ impl FrontEnd {
         if browsing {
             self.mp_session.as_mut().unwrap().poll();
             self.mp_lobby_rows = self.mp_session.as_ref().unwrap().browse_rows();
+            // net-cloud-lobby: the internet's public lobbies (the Cloudflare service) follow the LAN's. Their `addr`
+            // is the 4-character code — dialing a code is the lookup path, so choosing the row joins it.
+            let cloud = self.mp_session.as_ref().unwrap().cloud_lobbies();
+            self.mp_lobby_rows.extend(cloud.into_iter().map(|l| MpLobbyRow {
+                name: l.name, host: "Internet".into(), level: l.level, scenario: l.scenario,
+                players: l.players, max_players: l.max_players, in_progress: false, ping_ms: 0, joinable: true, addr: l.code,
+            }));
             self.cursor = self.cursor.min(self.mp_lobby_rows.len());
         }
         if self.mp_hosting {
@@ -8512,10 +8519,12 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                             label(&mut h, font, "Searching the network for games...", 120.0, y + 30.0, 400.0, 14.0, dim, true, 1.0);
                         }
                         let bind = |id: u32| lang.and_then(|l| l.bind(id)).map(str::to_string).unwrap_or_default();
-                        for (k, r) in fe.mp_lobby_rows.iter().take(5).enumerate() {
+                        for (k, r) in fe.mp_lobby_rows.iter().take(8).enumerate() {
                             let map = MP_MAP_ROWS.iter().find(|m| m.3 == r.level).map(|m| bind(m.1)).unwrap_or_else(|| format!("{:08x}", r.level));
                             let status = if !r.joinable { "  (other version)" } else if r.in_progress { "  (in progress)" } else { "" };
-                            let line = format!("{}  -  {}  -  {}/{}  -  {} ms{}", r.name, map, r.players, r.max_players, r.ping_ms, status);
+                            // An internet lobby (the cloud list) shows its code where a LAN lobby shows its ping.
+                            let tail = if r.host == "Internet" { format!("Internet  {}", r.addr) } else { format!("{} ms", r.ping_ms) };
+                            let line = format!("{}  -  {}  -  {}/{}  -  {}{}", r.name, map, r.players, r.max_players, tail, status);
                             let col = if fe.cursor == k + 1 { bright } else { dim };
                             label(&mut h, font, &line, 60.0, y + 30.0 + 20.0 * k as f32, 520.0, 15.0, col, true, 1.0);
                         }
