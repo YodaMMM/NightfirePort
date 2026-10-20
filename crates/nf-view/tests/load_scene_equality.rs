@@ -43,7 +43,9 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // placement has DropType 1 gets 128 rain-mesh slots (`DrawDrops` 0x18cb90, mesh 0x02000290) —
 // 01 and 02 are rain levels: +128 attachments, +6400 vertices, +12288 indices each; 05/0c/14 unchanged.
 const BASELINE: &[(&str, &str)] = &[
-    ("07000002.bin", "31d5bf43e19366ce 4483659 9371265 5347 4346365 81 9810 205 28 25 8"),
+    // Re-pinned for silencer-white-artifact (700y3, 2026-10-20): the silenced weapons' duplicate suppressor extra
+    // (the record's +0x7C view-entity, drawn by the datum-0 attach instead) is no longer built — 4 meshes, 600 tris.
+    ("07000002.bin", "d96046ef6be529e6 4483059 9370089 5343 4345765 81 9802 205 28 25 8"),
     ("07000005.bin", "6a43ad2ce9dee894 4377695 9151611 3576 4293354 73 9731 106 19 16 6"),
     ("0700000c.bin", "15de2f0294792a8a 4871632 10240830 8177 4680808 96 10996 170 22 40 15"),
     ("07000014.bin", "b4011376b5d7991f 7208306 14968956 6767 7055181 111 13430 173 41 37 32"),
