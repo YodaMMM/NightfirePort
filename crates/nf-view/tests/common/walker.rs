@@ -12,6 +12,17 @@ use nf_view::scene::Scene;
 
 pub const TICKS_PER_SEC: u32 = 60;
 
+/// faster-live-tests: the LENIENT leg's give-up cap (ticks). A lenient leg that burns this long is
+/// a deterministic wedge (the give-up dumps show real geometry — wall/door frames), and the design
+/// already treats the give-up as expected: the caller skips the node and the next one re-aims
+/// [walk_nav_to]. On walkreal_07000001 every leg that genuinely arrives lands within 1800 ticks
+/// while 25 wedged legs each burned the full 6000; 3000 keeps ~1.6× headroom over the longest real
+/// arrival while halving the burn (~35 s on that binary alone). A shorter cap never changes an
+/// ARRIVING leg's outcome — it only shortens how long a wedge burns before the documented skip —
+/// and the non-lenient panic cap below stays 6000. The full-suite run validates the cap across
+/// every walker user (23 binaries include common/walker.rs).
+const LENIENT_GIVE_UP_TICKS: u32 = 3_000;
+
 /// Wrap an angle into −π..π.
 pub fn wrap_pi(a: f32) -> f32 {
     let mut a = a;
@@ -89,7 +100,11 @@ pub struct Walker {
     stuck_cycles: u32,
     sidestep: i32,
     max_y: f32,
-    lenient: bool,
+    pub lenient: bool,
+    /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
+    /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
+    /// see `resupply` for why the harness must not take off-path ammo detours.
+    trail: Vec<V3>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops (walkreal-b2).
@@ -124,6 +139,9 @@ fn fail_dump(scene: &Scene, target: V3, label: &str) -> String {
 }
 
 impl Walker {
+    /// The walked breadcrumb (public for the escort's plate-box probe — break-debris-shatter-2).
+    pub fn trail_points(&self) -> &[V3] { &self.trail }
+
     pub fn new(scene: Scene) -> Walker {
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {
@@ -131,6 +149,7 @@ impl Walker {
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, max_y: pos[1], lenient: false,
+            trail: Vec::new(),
         }
     }
 
@@ -220,6 +239,13 @@ impl Walker {
         self.scene.sim.as_mut().unwrap().step_bond(input, fire, false, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
         self.total_ticks += 1;
+        // The walked-path breadcrumb (guard-first-shot-walkreal-2): every 2 u of ground cover.
+        // Fights and nav legs both flow through here, so the trail is the route Bond really
+        // walked — the resupply corridor is cut from it.
+        if self.trail.last().map_or(true, |t| dxz(*t, sim.bond.pos) > 2.0) {
+            self.trail.push(sim.bond.pos);
+            if self.trail.len() > 512 { self.trail.remove(0); }
+        }
         // fix-08-collision2's divergence trace (env-gated, additive): Bond's position every 60
         // ticks so two trees' walks can be diffed line by line.
         if std::env::var_os("NF_WALK_TRACE").is_some() && self.total_ticks % 60 == 0 {
@@ -267,15 +293,39 @@ impl Walker {
             sim.gun.clip as i32 + sim.gun.spare as i32
         };
         let before = ammo(self);
+        let mut tried: Vec<[f32; 3]> = Vec::new();
         for attempt in 0..4 {
+            // The walked-path corridor (guard-first-shot-walkreal-2): a resupply target must lie
+            // within 9 u of ground Bond actually covered. The disc punishes the off-path ammo
+            // detour: the east wing's placed box (17.4, 6.2, −3.2) sits 37.8 u off the route and
+            // the walk to it crosses the east-wing script trigger whose write pl#294 (main map,
+            // OUT kind, at (15.4, 6.4, 0.2)) mirrors into ch 0x05 every tick [D placement;
+            // M Trigger_Update 0x1b1a78 case 5: switch_channels[list[k]] = switch_channels[out]]
+            // — and the ch-0x05 WAIT_SWITCH guards 10/16 then wake to ATTACK (0x56) [M the
+            // DSTATE_WaitForSwitch channel arm], stalling the contact west of the plate. Both
+            // observed on this branch (NF_CHWATCH=5: ch 0x05 = 1 at frame 10000, master never
+            // writes it) and the detour walk itself wedged at 3000-tick caps both ways. A player
+            // mid-escort does not backtrack a level for ammo; the corridor keeps the on-path
+            // boxes (the west-hall pair at (−14.4, 6.5, 16.1) and (−13.2, 5.6, 10.4) — 5-6 u off
+            // the route) and the guards' own drops, which land at the fight floor [L drops].
+            // Harness policy only: every :317-class assert is untouched.
+            let bond_y = self.scene.sim.as_ref().unwrap().bond.pos[1];
             let Some(target) = self.scene.sim.as_ref().unwrap().drones.pickups.iter()
                 .filter(|p| !p.gone)
                 // Ground-level pickups only: the upstairs placed boxes are a detour the walker
                 // cannot always climb; the drops land at the guards' feet [L drop positions].
-                .filter(|p| (p.m[3][1] - self.pos[1]).abs() < 1.5)
+                // Live bond y (the stale self.pos sat floors away after a nav leg — the old
+                // filter admitted boxes on the wrong floor).
+                .filter(|p| (p.m[3][1] - bond_y).abs() < 1.5)
+                // The walked-path corridor (see the block comment above).
+                .filter(|p| self.trail.iter().any(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) < 9.0))
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                // A box the walker just wedged on is not the box a player keeps trying: exclude
+                // the already-tried spots so the next attempt takes the next-nearest.
+                .filter(|p| !tried.iter().any(|t| dxz(*t, *p) < 0.5))
                 .min_by(|a, b| dxz(*a, self.pos).total_cmp(&dxz(*b, self.pos)))
-            else { break };
+            else { eprintln!("[walk] {label}: no pickup within the walked-path corridor ({} trail points) — not taking the off-path detour", self.trail.len()); break };
+            tried.push(target);
             let d = dxz(target, self.pos);
             if d > 45.0 { break; }
             eprintln!("[walk] {label}: resupply attempt {attempt} at ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], d);
@@ -339,6 +389,7 @@ impl Walker {
             skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
             hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
             surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+            ai_points: &sim.ai_points,
         };
         let torso = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
         let mut best: Option<(f32, V3)> = None;
@@ -363,6 +414,38 @@ impl Walker {
     /// corner pins the sidestep) he walks the NAV GRAPH to a flank point — perpendicular to the
     /// guard bearing, alternating the side and growing the offset 3→5→7 — and re-checks. The
     /// 900-tick no-damage fallback (4 repositions) stays for clear-aim-but-missing cases.
+    /// Fire at a fixed world point (a Destroy prop: `Destroy_CollisionHandler` 0x12bd48 reads the
+    /// bullet's damage against the tag's health; the port's bullet pass checks the segment against
+    /// the prop's bounds [crates/nf-game/src/props.rs]). Aims the view each tick; taps the trigger
+    /// when the view is on the point. Returns when `done` (polled by the caller's closure) or the cap.
+    pub fn shoot_point(&mut self, at: V3, label: &str, done: impl Fn(&nf_view::scene::Sim) -> bool) -> bool {
+        for t in 0..2400u32 {
+            {
+                let sim = self.scene.sim.as_ref().unwrap();
+                if done(sim) { return true; }
+                let bp = sim.bond.pos;
+                let dx = at[0] - bp[0];
+                let dz = at[2] - bp[2];
+                let dy = at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+                let desired = dx.atan2(dz);
+                let err = wrap_pi(desired - sim.bond.yaw);
+                let want_pitch = (dy / dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                let perr = want_pitch - sim.bond.pitch;
+                let on_target = err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0;
+                let input = Input {
+                    turn: err.clamp(-0.08, 0.08),
+                    look: perr.clamp(-0.08, 0.08),
+                    ..Default::default()
+                };
+                drop(sim);
+                self.tick_fire(input);
+                let _ = on_target;
+            }
+        }
+        eprintln!("[walk] {label}: shoot_point cap");
+        false
+    }
+
     pub fn shoot(&mut self, di: usize, label: &str) -> bool {
         let mut hp0 = self.scene.sim.as_ref().unwrap().drones.list[di].health;
         let mut repositions = 0i32;
@@ -552,10 +635,11 @@ impl Walker {
                 let dump = fail_dump(&self.scene, wp.at, label);
                 panic!("walk_to {label}: 40000-tick cap\n{dump}");
             }
-            if self.total_ticks - start_ticks >= 6_000 {
-                // Lenient or not: a 100-second leg is a wedge. Report and bail.
+            let give_up = if self.lenient { LENIENT_GIVE_UP_TICKS } else { 6_000 };
+            if self.total_ticks - start_ticks >= give_up {
+                // Lenient or not: a leg this long is a wedge. Report and bail.
                 let dump = fail_dump(&self.scene, wp.at, label);
-                if self.lenient { eprintln!("[walk] {label}: gave up at the 6000-tick cap\n{dump}"); return u32::MAX; }
+                if self.lenient { eprintln!("[walk] {label}: gave up at the {give_up}-tick cap\n{dump}"); return u32::MAX; }
                 panic!("walk_to {label}: 6000-tick cap\n{dump}");
             }
             let sim = self.scene.sim.as_ref().unwrap();

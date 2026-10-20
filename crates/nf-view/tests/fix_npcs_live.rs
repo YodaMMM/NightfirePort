@@ -47,7 +47,8 @@ fn the_intro_freeze_disables_every_drone_and_shields_them_from_bullets() {
         }).map(|(i, _)| i).unwrap();
         let hp0 = sim.drones.list[target].health;
         {
-            let d = nf_game::drone::Data { tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons, world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins, skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning, hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: None, models: &sim.models, surfaces: None, voices: None, difficulty: 1 };
+            let d = nf_game::drone::Data { tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons, world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins, skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning, hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: None, models: &sim.models, surfaces: None, voices: None, difficulty: 1,
+                ai_points: &sim.ai_points };
             let from = sim.bond.head();
             let tp = sim.drones.list[target].pos;
             let dir = [tp[0] - from[0], tp[1] + 0.8 - from[1], tp[2] - from[2]];
@@ -165,14 +166,18 @@ fn an_idle_gate_guard_sees_and_attacks_bond_on_the_same_floor() {
     let (saw, attacked) = {
         let sim = scene.sim.as_mut().unwrap();
         for _ in 0..3000 { sim.step_bond(Input::default(), false, false, false); }
-        // d15/d16: enabled IDLE guards with no switch channel on the spawn floor (39).
-        assert!(sim.drones.list[15].present && sim.drones.list[15].enabled && sim.drones.list[15].state == nf_game::drone::state::IDLE,
-            "d15 is an enabled idle guard");
+        // The idle gate guards (placements 487/488, the pre-gate list[15]/[16]): enabled IDLE with no
+        // switch channel on the spawn floor (39). Drone_Create's min-difficulty gate [M 0x136be0:49]
+        // holds back 07000006's six param2=2 placements (442/447/635/648/680/704) at the direct load's
+        // difficulty 1, so the guard sits at list[13] (the d1 roster order, verified by probe).
+        assert!(sim.drones.list[13].present && sim.drones.list[13].enabled && sim.drones.list[13].state == nf_game::drone::state::IDLE,
+            "the idle gate guard (placement 487) is an enabled idle guard");
+        let d15_idx = 13;
         sim.bond = nf_game::player::Bond::stand_at(&sim.world, [33.5, 39.0, 22.5], 0.0);
         let mut saw = false; let mut attacked = false;
         for _ in 0..600 {
             sim.step_bond(Input::default(), false, false, false);
-            let d15 = &sim.drones.list[15];
+            let d15 = &sim.drones.list[d15_idx];
             if d15.los { saw = true; }
             if d15.state != nf_game::drone::state::IDLE && d15.alert >= 1.0 { attacked = true; }
         }

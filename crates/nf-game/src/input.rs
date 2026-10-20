@@ -12,6 +12,10 @@
 
 mod styles_gen;
 
+/// The driving levels' input path from DRIVING.ELF (G-004) [M docs/systems/driving-input.md]:
+/// the pure PollDevice/binding port; the driving levels stay unwired.
+pub mod driving;
+
 /// One dead-zoned axis byte's tSlot offset [M docs/systems/input.md §2, WORKLOG 0006].
 pub const AX_RX: u16 = 0x128;
 pub const AX_RY: u16 = 0x129;
@@ -316,6 +320,11 @@ impl PadDriver {
         // keyboard path and the game's +0x120 "newly pressed" word [M ps2_handle_pad 0x10c738:89].
         input.jump = a[7] != 0.0 && newly & self.mask_of(pad, 7) != 0;
         input.crouch = a[8] != 0.0 && newly & self.mask_of(pad, 8) != 0;
+        // Zero-g reads the SAME pair as a HELD analog thruster, not edges [M Player_ZeroG
+        // 0x192ab0:136-138 `Input_Action(7,1) − Input_Action(8,1)`], and the action-0xe digital
+        // read arms the auto-stabiliser window [M :163-166] — held, like the game's flag-4 read.
+        input.lift = a[7] - a[8];
+        input.stabilise = a[14] != 0.0;
         input.fire = a[9] != 0.0;
         input.aiming = a[19] != 0.0;
         // Player_Zoom 0x1a1a70: action 6 while aim mode is on.

@@ -119,16 +119,16 @@ pub enum StartError {
     NoMovieData(String),
 }
 
-/// The movie PCM output: a cpal stream draining a ring the decoder thread feeds per frame
-/// (the game's AudioDec IOP ring: `audioDecSendToIOP` per decoded frame 0x107100, SPU2 at 48 kHz
-/// stereo [M 0x107360]; the port's mix runs at the device's own rate with a nearest-neighbour
-/// resample). Volume 1.0 [S — the game applies `MovieVolume` = `SFXGetVolume()` at the start site;
-/// the sfx master volume is not plumbed into the player].
+/// The movie PCM output: a cpal stream playing the whole track from memory (`open_pcm_out`), opened
+/// with the first picture. Gain `movie_gain(volume)` (the boot default is `MOVIE_GAIN`).
 #[cfg(feature = "movies")]
 struct PcmOut {
     _stream: cpal::Stream,
-    #[allow(dead_code)] // held so the ring outlives the stream callback
-    ring: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<i16>>>,
+    /// The track position the device has played to, in source sample frames (an f64's bits) —
+    /// the movie's master clock (`audio_clock`).
+    played: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// The track length in source sample frames.
+    frames: usize,
 }
 
 /// A playing movie, the port's `psiStartBackgroundMovie` (0x001081a8). fix-menu-movies2: this is
@@ -151,47 +151,74 @@ pub struct Player {
     /// `psiMovieFinished`].
     looping: bool,
     last: Option<(u32, u32, Vec<u8>)>,
+    /// Frames pulled since `started` (the pacing clock).
     tick: u32,
+    started: Option<std::time::Instant>,
     ended: bool,
     /// The ONE decoder path: the closed-GOP streaming worker.
     #[cfg(feature = "movies")]
     stream: Option<MovieStream>,
-    /// The movie PCM + the walk offset: each decoded frame's audio slice feeds the ring (the game
-    /// feeds the IOP ring from the same callback that produces the frame [M audioDecSendToIOP
-    /// 0x107100]); a looping movie restarts the walk with the video [M 0x00108060].
+    /// `MovieVolume` [M 0x1081a8's store]: the start site's SFX volume in the game's
+    /// SfxMasterVolume scale (0..100), captured once — the game reads it back only in
+    /// `audioDecStart` [M 0x107360], so a mid-movie options change does not reach a playing movie.
+    volume: u32,
+    /// The movie's interleaved stereo PCM and its rate. The device stream opens with the FIRST
+    /// picture (`present`), not at `start`: the mission flow starts the briefing during the map-load
+    /// fade (decode-ahead), and the audio ran seconds ahead of a picture that wasn't showing yet.
     #[cfg(feature = "movies")]
-    pcm: Vec<i16>,
+    pcm: std::sync::Arc<Vec<i16>>,
     #[cfg(feature = "movies")]
-    pcm_at: usize,
-    #[cfg(feature = "movies")]
-    ring: Option<std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<i16>>>>,
+    rate: f64,
     #[cfg(feature = "movies")]
     _pcm: Option<PcmOut>,
+    /// Playback timing for `movie-timing.log` (written when the player drops).
+    timing: Timing,
+}
+
+/// Per-movie playback timing, one log line per movie (playtest 1016's lag report: real-path
+/// evidence from the user's own runs). Port diagnostics only.
+#[derive(Default)]
+struct Timing {
+    last_present: Option<std::time::Instant>,
+    presents: u32,
+    worst_gap_ms: f64,
+    gaps_over_50ms: u32,
+    shown: u32,
+    dropped: u32,
+    worst_behind: u32,
+    audio_clocked: bool,
 }
 
 impl Player {
     /// `psiStartBackgroundMovie__FUiScUi` 0x001081a8 for one of the mission-flow codes: gate on the
     /// `UsingMovie` whitelist, open `cdrom0:\movies\30_FPS\%8.8x.pss;1`, start decoding + audio.
-    /// (The game's `loop` and `volume` args are 0 / `SFXGetVolume()` at every mission-flow site
-    /// [M]; the port plays once at fixed volume.)
-    pub fn start(iso_path: &str, code: u32) -> Result<Player, StartError> {
-        Self::open(iso_path, code, false)
+    /// `volume` is the start site's `SFXGetVolume()` — every `psiStartBackgroundMovie` caller
+    /// passes it [M Menu_PlayMovie 0x215990:18-19, P_INTRO 0x209e88:62, P_ATTRACT 0x20a1f0:36,
+    /// P_FMVPLAYER 0x20ad30:26, P_TRAILER 0x214f10:20, ResetMap_Load 0x1d6360; see
+    /// `lib.rs::movie_sfx_volume` for the port's read]. The game's `loop` arg is 0 here.
+    pub fn start(iso_path: &str, code: u32, volume: u32) -> Result<Player, StartError> {
+        Self::open(iso_path, code, false, volume)
     }
 
     /// The front end's start site: `Menu_PlayMovie(aux, 0, 1, 0, 0, 0)` — loop = 1 [M
     /// `Manager_SendMessage` 0x21c858:338] — for the page backdrop; the intro pair plays once
     /// (`P_INTRO_Handler` 0x209e88 waits `psiMovieFinished`), so it uses `start`. The same
-    /// whitelist gates every code [M 0x107eb8].
-    pub fn start_looping(iso_path: &str, code: u32) -> Result<Player, StartError> {
-        Self::open(iso_path, code, true)
+    /// whitelist gates every code [M 0x107eb8]; the volume is `Menu_PlayMovie`'s own
+    /// `SFXGetVolume()` [M 0x215990:18-19].
+    pub fn start_looping(iso_path: &str, code: u32, volume: u32) -> Result<Player, StartError> {
+        Self::open(iso_path, code, true, volume)
     }
 
-    fn open(iso_path: &str, code: u32, looping: bool) -> Result<Player, StartError> {
+    /// `MovieVolume` as started [M 0x1081a8's store; the game's only later read is
+    /// `audioDecStart` 0x107360 — a mid-movie options change never reaches the player].
+    pub fn volume(&self) -> u32 { self.volume }
+
+    fn open(iso_path: &str, code: u32, looping: bool, volume: u32) -> Result<Player, StartError> {
         if !USING_MOVIE.contains(&code) { return Err(StartError::NotWhitelisted); }
         let iso = nf_formats::iso9660::IsoImage::open(iso_path).map_err(|e| StartError::NoMovieData(e.to_string()))?;
         let m = Movie::load(&iso, &format!("{code:08X}")).map_err(|e| StartError::NoMovieData(e.to_string()))?;
         #[cfg(not(feature = "movies"))]
-        { let _ = (&m, looping); Ok(Player { code, looping, last: None, tick: 0, ended: true }) }
+        { let _ = (&m, looping); Ok(Player { code, looping, volume, last: None, tick: 0, started: None, ended: true, timing: Timing::default() }) }
         #[cfg(feature = "movies")]
         {
             // Audio first: the whole PCM is in memory after the demux; each decoded frame's slice
@@ -199,18 +226,20 @@ impl Player {
             // (0x107100).
             let pcm: Vec<i16> = m.audio().map(|a| a.decode().into_iter().flat_map(|[l, r]| [l, r]).collect()).unwrap_or_default();
             let rate = m.audio().map(|a| a.header.rate).unwrap_or(48000) as f64;
-            let (ring, out) = open_pcm_out(&pcm, rate);
             // The ONE decoder path: MovieStream's closed-GOP worker (fix-menu-movies'), now under
             // the mission-flow codes too.
             let stream = match MovieStream::start(&m, looping) {
                 Ok(s) => Some(s),
                 Err(e) => { eprintln!("movie: {code:08x}: {e}"); None }
             };
-            Ok(Player { code, looping, last: None, tick: 0, ended: stream.is_none(), stream, pcm, pcm_at: 0, ring: Some(ring), _pcm: out })
+            Ok(Player { code, looping, volume, last: None, tick: 0, started: None, ended: stream.is_none(), stream, pcm: std::sync::Arc::new(pcm), rate, _pcm: None, timing: Timing::default() })
         }
     }
 
     pub fn code(&self) -> u32 { self.code }
+
+    /// Seconds since the first frame was presented (0 before any frame showed).
+    pub fn shown_for(&self) -> f32 { self.started.map_or(0.0, |s| s.elapsed().as_secs_f32()) }
 
     /// True when this player loops its file (the front end's backdrop [M 0x21c858:338 loop = 1]);
     /// the mission-flow players never do.
@@ -221,24 +250,55 @@ impl Player {
     /// a declined start) this is true immediately, exactly like the game's un-started movie.
     pub fn finished(&self) -> bool { self.ended }
 
-    /// One render frame. Pulls a new decoded frame on every second call (the game's 30 fps pacing,
-    /// main 0x00109080) and returns the frame to show as the full-screen plane, if any has arrived.
+    /// One render frame. Pulls the next decoded frame when one is due at the game's 30 fps (main 0x00109080 decodes
+    /// on every second 60 Hz vblank) by the wall clock, and returns the frame to show as the full-screen plane, if any
+    /// has arrived. (Pulling on every second CALL tied the movie to the render rate: ~66 frames a second on a fast
+    /// display, measured 2026-10-15.)
     pub fn present(&mut self) -> Option<(u32, u32, &[u8])> {
-        self.tick = self.tick.wrapping_add(1);
+        let now = std::time::Instant::now();
+        let start = *self.started.get_or_insert(now);
         #[cfg(feature = "movies")]
-        if self.tick % 2 == 0 || self.last.is_none() {
+        {
+            let tm = &mut self.timing;
+            if let Some(l) = tm.last_present {
+                let gap = (now - l).as_secs_f64() * 1000.0;
+                tm.worst_gap_ms = tm.worst_gap_ms.max(gap);
+                if gap > 50.0 { tm.gaps_over_50ms += 1; }
+            }
+            tm.last_present = Some(now);
+            tm.presents += 1;
+        }
+        #[cfg(feature = "movies")]
+        if let Some(t) = self.audio_clock() {
+            return self.present_on_audio(now, t);
+        }
+        let mut due = ((now - start).as_secs_f64() * 30.0) as u32 + 1;
+        // Never faster than real time: when the decoder falls behind (its warm-up on the first
+        // frames, a slow GOP) the clock slips instead of the picture racing to catch up — the old
+        // catch-up showed one movie frame per RENDER frame, so the intro's opening (the 007 white
+        // dots) flashed by at 100+ fps (playtest 1015-2142). The audio rides the frames, so it
+        // stays with the picture.
+        if due > self.tick.wrapping_add(2) && self.last.is_some() {
+            self.started = Some(now - std::time::Duration::from_secs_f64(self.tick as f64 / 30.0));
+            due = self.tick.wrapping_add(1);
+        }
+        #[cfg(feature = "movies")]
+        if self.tick < due || self.last.is_none() {
             if let Some(s) = self.stream.as_mut() {
                 if s.advance() {
+                    self.tick = self.tick.wrapping_add(1);
                     if let Some(f) = s.frame().cloned() {
                         // The frame's audio slice goes out with its picture (the game feeds the IOP
                         // ring from the same callback that produces the frame [M 0x107100]); a
                         // looping movie restarts the walk with the video [M 0x00108060].
-                        if !self.pcm.is_empty() {
-                            let per_frame = self.pcm.len().div_ceil(s.pictures.max(1));
-                            let end = (self.pcm_at + per_frame).min(self.pcm.len());
-                            if let Some(ring) = &self.ring { push_pcm(ring, &self.pcm[self.pcm_at..end]); }
-                            self.pcm_at = if end >= self.pcm.len() && self.looping { 0 } else { end };
+                        // movie-audio: the audio is the device's own stream (`open_pcm_out` plays the
+                        // whole track at its rate); per-picture pushes starved and dropped it.
+                        // movie-volume: the start's `MovieVolume` sets the gain (the game applies it
+                        // once, in audioDecStart [M 0x107360]).
+                        if self.last.is_none() && self._pcm.is_none() {
+                            self._pcm = open_pcm_out(self.pcm.clone(), self.rate, self.looping, movie_gain(self.volume));
                         }
+                        self.timing.shown += 1;
                         let rgba = nf_formats::mpeg2::yuv420_to_rgb8(&f);
                         self.last = Some((f.width as u32, f.height as u32, rgba));
                     }
@@ -252,53 +312,206 @@ impl Player {
         self.last.as_ref().map(|(w, h, rgba)| (*w, *h, rgba.as_slice()))
     }
 
+    /// The audio device's play position in seconds while the movie's track is playing — the
+    /// master clock for a once-through movie, as on the PS2, where the IOP streams the audio
+    /// continuously and the picture skips frames to keep up [M audioDecSendToIOP 0x107100;
+    /// PS2FramesToSkip]. None for a looping backdrop (the track wraps), with no device, or once
+    /// the track has ended (the picture then finishes on the wall clock).
+    #[cfg(feature = "movies")]
+    fn audio_clock(&self) -> Option<f64> {
+        let out = self._pcm.as_ref()?;
+        if self.looping { return None; }
+        let pos = f64::from_bits(out.played.load(std::sync::atomic::Ordering::Relaxed));
+        if pos >= out.frames as f64 - 1.0 { return None; }
+        Some(pos / self.rate)
+    }
+
+    /// `present` against the audio clock: the picture due at `t` seconds of audio is shown; when
+    /// the decoder fell behind, the pictures in between are dropped (decoded, never converted or
+    /// shown) so the picture lands back on the sound instead of slipping behind it. Ahead of the
+    /// audio, the current picture holds.
+    #[cfg(feature = "movies")]
+    fn present_on_audio(&mut self, now: std::time::Instant, t: f64) -> Option<(u32, u32, &[u8])> {
+        let due = (t * 30.0) as u32 + 1;
+        self.timing.audio_clocked = true;
+        self.timing.worst_behind = self.timing.worst_behind.max(due.saturating_sub(self.tick + 1));
+        let mut latest = None;
+        if let Some(s) = self.stream.as_mut() {
+            while self.tick < due {
+                if !s.advance() {
+                    if s.finished { self.ended = true; }
+                    break;
+                }
+                self.tick = self.tick.wrapping_add(1);
+                if latest.is_some() { self.timing.dropped += 1; }
+                latest = s.frame().cloned();
+            }
+        }
+        if let Some(f) = latest {
+            self.timing.shown += 1;
+            let rgba = nf_formats::mpeg2::yuv420_to_rgb8(&f);
+            self.last = Some((f.width as u32, f.height as u32, rgba));
+        }
+        // Keep the wall clock aligned for the hand-over when the track ends first.
+        self.started = Some(now - std::time::Duration::from_secs_f64(self.tick as f64 / 30.0));
+        self.last.as_ref().map(|(w, h, rgba)| (*w, *h, rgba.as_slice()))
+    }
+
     /// `psiStopBackgroundMovie__Fv` 0x00108328 — stops the decoder worker and the audio stream
     /// (both drop with the player).
     pub fn stop(self) {}
 }
 
 #[cfg(feature = "movies")]
-/// The decoder-side half of the PCM ring.
-fn push_pcm(ring: &std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<i16>>>, chunk: &[i16]) {
-    if let Ok(mut q) = ring.lock() {
-        // Cap ~0.25 s at 48 kHz stereo: the callback drains in real time, so a full ring means the
-        // audio is far ahead of the picture — drop the oldest instead of growing.
-        for &s in chunk {
-            if q.len() >= 24_000 { q.pop_front(); }
-            q.push_back(s);
+impl Drop for Player {
+    fn drop(&mut self) {
+        let tm = &self.timing;
+        if tm.presents < 2 || self.looping { return; }
+        let line = format!(
+            "{} movie {:08x}: {} pictures, {} shown, {} dropped to keep up, worst {} behind the audio, {} redraws, worst redraw gap {:.0} ms, {} gaps over 50 ms, clock {}{}
+",
+            chrono_now(), self.code, self.tick, tm.shown, tm.dropped, tm.worst_behind, tm.presents, tm.worst_gap_ms, tm.gaps_over_50ms,
+            if tm.audio_clocked { "audio" } else { "wall" }, if self.ended { "" } else { " (stopped early)" });
+        eprint!("{line}");
+        if nf_audio::silent() { return; } // tests never write next to their binaries
+        {
+            use std::io::Write;
+            let path = crate::settings::output_dir().join("movie-timing.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) { let _ = f.write_all(line.as_bytes()); }
         }
     }
 }
 
+/// Seconds since the Unix epoch (the log's timestamp; no date crate in the tree).
 #[cfg(feature = "movies")]
-fn open_pcm_out(pcm: &[i16], rate: f64) -> (std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<i16>>>, Option<PcmOut>) {
+fn chrono_now() -> String {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| format!("t={}", d.as_secs())).unwrap_or_default()
+}
+
+/// movie-volume: the game's movie gain chain. `psiStartBackgroundMovie` stores
+/// `MovieVolume = SFXGetVolume()` (= `SfxMasterVolume` when the sound option is on, 100 at boot
+/// [L 0x30c95c; the ==0 branch returns 1, M 0x116e18]) and `audioDecStart` 0x107360:2-9 calls
+/// `changeInputVolume(MovieVolume * 100)` [M the mult at 0x107380], which writes the value to the
+/// SPU2 core-0 input-volume pair (entries 0xf80 / 0x1080) via the same `sceSdSetParam` RPC its
+/// `changeMasterVolume` 0x107860 uses for the master pair (0x980/0xa80 + core in bit 0; the R
+/// channel sits at L+0x100) [M]. `MovieVolume` (0x30c6a8) has exactly two readers in the whole
+/// decompile — that store and `audioDecStart` — so the volume is captured once at start and a
+/// mid-movie options change never reaches a playing movie. `CleanUpBGFMV` 0x108700 →
+/// `audioDecReset` 0x1073d8 → `changeInputVolume(0)` silences the path on teardown [M].
+///
+/// The register's full scale is the SPU2 volume register's signed-16-bit 0x7fff [S unverified —
+/// the SPU2's input-volume DSP curve is hardware, not in any decompile; the game's own voice/reverb
+/// writes use 0x3fff as 100% (sound.md §5.4), so 0x7fff is the other candidate. Boot gain
+/// 10000/0x7fff ≈ 0.305 matches playtest 1016's "full scale is about 3x too loud"; 10000/0x3fff
+/// ≈ 0.610 would be only 1.6x. A live check is requested in docs/reports/movie-volume-options.md].
+pub const MOVIE_FULL_SCALE: f32 = 32767.0;
+
+/// The port's movie gain for `movie_volume` in the game's SfxMasterVolume scale (0..100):
+/// `changeInputVolume(MovieVolume * 100)` units over the register's full scale.
+pub fn movie_gain(movie_volume: u32) -> f32 {
+    movie_input_volume(movie_volume) as f32 / MOVIE_FULL_SCALE
+}
+
+/// `audioDecStart` 0x107360:2-3's argument: the input-volume register value the game writes for
+/// `MovieVolume` [M]. The options' SFX volume N reaches the movie path as N*100.
+pub fn movie_input_volume(movie_volume: u32) -> u32 { movie_volume * 100 }
+
+/// The boot default: `SfxMasterVolume` is 100 in the fresh-boot EE snapshot [L 0x30c95c], so the
+/// boot movie gain is `movie_gain(100)`. Before movie-volume-options the port played every movie
+/// at this fixed gain — about 3x too loud (playtest 1016) — because the options' SFX volume was
+/// not plumbed into the player.
+pub const MOVIE_GAIN: f32 = (100.0 * 100.0) / 32767.0;
+
+#[cfg(feature = "movies")]
+fn open_pcm_out(src: std::sync::Arc<Vec<i16>>, rate: f64, looping: bool, gain: f32) -> Option<PcmOut> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-    use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
-    let ring: Arc<Mutex<VecDeque<i16>>> = Arc::new(Mutex::new(pcm.iter().take(24_000).copied().collect()));
-    if nf_audio::silent() { return (ring, None); }
-    let Some(device) = cpal::default_host().default_output_device() else { eprintln!("movie: no output device; running silent"); return (ring, None) };
-    let Ok(cfg) = device.default_output_config() else { eprintln!("movie: no output config; running silent"); return (ring, None) };
-    let dr = ring.clone();
+    if nf_audio::silent() || src.len() < 4 { return None; }
+    let Some(device) = cpal::default_host().default_output_device() else { eprintln!("movie: no output device; running silent"); return None };
+    let Ok(cfg) = device.default_output_config() else { eprintln!("movie: no output config; running silent"); return None };
     let dev_rate = cfg.sample_rate() as f64;
     let ch = cfg.channels() as usize;
-    let pos = Arc::new(Mutex::new(0.0f64));
-    let pos_cb = pos.clone();
+    // movie-audio: the WHOLE track plays from memory at the device's own clock — the way a PS2
+    // movie's audio is the master the IOP streams continuously [M audioDecSendToIOP 0x107100 keeps
+    // the SPU2 ring full]. Feeding it one 33 ms slice per decoded picture (the old ring) starved it
+    // whenever the picture slipped (gaps = static) and dropped samples when it caught up (pitch
+    // jumps). Linear interpolation from the track's 48 kHz to the device rate.
+    let frames = src.len() / 2;
+    let step = rate / dev_rate;
+    let mut pos = 0.0f64;
+    let played = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0f64.to_bits()));
+    let played2 = played.clone();
     let err = |e: cpal::Error| eprintln!("movie audio: {e}");
     let stream = match cfg.sample_format() {
         cpal::SampleFormat::F32 => device.build_output_stream(cpal::StreamConfig::from(cfg.config()), move |d: &mut [f32], _| {
-            let mut p = pos_cb.lock().unwrap();
-            for out in d.iter_mut() {
-                let step = dev_rate / rate / ch.max(1) as f64;
-                let src = (*p * rate as f64) as usize / 2 * 2; // stay on a stereo pair
-                let s = if let Ok(q) = dr.lock() { q.get(src % q.len().max(1)).copied().unwrap_or(0) } else { 0 };
-                *out = s as f32 / 32768.0;
-                *p += step;
+            for frame in d.chunks_mut(ch.max(1)) {
+                if pos >= frames as f64 - 1.0 {
+                    if looping { pos = 0.0; } else { frame.fill(0.0); continue; }
+                }
+                let i = pos as usize;
+                let t = (pos - i as f64) as f32;
+                // nf_audio::OUTPUT_GAIN: the port's overall output level, the same as the game mixer's.
+                let at = |k: usize, c: usize| src[2 * k + c] as f32 / 32768.0 * gain * nf_audio::OUTPUT_GAIN;
+                let l = at(i, 0) * (1.0 - t) + at(i + 1, 0) * t;
+                let r = at(i, 1) * (1.0 - t) + at(i + 1, 1) * t;
+                for (k, out) in frame.iter_mut().enumerate() { *out = if k % 2 == 0 { l } else { r }; }
+                pos += step;
             }
+            played2.store(pos.to_bits(), std::sync::atomic::Ordering::Relaxed);
         }, err, None).ok(),
         _ => { eprintln!("movie audio: unsupported sample format; running silent"); None }
     };
-    (ring.clone(), stream.map(move |s| PcmOut { _stream: s, ring }))
+    if let Some(s) = &stream { if let Err(e) = s.play() { eprintln!("movie audio: {e}"); } }
+    stream.map(|s| PcmOut { _stream: s, played, frames })
+}
+
+/// movie-volume-options: the SfxMasterVolume → movie-gain mapping, pure so the default-feature
+/// suite runs it (the audio itself stays behind `movies` + NF_SILENT — no test plays sound).
+#[cfg(test)]
+mod volume_tests {
+    use super::*;
+
+    /// The boot chain: the front end's SFX volume 100 (the boot `SfxMasterVolume` [L 0x30c95c])
+    /// reaches `changeInputVolume` as 100*100 = 10000 [M audioDecStart 0x107360:2-3 mult] and the
+    /// gain equals the fixed `MOVIE_GAIN` the port played everything at before the options were
+    /// plumbed — boot behaviour must not move. Sister: a mid-range volume 37 follows the same
+    /// ×100 → /0x7fff chain (3700 register units, 3700/32767 gain).
+    #[test]
+    fn the_boot_volume_gives_the_old_fixed_gain() {
+        assert_eq!(movie_input_volume(100), 10000, "audioDecStart's changeInputVolume argument [M 0x107360]");
+        assert_eq!(movie_gain(100), MOVIE_GAIN);
+        assert_eq!(MOVIE_GAIN, 10000.0 / MOVIE_FULL_SCALE);
+        // Sister: a non-default volume follows the same mapping (N → N*100 register units).
+        assert_eq!(movie_input_volume(37), 3700);
+        assert_eq!(movie_gain(37), 3700.0 / MOVIE_FULL_SCALE);
+    }
+
+    /// The endpoints: SFX 0 mutes the movie (the game writes register 0 [M 0x107360]), and the
+    /// gain stays a plain fraction of the source samples (no extra shaping). Sister: 50 gives
+    /// exactly half the boot gain — the mapping is linear in the option [S the linear scale, see
+    /// MOVIE_FULL_SCALE's note].
+    #[test]
+    fn the_gain_is_linear_and_zero_mutes() {
+        assert_eq!(movie_gain(0), 0.0);
+        assert_eq!(movie_gain(50), movie_gain(100) / 2.0);
+    }
+
+    /// The host reads the movie's start volume from the front end's SFX option — the port's
+    /// `SfxMasterVolume` static [M P_CNAVOPTIONS 0x214818:74 writes the static from the page;
+    /// LS_LoadGlobalSettings 0x1cdbc8:70 loads straight into it]. A mid-range option rides
+    /// through unchanged, a missing key boots 100 [L 0x30c95c]. Sister: another value 55 —
+    /// every start site reads the option fresh, like the game's `SFXGetVolume()` call at each
+    /// `psiStartBackgroundMovie` [M 0x215990:18].
+    #[test]
+    fn the_start_volume_comes_from_the_options_sfx() {
+        let mut fe = crate::menu::FrontEnd::new();
+        assert_eq!(crate::movie_sfx_volume(&fe), 100, "the boot default with the default map's 100");
+        fe.opts.insert(0x1000_0134, 37);
+        assert_eq!(crate::movie_sfx_volume(&fe), 37);
+        fe.opts.insert(0x1000_0134, 55);
+        assert_eq!(crate::movie_sfx_volume(&fe), 55);
+        fe.opts.remove(&0x1000_0134);
+        assert_eq!(crate::movie_sfx_volume(&fe), 100, "a missing key falls back to the boot default [L 0x30c95c]");
+    }
 }
 
 #[cfg(all(test, feature = "movies"))]
@@ -328,6 +541,26 @@ mod tests {
         // "0x7100001" trimmed is 7 and looked up as the file 7100001.PSS, which no image has.)
         let m2 = Movie::load(&iso, "0x07100001").unwrap();
         assert_eq!(m2.name, m.name);
+    }
+
+    /// movie-volume-options: the player carries the start site's volume, and the gain the PCM
+    /// callback applies is `movie_gain(volume)`. The volume is captured once at `start` — the
+    /// game's `MovieVolume` has exactly two readers, its store and `audioDecStart` [M 0x1081a8 +
+    /// 0x107360], so a mid-movie options change never reaches the running player (there is no
+    /// re-read path: `volume()` stays what `start` was given). Sister: a second start with the
+    /// boot volume 100 carries 100 and its gain equals the fixed `MOVIE_GAIN`. Needs real movie
+    /// data (the slim on-foot image has none — `Movie::load` fails first, as the game's
+    /// `strFileOpen` would).
+    #[test]
+    fn the_player_captures_the_start_volume_once() {
+        let Some(path) = std::env::var("NF_MOVIE_ISO").ok().or_else(|| std::env::var("NF_ISO").ok()) else { eprintln!("skip: NF_MOVIE_ISO/NF_ISO not set"); return };
+        let Ok(p) = Player::start(&path, 0x0710_0001, 37) else { eprintln!("skip: no movie data on this image"); return };
+        assert_eq!(p.volume(), 37, "the start volume is the player's MovieVolume [M 0x1081a8]");
+        assert_eq!(movie_gain(p.volume()), 3700.0 / MOVIE_FULL_SCALE, "the callback's gain is the ×100 register value over the full scale");
+        // Sister: the boot volume still gives today's fixed gain.
+        let Ok(p100) = Player::start(&path, 0x0710_0001, 100) else { eprintln!("skip: no movie data on this image"); return };
+        assert_eq!(p100.volume(), 100);
+        assert_eq!(movie_gain(p100.volume()), MOVIE_GAIN);
     }
 
     /// fix-menu-backdrop: the FIRST chunk carries the first GOP, not the bare sequence header. The
@@ -370,13 +603,27 @@ mod tests {
 // chunk), with the stream's sequence header prepended — self-contained per ISO 13818-2 §6.4.
 // ---------------------------------------------------------------------------
 
+/// Decoded pictures the streaming worker may hold ahead of playback (~2 s at 30 fps).
+#[cfg(feature = "movies")]
+pub const STREAM_AHEAD: usize = 60;
+
+/// Movie decode threads. One thread decodes these 512x448 MPEG-2 movies at ~34 fps on an idle
+/// 24-thread desktop, and the heaviest GOPs of the 07300004 briefing run at 108 ms a picture —
+/// a third of real time [L probe 2026-10-16]; the 2 s lead drained on those GOPs and the
+/// picture stalled (playtest 1016: "starting and ending movies of missions are lagging"). The GOP
+/// units are independent decodes (a closed GOP alone, an open one with its predecessor in front),
+/// so they decode in parallel, round-robin, and come back out in order.
+pub const DECODE_THREADS: usize = 4;
+
 #[cfg(feature = "movies")]
 pub struct MovieStream {
-    /// Display-ordered frames ready to show, or the worker's end marker.
-    rx: std::sync::mpsc::Receiver<WorkerMsg>,
+    /// One channel per decode thread: unit k's pictures arrive on `rx[k % DECODE_THREADS]`,
+    /// followed by a `UnitEnd`; `next` is the channel whose turn it is.
+    rx: Vec<std::sync::mpsc::Receiver<WorkerMsg>>,
+    next: usize,
     /// The newest frame `advance` handed out (kept so the caller can re-take it between ticks).
     current: Option<nf_formats::mpeg2::VideoFrame>,
-    handle: Option<std::thread::JoinHandle<()>>,
+    handles: Vec<std::thread::JoinHandle<()>>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The movie this stream plays (the host keys restarts on the code, like
     /// `Manager_SendMessage` 0x21c858:338 compares M_PAGE+0xC4 against the playing one).
@@ -392,6 +639,8 @@ pub struct MovieStream {
 #[cfg(feature = "movies")]
 enum WorkerMsg {
     Frame(nf_formats::mpeg2::VideoFrame),
+    /// The end of one GOP unit's pictures: the next unit is on the next thread's channel.
+    UnitEnd,
     Done,
 }
 
@@ -427,40 +676,109 @@ fn gop_chunks(es: &[u8]) -> (Vec<(usize, usize)>, usize) {
     (chunks, head_end)
 }
 
+/// boot-flow: the streaming worker's decode units — one per GOP, so the first picture arrives after
+/// one GOP's decode instead of a whole closed-GOP chunk (0x073B0048's first closed chunk held most of
+/// the movie: the P_ESTHERO intro sat black ~20 s, then joined mid-way). Each unit is (decode from,
+/// decode to, keep the last N frames): a closed GOP decodes alone (keep all); an OPEN GOP's leading
+/// B pictures reference the previous GOP's last anchor [ISO 13818-2 §6.3.8 closed_gop], so it decodes
+/// with the previous GOP in front and keeps only its own pictures (the last N of the output — robust
+/// whether the decoder emits or drops the prefix's own unreferenced B pictures).
+#[cfg(feature = "movies")]
+fn gop_units(es: &[u8]) -> (Vec<(Option<(usize, usize)>, usize, usize, usize)>, usize) {
+    let mut gops: Vec<(usize, bool)> = Vec::new();
+    let mut i = 0usize;
+    while i + 8 <= es.len() {
+        let Some(at) = es[i..].windows(4).position(|w| w == [0, 0, 1, 0xb8]) else { break };
+        let at = i + at;
+        if at + 8 > es.len() { break; }
+        gops.push((at, (es[at + 7] >> 6) & 1 == 1));
+        i = at + 4;
+    }
+    let head_end = gops.first().map(|(at, _)| *at).unwrap_or(es.len());
+    let pics = |a: usize, b: usize| es[a..b].windows(4).filter(|w| *w == [0, 0, 1, 0]).count();
+    let mut units = Vec::new();
+    for k in 0..gops.len() {
+        let (at, closed) = gops[k];
+        let end = gops.get(k + 1).map_or(es.len(), |g| g.0);
+        let n = pics(at, end);
+        if n == 0 { continue; }
+        let prefix = if closed || k == 0 { None } else { Some((gops[k - 1].0, at)) };
+        units.push((prefix, at, end, n));
+    }
+    (units, head_end)
+}
+
+/// boot-flow: a reference GOP without its own leading B pictures. An open GOP's leading Bs (coded right
+/// after its I, before the next anchor) reference the GOP before it; as a prefix they have nothing in
+/// front, and the decoder rejects them ("B-picture before two I/P anchors"). Their frames are dropped
+/// anyway — only the prefix's anchors matter as references for the unit.
+#[cfg(feature = "movies")]
+fn strip_leading_b(gop: &[u8]) -> Vec<u8> {
+    let starts: Vec<usize> = gop.windows(4).enumerate().filter(|(_, w)| *w == [0, 0, 1, 0]).map(|(i, _)| i).collect();
+    let mut out = Vec::with_capacity(gop.len());
+    out.extend_from_slice(&gop[..starts.first().copied().unwrap_or(gop.len())]);
+    let mut seen_anchor = 0;
+    for (k, &st) in starts.iter().enumerate() {
+        let en = starts.get(k + 1).copied().unwrap_or(gop.len());
+        let kind = gop.get(st + 5).map_or(0, |b| (b >> 3) & 7);
+        if kind == 3 && seen_anchor < 2 { continue; } // a leading B (before the second anchor)
+        if kind == 1 || kind == 2 { seen_anchor += 1; }
+        out.extend_from_slice(&gop[st..en]);
+    }
+    out
+}
+
 #[cfg(feature = "movies")]
 impl MovieStream {
-    /// Starts the worker: decode chunk by chunk ahead of playback. `looping` restarts from the
-    /// first chunk when the ES ends (the game's looping background movies).
+    /// Starts the worker: decode GOP by GOP ahead of playback (`gop_units`). `looping` restarts from the
+    /// first unit when the ES ends (the game's looping background movies).
     pub fn start(movie: &Movie, looping: bool) -> Result<MovieStream> {
-        let (chunks, head_end) = gop_chunks(&movie.demuxed.video);
+        let (chunks, head_end) = gop_units(&movie.demuxed.video);
         anyhow::ensure!(!chunks.is_empty(), "no decodable GOP chunks in {}", movie.name);
         let head = movie.demuxed.video[..head_end].to_vec();
         let es = movie.demuxed.video.clone();
-        let (tx, rx) = std::sync::mpsc::channel::<WorkerMsg>();
+        // crash-fix: BOUNDED. The unbounded channel let the worker decode the whole movie ahead
+        // of playback — a briefing started during the map-load fade (decode-ahead) piled every
+        // picture in RAM (~350 KB each, thousands of them): freeze, then crash at the briefing's
+        // end (playtest 1016). ~2 s of pictures is plenty of lead.
+        // The lead is split over the decode threads' channels.
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stop2 = stop.clone();
         let pictures = nf_formats::mpeg2::picture_counts(&movie.demuxed.video).0;
         let code = movie.code;
-        let handle = std::thread::Builder::new().name(format!("movie-{code:08x}")).spawn(move || {
-            'movie: loop {
-                for &(a, b) in &chunks {
-                    if stop2.load(std::sync::atomic::Ordering::Relaxed) { break 'movie; }
-                    // The chunk's own sequence header + its GOPs: a closed-GOP-aligned slice is
-                    // self-contained, so `decode_video` on it equals the whole-stream decode's
-                    // frames for the same pictures.
-                    let mut part = head.clone();
+        let (chunks, head, es) = (std::sync::Arc::new(chunks), std::sync::Arc::new(head), std::sync::Arc::new(es));
+        let mut rxs = Vec::new();
+        let mut handles = Vec::new();
+        for w in 0..DECODE_THREADS {
+            let (tx, rx) = std::sync::mpsc::sync_channel::<WorkerMsg>((STREAM_AHEAD / DECODE_THREADS).max(1));
+            rxs.push(rx);
+            let (stop2, chunks, head, es) = (stop.clone(), chunks.clone(), head.clone(), es.clone());
+            handles.push(std::thread::Builder::new().name(format!("movie-{code:08x}-{w}")).spawn(move || {
+                // Thread w decodes the units at global positions w, w+N, w+2N, … (a looping movie
+                // keeps counting past the end, so the round-robin order holds across the wrap).
+                let n = chunks.len();
+                let mut g = w;
+                loop {
+                    if !looping && g >= n { break; }
+                    if stop2.load(std::sync::atomic::Ordering::Relaxed) { return; }
+                    let (prefix, a, b, keep) = chunks[g % n];
+                    // The unit's own sequence header + its GOP (an open GOP with its predecessor in
+                    // front as the reference); only the unit's own pictures go out.
+                    let mut part = (*head).clone();
+                    if let Some((pa, pb)) = prefix { part.extend_from_slice(&strip_leading_b(&es[pa..pb])); }
                     part.extend_from_slice(&es[a..b]);
-                    let Ok(frames) = nf_formats::mpeg2::decode_video(&part) else { break 'movie };
+                    let mut frames = nf_formats::mpeg2::decode_video(&part).unwrap_or_default();
+                    if frames.len() > keep { frames.drain(..frames.len() - keep); }
                     for f in frames {
-                        if stop2.load(std::sync::atomic::Ordering::Relaxed) { break 'movie; }
-                        if tx.send(WorkerMsg::Frame(f)).is_err() { break 'movie; }
+                        if stop2.load(std::sync::atomic::Ordering::Relaxed) { return; }
+                        if tx.send(WorkerMsg::Frame(f)).is_err() { return; }
                     }
+                    if tx.send(WorkerMsg::UnitEnd).is_err() { return; }
+                    g += DECODE_THREADS;
                 }
-                if !looping { break; }
-            }
-            let _ = tx.send(WorkerMsg::Done);
-        })?;
-        Ok(MovieStream { rx, current: None, handle: Some(handle), stop, code, looping, pictures, finished: false })
+                let _ = tx.send(WorkerMsg::Done);
+            })?);
+        }
+        Ok(MovieStream { rx: rxs, next: 0, current: None, handles, stop, code, looping, pictures, finished: false })
     }
 
     /// Pops the next decoded frame into `current` (the display advance — the game decodes one frame
@@ -468,11 +786,18 @@ impl MovieStream {
     /// false while the decoder is behind (the caller keeps the previous frame, like a skipped IPU
     /// frame [M PS2FramesToSkip]) or the stream ended.
     pub fn advance(&mut self) -> bool {
-        match self.rx.try_recv() {
-            Ok(WorkerMsg::Frame(f)) => { self.current = Some(f); true }
-            Ok(WorkerMsg::Done) => { self.finished = true; false }
-            Err(_) => false,
+        if self.finished { return false; }
+        // At most one full round of empty units (a GOP that decoded to nothing) per call.
+        for _ in 0..=DECODE_THREADS {
+            match self.rx[self.next].try_recv() {
+                Ok(WorkerMsg::Frame(f)) => { self.current = Some(f); return true }
+                Ok(WorkerMsg::UnitEnd) => { self.next = (self.next + 1) % self.rx.len(); }
+                // The thread whose turn it is has no units left: the movie is over.
+                Ok(WorkerMsg::Done) => { self.finished = true; return false }
+                Err(_) => return false,
+            }
         }
+        false
     }
 
     /// The frame to display now.
@@ -481,7 +806,13 @@ impl MovieStream {
     /// Stops the worker (page change / movie stop — `psiStopBackgroundMovie` frees instantly [M 0x00108328]).
     pub fn stop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        if let Some(h) = self.handle.take() { let _ = h.join(); }
+        // A worker may sit in a full channel's send; drain until each sees the flag and exits
+        // (a bare join here would deadlock against the bounded channels).
+        while self.handles.iter().any(|h| !h.is_finished()) {
+            for rx in &self.rx { while rx.try_recv().is_ok() {} }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        for h in self.handles.drain(..) { let _ = h.join(); }
         self.current = None;
     }
 }
@@ -512,7 +843,7 @@ pub fn pcm_voices(movie: &Movie, looping: bool) -> Result<(std::sync::Arc<nf_aud
 /// closed-GOP chunks decode in order until `n` is covered (a chunk ≈ 10 pictures; frame 12 of the
 /// menu loops rides chunk 1 [L golden/pss_movies.tsv: 180 I pictures / 1800 total]) instead of the
 /// whole ES. Chunk boundaries sit at closed GOPs, so a chunk's frames equal the whole-ES decode's
-/// frames for the same pictures [ISO 13818-2 §6.4.3; the `1f1fe7b0…` frame-12 pin in
+/// frames for the same pictures [ISO 13818-2 §6.4.3; the `21d0739d…` frame-12 pin in
 /// menu_movies::the_menu_loop_movie_decodes].
 #[cfg(feature = "movies")]
 pub fn movie_still(iso_path: &str, code: u32, n: usize) -> Result<crate::scene::TextureImage> {
@@ -535,4 +866,116 @@ pub fn movie_still(iso_path: &str, code: u32, n: usize) -> Result<crate::scene::
     }
     let (pics, ..) = nf_formats::mpeg2::picture_counts(&m.demuxed.video);
     bail!("no frame {n} in the first {} chunks (the movie has {pics} pictures)", chunks.len())
+}
+
+/// The FMV briefing's subtitle track (subtitles-data): `ResetMap_Load` (0x1d6360) phase 0 loads the
+/// global pack `07000500.bin` from FILES.BIN and — only when the Subtitles option is on
+/// (`DAT_002a37c8`) — creates one ScriptPlayer per movie code from its 14 kind-7 scripts (single
+/// streams of op-0x1e `Script_TextStart` commands [D levels.md §5.4]) and plays it at once while
+/// the briefing movie runs, so the script's tick axis is the movie's. The port builds the same
+/// track from the pack's script: `nf_game::subtitle::intro_script_for(movie_code)` [M
+/// 0x1d6360:40-99] picks it and `SubtitleTrack::from_script` walks its Wait + Text commands with
+/// `Script_Run`'s clock. `Ok(None)` = the code has no intro row (e.g. 0x710004a — no briefing
+/// subtitles by the game's own table).
+pub fn briefing_subtitles(iso_path: &str, movie_code: u32, enabled: bool) -> Result<Option<nf_game::subtitle::SubtitleTrack>> {
+    let Some(script) = nf_game::subtitle::intro_script_for(movie_code) else { return Ok(None) };
+    let iso = IsoImage::open(iso_path)?;
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&iso)?;
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000500.bin"))
+        .with_context(|| "no 07000500.bin in FILES.BIN (the global pack)")?;
+    let pack = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64)?;
+    let plb = nf_formats::levelbin::LevelBin::parse(&pack)?;
+    for pe in plb.entries.iter().filter(|e| e.kind == 7) {
+        if pe.hash() == script {
+            let nis = nf_formats::nis::Nis::parse(script, plb.data(&pack, pe))?;
+            return Ok(Some(nf_game::subtitle::SubtitleTrack::from_script(&nis, enabled)));
+        }
+    }
+    bail!("script {script:08x} not in 07000500.bin")
+}
+
+
+/// playtest 1016: "starting and ending movies of missions are lagging … it throws the audio out of
+/// sync". [L probe 2026-10-16: one decode thread ran the 07300004 briefing at ~34 fps on an idle
+/// desktop, its heaviest GOPs at 108 ms a picture.] [S port engineering: decode throughput and the
+/// A/V clock; the game's own rule is that the audio streams on and the picture skips frames to keep
+/// up — PS2FramesToSkip, audioDecSendToIOP 0x107100.]
+#[cfg(all(test, feature = "movies"))]
+mod lag_tests {
+    use super::*;
+
+    fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
+
+    /// The stream must outrun real time with margin across the briefing's heavy stretch, so a
+    /// busy machine still keeps the 2 s lead. One thread managed ~34 fps here — the sister.
+    #[test]
+    fn the_briefing_decodes_well_ahead_of_real_time() {
+        let Some(path) = iso() else { return };
+        let iso = nf_formats::iso9660::IsoImage::open(&path).unwrap();
+        let Ok(m) = Movie::load(&iso, "07300004") else { return };
+        let mut s = MovieStream::start(&m, false).unwrap();
+        let t0 = std::time::Instant::now();
+        let mut n = 0usize;
+        while n < 900 && t0.elapsed().as_secs() < 60 {
+            if s.advance() { n += 1 } else if s.finished { break } else { std::thread::yield_now() }
+        }
+        let fps = n as f64 / t0.elapsed().as_secs_f64();
+        eprintln!("07300004: {n} pictures at {fps:.1} fps with {DECODE_THREADS} threads");
+        assert_eq!(n, 900, "the stream stalled or ended early");
+        assert!(fps >= 50.0, "{fps:.1} fps — the decoder must run well ahead of the movie's 30");
+    }
+
+    /// The units come back in display order: the parallel stream's pictures match a plain
+    /// in-order decode of the same GOPs, across several thread hand-overs.
+    #[test]
+    fn the_parallel_stream_keeps_the_picture_order() {
+        let Some(path) = iso() else { return };
+        let iso = nf_formats::iso9660::IsoImage::open(&path).unwrap();
+        let Ok(m) = Movie::load(&iso, "07380048") else { return };
+        let (units, head_end) = gop_units(&m.demuxed.video);
+        let es = &m.demuxed.video;
+        let mut want = Vec::new();
+        for &(prefix, a, b, keep) in units.iter().take(DECODE_THREADS * 2 + 1) {
+            let mut part = es[..head_end].to_vec();
+            if let Some((pa, pb)) = prefix { part.extend_from_slice(&strip_leading_b(&es[pa..pb])); }
+            part.extend_from_slice(&es[a..b]);
+            let mut f = nf_formats::mpeg2::decode_video(&part).unwrap();
+            if f.len() > keep { f.drain(..f.len() - keep); }
+            want.extend(f.into_iter().map(|f| nf_formats::sha1::hex(&nf_formats::sha1::sha1(&f.y))));
+        }
+        let mut s = MovieStream::start(&m, false).unwrap();
+        let mut got = Vec::new();
+        let t0 = std::time::Instant::now();
+        while got.len() < want.len() && t0.elapsed().as_secs() < 60 {
+            if s.advance() { got.push(nf_formats::sha1::hex(&nf_formats::sha1::sha1(&s.frame().unwrap().y))) } else { std::thread::yield_now() }
+        }
+        assert_eq!(got.len(), want.len());
+        assert!(got == want, "the parallel stream reordered pictures");
+        // Sister: the comparison can fail (neighbouring pictures differ).
+        assert!(want.windows(2).any(|w| w[0] != w[1]));
+    }
+
+    /// When the picture is late against the audio clock, it jumps to the picture the sound is
+    /// at (dropping the ones in between) instead of playing them late and drifting behind.
+    #[test]
+    fn a_late_picture_catches_up_to_the_audio_clock() {
+        let Some(path) = iso() else { return };
+        let Ok(mut p) = Player::start(&path, 0x0730_0004, 100) else { return };
+        // Let the decoder build its lead, as during the map-load fade.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let now = std::time::Instant::now();
+        assert!(p.present_on_audio(now, 0.0).is_some(), "the first picture shows at audio 0");
+        assert_eq!(p.tick, 1);
+        // The audio is 1.5 s in (45 pictures): one present must land on picture 46.
+        let mut ok = false;
+        for _ in 0..200 {
+            p.present_on_audio(std::time::Instant::now(), 1.5);
+            if p.tick == 46 { ok = true; break }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(ok, "the picture stopped at {} instead of catching up to 46", p.tick);
+        // Sister: with the audio clock standing still the picture holds (never runs ahead).
+        for _ in 0..10 { p.present_on_audio(std::time::Instant::now(), 1.5); }
+        assert_eq!(p.tick, 46, "the picture ran ahead of the audio");
+    }
 }

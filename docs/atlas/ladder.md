@@ -44,9 +44,12 @@ On grab [M]: snap to `centre + fwd(ladder.yaw)·0.5` (x = `cx − sin(yaw+π)·0
 
 **Not input-driven**: walking into the ladder attaches (the use key is not involved) [M].
 
-Port: `Bond::ladder_grab` (crates/nf-game/src/player.rs). The grab zone uses the ladder's axis column
-(`Ladder::capsule_hits`) instead of the game's per-object HITTEST shape [S — the shape is not recoverable
-from the decompile this pass; the yaw window and y window above are the real gates and are [M]].
+Port: `Bond::ladder_grab` (crates/nf-game/src/player.rs). The grab zone is the substate arm's capsule
+against the ladder mesh's bounds box in the ladder's frame (`Ladder::in_mesh_box`; the shipped ladders
+are ±0.354 wide × ±0.060 deep [M glist bounds + 0x2E triangles, 07000002]) instead of the unported
+glist triangle refine [S stand-in; the yaw window and y window above are the real gates and are [M]].
+PCSX2 pin (2026-10-16): from the 02 hut pocket (−76.27, 3.17, 22.14) a swimmer at yaw 0.4/0.7 passes
+the ladder and ≥ 1.3 grabs (`hut_pocket_swim_out_passes_the_ladder_like_the_ps2`).
 
 ## The climb — `Player_Climb` 0x196310 (936 bytes, substate 1) [M]
 
@@ -137,3 +140,50 @@ at (60.9, 29.9, 89.2) — far from the start), so no live instance is in the sna
 - `Player_Climb`'s `AnimObj+0xDC = 0` carry and `BLData+0x904` (the saved grab yaw) consumers.
 - The ladder/wire instance `+0xC0/+0x40` carry pair for moving ladders (none found in the SP game [S]).
 - Climb/wire/grapple view-model anims (the port holsters to fists on grab; the climb anims are not ported).
+
+## The pick refine — the glist triangles, not a box (ladder-mesh-refine)
+
+The grab zone's stage 2 was a capsule-vs-bounds-box stand-in (`in_mesh_box`). The game's stage 2 is the
+object's own collision mesh:
+
+1. **Candidates — the straddled cels' object chains** [M `Collide_Pick` 0x1eb320:125-134/318-328].
+   `Collide_StraddleCels` 0x1eac98 BFS-walks the portal graph from the HITTEST's home cel (+0x80) through
+   every portal the HITTEST shape touches (`Intersect_Portal` 0x1ea7b8), cap 0x7e cels, home always kept.
+   Per straddled cel: the cel's linked-object chain (`cel+0x18`; `control_link_object_to_cel`), the cel
+   itself (its own collision, sorted first at distance −1000 + index·0.1), and the static chain (`cel+8`)
+   through `Collide_PickObj` 0x1eae80 — objects whose `obj+0xF0` carries 0x30000000 are skipped
+   (0x1eb320:318-328). So a ladder is only ever a candidate when it is linked to a cel the picker
+   straddles. The link is per-object and created once: `build_LinkToRoom` 0x1c9680 runs
+   `Control_BuildWorldSph` then `build_FindCel(world-sphere centre)` and links the object to THAT cel
+   (`control_link_object_to_cel`); `Ladder_Create` passes the straddle-test flag 0 (the atlas's
+   "Controls_StraddleTest(obj)" in the create line is the flag-0 call site, not a live straddle).
+2. **Stage 1 per candidate — the ×1.5 sphere** [M 0x1eb320:224-242, the 0x800 arm]: the object's world
+   sphere (`obj+0x80/+0x8C`) radius ×1.5 PLUS the HITTEST's own radius (+0x8C) against the closest point
+   on the HITTEST segment (`vecutil_calculate_closest_point_on_line`); strict `<` on the squared compare.
+   This is the port's `pick_hit` stage 1 unchanged.
+3. **Stage 2 — the mesh refine** [M `Collide_Update` 0x1ea398:84-93 → `Collide_Intersect` 0x1ebaa8 →
+   `Intersect_CylGeom` 0x109da0]. `Collide_Intersect` copies the HITTEST (0xa0 bytes), inverse-rotates the
+   capsule segment (+0x20/+0x30) into the object's local frame (the inverse of `obj+0x90`), sets the
+   candidate distance +0xC to 1e8 and calls `Intersect_CylGeom` for the 0x800 mode. `Intersect_CylGeom`
+   walks the object's glist collision tree (`glist+8` → COLLDATA: the 0x2E box tree `Intersect_BoxBox`
+   prefilters with the segment AABB inflated by radius + 0.1 [0x109da0:147-173]), then per triangle in
+   each leaf box measures the capsule's distance and keeps the minimum; the boundary is **strict** — a
+   triangle is tracked only while `dist < radius` (0x109da0:447 pushes when `fVar30 < *(hittest+0x8C)`,
+   0x109da0:524 tracks while `fVar30 < fVar19` with the minimum seeded at the radius), and with no
+   tracked triangle the distance stays 1e8 → no hit. The refine also depenetrates: each triangle closer
+   than the radius pushes the segment out by `(radius − dist)` along the closest-point direction
+   (0x109da0:447-470) — that resolves the HITDATA point, which the ladder grab never reads; the pick's
+   boolean is `min dist < radius`.
+
+Port (crates/nf-game/src/ladder.rs): `Ladder` now carries `tris` — the object's 0x2E collision triangles
+([M] `MapObject.collision`, `nf-formats::collision::Collision::triangles()`) transformed to world space
+with the same yaw-only matrix + per-axis scale + translation `create` uses for the bounds — and the stage
+2 decider is the capsule (the substate arm's segment and radius) against those triangles with the strict
+`dist < radius` boundary (`crate::triggers::capsule_hits_tris_strict`); the bounds box survives only as
+the prefilter (the game's own box tree prefilter [M 0x109da0:173]). The unit-test `Ladder::simple` builds
+a closed box mesh with the same ±0.354/±0.06 footprint, so the old box pins are now triangle pins.
+**Scoping**: `Ladder.cell` is resolved at load with `world.find_cel(centre)` [M the build_LinkToRoom
+0x1c9680 link] and the per-tick pick keeps only ladders whose cell is in Bond's straddle set
+(`CollisionWorld::debug_straddle` from the player's runtime cel, the capsule of the current substate's
+pick arm) — empty set (no graph, MP remotes, unit tests) scopes nothing [S: the port's straddle capsule
+is built at the tick start, the game's at the integrated position — one tick apart at most].

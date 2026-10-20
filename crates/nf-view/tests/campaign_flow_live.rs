@@ -79,8 +79,19 @@ fn shoot_gadget_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32,
 /// the documented SP-activation blocker → the AND mux completes obj 2 → the lift doors' SSs
 /// open → the cab → the real TOUCH_ONCE #67 → ch 0x32 → the real LOAD_LEVEL exit → 0700000a.
 /// (The runner's old self-loop "exit" — blocker 3 — is never touched: the walked cab exit wins.)
+/// The NPCs are held (the renderer's --hold-npcs dev hold [M lib.rs:5763]): a walking Bond IS
+/// seen by the patrolling lobby guard, and the game's sighted-guard chain — NearArmedPerson
+/// 0x1787c8:13-22 (no armed gate on 09/0A) → CivilianPatrol 0x15d610 case 3 SetState(0x56) →
+/// FirstSightState 0x147c48 prop 0x1A → CivilianChallenge 0x162558 → RunToAlarm → PressAlarm
+/// 0x168ea8 → SetMissionFailReason 0x13e560 case 0x10 — ends with the GUARD pressing the
+/// nearest switch (ch 0x7D → mux → ch 0x61 → objective 1 failed). The old "the walk must not
+/// raise the alarm (the switches are never touched)" claim was green only while the port froze
+/// sighted guards in CivilianHiding. The unheld sight repro is
+/// security_alarm_09_live::the_panel_guard_raises_the_alarm_and_fails_the_mission
+/// (docs/systems/security-room-alarm-09.md §"The walk tests under the real rule").
 fn drive_09(w: &mut Walker) -> String {
     let mut note = String::from("real drive 09: ");
+    w.scene.sim.as_mut().unwrap().drones.hold_npcs = true;
     w.wait(60);
     assert!(w.scene.sim.as_ref().unwrap().drones.scripts.players.iter().any(|p| p.out == 0x39),
         "SP #70 SCRIPTPLAYER_Elevators (out ch 0x39) [D placement]");
@@ -634,7 +645,7 @@ fn the_mission_layer_re_arms_on_a_warm_transition() {
 // does: Mission_Update case 4 (mission_ended) → the outro movie wrap (the loader's phase 0/2) →
 // the results page 0x40000036 on the map [M 0x1d6360:160-163] → P_NFRESULTS case 0x4c (the
 // fields + Menu_SetLevelBonus 0x1ffa10) → Confirm → the mission list 0x4000001c [M 0x208e78:43]
-// → the next mission's row confirmed [M C_SBNFMAP 0x20b8d8:18-41]. From 01's end to 05's start.
+// → the next mission's row confirmed [M C_SBNFMAP 0x20b8d8:18-41; the lock gate :21-23]. From 01's end to 05's start.
 
 use nf_view::menu::{self, Action, CAMPAIGN, FrontEnd, Outcome, Page, Stats};
 
@@ -670,7 +681,7 @@ fn front_end_chain_01_to_05() {
     for (mi, &m) in CHAIN.iter().enumerate() {
         if mi > 0 {
             // The mission list offers the next mission: its row unlocked, confirmed, and the
-            // game's mission start riding the request [M C_SBNFMAP 0x20b8d8:18-41].
+            // game's mission start riding the request [M C_SBNFMAP 0x20b8d8:18-41; the lock gate :21-23].
             let rowi = CAMPAIGN.iter().position(|c| c.3 == m).unwrap();
             assert!(fe.unlocked_row(rowi), "the mission page lists 0x{m:08x} (unlocked by the previous award)");
             fe.cursor = rowi;
@@ -717,9 +728,15 @@ fn front_end_chain_01_to_05() {
             if let Some(r) = fe.flow.phase2_resolved.take() { resolved = Some(r); break; }
         }
         assert_eq!(resolved, Some(menu::FRONTEND_LEVEL), "the outro routes to the front end");
-        assert_eq!(fe.flow.page, menu::PAGE_RESULTS, "phase 2 sets +0x28 = 0x40000036 [M 0x1d6360]");
+        assert_eq!(fe.flow.page, menu::PAGE_RESULTS, "phase 2 sets +0x1c = 0x40000036 [M 0x1d6360]");
         fe.tick();
         assert_eq!(fe.flow.current_level, menu::FRONTEND_LEVEL, "the front-end map loads [M 0x1d6360 phase 3]");
+        // reward-after-outro [M 0x182c60:72 / 0x1d6360:160-163]: the complete arm QUEUES the page;
+        // G-048(3): the load tail's MenuManager_Create lands the queued page — nothing was open
+        // between the mission end and here [M 0x1d6360:160-163, 0x182c60:72-75]. One reopen is
+        // the create; the second would be a no-op on an already-open page.
+        assert!(fe.reopen_queued_page(), "the manager create opens the queued results page");
+        assert_eq!(fe.page, Page::Results);
         // P_NFRESULTS case 0x4c against the live layer: the fields + the award.
         let difficulty = progress.difficulty;
         assert!(fe.results_enter(&mut progress, m, 6, difficulty, lang.as_ref()),
@@ -744,10 +761,32 @@ fn front_end_chain_01_to_05() {
         // nightfire_status the save carries [M Menu_GetNightfireStatus 0x202360].
         assert_eq!(progress.nightfire_status() & (1 << rowi), 1 << rowi, "the completed row stamps");
         assert!(fe.unlocked_row((rowi + 1).min(11)), "the next campaign row unlocks");
-        // Confirm → the mission list [M 0x208e78:43; the new-reward hop lands there too, 0x209670
-        // :50-53]; it opens on the highest unlocked row [M P_NFMAP 0x20b608 case 0x4c scans
-        // sp_level+0x10 from row 11 down].
+        // Confirm opens the save prompt (the commit improved + CHAIN01 is a saved codename [M
+        // P_NFRESULTS 0x208e78:24-32]); Yes → the card flow's overwrite question (the file
+        // exists [M MemCard_SAVE_DATA 0x10fa08 sub-7]) → Yes → "Saving data…" runs and the
+        // completion routes on [M the terminal branch 0x217bd8:62-71 + 0x208e78:203-211].
         assert!(fe.action(Action::Confirm));
+        assert!(fe.results_box, "the save prompt stands [M 0x1000206]");
+        assert!(fe.action(Action::Confirm), "Yes requests the save");
+        assert!(fe.card_answer(menu::BTN_YES), "the overwrite question's Yes [M ASK_OVERWRITE]");
+        fe.tick();
+        assert_eq!(fe.card_message(), None, "the flow closed");
+        // The routing then follows case 0x4b [M 0x208e78:39-52]: with a new reward standing it
+        // hops to the 007 Bonus page 0x40000038 first [M 0x208e78:48-53]. Every one of these legs
+        // earns its medal on a fresh profile (01's run scores 24150000 → medal 4, the platinum
+        // row), and Menu_SetLevelBonus's tier loop 4..1 sets DAT_002e1c2c on the first tier that
+        // was not yet standing [M 0x1ffa10:71-82] — so the hop happens on each leg here. The
+        // bonus page's own Confirm lands on the mission list [M 0x209670:50-53, the
+        // !just_completed arm], which opens on the highest unlocked row [M P_NFMAP 0x20b608 case
+        // 0x4c scans sp_level+0x10 from row 11 down].
+        if fe.page == menu::Page::NfBonus {
+            assert!(fe.new_reward, "the hop only happens on a new reward [M 0x1ffa10:78]");
+            // The host builds the page's fields on the 0x4c enter [M 0x209670:16-43] — the port
+            // splits it out of the action handler (no Progress there).
+            fe.bonus_enter(&progress, fe.results_level, fe.new_reward);
+            assert!(fe.bonus.is_some(), "the bonus fields built on the page enter");
+            assert!(fe.action(Action::Confirm), "the bonus page's Confirm [M 0x209670:50-53]");
+        }
         assert_eq!(fe.page, menu::Page::MissionSelect);
         assert_eq!(fe.flow.page, menu::PAGE_MISSION_SELECT);
         let want_cursor = (0..CAMPAIGN.len()).rev().find(|&i| fe.unlocked_row(i)).unwrap();
@@ -768,7 +807,7 @@ fn front_end_chain_01_to_05() {
     assert_eq!(status, 0b1111_0111, "01-04's awards + the boot rows rode the saves");
     // The mission page offers 05: confirming its row starts the mission.
     fe.cursor = row5;
-    assert!(fe.action(Action::Confirm), "05's unlocked row confirms [M C_SBNFMAP 0x20b8d8:18-41]");
+    assert!(fe.action(Action::Confirm), "05's unlocked row confirms [M C_SBNFMAP 0x20b8d8:18-41; the lock gate :21-23]");
     assert_eq!(fe.requested_level, Some(0x0700_0011), "05's start is requested");
     let _ = std::fs::remove_dir_all(&dir);
 }

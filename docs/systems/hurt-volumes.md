@@ -1,0 +1,215 @@
+# Hurt volumes (placement 0xE4, class 0x27) — the spec, from the decompile
+
+Written for the port task that implements them. Everything below cites the decompile; nothing is
+asserted from memory. 07000006 carries exactly one: **#373 "Hurt_A"**, the well shaft's kill volume
+(docs/levels/07000006.md §5.10).
+
+## `Hurt_Create` 0x17e870 [M]
+
+`control_create_object(0x1c, pos, rot, 0)`; `ext = obj+0xE0` (the level-tag block). Fields:
+
+| ext offset | source | meaning |
+|---|---|---|
+| +0x00 (f32) | 0 | the anim clock `t` |
+| +0x04 (f32) | `count × REC_FRAME_RATE × FRAME_RATE / (u16)tag+4` | the clock increment per tick (`count` = `(short)tag+2 − 1`, the placement's object index − 1... `tag+2` reads the u16 at level-tag +2) |
+| +0x08 (ptr) | `tag+8` | the framelist (`Spline_Interp`'s first arg) — the hurt object ANIMATES |
+| +0x0C (u16) | `(short)tag+2 − 1` (0 when tag+2 = 0) | the key count / anim duration (the spline's time cap) |
+| +0x10 (f32) | `tag+0x30` = **param 1** | the damage (`Hurt_GetDamage` 0x17ea18 returns it as float) |
+| +0x14 (u8) | `tag+0x2c` = **param 0** | the damage type (`Hurt_GetType` 0x17ea50; 6 = fall in the port's damage table, types 1..7 with drowning 7) |
+| +0x15 (u8) | `tag+0x40` = **param 5** | the one-shot flag (1 → state 2 after the first pass) |
+| +0x16 (u16) | `tag+0x3c` = **param 4** | the "who" mask (ANDs the contact class bits: 1 = always, 2 = class 5, 8 = class 3, 0x10 = class 2/the player) |
+| +0x18 (u16) | `tag+0x34` = **param 2** | the gate channel (0 = none; nonzero → the channel VALUE is the who-mask) |
+| +0x1a (u16) | `tag+0x38` = **param 3** (0xffff when 0) | the activation sound id (`Sound_Play3D(100.0, 1.0, 1.0, id, obj+0x30, …)`) |
+
+`obj+0xFF = 0x27` (the class; `control_funcs[0x27] = Hurt_Update`), `obj+0xFA |= 0x44`,
+`Control_SetGList(obj, glist)` — **the volume's geometry is the glist object's collision** (the same
+source the trigger volumes build from), `build_LinkToRoom(obj, 0, glb_world)`. If the gate channel
+is set and LOW at create: `obj+0xF0 |= 0x20` (inactive until it rises).
+
+#747's neighbour **#373**: params [6, 1000, 0, 0xffff, 1, 0] → type 6 (fall), 1000 damage, no gate,
+no activation sound, who-mask 1, one-shot 0 (re-arms), anim duration = object index 373 − 1 = 372
+keys [D #373; the framelist lives at `tag+8` — the placement block's +8 word, i.e. the HASHCODE
+slot... **live check for the main agent**: dump `tag+8` for #373 on 07000006 and read the framelist
+it points at — the decompiler's `tag` here is the level-tag the creator receives, whose +0x2C+4k
+carries the params (the same layout SoundTrigger_Create uses), so +8 is BEFORE the params: it is
+the tag's own +8 word, not a param].
+
+## `Hurt_Update` 0x17e5d0 [M]
+
+A state machine on `obj+0xF4`:
+
+- **state 0 (armed)**: compute the who-mask `uVar5`:
+  - gate channel set and LOW → stay armed;
+  - gate channel set and HIGH → `uVar5 = switch_channels[gate]` (the channel byte IS the mask) → start;
+  - no gate + param4 (+0x16) == 0 → `uVar5 = 1` → start;
+  - no gate + param4 != 0 → walk the object's `obj+0xD0` HITDATA chain, OR-ing the contact objects'
+    class bits (class 3 → 8, class 2 → 0x10, class 5 → 2; classes 1/4 collect nothing), then
+    `uVar5 = param4 & collected`.
+
+**THE #373 LAW [M 0x17e5d0 + D #373 params]**: the well's Hurt_A carries param4 = 1. The contact
+scan only ever collects bits {8, 0x10, 2}, so `1 & collected == 0` ALWAYS — the well volume can
+never start, on the disc as shipped. It is a configured-inert placement (the 1000-damage type-6
+row exists but the who-mask matches no class). The port must reproduce exactly this: create the
+record, never fire it. The well's player hazard is the plain fall path (`Player_HandlePain`
+type 6 [M]) — the port has that (`player.rs` `fall_damage`), and the measured shaft drop (~5 m to
+the shaft floor in the port's collision) is survivable (tests/interact_07000006_live.rs
+`the_well_shaft_is_open_and_the_hurt_volume_is_game_inert` pins the measured behaviour; the REAL
+shaft's depth needs the PCSX2 live check below).
+  `uVar5 != 0` → state = 1 (the anim starts).
+- **state 1 (animating)**: at `t == 0` play the activation sound (id +0x1a) at `obj+0x30`;
+  `Spline_Interp(framelist, 0, key_count, t, obj+0x90, 0, 2)` — the pose animates;
+  `t += inc`; `t > key_count` → `t = 0`, and param5 == 1 → state = 2.
+- **state 2**: `obj+0xFF = 1` (the object retires).
+- The gate arm: the gate channel RISING clears `obj+0xF0` bit 0x20 (re-arms a hidden volume).
+
+**No damage is applied here** — the damage rides the COLLIDE system: a body intersecting the
+volume's glist geometry gets the contact, and the victim's damage pass calls `Hurt_GetDamage`
+0x17ea18 (+0x10) / `Hurt_GetType` 0x17ea50 (+0x14). The port's hook is wherever it resolves
+damage volumes today (`bullet.rs`'s PlayerHealth damage types 1..7 — falls 6, drowning 7, hurt
+volumes).
+
+## Port plan (the next task)
+
+1. `crates/nf-game/src/hurt.rs`: create from the 0xE4 placements (the same param layout as
+   SoundTrigger: `tag+0x2C+4k` = param k), the volume from the placement's glist tris — reuse
+   `triggers::build`'s glist-volume path.
+2. Update: the state machine above (clock, spline pose via the existing door/SS interpolation,
+   the sound), then the inside-test: the standing capsule vs the volume tris (the trigger
+   walk's test).
+3. Damage: `Player_Hurt(damage, …)`-shaped application through `health.pain_generic` with the
+   type byte (the fusebox's live-wire hurt is the precedent: `player_hits` marker + `pain_generic`).
+4. Tests: #373's row pinned (type 6, 1000.0, who 1, one-shot 0 [D + M]) and the INERT law above
+   (a who-1 volume never starts); a generic hurt placement (who = 0x10) takes the real-path
+   damage test. The well itself is covered by interact_07000006_live's measured pair.
+5. Evidence gap: the who-mask contact bits and the collide-pass reader are [M]-read above but the
+   volume GEOMETRY resolution (which map object's tris) needs the disc dump — the census probe's
+   `classify` path can print #373's glist object; a live PCSX2 check of `Hurt_GetDamage`'s caller
+   settles the application point.
+
+## Live checks for the main agent
+
+1. PCSX2, fresh boot of 07000006: walk Bond over the well mouth and let him drop. Measure the
+   drop and the health after landing (does the REAL game's well shaft reach a kill depth, or is
+   the landing survivable there too?). The port's shaft floor sits ~5 m below the lip and the
+   drop is survivable [M the port's fall threshold].
+2. Watch `Hurt_GetDamage` 0x17ea18's caller during any hurt-volume touch on any level (e.g. the
+   0700000c fires/steam if they are Hurt placements) — settles the damage-application point the
+   port plan's step 3 needs.
+
+## The disc-wide survey (the kind's live placements) [D; the census probe `survey_0xe4_hurt_placements_across_the_story_levels`]
+
+The start law [M 0x17e5d0 state 0]: gated → the channel starts it; no gate + who 0 → starts at
+once; no gate + who ≠ 0 → fires only when `who & {8, 0x10, 2}` — **who 1 collects nothing (the
+inert configuration)**.
+
+| Level | Placements | Type / damage / gate / who | Verdict |
+|---|---|---|---|
+| 07000002 | #13 | 1 / 1 / gate 0x8d / 1 | GATED |
+| 07000005 | #328–330, #334–340 | 6 / 1000 / – / 1 | inert |
+| 07000005 | **#331–333** | 6 / 1000 / – / **0** | **LIVE (start at load)** |
+| 07000006 | #373 | 6 / 1000 / – / 1 | inert (this level's only one) |
+| 07000008 | **#42–44** | 6 / 1000 / – / **0x18** | **LIVE (classes 3+2: drones AND the player)** |
+| 0700000a | **#745–749** | 6 / 1000 / – / **0x18** | **LIVE** |
+| 07000011 | **#271–273** | 6 / 1000 / – / **0** | **LIVE** |
+| 07000015 | **#464–471, #525** | 6 / 1000 / – / **0** | **LIVE** |
+| 07000016 | #309, #352 | 2 / 1000 / 0xf3; 4 / 1000 / 0xcb / 1 | GATED |
+| 0700001b | **#17** | **2 / 50** / – / **0** | **LIVE** (the space level's smaller hurt) |
+| 0700001b | #259 | 1 / 50 / gate 0x12 / 1 | GATED |
+| 0700004b | #147 | 6 / 1000 / – / 1 | inert |
+
+So the kind port is visible play on 05 / 08 / 0a / 11 / 15 / 1b — not on 06 (whose only placement
+is the inert one). The 07000005 #331–333 trio sits at the chasm the plunge triggers already cover
+[docs/levels/07000005.md] — worth checking whether the game doubles the kill (plunge + hurt) there.
+
+## The port as merged (level-08-interactables-2, re-landing 708a onto master's one system)
+
+`crates/nf-game/src/hurt.rs` is the ONE hurt module (the 708a `Drones::hurts` variant is retired):
+master's `Sim.hurts` (`nf-view/src/scene.rs` creates them with the level and ticks them in the
+scene pass next to the drown tick). `Hurt_Update` 0x17e5d0's contact law lives in
+`Hurt::update_touch(gate_on, a, b, r, drone)` — the gate maintenance (the live 0x20 bit), the
+state-0 who law (gated → the channel value is the mask; ungated who 0 → starts at once; ungated
+who ≠ 0 → the victim's class bit must survive the AND: the player's class 2 → 0x10, a drone's
+class 3 → 0x8 [M 0x17e5d0:57-95]), the capsule-vs-glist-tris contact, the one-shot retire.
+`Hurt::update(gate_on, bond_pos)` is the player wrapper (the standing capsule, r 0.55).
+
+Two victim passes run per tick:
+
+- **The player** — `Player_DealWithObjHit` 0x194458's class-0x27 arm through
+  `health.pain_generic` (difficulty factor, no armour for types 1..7 [M 0x1902c8:84-104]) + the
+  pain grunt. This is the arm that keeps 07000016's #309 "HurtPoly-ShuttleLaunch" (gate 0xf3,
+  1000 damage [D]) from killing Bond on the silo floor during the chaser fight — the channel is
+  low until the launch, so the volume loads and stays disabled [M 0x17e870 tail + 0x17e5d0:26-37].
+- **The drones** — `NDrone2_DealWithObjHit` 0x13fff0 gives NPCs the same treatment; the who masks
+  naming the drone bit 8 (07000008's #42–44, who 0x18 [D]) are delivered for it. The capsule is
+  the trigger walk's drone body ([pos−1.0 … head], r 0.4 — the Toucher law drone.rs builds for
+  `Trigger_Calc`); the delivery is the explosion path's flat subtract (`health -= damage ·
+  damage_taken`, `last_damage` stamped — the drones' own update's health ≤ 0 selector picks the
+  death). A one-shot volume fired by any victim retires for all of them (the shared obj state
+  [M 0x17e5d0:41-47]).
+
+`Hurt.hits` is the port's mechanism witness (the applications count; the live tests' "the volumes
+stay armed" pin reads it) — not game state.
+
+Tests: the row law + the who/gate laws in `hurt.rs`'s units (incl. the drone bit 8 / who 0x18
+takes both victims / who 1 inert for every class); the live pairs `hurt_07000008_live` (the
+platform stand + the real walk off the boarding platform: the fall, the plunge, the death-NIS
+hold, hits == 0), `hurt_02_live`, `interact_07000006_live` (#373 inert), `fix_finale_live` +
+`spurious_complete_16_live` (#309 stays dead during the fight).
+
+### Live checks for the main agent (the 705d coordination)
+
+3. PCSX2, fresh boot of 07000016: watch `switch_channels[243]` (0xf3) and the Mission state
+   (0x182c60) through the chaser fight. Expected: the channel rises with (or after) Mission
+   state 6 — the chasers' defeat — never before; #309 (gate 0xf3, 1000 damage) must stay
+   disabled for the whole fight. Settles the ShuttleLaunch question 705d and this task both need.
+4. PCSX2, fresh boot of 07000008: let a guard (or drive the chopper's passengers) onto the y
+   −24.1 valley floor under #42–44 — expect the drone's health to drop by 1000·damage_taken and
+   the death selector to fire (the drone-side delivery the port infers from NDrone2_DealWithObjHit
+   0x13fff0; not yet live-pinned).
+
+### U-051 answered (hurt-volumes-16b, 2026-10-19): the 07000016 finale window
+
+The volume #309 "HurtPoly-ShuttleLaunch" (gate 0xf3, type 2, damage 1000, box x −30.7..35.3,
+y −24.1..−21.3, z −197.3..−133.8 [D]) is live for a bounded, player-outsmartable window — the game
+does NOT move Bond out of its box, and the port does not either; the difference is the flight the
+pack buys:
+
+1. **When ch 0xf3 (243) rises.** The launch script **0x0600090a "ShuttleLaunch"** (SP #272, length
+   7810 [D]) raises it from **stream 6's event-0xD write at script tick 1611 and drops it at 2170**
+   [D the script's stream-6 commands + the port's scriptlog]. The disc's order puts the whole pulse
+   BEFORE the spawner writes (ch 0xf0 at tick 2180 [D]) — the chaser fight never overlaps the pulse.
+2. **Where the game puts Bond.** The pack cinema **0x06000631** streams from the loadable pack
+   **07800016.bin** (the level archive's type-0xC record `(0x06000631, flag 1)` →
+   `LoadableLoad` 0x1d69e8's nibble-8 pack [M 0x1d4880 case 0xC; D measured]). Its Bond-actor stream
+   (**stream 8, kind 1**) carries **exactly one key at t747, pos (3.57, −22.76, −179.55)** [D the
+   pack's 205-key dump] — the actor never moves: the pack cinema is the pickup close-up, and the
+   snapshot the cinema's **event 6** takes for the hand-back is the PREVIOUS stream's live entity
+   matrix [M `Script_EventHandler` 0x1d94c0:73-84 takes record(i−1) gated on kind ∈ {1,2}] = that
+   same pit-floor pose. `Script_Free` 0x1da880:46-49 hands it to **`Player_Enable` 0x195498**, which
+   **teleports** the player: `obj+0x30 = matrix[3]`, `+0x40` follows, the look re-derived through
+   `vecutil_cartesian_to_spherical_acc`, then `control_unlink_object` +
+   `build_LinkToRoom(obj, 1, glb_world)` (straddle flag 1) [M 0x195498 param_2 path]. So the game's
+   Bond re-enables at (3.57, −22.76, −179.55) — **INSIDE the volume's box**, exactly where the port
+   re-enables him. The port's cinema path is faithful; the bug U-051 saw is not a misplaced re-seat.
+3. **The escape is the pack flight.** Between the re-enable (cinema tick 750) and the pulse
+   (script tick 1611) the game's player has ~861 ticks (≈14.4 s) of control at the pit floor with
+   the pack picked up. The pit's door (13.9, −23.1, −166.4) locks on ch 240/241, and ch 0xf0 rises
+   only at tick **2180** — after the pulse drops [D] — so no door escape exists before it; the pit
+   holds no ladder/wire placement (the near-pit census: doors, spawners #257/#293, the pickups at
+   y −9.1 [D]). The survival mechanism is the pack's own flight (the port enumerates no jetpack
+   substate — the substate list is walk/climb/grapple/swim/wire/creep/zipline/zero-g [M
+   player.rs consts + the symtab's Player_SS*]) — **[S] the flight's controls and physics are the
+   one unverified piece; live check below.**
+4. **The port's stand-in.** `fix_finale_live` re-seats Bond on the upper floor once the cinema
+   hands control back — the documented stand-in for the pack flight [S], needed only because the
+   test fires ch 0x81 from the upper floor (the game's Bond is at the pit when the pack trigger
+   fires; the re-enable then leaves him where he already was). `walkreal_07000016_live`'s tail
+   stays `#[ignore]`d for the same reason (its reason text cites this section).
+
+**Live checks for the main agent (U-051 closure):**
+5. PCSX2, fresh boot of 07000016, play to the pack pickup: watch `switch_channels[243]`
+   (0x26fc90 + 243·4) and the player position (obj+0x30) from the pack cinema's end to the launch.
+   Expected: position == (3.57, −22.76, −179.55) at the re-enable; the player RISES out of the pit
+   (the pack flight) before ch 243 rises at the launch script's tick 1611; the volume never deals
+   damage. If the player instead walks a route (ladder/door not in the port's census), the
+   position trace shows it.

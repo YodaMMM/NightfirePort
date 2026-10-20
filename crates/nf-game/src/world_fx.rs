@@ -83,6 +83,45 @@ pub struct RippleFx {
     counter: u32,
 }
 
+/// One 0x2b placement (`LeafGen_Create` 0x1acbd0 — an invisible object linked to room 0;
+/// `LeafGen_Update` 0x1acc48: every tick `Rand_Rand(FRAME_RATE_INT >> 1) == 0` → one
+/// `Leaf_Create` 0x1abc88 particle: `Rand_FRand(0.02f)` x/z velocity jitter slots, a
+/// `Rand_FRandHalf_Vec(0.1f)` spin — a falling leaf by the generator). The port keeps the gate on
+/// the counter-hash (the RNG discipline — the game's leaf draws come out of the shared stream) and
+/// records the spawn's jittered position for the draw code; the leaf's own motion integrator is not
+/// ported [S unverified].
+#[derive(Clone, Debug, PartialEq)]
+pub struct LeafGenFx {
+    pub placement: usize,
+    pub pos: V3,
+    counter: u32,
+    /// Ticks since load (a spawn count the tests and the draw code read).
+    pub spawned: u32,
+    /// The last spawn's jittered offset (± the `Leaf_Create` 0.02 velocity band, counter-hash).
+    pub last_offset: [f32; 2],
+}
+
+/// One 0xf3 placement (`Env_Tree_Create` 0x17c200 — an object at the placement pose,
+/// `AnimObjectNew` + `AnimScriptAdd(anim)`: the sway animation; on every level but 0x7000043 the
+/// script's +0x78 gets 0x80000000 and a random start phase `Rand_FRand(anim length)` [M
+/// 0x17c200:38-52]). The port records the placement and its hashes; the sway animation itself (the
+/// world-object anim-script runtime) is not ported [S unverified].
+#[derive(Clone, Debug, PartialEq)]
+pub struct TreeFx {
+    pub placement: usize,
+    pub pos: V3,
+    pub yaw: f32,
+    /// param 0 — the model hash (the game reads `cel+0x2c` [M 0x17c200:33]; the placement's param
+    /// 0 feeds it [S — parseentity_fixup_entity's param→cel write order untraced]). 07000004's two
+    /// carry 0x05000043 "Tree" [D].
+    pub model: u32,
+    /// param 1 — the anim script hash (the game reads `cel+0x30`; 07000004: 0x06000474 [D]).
+    pub anim: u32,
+    /// `Env_Tree_Create` 0x17c200:44-52: level == 0x7000043 keeps the script unpaused, every other
+    /// level pauses +0x78 bit 0x80000000 and takes a random phase. 07000004 != 0x7000043 → paused.
+    pub paused: bool,
+}
+
 /// One 0xd4 placement.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CloudFx {
@@ -97,6 +136,107 @@ pub struct CloudFx {
     pub wrap: f32,
     /// data[2]/data[3]: the drift phases.
     pub phase: [f32; 2],
+}
+
+/// The bolt's draw mesh — `hashtable_set_object_to_entity_gfx(obj, 0x200032c)` [M
+/// `Lightning_Update` 0x18cf68:30], the same 0x0200xxxx mesh namespace as RIPPLE_MESH.
+pub const BOLT_MESH: u32 = 0x0200_032c;
+
+/// One 0x2c placement record at load (pre-pairing) — the fields `Lightning_Create` 0x18cde8
+/// copies into the created object's ext [M 0x18cde8:20-24].
+struct LightningRec {
+    placement: usize,
+    /// ext+0x40 = the full word at the placement param area +0x2c (param 0).
+    group: u32,
+    /// ext+0x44 = the u16 at param area +0x30 (param 1 low half) — the pairing key, compared
+    /// as a signed short [M 0x18cde8:40].
+    key: i16,
+    /// ext+0x46 = the u16 at param area +0x34 (param 2 low half) — stored at create, never
+    /// read by `Lightning_Update` [M 0x18cf68] (dead in the game too).
+    #[allow(dead_code)]
+    extra: u16,
+    pos: V3,
+}
+
+/// One lightning strike: a paired 0x2c master (`Lightning_Create` 0x18cde8, class 0x33) with
+/// its 8-object bolt chain — ext[0] the master, ext[1..7] six fresh class-1 beam objects
+/// [M 0x18cde8:44-52], ext[7] the found partner (demoted to class 1 [M 0x18cde8:54]);
+/// ext+0x20 the master's position (the start), ext+0x30 the partner's position (the end)
+/// [M 0x18cde8:55-68].
+#[derive(Clone, Debug, PartialEq)]
+pub struct LightningStrike {
+    /// The master placement — the SECOND of the pair in creation order: the finder of the
+    /// match becomes the master [M 0x18cde8:41-69].
+    pub master_placement: usize,
+    /// The partner placement — the found earlier class-0x33 object.
+    pub partner_placement: usize,
+    /// ext+0x40: param 0 — the group word.
+    pub group: u32,
+    /// ext+0x44: param 1 (u16) — the pairing key.
+    pub key: u16,
+    /// ext+0x20: the strike's start (the master placement's translation).
+    pub start: V3,
+    /// ext+0x30: the strike's end (the partner placement's translation).
+    pub end: V3,
+    /// The 8 chain node positions, node 0 = master … node 7 = partner. At load the six fresh
+    /// beams sit at the master's pose (`control_create_object(0, the master's pos/quat)`
+    /// [M 0x18cde8:46]); the game's `FractalThing` 0x1a94d8 redistributes nodes 1..7 on the
+    /// first drawn reflicker flash — here on the `super_happy && reflicker` tick with the
+    /// counter-hash jitter stand-in [S] (the game draws 21 `Rand_FRand`s from the shared
+    /// stream; the port consumes none — the G-033 discipline).
+    pub nodes: [V3; 8],
+    /// `Lightning_Update` 0x18cf68: false = the `View_SetDrawInNoViews` arm (hidden), true =
+    /// the `SuperHappyLightningFlag` arm (the BOLT_MESH chain drawn in all views). The game's
+    /// per-tick hide arm covers all 8 objects [M 0x18cf68:13-21], the draw arm re-sets the
+    /// mesh, the all-views flag and the `PositionBeam` chain master→beams→partner→end
+    /// [M 0x18cf68:27-42].
+    pub visible: bool,
+    counter: u32,
+}
+
+impl LightningStrike {
+    /// `Lightning_Update` 0x18cf68 for this strike, one tick. `g` is the port's copy of the
+    /// lightning globals (`crate::sky::LightningGlobals` — the game reads the globals
+    /// `SuperHappyLightningFlag`/`Reflicker` [M 0x18cf68:12/23]; the sim does not drive
+    /// `View_DrawSky` yet, so `WorldFx::lightning` rests cleared and the bolt stays hidden —
+    /// the sky pass sets them through `WorldFx::lightning_globals_mut`).
+    pub fn tick(&mut self, g: &mut crate::sky::LightningGlobals) {
+        if !g.super_happy {
+            self.visible = false; // the 8 × `View_SetDrawInNoViews` arm [M 0x18cf68:13-21]
+            return;
+        }
+        if g.reflicker {
+            g.reflicker = false; // consumed [M 0x18cf68:23-24]
+            self.counter = self.counter.wrapping_add(0x9e37_79b9);
+            let mut s = self.counter;
+            let mut rand = move |amp: f32| { s = s.wrapping_add(0x9e37_79b9); jitter(s, 0x1e) * amp };
+            fractal_thing(&mut self.nodes, 0, 8, self.start, self.end, 0, &mut rand);
+            self.counter = s;
+        }
+        self.visible = true;
+    }
+}
+
+/// `FractalThing(objs, i0, i1, start, end, mode)` 0x1a94d8: the recursive midpoint
+/// displacement that shapes the bolt. While `i1 - i0 > 1`: mid = `(i0+i1)/2` (rounded up on a
+/// negative sum — the decompile's `- (>> 0x1f)` correction [M 0x1a94d8:66]), the amplitude
+/// `Vec_Dist3D(start, end) × 0.5` in mode 0, `sqrt(dist) × 0.16666667` otherwise [M
+/// 0x1a94d8:67-76], the node position `(start+end)×0.5 + (Rand_FRand(amp) − amp/2)` per axis
+/// (3 draws [M 0x1a94d8:78-87]) written to the mid node, then the two recursions [M
+/// 0x1a94d8:92-93]. `rand` returns one `Rand_FRand(amp)` in [0, amp) — the game's shared-
+/// stream draw; the caller supplies its own stand-in (the RNG discipline).
+pub fn fractal_thing(nodes: &mut [V3], i0: i32, i1: i32, start: V3, end: V3, mode: u8, rand: &mut impl FnMut(f32) -> f32) {
+    if i1 - i0 <= 1 { return; }
+    let sum = i0 + i1;
+    let mid = if sum < 0 { (sum + 1) / 2 } else { sum / 2 };
+    let d = ((start[0] - end[0]).powi(2) + (start[1] - end[1]).powi(2) + (start[2] - end[2]).powi(2)).sqrt();
+    let amp = if mode == 0 { d * 0.5 } else { d.sqrt() * 0.166_666_67 };
+    let half = amp * 0.5;
+    let mut m = [0.0f32; 3];
+    for k in 0..3 { m[k] = (start[k] + end[k]) * 0.5 + (rand(amp) - half); }
+    nodes[mid as usize] = m;
+    fractal_thing(nodes, i0, mid, start, m, mode, rand);
+    fractal_thing(nodes, mid, i1, m, end, mode, rand);
 }
 
 /// One 0x4a placement.
@@ -155,6 +295,14 @@ pub struct EmitterFx {
     dead_ticks: u8,
     pub parts: Vec<EmitterParticle>,
     counter: u32,
+    /// G-041 (fix-impact-remainder): the `Effect_Create` 0x1ce688 impact arm's emitters consume
+    /// the SHARED stream (`Emitter_Update` 0x17b080's 4 × `Rand_FRandHalf(1.0)` per spawn) —
+    /// unlike the 0xf2 placements, whose counter-hash stand-in predates this task and stays.
+    pub shared_rng: bool,
+    /// The object basis `Mat_SetDir/SetNorm/SetUp` 0x1e3418/0x1e3458/0x1e3438 built from the hit
+    /// normal (`Emitter_Create` 0x17ae00): rows [Norm = v, Up = normal, Dir = u] — the spawn's
+    /// local +y rides the normal. `None` → the placement euler matrix (the 0xf2 path).
+    pub basis: Option<[[f32; 4]; 4]>,
 }
 
 impl EmitterFx {
@@ -181,33 +329,90 @@ pub struct ParticleSprite {
 pub struct WorldFx {
     pub flickers: Vec<FlickerFx>,
     pub ripples: Vec<RippleFx>,
+    pub leafgens: Vec<LeafGenFx>,
+    pub trees: Vec<TreeFx>,
     pub clouds: Vec<CloudFx>,
     pub apocalypses: Vec<ApocalypseFx>,
     pub emitters: Vec<EmitterFx>,
+    /// The paired 0x2c strikes, in pairing order (the master's creation order).
+    pub lightnings: Vec<LightningStrike>,
+    /// The 0x2c placements created with no earlier same-key class-0x33 — their own
+    /// `Lightning_Update` no-ops (ext[0] stays 0 [M 0x18cf68:11]); they still serve as
+    /// partners of later strikes.
+    pub unpaired_lightnings: Vec<usize>,
+    /// The port's copy of the lightning globals (`LightningType`/`Reflicker`/
+    /// `SuperHappyLightningFlag` [L 0x30d0b8/0x30d0b9]; `crate::sky::LightningGlobals`). The
+    /// game's `Lightning_Update` reads the globals each pass; the (future) sky pass mirrors
+    /// its `View_DrawSky` tick into here.
+    pub lightning: crate::sky::LightningGlobals,
     defs: std::collections::HashMap<u32, EmitterDef>,
+}
+
+/// The 0x2c pairing [M `Lightning_Create` 0x18cde8:28-72]: each new bolt walks the object list
+/// (newest-first — `control_add_object_to_list` 0x134698 prepends, the worldobj.rs emitter
+/// note) for the first OTHER class-0x33 object whose signed key halfword matches, pairs with
+/// it (ext[7], demoted to class 1) and becomes the master. A record with no earlier match
+/// keeps ext[0] = 0 — its own update no-ops [M 0x18cf68:11] — but it still serves as a later
+/// strike's partner. Records: `(placement index, param 0 word, param 1 as i16, param 2 u16,
+/// translation)` in creation (= placement) order.
+pub fn pair_lightning_recs(recs: &[(usize, u32, i16, u16, V3)]) -> (Vec<LightningStrike>, Vec<usize>) {
+    let mut strikes = Vec::new();
+    let mut ends = vec![false; recs.len()]; // found as a partner → demoted to class 1
+    let mut inert = Vec::new();
+    for j in 0..recs.len() {
+        let Some(i) = (0..j).rev().find(|&i| !ends[i] && recs[i].2 == recs[j].2) else {
+            inert.push(recs[j].0);
+            continue;
+        };
+        ends[i] = true;
+        let (a, b) = (&recs[i], &recs[j]);
+        strikes.push(LightningStrike {
+            master_placement: b.0, partner_placement: a.0,
+            group: b.1, key: b.2 as u16,
+            start: b.4, end: a.4,
+            nodes: [b.4, b.4, b.4, b.4, b.4, b.4, b.4, a.4],
+            visible: false, counter: b.0 as u32,
+        });
+    }
+    (strikes, inert)
 }
 
 impl WorldFx {
     /// Every FX placement of the main map, in placement order (the game creates the dynamic objects
     /// in the same `parsemap_create_dynamic_objects` 0x1d04f0 walk). The emitter defs merge from
-    /// every map's block 0x30 (the game's hashtable is global).
-    pub fn attach_level(level: &Level) -> WorldFx {
+    /// every map's block 0x30 (the game's hashtable is global). `level_hash` = the archive hash
+    /// (GameState+8; `Env_Tree_Create` 0x17c200:44 compares it for the tree anim's pause arm).
+    pub fn attach_level(level: &Level, level_hash: u32) -> WorldFx {
         let mut defs = std::collections::HashMap::new();
         for map in &level.maps {
             for d in &map.emitter_defs { defs.insert(d.hash, d.clone()); }
         }
         let mut fx = WorldFx { defs, ..Default::default() };
         let Some(m) = level.main_map() else { return fx };
+        let mut lightning_recs: Vec<LightningRec> = Vec::new();
         for (i, p) in level.maps[m].placements.iter().enumerate() {
             let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
             let kind = p.flags & 0xff;
             let pos = p.translation;
+            let _ = &mut fx;
             match kind {
                 0x21 => {
                     // `Ripples_Create` 0x1acc90:20-30 — the s16 params, both-0 defaults.
                     let (spread, period) = (param(0) as u16 as i16, param(1) as u16 as i16);
                     let (spread, period) = if period == 0 && spread == 0 { (1.0, 0x1e) } else { (spread as f32, period as i32) };
                     fx.ripples.push(RippleFx { placement: i, pos, spread, period, counter: i as u32 });
+                }
+                0x2b => {
+                    // `LeafGen_Create` 0x1acbd0 — the generator, no placement params read.
+                    fx.leafgens.push(LeafGenFx { placement: i, pos, counter: i as u32, spawned: 0, last_offset: [0.0; 2] });
+                }
+                0xf3 => {
+                    // `Env_Tree_Create` 0x17c200: the model/anim hashes from the placement's params
+                    // 0/1 [D 07000004 #30/#31]; the pause arm — every level but 0x7000043.
+                    fx.trees.push(TreeFx {
+                        placement: i, pos, yaw: p.rotation[1],
+                        model: param(0), anim: param(1), paused: level_hash != 0x0700_0043,
+                    });
                 }
                 0xe3 => {
                     // `Flicker_Create` 0x1acb00: data+4 = param 0 (the u16 spark gate — unreachable),
@@ -235,6 +440,14 @@ impl WorldFx {
                         remaining: total, total, armed: false, fade: 0.0,
                     });
                 }
+                0x2c => {
+                    // `Lightning_Create` 0x18cde8:20-24 — the ext fields from the param area;
+                    // the pairing runs after the walk (creation order = placement order).
+                    lightning_recs.push(LightningRec {
+                        placement: i, group: param(0),
+                        key: param(1) as u16 as i16, extra: param(2) as u16, pos,
+                    });
+                }
                 0xf2 => {
                     // `Emitter_CreatePlist` 0x17b848: the rate from param 1 (0 → −1, 1 → 0, else /60);
                     // `Emitter_Create` 0x17ae00 inits every slot dead (age 100000, life 0), the
@@ -253,17 +466,61 @@ impl WorldFx {
                         parts: (0..d.max).map(|_| EmitterParticle {
                             pos: [0.0; 3], vel: [0.0; 3], age: 99999.0, life: 0.0, rgba: [0; 4],
                         }).collect(), counter: i as u32,
+                        shared_rng: false, basis: None,
                     });
                 }
                 _ => {}
             }
         }
+        // The 0x2c pairing — the standalone `pair_lightning_recs` (the decompile trace above it).
+        let (strikes, inert) = pair_lightning_recs(&lightning_recs.iter().map(|r| (r.placement, r.group, r.key, r.extra, r.pos)).collect::<Vec<_>>());
+        fx.lightnings = strikes;
+        fx.unpaired_lightnings = inert;
         fx
     }
 
+    /// The lightning globals the (future) sky pass mirrors its `View_DrawSky` tick into —
+    /// `Lightning_Update` reads them per pass [M 0x18cf68:12/23].
+    pub fn lightning_globals_mut(&mut self) -> &mut crate::sky::LightningGlobals { &mut self.lightning }
+
+    /// The `Effect_Create` 0x1ce688 impact arm's `Emitter_Create(0, 0, EffectInfo+0x84, hit_pos,
+    /// normal, 0, 0, 0)` 0x17ae00: a def-hash lookup (a miss → NO object, the placement path's own
+    /// rule), a ONE-SHOT emitter (the rate argument is 0 → the +0x4b latch), no channels (+0x4a =
+    /// 1 from create, params 0 don't touch it), the basis from the hit normal, every slot dead.
+    /// Consumes no RNG here — the burst's draws run on the object's own update ticks.
+    pub fn spawn_impact(&mut self, def_hash: u32, pos: V3, normal: V3) {
+        let Some(d) = self.defs.get(&def_hash) else { return };
+        // `Vec_MakeOrthonormalBasis(normal)` → (u, v); Mat_SetDir(u) → row +0x20 (the spawn's
+        // local z), Mat_SetNorm(v) → row +0x00 (local x), Mat_SetUp(normal) → row +0x10 (local
+        // y) [M 0x1e3418/0x1e3458/0x1e3438]. The rows the velocity transform reads:
+        // vel = Norm_row·x + Up_row·y + Dir_row·z [M 0x17b080 _vmulabc/_vmaddabc/_vmaddbc].
+        let (u, v) = crate::effect::orthonormal_basis_pair(normal);
+        let basis = [
+            [v[0], v[1], v[2], 0.0],
+            [normal[0], normal[1], normal[2], 0.0],
+            [u[0], u[1], u[2], 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        self.emitters.push(EmitterFx {
+            placement: usize::MAX, pos, rotation: [0.0; 3],
+            def: def_hash, rate: 0.0, ch_on: 0, ch_off: 0, ch_out: 0,
+            toggle_period: 0.0, toggle_timer: 0.0, toggle_state: true,
+            expired: true, dead_ticks: 0,
+            parts: (0..d.max).map(|_| EmitterParticle {
+                pos: [0.0; 3], vel: [0.0; 3], age: 99999.0, life: 0.0, rgba: [0; 4],
+            }).collect(),
+            counter: 0, shared_rng: true, basis: Some(basis),
+        });
+    }
+
+    /// The def table (the test's count predictor: the impact burst draws 4 × min(max, batch)).
+    pub fn defs(&self) -> &std::collections::HashMap<u32, EmitterDef> { &self.defs }
+
     /// One 60 Hz tick (`Emitter_Update`/`Ripples_Update`/`cloud_update`/`Apocalypse_Update` run in
-    /// the game's object handler; `Flicker_Update` likewise). `frame` = `GameState+0x52`.
-    pub fn tick(&mut self, ch: &mut Channels, player_pos: V3, frame: u32, gas: &mut crate::gas::GasPool) {
+    /// the game's object handler; `Flicker_Update` likewise). `frame` = `GameState+0x52`. `rng` is
+    /// the SHARED stream — consumed ONLY by the impact emitters (`shared_rng`); the 0xf2
+    /// placements keep the counter-hash stand-in (the G-033/fix-world-fx discipline).
+    pub fn tick(&mut self, ch: &mut Channels, player_pos: V3, frame: u32, gas: &mut crate::gas::GasPool, rng: &mut crate::drone::Rng) {
         // Flicker [M 0x1ab960]: the stubbed FindMapLight keeps the white target and the 0 stamp.
         for f in &mut self.flickers {
             for k in 0..3 {
@@ -287,6 +544,15 @@ impl WorldFx {
             let s = jitter(r.counter, 3) * 0.05 + 0.05;
             gas.init([r.pos[0] + jx, r.pos[1], r.pos[2] + jz], 0.0, [0.0; 3], s, s + s, 6, [0x7f, 0x7f, 0x7f, 0xff], r.period as f32);
         }
+        // LeafGens [M 0x1acc48]: the gate (counter-hash for Rand_Rand(30)), one leaf spawn — the
+        // 0.02-band x/z velocity jitter the draw code reads; the leaf's own integrator is not ported.
+        for l in &mut self.leafgens {
+            l.counter = l.counter.wrapping_add(0x9e37_79b9);
+            if jitter(l.counter, 11) * 30.0 < 1.0 {
+                l.spawned += 1;
+                l.last_offset = [jitter(l.counter, 12) * 0.04 - 0.02, jitter(l.counter, 13) * 0.04 - 0.02];
+            }
+        }
         // Clouds [M 0x18d768]: fmod-wrapped phases, position = player + (phase_x, height, phase_z).
         for c in &mut self.clouds {
             c.phase[0] = (c.phase[0] + c.drift[0]).rem_euclid(c.wrap.max(1e-6));
@@ -302,9 +568,27 @@ impl WorldFx {
                 if a.whiteout { a.fade = a.remaining * 5.0 / a.total; }
             }
         }
+        // Lightning bolts [M 0x18cf68]: the visibility (and the reflicker redistribution) —
+        // the game's class-0x33 update reads the globals each pass; the port reads its copy
+        // (resting cleared until the sky pass drives it, so the bolts stay hidden).
+        let mut lg = self.lightning;
+        for l in &mut self.lightnings { l.tick(&mut lg); }
+        self.lightning = lg;
         // Emitters [M 0x17b080]: the rate countdown, the channels, the blink, the spawn, the motion.
         for e in &mut self.emitters {
             let Some(def) = self.defs.get(&e.def).cloned() else { continue; };
+            // Creation-tick timing (fix-impact-remainder2): the game's object list is NEWEST-FIRST
+            // (`control_add_object_to_list` 0x134698 prepends to the 0x2705a0 head; the pass-1 walk
+            // in `control_movement_object_handler` 0x1336f8 follows head+0x14 first) and the walk
+            // cursor never revisits the head, so an object created mid-walk (the impact emitter,
+            // during the bullet's collide phase) is NOT updated its creation frame [M Collide_Update
+            // 0x1ea398 vs Control_Update's class walk] and is the FIRST object updated the next
+            // frame — ahead of the older drones. The port's `Drones::tick` runs this fx pass BEFORE
+            // the bullet collide phase of the same frame, so an emitter created at tick N is first
+            // seen HERE at tick N+1 — which IS the game's first `Emitter_Update` (the burst draws
+            // then, not one tick later; the creation-frame skip is already implicit in the call
+            // order, and gating it again delayed every burst by a tick and shifted every AI roll
+            // after a wall hit).
             // The out channel resets every tick and re-sets while any particle lives [M 0x17b080].
             if e.ch_out != 0 { ch.set(e.ch_out as u32, 0, frame); }
             // The blink (param 5): ON half the period, OFF the whole period [M 0x17b080:105-120].
@@ -342,18 +626,37 @@ impl WorldFx {
                     if e.expired && p.age < 99999.0 { continue; } // one-shot: never-spawned slots only
                     p.age = 0.0;
                     batch -= 1;
-                    // The spawn draws (yaw, pitch, speed, life) — counter-hash, no shared-stream draws.
-                    e.counter = e.counter.wrapping_add(0x9e37_79b9);
-                    let yaw = def.yaw_base + def.yaw_var * jitter(e.counter, 1);
-                    let pitch = def.pitch_base + def.pitch_var * jitter(e.counter, 2);
-                    let speed = def.speed_base + def.speed_var * jitter(e.counter, 3);
-                    let life = def.life_base + def.life_var * jitter(e.counter, 4);
-                    // The spherical direction: sin(pitch+π/2)=cos(pitch), sin(yaw+π/2)=cos(yaw) —
-                    // PS2Sinf2 0x11f968 returns TWO sines; the RotMatrixX caller proves the idiom.
-                    let (cp, sp, cy, sy) = ((pitch + std::f32::consts::FRAC_PI_2).sin(), pitch.sin(), (yaw + std::f32::consts::FRAC_PI_2).sin(), yaw.sin());
-                    let dir = [cp * cy * speed, sp * speed, cp * sy * speed];
-                    // The object basis (obj+0x90) from the placement's yaw/pitch/roll rotation.
-                    let m = nf_formats::placement::object_matrix(e.rotation, [0.0; 3]);
+                    // The spawn draws (yaw, pitch, speed, life) — the game's order [M 0x17b080:
+                    // 216-247]. The impact emitters draw the SHARED stream (`Rand_FRandHalf(1.0)`
+                    // × 4); the 0xf2 placements keep the counter-hash (no shared-stream draws).
+                    let (yaw, pitch, speed, life);
+                    if e.shared_rng {
+                        yaw = def.yaw_base + def.yaw_var * crate::effect::frand_half(rng, 1.0);
+                        pitch = def.pitch_base + def.pitch_var * crate::effect::frand_half(rng, 1.0);
+                        speed = def.speed_base + def.speed_var * crate::effect::frand_half(rng, 1.0);
+                        life = def.life_base + def.life_var * crate::effect::frand_half(rng, 1.0);
+                        if std::env::var_os("NF_RNGLOG").is_some() {
+                            eprintln!("[rnglog] emitter_burst +4 (draw #{})", rng.draws);
+                        }
+                    } else {
+                        e.counter = e.counter.wrapping_add(0x9e37_79b9);
+                        yaw = def.yaw_base + def.yaw_var * jitter(e.counter, 1);
+                        pitch = def.pitch_base + def.pitch_var * jitter(e.counter, 2);
+                        speed = def.speed_base + def.speed_var * jitter(e.counter, 3);
+                        life = def.life_base + def.life_var * jitter(e.counter, 4);
+                    }
+                    // G-046: the game's cone is two PS2Sinf2 pairs [M Emitter_Update 0x17b080, disasm
+                    // 0x17b504-0x17b53c]: PS2Sinf2(pitch + 1.5707964, pitch) → (cos p, sin p) and
+                    // PS2Sinf2(yaw + 1.5707964, yaw) → (cos t, sin t); the stored dir vector is
+                    // (sin p·cos t, cos p, sin p·sin t) — polar p from +Y, azimuth t from +X about +Y
+                    // — then Vec_MulR32(speed). The port's old form (elevation p, azimuth from +Z)
+                    // pointed the cone differently.
+                    let (cp, sp) = (crate::trig::cosf(pitch), crate::trig::sinf(pitch));
+                    let (ct, st) = (crate::trig::cosf(yaw), crate::trig::sinf(yaw));
+                    let dir = [sp * ct * speed, cp * speed, sp * st * speed];
+                    // The object basis (obj+0x90): the impact emitters carry the Mat_SetDir/
+                    // SetNorm/SetUp rows built from the hit normal; the placements the euler matrix.
+                    let m = e.basis.unwrap_or_else(|| nf_formats::placement::object_matrix(e.rotation, [0.0; 3]));
                     p.vel = [0, 1, 2].map(|k| m[k][0] * dir[0] + m[k][1] * dir[1] + m[k][2] * dir[2]);
                     p.pos = e.pos;
                     p.life = life;
@@ -408,9 +711,25 @@ mod tests {
         fx.flickers.push(FlickerFx { placement: 0, pos: [0.0; 3], signal_channel: 0x55, rgb: [0; 3] });
         let mut ch = Channels::default();
         ch.set(0x55, 1, 0);
-        for _ in 0..600 { fx.tick(&mut ch, [0.0; 3], 0, &mut crate::gas::GasPool::default()); }
+        let mut rng = crate::drone::Rng::new(1);
+        for _ in 0..600 { fx.tick(&mut ch, [0.0; 3], 0, &mut crate::gas::GasPool::default(), &mut rng); }
         assert_eq!(fx.flickers[0].rgb, [255; 3], "the tint reaches white");
         assert_eq!(ch.v[0x55], 0, "the stubbed FindMapLight keeps the light-on path");
+    }
+
+    /// `LeafGen_Update` 0x1acc48: the Rand_Rand(30) gate fires on the counter-hash, each spawn
+    /// bumps `spawned` and jitters the last offset inside the 0.02 band.
+    #[test]
+    fn leafgens_spawn_on_the_period_gate() {
+        let mut fx = WorldFx::default();
+        fx.leafgens.push(LeafGenFx { placement: 0, pos: [1.0, 5.0, 2.0], counter: 0, spawned: 0, last_offset: [0.0; 2] });
+        let mut gas = crate::gas::GasPool::default();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::new(1);
+        for f in 0..600 { fx.tick(&mut ch, [0.0; 3], f, &mut gas, &mut rng); }
+        let l = &fx.leafgens[0];
+        assert!(l.spawned >= 5, "600 ticks at the 30-tick gate → several leaf spawns, got {}", l.spawned);
+        assert!(l.last_offset[0].abs() <= 0.02 && l.last_offset[1].abs() <= 0.02, "the jitter stays in the 0.02 band");
     }
 
     /// `Ripples_Update` 0x1ac028: with the default period 30 the gate fires (counter-hash) roughly
@@ -421,10 +740,11 @@ mod tests {
         fx.ripples.push(RippleFx { placement: 0, pos: [10.0, 5.0, 20.0], spread: 2.0, period: 30, counter: 0 });
         let mut gas = crate::gas::GasPool::default();
         let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::new(1);
         let mut occupied = 0;
         let mut seen = None;
         for f in 0..600 {
-            fx.tick(&mut ch, [0.0; 3], f, &mut gas);
+            fx.tick(&mut ch, [0.0; 3], f, &mut gas, &mut rng);
             if !gas.puffs.is_empty() { occupied += 1; seen = Some(gas.puffs[0].clone()); }
         }
         // A ring lives its whole period (life = period), so with ~1 spawn per period the pool holds
@@ -453,9 +773,11 @@ mod tests {
             toggle_state: true, expired: false, dead_ticks: 0, parts: (0..8).map(|_| EmitterParticle {
                 pos: [0.0; 3], vel: [0.0; 3], age: 99999.0, life: 0.0, rgba: [0; 4],
             }).collect(), counter: 0,
+            shared_rng: false, basis: None,
         });
         let mut ch = Channels::default();
-        for f in 0..60 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default()); }
+        let mut rng = crate::drone::Rng::new(1);
+        for f in 0..60 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), &mut rng); }
         assert_eq!(fx.emitters.len(), 1, "a continuous emitter never dies");
         assert!(fx.emitters[0].parts.iter().filter(|p| p.age < p.life).count() >= 6, "the slots cycle at the batch rate (batch 2/tick, life 0.5 s)");
         assert!(fx.particle_sprites().len() >= 6, "the draw handoff exposes the alive slots");
@@ -470,7 +792,7 @@ mod tests {
         fx.emitters[0].expired = true;
         let mut died = None;
         for f in 60..200 {
-            fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default());
+            fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), &mut rng);
             if fx.emitters.is_empty() { died = Some(f); break; }
         }
         assert!(died.is_some(), "the spent one-shot self-destructs (obj+0xFE bit 0)");
@@ -487,14 +809,15 @@ mod tests {
             remaining: 120.0, total: 120.0, armed: false, fade: 0.0,
         });
         let mut ch = Channels::default();
-        fx.tick(&mut ch, [0.0; 3], 0, &mut crate::gas::GasPool::default());
+        let mut rng = crate::drone::Rng::new(1);
+        fx.tick(&mut ch, [0.0; 3], 0, &mut crate::gas::GasPool::default(), &mut rng);
         assert!(!fx.apocalypses[0].armed && fx.apocalypses[0].fade == 0.0, "unlatched: no countdown");
         ch.set(0x10, 1, 1);
-        for f in 1..61 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default()); }
+        for f in 1..61 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), &mut rng); }
         assert!(fx.apocalypses[0].armed, "the latch sets once the channel fires");
         assert!((fx.apocalypses[0].remaining - 60.0).abs() < 1e-4, "60 of 120 ticks remain");
         assert!((fx.apocalypses[0].fade - 60.0 * 5.0 / 120.0).abs() < 1e-4, "fade = remaining·5/total [M 0x18d4f0]");
-        for f in 61..130 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default()); }
+        for f in 61..130 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), &mut rng); }
         assert!(fx.apocalypses[0].remaining == 0.0, "the countdown floors at 0");
     }
 
@@ -504,10 +827,109 @@ mod tests {
         let mut fx = WorldFx::default();
         fx.clouds.push(CloudFx { placement: 0, slot: 3, drift: [0.002, 0.0], height: 50.0, wrap: 0.1, phase: [0.0; 2] });
         let mut ch = Channels::default();
-        for f in 0..100 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default()); }
+        let mut rng = crate::drone::Rng::new(1);
+        for f in 0..100 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), &mut rng); }
         let c = &fx.clouds[0];
         assert!(c.phase[0] >= 0.0 && c.phase[0] < 0.1, "the phase wraps inside the modulus");
         assert!(c.phase[0] > 0.0, "the drift accumulated (100 ticks × 0.002 = 0.2 → wrapped)");
+    }
+
+    /// The 0x2c pairing [M `Lightning_Create` 0x18cde8]: the finder (the SECOND of a key pair
+    /// in creation order) is the master, the found one the partner; a key with no earlier
+    /// match stays inert (its own update no-ops [M 0x18cf68:11]).
+    #[test]
+    fn lightning_pairing_finder_is_master_and_loners_stay_inert() {
+        let (pa, pb, pc) = ([1.0, 0.0, 1.0], [2.0, 0.0, 2.0], [3.0, 0.0, 3.0]);
+        let recs = vec![
+            (10usize, 0x11u32, 7i16, 0u16, pa),
+            (11, 0x11, 7, 0, pb),
+            (12, 0x22, 9, 0, pc),
+        ];
+        let (strikes, inert) = pair_lightning_recs(&recs);
+        assert_eq!(strikes.len(), 1, "one key-7 pair; the key-9 record is alone");
+        let s = &strikes[0];
+        assert_eq!((s.master_placement, s.partner_placement), (11, 10), "the finder (second created) is the master");
+        assert_eq!((s.group, s.key), (0x11, 7), "the master's own params ride ext+0x40/+0x44 [M 0x18cde8:20-23]");
+        assert_eq!(s.start, pb, "ext+0x20 = the master's position [M 0x18cde8:58-61]");
+        assert_eq!(s.end, pa, "ext+0x30 = the partner's position [M 0x18cde8:62-68]");
+        assert_eq!(s.nodes, [pb, pb, pb, pb, pb, pb, pb, pa], "the six fresh beams spawn at the master's pose [M 0x18cde8:46]");
+        assert!(!s.visible, "the bolt loads hidden (the hide arm owns every tick until the flag rises)");
+        assert_eq!(inert, vec![10, 12], "the first key-7 and the lone key-9 keep ext[0] = 0");
+    }
+
+    /// Three records on one key chain: the third pairs with the second (the still-0x33 master)
+    /// — the newest-first object walk [M `control_add_object_to_list` 0x134698 prepends].
+    #[test]
+    fn lightning_triple_key_chains_through_the_still_live_master() {
+        let p = |x: f32| [x, 0.0, 0.0];
+        let recs: Vec<(usize, u32, i16, u16, V3)> = (0..3).map(|i| (i, 0u32, 5i16, 0u16, p(i as f32))).collect();
+        let (strikes, inert) = pair_lightning_recs(&recs);
+        assert_eq!(strikes.iter().map(|s| (s.master_placement, s.partner_placement)).collect::<Vec<_>>(), vec![(1, 0), (2, 1)]);
+        assert_eq!(inert, vec![0], "only the first creation no-ops");
+    }
+
+    /// The key compares as a SIGNED short [M 0x18cde8:40 `(short)` cast]: 0xffff (−1) never
+    /// pairs with 0x7fff, 0x8000 (−32768) only with itself.
+    #[test]
+    fn lightning_key_compare_is_signed() {
+        let recs = vec![(0usize, 0u32, -1i16, 0u16, [0.0; 3]), (1, 0, 0x7fff, 0, [1.0; 3]), (2, 0, -32768i16, 0, [2.0; 3])];
+        let (strikes, inert) = pair_lightning_recs(&recs);
+        assert!(strikes.is_empty(), "0xffff/0x7fff/0x8000 are three distinct keys");
+        assert_eq!(inert, vec![0, 1, 2]);
+        let recs = vec![(0usize, 0u32, -32768i16, 0u16, [0.0; 3]), (1, 0, -32768i16, 0, [1.0; 3])];
+        let (strikes, _) = pair_lightning_recs(&recs);
+        assert_eq!(strikes.len(), 1, "0x8000 pairs with 0x8000");
+    }
+
+    /// `Lightning_Update` 0x18cf68: hidden while `SuperHappyLightningFlag` is clear; the
+    /// reflicker consumption + `FractalThing` redistribution on the first drawn flash tick;
+    /// plain flashes keep the shape.
+    #[test]
+    fn lightning_visibility_and_reflicker_redistribution() {
+        let (start, end) = ([0.0f32, 0.0, 0.0], [100.0f32, 0.0, 0.0]);
+        let mut s = LightningStrike {
+            master_placement: 1, partner_placement: 0, group: 0, key: 0,
+            start, end, nodes: [start, start, start, start, start, start, start, end],
+            visible: false, counter: 0,
+        };
+        let mut g = crate::sky::LightningGlobals::default();
+        s.tick(&mut g);
+        assert!(!s.visible, "flag clear → the 8 × SetDrawInNoViews arm [M 0x18cf68:13-21]");
+        g.super_happy = true;
+        g.reflicker = true;
+        s.tick(&mut g);
+        assert!(s.visible, "the SuperHappyLightningFlag arm draws the chain [M 0x18cf68:27-42]");
+        assert!(!g.reflicker, "the reflicker bit is consumed [M 0x18cf68:24]");
+        assert_eq!(s.nodes[0], start, "node 0 (the master) keeps the start — no recursion range covers index 0");
+        assert!(s.nodes[1] != start, "the fractal moved the beams");
+        let after = s.nodes;
+        g.reflicker = false;
+        s.tick(&mut g);
+        assert!(s.visible && s.nodes == after, "a plain flash tick redraws without reshaping");
+        g.reflicker = true;
+        s.tick(&mut g);
+        assert!(s.nodes != after, "the next reflicker flash redistributes again");
+    }
+
+    /// `FractalThing` 0x1a94d8 with a mid-returning rand (offset 0): the mid sequence
+    /// (0,8)→4, (0,4)→2, (0,2)→1, (2,4)→3, (4,8)→6, (4,6)→5, (6,8)→7 [M 0x1a94d8:66/92-93]
+    /// and every node the exact midpoint of its range — 3 draws per node [M :78-87].
+    #[test]
+    fn fractal_thing_recursion_shape_and_draw_count() {
+        let (start, end) = ([0.0f32, 0.0, 0.0], [8.0f32, 0.0, 0.0]);
+        let mut nodes = [[0.0f32; 3]; 8];
+        let mut mids = Vec::new();
+        fractal_thing(&mut nodes, 0, 8, start, end, 0, &mut |amp| { mids.push(amp); amp * 0.5 });
+        assert_eq!(mids.len(), 21, "7 nodes × 3 axis draws each [M 0x1a94d8:78-87]");
+        assert!(mids[..3].iter().all(|a| (*a - 4.0).abs() < 1e-4), "the (0,8) range: distance 8 → amp 4 in mode 0");
+        assert_eq!(nodes[1], [1.0, 0.0, 0.0], "mid of (start, node2)");
+        assert_eq!(nodes[2], [2.0, 0.0, 0.0], "mid of (start, node4)");
+        assert_eq!(nodes[3], [3.0, 0.0, 0.0], "mid of (node2, node4)");
+        assert_eq!(nodes[4], [4.0, 0.0, 0.0], "mid of (start, end)");
+        assert_eq!(nodes[5], [5.0, 0.0, 0.0], "mid of (node4, node6)");
+        assert_eq!(nodes[6], [6.0, 0.0, 0.0], "mid of (node4, end)");
+        assert_eq!(nodes[7], [7.0, 0.0, 0.0], "mid of (node6, end)");
+        assert_eq!(nodes[0], [0.0, 0.0, 0.0], "the start keeps its position");
     }
 }
 

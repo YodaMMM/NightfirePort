@@ -73,6 +73,11 @@ struct Item {
     delete: bool,
     fade_kill: bool,
     fade_kill_vol: i32,
+    /// `StartedWhenNisPlaying` (SFXItem+0x294): sampled from the IOP's `NisPlaying` at start init
+    /// (`SFXStart3D`@3aac step 5). While `NisQuitten` stands, every item with this flag gets
+    /// `FadeAndKill = 1` — the cut-scene's own sounds (the mid-line dialogue) die in the skip's
+    /// fade window [M sound.md §6 step 3].
+    started_when_nis: bool,
     streamed: bool,
     /// `Paused` (SFXItem+0x290): a `PauseInNis` sound while an NIS plays — pitch 0, skipped by `SFXUpdate` [M §8].
     paused: bool,
@@ -216,6 +221,13 @@ impl Driver {
     /// limits are the owning bank's, never the level's [S — the game loads one bank; the port extends].
     pub fn load_spare_bank(&mut self, slot: usize, bank: Bank, sbf: Vec<u8>) { self.slots.insert(slot, Slot { bank, sbf, pcm: HashMap::new() }); }
 
+    /// frontend-music: `Sound_Ready`'s front-end case re-points the primary bank on every
+    /// front-end load [M 0x1dceb8 case 0x7000048: bank 0xc / 0x38 by `DAT_002e1b11`, so the
+    /// jingle pair resolves only its id]. The port keeps the banks resident (the spare-bank
+    /// extension above), so the flip just re-points the first lookup. A no-op when the slot is
+    /// not resident.
+    pub fn set_primary(&mut self, slot: usize) { if self.slots.contains_key(&slot) { self.primary = Some(slot); } }
+
     /// `SFXSetupListener` (one listener): eye position and the camera's forward and left axes, all × 1000 as the EE
     /// packs them. `Norm` is the camera matrix's row 0, which points to the screen left.
     pub fn set_listener(&mut self, pos: [f32; 3], dir: [f32; 3], left: [f32; 3]) {
@@ -260,13 +272,22 @@ impl Driver {
         let item = Item {
             id, counter: 0, vh: [None; 10], base_volume: [0; 10], pitch: [0; 10], pan: [0; 10], cue_pos: 0, csw: [0; 50], cued: Vec::new(),
             inner: if inner == -1 { fx.inner } else { inner }, outer: if outer == -1 { fx.outer } else { outer }, fx: Arc::new(fx), slot,
-            updated: 0, real_pos: p, pos: p, handle, delete: false, fade_kill: false, fade_kill_vol: 100, streamed: false,
+            updated: 0, real_pos: p, pos: p, handle, delete: false, fade_kill: false, fade_kill_vol: 100,
             paused: false, key_on_delay: kd,
             gpaused: false,
             sample_hash: 0,
+            started_when_nis: self.nis_playing,
+            streamed: false,
         };
         self.items.insert(0, item);
-        if self.setup(out, 0) { 0 } else { 1 }
+        if self.setup(out, 0) { return 0; }
+        // A start `SFXSetup` rejected (the distance/budget reject, `max_reject`, or the per-id
+        // `max_voices` limit) never keyed a voice and never cued a sample: it goes now, and the
+        // start reports the failure. Left in the list it reached the next `update` before the kill
+        // pass, and the polyphonic arm indexed its empty `cued` — the playtest crash (1015-2142,
+        // sfx.rs `fx.subs[cued[k]]`) when the front end restarted its music pair over the live one.
+        if self.items[0].delete { self.items.remove(0); }
+        1
     }
 
     /// `ES_GetDist`: world units (`√(min Σ(Δ/100)²) / 10`).
@@ -615,6 +636,13 @@ impl Driver {
         self.update_ducker();
         self.fade_update();
         if self.nis_quitten { self.stop_ducker(); }
+        // §6 step 3's second half: `For all items: if NisQuitten && StartedWhenNisPlaying:
+        // FadeAndKill=1` — the skip's dialogue kill. `NisPlaying` has already dropped by then (the
+        // EE's event 5 cleared it), so only the lines that started before the skip are hit; the
+        // step-4 loop then spends FadeAndKillVolume (−5/frame from 100, ≈21 frames) [M §6].
+        if self.nis_quitten {
+            for it in &mut self.items { if it.started_when_nis { it.fade_kill = true; } }
+        }
         for it in &mut self.items { it.updated = 0; }
         let mut i = 0;
         while i < self.items.len() {
@@ -713,6 +741,14 @@ impl Driver {
     /// Live items (tests).
     pub fn items(&self) -> usize { self.items.len() }
 
+    /// Probe (read-only, tests): every item's (id, delete, fade_kill, started_when_nis, looping) —
+    /// the skip's dialogue kill is asserted through these; `looping` (any live voice's loop bit)
+    /// tells the NIS score (which never ends on its own) from the one-shot lines.
+    pub fn items_probe(&self) -> Vec<(u32, bool, bool, bool, bool)> {
+        self.items.iter().map(|it| (it.id, it.delete, it.fade_kill, it.started_when_nis,
+            it.vh.iter().flatten().any(|v| self.voices[*v].as_ref().is_some_and(|vo| vo.looping)))).collect()
+    }
+
     /// The pitch-0 pause of one item's live voices (front + rear): the NIS pause's edge and the
     /// global pause's edge [M sound.md §8]. The port adds volume 0 — the SPU's pitch 0 alone would
     /// hold one sample audible — the NIS-pause precedent [S].
@@ -753,14 +789,37 @@ impl Driver {
     /// a spare's slot only for ids it lacks.
     pub fn item_slot(&self, id: u32) -> Option<usize> { self.items.iter().find(|it| it.id == id).map(|it| it.slot) }
 
+    /// rocket-sound-leak test hook: the live item's tracked 3-D position (`SFXSetPositionAndVelocity`'s
+    /// target, item `real_pos`, /1000 back to units), first item with the id.
+    pub fn item_pos(&self, id: u32) -> Option<[f32; 3]> { self.items.iter().find(|it| it.id == id).map(|it| it.real_pos.map(|x| x as f32 / 1000.0)) }
+
     /// The ids of the live items (tests).
     pub fn ids(&self) -> Vec<u32> { self.items.iter().map(|it| it.id).collect() }
+
+    /// The hardware voices of live LOOPED items (tests, bathhouse-voices-02b): the headless stand-in
+    /// ends every non-looping voice each tick (the stream slots free for the next start) but must
+    /// keep the looped ambients the game keeps (a looped sample never reports its end on hardware).
+    pub fn looping_voice_ids(&self) -> Vec<u32> {
+        let mut out = Vec::new();
+        for it in &self.items {
+            if it.vh.iter().flatten().any(|&v| self.voices[v].as_ref().is_some_and(|x| x.looping)) {
+                for v in it.vh.iter().flatten() {
+                    if let Some(x) = self.voices[*v].as_ref() { out.push(x.front); if let Some(r) = x.rear { out.push(r); } }
+                }
+            }
+        }
+        out
+    }
 }
 
 /// The driver plus the sound output, fed by the EE layer's commands once per game tick.
 pub struct Sound {
     pub driver: Driver,
     pub output: Option<Output>,
+    /// bathhouse-voices-02b test hook: when set, every batch's commands are appended here too (the
+    /// real path with `output: None` drops them) — the mixer's Play/Set volumes per voice, asserted
+    /// as "what reaches the mixer" ([M] the mixer's gain for a voice is exactly these fields).
+    pub captured: Option<std::sync::Arc<std::sync::Mutex<Vec<Cmd>>>>,
     /// The level's music: track number, marker file and SSD; the stream player once started; the EE's music
     /// commands of the last frame (sent with this frame's batch).
     pub music_files: Option<(i32, nf_formats::music::Smf, std::sync::Arc<Vec<u8>>)>,
@@ -790,6 +849,7 @@ impl Sound {
             // `ES_MusicSetVolume`: music ducks to `DuckerCurrentVolume` and fades with `FadeMusicVolume` [M §5.5].
             out.push(Cmd::MusicGain(p.gain(self.driver.music_master, self.driver.ducker_current, self.driver.fade_music_volume)));
         }
+        if let Some(c) = &self.captured { c.lock().unwrap().extend(out.iter().cloned()); }
         if let Some(o) = &self.output { o.send(out); }
     }
 
@@ -986,5 +1046,41 @@ mod tests {
         // Out-of-range reverb is clamped.
         d.set_environment(500, 0);
         assert_eq!(d.reverb_target, 100);
+    }
+
+    /// `SFXRemove(0, id)` kills EVERY instance of the id — the IOP's KillSFX walks the whole
+    /// item list [M IRX 0x1f88:11-16 → KillSFX 0x1ea4]; the menu-music pair (0x1d7/0x470) is
+    /// looped by design and dies only this way (menu-audio-leaks).
+    #[test]
+    fn remove_kills_every_instance_of_the_id() {
+        let (b, sbf) = one_sound_bank();
+        let mut d = Driver::new();
+        d.load_bank(4, b, sbf);
+        let mut out = Vec::new();
+        assert_eq!(d.start(&mut out, 7, None, 0, None), 0);
+        assert_eq!(d.start(&mut out, 7, None, 0, None), 0, "a second instance keys on too");
+        assert_eq!(d.ids(), vec![7, 7]);
+        // Sister: a remove of another id touches nothing [M the (handle, id) match].
+        d.remove(0, Some(9));
+        d.update(&mut Vec::new(), &[]);
+        assert_eq!(d.ids(), vec![7, 7], "the other id's remove is a no-op");
+        d.remove(0, Some(7));
+        d.update(&mut Vec::new(), &[]);
+        assert!(d.ids().is_empty(), "SFXRemove(0, id) removes every matching item [M 0x1f88]");
+    }
+
+    /// A start whose id no loaded bank holds returns 1 and starts nothing — the game's lookup
+    /// miss [M the IOP lookup, docs/systems/sound.md §2]. Per front-end visit only ONE half of
+    /// the open pair resolves (SB_0 holds 0x1d7, SB_1 holds 0x470 [D]); the other half must not
+    /// leave an item behind.
+    #[test]
+    fn a_bank_miss_starts_nothing() {
+        let (b, sbf) = one_sound_bank();
+        let mut d = Driver::new();
+        d.load_bank(4, b, sbf);
+        let mut out = Vec::new();
+        assert_eq!(d.start(&mut out, 0x1d7, None, 0, None), 1, "the id is not in the bank");
+        assert!(out.is_empty(), "no voice command either");
+        assert!(d.ids().is_empty(), "no item, no leak");
     }
 }

@@ -10,6 +10,9 @@ use nf_formats::weapon::WeaponData;
 pub const SOUND: u32 = 0xf5;
 /// `FRAME_RATE_INT · 120` (single player) with FRAME_RATE_INT = 60 [L]: a dropped gun lasts two minutes.
 pub const DROP_LIFETIME: u16 = 60 * 120;
+/// `Pickup_CreateFromSet` 0x18f1b0's respawn argument: 3 (×10 s) [M disasm 0x18f21c `addiu s6,zero,3`
+/// → 0x18f25c `sw s6,16(sp)`, `Pickup_Create`'s param 11 → +0x2C].
+pub const SET_RESPAWN: u16 = 3;
 /// `WldGravity.y · REC_FRAME_RATE²` [L]: the fall per tick².
 const GRAVITY: f32 = -9.8 * (1.0 / 60.0) * (1.0 / 60.0);
 
@@ -20,11 +23,13 @@ const GRAVITY: f32 = -9.8 * (1.0 / 60.0) * (1.0 / 60.0);
 pub const BEST_WEAPON: [u16; 18] = [0x42, 0x32, 0x1a, 0x18, 0x1c, 0x16, 0x15, 0x08, 0x10, 0x0e, 0x0d, 0x0c, 0x12, 0x06, 0x04, 0x02, 0x0a, 0x01];
 
 /// `PickupMatrix` (0x2b9100, 110 bytes) row 0 — the MP weapon-set table `Pickup_CreateFromSet`
-/// (0x18f1b0) reads for kinds 7–11: `PickupMatrix[row][(kind-7)*2]`, row = the u16 at
-/// `MPSettings+0x1B4` (0 in SP [L ee_start_05.bin]; rows of 10 s16 entries). The disc's live row:
-/// set 7 → 0x6, 8 → 0x1e, 9 → 0x2c, 10 → 0x6, 11 → 0x10. The odd columns of the live row
-/// ([0x1c, 0x18, 0x2, 0xa, 0x42]) are not read by 0x18f1b0.
-pub const PICKUP_MATRIX_ROW0: [u16; 5] = [0x6, 0x1e, 0x2c, 0x6, 0x10];
+/// (0x18f1b0) reads for kinds 7–11: `PickupMatrix + (kind-7)·2 + set·10` in BYTES — 11 rows of
+/// 5 s16, row = the u16 at `MPSettings+0x1B4` (0 in SP) [M 0x18f1b0:56; the 110-byte symbol and
+/// `Pickup_MakeRandomWeaponSet` 0x18f098's row-10 fill at +100 agree]. Row 0: set 7 → 6, 8 → 0x1c,
+/// 9 → 0x1e, 10 → 0x18, 11 → 0x2c [D the ELF bytes]. (mp-lobby-settings: this read the table as
+/// rows of 10 s16 and took every other entry — [6, 0x1e, 0x2c, 6, 0x10] — so kinds 8..11 made the
+/// wrong guns.) The full table is `crate::mp::equip::PICKUP_MATRIX`.
+pub const PICKUP_MATRIX_ROW0: [u16; 5] = crate::mp::equip::PICKUP_MATRIX[0];
 
 /// A model's glist bounds (`celglist+0x20`: centre, radius).
 #[derive(Clone, Copy, Debug)]
@@ -194,18 +199,32 @@ impl Pickup {
     /// clip, model 0x20007c4, at +0.1,+0.1, with a 0.5 fall velocity [M :49-62] — the offset/velocity are the
     /// port's unmodelled remainder). State 1 (the set pickups rest where placed).
     pub fn create_from_set(translation: V3, rotation: [f32; 3], set: u16, w: &WeaponData, models: &std::collections::HashMap<u32, Model>) -> Option<Pickup> {
-        let weapon = *PICKUP_MATRIX_ROW0.get((set - 7) as usize)?;
+        Self::create_from_set_row(translation, rotation, set, &PICKUP_MATRIX_ROW0, w, models)
+    }
+
+    /// [`Pickup::create_from_set`] over the match's weapon-set row (`MPSettings+0x1B4`'s row of
+    /// `PickupMatrix`, the Random row once filled) — mp-lobby-settings: the MP arenas' set pickups
+    /// follow the lobby's Weapon Set [M 0x18f1b0:56].
+    pub fn create_from_set_row(translation: V3, rotation: [f32; 3], set: u16, row: &[u16; 5], w: &WeaponData, models: &std::collections::HashMap<u32, Model>) -> Option<Pickup> {
+        let weapon = *row.get((set.checked_sub(7)?) as usize)?;
         let base = w.base(weapon as usize) as u16;
         let model = w.model(base as usize);
         let bounds = *models.get(&model)?;
         let rounds = (w.clip_size(base as usize) as i16).wrapping_mul(2);
         let m = nf_formats::placement::object_matrix(rotation, translation);
+        // The create call's stack arguments [M 0x18f1b0 disasm: `sw v1(0xF5),0(sp)` 0x18f24c →
+        // param 9 sound, `sw s5(1),8(sp)` → param 10 rest, `sw s6(3),16(sp)` 0x18f25c → param 11,
+        // `sw zero,24(sp)` → param 12; `Pickup_Create` 0x18dda0 stores param 11 → +0x2C (the
+        // respawn: 0x18dda8 `lhu v1,272(sp)` → 0x18def8 `sh v0,44(s3)`) and param 12 → +0x2E
+        // (the lifetime: 0x18ddb0 → 0x18df08)]. So every set pickup respawns 3·10 s after a take
+        // (`Pickup_Update` 0x18e148's `FRAME_RATE_INT · respawn · 10` wait) — mp-world-sync: the
+        // port's 0 deleted the arenas' weapons for good on the first take.
         Some(Pickup {
             kind: kind::WEAPON, weapon: base, rounds, model, bounds, m,
             start: translation, vel: [0.0; 3], state: 1, lifetime: 0,
-            switch_channel: 0, sound: None,
+            switch_channel: 0, sound: Some(SOUND),
             hidden: false, gone: false, from: None, obj: None,
-            respawn: 0, respawn_ticks: 0, spin: false,
+            respawn: SET_RESPAWN, respawn_ticks: 0, spin: false,
             label: 0,
         })
     }
@@ -244,13 +263,18 @@ impl Pickup {
     /// concatenated per tick — about +Y by 1/60 rad.
     pub fn spin_tick(&mut self) {
         if !self.spin { return; }
-        let a = 1.0f32 / 60.0;
-        let (s, c) = a.sin_cos();
+        // G-046: the spin is RotMatrix((0, REC_FRAME_RATE, 0)) [M 0x18e148:193-201] — REC_FRAME_RATE
+        // 0x3c888889 [L ee_snapshot 0x30d0dc], its sines PS2Sinf3 lanes [M RotMatrix 0x1e2368:28-31],
+        // the row products/sums EE mul.s/add.s.
+        let a = f32::from_bits(0x3c88_8889);
+        let s = crate::trig::sinf(a);
+        let c = crate::trig::cosf(a);
+        let mul = nf_formats::ps2float::mul;
         // Rotate the matrix's x/z rows about Y, keeping the translation row.
         for r in 0..3 {
             let (x, z) = (self.m[r][0], self.m[r][2]);
-            self.m[r][0] = x * c + z * s;
-            self.m[r][2] = z * c - x * s;
+            self.m[r][0] = crate::trig::ee_add(mul(x, c), mul(z, s));
+            self.m[r][2] = crate::trig::ee_sub(mul(z, c), mul(x, s));
         }
     }
 
@@ -306,8 +330,14 @@ impl Pickup {
         let c = self.centre();
         let r = self.bounds.radius + 1.1;
         let d2 = (c[0] - pos[0]).powi(2) + (c[1] - pos[1]).powi(2) + (c[2] - pos[2]).powi(2);
-        // The LOS ray from the player's world-sphere centre to the pickup's centre. A resting pickup whose
-        // model centre y ≈ 0 (live: the 07000001 guard drop of weapon 0xe rests with its centre ON the
+        // The game gates the ray on the distance: `fVar13 = Vec_SqDist3D(pickup+0x80, player+0x30) < fVar12 &&`
+        // short-circuits BEFORE `Collide_LineOfSight` [M 0x18e148:210-214] — a far pickup never casts. The
+        // port cast the take-ray for every pickup every tick (the 07000006 cut-scene profile: update_pickups
+        // 1.0 ms/tick on the level's 11 pickups — the sim tick's largest scoped block — vs 0.001 after), so
+        // the reordering is the game's own order, not an approximation. Same result: the LOS only decided
+        // when the distance gate passes.
+        if d2 >= r * r { return false; }
+        // A resting pickup whose model centre y ≈ 0 (live: the 07000001 guard drop of weapon 0xe rests with its centre ON the
         // floor [L, fix_player2_live take-test log]) ends the ray ON the floor triangle; the port's
         // `segment` counts t = 1.0 as a hit, which refused every such drop forever (the "some drops never
         // pick up" playtest symptom). The game takes floor-resting drops, so its `Collide_LineOfSight`
@@ -324,7 +354,7 @@ impl Pickup {
             eprintln!("[take-test] weapon {:#x} kind {} state {}: bond ({:.3}, {:.3}, {:.3}) centre ({:.3}, {:.3}, {:.3}) dist {:.3} vs r {:.3} los {}",
                 self.weapon, self.kind, self.state, pos[0], pos[1], pos[2], c[0], c[1], c[2], d2.sqrt(), r, los);
         }
-        d2 < r * r && los
+        los
     }
 }
 
@@ -373,7 +403,7 @@ impl Inventory {
     fn cap(w: &WeaponData, t: usize) -> i16 { w.ammo_cap.get(t).copied().unwrap_or(0) }
 
     /// The clip slot a weapon uses: its base's when `+0x05` is set and their ammo types agree.
-    fn clip_slot(w: &WeaponData, id: usize) -> usize {
+    pub fn clip_slot(w: &WeaponData, id: usize) -> usize {
         let base = w.base(id) as usize;
         if w.shares_base_clip(id) && w.ammo_type(id) == w.ammo_type(base) { base } else { id }
     }
@@ -663,9 +693,9 @@ mod tests {
         assert!(!Inventory::is_better_weapon(&w, 2, 2), "sister: the same id never re-switches (15 < 15 is false)");
     }
 
-    /// `Pickup_CreateFromSet` (0x18f1b0) with the live row 0 [L MPSettings+0x1B4 = 0,
-    /// PickupMatrix 0x2b9100]: set 9 → weapon 0x2c (the rocket launcher), kind 0, the BASE id,
-    /// `clip_size·2` = 8 rounds; sets 7/8/10/11 → 0x6/0x1e/0x6/0x10.
+    /// `Pickup_CreateFromSet` (0x18f1b0) with row 0 [M the byte-stride read; D PickupMatrix
+    /// 0x2b9100]: set 11 → weapon 0x2c (the rocket launcher), kind 0, the BASE id,
+    /// `clip_size·2` = 8 rounds; sets 7/8/9/10 → 0x6/0x1c/0x1e/0x18.
     #[test]
     fn set_kinds_resolve_through_the_pickup_matrix() {
         let mut w = table();
@@ -677,10 +707,13 @@ mod tests {
         let mut models = models;
         let rocket_model = w.model(0x2c as usize);
         models.insert(rocket_model, Model { centre: [0.0; 3], radius: 0.5 });
-        let p = Pickup::create_from_set([1.0, 2.0, 3.0], [0.0; 3], 9, &w, &models).expect("set 9 creates");
+        // Row 0's rocket is column 4 = kind 11 (the byte-stride table; the old every-other read put
+        // it at kind 9) [M 0x18f1b0:56].
+        let p = Pickup::create_from_set([1.0, 2.0, 3.0], [0.0; 3], 11, &w, &models).expect("set 11 creates");
         assert_eq!((p.kind, p.weapon, p.rounds), (kind::WEAPON, 0x2c, 8), "the rocket set: kind 0, base id, clip·2");
         assert_eq!(p.model, rocket_model, "the WEAPON's glist, not the placement's object");
         assert_eq!((p.state, p.spin), (1, false), "rests where placed, no spin");
+        assert_eq!((p.respawn, p.sound), (3, Some(SOUND)), "respawn 3 (30 s) and sound 0xF5 — the call's stack args");
         assert!(Pickup::create_from_set([0.0; 3], [0.0; 3], 12, &w, &models).is_none(), "sister: kind 12 is not a set");
     }
 

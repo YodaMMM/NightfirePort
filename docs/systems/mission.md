@@ -21,8 +21,10 @@ pub struct Objective { pub text: u32, pub fail: u32, pub hint: u32, pub channel:
 
 Objective record (0x18 bytes) fields, established from the readers [M 0x1827d8/0x182270/0x182630]:
 `text` (the bank-4 label, e.g. 0x04000000 "Breach the castle walls"), `fail` (a per-objective fail label,
-0xffffffff = none in every shipped record), `hint` (the long description — filled but never drawn by any
-ACTION.ELF code found), `channel` (the condition switch channel; 0 = the raw `switch_channels[0]`), `init`
+0xffffffff = none in every shipped record), `hint` (the long description — drawn by the pause
+OBJECTIVES tab's ✕ Hint box: `C_GCPAUSE_Handler` 0x204408 case 1 binds record+0x08 in the ok-only
+option box, 0x31d substituted for −1 [M 0x205bd0-0x205bdc → Menu_CreateOptionBox 0x202218;
+docs/systems/objective-hints.md]), `channel` (the condition switch channel; 0 = the raw `switch_channels[0]`), `init`
 (the value `Mission_Init` resets it to), `enable` (the announce gate channel; 0 = announce without it),
 `flags` (bit 1 = the channel being ON means FAIL).
 
@@ -85,7 +87,7 @@ interludes — the port logs and skips them), else 0x07000048 → `ResetMap_Leve
 
 | Event | The port's action |
 |---|---|
-| `Objective { label, is_new, ticks, failed }` | the objective banner queue (type 2); the text bound via `Lang::bind`, "Fail: %s" (0x170) when `failed`. The SFX play when the message first DISPLAYS, not when the event lands: 1532 at open (468 for "OBJECTIVE COMPLETE"), 469 sixty ticks later — new objectives only [M 0x19c310:148-164, 219-235; fix-objective-banner] |
+| `Objective { label, is_new, ticks, failed }` | the objective banner queue (type 2); the text bound via `Lang::bind`, "Fail: %s" (0x170) when `failed`. The SFX play from the pane, not when the event lands: case 2 (the open) only schedules the pair [M 0x19c310:148-164]; case 3 — the next pane frame — fires 1532 (468 for "OBJECTIVE COMPLETE") once the flash window (remaining + 60 > life), ONLY while `ScriptCam == 0` [M 0x19c310:219-229], and 469 sixty ticks into the display (the steady phase; new objectives only) [M 0x19c310:232-235]. A cut-scene starting inside a banner's flash window holds the chime at the hand-back (the timer frozen by the same viewer+0x2a gate [M 0x1b11d8:16-18]) [fix-objective-banner; objective-banner-timing] |
 | `FailLabel(u32)` | the mission banner's second line (`Lang::bind` at draw) |
 | `MissionComplete { next }` | the type-3 banner (240 ticks) |
 | `MissionFailed` | the type-3 banner (300 ticks) |
@@ -129,11 +131,17 @@ straight-line stand-ins).
 
 ## 7. Known gaps
 
-- The pause-screen objectives list (`Mission_ObjectiveState` 0x182630, `Mission_NumVisObjectives`
-  0x182540, drawn by `C_GCPAUSE_Handler` 0x204408) is not ported.
+- ~~The pause-screen objectives list (`Mission_ObjectiveState` 0x182630, `Mission_NumVisObjectives`
+  0x182540, drawn by `C_GCPAUSE_Handler` 0x204408) is not ported~~ → the data + flow are ported
+  (objective-hints: `Mission::num_vis_objectives`/`objective_state`, the `pause_objectives`/
+  `pause_objectives_sel`/`pause_hint` FrontEnd state and the ✕ flow — docs/systems/objective-hints.md);
+  the DRAWING of the ✕ hint box is the main agent's.
 - The fail/death 0x40000042 menu is a level restart; the red death fade is not drawn.
-- `DroneFunc_SetMissionFailReason` (0x13e560) is not wired to the drone paths that call it (the punch/
-  alarm reasons) — the channels 0x60/0x61 hooks are.
+- ~~`DroneFunc_SetMissionFailReason` (0x13e560) is not wired to the drone paths that call it~~ → wired
+  (fix-party-mission: the punch reasons 5/6 `punch_impact`, the death reasons `on_init_death`, the
+  PartyGirl 0xb; party07-start-rules: the tase reason 7 in `Drone::on_tase`, 0x1469b8:58-68 — the
+  taser family's own case-7 arms bypass it, and Stunned_Recover's forwarded case 7 re-runs it). The
+  channels 0x60/0x61 hooks are, and `mission_fail_reason` mirrors 0x13e560's label/channel switch.
 - A cold load of a mid-mission level leaves previous parts' objectives at their `.data` states (the
   game's saves carry them via LS_MakeMission — `MissionSave` is the port's hook for 210-fix-progress).
 - Ch-0 conditions read the raw `switch_channels[0]` (the game has no zero guard [M 0x1827d8:33-37]);
@@ -198,7 +206,7 @@ reload produces [M]:
   `Player_RamLoad`'s boost arg 1 [M 0x216618:21]. With it set, `Player_RamLoad` 0x1957a8:21-34
   floors the saved health — the float at **RamSave+0x5FC** (`RamSave._1532_4_`) — at the
   difficulty's `ContinueHealthBoost*`:
-  - **The pick** [M 0x1957a8:21-33]: the difficulty global **`GameState+0x40`** (0x2a37a8) —
+  - **The pick** [M 0x1957a8:21-33]: the difficulty global **`GameState+0x40`** (Ghidra DECIMAL 40 = hex +0x28 = 0x2a3790) —
     1 → `ContinueHealthBoostEasy` (0x30cc34), 2 → `ContinueHealthBoostMedium` (0x30cc38),
     anything else (0/3/4) → `ContinueHealthBoostHard` (0x30cc3c). All three are **50.0** on the
     retail build [L ee_start_05.bin 0x30cc34..3c].
@@ -257,7 +265,7 @@ triggers none of it.
 
 ### Known gaps (updated)
 
-- The pause-screen objectives list (as before) is not ported.
+- ~~The pause-screen objectives list (as before) is not ported~~ → ported (objective-hints, above).
 - ~~The fail/death 0x40000042 menu is a level restart; the red death fade is not drawn~~ → the menu
   logic + API are ported (§8); the menu DRAWING is 180-fix-menus'; the red fade drawing (pane 12's
   growing sprites, `death.pane_on`/`death.ticks`/`death.covered`) is render-side, not drawn yet.

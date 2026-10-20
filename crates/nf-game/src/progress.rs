@@ -258,22 +258,77 @@ pub static REWARDS_TABLE: [RewardEntry; 12] = [
     reward(0x0700_001B, [(0, 0, 0x25), (37, 0, 0x2003d), (61, 2, 0x40009), (9, 4, 0x10037), (55, 1, 0)]),
 ];
 
+/// The reward-text half of each `RewardsTable` entry — what `Menu_GetLevelBonuses` 0x1ffe98:21-31
+/// reads for the bonus page 0x40000038: per tier N (1..4) the entry's label at +0x18+4·N and the
+/// texture hash at +0x2c+4·N [L ee_start_05.bin 0x2bc920; the labels are `Txt_BindLabel` ids
+/// (`bank<<24|index` [M 0x1cad60:13]), the textures the 0x03xxxxxx sprite hashes the handler
+/// forwards with msg 0x24 to control 0x100001cf [M 0x209670:23]]. Indexed like
+/// [`REWARDS_TABLE`] (the same table order); `[tier - 1]` = (label, texture).
+pub static REWARD_TEXT: [[(u32, u32); 4]; 12] = [
+    [(0x2d6, 0x0300_012c), (0x2ec, 0x0300_0111), (0x0100_01f9, 0x0300_0102), (0x2f2, 0x0300_0118)], // 0x09000001
+    [(0x2d2, 0x0300_0134), (0x2e9, 0x0300_0116), (0x3a5, 0x0300_00f3), (0x2f1, 0x0300_0108)], // 0x07000005
+    [(0x2d3, 0x0300_0131), (0x2de, 0x0300_00a1), (0x2df, 0x0300_00e2), (0x0100_01fc, 0x0300_0196)], // 0x09000005
+    [(0x2d4, 0x0300_0133), (0x2ea, 0x0300_011a), (0x3a6, 0x0300_00df), (0x2ee, 0x0300_0113)], // 0x09000006
+    [(0x2d5, 0x0300_012f), (0x2e0, 0x0300_00a4), (0x3a7, 0x0300_00fa), (0x2ed, 0x0300_011d)], // 0x07000001
+    [(0x2db, 0x0300_012e), (0x2e1, 0x0300_00a3), (0x3a5, 0x0300_00f3), (0x2f0, 0x0300_010b)], // 0x07000009
+    [(0x2d7, 0x0300_0130), (0x3a3, 0x0300_011c), (0x3a8, 0x0300_00e0), (0x2e8, 0x0300_0110)], // 0x0700000c
+    [(0x2d8, 0x0300_012a), (0x2e3, 0x0300_009d), (0x3a5, 0x0300_00f3), (0x3a2, 0x0300_0148)], // 0x07000011
+    [(0x2d9, 0x0300_0198), (0x3a4, 0x0300_0114), (0x3a9, 0x0300_00e1), (0x2ef, 0x0300_010f)], // 0x09000002
+    [(0x2da, 0x0300_0132), (0x2e5, 0x0300_009e), (0x3aa, 0x0300_00e6), (0x3a1, 0x0300_010a)], // 0x09000003
+    [(0x2dc, 0x0300_012d), (0x2e6, 0x0300_00c4), (0x3ab, 0x0300_00c4), (0x2eb, 0x0300_0117)], // 0x07000014
+    [(0x0100_01ff, 0x0300_012b), (0x2e7, 0x0300_00a0), (0x3a7, 0x0300_00fa), (0x0100_01fb, 0x0300_0194)], // 0x0700001b
+];
+
 /// `ScoringTableDifMul` 0x2bc910 ([L]: [0.0, 1.0, 2.0]) — the difficulty bonus multiplier
 /// (difficulty 1 → [0], 2 → [1], anything else → [2] [M `PlrStat_GetScore` 0x1984b0:294-300]).
 pub static SCORING_DIF_MUL: [f32; 3] = [0.0, 1.0, 2.0];
 
-/// A kind-4 descriptor's group lookup ([M 0x199210's kind-4 arm]): the entries whose FIRST
-/// descriptor shares the packed {bit, kind} u32 word form the group; this entry's effective bit is
-/// `bit + rank` within the group order. Returns `(bit, group_len, rank)`.
-fn gold_group(entry_idx: usize) -> (u16, usize, usize) {
-    let word = REWARDS_TABLE[entry_idx].desc[0].bit as u32 | ((REWARDS_TABLE[entry_idx].desc[0].kind as u32) << 16);
+/// A kind-4 descriptor's group lookup ([M `PlrStarts_ProcessRewardCounter` 0x199210:39-62 — the
+/// kind-4 arm scans every entry's descriptors 1..4 (`0x2bc924 + entry·0x40 + 4..0x14`) for the
+/// target descriptor's own packed {bit, kind} u32 word; the effective bit is `bit + rank`, the
+/// ordinal of the match at the scan position, and the group's set-bit count is the reward's
+/// "level"). `counter` is the descriptor slot being read (1..=4; slot 0 is never scanned — the
+/// game's counters run 1..5 exclusive). Returns `(base bit, group_len, rank)`.
+fn gold_group(entry_idx: usize, counter: usize) -> (u16, usize, usize) {
+    let d = REWARDS_TABLE[entry_idx].desc[counter];
+    let word = d.bit as u32 | ((d.kind as u32) << 16);
     let mut rank = 0;
     let mut len = 0;
     for (i, e) in REWARDS_TABLE.iter().enumerate() {
-        let w = e.desc[0].bit as u32 | ((e.desc[0].kind as u32) << 16);
-        if w == word { len += 1; if i < entry_idx { rank += 1; } }
+        for k in 1..5 {
+            let d2 = e.desc[k];
+            let w = d2.bit as u32 | ((d2.kind as u32) << 16);
+            if w == word {
+                len += 1;
+                if i < entry_idx || (i == entry_idx && k < counter) { rank += 1; }
+            }
+        }
     }
-    (REWARDS_TABLE[entry_idx].desc[0].bit + rank as u16, len, rank)
+    (d.bit + rank as u16, len, rank)
+}
+
+/// The kind-4 group's widened bits in scan order (entry-major, counter 1..4 minor) — the bits the
+/// game tests for the group's set count [M 0x199210:53-55 `1 << (bit + iVar9)`].
+fn gold_group_bits(entry_idx: usize, counter: usize) -> Vec<u16> {
+    let d = REWARDS_TABLE[entry_idx].desc[counter];
+    let word = d.bit as u32 | ((d.kind as u32) << 16);
+    let mut out = Vec::new();
+    for e in REWARDS_TABLE.iter() {
+        for k in 1..5 {
+            let d2 = e.desc[k];
+            if d2.bit as u32 | ((d2.kind as u32) << 16) == word { out.push(d.bit + out.len() as u16); }
+        }
+    }
+    out
+}
+
+/// The game's ceil with the 1e-5 epsilon: `(int)x`, then +1 when the dropped fraction is at
+/// least 1e-5 [M `PlrStat_GetScore` 0x1984b0 — the bump appears on every raw-score store
+/// (:181-185, :213-218, :155-160)]. Float noise below 1e-5 does not bump.
+fn ceil_1e5(x: f32) -> f32 {
+    let t = x as i32; // trunc toward zero; the game's scores are non-negative here
+    let tf = t as f32;
+    if x - tf >= 1e-5 { (t + 1) as f32 } else { tf }
 }
 
 /// The outcome of one `PlrStat_GetScore` commit — what the results screen and the save show.
@@ -292,6 +347,50 @@ pub struct Scored {
     /// The medal the results screen awards (P_NFRESULTS 0x208e78:119-146: 1 bronze .. 4 platinum,
     /// 5 = the "target" none).
     pub medal: u32,
+}
+
+/// The level-end score hand-off (`fix-scores-handoff`, the G-045 remainder): the rows and totals
+/// the Sim produces when a level exits — the plain data the end-of-level results screen reads.
+/// No UI; the results page (`menu.rs results_enter`) re-runs the game's own scoring on entry.
+///
+/// The game's results path is `P_NFRESULTS_Handler` 0x208e78:77 `PlrStat_GetScore(0)` — commit
+/// mode [M 0x1984b0:301-315] — with `Mission_Status() == 6` [M 0x182c60:85-122 sets state 6
+/// before the front end loads]; the scored entry then carries what the page reads [M :80-146].
+/// The same scoring runs at the DRIVING→ACTION hand-off (`Boot_LoadPTPData` 0x1c8560's
+/// `PlrStat_GetScore(0)` before `ResetMap_LevelToLoad(0x7000048)`). This production runs
+/// READ-mode (commit = false): the rows/totals are exactly what the page's entry would hold,
+/// while `best`/`last` stay the game's — a mid-mission part exit (07000005's truck ride into
+/// 07000006) must not stamp them; only the results page commits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FinishedLevel {
+    /// The base map hash the rows were scored under (`Mission_BaseMapHCode`'s port,
+    /// `mission.base_map`).
+    pub base_map: u32,
+    /// The results-path mission status the production runs under (6 — the game's step 6 keeps
+    /// the scores only there [M 0x1984b0:318-333]).
+    pub mission_status: u32,
+    /// The entry's 9 rows after the build: count/target the static design data, value the run's
+    /// stat, ratio (+0xC) and raw (+0x10) the formula's output [M 0x1984b0:100-293].
+    pub rows: [ScoringRow; 9],
+    /// `Σ raw` [M entry +0x2C].
+    pub base: u32,
+    /// The difficulty multiplier applied [M entry +0x24; `ScoringTableDifMul` 0x2bc910].
+    pub dif: u32,
+    /// `base × dif` [M entry +0x28].
+    pub bonus: u32,
+    /// `base + bonus` — the score the results page prints [M 0x208e78:96-98 reads entry +0x34].
+    pub last: u32,
+    /// The entry's best after the production (unchanged — the read-mode call; the results page's
+    /// own `GetScore(0)` commits [M 0x1984b0:301-315]).
+    pub best: u32,
+    /// The medal the page's compare chain would award on `last` (1 bronze .. 4 platinum, 5 none)
+    /// [M 0x208e78:98-146].
+    pub medal: u32,
+    /// The mission tally snapshot the rows were produced from (`PlrMissionStats[0]` as of the
+    /// exit tick) — "the stats the run produced".
+    pub stats: PlrMissionStats,
+    /// The difficulty the production ran with (GameState+40 DECIMAL = +0x28, 0x2a3790's port).
+    pub difficulty: u32,
 }
 
 /// The whole progress layer: the port's `PlrMissionStats` + `BondMoments` + `ScoringTable`
@@ -338,25 +437,33 @@ pub struct Progress {
     /// page 0x40000038 while it stands [M 0x208e78:49-52]. Cleared at every SetLevelBonus entry
     /// [M :56].
     pub new_reward: bool,
+    /// The last level-end production (`finish_level`) — the score rows the game would hand to
+    /// the results screen, as plain data (fix-scores-handoff). Rebuilt on every exit tick while
+    /// the level-exit latch stands; consumed by tests/the menus, never committed back.
+    pub finished: Option<FinishedLevel>,
 }
 
 impl Default for Progress {
     /// A fresh profile: everything zero except the difficulty's boot default 2
-    /// [M bootup 0x1c7e78:25]. (`Menu_SetNightfireStatus` 0x2023a0 defaults the loaded status to
-    /// 0x3 when the save holds 0 — the LOAD path's default, applied in `load`, not here.)
+    /// [M bootup 0x1c7e78:25] and the unlock word's boot state 0x3 — the shipped sp_level
+    /// .data bytes hold rows 0 and 1's +0x10 = 1, rows 2-11 = 0 [D ACTION.ELF .data file
+    /// offset 0x1d91e0, byte-dumped; the same two rows the game's fresh-codename template
+    /// writes via Menu_SetNightfireStatus 0x2023a0's 0x3 default]. (The LOAD path's own
+    /// 0 → 0x3 default stays in `set_nightfire_status`.)
     fn default() -> Self {
         Progress {
             stats: [PlrMissionStats::default(); 8],
             bond_moments: [0; 10],
             table: SCORING_TABLE,
             bonus: [0; 21],
-            nightfire_status: 0,
+            nightfire_status: 0x3,
             game_complete: false,
             // Bootup 0x1c7e78:86 sets `NewScoresRef = &DAT_0031ca38` (the zeroed PTPDATA tail);
             // the NULL GetScore abort is dead code in the shipped game.
             new_scores: Some([[0; 3]; 9]),
             difficulty: 2,
             new_reward: false,
+            finished: None,
         }
     }
 }
@@ -426,9 +533,12 @@ impl Progress {
             rows[2].value = s.disabled;
             rows[3].value = s.surrendered;
             rows[4].value = s.detected;
+            // Accuracy: the value STARTS at the par (count) and only a shot tally rescales it —
+            // no shots → the full 100% [M 0x1984b0:74-78: row+0x8 = row+0x0, then the fired != 0
+            // branch overwrites with hit × count / fired].
             rows[5].value = if s.shots_fired > 0 {
                 (rows[5].count as u64 * s.shots_hit_enemy as u64 / s.shots_fired as u64) as u32
-            } else { 0 };
+            } else { rows[5].count };
             rows[6].value = s.health as u32; // fptoui [M 0x1984b0 row 6]
             if ms == 3 { rows[6].value = 0; } // the failed-mission zero [M 0x1984b0]
             rows[7].value = s.elapsed;
@@ -440,33 +550,46 @@ impl Progress {
             let r = &mut rows[i];
             if r.count == 0 { continue; }
             match i {
-                // Row 4, the undetected row: over par → the penalty ramp.
-                4 if r.count < r.value => {
-                    let pen = if self.table[idx].penalty == 0.0 { 0.03 } else { self.table[idx].penalty };
-                    let f = (1.0 - (r.value - r.count) as f32 * pen).max(0.0);
-                    r.raw = f * r.target as f32;
-                    r.ratio = f.clamp(0.0, 1.0);
-                }
-                // Row 7, the time row: value in 1/100 s, count in seconds.
-                7 => {
-                    let t = r.value as f32 / 100.0;
-                    if (r.count as f32) < t {
-                        r.raw = r.target as f32 * r.count as f32 / t;
-                        r.ratio = (r.count as f32 / t).clamp(0.0, 1.0);
+                // Row 4, the undetected row. Over par → the penalty ramp, CEILED with the game's
+                // 1e-5 epsilon [M 0x1984b0:213-218]. Within par → the FULL max, ratio 1.0
+                // [M 0x1984b0:225-233 — the else store of row+0x4 into row+0x10, then the 1.0
+                // ratio at LAB_00198bdc]. (The old fall-through into the proportional arm
+                // awarded 0 for a clean run — the capture's 100% / 25,000 is the disproof.)
+                4 => {
+                    if r.count < r.value {
+                        let pen = if self.table[idx].penalty == 0.0 { 0.03 } else { self.table[idx].penalty };
+                        let f = (1.0 - (r.value - r.count) as f32 * pen).max(0.0);
+                        r.raw = ceil_1e5(f * r.target as f32);
+                        r.ratio = f.clamp(0.0, 1.0);
                     } else {
                         r.raw = r.target as f32;
                         r.ratio = 1.0;
                     }
+                }
+                // Row 7, the time row: value in 1/100 s, count in seconds. BOTH of the game's
+                // branches are the same expression — raw = ceil₁ₑ₋₅(max × par / max(elapsed_s, 1))
+                // — under par the score RISES above max [M 0x1984b0:118-170: the under-par arm
+                // computes max × par and divides by max(elapsed, 1); the over-par arm divides max
+                // by elapsed/par]. The PCSX2 capture's 01:19 / 09:00 → 170,887 =
+                // ceil(25000 × 540 / 79) is the proof (docs/systems/mission-stats.md). The ratio
+                // is the game's shared block [M :234-253]: round½↑(raw/max × 100) × 0.01 clamped.
+                7 => {
+                    let t = (r.value as f32 / 100.0).max(1.0);
+                    r.raw = ceil_1e5(r.target as f32 * r.count as f32 / t);
+                    r.ratio = if r.target != 0 {
+                        ((r.raw / r.target as f32 * 100.0).round() * 0.01).clamp(0.0, 1.0)
+                    } else { 0.0 };
                 }
                 // Row 8, the bonus pickups: all-or-nothing.
                 8 => {
                     if r.count <= r.value { r.raw = r.target as f32; r.ratio = 1.0; }
                     else { r.raw = 0.0; r.ratio = 0.0; }
                 }
-                // The normal rows: raw = target · min(count, value) / count.
+                // The normal rows: raw = ceil₁ₑ₋₅(target · min(count, value) / count) [M
+                // 0x1984b0:171-185 — (int)f then the 1e-05 bump].
                 _ => {
                     let m = r.count.min(r.value);
-                    r.raw = r.target as f32 * m as f32 / r.count as f32;
+                    r.raw = ceil_1e5(r.target as f32 * m as f32 / r.count as f32);
                     r.ratio = (((m as f32 / r.count as f32) * 100.0).round() * 0.01).clamp(0.0, 1.0);
                 }
             }
@@ -495,21 +618,68 @@ impl Progress {
                 e.best = e.best.max(total);
             }
         }
-        // Step 6 [M 0x1984b0:316-333]: scores only stick on the results path (Mission_Status 6) —
-        // everything from step 3 except entry.best is zeroed otherwise, and DoneBetter clears.
+        // Step 6 [M 0x1984b0:318-333]: scores only stick on the results path (Mission_Status 6).
+        // The game's non-6 wipe zeroes ONLY the per-row points (+0x10 — the 0x14-stride loop at
+        // :322-327 stores just that offset) and the entry's dif/bonus/subtotal/total
+        // (puVar7[9]/[10]/[0xb]/[0xd]) plus DoneBetter. The tallies (+0x08) and ratios (+0x0c)
+        // SURVIVE — the handler still shows them on a non-6 status (the current/ratio reads at
+        // 0x209938:70/84/101), which is why the page shows 1, "01:19" and the pct rows.
         let e = &mut self.table[idx];
         if ms != 6 {
-            for r in e.rows.iter_mut() { r.value = 0; r.ratio = 0.0; r.raw = 0.0; }
-            e.base = 0;
-            e.bonus = 0;
-            e.last = 0;
-            e.dif = 0;
-            done_better = false;
+            for r in e.rows.iter_mut() { r.raw = 0.0; } // only row+0x10 [M :323-327]
+            e.dif = 0; // puVar7[9] +0x24 [M :328]
+            e.bonus = 0; // puVar7[10] +0x28 [M :329]
+            e.base = 0; // puVar7[0xb] +0x2c [M :330]
+            e.last = 0; // puVar7[0xd] +0x34 [M :331]
+            done_better = false; // DoneBetter [M :332]
         }
         let th = SCORING_TABLE[idx].thresholds;
         let medal = if e.last >= th[3] { 4 } else if e.last >= th[2] { 3 }
             else if e.last >= th[1] { 2 } else if e.last >= th[0] { 1 } else { 5 };
         Some(Scored { base: e.base, bonus: e.bonus, last: e.last, best: e.best, done_better, medal })
+    }
+
+    /// The level-end hand-off (`fix-scores-handoff`): at a level exit the Sim produces the rows
+    /// the game would hand to the end-of-level results screen, as plain data (no UI). The
+    /// game's scoring moment is the results page's `PlrStat_GetScore(0)` with
+    /// `Mission_Status() == 6` [M P_NFRESULTS 0x208e78:77-146; the state-6 gate 0x182c60:85-122;
+    /// the same call at the DRIVING→ACTION hand-off, `Boot_LoadPTPData` 0x1c8560], so the
+    /// production runs the same formula at status 6 — but READ-mode (commit = false): the entry's
+    /// `best`/`last` stay the game's (a mid-mission part exit must not stamp them; the results
+    /// page's own commit, already ported in `menu.rs results_enter`, updates them). Returns the
+    /// produced `FinishedLevel` (None when the hash is not a `ScoringTable` entry) and mirrors it
+    /// on `Progress::finished` — rebuilt on every exit tick while the latch stands (the same
+    /// inputs score the same rows; the last tick's data is the final hand-off).
+    pub fn finish_level(&mut self, base_map: u32, difficulty: u32) -> Option<FinishedLevel> {
+        // The results-path status: step 6 keeps the scores only at Mission_Status 6
+        // [M 0x1984b0:318-333]; the commit flag false leaves the entry's best/last alone
+        // [M :301-315 — the param_1 != 0 arm].
+        self.get_score(base_map, 6, difficulty, false)?;
+        let idx = self.table.iter().position(|e| e.hash == base_map)?;
+        let e = self.table[idx];
+        // The page reads `last` (entry +0x34) off the committed entry; the read-mode entry
+        // carries this run's totals in base/bonus [M :294-300 — the unconditional stores], so
+        // the run's total (the page's would-be +0x34) is base + bonus.
+        let total = e.base.wrapping_add(e.bonus);
+        // The medal compare chain on the run's total [M 0x208e78:98-146 — the +0x10/+0xc/+8/+4
+        // threshold cascade].
+        let medal = if total >= e.thresholds[3] { 4 } else if total >= e.thresholds[2] { 3 }
+            else if total >= e.thresholds[1] { 2 } else if total >= e.thresholds[0] { 1 } else { 5 };
+        let out = FinishedLevel {
+            base_map,
+            mission_status: 6,
+            rows: e.rows,
+            base: e.base,
+            dif: e.dif,
+            bonus: e.bonus,
+            last: total,
+            best: e.best,
+            medal,
+            stats: self.stats[0],
+            difficulty,
+        };
+        self.finished = Some(out);
+        Some(out)
     }
 
     /// `PlrStarts_ProcessRewardCounter` 0x199210: the counter c (1 bronze .. 4 platinum) of
@@ -521,7 +691,7 @@ impl Progress {
         let Some(idx) = REWARDS_TABLE.iter().position(|e| e.hash == hash) else { return false };
         if counter == 0 || counter > 5 { return false; }
         let d = REWARDS_TABLE[idx].desc[counter as usize];
-        let bit = if d.kind == 4 { gold_group(idx).0 } else { d.bit };
+        let bit = if d.kind == 4 { gold_group(idx, counter as usize).0 } else { d.bit };
         if bit >= 0x3F { return false; }
         let m = &mut self.bonus[slot];
         if set { *m |= 1u64 << bit; }
@@ -534,7 +704,7 @@ impl Progress {
         let Some(idx) = REWARDS_TABLE.iter().position(|e| e.hash == hash) else { return false };
         if kind > 5 { return false; }
         let d = REWARDS_TABLE[idx].desc[kind as usize];
-        let bit = if d.kind == 4 { gold_group(idx).0 } else { d.bit };
+        let bit = if d.kind == 4 { gold_group(idx, kind as usize).0 } else { d.bit };
         if bit >= 0x3F { return false; }
         self.bonus[slot] & (1u64 << bit) != 0
     }
@@ -563,6 +733,30 @@ impl Progress {
                 self.nightfire_status |= 1 << (i + 1);
             }
         }
+    }
+
+    /// `Menu_GetObjectUpgradeLevel` 0x2025f8: the upgrade level (0..) of reward object `object`
+    /// in `bonus[slot]`. The game walks the campaign's 12 levels in order, counters 1..4
+    /// [M :60-84 — `sp_level+0xc` entries, `PlrStarts_ProcessRewardCounter(&bonus+slot, level,
+    /// counter, 0, &info)`], and on the FIRST kind-4 descriptor whose bit equals `object` and
+    /// whose (widened) bit is set returns the group's set-bit count [M :76-78 — `info`'s kind 4,
+    /// `uStack_8c == param_1`, returns `uStack_88`]. `object` ≥ 0x3f returns 0 [M :57]. The
+    /// Dossier's Gadgets/Weapons pages read it per row (object 0 = the watch upgrade, whose
+    /// 3-member gold group spans bits 0..2 → levels 0..3 [M P_DSWEAPONS 0x217038:11-33]).
+    pub fn object_upgrade_level(&self, object: u32, slot: usize) -> u32 {
+        if object >= 0x3f { return 0; }
+        for (ei, entry) in REWARDS_TABLE.iter().enumerate() {
+            for counter in 1..5 {
+                let d = entry.desc[counter];
+                if d.kind != 4 || d.bit as u32 != object { continue; }
+                let (_, _, rank) = gold_group(ei, counter);
+                let bits = gold_group_bits(ei, counter);
+                let set = |b: u16| self.bonus[slot] & (1u64 << b) != 0;
+                if !set(d.bit + rank as u16) { continue; }
+                return bits.iter().filter(|&&b| set(b)).count() as u32;
+            }
+        }
+        0
     }
 
     /// `Menu_GetNightfireStatus` 0x202360's packing: bit i of the 12 `sp_level[i]+0x10` flags.
@@ -764,16 +958,17 @@ mod tests {
         s.elapsed = 54_000;          // row 7: 540.00 s == the 540 s par → full target
         s.bonus_pickups = 7;         // row 8: 7/7
         let sc = p.get_score(0x0700_0005, 6, 1, true).expect("the 0x07 entry scores");
-        // Row raws: 50000·2/2 = 50000; 50000·30/30 = 50000; accuracy 50000·80/100 = 40000;
-        // health 50000·46/100 = 23000; time full 25000; bonus 150000.
-        // Σ = 50000+50000+40000+23000+25000+150000 = 338000.
-        assert_eq!(sc.base, 338_000, "Σ raw");
+        // Row raws: 50000·2/2 = 50000; 50000·30/30 = 50000; stealth 0 detections ≤ 30 → the FULL
+        // 25000 [M 0x1984b0:225-233]; accuracy 50000·80/100 = 40000; health 50000·46/100 = 23000;
+        // time 25000·540/540 = 25000 [M :118-170]; bonus 150000.
+        // Σ = 50000+50000+25000+40000+23000+25000+150000 = 363000.
+        assert_eq!(sc.base, 363_000, "Σ raw");
         // Difficulty 1 → multiplier 0.0 → bonus 0, last = base.
         assert_eq!(sc.bonus, 0);
-        assert_eq!(sc.last, 338_000);
-        assert!(sc.done_better, "338000 ≥ the fresh best 0 [M 0x1984b0:303-307]");
-        assert_eq!(sc.best, 338_000);
-        // Medal vs [50000, 125000, 200000, 1000000]: 338000 ≥ 200000 → gold 3.
+        assert_eq!(sc.last, 363_000);
+        assert!(sc.done_better, "363000 ≥ the fresh best 0 [M 0x1984b0:303-307]");
+        assert_eq!(sc.best, 363_000);
+        // Medal vs [50000, 125000, 200000, 1000000]: 363000 ≥ 200000 → gold 3.
         assert_eq!(sc.medal, 3);
         // Sister: a read (the game's param_1 != 0 — the pause screen) leaves last/best alone.
         let before = (p.table[1].last, p.table[1].best);
@@ -784,16 +979,18 @@ mod tests {
         let mut p2 = Progress::default();
         std::mem::swap(p2.stats_mut(), p.stats_mut());
         let sc2 = p2.get_score(0x0700_0005, 6, 3, true).unwrap();
-        assert_eq!(sc2.base, 338_000);
-        assert_eq!(sc2.bonus, 676_000, "bonus = base × 2.0 [M 0x1984b0 step 4]");
-        assert_eq!(sc2.last, 1_014_000, "last = base + bonus");
-        // Sister: status != 6 zeroes the stickable fields but keeps best (step 6 zeroes everything
-        // from step 3 EXCEPT entry.best [M 0x1984b0:316-333]). A fresh tally still earns the time
-        // row's full target (elapsed 0 ≤ the 540 s par → 25000), so best = max(0, 25000).
+        assert_eq!(sc2.base, 363_000);
+        assert_eq!(sc2.bonus, 726_000, "bonus = base × 2.0 [M 0x1984b0 step 4]");
+        assert_eq!(sc2.last, 1_089_000, "last = base + bonus");
+        // Sister: status != 6 zeroes the stickable fields but keeps best (step 6 zeroes the row
+        // points and the dif/bonus/subtotal/total, NOT the tallies/ratios [M 0x1984b0:318-333]).
+        // A fresh tally still scores: stealth
+        // 25000 (0 detections ≤ 30) + accuracy 50000 (no shots → the par copies) + the time row's
+        // max × par / max(0, 1) = 25000·540 = 13,500,000 [M :118-170 — the max(elapsed, 1) guard].
         let mut p3 = Progress::default();
         let sc3 = p3.get_score(0x0700_0005, 1, 1, true).unwrap();
         assert_eq!(sc3.last, 0, "not the results path — last zeroed");
-        assert_eq!(p3.table[1].best, 25_000, "best kept");
+        assert_eq!(p3.table[1].best, 13_575_000, "best kept (the commit precedes the zeroing)");
         assert!(!sc3.done_better, "DoneBetter clears off the results path [M 0x1984b0:332]");
         // The 0x09 path: NewScoresRef's [value, count, target] rows, row 7's value ×100
         // [M 0x1984b0:50-56] — the PTP stand-in supplies the driving tallies.
@@ -864,11 +1061,11 @@ mod tests {
         let mut p = Progress::default();
         let s = p.stats_mut();
         s.dispatched = 30; // row 1: 30/30 → the full 50000
-        s.elapsed = 54_000; // row 7: 540.00 s == the 540 s par → the full 25000
+        s.elapsed = 54_000; // row 7: 540.00 s == the 540 s par → 25000·540/540 = 25000
         let sc = p.get_score(0x0700_0005, 6, 2, true).expect("the 0x07 map scores from PlrMissionStats");
-        assert_eq!(sc.base, 75_000, "dispatched 50000 + time 25000");
-        assert_eq!(sc.last, 150_000, "difficulty 2 → ×1.0 → last = base + bonus");
-        assert_eq!(sc.medal, 2, "150000 ≥ the silver 125000, < the gold 200000");
+        assert_eq!(sc.base, 150_000, "dispatched 50000 + stealth 25000 (0 ≤ 30) + accuracy 50000 (no shots [M :74-78]) + time 25000");
+        assert_eq!(sc.last, 300_000, "difficulty 2 → ×1.0 → last = base + bonus");
+        assert_eq!(sc.medal, 3, "300000 ≥ the gold 200000, < the platinum 1000000");
         // Sister: the 0x09 maps keep the NewScoresRef row source — the bootup-set zeroed buffer
         // [M 0x1c7e78:86; L ee_start_05] scores nothing (every row's count is 0), no abort.
         let sc = p.get_score(0x0900_0005, 6, 2, true).expect("the 0x09 map reads the zeroed buffer");
@@ -891,5 +1088,72 @@ mod tests {
         p2.set_level_bonus(0x0700_0005, 2, 0);
         assert!(p2.has_medal(0x0700_0005, 1, 0) && p2.has_medal(0x0700_0005, 2, 0));
         assert!(!p2.has_medal(0x0700_0005, 3, 0), "the gold counter is above the silver medal");
+    }
+
+    /// The level-end hand-off (fix-scores-handoff): `finish_level` produces the rows the results
+    /// screen would read, as plain data, and a run with no kills gives the zero rows (the task's
+    /// sister). Read-mode: the entry's best/last are untouched (the commit belongs to the
+    /// results page's own `GetScore(0)` [M 0x208e78:77, 0x1984b0:301-315]).
+    #[test]
+    fn finish_level_handoff_no_kills_zero_rows() {
+        let mut p = Progress::default();
+        // A run with no kills: nothing logged. The kill rows (1 dispatched / 2 disabled /
+        // 3 surrendered) and the bonus row (8) score zero. No shots → the accuracy par copies
+        // (100/100 → the full 50000 [M :74-78]); row 4 scores the FULL max (0 detections ≤ 30
+        // [M :225-233]); the time row scores max × par / max(0, 1) = 13,500,000 [M :118-170].
+        let f = p.finish_level(0x0700_0005, 2).expect("07000005 is a ScoringTable entry");
+        assert_eq!(f.base_map, 0x0700_0005);
+        assert_eq!(f.mission_status, 6, "the production runs the results-path status");
+        assert_eq!(f.stats, *p.stats(), "the snapshot is the run's tally");
+        for i in [1usize, 2, 3, 8] {
+            assert_eq!(f.rows[i].value, 0, "row {i}: the empty tally's stat");
+            assert_eq!(f.rows[i].raw, 0.0, "row {i} scores zero on a no-kill run");
+        }
+        assert_eq!(f.rows[5].value, 100, "no shots → the accuracy par copies [M 0x1984b0:74-78]");
+        assert_eq!(f.rows[5].raw, 50_000.0);
+        assert_eq!(f.rows[4].value, 0, "row 4: no detections");
+        assert_eq!(f.rows[4].raw, 25_000.0, "within par → the FULL max [M 0x1984b0:225-233]");
+        assert_eq!(f.rows[4].ratio, 1.0);
+        // The static design data survives in the hand-off rows.
+        assert_eq!(f.rows[1].count, SCORING_TABLE[1].rows[1].count);
+        assert_eq!(f.rows[1].target, SCORING_TABLE[1].rows[1].target);
+        assert_eq!(f.rows[7].raw, 25_000.0 * 540.0, "elapsed 0 → max × par / max(0, 1) [M :118-170]");
+        // base = Σ raw = 25000 + 50000 + 13500000; difficulty 2 → ×1.0 → last = base + bonus.
+        assert_eq!(f.base, 13_575_000);
+        assert_eq!(f.dif, 1);
+        assert_eq!(f.bonus, 13_575_000);
+        assert_eq!(f.last, 27_150_000);
+        assert_eq!(f.medal, 4, "27150000 ≥ 07000005's platinum 1000000");
+        assert_eq!(f.best, 0, "the read-mode production commits nothing");
+        assert_eq!((p.table[1].last, p.table[1].best), (0, 0), "the entry's last/best stay the game's");
+        assert_eq!(p.finished, Some(f), "the hand-off mirrors on Progress::finished");
+        // Sister: re-running while the latch stands is inert (the same inputs, the same rows).
+        assert_eq!(p.finish_level(0x0700_0005, 2), Some(f));
+        // Sister: an unknown hash produces nothing.
+        assert_eq!(p.finish_level(0x0700_0048, 2), None, "the front end is not a table entry");
+    }
+
+    /// The hand-off's formula on a non-trivial tally: a kill run's dispatched row scores
+    /// `target · min(count, value) / count` [M 0x1984b0:174-191], and the snapshot carries the
+    /// stats the rows were produced from.
+    #[test]
+    fn finish_level_handoff_kill_run() {
+        let mut p = Progress::default();
+        let ms = 1; // the tally gate's playing status
+        for _ in 0..7 { p.log_enemy_dispatched(ms); }
+        p.log_health(ms, 80.0);
+        p.log_update_elapsed(12_000); // 120.00 s of the 540 s par
+        let f = p.finish_level(0x0700_0005, 3).expect("scores");
+        assert_eq!(f.stats.dispatched, 7);
+        assert_eq!(f.rows[1].value, 7);
+        let m = f.rows[1].count.min(7);
+        let x = f.rows[1].target as f32 * m as f32 / f.rows[1].count as f32;
+        let ti = x as i32;
+        let want = if x - ti as f32 >= 1e-5 { (ti + 1) as f32 } else { ti as f32 };
+        assert_eq!(f.rows[1].raw, want,
+            "the generic row's raw = ceil₁ₑ₋₅(target · min(count, value) / count) [M 0x1984b0:181-185]");
+        assert_eq!(f.rows[6].value, 80, "the health snapshot's fptoui [M 0x1984b0:80-81]");
+        // Difficulty 3 → the multiplier 2.0 [M 0x1984b0:294-297].
+        assert_eq!(f.dif, 2, "difficulty 3 doubles");
     }
 }

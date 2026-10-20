@@ -135,10 +135,17 @@ pub struct SmokeCloud {
     pub ticks: i16,
 }
 
+/// The smoke grenade's cloud mesh (`Occlude_Create(pos, 1200, 1)` 0x17ea80's
+/// `hashtable_set_object_to_entity_gfx(obj, 0x2000273)` [M]; kinds 0/2/3 are 0x200026b/0x2000274/
+/// 0x2000275 and never spawn from the grenades). Its glist bounds in `Data.models` are the cloud's
+/// collision sphere — `Drone_CollisionHandler`'s per-tick hit list reaches the cloud and
+/// `NDrone2_DealWithObjHit` case 0x2A turns the touch into msg 0x17 [M disasm 0x1405a8].
+pub const SMOKE_CLOUD_MESH: u32 = 0x0200_0273;
+
 /// `WldGravity` (VECTOR at 0x2d8890): `(0, −9.8, 0)`. [L] docs/systems/pickups.md, player.md.
-const WLD_GRAVITY: V3 = [0.0, -9.8, 0.0];
+pub(crate) const WLD_GRAVITY: V3 = [0.0, -9.8, 0.0];
 /// `REC_FRAME_RATE` (0x30d0cc) = 1/60.
-const REC_FRAME_RATE: f32 = 1.0 / 60.0;
+pub(crate) const REC_FRAME_RATE: f32 = 1.0 / 60.0;
 /// `Bullet_CollisionHandler` bounce max: 0x14 (20) bounces.
 const BOUNCE_MAX: u8 = 20;
 /// `Bullet_CollisionHandler` min speed to keep bouncing: `FRAME_RATE_MUL · 0.01` = 0.01.
@@ -295,9 +302,52 @@ impl Grenade {
         // A sitting grenade (speed zeroed by a slow bounce) skips the collision — the game's zero-length
         // move hits nothing and the fuse keeps counting [M 0x12ce80 tail].
         let speed2 = self.velocity[0] * self.velocity[0] + self.velocity[1] * self.velocity[1] + self.velocity[2] * self.velocity[2];
+        // satchel-stick2: `Bullet_update`'s world hittest has TWO forms [M 0x12e7b0:425-465 — the
+        // HITTEST build over the pre-move obj+0x30], picked by the move length against the probe
+        // radius `max(0.25, obj+0x8C)` (the grenade family keeps the 0.25 floor, 0x3e800000; only
+        // the MGL family 0x2c..0x31 / 0x62 / 0x6d zeroes it, :427-429):
+        // - move < radius·0.5 → version 0x101: a one-sided sphere of that radius AT THE CURRENT
+        //   position (0x1e92d8 `Intersect_PointGeom` → `Dist2Tri` 0x1dfca8: the closest point on
+        //   the triangle wins, faces the centre is behind are skipped);
+        // - move ≥ radius·0.5 → version 0x201: a ray of `max(1.0, move)` [M :443-465 —
+        //   `uVar19 = max(1.0, fVar16)`], i.e. up to 1 u of look-ahead.
+        // The satchel's speed is 0.0667 u/tick [L ee_start_05.bin weapon_data 0x3b +0x20], so its
+        // whole 1-2 m approach runs in the 0x101 sphere form: the game PARKS the satchel the
+        // moment a face comes within 0.25 u — grazing the wall top, hugging the wall, or a
+        // close-range throw all stick where the old port's 0.067 u ray sailed past (the playtest's
+        // "even standing directly at a wall and throwing it at it, it still bounced": no ray
+        // crossing, no stick, the satchel flies on). Scoped to the +0x100 sticky family this arm
+        // serves (0x37/0x3a/0x3b — the hat 0x45 keeps its verified path); the bouncing family
+        // (0x34…) keeps the old move-length ray — the game gives it the same two forms [S backlog:
+        // a 1.0 u look-ahead would shift every pinned frag bounce point].
+        // grenade-rattle: the two forms ARE every bullet's in the game [M 0x12e7b0:427-465 — the
+        // family test only zeroes the probe radius (the MGL 0x2c..0x31/0x62/0x6d → always the ray);
+        // the 0x201 ray's length is `max(1.0, move)` [M :443-465]]. NOT landed here: the look-ahead
+        // shifts the pinned blast geometry (fix_grenade_types_live's stun whiteout pins the old
+        // landing; the re-pin needs the game's own landing measured live — see the report's live
+        // checks). The bouncing family keeps the move-length ray for now; the settle-sound mechanics
+        // below (the dot gate, the cap, the park order) are the rattle's fix.
+        let sticky = matches!(self.weapon_type, 0x37 | 0x3a | 0x3b);
+        const PROBE_RADIUS: f32 = 0.25;
+        let world_hit = if !sticky {
+            world.segment_surface(self.pos, end, false)
+                .map(|(t, normal, mat)| (t, [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t], normal, mat))
+        } else {
+            let speed = speed2.sqrt();
+            let move_len = speed * dt;
+            if move_len < PROBE_RADIUS * 0.5 {
+                world.sphere_surface(self.pos, PROBE_RADIUS, false)
+                    .map(|(q, normal, mat, _)| (0.0f32, q, normal, mat))
+            } else {
+                let dir = [self.velocity[0] / speed, self.velocity[1] / speed, self.velocity[2] / speed];
+                let len = 1.0f32.max(move_len);
+                let far = [self.pos[0] + dir[0] * len, self.pos[1] + dir[1] * len, self.pos[2] + dir[2] * len];
+                world.segment_surface(self.pos, far, false)
+                    .map(|(t, normal, mat)| (t, [self.pos[0] + (far[0] - self.pos[0]) * t, self.pos[1] + (far[1] - self.pos[1]) * t, self.pos[2] + (far[2] - self.pos[2]) * t], normal, mat))
+            }
+        };
         if speed2 > 1e-12 {
-            if let Some((t, normal, mat)) = world.segment_surface(self.pos, end, false) {
-                let hit = [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
+            if let Some((_t, hit, normal, mat)) = world_hit {
                 // fix-oddjob-hat: Oddjob's hat (0x45, `+0x70 & 0x100` [L record]) never bounces off
                 // the world — the +0x100 arm STICKS it: `obj+0xF4 = 3` [M 0x12ce80:255], the matrix
                 // aligns to the negated hit normal [:256-266] and the hat alone gets the 1500.0
@@ -338,12 +388,19 @@ impl Grenade {
                     self.velocity = [0.0; 3];
                     self.stuck = true;
                     self.resting = false;
+                    // satchel-stick2: the countdown latch (BU+0x100) and the digit meshes live in
+                    // BU, not the stick — `Bullet_CollisionHandler` writes only obj+0xF4/0x90/0x30
+                    // [M 0x12ce80:255-266 + the 0x12d478 park]; `Bullet_DoTrails`' 0x3b tail keeps
+                    // reading the same BU fields through state 3. The old reset to (0, None) opened
+                    // a one-tick digit gap at the stick (digits None → the kinds-4/5 slots FAR →
+                    // the numbers blink off exactly when the satchel parks).
+                    let (last_qs, digits) = self.phase.as_ref().map_or((0, None), |p| (p.last_qs, p.digits));
                     self.phase = Some(Box::new(StuckGadget {
                         normal,
                         arm: if self.weapon_type == 0x3a { 120.0 } else { 0.0 },
                         armed: false,
-                        last_qs: 0,
-                        digits: None,
+                        last_qs,
+                        digits,
                     }));
                     return Some(GrenadeEvent::Stick(stuck_at));
                 }
@@ -352,34 +409,62 @@ impl Grenade {
                 // Bounce arm, which reads the record's flags and blasts instead of bouncing (the MGL's
                 // 'Grenade' 0x2A [L ee_start_05.bin]; its 'Delay' twin 0x2B bounces to the fuse).
                 // Bounce: reflect the velocity by the surface normal, × the material coefficient [L 0x3037dc].
-                let v = self.velocity;
-                let dot = v[0] * normal[0] + v[1] * normal[1] + v[2] * normal[2];
-                let reflected = [v[0] - 2.0 * dot * normal[0], v[1] - 2.0 * dot * normal[1], v[2] - 2.0 * dot * normal[2]];
-                let c = bounce_coefficient(mat);
-                self.velocity = [reflected[0] * c, reflected[1] * c, reflected[2] * c];
-                // `Bullet_CollisionHandler` (0x12ce80, the store at LAB_0012d478): the bounce writes
-                // `BU+0x30 = *(HITDATA+0x40) + *(HITDATA+0x10) · uVar13` — the hit point offset ALONG the
-                // hit normal by uVar13 = uVar12 = 0x3d23d70a = 0.04 (set at 0x12ce80:257-258 for the
-                // generic bounce arms; the contact-detonation arm's 0x3b03126f = 0.002 differs only on
-                // the MGL's Explode position, folded here — 0.038 on a ≥ 4.0 blast radius). Without it
-                // the grenade rests exactly ON the collision triangle and every later sight/LOS ray to
-                // it grazes the surface at the ray's end (the port's Collide_Intersect analogue accepts
-                // tt ∈ [0,1] inclusive) — the ai_live grenade-scare guard never saw the bounced frag.
+                // grenade-rattle: the reflect arm is DOT-GATED [M 0x12ce80 0x12d5f0-0x12d600 —
+                // `fVar23 = 2·(v·n); if (fVar23 <= 0.0) { reflect; Normalise; speed ×= coeff }`]: a
+                // contact the grenade is already SEPARATING from (the 1 u look-ahead ray's hit while
+                // climbing) parks and counts but leaves the velocity/speed alone — the port's
+                // unconditional reflect flipped such a contact back INTO the surface and re-collided
+                // every tick (the playtests' "rapidly contacting the ground"). The cap [M 0x12d578-
+                // 0x12d57c — `sltiu $v1, $v1, 0x14; beqz → 0x12d6a0`]: the 20th bounce does NOT
+                // reflect or scale — but the gate's ELSE arm (0x12d6a0-0x12d6bc) aligns the matrix
+                // to the velocity and zeroes BU+0xF8 (`sw $zero, 0xf8($s0)`) with NO dot gate, so
+                // the grenade still parks, counts, and SITS until its fuse. grenade-rattle's
+                // "the cap gates the whole arm" reading missed that else — the zero at 0x12d6bc is
+                // unconditional.
+                // The park BEFORE the reflect (the game's order: LAB_0012d478's park, then the sound
+                // block, then the counter, then the dot-gated reflect): `BU+0x30 = *(HITDATA+0x40) +
+                // *(HITDATA+0x10) · 0.04` — the hit point offset ALONG the hit normal by 0x3d23d70a
+                // (set at 0x12ce80:257-258 for the generic bounce arms; the contact-detonation arm's
+                // 0.002 differs only on the MGL's Explode position, folded in the Sim's blast).
+                // Without it the grenade rests exactly ON the collision triangle and every later
+                // sight/LOS ray to it grazes the surface at the ray's end — the ai_live grenade-scare
+                // guard never saw the bounced frag. The 1 u look-ahead ray's hit point may sit ahead
+                // of the tick's move — the game parks AT the contact (the look-ahead is the game's).
                 let off = 0.04f32;
                 let hit = [hit[0] + normal[0] * off, hit[1] + normal[1] * off, hit[2] + normal[2] * off];
                 self.pos = hit;
                 self.bounces = self.bounces.saturating_add(1);
-                // Slow bounce or the bounce max: the speed zeroes and the grenade sits — NO explosion
-                // [M Bullet_CollisionHandler 0x12ce80; fix-weapons-all: the old port exploded here,
-                // which blew the frag up the moment it touched the ground].
-                let speed = (self.velocity[0] * self.velocity[0] + self.velocity[1] * self.velocity[1] + self.velocity[2] * self.velocity[2]).sqrt();
-                if self.bounces >= BOUNCE_MAX || speed < BOUNCE_MIN_SPEED {
-                    // The game's rest: the slow-bounce tail zeroes the speed [M 0x12ce80 tail] and
-                    // `Bullet_update`'s re-normalise (`Vec_NormaliseLen` stores the length back, disasm
-                    // 0x12f020-0x12f030) keeps a zero-speed bullet's move at zero — a rested grenade
-                    // never re-collides. fix-grenade-throw: the port's velocity kept re-accumulating
-                    // gravity at rest, so the grenade re-collided EVERY tick (the user's "rapid sound
-                    // as if it's rapidly contacting the ground").
+                let v = self.velocity;
+                let dot = v[0] * normal[0] + v[1] * normal[1] + v[2] * normal[2];
+                if self.bounces < BOUNCE_MAX {
+                    if dot <= 0.0 {
+                        let reflected = [v[0] - 2.0 * dot * normal[0], v[1] - 2.0 * dot * normal[1], v[2] - 2.0 * dot * normal[2]];
+                        let c = bounce_coefficient(mat);
+                        self.velocity = [reflected[0] * c, reflected[1] * c, reflected[2] * c];
+                        // The game's rest: the slow-bounce tail zeroes the speed [M 0x12ce80 tail,
+                        // disasm 0x12d674 `bc1f 0x12d6c0` → 0x12d67c-0x12d69c: Mat_Align2Dir +
+                        // `swc1 $f20, 0xf8($s0)` = 0.0] and `Bullet_update`'s re-normalise
+                        // (`Vec_NormaliseLen` stores the length back, disasm 0x12f020-0x12f030)
+                        // keeps a zero-speed bullet's move at zero — a rested grenade never
+                        // re-collides. fix-grenade-throw: the port's velocity kept re-accumulating
+                        // gravity at rest, so the grenade re-collided EVERY tick (the user's "rapid
+                        // sound as if it's rapidly contacting the ground").
+                        let speed = (self.velocity[0] * self.velocity[0] + self.velocity[1] * self.velocity[1] + self.velocity[2] * self.velocity[2]).sqrt();
+                        if speed < BOUNCE_MIN_SPEED {
+                            self.velocity = [0.0; 3];
+                            self.resting = true;
+                        }
+                    }
+                    // A separating contact (dot > 0): the park + the count stand, the velocity is
+                    // untouched — the gate skips reflect, scale AND zero [M 0x12d5f8 `bc1f
+                    // 0x12d6c0`].
+                } else {
+                    // The cap arm zeroes the speed [M 0x12d6a0-0x12d6bc: Mat_Align2Dir(obj+0x90,
+                    // velocity) then `sw $zero, 0xf8($s0)`] — no dot gate, no reflect, no scale.
+                    // The port's `resting` models the game's zero-speed bullet (the re-normalise
+                    // pins the move at zero, 0x12f020-0x12f030): the fuse keeps counting, no
+                    // re-collisions, no more bounce sounds (the game's own sound gate
+                    // `counter < 0xf` [M 0x12d4bc block] is long past).
                     self.velocity = [0.0; 3];
                     self.resting = true;
                 }
@@ -702,5 +787,52 @@ mod tests {
         }
         let n = stuck_normal.expect("it sticks somewhere (the floor) within 200 ticks");
         assert!(n[1] > 0.9, "NOT on the wall's entry face — the one-sided ray skips it (the game's shape, 0x10a8c8:150-168); normal {n:?}");
+    }
+
+    /// satchel-stick2 [M `Bullet_update` 0x12e7b0:425-444 — the slow-move hittest is the 0x101
+    /// sphere of radius max(0.25, obj+0x8C) AT THE CURRENT POSITION, `Intersect_PointGeom`
+    /// 0x1e92d8 + `Dist2Tri` 0x1dfca8; the satchel's 0.0667 u/tick throw [L ee_start_05.bin
+    /// weapon_data 0x3b +0x20] never leaves that form until gravity builds |v| past 0.125]: a
+    /// satchel flying PARALLEL to a face within 0.25 u of it sticks on the first tick — there is
+    /// no ray crossing to wait for. The old port ran a move-length ray and flew on (the playtest's
+    /// "it still bounced": the throw passes just over/along the wall and nothing catches it).
+    #[test]
+    fn satchel_flying_along_a_wall_within_the_probe_radius_sticks_at_once() {
+        let w = wall_world();
+        let mut g = satchel();
+        g.pos = [0.0, 1.0, 0.2]; // 0.2 u off the z = 0 wall face, moving ALONG it (−x)
+        g.velocity = [-0.0666_6667, 0.0, 0.0];
+        g.speed = 0.0666_6667;
+        let mut rng = Rng::new(0);
+        let mut stuck_at = None;
+        for t in 0..3 {
+            if let Some(ev) = g.update(&w, &mut rng) {
+                if matches!(ev, GrenadeEvent::Stick(_)) { stuck_at = Some(t); break; }
+            }
+        }
+        assert!(g.stuck, "the 0.2 u graze sticks within 3 ticks (the game's 0.25 probe)");
+        assert_eq!(stuck_at, Some(0), "on the FIRST update");
+        let p = g.phase.as_ref().expect("the phase box");
+        assert!((p.normal[2] - 1.0).abs() < 1e-4, "the wall's +z normal, got {:?}", p.normal);
+        // The park: Dist2Tri's closest point (z = 0) + normal·0.04 [M 0x12ce80:383-392].
+        assert!((g.pos[2] - 0.04).abs() < 1e-4, "parked 0.04 off the face, got z {}", g.pos[2]);
+        assert!((g.pos[1] - 1.0).abs() < 1e-4, "the closest point keeps the flight height");
+    }
+
+    /// Sister: the same probe catches a satchel descending onto a floor it has not reached yet —
+    /// the game parks it 0.25 u early (the graze-over-the-wall-top case).
+    #[test]
+    fn satchel_descending_onto_the_floor_within_the_probe_radius_sticks_early() {
+        let w = wall_world();
+        let mut g = satchel();
+        g.pos = [0.0, 0.2, 2.0]; // 0.2 u above the y = 0 floor, drifting along it
+        g.velocity = [-0.0666_6667, 0.0, 0.0];
+        g.speed = 0.0666_6667;
+        let mut rng = Rng::new(0);
+        for _ in 0..3 { g.update(&w, &mut rng); }
+        assert!(g.stuck, "the 0.2 u floor graze sticks within 3 ticks");
+        let p = g.phase.as_ref().expect("the phase box");
+        assert!(p.normal[1] > 0.9, "the floor's +y normal, got {:?}", p.normal);
+        assert!((g.pos[1] - 0.04).abs() < 1e-4, "parked 0.04 above the floor, got y {}", g.pos[1]);
     }
 }

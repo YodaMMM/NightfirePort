@@ -49,16 +49,18 @@ fn a_guard_spotting_bond_counts_one_detection_per_guard() {
     // comes up with the IDLE enter (0x15bf18:30), not at tick 0.
     tick_idle(sim, 3000);
     assert_eq!(sim.drones.progress.stats[0].detected, 0, "no detections before Bond is seen");
-    // The idle gate guard d15's spot (fix_npcs_live): an enabled IDLE guard on the spawn floor.
-    assert!(sim.drones.list[15].present && sim.drones.list[15].enabled
-        && sim.drones.list[15].team == 1, "d15 is an enabled team-1 guard");
+    // The idle gate guard (placement 487, the pre-gate list[15]; d1 list[13] — the spawn gate
+    // [M 0x136be0:49] holds back 07000006's param2=2 placements at the direct load's difficulty 1).
+    assert!(sim.drones.list[13].present && sim.drones.list[13].enabled
+        && sim.drones.list[13].team == 1, "the idle gate guard is an enabled team-1 guard");
+    let d15_idx = 13;
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, [33.5, 39.0, 22.5], 0.0);
     let mut saw = false;
     for _ in 0..600 {
         sim.step_bond(Input::default(), false, false, false);
-        if sim.drones.list[15].los { saw = true; }
+        if sim.drones.list[d15_idx].los { saw = true; }
     }
-    assert!(saw, "d15 has LOS to Bond (the fix_npcs_live sister saw him within 600 ticks)");
+    assert!(saw, "the idle gate guard has LOS to Bond (the fix_npcs_live sister saw him within 600 ticks)");
     // Past the reaction time the HaveOpponentSight ack fires LogSeenOpponent: exactly one count.
     for _ in 0..90 { sim.step_bond(Input::default(), false, false, false); }
     let after_first = sim.drones.progress.stats[0].detected;
@@ -266,9 +268,11 @@ fn the_driving_maps_score_through_the_zeroed_new_scores_buffer() {
         "the copy writes value/count/target = [0]/[1]/[2] [M 0x1984b0:56-61]");
     assert_eq!(rows[7].value, 9000, "row 7's value is ×100 at the copy [M 0x1984b0:52-54]");
     assert_eq!(rows[4].value, 1, "the other rows copy raw");
-    // Row 7's ratio math reads the ×100'd value: t = 9000/100 = 90 s, count 60 → 60/90.
-    assert!((rows[7].ratio - (60.0f32 / 90.0)).abs() < 1e-4,
-        "the time ratio runs on the ×100'd value [M 0x1984b0 row 7 + the copy]");
+    // Row 7's ratio math reads the ×100'd value: t = 9000/100 = 90 s, count 60. The game's shared
+    // ratio block [M 0x1984b0:234-253] rounds raw/max × 100 to the integer percent grid:
+    // raw = ceil(1000·60/90) = 667 → 66.7 → 67 → 0.67 (the pre-round fraction is 60/90).
+    assert!((rows[7].ratio - 0.67).abs() < 1e-4,
+        "the time ratio runs on the ×100'd value, on the game's 2-decimal grid [M 0x1984b0 row 7 + the ratio block]");
 }
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
