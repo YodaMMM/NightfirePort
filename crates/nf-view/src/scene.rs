@@ -2269,6 +2269,13 @@ impl Sim {
         // rest of the tick (the game's disabled player runs only the imp).
         let (mut input, trigger, reload, use_key) = if self.drones.props.gunimps.iter().any(|g| g.active) {
             self.drones.gunimp_tick(&self.weapons, input.look, input.turn, trigger || input.fire, use_key, &mut self.bond);
+            // The dismount (`GunImp_Deactivate` 0x132c18): `AnimObj[99] = AnimObj[100]` — the
+            // weapon saved by the mount's `Player_WeaponNone` is requested back (the climb
+            // dismount's carry).
+            if !self.drones.props.gunimps.iter().any(|g| g.active) && self.gun.weapon == 0x47
+                && self.gun.saved_weapon != 0x47 && self.gun.saved_weapon != self.gun.weapon {
+                self.gun.switch_request = self.gun.saved_weapon;
+            }
             (Default::default(), false, false, false)
         } else { (input, trigger, reload, use_key) };
         // fix-aim-raise: the aim BIT, not the raw button — a raise-script weapon defers it to the
@@ -4421,6 +4428,9 @@ impl Sim {
             if let Some((_, i)) = gbest {
                 let placement = self.drones.props.gunimps[i].placement;
                 self.drones.gunimp_activate(i);
+                // `GunImp_Activate` runs `Player_WeaponNone` [M 0x132f00]: the held weapon is saved
+                // and Bond goes to hands at once — no first-person gun while mounted.
+                if self.gun.weapon != 0x47 { self.gun.go_to_hands(); }
                 eprintln!("[gunimp] #{i} (placement {placement}) mounted — GunImp_Activate 0x132f00");
             }
             }

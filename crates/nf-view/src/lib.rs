@@ -6028,12 +6028,25 @@ pub fn run() -> Result<()> {
             // Render aid (death-blood-pane): `NF_KILL_AT=t` deals Bond a fatal hit on tick t, so `--frame`
             // past it renders the blood pane at that many dead ticks.
             let kill_at: Option<u32> = std::env::var("NF_KILL_AT").ok().and_then(|v| v.parse().ok());
+            // Render aids (gunimp-mounted-pose): `NF_USE_AT=t` presses E on tick t; `NF_FWD=a-b` holds
+            // forward and `NF_TURN=a-b:v` holds the turn stick at v over those ticks.
+            let range = |k: &str| -> Option<(u32, u32, f32)> {
+                let v = std::env::var(k).ok()?;
+                let (r, val) = v.split_once(':').map_or((v.as_str(), 1.0), |(r, x)| (r, x.parse().unwrap_or(1.0)));
+                let (a, b) = r.split_once('-')?;
+                Some((a.parse().ok()?, b.parse().ok()?, val))
+            };
+            let use_at: Option<u32> = std::env::var("NF_USE_AT").ok().and_then(|v| v.parse().ok());
+            let (fwd, turn) = (range("NF_FWD"), range("NF_TURN"));
             for t in 1..=time as u32 {
                 if kill_at == Some(t) { let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng); h.pain_generic(r, 500.0, 1, 0x0700_0005, 0); }
                 if skip_cuts && sim.disabled { sim.drones.scripts.skip_request = true; }
                 // `--mode 70,90`: the fire-mode press (the B key) on those ticks.
                 let mode_now = modes.contains(&t);
-                if walk { sim.step_bond(nf_game::player::Input { mode_switch: mode_now, ..shot_input }, pulls.contains(&t), false, false); } else { sim.step([cam.pos.x, cam.pos.y, cam.pos.z], cam.dir().to_array(), pulls.contains(&t), false); }
+                let mut inp = nf_game::player::Input { mode_switch: mode_now, ..shot_input };
+                if let Some((a, b, v)) = fwd { if (a..=b).contains(&t) { inp.forward = v; } }
+                if let Some((a, b, v)) = turn { if (a..=b).contains(&t) { inp.turn = v; } }
+                if walk { sim.step_bond(inp, pulls.contains(&t), false, use_at == Some(t)); } else { sim.step([cam.pos.x, cam.pos.y, cam.pos.z], cam.dir().to_array(), pulls.contains(&t), false); }
             }
             // With `--skip-cutscenes`, a skipped cut-scene's hand-back moves Bond: put him back on the `--bond` spot (and
             // let one tick settle) so the image pair matches the real game's placement.
