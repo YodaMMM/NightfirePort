@@ -70,8 +70,9 @@ fn assert_no_wrapper_target(sim: &nf_view::scene::Sim, level: &str) {
 ///   script bank is mode-0/64 only [D, the §4 census] — the player viewer stays drawn and the
 ///   fade-up really shows for its 45 ticks.
 /// Sisters that can fail: the exact per-tick raw ramp (a tick drift fails), the per-level
-/// camera expectation at tick 0 (a viewer-rule or script regression fails), and the exact
-/// drawn alpha ramp.
+/// camera expectation from tick 1 on (a viewer-rule or script regression fails; tick 0 is the
+/// pre-tick read — the port's intro beat is the first control walk, see the n == 0 arm), and
+/// the exact drawn alpha ramp.
 fn assert_entry_fade_runs(scene: &mut Scene, level: &str, view_drawn: bool) {
     {
         let sim = scene.sim.as_mut().unwrap();
@@ -98,8 +99,22 @@ fn assert_entry_fade_runs(scene: &mut Scene, level: &str, view_drawn: bool) {
             } else {
                 assert!(view.is_none(), "{level}: the expired fade draws nothing");
             }
+        } else if n == 0 {
+            // Tick 0 reads BEFORE the first step: the port's load does not tick, so the auto-play
+            // intro has not started yet — the game runs SP_LoadScript's mode dispatch (mode 1 →
+            // `Script_Play`) during the level load itself [M 0x1dbc08:41-55 via SP_CreateScriptPlayer
+            // 0x1db9a8], the port's beat lands on the first control walk (step 1) [S: port-only beat
+            // shift, the script machinery byte-identical across the held-merge base; every DRAWN
+            // frame matches — the window steps before it draws (lib.rs 4696) and the [L] capture
+            // shows the cut-scene at full brightness from +3]. The pre-tick read pins the armed,
+            // unticked state: the raw fade at (45, 45) and the fade view still on the player's
+            // viewer (no script camera exists yet to take it off).
+            assert_eq!(raw_left, Some(45),
+                "{level}: the entry fade is armed and unticked before the first step [M 0x1910f8:45]");
+            let v = view.expect("{level}: the fade view is the player viewer's before the intro starts");
+            assert!((v.alpha - 1.0).abs() < 1e-6, "{level}: the pre-tick fade is at black, got {}", v.alpha);
         } else {
-            assert!(cam, "{level}: tick {n} must sit under the auto-play intro's script camera [D mode-1 SP]");
+            assert!(cam, "{level}: tick {n} (after {n} steps) must sit under the auto-play intro's script camera [D mode-1 SP]");
             assert!(view.is_none(),
                 "{level}: the entry fade must NOT draw while the cut-scene owns the view [M 0x1d9140 + 0x1b9920:31-32 + 0x1e6f50:186-212; L the PS2 capture]");
         }
