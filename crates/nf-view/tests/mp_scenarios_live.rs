@@ -505,12 +505,20 @@ fn espionage_online() {
 
 /// GoldenEye Strike (0x20000200): slot 0 (team 0) takes both items by contact [M
 /// 0x187568:389-400]; one team holding both launches the strike — each carried item +1 to its
-/// carrier, a random live enemy targeted [M :356-384]; the strike lands (the port's 3 s flight
-/// [S]) and kills the target through the death path, the opposite team +1, both items re-pick
-/// [M :96-179]; the target's body dies and respawns 5 s later on both machines.
+/// carrier, a random live enemy targeted [M :356-384]; the strike flies the SP script
+/// 0x0600003e's own length (299 ticks on 07000023 [D the archive entry; the live load reads
+/// `level.nis`]) while its beam tracks the target's `(x, y − 1.0, z)` every tick [M :87-95],
+/// then lands (the SP's state 2 [M :96]) and kills the target through the death path, the
+/// opposite team +1, both items re-pick [M :96-179]; the target's body dies and respawns 5 s
+/// later on both machines.
 #[test]
 fn goldeneye_online() {
     let Some(mut p) = start(settings(scenario::GOLDENEYE, 2, -1, [0, 1])) else { eprintln!("skip: NF_ISO not set"); return };
+    // mp-goldeneye-strike: the flight length is the arena's own script (0x0600003e, 299 ticks
+    // [D 07000023.bin's entry]) — the live load reads `level.nis` [M SP_Update 0x1dbda8's play-
+    // to-end → `SP_GetState` 0x1dc900 == 2, 0x187568:96].
+    assert_eq!(p.m().objects_rt.ge_flight_ticks, 299, "the strike script's length [D 07000023.bin 0600003e]");
+    assert_eq!(p.m().ge_strike_view(), None, "no strike before the launch");
     let (i0, i1) = (p.m().objects_rt.ge[0].as_ref().unwrap().pos, p.m().objects_rt.ge[1].as_ref().unwrap().pos);
     let away = far_from(&p, &[i0, i1], 1);
     place(&mut p, 1, away, 0.0);
@@ -522,21 +530,37 @@ fn goldeneye_online() {
     assert!(o.ge.iter().all(|g| g.as_ref().unwrap().state == 3), "both carried by team 0 → the strike flies");
     assert_eq!(o.ge_target, Some(1), "the only enemy is the target");
     assert_eq!(p.m().game.slots[0].score, 2.0, "+1 per carried item");
+    assert!(p.m().ge_strike_view().is_some(), "the strike is in flight (the draw getter)");
     // the carrier steps away from every item spawn (the re-picked items must stay free)
     let spawns: Vec<[f32; 3]> = p.m().objects.goldeneye.iter().flatten().map(|r| [r.matrix[3][0], r.matrix[3][1], r.matrix[3][2]]).collect();
     let park = far_from(&p, &spawns, 0);
     place(&mut p, 0, park, 0.0);
     let mut flight = 0u32;
+    let flight_ticks = p.m().objects_rt.ge_flight_ticks as u32;
     while p.m().game.team_scores[0] == 0.0 {
         tick(&mut p, &row(None, 2));
         flight += 1;
-        assert!(flight <= nf_game::mp::rules::GE_STRIKE_FRAMES as u32 + 1, "the strike lands");
+        assert!(flight <= flight_ticks + 1, "the strike lands");
+        // mp-goldeneye-strike: the beam tracks the target — the parked slot 1's position with
+        // y − 1.0, identically on both machines [M 0x187568:87-95]. The impact tick itself
+        // clears the position ([M :121-122]), so the asserts ride the still-flying ticks.
+        for s in p.sims() {
+            let m = s.0.mp.as_ref().unwrap();
+            if !m.objects_rt.ge.iter().flatten().any(|it| it.state == 3) { continue; }
+            let t = m.game.slots[1].pos.expect("the target's body stands");
+            assert_eq!(m.objects_rt.ge_strike_pos, Some([t[0], t[1] - 1.0, t[2]]), "the tracked beam position");
+            let v = m.ge_strike_view().expect("in flight");
+            assert_eq!(v.target, 1, "the view's target");
+            assert_eq!(v.pos, [t[0], t[1] - 1.0, t[2]], "the view's position");
+        }
     }
-    assert!(flight + 2 >= nf_game::mp::rules::GE_STRIKE_FRAMES as u32, "after the flight time ({flight} ticks)");
+    assert!(flight + 2 >= flight_ticks, "after the flight time ({flight} ticks)");
     let m = p.m();
     assert_eq!(m.game.team_scores, [1.0, 0.0], "the strike scores the opposite team");
     assert_eq!(m.game.slots[1].deaths, 1, "the target died");
     assert!(m.objects_rt.ge.iter().all(|g| g.as_ref().unwrap().state == 0), "both items free again");
+    assert_eq!(m.ge_strike_view(), None, "the strike's view is gone at the impact [M 0x187568:121-122]");
+    assert_eq!(m.objects_rt.ge_strike_pos, None, "the tracked position cleared");
     assert!(p.a.sim.as_ref().unwrap().mp_dead_ticks[1] > 0 && p.b.sim.as_ref().unwrap().mp_dead_ticks[1] > 0,
         "the target's body dies on both machines");
     ticks(&mut p, 300, &row(None, 2));

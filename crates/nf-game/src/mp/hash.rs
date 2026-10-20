@@ -290,6 +290,9 @@ fn hash_objects_rt(h: &mut Hasher, m: &MpMatch) {
         Some(v) => {
             h.u8(1);
             h.usize(v);
+            // mp-goldeneye-strike: the tracked beam position rides the target's arm — the non-GE
+            // scenarios' fold bytes are unchanged (ge_target is always None there).
+            hash_opt_pos(h, &o.ge_strike_pos);
         }
     }
     hash_opt_obj(h, &o.blueprint);
