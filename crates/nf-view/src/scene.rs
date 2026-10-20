@@ -4746,7 +4746,7 @@ impl Sim {
             // `Check_Target`/`Door_DoMsg`'s aim hint 0x200000b — the same `Text_AddMsg` drain as
             // the script texts [M 0x1363c8:101-107, 0x135f18:16-34].
             for (label, time) in self.drones.doors.label_msgs.drain(..) {
-                let text = lang.bind(label).unwrap_or("").trim().to_string();
+                let text = lang.as_ref().and_then(|l| l.bind(label)).unwrap_or("").trim().to_string();
                 if !text.is_empty() { new_msgs.push_back(Msg::new(text, time as f32)); }
             }
         }
@@ -10181,7 +10181,7 @@ impl Sim {
             if !row[slot].use_key || self.mp_dead_ticks[slot] > 0 { continue; }
             let Some(b) = self.net_body(slot) else { continue };
             let (head, look) = (b.head(), b.look());
-            let (evs, _) = self.drones.doors.player_use(head, look, &mut self.drones.channels, frame);
+            let (evs, _) = self.drones.doors.player_use(head, look, &mut self.drones.channels, frame, &self.world);
             for (id, pos) in evs { self.drones.audio.play3d(id as u32, pos, None); }
             self.drones.net_use_triggers.push((head, look));
             let mut best: Option<(f32, usize)> = None;

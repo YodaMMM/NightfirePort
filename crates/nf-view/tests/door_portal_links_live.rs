@@ -296,7 +296,7 @@ fn with_the_portalled_doors_open_the_07000001_walk_returns_the_old_set() {
     }
     for (head, look, di) in &uses {
         let s = scene.sim.as_mut().unwrap();
-        let (snd, hits) = s.drones.doors.player_use(*head, *look, &mut s.drones.channels, s.drones.frame);
+        let (snd, hits) = s.drones.doors.player_use(*head, *look, &mut s.drones.channels, s.drones.frame, &s.world);
         assert!(hits >= 1, "door {di}: the use sphere meets the door");
         eprintln!("[01] door {di} use hits {hits} sounds {:?}", snd.iter().map(|s| s.0).collect::<Vec<_>>());
     }

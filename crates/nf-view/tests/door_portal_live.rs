@@ -180,7 +180,7 @@ fn a_shut_portalled_door_hides_the_room_behind_it_on_07000001() {
     };
     {
         let s = scene.sim.as_mut().unwrap();
-        let (snd, hits) = s.drones.doors.player_use(head, look, &mut s.drones.channels, s.drones.frame);
+        let (snd, hits) = s.drones.doors.player_use(head, look, &mut s.drones.channels, s.drones.frame, &s.world);
         eprintln!("[door0] use hits {hits}, sounds {:?}", snd.iter().map(|s| s.0).collect::<Vec<_>>());
         assert!(hits >= 1, "the use sphere meets the door");
     }
