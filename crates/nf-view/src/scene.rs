@@ -5826,10 +5826,85 @@ impl Scene {
         crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash)
     }
 
+    /// One level-placed pickup (type 0xF0) — the ONE builder both `Scene::build` sides call (the draw
+    /// list and the sim's `Drones::pickups` are index-paired, `Scene::n`/`placed_pickup_pose`). The
+    /// game's `Pickup_Create` 0x18dda0 via `parsemap_create_dynamic_objects` 0x1d04f0 case 0xF0 [M]:
+    /// the placement's params give kind/id/rounds/switch/sound/respawn (read by INDEX,
+    /// `level_tag+0x2C+4k` [M 0x1d04f0:457-462; pickup-port-check §3], absent reads 0), and the
+    /// placement's resolved object is the drawn model for kinds 0..6 ([M 0x1d04f0:459-462] —
+    /// fix-objects: the game draws the glist pointer, not a hashcode re-lookup, so the resolved
+    /// (map, object) is kept; an object with hashcode 0xFFFFFFFF (07000005's `oOBJECT_AmmoPickUp_9mm`
+    /// [D]) has no by-hash entry but is still drawn through its own object).
+    ///
+    /// mp-pickups-visible (docs/systems/mp-pickups-visible.md): kinds 7..11 are `Pickup_CreateFromSet`
+    /// 0x18f1b0 [M] — a kind-0 pickup of `PickupMatrix[row][kind-7]` (the row = `MPSettings+0x1B4`,
+    /// `mp_row`) with the WEAPON's own world model `weapon_data[base]+0x80`, and the placement's object
+    /// is NEVER drawn (`obj` stays None — the arenas' set placements are `PICKUP` objects with
+    /// hashcode 0xFFFFFFFF [D 07000023/24], which is why they drew nothing before). Without a match
+    /// the row is 0 (`MPSettings+0x1B4` is 0 in SP [M]). The placement's object must still resolve
+    /// (the game's null-glist gate 0x18dda0:88) and so must the weapon's model (`create_from_set_row`'s
+    /// lookup — the arenas ship their set weapons' meshes [D 07000023/24]). In a match every created
+    /// pickup spins (`+0x38 = 1` for all kinds [M 0x18dda0:138-144]; `Pickup_Update` 0x18e148:193-201
+    /// applies it per tick); in SP only kind 6 does. `None` where the game refuses (id −1 [M 0x18de0c],
+    /// an unresolvable model).
+    fn placed_pickup_from_placement(
+    level: &Level,
+    p: &nf_formats::placement::Placement,
+    main_map: usize,
+    mp_row: Option<&[u16; 5]>,
+    weapons: &nf_formats::weapon::WeaponData,
+    level_id: u32,
+    models: &std::collections::HashMap<u32, nf_game::pickup::Model>,
+) -> Option<nf_game::pickup::Pickup> {
+    let param = |idx: u32| -> u32 { p.params.iter().find(|(i, _)| *i == idx).map(|(_, v)| *v).unwrap_or(0) };
+    let type_ = param(0) as u16;
+    let id = param(1) as u16;
+    // `Pickup_Create`'s level-conditional rounds override [M 0x18dda0: GameState+0xc ==
+    // 0x7000008 && id == 0x2c → rounds = 4]: the vault's rocket placement says 5 [D], the game creates 4.
+    let rounds = nf_game::pickup::Pickup::create_rounds_override(level_id, id, param(2) as i16);
+    let switch_channel = param(3) as u16;
+    let sound = param(4) as u16;
+    let respawn = param(5) & 0xFFFF;
+    let lifetime = 0u8; // always 0 for level-placed pickups (rest=1 in the game)
+    let set_kind = (7..=11).contains(&type_) && id != 0xFFFF;
+    // The placement's resolved object (the celglist handed to Pickup_Create, [M 0x1d04f0:459-462]).
+    let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+        else if (p.index as usize) < level.maps[main_map].objects.len() { Some((main_map, p.index as usize)) } else { None };
+    let obj = target.and_then(|(om, oi)| {
+        let obj_ = &level.maps[om].objects[oi];
+        models.get(&obj_.hashcode).map(|&m| (obj_.hashcode,
+            nf_game::pickup::Model { centre: obj_.centre, radius: obj_.radius }, (om, oi)))
+    });
+    let mut p2 = match (set_kind, mp_row) {
+        (true, row) => {
+            // The game's null-glist gate comes first [M 0x18dda0:88]: the placement's object must
+            // resolve even though it is never drawn for a set kind.
+            let _placement_glist = target?;
+            match row {
+                // mp-lobby-settings / mp-pickups-visible: the match's weapon-set row [M 0x18f1b0:56].
+                Some(row) => nf_game::pickup::Pickup::create_from_set_row(p.translation, p.rotation, type_, row, weapons, models)?,
+                // SP: `MPSettings+0x1B4` is 0, `Pickup_CreateFromSet` reads row 0 [M].
+                None => nf_game::pickup::Pickup::create_from_set_row(p.translation, p.rotation, type_, &nf_game::pickup::PICKUP_MATRIX_ROW0, weapons, models)?,
+            }
+        }
+        (false, _) => {
+            let (model, bounds, obj) = obj?;
+            let mut p2 = nf_game::pickup::Pickup::create_placed(p.translation, p.rotation, type_, id, rounds, switch_channel, sound, respawn as u16, lifetime, model, bounds, weapons, models)?;
+            p2.obj = Some(obj);
+            p2
+        }
+    };
+    p2.label = param(6); // the kind-4 label (`Pickup_Create` param_13 → +0x34; 0700000b's item: 0x2000036 [D])
+    // In a match every pickup spins (`+0x38 = 1` for all kinds [M 0x18dda0:138-144]); SP keeps
+    // `create_placed`'s kind-6-only spin.
+    if mp_row.is_some() { p2.spin = true; }
+    Some(p2)
+}
+
     /// `skeletons`: every skeleton on the disc by id; `sequences`: the level's animation archive, grouped by skeleton.
     /// `mp`: the MP match settings on an MP load (`--mp`/net) — the body slots the scene parks
     /// (mp-character-data); `None` on every campaign load (no bodies).
-    pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, sequences: HashMap<u8, Vec<Sequence>>, drones: Option<&DroneContext>, difficulty: u32, mp: Option<&nf_game::mp::MpSettings>) -> Scene {
+pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, sequences: HashMap<u8, Vec<Sequence>>, drones: Option<&DroneContext>, difficulty: u32, mp: Option<&nf_game::mp::MpSettings>) -> Scene {
         let mut t = std::time::Instant::now();
         // cross-process-determinism: the buckets are walked in ASCENDING skeleton id, not HashMap
         // order — a hashcode present under two buckets resolves to the highest-id bucket's entry
@@ -5933,43 +6008,12 @@ impl Scene {
         let placed_weapons = drones.and_then(|d| d.weapons.clone()).unwrap_or_else(|| nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() });
             let hoist_models = nf_game::pickup::models(level);
             let mm = level.main_map().unwrap_or(0);
+            // mp-pickups-visible: the same weapon-set row the sim build takes (the draw slot k must
+            // pair the sim's pickups[k], and kinds 7..11 must model the match's weapons) [M 0x18f1b0].
+            let mp_row = mp.map(nf_game::mp::equip::weapon_row);
             let placed_pickups: Vec<nf_game::pickup::Pickup> = level.maps[mm].placements.iter()
                 .filter(|p| p.flags & 0xff == 0xf0)
-                .filter_map(|p| {
-                    // `parsemap_block_map_data_dynamic` collects the placement's params into a stack buffer;
-                    // `parsemap_create_dynamic_objects` case 0xf0 reads from that buffer. The params are
-                    // (index, value) pairs and parameter k lives at `level_tag+0x2C+4k` — looked up by
-                    // INDEX, not by position [M 0x1d04f0:457-462; pickup-port-check §3]. An absent index
-                    // reads 0.
-                    let param = |idx: u32| -> u32 { p.params.iter().find(|(i, _)| *i == idx).map(|(_, v)| *v).unwrap_or(0) };
-                    let type_ = param(0) as u16;
-                    let id = param(1) as u16;
-                    // `Pickup_Create`'s level-conditional rounds override [M 0x18dda0: GameState+0xc ==
-                    // 0x7000008 && id == 0x2c → rounds = 4]: the vault's rocket placement says 5 [D],
-                    // the game creates 4.
-                    let rounds = nf_game::pickup::Pickup::create_rounds_override(drones.map(|d| d.level_id).unwrap_or(0), id, param(2) as i16);
-                    let switch_channel = param(3) as u16;
-                    let sound = param(4) as u16;
-                    let respawn = param(5) & 0xFFFF;
-                    let lifetime = 0u8; // always 0 for level-placed pickups (rest=1 in the game)
-                    // The model: the placement's object (the celglist passed to Pickup_Create, [M]
-                    // 0x1d04f0:459-462). fix-objects: keep the RESOLVED object — the game draws the
-                    // glist pointer, not a hashcode re-lookup, and an object with hashcode 0xFFFFFFFF
-                    // (07000005's `oOBJECT_AmmoPickUp_9mm` [D]) has no by-hash entry, so the old
-                    // `model`-hash fallback left those pickups undrawn. The bounds are the object's
-                    // own (the glist's), not the first hashcode match's.
-                    let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
-                        else if (p.index as usize) < level.maps[mm].objects.len() { Some((mm, p.index as usize)) } else { None };
-                    let (model, bounds, obj) = target.and_then(|(om, oi)| {
-                        let obj_ = &level.maps[om].objects[oi];
-                        hoist_models.get(&obj_.hashcode).map(|&m| (obj_.hashcode,
-                            nf_game::pickup::Model { centre: obj_.centre, radius: obj_.radius }, (om, oi)))
-                    })?;
-                    let mut p2 = nf_game::pickup::Pickup::create_placed(p.translation, p.rotation, type_, id, rounds, switch_channel, sound, respawn as u16, lifetime, model, bounds, &placed_weapons, &hoist_models)?;
-                    p2.label = param(6); // the kind-4 label (`Pickup_Create` param_13 → +0x34; 0700000b's item: 0x2000036 [D])
-                    p2.obj = Some(obj);
-                    Some(p2)
-                })
+                .filter_map(|p| Self::placed_pickup_from_placement(level, p, mm, mp_row.as_ref(), &placed_weapons, drones.map(|d| d.level_id).unwrap_or(0), &hoist_models))
                 .collect();
             // fix-safe08: the scripts' obj_type-0xF0 Entity spawns reserve slots after the placed
             // pickups, in the SAME order the sim build appends them (the draw slot k must equal the
@@ -7465,48 +7509,12 @@ impl Scene {
             // mp-lobby-settings: an MP match's set pickups (kinds 7..11) come from the lobby's
             // Weapon Set row [M Pickup_CreateFromSet 0x18f1b0:56 — row = MPSettings+0x1B4].
             let mp_row = mp.map(nf_game::mp::equip::weapon_row);
+            // mp-pickups-visible: the ONE builder both sides call (docs/systems/mp-pickups-visible.md §4) —
+            // kinds 7..11 take the match's row and the weapon's own model, `obj` stays None, so the sim's
+            // pickups[k] pair the draw slots and model the match's weapons.
             let placed_pickups: Vec<nf_game::pickup::Pickup> = level.maps[m].placements.iter()
                 .filter(|p| p.flags & 0xff == 0xf0)
-                .filter_map(|p| {
-                    // `parsemap_block_map_data_dynamic` collects the placement's params into a stack buffer;
-                    // `parsemap_create_dynamic_objects` case 0xf0 reads from that buffer. The params are
-                    // (index, value) pairs and parameter k lives at `level_tag+0x2C+4k` — looked up by
-                    // INDEX, not by position [M 0x1d04f0:457-462; pickup-port-check §3]. An absent index
-                    // reads 0.
-                    let param = |idx: u32| -> u32 { p.params.iter().find(|(i, _)| *i == idx).map(|(_, v)| *v).unwrap_or(0) };
-                    let type_ = param(0) as u16;
-                    let id = param(1) as u16;
-                    // `Pickup_Create`'s level-conditional rounds override [M 0x18dda0: GameState+0xc ==
-                    // 0x7000008 && id == 0x2c → rounds = 4]: the vault's rocket placement says 5 [D],
-                    // the game creates 4.
-                    let rounds = nf_game::pickup::Pickup::create_rounds_override(d.level_id, id, param(2) as i16);
-                    let switch_channel = param(3) as u16;
-                    let sound = param(4) as u16;
-                    let respawn = param(5) & 0xFFFF;
-                    let lifetime = 0u8; // always 0 for level-placed pickups (rest=1 in the game)
-                    // The model: the placement's object (the celglist passed to Pickup_Create, [M]
-                    // 0x1d04f0:459-462). fix-objects: keep the RESOLVED object — the game draws the
-                    // glist pointer, not a hashcode re-lookup, and an object with hashcode 0xFFFFFFFF
-                    // (07000005's `oOBJECT_AmmoPickUp_9mm` [D]) has no by-hash entry, so the old
-                    // `model`-hash fallback left those pickups undrawn. The bounds are the object's
-                    // own (the glist's), not the first hashcode match's.
-                    let m_map = m;
-                    let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
-                        else if (p.index as usize) < level.maps[m_map].objects.len() { Some((m_map, p.index as usize)) } else { None };
-                    let (model, bounds, obj) = target.and_then(|(om, oi)| {
-                        let obj_ = &level.maps[om].objects[oi];
-                        pickup_models.get(&obj_.hashcode).map(|&m| (obj_.hashcode,
-                            nf_game::pickup::Model { centre: obj_.centre, radius: obj_.radius }, (om, oi)))
-                    })?;
-                    let mut p2 = match mp_row {
-                        Some(row) if (7..=11).contains(&type_) && id != 0xFFFF =>
-                            nf_game::pickup::Pickup::create_from_set_row(p.translation, p.rotation, type_, &row, &weapons, &pickup_models)?,
-                        _ => nf_game::pickup::Pickup::create_placed(p.translation, p.rotation, type_, id, rounds, switch_channel, sound, respawn as u16, lifetime, model, bounds, &weapons, &pickup_models)?,
-                    };
-                    p2.label = param(6); // the kind-4 label (`Pickup_Create` param_13 → +0x34; 0700000b's item: 0x2000036 [D])
-                    p2.obj = Some(obj);
-                    Some(p2)
-                })
+                .filter_map(|p| Self::placed_pickup_from_placement(level, p, m, mp_row.as_ref(), &weapons, d.level_id, &pickup_models))
                 .collect();
             let (reserved, sim_slots) = script_pickup_reservations(level, &weapons, &pickup_models, d.level_id);
             drones.pickups.extend(placed_pickups);
