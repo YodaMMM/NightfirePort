@@ -6217,6 +6217,22 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 invisible += 1;
             }
             if skipped { continue; }
+            // floating-rifle-02-2: NO bake skip. 786 read `parseentity_fixup_entity` 0x1d00c0's
+            // 0x8019/0x8018 flag bit 0x8000000 as "baked, not drawn" and skipped every 0x8019/0x8018
+            // placement whose matrix rows 1+2 looked identity — that broke decal_order_live (07000007's
+            // hall_shadows*/OBJECT_banistershadows* dropped, their textures never loaded) and the
+            // decompile does not support the reading: the bit is set when the placement's TRANSLATION
+            // and ROTATION vectors (cel+0x60/+0x70, the placement record's two float triples) are BOTH
+            // exactly zero (`Vec_IsEqual` with epsilon 0.0f against the zero vector at 0x2d6200 —
+            // disasm of 0x1d02e0-0x1d0324), and its only consumers are the collision identity fast
+            // paths `Collide_Pick` 0x1eb320:166,249 / `Collide_Intersect` 0x1ebaa8:142 (`Ident`). No
+            // draw path tests it: `View_AddCels` 0x1e6ba0 walks every inner-chain cel (gated on
+            // glist+0x44 bit 0x10, the 0x8018-vs-0xc023 special case and Vision_InView) and
+            // `View_DrawCelGlist` 0x1e6538 draws it at Rot(cel+0x70)·Trans(cel+0x60) behind
+            // psiSetTweakARGB(cel+0xa3-derived alpha, 0xff, 0xff, 0xff). The game DRAWS the flagged
+            // records — 07000002's sandals (t=r=0 [D]) at their absolute art coords, 07000007's shadow
+            // decals with them. docs/systems/baked-statics.md holds the full chain + the open
+            // visibility question at the doorway eye.
             // Searchlight parts are dynamic objects (`Searchlight_Update` moves them every tick): drawn from
             // the simulation below, not from their placements.
             if inst.placement.flags & 0xff == 0xde { continue; }
