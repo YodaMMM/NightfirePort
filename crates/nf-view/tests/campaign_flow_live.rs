@@ -368,45 +368,80 @@ fn drive_08(w: &mut Walker) -> String {
 }
 
 /// 4a: the lift ride from the spawn — the platform carries Bond down the shaft (no input), the
-/// first plate reveals the objective, the landing NIS plays, and the lift script's end fires
-/// ch 0x4a (the documented nis.rs stand-in — no writer exists in the level's data, docs/levels/
-/// 0700004a.md §6; the game's own landing writer is the live-checked #289 NIS enable).
+/// first plate reveals the objective, the ride HOLDS at the −52 landing while the landing
+/// cut-scene plays (SP #289 on the script's ch-0x40 write [D 0x06000571 s5; M 0x1dbda8 case 0 +
+/// SP_Hit 0x1dc470:17-19]) and its end event writes ch 0x22 [D 0780004a.bin 0x060006cf s27],
+/// releasing the hold; the script ends with the platform parked at the lobby and writes NO
+/// channel — "Gain access to lobby" (ch 0x4a) completes on 07000013's spawn touch #153 [D
+/// 07000013.bin; walk_07000013_live pins it]. The leg therefore ends 0/1 with the ride real;
+/// the next part (13) folds it. docs/systems/tower2-lift-ride.md §2.
 fn drive_4a(w: &mut Walker) -> String {
     let mut note = String::from("real drive 4a: ");
     // 12's forced-complete carry holds ch 99/100 — they never survive a real transition; bring
-    // the channels to what a real level entry finds (the re-arm test's clears).
+    // the channels to what a real level entry finds (the re-arm test's clears). The forced
+    // complete also left the mission LAYER in its post-complete arm (internal 5, status 6 —
+    // Mission_Update's case 4), which re-fired on the carried ch 100 during play_level's warm-up
+    // ticks; the game's own state-0 SP start gate refuses cut-scenes on a completed mission
+    // [M 0x1dbda8:80-93 — Mission_Status() must be 0/1], so the −52 landing cut-scene could never
+    // start. A real entry never carries either: re-arm the layer exactly as Mission_Init does on
+    // the warm load [M 0x182270:21-23 — InternalState = 1, Mission_SetStatus(1)].
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.drones.channels.set(100, 0, sim.drones.frame);
         sim.drones.channels.set(99, 0, sim.drones.frame);
+        sim.drones.mission.internal = 1;
+        sim.drones.mission.set_state(1);
     }
     w.wait(30);
     let i4a = mission::LEVELS.iter().position(|l| l.level == 0x0700_004a).unwrap();
     let y0 = w.scene.sim.as_ref().unwrap().bond.pos[1];
     let mut revealed = false;
-    let mut mid_ride_complete = false;
-    for k in 0..5600 {
+    let (mut t40, mut t22, mut t_disabled, mut resumed) = (None, None, None, None);
+    let mut prev_lift_y: Option<f32> = None;
+    // 5600 + the landing hold's ~576 ticks (the script's clock freezes during the scene).
+    for k in 0..6200u32 {
         // Raw steps (the probe's shape): the platform carries Bond; health topped like fix_finale's ride.
         let sim = w.scene.sim.as_mut().unwrap();
         sim.step_bond(Input::default(), false, false, false);
         sim.drones.health.health = 100.0;
-        w.total_ticks += 1;
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.drones.channels.on(0x4d) { revealed = true; }
-        if k == 1200 { mid_ride_complete = sim.drones.channels.on(0x4a); }
-        if sim.drones.channels.on(0x4a) { break; }
+        if sim.drones.channels.on(0x40) && t40.is_none() { t40 = Some(k); }
+        if sim.drones.channels.on(0x22) && t22.is_none() { t22 = Some(k); }
+        if sim.disabled && t_disabled.is_none() && t40.is_some() { t_disabled = Some(k); }
+        let lift = sim.drones.scripts.players.iter().find(|p| p.scripts[0] == 0x0600_0571);
+        let py = platform_y(sim);
+        if let Some(y) = py {
+            if let (Some(prev), Some(t22t)) = (prev_lift_y, t22) {
+                if resumed.is_none() && y < prev - 0.005 { resumed = Some((k, t22t)); }
+            }
+            prev_lift_y = Some(y);
+        }
+        if k == 1200 { assert!(!sim.drones.channels.on(0x4a), "sister: ch 0x4a is OFF mid-ride [D 07000013.bin]"); }
+        // The ride's end: the lift script's own end (the SP deletes, stay=1 → state 5 [M 0x1dbda8]).
+        if lift.is_none_or(|l| l.deleted) && k > 3000 { break; }
     }
-    w.wait(10); // the monitor folds the objective the tick after the writer
+    w.wait(2);
     {
         let sim = w.scene.sim.as_ref().unwrap();
+        let t40 = t40.expect("the lift script's t1610 event writes ch 0x40 [D 0x06000571 s5]");
+        let t22 = t22.expect("the landing cut-scene's end writes ch 0x22 [D 0780004a.bin 0x060006cf s27]");
         assert!(revealed && sim.drones.channels.on(0x4d),
             "the shaft's first plate #277 revealed 'Gain access to lobby' during the ride [D]");
-        assert!(!mid_ride_complete, "sister: ch 0x4a is OFF mid-ride — only the script's end writes it");
-        assert!(sim.drones.channels.on(0x4a),
-            "the lift ride reaches the lobby (ch 0x4a at the script's end — the documented stand-in [S 0700004a.md §6])");
-        assert!(sim.bond.pos[1] < y0 - 100.0, "the ride covered the shaft (y {:.2} from {y0:.2})", sim.bond.pos[1]);
-        // The fold itself is the runner's row.complete (the mission layer's arm after the banner;
-        // the warm-carry fold timing is the live-checked open item, see the report).
+        let gap = t22 - t40;
+        assert!((500..=760).contains(&gap),
+            "the −52 landing cut-scene (575 ticks [D 0x060006cf]) separates ch 0x40 from ch 0x22, got +{gap}");
+        let td = t_disabled.expect("the landing cut-scene disables Bond [D 0x060006cf s9 t0]");
+        assert!(td > t40 && td < t22, "the disable sits inside the scene window");
+        let (rk, rt22) = resumed.expect("the hold releases on ch 0x22 [M 0x1dbda8 case 2]");
+        assert!(rk >= rt22, "the resume follows the ch-0x22 write");
+        assert!(sim.drones.channels.on(0x40), "the −52 doors' unlock channel stands [D]");
+        assert!(!sim.drones.channels.on(0x4a),
+            "ch 0x4a does NOT fire on 0700004a — the real writer is 07000013's spawn touch #153 [D] (the removed stand-in wrote it here)");
+        assert_eq!(sim.drones.mission.states[i4a][0], 3, "the objective stays revealed through the ride's end [L record 4a]");
+        let parked = platform_y(sim).map(|y| y - y0).unwrap_or(f32::NAN);
+        note.push_str(&format!("ride real: ch 0x40 t{t40} → the landing scene (disabled t{td}) → ch 0x22 t{t22} (+{gap}) → the resume t{rk}; \
+            the platform parked {parked:.1} from {y0:.1}; the objective folds on 07000013's spawn touch #153 [D]"));
     }
     // objective-77: the late AND lands HERE — 0700004a's spawn plate #277 (the shaft's first
     // surface, y −9.87..−7.65 [D 0700004a.md §2]) is the only writer of ch 0x4d in the mission's
@@ -420,12 +455,19 @@ fn drive_4a(w: &mut Walker) -> String {
         assert_eq!(sim.drones.mission.states[i12][1], 4,
             "12's 'Escape through the elevator shaft' folds on 0700004a via touch #277's ch 0x4d (the late AND) [D census §2; M 0x1827d8 case 3]");
         assert_eq!(sim.drones.mission.states[i12][0], 4,
-            "sister: 12's override objective stays complete through the fold [M 0x182270 keeps previous parts]");
-        assert_eq!(sim.drones.mission.states[i4a][0], 4,
-            "4a's own 'Gain access to lobby' folded at the ride's end (ch 0x4a) [M 0x1827d8 case 3]");
+            "sister: 12's override objective stays complete through the fold [M 0x182270 keeps previous parts — the disassembly's previous-part arms (0x182488-0x1824a4) fall through with no store]");
+        assert_eq!(sim.drones.mission.states[i4a][0], 3,
+            "4a's own 'Gain access to lobby' ANNOUNCES here (enable 0x4d [L ee_start_05.bin @ 0x2a41e8] via touch #277 [D]) and does NOT fold: nothing on 0700004a writes ch 0x4a [D census, tower2-lift-ride.md §2.8] — the fold is 07000013's spawn touch #153 [D; walk_07000013_live pins states[4a][0]==4 there] (M 0x1827d8 case 3 = the mechanism; M 0x1827d8 has no case 4, folded records stay folded)");
     }
-    note.push_str("the ride real (the script-end writer is the documented stand-in)");
     note
+}
+
+/// The lift platform's keyed entity y (the Entity stream's 0x020005b4 [D 0x06000571]).
+fn platform_y(sim: &nf_view::scene::Sim) -> Option<f32> {
+    sim.drones.scripts.objects.list.iter().flatten().find_map(|o| match o {
+        nf_game::nis::Obj::Entity { hash: 0x0200_05b4, matrix, .. } => Some(matrix[3][1]),
+        _ => None,
+    })
 }
 
 /// The story order [M ResetMap_LevelCode2Img 0x1d5258:77-350 — the on-foot cases ascend in mission

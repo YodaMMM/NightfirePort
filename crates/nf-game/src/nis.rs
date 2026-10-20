@@ -1361,19 +1361,16 @@ impl Player {
                     self.activated = true;
                     if let Some(s) = self.info[self.cur].as_mut() { s.delay = 0; }
                 }
-                // script-negative-delay [S stand-in, docs/levels/0700004a.md §6]: the Tower-2 lift
-                // (SP #42: mask 1, out 0x22 [D placement]) resumes ONLY while ch 0x22 is on — the
-                // game's case-2 rule above — and its script HOLDS itself at t1611 (stream 4's
-                // event 3 p0 = 0 → the −1 delay [D 0x06000571]). The disc carries no ch-0x22
-                // writer the port's scans reach (the 11 scripts' 0xD/0x11 events, the placements,
-                // the 13 TouchOnce plates — the same "no writer found" shape as ch 0x4a below),
-                // so the port marks the play the doc's reading ("the ch-0x22 SP out marks the
-                // play"): the channel rises when the hold engages, and the mask&1 rule then
-                // releases the hold through `SP_UnPause` — the game's path, not a delay override.
-                if w.level() == 0x0700_004a && self.scripts[self.cur] == 0x0600_0571
-                    && self.info[self.cur].as_ref().is_some_and(|s| s.delay < 0) {
-                    ch.set(0x22, 1, frame);
-                }
+                // script-negative-delay: the Tower-2 lift (SP #42: mask 1, out 0x22 [D placement])
+                // resumes ONLY while ch 0x22 is on — the game's case-2 rule above — and its script
+                // HOLDS itself at t1611 (stream 4's event 3 p0 = 0 → the −1 delay [D 0x06000571]).
+                // The ch-0x22 writer is REAL, not a stand-in: the −52 landing cut-scene (SP #289,
+                // mask 1 = SP_Hit's out-channel bit, out 0x40 [D placement]) triggers on the lift
+                // script's t1610 ch-0x40 write [D 0x06000571 s5; M 0x1dbda8 case 0 + SP_Hit
+                // 0x1dc470:17-19], plays pack script 0x060006cf (0780004a.bin), and its LAST stream
+                // event writes ch 0x22 = 1 at the scene's t575 [D 0780004a.bin 0x060006cf s27],
+                // which lands here and releases the hold through `SP_UnPause` — the game's path.
+                // (docs/systems/tower2-lift-ride.md §2 steps 3-7.)
                 // The skip [M 0x1dbda8:129-141]: `Input_Action(-1, 0x19, 1)` — any player pressing the skip
                 // action — fast-forwards the current script via `Script_FFwd(cur, 1)`, unless the script is one
                 // of the three death NISs (`Script_IsDeathNIS` reads slot A's hash, always +0x1C).
@@ -1383,14 +1380,17 @@ impl Player {
                     }
                 }
                 if !self.info[self.cur].as_ref().is_some_and(Script::playing) {
-                    // fix-finale-blockers [S, docs/levels/0700004a.md §6]: the Tower-2 lift — the
-                    // 0x06000571 script's last key parks the platform entity 150 units down at the
-                    // lobby. The game's own ch-0x4a writer ("the lift's lobby arrival") is not in
-                    // the data the port reaches (no mux, trigger, script event or SP writes it —
-                    // the scans), so the port completes the objective at the lift script's end.
-                    if w.level() == 0x0700_004a && self.scripts[self.cur] == 0x0600_0571 {
-                        ch.set(0x4a, 1, frame);
-                    }
+                    // The Tower-2 lift's script end (0x06000571, stay=1 [D placement] → state 5
+                    // [M 0x1dbda8 case 2]) writes NO channel: every 0700004a writer was checked
+                    // (the 13 plates' outs, the 162 doors' ch_open/ch_lock, the 6 spawners' outs
+                    // = 0, the 4 SPs' outs 0x22/0x83/0x84/0x40, the 11 scripts' 0xd/0x11 events —
+                    // only ch 0x40 [D dumps]) and no ACTION.ELF write reaches ch 0x4a. The
+                    // objective "Gain access to lobby" (complete ch 0x4a [L ee_start_05.bin @
+                    // 0x2a41e8]) completes on the NEXT level: 07000013's spawn touch #153 (out
+                    // 0x4a, covering start #9) writes it [D 07000013.bin], and the mission
+                    // monitor watches every part's records [M 0x1827d8:22-38]. The old
+                    // script-end ch-0x4a write here was the documented stand-in — removed
+                    // (docs/systems/tower2-lift-ride.md §2 steps 8-10).
                     if self.stay { self.state = 5; } else {
                         if self.other().is_some() { self.cur ^= 1; self.load(lib, objs, ch, w, frame, out); }
                         self.state = 3;
