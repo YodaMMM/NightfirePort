@@ -43,6 +43,7 @@
 //! Tags: [M] the addresses above, [D] the disc bytes, [L] the snapshot reads, [S] suggested.
 
 use crate::world::V3;
+use nf_formats::anim::Mat4;
 
 /// The `TurretGuns` table [D ACTION.ELF @0x26f520 (file 0x169420), 12 entries × 0x1c].
 pub struct TurretGun {
@@ -101,6 +102,15 @@ pub struct GunImp {
     /// `ext+0x9d` — the `TurretGuns` entry: 0xb in SP, the MP weapon set (Random: a `Rand_Rand(10)`
     /// pick) [M GunImp_Create 0x131f20:52-63,87].
     pub turret: u8,
+    /// The seat offset along the base's forward axis (ext+0x68; the offset vector's x/y are
+    /// zeroed at create [M GunImp_Create 0x131f20:78-79]). Its z = `*(float *)(celglist + 0x28)
+    /// * 0.75` [M 0x131f20:77,81] — the glist's bounds-block word at +0x28: the entity-params
+    /// bounds copy into the runtime glist at the same +8 shift the verified rows show (centre
+    /// payload+8 → glist+0x10, radius payload+0x14 → glist+0x1c [M glist.md], so min at
+    /// payload+0x18 → glist+0x20 and **glist+0x28 = min.z**) — for #225 min.z = −1.4362069
+    /// [D placements box], seat = −1.0771552. Residual [S]: the payload→runtime +8 shift for
+    /// the bounds block is inferred from the verified centre/radius rows, not read live.
+    pub seat: f32,
 }
 
 impl GunImp {
@@ -122,5 +132,35 @@ impl GunImp {
         // The offset (0, 0, 1.71) is pure barrel-forward; the rotated form keeps the general shape.
         let along = m[2];
         [self.pos[0] + d[0] * along + m[0], self.pos[1] + d[1] * along + m[1], self.pos[2] + d[2] * along + m[2]]
+    }
+
+    /// The mounted player pose the game writes every tick [M 0x1320d8:175-194]: the player
+    /// object's matrix ← base·RotY(yaw_s) (Bond's yaw follows the turret), the position ←
+    /// base·RotY(yaw_s)·(0,0,seat) + base translation (the seat offset rides the matrix rows
+    /// [M 0x1320d8:176-192]), the view pitch `BLData+0x8A8 = −pitch_s·0.5` [M 0x1320d8:194].
+    /// Returns (pos, yaw, view_pitch).
+    pub fn mounted_pose(&self) -> (V3, f32, f32) {
+        let yaw = self.yaw_base + self.yaw_s;
+        let (sy, cy) = yaw.sin_cos();
+        ([self.pos[0] + sy * self.seat, self.pos[1], self.pos[2] + cy * self.seat], yaw, -self.pitch_s * 0.5)
+    }
+
+    /// The barrel matrix for the draw: base·RotY(yaw_s)·RotX(pitch_s) with the base
+    /// translation [M 0x1320d8:165-172 — the gunimp object's matrix ← the stored base, ·RotY,
+    /// copied to the barrel object, ·RotX]. Rows are the port's row-vector axes (row 2 = the
+    /// barrel forward, `barrel_dir`); the base is #225's identity-rotation placement, so the
+    /// composed yaw is `yaw_base + yaw_s` [D placements; the general non-yaw-only base is not
+    /// modelled — 0d carries exactly one mount].
+    pub fn barrel_matrix(&self) -> Mat4 {
+        let yaw = self.yaw_base + self.yaw_s;
+        let (sy, cy) = yaw.sin_cos();
+        let (sp, cp) = self.pitch_s.sin_cos();
+        // RotX(p) maps (0,0,1) → (0, −sin p, cos p) [M barrel_dir]; rows: right, up, forward.
+        [
+            [cy, 0.0, -sy, 0.0],
+            [sy * sp, cp, cy * sp, 0.0],
+            [sy * cp, -sp, cy * cp, 0.0],
+            [self.pos[0], self.pos[1], self.pos[2], 1.0],
+        ]
     }
 }
