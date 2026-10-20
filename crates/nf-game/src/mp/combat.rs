@@ -659,8 +659,9 @@ pub struct ShotGate {
     pub reload_state: u8,
     /// Ticks left in the current reload script.
     pub reload_ticks: u32,
-    /// The trigger's previous level — the fresh-press edge the auto-reload reads [M 0x1a5460's
-    /// `Input_Action(9,1)` edge test, the port's `gun.rs` auto_reload rule].
+    /// The trigger's previous level (the wire's fire byte last gate_tick). The auto-reload reads
+    /// the CURRENT level only (`!fire` — the game's `Input_Action(9,1) == 0` release-path arm [M
+    /// 0x1a5fe8 → 0x1a61d0]); this keeps the last level for the switch reset and the traces.
     pub fire_prev: bool,
     /// Weapon ids the gate has already seeded (bit `id`, ids < 128): a weapon the gate never saw
     /// equipped or taken holds ONE spawn-equip grant, and a switch away and back does not refill
@@ -759,19 +760,22 @@ impl MpCombat {
         let cs = crate::pickup::Inventory::clip_slot(wd, w);
         let clip = |g: &ShotGate| g.inv.clip.get(cs).copied().unwrap_or(0) as i32;
         let spare = |g: &ShotGate| g.inv.carried.get(t).copied().unwrap_or(0) as i32;
-        // The reload starts: the reload key, or the auto-reload — no fresh fire press and the
-        // clip can't feed a shot [M 0x1a5460's action-14 / `Input_Action(9,1)==0` branches; the
-        // branch-B timer zero at 0x1a6244].
+        // The reload starts: the reload key (the wire's reload lane — the game's action-14 fresh
+        // press, `Input_Action(0xe, 4)` [M 0x1a5460 disasm 0x1a5ec8]), or the auto-reload — the
+        // game's arm runs in the trigger's RELEASE path: `Input_Action(9, 1) == 0` is the fire
+        // trigger's LEVEL (Input_Update 0x17ee88 writes the action byte 0x01 while held, 0x05 on
+        // the fresh press, 0 on release — disasm 0x17f084-0x17f100), so a HELD trigger with an
+        // empty clip reloads nothing until it releases [M 0x1a5fe8 → 0x1a61d0; the dry
+        // `Player_RoundToFire(+0x91, 0)` and the view-idle/switch checks are the gate's clip and
+        // state stand-ins; docs/systems/mp-shot-gate-reload.md].
         if g.reload_state == 0 {
-            let fresh = fire && !g.fire_prev;
             let can_reload = spare(g) > 0 && clip(g) < p.clip as i32;
-            let auto_reload = !fire || g.fire_prev; // ¬(fresh press)
+            let auto_reload = !fire; // the trigger's level 0 [M 0x1a5fe8 → 0x1a61d0]
             if can_reload && (reload_key || (auto_reload && clip(g) < p.ammo_per_shot as i32)) {
                 if !reload_key { g.timer = 0.0; }
                 g.reload_state = if p.reload_start_ticks > 0 { 5 } else { 6 };
                 g.reload_ticks = if p.reload_start_ticks > 0 { p.reload_start_ticks.max(1) } else { p.reload_ticks.max(1) };
             }
-            let _ = fresh;
         }
         g.fire_prev = fire;
         // The reload machine advances (the port's `Gun::reload_tick` shape; the trigger's level
