@@ -580,6 +580,12 @@ impl Rng {
         self.draws += 1;
         ((self.y & 0xffff).wrapping_mul(n)) >> 16
     }
+    /// `Rand_FRandHalf(max)` 0x1e3810: the same x/y step and value as `Rand_FRand`, minus
+    /// `max·0.5` — uniform in [−max/2, max/2) [M 0x1e3810:11-15]. One draw.
+    pub fn frand_half(&mut self, max: f32) -> f32 {
+        let v = self.frand(max);
+        nf_formats::ps2float::sub(v, nf_formats::ps2float::mul(max, 0.5))
+    }
 }
 
 /// Animation side of a drone: `DroneAnim_*` over the danim tables, playing scripts.
@@ -9814,7 +9820,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // shot in the Sim's shared world pass (`Sim::step_net_world`), on every machine —
             // this machine's own bullet must not break them here alone.
             let net_world = self.net_bodies.is_some();
-            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage) } {
+            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.rng) } {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
                 // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
@@ -13409,7 +13415,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let level_01 = d.level == 0x0700_0001;
         for (dr, from) in self.list.iter().zip(drone_from) {
             if !dr.present || dr.corpse { continue; }
-            for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move) {
+            for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, &mut self.rng) {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 let id = u32::from(k.sound);
                 self.audio.play3d(id, k.pos, None);
@@ -13419,6 +13425,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
         }
+        // The kill pieces tick once per frame: `UpdateAllShards` 0x12b808 (the game runs it in
+        // the frame loop, paused-gated — the Sim has no pause) and `Debris_Update` 0x1aac00 in
+        // the object walk. docs/systems/break-debris.md.
+        self.breaks.shatter.update();
     }
 }
 

@@ -139,6 +139,9 @@ fn fail_dump(scene: &Scene, target: V3, label: &str) -> String {
 }
 
 impl Walker {
+    /// The walked breadcrumb (public for the escort's plate-box probe — break-debris-shatter-2).
+    pub fn trail_points(&self) -> &[V3] { &self.trail }
+
     pub fn new(scene: Scene) -> Walker {
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {

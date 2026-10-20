@@ -195,6 +195,8 @@ impl HudFrame {
 
 /// Most snow vertices per frame (4096 flakes × 6).
 const SNOW_MAX: usize = 4096 * 6;
+/// break-shards draw: at most this many texture groups of glass shards per frame (one uniform slot each).
+const SHARD_GROUPS: usize = 16;
 
 /// Most overlay vertices per frame.
 const HUD_MAX: usize = 16384;
@@ -275,6 +277,10 @@ pub struct Renderer {
     pipelines: Vec<(Draw, wgpu::RenderPipeline)>,
     /// Snow: the particle pipeline (additive, depth test, no write), a per-frame vertex buffer and the flake texture.
     snow_pipeline: wgpu::RenderPipeline,
+    shard_pipeline: wgpu::RenderPipeline,
+    shard_vbuf: wgpu::Buffer,
+    /// This frame's shard groups: (tex_frames index, first vertex, count) — `set_shards`.
+    shard_groups: Vec<(usize, u32, u32)>,
     snow_vbuf: wgpu::Buffer,
     snow_bg: wgpu::BindGroup,
     /// The level's fog (`psiPreGameRun`): colour 0-255, `Ps2Far1`.
@@ -616,6 +622,10 @@ impl Renderer {
             .map(|(m, &tex)| DrawCall { layer: m.layer, pass: m.draw.pass, pipeline: pipelines.iter().position(|(d, _)| *d == m.draw).unwrap(), tex, first: m.first_index, count: m.index_count, centre: m.centre, radius: m.radius, cel: m.cel, chain: m.chain, node: m.node, lflags: m.lflags, skin: m.skin }).collect();
         let fog = scene.fog;
         let snow_pipeline = make_pipeline(Draw { pass: 5, blend: 1, zwrite: false, atest: 0, fog: 0 });
+        // break-shards draw: normal alpha, no depth write, the alpha-list test [S: psiDrawShard's
+        // GS state is in its microcode packet, unread — the pane's own list-1 state stood in].
+        let shard_pipeline = make_pipeline(Draw { pass: 5, blend: 0, zwrite: false, atest: 1, fog: 0 });
+        let shard_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("shards"), size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let snow_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let (snow_bg, snow_view) = match &scene.snow_texture { Some(t) => make_tex2(t.width, t.height, &t.rgba), None => make_tex2(1, 1, &[255, 255, 255, 255]) };
         let batch = wtbgl.as_ref().map(|l| {
@@ -659,7 +669,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -794,6 +804,20 @@ impl Renderer {
     /// every cut-scene at the console's own 4:3 frame, so a wider window pillar-boxes instead of
     /// widening the view (gameplay stays widescreen — the caller passes None there). A movie frame
     /// ignores the band: the FMV owns the whole screen [M 0x209e88].
+    /// break-shards draw: this frame's glass shards (`Scene::shard_draws` — scene texture index,
+    /// world vertices), uploaded before `render`.
+    pub fn set_shards(&mut self, queue: &wgpu::Queue, groups: &[(usize, Vec<crate::scene::Vertex>)]) {
+        self.shard_groups.clear();
+        let mut all: Vec<crate::scene::Vertex> = Vec::new();
+        for (ti, v) in groups.iter().take(SHARD_GROUPS) {
+            let n = v.len().min(SNOW_MAX - all.len()) / 3 * 3;
+            if n == 0 { break; }
+            self.shard_groups.push((ti + 1, all.len() as u32, n as u32));
+            all.extend_from_slice(&v[..n]);
+        }
+        if !all.is_empty() { queue.write_buffer(&self.shard_vbuf, 0, bytemuck::cast_slice(&all)); }
+    }
+
     pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::TextureView, depth: &wgpu::TextureView, view_proj: [[f32; 4]; 4], view_proj_rot: [[f32; 4]; 4], eye: [f32; 3], ticks: u32, snow: &[crate::scene::Vertex], hud: &HudFrame, movie: Option<(u32, u32, &[u8])>, pillar: Option<[f32; 4]>) -> wgpu::CommandEncoder {
         let ns = snow.len().min(SNOW_MAX);
         if ns > 0 { queue.write_buffer(&self.snow_vbuf, 0, bytemuck::cast_slice(&snow[..ns])); }
@@ -1002,7 +1026,13 @@ impl Renderer {
                 const SLOT: usize = 20;
                 let mut staged = std::mem::take(&mut self.staged);
                 staged.clear();
-                staged.resize(HEAD + SLOT * (self.order.len() + 1), 0.0);
+                staged.resize(HEAD + SLOT * (self.order.len() + 1 + self.shard_groups.len()), 0.0);
+                // break-shards draw: one slot per shard group after the draws — no lights, the
+                // group's texture as the array index (batch-draws).
+                for (g, &(tf, _, _)) in self.shard_groups.iter().enumerate() {
+                    let (fb, nf, rate) = self.tex_frames[tf];
+                    staged[HEAD + (self.order.len() + 1 + g) * SLOT + 17] = (fb + ((ticks / rate) % nf) as usize) as f32;
+                }
                 for c in 0..4 { staged[c * 4..c * 4 + 4].copy_from_slice(&view_proj[c]); staged[16 + c * 4..20 + c * 4].copy_from_slice(&view_proj_rot[c]); }
                 staged[32..40].copy_from_slice(&extra);
                 {
@@ -1120,6 +1150,22 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.snow_vbuf.slice(..));
                 pass.set_vertex_buffer(1, self.snow_skin.slice(..));
                 pass.draw(0..ns as u32, 0..1);
+            }
+            // break-shards draw: `DrawAllShards` 0x12bef8 runs before `DrawDrops` [M Game_Draw] — the
+            // shards after the alpha list, each texture group in its own uniform slot.
+            if !self.shard_groups.is_empty() {
+                pass.set_pipeline(&self.shard_pipeline);
+                pass.set_bind_group(0, &self.uniform_bg, &[]);
+                pass.set_vertex_buffer(0, self.shard_vbuf.slice(..));
+                pass.set_vertex_buffer(1, self.snow_skin.slice(..));
+                let base = self.order.len() as u32 + 1;
+                for (g, &(tf, first, count)) in self.shard_groups.iter().enumerate() {
+                    match self.batch.as_ref() {
+                        Some(b) => pass.set_bind_group(1, &b.bg, &[]),
+                        None => { let (fb, nf, rate) = self.tex_frames[tf]; pass.set_bind_group(1, &self.tex_bgs[fb + ((ticks / rate) % nf) as usize], &[]); }
+                    }
+                    pass.draw(first..first + count, base + g as u32..base + g as u32 + 1);
+                }
             }
             // fix-menu-movies2: the ONE movie plane draws BEFORE the HUD runs. The game uploads
             // the decoded frame to VRAM and the page draws it as its own background texture
