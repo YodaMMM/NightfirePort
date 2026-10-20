@@ -285,6 +285,9 @@ impl Breaks {
         let trans = [br.matrix[3][0], br.matrix[3][1], br.matrix[3][2]];
         let centre = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
         let (hit, normal, mat) = Self::contact(&br.src.records, a, b, trans, centre);
+        // Break_Kill defaults the hit material's low 6 bits to 0x10 when zero — the debris
+        // table's breakable row [M 0x12b970:137-138 `if ((hitdata+0x50 & 0x3f) == 0) = 0x10`].
+        let mat = if mat & 0x3f == 0 { 0x10 } else { mat };
         if br.kind == 2 {
             self.shatter.spawn_glass(&br.src.glass, trans, hit, normal, rng);
         } else {
