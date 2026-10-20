@@ -2,8 +2,9 @@
 //! REAL path (`nf_view::load` / `load_with_carry` + `Sim::step_bond`) on the finale levels:
 //!
 //! - 07000016: the launch chain spawns the chaser (ch 0x81 → SP #262's pack cinema 0x06000631 →
-//!   ch 185 → SP #272 "ShuttleLaunch" 0x0600090a → ch 240/242 → spawners #257/#293 [D]); her
-//!   defeat (docs/levels/07000016.md §3/§6; the stand-in is kiko.rs's) completes the mission.
+//!   ch 185 → SP #272 "ShuttleLaunch" 0x0600090a → ch 240/242 → spawners #257/#293 [D]); the
+//!   mission's defeat is the KikoDeathButton #693 (kiko-16-defeat: her death channel is param 12
+//!   = 0 [D] — the old init-forced 0x90 stand-in is gone; docs/levels/07000016.md §3/§6).
 //! - 0700001b: ch 0x0a (0x060008f0 t104 [D] — SP #211's second script, behind the missile
 //!   choreography) spawns Drake (spawner #187, trigger 10 [D]) and enables him (sw_ch 10 [D]);
 //!   his death (ch 0x0e [D]) fires SP #198 → NIS 0x06000a20 → ch 0x0b (t600) + ch 100 (t720).
@@ -40,12 +41,19 @@ fn carry(on: &[u32]) -> RamSave {
     RamSave::capture(&Default::default(), 0, &nf_game::pickup::Inventory::level_start(0x73, 34), &ch)
 }
 
-/// 07000016: the chaser (Kiko, #261 — skin 0x0500001e, dtype 0xf, the only such drone without a
-/// death channel [D]) dies at the silo → ch 0x90 (the kiko.rs stand-in) → AND #271 → ch 100 →
-/// Mission_Update state 6 → the driving hand-off 0x7300017 [M 0x182c60:111-112].
-/// Sister: a pit-squad death (channels 23..26 [D]) never raises ch 0x90 by itself.
+/// 07000016, the real defeat → objective path (kiko-16-defeat): the launch chain spawns the
+/// chaser (Kiko, #261 — skin 0x0500001e, dtype 0xf, death channel param 12 = 0 [D]) and Bond
+/// kills her: her death raises NOTHING (she is not the objective's writer — the pre-2026-10-20
+/// port forced ch 0x90 onto her at init; that stand-in is removed). The mission's defeat is the
+/// **KikoDeathButton #693** — the level's kind-0x29 switch, param 0 = ch 0x90, param 5 = the 0x8d
+/// gate [D hash 020008c1; docs/levels/07000016.md §7]: Bond's own E on it → `Switch_Activate`
+/// 0x1b02a8 toggles ch 0x90 (the gate ch 0x8d off [M 0x1b02a8:22]) → mux #618 (out 0x64 = ch 100
+/// ← 0x90 [D]) → Mission_Update state 6 → the driving hand-off 0x7300017 [M 0x182c60:111-112].
+/// Sisters: a pit-squad death (channels 23..26 [D]) never raises ch 0x90, and the chaser's OWN
+/// death never does either — FAIL-FIRST: on the stand-in the kill assertion failed (the init
+/// write raised 0x90 on her corpse).
 #[test]
-fn the_07000016_chasers_defeat_completes_the_final_mission() {
+fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
     let iso = iso();
     let mut scene = nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).expect("load 07000016");
     {
@@ -89,7 +97,10 @@ fn the_07000016_chasers_defeat_completes_the_final_mission() {
                 scene.sim.as_mut().unwrap().bond.pos = [2.5, 1.2, -153.9];
             }
             let sim = scene.sim.as_ref().unwrap();
-            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && d.death_channel == 0x90) {
+            // The chaser is the skin-0x1e dtype-0xf drone NOT in the death-ch 23..26 pit squad
+            // (#294–297 [D]) — her param 12 is 0 [D #261], so this finds her with or without the
+            // (removed) stand-in, which had made it 0x90.
+            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)) {
                 found = Some(i);
                 break;
             }
@@ -100,11 +111,12 @@ fn the_07000016_chasers_defeat_completes_the_final_mission() {
     // on its own. Re-baselined for fix-spawner-p7: the launch chain's ch 0x15 is the group-1
     // spawner's KILL channel [L-verified 07000005], and 07000016 is a keep level, so the chain's
     // own cleanup removes its undrawn spawns before this point — the sister throws at the nearest
-    // remaining non-chaser (a ninja escort, who walks), re-reading his position per attempt like
-    // the chaser defeat below.
+    // remaining non-chaser (any present guard that is not the chaser herself, index-excluded),
+    // re-reading his position per attempt like the chaser kill below.
     {
         let sim = scene.sim.as_mut().unwrap();
-        let squad = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.death_channel != 0x90)
+        let squad = sim.drones.list.iter().enumerate()
+            .position(|(i, d)| i != chaser && d.present && !d.corpse)
             .expect("a non-chaser guard exists");
         let mut died = false;
         for _ in 0..4 {
@@ -117,14 +129,15 @@ fn the_07000016_chasers_defeat_completes_the_final_mission() {
             if died { break; }
         }
         assert!(died, "the grenade reaches the non-chaser guard");
-    }
-    {
         let sim = scene.sim.as_ref().unwrap();
-        assert!(sim.drones.list.iter().any(|d| d.death_channel != 0x90 && d.corpse), "the guard died");
+        assert!(sim.drones.list[squad].corpse, "the guard died");
         assert!(!sim.drones.channels.on(0x90), "a non-chaser death never completes the objective [D AND #271]");
     }
-    // The chaser's defeat through the game's explosive path (the ninja chain walks her, so the
-    // throw re-reads her position each attempt).
+    // The chaser's own defeat through the game's explosive path (the ninja chain walks her, so
+    // the throw re-reads her position each attempt) — and it raises NOTHING: her death channel is
+    // param 12 = 0 [D #261]; ch 0x90's disc writer is the KikoDeathButton switch #693 [D], not
+    // her health. FAIL-FIRST vs the removed stand-in: with the init-forced 0x90 this assert
+    // failed on her corpse.
     {
         let sim = scene.sim.as_mut().unwrap();
         let mut died = false;
@@ -139,7 +152,50 @@ fn the_07000016_chasers_defeat_completes_the_final_mission() {
         }
         assert!(died, "the chaser dies at the silo");
     }
-    // ch 0x90 → AND #271 → ch 100 → Mission_Update state 6 [M 0x1827d8:155-160, 0x182c60:85-122].
+    // Death_Anim raises the death channel on its first UPDATE after the kill [M 0x1637f8 case 2]
+    // — a few ticks after the corpse appears. Settle 120 ticks before reading the channels.
+    for _ in 0..120 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.drones.list[chaser].corpse, "the chaser is down");
+        assert!(!sim.drones.channels.on(0x90), "the chaser's death raises ch 0x90 — her death channel is param 12 = 0 [D #261]; the writer is the switch #693 [D]");
+        assert!(sim.drones.mission.status() != 6, "sister: the mission does not complete on the kill [D AND #271 waits for the button]");
+    }
+    // THE REAL DEFEAT: Bond's own E on the KikoDeathButton #693 (7.02, 1.16, −155.61 [D]) in the
+    // tower room. Teleport-reach only (the walkreal's full walk is parked on the pit geometry);
+    // the press itself is the game's Player_Activate dispatch like the interactables test. The
+    // gate ch 0x8d (the corridor touch #616) is OFF on this route — the switch is usable
+    // [M Switch_Activate 0x1b02a8:22].
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [7.02, 1.2, -154.0];
+        sim.bond.vel = [0.0; 3];
+    }
+    for _ in 0..10 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    let mut pressed = false;
+    for k in 0..240u32 {
+        if scene.sim.as_ref().unwrap().drones.channels.on(0x90) { pressed = true; break; }
+        let sim = scene.sim.as_ref().unwrap();
+        let at = [7.02f32, 1.46, -155.61];
+        let desired = (at[0] - sim.bond.pos[0]).atan2(at[2] - sim.bond.pos[2]);
+        let err = {
+            let mut e = desired - sim.bond.yaw;
+            while e > std::f32::consts::PI { e -= std::f32::consts::TAU; }
+            while e < -std::f32::consts::PI { e += std::f32::consts::TAU; }
+            e
+        };
+        let eye = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+        let to = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+        let want_pitch = (to[1] / to[0].hypot(to[2]).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+        let input = Input {
+            turn: err.clamp(-0.08, 0.08),
+            look: (want_pitch - sim.bond.pitch).clamp(-0.06, 0.06),
+            ..Default::default()
+        };
+        scene.sim.as_mut().unwrap().step_bond(input, false, false, k % 6 == 0);
+    }
+    assert!(pressed, "the E on the KikoDeathButton never wrote ch 0x90 — Switch_Activate 0x1b02a8 must toggle param-0 [D #693 p0 = 0x90]");
+    // ch 0x90 → mux #618 → ch 100 → Mission_Update state 6 [M 0x1827d8:155-160, 0x182c60:85-122].
     let mut complete = false;
     for _ in 0..600u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
@@ -147,8 +203,8 @@ fn the_07000016_chasers_defeat_completes_the_final_mission() {
     }
     {
         let sim = scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x90), "the chaser's defeat raises ch 0x90 [S kiko.rs]");
-        assert!(sim.drones.channels.on(100), "AND #271 [ch 0x90] → ch 100 [D #271]");
+        assert!(sim.drones.channels.on(0x90), "the KikoDeathButton raises ch 0x90 [D #693 p0]");
+        assert!(sim.drones.channels.on(100), "mux #618 (out 0x64 ← 0x90) fires ch 100 [D #618]");
         assert!(complete, "the final mission completes (MissionState 6 [M 0x182c60:85-116])");
         assert_eq!(sim.drones.mission.to_end, 0x0730_0017, "the driving hand-off [M 0x182c60:111-112]");
     }
