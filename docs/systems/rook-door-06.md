@@ -85,3 +85,45 @@ in check order for the next session/live pass:
 3. Does the escort walk anywhere after his start script (with Bond unarmed at distance)? If he
    follows the driver east, the port's escort chain (PlayScript → resume) needs the same real-
    path treatment as the driver's.
+
+## rook-door-06-3: the [L] walk proof and the driver-test re-derivation
+
+The held merge (818's s/rook-door-06-2 onto master) failed 5 driver tests that pin
+"ANIM_DONE → TruckDriverIdle (0x34)". Re-derived onto the game's own evidence — the pins were
+written before the walk start was found and over-generalised one branch of case 5:
+
+- **The gate's two halves [M].** Case 1 (0x160bd0) calls `AssignAIPath(8)` 0x154190 only when
+  behaviour prop 0x1d ≠ 0 — and prop 0x1d IS set for this driver twice over: the placement's
+  start script id 0x600011d hits `DoModeSettingsNEW` 0x14c600's arm (`setProperty(0x1d, 1)` +
+  mode 0xc5 = 0x17), and `init_DMODE_TruckDriver` 0x14e348 sets it too. AssignAIPath hunts the
+  closest node whose ROUTE flags (route+8, the disc AIPath kind at record+0x80 [M AIPath_Parse
+  0x1d2598:24-33]) carry bit 3 (mask 8) within **0.3** 2D of obj+0x30; none → returns 0 with
+  +0x9f2 still 0 (cleared at entry). On success `InitAIPath` 0x153720 walks the route's node
+  chain filling +0x9f2 (≥ 1; a kind-8 route exits after one node unless the first node is a
+  jump). Case 5 then: `*(short*)(drone+0x9f2) != 0` → 0x35, `== 0` → 0x34.
+- **The game's driver walks [L].** `tests/traces/06-firstsight.trace` (a fresh-boot PCSX2
+  recording on 07000006): the driver is IN 0x32 from frame 147176 at (66.12, 39.20, 28.89)
+  (the sit, x span ~0.03, y the sit settle); at **frame 148014** (+838, the sit script's done)
+  his state becomes **53 = 0x35 TruckDriverMission** and he walks CONTINUOUSLY — 66.65 → 67.94
+  (148100) → 69.93 (148200) → 70.88, y 39.32 → 38.47 — until **frame 148247**, when with armed
+  Bond 2.4 units away he goes to **0x13 CivilianHiding** (the Mission scare arms
+  0x11/0x12/0x15/0x16/0x1e → EnemyAlerts [M 0x161030:75-89]; the Mission state has NO in-tick
+  armed-person scan [M 0x161030 case 3]). A second witness for the scare chain from the sit:
+  `tests/traces/06-searchlight.trace` shows a 0x13 drone holding the park spot (66.1, ~39,
+  28.9) for 2850 samples (frames 140866..144629) — scared off the sit, cowering IN PLACE.
+- **Conclusion.** The 06-2 port behaviour (route → Mission, walk, arrival → Idle [M 0x161030
+  case 3 result 3]) is the game's. The 5 tests' "0x34 after the sit" pins predate the walk
+  start and cited only "[M 0x160bd0 case 5]" — the +0x9f2-clear premise is false on 07000006.
+  Re-derived (this branch, rook-door-06-3):
+  - `fix_driver_air_live`: the post-sit state pin 0x34 → 0x35 ([L 148014]); the settle sister
+    now measures on the walking driver (the settle gate is the hip's, not the state's [M
+    0x140968 tail + 0x140e30-48]).
+  - `fix_06_driver_live`: the gunfire test opens on 0x35; the cower test waits for the mission
+    route's arrival (result 3 → prop 0x1d clears → 0x34 [M 0x161030]) and then runs the
+    ORIGINAL Idle scare choreography at the route end (Idle's case 3 NearArmedPerson [M
+    0x160ed0] — the Mission state must not be scared by proximity alone).
+  - `fix_drone3_live`: the driver test asserts 0x35 at the sit's done, waits for the arrival,
+    then the same Idle scare + the never-aims + grounded sisters.
+  All 5 re-derived tests pass on this branch with the 06-2 drone.rs UNCHANGED
+  — the merge held, the rook door still works on the real path (`rook_door_06_walk_live`
+  green), and the driver's states are the game's.

@@ -60,8 +60,14 @@ fn gunfire_never_arms_the_driver_and_his_death_is_his_own() {
     let mut scene = nf_view::load(&iso, "07000006.bin", false).expect("load");
     let sim = scene.sim.as_mut().unwrap();
     let di = sim.drones.list.iter().position(|dr| dr.skin == 0x0500_0035).expect("the 07000006 driver (skin 0x05000035)");
-    tick_idle(sim, 920); // the 880-frame sit-in-truck script [D nf-extract 0600011d] ends into TruckDriverIdle
-    assert_eq!(sim.drones.list[di].state, state::TRUCK_DRIVER_IDLE, "the driver idles before the shots");
+    tick_idle(sim, 920); // the 880-frame sit-in-truck script [D nf-extract 0600011d] ends into TruckDriverMission
+    // rook-door-06-3: the game's post-sit state is TruckDriverMission (0x35), not Idle — the kind-8
+    // route stands (case 1's prop 0x1d [M 0x14c600/0x14e348] → AssignAIPath(8) 0x154190 finds path
+    // 10's node 0 at his park spot), so case 5's `+0x9f2 != 0` sends him to 0x35 [M 0x160bd0 case 5]
+    // — [L 06-firstsight.trace frame 148014: state 50 → 53 (0x35) exactly at the sit's done, then
+    // the continuous walk 148014..148247 (66.65 → 70.88)]. The pre-06-2 "idles" pin predated the
+    // 06-2 walk-start fix and is re-derived here (the task's held-merge scope).
+    assert_eq!(sim.drones.list[di].state, state::TRUCK_DRIVER_MISSION, "the driver walks his mission route after the sit [L 06-firstsight.trace 148014; M 0x160bd0 case 5]");
     assert_eq!(sim.drones.list[di].anim_set, 12, "the driver plays the civilian anim set");
     assert_eq!(sim.drones.list[di].team, 3, "dtype 13 → team 3 [M GetDroneTypeAttackTypeFriend 0x14cbd8]");
     let dp = sim.drones.list[di].pos;
@@ -137,8 +143,11 @@ fn gunfire_never_arms_the_driver_and_his_death_is_his_own() {
 /// The scare: armed Bond in his facing cone sends him down the scared chain, and the cower keeps
 /// him IN PLACE on the floor at the game's position (the cower anim's x/z root is constant [D
 /// 04000048], the game's CivilianScared runs straight to CivilianHiding at alt mode 0 [M 0x15d3a0],
-/// and the floor snap keeps his feet on the courtyard floor [M 0x140660]). Sister: he stays alive
-/// and unarmed — a scare is not a shot.
+/// and the floor snap keeps his feet on the courtyard floor [M 0x140660]). rook-door-06-3: the
+/// scare is TruckDriverIdle's own (case 3 NearArmedPerson [M 0x160ed0]; the Mission state has NO
+/// in-tick armed-person scan [M 0x161030 case 3]), so the choreography waits for the mission route
+/// to end into Idle first ([L 06-firstsight.trace 148014] the walk; [M 0x161030 result 3] the
+/// arrival clears prop 0x1d → 0x34). Sister: he stays alive and unarmed — a scare is not a shot.
 #[test]
 fn the_scared_cower_keeps_him_in_place_on_the_floor() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -146,6 +155,16 @@ fn the_scared_cower_keeps_him_in_place_on_the_floor() {
     let sim = scene.sim.as_mut().unwrap();
     let di = sim.drones.list.iter().position(|dr| dr.skin == 0x0500_0035).expect("the driver");
     tick_idle(sim, 920);
+    // The sit's done → TruckDriverMission and the route walk ([L 06-firstsight.trace 148014; M
+    // 0x160bd0 case 5]); the scare below is Idle's NearArmedPerson arm, so wait for the mission's
+    // arrival (UpdateMissionRoute result 3 clears prop 0x1d → TruckDriverIdle [M 0x161030 case 3]).
+    assert_eq!(sim.drones.list[di].state, state::TRUCK_DRIVER_MISSION, "the driver walks his mission route after the sit [L 06-firstsight.trace 148014]");
+    let mut arrived = false;
+    for _ in 0..12000u32 {
+        tick_idle(sim, 1);
+        if sim.drones.list[di].state == state::TRUCK_DRIVER_IDLE { arrived = true; break; }
+    }
+    assert!(arrived, "the mission route ends into TruckDriverIdle [M 0x161030 case 3 result 3] — still {:#x}", sim.drones.list[di].state);
     let before = sim.drones.list[di].pos;
     let floor = sim.world.segment([before[0], before[1], before[2]], [before[0], before[1] - 2.5, before[2]])
         .map(|t| before[1] - 2.5 * t);
