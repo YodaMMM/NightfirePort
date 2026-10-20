@@ -64,6 +64,14 @@ fn owners(sim: &nf_view::scene::Sim, level: u32) -> std::collections::BTreeSet<u
     for s in &d.sss.list {
         if s.mask & 1 == 0 && s.channel != 0 { o.insert(s.channel as u8); }
     }
+    // The locks' state-1 hold [M Lock_Update 0x1ae3d8:192-196 — case 1 writes
+    // `switch_channels[u16[+8]] = 1` EVERY tick while the lock is unlocked]: the Operative
+    // create-unlock (param 6 [M 0x1ae1f8:67-69]) and the burned locks own their out channel each
+    // tick (objective-77: the per-tick hold is the port's warm-load fix — the create-time
+    // one-shot left the carried-clobbered channel dead).
+    for l in &d.locks {
+        if (l.unlocked || l.burned) && l.out != 0 { o.insert(l.out as u8); }
+    }
     if level == 0x0700_0005 { o.insert(0x6f); }
     if level == 0x0700_000b { o.insert(0x2d); }
     o.insert(0x97); // Drone_InitComms 0x139520:198-201

@@ -11265,6 +11265,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.rng.rand(20000);
             env.update(&mut self.rng, &mut self.fill_rng, player.eye, atan2_approx(player.aim[0], player.aim[2]));
         }
+        // objective-77: `Lock_Update` case 1 (0x1ae3d8:192-196 — `case 1:
+        // switch_channels[puVar1[4]] = 1; switch_channels_time[...] = GameState._52_4_`) writes the
+        // unlocked lock's out channel EVERY tick — the create-time one-shot hold in `Drones::create`
+        // is only the cold-load shortcut, and a warm load's carried channels restore AFTER it, so
+        // the held channel sat dead (07000012's Operative warm leg: locks #656/#694 unlocked, ch
+        // 0xa = 0 forever, the Q-Decryptor burn route unreachable). The game's object pass re-holds
+        // it every frame; the port does the same here (the object-handler slot, after Env_Update).
+        for l in self.locks.iter().filter(|l| (l.unlocked || l.burned) && l.out != 0) {
+            self.channels.set(l.out as u32, 1, frame);
+        }
         // The presentation FX tick (ripples/flicker/clouds/apocalypse/emitters, fix-world-fx): the
         // game's object handler updates them per frame in the same control pass. The impact
         // emitters (G-041) consume the SHARED stream on their own update ticks. Position
