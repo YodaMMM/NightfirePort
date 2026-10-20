@@ -320,6 +320,14 @@ pub struct NetCore {
     browse: Option<nf_net::discovery::LobbyList>,
     /// The next REGISTER to the lobby directory (ms on the core's clock).
     dir_next_ms: u64,
+    /// net-short-codes: the host's short-code bookkeeping (None until the first REGISTER goes
+    /// out; the code shows while the server keeps answering) [S docs/systems/net-short-codes.md].
+    dir_code: Option<nf_net::directory::ShortCodeHost>,
+    /// net-short-codes: the joiner's LOOKUP for a 4-character code, before any dial [S].
+    pending_join: Option<nf_net::directory::ShortLookup>,
+    /// net-short-codes: the joiner's short-code status line for the join page (the note getter
+    /// hands it to the draw code) [S].
+    short_note: Option<String>,
     /// mp-lobby-one-screen: the host's last published snapshot / the client's last received
     /// one, and the arrived client edits the host has not drained [S §6.4].
     lobby: Option<nf_net::LobbyState>,
@@ -360,6 +368,9 @@ impl NetCore {
             advert: None,
             browse: None,
             dir_next_ms: 0,
+            dir_code: None,
+            pending_join: None,
+            short_note: None,
             lobby: None,
             lobby_edits: Vec::new(),
         })))
@@ -393,6 +404,11 @@ impl NetCore {
         self.start_resend = None;
         self.lobby = None;
         self.lobby_edits.clear();
+        // net-short-codes: a re-listen binds a NEW socket, so the directory's entry (keyed by the
+        // source address) is stale — the code goes and the next REGISTER asks for a fresh one.
+        self.dir_code = None;
+        self.pending_join = None;
+        self.short_note = None;
         Ok(())
     }
 
@@ -422,6 +438,8 @@ impl NetCore {
         self.start_resend = None;
         self.lobby = None;
         self.lobby_edits.clear();
+        self.pending_join = None;
+        self.short_note = None;
         Ok(())
     }
 
@@ -448,6 +466,9 @@ impl NetCore {
             advert: None,
             browse: None,
             dir_next_ms: 0,
+            dir_code: None,
+            pending_join: None,
+            short_note: None,
             lobby: None,
             lobby_edits: Vec::new(),
         })))
@@ -459,15 +480,40 @@ impl NetCore {
         self.reach_cfg = Some(cfg);
     }
 
-    /// Client: dial a typed target — a join code or `a.b.c.d:port` — on the SAME core, starting
-    /// "my code" discovery when reach is enabled.
+    /// Client: dial a typed target — a 4-character code, a join code or `a.b.c.d:port` — on the
+    /// SAME core, starting "my code" discovery when reach is enabled. A 4-character code is not
+    /// dialled here: the LOOKUP to the player's lobby server runs in `poll` and dials what it
+    /// found (net-short-codes) [S].
     pub fn dial(&mut self, typed: &str) -> Result<(), String> {
-        let jc = nf_net::p2p::parse_target(typed).map_err(|e| format!("{e:?}"))?;
-        self.rebind_client(std::net::SocketAddr::V4(jc.addr))?;
-        if let Some(cfg) = self.reach_cfg.clone() {
-            self.reach_join = nf_net::p2p::JoinReach::start(typed, &cfg, reach_seed()).ok();
+        match nf_net::p2p::parse_join_target(typed).map_err(|e| format!("{e:?}"))? {
+            nf_net::p2p::JoinTarget::Short(code) => {
+                let server = self
+                    .reach_cfg
+                    .as_ref()
+                    .and_then(|c| c.directory)
+                    .ok_or_else(|| {
+                        self.short_note = Some("No lobby server is set - 4-character codes need one (net.txt)".to_string());
+                        "no lobby server set".to_string()
+                    })?;
+                self.short_note = Some(format!("Looking up {} on the lobby server...", nf_net::directory::short_code_string(&code)));
+                self.pending_join = Some(nf_net::directory::ShortLookup::new(server, code, reach_seed() as u32));
+                Ok(())
+            }
+            nf_net::p2p::JoinTarget::Address(a) => {
+                self.rebind_client(std::net::SocketAddr::V4(a))?;
+                if let Some(cfg) = self.reach_cfg.clone() {
+                    self.reach_join = nf_net::p2p::JoinReach::start(typed, &cfg, reach_seed()).ok();
+                }
+                Ok(())
+            }
+            nf_net::p2p::JoinTarget::Code(jc) => {
+                self.rebind_client(std::net::SocketAddr::V4(jc.addr))?;
+                if let Some(cfg) = self.reach_cfg.clone() {
+                    self.reach_join = nf_net::p2p::JoinReach::start(typed, &cfg, reach_seed()).ok();
+                }
+                Ok(())
+            }
         }
-        Ok(())
     }
 
     /// net-p2p: stop probing; a host's mapping is deleted on a background thread (the UPnP/NAT-PMP
@@ -477,6 +523,22 @@ impl NetCore {
             std::thread::spawn(move || r.close());
         }
         self.reach_join = None;
+    }
+
+    /// net-short-codes: the code the lobby shows — the server's 4-character one while it keeps
+    /// answering, else the long self-contained code [S].
+    pub fn join_code_display(&self) -> Option<String> {
+        let now = self.epoch.elapsed().as_millis() as u64;
+        if let Some(c) = self.dir_code.as_ref().and_then(|sc| sc.code(now)) {
+            return Some(c);
+        }
+        self.reach_host.as_ref().map(|r| r.status()).and_then(|s| s.code)
+    }
+
+    /// net-short-codes: the joiner's short-code status line for the join page (None when there
+    /// is nothing to say) [S].
+    pub fn join_code_note(&self) -> Option<String> {
+        self.short_note.clone()
     }
 
     /// net-p2p: the online pages' reachability lines.
@@ -500,7 +562,7 @@ impl NetCore {
                 HostState::Failed => format!("Forward UDP {} on your router to play online", s.local_port),
                 _ => String::new(),
             };
-            return Some(crate::menu::MpReach { hosting: true, state, code: s.code, my_code: None, note });
+            return Some(crate::menu::MpReach { hosting: true, state, code: self.join_code_display(), my_code: None, note });
         }
         if let Some(j) = self.reach_join.as_ref() {
             let s = j.status(self.epoch.elapsed().as_millis() as u64);
@@ -532,11 +594,15 @@ impl NetCore {
         let strays = self.sess.take_stray();
         if self.is_host && !self.closed {
             // The internet directory: REGISTER from the game socket every few seconds (the server
-            // lists the source address — this socket's public mapping).
+            // lists the source address — this socket's public mapping). net-short-codes: the
+            // REGISTER is a v2 packet (this period's nonce + our LAN endpoint); the server's ack
+            // carries the 4-character code [S docs/systems/net-short-codes.md].
             if let (Some(dir), Some(info)) = (self.reach_cfg.as_ref().and_then(|c| c.directory), self.advert.as_ref()) {
                 if now >= self.dir_next_ms {
                     self.dir_next_ms = now + nf_net::directory::REGISTER_EVERY_MS;
-                    let pkt = nf_net::directory::register_packet(info);
+                    let lan = nf_net::p2p::local_ipv4().map(|ip| std::net::SocketAddrV4::new(ip, self.sess.local_addr().port()));
+                    let sc = self.dir_code.get_or_insert_with(|| nf_net::directory::ShortCodeHost::new(reach_seed() as u32));
+                    let pkt = sc.register_packet(info, lan);
                     self.sess.send_raw(dir, &pkt);
                 }
             }
@@ -545,7 +611,55 @@ impl NetCore {
                 info.port = self.sess.local_addr().port();
                 for (from, d) in &strays {
                     if let Some(r) = nf_net::discovery::answer(d, info) { self.sess.send_raw(*from, &r); }
+                    if let Some(sc) = self.dir_code.as_mut() { sc.on_packet(d, now); }
                 }
+            }
+        }
+        // net-short-codes: the joiner's 4-character code is being looked up; the found endpoint
+        // is dialled exactly as a long code's (rebind + JoinReach, the LAN endpoint as a probe
+        // hint). Any failure leaves a clear note for the join page [S].
+        if self.pending_join.is_some() {
+            let mut lk = self.pending_join.take().expect("pending_join checked");
+            for (from, d) in &strays {
+                lk.on_packet(*from, d);
+            }
+            let mut out: Vec<(std::net::SocketAddr, Vec<u8>)> = Vec::new();
+            lk.poll(now, &mut |to, d| out.push((to, d.to_vec())));
+            for (to, d) in out { self.sess.send_raw(to, &d); }
+            if let Some(r) = lk.result() {
+                match r {
+                    Ok(f) => {
+                        let public = std::net::SocketAddr::V4(f.public);
+                        eprintln!("[net] code {}: the server knows {}", lk.code(), public);
+                        let name = self.display_name();
+                        if let Err(e) = self.rebind_client(public) {
+                            // The ephemeral re-bind could not open a socket: the join page's own
+                            // timeout ends the attempt; the note says why.
+                            eprintln!("[net] code {}: dial failed: {e}", lk.code());
+                            self.short_note = Some("Could not open a socket to dial the host".to_string());
+                            return;
+                        }
+                        if !name.is_empty() { self.sess.set_display_name(&name); }
+                        if let Some(cfg) = self.reach_cfg.clone() {
+                            let mut jr = nf_net::p2p::JoinReach::start(&public.to_string(), &cfg, reach_seed()).ok();
+                            if let Some(j) = jr.as_mut() {
+                                j.set_lan_hint(f.lan.map(|a| std::net::SocketAddr::V4(a)));
+                            }
+                            self.reach_join = jr;
+                        }
+                        self.short_note = None;
+                    }
+                    Err(reason) => {
+                        eprintln!("[net] code {}: lookup failed: {reason:?}", lk.code());
+                        self.short_note = Some(match reason {
+                            nf_net::directory::NackReason::NotFound => format!("Code {} was not found on the lobby server", lk.code()),
+                            nf_net::directory::NackReason::RateLimited => "The lobby server rate-limited lookups - wait a moment".to_string(),
+                            _ => "The lobby server did not answer - an older nf-lobbyd without short codes?".to_string(),
+                        });
+                    }
+                }
+            } else {
+                self.pending_join = Some(lk);
             }
         }
         if self.reach_host.is_some() || self.reach_join.is_some() {
@@ -1117,6 +1231,8 @@ impl crate::menu::MpSession for SessionProxy {
         });
     }
     fn expect_peer(&mut self, code: &str) -> bool { self.0.borrow_mut().expect_peer(code) }
+    fn join_code_display(&self) -> Option<String> { self.0.borrow().join_code_display() }
+    fn join_code_note(&self) -> Option<String> { self.0.borrow().join_code_note() }
 }
 
 /// A per-run seed for STUN transaction ids / punch nonces (not security relevant).

@@ -16,7 +16,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub use joincode::{parse_target, CodeError, JoinCode, FLAG_NEEDS_PUNCH, FLAG_SYMMETRIC};
+pub use joincode::{parse_join_target, parse_target, CodeError, JoinCode, JoinTarget, FLAG_NEEDS_PUNCH, FLAG_SYMMETRIC};
 pub use punch::{PunchState, Puncher};
 pub use stun::StunClient;
 
@@ -385,6 +385,10 @@ pub struct JoinReach {
     probes_sent: u32,
     lan_host: Option<SocketAddr>,
     redirected: bool,
+    /// net-short-codes: the LAN endpoint the lobby server's LOOKUP answer reported — probed
+    /// beside the broadcast when the code's IP is our own public one (the same-network path),
+    /// never trusted without a PROBE_ACK from it [S].
+    lan_hint: Option<SocketAddr>,
 }
 
 /// §3a: PROBEs go out every this many ms, this many times.
@@ -396,7 +400,12 @@ impl JoinReach {
     pub fn start(typed: &str, cfg: &ReachConfig, seed: u64) -> Result<JoinReach, CodeError> {
         let target = parse_target(typed)?;
         let cfg = ReachConfig { map: false, ..cfg.clone() };
-        Ok(JoinReach { target, mapper: spawn_mapper(0, &cfg), stun: None, seed, probe_next_ms: 0, probes_sent: 0, lan_host: None, redirected: false })
+        Ok(JoinReach { target, mapper: spawn_mapper(0, &cfg), stun: None, seed, probe_next_ms: 0, probes_sent: 0, lan_host: None, redirected: false, lan_hint: None })
+    }
+
+    /// net-short-codes: the LAN endpoint the LOOKUP answer carried (None = the host sent none).
+    pub fn set_lan_hint(&mut self, a: Option<SocketAddr>) {
+        self.lan_hint = a;
     }
 
     pub fn target(&self) -> SocketAddr {
@@ -424,6 +433,10 @@ impl JoinReach {
             send(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, port)), &pkt);
             // The same PC (a second window): broadcasts do not always loop back.
             send(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)), &pkt);
+            // The lobby server's answer knew this one — probe it too (the ack decides).
+            if let Some(h) = self.lan_hint {
+                send(h, &pkt);
+            }
         }
     }
 
