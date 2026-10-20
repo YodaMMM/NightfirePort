@@ -521,7 +521,7 @@ impl Doors {
                 // text label 0x2000003 (`Text_AddMsg(0, 0, 1, Txt_BindLabel(0x2000003), 0, 0xb4)`),
                 // unless the GameState is one of the label-less states (0x7000014 / 0x700004a —
                 // `no_unlock_label`, set from the level code at load).
-                if !self.no_unlock_label { self.label_msgs.push((0x2000_0003, 180)); }
+                if !self.no_unlock_label { self.label_msgs.push((0x0200_0003, 180)); }
             }
         }
         // The auto-close: an open door without the keep-open flag, after `FRAME_RATE_INT·6` quiet ticks
@@ -671,7 +671,7 @@ impl Doors {
         let locked = d.ch_lock != 0 && !channels.on(d.ch_lock as u32);
         let effective = if d.group != 0 && (d.group as usize) < self.group_states.len() { self.group_states[d.group as usize] } else { d.state };
         if !locked && effective != 4 {
-            self.label_msgs.push((0x2000_000b, 180));
+            self.label_msgs.push((0x0200_000b, 180));
             self.door_msg_count += 1;
         }
     }
