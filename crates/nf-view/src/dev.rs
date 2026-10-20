@@ -1164,7 +1164,7 @@ pub fn state_name(s: u8) -> &'static str {
         SURRENDER_ANIM => "SurrenderAnim", SURRENDERED => "Surrendered", UNSURRENDER_ANIM => "UnsurrenderAnim", DRAW_WEAPON => "DrawWeapon",
         PATROL => "Patrol", ATTACK => "Attack", COMBAT => "Combat", COMBAT_NO_MOVE => "CombatNoMove",
         COMBAT_OUT_OF_RANGE => "OutOfRange", COMBAT_NEW_SIGHTING => "NewSighting", COMBAT_NO_SIGHT => "NoSight",
-        COMBAT_DRONE_AHEAD => "DroneAhead", COMBAT_NO_ROUTE => "NoRoute", NO_OPPONENT => "NoOpponent", DRONE_STUCK => "Stuck",
+        COMBAT_WAIT => "CombatWait", COMBAT_NO_ROUTE => "NoRoute", NO_OPPONENT => "NoOpponent", DRONE_STUCK => "Stuck",
         GO_TO_GOAL => "GoToGoal", DEATH_ANIM => "DeathAnim", SPECIAL_DEATH => "SpecialDeath", DEAD => "Dead", FADE => "Fade", FADE_FAST => "FadeFast",
         BULLET_IMPACT => "BulletImpact", ALERT_TO_POSITION => "AlertToPos", SEARCH_AREA => "SearchArea",
         HEARD_NOISE => "HeardNoise", HEARD_NOISE_AWARE => "HeardNoiseAware", HEARD_NOISE_SUSPECT => "HeardNoiseSuspect",
