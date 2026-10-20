@@ -41,9 +41,18 @@ fn the_load_point_refuses_without_the_key_channel_and_loads_07000003_with_it() {
     for _ in 0..6 { sim.step_bond(Default::default(), false, false, true); }
     assert_eq!(sim.drones.level_exit, None, "the key gate must refuse the exit while ch 0x4C is off");
     assert!(!sim.drones.channels.on(0x4c));
-    // With the gate channel on (the un-ported lock/dialogue interaction's write), the same E loads the level.
-    sim.drones.set_channel(0x4c);
-    for _ in 0..6 { sim.step_bond(Default::default(), false, false, true); }
+    // With the gate channel on (the un-ported lock/dialogue interaction's write), a fresh E press
+    // loads the level. door-react-path5: the game's use fires ONCE per press — `Player_Activate`
+    // runs behind `Input_Action(slot, 0xe, 4)`, the action state byte's PRESS-EDGE bit (the byte
+    // is 5 on a fresh press, 1 while held [M Input_Update 0x17f084-0x17f090]; `Input_Action`
+    // 0x17f208 only reads it), and the call site gates on action 9 (fire) down first [M
+    // 0x1a5ea8-0x1a5ee8]. A key held across the gate-on transition re-fires nothing — the old
+    // every-tick re-pick was the port's stand-in, and the old hold passed by its re-toggle
+    // accident. Release and press again, like the player's second tap. The channel re-raises every
+    // tick (the real writer is AND #480's recomputed output over 0x48/0x4B [D]; a one-shot write
+    // is reclaimed by the mux pass before the next tick's E reads it).
+    for _ in 0..6 { sim.drones.set_channel(0x4c); sim.step_bond(Default::default(), false, false, false); }
+    for _ in 0..6 { sim.drones.set_channel(0x4c); sim.step_bond(Default::default(), false, false, true); }
     assert_eq!(sim.drones.level_exit, Some(0x0700_0003), "the exit must load 07000003 once the key gate is on");
     // The reload path (the viewer's own next-level step).
     let next = nf_view::level_archive_name(0x0700_0003).to_string();
