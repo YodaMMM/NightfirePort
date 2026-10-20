@@ -98,3 +98,33 @@ nothing, ch 0x1f stays off — the sister that fails.
    −50.0 per shot — and `switch_channels[0x1f]` flipping to 1 when it crosses 0.
 3. The stick signs: pitch the aim up and read `ext+0x70`'s sign vs the stick (the port assumes
    stick-y negative raises the barrel).
+
+## The mounted carry (gunimp-mounted-pose, 2026-10-20)
+
+The mounted camera is NOT a special turret camera: `Player_PositionCamera` 0x18f5d8 handles cam
+mode 0xe in the SAME case as mode 0 (lines 96-97) — Bond's own first-person eye. What moves the
+view is `GunImp_Update` 0x1320d8:162-194, every mounted tick:
+
+- the player object's matrix ← base·RotY(yaw_s) [M :175] — Bond's yaw follows the turret;
+- the player's position ← base·RotY(yaw_s)·(0,0,seat) + base translation — written to the
+  player's +0xC0 then copied to +0x30..+0x3C [M :176-192]. The seat offset's z =
+  `*(float *)(celglist + 0x28) * 0.75` [M `GunImp_Create` 0x131f20:77-81] — the glist's
+  bounds word at +0x28 = the object record's min.z (the entity-params bounds block copies into
+  the runtime glist at the +8 shift the verified rows show: centre payload+8 → glist+0x10,
+  radius payload+0x14 → glist+0x1c [M glist.md]; the shift for the bounds block is [S]) —
+  #225's min.z = −1.4362069 [D placements box] → **seat = −1.0771552**;
+- the view pitch `BLData+0x8A8 = −pitch_s·0.5` [M :194];
+- the barrel matrix = base·RotY(yaw_s)·RotX(pitch_s) [M :165-172] — the port exposes
+  `GunImp::barrel_matrix()` (rows = the port's row-vector axes, row 2 = `barrel_dir`) and
+  `GunImp::mounted_pose()` (pos/yaw/view-pitch) for the draw.
+
+The port (`gunimp_tick`): the smoothed turret's pose lands on Bond every mounted tick
+(pos/yaw/pitch/vel=0); the view skips Bond's walk while mounted (the game's `Player_Disable`
+[M 0x132f00] takes the player out of the update — `GunImp_Update` moves the object itself).
+The dismount (`GunImp_Deactivate` 0x132c18) restores control (cam mode 0, the saved substate,
+`Player_Enable`, `Camera_CalcViewAngles`) and KEEPS the carried pose — the deactivate writes no
+object position [M 0x132c18:33-47]; the port zeroes the velocity (the game's BL+0x50/+0x10
+zeroing [M 0x132c18:44-45]) and the walk resumes from the mount.
+
+The mount approach: #225 stands on the 7.98 deck [D coll-floor probes] — standing Bond's
+position rides ≈ 9.1 [L main agent, PCSX2]. Tests: `crates/nf-view/tests/gunimp_mounted_live.rs`.
