@@ -58,10 +58,13 @@ opened. The old test stood in with `set_channel(0x39)` — the stand-in is what 
   entity object, each as (world centre, radius) = `World::glist_sphere(hash)` transformed by the
   stream matrix (the same math `Scripts::held_hit_targets` already uses for the bullet pass).
 - `useobj::UseObjects::player_activate` takes the world and, per mask-4 SP, tests the use sphere
-  against the entity targets; with **no resolvable entity** it falls back to the SP's own model
-  sphere (the placement gfx, also the panel here) and then to the placement matrix (the old
-  stand-in, kept for SPs whose scripts have created nothing yet — the existing unit tests). The
-  entity path is the [M] path; the fallbacks are marked [S] in code.
+  against the entity targets. The model-sphere and placement-matrix fallbacks this task originally
+  kept for "SPs whose scripts have created nothing yet" are REMOVED (use-pick-sp-standins):
+  `Player_Activate` 0x1a5170's class walk (0x1a5170:126-175) has no 0x1B case, so a mask-4 SP
+  with no live entity sphere is simply not use-activatable — the game has no such route either.
+  The switch-through-SP route's facing dot now reads the real positions [M 0x1dc338:50-61]:
+  `Mat_GetDir(entity+0x90)` dotted with `activator obj+0xC0 − entity obj+0xC0` (the object
+  translation rows), not the head/eye position.
 - The rest of the chain already existed: the SP latch → out-channel write (nis.rs update_player),
   the SS state machine (ss.rs), the touch → load (triggers.rs).
 

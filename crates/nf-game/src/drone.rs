@@ -10761,7 +10761,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// calls `Trigger_Activate` (0x1b2318) — routes b and c on 07000005 (the on-foot gate door and the zip-wire
     /// exit). The port's `player_use_doors` handled only doors; this adds the trigger path so pressing E on a
     /// LOAD_LEVEL or TouchOnce trigger fires it immediately [M 0x1a5170:100-108,128, 0x1b2318:34-111].
-    pub fn player_use_doors(&mut self, d: &Data, head: V3, look: V3, frame: u32, sp_head: V3) {
+    pub fn player_use_doors(&mut self, d: &Data, head: V3, look: V3, frame: u32, sp_head: V3, body: V3) {
         let (evs, _hits) = self.doors.player_use(head, look, &mut self.channels, frame, d.world);
         for (id, pos) in evs {
             match d.sfx {
@@ -10793,8 +10793,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // mouths, z ≈ 26.3) sat just outside the camera-based sphere and the buttons never
         // responded. The doors/trigger/monitor arms above keep the camera origin their reaches
         // were tuned to (the game builds them from the same head ray [M 0x1a5170]; unifying them
-        // re-tunes every door reach and is its own task).
-        self.useobjs.player_activate(&mut self.scripts, &mut self.channels, sp_head, look, frame, d);
+        // re-tunes every door reach and is its own task). `body` = the player object's obj+0xC0
+        // (the body position) — `SP_Activate` 0x1dc338:51-53's facing-dot input (use-pick-sp-standins).
+        self.useobjs.player_activate(&mut self.scripts, &mut self.channels, sp_head, look, frame, d, body);
         // `Player_Activate`'s class-0x38 monitor path (`Monitor_Activate` 0x1b0058): the use
         // sphere's nearest monitor within reach activates (or, while viewing, the same 0xE edge
         // cycles/exits). Reach: the door rule (head+look sphere 1.0 vs the object's sphere) —
