@@ -36,9 +36,11 @@ delete flag — the pane leaves the world and registers nothing further, the "co
 `Rand_Rand(100) < 0x29` → 0x5f2 (1522) else 0x5f3 (1523) [M 0x12b970:65-76; the roll is the only
 RNG draw, taken only when a non-glass pane dies] — then the kind-2 shatter polys (`psiGetTriList`
 0x11c9d8 + `ShatterPolyRecurse`) or the debris loop (`Drone_BrokenObject` 0x138588 is guard barks
-on 07000001 only; `Debris_Create_Loop` 0x1ed548 spawns one debris object per collision triangle,
-EffectInfo[hit material] supplies the gfx — the hit's material defaults to 0x10 when unset [M
-0x12b970:134-141]).
+on 07000001 only; `Debris_Create_Loop` 0x1ed548 spawns one debris object per third collision
+triangle record of every leaf box — the stride is 3 in the disassembly [M 0x1ed638],
+`docs/systems/break-debris.md` — EffectInfo[hit material] supplies the gfx — the hit's
+material defaults to 0x10 when unset [M 0x12b970:134-141]). The kill pieces are ported in
+`crates/nf-game/src/shatter.rs` (docs/systems/break-debris.md).
 
 ## Bullets never stop on a pane
 
