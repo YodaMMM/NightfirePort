@@ -11,6 +11,18 @@
 //! → latch → `switch_channels[57] = 1` [M 0x1dbda8:107-123,221-229] → the AND mux #274 completes
 //! objective 2 (ch 0x46) [D] and the LIFTDOORS SS (channel 57 [D params (3,57)]) play their open
 //! spline; Bond walks in, TOUCH_ONCE #67 → ch 0x32 → LOAD_LEVEL #63 → 0700000a [D].
+//!
+//! The walks hold the NPCs (the renderer's --hold-npcs dev hold [M lib.rs:5763]): the route
+//! passes the patrolling lobby guard within his 12-unit sight [D drone props], and the game's
+//! sighted-guard chain — NearArmedPerson 0x1787c8:13-22 (prop 0x3c + the sight flag, NO armed
+//! gate on 09/0A) → CivilianPatrol 0x15d610 case 3 SetState(0x56) → FirstSightState 0x147c48
+//! prop 0x1A → CivilianChallenge 0x162558 → RunToAlarm → PressAlarm 0x168ea8 →
+//! SetMissionFailReason 0x13e560 case 0x10 — ends with the GUARD pressing the nearest switch
+//! (ch 0x7D → mux #278 → ch 0x61 → objective 1 failed). An unheld walk therefore legitimately
+//! raises the alarm in the game too; these tests pin the button/door/cab machinery, not the
+//! stealth, so the hold keeps the alarm off. The unheld sight repro:
+//! security_alarm_09_live::the_panel_guard_raises_the_alarm_and_fails_the_mission
+//! (docs/systems/security-room-alarm-09.md §"The walk tests under the real rule").
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -107,6 +119,7 @@ fn walk_to_the_lobby(w: &mut Walker) {
 fn walk_operate_the_button_and_ride_to_0700000a() {
     let iso = iso();
     let mut w = Walker::new(load(&iso));
+    w.scene.sim.as_mut().unwrap().drones.hold_npcs = true;
     w.wait(30);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -198,6 +211,7 @@ fn walk_operate_the_button_and_ride_to_0700000a() {
 fn without_the_button_the_doors_stay_shut() {
     let iso = iso();
     let mut w = Walker::new(load(&iso));
+    w.scene.sim.as_mut().unwrap().drones.hold_npcs = true;
     w.wait(30);
     walk_to_the_lobby(&mut w);
     // Past the panel without a press: the route's own arrival by the armour corner IS the
@@ -208,7 +222,8 @@ fn without_the_button_the_doors_stay_shut() {
         assert!(!sim.drones.channels.on(0x46) && !sim.drones.channels.on(0x32), "no objective, no exit channel");
         assert_eq!(elevator_sp(sim).state, 1, "#70 still primed-idle [M 0x1dbc08]");
         assert!(lift_doors(sim).iter().all(|s| s.state == 0x40), "the doors still rest shut [D param 0 = 64]");
-        assert!(sim.drones.level_exit.is_none());
+        assert!(sim.drones.level_exit.is_none(),
+            "no button press → the level never ends (the held guards cannot end it either)");
     }
     // The closed doors are solid: pushing at the shaft mouth must not reach the touch box
     // (z 10.33..12.49 [D]) nor fire it.
