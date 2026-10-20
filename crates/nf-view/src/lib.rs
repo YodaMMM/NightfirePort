@@ -1926,6 +1926,19 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
             "mpplayermods" => menu::Page::MpPlayerMods,
             "mpenviromods" => menu::Page::MpEnviroMods,
             "mpbotsetup" => menu::Page::MpBotSetup,
+            // The setup step / match summary (agent 1 joined; NF_SETUP_STATE=2|3|4 picks team/character/handicap,
+            // NF_CONFIRM_TEAM=1 a Team Arena with 3 bots split across the teams).
+            "mpsetup" | "mpconfirm" => {
+                fe.mp_join[0].joined = true; fe.mp_join[0].state = 5; fe.mp_join[0].skin = 0;
+                fe.mp_level = 0x0700_0024;
+                if std::env::var_os("NF_CONFIRM_TEAM").is_some() {
+                    fe.mp_scenario = menu::MP_SCENARIO_ROWS.iter().map(|r| r.3).find(|s| s & 0x2000_0000 != 0).unwrap_or(0x2000_0001);
+                    fe.mp_join[0].team = 1;
+                    for (k, b) in fe.mp_bots.iter_mut().take(3).enumerate() { b.enabled = true; b.team_mi6 = k == 0; }
+                } else { fe.mp_scenario = 1; }
+                fe.mp_setup_state = std::env::var("NF_SETUP_STATE").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+                if name == "mpsetup" { menu::Page::MpSetup } else { menu::Page::MpConfirm }
+            }
             // The online one screen as the host sees it (a joined player in slot 2 for the render).
             "mplobby" => {
                 fe.mp_hosting = true;

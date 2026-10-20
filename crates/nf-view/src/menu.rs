@@ -1369,6 +1369,10 @@ pub struct MpConfirmSummary {
     /// fills blue only) [M :320-389].
     pub bots_blue: u32,
     pub bots_red: u32,
+    /// The enabled bots' portrait textures per column, in record order (the columns' msg-0x24 icons
+    /// [M :320-389]); the counts above are their lengths.
+    pub bot_portraits_blue: Vec<u32>,
+    pub bot_portraits_red: Vec<u32>,
     /// The six summary rows [M :275-318].
     pub rows: MpConfirmRows,
 }
@@ -1383,6 +1387,14 @@ pub struct MpConfirmAgent {
     /// The handicap value (the line renders "%s%d" with 0x30d3e0, or 0x30d2d8 when negative
     /// [M :203-207]).
     pub handicap: i32,
+    /// The portrait 0x10000235/0x10000236's msg-0x24 texture: `mp_characters_small` row +0x00 for the
+    /// agent's character [M :193-200 — GetItemFromHash(0x2df8f8, char, 0x1d)]; 0 when no row matches.
+    pub portrait: u32,
+}
+
+/// The `mp_characters_small` portrait texture for a character id (row +0x0C key → row +0x00), 0 if none.
+pub fn mp_small_portrait(character: u32) -> u32 {
+    MP_CHARACTERS_SMALL.iter().find(|r| r.3 == character).map_or(0, |r| r.0)
 }
 
 /// The six summary rows' ids and rendered values [M :275-318].
@@ -6647,7 +6659,7 @@ impl FrontEnd {
         let team_game = self.mp_scenario & 0x2000_0000 != 0;
         let humans: Vec<MpConfirmAgent> = self.mp_join.iter().enumerate().filter(|(_, a)| a.joined).map(|(p, a)| {
             let blue = a.team == 1 || !team_game;
-            MpConfirmAgent { blue, name: if a.codename.is_empty() { format!("Player {}", p + 1) } else { a.codename.clone() }, handicap: if p == 0 { self.mp_handicap } else { 0 } }
+            MpConfirmAgent { blue, name: if a.codename.is_empty() { format!("Player {}", p + 1) } else { a.codename.clone() }, handicap: if p == 0 { self.mp_handicap } else { 0 }, portrait: mp_small_portrait(a.skin) }
         }).collect();
         // The bots' columns: a free-for-all fills the blue column only (the 0x4c's arm — the
         // `if (+0x420 & 0x20000000) == 0` jump straight to 0x10000233); a team game splits by
@@ -6678,6 +6690,8 @@ impl FrontEnd {
             humans,
             bots_blue: bots_blue_n,
             bots_red: bots_red_n,
+            bot_portraits_blue: self.mp_bots.iter().filter(|b| b.enabled && (!team_game || b.team_mi6)).map(|b| mp_small_portrait(b.character)).collect(),
+            bot_portraits_red: self.mp_bots.iter().filter(|b| b.enabled && team_game && !b.team_mi6).map(|b| mp_small_portrait(b.character)).collect(),
             rows: MpConfirmRows {
                 map_label: 0x3d4, map_name_label: map_name,
                 scenario_label: 0x3d5, scenario_name_label: scenario_name,
@@ -7834,9 +7848,108 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             hint_bar(&mut h, font, &hint(0x217, "~A Confirm  ~V Scroll  ~H Change  ~B Back"), 50.0, 419.0, cream);
             logo_stamp(&mut h);
         }
-        // Not drawn yet: the per-agent setup step (PCSX2 m52-m54 — the Join Game panels with Choose Team / Choose
-        // Character / Health Handicap) and the Start summary (m65).
-        Page::MpSetup | Page::MpConfirm => {}
+        // The per-agent setup step [PCSX2 m52 Choose Team / m53 Choose Character / m54 Health Handicap]: the Join Game
+        // page's four panels (the same page geometry as MpJoin, page 0x40000019's panels TEX 0x03000199), agent 1's
+        // prompt (70,132), its 128×64 picture (117,150) and the pick with the arrows (70,215); the other agents' panels
+        // stay empty (the game hides an unjoined agent's controls [M P_MPSETUP 0x20d7a8:73-78]). Until 2026-10-19 this
+        // page drew nothing — the user's "no screen appears after selecting a map".
+        Page::MpSetup => {
+            page_header(&mut h, hfont, &bind(0x29e));
+            let panels = fe.mp_setup_panels(lang);
+            let spots = [(50.0f32, 103.0f32), (328.0, 103.0), (50.0, 253.0), (328.0, 253.0)];
+            for (i, &(px, py)) in spots.iter().enumerate() {
+                quad640(&mut h, 0x0300_0199, px, py, 262.0, 134.0, [0.0, 0.0, 256.0, 128.0], gs(0x7f7f7f, 0xff));
+                label(&mut h, font, &bind(0x5f0 + i as u32), px + 20.0, py + 2.0, 226.0, 16.0, bright, true, 1.0);
+                let p = &panels[i];
+                if !p.joined || p.state == 0 { continue; }
+                let (dx, dy) = (px - 50.0, py - 103.0);
+                if i == 0 && (2..=4).contains(&fe.mp_setup_state) {
+                    label(&mut h, font, &bind(fe.mp_setup_prompt_label()), 70.0 + dx, 132.0 + dy, 226.0, 16.0, cream, true, 1.0);
+                    // The picture control (117,150,128×64): the team emblems and the handicap cross are 128×64
+                    // images; a character's preview is the 128×128 ring art, its middle band shown.
+                    let tex = fe.mp_setup_image();
+                    let uv = if fe.mp_setup_state == 3 { [0.0, 32.0, 128.0, 96.0] } else { [0.0, 0.0, 128.0, 64.0] };
+                    quad640(&mut h, tex, 117.0 + dx, 150.0 + dy, 128.0, 64.0, uv, gs(0x7f7f7f, 0xff));
+                    label(&mut h, font, &fe.mp_setup_value_text(lang), 70.0 + dx, 215.0 + dy, 226.0, 16.0, cream, true, 1.0);
+                    let yellow = gs(0xfec43e, 0xff);
+                    for (cx, left) in [(80.0f32 + dx, true), (284.0 + dx, false)] {
+                        let cy = 223.0 + dy;
+                        let (p0, p1, p2) = if left { ((cx + 6.0, cy - 6.0), (cx + 6.0, cy + 6.0), (cx - 6.0, cy)) } else { ((cx - 6.0, cy - 6.0), (cx - 6.0, cy + 6.0), (cx + 6.0, cy)) };
+                        let q = |p: (f32, f32), h: &Hud| HudVertex { p: h.ndc(Anchor::Centre, mx(p.0), my(p.1)), uv: [0.0, 0.0], c: yellow };
+                        let v = [q(p0, &h), q(p1, &h), q(p2, &h), q(p0, &h), q(p2, &h), q(p2, &h)];
+                        h.ndc_solid(-3, v, yellow);
+                    }
+                } else {
+                    // A finished agent (or another joined one): its choice, centred in the panel.
+                    label(&mut h, font, &p.pick, 70.0 + dx, 160.0 + dy, 226.0, 16.0, cream, true, 1.0);
+                }
+            }
+            hint_bar(&mut h, font, "~A Confirm  ~H Change  ~B Back", 50.0, 419.0, cream);
+            logo_stamp(&mut h);
+        }
+        // The match summary "Start" [PCSX2 m65; the content per P_MPCONFIRM 0x20ec00's 0x4c arm via
+        // `mp_confirm_summary`]: the settings band (50..590, 82..158) with map/scenario/weapon set on the left and
+        // points/duration/friendly fire right-aligned; the blue column (50..317) and the red one (324..591), 167..412,
+        // each a header bar with the team name, the humans' rows (portrait, name, handicap) and the "AI Bots" bar with
+        // the bots' portraits under it. A free-for-all fills the blue column only. Positions from m65 (the 640-space
+        // mapping the Join Game panels pin: x = (px − 307.5)/2.15, y = (py − 18.6)/2.15).
+        Page::MpConfirm => {
+            let s = fe.mp_confirm_summary(lang);
+            page_header(&mut h, hfont, &bind(0x173));
+            let fill = |h: &mut Hud, x0: f32, y0: f32, x1: f32, y1: f32, c: [f32; 4]| {
+                let (a, b) = (h.ndc(Anchor::Centre, mx(x0), my(y0)), h.ndc(Anchor::Centre, mx(x1), my(y1)));
+                let q = |p: [f32; 2]| HudVertex { p, uv: [0.0, 0.0], c };
+                let v = [q([a[0], a[1]]), q([b[0], a[1]]), q([b[0], b[1]]), q([a[0], a[1]]), q([b[0], b[1]]), q([a[0], b[1]])];
+                // Layer 1: under the portraits (layer 0) — lower layers draw on top [M hud.rs finish].
+                h.ndc_solid(1, v, c);
+            };
+            let right_text = |h: &mut Hud, s: &str, xr: f32, y: f32| {
+                let (placed, _) = font.layout(s, 0.0, 0.0);
+                let w = placed.last().map_or(0.0, |p| p.x + font.glyphs[p.glyph].w as f32) * 1.3;
+                left_text(h, font, s, mx(xr) - w, my(y), cream, true, 1.3);
+            };
+            // The settings band.
+            fill(&mut h, 50.0, 82.0, 590.0, 158.0, [0.0, 0.0, 0.0, 0.45]);
+            let r = &s.rows;
+            let colon = |l: u32, v: String| format!("{} : {}", bind(l), v);
+            left_text(&mut h, font, &colon(r.map_label, bind(r.map_name_label)), mx(60.0), my(101.0), cream, true, 1.3);
+            left_text(&mut h, font, &colon(r.scenario_label, bind(r.scenario_name_label)), mx(60.0), my(124.0), cream, true, 1.3);
+            left_text(&mut h, font, &colon(0x24d, bind(r.weapon_label)), mx(60.0), my(147.0), cream, true, 1.3);
+            // The PCSX2 m65 order: 0x10000230 (the time row, label 0x3d8 [M :273-279]) on top, then 0x10000231 (the points
+            // row, 0x3d6), then friendly fire. Which value each label carries is open (m65 has both at 10) — a PCSX2
+            // capture with different limits settles it (queued 2026-10-19).
+            for (row, y) in [(&r.time_row, 101.0f32), (&r.points_row, 124.0), (&r.friendly_fire_row, 147.0)] {
+                right_text(&mut h, &row.replace(": ", " : "), 579.0, y);
+            }
+            // The two columns.
+            let cols = [(50.0f32, 317.0f32, true), (324.0, 591.0, false)];
+            for &(x0, x1, blue) in &cols {
+                if !blue && !s.team_game { continue; }
+                let (body, edge) = if blue { ([0.16, 0.07, 0.36, 0.85], [0.25, 0.22, 0.95, 1.0]) } else { ([0.42, 0.04, 0.03, 0.75], [0.95, 0.12, 0.08, 1.0]) };
+                fill(&mut h, x0, 167.0, x1, 412.0, body);
+                for (a0, b0, a1, b1) in [(x0, 167.0, x1, 169.0), (x0, 410.0, x1, 412.0), (x0, 167.0, x0 + 2.0, 412.0), (x1 - 2.0, 167.0, x1, 412.0)] {
+                    fill(&mut h, a0, b0, a1, b1, edge);
+                }
+                fill(&mut h, x0 + 2.0, 169.0, x1 - 2.0, 191.0, [0.0, 0.0, 0.0, 0.85]);
+                let title = if s.team_game { bind(if blue { 0x1c8 } else { 0x1c7 }) } else { bind(s.header_label) };
+                centred(&mut h, font, -2, &title, mx((x0 + x1) / 2.0), my(186.0), cream, true, 1.5);
+                for (k, a) in s.humans.iter().filter(|a| a.blue == blue).enumerate() {
+                    let y = 195.0 + k as f32 * 40.0;
+                    if a.portrait != 0 { quad640(&mut h, a.portrait, x0 + 5.0, y, 40.0, 37.0, [32.0, 0.0, 96.0, 64.0], gs(0x7f7f7f, 0xff)); }
+                    left_text(&mut h, font, &a.name, mx(x0 + 54.0), my(y + 24.0), cream, true, 1.4);
+                    let hc = if a.handicap < 0 { a.handicap.to_string() } else { format!("+{}", a.handicap) };
+                    right_text(&mut h, &hc, x1 - 14.0, y + 24.0);
+                }
+                fill(&mut h, x0 + 2.0, 359.0, x1 - 2.0, 382.0, [0.0, 0.0, 0.0, 0.85]);
+                centred(&mut h, font, -2, &bind(0x1ad), mx((x0 + x1) / 2.0), my(377.0), cream, true, 1.5);
+                let bots = if blue { &s.bot_portraits_blue } else { &s.bot_portraits_red };
+                for (k, &tex) in bots.iter().enumerate().take(10) {
+                    if tex != 0 { quad640(&mut h, tex, x0 + 4.0 + k as f32 * 26.0, 384.0, 24.0, 24.0, [32.0, 0.0, 96.0, 64.0], gs(0x7f7f7f, 0xff)); }
+                }
+            }
+            hint_bar(&mut h, font, "~A Start Game  ~B Back", 50.0, 419.0, cream);
+            logo_stamp(&mut h);
+        }
         // mp-lobby-one-screen: the one screen (the main agent's draw over the model's getters
         // [S docs/systems/net-online-lobby.md §6]): the settings column on the panel's left, the
         // players on its right, the internet line + join code in the band under the panel. The
@@ -7856,7 +7969,8 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             plate(&mut h, 358.0, 64.0, 272.0, 200.0);
             let bind = |id: u32| lang.and_then(|l| l.bind(id)).map(str::to_string).unwrap_or_default();
             let mut one = fe.mp_one.clone();
-            let rows = one.rows();
+            // An Off bot's Skill row carries no value — drop such empty, disabled rows (clutter in the list).
+            let rows: Vec<_> = one.rows().into_iter().filter(|r| r.focused || r.enabled || r.value_id != 0 || !r.value_text.is_empty()).collect();
             // Rows sharing a label (the five Enviro-Mods, the four bots' Bot/Skill pairs) number themselves.
             let names: Vec<String> = rows.iter().map(|r| if r.label_id != 0 { bind(r.label_id) } else { r.label_text.to_string() }).collect();
             let names: Vec<String> = names.iter().enumerate().map(|(k, n)| {
@@ -7869,7 +7983,9 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             // resolution so it's a scroll bar when smaller" — the 16-player lobbies): `k` is the
             // page units per 720p unit, so a taller window fits more rows; a list that overflows its
             // column scrolls with the focus and draws a scroll bar [S].
-            let k = (720.0 / fe.view_h.max(1.0)).clamp(0.4, 1.25);
+            // Floor 0.8 (the user, 2026-10-19, on a 1440p window: "this looks awful" — at k 0.5 the rows were packed
+            // tighter than the text): below it the lists scroll instead of shrinking.
+            let k = (720.0 / fe.view_h.max(1.0)).clamp(0.8, 1.25);
             let scroll_bar = |h: &mut Hud, x: f32, y: f32, hh: f32, first: usize, vis: usize, total: usize| {
                 if total <= vis || total == 0 { return; }
                 plate(h, x, y, 3.0, hh);
@@ -7882,7 +7998,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             };
             // The settings column, scrolled to keep the focus in view.
             let (col_top, col_h) = (72.0f32, 272.0f32);
-            let rh = 15.0 * k;
+            let rh = 17.0 * k;
             let vis = ((col_h / rh) as usize).max(3);
             let focus = rows.iter().position(|r| r.focused).unwrap_or(0);
             let first = focus.saturating_sub(vis.saturating_sub(3)).min(rows.len().saturating_sub(vis));
@@ -7891,10 +8007,13 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 let name = names[n].clone();
                 let value = if r.value_id != 0 { bind(r.value_id) } else { r.value_text.clone() };
                 let col = if r.focused { bright } else if !r.enabled || !r.editable { dim } else { cream };
-                left_text(&mut h, font, &name, mx(66.0), my(y + 6.0 * k), col, true, 0.85 * k);
+                // Name and value on ONE baseline (the value used to be centred in its own box, which drifted off the
+                // name's line as k shrank — the overlapping rows in the user's screenshot).
+                let base = my(y + 11.0 * k);
+                left_text(&mut h, font, &name, mx(66.0), base, col, true, 0.85 * k);
                 if !value.is_empty() {
                     let shown = if r.focused && r.editable { format!("< {value} >") } else { value };
-                    label(&mut h, font, &shown, 222.0, y - 3.0 * k, 122.0, 12.0 * k, col, true, 0.85 * k);
+                    centred(&mut h, font, -2, &shown, mx(283.0), base, col, true, 0.85 * k);
                 }
             }
             scroll_bar(&mut h, 346.0, col_top - 4.0, col_h, first, vis, rows.len());
@@ -7906,7 +8025,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             // 16-player lobbies: one line per JOINED player (name, team, ready, ping), the open slots
             // summed in one line under them; the list scrolls with a bar when it overflows [S].
             let (pl_top, pl_h) = (90.0f32, 150.0f32);
-            let ph = 15.0 * k;
+            let ph = 17.0 * k;
             let joined: Vec<usize> = (0..fe.mp_one.players.len()).filter(|&i| fe.mp_one.players[i].joined).collect();
             let open = fe.mp_one.players.len() - joined.len();
             let lines = joined.len() + usize::from(open > 0);
@@ -8894,6 +9013,8 @@ pub fn mp_textures() -> &'static [u32] {
         let mut v: Vec<u32> = MP_SCENARIO_ROWS.iter().map(|r| r.0).chain(MP_MAP_ROWS.iter().map(|r| r.0))
             .chain(MP_CHARACTERS.iter().map(|r| r.0)).chain(MP_OPTIONS_ROWS.iter().map(|r| r.0)).chain(MP_BOTS_ROWS.iter().map(|r| r.0))
             .chain([0x0300_0199u32, 0x0300_0159, 0x0300_015c, 0x0300_0169, 0x0300_01a0])   // the Join Game panels + slot images [L page 0x40000019]
+            // The Setup page's prompt images: team Phoenix/MI6 and the handicap cross [M C_RBMPSETUP 0x20de58].
+            .chain([0x0300_01a1u32, 0x0300_01a2, 0x0300_01a3])
             // mp-hud-real: the debriefing's portraits (`mp_characters_small` @0x2df8f8 +0x00, the
             // handler's msg-0x24 sends [M 0x212198:159-166]) and its placeholders [L page 0x40000033].
             .chain(MP_CHARACTERS_SMALL.iter().map(|r| r.0))

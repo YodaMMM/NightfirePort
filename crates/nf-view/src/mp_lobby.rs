@@ -249,7 +249,16 @@ impl MpLobby {
             };
             push(MpLobbyRowId::Enviro(i), 0, "Enviro-Mod", vid, String::new(), host_can, enabled, &mut self.focus);
         }
+        // Ravine takes no bots: the game locks the AI Bots row there [M P_MPMAP 0x217678:20-25] and the match start
+        // zeroes them [M Menu_PrepareBots 0x1f94a0:85-88] (`FrontEnd::mp_bot_count`). The lobby used to let the host
+        // turn bots on for Ravine and then start with none — the user's "started a game with 16 bots and no bots
+        // spawned" (2026-10-19). On Ravine the bot rows show "Not on this map" and can't be edited.
+        let no_bots = self.level == 0x0700_004b;
         for (i, b) in self.bots.iter().enumerate() {
+            if no_bots {
+                push(MpLobbyRowId::Bot(i), 0, "Bot", 0, "Not on this map".to_string(), false, false, &mut self.focus);
+                continue;
+            }
             push(MpLobbyRowId::Bot(i), 0, "Bot",
                  if b.enabled { MP_CHARACTERS[b.character.min(28) as usize].1 } else { 0x1b6 },
                  String::new(), host_can, true, &mut self.focus);

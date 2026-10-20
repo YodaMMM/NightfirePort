@@ -406,3 +406,38 @@ fn every_row_is_reachable_with_the_bots_off() {
         for _ in 0..n + 5 { one.apply(nf_view::menu::Action::Up); }
     }
 }
+
+/// The user, 2026-10-19: "I started a game with 16 bots and no bots spawned" — the match was on Ravine, where the
+/// game takes no bots [M P_MPMAP 0x217678:20-25; Menu_PrepareBots 0x1f94a0:85-88], but the lobby let the host turn
+/// them on. On Ravine the bot rows read "Not on this map" and can't be edited; the start carries no bots.
+#[test]
+fn ravine_shows_its_bot_rows_as_unavailable() {
+    let lobby_on = |level: u32| {
+        let mut fe = FrontEnd::new();
+        fe.page = Page::MpOnlineLobby;
+        let mut bots: [nf_view::menu::MpBot; nf_net::lobby::BOTS] = std::array::from_fn(nf_view::menu::MpBot::fresh);
+        for b in bots.iter_mut().take(3) { b.enabled = true; }
+        fe.mp_one = nf_view::mp_lobby::MpLobby::new_host(1, level, 0, 1, 0, 10, 10, [0, 1], [2, 0, 0, 0, 0],
+            bots, "Player 1", false, 0);
+        fe
+    };
+    let mut ravine = lobby_on(0x0700_004b);
+    let rows = ravine.mp_lobby_rows().unwrap();
+    let bot_rows: Vec<_> = rows.iter().filter(|r| matches!(r.id, MpLobbyRowId::Bot(_))).collect();
+    assert!(!bot_rows.is_empty() && bot_rows.iter().all(|r| !r.editable && r.value_text == "Not on this map"),
+        "every Ravine bot row is locked and says why");
+    assert!(!rows.iter().any(|r| matches!(r.id, MpLobbyRowId::BotSkill(_))), "no skill rows on Ravine");
+    // The start copies the lobby's map and bots into the couch fields (mp_lobby_start); with three enabled bots on
+    // Ravine the count is still 0.
+    ravine.mp_level = ravine.mp_one.level;
+    ravine.mp_bots = ravine.mp_one.bots;
+    assert_eq!(ravine.mp_bots.iter().filter(|b| b.enabled).count(), 3);
+    assert_eq!(ravine.mp_bot_count(), 0, "the start carries no bots on Ravine [M]");
+    // Sister: on Skyrail the same lobby offers its bots, and all three enabled ones count.
+    let mut skyrail = lobby_on(0x0700_0024);
+    let rows = skyrail.mp_lobby_rows().unwrap();
+    assert!(rows.iter().filter(|r| matches!(r.id, MpLobbyRowId::Bot(_))).all(|r| r.editable), "Skyrail's bot rows are editable");
+    skyrail.mp_level = skyrail.mp_one.level;
+    skyrail.mp_bots = skyrail.mp_one.bots;
+    assert_eq!(skyrail.mp_bot_count(), 3);
+}
