@@ -611,32 +611,49 @@ fn play_level(iso_path: &str, level: u32, budget: u32, save: Option<&RamSave>) -
     // fallback drives the E-path: stand Bond in the trigger's bbox and hold use.
     if sim.drones.level_exit.is_none() {
         let exit = sim.drones.triggers.iter().find(|t| t.kind == nf_game::triggers::kind::LOAD_LEVEL && t.next_level != 0)
-            .map(|t| (t.lo, t.hi, t.gate, t.key_gate, t.next_level));
-        if let Some((lo, hi, gate, key_gate, next)) = exit {
-            row.note.push_str(&format!("exit trigger→0x{next:08x} gate ch{gate} key{key_gate}; E at the exit; "));
+            .map(|t| (t.gate, t.key_gate, t.next_level));
+        if let Some((gate, key_gate, next)) = exit {
+            row.note.push_str(&format!("exit trigger→0x{next:08x} gate ch{gate} key{key_gate}; "));
             if key_gate != 0 { sim.drones.set_channel(key_gate); } // the key pickup's channel [M 0x1b2318:76-90]
-            // fix-level-chain: a trigger with no collision mesh has lo = inf / hi = -inf; the old
-            // centre formula produced NaN and Bond never stood anywhere. Aim at the finite box only.
-            if lo.iter().any(|v| !v.is_finite()) {
-                row.note.push_str("no exit mesh (unbounded bbox) — E-aim skipped; ");
-                let carry = sim.drones.level_exit.is_some().then(|| RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels).with_mission(&sim.drones.mission));
-                row.exit_next = sim.drones.level_exit.take();
-                if row.exit_next.is_none() && row.complete { row.note.push_str(&format!("mission end → LevelToEndTo 0x{:08x}", sim.drones.mission.to_end)); }
-                return (row, carry);
-            }
-            let c = [(lo[0] + hi[0]) * 0.5, lo[1] + 0.1, (lo[2] + hi[2]) * 0.5];
-            // fix-level-chain: the 0xE8's mesh is the door slab it sits on — the collision push-out
-            // lands Bond beside it, so the use sphere reaches it only from the right FACING
-            // [M 0x1a5170:100-137 head + dir sphere]. Sweep the four facings like a player would.
-            'facing: for k in 0..4u32 {
-                sim.bond = nf_game::player::Bond::new(c, k as f32 * std::f32::consts::FRAC_PI_2);
-                for _ in 0..60 {
-                    // fix-level-chain: hold the key channel across the sweep — on 0700000a the "key"
-                    // (ch 0x4a) is an AND mux's output the mux recomputes every tick, so a one-shot
-                    // write is reclaimed before the E-path reads it.
-                    if key_gate != 0 { sim.drones.set_channel(key_gate); }
-                    sim.step_bond(Default::default(), false, false, true); // the use key held
-                    if sim.drones.level_exit.is_some() { break 'facing; }
+            // exit-aim-01: resolve the exit's REAL use target and aim E there like a player. The
+            // game's E pick is a sphere vs COLLISION geometry [M 0x1a5170:100-108], so a mesh-less
+            // 0xE8 is not E-reachable in the game either — and the disc's records can have no
+            // collision at all (07000001 #18 "Load Point" [D collision None]). The level's real
+            // use target is then the gate plate the player stands on: E on it is refused by the
+            // game's `mask & 4` gate [M 0x1b2318:23-25; #180 mask 0x18 [D]] and the exit fires by
+            // PRESENCE once both bodies stand on the plate [M 0x1b1a78:162-166 + Trigger_Hit].
+            match nf_game::triggers::exit_use_target(&sim.drones.triggers) {
+                Some((target, e_fires)) => {
+                    let (lo, hi) = (target.lo, target.hi);
+                    // fix-level-chain: aim at the finite box only (a mesh-less trigger's lo = inf /
+                    // hi = -inf produced NaN and Bond never stood anywhere).
+                    if lo.iter().all(|v| v.is_finite()) {
+                        if e_fires {
+                            row.note.push_str("E at the exit; ");
+                        } else {
+                            row.note.push_str("E-aim at the gate plate (E refused by mask & 4 — the exit fires by presence, both bodies on the plate); ");
+                        }
+                        let c = [(lo[0] + hi[0]) * 0.5, lo[1] + 0.1, (lo[2] + hi[2]) * 0.5];
+                        // fix-level-chain: the 0xE8's mesh is the door slab it sits on — the collision push-out
+                        // lands Bond beside it, so the use sphere reaches it only from the right FACING
+                        // [M 0x1a5170:100-137 head + dir sphere]. Sweep the four facings like a player would.
+                        'facing: for k in 0..4u32 {
+                            sim.bond = nf_game::player::Bond::new(c, k as f32 * std::f32::consts::FRAC_PI_2);
+                            for _ in 0..60 {
+                                // fix-level-chain: hold the key channel across the sweep — on 0700000a the "key"
+                                // (ch 0x4a) is an AND mux's output the mux recomputes every tick, so a one-shot
+                                // write is reclaimed before the E-path reads it.
+                                if key_gate != 0 { sim.drones.set_channel(key_gate); }
+                                sim.step_bond(Default::default(), false, false, true); // the use key held
+                                if sim.drones.level_exit.is_some() { break 'facing; }
+                            }
+                        }
+                    } else {
+                        row.note.push_str("no exit mesh (unbounded bbox) — E-aim skipped; ");
+                    }
+                }
+                None => {
+                    row.note.push_str("no exit mesh and no gate plate (unbounded bbox) — E-aim skipped; ");
                 }
             }
         } else if !row.complete {
