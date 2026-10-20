@@ -765,6 +765,35 @@ impl HudState {
     const INFO_W: f32 = 480.0;
 }
 
+/// mp-death-effects: the local player's death presentation in one struct — what the draw code
+/// needs for the blood pane / the death view, offline MP, online MP and SP alike
+/// (docs/systems/mp-death-effects.md has the addresses). Read it through
+/// [`Sim::local_death_fx`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalDeathFx {
+    /// 0 none / 1 the sequence is running / 2 the full cover [M `HUD_UpdateBloodPane`
+    /// 0x19a6a8:23-25 — SP only; the MP respawn ends the sequence first].
+    pub phase: u8,
+    /// The blood pane's grown height in px: 1 px/tick from the enable [M 0x19a6a8:27-30],
+    /// capped at the 448 cover [M 0x19f4e8:33].
+    pub pane_px: u32,
+    /// `pane_px / 448` clamped 0..1 — the per-tick alpha source [S derived; the draw maps it
+    /// onto the pane-12 templates (layer 9, textures 0x0300005a/0x03000002 [L BloodSprInfo
+    /// 0x2bcfd8])].
+    pub fade_alpha: f32,
+    /// The whole HUD hides for the pane — SP only (the `HUD_DisableAll` [M 0x190bb0:24]);
+    /// MP keeps the HUD up under the blood [M :39].
+    pub hud_hidden: bool,
+    /// MP only: the ticks left of the 5 s respawn gate [M 0x190bb0:41-54]; None in SP (SP
+    /// waits for the cover / the ✕ instead). The game draws no countdown/prompt — this is
+    /// data for the draw, not a game behavior.
+    pub respawn_ticks_left: Option<u32>,
+    /// The camera holds the frozen first-person eye at the death spot (cam mode 0
+    /// [M `Player_CheckForDeath` 0x190810:64]; the pose source is `bond.head()`). Online the
+    /// freeze starts on the kill tick itself (`net_dead`), one tick before `drones.death`.
+    pub camera_frozen: bool,
+}
+
 impl Sim {
 
     /// fix-laser-beam: stop every LOOPED op-1 sound of `weapon`'s fire + release scripts (the
@@ -6348,14 +6377,28 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let (map, object) = level.by_hash[&sleeve];
                 let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
                 add_instance(level, &inst, Layer::Character, Some((ci, None)), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
+                // silencer-white-artifact: the record's +0x7C view-entity (the silencer mesh, records
+                // whose +0x68 flags carry 0x800 — the pair's bare record shares the mesh [L the golden
+                // weapon table 2fd48d6d]) is owned by the DATUM-0 attach below. The game hides the
+                // weapon-slot objects EVERY tick before the attach (32 `View_SetDrawInNoViews` calls,
+                // `Player_WeaponFiring` 0x1a5460 — the loop over BL+0x7ec..+0x86c and +0x86c), and the
+                // fp skin's extra list carries the SAME mesh on its suppressor bone (0x05000088's
+                // extra bone 43 = 0x02000842 [D]; likewise 05000047→0x020001f2, 05000050→0x020005b2,
+                // 050000a8→0x0200099d, 050000a9→0x020009a3, all bone 43). Drawing it here as well as
+                // the datum attach doubled the mesh's additive sheen batch (ALPHA_1 0x7f00000048 [D])
+                // — the user's "weird white thing" on attachments. Skip the extra whose hash is the
+                // record's +0x7C; the twin arm (0x1a5460:111-118) and the datum attach keep the bare
+                // twin bare and the silenced twin with exactly one suppressor.
+                let r = &wd.records[wid as usize];
+                let ventity = u32::from_le_bytes(r[0x7c..0x80].try_into().unwrap());
                 for &(bone, part) in &skin.extra {
+                    if ventity != 0 && part == Some(ventity) { continue; }
                     let Some(&(pmap, pobject)) = part.and_then(|h| level.by_hash.get(&h)) else { continue };
                     let pinst = Instance { map: pmap, object: pobject, matrix: ident, placement: placement.clone() };
                     add_instance(level, &pinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
                     attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None });
                 }
                 // The muzzle flash (`Player_MuzzleFlash`): mesh `weapon+0x48` on datum 0, colour (+0x56, +0x55, +0x54).
-                let r = &wd.records[wid as usize];
                 let flash = u32::from_le_bytes(r[0x48..0x4c].try_into().unwrap());
                 if let (Some(&(fmap, fobject)), Some(dt)) = (level.by_hash.get(&flash), skin.datums.iter().find(|d| d.id == 0 && d.bone >= 0)) {
                     let finst = Instance { map: fmap, object: fobject, matrix: ident, placement: placement.clone() };
@@ -9208,6 +9251,10 @@ impl Sim {
     /// here is a body-sphere sweep along the shot ray with the world's clear-line check — a
     /// stand-in for the full `Collide` capsule walk ([S], the sim's bots are not drone objects
     /// so the shared bullet system cannot hit them; see the report's left items).
+    /// The MP respawn gate [M `Player_HandleDeath` 0x190bb0:41-54 — `FRAME_RATE_INT * 5` ticks
+    /// from the death stamp; the port's dead-tick counters start at 0 on the stamp tick].
+    pub const MP_RESPAWN_DELAY_TICKS: u32 = 300;
+
     /// mp-host-match-logic: the live match's kill-credit + respawn half for the local human
     /// (slot 0) — the pieces `MP_Update`/the death path drive in the game, wired into
     /// [`Sim::step_bond`] (the local and the online host tick the same path).
@@ -9241,8 +9288,7 @@ impl Sim {
         }
         // The 5 s respawn gate [M 0x190bb0:41-54: `FRAME_RATE_INT * 5 <= GameState+0x34 -
         // obj+0xec`] — the port's dead-tick counter starts at 0 on the stamp tick.
-        const RESPAWN_DELAY_TICKS: u32 = 300;
-        if !self.drones.death.active || self.drones.death.ticks < RESPAWN_DELAY_TICKS {
+        if !self.drones.death.active || self.drones.death.ticks < Self::MP_RESPAWN_DELAY_TICKS {
             return;
         }
         let Some(m) = self.mp.as_mut() else { return };
@@ -9255,6 +9301,72 @@ impl Sim {
         self.drones.health.health = hp;
         self.drones.death = nf_game::death::Death::default();
         m.set_slot(0, self.bond.pos);
+        // mp-respawn-ammo: `MP_ReSpawn`'s human arm re-runs `MP_EquipPlayer` 0x185368:74 — the
+        // inventory is wiped and the set's spawn kit re-granted (`clip_size·2` rounds [M
+        // 0x1855f8:26-29]); the death sequence had left the fists 0x47 [M 0x190810:61] and the
+        // spent rounds. The online path re-equips the same way in `step_net_combat`.
+        self.mp_equip_local();
+        // mp-shot-gate: the shared gate re-seeds with the same equip (the settings clone keeps
+        // the borrow split) — the hashed rounds must agree on every machine [M 0x185368:74].
+        let settings = self.mp.as_ref().map(|m| m.settings.clone());
+        if let Some(s) = settings {
+            let lf = |w: u8| self.mp_weapon_loaded.get(w as usize).copied().unwrap_or(true);
+            self.mp_combat.gate_equip(0, &s, &self.weapons, lf);
+        }
+    }
+
+    /// mp-death-effects: the local player's death presentation — the getters the draw code reads
+    /// (docs/systems/mp-death-effects.md). `None` while alive.
+    ///
+    /// The game's MP death runs the SP sequence's sim core with the SP-only pieces skipped: the
+    /// blood pane (HUD pane 12) enables on the death tick [M `Player_HandleDeath` 0x190bb0:38-40]
+    /// and grows 1 px/tick [M `HUD_UpdateBloodPane` 0x19a6a8:27-30] — in MP without the
+    /// `HUD_DisableAll`, the HUD stays up [M 0x190bb0:24 vs :39]; the death sound 0x89 and cam
+    /// mode 0 are common [M `Player_CheckForDeath` 0x190810:64,88]; the sting (ch 0x5e +
+    /// `Music_Event(6,1)`) and the ✕/ch 0x62/fail-menu path are SP-only [M 0x190810:39-42,
+    /// 0x190bb0:29-33]; MP respawns 300 ticks after the stamp [M 0x190bb0:41-54] and
+    /// `MP_ReSpawn` turns the pane back off [M 0x185368:67]. No countdown/prompt is drawn — the
+    /// 5 s wait is silent [M 0x190bb0:37-55]; the only MP-death text is the kill message
+    /// [M 0x190810:67-87, the port's `kill_msgs`].
+    pub fn local_death_fx(&self) -> Option<LocalDeathFx> {
+        let d = &self.drones;
+        let local = self.mp_local_slot;
+        // Online the shared hurt pass marks the slot dead (`mp_dead_ticks`) a tick before
+        // `drones.death` starts (the health mirror + `Drones::tick` follow it) — the dead slot
+        // surfaces from the kill tick.
+        let dead_mp = self.mp.is_some() && self.mp_dead_ticks[local] > 0;
+        if !d.death.active && !dead_mp { return None; }
+        let online = self.mp.is_some() && (self.net_rng.is_some() || self.net_rng_shared.is_some());
+        let is_mp = self.mp.is_some();
+        // The pane clock: elapsed since the death stamp [M 0x190810:59-60 obj+0xec]. Offline
+        // (and SP) `death.ticks` is exactly that; online the death starts one tick after the
+        // kill tick (`mp_dead_ticks` is set in `step_net_combat`'s shared hurt pass, the health
+        // mirror + `Drones::tick` follow), so the elapsed rides `mp_dead_ticks - 1`.
+        let (elapsed, gate_left) = if online {
+            let dt = self.mp_dead_ticks[local];
+            (dt.saturating_sub(1), Self::MP_RESPAWN_DELAY_TICKS.saturating_sub(dt))
+        } else if is_mp {
+            (d.death.ticks, Self::MP_RESPAWN_DELAY_TICKS.saturating_sub(d.death.ticks))
+        } else {
+            (d.death.ticks, 0)
+        };
+        let pane_px = elapsed.min(nf_game::death::RED_FADE_TICKS);
+        Some(LocalDeathFx {
+            phase: d.death.phase(),
+            pane_px,
+            // [S] the draw's alpha source, derived from the px rule (448 px = full cover).
+            fade_alpha: (pane_px as f32 / nf_game::death::RED_FADE_TICKS as f32).clamp(0.0, 1.0),
+            // SP hides the whole HUD for the pane [M 0x190bb0:24]; MP keeps it [M :39].
+            hud_hidden: !is_mp,
+            // MP only: the ticks left of the 5 s respawn gate [M 0x190bb0:41-54]; SP waits for
+            // the cover / the ✕ instead (None).
+            respawn_ticks_left: if is_mp { Some(gate_left) } else { None },
+            // The frozen first-person eye: cam mode 0 [M 0x190810:64], the pose source
+            // `bond.head()` (the SP test `dead_bond_holds_the_death_camera_spot`). Online the
+            // freeze starts on the kill tick itself (`net_dead`), one tick before
+            // `drones.death` does.
+            camera_frozen: d.death.active || (online && self.mp_dead_ticks[local] > 0),
+        })
     }
 
     /// mp-scenarios-online (agent6): the match -> body half of the scenario rules, run every tick
@@ -9275,6 +9387,7 @@ impl Sim {
         let frame = self.drones.frame;
         let local = self.mp_local_slot;
         let mut restart_equip = false;
+        let mut restart_slots: Vec<usize> = Vec::new();
         let Some(m) = self.mp.as_mut() else { return };
         if std::mem::take(&mut m.game.restart_pending) {
             let humans = (m.settings.human_count as usize).min(nf_net::MAX_AGENTS);
@@ -9282,6 +9395,7 @@ impl Sim {
                 let has_body = slot == local || self.mp_bonds[slot].is_some();
                 if !has_body || m.game.slots[slot].pos.is_none() { continue; }
                 let Some((sp_idx, hp)) = m.mp_respawn(slot, &mut self.drones.rng) else { continue };
+                restart_slots.push(slot);
                 let sp = m.spawns.points[sp_idx as usize];
                 let nb = nf_game::player::Bond::stand_at(&self.world, [sp.pos[0], sp.pos[1], sp.pos[2]], sp.facing[1]);
                 m.set_slot(slot, nb.pos);
@@ -9291,8 +9405,11 @@ impl Sim {
                     self.drones.health.health = hp;
                     if was_dead {
                         self.drones.death = nf_game::death::Death::default();
-                        restart_equip = true;
                     }
+                    // mp-respawn-ammo: the restart's `MP_ReSpawn` re-arms EVERY present human —
+                    // the full arm keys on obj+0xff ∈ {3, 0x12} and 3 is the live state too
+                    // [M 0x185368:74, 0x183fc0:55-75], so a surviving local re-equips as well.
+                    restart_equip = true;
                 } else {
                     self.mp_bonds[slot] = Some(nb);
                 }
@@ -9329,8 +9446,19 @@ impl Sim {
         } else if m.game.slots[0].dead && !self.drones.death.active && self.drones.health.health > 0.0 {
             self.drones.health.health = 0.0;
         }
-        // The restart's `MP_ReSpawn` re-arms a dead local human (`MP_EquipPlayer` [M 0x185368:74]).
+        // The restart's `MP_ReSpawn` re-arms every present human (`MP_EquipPlayer` [M
+        // 0x183fc0:55-75 → 0x185368:74]) and the shared gates re-seed the same way — the hashed
+        // rounds must agree on every machine.
         if restart_equip { self.mp_equip_local(); }
+        if !restart_slots.is_empty() {
+            let settings = self.mp.as_ref().map(|m| m.settings.clone());
+            if let Some(s) = settings {
+                let lf = |w: u8| self.mp_weapon_loaded.get(w as usize).copied().unwrap_or(true);
+                for slot in restart_slots {
+                    self.mp_combat.gate_equip(slot, &s, &self.weapons, lf);
+                }
+            }
+        }
     }
 
     pub fn step_mp_bots(&mut self) {
