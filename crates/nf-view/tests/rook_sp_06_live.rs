@@ -10,9 +10,11 @@ fn probe_06_script_players() {
     for _ in 0..120 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     let sim = scene.sim.as_ref().unwrap();
     for (i, sp) in sim.drones.scripts.players.iter().enumerate() {
-        let watch185 = (sp.mask >> 0) != 0 && (sp.mask as u32 >> 185 & 1 != 0 || sp.mask as u32 >> (185 - 16) & 1 != 0);
+        // `Player.mask` is the placement's p5 WHO-mask (nis.rs g(5)), not a channel watch —
+        // the channel watchers are the drones' switch channels; an SP relates to ch 185 only
+        // through its gate/out channels (the probe's original `u32 >> 185` never compiled).
         let gate185 = sp.gate == 185 || sp.out == 185;
-        if !watch185 && !gate185 {
+        if !gate185 {
             // still print SPs whose script is loaded and whose out/gate near the greeting, terse
             continue;
         }

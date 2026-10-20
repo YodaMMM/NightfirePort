@@ -12,7 +12,7 @@ fn probe_06_all_drones() {
         world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
         skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
         hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
-        surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+        surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty, ai_points: &sim.ai_points,
     };
     for (i, dr) in sim.drones.list.iter().enumerate() {
         if dr.corpse { continue; }
