@@ -6888,7 +6888,7 @@ impl Drone {
                 }
                 if self.dist < self.interro_min_dist { self.interro_min_dist = self.dist; }
                 if self.interro_min_dist - self.dist < -4.0 {
-                    self.talks.push((0x4a, true));
+                    let _ = self.speech_request(d, 0x4a, false); // SpeechSFX(0x4a, 0, 1, 1) — NOT forced, facial-only [M 0x161a40 case 3] (review 2026-10-21: was a forced direct line)
                     self.set_state(ATTACK);
                 }
                 true
@@ -6904,7 +6904,7 @@ impl Drone {
                 self.interro_step += 1;
                 if d.level == 0x0700_0007 {
                     match step {
-                        0 => { self.call_anim(d, anim_state::AIM_STAND, 0, 0); self.talks.push((0x51, true)); self.timer_c = Some(frame + 180); }
+                        0 => { self.call_anim(d, anim_state::AIM_STAND, 0, 0); let _ = self.speech_request(d, 0x51, false); /* SpeechSFX(0x51, 0, 1, 1) [M 0x161a40 case 0xc] */ self.timer_c = Some(frame + 180); }
                         1 => self.set_state(ATTACK),
                         _ => {}
                     }
