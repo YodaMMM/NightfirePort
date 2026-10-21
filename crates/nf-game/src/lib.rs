@@ -54,6 +54,7 @@ pub mod death;
 pub mod nav;
 pub mod nis;
 pub mod props;
+pub mod psi_tex;
 pub mod shatter;
 pub mod gunimp;
 pub mod pickup;

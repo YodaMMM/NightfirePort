@@ -46,8 +46,9 @@ Which menu entry triggers which key is [S] until the level-select code is read.
 - `psiLaunchDriving(void*, uint)` 0x120af0 (148 B): `PS2SafeCleanup()`, `DisableIntc(2/5)`,
   removes the `VBlank_HID`/`VIF_HID` handlers, `amemcpy(0x100000, data, size)` — the PTP block
   goes to **EE 0x100000** — then `uRam0010097c = 1` (a "came from ACTION" flag inside the block,
-  at PTP+0x97c) and `RunNextModule("cdrom0:\\DRIVING.ELF;1")` (string at 0x2f3b00), then parks in
-  an infinite loop [M].
+  at PTP+0x97c) and `RunNextModule("cdrom0:\\BASE.ELF;1")` (string at 0x2f3b00 — verified in the
+  ELF bytes, file offset 0x1eda00; it is the ONLY `cdrom0:` string in ACTION.ELF — 2026-10-21,
+  unported-misc-2), then parks in an infinite loop [M].
 - `bootup_bootup` 0x1c7e78 memsets `PTPDATA` (0xa50) at boot [M].
 
 **DRIVING side consumes it** [M]:
@@ -72,9 +73,13 @@ ELF loader: strings `Now parsing and loading %s`, `Now loading segment %d at %08
 `Fatal Error: ELF Magic number not present in header`, plus `host0:BondPS2_Release.elf`
 (= ACTION), `host0:BasePS2_Release.elf`, `host0:TestPS2_Release.elf` and
 `cdrom0:\ACTION.ELF;1` / `cdrom0:\DRIVING.ELF;1` / `cdrom0:\BASE.ELF;1` [D, file offsets 0x1c138–0x1c1d8].
-The round trip is now measured on both ends: ACTION launches DRIVING.ELF directly
-(`RunNextModule`), DRIVING launches **BASE.ELF** back (§3), and the boot loader re-dispatches from
-the block at 0x100000 (its read of the block is the remaining [S] — decompile in
+The round trip is now measured on both ends: ACTION launches **BASE.ELF** (the boot loader)
+via `RunNextModule` 0x120008 — its one `cdrom0:` string at 0x2f3b00 is `cdrom0:\BASE.ELF;1`
+[M ELF bytes, 2026-10-21] — and BASE re-dispatches to DRIVING.ELF from the block at 0x100000
+(the flag PTP+0x97c = 1 set by `psiLaunchDriving` picks the driving arm). The older claim
+"ACTION launches DRIVING.ELF directly" was wrong; DRIVING carries all three strings at
+0x3c5ea8.. (`ACTION.ELF;1` / `DRIVING.ELF;1` / `BASE.ELF;1`) because IT re-launches through
+the same loader (its read of the block is the remaining [S] — decompile in
 `work/decomp/SLUS_205.79/`).
 
 **Ported (drive-ptp)** — the handover itself now runs in the port:

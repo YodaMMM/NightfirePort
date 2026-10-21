@@ -231,3 +231,27 @@ functions in the R5900 interpreter over the user's ACTION.ELF (`crates/nf-game/t
    0 = left/up), then `PadDriver::merge` runs the game's path and merges the result into the keyboard's
    `Input` (axes add+clamp, buttons OR). No pad connected → no-op: the keyboard/mouse path is untouched
    (the recorded-trace test pins it bit-exact). Master builds without the feature and without gilrs.
+
+## 10. Players → pad slots — `system_input_init` 0x10c418, `MapPlayerToSlot` 0x10cc48
+
+Boot: `main` 0x109080 calls **`system_input_init`** 0x10c418 (796 B) before the main loop —
+`sceMtapInit`, `sceMtapPortOpen(0)`, `sceMtapPortOpen(1)`, `scePadInit(0)`, then 8 ×
+`scePadPortOpen(port, slot, tSlot + i·0x180)` for ports/slots (0,0)(0,1)(0,2)(0,3)(1,0)(1,1)
+(1,2)(1,3), `tSlot` at 0x245680 with stride 0x180 [M decomp]. Each successful open clears the
+6-byte actuator (rumble) buffer at +0x164..+0x169 and zeroes the slot's port (+0x100), slot id
+(+0x104), prev pad type (+0x110) and state (+0x114; `ps2_handle_pad` 0x10c738 later sets 99 =
+ready). The port has one OS pad: `nf_view::gamepad::Backend::new` is the counterpart and
+carries the citation; no multitap bring-up exists on the host.
+
+Per player: **`MapPlayerToSlot`** 0x10cc48 (312 B) maps player → slot, reading each slot's
++0x114 state word and the global `MultitapPresent` (0x246960, refreshed every 0x3c frames by
+`psiInput_MapInputs` 0x10cd80 and by `psiMultitapPresent` 0x10e378 in the front end) [M
+decomp]. P0 → slot 0 (if ready); P1 → slot 1 with a multitap, else slot 4 (port 2's pad) —
+slot 0 must be ready either way; P2 → slot 2 and P3 → slot 3 only with a multitap and all
+earlier slots ready; out of range or any gate failed → −1. Called per player from
+`psiInput_MapInputs` 0x10cd80 (every game update in every mode) and from the rumble wrappers
+`psiInput_RumbleStart` 0x10e4a8 / `psiInput_RumbleStop` 0x10e3a8 (via `Input_RumbleStart`
+0x17f6b8 / `Input_RumbleStop` 0x17f748; `MenuManager_Create` 0x21b908 stops all four). Ported
+as `nf_game::input::map_player_to_slot` (readiness = `PadState::connected`, the state-99
+idea); the port's rumble is a recorded deviation (`world_fx.rs`: `rumble` carried, never
+drives hardware).

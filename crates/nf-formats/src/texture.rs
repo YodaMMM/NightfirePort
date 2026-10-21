@@ -1,6 +1,18 @@
 //! Map textures: blocks 0x10 (texture header), 0x0F (palette header), 0x16 (pixels) and 0x12 (palette), one 0x16 +
 //! 0x12 pair per texture in table order. Spec: docs/formats/map.md §Textures.
 //!
+//! The PS2 runtime that used to surround this data, cited so the scan finds it [M grep ACTION.ELF
+//! decomp]: at level load `psiPreGameRun` 0x11e2e8 → `Reduce` 0x11daf0 packs every texture into
+//! VRAM texture space (slot table 0x25caf0, `psiCreateMapTextures` 0x11d200 → `FillTextureDMA`
+//! 0x11d110 builds the per-texture 16-word GS/DMA packet template), and
+//! `CreateSpaceAndPackTextures` 0x11dcf8 → `Conv4to32` 0x11e8d8 → `PageConv4to32` 0x11e640 →
+//! `BlockConv4to32` 0x11e530 converts the disc's 4-bpp blocks to 32-bit words through `lut4`
+//! before upload — exactly the per-pixel decode this module does instead (`unswizzle_csm1` +
+//! low-nibble-first indices, below). `psiCreateMapTextures` also dedups records with
+//! `ByteCompare` 0x1206c0 (first-mismatch equality, ported as `nf_game::psi_tex::byte_compare`).
+//! The pure width maths of that pipeline are ported in `nf_game::psi_tex` (`get_bit_pos`
+//! 0x11f808, `get_min_width` 0x1205c8, `get_min_width2` 0x120610).
+//!
 //! Texture header entry (12 bytes, *measured* via `psiCreateMapTextures` 0x11d200):
 //! ```text
 //! +0 u8 flags   bit 0: 256 colours / 8 bpp, else 16 colours / 4 bpp   (values 0x00 0x01 0x10 0x11 0x18 0x19)

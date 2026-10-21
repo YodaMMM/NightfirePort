@@ -553,6 +553,16 @@ impl GameFlow {
 /// (`C_SBNFMAP` passes them straight to `ResetMap_LevelToLoad` [M 0x20b8d8:21-24]).
 /// A DRIVING.ELF mission hash (0x09xxxxxx) — no level archive on the disc; the game hands over to
 /// the driving executable [M GameFlow state 9, psiLaunchDriving 0x120af0].
+///
+/// The handover on hardware: `psiLaunchDriving` 0x120af0 memcpy's the 0xa50-byte PTP blob to EE
+/// 0x100000, sets flag PTP+0x97c = 1, then calls `RunNextModule` 0x120008 (436 B) with the only
+/// `cdrom0:` string in ACTION.ELF — `cdrom0:\\BASE.ELF;1` at 0x2f3b00 (file 0x1eda00) [M ELF
+/// bytes]. `RunNextModule` reads the 4 KiB ELF header into 0x1e20000, memsets+loads each program
+/// header, closes the fd, re-inits the CD (`sceCdInit(5)`), kills threads 2..0xFF, deletes
+/// semaphores 0..0xFF, flushes the caches and jumps to the new `e_entry` — BASE.ELF (the boot
+/// loader, ≡ SLUS_205.79) then re-dispatches to DRIVING.ELF from the 0x100000 block [M decomp
+/// + DRIVING.ELF's own ACTION/DRIVING/BASE strings at 0x3c5ea8..]. The port stays one process:
+/// `launching_driving()` below is the state, the draw is the main agent's.
 pub fn is_driving_level(level: u32) -> bool { level >> 24 == 0x09 }
 
 /// The campaign rows' names for port-only messages (the game's own names are Txt labels; these
@@ -900,6 +910,11 @@ pub fn menu_enable_sounds(page: u32) -> u8 {
 }
 
 // ── G-048(4): the boot card check ─────────────────────────────────────────────────────────────
+// The card-status block this walk runs on is zeroed at boot by `InitaliseMemoryCard` 0x110f48
+// (76 B, main 0x109080): `sceMcInit()`, zero MC_Info 0x316940..0x31694b, CardState 0x316950 and
+// its retry byte 0x316951, StateStack 0x30d6dc = 0, then one `PS2PollMemoryCard` 0x110fa0 kick
+// [M decomp]. The port's equivalent is this card-flow machine plus the profiles dir — there is
+// no sceMcInit to call.
 // P_PARISENUM ("Checking memory card…") opens the box and waits on the card flow: its 0x4c sets
 // the message-box mode 4 (`DAT_002e1b09 = 4`) and runs `Menu_UpdateMessageBox(page, 0, 0)`
 // [M 0x20a648:12-24], whose case 4 calls `Menu_EnumSaves(page, 1)` + `PS2_DoCardFlow`

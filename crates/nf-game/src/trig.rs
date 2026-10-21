@@ -297,6 +297,25 @@ pub fn rotate_to_bearing(cur: f32, target: f32, speed: f32, max: f32) -> f32 {
     if d.abs() < 1e-4 { target } else { cur + d * speed }
 }
 
+/// `LimitRadAngle(a)` (ACTION.ELF 0x120510, 172 B): wrap to [−π, π].
+///
+/// [M 0x120510 decomp + disassembly] The decomp's C drops the return; the disassembly pins it:
+/// `mov.s $f0, $f12` at 0x12051c copies the argument into the return register and the two
+/// branch-likely loops run on `$f0` — `while (a < −π) a += 2π;` (compare `c.lt.s` at 0x120520
+/// against 0xc0490fdb) then `while (π < a) a -= 2π;` (0x40490fdb at 0x120564). Result range
+/// [−π, π]: ±π pass through unchanged, NaN passes through, and the adds/subtracts are EE FPU
+/// chop (`add_noguard`), so the wrap of −3.3 lands on 0x403eec82 while +3.3 lands on
+/// 0xc03eec84. Callers [M grep]: `Emitter_Draw` 0x17b708 (particle spin, obj+0x20/+0x24) and
+/// `View_DrawCelGlist` 0x1e6538 (cel euler +0x70/+0x74/+0x78). Distinct from `wrap_pi`
+/// (player.rs, `Vec_AngleDifference` semantics): ±π map differently there.
+pub fn limit_rad_angle(a: f32) -> f32 {
+    const NEG_PI: f32 = f32::from_bits(0xc049_0fdb);
+    let mut a = a;
+    while a < NEG_PI { a = add(a, TAU); }
+    while PI < a { a = sub(a, TAU); }
+    a
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,5 +477,46 @@ mod tests {
         assert_eq!(atan2_approx(0.0, 0.0), 0.0);
         assert!((angle_difference(0.1, TAU - 0.1) + 0.2).abs() < 1e-5);
         assert!((rotate_to_bearing(0.0, 1.0, 0.1, PI) - 0.1).abs() < 1e-6);
+    }
+
+    /// [M 0x120510] wrap results. The EXACT cases (0, ±1, ±π, ±2π — and ±4.0, whose exact
+    /// f64 sum is f32-representable so every rounding model agrees) are pinned bit-exactly.
+    /// 3.3/100.0-style one-ulp-sensitive cases assert the proven range and idempotency only:
+    /// the last-iteration structure proves the result stays in [−π, π] [M the two branch-likely
+    /// loops' exit conditions], but which of two adjacent f32 values a multi-iteration wrap
+    /// lands on depends on the EE-add model (`add_noguard`, the port's PCSX2-validated choice)
+    /// — pinning those bits needs a live probe, not a model [S].
+    #[test]
+    fn limit_rad_angle_wraps_to_pi() {
+        for (x, want) in [
+            (0.0f32, 0x0000_0000u32),
+            (1.0, 0x3f80_0000),
+            (-1.0, 0xbf80_0000),
+            (PI, 0x4049_0fdb),   // ±π pass through
+            (-PI, 0xc049_0fdb),
+            (TAU, 0x0000_0000),  // ±2π → 0
+            (-TAU, 0x0000_0000),
+            (4.0, 0xc012_1fb6),
+            (-4.0, 0x4012_1fb6),
+        ] {
+            assert_eq!(limit_rad_angle(x).to_bits(), want, "LimitRadAngle({x})");
+        }
+        for x in [3.3f32, -3.3, 100.0, -100.0, 31.4159, -31.4159] {
+            let r = limit_rad_angle(x);
+            assert!(r >= -PI && r <= PI, "LimitRadAngle({x}) left the range: {r}");
+            assert_eq!(limit_rad_angle(r).to_bits(), r.to_bits(), "not idempotent at {x}");
+        }
+    }
+
+    /// Sister: NaN and the range edges — a port that wrapped to (−π, π] (e.g. reusing
+    /// `wrap_pi`'s edge rule) would map −π to +π instead of passing it through.
+    #[test]
+    fn limit_rad_angle_edges_and_nan() {
+        assert!(limit_rad_angle(f32::NAN).is_nan());
+        assert_eq!(limit_rad_angle(-PI).to_bits(), 0xc049_0fdb);
+        assert_eq!(limit_rad_angle(PI).to_bits(), 0x4049_0fdb);
+        // A full turn from the middle lands back inside the range.
+        let r = limit_rad_angle(limit_rad_angle(100.0) + TAU);
+        assert!(r >= -PI && r <= PI, "wrap of a wrapped value left the range: {r}");
     }
 }

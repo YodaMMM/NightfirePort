@@ -428,3 +428,18 @@ level, the front end and MP).
 Method note: the scan driver's earlier "jal" hits inside the 16-byte kernel import
 stubs (0x23bde4, 0x23bf54) are the PS2 syscall-trap word 0x0c000000, not calls; the
 census excludes it.
+
+## SFXSetFilePath 0x116c50: dead — its only call path never fires
+
+`SFXSetFilePath(path)` (164 B, batch op 0x14 + 50 words = 200 bytes of path) has exactly one
+caller: `SFXInitialise` 0x1157b0:37, guarded `if (param_1 != 0)`. `SFXInitialise`'s only caller
+is `Sound_Init` 0x1ddf88:9, which passes **0** — so the guard is never taken and the function
+never executes in the shipped game [M grep + decomp]. The IOP keeps its `.data` default path
+`\PS2\MUSIC\` (docs/systems/music.md §1.2). No port: streams resolve through
+`nf_formats::soundbank::stream_data` with explicit paths.
+
+Also recorded here because the natural alternative buckets don't fit: `SaveMemoryMap`
+0x111298 (36 B) IS reached — `CreateSpaceAndPackTextures` 0x11dcf8:310 on every level load —
+but it is a stubbed-out no-op: the disassembly (file 0xb198) shows it memsets 18 bytes of its
+own dead stack frame and returns, touching no globals, result ignored by the caller [M ELF
+bytes]. Nothing to port; noted in docs/systems/memcard-save-flow.md.

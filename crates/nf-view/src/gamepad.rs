@@ -22,6 +22,15 @@ pub struct Backend {
 
 impl Backend {
     /// Opens the pad device and reads the game's curve table + tuning from the user's ACTION.ELF.
+    ///
+    /// The PS2 counterpart is `system_input_init` 0x10c418 (796 B, main 0x109080 boot path):
+    /// `sceMtapInit` + `sceMtapPortOpen(0/1)`, `scePadInit(0)`, then 8 × `scePadPortOpen`
+    /// (ports/slots (0,0)(0,1)(0,2)(0,3)(1,0)(1,1)(1,2)(1,3)) each with the slot's data buffer
+    /// `tSlot + i·0x180` (tSlot @ 0x245680), each success clearing the 6-byte actuator buffer
+    /// at +0x164 and the port/slot-id/prev-type/state words (+0x100/+0x104/+0x110/+0x114).
+    /// The mapping of players onto those slots is ported in nf-game: `map_player_to_slot`
+    /// [M MapPlayerToSlot 0x10cc48]. Multitap bring-up has no OS equivalent here — one OS pad
+    /// stands in for slot 0 [S].
     pub fn new(iso_path: &str) -> Option<Backend> {
         let gilrs = gilrs::Gilrs::new().ok()?;
         let iso = nf_formats::iso9660::IsoImage::open(iso_path).ok()?;

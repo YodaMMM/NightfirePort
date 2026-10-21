@@ -349,6 +349,18 @@ pub(crate) fn bug_replay_shot(scene: &scene::Scene, out: &std::path::Path) -> Re
 /// Builds the sound driver + output from the scene's bank/music, and wires the music logic. The scene's bank,
 /// music and tables are consumed (taken out) — the same path `main` uses at startup [M]. Public so the live
 /// tests drive the exact runtime driver (fix-weapon-sounds).
+///
+/// The PS2 teardown/init it replaces [M grep ACTION.ELF decomp]: `Sound_Kill` 0x1ddfd0 +
+/// `Sound_Ready` 0x1dceb8 call `SFXReset` 0x116a18 → `SFXReset2` 0x116a38 (batch op 0x0f,
+/// ES_FadeReset — the IOP ends with no active items/voices, fade back to 10000), and
+/// `Sound_Init` 0x1ddf88 calls `SFXInitialise` 0x1157b0 once per boot (bind the SFX.IRX RPC
+/// 0x40013575, replay SetLanguage/Mode/Volume, op 0x00). Dropping the old `Sound` and
+/// building a fresh `Driver` here (`Driver::new` inits `fade: 10000`) is the same state
+/// transition. `SFXSuspendFileAccess` 0x1165d0 / `SFXUnSuspendFileAccess` 0x1166f8 (ops
+/// 0x24/0x25 around `SP_LoadScript`/`Script_Free` loadable loads — IOP CD lockout) and
+/// `SFXSetFilePath` 0x116c50 (op 0x14; dead — `Sound_Init` passes 0) have no host
+/// equivalent: the port reads banks/streams from memory. `SFXSetNumberOfListeners` 0x116ec0
+/// is cited at `nf_audio::sfx::Driver::set_listener`.
 pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
     let sound = scene.sound_bank.take().map(|(slot, bank, sbf)| {
         let mut driver = nf_audio::sfx::Driver::new();
