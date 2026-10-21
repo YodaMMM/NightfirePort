@@ -102,6 +102,13 @@ pub fn textures(map: &[u8], f: &MapFile) -> Result<(Vec<Texture>, Vec<(usize, St
             continue;
         }
         let indices = if eight { px[..count].to_vec() } else { (0..count).map(|k| (px[k / 2] >> (4 * (k & 1))) & 15).collect() };
+        // The game's Conv4to32 0x11e8d8 / Conv8to32 0x11eeb0 (per-page PageConv4to32 0x11e640 /
+        // PageConv8to32 0x11eba8, unported-front-end-menus-1) re-order these SAME indices into GS
+        // PSMT4/PSMT8→PSMCT32 page/block order for VRAM fetch (block_table4/8/32 + lut4/lut8); they
+        // do not change which palette index a texel holds. This decoder produces linear indices and
+        // expands to RGBA at scene.rs's TextureImage — the swizzle is hardware-side only [M
+        // 0x11e8d8:161 page loop; 0x11e530:40-42 keeps the first texel in the low nibble, matching
+        // the low-nibble-first read above].
         out.push(Texture { index: i, flags, unknown1, width, height, frames, rate, hashcode, palette, indices });
     }
     Ok((out, bad))

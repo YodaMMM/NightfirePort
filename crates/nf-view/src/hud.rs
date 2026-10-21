@@ -126,6 +126,11 @@ pub fn script_overlay(fade: Option<nf_game::drone::ViewFade>, letterbox: bool, s
     }
     if let Some(f) = fade {
         if f.alpha > 0.0 {
+            // CreateTotalScreenSprite 0x1181b0's job [M]: psiFadeView 0x10b9c8 (← Game_Draw
+            // 0x1e6f50:206,354) packs the fade colour (r,g,b,a — alpha in the RGBAQ top byte) into one
+            // fullscreen SPRITE packet (Q=1.0, z-test off) per viewer. This quad is black; the game
+            // fades to the viewer's own r,g,b — a render-parity check for the main agent
+            // (docs/systems/psi-render-plumbing.md).
             h.quad(Anchor::Stretch, 0, SCOPE_STRIP_TEX, 0, 0.0, 0.0, SW, SH, [0.0; 4], (false, false), [0.0, 0.0, 0.0, f.alpha.min(1.0)]);
         }
     }
