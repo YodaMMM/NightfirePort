@@ -272,7 +272,7 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
                 // float pool, so the in-band expectation is the pool of (record × 2), not the
                 // pool of record × 2 (the measured in-band hit: 3.8499985 = 100 − (100 − 3.85),
                 // not 1.925003 × 2 = 3.850006).
-                let expect = if band_hit { 100.0_f32 - (100.0_f32 - expected_hit * 2.0) } else { pool_hit };
+                let expect = if band_hit { pool_hit } else { 100.0_f32 - (100.0_f32 - expected_hit * 2.0) };
                 assert_eq!(d, expect, "{level} diff {diff} weapon {weapon:#x}: hit #{k} (band {}) damage {d} vs model {expected_hit} (pool {pool_hit})",
                     if band_hit { "out" } else { "TOOCLOSE" });
             }
