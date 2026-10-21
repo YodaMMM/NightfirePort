@@ -1125,9 +1125,13 @@ pub struct Player {
     /// Collide_Update clears every hit list each frame), consumed by `update_player`.
     pub tick_damage: f32,
     /// `SCRIPTPLAYER_tag+0x36` — the disabled byte [M SP_Update 0x1dbda8:57-59 returns while it is
-    /// set; its only writer is `SP_HideObj` 0x1dcbf0 (the campaign copter's hide channel)]. The
-    /// game's one level-load-hidden SP is 07000005's 0x16ddb40 looping pair (+0x36 = 1 [L]; setter
-    /// unknown, a live check) — the port keys that stand-in on the SP's own identity below.
+    /// set]. Its only writer is `SP_HideObj` 0x1dcbf0, called from the copter path: `Copter_Create`
+    /// 0x17d340:73-74 hides the copter's own SP (`SP_Create` 0x1dc7e0 → `SP_CreateScriptPlayer`
+    /// 0x1db9a8, modes 8,8) when its gate channel (placement param 6, copter+0x70) is non-zero and
+    /// off at create, and `Copter_Update` 0x17dbb8's head unhides it (`SP_HideObj(sp, 0)`) on the
+    /// gate's first ON tick, zeroing copter+0x70. On 07000005 that freezes copter #242's SP (gate
+    /// 66) while #241's (gate 0) plays from load — the snapshot's twin looping pairs, one +0x36 = 1
+    /// (0x16ddb40) and one 0 (0x16df360) [L ee_start_05.bin; docs/systems/copter-sp-hide.md].
     pub hidden: bool,
     /// The placement's model hash (`Placement::hashcode` when `by_hash()`, else 0) — the SP's own
     /// art. `SCRIPTPLAYER_Elevators`' panel model is baked absolute in it (gfx bounds
@@ -1230,21 +1234,23 @@ impl Player {
     /// (mode 64's arm is play+update+stop; mode 8 plays looping and leaves state 6) [M]. The game does this
     /// during the level load; the port runs it once at the start of the first `Scripts::begin_tick` [L ee_start_05.bin:
     /// the 07000005 EndLevel SP (script 0x6000A23, mode 64) is primed in state 1 with its clock at 2.0 at level
-    /// start, and the disabled looping pair (modes 8, mask 0) already plays].
+    /// start, and the gate-0 copter's looping pair (modes 8, mask 0) already plays while its gate-66 twin sits frozen].
     fn prime(&mut self, lib: &HashMap<u32, Arc<Nis>>, objs: &mut Objects, ch: &mut Channels, w: &dyn World, frame: u32, out: &mut Vec<Request>) {
         // `SP_CreateScriptPlayer` 0x1db9a8 primes EVERY placed SP whose mode A ∉ {0, 1} at create,
         // regardless of the trigger mask: mask 0 only selects the state word (0x2e == 0 → state 6,
         // :72-76 — "mask 0 → state 6" [L ee_start_05.bin, both looping pairs]) and `SP_LoadScript`
         // 0x1dbc08 then loads + `Script_Play`s the looping pair. `SP_Update` 0x1dbda8 ticks
         // `Script_Update` for every state — the ONLY thing that stops it is the +0x36 disabled byte
-        // (:57-59), which nothing in the level-load path sets (`SP_HideObj` 0x1dcbf0 is its only
-        // writer and only the campaign copter calls it). The port used to skip mask-0 SPs here
-        // (pickup-port-check §9's disabled-byte stand-in), which froze the multiplayer gondolas:
-        // Skyrail's carriage (placement [4], script 0x06000058, mode 8, mask 0) never loaded and
-        // the playtest 1016-1355 sees no gondolas. The one SP the game really keeps frozen is
-        // 07000005's 0x16ddb40 looping pair (+0x36 = 1 [L], setter unknown — its twin 0x16df360
-        // reads 0 and plays); that pair's freeze is the hidden-field stand-in below.
-        if self.hidden { return; }
+        // (:57-59), whose writer is `SP_HideObj` 0x1dcbf0 on the copter path: `Copter_Create`
+        // 0x17d340:73-74 hides the copter's own SP when its gate channel is off at create, and
+        // `Copter_Update` 0x17dbb8's head unhides it on the gate's first ON tick
+        // (docs/systems/copter-sp-hide.md). The port used to skip mask-0 SPs here (pickup-port-check
+        // §9's disabled-byte stand-in), which froze the multiplayer gondolas: Skyrail's carriage
+        // (placement [4], script 0x06000058, mode 8, mask 0) never loaded and the playtest
+        // 1016-1355 sees no gondolas. The prime runs for HIDDEN players too: the game primes
+        // first (`SP_Create`'s tail into `SP_CreateScriptPlayer`) and hides second
+        // (`SP_HideObj(sp, 1)` is the next statement) [M 0x1dc7e0 → 0x1db9a8 → 0x17d340:73-74] —
+        // the frozen SP holds its primed pose, its entities hidden by the Script_HideObj cascade.
         if self.state != 0 && self.state != 6 { return; }
         let m = self.modes[0];
         if m == 0 || m == 1 { return; }
@@ -1617,9 +1623,14 @@ impl Scripts {
     /// hashcode) is alive, where, at what alpha (`Script_GetInterp` 0x1da158's `*param_8`), and
     /// under which script/stream (the `src` the render attachments resolve through). Read-only.
     pub fn entities(&self) -> Vec<(u32, u8, u32, Mat4, f32)> {
-        self.objects.list.iter().filter_map(|o| match o {
-            Some(Obj::Entity { hash, matrix, alpha, src: (sh, st), .. }) => Some((*sh, *st, *hash, *matrix, *alpha)),
-            _ => None,
+        // The hidden SPs' stream objects read as absent — the Script_HideObj cascade [M 0x1db808].
+        let hidden = self.hidden_stream_objects();
+        self.objects.list.iter().enumerate().filter_map(|(i, o)| {
+            if hidden.contains(&i) { return None; }
+            match o {
+                Some(Obj::Entity { hash, matrix, alpha, src: (sh, st), .. }) => Some((*sh, *st, *hash, *matrix, *alpha)),
+                _ => None,
+            }
         }).collect()
     }
 
@@ -1637,6 +1648,58 @@ impl Scripts {
             // The runtime spawn has no placement model.
             model: 0,
         });
+    }
+
+    /// `Copter_Create`'s SP beat [M 0x17d340:66-74]: the copter's own ScriptPlayer, created at
+    /// level load through `SP_Create` 0x1dc7e0 — a synthetic level record with the copter's two
+    /// scripts (placement params 4/5) and the mode byte 8 at BOTH mode slots (`uStack_11c =
+    /// param_5; uStack_118 = param_5` [M 0x1dc7e0; L ee_start_05.bin: the pair SPs read modes 8,8])
+    /// — so `SP_CreateScriptPlayer` 0x1db9a8 primes it looping (mask 0 → state 6, mode 8 →
+    /// `Script_Play` looping). Then the hide: `if (copter+0x70 != 0 && switch_channels[+0x70] == 0)
+    /// SP_HideObj(sp, 1)` [M 0x17d340:73-74] — `hidden` here is that SP+0x36 write, the channels
+    /// as they stand at create (all off at level load). The caller unides through
+    /// `unhide_sp` when `Copter::tick` reports the gate edge (docs/systems/copter-sp-hide.md).
+    pub fn spawn_copter_sp(&mut self, placement: usize, scripts: [u32; 2], matrix: Mat4, gate: u16, ch: &Channels) {
+        self.players.push(Player {
+            placement, scripts, modes: [8, 8], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0,
+            matrix, cur: 0, state: 6, activated: false, countdown: 0, info: [None, None], deleted: false,
+            live_matrix: matrix,
+            subs: Vec::new(),
+            hit_points: 0.0,
+            damage: 0.0,
+            tick_damage: 0.0,
+            // `SP_HideObj(sp, 1)` while the gate channel is armed and off [M 0x17d340:73-74].
+            hidden: gate != 0 && !ch.on(gate as u32),
+            // The runtime spawn has no placement model.
+            model: 0,
+        });
+    }
+
+    /// `Copter_Update`'s head unhide [M 0x17dbb8: `SP_HideObj(*(copter+0x2c), 0)` on the gate's
+    /// first ON tick, then `copter+0x70 = 0`]: the copter `placement`'s SP plays from its primed
+    /// pose (the prime ran at create — docs/systems/copter-sp-hide.md).
+    pub fn unhide_sp(&mut self, placement: usize) {
+        for p in &mut self.players {
+            if p.placement == placement { p.hidden = false; }
+        }
+    }
+
+    /// The object indices the hidden SPs' CURRENT scripts own — the port-side `Script_HideObj`
+    /// cascade [M 0x1dcbf0:12-14 → 0x1db808: the kind-1..3 stream objects of the script
+    /// `SCRIPTPLAYER_tag+0x2a` selects get the obj+0xF0 bit 0x10]. The nf-view entity getters
+    /// skip these, so a frozen SP's primed model resolves to nothing (the draw code needs no
+    /// change).
+    pub fn hidden_stream_objects(&self) -> Vec<usize> {
+        let mut out = Vec::new();
+        for p in &self.players {
+            if !p.hidden { continue; }
+            if let Some(s) = p.info[p.cur].as_ref() {
+                for st in &s.streams {
+                    if let Some(o) = st.obj { out.push(o); }
+                }
+            }
+        }
+        out
     }
 
     /// Any script player playing a non-looping script right now — the game's skip window (`SP_Update` state 2
