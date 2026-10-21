@@ -154,6 +154,53 @@ fn same_time_keyframes_replace_unless_flag_0x20() {
 }
 
 #[test]
+fn out_of_order_kframe_tags_land_in_the_games_time_sorted_order() {
+    // [M Script_AddKeyFrame 0x2201c8:52-72: the walk advances while existing.time <= new.time
+    // and `LinkedList_Insert` 0x219318:26-45 puts the new frame after the last ≤ element —
+    // the game's list is time-sorted regardless of tag order. `LinkedList_GetIndex` 0x219428
+    // then reads them by index for the interpolators 0x220bc8/0x2208b8, so the port's Vec
+    // index equals the game's index only in sorted order — the parser sorts stably.]
+    let mut data: Vec<u8> = Vec::new();
+    let mut put = |v: i32, d: &mut Vec<u8>| d.extend_from_slice(&v.to_le_bytes());
+    put(-0x06, &mut data);
+    put(-0x10, &mut data); put(0x4000_0002, &mut data); put(0x0800_0002, &mut data);
+    put(0, &mut data); data.push(0); put(0, &mut data);
+    put(-0x07, &mut data); put(0x1000_0001, &mut data); data.push(0); data.push(0);
+    for v in [0u16, 0, 30, 20] { data.extend_from_slice(&v.to_le_bytes()); } // x y w h
+    data.extend_from_slice(&0u16.to_le_bytes()); // f1
+    put(0, &mut data);                            // d1
+    data.extend_from_slice(&0u16.to_le_bytes()); // f2
+    put(0, &mut data); put(0, &mut data);         // d2 d3
+    put(-0x09, &mut data); put(1, &mut data); put(0, &mut data);
+    let kframe = |t: u32, x: u32| {
+        let mut d = Vec::new();
+        put(-0x0b, &mut d);
+        d.extend_from_slice(&(t as u16).to_le_bytes());
+        d.extend_from_slice(&(x as u16).to_le_bytes());
+        d.extend_from_slice(&0u16.to_le_bytes());
+        d.extend_from_slice(&30u16.to_le_bytes());
+        d.extend_from_slice(&20u16.to_le_bytes());
+        put(0, &mut d);
+        d
+    };
+    data.extend(kframe(60, 300)); // authored LAST-in-time FIRST in the stream
+    data.extend(kframe(0, 100));  // the earliest, authored in the middle
+    data.extend(kframe(30, 200));
+    put(-0x0e, &mut data);
+    let def = MenuDef::parse(&data, 0x0800_0002).unwrap();
+    let ks: Vec<(u16, i16)> = def.pages[0].controls[0].scripts[0]
+        .keyframes.iter().map(|k| (k.time, k.x)).collect();
+    assert_eq!(ks, vec![(0, 100), (30, 200), (60, 300)],
+        "the game's keyframe list is time-sorted [M 0x2201c8:52-72]");
+    // Sister through the real path (fails without the sort): tick 1 draws kf[0] exactly
+    // [M 0x220580:27-41] — the EARLIEST frame, though time-60 was authored first.
+    let mut rt = MenuRuntime::new(&def.pages[0]);
+    assert!(rt.play_script(0, 1));
+    rt.tick();
+    assert_eq!(rt.draw_list()[1].rect.0, 100, "tick 1 draws the earliest keyframe's x");
+}
+
+#[test]
 fn delayed_0xe1_message_fades_the_colour_to_the_exact_target() {
     // [M Script_RunFrame 0x220580:104-116: a keyframe message with id ≥ 0xe1 becomes a delayed
     // Process_Create with delay = next kf time − timer − 1 (16-bit), on the target control

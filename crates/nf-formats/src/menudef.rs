@@ -27,6 +27,18 @@
 //!   scaling) — and both interpolators are affine-invariant (the Catmull-Rom basis sums to 1).
 //! - Keyframes attach to the current SCRIPT, sorted by time, dedup by time unless the existing
 //!   frame's flags bit 0x20 is set [M `Script_AddKeyFrame` 0x2201c8:24-38].
+//!
+//! The game's intrusive doubly-linked list (`LINKEDLIST` head {first@+0, last@+4, count@+8,
+//! stride@+0xC}, node {next@+0, prev@+4}) — `LinkedList_Init` 0x219280, `LinkedList_ReInit`
+//! 0x2192a0 (zeroes first/last/count, KEEPS stride — the mgr page-list empty),
+//! `LinkedList_Add` 0x2192c0 (append at tail), `LinkedList_Insert` 0x219318 (insert after a
+//! walked position — the keyframe time-sort), `LinkedList_Remove` 0x2193b0 (unlink),
+//! `LinkedList_GetIndex` 0x219428 (nth walk, 0 out of range) — is 100% the front-end menu
+//! engine's container (scripts/keyframes/messages, pages, delayed procs, list/radio
+//! widgets, Component_* sprite sets [M the 9+9+9+2+16 call sites]; no drone/object users —
+//! those use the separate DList_* family). This port models each list as a `Vec` field:
+//! `Vec::new()` = Init/ReInit, `push` = Add, the keyframe sort below = Insert's ordering,
+//! `remove`/drop = Remove, slice indexing = GetIndex (see the parse-end comment).
 //! - Runtime state is on the control [M `Script_PrepareScripting` 0x220ed8]: script list +0x28,
 //!   current script +0x38, segment-end keyframe +0x3c, loop-return keyframe +0x40 / index +0x44,
 //!   segment-start index +0x4c (init −1), last message result +0x50, frame timer +0x54, flags
@@ -338,6 +350,21 @@ impl MenuDef {
                     let ctx: Vec<String> = data[at..(at + 16).min(data.len())]
                         .iter().map(|b| format!("{b:02x}")).collect();
                     return Err(format!("unknown menu-def tag {tag:#x} at {at}: {}", ctx.join(" ")));
+                }
+            }
+        }
+        // The game's keyframe list is time-SORTED: `Script_AddKeyFrame` 0x2201c8 walks the list
+        // while existing.time <= new.time and `LinkedList_Insert` 0x219318 puts the new frame
+        // after the last ≤ element — equal times keep file order [M 0x2201c8:52-72,
+        // 0x219318:26-45]. The tag loop above appends in file order; this stable sort restores
+        // the game's list order so the runtime's Vec index == the game's
+        // `LinkedList_GetIndex` 0x219428 nth-walk (the interpolators 0x220bc8:65-101 /
+        // 0x2208b8 fetch kf[i−1..i+2] by index). KMSGs are nested in the moved structs, so
+        // the parse-time attachments survive the sort.
+        for pg in &mut def.pages {
+            for ct in &mut pg.controls {
+                for sc in &mut ct.scripts {
+                    sc.keyframes.sort_by_key(|k| k.time);
                 }
             }
         }

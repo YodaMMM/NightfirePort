@@ -14453,7 +14453,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `Drone_CollisionHandler` (0x140968, WORKLOG 0078): the feet-sphere down-ray + gravity, before the
             // AI-boundary push-out (the game's `AINetwork_GetBoundsPushVectorForSphere` runs last in the handler).
             { let _p = crate::prof::scope("drone: collision_handler"); dr.abseil_move(); dr.collision_handler(d.world); }
-            // `NDrone2_Collision`: the feet sphere (r 0.4) is pushed out of the AI-network boundaries.
+            // `NDrone2_Collision` 0x140e90:170-172: the feet sphere (r 0.4, mask drone+0xba4) is pushed
+            // out of the AI-network boundaries — `AINetwork_GetBoundsPushVectorForSphere` 0x157bd0
+            // walking the cel's BLINK chain with `AINetwork_HitBoundry` 0x157780 per wall [M], gated
+            // on drone+0x4f8 < 0 [M :169] (the port's `bounded` flag stands in for that gate).
             if dr.enabled && dr.bounded && d.nav.bounds {
                 let p = d.nav.push_out(dr.feet(), 0.4);
                 dr.pos[0] = p[0];
