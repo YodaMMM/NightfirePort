@@ -820,8 +820,10 @@ pub struct Drone {
     pub group: u32,
     pub present: bool,
     pub started: bool,
-    /// Drawn last frame (`obj+0xFC`, set by the renderer's cel visibility; *suggested* stand-in: within 60° of Bond's
-    /// view and in line of sight from his eye), set by `Drones::tick`.
+    /// Drawn last frame (`obj+0xFC`, set to 2 by `View_AddObjects` 0x1e62d8 when the object's world sphere
+    /// passes `Vision_InView` 0x1e89e0 over the portal-visible cels), set by `Drones::tick` through
+    /// `visible_to`: the sim-side camera frustum (`frustum_sides` — 60° view angle, 4/3 aspect) plus the
+    /// bullet-ray walk that stands in for the room gate.
     pub drawn: bool,
     pub enabled: bool,
     /// Index in `Drones::list` (cover ownership) and the state being entered during an exit message.
@@ -8213,26 +8215,94 @@ pub struct FlashProbe {
     pub f: f32,
 }
 
-/// Stand-in for the renderer's "drawn" (`obj+0xFC`) ONLY: within 60° of Bond's aim (or within 2 units) and any of
-/// five body points in line of sight from his eye (thin occluders hide one ray, not a cel). The SPawner's
-/// "player can see the spot" gate is a different reader — `drone_position_visible` below; guards-0c-b decoupled
-/// them (the spawner must not ride the drawn gate's rays).
-/// guards-0c: the game's draw test is `Vision_InView` (0x1e89e0 [M], the four fov side planes) over the PORTAL-VISIBLE
-/// cels (`View_AddObjects` 0x1e62d8 walks `Vision_Portal_Recurse` first) — no occlusion rays anywhere. The sim has no
-/// portal graph, so the rays stand in for the room gate — but they run on the BULLET segment (the pass-flagged hits
-/// drop, [M `Collide_Intersect` 0x1ebff0-0x1ec010 for the bit-0x8 queries]): the renderer draws through the
-/// pass-flagged surfaces (the 0c museum's glass displays, the foliage), and the old flat-segment rays marked those
-/// guards undrawn — `NDrone2_DoAnimation` (0x149f88 [M]) then slides them at the danim's speed (0.02 for walk 392)
-/// with no gait, ON SCREEN: the playtests' "the walking animation is kind of fucked" (1012-1723/2105). Opaque
-/// occluders (the 05 castle behind the switch-trace patroller [L work/switch_trace.tsv]) block both segment kinds,
-/// so the live-pinned slide of that guard is untouched.
+/// The on-foot camera's frustum, as the sim computes it — `Vision_Calculate_View_Fustrum` (0x1e7df8 [M]):
+/// four side planes through the eye (the far plane is built but never copied into the viewer —
+/// `amemcpy(viewer+0x70, planes, 0x40)` is four 16-byte records). The game builds the far-quad corners
+/// in camera space at depth 200 (x = ±tan(view/2)·aspect·200, y = ±tan(view/2)·200) and crosses them
+/// into the side planes (`Plane_PlaneEq` 0x1df8d0 [M]); the equivalent directions are the analytic
+/// basis combinations below — bottom/top mix the up axis with the forward at the vertical half angle,
+/// left/right mix the right axis at the horizontal half angle (tan h = tan v · aspect [M 0x1e7df8:
+/// `fStack_90 = fVar4 * *(float *)(param_1 + 0x114) * 200.0`]). The viewer's matrix rows are the player
+/// camera's: `Camera_SetToPlayer` (0x1bc048 [M]) composes the yaw matrix (obj+0x90) with
+/// `RotMatrixX(-pitch·π/2)`, so right = (cos yaw, 0, −sin yaw), up = cross(forward, right) — the pitch
+/// tilt lands in up/forward only, exactly the game's rows.
+/// The view angle is the on-foot default 0x3F860A92 (1.0471976 = 60°) [M Camera_CreateCameras
+/// 0x1bb2b8:63-121 and Camera_CalcViewAngles 0x1baf70:32]; the sim has no GunImp scope state, so the
+/// 30° zoom arm (0x132f00) is out of scope. The aspect is the DAT_002a37c4 == 0 branch 0x3FAAAAAB
+/// (4/3) [M 0x1baf70:29-33; L ee_snapshot.bin @ 0x2a37c4 = 0 and ee_start_07000001.bin @ 0x2a37c4 = 0].
+/// tanf is the SDK libm in the game — the port's `f32::tan` is the stand-in (plane-direction error
+/// < 1e-6 rad, orders below the slack) [S].
+pub fn frustum_sides(forward: V3) -> [V3; 4] {
+    /// The on-foot view angle 0x3F860A92 [M Camera_CreateCameras 0x1bb2b8].
+    const VIEW_ANGLE: f32 = 1.047_197_6;
+    /// The DAT_002a37c4 == 0 aspect 0x3FAAAAAB [M Camera_CalcViewAngles 0x1baf70; L ee_snapshot].
+    const ASPECT: f32 = 1.333_333_4;
+    let l = (forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]).sqrt();
+    let f = [forward[0] / l, forward[1] / l, forward[2] / l];
+    let yaw = atan2_approx(f[0], f[2]);
+    let (sy, cy) = (crate::trig::sinf(yaw), crate::trig::cosf(yaw));
+    let r = [cy, 0.0, -sy]; // the yaw matrix's right row (pitch-independent [M 0x1bc048])
+    let u = [f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]]; // cross(f, r)
+    let tv = (VIEW_ANGLE * 0.5).tan();
+    let th = tv * ASPECT;
+    let iv = 1.0 / (1.0 + tv * tv).sqrt();
+    let ih = 1.0 / (1.0 + th * th).sqrt();
+    let (sv, cv, sh, ch) = (tv * iv, iv, th * ih, ih);
+    [
+        [cv * u[0] + sv * f[0], cv * u[1] + sv * f[1], cv * u[2] + sv * f[2]],  // bottom
+        [ch * r[0] + sh * f[0], ch * r[1] + sh * f[1], ch * r[2] + sh * f[2]],  // left
+        [-cv * u[0] + sv * f[0], -cv * u[1] + sv * f[1], -cv * u[2] + sv * f[2]], // top
+        [-ch * r[0] + sh * f[0], -ch * r[1] + sh * f[1], -ch * r[2] + sh * f[2]], // right
+    ]
+}
+
+/// The drawn gate's slack — the game passes the object's world-sphere radius obj+0x8C as
+/// `Vision_InView`'s threshold [M View_AddObjects 0x1e62d8:27-29 + Control_BuildWorldSph 0x133070:
+/// glist+0x1C · abs(+0xE8)]. The port's drones carry no glist, so this is the model-table constant:
+/// [L ee_snapshot.bin] every guard glist+0x1C read 1.1589-1.1602 and the built obj+0x8C radii sat
+/// at 1.019-1.128 — 1.0 is just under the live range, making the port's gate marginally TIGHTER
+/// than the game's at the plane edge (≤ 0.13 units). [S] unverified — the per-frame value varies;
+/// the tests keep their geometry margins well clear of it.
+pub const DRONE_DRAWN_SLACK: f32 = 1.0;
+
+/// `Vision_InView` (0x1e89e0 [M]) in the port's signed-distance reading — the same form the
+/// renderer's cel cull ships (`vision_in_view` in nf-view/scene.rs, fix-portal6): the point meets
+/// every side plane at `n·(P − eye) >= −slack`. The raw 4-lane reading (`n·c + d·r >= r` [L
+/// ee_start_05.bin: |n| = 1, d = −n·eye, |d| 51..117]) is untestable-absurd with the game's own
+/// stored planes — the common limit is the signed distance. The planes are unit normals, the eye is
+/// the viewer's translation row (Player_GetHeadPos → viewer+0x150 [M 0x1bc048]; the port's
+/// `player.eye` is the established equivalent).
+pub fn in_view(eye: V3, pos: V3, slack: f32, sides: &[V3; 4]) -> bool {
+    sides.iter().all(|n| {
+        (pos[0] - eye[0]) * n[0] + (pos[1] - eye[1]) * n[1] + (pos[2] - eye[2]) * n[2] >= -slack
+    })
+}
+
+/// The renderer's "drawn" (`obj+0xFC`, written 2 by `View_AddObjects` 0x1e62d8:71 when the object's
+/// world sphere passes `Vision_InView` over the PORTAL-VISIBLE cels): the sim-side gate runs the same
+/// frustum test (`frustum_sides` + `in_view`, slack = the world-sphere radius [M 0x133070]) and keeps
+/// the guards-0c ray walk for the ROOM gate the sim has no portal graph for — the rays run on the
+/// BULLET segment (the pass-flagged hits drop, [M `Collide_Intersect` 0x1ebff0-0x1ec010 for the
+/// bit-0x8 queries]): the renderer draws through the pass-flagged surfaces (the 0c museum's glass
+/// displays, the foliage), and the old flat-segment rays marked those guards undrawn —
+/// `NDrone2_DoAnimation` (0x149f88 [M]) then slides them at the danim's speed (0.02 for walk 392)
+/// with no gait, ON SCREEN: the playtests' "the walking animation is kind of fucked" (1012-1723/2105).
+/// Opaque occluders (the 05 castle behind the switch-trace patroller [L work/switch_trace.tsv]) block
+/// both segment kinds, so the live-pinned slide of that guard is untouched. The SPawner's "player can
+/// see the spot" gate is a different reader — `drone_position_visible` below; guards-0c-b decoupled
+/// them (the spawner must not ride the drawn gate's rays). The old 60°/2-unit aim cone (a 120°-wide
+/// horizontal fan around Bond's aim) is gone: the game's frustum is 60° tall and 2·atan(tan(30°)·4/3)
+/// ≈ 75° wide, and a point behind the eye fails all four side planes — the cone marked guards drawn
+/// (auto-aimable, seek targets, slide-free) that the game leaves off-screen.
 pub fn visible_to(player: &Player, world: &CollisionWorld, pos: V3, head: V3) -> bool {
-    let v = [pos[0] - player.eye[0], pos[2] - player.eye[2]];
-    let (a, l) = ([player.aim[0], player.aim[2]], (v[0] * v[0] + v[1] * v[1]).sqrt());
-    let al = (a[0] * a[0] + a[1] * a[1]).sqrt();
-    let side = [-v[1] / l.max(1e-6) * 0.5, v[0] / l.max(1e-6) * 0.5];
-    let pts = [head, pos, [pos[0] + side[0], pos[1], pos[2] + side[1]], [pos[0] - side[0], pos[1], pos[2] - side[1]], [pos[0], pos[1] - 0.8, pos[2]]];
-    l < 2.0 || (al > 1e-6 && (v[0] * a[0] + v[1] * a[1]) / (l * al) > 0.5 && pts.iter().any(|&q| world.segment_bullet(player.eye, q).is_none()))
+    let a2 = player.aim[0] * player.aim[0] + player.aim[1] * player.aim[1] + player.aim[2] * player.aim[2];
+    if !(a2 > 1e-12) { return false; }
+    let v = [pos[0] - player.eye[0], pos[1] - player.eye[1], pos[2] - player.eye[2]];
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    let side = if l > 1e-6 { [-v[2] / l * 0.5, 0.0, v[0] / l * 0.5] } else { [0.0; 3] };
+    let pts = [head, pos, [pos[0] + side[0], pos[1] + side[1], pos[2] + side[2]], [pos[0] - side[0], pos[1] - side[1], pos[2] - side[2]], [pos[0], pos[1] - 0.8, pos[2]]];
+    in_view(player.eye, pos, DRONE_DRAWN_SLACK, &frustum_sides(player.aim))
+        && pts.iter().any(|&q| world.segment_bullet(player.eye, q).is_none())
 }
 
 /// The spawner's own "player can see the spot" gate — the game's `Drone_PositionVisible`
@@ -8251,17 +8321,18 @@ pub fn visible_to(player: &Player, world: &CollisionWorld, pos: V3, head: V3) ->
 /// guards-0c-b: the spawner must NOT ride the drawn gate's bullet rays — on 0700001b the sightline to spawner
 /// #187's Drake spot is bullet-CLEAR but flat-BLOCKED (a pass-flagged surface), so the drawn-gate abort rejected
 /// every spawn and the fight never started (fix_finale_live the_0700001b_drakes_defeat_ends_the_space_station).
-/// Stand-ins, same as the drawn gate: the 60°/2-unit cone for `Vision_InView` (no camera frustum in the sim) and
-/// the five bullet rays for the cel byte +0xa0 (no portal graph); only the game's own ray is exact.
+/// The `Vision_InView` leg is the game's own shape: the same camera frustum (`frustum_sides`) with the game's
+/// literal 2.0 slack [M 0x13a7a0]; the 2-unit near bypass the old cone carried is gone (the game's frustum leg
+/// never bypassed the later legs). The five bullet rays stand in for the cel byte +0xa0 (no portal graph); only
+/// the game's own ray is exact.
 pub fn drone_position_visible(player: &Player, world: &CollisionWorld, pos: V3) -> bool {
-    let v = [pos[0] - player.eye[0], pos[2] - player.eye[2]];
-    let (a, l) = ([player.aim[0], player.aim[2]], (v[0] * v[0] + v[1] * v[1]).sqrt());
-    let al = (a[0] * a[0] + a[1] * a[1]).sqrt();
-    let side = [-v[1] / l.max(1e-6) * 0.5, v[0] / l.max(1e-6) * 0.5];
-    let pts = [pos, [pos[0] + side[0], pos[1], pos[2] + side[1]], [pos[0] - side[0], pos[1], pos[2] - side[1]], [pos[0], pos[1] - 0.8, pos[2]]];
-    l < 2.0 || (al > 1e-6 && (v[0] * a[0] + v[1] * a[1]) / (l * al) > 0.5
+    let v = [pos[0] - player.eye[0], pos[1] - player.eye[1], pos[2] - player.eye[2]];
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    let side = if l > 1e-6 { [-v[2] / l * 0.5, 0.0, v[0] / l * 0.5] } else { [0.0; 3] };
+    let pts = [pos, [pos[0] + side[0], pos[1], pos[2] + side[2]], [pos[0] - side[0], pos[1], pos[2] - side[2]], [pos[0], pos[1] - 0.8, pos[2]]];
+    in_view(player.eye, pos, 2.0, &frustum_sides(player.aim))
         && pts.iter().any(|&q| world.segment_bullet(player.eye, q).is_none())        // the cel byte +0xa0
-        && world.segment_actor(player.eye, pos).is_none())                           // the game's 0xa27 ray
+        && world.segment_actor(player.eye, pos).is_none()                           // the game's 0xa27 ray
 }
 
 /// The captain skin by `kind` — `NDrone2_DefaultInit` 0x14b300:536-555's switch (`+0xe0`):

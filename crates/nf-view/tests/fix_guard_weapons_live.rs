@@ -20,7 +20,7 @@ const ACC: [f32; 3] = [0.5, 0.7, 1.0];
 /// [L work/ee_start_07000001.bin @ 0x30cc50/54/58] — `Plr_DMod_*` (ReadTuningVars group 0x1d3e00).
 const DMG: [f32; 3] = [0.5, 0.7, 1.2];
 
-struct Shot { frame: u32, hit: bool }
+struct Shot { frame: u32, hit: bool, dist: f32 }
 
 /// Drive one guard into firing at a still Bond 10 units away and collect `wanted` shots from him
 /// alone (Bond topped back to 100 health each tick so the per-hit deltas stay exact). Returns
@@ -38,7 +38,7 @@ struct Shot { frame: u32, hit: bool }
 /// 0x179740:100-110 vs drone.rs's fire_weapon], so filtering on `seen_ticks >= 120` samples the
 /// same subset the model describes. Sister: the gated shots still exist (the filter's skip count
 /// is logged and asserted non-negative trivially — a run with zero gated shots is a no-op).
-fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, warmup_shots: u32) -> (usize, Vec<Shot>, Vec<f32>, f32) {
+fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, warmup_shots: u32) -> (usize, Vec<Shot>, Vec<(f32, f32)>, f32) {
     // Live guards with the weapon, the standard stats and the standard ×1 damage multiplier —
     // tried in order until one actually opens fire (some are elevated or scripted and never do).
     let candidates: Vec<usize> = {
@@ -56,15 +56,33 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
     // sighting gate (120 ticks, `DroneWeap_DoBulletAccuracy`) and his first shots.
     let mut guard = usize::MAX;
     let mut w0 = 0usize;
-    let mut hit_events: Vec<(u32, f32)> = Vec::new(); // (bullet-arrival frame, health delta) for this guard
+    // (bullet-arrival frame, health delta, the shooter's live distance at the arrival tick) —
+    // Drone_ModBulletDamage 0x139fac reads the shooter's LIVE Drone+0x1A0 when the bullet lands
+    // [M], not the fire-time distance, so the band the ×2 saw is the hit-tick one.
+    let mut hit_events: Vec<(u32, f32, f32)> = Vec::new();
     // fix-guard-weapons3: per-shot gate-clean flags (aligned with `d.shots[w0..]`), for the final candidate.
     let mut gate_ok: Vec<bool> = Vec::new();
+    // ai-sight-drawn-gate-3: the fire-time guard distance per collected shot (the band split).
+    let mut gate_dist: Vec<f32> = Vec::new();
     'guards: for &cand in &candidates {
         let mut placed = false;
+        // ai-sight-drawn-gate-3: the park-distance ladder 10/7/5. The frustum sight gate moved the
+        // spawn/patrol frames (Drone_PositionVisible 0x13a7a0 is the frustum(2.0) test, far
+        // narrower than the old 120-degree cone [M 0x137cb0:43's post-selection abort]), so at
+        // collection time the guards stand mid-room and a fixed 10.0-axis park often lands in a
+        // wall or off the floor; and a guard with sight range r < 10 accumulates no sighting at
+        // all from 10 (the 826b run: two candidates parked with seen_ticks stuck 0). The ladder
+        // tries 10, then 7, then 5 along each axis before giving up on the candidate; every rung
+        // stays beyond the 3.0 CombatTooClose band [L 0x30caf0-area tuning: the model is
+        // distance-independent for parks in the gate-clean subset, M 0x179740's gate reads
+        // sighting time, not distance].
         'dirs: for &(dx, dz) in &[(1.0f32, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (0.70710678, 0.70710678), (-0.70710678, 0.70710678), (0.70710678, -0.70710678), (-0.70710678, -0.70710678)] {
+        // The diff-3 reroll: all three 10/7/5 rungs failed placement for every 0x12 candidate —
+        // the rung set extends down to 4.0, all of it beyond the 3.0 band [L 0x30cb14].
+        for &park in &[10.0f32, 8.0, 7.0, 6.0, 5.0, 4.0] {
             let sim = scene.sim.as_mut().unwrap();
             let g = sim.drones.list[cand].pos;
-            sim.bond.pos = [g[0] + dx * 10.0, g[1] + 0.14, g[2] + dz * 10.0];
+            sim.bond.pos = [g[0] + dx * park, g[1] + 0.14, g[2] + dz * park];
             sim.bond.yaw = (g[0] - sim.bond.pos[0]).atan2(g[2] - sim.bond.pos[2]);
             // fix-guard-weapons3: the spot must be IN SIGHT of the guard (the model presumes sighted
             // shooting — the NewSighting gate auto-misses blind shots, and a park behind a wall
@@ -76,6 +94,7 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
             for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
             let y = sim.bond.pos[1];
             if (y - (g[1] + 0.14)).abs() < 1.0 { placed = true; break 'dirs; }
+        }
         }
         if !placed { eprintln!("[gw] guard {cand} (weapon {weapon:#x}): no level parking spot"); continue 'guards; }
         let mut warmed = false;
@@ -109,6 +128,7 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
         // block runs before the fire in the same tick, so the post-tick read is what the fire's
         // gate saw [M 0x179740:100-110].
         gate_ok.clear();
+        gate_dist.clear();
         let cap = 60000u32;
         loop {
             let sim = scene.sim.as_mut().unwrap();
@@ -117,12 +137,18 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
             {
                 let d = &sim.drones.list[guard];
                 let clean = d.seen_ticks >= 120;
-                while w0 + gate_ok.len() < d.shots.len() { gate_ok.push(clean); }
+                // The band variable is the AI's OWN tracked distance (Drone+0x1A0, the port's
+                // `dist` field) — that is what `Drone_ModBulletDamage` 0x139fac compares and
+                // what the fire path's hit-chance doubling reads [M 0x139fac-0x139fc8]; a
+                // geometric measure disagrees with it exactly when the cache lags a strafe
+                // (the measured hit #115: fire-time geometric 2.98, the ×2 not applied).
+                while w0 + gate_ok.len() < d.shots.len() { gate_ok.push(clean); gate_dist.push(d.dist); }
             }
             let got = gate_ok.iter().filter(|&&c| c).count();
             let frame = sim.drones.frame;
+            let gdist = sim.drones.list[guard].dist;
             for &(f, owner, delta) in &sim.drones.player_hits {
-                if owner == guard { hit_events.push((f, delta)); }
+                if owner == guard { hit_events.push((f, delta, gdist)); }
             }
             sim.drones.player_hits.clear();
             if got >= wanted as usize + 5 { break 'guards; } // +5: let the in-flight bullets land before matching
@@ -166,17 +192,18 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
             .map(|(_, f)| *f).collect()
     };
     let mut shots = Vec::new();
-    let mut deltas = Vec::new();
+    let mut deltas: Vec<(f32, f32)> = Vec::new(); // (health delta, the shot's fire-time distance)
     let mut hi = 0usize;
     for k in 0..wanted as usize {
         let f = frames[k];
         let next = frames.get(k + 1).copied().unwrap_or(u32::MAX);
+        let dist = *gate_dist.get(k).unwrap_or(&10.0);
         let mut hit = false;
         while hi < hit_events.len() && hit_events[hi].0 < f { hi += 1; }
         while hi < hit_events.len() && hit_events[hi].0 < next {
-            hit = true; deltas.push(hit_events[hi].1); hi += 1;
+            hit = true; deltas.push((hit_events[hi].1, hit_events[hi].2)); hi += 1;
         }
-        shots.push(Shot { frame: f, hit });
+        shots.push(Shot { frame: f, hit, dist });
     }
     let dist = scene.sim.as_ref().unwrap().drones.list[guard].dist;
     (guard, shots, deltas, dist)
@@ -208,15 +235,26 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             let (acc, mul) = (sim.drones.list[guard].accuracy, sim.drones.list[guard].damage_mul);
             let expected_rate = (100.0_f32 - 5.0 * acc as f32) * acc_tbl[(diff - 1) as usize] / 100.0;
             let expected_hit = record_damage * mul * dmg_tbl[(diff - 1) as usize];
-            let hits = shots.iter().filter(|s| s.hit).count();
-            let n = shots.len();
+            // ai-sight-drawn-gate-3: the model's domain is the out-of-band shots (dist > 3.0
+            // [L 0x30cb14]); an in-band shot is a forced hit with double damage [M the
+            // too_close branch] — the guard closes during a long engagement (the measured run
+            // crossed the band around shot #118), so the sample splits by the fire-time
+            // distance instead of assuming the whole run stays out of the band.
+            let out_of_band: Vec<&Shot> = shots.iter().filter(|s| s.dist >= 3.0).collect();
+            let hits = out_of_band.iter().filter(|s| s.hit).count();
+            let n = out_of_band.len();
+            assert!(n >= 100, "only {n} of {} shots sampled outside the 3.0 band — the model cell has no sample", shots.len());
             eprintln!("[gw] {level} diff {diff} weapon {weapon:#x} (guard {guard}, acc {acc}, mul {mul}): {hits}/{n} hits (model {:.2}), per-hit {:?} (model {expected_hit}), dist {dist:.2}",
                 expected_rate * 100.0, &deltas[..deltas.len().min(6)]);
             // The model's only distance term is the binary TooClose ×2 (< 3.0 [L 0x30cb14]) —
             // there is NO falloff [M 0x19455c-0x194588] — so any band above 3.0 validates the
             // rate/damage model; the 8.0 floor was the pre-re-park calibration. (Re-parks can
-            // leave the guard closer, e.g. 6.7 — still far above 3.0.)
-            assert!(dist > 3.5 && dist < 12.5, "guard {guard} ended inside the TooClose band or far off the engagement (dist {dist})");
+            // leave the guard closer, e.g. 6.7 — still far above 3.0.) ai-sight-drawn-gate-3:
+            // the floor follows the decompile's 3.0 — the park ladder may park at 5 and the
+            // guard may close to just above the band (measured 3.46 with the rate and per-hit
+            // damage still on the model: 0.685 vs 0.60 ± 0.12, 1.65 exact); the old 3.5 floor
+            // was harness margin, not a game rule.
+            assert!(dist > 3.05 && dist < 12.5, "guard {guard} ended inside the TooClose band or far off the engagement (dist {dist})");
             let rate = hits as f32 / n as f32;
             assert!((rate - expected_rate).abs() <= 0.12,
                 "{level} diff {diff} weapon {weapon:#x}: hit rate {rate:.3} vs model {expected_rate:.3} ({hits}/{n})");
@@ -226,8 +264,19 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             // and 100 − 98.349998 = 1.6500015. The game's health is the same float pool, so pin
             // the pool round-trip of the model value, not the raw product.
             let pool_hit = 100.0_f32 - (100.0_f32 - expected_hit);
-            for (k, &d) in deltas.iter().enumerate() {
-                assert_eq!(d, pool_hit, "{level} diff {diff} weapon {weapon:#x}: hit #{k} damage {d} vs model {expected_hit} (pool {pool_hit})");
+            for (k, &(d, dist)) in deltas.iter().enumerate() {
+                // The band split on the damage too: an in-band hit is the forced ×2 [M the
+                // too_close branch] — the same event the TooClose test pins deliberately. The
+                // band is the HIT-tick distance (Drone_ModBulletDamage reads the shooter's live
+                // +0x1A0 at the landing [M 0x139fac-0x139fc8]).
+                let band_hit = dist >= 3.0;
+                // The ×2 sits INSIDE the pool round-trip: the game applies damage to the same
+                // float pool, so the in-band expectation is the pool of (record × 2), not the
+                // pool of record × 2 (the measured in-band hit: 3.8499985 = 100 − (100 − 3.85),
+                // not 1.925003 × 2 = 3.850006).
+                let expect = if band_hit { pool_hit } else { 100.0_f32 - (100.0_f32 - expected_hit * 2.0) };
+                assert_eq!(d, expect, "{level} diff {diff} weapon {weapon:#x}: hit #{k} (band {}) damage {d} vs model {expected_hit} (pool {pool_hit})",
+                    if band_hit { "out" } else { "TOOCLOSE" });
             }
         };
         // 07000001 in one scene, in this order: 0x0e fires on a fresh level; the 0x12 guards only
