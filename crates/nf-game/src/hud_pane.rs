@@ -345,6 +345,45 @@ impl MonitorNightSight {
     }
 }
 
+/// `HUD_CreateShrink` 0x1a0bb8's tail (shared by Blood/Sight/NightSight/RCCar/Ronin/Laser and
+/// the OICW pane 0x19cc90:23-52): on a sub-fullscreen viewport the pane's sprites re-centre —
+/// screen h (`viewer+0x10c`) < 512 halves each sprite's w (`+0x2c`) and shifts x (`+0x24`) by
+/// `−def_x/2`; screen h (`viewer+0x110`) < 448 halves h (`+0x2e`) and shifts y (`+0x26`) by
+/// `−def_y/2` [M 0x1a0bb8:17-40]. Returns `(w2, x2, h2, y2)` per sprite over the closure's
+/// base geometry.
+pub fn shrink_to_viewport(
+    screen_w: f32,
+    screen_h: f32,
+    def_x: i16,
+    def_y: i16,
+    base: impl Fn(usize) -> (i16, i16, i16, i16),
+    count: usize,
+) -> Vec<(i16, i16, i16, i16)> {
+    let hw = screen_w < 512.0;
+    let hh = screen_h < 448.0;
+    (0..count)
+        .map(|k| {
+            let (w, x, h, y) = base(k);
+            let (w2, x2) = if hw { (w >> 1, x - (def_x >> 1)) } else { (w, x) };
+            let (h2, y2) = if hh { (h >> 1, y - (def_y >> 1)) } else { (h, y) };
+            (w2, x2, h2, y2)
+        })
+        .collect()
+}
+
+/// `HUD_UpdateCarPane` 0x1a15a0: the RC-car pane's 5 sprites' layer bytes (`+0x38`) swap by
+/// the vehicle's cel group — the RC-car cel (`hashtable_hashcode_to_celglist(0x2000194)`,
+/// `obj+0xd8`) puts the layers at `[0xff, 0xff, 0x27, 0x27, 0x27]` with sprite 0's colour
+/// word `0x0020ff`; anything else `[0x27, 0x27, 0xff, 0xff, 0xff]` with `0x2000ff` [M
+/// 0x1a15a0:12-30]. Returns (sprite 0's colour word, the 5 layer bytes).
+pub fn car_pane_layers(is_car_cel: bool) -> (u32, [u8; 5]) {
+    if is_car_cel {
+        (0x0020ff, [0xff, 0xff, 0x27, 0x27, 0x27])
+    } else {
+        (0x2000ff, [0x27, 0x27, 0xff, 0xff, 0xff])
+    }
+}
+
 /// The HUD pane's private per-frame hash (the redeemer pane's idiom, nf-view hud.rs):
 /// deterministic, never the sim RNG.
 fn hash_frame(frame: u32, salt: u32) -> u32 {
@@ -594,6 +633,38 @@ mod tests {
         assert_eq!(out.mode, 0);
         assert_eq!(m.fade, 0.0);
         assert!(!m.night_pane_on && !m.xray_pane_on);
+    }
+
+    /// [M 0x1a0bb8 :17-40] the sub-viewport re-centre: w/x on h < 512, h/y on h < 448.
+    #[test]
+    fn shrink_recenters_sub_fullscreen() {
+        let base = |k: usize| match k {
+            0 => (0x100i16, 0x80i16, 0x40i16, 0x20i16),
+            _ => (0x40, 0x10, 0x20, 0x30),
+        };
+        // Fullscreen: untouched.
+        let out = shrink_to_viewport(640.0, 448.0, 0x40, 0x20, base, 2);
+        assert_eq!(out[0], (0x100, 0x80, 0x40, 0x20));
+        // Narrow (640 < 512? no — width guard is screen_w < 512): 512-wide halves.
+        let out = shrink_to_viewport(511.0, 448.0, 0x40, 0x20, base, 2);
+        assert_eq!(out[0], (0x80, 0x80 - 0x20, 0x40, 0x20));
+        // Short: h/y halve/shift.
+        let out = shrink_to_viewport(640.0, 447.0, 0x40, 0x20, base, 2);
+        assert_eq!(out[0], (0x100, 0x80, 0x20, 0x20 - 0x10));
+        // Both.
+        let out = shrink_to_viewport(511.0, 447.0, 0x40, 0x20, base, 2);
+        assert_eq!(out[0], (0x80, 0x80 - 0x20, 0x20, 0x20 - 0x10));
+    }
+
+    /// [M 0x1a15a0 :12-30] the RC-car layer swap (sister: the two sets differ everywhere).
+    #[test]
+    fn car_pane_layer_swap() {
+        let (c, layers) = car_pane_layers(true);
+        assert_eq!(c, 0x0020ff);
+        assert_eq!(layers, [0xff, 0xff, 0x27, 0x27, 0x27]);
+        let (c, layers) = car_pane_layers(false);
+        assert_eq!(c, 0x2000ff);
+        assert_eq!(layers, [0x27, 0x27, 0xff, 0xff, 0xff]);
     }
 
     /// [M 0x19e9d8 :60-66] the item-class clamp.

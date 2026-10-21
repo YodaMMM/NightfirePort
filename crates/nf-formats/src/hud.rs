@@ -116,7 +116,7 @@ pub struct HudTables {
     pub mp_ammo: Vec<SpriteInfo>,
     /// The OICW boot/zoom pane's sprites (`OICWPane` 0x2be140 → `HUD_CreateOICWPane` 0x19cc90 /
     /// `HUD_UpdateOICWPane` 0x19cef8, `OICWSprInfo` 0x2be008 — 7 sprites [L ee_snapshot
-    /// pane-def +0x14]); sprites 1..4 are the COMMAND.COM boot text lines.
+    /// pane-def +0x14]); the five boot text sprites sit at consecutive list slots [M 0x19cc90:44-62].
     pub oicw: Vec<SpriteInfo>,
     /// The nightsight pane's sprites (`NightSightPane` 0x2bd8b8 → `HUD_UpdateNightSightPane`
     /// 0x19d218, `NightSightSprInfo` 0x2bd7b0 — 6 [L]).
