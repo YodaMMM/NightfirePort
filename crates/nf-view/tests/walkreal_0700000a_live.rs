@@ -159,8 +159,12 @@ fn clear_hostiles(w: &mut Walker, radius: f32, max_ticks: u32) -> usize {
 fn alarm_runner_within(w: &Walker, radius: f32) -> Option<usize> {
     let sim = w.scene.sim.as_ref().unwrap();
     let bp = sim.bond.pos;
+    // ai-sight-drawn-gate-4 trace (NF_ALARM_TRACE): the fail-tick presser on 07000001's
+    // neighbour is a TEAM-3 CIVILIAN — the office workers run the same alarm family
+    // (g15 0x8a PressAlarm at the fail digest, team 3) — the team==1 filter matched nothing
+    // on this level, so the chase never fired. The family is the state set, not a team.
     sim.drones.list.iter().enumerate()
-        .filter(|(_, d)| d.present && d.enabled && d.team == 1 && !d.corpse && d.health > 0.0)
+        .filter(|(_, d)| d.present && d.enabled && d.team != 0 && !d.corpse && d.health > 0.0)
         .filter(|(_, d)| matches!(d.state, nf_game::kiko::RUN_TO_ALARM | nf_game::kiko::PRESS_ALARM | nf_game::kiko::DONE_PRESS_ALARM))
         .map(|(i, d)| (i, walker::dxz(d.pos, bp)))
         .filter(|(_, dist)| *dist <= radius)
