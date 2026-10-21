@@ -82,9 +82,16 @@ impl Network {
         n
     }
 
-    /// `NDrone_InitDoorNodes` / `InitKickNodes` (walls crossed by a link between two door / kick nodes → 0x800 /
-    /// 0x1000), then `AINetwork_InitPassableBoundries` (walls crossed by any path link → 0x400, with the height
-    /// adjustment of `LineIntersectsBoundry(adjust = 1)` as written).
+    /// `NDrone_InitDoorNodes` 0x139a70 / `InitKickNodes` 0x139ce0 — the two callers of
+    /// `AINetwork_ModIntersectedLinkFlags_Bounds` 0x15b6f0 (for every boundary wall the
+    /// node-pair segment crosses, OR the flags in [M 0x15b6f0:20-38]; 0x800 door walls from
+    /// node-flag bit 2 pairs [M 0x139a70:87-88], 0x1000 kick walls from bit 4 pairs
+    /// [M 0x139ce0:100-101], both ← `Drone_PostLoad_Init` 0x136938:109-110 ←
+    /// `ResetMap_Load` 0x1d6360:156) — then `AINetwork_InitPassableBoundries` (walls crossed by any
+    /// path link → 0x400, with the height adjustment of `LineIntersectsBoundry(adjust = 1)` as written).
+    /// Deviation: the game walks every cel's BLINK array (0x2c87b0/0x2c87b4 per cel); the port
+    /// is one cel. The game's return value also gates the AIPath-link u16 flags 0x20/0x40
+    /// [M 0x139a70:93, 0x139ce0:106], which this port folds into the node→door binding.
     fn init_walls(&mut self) {
         for p in &self.paths {
             for l in &p.links {
@@ -106,15 +113,29 @@ impl Network {
         }
     }
 
-    /// `GetBoundsPushVectorForSphere(r, pos, mask 0x1C00)` (drone collision): walls without the mask bits whose closest
-    /// point Q (on the 3D segment) is within r of the feet, with the feet between Q.y − 0.4 and Q.y + height, push the
-    /// feet out horizontally to distance r (the push direction / length is *suggested*: the decomp loses the stores).
+    /// `GetBoundsPushVectorForSphere` 0x157bd0 (drone collision) walking the boundary walls with
+    /// `AINetwork_HitBoundry` 0x157780: walls without the mask bits whose closest point Q (on the
+    /// nodeA→nodeB segment, t clamped [M 0x157780:27-93]) is within r of the feet — **XZ-only**
+    /// distance (`Vec_SqDist2D` [M 0x157780:94]) — with the feet between Q.y − 0.4 and
+    /// Q.y + lerp(post heights by t) [M 0x157780:96-104], push the feet out horizontally to
+    /// distance r (the push direction / length is *suggested*: the decomp loses the stores).
+    /// The game's caller passes mask = drone+0xba4 (= 0x1c00 on the shipped paths [S]) which
+    /// skips 0x800/0x1000/0x400-flagged walls before the 0x800 double-radius rule
+    /// (0x157bd0:94-97) could matter, so that rule is not modelled here [S unverified].
     pub fn push_out(&self, feet: V3, r: f32) -> V3 {
         let mut p = feet;
         for w in self.walls.iter().filter(|w| w.flags & 0x1c00 == 0) {
             let q = closest_on_segment(w.a, w.b, p);
-            let d2 = (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2);
-            let h = w.ha.min(w.hb);
+            // [M 0x157780:94] the hit distance is 2D (X/Z only) — the Y gap does not count.
+            let d2 = (p[0] - q[0]).powi(2) + (p[2] - q[2]).powi(2);
+            // [M 0x157780:96-104] band top = closestY + lerp(nodeA.h, nodeB.h, t) with the same
+            // clamped t as Q (not min(ha,hb) as this port used before unported-ai-navigation-1).
+            let d = [w.b[0] - w.a[0], w.b[1] - w.a[1], w.b[2] - w.a[2]];
+            let len2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            let t = if len2 <= 0.0 { 0.0 } else {
+                (((p[0] - w.a[0]) * d[0] + (p[1] - w.a[1]) * d[1] + (p[2] - w.a[2]) * d[2]) / len2).clamp(0.0, 1.0)
+            };
+            let h = w.ha + (w.hb - w.ha) * t;
             if d2 > r * r || p[1] > q[1] + h || p[1] < q[1] - 0.4 { continue; }
             let (dx, dz) = (p[0] - q[0], p[2] - q[2]);
             let l = (dx * dx + dz * dz).sqrt();
@@ -828,5 +849,42 @@ mod tests {
             if !visited.contains(&r.index) { visited.push(r.index) }
         }
         assert_eq!(visited.len(), 4, "all four links walked: {visited:?}");
+    }
+
+    /// `AINetwork_HitBoundry` 0x157780 via `push_out`: the hit distance is XZ-ONLY
+    /// (`Vec_SqDist2D` [M 0x157780:94]) — a feet-Y gap does not defeat the push while the
+    /// y-band holds. Sister: beyond the radius in XZ there is no push.
+    #[test]
+    fn boundary_push_distance_is_xz_only() {
+        let n = Network {
+            paths: vec![],
+            walls: vec![Wall { a: [2.0, 0.0, 0.0], b: [2.0, 0.0, 10.0], ha: 2.0, hb: 2.0, flags: 0 }],
+            bounds: true, slope_dy: 2.0, max_slope: 0.8727,
+        };
+        // Feet 0.3 east of the wall at y=1 (inside the band [−0.4, +2]): 3D d² = 1.09 > r²
+        // would skip; the game's XZ d² = 0.09 ≤ 0.16 pushes to 0.4 east [M 0x157780:94,96-104].
+        let p = n.push_out([2.3, 1.0, 5.0], 0.4);
+        assert!((p[0] - 2.4).abs() < 1e-4 && (p[2] - 5.0).abs() < 1e-4, "pushed east to 0.4: {p:?}");
+        // Sister: 0.5 away in XZ (no Y trickery) stays put.
+        let p = n.push_out([2.5, 1.0, 5.0], 0.4);
+        assert_eq!(p, [2.5, 1.0, 5.0], "beyond r: no push");
+    }
+
+    /// The y-band top is `closestY + lerp(post heights by t)` [M 0x157780:96-104], not
+    /// min(hA,hB). Sister: above the interpolated top there is no push.
+    #[test]
+    fn boundary_band_top_interpolates_the_post_heights() {
+        let n = Network {
+            paths: vec![],
+            walls: vec![Wall { a: [0.0, 0.0, 0.0], b: [10.0, 0.0, 0.0], ha: 1.0, hb: 3.0, flags: 0 }],
+            bounds: true, slope_dy: 2.0, max_slope: 0.8727,
+        };
+        // Mid-segment (t=0.5): top = 0 + lerp(1,3,0.5) = 2.0 — feet at 1.9 are INSIDE
+        // (min(ha,hb)=1.0 would have skipped) → pushed north to 0.4.
+        let p = n.push_out([5.0, 1.9, 0.1], 0.4);
+        assert!((p[2] - 0.4).abs() < 1e-4, "inside the interpolated band: pushed: {p:?}");
+        // Sister: feet at 2.1 sit above the interpolated top (2.0) → unchanged.
+        let p = n.push_out([5.0, 2.1, 0.1], 0.4);
+        assert_eq!(p, [5.0, 2.1, 0.1], "above the interpolated band top: no push");
     }
 }
