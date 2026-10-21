@@ -255,3 +255,44 @@ message queue sorts TXTMSG records by the `isNew` byte — contradicted by the c
 message queue is FIFO via the CirBuf ring (CirBuf_Add 0x1cd040, replaced by the port's
 subtitle queue). Also fixes a mislabel in docs/systems/fix-cel-order.md:28, which calls
 0x1d3320 "CompLight": 0x1d3320 is CompSpr; CompLight is 0x1d3350.
+
+# unported-front-end-menus-7 (2026-10-21)
+
+## libcglue `close` 0x23c288 (8 bytes) — newlib fd-close stub, never invoked
+
+The 8-byte body is `jr $ra; addiu $v0, $zero, -1` [M disassembly of work/elf/ACTION.ELF
+0x23c288-0x23c290; decompile 0023c288_close.c `return -1`]: it always fails and never
+sets errno. Its whole-ELF reference census (every PT_LOAD segment scanned for `jal`
+targets, `lui+addiu` address constructions with correct sign extension, and raw 4-byte
+data words) finds **exactly one reference**: `jal 0x23c288` at 0x23bab4 inside `_close_r`
+0x23ba98 [M]. From there the chain terminates in glue that nothing ever calls:
+
+- `_close_r` 0x23ba98 (`errno=0; close(fd); on -1 && errno: *reent = errno`) is called
+  only by `__sclose` 0x23b958 (`jal` at 0x23b964, args FILE->_data +0x54 / _file +0xe) [M].
+- `__sclose` 0x23b958 is referenced only by `std` 0x239f30, which stores it into the
+  FILE `_close` glue slot at +0x2c (lui/addiu at 0x239f48, `sw $t1, 0x2c($a0)` at
+  0x239f68; the other glue slots get `__sread` 0x23b808 / `__swrite` 0x23b870 /
+  `__sseek` 0x23b8f0) [M disassembly of std]. `std`'s only caller is `__sinit`
+  0x239fa0:11-13, wiring stdin/stdout/stderr [M]; `__sinit` runs lazily from vfprintf
+  0x237110, the FILE accessor 0x238930 and `fflush` 0x239e28 [M].
+- Nothing in ACTION.ELF ever invokes the `_close` glue: `work/action-symtab.tsv` has no
+  `fclose`/`_fclose_r`/`freopen`; a decompile grep for `__sclose` outside its own file
+  and `std` is empty; and an instruction-level census of all 172 `lw rt, 0x2c(base)`
+  sites in .text finds no same-register `jalr rt` within the following 24 instructions
+  [M census, capstone scan of ACTION.ELF .text].
+- The exit path closes nothing: `exit` 0x2358b0 (its 5 `jal` callers all sit in the
+  failure arms of `sceMtapInit` 0x226b68) runs the atexit walk, then `(*(reent+0x3c))()`
+  = `_cleanup_r` 0x239f88 (stored by `__sinit`:6 and `__smakebuf` 0x23a978), which calls
+  `_fwalk` 0x23a898 with `fflush` 0x239e28 as the per-FILE callback [M _cleanup_r:4] —
+  flush only, never close. So even the `sceMtapInit`-failure exit cannot reach `close`.
+
+The game's real file I/O never uses EE-side fds: loaders go through sce* / memcard
+primitives (`sceOpen` 0x23edd0, `sceMcOpen` 0x227f48, `strFileOpen` 0x108cc0,
+`psiFileOpen` 0x10bd08 — symtab) [M], and the Rust port reads disc data through
+nf-formats' ISO reader, which has no fd table to close. So there is no ported job to
+cite either: recorded unreached (dead libcglue stub, unreachable on every on-foot
+level, the front end and MP).
+
+Method note: the scan driver's earlier "jal" hits inside the 16-byte kernel import
+stubs (0x23bde4, 0x23bf54) are the PS2 syscall-trap word 0x0c000000, not calls; the
+census excludes it.
