@@ -387,6 +387,12 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
 /// pulse the first `UpdateMusicalEvents` consumes. fix-party-mission: the tests' `load` path now wires
 /// the music too (the cut-scene music jumps were test-invisible before); `build_sound` reuses this.
 fn wire_music(sim: &mut scene::Sim, mm: Vec<nf_formats::music::MapMusic>, vars: Vec<nf_formats::music::MusicVars>) {
+    // The load path's sound reboot: `ResetMap_Load` 0x1d6360:24/:131 runs `Sound_Kill` 0x1ddfd0
+    // (`SFXReset` when `Sound_Ready` had set SoundInit [M 0x1dceb8:107], SoundInit = 0) then
+    // `Sound_Init` 0x1ddf88 (`DList_Init` pool, `SFXInitialise(0)`, `memset(&EventList,0,0x100)` =
+    // the 64-u32 music event board) on EVERY load. The port takes the same job by rebuilding the
+    // audio world here (build_sound's fresh driver/banks/streams, and this fresh engine with its
+    // zeroed event board) — docs/systems/sound-lifecycle.md.
     sim.drones.attack_gate.vars = vars.iter().find(|v| v.level == sim.level).copied()
         .or(Some(nf_formats::music::MusicVars { level: sim.level, count: 2, floor: 0, window: 8, distance: 25.0 }));
     sim.drones.music = nf_game::music::Music::new(mm);
@@ -760,6 +766,9 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // `ResetMap_Load` 0x1d6360 also calls `AnimSeqGetHdrBuf` 0x1c7998 (jal 0x1d67c4, a0=1) before
     // this loader loop — `jr ra; or v0,zero,zero`, always 0, and the caller never reads v0 [M
     // disasm 0x1d67c4-0x1d67d8]: a retired header-buffer hook; the port's load needs no hook.
+    // `ResetMap_GameInit` also calls `Sound_SetLogSfxFile` 0x1de368 right before `Mission_Init`
+    // [M 0x1d5080:43] — the shipped function is a bare `ret` [M 0x1de368], so the port preserves
+    // the call as nothing (docs/systems/sound-lifecycle.md).
     let mut sequences: HashMap<u8, Vec<Sequence>> = HashMap::new();
     if let Some(anim) = read(&anim_name)? {
         let alb = LevelBin::parse(&anim)?;
