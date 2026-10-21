@@ -34,6 +34,12 @@ impl Font {
     /// `Lang::parse` re-encodes the bank's CP-1252 bytes as UTF-8, so a byte walk split "©" (U+00A9 → C2 A9) into
     /// glyphs 0xC2 + 0xA9 and the title's legal line read "Â©" — the main agent's 2026-10-13 render]. Chars restore
     /// the one-glyph-per-source-byte mapping: each CP-1252 byte became exactly one char, so glyph code = char code.
+    ///
+    /// The returned width is `Font_GetTextExtent` 0x1ef588's extent (the same per-glyph advance walk the
+    /// game runs through `Font_ParseFormat` 0x1ee3e0 + `__Font_DrawText` 0x1ee598's counting mode; callers:
+    /// `Sprite_SetFmt` 0x1de628, `Sprite_SetTextNFmt` 0x1de718, `Text_Init` 0x222b80, `Memo_*`, `List_Init`
+    /// 0x219488, `List_SendMessage` 0x2196e8, `Checkbox_Init` 0x1f0110, `Spin_Init` 0x2224c8,
+    /// `Menu_ClipString` 0x1f2e70) [M 001ef588 decomp].
     pub fn layout(&self, text: &str, x: f32, y: f32) -> (Vec<Placed>, f32) {
         let top = self.glyphs.first().map_or(0.0, |g| (g.h + g.yoff) as f32);
         let (mut pen, mut out, mut prev): (f32, Vec<Placed>, Option<usize>) = (x, Vec::new(), None);
@@ -65,7 +71,11 @@ impl Font {
     /// HUD pixels (`TextMsgFormats[type]`'s maxWidth — 480 for the type-2 objective text [L
     /// 0x2bf108+0x14]), the lines joined with '\n' — the string the game stores, which
     /// `__Font_DrawText`'s newline branch then lays out. Words that alone exceed `max_w` keep their
-    /// own line.
+    /// own line. The measure-each-candidate-prefix loop is also `Font_GetTextCountExtent`
+    /// 0x1ef668's job shape (count how many chars fit a clip width, extent out through the GPOINT
+    /// — `Font_ParseFormat` + `__Font_DrawText` counting mode; callers `Menu_ClipString` 0x1f2e70
+    /// and `List_SendMessage` 0x2196e8's paging); the port re-measures whole prefixes with
+    /// [`Self::layout`] instead of counting glyphs [M 001ef668 decomp].
     pub fn word_wrap(&self, text: &str, max_w: f32) -> String {
         let mut out = String::new();
         let mut line = String::new();

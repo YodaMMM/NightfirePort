@@ -240,6 +240,18 @@ fn add(a: f32, b: f32) -> f32 { add_noguard(a, b, true) }
 /// builds the object draw matrix with it — the same ten rotation entries via the same
 /// π/2-offset sinf pair; 0x1e2478 additionally copies the translation into out[12..14], the
 /// port passes translations separately) [M].
+///
+/// The Euler family's single/double-axis members are the same formula with rows masked, each
+/// cited at its port site: `RotMatrixY(angle, m)` 0x1e4718 (m = [[c,0,−s],[0,1,0],[s,0,c]] via
+/// `PS2Sinf2(a+π/2, a)` — the port builds that exact matrix for the aim yaw,
+/// `drone.rs`'s `rot_y` in `object_pose_inner`, with `trig::sinf`/`cosf` lanes) and
+/// `RotMatrixZ(angle, m)` 0x1e4798 (callers `GT_Update` 0x180498, `Bullet_update` 0x12e7b0,
+/// `Car_Update` 0x1307d8, `Draw_MuzzleFlash` 0x1a3fe0, `Player_PositionCamera` 0x18f5d8,
+/// `Player_PositionGun` 0x1a3b40, `RotMatrixZYX` 0x1e25a8, `View_DrawCelGlist` 0x1e6538)
+/// and `RotMatrixXY(x, y, m)` 0x1e4818 (its only caller `Car_SetBits` 0x130060 — the car
+/// frame's pitch/yaw; the port's car matrix composition is the deferred `Car_Update` work,
+/// `car.rs` module doc) reduce to `RotMatrix`'s rows; the port composes them through this
+/// `rot_matrix`/`concat` pair [M 001e4718/001e4798/001e4818 decomp].
 pub fn rot_matrix(v: [f32; 3]) -> [f32; 12] {
     let cx = sinf(add(v[0], HALF_PI)); // fStack_60
     let sx = sinf(v[0]);               // fStack_5c
@@ -263,6 +275,17 @@ pub fn rot_matrix(v: [f32; 3]) -> [f32; 12] {
 /// `Concat(a, b)` [M 0x1e4a90]: `b = a · b` on the rotation rows (translation rows add —
 /// the game's per-row add is `auxVec_Add` 0x1e4f10 [M 0x1e4a90:49]; the sky keeps them zero —
 /// `Mat_CopyRot` copies a rotation-only matrix).
+///
+/// The gameplay paths' scalar 3×3 composition — the same `b = a·b` / `out = a·b` products the
+/// EE FPU runs — is cited here because this `concat` and `nf_formats::anim::mul` are the port's
+/// only matrix composers: `MulMatrix0(a, b, out)` 0x1e2820 (`out = a·b`; callers `Car_Update`
+/// 0x1307d8, `Draw_MuzzleFlash` 0x1a3fe0, `Bullet_DoTrails` 0x12d890, `Bullet_update`
+/// 0x12e7b0, `Camera_SetToPlayer` 0x1bc048), `MulMatrix2(a, m)` 0x1e26b0 (`m = a·m` in place;
+/// caller `DroneWeap_ThrowGrenade` 0x179558) and `RotTransMat(rot, m)` 0x1e29d8 (`m = rot·m`
+/// then translation += rot's; callers `RotTransMatrix` 0x1e2478, `View_RotTransMatrix`
+/// 0x1e5168, `Control_GetObjMatrix` 0x134210, `control_create_object` 0x1344e0, the camera
+/// suite `camera_freechase`/`camera_snake`/`Camera_ApplySwing`/`Camera_Enable`, and
+/// `AnimGetBoneWorldTrans2` 0x1c32e0) [M 001e2820/001e26b0/001e29d8 decomp].
 pub fn concat(a: &[f32; 12], b: &mut [f32; 12]) {
     let mut out = [0.0f32; 12];
     for r in 0..3 {

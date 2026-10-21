@@ -443,3 +443,14 @@ Also recorded here because the natural alternative buckets don't fit: `SaveMemor
 but it is a stubbed-out no-op: the disassembly (file 0xb198) shows it memsets 18 bytes of its
 own dead stack frame and returns, touching no globals, result ignored by the caller [M ELF
 bytes]. Nothing to port; noted in docs/systems/memcard-save-flow.md.
+
+## LS_LoadBonus 0x1ce488: dead — zero references in the whole ELF
+
+`LS_LoadBonus(buf, kind)` (124 B) would pull two 32-bit values from a bit buffer
+(`BIN_PullBits` twice) and apply them through `Menu_SetBonus` — a bonus-unlock parse from a
+loaded save. Nothing calls it: the full capstone scan of ACTION.ELF's LOAD segment (vaddr
+0x107100..0x30d670, every 4-byte step) finds **no jal** and **no absolute word** equal to
+0x1ce488 [M scan, task unported-misc-6]. Its decompiled C is register garbage (`unaff_s0`/
+`unaff_s1`), consistent with a function no caller ever reaches. The unlock data instead
+flows through `Menu_SetLevelBonus` 0x1ffa10 (the profile's unlock rows) and the
+cheat-codename checks. Not ported.
