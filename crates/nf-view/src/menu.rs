@@ -3725,7 +3725,12 @@ impl FrontEnd {
     /// (0x21f8e0) builds it from the page def, `Radio_SendMessage` (0x21fa50) pumps it
     /// (0x10 add option, 0x1d/0x1e/0x49 select+notify), `Radio_GetIndex` (0x220130) /
     /// `Radio_SetIndex` (0x220180) are the list-index helpers; the port hand-rolls the
-    /// behaviour per page [S — same behaviour, no widget layer].
+    /// behaviour per page [S — same behaviour, no widget layer]. Its per-tick layout member
+    /// `Radio_Update` 0x21ff80 (`Menu_Update` 0x1f1dc0 walks each page's controls every tick)
+    /// resizes the M_LABEL child (+0x94) into the radio box (+0x70..+0x76 minus the scroll
+    /// arrows), hides the widget when +0x7a flags say so and re-runs `Scroll_Update` +
+    /// `Label_Update` — pure draw-time layout the port has no counterpart for (the ◀▶ step
+    /// here + the draw side's own geometry cover the job) [M 0021ff80 decomp].
     fn opt_step(&mut self, row: &OptRow, dir: i32) {
         let v = self.opt_value(row.ctrl);
         let nv = match row.kind {
@@ -4304,7 +4309,12 @@ impl FrontEnd {
     /// `Menu_FlushEnum` 0x202000 (reset of `Menu_EnumSaves` 0x1f7b78's enumeration machine;
     /// `PS2_DoCardFlow` 0x2184f0's terminal block runs it): the port has no persistent
     /// enumeration state — this synchronous reload re-derives everything, so the flush's job is
-    /// subsumed by the rebuild itself [M docs/systems/menu-alpha-text-messages.md].
+    /// subsumed by the rebuild itself [M docs/systems/menu-alpha-text-messages.md]. The same
+    /// terminal block's other close-out, `LS_FlushStates` 0x1ce1b0 (12 B: `Load_State = 0;
+    /// Save_State = 0` — the LS_* state machines back to idle; also called by
+    /// `Menu_UpdateMessageBox` 0x1f7de8:25 when the save gate drops the op) has nothing to
+    /// reset here: the port's save/load is a synchronous file write with no async state
+    /// machine [M 001ce1b0 + both call sites].
     pub fn reload_profiles(&mut self) {
         self.profiles = self
             .profile_dir
@@ -5041,6 +5051,30 @@ impl FrontEnd {
 
     /// One menu action. Returns true when the action changed the state.
     pub fn action(&mut self, a: Action) -> bool {
+        // The M_* widget runtime this page/action model re-expresses (misc-6 citations; the game's
+        // pages drive NEW_CONTROL-built M_* widgets through a message pump, the port folds each
+        // page's widgets into its own rows/state — the data/state/flow is here, the drawing is
+        // the main agent's):
+        // - `Manager_HandleMessage` 0x21df10 (28 B — a pure forward to `Handler_HandleMessage`
+        //   0x2029e0) sits at the end of `Manager_SendMessage` 0x21c858's dispatch; the port's
+        //   terminal per-action handler is THIS fn.
+        // - `Button_Init` 0x1efc90 (builds an M_BUTTON from its NEW_CONTROL def: kind byte +0x7b=1,
+        //   def words to +0x14/+0x18/+0x20, colours +0x70..+0x76, the M_LABEL child at +0x94 via
+        //   `Label_Init`, `Script_PrepareScripting`) — the port's per-page row construction
+        //   (`rows()`/`enter_page`/the page handlers' row tables).
+        // - `Button_SendMessage` 0x1ef7a0 (the M_BUTTON message pump: 0x14 `Script_ExitLoop`, 0x16
+        //   `Script_Play`, 0x18 → `Label_SendMessage`, 0x20 set target, 0x21 select state 0..6,
+        //   0x2b enable + `Component_SetupInstance`, 0x2f, 0x39) — the port's per-row Confirm /
+        //   step handling inside this `action` + [`Self::opt_step`].
+        // - `Window_Init` 0x224110 (M_WINDOW: +0x7b=0xd class, def words, `Script_PrepareScripting`)
+        //   and `Window_Update` 0x224270 (8 bytes: `return` — a no-op even in the game) — the
+        //   port has no per-widget window step; pages draw their frames directly.
+        // - `Font_GetAlignment` 0x1ef728 (walks the label text's embedded 0xFA.. tags and returns
+        //   the alignment byte after the 0xFA tag, default 1) — the port's alignment comes from
+        //   the page-def rows it re-expresses, not string tags (`Lang::parse` keeps no tags).
+        // Dispatch evidence: `Button_Init`/`Window_Init` are reached from `Manager_SendMessage`
+        // 0x21c858's control-create switch, `Button_SendMessage` from `__Menu_SendMessage`
+        // 0x1f1c18's per-kind dispatch [M grep over work/decomp/ACTION.ELF].
         // `MenuManager_GetStatus` 0x21deb0 (max +0x1b4 over the five manager slots — the
         // create-page results; callers Menu_InputAction 0x1f1f40:102 gates actions 0x1e/0x1f
         // behind `status > 3`, P_PAUSE_Handler 0x203c28:99) — the port's gate is structural:

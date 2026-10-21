@@ -565,3 +565,14 @@ every level is flags 0x8019 — a cel-create record the dispatcher never sees [D
 sweep found no store of class byte 6 [M]; no placement creator case produces it (kind 0x21 =
 `Ripples_Create` 0x1acc90 stores class 0x34, not 6 [M 0x1acd10]); absent from the start snapshot
 class histograms [L ee_start_05]. Nothing in the shipped on-foot game can dispatch to it.
+
+## LS_LoadBonus 0x1ce488: dead — zero references in the whole ELF
+
+`LS_LoadBonus(buf, kind)` (124 B) would pull two 32-bit values from a bit buffer
+(`BIN_PullBits` twice) and apply them through `Menu_SetBonus` — a bonus-unlock parse from a
+loaded save. Nothing calls it: the full capstone scan of ACTION.ELF's LOAD segment (vaddr
+0x107100..0x30d670, every 4-byte step) finds **no jal** and **no absolute word** equal to
+0x1ce488 [M scan, task unported-misc-6]. Its decompiled C is register garbage (`unaff_s0`/
+`unaff_s1`), consistent with a function no caller ever reaches. The unlock data instead
+flows through `Menu_SetLevelBonus` 0x1ffa10 (the profile's unlock rows) and the
+cheat-codename checks. Not ported.
