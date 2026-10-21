@@ -1991,6 +1991,11 @@ pub struct BonusFields {
 // MemCard_* states, whose message ids PS2_DoCardFlow 0x217bd8 renders as the dialog page's
 // text + buttons. The port keeps the ids and the shape, narrowed to what a file save can mean
 // (§4 of the doc: no card-hardware states — a directory of files has no "unformatted").
+// Beneath those states the game's mcman SDK sync — `sceMcSync` 0x2285e8 (jal'd from the
+// `MemCard_*` states at 0x10f4c4/0x11019c/0x110338/0x110650/0x110888/0x110c24 [M ELF jal scan])
+// → `mcDelayThread` 0x2285a0 (jal at 0x228650, SetAlarm/sleep/wait) → `mcHearAlarm` 0x228578
+// (the alarm callback, registered via the immediate at 0x2285ac [M]) — is IOP thread glue this
+// flow machine replaces with plain polling of the save directory [M unported-misc-7].
 
 /// The card-flow messages — `DAT_002462d4` in PS2_DoCardFlow 0x217bd8's switch [M :76-152].
 /// Only the ids the port's machine can reach are variants; `label`/`buttons` cover the table.

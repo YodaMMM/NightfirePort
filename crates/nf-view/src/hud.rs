@@ -3,6 +3,11 @@
 //! (`HUD_UpdateAmmoPane` 0x19a7f0). Sprites from `HealthSprInfo` / `AmmoSprInfo` / `BulletImg` and font 2, read from
 //! ACTION.ELF; textures from the level archive. Sorted by layer, higher first (`CompSpr`: lower numbers on top).
 //!
+//! The health panes' percentage math runs the game's soft-float `fptodp` 0x2246d0 (the EE has no double FPU;
+//! jal'd 3× from `HUD_UpdateMPHealthPane` 0x19b630 at 0x19b948/0x19b954/0x19b960 and 3× from
+//! `HUD_UpdateHealthPane` 0x19b9c8 at 0x19c04c/0x19c058/0x19c064 [M ELF jal scan]) — the f32→f64 promotion
+//! Rust performs natively at each `as f64`/mixed-type step below [M unported-misc-7].
+//!
 //! Sprite-record primitives this immediate-mode frame replaces [M] — the game's text/bitmap sprite
 //! nodes (0x44 bytes, `SpriteList` 0x349b18, `docs/fields/sprite.md`): `Sprite_InitLists`
 //! 0x1de600 (the 512-node free/in-use pool; the port builds a fresh `HudFrame` per frame, no pool),

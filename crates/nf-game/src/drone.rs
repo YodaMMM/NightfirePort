@@ -9600,7 +9600,10 @@ pub struct FlashProbe {
 /// (4/3) [M 0x1baf70:29-33; L ee_snapshot.bin @ 0x2a37c4 = 0 and ee_start_07000001.bin @ 0x2a37c4 = 0].
 /// The per-viewer init is `Camera_Create` 0x1bb0f8 [M] — rect +0xf0/+0xf4/+0xf8/+0xfc, size +0x10c/+0x110, sprite-draw gate +0x2a, updator slot +0x68; its FOV default 0x3F860A92 comes through `Camera_CalcViewAngles` 0x1baf70 (the `VIEW_ANGLE` const below).
 /// tanf is the SDK libm in the game — the port's `f32::tan` is the stand-in (plane-direction error
-/// < 1e-6 rad, orders below the slack) [S].
+/// < 1e-6 rad, orders below the slack) [S]. The game's `tanf` is `0x232bc0` (libm, jal'd from
+/// `PS2WorldViewVU1Kick2` 0x10b2b0 at 0x10b3a0, `Camera_CalcViewAngles` 0x1baf70 at 0x1bb074 and
+/// `Vision_Calculate_View_Fustrum` 0x1e7df8 at 0x1e7e2c [M ELF jal scan]) — this `(VIEW_ANGLE * 0.5).tan()`
+/// and the frustum half-angle math below are the same job under Rust's native f32 tan [M unported-misc-7].
 pub fn frustum_sides(forward: V3) -> [V3; 4] {
     /// The on-foot view angle 0x3F860A92 [M Camera_CreateCameras 0x1bb2b8].
     const VIEW_ANGLE: f32 = 1.047_197_6;
@@ -12125,6 +12128,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     pub fn auto_aim(&mut self, d: &Data, head: V3, look: V3, weapon: u8) -> V3 {
         let t = d.tuning;
         let yaw = look[0].atan2(look[2]);
+        // The game's pitch angle is `asinf` 0x232d48 (jal at 0x1a7710 in `Check_AutoAim` 0x1a73f8 [M ELF jal
+        // scan]); asinf's own callees — `dptofp` 0x225378 (jal 0x232e18, the f64→f32 result narrowing) and
+        // `matherr` 0x2352e8 → `dpcmp` 0x225108 (the |x|>1 domain-error path, jal 0x2352f4 [M]) — are the
+        // SDK soft-float/libm internals this Rust `.asin()` + `.clamp(-1.0, 1.0)` replace [M unported-misc-7].
         let pitch = look[1].clamp(-1.0, 1.0).asin();
         let wf = d.weapons.records.get(weapon as usize).map_or(100.0, |w| f32::from_le_bytes(w[0x14..0x18].try_into().unwrap()));
         let diff = match self.difficulty { 1 => t.Autoaim_EasyMul, 3 | 4 => t.Autoaim_HardMul, _ => t.Autoaim_NormalMul };
