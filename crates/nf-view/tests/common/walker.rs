@@ -29,6 +29,9 @@ pub fn wrap_pi(a: f32) -> f32 {
     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; }
     a
+    /// ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive): each drone's last logged state, so the
+    /// trace prints only transitions + a 50-tick digest — the fail reads as the presser's walk.
+    pub alarm_last: Vec<u8>,
 }
 
 /// XZ distance.
@@ -153,6 +156,7 @@ impl Walker {
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, max_y: pos[1], lenient: false,
             trail: Vec::new(),
+            alarm_last: Vec::new(),
         }
     }
 
@@ -261,6 +265,34 @@ impl Walker {
             eprintln!("[trace] t{} bond=({:.2},{:.2},{:.2}) grounded={} substate={:#x} crouched={}",
                 self.total_ticks, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2],
                 sim.bond.grounded, sim.bond.substate, sim.bond.crouched);
+        }
+        // ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive — the NF_WALK_TRACE pattern): the
+        // alarm-chain trace. Every live team-1 guard's state is diffed against `alarm_last`; a
+        // transition prints (idx, from -> to, dist to Bond), a 50-tick digest prints the live
+        // states compactly, and the mission fail_label's value rides the digest so the fail
+        // reads as the presser's state walk (826c: the {0x89,0x8a,0x8b} family never fired).
+        if std::env::var_os("NF_ALARM_TRACE").is_some() {
+            if self.alarm_last.len() < sim.drones.list.len() {
+                self.alarm_last.resize(sim.drones.list.len(), 0xff);
+            }
+            let bp = sim.bond.pos;
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                if !d.present || d.team != 1 || d.corpse { continue; }
+                let prev = self.alarm_last[i];
+                self.alarm_last[i] = d.state;
+                if prev != d.state {
+                    eprintln!("[alarm] t{} g{} {prev:#x} -> {:#x} d {:.1} at ({:.1},{:.2},{:.1})",
+                        self.total_ticks, i, d.state, dxz(d.pos, bp), d.pos[0], d.pos[1], d.pos[2]);
+                }
+            }
+            if self.total_ticks % 50 == 0 {
+                let states: Vec<String> = sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.present && d.team == 1 && !d.corpse)
+                    .map(|(i, d)| format!("g{i}:{:#x}@{:.0}", d.state, dxz(d.pos, bp)))
+                    .collect();
+                eprintln!("[alarm] t{} fail {:#x} live [{}]",
+                    self.total_ticks, sim.drones.mission.fail_label, states.join(" "));
+            }
         }
         if sim.bond.pos[1] < y_before - 0.4 && !sim.bond.grounded {
             // falling: record the drop
