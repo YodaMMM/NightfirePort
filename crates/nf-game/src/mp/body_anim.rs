@@ -376,10 +376,12 @@ impl MpBodyAnim {
     /// (`AnimScriptDelete` 0x1c14f0 — the unlink-and-free of one script node that `AnimSetUpdate`,
     /// `AnimScriptTick`, `AnimFrameResolve`, `AnimSetDeleteAll`, `AnimListDelete` and the Add/Append
     /// family all reach — is this `retain`: a layer whose fade clock ran out is dropped. The game also
-    /// fires the node's +0x68 OnStop callback and clears the +0x64 backref — no port equivalent: the
-    /// shipped game's only OnStop setter call (`DroneAnim_SetHTAnim` 0x13b1c8) writes NULL, and the
-    /// `Glb_bScriptDeleted` reentrancy flag is structurally unreachable (nothing is ticked inside its
-    /// own delete here). The `0x983c4837` freed-marker write at +0x40 is Rust ownership.)
+    /// fires the node's +0x68 OnStop callback and clears the +0x64 backref — no port callback slot: the
+    /// armed value (`DroneAnim_AnimEndCallback` 0x13e3e8, from `DroneAnim_SetHTAnim` 0x13b1c8) only
+    /// clears the drone's +0x579 one-shot-pending flag, which the port's per-Animator `once`/`held`/
+    /// `early_end` reset on script replacement covers; the `Glb_bScriptDeleted` reentrancy flag is
+    /// structurally unreachable (nothing is ticked inside its own delete here). The `0x983c4837`
+    /// freed-marker write at +0x40 is Rust ownership.)
     fn resolve(&mut self) {
         for l in self.layers.iter_mut() {
             if l.manual.is_some() { continue; }

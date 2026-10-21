@@ -74,14 +74,19 @@ If deleting `Glb_pCurrentScript` sets `Glb_bScriptDeleted = 1`; fires the +0x68 
 `AnimFrameResolve` 0x1c35f8, `AnimSetDeleteAll` 0x1c6928, `AnimListDelete` 0x1c6b98, `AnimScriptAdd*`,
 `BOTSTATE_stopAnim` 0x129918, `AnimObjectInitialPose` 0x1c64e0. The port's delete = the faded-out
 `layers.retain` in `MpBodyAnim::resolve` (cited) and the drone side's `outgoing.retain_mut` after
-`Outgoing::tick`. The OnStop callback / backref clear are not ported — the shipped game's only OnStop setter
-call is `DroneAnim_SetHTAnim` 0x13b1c8 and it writes NULL [M], so no callback body ever runs through the
-modelled scripts; the reentrancy flag is structurally unreachable in the port.
+`Outgoing::tick`. The OnStop callback / backref clear are not ported as a slot — the armed OnStop value
+(`DroneAnim_AnimEndCallback` 0x13e3e8, set by `DroneAnim_SetHTAnim` 0x13b1c8 for stop-at-end scripts
+[M 0x13b1c8:139]) only clears the drone's +0x579 one-shot-pending flag on delete; the port covers that with
+its per-Animator `once`/`held`/`early_end` reset on script replacement. The reentrancy flag is structurally
+unreachable in the port.
 
 ### `AnimScriptCallOnEvent` 0x1c71f8 / `AnimScriptCallOnStop` 0x1c7200 — the callback slots; cited inlined
 Store a function pointer at script+0x70 / +0x6c [M 001c71f8 / 001c7200]. Sole shipped caller of both:
-`DroneAnim_SetHTAnim` 0x13b1c8, which writes NULL [M]. The port inlines the +0x70 dispatch as the op-4 arm of
-`script_commands` feeding `event_func` (`drone.rs`, cited); the +0x6c stop slot is documented at `anim::Outgoing`.
+`DroneAnim_SetHTAnim` 0x13b1c8 — it clears the old script's OnStop and the new script's OnEvent slot
+[M 0x13b1c8:84-88], then arms the new script's OnEvent = `DroneAnim_EventFunc` 0x13b750 [M 0x13b1c8:129] and,
+for stop-at-end scripts, OnStop = `DroneAnim_AnimEndCallback` 0x13e3e8 [M 0x13b1c8:139]. The port inlines the
++0x70 dispatch as the op-4 arm of `script_commands` feeding `event_func` (`drone.rs`, cited); the +0x6c stop
+slot is documented at `anim::Outgoing`.
 
 ### `AnimScriptSetAnimRotation` 0x1c7208 — the anim-rotation flag; cited at `begin_blend`
 Param 0: clear +0x78 bit 0x20000; else +0xa0 = 8.0f and set the bit [M 001c7208]. The bit's effect — the

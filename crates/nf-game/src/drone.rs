@@ -2213,10 +2213,13 @@ impl Drone {
     /// not ported), event 3 `Sound_StopAllWithId(arg)` [M `AnimProcessScriptCmds` 0x1c1b38; the walk scripts carry
     /// events 4 / 5, e.g. 0600025A frames 19 / 57].
     /// (The game dispatches op 4 through the script's +0x70 OnEvent pointer, which `AnimScriptCallOnEvent` 0x1c71f8
-    /// stores — and its +0x6c OnStop sibling via `AnimScriptCallOnStop` 0x1c7200. `DroneAnim_SetHTAnim` 0x13b1c8,
-    /// the shipped game's only caller of both setters, writes NULL to both slots, so the pointer mechanism is
-    /// write-only-clear there; the port inlines the dispatch as this command match feeding `event_func`
-    /// (`DroneAnim_EventFunc` 0x13b750) and has no stop-callback slot — see `anim::Outgoing`.)
+    /// stores, and fires the +0x6c OnStop pointer from `AnimScriptDelete` 0x1c14f0 — stored by
+    /// `AnimScriptCallOnStop` 0x1c7200. `DroneAnim_SetHTAnim` 0x13b1c8 clears the OLD script's OnStop and the new
+    /// script's OnEvent slot, then arms the new script's OnEvent = `DroneAnim_EventFunc` 0x13b750 — exactly the
+    /// dispatch inlined here as this command match feeding `self.event_func` — and, for stop-at-end scripts
+    /// ((param_3 & 1) == 0), OnStop = `DroneAnim_AnimEndCallback` 0x13e3e8, which only clears the drone's +0x579
+    /// one-shot-pending flag on delete. The port has no callback slot: that clear is covered by the per-Animator
+    /// `once`/`held`/`early_end` state being reset with the replaced script — see `begin_blend` / `set_danim`.)
     fn script_commands(&mut self, d: &Data, from: u32, to: u32, wrapped: bool) {
         let Some(script) = self.anim.script.and_then(|h| d.scripts.get(&h)) else { return };
         let len = script.length as u32;

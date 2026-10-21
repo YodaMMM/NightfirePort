@@ -452,8 +452,10 @@ fn sequence_pose_n_with(seq: &Sequence, frame: f32, bones: usize, sample: &mut d
 
 /// A script that is fading out (`AnimScriptAppendBlend`: fade −1, flags 0x500000): it keeps playing while its blend
 /// clock runs down; weight = clock / length. `AnimScriptCallOnStop` (0x1c7200) stores the game's +0x6c stop
-/// callback on that node — the port has no stop callbacks: the shipped game's only setter call
-/// (`DroneAnim_SetHTAnim` 0x13b1c8) writes NULL, and `AnimScriptDelete` 0x1c14f0's invoke is null-checked.
+/// callback on that node — `DroneAnim_SetHTAnim` 0x13b1c8 arms it to `DroneAnim_AnimEndCallback` 0x13e3e8 for
+/// stop-at-end scripts, which only clears the drone's +0x579 one-shot-pending flag when the node dies; the port
+/// has no stop-callback slot, covering that clear with its per-Animator `once`/`held`/`early_end` reset on
+/// script replacement. The old script's OnStop is cleared (0) by the same call [M 0x13b1c8:84-88].
 #[derive(Clone, Debug)]
 pub struct Outgoing {
     pub script: u32,
