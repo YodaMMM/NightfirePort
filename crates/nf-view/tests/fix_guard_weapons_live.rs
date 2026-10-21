@@ -56,7 +56,10 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
     // sighting gate (120 ticks, `DroneWeap_DoBulletAccuracy`) and his first shots.
     let mut guard = usize::MAX;
     let mut w0 = 0usize;
-    let mut hit_events: Vec<(u32, f32)> = Vec::new(); // (bullet-arrival frame, health delta) for this guard
+    // (bullet-arrival frame, health delta, the shooter's live distance at the arrival tick) —
+    // Drone_ModBulletDamage 0x139fac reads the shooter's LIVE Drone+0x1A0 when the bullet lands
+    // [M], not the fire-time distance, so the band the ×2 saw is the hit-tick one.
+    let mut hit_events: Vec<(u32, f32, f32)> = Vec::new();
     // fix-guard-weapons3: per-shot gate-clean flags (aligned with `d.shots[w0..]`), for the final candidate.
     let mut gate_ok: Vec<bool> = Vec::new();
     // ai-sight-drawn-gate-3: the fire-time guard distance per collected shot (the band split).
@@ -137,8 +140,12 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
             }
             let got = gate_ok.iter().filter(|&&c| c).count();
             let frame = sim.drones.frame;
+            let gdist = {
+                let d = &sim.drones.list[guard];
+                ((d.pos[0] - sim.bond.pos[0]).powi(2) + (d.pos[2] - sim.bond.pos[2]).powi(2)).sqrt()
+            };
             for &(f, owner, delta) in &sim.drones.player_hits {
-                if owner == guard { hit_events.push((f, delta)); }
+                if owner == guard { hit_events.push((f, delta, gdist)); }
             }
             sim.drones.player_hits.clear();
             if got >= wanted as usize + 5 { break 'guards; } // +5: let the in-flight bullets land before matching
@@ -191,7 +198,7 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
         let mut hit = false;
         while hi < hit_events.len() && hit_events[hi].0 < f { hi += 1; }
         while hi < hit_events.len() && hit_events[hi].0 < next {
-            hit = true; deltas.push((hit_events[hi].1, dist)); hi += 1;
+            hit = true; deltas.push((hit_events[hi].1, hit_events[hi].2)); hi += 1;
         }
         shots.push(Shot { frame: f, hit, dist });
     }
@@ -256,7 +263,9 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             let pool_hit = 100.0_f32 - (100.0_f32 - expected_hit);
             for (k, &(d, dist)) in deltas.iter().enumerate() {
                 // The band split on the damage too: an in-band hit is the forced ×2 [M the
-                // too_close branch] — the same event the TooClose test pins deliberately.
+                // too_close branch] — the same event the TooClose test pins deliberately. The
+                // band is the HIT-tick distance (Drone_ModBulletDamage reads the shooter's live
+                // +0x1A0 at the landing [M 0x139fac-0x139fc8]).
                 let band_hit = dist > 3.0;
                 let expect = if band_hit { pool_hit } else { pool_hit * 2.0 };
                 assert_eq!(d, expect, "{level} diff {diff} weapon {weapon:#x}: hit #{k} (band {}) damage {d} vs model {expected_hit} (pool {pool_hit})",
