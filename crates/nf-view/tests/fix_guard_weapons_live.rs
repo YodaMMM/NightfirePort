@@ -77,7 +77,9 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
         // distance-independent for parks in the gate-clean subset, M 0x179740's gate reads
         // sighting time, not distance].
         'dirs: for &(dx, dz) in &[(1.0f32, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (0.70710678, 0.70710678), (-0.70710678, 0.70710678), (0.70710678, -0.70710678), (-0.70710678, -0.70710678)] {
-        for &park in &[10.0f32, 7.0, 5.0] {
+        // The diff-3 reroll: all three 10/7/5 rungs failed placement for every 0x12 candidate —
+        // the rung set extends down to 4.0, all of it beyond the 3.0 band [L 0x30cb14].
+        for &park in &[10.0f32, 8.0, 7.0, 6.0, 5.0, 4.0] {
             let sim = scene.sim.as_mut().unwrap();
             let g = sim.drones.list[cand].pos;
             sim.bond.pos = [g[0] + dx * park, g[1] + 0.14, g[2] + dz * park];
