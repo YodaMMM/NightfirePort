@@ -188,6 +188,12 @@ pub struct Demuxed {
 }
 
 /// Splits a PSS file into its streams.
+///
+/// Replaces the game's streaming demux pump (unported-misc-1, docs/systems/fmv-plumbing.md):
+/// `fillBuff` 0x108c08 read 0x4000 bytes per call through `strFileRead` 0x108fe0 and drove
+/// `sceMpegDemuxPss`, whose stream callbacks delivered the payloads — `videoCallback` 0x108848
+/// (video PES → ES ring) and `audioCallback` 0x108988 (audio PES → PCM ring). Here the whole
+/// file is demuxed up front and the decoded audio/video are consumed from memory.
 pub fn demux(data: &[u8]) -> Result<Demuxed> {
     let mut out = Demuxed::default();
     let mut dm = Demux::new(data);
