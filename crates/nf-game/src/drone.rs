@@ -3582,7 +3582,7 @@ impl Drone {
                 self.health = 0.0; // `NDrone2_SetAsDead`
                 self.vision_on = false;
                 self.firing = false;
-                self.timer_c = Some(frame + 300); // `DAT_00298F58` = 10 · FRAME_RATE_INT
+                self.timer_c = Some(frame + 600); // `DAT_00298F58` = 10 · FRAME_RATE_INT = 600 [M 0x13a5a8:10, 0x163fe8:22; FRAME_RATE_INT 60 at 0x30d0cc] (daily audit 2026-10-21: was 300)
                 // Prop 0x31 and no silent kill: `DroneAlertToObject(msg 0x15, corpse)` — not modelled (G-026).
                 true
             }
@@ -3625,7 +3625,7 @@ impl Drone {
                 self.door_zone_step = 4;
                 self.call_anim(d, 0x24, 0, 0);
                 self.timer_c_payload = 1; // `+0xCC8 = 1` [M 0x160648:31]
-                self.timer_c = Some(frame + rng.rand(25) * 30); // FRAME_RATE_INT = 30 [M 0x2446's DEAD arm]
+                self.timer_c = Some(frame + rng.rand(25) * 60); // `Rand(25) · FRAME_RATE_INT` [M 0x160648:28-30]; FRAME_RATE_INT = 60 (0x30d0cc) — the old 30 was wrong (daily audit 2026-10-21)
                 true
             }
             // EXIT (case 2): `+0x44 = 1`.
@@ -3706,7 +3706,7 @@ impl Drone {
                 };
                 self.door_idle_anim = anim;
                 self.call_anim(d, anim as u16, 0, 0);
-                self.timer_c = Some(frame + (rng.rand(20) + 5) * 30);
+                self.timer_c = Some(frame + (rng.rand(20) + 5) * 60); // `(Rand(20) + 5) · FRAME_RATE_INT` [M 0x160648:129-130], FRAME_RATE_INT = 60
                 self.timer_c_payload = next_payload;
                 true
             }
@@ -5510,7 +5510,7 @@ impl Drone {
                 let v = rng.rand(2); // [M 0x1747b8:19]
                 self.call_anim_variant(d, anim_state::ASTRONAUT_DEATH, v as u16, 0, 0); // [M 0x1747b8:20]
                 self.astronaut_death_move(); // DroneMove_AstronautDeathMove [M 0x156008]
-                self.timer_c = Some(frame + 300); // DAT_00298f58 = FRAME_RATE_INT · 10 [M 0x1747b8:22]
+                self.timer_c = Some(frame + 600); // DAT_00298f58 = FRAME_RATE_INT · 10 = 600 [M 0x1747b8:22, 0x13a5a8:10]
                 true
             }
             // Death tick: the corpse-cull accelerator [M 0x1747b8:27-29 → 0x14a298] — the port's
@@ -6731,7 +6731,7 @@ impl Drone {
                 self.vision_on = false;
                 self.firing = false;
                 if self.prop(d, 0x53) { self.fail_reason = Some(crate::ally::mission_fail_reason(9)); }
-                self.timer_c = Some(frame + 300);
+                self.timer_c = Some(frame + 600); // `DAT_00298F58` = 10 · FRAME_RATE_INT = 600 [M 0x172628:22, 0x13a5a8:10]
                 true
             }
             (HOSTAGE_DEAD, msg::UPDATE) => {
@@ -8091,7 +8091,7 @@ impl Drone {
     /// (`NDrone2_MoveTest` 0x155330: |dy| ≤ 4 and not across a boundary). *Deviation*: the game tests AI-network
     /// boundaries; we require a floor there and no collision between at knee and chest height.
     /// The shared spatial test behind `NDrone2_CanStepLeft` 0x14f640 (prop 0x42, anim 0x5a, +1.8 x —
-    /// 0x3fe66666) / `NDrone2_CanRollLeft` 0x150338 (prop 0x2e, anim 0x53, +5.3 x — 0x40a66666) /
+    /// 0x3fe66666) / `NDrone2_CanRollLeft` 0x150338 (prop 0x2e, anim 0x53, +5.2 x — 0x40a66666) /
     /// `NDrone2_CanStrafeDodgeLeft` 0x14fdf8 (prop 0x13, anim 0x29, +3.6 x — 0x40666666, gate
     /// drone+0x31c bit 3 clear) / `NDrone2_CanStrafeDodgeRight` 0x14ffc0 (prop 0x13, anims 0x29 AND 0x2a,
     /// −3.6 x — 0xc0666666, gate drone+0x31c bit 4 clear) / `NDrone2_CanMoveToRelativePos` 0x154838 (the
@@ -8153,7 +8153,7 @@ impl Drone {
     /// `NDrone2_ChooseCombatMove` (0x150c18): an option list (dodge, strafe, roll, step, crouch, stand) picked at
     /// random, each case falling through to the next when it fails; left/right order random. The cases probe
     /// `NDrone2_CanStrafeDodgeLeft` 0x14fdf8 / `NDrone2_CanStrafeDodgeRight` 0x14ffc0 (case 1, ±3.6),
-    /// `NDrone2_CanRollLeft` 0x150338 / `NDrone2_CanRollRight` 0x150500 (case 2, ±5.3 — 0x40a66666 /
+    /// `NDrone2_CanRollLeft` 0x150338 / `NDrone2_CanRollRight` 0x150500 (case 2, ±5.2 — 0x40a66666 /
     /// 0xc0a66666) and `NDrone2_CanStepLeft` 0x14f640 / `NDrone2_CanStepRight` 0x14f808 (case 3/4 tail, ±1.8)
     /// [M 0x150c18:164-316]; the port's pair() probes both sides through `can_move`.
     /// `NDrone2_CanAimCrouch` (0x154960) is the crouch-roll option here (case 5); the pair()
@@ -8191,7 +8191,7 @@ impl Drone {
                 1 if aimed && self.prop(d, 0x13) => pair(self, rng, 3.6, STRAFE_DODGE_LEFT, STRAFE_DODGE_RIGHT),
                 2 if !aimed => { case = 4; continue; }
                 2 if self.prop(d, 0x41) => pair(self, rng, 1.8, STRAFE_AIM_LEFT, STRAFE_AIM_RIGHT),
-                3 if aimed && self.prop(d, 0x2e) && self.can_do(d, anim_state::ROLL_LEFT) => pair(self, rng, 5.3, ROLL_LEFT_CROUCH, ROLL_RIGHT_CROUCH), // ±5.3 [M 0x150338/0x150500]
+                3 if aimed && self.prop(d, 0x2e) && self.can_do(d, anim_state::ROLL_LEFT) => pair(self, rng, 5.2, ROLL_LEFT_CROUCH, ROLL_RIGHT_CROUCH), // ±5.2 — 0x40a66666 [M 0x150338:63/0x150500:63] (daily audit 2026-10-21: 842's 5.3 misread the float)
                 4 if self.prop(d, 0x42) && self.can_do(d, anim_state::STEP_LEFT) => pair(self, rng, 1.8, STEP_AIM_LEFT, STEP_AIM_RIGHT),
                 5 if self.prop(d, 0x11) && self.can_do(d, anim_state::CROUCH_AIM) && self.dist >= 6.0 && rng.rand(2) == 0 => AIM_CROUCH,
                 6 => break if rng.rand(4) != 0 { AIM_STAND } else { 0 },

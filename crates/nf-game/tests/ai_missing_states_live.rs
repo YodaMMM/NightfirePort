@@ -206,9 +206,16 @@ fn hostage_dead_is_a_corpse_that_fades_after_ten_seconds() {
     assert_eq!(sim.list[gi].health, 0.0, "SetAsDead: health 0");
     assert!(sim.list[gi].fail_reason.is_none() || sim.list[gi].prop(&d, 0x53),
         "the fail reason 9 only with prop 0x53 [M 0x172628:16-19]");
-    let mut faded = false;
-    for _ in 0..320 { sim.tick(&d, &far); if entered(&sim, gi, state::FADE) || !sim.list[gi].present { faded = true; break; } }
-    assert!(faded, "timer C (10 s) → Fade 0x48 [M 0x172628:30-33]; log {:x?}", sim.list[gi].log);
+    // Timer C = `DAT_00298F58` = 10 · FRAME_RATE_INT = 600 ticks [M 0x172628:22, 0x13a5a8:10;
+    // FRAME_RATE_INT = 60 at 0x30d0cc] (daily audit 2026-10-21: the old 320-tick wait pinned the
+    // port's half-length 300). Sister: still lying there at 580.
+    // Bond 4 units off, facing the body: Dead's UPDATE disables an UNDRAWN corpse [M 0x163fe8:38-42]
+    // (the port drops it), so the timer is only observable on a drawn one.
+    let near = bond_near(&sim, gi, 4.0);
+    let mut faded_at = None;
+    for t in 0..700u32 { sim.tick(&d, &near); if entered(&sim, gi, state::FADE) || !sim.list[gi].present { faded_at = Some(t); break; } }
+    let t = faded_at.unwrap_or_else(|| panic!("timer C (10 s) → Fade 0x48 [M 0x172628:30-33]; log {:x?}", sim.list[gi].log));
+    assert!((580..=620).contains(&t), "the fade lands on the 600-tick timer [M 0x172628:22], got {t}");
 }
 
 /// `NDrone2_DSTATE_CombatWait` 0x164960 (the port's former COMBAT_DRONE_AHEAD): enter = vision on +
