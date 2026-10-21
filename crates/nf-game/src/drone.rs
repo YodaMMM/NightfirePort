@@ -6530,7 +6530,6 @@ impl Drone {
             (INVESTIGATE, msg::TASE | msg::EXPLOSION | msg::FLASH | msg::SMOKE | msg::STUN_DART) => self.on_bullet_resume(d, rng, frame, ATTACK, true),
             (INVESTIGATE, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, ATTACK); true }
             (INVESTIGATE, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
-            (COMBAT_NO_MOVE, msg::ENTER) => { self.attack_talk(d, rng); true }
             (COMBAT_NO_MOVE, msg::UPDATE) => {
                 if self.unseen_ticks < 16 { self.set_state(COMBAT_NEW_SIGHTING) } else { self.set_state(COMBAT_NO_SIGHT) }
                 true
