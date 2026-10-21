@@ -14664,6 +14664,7 @@ mod tests {
         let dr = Drone {
             skin: 0, anim_set: 0, weapon: 0, pos, yaw: 0.0, desired_yaw: 0.0, aim_yaw: 0.0, alert: 0.0, alert_floor: 0.0,
             body_glow: None,
+            dist_to_player: [100000.0; 4],
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
             accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, visibility: 0.0,
             seen_ticks: 0, unseen_ticks: 0, vision_on: false, dist: 0.0, yaw_to_opp: 0.0,
