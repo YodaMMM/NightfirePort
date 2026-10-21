@@ -7,6 +7,20 @@
 //! `UsingMovie` whitelist (0x00107eb8); frames land in a 512×448 RGBA32 background (`DecodeBGFMVFrame`
 //! 0x00108550, `AllocateMovieMemory` 0x00107d70) at 30 fps (main 0x00109080 skips to even vblanks); skip =
 //! action 0x19 (X/Start, newly pressed) in `GameFlow_Main` 0x001c98c8 case 6 / `MenuManager_Update` 0x0021c3d8.
+//!
+//! **Replaced plumbing family** (unported-misc-1; full story in docs/systems/fmv-plumbing.md — all reached
+//! only via this movie system, all registered by `StartUpBGFMV` 0x1083a8). The port replaces each job as
+//! follows: `fillBuff` 0x108c08 (0x4000 CD-sector demux pump) and `videoCallback` 0x108848 (video PES →
+//! ES ring) → whole-file `pss::demux` + the decoded stream buffers; `audioCallback` 0x108988 (audio PES →
+//! PCM ring, skipping the 4-byte `FF A0` sub-stream header) → `Audio::parse/decode`; the IOP transport —
+//! `audioDecCreate` 0x1072b8, `audioDecEndPut` 0x107530, `audioDecIsPreset` 0x1075b0 (priming gate),
+//! `iopGetArea` 0x1075c8, `sendToIOP2area` 0x107698, `sendToIOP` 0x1077e0 (synchronous SIF DMA) —
+//! → the whole-track PCM buffer played by `open_pcm_out` (cpal; the device opens on the first picture =
+//! the priming gate's observable behaviour); `nodataCallback` 0x108a60 (IPU refill) → the bounded
+//! decode-ahead channels in `MovieStream`; `backgroundCallback` 0x108b80 (T1 frame pacer, ≈34.6 ticks
+//! per 512×448 frame) → the audio/wall clocks in `present`/`present_on_audio`; `SwapBGFMVFrame` 0x1087c8
+//! (per-tick hand-out) → `Player::present`; `errorCallback` 0x108c00 (`return 1`) → the per-GOP
+//! `unwrap_or_default`.
 
 use anyhow::{bail, Context, Result};
 use nf_formats::iso9660::IsoImage;

@@ -534,6 +534,11 @@ impl Renderer {
             mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default()
         });
         let make_tex2 =|w: u32, h: u32, rgba: &[u8]| {
+            // The game stages level/HUD texture patches through a double-buffered GS VRAM bump
+            // allocator per frame (unported-misc-1: initcache 0x109688 / allocache 0x109700 /
+            // CacheTexture 0x11cd58 / CacheFlipBuffers 0x1095d0 — docs/systems/boot-fs-cache.md);
+            // here every texture is decoded once and uploaded directly, which is the same job
+            // without the per-frame staging window.
             let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
             let t = device.create_texture(&wgpu::TextureDescriptor {
                 label: None, size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
@@ -1178,6 +1183,14 @@ impl Renderer {
             // texture, not an IPU overlay"], i.e. UNDER the menu controls; the GameFlow state-6
             // briefing draws over the empty backdrop with the overlay suppressed, so drawing
             // before the (empty) HUD runs is the same picture there.
+            // The game's upload path is the PATH3 tag-builder family (unported-misc-1: its only
+            // user in the whole binary is this BG FMV upload; docs/systems/fmv-plumbing.md):
+            // DecodeBGFMVFrame 0x108550 builds chains via setLoadImageTags 0x107b90 →
+            // setLoadImageTagsYX 0x107910 → setDMAscTag 0x107bd0 / setGIFtag 0x107c20 /
+            // setBITBLTBUF 0x107c70 / setTRXPOS 0x107ca0 / setTRXREG 0x107cd0 / setTRXDIR
+            // 0x107d08 (16×16 CT32 blocks), and the INTC handler kicks them with
+            // loadImage 0x107d30 (D2_CHCR=0x105) from PS2UploadBGMImage — all replaced by this
+            // wgpu write_texture into the full-screen plane's texture.
             if let Some((w, h, rgba)) = movie {
                 if self.movie_size != Some((w, h)) || self.movie_bg.is_none() {
                     let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
