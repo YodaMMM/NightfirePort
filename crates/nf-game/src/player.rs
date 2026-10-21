@@ -136,7 +136,7 @@ fn quat_from_matrix(m: &[[f32; 3]; 3]) -> [f32; 4] {
 }
 
 /// `Quat_QuaternionToMatrix` 0x1e02a0 — the rotation floats in the game's row-major slots.
-fn quat_to_matrix(q: &[f32; 4]) -> [[f32; 3]; 3] {
+pub(crate) fn quat_to_matrix(q: &[f32; 4]) -> [[f32; 3]; 3] {
     let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
     [
         [2.0 * (x * x + w * w) - 1.0, 2.0 * (x * y + z * w), 2.0 * (x * z - y * w)],

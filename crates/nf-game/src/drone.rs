@@ -1330,6 +1330,12 @@ pub struct Drone {
     /// `DroneFunc_AllocateTargetID` 0x141f28 via `NDrone2_SetOpponent` 0x1422d0; 0xff = none).
     /// The pool lives on `Drones::targets` — docs/systems/dronefunc-rest.md.
     pub target_id: u8,
+    /// `BodyGlow_Create` 0x1ac158's record, created unconditionally per guard spawn in
+    /// `NDrone2_DefaultInit` 0x14b300's tail (result → DIVars+0x10 [M 0x14b300; docs/atlas/drone.md:51]).
+    /// The port stores the glow on the owning Drone itself, so `owner` is the drone's list index
+    /// (the game's ext[0] = the owner object pointer). `crate::body_glow` holds the gfx hashes and
+    /// flags the draw code needs; the sprite rendering is the main agent's draw work.
+    pub body_glow: Option<crate::body_glow::BodyGlow>,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1538,6 +1544,9 @@ impl Drone {
             scripted_move: false,
             // +0x174 — the shared target registry slot, allocated on first sight (task 845).
             target_id: 0xff,
+            // BodyGlow_Create 0x1ac158 — every guard spawn glows on the shipped path (the
+            // switch_NO_DRONES gate is 0 in every shipped level [M 0x1ac158:9]).
+            body_glow: crate::body_glow::create(0, false),
         };
         dr.init_properties(d, &param);
         // `DroneInit_Collision` 0x14b1e8 (DefaultInit 0x14b300:775): not MP, `+0xBD4`/`+0x23` clear,
@@ -8550,6 +8559,16 @@ impl Drone {
     /// `DroneWeap_FireWeapon` + `DoBulletAccuracy`: hit roll, the miss wobble, the cone (`Bullet_init`), damage
     /// (`Drone_ModBulletDamage`: the ×2 under TooClose lands at the hit site, × `+0x100` here).
     fn fire_weapon(&mut self, d: &Data, rng: &mut Rng, frame: u32, p: &Player, (moving, first_moved): (bool, bool), owner: usize, lights: &mut crate::light::LightList) -> Option<crate::bullet::Bullet> {
+        // `DroneWeap_FireWeapon` 0x178f68:92-145: before any accuracy draw, the mounted-minigun
+        // deploy branch — the guard's weapon datum char (BOT_vars+0x768) == 'R', combat state
+        // type 4, weapon id not 0xdd/0xde, `AmmoInGun >= 1`, not `tooCloseForWeapon` (+0x170
+        // gate) -> `GT_DeployMiniGun` 0x181560 at (x+sin(yaw), y, z+sin(yaw+1.5707964))
+        // [M 00178f68:129-137]; on success `BOTWEAP_decrRounds(..., 1000)` +
+        // `BOTSTATE_changeWeapon(..., 0, 1, 0)` and return — the normal bullet path never runs
+        // for 'R'. The port does not model the weapon datum char (BOT_vars+0x768) yet, so the
+        // branch cannot select here; the deploy position math is ported
+        // (`crate::gt::deploy_position`, unit-tested) and the turret record it creates is
+        // `crate::gt::GTurret` (the minigun glist 0x2000359, the Collide_PlaceObject radii).
         let w = d.weapons.records.get(self.weapon as usize)?;
         let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
         // Hit chance: p = 100 − 5·accuracy, ×2 under TooClose ([0x30cb14] — `close_threshold`), ×0.25
@@ -9466,6 +9485,15 @@ pub struct Drones {
     /// `Create_SpaceMissile` [M 0x1a9ef0:62]: per missile 0 idle, 1 launch script playing,
     /// 2 disarmed, 3 launched [M 0x1aa118 disasm]. `HUD_UpdateSpacePane` 0x19d3b8 reads it.
     pub missile_deploy: [u8; 8],
+    /// The GT turrets — the kind-0x27 placements (`GT_Create` 0x17ffa0, 41 disc-wide [D
+    /// script-census.md:141]); the creator's param map in `crate::gt`. The turret behaviours
+    /// (GT_Update 0x180498, GT_Track 0x17f9c8, GT_ApplyDamage 0x1816d8) are the tracked gap
+    /// (docs/reports/script-ops-unported.md:78-91).
+    pub gt_turrets: Vec<crate::gt::GTurret>,
+    /// The 0700001b space laser — the kind-0x38 placement (`Create_SpaceLaser` 0x1aa8b8, one
+    /// disc-wide [D script-census.md:144]); the creator's param map in `crate::space_laser`.
+    /// `SpaceLaser_Update` 0x1aa3f8 (the arm/fire/damage flow) is the remaining gap.
+    pub space_lasers: Vec<crate::space_laser::SpaceLaser>,
     /// frag-throw-timing2: the last stun flash's recorded inputs (the `FlashProbe` doc). One
     /// pop deep — each new pop overwrites it; cleared nowhere (the probe is read-after-pop by
     /// tests; the flash state itself decays independently).
@@ -9613,7 +9641,11 @@ pub struct ExitHold {
 impl Drones {
     pub fn new(mut list: Vec<Drone>, rng: Rng) -> Drones {
         // `Drone_SM_InitObject` numbers state machines in creation order (the base is not known: 0 here).
-        for (i, dr) in list.iter_mut().enumerate() { dr.sm_id = i as u32; dr.index = i; }
+        for (i, dr) in list.iter_mut().enumerate() {
+            dr.sm_id = i as u32;
+            dr.index = i;
+            if let Some(g) = &mut dr.body_glow { g.owner = i; }
+        }
         let llist = (0..list.len()).collect();
         let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             movie_request: None,
@@ -9646,6 +9678,8 @@ impl Drones {
             subtitle_track: crate::subtitle::SubtitleTrack::new(false),
             space_missiles: Vec::new(),
             missile_deploy: [0; 8],
+            gt_turrets: Vec::new(),
+            space_lasers: Vec::new(),
             death: Default::default(), bond_fire: false, aims_idle: 0, auto_restart: true, level_exit_cold: false,
             // fix-aims20-modes-lights: BL+0x93e starts at the refill value [L ee_start_05].
             aims_raise: 1200,
@@ -10097,6 +10131,30 @@ impl Drones {
             });
         }
         }
+        // The GT turrets: kind 0x27 — `parsemap_create_dynamic_objects` 0x1d04f0 case 0x27
+        // [M 0x1d04f0:115], the same dynamic-object walk the 0x39 run above mirrors.
+        let mi = level.main_map().unwrap_or(0);
+        self.gt_turrets.clear();
+        for (i, p) in level.maps[mi].placements.iter().enumerate() {
+            if p.flags & 0xff != 0x27 { continue; }
+            if let Some(t) = crate::gt::from_placement(i, &p.params) { self.gt_turrets.push(t); }
+        }
+        // The space laser: kind 0x38 — the same walk's case 0x38 [M 0x1d04f0:227].
+        self.space_lasers.clear();
+        for (i, p) in level.maps[mi].placements.iter().enumerate() {
+            if p.flags & 0xff != 0x38 { continue; }
+            self.space_lasers.push(crate::space_laser::from_placement(i, &p.params));
+        }
+        // Never-called proofs [M/D]: the walk's remaining AI-reachable creators have no disc
+        // placements. `Sub_Create` 0x1ad6c0 (case 0x36, 0x1d04f0:215) and `MiniSub_Create`
+        // 0x182130 (case 0x37, 0x1d04f0:221) have no row in the disc placement census
+        // (docs/systems/script-census.md's type table) — no shipped level carries either kind.
+        // `Creature_Create` 0x134ab8 / `Creature_CalcPoint` 0x134cf0 / `Creature_CalcWaypoints`
+        // 0x134e58 (case 0xE0, 0x1d04f0:353) likewise: "Creature_Create type 0xE0 never occurs
+        // on the disc" [D script-census.md:120; docs/systems/uncited-audit.md:229-231 — dead on
+        // retail data]. The port therefore runs no case for them; the proof is the census, and
+        // the game functions are cited here at the exact dispatch site that would call them.
+
         for dr in &mut self.list {
             if let Some(i) = level.maps[m].placements.iter().position(|p| p.flags & 0xff == 0x0f
                 && (p.translation[0] - dr.pos[0]).abs() < 1e-3 && (p.translation[2] - dr.pos[2]).abs() < 1e-3) { dr.placement = i; }
@@ -11762,6 +11820,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     let idx = self.list.len();
                     dr.index = idx;
                     dr.sm_id = idx as u32;
+                    if let Some(g) = &mut dr.body_glow { g.owner = idx; }
                     self.list.push(dr);
                     self.llist.push(idx);
                     // `NDrone2_DefaultInit` 0x14b300:609 → `PlrStat_LogEnemySpawned(0)` per created
@@ -14530,6 +14589,7 @@ mod tests {
     pub(crate) fn drone_at(pos: V3) -> Drone {
         let dr = Drone {
             skin: 0, anim_set: 0, weapon: 0, pos, yaw: 0.0, desired_yaw: 0.0, aim_yaw: 0.0, alert: 0.0, alert_floor: 0.0,
+            body_glow: None,
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
             accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, visibility: 0.0,
             seen_ticks: 0, unseen_ticks: 0, vision_on: false, dist: 0.0, yaw_to_opp: 0.0,
