@@ -266,8 +266,8 @@ fn zone_bands_drive_the_challenge_and_the_mission_fail() {
     }
     assert!(!challenge.is_empty(), "no challenge spots (the geometry probe)");
     // The ARMED sister [M 0x160648:38-58]: `NDrone2_NearArmedPerson` runs BEFORE the zone read —
-    // an armed opponent at the same spot turns the guard hostile (the prop-0x33 shout), no zone
-    // animation. The port's `bond_weapon` gate [M the armed set 2..0x47].
+    // an armed opponent at the same spot turns the guard hostile (the prop-0x33 shout) once the
+    // sight is acked. The port's `bond_weapon` gate [M the armed set 2..0x47].
     let (guard, pos) = challenge[0].clone();
     {
         let (mut sim, _rng) = l.sim();
@@ -284,7 +284,10 @@ fn zone_bands_drive_the_challenge_and_the_mission_fail() {
             }
         }
         assert!(hostile, "the armed opponent never turned the door guard hostile (state {:#x})", sim.list[ev].state);
-        assert!(sim.list[ev].door_zone_step != 2, "the armed path must not play the challenge");
+        // (No "no challenge" assertion: `NearArmedPerson` needs the reaction-acked sight +0x228 & 4
+        // [M 0x1787c8:37], so for the reaction window the guard's case 3 falls through to
+        // `DoorGuardHandler` [M 0x160648:39 → :58] and the zone-2 challenge may start before the
+        // armed switch — the old instant-los stand-in never let it. Fixed with 833, batch 1021e.)
     }
     // The challenge: stand UNARMED Bond there (fists, weapon 1 — outside the armed set). No aim
     // is set toward the guard — the game's zone read has no aim input [M 0x1416d8:16-73].
