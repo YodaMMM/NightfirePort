@@ -2471,7 +2471,8 @@ impl Drone {
             // [M 0x15f938]; the rest pass the state machine's CURRENT state, SM+4 (the id
             // `Drone_SM_RouteMsgDCV` hands each DSTATE [M 0x171df8:95]) [M 0x15e698, 0x15ea28,
             // 0x15ec08, 0x15eda8, 0x15efc8, 0x15f120, 0x15f2e8, 0x15f3c8, 0x15f4e0, 0x15f6a0,
-            // 0x15f858]. The port had no arm: bullets and blasts on the escort dropped.
+            // 0x15f858]. The port had no arm: bullets reached the escort only through the GLOBAL base arm
+            // (no stagger), and blasts dropped (GLOBAL has no case 9 [M 0x15b830]).
             ALLY_LEAD_INIT => (0, false),
             ALLY_LEAD | PLAYER_IN_WAY | LEAD_HIDE | ALLY_LEAD_WAIT | LEAD_MISSION_WAIT | LEAD_BOND_COMBAT
                 | ALLY_LEAD_DONE | FOLLOW_INIT | FOLLOW | FOLLOW_WAIT | FOLLOW_DONE | GO_TO_GOAL_ALLY => (s, false),
