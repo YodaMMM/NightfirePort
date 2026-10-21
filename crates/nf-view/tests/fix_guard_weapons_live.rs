@@ -135,15 +135,16 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
             {
                 let d = &sim.drones.list[guard];
                 let clean = d.seen_ticks >= 120;
-                let dist = ((d.pos[0] - sim.bond.pos[0]).powi(2) + (d.pos[2] - sim.bond.pos[2]).powi(2)).sqrt();
-                while w0 + gate_ok.len() < d.shots.len() { gate_ok.push(clean); gate_dist.push(dist); }
+                // The band variable is the AI's OWN tracked distance (Drone+0x1A0, the port's
+                // `dist` field) — that is what `Drone_ModBulletDamage` 0x139fac compares and
+                // what the fire path's hit-chance doubling reads [M 0x139fac-0x139fc8]; a
+                // geometric measure disagrees with it exactly when the cache lags a strafe
+                // (the measured hit #115: fire-time geometric 2.98, the ×2 not applied).
+                while w0 + gate_ok.len() < d.shots.len() { gate_ok.push(clean); gate_dist.push(d.dist); }
             }
             let got = gate_ok.iter().filter(|&&c| c).count();
             let frame = sim.drones.frame;
-            let gdist = {
-                let d = &sim.drones.list[guard];
-                ((d.pos[0] - sim.bond.pos[0]).powi(2) + (d.pos[2] - sim.bond.pos[2]).powi(2)).sqrt()
-            };
+            let gdist = sim.drones.list[guard].dist;
             for &(f, owner, delta) in &sim.drones.player_hits {
                 if owner == guard { hit_events.push((f, delta, gdist)); }
             }
@@ -237,7 +238,7 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             // too_close branch] — the guard closes during a long engagement (the measured run
             // crossed the band around shot #118), so the sample splits by the fire-time
             // distance instead of assuming the whole run stays out of the band.
-            let out_of_band: Vec<&Shot> = shots.iter().filter(|s| s.dist > 3.0).collect();
+            let out_of_band: Vec<&Shot> = shots.iter().filter(|s| s.dist >= 3.0).collect();
             let hits = out_of_band.iter().filter(|s| s.hit).count();
             let n = out_of_band.len();
             assert!(n >= 100, "only {n} of {} shots sampled outside the 3.0 band — the model cell has no sample", shots.len());
@@ -266,7 +267,7 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
                 // too_close branch] — the same event the TooClose test pins deliberately. The
                 // band is the HIT-tick distance (Drone_ModBulletDamage reads the shooter's live
                 // +0x1A0 at the landing [M 0x139fac-0x139fc8]).
-                let band_hit = dist > 3.0;
+                let band_hit = dist >= 3.0;
                 let expect = if band_hit { pool_hit } else { pool_hit * 2.0 };
                 assert_eq!(d, expect, "{level} diff {diff} weapon {weapon:#x}: hit #{k} (band {}) damage {d} vs model {expected_hit} (pool {pool_hit})",
                     if band_hit { "out" } else { "TOOCLOSE" });
