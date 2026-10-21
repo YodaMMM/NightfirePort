@@ -13656,6 +13656,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .chain(self.sensors.list.iter().enumerate().map(|(j, s)| (s.placement, 6, j)))
             .collect();
         order.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        // `Doors_Calc`'s head memset (0x135fe0:13), which the game runs at the TOP of
+        // `control_movement_object_handler` 0x1336f8 — before the walk's door updates OR their
+        // states in (door.rs `begin_pass`; `DoorGroupsStates` must read this frame's ORs only).
+        self.doors.begin_pass();
         // Pickups are created at run time, so they head the control list: `Pickup_Update` before the placed objects.
         // mp-world-sync: online the take walk sees every body (`update_pickups_net`).
         match self.net_bodies.take() {

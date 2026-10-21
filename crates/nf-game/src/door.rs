@@ -245,7 +245,8 @@ impl Door {
 #[derive(Clone, Debug)]
 pub struct Doors {
     pub list: Vec<Door>,
-    /// `DoorGroupsStates` (0xca bytes, cleared by `Doors_Calc` each frame): per group, the OR of the states.
+    /// `DoorGroupsStates` (0xca bytes — `Door_Init` 0x136848 zeroes it per map, `Doors_Calc`
+    /// 0x135fe0:13 wipes it per frame via `begin_pass`): per group, the OR of the door states.
     pub group_states: [u16; 101],
     /// The previous tick's `switch_channels` (`switch_channels_prev`) for the lock channel's rising edge.
     prev_channels: [u8; 256],
@@ -788,8 +789,19 @@ impl Doors {
         d.flags |= 0x10;
     }
 
+    /// `Doors_Calc`'s head memset [M 0x135fe0:13 — the per-frame wipe the decompile opens with]:
+    /// the game runs `Doors_Calc` at the top of `control_movement_object_handler` 0x1336f8 (before
+    /// the object walk), so `DoorGroupsStates` starts each frame empty and `Door_Update`'s ORs
+    /// (0x1363c8:170-171) accumulate only this frame's states — `Door_IsClosed` 0x1367b0's
+    /// `== CLOSED (2)` read never sees a stale OR. The port runs `calc` at the tick's tail
+    /// (drone.rs), so the wipe rides `begin_pass` — call it before the object pass each tick.
+    pub fn begin_pass(&mut self) {
+        self.group_states = [0; 101];
+    }
+
     /// `Doors_Calc` (after every door's update): a group's members copy the first non-busy door's direction,
-    /// position, state and timer, re-pose, and every busy marker clears.
+    /// position, state and timer, re-pose, and every busy marker clears. (The game's per-frame
+    /// `DoorGroupsStates` memset is `begin_pass` above — the decompile's 0x135fe0:13.)
     pub fn calc(&mut self) {
         for master in 0..self.list.len() {
             let group = self.list[master].group;
