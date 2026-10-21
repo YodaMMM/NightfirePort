@@ -230,6 +230,12 @@ impl Driver {
 
     /// `SFXSetupListener` (one listener): eye position and the camera's forward and left axes, all × 1000 as the EE
     /// packs them. `Norm` is the camera matrix's row 0, which points to the screen left.
+    ///
+    /// The companion batch op `SFXSetNumberOfListeners` 0x116ec0 (op 0x18) is single-listener
+    /// here by construction: `Sound_Ready` 0x1dceb8 passes 1 in SP and the MPSettings count in
+    /// MP, but the EE itself only encodes the first `SFXSetupListener` per batch
+    /// (`LimitSFXSetupListenerCount`, docs/systems/sound.md §4), so the PS2 also effectively
+    /// rendered one listener [M grep + docs].
     pub fn set_listener(&mut self, pos: [f32; 3], dir: [f32; 3], left: [f32; 3]) {
         let k = |v: [f32; 3]| v.map(|x| (x * 1000.0) as i32);
         (self.listener_pos, self.listener_dir, self.listener_norm) = (k(pos), k(dir), k(left));

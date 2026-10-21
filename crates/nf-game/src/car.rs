@@ -85,6 +85,19 @@ pub struct Car {
     /// the decompiler's arg order is ambiguous, disasm check listed in the report).
     pub matrix: Mat4,
     pub spawn_matrix: Mat4,
+    /// `CAR_INFO+0xf8` — the collision damage accumulator (hits add; deactivate > 200)
+    /// [M 0x131838 hit walk, 0x131838 tail; Car_Reset zeroes it 0x132da8:23].
+    pub damage: f32,
+    /// `CAR_INFO+0xd0` — the turret pitch state (driven input ∓axis·FRM·0.05, clamp
+    /// [−0.705, (1−|yaw·1.2732395|)·0.12900001+0.08]) [M Car_SetBits 0x130060:104-119].
+    pub turret_pitch: f32,
+    /// `CAR_INFO+0xd4` — the turret yaw state (wrapped to ±π) [M 0x130060:104-112].
+    pub turret_yaw: f32,
+    /// `CAR_INFO+0x100` — the MG cooldown (set 0x42f00000 = 120.0 per burst)
+    /// [M 0x130060:207-210].
+    pub mg_cooldown: f32,
+    /// `CAR_INFO+0x110` — the MG ammo short (decremented per burst) [M 0x130060:208].
+    pub mg_ammo: i16,
 }
 
 impl Car {
@@ -121,6 +134,11 @@ impl Car {
                 overheated: false,
                 matrix: ident,
                 spawn_matrix: ident,
+                damage: 0.0,
+                turret_pitch: 0.0,
+                turret_yaw: 0.0,
+                mg_cooldown: 0.0,
+                mg_ammo: 0,
             },
             heli,
         ))
@@ -250,5 +268,142 @@ impl Car {
             self.overheated = true;
         }
         true
+    }
+
+    /// The driven-weapon tick `Car_SetBits` 0x130060 [M], called by `Car_CollisionHandler`
+    /// 0x131838 (jal 0x131bf0 — the +4 slot of control_funcs[0x28], row 0x26fa70) every tick
+    /// while the car is not frozen/respawning; the input block only runs while driven
+    /// (obj+0xf4 == 1) [M 0x130060:91], the cooldown decrements run unconditionally
+    /// [M 0x130060:159-168]. `actions` is the driver pad's Input_Action table (the port's
+    /// input.rs `actions()` indexing): 9 = shell fire, 0xC = MG fire, 0 = turn axis,
+    /// 5 = pitch axis. `frm` = FRAME_RATE_MUL (1.0 at the port's fixed 60 Hz).
+    ///
+    /// Ported here: the turret yaw/pitch integration, the yaw wrap to ±π, the pitch clamp
+    /// `limit = (1−|yaw·1.2732395|)·0.12900001 + 0.08` with the −0.705 floor [M 0x130060:104-119],
+    /// and the two fire decisions with their exact constants: shell → Sound 0x10a +
+    /// `Bullet_init(weapon 0x2c55d0)` + cooldown 6.0 (0x40c00000) + heat +10, latch > 100
+    /// [M 0x130060:169-192]; MG → Sound 0x40c + `Bullet_init(0x2c1d48)` + cooldown 120.0
+    /// (0x42f00000) + ammo −1 [M 0x130060:193-212]. The composed matrices the renderer reads
+    /// (RotMatrixY(yaw) → turret obj+0x90, RotMatrixXY(pitch, yaw) → barrel obj+0x90, and the
+    /// barrel position = car pos + dir(car)·(turret model +0x38 ·0.9) + up(car)·0.162
+    /// [M 0x130060:121-158]) stay with the full Car_Update/CollisionHandler port — the
+    /// draw-side observation notes are in docs/systems/psi-render-plumbing.md.
+    pub fn set_bits(&mut self, actions: &[f32; 40], frm: f32) -> SetBitsFire {
+        let mut fired = SetBitsFire::default();
+        // Both cooldowns count down by FRAME_RATE_MUL whenever non-zero — BEFORE the fire
+        // branches, exactly as the game orders it [M 0x130060:159-168 precede :169-212], so the
+        // tick that fires leaves the new cooldown intact until the next tick.
+        if self.shell_cooldown != 0.0 {
+            self.shell_cooldown -= frm;
+        }
+        if self.mg_cooldown != 0.0 {
+            self.mg_cooldown -= frm;
+        }
+        if self.state == CAR_DRIVEN {
+            let shell_pressed = actions[9] != 0.0;
+            let mg_pressed = actions[0xC] != 0.0;
+            // Yaw and pitch integrate at ∓axis·FRAME_RATE_MUL·0.05 [M 0x130060:104-110].
+            self.turret_yaw += -actions[0] * frm * 0.05;
+            self.turret_pitch += -actions[5] * frm * 0.05;
+            // Yaw wraps into (−π, π] via fmodf(2π) then the sign-dependent ±2π [M 0x130060:111-112].
+            if self.turret_yaw.abs() >= core::f32::consts::PI {
+                let sign = self.turret_yaw; // fmod keeps the dividend's sign
+                self.turret_yaw = self.turret_yaw % (2.0 * core::f32::consts::PI);
+                if self.turret_yaw.abs() >= core::f32::consts::PI {
+                    self.turret_yaw = if sign >= 0.0 {
+                        self.turret_yaw - 2.0 * core::f32::consts::PI
+                    } else {
+                        self.turret_yaw + 2.0 * core::f32::consts::PI
+                    };
+                }
+            }
+            // The pitch clamp: up-limit shrinks as the turret yaws off-forward
+            // [M 0x130060:113-119 — 1.2732395 ≈ 4/π; the −0.705 (0xbf347ae1) floor].
+            let limit = (1.0 - (self.turret_yaw * 1.2732395).abs()) * 0.12900001 + 0.08;
+            if self.turret_pitch < -0.705 {
+                self.turret_pitch = -0.705;
+            }
+            if self.turret_pitch > limit {
+                self.turret_pitch = limit;
+            }
+            // Shell: pressed ∧ cooldown ≤ 0 ∧ overheat latch clear [M 0x130060:169-192].
+            if shell_pressed && self.shell_cooldown <= 0.0 && !self.overheated {
+                fired.shell = true; // Sound 0x10a; Bullet_init(0x2c55d0) — caller emits
+                self.shell_cooldown = 6.0; // 0x40c00000
+                self.heat += 10.0;
+                if self.heat > 100.0 {
+                    self.overheated = true; // CAR_INFO+0x113
+                }
+            }
+            // MG: pressed ∧ cooldown ≤ 0 ∧ ammo ≠ 0 [M 0x130060:193-212].
+            if mg_pressed && self.mg_cooldown <= 0.0 && self.mg_ammo != 0 {
+                fired.mg = true; // Sound 0x40c; Bullet_init(0x2c1d48) — caller emits
+                self.mg_ammo -= 1;
+                self.mg_cooldown = 120.0; // 0x42f00000
+            }
+        }
+        fired
+    }
+}
+
+/// What one [`Car::set_bits`] tick fired — the caller emits `Sound_Play3D` and `Bullet_init`
+/// (shell: sound 0x10a + weapon 0x2c55d0; MG: sound 0x40c + weapon 0x2c1d48 [M 0x130060:186, 207]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SetBitsFire {
+    pub shell: bool,
+    pub mg: bool,
+}
+
+/// The game's tank registry globals [M `Car_Init` 0x132d78 — `NumTanks = 0;
+/// memset(&Tanks, 0, 0x20)`; `Car_Create` 0x1305b0:56-61 appends `Tanks[NumTanks] = obj`,
+/// `CAR_INFO+0x10e = NumTanks`, `Mat_Copy(obj+0x90 → TankSpawns+slot*0x40)`]: up to
+/// [`MAX_TANKS`] vehicles per level.
+pub struct CarSystem {
+    /// `NumTanks` [M 0x132d78; the 0x1305b0:24 cap].
+    pub num_tanks: usize,
+    /// `Tanks` — the eight obj slots [M 0x132d78's 0x20-byte memset].
+    pub tanks: [Option<Car>; MAX_TANKS],
+}
+
+impl CarSystem {
+    /// `Car_Init` 0x132d78 [M]: the registry zeroed. Jal'd from `ResetMap_GameInit`
+    /// 0x1d5080 (jal 0x1d51ec) on every map load [M — the caller chain
+    /// ResetMap_Load 0x1d6360 ← GameFlow_Main 0x1c98c8].
+    pub fn init() -> Self {
+        CarSystem {
+            num_tanks: 0,
+            tanks: Default::default(),
+        }
+    }
+
+    /// `Car_Reset` 0x132da8 [M] — the FIRST call of `MP_RestartScenario` 0x183fc0:13 (jal
+    /// 0x183fec), per tank i in 0..NumTanks: state(obj+0xf4) = 0, timer(obj+0xf6) = 0,
+    /// driver(CAR_INFO+0xec) = 0, damage(CAR_INFO+0xf8) = 0, the turret vector
+    /// (CAR_INFO+0xd0, Vec_Zero) zeroed, and the live matrix restored from TankSpawns[i]
+    /// (`Mat_Copy(TankSpawns+i*0x40, obj+0x90)`) + the room re-link (build_LinkToRoom 0).
+    /// Car_Create's heat/cooldowns/MG ammo are NOT touched here [M — only create zeroes
+    /// those: 0x1305b0:62-63].
+    pub fn reset(&mut self) {
+        for tank in self.tanks.iter_mut().take(self.num_tanks) {
+            if let Some(car) = tank {
+                car.state = CAR_IDLE;
+                car.timer_or_pilot = 0;
+                car.driver = None;
+                car.damage = 0.0;
+                car.turret_pitch = 0.0;
+                car.turret_yaw = 0.0;
+                car.matrix = car.spawn_matrix;
+            }
+        }
+    }
+
+    /// `Car_Delete` 0x132e78 [M] — the class-0x28 delete handler, dispatched from
+    /// `control_delete_object` 0x133178:16-18 through control_funcs[type·0xC + 8] (the car row
+    /// 0x26fa70 = update 0x1307d8 / collision 0x131838 / delete 0x132e78); it is a tail-call
+    /// to `Car_Deactivate` 0x131d88, so the game's delete IS the deactivate.
+    pub fn delete(&mut self, slot: usize) {
+        if let Some(Some(car)) = self.tanks.get_mut(slot) {
+            car.deactivate();
+        }
     }
 }

@@ -1,6 +1,18 @@
 //! Map textures: blocks 0x10 (texture header), 0x0F (palette header), 0x16 (pixels) and 0x12 (palette), one 0x16 +
 //! 0x12 pair per texture in table order. Spec: docs/formats/map.md §Textures.
 //!
+//! The PS2 runtime that used to surround this data, cited so the scan finds it [M grep ACTION.ELF
+//! decomp]: at level load `psiPreGameRun` 0x11e2e8 → `Reduce` 0x11daf0 packs every texture into
+//! VRAM texture space (slot table 0x25caf0, `psiCreateMapTextures` 0x11d200 → `FillTextureDMA`
+//! 0x11d110 builds the per-texture 16-word GS/DMA packet template), and
+//! `CreateSpaceAndPackTextures` 0x11dcf8 → `Conv4to32` 0x11e8d8 → `PageConv4to32` 0x11e640 →
+//! `BlockConv4to32` 0x11e530 converts the disc's 4-bpp blocks to 32-bit words through `lut4`
+//! before upload — exactly the per-pixel decode this module does instead (`unswizzle_csm1` +
+//! low-nibble-first indices, below). `psiCreateMapTextures` also dedups records with
+//! `ByteCompare` 0x1206c0 (first-mismatch equality, ported as `nf_game::psi_tex::byte_compare`).
+//! The pure width maths of that pipeline are ported in `nf_game::psi_tex` (`get_bit_pos`
+//! 0x11f808, `get_min_width` 0x1205c8, `get_min_width2` 0x120610).
+//!
 //! Texture header entry (12 bytes, *measured* via `psiCreateMapTextures` 0x11d200):
 //! ```text
 //! +0 u8 flags   bit 0: 256 colours / 8 bpp, else 16 colours / 4 bpp   (values 0x00 0x01 0x10 0x11 0x18 0x19)
@@ -102,6 +114,13 @@ pub fn textures(map: &[u8], f: &MapFile) -> Result<(Vec<Texture>, Vec<(usize, St
             continue;
         }
         let indices = if eight { px[..count].to_vec() } else { (0..count).map(|k| (px[k / 2] >> (4 * (k & 1))) & 15).collect() };
+        // The game's Conv4to32 0x11e8d8 / Conv8to32 0x11eeb0 (per-page PageConv4to32 0x11e640 /
+        // PageConv8to32 0x11eba8, unported-front-end-menus-1) re-order these SAME indices into GS
+        // PSMT4/PSMT8→PSMCT32 page/block order for VRAM fetch (block_table4/8/32 + lut4/lut8); they
+        // do not change which palette index a texel holds. This decoder produces linear indices and
+        // expands to RGBA at scene.rs's TextureImage — the swizzle is hardware-side only [M
+        // 0x11e8d8:161 page loop; 0x11e530:40-42 keeps the first texel in the low nibble, matching
+        // the low-nibble-first read above].
         out.push(Texture { index: i, flags, unknown1, width, height, frames, rate, hashcode, palette, indices });
     }
     Ok((out, bad))

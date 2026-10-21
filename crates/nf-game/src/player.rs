@@ -1856,6 +1856,11 @@ pub struct LevelStart {
 /// assembly (checked by start_slot_0x2d_live's sweep), so the port keeps the data-level rule.
 /// Yaw = the placement's rotation[1], the pinned convention (party07-start-rules); gate = param 0,
 /// p3 = param 3 (level_starts' parse, unchanged).
+/// `Player_ResetStartPos` 0x195bf0 (16 B, `ResetMap_GameInit` 0x1d5080:18 — the first init
+/// action): zeroes the game's `player_start_positions_index` / `player_start_position` globals
+/// [M 0x195bf0:6-7] before the map parse refills them (`Player_AddNewStartPos` 0x195c00:20,65).
+/// The port's equivalent is this per-load rebuild — fresh `Vec` each scene build, one
+/// `Player_Start` per load — so the two globals' reset is implicit in the rebuild.
 pub fn starts_from_placements(placements: &[nf_formats::placement::Placement]) -> Vec<LevelStart> {
     placements.iter()
         .filter(|p| p.flags & 0xa000 == 0)

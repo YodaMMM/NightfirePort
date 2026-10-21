@@ -651,6 +651,18 @@ impl Rng {
         self.draws += 1;
         ((self.y & 0xffff).wrapping_mul(n)) >> 16
     }
+    /// `Rand_Random()` 0x1e36f0: x THEN y step (the opposite order of `Rand_Rand`), returning
+    /// the raw 32-bit draw `(SEED_X << 16) | (SEED_Y & 0xffff)` [M 001e36f0_Rand_Random__Fv.c:
+    /// `SEED_X = a*(SEED_X&0xffff)+(SEED_X>>16); SEED_Y = b*(SEED_Y&0xffff)+(SEED_Y>>16);
+    /// return SEED_X*0x10000 | SEED_Y & 0xffff`]. One draw. The consumer is `Locks_Init`
+    /// 0x1b0548's keypad-code generation ((draw % 9) + '0'); the port's callers drive it with a
+    /// LOCAL Rng — the shared stream's boot draws are pre-consumed by the level-start snapshot.
+    pub fn random(&mut self) -> u32 {
+        self.step_x();
+        self.step_y();
+        self.draws += 1;
+        self.x << 16 | self.y & 0xffff
+    }
     /// `Rand_FRandHalf(max)` 0x1e3810: the same x/y step and value as `Rand_FRand`, minus
     /// `max·0.5` — uniform in [−max/2, max/2) [M 0x1e3810:11-15]. One draw.
     pub fn frand_half(&mut self, max: f32) -> f32 {
@@ -1163,6 +1175,8 @@ pub struct Drone {
     pub bounded: bool,
     /// `+0x54C`: the turn a finished turning danim leaves (`DroneAnim_OnEndAnim` 0x13e2c0: info flags 0x100 → π,
     /// 0x80 → π/2, 0x200 → −π/2), applied to the yaw and the desired yaw by `DroneAnim_SnapRotate` (0x13e198) after
+    /// (task 854: `Drone_Control` 0x139268 also calls `DroneAnim_SnapRotate2` 0x13e230 — an 8-byte
+    /// EMPTY body [M 0013e230 decompile], i.e. a second no-op snap entry — nothing to port).
     /// the next control update.
     pub snap: f32,
     /// `DroneAnim_EventFunc` flags `+0x20` / `+0x21` (events 0xF / 0x12 set, 0x10 clears; `PlayFiringAnim` reads
@@ -1200,6 +1214,13 @@ pub struct Drone {
     /// play and every direct PlaySFX (foley) writes it, after the gates [M 0x141848, speech.md §1.2];
     /// gates HitTalkExtra's 3-s suppression [M 0x13ed38:31].
     pub last_voice: u32,
+    /// `+0xCF0`: the AFO approach-dialogue script step (`NDrone2_HandleTalking` 0x13f688: step 0 →
+    /// 0x9b, 1 → 0x9c, 2 → 0x9d → 1…, 99 = finished by the switch-channel 0x4a once-line 0x9e
+    /// [M 0x13f688:59-84]).
+    pub talk_script: u32,
+    /// `+0xCF4`: the AFO dialogue cooldown frame — the step advance sets now + 5 s (step 0) / 15 s
+    /// (steps 1/2) [M 0x13f688:79-96].
+    pub talk_cooldown: u32,
     /// `+0xCD8`: the Bond-talk counter (0xFF = not greeted yet — the civilian states' ENTER sets it,
     /// [M 0x15d118/0x15d860/0x15dbb0 enters]); read and advanced by `NDrone2_BondTalk` 0x1446b0.
     pub bond_talk_count: u32,
@@ -1329,6 +1350,11 @@ pub struct Drone {
     /// A switch channel to raise after the drone's update (`SetDeathChannel`).
     pub raise: Option<u8>,
     /// `DCVars+0x2B0`: the hostage's captor link (`NDrone2_SetupHostageKiller` 0x144030 — the
+    /// (task 854: the execution-scene setup downstream of this link — `NDrone2_SetupHostageExecute`
+    /// 0x14a808, from `NDrone2_DSTATE_HostageKillerAttack` 0x15c940 [M caller grep] — copies the
+    /// hostage's and captor's positions into each other's AI+0x670 move-target slot and sets the
+    /// mutual facing yaw `+0x694` via `ATAN2_APPROX` [M 0014a808 decompile]. NOT YET PORTED: the
+    /// port has no HostageKillerAttack state — listed as remaining work in the task 854 report.)
     /// nearest armed guard; the save fires when it dies [M `NDrone2_DSTATE_Hostage` 0x15cb78:24-36]).
     /// The port stores the captor's `Drones::list` index.
     pub captor: Option<usize>,
@@ -1632,6 +1658,7 @@ impl Drone {
             stationary: param(13) != 0 && param(13) != 0x0600_021f, alpha: 255.0, raise: None,
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
+            talk_script: 0, talk_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(), free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
             // `DroneFunc_NearPlayerCollision`'s source array (own line — merge lesson 4):
             dist_to_player: [100000.0; 4],
@@ -1802,6 +1829,10 @@ impl Drone {
         // `NDrone2_IsCivilian` (0x14aae0) in team form: team 3 = the civilian dtypes.
         self.team = match self.dtype { 10 | 11 | 0xd | 0xe => 3, 0xc => 2, _ => 1 };
         let row = |m: u8| d.props.types.get(m as usize);
+        // `NDrone2_initDTYPE_*` dispatch (task 854): the per-DTYPE init row. `NDrone2_initDTYPE_BotInit`
+        // 0x1291e8 — the DTYPE 0xc3 (MP bot) init — is an 8-byte EMPTY body [M 001291e8 decompile],
+        // reached through the {id, fn} table at 0x29B050 (0x29B054 → 0x1291e8); so its port job is
+        // exactly nothing, which this name-keyed dispatch preserves for every other init too.
         if row(self.mode).and_then(|t| t.init.as_deref()).is_some_and(|n| n.starts_with("NDrone2_initDTYPE_Sniper")) { self.stationary = true; }
         // No mode-init property writes here: placed drones take `DoModeSettingsNEW` 0x14c600 (placement
         // param 5 = 100 on all 555 placements [D census, docs/port-map/unreached.md]), which fills both
@@ -2376,6 +2407,9 @@ impl Drone {
     }
 
     /// `DroneAnim_CallHandler` (0x13add0), every frame after the anim tick: once a danim of the requested state started
+    /// (task 854: the game's call path is `DroneAnim_SetAnimCall` 0x13def8 — save `+0x588` into
+    /// `+0x4C0` then `DroneAnim_SetDAnimInternal` [M 0013def8 decompile] — the port's `call` state
+    /// below is the same job; the saved word has no port reader).
     /// (`+0x57B`) and no blend is waited for (`+0x578`), the call completes when that danim's class is 1, 2 or 9;
     /// until the state is reached the transition is looked up again from the state playing now
     /// (`DroneAnim_CanSetAnimCall`: not while a class-5 danim of another state than the call's start plays) and set.
@@ -2436,6 +2470,10 @@ impl Drone {
         let early = self.anim.early_end && self.anim.once && self.anim.time < len;
         if early {
             // `CheckForAnimComplete` (0x13dae8): `+0x57A` set and `+0x579` cleared by event 7 → `SetEndAnim` now.
+            // (task 854: the other `+0x579` writer is `DroneAnim_AnimEndCallback` 0x13e3e8 —
+            // `AI+0x579 = 0`, registered as the head-tracking anim's ON-STOP callback by
+            // `DroneAnim_SetHTAnim` 0x13b1c8:140 via `AnimScriptCallOnStop(script, 0x13e3e8)`
+            // [M 0013b1c8 decompile]. The port's HT-anim end fold here covers that clear.)
             self.anim.early_end = false;
             let info = d.tables.info.get(self.anim.danim as usize).copied().unwrap_or([0; 24]);
             let next = if self.anim.danim == 0 { self.anim.follow_on } else { u16::from_le_bytes([info[10], info[11]]) };
@@ -3211,7 +3249,9 @@ impl Drone {
 
     /// The upper-body aim gate. The game's `AnimObjectAimAt` (0x1bfe58, from `psiBuildMatrixPalette` 0x111498)
     /// runs only while the anim object carries the 0x180 aim flag — requested by the aim/fire states — and returns
-    /// at once when the drone has no weapon datum out (`AnimDatumGetWeaponInfo < 0`). The port: the aim/fire state
+    /// at once when the drone has no weapon datum out (`AnimDatumGetWeaponInfo < 0`). The flag's reader is
+    /// `AnimObjectIsAiming` 0x1c6900 (the `animobj+0xc8 & 0x180` predicate, `anim::is_aiming` here), which
+    /// `NDrone2_DoTracking` 0x1479d8 gates its stop-aim and tracker arms on. The port: the aim/fire state
     /// family with a drawn weapon (holstered or unarmed = no torso aim). The exact 0x80 setter was not pinned this
     /// session (the state list is the stand-in; *suggested* for the list, *measured* for the weapon gate).
     fn aims_torso(&self) -> bool {
@@ -3319,6 +3359,11 @@ impl Drone {
     }
 
     /// The "busy" test of the talk functions: a referenced line still playing; a finished one is dropped.
+    /// `Drone_IsTalking` 0x149798 [M 00149798 decompile: +0x4D0 set → `Sound_IsFinnished`; while it
+    /// plays the drone is busy; a FINISHED handle is cleared in place] — the port's `+0x4D0` fold is
+    /// `voice`/`voice_finished`, and this fn is its busy test. `NDrone2_SpeechSFXd` 0x149d58 [M
+    /// 00149d58 decompile: `Drone_DCVfromOBJ(obj+0xC, vars)` then `NDrone2_SpeechSFX(vars, …)`] is
+    /// the same request in the port's inline form: build the request on the drone (`talks.push`).
     fn voice_busy(&mut self) -> bool {
         if self.voice.is_some() && !self.voice_finished { return true; }
         if self.voice_finished { self.voice = None; }
@@ -3422,6 +3467,110 @@ impl Drone {
     /// of ProcessDroneSight's per-frame counter [M 0x139520:265 / 0x176a28:224]), then the busy test,
     /// health > 0, and voice type 1: `SpeechSFX(0x26, 0, 1, 0)` [M 0x149920:8-24]. Type 2 (07000005)
     /// and every other set: nothing.
+    /// [M] the ELF's static table at 0x29AB20 (the decompiler's `PowerSfx`): 17 records
+    /// `{u16 channel on 0x070000c, u16 channel on 0x070000d, u32 id}`, ids 216..232, terminated by
+    /// the 0 u32 after 232 [M ELF bytes 0x29AB20..0x29ABA8; `NDrone2_PowerstationTalk` 0x13e770
+    /// reads id at record+4 and breaks when the NEXT record's id is 0]. Dumped from work/elf/ACTION.ELF.
+    const POWER_SFX: [(u16, u16, u32); 17] = [
+        (0, 70, 216), (52, 71, 217), (0, 72, 218), (64, 0, 219), (53, 0, 220), (54, 0, 221), (55, 0, 222), (56, 0, 223),
+        (57, 74, 224), (58, 75, 225), (59, 0, 226), (60, 77, 227), (79, 0, 228), (80, 0, 229),
+        (0, 81, 230), (61, 83, 231), (62, 0, 232),
+    ];
+
+    /// `DroneFunc_NewSightTalk` (0x13f420, from `DroneVision_ProcessDroneSight` 0x176a28) — the
+    /// powerstation-level first-sight bark. SP body (the MP gate returns at once [M 0x13f420:12-14]);
+    /// the busy test (clears a finished `+0x4D0`) and health > 0 [M :18-30]; only alert type 5/6 on
+    /// levels 0x070000c/0x070000d (`GameState − 0x700000c < 2` [M :31-36]); the line is
+    /// `0xd6 + Rand(2)` and `DroneFunc_TargetSeen` follows the play (the port's sight bookkeeping
+    /// already covers it) [M :36-40].
+    fn new_sight_talk(&mut self, level: u32, rng: &mut Rng) {
+        if level != 0x0700_000c && level != 0x0700_000d { return; }
+        if self.voice_busy() || self.health <= 0.0 { return; }
+        if self.voice_type != 5 && self.voice_type != 6 { return; }
+        let idx = 0xd6 + rng.rand(2);
+        self.talks.push((idx as usize, false));
+    }
+
+    /// `DroneFunc_LostSightTalk` (0x13f550) — the lost-sight bark: the same gates plus the drone
+    /// standing in the player's cel (`*(obj+0xc)+0x20 == glb_players+0x20` — obj+0x20 is the
+    /// cel [M 0x13f550:41]); the line is `0xd3 + Rand(3)` [M :42-47]. No cel match → no Rand draw.
+    fn lost_sight_talk(&mut self, level: u32, same_cel: bool, rng: &mut Rng) {
+        if level != 0x0700_000c && level != 0x0700_000d { return; }
+        if self.voice_busy() || self.health <= 0.0 { return; }
+        if self.voice_type != 5 && self.voice_type != 6 { return; }
+        if !same_cel { return; }
+        let idx = 0xd3 + rng.rand(3);
+        self.talks.push((idx as usize, false));
+    }
+
+    /// `NDrone2_PowerstationTalk` (0x13e770, dispatched by `NDrone2_HandleTalking` on levels
+    /// 0x070000c/0x070000d) — the idle chatter. Not busy [M :12-20]; alive [M :29]; the port folds
+    /// the `+0x4F8` 0x600/0x100, class ≠ 0x11 and obj+0xFE bit-0 arms (SP drones are class 2 and
+    /// the port has no fell-out flag on guards — [S], speech.md §2.3); only while
+    /// `switch_channels[0x98]` is set [M :39-41]. Each record of `Self::POWER_SFX` whose level
+    /// column names this guard's channel (0c: the guard's switch channel, first u16; 0d: the
+    /// second u16) plays once its channel is on and the global last-played channel differs; the
+    /// played channel is remembered (0c remembers the first column, 0d the second) [M :44-72].
+    fn powerstation_talk(&mut self, level: u32, channels: &[u8], power_last: &mut u32) {
+        if self.voice_busy() { return; }
+        if self.health <= 0.0 { return; }
+        if channels.get(0x98).copied().unwrap_or(0) == 0 { return; }
+        for &(ch0c, ch0d, id) in &Self::POWER_SFX {
+            let (ch, last) = match level {
+                0x0700_000c => (ch0c, ch0c as u32),
+                0x0700_000d => (ch0d, ch0d as u32),
+                _ => return,
+            };
+            if ch == 0 || ch as u32 == *power_last { continue; }
+            if channels.get(ch as usize).copied().unwrap_or(0) == 0 { continue; }
+            self.talks.push((id as usize, false));
+            *power_last = last;
+            // review fix: the game remembers the channel only when `SpeechSFX` plays [M
+            // 0x13e770:48-50]; once one plays the drone is busy and the rest are refused, so the
+            // first eligible record is the one that sticks. The port cannot see the play result
+            // here (repeat delay / first-30-frames refusals) — [S] first-eligible.
+            break;
+        }
+    }
+
+    /// `NDrone2_HandleTalking` (0x13f688, every frame from `NDrone2_ControlSTANDARD` 0x1490f0 while
+    /// `Drone_bDisableSystem` is clear — the port's tick gate covers it) — level 0x0700008 (Air
+    /// Force One): type 0xc guards run the approach dialogue — the player within 3 units
+    /// (`Vec_SqDist2D < 9`), script ≠ 99, now ≥ `+0xCF4`, the global `counter_210` throttle (each
+    /// call burns one; the call that gets through refills 30), `NDrone2_CanSeeObject(player,5,0)` —
+    /// the port's `los` stand-in [S fold] — then: switch channel 0x4a on → `SpeechSFX(0x9e, force)`
+    /// once and script = 99; else the 0 → 1 → 2 → 1… cycle of 0x9b / 0x9c / 0x9d (force 1) with
+    /// `+0xCF4 = now + 5 s` (step 0) / 15 s (steps 1/2) [M 0x13f688:29-96]. Levels 0x070000c/0x070000d
+    /// dispatch to `NDrone2_PowerstationTalk` [M :24-27]; nothing on other levels [M :21-24].
+    fn handle_talking(&mut self, level: u32, frame: u32, player_pos: V3, player_alive: bool, channels: &[u8], throttle: &mut u32, power_last: &mut u32) {
+        if level == 0x0700_000c || level == 0x0700_000d {
+            self.powerstation_talk(level, channels, power_last);
+            return;
+        }
+        if level != 0x0700_0008 { return; }
+        if self.voice_type != 0xc || !player_alive { return; }
+        let dx = player_pos[0] - self.pos[0];
+        let dz = player_pos[2] - self.pos[2];
+        if dx * dx + dz * dz >= 9.0 { return; }
+        if self.talk_script == 99 || frame < self.talk_cooldown { return; }
+        if *throttle > 0 { *throttle -= 1; return; }
+        *throttle = 30;
+        if !self.los { return; }
+        if channels.get(0x4a).copied().unwrap_or(0) != 0 {
+            self.talks.push((0x9e, true));
+            self.talk_script = 99;
+            return;
+        }
+        let (idx, cooldown) = match self.talk_script {
+            0 => { self.talk_script = 1; (0x9b, 300) }
+            1 => { self.talk_script = 2; (0x9c, 900) }
+            2 => { self.talk_script = 1; (0x9d, 900) }
+            _ => return,
+        };
+        self.talks.push((idx, true));
+        self.talk_cooldown = frame + cooldown;
+    }
+
     fn heard_noise_talk(&mut self, saw_opp_last_frame: bool) {
         if saw_opp_last_frame { return; }
         if self.voice_busy() || self.health <= 0.0 { return; }
@@ -3765,6 +3914,14 @@ impl Drone {
                 let gone = !self.drawn || {
                     if self.alpha > 0.0 { self.alpha = (self.alpha - if s == FADE_FAST { 8.0 } else { 0.6 }).max(0.0); false } else { true }
                 };
+                // task 854: `gone` here is the game's object deletion — `control_delete_object`
+                // 0x133178:16-17 dispatches `control_funcs[class*0xC+8]`, and for the drone classes
+                // that is `Drone_Delete` 0x136ce8 [M 0x26F8B0/0x26F964 entries, symtab `control_funcs`
+                // 0x26F890]: BodyGlow delete, the target-registry claim cleared (the 0xB0-stride
+                // slots' +0x14), the +0x950/+0xA60 arrays freed, and every other object's references
+                // to this drone nulled (+0x170 opponent, +0x2C0, +0x314, class-0xD +0x28) [M
+                // 00136ce8 decompile]. The port folds the sweep — no port object keeps a dangling
+                // id once `present` drops.
                 if gone { self.present = false; self.enabled = false; return Some(true); }
                 if s == FADE && self.cull { self.set_state(FADE_FAST); }
                 true
@@ -5040,6 +5197,10 @@ impl Drone {
             // `NDrone2_DSTATE_UnderCoverAim` 0x16a2d0 (state 0x95) — entered by UnderCoverIdle's
             // `uVar5 = 0x95` pick when the cover node is OK [M 0x169e58:145-151].
             (UNDER_COVER_AIM, msg::ENTER) => {
+                // task 854: the game's `NDrone2_DSTATE_UnderCoverAim` 0x16a2d0 also calls
+                // `DroneFunc_UnderCoverAimTalk` 0x13fb98 — DEAD in both modes [M 0013fb98:7-9:
+                // the SP gate returns at once (`MPSettings+0x184 == 0`); SpeechSFX refuses in MP;
+                // docs/port-map/unreached.md] — nothing to port here.
                 if !self.cover_anim(d, rng, 2, UNDER_COVER_FIRE) { self.set_state(UNDER_COVER_LEAVE_NOW) }
                 true
             }
@@ -8191,7 +8352,14 @@ impl Drone {
                 true
             }
             // DeleteMe 0xb4 (0x173f00): the soft removal (NDrone2_Enable(0) + obj+0xfe |= 1).
-            (crate::kiko::DELETE_ME, msg::ENTER) => { self.present = false; self.enabled = false; true }
+            (crate::kiko::DELETE_ME, msg::ENTER) => {
+                // task 854: this is `Drone_FellOutMap` 0x13a878's SP body [M 0013a878 decompile —
+                // `NDrone2_Enable(0)` + `obj+0xFE |= 1`; the MP arm is `BOT_fellOutMap`]: the game
+                // reaches it from `control_handle_cel_change` 0x133288 when the object's cel says
+                // out-of-map; the port's DeleteMe arm is the same Enable(0)+flag fold, and the
+                // port's guards never leave the map mesh (no out-of-map cel reader on drones).
+                self.present = false; self.enabled = false; true
+            }
             // ---- drone-abseil-elevator: states 0x8d–0x92 (`NDrone2_StateFuncs` slots 0x8d–0x92) ----
             // ElevatorJumper 0x8d (0x169488). No decomp writer reaches 0x8d — every constant
             // `Drone_SM_SetState` and every `+0x5a2` write in ACTION.ELF is accounted for elsewhere and
@@ -9202,6 +9370,10 @@ impl Drone {
     }
 
     /// `NDrone2_GetHeadPos` (0x149aa8) at fixed +0.6 — the game's `DroneAnim_CurrentMoveState`
+    /// (task 854: this is also `NDrone2_GetHeadPosOld` 0x141150's job — the `DroneVision_ProcessDroneSight`
+    /// 0x176a28 variant: bone 0x80000005 world-trans on level 0x700001b, else obj pos + 0.2/0.6 by
+    /// move state with states 4/0x1a failing [M 00141150 decompile]; the fixed +0.6 fold below is
+    /// the standing case the port pins).
     /// (0x13e378) move-state switch (crouch/aim heights) is not modelled [S].
     pub fn head(&self) -> V3 { [self.pos[0], self.pos[1] + 0.6, self.pos[2]] }
 }
@@ -9552,6 +9724,18 @@ pub fn captain_skin(skin: u32, param: &impl Fn(u32) -> u32, props: &nf_formats::
 
 /// Every drone placement of the level's main map, in placement order (`Drone_Create`); spawner templates included
 /// (`Drones::attach_level` marks them absent). Positions on the collision floor below the placement.
+/// The map-load init chain the game runs at `ResetMap_GameInit` 0x1d5080, disposed:
+/// - `control_init_object_lists` 0x134388 (:33 area, JAL at +0xcc [D]) — zeroes `DynamicObjList`
+///   head/tail/count and `LList_Init(0x270590, 0x110, 0)` (ForcedList) [M 0x134388:6-9]. The
+///   port's scene build recreates its object vecs per load (docs/atlas/object.md:37-38 documents
+///   the ForcedList shape); the fresh-vecs rebuild is that reset.
+/// - `Creature_Init` 0x135208 (:+0x144) — `LList_Init(0x316e90, 0xf0, 0)` [M 0x135208:6-7], the
+///   creature list. Retail data never creates a creature: placement type 0xe0 ships on no level
+///   [D census — docs/systems/script-census.md:120, docs/systems/uncited-audit.md:229], so the
+///   list stays empty and the port carries none (an empty-list init is a no-op).
+/// - The per-class update/delete dispatch (.data 0x26f890 base, stride 12 {update, _, delete}
+///   [D]; Creature class 0x23 rows at 0x26fa34/0x26fa3c, Copter 0x3B at 0x26fb54/0x26fb5c) never
+///   fires for 0x23 for the same census reason — see docs/port-map/unreached.md.
 pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, lights: &mut crate::light::LightList) -> Vec<Drone> {
     // The map parse's ambient radiators precede every dynamic-object create [M parsemap_handle_block_id 0x1d1020].
     crate::light::level_lights(level, rng, lights);
@@ -9675,6 +9859,17 @@ pub struct Drones {
     /// InitComms cycle (`AINetwork_ClearLinkFlags` 0x15b498 + `Drone_BuildDynamicAwarePoints`
     /// 0x138b10), lent into the active drone like `used`.
     link_flags: crate::nav::LinkFlags,
+    /// `0x298FA8`/`0x298FA9`: the NewSight/LostSight global latches — `DroneVision_ProcessDroneSight`
+    /// 0x176a28 sets fa8 (sighted) after a 60+-frame sight and fa9 (lost) after a 120+-frame loss
+    /// with nobody having seen the opponent last frame; each clears the other (speech.md §2.3).
+    pub sight_latch: bool,
+    pub lost_latch: bool,
+    /// `counter_210`: the AFO dialogue's global throttle — each `NDrone2_HandleTalking` call burns
+    /// one and the call that gets through refills it to 30 [M 0x13f688:49-57].
+    pub afo_throttle: u32,
+    /// `DAT_00298FCC`: the powerstation chatter's last-played channel (`NDrone2_PowerstationTalk`
+    /// 0x13e770 skips it; 0c remembers the first u16 column, 0d the second [M 0x13e770:57-73]).
+    pub power_last: u32,
     /// `switch_channels` and the level's trigger objects (docs/systems/triggers.md).
     pub channels: crate::triggers::Channels,
     pub triggers: Vec<crate::triggers::Trigger>,
@@ -9861,6 +10056,8 @@ pub struct Drones {
     pub hold_npcs: bool,
     /// Set only for the duration of a held tick (keeps the bullets' drone test live).
     hold_active: bool,
+    /// `Drone_InitOnce` 0x13a0f8 — called once from `bootup_bootup` 0x1c7e78 — is an 8-byte EMPTY
+    /// body [M 0013a0f8 decompile]: the drone system's one-time init is a no-op, like this fold.
     /// `Drone_bDisableSystem` (0x30ca9e): `DroneSpawner_Control` returns while it is set
     /// (0x137e68:24-26), and `DroneSpawner_Create` never creates a spawner (0x1378d0:12). The
     /// writers are the options-menu "drones off" setting (`switch_NO_DRONES` 0x30ce2c —
@@ -10229,6 +10426,11 @@ pub struct ExitHold {
 
 impl Drones {
     pub fn new(mut list: Vec<Drone>, rng: Rng) -> Drones {
+        // (task 854: `Drone_LevelReset` 0x13a5a8 — from `ResetMap_GameInit` 0x1d5080 [M caller grep] —
+        // zeroes NPCGlobals (0x1D10 bytes incl. the target registry), sets `NPCGlobals = 1`, the
+        // 600-frame `DAT_00298F58`, 0.5 into `DAT_0029AA80` and 3 into `DAT_00298F5C`, then
+        // `Drone_SM_Init` [M 0013a5a8 decompile]; this constructor + `target_registry`'s fresh state
+        // is the port's level reset of the same globals.)
         // `Drone_SM_InitObject` numbers state machines in creation order (the base is not known: 0 here).
         for (i, dr) in list.iter_mut().enumerate() {
             dr.sm_id = i as u32;
@@ -10244,6 +10446,12 @@ impl Drones {
             // fix-06-alarm (fields on their own lines — merge lesson 4).
             sound_triggers: Default::default(),
             // task 845: the shared target registry (NPCGlobals DAT_00299110).
+            // task 854 (unported-guard-ai-other-1): the sight-bark latches and the talk globals.
+            // `Drone_LevelReset` 0x13a5a8 (from `ResetMap_GameInit` 0x1d5080) is the game's level-set
+            // reset of this state: NPCGlobals zeroed, `NPCGlobals = 1` (the system on), the 600-frame
+            // `DAT_00298F58` (the DEAD timer_c payload) and `Drone_SM_Init` — the port's construction
+            // + `target_registry::reset` is where the same job lands.
+            sight_latch: false, lost_latch: false, afo_throttle: 0, power_last: 0,
             targets: Default::default(),
             delayed_msgs: Vec::new(),
             // fix-0c-hatch-latches2: the per-tick player-bullet SS Operate contacts (see the field).
@@ -10757,6 +10965,14 @@ impl Drones {
                 && (p.translation[0] - dr.pos[0]).abs() < 1e-3 && (p.translation[2] - dr.pos[2]).abs() < 1e-3) { dr.placement = i; }
         }
         // Spawners: their group's drones become templates, absent until spawned (`DroneSpawner_Init`).
+        // (task 854: this block is `NDrone2_SetupGroups` 0x149ca0's job [M 00149ca0 decompile —
+        // `NDrone2_AddToGroup` 0x1412e0 links each drone with a group id into the per-group list
+        // {0x298E20 heads, 0x298F18 counts}, then `DroneSpawner_Init` per occupied slot]; the port
+        // keys the same grouping off the placement parameter — `group` on the templates below.
+        // `DroneSpawner_Delete` 0x13a338 [M 0013a338 decompile: free the spawner's arrays and clear
+        // its 0x298E9C registry slot] is the class-delete op `control_delete_object` 0x133178:16-17
+        // dispatches through `control_funcs[class*0xC+8]` [M 0x26FAD8 entry, symtab `control_funcs`
+        // 0x26F890]; the port's spawner slot leaving `self.spawners` is that cleanup.)
         self.spawners.clear();
         for (i, p) in level.maps[m].placements.iter().enumerate().filter(|(_, p)| p.flags & 0xff == 0xf1) {
             let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
@@ -11960,6 +12176,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// §1.3–1.4 — is NOT ported: this loop skips `l.facial != 0` lines, so those lines are silent here. On the
     /// port's tested level 07000005 no facial scripts load, and the game's own fallback (hashtable miss clears
     /// `facialAnimId` to 0, permanent) then plays the line directly — the skip stands in for the whole path [S].)
+    // task 854: the game's SpeechSFX play path also touches the anim-script machinery that the
+    // port folds into the animator/voice bookkeeping: `AnimScriptNew` 0x1C1398 (a fresh script for
+    // the facial track), `AnimFacialAppend` 0x1C6490 (append the facial events),
+    // `AnimScriptPeekSfx` 0x1C6CA8 (the pending-SFX peek the play loop uses) and
+    // `AnimSeqDelete` 0x1C72E0 (release the seq on stop) [M decompiles; reached from
+    // `NDrone2_SpeechSFX` 0x149818 → `AnimScript*`]. Their port job lives in the Animator/`speech`
+    // flow below — owned by the anim-script task for full porting.
     fn speech(&mut self, d: &Data, index: usize, talks: Vec<(usize, bool)>, frame: u32) {
         let Some(lines) = d.voices else { return };
         if self.voice_last.len() < lines.len() { self.voice_last.resize(lines.len(), None); }
@@ -13141,6 +13364,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // once +0x270 >= ReactionTime — gating the fire request +0x3b in the combat
                 // arms (0x148338:108-113 etc.) plus Ready2Fire's aim-class + muzzle-tolerance
                 // gates (0x178c48), which the port mirrors (face_and_aim/ready_to_fire).
+
+                // (task 854: the game's sight/LOS queries the port's collision world stands in for —
+                // reached from `NDrone2_CanSeeObject`/`DroneVision_*` [M calltree from 0x13F688]:
+                // `RecurseBoxesSph` 0x1EDAE0 / `RecurseBoxesBox` 0x1EDC48 (the box-tree walk —
+                // the port's per-cell buckets), `ASH_RecurseBoxesBox` 0x10AE50 / `ASH_Intersect_RayBox`
+                // 0x109AD0 / `ASH_vecutil_Dist2Tri` 0x109770 (the BSP ray walk — the port's
+                // `segment_hit_cell`/`line_of_sight`), `Intersect_CylTriGeom` 0x1E9A70 /
+                // `vecutil_Dist2Tri_PointGeom` 0x1DFAC8 (cylinder-triangle tests), `LList_Cut`
+                // 0x1CCA80 / `LList_AllocnNodes` 0x1CCBE0 (the shared scratch lists), `Swap`
+                // 0x1D3518, `RotTransMatrix` 0x1E2478, `auxVec_Add` 0x1E4F10 (vector-math plumbing).)
                 dr.unseen_ticks = 0;
                 if dr.seen_ticks >= dr.reaction_time(d.level) {
                     if !dr.seen && std::env::var_os("NF_AILOG").is_some() {
@@ -14245,12 +14478,45 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `DroneVision_ProcessDroneSight` 0x176a28:224 counts a drone with the vision flag
             // (`+0x4F8 & 0x10000`), an opponent record and sight into 0x298fa0; the port's fields.
             if dr.vision_on && dr.los { self.saw_opp_this_frame = true; }
+            // task 854: the sight-bark latches (`DroneVision_ProcessDroneSight` 0x176a28) — NewSight
+            // when a drone has held sight 60+ frames with the 0x298FA8 latch clear (sets fa8, clears
+            // fa9); LostSight when unsighted 120+ frames, the fa9 latch clear, nobody saw the
+            // opponent last frame (sets fa9, clears fa8) [M speech.md §2.3; the port's `seen_ticks` /
+            // `unseen_ticks` stand in the game's per-drone sight timers — [S] fold, 0c/0d only].
+            // `NDrone2_HandleTalking` 0x13f688 rides the same per-drone walk (the game calls it from
+            // `NDrone2_ControlSTANDARD`); `counter_210`/`DAT_00298FCC` are `Drones` globals — disjoint
+            // field borrows. The port always has the player in the tick (`glb_players` ≠ 0 in SP).
+            if dr.enabled && dr.present && !self.npc_system_disabled && (d.level == 0x0700_000c || d.level == 0x0700_000d) {
+                if !self.sight_latch && dr.seen_ticks > 60 {
+                    self.sight_latch = true;
+                    self.lost_latch = false;
+                    dr.new_sight_talk(d.level, rng);
+                } else if dr.ever_seen && !self.lost_latch && dr.unseen_ticks > 120 && !self.saw_opp_last_frame {
+                    // review fix: the lost arm needs the sight record (`+0x228 & 8`, the port's
+                    // `ever_seen`) [M 0x176a28:204] — a guard that never saw Bond does not latch.
+                    self.lost_latch = true;
+                    self.sight_latch = false;
+                    // `*(obj+0xc)+0x20 == player+0x20`: the drone stands in Bond's cel [M 0x13f550:41;
+                    // obj+0x20 = the cel, docs/fields/obj-tag.md:19]. The drone's cel is the world's
+                    // containing cell for its position [S stand-in: the port does not relink drones].
+                    let same_cel = d.world.find_cel(dr.pos) == player.cel;
+                    dr.lost_sight_talk(d.level, same_cel, rng);
+                }
+            }
+            if dr.enabled && dr.present && !self.npc_system_disabled {
+                dr.handle_talking(d.level, frame, self.player_pos, true, &self.channels.v, &mut self.afo_throttle, &mut self.power_last);
+            }
             let talks = std::mem::take(&mut dr.talks);
             if !talks.is_empty() { talk_queue.push((index, talks)); }
             self.used = std::mem::take(&mut dr.links_used);
             self.link_flags = std::mem::take(&mut dr.link_flags);
             self.cover_rt = std::mem::take(&mut dr.cover_rt);
             // NDrone2_Steer: exponential turn toward the desired yaw, 0.1 per tick, with the anim's yaw offset added
+            // (task 854: `Drone_Control` 0x139268 ends with `NDrone2_PostDroneControl` 0x14aff8 [M
+            // 0014aff8 decompile] — `+0x4F8 & 0x100` set → `obj+0xFA |= 0x20`, and with health
+            // `+0xAC <= 0` and `0x200` clear, `+0x4F8 |= 0x400` (the dead-drone flag
+            // `PowerstationTalk`'s 0x600 gate reads) — the port's `present`/`corpse` fields are the
+            // same job; the 0xFA/0x400 bits have no other port reader.)
             // around it (`ControlSTANDARD`): the body faces desired − offset.
             let y = dr.yaw + dr.yaw_offset;
             dr.yaw = y + angle_difference(y, dr.desired_yaw) * 0.1 - dr.yaw_offset;
@@ -14262,8 +14528,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let want = if dr.anim.class == 2 && dr.aims_torso() { angle_difference(dr.yaw, dr.yaw_to_opp).clamp(-0.9, 0.9) } else { 0.0 };
             dr.aim_yaw = rotate_to_bearing(dr.aim_yaw, want, 0.2, crate::trig::PI);
             // Head tracking and the aim pitch (fix-ai-remainder; G-026). `NDrone2_DoTracking` 0x1479d8:
+            // (task 854: the target SELECTION the game runs first is `NDrone2_DoHeadTrackingBehaviour`
+            // 0x147578 [M 00147578 decompile, from `NDrone2_DoTracking` 0x1479d8]: the `+0x228 & 8`
+            // sight-record path tracking `+0x170`, the `+0x35C == 2` 50.0/16.0 range split, the
+            // `+0x4F8 & 0x4000000` / `+0x586 ∈ {0,0xD}` off-switch, the `+0x44` behaviour arms with
+            // the prop-0x4C gate and the 900.0² same-team nearest pick — the port folds the pick to
+            // the opponent (`+0x170`) / Bond's eye stand-in in the block below.)
             // `NDrone2_AimTest` 0x147918 passing (the aim/fire states — the port's `aims_torso` gate) puts
-            // the 0x180 aim flag up: `AnimObjectHeadTrack` 0x1bf618 clears the 0x10 track flag
+            // the 0x180 aim flag up (its reader is `AnimObjectIsAiming` 0x1c6900, `anim::is_aiming`): `AnimObjectHeadTrack` 0x1bf618 clears the 0x10 track flag
             // (`&= 0xffffffef`), the stored head angles ease back to 0 (HeadTrack's bVar5 == 2 path), and
             // `AnimObjectAimAt` 0x1bfe58 aims the spine (bone 2) with yaw AND pitch — mode-0 clamps ±0.9
             // (0x3f666666 / 0xbf666666), smoothed at `SetAiming`'s 0.2 (0x1c6878, 0x3e4ccccd). With the aim
@@ -14292,6 +14564,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // state: target → animobj+0x70 (+0xE0 pointer), range² → +0xE8, the 0x10 flag at +0xC8 on,
                 // the target-is-object bits 0x40/0x50 and bone byte +0x104, and the re-decide timer
                 // (mode 1: Rand(FR/4)+FR/10 → +0x106; DoHeadTracking's path re-arms +0x358 Rand(5)+2).
+                // The flag word's reader is `AnimObjectIsHeadTracking` 0x1c6850 (`animobj+0xc8 & 0x30`,
+                // `anim::is_head_tracking`), which DoHeadTracking gates its early return and re-decide on.
                 // `tracking` here = the +0xC8 0x10 flag, `track_recheck` = the re-decide timer, the
                 // range² 3.0² below = +0xE8; the target is Bond's eye (the game tracks an object ptr +
                 // bone 5). Not modelled: the +0x106 random snap-delay draw and the 0x40 target-is-object
@@ -15298,6 +15572,159 @@ mod tests {
     use super::*;
     use crate::world::CollisionWorld;
 
+    /// `NDrone2_HandleTalking` 0x13f688's AFO approach dialogue [M 0x13f688:29-96]: the first call
+    /// plays 0x9b (force 1), advances the script to 1 and sets `+0xCF4 = now + 5·60`.
+    /// Sister: beyond 3 units (`SqDist2D ≥ 9`) nothing plays [M :37-40].
+    #[test]
+    fn afo_approach_dialogue_first_line_and_range_gate() {
+        let mut dr = drone_at([0.0, 0.0, 0.0]);
+        dr.voice_type = 0xc;
+        dr.los = true;
+        let mut throttle = 0u32;
+        let mut power_last = 0u32;
+        let ch = vec![0u8; 256];
+        dr.handle_talking(0x0700_0008, 1000, [0.5, 0.0, 0.0], true, &ch, &mut throttle, &mut power_last);
+        assert_eq!(dr.talks, vec![(0x9b, true)], "step 0 → SpeechSFX(0x9b, force 1) [M 0x13f688:63-72]");
+        assert_eq!(dr.talk_script, 1);
+        assert_eq!(dr.talk_cooldown, 1000 + 300, "+0xCF4 = now + 5·FRAME_RATE_INT [M :79-88]");
+        // Sister: the player 4 units away (16 ≥ 9) is out of the dialogue range.
+        let mut dr2 = drone_at([0.0, 0.0, 0.0]);
+        dr2.voice_type = 0xc;
+        dr2.los = true;
+        dr2.handle_talking(0x0700_0008, 1000, [4.0, 0.0, 0.0], true, &ch, &mut throttle, &mut power_last);
+        assert!(dr2.talks.is_empty(), "SqDist2D < 9 gates the dialogue [M 0x13f688:37-40]");
+    }
+
+    /// The dialogue's cycle and finishers: step 1 → 0x9c (script 2, 15 s cooldown), step 2 → 0x9d
+    /// (back to 1) [M 0x13f688:74-84]; the switch-channel 0x4a once-line 0x9e sets script 99 [M
+    /// :59-63]; script 99 and the cooldown gate block [M :41-47]; `counter_210` burns [M :49-57].
+    #[test]
+    fn afo_dialogue_cycle_once_line_and_gates() {
+        let mut throttle = 0u32;
+        let mut power_last = 0u32;
+        let ch = vec![0u8; 256];
+        let mut dr = drone_at([0.0, 0.0, 0.0]);
+        dr.voice_type = 0xc;
+        dr.los = true;
+        dr.talk_script = 1;
+        dr.handle_talking(0x0700_0008, 2000, [0.0, 0.0, 0.0], true, &ch, &mut throttle, &mut power_last);
+        assert_eq!(dr.talks.last(), Some(&(0x9c, true)));
+        assert_eq!(dr.talk_script, 2);
+        assert_eq!(dr.talk_cooldown, 2000 + 900, "steps 1/2 cool down 15 s [M 0x13f688:74-96]");
+        let mut throttle = 0u32; // fresh global per scenario — the call above refilled counter_210 to 30
+        let mut dr3 = drone_at([0.0, 0.0, 0.0]);
+        dr3.voice_type = 0xc;
+        dr3.los = true;
+        dr3.talk_script = 2;
+        dr3.handle_talking(0x0700_0008, 2000, [0.0, 0.0, 0.0], true, &ch, &mut throttle, &mut power_last);
+        assert_eq!(dr3.talks.last(), Some(&(0x9d, true)), "step 2 → 0x9d [M :74-84]");
+        assert_eq!(dr3.talk_script, 1, "step 2 returns to 1 [M :84]");
+        // The 0x4a once-line and the 99 / cooldown / throttle sisters.
+        let mut throttle = 0u32;
+        let mut ch4 = vec![0u8; 256];
+        ch4[0x4a] = 1;
+        let mut dr4 = drone_at([0.0, 0.0, 0.0]);
+        dr4.voice_type = 0xc;
+        dr4.los = true;
+        dr4.handle_talking(0x0700_0008, 2000, [0.0, 0.0, 0.0], true, &ch4, &mut throttle, &mut power_last);
+        assert_eq!(dr4.talks, vec![(0x9e, true)], "switch_channels[0x4A] → SpeechSFX(0x9e, force) [M :59-63]");
+        assert_eq!(dr4.talk_script, 99);
+        dr4.talks.clear();
+        dr4.handle_talking(0x0700_0008, 5000, [0.0, 0.0, 0.0], true, &ch4, &mut throttle, &mut power_last);
+        assert!(dr4.talks.is_empty(), "script 99 is done [M 0x13f688:41-43]");
+        let mut dr5 = drone_at([0.0, 0.0, 0.0]);
+        dr5.voice_type = 0xc;
+        dr5.los = true;
+        dr5.talk_cooldown = 3000;
+        dr5.handle_talking(0x0700_0008, 2000, [0.0, 0.0, 0.0], true, &ch, &mut throttle, &mut power_last);
+        assert!(dr5.talks.is_empty(), "now < +0xCF4 blocks [M :45-47]");
+        let mut th = 2u32;
+        let mut dr6 = drone_at([0.0, 0.0, 0.0]);
+        dr6.voice_type = 0xc;
+        dr6.los = true;
+        dr6.handle_talking(0x0700_0008, 2000, [0.0, 0.0, 0.0], true, &ch, &mut th, &mut power_last);
+        assert_eq!(th, 1, "a throttled call burns one counter_210 tick [M :49-57]");
+        assert!(dr6.talks.is_empty());
+    }
+
+    /// `NDrone2_PowerstationTalk` 0x13e770 speaks its own channel's record from the 0x29AB20 table
+    /// [M ELF bytes; decompile :44-72] and remembers the channel (`DAT_00298FCC`); the
+    /// `switch_channels[0x98]` gate blocks [M :39-41]. 0x070000c reads the first u16 column,
+    /// 0x070000d the second [M :45-52].
+    #[test]
+    fn powerstation_chatter_table_and_gates() {
+        let mut dr = drone_at([0.0, 0.0, 0.0]);
+        dr.switch_channel = 53;
+        let mut ch = vec![0u8; 256];
+        ch[0x98] = 1;
+        ch[53] = 1;
+        let mut power_last = 0u32;
+        dr.powerstation_talk(0x0700_000c, &ch, &mut power_last);
+        assert_eq!(dr.talks, vec![(220, false)], "record (53, 0, 220): channel 53 → id 220 [M 0x29AB20+0x20]");
+        assert_eq!(power_last, 53, "0c remembers the first u16 column [M 0x13e770:57]");
+        // Sister: the just-played channel is skipped (`uVar4 != DAT_00298FCC`).
+        let mut dr2 = drone_at([0.0, 0.0, 0.0]);
+        dr2.switch_channel = 53;
+        dr2.powerstation_talk(0x0700_000c, &ch, &mut power_last);
+        assert!(dr2.talks.is_empty());
+        // 0x070000d: the second column — channel 70 → id 216.
+        let mut dr3 = drone_at([0.0, 0.0, 0.0]);
+        dr3.second_channel = 70;
+        let mut ch3 = vec![0u8; 256];
+        ch3[0x98] = 1;
+        ch3[70] = 1;
+        let mut last3 = 0u32;
+        dr3.powerstation_talk(0x0700_000d, &ch3, &mut last3);
+        assert_eq!(dr3.talks, vec![(216, false)], "record (0, 70, 216) [M 0x29AB20]");
+        // Sister: the 0x98 master gate clear → nothing.
+        let mut dr4 = drone_at([0.0, 0.0, 0.0]);
+        dr4.switch_channel = 53;
+        let ch4 = vec![0u8; 256];
+        let mut last4 = 0u32;
+        dr4.powerstation_talk(0x0700_000c, &ch4, &mut last4);
+        assert!(dr4.talks.is_empty(), "switch_channels[0x98] gates the chatter [M 0x13e770:39-41]");
+    }
+
+    /// `DroneFunc_NewSightTalk` 0x13f420 / `DroneFunc_LostSightTalk` 0x13f550: the level pair
+    /// (`GameState − 0x700000c < 2`), the busy/health gates and the type 5/6 gate [M 0x13f420:18-36
+    /// / 0x13f550:18-28]; the id shapes `0xd6 + Rand(2)` and `0xd3 + Rand(3)` [M :31-40 / :33-40].
+    #[test]
+    fn sight_talks_gates_and_id_shapes() {
+        let mut rng = Rng::new(7);
+        let mut dr = drone_at([0.0, 0.0, 0.0]);
+        dr.voice_type = 5;
+        dr.new_sight_talk(0x0700_000d, &mut rng);
+        assert_eq!(dr.talks.len(), 1);
+        assert!(dr.talks[0].0 == 0xd6 || dr.talks[0].0 == 0xd7, "0xd6 + Rand(2) [M 0x13f420:36-40]");
+        // Sister: another level never talks.
+        let mut dr2 = drone_at([0.0, 0.0, 0.0]);
+        dr2.voice_type = 5;
+        dr2.new_sight_talk(0x0700_0005, &mut rng);
+        assert!(dr2.talks.is_empty(), "GameState − 0x700000c < 2 keeps out 0x7000005 [M :31-38]");
+        // LostSight: 0xd3 + Rand(3).
+        let mut dr3 = drone_at([0.0, 0.0, 0.0]);
+        dr3.voice_type = 6;
+        dr3.lost_sight_talk(0x0700_000c, true, &mut rng);
+        assert_eq!(dr3.talks.len(), 1);
+        assert!((0xd3..=0xd5).contains(&dr3.talks[0].0), "0xd3 + Rand(3) [M 0x13f550:42-47]");
+        // sister: the drone outside Bond's cel stays quiet [M 0x13f550:41]
+        let mut quiet = dr3.clone();
+        quiet.talks.clear();
+        quiet.voice = None;
+        quiet.lost_sight_talk(0x0700_000c, false, &mut rng);
+        assert!(quiet.talks.is_empty(), "obj+0x20 (cel) != player+0x20 → no line");
+        // Sisters: type 2 and dead guards never bark.
+        let mut dr4 = drone_at([0.0, 0.0, 0.0]);
+        dr4.voice_type = 2;
+        dr4.new_sight_talk(0x0700_000c, &mut rng);
+        assert!(dr4.talks.is_empty(), "types other than 5/6 return [M 0x13f420:24-30]");
+        let mut dr5 = drone_at([0.0, 0.0, 0.0]);
+        dr5.voice_type = 5;
+        dr5.health = 0.0;
+        dr5.new_sight_talk(0x0700_000c, &mut rng);
+        assert!(dr5.talks.is_empty(), "health ≤ 0 returns [M 0x13f420:28-30]");
+    }
+
     /// `DroneFunc_FirstAlertState` 0x147f58's table [M :8-44]: the gate bits, the 0x200000 arm's
     /// four level classes, and sisters that flip each.
     #[test]
@@ -15456,6 +15883,7 @@ mod tests {
             melee_min_dist: 4.0, attack_hold: 0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(),
             voice_type: 0, female: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
+            talk_script: 0, talk_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,

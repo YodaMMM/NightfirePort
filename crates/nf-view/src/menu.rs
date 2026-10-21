@@ -89,6 +89,26 @@ pub const PAGE_START: u32 = 0x4000_0009;
 /// `GameState._28_4_ = 0x40000034` (decimal 28 = +0x1c); 0x2029e0:302-303 → P_LANGUAGE_Handler].
 /// The port does not model it (nor P_PS2MEMCARDINIT 0x40000048): `FrontEnd::new` opens the title.
 pub const PAGE_LANGUAGE: u32 = 0x4000_0034;
+
+/// `ConvLanguageToFlagIndex` 0x216948 — language enum → flag-spinner row. The standalone function
+/// has no callers in the decompile: GCC inlined it into `P_LANGUAGE_Handler` 0x208830 (twice —
+/// the spinner preselect at :77-95 and the 9-flag disable loop at :112-135, both the same
+/// switch), which is the page-0x40000034 dispatch arm of `Handler_HandleMessage` 0x2029e0:302.
+/// The inverse direction (row → language) is `C_LANGUAGE_Handler` 0x208c68:8-24's
+/// `LanguageToLoad` table. Ported here so the flag-spinner row math exists for the language
+/// page's future draw; every arm below is decompile-pinned [M 0x216948:6-25].
+pub fn conv_language_to_flag_index(lang: u32) -> i32 {
+    match lang {
+        0 => 0,
+        1 => 2,
+        2 => 1,
+        3 => 5,
+        4 => 3,
+        5 => 4,
+        8 => 6,
+        _ => -1,
+    }
+}
 /// P_INTRO, the boot EA/MGM logos [M 0x2029e0:427 → P_INTRO_Handler 0x209e88].
 pub const PAGE_INTRO: u32 = 0x4000_0032;
 /// P_PARISENUM, the memory-card check START opens [M 0x2029e0:531 → P_PARISENUM_Handler 0x20a648].
@@ -174,7 +194,12 @@ pub const PAGE_CN_AV: u32 = 0x4000_0031;
 /// the MISSION archives' own kind-8 menu def (entry 08000001 of each level archive, e.g. 07000001.bin
 /// [L parsed 2026-10-14]), NOT the front-end 07000048 stream — the old 0x4000000c id was the NIS page
 /// (the handler table maps 0x4000000c → P_NIS_Handler [M Handler_HandleMessage 0x2029e0])]. Its main
-/// control is 0x10000028, handled by C_GCPAUSE_Handler 0x204408.
+/// control is 0x10000028, handled by C_GCPAUSE_Handler 0x204408 — and 0x10000028 is a TYPE-6
+/// M_LISTBOX (widget-type byte 6, the List widget [D census, docs/systems/menu-list-widget.md]):
+/// the game fills its rows via `List_SendMessage` 0x2196e8 and lays them out per tick with
+/// `List_Update` 0x21a598. The port's `ListState` (nf-formats/src/menudef.rs, unported-engine-plumbing-1)
+/// models that row/cursor/scroll state; the pause rows this FE draws by hand are that widget's
+/// draw side.
 /// The IN-GAME NIS page 0x1000003e is `C_NIS_Handler` (0x205f10) [M Handler_HandleMessage
 /// 0x2029e0:224]: msg 0x51 binds the level's cut-scene controls → script hashes, 0x4b (shown)
 /// boots the level cut-scene (LoadableLoad → Script_Load → Script_Play → Camera_Enable(7)) —
@@ -324,6 +349,10 @@ impl GameFlow {
     /// 0x1d6958 sets GameState+0x8 = 0x7000048 when it is 0 and calls `ResetMap_LevelToLoad(level, 0, 0)`
     /// — the boot load of the front-end map.
     pub fn boot() -> Self {
+        // `MenuManager_Init` 0x21b570's job (zero the five 0x1d8-byte manager slots, defaults
+        // +0x1c8 = 0x1e, `user_restarted_or_quit` 0x30d8c4 = 0, Component_InitComponents) rides
+        // the host's FrontEnd construction; the port folds the manager POOL into one GameFlow +
+        // FrontEnd (`MenuManager_Init` caller: ResetMap_GameInit 0x1d5080).
         GameFlow { stack: vec![ST_BOOT], page: PAGE_LANGUAGE, level_to_load: FRONTEND_LEVEL, ..Default::default() }
     }
 
@@ -529,6 +558,16 @@ impl GameFlow {
 /// (`C_SBNFMAP` passes them straight to `ResetMap_LevelToLoad` [M 0x20b8d8:21-24]).
 /// A DRIVING.ELF mission hash (0x09xxxxxx) — no level archive on the disc; the game hands over to
 /// the driving executable [M GameFlow state 9, psiLaunchDriving 0x120af0].
+///
+/// The handover on hardware: `psiLaunchDriving` 0x120af0 memcpy's the 0xa50-byte PTP blob to EE
+/// 0x100000, sets flag PTP+0x97c = 1, then calls `RunNextModule` 0x120008 (436 B) with the only
+/// `cdrom0:` string in ACTION.ELF — `cdrom0:\\BASE.ELF;1` at 0x2f3b00 (file 0x1eda00) [M ELF
+/// bytes]. `RunNextModule` reads the 4 KiB ELF header into 0x1e20000, memsets+loads each program
+/// header, closes the fd, re-inits the CD (`sceCdInit(5)`), kills threads 2..0xFF, deletes
+/// semaphores 0..0xFF, flushes the caches and jumps to the new `e_entry` — BASE.ELF (the boot
+/// loader, ≡ SLUS_205.79) then re-dispatches to DRIVING.ELF from the 0x100000 block [M decomp
+/// + DRIVING.ELF's own ACTION/DRIVING/BASE strings at 0x3c5ea8..]. The port stays one process:
+/// `launching_driving()` below is the state, the draw is the main agent's.
 pub fn is_driving_level(level: u32) -> bool { level >> 24 == 0x09 }
 
 /// The campaign rows' names for port-only messages (the game's own names are Txt labels; these
@@ -876,6 +915,11 @@ pub fn menu_enable_sounds(page: u32) -> u8 {
 }
 
 // ── G-048(4): the boot card check ─────────────────────────────────────────────────────────────
+// The card-status block this walk runs on is zeroed at boot by `InitaliseMemoryCard` 0x110f48
+// (76 B, main 0x109080): `sceMcInit()`, zero MC_Info 0x316940..0x31694b, CardState 0x316950 and
+// its retry byte 0x316951, StateStack 0x30d6dc = 0, then one `PS2PollMemoryCard` 0x110fa0 kick
+// [M decomp]. The port's equivalent is this card-flow machine plus the profiles dir — there is
+// no sceMcInit to call.
 // P_PARISENUM ("Checking memory card…") opens the box and waits on the card flow: its 0x4c sets
 // the message-box mode 4 (`DAT_002e1b09 = 4`) and runs `Menu_UpdateMessageBox(page, 0, 0)`
 // [M 0x20a648:12-24], whose case 4 calls `Menu_EnumSaves(page, 1)` + `PS2_DoCardFlow`
@@ -3172,6 +3216,12 @@ impl FrontEnd {
         }
     }
 
+    /// `Page_SetHelpText` 0x21f2b8's port side: the game binds the FOCUSED row's description
+    /// through help_table rows {control id, wildcard 0xf0f0f0f0, Txt label} to the page's help
+    /// control 0x10000225 (shipped on 8 pages [D front_end_menus_census.rs]; `Page_Update`
+    /// 0x21edc8:59-67 re-runs the walk + the bind every frame, jal 0x21eed0/0x21eee0/0x21eee8)
+    /// — this getter is what the draw code calls per focused row instead [S fold: one bind per
+    /// draw rather than per frame].
     pub fn row_label<'a>(&self, lang: Option<&'a Lang>, row: usize) -> String {
         let bind = |id: u32| lang.and_then(|l| l.bind(id)).map(str::to_string).unwrap_or_else(|| format!("<{id:#x}>"));
         match self.page {
@@ -4987,6 +5037,11 @@ impl FrontEnd {
 
     /// One menu action. Returns true when the action changed the state.
     pub fn action(&mut self, a: Action) -> bool {
+        // `MenuManager_GetStatus` 0x21deb0 (max +0x1b4 over the five manager slots — the
+        // create-page results; callers Menu_InputAction 0x1f1f40:102 gates actions 0x1e/0x1f
+        // behind `status > 3`, P_PAUSE_Handler 0x203c28:99) — the port's gate is structural:
+        // `action` only runs while the front end owns the input (the GameFlow stack), so no
+        // status counter is needed.
         // menu-mouse-parity: any action moves the wheel under the pointer — the hover is stale.
         self.wheel_hover = None;
         // death-loop-07: a fresh input decides the restart marker anew — only the results page's
@@ -5688,7 +5743,11 @@ impl FrontEnd {
                 // then re-shows the list on msg 0x50 [M P_PAUSE_Handler 0x203c28:19-24 —
                 // option_return != 0 → control 8 0x2b(0); the ok-only box returns 3 on OK and 4
                 // on cancel, both non-zero] — the port just clears the field. Everything else
-                // idles.
+                // idles. The game's box is the authored TYPE-6 list control 0x10000120 on that
+                // page [D census]: Menu_CreateOptionBox fills its row text via
+                // `List_SendMessage` 0x2196e8 arm 0x10 (:27-41) and calls `List_Update`
+                // 0x21a598 directly (:68) — the port's `ListState` + this modal stand in for
+                // that flow (the draw side is the main agent's).
                 if self.pause_hint.is_some() {
                     match a {
                         Action::Confirm | Action::Back => { self.pause_hint = None; return true; }

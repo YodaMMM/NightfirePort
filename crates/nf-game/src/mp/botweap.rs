@@ -81,7 +81,8 @@ pub struct BotWeaponRow {
     pub flags: u32,
     /// +0x90 the ammo type.
     pub ammo_type: u8,
-    /// +0x92 the clip capacity.
+    /// +0x92 the clip capacity — the word `BOTWEAP_getWeaponClipSize` 0x12b010 returns
+    /// (`weapon_data + w*0x10C + 0x92`) [M].
     pub clip: i16,
     /// +0xDC != 0 and (weapon 1 or the first-person skin loaded) — `BOTWEAP_EquipWeapon`'s gates
     /// [M 0x12a138:18-25] and `CheckWeaponsLoaded`'s [M 0x12aec0].
@@ -248,6 +249,10 @@ pub struct BotArsenal {
     /// `+0x698 + t·2` (s16) — the ammo pool per type.
     pub pool: [i16; AMMO_TYPES],
     /// `+0x769` (u8) — the armour pool (`Pickup_Handler` adds, capped at 50; `BOT_handlePain` drains).
+    /// The game's armour-pickup case applies the add inline and then calls
+    /// `BOTWEAP_setDroneArmour` 0x12af70 — an empty stub in the shipped binary (`jr ra; nop`,
+    /// 8 bytes; its only caller, `Pickup_Handler` 0x18e650:133, reached on every armour take) —
+    /// so the port's inline add with no setter call is the whole behaviour [M].
     pub armour: u8,
     /// The match's `startweap` global (copied per bot so the arsenal is self-contained).
     pub start_weapon: u8,
@@ -373,7 +378,8 @@ impl BotArsenal {
         self.pool_of(at) != 0 || self.ammo_in_gun(t, w) != 0 || at == 0 || w == self.start_weapon
     }
 
-    /// `BOTWEAP_hasWeapon` 0x12af78.
+    /// `BOTWEAP_hasWeapon` 0x12af78 — also the whole body of `BOTSTATE_hasWeapon` 0x129658
+    /// (the BOT_vars-typed forwarder: `BOTWEAP_hasWeapon(*(BOT_vars+0x754), w)` [M]).
     pub fn has_weapon(&self, w: u8) -> bool { self.held_of(w) }
 
     /// `BOTWEAP_hasLoadedWeapon` 0x12b038.

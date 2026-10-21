@@ -64,6 +64,21 @@ further confirm once Yes is chosen.
 
 ## 2. The save operation itself
 
+Card-side bookkeeping around it: at boot `InitaliseMemoryCard` 0x110f48 (main 0x109080:32)
+calls `sceMcInit()`, zeroes `MC_Info` 0x316940..0x31694b, `CardState` 0x316950 + retry byte
+0x316951 and `StateStack` 0x30d6dc, and kicks `PS2PollMemoryCard` 0x110fa0 once [M decomp].
+The save's title u16s (`GameTitle` 0x3124c0) are `AsciiString2Sjis` 0x120b88 of
+"007: NightFire" + codename (0x2e8370 + the codename, "%s%s" at 0x30c818) via `Ascii2Sjis`
+0x1201c0 — fullwidth Shift-JIS, stored byte-swapped — ported as
+`nf_game::profile::ascii_string_to_sjis`; `SavingName` 0x312540 = "BASLUS-20579" + codename
+stays ASCII [M decomp; tables dumped from ACTION.ELF 0x264fd8/0x265060].
+
+A stub lives on the load path, not this one, but is recorded here because it is the only
+misc memory-card function with nowhere else to go: `SaveMemoryMap` 0x111298 (36 B, called
+at the tail of `CreateSpaceAndPackTextures` 0x11dcf8:310 on every level load) memsets 18
+bytes of its own dead stack frame and returns — no globals, result ignored [M ELF bytes at
+file 0xb198]. Nothing to port.
+
 `LS_Save(name, slot, mask)` 0x1ce0c0: builds the block chain into `DstData[slot·0x1000]`
 (`LS_GetSaveStuff` 0x1cd0d8 walks `SaveIFFBlocks` 0x2c74d8 — six blocks, PLRS/MSSN/MSPG/GSET/
 CHET/BNUS, masks 1..0x20 [M; L the table bytes in the snapshot]; mask 0xff = all six), copies
