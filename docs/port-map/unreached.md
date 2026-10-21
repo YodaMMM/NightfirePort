@@ -172,3 +172,29 @@ it into the FORCED_ATTACK send, cited in drone.rs). Caveat for all rows: the msg
 channel (`DSTATE_Disabled` 0x172440 reads the id from the message at +0xcd8) means a shipped level
 script could command any of these ids; no disc-side census was done in this window — a live check
 (gdbwatch on each address during a full game run) would settle it.
+
+# Unreached scripts-cluster functions (unported-scripts-1, 2026-10-21)
+
+## M_SPIN widget: Spin_Init 0x2224c8, Spin_SendMessage 0x2226d8, Spin_Update 0x222948
+
+The Spin control (menu widget type 0xb — `Spin_Init` self-stamps `+0x7b = 0xb`
+[M 002224c8:67]; dispatch arms in `__Menu_SendMessage` 0x1f1c18:45-46 and
+`Menu_Update` 0x1f1dc0:32-33) is an up/down integer spinner: a centred Label
+showing `max − step + min` [M 00222948:43] over an embedded M_SCROLL at +0x94
+whose d1 def word is the value range [M 002224c8 Scroll_Init call].
+
+The only trigger for all three is an authored **ctype-11 CONTROL** in a menu def:
+`MenuManager_Create` 0x21b908:318 → `Manager_SendMessage` 0x21c858 case 0x42
+(:158, :220-227) mallocs 0x318 bytes and calls `Spin_Init` when the NEW_CONTROL
+type byte is 0xb. Disc census [D]: kind-8 entry 08000002 of 07000048.bin (the
+whole front-end def; all pages carry file hash 0x80000002) parses to 52 pages /
+830 controls with ctypes {0 (Label): 824, 1 (Button): 1, 2 (Checkbox): 1,
+3 (Combo): 4} — **zero ctype 11** (and zero List/Radio/Scroll/Text/Window/Memo).
+A signature scan for CONTROL records with type byte 0xb over the entire 764 MB
+FILES.BIN found **0 hits** [D]. The shipped front end builds its spinner-looking
+UI from Combo/List/Label composites instead (menu.rs:1148 "row 0 is the
+controller-style spinner — the list control 0x10000025").
+
+So no caller runs on any on-foot level, the front end or MP: recorded unreached.
+`menudef.rs` already parses CONTROL ctype as a raw u8, which is the right depth
+of support for a dead widget class.
