@@ -222,6 +222,14 @@ pub mod state {
     /// 0x29b300 [L]): the unarmed guard's challenge — the 0x3E point anim chains to RunToAlarm
     /// 0x89. 0x3E is already listed as a state id in FLASH_HANDLING below, so the id space agrees.
     pub const CIVILIAN_CHALLENGE: u8 = 0x3e;
+    /// `NDrone2_DSTATE_Interogate` 0x161a40 (`NDrone2_StateFuncs[0x3c]` [L 0x29b300]): the 07/41
+    /// prop-0x1A guard's first-sight interrogation [M 0x147c48:92-100].
+    pub const INTEROGATE: u8 = 0x3c;
+    /// `NDrone2_DSTATE_InterogateAssist` 0x1616c0 (`StateFuncs[0x39]`): a guard that saw an
+    /// interrogation joins it [M `DroneFunc_FirstAlertState` 0x147f58:30-41 returns 0x39].
+    pub const INTEROGATE_ASSIST: u8 = 0x39;
+    /// `NDrone2_DSTATE_InterogateAssistWait` 0x161860 (`StateFuncs[0x3a]`).
+    pub const INTEROGATE_ASSIST_WAIT: u8 = 0x3a;
     /// The real `NDrone2_DSTATE_Hostage` (0x15cb78) — `NDrone2_StateFuncs[0x0a]` [L 0x29b300]; the
     /// captive cower the castle geishas sit in while their captor lives.
     pub const HOSTAGE: u8 = 0x0a;
@@ -937,6 +945,23 @@ pub struct Drone {
     pub hit_by_player: bool,
     /// The pending `OnInitDeath` fail verdict, drained by the tick (fix-actors).
     pub fail_reason: Option<crate::ally::FailReason>,
+    /// Interogate 0x3C's `+0x228 & 0x10`: the opponent was armed when the interrogation began (cleared
+    /// when he holsters) [M 0x161a40 case 1/3].
+    pub interro_armed: bool,
+    /// Interogate's `+0x27C`: the closest the opponent has come during the interrogation [M 0x161a40 case 3].
+    pub interro_min_dist: f32,
+    /// Interogate's `+0xCD8` step counter (the timer-C beats) [M 0x161a40 case 0xc].
+    pub interro_step: u32,
+    /// Outbox for `DAT_0029aa86` (the Drones `party_loud` latch): Some(true) = `BeginInterogate`
+    /// 0x1782a8, Some(false) = `EndInterogate` 0x1782c8 off 07000007. Drained by the tick.
+    pub interro_latch: Option<bool>,
+    /// `+0x528`: the drone whose alert this one copied (`DroneVision_ConsiderAlerted` 0x176250:206) —
+    /// the interrogator an InterogateAssist guard backs up.
+    pub assist_src: Option<usize>,
+    /// `DroneVision_TestEndInterogationAssist` 0x178348's verdict this tick (true = end): stamped by
+    /// the tick from the source drone's +0x4FC (`alert_bits`) — the source exists, holds 0x200020
+    /// bits and no bit outside 0x21 → false.
+    pub assist_ended: bool,
     /// The wait-channel latch `+0xCD8` (`AllyLeadMissionWait`'s and the other wait states'), and the
     /// tick's read of it (fix-actors). The source word is `mission_wait_channel` (+0x12C) [M 0x15efc8].
     pub wait_channel: u16,
@@ -1449,7 +1474,7 @@ impl Drone {
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
-            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false,
+            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false,
             mission_wait_channel: 0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
@@ -2534,6 +2559,10 @@ impl Drone {
             // the flinch [M 0x174550:38-42 → 0x1461c8:127].
             ASTRONAUT_LAUNCH | ASTRONAUT_COMBAT | ASTRONAUT_HIT | ASTRONAUT_DEATH => (0, false),
             ASTRONAUT_COMBAT_MOVE => (ASTRONAUT_HIT, true),
+            // Interogate 0x161a40 cases 6/8 → HandleImpact(0x56, 0), 7/9/0x17-0x19 → (0x56, 1);
+            // InterogateAssistWait 0x161860 cases 6-9/0x17-0x19 → (0x56, 1) [M].
+            INTEROGATE => (ATTACK, false),
+            INTEROGATE_ASSIST_WAIT => (ATTACK, true),
             _ => return None,
         })
     }
@@ -2666,7 +2695,7 @@ impl Drone {
         // 7/9/0x17/0x18/0x19 group passes (0x56, 1) while case 8 alone passes (0x56, 0) [M
         // 0x15bf18:100-110 / 0x15c248:68-77 / 0x15c498:65-74] — the surviving guard staggers.
         // The scare-flight family's group arm does the same [M 0x168aa8 / 0x168d18:57-65].
-        let allow = allow || matches!(s, IDLE | ALERT | PATROL | RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT);
+        let allow = allow || matches!(s, IDLE | ALERT | PATROL | RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT | INTEROGATE);
         if allow {
             // 0x1469b8:178-193: stamp the resume (the 0x53-0x55 impact states are excluded), then
             // state 0x54 — its ENTER re-runs the impact with allow = 1 (the stagger anim).
@@ -3533,9 +3562,11 @@ impl Drone {
                     // 0x160648:39-57: `+0x4F8 |= 0x8000000`; prop 0x33 (once, `+0x4F8 & 0x200000`):
                     // `+0x4FC |= 1`, `DroneAlertToObject(20, 20, 0.759, dc, 0x11, player)`, the
                     // 0x200000 latch; then `+0x44 = 1`, `+0x5A2 = 0x56`, SetState(0x56 Attack).
-                    if self.prop(d, 0x33) && !self.surrender_logged {
+                    self.own_sight = true; // `+0x4F8 |= 0x8000000` [M 0x160648:41]
+                    if self.prop(d, 0x33) && !self.scare_shouted {
+                        self.alert_bits |= 1; // `+0x4FC |= 1` [M 0x160648:46]
                         self.pending_shout = Some((msg::SHOUT, self.pos));
-                        self.surrender_logged = true; // the 0x200000 latch (a free scratch — 0x31 never surrenders)
+                        self.scare_shouted = true; // `+0x4F8 & 0x200000`
                     }
                     self.return_state = ATTACK;
                     self.set_state(ATTACK);
@@ -6034,10 +6065,12 @@ impl Drone {
             // CivilianChallenge on 09/0A (0x3C Interogate on 07/41) before SeenPlayerTalk and the
             // 0x1B/0x18/0x19 rolls [M 0x147c48:142-153]. The 09 security guards raise the alarm from
             // here: the challenge plays anim 0x3E with the follow-on 0x89 RunToAlarm [M 0x162558].
-            // (Prop 0x1A is not set on 07/41 drones by DoModeSettingsNEW; a placement-set 0x1A there
-            // would take the 0x3C Interogate arm, which this port does not carry — [S] no such
-            // placement is known.)
-            (ATTACK, msg::ENTER) if !self.first_attack_done && self.own_sight && self.prop(d, 0x1a) => {
+            // On 07000007 (and 07000041) the prop-0x1A guard returns 0x3C Interogate [M 0x147c48:92-100]:
+            // DoModeSettingsNEW leaves a placement-set 0x1A alone there (`init_properties`), and 07
+            // carries one — the skin-0x13 guard at (110.2, 44.1, −60.8) [D placement words]. Other
+            // levels clear 0x1A at init and fall through to SeenPlayerTalk.
+            (ATTACK, msg::ENTER) if !self.first_attack_done && self.own_sight && self.prop(d, 0x1a)
+                && matches!(d.level, 0x0700_0007 | 0x0700_0009 | 0x0700_000a | 0x0700_0041) => {
                 // The FirstSightState-return arm of FirstAttack 0x148010: the first-attack stamps —
                 // the same set `DroneFunc_SetAsAttacking` 0x14aed8 performs for the already-alerted
                 // spawn (`DefaultInit` 0x14b300:686, return state 0x56/0x12): `+0x13a`/`second_tag`
@@ -6053,7 +6086,7 @@ impl Drone {
                 if self.attack_frame == 0 { self.attack_frame = frame; }
                 self.sight_range = self.sight_range.max(self.combat_range);
                 self.half_fov = 0.0;
-                self.set_state(CIVILIAN_CHALLENGE);
+                self.set_state(if matches!(d.level, 0x0700_0009 | 0x0700_000a) { CIVILIAN_CHALLENGE } else { INTEROGATE });
                 true
             }
             // `NDrone2_ChangeToAttackMode` 0x14a648 through `DroneFunc_FirstAttack`: the alternate state
@@ -6432,6 +6465,135 @@ impl Drone {
             // (written with the opponent in `DroneVision_HaveOpponentSight` 0x175ef0:66-67) still within
             // 30 ticks: `GameState+52 <= +0x238 + 0x1e`] — the port's `ever_seen` latch is the coarse fold
             // [S]: the SP port has no opponent pointer to clear, so the 30-tick grace never expires.
+            // ---- `NDrone2_DSTATE_Interogate` 0x161a40 (state 0x3c) -------------------------------------
+            // ENTER [M case 1]: no opponent (+0x170; the port's `ever_seen`) → NoOpponent 0x60; a
+            // civilian (`IsCivilian` — team ≠ 1) or a drone holding no gun (its own held byte
+            // `obj+0xdc+0x62` ≤ 1) → Attack 0x56. Otherwise `DroneVision_BeginInterogate` 0x1782a8
+            // (+0x4FC |= 0x20, the party latch DAT_0029aa86 = 1), vision on (+0x4F8 |= 0x10000),
+            // alert status 1, `+0x228 & 0x10` = the opponent is armed now, `+0x278/+0x27C` = the
+            // current distance, timer C = now + FRAME_RATE_DIV·60, `+0xCD8` = 0, anim 0x21.
+            // (+0x4F8 |= 0x2000 has no port reader [S].)
+            (INTEROGATE, msg::ENTER) => {
+                if !self.ever_seen { self.set_state(NO_OPPONENT); return true; }
+                if self.team != 1 || (self.weapon as u8) <= 1 { self.set_state(ATTACK); return true; }
+                self.alert_bits |= 0x20;
+                self.interro_latch = Some(true);
+                self.vision_on = true;
+                self.alert = 0.0; // `Drone_AlertStatusSet(1)` — table 0x2f5cc8[1] = 0
+                self.interro_armed = self.bond_armed;
+                self.interro_min_dist = self.dist;
+                self.timer_c = Some(frame + 60);
+                self.interro_step = 0;
+                self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
+                true
+            }
+            // EXIT [M case 2]: `DroneVision_EndInterogate` 0x1782c8 — +0x4FC = (& ~0x20) | 0x10; the
+            // latch clears except on 07000007.
+            (INTEROGATE, msg::EXIT) => {
+                self.alert_bits = (self.alert_bits & !0x20) | 0x10;
+                if d.level != 0x0700_0007 { self.interro_latch = Some(false); }
+                true
+            }
+            // UPDATE [M case 3]: face the opponent; the armed flag drops when he holsters, and an
+            // UNARMED-at-start opponent who draws a gun → `PlaySFX(0x4a)` + Attack; walking away more
+            // than 4.0 beyond the closest approach → `SpeechSFX(0x4a, forced)` + Attack.
+            (INTEROGATE, msg::UPDATE) => {
+                self.desired_yaw = self.yaw_to_opp;
+                if self.interro_armed && !self.bond_armed { self.interro_armed = false; }
+                if !self.interro_armed && self.bond_armed {
+                    self.foley_reqs.push(0x4a);
+                    self.set_state(ATTACK);
+                    return true;
+                }
+                if self.dist < self.interro_min_dist { self.interro_min_dist = self.dist; }
+                if self.interro_min_dist - self.dist < -4.0 {
+                    self.talks.push((0x4a, true));
+                    self.set_state(ATTACK);
+                }
+                true
+            }
+            // Timer C [M case 0xc]: no opponent → 0x60. 07000007: step 0 → anim 0x0A (AimStand) +
+            // `SpeechSFX(0x51, forced)`, timer +180; step 1 → Attack; later steps nothing. 07000041
+            // (the other reaching level): 0 → anim 0x0A, 1 → anim 0x0B, timer +180 each; 2 → anim 0x0A,
+            // timer +60; 3 → Attack. (The 07000005 arm is unreachable: FirstSightState never returns
+            // 0x3C there [M 0x147c48:92-100].)
+            (INTEROGATE, msg::TIMER_C) => {
+                if !self.ever_seen { self.set_state(NO_OPPONENT); return true; }
+                let step = self.interro_step;
+                self.interro_step += 1;
+                if d.level == 0x0700_0007 {
+                    match step {
+                        0 => { self.call_anim(d, anim_state::AIM_STAND, 0, 0); self.talks.push((0x51, true)); self.timer_c = Some(frame + 180); }
+                        1 => self.set_state(ATTACK),
+                        _ => {}
+                    }
+                } else {
+                    match step {
+                        0 => { self.call_anim(d, anim_state::AIM_STAND, 0, 0); self.timer_c = Some(frame + 180); }
+                        1 => { self.call_anim(d, 0x0b, 0, 0); self.timer_c = Some(frame + 180); }
+                        2 => { self.call_anim(d, anim_state::AIM_STAND, 0, 0); self.timer_c = Some(frame + 60); }
+                        3 => self.set_state(ATTACK),
+                        _ => {}
+                    }
+                }
+                true
+            }
+            // The alert messages [M cases 0x11/0x12/0x14/0x15/0x16/0x1e → `DroneVision_EnemyAlerts`].
+            (INTEROGATE | INTEROGATE_ASSIST_WAIT, msg::SOUND | msg::SCREAM | msg::SHOUT | msg::ALARM) => {
+                if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n) }
+                true
+            }
+            // Msg 0x1f → `DroneFunc_DoForcedAttack` [M case 0x1f]; msg 0x21 → ConsiderExplosive(…, 0x56).
+            (INTEROGATE | INTEROGATE_ASSIST_WAIT, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
+            (INTEROGATE | INTEROGATE_ASSIST_WAIT, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, ATTACK); true }
+            // ---- `NDrone2_DSTATE_InterogateAssist` 0x1616c0 (state 0x39) --------------------------------
+            // ENTER [M case 1]: no opponent → 0x60; `DroneVision_SetInterogateAssist` 0x178308
+            // (+0x4FC |= 0x20); timer C = now + Rand(120)·FRAME_RATE_DIV. Timer C [M case 0xc]: no
+            // opponent → 0x60; a goal route to within 10.0 of the opponent (`SetupGoalPositionToObj`,
+            // `CanReachGoalPosition`) → +0x5A2 = 0x3a and GoToGoalPosition 0x63; else 0x3a directly.
+            (INTEROGATE_ASSIST, msg::ENTER) => {
+                if !self.ever_seen { self.set_state(NO_OPPONENT); return true; }
+                self.alert_bits |= 0x20;
+                self.timer_c = Some(frame + rng.rand(120));
+                true
+            }
+            (INTEROGATE_ASSIST, msg::TIMER_C) => {
+                if !self.ever_seen { self.set_state(NO_OPPONENT); return true; }
+                self.croute = None;
+                self.goal = Some(self.target.pos);
+                if matches!(self.move_to_goal(d), 0..=3) {
+                    self.return_state = INTEROGATE_ASSIST_WAIT;
+                    self.set_state(GO_TO_GOAL);
+                } else {
+                    self.set_state(INTEROGATE_ASSIST_WAIT);
+                }
+                true
+            }
+            // ---- `NDrone2_DSTATE_InterogateAssistWait` 0x161860 (state 0x3a) ----------------------------
+            // ENTER [M case 1]: vision on, SetInterogateAssist, anim 0x21 when its own held byte ≤ 1,
+            // else 0x0A. EXIT [M case 2]: `EndInterogateAssist` 0x178318 (+0x528 = 0; +0x4FC = (&
+            // 0xffdfffdf) | 0x10). UPDATE [M case 3]: no opponent → 0x60; no assist source → Attack;
+            // `TestEndInterogationAssist` 0x178348 (the source's +0x4FC still holds 0x200020 bits and
+            // nothing else but 0x21) false → face the opponent and stay; true → Attack.
+            (INTEROGATE_ASSIST_WAIT, msg::ENTER) => {
+                self.vision_on = true;
+                self.alert_bits |= 0x20;
+                let a = if (self.weapon as u8) < 2 { anim_state::ALERT_IDLE } else { anim_state::AIM_STAND };
+                self.call_anim(d, a, 0, 0);
+                true
+            }
+            (INTEROGATE_ASSIST_WAIT, msg::EXIT) => {
+                self.assist_src = None;
+                self.alert_bits = (self.alert_bits & 0xffdf_ffdf) | 0x10;
+                true
+            }
+            // (The UPDATE needs the source drone's +0x4FC — read at the tick, `assist_end` below.)
+            (INTEROGATE_ASSIST_WAIT, msg::UPDATE) => {
+                if !self.ever_seen { self.set_state(NO_OPPONENT); return true; }
+                if self.assist_src.is_none() || self.assist_ended { self.set_state(ATTACK); return true; }
+                self.desired_yaw = self.yaw_to_opp;
+                true
+            }
             (NO_OPPONENT, msg::ENTER) => {
                 self.alert = 0.0;
                 self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
@@ -6626,9 +6788,19 @@ impl Drone {
             (CIVILIAN_GUARD, msg::EXIT) => { self.team = 1; true }
             (CIVILIAN_GUARD, msg::UPDATE) => {
                 // 0x1603a8 case 3: NearArmedPerson (the 20.0 arg is dead [M 0x1787c8]) or
-                // ObjectIsArmed(Bond) && sight [M 0x1603a8:39-45] — then 0x8000000 + the prop-0x33 alert.
-                if self.near_armed_person(d) || (self.bond_armed && self.seen) {
-                    self.sighted = true;
+                // `ObjectIsArmed(param_3)` — the GUARD's own object, the DSTATE's obj argument — with
+                // the acked sight +0x228 & 4 [M 0x1603a8:41-47] (the port had read Bond's weapon here
+                // and stamped `sighted` 0x4000000 instead of the own-sight bit). Then `+0x4F8 |=
+                // 0x8000000` (`own_sight`) [M :53] and the once-only prop-0x33 alert (`+0x4FC |= 1`,
+                // `DroneAlertToObject(20, 20, 0.76, dc, 0x11, player)`, the 0x200000 latch) [M :60-67]
+                // → Attack 0x56. (No reaction → `NDrone2_BondTalk` — the level voice sets, not ported.)
+                if self.near_armed_person(d) || (self.obj_armed() && self.seen) {
+                    self.own_sight = true;
+                    if self.prop(d, 0x33) && !self.scare_shouted {
+                        self.alert_bits |= 1;
+                        self.pending_shout = Some((msg::SHOUT, self.pos));
+                        self.scare_shouted = true; // `+0x4F8 & 0x200000`
+                    }
                     self.set_state(ATTACK);
                 } else {
                     // [M 0x1603a8:39-45] the game's BondTalk arm: !near && (!ObjectIsArmed || !seen) —
@@ -12242,6 +12414,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `DroneCanSeeDrone`): source attacking ≥ 1 s with visible alert bits; observer watching (Idle/Alert), not yet
         // alerted, whose props accept the bits (0x10 always; 2 → 0x27, 4 → 0x4F, 1 → 0x28, 8 → 0x26/0x29), within
         // 50 units, in its view (±e4, ≤ e8, under 2 always) and with head-to-head line of sight. At most 4 per tick.
+        // `DroneVision_TestEndInterogationAssist` 0x178348 for every assisting drone, from its source's
+        // +0x4FC (`alert_bits`): NOT ended while the source exists, holds a 0x200020 bit and nothing
+        // outside 0x21 [M 0x178348:7-12]. InterogateAssistWait's UPDATE reads the stamp.
+        let bits: Vec<u32> = self.list.iter().map(|x| x.alert_bits).collect();
+        for dr in self.list.iter_mut() {
+            if let Some(si) = dr.assist_src {
+                let b = bits.get(si).copied().unwrap_or(0);
+                dr.assist_ended = !(b & 0x0020_0020 != 0 && b & 0xffff_ffde == 0);
+            }
+        }
         let mut alerts = Vec::new();
         // `DroneVision_DroneCanSeeDrone` (0x1760b0, via `DroneVision_ConsiderAlerted` 0x176250):
         // can the watching idle/alert/patrol drone see the alerting one.
@@ -12258,13 +12440,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if dist > 50.0 { continue; }
                 let in_view = dist < 2.0 || ((o.half_fov == 0.0 || angle_difference(o.yaw, atan2_approx(dx, dz)).abs() <= o.half_fov) && dist <= o.sight_range);
                 if in_view && d.world.line_of_sight(o.head(), src.head()) {
-                    alerts.push((oi, b));
+                    alerts.push((oi, b, si));
                     if alerts.len() > 4 { break 'pairs; }
                     continue 'pairs;
                 }
             }
         }
-        for (oi, b) in alerts {
+        for (oi, b, si) in alerts {
             let o = &mut self.list[oi];
             // `DroneFunc_DoForcedAttack` 0x148c60's gate: on 07000007 while the interrogate latch
             // (`DAT_0029aa86` — `party_loud` here) is 0, only the bouncer mode 0x13 and the
@@ -12272,6 +12454,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if d.level == 0x0700_0007 && !self.party_loud && !matches!(o.mode, 0x13 | 0x16) { continue; }
             o.alerted_by_drone = true;
             o.alert_bits |= b << 16;
+            o.assist_src = Some(si); // `+0x528 = source` [M 0x176250:206]
             o.send(d, &mut self.rng, frame, msg::FORCED_ATTACK);
         }
         // `Drone_InitComms` after the vision pass: an enabled (`+0x4F8 & 0x100`, set by DefaultInit / Enable), living
@@ -13404,6 +13587,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `DroneFunc_OnInitDeath`'s verdict: the FailLabel event + the fail channel [M 0x13e560
             // applied per 0x145bd0's reasons; fix-actors]. The monitor's standing hooks (ch 0x60/0x61
             // → the label + ch 99) take it from here [M 0x1827d8:98-107].
+            // `DroneVision_Begin/EndInterogate`'s latch DAT_0029aa86 [M 0x1782a8 / 0x1782c8].
+            if let Some(v) = dr.interro_latch.take() { self.party_loud = v; }
             if let Some(r) = dr.fail_reason.take() {
                 if r.label != 0 {
                     self.mission.fail_label = r.label;
@@ -14103,6 +14288,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // in the same tick the game wrote it.
         for dr in self.list.iter_mut() {
             if let Some(c) = dr.raise.take() { self.channels.set(c as u32, 1, frame); }
+            // `DroneVision_Begin/EndInterogate`'s latch DAT_0029aa86 [M 0x1782a8 / 0x1782c8].
+            if let Some(v) = dr.interro_latch.take() { self.party_loud = v; }
             if let Some(r) = dr.fail_reason.take() {
                 if r.label != 0 {
                     self.mission.fail_label = r.label;
@@ -14330,7 +14517,7 @@ mod tests {
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
-            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
+            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
             mission_wait_channel: 0,
