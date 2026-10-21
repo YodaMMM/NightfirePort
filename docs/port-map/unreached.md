@@ -652,3 +652,19 @@ replacement: the port plays no FMV and has no IPU — the psi background-movie e
 the port's front end, so this whole hardware pipeline (SPR→TADR chains, IPU_FROM/TO channels,
 CHCR STR writes) has no port side to cite. If a future build wants menu FMV, these five are the
 DMA primitives (bodies recorded here and in the decompile).
+## unported-misc-8 (2026-10-21) — the printf float branch
+
+**`isinf` 0x23b788, `isnan` 0x23b7d0, `quorem` 0x238a40 — UNREACHED on the shipped game**
+(behind a never-taken branch; their caller runs every frame). `_vfprintf_r` 0x237188 is reached
+via `sprintf` 0x2366c8 (71 decompiled callers — HUD/label/score text [M]) and its `%f/%e/%g`
+branch is the ONLY caller of `isinf` (jal 0x2375d0), `isnan` (jal 0x237608) and `cvt` 0x2386a0
+(jal 0x237644) → `_dtoa_r` 0x238c58 → `quorem` 0x238a40 [M chain]. The disc's entire .rodata
+carries exactly one float format string — `"%.2f %.2f %.2f\nFPS %d\n"` — printed by
+`HUD_UpdateHealthPane` 0x19b9c8:265-268 / `HUD_UpdateMPHealthPane` 0x19b630 only while
+`switch_SHOW_COORDS != 0` [M], the debug-coords byte only the never-opened per-level cheat hub
+writes (see the C_CHCH* entries above) [D census; the sdk.rs test re-scans the user's ISO].
+So the float branch never executes on any shipped on-foot level, the front end or MP. `isnan` is
+also listed by the decompile inside the libm NaN guards, but those reference `isnanf` 0x2356e8
+(REACHED, cited in trig.rs), not `isnan` [M jal census: `isnan`'s only jal site is 0x237608].
+`localeconv` 0x23a950, by contrast, sits at `_vfprintf_r`'s top BEFORE the format dispatch
+[0x237188:65] — reached on every sprintf, cited in crates/nf-game/src/sdk.rs.
