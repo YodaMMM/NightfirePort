@@ -243,6 +243,11 @@ impl Door {
 
 /// All doors of a level, in placement (creation) order.
 #[derive(Clone, Debug)]
+/// `Door_Init` 0x136848 (60 B, from `ResetMap_GameInit` 0x1d5080:12-19 at 0x1d5184):
+/// `LList_Init(TheDoors 0x316f70, 0x80, 0)` + `memset(DoorGroupsStates 0x316ea0, 0, 0xca)` — the
+/// per-map empty of the door list and the 101×u16 group-state table. The port's `Doors::create`
+/// per level attach (drone.rs `attach_level_id`) rebuilds the list and zeroes `group_states` —
+/// this reset; the per-FRAME wipe of `DoorGroupsStates` is `Doors::begin_pass` below.
 pub struct Doors {
     pub list: Vec<Door>,
     /// `DoorGroupsStates` (0xca bytes — `Door_Init` 0x136848 zeroes it per map, `Doors_Calc`
