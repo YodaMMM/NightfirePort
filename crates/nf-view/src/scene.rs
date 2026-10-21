@@ -7665,6 +7665,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let seq_index = by_hash.clone();
             // Bond at the "Player1" placement, on the floor below (`Player_StandAtNewPosition`: floor + 1.1).
             let (p0, yaw0) = start.unwrap_or(([0.0; 3], 0.0));
+            // The game's `Player_Init` 0x1910f8:117 next `JAL`s `AnimDebugCreate` 0x1bcfa8 after the player's
+            // `AnimObjectNew` — a body that only acts on the wrapper codes 0x07000043/0x07000049 (the
+            // all-models mannequin circle) or 0x07000041 (the body-glow figure), which nothing on the retail
+            // disc ever loads [D: every 0xE8 param-0 scanned — no loader of 0x07000041/43/46/49, pinned in
+            // `doublecross_transitions_live.rs:44`; M 0x1bcfa8:72,140]. On every shipped on-foot level, front
+            // end and MP, the call returns at once — the port's spawn does the same job by doing nothing
+            // (docs/systems/anim-debug-and-queries.md, docs/port-map/unreached.md §863).
             let bond = nf_game::player::Bond::stand_at(&world, p0, yaw0);
             let mut drones = nf_game::drone::Drones::new(list, rng);
             drones.lights = lights;

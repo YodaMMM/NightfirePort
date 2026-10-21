@@ -754,6 +754,12 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // every level load starts the anim layer fresh — the tag/script timestamps, skin-scale globals
     // and the pSkeletons+0x1fc scratch it resets have no port counterparts (nothing persists across
     // loads), so these fresh skeleton/sequence/script maps ARE the reset.
+    // The same ResetMap_GameInit (0x1d5080:37) calls `AnimCacheInit` 0x1c6390 — `jr ra; nop` [M
+    // disasm 0x1c6390]: the shipped build's anim cache was emptied; there is nothing to init, so
+    // the port models no cache gate (the family's Enable 0x1c6398 / Disable 0x1c63a0 likewise).
+    // `ResetMap_Load` 0x1d6360 also calls `AnimSeqGetHdrBuf` 0x1c7998 (jal 0x1d67c4, a0=1) before
+    // this loader loop — `jr ra; or v0,zero,zero`, always 0, and the caller never reads v0 [M
+    // disasm 0x1d67c4-0x1d67d8]: a retired header-buffer hook; the port's load needs no hook.
     let mut sequences: HashMap<u8, Vec<Sequence>> = HashMap::new();
     if let Some(anim) = read(&anim_name)? {
         let alb = LevelBin::parse(&anim)?;

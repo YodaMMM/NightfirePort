@@ -3223,7 +3223,9 @@ impl Drone {
 
     /// The upper-body aim gate. The game's `AnimObjectAimAt` (0x1bfe58, from `psiBuildMatrixPalette` 0x111498)
     /// runs only while the anim object carries the 0x180 aim flag — requested by the aim/fire states — and returns
-    /// at once when the drone has no weapon datum out (`AnimDatumGetWeaponInfo < 0`). The port: the aim/fire state
+    /// at once when the drone has no weapon datum out (`AnimDatumGetWeaponInfo < 0`). The flag's reader is
+    /// `AnimObjectIsAiming` 0x1c6900 (the `animobj+0xc8 & 0x180` predicate, `anim::is_aiming` here), which
+    /// `NDrone2_DoTracking` 0x1479d8 gates its stop-aim and tracker arms on. The port: the aim/fire state
     /// family with a drawn weapon (holstered or unarmed = no torso aim). The exact 0x80 setter was not pinned this
     /// session (the state list is the stand-in; *suggested* for the list, *measured* for the weapon gate).
     fn aims_torso(&self) -> bool {
@@ -14275,7 +14277,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             dr.aim_yaw = rotate_to_bearing(dr.aim_yaw, want, 0.2, crate::trig::PI);
             // Head tracking and the aim pitch (fix-ai-remainder; G-026). `NDrone2_DoTracking` 0x1479d8:
             // `NDrone2_AimTest` 0x147918 passing (the aim/fire states — the port's `aims_torso` gate) puts
-            // the 0x180 aim flag up: `AnimObjectHeadTrack` 0x1bf618 clears the 0x10 track flag
+            // the 0x180 aim flag up (its reader is `AnimObjectIsAiming` 0x1c6900, `anim::is_aiming`): `AnimObjectHeadTrack` 0x1bf618 clears the 0x10 track flag
             // (`&= 0xffffffef`), the stored head angles ease back to 0 (HeadTrack's bVar5 == 2 path), and
             // `AnimObjectAimAt` 0x1bfe58 aims the spine (bone 2) with yaw AND pitch — mode-0 clamps ±0.9
             // (0x3f666666 / 0xbf666666), smoothed at `SetAiming`'s 0.2 (0x1c6878, 0x3e4ccccd). With the aim
@@ -14304,6 +14306,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // state: target → animobj+0x70 (+0xE0 pointer), range² → +0xE8, the 0x10 flag at +0xC8 on,
                 // the target-is-object bits 0x40/0x50 and bone byte +0x104, and the re-decide timer
                 // (mode 1: Rand(FR/4)+FR/10 → +0x106; DoHeadTracking's path re-arms +0x358 Rand(5)+2).
+                // The flag word's reader is `AnimObjectIsHeadTracking` 0x1c6850 (`animobj+0xc8 & 0x30`,
+                // `anim::is_head_tracking`), which DoHeadTracking gates its early return and re-decide on.
                 // `tracking` here = the +0xC8 0x10 flag, `track_recheck` = the re-decide timer, the
                 // range² 3.0² below = +0xE8; the target is Bond's eye (the game tracks an object ptr +
                 // bone 5). Not modelled: the +0x106 random snap-delay draw and the 0x40 target-is-object
