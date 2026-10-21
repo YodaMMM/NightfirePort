@@ -61,10 +61,21 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
     let mut gate_ok: Vec<bool> = Vec::new();
     'guards: for &cand in &candidates {
         let mut placed = false;
+        // ai-sight-drawn-gate-3: the park-distance ladder 10/7/5. The frustum sight gate moved the
+        // spawn/patrol frames (Drone_PositionVisible 0x13a7a0 is the frustum(2.0) test, far
+        // narrower than the old 120-degree cone [M 0x137cb0:43's post-selection abort]), so at
+        // collection time the guards stand mid-room and a fixed 10.0-axis park often lands in a
+        // wall or off the floor; and a guard with sight range r < 10 accumulates no sighting at
+        // all from 10 (the 826b run: two candidates parked with seen_ticks stuck 0). The ladder
+        // tries 10, then 7, then 5 along each axis before giving up on the candidate; every rung
+        // stays beyond the 3.0 CombatTooClose band [L 0x30caf0-area tuning: the model is
+        // distance-independent for parks in the gate-clean subset, M 0x179740's gate reads
+        // sighting time, not distance].
         'dirs: for &(dx, dz) in &[(1.0f32, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (0.70710678, 0.70710678), (-0.70710678, 0.70710678), (0.70710678, -0.70710678), (-0.70710678, -0.70710678)] {
+        for &park in &[10.0f32, 7.0, 5.0] {
             let sim = scene.sim.as_mut().unwrap();
             let g = sim.drones.list[cand].pos;
-            sim.bond.pos = [g[0] + dx * 10.0, g[1] + 0.14, g[2] + dz * 10.0];
+            sim.bond.pos = [g[0] + dx * park, g[1] + 0.14, g[2] + dz * park];
             sim.bond.yaw = (g[0] - sim.bond.pos[0]).atan2(g[2] - sim.bond.pos[2]);
             // fix-guard-weapons3: the spot must be IN SIGHT of the guard (the model presumes sighted
             // shooting — the NewSighting gate auto-misses blind shots, and a park behind a wall
@@ -76,6 +87,7 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
             for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
             let y = sim.bond.pos[1];
             if (y - (g[1] + 0.14)).abs() < 1.0 { placed = true; break 'dirs; }
+        }
         }
         if !placed { eprintln!("[gw] guard {cand} (weapon {weapon:#x}): no level parking spot"); continue 'guards; }
         let mut warmed = false;
@@ -215,8 +227,12 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             // The model's only distance term is the binary TooClose ×2 (< 3.0 [L 0x30cb14]) —
             // there is NO falloff [M 0x19455c-0x194588] — so any band above 3.0 validates the
             // rate/damage model; the 8.0 floor was the pre-re-park calibration. (Re-parks can
-            // leave the guard closer, e.g. 6.7 — still far above 3.0.)
-            assert!(dist > 3.5 && dist < 12.5, "guard {guard} ended inside the TooClose band or far off the engagement (dist {dist})");
+            // leave the guard closer, e.g. 6.7 — still far above 3.0.) ai-sight-drawn-gate-3:
+            // the floor follows the decompile's 3.0 — the park ladder may park at 5 and the
+            // guard may close to just above the band (measured 3.46 with the rate and per-hit
+            // damage still on the model: 0.685 vs 0.60 ± 0.12, 1.65 exact); the old 3.5 floor
+            // was harness margin, not a game rule.
+            assert!(dist > 3.05 && dist < 12.5, "guard {guard} ended inside the TooClose band or far off the engagement (dist {dist})");
             let rate = hits as f32 / n as f32;
             assert!((rate - expected_rate).abs() <= 0.12,
                 "{level} diff {diff} weapon {weapon:#x}: hit rate {rate:.3} vs model {expected_rate:.3} ({hits}/{n})");

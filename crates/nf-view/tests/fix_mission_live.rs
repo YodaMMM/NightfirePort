@@ -354,9 +354,19 @@ fn the_07000001_exit_works_end_to_end() {
                 if let Some(tgt) = rtarget {
                     let dx = tgt[0] - mp[0]; let dz = tgt[2] - mp[2];
                     let l = (dx * dx + dz * dz).sqrt().max(1e-4);
-                    let floor = sim.world.floor_below([mp[0], mp[1], mp[2]], 6.0).unwrap_or(mp[1]);
-                    let dr = &mut sim.drones.list[mi];
-                    dr.pos = [mp[0] + dx / l * 2.0, floor + 1.0, mp[2] + dz / l * 2.0];
+                    // ai-sight-drawn-gate-3: the destination-floor guard. The nudge shifts 2.0
+                    // toward the route target; a stall at the courtyard rail puts the landing spot
+                    // over a drop, and the every-30-tick re-fire then walked the escort through
+                    // the air (the 826b trace: y -172 -> -19274, the horizontal drift the teleport
+                    // re-firing while floor_below found nothing). The game's walking drone is
+                    // never teleported at all; when the DESTINATION has no floor the window is
+                    // skipped and the escort keeps his own slide. One floor_below, at the
+                    // destination — the old spot's floor said nothing about the landing.
+                    let dest = [mp[0] + dx / l * 2.0, mp[1], mp[2] + dz / l * 2.0];
+                    if let Some(floor) = sim.world.floor_below(dest, 6.0) {
+                        let dr = &mut sim.drones.list[mi];
+                        dr.pos = [dest[0], floor + 1.0, dest[2]];
+                    }
                 }
             }
             stall_window = 0.0;

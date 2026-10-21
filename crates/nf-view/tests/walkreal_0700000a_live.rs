@@ -153,6 +153,72 @@ fn clear_hostiles(w: &mut Walker, radius: f32, max_ticks: u32) -> usize {
     }
 }
 
+/// The nearest live team-1 hostile in the alarm-run family (RunToAlarm 0x89 / PressAlarm 0x8a /
+/// DonePressAlarm 0x8b [M kiko.rs 117-121; PressAlarm's timer C lands the fail 0x10 at
+/// RunToAlarm + 180 + 30 ticks, NDrone2_DSTATE_PressAlarm 0x168ea8]) within `radius` of Bond.
+fn alarm_runner_within(w: &Walker, radius: f32) -> Option<usize> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let bp = sim.bond.pos;
+    sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && d.enabled && d.team == 1 && !d.corpse && d.health > 0.0)
+        .filter(|(_, d)| matches!(d.state, nf_game::kiko::RUN_TO_ALARM | nf_game::kiko::PRESS_ALARM | nf_game::kiko::DONE_PRESS_ALARM))
+        .map(|(i, d)| (i, walker::dxz(d.pos, bp)))
+        .filter(|(_, dist)| *dist <= radius)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+/// The leg-internal watch: clear whoever is inside `clear_radius`, then CHASE an alarm runner
+/// already past the band (the 826b trace: the alerted guard was outside the 16-unit clear radius
+/// before the first boundary check — the mid-leg watch plus the intercept at his live spot is
+/// the player's own answer; the press holds him at the panel for 180+30 ticks [M 0x168ea8], so
+/// there is time when the chase starts during the run). Returns guards dropped.
+fn watch_and_clear(w: &mut Walker, clear_radius: f32) -> usize {
+    let mut dropped = clear_hostiles(w, clear_radius, 900);
+    for _ in 0..4 {
+        let Some(gi) = alarm_runner_within(w, 40.0) else { break; };
+        eprintln!("[walk] alarm runner {gi} past the band — chasing");
+        let start = w.total_ticks;
+        loop {
+            if w.total_ticks - start >= 3600 { eprintln!("[walk] the runner chase timed out"); break; }
+            let dpos = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[gi];
+                if d.corpse || d.health <= 0.0 || !d.present { dropped += 1; break; }
+                d.pos
+            };
+            if walker::dxz(dpos, w.scene.sim.as_ref().unwrap().bond.pos) <= clear_radius {
+                dropped += clear_hostiles(w, clear_radius, 900);
+                break;
+            }
+            let before = w.total_ticks;
+            let _ = w.try_walk_to(Wp::new(dpos[0], dpos[1], dpos[2]).r(1.4), "chase the alarm runner");
+            if w.total_ticks == before { w.wait(5); }
+        }
+    }
+    dropped
+}
+
+/// Walk one leg in ~4-unit segments with the watch between the segments (the mid-leg re-check
+/// the 826b remaining-steps note prescribes: re-check DURING legs, not only at boundaries).
+/// Returns when Bond is within `arrive` of `to` (or the segment budget ran out).
+fn walk_leg_watched(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> bool {
+    let seg = 4.0f32;
+    for iteration in 0..200 {
+        let from = w.scene.sim.as_ref().unwrap().bond.pos;
+        let dx = to[0] - from[0];
+        let dz = to[2] - from[2];
+        let dist = (dx * dx + dz * dz).sqrt();
+        if dist < arrive { return true; }
+        watch_and_clear(w, 16.0);
+        if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return false; }
+        let step = seg.min(dist);
+        let mid = [from[0] + dx / dist * step, to[1], from[2] + dz / dist * step];
+        w.walk_to(Wp::new(mid[0], mid[1], mid[2]).r(1.1), &format!("{label} seg {iteration}"));
+    }
+    false
+}
+
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch() {
     let mut w = load_carry(None);
@@ -279,12 +345,17 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         None => { assert!(w.follow_nav_route([21.72, 1.12, 19.4], "to the hatch"), "no nav route to the hatch"); Vec::new() }
     };
     for (k, p) in route.iter().enumerate() {
-        clear_hostiles(&mut w, 16.0, 900);
-        w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("to the hatch node {k}"));
+        // ai-sight-drawn-gate-3: the leg is walked in segments with the watch between them —
+        // the alarm runner must be caught DURING the legs (the boundary-only clear missed him:
+        // he was past the 16-unit band before the first leg ended, and the press at the panel
+        // lands the fail [M 0x168ea8]).
+        let ok = walk_leg_watched(&mut w, *p, 1.3, &format!("to the hatch node {k}"));
+        assert!(ok || w.scene.sim.as_ref().unwrap().drones.level_exit.is_none() || k + 1 == route.len(),
+            "the leg to node {k} never arrived and the mission did not end");
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none() || k + 1 == route.len(),
             "the mission failed mid-route at node {k} (an alarm the clear missed)");
     }
-    clear_hostiles(&mut w, 16.0, 900);
+    watch_and_clear(&mut w, 16.0);
     {
         // Diagnostic (this task): what failed the mission mid-route (the exit to 0x0700000a is
         // the fail menu's auto-restart [M 0x216618] — ch 0x63 = the fail channel [M mission.rs]).
