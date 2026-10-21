@@ -1437,6 +1437,9 @@ pub struct Drone {
     pub hostage_target: Option<usize>,
     /// The killer's pairing search ran once for this capture (the game's ENTER runs it once).
     pub killer_searched: bool,
+    /// `Drone_SM_SendMsg(msg, delay, from, to)` [M 0x13a630 callers] outbox: (target drone, msg, delay
+    /// ticks), moved into `Drones::delayed_msgs` by the tick and delivered when due.
+    pub msg_out: Vec<(usize, u8, u32)>,
     /// `Drone+0x1e` — the gun-through-wall flag: `DroneVision_SeekOpponentLOS` 0x175cb8:77-79 refreshes
     /// it on every sight tick while aiming (`DroneVision_GunThroughWall` 0x178520), and the combat
     /// fire requests are gated on `+0x3b = !+0x1e` (see `gun_through_wall`).
@@ -1581,7 +1584,7 @@ impl Drone {
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
             cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), return_state: 0, second_channel: param(6) as u8, second_tag: param(8),
             captor: None, hostage_searched: false,
-            hostage_target: None, killer_searched: false,
+            hostage_target: None, killer_searched: false, msg_out: Vec::new(),
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
             // `drone_stats[type]+8` is 0 for these guards → 10 (captains, difficulty ≥ 2 only, are not modelled).
             health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: !matches!(skin, 0x0500_003b | 0x0500_003c | 0x0500_0053), kind: setup.kind,
@@ -2730,10 +2733,11 @@ impl Drone {
             UNSURRENDER_ANIM | DRAW_WEAPON => (0, false),
             AIM_CROUCH | AIM_STAND_RELOAD | AIM_CROUCH_RELOAD | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_WAIT
                 | GO_TO_GOAL | DRONE_STUCK => (0, false),
-            // HostageKiller 0x15c728 / HostageKillerAttack 0x15c940 case 8 → HandleImpact(current,
-            // 0) — bullets damage without a state change [M 0x15c728:47-62, 0x15c940:66-85]; the
-            // 7/9/0x17/0x18/0x19 group arm passes allow 1, raised in `on_explosion` below.
-            HOSTAGE_KILLER | HOSTAGE_KILLER_ATTACK => (0, false),
+            // HostageKiller 0x15c728 cases 6/8 → HandleImpact(0x56, 0): a shot captor ATTACKS (review
+            // 2026-10-21 — the branch read "current"); HostageKillerAttack 0x15c940 passes its own state
+            // (SM+4). The 7/9/0x17/0x18/0x19 group arms pass allow 1, raised in `on_explosion` below.
+            HOSTAGE_KILLER => (ATTACK, false),
+            HOSTAGE_KILLER_ATTACK => (0, false),
             // The scare-flight family: case 8 forwards `HandleImpact(0x88, 0)` and the
             // 7/9/0x17/0x18/0x19 group `HandleImpact(0x88, 1)` [M 0x168aa8 case 8 + the case-7
             // fallthrough group; 0x168d18:57-65] — bullets resume through Recover 0x88 with no
@@ -6549,8 +6553,12 @@ impl Drone {
             // anim (0xA), runs AttackTalk, then fires immediately — EXCEPT anim-set 0x13 skins,
             // whose first shot defers 60 ticks via timer C with `+0x3B` cleared.
             (COMBAT_NO_MOVE, msg::ENTER) => {
+                // [M 0x1643e8:20-37] AlertStatusSet(1); the MODE byte +0xC5 == 2 → SniperFire 0x2b (review
+                // 2026-10-21: the branch tested alt_mode); else anim 0xA, vision (+0x4F8 |= 0x10000),
+                // AttackTalk, then fire — anim set 0x13 defers it FRAME_RATE_INT with +0x3B cleared.
+                self.alert_status_set(1, frame);
+                if self.mode == 2 { self.set_state(SNIPER_FIRE); return true; }
                 self.vision_on = true;
-                if self.alt_mode == 2 { self.set_state(SNIPER_FIRE); return true; }
                 self.call_anim(d, anim_state::AIM_STAND, 0, 0);
                 self.attack_talk(d, rng);
                 if self.anim_set != 0x13 { self.firing = true; }
@@ -7368,7 +7376,14 @@ impl Drone {
             // Case 5 = ANIM_DONE [M :40-46]: shout msg 0xb with the hostage's marker, then combat 0x56
             // (the marker shout rides the shared shout path — the port's shout outbox takes the target's
             // marker from the link; the state change is the game's).
-            (HOSTAGE_KILLER, msg::ANIM_DONE) => { self.set_state(ATTACK); true }
+            (HOSTAGE_KILLER | HOSTAGE_KILLER_ATTACK, msg::ANIM_DONE) => {
+                // Case 5 [M 0x15c728 / 0x15c940]: `Drone_SM_SendMsg(0xb, 10, own, hostage)` — the hostage's
+                // case 0xb enters HostageDie 0xb [M 0x15cb78] — then Attack 0x56. The execution anim 0x58
+                // carries done-msg 5 (CallAnim a3 = 5 → +0x598 [disasm 0x15c848 / 0x15cab8; M 0x13ab58:100]).
+                if let Some(h) = self.hostage_target { self.msg_out.push((h, msg::DIE, 10)); }
+                self.set_state(ATTACK);
+                true
+            }
             // Timer 10 [M :63-68]: with the hostage link alive and the hostage healthy, the execution
             // anim 0x58 (the pairing/timer block lives in the `Drones` tick, which reads both drones).
             // `NDrone2_DSTATE_HostageKillerAttack` 0x15c940 (state 9) ENTER [M :22-51]: with a live
@@ -10059,6 +10074,8 @@ pub struct Drones {
     /// rule in `spawn_fade_view`'s doc); the raw state still advances per tick. See
     /// docs/systems/doublecross-transitions.md §6/§7.
     pub spawn_fade: Option<(u32, u32)>,
+    /// Drone-to-drone messages in flight: (target, msg, due frame) — `Drone::msg_out`'s delivery queue.
+    pub delayed_msgs: Vec<(usize, u8, u32)>,
     /// The guards' shared target registry (NPCGlobals' 8 slots at DAT_00299110):
     /// `DroneFunc_AllocateTargetID` 0x141f28 / `DroneFunc_TargetSeen` 0x14a008, allocated by
     /// `NDrone2_SetOpponent` 0x1422d0, stamped by the sight/talk flow, read by
@@ -10188,6 +10205,7 @@ impl Drones {
             sound_triggers: Default::default(),
             // task 845: the shared target registry (NPCGlobals DAT_00299110).
             targets: Default::default(),
+            delayed_msgs: Vec::new(),
             // fix-0c-hatch-latches2: the per-tick player-bullet SS Operate contacts (see the field).
             ss_bullet_contacts: Vec::new(),
             // level-0c-complete: the deferred use-key trigger half (see the field).
@@ -13365,10 +13383,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // ch 0x17/0x19).
         let captor_pool: Vec<(f32, bool, bool, V3, bool)> = self.list.iter()
             .map(|x| (x.health, x.corpse, x.team == 1, x.pos, x.present && x.enabled)).collect();
-        // The hostages' pool for the HostageKiller pairing (`SetupHostageKiller` 0x144030's nearest
-        // unpaired hostage): state / corpse / health / position / already-paired per drone.
+        // The hostages' pool for the HostageKiller pairing (`SetupHostageKiller` 0x144030): mode byte
+        // (+0xC5) / corpse / health / position / already-paired (+0x2B0) per drone.
         let hostage_pool: Vec<(u8, bool, f32, V3, bool)> = self.list.iter()
-            .map(|x| (x.state, x.corpse, x.health, x.pos, x.captor.is_some())).collect();
+            .map(|x| (x.mode, x.corpse, x.health, x.pos, x.captor.is_some())).collect();
+        let mut killer_binds: Vec<(usize, usize)> = Vec::new();
         // door-guard-pairing: `SetDronePartner` (0x141360) + `NDrone2_DoorGuardHandler` (0x1416d8)
         // for the CivilianDoorGuard pairs. The game pairs inside the 0x31 ENTER and runs the zone
         // read inside the 0x31 UPDATE; the port's pre-pass has the list access the per-drone
@@ -13646,6 +13665,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // core-loop item 11] — so the scan sees this walk-start snapshot, not a same-walk recompute
         // (a spawned guard whose per-drone pass runs before its spawner's would otherwise read fresh).
         let drawn_prev: Vec<bool> = self.list.iter().map(|d| d.drawn).collect();
+        // `Drone_SM_SendMsg`'s delayed messages that fall due this tick (`SendDelayedMsgs` 0x1759a0).
+        let due: Vec<(usize, u8)> = self.delayed_msgs.iter().filter(|x| x.2 <= frame).map(|x| (x.0, x.1)).collect();
+        self.delayed_msgs.retain(|x| x.2 > frame);
+        for (t, m) in due {
+            if self.list.get(t).is_some_and(|x| x.present) { self.list[t].send(d, &mut self.rng, frame, m); }
+        }
         // fix-door-react-path: the drones' pre-walk positions — each drone's door-pick capsule is
         // anchored at its post-walk position, but a guard that walked this tick needs the walk to be
         // visible to the door pick (the game's pick runs after the whole control walk [M
@@ -13986,29 +14011,37 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if dr.state == state::HOSTAGE_KILLER || dr.state == state::HOSTAGE_KILLER_ATTACK {
                 if !dr.killer_searched {
                     dr.killer_searched = true;
+                    // [M 0x144030:22-55] walk the drone list for mode (+0xC5) 5 with +0x2B0 == 0, the
+                    // nearest within 5.0 (Vec_Dist3D); no health/corpse test. Then BOTH links are set
+                    // (killer +0x2B0 = hostage, hostage +0x2B0 = killer) [M :57-59]. (Review 2026-10-21:
+                    // the branch matched state HOSTAGE, had no 5.0 range and bound one side only.)
                     let mut best: Option<(f32, usize)> = None;
                     for (hi, h) in hostage_pool.iter().enumerate() {
-                        let (hstate, hcorpse, hhealth, hpos, hpaired) = h;
-                        if hi == index || *hstate != state::HOSTAGE || *hcorpse || *hhealth <= 0.0 || *hpaired { continue; }
-                        let q = (hpos[0] - dr.pos[0]).powi(2) + (hpos[1] - dr.pos[1]).powi(2) + (hpos[2] - dr.pos[2]).powi(2);
-                        if best.map_or(true, |(bq, _)| q < bq) { best = Some((q, hi)); }
+                        let (hmode, _hcorpse, _hhealth, hpos, hpaired) = h;
+                        if hi == index || *hmode != 5 || *hpaired { continue; }
+                        let q = ((hpos[0] - dr.pos[0]).powi(2) + (hpos[1] - dr.pos[1]).powi(2) + (hpos[2] - dr.pos[2]).powi(2)).sqrt();
+                        if q < 5.0 && best.map_or(true, |(bq, _)| q < bq) { best = Some((q, hi)); }
                     }
                     dr.hostage_target = best.map(|(_, hi)| hi);
+                    if let Some(hi) = dr.hostage_target { killer_binds.push((hi, index)); }
                     if dr.state == state::HOSTAGE_KILLER && dr.hostage_target.is_none() {
                         dr.set_state(state::IDLE); // the ENTER fail arm [M 0x15c728:27-29]
                     }
                 }
-                // The beat [M 0x15c728:63-68 / 0x15c940:86-96]: the link gone or the hostage dead →
-                // stay; otherwise the execution anim 0x58.
+                // Timer 10: HostageKiller needs the hostage alive (+0xAC > 0) [M 0x15c728 case 10];
+                // HostageKillerAttack only the link [M 0x15c940 case 10]. Both call the execution anim
+                // 0x58 with done-msg 5 → the ANIM_DONE arm (the hostage's DIE + Attack).
                 if dr.timer_c == Some(frame) {
                     dr.timer_c = None;
                     if let Some(hi) = dr.hostage_target {
-                        if hostage_pool.get(hi).map_or(false, |h| !h.1 && h.2 > 0.0) {
-                            dr.call_anim(d, 0x58, 0, 0);
+                        let alive = hostage_pool.get(hi).is_some_and(|h| h.2 > 0.0);
+                        if dr.state == state::HOSTAGE_KILLER_ATTACK || alive {
+                            dr.call_anim(d, 0x58, 0, msg::ANIM_DONE);
                         }
                     }
                 }
             }
+            for (t, m, delay) in dr.msg_out.drain(..) { self.delayed_msgs.push((t, m, frame + delay)); }
             dr.voice_finished = dr.voice.is_none_or(|v| self.audio.finished(v.0));
             dr.patrol_cooldown = self.patrol_cooldown;
             dr.saw_opp_last_frame = self.saw_opp_last_frame;
@@ -14383,6 +14416,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.pos[2] = p[2];
             }
         }
+        // `SetupHostageKiller`'s hostage half: hostage +0x2B0 = the killer [M 0x144030:57-59].
+        for (hi, ki) in killer_binds { if let Some(h) = self.list.get_mut(hi) { h.captor = Some(ki); } }
         drop(prof_loop);
         // The dynamic collision set, AFTER the walk (fix-script-start-tick): the game's
         // `Collide_Update` runs post-walk [M 0x1336f8:238], so Bond's next movement reads this
@@ -15337,7 +15372,7 @@ mod tests {
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
             cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), return_state: 0, second_channel: 0, second_tag: 0,
             captor: None, hostage_searched: false,
-            hostage_target: None, killer_searched: false,
+            hostage_target: None, killer_searched: false, msg_out: Vec::new(),
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
             health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: true, kind: 0,
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
