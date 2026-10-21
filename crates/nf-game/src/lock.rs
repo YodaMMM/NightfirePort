@@ -131,6 +131,36 @@ impl Lock {
         true
     }
 
+    /// `Lock_ReLock` 0x1b0750 — the re-arming of a burnt-open lock. The game's version:
+    /// `if (player != 0 && lock != 0 && player->obj+0xff == 3 /* a player */) { lock->state
+    /// (+0xf4) = 0; Player_UnEquipKey(player->BLData, lock->instance u16[+2]);
+    /// Control_NextLOD(lock); }` — the lock goes back to state 0 (armed) and the key the player
+    /// burned with is unequipped. Returns the key id to strip from the player (the port's
+    /// `code` — record u16[+2], the same word `Lock_Unlock` 0x1b0650 equips [M]).
+    pub fn re_lock(&mut self) -> Option<u16> {
+        self.burned = false;
+        self.unlocked = false;
+        Some(self.code)
+    }
+
+    /// `Lock_Update` 0x1ae3d8 **case 2** (the burnt-open tick): the decryptor locks (kind 0)
+    /// re-arm the moment their burn-through channel drops [M 0x1ae3d8 case 2: `if
+    /// (instance u16[0] == 0 && u16[+8] != 0 && switch_channels[u16[+8]] == 0)
+    /// Lock_ReLock(glb_players, lock)`]. `channel_on` reads that switch. Returns the key id to
+    /// unequip when the re-lock fired. (Kind 1 = the laser-burn locks never re-arm here [M —
+    /// the guard is `== 0`].)
+    pub fn update_burnt_open(&mut self, channel_on: bool) -> Option<u16> {
+        // Only the case-2 (burnt-open) tick runs this [M 0x1ae3d8:220-232]; the port's `burned`
+        // is that state [S mapping]. Any other state never re-locks.
+        if !self.burned {
+            return None;
+        }
+        if self.kind == 0 && self.out != 0 && !channel_on {
+            return self.re_lock();
+        }
+        None
+    }
+
     /// The lock of a placement index (the render's per-instance lookup, when the meshes land).
     pub fn of_placement(list: &[Lock], placement: usize) -> Option<usize> {
         list.iter().position(|l| l.placement == placement)
@@ -315,5 +345,42 @@ impl Keypad {
     /// [M 0x1ae3d8:292-295]).
     pub fn close(&mut self) {
         self.open = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lock(kind: u16, out: u16, code: u16) -> Lock {
+        Lock {
+            placement: 0, pos: [0.0; 3], radius: 1.0, out, key_channels: [0xffff; 2],
+            burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
+            kind, code, scan_progress: 0, scan_solved: 0, scanning: false,
+        }
+    }
+
+    // [M 0x1ae3d8 case 2 + 0x1b0750] a kind-0 lock re-arms when its channel drops; the key comes back.
+    #[test]
+    fn burnt_open_decryptor_locks_rearm_when_the_channel_drops() {
+        let mut l = lock(0, 0x88, 0x1234);
+        l.burned = true;
+        assert_eq!(l.update_burnt_open(true), None, "channel still on — no re-lock");
+        assert!(l.burned);
+        let key = l.update_burnt_open(false);
+        assert_eq!(key, Some(0x1234), "the unequipped key is the lock's record u16[+2]");
+        assert!(!l.burned && !l.unlocked, "state word back to 0");
+        // Sister (can fail): a kind-1 (laser-burn) lock never re-arms here — the guard is `== 0`.
+        let mut laser = lock(1, 0x88, 0x1234);
+        laser.burned = true;
+        assert_eq!(laser.update_burnt_open(false), None);
+        assert!(laser.burned);
+        // A kind-0 lock with no channel never re-arms (the game's `u16[+8] != 0` guard).
+        let mut mute = lock(0, 0, 0x7);
+        mute.burned = true;
+        assert_eq!(mute.update_burnt_open(false), None);
+        // A kind-0 lock that is not burnt open (state != 2) never re-locks [M 0x1ae3d8 case 2 only].
+        let mut idle = lock(0, 0x88, 0x1234);
+        assert_eq!(idle.update_burnt_open(false), None);
     }
 }

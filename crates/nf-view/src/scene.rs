@@ -1785,6 +1785,19 @@ pub fn portal_cel_chain_from_cell(graph: &CelGraph, start: usize, eye: [f32; 3],
 /// `door_closed` is the per-door `Door_IsClosed` (0x1367b0) snapshot (`Doors::closed_flags`), read
 /// per portal the same order the game reads it — after the eye-side plane test, before the clip
 /// [M `Vision_Recurse` 0x1e82e0:50-70]. `None` = the doors-less walk (the pre-G-035 behaviour).
+///
+/// This chain is the game's capture pipeline's tail, whose three never-mentioned members run
+/// inside `View_CaptureScene` 0x1e6df0 [M its decomp — the only caller of all three]:
+/// `Vision_Init_Portal_Recurse` 0x1e89a8 (reset `VisCelCount = 0`, `Mat_GetDir(viewer+0x120)`,
+/// `Vision_Calculate_View_Fustrum` — the port's `depth0` plane build + chain start), the
+/// `Vision_Portal_Recurse`/`Vision_Recurse` walk below, and `vision_generate_display_list`
+/// 0x1e8848 (`QuickSort` comparator 3 over `VisCelList` by recursion depth, then the cels
+/// threaded through `cel+0x20` with the sorted order — exactly the sort + order this fn
+/// returns; the viewer+0x20 accumulate bit is the game's own draw bookkeeping). The eye
+/// position itself is `vision_GetCamPos` 0x1e8990 (copies the 4 words at `ViewPoints`
+/// 0x2d67d0 — the current viewer position — into a caller vector) — the port's `eye`
+/// parameter, threaded from the frame camera by the renderer [M 001e8990/001e89a8/001e8848
+/// decomp; ViewPoints in the symtab 0x2d67d0 size 80].
 pub fn portal_cel_chain_from_cell_doors(graph: &CelGraph, start: usize, eye: [f32; 3], depth0: &[[f32; 4]; 5], door_closed: Option<&[bool]>) -> Option<Vec<usize>> {
     let mut visited = vec![false; graph.cells.len()];
     let mut planes: Vec<Vec<[f32; 4]>> = vec![Vec::new(); 48];
@@ -7282,7 +7295,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         //   0x3B DynamicObject_Create 0x18dbf8:19-31 (hidden until its
         //   switch channel when param 0 ≠ 0 — those stay skipped)
         //   0x71 rotor_init 0x18f4b8:24 · 0xD5 OneSided_Create 0x1e7ce8:14 (its per-frame backface self-cull
-        //   is the port's triangle culling) · 0xD8 RB_Create 0x1d6bf0:52 (rigid bodies evolve obj+0x90 once
+        //   is the port's triangle culling: `OneSided_Update` 0x1e7d58 — control_funcs[0x4c], dispatched by
+        //   `control_movement_object_handler` 0x1336f8's `control_funcs + kind*0xC` walk [M 0x1336f8; the
+        //   kind byte OneSided_Create writes at obj+0xff = 0x4c is exactly (0x26fc20 − control_funcs
+        //   0x26f890)/0xC [M symtab + decomp]] — dots (obj pos − cam pos) against the obj matrix's dir and
+        //   sets obj+0xF0 bit 0x10 when facing away; reached whenever a level places type-0xd5 objects —
+        //   07000041 does [D levels.md census]. The port's per-triangle backface cull of the placed glist
+        //   is the same job at draw time) · 0xD8 RB_Create 0x1d6bf0:52 (rigid bodies evolve obj+0x90 once
         //   disturbed; at rest = placement) · 0xE1 Destroy_Create 0x12c318:23 (death keeps the object drawn:
         //   Destroy_Smash 0x12bb60 sets class 1 and only swaps to the block-0x27 LOD variant when one exists)
         //   · 0xE3 Flicker_Create 0x1acb00:49 · 0xFA ThirdIcon_Create 0x197070:33 / 0xFD CamSubject_Create
