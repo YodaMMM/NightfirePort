@@ -43,6 +43,12 @@ pub const CLASS: u8 = 0x46;
 pub const CHILD_CLASS: u8 = 1;
 
 /// The glow record one spawn creates (the main object + its 14 children, ext[0] = owner).
+///
+/// Update-side (`BodyGlow_Update` 0x1ac2c8, the port does not run the update loop): every
+/// tick it recomputes the per-viewer display mask (a viewer whose view mode is 2 or whose
+/// HUD block +0x244 is set contributes its bit) and writes it with `View_SetViewMask`
+/// 0x1e7ac8 — the main object `mask | 0x10`, then each child the same (0x1ac2c8:223/257)
+/// — ported as `crate::view::set_view_mask` [M disasm 0x1e7ac8; docs/systems/view-display.md].
 #[derive(Clone, Debug, PartialEq)]
 pub struct BodyGlow {
     /// ext[0]: the owner object — the port stores the owning guard's `Drones::list` index.

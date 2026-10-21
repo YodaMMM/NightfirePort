@@ -71,6 +71,7 @@ pub mod trig;
 pub mod triggers;
 pub mod tuning;
 pub mod useobj;
+pub mod view;
 pub mod wire;
 pub mod world;
 pub mod worldobj;
