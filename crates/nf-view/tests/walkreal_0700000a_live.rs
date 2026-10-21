@@ -80,6 +80,79 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, label:
     }
 }
 
+/// The player's own answer to an alerted guard: aim at his chest through the view inputs and fire
+/// through the real trigger path (the same loop shape as shoot_at, re-reading the guard's LIVE
+/// position each tick) until he drops. The re-derivation under the game's drawn gate [M
+/// View_AddObjects 0x1e62d8 + Vision_InView 0x1e89e0]: the frustum legitimately moves the office
+/// floor's guards, and an alerted guard runs to the nearest alarm panel and presses it —
+/// `NDrone2_DSTATE_PressAlarm` 0x168ea8's timer C lands `SetMissionFailReason(drone, 0x10)`, the
+/// nearest switch's channel (0x61) rises and the mission fails (the fail label 0x04000032 in this
+/// run) — which the auto-restart serves as a LOAD_LEVEL back into 0x0700000a [M P_ENDMISSION_Handler
+/// 0x216618]. A player shoots the spotter before the press; the walk clears hostiles at the route's
+/// node boundaries for the same effect. Returns how many guards dropped.
+fn clear_hostiles(w: &mut Walker, radius: f32, max_ticks: u32) -> usize {
+    let mut dropped = 0usize;
+    loop {
+        let Some((gi, _gp)) = ({
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.present && d.enabled && d.team == 1 && !d.corpse && d.health > 0.0)
+                .map(|(i, d)| {
+                    let dist = ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt();
+                    (i, dist)
+                })
+                .filter(|(_, dist)| *dist <= radius)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| (i, ()))
+        }) else { return dropped; };
+        let start = w.total_ticks;
+        let mut last_tap = 0u32;
+        loop {
+            if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return dropped; }
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[gi];
+                if d.corpse || d.health <= 0.0 { dropped += 1; break; }
+            }
+            if w.total_ticks - start >= max_ticks {
+                eprintln!("[walk] clear_hostiles: guard {gi} did not drop in {max_ticks} ticks (moved on)");
+                break;
+            }
+            let input = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[gi];
+                let bp = sim.bond.pos;
+                let eye = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
+                let target = [d.pos[0], d.pos[1] + 1.0, d.pos[2]];
+                let dx = target[0] - bp[0];
+                let dz = target[2] - bp[2];
+                let dy = target[1] - eye;
+                let desired = dx.atan2(dz);
+                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                let want_pitch = (dy / walker::dxz(bp, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                let perr = want_pitch - sim.bond.pitch;
+                let on_target = err.abs() < 0.03 && perr.abs() < 0.05 && w.total_ticks - last_tap > 4;
+                if on_target { last_tap = w.total_ticks; }
+                nf_game::player::Input {
+                    turn: err.clamp(-0.08, 0.08),
+                    look: perr.clamp(-0.08, 0.08),
+                    aiming: true,
+                    ..Default::default()
+                }
+            };
+            let on = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[gi];
+                let bp = sim.bond.pos;
+                let err = walker::wrap_pi((d.pos[0] - bp[0]).atan2(d.pos[2] - bp[2]) - sim.bond.yaw);
+                err.abs() < 0.03
+            };
+            if on { w.tick_fire(input); } else { w.tick(input, false); }
+        }
+    }
+}
+
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch() {
     let mut w = load_carry(None);
@@ -183,7 +256,45 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // press now works with the lock driven).
     w.walk_to(Wp::at(-10.6, 0.4, -19.3, Act::Use { use_ticks: 400 }), "E the locked office door");
     w.walk_to(Wp::new(-9.7, 0.4, -19.3).r(1.0), "through the doorway");
-    assert!(w.follow_nav_route([21.72, 1.12, 19.4], "to the hatch"), "no nav route to the hatch");
+    // Diagnostic (this task): the office floor's LOAD_LEVEL triggers — the reload (next == this
+    // level) one must NOT sit on the walked corridor. Dumped while re-deriving the route under
+    // the game's frustum gate [M View_AddObjects 0x1e62d8]: the frustum legitimately moves the
+    // guards, and the walk's wedge points shift with them.
+    for (ti, t) in w.scene.sim.as_ref().unwrap().drones.triggers.iter().enumerate() {
+        if t.kind == nf_game::triggers::kind::LOAD_LEVEL {
+            eprintln!("[0a] LOAD_LEVEL trigger {ti}: pos {:?}..{:?} next {:#x} key {:#x} gate {:#x}",
+                t.lo, t.hi, t.next_level, t.key_gate, t.gate);
+        }
+    }
+    // The hatch exit: the graph's long way, walked node by node with the player's own hostile
+    // clears between the legs (clear_hostiles above — the alarm guard [M 0x168ea8] must not land
+    // his press). The route's nodes come from the same nav_route the walker's follow_nav_route
+    // uses [D nav dump].
+    let route = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        walker::nav_route(sim, sim.bond.pos, [21.72, 1.12, 19.4])
+    };
+    let route = match route {
+        Some(p) => p,
+        None => { assert!(w.follow_nav_route([21.72, 1.12, 19.4], "to the hatch"), "no nav route to the hatch"); Vec::new() }
+    };
+    for (k, p) in route.iter().enumerate() {
+        clear_hostiles(&mut w, 16.0, 900);
+        w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("to the hatch node {k}"));
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none() || k + 1 == route.len(),
+            "the mission failed mid-route at node {k} (an alarm the clear missed)");
+    }
+    clear_hostiles(&mut w, 16.0, 900);
+    {
+        // Diagnostic (this task): what failed the mission mid-route (the exit to 0x0700000a is
+        // the fail menu's auto-restart [M 0x216618] — ch 0x63 = the fail channel [M mission.rs]).
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0a] ch63 {} fail_label {} menu_open {}", sim.drones.channels.on(0x63), sim.drones.mission.fail_label, sim.drones.mission.menu_open);
+        for (oi, st) in sim.drones.mission.states.iter().enumerate() {
+            eprintln!("[0a] objective {oi} states {st:?}");
+        }
+    }
+    eprintln!("[0a] pre-assert report: falls {:?} stuck {:?}", w.report.falls, w.report.stuck_events);
     w.walk_to(Wp::at(21.72, 1.12, 19.79, Act::Use { use_ticks: 600 }), "E the hatch");
     {
         let sim = w.scene.sim.as_ref().unwrap();
