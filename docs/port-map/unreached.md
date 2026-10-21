@@ -112,3 +112,29 @@ Reached-elsewhere notes for the same task: `NDrone2_DSTATE_SeenDeadBody` 0x16acd
 `NDrone2_ReactToDroneAlertMsg` 0x1437a0, whose only caller is the MP bots'
 `NDrone2_DSTATE_BotGlobal` 0x16e060 [M] — MP counts as a shipped path, and the port now delivers
 the transition flow (`mp/bots.rs react_to_drone_alert_msg`).
+
+## 863-unported-animation-1 — the anim debug family and the two wrapper-gated spawners
+
+Evidence basis: an exhaustive reference sweep for each address [M] — every `JAL` encoding in the
+loaded `.text`/`.vutext` (0x107100-0x241c80) re-derived from the instruction word, every raw
+address word in the loaded `.data`/`.rodata`/`.sdata`/`.vudata`, every `lui`+`addiu` address
+formation pair, and the decompile call graph (`work/decomp/ACTION.ELF/`). The only symbol-table
+hits outside these are the functions' own `.symtab` entries. Boot and front end included: the
+same sweep covers every caller.
+
+| addr | name | size | why it is never reached (or never acts) |
+|---|---|---|---|
+| 0x1bc6e8 | AnimDebugHandler | 2240 | No reference anywhere in the loaded image [M]: zero `JAL` encodings, zero address words in `.data`/`.rodata`/`.sdata`, zero `lui 0x1b`+`addiu 0xc6e8` formations, zero decompile callers. A debug anim-viewer state machine (reads the `AnimDebugDisplay` switch global 0x30cb5f [M symtab, 1 byte], spawns mannequin test objects per `State_223`); kept by the linker, never called. |
+| 0x1c63b0 | AnimCacheDump | 8 | Its only `JAL` is at 0x1bc6fc — inside `AnimDebugHandler` (row above) [M]; no data references, no other callers. Body is `jr ra; nop` [M disasm 0x1c63b0]. |
+| 0x1bcfa8 | AnimDebugCreate | 896 | `JAL`ed unconditionally from `Player_Init` 0x1910f8:117 [M], but the body only acts when `GameState+0xc` is 0x07000043, 0x07000049 (the all-models mannequin circle) or 0x07000041 (the body-glow figure) [M 0x1bcfa8:72,140] — the wrapper codes nothing on the retail disc ever loads: every 0xE8 placement param-0 scan found no loader of 0x07000041/43/46/49 and the decompile has no loader constant for them [D; pinned in `crates/nf-view/tests/doublecross_transitions_live.rs:44`]. They are not in the MP sound-bank family either (`Sound_Ready` gives 0x07000041 bank 0xb, an SP bank [M 0x1dceb8:91; port `sound.rs:192`]). So the shipped game runs the call but the body returns at once on every on-foot level, front end and MP. The port's `Player_Init` site cites it (scene.rs). |
+| 0x1c64e0 | AnimObjectInitialPose | 172 | Its only `JAL` is inside `AnimDebugCreate`'s never-acting body (row above) [M]; no data references, no other callers. |
+
+Reached, cited at the port's code instead (the port does the same job under another name):
+`AnimCacheInit` 0x1c6390 — `JAL`ed from `ResetMap_GameInit` 0x1d5080:37 on every level start,
+body `jr ra; nop` [M disasm] (no anim cache exists to init); cited in `nf_view::load`.
+`AnimSeqGetHdrBuf` 0x1c7998 — `JAL`ed from `ResetMap_Load` 0x1d67c4 with a0=1, body
+`jr ra; or v0,zero,zero` (returns 0) and the caller never reads v0 [M disasm 0x1d67c4-0x1d67d8];
+cited in `nf_view::load`. `AnimObjectIsHeadTracking` 0x1c6850 and `AnimObjectIsAiming` 0x1c6900
+— reached through `NDrone2_DoHeadTracking` 0x1472c8 / `NDrone2_DoTracking` 0x1479d8 (drone ticks);
+the port's folds carry the masks and cite them (`anim::is_head_tracking` / `anim::is_aiming`,
+drone.rs `tracking` fold and `aims_torso`).

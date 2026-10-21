@@ -521,6 +521,27 @@ pub fn blend_playing(current: Pose, outgoing: &[(Pose, f32)]) -> Pose {
     out
 }
 
+/// The anim-object flag word at `animobj+0xc8` (the object the port folds into state lists — see
+/// `drone.rs` `aims_torso` for the aim side and the `tracking` fold for the head side).
+/// `AnimObjectIsAiming` 0x1c6900 tests `& 0x180`, `AnimObjectIsHeadTracking` 0x1c6850 tests `& 0x30` [M
+/// work/decomp/ACTION.ELF/001c6900, 001c6850].
+pub const ANIM_FLAGS_AIMING: u32 = 0x180;
+/// The head-tracking flag bits (`AnimObjectIsHeadTracking` 0x1c6850's mask) [M 001c6850].
+pub const ANIM_FLAGS_HEAD_TRACKING: u32 = 0x30;
+
+/// `AnimObjectIsAiming` 0x1c6900 [M 001c6900]: `(animobj+0xc8 & 0x180) != 0` once the object and its anim
+/// exist — the callers pass a live object, so the null arms (`obj == 0 || obj+0xdc == 0 → false`) live at the
+/// callers (`NDrone2_DoTracking` 0x1479d8 dereferences first). Reached only through the drone AI tick.
+pub fn is_aiming(flags: u32) -> bool {
+    flags & ANIM_FLAGS_AIMING != 0
+}
+
+/// `AnimObjectIsHeadTracking` 0x1c6850 [M 001c6850]: the 0x30 mask — `AnimObjectSetHeadTracking` 0x1c6748
+/// sets these bits (`drone.rs` tracking fold cites it); `NDrone2_DoHeadTracking` 0x1472c8 early-returns on it.
+pub fn is_head_tracking(flags: u32) -> bool {
+    flags & ANIM_FLAGS_HEAD_TRACKING != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -803,5 +824,41 @@ mod facial3_tests {
         let mut tmc = 0u16;
         let cmd = facial_update(&mut stc, &mut tmc, false, 3, &mut false, false, &mut rng);
         assert!(!cmd.blink && tmc == 0, "alert 3 freezes the blink");
+    }
+}
+
+#[cfg(test)]
+mod anim_object_flag_queries {
+    use super::*;
+
+    /// `AnimObjectIsAiming` 0x1c6900: the 0x180 mask — either bit alone aims, both aim, and the
+    /// head-tracking bits 0x30 are NOT aim bits [M 001c6900: `(*(uint *)(iVar1 + 200) & 0x180) != 0`].
+    /// Sister: the same word with only the 0x30/0x40/0x200 bits set does not aim.
+    #[test]
+    fn is_aiming_follows_the_0x180_mask() {
+        assert!(is_aiming(0x180), "both aim bits set [M 001c6900]");
+        assert!(is_aiming(0x080), "the 0x80 bit alone aims");
+        assert!(is_aiming(0x100), "the 0x100 bit alone aims");
+        assert!(is_aiming(0x180 | 0x30), "aim bits win over the track bits");
+        // The sister: the neighbouring flags must not leak into the aim answer.
+        assert!(!is_aiming(0x30), "head-track bits 0x30 are not aim bits");
+        assert!(!is_aiming(0x40), "0x40 (outside both masks) is not an aim bit");
+        assert!(!is_aiming(0x200), "0x200 is outside the 0x180 mask");
+        assert!(!is_aiming(0), "the idle flag word does not aim");
+    }
+
+    /// `AnimObjectIsHeadTracking` 0x1c6850: the 0x30 mask — 0x10 and 0x20 each track; the aim bits
+    /// 0x180 are NOT track bits [M 001c6850: `(*(uint *)(iVar1 + 200) & 0x30) != 0`].
+    /// Sister: the aim flag word with no track bits does not head-track.
+    #[test]
+    fn is_head_tracking_follows_the_0x30_mask() {
+        assert!(is_head_tracking(0x30), "both track bits set [M 001c6850]");
+        assert!(is_head_tracking(0x10), "the 0x10 bit alone tracks");
+        assert!(is_head_tracking(0x20), "the 0x20 bit alone tracks");
+        assert!(is_head_tracking(0x30 | 0x180), "track bits win over the aim bits");
+        // The sister: the aim bits must not leak into the track answer.
+        assert!(!is_head_tracking(0x180), "aim bits 0x180 are not track bits");
+        assert!(!is_head_tracking(0x40), "0x40 is outside the 0x30 mask");
+        assert!(!is_head_tracking(0), "the idle flag word does not track");
     }
 }
