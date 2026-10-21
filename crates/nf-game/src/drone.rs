@@ -4022,6 +4022,9 @@ impl Drone {
             .or_else(|| if group == 2 { crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 1, owner) } else { None });
         let Some(pi) = hit else { return false };
         self.goal = Some(d.ai_points[pi].pos);
+        // `AINetwork_InvalidateRoute(drone+0x860)` before SetupGoalPosition/MoveToGoalPosition —
+        // every ask rebuilds the route even when a stale valid one exists [M 0x153168:41, 76].
+        self.croute = None;
         matches!(self.move_to_goal(d), 0..=3)
     }
 
@@ -6025,6 +6028,9 @@ impl Drone {
             (AIM_BACKOFF, msg::UPDATE) => {
                 if !(self.dist <= self.engage_range && self.unseen_ticks < 16 && self.can_backoff(d)) { self.set_state(AIM_STAND); return true; }
                 self.desired_yaw = self.yaw_to_opp;
+                // `EvasiveMove` FIRST [M 0x166b98:37-40] — non-zero means the dodge state is already
+                // set inside (the old code asked ChooseCombatMove only: the stand-in).
+                if self.evasive_move(d, rng) != 0 { return true; }
                 if self.firing && !self.burst_done { return true; }
                 self.fire(d, rng, frame, true);
                 let m = self.choose_combat_move(d, rng);
@@ -7450,6 +7456,52 @@ impl Drone {
             case += 1;
         };
         if (result == AIM_STAND && self.state == AIM_STAND_FIRE) || (result == AIM_CROUCH && self.state == AIM_CROUCH_FIRE) || result == self.state { 0 } else { result }
+    }
+
+    /// `NDrone2_EvasiveMove` (0x1506d8) — the evasive mover `AimBackoff` 0x68 asks FIRST
+    /// (`NDrone2_DSTATE_AimBackoff` 0x166b98 case 3: `EvasiveMove` → non-zero: the state is already
+    /// set, return; else the fire logic + `ChooseCombatMove`). The gate: the movement lock
+    /// `+0x4f8 & 0x10` (the port's `stationary`) and `OpponentIsAimingAtMe(7.5)` [M 0x1506f8-720;
+    /// the armed-opponent + `+0x2A` latch pair the port models as `aimed_at && bond_armed`, the
+    /// choose_combat_move gate]. The option list — 1 roll (prop 0x2e + CanDo 0x53), 2 strafe
+    /// (prop 0x41 + CanDo 0xc), 3 dodge (prop 0x13 + CanDo 0x29), 4 step (prop 0x42 + CanDo 0x5a),
+    /// each lock-gated [M 0x15073c-0x1508a8] — feeds `Rand(count)`, consumed even when the list is
+    /// empty (Rand(0) still advances both seeds [M-dis 0x1508ac-0x1508d0 + Rand_Rand 0x1e3738]).
+    /// The pick selects the ENTRY into the fixed recheck chain roll → strafe → dodge [M-dis
+    /// 0x1508d8-0x1509c8]: the roll recheck re-gates prop 0x2e + the lock + CanDo(0x53) and burns
+    /// its Rand(2) + Can* pair; the strafe recheck re-gates prop 0x41 ONLY; NEITHER assigns a
+    /// state — their Can* results are discarded [M-dis 0x150978-0x150a10, the success paths jump
+    /// straight to the next recheck]. Only the dodge recheck (prop 0x13, no CanDo re-check
+    /// [M-dis 0x150a14-0x150a30]) assigns: Rand(2) sides the pair (0 → right-first), the winner
+    /// 0x78/0x77 is `SetState`d when mode (+0xc5) != 0x1e and returned (0 none) [M-dis
+    /// 0x150a38-0x150a8c + the tail 0x150a90-0x150ab0].
+    fn evasive_move(&mut self, d: &Data, rng: &mut Rng) -> u8 {
+        use state::*;
+        if self.stationary || !(self.aimed_at && self.bond_armed) { return 0; }
+        let mut opts = Vec::new();
+        if self.prop(d, 0x2e) && self.can_do(d, anim_state::ROLL_LEFT) { opts.push(1) }
+        if self.prop(d, 0x41) && self.can_do(d, anim_state::STRAFE_LEFT) { opts.push(2) }
+        if self.prop(d, 0x13) && self.can_do(d, anim_state::DODGE_LEFT) { opts.push(3) }
+        if self.prop(d, 0x42) && self.can_do(d, anim_state::STEP_LEFT) { opts.push(4) }
+        let picked = opts.get(rng.rand(opts.len() as u32) as usize).copied().unwrap_or(0);
+        // The recheck chain from the picked entry; the roll/strafe arms consume their Rand(2) when
+        // their gates pass and discard the Can* verdicts (pure probes — no RNG, no state).
+        if picked <= 1 && self.prop(d, 0x2e) && !self.stationary && self.can_do(d, anim_state::ROLL_LEFT) {
+            rng.rand(2); // the pair's verdicts are discarded [M-dis 0x150978-0x1509b0]
+        }
+        if picked <= 2 && self.prop(d, 0x41) {
+            rng.rand(2); // no CanDo re-check here [M-dis 0x1509b4-0x1509c8]; verdicts discarded
+        }
+        if picked <= 3 && self.prop(d, 0x13) {
+            let m = if rng.rand(2) == 0 {
+                if self.can_move(d, -3.6, 0.0) { STRAFE_DODGE_RIGHT }
+                else if self.can_move(d, 3.6, 0.0) { STRAFE_DODGE_LEFT } else { 0 }
+            } else if self.can_move(d, 3.6, 0.0) { STRAFE_DODGE_LEFT }
+            else if self.can_move(d, -3.6, 0.0) { STRAFE_DODGE_RIGHT } else { 0 };
+            if m != 0 && self.mode != 0x1e { self.set_state(m); }
+            return m;
+        }
+        0
     }
 
     /// `DroneFunc_CombatState` (0x148338): the combat decision for 0x58 / 0x5A / 0x5C / 0x5E / 0x68 / 0x70. Every
