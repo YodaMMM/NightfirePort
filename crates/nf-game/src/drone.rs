@@ -3569,6 +3569,9 @@ impl Drone {
     /// `+0x53C` (a facial anim attached) by the callers. The port has no facial system, so these lines
     /// stay silent and never advance the Bond-talk bookkeeping (843 returned the sfx id for non-facial
     /// entries, advancing the cooldown/count on lines the game never plays — review 2026-10-21).
+    /// [S] gap: an entry WITH a facial id whose script is not loaded on the level takes the hashtable-miss
+    /// arm (facialAnimId := 0, then DIRECT — it plays and returns a handle) [M 0x141b00; speech.md §1.3];
+    /// the port has no facial-script presence test, and `Drones::speech` skips facial-id lines — task 945.
     fn speech_request(&mut self, _d: &Data, _idx: usize, _force: bool) -> u32 { 0 }
 
     /// `SpeechSFX(idx, 0, 0, 0)` — the DIRECT path [M 0x141b00; speech.md §1.3]: plays when the entry has
