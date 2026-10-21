@@ -108,6 +108,13 @@ pub struct Trigger {
     /// (0x1b1d78-0x1b1d90) or a Bond-moment AND (out 0x65-0x6E, 0x1b1da0). `Trigger_Create` sets `obj+0xF0` from
     /// the object's glist [M 0x1b1720]; the port does not read glist+0x44 yet — live data: every TouchOnce on
     /// 07000005 carries the bit [L, trigger-port-check #6] — so the flag is modelled as set.
+    ///
+    /// The same word's low bits are the EFFECT TYPE: `Trigger_Update` 0x1b1a78:45 calls
+    /// `Control_SetEffectType` 0x134940 every tick — `*(obj+0xF0) = effect | *(obj+0xF0) & 0x30008000`
+    /// [M 0x134940:6-7], the effect taken from the trigger's glist+0x44 (or the obj's own word when
+    /// the glist is 0) [M 0x1b1a78:31-44]. The effect-type readers are render-side (the spawned
+    /// effect class); the port carries no per-trigger effect word — recorded here at the word this
+    /// field models, not silently dropped.
     pub glist_0x10: bool,
     /// `ext+0x2E` (`mask & 1`'s base channel, `Trigger_Hit` 0x1b1fc8:63-68): the filter list's 5th entry — for the
     /// Touch families that is param 6 (the same param the lock reads; both live at ext+0x24/+0x2E from slot p6).
