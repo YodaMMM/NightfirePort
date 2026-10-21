@@ -20,7 +20,7 @@ const ACC: [f32; 3] = [0.5, 0.7, 1.0];
 /// [L work/ee_start_07000001.bin @ 0x30cc50/54/58] — `Plr_DMod_*` (ReadTuningVars group 0x1d3e00).
 const DMG: [f32; 3] = [0.5, 0.7, 1.2];
 
-struct Shot { frame: u32, hit: bool }
+struct Shot { frame: u32, hit: bool, dist: f32 }
 
 /// Drive one guard into firing at a still Bond 10 units away and collect `wanted` shots from him
 /// alone (Bond topped back to 100 health each tick so the per-hit deltas stay exact). Returns
@@ -38,7 +38,7 @@ struct Shot { frame: u32, hit: bool }
 /// 0x179740:100-110 vs drone.rs's fire_weapon], so filtering on `seen_ticks >= 120` samples the
 /// same subset the model describes. Sister: the gated shots still exist (the filter's skip count
 /// is logged and asserted non-negative trivially — a run with zero gated shots is a no-op).
-fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, warmup_shots: u32) -> (usize, Vec<Shot>, Vec<f32>, f32) {
+fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, warmup_shots: u32) -> (usize, Vec<Shot>, Vec<(f32, f32)>, f32) {
     // Live guards with the weapon, the standard stats and the standard ×1 damage multiplier —
     // tried in order until one actually opens fire (some are elevated or scripted and never do).
     let candidates: Vec<usize> = {
@@ -59,6 +59,8 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
     let mut hit_events: Vec<(u32, f32)> = Vec::new(); // (bullet-arrival frame, health delta) for this guard
     // fix-guard-weapons3: per-shot gate-clean flags (aligned with `d.shots[w0..]`), for the final candidate.
     let mut gate_ok: Vec<bool> = Vec::new();
+    // ai-sight-drawn-gate-3: the fire-time guard distance per collected shot (the band split).
+    let mut gate_dist: Vec<f32> = Vec::new();
     'guards: for &cand in &candidates {
         let mut placed = false;
         // ai-sight-drawn-gate-3: the park-distance ladder 10/7/5. The frustum sight gate moved the
@@ -121,6 +123,7 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
         // block runs before the fire in the same tick, so the post-tick read is what the fire's
         // gate saw [M 0x179740:100-110].
         gate_ok.clear();
+        gate_dist.clear();
         let cap = 60000u32;
         loop {
             let sim = scene.sim.as_mut().unwrap();
@@ -129,7 +132,8 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
             {
                 let d = &sim.drones.list[guard];
                 let clean = d.seen_ticks >= 120;
-                while w0 + gate_ok.len() < d.shots.len() { gate_ok.push(clean); }
+                let dist = ((d.pos[0] - sim.bond.pos[0]).powi(2) + (d.pos[2] - sim.bond.pos[2]).powi(2)).sqrt();
+                while w0 + gate_ok.len() < d.shots.len() { gate_ok.push(clean); gate_dist.push(dist); }
             }
             let got = gate_ok.iter().filter(|&&c| c).count();
             let frame = sim.drones.frame;
@@ -178,17 +182,18 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
             .map(|(_, f)| *f).collect()
     };
     let mut shots = Vec::new();
-    let mut deltas = Vec::new();
+    let mut deltas: Vec<(f32, f32)> = Vec::new(); // (health delta, the shot's fire-time distance)
     let mut hi = 0usize;
     for k in 0..wanted as usize {
         let f = frames[k];
         let next = frames.get(k + 1).copied().unwrap_or(u32::MAX);
+        let dist = *gate_dist.get(k).unwrap_or(&10.0);
         let mut hit = false;
         while hi < hit_events.len() && hit_events[hi].0 < f { hi += 1; }
         while hi < hit_events.len() && hit_events[hi].0 < next {
-            hit = true; deltas.push(hit_events[hi].1); hi += 1;
+            hit = true; deltas.push((hit_events[hi].1, dist)); hi += 1;
         }
-        shots.push(Shot { frame: f, hit });
+        shots.push(Shot { frame: f, hit, dist });
     }
     let dist = scene.sim.as_ref().unwrap().drones.list[guard].dist;
     (guard, shots, deltas, dist)
@@ -220,8 +225,15 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             let (acc, mul) = (sim.drones.list[guard].accuracy, sim.drones.list[guard].damage_mul);
             let expected_rate = (100.0_f32 - 5.0 * acc as f32) * acc_tbl[(diff - 1) as usize] / 100.0;
             let expected_hit = record_damage * mul * dmg_tbl[(diff - 1) as usize];
-            let hits = shots.iter().filter(|s| s.hit).count();
-            let n = shots.len();
+            // ai-sight-drawn-gate-3: the model's domain is the out-of-band shots (dist > 3.0
+            // [L 0x30cb14]); an in-band shot is a forced hit with double damage [M the
+            // too_close branch] — the guard closes during a long engagement (the measured run
+            // crossed the band around shot #118), so the sample splits by the fire-time
+            // distance instead of assuming the whole run stays out of the band.
+            let out_of_band: Vec<&Shot> = shots.iter().filter(|s| s.dist > 3.0).collect();
+            let hits = out_of_band.iter().filter(|s| s.hit).count();
+            let n = out_of_band.len();
+            assert!(n >= 100, "only {n} of {} shots sampled outside the 3.0 band — the model cell has no sample", shots.len());
             eprintln!("[gw] {level} diff {diff} weapon {weapon:#x} (guard {guard}, acc {acc}, mul {mul}): {hits}/{n} hits (model {:.2}), per-hit {:?} (model {expected_hit}), dist {dist:.2}",
                 expected_rate * 100.0, &deltas[..deltas.len().min(6)]);
             // The model's only distance term is the binary TooClose ×2 (< 3.0 [L 0x30cb14]) —
@@ -242,8 +254,13 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             // and 100 − 98.349998 = 1.6500015. The game's health is the same float pool, so pin
             // the pool round-trip of the model value, not the raw product.
             let pool_hit = 100.0_f32 - (100.0_f32 - expected_hit);
-            for (k, &d) in deltas.iter().enumerate() {
-                assert_eq!(d, pool_hit, "{level} diff {diff} weapon {weapon:#x}: hit #{k} damage {d} vs model {expected_hit} (pool {pool_hit})");
+            for (k, &(d, dist)) in deltas.iter().enumerate() {
+                // The band split on the damage too: an in-band hit is the forced ×2 [M the
+                // too_close branch] — the same event the TooClose test pins deliberately.
+                let band_hit = dist > 3.0;
+                let expect = if band_hit { pool_hit } else { pool_hit * 2.0 };
+                assert_eq!(d, expect, "{level} diff {diff} weapon {weapon:#x}: hit #{k} (band {}) damage {d} vs model {expected_hit} (pool {pool_hit})",
+                    if band_hit { "out" } else { "TOOCLOSE" });
             }
         };
         // 07000001 in one scene, in this order: 0x0e fires on a fresh level; the 0x12 guards only
