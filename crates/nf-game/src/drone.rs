@@ -12692,6 +12692,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         for (oi, b, si) in alerts {
             let o = &mut self.list[oi];
+            // The game's alert receiver `NDrone2_ReactToDroneAlertMsg` 0x1437a0 routes the alert kinds
+            // straight to Attack 0x56 or, for the shot kind, parks in `NDrone2_DSTATE_SeenDroneShot`
+            // 0xa0 whose only behaviour is ENTER → 0x56 [M 0x1437a0:263,368 + 0x173b78] — the port
+            // folds both into this FORCED_ATTACK send (its intercept enters ATTACK).
             // `DroneFunc_DoForcedAttack` 0x148c60's gate: on 07000007 while the interrogate latch
             // (`DAT_0029aa86` — `party_loud` here) is 0, only the bouncer mode 0x13 and the
             // CivilianMission 0x16 walkers force-attack; the guests hold the party [M 0x148c60:10-13].
