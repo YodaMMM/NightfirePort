@@ -531,3 +531,80 @@ selects:
   probes, the 1/8-per-tick radius smoothing toward viewer+0x1f0 = 4.0, the position/angle
   writes) in case a future build or debug mode needs it; the port's live camera modes live in
   `crates/nf-view/src/scene.rs` (cam2/creep/script cameras) and modes 4/5/6/0xa stay absent.
+
+## unported-misc-7 (2026-10-21) — the misc 25: soft-float doubles, mcman glue, IPU DMA, libm, CRT
+
+Method note: the caller evidence below is a machine-level scan of `work/elf/ACTION.ELF` (every
+`jal` opcode resolved to its target, plus every `lui`+`ori`/`addiu` immediate pair that builds a
+target address as a value, plus a whole-file 4-byte data-word scan), cross-checked against the
+decompile's call names. "0 references" = no jal, no data word, no immediate anywhere in the
+loaded segments.
+
+### The gcc2 soft-float double helpers — the EE has no double FPU
+
+`fptodp` 0x2246d0, `dpadd` 0x224b20, `dpsub` 0x224b78, `dpmul` 0x224be0, `dpdiv` 0x224e88,
+`dpcmp` 0x225108, `litodp` 0x225158, `dptoli` 0x225210, `dptoul` 0x2252a8, `dptofp` 0x225378
+are libgcc2's software double routines (Ghidra marks each file "inlined function"; the WARN lines
+in the callers' decompiles show the compiler injected them).
+
+- **Reached and replaced in the port** (cited at the Rust job sites, see the report):
+  `fptodp` 0x2246d0 (48 jal sites: the two live HUD panes + the P_TWEAKS handlers + the libm
+  family [M]); `dptofp` 0x225378 (jal 0x232e18 inside the live `asinf` 0x232d48 [M]);
+  `dpcmp` 0x225108 (jal 0x2352f4 inside `matherr` 0x2352e8, which the live `asinf`/`expf` jal on
+  the |x|>1 / overflow error paths at 0x232ddc/0x232f04 [M]; also 27 more jal sites in the %f
+  print path). `tanf` 0x232bc0, `asinf` 0x232d48, `expf` 0x232f70 are the libm entry points —
+  replaced by Rust `f32::tan/asin/exp` (citations in `crates/nf-game/src/drone.rs`
+  `frustum_sides`/`auto_aim`, `crates/nf-game/src/rigid_body.rs`, `crates/nf-view/src/hud.rs`).
+- **Not reached by the shipped game** — `dpadd` 0x224b20, `dpsub` 0x224b78, `dpmul` 0x224be0,
+  `dpdiv` 0x224e88, `litodp` 0x225158, `dptoli` 0x225210, `dptoul` 0x2252a8 [M]: their only jal
+  callers are the %f print machinery — `cvt` 0x2386a0 / `_dtoa_r` 0x238c58 internals
+  (0x238e88..0x239610), `printfloat` 0x23ce08 (0x23ce38/0x23ced8), the gcc2 blobs 0x240890/0x240980
+  (jal'd from printfloat 0x23cf0c), i.e. the printf %f conversion path. That path was already
+  proven dead on retail: "the game's only %f sprintfs are `switch_SHOW_COORDS`-gated debug
+  overlays whose control never ships [M 0x19b9c8:266-273 + D census]" (unported-front-end-menus-6,
+  the `cvt` row of its report). No gameplay double arithmetic exists in ACTION.ELF outside the
+  HUD panes' `fptodp` promotions. The port's native f64 ops replace all of them.
+
+### zerobss 0x2242a8 (164 bytes) — the CRT entry
+
+**Reached only as the ELF entry point** — 0 jal, 0 data, 0 immediate references [M scan]; it is
+what runs first (zero BSS from `isStarted` to `_end`, syscall 0x3c/0x3d, FlushCache, EI, jump to
+`main` 0x109080 [M decompile]). Unreached-by-replacement: the port's Rust `std` runtime start-up
+does this job; there is no BSS to zero.
+
+### DPRINT 0x226b40 (40 bytes) — dead debug stub
+
+**Never reached.** Body is a bare `return` [M decompile]; 0 jal / 0 data / 0 immediate references
+in ACTION.ELF [M scan]. Its only would-be callers are the `sceMtap*` multitap logging sites —
+and those names never appear as calls from game code either (the 8 jal sites 0x226bd0..0x226f18
+are inside the sceMtap functions themselves). No port side needed.
+
+### mcman / mcevacd memory-card SDK glue — the IOP side the port replaces
+
+- `mcDelayThread` 0x2285a0 + `mcHearAlarm` 0x228578 — **reached on hardware** (`sceMcSync` 0x2285e8
+  jal's mcDelayThread at 0x228650 [M]; mcDelayThread `SetAlarm(...,0x228578,...)` registers
+  mcHearAlarm via the immediate at 0x2285ac [M]; sceMcSync is jal'd from the six `MemCard_*`
+  game states 0x10f4c4/0x11019c/0x110338/0x110650/0x110888/0x110c24 [M]) — but it is IOP
+  thread/sleep glue with no port counterpart: the port's card flow (`crates/nf-view/src/menu.rs`
+  memcard-save-flow machine) polls a directory and has no threads to wake. Cited as replaced at
+  that machine (see the report).
+- `mceIntrReadFixAlign` 0x228248, `mceGetInfoApdx` 0x2286c8, `mceStorePwd` 0x228a08 — **never
+  referenced**: 0 jal, 0 data words, 0 immediate pairs [M scan]. Dead mcman-library weight in the
+  EE text (their IOP-side callers live in mcman.irx, not ACTION.ELF). No port side needed.
+
+### The IPU / MPEG DMA family — the front-end FMV pipeline the port skips
+
+`dmaRefImage` 0x22ffd8 (jal 0x22b664 in the `_pack_header`/demux blob), `receiveDataFromIPU`
+0x230130 (jal 0x22df7c in the `_doMC`/`_rix_000` decode blob), `setD3_CHCR` 0x2325b0 (jal
+0x2326fc/0x2327e4 in `sceIpuStopDMA`/`sceIpuRestartDMA`), `setD4_CHCR` 0x232618 (jal 0x232690 in
+`sceIpuStopDMA`), `setD4_CHCR` 0x232920 (jal 0x232990 in `sceIpuInit`, which `sceMpegInit`
+0x22a140 jal's, which `psiStartBackgroundMovie` 0x1081a8 jal's at 0x1083e4 [M]).
+
+**Reached on the shipped front end** — `psiStartBackgroundMovie` has 8 jal callers in the loader
+and front-end menu handlers (0x1d66d8 ResetMap region; 0x20a000/0x20a0f0/0x20a2c4/0x20adc0;
+0x214fa0/0x215174/0x215a08 CN-menu/keyboard region) [M]: the menu background movie's macroblocks
+and reference images cross the IPU through these DMAC channel start/stop helpers. Unreached-by-
+replacement: the port plays no FMV and has no IPU — the psi background-movie entry is absent from
+the port's front end, so this whole hardware pipeline (SPR→TADR chains, IPU_FROM/TO channels,
+CHCR STR writes) has no port side to cite. If a future build wants menu FMV, these five are the
+DMA primitives (bodies recorded here and in the decompile).

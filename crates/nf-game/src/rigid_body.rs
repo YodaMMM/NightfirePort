@@ -17,7 +17,9 @@
 //! post-RB_Init/RB_Build/RB_SetState state. The disturbed-body evolution (`RB_Update` 0x1d6e38,
 //! `RB_EulerEvolve` 0x1d7810, `RB_ApplyImpulses` 0x1d6ff8, `RB_RestingContact` 0x1d7168) is the
 //! tracked gap (docs/systems/levels.md §7.1, the level reports) — this module ports the four
-//! init functions so the evolution port has its base.
+//! init functions so the evolution port has its base. When that evolution port lands, its drag
+//! term is the game's `expf` 0x232f70 (libm; jal at 0x1d78a8/0x1d7904 in `RB_EulerEvolve` [M ELF
+//! jal scan]) — Rust's native `f32::exp` replaces it there [M unported-misc-7].
 //!
 //! All offsets are the RIGIDBODY ext block (obj+0xE0, 0x160 bytes [M RB_Init memset]).
 //!
