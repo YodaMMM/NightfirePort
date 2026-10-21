@@ -82,3 +82,48 @@ fn a_blast_hurts_the_hiding_escort() {
     blow(sim, 0.0);
     assert!(sim.drones.list[escort].health < h0, "a blast at his feet hurts the hiding escort [M 0x15ec08 case 9] ({h0} → {})", sim.drones.list[escort].health);
 }
+
+/// After the cover run and the hide, the fight ends (every started hostile moved beyond the
+/// 14-unit clear band [M 0x15ec08 case 3]) and the escort returns to the lead (AllyLead case 1
+/// re-points +0x854 at the mission route +0x970 [M 0x15e698]) — and LEADS: he must move off the
+/// cover point along his route. Sister: he reached the cover point first (0x28 ran).
+#[test]
+fn the_escort_resumes_the_route_after_cover() {
+    let iso = iso();
+    let mut scene = nf_view::load(&iso, "07000001.bin", false).expect("load 07000001");
+    let sim = scene.sim.as_mut().unwrap();
+    for _ in 0..3000u32 { sim.step_bond(Input::default(), false, false, false); if sim.drones.channels.on(0xb) { break; } }
+    let escort = sim.drones.list.iter().position(|d| d.skin == 0x0500_004f).expect("the escort");
+    let ep = sim.drones.list[escort].pos;
+    sim.bond.pos = [ep[0], ep[1], ep[2] + 2.0];
+    let mut ran = false;
+    for _ in 0..600u32 {
+        sim.step_bond(Input::default(), false, false, false);
+        let st = sim.drones.list[escort].state;
+        if st == state::GO_TO_GOAL_ALLY { ran = true; }
+        if ran && st == state::LEAD_HIDE { break; }
+    }
+    assert!(ran, "the cover run happened");
+    for g in sim.drones.list.iter_mut().filter(|g| g.team == 1 && g.started && !g.corpse) {
+        g.pos = [g.pos[0] + 60.0, g.pos[1], g.pos[2] + 60.0];
+    }
+    let mut back = false;
+    for _ in 0..300u32 {
+        sim.step_bond(Input::default(), false, false, false);
+        if sim.drones.list[escort].state == state::ALLY_LEAD { back = true; break; }
+    }
+    assert!(back, "the hide clears back to the lead");
+    let p0 = sim.drones.list[escort].pos;
+    let mut best = 0.0f32;
+    for t in 0..400u32 {
+        // Bond keeps close behind (inside the follow band, out of the in-way cone).
+        let d = &sim.drones.list[escort];
+        let (p, yaw) = (d.pos, d.yaw);
+        sim.bond.pos = [p[0] - yaw.sin() * 3.0, p[1], p[2] - yaw.cos() * 3.0];
+        sim.step_bond(Input::default(), false, false, false);
+        let d = &sim.drones.list[escort];
+        best = best.max(((d.pos[0] - p0[0]).powi(2) + (d.pos[2] - p0[2]).powi(2)).sqrt());
+        if t % 50 == 0 { eprintln!("t{t} state {:#x} pos {:.2?} path {:.1}", d.state, d.pos, d.mission_path_dist); }
+    }
+    assert!(best > 2.0, "the escort leads on after the cover (moved {best:.2} from {p0:.2?})");
+}
