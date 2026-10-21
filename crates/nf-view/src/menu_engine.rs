@@ -459,7 +459,7 @@ pub fn component_destroy_all(list: &mut Vec<ComponentSet>, page: u8) {
 
 /// The alpha side effect of Component_SetupInstance — computed per visible instance
 /// [M 0x1f0950: (mask & 0x20 == 0 || inst.wf != 0 || inst.hf != 0) →
-/// mask & 0xc0 ? Menu_AlphaReset : Menu_AlphaGet; else nothing].
+/// mask & 0xc0 ? Menu_AlphaReset : nothing; else Menu_AlphaGet].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlphaOp {
     None,
@@ -497,7 +497,8 @@ pub struct PlacedSprite {
 pub fn component_setup_instance(
     ctrl: &MenuControl,
     page: &MenuControl,
-    record: &Component,
+    record: &mut Component,
+    sprite_h: &[i16],
     mask: u32,
     x: i16,
     y: i16,
@@ -513,7 +514,7 @@ pub fn component_setup_instance(
     let mut acc_left: i32 = 0; // iStack_c4
     let mut acc_right: i32 = ah; // iVar14
     let mut out = Vec::new();
-    for (i, inst) in record.instances.iter().enumerate() {
+    for (i, inst) in record.instances.iter_mut().enumerate() {
         if inst.flags & mask == 0 {
             out.push(PlacedSprite {
                 sprite_ix: i, layer_delta: 0, x: 0, y: 0, w: 0, h: 0, hidden: true,
@@ -528,8 +529,9 @@ pub fn component_setup_instance(
         // cross-axis fits first [M the 0x100 then 0x200 blocks]
         if flags & 0x100 != 0 {
             inst_w_slot = if inst.hf == 0.0 {
-                // the game copies the sprite's current +0x2e [M 0x1f0950]
-                inst.h
+                // the game copies the control SPRITE's current +0x2e (its placed h), not the
+                // instance's +0x12 [M 0x1f0950 `*(sprites[i]) + 0x2e`]
+                sprite_h.get(i).copied().unwrap_or(0)
             } else {
                 ((acc_right - acc_left) as f32 * inst.hf) as i16
             };
@@ -541,6 +543,9 @@ pub fn component_setup_instance(
                 ((acc_bot - acc_top) as f32 * inst.wf) as i16
             };
         }
+        // the slot writes land in the record (+0x10/+0x12) and persist to the next call [M]
+        inst.w = inst_w_slot;
+        inst.h = inst_h_slot;
         // span-driven sizes [M the wf/hf branches with the (v<0→0, v>span→span) clamp]
         let w_f = if inst.wf == 0.0 {
             inst_w_slot as i32
@@ -586,14 +591,16 @@ pub fn component_setup_instance(
         } else {
             (page.y as i32 + py + inst.dy as i32) as i16
         };
+        // [M 0x1f0950]: (mask & 0x20 == 0 || wf != 0 || hf != 0) → AlphaReset only when
+        // mask & 0xc0, else nothing; the remaining case (0x20 set, no fractions) → AlphaGet.
         let alpha = if mask & 0x20 == 0 || inst.wf != 0.0 || inst.hf != 0.0 {
             if mask & 0xc0 != 0 {
                 AlphaOp::Reset
             } else {
-                AlphaOp::Get
+                AlphaOp::None
             }
         } else {
-            AlphaOp::None
+            AlphaOp::Get
         };
         out.push(PlacedSprite {
             sprite_ix: i,
@@ -768,8 +775,9 @@ pub struct Combo {
     pub y: i16,
     pub w: i16,
     pub h: i16,
-    /// +0x78 — rows = u16 NEW_CONTROL+0x16.
-    pub rows: u16,
+    /// +0x78 — the draw layer = u16 NEW_CONTROL+0x16 [M 0x1f0248 `*(u16*)(combo+0x78) =
+    /// nc+0x16`; +0x78 is the layer every control carries — Menu_CursorOverMe/FindControl].
+    pub layer: u16,
     /// +0x714 — the item text extent + 2.0 [M `fStack_cc + 2.0`].
     pub item_w: f32,
     /// +0x718 — (h ÷ row height) − 1; the row height is the control's own +0x5c4 float
@@ -781,20 +789,27 @@ pub struct Combo {
 }
 
 impl Combo {
-    /// Combo_Init 0x1f0248. `new_control` = (v00, v0c, handle_hi, rows, x, y, w, h) — the
-    /// NEW_CONTROL fields the game reads (+0x00 u32, +0x0c u32, +0x14 u16, +0x16 u16,
-    /// +0x18 x, +0x1a y, +0x1c w, +0x1e h [M disasm + the FixupResolution cross-check]).
-    /// `item_extent` = the Font_GetTextExtent width for the combo's charset row
-    /// (0x305c60/0x30d150). `row_h` = the control's +0x5c4 row height. `comp` = the
-    /// component record the four Component_GetHandle reads use (its +6 short offsets the
-    /// label/list children; its +8/+10 shorts size them) [M 0x1f0378-0x1f0458].
+    /// Combo_Init 0x1f0248. `new_control` = (v00, v0c, handle_hi, layer, x, y, w, h) — the
+    /// NEW_CONTROL fields the game reads (+0x00 u32, +0x0c u32, +0x14 u16, +0x16 u16 layer,
+    /// +0x18 x, +0x1a y, +0x1c w, +0x1e h). `item_extent` = the Font_GetTextExtent height-row
+    /// value for the combo's charset (0x305c60/0x30d150). `row_h` = the control's +0x5c4 row
+    /// height. `comp` = the component record's (+6, +8, +10) shorts (Component_GetHandle).
+    ///
+    /// [M 0x1f0248:77-109]: label child = the NEW_CONTROL with x += comp+6, layer − 1, h = the
+    /// combo's +0x76 read BEFORE its :109 write (whatever the allocation left — the port takes 0 [S]);
+    /// list child = x += comp+6, y += (int)item_w + comp+8 + 4, w −= (comp+6 − comp+10), h = 1,
+    /// layer − 1; the combo's own rect = the NEW_CONTROL x/y/w with h = (int)item_w + 5.
     pub fn init(
         new_control: (u32, u32, u16, u16, i16, i16, i16, i16),
         item_extent: f32,
         row_h: f32,
         comp: (i16, i16, i16),
     ) -> Combo {
-        let (v00, v0c, handle_hi, rows, x, y, w, h) = new_control;
+        let (v00, v0c, handle_hi, layer, x, y, w, h) = new_control;
+        let (c6, c8, c10) = comp;
+        let item_w = item_extent + 2.0; // [M :82 fStack_cc + 2.0]
+        let iw = item_w as i32 as i16;
+        let child_layer = (layer as i16).wrapping_sub(1);
         let mut c = Combo {
             ctype: TYPE_COMBO,
             disabled: 0,
@@ -802,25 +817,27 @@ impl Combo {
             handle: ((handle_hi as u32) << 16) | 2,
             v18: v00,
             v20: v0c,
-            x, y, w, h,
-            rows,
-            item_w: item_extent + 2.0,
-            max_item: if row_h != 0.0 { (h as f32 / row_h) as i32 - 1 } else { -1 },
+            x, y, w,
+            h: iw.wrapping_add(5), // [M :109 +0x76 = (int)item_w + 5]
+            layer,
+            item_w,
+            // [M :80 (int)((float)nc.h / +0x5c4) − 1]
+            max_item: (h as f32 / row_h) as i32 - 1,
             label: MenuControl::default(),
             list: MenuControl::default(),
         };
-        let (off_x, comp_w, comp_h) = comp;
-        // Label child: x += the component's offset; h = rows − 1 [M the sStack_aa/-1 writes].
-        c.label.x = c.x + off_x;
-        c.label.y = c.y;
-        c.label.h = rows.saturating_sub(1) as i16;
-        // List child: x += comp offset; y = label + item_w + 4 [M sStack_76 =
-        // item_w + 5? — the game stores item extent + 5 to +0x76 and +4 into the list's
-        // y]; h = comp_h − (label x − comp_w) [M sStack_74's subtraction].
-        c.list.x = c.label.x;
-        c.list.y = c.y + c.item_w as i16 + 4;
-        c.list.w = comp_w;
-        c.list.h = comp_h - (c.label.x - comp_w);
+        // Label child [M :84-91]
+        c.label.x = x.wrapping_add(c6);
+        c.label.y = y;
+        c.label.w = w;
+        c.label.h = 0;
+        c.label.layer = child_layer;
+        // List child [M :93-105]
+        c.list.x = x.wrapping_add(c6);
+        c.list.y = y.wrapping_add(iw).wrapping_add(c8).wrapping_add(4);
+        c.list.w = w.wrapping_sub(c6.wrapping_sub(c10));
+        c.list.h = 1;
+        c.list.layer = child_layer;
         c
     }
 
@@ -1097,13 +1114,13 @@ mod tests {
         let ctrlc = ctrl(10, 20, 100, 50, 5);
         let mut rec = component_add_component(0, 0, 0, 0, 0x55, 1);
         component_init_instance(&mut rec.instances[0], 0.0, 0.0, [5, 6, 30, 10, 0, 0, 0, 0], 0x80, 0);
-        let out = component_setup_instance(&ctrlc, &page, &rec, 0x80, 0, 0, -1, -1);
+        let out = component_setup_instance(&ctrlc, &page, &mut rec, &[], 0x80, 0, 0, -1, -1);
         assert_eq!(out.len(), 1);
         // [M] x = page.x + param_x + dx — the page rect, not the control's
         assert_eq!((out[0].x, out[0].y, out[0].w, out[0].h), (5, 6, 30, 10));
         assert!(!out[0].hidden);
         // sister: mask misses the flags → hidden with layer 0xff [M *(u8*)(sp+0x38)=0xff]
-        let out2 = component_setup_instance(&ctrlc, &page, &rec, 0x10, 0, 0, -1, -1);
+        let out2 = component_setup_instance(&ctrlc, &page, &mut rec, &[], 0x10, 0, 0, -1, -1);
         assert!(out2[0].hidden);
     }
 
@@ -1115,17 +1132,17 @@ mod tests {
         let ctrlc = ctrl(10, 20, 100, 50, 5);
         let mut rec = component_add_component(0, 0, 0, 0, 0x55, 1);
         component_init_instance(&mut rec.instances[0], 0.0, 0.0, [5, 6, 30, 10, 0, 0, 0, 0], 0x80 | 2, 0);
-        let out = component_setup_instance(&ctrlc, &page, &rec, 0x80, 0, 0, -1, -1);
+        let out = component_setup_instance(&ctrlc, &page, &mut rec, &[], 0x80, 0, 0, -1, -1);
         assert_eq!(out[0].x, (0 + 0 + 100 - 30 - 5) as i16); // page.x + x + aw − w' − dx
         // sister: centre ignores dx
         let mut rec2 = component_add_component(0, 0, 0, 0, 0x55, 1);
         component_init_instance(&mut rec2.instances[0], 0.0, 0.0, [5, 6, 30, 10, 0, 0, 0, 0], 0x80 | 4, 0);
-        let out2 = component_setup_instance(&ctrlc, &page, &rec2, 0x80, 0, 0, -1, -1);
+        let out2 = component_setup_instance(&ctrlc, &page, &mut rec2, &[], 0x80, 0, 0, -1, -1);
         assert_eq!(out2[0].x, (0 + (100 - 30) / 2) as i16);
         // sister: bottom-align y
         let mut rec3 = component_add_component(0, 0, 0, 0, 0x55, 1);
         component_init_instance(&mut rec3.instances[0], 0.0, 0.0, [5, 6, 30, 10, 0, 0, 0, 0], 0x80 | 1, 0);
-        let out3 = component_setup_instance(&ctrlc, &page, &rec3, 0x80, 0, 0, -1, -1);
+        let out3 = component_setup_instance(&ctrlc, &page, &mut rec3, &[], 0x80, 0, 0, -1, -1);
         assert_eq!(out3[0].y, (0 + 50 - 10 - 6) as i16);
     }
 
@@ -1136,28 +1153,28 @@ mod tests {
         let ctrlc = ctrl(10, 20, 100, 50, 5);
         let mut rec = component_add_component(0, 0, 0, 0, 0x55, 1);
         component_init_instance(&mut rec.instances[0], 0.5, 0.0, [0, 0, 0, 0, 0, 0, 0, 0], 0x80, 0);
-        let out = component_setup_instance(&ctrlc, &page, &rec, 0x80, 0, 0, -1, -1);
+        let out = component_setup_instance(&ctrlc, &page, &mut rec, &[], 0x80, 0, 0, -1, -1);
         assert_eq!(out[0].w, 50); // 0.5 · 100
         // sister: wf > 1 clamps to the span
         let mut rec2 = component_add_component(0, 0, 0, 0, 0x55, 1);
         component_init_instance(&mut rec2.instances[0], 2.0, 0.0, [0, 0, 0, 0, 0, 0, 0, 0], 0x80, 0);
-        let out2 = component_setup_instance(&ctrlc, &page, &rec2, 0x80, 0, 0, -1, -1);
+        let out2 = component_setup_instance(&ctrlc, &page, &mut rec2, &[], 0x80, 0, 0, -1, -1);
         assert_eq!(out2[0].w, 100);
     }
 
     #[test]
     fn setup_instance_alpha_op_follows_the_mask() {
-        // [M 0x1f0950: mask & 0x20 == 0 or a fraction set → mask & 0xc0 ? Reset : Get]
+        // [M 0x1f0950: mask & 0x20 == 0 or a fraction set → mask & 0xc0 ? Reset : nothing; else Get]
         let page = ctrl(0, 0, 640, 480, TYPE_PAGE_CONTAINER);
         let ctrlc = ctrl(10, 20, 100, 50, 5);
         let mut rec = component_add_component(0, 0, 0, 0, 0x55, 1);
         component_init_instance(&mut rec.instances[0], 0.0, 0.0, [0, 0, 5, 5, 0, 0, 0, 0], 0x10, 0);
-        let out = component_setup_instance(&ctrlc, &page, &rec, 0x10, 0, 0, -1, -1);
-        // mask 0x10 has no 0x20 bit → the (mask & 0x20 == 0) condition holds → Get (0xc0 unset)
-        assert_eq!(out[0].alpha, AlphaOp::Get);
-        let out2 = component_setup_instance(&ctrlc, &page, &rec, 0x30, 0, 0, -1, -1);
-        assert_eq!(out2[0].alpha, AlphaOp::None); // 0x20 set, wf == hf == 0 → nothing
-        let out3 = component_setup_instance(&ctrlc, &page, &rec, 0xd0, 0, 0, -1, -1);
+        let out = component_setup_instance(&ctrlc, &page, &mut rec, &[], 0x10, 0, 0, -1, -1);
+        // mask 0x10 has no 0x20 bit → the first arm; 0xc0 unset → nothing
+        assert_eq!(out[0].alpha, AlphaOp::None);
+        let out2 = component_setup_instance(&ctrlc, &page, &mut rec, &[], 0x30, 0, 0, -1, -1);
+        assert_eq!(out2[0].alpha, AlphaOp::Get); // 0x20 set, wf == hf == 0 → Menu_AlphaGet
+        let out3 = component_setup_instance(&ctrlc, &page, &mut rec, &[], 0xd0, 0, 0, -1, -1);
         assert_eq!(out3[0].alpha, AlphaOp::Reset); // 0xc0 set, no 0x20 → Reset
     }
 
@@ -1181,17 +1198,18 @@ mod tests {
 
     #[test]
     fn combo_init_builds_the_handle_and_children() {
-        // [M 0x1f0248: handle = (u16 NEW_CONTROL+0x14) << 16 | 2; type = 3; rows → +0x78;
-        // item extent + 2.0 → +0x714; rows−1-ish → +0x718]
+        // [M 0x1f0248: handle = (u16 NEW_CONTROL+0x14) << 16 | 2; type = 3; NEW_CONTROL+0x16 → +0x78 layer;
+        // item extent + 2.0 → +0x714; h / row_h − 1 → +0x718]
         let c = Combo::init((9, 11, 0x1234, 4, 100, 60, 120, 40), 50.0, 20.0, (2, 30, 50));
         assert_eq!(c.ctype, TYPE_COMBO);
         assert_eq!(c.handle, (0x1234u32 << 16) | 2);
-        assert_eq!(c.rows, 4);
+        assert_eq!(c.layer, 4);
         assert_eq!(c.item_w, 52.0);
         assert_eq!(c.max_item, 1); // 40 / 20 − 1
-        // sister: the children carry the offsets the game computes
-        assert_eq!(c.label.x, 102);
-        assert_eq!(c.list.y, 60 + 52 + 4);
+        assert_eq!((c.x, c.y, c.w, c.h), (100, 60, 120, 52 + 5)); // [M :106-109]
+        // sister: the children carry the offsets the game computes [M :84-105]
+        assert_eq!((c.label.x, c.label.y, c.label.layer), (102, 60, 3));
+        assert_eq!((c.list.x, c.list.y, c.list.w, c.list.h), (102, 60 + 52 + 30 + 4, 120 - (2 - 50), 1));
     }
 
     #[test]

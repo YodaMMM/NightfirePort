@@ -174,26 +174,28 @@ impl Copter {
         self.body_obj // [M 0x17e4b8:9 — *(rec+0x38)]
     }
 
-    /// `Copter_FireGun` 0x17d828 — one attack tick for the gun pair. `gun` is the firing part's
+    /// `Copter_FireGun` 0x17d828 — one attack tick. Only gun A (`rec+0x44`, slot 5) counts and
+    /// fires [M :58-65]; gun B (`rec+0x48`) is only re-primed to 2 after a shot (with its +0xf0
+    /// bit 0x10 cleared) when present [M :94-96]. `gun` is gun A's
     /// world position (the game reads it from the gun obj's +0xc0), `radius` the gun's cel-glist
     /// sphere radius (`*(glist)+0x38` [M :66-84]), `player` Bond's +0x30 with y+0.5 [M :55-59],
     /// `level_is_07000008` selects the weapon id (0x61 on 0700008, else 0x71 [M :86-89]).
     /// Returns Some((muzzle, dir, weapon_id)) on the tick the gun fires, else None.
     ///
-    /// [M] the cadence: the counter pre-increments and fires when the OLD value > 4 — every 6th
-    /// call (:63-65). [M] after a fire the firing gun's counter resets to 0 and the sister gun's
-    /// is set to 2 (:93-96) — the alternation. No RNG here (the gun/missile pick is the caller's
+    /// [M] the cadence: gun A's counter pre-increments and fires when the OLD value > 4 — every
+    /// 6th call (:63-65). [M] after a fire gun A's counter resets to 0 and gun B's (when
+    /// `gun_b_present`) is set to 2 (:93-96). No RNG here (the gun/missile pick is the caller's
     /// `Rand_Rand(10)` at 0x17dbb8:184).
     pub fn fire_gun_tick(
         &mut self,
-        which: usize,
+        gun_b_present: bool,
         gun: V3,
         radius: f32,
         player: V3,
         level_is_07000008: bool,
     ) -> Option<(V3, V3, u32)> {
-        let old = self.gun_counters[which];
-        self.gun_counters[which] = old.wrapping_add(1); // [M :63-65 pre-increment]
+        let old = self.gun_counters[0] as i16; // signed short [M :63 `short sVar1`]
+        self.gun_counters[0] = (old as u16).wrapping_add(1); // [M :63-65 pre-increment]
         if old <= 4 {
             return None; // [M :65 — fires only when the old value > 4]
         }
@@ -206,8 +208,10 @@ impl Copter {
         let muzzle = [gun[0] + dir[0] * radius, gun[1] + dir[1] * radius, gun[2] + dir[2] * radius];
         // [M :66-84 muzzle = gun pos + dir * cel-glist radius]
         let weapon = if level_is_07000008 { 0x61 } else { 0x71 }; // [M :86-89]
-        self.gun_counters[which] = 0; // [M :93-96]
-        self.gun_counters[1 - which] = 2;
+        self.gun_counters[0] = 0; // [M :93]
+        if gun_b_present {
+            self.gun_counters[1] = 2; // [M :94-95]
+        }
         Some((muzzle, dir, weapon))
     }
 
@@ -271,9 +275,9 @@ mod tests {
         let player = [100.0, 10.0, 0.0];
         let gun = [0.0, 0.0, 0.0];
         for i in 0..5 {
-            assert!(c.fire_gun_tick(0, gun, 2.0, player, false).is_none(), "call {i} must not fire");
+            assert!(c.fire_gun_tick(true, gun, 2.0, player, false).is_none(), "call {i} must not fire");
         }
-        let shot = c.fire_gun_tick(0, gun, 2.0, player, false);
+        let shot = c.fire_gun_tick(true, gun, 2.0, player, false);
         assert!(shot.is_some(), "call 6 fires [M :65]");
     }
 
@@ -281,34 +285,36 @@ mod tests {
     #[test]
     fn fire_gun_weapon_id_per_level() {
         let mut c = copter();
-        for _ in 0..5 { c.fire_gun_tick(0, [0.0; 3], 1.0, [0.0; 3], false); }
-        assert_eq!(c.fire_gun_tick(0, [0.0; 3], 1.0, [0.0; 3], false).unwrap().2, 0x71);
+        for _ in 0..5 { c.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], false); }
+        assert_eq!(c.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], false).unwrap().2, 0x71);
         let mut c2 = copter();
-        for _ in 0..5 { c2.fire_gun_tick(0, [0.0; 3], 1.0, [0.0; 3], true); }
-        assert_eq!(c2.fire_gun_tick(0, [0.0; 3], 1.0, [0.0; 3], true).unwrap().2, 0x61);
+        for _ in 0..5 { c2.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], true); }
+        assert_eq!(c2.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], true).unwrap().2, 0x61);
     }
 
     // [M 0x17d828:93-96] after a fire: firing counter resets to 0, the sister's becomes 2.
     #[test]
     fn fire_gun_swaps_the_counters() {
         let mut c = copter();
-        for _ in 0..5 { c.fire_gun_tick(0, [0.0; 3], 1.0, [0.0; 3], false); }
-        c.fire_gun_tick(0, [0.0; 3], 1.0, [0.0; 3], false);
+        for _ in 0..5 { c.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], false); }
+        c.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], false);
         assert_eq!(c.gun_counters[0], 0);
         assert_eq!(c.gun_counters[1], 2);
-        // The sister then fires on its own cadence: old 2,3,4 → no, old 5 → fires.
-        assert!(c.fire_gun_tick(1, [0.0; 3], 1.0, [0.0; 3], false).is_none(), "old 2");
-        assert!(c.fire_gun_tick(1, [0.0; 3], 1.0, [0.0; 3], false).is_none(), "old 3");
-        assert!(c.fire_gun_tick(1, [0.0; 3], 1.0, [0.0; 3], false).is_none(), "old 4");
-        assert!(c.fire_gun_tick(1, [0.0; 3], 1.0, [0.0; 3], false).is_some(), "old 5 > 4 fires");
+        // gun B never fires itself: only gun A's counter moves on later calls [M :58-65].
+        c.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], false);
+        assert_eq!(c.gun_counters, [1, 2]);
+        // sister: no gun B → its counter is left alone [M :94 the null test]
+        let mut d = copter();
+        for _ in 0..6 { d.fire_gun_tick(false, [0.0; 3], 1.0, [0.0; 3], false); }
+        assert_eq!(d.gun_counters, [0, 0]);
     }
 
     // [M 0x17d828:66-84] the muzzle sits radius units along the aim direction from the gun.
     #[test]
     fn muzzle_is_radius_along_the_aim() {
         let mut c = copter();
-        for _ in 0..5 { c.fire_gun_tick(0, [0.0; 3], 1.0, [0.0; 3], false); }
-        let (muzzle, dir, _) = c.fire_gun_tick(0, [0.0, 0.0, 0.0], 3.0, [4.0, 3.0, 0.0], false).unwrap();
+        for _ in 0..5 { c.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], false); }
+        let (muzzle, dir, _) = c.fire_gun_tick(true, [0.0, 0.0, 0.0], 3.0, [4.0, 3.0, 0.0], false).unwrap();
         // dir = normalise(4, 3.5, 0); muzzle = dir * 3.
         let len = (4.0f32 * 4.0 + 3.5 * 3.5).sqrt();
         let want = [4.0 / len * 3.0, 3.5 / len * 3.0, 0.0];
