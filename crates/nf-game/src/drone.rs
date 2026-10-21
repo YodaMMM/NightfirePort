@@ -10642,7 +10642,12 @@ impl Drones {
         self.gt_turrets.clear();
         for (i, p) in level.maps[mi].placements.iter().enumerate() {
             if p.flags & 0xff != 0x27 { continue; }
-            if let Some(t) = crate::gt::from_placement(i, &p.params) { self.gt_turrets.push(t); }
+            // obj+0x30 = the placement translation (the port's convention, cf. Shooter.pos) —
+            // `GT_Track`'s distances and the muzzle read obj+0x30 [M 0x17f9c8:99-118].
+            if let Some(mut t) = crate::gt::from_placement(i, &p.params) {
+                t.pos = p.translation;
+                self.gt_turrets.push(t);
+            }
         }
         // The space laser: kind 0x38 — the same walk's case 0x38 [M 0x1d04f0:227].
         self.space_lasers.clear();
@@ -10941,6 +10946,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if owner == usize::MAX { dr.hit_by_player = true; }
                 dr.blast = Some(pos); // DroneImpact+0x10: the blast VECTOR (the anim bearing)
                 dr.send(d, &mut self.rng, frame, msg::EXPLOSION);
+            }
+        }
+        // `Explode_Propagate` case 0x36 [M 0x17c518:190-193]: `GT_ApplyDamage(falloff, obj)`
+        // then `GT_Disable(obj)` — the same integer-truncated falloff as propagate, with the
+        // turret as a point (the port builds no turret world sphere; the game reads the
+        // object's — [S] unverified stand-in, flagged in the report).
+        for t in self.gt_turrets.iter_mut() {
+            if t.delete_flag { continue; }
+            let dx = t.pos[0] - pos[0];
+            let dy = t.pos[1] - pos[1];
+            let dz = t.pos[2] - pos[2];
+            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+            let truncated = if dist > 0.0 { dist as i32 as f32 }
+                else if dist < 0.0 { -((-dist) as i32) as f32 } else { 0.0 };
+            let amount = damage * (1.0 - truncated / radius);
+            if amount >= 0.0002 {
+                t.apply_damage(amount);
+                t.disable();
             }
         }
         // `Explode_Create` aligns the blast script to face the closest player before playing it
@@ -12691,6 +12714,63 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.casings.update(bone, &mut self.rng, |id, pos| { audio.play3d(id as u32, pos, None); });
         }
         let frame = self.frame;
+        // The gun turrets (`GT_Update` 0x180498, docs/systems/gun-turrets.md): the game runs
+        // them from `control_movement_object_handler`'s control_funcs[54] dispatch
+        // [M 0x1336f8:62-63]; the port's pass sits with the other per-tick object updates.
+        // Candidates: Bond (alive, the game's health/targetable checks [M 0x17f9c8:99-110])
+        // and the present guards (the alive stand-in for the ext+0x4f8 flag/health filters —
+        // the port's drone records don't carry those bits; flagged in the report). The
+        // per-candidate LOS (`Collide_LineOfSight` 0x17f9c8:271-278) is caller-supplied and
+        // the port has no collide ray for turrets yet: supplied true, reported as a gap.
+        {
+            let mut cands: Vec<crate::gt::TrackCand> = Vec::new();
+            if self.health.health > 0.0 {
+                cands.push(crate::gt::TrackCand { obj: u32::MAX, pos: player.pos, copter: false, los_ok: true });
+            }
+            for (i, dr) in self.list.iter().enumerate() {
+                if dr.present && !dr.corpse {
+                    cands.push(crate::gt::TrackCand { obj: i as u32, pos: dr.pos, copter: false, los_ok: true });
+                }
+            }
+            let chans = &self.channels;
+            let mut gt_events: Vec<(usize, crate::gt::GTEvent)> = Vec::new();
+            for (ti, t) in self.gt_turrets.iter_mut().enumerate() {
+                if t.delete_flag { continue; }
+                let ctx = crate::gt::GTCtx {
+                    channels: chans,
+                    mp: false, // the port's drone AI is SP-only (MPSettings stays 0)
+                    frame,
+                    cands: &cands,
+                    registered0_state: None, // the script VM is the tracked gap (gt.rs)
+                    mount: None,             // the mount use path (Player_WeaponInitBullet) is the tracked gap
+                };
+                let mut out = Vec::new();
+                t.update(&ctx, &mut self.rng, &mut out);
+                for e in out { gt_events.push((ti, e)); }
+            }
+            self.gt_turrets.retain(|t| !t.delete_flag);
+            for (ti, e) in gt_events {
+                match e {
+                    // One `Bullet_init` shot [M 0x180498 case 4/7]: the sound rides the pool;
+                    // the bullet itself needs the weapon-96 record walk (a follow-up — the
+                    // event carries muzzle+dir for it).
+                    crate::gt::GTEvent::Fire { muzzle, dir: _, sound } => {
+                        self.audio.play3d(sound, muzzle, None);
+                    }
+                    // The wreck smoke puff [M case 6]: Gas_Init(0.05, 0.25, glist 0x2000039,
+                    // 7, 0x48403080, 1) — the port's gas has the searchlight-shape init only;
+                    // recorded as the draw/sfx gap in the report.
+                    crate::gt::GTEvent::Smoke { .. } | crate::gt::GTEvent::DestroyedBurst { .. } => {}
+                    // Music_Event(2,1) [M case 4] — the music system is the main agent's draw.
+                    crate::gt::GTEvent::CombatSting => { self.music.event(2, 1); }
+                    // The rest are the draw-side events (pickup drop, MP wreck explode, the
+                    // sweep aim, the registered-object hide) — data for the renderer, listed
+                    // in the report.
+                    _ => {}
+                }
+                let _ = ti;
+            }
+        }
         // `Mission_Update` (0x182c60) runs from `Game_Run` (0x1c9790:17) BEFORE the object handler
         // (`control_movement_object_handler` 0x1336f8:30-35) — i.e. before this frame's triggers,
         // scripts and the player/death path, on the channels as the previous frame left them.
