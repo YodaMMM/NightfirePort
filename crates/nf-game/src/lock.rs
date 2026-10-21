@@ -68,6 +68,18 @@ pub struct Lock {
     /// Record u16[+0x02] = placement param 1 — the KeyCodes index (the code copied to the display
     /// buffer at scan start [M 0x1ae3d8:180], the key `Lock_Unlock` equips [M 0x1b0650:19]).
     pub code: u16,
+    /// The burn bytes, the game's lock `obj+0x104`/`obj+0x105` (u8 each). `control_init_object`
+    /// 0x134630 sets both 0xff for every created object and `Lock_Create` 0x1ae1f8 writes neither,
+    /// so a fresh lock holds 0xff/0xff [M]; the contact arm burns the laser's amount off BOTH
+    /// (clamped at 0) and the unlock fires when `+0x105` drops under 4 [M 0x1ae3d8:82-101]; the
+    /// idle arm refills both +1/tick to the 0xff cap [M :113-121].
+    pub burn_a: u8,
+    pub burn_b: u8,
+    /// The idle/refill grace, the game's lock short `obj+0xf6` in case 0 kind 1: a contact tick
+    /// stores 2, every no-contact tick decrements it, and the +1/tick refill runs only when it
+    /// reads 0 [M 0x1ae3d8:79, 107-121]. (The decryptor arm reuses +0xf6 as the scan counter —
+    /// the two arms never share a lock: kind 1 burns, kinds 0/2 scan [M :47, :62].)
+    pub grace: u8,
     /// The decrypt scan's progress, the game's lock `obj+0xf6` (state 0 accumulates contacts,
     /// state 5 the +1/+3 per tick; the decay floor is 0 and the cap 3000 [M 0x1ae3d8:327-344]).
     pub scan_progress: u32,
@@ -94,6 +106,9 @@ impl Lock {
                 key_channels: [param(3) as u16, param(4) as u16],
                 burn: 0,
                 burned: false,
+                burn_a: 0xff,
+                burn_b: 0xff,
+                grace: 0,
                 unlock_on_operative: param(6) != 0,
                 unlocked: param(6) != 0 && difficulty == 1,
                 kind: param(0) as u16,
@@ -106,12 +121,45 @@ impl Lock {
         out
     }
 
-    /// One tick of the laser's burn (`Player_LaserPointer` 0x1a65d8's hook — the gadget is not
-    /// ported; see the module doc). `Lock_Update` writes the out channel when the burn completes
-    /// [M 0x1ae3d8:194-195]. Returns whether it completed this tick.
-    pub fn burn(&mut self, ch: &mut Channels, frame: u32) -> bool {
+    /// One tick of LASER CONTACT (`Lock_Update` 0x1ae3d8 case 0, kind 1, per contact entry):
+    /// `amount` is the contact's per-tick burn — the game reads the contact object's weapon id
+    /// off its `link+0x44` record (**0x4E → 3, 0x4F → 10** [M :57-66]) and subtracts it from BOTH
+    /// burn bytes, clamped at 0 [M :82-95]; a contact tick stores the grace 2 [M :79]; when
+    /// `+0x105` drops under 4 the lock completes: sound 0x249 at the lock [M :96-99] then
+    /// `Lock_Unlock`, which writes `switch_channels[record+8]` [M :194-195, 0x1b0650]. Returns
+    /// whether it completed THIS tick.
+    pub fn burn(&mut self, amount: u8, ch: &mut Channels, frame: u32) -> bool {
         if self.burned || self.unlocked { return false; }
-        self.burned = true; // the create-time burn base is 0 [M 0x1ae1f8]
+        self.grace = 2; // *(lock+0xf6) = 2 on the contact tick [M 0x1ae3d8:79]
+        self.burn_a = self.burn_a.saturating_sub(amount);
+        self.burn_b = self.burn_b.saturating_sub(amount);
+        if self.burn_b >= 4 { return false; }
+        self.burned = true;
+        if self.out != 0 { ch.set(self.out as u32, 1, frame); }
+        true
+    }
+
+    /// One tick with NO contact (`Lock_Update` case 0 kind 1's tail): while the grace is up it
+    /// counts down, and at 0 BOTH burn bytes refill +1 to the 0xff cap [M 0x1ae3d8:107-121 —
+    /// the partial burn heals, ~1 tick per unit]. The decryptor arms reuse +0xf6 for the scan
+    /// count, so this runs for kind-1 locks only (the port drives it from `Drone::tick`'s
+    /// per-tick pass over the locks).
+    pub fn idle_tick(&mut self) {
+        if self.burned || self.unlocked { return; }
+        if self.kind != 1 { return; }
+        if self.grace > 0 { self.grace -= 1; return; }
+        self.burn_a = self.burn_a.saturating_add(1);
+        self.burn_b = self.burn_b.saturating_add(1);
+    }
+
+    /// THE TEST-PREMISE SHORTCUT (not the game path): completes the burn in one call — the state
+    /// a level arrives with when a premise test needs the lock already gone. The REAL path is the
+    /// ~84 contact ticks of `burn(3)` (0x4E from 0xff [M control_init_object 0x134630 sets both
+    /// bytes 0xff; 0x1ae3d8:82-101]) driven by the bullet pass; only premise tests (the mux/SS
+    /// sides) use this.
+    pub fn burn_through(&mut self, ch: &mut Channels, frame: u32) -> bool {
+        if self.burned || self.unlocked { return false; }
+        self.burned = true;
         if self.out != 0 { ch.set(self.out as u32, 1, frame); }
         true
     }

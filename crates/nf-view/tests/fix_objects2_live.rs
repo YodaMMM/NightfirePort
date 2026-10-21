@@ -144,7 +144,7 @@ fn the_safe_bolts_open_the_safe_and_the_briefcase_completes_the_boarding_objecti
     assert!(outs.contains(&134) && outs.contains(&135), "the bolts write chs 134/135 [D], got {outs:?}");
     // The laser watch burns them (the gadget hook — see lock.rs; the watch itself is not ported).
     let frame = sim.drones.frame;
-    for k in 0..sim.drones.locks.len() { sim.drones.locks[k].burn(&mut sim.drones.channels, frame); }
+    for k in 0..sim.drones.locks.len() { sim.drones.locks[k].burn_through(&mut sim.drones.channels, frame); }
     for _ in 0..4 { sim.step_bond(Input::default(), false, false, false); }
     assert!(sim.drones.channels.on(136), "mux #278 ORs the burns into ch 136 [D #278]");
     // The safe door (Object_SafeDoor #205, a 0xE2 SimpleScript on ch 136, rate 60 [D extra7 0x3c0008])
@@ -188,7 +188,7 @@ fn the_gondola_ride_runs_and_the_helicopter_completes_the_mission() {
     sim.drones.channels.set(0x49, 1, sim.drones.frame);
     sim.step_bond(Input::default(), false, false, false);
     let frame = sim.drones.frame;
-    for k in 0..sim.drones.locks.len() { sim.drones.locks[k].burn(&mut sim.drones.channels, frame); }
+    for k in 0..sim.drones.locks.len() { sim.drones.locks[k].burn_through(&mut sim.drones.channels, frame); }
     sim.bond.pos = [172.7, 44.6, -116.2];
     assert!(wait(sim, 120, |s| s.drones.channels.on(0x4a)), "the briefcase taken");
     // Bond steps onto the cable-car floor (SWITCH_CABLECARFLOOR, Touch 0xEB out 4, mask 8 [D #236]).

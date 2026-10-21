@@ -38,7 +38,7 @@ fn burn_display_hinges(scene: &mut nf_view::scene::Scene) {
     let sim = scene.sim.as_mut().unwrap();
     for k in 0..sim.drones.locks.len() {
         if (14..=17).contains(&sim.drones.locks[k].out) {
-            sim.drones.locks[k].burn(&mut sim.drones.channels, 1);
+            sim.drones.locks[k].burn_through(&mut sim.drones.channels, 1);
         }
     }
 }
@@ -100,7 +100,7 @@ fn the_warehouse_ventmesh_sweep_takes_the_game_rate_ticks() {
     let mut scene = load_at([6.0, 13.8, -110.5], 0.0);
     let sim = scene.sim.as_mut().unwrap();
     let k = sim.drones.locks.iter().position(|l| l.out == 84).expect("the VentLatch exists [D #182]");
-    sim.drones.locks[k].burn(&mut sim.drones.channels, 1);
+    sim.drones.locks[k].burn_through(&mut sim.drones.channels, 1);
     let ss180 = sim.drones.sss.of_placement(180).expect("ventmesh SS [D #180]");
     let mut done = None;
     for tick in 1..=600u32 {

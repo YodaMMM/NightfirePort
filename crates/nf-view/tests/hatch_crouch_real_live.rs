@@ -28,7 +28,7 @@ fn wrap_pi(a: f32) -> f32 {
 fn burn_display_hinges(sim: &mut nf_view::scene::Sim) {
     for k in 0..sim.drones.locks.len() {
         if (14..=17).contains(&sim.drones.locks[k].out) {
-            sim.drones.locks[k].burn(&mut sim.drones.channels, 1);
+            sim.drones.locks[k].burn_through(&mut sim.drones.channels, 1);
         }
     }
 }

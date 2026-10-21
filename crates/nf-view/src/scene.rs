@@ -4080,8 +4080,10 @@ impl Sim {
                         self.gun.clip = (self.gun.clip + u32::from(self.weapons.records.get(self.gun.weapon as usize).map_or(1u8, |r| r[0x91]).max(1))).min(clip_size);
                     }
                     if target_hit {
-                        let frame = self.drones.frame + 1;
-                        let (a, b) = nf_game::gadget::laser_tick(camera, dir, &mut self.drones.locks, &self.world, &mut self.drones.channels, frame);
+                        // The beam's endpoints only — the burn is the bullet pass's contact chain
+                        // [M 0x1ae3d8:57-101 via 0x1eae80:92-108; the fire below spawns the real
+                        // round through fire_player, whose per-tick segment picks the lock].
+                        let (a, b) = nf_game::gadget::laser_tick(camera, dir, &self.world);
                         self.laser_beam = Some((a, b));
                     }
                 }

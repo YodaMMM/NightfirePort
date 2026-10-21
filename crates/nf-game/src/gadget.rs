@@ -27,7 +27,6 @@
 //! 0x1a5460:512-514), **0x56/0x57 Decryptor**.
 
 use crate::lock::Lock;
-use crate::triggers::Channels;
 use crate::world::V3;
 /// The weapon ids whose shots carry the LASER BEAM bit `weapon_data+0x6C & 0x100` [M
 /// Player_MuzzleFlash 0x1a4298:131 → `Draw_LaserBeam`]: the Laser 0x4E and its upgrade 0x4F
@@ -113,64 +112,44 @@ pub fn pick_decryptor_lock(
 }
 
 
-/// One tick of the laser beam (the Laser 0x4E/0x4F and the watch 0x54/0x55): the ray from `head`
-/// along `dir` (unit), 100.0 units [M 0x1a65d8],
-/// against the world segment and the locks' world spheres. A lock whose sphere the ray touches
-/// (the ray's closest point within its radius — the game's contact-list stand-in) burns; its out
-/// channel is written on completion [M 0x1ae3d8:194-195].
+/// One tick of the laser beam's VISUAL endpoints (the Laser 0x4E/0x4F — the watch itself): the ray from `head`
+/// along `dir` (unit), 100.0 units [M 0x1a65d8], capped by the world's first hit
+/// (`Collide_RayIntersect` 0x1ec690). THE BURN IS NOT HERE: the game's burn runs through the
+/// bullet stream's contacts (`Player_WeaponInitBullet` 0x1a4bf0 spawns a class-5 bullet per
+/// refire tick — the watch's +0x44 short is 0 [L weapon_data 0x4E]; `Collide_PickObj` 0x1eae80:92-108
+/// picks the lock's world sphere off the bullet's per-tick segment; `Collide_Update` 0x1ea398 lands
+/// the contact on the lock's `obj+0xD0` list; `Lock_Update` 0x1ae3d8:57-101 burns −3/−10 per
+/// contact) — the port's bullet pass drives it (drone.rs's watch arm). This function is the beam
+/// MESH's endpoints only.
 /// `head`/`dir` are THE CROSSHAIR RAY the caller fires bullets down (the game's shot ray runs from
 /// `Player_GetHeadPos` through `Player_GetAimingPoint` [M Player_WeaponInitBullet 0x1a4bf0:152-159],
 /// and the beam draws from the muzzle to that ray's re-cast hit [M 0x1a4298:107-132]) — the old
 /// `bond.look()` ray was the user's "the laser isn't accurate" on the 0700000c display vent.
 /// Returns the beam's endpoints (the hand end is the caller's; here the head) and the hit point
 /// for the renderer.
-pub fn laser_tick(
-    head: V3,
-    dir: V3,
-    locks: &mut [Lock],
-    world: &crate::world::CollisionWorld,
-    ch: &mut Channels,
-    frame: u32,
-) -> (V3, V3) {
+pub fn laser_tick(head: V3, dir: V3, world: &crate::world::CollisionWorld) -> (V3, V3) {
     let len = 100.0f32;
     let end = [head[0] + dir[0] * len, head[1] + dir[1] * len, head[2] + dir[2] * len];
     // The world hit caps the beam's visual end (Collide_RayIntersect 0x1ec690's first-hit t).
     let hit_t = world.segment(head, end).unwrap_or(1.0);
     let hit = [head[0] + dir[0] * len * hit_t, head[1] + dir[1] * len * hit_t, head[2] + dir[2] * len * hit_t];
-    // The lock contact: the game reads the beam OBJECT out of the lock's contact list [M 0x1ae3d8
-    // case 0]. The port's stand-in uses the AIM LINE's closest approach to the lock's centre — on
-    // 07000008 the safe door's collision plane sits ~0.9 in front of the bolt centres [D the probe
-    // grid: every standpoint's world-capped beam lands ≥ 0.88 from a bolt], while the aimed line
-    // passes within centimetres of the aimed-at bolt, so the game's beam object (its sphere at the
-    // knob it burns) is represented by the line's approach within the lock's reach. [S the exact
-    // beam-object radius is unmeasured; 0.25.]
-    const BEAM_RADIUS: f32 = 0.25;
-    let ab = [end[0] - head[0], end[1] - head[1], end[2] - head[2]];
-    let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
-    for lock in locks.iter_mut() {
-        if lock.burned { continue; }
-        let reach = lock.radius + BEAM_RADIUS;
-        if ab2 < 1e-9 { continue; }
-        let ap = [lock.pos[0] - head[0], lock.pos[1] - head[1], lock.pos[2] - head[2]];
-        let t = ((ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2).clamp(0.0, 1.0);
-        let closest = [head[0] + ab[0] * t, head[1] + ab[1] * t, head[2] + ab[2] * t];
-        let d2 = (closest[0] - lock.pos[0]).powi(2) + (closest[1] - lock.pos[1]).powi(2) + (closest[2] - lock.pos[2]).powi(2);
-        if d2 <= reach * reach {
-            lock.burn(ch, frame);
-        }
-    }
     (head, hit)
 }
 
-/// The laser watch's held-meter constants and tick [M HUD_UpdateAmmoPane 0x19a7f0:160-176 — while
-/// the player's view state is 0xb (the laser watch's held state, `Player_WeaponFiring` 0x1a5460's
-/// `+0x6C & 0x400` arm) the ammo pane reads a 0–100 value at the beam bullet's instance +0x110
-/// (u16) / +0x104 (f32), NOT the kind-0x1a clip percentage]. The measured drain while held:
-/// ~31/s ≈ 0.5/frame [D docs/live/2026-10-14-weapon-measurements-pcsx2.md "The laser watch 0x4e":
-/// 100 → 59 over ~1.3 s]. The game's writer of those instance fields is unlocated in the decompile
-/// (the pane reads them through the bullet walk; live check in the report) — the port stands the
-/// value in as `Sim::laser_charge`. The refill stands in the game's gadget clip regen shape (+1 per
-/// 4 frames [M Player_Update 0x193600 disasm 0x193f18-58]) — [S] for the charge itself.
+/// The laser watch's held-meter constants and tick [D HUD_UpdateAmmoPane 0x19a7f0:160-176 — while
+/// the player's view state is 0xb (the watch's held anim state — the fire tail's `+0x6C & 0x400`
+/// arm belongs to the grenade family; the watch's +0xB4 = 0x60004e8 selects the same state via its
+/// fire anim [L weapon_data 0x4E +0xB4; M 0x1a5460 disasm 0x1a6538-0x1a6578]) the ammo pane reads a
+/// 0–100 value at the tracked object's instance link +0x110 (u16) / +0x104 (f32), NOT the
+/// kind-0x1a clip percentage]. The measured drain while held: ~31/s ≈ 0.5/frame [D
+/// docs/live/2026-10-14-weapon-measurements-pcsx2.md "The laser watch 0x4e": 100 → 59 over ~1.3 s].
+/// The game's writer of those instance fields is UNLOCATED in the decompile (an exhaustive store
+/// scan of ACTION.ELF's .text finds no write at link+0x110/link+0x104 nor at the obj-relative
+/// +0x220/+0x214 — the pane reads them through the bullet walk; live check in the report) — the
+/// port stands the value in as `Sim::laser_charge` with the [D] drain. The refill below is [S]:
+/// no decompile or disc evidence pins the game's idle refill (the old "+1 per 4 frames" shape was
+/// the gadget-clip regen [M Player_Update 0x193600 disasm 0x193f18-58], which regenerates the
+/// gadget clips, not this meter); it is kept for the HUD's usability and kept OUT of pass/fail.
 pub const LASER_CHARGE_DRAIN_PER_TICK: f32 = 31.0 / 60.0;
 pub const LASER_CHARGE_REFILL_PER_TICK: f32 = 0.25;
 
@@ -187,52 +166,84 @@ pub fn laser_charge_tick(charge: &mut f32, beam_on: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::triggers::Channels;
     use crate::world::CollisionWorld;
 
     fn empty_world() -> CollisionWorld { CollisionWorld::empty() }
 
     #[test]
-    fn laser_burns_the_lock_it_touches_and_writes_the_out_channel() {
+    fn laser_tick_returns_the_visual_endpoints_and_burns_nothing() {
+        // The burn left laser_tick (the old aim-line + BEAM_RADIUS 0.25 stand-in): the game burns
+        // through the bullet stream's contact list [M 0x1ae3d8:57-101 via 0x1eae80:92-108] — the
+        // drone pass drives it. Here: the endpoints only, and a lock in the path stays unburnt.
         let mut ch = Channels::default();
         let world = empty_world();
-        let mut locks = vec![Lock {
-            placement: 0, pos: [99.5, 0.0, 0.0], radius: 1.0, out: 134, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
-            kind: 1, code: 0, scan_progress: 0, scan_solved: 0, scanning: false,
-        }];
-        let (a, b) = laser_tick([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], &mut locks, &world, &mut ch, 10);
-        assert!(locks[0].burned, "the aim line passes 0.5 from the lock's centre — within 1.0+0.25");
-        assert!(ch.on(134), "the burn writes the lock's out channel [M 0x1ae3d8:194-195]");
+        let mut locks = vec![test_lock(99.5, 0.0, 134)];
+        let (a, b) = laser_tick([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], &world);
         assert!((b[0] - 100.0).abs() < 0.01, "the empty world's beam runs its full 100 units");
-        let _ = a;
+        assert!((a[0] - 0.0).abs() < 0.01, "the head end is the caller's point");
+        assert!(!locks[0].burned && !ch.on(134), "laser_tick no longer burns — the contact chain is the bullet pass's");
     }
 
-    #[test]
-    fn laser_misses_the_lock_it_does_not_touch() {
-        let mut ch = Channels::default();
-        let world = empty_world();
-        let mut locks = vec![Lock {
-            placement: 0, pos: [99.5, 4.0, 0.0], radius: 1.0, out: 135, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
+    fn test_lock(x: f32, y: f32, out: u16) -> Lock {
+        Lock {
+            placement: 0, pos: [x, y, 0.0], radius: 1.0, out, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
             kind: 1, code: 0, scan_progress: 0, scan_solved: 0, scanning: false,
-        }];
-        let _ = laser_tick([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], &mut locks, &world, &mut ch, 10);
-        assert!(!locks[0].burned, "the aim line passes 4 units off the lock's centre — no contact");
-        assert!(!ch.on(135), "no burn, no channel");
+            burn_a: 0xff, burn_b: 0xff, grace: 0,
+        }
     }
 
     #[test]
+    fn lock_burn_takes_the_real_tick_counts_and_writes_the_channel() {
+        // The real burn: 0x4E takes 3/tick off the 0xff bytes, the unlock fires when +0x105 < 4
+        // [M 0x1ae3d8:82-101; both bytes start 0xff — control_init_object 0x134630, Lock_Create
+        // writes neither]: (0xff − 3k < 4) → k = 84. The 0x4F's −10/tick → k = 26.
+        let mut ch = Channels::default();
+        let mut l = test_lock(99.5, 0.0, 134);
+        let mut ticks = 0;
+        while !l.burn(3, &mut ch, 10) { ticks += 1; assert!(ticks < 200, "the 0x4E burn must complete"); }
+        assert_eq!(ticks, 83, "the 84th contact tick completes (the loop's last call returned true) [M 0x1ae3d8:82-101]");
+        assert!(ch.on(134), "the unlock writes the out channel [M 0x1ae3d8:194-195]");
+        let mut ch2 = Channels::default();
+        let mut l2 = test_lock(99.5, 0.0, 135);
+        let mut t2 = 0;
+        while !l2.burn(10, &mut ch2, 10) { t2 += 1; assert!(t2 < 200); }
+        assert_eq!(t2, 25, "the 0x4F's 26th contact tick completes [M 0x1ae3d8:66]");
+    }
+
     #[test]
-    fn laser_charge_tick_drains_and_refills_the_measured_rates() {
+    fn lock_burn_refills_one_per_tick_after_the_two_tick_grace() {
+        // The idle arm: a contact stores the grace 2 [M 0x1ae3d8:79]; every no-contact tick
+        // decrements it; at 0 BOTH bytes refill +1 to the 0xff cap [M :107-121]. A partial burn
+        // HEALS; a completed lock never refills (state 1 — the out channel stays latched).
+        let mut ch = Channels::default();
+        let mut l = test_lock(99.5, 0.0, 134);
+        for _ in 0..10 { l.burn(3, &mut ch, 10); } // 0xff − 30 = 0xe1
+        assert_eq!(l.burn_a, 0xe1);
+        l.idle_tick(); l.idle_tick(); // the grace ticks [M :107-111]
+        assert_eq!(l.burn_a, 0xe1, "no refill while the grace runs");
+        l.idle_tick();
+        assert_eq!(l.burn_a, 0xe2, "the refill resumes at grace 0, +1/tick [M :113-121]");
+        for _ in 0..400 { l.idle_tick(); }
+        assert_eq!(l.burn_a, 0xff, "the refill caps at 0xff");
+        // And the burn resumes from the healed value.
+        let mut ticks = 0;
+        while !l.burn(3, &mut ch, 10) { ticks += 1; assert!(ticks < 200); }
+        assert_eq!(ticks, 83, "a fully healed lock takes the full 84 ticks again");
+    }
+
+    #[test]
+    fn laser_charge_tick_drains_at_the_measured_rate_and_clamps() {
         let mut c = 100.0f32;
         // 60 beam ticks = ~31 drained [D the measured ~31/s]; the floor is 0.
         for _ in 0..60 { laser_charge_tick(&mut c, true); }
         assert!((100.0 - c - 31.0).abs() < 0.01, "60 beam ticks drain ~31 (drained {:.2})", 100.0 - c);
         for _ in 0..600 { laser_charge_tick(&mut c, true); }
         assert_eq!(c, 0.0, "the charge floors at 0");
-        // 4 idle ticks = +1 (the game's +1-per-4-frames regen shape [M 0x193600]), capped at 100.
-        for _ in 0..4 { laser_charge_tick(&mut c, false); }
-        assert!((c - 1.0).abs() < 0.001, "4 idle ticks refill 1 (got {c:.3})");
+        // The idle REFILL SHAPE is [S] unverified (the game's writer is unlocated — see the module
+        // doc): NOT a pass/fail pin. The cap at 100 is the pane's own 0–100 read [D the HUD's u16].
         for _ in 0..600 { laser_charge_tick(&mut c, false); }
-        assert_eq!(c, 100.0, "the charge caps at 100");
+        assert_eq!(c, 100.0, "the charge caps at 100 [D the pane reads a 0–100 value]");
     }
 
     fn is_laser_weapon_matches_the_laser_family() {
@@ -270,6 +281,7 @@ mod tests {
             placement: 0, pos: [10.0, 0.0, 0.0], radius: 1.0, out, key_channels: [0xffff; 2],
             burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
             kind, code: 7, scan_progress: 0, scan_solved: 0, scanning: false,
+            burn_a: 0xff, burn_b: 0xff, grace: 0,
         }
     }
 

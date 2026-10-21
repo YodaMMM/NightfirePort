@@ -9505,8 +9505,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.swoosh_create(from, from, i16::from_le_bytes([w[0x76], w[0x77]]), 0x0200_0918, 1)
                 } else { None }
             };
+            // [M Bullet_init 0x12c5a0 — `pfVar3[0x3f] = 210.0`]: the bullet's death cap is the
+            // HITTEST's range `BU+0xFC` (`Bullet_update` disasm 0x12efa4 reads it per tick), a
+            // 210.0 default with per-id overrides (0x3b/0x69/0x37 [M :255-283]) — NOT the record's
+            // +0x1C (the use/fire distance gate). The watch 0x4E/0x4F carries +0x1C = 4.0 [L
+            // ee_start_05.bin @ weapon_data 0x2bf150] — on +0x1C the beam's rounds die at the
+            // muzzle (the user's "the laser isn't accurate": the bullet stream never reached the
+            // locks and only the aim-line stand-in burned). The watch gets the game's 210.0; the
+            // other weapons keep the port's +0x1C model (a port-wide question, the report's note).
+            let base_id = u16::from_le_bytes([w[0x02], w[0x03]]);
+            let bullet_range = if matches!(base_id, 0x4e | 0x4f) { 210.0 } else { f(0x1c) };
             self.player_bullets.push(PlayerBullet {
-                pos: from, dir, speed, travelled: 0.0, range: f(0x1c), damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
+                pos: from, dir, speed, travelled: 0.0, range: bullet_range, damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
                 homing: u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x2_0000 != 0,
                 target: None,
                 // delta-repeater: `Bullet_init` spawns the record's bullet with the gravity bit
@@ -9580,8 +9590,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.swoosh_create(from, from, i16::from_le_bytes([w[0x76], w[0x77]]), 0x0200_0918, 1)
                 } else { None }
             };
+            // [M Bullet_init 0x12c5a0 — `pfVar3[0x3f] = 210.0`]: the bullet's death cap is the
+            // HITTEST's range `BU+0xFC` (`Bullet_update` disasm 0x12efa4 reads it per tick), a
+            // 210.0 default with per-id overrides (0x3b/0x69/0x37 [M :255-283]) — NOT the record's
+            // +0x1C (the use/fire distance gate). The watch 0x4E/0x4F carries +0x1C = 4.0 [L
+            // ee_start_05.bin @ weapon_data 0x2bf150] — on +0x1C the beam's rounds die at the
+            // muzzle (the user's "the laser isn't accurate": the bullet stream never reached the
+            // locks and only the aim-line stand-in burned). The watch gets the game's 210.0; the
+            // other weapons keep the port's +0x1C model (a port-wide question, the report's note).
+            let base_id = u16::from_le_bytes([w[0x02], w[0x03]]);
+            let bullet_range = if matches!(base_id, 0x4e | 0x4f) { 210.0 } else { f(0x1c) };
             self.player_bullets.push(PlayerBullet {
-                pos: from, dir, speed, travelled: 0.0, range: f(0x1c), damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
+                pos: from, dir, speed, travelled: 0.0, range: bullet_range, damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
                 homing: flags6c & 0x2_0000 != 0,
                 target: None,
                 gravity: flags6c & 0x8 != 0,
@@ -10087,22 +10107,29 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
             // The lazer watch's beam burns the locks (`Lock_Update` 0x1ae3d8 case 0, record word 1):
-            // the cell walk takes class-5 contacts whose BU+0x44 reads 0x4E/0x4F (the watch, −3/−10
-            // per tick [:57-103]); `Lock_Unlock` writes `switch_channels[record+8]` [:194-195]. The
-            // port's watch bullets carry the weapon id, so the segment-vs-sphere contact stands in
-            // for the cell walk; the create-time burn base is 0 on this level's data [M 0x1ae1f8 —
-            // 07000008's #207/#208 param 2 = 0], so the first contact completes it (playtest item 7).
+            // the lock's contact list takes THIS bullet's per-tick segment as a contact (the game's
+            // pick is the closest point on the segment vs the lock's world sphere, `dist² < r²`
+            // [M Collide_PickObj 0x1eae80:92-108]; the pass-2 walk lands it on the lock's `obj+0xD0`
+            // list with the picker at entry+0x58 [M Collide_Update 0x1ea398]) and the lock walk takes
+            // class-5 contacts whose `link+0x44` record id is 0x4E (−3/tick) or 0x4F (−10/tick)
+            // [M 0x1ae3d8:57-66]; `Lock_Unlock` writes `switch_channels[record+8]` at +0x105 < 4
+            // [:90-101, :194-195]. One contact per bullet per tick (the pick appends one entry per
+            // (picker, object) pair [M 0x1eae80]) — the stream's segments tile the ray, so a held
+            // beam is one contact per tick. The lock's radius is the game's world sphere as loaded
+            // (Control_BuildWorldSph 0x133070's glist bounds — the port's `Lock.radius`); the old
+            // 0.5 floor was a stand-in.
             if matches!(b.weapon, 0x4e | 0x4f) {
+                let amount = if b.weapon == 0x4e { 3u8 } else { 10u8 }; // [M 0x1ae3d8:60-66]
                 let hits: Vec<usize> = self.locks.iter().enumerate()
-                    .filter(|(_, lk)| !lk.burned && Self::segment_hits_sphere(b.pos, end, lk.pos, lk.radius.max(0.5)))
+                    .filter(|(_, lk)| !lk.burned && Self::segment_hits_sphere(b.pos, end, lk.pos, lk.radius))
                     .map(|(k, _)| k).collect();
                 for k in hits {
-                    if self.locks[k].burn(&mut self.channels, frame) {
-                        // The burn-through sounds: `Lock_Update` 0x1ae3d8:90-93 plays 0x249 (the
-                        // mechanism's release clunk) and calls `Lock_Unlock`; the trail side
+                    if self.locks[k].burn(amount, &mut self.channels, frame) {
+                        // The burn-through sound: `Lock_Update` 0x1ae3d8:90-99 plays 0x249 (the
+                        // mechanism's release clunk) and calls `Lock_Unlock`. The trail side
                         // `Bullet_DoTrails` 0x12d890:473-478 plays 0x5dd when the burn life runs
-                        // out on the watch's beam. The port burns instantly (base 0), so both fire
-                        // at the same tick here. sound-coverage port (audit-sound-calls).
+                        // out on the watch's beam — the port fires it with the unlock here (the
+                        // two sounds' tick alignment is not separated in the decompile walk).
                         self.audio.play3d(0x249, self.locks[k].pos, None);
                         self.audio.play3d(0x5dd, self.locks[k].pos, None);
                     }
@@ -11537,6 +11564,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for dr in self.list.iter_mut().filter(|x| x.present) { dr.light = light; dr.opponent_info(player); dr.player_pos = player.pos; dr.seen = false; dr.bond_armed = armed; dr.stat_ok = stat_ok; }
         }
         self.update_player_bullets(d, player.pos);
+        // The locks' idle arm (`Lock_Update` 0x1ae3d8 case 0 kind 1's tail): the +1/tick refill of
+        // the burn bytes once the 2-tick grace runs out [M :107-121] — the partial burn heals. The
+        // game runs `Lock_Update` per tick in the control pass; the contact side already ran above
+        // in the bullet pass, so the grace this stores (2) counts down from the NEXT tick exactly
+        // as the game's same-tick tail does.
+        for l in self.locks.iter_mut() { l.idle_tick(); }
         // The use objects' per-tick halves (`PCQWorm_Update` 0x1aee20's bullet install +
         // `Switch_Update` 0x1adea8's value/auto-return; map-tower, crate::useobj). The bullet
         // segments are this tick's paths — the game reads the class-5 contact list the same pass.
