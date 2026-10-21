@@ -71,22 +71,21 @@ fn the_truck_driver_reaches_his_idle_state_and_never_twists() {
         if sim.drones.list[di].state == 0x34 { arrived = true; break; }
     }
     assert!(arrived, "the mission route ends into TruckDriverIdle [M 0x161030 case 3 result 3] — still {:#x}", sim.drones.list[di].state);
-    // Walk armed Bond up to the driver: TruckDriverIdle's NearArmedPerson scares him into CivilianScared →
-    // CivilianHiding [M 0x160ed0 case 3 → 0x1787c8], and the old build additionally twisted his torso all the
-    // while. fix-party-mission: NearArmedPerson is prop 0x3c + Bond IN SIGHT (+0x228 & 4) + ObjectIsArmed
-    // [M 0x1787c8 — the distance arg is dead], so Bond stands in the driver's facing (±π/2 cone) with LOS.
+    // Walk armed Bond up to the driver. TruckDriverIdle's case-3 scare is NearArmedBond(6.0), which needs prop
+    // 0x51 [M 0x160ed0 case 3, 0x178678:10-13]; his live block is the placement's normal block, which lacks 0x51
+    // [D drone-props 07000006 (66.1, 39.2, 28.9); M 0x14c600:61-70] — so he stays idle (review 2026-10-21: this
+    // test used to expect the scare the port had invented). The subject stands: no torso twist, grounded.
     let dp = sim.drones.list[di].pos;
     let dy = sim.drones.list[di].yaw;
     stand_armed_at(sim, [dp[0] + dy.sin() * 4.0, dp[1], dp[2] + dy.cos() * 4.0], dp);
     tick_idle(sim, 180);
     let dr = &sim.drones.list[di];
-    assert!(matches!(dr.state, 0x12 | 0x13),
-        "the driver reacts to armed Bond within 8 through TruckDriverIdle's scare [M 0x160ed0 case 3] — got {:#x}", dr.state);
+    assert_eq!(dr.state, 0x34, "armed Bond alone leaves the idle driver idle [M 0x178678; D the placement block] — got {:#x}", dr.state);
     assert!(dr.aim_yaw.abs() < 1e-4,
         "an unarmed driver never aims his torso [M AnimObjectAimAt weapon gate] — aim_yaw {}", dr.aim_yaw);
-    // Sister: he stays grounded — gravity keeps pos.y at the floor + the standing hip through the
-    // scare (the old build's scripted no-gravity stand-in would have let him drift).
-    assert!((dr.pos[1] - dp[1]).abs() < 0.05, "the driver stays grounded through the scare ({} vs {})", dr.pos[1], dp[1]);
+    // Sister: he stays grounded — gravity keeps pos.y at the floor + the standing hip (the old build's
+    // scripted no-gravity stand-in would have let him drift).
+    assert!((dr.pos[1] - dp[1]).abs() < 0.05, "the driver stays grounded ({} vs {})", dr.pos[1], dp[1]);
 }
 
 /// The 07000005 patrol look: "a patrolling guard walks one way while his upper body looks the opposite
