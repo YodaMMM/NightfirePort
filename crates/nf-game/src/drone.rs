@@ -3212,11 +3212,12 @@ impl Drone {
             // `Drone_SM_SendMsgSelf(3,…)`, gated on the enabled bit at :141-148].
             (CIVILIAN_DOOR_GUARD, msg::UPDATE) => {
                 self.door_pair_watch = true;
-                // `NDrone2_NearArmedPerson(20.0)` 0x1787c8: the opponent exists (+0x228 & 4) and is
-                // armed (`DroneWeap_OpponentHasWeapon`) — the port's stand-in: the guard sees the
-                // player and Bond's weapon is not the fists [S stand-in, the prop-0x3c gate rides
-                // the state's own prop set].
-                if self.los && self.bond_armed {
+                // `NDrone2_NearArmedPerson(20.0)` 0x1787c8 [M 0x160648:39] — the real gate
+                // (`near_armed_person`: voice 0xD exempt, prop 0x3c, the reaction-acked sight
+                // +0x228 & 4, `DroneWeap_OpponentHasWeapon`; on 09/0A prop 0x3c + sight only; the
+                // 20.0 is dead). The old stand-in read raw line of sight + armed and skipped the
+                // prop-0x3c gate and the reaction time.
+                if self.near_armed_person(d) {
                     // 0x160648:39-57: `+0x4F8 |= 0x8000000`; prop 0x33 (once, `+0x4F8 & 0x200000`):
                     // `+0x4FC |= 1`, `DroneAlertToObject(20, 20, 0.759, dc, 0x11, player)`, the
                     // 0x200000 latch; then `+0x44 = 1`, `+0x5A2 = 0x56`, SetState(0x56 Attack).
