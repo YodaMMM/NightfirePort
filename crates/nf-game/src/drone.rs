@@ -2282,6 +2282,12 @@ impl Drone {
     /// the last one holds instead of an empty pose.
     /// Returns whether a script started (`SetDAnimInternal` 0x13aee8's return: 1 on the play arm, 0 when the
     /// skip arm ends it [M 0x13aee8:95-126]).
+    // `DroneData_DAStateFunc` 0x2707f0 (the DAState dispatch table `DroneData_GetDAStateFuncInfo`
+    // 0x13e520 scans with drone+0x56a): its ONE entry is {id 0x0a -> `DAStateFunc_AimStand`
+    // 0x13e518}, and that handler is an empty `return` [M 0x13e518, 8 B; the table dump
+    // 0x2707f0: 0a 00 | 18 e5 13 00 | ff ff ff ff]. The id pipeline itself is the anim state
+    // written below (`Drone_AnimInfo[danim]+8`, nf-formats/src/drone.rs `state_of`) — the port's
+    // `anim_state::AIM_STAND = 0x0a`. No behavior sits behind the table dispatch to port.
     fn set_danim(&mut self, d: &Data, danim: u16, blend: u16) -> bool {
         if danim == 0x188 && std::env::var_os("NF_SDLOG").is_some() { eprintln!("[sd] -> 188 blend {}", blend); }
         // The replaced danim: a 180° turn (info flag 0x100) still running.
@@ -13896,6 +13902,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .chain(self.sensors.list.iter().enumerate().map(|(j, s)| (s.placement, 6, j)))
             .collect();
         order.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        // `Doors_Calc`'s head memset (0x135fe0:13), which the game runs at the TOP of
+        // `control_movement_object_handler` 0x1336f8 — before the walk's door updates OR their
+        // states in (door.rs `begin_pass`; `DoorGroupsStates` must read this frame's ORs only).
+        self.doors.begin_pass();
         // Pickups are created at run time, so they head the control list: `Pickup_Update` before the placed objects.
         // mp-world-sync: online the take walk sees every body (`update_pickups_net`).
         match self.net_bodies.take() {

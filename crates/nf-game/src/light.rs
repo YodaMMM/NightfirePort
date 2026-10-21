@@ -1,3 +1,6 @@
+// unported-misc-5 — `Light_Init` 0x1cc340 (`ResetMap_GameInit` 0x1d5080's per-level call) is the
+// level light objects' init; the port's level lights are the loaded `Level` light records the
+// scene consumes (this module carries the runtime effects that attach to them).
 //! Level and dynamic lights (`light_tag` records), the VU1 point-light formula, and the per-object
 //! 2-light selection.
 //!

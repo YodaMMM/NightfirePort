@@ -244,6 +244,14 @@ impl HudTables {
     }
 }
 
+/// unported-misc-5 — the game's text-heap layer folds into this struct:
+/// `Txt_LanguageInit` 0x1cad00 (per-level, `ResetMap_GameInit` 0x1d5080's call) is the loader that
+/// fills these tables; `Txt_GetStringFromHeap` 0x1caa10 (the callers: `MP_PlayerKilled` 0x188f70,
+/// `Font_WordWrapString` 0x1ef178, the Text/HUD message adds) is the heap-slot lookup this module
+/// resolves through `bind`'s fixup+offset arithmetic; `Txt_LockString` 0x1cae68 /
+/// `Txt_UnlockString` 0x1cae10 pin/unpin heap strings around use (`Sprite_Create2` 0x1de3d8,
+/// `Sprite_Delete` 0x1de930, `Text_Init`/`Text_AddMsg`) — the port's borrowed `&str` from `data`
+/// makes that refcounting unnecessary.
 /// A language string table: one disc `*.dat` file (e.g. `USATxt.dat`, the NTSC-U default — `FNames[SelLang]`,
 /// `Txt_LoadLanguage` 0x1caad0 sprintf's `"%s%s"` over it). Layout [M 0x1caad0, verified on the disc]:
 /// `u32 dataBytes`, the data block, padded to `dataBytes + (4 - dataBytes % 4)` (the reader's advance is

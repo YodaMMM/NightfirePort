@@ -1,3 +1,9 @@
+// unported-misc-5 — the game's generic list containers are Rust collections here:
+// `LList_Init` 0x1cc958 (the door list's init; its other callers `Door_Init` 0x136848,
+// `control_init_object_lists` 0x134388, `Coll_ResetHitHeap` 0x1edda0, `Sensor_Init` 0x1b0868,
+// `Drone_PreLoad_Init` 0x136888, `Copter_Init` 0x17e4f0, `InitShards` 0x12bed0,
+// `Creature_Init` 0x135208) is this module's owned `Vec` — the game's LLISTINFO/LLNODE
+// linked list with the same insert-at-head/order semantics, without the manual nodes.
 //! Doors (`docs/systems/world-objects.md` "Doors"): `Door_Create` 0x136100, `Door_SetupSwing` 0x135440,
 //! `Door_SetState` 0x135618, `Door_Interp` 0x135738, `Door_ReactToHit` 0x135980, `Door_Activate` 0x135be0,
 //! `Door_DoMsg` 0x135f18, `Doors_Calc` 0x135fe0, `Door_Update` 0x1363c8 — ported from the disassembly [M] and
@@ -243,9 +249,15 @@ impl Door {
 
 /// All doors of a level, in placement (creation) order.
 #[derive(Clone, Debug)]
+/// `Door_Init` 0x136848 (60 B, from `ResetMap_GameInit` 0x1d5080:12-19 at 0x1d5184):
+/// `LList_Init(TheDoors 0x316f70, 0x80, 0)` + `memset(DoorGroupsStates 0x316ea0, 0, 0xca)` — the
+/// per-map empty of the door list and the 101×u16 group-state table. The port's `Doors::create`
+/// per level attach (drone.rs `attach_level_id`) rebuilds the list and zeroes `group_states` —
+/// this reset; the per-FRAME wipe of `DoorGroupsStates` is `Doors::begin_pass` below.
 pub struct Doors {
     pub list: Vec<Door>,
-    /// `DoorGroupsStates` (0xca bytes, cleared by `Doors_Calc` each frame): per group, the OR of the states.
+    /// `DoorGroupsStates` (0xca bytes — `Door_Init` 0x136848 zeroes it per map, `Doors_Calc`
+    /// 0x135fe0:13 wipes it per frame via `begin_pass`): per group, the OR of the door states.
     pub group_states: [u16; 101],
     /// The previous tick's `switch_channels` (`switch_channels_prev`) for the lock channel's rising edge.
     prev_channels: [u8; 256],
@@ -788,8 +800,19 @@ impl Doors {
         d.flags |= 0x10;
     }
 
+    /// `Doors_Calc`'s head memset [M 0x135fe0:13 — the per-frame wipe the decompile opens with]:
+    /// the game runs `Doors_Calc` at the top of `control_movement_object_handler` 0x1336f8 (before
+    /// the object walk), so `DoorGroupsStates` starts each frame empty and `Door_Update`'s ORs
+    /// (0x1363c8:170-171) accumulate only this frame's states — `Door_IsClosed` 0x1367b0's
+    /// `== CLOSED (2)` read never sees a stale OR. The port runs `calc` at the tick's tail
+    /// (drone.rs), so the wipe rides `begin_pass` — call it before the object pass each tick.
+    pub fn begin_pass(&mut self) {
+        self.group_states = [0; 101];
+    }
+
     /// `Doors_Calc` (after every door's update): a group's members copy the first non-busy door's direction,
-    /// position, state and timer, re-pose, and every busy marker clears.
+    /// position, state and timer, re-pose, and every busy marker clears. (The game's per-frame
+    /// `DoorGroupsStates` memset is `begin_pass` above — the decompile's 0x135fe0:13.)
     pub fn calc(&mut self) {
         for master in 0..self.list.len() {
             let group = self.list[master].group;

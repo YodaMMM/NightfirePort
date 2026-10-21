@@ -65,6 +65,7 @@ pub struct Props {
     /// The mounted-gun implementations (`GunImp_Create` 0x131f20, placement 0x34). Own line
     /// (merge lesson 4).
     pub gunimps: Vec<crate::gunimp::GunImp>,
+
 }
 
 /// One placement's target object's bounds placed by the placement transform (the game's contact
@@ -94,6 +95,20 @@ pub fn bounds(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> 
 }
 
 impl Props {
+    /// `GunImp_PlayerHasDied` 0x133008 (100 B, called from `Player_CheckForDeath` 0x190810:3-10
+    /// right after the death marker): walk the objects for the class-0x47 ('G') gun implant whose
+    /// linked player is the dead one and `GunImp_Deactivate` it [M 0x133008:4-17; the class byte
+    /// at obj+0xff from `GunImp_Create` 0x131f20, the linked player at obj+0xe0 -> +4]. The port
+    /// is single-player (the SP-only laser mount), so every active imp is Bond's: drop the mount —
+    /// the same `active` flag the use-key dismount clears (drone.rs `gunimp_tick`).
+    /// `GunImp_Deactivate`'s bond-side restore (cam mode, the saved substate, the velocity zeroes
+    /// [M 0x132c18:33-47]) rides the death flow's own takeover of the view.
+    pub fn gunimp_player_has_died(&mut self) {
+        for g in self.gunimps.iter_mut() {
+            g.active = false;
+        }
+    }
+
     /// `CamSubject_Create` / `Destroy_Create` over the main map's placements (placement order, like
     /// the game's `parsemap_create_dynamic_objects`).
     pub fn create(level: &Level) -> Props {
@@ -220,6 +235,23 @@ mod tests {
             kind: 1, blast_damage: 100.0 }],
             gunimps: Vec::new(),
         }
+    }
+
+    #[test]
+    fn gunimp_player_has_died_drops_the_mount() {
+        // `GunImp_PlayerHasDied` 0x133008: the dead player's active mount deactivates.
+        let mut p = box_props();
+        p.gunimps.push(crate::gunimp::GunImp {
+            placement: 0, pos: [0.0; 3], yaw_base: 0.0, pitch: 0.0, yaw: 0.0, pitch_s: 0.0, yaw_s: 0.0,
+            active: true, heat: 0.0, cooldown: 0.0, hot: false, turret: 0xb, seat: 0.0,
+        });
+        p.gunimp_player_has_died();
+        assert!(!p.gunimps[0].active);
+        // Sister: an idle mount stays idle and an empty list does not panic.
+        p.gunimp_player_has_died();
+        assert!(!p.gunimps[0].active);
+        let mut empty = box_props();
+        empty.gunimp_player_has_died();
     }
 
     #[test]
