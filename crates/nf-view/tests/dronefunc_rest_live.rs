@@ -78,6 +78,12 @@ fn the_target_registry_and_first_attack_stamps_follow_the_game() {
     assert!(slot.flags & 2 != 0, "the slot is stamped seen [M 0x14a008:16]");
     assert!(slot.pos[0] != 0.0 || slot.pos[1] != 0.0 || slot.pos[2] != 0.0,
         "the last-seen position stored [M 0x14a008:20-23]");
+    // The slot is keyed by the opponent (Bond), not the guard: every team-1 guard that allocated
+    // shares it [M 0x1422d0:74 passes the opponent as AllocateTargetID's param_2; 0x141f28:16-21].
+    assert_eq!(slot.obj, nf_game::target_registry::BOND, "the slot holds the opponent obj [M 0x141f28:30]");
+    for g in sim.drones.list.iter().filter(|d| d.team == 1 && d.target_id != 0xff) {
+        assert_eq!(g.target_id, attacker.target_id, "guard #{} shares Bond's slot", g.placement);
+    }
     // Sister: the girls are team 3 — the game's `+0x44 != 1` gate never lets them allocate
     // [M 0x141f28:11-13].
     for g in sim.drones.list.iter().filter(|d| d.team == 3) {

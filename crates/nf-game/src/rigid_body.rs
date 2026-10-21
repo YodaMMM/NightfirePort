@@ -72,7 +72,7 @@ impl RigidBody {
 
 /// `RB_Init` 0x1d7ad8 [M]: zero 0x160 bytes, then +0xa8 = type, +0x64 = 1.0f, +0x68/6c/70 = 0,
 /// and the per-type triple: type 0 → (+0x98, +0xa0, +0xa4) = (−0.5, 1.0, 31.0); type 3 →
-/// (−0.75, 0.0, 252.0); any other type → (−0.75, 0.0, 25.0). (The game's odd non-void return —
+/// (−0.75, 0.0, 250.0 — 0x437a0000, review 2026-10-21: the branch said 252); any other type → (−0.75, 0.0, 25.0). (The game's odd non-void return —
 /// the memset pointer on type 0, literal 3 otherwise — is an artifact, not behaviour.)
 pub fn rb_init(ty: i16) -> RigidBody {
     let mut rb = RigidBody::zeroed();
@@ -85,7 +85,7 @@ pub fn rb_init(ty: i16) -> RigidBody {
     } else if ty == 3 {
         rb.s98 = -0.75;
         rb.sa0 = 0.0;
-        rb.sa4 = 252.0;
+        rb.sa4 = 250.0; // 0x437a0000 [M 0x1d7ad8:22]
     } else {
         rb.s98 = -0.75;
         rb.sa0 = 0.0;
@@ -143,7 +143,7 @@ mod tests {
         assert_eq!((t0.s98, t0.sa0, t0.sa4), (-0.5, 1.0, 31.0));
         assert_eq!(t0.quat, [1.0, 0.0, 0.0, 0.0]);
         let t3 = rb_init(3);
-        assert_eq!((t3.s98, t3.sa0, t3.sa4), (-0.75, 0.0, 252.0));
+        assert_eq!((t3.s98, t3.sa0, t3.sa4), (-0.75, 0.0, 250.0)); // 0x437a0000 = 250.0
         let tx = rb_init(7);
         assert_eq!((tx.s98, tx.sa0, tx.sa4), (-0.75, 0.0, 25.0));
         // Sister (can fail): the type-0 +0x98 is the outlier — −0.5 sits ABOVE the −0.75 band.

@@ -21,16 +21,18 @@ prop 0x3c AND prop 0x51, `+0x1a0 < arg`, the seen bit `+0x228 & 4`; then levels
 `NDrone2_NearArmedPerson` 0x1787c8 (no distance gate, voice-0xD exempt) — the port had wired
 the driver to that one; fixed.
 - Port: `Drone::near_armed_bond` (drone.rs) + the `TRUCK_DRIVER_IDLE` UPDATE arm.
-- **The prop 0x51 gap**: the port's placement-driven props left the 07000006 driver (mode 0x17)
-  without 0x51. The game sets it from the mode init: `DoModeSettingsOLD` 0x14cfa0 memsets the
-  first behaviour block `+0x4dc` and dispatches `DroneModeSettings[mode·0xc+8]` — mode 0x17 →
-  `NDrone2_init_DMODE_CivilianGuard` 0x14e158, which writes 0x1d, 0x24, 0x3c, 0x1f, 0x46,
-  0x26, 0x27, 0x28, 0x29, 0x4f, 0x50, **0x51** [M 0x14e158:6-19; the mode→init table read at
-  0x29ad40]. The port now sets 0x51 for mode 0x17 (`type_setup`); the block's other writes are
-  not modelled from the init (the placement words carry this port's values) — porting them is
-  its own task.
+- **Prop 0x51 (corrected in the 2026-10-21 review of 844)**: the 07000006 driver's live behaviour
+  block is the placement's normal block — placed drones take `DoModeSettingsNEW` 0x14c600, which
+  fills both blocks from the placement words [M 0x14c600:61-70]; `DoModeSettingsOLD` and the
+  `DroneModeSettings` init rows (`init_DMODE_CivilianGuard` 0x14e158 included) are unreachable for
+  placements [D census; docs/port-map/unreached.md]. His normal block has 0x3c but **no 0x51**
+  (only the alert block carries 0x50/0x51) [D `nf-extract drone-props … 07000006.bin`, (66.1, 39.2,
+  28.9) k15 13]. So the game's NearArmedBond is 0 while he idles: armed Bond alone does not scare
+  him. 844 had forced 0x51 for mode 0x17, citing the playtest observation "he does get scared" —
+  that observation was of the port, not the game. No runtime writer of prop 0x51 exists outside
+  the init rows [M grep setProperty(0x51)].
 - Test: `nf-view/tests/fix_06_driver_live.rs::the_scared_cower_keeps_him_in_place_on_the_floor`
-  — armed Bond 4 units in the idling driver's cone → CivilianScared/Hiding through the REAL
+  — armed Bond 4 units in the idling driver's cone → he stays idle; the scared chain entered directly cowers in place (was: CivilianScared/Hiding through the REAL
   input path (`nf_view::load` + `Sim::step_bond`); sister `gunfire_never_arms_the_driver…`
   (the scare is not a shot: the gunfire arm still kills him through the shared death path and
   the guards still react). Both green.

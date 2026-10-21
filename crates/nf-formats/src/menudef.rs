@@ -27,6 +27,18 @@
 //!   scaling) — and both interpolators are affine-invariant (the Catmull-Rom basis sums to 1).
 //! - Keyframes attach to the current SCRIPT, sorted by time, dedup by time unless the existing
 //!   frame's flags bit 0x20 is set [M `Script_AddKeyFrame` 0x2201c8:24-38].
+//!
+//! The game's intrusive doubly-linked list (`LINKEDLIST` head {first@+0, last@+4, count@+8,
+//! stride@+0xC}, node {next@+0, prev@+4}) — `LinkedList_Init` 0x219280, `LinkedList_ReInit`
+//! 0x2192a0 (zeroes first/last/count, KEEPS stride — the mgr page-list empty),
+//! `LinkedList_Add` 0x2192c0 (append at tail), `LinkedList_Insert` 0x219318 (insert after a
+//! walked position — the keyframe time-sort), `LinkedList_Remove` 0x2193b0 (unlink),
+//! `LinkedList_GetIndex` 0x219428 (nth walk, 0 out of range) — is 100% the front-end menu
+//! engine's container (scripts/keyframes/messages, pages, delayed procs, list/radio
+//! widgets, Component_* sprite sets [M the 9+9+9+2+16 call sites]; no drone/object users —
+//! those use the separate DList_* family). This port models each list as a `Vec` field:
+//! `Vec::new()` = Init/ReInit, `push` = Add, the keyframe sort below = Insert's ordering,
+//! `remove`/drop = Remove, slice indexing = GetIndex (see the parse-end comment).
 //! - Runtime state is on the control [M `Script_PrepareScripting` 0x220ed8]: script list +0x28,
 //!   current script +0x38, segment-end keyframe +0x3c, loop-return keyframe +0x40 / index +0x44,
 //!   segment-start index +0x4c (init −1), last message result +0x50, frame timer +0x54, flags
@@ -181,7 +193,9 @@ impl MenuDef {
                     }
                 }
                 -0x09 => {
-                    // SCRIPT {id, flags}
+                    // SCRIPT {id, flags} — `Script_AddScript` 0x220fb0: find-or-create the
+                    // M_SCRIPT with this id and make it current; the parser records the same
+                    // {id, flags} pair for the runtime `play_script`/`select_script` lookup.
                     let id = p.dword();
                     let flags = p.dword();
                     if let (Some(pg), Some(ct)) = (page, ctrl) {
@@ -267,6 +281,9 @@ impl MenuDef {
                 }
                 -0x0c => {
                     // KMSG {target, id, a, b} — attaches to the CURRENT keyframe
+                    // (= `Script_AddMessage` 0x221198, sole caller MenuManager_Create
+                    // 0x21b908:216; dropped when no keyframe is current, which this guard
+                    // models with `kf = None`) [M].
                     let target = p.dword() as i32;
                     let id = p.byte();
                     let a = p.dword();
@@ -336,6 +353,21 @@ impl MenuDef {
                 }
             }
         }
+        // The game's keyframe list is time-SORTED: `Script_AddKeyFrame` 0x2201c8 walks the list
+        // while existing.time <= new.time and `LinkedList_Insert` 0x219318 puts the new frame
+        // after the last ≤ element — equal times keep file order [M 0x2201c8:52-72,
+        // 0x219318:26-45]. The tag loop above appends in file order; this stable sort restores
+        // the game's list order so the runtime's Vec index == the game's
+        // `LinkedList_GetIndex` 0x219428 nth-walk (the interpolators 0x220bc8:65-101 /
+        // 0x2208b8 fetch kf[i−1..i+2] by index). KMSGs are nested in the moved structs, so
+        // the parse-time attachments survive the sort.
+        for pg in &mut def.pages {
+            for ct in &mut pg.controls {
+                for sc in &mut ct.scripts {
+                    sc.keyframes.sort_by_key(|k| k.time);
+                }
+            }
+        }
         Ok(def)
     }
 
@@ -380,6 +412,16 @@ pub struct ControlDef {
     pub defaults: [Option<u32>; 6],
 }
 
+/// One control script — the game's `M_SCRIPT` record (0x20 bytes: link, keyframe list,
+/// id, flags) built by `Script_AddScript` 0x220fb0 during `MenuManager_Create` 0x21b908
+/// (BIN tag −0x09) and freed by `Script_DelScript` 0x221068 on widget destroy. The port
+/// keeps the same records in this `Vec` and drops them with the page — which is the
+/// whole job of the game's destroy chain `Script_DelAllScripts` 0x220f30 (zeroes
+/// control+0x38/+0x3c, frees every script) → `Script_DelKeyFrame` 0x221100 (frees each
+/// keyframe's message list) → `Script_DelMessage` 0x221210 (unlink + free), reached from
+/// every widget's SendMessage case 0x47 (e.g. Label 0x218890:175, Spin 0x2226d8:92)
+/// when a page closes [M]. `Script_AddMessage` 0x221198 is the game's KMSG attach
+/// (malloc 0x18, copy, list-add to the current keyframe) — the −0x0c tag below.
 #[derive(Debug, Default, Clone)]
 pub struct ScriptDef {
     pub id: u32,

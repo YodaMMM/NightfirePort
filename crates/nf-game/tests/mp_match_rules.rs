@@ -251,6 +251,14 @@ fn demolition_destroy_own_goal_and_restart() {
     assert_eq!(m.game.team_scores, [0.0, 1.0], "the restart keeps the scores (multi-round)");
     assert_eq!(m.objects_rt.site.as_ref().unwrap().state, 2000, "the site HP re-inits");
     assert_eq!(m.game.slots[0].last_killer, 0xffff, "the per-slot words reset [M 0x183fc0:55-82]");
+    // unported-scripts-1 sister: the DAMAGE path makes no ScriptPlayer switch — only the
+    // round-timeout branch calls SP_SwitchToScript [M 0x1870a0:81-165 vs :115]. The port's
+    // restart also re-creates the site state, so the SP words stay at their boot values here.
+    {
+        let site = m.objects_rt.site.as_ref().unwrap();
+        assert_eq!((site.sp_script, site.sp_state), (0, 0),
+            "no SP script switch on the damage/restart path [M 0x1870a0:81-160]");
+    }
     // sister: the defender destroying their own site is an own-goal [M 0x1870a0:133-140]
     let mut og = make(scenario::DEMOLITION, 5, -1);
     join(&mut og, 0, 0);
@@ -277,10 +285,24 @@ fn protection_timeout_scores_defenders() {
     tick(&mut m, 60 * 59, &mut rng);
     assert_eq!(m.game.team_scores, [0.0, 0.0], "no score before the timeout");
     assert_eq!(m.game.state, 0);
+    // unported-scripts-1 sister: before the timeout the site SP still runs its boot script —
+    // the switch happens only in the timeout branch [M 0x1870a0:112-124].
+    {
+        let site = m.objects_rt.site.as_ref().unwrap();
+        assert_eq!((site.sp_script, site.sp_state), (0, 0), "boot script before the timeout");
+    }
     tick(&mut m, 60 * 2, &mut rng);
     assert_eq!(m.game.team_scores, [0.0, 1.0], "the defending team scores on the timeout");
     assert_eq!(m.game.state, 6, "the round-over state [M 0x184268:58-60]");
     assert_eq!(m.objects_rt.site.as_ref().unwrap().sub, 1, "the site is done");
+    // unported-scripts-1: the timeout branch also switches the site's ScriptPlayer to script 1
+    // (`SP_SwitchToScript(site_sp, 1, 0)` [M 0x1870a0:115]); script hash 1 lands the SP state
+    // on 2, not 3 [M 0x1dcad8:28-33 — uVar4 = 3, overwritten to 2 when the new slot's hash == 1].
+    {
+        let site = m.objects_rt.site.as_ref().unwrap();
+        assert_eq!(site.sp_script, 1, "the site SP switched to script 1 on the timeout [M 0x1870a0:115]");
+        assert_eq!(site.sp_state, 2, "script hash 1 → SP state 2 [M 0x1dcad8:30-33]");
+    }
 }
 
 /// GoldenEye Strike: both items carried by one team launch the strike (+1 each carrier, a random

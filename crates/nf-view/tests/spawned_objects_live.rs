@@ -8,7 +8,7 @@
 //! - The space laser: the single kind-0x38 placement on 0700001b (#108) → `Create_SpaceLaser`
 //!   0x1aa8b8's ext map (`crate::space_laser`) [D script-census.md:144; docs/levels/0700001b.md:71].
 //! - The body glow: `BodyGlow_Create` 0x1ac158 runs in every guard's `NDrone2_DefaultInit` tail
-//!   [M 0x14b300; docs/atlas/drone.md:51] — 14 child sprites, owner = the guard [M 001ac158].
+//!   [M 0x14b300; docs/atlas/drone.md:51] — 15 child sprites (the do-while counter runs 1..=15 — review 2026-10-21), owner = the guard [M 001ac158].
 //!
 //! Numbers and ids only. Opt-in via NF_ISO; run with NF_SILENT=1.
 
@@ -77,8 +77,8 @@ fn every_guard_spawns_with_the_body_glow() {
     // DefaultInit's tail creates the glow unconditionally on the shipped path
     // [M 0x14b300 + 001ac158:9 — switch_NO_DRONES is 0].
     assert!(list.iter().all(|d| d.body_glow.is_some()), "every guard glow");
-    // The do-while makes exactly 14 children [M 001ac158].
-    assert!(list.iter().all(|d| d.body_glow.as_ref().unwrap().children == 14));
+    // The do-while makes exactly 15 children (counter 1..=15, `< 0xf`) [M 001ac158].
+    assert!(list.iter().all(|d| d.body_glow.as_ref().unwrap().children == 15));
     // ext[0] = the owner object [M 001ac158] — the port keys it on the drone's list index.
     for (i, d) in list.iter().enumerate() {
         assert_eq!(d.body_glow.as_ref().unwrap().owner, i, "glow owner = drone index");

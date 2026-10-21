@@ -23,6 +23,7 @@ pub mod target_registry;
 pub mod env;
 pub mod explode;
 pub mod gun;
+pub mod hud_pane;
 pub mod grenade;
 pub mod hurt;
 pub mod ladder;

@@ -162,7 +162,11 @@ pub struct Script {
     /// `+0xAA8`: 0x10 keep objects, 0x20, 0x40 camera, 0x80 re-enable drones on free (`Drone_EnableAll(1, hash)`,
     /// set by event 7), 0x100 player return.
     pub flags: u16,
-    /// `+0x98` ScriptCam (event 0x13): a script camera is active.
+    /// `+0x98` ScriptCam (event 0x13): a script camera is active. The game zeroes this global
+    /// (0x30D100) together with `Borders` (0x30D068, the letterbox sprite handle) in
+    /// `Script_Init` 0x1daea8 at every `ResetMap_GameInit` [M 001daea8:4-8 — the whole
+    /// function is two global clears]; the port gets the same reset by building a fresh
+    /// `Sim`/`Script` per level, and `script_cam: false` is that zeroing [M].
     pub script_cam: bool,
     /// `+0xAB2`: 1 playing, 2 done, 8 looping.
     pub play: u8,

@@ -166,9 +166,13 @@ fn investigate_stands_down_to_idle_when_nothing_is_found() {
     let d = l.data(L05);
     let (mut sim, gi) = guard_sim(&l);
     let far = bond_far();
+    let alert_before = sim.list[gi].alert;
     enter(&mut sim, &d, gi, state::INVESTIGATE, &far);
     assert!(sim.list[gi].vision_on, "Investigate ENTER sets +0x4F8 0x10000 [M 0x168070 case 1]");
-    assert!((sim.list[gi].alert - 0.66).abs() < 1e-4, "alert status 2 → share 0.66 [M table 0x2f5cc8[2]]");
+    // `Drone_AlertStatusSet(2)` writes the +0x51C status byte ONLY [M 0x13a8d8] (review 2026-10-21:
+    // this test used to pin alertness 0.66 — the 0x2f5cc8 table is read only by DoModeSettingsNEW).
+    assert_eq!(sim.list[gi].alert_status, 2, "alert status 2 [M 0x168070 case 1]");
+    assert_eq!(sim.list[gi].alert, alert_before, "the alertness +0x50C is untouched [M 0x13a8d8]");
     for _ in 0..30 { sim.list[gi].ever_seen = false; sim.list[gi].alert = 0.0; sim.tick(&d, &far); }
     assert!(entered(&sim, gi, state::IDLE), "no pick, share < 0.66 → Idle 0x04 [M 0x168070 case 3]; log {:x?}", sim.list[gi].log);
     // Sister: with an opponent in sight (the game's `+0x170 != 0`) the pick wins over the idle
@@ -185,16 +189,19 @@ fn investigate_stands_down_to_idle_when_nothing_is_found() {
 /// The bots' alert outcomes (`mp/bots.rs react_to_drone_alert_msg`, the SetState tail of
 /// `NDrone2_ReactToDroneAlertMsg` 0x1437a0 [M LAB_00143e30]): the dead-body shout 0x15 →
 /// SeenDeadBody 0x9e [M :307-326], the surrender shout 0x16 → SeenSurrenderedDrone 0x9f [M
-/// :283-290]; sender 0x12/0x1e drop out of 0x15, senders 9/0x12/0x13 attack on 0x16. Sister: the
+/// :283-290]; receiver modes 0x12/0x1e drop out of 0x15, receiver modes 9/10/0x12/0x13 attack on 0x16
+/// (the mode byte is the HANDLING drone's [M 0x1437a0:24]). Sister: the
 /// property gates actually gate (no prop → None).
 #[test]
 fn bot_alert_shouts_resolve_to_the_seen_states() {
     let all = |_p: u32| true;
     let none = |_p: u32| false;
-    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x0b, all, true), Some(0x9e), "dead-body shout, mode-0x0b sender → 0x9e [M 0x1437a0:307-326]");
-    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x12, all, true), None, "sender 0x12 drops out [M 0x1437a0:312]");
-    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x16, 0x05, all, true), Some(0x9f), "surrender shout, ordinary sender → 0x9f [M 0x1437a0:283-290]");
-    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x16, 0x13, all, true), Some(0x56), "sender 0x13 attacks instead [M 0x1437a0:289-292]");
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x0b, all, true), Some(0x9e), "dead-body shout, receiver mode 0x0b → 0x9e [M 0x1437a0:307-326]");
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x12, all, true), None, "receiver mode 0x12 drops out [M 0x1437a0:312]");
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x16, 0x05, all, true), Some(0x9f), "surrender shout, ordinary receiver mode → 0x9f [M 0x1437a0:283-290]");
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x16, 0x13, all, true), Some(0x56), "receiver mode 0x13 attacks instead [M 0x1437a0:289-292]");
+    // Review 2026-10-21: mode 10 is in the same attack group as 9/0x12/0x13 [M 0x1437a0:336-341] (the branch left it out).
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x16, 0x0a, all, true), Some(0x56), "receiver mode 10 attacks too");
     // Sister: without the receiver property the shout is ignored [M 0x1437a0:271-275 (0x4F), 300-303 (0x29)].
     assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x0b, none, true), None);
     assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x16, 0x05, none, true), None);

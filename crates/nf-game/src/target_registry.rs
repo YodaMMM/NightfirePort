@@ -20,6 +20,10 @@ impl Default for TargetSlot {
     }
 }
 
+/// The registry key for the player (Bond) — the opponent object `NDrone2_SetOpponent` 0x1422d0 passes
+/// as `param_2` [M 0x1422d0:74]. Slots are keyed by the TARGET, so every guard hunting Bond shares one.
+pub const BOND: usize = usize::MAX - 1;
+
 /// The 8-slot pool. `GameState+52` (the game's frame counter) plays `stamp`.
 #[derive(Clone, Debug, Default)]
 pub struct TargetRegistry {

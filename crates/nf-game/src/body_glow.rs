@@ -17,8 +17,10 @@
 //!   0x200025f, obj+0xe8 = 6.0f, obj+0xf0 |= 0x2408, `build_LinkToRoom(obj, 0, glb_world)`,
 //!   `View_SetDrawInNoViews`.
 //! - the ext block (0x44 bytes): ext[0] = owner, u16 ext+0x40 = 0x100.
-//! - 14 child sprite objects (`do..while` counter, 0..0xe): `control_create_object(0, …)`, gfx
-//!   hash 0x200055a, obj+0xff = 1, obj+0xf0 |= 0x2400, linked + no-views, stored ext[1..14].
+//! - 15 child sprite objects (the `do..while` reads the counter BEFORE its increment — 1..=15 — and
+//!   loops while < 0xf, so 15 passes; ext[0] owner + ext[1..=15] fill exactly the 0x40 bytes before the
+//!   u16 at ext+0x40 — review 2026-10-21, the branch said 14): `control_create_object(0, …)`, gfx
+//!   hash 0x200055a, obj+0xff = 1, obj+0xf0 |= 0x2400, linked + no-views, stored ext[1..=15].
 //!
 //! The port carries the record (owner, the two gfx hashes, the child count, the flags) on the
 //! guard spawn path; the sprite rendering itself is the main agent's draw work (no drawing
@@ -27,7 +29,7 @@
 
 /// The main glow object's gfx hash [M 001ac158: `hashtable_set_object_to_entity_gfx(obj, 0x200025f)`].
 pub const MAIN_GFX: u32 = 0x2000_25f;
-/// The 14 child sprites' gfx hash [M 001ac158: 0x200055a per child].
+/// The 15 child sprites' gfx hash [M 001ac158: 0x200055a per child].
 pub const CHILD_GFX: u32 = 0x2000_55a;
 /// The main object's obj+0xf0 bits [M 001ac158: |= 0x2408].
 pub const FLAGS_MAIN: u32 = 0x2408;
@@ -42,7 +44,7 @@ pub const CLASS: u8 = 0x46;
 /// The child objects' class byte [M 001ac158: 1].
 pub const CHILD_CLASS: u8 = 1;
 
-/// The glow record one spawn creates (the main object + its 14 children, ext[0] = owner).
+/// The glow record one spawn creates (the main object + its 15 children, ext[0] = owner).
 ///
 /// Update-side (`BodyGlow_Update` 0x1ac2c8, the port does not run the update loop): every
 /// tick it recomputes the per-viewer display mask (a viewer whose view mode is 2 or whose
@@ -64,19 +66,19 @@ pub fn create(owner: usize, no_drones: bool) -> Option<BodyGlow> {
     if no_drones {
         return None;
     }
-    Some(BodyGlow { owner, children: 14 })
+    Some(BodyGlow { owner, children: 15 })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // [M 001ac158] the shipped path creates the record; the do-while makes exactly 14 children.
+    // [M 001ac158] the shipped path creates the record; the do-while makes exactly 15 children (counter 1..=15, `uVar2 < 0xf`).
     #[test]
     fn glow_record_matches_the_game() {
         let g = create(3, false).expect("shipped path glows");
         assert_eq!(g.owner, 3);
-        assert_eq!(g.children, 14);
+        assert_eq!(g.children, 15);
         assert_eq!(MAIN_GFX, 0x2000_25f);
         assert_eq!(CHILD_GFX, 0x2000_55a);
         assert_eq!(CLASS, 0x46);
@@ -86,8 +88,8 @@ mod tests {
         assert_eq!(FLAGS_CHILD, 0x2400);
         // Sister (can fail): the child count is the loop bound — 13 or 15 would mean the
         // counter test was misread.
-        assert_ne!(g.children, 13);
-        assert_ne!(g.children, 15);
+        assert_ne!(g.children, 14);
+        assert_ne!(g.children, 16);
     }
 
     // [M 001ac158:9] the switch_NO_DRONES gate.

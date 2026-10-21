@@ -102,7 +102,7 @@ the draw side supplies `psiDrawSprites`.
 `obj+0xDC != 0`, write the same mask to each of the skin's attachments
 (`skin+0x2D` count over `anim+0xC0` array) [M disasm 0x1e7ac8..0x1e7b24].
 
-Caller [M]: `BodyGlow_Update` 0x1ac2c8:223,257 — the glow body and each of its 14 child
+Caller [M]: `BodyGlow_Update` 0x1ac2c8:223,257 — the glow body and each child sprite (the update loop walks 15, `uVar16 < 0xf` — the count master's review pinned)
 sprites get the per-viewer mask (`uVar11 & 0xffff | 0x10`): the bit per OTHER viewer whose
 view mode is 2 or whose HUD block +0x244 is set, OR 0x10 (bit 4) always. The port's
 `body_glow.rs` carries the spawn record; the update-side mask math is `view::set_view_mask`'s

@@ -2,6 +2,19 @@
 //! health / armour pane (`HUD_UpdateHealthPane` 0x19b9c8) with the damage-direction glow, and the ammo pane
 //! (`HUD_UpdateAmmoPane` 0x19a7f0). Sprites from `HealthSprInfo` / `AmmoSprInfo` / `BulletImg` and font 2, read from
 //! ACTION.ELF; textures from the level archive. Sorted by layer, higher first (`CompSpr`: lower numbers on top).
+//!
+//! Sprite-record primitives this immediate-mode frame replaces [M] — the game's text/bitmap sprite
+//! nodes (0x44 bytes, `SpriteList` 0x349b18, `docs/fields/sprite.md`): `Sprite_InitLists`
+//! 0x1de600 (the 512-node free/in-use pool; the port builds a fresh `HudFrame` per frame, no pool),
+//! `Sprite_Create` 0x1de808 (pop a free node, init scale 1.0 / fmt sentinel), `Sprite_SetParams`
+//! 0x1de7b0 (layer → +0x38, home+draw x/y, colour → +0x10, texture hash → +0xc) — here each is a
+//! `Hud::text`/`Hud::quad` call's layer/x/y/colour/texture args. `Sprite_SetText` 0x1de698,
+//! `Sprite_SetTextNFmt` 0x1de718 and `Sprite_SetFmt` 0x1de628 store the text/format strings and
+//! re-measure the extent via `Font_GetTextExtent` into +0x34/+0x36 — here that is `Font::layout`
+//! (nf-formats/src/hud.rs) at the draw sites: the ammo/fire-mode strings [0x19a7f0], the objective
+//! banner's status label + body [0x19c310:127-144], the two-line subtitles (`Text_Update2Line`
+//! 0x1b09f0, `docs/systems/subtitles.md`) and the load-screen lines (`ResetMap_GenLoadScreen`
+//! 0x1d5de0, the menu.rs loading overlay).
 
 use crate::gpu::{HudFrame, HudVertex};
 use nf_formats::hud::SpriteInfo;
