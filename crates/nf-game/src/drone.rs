@@ -60,9 +60,23 @@ pub mod state {
     /// re-arms the 1 s execute timer and aims, or falls to combat 0x56 without a hostage link
     /// [M 0x15c940:22-51]; timer 10 fires the execution anim 0x58 [M :86-96].
     pub const HOSTAGE_KILLER_ATTACK: u8 = 0x09;
+    /// `NDrone2_DSTATE_HostageDie` 0x1725a0 = `NDrone2_StateFuncs[0x0b]` [M table]: the hostage's
+    /// death cry — `NDrone2_DSTATE_Hostage` 0x15cb78 case 0xb SetStates it [M 0x15cb78:61-64]. ENTER:
+    /// alert status 3, the death SFX (sound 10, forced), the fall anim 0x40 with follow-on
+    /// HostageDead 0x0f, `NDrone2_LogDroneDeath` [M 0x1725a0:15-20].
+    pub const HOSTAGE_DIE: u8 = 0x0b;
     /// `NDrone2_DSTATE_AltAttack` 0x167488 (`NDrone2_StateFuncs[0x72]`): the close-range alternate attack.
     pub const ALT_ATTACK: u8 = 0x72;
+    /// `NDrone2_DSTATE_DroneStuck` 0x165ef0 = `NDrone2_StateFuncs[0x7f]` [M table]. ENTER turns the
+    /// vision on and falls straight through to CombatNoRoute 0x5f [M 0x165ef0 case 1].
     pub const DRONE_STUCK: u8 = 0x7f;
+    /// `NDrone2_DSTATE_Investigate` 0x168070 = `NDrone2_StateFuncs[0x7e]` [M table]: the blind-cheat
+    /// search state — `NDrone2_DSTATE_CombatOutOfRange` 0x164690 (ENTER, the `switch_BLIND_DRONES != 0`
+    /// arm — the shipped cheat `C_CHCHBLIND_Handler` 0x215d60 sets the switch) parks the return state
+    /// `+0x5A2 = 0x7e` and routes to GoToGoalPosition 0x63; the arrival SetState(`+0x5A2`) lands here
+    /// [M 0x164690:26-32; M 0x165640's `+0x5A2` reads]. ENTER: vision on, `+0x4F8 |= 0x2000`, alert
+    /// status 2, the alert-idle anim [M 0x168070 case 1].
+    pub const INVESTIGATE: u8 = 0x7e;
     pub const GO_TO_GOAL: u8 = 0x63;
     /// `NDrone2_DSTATE_HostageGoToGoalPosition` 0x165a68 (state 100): the hostages'/scared civilians'
     /// goal run — `Drone+0x6F0`'s point, the run/walk anims, arrive → `+0x5A2`.
@@ -312,6 +326,12 @@ pub mod state {
     pub const AIM_STAND_FIRE: u8 = 0x68;
     pub const AIM_STAND_RELOAD: u8 = 0x69;
     pub const AIM_BACKOFF: u8 = 0x6d;
+    /// `NDrone2_DSTATE_CrouchCover` 0x166d90 = `NDrone2_StateFuncs[0x6e]` [M table]: the mode-0x11
+    /// (cover-croucher) drone's AimCrouch — `NDrone2_DSTATE_AimCrouch` 0x166f28 ENTER branches on the
+    /// mode byte `+0xc5 == 0x11` and SetStates here instead of playing the crouch-aim anim
+    /// [M 0x166f28:15-22]. ENTER: alert status 0, crouch anim 0x11, timer C = now + 2 s + Rand(60)
+    /// [M 0x166d90 case 1]; timer C → AimStand 0x67 [M case 0xc]; impacts resume through 0x67.
+    pub const CROUCH_COVER: u8 = 0x6e;
     pub const AIM_CROUCH: u8 = 0x6f;
     pub const AIM_CROUCH_FIRE: u8 = 0x70;
     pub const AIM_CROUCH_RELOAD: u8 = 0x71;
@@ -390,6 +410,11 @@ pub mod msg {
     /// The smoke cloud's touch (`NDrone2_DealWithObjHit` case 0x2A → `Drone_Message(obj, 0x17, 0,
     /// 0)` [M disasm 0x1405a8]; `DroneFunc_HandleImpact` case 0x17 → `DSTATE_SmokedOut` 0x7B).
     pub const SMOKE: u8 = 0x17;
+    /// The hostage death ping (`NDrone2_DSTATE_Hostage` 0x15cb78 case 0xb → SetState(HostageDie
+    /// 0x0b) [M 0x15cb78:61-64]). No ported sender routes 0x0b yet — the kill paths (`Drone_BulletHit`
+    /// msg 8) reach hostages through the impact handlers instead — so the arm waits like the game's
+    /// dispatch.
+    pub const DIE: u8 = 0x0b;
 }
 
 /// Anim states (`DroneAnimStates` index).
@@ -4920,6 +4945,8 @@ impl Drone {
                 true
             }
             (UNDER_COVER_IDLE, msg::EXIT) => { d.props.set(0x10, &mut self.props, 0); true }
+            // `NDrone2_DSTATE_UnderCoverAim` 0x16a2d0 (state 0x95) — entered by UnderCoverIdle's
+            // `uVar5 = 0x95` pick when the cover node is OK [M 0x169e58:145-151].
             (UNDER_COVER_AIM, msg::ENTER) => {
                 if !self.cover_anim(d, rng, 2, UNDER_COVER_FIRE) { self.set_state(UNDER_COVER_LEAVE_NOW) }
                 true
@@ -5007,6 +5034,8 @@ impl Drone {
             (AMBUSH_WAIT, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, ATTACK); true }
             // `DroneFunc_UnderCoverTalk` 0x13fe80 [M 0x16a9c0:25 — the enter calls it]: MP-gated
             // dead (see UNDER_COVER_INIT above).
+            // `NDrone2_DSTATE_UnderCoverReturn` 0x16a9c0 (state 0x99) — UnderCoverFire /
+            // UnderCoverSniperFire SetState it when the target drops [M 0x16a3e0 / 0x16a610].
             (UNDER_COVER_RETURN, msg::ENTER) => { if !self.cover_anim(d, rng, 4, UNDER_COVER_TYPE_CHANGE) { self.set_state(UNDER_COVER_LEAVE) } true }
             (UNDER_COVER_RETURN, msg::UPDATE) => { if !in_cover_ok(self, false) || far_from_goal(self) { self.cover_leave |= 4 } true }
             (UNDER_COVER_TYPE_CHANGE, msg::ENTER) => {
@@ -5016,6 +5045,9 @@ impl Drone {
                 true
             }
             (UNDER_COVER_LEAVE, msg::ENTER) => { self.set_state(UNDER_COVER_LEAVE_NOW); true }
+            // `NDrone2_DSTATE_UnderCoverLeaveNow` 0x16ab38 (state 0x9c) — UnderCoverLeave SetStates it
+            // [M 0x173ac0], the UnderCover impact/ignore group forwards HandleImpact(0x9c), and
+            // UnderCoverIdle's goal/cover failures jump here [M 0x169e58].
             (UNDER_COVER_LEAVE_NOW, msg::ENTER) => {
                 self.cover_leave |= 8;
                 self.disown_cover();
@@ -5946,6 +5978,10 @@ impl Drone {
             // target): ENTER re-finds the mission path (ReFindMissionPath 0x153a30 — not modelled
             // [S]) and falls to GO_TO_GOAL 0x63 with the Global resume +0x5a2 = 0x14 [M case 1].
             (RETURN_TO_PATROL_PATH, msg::ENTER) => { self.set_state(GO_TO_GOAL); true }
+            // `NDrone2_DSTATE_InitPatrol` 0x1724f0 (state 0x06) ENTER [M case 1]: the spawn entry —
+            // prop 0x24/0x25 drones take the mission path (`AssignAIPath(4)`) → Patrol 0x07, everyone
+            // else Idles. The [L ee_start_05.bin] fresh-boot snapshot shows guards passing through
+            // (cur=4 Idle, prev=6).
             (INIT_PATROL, msg::ENTER) => {
                 let patrols = (self.prop(d, 0x24) || self.prop(d, 0x25)) && self.assign_path(d, 4);
                 self.set_state(if patrols { PATROL } else { IDLE });
@@ -6197,6 +6233,9 @@ impl Drone {
             (ALERT_TO_POSITION, msg::ENTER) => { self.vision_on = true; self.call_anim(d, anim_state::WALK_AIM, 0, 0); self.timer_c = Some(frame + 300); true }
             (ALERT_TO_POSITION, msg::TIMER_C) => { true }
             // SearchArea 0x65: look around, turn, look, give up and walk home (`+0x5B0`) through GoToGoalPosition.
+            // `NDrone2_DSTATE_SearchArea` 0x165bf0 (state 0x65) ENTER [M case 1]: vision on,
+            // `+0x4F8 |= 0x2000`, alert status 1, the alert-look anim 0x22, timer C = now + 3 s,
+            // timer D cleared, the timer-C armed byte `+0xCC0 = 1` (the port's `timer_c`).
             (SEARCH_AREA, msg::ENTER) => { self.vision_on = true; self.call_anim(d, anim_state::ALERT_LOOK, 0, 0); self.timer_c = Some(frame + 180); true }
             (SEARCH_AREA, msg::TIMER_C) => { self.call_anim(d, TURN, 0, msg::SEARCH_LOOKED); true }
             (SEARCH_AREA, msg::SEARCH_LOOKED) => { self.call_anim(d, LOOK_SHORT, 0, msg::SEARCH_DONE); true }
@@ -6438,6 +6477,8 @@ impl Drone {
                 true
             }
             // DroneStuck: `DAT_00299024` is only ever 0, so the update's escape never fires; the enter goes to NoRoute.
+            // `NDrone2_DSTATE_DroneStuck` 0x165ef0 (state 0x7f) ENTER [M case 1]: vision on, then
+            // straight into CombatNoRoute 0x5f — the stuck state itself is a one-frame passthrough.
             (DRONE_STUCK, msg::ENTER) => { self.vision_on = true; self.set_state(COMBAT_NO_ROUTE); true }
             // `NDrone2_DSTATE_CombatNoMove` 0x1643e8 (state 0x59), ENTER [M :18-40]: vision on; an
             // alt-mode-2 sniper reroutes to SniperFire at once; everyone else takes the aim-stand
@@ -6457,6 +6498,39 @@ impl Drone {
             // mode-0xC guards' Rand(3) → 0x6E). The port's fold (the shared combat tick drives the
             // fire/turn plumbing; the unseen-ticks exit keeps the 0x5b/0x5c routing) stands until the
             // per-state rework; the decompile cites here so the audit sees the handler.
+            // `NDrone2_DSTATE_Investigate` 0x168070 (state 0x7e) — the blind-cheat search (the entry:
+            // CombatOutOfRange's `switch_BLIND_DRONES` ENTER arm parks `+0x5A2 = 0x7e`, GoToGoalPosition
+            // arrives and SetStates it [M 0x164690:26-32]). ENTER [M case 1]: vision on, `+0x4F8 |=
+            // 0x2000`, alert status 2 (alert share 0.66), the alert-idle anim 0x21. UPDATE [M case 3]:
+            // `DroneVision_EnemyLookForOpponent` — a picked state wins; with no pick and the alert share
+            // under 0.66 the search is over → Idle 0x04. The alert msgs 0x11/0x12/0x14/0x15/0x16/0x1E run
+            // `DroneVision_EnemyAlerts` [M case group]; impacts resume through Attack 0x56 [M cases
+            // 6/7/8/9/0x17/0x18/0x19 + 0x21]; forced attack [M case 0x1f].
+            (INVESTIGATE, msg::ENTER) => {
+                self.vision_on = true;
+                self.alert = 0.66; // `Drone_AlertStatusSet(2)` — table 0x2f5cc8[2] = 0.66
+                self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
+                true
+            }
+            (INVESTIGATE, msg::UPDATE) => {
+                if let Some(n) = self.look_for_opponent(d) { self.set_state(n); }
+                else if self.alert < 0.66 { self.set_state(IDLE); } // `+0x50c` = the AlertStatusSet share
+                true
+            }
+            (INVESTIGATE, msg::SHOUT | msg::SCREAM | msg::SOUND) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (INVESTIGATE, msg::ALARM) => {
+                // EnemyAlerts case 0x1E [M 0x177c18]: the first-time stamps then Attack 0x56.
+                if !self.investigating { self.resume_state = s; self.home = self.feet(); }
+                self.set_state(ATTACK);
+                true
+            }
+            (INVESTIGATE, msg::BULLET) => self.on_bullet_resume(d, rng, frame, ATTACK, false),
+            // [M 0x168070 cases 6/7/8/9/0x17/0x18/0x19]: msg 6 and 8 forward allow = 0, the rest allow = 1.
+            (INVESTIGATE, msg::PUNCH) => self.on_bullet_resume(d, rng, frame, ATTACK, false),
+            (INVESTIGATE, msg::TASE | msg::EXPLOSION | msg::FLASH | msg::SMOKE | msg::STUN_DART) => self.on_bullet_resume(d, rng, frame, ATTACK, true),
+            (INVESTIGATE, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, ATTACK); true }
+            (INVESTIGATE, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
+            (COMBAT_NO_MOVE, msg::ENTER) => { self.attack_talk(d, rng); true }
             (COMBAT_NO_MOVE, msg::UPDATE) => {
                 if self.unseen_ticks < 16 { self.set_state(COMBAT_NEW_SIGHTING) } else { self.set_state(COMBAT_NO_SIGHT) }
                 true
@@ -6568,6 +6642,12 @@ impl Drone {
                 true
             }
             (AIM_STAND_FIRE | AIM_CROUCH_FIRE, msg::TIMER_C) => { self.fire(d, rng, frame, true); true }
+            // `NDrone2_DSTATE_AimStandReload` 0x1666d8 (state 0x69) / `NDrone2_DSTATE_AimCrouchReload`
+            // 0x167370 (state 0x71) ENTER [M 0x1666d8 case 1]: `firing` drops, the clip refills from
+            // the reserve (`+0xBBC = +0xBBE`), and the reload anim's follow-on returns to the matching
+            // fire state (0x68 stand / 0x70 crouch). (The game's 1-in-30 alternate reload anim 0x4a
+            // with the same follow-on is a presentation variant [M 0x1666d8:21-27] — the port plays
+            // RELOAD only.)
             (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::ENTER) => {
                 self.firing = false;
                 self.clip = self.clip_max;
@@ -6576,9 +6656,35 @@ impl Drone {
             }
             (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::UPDATE) => { self.turn_to_opponent(0.9); true }
             // Crouching: AimCrouch plays the crouch-aim anim and continues in AimCrouchFire.
-            (AIM_CROUCH, msg::ENTER) => { self.call_anim(d, anim_state::CROUCH_AIM, AIM_CROUCH_FIRE, 0); true }
+            // `NDrone2_DSTATE_AimCrouch` 0x166f28 (state 0x6f) ENTER [M case 1]: vision on, alert
+            // status 1, then by mode byte — `+0xc5 == 0x11` (the cover-croucher type) SetStates
+            // CrouchCover 0x6e instead of playing anim 5 with follow-on 0x70 [M 0x166f28:15-22].
+            (AIM_CROUCH, msg::ENTER) => {
+                if self.mode == 0x11 { self.set_state(CROUCH_COVER); return true; }
+                self.call_anim(d, anim_state::CROUCH_AIM, AIM_CROUCH_FIRE, 0); true
+            }
             (AIM_CROUCH, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
+            // `NDrone2_DSTATE_CrouchCover` 0x166d90 (state 0x6e) — the cover-croucher's hold. ENTER
+            // [M case 1]: vision on, alert status 0 (the table's 0 = 1.0 alert share), crouch anim 0x11,
+            // timer C = now + 2 s + Rand(FRAME_RATE) frames. UPDATE [M case 3]: seen-and-attacking, and
+            // face the opponent unless the drone mode is 0xc. Timer C [M case 0xc] and the impact
+            // resume state [M cases 6/7/8/9/0x17/0x18/0x19 + 0x21] both land on AimStand 0x67.
+            (CROUCH_COVER, msg::ENTER) => {
+                self.vision_on = true;
+                self.alert = 0.0; // `Drone_AlertStatusSet(0)` — table 0x2f5cc8[0] = 0
+                self.call_anim(d, 0x11, 0, 0);
+                self.timer_c = Some(frame + 120 + rng.rand(60) as u32);
+                true
+            }
+            (CROUCH_COVER, msg::UPDATE) => {
+                // SeenAndAttacking + TurnToObj — the port's fold is facing the opponent [M 0x166d90 case 3];
+                // the mode-0xc drone keeps its angle.
+                if self.mode != 0xc { self.desired_yaw = self.yaw_to_opp; }
+                true
+            }
+            (CROUCH_COVER, msg::TIMER_C) => { self.set_state(AIM_STAND); true }
             (AIM_CROUCH_FIRE, msg::ENTER) => { self.call_anim(d, anim_state::CROUCH_AIM, 0, 0); self.vision_on = true; self.fire(d, rng, frame, true); true }
+            // `NDrone2_DSTATE_AimCrouchFire` 0x167060 (state 0x70) UPDATE fires from the crouch
             (AIM_CROUCH_FIRE, msg::UPDATE) => {
                 self.desired_yaw = self.yaw_to_opp;
                 if self.dist <= 4.0 && self.can_backoff(d) { self.set_state(AIM_BACKOFF); return true; }
@@ -6592,6 +6698,9 @@ impl Drone {
             }
             // Steps: one anim, then back to AimStandFire; no firing while stepping.
             (STEP_AIM_LEFT | STEP_AIM_RIGHT, msg::ENTER) => {
+                // `NDrone2_DSTATE_StepAimLeft` 0x167590 / `NDrone2_DSTATE_StepAimRight` 0x1676a0
+                // (states 0x73/0x74) [M cases 1]: vision on, the step anim (0x5a/0x5b), no firing
+                // (`+0x3b = 0`), follow-on AimStandFire 0x68.
                 self.vision_on = true; // `+0x4F8 |= 0x10000` (decomp 0x167590:14)
                 self.call_anim(d, if s == STEP_AIM_LEFT { anim_state::STEP_LEFT } else { anim_state::STEP_RIGHT }, AIM_STAND_FIRE, 0);
                 self.firing = false;
@@ -6604,6 +6713,11 @@ impl Drone {
             }
             // Strafes fire while moving; dodges do not. Both end on a 2–5 s / 2–3 s timer or when blocked.
             (STRAFE_AIM_LEFT | STRAFE_AIM_RIGHT | STRAFE_DODGE_LEFT | STRAFE_DODGE_RIGHT, msg::ENTER) => {
+                // `NDrone2_DSTATE_StrafeAimLeft` 0x1677b0 / `NDrone2_DSTATE_StrafeAimRight` 0x167980
+                // (states 0x75/0x76) and `NDrone2_DSTATE_StrafeDodgeLeft` 0x167b50 /
+                // `NDrone2_DSTATE_StrafeDodgeRight` 0x167cf0 (states 0x77/0x78) [M cases 1]: vision on,
+                // the strafe/dodge anim, timer C = 2 + Rand(4) s (strafes) / 2 + Rand(2) s (dodges);
+                // the strafes fire from the enter, the dodges clear the fire request.
                 self.vision_on = true; // `+0x4F8 |= 0x10000` (decomp 0x1677b0 etc.)
                 let (anim, secs, fires) = match s {
                     STRAFE_AIM_LEFT => (anim_state::STRAFE_LEFT, rng.rand(4) + 2, true),
@@ -6629,6 +6743,9 @@ impl Drone {
             }
             (STRAFE_AIM_LEFT | STRAFE_AIM_RIGHT | STRAFE_DODGE_LEFT | STRAFE_DODGE_RIGHT | AIM_BACKOFF, msg::TIMER_C) => { self.set_state(AIM_STAND); true }
             (ROLL_LEFT_CROUCH | ROLL_RIGHT_CROUCH, msg::ENTER) => {
+                // `NDrone2_DSTATE_RollLeftCrouch` 0x167e90 / `NDrone2_DSTATE_RollRightCrouch` 0x167f80
+                // (states 0x79/0x7a) [M cases 1]: vision on, the roll anim (0x53/0x54), follow-on
+                // AimCrouchFire 0x70.
                 self.vision_on = true; // `+0x4F8 |= 0x10000` (decomp 0x167e90 etc.)
                 self.call_anim(d, if s == ROLL_LEFT_CROUCH { anim_state::ROLL_LEFT } else { anim_state::ROLL_RIGHT }, AIM_CROUCH_FIRE, 0);
                 true
@@ -7202,6 +7319,18 @@ impl Drone {
             // danim 0xf4 with blend 0 — the kneel pose, restarted whenever its one-shot ends. No ported sender
             // routes msg 5 to a hostage on the shipped path (the ENTER call's completion message is 0), so the
             // arm waits like the game's dispatch; the abseil landing exercises `set_danim_now` for real.
+            // Hostage case 0xb (the death ping) [M 0x15cb78:61-64]: SetState(HostageDie 0x0b).
+            (HOSTAGE, msg::DIE) => { self.set_state(HOSTAGE_DIE); true }
+            // `NDrone2_DSTATE_HostageDie` 0x1725a0 (state 0x0b) ENTER [M case 1]: alert status 3
+            // (alert share 1.0), the death scream (sound 10, forced), the fall anim 0x40 with
+            // follow-on HostageDead 0x0f, `NDrone2_LogDroneDeath` (the port's corpse/mission path
+            // already runs through HOSTAGE_DEAD's ENTER).
+            (HOSTAGE_DIE, msg::ENTER) => {
+                self.alert = 1.0; // `Drone_AlertStatusSet(3)` — table 0x2f5cc8[3] = 1.0
+                self.foley_reqs.push(10);
+                self.call_anim(d, 0x40, HOSTAGE_DEAD, 0);
+                true
+            }
             (HOSTAGE, msg::ANIM_DONE) => { self.set_danim_now(d, 0xf4, 0); true }
             // HostageSaved (0x15ccf0 — state 0x0c [L 0x29b300]) ENTER [M 0x15ccf0:16-44]:
             // `Drone_AlertStatusSet(0)`, clear the captor link, `Music_Event(0x10, 1)` (the port

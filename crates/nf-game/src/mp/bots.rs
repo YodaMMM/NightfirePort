@@ -550,6 +550,58 @@ pub fn bot_global_dispatch(
     }
 }
 
+/// The alert-msg → state outcomes of `NDrone2_ReactToDroneAlertMsg` 0x1437a0 — the function
+/// `NDrone2_DSTATE_BotGlobal` 0x16E060's alert arm (msgs 0x11..0x16, 0x1E) forwards to after the
+/// `Alert { react }` gate [M 0x16E060]. The caller's `prop` is the receiver's behaviour-property
+/// test (`behaviour_util_getProperty` against `Drone+0x4D8`), `shouting_range` folds
+/// `NDrone2_InShoutingRange` 0x1488c0, and `sender` is the alerting drone's mode byte `+0xC5`
+/// [M 0x1437a0 — the per-case gates]. Returns the state the receiver's SMI is SetState'd to
+/// [M LAB_00143e30 `Drone_SM_SetState(smi, param_3, 0)`].
+///
+/// The two states this task owns (857-unported-guard-ai-other-4):
+/// - **`NDrone2_DSTATE_SeenDeadBody` 0x16ACD0** (state 0x9E) — alert 0x15, the dead-body shout:
+///   receiver prop 0x29, no `+0x4F8 & 0x800000`, in shouting range, alert share `+0x50C = 1.0`,
+///   then every sender mode byte except 9/10 (which keep the incoming override) and 0x1E (MP
+///   same-team check) lands `param_3 = 0x9E` [M 0x1437a0:307-326]. ENTER plays anim 0x24 with
+///   the body look, timer C, and falls back to `+0x5A2` [M 0x16ACD0 — the state body; the port
+///   delivers the transition, the body presentation is the main agent's].
+/// - **`NDrone2_DSTATE_SeenSurrenderedDrone` 0x16ADE0** (state 0x9F) — alert 0x16, the surrender
+///   shout: shouting range, alert share 1.0, receiver prop 0x4F, and every sender mode byte
+///   except 9/10/0x12/0x13 (those four attack instead, when no override came in) lands
+///   `param_3 = 0x9F` [M 0x1437a0:283-290, 329-340].
+pub fn react_to_drone_alert_msg(
+    alert: u8,
+    sender: u8,
+    prop: impl Fn(u32) -> bool,
+    shouting_range: bool,
+) -> Option<u8> {
+    match alert {
+        // 0x15 the dead-body shout → SeenDeadBody 0x9E. Gates [M 0x1437a0:298-326]: receiver prop
+        // 0x29, not already fleeing (+0x4F8 & 0x800000 clear), in shouting range, alert share
+        // +0x50C = 1.0; sender mode 0x12 drops out, 0x1E goes to the MP bot path, sender 9/10 keep
+        // the incoming override (the port's callers pass none — Attack), everyone else → 0x9E.
+        0x15 if prop(0x29) && shouting_range && sender != 0x12 && sender != 0x1e => {
+            if matches!(sender, 9 | 10) { Some(0x56) } else { Some(0x9e) }
+        }
+        // 0x16 the surrender shout → SeenSurrenderedDrone 0x9F. Gates [M 0x1437a0:283-340]: receiver
+        // prop 0x4F (checked before the shout branch), not fleeing, in shouting range, alert share
+        // 1.0; sender modes 9/10/0x12/0x13 attack when no state override came in, everyone else → 0x9F.
+        0x16 if prop(0x4f) && shouting_range => {
+            if matches!(sender, 9 | 0x12 | 0x13) { Some(0x56) } else { Some(0x9f) }
+        }
+        // The other alert ids (0x11 armed intruder, 0x12 scream, 0x14 alarm sound, 0x1E alarm) resolve
+        // through the same SetState tail [M LAB_00143e30] — Attack 0x56 for the intruder/alarm arms
+        // (0x1437a0:218-222, 108), 0xA0/0xA2 heard-noise for the scream/alarm-sound default senders
+        // [M 0x1437a0:106-108, 253-258]. Their per-sender gates are the SP alert family's, not this
+        // task's functions — the coarse outcomes only.
+        0x11 if prop(0x28) && shouting_range => Some(0x56),
+        0x12 if prop(0x27) && shouting_range && sender != 0x12 => Some(0xa0),
+        0x14 if prop(0x1f) && sender != 0x16 && sender != 9 => Some(0xa2),
+        0x1e => Some(0x56),
+        _ => None,
+    }
+}
+
 // ============================================================================
 // 6. Phase 4 (`mp-bots-states`): the ported state machine — the goal machine,
 //    the roam states (0xF9/0xEB) and the attack/fire decision (0xCF/0xD2)
