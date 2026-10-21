@@ -7,7 +7,7 @@
 //! - `Check_Target` 0x1a7810 (every 6th tick) decrements `LoadMsg` (0x30cd08) on EVERY invocation
 //!   (:78-79); the class-0x1D arm (:193-208) requires `Trigger_Type` (0x1b2fa8) == 10 — a
 //!   LOAD_LEVEL exit — hit dist < 5.0, `LoadMsg == 0`, level != 0x7000009, and re-arms
-//!   `LoadMsg = FRAME_RATE_INT * 0x14` = 60 whether or not the hint shows (:195-196).
+//!   `LoadMsg = FRAME_RATE_INT * 0x14` = 1200 whether or not the hint shows (:195-196).
 //! - The hint itself needs `!Trigger_Locked` (0x1b2fc8): for a type-10 trigger the key gate channel
 //!   (ext+0x26) off; a non-10 trigger's lock channel (ext+0x24) on locks it. Unlocked →
 //!   `Txt_BindLabel(0x2000009, 0)` for 0xb4 = 180 ticks (:201-207).
@@ -64,7 +64,7 @@ fn exit_fixture(sim: &nf_view::scene::Sim) -> (usize, [f32; 3]) {
 
 /// The real path raises the 0x2000009 exit hint once: aim at the exit through `step_bond` inputs —
 /// fails on the old stand-in (no trigger arm at all → no label ever) — and the sister asserts the
-/// game's cooldown: `LoadMsg` re-arms to 60 (invocations), so the label does NOT double-post while
+/// game's cooldown: `LoadMsg` re-arms to 1200 (invocations), so the label does NOT double-post while
 /// it runs [M 0x1a7810:195-196].
 #[test]
 fn aiming_at_a_load_level_exit_raises_the_hint_once_and_arms_the_cooldown() {
@@ -83,13 +83,14 @@ fn aiming_at_a_load_level_exit_raises_the_hint_once_and_arms_the_cooldown() {
     let mut hits = Vec::new();
     for k in 0..30 {
         sim.step_bond(Input::default(), false, false, false);
-        hits = raised(sim, 0x200_0009);        if !hits.is_empty() { break; }
+        hits = raised(sim, 0x200_0009);
+        if !hits.is_empty() { break; }
     }
     assert_eq!(hits, vec![180.0], "the aim ray raised the 0x2000009 exit hint for 180 ticks — Text_AddMsg(…, 0xb4) [M 0x1a7810:201-207]; other info msgs {:?}",
         sim.hud.info_msgs.iter().map(|m| (m.label, m.life)).collect::<Vec<_>>());
-    // Sister: the cooldown re-armed to 60 invocations [M 0x1a7810:196] and counts down one per
-    // 6th-frame invocation [M 0x1a7810:78-79] — so it stays > 0 (no second raise) for ~350 frames.
-    assert_eq!(sim.hud.load_msg, 60, "LoadMsg re-armed to FRAME_RATE_INT * 0x14 [M 0x1a7810:196]");
+    // Sister: the cooldown re-armed to 1200 invocations (60 * 0x14) [M 0x1a7810:196] and counts
+    // down one per 6th-frame invocation [M 0x1a7810:78-79] — so it stays > 0 (no second raise).
+    assert_eq!(sim.hud.load_msg, 1200, "LoadMsg re-armed to FRAME_RATE_INT * 0x14 [M 0x1a7810:196]");
     for _ in 0..60 {
         sim.step_bond(Input::default(), false, false, false);
         assert!(sim.hud.load_msg > 0, "the cooldown must outlast a 60-tick aim window [M 0x1a7810:78-79: one decrement per 6th frame]");

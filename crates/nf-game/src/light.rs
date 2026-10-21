@@ -355,8 +355,7 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2
 /// rocket-trail-gas]. The live spawn runs through `GasPool::init_ex` (scene.rs, the muzzle-flash
 /// tick); this struct is the older models-misc stand-in kept for the render slot type.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Smoke
- {
+pub struct Smoke {
     pub pos: [f32; 3],
     /// Ticks since creation.
     pub age: u8,

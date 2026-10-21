@@ -802,7 +802,7 @@ pub struct HudState {
     /// unported-misc-5: the game's `LoadMsg` global (0x30cd08, .sdata, next to `DoorMsg`): the aim-ray
     /// exit-hint cooldown. `Check_Target` decrements it on EVERY 6th-frame invocation (0x1a7810:78-79),
     /// and the 0x1d `Trigger_Type == 10` arm only fires while it is 0, re-arming it to
-    /// `FRAME_RATE_INT * 0x14` = 60 invocations = 360 frames [M 0x1a7810:195-196]. Same [S port
+    /// `FRAME_RATE_INT * 0x14` = 1200 invocations = 7200 frames [M 0x1a7810:195-196]. Same [S port
     /// architecture note as `door_msg`: the port resets it per level, the game's .sdata does not.
     pub load_msg: u32,
 }
@@ -4623,7 +4623,7 @@ impl Sim {
             // `Trigger_Type` (0x1b2fa8 — the discrete's ext+0x38; the port's `Trigger.kind`) must be 10 — a
             // LOAD_LEVEL exit. Gates: hit dist < 5.0 [M 0x1a7810:194], `LoadMsg` 0x30cd08 == 0 (the aim-hint
             // cooldown, decremented on EVERY 6th-frame invocation at 0x1a7810:78-79 and re-armed to
-            // `FRAME_RATE_INT * 0x14` = 60 here whether or not the hint shows [M 0x1a7810:195-196]), and the
+            // `FRAME_RATE_INT * 0x14` = 1200 (invocations, ≈2 minutes at one per 6 frames) here whether or not the hint shows [M 0x1a7810:195-196]), and the
             // level != 0x7000009 — 09's exit panels carry their own hint path [M 0x1a7810:195]. On all gates
             // passing and `!Trigger_Locked` (0x1b2fc8 — for a LOAD_LEVEL exit the key gate off), the game posts
             // `Txt_BindLabel(0x2000009, 0)` for 0xb4 = 180 ticks [M 0x1a7810:201-207]. The port: the AABB pick
@@ -4637,7 +4637,7 @@ impl Sim {
                 if !drone_in_front && !door_in_front && tt * 50.0 < 5.0
                     && t.kind == nf_game::triggers::kind::LOAD_LEVEL
                     && self.level != 0x0700_0009 && self.hud.load_msg == 0 {
-                    self.hud.load_msg = 60; // FRAME_RATE_INT * 0x14 [M 0x1a7810:196]
+                    self.hud.load_msg = 60 * 0x14; // FRAME_RATE_INT * 0x14 = 1200 invocations [M 0x1a7810:196]
                     if !t.locked(&self.drones.channels) {
                         self.hud.info_labels.push_back((0x200_0009, 180.0));
                     }
