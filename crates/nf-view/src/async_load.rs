@@ -11,6 +11,26 @@
 //! 0x10b9f8. The port's old model blocked the window thread in the load, so the screen showed the
 //! dots' first state only; [`Job`] moves the build to a worker thread and lets the window thread
 //! keep redrawing the screen with `loading::dots_lit` over the load's elapsed 60 Hz vblanks.
+//!
+//! The PS2 OS seam this replaces (misc-9 citations — the kernel services behind every game file
+//! read and level switch; shapes disassembled from the ELF, each a 16-byte `li $v1,<#>; syscall;
+//! jr $ra; nop` stub unless noted, full caller maps in docs/systems/kernel-stubs-misc9.md):
+//! - `FlushCache` 0x23bf20 (syscall 0x64) — `psiFileRead` 0x10bdf0:18 flushes unconditionally
+//!   before every `sceCdRead`, and `psiAllocateLoadingBlobs`/`CreateDB`/`PS2EndCalcPacket` do
+//!   the same around their DMA; coherent host memory needs no flush.
+//! - `SyncDCache` 0x23c410 (124 B range-flush wrapper) — `amemcpy` 0x11f5c0 runs it before
+//!   every DMA staging copy; the port's slice copies are coherent.
+//! - `iFlushCache` 0x23bf40 + `ReferThreadStatus` 0x23bdc0 + `ReferSemaStatus` 0x23be90 —
+//!   `RunNextModule` 0x120008's level/module switch bookkeeping.
+//! - `WaitSema` 0x23be60 / `SignalSema` 0x23be40 / `iSignalSema` 0x23be50 / `DeleteSema`
+//!   0x23be30 — the IOP file-service/CD semaphore layer (18/53/6/26 call sites: `get_iob`,
+//!   `_sceFsWaitS`, `_sceCd_*_prechk`, `sceOpen`/`sceClose`/`sceIoctl`, the cd_callback
+//!   interrupt, …); one worker thread with synchronous host reads needs no locking.
+//! - `isceSifSetDma` 0x23bfc0 / `isceSifSetDChain` 0x23bfe0 — the SIF DMA transport under
+//!   every RPC/CD command (`_sceSifSendCmd`, `_sceSifCmdIntrHdlr`).
+//! - `SleepThread` 0x23bdd0 — `mcDelayThread` 0x2285a0 tail-jumps it (`j 0x23bdd0`,
+//!   0x2285dc) while the mcman card-op delay thread waits; the port's card ops are
+//!   synchronous file writes (`FrontEnd::reload_profiles`).
 
 /// A load running on a worker thread: `spawn` the build, `poll` it from the frame loop.
 ///

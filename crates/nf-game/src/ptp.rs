@@ -6,6 +6,11 @@
 //! writes the result flag +0x97c, the next index +0x974 and the next key +0x4f4 before BASE.ELF
 //! re-dispatches. ACTION's next boot mirrors the read (`Boot_LoadPTPData` 0x1c8560).
 //!
+//! The launch's interrupt masking has no host counterpart: `psiLaunchDriving` calls
+//! `DisableIntc` 0x23c4b0 (104 B — masks an INTC channel) around the exec jump, as
+//! `sceGsResetGraph` does around graph init [M caller scan; docs/systems/kernel-stubs-misc9.md
+//! §3] — a host process exec needs no interrupt controller.
+//!
 //! Every offset below is measured from the decompile [M], with the DRIVING-side strings from the
 //! ELF [D]. The struct models the fields the decompile writes AND reads on both sides; the gaps
 //! (e.g. +0x1b4..+0x4b4, never touched by either side's handover code) are modelled as raw bytes.
