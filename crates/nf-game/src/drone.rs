@@ -1282,6 +1282,10 @@ pub struct Drone {
     /// charge shatters it at 0xB+911.] Reset at the head of `Drones::tick_inner`, set in
     /// `root_motion`.
     pub scripted_move: bool,
+    /// `Drone+0x174`: the drone's allocated slot in the shared target registry (NPCGlobals,
+    /// `DroneFunc_AllocateTargetID` 0x141f28 via `NDrone2_SetOpponent` 0x1422d0; 0xff = none).
+    /// The pool lives on `Drones::targets` — docs/systems/dronefunc-rest.md.
+    pub target_id: u8,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1340,6 +1344,13 @@ impl Drone {
         let setup = nf_formats::drone::drone_setup(skin, param(9), d.level);
         let (start_danim, anim_set) = nf_formats::drone::start_danim(setup, 0);
         let (normal, alert_words) = nf_formats::drone::behaviour_words(&param);
+        // The second behaviour block, parameter 5 == 100 → `+0xC48` [M 0x14b300]. The game points
+        // `+0x4D8` at `+0x4E8` in `DroneFunc_FirstAttack` 0x148010:124-127 (latching `+0x29 = 1`,
+        // read by `DroneFunc_Using2ndBehaviour` 0x14a5e8) and restores the first block with
+        // `DroneFunc_Set1stBehaviour` 0x14a5f0 (clears `+0x29`, `+0x4D8 → +0x4DC`) from the
+        // GoToGoalPosition blocked tail 0x165640. The port parses the block (and its alertness
+        // level below) but never swaps the active props at runtime [S deviation —
+        // docs/systems/dronefunc-rest.md].
         let alert_props = (param(5) == 100).then_some(alert_words);
         let alert = nf_formats::drone::ALERTNESS_LEVELS[d.props.get(0x20, &normal) as usize & 3];
         let weapon = nf_formats::drone::weapon_id(skin, param(9));
@@ -1480,8 +1491,15 @@ impl Drone {
             recoil_weapon: weapon == 0x1c || weapon == 0x1d,
             // glass-breach-guards-4 (own line — merge lesson 4).
             scripted_move: false,
+            // +0x174 — the shared target registry slot, allocated on first sight (task 845).
+            target_id: 0xff,
         };
         dr.init_properties(d, &param);
+        // `DroneInit_Collision` 0x14b1e8 (DefaultInit 0x14b300:775): not MP, `+0xBD4`/`+0x23` clear,
+        // `+0xD8 != 0x13`, `+0xC5 != 0x17` — a 25-unit ray down from obj+1.0 moves the spawn to the
+        // hit + 1.0 and sets the anim object's +0x60 |= 8. The port spawns at the placement
+        // translation (authored on the floor [D census]); the flagged 0x13/0x17 spawns enter
+        // mid-air by design, so the drop is a no-op for the port's on-floor placements.
         dr.type_setup(d);
         // The dtypenew specials [M 0x14b300:615-627]: placement msg 0x6000892 → mode 0x1c, 0x600089c
         // → 0x1b; the skin's anim set (+0xda) is saved to +0xdc and set 0xf (the rope set) takes
@@ -2834,7 +2852,11 @@ impl Drone {
         }
         // `Drone_AlertStatusSet(2)` [M 0x145f28:30] — the port's alert-status-2 = alert ≥ 0.66
         // (the convention crate::drone line ~2703 uses for the stun family). The game stamps it
-        // before the damage; the port reaches the same value for every living victim.
+        // before the damage; the port reaches the same value for every living victim. The discrete
+        // status byte the setter writes is drone+0x51C, read back by the getter `Drone_AlertStatus`
+        // 0x13a910 (its one caller, `AnimFacialUpdate` 0x1be310, is not ported — the facial system
+        // is draw-side; docs/systems/dronefunc-rest.md) — the port's alert level + these thresholds
+        // stand in for the byte.
         self.alert = self.alert.max(1.0);
         // 0x145f28:57-84 — the two team arms, in the game's order: team 1 KOs BEFORE the hurt
         // message (a punched-out guard never screams); team ≠ 1 sends it FIRST — even when the
@@ -4952,6 +4974,8 @@ impl Drone {
     }
 
     /// `Drone_SM_RouteMsgDCV`: deliver, then apply pending changes (exit → enter, repeating).
+    /// `Drone_SM_RouteMsg` 0x172128 is its obj-level wrapper (`Drone_DCVfromOBJ` 0x13a0a0 resolves
+    /// the object first); the port's obj half is `Drones::tick`.
     pub fn send(&mut self, d: &Data, rng: &mut Rng, frame: u32, m: u8) {
         if !self.handle(d, rng, frame, self.state, m) { self.handle(d, rng, frame, state::GLOBAL, m); }
         if let Some(m2) = self.self_msg.take() { self.send(d, rng, frame, m2); }
@@ -5689,8 +5713,14 @@ impl Drone {
             // would take the 0x3C Interogate arm, which this port does not carry — [S] no such
             // placement is known.)
             (ATTACK, msg::ENTER) if !self.first_attack_done && self.own_sight && self.prop(d, 0x1a) => {
-                // The FirstSightState-return arm of FirstAttack 0x148010: the first-attack stamps,
-                // alertness 1.0, the sight widening, `+0x13a` (second_tag) and the second switch cleared.
+                // The FirstSightState-return arm of FirstAttack 0x148010: the first-attack stamps —
+                // the same set `DroneFunc_SetAsAttacking` 0x14aed8 performs for the already-alerted
+                // spawn (`DefaultInit` 0x14b300:686, return state 0x56/0x12): `+0x13a`/`second_tag`
+                // and the second switch cleared, `+0x4F8 |= 0x2000000|0x4000000`, `+0x524` once,
+                // `+0x50C = 1.0`, `+0xE8 = max(+0xE8, +0xFC)`, `+0xE4 = 0`. The game's comms-alerted
+                // arm (broadcast bits, not own sight) picks `DroneFunc_FirstAlertState` 0x147f58's
+                // state instead — `Drone::first_alert_state` lifts that pick; the port does not yet
+                // stamp the 0x70000000 broadcast bits [S].
                 self.first_attack_done = true;
                 self.alert = 1.0;
                 self.second_tag = 0;
@@ -7338,6 +7368,21 @@ impl Drone {
         go.then_some(state::ATTACK)
     }
 
+    /// `DroneFunc_FirstAlertState` 0x147f58 [M :8-44] — the COMMS-alerted first-attack pick
+    /// (`DroneFunc_FirstAttack` 0x148010:23-30 consults it when the alert-broadcast bits
+    /// (+0x4F8 & 0x70000000) are set but the sighting was not the drone's own): any of the
+    /// +0x4FC bits 2/0x10/0x20/0x20000/0x40000/0x80000/0x100000 → 0 (the sight flow); bit
+    /// 0x200000 → state 0x39 on the levels 0x7000005, 0x7000007, 0x7000041 and everything
+    /// ≥ 0x7000008, else 0. `alert_bits` is the port's +0x4FC.
+    pub fn first_alert_state(alert_bits: u32, level: u32) -> u16 {
+        if alert_bits & (2 | 0x10 | 0x20 | 0x20000 | 0x40000 | 0x80000 | 0x100000) != 0 { return 0; }
+        if alert_bits & 0x200000 == 0 { return 0; }
+        if level == 0x7000_007 { return 0x39; }
+        if level < 0x7000_008 { return if level == 0x7000_005 { 0x39 } else { 0 }; }
+        if level == 0x7000_041 { return 0x39; }
+        0
+    }
+
     /// `NDrone2_CheckSurrender` (0x14a060, inlined in `FirstSightState`): prop 0x43, alertness < 0.66, Bond within
     /// 2.0, more than 120° off the drone's facing (behind it), in line of sight, armed, and facing the drone within 45°.
     fn check_surrender(&self, d: &Data) -> bool {
@@ -7980,6 +8025,13 @@ impl Drone {
     }
 
     /// `DroneVision_OpponentVisibility` (+0x230): range scaled by alertness, cone with a 22.5° pad.
+    /// `DroneVision`'s per-tick visibility — the sight probes the game runs from
+    /// `DroneVision_CanSeeObject` 0x1785e0 / `CanSeePosition` 0x178438 / `GunThroughWall` 0x178520 /
+    /// `CanSeeObjectFrom` 0x176f18, each clamping its probe through `DroneFunc_ClampPosToCollisionCylinder`
+    /// 0x1499d0 (within 0.4 of the obj's x/z centre, y kept). The port's probes start at the drone
+    /// centre (`head()`, +0.6) — already inside the 0.4 cylinder, so the clamp is a no-op here.
+    /// `CanSeeObjectFrom`'s LOS starts at `DroneFunc_GetBonePos` 0x149bd0 (the head bone, falling
+    /// back to obj+0x30); the port's bone-free `head()` stands in for it.
     pub fn visibility(&self) -> f32 {
         if self.dist < 2.0 && self.sight_range > 0.0 { return 1.0; }
         let r = self.sight_range * (2.0 * self.alert + 1.0);
@@ -8839,6 +8891,12 @@ pub struct Drones {
     /// rule in `spawn_fade_view`'s doc); the raw state still advances per tick. See
     /// docs/systems/doublecross-transitions.md §6/§7.
     pub spawn_fade: Option<(u32, u32)>,
+    /// The guards' shared target registry (NPCGlobals' 8 slots at DAT_00299110):
+    /// `DroneFunc_AllocateTargetID` 0x141f28 / `DroneFunc_TargetSeen` 0x14a008, allocated by
+    /// `NDrone2_SetOpponent` 0x1422d0, stamped by the sight/talk flow, read by
+    /// `Drone_GetOpponentInfo` 0x138f68 / `IsCoverNodeUsable` 0x1386d8 / `InitComms` 0x139520.
+    /// docs/systems/dronefunc-rest.md.
+    pub targets: crate::target_registry::TargetRegistry,
 }
 
 /// mp-world-sync (agent 9): one body as the online shared world sees it (see `Drones::net_bodies`).
@@ -8951,6 +9009,8 @@ impl Drones {
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             // fix-06-alarm (fields on their own lines — merge lesson 4).
             sound_triggers: Default::default(),
+            // task 845: the shared target registry (NPCGlobals DAT_00299110).
+            targets: Default::default(),
             // fix-0c-hatch-latches2: the per-tick player-bullet SS Operate contacts (see the field).
             ss_bullet_contacts: Vec::new(),
             // level-0c-complete: the deferred use-key trigger half (see the field).
@@ -11356,6 +11416,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     pub fn bullet_paths(&self) -> (&[(V3, V3)], &[u16]) { (&self.bullet_paths, &self.bullet_path_weapons) }
 
     /// One 60 Hz game tick: global vision (`DroneVision_ProcessDroneSight`), then each drone's control.
+    /// The per-tick drone update — the obj-level entry the game reaches through
+    /// `Drone_SM_RouteMsg` 0x172128 (every send path funnels there: `Drone_SM_SendMsg` 0x13a630,
+    /// `SendDelayedMsgs` 0x1759a0, `SendMsgSelf` 0x175a38, `BroadcastMsg` 0x175aa8, the MP
+    /// setPlayerStatus/objectBeingDeleted/sendTeamBotMessage/getObjExtObj family) after
+    /// `Drone_DCVfromOBJ` 0x13a0a0 resolves the object (class +0xFF 2/0x11) to its drone.
+    /// The port's typed `Drones`/`Drone` split IS that adapter; the pump is `Drone::send`.
     pub fn tick(&mut self, d: &Data, player: &Player) {
         if self.hold_npcs && self.npc_enabled {
             self.npc_enabled = false;
@@ -11703,6 +11769,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             dr.index, dr.seen_ticks, dr.reaction_time(d.level), dr.dist, dr.state);
                     }
                     dr.seen = true; dr.ever_seen = true;
+                    // `NDrone2_SetOpponent` 0x1422d0 → `DroneFunc_AllocateTargetID` 0x141f28: a team-1
+                    // guard claims its shared registry slot on acquiring the opponent, and the sight
+                    // stamp (`DroneFunc_TargetSeen` 0x14a008 — the game stamps it from the talk sites
+                    // and `GetOpponentInfo` 0x138f68 refreshes the pool; the port stamps the same
+                    // +0x250-shaped position here per sight tick) keeps the pool at the freshest
+                    // sighting [M; docs/systems/dronefunc-rest.md].
+                    if dr.team == 1 {
+                        if dr.target_id == 0xff { dr.target_id = self.targets.allocate(true, dr.index); }
+                        self.targets.target_seen(dr.target_id, self.frame, dr.opp_target);
+                    }
                     // `DroneVision_HaveOpponentSight` 0x175ef0:20-25 (the reaction gate, then
                     // `+0x228 |= 4` and the call — every LOS tick [M ProcessDroneSight 0x176a28:
                     // 216-231]) → `DroneVision_LogSeenOpponent` 0x1780a8: the opponent is the
@@ -13743,6 +13819,28 @@ mod tests {
     use super::*;
     use crate::world::CollisionWorld;
 
+    /// `DroneFunc_FirstAlertState` 0x147f58's table [M :8-44]: the gate bits, the 0x200000 arm's
+    /// four level classes, and sisters that flip each.
+    #[test]
+    fn first_alert_state_picks_the_game_table() {
+        // Any of the seven gate bits clears the pick even with 0x200000 set [M :9-29].
+        for bit in [2u32, 0x10, 0x20, 0x20000, 0x40000, 0x80000, 0x100000] {
+            assert_eq!(Drone::first_alert_state(0x200000 | bit, 0x0700_0007), 0, "bit {bit:#x} gates it off");
+        }
+        // Sister: with no gate bits and no 0x200000, every level returns 0 [M :31-43].
+        assert_eq!(Drone::first_alert_state(0, 0x0700_0007), 0);
+        // 0x200000 + the four level classes → 0x39 [M :31-42].
+        assert_eq!(Drone::first_alert_state(0x200000, 0x0700_0005), 0x39);
+        assert_eq!(Drone::first_alert_state(0x200000, 0x0700_0007), 0x39);
+        assert_eq!(Drone::first_alert_state(0x200000, 0x0700_0041), 0x39);
+        // Sister: the other ≥ 0x7000008 levels return 0 — only 0x7000041 passes [M :37-39].
+        assert_eq!(Drone::first_alert_state(0x200000, 0x0700_0042), 0);
+        // Sisters: the other low levels and the other high levels return 0 [M :33-39].
+        assert_eq!(Drone::first_alert_state(0x200000, 0x0700_0002), 0);
+        assert_eq!(Drone::first_alert_state(0x200000, 0x0700_0006), 0);
+        assert_eq!(Drone::first_alert_state(0x200000, 0x0700_0008), 0);
+    }
+
     /// `Drone_BuildDynamicAwarePoints`' record-id switch [M 0x138b10:36-160]: the (radius, flag)
     /// pairs fed to `AINetwork_SetLinksFlagInCircle` [M 0x15b548]. Stun 0x35 and tripbomb 0x3a
     /// have no case; a stuck mine (`obj+0xF4 == 3` [M 0x138b10:150]) is skipped.
@@ -13847,6 +13945,8 @@ mod tests {
             // fix-cover-remainder: the scary-object flee family (own line — merge lesson 4).
             scared: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
             scripted_move: false,
+            // +0x174 — the shared target registry slot (task 845).
+            target_id: 0xff,
         };
         dr
     }
