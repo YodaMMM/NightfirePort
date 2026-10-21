@@ -820,6 +820,10 @@ impl<'a> MenuRuntime<'a> {
     /// target −3 = the manager (no handler modelled → 0), −2 = the control itself, else the
     /// control with that id. Returns the handler result (msg 0x30 = the colour, 0x39 = the
     /// control's index+1 as a stand-in pointer, others 1 on delivery).
+    ///
+    /// The game's manager level (`Manager_SendMessage` 0x21c858) walks the menu handler stack with
+    /// `Stack_IsEmpty` 0x1cceb0 / `Stack_Pop` 0x1ccf68 until a handler answers [M]; the port's fixed
+    /// −3/−2/id routing here and the front end's page stack (nf-view `menu`) are that walk flattened.
     fn deliver(&mut self, st_ix: usize, target: i32, id: u32, a: i32, b: i32) -> i32 {
         match target {
             -3 => 0, // Manager_SendMessage — not modelled (no manager-level handler reads it)

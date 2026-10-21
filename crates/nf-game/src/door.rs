@@ -324,6 +324,10 @@ pub struct DoorMover {
 
 /// One `obj+0xD0` contact: the copy `Collide_Update` appends to the hit object, `+0x58` = the hitter,
 /// of whose world sphere centre the door's kind-0 reversal reads [M 0x1ea398:176-193, 0x135980:80].
+/// The game builds that hit list with the collision LList helpers — `LList_AllocnNodes` 0x1ccbe0
+/// allocates the nodes and `LList_Cut` 0x1cca80 moves the filled list onto the object (both called
+/// by `Collide_Update` 0x1ea398 / `Collide_Pick` 0x1eb320 [M]); the port's contact Vec append is
+/// that same list work.
 #[derive(Clone, Copy, Debug)]
 struct DoorContact { centre: V3, player: bool, valid: bool }
 

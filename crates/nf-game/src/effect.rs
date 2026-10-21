@@ -5,6 +5,11 @@
 //! Per-material data comes from the `EffectInfo` table (0x3037c0, parsed in
 //! `nf_formats::sfx::SurfaceSounds::effects`). G-041; docs/atlas/effect.md.
 //!
+//! The game's decal pool is a free/in-use node pair: `Effect_Bullet` takes a node with
+//! `DList_MoveFromFree2InUse` 0x1cccb8 and the eviction path returns it with
+//! `DList_RemoveFromInUse2Free` 0x1cc868 [M]; the port's 200-slot FIFO index (oldest evicted when
+//! full) is that same take/return work.
+//!
 //! RNG discipline: every `Rand_*` the game draws at an impact is drawn here, in the game's order
 //! (the collision handler runs: the material-0x80 roll [not ported — the port's HITDATA carries no
 //! +0x51 second byte], then `Effect_Create`'s debris-count draw, then per-debris draws, then

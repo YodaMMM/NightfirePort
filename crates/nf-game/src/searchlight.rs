@@ -1,6 +1,9 @@
 //! Searchlights (docs/systems/world-objects.md "Searchlights"): `Searchlight_Create` 0x1cb4f8 /
 //! `Searchlight_Update` 0x1cb900, ported from the disassembly [M] and checked against the live layout in
 //! `work/ee_start_05.bin` [L] (29 parts on 07000005: 7 mounts, 7 heads, 6 beams, 7 coronas, 2 spots).
+//! The game's per-part nodes come from the same free/in-use pool machinery as the lights
+//! (`DList_MoveFromFree2InUse` 0x1cccb8 is called by `Searchlight_Create` [M]); the port's per-part
+//! Vec records replace it.
 //!
 //! The bullet contact path (U-041, docs/systems/searchlight-bullet.md): a flying bullet's HITTEST picks the
 //! head's world sphere each tick and the head's update breaks on a class-5 contact with damage > 0.0 [M].
