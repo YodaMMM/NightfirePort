@@ -28,18 +28,20 @@ fn swing_advances_the_phase_and_scales_the_three_sines() {
     assert!((r - expect(3.0 * phase)).abs() < 1.0e-5, "roll {r}");
 }
 
-/// Sister: the zero-amount gate [M 0x1bbf40:8] — the whole body is behind the != 0 test, so
-/// the phase must NOT advance and the deltas must be zero.
+/// Sister: zero amount. The `!= 0` test at [M 0x1bbf40:8] is on `param_2` = the VIEWER pointer (the
+/// call site passes the weapon's swing float first and `glb_viewer[...]` second [M 0x193600:439-441]),
+/// so a zero amount still advances the phase; only the deltas are zero (review 2026-10-21 — this
+/// test used to pin a frozen phase).
 #[test]
-fn swing_with_zero_amount_is_a_full_noop() {
+fn swing_with_zero_amount_still_advances_the_phase() {
     let mut phase = 0.437;
     let (p, y, r) = camera_swing_step(&mut phase, 0.0, 2.0);
     assert_eq!((p, y, r), (0.0, 0.0, 0.0));
-    assert!((phase - 0.437).abs() < 1.0e-6, "phase moved to {phase}");
+    assert!((phase - (0.437 + SWING_STEP)).abs() < 1.0e-6, "phase {phase}");
 }
 
 /// The deltas scale with (zoom − 1) [M 0x1bbf40:12-24]: at zoom 1.0 (unzoomed) they are zero
-/// while the phase still advances (the advance is only amount-gated).
+/// while the phase still advances (the advance is gated only on the viewer).
 #[test]
 fn swing_at_zoom_one_yields_zero_deltas_but_still_advances() {
     let mut phase = 0.0;

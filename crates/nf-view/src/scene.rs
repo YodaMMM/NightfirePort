@@ -11354,9 +11354,8 @@ pub fn camera_shear_step(phase: &mut f32) -> (f32, f32) {
 /// viewer+0x108, fed BLData+0x8d0 each tick [M Player_PositionCamera 0x18f5d8:134]. The game
 /// then rebuilds the view matrix — the draw side's job.
 pub fn camera_swing_step(phase: &mut f32, amount: f32, zoom: f32) -> (f32, f32, f32) {
-    if amount == 0.0 {
-        return (0.0, 0.0, 0.0);
-    }
+    // The game's guard is the VIEWER pointer (param_2), not the amount: the phase advances every
+    // frame even at amount 0 [M 0x1bbf40:9-11] (review 2026-10-21: the branch froze it at 0).
     *phase += std::f32::consts::TAU / (60.0 * 4.0); // FRAME_RATE = 60 [M]
     let phi = *phase;
     let k = (zoom - 1.0) * amount;
