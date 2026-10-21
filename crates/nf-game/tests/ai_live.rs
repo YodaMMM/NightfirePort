@@ -527,12 +527,14 @@ fn bond_kills_guards_with_two_torso_shots() {
     assert_eq!(log[0], state::SNIPER_IDLE, "log {:x?}", sim.list[i].log);
     assert!(log.contains(&state::SNIPER_AIM) && log.contains(&state::DEATH_ANIM) && log.contains(&state::DEAD), "log {:x?}", sim.list[i].log);
     assert!(sim.channels.on(0x0a), "death channel 0x0A raised");
-    // The gate guard: dead at the death anim's end, fading 300 ticks later, gone after the fade.
-    let (sim, i, hits) = run([66.0, 26.5, 99.5], 5, 1100, 0.0);
+    // The gate guard: dead at the death anim's end, fading `DAT_00298F58` = 10·FRAME_RATE_INT = 600
+    // ticks later [M 0x163fe8:22, 0x13a5a8:10] (daily audit 2026-10-21: the old 300 was half), gone
+    // after the fade.
+    let (sim, i, hits) = run([66.0, 26.5, 99.5], 5, 1500, 0.0);
     assert_eq!(hits.len(), 2);
     let at = |s: u8| sim.list[i].log.iter().find(|&&(_, x)| x == s).map(|&(f, _)| f);
     let (dead, fade) = (at(state::DEAD).unwrap(), at(state::FADE).unwrap());
-    assert_eq!(fade - dead, 300);
+    assert_eq!(fade - dead, 600);
     assert!(!sim.list[i].present, "faded out");
     // Sister: over the head, nothing is hit.
     let (sim, i, hits) = run([66.0, 26.5, 99.5], 5, 200, 3.0);
