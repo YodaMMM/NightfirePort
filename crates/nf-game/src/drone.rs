@@ -3639,6 +3639,28 @@ impl Drone {
         }
     }
 
+    /// `DroneWeap_ChangeWeapon(dcv, w)` 0x17a6e0 — the param IS the new held weapon id (the bots
+    /// write it to `Drone+0x768` and re-derive the anim set from it [M BOTWEAP_changeWeapon
+    /// 0x12a028:43-48]), and the function is the per-weapon config jump table at 0x2fb740 (55
+    /// entries, `sltiu a1,55` gate): arms for {1, 6, 0x12, 0x18, 0x19, 0x36} write the held byte
+    /// (`anim+0x62`, the port's `weapon`) together with the anim set (`+0xDA`, the port's
+    /// `anim_set`) and the clip pair (`+0xBBC`/`+0xBBE`, the port's `clip`/`clip_max`); every
+    /// other id hits the shared `jr ra` at 0x17a78c and changes NOTHING [M dis 0x17a70c-0x17a790]:
+    /// - 1 → set 0xC, weapon 1, clip 0, clip_max 0 (0x17a72c → the 0x17a714 tail);
+    /// - 6 → set 4, weapon 6, clip 16, clip_max untouched (0x17a738-0x17a754);
+    /// - 0x12 → set 6, weapon 0x12, clip 32, clip_max untouched (0x17a75c → the 0x17a748 tail);
+    /// - 0x18/0x19 → clip 32, set 5, clip_max 32, weapon = the id itself (0x17a770-0x17a788);
+    /// - 0x36 → set 0xC, weapon 0x36, clip 0, clip_max 0 (0x17a70c → the 0x17a714 tail).
+    fn change_weapon(&mut self, w: u32) {
+        match w {
+            1 | 0x36 => { self.anim_set = 0xc; self.weapon = w; self.clip = 0; self.clip_max = 0; }
+            6 => { self.anim_set = 4; self.weapon = 6; self.clip = 16; }
+            0x12 => { self.anim_set = 6; self.weapon = 0x12; self.clip = 32; }
+            0x18 | 0x19 => { self.clip = 32; self.anim_set = 5; self.clip_max = 32; self.weapon = w; }
+            _ => {}
+        }
+    }
+
     /// `AnimGetBoneWorldTrans(obj, datum, 0, …)` for the held weapon's datum (`+0x50`, 0xFF → 0): datum · bone world;
     /// the drone's object matrix when it has no pose or no such datum.
     fn weapon_matrix(&self, d: &Data) -> nf_formats::anim::Mat4 {
@@ -4552,11 +4574,15 @@ impl Drone {
                 // fix-guard-drops-flashbang [M 0x172bb0:15-18, the state's own case 1]: the flashed
                 // guard DROPS the held gun and takes the fists — `if (+0xda != 4) { DropWeapon;
                 // ChangeWeapon(1) }` — whatever route stunned him (the flash broadcast, a stunned
-                // waiter included). The drop rolls the shared stream here, before the anim draw, in
-                // the game's case-1 order.
-                if self.weapon != 4 {
+                // waiter included). The gate reads the ANIM SET byte (+0xDA, the port's `anim_set`)
+                // — anim-set-4 guards (the pistol class {2,6,0xa,0xb,0xe,0x10,0x3b..0x40} of
+                // DefaultInit's weapon switch, 0x14b300:267-282) KEEP their gun [M]; the old held-
+                // weapon-byte stand-in dropped it for every id but 4. ChangeWeapon(1) is the full
+                // table arm [M 0x17a72c→0x17a714]: weapon 1, anim set 0xC, clip 0, clip_max 0. The
+                // drop rolls the shared stream here, before the anim draw, in the game's case-1 order.
+                if self.anim_set != 4 {
                     self.drop_weapon(d, rng);
-                    self.weapon = 1;
+                    self.change_weapon(1);
                 }
                 self.alert = self.alert.max(0.66);
                 self.vision_on = false;
@@ -4631,15 +4657,16 @@ impl Drone {
             (_, 0) | (_, 10) => true,
             (TASER, msg::ENTER) => {
                 // +0xCE0 = `DroneFunc_RecoverTime`: the taser arm FRAME_RATE_INT·10 → 600·0.01·(200−0)
-                // = 1200 [M 0x147188 cases 0x4a/0x4c]. The weapon drop: `DropWeapon + ChangeWeapon(1)`
-                // for non-civilians with +0xDA != 4 [M 0x162b98:27-34] — the same shape the flashbang
-                // family drops with (the port's +0xDA stand-in is the held `weapon` byte; the game's
-                // ChangeWeapon slot is not modelled — the fists id stands in). The drop rolls the
-                // shared stream here, BEFORE the anim draw, in the game's case-1 order.
+                // = 1200 [M 0x147188 cases 0x4a/0x4c]. The weapon drop: for NON-civilians (+0x44 == 1,
+                // `IsCivilian` 0x14aae0 returns `+0x44 != 1`) with anim set +0xDA != 4, `DropWeapon +
+                // ChangeWeapon(1)` — the game's gate reads the ANIM SET (+0xDA), not the held weapon
+                // byte [M 0x162b98:27-34, the `lhu/slti` on 0xda]; ChangeWeapon(1) is the full table
+                // arm: weapon 1, anim set 0xC, clip 0, clip_max 0 [M 0x17a72c→0x17a714]. The drop rolls
+                // the shared stream here, BEFORE the anim draw, in the game's case-1 order.
                 self.tase_recover = 1200;
-                if self.weapon != 4 {
+                if self.team == 1 && self.anim_set != 4 {
                     self.drop_weapon(d, rng);
-                    self.weapon = 1;
+                    self.change_weapon(1);
                 }
                 self.alert = self.alert.max(0.66); // AlertStatusSet(2) [M 0x162b98:42]
                 self.vision_on = false;
@@ -4722,8 +4749,16 @@ impl Drone {
                 true
             }
             (STUNNED_RECOVER, msg::ENTER) => {
-                // case 1: +0x4F8 |= 0x10000, ChangeWeapon(6) for non-civilians (not modelled — see the
-                // TASER enter), the get-up anim 0x76 with follow-on Attack 0x56 [M 0x1630b8 case 1].
+                // case 1: +0x4F8 |= 0x10000; for NON-civilians `ChangeWeapon(6)` — the recover
+                // RE-ARMS the guard with the fresh sidearm: weapon 6, anim set 4, clip 16, clip_max
+                // untouched [M 0x1630b8 case 1, dis 0x16314c-0x163150 `addiu a1,6` before the jal;
+                // the arm at 0x17a738]. The old port skipped it — a tased guard who woke stayed on
+                // the fists id, so killing him dropped nothing where the game drops the weapon-6
+                // pickup (weapon_data[6]: +2 = 6, +0x80 != 0, +0x92 = 16 [L ee_start_05.bin]).
+                // (The game's skin-0x10 arm first flips +0x44 to 1 [M 0x1630b8:17-19] — not ported,
+                // not weapon handling; noted in the report.) The get-up anim 0x76 with follow-on
+                // Attack 0x56 for non-civilians [M 0x1630b8 case 1].
+                if self.team == 1 { self.change_weapon(6); }
                 self.call_anim(d, anim_state::STUN_GET_UP, ATTACK, 0);
                 true
             }
@@ -4774,15 +4809,18 @@ impl Drone {
         120 * k
     }
 
-    /// The dart's ENTER weapon drop, `+0xDA ∈ {5, 6, 9}` [M 0x163430:20-27]. `+0xDA` is
-    /// `NDrone2_DefaultInit`'s anim-set byte, keyed on the held weapon id by its second switch
-    /// [M 0x14b300:281-313]: weapons {0x16,0x18,0x19,0x1a,0x1b} → 5, {0x12,0x14,0x15,0x30,0x32,0x33,
-    /// 0x6a,0x6e} → 6 (unless the skin's +0xD8 is 0xb/0x18 — the port does not model +0xD8 [S]),
-    /// {0x1c,0x1d,0x2a..0x2d} → 9; the pistol class {2,6,10,0xb,0xe,0x10,0x3b..0x40} → 4 (KEPT) and
-    /// the snipers {0x1e,0x1f,0x24,0x25} → 0x13 (KEPT). [L] ee_start_05.bin: the Paris guards read
-    /// wep 22 (0x16) → +0xDA = 5 and wep 36 (0x24) → +0xDA = 19 — both arms confirmed live.
-    fn held_weapon_drops_on_dart(&self) -> bool {
-        matches!(self.weapon, 0x12 | 0x14 | 0x15 | 0x16..=0x1d | 0x2a..=0x2d | 0x30 | 0x32 | 0x33 | 0x6a | 0x6e)
+    /// The dart's ENTER weapon drop band, `+0xDA ∈ {5, 6, 9}` [M 0x163430:20-27, dis
+    /// 0x16347c-0x1634b4: `lhu 218(drone)`, `< 5` keep, `{5,6}` ∪ `{9}` drop, the rest keep].
+    /// `+0xDA` is `NDrone2_DefaultInit`'s anim-set byte, keyed on the held weapon id by its second
+    /// switch [M 0x14b300:281-313]: weapons {0x16,0x18,0x19,0x1a,0x1b} → 5, {0x12,0x14,0x15,0x30,
+    /// 0x32,0x33,0x6a,0x6e} → 6 (unless the skin's +0xD8 is 0xb/0x18), {0x1c,0x1d,0x2a..0x2d} → 9;
+    /// the pistol class {2,6,10,0xb,0xe,0x10,0x3b..0x40} → 4 (KEPT) and the snipers {0x1e,0x1f,
+    /// 0x24,0x25} → 0x13 (KEPT). [L] ee_start_05.bin: the Paris guards read wep 22 (0x16) →
+    /// +0xDA = 5 and wep 36 (0x24) → +0xDA = 19 — both arms confirmed live. The band reads the
+    /// LIVE byte: ChangeWeapon rewrites +0xDA now, so the old held-weapon-id inverse mapping
+    /// (equal only while the byte held its init value) is gone.
+    fn anim_set_drops_on_dart(&self) -> bool {
+        matches!(self.anim_set, 5 | 6 | 9)
     }
 
     /// The dart-sleep family (tranq-gun): `DSTATE_StunDartImpact` 0x163430, `DSTATE_StunDartLoop`
@@ -4806,9 +4844,9 @@ impl Drone {
                 // SetMissionFailReason(0xE) — the default arm: ch 99, NO label [M 0x13e560];
                 // AlertStatusSet(0) — the guard goes fully calm (the taser's arm is 2).
                 self.dart_recover = self.hit_recover_time();
-                if self.held_weapon_drops_on_dart() {
+                if self.anim_set_drops_on_dart() {
                     self.drop_weapon(d, rng);
-                    self.weapon = 1;
+                    self.change_weapon(1);
                 }
                 if self.dtype == 0x11 || self.dtype == 0x0c {
                     self.fail_reason = Some(crate::ally::mission_fail_reason(0xe));
@@ -5510,13 +5548,14 @@ impl Drone {
             // 0x5C → Surrendered), turned away from Bond; every 15 ticks the "surrendered" alert bit (`+0x4FC |= 4`) that
             // calm guards seeing him react to (prop 0x4F). The 0x0600021F special death is cancelled.
             (SURRENDER_ANIM, msg::ENTER) => {
-                // Order as read: the call (with the armed anim set), the drop, then `ChangeWeapon(1)`.
+                // Order as read: the call (with the armed anim set), then `DropWeapon +
+                // ChangeWeapon(1)` — the full table arm [M 0x1626a0:21-22 + 0x17a72c→0x17a714:
+                // weapon 1, anim set 0xC, clip 0, clip_max 0]. No civilian/anim-set gate here [M
+                // 0x1626a0 case 1] — unlike the taser/stun-grenade enters.
                 self.firing = false;
                 self.call_anim(d, anim_state::SURRENDER, SURRENDERED, 0);
                 self.drop_weapon(d, rng);
-                self.weapon = 1;
-                self.anim_set = 0xc;
-                self.clip = 0;
+                self.change_weapon(1);
                 self.timer_c = Some(frame + 15);
                 // `NDrone2_DSTATE_Surrender_Anim` 0x1626a0's ENTER ends with
                 // `PlrStat_LogEnemySurrender(0)` — outboxed, folded into the tally by the tick.
@@ -5549,7 +5588,7 @@ impl Drone {
             // The draw event (case 2, [M 0x166000:41-43] `cVar2 < 2 → ChangeWeapon(6)`) arms with
             // the sidearm only after the draw anim ran for a drone that entered with a swap id —
             // the ENTER bail (above) leaves by EXIT with `+0x45` < 2 and must not arm here.
-            (DRAW_WEAPON, msg::EXIT) => { if self.weapon_swap > 1 && (self.weapon as u8) <= 1 { self.weapon = 6; self.anim_set = 4; self.clip = 16; } true }
+            (DRAW_WEAPON, msg::EXIT) => { if self.weapon_swap > 1 && (self.weapon as u8) <= 1 { self.change_weapon(6); } true }
             (SNIPER_RELOAD, msg::ENTER) => { self.vision_on = true; self.stationary = true; self.firing = false; self.timer_c = Some(frame + 20); true }
             (SNIPER_RELOAD, msg::TIMER_C) => { self.call_anim(d, anim_state::RELOAD, SNIPER_FIRE, 0); true }
             (SNIPER_RELOAD, msg::EXIT) => { self.clip = self.clip_max; true }
@@ -12807,15 +12846,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if let Some(b) = dr.close_combat_impact(d, kind, index) { self.bullets.push(b); }
             }
             // `DroneAnim_EventFunc` datum 2 → `DroneWeap_ChangeWeapon(drone+0x45)` (0x17a6e0's per-weapon
-            // jump table, 0x2fb740, 55 entries). The port carries the two entries the SP states verify:
-            // 1 (Surrender_Anim 0x1626a0: weapon 1, anim set 0xC, empty) and 6 (DrawWeapon 0x166000's
-            // EXIT: weapon 6, anim set 4, 16 rounds); the rest of the table is not ported yet.
+            // jump table, 0x2fb740, 55 entries) — the FULL table through `change_weapon` [M dis
+            // 0x17a70c-0x17a790]: arms {1, 6, 0x12, 0x18, 0x19, 0x36} carry their anim set + clip pair,
+            // every other id is the shared no-op return. (The datum-2 health/script gate of EventFunc
+            // 1/5/6/9/0xB does not bind here [M 0x13b7dc].)
             if std::mem::take(&mut dr.pending_weapon_swap) {
-                match dr.weapon_swap {
-                    1 => { dr.weapon = 1; dr.anim_set = 0xc; dr.clip = 0; }
-                    6 => { dr.weapon = 6; dr.anim_set = 4; dr.clip = 16; }
-                    _ => {}
-                }
+                dr.change_weapon(dr.weapon_swap as u32);
             }
             // The anim impact event 6 (fired in `update_anim` just above): msg 0x20 to self —
             // `DSTATE_OpenDoor` and `DSTATE_KickObject` handle it (the GLOBAL fallback drops it
