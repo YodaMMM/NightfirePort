@@ -531,3 +531,38 @@ selects:
   probes, the 1/8-per-tick radius smoothing toward viewer+0x1f0 = 4.0, the position/angle
   writes) in case a future build or debug mode needs it; the port's live camera modes live in
   `crates/nf-view/src/scene.rs` (cam2/creep/script cameras) and modes 4/5/6/0xa stay absent.
+
+### unported-misc-10 (2026-10-22, branch s/unported-misc-10)
+
+12 of the 24 SDK-glue functions record here as unreached / unreached-by-replacement; the other
+12 are cited as replaced or reached-and-replaced at Rust sites (full chains and the boot/RPC/
+tty/exit/syscall-table evidence live in docs/systems/ps2-sdk-glue.md):
+
+- `kCopy` 0x23c650 and `kCopy` 0x23fda8 — registered into the `SysEntry` kernel-syscall tables
+  (0x2e7a10 / 0x2e7e70, syscall-0x5a entries; data words 0x2e7a14 / 0x2e7e74 [M symtab+scan])
+  and never invoked: no jal anywhere and no `syscall` instruction for 90/91 in ACTION.ELF [M
+  scan of every `syscall` site's `li v1,N`]. Registered-but-unused libcglue glue.
+- `serialPutchar` 0x23cd40 — the initial value of the `_putchar` OBJECT 0x2e7a58 [M symtab, D
+  ELF data word]; every `_printf` path runs after `scePrintf` swaps it to `deci2Putchar`, so
+  the serial default never executes. Its callee `kputchar` 0x23cc58 (SIO FIFO poll + write)
+  is unreached with it [M scan].
+- `QueueInit` 0x23c738 / `QueuePeekWriteDone` 0x23c760 / `QueuePeekReadDone` 0x23c7a0 — the
+  DECI2 tty line queue. `sceTtyInit` (jal 0x23cc30) runs only from `write()` fd 1/2, whose
+  only game-side trigger is libc stdio glue (`__swrite` has 0 refs; the read blob's only
+  installer is `std` 0x23f930-region code); `sceTtyHandler`/`sceTtyRead` additionally need a
+  real DECI2 host, which a retail console never has [M scan+decompile].
+- `kprintf` 0x23d538 — only the tty handler, the dead %f path (`printfloat`) and the
+  InitTLB32MB overflow checks call it [M scan] — debug-only, dead on retail.
+- `ftoi` 0x23cd78 — only `printfloat` (jal 0x23cf14) calls it; the %f print path is dead on
+  retail (menus-6 %f gate; misc-7 § dp-family) [M scan].
+- `kputs` 0x23fd78 — only `deci2Putchar`'s newline/overflow flush calls it [M decompile
+  0x23cc90]; the boot banner's trailing `%\n` is swallowed by _printf's unknown-conversion
+  default branch (no emit) [M 0x23d508], and every other `\n`-ending format string sits in a
+  non-firing error branch ("ReadCount different…" in psiFileLoad/psiFileRead, "Libcdvd bind
+  err…" / "ee call cmd search…" behind `SCE_CD_debug` = 0 [D ELF 0x2e4f90]).
+- `TerminateLibrary` 0x23fc18 (`j InitTLB`), `InitTLB` 0x23fdf8, `InitTLB32MB` 0x23fe38,
+  `Exit` 0x23fc28 — unreached-by-replacement: the exit-time teardown chain
+  (`exit`/`_exit`/`Exit`) fires only from `sceMtapInit`'s IOP bind-failure branches (do not
+  fire on retail) or `zerobss` after `main` returns (main's loop is infinite [M decompile
+  0x1092a8..0x109414]); the TLB map tables (kernelTLB 0x2e7eb0 / defaultTLB 0x2e7f80) are
+  boot/exit state the port's Rust runtime owns [M scan chains].
