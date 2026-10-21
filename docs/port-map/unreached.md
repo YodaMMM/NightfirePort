@@ -443,6 +443,95 @@ Also recorded here because the natural alternative buckets don't fit: `SaveMemor
 but it is a stubbed-out no-op: the disassembly (file 0xb198) shows it memsets 18 bytes of its
 own dead stack frame and returns, touching no globals, result ignored by the caller [M ELF
 bytes]. Nothing to port; noted in docs/systems/memcard-save-flow.md.
+## 863-unported-animation-1 — the anim debug family and the two wrapper-gated spawners
+
+Evidence basis: an exhaustive reference sweep for each address [M] — every `JAL` encoding in the
+loaded `.text`/`.vutext` (0x107100-0x241c80) re-derived from the instruction word, every raw
+address word in the loaded `.data`/`.rodata`/`.sdata`/`.vudata`, every `lui`+`addiu` address
+formation pair, and the decompile call graph (`work/decomp/ACTION.ELF/`). The only symbol-table
+hits outside these are the functions' own `.symtab` entries. Boot and front end included: the
+same sweep covers every caller.
+
+| addr | name | size | why it is never reached (or never acts) |
+|---|---|---|---|
+| 0x1bc6e8 | AnimDebugHandler | 2240 | No reference anywhere in the loaded image [M]: zero `JAL` encodings, zero address words in `.data`/`.rodata`/`.sdata`, zero `lui 0x1b`+`addiu 0xc6e8` formations, zero decompile callers. A debug anim-viewer state machine (reads the `AnimDebugDisplay` switch global 0x30cb5f [M symtab, 1 byte], spawns mannequin test objects per `State_223`); kept by the linker, never called. |
+| 0x1c63b0 | AnimCacheDump | 8 | Its only `JAL` is at 0x1bc6fc — inside `AnimDebugHandler` (row above) [M]; no data references, no other callers. Body is `jr ra; nop` [M disasm 0x1c63b0]. |
+| 0x1bcfa8 | AnimDebugCreate | 896 | `JAL`ed unconditionally from `Player_Init` 0x1910f8:117 [M], but the body only acts when `GameState+0xc` is 0x07000043, 0x07000049 (the all-models mannequin circle) or 0x07000041 (the body-glow figure) [M 0x1bcfa8:72,140] — the wrapper codes nothing on the retail disc ever loads: every 0xE8 placement param-0 scan found no loader of 0x07000041/43/46/49 and the decompile has no loader constant for them [D; pinned in `crates/nf-view/tests/doublecross_transitions_live.rs:44`]. They are not in the MP sound-bank family either (`Sound_Ready` gives 0x07000041 bank 0xb, an SP bank [M 0x1dceb8:91; port `sound.rs:192`]). So the shipped game runs the call but the body returns at once on every on-foot level, front end and MP. The port's `Player_Init` site cites it (scene.rs). |
+| 0x1c64e0 | AnimObjectInitialPose | 172 | Its only `JAL` is inside `AnimDebugCreate`'s never-acting body (row above) [M]; no data references, no other callers. |
+
+Reached, cited at the port's code instead (the port does the same job under another name):
+`AnimCacheInit` 0x1c6390 — `JAL`ed from `ResetMap_GameInit` 0x1d5080:37 on every level start,
+body `jr ra; nop` [M disasm] (no anim cache exists to init); cited in `nf_view::load`.
+`AnimSeqGetHdrBuf` 0x1c7998 — `JAL`ed from `ResetMap_Load` 0x1d67c4 with a0=1, body
+`jr ra; or v0,zero,zero` (returns 0) and the caller never reads v0 [M disasm 0x1d67c4-0x1d67d8];
+cited in `nf_view::load`. `AnimObjectIsHeadTracking` 0x1c6850 and `AnimObjectIsAiming` 0x1c6900
+— reached through `NDrone2_DoHeadTracking` 0x1472c8 / `NDrone2_DoTracking` 0x1479d8 (drone ticks);
+the port's folds carry the masks and cite them (`anim::is_head_tracking` / `anim::is_aiming`,
+drone.rs `tracking` fold and `aims_torso`).
+# Unreached or dead ACTION.ELF gameplay functions
+
+Recorded per the unported-function tasks: a function the shipped game never reaches on any
+on-foot level, the front end or MP — or that is reached only into a silent return — with the
+evidence. Evidence tags: [M] decompile/disassembly with the file and line, [D] disc, [L] live
+PCSX2. "No callers" below means: no direct call in the decompile, no `jal`/`j` encoding of the
+address anywhere in ACTION.ELF, and no absolute data word of the address (checked with an
+ELF scan over all load segments).
+
+## `DroneFunc_UnderCoverAimTalk` 0x13fb98 — dead in both modes
+
+Called from `NDrone2_DSTATE_UnderCoverAim` 0x16a2d0 [M caller grep], so the game does reach it —
+but the body returns before anything observable:
+
+- The first statement is `if (MPSettings+0x184 == 0) return;` [M 0013fb98:7-9] — the SP game
+  returns at once (the decompiler's `MPSettings._388_4_` is `MPSettings+0x184`; the same gate
+  field `Drone_FellOutMap` 0x13a878 branches on, SP == 0).
+- In MP the line pick runs, but `NDrone2_SpeechSFX` refuses every request in MP (speech.md
+  §2.1, [M 0x149818 disasm note]), so the play never happens.
+- The remaining writes are the would-be `CoverTalkCooldown` (`DAT_00298FC8 = now + 5·FRAME_RATE`)
+  behind a final `Rand(0) == 0` gate that is always true [M 0x13fb98:38-45] — but that store is
+  only reached after `SpeechSFX` returns non-zero, which never happens.
+
+So there is no input on which the function has an observable effect. speech.md §2.3 documents the
+same verdict for its siblings (`InjuredTalk`/`RunForCoverTalk`/`UnderCoverTalk`: "dead in both
+modes", verified in the disassembly). Not ported; no observable behaviour to pin.
+## unported-front-end-menus-2 (2026-10-21) — Creature update chain and the dead chase camera
+
+### Creature_Update 0x135268 / Creature_Hurt 0x1352d0 / Creature_Move 0x135340 / Creature_Delete 0x135230
+
+**Never reached on any shipped path** (recorded with the callers, not ported):
+
+- The four are the class-0x23 object handlers [M docs/atlas/object.md:123]: the .data dispatch
+  slots at 0x26fa34 (Update) / 0x26fa3c (Delete) in the stride-12 `{update, _, delete}` table
+  base 0x26f890 [D ELF bytes]; `Creature_Update` calls `Creature_Hurt` (+0x3c) and
+  `Creature_Move` (+0x48) [M 0x135268:9-20].
+- The only creator is `Creature_Create` 0x134ab8, whose sole caller is
+  `parsemap_create_dynamic_objects` 0x1d04f0 case **0xe0** [M 001d04f0:351-353]. The disc
+  placement census has **no rows for kind 0xe0 on any shipped level** [D census;
+  docs/systems/script-census.md:120, docs/systems/uncited-audit.md:229,
+  docs/systems/ai-spawned-objects.md:79-81]. With no creature ever created, the dispatch never
+  fires and the whole chain is dead on retail.
+- `Creature_Init` 0x135208 (the list init) **is** reached — `ResetMap_GameInit` 0x1d5080 calls it
+  unconditionally (JAL at +0x144 [D ELF]) — but on retail it only ever initialises an
+  always-empty list (`LList_Init(0x316e90, 0xf0, 0)` [M 0x135208:6-7]). Cited as the port's
+  no-op equivalent at `crates/nf-game/src/drone.rs` (`level_drones` doc, 2026-10-21).
+
+### camera_chasecam 0x1b9c00
+
+**Not reached by the shipped game** — both its call sites are in camera modes the code never
+selects:
+
+- Callers: `Player_PositionCamera` 0x18f5d8 case 6 (:172-176, JAL at 0x18f8b0 [D word
+  0x0c06e700]) and case 10 (:219-226, JAL at 0x18f8f8 [D]), guarded by `BLData+0x950` (the cam
+  mode, docs/fields/bldata.md).
+- The cam mode byte is written only by `Player_SetCamMode` 0x195928 [M]; every call site passes
+  a literal from {0, 1, 2, 0xb, 0xc, 0xd, 0xe, 0xf} — never 6 or 0xa [M grep of all sites;
+  docs/systems/uncited-audit.md:226-228]. `BLData+0x87c` (the case-10 chase-cam obj) is written
+  by `Player_Init` 0x1910f8:73 but never consumed anywhere else [M].
+- The algorithm is recorded in docs/reports/unported-front-end-menus-2.md (the five occlusion
+  probes, the 1/8-per-tick radius smoothing toward viewer+0x1f0 = 4.0, the position/angle
+  writes) in case a future build or debug mode needs it; the port's live camera modes live in
+  `crates/nf-view/src/scene.rs` (cam2/creep/script cameras) and modes 4/5/6/0xa stay absent.
+
 
 ## LS_LoadBonus 0x1ce488: dead — zero references in the whole ELF
 

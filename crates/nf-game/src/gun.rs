@@ -1,6 +1,11 @@
 //! Bond's trigger (`Player_WeaponFiring` 0x1a5460, called from `Player_Update`): shots per pull, the refire interval
 //! and the clip, plus the weapon-switch state machine (`Player_WeaponChange` 0x1a6f80 → `Player_SetWeaponAnimObj`
 //! 0x1a2e38). Spec: docs/systems/player.md "Aim and bullets" + docs/systems/pickups.md "Bond's inventory".
+//!
+//! `Player_ResetWalkAnim` 0x195a88 (16 B, `Player_Weapon` 0x1a24c8:162's equip edge, the bit0==0
+//! arm): `*(u8*)(*(obj+0xE0) + 0x954) = 0xFF` [M 0x195a88:6]. BL+0x954 is write-only across the
+//! whole decompile (bldata.md:186 — no reader; the other writer is 0x190630), so there is nothing
+//! to observe; recorded here at the weapon-switch code that would carry it.
 
 /// The trigger state of the selected weapon: clip (`BLData+0x1B8 + w·0xC`), spare rounds of its ammo type
 /// (`BLData+0x170`), the refire timer (`+0x92C`), the shots left in this pull (`+0x936`).

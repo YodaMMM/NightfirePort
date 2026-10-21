@@ -48,8 +48,10 @@ Yes — instantly, no confirm: **action 0x19 (25) newly pressed = X or Start for
 A full-screen **background texture**, not an IPU overlay: the IPU (inside the statically linked libmpeg,
 `sceMpegGetPicture` 0x0022a3f8) decodes into a 512×448 RGBA32 buffer (`Mem_Malloc(0xe0000)`), the frame is
 centred (`DecodeBGFMVFrame` 0x00108550: `(0x200 − w)/2`, `(0x1c0 − h)/2` — every movie is exactly 512×448, so no
-borders), uploaded via PATH3 GIF tags (`setLoadImageTags__FPUiPviiii` 0x00107910, `PS2UploadBGMImage__Fv`
-0x00108740) and flipped per tick (`SwapBGFMVFrame` 0x001087c8). Pacing: one MPEG frame per game tick with
+borders), uploaded via PATH3 GIF tags (`setLoadImageTags__FPUiPviiii` 0x00107b90, which wraps
+`setLoadImageTagsYX` 0x00107910 — the addresses were swapped here until unported-misc-1 checked
+them, docs/systems/fmv-plumbing.md; `PS2UploadBGMImage__Fv` 0x00108740) and flipped per tick
+(`SwapBGFMVFrame` 0x001087c8). Pacing: one MPEG frame per game tick with
 `PS2FramesToSkip` computed on even vblanks, clamped to 2 (main 0x00109080) — 30 fps NTSC; the fog pass is
 suppressed while a movie plays (`psiDrawFogPass` 0x0010b960: `BGFMVPlaying == 0`).
 

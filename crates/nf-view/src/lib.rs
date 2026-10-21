@@ -25,6 +25,7 @@ pub mod devwin;
 pub mod hud;
 pub mod credits;
 pub mod menu;
+pub mod menu_engine;
 pub mod mp_lobby;
 pub mod menu_music;
 pub mod settings;
@@ -387,6 +388,12 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
 /// pulse the first `UpdateMusicalEvents` consumes. fix-party-mission: the tests' `load` path now wires
 /// the music too (the cut-scene music jumps were test-invisible before); `build_sound` reuses this.
 fn wire_music(sim: &mut scene::Sim, mm: Vec<nf_formats::music::MapMusic>, vars: Vec<nf_formats::music::MusicVars>) {
+    // The load path's sound reboot: `ResetMap_Load` 0x1d6360:24/:131 runs `Sound_Kill` 0x1ddfd0
+    // (`SFXReset` when `Sound_Ready` had set SoundInit [M 0x1dceb8:107], SoundInit = 0) then
+    // `Sound_Init` 0x1ddf88 (`DList_Init` pool, `SFXInitialise(0)`, `memset(&EventList,0,0x100)` =
+    // the 64-u32 music event board) on EVERY load. The port takes the same job by rebuilding the
+    // audio world here (build_sound's fresh driver/banks/streams, and this fresh engine with its
+    // zeroed event board) — docs/systems/sound-lifecycle.md.
     sim.drones.attack_gate.vars = vars.iter().find(|v| v.level == sim.level).copied()
         .or(Some(nf_formats::music::MusicVars { level: sim.level, count: 2, floor: 0, window: 8, distance: 25.0 }));
     sim.drones.music = nf_game::music::Music::new(mm);
@@ -754,6 +761,15 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // every level load starts the anim layer fresh — the tag/script timestamps, skin-scale globals
     // and the pSkeletons+0x1fc scratch it resets have no port counterparts (nothing persists across
     // loads), so these fresh skeleton/sequence/script maps ARE the reset.
+    // The same ResetMap_GameInit (0x1d5080:37) calls `AnimCacheInit` 0x1c6390 — `jr ra; nop` [M
+    // disasm 0x1c6390]: the shipped build's anim cache was emptied; there is nothing to init, so
+    // the port models no cache gate (the family's Enable 0x1c6398 / Disable 0x1c63a0 likewise).
+    // `ResetMap_Load` 0x1d6360 also calls `AnimSeqGetHdrBuf` 0x1c7998 (jal 0x1d67c4, a0=1) before
+    // this loader loop — `jr ra; or v0,zero,zero`, always 0, and the caller never reads v0 [M
+    // disasm 0x1d67c4-0x1d67d8]: a retired header-buffer hook; the port's load needs no hook.
+    // `ResetMap_GameInit` also calls `Sound_SetLogSfxFile` 0x1de368 right before `Mission_Init`
+    // [M 0x1d5080:43] — the shipped function is a bare `ret` [M 0x1de368], so the port preserves
+    // the call as nothing (docs/systems/sound-lifecycle.md).
     let mut sequences: HashMap<u8, Vec<Sequence>> = HashMap::new();
     if let Some(anim) = read(&anim_name)? {
         let alb = LevelBin::parse(&anim)?;
@@ -1770,6 +1786,14 @@ fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
 
 /// One frame of sound (`Sound_UpdateListeners` → `Sound_UpdateSounds` → the batch → `SFXUpdate`): the listener is
 /// Bond's eye and view (glb_viewer[0]; the cut-scene camera's listener call is dropped by the EE batcher [M]).
+///
+/// The game's viewer is a 0x240-byte `viewer_tag` built by `build_alloc_viewer` 0x1c9378 (malloc +
+/// the +0x28 viewer index) and initialised by `Camera_Reset` 0x1b9af0 (272 B) [M]: zero pos/rot
+/// vectors (+0xc0..+0xcc / +0xe0..+0xec from the zero constant at 0x2d6200 [D]), the view MATRIX
+/// at +0x120 from zeros, +0x1a0 identity matrix, +0x2c StackInfo (cap 12), the dirty byte +0x2b,
+/// +0x108 = 1.0f (the FOV/zoom factor) and the camera radii +0x1ec/+0x1f0 = 4.0f [M
+/// 0x1b9af0:13-62]. The port's single `Viewer` struct here + the per-frame camera construction is
+/// that init (the field list is in docs/reports/unported-front-end-menus-2.md).
 /// `pub` so the headless tests drive the exact function the winit loop runs (the fix-gpu-skinning precedent).
 pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     let (pos, f) = (sim.bond.head(), sim.bond.look());

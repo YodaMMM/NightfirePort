@@ -80,13 +80,26 @@ pub struct Music {
     c_temp2: i32,
     /// `MusicTemp4` 0x30c8f8 as CastleC uses it (the 0x6000073 scene's started latch).
     c_temp4: bool,
+    /// `MusicTemp1` 0x30c8ec as `UpdateMFX_HT_Level_Tower2B` 0x114348 uses it (the 0/1/2 alarm machine).
+    tower2b_temp1: i32,
+    /// `MusicTemp2..6` as `UpdateMFX_HT_Level_EvilBase` 0x114728 uses them: the latches t2 (the
+    /// 0x600062f scene), t3 (the 0x6000848 hold), t4 (the 0x6000833 NIS), t6 (the 0x6000848 NIS)
+    /// and t1 — the 0x6000833 counter that gives up to `PickRandomCombat(1)` past 0x37.
+    evil_base_t1: i32,
+    evil_base_t2: i32,
+    evil_base_t3: i32,
+    evil_base_t4: i32,
+    evil_base_t6: i32,
+    /// `MusicTemp1` as `UpdateMFX_HT_Level_EvilBaseC` 0x114b38 uses it (the 0/1/2/3 machine).
+    evil_base_c_t1: i32,
 }
 
 impl Default for Music {
     fn default() -> Music {
         Music { table: Vec::new(), entry: None, events: [0; 64], out: Vec::new(), nis_playing: false, nis_quitten: 0, delay_timer: 0, last_jump: 0,
             last_request: -1, wait_for_end: false, under_attack: false, count: 0, count2: 0, bonus: 0, which_combat: 0, which_stealth: 0,
-            temp1: false, temp2: 0, temp3: 0, temp4: false, sfx_paused: false, nis_trigger: false, c_temp1: 0, c_temp2: 0, c_temp4: false }
+            temp1: false, temp2: 0, temp3: 0, temp4: false, sfx_paused: false, nis_trigger: false, c_temp1: 0, c_temp2: 0, c_temp4: false,
+            tower2b_temp1: 0, evil_base_t1: 0, evil_base_t2: 0, evil_base_t3: 0, evil_base_t4: 0, evil_base_t6: 0, evil_base_c_t1: 0 }
     }
 }
 
@@ -147,6 +160,9 @@ impl Music {
                 self.wait_for_end = false;
                 (self.count, self.count2) = (m.calm_frames, m.alert_frames);
                 (self.temp1, self.temp2, self.temp3, self.temp4) = (false, 0, 0, false);
+                // The same restart zeroes `MusicTemp1..9` [M 0x114e70:52-54] — the machines below
+                // (Tower2B / EvilBase / EvilBaseC) keep theirs here.
+                (self.tower2b_temp1, self.evil_base_t1, self.evil_base_t2, self.evil_base_t3, self.evil_base_t4, self.evil_base_t6, self.evil_base_c_t1) = (0, 0, 0, 0, 0, 0, 0);
                 (self.under_attack, self.which_stealth, self.which_combat, self.bonus) = (false, 0, 0, 0);
                 self.delay_timer = 10;
                 self.entry = Some(m);
@@ -183,12 +199,19 @@ impl Music {
         // them under the same gate (their internal `MusicWaitForEnd` checks — 0x113188:40,
         // 0x114d60:40 — guard blocks INSIDE the handlers, which the dispatcher already excludes).
         if !self.wait_for_end {
+            // `UpdateMFX_HT_Level_Tower2C` 0x114640:9-12: the alarm jump is the updater's FIRST
+            // statement — queued BEFORE the shared exit block, so on a frame with both the alarm
+            // and an exit event the game's batch holds jump(0, non-instant) then the end-marker
+            // jump (the IOP's last request wins) [M order: 0x114640:9-12 vs :14-39].
+            if m.level == 0x0700_0013 && self.under_attack { self.jump(0, false); }
             // The shared level-exit block, ported from every unported level updater [M 0x113558:9-33
             // (TowerA, 07000009); the same block in 0x111ed8 MayhewA/07000001:9-, 0x112270 MayhewB/02,
             // 0x112730 MayhewC/03, 0x112bf8 MayhewD/04, 0x1137b0 TowerB/0700000a, 0x113a20 TowerC/0b
-            // (:70), 0x113c18 PowerStationA1/0c, 0x113fc0 PowerStationA2/0d, 0x14250 Tower2A/11,
-            // 0x14348 Tower2B/12, 0x14640 Tower2C/13, 0x14728 EvilBase/14, 0x14a38 EvilSilo/15,
-            // 0x14b38 EvilBaseC/16, 0x14528 Tower2Elevator/0700004a:9-34 — all `DAT_002d3518 ||
+            // (:70), 0x113c18 PowerStationA1/0c, 0x113fc0 PowerStationA2/0d, 0x114250
+            // UpdateMFX_HT_Level_Tower2A/11, 0x114348 UpdateMFX_HT_Level_Tower2B/12, 0x114640
+            // UpdateMFX_HT_Level_Tower2C/13, 0x114728 UpdateMFX_HT_Level_EvilBase/14, 0x114a38
+            // UpdateMFX_HT_Level_EvilSilo/15, 0x114b38 UpdateMFX_HT_Level_EvilBaseC/16, 0x114528
+            // UpdateMFX_HT_Level_Tower2Elevator/0700004a:9-34 — all `DAT_002d3518 ||
             // DAT_002d3504` = e[8] (mission success, 0x182c60:31) || e[3] (the Trigger_Activate
             // LOAD_LEVEL exit, 0x1b2318:109)]: the +0x24 combat-set scan picks the end marker
             // (+0x14 end_combat when MusicLastJump is a combat section, else +0x18 end_calm), the
@@ -208,6 +231,14 @@ impl Music {
             // (*not ported*); the alarm half is the one play hears: `MusicUnderAttack ? PickRandomCombat(0) :
             // PickRandomStealth()` [M 0x113060:26-30].
             if m.level == 0x0700_0006 { if self.under_attack { self.pick_combat(false); } else { self.pick_stealth(); } }
+            // The HT-level updaters with a per-level half (docs/systems/ht-music-updaters.md).
+            // Tower2A (0x0700_0011) has none: `UpdateMFX_HT_Level_Tower2A` 0x114250:9-34 is the
+            // shared exit block above, whole.
+            if m.level == 0x0700_0012 { self.tower2_b(&m); }
+            if m.level == 0x0700_0014 { self.evil_base(&e, &m); }
+            if m.level == 0x0700_0015 { self.evil_silo(); }
+            if m.level == 0x0700_0016 { self.evil_base_c(&e, &m); }
+            if m.level == 0x0700_004a { self.tower2_elevator(&e); }
         }
         self.events = [0; 64];
     }
@@ -243,6 +274,103 @@ impl Music {
         if !self.wait_for_end && e[0xc] == 0x6000_085c {
             self.last_request = 0;
             self.jump(0, false);   // SFXJumpToMusicMarker(0, 0) — not instant [M 0x114d60:40-43]
+        }
+    }
+
+    /// `UpdateMFX_HT_Level_Tower2B` 0x114348:36-76 (07000012): the 3-state alarm machine on
+    /// `MusicTemp1` (the port's `tower2b_temp1`). State 0 + attack → jump 0xf INSTANT, state 1;
+    /// state 1 + calm → jump 0x11 non-instant, state 2; state 2: calm jumps 0x16 (non-instant)
+    /// only while the IOP's section (`MusicLastJump`) is one of the level's combat sections
+    /// (the +0x24 scan [M 0x114348:49-66]), attack round-robins `PickRandomCombat(0)`.
+    fn tower2_b(&mut self, m: &MapMusic) {
+        match self.tower2b_temp1 {
+            1 => { if !self.under_attack { self.jump(0x11, false); self.tower2b_temp1 = 2; } }
+            2 => {
+                if self.under_attack { self.pick_combat(false); }
+                else if m.combat.iter().any(|&s| s == self.last_jump) { self.jump(0x16, false); }
+            }
+            _ => { if self.under_attack { self.jump(0xf, true); self.tower2b_temp1 = 1; } }
+        }
+    }
+
+    /// `UpdateMFX_HT_Level_EvilSilo` 0x114a38:41-47 (07000015): every frame after the exit block,
+    /// the alarm picks `PickRandomCombat(0)` else `PickRandomStealth`.
+    fn evil_silo(&mut self) {
+        if self.under_attack { self.pick_combat(false); } else { self.pick_stealth(); }
+    }
+
+    /// `UpdateMFX_HT_Level_Tower2Elevator` 0x114528:36-40 (0700004a): while the elevator ride's
+    /// NIS stream hash 0x60006d3 stands in e[0xb] (`DAT_002d3524`), jump the fx-int marker 4,
+    /// non-instant. The game stashes the `&o_fx_int` mark in `MusicLastJumpRequest` — bookkeeping
+    /// only: `SFXJumpToMusicMarker` queues its ARGUMENT [M 0x116950:3-15] and no reader ever
+    /// compares the request to a pointer, so the port's `jump` records the section.
+    fn tower2_elevator(&mut self, e: &[u32; 64]) {
+        if e[0xb] == 0x0600_06d3 { self.jump(4, false); }
+    }
+
+    /// `UpdateMFX_HT_Level_EvilBaseC` 0x114b38:36-77 (07000016): the 4-state cut-scene machine on
+    /// `MusicTemp1` (the port's `evil_base_c_t1`). The 0x6000631 arm runs EVERY frame [M
+    /// 0x114b38:36-40], then the state machine: 1 → the stream-kill hash 0x6000631 in e[0xc]
+    /// jumps 0x27 instant; 2 → the 0x6000632 stream in e[0xb] jumps 0x29; 3 → the exit pair
+    /// (e[3]/e[8]) jumps 0x2b non-instant and holds the end-wait; 0 → the alarm picks combat or
+    /// stealth.
+    fn evil_base_c(&mut self, e: &[u32; 64], _m: &MapMusic) {
+        if e[0xb] == 0x0600_0631 { self.jump(0x24, true); self.evil_base_c_t1 = 1; }
+        match self.evil_base_c_t1 {
+            2 => { if e[0xb] == 0x0600_0632 { self.jump(0x29, false); self.evil_base_c_t1 = 3; } }
+            1 => { if e[0xc] == 0x0600_0631 { self.jump(0x27, true); self.evil_base_c_t1 = 2; } }
+            3 => { if e[3] != 0 || e[8] != 0 { self.jump(0x2b, false); self.wait_for_end = true; } }
+            _ => { if self.under_attack { self.pick_combat(false); } else { self.pick_stealth(); } }
+        }
+    }
+
+    /// `UpdateMFX_HT_Level_EvilBase` 0x114728:36-134 (07000014): the busiest machine. Latches on
+    /// the port's `evil_base_t2/t3/t4/t6` and the counter `evil_base_t1`: the stream-kill hash
+    /// 0x6000848 in e[0xc] sets t3 and the tail `SFXJumpToMusicMarker(0x18, 1)` re-issues EVERY
+    /// frame the latch holds [M 0x114728:36-40 + :134]; the NIS-start hash in e[0xb] sets t6 and
+    /// jumps 0x22 instant once; the 0x600062f scene (e[0xb]) latches t2, zeroes t1 and jumps 5
+    /// instant calm / 0x12 attack; the 0x6000833 hash (e[0xc], or t1 already up) counts t1 and
+    /// jumps 0xf non-instant when the IOP sits in a combat section, else 0x14 instant (request
+    /// `&o_left` — bookkeeping, see tower2_elevator), or gives to `PickRandomCombat(1)` past 0x37
+    /// under attack; the t4 arm (0x6000833 in e[0xb]) jumps 0x34 when the IOP is in 0x2e, else
+    /// 0x16 instant; with no hash at all, calm jumps 0x32 non-instant (once, when the IOP leaves
+    /// 5), attack jumps 0x2e instant.
+    fn evil_base(&mut self, e: &[u32; 64], m: &MapMusic) {
+        if e[0xc] == 0x0600_0848 || self.evil_base_t3 != 0 {
+            self.evil_base_t3 = 1;
+            self.jump(0x18, true);
+            return;
+        }
+        if e[0xb] == 0x0600_0848 || self.evil_base_t6 != 0 {
+            self.evil_base_t6 = 1;
+            self.jump(0x22, true);
+        }
+        if e[0xb] == 0x0600_062f || self.evil_base_t2 != 0 {
+            if self.evil_base_t2 != 0 { return; }
+            self.evil_base_t2 = 1;
+            self.evil_base_t1 = 0;
+            if self.under_attack { self.jump(0x12, false); } else { self.jump(5, true); }
+        }
+        if e[0xc] == 0x0600_0833 || self.evil_base_t1 != 0 {
+            self.evil_base_t1 += 1;
+            if !self.under_attack {
+                if m.combat.iter().any(|&s| s == self.last_jump) { self.jump(0xf, false); return; }
+                if self.last_request == 0xf { return; }
+                self.jump(0x14, true);
+            } else {
+                if self.evil_base_t1 > 0x37 { self.pick_combat(true); return; }
+                self.jump(0x14, true);
+            }
+        } else if e[0xb] == 0x0600_0833 || self.evil_base_t4 != 0 {
+            if self.evil_base_t4 != 0 { return; }
+            self.evil_base_t4 = 1;
+            if self.last_jump == 0x2e { self.jump(0x34, false); return; }
+            self.jump(0x16, true);
+        } else if !self.under_attack {
+            if self.last_jump == 5 { return; }
+            self.jump(0x32, false);
+        } else {
+            self.jump(0x2e, true);
         }
     }
 
@@ -549,5 +677,214 @@ mod tests {
         m.event(0xc, 0x6000_085c); m.event(8, 1);
         m.update(0);
         assert!(!m.out.iter().any(|c| matches!(c, Cmd::Jump { section: 0, .. })), "05 does not restart at section 0 on 1b's cinema hash");
+    }
+
+    // ---- The HT-level updaters (docs/systems/ht-music-updaters.md). Synthetic MapMusic rows:
+    // ---- the marker numbers the assertions pin are the decompile's jump targets [M]; the row
+    // ---- fields the machines don't read are test furniture.
+
+    fn tower2_b_row() -> MapMusic {
+        MapMusic { level: 0x0700_0012, track: 30, start: 0, on_death: 14, on_fail: 13, end_combat: 0x1a, end_calm: 0x1b, alert_frames: 10, calm_frames: 160, combat: vec![0xf, 0x16], stealth: vec![0x10] }
+    }
+    fn tower2_a_row() -> MapMusic {
+        MapMusic { level: 0x0700_0011, track: 30, start: 0, on_death: 14, on_fail: 13, end_combat: 0x1a, end_calm: 0x1c, alert_frames: 10, calm_frames: 160, combat: vec![0xf], stealth: vec![0x10] }
+    }
+    fn tower2_c_row() -> MapMusic {
+        MapMusic { level: 0x0700_0013, track: 30, start: 0, on_death: 14, on_fail: 13, end_combat: 0x1a, end_calm: 0x1c, alert_frames: 10, calm_frames: 160, combat: vec![0xf], stealth: vec![0x10] }
+    }
+    fn evil_base_row() -> MapMusic {
+        MapMusic { level: 0x0700_0014, track: 30, start: 0, on_death: 14, on_fail: 13, end_combat: 0x1a, end_calm: 0x1b, alert_frames: 10, calm_frames: 160, combat: vec![0xf, 0x2e], stealth: vec![0x10] }
+    }
+    fn evil_silo_row() -> MapMusic {
+        MapMusic { level: 0x0700_0015, track: 30, start: 0, on_death: 14, on_fail: 13, end_combat: 0x1a, end_calm: 0x1b, alert_frames: 10, calm_frames: 160, combat: vec![0xf, 0x16], stealth: vec![0x10] }
+    }
+    fn evil_base_c_row() -> MapMusic {
+        MapMusic { level: 0x0700_0016, track: 30, start: 0, on_death: 14, on_fail: 13, end_combat: 0x1a, end_calm: 0x1b, alert_frames: 10, calm_frames: 160, combat: vec![0xf], stealth: vec![0x10] }
+    }
+    fn elevator_row() -> MapMusic {
+        MapMusic { level: 0x0700_004a, track: 30, start: 0, on_death: 14, on_fail: 13, end_combat: 0x1a, end_calm: 0x1b, alert_frames: 10, calm_frames: 160, combat: vec![0xf], stealth: vec![0x10] }
+    }
+
+    /// `UpdateMFX_HT_Level_Tower2B` 0x114348:36-76: attack in state 0 jumps 0xf INSTANT and
+    /// latches state 1 [M 0x114348:37-42]; calm in state 1 jumps 0x11 non-instant and latches 2
+    /// [M :43-48]; calm in state 2 jumps 0x16 only when `MusicLastJump` is in the combat set
+    /// [M :49-66]. Sister: state 2 calm with the IOP OUTSIDE the set requests nothing.
+    #[test]
+    fn tower2b_alarm_machine_walks_0f_11_16() {
+        let mut m = Music::new(vec![tower2_b_row()]);
+        m.event(0, 0x0700_0012); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(2, 2);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0xf, instant: true }), "state 0 + attack → 0xf instant: {:?}", m.out);
+        m.out.clear();
+        // The alarm decays (bonus 600 + calm_frames 160 [M 0x114e70]); state 1 waits for calm,
+        // then jumps 0x11 non-instant.
+        for _ in 0..800 { m.update(0); }
+        assert!(!m.alarm_state().0, "the alarm decayed");
+        assert!(m.out.contains(&Cmd::Jump { section: 0x11, instant: false }), "state 1 + calm → 0x11: {:?}", m.out);
+        m.out.clear();
+        // The IOP now reports the section it jumped to (0xf) — `MusicLastJump` is the IOP's
+        // per-frame report [M 0x114e70:66-67 `MusicLastJump = DAT_002500cc`], so the test feeds
+        // it through `update(iop_section)` like the game's frame does.
+        m.update(0xf);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x16, instant: false }), "state 2, IOP in combat → 0x16: {:?}", m.out);
+        m.out.clear();
+        // Sister: the IOP outside the combat set → nothing (2B has no stealth pick in state 2).
+        m.update(0x11);
+        assert!(m.out.iter().all(|c| !matches!(c, Cmd::Jump { .. })), "state 2, IOP outside combat: nothing: {:?}", m.out);
+    }
+
+    /// `UpdateMFX_HT_Level_Tower2C` 0x114640:9-12: the alarm jump (0, non-instant) is queued
+    /// BEFORE the exit block, so on a frame with both the alarm and the LOAD_LEVEL exit (e[3])
+    /// the LAST jump is the end marker [M order]. Sister: without the alarm the same frame has
+    /// no jump(0) at all.
+    #[test]
+    fn tower2c_alarm_jump_precedes_the_exit_jump() {
+        let mut m = Music::new(vec![tower2_c_row()]);
+        m.event(0, 0x0700_0013); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(2, 2); m.event(3, 1);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0, instant: false }), "the alarm jump ran: {:?}", m.out);
+        let last = m.out.iter().filter(|c| matches!(c, Cmd::Jump { .. })).last().copied();
+        assert_eq!(last, Some(Cmd::Jump { section: 0x1c, instant: true }), "the exit jump is LAST (end_calm, instant): {:?}", m.out);
+        assert!(m.out.contains(&Cmd::FadeDown { music: false }) && m.wait_for_end, "the exit block held the end-wait: {:?}", m.out);
+        // Sister: the same frame without the alarm — no jump(0) in the batch.
+        let mut m = Music::new(vec![tower2_c_row()]);
+        m.event(0, 0x0700_0013); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(3, 1);
+        m.update(0);
+        assert!(!m.out.iter().any(|c| matches!(c, Cmd::Jump { section: 0, .. })), "no alarm jump without the alarm: {:?}", m.out);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x1c, instant: true }), "the exit jump alone: {:?}", m.out);
+    }
+
+    /// `UpdateMFX_HT_Level_Tower2A` 0x114250:9-34 is the shared exit block WHOLE — the exit pair
+    /// (e[8] here) jumps the end marker instant + FadeDown + the end-wait, and nothing else ever
+    /// queues a jump on this level. Sister: a plain frame with no events emits nothing.
+    #[test]
+    fn tower2a_is_the_exit_block_alone() {
+        let mut m = Music::new(vec![tower2_a_row()]);
+        m.event(0, 0x0700_0011); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(8, 1);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x1c, instant: true }) && m.out.contains(&Cmd::FadeDown { music: false }), "the exit block ran: {:?}", m.out);
+        assert!(m.wait_for_end);
+        m.out.clear();
+        m.update(0);
+        assert!(m.out.is_empty(), "no updater output beyond the exit block: {:?}", m.out);
+    }
+
+    /// `UpdateMFX_HT_Level_EvilSilo` 0x114a38:41-47: attack round-robins `PickRandomCombat(0)`,
+    /// calm picks `PickRandomStealth` once the IOP reports a combat section. Sister: calm with
+    /// the IOP outside combat picks nothing [M PickRandomStealth 0x111c70:20-26 gate].
+    #[test]
+    fn evilsilo_picks_combat_then_stealth() {
+        let mut m = Music::new(vec![evil_silo_row()]);
+        m.event(0, 0x0700_0015); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(2, 2);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0xf, instant: false }), "attack → combat round 1 (0xf, non-instant flag=0): {:?}", m.out);
+        m.out.clear();
+        for _ in 0..800 { m.update(0); }
+        assert!(!m.alarm_state().0, "the alarm decayed");
+        m.update(0xf);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x10, instant: false }), "calm + IOP in combat → stealth 0x10: {:?}", m.out);
+        m.out.clear();
+        // Sister: attack again from the stealth section round-robins to the NEXT combat pick.
+        m.event(2, 2);
+        m.update(0x10);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x16, instant: false }), "attack → combat round 2 (0x16): {:?}", m.out);
+    }
+
+    /// `UpdateMFX_HT_Level_Tower2Elevator` 0x114528:36-40: the elevator ride's NIS hash
+    /// 0x60006d3 in e[0xb] jumps marker 4 non-instant. Sister: any other hash does nothing.
+    #[test]
+    fn elevator_nis_jumps_marker_4() {
+        let mut m = Music::new(vec![elevator_row()]);
+        m.event(0, 0x0700_004a); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(0xb, 0x0600_06d3);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 4, instant: false }), "the ride NIS → marker 4: {:?}", m.out);
+        m.out.clear();
+        m.event(0xb, 0x0600_0631);
+        m.update(0);
+        assert!(m.out.is_empty(), "a foreign hash does nothing on 4a: {:?}", m.out);
+    }
+
+    /// `UpdateMFX_HT_Level_EvilBaseC` 0x114b38:36-77: the 0x6000631 NIS (e[0xb]) jumps 0x24
+    /// instant and latches state 1; the stream-kill 0x6000631 (e[0xc]) jumps 0x27 instant; the
+    /// 0x6000632 stream (e[0xb]) jumps 0x29; the exit pair jumps 0x2b and holds the end-wait.
+    /// Sister: in state 0 the alarm picks combat/stealth as on EvilSilo.
+    #[test]
+    fn evilbasec_cutscene_machine_walks_24_27_29_2b() {
+        let mut m = Music::new(vec![evil_base_c_row()]);
+        m.event(0, 0x0700_0016); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(0xb, 0x0600_0631);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x24, instant: true }), "the NIS → 0x24 instant: {:?}", m.out);
+        m.out.clear();
+        m.event(0xc, 0x0600_0631);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x27, instant: true }), "the kill-stream → 0x27 instant: {:?}", m.out);
+        m.out.clear();
+        m.event(0xb, 0x0600_0632);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x29, instant: false }), "the second stream → 0x29: {:?}", m.out);
+        m.out.clear();
+        m.event(8, 1);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x2b, instant: false }) && m.wait_for_end, "the exit → 0x2b + end-wait: {:?}", m.out);
+        // Sister: state 0 with the alarm picks combat (the machines' shared picker).
+        let mut m = Music::new(vec![evil_base_c_row()]);
+        m.event(0, 0x0700_0016); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(2, 2);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0xf, instant: false }), "state 0 + attack → combat 0xf: {:?}", m.out);
+    }
+
+    /// `UpdateMFX_HT_Level_EvilBase` 0x114728:36-134. The stream-kill hash 0x6000848 in e[0xc]
+    /// latches t3 and the tail re-issues jump(0x18, instant) EVERY frame [M :36-40 + :134]; the
+    /// 0x600062f scene latches t2, zeroes t1 and jumps 5 instant calm — then the empty-slot arm
+    /// queues 0x32 the same frame (the game's two batch ops, last wins on the IOP) [M :120-131].
+    /// Sister: after the t2 latch the updater returns early — no more jumps.
+    #[test]
+    fn evilbase_hold_latch_and_the_062f_scene() {
+        let mut m = Music::new(vec![evil_base_row()]);
+        m.event(0, 0x0700_0014); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(0xc, 0x0600_0848);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x18, instant: true }), "the kill-stream hold → 0x18 instant: {:?}", m.out);
+        m.out.clear();
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x18, instant: true }), "the latch holds EVERY frame: {:?}", m.out);
+        // The 0x600062f scene (t2): calm jumps 5 instant, then the no-hash arm queues 0x32.
+        let mut m = Music::new(vec![evil_base_row()]);
+        m.event(0, 0x0700_0014); m.event(1, 1);
+        m.update(0);
+        m.out.clear();
+        m.event(0xb, 0x0600_062f);
+        m.update(0);
+        assert!(m.out.contains(&Cmd::Jump { section: 5, instant: true }), "the scene calm arm → 5 instant: {:?}", m.out);
+        assert!(m.out.contains(&Cmd::Jump { section: 0x32, instant: false }), "the same frame's no-hash arm → 0x32: {:?}", m.out);
+        m.out.clear();
+        m.update(0);
+        assert!(m.out.is_empty(), "the t2 latch returns early: {:?}", m.out);
     }
 }

@@ -88,6 +88,11 @@ pub fn bigf_manifest<R: Read + Seek>(iso: &IsoImage<R>) -> Result<String> {
 }
 
 /// The `FileList` index read from the disc's ACTION.ELF, checked against FILES.BIN.
+///
+/// Replaces the game's boot-time disc-FS init (unported-misc-1, docs/systems/boot-fs-cache.md):
+/// `FS_Init` 0x10bc48 retries `sceCdSearchFile("\FILES.BIN;1")` until it succeeds and its
+/// `DVDfp.lsn` becomes the base of every psiFile* sector read — the job done here by
+/// `iso.find` + the FileList lba math.
 pub fn files_bin_entries<R: Read + Seek>(iso: &IsoImage<R>) -> Result<(Vec<crate::filelist::FileEntry>, &IsoEntry)> {
     let action = iso.find("/ACTION.ELF").ok_or_else(|| crate::buf::FormatError::Invalid("no ACTION.ELF".into()))?;
     let bin = iso.find("/FILES.BIN").ok_or_else(|| crate::buf::FormatError::Invalid("no FILES.BIN".into()))?;

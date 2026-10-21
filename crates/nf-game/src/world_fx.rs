@@ -317,6 +317,14 @@ impl EmitterFx {
 
 /// The frame's particle billboards (`Emitter_Draw` path A: a size-`def.size` rgba sprite per alive
 /// slot) — the render handoff, the way `Sim::snow_quads` exposes the snow.
+///
+/// Replaces `CreatePointerSpriteList` 0x11a160 (unported-front-end-menus-1) [M]: the game converts
+/// this same VECTOR array into one batched GIF sprite packet (56 quads per tag, texture bound by
+/// psiFont_SetTexture 0x120880; count pre-masked to a multiple of 4 by psiDrawParticleList
+/// 0x122d50:107; tint 0x3f,0x3f,0x3f,0x7f; scale 1/(PS2SnowSize·PS2SnowSizeMult)) — reached every
+/// frame via DrawDrops 0x18cb90 (rain/snow hashes 0x3000045/0x3000087) and Emitter_Draw 0x17b708
+/// (def+4) ← View_DrawObjList 0x1e69a0 ← Game_Draw. Here the quads feed the wgpu snow/particle
+/// pipelines instead (gpu.rs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParticleSprite {
     pub pos: V3,
