@@ -137,7 +137,9 @@ impl Network {
         self.bounds_test(a, b, near, want_hit)
     }
 
-    /// `DroneMove_ObjectMissionPathDistance`'s node qualification (0x153f50:100-121): 3D distance
+    /// `DroneMove_ObjectMissionPathDistance`'s node qualification (0x153f50:100-121) — the same gate
+    /// chain as `NDrone2_MoveTest` 0x155330 and its MAPNODE twins `NDrone2_MoveTestFromNode` 0x1554a8
+    /// (node → pos) / `NDrone2_MoveTestToNode` 0x155620 (pos → node): 3D distance
     /// ≤ 30 (DAT_002c7954 = 900.0, `Drone_PostLoad_Init` 0x136938:62), |dy| ≤ 4.0 (DAT_002c794c),
     /// the slope band (DAT_002c7948 < |dy| ⇒ |atan2(dy, horiz)| ≤ DAT_002c7944 — the
     /// PostLoad_Init 1.5·/2.0 + 0.7854/0.8727 pair this Network carries), then the BOUNDARY test
@@ -219,8 +221,9 @@ impl Network {
         c.into_iter().map(|(_, i)| i).collect()
     }
 
-    /// `AINetwork_NodesForPosition` for one path (mode 0): the first candidate with `MoveTestFromNode(node → pos)`
-    /// = 1 is found; the first failure is the fallback.
+    /// `AINetwork_NodesForPosition` for one path (mode 0): the first candidate with
+    /// `NDrone2_MoveTestFromNode` 0x1554a8 (node → pos, via `AINetwork_NodeSearchCel` 0x156e18:127-144's
+    /// mode-0 arm) = 1 is found; the first failure is the fallback.
     /// `AINetwork_NodesForPosition` + `AINetwork_BuildAITarget` (0x15ac78) — the drone-alert
     /// target node set; also the port form of `NDrone2_NearestNode` (0x1558d8) / `NearestNodeDCV`
     /// (0x155958)'s nearest-node ask.
@@ -243,7 +246,9 @@ impl Network {
         let (mut flags, mut g, mut f) = (vec![0u32; n], vec![0f32; n], vec![0f32; n]);
         let mut parent: Vec<Option<(u16, u16)>> = vec![None; n];
         let mut open: Vec<usize> = Vec::new();
-        // Start node: the first candidate (box ±25) reachable from the start.
+        // Start node: the first candidate (box ±25) reachable from the start — the game's
+        // `NDrone2_MoveTestToNode` 0x155620 (pos → node) probe, the -1 result ending the scan
+        // [M AINetwork_NodeSearchCel 0x156e18:147-176, the mode-1 arm its A* caller drives].
         let mut started = false;
         for i in self.candidates(path, start, 625.0) {
             match self.move_test(world, start, p.nodes[i].pos, false, false).0 {
@@ -298,7 +303,9 @@ impl Network {
 }
 
 impl Network {
-    /// `AINetwork_NodeSearch` (mode 1, limit 625): the first node (nearest first, 2D) reachable from `pos`.
+    /// `AINetwork_NodeSearch` (mode 1, limit 625): the first node (nearest first, 2D) reachable from `pos`
+    /// — `NDrone2_MoveTestToNode` 0x155620 (pos → node) per candidate, the −1 result stopping the scan
+    /// [M 0x156e18:147-176].
     pub fn node_from(&self, world: &CollisionWorld, path: usize, pos: V3) -> Option<u16> {
         for i in self.candidates(path, pos, 625.0) {
             match self.move_test(world, pos, self.paths[path].nodes[i].pos, false, false).0 {
@@ -552,7 +559,8 @@ impl Route {
         }
         let Some(pi) = path.filter(|&p| !net.paths[p].nodes.is_empty()) else { return Err(8) };
         let (res, mut nodes, mut links) = net.astar(world, pi, start, dest, goal, used)?;
-        // OptimiseRoute: trim the first / last node when the next one is reachable directly.
+        // OptimiseRoute 0x156760 (its two `NDrone2_MoveTestToNode` 0x155620 probes): trim the
+        // first / last node when the next one is reachable directly.
         let p = &net.paths[pi];
         let pair_ok = |x: u16, y: u16| { let (fx, fy) = (p.nodes[x as usize].flags, p.nodes[y as usize].flags); !((fx & 2 != 0 && fy & 2 != 0) || (fx & 4 != 0 && fy & 4 != 0)) };
         if nodes.len() > 1 && pair_ok(nodes[0], nodes[1]) && net.move_test(world, start, p.nodes[nodes[1] as usize].pos, true, false).0 == 1 {

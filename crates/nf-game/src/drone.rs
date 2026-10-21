@@ -7317,12 +7317,20 @@ impl Drone {
     }
 
     /// The `NDrone2_Can*` tests: the point `local` (x = left, z = forward) from the feet must be reachable
-    /// (`NDrone2_MoveTest`: |dy| ≤ 4 and not across a boundary). *Deviation*: the game tests AI-network boundaries;
-    /// we require a floor there and no collision between at knee and chest height.
-    /// The shared spatial test behind `NDrone2_CanStrafeLeft` (0x14f9e8) / `NDrone2_CanStrafeRight`
-    /// (0x14fbe0) / `NDrone2_CanStepRight` (0x14f808) / `NDrone2_CanRollRight` (0x150500) — the
-    /// game's per-direction probes with the floor-vs-AI-boundary deviation documented in
-    /// docs/systems/drone-navigation.md; `NDrone2_EvasiveMove` (0x1506d8) picks among them.
+    /// (`NDrone2_MoveTest` 0x155330: |dy| ≤ 4 and not across a boundary). *Deviation*: the game tests AI-network
+    /// boundaries; we require a floor there and no collision between at knee and chest height.
+    /// The shared spatial test behind `NDrone2_CanStepLeft` 0x14f640 (prop 0x42, anim 0x5a, +1.8 x —
+    /// 0x3fe66666) / `NDrone2_CanRollLeft` 0x150338 (prop 0x2e, anim 0x53, +5.3 x — 0x40a66666) /
+    /// `NDrone2_CanStrafeDodgeLeft` 0x14fdf8 (prop 0x13, anim 0x29, +3.6 x — 0x40666666, gate
+    /// drone+0x31c bit 3 clear) / `NDrone2_CanStrafeDodgeRight` 0x14ffc0 (prop 0x13, anims 0x29 AND 0x2a,
+    /// −3.6 x — 0xc0666666, gate drone+0x31c bit 4 clear) / `NDrone2_CanMoveToRelativePos` 0x154838 (the
+    /// caller's (dx, dy, dz) as the probe offset — NinjaAttack's (0, 0, ±5), `IsOpponent`'s (0, 0, 0.4)) /
+    /// `NDrone2_CanStrafeLeft` (0x14f9e8) / `NDrone2_CanStrafeRight` (0x14fbe0) / `NDrone2_CanStepRight`
+    /// (0x14f808) / `NDrone2_CanRollRight` (0x150500) — the game's per-direction probes with the
+    /// floor-vs-AI-boundary deviation documented in docs/systems/drone-navigation.md (the gates table in
+    /// docs/systems/guard-move-checks.md); `NDrone2_EvasiveMove` (0x1506d8) picks among them. Each game probe
+    /// publishes its target into the reach globals (DroneReachCheckPos / DAT_0029b2f4/f8/fc) before the
+    /// `NDrone2_MoveTest` — the port reads no globals.
     fn can_move(&self, d: &Data, x: f32, z: f32) -> bool {
         let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
         let feet = [self.pos[0], self.pos[1] - 1.0, self.pos[2]];
@@ -7332,6 +7340,9 @@ impl Drone {
         [0.5, 1.4].iter().all(|&h| d.world.line_of_sight([feet[0], feet[1] + h, feet[2]], [to[0], floor + h, to[2]]))
     }
 
+    /// `NDrone2_CanBackoff` 0x1501a0: prop 0x06, `CanDoAnimState(4)` (the port's `anim_state::BACKOFF`),
+    /// then the (0, 0, −1.8) probe — 0xbfe66666 on the decompile's z — through `NDrone2_MoveTest`; no
+    /// +0x31c flag gate (unlike the dodge/step/roll probes). [M 0x1501a0:49-93]
     fn can_backoff(&self, d: &Data) -> bool { self.prop(d, 0x06) && self.can_do(d, anim_state::BACKOFF) && self.can_move(d, 0.0, -1.8) }
 
     /// NinjaAttack 0xa7's ENTER/UPDATE routing [M 0x16bb50 case 1/case 3]: >12 → 0xa8, >6 → 0xa9,
@@ -7369,7 +7380,11 @@ impl Drone {
     }
 
     /// `NDrone2_ChooseCombatMove` (0x150c18): an option list (dodge, strafe, roll, step, crouch, stand) picked at
-    /// random, each case falling through to the next when it fails; left/right order random.
+    /// random, each case falling through to the next when it fails; left/right order random. The cases probe
+    /// `NDrone2_CanStrafeDodgeLeft` 0x14fdf8 / `NDrone2_CanStrafeDodgeRight` 0x14ffc0 (case 1, ±3.6),
+    /// `NDrone2_CanRollLeft` 0x150338 / `NDrone2_CanRollRight` 0x150500 (case 2, ±5.3 — 0x40a66666 /
+    /// 0xc0a66666) and `NDrone2_CanStepLeft` 0x14f640 / `NDrone2_CanStepRight` 0x14f808 (case 3/4 tail, ±1.8)
+    /// [M 0x150c18:164-316]; the port's pair() probes both sides through `can_move`.
     /// `NDrone2_CanAimCrouch` (0x154960) is the crouch-roll option here (case 5); the pair()
     /// rolls are the ChooseCombatMove (0x150c18) stand-in for `BOTSTATE_EvasiveMove` (0x129368).
     fn choose_combat_move(&mut self, d: &Data, rng: &mut Rng) -> u8 {
@@ -7405,7 +7420,7 @@ impl Drone {
                 1 if aimed && self.prop(d, 0x13) => pair(self, rng, 3.6, STRAFE_DODGE_LEFT, STRAFE_DODGE_RIGHT),
                 2 if !aimed => { case = 4; continue; }
                 2 if self.prop(d, 0x41) => pair(self, rng, 1.8, STRAFE_AIM_LEFT, STRAFE_AIM_RIGHT),
-                3 if aimed && self.prop(d, 0x2e) && self.can_do(d, anim_state::ROLL_LEFT) => pair(self, rng, 5.2, ROLL_LEFT_CROUCH, ROLL_RIGHT_CROUCH),
+                3 if aimed && self.prop(d, 0x2e) && self.can_do(d, anim_state::ROLL_LEFT) => pair(self, rng, 5.3, ROLL_LEFT_CROUCH, ROLL_RIGHT_CROUCH), // ±5.3 [M 0x150338/0x150500]
                 4 if self.prop(d, 0x42) && self.can_do(d, anim_state::STEP_LEFT) => pair(self, rng, 1.8, STEP_AIM_LEFT, STEP_AIM_RIGHT),
                 5 if self.prop(d, 0x11) && self.can_do(d, anim_state::CROUCH_AIM) && self.dist >= 6.0 && rng.rand(2) == 0 => AIM_CROUCH,
                 6 => break if rng.rand(4) != 0 { AIM_STAND } else { 0 },
