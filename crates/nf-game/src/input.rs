@@ -80,6 +80,48 @@ impl PadState {
     pub fn disconnected() -> PadState { PadState { buttons: 0, rx: 0x7f, ry: 0x7f, lx: 0x7f, ly: 0x7f, connected: false } }
 }
 
+/// `MapPlayerToSlot(player)` (ACTION.ELF 0x10cc48, 312 B): which pad slot drives a player.
+///
+/// [M 0x10cc48 decomp] Reads each slot's state word (`tSlot` 0x245680, stride 0x180, state at
+/// +0x114; 99 = pad ready — here `ready[i]`) and the global `MultitapPresent` (0x246960,
+/// refreshed by `psiInput_MapInputs` 0x10cd80 every 0x3c frames and by `psiMultitapPresent`
+/// 0x10e378 in the front end):
+///
+/// - player 0 → slot 0 if ready, else none;
+/// - player 1 → slot 0 must be ready; with a multitap slot 1, without it slot 4 (port 2's pad);
+/// - player 2 → multitap, slots 0+1 ready, then slot 2;
+/// - player 3 → multitap, slots 0+1+2 ready, then slot 3;
+/// - anything else → none (the game returns 0xffffffff).
+///
+/// Callers [M grep]: `psiInput_MapInputs` 0x10cd80 (per player, every game update in every
+/// mode), `psiInput_RumbleStart` 0x10e4a8 / `psiInput_RumbleStop` 0x10e3a8 (via
+/// `Input_RumbleStart` 0x17f6b8 / `Input_RumbleStop` 0x17f748). The pad bring-up that fills
+/// the slots is `system_input_init` 0x10c418 (main 0x109080 boot path): `sceMtapInit`,
+/// `sceMtapPortOpen(0/1)`, `scePadInit(0)`, then 8 × `scePadPortOpen(port, slot,
+/// tSlot + i·0x180)` for (0,0)(0,1)(0,2)(0,3)(1,0)(1,1)(1,2)(1,3), each successful open
+/// clearing the 6-byte actuator buffer at +0x164 and zeroing port/+0x100, slot id/+0x104,
+/// prev pad type/+0x110 and state/+0x114. The port has one OS pad (`nf_view::gamepad`), so
+/// the init is cited there (`gamepad::Backend::new`) rather than modelled.
+pub fn map_player_to_slot(player: i32, ready: &[bool; 8], multitap: bool) -> i32 {
+    let is = |s: usize| -> i32 { if ready[s] { s as i32 } else { -1 } };
+    match player {
+        0 => is(0),
+        1 => {
+            if !ready[0] {
+                return -1;
+            }
+            if multitap { is(1) } else { is(4) }
+        }
+        2 => {
+            if multitap && ready[0] && ready[1] { is(2) } else { -1 }
+        }
+        3 => {
+            if multitap && ready[0] && ready[1] && ready[2] { is(3) } else { -1 }
+        }
+        _ => -1,
+    }
+}
+
 /// The game's analog dead zone [M psiInput_PollDevices 0x10ca78:27-58] — G-012.
 ///
 /// Per axis (in place, both the raw +0x128..0x12b bytes and the curve copy at +0x148..0x14b):
@@ -424,5 +466,45 @@ mod tests {
         let mut a = AccelState { state: base };
         a.step(0.9, base, mul, steps, 0.05, 0.95);
         assert_eq!(a.state, base);
+    }
+
+    /// [M MapPlayerToSlot 0x10cc48 decomp] the mapping table over slot-readiness patterns.
+    #[test]
+    fn map_player_to_slot_table() {
+        // One pad on slot 0, no multitap: P0 → 0, P1 → 4 (port 2's pad), P2/P3 none.
+        let one = [true, false, false, false, false, false, false, false];
+        assert_eq!(map_player_to_slot(0, &one, false), 0);
+        assert_eq!(map_player_to_slot(1, &one, false), 4);
+        assert_eq!(map_player_to_slot(2, &one, false), -1);
+        assert_eq!(map_player_to_slot(3, &one, false), -1);
+        // Four pads via multitap: every player maps to its own slot.
+        let four = [true, true, true, true, false, false, false, false];
+        for p in 0..4 {
+            assert_eq!(map_player_to_slot(p, &four, true), p);
+        }
+        // Two pads, no multitap: P1 still lands on slot 4 (the physical port-2 pad), which
+        // this readiness set does not have — so P1 has no pad even though slot 1 exists.
+        let two = [true, true, false, false, false, false, false, false];
+        assert_eq!(map_player_to_slot(1, &two, false), -1);
+        assert_eq!(map_player_to_slot(1, &two, true), 1);
+    }
+
+    /// Sister: the gating chain — later players require every earlier slot ready, and an
+    /// unready slot 0 leaves even player 0 without a pad (a port that skipped the P0 gate
+    /// would return 0 for a dead first controller).
+    #[test]
+    fn map_player_to_slot_gating() {
+        let none = [false, false, false, false, false, false, false, false];
+        for p in 0..4 {
+            assert_eq!(map_player_to_slot(p, &none, true), -1);
+        }
+        // P3 needs slots 0,1,2 all ready — slot 2 dead blocks it even with slot 3 alive.
+        let three_of_four = [true, true, false, true, false, false, false, false];
+        assert_eq!(map_player_to_slot(3, &three_of_four, true), -1);
+        let all = [true; 8];
+        assert_eq!(map_player_to_slot(3, &all, true), 3);
+        // Out-of-range player index → none.
+        assert_eq!(map_player_to_slot(4, &all, true), -1);
+        assert_eq!(map_player_to_slot(-1, &all, true), -1);
     }
 }

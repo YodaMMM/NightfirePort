@@ -239,6 +239,12 @@ impl Hud<'_> {
     }
 
     /// A `SpriteInfo` sprite at the pane origin with colour `c`.
+    ///
+    /// On the PS2 the equivalent packet is built by `psiDrawSprites` 0x120e68 → `FillSpriteData`
+    /// 0x120cf8 (52-word GS template: GIF tags 0x6000000c/0x5000000c, TEX0 from the
+    /// texture-space entry, two vertex blocks coloured by the `SpriteColourR/G/B/A` globals
+    /// 0x2469d0..0x2469dc) [M decomp] — the colour/UV/position data that packet carried is what
+    /// this draw carries; the GS packet itself has no host equivalent.
     fn sprite(&mut self, anchor: Anchor, at: (f32, f32), s: &SpriteInfo, c: [f32; 4]) {
         let mut uv = s.uv.map(|k| k as f32);
         // Zero UV extents = the whole texture, like the zero w/h below (the Redeemer brackets 3..8: uv 0, w/h 0 —

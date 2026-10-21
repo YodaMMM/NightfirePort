@@ -353,6 +353,12 @@ pub struct Sim {
     pub seq_index: HashMap<u32, (u8, usize)>,
     /// The same sequences by hashcode (root motion in the AI).
     pub seqs: HashMap<u32, Sequence>,
+    /// Loaded skin assets by hashcode. NOT the game's `SkinCache` — that is a 128-entry × 24 B
+    /// pool at 0x246350 zeroed per level by `InitCacheSkin` 0x111ad0 (psiPreGameRun 0x11e2e8),
+    /// aged per frame by `AgeSkinCache` 0x111b08 (psiPreDraw 0x121590: each +0x14 age drops
+    /// from 3, both Mem_Malloc'd buffers freed at 0; `CacheSkin` 0x1112c0 refreshes age-3 on a
+    /// hit) — short-lived DMA-upload buffers for skins drawn this frame [M decomp]. This map is
+    /// the port's persistent decode cache, a different job.
     pub skins: HashMap<u32, Skin>,
     pub skeletons: HashMap<u8, Skeleton>,
     pub nav: nf_game::nav::Network,

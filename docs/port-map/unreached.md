@@ -255,3 +255,18 @@ message queue sorts TXTMSG records by the `isNew` byte — contradicted by the c
 message queue is FIFO via the CirBuf ring (CirBuf_Add 0x1cd040, replaced by the port's
 subtitle queue). Also fixes a mislabel in docs/systems/fix-cel-order.md:28, which calls
 0x1d3320 "CompLight": 0x1d3320 is CompSpr; CompLight is 0x1d3350.
+
+## SFXSetFilePath 0x116c50: dead — its only call path never fires
+
+`SFXSetFilePath(path)` (164 B, batch op 0x14 + 50 words = 200 bytes of path) has exactly one
+caller: `SFXInitialise` 0x1157b0:37, guarded `if (param_1 != 0)`. `SFXInitialise`'s only caller
+is `Sound_Init` 0x1ddf88:9, which passes **0** — so the guard is never taken and the function
+never executes in the shipped game [M grep + decomp]. The IOP keeps its `.data` default path
+`\PS2\MUSIC\` (docs/systems/music.md §1.2). No port: streams resolve through
+`nf_formats::soundbank::stream_data` with explicit paths.
+
+Also recorded here because the natural alternative buckets don't fit: `SaveMemoryMap`
+0x111298 (36 B) IS reached — `CreateSpaceAndPackTextures` 0x11dcf8:310 on every level load —
+but it is a stubbed-out no-op: the disassembly (file 0xb198) shows it memsets 18 bytes of its
+own dead stack frame and returns, touching no globals, result ignored by the caller [M ELF
+bytes]. Nothing to port; noted in docs/systems/memcard-save-flow.md.

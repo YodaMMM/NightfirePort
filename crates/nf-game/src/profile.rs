@@ -441,6 +441,53 @@ impl Profile {
         dir.join(format!("{}.profile", name))
     }
 
+    /// `Ascii2Sjis(c)` (ACTION.ELF 0x1201c0, 232 B): one ASCII byte → fullwidth Shift-JIS.
+    ///
+    /// [M 0x1201c0 decomp; tables dumped from ACTION.ELF] `c &= 0xff`, then:
+    /// '0'–'9' → 0x824F + (c − 0x30) (fullwidth digits), 'A'–'Z' → 0x8260 + (c − 0x41),
+    /// 'a'–'z' → 0x8281 + (c − 0x61) (the `ascii_table` rows {add, sub} at 0x265060:
+    /// (0x824f, 0x30) (0x8260, 0x41) (0x8281, 0x61)), the 33 punctuation bytes 0x20–0x2F,
+    /// 0x3A–0x40, 0x5B–0x60, 0x7B–0x7E through `ascii_special` 0x264fd8 (stride 4, low
+    /// u16 — the standard fullwidth form: ' '→0x8140, '!'→0x8149, … '~'→0x8150), and
+    /// everything else (control, 0x7F, ≥0x80) → 0x0000.
+    pub fn ascii_to_sjis(c: u8) -> u16 {
+        const SPECIAL: [u16; 33] = [
+            0x8140, 0x8149, 0x8168, 0x8194, 0x8190, 0x8193, 0x8195, 0x8166, 0x8169, 0x816A,
+            0x8196, 0x817B, 0x8143, 0x817C, 0x8144, 0x815E, // 0x20..0x2F
+            0x8146, 0x8147, 0x8171, 0x8181, 0x8172, 0x8148, 0x8197, // 0x3A..0x40
+            0x816D, 0x818F, 0x816E, 0x814F, 0x8151, 0x8165, // 0x5B..0x60
+            0x816F, 0x8162, 0x8170, 0x8150, // 0x7B..0x7E
+        ];
+        match c {
+            b'0'..=b'9' => 0x824f + (c - b'0') as u16,
+            b'A'..=b'Z' => 0x8260 + (c - b'A') as u16,
+            b'a'..=b'z' => 0x8281 + (c - b'a') as u16,
+            // [M 0x1201c0] the four punctuation ranges index the same 33-entry table:
+            // 0x20..0x2F at 0, 0x3A..0x40 at 16 (c − 0x2a), 0x5B..0x60 at 23 (c − 0x44),
+            // 0x7B..0x7E at 29 (c − 0x5e).
+            0x20..=0x2f => SPECIAL[(c - 0x20) as usize],
+            0x3a..=0x40 => SPECIAL[(c - 0x2a) as usize],
+            0x5b..=0x60 => SPECIAL[(c - 0x44) as usize],
+            0x7b..=0x7e => SPECIAL[(c - 0x5e) as usize],
+            _ => 0,
+        }
+    }
+
+    /// `AsciiString2Sjis(in, out)` (ACTION.ELF 0x120b88, 152 B): a NUL-terminated ASCII string
+    /// → Shift-JIS u16s as the memory card save icon/sys wants them.
+    ///
+    /// [M 0x120b88 decomp] Per byte: `out[i] = byteswap16(Ascii2Sjis(in[i]))` — the u16 is
+    /// stored big-endian (memory holds `82 4F` for '0') — and after the string a u16 0
+    /// terminator. The game writes these to `GameTitle` 0x3124c0 as
+    /// `SJIS("007: NightFire" + codename)` ("007: NightFire" at 0x2e8370, "BASLUS-20579" at
+    /// 0x2e8380, format "%s%s" at 0x30c818) from `psiSaveData` 0x110df0 / `psiLoadData`
+    /// 0x1110a0 / `psiDeleteData` 0x111168 — all front-end flows. The port's saves are plain
+    /// files (see `list_dir` below), so this is kept as the faithful conversion for save
+    /// metadata parity; bytes the table rejects become 0x0000 in place.
+    pub fn ascii_string_to_sjis(s: &[u8]) -> Vec<u16> {
+        s.iter().map(|&c| Self::ascii_to_sjis(c).swap_bytes()).collect()
+    }
+
     /// Write this profile next to the port's config (the profiles dir), creating the dir.
     pub fn save_to_dir(&self, dir: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
         std::fs::create_dir_all(dir)?;
@@ -465,7 +512,12 @@ impl Profile {
     /// `Menu_EnumSaves` 0x1f7b78's psiStartSaveEnum/psiGetNextSave walk, name < 0x21 chars).
     /// The game's save-icon buffer registration — `SetUpIconFile` 0x111270 (the loader case 0xF
     /// stores the buffer pointer and the 0x128F8-byte icon size [M 0x111270:4-8]) — has no port
-    /// path: the port's saves are plain files, no PS2 icon sys pipeline [S].
+    /// path: the port's saves are plain files, no PS2 icon sys pipeline [S]. On the card the
+    /// file's title u16s are `AsciiString2Sjis` 0x120b88("007: NightFire" + codename) via
+    /// `Ascii2Sjis` 0x1201c0 (port: `Profile::ascii_string_to_sjis`); `InitaliseMemoryCard`
+    /// 0x110f48 zeroes the card state (MC_Info 0x316940, CardState 0x316950, StateStack
+    /// 0x30d6dc) from main 0x109080 and kicks the poller — the port's equivalent is the
+    /// profiles dir plus the card-flow machine in `nf_view::menu`.
     pub fn list_dir(dir: &std::path::Path) -> Vec<String> {
         let mut out = Vec::new();
         if let Ok(rd) = std::fs::read_dir(dir) {
@@ -677,5 +729,58 @@ mod delete_tests {
         assert!(Profile::path_in(&dir, "KEEPME").exists());
         assert!(!Profile::delete_in(&dir, "DROPME"), "a second delete finds nothing");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// [M Ascii2Sjis 0x1201c0; tables dumped from ACTION.ELF] digits, letters and punctuation
+    /// → standard fullwidth Shift-JIS.
+    #[test]
+    fn ascii_to_sjis_table() {
+        for (c, want) in [
+            (b'0', 0x824f),
+            (b'9', 0x8258),
+            (b'A', 0x8260),
+            (b'Z', 0x8279),
+            (b'a', 0x8281),
+            (b'z', 0x829a),
+            (b' ', 0x8140),
+            (b'!', 0x8149),
+            (b'-', 0x817c),
+            (b':', 0x8146),
+            (b'?', 0x8148),
+            (b'[', 0x816d),
+            (b'~', 0x8150),
+        ] {
+            assert_eq!(Profile::ascii_to_sjis(c), want, "Ascii2Sjis(0x{c:02x})");
+        }
+    }
+
+    /// Sister: rejected bytes (control, 0x7f, high bytes) → 0, not a passthrough — a port
+    /// that returned the byte unchanged would answer 0x41 for 'A'-adjacent junk.
+    #[test]
+    fn ascii_to_sjis_rejects_unsupported() {
+        for c in [0x00u8, 0x1f, 0x7f, 0x80, 0xff] {
+            assert_eq!(Profile::ascii_to_sjis(c), 0, "Ascii2Sjis(0x{c:02x})");
+        }
+    }
+
+    /// [M AsciiString2Sjis 0x120b88] the stored u16s are byte-swapped (big-endian on the
+    /// card): '0' → 0x4f82 in memory order. The game writes "007: NightFire" + codename.
+    #[test]
+    fn ascii_string_to_sjis_swaps_and_converts() {
+        let out = Profile::ascii_string_to_sjis(b"007");
+        assert_eq!(out, vec![0x4f82, 0x4f82, 0x5082], "byteswapped fullwidth 007");
+        assert_eq!(Profile::ascii_string_to_sjis(b"B"), vec![0x6082]);
+    }
+
+    /// Sister: a port that forgot the swap or the rejected-byte rule breaks on the real
+    /// title string — ':' is punctuation (0x8146 → 0x4681 stored) and ' ' maps, not zeroes.
+    #[test]
+    fn ascii_string_to_sjis_game_title_bytes() {
+        let out = Profile::ascii_string_to_sjis(b"007: NightFire");
+        assert_eq!(out.len(), 14);
+        assert_eq!(out[3], 0x4681, "colon stored swapped");
+        assert_eq!(out[4], 0x4081, "space stored swapped");
+        assert_eq!(out[5], 0x6d82, "N = 0x826d stored swapped");
+        assert_eq!(out[13], 0x8582, "e = 0x8285 stored swapped");
     }
 }
