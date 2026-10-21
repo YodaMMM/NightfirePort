@@ -181,11 +181,14 @@ fn deep_ladder_climb_opens_the_hatch_on_e_and_exits_into_the_bathhouse() {
     let up = nf_game::player::Input { forward: 1.0, look: 0.2, ..Default::default() };
     for _ in 0..8 { step_use(&mut sim, up); }
     sim.bond.pitch = 1.0;
-    // The E edge every other tick, still holding the climb.
+    // The E edge every other tick, still holding the climb. door-react-path5: the game's use fires
+    // once per press edge [M 0x1a5ea8-0x1a5ee8 + 0x17f084-0x17f090] — press on even ticks, release
+    // on odd ones, so every even tick is a fresh press (the warmup's 8 presses fired before the
+    // pitch rose and must not swallow these).
     let mut opened = false;
-    for t in 0..90 {
-        step_use(&mut sim, up);
-        if t % 2 == 0 {
+    for t in 0..180 {
+        if t % 2 == 0 { step_use(&mut sim, up); } else { step(&mut sim, up); }
+        if t % 4 == 0 {
             let s = &sim.drones.sss.list[s308];
             if s.state == 1 || s.t > 0.0 { opened = true; }
         }

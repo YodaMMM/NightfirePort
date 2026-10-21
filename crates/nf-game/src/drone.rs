@@ -12186,6 +12186,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // core-loop item 11] — so the scan sees this walk-start snapshot, not a same-walk recompute
         // (a spawned guard whose per-drone pass runs before its spawner's would otherwise read fresh).
         let drawn_prev: Vec<bool> = self.list.iter().map(|d| d.drawn).collect();
+        // fix-door-react-path: the drones' pre-walk positions — each drone's door-pick capsule is
+        // anchored at its post-walk position, but a guard that walked this tick needs the walk to be
+        // visible to the door pick (the game's pick runs after the whole control walk [M
+        // Collide_Update 0x1ea398, atlas/object.md step 7]; the drone HITTEST is unported — [S]).
+        let drone_pre: Vec<V3> = self.list.iter().map(|x| x.pos).collect();
         for &(_, what, index) in &order {
             if what == 1 { let _pw = crate::prof::scope("ctl: kind 1");
                 self.triggers[index].update(&mut self.channels, &touchers, frame);
@@ -12920,20 +12925,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             });
         }
         { let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&script_parts(self, d)); }
-        // The proxy path (U-041): `Collide_Update` (0x1ea398) is POST-walk — every mover's collider
-        // is picked against the objects and each victim's COLLIDE function runs from the dispatch
-        // table the same frame (`control_funcs[0x1c]+4` = `Door_ReactToHit` 0x135980). The doors'
-        // records are the moving leaf meshes they carry (`set_dynamic` just published this tick's
-        // poses); the anti-crush/bump-open fires here, never from `Door_Update` (A-11b).
-        {
-            let evs = self.doors.collide_update(d.world, &actors, &mut self.channels, frame);
-            for (id, pos) in evs {
-                match d.sfx {
-                    Some(t) => { let h = t.get(id as u32); self.play_sound_handle(pos, h); }
-                    None => { self.audio.play3d(id as u32, pos, None); }
-                }
-            }
-        }
         // The drones' speech requests, in update order (no random draws in `SpeechSFX` / `PlaySFX`).
         for (index, talks) in talk_queue { self.speech(d, index, talks, frame); }
         // The drones' door-open sounds (`NDrone2_OpenDoor`'s `Door_Activate` events).
@@ -12941,6 +12932,57 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             match d.sfx {
                 Some(t) => { let h = t.get(id); self.play_sound_handle(pos, h); }
                 None => { self.audio.play3d(id, pos, None); }
+            }
+        }
+        // fix-door-react-path (G-035): the door collide step — `Collide_Update` 0x1ea398 runs after the
+        // control walk + movement pass (docs/atlas/object.md step 7), picks the ForcedList doors with each
+        // picker's capsule (`Collide_PickObj` 0x1eae80, the player's mode 0x800: segment vs the live
+        // sphere ×1.5) and dispatches `Door_ReactToHit` 0x135980 per door with contacts — the anti-crush.
+        // Movers: the player (alive only — a dead Bond is class 0x12, which the ReactToHit selection
+        // skips [M 0x135980:47-72]) with the per-substate pick capsule of `Player_Collision` 0x194df0
+        // (the port's `Ladder::pick_hit` arms), then every present drone (class 2 [S — the drone HITTEST
+        // is unported: the capsule is a point at the root with the 0.4 DoorActor radius; the validity
+        // gate stands in for `(ext+0x4F8 & 0x600) == 0 && & 0x100 != 0 && +0xAC > 0 && !(obj+0xFE & 1)`]).
+        // Before `Doors_Calc` (0x1336f8:23) so the busy marker the tail sets clears in the same tick —
+        // the game's calc clears it next frame, still before any `Door_Update` reads it.
+        {
+            let mut movers: Vec<crate::door::DoorMover> = Vec::with_capacity(1 + self.list.len());
+            if self.health.health > 0.0 {
+                // The pick radius is written in the same 0x194df0 switch arm as the capsule: the walk
+                // arms (0/6, the tall pos+0.55 top end) write 0.275, every other arm 0.55. The port's
+                // snapshot carries the capsule but no substate, so the top end identifies the arm.
+                let r = if player.capsule.0[1] - player.pos[1] > 0.3 { crate::player::WALK_PICK_RADIUS } else { 0.55 };
+                movers.push(crate::door::DoorMover {
+                    a: player.capsule.0,
+                    b: player.capsule.1,
+                    radius: r,
+                    centre: player.sph,
+                    player: true,
+                    valid: false,
+                });
+            }
+            for (i, x) in self.list.iter().enumerate() {
+                if !x.present { continue; }
+                let pre = drone_pre.get(i).copied().unwrap_or(x.pos);
+                // fix-door-react-path2: the class-2 contact gate [M Door_ReactToHit 0x135980:47-72,
+                // docs/fields/drone.md +0x4F8 census] needs the AI-active bit 0x100 SET
+                // (`(ext+0x4F8 & 0x600) == 0 && (ext+0x4F8 & 0x100) != 0 && +0xAC > 0 &&
+                // !(obj+0xFE & 1)`) — Enable(0) clears 0x100 [M 0x149dd0:14], so a disabled-but-
+                // alive drone (its enable channel off, pre-spawn waiting) never qualifies and never
+                // reverses a closing leaf. The port's `enabled` is the Enable(1)/Enable(0) mirror;
+                // the corpse bits 0x200/0x400 map to `corpse` and the health floor to `+0xAC > 0`.
+                movers.push(crate::door::DoorMover {
+                    a: pre, b: x.pos, radius: 0.4, centre: x.pos,
+                    player: false,
+                    valid: !x.corpse && x.health > 0.0 && x.enabled,
+                });
+            }
+            let evs = self.doors.collide_step(&movers, &mut self.channels, frame);
+            for (id, pos) in evs {
+                match d.sfx {
+                    Some(t) => { let h = t.get(id as u32); self.play_sound_handle(pos, h); }
+                    None => { self.audio.play3d(id as u32, pos, None); }
+                }
             }
         }
         // `Doors_Calc` — the control pass's last act (0x1336f8's tail): the door groups sync, the busy markers

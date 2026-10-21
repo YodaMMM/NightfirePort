@@ -421,6 +421,14 @@ pub struct Sim {
     /// mp-world-sync: the latest online tick's pickup takes (pickup index, slot, bot) — what
     /// `step_net_world` applied (the tests and the dev log read it; never hashed).
     pub net_last_takes: Vec<(usize, usize, bool)>,
+    /// door-react-path4: the previous tick's raw use key — `Player_Activate` fires on the action
+    /// bits' PRESS EDGE (`Input_Action(player, 9, 1)` | `Input_Action(player, 0xe, 4)` [M
+    /// 0x1a5460:395-403]; the action machine 0x17ee88 latches per press), so a held E activates
+    /// the world ONCE, not every tick. The port fired the whole use block raw every held tick —
+    /// a 1-s hold re-toggled a swing door 60× and the 06 guardhouse door closed itself before
+    /// the interact test's assert. The 46-frame auto-repeat arm [M 0x17ee88's counter] stays
+    /// unported [S]. SP path only — the MP row's per-slot use pass is untouched.
+    use_key_prev: bool,
     /// mp-combat-weapons: the online match's shared rounds / grenades / blasts / guided rides
     /// (`nf_game::mp::combat`) — every machine runs every agent's rounds from the shot
     /// descriptions in the session inputs. Shared, hashed.
@@ -4337,8 +4345,18 @@ impl Sim {
         // The use key (`Player_Activate` 0x1a5170): the doors its sphere — one unit ahead of the head — meets
         // open, swing or thud locked (docs/systems/world-objects.md "Doors"); the player object updates before
         // the control list's doors, so they see the activation this same tick.
+        // door-react-path4: the game calls `Player_Activate` from `Player_WeaponFiring` behind the action
+        // bits' PRESS EDGE (`Input_Action(player, 9, 1)` | `Input_Action(player, 0xe, 4)` [M 0x1a5460:395-403];
+        // the action machine 0x17ee88 latches per press) — a HELD use key activates the world once per press,
+        // not every tick. The port fired the block raw every held tick: a 1-s hold re-toggled the 06
+        // guardhouse swing door 60× (activate's open/opening arm [M 0x135be0:121-131] turns OPENING back to
+        // CLOSING on the next tick's call) and the door was CLOSED again before the interact assert. Gate the
+        // SP use block on the rising edge; the 46-frame auto-repeat arm [M 0x17ee88's counter] stays unported
+        // [S]. The MP row path (net_use_pass) keeps its own per-slot semantics.
+        let use_edge = use_key && !self.use_key_prev;
+        self.use_key_prev = use_key;
         let mut crept = false;
-        if use_key {
+        if use_edge {
             // `Player_Activate` 0x1a5170:66-97's creepwall arm comes FIRST: with the third-icon
             // context 6 (BLData+0x95f, the game's ONLY gate [M 0x1a5170:66 `if (BL+0x95f == 6)`])
             // the use key scans every object for class '+' (0x2B) and calls
@@ -4363,7 +4381,7 @@ impl Sim {
                 }
             }
         }
-        if use_key && !crept {
+        if use_edge && !crept {
             // garage-lift-calls: the SP arm of `Player_Activate` picks from Bond's HEAD
             // (`Player_GetHeadPos` [M 0x1a5170:100]), not the render camera — the camera hangs
             // ~2.5 behind Bond and its sphere fell short of the 07000009 lift-call stations'
@@ -7752,6 +7770,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             net_row: None,
             net_remotes_done: false,
             net_last_takes: Vec::new(),
+            use_key_prev: false,
             mp_combat: Default::default(),
             net_shot: None,
             mp_held: [2; nf_net::MAX_AGENTS],
