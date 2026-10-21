@@ -1,6 +1,14 @@
 //! Weather: snow / rain drops (`Env_Create` 0x17b968, `InitDrops` 0x18bf68, `Env_Update` 0x17bc88 → `UpdateDrops`
 //! 0x18c580, `AddDrop` 0x18c278, `RainBox_Clip` 0x18d0d0). Spec: docs/systems/render.md "Snow".
 //!
+//! The load-time reset — `Env_Reset` 0x17c1b0, called by `ResetMap_GameInit` 0x1d5080 [M] —
+//! clears the effect globals (`memset(GfxList+0x10, 0, 0x540)`, `Vec_Zero(0x2d88a0)`,
+//! `GlobalEnv = 0`), calls `InitDrops(0xff)` and `InitRainBox` 0x18d838 (`RainBoxRoot = 0`, the
+//! head of the `RainBox_Create` 0x18d840 box list). The port does the same job by rebuilding its
+//! weather state per level: `Drops::new` (this file) takes a fresh box list from the level's 0x32
+//! placements each load — there is no persistent `RainBoxRoot` list to clear, and `GlobalEnv`'s
+//! sun vector is the `Env_Create` record's own field (world_fx.rs).
+//!
 //! The drops use the shared `Rand_*` generator every tick (the wind, each respawn), and `Env_Update` draws one
 //! `Rand_Rand(20000)` first; `Game_Run` calls it before the object handler, so `Drones::tick` runs it first.
 

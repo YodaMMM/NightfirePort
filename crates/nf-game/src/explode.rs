@@ -90,6 +90,65 @@ impl Explosion {
     }
 }
 
+/// One debris particle the port carries — `Debris_CreateEx` 0x1ac808's per-particle record
+/// (the draw side renders the gfx hash; the motion integrator is `Debris_Update` 0x1aac00's).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DebrisSpawn {
+    /// instance+0x10..0x18: the initial velocity [M 0x1ac808:35-39].
+    pub vel: V3,
+    /// instance+0x20..0x2b: the `Rand_FRandHalf_Vec(0.24414063)` spin [M 0x1ac808:40 — 0x3e71463b].
+    pub spin: V3,
+    /// instance s16+0x30: the life in ticks, `Rand(count/2) + count/2` [M 0x1ac808:29-31].
+    pub life: u16,
+    /// obj+0xE8: the scale, `Rand_FRand(0.1) + 0.4` [M 0x1ac808:25-28].
+    pub scale: f32,
+    /// The gfx hash picked from the caller's array, `gfx[Rand(gfx_count−1)]` [M 0x1ac808:41-43].
+    pub gfx: u32,
+    /// obj+0xFF = 0x10 (class `Debris_Update`) [M 0x1ac808:24].
+    pub class: u8,
+}
+
+/// `Debris_CreateEx` 0x1ac808 over the port's RNG. `speed` is param 1 (the blast's speed scale),
+/// `dir` param 3 (the blast direction), `jitter` param 4 (the spread direction), `life_base`
+/// param 5 (the life is `Rand(life_base/2) + life_base/2`), `count` param 6 (how many particles),
+/// `gfx`/`gfx` param 8/9 (the mesh-hash array to pick from — the game picks
+/// `gfx[Rand(gfx_count−1)]` per particle [M 0x1ac808:41-43]). The velocity [M 0x1ac808:32-39]:
+/// `mag = speed · (Rand_FRand(1.5) + 0.1) · 0.5`; per axis
+/// `vel[k] = (mag·dir[k] + jitter[k]·Rand_FRandHalf(speed)) · REC_FRAME_RATE` (REC_FRAME_RATE is
+/// 1.0 at the fixed 60 Hz [M GS_SetRefreshRate 0x17d2b8:15]). Empty `gfx` or `count == 0` spawns
+/// nothing (the game's own guards [M 0x1ac808:18]).
+pub fn create_debris(
+    rng: &mut crate::drone::Rng,
+    speed: f32,
+    dir: V3,
+    jitter: V3,
+    life_base: u32,
+    count: u32,
+    gfx: &[u32],
+) -> Vec<DebrisSpawn> {
+    if gfx.is_empty() || count == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let scale = rng.frand(0.1) + 0.4;
+        let life = rng.rand(life_base >> 1) as u16 + (life_base >> 1) as u16;
+        let mag = speed * (rng.frand(1.5) + 0.1) * 0.5;
+        let mut vel = [0f32; 3];
+        let mut spin = [0f32; 3];
+        for k in 0..3 {
+            vel[k] = (mag * dir[k] + jitter[k] * rng.frand_half(speed)) * 1.0;
+        }
+        // `Rand_FRandHalf_Vec(0x3e71463b, …)` [M 0x1ac808:40] — three half-range draws.
+        for s in spin.iter_mut() {
+            *s = rng.frand_half(0.244_140_63);
+        }
+        let g = gfx[rng.rand(gfx.len() as u32 - 1) as usize];
+        out.push(DebrisSpawn { vel, spin, life, scale, gfx: g, class: 0x10 });
+    }
+    out
+}
+
 /// Who an explosion damaged, in the port's terms (`Explode_Propagate`'s per-case effects).
 #[derive(Clone, Debug, Default)]
 pub struct PropagateHits {
@@ -225,5 +284,41 @@ mod tests {
             destroys: &[(0, [4.5, 0.0, 0.0], 0.0, false), (1, [4.5, 0.0, 0.0], 0.0, true)] };
         let h = propagate([0.0; 3], 10.0, 5.0, usize::MAX, &near);
         assert_eq!(h.destroys, vec![0], "3 damage smashes the unsmashed one only");
+    }
+
+    #[test]
+    fn debris_spawns_follow_the_create_math() {
+        // [M 0x1ac808] the per-particle math over the port's bit-exact RNG.
+        let mut rng = crate::drone::Rng::new(7);
+        let gfx = [0x2000_001u32, 0x2000_002, 0x2000_003];
+        let d = create_debris(&mut rng, 8.0, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], 60, 5, &gfx);
+        assert_eq!(d.len(), 5);
+        for p in &d {
+            assert_eq!(p.class, 0x10);
+            assert!((0.4..0.5).contains(&p.scale), "scale = Rand(0.1) + 0.4, got {}", p.scale);
+            assert!((30..60).contains(&p.life), "life = Rand(30) + 30, got {}", p.life);
+            assert!(gfx.contains(&p.gfx));
+            for s in p.spin {
+                assert!(s.abs() <= 0.244_140_63, "the spin is a half-range draw, got {s}");
+            }
+            // The velocity's y rides the blast direction (jitter only perturbs it around mag·dir).
+            assert!(p.vel[1] > 0.0, "the direction term dominates on the y axis: {p:?}");
+        }
+        // Sister (can fail): the same seed reproduces bit-exact.
+        let mut rng = crate::drone::Rng::new(7);
+        let e = create_debris(&mut rng, 8.0, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], 60, 5, &gfx);
+        assert_eq!(d, e);
+    }
+
+    #[test]
+    fn debris_guards_match_the_game() {
+        // [M 0x1ac808:18] `param_8 != 0 && param_6 != 0` — no mesh array or zero count spawns nothing.
+        let mut rng = crate::drone::Rng::new(1);
+        assert!(create_debris(&mut rng, 8.0, [0.0; 3], [0.0; 3], 60, 4, &[]).is_empty());
+        assert!(create_debris(&mut rng, 8.0, [0.0; 3], [0.0; 3], 60, 0, &[0x2000_001]).is_empty());
+        // Sister (can fail): a one-entry array is legal (Rand(0) → 0).
+        let d = create_debris(&mut rng, 8.0, [0.0; 3], [0.0; 3], 2, 3, &[0x2000_009]);
+        assert_eq!(d.len(), 3);
+        assert!(d.iter().all(|p| p.gfx == 0x2000_009));
     }
 }

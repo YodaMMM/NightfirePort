@@ -147,6 +147,10 @@ pub enum MenuChoice { Restart, Quit }
 /// The mission layer's globals: `InternalState` 0x30cb98, `MissionState` 0x30cb9c, `BaseMap`
 /// 0x30cba0, `ThisOrderNum` 0x30cba4, `FailLabel` 0x30cba8, `LevelToEndTo` 0x30cbac, `TimeOut`
 /// (0x182c60's local static) — plus the per-objective runtime states [M symtab].
+///
+/// `fail_label` is the game's `FailLabel` 0x30cba8 (init 0xffffffff [L ee_start_05 @ 0x30cba8]);
+/// `Mission_SetFailLabel` 0x183098 writes it and `Mission_FailLabel` 0x1830c8 (`return FailLabel;`)
+/// is the getter `HUD_UpdateStatusPane` 0x19c310 reads for the banner's second line [M].
 pub struct Mission {
     pub base_map: u32,
     pub order: u32,

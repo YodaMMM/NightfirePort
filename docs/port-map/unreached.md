@@ -317,3 +317,37 @@ sends those ids (each occurs in exactly one decompile file — the dispatcher); 
 be menu-def CONTROL/KMSG data, and their only owner page in shipped data is the never-opened
 per-level hub **0x40000007** (see C_LBPMMAP above — no code reference, no navigation) [D].
 Recorded unreached.
+
+## unported-misc-4 (2026-10-21)
+
+**MiniSub_FireTorpedo 0x181888, MiniSubMove_Forward 0x1819d8, MiniSubState_Attack 0x181b00,
+MiniSub_Update 0x181f40, MiniSub_Collide 0x182128, MiniSub_Delete 0x182268 — UNREACHED**
+(never placed). The only external references are `control_funcs` 0x26f890 row 0x4D {update,
+collide, delete} [M, docs/atlas/object.md] and the internal chain Update → State_Attack →
+FireTorpedo / Move_Forward [M decompile]. The only creator is `MiniSub_Create` 0x182130 (class
+store `sb $v0, 0xff($s0)` with 0x4d at 0x1821a8 [M disasm]), dispatched solely by
+`parsemap_create_dynamic_objects` 0x1d04f0 case 0x37 [M]. **No level on the disc carries a
+placement of type 0x37**: a full census of every map archive's main-map 0x1A block (the same
+records both `parsemap_block_map_data_static` 0x1d1998 and — after the 0xa000 cel/template
+filter — the dynamic dispatcher walk, [M parsemap_parsemap 0x1d1cf0:65]) found kinds 0x2b ×3
+(07000004 ×2, 07000041 ×1), 0xf3 ×8, 0x36 ×0 and **0x37 ×0** across all 34 archives [D,
+tools census run 2026-10-21]. The NDrone2 script path's initial class 0x4D (0x14d84c) re-classes
+its objects before they tick and no class-0x4D object exists in the 07000005 start snapshot [L,
+docs/atlas/object.md snapshot check]. No drawing or sim work is owed.
+
+**Sunreflection_Update 0x18db40 — UNREACHED** (no creator). Only external reference:
+`control_funcs` 0x26f890 row 0x19 [M]. No decompiled or disassembled function stores class byte
+0x19 to obj+0xFF: a full-.text sweep (capstone over all 322,249 instructions, every `sb ,0xff(…)`
+site with 80-instruction backward value tracking — all 110 sites resolved) found stores for every
+other class (2/3/6?/0x10/0x1c/0x1d/0x25/0x2e/0x31/0x34/0x3f/0x46/0x4d/…) but **never 6 or 0x19**
+[M sweep method, run 2026-10-21]. No placement type dispatches to a Sunreflection creator
+(`parsemap_create_dynamic_objects` 0x1d04f0 has no case 0x19 [M]; the placement kind 0x19 seen on
+every level is flags 0x8019 — a cel-create record the dispatcher never sees [D census + M
+0x1d1b68's `(flags & 0xa000) == 0` gate]). Absent from every start snapshot's class histogram
+[L ee_start_05, docs/atlas/object.md]. The placement kind 0x19 byte is coincidence, not a route.
+
+**Bubble_Update 0x1aca48 — UNREACHED** (no creator). Same evidence shape as Sunreflection:
+`control_funcs` 0x26f890 row 6 is its only external reference [M]; the full-.text class-store
+sweep found no store of class byte 6 [M]; no placement creator case produces it (kind 0x21 =
+`Ripples_Create` 0x1acc90 stores class 0x34, not 6 [M 0x1acd10]); absent from the start snapshot
+class histograms [L ee_start_05]. Nothing in the shipped on-foot game can dispatch to it.
