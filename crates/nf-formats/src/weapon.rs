@@ -210,6 +210,14 @@ impl WeaponData {
         self.records.get(weapon).map_or(1.0, |r| f32::from_le_bytes(r[0x88..0x8c].try_into().unwrap()))
     }
 
+    /// `+0x8C`: the camera swing amount — the game loads it per tick in `Player_Update`
+    /// 0x193600:439-441 (`weapon_data[weapon·0x10c + 0x8c]`, `lwc1 f12, 140(a1)` [M
+    /// 0x194134]) and hands it to `Camera_ApplySwing` 0x1bbf40 as the sway amplitude
+    /// (docs/fields/weapon_data.md:59; 0 on most arms, 0.001 sampled).
+    pub fn swing_amount(&self, weapon: usize) -> f32 {
+        self.records.get(weapon).map_or(0.0, |r| f32::from_le_bytes(r[0x8c..0x90].try_into().unwrap()))
+    }
+
     /// `+0xA0`: the idle script hashcode (the first-person gun's idle loop).
     pub fn idle_script(&self, weapon: usize) -> u32 {
         self.records.get(weapon).map_or(0, |r| u32::from_le_bytes(r[0xa0..0xa4].try_into().unwrap()))

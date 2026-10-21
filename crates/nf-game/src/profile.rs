@@ -482,6 +482,7 @@ impl Profile {
                 }
             }
         }
+        // CompStrings 0x1d34f0 [M] — QuickSort comparator id 8, Menu_EnumSaves 0x1f7b78's save-name sort at 0x1f7d34 (plain strcmp ascending on the save-file names); this sort replaces it.
         out.sort();
         out
     }

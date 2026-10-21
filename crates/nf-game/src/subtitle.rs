@@ -12,6 +12,7 @@
 //! 0x1b1640 — unlock the message's string and return the node to the free list, which
 //! `Text_FlushAllSubtitles` 0x1b15c8 and `Text_UpdateMsg` 0x1b11d8 reach for every expired or
 //! flushed line — is the queue drop in [`SubtitleTrack::flush`] and the `push` dequeue path.
+//! `CirBuf_Init` 0x1ccfb8 [M] / `CirBuf_Add` 0x1cd040 [M] (`Text_Init` 0x1b1428 / `Text_AddMsg` 0x1b0c30's text ring) — this queue replaces the game's circular buffer.
 //! Full evidence: docs/systems/hud-panes.md.
 //!
 //! Evidence tags: [M] decomp / disassembly read here, [D] disc, [S] suggested.

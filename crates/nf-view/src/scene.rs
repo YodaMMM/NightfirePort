@@ -671,6 +671,18 @@ pub struct Sim {
     /// `C_NIS_Handler` 0x205f10:71,87]) — the hash `nis_page_boot` started, `None` when the
     /// page hasn't booted one. The msg-0x4b gate re-checks `Script_IsPlaying(FMVScript)`.
     pub fmv_script: Option<u32>,
+    /// unported-front-end-menus-3: `Camera_Shear`'s phase (viewer+0x1e0) [M 0x1bba38:26-34] —
+    /// advances REC_FRAME_RATE per underwater frame, wrapped into [−π, π]. Field on its own
+    /// line (merge lesson 4).
+    pub shear_phase: f32,
+    /// unported-front-end-menus-3: the underwater post-FX byte `GlobalBlur` — 0x91 while the
+    /// shear runs [M 0x1bba38:49], 0 otherwise (the port's only writer is this trigger). The
+    /// draw side reads it for the underwater blur. Field on its own line (merge lesson 4).
+    pub global_blur: u8,
+    /// unported-front-end-menus-3: `Camera_ApplySwing`'s phase (viewer+0x204) [M 0x1bbf40:10]
+    /// — advances 2π/(FRAME_RATE·4) per swaying frame (the 4-second cycle). Field on its own
+    /// line (merge lesson 4).
+    pub swing_phase: f32,
 }
 
 /// A status-pane message (`Text_AddMsg` 0x1b0c30's `TXT_MSG` node): the bound text, its remaining ticks,
@@ -2873,6 +2885,22 @@ impl Sim {
                 }
                 self.drones.audio.swim_prev_under = under;
             }
+            // unported-front-end-menus-3: `Camera_Update` 0x1bb6d8:25-34's shear trigger [M] —
+            // while the eye sits below the cel's water surface (cel+0x90; the port's
+            // equivalent comparison is `Bond::underwater`, `Player_MonitorAir` 0x191a70's
+            // cel+0x90 head test) each frame runs `Camera_Shear` 0x1bba38; the blur byte
+            // drops when the eye leaves (the port's only GlobalBlur writer).
+            if self.bond.underwater {
+                let _ = self.camera_shear();
+            } else {
+                self.global_blur = 0;
+            }
+            // unported-front-end-menus-3: `Player_Update` 0x193600:439-441's per-tick sway [M]
+            // — the current weapon's swing amount (weapon_data+0x8c, `swing_amount`) × the
+            // zoom factor, through `Camera_ApplySwing` 0x1bbf40 (the deltas are the viewer's
+            // pitch/yaw/roll offsets; the port's draw side reads `swing_phase`).
+            let swing = self.weapons.swing_amount(self.gun.weapon as usize);
+            let _ = self.camera_apply_swing(swing, self.zoom);
         }
         // Footsteps (`AnimObjectUpdate` 0x1befd8:163-198 [M], player): `BL+0x924` gathers the distance
         // moved (`+= |anim+0xD8|`); past the stride it wraps (fmod) and a step sounds. The stride is
@@ -5635,6 +5663,9 @@ fn add_instance(level: &Level, inst: &Instance, layer: Layer, character: Option<
     // upper-left 3×3 are the basis vectors and their lengths are the per-axis scales. `object_matrix` is a pure
     // rotation+translation (column lengths = 1), so most world placements keep `obj.radius` unchanged.
     let centre = transform(&inst.matrix, obj.centre);
+    // CompAlphaObj 0x1d3458 [M] — QuickSort comparator id 4, View_DrawObjList 0x1e69a0:24's
+    // per-object draw key (f32 at +0 = the world-centre distance, ascending); this pass/layer
+    // + centre model replaces the game's alpha-object ordering.
     let col_len = |c: usize| (inst.matrix[0][c] * inst.matrix[0][c] + inst.matrix[1][c] * inst.matrix[1][c] + inst.matrix[2][c] * inst.matrix[2][c]).sqrt();
     let radius = obj.radius * col_len(0).max(col_len(1)).max(col_len(2));
     // The light-selection flags: the glist flags word's low 16 bits — `Control_SetGList` 0x134960
@@ -7789,6 +7820,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 laser_sight: None,
                 fmv_script: None,
                 hurts,
+                // unported-front-end-menus-3: the viewer's shear/swing phases and the underwater
+                // blur byte (fields on their own lines, merge lesson 4).
+                shear_phase: 0.0,
+                global_blur: 0,
+                swing_phase: 0.0,
             })
         });
         let fog = drones.and_then(|d| fog_for(d.level_id));
@@ -11233,4 +11269,100 @@ pub fn fold_component_hashes(comps: &[u64; NET_HASH_COMPONENTS]) -> u64 {
         h.u64(*c);
     }
     h.finish()
+}
+
+impl Sim {
+    /// unported-front-end-menus-3: `Camera_Shear` 0x1bba38 [M] — the underwater view wobble
+    /// the game runs from `Camera_Update` 0x1bb6d8:25-34 whenever the eye Y (viewer+0xc4)
+    /// sits below the eye cel's water surface (cel+0x90). One call = one frame: returns the
+    /// skew factors xs = 0.025·sin(φ+π/2), ys = 0.025·sin(φ) [M :20-24 — PS2Sinf2(phase+π/2,
+    /// phase) into xs.234 @0x30d798 / ys.235 @0x30d79c, both × 0.025], advances the shear
+    /// phase (viewer+0x1e0) by REC_FRAME_RATE and wraps it into [−π, π] [M :26-34], and sets
+    /// `GlobalBlur = 0x91` [M :49]. The game builds the identity+skew matrix (scale 1+xs,
+    /// 1+ys, 1+xs) and concats it into the view matrix — the draw side's job (the main agent
+    /// renders; the port's Camera has no roll/shear slot yet).
+    pub fn camera_shear(&mut self) -> (f32, f32) {
+        let (xs, ys) = camera_shear_step(&mut self.shear_phase);
+        self.global_blur = 0x91; // [M 0x1bba38:49]
+        (xs, ys)
+    }
+
+    /// unported-front-end-menus-3: `Camera_ApplySwing` 0x1bbf40 [M] — the per-frame
+    /// weapon-aim sway the game runs from `Player_Update` 0x193600:439-441 with the current
+    /// weapon's swing amount (`weapon_data[weapon·0x10c + 0x8c]`, `lwc1 f12,140(a1)` [M
+    /// 0x194134]) and the viewer's zoom factor (viewer+0x108, fed BLData+0x8d0 each tick [M
+    /// `Player_PositionCamera` 0x18f5d8:134]). No-op when amount == 0 [M 0x1bbf40:8].
+    /// Advances the swing phase (viewer+0x204) by 2π/(FRAME_RATE·4) [M :10-11] and returns
+    /// the three view-angle deltas: pitch (viewer+0xe0) += (zoom−1)·amount·sin(2φ), yaw
+    /// (+0xe4) += (zoom−1)·amount·sin(φ), roll (+0xe8) += (zoom−1)·amount·sin(3φ) [M :12-24].
+    /// The game then rebuilds the view matrix — the draw side's job.
+    pub fn camera_apply_swing(&mut self, amount: f32, zoom: f32) -> (f32, f32, f32) {
+        camera_swing_step(&mut self.swing_phase, amount, zoom)
+    }
+
+    /// unported-front-end-menus-3: `Camera_Orbit` 0x1bb828's per-frame arm — the game runs it
+    /// from `Camera_Update` 0x1bb6d8:21 → `Player_PositionCamera` 0x18f5d8 case 1 for the
+    /// viewer whose BL holds cam_mode 1 (the GoldenEye-strike orbit). The port: refresh the
+    /// look from Bond's head (the game's `AnimGetBoneWorldTrans(obj, −5, 0, BLData+0xe0, 0)`
+    /// head-bone refresh [M 0x18f5d8:137-139]; the port's head stand-in is
+    /// `Player_GetHeadPos`), run [`Bond::orbit_camera`] with the eye sphere's closest hit
+    /// (the game's `Collide_SphereIntersect(1.5, viewer+0x150, cel, obj, …)` HITDATA+0xc [M
+    /// 0x1bb828:63-70]; the port's world-sphere query stands in), and hand the draw side
+    /// `(eye, look, zoom)`.
+    pub fn orbit_camera(&mut self, world: &nf_game::world::CollisionWorld) -> Option<([f32; 3], [f32; 3], f32)> {
+        if self.bond.cam_mode != 1 {
+            return None;
+        }
+        let eye0 = self.bond.head();
+        if let Some(o) = self.bond.orbit.as_mut() {
+            o.look = eye0;
+        }
+        // The eye-sphere pull: the game spheres r = 1.5 at viewer+0x150 (the authoritative
+        // eye — which Camera_Orbit itself never rewrites [M 0x1bb828 writes only +0x120]).
+        let hit = world
+            .sphere_surface(eye0, 1.5, false)
+            .map(|(_p, _n, _mat, dist)| dist);
+        self.bond.orbit_camera(hit)
+    }
+}
+
+/// unported-front-end-menus-3: `Camera_Shear` 0x1bba38's per-frame step [M] — returns the
+/// skew factors xs = 0.025·sin(φ+π/2), ys = 0.025·sin(φ) [M :20-24 — PS2Sinf2(phase+π/2,
+/// phase) into xs.234 @0x30d798 / ys.235 @0x30d79c, both × 0.025], advances the shear phase
+/// (viewer+0x1e0) by REC_FRAME_RATE and wraps it into [−π, π] [M :26-34: |x| ≥ π → fmod(x,
+/// 2π), still ≥ π → ±2π by sign]. The game builds the identity+skew matrix (scale 1+xs,
+/// 1+ys, 1+xs) and concats it into the view matrix, then sets GlobalBlur = 0x91 [M :36-49]
+/// — the matrix is the draw side's job; the blur byte is the Sim method's.
+pub fn camera_shear_step(phase: &mut f32) -> (f32, f32) {
+    let xs = 0.025 * nf_game::trig::sinf(*phase + std::f32::consts::FRAC_PI_2);
+    let ys = 0.025 * nf_game::trig::sinf(*phase);
+    *phase += 1.0 / 60.0; // REC_FRAME_RATE [M grenade.rs:148]
+    if phase.abs() >= std::f32::consts::PI {
+        *phase %= std::f32::consts::TAU;
+        if phase.abs() >= std::f32::consts::PI {
+            *phase -= if *phase >= 0.0 { std::f32::consts::TAU } else { -std::f32::consts::TAU };
+        }
+    }
+    (xs, ys)
+}
+
+/// unported-front-end-menus-3: `Camera_ApplySwing` 0x1bbf40's per-frame step [M] — no-op
+/// when amount == 0 [M :8 — the whole body is behind the != 0 test]; advances the swing
+/// phase (viewer+0x204) by 2π/(FRAME_RATE·4) [M :10-11] and returns the three view-angle
+/// deltas: pitch (viewer+0xe0) += (zoom−1)·amount·sin(2φ), yaw (+0xe4) += (zoom−1)·amount·
+/// sin(φ), roll (+0xe8) += (zoom−1)·amount·sin(3φ) [M :12-24]. The zoom factor is
+/// viewer+0x108, fed BLData+0x8d0 each tick [M Player_PositionCamera 0x18f5d8:134]. The game
+/// then rebuilds the view matrix — the draw side's job.
+pub fn camera_swing_step(phase: &mut f32, amount: f32, zoom: f32) -> (f32, f32, f32) {
+    if amount == 0.0 {
+        return (0.0, 0.0, 0.0);
+    }
+    *phase += std::f32::consts::TAU / (60.0 * 4.0); // FRAME_RATE = 60 [M]
+    let phi = *phase;
+    let k = (zoom - 1.0) * amount;
+    (
+        k * nf_game::trig::sinf(phi + phi),      // pitch: sin(2φ) [M 0x1bbf40:12-15]
+        k * nf_game::trig::sinf(phi),            // yaw: sin(φ) [M 0x1bbf40:16-19]
+        k * nf_game::trig::sinf(phi * 3.0),      // roll: sin(3φ) [M 0x1bbf40:20-24]
+    )
 }

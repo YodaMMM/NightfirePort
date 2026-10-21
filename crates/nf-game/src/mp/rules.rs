@@ -12,6 +12,8 @@
 //! `REC_FRAME_RATE * 0.2` = 0.2 points/s. Touch events (`touch_*`) stand in for the game's
 //! `MP_HitBy` 0x1830e0 overlap walk — the rules (team filters, state gates) are here, the spatial
 //! test is the caller's.
+//!
+//! `Cameras_PostLoad` 0x1bc3a8 [M] — per level load after `Player_Start`, creates the 3-player split-screen divider sprite only when `MPSettings+0x428 == 3` (no effect in SP/1P/2P/4P) — has no port path: the port has a single viewer.
 
 use super::{scenario, MpEndStatus, MpMatch};
 use crate::drone::Rng;

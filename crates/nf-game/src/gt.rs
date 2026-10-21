@@ -387,6 +387,7 @@ impl GTurret {
             self.target = 0;
             return None;
         }
+        // CompTargetObj 0x1d3490 [M] — QuickSort comparator id 6, the GT_Track 0x17f9c8 sort at 0x17fe38 (key = f32 squared distance at +4, ascending); this sort replaces it.
         list.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         let mut first: Option<u32> = None;
         let mut second: Option<u32> = None;

@@ -15,6 +15,8 @@
 //!   whole exact-size entries out of the archive (this module), so there is no padded buffer to shrink.
 //! - `parsemap_block_memory_discard` 0x1d2538 records `FileDiscard = FileNextBlock` (the map prefix the streamed
 //!   load never needs again) [M]; with no stream there is no discard point to record.
+//! - `parsemap_reset_to_block_memory_discard` 0x1d2550 rewinds that discard state at level load [M]; the port
+//!   reads whole archive entries, so there is nothing to reset.
 
 use crate::buf::{invalid, Buf, Result};
 
