@@ -362,7 +362,16 @@ fn the_07000001_exit_works_end_to_end() {
                     // never teleported at all; when the DESTINATION has no floor the window is
                     // skipped and the escort keeps his own slide. One floor_below, at the
                     // destination — the old spot's floor said nothing about the landing.
-                    let dest = [mp[0] + dx / l * 2.0, mp[1], mp[2] + dz / l * 2.0];
+                    // ai-sight-drawn-gate-4: the step clamps to the remaining distance — the
+                    // game's walker advances by speed·dt toward the goal and ARRIVES there, never
+                    // overshooting past it [M NDrone2_Move 0x14eff8's per-tick step]. The old fixed
+                    // 2.0 jump past a 0.127-away door node threw the escort 15× beyond the goal,
+                    // onto the opening shoji's collision rail (the only floor_below hit there — the
+                    // port's doorway-threshold seam has no floor: x 4.6-5.5, z 8.8-11.2 all miss
+                    // within 8.0); when the panel slid the rest of the way open the "floor" left
+                    // and the faithful gravity (Drone_CollisionHandler 0x140968) took him to −17k.
+                    let step = 2.0_f32.min(l);
+                    let dest = [mp[0] + dx / l * step, mp[1], mp[2] + dz / l * step];
                     if let Some(floor) = sim.world.floor_below(dest, 6.0) {
                         let dr = &mut sim.drones.list[mi];
                         dr.pos = [dest[0], floor + 1.0, dest[2]];
