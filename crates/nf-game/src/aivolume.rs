@@ -82,6 +82,14 @@ impl AiVolume {
 
 /// `Drone_ProcessOpponents`: the product of the factors of the visibility boxes (kind 0) holding `p`; ×0.75 when Bond
 /// crouches (player `obj+0xF6` = 4).
+/// (task 854: `Drone_VisibilityForPosition` 0x13a1f8 [M 0013a1f8 decompile, from
+/// `DroneVision_ProcessDroneSight` 0x176a28] is the same product — boxes whose `+0x24` kind matches
+/// the caller's zone argument and whose `Intersect_PointOOBox` holds the point multiply their
+/// `+0x20` factor into 1.0; the port's kind-0 filter is the ProcessOpponents call passing zone 0.
+/// `Drone_AIVolume_Delete` 0x13a1d0 [M 0013a1d0 decompile — `LList_Remove(0x2706C8, obj+0xE0)`,
+/// the class-delete op at `control_funcs` 0x26FB80 via `control_delete_object` 0x133178:16-17]
+/// has no port counterpart because the port's volumes are a per-level `Vec` built once in
+/// `build` below — nothing deletes a volume mid-level.)
 pub fn visibility_factor(volumes: &[AiVolume], p: V3, crouched: bool) -> f32 {
     let mut f = 1.0f32;
     for v in volumes.iter().filter(|v| v.kind == 0) {
