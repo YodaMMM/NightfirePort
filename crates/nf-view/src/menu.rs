@@ -3052,6 +3052,12 @@ impl FrontEnd {
         }
     }
 
+    /// `Page_SetHelpText` 0x21f2b8's port side: the game binds the FOCUSED row's description
+    /// through help_table rows {control id, wildcard 0xf0f0f0f0, Txt label} to the page's help
+    /// control 0x10000225 (shipped on 8 pages [D front_end_menus_census.rs]; `Page_Update`
+    /// 0x21edc8:59-67 re-runs the walk + the bind every frame, jal 0x21eed0/0x21eee0/0x21eee8)
+    /// — this getter is what the draw code calls per focused row instead [S fold: one bind per
+    /// draw rather than per frame].
     pub fn row_label<'a>(&self, lang: Option<&'a Lang>, row: usize) -> String {
         let bind = |id: u32| lang.and_then(|l| l.bind(id)).map(str::to_string).unwrap_or_else(|| format!("<{id:#x}>"));
         match self.page {

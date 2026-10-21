@@ -388,13 +388,14 @@ pub struct PageDef {
 }
 
 impl PageDef {
-    /// `Page_FindHelpControl` 0x21f250 — the page-create walk (`MenuManager_Create` 0x21b908
-    /// calls it per page; the decompile dropped the argument, the caller passes the page) that
-    /// scans the page's control list for the help-text control **0x10000225** and parks it in the
-    /// global `h` [M 0021f250_Page_FindHelpControl__FP6M_PAGE.c: the id compare `h[6] ==
-    /// &DAT_10000225`]. The only reader of `h` is `Page_SetHelpText` 0x21f2b8, which has NO
-    /// callers in the decompile (docs/port-map/unreached.md), so the parked pointer is dead in
-    /// the shipped game; the parse keeps the lookup as the getter the draw code can call.
+    /// `Page_FindHelpControl` 0x21f250 — the help-control walk: `MenuManager_Create` 0x21b908
+    /// calls it per page (jal 0x21ba54) and `Page_Update` 0x21edc8:59-63 re-runs it per frame
+    /// (jal 0x21eed0/0x21eee0), scanning the page's control list for the help-text control
+    /// **0x10000225** and parking it in the global `h` [M 0021f250]. `Page_SetHelpText`
+    /// 0x21f2b8 (Page_Update's next call, jal 0x21eee8) is `h`'s only reader — the per-focused-
+    /// row description bar. Shipped pages carrying the control: 8 [D
+    /// front_end_menus_census.rs::help_control_ships_on_exactly_the_eight_pages]. The parse
+    /// keeps the lookup as the getter the draw code can call.
     pub fn find_help_control(&self) -> Option<&ControlDef> {
         self.controls.iter().find(|c| c.id == 0x1000_0225)
     }

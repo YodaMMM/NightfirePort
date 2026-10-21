@@ -1518,3 +1518,21 @@ fn the_timeout_does_not_fire_mid_intro_even_past_2700_ticks() {
     fe.tick();
     assert!(fe.attract_playing, "the timeout fires 0xa8c ticks after the main menu's open");
 }
+
+/// `conv_language_to_flag_index` (menu.rs) — every arm decompile-pinned [M 0x216948:6-25:
+/// 0→0, 1→2, 2→1, 3→5, 4→3, 5→4, 8→6, default −1] — the mapping GCC inlined into
+/// `P_LANGUAGE_Handler` 0x208830 (the spinner preselect :77-95 and the 9-flag loop :112-135).
+/// Sister: the default arm (an unknown language is −1).
+#[test]
+fn conv_language_to_flag_index_pins_all_arms() {
+    use nf_view::menu::conv_language_to_flag_index as f;
+    assert_eq!(f(0), 0);
+    assert_eq!(f(1), 2);
+    assert_eq!(f(2), 1);
+    assert_eq!(f(3), 5);
+    assert_eq!(f(4), 3);
+    assert_eq!(f(5), 4);
+    assert_eq!(f(8), 6);
+    assert_eq!(f(9), -1, "default → −1 [M 0x216948 default]");
+    assert_eq!(f(7), -1);
+}

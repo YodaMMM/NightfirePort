@@ -274,11 +274,11 @@ impl Keypad {
     }
 
     /// The display string for the label control 0x10000075 (msg 0x18 set-text target
-    /// [M 0x216810:22]): typed[0..=count] inclusive — the just-typed digit included — NUL-padded
-    /// to 4 with the '*' masks.
+    /// [M 0x216810:13-22]): the game copies typed[0..=count_before] INCLUSIVE — the just-typed
+    /// digit included, i.e. `typed[..count]` with the post-increment count — then NULs the tail.
     pub fn display(&self) -> String {
-        let n = (self.count as usize).min(3);
-        String::from_utf8_lossy(&self.typed[..=n]).into_owned()
+        let n = (self.count as usize).min(4);
+        String::from_utf8_lossy(&self.typed[..n]).into_owned()
     }
 
     /// The Q-Worm hint line — `sprintf("%d%d%d%d", …)` bound through Txt_BindLabel 0x2000014

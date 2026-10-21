@@ -63,14 +63,21 @@ controls from the level def, the digit grid bound to `Keypad::digit`, the displa
   2 controls [D], but nothing reaches it: no `Manager_SendMessage(…, 0x44, 0x4000004d, …)` in the
   decompile [M grep] and no mgr/control/keyframe message in the def targets it [D census].
   Unreached (orphan page).
-- **`Page_SetHelpText` 0x21f2b8** — reads the help control global `h` (set by
-  `Page_FindHelpControl` 0x21f250, which `MenuManager_Create` calls per page [M 0x21b908:137]),
-  matches the focused control's id against `help_table` rows {id, match, label} (0xf0f0f0f0 = the
-  wildcard default) and binds the label to the help control [M 0x21f2b8]. **No callers** in the
-  decompile [M grep] — the help-bar flow is dead; unreached.md. `Page_FindHelpControl` itself IS
-  called, but its result is only read by SetHelpText, so the port keeps it as the parse-side
-  getter `PageDef::find_help_control` (nf-formats menudef.rs) with the census test asserting the
-  shipped def has no help control for it to find ([D] — see the test's sister).
+- **`Page_FindHelpControl` 0x21f250 / `Page_SetHelpText` 0x21f2b8 — REACHED.** The binary's jal
+  scan pins the callers the decompile grep order hid: `Page_Update` 0x21edc8 re-runs
+  `Page_FindHelpControl(page)` (or `(0)` to clear `h` when the manager byte +0x1d3 is set) every
+  frame and then calls `Page_SetHelpText(page)` [M jal 0x21eed0/0x21eee0/0x21eee8 → the two
+  functions; decompile 0x21edc8:59-67], and `MenuManager_Create` 0x21b908 calls FindHelpControl
+  per page [M jal 0x21ba54]. SetHelpText matches the FOCUSED control's id (page+0xac) against
+  `help_table` at 0x2e4c04 — three shipped rows, all wildcard-matched (0xf0f0f0f0):
+  {0x100001a3 → label 0x01000073}, {0x10000138 → 0x01000074}, {0x10000222 → 0x01000308} [D ELF
+  dump], binding the label through Txt_BindLabel + msg 0x18 to the help control **0x10000225**
+  [M 0x21f2b8]. The help control ships on exactly 8 pages (main 0x40000002, MPRULES 0x40000014,
+  MPENVIROMODS 0x40000028, MPPLAYERMODS 0x40000017, MPBOTSETUP 0x4000002c, CNOPTIONS 0x4000002d,
+  CNMPOPTIONS 0x4000002e, CNAVOPTIONS 0x40000031) [D census, `front_end_menus_census.rs`] — the
+  per-focused-row description bar. The port's equivalent is the row-description binding in
+  nf-view menu.rs (`row_label`/the page description getters, cited there); the parse keeps
+  `PageDef::find_help_control` (nf-formats menudef.rs) as the def-side getter.
 - **`ConvLanguageToFlagIndex` 0x216948** — no direct callers: GCC inlined it (twice) into
   `P_LANGUAGE_Handler` 0x208830 (page 0x40000034 EXISTS in the shipped def [D]) for the flag
   spinner preselect + the 9-flag disable loop [M 0x208830:77-135]. The inverse table is
