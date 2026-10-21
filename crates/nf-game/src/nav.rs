@@ -137,7 +137,9 @@ impl Network {
         self.bounds_test(a, b, near, want_hit)
     }
 
-    /// `DroneMove_ObjectMissionPathDistance`'s node qualification (0x153f50:100-121): 3D distance
+    /// `DroneMove_ObjectMissionPathDistance`'s node qualification (0x153f50:100-121) — the same gate
+    /// chain as `NDrone2_MoveTest` 0x155330 and its MAPNODE twins `NDrone2_MoveTestFromNode` 0x1554a8
+    /// (node → pos) / `NDrone2_MoveTestToNode` 0x155620 (pos → node): 3D distance
     /// ≤ 30 (DAT_002c7954 = 900.0, `Drone_PostLoad_Init` 0x136938:62), |dy| ≤ 4.0 (DAT_002c794c),
     /// the slope band (DAT_002c7948 < |dy| ⇒ |atan2(dy, horiz)| ≤ DAT_002c7944 — the
     /// PostLoad_Init 1.5·/2.0 + 0.7854/0.8727 pair this Network carries), then the BOUNDARY test
@@ -204,8 +206,11 @@ impl Network {
         best.map(|b| b.2)
     }
 
-    /// `NodeSearchCel` candidates: the path's nodes in the box (±√r² or ±15 in x/z, ±2 in y) with dist2D ≤ r²
-    /// (the linear distance against r², as written), nearest first; equal distances keep reverse file order.
+    /// `AINetwork_NodeSearchCel` (0x156e18) candidates: the path's nodes in the box (±√r² or ±15 in x/z, ±2 in y) with dist2D ≤ r²
+    /// (the linear distance against r², as written), nearest first; equal distances keep reverse file order. The game
+    /// walks the per-cel node lists (`AINodeSearch+2` = the cel); this port is one cel [S deviation — the header note].
+    /// Driven by `AINetwork_NodesForPosition` 0x1586a8 / `AINetwork_DoAStarPath` 0x1571b0 / `AINetwork_EmitPath`
+    /// 0x158cf8 / `AINetwork_NodeSearch` 0x15aa88.
     fn candidates(&self, path: usize, pos: V3, r2: f32) -> Vec<usize> {
         let half = if r2 > 0.0 { r2.sqrt() } else { 15.0 };
         let p = &self.paths[path];
@@ -219,8 +224,9 @@ impl Network {
         c.into_iter().map(|(_, i)| i).collect()
     }
 
-    /// `AINetwork_NodesForPosition` for one path (mode 0): the first candidate with `MoveTestFromNode(node → pos)`
-    /// = 1 is found; the first failure is the fallback.
+    /// `AINetwork_NodesForPosition` for one path (mode 0): the first candidate with
+    /// `NDrone2_MoveTestFromNode` 0x1554a8 (node → pos, via `AINetwork_NodeSearchCel` 0x156e18:127-144's
+    /// mode-0 arm) = 1 is found; the first failure is the fallback.
     /// `AINetwork_NodesForPosition` + `AINetwork_BuildAITarget` (0x15ac78) — the drone-alert
     /// target node set; also the port form of `NDrone2_NearestNode` (0x1558d8) / `NearestNodeDCV`
     /// (0x155958)'s nearest-node ask.
@@ -249,7 +255,9 @@ impl Network {
         let (mut flags, mut g, mut f) = (vec![0u32; n], vec![0f32; n], vec![0f32; n]);
         let mut parent: Vec<Option<(u16, u16)>> = vec![None; n];
         let mut open: Vec<usize> = Vec::new();
-        // Start node: the first candidate (box ±25) reachable from the start.
+        // Start node: the first candidate (box ±25) reachable from the start — the game's
+        // `NDrone2_MoveTestToNode` 0x155620 (pos → node) probe, the -1 result ending the scan
+        // [M AINetwork_NodeSearchCel 0x156e18:147-176, the mode-1 arm its A* caller drives].
         let mut started = false;
         for i in self.candidates(path, start, 625.0) {
             match self.move_test(world, start, p.nodes[i].pos, false, false).0 {
@@ -304,7 +312,9 @@ impl Network {
 }
 
 impl Network {
-    /// `AINetwork_NodeSearch` (mode 1, limit 625): the first node (nearest first, 2D) reachable from `pos`.
+    /// `AINetwork_NodeSearch` (mode 1, limit 625): the first node (nearest first, 2D) reachable from `pos`
+    /// — `NDrone2_MoveTestToNode` 0x155620 (pos → node) per candidate, the −1 result stopping the scan
+    /// [M 0x156e18:147-176].
     pub fn node_from(&self, world: &CollisionWorld, path: usize, pos: V3) -> Option<u16> {
         for i in self.candidates(path, pos, 625.0) {
             match self.move_test(world, pos, self.paths[path].nodes[i].pos, false, false).0 {
@@ -401,9 +411,9 @@ fn closest_on_segment(a: V3, b: V3, p: V3) -> V3 {
     lerp(a, b, t)
 }
 
-/// `LineIntersectsBoundry`: 2D intersection of the segment A→B with the wall; hit when the segment's height there is
-/// within [wall − 2.4, wall + height]. With `adjust`, a segment more than 2 above the wall sets both post heights to
-/// its height − 0.5 (as written). Returns the intersection point.
+/// `AINetwork_LineIntersectsBoundry` (0x157990): 2D intersection of the segment A→B with the wall; hit when the
+/// segment's height there is within [wall − 2.4, wall + height]. With `adjust`, a segment more than 2 above the wall
+/// sets both post heights to its height − 0.5 (as written). Returns the intersection point.
 fn intersects(w: &Wall, a: V3, b: V3) -> Option<V3> { intersect_adjust(&mut w.clone(), a, b, false) }
 
 impl Network {
@@ -454,13 +464,19 @@ pub enum RouteMode { OneWay, OneWayEnd, Loop }
 pub struct Creep { pub a: V3, pub b: V3, pub vec: V3, pub step: i32, pub steps: i32, pub special: Option<u16> }
 
 impl Creep {
-    /// `LinkCreep_ForNodes`: steps of 0.4 (trunc(trunc(|d|) × 2.5)), or one step of d when |d| ≤ 0.4.
+    /// `LinkCreep_CalcToRouteEnd` (0x159cc8, from `AINetwork_CalcRoute` 0x156ba8) + `LinkCreep_ForNodes`
+    /// (0x159810): steps of 0.4 (trunc(trunc(|d|) × 2.5) [M 0x159cc8:24-31]), or one step of d when |d| ≤ 0.4;
+    /// `+0xb0` (the step index) = 0, `+0xa0` (active) = 1. The game's `LinkCreep_Dest` then takes the step
+    /// position through `build_FindCel` — this port is one cel, so the dest is the plain offset [S deviation].
     fn new(a: V3, b: V3, special: Option<u16>) -> Creep {
         let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         let (vec, steps) = if len > 0.4 { (d.map(|x| x * 0.4 / len), (len.trunc() * 2.5).trunc() as i32) } else { (d, 1) };
         Creep { a, b, vec, step: 0, steps, special }
     }
+    /// `LinkCreep_Dest` (0x15b420): the creep's k-th step point — `vec × (step + k)` offset from the route start
+    /// (`+0xd0`), stored through `build_FindCel` (the port is one cel — the plain offset [S deviation,
+    /// `Creep::new`]).
     fn point(&self, k: i32) -> V3 { [self.a[0] + self.vec[0] * k as f32, self.a[1] + self.vec[1] * k as f32, self.a[2] + self.vec[2] * k as f32] }
 }
 
@@ -495,6 +511,12 @@ pub mod follow {
 }
 
 impl Route {
+    /// A fresh route replaces the game's `AINetwork_ResetRoute` (0x15aa00): the field resets — the link/used
+    /// walk over the old route (`+0x41` count loop, the decompiler dropped the body), mode byte `+4 = 0xb`, the
+    /// node index / link index / `+0x80` target word to 0xffff, the stamps `+0xf8`/`+0xfc` to the new object and
+    /// flags cleared [M 0x15aa00] — are the zero fields of this constructor; the port drops the whole `AIRoute`
+    /// (`croute = None`, e.g. `find_safety_from_scary_object`'s "ResetRoute + InvalidateRoute [M 0x152250:128-129]")
+    /// and builds a new one.
     fn new(path: usize, mode: RouteMode, nodes: Vec<u16>, links: Vec<u16>, start: V3, dest: V3) -> Route {
         Route { path, mode, nodes, links, index: 0, start, dest, target: start, remaining: 0.0, radius: 2.0, lookahead: 2.0, creep: Creep::default(), stamp: 0 }
     }
@@ -564,7 +586,8 @@ impl Route {
         }
         let Some(pi) = path.filter(|&p| !net.paths[p].nodes.is_empty()) else { return Err(8) };
         let (res, mut nodes, mut links) = net.astar(world, pi, start, dest, goal, used)?;
-        // OptimiseRoute: trim the first / last node when the next one is reachable directly.
+        // OptimiseRoute 0x156760 (its two `NDrone2_MoveTestToNode` 0x155620 probes): trim the
+        // first / last node when the next one is reachable directly.
         let p = &net.paths[pi];
         let pair_ok = |x: u16, y: u16| { let (fx, fy) = (p.nodes[x as usize].flags, p.nodes[y as usize].flags); !((fx & 2 != 0 && fy & 2 != 0) || (fx & 4 != 0 && fy & 4 != 0)) };
         if nodes.len() > 1 && pair_ok(nodes[0], nodes[1]) && net.move_test(world, start, p.nodes[nodes[1] as usize].pos, true, false).0 == 1 {
@@ -696,7 +719,10 @@ impl Route {
         (follow::MOVING, reached)
     }
 
-    /// `UpdateLinksUsedCount`: every remaining link (from index − 1).
+    /// `AINetwork_UpdateLinksUsedCount` (0x15a490, from `AINetwork_FollowRoute` 0x15b110): every remaining link (from
+    /// index − 1) gets its `MAPLINK+6` used counter incremented, so the next drone's A* costs the crowded links
+    /// `len × (used + 1)` [M 0x15a490]. The game walks the node chain re-finding each pair's link object; the port
+    /// keeps the link list on the Route (`Route::links`) and marks from `index − 1` [S fold].
     pub fn mark_used(&self, used: &mut [u16]) {
         let from = (self.index - 1).max(0) as usize;
         for &l in self.links.iter().skip(from) { if let Some(u) = used.get_mut(l as usize) { *u += 1 } }
