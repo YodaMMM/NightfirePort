@@ -112,3 +112,24 @@ Reached-elsewhere notes for the same task: `NDrone2_DSTATE_SeenDeadBody` 0x16acd
 `NDrone2_ReactToDroneAlertMsg` 0x1437a0, whose only caller is the MP bots'
 `NDrone2_DSTATE_BotGlobal` 0x16e060 [M] — MP counts as a shipped path, and the port now delivers
 the transition flow (`mp/bots.rs react_to_drone_alert_msg`).
+
+## unported-hud-1 (2026-10-21) — M_TEXTBOX: no shipped page builds one
+
+`Text_Init(M_TEXTBOX*, NEW_CONTROL*, M_CONTROL*)` 0x222b80 (2688 B), `Text_SendMessage`
+0x223600 (456 B) and `Text_SetupChar` 0x224098 (116 B) are **not reached by the shipped game**.
+
+Evidence: the only construction path is the front-end control factory
+`Manager_SendMessage` 0x21c858, whose type-0xc arm (:206-208, `Menu_Malloc(0x9b0)` +
+`Text_Init`) runs for a page-def control whose type byte is 0xc [M]. The shipped front-end
+menu def (kind-8 entry 08000002 in 07000048.bin — the file `MenuManager_Create` 0x21b908 is
+called with, hash 0x80000002 [D]) contains **zero controls with ctype 0xc** — the census in
+`crates/nf-formats/tests/hud_pane_census.rs::menu_def_textbox_census` parses every page and
+every control and prints `[]` [D]. With no textbox control, `Text_SendMessage` (the control's
+message switch, called via `__Menu_SendMessage` 0x1f1c18 / `TextBox_Update` 0x2237c8) and
+`Text_SetupChar` (called only by `Text_Init` 0x222b80 [M grep]) are never reached either.
+
+Caveat: the census covers the one menu def the game boots with [D docs/systems/frontend.md,
+menudef.rs header]; no other kind-8 page-def entry is loaded by the boot path the port
+reconstructs. `Text_SendMessage`'s opcode surface (0x14/0x16/0x21/0x2b/0x39/0x3b/0x3d/0x47/0x53
+[M 0x223600]) is fully documented in docs/systems/hud-panes.md so a future task can port the
+control if a def with a type-0xc control ever surfaces (e.g. from a different region build).
