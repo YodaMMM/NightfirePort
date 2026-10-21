@@ -302,6 +302,11 @@ pub const BOT_STATES: [BotStateInfo; BOT_STATE_COUNT] = [
     BotStateInfo { id: BOT_INIT, addr: 0x1748C8, name: "BotInit", kind: StateKind::Thin },
     BotStateInfo { id: BOT_RESPAWN, addr: 0x174938, name: "BotRespawn", kind: StateKind::Thin },
     BotStateInfo { id: BOT_GLOBAL, addr: 0x16E060, name: "BotGlobal", kind: StateKind::Global },
+    // BotGlobal's alert dispatch runs `NDrone2_ReactToDroneAlertMsg` 0x1437a0, whose msg 0x11/0x12 arms gate
+    // the shout propagation on `NDrone2_InShoutingRange` 0x1788a0 [M 0x1437a0:181, 227]: 3D distance (obj+0x30)
+    // between the two drones — the level band 0x700000c..0x700000f [M the `< 0x7000010 && > 0x700000b` fold]:
+    // < 40 yes, 40..100 only the same cel (obj+0x20), ≥ 100 no; every other level: < 15 yes, 15..20 only the
+    // same cel, ≥ 20 no [M 0x1788a0]. Phase 4 ports it with the receiver's cel; the port's cels are not modelled yet.
     BotStateInfo { id: BOT_COLLECTOR, addr: 0x174980, name: "BotCollector", kind: StateKind::Full },
     BotStateInfo { id: BOT_GUARDIAN, addr: 0x174A28, name: "BotGuardian", kind: StateKind::Stub },
     BotStateInfo { id: BOT_TEAM_PLAYER, addr: 0x174A70, name: "BotTeamPlayer", kind: StateKind::Stub },
@@ -312,6 +317,10 @@ pub const BOT_STATES: [BotStateInfo; BOT_STATE_COUNT] = [
     BotStateInfo { id: BOT_JUDGE, addr: 0x174BD8, name: "BotJudge", kind: StateKind::Stub },
     BotStateInfo { id: BOT_ASSASSIN, addr: 0x174C20, name: "BotAssassin", kind: StateKind::Stub },
     BotStateInfo { id: BOT_ATTACK, addr: 0x16F198, name: "BotAttack", kind: StateKind::Full },
+    // BotAttack's UPDATE (case 3) sends the team shout `NDrone2_SendAttackMessage` 0x14a410 when the drone
+    // has an opponent and hasn't yet: `+0x44 == 1` (team 1) && `+0x4F8 & 0x200000` clear && `+0x170 != 0`
+    // → `+0x4FC |= 0x10`, `+0x4F8 |= 0x200000`, then `NDrone2_DroneAlertToObject(10.0, 10.0, 1.0, msg 0x16,
+    // opponent)` [M 0x14a410]. Phase 4 ports it with the shout outbox.
     BotStateInfo { id: BOT_ATTACK_RUN, addr: 0x16F390, name: "BotAttackRun", kind: StateKind::Full },
     BotStateInfo { id: BOT_ATTACK_NO_ROUTE, addr: 0x174C68, name: "BotAttackNoRoute", kind: StateKind::Thin },
     BotStateInfo { id: BOT_ATTACK_FIRE, addr: 0x16F5E8, name: "BotAttackFire", kind: StateKind::Full },
@@ -319,6 +328,9 @@ pub const BOT_STATES: [BotStateInfo; BOT_STATE_COUNT] = [
     BotStateInfo { id: BOT_ATTACK_STRAFE_AIM_LEFT, addr: 0x16F850, name: "BotAttackStrafeAimLeft", kind: StateKind::Full },
     BotStateInfo { id: BOT_ATTACK_STRAFE_AIM_RIGHT, addr: 0x16F9B8, name: "BotAttackStrafeAimRight", kind: StateKind::Full },
     BotStateInfo { id: BOT_ATTACK_RUN_CHANGE_POSITION, addr: 0x16FB20, name: "BotAttackRunChangePosition", kind: StateKind::Full },
+    // Its UPDATE (case 3) re-faces the run destination while no drone blocks: not AtDest, no `NDrone2_NearDrone`
+    // within 6.0 → `NDrone2_SetAngleToDest(0)` 0x154e20 — `+0x694` = atan2(dest `+0x670` − pos), gated on the
+    // own-sight bit `+0x4F8 & 0x8000000` clear [M 0x16fb20:33-38, 0x154e20]. Phase 4 ports it.
     BotStateInfo { id: BOT_ATTACK_BACKOFF, addr: 0x16FC30, name: "BotAttackBackoff", kind: StateKind::Full },
     BotStateInfo { id: BOT_ATTACK_CROUCH, addr: 0x16FE80, name: "BotAttackCrouch", kind: StateKind::Full },
     BotStateInfo { id: BOT_ATTACK_ROLL_LEFT_CROUCH, addr: 0x174D18, name: "BotAttackRollLeftCrouch", kind: StateKind::Thin },

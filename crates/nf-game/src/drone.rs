@@ -1506,7 +1506,7 @@ impl Drone {
         // The dtypenew specials [M 0x14b300:615-627]: placement msg 0x6000892 → mode 0x1c, 0x600089c
         // → 0x1b; the skin's anim set (+0xda) is saved to +0xdc and set 0xf (the rope set) takes
         // over; the start script is consumed (start_script above). The type-settings lookup runs
-        // with the OVERRIDE mode: the OLD chain's DoTypeSettingsOLD(+0xc5) at 0x14b300:676 reads
+        // with the OVERRIDE mode: the OLD chain's NDrone2_DoTypeSettingsOLD 0x14d2e8 (+0xc5) at 0x14b300:676 reads
         // rows 27/28 → start state 0x8e (AbseilInit) [L rows 27/28 = 8e00…]. DefaultInit's mode
         // check {0x1b,0x1c} then sets the air flag (0x14b300:763); the port's `start_state` picks
         // 0x8e off the same rows, so the Global enter dispatches into the abseil chain.
@@ -1620,6 +1620,15 @@ impl Drone {
         self.team = match self.dtype { 10 | 11 | 0xd | 0xe => 3, 0xc => 2, _ => 1 };
         let row = |m: u8| d.props.types.get(m as usize);
         if row(self.mode).and_then(|t| t.init.as_deref()).is_some_and(|n| n.starts_with("NDrone2_initDTYPE_Sniper")) { self.stationary = true; }
+        // The OLD-path mode init's property writes (`DoModeSettingsOLD` 0x14cfa0 memsets the first
+        // behaviour block +0x4dc, then calls `DroneModeSettings[mode·0xc+8]` [L table 0x29ad40: mode
+        // 0x17 → `NDrone2_init_DMODE_CivilianGuard` 0x14e158]). This task ports the block's
+        // `NDrone2_NearArmedBond` gate prop 0x51 [M 0x14e158:17] — the 07000006 driver's sight scare
+        // needs it and the playtest shows the scare firing [L 1011-1535]. The block's other writes
+        // (0x1d/0x24/0x3c/0x1f/0x46/0x26/0x27/0x28/0x29/0x4f/0x50 [M 0x14e158:6-16]) are not modelled
+        // from the init here — the placement words carry this port's values (docs/systems/
+        // drone2-helpers.md); porting them is its own task.
+        if self.mode == 0x17 { d.props.set(0x51, &mut self.props, 1); }
         self.alt_state = if self.alt_mode == 0 { 0 } else {
             let a = row(self.alt_mode).map_or(0, |t| t.alt);
             (if a != 0 { a } else { row(self.mode).map_or(0, |t| t.alt) }) as u8
@@ -1749,8 +1758,12 @@ impl Drone {
         if self.can_do(d, a) { a } else { anim_state::WALK }
     }
 
-    /// `UpdatePatrolRoute` → `NDrone2_FollowRoute` → `AINetwork_FollowRoute`: move target and desired yaw, the walk
-    /// anim, wait nodes (`ReachedDestNode` flag 1: msg 4 a tick later every other lap, alertness < 0.33).
+    /// `NDrone2_UpdatePatrolRoute` (0x1514d8) → `NDrone2_FollowRoute` → `AINetwork_FollowRoute`: move target and
+    /// desired yaw, the walk anim, wait nodes (`ReachedDestNode` flag 1: msg 4 a tick later every other lap,
+    /// alertness < 0.33). The game's anim pick [M 0x1514d8:6-27]: route done (7) → stand idle; not moving (0) → the
+    /// walk when prop 0x25 and `+0x50c` ≥ 0.66, else SetWalkIdleAnim, running 0x35 only in the alerted arm; moving →
+    /// walk 0x21 / run 0x35 by the same gates. The port's `alerted` fold picks ALERT_WALK over `walk_anim` — the
+    /// run-anim 0x35 band (prop 0x25 + speed ≥ 0.66 while moving) rides `walk_anim`'s level table [S fold].
     fn update_patrol_route(&mut self, d: &Data, _rng: &mut Rng, frame: u32) {
         let feet = self.feet();
         let Some(route) = self.route.as_mut() else { self.request_anim(d, anim_state::STAND_IDLE); return };
@@ -2932,6 +2945,18 @@ impl Drone {
             return self.prop(d, 0x3c) && self.seen;
         }
         self.voice_type != 0xd && self.prop(d, 0x3c) && self.seen && self.bond_armed
+    }
+
+    /// `NDrone2_NearArmedBond` (0x178678) — its ONLY caller passes 6.0 (`TruckDriverIdle` case 3,
+    /// 0x160ed0:27, `0x40c00000`), and the arg is LIVE here [M 0x178678:12-14: `arg <= +0x1a0` → 0]:
+    /// prop 0x3c AND prop 0x51, the opponent distance `+0x1a0` under the arg, the seen bit (`+0x228 & 4`),
+    /// then levels 0x7000009/0xa → yes [M 0x178678:22-24, the `+ 0xf8fffff7 < 2` unsigned fold]; otherwise
+    /// `DroneWeap_OpponentHasWeapon`, and level 0x7000007 falls to `NDrone2_ObjectIsArmed` 0x178768 on the
+    /// Bond object — both are the port's `bond_armed` fold (armed = 2..0x46 or 0x6a..0x71 [M 0x178768,
+    /// Drones::tick's per-tick `armed`]).
+    fn near_armed_bond(&self, d: &Data, max_dist: f32) -> bool {
+        self.prop(d, 0x3c) && self.prop(d, 0x51) && self.dist < max_dist && self.seen
+            && (matches!(d.level, 0x0700_0009 | 0x0700_000a) || self.bond_armed)
     }
 
     /// `NDrone2_BulletImpact` (0x1461c8): damage; dead → Death_Anim; alive with `allow` and no flinch for 2 s (this
@@ -5723,6 +5748,10 @@ impl Drone {
                 true
             }
             (PATROL, msg::UPDATE) => {
+                // Patrol's UPDATE (case 3) is `NDrone2_UpdatePatrolRoute` 0x1514d8 + the sight scan. Its msg 0x1b
+                // arm parks the drone in Obstructed: `SetState(NDrone2_ObstructedPatrolPath())` = state 0x61
+                // `NDrone2_DSTATE_Obstructed` 0x173390 [M 0x15c498:95-97 — 0x14ad50 is the constant-returning pick
+                // (size 8, returns 0x61); no decompiled sender of msg 0x1b [M grep] — the port has no 0x1b arm].
                 self.patrol_talk(rng, frame);
                 self.update_patrol_route(d, rng, frame);
                 if let Some(n) = self.look_for_opponent(d) { self.set_state(n) }
@@ -5866,6 +5895,11 @@ impl Drone {
                 true
             }
             (HEARD_NOISE_SUSPECT, msg::ENTER) => {
+                // The face-the-sound gate is `NDrone2_GetAngleDifferenceToAlert` 0x154f00 (|Δ| > 2.3561945 =
+                // 3π/4 → the turn anim 0x61 with resume 0x23 [M 0x16b0e0:44-49]); the accepted arm's facing is
+                // `NDrone2_SetAngleToAlert(0)` 0x154e90 — `+0x694` = atan2(alert_pos − pos) with the
+                // `+0x4F8 & 0x8000000` own-sight gate [M 0x154e90]. The alert position `+0xaf0` is the sound
+                // alert's position (`DroneFunc_HandleSoundAlerts` 0x148a30:77) — the port's `sound_pos`.
                 if self.noise_level >= 3 { self.set_state(HEARD_NOISE_ALERT); return true; }
                 self.noise_level = 3;
                 // [M 0x16b0e0:21-24] the enter arm's bark (AlertStatusSet(1) → HeardNoiseTalk).
@@ -5890,8 +5924,9 @@ impl Drone {
                 true
             }
             // Suspect's turn finished (msg 0x23, 0x16b0e0): already turned with prop 0x21 → AlertToPosition; else face the
-            // sound; without prop 0x21 look about (variant 1) and go back; with it SearchArea follows AlertToPosition,
-            // reached through the short look (0x0B) when standing in alert idle, else at once.
+            // sound (again `NDrone2_SetAngleToAlert(0)` 0x154e90 [M 0x16b0e0:145]); without prop 0x21 look about (variant 1) and go
+            // back; with it SearchArea follows AlertToPosition, reached through the short look (0x0B) when standing in alert idle,
+            // else at once.
             (HEARD_NOISE_SUSPECT, msg::TURNED) => {
                 if self.turned && self.prop(d, 0x21) { self.set_state(ALERT_TO_POSITION); return true; }
                 self.turned = true;
@@ -5960,8 +5995,14 @@ impl Drone {
                 self.set_state(CIVILIAN_CHALLENGE);
                 true
             }
-            // `DroneFunc_FirstAttack` with an alternate state (`+0x5A4`) and no second switch: take the alternate mode
+            // `NDrone2_ChangeToAttackMode` 0x14a648 through `DroneFunc_FirstAttack`: the alternate state
+            // (`+0x5A4`) with no second switch — take the alternate mode
             // (mode 2 becomes 0x19, sniper alert, whose init keeps the drone stationary) and go to that state.
+            // The game's helper flushes the pending resume (`+0x5a4`): promotes the pending mode byte
+            // `+0xc6` → `+0xc5` (ninja 2 → 0x19), clears `+0xc6`/`+0x5a4`, switches to the 2nd behaviour block
+            // when the mission's `+0xc48` == 100, sets `+0x28`/`+0x29`, and RETURNS `+0x5a4`'s old value for
+            // the caller's `SetState` [M 0x14a648:7-36; callers 0x14cbd8:124, 0x14d2e8 (DoTypeSettingsOLD),
+            // 0x15d860:60, 0x15e1e8, 0x165640:72]. The port's `alt_state`/`alt_mode` pair is that flush.
             (ATTACK, msg::ENTER) if self.alt_state != 0 && self.second_channel == 0 && self.alt_state != ATTACK && self.alt_state != 0xb4 => {
                 self.alert = 1.0;
                 self.return_state = ATTACK;
@@ -6030,6 +6071,11 @@ impl Drone {
                 if first_sight && first == 0 { self.attack_talk(d, rng); }
                 // `FirstAttack` may switch to the second behaviour block (`+0x5A4` ≠ 0, not modelled); [L] the 07000005
                 // gate guard still used its first block after a fight (`+0x4D8` = `+0x4DC`, WORKLOG 0021), so no switch.
+                // The AimStand pick with prop 0x18 and the engage range met: the game runs it through
+                // `NDrone2_DroneInSights` 0x14a800 — a size-8 stub that returns 0 [M 0x164210:79-84], so the
+                // branch is UNCONDITIONAL: resume `+0x5a2` = 0x68 (AimStandFire) and state 0x67 AimStand;
+                // without prop 0x18 (or beyond `+0xF0`) it is Combat 0x58 [M 0x164210:69-88]. The port's
+                // `return_state = ATTACK` above is the 0x68 resume.
                 self.set_state(if first != 0 { first } else if self.prop(d, 0x18) && self.dist < self.engage_range { AIM_STAND } else { COMBAT });
                 true
             }
@@ -6320,7 +6366,11 @@ impl Drone {
             // anim 0x21, and (SP - `MPSettings+0x388` 0; this port's drone AI is SP-only) timer C = 1 s
             // (`FRAME_RATE_DIV * 60`) [M 0x1650a0:13-22]. UPDATE (SP) and timer C: an opponent object
             // (`+0x170`; the port's stand-in is `ever_seen`) -> Attack 0x56; timer C with none re-arms 1 s
-            // [M :24-42]. (The port used to drop straight to Idle.)
+            // [M :24-42]. (The port used to drop straight to Idle.) The game's opponent test is
+            // `NDrone2_HasOpponent` 0x14ad58 [M: opponent `+0x170` != 0, OR the last-opponent tick `+0x238`
+            // (written with the opponent in `DroneVision_HaveOpponentSight` 0x175ef0:66-67) still within
+            // 30 ticks: `GameState+52 <= +0x238 + 0x1e`] — the port's `ever_seen` latch is the coarse fold
+            // [S]: the SP port has no opponent pointer to clear, so the 30-tick grace never expires.
             (NO_OPPONENT, msg::ENTER) => {
                 self.alert = 0.0;
                 self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
@@ -6414,11 +6464,12 @@ impl Drone {
             (TRUCK_DRIVER_INIT_ALERT, msg::BULLET) => self.on_bullet_resume(d, rng, frame, 0, false),
             // fix-06-driver: InitAlert 0x160d98 handles NO sound messages (its cases: 0/1/2/5/6/7/9/0x17/
             // 0x18/0x19/8 → HandleImpact, 0x21 → ConsiderExplosive) — the port's SOUND arm is dropped.
-            // TruckDriverIdle (0x160ed0): stand idle; NearArmedPerson (0x1787c8 — the 8.0 arg is dead)
-            // → CivilianScared (`|= 0x8000000`).
+            // TruckDriverIdle (0x160ed0): stand idle; case 3's scare is `NDrone2_NearArmedBond(6.0)`
+            // 0x178678 (NOT NearArmedPerson 0x1787c8 — that is the civilian states' predicate),
+            // → CivilianScared (`|= 0x8000000`) [M 0x160ed0:26-34].
             (TRUCK_DRIVER_IDLE, msg::ENTER) => { self.vision_on = true; self.set_stand_idle(d, rng, frame, true); true }
             (TRUCK_DRIVER_IDLE, msg::UPDATE) => {
-                if self.near_armed_person(d) { self.sighted = true; self.set_state(CIVILIAN_SCARED); }
+                if self.near_armed_bond(d, 6.0) { self.sighted = true; self.set_state(CIVILIAN_SCARED); }
                 true
             }
             (TRUCK_DRIVER_IDLE, msg::BULLET) => self.on_bullet_resume(d, rng, frame, CIVILIAN_SCARED, false),
@@ -6679,7 +6730,9 @@ impl Drone {
             // `Drone_AlertStatusSet(0)` [M 0x15cb78 enter arm] and the cower anim; the captor link
             // (+0x2B0) is bound by `NDrone2_SetupHostageKiller` 0x144030 — the port binds it at the
             // `Drones` tick (the nearest armed, alive guard; the `captor_pool` snapshot). UPDATE
-            // lives there too: captor gone or its health ≤ 0 → HostageSaved [M 0x15cb78:24-36].
+            // lives there too: captor gone or its health ≤ 0 → HostageSaved [M 0x15cb78:24-36]. The
+            // alive-hostage arm also calls `NDrone2_HostageSituationActive` 0x14aaf8 — a size-8 empty body whose
+            // result the caller DISCARDS (`call; return 1` [M 0x15cb78:30-33]) — the port models nothing for it.
             (HOSTAGE, msg::ENTER) => {
                 self.alert = 0.0;
                 self.call_anim(d, anim_state::COWER, 0, 0);
@@ -6831,7 +6884,12 @@ impl Drone {
             (LEAD_HIDE, msg::TIMER_C) => { self.set_state(ALLY_LEAD); true }
             // AllyLeadMissionWait 0x21 (0x15efc8): the route's wait-channel node parks the escort until
             // the channel fires. The port's route nodes carry no channels — the state is reachable
-            // through the forced-state path only [*suggested*; documented].
+            // through the forced-state path only [*suggested*; documented]. The game's ENTER (case 1)
+            // also runs `NDrone2_MoveTo_RouteNode(vars, 1, +0x854 = the mission route)` — the dest `+0x670`
+            // = route node 1's position (fallback: the drone's own placement pos), cel `+0x680`, arrival
+            // radius `+0x664` = 0.3, dist `+0x660`, angles to `+0x690` — and plays the walk 0x21 [M
+            // 0x15efc8:22-26, 0x1519e0]; the port's route-walk rides the shared Lead machinery, so the
+            // ENTER parks on the alert idle instead [S fold].
             (LEAD_MISSION_WAIT, msg::ENTER) => {
                 // The game latches `Drone+0x12C`, 0 → 0x99 [M 0x15efc8 case 1]. Drone+0x12C is init 0 by
                 // Drone_SM_InitObject 0x175838 and no decompiled function ever writes it, so in the game the
@@ -6891,6 +6949,10 @@ impl Drone {
             // [M case 1 tail + LAB_001683ac: +0xCC0 = 1, +0xCC4 = GameState + 2·FRAME_RATE_INT].
             // (The game's kind == 0 gate on the 0x4e branch is not reproducible at ENTER — the port
             // resolves the door index just after the state machine; the anim choice drops that gate.)
+            // The game's ENTER (case 1) first runs `NDrone2_MoveTo_RouteNode(vars, 1, +0x854)` (the
+            // route's door node position into `+0x670`/`+0x680`, the 0.3 arrival radius, the `+0x690`
+            // angles [M 0x1681f8:53-54, 0x1519e0]) — the port's route walk already carried the drone
+            // to the node, so the ENTER plays the anim directly [S fold].
             (state::OPEN_DOOR, msg::ENTER) => {
                 if self.prop(d, 0x14) || self.prop(d, 0x15) || self.prop(d, 0x16) {
                     self.call_anim(d, 0x4e, 0, 0);
@@ -6983,7 +7045,12 @@ impl Drone {
             // ---- fix-finale-blockers + ninja-melee (crates/nf-game/src/kiko.rs has the addresses
             // and the tags; the state-id ↔ function table is NDrone2_StateFuncs [L 0x29b300]) ----
             // NinjaStand 0xa6 (0x16b990) ENTER: the eyes datum then SetState(0xa7) — the BLIND_DRONES
-            // cheat is not modelled, so the fall-through is the only arm.
+            // cheat is not modelled, so the fall-through is the only arm. The eyes are the two gfx objects
+            // `NDrone2_CreateNinjaEyes` 0x149600 spawns (kind 0x40, hash 0x2000132, at bones 0x54/0x60 —
+            // 0x60/0x61 on skin 0x0500001e) when the ninja type is set (`NDrone2_ControlDTYPE_Ninja`
+            // 0x14b0f8:6, and `NDrone2_PreDroneControl` 0x148db0:126 behind the +0x18 flag) [M] — a
+            // visual-only spawn the port's draw layer does not build (the main agent renders; nothing in
+            // the AI reads the eyes datum on the ported paths [M 0x16b990 reads it for the cheat arm only]).
             (0xa6, msg::ENTER) => { self.set_state(crate::kiko::NINJA_ATTACK); true }
             // NinjaAttack 0xa7 (0x16bb50): ENTER — vision on, +0x4F8 |= 0x80000000, alert 1.0, then
             // the distance routing (bands or the close-band evasion / sword / stand-fire choice);
@@ -8261,7 +8328,13 @@ impl Drone {
 
     // ---- per tick -----------------------------------------------------------------------------------------------
 
-    /// `Drone_GetOpponentInfo`: distance and yaw to the player.
+    /// `Drone_GetOpponentInfo`: distance and yaw to the player. The `opp_target` write is the port's
+    /// `NDrone2_SetOpponentAimPos` 0x141fe8 fold — the game copies the opponent's tracked bone world
+    /// position (SP: `Drone_View_Bones[+0x1da]`/bone 2 when the anim datum allows, else `+0x30` with the
+    /// move-state y-lift 0.2 crouched / 0.6, smoothed 2/7 toward the bone on the next pass [M 0x141fe8],
+    /// and re-runs it from `DroneWeap_NextBulletTime` 0x179d40:130 before every shot) into `+0x210`, the
+    /// AI's aim point. The port stands in the player's own aim target snapshot (`Player.target`, [S fold
+    /// documented in docs/systems/drone2-helpers.md]).
     fn opponent_info(&mut self, p: &Player) {
         let dx = p.pos[0] - self.pos[0];
         let dz = p.pos[2] - self.pos[2];
@@ -11881,7 +11954,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         // `Drone_ProcessOpponents` (0x1390c0): Bond's visibility factor from the AI volumes holding him (crouching
-        // ×0.75 is not modelled: the port's Bond does not crouch), then each drone's opponent info. Inside
+        // ×0.75 is not modelled: the port's Bond does not crouch), then each drone's opponent info. The player
+        // object itself is `NDrone2_Player` 0x149768's pick (`glb_players`, or the MP active-player global
+        // `DAT_00298fb4` behind `DAT_00298fb0` [M 0x149768]) — the port has one Bond, passed here. Inside
         // `Drone_InitComms`' `NPCGlobals != 0` block [M 0x139520:124-284] — frozen drones keep their last state.
         if self.npc_enabled {
             let light = crate::aivolume::visibility_factor(d.volumes, player.pos, false);
@@ -13047,8 +13122,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // off, `NDrone2_DoHeadTracking` 0x1472c8 tracks the opponent (re-decided on `+0x358`, the
             // same-target re-decide returning before the Rand(5); the tracked point is the opponent's
             // tracked bone — the port stands in Bond's eye) or, with none, one Rand(10) stops the tracking
-            // and the angles ease back. HeadTrack's clamps: yaw ±1.1, 0 beyond 2.6; pitch [-1.0, +0.6];
-            // speed 0.14 alerted (`DCVars+0x50c > 0.66`) else 0.07 (0x1472c8). Both angles positive up.
+            // and the angles ease back. `NDrone2_HeadTrackObj` 0x14ada0 (the Bond-talk request, from
+            // `DroneFunc_DoBondTalk` 0x144488 / `NDrone2_BondTalk` 0x1446b0 behind the prop-0x4c gate) is
+            // the third writer of the same state: `AnimObjectSetHeadTracking(3.0, 0.13, obj, talk_target,
+            // 1, 1, 5)` [M 0x14ada0:9-15] — the port's tracking block below covers it with the same
+            // 3.0 range gate and the eye stand-in [S fold]. HeadTrack's clamps: yaw ±1.1, 0 beyond 2.6;
+            // pitch [-1.0, +0.6]; speed 0.14 alerted (`DCVars+0x50c > 0.66`) else 0.07 (0x1472c8). Both angles positive up.
             let aiming = dr.anim.class == 2 && dr.aims_torso();
             if aiming {
                 let dy = player.eye[1] - (dr.pos[1] + 1.2);
