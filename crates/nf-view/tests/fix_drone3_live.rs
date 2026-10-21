@@ -142,7 +142,10 @@ fn the_party_guests_wander_and_the_bouncers_react() {
     assert_eq!(sim.drones.list[bouncer].state, 0x30,
         "a bouncer runs CivilianGuard [M 0x1603a8] — got {:#x}", sim.drones.list[bouncer].state);
 
-    // Armed Bond walks up to the bouncer: he attacks (0x56). (Pre-fix: stood in 0x30 forever.)
+    // Armed Bond walks up to the bouncer: he attacks (0x56). (Pre-fix: stood in 0x30 forever.) The
+    // unarmed bouncer draws (0x66) and returns to Attack — a re-entry, so `FirstAttack` returns 0 and
+    // Attack's own fallback picks Combat 0x58 without prop 0x18 in range [M 0x148010:17-19 +
+    // 0x164210:69-88] (attack-reentry-choice, 913).
     // fix-party-mission: NearArmedPerson is prop 0x3c + Bond IN SIGHT + ObjectIsArmed [M 0x1787c8 —
     // the 20.0 distance arg is dead], so Bond stands in the bouncer's facing (±π/2 cone) with LOS.
     let bp = sim.drones.list[bouncer].pos;
@@ -150,7 +153,7 @@ fn the_party_guests_wander_and_the_bouncers_react() {
     stand_armed_at(sim, [bp[0] + by.sin() * 6.0, bp[1], bp[2] + by.cos() * 6.0], bp);
     tick_idle(sim, 90);
     assert!(matches!(sim.drones.list[bouncer].state,
-            0x56 | 0x66 | 0x67 | 0x68 | 0x69),
+            0x56 | 0x58 | 0x66 | 0x67 | 0x68 | 0x69),
         "a bouncer leaves CivilianGuard into the attack chain when armed Bond is within 20 [M 0x1603a8 case 3 → 0x56; the unarmed draw is the game's Attack enter] — got {:#x}", sim.drones.list[bouncer].state);
 
     // Armed Bond walks up to a guest: fix-party-mission — PartyGirl's scare runs through the same
