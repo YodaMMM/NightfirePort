@@ -1113,6 +1113,7 @@ const TOGGLE_HOLD: &[(u32, &str, i32)] = &[(0x2a2, "Toggle", 1), (0x2a3, "Hold",
 /// Advanced Options [M P_CNOPTIONS_Handler 0x213f08:24-71 — each row's items (label, value) and the profile byte
 /// (DAT_002a38d1/c9/d0/cc/cb/d2/d4/d3) it reads back with msg 0x35; L page 0x4000002d's controls for the y].
 pub const ADV_ROWS: &[OptRow] = &[
+    // Checkbox_SendMessage 0x1efd68 [M] / Checkbox_Init 0x1f0110 [M] — the front end's one ctype-2 control (page 0x4000002d, control 0x1000011a, this Vibration row); the port models it as this generic two-item option row.
     OptRow { ctrl: 0x1000_011a, label: 0x196, y: 104.0, items: ON_OFF, kind: OptKind::List },        // Vibration
     OptRow { ctrl: 0x1000_011b, label: 0x197, y: 136.0, items: ON_OFF, kind: OptKind::List },        // Auto Aim
     OptRow { ctrl: 0x1000_0124, label: 0x29c, y: 168.0, items: ON_OFF, kind: OptKind::List },        // Crosshairs
@@ -5045,6 +5046,7 @@ impl FrontEnd {
                 }
             }
             Page::CnAdvanced | Page::CnMp | Page::CnAv => {
+                // CompMenuCtrl 0x1d34c8 [M] — QuickSort comparator id 7, the row→control lookup (`Menu_FindControl` 0x1f16d8 sorts the page's controls by the s16 row/order at +4 with it, 0x1f1b34); the port's `opt_rows()` tables carry each row's ctrl, so there is nothing to sort.
                 let rows = self.opt_rows();
                 let back_row = match self.page { Page::CnAdvanced => 3, Page::CnMp => 4, _ => 5 };
                 match a {

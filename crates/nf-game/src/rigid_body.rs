@@ -20,6 +20,12 @@
 //! init functions so the evolution port has its base.
 //!
 //! All offsets are the RIGIDBODY ext block (obj+0xE0, 0x160 bytes [M RB_Init memset]).
+//!
+//! Collide_CylinderIntersect 0x1ecc00 [M] runs from RB_CollisionHandler 0x1d7a80 → RB_RestingContactRot 0x1d73a0:111
+//! (cylinder HITTEST at RIGIDBODY+0xB0) — reached on levels 07000006/0700000d (barrel placements, type halfword
+//! 0xFFFF [D]); owned when the RB evolution lands (docs/systems/levels.md §7.1). Coll_ResetHitHeap 0x1edda0 [M]
+//! (the per-level HITDATA/TriHeap reset, ResetMap_GameInit 0x1d5080:35) is absorbed: the port's collision allocates
+//! directly (world.rs CollisionWorld, nf-formats/collision.rs).
 
 /// The RIGIDBODY struct size in bytes [M 001d7ad8: memset(param_1, 0, 0x160)].
 pub const RB_SIZE: usize = 0x160;

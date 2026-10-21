@@ -365,7 +365,9 @@ pub struct Bond {
     pub wire_anim_rate: f32,
     /// The camera mode the grab/drop paths set (`Player_SetCamMode`: 0xB on the wire, 0 on foot) [M
     /// CollWire 0x1975f8, Player_Wire 0x1978a8]. The renderer can adopt it; the headless sim only
-    /// records it.
+    /// records it. This field is the port of the game's cam-mode dispatch: `Camera_Update`
+    /// 0x1bb6d8:21 calls the viewer's updator (`Player_PositionCamera` 0x18f5d8) which switches on
+    /// BLData+0x950 — this byte — per frame [M].
     pub cam_mode: u16,
     /// `BLData+0x18`: the fall-speed accumulator — the zipline ride adds FRAME_RATE_MUL·0.15 per tick
     /// and the creep drop 0.05 [M Player_Zipline 0x198054, Player_Creep; the game's `Player_Move`
@@ -437,6 +439,11 @@ pub struct Bond {
     /// 0x1ebaa8:353-373] but does NOT gate `grounded` on the pick arm; the main agent's live
     /// pin of the bit block decides when it returns. Field on its own line (merge lesson 4).
     pub pick_ref: V3,
+    /// unported-front-end-menus-3: the `CAM_ORBIT` state (BLData+0xe0..0x104) [M `Camera_Orbit`
+    /// 0x1bb828] — `Some` while cam_mode is 1, the GoldenEye-strike orbit (`MP_GoldenEyeUpdate`
+    /// 0x187568:396-398 → `Player_SetCamMode` 0x195928 case 1, the game's only mode-1 writer).
+    /// Field on its own line (merge lesson 4).
+    pub orbit: Option<OrbitCam>,
 }
 
 impl Bond {
@@ -461,6 +468,9 @@ impl Bond {
             // into `drones.audio`); `Player_HandleJump` 0x1916b0 plays 0xA3 at launch (:184) and
             // 0xA3/0x5FB at the head bump (:195-198).
             sfx_out: Vec::new(),
+            // unported-front-end-menus-3: no orbit until Player_SetCamMode(BL, 1) (0x195928
+            // case 1) arms it. Field on its own line (merge lesson 4).
+            orbit: None,
         }
     }
 
@@ -2620,5 +2630,86 @@ mod tests {
         let mut b = Bond::new([0.0, 30.0, 0.0], 0.0);
         for _ in 0..30 { b.tick(&w, &Input::default()); }
         assert!(b.pos[1] < 30.0 - 1.0 && !b.grounded);
+    }
+}
+
+/// unported-front-end-menus-3: the game's `CAM_ORBIT` (BLData+0xe0, 0x24 bytes) — the orbit
+/// camera state `Camera_Orbit` 0x1bb828 advances [M]. `Player_PositionCamera` 0x18f5d8:135-144
+/// (cam_mode 1) refreshes `look` from the head bone each tick (`AnimGetBoneWorldTrans(obj, −5,
+/// 0, BLData+0xe0, 0)`) and stores the obj at BLData+0x100; `Player_SetCamMode` 0x195928:17-24
+/// initializes max = 1.5, radius = 0.15, target = 1.5, phase = 0 (case 1: +0xf0 = 0x3fc00000,
+/// +0xf4 = 0x3e19999a, +0xf8 = 0x3fc00000, +0xfc = 0).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OrbitCam {
+    /// `CAM_ORBIT+0x00..+0x0c`: the look-at point (the holder's head-bone position).
+    pub look: V3,
+    /// `CAM_ORBIT+0x10`: the maximum orbit radius (init 1.5 [M 0x195928:18]).
+    pub max: f32,
+    /// `CAM_ORBIT+0x14`: the current orbit radius (init 0.15 [M 0x195928:19]).
+    pub radius: f32,
+    /// `CAM_ORBIT+0x18`: the target radius the current one eases toward (init 1.5 [M 0x195928:20]).
+    pub target: f32,
+    /// `CAM_ORBIT+0x1c`: the orbit phase, radians (init 0 [M 0x195928:21]).
+    pub phase: f32,
+}
+
+impl Bond {
+    /// unported-front-end-menus-3: `Player_SetCamMode(BL, 1)` 0x195928 case 1 [M] — the only
+    /// mode-1 writer in the game is `MP_GoldenEyeUpdate` 0x187568:396-398 (the GoldenEye
+    /// strike's orbit on its class-3 holder). Sets the port's `cam_mode` and stamps the
+    /// CAM_ORBIT init the game's case-1 arm writes (HUD_Reset + viewer+0x236 = 0 are HUD
+    /// state the port does not draw).
+    pub fn set_cam_mode_orbit(&mut self) {
+        self.cam_mode = 1;
+        self.orbit = Some(OrbitCam {
+            look: self.head(),
+            max: 1.5,
+            radius: 0.15,
+            target: 1.5,
+            phase: 0.0,
+        });
+    }
+
+    /// unported-front-end-menus-3: `Camera_Orbit` 0x1bb828 [M] — one per-frame orbit step,
+    /// run by the game from `Camera_Update` 0x1bb6d8:21 → `Player_PositionCamera` 0x18f5d8
+    /// case 1 while cam_mode is 1. Order per the decompile: the sines and the eye use the
+    /// CURRENT phase and radius (:29-52), then the phase advances (:45), then the eye's
+    /// sphere pull sets the target and the radius eases toward it without overshoot
+    /// (:63-82). `sphere_hit` is the eye sphere's closest hit distance — the game's
+    /// `Collide_SphereIntersect(1.5, viewer+0x150, cel, obj, …)` HITDATA+0xc (:63-70; None =
+    /// no hit → target = max). Returns `(eye, look, zoom)` — the eye computed as x = look.x +
+    /// sin(φ)·r, z = look.z + cos(φ)·r, y = look.y + (0.75 when r < 0.75, else min(r, max))
+    /// [M :35-52]; the game `Mat_LookAt`s eye → look into the view matrix — the draw side's
+    /// job here, so the port hands it both endpoints.
+    pub fn orbit_camera(&mut self, sphere_hit: Option<f32>) -> Option<([f32; 3], [f32; 3], f32)> {
+        let o = self.orbit.as_mut()?;
+        // Eye from the CURRENT phase + radius: x = look.x + sin(φ)·r, z = look.z + cos(φ)·r [M
+        // 0x1bb828:52-58 (PS2Sinf2(phase+π/2, phase) → cos φ @fStack_50 / sin φ @fStack_4c)].
+        // y = look.y + 0.75, or look.y + min(r, max) when that sits at/above the 0.75 floor [M
+        // 0x1bb828:40-52 (fStack_5c = look.y + 0.75; if it ≤ look.y + r → min(look.y + r,
+        // look.y + +0x10))].
+        let (s, c) = (crate::trig::sinf(o.phase), crate::trig::cosf(o.phase));
+        let eye_y = if 0.75 <= o.radius {
+            (o.look[1] + o.radius).min(o.look[1] + o.max)
+        } else {
+            o.look[1] + 0.75
+        };
+        let eye = [o.look[0] + s * o.radius, eye_y, o.look[2] + c * o.radius];
+        // Phase advance [M 0x1bb828:45: +0x1c += REC_FRAME_RATE · 0.7].
+        o.phase += crate::grenade::REC_FRAME_RATE * 0.7;
+        // Sphere pull [M 0x1bb828:72-78]: no hit → target = max (+0x10); hit → target = the
+        // hit's HITDATA+0xc floored at 0.1 (0x3dcccccd).
+        o.target = match sphere_hit {
+            None => o.max,
+            Some(h) => h.max(0.1),
+        };
+        // Radius ease, no overshoot [M 0x1bb828:79-82: radius += (target − radius) ·
+        // REC_FRAME_RATE · 5, clamped at the target from both sides].
+        let was = o.radius;
+        o.radius += (o.target - was) * crate::grenade::REC_FRAME_RATE * 5.0;
+        if (o.target >= was && o.radius > o.target) || (o.target < was && o.radius < o.target) {
+            o.radius = o.target;
+        }
+        Some((eye, o.look, 1.0)) // zoom 1.0: Player_PositionCamera case 1 sets viewer+0x108 = 0x3f800000 [M 0x18f5d8:136]
     }
 }

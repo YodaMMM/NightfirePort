@@ -218,3 +218,40 @@ menudef.rs header]; no other kind-8 page-def entry is loaded by the boot path th
 reconstructs. `Text_SendMessage`'s opcode surface (0x14/0x16/0x21/0x2b/0x39/0x3b/0x3d/0x47/0x53
 [M 0x223600]) is fully documented in docs/systems/hud-panes.md so a future task can port the
 control if a def with a type-0xc control ever surfaces (e.g. from a different region build).
+
+# unported-front-end-menus-3 (2026-10-21)
+
+## Camera modes 3/4/5: camera_freechase 0x1ba1c8, camera_fixed 0x1ba4e8, camera_snake 0x1baa78
+
+All three are `Player_PositionCamera` 0x18f5d8 switch arms — case 3 → `camera_freechase`
+(:157-161), case 4 → `camera_fixed` (:162-166), case 5 → `camera_snake` (:167-171) [M].
+The switched byte is `BLData+0x950` (the camera mode). Its only writer is
+`Player_SetCamMode` 0x195928:11 [M whole-decompile grep of +0x950; camera_freechase itself
+resets it to 0 at 0x1ba1c8:106]. All 20 `Player_SetCamMode` call sites pass mode
+{0, 1, 2, 0xb, 0xc, 0xd, 0xe, 0xf} — none passes 3, 4 or 5 [M census of every call site,
+0x1910f8:118 through 0x184bd0:71]. The script side's only camera-mode path is NIS event 9 →
+`Player_Cam2Mode` 0x195fc8, which maps to 2 or 0 only [M 0x195fc8:10-16]. Corroboration:
+docs/systems/uncited-audit.md:226-228 already records modes 4/5/6/0xa dead (the same census
+covers 3). So no code runs these three handlers on any on-foot level, the front end or MP:
+recorded unreached. Residual caveat: a data-driven `+0x950` write from script bytes cannot be
+fully excluded from decompile alone — a gdbwatch on `*(u8*)(BLData+0x950)` across a full
+SP+MP run would settle it conclusively.
+
+## QuickSort dead comparators: CompBoxList 0x1d3390, CompMsgTxt 0x1d3400
+
+The seven `Comp*` comparators (`CompBoxList` 0x1d3390 … `CompStrings` 0x1d34f0) are not
+passed as function pointers anywhere: they are dispatch-table targets of `QuickSort`
+0x1d30a8:61-67 — the `COMP_FUNCT` id selects a jumptable entry at 0x304fc0 [M dump of
+work/elf/ACTION.ELF: id 0→CompSpr 0x1d3320, 1→CompLight 0x1d3350, 2→CompHitData 0x1d33c0,
+3→CompDrawCels 0x1d3430, 4→CompAlphaObj 0x1d3458, 5→CompMsgTxt 0x1d3400, 6→CompTargetObj
+0x1d3490, 7→CompMenuCtrl 0x1d34c8, 8→CompStrings 0x1d34f0, 9→CompBoxList 0x1d3390, 10→
+a dynamic comparator]. A binary-wide census found exactly 15 `jal QuickSort` sites, all 15
+decompiled, and **none passes id 5 or id 9** [M]. So `CompBoxList` (key = f32 at
+`*elem+4`, the box-list entry) and `CompMsgTxt` (key = s8 `isNew` at TXTMSG+0x1d) are dead
+table entries: recorded unreached.
+
+Correction to prior art: docs/reports/objectives-0b-start.md:115 implies the objective
+message queue sorts TXTMSG records by the `isNew` byte — contradicted by the census; the
+message queue is FIFO via the CirBuf ring (CirBuf_Add 0x1cd040, replaced by the port's
+subtitle queue). Also fixes a mislabel in docs/systems/fix-cel-order.md:28, which calls
+0x1d3320 "CompLight": 0x1d3320 is CompSpr; CompLight is 0x1d3350.

@@ -4122,7 +4122,10 @@ impl Drone {
     /// them: from the FRESH anim pose's head axes (the palette `psiBuildMatrixPalette` 0x111498
     /// hands HeadTrack carries no stored rotation — it is rebuilt from the anim every tick), so
     /// easing the stored angle toward these never double-counts the anim's own head pose (the
-    /// playtest's "head tips UP well past the camera"). Yaw: the angle from the head's forward to
+    /// playtest's "head tips UP well past the camera"). The projection this replaces is
+    /// `Plane_PutPntOnPlane` 0x1e3698 [M] — the game projects the target (and a head+axis point)
+    /// onto the head's (side, forward) planes before the acos blocks (0x1bf618:208-211, 256-259);
+    /// the port inlines the same component removal along the unit normal. Yaw: the angle from the head's forward to
     /// the target in the (forward, side) plane, signed about the neck axis — positive right, the
     /// port's stored convention. Pitch: the angle in the (forward, neck) plane, signed about the
     /// side axis in the GAME's convention (positive down) — the clamps ±1.1 / 0-beyond-2.6 (yaw)
@@ -9417,6 +9420,7 @@ pub struct FlashProbe {
 /// 0x1bb2b8:63-121 and Camera_CalcViewAngles 0x1baf70:32]; the sim has no GunImp scope state, so the
 /// 30° zoom arm (0x132f00) is out of scope. The aspect is the DAT_002a37c4 == 0 branch 0x3FAAAAAB
 /// (4/3) [M 0x1baf70:29-33; L ee_snapshot.bin @ 0x2a37c4 = 0 and ee_start_07000001.bin @ 0x2a37c4 = 0].
+/// The per-viewer init is `Camera_Create` 0x1bb0f8 [M] — rect +0xf0/+0xf4/+0xf8/+0xfc, size +0x10c/+0x110, sprite-draw gate +0x2a, updator slot +0x68; its FOV default 0x3F860A92 comes through `Camera_CalcViewAngles` 0x1baf70 (the `VIEW_ANGLE` const below).
 /// tanf is the SDK libm in the game — the port's `f32::tan` is the stand-in (plane-direction error
 /// < 1e-6 rad, orders below the slack) [S].
 pub fn frustum_sides(forward: V3) -> [V3; 4] {
