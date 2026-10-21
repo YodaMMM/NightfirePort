@@ -1746,7 +1746,10 @@ impl BotBrain {
     }
 
     /// `BOTSTATE_pickGoal` 0x126b88 (the port's flow; route distance → straight-line [Deviation]).
-    /// Returns true when a goal was initialised + `gotoGoal` ran.
+    /// The game's move arm calls `NDrone2_DistanceToAIPoint` 0x155d78 (feet → the drone's embedded
+    /// goal AIPoint at +0x6f0, +0x20 = the goal position) right before `NDrone2_MoveToGoalPosition`
+    /// [M 0x126b88:517-520]; the port's `route.remaining` / straight-line distance stands in for that
+    /// cached distance. Returns true when a goal was initialised + `gotoGoal` ran.
     pub fn pick_goal(&mut self, ctx: &BotCtx, rng: &mut Rng, slot: usize) -> bool {
         self.pick_goal_scan(ctx, rng, slot, true)
     }
@@ -3092,8 +3095,10 @@ impl BotBrain {
         }
     }
 
-    /// `NDrone2_CanStrafeLeft/Right` / `CanStepLeft/Right` / `CanBackoff` [S — the game's tests
-    /// (0x14f9e8…) sweep the drone's bounds; the port: the side spot `dist` away is walk-clear
+    /// `NDrone2_CanStrafeLeft/Right` (0x14f9e8/0x14fbe0) / `NDrone2_CanStepLeft` 0x14f640 /
+    /// `NDrone2_CanStepRight` 0x14f808 / `NDrone2_CanBackoff` 0x1501a0 [S — the game's tests
+    /// (0x14f640…, called from `BOTSTATE_checkAttackMove` 0x126a40 and the aim-fire states)
+    /// sweep the drone's bounds; the port: the side spot `dist` away is walk-clear
     /// and has a floor under it].
     fn can_side_move(&self, ctx: &BotCtx, side: f32, dist: f32) -> bool {
         let r = self.root();
@@ -3304,9 +3309,13 @@ impl BotBrain {
 
     /// 0xD0 BotAttackRun [M 0x16f390]: no opponent → 0xD3 (the port: idle); the route to the
     /// opponent (`NDrone2_MoveToObject` — the port's `steer_to` over the AI network); inside
-    /// the too-close range → 0xD7 backoff; inside the engage range (+0xF0) and sighted → react
-    /// → 0xCF. A route that fails for good (the stuck watch) → 0xD1's place: drop the opponent
-    /// and go back to the goals [S].
+    /// the too-close range → 0xD7 backoff (`NDrone2_CanBackoff` 0x1501a0 gates the game's arm
+    /// [M :72-81] — the port's transition re-enters the stand-in state unconditionally [S]);
+    /// inside the engage range (+0xF0) and sighted → react → 0xCF. The game then picks the move
+    /// anim with `NDrone2_AnimForDist` 0x1512e0 [M :87] — the port lifts that pick as the pure
+    /// [`anim_for_dist`] (the bot brain carries no drone-anim state to apply it to; the body-anim
+    /// draw derives locomotion from the body's speeds). A route that fails for good (the stuck
+    /// watch) → 0xD1's place: drop the opponent and go back to the goals [S].
     fn bot_attack_run_msg3(&mut self, ctx: &BotCtx) {
         let Some(o) = self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive) else {
             self.set_state(state::BOT_IDLE);
@@ -3827,6 +3836,59 @@ impl BotBrain {
     }
 }
 
+/// `NDrone2_AnimForDist` 0x1512e0 — the drone move-anim pick, lifted exactly (the decompile's
+/// argument order: `(float dist_move, DCVars*)`; every game input is a parameter here because the
+/// port's bot brain carries no drone-anim state to read them from — the caller-side mapping is the
+/// draw/AI's to make, per docs/systems/guard-move-checks.md). Inputs: `class` = drone+0xc5,
+/// `speed` = +0xf0, `dist_opp` = +0x1a0, `turning` = +0x228 bit 2, `aim_angle` = +0x1d4,
+/// `dist_move` = the remaining route distance (+0x8e8, `NDrone2_MoveToObject` 0x151618's store),
+/// `prop0/1/2` = behaviour_util_getProperty 0/1/2, `can_do_8`/`can_do_f` =
+/// `DroneAnim_CanDoAnimState(8/0xf)`. Returns the anim state id: 0x1e run, 8 walk, 0xf strafe-walk,
+/// 10 stop-walk [M 0x1512e0:14-90]:
+/// 1. start 0x1e; class 0x1e starts 8, kept only when `can_do_8` [M :15-23];
+/// 2. not turning: `speed * 1.5 <= dist_opp` keeps it, else prop 1 + (prop 2 or `can_do_8`) → 8
+///    [M :25-51];
+/// 3. turning and `dist_move < speed * 0.5` → 10 [M :52-54];
+/// 4. turning else: `dist_opp >= speed` falls to arm 2's near-walk try; `(prop 0 or prop 2)` +
+///    `can_do_f` → 0xf, else the near-walk try [M :55-78].
+/// The game then calls `DroneAnim_CallAnim` when +0x56a differs and writes the +0x3b fire-request
+/// byte behind a condition the decompile shows with unresolved registers [M :82-89] — not
+/// reproduced here; the caller owns both side effects.
+pub fn anim_for_dist(
+    class: u8,
+    can_do_8: bool,
+    can_do_f: bool,
+    turning: bool,
+    _aim_angle: f32,
+    speed: f32,
+    dist_opp: f32,
+    dist_move: f32,
+    prop0: bool,
+    prop1: bool,
+    prop2: bool,
+) -> u16 {
+    let mut anim: u16 = 0x1e;
+    if class == 0x1e && can_do_8 {
+        anim = 8;
+    }
+    if !turning {
+        if speed * 1.5 > dist_opp && prop1 && (prop2 || can_do_8) {
+            anim = 8;
+        }
+    } else if dist_move < speed * 0.5 {
+        anim = 10;
+    } else if dist_opp < speed {
+        if (prop0 || prop2) && can_do_f {
+            anim = 0xf;
+        } else if speed * 1.5 > dist_opp && prop1 && (prop2 || can_do_8) {
+            anim = 8;
+        }
+    } else if speed * 1.5 > dist_opp && prop1 && (prop2 || can_do_8) {
+        anim = 8;
+    }
+    anim
+}
+
 // ============================================================================
 // 5. Tests — the golden table checks and the dispatch test
 // ============================================================================
@@ -3834,6 +3896,34 @@ impl BotBrain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `NDrone2_AnimForDist` 0x1512e0's selection table (numbers only, each arm's [M] line cited;
+    /// every arm has a sister that flips the result so the assert can fail).
+    #[test]
+    fn anim_for_dist_picks_the_game_table() {
+        // Not turning, far: 1.5·speed ≤ dist_opp keeps the run [M 0x1512e0:28].
+        assert_eq!(anim_for_dist(0, false, false, false, 0.0, 4.0, 6.0, 6.0, false, false, false), 0x1e);
+        // Sister: just under 1.5·speed without prop 1 still runs (the walk arm's prop gate) [M :32-45].
+        assert_eq!(anim_for_dist(0, false, false, false, 0.0, 4.0, 5.9, 6.0, false, false, false), 0x1e);
+        // Sister: the same near shape with prop 1 + prop 2 walks (8) [M :32-50].
+        assert_eq!(anim_for_dist(0, false, false, false, 0.0, 4.0, 5.9, 6.0, false, true, true), 8);
+        // Near, prop 1 without prop 2 but can_do(8) → 8 [M :38-44].
+        assert_eq!(anim_for_dist(0, true, false, false, 0.0, 4.0, 5.9, 6.0, false, true, false), 8);
+        // Turning, dist_move < 0.5·speed → the stop-walk 10 [M :52-54].
+        assert_eq!(anim_for_dist(0, false, false, true, 0.0, 4.0, 20.0, 1.9, false, false, false), 10);
+        // Sister: dist_move at 0.5·speed leaves the stop arm; with dist_opp < speed the
+        // strafe-walk try runs [M :55-60, 0x1513bc].
+        assert_eq!(anim_for_dist(0, false, true, true, 0.0, 4.0, 3.0, 2.0, true, false, false), 0xf);
+        // Turning, dist_opp < speed, prop 0 + can_do(0xf) → strafe-walk 0xf [M :60-77].
+        assert_eq!(anim_for_dist(0, false, true, true, 0.0, 4.0, 3.0, 3.0, true, false, false), 0xf);
+        // Turning, dist_opp ≥ speed → the near-walk try: far keeps the run, near with prop 1 walks
+        // [M :56-57 → 0x1513d4 → :28-50].
+        assert_eq!(anim_for_dist(0, false, false, true, 0.0, 4.0, 6.0, 3.0, false, true, true), 0x1e);
+        assert_eq!(anim_for_dist(0, false, false, true, 0.0, 4.0, 5.9, 3.0, false, true, true), 8);
+        // Class 0x1e starts at 8 when can_do(8), else the run [M :15-23] (far, so no later arm fires).
+        assert_eq!(anim_for_dist(0x1e, true, false, false, 0.0, 4.0, 6.0, 6.0, false, false, false), 8);
+        assert_eq!(anim_for_dist(0x1e, false, false, false, 0.0, 4.0, 6.0, 6.0, false, false, false), 0x1e);
+    }
 
     /// mp-bot-weapons: the interval floor — `DroneWeap_NextBulletTime` 0x179d40:26-47 clamps the
     /// record interval (`weapon_data+0x40`) to 60 ticks for weapons 6, 0xA and 0xE..0x10 only; a
