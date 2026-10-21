@@ -114,6 +114,34 @@ pub struct HudTables {
     /// The MP ammo pane's 3 text sprites (`MPAmmoPane` → `HUD_UpdateAmmoPane` 0x19a7f0,
     /// `MPAmmoSprInfo` 0x2be610) — empty when absent.
     pub mp_ammo: Vec<SpriteInfo>,
+    /// The OICW boot/zoom pane's sprites (`OICWPane` 0x2be140 → `HUD_CreateOICWPane` 0x19cc90 /
+    /// `HUD_UpdateOICWPane` 0x19cef8, `OICWSprInfo` 0x2be008 — 7 sprites [L ee_snapshot
+    /// pane-def +0x14]); the five boot text sprites sit at consecutive list slots [M 0x19cc90:44-62].
+    pub oicw: Vec<SpriteInfo>,
+    /// The nightsight pane's sprites (`NightSightPane` 0x2bd8b8 → `HUD_UpdateNightSightPane`
+    /// 0x19d218, `NightSightSprInfo` 0x2bd7b0 — 6 [L]).
+    pub nightsight: Vec<SpriteInfo>,
+    /// The x-ray pane's sprites (`XrayPane` 0x2bde90 → `HUD_UpdateXRayPane` 0x1a1410,
+    /// `XraySprInfo` 0x2bddb0 — 5 [L]).
+    pub xray: Vec<SpriteInfo>,
+    /// The security-camera wash pane's sprites (`SecCamPane` 0x2bdfe8 →
+    /// `HUD_UpdateSecCamPane` 0x1a1538, `SecCamSprInfo` 0x2bdeb0 — 7 [L]).
+    pub secam: Vec<SpriteInfo>,
+    /// The sight/ronin/laser panes' shared sprite table (`SightPane` 0x2bd5e0 →
+    /// `HUD_UpdateSightPane` 0x1a12d0 = a no-op, `SightSprInfo` 0x2bd558 — 3 [L]).
+    pub sight: Vec<SpriteInfo>,
+    /// The RC-car pane's sprites (`RCCarPane` 0x2bdd40 → `HUD_UpdateCarPane` 0x1a15a0,
+    /// `RCCarSprInfo` 0x2bdc38 — 6 [L]; the layer-byte swap is `hud_pane::car_pane_layers`).
+    pub rccar: Vec<SpriteInfo>,
+    /// The blood/death pane's sprites (`BloodPane` 0x2bd030, `BloodSprInfo` 0x2bcfd8 — 2 [L]).
+    pub blood: Vec<SpriteInfo>,
+    /// The Ronin tyre-cam pane's sprites (`RoninPane` 0x2be268, `RoninSprInfo` 0x2be160 — 6 [L]).
+    pub ronin: Vec<SpriteInfo>,
+    /// The laser-sight pane's sprites (`LaserPane` 0x2be390, `LaserSprInfo` 0x2be288 — 6 [L]).
+    pub laser: Vec<SpriteInfo>,
+    /// The micro-camera pane's sprites (`CameraPane` 0x2bd790 → `HUD_UpdateCameraPane`
+    /// 0x1a12d8, `CameraSprInfo` 0x2bd600 — 9 [L]).
+    pub camera: Vec<SpriteInfo>,
     /// Per ammo type: u, v, width, pixels per round.
     pub bullets: Vec<[f32; 4]>,
     /// Font 2 (`FONTSerpLight`, the HUD's).
@@ -179,7 +207,40 @@ impl HudTables {
         let mp_score = sprites("MPScoreInfo").unwrap_or_default();
         let mp_health = sprites("MPHealthSprInfo").unwrap_or_default();
         let mp_ammo = sprites("MPAmmoSprInfo").unwrap_or_default();
-        Ok(HudTables { health: sprites("HealthSprInfo")?, ammo: sprites("AmmoSprInfo")?, air, redeemer, space, radar, mp_score, mp_health, mp_ammo, bullets, font, font_header })
+        let oicw = sprites("OICWSprInfo")?;
+        let nightsight = sprites("NightSightSprInfo")?;
+        let xray = sprites("XraySprInfo")?;
+        let secam = sprites("SecCamSprInfo")?;
+        let sight = sprites("SightSprInfo")?;
+        let rccar = sprites("RCCarSprInfo")?;
+        let blood = sprites("BloodSprInfo")?;
+        let ronin = sprites("RoninSprInfo")?;
+        let laser = sprites("LaserSprInfo")?;
+        let camera = sprites("CameraSprInfo")?;
+        Ok(HudTables {
+            health: sprites("HealthSprInfo")?,
+            ammo: sprites("AmmoSprInfo")?,
+            air,
+            redeemer,
+            space,
+            radar,
+            mp_score,
+            mp_health,
+            mp_ammo,
+            oicw,
+            nightsight,
+            xray,
+            secam,
+            sight,
+            rccar,
+            blood,
+            ronin,
+            laser,
+            camera,
+            bullets,
+            font,
+            font_header,
+        })
     }
 }
 
