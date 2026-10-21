@@ -94,3 +94,46 @@ mod tests {
         assert_eq!(fpu_sub(0.25, 1.0), -0.75);
     }
 }
+
+// ============================================================================
+// ai-world-helpers: the auxVec family — the game's small fixed-ops vector
+// helpers (V3 as [f32; 3], x/y/z lanes in decompile order)
+// ============================================================================
+
+/// `auxVec_Add` 0x1e4f10 [M :4-9]: `c = a + b` per lane. The game's only caller is
+/// `Concat` 0x1e4a90:49 (the translation rows — the port's `sky::concat` adds them inline
+/// with the PS2-exact float ops, see the cite there).
+pub fn aux_vec_add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [fpu_add(a[0], b[0]), fpu_add(a[1], b[1]), fpu_add(a[2], b[2])]
+}
+
+/// `auxVec_Sub` 0x1e4f48 [M]: `c = a − b` per lane. The game's only caller is
+/// `Creature_CalcWaypoints` 0x134e58 (unported — the creature waypoint math has no port
+/// path yet).
+pub fn aux_vec_sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [fpu_add(a[0], -b[0]), fpu_add(a[1], -b[1]), fpu_add(a[2], -b[2])]
+}
+
+/// `auxVec_AddMulR32` 0x1e4f98 [M]: `c = a + b·s` per lane (the R32 scale is a plain f32
+/// multiply). The game's callers are `Creature_CalcWaypoints` 0x134e58 and
+/// `Creature_CalcPoint` 0x134cf0 (both unported).
+pub fn aux_vec_add_mul_r32(a: [f32; 3], b: [f32; 3], s: f32) -> [f32; 3] {
+    [fpu_add(a[0], mul(b[0], s)), fpu_add(a[1], mul(b[1], s)), fpu_add(a[2], mul(b[2], s))]
+}
+
+#[cfg(test)]
+mod world_helper_tests {
+    use super::*;
+
+    /// `auxVec_Add` 0x1e4f10 / `auxVec_Sub` 0x1e4f48 / `auxVec_AddMulR32` 0x1e4f98 [M]: the
+    /// lane-wise forms; the PS2 float ops are the port's `fpu_add`/`mul`.
+    #[test]
+    fn aux_vec_lane_ops() {
+        let a = [1.0, 2.0, 3.0];
+        let b = [0.5, -1.0, 4.0];
+        assert_eq!(aux_vec_add(a, b), [1.5, 1.0, 7.0], "c = a + b [M 0x1e4f10:5-7]");
+        assert_eq!(aux_vec_sub(a, b), [0.5, 3.0, -1.0], "c = a - b [M 0x1e4f48]");
+        // sister: the scale arm is a multiply, not an add (a wrong b+s would fail here)
+        assert_eq!(aux_vec_add_mul_r32(a, b, 2.0), [2.0, 0.0, 11.0], "c = a + b*2 [M 0x1e4f98]");
+    }
+}

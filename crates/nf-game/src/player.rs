@@ -872,6 +872,10 @@ impl Bond {
         // `build_LinkToRoom` 0x1c9680 order); `None` falls back to the flat world.
         let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS, false);
         // The pick-contact bit is measured but NOT gated into `grounded` (hatch-crouch-0c4):
+        // `Player_FeetOnPoint` 0x194188 registers the stand-on contact on the ridden object's
+        // `obj+0xD0` list through `Coll_AddHitToList` 0x1ede68 (dist forced 1.0, normal =
+        // CONSTANT_UP1, point = obj+0x40 [M 0x194188:138-150]) — the port tracks the ground
+        // object as the `ground_move` pair instead, no contact list [S].
         // `Player_FeetOnPoint` 0x194188's tail does ground on `HITTEST+0x9c != 0` alongside the
         // band [M 0x1943a8-0x1943bc], but the port's dot2 model — the bit needs
         // `pick_ref_y < b_pre_y` with `pick_ref` a lifetime push accumulator — is [S]: the
@@ -920,6 +924,10 @@ impl Bond {
 
     /// `Player_ClearInertia` 0x195e08 [M]: the four velocity triples (`BLData+0x10/+0x20/+0x30/+0x40`)
     /// zero. The port models +0x10 as `vel` and +0x14's push as `push_fwd`; `local` is +0x28's pair.
+    /// (Distinct from `Player_ClearAimInertia` 0x1a9790 — BLData+0x128/+0x12C, the aim-mode look
+    /// deltas, zeroed by `Player_Weapon` 0x1a24c8:185 and `Player_StandAtNewPosition` 0x190d88:75
+    /// [M]; the port applies those deltas directly each tick and stores nothing, so the clear is
+    /// a natural no-op — docs/GAPS.md.)
     fn clear_inertia(&mut self) {
         self.vel = [0.0; 3];
         self.local = [0.0; 2];
@@ -1651,6 +1659,10 @@ self.local = [vs / k, vf / k];
         self.land_delay = self.land_delay.saturating_sub(1);
         if self.jump != 0 && self.land_delay == 0 && self.grounded && self.vel[1] <= 0.0 { self.vel = [0.0; 3]; self.jump = 0; }
         if self.grounded && self.jump == 0 { self.vel[1] = 0.0; }
+        // `Player_PositionCamera` 0x18f5d8 (its viewer write is `Camera_Set` 0x1bbbf8 — the
+        // `View_RotTransMatrix` 0x1e5168 matrix into viewer+0x120, the rot copy to +0xE0, the
+        // pos copy to +0xC0, the byte +0x2B cleared [M 0x1bbbf8:5-16]): the port carries the
+        // same role as this eye/crouch-drop pair the view builds its camera from.
         // `Player_PositionCamera`: the crouch drop and the eye ease in.
         self.crouch_drop = if self.crouched { (self.crouch_drop + 0.0225).min(0.45) } else { (self.crouch_drop - 0.0225).max(0.0) };
         self.eye += (EYE - self.eye) * 0.1;

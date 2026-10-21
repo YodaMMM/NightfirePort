@@ -463,6 +463,9 @@ impl Profile {
 
     /// List the saved codenames in a profiles dir (the port's memory-card enumeration —
     /// `Menu_EnumSaves` 0x1f7b78's psiStartSaveEnum/psiGetNextSave walk, name < 0x21 chars).
+    /// The game's save-icon buffer registration — `SetUpIconFile` 0x111270 (the loader case 0xF
+    /// stores the buffer pointer and the 0x128F8-byte icon size [M 0x111270:4-8]) — has no port
+    /// path: the port's saves are plain files, no PS2 icon sys pipeline [S].
     pub fn list_dir(dir: &std::path::Path) -> Vec<String> {
         let mut out = Vec::new();
         if let Ok(rd) = std::fs::read_dir(dir) {

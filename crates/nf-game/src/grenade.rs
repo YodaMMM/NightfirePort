@@ -307,7 +307,7 @@ impl Grenade {
         // radius `max(0.25, obj+0x8C)` (the grenade family keeps the 0.25 floor, 0x3e800000; only
         // the MGL family 0x2c..0x31 / 0x62 / 0x6d zeroes it, :427-429):
         // - move < radius·0.5 → version 0x101: a one-sided sphere of that radius AT THE CURRENT
-        //   position (0x1e92d8 `Intersect_PointGeom` → `Dist2Tri` 0x1dfca8: the closest point on
+        //   position (0x1e92d8 `Intersect_PointGeom` → `Dist2Tri_PointGeom` 0x1dfac8: the closest point on
         //   the triangle wins, faces the centre is behind are skipped);
         // - move ≥ radius·0.5 → version 0x201: a ray of `max(1.0, move)` [M :443-465 —
         //   `uVar19 = max(1.0, fVar16)`], i.e. up to 1 u of look-ahead.
@@ -791,7 +791,7 @@ mod tests {
 
     /// satchel-stick2 [M `Bullet_update` 0x12e7b0:425-444 — the slow-move hittest is the 0x101
     /// sphere of radius max(0.25, obj+0x8C) AT THE CURRENT POSITION, `Intersect_PointGeom`
-    /// 0x1e92d8 + `Dist2Tri` 0x1dfca8; the satchel's 0.0667 u/tick throw [L ee_start_05.bin
+    /// 0x1e92d8 + `Dist2Tri_PointGeom` 0x1dfac8; the satchel's 0.0667 u/tick throw [L ee_start_05.bin
     /// weapon_data 0x3b +0x20] never leaves that form until gravity builds |v| past 0.125]: a
     /// satchel flying PARALLEL to a face within 0.25 u of it sticks on the first tick — there is
     /// no ray crossing to wait for. The old port ran a move-length ray and flew on (the playtest's

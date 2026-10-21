@@ -5,6 +5,10 @@
 //! then every frame the position of a playing 3-D sound; a one-shot dies when the driver no longer reports it playing
 //! (state 2 → remove → free), a looped one only by `Sound_Stop`. Per-sound volume and pitch are stored by the game but
 //! never reach the driver (it forces volume 100; pitch is never read) [M].
+//! The game's per-node volume write is `Sound_SetVolume` 0x1de190 (vol -> node+0x3C, the
+//! +0x4F dirty byte set, the still-playing read through `SFXIsSFXPlaying` [M 0x1de190:4-22];
+//! its only caller is `Script_Interp` 0x1d9a08:224's script op) — no port node keeps a
+//! volume field, so there is nothing to set [S].
 
 use crate::world::V3;
 use nf_formats::sfx::SfxTable;

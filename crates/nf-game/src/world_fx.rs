@@ -245,7 +245,9 @@ pub struct ApocalypseFx {
     pub placement: usize,
     /// param 0: the latch channel.
     pub channel: u16,
-    /// param 2: the rumble strength (the port has no rumble; carried for completeness).
+    /// param 2: the rumble strength (the port has no rumble; carried for completeness —
+    /// likewise `Input_RumblePause` 0x17f710, `SP_LoadScript` 0x1dbc08:20's stop-all-pads
+    /// call before the blocking load, is a no-op here [M 0x17f710:4-9]).
     pub rumble: u16,
     /// param 3 / param 4: the whiteout / flashbang flags.
     pub whiteout: bool,

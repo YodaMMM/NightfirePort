@@ -319,6 +319,7 @@ impl Trigger {
             // slot 8 keeps raw p8 and slots 9-11 are never touched. `Trigger_Create` copies 7 input ushorts from
             // slots 2..8 into ext+0x26..0x32 (ext+0x34 stays 0) and reads mask/lock/hide from slots 9/10/11
             // [M 0x1b1720:80-91 — the audit's correction of the port-map's "p1..p7 / p8 / p9 / p10" table].
+            // `Trigger_MultiplexOut` 0x1b2ed8 — the 0xEE placement wrapper [M 0x1b2ed8:11-28].
             _ => (q(0), q(9), (1..=6).map(&q).chain(std::iter::once(q(8))).collect(), q(10), q(11) != 0, 0, 0, 0, 0, 0),
         };
         // `Trigger_Create` defaults a zero mask to 2 (class-5 contacts) [M 0x1b1720:80-84].

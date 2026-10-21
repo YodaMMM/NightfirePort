@@ -62,7 +62,10 @@ pub mod state {
     pub const FADE: u8 = 0x48;
     pub const FADE_FAST: u8 = 0x49;
     /// The zero-G astronaut guards (`NDrone2_StateFuncs[0xBD..=0xC1]` @0x29B5F4 [L table read;
-    /// docs/fields/dronetype-tables.md:372-377]). DefaultInit skin kind 0x18 forces mode 0x1D and
+    /// docs/fields/dronetype-tables.md:372-377]). `NDrone2_DefaultInit` 0x14b300:36's
+    /// `control_init_collision` call is the EMPTY stub 0x134878 (`Player_Init` 0x1910f8:46
+    /// makes the same call [M 0x134878:3-7] — nothing to port).
+    /// DefaultInit skin kind 0x18 forces mode 0x1D and
     /// start state 0xBD [M 0x14b300:722-727]; DroneTypeSettings row 29 start = 0xBD [D :111].
     pub const ASTRONAUT_LAUNCH: u8 = 0xbd;
     /// `NDrone2_DSTATE_AstronautHit` (0x174690): the CombatMove flinch — knockback, no anim, a
@@ -1378,6 +1381,8 @@ impl Drone {
             skin, anim_set, weapon, pos, yaw, desired_yaw: yaw, aim_yaw: 0.0, alert, alert_floor: alert, props: normal, alert_props,
             sight_range: e8, half_fov: crate::trig::HALF_PI, engage_range: f0, combat_range: fc,
             // `drone_stats` for the guards' type is all zero at run time (07000005 snapshot) → defaults.
+            // (The lookup is `behaviour_util_getStats` 0x1c7e58 — `drone_stats + type·0x60 + kind·0x20`,
+            // driven by `NDrone2_DoModeSettingsNEW` 0x14c600:81; its word +8 is the health [M].)
             accuracy: 5, aggression: 0, reaction: 0,
             los: false, seen: false, ever_seen: false, visibility: 0.0, seen_ticks: 0, unseen_ticks: 0, vision_on: false,
             dist: 0.0, yaw_to_opp: 0.0,
@@ -9707,7 +9712,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.send(d, &mut self.rng, frame, msg::EXPLOSION);
             }
         }
-        // `Explode_Create` aligns the blast script to face the closest player before playing it:
+        // `Explode_Create` aligns the blast script to face the closest player before playing it
+        // (the game picks it with `control_ClosestPlayerPnt` 0x134880 — the 4 glb_players slots'
+        // `Vec_SqDist3D(pnt, player+0x30)` minimum, pos copied out [M 0x134880:5-40]; the port's
+        // single-player-context caller passes Bond's position directly):
         // dir = normalize(ClosestPlayerPnt − pos), `Mat_Align2Dir(script, dir, (0,1,0) @0x2d6210,
         // (1,0,0) @0x2d6220)` [M 0x17cbd0:69-75, :96]. The script's keyed light/sprite offsets are in
         // that frame, so the blast's light sits on the player's side of the hit surface. The port
