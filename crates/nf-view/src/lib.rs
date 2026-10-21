@@ -1875,9 +1875,13 @@ pub fn spot_movie_gates(state6: bool, intro_up: bool, attract_up: bool, looping:
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Blank { Always, WithFrame, Never }
 
-pub fn shot_hud(scene: &scene::Scene, aspect: f32, menu: Option<&gpu::HudFrame>) -> gpu::HudFrame {
+/// `movie_up`: a movie frame owns the screen — the scene's script overlay (fade / letterbox /
+/// flash) stays off it, the window redraw's rule (the game's movie loop draws nothing of the
+/// scene over the movie). Without the gate the idle scene behind the boot movies held
+/// `Player_Init`'s entry fade at full black over every boot/briefing movie (2026-10-20).
+pub fn shot_hud(scene: &scene::Scene, aspect: f32, menu: Option<&gpu::HudFrame>, movie_up: bool) -> gpu::HudFrame {
     let mut f = menu.map_or_else(|| overlay_for(scene, aspect), |m| m.clone());
-    f.append(&scene.script_overlay_hud(aspect));
+    if !movie_up { f.append(&scene.script_overlay_hud(aspect)); }
     f
 }
 
@@ -2246,7 +2250,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let depth = gpu::depth_view(&device, w, h);
     let (vp, vp_rot) = cam.view_proj(proj_aspect);
     let snow = snow_for(scene, cam);
-    let hud_owned = shot_hud(scene, proj_aspect, menu);
+    let hud_owned = shot_hud(scene, proj_aspect, menu, movie.is_some());
     let hud = &hud_owned;
     let movie_arg = movie.map(|(w, h, rgba)| (*w, *h, rgba.as_slice()));
     r.set_shards(&queue, &scene.shard_draws());
@@ -5221,7 +5225,14 @@ impl App {
                 } else { overlay_for(&self.scene, aspect) };
                 if let Some(d) = self.dev.as_deref() { if d.overlay || d.menu { hud.append(&dev::hud(d, &self.scene, aspect, vp)); } }
                 if self.fps_meter.shown > 0.0 { hud.append(&dev::fps_counter_hud(&self.scene, aspect, self.fps_meter.shown)); }
-                hud.append(&self.scene.script_overlay_hud(aspect));
+                // The scene's script overlay (the view fade / letterbox / flash) belongs to the 3D
+                // frame. While a movie frame is up the movie owns the screen — the game's movie loop
+                // renders nothing of the scene over it [docs/systems/movies.md]. Since
+                // doublecross-transitions chained `Player_Init`'s entry fade into this overlay, the
+                // idle scene behind the boot movies held that fade at full black (45/45 — it only
+                // counts down while the sim ticks) and blacked out every boot/briefing movie
+                // (user report 2026-10-20: "movies arent visually there … I can hear the audio").
+                if movie_frame.is_none() { hud.append(&self.scene.script_overlay_hud(aspect)); } // `shot_hud`'s movie rule
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
                 let fp_enc = std::time::Instant::now();
