@@ -198,10 +198,17 @@ impl MpBodyAnim {
     }
 
     /// `AnimScriptAppend` + `AnimScriptInit` 0x1c1600: time 1, speed 1, fade in, blend clock =
-    /// length = 1.0 (full weight at once), a new stamp.
+    /// length = 1.0 (full weight at once), a new stamp. (`AnimScriptNew` 0x1c1398 — the node
+    /// allocation behind every Append/Add/Blend: the 0xc0 node, the `0x159f5ab2` canary at +0x40,
+    /// the +0x44/+0x48 list link and the +0x50/+0x54 seq slots — has no separate port form: this
+    /// `Layer` push IS that node, in list order; the seq slots resolve by hash at pose time.)
     fn append(&mut self, kind: LayerKind, speed: f32, lens: &dyn Fn(u32) -> Option<(u16, bool)>, force_loop: bool, tagged: bool) -> u32 {
         let id = match kind { LayerKind::Idle(s) | LayerKind::Strafe(s) | LayerKind::OneShot(s) => s, LayerKind::Walk { walk, .. } => walk };
         let (len, lp) = lens(id).unwrap_or((1, false));
+        // `AnimTagGetUnique` (0x1c77c0, called by `AnimSetAppend` 0x1c07b8): returns the tag counter then
+        // increments it, skipping 0 (`if AnimTagTimeStamp == 0: = 1`). The game's level reset seeds it to
+        // 0x80000001 (AnimPreLoadInit); the port starts `next_stamp` at 1 on the fresh per-load store —
+        // the same monotonic order the +0x84 stamp field carries and the layer walk relies on.
         let stamp = self.next_stamp;
         self.next_stamp = self.next_stamp.wrapping_add(1).max(1);
         self.layers.push(Layer {
@@ -366,6 +373,13 @@ impl MpBodyAnim {
     }
 
     /// `AnimFrameResolve` 0x1c35f8's weight pass and the faded-out deletes.
+    /// (`AnimScriptDelete` 0x1c14f0 — the unlink-and-free of one script node that `AnimSetUpdate`,
+    /// `AnimScriptTick`, `AnimFrameResolve`, `AnimSetDeleteAll`, `AnimListDelete` and the Add/Append
+    /// family all reach — is this `retain`: a layer whose fade clock ran out is dropped. The game also
+    /// fires the node's +0x68 OnStop callback and clears the +0x64 backref — no port equivalent: the
+    /// shipped game's only OnStop setter call (`DroneAnim_SetHTAnim` 0x13b1c8) writes NULL, and the
+    /// `Glb_bScriptDeleted` reentrancy flag is structurally unreachable (nothing is ticked inside its
+    /// own delete here). The `0x983c4837` freed-marker write at +0x40 is Rust ownership.)
     fn resolve(&mut self) {
         for l in self.layers.iter_mut() {
             if l.manual.is_some() { continue; }

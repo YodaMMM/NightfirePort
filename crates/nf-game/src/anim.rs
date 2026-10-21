@@ -62,6 +62,9 @@ pub fn root_translation_at(seq: &Sequence, frame: f32) -> [f32; 3] {
 /// quintic samples), components masked by `axis_mask` bits 0/1/2 = x/y/z; a segment under 1e-05 becomes 0.01
 /// [M 001c4060: `fVar8 = 1e-05`, `if fVar7 < fVar8 → 0.01`]. The walk sets build z-only tables (axis mask 4,
 /// `AnimDistanceTableGet` 0x1c76f0) with `looping` set [M AnimSeqSet 0x1c7460 attaches the table to seq+0x80].
+/// (`AnimDistanceTableInit` 0x1c76e8 — called only from `AnimPreLoadInit` 0x1c63b8 — clears the game's global
+/// `nDistanceTables` counter on level load; the port builds tables lazily per sequence below, so there is no
+/// registry to reset — the fresh-per-load model covers it.)
 pub struct DistanceTable {
     pub total: f32,
     pub segments: u32,
@@ -448,7 +451,9 @@ fn sequence_pose_n_with(seq: &Sequence, frame: f32, bones: usize, sample: &mut d
 }
 
 /// A script that is fading out (`AnimScriptAppendBlend`: fade −1, flags 0x500000): it keeps playing while its blend
-/// clock runs down; weight = clock / length.
+/// clock runs down; weight = clock / length. `AnimScriptCallOnStop` (0x1c7200) stores the game's +0x6c stop
+/// callback on that node — the port has no stop callbacks: the shipped game's only setter call
+/// (`DroneAnim_SetHTAnim` 0x13b1c8) writes NULL, and `AnimScriptDelete` 0x1c14f0's invoke is null-checked.
 #[derive(Clone, Debug)]
 pub struct Outgoing {
     pub script: u32,
@@ -642,6 +647,10 @@ fn script_frame_of(seq: &Sequence, time: f32) -> Option<(u32, f32)> {
 /// +0x98 writes indices 11 and 12 the same way, each guarded by the same 0.01 threshold
 /// (0.003921569 = 1/255). Under a script camera (`ScriptCam != 0`) only slot 2 applies, as a
 /// straight copy. `out` = the object's morph weight array (animData+0xb0, `count` floats).
+/// (`AnimFacialAppend` 0x1c6490 is the game's slot-2 feeder — it appends the talk script via
+/// `AnimScriptAppend` with marker 0xe0000002, stop-at-end +0xb5 = 3, and sets the anim object's
+/// speaking byte +0x109 = 2. The port's slot-2 consumer is this `slot2` parameter, but no
+/// gameplay append fills it: `Drones::speech` skips facial lines — see the note there.)
 pub fn facial_blend(out: &mut [f32], slot0: Option<&[f32]>, slot1: Option<&[f32]>, slot2: Option<&[f32]>, eyes: [u8; 2], script_cam: bool) {
     if script_cam {
         if let Some(s2) = slot2 {

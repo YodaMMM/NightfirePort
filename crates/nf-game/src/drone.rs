@@ -1937,11 +1937,23 @@ impl Drone {
     /// `old_turn`: the replaced danim is a 180° turn (info flag 0x100, `+0x574`) not yet at its end — `SetHTAnim` then
     /// freezes it (speed 0), fades it over 30 frames in anim rotation, and leaves the turn it had made (`+0x54C` = its
     /// root yaw) for `SnapRotate`: the yaw takes the turn and the fading pose loses it.
+    /// (`AnimScriptSetAnimRotation` 0x1c7208 — the game's setter of that anim-rotation state, called by
+    /// `DroneAnim_SetHTAnim` 0x13b1c8 / `DroneAnim_SnapRotate` 0x13e198 — sets +0xa0 = 8.0 and +0x78 |= 0x20000 on
+    /// the fading script: its root yaw is moved into the object. The port carries the flag's effect directly as
+    /// `Outgoing::unyaw`, taken from the old root here and applied to the fading pose in `local_pose` —
+    /// no bitfield, no +0xa0 time-scale field. The param-0 clear arm has no port path: nothing re-enables
+    /// rotation-carrying on a live script.)
     fn begin_blend(&mut self, d: &Data, blend: u16, old_turn: bool) {
         if blend == 0 || !self.drawn { self.anim.outgoing.clear(); return; }
         for o in &mut self.anim.outgoing { o.clock = 8.0; o.length = 8.0; }
         if let Some(s) = self.anim.script {
             let looping = !(self.anim.once || self.anim.held);
+            // `AnimScriptNew` (0x1c1398) allocates the 0xc0 script node (`0x159f5ab2` canary at +0x40), links it
+            // into the object's +0x44/+0x48 script list and creates its +0x50 (body) / +0x54 (facial, only when
+            // the skeleton byte +0x2e is set) seq slots; `AnimScriptAppend` 0x1c7000 / `AnimScriptAppendBlend`
+            // 0x1c17c0 then init it (`AnimScriptInit` 0x1c1600). This `Outgoing` push is that node: the +0x44/+0x48
+            // list is `anim.outgoing` in push order, the seq slots resolve by hash at pose time, the canary and
+            // the malloc-failure path (the game's `AnimSeqDelete` cleanup) have nothing to manage in Rust.
             let mut o = crate::anim::Outgoing { script: s, time: 1.0 + self.anim.ftime, speed: self.anim.speed, looping, clock: blend as f32, length: blend as f32, unyaw: 0.0 };
             if old_turn {
                 let yaw = self.local_pose(d).and_then(|p| p.first().map(|r| crate::anim::root_yaw(r.1))).unwrap_or(0.0);
@@ -2200,6 +2212,11 @@ impl Drone {
     /// `AnimObjectUpdate` → `Effect_Create(floor hit, 0x42 | foot)`: the floor surface's footstep sound; footprints
     /// not ported), event 3 `Sound_StopAllWithId(arg)` [M `AnimProcessScriptCmds` 0x1c1b38; the walk scripts carry
     /// events 4 / 5, e.g. 0600025A frames 19 / 57].
+    /// (The game dispatches op 4 through the script's +0x70 OnEvent pointer, which `AnimScriptCallOnEvent` 0x1c71f8
+    /// stores — and its +0x6c OnStop sibling via `AnimScriptCallOnStop` 0x1c7200. `DroneAnim_SetHTAnim` 0x13b1c8,
+    /// the shipped game's only caller of both setters, writes NULL to both slots, so the pointer mechanism is
+    /// write-only-clear there; the port inlines the dispatch as this command match feeding `event_func`
+    /// (`DroneAnim_EventFunc` 0x13b750) and has no stop-callback slot — see `anim::Outgoing`.)
     fn script_commands(&mut self, d: &Data, from: u32, to: u32, wrapped: bool) {
         let Some(script) = self.anim.script.and_then(|h| d.scripts.get(&h)) else { return };
         let len = script.length as u32;
@@ -8910,6 +8927,11 @@ impl crate::nis::World for Data<'_> {
 impl Data<'_> {
     /// An animated script object's discrete objects (the skin's rigid parts): glist hash and world matrix. The root
     /// keeps its translation: the object sits at the origin and follows it (`Script_AnimStart`).
+    /// (`AnimGetNDiscreteObj` 0x1c66b8, the game's getter used by `Script_GetInterp` 0x1da158, returns
+    /// obj->anim(+0xdc)->discrete[i] from the +0xc0 array, bounds-checked against the skeleton's discrete count
+    /// (+0x94+0x2d) and 0 on any failure. The port computes the skin's rigid parts on demand at the script's frame
+    /// instead of storing per-object pointers: the bone `.get()` filter below is that bounds check and an empty
+    /// vec is the failure case; the consumers are `World::discrete0` / the per-tick `script_parts` rebuild.)
     pub fn discrete_parts(&self, skin: u32, script: u32, frame: f32) -> Vec<(u32, nf_formats::anim::Mat4)> {
         let pose = || -> Option<Vec<(u32, nf_formats::anim::Mat4)>> {
             let sk = self.skins.get(&skin)?;
@@ -10605,6 +10627,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// for the first 30 frames (`DronePostLoadFrame`), the line's repeat delay (global per line), no direct play for a
     /// line with a facial anim, a non-forced line refused while one is referenced; the line is stamped, played at the
     /// drone (`Sound_Play3D`: heard and entered for the AI) and becomes the drone's current line (`+0x4D0`).
+    /// (The game's FACIAL branch for a line with a loaded facial script — `AnimScriptPeekSfx` 0x1c6ca8 for the
+    /// script's own op-1 sfx → SFXPreCache + a T+20 pending append via +0x4c/+0x37/+0x48, else
+    /// `AnimFacialAppend` 0x1c6490 appends the mouth-flap script at once into +0x53c, per docs/systems/speech.md
+    /// §1.3–1.4 — is NOT ported: this loop skips `l.facial != 0` lines, so those lines are silent here. On the
+    /// port's tested level 07000005 no facial scripts load, and the game's own fallback (hashtable miss clears
+    /// `facialAnimId` to 0, permanent) then plays the line directly — the skip stands in for the whole path [S].)
     fn speech(&mut self, d: &Data, index: usize, talks: Vec<(usize, bool)>, frame: u32) {
         let Some(lines) = d.voices else { return };
         if self.voice_last.len() < lines.len() { self.voice_last.resize(lines.len(), None); }
@@ -12753,6 +12781,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // `los` (+0x228 & 2) not `seen` (& 4): `DroneVision_HaveOpponentSight` sets the seen bit
                 // only past the reaction time, and the game's head tracking follows Bond from the first
                 // sight pass (`DoHeadTrackingBehaviour`'s +0x228 & 8 path) — the pre-attack window.
+                // `AnimObjectSetHeadTracking` 0x1c6748 (from `NDrone2_DoHeadTracking` 0x1472c8) writes this
+                // state: target → animobj+0x70 (+0xE0 pointer), range² → +0xE8, the 0x10 flag at +0xC8 on,
+                // the target-is-object bits 0x40/0x50 and bone byte +0x104, and the re-decide timer
+                // (mode 1: Rand(FR/4)+FR/10 → +0x106; DoHeadTracking's path re-arms +0x358 Rand(5)+2).
+                // `tracking` here = the +0xC8 0x10 flag, `track_recheck` = the re-decide timer, the
+                // range² 3.0² below = +0xE8; the target is Bond's eye (the game tracks an object ptr +
+                // bone 5). Not modelled: the +0x106 random snap-delay draw and the 0x40 target-is-object
+                // byte (HeadTrackObj 0x14ada0's arbitrary-target form is unported).
                 if !dr.tracking {
                     dr.tracking = true;
                     dr.track_recheck = frame + rng.rand(5) as u32 + 2; // (Rand(5)+2)·FR·FR_DIV

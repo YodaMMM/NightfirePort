@@ -715,6 +715,12 @@ impl Script {
     /// `Script_KillStream` (0x1d9860): an entity, animated object, sprite or light is deleted unless the script
     /// keeps its objects (flag 0x10: only detached — the light's case 6 keeps the object and just clears the
     /// kind [M 0x1d9860:104-113]); a camera pops back (Music_Event(0xC)); a sub-script is freed.
+    /// (`AnimObjectDelete` 0x1bee80 — the game's anim-side teardown behind `control_delete_object` 0x133178 and
+    /// `Player_SetWeaponAnim` 0x1a9338: `AnimSetDeleteAll` + `AnimListBuild`/`AnimListDelete`, a
+    /// `control_delete_object` per discrete-object entry at anim+0xc0, the five track arrays +0xac..+0xbc
+    /// `Mem_Free`d, then obj+0xdc itself — has no port form: `Obj::Anim` is a value dropped by `objs.list[o] =
+    /// None` here, and the discrete parts are computed on demand per tick (`drone.rs` `script_parts`), so
+    /// there is nothing to free.)
     fn kill(&mut self, i: usize, subs: &mut Vec<Option<Script>>, objs: &mut Objects) {
         let keep = self.flags & 0x10 != 0;
         let s = &mut self.streams[i];
