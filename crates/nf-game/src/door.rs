@@ -247,16 +247,9 @@ impl Door {
     pub fn live_sph(&self) -> (V3, f32) { (transform(&self.matrix, self.sph_centre), self.sph.1) }
 }
 
-/// `control_init_object_lists` 0x134388, `Coll_ResetHitHeap` 0x1edda0, `Sensor_Init` 0x1b0868,
-/// `Drone_PreLoad_Init` 0x136888, `Copter_Init` 0x17e4f0, `InitShards` 0x12bed0,
-/// linked list with the same insert-at-head/order semantics, without the manual nodes.
-/// `control_init_object_lists` 0x134388, `Coll_ResetHitHeap` 0x1edda0, `Sensor_Init` 0x1b0868,
-/// `Drone_PreLoad_Init` 0x136888, `Copter_Init` 0x17e4f0, `InitShards` 0x12bed0,
-/// linked list with the same insert-at-head/order semantics, without the manual nodes.
 /// All doors of a level, in placement (creation) order.
 #[derive(Clone, Debug)]
-pub struct Doors
- {
+pub struct Doors {
     pub list: Vec<Door>,
     /// `DoorGroupsStates` (0xca bytes, cleared by `Doors_Calc` each frame): per group, the OR of the states.
     pub group_states: [u16; 101],
