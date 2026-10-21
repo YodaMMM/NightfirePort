@@ -181,7 +181,9 @@ impl MenuDef {
                     }
                 }
                 -0x09 => {
-                    // SCRIPT {id, flags}
+                    // SCRIPT {id, flags} — `Script_AddScript` 0x220fb0: find-or-create the
+                    // M_SCRIPT with this id and make it current; the parser records the same
+                    // {id, flags} pair for the runtime `play_script`/`select_script` lookup.
                     let id = p.dword();
                     let flags = p.dword();
                     if let (Some(pg), Some(ct)) = (page, ctrl) {
@@ -267,6 +269,9 @@ impl MenuDef {
                 }
                 -0x0c => {
                     // KMSG {target, id, a, b} — attaches to the CURRENT keyframe
+                    // (= `Script_AddMessage` 0x221198, sole caller MenuManager_Create
+                    // 0x21b908:216; dropped when no keyframe is current, which this guard
+                    // models with `kf = None`) [M].
                     let target = p.dword() as i32;
                     let id = p.byte();
                     let a = p.dword();
@@ -380,6 +385,16 @@ pub struct ControlDef {
     pub defaults: [Option<u32>; 6],
 }
 
+/// One control script — the game's `M_SCRIPT` record (0x20 bytes: link, keyframe list,
+/// id, flags) built by `Script_AddScript` 0x220fb0 during `MenuManager_Create` 0x21b908
+/// (BIN tag −0x09) and freed by `Script_DelScript` 0x221068 on widget destroy. The port
+/// keeps the same records in this `Vec` and drops them with the page — which is the
+/// whole job of the game's destroy chain `Script_DelAllScripts` 0x220f30 (zeroes
+/// control+0x38/+0x3c, frees every script) → `Script_DelKeyFrame` 0x221100 (frees each
+/// keyframe's message list) → `Script_DelMessage` 0x221210 (unlink + free), reached from
+/// every widget's SendMessage case 0x47 (e.g. Label 0x218890:175, Spin 0x2226d8:92)
+/// when a page closes [M]. `Script_AddMessage` 0x221198 is the game's KMSG attach
+/// (malloc 0x18, copy, list-add to the current keyframe) — the −0x0c tag below.
 #[derive(Debug, Default, Clone)]
 pub struct ScriptDef {
     pub id: u32,

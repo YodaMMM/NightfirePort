@@ -1249,6 +1249,12 @@ pub struct Drone {
     /// 8/0x10 = which side (the decomp drops the ATAN2 store, so the side sign is [*suggested*];
     /// bit 2 is sign-independent). Read at the top of `DroneAnim_SetCombatMoveAnim` (0x13cfb0:35:
     /// bit 2 → state 0x5E instead of a move anim) and in the strafe selection (:78/:247/:281).
+    /// The game measures "obstacle" with the swept-sphere test `SphereSphereSweep` 0x14e5b8
+    /// (sole caller `EvaluateObstacle` 0x14e6f0:94; solves the quadratic for the first/last
+    /// overlap times of the drone's swept sphere vs the obstacle's, out t0/t1 [M
+    /// 0014e5b8:46-61]) — the port's sqDist scan keeps the same gate (radius sum 3.0 = the
+    /// same 9.0 threshold) without the sweep timing, which only matters for fast crossers
+    /// ([S] unverified simplification).
     pub no_bunching: u32,
     pub alpha: f32,
     /// A switch channel to raise after the drone's update (`SetDeathChannel`).
