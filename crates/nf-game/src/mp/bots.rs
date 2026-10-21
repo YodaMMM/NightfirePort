@@ -3914,7 +3914,8 @@ impl BotBrain {
 /// `DroneAnim_CanDoAnimState(8/0xf)`. Returns the anim state id: 0x1e run, 8 walk, 0xf strafe-walk,
 /// 10 stop-walk [M 0x1512e0:14-90]:
 /// 1. start 0x1e; class 0x1e starts 8, kept only when `can_do_8` [M :15-23];
-/// 2. not turning: `speed * 1.5 <= dist_opp` keeps it, else prop 1 + (prop 2 or `can_do_8`) → 8
+/// 2. not turning: `speed * 1.5 <= dist_opp` keeps it, else prop 1 + prop 2 CLEAR + `can_do_8` → 8 (prop 2 set blocks
+///    the walk: `getProperty(2) == 0` is what reaches `CanDoAnimState(8)` [M :38-44])
 ///    [M :25-51];
 /// 3. turning and `dist_move < speed * 0.5` → 10 [M :52-54];
 /// 4. turning else: `dist_opp >= speed` falls to arm 2's near-walk try; `(prop 0 or prop 2)` +
@@ -3940,7 +3941,7 @@ pub fn anim_for_dist(
         anim = 8;
     }
     if !turning {
-        if speed * 1.5 > dist_opp && prop1 && (prop2 || can_do_8) {
+        if speed * 1.5 > dist_opp && prop1 && !prop2 && can_do_8 {
             anim = 8;
         }
     } else if dist_move < speed * 0.5 {
@@ -3948,10 +3949,10 @@ pub fn anim_for_dist(
     } else if dist_opp < speed {
         if (prop0 || prop2) && can_do_f {
             anim = 0xf;
-        } else if speed * 1.5 > dist_opp && prop1 && (prop2 || can_do_8) {
+        } else if speed * 1.5 > dist_opp && prop1 && !prop2 && can_do_8 {
             anim = 8;
         }
-    } else if speed * 1.5 > dist_opp && prop1 && (prop2 || can_do_8) {
+    } else if speed * 1.5 > dist_opp && prop1 && !prop2 && can_do_8 {
         anim = 8;
     }
     anim
@@ -3973,8 +3974,8 @@ mod tests {
         assert_eq!(anim_for_dist(0, false, false, false, 0.0, 4.0, 6.0, 6.0, false, false, false), 0x1e);
         // Sister: just under 1.5·speed without prop 1 still runs (the walk arm's prop gate) [M :32-45].
         assert_eq!(anim_for_dist(0, false, false, false, 0.0, 4.0, 5.9, 6.0, false, false, false), 0x1e);
-        // Sister: the same near shape with prop 1 + prop 2 walks (8) [M :32-50].
-        assert_eq!(anim_for_dist(0, false, false, false, 0.0, 4.0, 5.9, 6.0, false, true, true), 8);
+        // Sister: the same near shape with prop 1 + prop 2 still runs — prop 2 set skips the walk [M :38-46].
+        assert_eq!(anim_for_dist(0, true, false, false, 0.0, 4.0, 5.9, 6.0, false, true, true), 0x1e);
         // Near, prop 1 without prop 2 but can_do(8) → 8 [M :38-44].
         assert_eq!(anim_for_dist(0, true, false, false, 0.0, 4.0, 5.9, 6.0, false, true, false), 8);
         // Turning, dist_move < 0.5·speed → the stop-walk 10 [M :52-54].
@@ -3984,10 +3985,10 @@ mod tests {
         assert_eq!(anim_for_dist(0, false, true, true, 0.0, 4.0, 3.0, 2.0, true, false, false), 0xf);
         // Turning, dist_opp < speed, prop 0 + can_do(0xf) → strafe-walk 0xf [M :60-77].
         assert_eq!(anim_for_dist(0, false, true, true, 0.0, 4.0, 3.0, 3.0, true, false, false), 0xf);
-        // Turning, dist_opp ≥ speed → the near-walk try: far keeps the run, near with prop 1 walks
+        // Turning, dist_opp ≥ speed → the near-walk try: far keeps the run, near with prop 1 (prop 2 clear, can_do 8) walks
         // [M :56-57 → 0x1513d4 → :28-50].
         assert_eq!(anim_for_dist(0, false, false, true, 0.0, 4.0, 6.0, 3.0, false, true, true), 0x1e);
-        assert_eq!(anim_for_dist(0, false, false, true, 0.0, 4.0, 5.9, 3.0, false, true, true), 8);
+        assert_eq!(anim_for_dist(0, true, false, true, 0.0, 4.0, 5.9, 3.0, false, true, false), 8);
         // Class 0x1e starts at 8 when can_do(8), else the run [M :15-23] (far, so no later arm fires).
         assert_eq!(anim_for_dist(0x1e, true, false, false, 0.0, 4.0, 6.0, 6.0, false, false, false), 8);
         assert_eq!(anim_for_dist(0x1e, false, false, false, 0.0, 4.0, 6.0, 6.0, false, false, false), 0x1e);
