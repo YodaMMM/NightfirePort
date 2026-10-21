@@ -303,7 +303,10 @@ impl MenuDef {
                     }
                 }
                 -0x03 => {
-                    // SET (u16) — a sprite set begins; the game's Component_AddSet
+                    // SET (u16) — a sprite set begins; the game's Component_AddSet (0x1f1060). The
+              // engine's allocations are tagged Menu_Malloc 0x1f3008 (Mem_Malloc(size, 0x3104, 0))
+              // / Menu_Free 0x1f3028 — this port's Vec storage is that job (see
+              // nf-view/src/menu_engine.rs MENU_MALLOC_TAG);
                     let _n = p.word();
                     if let Some(pg) = page {
                         def.pages[pg].sets.push(SpriteSet::default());
