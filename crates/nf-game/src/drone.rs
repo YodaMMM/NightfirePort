@@ -688,6 +688,40 @@ pub struct Animator {
     pub len_cap: Option<u32>,
 }
 
+/// `DroneWeap_GetWeaponInfo` 0x17a5a0's outputs: the held weapon's model datum byte
+/// (`AnimDatumGetWeaponInfo` 0x1c7900: weapon byte → weapon_data `+0x50`), the shot sound id
+/// (weapon_data `+0x60`, `0 → 0xFFFF` [M 0x17a5a0 0x17a618-0x17a630]) and the weapon bone's world
+/// transform (`AnimGetBoneWorldTrans(obj, datum, 1)` 0x1c3120): `muzzle` = the matrix's translation
+/// row [M 0x1c3120:132-136], `dir` = −(row 0), the bone's world −X axis [M 0x17a5a0 0x17a664-0x17a6b8].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WeaponInfo {
+    pub datum: u8,
+    pub sound: u16,
+    pub muzzle: V3,
+    pub dir: V3,
+}
+
+/// `DroneFunc_ClampPosToCollisionCylinder` 0x1499d0: pull `p`'s x/z into the 0.4-radius cylinder
+/// around `pos` (the obj position, `obj+0x30`), y kept — only when |d_xz| > 0.4 (0x3ecccccd) [M
+/// 0x1499d0:36-43]; the game normalises then scales by 0.4 (Vec_Normalise, Vec_MulR32).
+fn clamp_to_collision_cylinder(pos: V3, p: V3) -> V3 {
+    let (dx, dz) = (p[0] - pos[0], p[2] - pos[2]);
+    let len = (dx * dx + dz * dz).sqrt();
+    if len > 0.4 {
+        let inv = 1.0 / len;
+        return [pos[0] + dx * inv * 0.4, p[1], pos[2] + dz * inv * 0.4];
+    }
+    p
+}
+
+/// `DroneVision_GunThroughWall` 0x178520's ray [M 0x178520:43-51]: the muzzle clamped into the obj's
+/// collision cylinder is the start, the raw muzzle the end; any hit (`Collide_RayIntersect`, the
+/// port's segment sets [S]) = the gun is buried in geometry.
+pub fn muzzle_through_wall(world: &CollisionWorld, pos: V3, muzzle: V3) -> bool {
+    let start = clamp_to_collision_cylinder(pos, muzzle);
+    !world.segment_clear(start, muzzle)
+}
+
 #[derive(Clone, Debug)]
 pub struct Drone {
     pub skin: u32,
@@ -1403,6 +1437,10 @@ pub struct Drone {
     pub hostage_target: Option<usize>,
     /// The killer's pairing search ran once for this capture (the game's ENTER runs it once).
     pub killer_searched: bool,
+    /// `Drone+0x1e` — the gun-through-wall flag: `DroneVision_SeekOpponentLOS` 0x175cb8:77-79 refreshes
+    /// it on every sight tick while aiming (`DroneVision_GunThroughWall` 0x178520), and the combat
+    /// fire requests are gated on `+0x3b = !+0x1e` (see `gun_through_wall`).
+    pub gun_through_wall: bool,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1619,6 +1657,8 @@ impl Drone {
             // BodyGlow_Create 0x1ac158 — every guard spawn glows on the shipped path (the
             // switch_NO_DRONES gate is 0 in every shipped level [M 0x1ac158:9]).
             body_glow: crate::body_glow::create(0, false),
+            // Drone+0x1e — the gun-through-wall flag (SeekOpponentLOS refreshes it on sight ticks).
+            gun_through_wall: false,
         };
         dr.init_properties(d, &param);
         // `DroneInit_Collision` 0x14b1e8 (DefaultInit 0x14b300:775): not MP, `+0xBD4`/`+0x23` clear,
@@ -6601,7 +6641,8 @@ impl Drone {
                     self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
                 } else {
                     self.call_anim(d, anim_state::AIM_STAND, 0, 0);
-                    self.fire(d, rng, frame, true);
+                    // The fire request rides `+0x3b = !gun_through_wall` [M 0x164960:40-46].
+                    if !self.gun_through_wall { self.fire(d, rng, frame, true); }
                 }
                 true
             }
@@ -6637,7 +6678,12 @@ impl Drone {
                     }
                     return true;
                 }
-                match self.combat_state(d, rng, frame, AIM_STAND_FIRE) { 0 => self.fire(d, rng, frame, true), n => self.set_state(n) }
+                // The UPDATE fire request rides `+0x3b = !gun_through_wall` [M 0x166328:141-147] —
+                // a wall-buried muzzle aims (the anim ran above) but does not fire.
+                match self.combat_state(d, rng, frame, AIM_STAND_FIRE) {
+                    0 => if !self.gun_through_wall { self.fire(d, rng, frame, true) },
+                    n => self.set_state(n),
+                }
                 true
             }
             (AIM_STAND_FIRE | AIM_CROUCH_FIRE, msg::TIMER_C) => { self.fire(d, rng, frame, true); true }
@@ -6690,7 +6736,8 @@ impl Drone {
                 if self.firing && !self.burst_done { return true; }
                 if frame < self.entered + 60 { return true; }
                 match self.combat_state(d, rng, frame, AIM_CROUCH_FIRE) {
-                    0 => if self.clip > 0 { self.fire(d, rng, frame, true) } else { self.set_state(AIM_CROUCH_RELOAD) },
+                    // The UPDATE fire request rides `+0x3b = !gun_through_wall` [M 0x167060:92-99].
+                    0 => if self.clip > 0 { if !self.gun_through_wall { self.fire(d, rng, frame, true) } } else { self.set_state(AIM_CROUCH_RELOAD) },
                     n => self.set_state(n),
                 }
                 true
@@ -8547,9 +8594,12 @@ impl Drone {
     }
 
     /// `NDrone2_SetAngleToObj(opponent)`, then aim (anim 0xA, firing while visible) or look about (0x21).
+    /// The fire request is `+0x3b = !gun_through_wall (+0x1e)` in the game's seen arms — CombatNoRoute
+    /// 0x164c08:63-73, GoToGoalPosition 0x165640:101-107, RunForCover 0x169150:88-94 — so a guard whose
+    /// gun is buried in a wall aims but does not fire.
     fn face_and_aim(&mut self, d: &Data) {
         self.desired_yaw = self.yaw_to_opp;
-        if self.seen { self.firing = true; self.call_anim(d, anim_state::AIM_STAND, 0, 0) } else { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0) }
+        if self.seen && !self.gun_through_wall { self.firing = true; self.call_anim(d, anim_state::AIM_STAND, 0, 0) } else { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0) }
     }
 
     /// `DroneAnim_InTransition` (0x13e3b0): the playing danim's class is above 3 and not 8.
@@ -8866,23 +8916,78 @@ impl Drone {
         bullet
     }
 
+    /// `AnimGetBoneWorldTrans` 0x1c3120 (the weapon-datum form the port's pose pipeline mirrors): the
+    /// skin datum `datum + 1` (the bone key = `(index & 0x7fffffff) + extra` [M 0x1c3120:120]) over the
+    /// blended palette (`psiBuildMatrixPalette` [M 0x1c3120:72], behind the same `+0xC8 & 1` live gate
+    /// the game checks [M 0x1c3120:71] — the port's `palette()` None). Row 3 = the world position
+    /// [M 0x1c3120:132-136].
+    fn weapon_bone_world(&self, d: &Data, datum: u8) -> Option<nf_formats::anim::Mat4> {
+        let skin = d.skins.get(&self.skin)?;
+        let dt = skin.datums.iter().find(|x| x.id == datum as u32 + 1 && x.bone >= 0)?;
+        let pal = self.palette(d)?;
+        Some(nf_formats::anim::mul(&nf_formats::anim::quat_trans_to_mat(dt.q, dt.t), pal.get(dt.bone as usize)?))
+    }
+
+    /// `DroneWeap_GetWeaponInfo` 0x17a5a0 (+ its resolver `AnimDatumGetWeaponInfo` 0x1c7900): the held
+    /// weapon's model datum, shot sound and the weapon bone's world transform. Fails when the weapon
+    /// byte ≥ 0x73 [M 0x1c7900:11], the `+0x50` datum byte is 0xFF (the game's −1 → return 0
+    /// [M 0x1c7900:23-25 → 0x17a5a0 `if (-1 < index)`]) or the pose is not live. The sound id
+    /// (weapon_data `+0x60`) gets GetWeaponInfo's `0 → 0xFFFF` fixup [M 0x17a5a0 0x17a618-0x17a630];
+    /// `muzzle` = the world matrix's translation row [M 0x1c3120:132-136]; `dir` = −(row 0) —
+    /// GetWeaponInfo's VU0 block transforms (−1, 0, 0, 1) (the row-scaled accumulation
+    /// `_vmulabc/_vmaddabc/_vmaddbc` with vf00.w = 1 [M 0x17a5a0 0x17a664-0x17a68c]) and subtracts the
+    /// position [M 0x17a5a0 0x17a68c-0x17a6b8], leaving −(row 0), i.e. the muzzle bone's world −X axis.
+    pub fn weapon_info(&self, d: &Data) -> Option<WeaponInfo> {
+        if self.weapon >= 0x73 { return None; }
+        let r = d.weapons.records.get(self.weapon as usize)?;
+        let datum = r[0x50];
+        if datum == 0xff { return None; }
+        let m = self.weapon_bone_world(d, datum)?;
+        let sound = u16::from_le_bytes([r[0x60], r[0x61]]);
+        Some(WeaponInfo {
+            datum,
+            sound: if sound == 0 { 0xffff } else { sound },
+            muzzle: [m[3][0], m[3][1], m[3][2]],
+            dir: [-m[0][0], -m[0][1], -m[0][2]],
+        })
+    }
+
     /// The muzzle (`AnimGetBoneWorldTrans(obj, weapon datum id, 1)` = datum id + 1) in world space, from the posed
     /// skeleton; falls back to chest height in front of the drone.
     pub fn muzzle(&self, d: &Data) -> V3 {
         // The same posed object the renderer and the hit boxes use (`palette`: blended, aimed, at the drawn height).
+        // The draw side maps a 0xFF datum byte to datum 0 (the `third_person` note in nf-formats);
+        // the AI's `DroneWeap_GetWeaponInfo` fails instead — `weapon_info()` carries that gate.
         let posed = (|| {
-            let skin = d.skins.get(&self.skin)?;
             let (_, datum) = d.weapons.third_person(self.weapon as u8)?;
-            let id = if datum == 0xff { 0 } else { datum as u32 } + 1;
-            let dt = skin.datums.iter().find(|x| x.id == id && x.bone >= 0)?;
-            let pal = self.palette(d)?;
-            let m = nf_formats::anim::mul(&nf_formats::anim::quat_trans_to_mat(dt.q, dt.t), pal.get(dt.bone as usize)?);
+            let datum = if datum == 0xff { 0 } else { datum };
+            let m = self.weapon_bone_world(d, datum)?;
             Some([m[3][0], m[3][1], m[3][2]])
         })();
         posed.unwrap_or_else(|| {
             let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
             [self.pos[0] + s * 0.5, self.pos[1] + 0.4, self.pos[2] + c * 0.5]
         })
+    }
+
+    /// `DroneVision_GunThroughWall` 0x178520 — the probe `DroneVision_SeekOpponentLOS` 0x175cb8:77-79
+    /// runs on every sight tick while the drone is aiming (`+0x22`, the aim/fire states — the port's
+    /// `aims_torso()`, the `NDrone2_DoTracking` 0x1479d8:49 fold). Armed first (`NDrone2_ObjectIsArmed`
+    /// 0x178768: the weapon byte 0x6A–0x71, or 2–0x46 with 0x47 excluded), then the
+    /// `DroneWeap_GetWeaponInfo` muzzle ray [M 0x178520:38-52]: from the muzzle clamped into the obj's
+    /// collision cylinder (`DroneFunc_ClampPosToCollisionCylinder` 0x1499d0) to the raw muzzle,
+    /// `Collide_RayIntersect` (mask 0x927) — any hit = the gun pokes through a wall. The result is
+    /// `Drone+0x1e`, and every combat fire request is gated on `+0x3b = !+0x1e` (`DroneWeap_Fire` /
+    /// `PlayFiringAnim`: CombatNoRoute 0x164c08:63-73, CombatWait 0x164960:40-46, GoToGoalPosition
+    /// 0x165640:101-107, RunForCover 0x169150:88-94, AimStandFire 0x166328:135-147, AimCrouchFire
+    /// 0x167060:72-99). The game's mask picks its own collision sets; the port probes its standard
+    /// segment sets like its other vision probes [S — the `line_of_sight` note below].
+    pub fn gun_through_wall(&self, d: &Data) -> bool {
+        if !matches!(self.weapon, 2..=0x46 | 0x6a..=0x71) { return false; } // [M 0x178768]
+        match self.weapon_info(d) {
+            Some(wi) => muzzle_through_wall(d.world, self.pos, wi.muzzle),
+            None => false, // the GetWeaponInfo fail arm returns 0 [M 0x178520:41]
+        }
     }
 
     /// `DroneWeap_FireWeapon` + `DoBulletAccuracy`: hit roll, the miss wobble, the cone (`Bullet_init`), damage
@@ -12841,6 +12946,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // collision world's line of sight — the same deviation the nav `move_test`
                 // documents [S].
                 dr.los = d.world.line_of_sight(dr.head(), player.target);
+                // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
+                // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
+                // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
+                // sight keep the last value (the game's early-outs leave +0x1e alone).
+                dr.gun_through_wall = dr.los && dr.aims_torso() && dr.gun_through_wall(d);
                 self.los_cursor = slot;
                 break;
             }
@@ -15032,12 +15142,70 @@ mod tests {
         assert_eq!(hazard_link_flag(0x33, false), None);
     }
 
+    /// `DroneWeap_GetWeaponInfo` 0x17a5a0's direction output: the VU0 block transforms (−1, 0, 0, 1)
+    /// (the row-scaled `_vmulabc/_vmaddabc/_vmaddbc` accumulation, vf00.w = 1 [M 0x17a5a0
+    /// 0x17a664-0x17a68c]) and subtracts the position — −(row 0) of the bone's world matrix.
+    #[test]
+    fn weapon_dir_is_the_negated_world_row0() {
+        // The un-rotated bone: row 0 = +X → dir (−1, 0, 0) [M 0x17a5a0].
+        let m0 = nf_formats::anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]);
+        assert!((m0[0][0] - 1.0).abs() < 1e-5 && m0[0][1].abs() < 1e-5 && m0[0][2].abs() < 1e-5, "row 0 of the identity: {:?}", m0[0]);
+        let dir0 = [-m0[0][0], -m0[0][1], -m0[0][2]];
+        assert!((dir0[0] + 1.0).abs() < 1e-5, "{dir0:?}");
+        // Sister: a 90° yaw puts the bone's world −X on +z — a different axis, so the pin can fail.
+        let s = (0.5f32).sqrt();
+        let m = nf_formats::anim::quat_trans_to_mat([0.0, s, 0.0, s], [10.0, 20.0, 30.0]);
+        // Row 3 is the translation [M 0x1c3120:132-136] — the position the game subtracts.
+        assert!((m[3][0] - 10.0).abs() < 1e-4 && (m[3][1] - 20.0).abs() < 1e-4 && (m[3][2] - 30.0).abs() < 1e-4, "{:?}", m[3]);
+        let dir = [-m[0][0], -m[0][1], -m[0][2]];
+        assert!(dir[0].abs() < 1e-5 && dir[1].abs() < 1e-5 && (dir[2] - 1.0).abs() < 1e-4, "{dir:?}");
+        // The whole idiom at once: M·(−1, 0, 0, 1) − pos == −(row 0) — the port's `transform` is the
+        // same row-scaled accumulation the VU0 ACC chain runs.
+        let out = nf_formats::anim::transform(&m, [-1.0, 0.0, 0.0]);
+        let pos = [m[3][0], m[3][1], m[3][2]];
+        let dir2 = [out[0] - pos[0], out[1] - pos[1], out[2] - pos[2]];
+        assert!((dir2[0] - dir[0]).abs() < 1e-4 && (dir2[1] - dir[1]).abs() < 1e-4 && (dir2[2] - dir[2]).abs() < 1e-4, "{dir2:?} vs {dir:?}");
+    }
+
+    /// `DroneFunc_ClampPosToCollisionCylinder` 0x1499d0 + `DroneVision_GunThroughWall` 0x178520's
+    /// ray: the muzzle clamped into the obj's 0.4 cylinder is the start, the raw muzzle the end; a
+    /// hit = the gun is buried.
+    #[test]
+    fn gun_ray_clamps_and_buries_in_a_wall() {
+        // Within the cylinder: untouched [M 0x1499d0:34 `if (0.4 < fVar1)`].
+        let m0 = clamp_to_collision_cylinder([0.0, 0.0, 0.0], [0.3, 1.2, 0.0]);
+        assert_eq!(m0, [0.3, 1.2, 0.0]);
+        // Beyond: pulled to 0.4 on the x/z bearing, y kept [M 0x1499d0:36-43].
+        let m1 = clamp_to_collision_cylinder([0.0, 0.0, 0.0], [0.0, 1.2, 0.5]);
+        assert!((m1[2] - 0.4).abs() < 1e-5 && (m1[1] - 1.2).abs() < 1e-5, "clamped to 0.4 ahead, y kept: {m1:?}");
+        // Sister: a 0.3 bearing clamps to the same 0.4 radius on ITS direction.
+        let m2 = clamp_to_collision_cylinder([0.0, 0.0, 0.0], [0.3, 1.2, 0.0].map(|v| v * 2.0));
+        assert!((m2[0] - 0.4).abs() < 1e-5 && m2[2].abs() < 1e-5, "{m2:?}");
+        let floor = [
+            [[-100.0, 0.0, -100.0], [100.0, 0.0, 100.0], [100.0, 0.0, -100.0]],
+            [[-100.0, 0.0, -100.0], [-100.0, 0.0, 100.0], [100.0, 0.0, 100.0]],
+        ];
+        // A wall at z = 0.45 facing −z (two triangles covering the rect, the grenade tests'
+        // winding): the clamped ray (z 0.4 → 0.5 at chest height) crosses it — the gun pokes
+        // through.
+        let wall = [
+            [[-100.0, 0.0, 0.45], [-100.0, 4.0, 0.45], [100.0, 4.0, 0.45]],
+            [[-100.0, 0.0, 0.45], [100.0, 4.0, 0.45], [100.0, 0.0, 0.45]],
+        ];
+        let w = CollisionWorld::from_triangles(floor.into_iter().chain(wall).collect());
+        assert!(muzzle_through_wall(&w, [0.0, 0.0, 0.0], [0.0, 1.2, 0.5]), "the muzzle pokes through the wall");
+        // Sister: without the wall the same muzzle is clear — the assertion can fail.
+        let open = CollisionWorld::from_triangles(floor.to_vec());
+        assert!(!muzzle_through_wall(&open, [0.0, 0.0, 0.0], [0.0, 1.2, 0.5]));
+    }
+
     /// A drone with only the collision-relevant fields set (pos, velocity, bounded, free_root, corpse), for the
     /// gravity / down-ray tests. The hip height is the default 1.0 (`Drone::hip`).
     pub(crate) fn drone_at(pos: V3) -> Drone {
         let dr = Drone {
             skin: 0, anim_set: 0, weapon: 0, pos, yaw: 0.0, desired_yaw: 0.0, aim_yaw: 0.0, alert: 0.0, alert_floor: 0.0,
             body_glow: None,
+            gun_through_wall: false,
             dist_to_player: [100000.0; 4],
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
             accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, visibility: 0.0,
