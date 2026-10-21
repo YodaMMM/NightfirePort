@@ -970,3 +970,227 @@ fn blend_colour(start: u32, target: u32, tick: i32, delay: i32) -> u32 {
     };
     (mix(24) << 24) | (mix(16) << 16) | (mix(8) << 8) | mix(0)
 }
+
+// ============================================================================
+// The M_LISTBOX widget — `List_Init` 0x219488, `List_Update` 0x21a598 and the
+// `List_GetIndex` 0x21b420 / `List_GetIndex_RealItem` 0x21b470 /
+// `List_SetIndex` 0x21b4c8 / `List_SetIndex_RealItem` 0x21b520 family
+// (docs/systems/menu-list-widget.md). REACHED in the shipped game: 335
+// type-6 List controls on the disc (the FE option-box list 0x10000120, the
+// MC-dialog list 0x100000fc, ~9-10 per level's in-game def 08000001) [D
+// census] plus the M_LISTBOX every Combo embeds at +0x94
+// [M Combo_Init 0x1f0248:105]. The draw half of `List_Update` (:234-528) is
+// the main agent's; this is the data, state and flow.
+// ============================================================================
+
+/// One `LIST_ROW` — the game's 0x2d0 malloc: `{+0x0 next, +8.. text cells
+/// (5 × 0x8c stride), +0x2c4 id/value, +0x2c8 wrap-flag byte, +0x2cc stripe
+/// sprite}` [M List_SendMessage 0x2196e8:89,126,293]. The port keeps the cell
+/// texts as owned strings (≤ 5 columns — `List_Update`'s per-column loop
+/// [M 0x21a598:301-360]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ListRow {
+    /// The per-column cell texts (the game's 5 × 0x8c cell stride).
+    pub cells: Vec<String>,
+    /// `LIST_ROW+0x2c4`: the row's id/value word (arm 0x1e selects by it [M 0x2196e8:365]).
+    pub id: u32,
+    /// `LIST_ROW+0x2c8`: the word-wrap continuation flag — arm 0x19 sets it on the row a
+    /// long text wraps into [M 0x2196e8:293]; the `_RealItem` walks skip these rows.
+    pub wrap: bool,
+}
+
+/// The `M_LISTBOX` runtime state the port models — the game's offsets in the
+/// comments [M List_Init 0x219488]. The embedded cursor-bar control (+0x94) and
+/// the embedded M_SCROLL (+0x128) are draw-side; only their state feeds live here.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ListState {
+    /// +0x270: the row list (the game's LINKEDLIST; the port's Vec index IS the row ref).
+    pub rows: Vec<ListRow>,
+    /// +0x560: the cursor/selection row (a row POINTER in the game, 0 = none; the port
+    /// keeps the Vec index). Seeded by arm 0xf only when it was NULL [M 0x2196e8:132-135],
+    /// cleared when arm 0x13 removes the cursor row [M :151-153].
+    pub cursor: Option<usize>,
+    /// +0x56b: the cursor's visible index (arm 0x1d recomputes it [M 0x2196e8:319-323]).
+    pub cursor_visible: i32,
+    /// +0x534: the scroll top row (`List_Update` :216-233 clamps it under the cursor).
+    pub top: usize,
+    /// +0x500: visible rows = h / stride [M 0x219488:79, 0x21a598:174-179].
+    pub visible_rows: usize,
+    /// +0x530: the row stride = font height × 1.1 [M 0x219488:58,75].
+    pub stride: f32,
+    /// +0x508: per-column widths in percent (memset 0 then widths[0] = 100 [M :92-94]).
+    pub col_widths: [u32; 5],
+    /// +0x51c: per-column alignment (align[0] = 1 at init [M :93]; the rest of the array
+    /// is whatever the malloc left — read as 0 [S] unverified; Update :404-415 consumes it).
+    pub col_align: [u32; 5],
+    /// +0x53c: the normal row colour [M 0x219488:85-89].
+    pub colour_normal: u32,
+    /// +0x540: the highlight (cursor-row) colour [M :88].
+    pub colour_highlight: u32,
+    /// +0x564: the highlight mode = def+0x04 [M :80,:88].
+    pub highlight_mode: u8,
+    /// +0x548: the striped-rows flag [M :82].
+    pub striped: bool,
+    /// +0x1a2 bit 0: the scrollbar reservation flag (Update reserves 16 px when set
+    /// [M 0x21a598:185-215]).
+    pub show_scrollbar: bool,
+    /// +0x78: the font size word = def+0x16 [M 0x219488:73].
+    pub font_size: u16,
+}
+
+impl ListState {
+    /// `List_Init` 0x219488's state half: `font_h` is the font's pixel height (the game
+    /// reads it from `Font_GetTextExtent` [M :58]); the def rect's h drives the visible
+    /// rows [M :79]; the colours/flags are the fixed inits [M :82-94].
+    pub fn init(font_h: f32, h: u16, highlight_mode: u8, font_size: u16) -> ListState {
+        let stride = font_h * 1.1;
+        ListState {
+            rows: Vec::new(),
+            cursor: None,
+            cursor_visible: 0,
+            top: 0,
+            visible_rows: if stride > 0.0 { (h as f32 / stride).floor() as usize } else { 0 },
+            stride,
+            col_widths: [100, 0, 0, 0, 0],
+            col_align: [1, 0, 0, 0, 0],
+            colour_normal: 0x4040_40ff,
+            colour_highlight: 0x7f7f_7fff,
+            highlight_mode,
+            striped: false,
+            show_scrollbar: false,
+            font_size,
+        }
+    }
+
+    /// `List_GetIndex` 0x21b420: the 0-based position of the row, −1 when not found. The
+    /// game walks `row->next` from the first row and returns −1 when the walk runs off
+    /// the end [M :16-24]; the port's Vec index IS the row reference, so the walk is the
+    /// bounds check.
+    pub fn get_index(&self, row: usize) -> i32 {
+        if row < self.rows.len() { row as i32 } else { -1 }
+    }
+
+    /// `List_GetIndex_RealItem` 0x21b470: the same walk, but the counter bumps only when
+    /// the row just advanced TO is non-wrap (+0x2c8 == 0) [M :21-25] — the returned value
+    /// is the 0-based index among non-wrap rows, and a wrap row returns the PRECEDING
+    /// real item's index (the first row's wrap flag is never consumed: the walk starts
+    /// there). −1 when not found / out of range.
+    pub fn get_index_real_item(&self, row: usize) -> i32 {
+        let mut i = 0i32;
+        for ix in 0..self.rows.len() {
+            if ix == row {
+                return i;
+            }
+            match self.rows.get(ix + 1) {
+                // bump when the row just advanced TO is non-wrap [M 0x21b470:22-25]
+                Some(next) if !next.wrap => i += 1,
+                // the C derefs NULL+0x2c8 here (no caller walks off — they pass rows
+                // that are in the list); the port returns not-found instead of crashing.
+                None => return -1,
+                _ => {}
+            }
+        }
+        -1
+    }
+
+    /// `List_SetIndex` 0x21b4c8: the row `index` hops from the first row; **index ≤ 0
+    /// returns the first row**; off the end is None (the game's NULL) [M :16-24].
+    pub fn set_index(&self, index: i32) -> Option<usize> {
+        if index <= 0 {
+            return if self.rows.is_empty() { None } else { Some(0) };
+        }
+        let n = index as usize;
+        if n < self.rows.len() { Some(n) } else { None }
+    }
+
+    /// `List_SetIndex_RealItem` 0x21b520: the counter starts −1; per row, `+0x2c8 == 0`
+    /// bumps it; the first row whose counter == `index` is returned; None when the list
+    /// is exhausted [M :10-26]. (The C derefs first+0x2c8 before the NULL check on an
+    /// empty list — the game's only caller, arm 0x1d, never runs it empty; the port
+    /// returns None there.)
+    pub fn set_index_real_item(&self, index: i32) -> Option<usize> {
+        if self.rows.is_empty() {
+            return None;
+        }
+        let mut counter = -1i32;
+        for (ix, r) in self.rows.iter().enumerate() {
+            if !r.wrap {
+                counter += 1;
+            }
+            if counter == index {
+                return Some(ix);
+            }
+        }
+        None
+    }
+
+    /// `List_SendMessage` 0x2196e8 arm 0xf (add row, :126-141): allocate, `LinkedList_Add`
+    /// to +0x270, **seed the cursor only when it was NULL** [M :132-135], then
+    /// `Scroll_SendMessage(0x12)` when > 1 row and an immediate relayout.
+    pub fn add_row(&mut self, cells: Vec<String>, id: u32) {
+        self.rows.push(ListRow { cells, id, wrap: false });
+        if self.cursor.is_none() {
+            self.cursor = Some(0);
+        }
+    }
+
+    /// `List_SendMessage` arm 0x13 (remove row, :149-159): `List_SetIndex(index)` → if it
+    /// is the cursor row, **the cursor clears to none** [M :151-153]; unlink + free; the
+    /// scroll re-syncs to 0.
+    pub fn remove_row(&mut self, index: i32) {
+        if let Some(row) = self.set_index(index) {
+            if self.cursor == Some(row) {
+                self.cursor = None;
+            }
+            self.rows.remove(row);
+        }
+    }
+
+    /// `List_SendMessage` arm 0x1d (scroll to real-item index, :313-324): the cursor row =
+    /// `List_SetIndex_RealItem(real)` [M :317], visible index +0x56b = `List_GetIndex` of
+    /// it [M :319-323], then the plain `List_SetIndex` re-sync and `Scroll_SendMessage(0x2e)`.
+    pub fn scroll_to_real_item(&mut self, real: i32) {
+        if let Some(row) = self.set_index_real_item(real) {
+            self.cursor = Some(row);
+            self.cursor_visible = self.get_index(row);
+            self.scroll_cursor_into_view();
+        }
+    }
+
+    /// `List_Update` 0x21a598:174-179: visible rows = h / stride; the top row clamps into
+    /// range.
+    pub fn refresh_metrics(&mut self, h: u16) {
+        if self.stride > 0.0 {
+            self.visible_rows = (h as f32 / self.stride).floor() as usize;
+        }
+        if self.visible_rows == 0 {
+            self.top = 0;
+        } else {
+            let max_top = self.rows.len().saturating_sub(1);
+            self.top = self.top.min(max_top);
+        }
+    }
+
+    /// `List_Update` 0x21a598:216-233: with a cursor, clamp the top so the cursor row ∈
+    /// [top, top + visible_rows): above the window → top = cursor index; at/below the
+    /// window's end → top = cursor − visible + 1; inside → unchanged [M the branch
+    /// structure at :218-232].
+    pub fn scroll_cursor_into_view(&mut self) {
+        let Some(cur) = self.cursor else { return };
+        if self.visible_rows == 0 {
+            return;
+        }
+        let idx = self.get_index(cur);
+        if idx < 0 {
+            return;
+        }
+        let idx = idx as usize;
+        if idx < self.top + self.visible_rows {
+            if idx < self.top {
+                self.top = idx;
+            }
+        } else {
+            self.top = idx + 1 - self.visible_rows;
+        }
+    }
+}
