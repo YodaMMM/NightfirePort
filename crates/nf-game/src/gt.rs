@@ -349,7 +349,10 @@ impl GTurret {
 
     /// `GT_Track` 0x17f9c8's selection core over the caller-filtered candidates.
     ///
-    /// Range 2500.0 SP / 500.0 MP (squared 6250000.0 / 250000.0) [M 0x17f9c8:92,178]; copter
+    /// Range: the game compares the SQUARED distance (`Vec_SqDist3D`) against 2500.0 SP / 500.0 MP
+    /// [M 0x17f9c8:92-99,178] — 50 units in SP (review 2026-10-21: the branch squared the thresholds
+    /// to 6250000 / 250000, a 2500-unit reach). Drones are candidates only for facing-0 turrets
+    /// [M :101 `sVar1 == 0`, the copter walk too :119]; the wall guns (facing 1) track Bond only. Copter
     /// distance ×0.25 [M :158-166]; cap 63 (the walk breaks once the count passes 0x3e)
     /// [M :146,170]; sorted by distance, the first two with LOS remembered, the current
     /// target returned while it is one of them, else the first LOS candidate, else none
@@ -357,7 +360,7 @@ impl GTurret {
     /// [M 0x17f9c8:66-88]) is the caller's alive-filter here: a target missing from `cands`
     /// is cleared.
     pub fn track(&mut self, cands: &[TrackCand], mp: bool) -> Option<u32> {
-        let range2 = if mp { 250000.0f32 } else { 6250000.0f32 };
+        let range2 = if mp { 500.0f32 } else { 2500.0f32 };
         if self.target != 0 && !cands.iter().any(|c| c.obj == self.target) {
             self.target = 0;
         }
@@ -365,6 +368,9 @@ impl GTurret {
         for c in cands {
             if mp && c.obj == self.owner {
                 continue; // the MP branch skips the owner [M 0x17f9c8:186]
+            }
+            if !mp && self.facing != 0 && (c.obj != u32::MAX || c.copter) {
+                continue; // SP: drones/copters only for facing-0 turrets [M 0x17f9c8:101,119]
             }
             let dx = c.pos[0] - self.pos[0];
             let dy = c.pos[1] - self.pos[1];
@@ -750,9 +756,9 @@ mod tests {
         let mut t = GTurret::default();
         t.state = 4;
         t.pos = [0.0, 0.0, 0.0];
-        let far = [3000.0, 0.0, 0.0]; // beyond the SP range 2500 [M 0x17f9c8:92]
+        let far = [60.0, 0.0, 0.0]; // beyond the SP range (dist² 3600 > 2500) [M 0x17f9c8:92]
         let cand_far = TrackCand { obj: 7, pos: far, copter: false, los_ok: true };
-        let cand_near = TrackCand { obj: 7, pos: [100.0, 0.0, 0.0], copter: false, los_ok: true };
+        let cand_near = TrackCand { obj: 7, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true }; // inside the 50-unit SP range
         // out of range: no target, no fire, no sting
         let ev = step(&mut t, &ch, &[cand_far], &mut rng);
         assert!(ev.is_empty(), "out-of-range candidate → no events");
@@ -781,47 +787,41 @@ mod tests {
     /// prefer-current among the first two LOS candidates.
     #[test]
     fn track_range_and_preference_rules() {
-        let ch = crate::triggers::Channels { v: vec![0; 256], time: vec![0; 256], writes: None, script_channels: std::collections::BTreeSet::new() };
-        let mut rng = crate::drone::Rng::new(1);
         let mut t = GTurret::default();
         t.state = 4;
         t.pos = [0.0, 0.0, 0.0];
-        // copter at 4000 → weighted 1000 < 2500 → targeted; guard at 2600 → out of range.
-        let copter = TrackCand { obj: 3, pos: [4000.0, 0.0, 0.0], copter: true, los_ok: true };
-        let guard = TrackCand { obj: 5, pos: [2600.0, 0.0, 0.0], copter: false, los_ok: true };
-        let picked = t.track(&[guard, copter], false);
-        assert_eq!(picked, Some(3), "copter dist ×0.25 beats the 2500 range [M :158-166]");
-        // Sister: the same object without the copter flag must NOT be picked (2600² > 2500²... 
-        // 4000² > range too). Use a 2400 ground candidate that loses to nothing.
-        let g2 = TrackCand { obj: 5, pos: [2400.0, 0.0, 0.0], copter: false, los_ok: true };
+        // The game compares SQUARED distance to 2500 (SP) → 50 units [M 0x17f9c8:92-99].
+        // A copter at 80: 6400 × 0.25 = 1600 < 2500 → in; a ground candidate at 52 (2704) → out.
+        let copter = TrackCand { obj: 3, pos: [80.0, 0.0, 0.0], copter: true, los_ok: true };
+        let guard = TrackCand { obj: 5, pos: [52.0, 0.0, 0.0], copter: false, los_ok: true };
+        assert_eq!(t.track(&[guard, copter], false), Some(3), "copter dist² ×0.25 inside 2500 [M :158-166]");
+        // Sister: 48 units (2304) is in range, 52 (2704) is not.
+        let g2 = TrackCand { obj: 6, pos: [48.0, 0.0, 0.0], copter: false, los_ok: true };
         t.target = 0;
-        let picked = t.track(&[guard, g2], false);
-        assert_eq!(picked, Some(5), "2400 < 2500 in range, closest wins");
-        // MP range 500: a candidate at 600 is out [M :178].
+        assert_eq!(t.track(&[guard, g2], false), Some(6), "48 in, 52 out — the 50-unit SP range");
+        // MP: squared distance under 500 → 22.36 units; 25 (625) is out, 20 (400) in [M :178].
         t.target = 0;
-        t.pos = [0.0, 0.0, 0.0];
-        let mp_guard = TrackCand { obj: 9, pos: [600.0, 0.0, 0.0], copter: false, los_ok: true };
-        let picked = t.track(&[mp_guard], true);
-        assert_eq!(picked, None, "MP range 500 [M 0x17f9c8:178]");
+        assert_eq!(t.track(&[TrackCand { obj: 9, pos: [25.0, 0.0, 0.0], copter: false, los_ok: true }], true), None, "MP 25 units out");
+        assert_eq!(t.track(&[TrackCand { obj: 9, pos: [20.0, 0.0, 0.0], copter: false, los_ok: true }], true), Some(9), "MP 20 units in");
+        // Facing-1 (wall) turrets track Bond only — drones are candidates for facing 0 alone [M :101].
+        let mut w = GTurret { state: 4, facing: 1, ..GTurret::default() };
+        let near_guard = TrackCand { obj: 4, pos: [5.0, 0.0, 0.0], copter: false, los_ok: true };
+        assert_eq!(w.track(&[near_guard], false), None, "a wall gun ignores guards");
+        let bond = TrackCand { obj: u32::MAX, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true };
+        assert_eq!(w.track(&[near_guard, bond], false), Some(u32::MAX), "and takes Bond");
         // prefer-current [M :246-300]: the walk remembers the first TWO candidates WITH LOS
         // and keeps the current target while it is one of them — even a farther current.
-        let a = TrackCand { obj: 1, pos: [100.0, 0.0, 0.0], copter: false, los_ok: true };
-        let b = TrackCand { obj: 2, pos: [200.0, 0.0, 0.0], copter: false, los_ok: false };
-        let c3 = TrackCand { obj: 3, pos: [300.0, 0.0, 0.0], copter: false, los_ok: true };
-        t.target = 3; // third by distance, but the second WITH LOS → kept [M :246-300]
-        let picked = t.track(&[a, b, c3], false);
-        assert_eq!(picked, Some(3), "current is the second LOS candidate → kept");
-        t.target = 2; // no LOS → not among the walk's picks → replaced
-        let picked = t.track(&[a, b, c3], false);
-        assert_eq!(picked, Some(1), "current without LOS → the first LOS candidate wins");
+        let a = TrackCand { obj: 1, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true };
+        let b = TrackCand { obj: 2, pos: [20.0, 0.0, 0.0], copter: false, los_ok: false };
+        let c3 = TrackCand { obj: 3, pos: [30.0, 0.0, 0.0], copter: false, los_ok: true };
+        t.target = 3;
+        assert_eq!(t.track(&[a, b, c3], false), Some(3), "current is the second LOS candidate → kept");
+        t.target = 2;
+        assert_eq!(t.track(&[a, b, c3], false), Some(1), "current without LOS → the first LOS candidate wins");
         t.target = 1;
-        let picked = t.track(&[a, b, c3], false);
-        assert_eq!(picked, Some(1), "current is the first LOS → kept");
-        // LOS gate: a nearer candidate without LOS is skipped for a farther one with LOS
-        // [M :271-278].
+        assert_eq!(t.track(&[a, b, c3], false), Some(1), "current is the first LOS → kept");
         t.target = 0;
-        let picked = t.track(&[b, c3], false);
-        assert_eq!(picked, Some(3));
+        assert_eq!(t.track(&[b, c3], false), Some(3), "a nearer candidate without LOS is skipped [M :271-278]");
     }
 
     /// [M 00180498:236-258] the death gate: health < 0 OR the shot counter at 0 → state 6,
