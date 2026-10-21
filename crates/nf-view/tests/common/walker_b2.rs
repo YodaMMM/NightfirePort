@@ -91,6 +91,8 @@ pub struct Walker {
     /// ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive): each drone's last logged state, so the
     /// trace prints only transitions + a 50-tick digest — the fail reads as the presser's walk.
     pub alarm_last: Vec<u8>,
+    /// ai-sight-drawn-gate-5: the one-shot roster dump latch.
+    alarm_props_dumped: Option<bool>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops.
@@ -132,6 +134,7 @@ impl Walker {
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
             sidestep: 0, max_y: pos[1], lenient: false,
             alarm_last: Vec::new(),
+            alarm_props_dumped: None,
         }
     }
 
@@ -168,6 +171,17 @@ impl Walker {
         // with the mission fail_label, so the fail reads as the presser's state walk (826c: the
         // {0x89,0x8a,0x8b} family never fired in the harness).
         if std::env::var_os("NF_ALARM_TRACE").is_some() {
+            // ai-sight-drawn-gate-5 (additive, one-shot): every drone's identity + behaviour
+            // props, so the protected-actor fail question [M 0x145bd0: props 0x53/0x54] and the
+            // dtype sight numbers can be read off the run.
+            if self.alarm_props_dumped.is_none() && self.total_ticks == 150 {
+                self.alarm_props_dumped = Some(true);
+                for (i, d) in sim.drones.list.iter().enumerate() {
+                    if !d.present { continue; }
+                    eprintln!("[alarm] roster g{} team {} skin {:#x} props {:?} sight_range {:.1} half_fov {:.2} at ({:.1},{:.2},{:.1}) yaw {:.2} weapon {:#x}",
+                        i, d.team, d.skin, d.props, d.sight_range, d.half_fov, d.pos[0], d.pos[1], d.pos[2], d.yaw, d.weapon);
+                }
+            }
             if self.alarm_last.len() < sim.drones.list.len() {
                 self.alarm_last.resize(sim.drones.list.len(), 0xff);
             }
@@ -177,8 +191,17 @@ impl Walker {
                 let prev = self.alarm_last[i];
                 self.alarm_last[i] = d.state;
                 if prev != d.state {
-                    eprintln!("[alarm] t{} g{} {prev:#x} -> {:#x} d {:.1} at ({:.1},{:.2},{:.1})",
-                        self.total_ticks, i, d.state, dxz(d.pos, bp), d.pos[0], d.pos[1], d.pos[2]);
+                    // ai-sight-drawn-gate-5 (additive): the sight geometry on the transition line —
+                    // Bond's live pos, the drone's yaw/seen/los/sight_range/half_fov — so the
+                    // game's sight chain [M 0x176a28 family] can be re-run by hand at the moment.
+                    if prev == 0xff {
+                        eprintln!("[alarm] t{} g{} FIRST team {} skin {:#x} props {:?} rng {:.1} fov {:.2} at ({:.1},{:.2},{:.1}) yaw {:.2} weapon {:#x} acc {} aggr {} react {} combat {:.1} engage {:.1}",
+                            self.total_ticks, i, d.team, d.skin, d.props, d.sight_range, d.half_fov,
+                            d.pos[0], d.pos[1], d.pos[2], d.yaw, d.weapon, d.accuracy, d.aggression, d.reaction, d.combat_range, d.engage_range);
+                    }
+                    eprintln!("[alarm] t{} g{} {prev:#x} -> {:#x} d {:.1} at ({:.1},{:.2},{:.1}) bond ({:.2},{:.2},{:.2}) yaw {:.2} seen {} los {} rng {:.0} fov {:.2}",
+                        self.total_ticks, i, d.state, dxz(d.pos, bp), d.pos[0], d.pos[1], d.pos[2],
+                        bp[0], bp[1], bp[2], d.yaw, d.seen, d.los, d.sight_range, d.half_fov);
                 }
             }
             if self.total_ticks % 50 == 0 {
