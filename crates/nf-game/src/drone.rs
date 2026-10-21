@@ -3912,6 +3912,13 @@ impl Drone {
     /// scan is [S]-approximated by it — documented in the report), resets the route [M 0x152250:128-129] and
     /// stores +0x5A2/+0x5A0 (the return/resume states — the port keeps +0x354 in flee_return) [M 0x152250:167-174].
     fn find_safety_from_scary_object(&mut self, d: &Data) -> bool {
+        // The game's flee pick is `DroneMove_FindSafetyFromScaryPosition` 0x152250: it walks
+        // `AINetwork_Emitter_GetNodeAtDistance` 0x159268 (the emitter scratch: clear the 0x40000000
+        // visit bits over the path's nodes, then walk the link lists outward from the nearest node,
+        // returning the first node at or past the requested run distance [M 0x159268]) toward the
+        // goal opposite the scary object. The port runs the straight opposite-ray goal + the shared
+        // route build (MoveTest-gated A*) instead [S fold]; `croute = None` is the game's
+        // `AINetwork_ResetRoute` 0x15aa00 + `InvalidateRoute` [M 0x152250:128-129].
         let dist = self.explosive_run_dist;
         let scary = self.explosive_pos;
         let (dx, dy, dz) = (self.pos[0] - scary[0], self.pos[1] - scary[1], self.pos[2] - scary[2]);
@@ -11674,6 +11681,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let slot = (self.los_cursor + 1 + k) % ln.max(1);
             let dr = &mut self.list[self.llist[slot]];
             if dr.visibility >= 0.7 {
+                // The drone-vision LOS: the game's `DroneVision_LineOfSightToObject` 0x178390 /
+                // `CanSeeObjectFrom` 0x176f18 / `CanSeePosition` 0x178438 all ray-test through
+                // `AINetwork_TestRayCels` 0x15ab78 (the segment against every boundary of the
+                // crossed AI cels, walls first [M 0x15ab78]); the port swaps that for the static
+                // collision world's line of sight — the same deviation the nav `move_test`
+                // documents [S].
                 dr.los = d.world.line_of_sight(dr.head(), player.target);
                 self.los_cursor = slot;
                 break;
