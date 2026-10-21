@@ -402,6 +402,11 @@ impl Trigger {
                 let ok = match f & 0xffff {
                     0xb => drone_touch,
                     0xe => player,
+                    // (task 854: the drone side of the hash test is `Drone_GetSkinHash` 0x13a578 [M
+                    // 0013a578 decompile — `AI+0xE0`, 0 when the AI block is absent], read by
+                    // `Trigger_Hit` 0x1b1fc8 [M caller grep]; the port's `Toucher.skin` is that hash.
+                    // NOT YET FED: the port's net-body touchers still pass `skin: 0` — the SP drone
+                    // toucher build is remaining work in the task 854 report.)
                     h => touchers.iter().any(|c| c.drone && self.touched_by(c) && c.skin & 0xffff == h),
                 };
                 acc = acc && ok;
