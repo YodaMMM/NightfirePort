@@ -956,6 +956,15 @@ pub struct Drone {
     pub hit_by_player: bool,
     /// The pending `OnInitDeath` fail verdict, drained by the tick (fix-actors).
     pub fail_reason: Option<crate::ally::FailReason>,
+    /// `Drone+0x51C` — the alert STATUS byte `Drone_AlertStatusSet` 0x13a8d8 writes (with the
+    /// previous value `+0x51D`, the changed flag `+0x51E` and the stamp `+0x520`). It is NOT the
+    /// alertness `+0x50C` (`alert`): the setter never touches it [M 0x13a8d8:9-17], and the
+    /// byte's only reader is `Drone_AlertStatus` 0x13a910 → `AnimFacialUpdate` 0x1be310 (the
+    /// facial anims, draw-side). The 0x2f5cc8 table is read only by `DoModeSettingsNEW` for the
+    /// STARTING alertness [M 0x14c600:62] (alert-status-vs-alertness, 916).
+    pub alert_status: u8,
+    pub alert_status_prev: u8,
+    pub alert_status_frame: u32,
     /// Interogate 0x3C's `+0x228 & 0x10`: the opponent was armed when the interrogation began (cleared
     /// when he holsters) [M 0x161a40 case 1/3].
     pub interro_armed: bool,
@@ -1493,7 +1502,7 @@ impl Drone {
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
-            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false,
+            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false,
             mission_wait_channel: 0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
@@ -1788,6 +1797,16 @@ impl Drone {
             for id in [0, 1, 6, 0x41, 0x42] { set(&mut self.props, id, 1); }
             set(&mut self.props, 0x13, 0);
             self.engage_range = 10.0;
+        }
+    }
+
+    /// `Drone_AlertStatusSet` 0x13a8d8: the status byte only — on a change, the previous value and
+    /// the frame stamp; alertness (`alert`, +0x50C) is untouched [M 0x13a8d8:9-17].
+    pub fn alert_status_set(&mut self, status: u8, frame: u32) {
+        if status != self.alert_status {
+            self.alert_status_prev = self.alert_status;
+            self.alert_status = status;
+            self.alert_status_frame = frame;
         }
     }
 
@@ -2803,7 +2822,8 @@ impl Drone {
         use state::*;
         let valid = |x: u8| x != 0 && !(0x53..=0x55).contains(&x);
         let u10 = if resume != 0 { resume } else { self.state };
-        self.alert = self.alert.max(1.0); // `Drone_AlertStatusSet(2)` [M 0x146538]
+        self.alert = 1.0; // `+0x50C = 1.0` [M 0x146480:53]
+        self.alert_status_set(2, frame); // `Drone_AlertStatusSet(2)` — the status byte [M 0x146538]
         let dmg = self.last_damage;
         if dmg > 0.0 {
             let target = crate::damage::Target { damageable: self.damageable, armour: 0, mode: 0, skin: self.skin, kind: self.kind };
@@ -3010,14 +3030,10 @@ impl Drone {
         if self.team != 1 && !matches!(d.level, 0x0700_0009 | 0x0700_000a) && !self.obj_armed() {
             self.fail_reason = Some(crate::ally::mission_fail_reason(6));
         }
-        // `Drone_AlertStatusSet(2)` [M 0x145f28:30] — the port's alert-status-2 = alert ≥ 0.66
-        // (the convention crate::drone line ~2703 uses for the stun family). The game stamps it
-        // before the damage; the port reaches the same value for every living victim. The discrete
-        // status byte the setter writes is drone+0x51C, read back by the getter `Drone_AlertStatus`
-        // 0x13a910 (its one caller, `AnimFacialUpdate` 0x1be310, is not ported — the facial system
-        // is draw-side; docs/systems/dronefunc-rest.md) — the port's alert level + these thresholds
-        // stand in for the byte.
-        self.alert = self.alert.max(1.0);
+        // PunchImpact writes both: the status byte `Drone_AlertStatusSet(2)` [M 0x145f28:30] (+0x51C —
+        // `alert_status`; read only by the facial anims) and the alertness `+0x50C = 1.0` [M :43].
+        self.alert = 1.0; // `+0x50C = 1.0` [M 0x145f28:43]
+        self.alert_status_set(2, frame); // [M 0x145f28:30] — the status byte
         // 0x145f28:57-84 — the two team arms, in the game's order: team 1 KOs BEFORE the hurt
         // message (a punched-out guard never screams); team ≠ 1 sends it FIRST — even when the
         // punch was the kill — then KOs.
@@ -3736,7 +3752,7 @@ impl Drone {
             (EXPLOSIVE_IMPACT, msg::EXIT) | (EXPLOSIVE_IMPACT, msg::UPDATE) => true,
             // SmokedOut ENTER (0x173c50 case 1): AlertStatusSet(2) + the cough with follow-on 0x7C.
             (SMOKED_OUT, msg::ENTER) => {
-                self.alert = self.alert.max(1.0);
+                self.alert_status_set(2, frame); // [M 0x173c50 case 1] — the status byte; SmokedOut writes no +0x50C
                 self.call_anim_variant(d, anim_state::COUGH, 0, SMOKED_OUT_LOOP, 0);
                 true
             }
@@ -5008,8 +5024,8 @@ impl Drone {
     /// when nobody is within 8.0 (`DroneFunc_AnyoneNear(0x40000000)`), else re-arms frame + 5·60. Another
     /// flash (msg 0x18/0x19) re-arms a fresh recover [M 0x1631c0 case 0x18]. `StunGrenadeRecover` 0x163350
     /// case 1: +0x4F8 & 0x10000 and the get-up anim 0x76 with follow-on 0x56 (non-civilians). The bullets
-    /// (msg 8/9 → 0x44) route through `on_impact`. `AlertStatusSet(2)` maps to the port's alert ≥ 0.66
-    /// (the ALERTNESS_LEVELS index 2 [*suggested* mapping; the port's alert is the 0..1 alertness float]).
+    /// (msg 8/9 → 0x44) route through `on_impact`. `AlertStatusSet(2)` is the status byte only (`alert_status`) —
+    /// the family writes no alertness +0x50C [M 0x13a8d8; 0x172bb0/0x162b98/0x162eb0 case 1].
     fn handle_stun(&mut self, d: &Data, rng: &mut Rng, frame: u32, s: u8, m: u8) -> Option<bool> {
         use state::*;
         if !matches!(s, STUN_GRENADE_IMPACT | STUN_GRENADE_LOOP | STUN_GRENADE_RECOVER) { return None; }
@@ -5034,7 +5050,7 @@ impl Drone {
                     self.drop_weapon(d, rng);
                     self.change_weapon(1);
                 }
-                self.alert = self.alert.max(0.66);
+                self.alert_status_set(2, frame); // [M 0x172bb0 case 1] — the status byte; no +0x50C write
                 self.vision_on = false;
                 self.firing = false;
                 // `Rand_Rand(2)`: one draw of the shared stream, then the anim with follow-on Loop [M 0x172c34].
@@ -5118,7 +5134,7 @@ impl Drone {
                     self.drop_weapon(d, rng);
                     self.change_weapon(1);
                 }
-                self.alert = self.alert.max(0.66); // AlertStatusSet(2) [M 0x162b98:42]
+                self.alert_status_set(2, frame); // AlertStatusSet(2) [M 0x162b98:42] — the status byte; no +0x50C write
                 self.vision_on = false;
                 self.firing = false;
                 // Rand_Rand(2): 0 → 0x32, else 0x31 [M 0x162b98:44-48]; no follow-on state (the SM is
@@ -5169,7 +5185,7 @@ impl Drone {
                 // the down flag +0x2f (its EXIT clears it) [M 0x162eb0 case 1/2].
                 self.timer_c = Some(frame + self.tase_recover);
                 self.down = true;
-                self.alert = self.alert.max(0.66);
+                self.alert_status_set(2, frame); // [M 0x162eb0 case 1] — the status byte; no +0x50C write
                 let a = if self.tase_fall_anim == anim_state::TASER_FALL_B { anim_state::STUNNED_TWITCH_B } else { anim_state::STUNNED_TWITCH_A };
                 self.call_anim(d, a, 0, 0);
                 true
@@ -5301,7 +5317,7 @@ impl Drone {
                 if self.dtype == 0x11 || self.dtype == 0x0c {
                     self.fail_reason = Some(crate::ally::mission_fail_reason(0xe));
                 }
-                self.alert = 0.0;
+                self.alert_status_set(0, frame); // [M 0x163430 case 1] — the status byte; no +0x50C write
                 self.vision_on = false;
                 self.firing = false;
                 // Rand_Rand(2): 0 → anim 0x2C, else 0x2B (the dart-only sleep-fall anims), follow-on
@@ -6592,7 +6608,7 @@ impl Drone {
                 self.alert_bits |= 0x20;
                 self.interro_latch = Some(true);
                 self.vision_on = true;
-                self.alert = 0.0; // `Drone_AlertStatusSet(1)` — table 0x2f5cc8[1] = 0
+                self.alert_status_set(1, frame); // `Drone_AlertStatusSet(1)` [M 0x161a40 case 1] — the status byte; alertness untouched
                 self.interro_armed = self.bond_armed;
                 self.interro_min_dist = self.dist;
                 self.timer_c = Some(frame + 60);
@@ -6708,7 +6724,7 @@ impl Drone {
                 true
             }
             (NO_OPPONENT, msg::ENTER) => {
-                self.alert = 0.0;
+                self.alert_status_set(0, frame); // [M 0x1650a0:13] — the status byte; NoOpponent writes no +0x50C
                 self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
                 self.timer_c = Some(frame + 60);
                 true
@@ -6724,7 +6740,7 @@ impl Drone {
             // (10 * FRAME_RATE_INT) [M 0x172628:13-26]; UPDATE `DroneFunc_DeadDrone` (Dead's tick);
             // timer C -> Fade 0x48 [M :28-35].
             (HOSTAGE_DEAD, msg::ENTER) => {
-                self.alert = 1.0;
+                self.alert_status_set(3, frame); // [M 0x172628:13] — the status byte; no +0x50C write
                 self.drop_weapon(d, rng);
                 self.corpse = true;
                 self.health = 0.0;
@@ -7044,7 +7060,7 @@ impl Drone {
             // HostageGoToGoalPosition 0x64, none → CivilianHiding [M 0x15d3a0:34-52].
             (CIVILIAN_SCARED, msg::ENTER) => {
                 self.vision_on = true;
-                self.alert = 1.0;
+                self.alert_status_set(2, frame); // [M 0x15d3a0 case 1] — the status byte; no +0x50C write
                 self.civilian_scared_talk(d, rng); // [M 0x15d3a0:30 — NDrone2_CivilianScaredTalk 0x13f900]
                 if self.scared_run && self.find_run_to_point(d) {
                     self.return_state = CIVILIAN_HIDING;
@@ -7058,7 +7074,7 @@ impl Drone {
             // CivilianHiding (0x15d520) ENTER: alert 2, cower anim 0x19.
             (CIVILIAN_HIDING, msg::ENTER) => {
                 self.vision_on = true;
-                self.alert = 1.0;
+                self.alert_status_set(2, frame); // [M 0x15d520 case 1] — the status byte; no +0x50C write
                 self.call_anim(d, anim_state::COWER, 0, 0);
                 true
             }
@@ -7067,7 +7083,8 @@ impl Drone {
             // UPDATE: an armed drone within 20 → HostageHide (0xe — not ported; the hostages stay here). Bullets
             // HandleImpact(0xe, …) — resume 0 keeps the state.
             (HOSTAGE_IDLE, msg::ENTER) => {
-                self.alert = 0.0;
+                self.alert = 0.0; // `+0x50C = 0` [M 0x15ce60:19]
+                self.alert_status_set(0, frame);
                 self.call_anim(d, anim_state::STAND_IDLE, 0, 0);
                 true
             }
@@ -7083,7 +7100,7 @@ impl Drone {
             // The alive-hostage arm also calls `NDrone2_HostageSituationActive` 0x14aaf8 — a size-8 empty body whose
             // result the caller DISCARDS (`call; return 1` [M 0x15cb78:30-33]) — the port models nothing for it.
             (HOSTAGE, msg::ENTER) => {
-                self.alert = 0.66;
+                self.alert_status_set(2, frame); // [M 0x15cb78:16] — the status byte; Hostage writes no +0x50C
                 self.call_anim(d, anim_state::COWER, 0, 0);
                 true
             }
@@ -7108,7 +7125,7 @@ impl Drone {
             // The old else arm cowered into 0x0d — the resume arm's state, never reachable on
             // this path (daily-audit 2026-10-17).
             (HOSTAGE_SAVED, msg::ENTER) => {
-                self.alert = 0.0;
+                self.alert_status_set(0, frame); // [M 0x15ccf0 case 1] — the status byte; no +0x50C write
                 self.captor = None;
                 if self.second_channel != 0 && self.raise.is_none() { self.raise = Some(self.second_channel); }
                 if self.find_run_to_point(d) {
@@ -7125,7 +7142,8 @@ impl Drone {
             // 0x15cfe0:23-29 — the port's msg-3 clock is not modelled, [S] the UPDATE-less hold].
             (HOSTAGE_HIDE, msg::ENTER) => {
                 self.enabled = true;
-                self.alert = self.alert.max(0.66); // AlertStatusSet(2) [M 0x15cfe0:15]
+                self.alert = 1.0; // `+0x50C = 1.0` [M 0x15cfe0:14]
+                self.alert_status_set(2, frame); // [M 0x15cfe0:15]
                 self.call_anim(d, anim_state::COWER, 0, 0);
                 true
             }
@@ -7967,7 +7985,7 @@ impl Drone {
                     self.corpse = true; // obj+0xf0 bit 0x20
                 }
                 self.death_pending = true; // +0xcd8 = 1 (the EXIT's SetDeathChannel latch) [M case 1]
-                self.alert = 1.0; // Drone_AlertStatusSet(3) → the 0x2f5cc8 table row 3 = 1.0 [M 0x169b28:28; L the table]
+                self.alert_status_set(3, frame); // `Drone_AlertStatusSet(3)` [M 0x169b28:28] — the status byte; AbseilDeath writes no +0x50C
                 if self.team == 1 && !self.knocked_out { self.dispatched_logged = true; } // LogDroneDeath [M 0x169b28:29 → 0x14ab00:11-31]
                 self.abseil_land_latch = false; // +0xcdc = 0 [M case 1]
                 self.air = false;
@@ -14716,7 +14734,7 @@ mod tests {
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
-            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
+            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
             mission_wait_channel: 0,
