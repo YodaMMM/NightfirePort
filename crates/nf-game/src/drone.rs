@@ -36,6 +36,9 @@ pub mod state {
     pub const COMBAT: u8 = 0x58;
     pub const COMBAT_NO_MOVE: u8 = 0x59;
     pub const COMBAT_OUT_OF_RANGE: u8 = 0x5a;
+    /// `NDrone2_DSTATE_CombatNewSighting` 0x173280 — `NDrone2_StateFuncs[0x5b]` 0x29b300 [ELF]:
+    /// ENTER sets the seen bit +0x4F8|=0x10000, talks, then crouch-capable guards at ≥ 6 units
+    /// flip a coin to 0x70 AimCrouchFire, else 0x68 AimStandFire [M 0x173280:ENTER].
     pub const COMBAT_NEW_SIGHTING: u8 = 0x5b;
     pub const COMBAT_NO_SIGHT: u8 = 0x5c;
     /// `NDrone2_DSTATE_CombatWait` 0x164960 — `NDrone2_StateFuncs[0x5e]` 0x29b300 [ELF]. The port called
@@ -148,7 +151,14 @@ pub mod state {
     pub const UNDER_COVER_AIM: u8 = 0x95;
     pub const UNDER_COVER_FIRE: u8 = 0x96;
     pub const UNDER_COVER_RETURN: u8 = 0x99;
+    /// `NDrone2_DSTATE_UnderCoverTypeChange` 0x1739b8 — `NDrone2_StateFuncs[0x9a]` 0x29b300 [ELF]:
+    /// ENTER honours the cover-leave flag (+0xBB8&4 → 0x9c), re-checks the cover node
+    /// (`CoverNodeOK` +0xBB4) and falls back via `CoverAvailable` [M 0x1739b8:ENTER].
     pub const UNDER_COVER_TYPE_CHANGE: u8 = 0x9a;
+    /// `NDrone2_DSTATE_UnderCoverLeave` 0x173ac0 — `NDrone2_StateFuncs[0x9b]` 0x29b300 [ELF]:
+    /// ENTER sets the seen bit and re-enters 0x9c; msg 2 (EXIT) clears the byte at +0x2E
+    /// [M 0x173ac0]. `DSTATE_UnderCoverLeaveNow` 0x16ab38 calls this state's function directly
+    /// in the game (shared ENTER logic) [M grep 0x16ab38 references 0x173ac0].
     pub const UNDER_COVER_LEAVE: u8 = 0x9b;
     pub const UNDER_COVER_LEAVE_NOW: u8 = 0x9c;
     /// Sniper cover (docs/systems/drone-cover.md): `UnderCoverFire` ENTER branches to 0x97 when the drone's anim set
@@ -1903,6 +1913,11 @@ impl Drone {
             if flags & 1 != 0 {
                 if self.alert < 0.33 && self.last_wait != Some(node) {
                     self.last_wait = Some(node);
+                    // ReachedDestNode 0x153358:74 defers msg 4 by one tick [M]; the game parks it in the
+                    // global delayed pool (`Drone_SM_RouteMsg` 0x172128 enqueue, `Drone_SM_SendDelayedMsgs`
+                    // 0x1759a0 drain, `Drone_SM_Init` 0x1757d0 0x400-node pool init) — the port models the
+                    // delay as this per-drone one-slot queue instead (deviation noted in
+                    // docs/reports/unported-guard-ai-other-5.md).
                     self.delayed = Some((frame + 1, msg::IDLE_TIMEOUT));
                 } else {
                     self.last_wait = None;
@@ -4972,12 +4987,15 @@ impl Drone {
             // dead (see UNDER_COVER_INIT above).
             (UNDER_COVER_RETURN, msg::ENTER) => { if !self.cover_anim(d, rng, 4, UNDER_COVER_TYPE_CHANGE) { self.set_state(UNDER_COVER_LEAVE) } true }
             (UNDER_COVER_RETURN, msg::UPDATE) => { if !in_cover_ok(self, false) || far_from_goal(self) { self.cover_leave |= 4 } true }
+            // `NDrone2_DSTATE_UnderCoverTypeChange` 0x1739b8 ENTER (case 1) [M]: leave-flag → 0x9c,
+            // else CoverNodeOK on the +0xBB4 node, else CoverAvailable → RUN_FOR_COVER, else cover anim 7.
             (UNDER_COVER_TYPE_CHANGE, msg::ENTER) => {
                 if self.cover_leave & 4 != 0 { self.set_state(UNDER_COVER_LEAVE_NOW) }
                 else if !in_cover_ok(self, true) && self.cover_available(d, true) { self.set_state(RUN_FOR_COVER) }
                 else if !self.cover_anim(d, rng, 7, UNDER_COVER_IDLE) { self.set_state(UNDER_COVER_IDLE) }
                 true
             }
+            // `NDrone2_DSTATE_UnderCoverLeave` 0x173ac0 ENTER (case 1): seen bit, then 0x9c [M 0x173ac0].
             (UNDER_COVER_LEAVE, msg::ENTER) => { self.set_state(UNDER_COVER_LEAVE_NOW); true }
             (UNDER_COVER_LEAVE_NOW, msg::ENTER) => {
                 self.cover_leave |= 8;
@@ -6398,6 +6416,8 @@ impl Drone {
                 if self.unseen_ticks < 16 { self.set_state(COMBAT_NEW_SIGHTING) } else { self.set_state(COMBAT_NO_SIGHT) }
                 true
             }
+            // `NDrone2_DSTATE_CombatNewSighting` 0x173280 ENTER (case 1) [M]: seen bit, SeenPlayerTalk,
+            // then crouch-capable guards ≥ 6 units flip Rand(2) to 0x70 AimCrouchFire, else 0x68 AimStandFire.
             (COMBAT_NEW_SIGHTING, msg::ENTER) => {
                 self.seen_player_talk(d, rng);
                 let crouch = self.prop(d, 0x11) && self.can_do(d, anim_state::CROUCH_AIM) && self.dist >= 6.0 && rng.rand(2) != 0;
@@ -12205,7 +12225,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// One 60 Hz game tick: global vision (`DroneVision_ProcessDroneSight`), then each drone's control.
     /// The per-tick drone update — the obj-level entry the game reaches through
     /// `Drone_SM_RouteMsg` 0x172128 (every send path funnels there: `Drone_SM_SendMsg` 0x13a630,
-    /// `SendDelayedMsgs` 0x1759a0, `SendMsgSelf` 0x175a38, `BroadcastMsg` 0x175aa8, the MP
+    /// `Drone_SM_SendDelayedMsgs` 0x1759a0 — whose due-tick drain the port folds into the per-drone
+    /// `delayed`/timer checks, and whose `Drone_SM_Init` 0x1757d0 pool the port rebuilds per level,
+    /// `SendMsgSelf` 0x175a38, `BroadcastMsg` 0x175aa8, the MP
     /// setPlayerStatus/objectBeingDeleted/sendTeamBotMessage/getObjExtObj family) after
     /// `Drone_DCVfromOBJ` 0x13a0a0 resolves the object (class +0xFF 2/0x11) to its drone.
     /// The port's typed `Drones`/`Drone` split IS that adapter; the pump is `Drone::send`.
@@ -12612,10 +12634,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         // `Drone_InitComms` order: `ProcessDroneSight` (vision, line of sight, `FindAlertedDrones`), the 0x97 check, then
         // every drone's `HandleSoundAlerts`, `Sound_ZeroAlertness`, the alarm.
-        // Drones noticing drones that attack (`DroneVision_FindAlertedDrones` → `ConsiderAlerted` →
-        // `DroneCanSeeDrone`): source attacking ≥ 1 s with visible alert bits; observer watching (Idle/Alert), not yet
+        // Drones noticing drones that attack (`DroneVision_FindAlertedDrones` → the A/B pair selector
+        // `DroneVision_DetermineAlertCheck` 0x1766f8 [M — picks which of the pair is the alerted source] →
+        // `ConsiderAlerted` → `DroneCanSeeDrone`): source attacking ≥ 1 s with visible alert bits; observer watching (Idle/Alert), not yet
         // alerted, whose props accept the bits (0x10 always; 2 → 0x27, 4 → 0x4F, 1 → 0x28, 8 → 0x26/0x29), within
-        // 50 units, in its view (±e4, ≤ e8, under 2 always) and with head-to-head line of sight. At most 4 per tick.
+        // 50 units, in its view (±e4, ≤ e8, under 2 always — that cone is `DroneVision_ObjectVisibility`
+        // 0x1781a8 [M: <2 always, >50 never, else half-FOV angle + range]) and with head-to-head line of sight. At most 4 per tick.
         // `DroneVision_TestEndInterogationAssist` 0x178348 for every assisting drone, from its source's
         // +0x4FC (`alert_bits`): NOT ended while the source exists, holds a 0x200020 bit and nothing
         // outside 0x21 [M 0x178348:7-12]. InterogateAssistWait's UPDATE reads the stamp.
@@ -14520,7 +14544,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // flee 10.0, deadline 10 s, return to the caller state [M 0x1431c0:165-176]; smoke 0x36 → kind 1, no
         // flee [M 0x138b10:143-159 + 0x1435f0:24-29 — only kind-2 entries trigger]; satchel 0x3B-0x40 → radius
         // 12.0, flee 14.0 [M 0x138b10:113-141 + 0x1431c0:122-152]. Per drone: fear prop 0x3A/0x3B [M 0x1435f0:30-34],
-        // within the radius, and the object visible [M 0x1435f0:37-44 ObjectVisibility ≥ 0.7 + CanSeeObject].
+        // within the radius, and the object visible [M 0x1435f0:37-44 — DroneVision_ObjectVisibility
+        // 0x1781a8 ≥ 0.7 (the ±e4/≤e8/<2 cone) + CanSeeObject(5,0); the port stands the cone in with the
+        // bare segment test here — deviation recorded in docs/reports/unported-guard-ai-other-5.md].
         let queued = std::mem::take(&mut self.explosive_queue);
         for (p, wt) in queued {
             let cls = match wt {
