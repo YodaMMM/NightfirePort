@@ -923,6 +923,11 @@ impl Renderer {
             // forced list (`View_AddForcedObjects` 0x1e5fb8) — they take only the frustum test.
             let orphan = &self.orphan_nodes;
             let mut cel_culled = 0usize;
+            // perf-culldiff: read the diagnostic switch ONCE — the per-draw `env::var_os` (a locked
+            // GetEnvironmentVariableW, ~1 µs) ran for every cel-culled draw and cost 4-5 ms a frame on
+            // 07000007/12/15 (thousands of cel-culled draws), pushing them under 240 fps.
+            static CULLDIFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            let culldiff = *CULLDIFF.get_or_init(|| std::env::var_os("NF_CULLDIFF").is_some());
             // Skip redundant `set_pipeline` calls (A-11e). The group-0 bind now carries a per-draw
             // dynamic offset (fix-lighting: each draw's own light pair), so it is issued every draw.
             let mut last_pipeline: Option<usize> = None;
@@ -967,7 +972,7 @@ impl Renderer {
                         if trace { cel_culled += 1; }
                         // Dev diagnostic: `NF_CULLDIFF=1` names the near, in-frustum World draws the room
                         // cull removes (the cel/node the walk failed to reach).
-                        if std::env::var_os("NF_CULLDIFF").is_some() && d2(dc.centre) < 400.0 + dc.radius * dc.radius && !sphere_outside(&planes, dc.centre, dc.radius) {
+                        if culldiff && d2(dc.centre) < 400.0 + dc.radius * dc.radius && !sphere_outside(&planes, dc.centre, dc.radius) {
                             eprintln!("[culldiff] draw {k} node {} cel {:?} chain {} centre {:?} r {:.2}", dc.node, dc.cel, dc.chain, dc.centre, dc.radius);
                         }
                         return false;
