@@ -81,7 +81,8 @@ pub struct BotWeaponRow {
     pub flags: u32,
     /// +0x90 the ammo type.
     pub ammo_type: u8,
-    /// +0x92 the clip capacity.
+    /// +0x92 the clip capacity (`BOTWEAP_getWeaponClipSize` 0x12b010 reads
+    /// `weapon_data + w·0x10C + 0x92` [M :5-8] — the setGoalPickPrefs ammo weight's input).
     pub clip: i16,
     /// +0xDC != 0 and (weapon 1 or the first-person skin loaded) — `BOTWEAP_EquipWeapon`'s gates
     /// [M 0x12a138:18-25] and `CheckWeaponsLoaded`'s [M 0x12aec0].
@@ -157,6 +158,22 @@ pub fn punch_is_better_if_close(w: u8) -> bool {
 /// `BOTWEAP_reloadAnimForWeapon` 0x12b200 (disasm): the weapons that play the reload anim 0x52.
 pub fn reload_anim_for_weapon(w: u8) -> bool {
     !matches!(w, 1 | 0x34..=0x37 | 0x3a..=0x41 | 0x45 | 0x52 | 0x53)
+}
+
+/// `BOTWEAP_getWeaponAnimSet` 0x12b140 [M] — the weapon id → anim-set switch
+/// (`DroneWeap_ChangeWeapon` writes it to Drone+0xDA [M 0x12a028]). Unlisted ids fall to 0x14
+/// (the default arm), as do 0x16 and 0x1a — the switch has no arms for them.
+pub fn weapon_anim_set(w: u8) -> u8 {
+    match w {
+        0 | 0x33..=0x36 | 0x39..=0x3F | 0x44 | 0x51 | 0x52 => 0x18,
+        0x01..=0x0B | 0x40 | 0x41 => 0x16,
+        0x0C => 0x1A,
+        0x0D..=0x10 => 0x17,
+        0x11..=0x14 | 0x29 | 0x2A | 0x32 => 0x15,
+        0x15 | 0x17..=0x28 => 0x14,
+        0x2B..=0x2E => 0x19,
+        _ => 0x14, // the default arm [M]
+    }
 }
 
 /// `BOTSTATE_isPreferredWeapon` 0x129580 — `class_pref` is the record's preferred-weapon-class
@@ -374,6 +391,8 @@ impl BotArsenal {
     }
 
     /// `BOTWEAP_hasWeapon` 0x12af78.
+    /// `BOTSTATE_hasWeapon` 0x129658 forwards here: `BOTWEAP_hasWeapon(Drone+0x754, w)` —
+    /// the pickGoal gate's held-weapon test [M 0x129658:5-8].
     pub fn has_weapon(&self, w: u8) -> bool { self.held_of(w) }
 
     /// `BOTWEAP_hasLoadedWeapon` 0x12b038.

@@ -1121,3 +1121,104 @@ impl MpMatch {
         }
     }
 }
+
+// ============================================================================
+// mp-bot-brain-rest: the MP object/pickup/sound helpers the call-tree check
+// listed (0x18bee0, 0x18b578, 0x18b848, 0x18a058, 0x18bca8, 0x18ac90,
+// 0x18be50, 0x18bbc8)
+// ============================================================================
+
+/// `MPSound_Play` 0x18bee0 [M :4-7]: `Sound_Play(100.0, id, 0, 0)` — the MP scenario
+/// updates' one-shot (the flag/uplink/KOH/demo/protect/GoldenEye/BluePrint update loops and
+/// `MP_PlayerKilled`'s bark are its callers). The port's one-shot sink is `Sounds::play`
+/// (`crate::sound`), which carries no volume parameter (MP sound is presentation,
+/// `rules.rs`' "5-point sound is presentation" note), so the 100.0 volume is implicit [S].
+pub fn mp_sound_play(sink: &mut crate::sound::Sounds, id: u32) -> crate::sound::Handle {
+    sink.play(id)
+}
+
+/// `MP_sendTeamBotMessage` 0x18bbc8 [M :18-31]: route `Drone_SM_RouteMsg` to the sender's
+/// team — the recipient mask is `~sender` (0 when the sender word is 2), the payload word
+/// `GameState+0x52 + arg4`, id/args straight through. The game's callers: 0xDE's team
+/// announce (`BotAttackChangeWeapon` 0x1750c8), the Demolition/Protection site updates
+/// (0x1870a0), `MP_PlayerKilled` 0x188f70 and `Player_SetWeaponAnimObj` 0x1a2e38. The port's
+/// brain-internal message flow has no cross-bot pump yet — this is the mask/payload shape,
+/// the pump wiring is the report's next-step item [S].
+pub fn send_team_bot_message(sender_team: u32, id: u8, arg3: u32, arg4: u32, arg5: u32) -> crate::mp::bots::BotMsg {
+    let mut mask = !sender_team;
+    if sender_team == 2 {
+        mask = 0; // [M :21-23]
+    }
+    let _ = mask; // the recipient mask — the port's pump consumes it when wired
+    crate::mp::bots::BotMsg {
+        id,
+        arg: arg3,
+        current_state: arg4.wrapping_add(arg5), // GameState+0x52 + arg4 [M :24]
+    }
+}
+
+/// `MP_resetPickupBotVisitTimes` 0x18be50 [M :4-13]: zero one bot's visit stamp across the
+/// pickup rows — the game walks 0x40 rows from `MPpickups+0x80 + bot·4` down by the 0xA0
+/// row stride; the port's `BotPickup.visit` is `[f32; 16]` by bot index [M 0x129958].
+/// `NDrone2_DSTATE_BotDead` 0x171518 calls it so a respawned bot re-competes for pickups.
+pub fn reset_pickup_bot_visit_times(pickups: &mut [crate::mp::bots::BotPickup], bot: usize) {
+    if bot >= 16 {
+        return;
+    }
+    for p in pickups.iter_mut() {
+        p.visit[bot] = 0.0;
+    }
+}
+
+/// `MP_UnregisterPickup` 0x18a058 [M :5-31]: take a registered pickup row out — the game
+/// frees its AI emitter, zeroes the 0xA0-byte `MP_PICKUP` row and the obj's 0x40 ext, sets
+/// the ext's +0x30 index to 0xFFFF, records `PickupLastDeletedIndex` and decrements the
+/// `MPSettings+0x472` registered count. The port's row is `BotPickup` (the available flag
+/// covers the deleted state, the count is `MpSettings::registered_pickups`).
+/// Returns false when the row was not registered (the game's gates: MP on, obj present, the
+/// obj's ext index valid and matching the row) [M].
+pub fn unregister_pickup(pickup: &mut crate::mp::bots::BotPickup, registered: &mut u32) -> bool {
+    if !pickup.available {
+        return false; // the row-registered gate [M :10-14]
+    }
+    *pickup = crate::mp::bots::BotPickup {
+        pos: [0.0; 3],
+        weapon_id: 0,
+        mp_class: 0,
+        is_obj_flag2: false,
+        visit: [0.0; 16],
+        available: false,
+    }; // the memset [M :21-27]
+    *registered = registered.saturating_sub(1); // MPSettings+0x472 -= 1 [M :29]
+    true
+}
+
+/// `MP_getObjExtObj` 0x18bca8 [M :22-57] — the Demolition/Protection site getter's tail: an
+/// ext whose script obj (ext+0x84) resolves to a DIFFERENT obj replaces the row's pointer and
+/// routes msg 0x40 to BotGlobal (0xc5) so the attackers re-target. The port's site row is the
+/// `BotObjectives` site view (the OBJ_ROW pseudo-opponent), which the driver rebuilds per
+/// tick — the re-target arrives through `BotGlobalOutcome::ObjectiveSite` (bots.rs) [S].
+pub fn get_obj_ext_obj(current: usize, script_obj: usize) -> (usize, bool) {
+    if current == script_obj || script_obj == 0 {
+        (current, false) // [M :35-42]
+    } else {
+        (script_obj, true) // the row := the script obj + the msg-0x40 route [M :44-53]
+    }
+}
+
+/// `MP_objectBeingDeleted` 0x18ac90's shape [M :66-278]: clear every mode-object row (and its
+/// AI emitter) that holds the deleted obj — the flag/bases (0x20000100), GoldenEye (0x20000200),
+/// Hill (0x40000800/0x60001000), Uplinks (0x60000008), Demolition (0x20000040),
+/// Protection (0x20000080), Flags/Bases (0x20000004) — plus the 64 `MPObjects` slots, then
+/// route msg 0x3D to BotGlobal when anything matched [M :259-272]. The port's rows are the
+/// per-store obj ids; the 0x3D route is `BotGlobalOutcome::GoalCancel` (bots.rs) [S].
+pub fn object_being_deleted(objs: &mut [usize], obj: usize) -> bool {
+    let mut hit = false;
+    for r in objs.iter_mut() {
+        if *r == obj {
+            *r = 0; // the game's `*piVar2 = 0` [M :250]
+            hit = true;
+        }
+    }
+    hit // the caller routes msg 0x3D to BotGlobal [M :259-272]
+}
