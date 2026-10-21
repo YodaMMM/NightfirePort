@@ -1875,9 +1875,22 @@ pub fn spot_movie_gates(state6: bool, intro_up: bool, attract_up: bool, looping:
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Blank { Always, WithFrame, Never }
 
-pub fn shot_hud(scene: &scene::Scene, aspect: f32, menu: Option<&gpu::HudFrame>) -> gpu::HudFrame {
+/// Whether the scene's script overlay (the view fade / letterbox / flash — the 3D view's) draws
+/// this frame. Not while a movie frame owns the screen (the game's movie loop draws nothing of the
+/// scene over it), and not on the front-end level 0x07000048: `ResetMap_Load` runs `Player_Start`
+/// → `Player_Init` there too [M 0x1d6360:154], arming the 45-tick entry fade [M 0x1910f8:45], but
+/// the game's front end ticks it away under the menus while the port's front-end scene never
+/// ticks — the fade sat at full black OVER the title and every backdrop-less page, and (once
+/// doublecross-transitions chained it into this overlay) over every boot/briefing movie (user
+/// report 2026-10-20: "movies arent visually there … I can hear the audio").
+pub fn scene_overlay_up(scene: &scene::Scene, movie_up: bool) -> bool {
+    !movie_up && scene.sim.as_ref().map_or(true, |s| s.level & 0xff00_ffff != menu::FRONTEND_LEVEL)
+}
+
+/// `movie_up`: a movie frame is on screen (see `scene_overlay_up`).
+pub fn shot_hud(scene: &scene::Scene, aspect: f32, menu: Option<&gpu::HudFrame>, movie_up: bool) -> gpu::HudFrame {
     let mut f = menu.map_or_else(|| overlay_for(scene, aspect), |m| m.clone());
-    f.append(&scene.script_overlay_hud(aspect));
+    if scene_overlay_up(scene, movie_up) { f.append(&scene.script_overlay_hud(aspect)); }
     f
 }
 
@@ -2246,7 +2259,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let depth = gpu::depth_view(&device, w, h);
     let (vp, vp_rot) = cam.view_proj(proj_aspect);
     let snow = snow_for(scene, cam);
-    let hud_owned = shot_hud(scene, proj_aspect, menu);
+    let hud_owned = shot_hud(scene, proj_aspect, menu, movie.is_some());
     let hud = &hud_owned;
     let movie_arg = movie.map(|(w, h, rgba)| (*w, *h, rgba.as_slice()));
     r.set_shards(&queue, &scene.shard_draws());
@@ -5221,7 +5234,9 @@ impl App {
                 } else { overlay_for(&self.scene, aspect) };
                 if let Some(d) = self.dev.as_deref() { if d.overlay || d.menu { hud.append(&dev::hud(d, &self.scene, aspect, vp)); } }
                 if self.fps_meter.shown > 0.0 { hud.append(&dev::fps_counter_hud(&self.scene, aspect, self.fps_meter.shown)); }
-                hud.append(&self.scene.script_overlay_hud(aspect));
+                // The scene's script overlay belongs to the 3D view — off a movie frame and off the
+                // front-end level (`scene_overlay_up`).
+                if scene_overlay_up(&self.scene, movie_frame.is_some()) { hud.append(&self.scene.script_overlay_hud(aspect)); }
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
                 let fp_enc = std::time::Instant::now();

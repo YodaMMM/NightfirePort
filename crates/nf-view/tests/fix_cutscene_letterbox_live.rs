@@ -66,7 +66,7 @@ fn the_kimiko_scene_raises_the_letterbox_and_the_shot_carries_the_bars() {
     // The gameplay overlay the shot path used to draw alone is empty while the camera runs
     // (the same gate the port's HUD blank rides) — the bars can only come from the script overlay.
     assert!(nf_view::overlay_for(&scene, 16.0 / 9.0).runs.is_empty(), "the gameplay HUD is blank during the cut-scene");
-    let frame = nf_view::shot_hud(&scene, 16.0 / 9.0, None);
+    let frame = nf_view::shot_hud(&scene, 16.0 / 9.0, None, false);
     let bars = bar_verts(&frame, &scene);
     let (ys, xs): (Vec<f32>, Vec<f32>) = (bars.iter().map(|v| v.p[1]).collect(), bars.iter().map(|v| v.p[0]).collect());
     assert!(ys.iter().any(|&y| y > 0.99), "the top bar must touch the screen top, ys {ys:?}");
@@ -96,7 +96,7 @@ fn no_letterbox_bars_before_the_scene_starts() {
         eprintln!("strip texture not loaded in this level — nothing to assert"); return;
     };
     assert!(!scene.sim.as_ref().unwrap().drones.letterbox, "the letterbox flag starts down");
-    let frame = nf_view::shot_hud(&scene, 16.0 / 9.0, None);
+    let frame = nf_view::shot_hud(&scene, 16.0 / 9.0, None, false);
     // The bars are the TWO border sprites Script_CameraStart creates [M 0x1d9140:49-61; L
     // SpriteInfo 0x2c9468] — one 12-vertex run, the same shape `bar_verts` finds above. The
     // matcher pins that run shape, not "any strip-textured quad": the overlay's full-screen fade
