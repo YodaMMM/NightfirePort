@@ -696,6 +696,14 @@ pub struct Drone {
     // Geometry to the opponent (`Drone_GetOpponentInfo`): +0x1A0 distance, +0x1C4 yaw to it.
     pub dist: f32,
     pub yaw_to_opp: f32,
+    // `Drone+0x154..+0x164`: the per-player distance array `NDrone2_PreDroneControl`
+    // 0x148db0:35-48 fills every tick (`Vec_Dist3D` of obj+0x30 to each `glb_players[i]+0x30`,
+    // 100000.0 when the slot is null). Consumed by `DroneFunc_NearPlayerCollision` 0x14b190
+    // through `NDrone2_DoCollision` 0x149ec8:23 / `NDrone2_DoGravity` 0x141e58:29. The port has
+    // one player: slot 0 is the live distance, slots 1..3 stay at the game's empty-slot
+    // 100000.0 [S one player]. Seeded at the empty-slot value so a pre-fill read (the game has
+    // none — PreDroneControl precedes Collision) cannot pass the < 2.0 test.
+    pub dist_to_player: [f32; 4],
     // State machine.
     pub state: u8,
     pub prev_state: u8,
@@ -1500,6 +1508,8 @@ impl Drone {
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(), free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
+            // `DroneFunc_NearPlayerCollision`'s source array (own line — merge lesson 4):
+            dist_to_player: [100000.0; 4],
             velocity: [0.0; 3], in_air: false, on_surface: true,
             // astronaut zero-G (fields on their own lines — merge lesson 4):
             thrust: false,
@@ -1672,6 +1682,11 @@ impl Drone {
         // from the init here — the placement words carry this port's values (docs/systems/
         // drone2-helpers.md); porting them is its own task.
         if self.mode == 0x17 { d.props.set(0x51, &mut self.props, 1); }
+        // `NDrone2_ControlDTYPE_Astronaut` 0x14b128 is `DroneTypeSettings` row 0x1D slot +8, read
+        // by `Drone_Control` 0x139268:60-64 (`+0xC5 * 0xC + 8`); its 28-byte body is a tail-call to
+        // `NDrone2_ControlSTANDARD` 0x1490f0 — the per-tick AI pass below IS this function's body,
+        // so mode-0x1D drones (kind 0x18: the 0700001b astronaut skins 0x05000078/0x050000BA, 19
+        // placements [D census in docs/systems/ai-dmode-inits.md]) need no separate control path.
         self.alt_state = if self.alt_mode == 0 { 0 } else {
             let a = row(self.alt_mode).map_or(0, |t| t.alt);
             (if a != 0 { a } else { row(self.mode).map_or(0, |t| t.alt) }) as u8
@@ -1722,6 +1737,31 @@ impl Drone {
     /// Mode-specific writes (modes 0xC, 0x11, mission scripts) are not ported.
     fn init_properties(&mut self, d: &Data, param: &impl Fn(u32) -> u32) {
         let set = |w: &mut [u32; 3], id: usize, v: u32| d.props.set(id, w, v);
+        if param(5) < 0x24 {
+            // The OLD chain, row 0 only: every shipped drone placement is parameter 5 = 100 (NEW;
+            // 555/555 [D census, docs/systems/ai-dmode-inits.md]) and the only OLD-path creators —
+            // MP bots (`BOT_init` 0x1249e8 memsets its DIVars) and the coder event (07000001 NIS
+            // 0x0600003B, `Script_EventHandler` 0x1d94c0 case 8 → `Drone_CoderCreate` 0x13a108,
+            // memset + skin/script/param-7 words) — give parameter 5 = 0. Row 0's function is
+            // `NDrone2_init_DMODE_Normal` 0x14d958 (a pure tail-call) →
+            // `NDrone2_init_DMODE_Defaults` 0x14d528: 40 `behaviour_util_setProperty(…, 1)` calls
+            // [M 0x14d528:4-44]. `DoModeSettingsOLD` 0x14cfa0's unconditional tail list is inside
+            // Defaults except 0x38; the +0xd8-conditional extras need +0xd8 ∈ {0x10,0xd,0x11,0x13}
+            // and the `+0xC5 == 0x11` extras need mode 0x11 — row 0 leaves +0xC5 = 0 and the coder
+            // skin 0x0500005B takes the skin-switch default +0xd8 = 0 [M 0x14b300:96-99], so
+            // neither fires. Rows 1..22 are never dispatched (docs/port-map/unreached.md).
+            for id in [1usize, 6, 7, 10, 0xc, 0x48, 0xf, 0x11, 0x13, 0x18, 0x1d, 0x4c, 0x21, 0x29,
+                       0x2e, 0x37, 0x41, 0x42, 0x4f, 0x51, 0x5a, 0x24, 0x3c, 0x1f, 0x44, 0x33,
+                       0x32, 0x31, 0x28, 0x27, 0x26, 0x30, 0x2f, 0x2a, 0x43, 0x3b, 0x17, 0x46,
+                       0x38] {
+                set(&mut self.props, id, 1);
+            }
+            // Row 0's word +4 is 0x00000000 → +0x500/+0x50C start at 0.0 [D table 0x29ad40 row 0;
+            // the mode byte 0 and team byte 1 are the port's construction defaults, and
+            // `type_setup`'s team fold below lands on the same values for dtype 0].
+            self.alert = 0.0;
+            self.alert_floor = 0.0;
+        }
         if param(5) >= 0x24 {
             match d.level {
                 0x0700_0007 => {}
@@ -1739,6 +1779,16 @@ impl Drone {
 
     /// `NDrone2_FeetPos`: the feet sphere's centre (object y − 1 + r 0.4 with the standing height 1.0).
     pub fn feet(&self) -> V3 { [self.pos[0], self.pos[1] - 0.6, self.pos[2]] }
+
+    /// `DroneFunc_NearPlayerCollision` 0x14b190: some non-null player slot's distance
+    /// (`Drone+0x154 + 4i`, filled per tick by `NDrone2_PreDroneControl` 0x148db0:35-48) is
+    /// < 2.0 — the decompile continues past `2.0 <= dist` [M 0x14b190:10-16], so 2.0 itself is
+    /// NOT near. `NDrone2_DoCollision` 0x149ec8:23-26 and `NDrone2_DoGravity` 0x141e58:29-32
+    /// force their physics-on return on this, overriding the `+0x570 & 2` no-physics flag
+    /// [M 0x140968:152-190 dispatches the two]. The port's collision handler models neither
+    /// +0x570 nor the 0x4F8&0x20 special-physics fold, so the override is currently inert
+    /// there; the probe and its per-tick source array are the port of the function.
+    pub fn near_player_collision(&self) -> bool { self.dist_to_player.iter().any(|&x| x < 2.0) }
 
     // ---- patrols and idling ------------------------------------------------------------------------------------
 
@@ -4515,7 +4565,11 @@ impl Drone {
     /// hit against `drone+0x400` — `NDrone2_Collision` 0x140e90's probe `obj.pos + up·(0.4 − hip)` [M 0x140c44-60:
     /// `c2 = hit+0x40 − drone+0x400`; 0x140e30-48: the settle runs while `c2 > −0.1`; the ×0.125 feed is
     /// `Drone_FeetOnPoint` 0x140660's correction out-param, 0x140e50] — so the gate is
-    /// `correction < 0.5 − hip` (0.4 − hip − correction > −0.1). Through the ANIMATED hip that is the driver-only
+    /// `correction < 0.5 − hip` (0.4 − hip − correction > −0.1). The game picks this whole branch
+    /// from `NDrone2_DoCollision` 0x149ec8 / `NDrone2_DoGravity` 0x141e58, whose shared
+    /// `DroneFunc_NearPlayerCollision` 0x14b190 gate (< 2.0 of a player forces physics on over the
+    /// `+0x570 & 2` flag) is ported as `near_player_collision` — the port models neither +0x570 nor
+    /// the 0x4F8&0x20 fold, so the override has no live consumer here yet. Through the ANIMATED hip that is the driver-only
     /// gating the game does itself: the sit's 0.2 clamp settles the whole on-surface band (correction < 0.3 — the
     /// trace's ×0.125 decay [L 05-truck.trace 39.305 → 39.2]), while the standing hip 1.0 settles only the deep-sink
     /// band (correction < −0.5, a 0.1-wide slice of the ray's [−0.6, 0.2] reach) and is otherwise NOT re-adjusted —
@@ -12246,7 +12300,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let armed = (2..0x47).contains(&self.bond_weapon) || (0x6a..=0x71).contains(&self.bond_weapon);
             // `PlrStat_OkToUpdate` 0x1993e0: MP master → 1; else Mission_Status < 2 (0 or 1) → 1 [M 0x1993e0].
             let stat_ok = self.mp_master != 0 || self.mission.status() < 2;
-            for dr in self.list.iter_mut().filter(|x| x.present) { dr.light = light; dr.opponent_info(player); dr.player_pos = player.pos; dr.seen = false; dr.bond_armed = armed; dr.stat_ok = stat_ok; }
+            for dr in self.list.iter_mut().filter(|x| x.present) { dr.light = light; dr.opponent_info(player); dr.player_pos = player.pos; dr.seen = false; dr.bond_armed = armed; dr.stat_ok = stat_ok;
+                // `NDrone2_PreDroneControl` 0x148db0:35-48: the +0x154 per-player distance fill
+                // (Vec_Dist3D of the two obj+0x30s; 100000.0 for a null slot). The port's single
+                // player is slot 0 [S one player]; slots 1..3 keep the empty-slot value.
+                let dx = dr.pos[0] - player.pos[0]; let dy = dr.pos[1] - player.pos[1]; let dz = dr.pos[2] - player.pos[2];
+                dr.dist_to_player = [(dx * dx + dy * dy + dz * dz).sqrt(), 100000.0, 100000.0, 100000.0]; }
         }
         self.update_player_bullets(d, player.pos);
         // The use objects' per-tick halves (`PCQWorm_Update` 0x1aee20's bullet install +
