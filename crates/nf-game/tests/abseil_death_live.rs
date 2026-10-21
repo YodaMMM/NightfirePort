@@ -141,14 +141,24 @@ fn a_guard_killed_on_the_rope_leaves_it_and_lands_below() {
     let mut landed = None;
     for t in 1..=240u32 {
         sim.tick(&d, &bond_at([0.0, -1000.0, 0.0]));
-        if sim.list[ai].state == state::DEAD { landed = Some(t); break; }
+        if sim.list[ai].abseil_land_latch { landed = Some(t); break; }
     }
-    let t = landed.expect("the corpse lands and reaches Dead 0x47");
+    let t = landed.expect("the corpse lands (the feet probe → danim 10, +0xcdc = 1)");
     let dr = &sim.list[ai];
     assert!(dr.on_surface, "the feet probe found the floor [M 0x169b28 case 3]");
     assert!(dr.pos[1] < rope_y - 1.0, "fell to a floor below the rope point ({rope_y} → {})", dr.pos[1]);
     assert_eq!(dr.anim.danim, 10, "the landed-corpse danim [M 0x169b28 case 3 SetDAnimNow(10)]");
+    assert_eq!(dr.state, state::ABSEIL_DEATH, "touchdown does not enter Dead yet: 0x47 is the call's completion state (+0x596) [M 0x169b28:55]");
     assert!(t <= 240, "inside the game's gravity timing ({t} ticks)");
+    // DEAD lands when CallHandler sees a class 2/9 danim [M 0x13add0]: danim 10 is class 8, its follow-on
+    // 0xbf class 9 [D Drone_AnimInfo 0x273200] — so Dead starts with 0xbf playing.
+    let mut dead = false;
+    for _ in 0..600u32 {
+        sim.tick(&d, &bond_at([0.0, -1000.0, 0.0]));
+        if sim.list[ai].state == state::DEAD { dead = true; break; }
+    }
+    assert!(dead, "Dead 0x47 follows the landing anim");
+    assert_eq!(sim.list[ai].anim.danim, 0xbf, "Dead starts on the class-9 follow-on 0xbf [D 0x273200 danim 10 next = 0xbf]");
 }
 
 /// A surviving bullet on the rope: the abseil DSTATEs pass `DroneFunc_HandleImpact(0, 0)` [M

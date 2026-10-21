@@ -2225,12 +2225,15 @@ impl Drone {
     /// 3–7 / 9), `SetHTAnim` starts it. Otherwise `SetEndAnim` goes to the follow-on — and with none, **the previous
     /// script keeps playing** (no `SetHTAnim`): e.g. an unarmed guard (anim set 0xC) has no death or corpse script, so
     /// the last one holds instead of an empty pose.
-    fn set_danim(&mut self, d: &Data, danim: u16, blend: u16) {
+    /// Returns whether a script started (`SetDAnimInternal` 0x13aee8's return: 1 on the play arm, 0 when the
+    /// skip arm ends it [M 0x13aee8:95-126]).
+    fn set_danim(&mut self, d: &Data, danim: u16, blend: u16) -> bool {
         if danim == 0x188 && std::env::var_os("NF_SDLOG").is_some() { eprintln!("[sd] -> 188 blend {}", blend); }
         // The replaced danim: a 180° turn (info flag 0x100) still running.
         let old_info = d.tables.info.get(self.anim.danim as usize).copied().unwrap_or([0; 24]);
         let old_turn = self.anim.danim != 0 && old_info[1] & 1 != 0 && self.anim.script.is_some() && !self.anim.held;
         let mut danim = danim;
+        let mut played = false;
         for _ in 0..8 {
             let info = d.tables.info.get(danim as usize).copied().unwrap_or([0; 24]);
             self.anim.danim = danim;
@@ -2262,12 +2265,14 @@ impl Drone {
                 // A new script has no previous root: no motion until its second tick (a call starting a danim after
                 // this tick's root motion would otherwise move by the old sequence's root minus the new one's).
                 self.root_prev = None;
+                played = true;
                 break;
             }
             let next = u16::from_le_bytes([info[10], info[11]]);
             if next == 0 || next == danim { break; }
             danim = next;
         }
+        played
     }
 
     /// `DroneAnim_SetDAnimNow(danim, blend, wait, vars)` (0x13dd78): zero the completion action
@@ -2276,8 +2281,7 @@ impl Drone {
     /// The `wait` argument (the game's third, +0x578) is 0 at every ported call site.
     fn set_danim_now(&mut self, d: &Data, danim: u16, blend: u16) {
         if let Some(c) = self.anim.call.as_mut() { c.1 = 0; c.2 = 0; }
-        self.set_danim(d, danim, blend);
-        if self.anim.script.is_some() && !self.anim.started { self.anim.reached = true; }
+        if self.set_danim(d, danim, blend) { self.anim.reached = true; } // `+0x57B = 1` on a started script [M 0x13dd78]
     }
 
     /// `DroneAnim_SetScript(script, state, follow-on, …, next AI state, message, flags)` (0x13e088): play a script by
@@ -2446,7 +2450,7 @@ impl Drone {
                 if self.anim.len_cap.is_some() { end_blend = 5; }
                 // `SnapRotate`: desired += the turn, the yaw = desired.
                 if self.snap != 0.0 { self.desired_yaw += self.snap; self.yaw = self.desired_yaw; self.snap = 0.0; }
-                self.set_danim(d, next, end_blend)
+                self.set_danim(d, next, end_blend);
             }
             else if self.anim.once {
                 // `AnimEndCallback` + `CheckForAnimComplete`: the script stops on its last frame; `+0x57A` clears.
@@ -8280,8 +8284,8 @@ impl Drone {
             // delete); elsewhere wait for +0xcdc == 0 and the feet probe (the corpse landed) → danim
             // 10, +0xcdc = 1, DEAD 0x47 [M case 3]. The game's danim 10 arm is `DroneAnim_SetDAnimNow`
             // (0x13dd78: clear the completion action, `SetDAnimInternal(10, 0, 0)`, mark +0x57B on a
-            // started script) followed by `+0x596 = 0x47` [M 0x169b28:53-55]; the port starts the danim
-            // (`set_danim`) and queues DEAD directly — the same routing, one call-handler tick earlier.
+            // started script) followed by `+0x596 = 0x47` [M 0x169b28:53-55] — DEAD is the completion
+            // state, applied when the class-9 follow-on 0xbf starts (see the landing arm).
             (state::ABSEIL_DEATH, msg::UPDATE) => {
                 if d.level == 0x0700_004a {
                     if self.drawn { self.present = false; self.enabled = false; }
@@ -8293,7 +8297,12 @@ impl Drone {
                     if self.on_surface {
                         self.set_danim_now(d, 10, 0);
                         self.abseil_land_latch = true;
-                        self.set_state(state::DEAD);
+                        // `+0x596 = 0x47` [M 0x169b28:55]: DEAD is the call's completion state, applied by
+                        // CallHandler once a class 2/9 danim plays [M 0x13add0] — danim 10 is class 8, its
+                        // follow-on 0xbf class 9 [D Drone_AnimInfo 0x273200], so DEAD lands when the landing
+                        // anim ends (review of 850, 2026-10-21: the port entered DEAD at touchdown).
+                        let want = self.anim.call.map_or(0, |c| c.0);
+                        self.anim.call = Some((want, state::DEAD, 0));
                     }
                 }
                 true
