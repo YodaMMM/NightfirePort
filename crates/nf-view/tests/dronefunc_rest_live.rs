@@ -47,8 +47,18 @@ fn the_target_registry_and_first_attack_stamps_follow_the_game() {
         sim.bond.pos = [-43.11, 6.46, 10.37]; // the playtest camera [L the playtest report]
         sim.bond.prev_pos = sim.bond.pos;
     }
+    // The stamp is read on the tick the first ATTACK runs: afterwards gunfire keeps adding sound
+    // shares to the alertness UNCLAMPED [M DroneFunc_HandleSoundAlerts 0x148a30], so a read 1800
+    // ticks later sees the fight, not the stamp (alert-status-vs-alertness, 916, exposed it).
+    let mut first_alert: Option<(usize, f32)> = None;
     for _ in 0..1800u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        if first_alert.is_none() {
+            let sim = scene.sim.as_ref().unwrap();
+            if let Some(i) = sim.drones.list.iter().position(|d| d.team == 1 && d.first_attack_done) {
+                first_alert = Some((i, sim.drones.list[i].alert));
+            }
+        }
     }
     let sim = scene.sim.as_ref().unwrap();
     // A team-1 guard saw Bond and entered its first ATTACK (the armed-girl scenario's proven
@@ -56,8 +66,10 @@ fn the_target_registry_and_first_attack_stamps_follow_the_game() {
     let attacker = sim.drones.list.iter()
         .find(|d| d.team == 1 && d.first_attack_done)
         .expect("a team-1 guard reached its first ATTACK in the wake scenario");
-    assert!((attacker.alert - 1.0).abs() < 1e-4,
-        "the first attack stamps alert 1.0 [M 0x14aed8:15], got {}", attacker.alert);
+    let (_, a0) = first_alert.expect("the first ATTACK tick was observed");
+    // Same tick: the stamp 1.0, plus at most that tick's sound share (sound only ever adds).
+    assert!(a0 >= 1.0 - 1e-4 && a0 < 1.5,
+        "the first attack stamps alert 1.0 [M 0x14aed8:15 / 0x148010:66], got {a0} on its tick");
     // Its registry slot: claimed (flag bit 0) + seen (flag bit 1) with a position
     // [M 0x141f28:26-33 / 0x14a008:14-23].
     assert!(attacker.target_id != 0xff, "the guard allocated a registry slot [M 0x141f28]");
