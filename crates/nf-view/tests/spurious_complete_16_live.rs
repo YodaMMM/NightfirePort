@@ -19,7 +19,7 @@
 //!
 //! Tests: the 07000016 arrival with the carried 07000014/15 chain posts exactly ONE "OBJECTIVE
 //! COMPLETE" (the spawn plate's ch 0x8e completing record 21) and no type-3 "Mission Complete"
-//! banner; the real end (the chaser's defeat → ch 0x90 → AND #271 → ch 100 [D #271]) posts the
+//! banner; the real end (the KikoDeathButton #693 → ch 0x90 → mux #618 → ch 100 [D]) posts the
 //! banner. Opt-in via NF_ISO (the slim ISO is enough).
 
 use nf_game::player::{Input, RamSave};
@@ -87,7 +87,7 @@ fn the_arrival_posts_one_objective_complete_and_no_mission_banner() {
 }
 
 /// The real end: the launch chain (ch 0x81 [D-driven] → the pack cinema → ch 240/242 → the
-/// spawners) spawns the chaser; her defeat raises ch 0x90 (the kiko.rs stand-in) → AND #271 →
+/// spawners) spawns the chaser; her defeat raises nothing (829); the KikoDeathButton #693 raises ch 0x90 → mux #618 →
 /// ch 100 [D #271] → MissionState 6 — and NOW the type-3 "Mission Complete" banner posts
 /// [M 0x182c60:85-122]. Sister: no mission banner before the ch 100 tick.
 #[test]
@@ -128,7 +128,7 @@ fn the_real_end_condition_posts_the_mission_complete_banner() {
             }
             let sim = scene.sim.as_ref().unwrap();
             if !sim.hud.mission_msgs.is_empty() { banner_before_end += 1; }
-            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && d.death_channel == 0x90) {
+            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)) {
                 found = Some(i);
                 break;
             }
@@ -155,7 +155,31 @@ fn the_real_end_condition_posts_the_mission_complete_banner() {
         }
         assert!(died, "the chaser dies at the silo");
     }
-    // ch 0x90 → AND #271 → ch 100 → MissionState 6 → the banner [M 0x182c60:85-122].
+    // kiko-16-defeat (829): her death raises nothing (param 12 = 0 [D #261]) — no banner yet.
+    for _ in 0..120u32 {
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        if !scene.sim.as_ref().unwrap().hud.mission_msgs.is_empty() { banner_before_end += 1; }
+    }
+    assert!(!scene.sim.as_ref().unwrap().drones.channels.on(0x90), "the chaser's death raises no ch 0x90 [D #261 param 12 = 0]");
+    // The real end: Bond's E on the KikoDeathButton #693 (p0 = ch 0x90, gate 0x8d [D]) —
+    // fix_finale_live's press (the re-seat beside the button is that test's reach; 911 owns the
+    // on-foot route).
+    let at = [7.02f32, 1.16, -155.61];
+    for k in 0..240u32 {
+        if scene.sim.as_ref().unwrap().drones.channels.on(0x90) { break; }
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            sim.bond.pos = [7.02, 1.2, -154.4];
+            sim.bond.vel = [0.0; 3];
+            let eye = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+            let to = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+            sim.bond.yaw = (at[0] - sim.bond.pos[0]).atan2(at[2] - sim.bond.pos[2]);
+            sim.bond.pitch = (to[1] / to[0].hypot(to[2]).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+        }
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, k % 6 == 0);
+        if !scene.sim.as_ref().unwrap().hud.mission_msgs.is_empty() { banner_before_end += 1; }
+    }
+    // ch 0x90 → mux #618 → ch 100 → MissionState 6 → the banner [M 0x182c60:85-122].
     let mut complete = false;
     for _ in 0..600u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
@@ -165,8 +189,8 @@ fn the_real_end_condition_posts_the_mission_complete_banner() {
     }
     {
         let sim = scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x90), "the chaser's defeat raises ch 0x90 [S kiko.rs]");
-        assert!(sim.drones.channels.on(100), "AND #271 [ch 0x90] → ch 100 [D #271]");
+        assert!(sim.drones.channels.on(0x90), "the KikoDeathButton raises ch 0x90 [D #693 p0]");
+        assert!(sim.drones.channels.on(100), "mux #618 (out 0x64 ← 0x90) fires ch 100 [D #618]");
         assert!(complete, "the final mission completes (MissionState 6 [M 0x182c60:85-116])");
         assert_eq!(sim.drones.mission.to_end, 0x0730_0017, "the driving hand-off [M 0x182c60:111-112]");
         assert!(mission_banner_ticks > 0, "the type-3 'Mission Complete' banner posted at the real end");
