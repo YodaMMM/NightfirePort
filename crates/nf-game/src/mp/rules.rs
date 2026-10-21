@@ -80,6 +80,15 @@ pub struct MpObjState {
     /// mp-scenarios-online: the model bounds (the contact sphere / the hill box); `None` = no
     /// contact geometry (the explicit `touch_*` events only).
     pub bounds: Option<MpObjBounds>,
+    /// unported-scripts-1: the object's ScriptPlayer state — `SP_SwitchToScript` 0x1dcad8's
+    /// observable writes on the SP at `obj+0xE0`: the current script hash `sp+0x26+slot*2`
+    /// and the SP state word `sp+0x24` [M 0x1dcad8:23-34]. The demolition/protection site's
+    /// SP object is `MPOBJECT+6` [M 0x1870a0:115]. 0/0 = the boot script still current. The
+    /// port keeps one script slot: the game's double-buffer swap (`Script_Free` of the active
+    /// SCRIPTINFO, slot toggle 0↔1, `SP_LoadScript` — 0x1dcad8:16-27) is represented by
+    /// these two fields only ([S] unverified beyond the observable id+state).
+    pub sp_script: u16,
+    pub sp_state: u8,
 }
 
 /// The scenario objects' live state — the port's `Flags`[2] @0x317210, `Bases`[2] @0x317330,
@@ -900,6 +909,12 @@ impl MpMatch {
             self.game.team_scores[defending] += 1.0; // [M :112-124]
             if let Some(site) = &mut self.objects_rt.site {
                 site.sub = 1;
+                // The same branch switches the site's ScriptPlayer to script 1
+                // (`SP_SwitchToScript(site_sp, 1, 0)` [M 0x1870a0:115]) — script hash 1
+                // lands the SP state on 2, not 3 [M 0x1dcad8:28-33]. The damage path
+                // (:81-160) makes no SP switch, so only the timeout writes these.
+                site.sp_script = 1;
+                site.sp_state = 2;
             }
         }
     }
