@@ -1,3 +1,9 @@
+// unported-misc-5 — the game's generic list containers are Rust collections here:
+// `LList_Init` 0x1cc958 (the door list's init; its other callers `Door_Init` 0x136848,
+// `control_init_object_lists` 0x134388, `Coll_ResetHitHeap` 0x1edda0, `Sensor_Init` 0x1b0868,
+// `Drone_PreLoad_Init` 0x136888, `Copter_Init` 0x17e4f0, `InitShards` 0x12bed0,
+// `Creature_Init` 0x135208) is this module's owned `Vec` — the game's LLISTINFO/LLNODE
+// linked list with the same insert-at-head/order semantics, without the manual nodes.
 //! Doors (`docs/systems/world-objects.md` "Doors"): `Door_Create` 0x136100, `Door_SetupSwing` 0x135440,
 //! `Door_SetState` 0x135618, `Door_Interp` 0x135738, `Door_ReactToHit` 0x135980, `Door_Activate` 0x135be0,
 //! `Door_DoMsg` 0x135f18, `Doors_Calc` 0x135fe0, `Door_Update` 0x1363c8 — ported from the disassembly [M] and
@@ -241,9 +247,16 @@ impl Door {
     pub fn live_sph(&self) -> (V3, f32) { (transform(&self.matrix, self.sph_centre), self.sph.1) }
 }
 
+/// `control_init_object_lists` 0x134388, `Coll_ResetHitHeap` 0x1edda0, `Sensor_Init` 0x1b0868,
+/// `Drone_PreLoad_Init` 0x136888, `Copter_Init` 0x17e4f0, `InitShards` 0x12bed0,
+/// linked list with the same insert-at-head/order semantics, without the manual nodes.
+/// `control_init_object_lists` 0x134388, `Coll_ResetHitHeap` 0x1edda0, `Sensor_Init` 0x1b0868,
+/// `Drone_PreLoad_Init` 0x136888, `Copter_Init` 0x17e4f0, `InitShards` 0x12bed0,
+/// linked list with the same insert-at-head/order semantics, without the manual nodes.
 /// All doors of a level, in placement (creation) order.
 #[derive(Clone, Debug)]
-pub struct Doors {
+pub struct Doors
+ {
     pub list: Vec<Door>,
     /// `DoorGroupsStates` (0xca bytes, cleared by `Doors_Calc` each frame): per group, the OR of the states.
     pub group_states: [u16; 101],

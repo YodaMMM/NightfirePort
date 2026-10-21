@@ -169,6 +169,21 @@ pub struct Material {
     /// The object's world-space bounding-sphere radius (the glist radius scaled by the instance matrix). Used by the
     /// CPU-side frustum cull (A-11e): a draw is skipped when its sphere is fully outside the view frustum.
     pub radius: f32,
+    // unported-misc-5 — the game's render-build layer, folded into the scene's owned structures:
+    // `hashtable_create_sections` 0x1ca2a8 / `hashtable_initialise` 0x1ca4b8 (map load:
+    // `ResetMap_Load` 0x1d6360, `LoadableLoad` 0x1d69e8, `LoadableReload` 0x1d6ab0) build the cel
+    // hashtable the streamer walks; `hashtable_deleteitem` 0x1ca1b0 (`Script_FreeFromHashTable`
+    // 0x1daec0, `hashtable_delete_hashtype` 0x1ca520) removes entries. The port's `CelGraph`-keyed
+    // draw lists and hash maps carry the same (cel, glist) → data relation without the sectioned
+    // table. The viewer/world glue: `build_alloc_viewer` 0x1c9378 (Mem_Malloc 0x240 + the +0x28
+    // id + `Camera_Reset` 0x1b9af0) and `build_link_world_to_viewer` 0x1c94d8 (`Camera_Create`
+    // 0x1bb0f8's world→viewer link) are this struct's camera + `world` field setup at load;
+    // `build_alloc_world` 0x1c93c8 (4-byte world holder, `Camera_CreateCameras` 0x1bb2b8 +
+    // `ResetMap_GameInit` 0x1d5080) is the `world` member itself. `build_MakeCelOverlapBox`
+    // 0x1c94f8 is EMPTY in the game (8-byte `jr ra`, called by `ResetMap_Load` 0x1d6360) — a no-op
+    // the port needs no trace of. `Stack_Init` 0x1cce38 (`Camera_Reset`'s per-viewer stack, and
+    // `MenuManager_Create` 0x21b908's) is the plain Vec the camera/menu state grows here and in
+    // menu.rs (see the GameFlow note there).
     /// The room cel this static draw sits in — `build_FindCel` (0x1c8cb0) over the placement's world
     /// centre, the same lookup `build_LinkToRoom` (0x1c9680) uses to link the game's objects to their
     /// cel. `None` = no room cel contains it (outdoor/uncel'd geometry — never cel-culled).
@@ -778,6 +793,12 @@ pub struct HudState {
     /// [S port architecture: the port's Sim is per level, so the count resets with the level; the
     /// game's .sdata survives level loads.]
     pub door_msg: u32,
+    /// unported-misc-5: the game's `LoadMsg` global (0x30cd08, .sdata, next to `DoorMsg`): the aim-ray
+    /// exit-hint cooldown. `Check_Target` decrements it on EVERY 6th-frame invocation (0x1a7810:78-79),
+    /// and the 0x1d `Trigger_Type == 10` arm only fires while it is 0, re-arming it to
+    /// `FRAME_RATE_INT * 0x14` = 60 invocations = 360 frames [M 0x1a7810:195-196]. Same [S port
+    /// architecture note as `door_msg`: the port resets it per level, the game's .sdata does not.
+    pub load_msg: u32,
 }
 
 impl HudState {
@@ -3238,6 +3259,48 @@ impl Sim {
         if self.weapons.shares_base_clip(id) && self.weapons.ammo_type(id) == self.weapons.ammo_type(base) { base } else { id }
     }
 
+    /// The aim ray's trigger pick (`Check_Target` 0x1a7810's class-0x1D arm) [M 0x1a7810:193-208].
+    /// **[S unverified as to shape]** — the game's ray hits the trigger's collision through the shared
+    /// hitlist; the port's `world.segment` returns no object id, so the pick tests each trigger's
+    /// placement box (`lo`/`hi`) and is wall-occluded like `Doors::pick_target`. Spent exits are
+    /// skipped: the game latches their discrete type to 99 (`Trigger_Activate` 0x1b2318:113), so
+    /// `Trigger_Type` no longer reads 10 — the port's `gone` flag carries that latch. Returns
+    /// `(trigger index, hit fraction of the 50-unit ray)` of the nearest touch, or None.
+    fn pick_trigger_target(&self, eye: [f32; 3], dir: [f32; 3], wall_t: f32) -> Option<(usize, f32)> {
+        let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        if l < 1e-9 { return None; }
+        let d = [dir[0] / l, dir[1] / l, dir[2] / l];
+        let mut best: Option<(f32, usize)> = None;
+        for (i, t) in self.drones.triggers.iter().enumerate() {
+            if t.gone || t.tris.is_empty() { continue; } // gone = the type←99 latch [M 0x1b2318:113]; no tris = no collision (01's #18 [D])
+            // Ray-vs-AABB slab test [S stand-in shape; the box itself is [M] the placement box
+            // `Trigger::from_params` stores from the level data].
+            let (mut t0, mut t1) = (0.0f32, wall_t * 50.0);
+            let mut hit = true;
+            for a in 0..3 {
+                let (lo, hi) = (t.lo[a], t.hi[a]);
+                let o = eye[a]; let dd = d[a];
+                if (lo - hi).abs() < 1e-6 {
+                    if (o - lo).abs() > 1e-4 && dd.abs() < 1e-9 { hit = false; break; }
+                    continue;
+                }
+                if dd.abs() < 1e-9 {
+                    if o < lo || o > hi { hit = false; break; }
+                    continue;
+                }
+                let (mut ta, mut tb) = ((lo - o) / dd, (hi - o) / dd);
+                if ta > tb { std::mem::swap(&mut ta, &mut tb); }
+                t0 = t0.max(ta); t1 = t1.min(tb);
+                if t0 > t1 { hit = false; break; }
+            }
+            if !hit || t1 < 0.0 { continue; }
+            let entry = t0.max(0.0) / 50.0; // the ray is the 50-unit Check_Target ray [M 0x1a7810:114-116]
+            if entry >= wall_t { continue; }
+            if best.is_none_or(|(bt, _)| entry < bt) { best = Some((entry, i)); }
+        }
+        best.map(|(tf, i)| (i, tf))
+    }
+
     fn run(&mut self, pos: [f32; 3], sph: [f32; 3], camera: [f32; 3], look: [f32; 3], aim: [f32; 3], trigger: bool, aiming: bool, reload: bool, use_key: bool, stick: bool) {
         // fix-weapon-anims + fix-aim-raise2: the aim raise/lower edges — the RAW button (the
         // param; the gated BIT is `self.aiming`, which `aim_gate` maintained before run) — before
@@ -4527,14 +4590,44 @@ impl Sim {
             // label `DoorMsg++` and `Text_AddMsg(BL+0x94e, 0, 1, label, 0, 0xb4)` — 180 ticks [M
             // 0x1a7b98-0x1a7bc8]. The port: the sphere pick [S, see Doors::pick_target] and the
             // info_labels queue bound in hud_tick (the game binds at post time, before the pane).
-            if let Some((di, dt)) = self.drones.doors.pick_target(camera, look, wall) {
+            // unported-misc-5: the trigger pick for the class-0x1D arm below — the game's single hitlist
+            // dispatches on the NEAREST hit object only, so the two aim arms must yield to each other too
+            // [M 0x1a79e8-0x1a7bc8: the 0x1c/0x1d branches are else-ifs on one `bVar3`].
+            let trig_pick = self.pick_trigger_target(camera, look, wall);
+            let door_pick = self.drones.doors.pick_target(camera, look, wall);
+            let trig_in_front_of_door = trig_pick.map_or(false, |(_, t)| door_pick.is_none_or(|(_, dt)| t < dt));
+            if let Some((di, dt)) = door_pick {
                 let drone_in_front = hit.map_or(false, |(_, t)| t < dt);
-                if !drone_in_front && dt * 50.0 < 5.0 && self.level != 0x0700_004a
+                if !drone_in_front && !trig_in_front_of_door && dt * 50.0 < 5.0 && self.level != 0x0700_004a
                     && self.hud.door_msg < 3 {
                     let mp = self.mp.is_some(); // MPSettings+0x388 — the SP/MP discriminator [S port mapping]
                     if let Some(label) = self.drones.doors.do_msg(di, mp, &self.drones.channels) {
                         self.hud.door_msg += 1;
                         self.hud.info_labels.push_back((label, 180.0));
+                    }
+                }
+            }
+            // unported-misc-5: the SAME ray's class-0x1D trigger arm [M 0x1a7810:193-208]. The hit trigger's
+            // `Trigger_Type` (0x1b2fa8 — the discrete's ext+0x38; the port's `Trigger.kind`) must be 10 — a
+            // LOAD_LEVEL exit. Gates: hit dist < 5.0 [M 0x1a7810:194], `LoadMsg` 0x30cd08 == 0 (the aim-hint
+            // cooldown, decremented on EVERY 6th-frame invocation at 0x1a7810:78-79 and re-armed to
+            // `FRAME_RATE_INT * 0x14` = 60 here whether or not the hint shows [M 0x1a7810:195-196]), and the
+            // level != 0x7000009 — 09's exit panels carry their own hint path [M 0x1a7810:195]. On all gates
+            // passing and `!Trigger_Locked` (0x1b2fc8 — for a LOAD_LEVEL exit the key gate off), the game posts
+            // `Txt_BindLabel(0x2000009, 0)` for 0xb4 = 180 ticks [M 0x1a7810:201-207]. The port: the AABB pick
+            // below [S stand-in — the game's ray hits the trigger's collision via the shared hitlist; the
+            // port's `world.segment` returns no object id, same [S] shape note as `Doors::pick_target`].
+            self.hud.load_msg = self.hud.load_msg.saturating_sub(1); // [M 0x1a7810:78-79]
+            if let Some((ti, tt)) = trig_pick {
+                let drone_in_front = hit.map_or(false, |(_, t)| t < tt);
+                let door_in_front = door_pick.map_or(false, |(_, dt)| dt < tt);
+                let t = &self.drones.triggers[ti];
+                if !drone_in_front && !door_in_front && tt * 50.0 < 5.0
+                    && t.kind == nf_game::triggers::kind::LOAD_LEVEL
+                    && self.level != 0x0700_0009 && self.hud.load_msg == 0 {
+                    self.hud.load_msg = 60; // FRAME_RATE_INT * 0x14 [M 0x1a7810:196]
+                    if !t.locked(&self.drones.channels) {
+                        self.hud.info_labels.push_back((0x200_0009, 180.0));
                     }
                 }
             }
@@ -4799,6 +4892,7 @@ impl Sim {
         // script-op drain above; the pane display waits on the viewer gate (below).
         for (label, time) in self.hud.info_labels.drain(..) {
             let text = lang.as_ref().and_then(|l| l.bind(label)).unwrap_or("").trim().to_string();
+
             if !text.is_empty() {
                 let mut m = Msg::new(text, time);
                 m.label = label;

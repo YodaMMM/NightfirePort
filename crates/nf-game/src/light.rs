@@ -1,3 +1,6 @@
+// unported-misc-5 — `Light_Init` 0x1cc340 (`ResetMap_GameInit` 0x1d5080's per-level call) is the
+// level light objects' init; the port's level lights are the loaded `Level` light records the
+// scene consumes (this module carries the runtime effects that attach to them).
 //! Level and dynamic lights (`light_tag` records), the VU1 point-light formula, and the per-object
 //! 2-light selection.
 //!
@@ -352,7 +355,8 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2
 /// rocket-trail-gas]. The live spawn runs through `GasPool::init_ex` (scene.rs, the muzzle-flash
 /// tick); this struct is the older models-misc stand-in kept for the render slot type.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Smoke {
+pub struct Smoke
+ {
     pub pos: [f32; 3],
     /// Ticks since creation.
     pub age: u8,

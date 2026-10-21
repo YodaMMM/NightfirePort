@@ -73,6 +73,13 @@ pub struct DistanceTable {
 }
 
 impl DistanceTable {
+    // unported-misc-5 — the game's anim skin data goes through the cel hashtable:
+    // `hashtable_modify` 0x1ca648 (`AnimProcessSkinData` 0x1bd500), `hashtable_celglist_to_hashcode`
+    // 0x1ca840 (`AnimObjectNew` 0x1be910), `hashtable_get_hashtype_count` 0x1ca938 /
+    // `hashtable_get_hashtype_data` 0x1ca9a0 (`AnimPostLoadInit` 0x1be1a8, `AnimDebugCreate`
+    // 0x1bcfa8, `CreateSpaceAndPackTextures` 0x11dcf8). The port keys its anim/weapon meshes by
+    // hash directly (HashMap/BTreeMap over the same hashes), so the sectioned hashtable is a
+    // Rust map here — see scene.rs's note for the render side of the same table.
     pub fn build(seq: &Sequence, axis_mask: u32, looping: bool) -> Option<DistanceTable> {
         let frames = seq.frames.max(1) as i32;
         let n = if looping { frames } else { frames - 1 };

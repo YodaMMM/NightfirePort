@@ -22,6 +22,10 @@ use nf_formats::nis::Nis;
 /// One queued subtitle line on an absolute tick axis: displayed for every tick `start <= t < end`.
 ///
 /// The game stores bound strings (`Text_AddMsg`'s word-wrapped copies); the port carries the raw
+/// unported-misc-5 — `Text_AddMsg` 0x1b0c30's queue machinery: the game builds each message on
+/// the text LList (`LList_Insert` 0x1ccb68 / `LList_InsertAt` 0x1cc600, and the node pool
+/// `DList_AllocnNodes` 0x1ccd60 — its only caller) — the port's `VecDeque` IS that queue
+/// (same head-insert order, same per-message time decrement in `Text_UpdateMsg` 0x1b11d8).
 /// label and lets the draw code bind it through the level's/bank's Lang table (`Txt_BindLabel`
 /// 0x1cad60 runs inside `Script_TextStart` on the game [M 0x1db2b8], but the label survives in the
 /// op stream and the binding is a pure bank lookup — the `drones.script_msgs` pattern).
