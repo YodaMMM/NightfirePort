@@ -1,3 +1,10 @@
+//! `Player_UnEquipKey` 0x1a97b8 (16 B): `BL[0x70C + (u16)id] = 0` — the key-ring slot clear
+//! [M 0x1a97b8:6]. Sole caller `Lock_ReLock` 0x1b0750:8 (guarded player-class-3), reached from
+//! `Lock_Update` 0x1ae3d8 case 2 when the take channel drops: the single-use key re-locks the
+//! door and removes Bond's key. The port's lock side does not consult or clear the key ring yet
+//! (bldata.md:95's recorded gap — `Inventory::keys` pickup.rs:376 is the pickup side); the clear
+//! itself is one line when `Lock_ReLock` lands.
+//!
 //! The game gates the keypad mini-game on the pause-menu manager's existence —
 //! `MenuManager_Exists` 0x21de90 (`manager[(id&0xff)·0x1d8 + 0x1D1]`, the in-use byte of the
 //! 0x1D8-byte manager slots [M]: `Lock_Activate` 0x1aed00:12 refuses while pause manager 1

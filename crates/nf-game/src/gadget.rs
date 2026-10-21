@@ -1,5 +1,11 @@
 //! Bond's gadgets (weapons 0x4A..0x5E): the laser-family beam and its lock burn.
 //!
+//! `Player_SetWatch` 0x1a69d0 (1244 B, the last statement of `Player_CollisionHandler`
+//! 0x1949a8:204) attaches the wristwatch face + hour/minute/second hand meshes to the fp
+//! view-model's bone 2 while the view-model skin is 0x0500004b, and deletes them otherwise
+//! [M 0x1a69d0:36-152] — pure render attach; its clock DATA (the per-level base table and the
+//! hand rates) is ported in `crate::watch`.
+//!
 //! The game's model [M]:
 //! - `Player_LaserPointer` (0x1a65d8): while a laser weapon is out (its `weapon_data+0x68` gate and
 //!   `BLData+0x964`), every tick casts a ray from `Player_GetHeadPos` through the hand bone's
@@ -387,6 +393,12 @@ impl GrapplePoint {
 }
 
 /// The grapple substate's runtime state (`BLData+0x140..0x160`'s fields the substate reads).
+///
+/// `Player_InitGrapple` 0x195d10 (144 B, `Player_Init` 0x1910f8:147 — unconditional, SP and MP):
+/// `memset(BL+0x140, 0, 0x30)` (the grapple block, exactly this struct's default) and hangs the
+/// rope mesh object — `Control_CreateObjEx(1.0, hashtable(0x02000138), parent = player, mode 5)` —
+/// at **BL+0x158** [M 0x195d10:9-13]. The zeroed block is what `GrappleState::default()` gives;
+/// the rope mesh is render-side (bldata.md:56/59 flag +0x140/+0x158 as the not-ported fields).
 #[derive(Clone, Debug)]
 pub struct GrappleState {
     /// The point Bond hangs from (`+0x14C`'s object position + `+0xC0`'s offset [M 0x192860 tail]).

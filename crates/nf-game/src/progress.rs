@@ -256,7 +256,9 @@ const fn reward(hash: u32, desc: [(u16, u16, u32); 5]) -> RewardEntry {
     } }
 }
 
-/// The 12 reward/medal entries ([L] ee_start_05.bin 0x2bc920). Descriptors 1..4 are the
+/// The 12 reward/medal entries ([L] ee_start_05.bin 0x2bc920). The count 12 is
+/// `PlrStarts_GetRewardsTableSize` 0x199b68:6 (`return 0xc;` [M]; callers `Menu_GetLevelBonuses`
+/// 0x1ffe98:13-15, `PlrStarts_ProcessRewardCounter` 0x199210). Descriptors 1..4 are the
 /// bronze..platinum counters; kind 4 descriptors with the same packed {bit, kind} word form a
 /// gold-medal group (the rank within the group widens the bit) [M `PlrStarts_ProcessRewardCounter`
 /// 0x199210].
@@ -530,6 +532,9 @@ impl Progress {
     /// 0x07/0x09 labels swapped vs the decompile (the accuracy formula in the +0x38==1 branch
     /// settles it: accuracy is an on-foot stat) — flagged in the fix-progress-remainder report.
     pub fn get_score(&mut self, base_map: u32, ms: u32, difficulty: u32, commit: bool) -> Option<Scored> {
+        // `PlrStats_GetLevelTotals` 0x199a70:9-20 — the linear hash scan over `ScoringTable`
+        // 0x2bc640 (stride 0x3c, 12 entries) returning the entry or NULL [M]; the dossier
+        // Records handler (`C_RBDSRECORDS` 0x20bf00:67-77) is the reader.
         let idx = self.table.iter().position(|e| e.hash == base_map)?;
         let s = *self.stats();
         // The row values, per source [M 0x1984b0:38-84].
@@ -819,6 +824,8 @@ impl Progress {
         let mut buf = vec![0u8; size];
         let mut pos = 64usize; // the header is bytes 0..8
         Self::push_bits(&mut buf, &mut pos, self.nightfire_status as u64, 32);
+        // `PlrStats_GetScoreTable` 0x199aa8:6-7 — `*param_1 = 0xc; return &ScoringTable;` [M];
+        // `LS_MakeMission` 0x1cd720:51-63 writes that count (8 bits) then best+rows[0] per entry.
         Self::push_bits(&mut buf, &mut pos, self.table.len() as u64, 8);
         for e in &self.table {
             Self::push_bits(&mut buf, &mut pos, e.best as u64, 32);

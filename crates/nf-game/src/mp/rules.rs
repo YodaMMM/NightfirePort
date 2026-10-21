@@ -564,6 +564,15 @@ impl MpMatch {
     /// pick (a `Rand_Rand` draw on the shared RNG), the done flags clear, and every present slot's
     /// last-killer/last-shooter words reset to 0xffff. Scores are **not** cleared (multi-round
     /// Demolition/Protection); the players' respawn is the caller's (`MP_ReSpawn` per slot).
+    ///
+    /// The game's class sweeps at :44-58 — `Control_DeleteAllObjectsOfType` 0x1349e8 (sets
+    /// +0xFE |= 1 on every non-deleted object of the class; [M 0x1349e8:6-20]) for classes 5,
+    /// 0x35, 0x10, 0xe, then `Control_ReturnNextObjectOfType` 0x134a38 walks (the +0x14 next /
+    /// +0xff class list walk; [M 0x134a38:6-27]) class 0x47 deactivating gunimps with +0xf4 == 1
+    /// (`GunImp_Deactivate`) and class 0x36 releasing gun turrets with +0xf4 == 7
+    /// (`GT_LoseControl`). The port's MP runtime does not yet carry those raw classes
+    /// (bullets/debris/MP-objects/gunimp/turret instances), so the sweeps have no target here —
+    /// recorded, not silently dropped.
     pub fn restart_scenario(&mut self, rng: &mut Rng) {
         self.game.clock = 0.0; // [M 0x183fc0:40-53]
         self.game.restart_timer = 0.0;
