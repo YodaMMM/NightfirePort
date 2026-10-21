@@ -483,6 +483,19 @@ impl Doors {
         }
     }
 
+    /// `Door_IsLocked` 0x136810 [M :4-17]: a null obj (the port's rows always exist) or an
+    /// unwired lock channel (`ext+0x68 == 0`) is not locked; a wired channel reads
+    /// `switch_channels[ch] == 0` — locked = the channel is OFF. The game's callers are the
+    /// AI pathing links (`AINetwork_EmitPath` 0x158cf8:233, `AINetwork_Emitter_GetNodeAtDistance`
+    /// 0x159268:177, `AINetwork_DoAStarPath` 0x1571b0:269 — a link between two door-type
+    /// MAPNODEs (+4 & 2) is rejected while locked); the port's `nav::Network` route queries
+    /// do not apply the gate yet (drones open doors by contact), so this is the door-side
+    /// fn the pathfinder wiring will call [S].
+    pub fn is_locked(&self, i: usize, channels: &Channels) -> bool {
+        let d = &self.list[i];
+        d.ch_lock != 0 && !channels.on(u32::from(d.ch_lock)) // [M 0x136810:10-16]
+    }
+
     /// `Door_DoMsg` 0x135f18 [M]: the aim-ray door hint. The game's order — the `+0x74` latch sets
     /// BEFORE any check (one attempt per door ever, a locked door burns it), then the lock-channel
     /// gate (a wired channel that is OFF fails), then the state gate (`== 4` OPEN fails; grouped
@@ -492,8 +505,8 @@ impl Doors {
         if mp { return None; }
         if self.list[i].msg_shown { return None; }
         self.list[i].msg_shown = true;
+        if self.is_locked(i, channels) { return None; }
         let d = &self.list[i];
-        if d.ch_lock != 0 && !channels.on(u32::from(d.ch_lock)) { return None; }
         let state = if d.group != 0 {
             self.group_states.get(d.group as usize).copied().unwrap_or(0)
         } else {
@@ -1305,5 +1318,33 @@ mod tests {
         let far = [([100.0, 1.0, 100.0], 0.4f32, false)];
         for _ in 0..12 { alone.update(0, &mut ch, &far, 0); alone.calc(); }
         assert_eq!(alone.list[0].state, CLOSED, "a door with nobody in it closes");
+    }
+}
+
+#[cfg(test)]
+mod world_helper_tests {
+    use super::*;
+
+    /// `Door_IsLocked` 0x136810 [M :10-16]: a wired lock channel reads `switch_channels[ch]`,
+    /// locked = OFF; channel 0 (unwired) is never locked.
+    #[test]
+    fn door_is_locked_reads_the_lock_channel() {
+        let mk = |ch_lock: u16| Door {
+            placement: 0, kind: 0, group: 0, ch_open: 0, ch_lock, straddle: false,
+            snd_open: 0, snd_close: 0, snd_hit: 0, flags: 0, approach: 0, locked_flag: 0,
+            keys: None, frames: 0, state: CLOSED, pos01: 0.0, speed: 1.0, dir: 0.0, swing: 0.0,
+            timer: 0, open_timer: 0, msg_shown: false, matrix: [[0.0; 4]; 4],
+            inv_closed: [[0.0; 4]; 4], pos: [0.0; 3], sph: ([0.0; 3], 0.0),
+            sph_centre: [0.0; 3], glist: 0,
+        };
+        let mut doors = Doors::default();
+        doors.list.push(mk(0x5A)); // a wired lock channel
+        doors.list.push(mk(0)); // unwired
+        let mut ch = Channels::default();
+        assert!(doors.is_locked(0, &ch), "channel OFF -> locked [M 0x136810:14-16]");
+        assert!(!doors.is_locked(1, &ch), "unwired -> never locked [M 0x136810:12-13]");
+        // sister: the same channel turned ON unlocks
+        ch.set(0x5A, 1, 0);
+        assert!(!doors.is_locked(0, &ch), "channel ON -> unlocked [M 0x136810:14-16]");
     }
 }

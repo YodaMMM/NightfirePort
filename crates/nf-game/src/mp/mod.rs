@@ -199,6 +199,11 @@ pub struct MpSettings {
     pub radar: u32,
     /// +0x472 (u16): the registered pickup count.
     pub registered_pickups: u16,
+    // (The registration flow's load-order gate is `IsMapLoaded` 0x1d6be8 — the `bLevelLoaded`
+    // byte `MP_RegisterPickup` 0x189d80:99, `MP_initObjExt` 0x18b7a0:36 and
+    // `MP_Pickup_PostLoadInit` 0x18b578:10 test [M]. The port parses levels synchronously
+    // (`nf-formats::Level::parse`): a constructed Level IS the loaded state — no flag, no
+    // async window [S].)
     /// +0x198 hex (Ghidra `_408_`): the friendly-fire enable in team games — 0 blocks same-team
     /// bullet hits in `MP_RegisterBulletHit` 0x1857c0:43-57 [M]. The menu's Player Mods row 0x1ae
     /// writes it [M mp-menus.md].

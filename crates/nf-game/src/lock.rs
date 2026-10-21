@@ -1,3 +1,10 @@
+//! The game gates the keypad mini-game on the pause-menu manager's existence —
+//! `MenuManager_Exists` 0x21de90 (`manager[(id&0xff)·0x1d8 + 0x1D1]`, the in-use byte of the
+//! 0x1D8-byte manager slots [M]: `Lock_Activate` 0x1aed00:12 refuses while pause manager 1
+//! exists; `Lock_Update` 0x1ae3d8:272-291 enables/deletes/resets around it) — the port has no
+//! menu-manager pool (the front-end is `nf-view`'s `FrontEnd`/`Page` state machine), so the
+//! gate is structural: the lock cannot be activated while the sim is paused [S].
+//!
 //! The locks (`Lock_Create` 0x1ae1f8, `Lock_Update` 0x1ae3d8, `Lock_Activate` 0x1aed00,
 //! `Lock_Unlock` 0x1b0650; placement type 0x2E, `parsemap_create_dynamic_objects` case 0x2E —
 //! fix-objects2): the burnable locks the Q-Laser / laser watch burns through — 07000008's

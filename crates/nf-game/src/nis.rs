@@ -27,7 +27,10 @@ pub enum Obj {
     /// A cut-scene camera (`CAM_INFO`, `Script_CameraStart`): its world matrix (rows: right, up, forward, position)
     /// and vertical field of view in radians (key scale × `+0x114` = 4/3, `Camera_CalcViewAngles`).
     Camera { matrix: Mat4, fov: f32, src: (u32, u8) },
-    /// A script sprite (`Script_SpriteStart` 0x1d9300 → `Sprite_CreateLink(4)`): the sprite's hash
+    /// A script sprite (`Script_SpriteStart` 0x1d9300 → `Sprite_CreateLink(4)` — the game's
+    /// viewer-link flag is `Sprite_Link2Viewer` 0x1de918's `sprite+0x39 = flag` byte, which
+    /// `Sprite_CreateLink`/`Sprite_Create2` set from the caller's flag [M]; the port carries
+    /// the same role in this variant's draw-layer/flags word): the sprite's hash
     /// (`hashtable_set_sprite`) and its screen rect in the HUD's 512×448 space — the game scales the
     /// 640×480 script coords by 0.8 (x/w) and 0.9333 (y/h) [M 0x1d9300:31-36] — plus the flag bits it
     /// set (script bit 2 → +0x22 |= 0x40, bit 4 → |= 0x80, always |= 0x100) and draw layer +0x38 = 2.
@@ -462,7 +465,7 @@ impl Script {
                         self.anim_start(i, subs, script, skin, start, objs, w);
                         next = pc + 14;
                     }
-                    0x0c => { self.kill(i, subs, objs); next = pc + 2; }
+                    0x0c => { self.kill(i, subs, objs); next = pc + 2; } // `Script_AnimEnd` 0x1db328 — the tail-call into `Script_KillStream` [M 0x1db328:5-9]
                     0x12 => {
                         let (Some(&n), Some(&kind)) = (cmds.get(pc + 1), cmds.get(pc + 2)) else { self.streams[i].pc = None; return };
                         let p: Vec<u32> = (0..n as usize).filter_map(|k| rd(2 + 4 * k, 4)).collect();
@@ -721,6 +724,11 @@ impl Script {
     /// `Mem_Free`d, then obj+0xdc itself — has no port form: `Obj::Anim` is a value dropped by `objs.list[o] =
     /// None` here, and the discrete parts are computed on demand per tick (`drone.rs` `script_parts`), so
     /// there is nothing to free.)
+    /// The reverse lookup — `SP_RemoveObj` 0x1dc958, `control_delete_object` 0x133178:28's call that
+    /// finds and kills the stream OWNING a deleted obj through the script-player's SCRIPTINFO —
+    /// has no port path: the port's object rows are `Option` slots and a stream's dead object
+    /// reference just no-ops (`objs.list[o] = None`), so the kill-on-delete direction is not
+    /// modelled [S].
     fn kill(&mut self, i: usize, subs: &mut Vec<Option<Script>>, objs: &mut Objects) {
         let keep = self.flags & 0x10 != 0;
         let s = &mut self.streams[i];
@@ -1064,7 +1072,10 @@ impl Script {
             (p, crate::anim::slerp(k[i0].quat, k[i1].quat, t), lerp(k[i0].scale, k[i1].scale, t), lerp(k[i0].f24(), k[i1].f24(), t))
         } else {
             // `GetSplineWeights`: Catmull-Rom over i−1..i+2 (clamped); the rotation slerps i → i+1 by t (*suggested*:
-            // the decomp loses the slerp's weight argument, U-040).
+            // the decomp loses the slerp's weight argument, U-040). The weight vector is
+            // `Spline_Eval3D` 0x1e4330's basis — its unrolled 0.5·(2p1 + (−p0+p2)t +
+            // (2p0−5p1+4p2−p3)t² + (−p0+3p1−3p2+p3)t³) is the same Catmull-Rom the weights
+            // below evaluate [M 0x1e4330:5-24; `Script_GetInterp` 0x1da158 is its caller].
             let (ix, wt, t) = if idx < 0 || idx as usize >= n {
                 let j = idx.clamp(0, n as isize) as usize;
                 ([j; 4], [0.0, 1.0, 0.0, 0.0], 0.0)
@@ -1231,6 +1242,12 @@ impl Player {
         out
     }
 
+    /// The base-matrix rewrite — `Script_SetPosRot` 0x1db920 (`Mat_Copy` into SCRIPTINFO+0x00,
+    /// then when +0x9C != 0 and the stream count +0xAAA != 0, `Script_Interp` re-keys every
+    /// 0x28-byte SSTREAM [M 0x1db920:4-31]; callers `SP_SetPos` 0x1dc990:24, `SP_SetPosRot`
+    /// 0x1dc9e8:14 and `GT_Update` 0x180498:264/397/494) — has no port path: the scripts'
+    /// keyed streams play in their placement frame, and the one live use (the MP GoldenEye
+    /// strike beam) rides the position tracker instead (mp/rules.rs) [S].
     /// `SP_CreateScriptPlayer@0x1db9a8:81-86`'s load beat: mode A ∉ {0, 1} loads the script immediately and
     /// `SP_LoadScript@0x1dbc08:41-55`'s mode dispatch leaves it **primed in state 1 after having run once**
     /// (mode 64's arm is play+update+stop; mode 8 plays looping and leaves state 6) [M]. The game does this

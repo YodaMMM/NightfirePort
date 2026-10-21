@@ -185,6 +185,10 @@ pub struct CollisionWorld {
 }
 
 /// Whether the segment `from + t·d`, t in [0, 1], passes through the box (slab test, a little padding).
+/// The scalar stand-in for the game's slab tests: `ASH_Intersect_RayBox` 0x109ad0 (the VU0
+/// ray-vs-leaf-box test `Intersect_RayGeom` 0x10a8c8 drives — origin +0x20, per-axis deltas
+/// +0x40, length cap +0x8c, the parallel-axis ±inf stand-in DAT_0030c748 [M]) and the
+/// `Intersect_BoxBox` overlap the box-tree walks use [M 0x1edc48].
 fn seg_box(from: V3, d: V3, lo: V3, hi: V3) -> bool {
     let (mut t0, mut t1) = (0.0f32, 1.0f32);
     for k in 0..3 {
@@ -209,6 +213,12 @@ fn along<'a>(g: &'a Geo, from: V3, to: V3) -> impl Iterator<Item = &'a Object> +
 }
 
 /// The objects whose bounds overlap `lo..hi` (through `groups` when present).
+/// Architecture note: the game walks each object's collision-box tree collecting leaf boxes
+/// into `ColBoxs`/`BoxCnt` — `RecurseBoxesBox` 0x1edc48 and `RecurseBoxesSph` 0x1edae0 (the
+/// scalar pair `Intersect_CylTriGeom` 0x1e9a70:156 and `Intersect_PointGeom` 0x1e92d8:153
+/// drive) and the VU0 `ASH_RecurseBoxesBox` 0x10ae50 (`Intersect_CylGeom` 0x109da0 drives)
+/// [M]. The port parses the tree (`nf-formats/src/collision.rs`) but queries the flattened
+/// triangle world through this AABB filter instead [S].
 fn overlapping<'a>(g: &'a Geo, lo: V3, hi: V3) -> impl Iterator<Item = &'a Object> + 'a {
     let out = move |o: &Object| (0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]);
     let all: Box<dyn Iterator<Item = &'a Object>> = if g.groups.is_empty() { Box::new(g.objects.iter()) } else {
@@ -1002,6 +1012,12 @@ impl CollisionWorld {
     /// (`build_scoped`) is coarser than the game's per-cel chains, and at the 07000001 seam the
     /// 0.1267-shorter down-ray flips the tie-break to a root whose bucket misses the floor under Bond
     /// (fix-08-collision2's traced 01 pin, kept green). `find_cel` itself is the game's.
+    /// `build_LinkToRoom` 0x1c9680's relink. The game's per-cel object list is an intrusive
+    /// doubly-linked list the movers maintain by hand — `control_unlink_object` 0x134608
+    /// (next/prev splice at obj+0xC/+0x8, then +0x20/+0xC/+0x8 cleared [M 0x134608:4-11], 18
+    /// call sites from `control_delete_object` 0x133178 to `MP_ReSpawn` 0x185368) — which the
+    /// port's `Vec`-of-objects model replaces: the cel membership is re-derived per tick here
+    /// [S].
     pub fn player_cel_relink(&self, cur: Option<usize>, prev: V3, pos: V3, centre: V3) -> Option<usize> {
         if let Some(cell) = cur {
             if let Some(dest) = self.cel_portal_dest(cell, prev, pos) { return Some(dest); }
@@ -1069,6 +1085,12 @@ impl CollisionWorld {
 
     /// First hit along the segment `from → to` as a fraction in [0, 1] (Möller–Trumbore). One-sided
     /// like every game ray test [M Intersect_RayGeom 0x10a8c8:168: `n·dir >= 0` skips the triangle].
+    /// The game's ray query returns a LINKED LIST of HITDATA nodes from a fixed pool
+    /// (`Coll_AddHitToList` 0x1ede68 cuts a 0x60-byte node from the LList pool 0x34B7B0,
+    /// links it at the head, stores cel at +0x54 / obj at +0x58 [M 0x1ede68:4-24];
+    /// `Collide_FreeHitList` 0x1ede00 walks the list back into the pool [M :4-14] — 37
+    /// consumers from `Bullet_update` to `control_delete_object`). The port returns the first
+    /// fraction and frees implicitly — no pool, no node list [S].
     pub fn segment(&self, from: V3, to: V3) -> Option<f32> {
         self.segment_in_sets(from, to, true)
     }
@@ -1360,7 +1382,7 @@ impl CollisionWorld {
     ///
     /// Per triangle (`Intersect_PointGeom` 0x1e92d8:183-249): the signed plane distance `sd` of
     /// the centre; faces in front by more than the radius are skipped (`radius < sd` → next tri);
-    /// `Dist2Tri` 0x1dfca8 returns the closest point on the triangle and — for a centre BEHIND
+    /// `Dist2Tri_PointGeom` 0x1dfac8 returns the closest point on the triangle and — for a centre BEHIND
     /// the face — a negative result, which the best gate skips (`fVar24 < fVar25` with the best
     /// initialised to 0.0 [M 0x1e92d8:103-109; the HITTEST flag word +0x9a bit 0x8 that would
     /// re-allow behind-faces is never set by Bullet_update's build — it writes only 0x20 at
@@ -1394,7 +1416,10 @@ impl CollisionWorld {
         best
     }
 
-    /// The player's capsule against the static geometry (`Intersect_CylGeom` 0x109da0, docs/systems/player.md): the
+    /// The player's capsule against the static geometry (`Intersect_CylGeom` 0x109da0, docs/systems/player.md;
+    /// the scalar triangle-collector form is `Intersect_CylTriGeom` 0x1e9a70 — the HITTEST version 0x2000
+    /// arm of `Collide_Intersect` 0x1ebaa8:256, radius grown by +0.05, leaves via `RecurseBoxesBox` 0x1edc48,
+    /// per-triangle gates HITTEST+0x98 bits 1/2 and the +0x9a bit masks [M]): the
     /// segment `a`–`b` with radius `r`, triangle by triangle, each push applied before the next triangle. Per triangle:
     /// the segment point where it meets the plane (clamped; the point nearest the centroid when parallel), the closest
     /// triangle point to it, and when that lies on an edge the segment point nearest it; closer than `r` → pushed out
@@ -1442,6 +1467,11 @@ fn closest_on_segment(a: V3, b: V3, p: V3) -> V3 {
 
 /// The closest point of a triangle to `p` (Ericson, Real-Time Collision Detection 5.1.5) and whether it lies on an edge
 /// or vertex rather than inside the face.
+/// The port's float point-to-triangle distance — the Ericson form of the game's `Dist2Tri`
+/// family: `vecutil_Dist2Tri_PointGeom` 0x1dfac8 (the scalar one `Intersect_PointGeom`
+/// 0x1e92d8:222 drives), `vecutil_Dist2Tri` 0x1dfca8 (the portal/cyl-tri one) and the VU0
+/// fixed-point `ASH_vecutil_Dist2Tri` 0x109770 (`Intersect_CylGeom` 0x109da0:331,416's actor
+/// push) [M — the same edge-bit mask (face / edge / vertex) and plane-projection shape].
 fn closest_on_triangle(p: V3, t: &[V3; 3]) -> (V3, bool) {
     let (a, b, c) = (t[0], t[1], t[2]);
     let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));

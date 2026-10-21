@@ -97,6 +97,23 @@ impl PlrMissionStats {
         moments[idx] = 1;
         self.bond_moments += 1;
     }
+    /// `PlarStat_LogTimerPause` 0x199520 [M :4-12]: the slot's +0x34 byte := 1 — the flag
+    /// that stops `PlarStat_LogUpdateElapsedTime` 0x1995a0's accumulator. Callers:
+    /// `GS_PauseGame` 0x17d178:20 and `Script_EventHandler` 0x1d94c0:120 (the cut-scene
+    /// Player_Disable arm). The port's record is the SP slot-0 record (the game's `slot < 8`
+    /// gate is structural here); the Sim's frozen frame counter already stops the clock while
+    /// paused, so the flag is belt-and-braces [S].
+    pub fn log_timer_pause(&mut self) {
+        self.timer_run = 1; // +0x34 [M 0x199520:8-11]
+    }
+    /// `PlarStat_LogTimerUnpause` 0x199550 [M :4-22]: +0x2C := psiGetTimeIn100ths() (the
+    /// accumulator's base resyncs) and +0x34 := 0. Callers: `GS_PauseGame` 0x17d178:17 (the
+    /// close arm), `Player_Init` 0x1910f8:187, `Script_Free` 0x1da880:47. `now` is the port's
+    /// frame-derived 1/100 s clock (no wall clock in the Sim).
+    pub fn log_timer_unpause(&mut self, now: u32) {
+        self.last_time = now; // +0x2C [M 0x199550:8-15]
+        self.timer_run = 0;   // +0x34 [M 0x199550:16-21]
+    }
     /// `PlarStat_LogUpdateElapsedTime` 0x1995a0: while `+0x34 == 0` (the timer runs),
     /// `+0x30 += now − +0x2C` and `+0x2C = now`. NO mission gate on this one [M the decompile:
     /// only `slot < 8` and the timer flag]. `now` is the port's frame-derived 1/100 s clock.
@@ -1155,5 +1172,27 @@ mod tests {
         assert_eq!(f.rows[6].value, 80, "the health snapshot's fptoui [M 0x1984b0:80-81]");
         // Difficulty 3 → the multiplier 2.0 [M 0x1984b0:294-297].
         assert_eq!(f.dif, 2, "difficulty 3 doubles");
+    }
+}
+
+#[cfg(test)]
+mod world_helper_tests {
+    use super::*;
+
+    /// `PlarStat_LogTimerPause` 0x199520 / `LogTimerUnpause` 0x199550 [M]: the pause byte stops
+    /// the 0x1995a0 accumulator; the unpause resyncs +0x2C and clears it.
+    #[test]
+    fn plarstat_timer_pause_unpause() {
+        let mut p = PlrMissionStats::default();
+        p.last_time = 100;
+        p.log_timer_pause();
+        p.log_update_elapsed(200);
+        assert_eq!(p.elapsed, 0, "the pause byte stops the accumulator [M 0x199520 -> 0x1995a0 gate]");
+        p.log_timer_unpause(300);
+        assert_eq!(p.timer_run, 0, "+0x34 cleared [M 0x199550:16-21]");
+        assert_eq!(p.last_time, 300, "+0x2C := now [M 0x199550:8-15]");
+        // sister: after the unpause the accumulator runs again from the resynced base
+        p.log_update_elapsed(400);
+        assert_eq!(p.elapsed, 100, "now(400) - last(300) accumulated [M 0x1995a0:10-13]");
     }
 }

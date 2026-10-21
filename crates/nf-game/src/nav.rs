@@ -241,6 +241,12 @@ impl Network {
 
     /// `AINetwork_DoAStarPath` from `start` toward `dest` whose goal nodes are `goal`; `used` = link used-counts
     /// this frame. Returns (0 real goal / 1 fallback goal, node list, link list) or the failure code (4, 5, 6).
+    /// `AINetwork_DoAStarPath` 0x1571b0. Not modelled here: the game's door-link gate — a link
+    /// between two door-type MAPNODEs (+4 & 2) is rejected while `Door_IsLocked` 0x136810
+    /// reads the lock channel OFF (`AINetwork_DoAStarPath` 0x1571b0:269, `AINetwork_EmitPath`
+    /// 0x158cf8:233, `AINetwork_Emitter_GetNodeAtDistance` 0x159268:177 [M]); the port's
+    /// route queries see no switch-channel state, and drones open doors by contact, so the
+    /// gate is deferred — the door-side fn is `Doors::is_locked` (door.rs) [S].
     pub fn astar(&self, world: &CollisionWorld, path: usize, start: V3, dest: V3, goal: &TargetNodes, used: &[u16]) -> Result<(u8, Vec<u16>, Vec<u16>), u8> {
         let p = &self.paths[path];
         let (goal_node, result) = match (goal.found, goal.fallback) { (Some(g), _) => (g, 0), (None, Some(g)) => (g, 1), _ => return Err(4) };
@@ -425,6 +431,12 @@ impl Network {
     }
 }
 
+/// The port's form of the game's boundary-crossing test — `AINetwork_LineIntersectsBoundry`
+/// 0x157990:82's per-wall pass, whose inner 2D segment intersection is
+/// `vecutil_intersect_line_line_2d` 0x1e0aa8 (x-range then z-range early rejects, the
+/// cross-product sign tests, the `|den| <= 0.0002` parallel arm returning 1 without a point
+/// [M 0x1e0aa8:14-100]; the port folds the range rejections into the t/u clamp and treats
+/// parallel as no hit — U-030) [S].
 fn intersect_adjust(w: &mut Wall, a: V3, b: V3, adjust: bool) -> Option<V3> {
     let (r, s) = ([b[0] - a[0], b[2] - a[2]], [w.b[0] - w.a[0], w.b[2] - w.a[2]]);
     let den = r[0] * s[1] - r[1] * s[0];

@@ -236,6 +236,10 @@ fn add(a: f32, b: f32) -> f32 { add_noguard(a, b, true) }
 
 /// `RotMatrix(angles)` [M 0x1e2368]: the game's Euler rotation matrix, `PS2Sinf3` = the game's sinf per
 /// argument. Row-major rows `[0..3] [4..7] [8..11]`, entry 4k+i as in the decompile.
+/// The rotation rows are also `RotTransMatrix` 0x1e2478's (`View_DrawObjectGlist` 0x1e6780:54
+/// builds the object draw matrix with it — the same ten rotation entries via the same
+/// π/2-offset sinf pair; 0x1e2478 additionally copies the translation into out[12..14], the
+/// port passes translations separately) [M].
 pub fn rot_matrix(v: [f32; 3]) -> [f32; 12] {
     let cx = sinf(add(v[0], HALF_PI)); // fStack_60
     let sx = sinf(v[0]);               // fStack_5c
@@ -256,8 +260,9 @@ pub fn rot_matrix(v: [f32; 3]) -> [f32; 12] {
     m
 }
 
-/// `Concat(a, b)` [M 0x1e4a90]: `b = a · b` on the rotation rows (translation rows add; the sky keeps
-/// them zero — `Mat_CopyRot` copies a rotation-only matrix).
+/// `Concat(a, b)` [M 0x1e4a90]: `b = a · b` on the rotation rows (translation rows add —
+/// the game's per-row add is `auxVec_Add` 0x1e4f10 [M 0x1e4a90:49]; the sky keeps them zero —
+/// `Mat_CopyRot` copies a rotation-only matrix).
 pub fn concat(a: &[f32; 12], b: &mut [f32; 12]) {
     let mut out = [0.0f32; 12];
     for r in 0..3 {
@@ -269,6 +274,9 @@ pub fn concat(a: &[f32; 12], b: &mut [f32; 12]) {
 }
 
 /// `ApplyMatrixLVI(m, v)` [M 0x1e4960]: `v = m · v` with the decompile's index pattern.
+/// Identical rotation-only body to `ApplyMatrixLV` 0x1e48c8 (the out-of-place form —
+/// `NDrone2_DealWithObjHit` 0x13fff0, `DroneAnim_PreTransCallback` 0x13b490 and
+/// `DroneWeap_DoBulletAccuracy` 0x179740 are its callers [M]).
 pub fn apply_matrix_lvi(m: &[f32; 12], v: &mut [f32; 3]) {
     let (x, y, z) = (v[0], v[1], v[2]);
     v[0] = add(add(mul(m[0], x), mul(m[4], y)), mul(m[8], z));
