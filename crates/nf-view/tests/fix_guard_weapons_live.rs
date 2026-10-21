@@ -22,6 +22,43 @@ const DMG: [f32; 3] = [0.5, 0.7, 1.2];
 
 struct Shot { frame: u32, hit: bool, dist: f32 }
 
+/// ai-sight-drawn-gate-5: the shared park pass. Reads the guard's LIVE position and yaw (he
+/// walks between attempts — the diff-3 0x12 candidates all failed a park computed from a stale
+/// snapshot), aims Bond into the guard's view from his current facing [M the drawn frustum:
+/// DroneVision_ProcessDroneSight 0x176a28 only sees what is in front of the guard's eyes; a
+/// world-axis park with clear LOS still never accumulates sighting when the guard faces away],
+/// requires the guard-head → Bond-head line of sight, settles 30 ticks and only accepts the
+/// spot when the settled Bond stands level with the guard's CURRENT floor (the pre-fix check
+/// compared against the pre-settle snapshot). The rung ladder stops at 4.0, beyond the 3.0
+/// CombatTooClose band [L 0x30cb14].
+fn try_park(scene: &mut nf_view::scene::Scene, cand: usize) -> bool {
+    let gyaw0 = scene.sim.as_ref().unwrap().drones.list[cand].yaw;
+    let mut dirs: Vec<(f32, f32)> = vec![(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (0.70710678, 0.70710678), (-0.70710678, 0.70710678), (0.70710678, -0.70710678), (-0.70710678, -0.70710678)];
+    for &a in &[-0.6f32, 0.0, 0.6] {
+        let a2 = gyaw0 + a;
+        dirs.push((nf_game::trig::sinf(a2), nf_game::trig::cosf(a2)));
+    }
+    for &(dx, dz) in &dirs {
+        for &park in &[10.0f32, 8.0, 7.0, 6.0, 5.0, 4.0] {
+            let sim = scene.sim.as_mut().unwrap();
+            let g = sim.drones.list[cand].pos;
+            sim.bond.pos = [g[0] + dx * park, g[1] + 0.14, g[2] + dz * park];
+            sim.bond.yaw = (g[0] - sim.bond.pos[0]).atan2(g[2] - sim.bond.pos[2]);
+            // fix-guard-weapons3: the spot must be IN SIGHT of the guard (the model presumes sighted
+            // shooting — the NewSighting gate auto-misses blind shots, and a park behind a wall
+            // never accumulates the 120 sighting ticks). The game's own sight test is the guard's
+            // head → Bond's target ray [M DroneVision_ProcessDroneSight 0x176a28].
+            let bp = sim.bond.pos;
+            if !sim.world.line_of_sight([g[0], g[1] + 1.5, g[2]], [bp[0], bp[1] + 1.5, bp[2]]) { continue; }
+            for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
+            let sim = scene.sim.as_ref().unwrap();
+            let (y, gy) = (sim.bond.pos[1], sim.drones.list[cand].pos[1]);
+            if (y - (gy + 0.14)).abs() < 1.0 { return true; }
+        }
+    }
+    false
+}
+
 /// Drive one guard into firing at a still Bond 10 units away and collect `wanted` shots from him
 /// alone (Bond topped back to 100 health each tick so the per-hit deltas stay exact). Returns
 /// (guard index, the shots with their hit flags, the per-hit health deltas, the final distance).
@@ -65,61 +102,48 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
     // ai-sight-drawn-gate-3: the fire-time guard distance per collected shot (the band split).
     let mut gate_dist: Vec<f32> = Vec::new();
     'guards: for &cand in &candidates {
-        let mut placed = false;
-        // ai-sight-drawn-gate-3: the park-distance ladder 10/7/5. The frustum sight gate moved the
-        // spawn/patrol frames (Drone_PositionVisible 0x13a7a0 is the frustum(2.0) test, far
-        // narrower than the old 120-degree cone [M 0x137cb0:43's post-selection abort]), so at
-        // collection time the guards stand mid-room and a fixed 10.0-axis park often lands in a
-        // wall or off the floor; and a guard with sight range r < 10 accumulates no sighting at
-        // all from 10 (the 826b run: two candidates parked with seen_ticks stuck 0). The ladder
-        // tries 10, then 7, then 5 along each axis before giving up on the candidate; every rung
-        // stays beyond the 3.0 CombatTooClose band [L 0x30caf0-area tuning: the model is
-        // distance-independent for parks in the gate-clean subset, M 0x179740's gate reads
-        // sighting time, not distance].
-        // ai-sight-drawn-gate-4: the park directions include the GUARD's own facing (his yaw and
-        // ±0.6 rad) — the 826 frustum sight gate only sees what is in front of the guard's eyes
-        // [M DroneVision_ProcessDroneSight 0x176a28's frustum], so a world-axis park with clear
-        // line_of_sight still never accumulates the 120 sighting ticks when the guard faces
-        // elsewhere (the diff-3 0x12 run: guards 2/4/12 parked, seen_ticks stuck 0). The player's
-        // own answer is to step into the guard's view; the yaw dirs are that, and they also give
-        // the placement-failing candidates (3/8/10/16/17) spots the fixed axes never tried.
-        let gyaw0 = scene.sim.as_ref().unwrap().drones.list[cand].yaw;
-        let mut dirs: Vec<(f32, f32)> = vec![(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (0.70710678, 0.70710678), (-0.70710678, 0.70710678), (0.70710678, -0.70710678), (-0.70710678, -0.70710678)];
-        for &a in &[-0.6f32, 0.0, 0.6] {
-            let a2 = gyaw0 + a;
-            dirs.push((nf_game::trig::sinf(a2), nf_game::trig::cosf(a2)));
-        }
-        'dirs: for &(dx, dz) in &dirs {
-        // The diff-3 reroll: all three 10/7/5 rungs failed placement for every 0x12 candidate —
-        // the rung set extends down to 4.0, all of it beyond the 3.0 band [L 0x30cb14].
-        for &park in &[10.0f32, 8.0, 7.0, 6.0, 5.0, 4.0] {
-            let sim = scene.sim.as_mut().unwrap();
-            let g = sim.drones.list[cand].pos;
-            sim.bond.pos = [g[0] + dx * park, g[1] + 0.14, g[2] + dz * park];
-            sim.bond.yaw = (g[0] - sim.bond.pos[0]).atan2(g[2] - sim.bond.pos[2]);
-            // fix-guard-weapons3: the spot must be IN SIGHT of the guard (the model presumes sighted
-            // shooting — the NewSighting gate auto-misses blind shots, and a park behind a wall
-            // never accumulates the 120 sighting ticks — the pre-fix run's guard 8 fired 450 gated
-            // shots at a wall and no candidate completed). The game's own sight test is the guard's
-            // head → Bond's target ray [M DroneVision_ProcessDroneSight 0x176a28].
-            let bp = sim.bond.pos;
-            if !sim.world.line_of_sight([g[0], g[1] + 1.5, g[2]], [bp[0], bp[1] + 1.5, bp[2]]) { continue 'dirs; }
-            for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
-            let y = sim.bond.pos[1];
-            if (y - (g[1] + 0.14)).abs() < 1.0 { placed = true; break 'dirs; }
-        }
-        }
-        if !placed { eprintln!("[gw] guard {cand} (weapon {weapon:#x}): no level parking spot"); continue 'guards; }
+        // ai-sight-drawn-gate-3: the park-distance ladder 10/7/5 (extended), now in `try_park`.
+        // The frustum sight gate moved the spawn/patrol frames (Drone_PositionVisible 0x13a7a0 is
+        // the frustum(2.0) test, far narrower than the old 120-degree cone [M 0x137cb0:43's
+        // post-selection abort]), so at collection time the guards stand mid-room and a fixed
+        // 10.0-axis park often lands in a wall or off the floor; and a guard with sight range
+        // r < 10 accumulates no sighting at all from 10 (the 826b run: two candidates parked with
+        // seen_ticks stuck 0). Every rung stays beyond the 3.0 CombatTooClose band [L
+        // 0x30caf0-area tuning: the model is distance-independent for parks in the gate-clean
+        // subset, M 0x179740's gate reads sighting time, not distance].
+        if !try_park(scene, cand) { eprintln!("[gw] guard {cand} (weapon {weapon:#x}): no level parking spot"); continue 'guards; }
         let mut warmed = false;
-        for warmup in 0..6000 {
-            let sim = scene.sim.as_mut().unwrap();
-            sim.step_bond(Default::default(), false, false, false);
-            sim.drones.health.health = 100.0;
-            let d = &sim.drones.list[cand];
-            if d.shots.len() >= warmup_shots as usize && d.seen_ticks >= 120 {
-                guard = cand; w0 = d.shots.len(); warmed = true; break;
+        // ai-sight-drawn-gate-5: the warmup re-park. The pre-fix warmup parked once and waited —
+        // a guard who turns away mid-warmup (combat repositioning, the patrol turn) never
+        // re-accumulates sighting, `seen_ticks` stays 0 and the candidate died at 6000 with the
+        // re-park machinery (which lives in the collect loop) never reached. The player's own
+        // answer is to step into his view AGAIN: every 600 ticks without a new shot or a sighting
+        // gain, re-run the park pass against his live position/facing. 8 attempts, then the
+        // next candidate. (600 ticks = 10 s, far above the 120-tick gate — a sighting that grows
+        // but has not fired yet is progress and is not re-parked away.)
+        let mut warm_re_parks = 0u32;
+        let (mut last_shots, mut last_best_seen, mut last_progress_tick) = (0usize, 0u32, 0u32);
+        'warmup: for warmup in 0..6000 {
+            let (nshots, seen) = {
+                let sim = scene.sim.as_mut().unwrap();
+                sim.step_bond(Default::default(), false, false, false);
+                sim.drones.health.health = 100.0;
+                let d = &sim.drones.list[cand];
+                if d.shots.len() >= warmup_shots as usize && d.seen_ticks >= 120 {
+                    guard = cand; w0 = d.shots.len(); warmed = true; break;
+                }
+                (d.shots.len(), d.seen_ticks)
+            };
+            if nshots > last_shots || seen > last_best_seen {
+                last_shots = nshots; last_best_seen = seen; last_progress_tick = warmup;
+            } else if warmup - last_progress_tick > 600 {
+                if warm_re_parks >= 8 { eprintln!("[gw] guard {cand} (weapon {weapon:#x}): still cold after {warm_re_parks} warmup re-parks (shots {nshots}, seen {seen})"); break 'warmup; }
+                warm_re_parks += 1;
+                eprintln!("[gw] guard {cand} (weapon {weapon:#x}) cold at tick {warmup} (shots {nshots}, seen {seen}) — warmup re-park #{warm_re_parks}");
+                if !try_park(scene, cand) { continue; }
+                last_progress_tick = warmup;
             }
-            if warmup == 5999 { eprintln!("[gw] guard {cand} (weapon {weapon:#x}): no fire in 6000 ticks (shots {}, seen {})", d.shots.len(), d.seen_ticks); }
+            if warmup == 5999 { eprintln!("[gw] guard {cand} (weapon {weapon:#x}): no fire in 6000 ticks (shots {nshots}, seen {seen})"); }
         }
         if !warmed { guard = usize::MAX; continue 'guards; }
         // Collect from THIS guard. Guards stall (no new shot for 900 ticks — faster-live-tests,
@@ -170,20 +194,9 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
                 if reparks < 4 {
                     reparks += 1;
                     eprintln!("[gw] guard {cand} (weapon {weapon:#x}) stalled at {got}/{wanted} shots — re-park #{reparks}");
-                    let mut placed2 = false;
-                    'dirs2: for &(dx, dz) in &[(0.0f32, 1.0), (0.0, -1.0), (1.0, 0.0), (-1.0, 0.0), (0.70710678, 0.70710678), (-0.70710678, 0.70710678), (0.70710678, -0.70710678), (-0.70710678, -0.70710678)] {
-                        let sim = scene.sim.as_mut().unwrap();
-                        let g = sim.drones.list[cand].pos;
-                        sim.bond.pos = [g[0] + dx * 10.0, g[1] + 0.14, g[2] + dz * 10.0];
-                        sim.bond.yaw = (g[0] - sim.bond.pos[0]).atan2(g[2] - sim.bond.pos[2]);
-                        // fix-guard-weapons3: the re-park needs sight too (see the initial park).
-                        let bp = sim.bond.pos;
-                        if !sim.world.line_of_sight([g[0], g[1] + 1.5, g[2]], [bp[0], bp[1] + 1.5, bp[2]]) { continue 'dirs2; }
-                        for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
-                        let y = sim.bond.pos[1];
-                        if (y - (g[1] + 0.14)).abs() < 1.0 { placed2 = true; break 'dirs2; }
-                    }
-                    if !placed2 { eprintln!("[gw] re-park: no level spot"); }
+                    // ai-sight-drawn-gate-5: the same live-pos/live-yaw park pass as the placement
+                    // (the old re-park computed from the stall-time snapshot and its own fixed axes).
+                    if !try_park(scene, cand) { eprintln!("[gw] re-park: no level spot"); }
                     last_progress = (scene.sim.as_ref().unwrap().drones.frame, got);
                 } else {
                     eprintln!("[gw] guard {cand} (weapon {weapon:#x}) still stalled after {reparks} re-parks at {got}/{wanted} — next candidate");
