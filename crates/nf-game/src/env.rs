@@ -159,7 +159,7 @@ pub fn env_water_ripple(gas: &mut crate::gas::GasPool, material: u8, hit_point: 
 /// `GlobalEnv` pair — `Some(cond)` is the game's `GlobalEnv == 0 || GlobalEnv+0x4b != 0`
 /// disjunct result, `None` the unported-`GlobalEnv` case, which takes the `GlobalEnv == 0` arm
 /// (true) [S — the port models no GlobalEnv; the two arms differ only in variant A vs B].
-/// `frame` = `GameState+0x52` [M 0x17be3c-0x17be48; the same counter `WorldFx::tick` takes].
+/// `frame` = `GameState+0x34` (the decompile's `_52_4_`, decimal 52) [M 0x17be3c-0x17be48; the same counter `WorldFx::tick` takes].
 ///
 /// Gates [M disasm 0x17be1c-0x17bec8]: zone != 0; `(frame - phase) % (FRAME_RATE_INT/10) == 0`
 /// (the game divides the global by 10 — 60/10 = 6 at the shipped refresh, folded to the literal
@@ -190,7 +190,8 @@ pub fn env_breath(
     if zone == 0 {
         return;
     }
-    let delta = frame.wrapping_sub(phase) as i32;
+    // Both remainders are `divu` (unsigned) on the u32 difference [M disasm 0x17be40-0x17be64].
+    let delta = frame.wrapping_sub(phase);
     if delta % 6 != 0 {
         return;
     }
