@@ -281,9 +281,28 @@ pub fn acosf_libm(x: f32) -> f32 {
     add(dw, dw)
 }
 
+/// The libm layer this module's ports stand in for — the never-mentioned scan block of task
+/// unported-misc-8, all REACHED in the shipped game [M jal census over ACTION.ELF]:
+/// - `fabsf` 0x2355b8 — called by the game's `acosf` 0x232c48 (jal 0x232c88), `asinf` 0x232d48
+///   (0x232d88), `atanf` 0x235310 (0x2353e8) and the kernel regions; the ports above use
+///   `f32::abs` (the EE FPU has no abs instruction the game relies on here).
+/// - `isnanf` 0x2356e8 — the NaN guards inside `acosf` (0x232c78), `asinf` (0x232d78),
+///   `atan2f` 0x232e48 (0x232e80/0x232e90) and `fmodf` 0x2330e8 (0x233124/0x233134); the ports
+///   above pin the decompile's guard behaviour in their tests instead of branching.
+/// - `finitef` 0x2355d8 — `expf` 0x232f70's overflow guard (jal 0x232fa4); `expf` is reached
+///   from `RB_EulerEvolve` 0x1d7810 ×2 (the rigid-body integrator, rigid_body.rs).
+/// - the `tanf` 0x232bc0 chain — tanf (reached every frame from `Vision_Calculate_View_Fustrum`
+///   0x1e7df8, `PS2WorldViewVU1Kick2` 0x10b2b0 and `Camera_CalcViewAngles` 0x1baf70 [M]) calls
+///   the 0x2341e8 kernel helper (jal 0x232c14) which calls the 0x234700 region (jal 0x23457c),
+///   which calls `scalbnf` 0x235710 ×4 (jals 0x234910/0x234a9c/0x234c4c/0x234cdc) and
+///   `floorf` 0x235600 (jal 0x234928) — so both are REACHED through the camera/frustum math the
+///   port does with `f32::tan`/`f32::floor` (world.rs's frustum).
+/// - `fmodf` 0x2330e8 — see `angle_difference` below.
 /// `Vec_AngleDifference(a, b)` (0x1e2b78): b − a wrapped to (−π, π], both first normalised to [0, 2π).
 pub fn angle_difference(a: f32, b: f32) -> f32 {
-    // Only values outside [0, 2π) go through `fmodf` (libm, exact like Rust's `%`); the adds are EE FPU adds.
+    // Only values outside [0, 2π) go through `fmodf` 0x2330e8 (libm, exact like Rust's `%`); the adds
+    // are EE FPU adds. `fmodf`'s other gameplay callers [M jal census]: `Car_Update` 0x1307d8,
+    // `Ang_RotateToBearing` 0x1e0f10, `HUD_UpdateStatusPane` 0x19c310, `AnimObjectUpdate` 0x1befd8.
     let norm = |v: f32| if v < 0.0 || v >= TAU { let r = v % TAU; if r < 0.0 { add(r, TAU) } else { r } } else { v };
     let mut d = sub(norm(b), norm(a));
     if d.abs() >= PI { d = if d >= 0.0 { sub(d, TAU) } else { add(d, TAU) } }

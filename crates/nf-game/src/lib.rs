@@ -45,6 +45,7 @@ pub mod casing;
 pub mod effect;
 pub mod lock;
 pub mod ss;
+pub mod sdk;
 pub mod sensor;
 pub mod mission;
 pub mod monitor;
