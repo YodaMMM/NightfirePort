@@ -387,6 +387,20 @@ pub struct PageDef {
     pub sets: Vec<SpriteSet>,
 }
 
+impl PageDef {
+    /// `Page_FindHelpControl` 0x21f250 — the help-control walk: `MenuManager_Create` 0x21b908
+    /// calls it per page (jal 0x21ba54) and `Page_Update` 0x21edc8:59-63 re-runs it per frame
+    /// (jal 0x21eed0/0x21eee0), scanning the page's control list for the help-text control
+    /// **0x10000225** and parking it in the global `h` [M 0021f250]. `Page_SetHelpText`
+    /// 0x21f2b8 (Page_Update's next call, jal 0x21eee8) is `h`'s only reader — the per-focused-
+    /// row description bar. Shipped pages carrying the control: 8 [D
+    /// front_end_menus_census.rs::help_control_ships_on_exactly_the_eight_pages]. The parse
+    /// keeps the lookup as the getter the draw code can call.
+    pub fn find_help_control(&self) -> Option<&ControlDef> {
+        self.controls.iter().find(|c| c.id == 0x1000_0225)
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ControlDef {
     pub id: u32,

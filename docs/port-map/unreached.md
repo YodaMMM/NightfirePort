@@ -317,3 +317,73 @@ sends those ids (each occurs in exactly one decompile file — the dispatcher); 
 be menu-def CONTROL/KMSG data, and their only owner page in shipped data is the never-opened
 per-level hub **0x40000007** (see C_LBPMMAP above — no code reference, no navigation) [D].
 Recorded unreached.
+## unported-front-end-menus-6 (2026-10-21) — the debug-toggle handlers, the orphan FMV page and the SDK/libc set
+
+### The seven `C_CHCH*` debug-toggle handlers — their controls never shipped
+
+`C_CHCHALLOWFREEZE_Handler` 0x216258 (`switch_AllowFreeze`), `C_CHCHDUMMY_Handler` 0x2162b8
+(`Drone_DummyPlayer`), `C_CHCHDRAWALL_Handler` 0x216320 (`switch_ForceDrawAll`),
+`C_CHCHLOCKUP_Handler` 0x216400 (`bDebugLockup`), `C_CHCHBRIGHT_Handler` 0x216460
+(`bTweakBrightness` 0x30d2b4), `C_CHCHUNLOCK_Handler` 0x2164c0 (`menu_unlock_everything`
+0x30d2a7), `C_CHCHCONTROLS_Handler` 0x216520 (`bDebugControls`) are each a two-way checkbox bind
+(msg 0x4b read / 0x2e write [M the seven bodies]) dispatched by `Handler_HandleMessage` 0x2029e0
+on control ids 0x100000c7 / 0x100000bd / 0x10000101 / 0x10000169 / 0x100001f7 / 0x10000216 /
+0x1000021d [M 0x2029e0 — the seven dispatch arms; the binary's jal scan shows no other caller].
+
+The shipped front end never contains those controls: the front-end def (07000048's kind-8
+08000002) and every level archive's kind-8 08000001 were parsed and each of the eight ids —
+these seven plus the keypad's 0x100000ba — has **zero hits** outside the keypad's own in-game
+page (see the keypad census in docs/systems/keypad-menu.md) [D
+`crates/nf-formats/tests/front_end_menus_census.rs::front_end_def_has_no_debug_toggle_controls_or_tweaks_pages`].
+Their pages don't ship either: `P_TWEAKS` 0x40000044 and `P_TWEAKS2` 0x40000046 — the only pages
+the decompile shows carrying debug toggles — are **absent from the shipped front-end def** [D the
+same census asserts both]. The bound globals are otherwise known to the port where the game reads
+them: `menu_unlock_everything` = the `--unlock-all` dev flag [M 0x20b8d8:18],
+`switch_AllowFreeze` in the freeze gate (docs/port-map/core-loop.md:19), `switch_ForceDrawAll`
+the portal bypass (docs/atlas/cel.md:107), `bTweakBrightness` (docs/atlas/gs-leaf.md:121). The
+`%.2f` health-pane sprintf that prints coordinates is gated on `switch_SHOW_COORDS` [M
+0x19b9c8:266-273, written only by the same debug family] — so even printf's float path never
+runs from it.
+
+### `P_FMV_Handler` 0x2169b0 — an orphan page left in the def
+
+Page 0x4000004d EXISTS in the shipped front-end def with 2 controls [D census], and the 8-byte
+handler (`return 1` [M 002169b0]) is the dispatch arm for it [M 0x2029e0:547-550; jal 0x2033fc
+the only caller]. But nothing navigates there: no `Manager_SendMessage(…, 0x44, 0x4000004d, …)`
+anywhere in the decompile [M grep + jal scan], and no mgr-msg, control-msg or keyframe message in
+the whole def targets the id [D `front_end_menus_census.rs::fmv_page_is_orphaned_in_the_front_end_def`].
+Unreached in the shipped game (the FMV pages that DO get wired are the trailer 0x4000004e and the
+FMV player 0x40000050).
+
+### The PS2 SDK / libc set — reached only through the layers the port replaces
+
+These are Sony SDK/libc internals, not game logic. The port has no IOP RPC, no kernel semaphores
+and no libc printf; disc access is nf-extract/iso9660 direct reads and the save flow is the
+port's own. Each with its caller evidence (binary jal scan + decompile):
+
+- `CreateSema` 0x23be20 / `PollSema` 0x23be70 — kernel semaphores; callers are the SDK file-IO
+  layer (_sceFsSemInit, sceOpen/sceRead/sceLseek/sceIoctl/sceSifBindRpc/sceSifCallRpc), the CDVD
+  driver (sceCdInit's cmd_sem_init, the ncmd/scmd prechecks) and the memcard library (sceMc*,
+  jal 0x227dc8..0x228de8) [M]. Reached at boot and during disc/memcard IO in the real game —
+  but every caller is a layer the port replaces wholesale; there is nothing to port.
+- `cmd_sem_init` 0x230d58 — the CDVD driver's semaphore pair init; called by `sceCdInit` 0x2316a8
+  (jal 0x231944) on the `mode < 2` arm — main 0x109080 / FS_Init 0x10bc48 call `sceCdInit(0)` at
+  boot [M]. Replaced: the port reads the ISO directly (nf-formats iso9660.rs).
+- `cdvd_exit` 0x230df0 — the CDVD shutdown arm; called by `sceCdInit` when `mode == 5` (jal
+  0x231918), i.e. `RunNextModule` 0x120008:88's `sceCdInit(5)` at the boot module chain [M].
+  Same replacement as above.
+- `PowerOffCB` 0x230eb8 — the power-off callback `sceCdInit` registers and invokes inline at
+  init (jal 0x23194c) [M]. Console power-event plumbing; the port has no poweroff path.
+- `CB_DelayTh` 0x230b70 — the SetAlarm callback of `sceCdDelayThread` 0x230b98 (the address
+  rides the alarm registration, hence no jal) [M]; reached when the loader's synchronous waits
+  (`sceCdSync` from psiFileRead 0x10bdf0 / psiFileLoad 0x10ba38) block. Replaced: the port's
+  reads are synchronous already (nf-extract), there is no alarm to service.
+- `cvt` 0x2386a0 — the float→ASCII worker of `_vfprintf_r` (jal 0x237644) [M]. The game's only
+  float-format sprintfs are the two debug health-pane overlays, gated on `switch_SHOW_COORDS`
+  [M 0x19b9c8:266-273, 0x19b630:94-99], whose writer is the debug-toggle family above with no
+  shipped control — so the float printf path is unreachable in the shipped game [M + D census].
+  Replaced by Rust's `format!` machinery.
+- `copysignf` 0x235870 — libc float helper; its only caller is `scalbnf` 0x235710 (jal 0x235824),
+  a libc-internal repair path [M]. No game code path reaches it in the decompile (the game's own
+  float math is inline/`PS2Sin f`-style); the port's float semantics live in ps2float.rs and std
+  `f32` ops.

@@ -89,6 +89,26 @@ pub const PAGE_START: u32 = 0x4000_0009;
 /// `GameState._28_4_ = 0x40000034` (decimal 28 = +0x1c); 0x2029e0:302-303 → P_LANGUAGE_Handler].
 /// The port does not model it (nor P_PS2MEMCARDINIT 0x40000048): `FrontEnd::new` opens the title.
 pub const PAGE_LANGUAGE: u32 = 0x4000_0034;
+
+/// `ConvLanguageToFlagIndex` 0x216948 — language enum → flag-spinner row. The standalone function
+/// has no callers in the decompile: GCC inlined it into `P_LANGUAGE_Handler` 0x208830 (twice —
+/// the spinner preselect at :77-95 and the 9-flag disable loop at :112-135, both the same
+/// switch), which is the page-0x40000034 dispatch arm of `Handler_HandleMessage` 0x2029e0:302.
+/// The inverse direction (row → language) is `C_LANGUAGE_Handler` 0x208c68:8-24's
+/// `LanguageToLoad` table. Ported here so the flag-spinner row math exists for the language
+/// page's future draw; every arm below is decompile-pinned [M 0x216948:6-25].
+pub fn conv_language_to_flag_index(lang: u32) -> i32 {
+    match lang {
+        0 => 0,
+        1 => 2,
+        2 => 1,
+        3 => 5,
+        4 => 3,
+        5 => 4,
+        8 => 6,
+        _ => -1,
+    }
+}
 /// P_INTRO, the boot EA/MGM logos [M 0x2029e0:427 → P_INTRO_Handler 0x209e88].
 pub const PAGE_INTRO: u32 = 0x4000_0032;
 /// P_PARISENUM, the memory-card check START opens [M 0x2029e0:531 → P_PARISENUM_Handler 0x20a648].
@@ -324,6 +344,10 @@ impl GameFlow {
     /// 0x1d6958 sets GameState+0x8 = 0x7000048 when it is 0 and calls `ResetMap_LevelToLoad(level, 0, 0)`
     /// — the boot load of the front-end map.
     pub fn boot() -> Self {
+        // `MenuManager_Init` 0x21b570's job (zero the five 0x1d8-byte manager slots, defaults
+        // +0x1c8 = 0x1e, `user_restarted_or_quit` 0x30d8c4 = 0, Component_InitComponents) rides
+        // the host's FrontEnd construction; the port folds the manager POOL into one GameFlow +
+        // FrontEnd (`MenuManager_Init` caller: ResetMap_GameInit 0x1d5080).
         GameFlow { stack: vec![ST_BOOT], page: PAGE_LANGUAGE, level_to_load: FRONTEND_LEVEL, ..Default::default() }
     }
 
@@ -3172,6 +3196,12 @@ impl FrontEnd {
         }
     }
 
+    /// `Page_SetHelpText` 0x21f2b8's port side: the game binds the FOCUSED row's description
+    /// through help_table rows {control id, wildcard 0xf0f0f0f0, Txt label} to the page's help
+    /// control 0x10000225 (shipped on 8 pages [D front_end_menus_census.rs]; `Page_Update`
+    /// 0x21edc8:59-67 re-runs the walk + the bind every frame, jal 0x21eed0/0x21eee0/0x21eee8)
+    /// — this getter is what the draw code calls per focused row instead [S fold: one bind per
+    /// draw rather than per frame].
     pub fn row_label<'a>(&self, lang: Option<&'a Lang>, row: usize) -> String {
         let bind = |id: u32| lang.and_then(|l| l.bind(id)).map(str::to_string).unwrap_or_else(|| format!("<{id:#x}>"));
         match self.page {
@@ -4987,6 +5017,11 @@ impl FrontEnd {
 
     /// One menu action. Returns true when the action changed the state.
     pub fn action(&mut self, a: Action) -> bool {
+        // `MenuManager_GetStatus` 0x21deb0 (max +0x1b4 over the five manager slots — the
+        // create-page results; callers Menu_InputAction 0x1f1f40:102 gates actions 0x1e/0x1f
+        // behind `status > 3`, P_PAUSE_Handler 0x203c28:99) — the port's gate is structural:
+        // `action` only runs while the front end owns the input (the GameFlow stack), so no
+        // status counter is needed.
         // menu-mouse-parity: any action moves the wheel under the pointer — the hover is stale.
         self.wheel_hover = None;
         // death-loop-07: a fresh input decides the restart marker anew — only the results page's
