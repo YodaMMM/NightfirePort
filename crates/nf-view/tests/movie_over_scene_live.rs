@@ -20,3 +20,17 @@ fn a_movie_frame_carries_no_scene_fade() {
     assert!(!script_only.v.is_empty(), "the script overlay has the fade quad");
     assert_eq!(with_movie.v.len() + script_only.v.len(), without.v.len(), "the movie frame drops exactly the scene's script overlay");
 }
+
+/// The front end: `ResetMap_Load` runs `Player_Start` on 0x07000048 too [M 0x1d6360:154], so the
+/// front-end scene carries the armed entry fade — the port's front-end scene never ticks it away,
+/// and it drew black over the title page (art 0x03000074 + the prompt). The front-end level draws
+/// no scene overlay; sister: a gameplay level (07000001, untouched entry fade) still does.
+#[test]
+fn the_front_end_level_draws_no_scene_fade() {
+    let fe = nf_view::load(&iso(), "07000048.bin", false).expect("load the front-end level");
+    assert!(fe.sim.as_ref().unwrap().drones.spawn_fade_view().is_some(), "the front end's entry fade is armed (Player_Start runs there)");
+    assert!(!nf_view::scene_overlay_up(&fe, false), "no scene overlay on the front-end level");
+    let game = nf_view::load(&iso(), "07000001.bin", false).expect("load 07000001");
+    assert!(nf_view::scene_overlay_up(&game, false), "sister: a gameplay level draws its overlay");
+    assert!(!nf_view::scene_overlay_up(&game, true), "sister: not over a movie frame");
+}
