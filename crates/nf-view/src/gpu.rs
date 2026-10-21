@@ -8,6 +8,31 @@
 //! colour = fog + (colour − fog)·⌊zb/256⌋/128; the alpha list fades by min(⌊zb/128⌋, 255)/255 instead. Every output
 //! is scaled by the display copy's gain (`SqueezeColourIn` 0x91 / 0x80, `CreateSqueezeFrame`) — linear, so the same
 //! as scaling the finished frame. No back-face culling — the GS has no winding.
+/*!
+PS2 packet-builder citations (unported-front-end-menus-1) — the game builds these screen passes as cached
+DMA/GIF packets at level load (psiPreGameRun 0x11e2e8 ← ResetMap_Load 0x1d6360) and consumes them per frame;
+this renderer computes the same passes per pixel instead:
+- `CreateZClearSprite` 0x117ce8 — TEST_1=0x32001 (ATST never + AFAIL=ZB_ONLY) + ZBUF_1=ZBufBase, a fullscreen
+  write-z-only sprite cached in ZClearPacket and chained per frame by psiClearZ 0x10b9a0 (via psiPreDraw
+  0x121590:19); here the render pass's `LoadOp::Clear(1.0)` depth clear.
+- `CreateMoveRG2BA` 0x118718 — caches RGB2APacket: a PSMZ16 texture-read of the z-buffer (TEX0_1 = ZBufBase<<5)
+  remapping its R,G (the z bytes) into B,A so `psiDrawFogPass` 0x10b960 gets per-pixel fog depth as dest alpha;
+  here the fog pass reads the depth attachment directly in-shader.
+- `CreateFogSprite` 0x119228 — caches FogOverlayPacket: a fullscreen quad in PS2FogR/G/B at fog factor 0x7fff,
+  chained second in psiDrawFogPass 0x10b960; here the `scene.fog` uniform + the `zb < 32767` fog blend below.
+- `CreateTotalScreenSprite` 0x1181b0 — packs (r,g,b,a) into one RGBAQ fullscreen SPRITE packet (Q=1.0, z-test
+  off) that `psiFadeView` 0x10b9c8 submits per viewer for fades; the port's fade quads live in hud.rs.
+- `CreatePointerSpriteList` 0x11a160 — converts a VECTOR array into one batched GIF sprite packet (56 quads per
+  tag, tex bound by psiFont_SetTexture 0x120880), the snow/rain/emitter particle draw via psiDrawParticleList
+  0x122d50; the port feeds wgpu quads from nf-game's world_fx ParticleSprite / Sim::snow_quads.
+- VRAM texture plumbing replaced by resident wgpu uploads (see the make_tex2 block below):
+  `CacheFlipBuffers` 0x1095d0, `CreateTexTranPacket` 0x11a900, `CreateTexUploadPacket` 0x11ad08,
+  `CacheTextureSpace` 0x11cc70, `CreateSortedTextures` 0x11d7d8, `CheckAndAddTextureToSpace` 0x11d8b8,
+  `CreateSpaceAndPackTextures` 0x11dcf8, `PageConv4to32` 0x11e640, `Conv4to32` 0x11e8d8,
+  `PageConv8to32` 0x11eba8, `CacheAndFillNewGlistTextures` 0x11f180, `CheckSize` 0x120970,
+  `CheckSizeAndShrink` 0x120928, and the GS double-buffer setup `CreateDB` 0x10b000 (main 0x109080:33 /
+  psiPreGame_Run 0x109520:11 — NTSC 512×448, TextureBufBase 0x2a00) → wgpu surface configuration.
+*/
 
 use crate::scene::{Draw, Scene};
 use wgpu::util::DeviceExt;
@@ -226,6 +251,16 @@ pub fn extract_frustum(vp: [[f32; 4]; 4]) -> [[f32; 4]; 6] {
 }
 
 /// Test if a sphere is fully outside any of the 6 frustum planes (Gribb-Hartmann point-plane test extended by radius).
+///
+/// Citations (unported-front-end-menus-1): the game's object cull is `CheckObjectClip` 0x121a60 — the 8 corners
+/// of the obj+0x80 sphere's AABB CLIP-tested against BOTH view slabs (clip volumes 0x244540/0x244580, built by
+/// PS2WorldViewVU1Kick2 0x10b2b0:190-233; VU0 VI18 flags, 0x3f mask), returning −1 cull / 1 draw-clipped / 0
+/// draw-plain [M 0x121a60:68-292] — called from psiDrawSkinObjectMatrix 0x111828:81 (the AnimObjectDraw 0x1c4490
+/// ← View_DrawObjList 0x1e69a0 ← Game_Draw 0x1e6f50 path, every frame). `CheckObjectClipBox` 0x121e30 is the
+/// same machinery on a GLIST_BOX min/max [M 0x121e30:72-289], called from RecurseAndDrawBoxes 0x1233e8:11-37
+/// (−1 → Ps2NumVertsRejected += box vert count, 1 → clipped draw, 0 → subtree drawn unclipped). This module's
+/// single-frustum p-vertex tests (`box_outside`, `sphere_outside`) are the behavioural replacement — the
+/// game's two-slab pair and the 3-way verdict are not modelled [S unverified whether the slabs ever disagree].
 /// `Vision_InView`'s shape as the port reads it: a box (a cel's `cel+0x40..0x58` min/max bbox) is
 /// outside the view when all eight corners lie outside the SAME frustum plane (the standard
 /// p-vertex test). `View_AddCels` (0x1e6ba0) frustum/bbox-tests each cel per viewer [M].
@@ -555,6 +590,29 @@ impl Renderer {
             (bg, view)
         };
         let make_tex = |w: u32, h: u32, rgba: &[u8]| make_tex2(w, h, rgba).0;
+        /* Citations (unported-front-end-menus-1) — every texture here is uploaded linear-RGBA and stays resident
+        for the whole level, which replaces the game's PS2 VRAM texture-cache plumbing outright (all reached per
+        frame / per level load; evidence in docs/systems/psi-render-plumbing.md):
+        - `CacheFlipBuffers` 0x1095d0 — the texture-cache double-buffer window flip (CacheFrame = (CacheFrame+1)&1,
+          CacheStart/CacheSize from initcache 0x109688's TextureBufBase 0x2a00 split), driven by
+          `CacheAndFillNewGlistTextures` 0x11f180 when a draw's texture cost exceeds the half-cache.
+        - `CacheTextureSpace` 0x11cc70 — per-frame VRAM cost of a texture's Space page (0x400-entry × 0x1c table at
+          0x25cae0) + its CLUT, with the animated-frame pick (GameState+0x56 / rate) % frames.
+        - `CreateSortedTextures` 0x11d7d8 — texture indices selection-sorted big-to-small into TexSize (the packer
+          priority), then Space ids set 0xffff.
+        - `CheckAndAddTextureToSpace` 0x11d8b8 — greedy shelf packer into a Space with a 64-rect occupancy list
+          (TextureRectList 0x316984), called from Reduce 0x11daf0.
+        - `CreateSpaceAndPackTextures` 0x11dcf8 — copies each texture's pixels into its packed Space, converts
+          4bpp/8bpp Spaces to 32bpp (`Conv4to32` 0x11e8d8 / `Conv8to32` 0x11eeb0 — per-page via `PageConv4to32`
+          0x11e640 / `PageConv8to32` 0x11eba8 GS page swizzles), and builds the upload packets
+          (`CreateTexTranPacket` 0x11a900 — GIF BITBLTBUF/TRXPOS/TRXREG per Space and per CLUT).
+        - `CreateTexUploadPacket` 0x11ad08 — PS2WipeVram 0x11cab0's blank-image VRAM packet (0x40-page rows),
+          run from psiPreGame_Run 0x109520:10 / psiResetResources 0x11f390:17.
+        - `CheckSize` 0x120970 (`end − start`, 8 bytes) and `CheckSizeAndShrink` 0x120928 (Mem_Shrink the packet
+          allocation to its used bytes) — DMA packet size helpers with no Rust counterpart.
+        - `CreateDB` 0x10b000 — the NTSC/PAL GS double-buffer + VRAM layout (TextureBufBase 0x2a00,
+          PS2ScreenWidth 512 × 448/512) → this process's wgpu surface configuration.
+        */
         // batch-draws: the world textures' views, index-aligned with `tex_bgs` (the bindless array).
         let mut tex_views: Vec<wgpu::TextureView> = Vec::new();
         let (bg0, v0) = make_tex2(1, 1, &[255, 255, 255, 255]);
@@ -848,6 +906,8 @@ impl Renderer {
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    // CreateZClearSprite 0x117ce8's job: the game clears z through a fullscreen write-z-only
+                    // sprite (TEST_1 0x32001, AFAIL ZB_ONLY) chained by psiClearZ 0x10b9a0; here the pass clear.
                     view: depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }), stencil_ops: None,
                 }),
                 timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
