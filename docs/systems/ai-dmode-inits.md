@@ -1,0 +1,84 @@
+# The DMODE inits: `DroneModeSettings` and the OLD mode chain
+
+Tags: [M] decompile/disassembly read here (ACTION.ELF), [D] disc bytes, [S] suggested.
+Owner task: unported-guard-ai-other-2 (2026-10-21). Sibling evidence: the 856 report
+(docs/reports/unported-guard-ai-other-3.md) covers rows 23-30 the same way.
+
+## The table [M 0x14cfa0 / D ELF data]
+
+`DroneModeSettings` 0x29ad40, 35 rows × 12 bytes. `NDrone2_DoModeSettingsOLD`
+(0x14cfa0) reads row `param_2` (the placement's parameter 5, `piVar19[0x12]`,
+DefaultInit 0x14b300:470/495):
+
+- byte 0 → `Drone+0xC5` (the mode byte `Drone_Control` dispatches on);
+- byte 1 → `Drone+0x44` (team);
+- word +4 → `Drone+0x500` and `Drone+0x50C` (resting and live alertness);
+- word +8 → the row's init function, called with the drone when non-null;
+- both props blocks (+0x4DC/+0x4E8) are memset 0 first, `+0x4D8` points at +0x4DC.
+
+`param_2 > 0x23` dispatches to `NDrone2_DoModeSettingsNEW` (0x14c600) instead, which
+never calls any row function — it rebuilds the profile from the placement's behaviour
+words. `DoModeSettingsOLD`'s only caller is `NDrone2_DefaultInit` 0x14b300:495-502
+(`< 0x24` branch); `DefaultInit`'s only caller is `NDrone2_PostLoad_Init` 0x14d890,
+whose callers are `Drone_PostLoad_Init` (placements), `DroneSpawner_SpawnDrone`
+0x137cb0 (spawner children inherit the template drone placement's param block,
+0x137cb0:75), `Drone_CoderCreate` 0x13a108 and `BOT_init` 0x1249e8 (MP bots).
+
+## Which rows the shipped game reaches
+
+Every `Drone_Create` copy puts the template's +0x2C block (0x84 bytes) at
+`Drone+0xC34` = `piVar19[13]` (0x136be0:59,81), so parameter k = word 13+k.
+
+- **Placements [D census, this disc]:** 555 drone placements (flags & 0xff == 0x0f)
+  across the 34 archives with a main map; parameter 5 is **100 for every one of
+  them** (histogram {100: 555}) → all NEW, none OLD. (The 856 report says "≥ 0x24";
+  the value is exactly 100, the alert-block sentinel the port already parses.)
+- **MP bots [M 0x1249e8:101-102]:** `BOT_init` memsets its DIVars template and never
+  writes word 18 → parameter 5 = 0 → OLD **row 0**.
+- **Coder-created drones [M 0x13a108:55-60 + D census]:** `Drone_CoderCreate` memsets
+  0xb0 bytes then fills only the skin (param 0), start script (param 1) and one more
+  word (param 7) → parameter 5 = 0 → OLD **row 0**. The disc carries exactly one
+  script event of this kind: 07000001's NIS 0x0600003B, `Cmd::Event` kind 8, params
+  [0x0500005B, 0x06000106, 16, 1] (skin 0x0500005B, start script 0x06000106) →
+  `Script_EventHandler` 0x1d94c0 case 8 → `Drone_CoderCreate` → OLD row 0.
+
+So of the 35 rows only **row 0 is reached** on the shipped game, through two paths:
+the 07000001 coder event (on-foot) and every MP bot. Row 0's function is
+`NDrone2_init_DMODE_Normal` 0x14d958, a pure tail-call to
+`NDrone2_init_DMODE_Defaults` 0x14d528. Rows 1-30 (and the empty rows 31/32/34) are
+never dispatched — see docs/port-map/unreached.md.
+
+## Row 0's effect [M 0x14d528 + 0x14cfa0]
+
+`Defaults` sets 40 behaviour bits (ids 1, 6, 7, 10(×2), 0xc(×2), 0x48, 0xf, 0x11,
+0x13, 0x18, 0x1d, 0x4c, 0x21, 0x29, 0x2e, 0x37, 0x41, 0x42, 0x4f, 0x51, 0x5a, 0x24,
+0x3c, 0x1f, 0x44, 0x33, 0x32, 0x31, 0x28, 0x27, 0x26, 0x30, 0x2f, 0x2a, 0x43, 0x3b,
+0x17, 0x46) on the active props block (+0x4DC). `DoModeSettingsOLD`'s tail then adds
+id 0x38 (the rest of its unconditional tail list is already inside Defaults; the
++0xd8-conditional extras and the `+0xC5 == 0x11` extras don't apply — row 0 leaves
+the mode byte 0 and the coder skin 0x0500005B takes the switch default +0xd8 = 0).
+Row 0's team byte is 1 and its alert word 0x00000000, so the drone starts at
+alertness 0.0 — both are the port's construction defaults.
+
+## The astronaut control thunk [M 0x14b128]
+
+`NDrone2_ControlDTYPE_Astronaut` 0x14b128 (28 bytes) is the `DroneTypeSettings`
+0x29aee8 row 0x1d slot +8 read by `Drone_Control` 0x139268:60-64
+(`Drone+0xC5 * 0xC + 8`), and its whole body is a tail-call to
+`NDrone2_ControlSTANDARD` 0x1490f0. Mode 0x1D comes from DefaultInit's +0xd8 == 0x18
+conversion [M 0x14b300:718-727: +0xC5 = 0x1D, +0x5A2 = 0xBD, +0xC4 = 0x1D, +0xC6 =
+0, +0x5A4 = 0, `DroneInit_TakeXHits`], whose skins are 0x5000078 / 0x5000094 /
+0x50000BA [M 0x14b300:233-237]. **0700001b carries 19 drone placements with those
+skins** (18 × 0x05000078, 1 × 0x050000BA — [D census]) → the mode and its control
+dispatch are reached on foot. The port converts kind 0x18 → mode 0x1D at spawn and
+runs the standard tick, which IS this function's body (citation in drone.rs).
+
+## Near-player physics gate [M 0x14b190 / 0x148db0 / 0x141e58 / 0x149ec8]
+
+`DroneFunc_NearPlayerCollision` 0x14b190: "some player slot is non-null AND the
+drone's distance to that player is < 2.0". The distances are `Drone+0x154..+0x160`,
+filled per tick by `NDrone2_PreDroneControl` 0x148db0:35-48 (100000.0 for an absent
+slot). `NDrone2_DoCollision` 0x149ec8:23-26 and `NDrone2_DoGravity` 0x141e58:29-32
+call it: within 2.0 of a player both force their "physics on" return, overriding the
+`+0x570 & 2` no-physics flag; `Drone_CollisionHandler` 0x140968:152-190 picks the
+object-collision branch on `DoCollision` and the free-gravity branch otherwise.
