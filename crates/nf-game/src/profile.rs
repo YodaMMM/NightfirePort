@@ -731,6 +731,12 @@ mod delete_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+}
+
+#[cfg(test)]
+mod sjis_tests {
+    use super::*;
+
     /// [M Ascii2Sjis 0x1201c0; tables dumped from ACTION.ELF] digits, letters and punctuation
     /// → standard fullwidth Shift-JIS.
     #[test]
@@ -768,8 +774,8 @@ mod delete_tests {
     #[test]
     fn ascii_string_to_sjis_swaps_and_converts() {
         let out = Profile::ascii_string_to_sjis(b"007");
-        assert_eq!(out, vec![0x4f82, 0x4f82, 0x5082], "byteswapped fullwidth 007");
-        assert_eq!(Profile::ascii_string_to_sjis(b"B"), vec![0x6082]);
+        assert_eq!(out, vec![0x4f82, 0x4f82, 0x5682], "byteswapped fullwidth 007");
+        assert_eq!(Profile::ascii_string_to_sjis(b"B"), vec![0x6182], "B = 0x8261 swapped");
     }
 
     /// Sister: a port that forgot the swap or the rejected-byte rule breaks on the real

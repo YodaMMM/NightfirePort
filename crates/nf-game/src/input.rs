@@ -471,22 +471,25 @@ mod tests {
     /// [M MapPlayerToSlot 0x10cc48 decomp] the mapping table over slot-readiness patterns.
     #[test]
     fn map_player_to_slot_table() {
-        // One pad on slot 0, no multitap: P0 → 0, P1 → 4 (port 2's pad), P2/P3 none.
+        // One pad on slot 0, no multitap: P0 → 0; P1 still needs slot 4 (port 2's pad) READY —
+        // with nothing on port 2 the game returns -1, not a slot number.
         let one = [true, false, false, false, false, false, false, false];
         assert_eq!(map_player_to_slot(0, &one, false), 0);
-        assert_eq!(map_player_to_slot(1, &one, false), 4);
+        assert_eq!(map_player_to_slot(1, &one, false), -1);
         assert_eq!(map_player_to_slot(2, &one, false), -1);
         assert_eq!(map_player_to_slot(3, &one, false), -1);
+        // P1's no-multitap arm: slot 0 + slot 4 ready → 4 even with no multitap.
+        let p1_port2 = [true, false, false, false, true, false, false, false];
+        assert_eq!(map_player_to_slot(1, &p1_port2, false), 4);
         // Four pads via multitap: every player maps to its own slot.
         let four = [true, true, true, true, false, false, false, false];
         for p in 0..4 {
             assert_eq!(map_player_to_slot(p, &four, true), p);
         }
-        // Two pads, no multitap: P1 still lands on slot 4 (the physical port-2 pad), which
-        // this readiness set does not have — so P1 has no pad even though slot 1 exists.
+        // Two pads via multitap: P1 → slot 1; P2 needs slot 2.
         let two = [true, true, false, false, false, false, false, false];
-        assert_eq!(map_player_to_slot(1, &two, false), -1);
         assert_eq!(map_player_to_slot(1, &two, true), 1);
+        assert_eq!(map_player_to_slot(1, &two, false), -1, "no multitap: slot 4 not ready");
     }
 
     /// Sister: the gating chain — later players require every earlier slot ready, and an
