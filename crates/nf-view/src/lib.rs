@@ -109,6 +109,13 @@ pub fn lerp_yaw(a: f32, b: f32, t: f32) -> f32 {
 /// a render frame advances the 60 Hz clock by `dt * 60` and runs the whole ticks that appeared,
 /// capped at `max_ticks` (fix-perf-level's drop cap — capped ticks are dropped, not deferred).
 /// Logic stays fixed-60 Hz at any frame rate: faster frames just run 0 ticks more often.
+///
+/// This is the game's frame gate under another name: `main` 0x109080 → `CreateDB` 0x10b000:52 →
+/// `sceGsSyncV` 0x225930 → `VSync` 0x23c058 (mask interrupts, clear INTC stat bit 4, busy-wait
+/// the next vsync) / `VSync2` 0x23c0e8 (the same plus the kernel flag via `SetVSyncFlag`
+/// 0x23bf90, syscall 0x73) — one sim tick per vertical blank [M 0023c058/0023c0e8 decomp +
+/// caller scan]. The host render loop's `dt * 60` accumulation with whole-tick runs is the
+/// port's vsync wait (determinism rule: the tick count, not the wall clock, drives Sim).
 pub fn ticks_for_frame(anim_time: &mut f32, dt: f32, max_ticks: u32) -> u32 {
     let before = *anim_time as u32;
     *anim_time += dt * 60.0;

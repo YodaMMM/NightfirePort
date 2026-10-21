@@ -531,3 +531,24 @@ selects:
   probes, the 1/8-per-tick radius smoothing toward viewer+0x1f0 = 4.0, the position/angle
   writes) in case a future build or debug mode needs it; the port's live camera modes live in
   `crates/nf-view/src/scene.rs` (cam2/creep/script cameras) and modes 4/5/6/0xa stay absent.
+
+## GetMemorySize 0x23c030: termination-only — never executes in the shipped game
+
+`GetMemorySize` (16 B kernel import stub, syscall 0x7f) has exactly one caller: `InitTLB`
+0x23fdf8. `InitTLB`'s only caller is `TerminateLibrary` 0x23fc18, whose only caller is
+`Exit` 0x23fc28 — and `Exit` runs only when `main` returns (crt0's tail) or on the
+`InitTLB32MB` 0x23fe38 boot-failure paths (`Exit(1)`). `main` 0x109080 never returns: its
+frame loop ends in `goto LAB_001092a8` [M 0x109080 tail], so the console is only ever reset,
+never exited — the whole chain is dead in the shipped game [M caller scan over jal AND
+tail-j (`j`), every 4-byte step of the LOAD segment, task unported-misc-9]. Not ported.
+
+## read 0x23c210 and lseek 0x23c290: stdin/seek stdio with no users
+
+`read` (116 B) serves fd 0 only (`sceTtyRead`); its caller chain is `_read_r` ← `__sread`
+← the std FILE's read slot, wired by `std` 0x239f30 (called only by `__sinit` 0x239fa0).
+Nothing ever reads a stream: the decompile has no `scanf`/`fread`/`fgets`/`getchar`/`fgetc`
+callers at all, and all game file input runs through the sceCd/sceOpen layer, not newlib
+[M grep + caller scan]. `lseek` (8 B: `li $v0, −1; jr $ra` — the stub returns −1 without
+even a syscall) sits behind `_lseek_r` ← `__sseek`/`__swrite`, which serve seekable or
+append-mode streams — the game has none (stdout is the only stream in play, via the
+printf error paths; see docs/systems/kernel-stubs-misc9.md §4) [M caller scan]. Not ported.
