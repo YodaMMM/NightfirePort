@@ -313,7 +313,7 @@ the old state, then msg 1 (enter) to the new one, repeating while enters keep ch
 | 0x156ba8 | `AINetwork_CalcRoute` | partial | `nav.rs::Route::to_position` | `MoveTest(start, dest, near 1) = 1` → direct route (status 2); else A*. |
 | 0x156e18 | `AINetwork_NodeSearchCel` | partial | `nav.rs::Network::candidates` | Box ±25 from the start; cel lists not decoded (one cel). |
 | 0x1571b0 | `AINetwork_DoAStarPath` | partial | `nav.rs::Network::astar` | The A* with cost = g + len × (used + 1); the four decompiler bugs (no re-sort of open nodes, the open bit 0x40000000) are kept. |
-| 0x157780 | `AINetwork_HitBoundry` | partial | `nav.rs::intersect_adjust` | The 2D segment intersection. |
+| 0x157780 | `AINetwork_HitBoundry` | ported | `nav.rs::Network::push_out` | The per-wall sphere test: XZ-only distSq ≤ r² [M 0x157780:94] and the feet inside [Q.y − 0.4, Q.y + lerp(hA, hB, t)] [M :96-104]; the push direction/length stays *suggested*. unported-ai-navigation-1: this row pointed at `intersect_adjust` (the 0x157990 twin) and push_out carried two deltas (3D dist², min-height band) — mapping corrected, deltas fixed. |
 | 0x157990 | `AINetwork_LineIntersectsBoundry` | partial | `nav.rs::intersect_adjust` | The wall y-range test (yWall − 2.4 ≤ yLine ≤ yWall + hWall). |
 | 0x157bd0 | `AINetwork_GetBoundsPushVectorForSphere` | partial | `nav.rs::Network::push_out` | The push-out vector for the feet sphere (r 0.4) out of boundary walls (no flags 0x1C00). The push itself is *suggested*. |
 | 0x157d80 | `AINetwork_BoundsTest` | partial | `nav.rs::Network::bounds_test` | The portal connectivity part (`Collide_StraddleCels`) is *deviation*: a collision-world line-of-sight at +1 stands in. |
