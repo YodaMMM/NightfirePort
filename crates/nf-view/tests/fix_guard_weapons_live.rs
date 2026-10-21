@@ -76,7 +76,20 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
         // stays beyond the 3.0 CombatTooClose band [L 0x30caf0-area tuning: the model is
         // distance-independent for parks in the gate-clean subset, M 0x179740's gate reads
         // sighting time, not distance].
-        'dirs: for &(dx, dz) in &[(1.0f32, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (0.70710678, 0.70710678), (-0.70710678, 0.70710678), (0.70710678, -0.70710678), (-0.70710678, -0.70710678)] {
+        // ai-sight-drawn-gate-4: the park directions include the GUARD's own facing (his yaw and
+        // ±0.6 rad) — the 826 frustum sight gate only sees what is in front of the guard's eyes
+        // [M DroneVision_ProcessDroneSight 0x176a28's frustum], so a world-axis park with clear
+        // line_of_sight still never accumulates the 120 sighting ticks when the guard faces
+        // elsewhere (the diff-3 0x12 run: guards 2/4/12 parked, seen_ticks stuck 0). The player's
+        // own answer is to step into the guard's view; the yaw dirs are that, and they also give
+        // the placement-failing candidates (3/8/10/16/17) spots the fixed axes never tried.
+        let gyaw0 = scene.sim.as_ref().unwrap().drones.list[cand].yaw;
+        let mut dirs: Vec<(f32, f32)> = vec![(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (0.70710678, 0.70710678), (-0.70710678, 0.70710678), (0.70710678, -0.70710678), (-0.70710678, -0.70710678)];
+        for &a in &[-0.6f32, 0.0, 0.6] {
+            let a2 = gyaw0 + a;
+            dirs.push((nf_game::trig::sinf(a2), nf_game::trig::cosf(a2)));
+        }
+        'dirs: for &(dx, dz) in &dirs {
         // The diff-3 reroll: all three 10/7/5 rungs failed placement for every 0x12 candidate —
         // the rung set extends down to 4.0, all of it beyond the 3.0 band [L 0x30cb14].
         for &park in &[10.0f32, 8.0, 7.0, 6.0, 5.0, 4.0] {
