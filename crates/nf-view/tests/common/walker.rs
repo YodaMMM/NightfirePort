@@ -84,6 +84,9 @@ pub struct Walker {
     /// Top Bond's health up every tick (the "enemies disabled for the walk" allowance; the pain
     /// pipeline still runs — flash, dir bits — so the walk is not a no-op).
     pub top_up_health: bool,
+    /// Drones kept standing every tick (an escort-leg allowance, opt-in; empty by default): health
+    /// floored at 1000 while alive (god mode, like Bond's top-up). For walks that pin an escort's route rules, not the firefight.
+    pub keep_alive: Vec<usize>,
     /// Stop the walk the moment `level_exit` is requested.
     pub stop_on_exit: bool,
     /// The cut-scene skip (the game's own skip action) while `disabled`. On by default (the walk
@@ -145,7 +148,7 @@ impl Walker {
     pub fn new(scene: Scene) -> Walker {
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {
-            scene, top_up_health: true, stop_on_exit: true, skip_cutscenes: true,
+            scene, top_up_health: true, keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, max_y: pos[1], lenient: false,
@@ -232,6 +235,12 @@ impl Walker {
     }
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool) {
+        for k in 0..self.keep_alive.len() {
+            let i = self.keep_alive[k];
+            if let Some(dr) = self.scene.sim.as_mut().unwrap().drones.list.get_mut(i) {
+                if !dr.corpse && dr.health > 0.0 { dr.health = dr.health.max(1000.0); }
+            }
+        }
         if self.skip_cutscenes && self.scene.sim.as_ref().unwrap().disabled {
             self.scene.sim.as_mut().unwrap().drones.scripts.skip_request = true;
         }
@@ -900,7 +909,27 @@ impl Walker {
             (sim.drones.doors.list[di].pos, sim.drones.doors.list[di].state)
         };
         if state & 0xc != 0 {
-            // Already open/opening — just walk through.
+            // Already open/opening — walk THROUGH the opening (the real player's move), not a bare
+            // return. fix-door-react-path2: at the 01 stairwell door (-14.06, 5.35, 13.05) the nav
+            // leg's straight line to the far node clips the jamb west of the open doorway, Bond
+            // wedges on the wall face ~2.7 short, and the leg burns its 6000-tick cap while the
+            // door sits open — the escort walk's 110p timeout. Steer at the door's centre until
+            // inside the threshold (~0.9), capped; the caller's stuck ladder resumes from there.
+            // The door cycling (auto-close → ReactToHit reversal) just re-runs this arm.
+            for _ in 0..90u32 {
+                let (dpos, st) = {
+                    let sim = self.scene.sim.as_ref().unwrap();
+                    (sim.drones.doors.list[di].pos, sim.drones.doors.list[di].state)
+                };
+                if st & 0xc == 0 { break; }   // closed again mid-walk: the E arm handles the next cycle
+                let sim = self.scene.sim.as_ref().unwrap();
+                let dd = dxz(sim.bond.pos, dpos);
+                if dd < 0.9 { break; }
+                let desired = (dpos[0] - sim.bond.pos[0]).atan2(dpos[2] - sim.bond.pos[2]);
+                let err = wrap_pi(desired - sim.bond.yaw);
+                let input = Input { turn: err.clamp(-0.08, 0.08), forward: 0.8, ..Default::default() };
+                self.tick(input, false);
+            }
             return;
         }
         eprintln!("[walk] {label}: opening door ({:.1},{:.1},{:.1}) state {:#x}", dpos[0], dpos[1], dpos[2], state);

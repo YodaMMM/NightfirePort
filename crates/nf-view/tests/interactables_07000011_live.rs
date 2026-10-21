@@ -219,15 +219,33 @@ fn storeroom_door_unlocks_from_its_touch_plate() {
         if sim.drones.channels.on(0x5a) { fired = true; break; }
     }
     assert!(fired, "the plate fires ch 0x5A [D #283; M triggers.rs]");
-    // The same E now opens the door.
+    // door-react-path5: the plate's ch 0x5A rising edge opens the door ITSELF — Door_Update's
+    // unlock arm runs Door_Activate + clears the lock field [M 0x1363c8], and with ch_open ==
+    // ch_lock == 0x5A [D #213] the leaf sweeps OPENING (the scratch dump: state 0x2 → 0x8,
+    // pos01 climbing, ch_lock 90 → 0). The game's E on an OPENING/OPEN leaf CLOSES it [M
+    // 0x135be0's state-4/8 arm] — the old tail ("the same E now opens the door") pinned the
+    // every-tick re-toggle accident instead. The game-backed proof that the unlock works:
+    // wait out the auto-open sweep, then one fresh E press acts on the unlocked leaf — where
+    // the locked leaf in the sister block refused the same press outright.
     {
         let sim = scene.sim.as_mut().unwrap();
         sim.bond.pos = [dx, dy - 0.2, dz + 1.6];
         sim.bond.vel = [0.0; 3];
-        for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
-        for _ in 0..8 { sim.step_bond(Default::default(), false, false, true); }
+    }
+    let mut open = false;
+    for _ in 0..180 {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.step_bond(Default::default(), false, false, false);
+        if sim.drones.doors.list[di].state == nf_game::door::OPEN { open = true; break; }
+    }
+    assert!(open, "the plate's unlock rising edge must auto-open the storeroom door [M 0x1363c8]");
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        // One fresh press (the wait loop's ticks released the key): the open unlocked leaf closes.
+        sim.step_bond(Default::default(), false, false, true);
         let st = sim.drones.doors.list[di].state;
-        assert!(st & 0xc != 0, "the unlocked storeroom door opens, state {st:#x}");
+        assert_eq!(st, nf_game::door::CLOSING,
+            "E on the open unlocked door closes it [M 0x135be0's state-4/8 arm], got {st:#x}");
     }
 }
 

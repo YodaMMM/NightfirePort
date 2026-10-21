@@ -191,11 +191,9 @@ fn door_labels_fire_per_the_decompile_rules() {
 
 /// (c) The proxy path: a closing door that meets Bond reverses (the anti-crush) — `Collide_Update`
 /// post-walk fills the records, `Door_ReactToHit` (0x135980) consumes them the same frame.
-/// IGNORED this session: the closing sweep never reversed for Bond standing 0.5 out on the
-/// through-axis (40 ticks, state never 0x8) — the proxy scan's reach/timing vs Bond's capsule
-/// needs the live measurement listed in the report's "Live checks" before it can pin anything.
+/// (Un-ignored at merge batch 1021c: door-react-path6's `Doors::collide_step` — the game's
+/// `Collide_PickObj` 0x1eae80 pick + `Door_ReactToHit` 0x135980 — reverses the sweep off Bond.)
 #[test]
-#[ignore = "the reversal does not reproduce headlessly yet — see the report's Live checks"]
 fn a_closing_door_reverses_off_bond() {
     if std::env::var_os("NF_ISO").is_none() { eprintln!("skip: NF_ISO not set"); return; }
     let mut w = Walker::new(nf_view::load(&iso(), "07000001.bin", false).unwrap());

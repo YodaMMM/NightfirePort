@@ -33,7 +33,12 @@ fn the_load_point_refuses_without_the_key_channel_and_loads_07000004_with_it() {
     for _ in 0..6 { sim.step_bond(Default::default(), false, false, true); }
     assert_eq!(sim.drones.level_exit, None, "the key gate must refuse the exit while ch 0x52 is off");
     sim.drones.set_channel(0x52);
-    for _ in 0..6 { sim.step_bond(Default::default(), false, false, true); }
+    // door-react-path5: a fresh press — the game's use fires once per press edge [M 0x1a5ea8-0x1a5ee8
+    // + 0x17f084-0x17f090]; a key held across the gate-on transition re-fires nothing. The channel
+    // re-raises every tick (the real writer is the mission layer's AND over its inputs [D]; a
+    // one-shot write is reclaimed by the mux pass before the next tick's E reads it).
+    for _ in 0..6 { sim.drones.set_channel(0x52); sim.step_bond(Default::default(), false, false, false); }
+    for _ in 0..6 { sim.drones.set_channel(0x52); sim.step_bond(Default::default(), false, false, true); }
     assert_eq!(sim.drones.level_exit, Some(0x0700_0004), "the exit must load 07000004 once the key gate is on");
     let next = nf_view::level_archive_name(0x0700_0004).to_string();
     let scene2 = nf_view::load(&iso_v, &next, false).expect("07000004 must load after the exit");

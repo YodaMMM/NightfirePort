@@ -97,6 +97,7 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
     // route-units behind, then waits (AllyLeadWait); Bond's walk closes to 7 and he resumes. The
     // follower keeps 4.5..10 behind, out of the PlayerInWay band, and every second asserts the
     // game's own bands off the drone's `mission_path_dist` (SM+0x20).
+    w.keep_alive.push(ci);
     let mut checked = 0u32;
     let mut last_round = [0.0f32; 3];
     let settled = 'escort: {
@@ -107,6 +108,11 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
             let mut still = 0u32;
             let start = w.total_ticks;
             loop {
+                // The walker's allowance extends to the escort: this leg pins the follow bands, not
+                // the firefight — guards still alive along the route can catch the hiding contact
+                // in their fire at Bond (msg 8 through the GLOBAL base arm [M 0x1469b8:134-166]),
+                // which the game allows too. Keep him standing so the bands stay observable.
+                // (`Walker::keep_alive`, armed before the leg — every tick, door sub-loops included.)
                 if w.total_ticks - start >= 9000
                     || w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -249,6 +255,12 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
                     eprintln!("[escort] round {round}: the contact parks at a closed door {door_i} (state {dl0:#x}) at ({:.1},{:.1}) — Bond E-opens it", dpos[0], dpos[2]);
                     let (dx, dz) = (dpos[0] - cp[0], dpos[2] - cp[2]);
                     let l = (dx * dx + dz * dz).sqrt().max(1e-4);
+                    // door-react-path5: the use fires once per press edge [M 0x1a5ea8-0x1a5ee8 +
+                    // 0x17f084-0x17f090] — a held key whose first activation is refused (the
+                    // 2-tick busy marker from the contact's own door work [M 0x135be0's tail])
+                    // would deadlock the hold. Tap: press, release, press — every press fresh,
+                    // the top-of-loop break still stops on OPENING/OPEN before a re-close.
+                    let mut flip = false;
                     for _ in 0..1500u32 {
                         let sim = w.scene.sim.as_ref().unwrap();
                         let st = sim.drones.doors.list[door_i].state;
@@ -262,7 +274,8 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
                         if d > 1.8 {
                             w.tick(Input { turn: err.clamp(-0.07, 0.07), forward: 0.55, ..Default::default() }, false);
                         } else {
-                            w.tick(Input { turn: err.clamp(-0.07, 0.07), ..Default::default() }, true);
+                            w.tick(Input { turn: err.clamp(-0.07, 0.07), ..Default::default() }, flip);
+                            flip = !flip;
                         }
                     }
                 } else {

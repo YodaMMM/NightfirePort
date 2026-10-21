@@ -96,9 +96,15 @@ fn the_e_key_path_raises_the_movie_request_and_refires() {
 
     // Into the record's volume [D (16.13, 0, −0.41)] and press E.
     sim.bond = Bond::stand_at(&sim.world, [16.14, 0.0, -0.41], std::f32::consts::PI);
+    // door-react-path5: release first — the sister above held E, and the game's use fires once per
+    // press edge [M 0x1a5ea8-0x1a5ee8 + 0x17f084-0x17f090]; a teleport under a held key re-fires
+    // nothing. The loop below presses on even ticks and releases on odd ones, so each even tick is
+    // a fresh press aimed at the volume.
+    sim.step_bond(Input::default(), false, false, false);
     for _ in 0..30 {
         sim.step_bond(Input::default(), false, false, true);
         if sim.drones.movie_request.is_some() { break; }
+        sim.step_bond(Input::default(), false, false, false);
     }
     assert_eq!(sim.drones.movie_request, Some(0), "the E path raises the movie request with the record's code 0 [M 0x1b2318:56-58]");
     assert_eq!(sim.drones.level_exit, None, "no level load rides the movie path [M 0x1b2318:53-61 — no ResetMap call]");
@@ -106,6 +112,9 @@ fn the_e_key_path_raises_the_movie_request_and_refires() {
     assert!(!sim.drones.triggers[i].gone, "no spent latch — the game's arm never writes ext+0x38 = 99 [M]");
     // Re-fire: the request consumed, a second press raises it again.
     sim.drones.movie_request = None;
+    // door-react-path5: the "second press" is now an actual second press — release ticks first
+    // (the game's use arm reads the press edge [M 0x1a5ea8-0x1a5ee8]).
+    for _ in 0..3 { sim.step_bond(Input::default(), false, false, false); }
     for _ in 0..30 { sim.step_bond(Input::default(), false, false, true); }
     assert_eq!(sim.drones.movie_request, Some(0), "a second E press fires again (no latch) [M]");
 }
