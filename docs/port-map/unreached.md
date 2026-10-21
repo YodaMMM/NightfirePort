@@ -255,6 +255,68 @@ message queue sorts TXTMSG records by the `isNew` byte — contradicted by the c
 message queue is FIFO via the CirBuf ring (CirBuf_Add 0x1cd040, replaced by the port's
 subtitle queue). Also fixes a mislabel in docs/systems/fix-cel-order.md:28, which calls
 0x1d3320 "CompLight": 0x1d3320 is CompSpr; CompLight is 0x1d3350.
+## unported-front-end-menus-5 — the debug TWEAKS pages, the FMV island, the dead hub and the C_CHCH* cheat toggles (2026-10-21)
+
+**P_TWEAKS_Handler 0x2067c8 / P_TWEAKS2_Handler 0x207950 (debug "TWEAKS" pages) — UNREACHED.**
+Sole caller `Handler_HandleMessage` 0x2029e0 (itself only fed by `Manager_HandleMessage` 0x21df10):
+they are the page handlers of menu pages **0x40000044 / 0x40000046**, routed by the receiving
+control's id [M 0x2029e0:505-507, 439-440]; the handlers then switch on the page msg id
+0x4c/0x4b/0x50/0x5d — no debug-flag gate, disasm 0x2067cc-0x20683c. The only id that can ever reach
+them is the page id itself: 0x40000044 occurs in the whole decompile only in the dispatcher,
+0x40000046 only there and in P_TWEAKS's own "more tweaks" arm, and neither occurs in any shipped
+data as a message target or `Manager_SendMessage(0x44, …)` argument [D structured walk of all 35
+kind-8 menu defs on the ISO + raw aligned dword scan of ACTION.ELF = 0]. The pages do register —
+but only in the mission archives' pause def `08000001` (sha1 f0225d338b93, all 33 mission .bins),
+whose openers are KMSG `{target −3, msg 0x44}` on the confirm scripts of three rows of hub page
+**0x40000007** — a page with no dispatcher arm, zero code references and zero data references
+anywhere in the shipped disc [D; the shipped pause rows go through C_GCPAUSE 0x204408 /
+P_PAUSE 0x203c28 only]. Debug-only leftover; the gameplay globals they tune (`DroneDamage_*`,
+`DroneArmour_*`, `Plr_DMod_*`, `DroneFiring_*`) are already modelled by
+`nf_formats::tuning::Tuning` / `read_tuning_vars` (ReadTuningVars 0x1d3a80). Note for
+docs/systems/unlock-popups.md §4: the P_CHEATMEDAL page record + its trigger row 0x1000021e ship
+in the mission pause def 08000001 behind the same dead hub (the front-end def doesn't have them).
+
+**P_FMVTEST_Handler 0x20a968 — UNREACHED** (debug). Dispatches on page **0x4000004f**, a
+movie-picker page that exists in the front-end def 08000002 [D PAGE @ ISO 0x192a8796: list control
+0x10000229 (134,75,372,331), hidden on entry, focused by the page-open script]. Nothing reaches it:
+no code path sends 0x44 → 0x4000004f (the id occurs only in the 0x2029e0 dispatch), no
+`GameState+0x28` writer stores it (writers store 0x40000034/09/1c/33/36/42/43), and a FILES.BIN-wide
+scan finds no MGRMSG/KMSG navigation to it [D]. On open it fills the list with 22 movies
+("Castle - Halo Jump" … "Menu - Making Of", 0x3090f0..) [M 0x20a968:14-36]; accept stores the pick
+into `movie_hashcode` 0x30d374 and goes to page 0x40000050 [M :10-11] — a page with **no dispatch
+arm at all** and a single placeholder control [D 0x192a886c]. Debug-only FMV preview island;
+superseded by the port's `nf-view` movie harness (cited in movie.rs).
+
+**C_LBPMMAP_Handler 0x215ac8 — UNREACHED** (debug). Dispatches on control **0x10000010**, a
+(50,64,258,376) map board that exists only on the per-level menu-def page **0x40000007** (33 defs,
+hash 0x80000002; the page-open script focuses the board and its siblings are the C_CHCH* cheat rows
+— an in-level debug menu) [D]. The page is never opened: no code references 0x40000007 (0 hits in
+the decompile; every `GameState+0x28` writer stores 0x40000034/09/1c/33/36/42/43), and no def
+MGRMSG/KMSG navigates to it [D]. Its behaviour, for the record [M 0x215ac8]: msg 0x49 stores
+GameState+0x28 = 0x40000009 (title) and GameState+8 = the board's map value; accept sets
+`MPSettings+0x1AC` (player count) = 1, `ResetMap_LevelToLoad` of the selected map,
+`GameFlow_PushState(80.0f,7,0xff)`, `SFXFadeDown(1)`, `MenuManager_Delete` — a 1-player quick
+launch; finalize adds one list item (string 0x308830, archive 0x07000048). The port's
+`mp_quick_start` already covers Quick-Game launching through the shipped scenario path (cited).
+
+**The C_CHCH* cheat-toggle controls — C_CHCHFLY 0x215c70, C_CHCHDRONES 0x215cf0, C_CHCHBLIND
+0x215d60, C_CHCHWEAP 0x215dc8, C_CHCHHEALTH 0x215ee0, C_CHCHHUD 0x215f48, C_CHCHDEBUG 0x216098,
+C_CHCHCOORDS 0x216100 — UNREACHED.** Checkbox toggles (msg 0x4b = read the widget via
+`__Menu_SendMessage(control,0x40)` into the cheat global; msg 0x51 = reply 0x2e) dispatched by
+`Handler_HandleMessage` 0x2029e0 on control ids **0x10000019 / 0x10000015 / 0x10000016 /
+0x100000e7 / 0x100000e8 / 0x1000001c / 0x10000017 / 0x1000001a** with no gate [M]. Their toggle
+targets: FLY → `debug_scanmode` 0x30cb5d (+ `debug_clipmode` 0x30cb5e, write-only) with
+`Player_ChangeSubState(glb_players, on?5:0)`; DRONES → `switch_NO_DRONES` 0x30ce2c = !checkbox;
+BLIND → `switch_BLIND_DRONES` 0x30ce30; WEAP → `CheatInfo+8` 0x2a3740 and `CheatInfo+4` 0x2a373c
+(all weapons @999 + armour 50.0 via `Player_EquipWeapon`); HEALTH → `CheatInfo` 0x2a3738 (god);
+HUD → `hud_state` 0x30d2a4 → PlayerSetting/MPSettings HUD bytes + `HUD_Enable(pane)` 0..0x15;
+DEBUG → `Drone_DebugSpr` 0x30ca9c; COORDS → `switch_SHOW_COORDS` 0x30ce7c [M — the effect readers
+are shipped gameplay code: Player_HandlePain 0x1902c8, Player_InitAmmoWeapons 0x1a17f8,
+Player_Update 0x193600, the NDrone2 combat states, HUD_UpdateHealthPane 0x19b9c8]. Nothing in code
+sends those ids (each occurs in exactly one decompile file — the dispatcher); the only senders can
+be menu-def CONTROL/KMSG data, and their only owner page in shipped data is the never-opened
+per-level hub **0x40000007** (see C_LBPMMAP above — no code reference, no navigation) [D].
+Recorded unreached.
 
 # unported-front-end-menus-7 (2026-10-21)
 
