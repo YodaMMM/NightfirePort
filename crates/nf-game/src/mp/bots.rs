@@ -3666,6 +3666,11 @@ impl BotBrain {
 
     /// `BOTSTATE_setPickupVisitTime` 0x129958 without a ctx (the take path's call [M 0x18e650:126-127]):
     /// returns the stamp (`now + 45.0`) the caller writes into `MP_PICKUP+0x80 + idx·4`.
+    /// mp-never-mentioned: the game's take path resolves the taker's `PICKUPINFO*` to its
+    /// `MPpickups` row first — `MP_getMPpickupFromPickupinfo` 0x18be98 (jal 0x18e9d8), the walk
+    /// over the fixed-stride table comparing each row's `+0xe0` against the pointer [M]. The
+    /// port's caller already holds the row index, so that resolution is the identity here; this
+    /// is the same job under the port's shape.
     pub fn pickup_visit_stamp(&mut self, pickup: usize) -> f32 {
         let mut t = self.tick as f32 / 60.0 + 45.0;
         if t == 0.0 {

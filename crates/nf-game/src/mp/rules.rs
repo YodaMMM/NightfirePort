@@ -555,6 +555,12 @@ impl MpMatch {
     /// pick (a `Rand_Rand` draw on the shared RNG), the done flags clear, and every present slot's
     /// last-killer/last-shooter words reset to 0xffff. Scores are **not** cleared (multi-round
     /// Demolition/Protection); the players' respawn is the caller's (`MP_ReSpawn` per slot).
+    /// The game also delete-marks the old round objects here — `Control_DeleteAllObjectsOfType`
+    /// 0x1349e8 for classes 5 / 0x35 / 0x10 / 0xe [M 0x183fc0:14-17] — whose class-0x35 pass
+    /// then calls the `control_funcs[0x35]` delete slot `MP_ObjectDelete` 0x18b2c0: an **empty
+    /// `jr ra` stub** [M size 8 @0x18b2c0], because the ext registrations are rewritten by
+    /// `MP_CreateObject` 0x185de8 at the next start instead. The port mirrors the stub: the
+    /// `objects_rt` records are simply overwritten by the next `create_mode_objects`.
     pub fn restart_scenario(&mut self, rng: &mut Rng) {
         self.game.clock = 0.0; // [M 0x183fc0:40-53]
         self.game.restart_timer = 0.0;
@@ -869,7 +875,12 @@ impl MpMatch {
         }
         for slot in 0..self.game.slots.len() {
             if self.game.slots[slot].pos.is_none() || self.game.slots[slot].dead {
-                continue; // the obj + alive gates [M 0x186ae0:80-86]
+                continue; // the obj + alive gates [M 0x186ae0:80-86] — the game's test is
+                // `MP_isPlayerOrBotDead` 0x18abc0 (jal 0x186b44): class 2 with the ext
+                // `+0x4f8` 0x600-clear/0x100-set + health `+0xac` > 0 + the `+0xfe` delete
+                // bit clear is the alive shape; class 0x11 (a body) and the 0x12/3-armed
+                // classes answer dead [M]. The port's `slots[slot].dead` — set by
+                // `player_killed`, cleared by `do_respawn` — is that predicate's stand-in.
             }
             if !on_hill[slot] {
                 self.game.slots[slot].status_bits &= !0x10; // [M :94-98]
@@ -1322,6 +1333,60 @@ impl MpMatch {
             bp.team = self.settings.players[slot].team as u16;
             self.game.slots[slot].status_bits |= 1;
         }
+    }
+
+    // ------------------------------------------------------------------
+    // mp-never-mentioned (859/unported-multiplayer-1): the getter family's
+    // remaining three — reached, ported here so the whole-ELF scan sees them.
+    // ------------------------------------------------------------------
+
+    /// `MP_HasEsponage` 0x18b468 (36 bytes): the `BluePrint` ext @0x318830 exists and its
+    /// `+0x1c` carrier pointer is this object [M]. `HUD_MPUpdatePane` 0x19f0a0:75-82 asks it per
+    /// frame in scenario 0x20000100 to swap the score pane's objective icon to 0x300018a; the
+    /// port's `objects_rt.blueprint` is that ext (`carrier` = `MPOBJECT+0x1c`, written by
+    /// [`MpMatch::touch_blueprint`] / the death drop like the game's `MP_setPlayerStatus`).
+    pub fn mp_has_esponage(&self, slot: usize) -> bool {
+        self.objects_rt
+            .blueprint
+            .as_ref()
+            .is_some_and(|bp| bp.carrier == Some(slot))
+    }
+
+    /// `MP_ObjTeamHasGEObj` 0x18b4a0 (152 bytes): GoldenEye item `item` (the `GoldenEye`[2] exts
+    /// @0x317ff0/0x318080 [M 0x185de8 cases 6-7]) has a non-null `+0x1c` carrier whose team word
+    /// (`MPSettings + slot·0x30 + 0x20` through `Control_Plr2Ind` 0x1304e8) equals `obj`'s [M].
+    /// `HUD_MPUpdatePane` 0x19f0a0:115-127 asks it for items 0/1 in scenario 0x20000200. The
+    /// raw word compare — the game has no `!= 2` guard here (unlike
+    /// `MP_areObjectsOnSameTeam` 0x18b608).
+    pub fn mp_obj_team_has_ge_obj(&self, slot: usize, item: usize) -> bool {
+        let Some(it) = self.objects_rt.ge.get(item).and_then(|o| o.as_ref()) else {
+            return false;
+        };
+        let Some(carrier) = it.carrier else { return false };
+        let (Some(mine), Some(theirs)) = (
+            self.settings.players.get(slot),
+            self.settings.players.get(carrier),
+        ) else {
+            return false;
+        };
+        mine.team == theirs.team
+    }
+
+    /// `MP_isObjectOnTeam` 0x18b720 (128 bytes): only in a team game (`MPSettings+0x18c`) or
+    /// Assassin (`MPSettings+0x1a4 == 0x400`) — then `obj`'s team word == `team`, with the word
+    /// 2 sentinel (unassigned) answering false [M]. `Check_Target` 0x1a7810:129-144 asks it for
+    /// the aim-ray's hit (class 3 = the objective models directly, class 2 = a body through
+    /// `ext+0xc`) to gate the friendly markers [M]; `Player_AutoAim` 0x1a7c98 calls Check_Target
+    /// from `Player_Weapon` 0x1a24c8 — every on-foot match while aiming. The port keys the
+    /// lookup on the slot (`Control_Plr2Ind`'s result).
+    pub fn mp_is_object_on_team(&self, slot: usize, team: u32) -> bool {
+        if self.settings.team_game == 0 && self.settings.scenario != scenario::ASSASSIN {
+            return false;
+        }
+        let Some(p) = self.settings.players.get(slot) else {
+            return false;
+        };
+        p.team != 2 && p.team == team
     }
 }
 
