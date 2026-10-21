@@ -699,6 +699,11 @@ pub fn facial_blend(out: &mut [f32], slot0: Option<&[f32]>, slot1: Option<&[f32]
     write_lid(out, eyes[1], 11, 12); // animObject+0x98
 }
 
+/// `control_AnimUpdate` 0x1341f0 (28 B) — the class-0x15/0x1F update dispatch slot (the .data
+/// table at 0x26f98c/0x26fa04 [D]; docs/atlas/object.md:113,119) — is a one-line forwarder to
+/// `AnimObjectUpdate` 0x1befd8 [M 0x1341f0:6], so the port's anim-object tick here does that
+/// job under this name.
+///
 /// `AnimFacialUpdate` (0x1be310) — the idle/blink driver, one call per skinned object per frame
 /// (`AnimObjectUpdate` 0x1befd8:127-136, gated on the skin's facial count, the big-skeleton flag
 /// and `AnimObjectIsClose(obj, 0xc)`; frozen under `ScriptCam` and the +0x58 bit-0x10000 facial-off

@@ -494,3 +494,40 @@ but the body returns before anything observable:
 So there is no input on which the function has an observable effect. speech.md §2.3 documents the
 same verdict for its siblings (`InjuredTalk`/`RunForCoverTalk`/`UnderCoverTalk`: "dead in both
 modes", verified in the disassembly). Not ported; no observable behaviour to pin.
+## unported-front-end-menus-2 (2026-10-21) — Creature update chain and the dead chase camera
+
+### Creature_Update 0x135268 / Creature_Hurt 0x1352d0 / Creature_Move 0x135340 / Creature_Delete 0x135230
+
+**Never reached on any shipped path** (recorded with the callers, not ported):
+
+- The four are the class-0x23 object handlers [M docs/atlas/object.md:123]: the .data dispatch
+  slots at 0x26fa34 (Update) / 0x26fa3c (Delete) in the stride-12 `{update, _, delete}` table
+  base 0x26f890 [D ELF bytes]; `Creature_Update` calls `Creature_Hurt` (+0x3c) and
+  `Creature_Move` (+0x48) [M 0x135268:9-20].
+- The only creator is `Creature_Create` 0x134ab8, whose sole caller is
+  `parsemap_create_dynamic_objects` 0x1d04f0 case **0xe0** [M 001d04f0:351-353]. The disc
+  placement census has **no rows for kind 0xe0 on any shipped level** [D census;
+  docs/systems/script-census.md:120, docs/systems/uncited-audit.md:229,
+  docs/systems/ai-spawned-objects.md:79-81]. With no creature ever created, the dispatch never
+  fires and the whole chain is dead on retail.
+- `Creature_Init` 0x135208 (the list init) **is** reached — `ResetMap_GameInit` 0x1d5080 calls it
+  unconditionally (JAL at +0x144 [D ELF]) — but on retail it only ever initialises an
+  always-empty list (`LList_Init(0x316e90, 0xf0, 0)` [M 0x135208:6-7]). Cited as the port's
+  no-op equivalent at `crates/nf-game/src/drone.rs` (`level_drones` doc, 2026-10-21).
+
+### camera_chasecam 0x1b9c00
+
+**Not reached by the shipped game** — both its call sites are in camera modes the code never
+selects:
+
+- Callers: `Player_PositionCamera` 0x18f5d8 case 6 (:172-176, JAL at 0x18f8b0 [D word
+  0x0c06e700]) and case 10 (:219-226, JAL at 0x18f8f8 [D]), guarded by `BLData+0x950` (the cam
+  mode, docs/fields/bldata.md).
+- The cam mode byte is written only by `Player_SetCamMode` 0x195928 [M]; every call site passes
+  a literal from {0, 1, 2, 0xb, 0xc, 0xd, 0xe, 0xf} — never 6 or 0xa [M grep of all sites;
+  docs/systems/uncited-audit.md:226-228]. `BLData+0x87c` (the case-10 chase-cam obj) is written
+  by `Player_Init` 0x1910f8:73 but never consumed anywhere else [M].
+- The algorithm is recorded in docs/reports/unported-front-end-menus-2.md (the five occlusion
+  probes, the 1/8-per-tick radius smoothing toward viewer+0x1f0 = 4.0, the position/angle
+  writes) in case a future build or debug mode needs it; the port's live camera modes live in
+  `crates/nf-view/src/scene.rs` (cam2/creep/script cameras) and modes 4/5/6/0xa stay absent.

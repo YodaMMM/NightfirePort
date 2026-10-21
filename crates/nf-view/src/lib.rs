@@ -1786,6 +1786,14 @@ fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
 
 /// One frame of sound (`Sound_UpdateListeners` → `Sound_UpdateSounds` → the batch → `SFXUpdate`): the listener is
 /// Bond's eye and view (glb_viewer[0]; the cut-scene camera's listener call is dropped by the EE batcher [M]).
+///
+/// The game's viewer is a 0x240-byte `viewer_tag` built by `build_alloc_viewer` 0x1c9378 (malloc +
+/// the +0x28 viewer index) and initialised by `Camera_Reset` 0x1b9af0 (272 B) [M]: zero pos/rot
+/// vectors (+0xc0..+0xcc / +0xe0..+0xec from the zero constant at 0x2d6200 [D]), the view MATRIX
+/// at +0x120 from zeros, +0x1a0 identity matrix, +0x2c StackInfo (cap 12), the dirty byte +0x2b,
+/// +0x108 = 1.0f (the FOV/zoom factor) and the camera radii +0x1ec/+0x1f0 = 4.0f [M
+/// 0x1b9af0:13-62]. The port's single `Viewer` struct here + the per-frame camera construction is
+/// that init (the field list is in docs/reports/unported-front-end-menus-2.md).
 /// `pub` so the headless tests drive the exact function the winit loop runs (the fix-gpu-skinning precedent).
 pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     let (pos, f) = (sim.bond.head(), sim.bond.look());

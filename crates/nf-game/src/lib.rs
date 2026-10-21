@@ -39,6 +39,8 @@ pub mod body_glow;
 pub mod rigid_body;
 pub mod space_laser;
 pub mod copter;
+pub mod shadow;
+pub mod watch;
 pub mod casing;
 pub mod effect;
 pub mod lock;

@@ -9719,6 +9719,18 @@ pub fn captain_skin(skin: u32, param: &impl Fn(u32) -> u32, props: &nf_formats::
 
 /// Every drone placement of the level's main map, in placement order (`Drone_Create`); spawner templates included
 /// (`Drones::attach_level` marks them absent). Positions on the collision floor below the placement.
+/// The map-load init chain the game runs at `ResetMap_GameInit` 0x1d5080, disposed:
+/// - `control_init_object_lists` 0x134388 (:33 area, JAL at +0xcc [D]) — zeroes `DynamicObjList`
+///   head/tail/count and `LList_Init(0x270590, 0x110, 0)` (ForcedList) [M 0x134388:6-9]. The
+///   port's scene build recreates its object vecs per load (docs/atlas/object.md:37-38 documents
+///   the ForcedList shape); the fresh-vecs rebuild is that reset.
+/// - `Creature_Init` 0x135208 (:+0x144) — `LList_Init(0x316e90, 0xf0, 0)` [M 0x135208:6-7], the
+///   creature list. Retail data never creates a creature: placement type 0xe0 ships on no level
+///   [D census — docs/systems/script-census.md:120, docs/systems/uncited-audit.md:229], so the
+///   list stays empty and the port carries none (an empty-list init is a no-op).
+/// - The per-class update/delete dispatch (.data 0x26f890 base, stride 12 {update, _, delete}
+///   [D]; Creature class 0x23 rows at 0x26fa34/0x26fa3c, Copter 0x3B at 0x26fb54/0x26fb5c) never
+///   fires for 0x23 for the same census reason — see docs/port-map/unreached.md.
 pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, lights: &mut crate::light::LightList) -> Vec<Drone> {
     // The map parse's ambient radiators precede every dynamic-object create [M parsemap_handle_block_id 0x1d1020].
     crate::light::level_lights(level, rng, lights);
