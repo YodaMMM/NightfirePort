@@ -3,6 +3,16 @@
 //! (`NodeSearchCel`), A* (`AINetwork_DoAStarPath`) and the link creep that produces a drone's move target
 //! (`LinkCreep_*`, `AINetwork_FollowRoute`).
 //!
+//! The load-time bind chain is reached on EVERY level load: `GameFlow_Main` 0x1c98c8 →
+//! `ResetMap_Load` 0x1d6360 → `ResetMap_GameInit` 0x1d5080 (which calls `AIPath_Init` 0x1d2ea8 —
+//! zeroing the five path-system globals DAT_002c7944/58/5c/60 + 0x2c8774), then `AIPath_BindNodes`
+//! 0x1d2af8 → `AIPath_Link2Cel` 0x1d2ec8 (each node head-inserted into its `build_FindCel` room's
+//! cel+0x24 node list) + `AIBounds_Prepare` 0x1d3008 (boundary edges chained into their two end
+//! cels' +0x34 lists) [M decomp]. The port rebuilds the network from the parsed block per level
+//! (`Network::build`) and walks it without cels — the deviation below — so Init's reset is the
+//! fresh `build`, Link2Cel's per-room node lists are subsumed by the single-cel model, and
+//! AIBounds_Prepare's per-cel edge lists are the port's flat `walls` + `first_wall_hit`.
+//!
 //! *Deviation*: cels (rooms) and portals are not decoded, so the level is one cel; a collision-world line of sight
 //! at +1 stands in for the portal connectivity part of `BoundsTest` (`Collide_StraddleCels`).
 
@@ -52,6 +62,10 @@ pub const SPECIAL: u32 = 0xF007F;
 
 impl Network {
     /// `AIPath_Parse` + `AIPath_BindNodes` + `Drone_PostLoad_Init` (door / kick walls, passable walls).
+    /// The bind's members: `AIPath_Link2Cel` 0x1d2ec8 (node → room cel list; the port has no cels —
+    /// one-cel deviation, the module doc) and `AIBounds_Prepare` 0x1d3008 (edges → per-cel lists;
+    /// the port's flat `walls` + `first_wall_hit`/`bounds_test`). `AIPath_Init` 0x1d2ea8's
+    /// state reset is this per-level rebuild itself [M 001d2ea8/001d2ec8/001d3008].
     pub fn build(net: &AiNetwork, world: &CollisionWorld, level: u32) -> Network {
         let mut paths = Vec::new();
         let mut walls = Vec::new();

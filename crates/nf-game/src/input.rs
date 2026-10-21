@@ -511,3 +511,149 @@ mod tests {
         assert_eq!(map_player_to_slot(-1, &all, true), -1);
     }
 }
+/// `Input_Ready` 0x17f1c0 — the input system's per-load reset [M callers: `ResetMap_Load`
+/// 0x1d6360 and `bootup_bootup` 0x1c7e78]. The game: `FreezeGame = 0`, `Input_ClearAllActions(-1)`
+/// (every action's pressed set cleared), `DList_Init(0x316ff0, 0x18, 10)` (the 10-record combo
+/// pool of 0x18-byte records) and `psiInputReady()`. The port's equivalent is `PadDriver::new`
+/// (a fresh driver per level load carries no pressed state).
+///
+/// `Input_Check4Combo` 0x17ebe0 — the button-combo scanner `Input_Update` 0x17ee88 calls every
+/// tick [M caller]. The game walks the `DAT_00316ffc` record list (records `{ next, ?, count u16,
+/// cursor u16, kind i16, latch u16, actions*, out* }` allocated from the 0x316ff0 pool):
+/// - digital records (kind 0): `Input_Action(actions[cursor], 4)` (mask 4 = pressed this tick)
+///   advances the cursor; otherwise `Input_Action(actions[cursor−1 clamped], 4)` re-probed (the
+///   record keeps its place, and the debug byte `DAT_002a3a1c` resets the cursor there); when the
+///   cursor wraps past `count−1` the target toggles (`*out = !*out`) and the cursor resets
+///   [M 0x17ebe0:21-63];
+/// - analog records: the product of `Input_Actionf(actions[i], 1)` (held level) over the
+///   record's actions; `|product| > 0.3` toggles `*out` once (latched via the record's +0xe
+///   byte), `|product| < 0.0002` clears the latch [M 0x17ebe0:64-87].
+///
+/// **The list is empty on the shipped game**: `DList_Init(0x316ff0, …)` in `Input_Ready` is the
+/// pool's only initializer and no decompiled function stores a record into it or writes
+/// `DAT_00316ffc` (full-decompile grep — the only reference is `Input_Check4Combo` itself), so
+/// `Input_Update`'s call returns immediately every tick [M]. The port keeps the scanner so the
+/// mechanism is on record.
+#[derive(Clone, Debug)]
+pub struct Combo {
+    /// The action slots (indices into the 40-float action array) in press order.
+    pub actions: Vec<usize>,
+    /// `kind`: false = digital (the cursor chain), true = analog (the product test).
+    pub analog: bool,
+    /// The record's cursor (digital path).
+    pub cursor: u16,
+    /// The record's +0xe latch (analog path).
+    pub latch: bool,
+}
+
+impl Combo {
+    /// One `Input_Check4Combo` pass over this record. `pressed[slot]` is the mask-4 read (the
+    /// action transitioned to pressed this tick), `held[slot]` the mask-1 float level, `debug`
+    /// the game's `DAT_002a3a1c` byte (0 on the shipped path [S — a debug global, never set by
+    /// shipped code]). `out` is the record's toggle target. Returns whether it flipped this tick.
+    pub fn check(&mut self, held: &[f32; 40], pressed: &[bool; 40], debug: bool, out: &mut u32) -> bool {
+        if self.analog {
+            let mut product = 1.0f32;
+            for &a in &self.actions {
+                product *= held.get(a).copied().unwrap_or(0.0);
+            }
+            if product.abs() > 0.3 {
+                let flipped = !self.latch;
+                if !self.latch {
+                    *out = u32::from(*out == 0);
+                }
+                self.latch = true;
+                return flipped;
+            }
+            if product.abs() >= 0.0002 {
+                return false;
+            }
+            self.latch = false;
+            return false;
+        }
+        let cursor = self.cursor as usize;
+        // The mask-4 read of the CURRENT chain slot (the actions list indexes the slots).
+        let cur_hit = self.actions.get(cursor).and_then(|&s| pressed.get(s)).copied().unwrap_or(false);
+        if cur_hit {
+            self.cursor += 1;
+        } else {
+            // The previous-slot re-probe: only the debug byte acts on it [M 0x17ebe0:45-48].
+            let prev_hit = cursor.checked_sub(1)
+                .and_then(|p| self.actions.get(p))
+                .and_then(|&s| pressed.get(s))
+                .copied()
+                .unwrap_or(false);
+            if debug && prev_hit {
+                self.cursor = 0;
+            }
+        }
+        if self.cursor as usize >= self.actions.len() && !self.actions.is_empty() {
+            *out = u32::from(*out == 0);
+            self.cursor = 0;
+            return true;
+        }
+        false
+    }
+}
+
+#[cfg(test)]
+mod combo_tests {
+    use super::*;
+
+    fn pressed(slots: &[usize]) -> [bool; 40] {
+        let mut p = [false; 40];
+        for &s in slots { p[s] = true; }
+        p
+    }
+
+    // [M 0x17ebe0:21-63] the digital chain: each slot's edge advances the cursor; the wrap toggles.
+    #[test]
+    fn digital_combo_toggles_when_the_chain_completes() {
+        let mut c = Combo { actions: vec![3, 5], analog: false, cursor: 0, latch: false };
+        let held = [0.0f32; 40];
+        let mut out = 0u32;
+        assert!(!c.check(&held, &pressed(&[]), false, &mut out));
+        assert_eq!(c.cursor, 0, "nothing pressed — the cursor keeps its place");
+        assert!(!c.check(&held, &pressed(&[3]), false, &mut out));
+        assert_eq!(c.cursor, 1);
+        assert!(!c.check(&held, &pressed(&[]), false, &mut out));
+        assert_eq!(c.cursor, 1, "a miss does NOT reset the shipped-game cursor");
+        assert!(c.check(&held, &pressed(&[5]), false, &mut out));
+        assert_eq!(out, 1, "the chain completed: *out toggled");
+        assert_eq!(c.cursor, 0);
+        // Sister (can fail): pressing the second slot first does NOT advance the chain.
+        let mut c = Combo { actions: vec![3, 5], analog: false, cursor: 0, latch: false };
+        let mut out = 0u32;
+        assert!(!c.check(&held, &pressed(&[5]), false, &mut out));
+        assert_eq!(c.cursor, 0);
+        assert_eq!(out, 0);
+    }
+
+    // [M 0x17ebe0:64-87] the analog product: > 0.3 toggles once (latched), < 0.0002 unlatches.
+    #[test]
+    fn analog_combo_latches_its_toggle() {
+        let mut c = Combo { actions: vec![1, 2], analog: true, cursor: 0, latch: false };
+        let pressed_none = [false; 40];
+        let mut held = [0.0f32; 40];
+        let mut out = 0u32;
+        assert!(!c.check(&held, &pressed_none, false, &mut out));
+        held[1] = 0.8;
+        held[2] = 0.5; // product 0.4 > 0.3
+        assert!(c.check(&held, &pressed_none, false, &mut out));
+        assert_eq!(out, 1);
+        assert!(c.latch);
+        assert!(!c.check(&held, &pressed_none, false, &mut out), "still held — no second toggle");
+        assert_eq!(out, 1);
+        held[2] = 0.00001; // product 0.000008 < 0.0002 → the latch clears
+        assert!(!c.check(&held, &pressed_none, false, &mut out));
+        assert!(!c.latch);
+        held[2] = 0.5;
+        assert!(c.check(&held, &pressed_none, false, &mut out), "re-crossing toggles again");
+        assert_eq!(out, 0);
+        // Sister (can fail): the dead band [0.0002, 0.3] keeps the latch untouched.
+        held[1] = 0.1;
+        held[2] = 0.002; // product 0.0002 — the band's floor, not below it
+        assert!(!c.check(&held, &pressed_none, false, &mut out));
+        assert!(c.latch, "0.0002 is not < 0.0002");
+    }
+}
