@@ -150,6 +150,11 @@ impl Lock {
     /// unequip when the re-lock fired. (Kind 1 = the laser-burn locks never re-arm here [M —
     /// the guard is `== 0`].)
     pub fn update_burnt_open(&mut self, channel_on: bool) -> Option<u16> {
+        // Only the case-2 (burnt-open) tick runs this [M 0x1ae3d8:220-232]; the port's `burned`
+        // is that state [S mapping]. Any other state never re-locks.
+        if !self.burned {
+            return None;
+        }
         if self.kind == 0 && self.out != 0 && !channel_on {
             return self.re_lock();
         }
@@ -374,5 +379,8 @@ mod tests {
         let mut mute = lock(0, 0, 0x7);
         mute.burned = true;
         assert_eq!(mute.update_burnt_open(false), None);
+        // A kind-0 lock that is not burnt open (state != 2) never re-locks [M 0x1ae3d8 case 2 only].
+        let mut idle = lock(0, 0x88, 0x1234);
+        assert_eq!(idle.update_burnt_open(false), None);
     }
 }

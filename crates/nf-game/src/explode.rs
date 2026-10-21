@@ -114,8 +114,9 @@ pub struct DebrisSpawn {
 /// `gfx`/`gfx` param 8/9 (the mesh-hash array to pick from — the game picks
 /// `gfx[Rand(gfx_count−1)]` per particle [M 0x1ac808:41-43]). The velocity [M 0x1ac808:32-39]:
 /// `mag = speed · (Rand_FRand(1.5) + 0.1) · 0.5`; per axis
-/// `vel[k] = (mag·dir[k] + jitter[k]·Rand_FRandHalf(speed)) · REC_FRAME_RATE` (REC_FRAME_RATE is
-/// 1.0 at the fixed 60 Hz [M GS_SetRefreshRate 0x17d2b8:15]). Empty `gfx` or `count == 0` spawns
+/// `vel[k] = (mag·dir[k] + jitter[k]·Rand_FRandHalf(speed)) · REC_FRAME_RATE` (REC_FRAME_RATE =
+/// `1.0 / FRAME_RATE` = 1/60 at the shipped 60 Hz [M GS_SetRefreshRate 0x17d2b8: `REC_FRAME_RATE =
+/// 1.0 / FRAME_RATE`] — a per-tick velocity from a per-second one). Empty `gfx` or `count == 0` spawns
 /// nothing (the game's own guards [M 0x1ac808:18]).
 pub fn create_debris(
     rng: &mut crate::drone::Rng,
@@ -137,7 +138,7 @@ pub fn create_debris(
         let mut vel = [0f32; 3];
         let mut spin = [0f32; 3];
         for k in 0..3 {
-            vel[k] = (mag * dir[k] + jitter[k] * rng.frand_half(speed)) * 1.0;
+            vel[k] = (mag * dir[k] + jitter[k] * rng.frand_half(speed)) * (1.0 / 60.0); // REC_FRAME_RATE [M 0x1ac808:33-38]
         }
         // `Rand_FRandHalf_Vec(0x3e71463b, …)` [M 0x1ac808:40] — three half-range draws.
         for s in spin.iter_mut() {

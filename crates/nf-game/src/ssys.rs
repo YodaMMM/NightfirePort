@@ -54,6 +54,9 @@ pub const MIN01: f32 = 6.0;
 pub const ARM_TIME: f32 = 240.0;
 /// The laser-2 arming delay [M 0x1ad998: `SSysDelayTimer = 8.0`].
 pub const LASER2_DELAY: f32 = 8.0;
+/// `REC_FRAME_RATE` (1/60 at the shipped 60 Hz): every SSys timer counts SECONDS — the monitor
+/// subtracts it per tick [M 0x1ad998:24, :43 `- REC_FRAME_RATE`], so the 240.0 arm is 4 minutes.
+pub const REC_FRAME_RATE: f32 = 1.0 / 60.0;
 
 /// The sound column of the four tables, ids 0..=6 [L ee_start_05; `SSys_Msg` reads +4 of each
 /// 8-byte row]. Laser 1 `Laser1.134` 0x2bef60, laser 2 `Laser2.135` 0x2bef98, camera 1
@@ -113,8 +116,10 @@ impl Ssys {
         let gate_b = phoenix_b && ch_0x76_off; // the decomp's `bVar1`
         match item {
             2 => {
-                if phoenix_b && !ch_0x76_off {
-                    return None; // laser 2 is silent on 0x070000b while channel 0x76 is set
+                // [M 0x1ad878:9-12] laser 2 plays when `level != 0x700000b || switch_channels[0x76]
+                // != 0` — i.e. it is silent exactly under `bVar1`, like the other three.
+                if gate_b {
+                    return None;
                 }
             }
             1 | 3 | 4 => {
@@ -160,7 +165,7 @@ impl Ssys {
                 if i == 2 {
                     // the laser-2 arming delay [M 0x1ad998:25-38]
                     if self.delay_timer > 0.0 {
-                        self.delay_timer -= 1.0;
+                        self.delay_timer -= REC_FRAME_RATE; // [M 0x1ad998:24]
                         continue;
                     }
                     if self.items[1].channel != 0xff {
@@ -178,7 +183,7 @@ impl Ssys {
                 out.push((i, 6));
                 continue;
             }
-            self.items[i].timer -= 1.0;
+            self.items[i].timer -= REC_FRAME_RATE; // [M 0x1ad998:43]
             match self.items[i].state {
                 6 => {
                     if self.items[i].timer < MIN3 {
@@ -252,12 +257,15 @@ mod tests {
     #[test]
     fn msg_gates_follow_the_decompile() {
         let s = Ssys::new();
-        // [M 0x1ad878] on 0x0700000b with channel 0x76 off only laser 2 sounds.
+        // [M 0x1ad878:7-12] on 0x0700000b with channel 0x76 off (bVar1) every item is silent,
+        // laser 2 included (its own test is the negation of bVar1).
         assert_eq!(s.msg_sound(1, 1, 0x0700_000b, true), None);
-        assert_eq!(s.msg_sound(2, 1, 0x0700_000b, true), Some(0x43d));
-        // On 0x070000b with 0x76 SET, laser 2 is gated and the rest play.
-        assert_eq!(s.msg_sound(2, 1, 0x0700_000b, false), None);
+        assert_eq!(s.msg_sound(2, 1, 0x0700_000b, true), None);
+        // On 0x070000b with 0x76 SET, everything plays.
+        assert_eq!(s.msg_sound(2, 1, 0x0700_000b, false), Some(0x43d));
         assert_eq!(s.msg_sound(1, 1, 0x0700_000b, false), Some(0x2a3));
+        // Any other level: laser 2 plays regardless of 0x76.
+        assert_eq!(s.msg_sound(2, 1, 0x0700_000a, true), Some(0x43d));
         // [M 0x1ad878:26] camera 1 never plays on 0x0700000a.
         assert_eq!(s.msg_sound(3, 1, 0x0700_000a, false), None);
         assert_eq!(s.msg_sound(4, 1, 0x0700_000a, false), Some(0x2a0));
@@ -281,7 +289,8 @@ mod tests {
         assert_eq!(s.items[1].state, 6);
         // Drive the timer to each threshold.
         let mut seen: Vec<(usize, u8)> = Vec::new();
-        for _ in 0..300 {
+        // 240 s at REC_FRAME_RATE per tick = 14400 ticks [M 0x1ad998:43].
+        for _ in 0..14_500 {
             seen.extend(s.monitor(on, &mut set));
         }
         let got: Vec<u8> = seen.iter().filter(|(i, _)| *i == 1).map(|(_, m)| *m).collect();
@@ -324,18 +333,23 @@ mod tests {
                 break;
             }
             waited += 1;
-            assert!(waited < 20, "laser 2 never armed");
+            assert!(waited < 2000, "laser 2 never armed");
         }
         // The game's laser-2 arming [M 0x1ad998:25-38]: 8 delay ticks → the (1, 0) laser-1
         // message + the delay rewritten to 8.0 → 8 more delay ticks → the shared arm. The count
         // here is 16 because the pre-loop arm call consumed one delay tick already.
-        assert_eq!(waited, 16, "7 + 1 + 8 ticks of delay after the pre-loop arm tick");
-        assert_eq!(laser1_msg_at, Some(7), "the (1, 0) laser-1 message fired at the first delay expiry");
+        // Two 8-SECOND delays at REC_FRAME_RATE per tick [M 0x1ad998:23-38] — 480 ticks each
+        // (±1 for the f32 accumulation of 1/60).
+        assert!((958..=962).contains(&waited), "two 8 s delays ≈ 960 ticks, got {waited}");
+        let at = laser1_msg_at.expect("the (1, 0) laser-1 message fired");
+        assert!((478..=481).contains(&at), "the first delay expiry ≈ 480 ticks, got {at}");
         assert_eq!(msgs, vec![(2usize, 6u8)]);
         assert_eq!(forced.borrow().clone(), vec![(0x53, true)]);
         assert_eq!(s.items[1].channel, 0xff);
-        // The 8.0 rewrite happens only on the laser-1 branch; at the arm the delay is spent.
-        assert_eq!(s.delay_timer, 0.0);
+        // The 8.0 rewrite happens only on the laser-1 branch; at the arm the delay is spent
+        // (`0.0 < SSysDelayTimer` false [M 0x1ad998:23]) — the f32 1/60 steps leave it at or
+        // just under 0.
+        assert!(s.delay_timer <= 0.0 && s.delay_timer > -REC_FRAME_RATE, "delay {}", s.delay_timer);
         // The break tick WAS the arm: item 2 carries the shared 240 s arm.
         assert_eq!(s.items[2].timer, ARM_TIME);
         assert_eq!(s.items[2].state, 6);
