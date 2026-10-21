@@ -45,7 +45,7 @@ the quoted texts resolve from USATxt.dat by the port's `Lang::bind` [D]). `req`/
 | 0x07000013 | 0x07000011 | 3 | 1 | 0x0400003a "Raise security gate and escape" ch 0x50 en 0x4a |
 | 0x07000014 | 0x07000014 | 0 | 5 | 0x04000049 "Infiltrate Drake's facility undetected" ch 0x47; 0x0400004a "Follow Kiko to the Security Control Center" ch 0x48 en 0x47; 0x0400004b "Sabotage base security and escape" ch 0x4a en 0x48; 0x0400004c "Prevent Rook from cutting the power" ch 0x54 en 0x4a; 0x04000069 "Take the exit to Delta Sector" ch 0xce en 0x54 |
 | 0x07000015 | 0x07000014 | 1 | 1 | 0x0400004d "Find the exit to Omega Sector" ch 0x8e en 0x4b |
-| 0x07000016 | 0x07000014 | 2 | 2 | 0x0400004e "Reach Drake's launch silo" ch 0x8f en 0x8e; 0x0400004f "Prevent Kiko from launching into space" ch 0x90 en 0x8f [gap: no writer on the disc] |
+| 0x07000016 | 0x07000014 | 2 | 2 | 0x0400004e "Reach Drake's launch silo" ch 0x8f en 0x8e; 0x0400004f "Prevent Kiko from launching into space" ch 0x90 en 0x8f — writer: the KikoDeathButton #693 (the kind-0x29 switch, p0 = 0x90, gate 0x8d [D]; kiko-16-defeat) |
 | 0x0700001b | 0x0700001b | 0 | 2 | 0x04000059 "Disable the missiles…" ch 0x09; 0x0400005a "Defeat Drake…" ch 0x0b en 0x09 |
 | 0x0700004a | 0x07000011 | 2 | 1 | 0x04000039 "Gain access to lobby" ch 0x4a en 0x4d [gap: no writer found] |
 
@@ -60,10 +60,11 @@ The port runs the whole mission layer above (this task's census test exercises a
 
 Known gaps (objectives that cannot complete in a real walk today):
 
-1. **07000016 ch 0x90** "Prevent Kiko from launching into space" — no writer in the level's
-   triggers/scripts [D, docs/levels/07000016.md]; the port carries the documented stand-in (chaser
-   defeat → AND #271 → ch 100 path). Needs a live check (gdbwatch ch 0x90 during the Kiko fight) to
-   find the real writer.
+1. **07000016 ch 0x90** "Prevent Kiko from launching into space" — RESOLVED (kiko-16-defeat):
+   the writer is the KikoDeathButton #693, the level's kind-0x29 switch (p0 = 0x90, p5 = 0x8d the
+   gate [D]) — Bond's E toggles ch 0x90 [M Switch_Activate 0x1b02a8:22]; the earlier scans missed
+   the kind-0x29 family. The old kill stand-in (the chaser's init death channel forced to 0x90)
+   is removed: her death channel is param 12 = 0 [D #261] and her death raises nothing.
 2. **0700004a ch 0x4a** "Gain access to lobby" — no writer in the level's triggers, 11 scripts or
    the 4 script players [D, docs/levels/0700004a.md §Objectives/§6].
 3. **0700000f + 07000010 ch 0x00 records** — the disc ships channel 0x00 (the monitor reads it as a

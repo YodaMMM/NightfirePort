@@ -7,11 +7,15 @@
 //! ch 0x8f (completes "Reach Drake's launch silo", reveals the Kiko objective) → the south room's
 //! ch-0x81 touch trigger at (2.4, 1.0, −176.4) fires the launch chain [D] (the cinema plays OUT —
 //! no skip: its stream writes ch 185 → SP #272 → ch 240/242 → the spawners) → the chaser (Kiko,
-//! #261) spawns and is defeated with Bond's own fire → ch 0x90 → AND #271 → ch 100 → MissionState
+//! #261) spawns. Her death raises NOTHING (param 12 = 0 [D]; kiko-16-defeat removed the init
+//! stand-in) — the mission's defeat writer is the KikoDeathButton #693 (the E press; pinned by
+//! interactables_07000016_live and fix_finale_live) → ch 0x90 → AND #271 → ch 100 → MissionState
 //! 6 → the driving hand-off 0x7300017 [M 0x182c60:111-112].
 //!
 //! Enemies are DISABLED for the walk only in the walkreal sense: damage is suppressed
-//! (top_up_health, the walker's allowance). Kiko dies to Bond's own bullets. Opt-in via NF_ISO.
+//! (top_up_health, the walker's allowance). Kiko herself is not the objective's writer (see the
+//! header) — the walk stops at her spawn; the button press is the finale tail's business. Opt-in
+//! via NF_ISO.
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -220,7 +224,9 @@ fn walk_arrival_to_the_chasers_spawn() {
         for _ in 0..6000u32 {
             w.tick(Input::default(), false);
             let sim = w.scene.sim.as_ref().unwrap();
-            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && d.death_channel == 0x90) {
+            // The chaser is the skin-0x1e dtype-0xf drone NOT in the death-ch 23..26 pit squad
+            // (#294–297 [D]) — her param 12 is 0 [D #261] (the old 0x90 init stand-in is gone).
+            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)) {
                 found = Some(i);
                 break;
             }
@@ -236,18 +242,21 @@ fn walk_arrival_to_the_chasers_spawn() {
     }
 }
 
-/// The finale tail: the chaser's defeat → ch 0x90 → AND #271 → ch 100 → MissionState 6 → the
-/// driving hand-off 0x7300017 [M 0x182c60:111-112]. PARKED on U-051 (docs/UNKNOWNS.md): the
-/// ch-0xf3-gated HurtPoly-ShuttleLaunch #309 (type 2, 1000 damage [D params 0:2 1:0x3e8 2:0xf3])
-/// goes live while this walk's Bond stands on the silo-pit floor (−23.2 — he crosses the ch-0x81
-/// slab on the y-0.25 bridge, the launch chain plays out, and the pit floor is where both this
-/// walk and fix_finale_live's parked Bond end up), and the volume's 1000 damage kills him before
-/// the chaser's defeat — the walk observes the mission FAIL exit request instead of the complete.
-/// Open [L]: where the GAME's Bond stands when ch 243 rises, and when ch 243 rises — a fresh-boot
-/// PCSX2 watch of switch_channels[243] (0x26fc90+243) and Bond's position through the launch
-/// cinema settles whether the port's cinema-Bond placement or the volume's live window is wrong.
+/// The finale tail: the mission completes ONLY through the KikoDeathButton #693 [D hash
+/// 020008c1]: the chaser's defeat raises nothing (param 12 = 0 [D]; the init-forced 0x90
+/// stand-in was removed in kiko-16-defeat), so this walk's kill-then-watch shape pins the REAL
+/// rule — ch 0x90 and ch 100 stay cold and the mission does not complete. PARKED on U-051
+/// (docs/UNKNOWNS.md): the ch-0xf3-gated HurtPoly-ShuttleLaunch #309 (type 2, 1000 damage [D
+/// params 0:2 1:0x3e8 2:0xf3]) goes live while this walk's Bond stands on the silo-pit floor
+/// (−23.2 — he crosses the ch-0x81 slab on the y-0.25 bridge, the launch chain plays out, and the
+/// pit floor is where both this walk and fix_finale_live's parked Bond end up), and the volume's
+/// 1000 damage kills him before the chaser's defeat — the walk observes the mission FAIL exit
+/// request instead of the kill. Open [L]: where the GAME's Bond stands when ch 243 rises, and when
+/// ch 243 rises — a fresh-boot PCSX2 watch of switch_channels[243] (0x26fc90+243) and Bond's
+/// position through the launch cinema settles whether the port's cinema-Bond placement or the
+/// volume's live window is wrong.
 #[test]
-#[ignore = "U-051 ANSWERED (docs/systems/hurt-volumes.md): the volume window is 0x0600090a stream 6 ticks 1611..2170 [D] and the game's Bond escapes on the pack flight — the port has no jetpack substate, so pit-floor Bond dies; the re-seat stand-in is documented in fix_finale_live"]
+#[ignore = "U-051 ANSWERED (docs/systems/hurt-volumes.md): the volume window is 0x0600090a stream 6 ticks 1611..2170 [D] and the game's Bond escapes on the pack flight — the port has no jetpack substate, so pit-floor Bond dies; the re-seat stand-in is documented in fix_finale_live. The tail now pins the REAL defeat rule (the kill raises nothing; the button is the writer, kiko-16-defeat)"]
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
@@ -263,7 +272,9 @@ fn walk_the_chasers_defeat_completes_the_mission() {
         for _ in 0..6000u32 {
             w.tick(Input::default(), false);
             let sim = w.scene.sim.as_ref().unwrap();
-            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && d.death_channel == 0x90) {
+            // The chaser is the skin-0x1e dtype-0xf drone NOT in the death-ch 23..26 pit squad
+            // (#294–297 [D]) — her param 12 is 0 [D #261] (the old 0x90 init stand-in is gone).
+            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)) {
                 found = Some(i);
                 break;
             }
@@ -275,18 +286,14 @@ fn walk_the_chasers_defeat_completes_the_mission() {
     let _ = w.try_walk_to(walker::Wp::new(cpos[0], cpos[1] + 6.0, cpos[2] + 4.0).r(2.0), "the chaser's rim");
     assert!(w.shoot(chaser, "the chaser"), "the chaser dies to Bond's fire");
 
-    let mut complete = false;
-    for _ in 0..900u32 {
-        w.tick(Input::default(), false);
-        if w.scene.sim.as_ref().unwrap().drones.mission.status() == 6 { complete = true; break; }
-    }
+    // The REAL rule (kiko-16-defeat): her death raises nothing — ch 0x90's writer is the
+    // KikoDeathButton #693 [D], and the mission does not complete on the kill [D AND #271].
+    for _ in 0..100 { w.tick(Input::default(), false); }
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x90), "the chaser's defeat raises ch 0x90 [S kiko.rs]");
-        assert!(sim.drones.channels.on(100), "AND #271 [ch 0x90] → ch 100 [D #271]");
-        assert!(complete, "the final mission completes (MissionState 6 [M 0x182c60:85-116])");
-        assert_eq!(sim.drones.mission.to_end, 0x0730_0017, "the driving hand-off [M 0x182c60:111-112]");
-        assert!(sim.drones.mission.states[21].iter().all(|&s| s == 4), "the carried 07000015 record stays complete");
+        assert!(!sim.drones.channels.on(0x90), "the chaser's death raises ch 0x90 — her death channel is param 12 = 0 [D #261]; the writer is the switch #693 [D]");
+        assert!(!sim.drones.channels.on(100), "mux #618 stays cold on the kill [D]");
+        assert!(sim.drones.mission.status() != 6, "the mission does not complete on the kill [D AND #271 waits for the button]");
     }
 }
 
