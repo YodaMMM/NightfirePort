@@ -882,6 +882,8 @@ pub struct Drone {
     pub hit: Option<Hit>,
     pub impact_resume: u8,
     pub hits_taken: u32,
+    /// Diagnostic: `AttackTalk` calls made from Attack 0x56's own entry (FirstAttack's site [M 0x148010:94]).
+    pub attack_entry_talks: u32,
     /// The msg-9 `DroneImpact+0x10` blast position — the stagger/death anim's bearing source [M
     /// `NDrone2_ExplosiveImpact` 0x146480:143-159, `NDrone2_ExplosionDir` 0x14aba8]. Set at the
     /// `spawn_blast` send, read by the 0x54/0x45 ENTERs.
@@ -1058,8 +1060,6 @@ pub struct Drone {
     pub voice_type: u16,
     /// `+0x15`: a female voice (the default pain / death lines).
     pub female: bool,
-    /// The first Attack entry has run (*suggested* stand-in for `+0x4F8 & 0x8000000`, "first sight").
-    pub attack_talked: bool,
     pub voice: Option<(u32, u32)>,
     pub voice_finished: bool,
     pub talks: Vec<(usize, bool)>,
@@ -1416,7 +1416,7 @@ impl Drone {
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
             // `drone_stats[type]+8` is 0 for these guards → 10 (captains, difficulty ≥ 2 only, are not modelled).
             health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: !matches!(skin, 0x0500_003b | 0x0500_003c | 0x0500_0053), kind: setup.kind,
-            last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0,
+            last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false,
@@ -1439,7 +1439,7 @@ impl Drone {
             special_death: param(13), special_spot: pos, special_yaw: yaw,
             stationary: param(13) != 0 && param(13) != 0x0600_021f, alpha: 255.0, raise: None,
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,
-            captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), attack_talked: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0, footstep: false, anim_stops: Vec::new(), drops: Vec::new(), free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
+            captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0, footstep: false, anim_stops: Vec::new(), drops: Vec::new(), free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
             velocity: [0.0; 3], in_air: false, on_surface: true,
             // astronaut zero-G (fields on their own lines — merge lesson 4):
             thrust: false,
@@ -3001,6 +3001,7 @@ impl Drone {
     /// then speaks 1 in 3; type 1 0x33 + Rand(4) at 1 in 2 (0xA3 + Rand(8) always on 0x11 / 0x0B / 0x13); type 3 0xAC +
     /// Rand(7). Others: *not modelled* (level-specific sets).
     fn attack_talk(&mut self, d: &Data, rng: &mut Rng) {
+        if self.state == state::ATTACK { self.attack_entry_talks += 1; }
         if self.voice_busy() || self.health <= 0.0 { return; }
         let (odds, idx) = match self.voice_type {
             1 if matches!(d.level, 0x0700_0011 | 0x0700_000b | 0x0700_0013) => (0, 0xa3 + rng.rand(8) as usize),
@@ -5698,6 +5699,9 @@ impl Drone {
                 true
             }
             (ATTACK, msg::ENTER) => {
+                // `DroneFunc_FirstAttack` 0x148010 runs its body ONCE per drone: `+0x4F8 & 0x2000000`
+                // (`first_attack_done`) set → return 0 at once [M :17-19], so a re-entry talks nothing.
+                let first_time = !self.first_attack_done;
                 self.first_attack_done = true;
                 // DroneFunc_FirstAttack → FirstSightState: alertness 1, combat sight; props 0x1B (50 %) / 0x19 pick a
                 // combat move; otherwise AimStand (prop 0x18, in range) or Combat. FirstAttack also clears the second
@@ -5710,12 +5714,14 @@ impl Drone {
                 self.alert_bits |= 0x10 | if self.prop(d, 0x33) { 1 } else { 0 };
                 self.sight_range = self.sight_range.max(self.combat_range);
                 self.half_fov = 0.0;
-                // `FirstSightState` (the drone's own first sight) talks before its prop-0x1B roll; `FirstAttack` talks after
-                // it when it chose no state, or when this is not a first sight (*suggested*: first sight = own sight on the
-                // first attack).
-                let first_sight = self.own_sight && !self.attack_talked;
-                self.attack_talked = true;
-                if first_sight { self.seen_player_talk(d, rng); } else { self.attack_talk(d, rng); }
+                // The talks [M 0x148010]: the own-sight bit `+0x4F8 & 0x8000000` (`own_sight` — set by
+                // `DroneVision_EnemyLookForOpponent` 0x177ed0:76-80 with 0x4000000, and by the
+                // civilian/party/door-guard/truck-driver armed reactions) routes the first attack
+                // through `FirstSightState` 0x147c48, which talks `SeenPlayerTalk` [M :106] before its
+                // prop-0x1B roll; FirstAttack's own `AttackTalk` [M 0x148010:94] follows only when
+                // FirstSightState chose no state, or when the bit is clear. Re-entries talk nothing.
+                let first_sight = first_time && self.own_sight;
+                if first_sight { self.seen_player_talk(d, rng); } else if first_time { self.attack_talk(d, rng); }
                 let first = if self.prop(d, 0x1b) { if rng.rand(2) == 0 { 0 } else { self.choose_combat_move(d, rng) } }
                     else if self.prop(d, 0x18) { 0 } else if self.prop(d, 0x19) { self.choose_combat_move(d, rng) } else { 0 };
                 if first_sight && first == 0 { self.attack_talk(d, rng); }
@@ -13743,7 +13749,7 @@ mod tests {
             captor: None, hostage_searched: false,
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
             health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: true, kind: 0,
-            last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0,
+            last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
@@ -13770,7 +13776,7 @@ mod tests {
             // ninja-melee: the melee band +0xEC and the +0x2C8 attack-hold counter (defaults).
             melee_min_dist: 4.0, attack_hold: 0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(),
-            voice_type: 0, female: false, attack_talked: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
+            voice_type: 0, female: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,

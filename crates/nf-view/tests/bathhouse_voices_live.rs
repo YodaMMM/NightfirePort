@@ -143,7 +143,7 @@ fn the_under_bathhouse_guards_shout_lines_key_on_through_the_real_path() {
     assert!(!pool_hits.is_empty(), "the vt-1 attack shouts (sfx 111..115) go live in the EE sound pool; hits {pool_hits:?}");
     {
         let sim = scene.sim.as_ref().unwrap();
-        let talked = bunker.iter().filter(|&&i| sim.drones.list[i].attack_talked).count();
+        let talked = bunker.iter().filter(|&&i| sim.drones.list[i].first_attack_done).count(); // FirstAttack ran (its AttackTalk site) [M 0x148010]
         assert!(talked >= 1, "at least one of the trio went through the AttackTalk site; states {:?}",
             bunker.iter().map(|&i| sim.drones.list[i].state).collect::<Vec<_>>());
     }
