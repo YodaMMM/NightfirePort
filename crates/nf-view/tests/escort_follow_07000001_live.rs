@@ -26,10 +26,12 @@ use nf_game::drone::state;
 
 /// The states the escort machine legitimately parks in while Bond walks behind him
 /// ([M 0x15e698/0x15ea28/0x15ec08/0x15efc8/0x15f120/0x15f2e8] + the route's own OpenDoor 0x81).
-const ESCORT_STATES: [u8; 9] = [
+const ESCORT_STATES: [u8; 10] = [
     state::ALLY_LEAD_INIT, state::ALLY_LEAD, state::ALLY_LEAD_WAIT, state::PLAYER_IN_WAY,
     state::LEAD_HIDE, state::LEAD_MISSION_WAIT, state::LEAD_BOND_COMBAT, state::ALLY_LEAD_DONE,
     state::OPEN_DOOR,
+    // the cover run [M 0x15e698:30-36 → 0x15f938]
+    state::GO_TO_GOAL_ALLY,
 ];
 
 #[test]
