@@ -107,10 +107,15 @@ pub fn menu_get_page(ctrls: &[MenuControl], ix: usize) -> Option<usize> {
     None
 }
 
-/// `Menu_GetFirstControl` 0x1f2708. Walks the page's controls from the list head, skipping
+/// `Menu_GetFirstControl` 0x1f2708. First the page's current control (page+0xac) when it is
+/// set and its +0x18 is not the 0x1fffffff backup mark [M disasm 0x1f2720-0x1f2744] —
+/// `current` is that control, already filtered by the caller. Otherwise walks the page's controls from the list head, skipping
 /// type-0xd headers and disabled (+0x7a) controls; returns the first usable control, or
 /// `None` for the game's static backup control (BACKUP_* fields).
-pub fn menu_get_first_control(ctrls: &[MenuControl], first: Option<usize>) -> Option<usize> {
+pub fn menu_get_first_control(ctrls: &[MenuControl], current: Option<usize>, first: Option<usize>) -> Option<usize> {
+    if current.is_some() {
+        return current; // [M 0x1f2740 return page+0xac]
+    }
     let mut cur = first;
     while let Some(ix) = cur {
         let c = ctrls.get(ix)?;
@@ -744,8 +749,9 @@ pub enum ComboMsg {
     ExitLoop,
     /// 0x33 — List_SendMessage(list child, 0x33).
     ListRefresh,
-    /// 0x39 — nothing [M the empty case].
-    Nothing,
+    /// 0x39 — returns the combo's own pointer (non-zero) [M jump table 0x305ca0 → 0x1f0938
+    /// `lw v0,0(sp)` = self].
+    ReturnSelf,
     /// 0x41 — return +0x718 (rows − 1, the max item index).
     QueryMaxItem(i32),
     /// 0x47 — destroy: label/list 0x47, Component_Free, Script_DelAllScripts, Mem_Free(self).
@@ -845,7 +851,7 @@ impl Combo {
         match msg {
             0x14 => ComboMsg::ExitLoop,
             0x33 => ComboMsg::ListRefresh,
-            0x39 => ComboMsg::Nothing,
+            0x39 => ComboMsg::ReturnSelf,
             0x41 => ComboMsg::QueryMaxItem(self.max_item),
             0x47 => ComboMsg::Destroy,
             0x49 | 0x4b => ComboMsg::Forward(msg),
@@ -962,14 +968,16 @@ mod tests {
         b.next = Some(2);
         c.next = Some(3);
         let ctrls = vec![a, b, c, d];
-        assert_eq!(menu_get_first_control(&ctrls, Some(0)), Some(3));
+        assert_eq!(menu_get_first_control(&ctrls, None, Some(0)), Some(3));
+        // sister: a live current control wins [M 0x1f2720-0x1f2744]
+        assert_eq!(menu_get_first_control(&ctrls, Some(1), Some(0)), Some(1));
         // sister: everything skipped → the backup control (BACKUP_* fields) [M 0x1f2708:8-14]
         let mut e = ctrl(0, 0, 10, 10, 5);
         e.disabled = 1;
         e.next = Some(1);
         let hdr = ctrl(0, 0, 10, 10, TYPE_PAGE_HEADER);
         let ctrls2 = vec![e, hdr];
-        assert_eq!(menu_get_first_control(&ctrls2, Some(0)), None);
+        assert_eq!(menu_get_first_control(&ctrls2, None, Some(0)), None);
         assert_eq!(BACKUP_NAME, 0x1fff_ffff);
         assert_eq!(BACKUP_XY, -100);
     }
@@ -1214,13 +1222,13 @@ mod tests {
 
     #[test]
     fn combo_send_message_switch_matches_the_decompile() {
-        // [M 0x1f0868: 0x14 exit-loop; 0x33 list refresh; 0x39 nothing; 0x41 → +0x718;
+        // [M 0x1f0868: 0x14 exit-loop; 0x33 list refresh; 0x39 returns self; 0x41 → +0x718;
         // 0x47 destroy; 0x49/0x4b forward; default 0]
         let mut c = Combo::init((0, 0, 1, 4, 0, 0, 100, 40), 50.0, 20.0, (0, 0, 0));
         assert_eq!(c.send_message(0x41), ComboMsg::QueryMaxItem(1));
         assert_eq!(c.send_message(0x14), ComboMsg::ExitLoop);
         assert_eq!(c.send_message(0x33), ComboMsg::ListRefresh);
-        assert_eq!(c.send_message(0x39), ComboMsg::Nothing);
+        assert_eq!(c.send_message(0x39), ComboMsg::ReturnSelf);
         assert_eq!(c.send_message(0x47), ComboMsg::Destroy);
         assert_eq!(c.send_message(0x49), ComboMsg::Forward(0x49));
         assert_eq!(c.send_message(0x4b), ComboMsg::Forward(0x4b));
