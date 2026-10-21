@@ -308,24 +308,30 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         assert!(sim.drones.channels.on(0x4a), "AND mux #742: 0x48+0x49 → the exit's key ch 0x4A [D]");
     }
 
-    // The hatch exit: the graph's long way (south gap z −14 → the east corridor), then E
-    // (the key gate 0x4A is on).
-    // The nav's node 15 leg crosses the (−10.7, −18.7) wall stub at every height [D probe] —
-    // reach the south-west office first (the nav does), then hop the stub gap manually and let
-    // the nav carry the rest.
-    assert!(w.follow_nav_route([-15.8, 0.4, -16.4], "to the south-west office"), "no nav route");
-    // THE SECOND BLOCKER: the office door (−10.6, −19.3) is LOCKED on ch 0x30 [D placement param]
-    // and the AI's own nav route crosses it (the graph assumes the door opens). No writer for
-    // ch 0x30 exists in 0a's trigger/switch/script dumps [D] — the candidate is the keyboard
-    // sequence (the security centre "unlocks" — the objective's own wording). Live check for the
-    // main agent: gdbwatch `switch_channels[48]` (0x26fc90+48) on a real run through the office
-    // floor; if the keyboard writes it, the port's keyboard stand-in should drive it too.
-    w.scene.sim.as_mut().unwrap().drones.set_channel(0x30);
-    w.wait(2);
-    // E the locked door from the wedge side (the doorway IS the passage east; the handler's E
-    // press now works with the lock driven).
-    w.walk_to(Wp::at(-10.6, 0.4, -19.3, Act::Use { use_ticks: 400 }), "E the locked office door");
-    w.walk_to(Wp::new(-9.7, 0.4, -19.3).r(1.0), "through the doorway");
+    // ai-sight-drawn-gate-5 route re-derivation: the door leg is GONE. The old route crossed the
+    // LOCKED office door (−10.6, −19.3, ch 0x30) by force-driving the channel — no writer for
+    // ch 0x30 exists in 0a's data [D trig/switch/script dumps] — and the door exit sits 8.4 u
+    // due south of the panel-side challenge civilian (g15: prop 0x3c/0x1a, sight rng 12, fov π/2,
+    // reaction 0 → 60 ticks [M 0x1787c8 + 0x175ef0; the trace's FIRST line]), whose 180° cone
+    // covers the whole corridor mouth; challenge → anim → RunToAlarm → PressAlarm is game-true
+    // [M 0x162558 + 0x13ab58's +0x596 follow + 0x168ea8] and he is PROTECTED (props 0x53/0x54,
+    // the ELF decode) — a player cannot clear him and cannot outrun 60 reaction ticks. The drone
+    // graph routes through that door even from the security centre (run 6: "opening door
+    // (−10.6,1.1,−19.3)" until the walker's door timeout) — it is a DRONE route. The player
+    // walks the corridor ring: north out of the security centre to the north corridor (z ≈ 21.5,
+    // the office-A drone's ring [D drone positions]), east across the shaft wall's north end to
+    // the hatch anteroom (the drone at (9.8, 1.1, 21.3) [D drone-props]) and south to the hatch.
+    for (wp, label) in [
+        ([-6.0f32, 1.3, 19.0], "north out of the security centre"),
+        ([-6.0, 1.3, 21.5], "the north corridor"),
+        ([0.0, 1.3, 21.5], "the ring east 1"),
+        ([5.0, 1.3, 21.5], "the ring east 2 (the shaft wall's north end)"),
+        ([9.8, 1.3, 21.3], "the hatch anteroom"),
+        ([15.0, 1.3, 20.5], "the ring east 3"),
+    ] {
+        assert!(walk_leg_watched(&mut w, wp, 1.4, label), "the ring leg '{label}' never arrived");
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
+    }
     // Diagnostic (this task): the office floor's LOAD_LEVEL triggers — the reload (next == this
     // level) one must NOT sit on the walked corridor. Dumped while re-deriving the route under
     // the game's frustum gate [M View_AddObjects 0x1e62d8]: the frustum legitimately moves the
