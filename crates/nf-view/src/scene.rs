@@ -2091,6 +2091,12 @@ impl Sim {
     }
 
     pub fn step_bond(&mut self, mut input: nf_game::player::Input, trigger: bool, reload: bool, use_key: bool) {
+        // The game's frame clock — `UpdateT0Count` 0x109468, called from `VBlankInt` 0x124088:76
+        // (`PS2DrawFrameTime`), `psiPreDraw`/`psiPostDraw` (`PS2DrawCodeTime`), `psiPreGame_Run` /
+        // `psiPostGame_Run` (`PS2GameCodeTime`) and the SFX/DMA probes — accumulates timer-0 deltas
+        // into `RunningPS2Count` for profiling. The port takes the timing role with this fixed
+        // 60 Hz step (determinism: no wall-clock in Sim); the profiling counters have no
+        // counterpart (docs/systems/sound-lifecycle.md).
         nf_game::prof::tick();
         let _prof = nf_game::prof::scope("step_bond (total)");
         // mayhew-end-transition: the exit hold — `Trigger_Activate`'s `GS_PauseGame(1)` +
