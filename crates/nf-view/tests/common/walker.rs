@@ -84,6 +84,9 @@ pub struct Walker {
     /// Top Bond's health up every tick (the "enemies disabled for the walk" allowance; the pain
     /// pipeline still runs — flash, dir bits — so the walk is not a no-op).
     pub top_up_health: bool,
+    /// Drones kept standing every tick (an escort-leg allowance, opt-in; empty by default): health
+    /// floored at 1000 while alive (god mode, like Bond's top-up). For walks that pin an escort's route rules, not the firefight.
+    pub keep_alive: Vec<usize>,
     /// Stop the walk the moment `level_exit` is requested.
     pub stop_on_exit: bool,
     /// The cut-scene skip (the game's own skip action) while `disabled`. On by default (the walk
@@ -145,7 +148,7 @@ impl Walker {
     pub fn new(scene: Scene) -> Walker {
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {
-            scene, top_up_health: true, stop_on_exit: true, skip_cutscenes: true,
+            scene, top_up_health: true, keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, max_y: pos[1], lenient: false,
@@ -232,6 +235,12 @@ impl Walker {
     }
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool) {
+        for k in 0..self.keep_alive.len() {
+            let i = self.keep_alive[k];
+            if let Some(dr) = self.scene.sim.as_mut().unwrap().drones.list.get_mut(i) {
+                if !dr.corpse && dr.health > 0.0 { dr.health = dr.health.max(1000.0); }
+            }
+        }
         if self.skip_cutscenes && self.scene.sim.as_ref().unwrap().disabled {
             self.scene.sim.as_mut().unwrap().drones.scripts.skip_request = true;
         }
