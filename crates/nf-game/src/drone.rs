@@ -3491,14 +3491,14 @@ impl Drone {
         self.talks.push((idx as usize, false));
     }
 
-    /// `DroneFunc_LostSightTalk` (0x13f550) — the lost-sight bark: the same gates plus the lost
-    /// target being the player (`obj+0x20 == glb_players+0x20` [M 0x13f550:29-33] — in SP the
-    /// port's drones only ever track Bond, so the check is a fold [S]); the line is
-    /// `0xd3 + Rand(3)` [M :33-40].
-    fn lost_sight_talk(&mut self, level: u32, rng: &mut Rng) {
+    /// `DroneFunc_LostSightTalk` (0x13f550) — the lost-sight bark: the same gates plus the drone
+    /// standing in the player's cel (`*(obj+0xc)+0x20 == glb_players+0x20` — obj+0x20 is the
+    /// cel [M 0x13f550:41]); the line is `0xd3 + Rand(3)` [M :42-47]. No cel match → no Rand draw.
+    fn lost_sight_talk(&mut self, level: u32, same_cel: bool, rng: &mut Rng) {
         if level != 0x0700_000c && level != 0x0700_000d { return; }
         if self.voice_busy() || self.health <= 0.0 { return; }
         if self.voice_type != 5 && self.voice_type != 6 { return; }
+        if !same_cel { return; }
         let idx = 0xd3 + rng.rand(3);
         self.talks.push((idx as usize, false));
     }
@@ -3525,6 +3525,11 @@ impl Drone {
             if channels.get(ch as usize).copied().unwrap_or(0) == 0 { continue; }
             self.talks.push((id as usize, false));
             *power_last = last;
+            // review fix: the game remembers the channel only when `SpeechSFX` plays [M
+            // 0x13e770:48-50]; once one plays the drone is busy and the rest are refused, so the
+            // first eligible record is the one that sticks. The port cannot see the play result
+            // here (repeat delay / first-30-frames refusals) — [S] first-eligible.
+            break;
         }
     }
 
@@ -14486,10 +14491,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.sight_latch = true;
                     self.lost_latch = false;
                     dr.new_sight_talk(d.level, rng);
-                } else if !self.lost_latch && dr.unseen_ticks > 120 && !self.saw_opp_last_frame {
+                } else if dr.ever_seen && !self.lost_latch && dr.unseen_ticks > 120 && !self.saw_opp_last_frame {
+                    // review fix: the lost arm needs the sight record (`+0x228 & 8`, the port's
+                    // `ever_seen`) [M 0x176a28:204] — a guard that never saw Bond does not latch.
                     self.lost_latch = true;
                     self.sight_latch = false;
-                    dr.lost_sight_talk(d.level, rng);
+                    // `*(obj+0xc)+0x20 == player+0x20`: the drone stands in Bond's cel [M 0x13f550:41;
+                    // obj+0x20 = the cel, docs/fields/obj-tag.md:19]. The drone's cel is the world's
+                    // containing cell for its position [S stand-in: the port does not relink drones].
+                    let same_cel = d.world.find_cel(dr.pos) == player.cel;
+                    dr.lost_sight_talk(d.level, same_cel, rng);
                 }
             }
             if dr.enabled && dr.present && !self.npc_system_disabled {
@@ -15693,9 +15704,15 @@ mod tests {
         // LostSight: 0xd3 + Rand(3).
         let mut dr3 = drone_at([0.0, 0.0, 0.0]);
         dr3.voice_type = 6;
-        dr3.lost_sight_talk(0x0700_000c, &mut rng);
+        dr3.lost_sight_talk(0x0700_000c, true, &mut rng);
         assert_eq!(dr3.talks.len(), 1);
-        assert!((0xd3..=0xd5).contains(&dr3.talks[0].0), "0xd3 + Rand(3) [M 0x13f550:33-40]");
+        assert!((0xd3..=0xd5).contains(&dr3.talks[0].0), "0xd3 + Rand(3) [M 0x13f550:42-47]");
+        // sister: the drone outside Bond's cel stays quiet [M 0x13f550:41]
+        let mut quiet = dr3.clone();
+        quiet.talks.clear();
+        quiet.voice = None;
+        quiet.lost_sight_talk(0x0700_000c, false, &mut rng);
+        assert!(quiet.talks.is_empty(), "obj+0x20 (cel) != player+0x20 → no line");
         // Sisters: type 2 and dead guards never bark.
         let mut dr4 = drone_at([0.0, 0.0, 0.0]);
         dr4.voice_type = 2;

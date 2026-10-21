@@ -1166,7 +1166,26 @@ impl ListState {
     pub fn scroll_to_real_item(&mut self, real: i32) {
         if let Some(row) = self.set_index_real_item(real) {
             self.cursor = Some(row);
-            self.cursor_visible = self.get_index(row);
+            let idx = self.get_index(row);
+            self.cursor_visible = idx;
+            // A word-wrapped continuation row under the cursor pulls the window down so both
+            // show: when visible < idx − (top − 2), msg 0x2c sets top = idx − (visible − 2)
+            // [M 0x2196e8:323-336]; arm 0x2c accepts 0 <= v <= count − visible (unsigned
+            // compare) [M :443-448].
+            if let Some(next) = self.set_index(idx + 1) {
+                if self.rows[next].wrap {
+                    let vis = self.visible_rows as i32;
+                    if vis < idx - (self.top as i32 - 2) {
+                        let v = idx - (vis - 2);
+                        let span = (self.rows.len() as i32).wrapping_sub(vis) as u32;
+                        if v >= 0 && (v as u32) <= span {
+                            self.top = v as usize;
+                        }
+                    }
+                }
+            }
+            // List_Update's per-frame clamp under the cursor (0x21a598:217-233) [S: run here
+            // at once instead of on the next update].
             self.scroll_cursor_into_view();
         }
     }

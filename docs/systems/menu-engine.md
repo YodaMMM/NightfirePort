@@ -53,7 +53,8 @@ arguments (noted inline). The port lives in `crates/nf-view/src/menu_engine.rs`
 - **Menu_GetPage 0x1f27f8**: assert-gated (a page header's own type 0xd fails the assert →
   returns 0); type 0xd would return +0x94 (the page's control list); otherwise walks the
   +0xc parent chain to a type-8 control and returns it, 0 at the end.
-- **Menu_GetFirstControl 0x1f2708**: the page's control at the list head, or walk skipping
+- **Menu_GetFirstControl 0x1f2708**: the page's current control (page+0xac) when set and its
+  +0x18 is not 0x1fffffff [M disasm 0x1f2720-0x1f2744]; else walk from the list head, skipping
   type-0xd headers and +0x7a-disabled controls; when none, a static backup control:
   name 0x1fffffff, x=y=-100 (0xff9c), w=h=0, byte +0x6b = 0xff [M 0x1f2708:8-14].
 - **Menu_CursorOverMe 0x1f13c8**: page-space point = cursor x/y (manager+0x94 sprite +0x24/+0x26)
@@ -98,12 +99,13 @@ arguments (noted inline). The port lives in `crates/nf-view/src/menu_engine.rs`
   horizontal accumulation (right edge seeded with w; fixed instances push it down at
   dy+w unless flag 0x400; right-anchored (flag 2) instances pull the right edge to
   (w - dx) - w'); height likewise on the vertical span with hf / flag 0x800 / flag 1.
-  Flags 0x100: inst.w slot = hf · (vertical span) (cross-axis fit); 0x200: inst.h slot =
-  wf · (horizontal span). Placement: flag 2 (right) x = page.x + x + w - w' - dx;
+  Flags 0x100: inst.w slot = hf · (vertical span), or the control sprite's current +0x2e
+  when hf == 0; 0x200: inst.h slot = wf · (horizontal span), or the +0x10 slot when wf == 0.
+  Both slot writes land in the record and persist across calls. Placement: flag 2 (right) x = page.x + x + w - w' - dx;
   flag 4 (centre-x) x = page.x + x + (w - w')/2 — dx ignored [M the (iStack_d4 - lVar11)>>1
   branch]; flag 0x20-less default x = page.x + x + dx; flag 1 (bottom) / 8 (centre-y) on y
-  symmetric. Alpha: when mask & 0x20 == 0 or wf/hf != 0 → mask & 0xc0 ? Menu_AlphaReset :
-  Menu_AlphaGet. Finally `Menu_InitializeSprite(sprite, ctrl.layer - page.layer, x, y, w', h',
+  symmetric. Alpha: when mask & 0x20 == 0 or wf/hf != 0 → Menu_AlphaReset only if
+  mask & 0xc0 (else nothing); otherwise (0x20 set, no fractions) → Menu_AlphaGet. Finally `Menu_InitializeSprite(sprite, ctrl.layer - page.layer, x, y, w', h',
   0, record.hash)`.
 - **Menu_InitializeSprite 0x1f2870**: sprite.layer(+0x38) = param; x/y/w/h to +0x24/+0x26/+0x2c/+0x2e;
   byte +0x39 = 7 always; +0x1c = 0; +0x22 = param 15; UV quad +0x30..+0x36 written only when
@@ -120,15 +122,17 @@ arguments (noted inline). The port lives in `crates/nf-view/src/menu_engine.rs`
   no text. The port injects the measurer (the port's `Font` metrics live in nf-formats::hud;
   the game's `Font_GetTextCountExtent`/`Font_GetTextExtent` are not separately ported).
 - **Combo_Init 0x1f0248** (3 args: self, NEW_CONTROL*, page — disasm prologue): type = 3;
-  handle = (u16 ctrl+0x14) << 16 | 2; copies ctrl+0x00 → +0x18, ctrl+0x0c → +0x20; rows =
-  u16 ctrl+0x16 → +0x78; rect from ctrl +0x18/+0x1a/+0x1c/+0x1e (x, y, w, h); item width
+  handle = (u16 ctrl+0x14) << 16 | 2; copies ctrl+0x00 → +0x18, ctrl+0x0c → +0x20; layer =
+  u16 ctrl+0x16 → +0x78; rect x/y/w from ctrl +0x18/+0x1a/+0x1c, h = (int)item width + 5
+  (written last, :109); item width
   +0x714 = Font_GetTextExtent(0x305c60 charset) + 2.0; item count - 1 → +0x718 (count from
   ctrl h ÷ control's own +0x5c4 row height); a LABEL child at +0x600 (Label_Init with a copy
-  of the NEW_CONTROL, y offset by the component rect, msg 0x2b) and a LIST child at +0x94
-  (List_Init, y = label + extent + 4, h = ctrl h - (label y + h) - ...); then
+  of the NEW_CONTROL: x += comp+6, layer − 1, h = the combo's +0x76 before its :109 write;
+  msg 0x2b) and a LIST child at +0x94 (List_Init: x += comp+6, y += (int)item width +
+  comp+8 + 4, w −= comp+6 − comp+10, h = 1, layer − 1) [M 0x1f0248:84-105]; then
   Script_PrepareScripting.
 - **Combo_SendMessage 0x1f0868** switch: 0x14 → Script_ExitLoop (returns its result);
-  0x33 → List_SendMessage(list child, 0x33); 0x39 → 0 (nothing); 0x41 → return +0x718
+  0x33 → List_SendMessage(list child, 0x33); 0x39 → returns the combo itself (jump table 0x305ca0 → 0x1f0938); 0x41 → return +0x718
   (item count - 1); 0x47 (destroy) → label/list 0x47, Component_Free, Script_DelAllScripts,
   Mem_Free(self), return 0; 0x49/0x4b → forward to `__Menu_SendMessage(page, msg, self, 0)`.
 - **Menu_SetAction 0x1f3048**: slot -1 broadcasts `Input_SetAction` to pads 0..3, else only
