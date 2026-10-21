@@ -44,3 +44,26 @@ here.
 Row 20 (`NDrone2_init_DMODE_Ambush` 0x14e018, mode 16) is not in this task's list
 and is not claimed here. `Defaults` 0x14d528 itself is reached (via row 0) and is
 ported — it is listed in the task only as the row-0 body's callee.
+
+## The Sub_* group (unported-level-objects-1, 2026-10-21)
+
+The `SUBINFO` submarine (distinct from the `MiniSub_*` family): `Sub_Create` 0x1ad6c0 is the
+placement dispatcher's case 0x36 only (`parsemap_create_dynamic_objects` 0x1d04f0:215) [M],
+sets class 0x4A ('J') [M 0x1ad6c0:21], and `control_funcs` 0x26f890 row 74 is
+{`Sub_Update` 0x1ad200, `Sub_Collide` 0x1ad868, `Sub_Delete` 0x1ad870} [M action-symtab +
+0x26fc08-0x26fc10]. The disc placement census has **no 0x36 rows** [D
+docs/systems/script-census.md; the proof is in docs/systems/ai-spawned-objects.md "Proven
+never called on the shipped path"], so no Sub object ever exists on a shipped on-foot level,
+front end or MP map, and nothing below can dispatch.
+
+| addr | name | bytes | why never reached |
+|---|---|---|---|
+| 0x1ad200 | Sub_Update | 880 | control_funcs[74] slot 0 — runs only for a class-0x4A object; `Sub_Create`'s only caller is parsemap case 0x36, which has no disc rows [M callers / D census] |
+| 0x1ad868 | Sub_Collide | 8 | control_funcs[74] slot 1 (`Collide_Update` 0x1ea398:59-63 dispatch) — same class gate [M callers / D census] |
+| 0x1ad870 | Sub_Delete | 8 | control_funcs[74] slot 2 (`control_delete_object` 0x133178:16-17 dispatch) — same class gate [M callers / D census] |
+| 0x1acda0 | Sub_Laser | 452 | only caller is `Sub_Update` 0x1ad200:111 [M] — never runs itself |
+| 0x1acf68 | Sub_DeployTorpedoes | 664 | only caller is `Sub_Update` 0x1ad200:127 [M] — never runs itself |
+| 0x1ad570 | Sub_ApplyDammage | 328 | two callers: `Explode_Propagate` 0x17c518:207 (its case-0x3D branch checks the victim's class byte == 'J' = 0x4A first [M]) and `Sub_Update` — both need an existing Sub [M callers / D census] |
+
+The auxVec_Sub 0x1e4f48 hits in the same name grep are the vector-subtract helper
+(`Creature_CalcWaypoints` calls it), not this family.
