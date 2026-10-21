@@ -6225,40 +6225,65 @@ impl Drone {
                 true
             }
             (ATTACK, msg::ENTER) => {
-                // `DroneFunc_FirstAttack` 0x148010 runs its body ONCE per drone: `+0x4F8 & 0x2000000`
-                // (`first_attack_done`) set → return 0 at once [M :17-19], so a re-entry talks nothing.
+                // `NDrone2_DSTATE_Attack` 0x164210 case 1: `DroneFunc_FirstAttack` 0x148010 first; a
+                // non-zero pick is the next state. FirstAttack runs its body ONCE per drone —
+                // `+0x4F8 & 0x2000000` (`first_attack_done`) set → it returns 0 at once [M :17-19] —
+                // so every re-entry goes straight to Attack's own fallback below.
                 let first_time = !self.first_attack_done;
-                self.first_attack_done = true;
-                // DroneFunc_FirstAttack → FirstSightState: alertness 1, combat sight; props 0x1B (50 %) / 0x19 pick a
-                // combat move; otherwise AimStand (prop 0x18, in range) or Combat. FirstAttack also clears the second
-                // switch and sets the return state to Attack (`+0x5A2` = 0x56, *suggested* for these guards).
+                let mut first = 0;
+                if first_time {
+                    self.first_attack_done = true;
+                    // FirstAttack → FirstSightState: alertness 1, combat sight; props 0x1B (50 %) / 0x19 pick a
+                    // combat move [M 0x147c48]. FirstAttack also clears the second switch.
+                    self.alert = 1.0;
+                    self.second_channel = 0;
+                    // FirstAttack: the attack is visible to others (`+0x4FC |= 0x10`, enemy side), shouts with prop 0x33.
+                    if self.alert_bits & 0x10 == 0 { self.attack_frame = frame; }
+                    self.alert_bits |= 0x10 | if self.prop(d, 0x33) { 1 } else { 0 };
+                    self.sight_range = self.sight_range.max(self.combat_range);
+                    self.half_fov = 0.0;
+                    // The talks [M 0x148010]: the own-sight bit `+0x4F8 & 0x8000000` (`own_sight` — set by
+                    // `DroneVision_EnemyLookForOpponent` 0x177ed0:76-80 with 0x4000000, and by the
+                    // civilian/party/door-guard/truck-driver armed reactions) routes the first attack
+                    // through `FirstSightState` 0x147c48, which talks `SeenPlayerTalk` [M :106] before its
+                    // prop-0x1B roll; FirstAttack's own `AttackTalk` [M 0x148010:94] follows only when
+                    // FirstSightState chose no state, or when the bit is clear.
+                    let first_sight = self.own_sight;
+                    if first_sight { self.seen_player_talk(d, rng); } else { self.attack_talk(d, rng); }
+                    first = if self.prop(d, 0x1b) { if rng.rand(2) == 0 { 0 } else { self.choose_combat_move(d, rng) } }
+                        else if self.prop(d, 0x18) { 0 } else if self.prop(d, 0x19) { self.choose_combat_move(d, rng) } else { 0 };
+                    if first_sight && first == 0 { self.attack_talk(d, rng); }
+                    // `FirstAttack` may switch to the second behaviour block (`+0x5A4` ≠ 0, not modelled); [L] the 07000005
+                    // gate guard still used its first block after a fight (`+0x4D8` = `+0x4DC`, WORKLOG 0021), so no switch.
+                }
+                if first != 0 { self.set_state(first); return true; }
+                // attack-reentry-choice (913): Attack's own fallback when FirstAttack returned 0
+                // [M 0x164210:24-90] — on the first entry with no pick AND on every re-entry:
+                // `+0x50C = 1.0` (alertness) and `Drone_AlertStatusSet(1)` (the status byte +0x51C
+                // only — no port reader [M 0x13a8d8]); `DroneFunc_AttackNoWeapon` (the port's
+                // weapon-≤1 arm above takes the unarmed drone first; an armed one gets 0); a captain
+                // (+0x19) holding weapon 0x19 swaps to 0x18 [M :31-52]; `+0x4F8 |= 0x400000` (no
+                // port reader). Then non-snipers (mode +0xC5 ∉ {2, 0x19}): vision on (`+0x4F8 |=
+                // 0x10000`), `NDrone2_InvalidateAttackRoute` 0x155020 (+0x854 = 0, the goal route
+                // +0x860 invalidated); prop 0x18 within the engage range `+0xF0` → `+0x5A2` = 0x68
+                // and AimStand 0x67 (`NDrone2_DroneInSights` 0x14a800 is a size-8 stub returning 0
+                // [M], so the arm is unconditional), else Combat 0x58. Snipers → SniperAim 0x2a.
+                // (The old arm re-ran the first-attack combat-move roll on every re-entry and
+                // stamped `+0x5A2` = 0x56 for every pick [*suggested*].)
                 self.alert = 1.0;
-                self.second_channel = 0;
-                self.return_state = ATTACK;
-                // FirstAttack: the attack is visible to others (`+0x4FC |= 0x10`, enemy side), shouts with prop 0x33.
-                if self.alert_bits & 0x10 == 0 { self.attack_frame = frame; }
-                self.alert_bits |= 0x10 | if self.prop(d, 0x33) { 1 } else { 0 };
-                self.sight_range = self.sight_range.max(self.combat_range);
-                self.half_fov = 0.0;
-                // The talks [M 0x148010]: the own-sight bit `+0x4F8 & 0x8000000` (`own_sight` — set by
-                // `DroneVision_EnemyLookForOpponent` 0x177ed0:76-80 with 0x4000000, and by the
-                // civilian/party/door-guard/truck-driver armed reactions) routes the first attack
-                // through `FirstSightState` 0x147c48, which talks `SeenPlayerTalk` [M :106] before its
-                // prop-0x1B roll; FirstAttack's own `AttackTalk` [M 0x148010:94] follows only when
-                // FirstSightState chose no state, or when the bit is clear. Re-entries talk nothing.
-                let first_sight = first_time && self.own_sight;
-                if first_sight { self.seen_player_talk(d, rng); } else if first_time { self.attack_talk(d, rng); }
-                let first = if self.prop(d, 0x1b) { if rng.rand(2) == 0 { 0 } else { self.choose_combat_move(d, rng) } }
-                    else if self.prop(d, 0x18) { 0 } else if self.prop(d, 0x19) { self.choose_combat_move(d, rng) } else { 0 };
-                if first_sight && first == 0 { self.attack_talk(d, rng); }
-                // `FirstAttack` may switch to the second behaviour block (`+0x5A4` ≠ 0, not modelled); [L] the 07000005
-                // gate guard still used its first block after a fight (`+0x4D8` = `+0x4DC`, WORKLOG 0021), so no switch.
-                // The AimStand pick with prop 0x18 and the engage range met: the game runs it through
-                // `NDrone2_DroneInSights` 0x14a800 — a size-8 stub that returns 0 [M 0x164210:79-84], so the
-                // branch is UNCONDITIONAL: resume `+0x5a2` = 0x68 (AimStandFire) and state 0x67 AimStand;
-                // without prop 0x18 (or beyond `+0xF0`) it is Combat 0x58 [M 0x164210:69-88]. The port's
-                // `return_state = ATTACK` above is the 0x68 resume.
-                self.set_state(if first != 0 { first } else if self.prop(d, 0x18) && self.dist < self.engage_range { AIM_STAND } else { COMBAT });
+                if self.captain && self.weapon == 0x19 { self.weapon = 0x18; }
+                if self.mode != 2 && self.mode != 0x19 {
+                    self.vision_on = true;
+                    self.croute = None;
+                    if self.prop(d, 0x18) && self.dist < self.engage_range {
+                        self.return_state = AIM_STAND_FIRE;
+                        self.set_state(AIM_STAND);
+                    } else {
+                        self.set_state(COMBAT);
+                    }
+                } else {
+                    self.set_state(SNIPER_AIM);
+                }
                 true
             }
             // `NDrone2_DSTATE_Combat` (0x1731b8, state 0x58): alert 1.0 on entry.
