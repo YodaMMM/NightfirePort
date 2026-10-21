@@ -806,6 +806,10 @@ pub struct Drone {
     /// shot, `+0x100` damage multiplier.
     pub wobble: u32,
     pub lost_sight: bool,
+    /// `Drone+0x1E` — the `DroneVision_GunThroughWall` 0x178520 latch [M]: 1 while the muzzle segment
+    /// (collision-cylinder-clamped → true muzzle, ray mask 0x927) intersects geometry; the aim-fire
+    /// DSTATEs hold the fire request +0x3B while it is set [M 0x166328:132,144 + 0x167060:72,93].
+    pub gun_in_wall: bool,
     pub damage_mul: f32,
     /// `+0x4FC` alert bits others can see (0x10 attacking, 1 shouted, …; observers get the source's bits << 16),
     /// `+0x524` frame the attack began, `+0x4F8 & 0x20000` already alerted by another drone, `+0x4F8 & 0x2000` may notice.
@@ -1481,7 +1485,7 @@ impl Drone {
             anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), started: false, early_end: false, len_cap: None },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip, clip_max: clip,
             grenade_weapon, grenade_count, pending_grenade: false,
-            shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: rng.rand(10000), lost_sight: true, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
+            shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: rng.rand(10000), lost_sight: true, gun_in_wall: false, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
             // drone-abseil-elevator: the +0x23 rope fields (own lines — merge lesson 4). `move_ok`
             // (+0x24) is set for every drone at DefaultInit 0x14b300:771; the rest start at the
             // game's fresh-allocation values.
@@ -6519,10 +6523,12 @@ impl Drone {
                     }
                     return true;
                 }
-                match self.combat_state(d, rng, frame, AIM_STAND_FIRE) { 0 => self.fire(d, rng, frame, true), n => self.set_state(n) }
+                // The +0x1E gun-through-wall hold is part of the game's fire request here
+                // [M 0x166328:132,144 — +0x3B = (*+0x1E == 0)]: the state keeps aiming while latched.
+                match self.combat_state(d, rng, frame, AIM_STAND_FIRE) { 0 if !self.gun_in_wall => self.fire(d, rng, frame, true), 0 => {}, n => self.set_state(n) }
                 true
             }
-            (AIM_STAND_FIRE | AIM_CROUCH_FIRE, msg::TIMER_C) => { self.fire(d, rng, frame, true); true }
+            (AIM_STAND_FIRE | AIM_CROUCH_FIRE, msg::TIMER_C) => { if !self.gun_in_wall { self.fire(d, rng, frame, true) } true }
             (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::ENTER) => {
                 self.firing = false;
                 self.clip = self.clip_max;
@@ -6533,7 +6539,7 @@ impl Drone {
             // Crouching: AimCrouch plays the crouch-aim anim and continues in AimCrouchFire.
             (AIM_CROUCH, msg::ENTER) => { self.call_anim(d, anim_state::CROUCH_AIM, AIM_CROUCH_FIRE, 0); true }
             (AIM_CROUCH, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
-            (AIM_CROUCH_FIRE, msg::ENTER) => { self.call_anim(d, anim_state::CROUCH_AIM, 0, 0); self.vision_on = true; self.fire(d, rng, frame, true); true }
+            (AIM_CROUCH_FIRE, msg::ENTER) => { self.call_anim(d, anim_state::CROUCH_AIM, 0, 0); self.vision_on = true; if !self.gun_in_wall { self.fire(d, rng, frame, true) } true }
             (AIM_CROUCH_FIRE, msg::UPDATE) => {
                 self.desired_yaw = self.yaw_to_opp;
                 if self.dist <= 4.0 && self.can_backoff(d) { self.set_state(AIM_BACKOFF); return true; }
@@ -12554,7 +12560,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `NPCGlobals != 0` block [M 0x139520:124-284]: a cut-scene that fired event 5 freezes all of these.
         if self.npc_enabled {
         // Visibility every tick for drones with vision on; line of sight for one drone per tick (round robin).
-        for dr in &mut self.list { dr.visibility = if dr.present && !dr.corpse && (dr.vision_on || dr.alert >= 1.0) { dr.visibility() } else { 0.0 }; if dr.visibility < 0.7 { dr.los = false; } }
+        for dr in &mut self.list { dr.visibility = if dr.present && !dr.corpse && (dr.vision_on || dr.alert >= 1.0) { dr.visibility() } else { 0.0 }; if dr.visibility < 0.7 { dr.los = false; dr.gun_in_wall = false; } }
         let ln = self.llist.len();
         for k in 0..ln {
             let slot = (self.los_cursor + 1 + k) % ln.max(1);
@@ -12567,6 +12573,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // collision world's line of sight — the same deviation the nav `move_test`
                 // documents [S].
                 dr.los = d.world.line_of_sight(dr.head(), player.target);
+                // `DroneVision_GunThroughWall` 0x178520, called from `SeekOpponentLOS` 0x175cb8:78-79
+                // on the sight tick while the drone is armed: ray from the muzzle clamped into the
+                // obj's ~0.4-radius x/z collision cylinder (`DroneFunc_ClampPosToCollisionCylinder`
+                // 0x149bd0) out to the true muzzle, mask 0x927 — a hit latches +0x1E and the aim-fire
+                // DSTATEs hold the +0x3B fire request until it clears [M 0x178520; 0x166328:132,144].
+                dr.gun_in_wall = dr.los && dr.weapon != 0 && {
+                    let m = dr.muzzle(d);
+                    let (dx, dz) = (m[0] - dr.pos[0], m[2] - dr.pos[2]);
+                    let l = (dx * dx + dz * dz).sqrt();
+                    let c = if l > 0.4 { [dr.pos[0] + dx / l * 0.4, m[1], dr.pos[2] + dz / l * 0.4] } else { m };
+                    !d.world.line_of_sight(c, m)
+                };
                 self.los_cursor = slot;
                 break;
             }
@@ -14746,7 +14764,7 @@ mod tests {
             grenade_weapon: 0x35, grenade_count: 0, pending_grenade: false, shots: Vec::new(),
             surrender_logged: false, hit_log: 0, detected_logged: false,
             hip_anim: 1.0,
-            log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script: 0, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: 0, lost_sight: false,
+            log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script: 0, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: 0, lost_sight: false, gun_in_wall: false,
             damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
             route: None, last_wait: None, idle_timeout: None, delayed: None, sm_id: 0, stand_until: 0,
             croute: None, nav_path: None, move_quad: 0, yaw_offset: 0.0, no_route_odd: false, target: PlayerTarget::default(), links_used: Vec::new(),
