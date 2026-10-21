@@ -1784,15 +1784,13 @@ impl Drone {
         self.team = match self.dtype { 10 | 11 | 0xd | 0xe => 3, 0xc => 2, _ => 1 };
         let row = |m: u8| d.props.types.get(m as usize);
         if row(self.mode).and_then(|t| t.init.as_deref()).is_some_and(|n| n.starts_with("NDrone2_initDTYPE_Sniper")) { self.stationary = true; }
-        // The OLD-path mode init's property writes (`DoModeSettingsOLD` 0x14cfa0 memsets the first
-        // behaviour block +0x4dc, then calls `DroneModeSettings[mode·0xc+8]` [L table 0x29ad40: mode
-        // 0x17 → `NDrone2_init_DMODE_CivilianGuard` 0x14e158]). This task ports the block's
-        // `NDrone2_NearArmedBond` gate prop 0x51 [M 0x14e158:17] — the 07000006 driver's sight scare
-        // needs it and the playtest shows the scare firing [L 1011-1535]. The block's other writes
-        // (0x1d/0x24/0x3c/0x1f/0x46/0x26/0x27/0x28/0x29/0x4f/0x50 [M 0x14e158:6-16]) are not modelled
-        // from the init here — the placement words carry this port's values (docs/systems/
-        // drone2-helpers.md); porting them is its own task.
-        if self.mode == 0x17 { d.props.set(0x51, &mut self.props, 1); }
+        // No mode-init property writes here: placed drones take `DoModeSettingsNEW` 0x14c600 (placement
+        // param 5 = 100 on all 555 placements [D census, docs/port-map/unreached.md]), which fills both
+        // behaviour blocks from the placement words (`behaviour_util_get` [M 0x14c600:61-70]) and never
+        // runs the `DroneModeSettings` init rows. (844 forced prop 0x51 for mode 0x17 citing
+        // `init_DMODE_CivilianGuard` 0x14e158 — unreachable; the 07000006 driver's normal block has no
+        // 0x51 [D drone-props 07000006: (66.1, 39.2, 28.9) k15 13], so the game's NearArmedBond is 0
+        // while he idles. Removed in the 2026-10-21 review.)
         // `NDrone2_ControlDTYPE_Astronaut` 0x14b128 is `DroneTypeSettings` row 0x1D slot +8, read
         // by `Drone_Control` 0x139268:60-64 (`+0xC5 * 0xC + 8`); its 28-byte body is a tail-call to
         // `NDrone2_ControlSTANDARD` 0x1490f0 — the per-tick AI pass below IS this function's body,
