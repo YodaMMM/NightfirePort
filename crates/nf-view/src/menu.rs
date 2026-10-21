@@ -194,7 +194,12 @@ pub const PAGE_CN_AV: u32 = 0x4000_0031;
 /// the MISSION archives' own kind-8 menu def (entry 08000001 of each level archive, e.g. 07000001.bin
 /// [L parsed 2026-10-14]), NOT the front-end 07000048 stream — the old 0x4000000c id was the NIS page
 /// (the handler table maps 0x4000000c → P_NIS_Handler [M Handler_HandleMessage 0x2029e0])]. Its main
-/// control is 0x10000028, handled by C_GCPAUSE_Handler 0x204408.
+/// control is 0x10000028, handled by C_GCPAUSE_Handler 0x204408 — and 0x10000028 is a TYPE-6
+/// M_LISTBOX (widget-type byte 6, the List widget [D census, docs/systems/menu-list-widget.md]):
+/// the game fills its rows via `List_SendMessage` 0x2196e8 and lays them out per tick with
+/// `List_Update` 0x21a598. The port's `ListState` (nf-formats/src/menudef.rs, unported-engine-plumbing-1)
+/// models that row/cursor/scroll state; the pause rows this FE draws by hand are that widget's
+/// draw side.
 /// The IN-GAME NIS page 0x1000003e is `C_NIS_Handler` (0x205f10) [M Handler_HandleMessage
 /// 0x2029e0:224]: msg 0x51 binds the level's cut-scene controls → script hashes, 0x4b (shown)
 /// boots the level cut-scene (LoadableLoad → Script_Load → Script_Play → Camera_Enable(7)) —
@@ -5738,7 +5743,11 @@ impl FrontEnd {
                 // then re-shows the list on msg 0x50 [M P_PAUSE_Handler 0x203c28:19-24 —
                 // option_return != 0 → control 8 0x2b(0); the ok-only box returns 3 on OK and 4
                 // on cancel, both non-zero] — the port just clears the field. Everything else
-                // idles.
+                // idles. The game's box is the authored TYPE-6 list control 0x10000120 on that
+                // page [D census]: Menu_CreateOptionBox fills its row text via
+                // `List_SendMessage` 0x2196e8 arm 0x10 (:27-41) and calls `List_Update`
+                // 0x21a598 directly (:68) — the port's `ListState` + this modal stand in for
+                // that flow (the draw side is the main agent's).
                 if self.pause_hint.is_some() {
                     match a {
                         Action::Confirm | Action::Back => { self.pause_hint = None; return true; }
