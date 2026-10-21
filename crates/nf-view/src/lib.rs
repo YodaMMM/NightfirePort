@@ -736,6 +736,10 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // The level's animations: LoaderLoad rewrites the hashcode's 0x00F00000 nibble to 0xF for loader types 0/3,
     // so 070000NN.bin's sequences are in 07F000NN.bin (docs/formats/level-bin.md).
     let anim_name = format!("{}F{}", &archive[..2], &archive[3..]);
+    // `AnimPreLoadInit` (0x1c63b8, from `ResetMap_GameInit` 0x1d5080 / `LoadableReload` 0x1d6ab0):
+    // every level load starts the anim layer fresh — the tag/script timestamps, skin-scale globals
+    // and the pSkeletons+0x1fc scratch it resets have no port counterparts (nothing persists across
+    // loads), so these fresh skeleton/sequence/script maps ARE the reset.
     let mut sequences: HashMap<u8, Vec<Sequence>> = HashMap::new();
     if let Some(anim) = read(&anim_name)? {
         let alb = LevelBin::parse(&anim)?;
@@ -743,6 +747,8 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             let s = Sequence::parse(alb.data(&anim, e))?;
             sequences.entry(s.skeleton).or_default().push(s);
         }
+        // The game frees each seq's +0x84/+0x88 frame buffers with `AnimSeqDelete` (0x1c72e0) when its
+        // script dies; the port's `Sequence` owns its decoded channels and drops with these maps.
     }
     phase_mark("03 level+levelbin parse, skeletons, 07F sequences", t); t = std::time::Instant::now();
     // The level's own sleeve, before any merge lends foreign ones (see the substitution below).
@@ -1048,7 +1054,11 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                 // per-skeleton sequence list. In the port that list is order-sensitive gameplay data —
                 // `frame_of`'s `k % len` idle cycle and the skeleton-filtered `seq_index` drone lookups —
                 // and appending to it changed guards' animations and broke live tests (07000001's
-                // `dropped_guns_dim_to_the_cel_ambient` "the guard died"). The sentinel key still reaches
+                // `dropped_guns_dim_to_the_cel_ambient` "the guard died"). (`LoadableLoad` 0x1d69e8's
+                // first call `AnimCacheDisable` 0x1c63a0 — like `LoadableReload` 0x1d6ab0's
+                // `AnimCacheEnable` 0x1c6398 — is an EMPTY function in ACTION.ELF, so the port needs
+                // no anim-cache gate around this stream, only the 0x4000000 flush modelled here.)
+                // The sentinel key still reaches
                 // the by-hash map `Scene::seqs` (built by flattening every bucket), which is the only thing
                 // a cut-scene's `Script_AnimStart` resolution reads (`script_frame`'s hash → `seqs.get`).
                 4 if pe.length >= 0x40 => { let s = Sequence::parse(plb.data(&pack, pe))?; sequences.entry(s.skeleton | 0x80).or_default().push(s); }
