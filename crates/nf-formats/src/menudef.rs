@@ -387,6 +387,19 @@ pub struct PageDef {
     pub sets: Vec<SpriteSet>,
 }
 
+impl PageDef {
+    /// `Page_FindHelpControl` 0x21f250 — the page-create walk (`MenuManager_Create` 0x21b908
+    /// calls it per page; the decompile dropped the argument, the caller passes the page) that
+    /// scans the page's control list for the help-text control **0x10000225** and parks it in the
+    /// global `h` [M 0021f250_Page_FindHelpControl__FP6M_PAGE.c: the id compare `h[6] ==
+    /// &DAT_10000225`]. The only reader of `h` is `Page_SetHelpText` 0x21f2b8, which has NO
+    /// callers in the decompile (docs/port-map/unreached.md), so the parked pointer is dead in
+    /// the shipped game; the parse keeps the lookup as the getter the draw code can call.
+    pub fn find_help_control(&self) -> Option<&ControlDef> {
+        self.controls.iter().find(|c| c.id == 0x1000_0225)
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ControlDef {
     pub id: u32,

@@ -651,6 +651,18 @@ impl Rng {
         self.draws += 1;
         ((self.y & 0xffff).wrapping_mul(n)) >> 16
     }
+    /// `Rand_Random()` 0x1e36f0: x THEN y step (the opposite order of `Rand_Rand`), returning
+    /// the raw 32-bit draw `(SEED_X << 16) | (SEED_Y & 0xffff)` [M 001e36f0_Rand_Random__Fv.c:
+    /// `SEED_X = a*(SEED_X&0xffff)+(SEED_X>>16); SEED_Y = b*(SEED_Y&0xffff)+(SEED_Y>>16);
+    /// return SEED_X*0x10000 | SEED_Y & 0xffff`]. One draw. The consumer is `Locks_Init`
+    /// 0x1b0548's keypad-code generation ((draw % 9) + '0'); the port's callers drive it with a
+    /// LOCAL Rng — the shared stream's boot draws are pre-consumed by the level-start snapshot.
+    pub fn random(&mut self) -> u32 {
+        self.step_x();
+        self.step_y();
+        self.draws += 1;
+        self.x << 16 | self.y & 0xffff
+    }
     /// `Rand_FRandHalf(max)` 0x1e3810: the same x/y step and value as `Rand_FRand`, minus
     /// `max·0.5` — uniform in [−max/2, max/2) [M 0x1e3810:11-15]. One draw.
     pub fn frand_half(&mut self, max: f32) -> f32 {
