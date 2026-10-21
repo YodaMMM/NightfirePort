@@ -1,6 +1,38 @@
 //! PS2_GFX map blocks (0x2D): glist boxes and their DMA/VIF packets, decoded to triangle-strip batches.
 //! Spec: docs/formats/ps2gfx.md.
 //!
+//! The runtime DMA-chain layer is deliberately NOT ported: the game builds a per-frame VIF/GIF
+//! packet stream (double-buffered via the VIF1 IRQ) that this port replaces with the wgpu
+//! renderer's single encode/submit (nf-view/src/gpu.rs `Renderer::render` -> lib.rs
+//! `queue.submit`). The game functions that own that layer, all reached every frame on every
+//! level, and the port sites that do their jobs instead:
+//! - `AllocateTListPos` 0x121650 / `AllocateNextTListPos` 0x124458 — the texture-tag list slots
+//!   in the calc buffer; the port uploads textures once at `Renderer::new`
+//!   (gpu.rs `queue.write_texture`), animated frames selected per tick (scene.rs `CacheTexture`
+//!   frame rule).
+//! - `AddTextureToChain` 0x124400 — the texture REF chain for the IRQ patch; the upload path above.
+//! - `FillMatrixChainRot` 0x122310 — the 0x18-qword VU1 matrix packet (world_view x obj,
+//!   view_screen, view_clip, the light matrices, the flag word); the port stages one uniform
+//!   slot per draw (gpu.rs per-draw staging) and the WGSL `vs()` reproduces the VU1 math.
+//! - `FillMatrixChainSkin` 0x122788 — the skinned palette packet; `Scene::skin_palette`
+//!   (scene.rs) + the shader skin block.
+//! - `RecurseAndDrawBoxes` 0x1233e8 / `DrawAllChildBoxes` 0x124680 — the box-tree walk with
+//!   `CheckObjectClipBox` culling; the port flattens the tree ONCE here at load and culls the
+//!   baked instances per frame (gpu.rs frustum + portal room walk).
+//! - `AddDMAChainRegSet` 0x123520 — the GIF A+D register sets (per-leaf GS state); decoded into
+//!   `Draw::from_gs` draw states (scene.rs) and wgpu pipelines.
+//! - `AddDMAChainSprite` 0x123910 / `AddDMAChainPacket` 0x123d68 — sprite/packet appends; the
+//!   port's sprites are immediate-mode quads in the HUD frame (nf-view/src/hud.rs).
+//! - `EndDMAChain` 0x1221f8 / `AddDMA_IRQ` 0x123a48 / `SetupIRQPointers` 0x124998 /
+//!   `FlagDMAChainDone` 0x124950 / `EndFreeList` 0x1245e8 / `AddChainFreePtr` 0x124928 —
+//!   chain termination, IRQ tags and the patch free-lists; no wgpu analogue — the frame ends at
+//!   the single `queue.submit` + present.
+//! - `VIFDMA` 0x123e90 — the VIF1 DMA interrupt that patches/kicks the old buffer's chains
+//!   (registered from `main` at 0x109114); replaced by the same single-pass submission.
+//! - `ResetDBufData` 0x1243a0 — the boot-time zero of the DBufData double-buffer arena (from
+//!   `main` 0x109080); the port builds per-scene state fresh at `Renderer::new` and clears the
+//!   per-frame staging each frame.
+//!
 //! The packet is replayed through a small VIF1 → VU1-memory model (UNPACK with STCYCL, generation-tagged qwords).
 //! At every `MSCNT`/`MSCAL`/`MSCALF` the batch is read back from VU memory at the layout the doc describes (GIF tag at
 //! B, vertex k at B+1+3k / B+2+3k / B+3+3k, UV at B+0xC7+k), and every qword read must have been written since the

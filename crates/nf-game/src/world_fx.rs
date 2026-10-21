@@ -274,6 +274,11 @@ pub struct EmitterParticle {
 
 /// One 0xf2 placement.
 #[derive(Clone, Debug, PartialEq)]
+/// `Emitter_Kill` 0x17b960 (8 B) is the emitter object's `control_funcs` kill slot — entry
+/// type 0x32 at 0x26faf0 (`Emitter_Create` sets `obj+0xff = 0x32` [M 0x17ae00]) — and it is an
+/// empty `return`: emitter state dies with the object [M table dump; `control_delete_object`
+/// 0x133178 dispatches the +8 slot]. The port has no destructor table; the FX records here are
+/// recreated per level, so the null destructor needs no counterpart.
 pub struct EmitterFx {
     pub placement: usize,
     pub pos: V3,
