@@ -3495,6 +3495,10 @@ impl BotBrain {
         let _ = dir;
         self.shots.push(BotShot { tick: self.tick, pos: self.pos, dir: aim, weapon: self.vars.weapon_id });
         self.vars.clip_rounds -= 1;
+        // The burst half of `DroneWeap_FireWeapon` 0x178f68's `DroneWeap_ManageBurstCount` 0x17a870
+        // [M :9-15]: the rounds-left short at drone+0xBC0 decrements per shot; while it stays > 0
+        // the game re-arms `DroneWeap_NextBulletTime(0, 0)`, and the count hitting 0 ends the burst
+        // (the port's `next_bullet_at = 0.0` stop + the `burst_empty` latch [M 0x17a180:63]).
         self.vars.burst_left -= 1;
         if self.vars.burst_left == 0 {
             self.vars.burst_empty = 1; // [M 0x17a180:63]

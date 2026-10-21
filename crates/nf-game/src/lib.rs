@@ -19,6 +19,7 @@ pub mod creepwall;
 pub mod damage;
 pub mod door;
 pub mod drone;
+pub mod target_registry;
 pub mod env;
 pub mod explode;
 pub mod gun;
