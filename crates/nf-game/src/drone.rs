@@ -9742,7 +9742,9 @@ impl Drones {
     /// The RAW state still advances per Game_Run tick (`Camera_UpdateAll` 0x1bbd68 runs
     /// unconditionally in Game_Run 0x1c9790:43; [L] FRAME_RATE_MUL = 1.0, ee_snapshot
     /// 0x0030d0d8) — `tick` keeps the decrement. Camera_PushStates/PopStates save only the
-    /// +0x29/+0x2a pair [M 0x1bbc60/0x1bbcd0], so no cut-scene resurrects it.
+    /// +0x29/+0x2a pair [M 0x1bbc60/0x1bbcd0] — the pair travels over the game's STACKINFO stack
+    /// (`Stack_IsEmpty` 0x1cceb0 / `Stack_Pop` 0x1ccf68, Camera_PopStates 0x1bbcd0's only list
+    /// ops [M]) — so no cut-scene resurrects it; the port's script-camera flag is that saved pair.
     pub fn spawn_fade_view(&self) -> Option<ViewFade> {
         if self.scripts.camera().is_some() { return None; }
         self.spawn_fade.as_ref().map(|&(left, total)| ViewFade {
@@ -13098,7 +13100,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 if ch != 0 && ch != 0x63 { self.channels.set(ch as u32, 1, frame); }
                             }
                         }
-                        for i in v { self.list[i].present = false; self.list[i].enabled = false; self.llist.retain(|&k| k != i); }
+                        for i in v {
+                            // The game's deletion path unlinks the drone from the shared object list with
+                            // `LList_Remove` 0x1ccac8 (called by `Drone_Delete` 0x136ce8 and every object
+                            // `*_Delete` [M]); dropping the index here is that same unlink.
+                            self.list[i].present = false; self.list[i].enabled = false; self.llist.retain(|&k| k != i);
+                        }
                     }
                     crate::spawners::Action::None => {}
                 }

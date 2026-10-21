@@ -65,6 +65,13 @@ pub fn unswizzle_csm1(pal: &[[u8; 4]]) -> Vec<[u8; 4]> {
 
 /// All textures of a map entry. Textures whose pixel block is shorter than the header implies are reported as
 /// errors in the second vector (index, message) rather than failing the whole map (3 such cases, UNKNOWNS U-017).
+///
+/// The four game block handlers this stands in for (dispatch `parsemap_handle_block_id` 0x1d1020):
+/// `parsemap_block_texture_header` 0x1d1f80 (block 0x10, 12 bytes per texture), `parsemap_block_palette_header`
+/// 0x1d1fc0 (block 0x0f, 8 bytes per palette), `parsemap_block_palette_data_psx` 0x1d20b0 (block 0x12) and
+/// `parsemap_block_texture_data_pc` 0x1d2048 (block 0x16 — the pixel block id that occurs 25,082 times on our
+/// disc [D census]; the PC's 0x15 and the GameCube/Xbox/pcdx variants 0x1d2148/0x1d21e0/0x1d2080 never occur
+/// [D census], docs/systems/engine-plumbing.md). Same byte layouts, fixed offsets instead of cursors.
 pub fn textures(map: &[u8], f: &MapFile) -> Result<(Vec<Texture>, Vec<(usize, String)>)> {
     let Some(th) = f.first(id::TEXTURE_HEADER) else { return Ok((Vec::new(), Vec::new())) };
     let th = Buf(th.payload(map));

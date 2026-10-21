@@ -734,7 +734,9 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         .map(|e| character::parse_skeleton(lb.data(&data, e)).map(|s| (s.id as u8, s)))
         .collect::<std::result::Result<_, _>>()?;
     // The level's animations: LoaderLoad rewrites the hashcode's 0x00F00000 nibble to 0xF for loader types 0/3,
-    // so 070000NN.bin's sequences are in 07F000NN.bin (docs/formats/level-bin.md).
+    // so 070000NN.bin's sequences are in 07F000NN.bin (docs/formats/level-bin.md). `LoaderLoadAnims` 0x1d6b48
+    // is the game's thin tail call into `LoaderLoad` 0x1d4a00 for this same animation load [M 0x1d6b48];
+    // this block is the port's LoaderLoadAnims.
     let anim_name = format!("{}F{}", &archive[..2], &archive[3..]);
     let mut sequences: HashMap<u8, Vec<Sequence>> = HashMap::new();
     if let Some(anim) = read(&anim_name)? {

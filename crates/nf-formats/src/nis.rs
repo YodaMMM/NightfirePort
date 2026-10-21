@@ -1,6 +1,11 @@
 //! Level scripts (archive entry type 7, `Script_Load` 0x1d8248): the timelines ScriptPlayers run — cut-scenes, the
 //! wine truck, helicopters. Spec: docs/formats/nis-script.md.
 //!
+//! The game reads these streams through the cursor primitives `BIN_GetByte` 0x1e8ad8, `BIN_GetWord` 0x1e8af0 and
+//! `BIN_GetFloat` 0x1e8b48 (a `u8*` cursor advanced by 1/2/4 bytes per read [M]; also the `Script_*Start` and
+//! `Emitter_LoadDefs` 0x17ab40 readers). The port consumes the identical fields at fixed offsets below, which is
+//! the same byte sequence in the same order.
+//!
 //! ```text
 //! u16 magic 0x1C, u16 camera flag (≠ 0 → SCRIPTINFO+0xAA8 bit 0x40), u16 stream count (≤ 0x3E), u16 loop start,
 //! u16 length (ticks)
