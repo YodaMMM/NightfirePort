@@ -294,6 +294,10 @@ pub const PAGE_MP_ONLINE_LOBBY: u32 = 0x5000_0005;
 #[derive(Clone, Debug, Default)]
 pub struct GameFlow {
     /// GameStateStack [M 0x2c7398] — the game keeps 64 u32s and wraps; ours grows.
+    /// unported-misc-5 — the game's generic STACKINFO container (`Stack_Init` 0x1cce38 in
+    /// `MenuManager_Create` 0x21b908 and `Camera_Reset` 0x1b9af0; `Stack_Top` 0x1cced0 in
+    /// `Manager_SendMessage` 0x21c858) is this owned `Vec` — the top-of-stack peek and push/pop
+    /// order match the game's node list without the manual nodes.
     pub stack: Vec<u8>,
     /// GameState+0x08: the level the loader should fetch [M 0x1d3800/0x1d6360].
     pub level_to_load: u32,
