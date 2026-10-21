@@ -25,15 +25,15 @@ gate ("frozen/controlled", common to all) and the speed-mul scale
 | function | address | flag gate (drone+0x31c) | behaviour prop | anim state(s) (`DroneAnim_CanDoAnimState` 0x13dfc8) | probe offset (local x, y, z) |
 |---|---|---|---|---|---|
 | `NDrone2_CanStepLeft` | 0x14f640 | bit 3 clear | 0x42 | 0x5a | (+1.8, 0, 0) |
-| `NDrone2_CanRollLeft` | 0x150338 | bit 3 clear | 0x2e | 0x53 | (+5.3, 0, 0) |
+| `NDrone2_CanRollLeft` | 0x150338 | bit 3 clear | 0x2e | 0x53 | (+5.2, 0, 0) |
 | `NDrone2_CanStrafeDodgeLeft` | 0x14fdf8 | bit 3 clear | 0x13 | 0x29 | (+3.6, 0, 0) |
 | `NDrone2_CanStrafeDodgeRight` | 0x14ffc0 | bit 4 clear | 0x13 | 0x29 AND 0x2a | (−3.6, 0, 0) |
 | `NDrone2_CanBackoff` | 0x1501a0 | — (none) | 0x06 | 4 | (0, 0, −1.8) |
 | `NDrone2_CanMoveToRelativePos` | 0x154838 | — (none) | — (none) | — (none) | (dx, dy, dz) arguments |
 
-Offsets are the decompile's float literals: 0x3fe66666 = 1.8, 0x40666666 = 3.6, 0x40a66666 = 5.3,
+Offsets are the decompile's float literals: 0x3fe66666 = 1.8, 0x40666666 = 3.6, 0x40a66666 = 5.2,
 0xc0666666 = −3.6, 0xbfe66666 = −1.8. The right-side twins (not this task's list, cited for the mirror):
-`CanStepRight` 0x14f808 (−1.8, anims 0x5a+0x5b, prop 0x42) and `CanRollRight` 0x150500 (−5.3, prop 0x2e).
+`CanStepRight` 0x14f808 (−1.8, anims 0x5a+0x5b, prop 0x42) and `CanRollRight` 0x150500 (−5.2, prop 0x2e).
 The strafe (non-dodge) pair: `CanStrafeLeft` 0x14f9e8 / `CanStrafeRight` 0x14fbe0 (prop 0x41, anim 0xc).
 
 Callers [M, decompile grep]: `NDrone2_ChooseCombatMove` 0x150c18 (step/roll/dodge cases, right-first or
@@ -51,7 +51,7 @@ documents). The prop/anim gates live at the call sites, exactly as the game's ca
 `choose_combat_move` cases 1/3/4 carry prop 0x13/0x2e/0x42 + the 0x29/0x53/0x5a `can_do` checks;
 `can_backoff` carries prop 0x06 + anim 4 + the (0, −1.8) probe. The mp bot side's `can_side_move`
 (bots.rs) is the BOTSTATE stand-in ([S], documented there). **Correction this task made**: the port's
-roll pair probed ±5.2; the decompile's `CanRollLeft`/`CanRollRight` literals are ±5.3 — fixed to 5.3
+roll pair probed ±5.2 — the decompile's literal 0x40a66666 IS 5.2 (842 misread it as 5.3; daily audit 2026-10-21 restored 5.2)
 [M 0x150338 / 0x150500].
 
 ## `NDrone2_MoveTestFromNode` 0x1554a8 and `NDrone2_MoveTestToNode` 0x155620 [M]
@@ -111,5 +111,5 @@ system, `AnimSetUpdate` 0x1c0938 — docs/systems/mp-body-anim), so the pick is 
 `crates/nf-game/src/mp/bots.rs` unit tests pin the `anim_for_dist` table (numbers only, [M]-cited, each
 with a sister that can fail). `crates/nf-view/tests/guard_move_checks_live.rs` runs the real path
 (`nf_view::load` + `Sim::step_bond`): a prop-0x42 guard on open floor steps (1.8 probe passes) and a
-guard against a wall does not (the probe must fail), plus the roll 5.3 distance through
+guard against a wall does not (the probe must fail), plus the roll 5.2 distance through
 `choose_combat_move`'s case-3 probe.

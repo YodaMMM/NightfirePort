@@ -3,7 +3,7 @@
 //! The bathhouse scenario (the armed-girl playtest's level 07000002, wake channels 22/23/25, Bond
 //! at the playtest spot) runs the armed guards' combat loop — `AimStandFire` 0x68 →
 //! `NDrone2_ChooseCombatMove` 0x150c18 — whose cases probe `NDrone2_CanStrafeDodgeLeft/Right`
-//! (0x14fdf8/0x14ffc0, ±3.6), `NDrone2_CanRollLeft/Right` (0x150338/0x150500, ±5.3) and
+//! (0x14fdf8/0x14ffc0, ±3.6), `NDrone2_CanRollLeft/Right` (0x150338/0x150500, ±5.2) and
 //! `NDrone2_CanStepLeft/Right` (0x14f640/0x14f808, ±1.8) before setting the move state, and whose
 //! too-close arm asks `NDrone2_CanBackoff` 0x1501a0. Pins [M 0x150c18:164-316 + the option gates
 //! :55-162]:
