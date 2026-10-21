@@ -1991,6 +1991,10 @@ pub struct BonusFields {
 // MemCard_* states, whose message ids PS2_DoCardFlow 0x217bd8 renders as the dialog page's
 // text + buttons. The port keeps the ids and the shape, narrowed to what a file save can mean
 // (§4 of the doc: no card-hardware states — a directory of files has no "unformatted").
+// IOP wake glue this machine replaces (unported-misc-10): `iWakeupThread` 0x23c698 is jal'd by
+// `mcHearAlarm` 0x228578 (the IOP mcman alarm the polling flow replaces — misc-7) and by
+// `_request_call` 0x23e2c0 (SIF cmd 0xa handler, registered by `sceSifInitRpc` 0x23dcc8 —
+// docs/systems/ps2-sdk-glue.md § boot); the port has no IOP threads to wake — the flow polls.
 
 /// The card-flow messages — `DAT_002462d4` in PS2_DoCardFlow 0x217bd8's switch [M :76-152].
 /// Only the ids the port's machine can reach are variants; `label`/`buttons` cover the table.
