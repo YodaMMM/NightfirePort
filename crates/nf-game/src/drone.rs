@@ -9193,16 +9193,6 @@ impl Drones {
         // The helicopter (`Copter_Create` 0x17d340, placement 0x2F) and the locks (`Lock_Create`
         // 0x1ae1f8, placement 0x2E) (fix-objects2). Neither draws RNG at create.
         self.copters = crate::copter::Copter::create(&level.maps[m].placements, self.difficulty);
-        // `Copter_Create`'s SP beat [M 0x17d340:66-74]: each copter owns a ScriptPlayer created at
-        // load (`SP_Create` 0x1dc7e0 → `SP_CreateScriptPlayer` 0x1db9a8, modes 8,8, mask 0 → state
-        // 6, primed looping), hidden (`SP_HideObj(sp, 1)` → SP+0x36 = 1) when its gate channel
-        // (placement param 6) is armed and off — at create the channels are all off, so every
-        // gated copter's SP starts frozen (07000005's #242, [L] +0x36 = 1) while an ungated one
-        // (#241, gate 0) plays from the first tick ([L] its twin +0x36 = 0). The unhide rides the
-        // copter tick's gate edge below (docs/systems/copter-sp-hide.md).
-        for c in &self.copters {
-            self.scripts.spawn_copter_sp(c.placement, c.scripts, c.matrix, c.gate, &self.channels);
-        }
         self.locks = crate::lock::Lock::create(&level.maps[m].placements, self.difficulty, |p| {
             let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
                 else { level.maps[m].objects.get(p.index as usize) };
@@ -9387,6 +9377,16 @@ impl Drones {
         for dr in &mut self.list {
             if let Some(i) = level.maps[m].placements.iter().position(|p| p.flags & 0xff == 0x0f
                 && (p.translation[0] - dr.pos[0]).abs() < 1e-3 && (p.translation[2] - dr.pos[2]).abs() < 1e-3) { dr.placement = i; }
+        }
+        // `Copter_Create`'s SP beat [M 0x17d340:66-74]: each copter owns a ScriptPlayer created at
+        // load (`SP_Create` 0x1dc7e0 → `SP_CreateScriptPlayer` 0x1db9a8, modes 8,8, mask 0 → state
+        // 6, primed looping), hidden (`SP_HideObj(sp, 1)` → SP+0x36 = 1) when its gate channel
+        // (placement param 6) is armed and off — at create the channels are all off, so every
+        // gated copter's SP starts frozen (07000005's #242, [L] +0x36 = 1) while an ungated one
+        // (#241, gate 0) plays from the first tick ([L] its twin +0x36 = 0). The unhide rides the
+        // copter tick's gate edge below (docs/systems/copter-sp-hide.md).
+        for c in &self.copters {
+            self.scripts.spawn_copter_sp(c.placement, c.scripts, c.matrix, c.gate, &self.channels);
         }
         // Spawners: their group's drones become templates, absent until spawned (`DroneSpawner_Init`).
         self.spawners.clear();
