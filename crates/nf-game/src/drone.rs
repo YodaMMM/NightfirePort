@@ -4918,6 +4918,10 @@ impl Drone {
             }
             (UNDER_COVER_IDLE, msg::EXIT) => { d.props.set(0x10, &mut self.props, 0); true }
             (UNDER_COVER_AIM, msg::ENTER) => {
+                // task 854: the game's `NDrone2_DSTATE_UnderCoverAim` 0x16a2d0 also calls
+                // `DroneFunc_UnderCoverAimTalk` 0x13fb98 — DEAD in both modes [M 0013fb98:7-9:
+                // the SP gate returns at once (`MPSettings+0x184 == 0`); SpeechSFX refuses in MP;
+                // docs/port-map/unreached.md] — nothing to port here.
                 if !self.cover_anim(d, rng, 2, UNDER_COVER_FIRE) { self.set_state(UNDER_COVER_LEAVE_NOW) }
                 true
             }
@@ -11434,6 +11438,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// for the first 30 frames (`DronePostLoadFrame`), the line's repeat delay (global per line), no direct play for a
     /// line with a facial anim, a non-forced line refused while one is referenced; the line is stamped, played at the
     /// drone (`Sound_Play3D`: heard and entered for the AI) and becomes the drone's current line (`+0x4D0`).
+    // task 854: the game's SpeechSFX play path also touches the anim-script machinery that the
+    // port folds into the animator/voice bookkeeping: `AnimScriptNew` 0x1C1398 (a fresh script for
+    // the facial track), `AnimFacialAppend` 0x1C6490 (append the facial events),
+    // `AnimScriptPeekSfx` 0x1C6CA8 (the pending-SFX peek the play loop uses) and
+    // `AnimSeqDelete` 0x1C72E0 (release the seq on stop) [M decompiles; reached from
+    // `NDrone2_SpeechSFX` 0x149818 → `AnimScript*`]. Their port job lives in the Animator/`speech`
+    // flow below — owned by the anim-script task for full porting.
     fn speech(&mut self, d: &Data, index: usize, talks: Vec<(usize, bool)>, frame: u32) {
         let Some(lines) = d.voices else { return };
         if self.voice_last.len() < lines.len() { self.voice_last.resize(lines.len(), None); }
@@ -12545,6 +12556,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // once +0x270 >= ReactionTime — gating the fire request +0x3b in the combat
                 // arms (0x148338:108-113 etc.) plus Ready2Fire's aim-class + muzzle-tolerance
                 // gates (0x178c48), which the port mirrors (face_and_aim/ready_to_fire).
+
+                // (task 854: the game's sight/LOS queries the port's collision world stands in for —
+                // reached from `NDrone2_CanSeeObject`/`DroneVision_*` [M calltree from 0x13F688]:
+                // `RecurseBoxesSph` 0x1EDAE0 / `RecurseBoxesBox` 0x1EDC48 (the box-tree walk —
+                // the port's per-cell buckets), `ASH_RecurseBoxesBox` 0x10AE50 / `ASH_Intersect_RayBox`
+                // 0x109AD0 / `ASH_vecutil_Dist2Tri` 0x109770 (the BSP ray walk — the port's
+                // `segment_hit_cell`/`line_of_sight`), `Intersect_CylTriGeom` 0x1E9A70 /
+                // `vecutil_Dist2Tri_PointGeom` 0x1DFAC8 (cylinder-triangle tests), `LList_Cut`
+                // 0x1CCA80 / `LList_AllocnNodes` 0x1CCBE0 (the shared scratch lists), `Swap`
+                // 0x1D3518, `RotTransMatrix` 0x1E2478, `auxVec_Add` 0x1E4F10 (vector-math plumbing).)
                 dr.unseen_ticks = 0;
                 if dr.seen_ticks >= dr.reaction_time(d.level) {
                     if !dr.seen && std::env::var_os("NF_AILOG").is_some() {
