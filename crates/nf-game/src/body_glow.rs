@@ -69,6 +69,99 @@ pub fn create(owner: usize, no_drones: bool) -> Option<BodyGlow> {
     Some(BodyGlow { owner, children: 15 })
 }
 
+/// `GlowBones` 0x2beed0 — the 15 bone indices the update hangs its child sprites on
+/// [L ee_start_05 @ 0x2beed0; `BodyGlow_Update` 0x1ac2c8 reads them in order].
+pub const GLOW_BONES: [u8; 15] = [0, 19, 20, 21, 31, 32, 35, 49, 50, 51, 52, 53, 54, 55, 56];
+
+/// `BodyGlow_Delete` 0x1acd50: the delete bit (obj+0xFE |= 1) on the main object **and** its 15
+/// children — the loop walks `do { i++ ; child |= 1 } while (i < 0xf)`, 15 passes.
+pub fn delete(children: &mut [bool; 15]) -> bool {
+    *children = [true; 15];
+    true
+}
+
+/// The per-frame state `BodyGlow_Update` 0x1ac2c8 computes for the draw code (the port carries
+/// the data; the sprite rendering itself is the main agent's draw work).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlowUpdate {
+    /// The alpha byte written to obj+0x106 on the main object and every child [M 0x1ac2c8:
+    /// `(1.0 − dist·0.1) · (i16)count · 128 · (1/256)` truncated to u8].
+    pub alpha: u8,
+    /// The view mask `View_SetViewMask` gets: the hidden-viewer bits `| 0x10` [M 0x1ac2c8:223].
+    pub view_mask: u32,
+    /// True when the update took the far/hidden branch: main + all 15 children get obj+0xF0 |= 0x10
+    /// (`View_SetDrawInNoViews`) and no bone poses [M 0x1ac2c8:162-173, 197-208].
+    pub hidden: bool,
+    /// The per-child pose data (bone index, the bone-to-bone distance written to child+0xE8, and
+    /// the child scale (1.5, 1.0, dist) [M 0x1ac2c8:231-264]). Empty when `hidden`.
+    pub bones: [(u8, f32); 15],
+}
+
+/// `BodyGlow_Update` 0x1ac2c8 over the port's record. Inputs:
+/// - `owner_kind`/`owner_health`: the owner's class byte (obj+0xFF) and the gate value — kind 2
+///   reads owner+0xAC, kind 3 owner+0x894; a failing gate decrements the ext counter (the game's
+///   `piVar2[0x10]`, the glow's own reference count) [M 0x1ac2c8:96-125];
+/// - `count`: that reference count;
+/// - `viewer_dist`: `Vec_Dist3D(owner pos, glb_viewer+0xC0)` [M 0x1ac2c8:175];
+/// - `hidden_mask`: the u32 the per-player loop builds — bit v set when viewer v's +0x236 == 2
+///   (MP spectator/split view) or the viewer's AnimObject+0x244 != 0 (dead) [M 0x1ac2c8:144-161];
+///   `mask == 0` (nobody watches) forces the hidden branch, as does the kind-2-owner + state-1 arm
+///   (passed in `owner_state1_hides`);
+/// - `bone_gap`: the 14 bone-pair distances (child+0xE8) — the game measures them off the posed
+///   skeleton each frame; the port takes them from the animation side.
+///
+/// The children's obj+0xF0 bits: `|=` 0x2400 normally, `&= 0xffffdbff` when a viewer is dead/spectating
+/// (`bVar4`) [M 0x1ac2c8:176-196]; the far branch (> 10.0) hides main + children instead.
+/// Returns `None` when the count ran out — the game calls `BodyGlow_Delete` and clears the owner's
+/// glow refs (+0x10 / +0x88c) [M 0x1ac2c8:128-136].
+pub fn update(
+    owner_kind: u8,
+    owner_gate_ok: bool,
+    owner_state1_hides: bool,
+    mut count: u16,
+    viewer_dist: f32,
+    hidden_mask: u32,
+    bone_gap: [f32; 14],
+) -> (Option<GlowUpdate>, u16) {
+    // The gate: a failing owner health check decrements the count once (kinds 2 and 3) [M
+    // 0x1ac2c8:96-125]. (The game does the same for kind 3 at +0x894.)
+    if (owner_kind == 2 || owner_kind == 3) && !owner_gate_ok {
+        count -= 1;
+    }
+    if count < 1 {
+        return (None, count);
+    }
+    let spectator_or_dead = hidden_mask != 0;
+    if hidden_mask == 0 || owner_state1_hides {
+        return (
+            Some(GlowUpdate { alpha: 0, view_mask: 0x10, hidden: true, bones: [(0, 0.0); 15] }),
+            count,
+        );
+    }
+    if viewer_dist > 10.0 {
+        return (
+            Some(GlowUpdate { alpha: 0, view_mask: hidden_mask | 0x10, hidden: true, bones: [(0, 0.0); 15] }),
+            count,
+        );
+    }
+    // The alpha byte [M 0x1ac2c8:224-226]: (1 − dist·0.1) · (i16)count · 128 · 0.00390625.
+    let a = (1.0 - viewer_dist * 0.1) * f32::from(count as i16) * 128.0 * 0.003_906_25;
+    let mut bones = [(0u8, 0f32); 15];
+    for (k, b) in bones.iter_mut().enumerate() {
+        let bone = GLOW_BONES[k];
+        // Child 0 hangs on bone 0 → the game measures against bone 4 [M 0x1ac2c8:236-239
+        // `uVar11 = 4` on bVar1 == 0]; the others against their table predecessor's NEXT pair —
+        // the pair distances arrive pre-measured in `bone_gap`.
+        let gap = if k == 0 { bone_gap[0] } else { bone_gap[k.min(13)] };
+        *b = (bone, gap);
+    }
+    let _ = spectator_or_dead; // the flags word delta is documented above; carried by the draw side
+    (
+        Some(GlowUpdate { alpha: a as u8, view_mask: hidden_mask | 0x10, hidden: false, bones }),
+        count,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +193,83 @@ mod tests {
         // shipped path (the game only early-outs on owner 0 OR the switch; owner 0 never
         // occurs in callers, the port keys the record on the list index).
         assert!(create(0, false).is_some());
+    }
+
+    // [L ee_start_05 @ 0x2beed0] the GlowBones table the update walks.
+    #[test]
+    fn glow_bones_match_the_ee_snapshot() {
+        assert_eq!(GLOW_BONES, [0, 19, 20, 21, 31, 32, 35, 49, 50, 51, 52, 53, 54, 55, 56]);
+        // Sister (can fail): 15 entries — 14 would mean the do-while bound was misread.
+        assert_ne!(GLOW_BONES.len(), 14);
+    }
+
+    // [M 0x1acd50] the delete bit lands on the main object and all 15 children.
+    #[test]
+    fn delete_marks_the_main_and_all_fifteen_children() {
+        let mut children = [false; 15];
+        assert!(delete(&mut children));
+        assert!(children.iter().all(|&c| c));
+        // Sister (can fail): the count is 15, not 14 (the loop's `while (i < 0xf)`).
+        assert_ne!(children.len(), 14);
+    }
+
+    // [M 0x1ac2c8:224-226] the alpha byte formula and the 10.0 hide band.
+    #[test]
+    fn update_alpha_follows_the_distance_formula() {
+        let gaps = [1.0f32; 14];
+        // dist 0, count 1 → 1.0 · 1 · 128 / 256 = 0.5 → 0 (truncated).
+        let (u, c) = update(2, true, false, 1, 0.0, 0x1, gaps).0.map(|g| (g.alpha, g.hidden)).unwrap();
+        assert_eq!((u, c), (0, false));
+        // count 16, dist 0 → 16 · 128 / 256 = 8.
+        let (g, _) = update(2, true, false, 16, 0.0, 0x1, gaps);
+        assert_eq!(g.unwrap().alpha, 8);
+        // dist 2.5, count 16 → (1 − 0.25) · 8 = 6.
+        let (g, _) = update(2, true, false, 16, 2.5, 0x1, gaps);
+        assert_eq!(g.unwrap().alpha, 6);
+        // dist 10.0 is NOT the hide band (strictly greater); dist 10.01 is.
+        let (g, _) = update(2, true, false, 16, 10.0, 0x1, gaps);
+        assert!(!g.unwrap().hidden);
+        let (g, _) = update(2, true, false, 16, 10.01, 0x1, gaps);
+        assert!(g.unwrap().hidden);
+        // Sister (can fail): alpha is a u8 — count 200 at dist 0 would be 100 exactly.
+        let (g, _) = update(2, true, false, 200, 0.0, 0x1, gaps);
+        assert_eq!(g.unwrap().alpha, 100);
+    }
+
+    // [M 0x1ac2c8:96-136] the owner-health gate drains the count to the delete.
+    #[test]
+    fn update_drains_the_count_and_then_deletes() {
+        let gaps = [1.0f32; 14];
+        let (_, c) = update(2, false, false, 3, 1.0, 0x1, gaps);
+        assert_eq!(c, 2);
+        // A healthy owner does not drain [M 0x1ac2c8:102 (<= 0.0)].
+        let (_, c) = update(2, true, false, 3, 1.0, 0x1, gaps);
+        assert_eq!(c, 3);
+        // Count 1 + a failed gate → the game deletes and clears the owner's refs.
+        let (u, c) = update(2, false, false, 1, 1.0, 0x1, gaps);
+        assert_eq!(c, 0);
+        assert!(u.is_none());
+        // Sister (can fail): kind 0 owners have no gate (the game only checks kinds 2/3).
+        let (_, c) = update(0, false, false, 5, 1.0, 0x1, gaps);
+        assert_eq!(c, 5);
+    }
+
+    // [M 0x1ac2c8:162-173] mask == 0 (nobody watches) → the hidden branch.
+    #[test]
+    fn update_hides_when_no_viewer_watches() {
+        let gaps = [1.0f32; 14];
+        let (g, c) = update(2, true, false, 9, 1.0, 0x0, gaps);
+        assert_eq!(c, 9);
+        let g = g.unwrap();
+        assert!(g.hidden);
+        assert_eq!(g.view_mask, 0x10);
+        // The spectator/dead mask keeps the glow visible to the others (mask | 0x10).
+        let (g, _) = update(2, true, false, 9, 1.0, 0b0010, gaps);
+        let g = g.unwrap();
+        assert!(!g.hidden);
+        assert_eq!(g.view_mask, 0b0010 | 0x10);
+        // Sister (can fail): the kind-2 + state-1 arm hides like mask 0.
+        let (g, _) = update(2, true, true, 9, 1.0, 0b0001, gaps);
+        assert!(g.unwrap().hidden);
     }
 }

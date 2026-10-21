@@ -68,6 +68,7 @@ pub mod hud;
 /// mp-lobby-settings: the spawn loadout (`MP_EquipPlayer`, the weapon-set matrix) and the MP pain
 /// scaling (`Player_HandlePain`'s MP arm) — see `equip.rs`.
 pub mod equip;
+pub mod upgrades;
 
 /// mp-combat-weapons: the online match's shared rounds/grenades/blasts and the MP pain rules
 /// (`Player_HandlePain` 0x1902c8's MP arm) — see `docs/systems/mp-combat.md`.
