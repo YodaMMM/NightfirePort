@@ -3444,10 +3444,10 @@ impl Drone {
             9 => {
                 if self.voice_busy() { return; } // returns 1 in the game — same effect
                 if self.bond_talk_count == 0xff {
-                    if self.seen { self.bond_talk_cooldown = 0; self.bond_talk_count = 0; } // LAB_0014502c [M]
+                    if self.aimed_at { self.bond_talk_cooldown = 0; self.bond_talk_count = 0; } // LAB_0014502c [M]
                     return;
                 }
-                if !self.seen || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
+                if !self.aimed_at || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
                 // HeadTrack(0, players, 200) [M 0x1446b0 case 9] — the port's head tracking is not
                 // modelled for civilians; no observable port state.
                 let r = rng.rand(2) as usize;
@@ -3459,10 +3459,10 @@ impl Drone {
             0xd => {
                 if self.voice_busy() { return; }
                 if self.bond_talk_count == 0xff {
-                    if self.seen { self.bond_talk_count = rng.rand(7) as u32; self.bond_talk_cooldown = frame + rng.rand(60) as u32; } // [M 0x1446b0 case 0xd tail: Rand(7), then LAB_00144e04 Rand(60)]
+                    if self.aimed_at { self.bond_talk_count = rng.rand(7) as u32; self.bond_talk_cooldown = frame + rng.rand(60) as u32; } // [M 0x1446b0 case 0xd tail: Rand(7), then LAB_00144e04 Rand(60)]
                     return;
                 }
-                if !self.seen || self.bond_talk_count > 6 || frame <= self.bond_talk_cooldown { return; }
+                if !self.aimed_at || self.bond_talk_count > 6 || frame <= self.bond_talk_cooldown { return; }
                 // variant by the character id `+0xE0`: 0x5000020 → 0, 0x5000022 → 1, 0x5000023 → 2, else 3 [M 0x1446b0 case 0xd]
                 let variant = match self.skin & 0xffff { 0x20 => 0, 0x22 => 1, 0x23 => 2, _ => 3 };
                 let r = rng.rand(11) as usize;
@@ -3478,10 +3478,10 @@ impl Drone {
             0x10 => {
                 if self.voice_busy() { return; }
                 if self.bond_talk_count == 0xff {
-                    if self.seen { self.bond_talk_cooldown = 0; self.bond_talk_count = 0; } // LAB_0014502c
+                    if self.aimed_at { self.bond_talk_cooldown = 0; self.bond_talk_count = 0; } // LAB_0014502c
                     return;
                 }
-                if !self.seen || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
+                if !self.aimed_at || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
                 let r = rng.rand(4) as usize;
                 let h = self.speech_request(d, 0x97 + r, false);
                 if h == 0 && !self.facial_attached() { return; }
@@ -3491,10 +3491,10 @@ impl Drone {
             0x11 => {
                 if self.voice_busy() { return; }
                 if self.bond_talk_count == 0xff {
-                    if self.seen { self.bond_talk_count = 0; self.bond_talk_cooldown = frame + rng.rand(60) as u32; } // [M case 0x11 tail]
+                    if self.aimed_at { self.bond_talk_count = 0; self.bond_talk_cooldown = frame + rng.rand(60) as u32; } // [M case 0x11 tail]
                     return;
                 }
-                if !self.seen || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
+                if !self.aimed_at || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
                 let h = self.speech_request(d, 0x8e, false);
                 if h == 0 && !self.facial_attached() { return; }
                 self.bond_talk_cooldown = frame + 480;
@@ -3508,28 +3508,41 @@ impl Drone {
                 }
                 if self.bond_talk_count > 6 { return; } // > 6 → return 0 [M]
                 if frame <= self.bond_talk_cooldown { return; }
-                // The 7-step jump table (PTR_LAB_002f5310 [D ACTION.ELF 0x2f5310..0x2f5328]): steps
-                // 0..5 speak the fixed lines 0x52..0x57 (SpeechSFX; no Rand draw in any step [M
-                // disasm scan]) and advance; step 6 waits for the line's end (Sound_IsFinnished
-                // [M 0x144d94]) — the port keys the fixed line per step and advances on the speak.
+                // The 7-step jump table PTR_LAB_002f5310 [D ACTION.ELF 0x2f5310..0x2f5328; targets
+                // disassembled 2026-10-21 review of 843]: steps 0..5 speak the fixed lines 0x52..0x57 —
+                // 0/1/3/5 via SpeechSFX(idx, 0, 1, 1) after a HeadTrack, 2/4 via SpeechSFX(idx, 0, 0, 0)
+                // (direct, no HeadTrack) — and on a spoken line (handle, or +0x53C attached) set
+                // `+0xCDC = now + K·FRAME_RATE_DIV` (K = 960/150/480/240/240/300: lui 0x4470/0x4316/
+                // 0x43f0/0x4370/0x4370/0x4396) and `+0xCD8 += 1` (join 0x144dac). Step 6 speaks nothing:
+                // HeadTrack(600) and `+0xCD8 += 1` [0x144d94-0x144db4]; then 7 > 6 returns. No Rand draw.
                 let step = self.bond_talk_count as usize;
-                let h = self.speech_request(d, 0x52 + step, false);
+                let Some((idx, facial, delay)) = Self::party_talk_step(step) else { self.bond_talk_count += 1; return; };
+                let h = if facial { self.speech_request(d, idx, false) } else { self.speech_direct(d, idx) };
                 if h == 0 && !self.facial_attached() { return; }
+                self.bond_talk_cooldown = frame + delay;
                 self.bond_talk_count += 1;
             }
             _ => {}
         }
     }
 
+    /// BondTalk voice set 0x12's step `n` (`+0xCD8`): `(line, facial form, cooldown)`, or `None` for
+    /// step 6 (no line) [D the jump table 0x2f5310; disasm 0x1449e4..0x144db4 — see `bond_talk`].
+    fn party_talk_step(n: usize) -> Option<(usize, bool, u32)> {
+        const STEPS: [(usize, bool, u32); 6] =
+            [(0x52, true, 960), (0x53, true, 150), (0x54, false, 480), (0x55, true, 240), (0x56, false, 240), (0x57, true, 300)];
+        STEPS.get(n).copied()
+    }
+
     /// `DroneFunc_DoBondTalk` (0x144488) — the shared Bond-talk form `(idx, headTrackTime, delay,
-    /// again)`: needs the `+0x2A` in-range latch, `now ≥ +0xCDC`, and `+0xCE0 == 0 or again`; on a
+    /// again)`: needs the `+0x2A` crosshair latch (Check_Target 0x1a7810:149-150 sets it when Bond's aim ray hits this drone; PreDroneControl 0x148db0:26-27 clears it 30 frames later — the port's `aimed_at`), `now ≥ +0xCDC`, and `+0xCE0 == 0 or again`; on a
     /// spoken line (handle or a facial anim attached) `+0xCD8 += 1`, `+0xCDC = now + delay`,
     /// `+0xCE0 += 1` [M 0x144488:36-67]. `again = 0` also clears `+0xCD8`/`+0xCE0` when `+0xCD8` is
     /// 0xFF / `+0x2A` clear [M 0x144488:14-33].
     fn do_bond_talk(&mut self, d: &Data, _rng: &mut Rng, frame: u32, idx: usize, _head_track: u32, delay: u32, again: bool) {
         // `+0x2A` clear: `if (param_5 == 0) +0xCD8 = 0; +0xCE0 = 0;` then the main body's `+0x2A`
         // recheck fails → 0 [M 0x144488:14-40].
-        if !self.seen {
+        if !self.aimed_at {
             if !again { self.bond_talk_count = 0; }
             self.bond_talk_done = 0;
             return;
@@ -3548,14 +3561,20 @@ impl Drone {
         self.bond_talk_done += 1;
     }
 
-    /// The Bond-talk SpeechSFX request (`SpeechSFX(idx, 0, 1, 1)`): the port queues the line; the
-    /// `talks` consumer applies the game's per-entry gates (repeat delay, the DIRECT refusal for a
-    /// line with a facial anim — speech.md §1.3). Returns the game's success notion: 0 when the
-    /// entry cannot play at all (no sfx, or a facial id that would take the unmodelled FACIAL path),
-    /// nonzero otherwise [M 0x141b00 DIRECT].
-    fn speech_request(&mut self, d: &Data, idx: usize, _force: bool) -> u32 {
+    /// The Bond-talk SpeechSFX request `SpeechSFX(idx, 0, 1, 1)` (useFacial + facialOnly): the game's
+    /// FACIAL path never returns a handle — `return 0` on every arm, and an entry without a facial anim
+    /// goes to FACIAL(0), which plays nothing [M 0x141b00; speech.md §1.3]. Success is read from
+    /// `+0x53C` (a facial anim attached) by the callers. The port has no facial system, so these lines
+    /// stay silent and never advance the Bond-talk bookkeeping (843 returned the sfx id for non-facial
+    /// entries, advancing the cooldown/count on lines the game never plays — review 2026-10-21).
+    fn speech_request(&mut self, _d: &Data, _idx: usize, _force: bool) -> u32 { 0 }
+
+    /// `SpeechSFX(idx, 0, 0, 0)` — the DIRECT path [M 0x141b00; speech.md §1.3]: plays when the entry has
+    /// an sfx and no facial anim (and the +0x4D0 busy test, which the callers already passed); returns
+    /// the handle (the port: the sfx id, queued on `talks`).
+    fn speech_direct(&mut self, d: &Data, idx: usize) -> u32 {
         match d.voices.and_then(|v| v.get(idx)) {
-            Some(l) if l.sfx != 0 && l.facial == 0 => l.sfx,
+            Some(l) if l.sfx != 0 && l.facial == 0 => { self.talks.push((idx, false)); l.sfx }
             _ => 0,
         }
     }
@@ -15483,6 +15502,20 @@ mod tests {
 #[cfg(test)]
 mod foley_tests {
     use super::*;
+
+    /// BondTalk set 0x12's step table [D 0x2f5310 → disasm of each target, review of 843 2026-10-21]:
+    /// lines 0x52..0x57, the direct form on steps 2/4 only, the per-step cooldowns; step 6 speaks nothing.
+    #[test]
+    fn party_talk_steps_match_the_jump_table() {
+        assert_eq!(Drone::party_talk_step(0), Some((0x52, true, 960)));   // lui 0x4470 @0x144a78
+        assert_eq!(Drone::party_talk_step(1), Some((0x53, true, 150)));   // lui 0x4316 @0x144b18
+        assert_eq!(Drone::party_talk_step(2), Some((0x54, false, 480)));  // SpeechSFX(…,0,0,0) @0x144b4c; lui 0x43f0
+        assert_eq!(Drone::party_talk_step(3), Some((0x55, true, 240)));   // lui 0x4370 @0x144c44
+        assert_eq!(Drone::party_talk_step(4), Some((0x56, false, 240)));  // SpeechSFX(…,0,0,0) @0x144c78
+        assert_eq!(Drone::party_talk_step(5), Some((0x57, true, 300)));   // lui 0x4396 @0x144d70
+        // Sister: step 6 is HeadTrack + count only — no line (843 spoke 0x58, another set's line).
+        assert_eq!(Drone::party_talk_step(6), None);
+    }
 
     /// `NDrone2_PlaySFX`'s gate + `Drone_SfxInfo` stamp (`foley_entry`, 0x141848): the 30-frame post-load gate,
     /// the entry's `repeatDelay` enforced from the table's `lastFrame` (stamped **before** the play — the rate
