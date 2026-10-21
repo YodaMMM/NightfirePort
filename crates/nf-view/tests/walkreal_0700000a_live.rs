@@ -322,12 +322,14 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // player's legal ring route: south through the west offices, the west corridor, the south
     // corridor, and up the east side to the hatch — the corners below, walked steadily (a real
     // player's stealth timing: no stops inside a civilian's reach).
-    let ring: [([f32; 3], &str); 34] = [
+    let ring: [([f32; 3], &str); 36] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
         ([-7.5, 1.3, 16.5], "ring: the west hall north"),
         ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
         ([-20.5, 1.3, 5.5], "ring: down the west office block"),
-        ([-18.5, 1.3, 5.5], "ring: the west corridor jink"),
+        ([-17.5, 1.3, 5.5], "ring: east of the west door (its threshold floor gap drops the player — the collision owner's residue)"),
+        ([-17.5, 1.3, 2.5], "ring: down past the west door"),
+        ([-18.5, 1.3, 2.5], "ring: the door jink west"),
         ([-18.5, 1.3, 0.5], "ring: down"),
         ([-19.5, 1.3, 0.5], "ring: the west corridor jink 2"),
         ([-19.5, 1.3, -1.5], "ring: down 2"),
