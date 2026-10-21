@@ -29,9 +29,10 @@ pub struct SpaceLaser {
     pub b: f32,
     /// ext+0x28: param 2 as raw f32 bits [M].
     pub c: f32,
-    /// ext+0x30: `(float)(int)` param 3 [M 001aa8b8:20-27].
+    /// ext+0x30: param 3 as an UNSIGNED u32 → float (the negative arm halves with the sticky bit,
+    /// converts, doubles — disasm 0x1aa934-0x1aa968; review 2026-10-21, the branch read it signed).
     pub p3: f32,
-    /// ext+0x34: `(float)(int)` param 4 [M 001aa8b8:28-37].
+    /// ext+0x34: param 4, the same unsigned conversion [disasm 0x1aa970-0x1aa9a4].
     pub p4: f32,
     /// ext+0x40: param 5 low u16 [M].
     pub ch5: u16,
@@ -56,8 +57,8 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> SpaceLaser {
         a: f32::from_bits(param(params, 0)),
         b: f32::from_bits(param(params, 1)),
         c: f32::from_bits(param(params, 2)),
-        p3: param(params, 3) as i32 as f32,
-        p4: param(params, 4) as i32 as f32,
+        p3: param(params, 3) as f32,
+        p4: param(params, 4) as f32,
         ch5: param(params, 5) as u16,
         ch6: param(params, 6) as u16,
         ch7: param(params, 7) as u16,
@@ -86,12 +87,12 @@ mod tests {
         let l = from_placement(4, &ps);
         assert_eq!(l.placement, 4);
         assert_eq!((l.a, l.b, l.c), (1.5, -2.0, 3.25));
-        assert_eq!((l.p3, l.p4), (-7.0, 90.0));
+        assert_eq!((l.p3, l.p4), ((-7_i32) as u32 as f32, 90.0));
         assert_eq!((l.ch5, l.ch6, l.ch7), (19, 14, 0x1234));
         assert_eq!(l.period, 10.0);
         assert_eq!(l.state, 0);
-        // Sister (can fail): param 3 is a SIGNED int→float — a unsigned read would give 4.29e9.
-        assert!(l.p3 < 0.0, "ext+0x30 = (float)(int)param [M 001aa8b8:20-24]");
+        // Sister (can fail): param 3 is an UNSIGNED u32→float — a signed read would give −7.
+        assert!(l.p3 > 4.0e9, "ext+0x30 = (float)(u32)param [disasm 0x1aa950-0x1aa964: srl 1 | and 1, cvt.s.w, add.s ×2]");
         // Missing params read 0 (the game's record always carries them; the port defaults).
         let empty = from_placement(0, &[]);
         assert_eq!((empty.a, empty.p3, empty.ch5), (0.0, 0.0, 0));
