@@ -308,28 +308,58 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         assert!(sim.drones.channels.on(0x4a), "AND mux #742: 0x48+0x49 → the exit's key ch 0x4A [D]");
     }
 
-    // ai-sight-drawn-gate-5 route re-derivation: the door leg is GONE. The old route crossed the
-    // LOCKED office door (−10.6, −19.3, ch 0x30) by force-driving the channel — no writer for
-    // ch 0x30 exists in 0a's data [D trig/switch/script dumps] — and the door exit sits 8.4 u
-    // due south of the panel-side challenge civilian (g15: prop 0x3c/0x1a, sight rng 12, fov π/2,
-    // reaction 0 → 60 ticks [M 0x1787c8 + 0x175ef0; the trace's FIRST line]), whose 180° cone
-    // covers the whole corridor mouth; challenge → anim → RunToAlarm → PressAlarm is game-true
-    // [M 0x162558 + 0x13ab58's +0x596 follow + 0x168ea8] and he is PROTECTED (props 0x53/0x54,
-    // the ELF decode) — a player cannot clear him and cannot outrun 60 reaction ticks. The drone
-    // graph routes through that door even from the security centre (run 6: "opening door
-    // (−10.6,1.1,−19.3)" until the walker's door timeout) — it is a DRONE route. The player
-    // walks the corridor ring: north out of the security centre to the north corridor (z ≈ 21.5,
-    // the office-A drone's ring [D drone positions]), east across the shaft wall's north end to
-    // the hatch anteroom (the drone at (9.8, 1.1, 21.3) [D drone-props]) and south to the hatch.
-    for (wp, label) in [
-        ([-6.0f32, 1.3, 19.0], "north out of the security centre"),
-        ([-6.0, 1.3, 21.5], "the north corridor"),
-        ([0.0, 1.3, 21.5], "the ring east 1"),
-        ([5.0, 1.3, 21.5], "the ring east 2 (the shaft wall's north end)"),
-        ([9.8, 1.3, 21.3], "the hatch anteroom"),
-        ([15.0, 1.3, 20.5], "the ring east 3"),
-    ] {
-        assert!(walk_leg_watched(&mut w, wp, 1.4, label), "the ring leg '{label}' never arrived");
+    // ai-sight-drawn-gate-5 route re-derivation (the ring route, BFS-derived): the old route
+    // crossed the LOCKED office door (−10.6, −19.3, ch 0x30) by force-driving the channel — no
+    // writer for ch 0x30 exists in 0a's data [D trig/switch/script dumps] — and the door exit
+    // sits 8.4 u due south of the panel-side challenge civilian (g15: prop 0x3c/0x1a armed, sight
+    // rng 12, 180° cone, reaction stat 0 → 60 ticks [M 0x1787c8 + 0x175ef0; the roster trace]),
+    // whose cone covers the whole corridor mouth; challenge → anim → RunToAlarm → PressAlarm is
+    // game-true [M 0x162558 + 0x13ab58's +0x596 follow + 0x168ea8] and he is PROTECTED (props
+    // 0x53/0x54 — the ACTION.ELF bitDescs/bitMasks decode) — a player cannot clear him and
+    // cannot outrun 60 reaction ticks through his cone. The drone graph routes through that door
+    // even from the security centre (the run-6 "opening door (−10.6,1.1,−19.3)" loop) — a DRONE
+    // route. The floor-sweep/BFS probe (work/elf collision + world::segment_actor) gives the
+    // player's legal ring route: south through the west offices, the west corridor, the south
+    // corridor, and up the east side to the hatch — the corners below, walked steadily (a real
+    // player's stealth timing: no stops inside a civilian's reach).
+    let ring: [([f32; 3], &str); 34] = [
+        ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
+        ([-7.5, 1.3, 16.5], "ring: the west hall north"),
+        ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
+        ([-20.5, 1.3, 5.5], "ring: down the west office block"),
+        ([-18.5, 1.3, 5.5], "ring: the west corridor jink"),
+        ([-18.5, 1.3, 0.5], "ring: down"),
+        ([-19.5, 1.3, 0.5], "ring: the west corridor jink 2"),
+        ([-19.5, 1.3, -1.5], "ring: down 2"),
+        ([-21.5, 1.3, -1.5], "ring: the west corridor jink 3"),
+        ([-21.5, 1.3, -6.5], "ring: down the south-west offices"),
+        ([-18.5, 1.3, -6.5], "ring: jink 4"),
+        ([-18.5, 1.3, -9.5], "ring: down 3"),
+        ([-17.5, 1.3, -9.5], "ring: jink 5"),
+        ([-17.5, 1.3, -13.5], "ring: the south-west corner approach"),
+        ([-11.5, 1.3, -13.5], "ring: east past the alarm-panel corridor"),
+        ([-11.5, 1.3, -18.5], "ring: south past the wall stub"),
+        ([-6.5, 1.3, -18.5], "ring: the south corridor mouth"),
+        ([-6.5, 1.3, -22.5], "ring: the south corridor"),
+        ([9.5, 1.3, -22.5], "ring: the south corridor's east run"),
+        ([9.5, 1.3, -13.5], "ring: up the east side south"),
+        ([22.5, 1.3, -13.5], "ring: the south-east corner"),
+        ([22.5, 1.3, -12.5], "ring: the east corridor jink"),
+        ([23.5, 1.3, -12.5], "ring: the east corridor jink 2"),
+        ([23.5, 1.3, -11.5], "ring: up the east corridor"),
+        ([24.5, 1.3, -11.5], "ring: the east corridor jink 3"),
+        ([24.5, 1.3, 2.5], "ring: up the east offices"),
+        ([23.5, 1.3, 2.5], "ring: the east corridor jink 4"),
+        ([23.5, 1.3, 3.5], "ring: up 2"),
+        ([11.5, 1.3, 3.5], "ring: west along the east corridor"),
+        ([11.5, 1.3, 15.5], "ring: up the east corridor north"),
+        ([17.5, 1.3, 15.5], "ring: east to the hatch anteroom's south"),
+        ([17.5, 1.3, 16.5], "ring: into the anteroom"),
+        ([21.5, 1.3, 16.5], "ring: the anteroom east"),
+        ([21.5, 1.3, 19.4], "ring: the hatch mouth"),
+    ];
+    for (wp, label) in ring {
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(1.2), label);
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
     }
     // Diagnostic (this task): the office floor's LOAD_LEVEL triggers — the reload (next == this
