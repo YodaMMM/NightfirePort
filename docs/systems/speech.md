@@ -511,3 +511,29 @@ the origin and the EE node (different handle) cannot move or remove it.
 - Exact start latency of a non-precached stream (CD timing) [S].
 - Header word 0 (=1) and the 52-byte record's meaning for SFX streams (music side) [S].
 - `*(drone+0x108) & 1` meaning (alternate voice on 0x14..0x16) [S].
+
+---------------------------------------------------------------------------------------------------
+
+## 5. Port (843 ai-talk-barks) — the calltree's nine talk functions
+
+`crates/nf-game/src/drone.rs`, all wired at the game's own call sites; the calltree
+(`tools/calltree/calltree.py work/decomp/ACTION.ELF work/elf/ACTION.ELF . --all-mentioned-dstates --list`)
+no longer lists any of the nine.
+
+| game function | port |
+|---|---|
+| `NDrone2_HitTalkExtra` 0x13ed38 | `Drone::hit_talk_extra`, called from `pain_talk`'s type-0x10 arm ([M 0x13eeb8]); busy/health gates, the `+0x4D4 + 180` suppression whose `Rand(5)` draws only there, sets 0xec + Rand(7) (type 0x10) / 0x133 + Rand(5) (types 5–7 on 0x14–0x16, the `+0x108 & 1` alternate arm [S] — no port reader yet) |
+| `DroneFunc_HeardNoiseTalk` 0x149920 | `Drone::heard_noise_talk`, called from the `HEARD_NOISE_SUSPECT` enter (noise < 3 arm, [M 0x16b0e0:21-24]) and the `HEARD_NOISE_ALERT` enter ([M 0x16b540:18-23]); the `0x298f84` "a drone saw the opponent last frame" latch is `Drones::saw_opp_last_frame` (InitComms 0x139520:263-273 latching ProcessDroneSight 0x176a28:224's counter), then busy/health/type-1 → 0x26 |
+| `NDrone2_CivilianScaredTalk` 0x13f900 | `Drone::civilian_scared_talk`, called from the `CIVILIAN_SCARED` enter ([M 0x15d3a0:30] — replacing the old `pain_talk` stand-in) and the `HOSTAGE_GO_TO_GOAL` update ([M 0x165a68:19]); female gate `+0x15`, levels 0x09–0x0b/0x11–0x13/0x4a add 0x9f + Rand(3), then 0x48 always |
+| `NDrone2_BondTalk` 0x1446b0 | `Drone::bond_talk`, called from the Civilian / CivilianMission / PartyGirl / CivilianGuard update arms ([M 0x15d118:47-49 / 0x15d860:36-38 / 0x160140:41-46 / 0x1603a8:39-45]) and the `+0xCD8`/`+0xCDC` enters ([M 0x15d118/0x15d860/0x15dbb0/0x160140/0x1603a8]); gates: drawn (`obj+0xFC`), within 3.0 of Bond (the port reads the live Bond position for `+0x1A0` [S stand-in for `Drone_GetOpponentInfo` 0x138f68's record magnitude]), facing Bond (|`+0x1D4`| [S same]), unarmed (`obj_armed` = ObjectIsArmed 0x178768 on the drone's own byte; speech.md §2.3), level 0x7000007; per set 9 / 0xd / 0xe / 0x10 / 0x11 / 0x12 with the game's draws (Rand(2), 0x58 + 4·Rand(11) + variant by `+0xE0`, Rand(9) → DoBondTalk(0x84 + r, 480), Rand(4), Rand(60) cooldowns) |
+| `DroneFunc_DoBondTalk` 0x144488 | `Drone::do_bond_talk` (the case-0xe form: `+0x2A` latch, `now ≥ +0xCDC`, `+0xCE0 == 0 or again`; success → `+0xCD8 += 1`, `+0xCDC = now + delay`, `+0xCE0 += 1` [M]); the type-0x12 seven-step dialogue (fixed lines 0x52..0x57, no draws — [D ACTION.ELF 0x2f5310 jump table + a disasm scan of the seven blocks]) keys one step per cooldown; per-step timing [S] |
+| `NDrone2_TalkToMissionObj` 0x14a8b8 | `Drone::talk_to_mission_obj`, wired as the `HOSTAGE` state's msg 0x1A arm (`msg::MISSION_TALK`, [M 0x15cb78 case 0x1A]); kind `+0xC5` 4 → 0x29 + Rand(6), 5 → 0x2f + Rand(4). The HostageKiller call site (0x15c728 case 0x1A) has no ported state — the captor stays a `Drones`-tick binding; the sender (`NDrone2_MonitorTalkToMissionObj` 0x144340's script-driven sequencer) is unported, so nothing delivers 0x1A yet |
+| `DroneFunc_InjuredTalk` 0x13fa20 | cited at `NDrone2_BulletImpact` (`Drone::bullet_impact` doc): the whole body is gated on MP != 0 ([M decompile; speech.md §2.3 disasm note]) and SpeechSFX refuses in MP → no observable SP effect (no RNG draw, no state change); the port runs nothing, as the shipped build |
+| `DroneFunc_RunForCoverTalk` 0x13fd08 | cited at the `RUN_FOR_COVER` handler ([M 0x169150:21-25 call site]); MP-gated dead, as above |
+| `DroneFunc_UnderCoverTalk` 0x13fe80 | cited at the `UNDER_COVER_INIT` / `UNDER_COVER_RETURN` enters ([M 0x169cc0:19 / 0x16a9c0:25]); MP-gated dead, as above |
+
+New per-drone fields (own lines): `last_voice` (+0x4D4, written by `speech`/`foley` where the game's
+PlaySFX writes it [M 0x141848]), `bond_talk_count/cooldown/done` (+0xCD8/+0xCDC/+0xCE0),
+`saw_opp_last_frame` (the 0x298f84 latch, lent by `Drones` like `patrol_cooldown`). The Bond-talk
+SpeechSFX calls are facialOnly=1 — nothing is audible without a loaded facial script (§1.3), so the
+observable port surface is the RNG draw sequence and the +0xCD8/+0xCDC bookkeeping.

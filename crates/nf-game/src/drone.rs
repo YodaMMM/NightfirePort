@@ -345,6 +345,10 @@ pub mod msg {
     /// "Open that door" (`DroneAnim_EventFunc` 0x13b750 event 6 → `Drone_SM_SendMsg(0x20, 0, own, own)`;
     /// docs/fields/drone-statemachine.md). Only `DSTATE_OpenDoor` handles it: retry the door activation.
     pub const DOOR: u8 = 0x20;
+    /// The mission-dialogue ping (`NDrone2_MonitorTalkToMissionObj` 0x144340 sends 0x1A to the
+    /// hostage and its captor in turn; the Hostage / HostageKiller case 0x1A runs
+    /// `NDrone2_TalkToMissionObj` 0x14a8b8). Nothing sends it in the port yet.
+    pub const MISSION_TALK: u8 = 0x1a;
     /// The stun-grenade broadcast (`Bullet_DoTrails` 0x12d890's `+0x70 & 0x2000` flash arm →
     /// `Drone_MessageObjVicinity(20.0, 0x18, …)` 0x12e0c0 [M]; `DroneFunc_HandleImpact` case 0x18).
     pub const FLASH: u8 = 0x18;
@@ -1064,6 +1068,21 @@ pub struct Drone {
     pub voice_finished: bool,
     pub talks: Vec<(usize, bool)>,
     pub patrol_cooldown: u32,
+    /// `+0x4D4`: the frame of the last `NDrone2_PlaySFX` arrival — every SpeechSFX that reaches the
+    /// play and every direct PlaySFX (foley) writes it, after the gates [M 0x141848, speech.md §1.2];
+    /// gates HitTalkExtra's 3-s suppression [M 0x13ed38:31].
+    pub last_voice: u32,
+    /// `+0xCD8`: the Bond-talk counter (0xFF = not greeted yet — the civilian states' ENTER sets it,
+    /// [M 0x15d118/0x15d860/0x15dbb0 enters]); read and advanced by `NDrone2_BondTalk` 0x1446b0.
+    pub bond_talk_count: u32,
+    /// `+0xCDC`: the Bond-talk cooldown frame [M 0x1446b0 cases 9/0xd/0xe/0x10/0x11/0x12].
+    pub bond_talk_cooldown: u32,
+    /// `+0xCE0`: the `DroneFunc_DoBondTalk` lines-spoken count [M 0x144488].
+    pub bond_talk_done: u32,
+    /// The `0x298f84` global ("a drone saw the opponent last frame"), latched by `Drone_InitComms`
+    /// 0x139520:265 from ProcessDroneSight's per-frame counter 0x298fa0 [M 0x176a28:224] — lent to
+    /// the drones by `Drones::tick` like `patrol_cooldown`; read by HeardNoiseTalk.
+    pub saw_opp_last_frame: bool,
     /// Script footstep this tick (op 4 event 0 / 4 / 5) and sounds to stop (op 4 event 3, `Sound_StopAllWithId`).
     pub footstep: bool,
     pub anim_stops: Vec<u32>,
@@ -1439,7 +1458,8 @@ impl Drone {
             special_death: param(13), special_spot: pos, special_yaw: yaw,
             stationary: param(13) != 0 && param(13) != 0x0600_021f, alpha: 255.0, raise: None,
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,
-            captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), attack_talked: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0, footstep: false, anim_stops: Vec::new(), drops: Vec::new(), free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
+            captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), attack_talked: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
+            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(), free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
             velocity: [0.0; 3], in_air: false, on_surface: true,
             // astronaut zero-G (fields on their own lines — merge lesson 4):
             thrust: false,
@@ -2644,7 +2664,7 @@ impl Drone {
         if !allow {
             // 0x146958-0x14697c: PainTalk, then the resume entry (SetState(0) is a no-op when the
             // resume equals the current state).
-            self.pain_talk(d);
+            self.pain_talk(d, rng, frame);
             if valid(resume) { self.set_state(resume); }
             return true;
         }
@@ -2658,7 +2678,7 @@ impl Drone {
         // 0x14aba8), follow-on = the stamped resume +0x118; then PainTalk.
         let v = self.blast_variant();
         self.call_anim_variant(d, anim_state::BLAST_STAGGER, v, self.impact_resume, 0);
-        self.pain_talk(d);
+        self.pain_talk(d, rng, frame);
         let _ = frame;
         true
     }
@@ -2740,7 +2760,7 @@ impl Drone {
                 | state::TASER | state::STUNNED | state::STUNNED_RECOVER
                 | state::STUN_DART_IMPACT | state::STUN_DART_LOOP | state::STUN_DART_RECOVER) {
             if punch {
-                if s == state::STUNNED || s == state::STUN_DART_LOOP { self.pain_talk(d); self.set_state(state::KNOCKED_OUT_ANIM); }
+                if s == state::STUNNED || s == state::STUN_DART_LOOP { self.pain_talk(d, rng, frame); self.set_state(state::KNOCKED_OUT_ANIM); }
                 return false;
             }
             self.set_state(state::DEATH_ANIM);
@@ -2803,7 +2823,7 @@ impl Drone {
     /// the resume state (for the common (ATTACK, false) pairs this is what turns a punched guard hostile at once).
     /// `DroneFunc_SendHurtMessage` (the hurt broadcast, prop 0x32) and the level-7/9-A mission-fail reasons are not
     /// modelled, matching the port's `bullet_impact`.
-    fn punch_impact(&mut self, d: &Data, _rng: &mut Rng, frame: u32, p3: u8, allow: bool) -> bool {
+    fn punch_impact(&mut self, d: &Data, rng: &mut Rng, frame: u32, p3: u8, allow: bool) -> bool {
         let valid = |x: u8| x != 0 && !(0x53..=0x55).contains(&x);
         // 0x145f28:23-42: the value STAMPED into +0x118 is p3 (or the current state when p3 == 0) if valid;
         // the state finally ENTERED is p3 (or 0 when it equals the current state) if valid — two different
@@ -2811,7 +2831,7 @@ impl Drone {
         let stored = if p3 != 0 { p3 } else { self.state };
         if valid(stored) { self.impact_resume = stored; }
         let setv = if p3 == self.state { 0 } else { p3 };
-        self.do_hit_effects(d);
+        self.do_hit_effects(d, rng, frame);
         // 0x145f28:45-56: on 07000007 a punch on an UNARMED drone (ObjectIsArmed 0x178768 on the drone's
         // own class byte — DoModeSettingsOLD 0x14cfa0:159-163 zeroes it for the party modes 9/10/0x13) is
         // an instant mission fail (reason 5 → "Cover Lost" ch 99 [M 0x13e560]); the port's fail plumbing
@@ -2846,7 +2866,7 @@ impl Drone {
             self.send_hurt_scream(d);
             if self.health <= 0.0 { ko(self); return true; }
         }
-        self.pain_talk(d);
+        self.pain_talk(d, rng, frame);
         if allow {
             // `CallAnim(0, 0x51, 0, *(Drone+0x118), 0, 0)` + both flinch stamps (0x145f28:89-94).
             self.call_anim(d, anim_state::PUNCHED, self.impact_resume, 0);
@@ -2912,12 +2932,17 @@ impl Drone {
 
     /// `NDrone2_BulletImpact` (0x1461c8): damage; dead → Death_Anim; alive with `allow` and no flinch for 2 s (this
     /// drone's and the global stamp) → `LocationImpactAnim` and false (the caller enters BulletImpact); else the resume
+    ///
+    /// The game's bullet path also calls `DroneFunc_InjuredTalk` 0x13fa20 [M 0x1461c8 call site]:
+    /// its whole body is gated on MP != 0 (`MPSettings`, [M decompile; speech.md §2.3 disasm note])
+    /// and SpeechSFX refuses in MP — no observable effect in SP (no RNG draw, no state change), so
+    /// the port runs nothing here and draws nothing, exactly as the shipped build does.
     /// state when it is another one.
     fn bullet_impact(&mut self, d: &Data, rng: &mut Rng, frame: u32, p3: u8, allow: bool) -> bool {
         let valid = |x: u8| x != 0 && !(0x53..=0x55).contains(&x);
         let u8_ = if p3 != 0 { p3 } else { self.state };
         let p3 = if p3 == self.state { 0 } else { p3 };
-        self.do_hit_effects(d);
+        self.do_hit_effects(d, rng, frame);
         if self.health <= 0.0 {
             // The death selector by the mode byte +0xc5 [M NDrone2_BulletImpact 0x1461c8:40-52]:
             // 0x1e → BotDeathAnim 0xf2 (not ported — no Bot row in the port's roster), 0x1b/0x1c →
@@ -2945,7 +2970,7 @@ impl Drone {
     }
 
     /// `NDrone2_DoHitEffects` → `NDrone2_HitDamage` with HIT+8 · `+0x14C` (the hit sounds 0x601 / 0x413 weigh 0).
-    fn do_hit_effects(&mut self, d: &Data) {
+    fn do_hit_effects(&mut self, d: &Data, rng: &mut Rng, frame: u32) {
         let Some(h) = self.hit else { return };
         self.hits_taken += 1;
         let target = crate::damage::Target { damageable: self.damageable, armour: 0, mode: 0, skin: self.skin, kind: self.kind };
@@ -2958,7 +2983,7 @@ impl Drone {
         self.health -= r.loss;
         self.last_damage = r.recorded;
         // `NDrone2_HitDamage`: a hit that leaves the drone alive → `NDrone2_PainTalk`.
-        if self.health > 0.0 { self.pain_talk(d); }
+        if self.health > 0.0 { self.pain_talk(d, rng, frame); }
     }
 
     /// `DroneAnim_LocationImpactAnim` (0x13c8b8): the flinch 0x4C, variant 5 + Rand(8), or by the part hit when Bond
@@ -2983,11 +3008,40 @@ impl Drone {
     fn line_sfx(d: &Data, idx: usize) -> u32 { d.voices.and_then(|v| v.get(idx)).map_or(0, |l| l.sfx) }
 
     /// `NDrone2_PainTalk` (0x13eeb8): forced, skipped only when the same line is the current one.
-    fn pain_talk(&mut self, d: &Data) {
+    fn pain_talk(&mut self, d: &Data, rng: &mut Rng, frame: u32) {
         let idx = match self.voice_type { 1 => 0x12, 2 => 0x13, 3 => 0x11, 7 => 0x14, 8 | 10 => 0x18, 9 => 0x15, 0xc => 0x1b, 0x12 | 0x13 => 0x1c, 0x14 => 0x10,
-            0x10 => return, // HitTalkExtra (type 0x10) not modelled
+            // 0x10 → `NDrone2_HitTalkExtra` 0x13ed38: it speaks its own set (and returns 1) or
+            // PainTalk falls through to 0x16 [M 0x13eeb8 type-0x10 arm].
+            0x10 => {
+                if self.hit_talk_extra(d, rng, frame) { return; }
+                0x16
+            }
             _ => if self.female { 0x17 } else { 0xf } };
         if self.current_line() != Some(Self::line_sfx(d, idx)) { self.talks.push((idx, true)); }
+    }
+
+    /// `NDrone2_HitTalkExtra` (0x13ed38) — PainTalk's type-0x10 extra set. SP body (the game gates
+    /// the whole body on MP == 0, `MPSettings` [M 0x13ed38:8 decompile; speech.md §2.3 disasm note]);
+    /// SpeechSFX refuses in MP, so the function is silent in both modes — the SP body is what the
+    /// port pins. Gates: the busy test (clears a finished `+0x4D0`), health > 0; then when
+    /// `now < +0x4D4 + 3*60` a `Rand(5)` is drawn and 0 aborts (the draw only happens in this
+    /// branch) [M 0x13ed38:31-35]. Sets: type 5..7 on 0x14/0x15/0x16 → `Rand(5) + (0x133 | 0x138 by
+    /// `+0x108 & 1`)`; type 0x10 → `0xec + Rand(7)` [M 0x13ed38:47-63]. Then SpeechSFX(idx, 0,0,0).
+    fn hit_talk_extra(&mut self, d: &Data, rng: &mut Rng, frame: u32) -> bool {
+        if self.voice_busy() || self.health <= 0.0 { return false; }
+        if frame < self.last_voice + 180 && rng.rand(5) == 0 { return false; }
+        let idx = match self.voice_type {
+            // `+0x108 & 1` (the state-machine info's first word, the alternate set) has no port
+            // reader yet — the base set 0x133 stands in [*suggested*, speech.md §2.1; the alternate
+            // 0x138 arm stays out of pass/fail until the bit has a port source].
+            5..=7 if matches!(d.level, 0x0700_0014 | 0x0700_0015 | 0x0700_0016) => {
+                0x133 + rng.rand(5) as usize
+            }
+            0x10 => 0xec + rng.rand(7) as usize,
+            _ => return false,
+        };
+        self.talks.push((idx, false));
+        true
     }
 
     /// `NDrone2_DeathTalk` (0x13eff8): forced; the second call of a death sees the first's line and is skipped.
@@ -3035,6 +3089,198 @@ impl Drone {
         let idx = 0xb3 + rng.rand(5) as usize;
         self.patrol_cooldown = frame + 600;
         self.talks.push((idx, false));
+    }
+
+    /// `DroneFunc_HeardNoiseTalk` (0x149920) — the `HeardNoiseSuspect` (0xA4) enter (noise level
+    /// `+0x43` < 3, so the port's Suspect enter with `noise_level < 3`) and the `HeardNoiseAlert`
+    /// (0xA5) enter call it [M 0x16b0e0:24 / 0x16b540:23]. Body: the global "a drone saw the
+    /// opponent last frame" `0x298f84` must be 0 (`Drones::saw_opp_last_frame`, the InitComms latch
+    /// of ProcessDroneSight's per-frame counter [M 0x139520:265 / 0x176a28:224]), then the busy test,
+    /// health > 0, and voice type 1: `SpeechSFX(0x26, 0, 1, 0)` [M 0x149920:8-24]. Type 2 (07000005)
+    /// and every other set: nothing.
+    fn heard_noise_talk(&mut self, saw_opp_last_frame: bool) {
+        if saw_opp_last_frame { return; }
+        if self.voice_busy() || self.health <= 0.0 { return; }
+        if self.voice_type != 1 { return; }
+        self.talks.push((0x26, false));
+    }
+
+    /// `NDrone2_CivilianScaredTalk` (0x13f900) — the `CivilianScared` (0x15d3a0 case 3's enter arm)
+    /// and `HostageGoToGoalPosition` (0x165a68 case 3) call it [M]. Busy test, health > 0, then the
+    /// `+0x15` flag must be non-zero (the female set, speech.md §2.1) [M 0x13f900:14-22]. Levels
+    /// 0x09..0x0b / 0x11..0x13 / 0x4a draw `Rand(3)` and speak `0x9f + r` first; then `0x48` speaks
+    /// on every level that passed the flag gate [M 0x13f900:24-40 — the C falls through to the
+    /// `0x48` SpeechSFX on both arms].
+    fn civilian_scared_talk(&mut self, d: &Data, rng: &mut Rng) {
+        if self.voice_busy() || self.health <= 0.0 { return; }
+        if !self.female { return; }
+        if matches!(d.level, 0x0700_0009..=0x0700_000b | 0x0700_0011..=0x0700_0013 | 0x0700_004a) {
+            let r = rng.rand(3) as usize;
+            self.talks.push((0x9f + r, false));
+        }
+        self.talks.push((0x48, false));
+    }
+
+    /// `NDrone2_BondTalk` (0x1446b0) — the Civilian / CivilianMission / CivilianMissionWait /
+    /// PartyGirl / CivilianGuard UPDATE arm, every frame `NDrone2_NearArmedPerson` is 0 [M
+    /// 0x15d118:46-49 / 0x15d860:36-38 / 0x15dbb0:41-43 / 0x160140 / 0x1603a8]. Gates [M
+    /// 0x1446b0:8-31]: `obj+0xFC` drawn (`self.drawn` — the port's per-tick cull stand-in), the
+    /// opponent within 3.0 (`+0x1A0`, `Drone_GetOpponentInfo` 0x138f68 — the port reads the live
+    /// Bond position [*suggested* stand-in]), the drone facing Bond (|`+0x1D4`| ≤ π/2, same
+    /// [*suggested*]), the drone unarmed (`NDrone2_ObjectIsArmed` 0x178768 on its own weapon byte —
+    /// the port's `obj_armed`; speech.md §2.3 "unarmed civilians"), level 0x7000007 and a player
+    /// present. Then per voice set 9 / 0xd / 0xe / 0x10 / 0x11 / 0x12 with `SpeechSFX(…, 0, 1, 1)`
+    /// (useFacial + facialOnly — nothing plays without a facial script; the RNG draws are the game's
+    /// and are what the port must keep bit-exact) and the `+0xCD8`/`+0xCDC` bookkeeping.
+    fn bond_talk(&mut self, d: &Data, rng: &mut Rng, frame: u32) {
+        if !self.drawn { return; }
+        let dx = self.player_pos[0] - self.pos[0];
+        let dz = self.player_pos[2] - self.pos[2];
+        let dist = (dx * dx + dz * dz).sqrt();
+        if dist > 3.0 { return; } // `3.0 < +0x1A0` [M 0x1446b0:12]
+        let to_bond = atan2_approx(dx, dz);
+        if angle_difference(self.yaw, to_bond).abs() > std::f32::consts::FRAC_PI_2 { return; } // |+0x1D4| [M 0x1446b0:14]
+        if self.obj_armed() { return; } // `NDrone2_ObjectIsArmed` [M 0x1446b0:16]
+        if d.level != 0x0700_0007 { return; }
+        // `glb_players` (0 when nobody) [M 0x1446b0:24-30] — the SP sim always has Bond.
+        match self.voice_type {
+            9 => {
+                if self.voice_busy() { return; } // returns 1 in the game — same effect
+                if self.bond_talk_count == 0xff {
+                    if self.seen { self.bond_talk_cooldown = 0; self.bond_talk_count = 0; } // LAB_0014502c [M]
+                    return;
+                }
+                if !self.seen || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
+                // HeadTrack(0, players, 200) [M 0x1446b0 case 9] — the port's head tracking is not
+                // modelled for civilians; no observable port state.
+                let r = rng.rand(2) as usize;
+                let h = self.speech_request(d, 0x95 + r, false);
+                if h == 0 && !self.facial_attached() { return; }
+                self.bond_talk_cooldown = frame + 480; // fptoui(now + 480·FRAME_RATE_DIV) [M]
+                self.bond_talk_count = 1;
+            }
+            0xd => {
+                if self.voice_busy() { return; }
+                if self.bond_talk_count == 0xff {
+                    if self.seen { self.bond_talk_count = rng.rand(7) as u32; self.bond_talk_cooldown = frame + rng.rand(60) as u32; } // [M 0x1446b0 case 0xd tail: Rand(7), then LAB_00144e04 Rand(60)]
+                    return;
+                }
+                if !self.seen || self.bond_talk_count > 6 || frame <= self.bond_talk_cooldown { return; }
+                // variant by the character id `+0xE0`: 0x5000020 → 0, 0x5000022 → 1, 0x5000023 → 2, else 3 [M 0x1446b0 case 0xd]
+                let variant = match self.skin & 0xffff { 0x20 => 0, 0x22 => 1, 0x23 => 2, _ => 3 };
+                let r = rng.rand(11) as usize;
+                let h = self.speech_request(d, 0x58 + r * 4 + variant, false);
+                if h == 0 && !self.facial_attached() { return; }
+                self.bond_talk_cooldown = frame + 600; // [M 0x1446b0 case 0xd]
+                self.bond_talk_count = rng.rand(7) as u32;
+            }
+            0xe => {
+                let r = rng.rand(9) as usize;
+                self.do_bond_talk(d, rng, frame, 0x84 + r, 200, 0x1e0, false); // [M 0x1446b0 case 0xe]
+            }
+            0x10 => {
+                if self.voice_busy() { return; }
+                if self.bond_talk_count == 0xff {
+                    if self.seen { self.bond_talk_cooldown = 0; self.bond_talk_count = 0; } // LAB_0014502c
+                    return;
+                }
+                if !self.seen || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
+                let r = rng.rand(4) as usize;
+                let h = self.speech_request(d, 0x97 + r, false);
+                if h == 0 && !self.facial_attached() { return; }
+                self.bond_talk_cooldown = frame + 480;
+                self.bond_talk_count = 0; // LAB_00144fe4 [M]
+            }
+            0x11 => {
+                if self.voice_busy() { return; }
+                if self.bond_talk_count == 0xff {
+                    if self.seen { self.bond_talk_count = 0; self.bond_talk_cooldown = frame + rng.rand(60) as u32; } // [M case 0x11 tail]
+                    return;
+                }
+                if !self.seen || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
+                let h = self.speech_request(d, 0x8e, false);
+                if h == 0 && !self.facial_attached() { return; }
+                self.bond_talk_cooldown = frame + 480;
+            }
+            0x12 => {
+                if self.voice_busy() { return; }
+                if self.bond_talk_count == 0xff {
+                    self.bond_talk_count = 0;
+                    self.bond_talk_cooldown = frame + 120; // FRAME_RATE_INT * 2 [M 0x1446b0 case 0x12 tail]
+                    return;
+                }
+                if self.bond_talk_count > 6 { return; } // > 6 → return 0 [M]
+                if frame <= self.bond_talk_cooldown { return; }
+                // The 7-step jump table (PTR_LAB_002f5310 [D ACTION.ELF 0x2f5310..0x2f5328]): steps
+                // 0..5 speak the fixed lines 0x52..0x57 (SpeechSFX; no Rand draw in any step [M
+                // disasm scan]) and advance; step 6 waits for the line's end (Sound_IsFinnished
+                // [M 0x144d94]) — the port keys the fixed line per step and advances on the speak.
+                let step = self.bond_talk_count as usize;
+                let h = self.speech_request(d, 0x52 + step, false);
+                if h == 0 && !self.facial_attached() { return; }
+                self.bond_talk_count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    /// `DroneFunc_DoBondTalk` (0x144488) — the shared Bond-talk form `(idx, headTrackTime, delay,
+    /// again)`: needs the `+0x2A` in-range latch, `now ≥ +0xCDC`, and `+0xCE0 == 0 or again`; on a
+    /// spoken line (handle or a facial anim attached) `+0xCD8 += 1`, `+0xCDC = now + delay`,
+    /// `+0xCE0 += 1` [M 0x144488:36-67]. `again = 0` also clears `+0xCD8`/`+0xCE0` when `+0xCD8` is
+    /// 0xFF / `+0x2A` clear [M 0x144488:14-33].
+    fn do_bond_talk(&mut self, d: &Data, _rng: &mut Rng, frame: u32, idx: usize, _head_track: u32, delay: u32, again: bool) {
+        // `+0x2A` clear: `if (param_5 == 0) +0xCD8 = 0; +0xCE0 = 0;` then the main body's `+0x2A`
+        // recheck fails → 0 [M 0x144488:14-40].
+        if !self.seen {
+            if !again { self.bond_talk_count = 0; }
+            self.bond_talk_done = 0;
+            return;
+        }
+        if self.bond_talk_count == 0xff {
+            self.bond_talk_count = 0; self.bond_talk_cooldown = 0; self.bond_talk_done = 0; // [M 0x144488:16-19]
+        }
+        if self.voice_busy() { return; }
+        if frame < self.bond_talk_cooldown { return; } // `now < +0xCDC` [M 0x144488:41]
+        if self.bond_talk_done != 0 && !again { return; } // `+0xCE0 == 0 || again` [M 0x144488:44]
+        // HeadTrack(0, players, head_track) [M 0x144488:47] — not modelled for civilians.
+        let h = self.speech_request(d, idx, false);
+        if h == 0 && !self.facial_attached() { return; } // [M 0x144488:50-53]
+        self.bond_talk_count = self.bond_talk_count.wrapping_add(1);
+        self.bond_talk_cooldown = frame + delay; // the signed float reinterpret of the u32 [M 0x144488:59-63]
+        self.bond_talk_done += 1;
+    }
+
+    /// The Bond-talk SpeechSFX request (`SpeechSFX(idx, 0, 1, 1)`): the port queues the line; the
+    /// `talks` consumer applies the game's per-entry gates (repeat delay, the DIRECT refusal for a
+    /// line with a facial anim — speech.md §1.3). Returns the game's success notion: 0 when the
+    /// entry cannot play at all (no sfx, or a facial id that would take the unmodelled FACIAL path),
+    /// nonzero otherwise [M 0x141b00 DIRECT].
+    fn speech_request(&mut self, d: &Data, idx: usize, _force: bool) -> u32 {
+        match d.voices.and_then(|v| v.get(idx)) {
+            Some(l) if l.sfx != 0 && l.facial == 0 => l.sfx,
+            _ => 0,
+        }
+    }
+
+    /// `+0x53C`: a facial anim object attached — the port has no facial system, so never [M
+    /// 0x144488:51; speech.md §1.3 "facial lines never return / store a handle"].
+    fn facial_attached(&self) -> bool { false }
+
+    /// `NDrone2_TalkToMissionObj` (0x14a8b8) — the Hostage (0x15cb78 case 0x1A) and HostageKiller
+    /// (0x15c728 case 0x1A) mission-talk msg (sent by `NDrone2_MonitorTalkToMissionObj` 0x144340's
+    /// hostage/captor dialogue sequencer; the port delivers no 0x1A yet — the sequencer's script op
+    /// is unported, so the arm below is the faithful handler waiting for its sender). Kind byte
+    /// `+0xC5` 4 → `0x29 + Rand(6)`, 5 → `0x2f + Rand(4)`, else 0 [M 0x14a8b8:8-21];
+    /// `SpeechSFX(idx, 0, 0, 0)` then.
+    fn talk_to_mission_obj(&mut self, rng: &mut Rng) -> bool {
+        let idx = match self.mode { // `+0xC5` — the DTYPE mode byte [M NDrone2_GetDTYPENEW; drone.rs `mode`]
+            4 => 0x29 + rng.rand(6) as usize,
+            5 => 0x2f + rng.rand(4) as usize,
+            _ => return false,
+        };
+        if idx != 0 { self.talks.push((idx, false)); }
+        true
     }
 
     /// `DroneAnim_LocationDeathAnim` (0x13c780): shot in the head or chest while Bond aims → 0x42 (variant 1 when the
@@ -4321,6 +4567,10 @@ impl Drone {
         let in_cover_ok = |me: &Self, los: bool| me.cover.is_some_and(|c| me.cover_node_ok(d, c, me.cover_side, los) != 0);
         let far_from_goal = |me: &Self| me.goal.is_none_or(|g| ((g[0] - me.pos[0]).powi(2) + (g[2] - me.pos[2]).powi(2)).sqrt() > 1.5);
         Some(match (s, m) {
+            // `DroneFunc_RunForCoverTalk` 0x13fd08 (the game's RunForCover case with `+0x6F4` set,
+            // [M 0x169150:21-25]) is MP-gated dead like InjuredTalk (body iff MP != 0, SpeechSFX
+            // refuses in MP → silent both modes, no SP RNG draw) — the port runs nothing, exactly
+            // as the shipped build. See `DroneFunc_InjuredTalk` at `NDrone2_BulletImpact`.
             (RUN_FOR_COVER, msg::ENTER) => { self.vision_on = true; if self.goal.is_none() { self.set_state(ATTACK) } true }
             (RUN_FOR_COVER, msg::UPDATE) => {
                 if !in_cover_ok(self, false) || (self.seen && self.dist < 4.0) { self.set_state(ATTACK); return Some(true); }
@@ -4346,6 +4596,9 @@ impl Drone {
                 true
             }
             (UNDER_COVER_INIT, msg::ENTER) => {
+                // `DroneFunc_UnderCoverTalk` 0x13fe80 [M 0x169cc0:19 — the enter calls it]: MP-gated
+                // dead (body iff MP != 0, SpeechSFX refuses in MP → silent both modes, no SP RNG
+                // draw) — the port runs nothing, as the shipped build.
                 self.vision_on = true;
                 self.cover_claimed = false;
                 if !self.cover_anim(d, rng, 6, UNDER_COVER_IDLE) { /* as built: the drone then waits here */ }
@@ -4476,6 +4729,8 @@ impl Drone {
             }
             (AMBUSH_WAIT, msg::EXIT) => { d.props.set(0x10, &mut self.props, 0); true }
             (AMBUSH_WAIT, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, ATTACK); true }
+            // `DroneFunc_UnderCoverTalk` 0x13fe80 [M 0x16a9c0:25 — the enter calls it]: MP-gated
+            // dead (see UNDER_COVER_INIT above).
             (UNDER_COVER_RETURN, msg::ENTER) => { if !self.cover_anim(d, rng, 4, UNDER_COVER_TYPE_CHANGE) { self.set_state(UNDER_COVER_LEAVE) } true }
             (UNDER_COVER_RETURN, msg::UPDATE) => { if !in_cover_ok(self, false) || far_from_goal(self) { self.cover_leave |= 4 } true }
             (UNDER_COVER_TYPE_CHANGE, msg::ENTER) => {
@@ -5568,6 +5823,8 @@ impl Drone {
             (HEARD_NOISE_SUSPECT, msg::ENTER) => {
                 if self.noise_level >= 3 { self.set_state(HEARD_NOISE_ALERT); return true; }
                 self.noise_level = 3;
+                // [M 0x16b0e0:21-24] the enter arm's bark (AlertStatusSet(1) → HeardNoiseTalk).
+                self.heard_noise_talk(self.saw_opp_last_frame);
                 self.investigating = true;
                 self.vision_on = true;
                 let back = if self.resume_state != 0 { self.resume_state } else { self.start_state(d) };
@@ -5605,6 +5862,8 @@ impl Drone {
             (HEARD_NOISE_SUSPECT, msg::SOUND) => { self.set_state(ATTACK); true }
             (HEARD_NOISE_ALERT, msg::ENTER) => {
                 self.noise_level = 4;
+                // [M 0x16b540:18-23] the enter arm's bark (+0x43 = 4 → … → HeardNoiseTalk).
+                self.heard_noise_talk(self.saw_opp_last_frame);
                 self.investigating = true;
                 self.vision_on = true;
                 if self.stays(d) { self.call_anim_variant(d, anim_state::ALERT_LOOK, 1, ATTACK, 0); return true; }
@@ -6166,6 +6425,7 @@ impl Drone {
                 if self.voice_type == 0x12 { self.set_state(CIVILIAN); return true; }
                 self.vision_on = true;
                 if self.assign_path(d, 4) { self.set_state(CIVILIAN_PATROL); }
+                else { self.bond_talk_count = 0xff; self.bond_talk_cooldown = 0; } // [M 0x160140:27-32 — the stay arm]
                 true
             }
             (PARTY_GIRL, msg::UPDATE) => {
@@ -6182,7 +6442,9 @@ impl Drone {
                     if self.prop(d, 0x52) { self.fail_reason = Some(crate::ally::mission_fail_reason(0xb)); }
                     self.set_state(CIVILIAN_SCARED);
                 } else {
+                    // [M 0x160140:41-46] the game returns here: SetStandIdleAnim(1) then BondTalk.
                     self.set_stand_idle(d, rng, frame, true);
+                    self.bond_talk(d, rng, frame);
                 }
                 true
             }
@@ -6196,6 +6458,7 @@ impl Drone {
                 self.vision_on = true;
                 self.return_state = ATTACK; // `+0x5A2 = 0x56`
                 if self.alert >= 0.66 { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0) } else { self.call_anim(d, anim_state::STAND_IDLE, 0, 0) }
+                self.bond_talk_count = 0xff; self.bond_talk_cooldown = 0; // [M 0x1603a8:33-34]
                 true
             }
             (CIVILIAN_GUARD, msg::EXIT) => { self.team = 1; true }
@@ -6205,6 +6468,10 @@ impl Drone {
                 if self.near_armed_person(d) || (self.bond_armed && self.seen) {
                     self.sighted = true;
                     self.set_state(ATTACK);
+                } else {
+                    // [M 0x1603a8:39-45] the game's BondTalk arm: !near && (!ObjectIsArmed || !seen) —
+                    // exactly this else.
+                    self.bond_talk(d, rng, frame);
                 }
                 true
             }
@@ -6233,6 +6500,7 @@ impl Drone {
                 // (kiko.rs) but ported for fidelity. fix-finale-blockers replaced the 0x0d stand-in.
                 if self.voice_type == 0x13 { self.set_state(crate::kiko::KIKO_MISSION); return true; }
                 self.call_anim(d, anim_state::WALK, 0, 0);
+                self.bond_talk_count = 0xff; self.bond_talk_cooldown = 0; // [M 0x15d860:23-24]
                 true
             }
             (CIVILIAN_MISSION, msg::UPDATE) => {
@@ -6241,6 +6509,8 @@ impl Drone {
                     if self.voice_type == 0x10 { self.team = 1; self.set_state(ATTACK); }
                     else { self.set_state(CIVILIAN_SCARED); }
                 } else if self.route.is_some() {
+                    // [M 0x15d860:36-38] the game calls BondTalk before UpdateMissionRoute.
+                    self.bond_talk(d, rng, frame);
                     let arrived = self.update_mission_route(d, rng, frame, self.walk_anim(d));
                     if arrived && self.next_state.is_none() { d.props.set(0x1d, &mut self.props, 0); self.set_state(CIVILIAN); }
                 } else {
@@ -6307,12 +6577,16 @@ impl Drone {
             (CIVILIAN, msg::ENTER) => {
                 self.vision_on = true;
                 self.scared_radius = if d.level == 0x0700_0007 { 10.0 } else { 20.0 };
+                if !matches!(self.voice_type, 0xd | 0xf) {
+                    self.bond_talk_count = 0xff; self.bond_talk_cooldown = 0; // [M 0x15d118:35-44]
+                }
                 self.set_stand_idle(d, rng, frame, true);
                 true
             }
             (CIVILIAN, msg::UPDATE) => {
                 // 0x15d118:46 passes the stored +0xCF8 radius (10/20) — dead in NearArmedPerson [M 0x1787c8].
                 if self.near_armed_person(d) { self.sighted = true; self.set_state(CIVILIAN_SCARED); }
+                else { self.bond_talk(d, rng, frame); } // [M 0x15d118:47-49]
                 true
             }
             (CIVILIAN, msg::BULLET) => self.on_bullet_resume(d, rng, frame, CIVILIAN_SCARED, false),
@@ -6324,7 +6598,7 @@ impl Drone {
             (CIVILIAN_SCARED, msg::ENTER) => {
                 self.vision_on = true;
                 self.alert = 1.0;
-                self.pain_talk(d); // the closest port line: the hurt/scared voice of the set
+                self.civilian_scared_talk(d, rng); // [M 0x15d3a0:30 — NDrone2_CivilianScaredTalk 0x13f900]
                 if self.scared_run && self.find_run_to_point(d) {
                     self.return_state = CIVILIAN_HIDING;
                     self.set_state(HOSTAGE_GO_TO_GOAL);
@@ -6361,6 +6635,9 @@ impl Drone {
                 self.call_anim(d, anim_state::COWER, 0, 0);
                 true
             }
+            // Hostage 0x15cb78 case 0x1A → `NDrone2_TalkToMissionObj` 0x14a8b8 (the mission dialogue
+            // sequencer's ping; nothing sends 0x1A in the port yet — see the fn's doc).
+            (HOSTAGE, msg::MISSION_TALK) => { self.talk_to_mission_obj(rng); true }
             // HostageSaved (0x15ccf0 — state 0x0c [L 0x29b300]) ENTER [M 0x15ccf0:16-44]:
             // `Drone_AlertStatusSet(0)`, clear the captor link, `Music_Event(0x10, 1)` (the port
             // has no music-event consumer in Sim — skipped), then `DroneFunc_HostageSaved`
@@ -7049,6 +7326,8 @@ impl Drone {
             // runs the route — moving → run anim, arrived (3) → the return state `+0x5A2`, blocked
             // (9/0xC) → the stand anim [M case 3]; msg 0x1b → the return state (unmodelled message).
             (crate::kiko::HOSTAGE_GO_TO_GOAL, msg::UPDATE) => {
+                // [M 0x165a68:17-19] case 3: DistanceToAIPoint, CivilianScaredTalk, MoveToGoalPosition.
+                self.civilian_scared_talk(d, rng);
                 match self.move_to_goal(d) {
                     0..=2 => self.call_anim(d, anim_state::RUN, 0, 0),
                     3 => { let r = self.return_state; self.set_state(r); }
@@ -8612,6 +8891,10 @@ pub struct Drones {
     /// Speech: each line's last play frame (`Drone_SfxInfo+0x08`, global; `None` = never) and the patrol-talk cooldown.
     voice_last: Vec<Option<u32>>,
     patrol_cooldown: u32,
+    /// The vision globals `0x298fa0` (this frame's sight count) / `0x298f84` (last frame's latch
+    /// [M Drone_InitComms 0x139520:263-265]); HeardNoiseTalk reads the latch.
+    saw_opp_this_frame: bool,
+    saw_opp_last_frame: bool,
     /// Script stream sounds: (script, stream) → handle and the object it follows.
     pub script_sounds: Vec<((u32, u8), crate::sound::Handle, Option<usize>)>,
     /// The level's searchlights (docs/systems/world-objects.md; created in `attach_level`, updated in `tick`'s
@@ -8898,7 +9181,7 @@ impl Drones {
             movie_request: None,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             // fix-06-alarm (fields on their own lines — merge lesson 4).
             sound_triggers: Default::default(),
             // fix-0c-hatch-latches2: the per-tick player-bullet SS Operate contacts (see the field).
@@ -10564,6 +10847,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if l.sfx == 0 || l.facial != 0 { continue; }
             if !force && self.list[index].voice.is_some() { continue; }
             self.voice_last[idx] = Some(frame);
+            self.list[index].last_voice = frame; // `*(drone+0x4D4) = now` [M 0x141848, speech.md §1.2]
             let pos = self.list[index].pos;
             let h = match d.sfx { Some(t) => self.play_sound_handle(pos, t.get(l.sfx)), None => self.audio.play3d(l.sfx, pos, None) };
             self.list[index].voice = (h != 0).then_some((h, l.sfx));
@@ -10577,6 +10861,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// 180-frame talk suppression is not modelled — it only gates optional talk lines [M 0x13f1d0].
     fn foley(&mut self, d: &Data, index: usize, idx: usize, frame: u32) {
         if let Some(l) = Self::foley_entry(d.voices, &mut self.voice_last, idx, frame) {
+            self.list[index].last_voice = frame; // the direct PlaySFX write [M 0x141848]
             let pos = self.list[index].pos;
             match d.sfx { Some(t) => { self.play_sound_handle(pos, t.get(l.sfx)); } None => { self.audio.play3d(l.sfx, pos, None); } }
         }
@@ -11331,6 +11616,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let prof_pre = crate::prof::scope("drones: shared passes");
         self.frame += 1;
         self.player_pos = player.pos;
+        // `Drone_InitComms` 0x139520:263-273: the latch `0x298f84 = 0x298fa0` then `0x298fa0 = 0` —
+        // the per-frame sight counter becomes "saw last frame"; this tick's sight accumulates below.
+        self.saw_opp_last_frame = self.saw_opp_this_frame;
+        self.saw_opp_this_frame = false;
         // The 07000041 wrapper end ([S] unverified — the port's flow for the task's known open
         // item "it must play through into 0700001b"): with the approach chain fired (ch 1, the
         // scripted-drone plate #99's out [D PL#99]) the wrapper's approach sequence runs; once it
@@ -12515,6 +12804,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             dr.voice_finished = dr.voice.is_none_or(|v| self.audio.finished(v.0));
             dr.patrol_cooldown = self.patrol_cooldown;
+            dr.saw_opp_last_frame = self.saw_opp_last_frame;
             // guard-blast-smoke: the smoke cloud's touch this tick → msg 0x17 (DealWithObjHit case
             // 0x2A). Delivered before the timers so the Loop's re-arm lands on the same tick.
             if smoke_touch[index] { dr.send(d, rng, frame, msg::SMOKE); }
@@ -12664,6 +12954,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 && dr.team == 1
                 && self.attack_gate.seen_and_attacking(index, dr.seen, dr.unseen_ticks, dr.dist) { self.music.event(2, 5); }
             self.patrol_cooldown = dr.patrol_cooldown;
+            // `DroneVision_ProcessDroneSight` 0x176a28:224 counts a drone with the vision flag
+            // (`+0x4F8 & 0x10000`), an opponent record and sight into 0x298fa0; the port's fields.
+            if dr.vision_on && dr.los { self.saw_opp_this_frame = true; }
             let talks = std::mem::take(&mut dr.talks);
             if !talks.is_empty() { talk_queue.push((index, talks)); }
             self.used = std::mem::take(&mut dr.links_used);
@@ -13770,7 +14063,8 @@ mod tests {
             // ninja-melee: the melee band +0xEC and the +0x2C8 attack-hold counter (defaults).
             melee_min_dist: 4.0, attack_hold: 0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(),
-            voice_type: 0, female: false, attack_talked: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
+            voice_type: 0, female: false, attack_talked: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
+            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
