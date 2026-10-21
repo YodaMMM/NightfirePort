@@ -477,6 +477,9 @@ impl GTurret {
             gt_state::COMBAT => {
                 let had = self.track(ctx.cands, ctx.mp);
                 if had.is_some() {
+                    // A tracked frame zeroes the re-holster timer +0xDC [M 0x180498:293] (review
+                    // 2026-10-21: the branch let it accumulate across target gaps).
+                    self.timer = 0.0;
                     out.push(GTEvent::CombatSting);
                     // fire cadence: ext+0xe0 += dt; > 0.1 → shoot [M case 4].
                     self.fire_timer += crate::grenade::REC_FRAME_RATE;
@@ -506,10 +509,13 @@ impl GTurret {
                     }
                 } else if self.facing == 1 {
                     // re-holster path [M case 4 tail: the channel gate, 0.5 s → state 2].
+                    // [M 0x180498:401-414]: ext+0xe8 == 0 → count; e8 ON → count only when ext+0xea is
+                    // set AND on (ea == 0 or ea OFF → return); e8 OFF → count. (Review 2026-10-21: the
+                    // branch opened the gate for e8 ON with ea == 0.)
                     let gate_open = if self.param4 == 0 {
                         true
                     } else if ctx.channels.on(self.param4 as u32) {
-                        self.param5 == 0 || ctx.channels.on(self.param5 as u32)
+                        self.param5 != 0 && ctx.channels.on(self.param5 as u32)
                     } else {
                         true
                     };
@@ -694,6 +700,49 @@ mod tests {
 
     /// [M 00180498 case 4] combat: a target in range with LOS fires on the 0.1 s cadence,
     /// spending one shot per bullet; no target → no fire.
+    /// [M 0x180498:293, 401-414] the facing-1 re-holster gate (review 2026-10-21): with the enable
+    /// channel ON and no disable channel the turret never re-holsters; with the enable channel OFF
+    /// it re-holsters after 0.5 s of CONTINUOUS no-target time — a tracked frame zeroes the timer.
+    #[test]
+    fn reholster_gate_and_tracked_frame_reset() {
+        let mut ch = crate::triggers::Channels::default();
+        ch.set(18, 1, 0);
+        let none: Vec<TrackCand> = Vec::new();
+        let mut rng = crate::drone::Rng::new(1);
+        let mut t = GTurret { state: gt_state::COMBAT, facing: 1, param4: 18, param5: 0, ..GTurret::default() };
+        for f in 0..120u32 {
+            let ctx = GTCtx { channels: &ch, mp: false, frame: f, cands: &none, registered0_state: None, mount: None };
+            t.update(&ctx, &mut rng, &mut Vec::new());
+        }
+        assert_eq!(t.state, gt_state::COMBAT, "e8 ON with ea == 0 returns before the timer [M :406-409]");
+        // Sister: the enable channel OFF → the 0.5 s count runs and the turret re-holsters.
+        let ch_off = crate::triggers::Channels::default();
+        let mut t2 = GTurret { state: gt_state::COMBAT, facing: 1, param4: 18, param5: 0, ..GTurret::default() };
+        let mut moved = None;
+        for f in 0..120u32 {
+            let ctx = GTCtx { channels: &ch_off, mp: false, frame: f, cands: &none, registered0_state: None, mount: None };
+            t2.update(&ctx, &mut rng, &mut Vec::new());
+            if t2.state == gt_state::RESTORING { moved = Some(f); break; }
+        }
+        assert!(moved.is_some_and(|f| f >= 29), "e8 OFF → > 0.5 s → state 2 [M :415-421], got {moved:?}");
+        // A tracked frame zeroes the timer: 20 idle frames, one tracked, 20 idle → still COMBAT.
+        let bond = [TrackCand { obj: u32::MAX, pos: [0.0, 0.0, 5.0], copter: false, los_ok: true }];
+        let mut t3 = GTurret { state: gt_state::COMBAT, facing: 1, param4: 18, param5: 0, ..GTurret::default() };
+        for f in 0..41u32 {
+            let c: &[TrackCand] = if f == 20 { &bond } else { &none };
+            let ctx = GTCtx { channels: &ch_off, mp: false, frame: f, cands: c, registered0_state: None, mount: None };
+            t3.update(&ctx, &mut rng, &mut Vec::new());
+        }
+        assert_eq!(t3.state, gt_state::COMBAT, "the tracked frame reset +0xDC — 20 + 20 idle frames stay under 0.5 s [M :293]");
+        // Sister: 41 idle frames with no tracked frame DO cross 0.5 s.
+        let mut t4 = GTurret { state: gt_state::COMBAT, facing: 1, param4: 18, param5: 0, ..GTurret::default() };
+        for f in 0..41u32 {
+            let ctx = GTCtx { channels: &ch_off, mp: false, frame: f, cands: &none, registered0_state: None, mount: None };
+            t4.update(&ctx, &mut rng, &mut Vec::new());
+        }
+        assert_ne!(t4.state, gt_state::COMBAT, "41 continuous idle frames re-holster");
+    }
+
     #[test]
     fn combat_fires_on_cadence_and_spends_shots() {
         let ch = crate::triggers::Channels { v: vec![0; 256], time: vec![0; 256], writes: None, script_channels: std::collections::BTreeSet::new() };

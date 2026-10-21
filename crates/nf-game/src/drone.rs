@@ -6580,7 +6580,9 @@ impl Drone {
             // 6/7/8/9/0x17/0x18/0x19 + 0x21]; forced attack [M case 0x1f].
             (INVESTIGATE, msg::ENTER) => {
                 self.vision_on = true;
-                self.alert = 0.66; // `Drone_AlertStatusSet(2)` — table 0x2f5cc8[2] = 0.66
+                // `Drone_AlertStatusSet(2)` [M 0x168070 case 1] writes the +0x51C status byte only
+                // (review 2026-10-21 — the branch wrote the alertness 0.66).
+                self.alert_status_set(2, frame);
                 self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
                 true
             }
@@ -6748,7 +6750,9 @@ impl Drone {
             // resume state [M cases 6/7/8/9/0x17/0x18/0x19 + 0x21] both land on AimStand 0x67.
             (CROUCH_COVER, msg::ENTER) => {
                 self.vision_on = true;
-                self.alert = 0.0; // `Drone_AlertStatusSet(0)` — table 0x2f5cc8[0] = 0
+                // `Drone_AlertStatusSet(0)` [M 0x166d90 case 1] — the status byte only (review 2026-10-21:
+                // the branch zeroed the alertness of a guard in a firefight).
+                self.alert_status_set(0, frame);
                 self.call_anim(d, 0x11, 0, 0);
                 self.timer_c = Some(frame + 120 + rng.rand(60) as u32);
                 true
@@ -6756,7 +6760,8 @@ impl Drone {
             (CROUCH_COVER, msg::UPDATE) => {
                 // SeenAndAttacking + TurnToObj — the port's fold is facing the opponent [M 0x166d90 case 3];
                 // the mode-0xc drone keeps its angle.
-                if self.mode != 0xc { self.desired_yaw = self.yaw_to_opp; }
+                // `+0xD8 != 0xC` — the VOICE type, not the mode byte [M 0x166d90 case 3].
+                if self.voice_type != 0xc { self.desired_yaw = self.yaw_to_opp; }
                 true
             }
             (CROUCH_COVER, msg::TIMER_C) => { self.set_state(AIM_STAND); true }
@@ -7411,7 +7416,7 @@ impl Drone {
             // follow-on HostageDead 0x0f, `NDrone2_LogDroneDeath` (the port's corpse/mission path
             // already runs through HOSTAGE_DEAD's ENTER).
             (HOSTAGE_DIE, msg::ENTER) => {
-                self.alert = 1.0; // `Drone_AlertStatusSet(3)` — table 0x2f5cc8[3] = 1.0
+                self.alert_status_set(3, frame); // [M 0x1725a0 case 1] — the status byte only
                 self.foley_reqs.push(10);
                 self.call_anim(d, 0x40, HOSTAGE_DEAD, 0);
                 true
