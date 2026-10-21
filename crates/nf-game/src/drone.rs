@@ -8358,8 +8358,8 @@ impl Drone {
     /// (`DroneFunc_FirstAttack` 0x148010:23-30 consults it when the alert-broadcast bits
     /// (+0x4F8 & 0x70000000) are set but the sighting was not the drone's own): any of the
     /// +0x4FC bits 2/0x10/0x20/0x20000/0x40000/0x80000/0x100000 → 0 (the sight flow); bit
-    /// 0x200000 → state 0x39 on the levels 0x7000005, 0x7000007, 0x7000041 and everything
-    /// ≥ 0x7000008, else 0. `alert_bits` is the port's +0x4FC.
+    /// 0x200000 → state 0x39 on the levels 0x7000005, 0x7000007 and 0x7000041 only, else 0
+    /// [M 0x147f58:31-42]. `alert_bits` is the port's +0x4FC.
     pub fn first_alert_state(alert_bits: u32, level: u32) -> u16 {
         if alert_bits & (2 | 0x10 | 0x20 | 0x20000 | 0x40000 | 0x80000 | 0x100000) != 0 { return 0; }
         if alert_bits & 0x200000 == 0 { return 0; }
@@ -13092,7 +13092,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // +0x250-shaped position here per sight tick) keeps the pool at the freshest
                     // sighting [M; docs/systems/dronefunc-rest.md].
                     if dr.team == 1 {
-                        if dr.target_id == 0xff { dr.target_id = self.targets.allocate(true, dr.index); }
+                        if dr.target_id == 0xff { dr.target_id = self.targets.allocate(true, crate::target_registry::BOND); } // keyed by the opponent obj [M 0x1422d0:74 → 0x141f28 param_2]
                         self.targets.target_seen(dr.target_id, self.frame, dr.opp_target);
                     }
                     // `DroneVision_HaveOpponentSight` 0x175ef0:20-25 (the reaction gate, then
