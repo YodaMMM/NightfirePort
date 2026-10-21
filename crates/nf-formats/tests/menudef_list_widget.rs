@@ -137,3 +137,20 @@ fn refresh_metrics_recomputes_rows_and_clamps_top() {
     l.refresh_metrics(0);
     assert_eq!(l.visible_rows, 0, "h 0 → 0 rows");
 }
+
+/// Arm 0x1d's wrap pull [M 0x2196e8:323-336]: when the row after the cursor is a word-wrap
+/// continuation (+0x2c8), msg 0x2c moves the top to idx − (visible − 2) so the continuation
+/// shows too. Sister: without the continuation the plain clamp leaves top = idx − visible + 1.
+#[test]
+fn scroll_to_real_item_pulls_a_wrapped_continuation_into_view() {
+    let mut l = ListState::init(16.0, 88, 0, 16); // 5 visible rows
+    for i in 0..9 { l.add_row(vec![format!("r{i}")], i as u32); }
+    l.rows[8].wrap = true; // row 8 continues real item 7
+    l.scroll_to_real_item(7);
+    assert_eq!(l.cursor, Some(7));
+    assert_eq!(l.top, 4, "5 < 7 − (0 − 2) → msg 0x2c top = 7 − 3 [M :329-333]; 4 <= 9 − 5 [M :445]");
+    let mut plain = ListState::init(16.0, 88, 0, 16);
+    for i in 0..9 { plain.add_row(vec![format!("r{i}")], i as u32); }
+    plain.scroll_to_real_item(7);
+    assert_eq!(plain.top, 3, "no continuation: only the List_Update clamp");
+}
