@@ -4010,6 +4010,9 @@ impl Drone {
             .or_else(|| if group == 2 { crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 1, owner) } else { None });
         let Some(pi) = hit else { return false };
         self.goal = Some(d.ai_points[pi].pos);
+        // `AINetwork_InvalidateRoute(drone+0x860)` before SetupGoalPosition/MoveToGoalPosition —
+        // every ask rebuilds the route even when a stale valid one exists [M 0x153168:41, 76].
+        self.croute = None;
         matches!(self.move_to_goal(d), 0..=3)
     }
 
@@ -6001,6 +6004,9 @@ impl Drone {
             (AIM_BACKOFF, msg::UPDATE) => {
                 if !(self.dist <= self.engage_range && self.unseen_ticks < 16 && self.can_backoff(d)) { self.set_state(AIM_STAND); return true; }
                 self.desired_yaw = self.yaw_to_opp;
+                // `EvasiveMove` FIRST [M 0x166b98:37-40] — non-zero means the dodge state is already
+                // set inside (the old code asked ChooseCombatMove only: the stand-in).
+                if self.evasive_move(d, rng) != 0 { return true; }
                 if self.firing && !self.burst_done { return true; }
                 self.fire(d, rng, frame, true);
                 let m = self.choose_combat_move(d, rng);
@@ -6431,8 +6437,17 @@ impl Drone {
                 // `behaviour_util_getProperty` 0x1c7d98 — the port's `prop`] — without it the cower
                 // arm is dead in the game, so the port gates the enter on the same bit.
                 if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 {
-                    if std::env::var_os("NF_AILOG").is_some() { eprintln!("[ailog] escort {} → LeadHide (peer {:.1})", self.index, self.armed_peer_dist); }
-                    self.set_state(LEAD_HIDE);
+                    // [M 0x15e698:93-102] `FindRunToPoint` → found: `+0x5A2 = 0x1f` (LeadHide) +
+                    // SetState(0x28 AllyGoToGoalPosition — the run to the found point); none:
+                    // SetState(0x1f). The old arm ran the hide half only (the FindRunToPoint stand-in).
+                    if self.find_run_to_point(d) {
+                        self.return_state = LEAD_HIDE; // `+0x5A2 = 0x1f` [M 0x15e698:96]
+                        if std::env::var_os("NF_AILOG").is_some() { eprintln!("[ailog] escort {} → GoToGoal {:?} (peer {:.1})", self.index, self.goal, self.armed_peer_dist); }
+                        self.set_state(GO_TO_GOAL_ALLY); // 0x28 [M 0x15e698:97]
+                    } else {
+                        if std::env::var_os("NF_AILOG").is_some() { eprintln!("[ailog] escort {} → LeadHide (peer {:.1})", self.index, self.armed_peer_dist); }
+                        self.set_state(LEAD_HIDE); // [M 0x15e698:101]
+                    }
                     return true;
                 }
                 // The route: done → AllyLeadDone [M 0x15e698 case 3, FollowRoute branch 3].
@@ -6464,12 +6479,19 @@ impl Drone {
             }
             (ALLY_LEAD_WAIT, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15eda8 case 1: 0x21]
             (ALLY_LEAD_WAIT, msg::UPDATE) => {
-                // [M 0x15eda8 case 3]: an armed hostile within 10 → hide (the FindRunToPoint stand-in,
-                // as Lead's arm; the flag-1 prop-0x50 gate applies here too, as in Lead [M
-                // 0x15eda8:30 + 0x177420:57-61]); else the path bands: ≤ −7.0 (Bond still over 7
-                // behind on the route) stays, and 0.0 with Bond ≥ 5.0 straight-line stays; anything
-                // else resumes the lead (the game's −9.0 enter / −7.0 resume hysteresis).
-                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
+                // [M 0x15eda8 case 3]: an armed hostile within 10 → `FindRunToPoint` → found:
+                // `+0x5A2 = 0x1f` + state 0x28, none: state 0x1f [M 0x15eda8:57-66] (the flag-1
+                // prop-0x50 gate applies here too, as in Lead [M 0x15eda8:30 + 0x177420:57-61]);
+                // else the path bands: ≤ −7.0 (Bond still over 7 behind on the route) stays, and
+                // 0.0 with Bond ≥ 5.0 straight-line stays; anything else resumes the lead (the
+                // game's −9.0 enter / −7.0 resume hysteresis).
+                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 {
+                    if self.find_run_to_point(d) {
+                        self.return_state = LEAD_HIDE; // `+0x5A2 = 0x1f` [M 0x15eda8:60]
+                        self.set_state(GO_TO_GOAL_ALLY); // 0x28 [M 0x15eda8:61]
+                    } else { self.set_state(LEAD_HIDE); } // [M 0x15eda8:65]
+                    return true;
+                }
                 let pd = self.object_mission_path_distance(d, 5.0, self.player_pos);
                 self.mission_path_dist = pd;
                 if pd > -7.0 && (pd != 0.0 || crate::nav::dist2d(self.pos, self.player_pos) < 5.0) { self.set_state(ALLY_LEAD); }
@@ -6482,11 +6504,17 @@ impl Drone {
             // parks him in PlayerInWay.
             (PLAYER_IN_WAY, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15ea28 case 1: 0x21]
             (PLAYER_IN_WAY, msg::UPDATE) => {
-                // An armed hostile within 10 → hide (the FindRunToPoint stand-in, as Lead's arm; the
-                // flag-1 prop-0x50 gate applies here too [M 0x15ea28:30 + 0x177420:57-61]);
-                // otherwise resume the lead once Bond leaves the stay band — inside the π/3
-                // (0x3f860a92) facing cone AND 3.5 [M 0x15ea28 case 3].
-                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
+                // An armed hostile within 10 → `FindRunToPoint` → found: `+0x5A2 = 0x1f` + state
+                // 0x28, none: state 0x1f [M 0x15ea28:53-62] (the flag-1 prop-0x50 gate applies here
+                // too [M 0x15ea28:30 + 0x177420:57-61]); otherwise resume the lead once Bond leaves
+                // the stay band — inside the π/3 (0x3f860a92) facing cone AND 3.5 [M 0x15ea28 case 3].
+                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 {
+                    if self.find_run_to_point(d) {
+                        self.return_state = LEAD_HIDE; // `+0x5A2 = 0x1f` [M 0x15ea28:56]
+                        self.set_state(GO_TO_GOAL_ALLY); // 0x28 [M 0x15ea28:57]
+                    } else { self.set_state(LEAD_HIDE); } // [M 0x15ea28:61]
+                    return true;
+                }
                 if !self.bond_band(3.5, 1.047_197_6) { self.set_state(ALLY_LEAD); }
                 true
             }
@@ -6518,14 +6546,21 @@ impl Drone {
                 true
             }
             // AllyLeadBondCombat 0x22 (0x15f120): Bond is fighting near the escort — hold the alert
-            // idle. UPDATE [M 0x15f120 case 3]: an armed hostile within 10 → hide (the FindRunToPoint
-            // stand-in; the flag-1 prop-0x50 gate applies here too [M 0x15f120:26 +
-            // 0x177420:57-61]); else the path distance: < 0 (Bond still behind on the route) stays;
+            // idle. UPDATE [M 0x15f120 case 3]: an armed hostile within 10 → `FindRunToPoint` →
+            // found: `+0x5A2 = 0x1f` + state 0x28, none: state 0x1f [M 0x15f120:41-51] (the flag-1
+            // prop-0x50 gate applies here too [M 0x15f120:26 + 0x177420:57-61]); else the path
+            // distance: < 0 (Bond still behind on the route) stays;
             // `DAT_00298f80 != 0` stays (no decomp writer — reads 0, docs/fields/
             // hitdata-spawner-ally.md §3); otherwise Lead.
             (LEAD_BOND_COMBAT, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15f120 case 1: 0x21]
             (LEAD_BOND_COMBAT, msg::UPDATE) => {
-                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 { self.set_state(LEAD_HIDE); return true; }
+                if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 {
+                    if self.find_run_to_point(d) {
+                        self.return_state = LEAD_HIDE; // `+0x5A2 = 0x1f` [M 0x15f120:44]
+                        self.set_state(GO_TO_GOAL_ALLY); // 0x28 [M 0x15f120:45]
+                    } else { self.set_state(LEAD_HIDE); } // [M 0x15f120:50]
+                    return true;
+                }
                 let pd = self.object_mission_path_distance(d, 5.0, self.player_pos);
                 self.mission_path_dist = pd;
                 if pd >= 0.0 { self.set_state(ALLY_LEAD); }
@@ -6548,11 +6583,21 @@ impl Drone {
             }
             (FOLLOW_WAIT, msg::UPDATE) => { if self.dist <= 6.0 { self.set_state(FOLLOW); } true }
             (FOLLOW_DONE, msg::ENTER) => { self.set_stand_idle(d, rng, frame, true); true } // [M 0x15f858]
-            // AllyGoToGoalPosition 0x28 (0x15f938): walk to the saved goal, then Lead (the escort's
-            // only user) [*suggested*: the goal = the route's last node].
-            (GO_TO_GOAL_ALLY, msg::ENTER) => { self.call_anim(d, self.walk_anim(d), 0, 0); true }
+            // AllyGoToGoalPosition 0x28 (`NDrone2_DSTATE_AllyGoToGoalPosition` 0x15f938): no ENTER
+            // arm (case 1 falls to case 0's plain 1 — the old walk-anim enter was the stand-in);
+            // UPDATE (case 3): `+0x4f8 |= 0x10000`, `AlertStatusSet(2)`, `DistanceToAIPoint` (the
+            // goal point's +0x10 scratch — read only by AlertToPosition 0x165270, no port reader),
+            // then `MoveToGoalPosition` on the saved goal: moving (0..2) → the run anim 0x1e,
+            // arrived (3) → the return state `+0x5A2`, 10 → stay, other codes (5/8/9/0xC) → the
+            // return state [M case 3; the port's `move_to_goal` returns 0/3/8/0xC only]. msg 0x1b →
+            // the return state [M case 0x1b — no port sender, unmodelled like 0x64's].
             (GO_TO_GOAL_ALLY, msg::UPDATE) => {
-                if self.update_mission_route(d, rng, frame, self.walk_anim(d)) && self.next_state.is_none() { self.set_state(ALLY_LEAD); }
+                self.vision_on = true;
+                self.alert = self.alert.max(0.66); // AlertStatusSet(2) [M 0x15f938 case 3]
+                match self.move_to_goal(d) {
+                    0..=2 => self.call_anim(d, anim_state::RUN, 0, 0),
+                    _ => { let r = self.return_state; self.set_state(r); }
+                }
                 true
             }
             // NDrone2_DSTATE_OpenDoor (0x1681f8) — `NDrone2_StateFuncs[0x81]` [L 0x29b300 + 0x81·4]:
@@ -7416,6 +7461,52 @@ impl Drone {
             case += 1;
         };
         if (result == AIM_STAND && self.state == AIM_STAND_FIRE) || (result == AIM_CROUCH && self.state == AIM_CROUCH_FIRE) || result == self.state { 0 } else { result }
+    }
+
+    /// `NDrone2_EvasiveMove` (0x1506d8) — the evasive mover `AimBackoff` 0x68 asks FIRST
+    /// (`NDrone2_DSTATE_AimBackoff` 0x166b98 case 3: `EvasiveMove` → non-zero: the state is already
+    /// set, return; else the fire logic + `ChooseCombatMove`). The gate: the movement lock
+    /// `+0x4f8 & 0x10` (the port's `stationary`) and `OpponentIsAimingAtMe(7.5)` [M 0x1506f8-720;
+    /// the armed-opponent + `+0x2A` latch pair the port models as `aimed_at && bond_armed`, the
+    /// choose_combat_move gate]. The option list — 1 roll (prop 0x2e + CanDo 0x53), 2 strafe
+    /// (prop 0x41 + CanDo 0xc), 3 dodge (prop 0x13 + CanDo 0x29), 4 step (prop 0x42 + CanDo 0x5a),
+    /// each lock-gated [M 0x15073c-0x1508a8] — feeds `Rand(count)`, consumed even when the list is
+    /// empty (Rand(0) still advances both seeds [M-dis 0x1508ac-0x1508d0 + Rand_Rand 0x1e3738]).
+    /// The pick selects the ENTRY into the fixed recheck chain roll → strafe → dodge [M-dis
+    /// 0x1508d8-0x1509c8]: the roll recheck re-gates prop 0x2e + the lock + CanDo(0x53) and burns
+    /// its Rand(2) + Can* pair; the strafe recheck re-gates prop 0x41 ONLY; NEITHER assigns a
+    /// state — their Can* results are discarded [M-dis 0x150978-0x150a10, the success paths jump
+    /// straight to the next recheck]. Only the dodge recheck (prop 0x13, no CanDo re-check
+    /// [M-dis 0x150a14-0x150a30]) assigns: Rand(2) sides the pair (0 → right-first), the winner
+    /// 0x78/0x77 is `SetState`d when mode (+0xc5) != 0x1e and returned (0 none) [M-dis
+    /// 0x150a38-0x150a8c + the tail 0x150a90-0x150ab0].
+    fn evasive_move(&mut self, d: &Data, rng: &mut Rng) -> u8 {
+        use state::*;
+        if self.stationary || !(self.aimed_at && self.bond_armed) { return 0; }
+        let mut opts = Vec::new();
+        if self.prop(d, 0x2e) && self.can_do(d, anim_state::ROLL_LEFT) { opts.push(1) }
+        if self.prop(d, 0x41) && self.can_do(d, anim_state::STRAFE_LEFT) { opts.push(2) }
+        if self.prop(d, 0x13) && self.can_do(d, anim_state::DODGE_LEFT) { opts.push(3) }
+        if self.prop(d, 0x42) && self.can_do(d, anim_state::STEP_LEFT) { opts.push(4) }
+        let picked = opts.get(rng.rand(opts.len() as u32) as usize).copied().unwrap_or(0);
+        // The recheck chain from the picked entry; the roll/strafe arms consume their Rand(2) when
+        // their gates pass and discard the Can* verdicts (pure probes — no RNG, no state).
+        if picked <= 1 && self.prop(d, 0x2e) && !self.stationary && self.can_do(d, anim_state::ROLL_LEFT) {
+            rng.rand(2); // the pair's verdicts are discarded [M-dis 0x150978-0x1509b0]
+        }
+        if picked <= 2 && self.prop(d, 0x41) {
+            rng.rand(2); // no CanDo re-check here [M-dis 0x1509b4-0x1509c8]; verdicts discarded
+        }
+        if picked <= 3 && self.prop(d, 0x13) {
+            let m = if rng.rand(2) == 0 {
+                if self.can_move(d, -3.6, 0.0) { STRAFE_DODGE_RIGHT }
+                else if self.can_move(d, 3.6, 0.0) { STRAFE_DODGE_LEFT } else { 0 }
+            } else if self.can_move(d, 3.6, 0.0) { STRAFE_DODGE_LEFT }
+            else if self.can_move(d, -3.6, 0.0) { STRAFE_DODGE_RIGHT } else { 0 };
+            if m != 0 && self.mode != 0x1e { self.set_state(m); }
+            return m;
+        }
+        0
     }
 
     /// `DroneFunc_CombatState` (0x148338): the combat decision for 0x58 / 0x5A / 0x5C / 0x5E / 0x68 / 0x70. Every
