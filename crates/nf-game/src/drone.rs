@@ -1722,7 +1722,9 @@ impl Drone {
         if self.anim.call.is_none() && self.anim.state != anim { self.call_anim(d, anim, 0, 0) }
     }
 
-    /// `SetWalkIdleAnim`: in Patrol (SM id + 1) % 3 + 0x37, or 0x37 when the set lacks it.
+    /// `DroneAnim_SetWalkIdleAnim` (0x13cc70): in Patrol (SM id + 1) % 3 + 0x37, or 0x37 when the set lacks it.
+    /// The game's per-set danim existence test (`Drone_AnimTables[set]` + the state's record, then set 0) is
+    /// `can_do`; the level override and the 0x37..=0x39 cap are the game's own [M 0x13cc70:11-30].
     fn walk_anim(&self, d: &Data) -> u16 {
         // 07000014 always asks for 0x39.
         let a = if d.level == 0x0700_0014 { 0x39 } else { ((self.sm_id + 1) % 3) as u16 + anim_state::WALK };
@@ -2008,6 +2010,16 @@ impl Drone {
         }
     }
 
+    /// `DroneAnim_SetDAnimNow(danim, blend, wait, vars)` (0x13dd78): zero the completion action
+    /// (`+0x596` / `+0x598` — the game's fields, here the `call` tuple's action half), run
+    /// `DroneAnim_SetDAnimInternal`, and when the script started mark the call reached (`+0x57B`).
+    /// The `wait` argument (the game's third, +0x578) is 0 at every ported call site.
+    fn set_danim_now(&mut self, d: &Data, danim: u16, blend: u16) {
+        if let Some(c) = self.anim.call.as_mut() { c.1 = 0; c.2 = 0; }
+        self.set_danim(d, danim, blend);
+        if self.anim.script.is_some() && !self.anim.started { self.anim.reached = true; }
+    }
+
     /// `DroneAnim_SetScript(script, state, follow-on, …, next AI state, message, flags)` (0x13e088): play a script by
     /// hashcode as anim state `state`, class 1, the call already reached with the given completion; flags 0 = one-shot.
     fn play_script(&mut self, d: &Data, hash: u32, state: u16, follow_on: u16, next_ai: u8, done_msg: u8) {
@@ -2040,9 +2052,11 @@ impl Drone {
 
     /// `DroneAnim_CallAnim` with a variant (consecutive danims of a record, e.g. 0x4B × 3). A state the anim set
     /// cannot do is replaced (0x22 → 0x21, 0x0B → 0x0A …, else 0x21; 0x24 when even that is missing). The playing
-    /// state completes at once (`CallFullyComplete`: the AI state is queued and the message routed now), or with no
-    /// completion action zeroes the call (`ZeroAnimCall`); the same request again keeps the running call; anything
-    /// else replaces it (`+0x55C` = the state playing now, `+0x57B` cleared).
+    /// state completes at once (`DroneAnim_CallFullyComplete` 0x13dcb8: the AI state is queued and the message
+    /// routed now — its `DroneAnim_SetEndAIState` 0x13dd00), or with no completion action zeroes the call
+    /// (`DroneAnim_ZeroAnimCall` 0x13dc90: the game memsets the +0x558 record, keeping +0x596/+0x598 — here both
+    /// are the one `call`, and the game only takes this arm with both zero); the same request again keeps the
+    /// running call; anything else replaces it (`+0x55C` = the state playing now, `+0x57B` cleared).
     fn call_anim_variant(&mut self, d: &Data, state: u16, variant: u16, next_ai: u8, done_msg: u8) {
         self.yaw_offset = 0.0; // `DroneAnim_CallAnim`'s yaw-offset argument is 0 except in SetCombatMoveAnim (*suggested*)
         let mut state = state;
@@ -3765,8 +3779,15 @@ impl Drone {
 
     // ---- cover (docs/systems/drone-cover.md) ---------------------------------------------------------------------
 
-    /// The anim predicates of `NDrone2_CoverNodeOK` / `DroneAnim_CoverAnim` for a corner node: which cover types this
-    /// drone can use there (crouch lean, crouch step, stand lean, stand step) and whether crouching is forced.
+    /// The anim predicates of `NDrone2_CoverNodeOK` (0x151d68) / `DroneAnim_CoverAnim` (0x13c078) for a corner
+    /// node: which cover types this drone can use there (crouch lean, crouch step, stand lean, stand step) and
+    /// whether crouching is forced. The four gates are the game's
+    /// `DroneAnim_CanCrouchLean` (0x13b9e0), `DroneAnim_CanCrouchStepOut` (0x13bb38),
+    /// `DroneAnim_CanStandLean` (0x13bc60) and `DroneAnim_CanStandStepOut` (0x13bde8): the node byte 0 the game
+    /// tests (1 = low, `Drone_CoverLowNode` 0x137340 writes it, corner memset 0 [M 0x136ff0]) is `is_corner()`
+    /// here, and the per-set danim existence test (`Drone_AnimTables[set]` record nonzero) is `can_do`. The second
+    /// tuple element is `DroneAnim_ForceCrouchCover` (0x13e3f8): property 0x10, or a corner whose stand bit (8)
+    /// is clear — the game's node byte 0 != 0 arm is the low node, which never reaches this corner-only path.
     fn cover_types(&self, d: &Data, n: &crate::cover::CoverNode) -> ([bool; 4], bool) {
         let p = |id| self.prop(d, id);
         let lean = p(0xa) || p(0xb) || p(0xd);
@@ -3780,7 +3801,8 @@ impl Drone {
          p(0x10) || (c && n.flags & 8 == 0))
     }
 
-    /// `CanUseCornerAsLowCover`: a low node or a crouch-only corner.
+    /// `DroneAnim_CanUseCornerAsLowCover` (0x13e450): a low node (byte 0 = 1) or a crouch-only corner
+    /// (flags 4 set, stand 8 clear — the game's `+8 as u64 & 0xc00000000 == 0x400000000`).
     fn as_low(n: &crate::cover::CoverNode) -> bool { !n.is_corner() || n.flags & 0xc == 4 }
 
     /// `NDrone2_CoverNodeOK(node, side, needLos)` (0x151d68): the side (1, 2, 3) or 0.
@@ -5308,7 +5330,9 @@ impl Drone {
             // 07000006 whose 1244-frame start script ends settles into IDLE, fix-npcs' d15); the
             // 0x6000168/0x6000169 arms → `CallAnim(0, 10, 0, 0x68, 0, 0)` + AttackTalk and the state is
             // HELD (the 07000001 guard's script 06000169 ends into his idle-then-aim follow-up);
-            // 0x60007ac → `SetDAnimNow(0xf4, 0, 1)` + the start state (no 0x60007ac drone is ported).
+            // 0x60007ac → `DroneAnim_SetDAnimNow` (0x13dd78) of danim 0xf4 with blend 0, wait 1, plus the
+            // +0x4f8 0x400000 clear and +0x54c = π [M 0x15ba68:135-138], then the start state (no 0x60007ac
+            // drone is ported — the sub-arm stays unported, its +0x4f8 bit has no port reader).
             (PLAY_SCRIPT, msg::ANIM_DONE) => {
                 let played = self.anim.script.unwrap_or(0);
                 self.start_script = 0;
@@ -6402,15 +6426,23 @@ impl Drone {
             }
             (HOSTAGE_IDLE, msg::BULLET) => self.on_bullet_resume(d, rng, frame, 0, false),
             // Hostage (0x15cb78 — state 0x0a [L NDrone2_StateFuncs 0x29b300]) ENTER:
-            // `Drone_AlertStatusSet(0)` [M 0x15cb78 enter arm] and the cower anim; the captor link
-            // (+0x2B0) is bound by `NDrone2_SetupHostageKiller` 0x144030 — the port binds it at the
-            // `Drones` tick (the nearest armed, alive guard; the `captor_pool` snapshot). UPDATE
+            // `Drone_AlertStatusSet(2)` [M 0x15cb78 case 1 — the old port's status-0 read missed the
+            // case-1 arm; status 2 = the 0x2f5cc8 table row 0.66 [D ee_start_07000001.bin @ 0x2f5cc8]]
+            // and the kneel call `CallAnim(0, 0x21, …)` [M case 1 — the port plays the COWER 0x19
+            // stand-in; the visible anim needs the main agent's render before it changes]; the captor
+            // link (+0x2B0) is bound by `NDrone2_SetupHostageKiller` 0x144030 — the port binds it at
+            // the `Drones` tick (the nearest armed, alive guard; the `captor_pool` snapshot). UPDATE
             // lives there too: captor gone or its health ≤ 0 → HostageSaved [M 0x15cb78:24-36].
             (HOSTAGE, msg::ENTER) => {
-                self.alert = 0.0;
+                self.alert = 0.66;
                 self.call_anim(d, anim_state::COWER, 0, 0);
                 true
             }
+            // Hostage case 5 (ANIM_DONE) [M 0x15cb78:38-41]: `DroneAnim_SetDAnimNow` (0x13dd78) re-asserts
+            // danim 0xf4 with blend 0 — the kneel pose, restarted whenever its one-shot ends. No ported sender
+            // routes msg 5 to a hostage on the shipped path (the ENTER call's completion message is 0), so the
+            // arm waits like the game's dispatch; the abseil landing exercises `set_danim_now` for real.
+            (HOSTAGE, msg::ANIM_DONE) => { self.set_danim_now(d, 0xf4, 0); true }
             // HostageSaved (0x15ccf0 — state 0x0c [L 0x29b300]) ENTER [M 0x15ccf0:16-44]:
             // `Drone_AlertStatusSet(0)`, clear the captor link, `Music_Event(0x10, 1)` (the port
             // has no music-event consumer in Sim — skipped), then `DroneFunc_HostageSaved`
@@ -7156,9 +7188,11 @@ impl Drone {
             // Timer C (case 0xc) → Attack 0x56 [M 0x169488:40]. The other msgs are unhandled
             // (default → 0 → the GLOBAL handler).
             (state::ELEVATOR_JUMPER, msg::TIMER_C) => { self.set_state(state::ATTACK); true }
-            // AbseilInit 0x8e (0x169610). ENTER: flag 0x10000, SetDAnimNow(0xb) (the rope-grab danim),
-            // timer C at now + Rand_Rand(60), +0xcc8 = 0, +0xcc0 = 1, +0x23 = 1, the rope point =
-            // the object position, +0xcd8 = 0 [M case 1].
+            // AbseilInit 0x8e (0x169610). ENTER: flag 0x10000, `DroneAnim_SetDAnimNow` (0x13dd78) of danim 0xb
+            // (the rope-grab danim — the game's clear-completion + `SetDAnimInternal` + mark-reached on a started
+            // script; a fresh abseiler has no pending call, `set_danim` is the same work), timer C at now +
+            // Rand_Rand(60), +0xcc8 = 0, +0xcc0 = 1, +0x23 = 1, the rope point = the object position, +0xcd8 = 0
+            // [M case 1].
             (state::ABSEIL_INIT, msg::ENTER) => {
                 self.set_danim(d, 0xb, 0);
                 self.timer_c = Some(frame + rng.rand(60) as u32);
@@ -7275,16 +7309,20 @@ impl Drone {
             }
             // UPDATE (case 3): on 0700004a wait to be drawn, then Enable(0) + obj+0xfe |= 1 (the soft
             // delete); elsewhere wait for +0xcdc == 0 and the feet probe (the corpse landed) → danim
-            // 10, +0xcdc = 1, DEAD 0x47 [M case 3].
+            // 10, +0xcdc = 1, DEAD 0x47 [M case 3]. The game's danim 10 arm is `DroneAnim_SetDAnimNow`
+            // (0x13dd78: clear the completion action, `SetDAnimInternal(10, 0, 0)`, mark +0x57B on a
+            // started script) followed by `+0x596 = 0x47` [M 0x169b28:53-55]; the port starts the danim
+            // (`set_danim`) and queues DEAD directly — the same routing, one call-handler tick earlier.
             (state::ABSEIL_DEATH, msg::UPDATE) => {
                 if d.level == 0x0700_004a {
                     if self.drawn { self.present = false; self.enabled = false; }
                 } else if !self.abseil_land_latch {
                     // The landing gate is +0xcdc (NOT +0xcd8 — the old port polled the death-channel
                     // latch here and never landed) [M 0x169b28 case 3]: the feet probe (anim+0x60 & 8,
-                    // the collision handler's own flag) → danim 10, +0xcdc = 1, DEAD 0x47.
+                    // the collision handler's own flag) → danim 10, +0xcdc = 1, DEAD 0x47. The danim
+                    // arm is `DroneAnim_SetDAnimNow` (0x13dd78) — see the UPDATE comment above.
                     if self.on_surface {
-                        self.set_danim(d, 10, 0);
+                        self.set_danim_now(d, 10, 0);
                         self.abseil_land_latch = true;
                         self.set_state(state::DEAD);
                     }
@@ -12822,7 +12860,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             let _pa = crate::prof::scope("drone: update_anim");
             if let Some((next_ai, done_msg)) = dr.update_anim(d) {
-                // `SetEndAIState`: the AI state is queued, then the message routed (which applies the queued state).
+                // `DroneAnim_CallFullyComplete` 0x13dcb8's deferred arm via `DroneAnim_SetEndAIState` (0x13dd00):
+                // the AI state is queued, then the message routed (which applies the queued state).
                 dr.set_state(next_ai);
                 if done_msg != 0 || next_ai != 0 { dr.send(d, rng, frame, done_msg); }
             }
