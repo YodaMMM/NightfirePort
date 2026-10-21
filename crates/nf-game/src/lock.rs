@@ -340,6 +340,8 @@ impl Keypad {
     /// [M 0x1ae3d8:292-295]).
     pub fn close(&mut self) {
         self.open = false;
+    }
+}
 
 #[cfg(test)]
 mod tests {
