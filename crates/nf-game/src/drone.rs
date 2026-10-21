@@ -1421,9 +1421,13 @@ impl Drone {
             tase_recover: 0,
             dart_recover: 0,
             tase_fall_anim: 0,
-            // fix-finale-blockers: 07000016's chaser (skin 0x0500001e, dtype 0xf, no placement death
-            // channel [D]) carries 0x90 at init — the defeat stand-in documented in kiko.rs [S].
-            death_channel: crate::kiko::chaser_death_channel(d.level, skin, param(15) as u8, param(12) as u8),
+            // kiko-16-defeat: the death channel is the placement's own param 12 — the game's
+            // `DroneFunc_SetDeathChannel` 0x13e660 writes `switch_channels[+0x13c]` from it and
+            // nothing else. 07000016's chaser #261 carries param 12 = 0 [D] (no death channel);
+            // her defeat raises nothing — the objective's ch 0x90 writer is the KikoDeathButton
+            // switch #693 [D hash 020008c1, p0 = 0x90; docs/levels/07000016.md §7]. The old
+            // init-forced-0x90 stand-in (kiko::chaser_death_channel) is removed.
+            death_channel: param(12) as u8,
             special_death: param(13), special_spot: pos, special_yaw: yaw,
             stationary: param(13) != 0 && param(13) != 0x0600_021f, alpha: 255.0, raise: None,
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,

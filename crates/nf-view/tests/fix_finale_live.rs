@@ -161,36 +161,33 @@ fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
         assert!(!sim.drones.channels.on(0x90), "the chaser's death raises ch 0x90 — her death channel is param 12 = 0 [D #261]; the writer is the switch #693 [D]");
         assert!(sim.drones.mission.status() != 6, "sister: the mission does not complete on the kill [D AND #271 waits for the button]");
     }
-    // THE REAL DEFEAT: Bond's own E on the KikoDeathButton #693 (7.02, 1.16, −155.61 [D]) in the
-    // tower room. Teleport-reach only (the walkreal's full walk is parked on the pit geometry);
-    // the press itself is the game's Player_Activate dispatch like the interactables test. The
-    // gate ch 0x8d (the corridor touch #616) is OFF on this route — the switch is usable
-    // [M Switch_Activate 0x1b02a8:22].
-    {
-        let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [7.02, 1.2, -154.0];
-        sim.bond.vel = [0.0; 3];
-    }
-    for _ in 0..10 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    // THE REAL DEFEAT: Bond's own E on the KikoDeathButton #693 — the switch's own position
+    // (7.02, 1.16, −155.61) [D] is the pick target (`Switch_GetNearest`/the use sphere centre on
+    // the placement origin), so the aim points AT it: the game's pick is a 1.0-radius sphere at
+    // head + 1 unit forward [M 0x1a5170:100-108], which swallows any eye within 2.0 of the
+    // origin. Teleport-reach only (the walkreal's full walk is parked on the pit geometry); the
+    // press itself is the game's Player_Activate dispatch like the interactables test. The gate
+    // ch 0x8d (the corridor touch #616) is OFF on this route — the switch is usable [M
+    // Switch_Activate 0x1b02a8:22]. The tower-room slab at this spot leaks (the probe run: Bond
+    // is shoved to (7.41, −153.78) and slides), so each press beat re-seats him 1.2 m north of
+    // the button facing it — the walkreal-lift re-seat pattern for reach, with the E itself the
+    // real input (the interactables test's shape, its aim pinned).
+    let at = [7.02f32, 1.16, -155.61];
     let mut pressed = false;
     for k in 0..240u32 {
         if scene.sim.as_ref().unwrap().drones.channels.on(0x90) { pressed = true; break; }
-        let sim = scene.sim.as_ref().unwrap();
-        let at = [7.02f32, 1.46, -155.61];
-        let desired = (at[0] - sim.bond.pos[0]).atan2(at[2] - sim.bond.pos[2]);
-        let err = {
-            let mut e = desired - sim.bond.yaw;
-            while e > std::f32::consts::PI { e -= std::f32::consts::TAU; }
-            while e < -std::f32::consts::PI { e += std::f32::consts::TAU; }
-            e
-        };
-        let eye = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
-        let to = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
-        let want_pitch = (to[1] / to[0].hypot(to[2]).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-        let input = Input {
-            turn: err.clamp(-0.08, 0.08),
-            look: (want_pitch - sim.bond.pitch).clamp(-0.06, 0.06),
-            ..Default::default()
+        let (desired, want_pitch, input) = {
+            let sim = scene.sim.as_ref().unwrap();
+            let desired = (at[0] - sim.bond.pos[0]).atan2(at[2] - sim.bond.pos[2]);
+            let eye = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+            let to = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+            let want_pitch = (to[1] / to[0].hypot(to[2]).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            let sim = scene.sim.as_mut().unwrap();
+            sim.bond.pos = [7.02, 1.2, -154.4];
+            sim.bond.vel = [0.0; 3];
+            sim.bond.yaw = desired;
+            sim.bond.pitch = want_pitch;
+            (desired, want_pitch, Input::default())
         };
         scene.sim.as_mut().unwrap().step_bond(input, false, false, k % 6 == 0);
     }

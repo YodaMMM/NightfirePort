@@ -26,21 +26,27 @@
 //! (07000016's drones are dtypes 2/8/0xf/12 [D]) — the port keeps the transition for fidelity and
 //! documents it as unreached.
 //!
-//! ## The chaser's defeat (ch 0x90)
+//! ## The chaser's defeat (ch 0x90) — the real path (kiko-16-defeat)
 //!
-//! The objective "Prevent Kiko from launching into space" completes on ch 0x90; AND #271 [ch 0x90]
-//! → ch 100 [D] → `Mission_Update` → 0x7300017 [M 0x182c60:111-112]. No writer of ch 0x90 exists
-//! in the level's data: its 13 triggers (the only muxes are #264/#271/#286/#342 [D]), all 300+
-//! scripts incl. the 07800016/07900016/07A00016 packs (event 0xD and the conditional 0x11 swept —
-//! none write 144 [D]), the SP outs (#262→129, #263→130, #272→185, #347→80, #348→142 [D]) and no
-//! drone's death-channel param 12 [D]. The code side: `DroneFunc_SetDeathChannel` 0x13e660 writes
-//! `switch_channels[+0x13c]` (param 12; #261's is 0 [D]) and the full `switch_channels` writer
-//! enumeration of the decompile (103 files) holds no 07000016 path to 144 [M].
+//! The objective "Prevent Kiko from launching into space" completes on ch 0x90; mux #618 (kind
+//! 0xec, out 0x64 = ch 100 ← input 0x90) [D] → `Mission_Update` → 0x7300017 [M 0x182c60:111-112].
+//! **The disc's writer of ch 0x90 is the KikoDeathButton #693** — the level's one kind-0x29
+//! switch (hash 020008c1 at (7.02, 1.16, −155.61)): param 0 = **0x90** the out channel, param 5
+//! = 0x8d the gate [D]. Bond's E on it runs `Switch_Activate` 0x1b02a8, which toggles
+//! `switch_channels[param 0]` when the gate channel is OFF (the mid-corridor touch #616 arms ch
+//! 0x8d, inhibiting the switch while ON [M 0x1b02a8:22]), the stored value matches and the
+//! switch's embedded script (0x60008ba [D], `Switch_Create` 0x1adcc0:44-46) is idle. The press is
+//! the defeat: pressing the button stops the launch, and the mission completes into the driving
+//! hand-off [D census; the earlier scans (triggers/scripts/SP outs/param 12) missed the kind-0x29
+//! family — docs/levels/07000016.md §7 records the correction].
 //!
-//! **The port's stand-in [S]**: on 0x07000016 the chaser — the skin-0x0500001e dtype-0xf drone at
-//! the silo edge that is NOT in the death-ch 23..26 pit squad (#294–297 [D]; #261 is the extra one,
-//! param 12 = 0 [D]) — carries death channel 0x90 at init. Killing her raises ch 0x90 exactly like
-//! the game's defeat; every other writer path stays untouched.
+//! The chaser — the skin-0x0500001e dtype-0xf drone at the silo edge spawned by the launch chain
+//! (not in the death-ch 23..26 pit squad, #294–297 [D]) — carries death channel param 12 = 0 [D
+//! #261]: **her death raises nothing**. `DroneFunc_SetDeathChannel` 0x13e660 writes
+//! `switch_channels[+0x13c]` from param 12 alone [M], and the port's death path is that write and
+//! nothing else. The earlier port forced ch 0x90 onto her at init (the documented stand-in,
+//! `kiko::chaser_death_channel`) — removed here; killing her plays her death and raises no
+//! channel.
 //!
 //! ## The ninja chain (0xa6/0xa7 …) — 07000004's assassin and 07000016's chaser
 //!
@@ -85,8 +91,9 @@
 //! - **NinjaNoRoute 0xb3** (0x16d878): ENTER alert 1.0, TIMER_C at +30, anim 0x6b, Fire(1); UPDATE
 //!   re-fire + angle + `+0x3B = (+0x228 >> 2) & 1`; TIMER_C MoveToObject(2.0): a route again (≤3)
 //!   → 0xa7, else re-arm at +30. The star throws ARE `DroneWeap_Fire(1)` — the ninja's weapon.
-//! The fight's CHANNEL effects — the assassin's death ch 0x54 on 07000004 [D], the chaser's 0x90
-//! stand-in — are the mission's business and stay death-path driven.
+//! The fight's CHANNEL effects — the assassin's death ch 0x54 on 07000004 [D], and 07000016's
+//! objective channel owned by the KikoDeathButton (§ above; the chaser's death raises nothing) —
+//! are the mission's business and stay death-path driven.
 //! `Drone+0x2C8` (the +0x2A-gated attack-hold counter, `NDrone2_PreDroneControl` 0x148db0:29-34)
 //! is ported as `attack_hold`, incremented while the opponent is seen [S — the +0x2A writer is
 //! untraced].
@@ -144,12 +151,11 @@ pub const NINJA_FIGHT_STATES: [u8; 13] = [
     NINJA_STAND_FIRE, NINJA_NO_ROUTE,
 ];
 
-/// 07000016's chaser: skin 0x0500001e, dtype 0xf, not in the death-ch 23..26 squad (#294–297 [D]).
-/// Her init death channel becomes 0x90 so her defeat raises the objective's channel (the stand-in
-/// documented above) [S].
-pub fn chaser_death_channel(level: u32, skin: u32, dtype: u8, death_channel: u8) -> u8 {
-    if level == 0x0700_0016 && death_channel == 0 && dtype == 0xf && skin & 0xffff == 0x1e { 0x90 } else { death_channel }
-}
+/// 07000016's chaser: skin 0x0500001e, dtype 0xf, spawned by the launch chain (spawner #257,
+/// group 6 [D]); not in the death-ch 23..26 pit squad (#294–297 [D]) and the only such drone
+/// without a death channel — param 12 = 0 [D #261]. Her death raises nothing: the objective's
+/// ch 0x90 writer is the KikoDeathButton switch #693 [D; the section above]. The old
+/// `chaser_death_channel` init stand-in (0x90 forced at init) was removed in kiko-16-defeat.
 
 /// The state arms for this module live in `drone.rs`'s state `match` (the Drone methods they call
 /// are private to that impl); `drone.rs` cites this module's doc for every address. The band router
