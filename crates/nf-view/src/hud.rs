@@ -447,8 +447,11 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             }
         }
     }
-    // Health / armour pane (fade factor F = 1: `PlayerSetting+0xB` = 0 [L] holds `BL+0x8BC` at 1).
-    let f = 1.0f32;
+    // Health / armour pane fade factor F = min(4·BL+0x8BC, 1) [M HUD_UpdateHealthPane 0x19b9c8:117-126]
+    // — every segment's alpha and the backing's 140 scale by it. BL+0x8BC is `pain_alpha`: 1 after
+    // damage/pickups, decaying only while the pane-fade option (`PlayerSetting+0xB`, `decay_gate`)
+    // is on [M Player_Update 0x193600:414]; with the default Off it holds 1 (F = 1).
+    let f = (s.drones.pain_alpha * 4.0).min(1.0);
     let armour = s.drones.health.armour * 0.16;
     // The health pane hides while the guided camera rides ("the health bar and the crosshair are gone while it
     // flies" [L PCSX2 2026-10-13]) — `HUD_UpdateHealthPane` 0x19b9c8:126-219 sets sprites 0..15 to layer 0xff
