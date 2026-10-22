@@ -180,14 +180,17 @@ fn no_opponent_waits_then_attacks_when_one_exists() {
     let d = l.data(L05);
     let (mut sim, gi) = guard_sim(&l);
     let far = bond_far();
-    sim.list[gi].ever_seen = false;
+    // The opponent pointer +0x170 is Bond while he lives, zeroed only when his class-3 health is
+    // <= 0 [M NDrone2_FindOpponent 0x1424e0:100-120] (standins-drone-922: `bond_alive`, stamped
+    // per tick from the health) — "no opponent" is a dead Bond, not an unseen one.
+    sim.health.health = 0.0;
     let mark = sim.list[gi].log.len();
     enter(&mut sim, &d, gi, state::NO_OPPONENT, &far);
-    for _ in 0..150 { sim.list[gi].ever_seen = false; sim.tick(&d, &far); }
+    for _ in 0..150 { sim.health.health = 0.0; sim.tick(&d, &far); }
     assert_eq!(sim.list[gi].state, state::NO_OPPONENT, "no opponent: NoOpponent holds (timer C re-arms) [M 0x1650a0:36-42]; log {:x?}", sim.list[gi].log);
     assert!(!sim.list[gi].log[mark..].iter().any(|&(_, x)| x == state::IDLE), "the old port's straight drop to Idle is gone; log {:x?}", &sim.list[gi].log[mark..]);
     // Sister: an opponent object exists → Attack on the next update [M 0x1650a0:24-27].
-    sim.list[gi].ever_seen = true;
+    sim.health.health = 100.0;
     sim.tick(&d, &far);
     sim.tick(&d, &far);
     assert!(entered(&sim, gi, state::ATTACK), "an opponent → Attack 0x56; log {:x?}", sim.list[gi].log);
