@@ -11,7 +11,6 @@
 //!
 //! Sister: the unbroken door opens from the same stand (the sphere rule untouched).
 
-use nf_view::dev;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
