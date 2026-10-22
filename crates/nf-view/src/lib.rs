@@ -7133,11 +7133,10 @@ mod headless_app_harness {
         fe.opts.insert(0x1000_0129, 1); // the MP row On
         h.app.fe = Some(fe);
         h.app.drain_options();
-        let sim = h.app.scene.sim.as_mut().unwrap();
-        assert!(!sim.auto_aim, "an SP match reads the SP row");
-        sim.drones.mp_shared_pickups = true; // the port's MP-match mark [S]
+        assert!(!h.app.scene.sim.as_ref().unwrap().auto_aim, "an SP match reads the SP row");
+        h.app.scene.sim.as_mut().unwrap().drones.mp_shared_pickups = true; // the port's MP-match mark [S]
         h.app.drain_options();
-        assert!(sim.auto_aim, "an MP match reads the MP row [M 0x1a7c98:44]");
+        assert!(h.app.scene.sim.as_ref().unwrap().auto_aim, "an MP match reads the MP row [M 0x1a7c98:44]");
     }
 
     // options-census: the pane-fade alpha (BLData+0x8bc) decays under the gate and pins at 1.0
