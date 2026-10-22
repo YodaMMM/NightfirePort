@@ -131,3 +131,104 @@ fn escort_still_leads_after_the_hide_arm() {
     }
     assert!(led, "the escort resumes the lead once the peers are gone [M 0x15ec08:23-29 + 0x15e698 case 3]");
 }
+
+/// The hide's timer exit re-anchors the mission route before the lead resumes
+/// [M 0x15ec08 case 0xc]: `NDrone2_ReFindMissionPath` 0x153a30 runs FIRST and its reachable-anchor
+/// arm returns non-0 → AllyLeadWait 0x20 (the old port arm jumped straight to AllyLead 0x1d on the
+/// stale route — the walkreal arrival wedge: after a cover run that left the route the lead never
+/// moved again). Fails on that stand-in.
+#[test]
+fn the_hides_exit_reanchors_the_mission_route_before_the_lead_resumes() {
+    let mut w = Walker::new(nf_view::load(&iso(), "07000001.bin", false).expect("load 07000001"));
+    let mut enabled_at = None;
+    for t in 0..4000u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0xb) { enabled_at = Some(t); break; }
+    }
+    enabled_at.expect("the intro must write ch 0xB");
+    w.wait_enabled(6000, "the intro tail");
+    let ci = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| d.skin == 0x0500_004f).expect("the contact");
+    // The courtyard's armed guards hide him (the first test's flow) and the hide latches.
+    let mut hid = false;
+    for _ in 0..4800u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.list[ci].state == state::LEAD_HIDE { hid = true; break; }
+    }
+    assert!(hid, "the armed peers hide the contact (LeadHide [M 0x15ec08 case 3])");
+    // The guards keep the hide latched; the exit fires only when the 14-band clears. Bond walks
+    // the guards down through the real fire path (the escort_follow opener, condensed).
+    let mut cleared = std::collections::HashSet::new();
+    let mut exited_at = None;
+    let mut pre: Option<(nf_game::world::V3, Option<nf_game::nav::Route>)> = None;
+    'outer: for _round in 0..12 {
+        let cp = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
+        let guards: Vec<usize> = { let sim = w.scene.sim.as_ref().unwrap();
+            (0..sim.drones.list.len()).filter(|&i| {
+                let d = &sim.drones.list[i];
+                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled
+                    && walker::dxz(d.pos, cp) < 14.0 && !cleared.contains(&i)
+            }).collect() };
+        for g in guards {
+            let (gpos, los_clear) = { let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g];
+                let bp = sim.bond.pos;
+                let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                (d.pos, sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none()) };
+            let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
+            if walker::dxz(gpos, bpos) > 9.0 || !los_clear { w.walk_nav_to(gpos, &format!("approach guard {g}"), 3.0); }
+            if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare < 8 { w.resupply("ammo"); }
+            let killed = w.shoot(g, &format!("guard {g}")) || { w.resupply("ammo retry"); w.shoot(g, &format!("guard {g}")) };
+            let sim = w.scene.sim.as_ref().unwrap();
+            if killed || sim.drones.list[g].corpse || sim.drones.list[g].health <= 0.0 { cleared.insert(g); }
+        }
+        // The hide's latch decays with no armed peer within 14; the timer (2 ticks) then exits.
+        // A guard re-entering the 10-band re-triggers the cover arm (0x28) inside the wait — that
+        // is not the exit under test: only a LEAD_HIDE→x transition with the 14-band clear counts.
+        // While he hides, keep the pre-exit snapshot (the cower is in place).
+        for _ in 0..600u32 {
+            w.tick(Default::default(), false);
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[ci];
+            let armed_near = sim.drones.list.iter().enumerate().any(|(i, o)| {
+                i != ci && o.team == 1 && o.started && !o.corpse && o.enabled && walker::dxz(o.pos, d.pos) < 14.0
+            });
+            if d.state == state::LEAD_HIDE {
+                pre = Some((d.pos, d.route.clone()));
+                continue;
+            }
+            if armed_near { continue; } // re-hidden mid-wait — keep waiting for the real exit
+            eprintln!("[hide-exit] left LeadHide at tick {} into {:#x} (armed_near {armed_near})", w.total_ticks, d.state);
+            exited_at = Some(w.total_ticks);
+            break 'outer;
+        }
+    }
+    exited_at.expect("the hide must exit once the 14-band clears [M 0x15ec08 case 3]");
+    // The re-anchor, pinned on the game's own scan [M 0x153a30]: the anchor is the route node
+    // nearest the contact's hide spot that MoveTest reaches (the first reachable inside 20 sets the
+    // bound, later ones only when closer), and after the exit the mission route's index IS that
+    // node with the +0x860 route freshly built to it. The old arm left the index where the follow
+    // had stopped and the +0x860 route pointing at the cover run's AI point — both asserts fail.
+    let (hide_pos, hide_route) = pre.expect("the contact hid with a mission route");
+    let mut route = hide_route.expect("the lead carries the mission route (+0x970)");
+    let sim = w.scene.sim.as_ref().unwrap();
+    let (nav, world) = (&sim.nav, &sim.world);
+    let feet = [hide_pos[0], hide_pos[1] - 0.6, hide_pos[2]];
+    let mut best: Option<(usize, f32)> = None;
+    for k in 0..route.nodes.len() {
+        let np = nav.paths[route.path].nodes[route.nodes[k] as usize].pos;
+        let sq = (np[0] - hide_pos[0]).powi(2) + (np[2] - hide_pos[2]).powi(2);
+        let test = match best { None => sq < 400.0, Some((_, bs)) => sq < bs };
+        if test && nav.move_test(world, feet, np, false, false).0 == 1 { best = Some((k, sq)); }
+    }
+    let anchor = best.map(|(k, _)| k).expect("a route node is reachable from the hide spot");
+    let anchor_pos = nav.paths[route.path].nodes[route.nodes[anchor] as usize].pos;
+    assert_eq!(route.index, anchor as i32,
+        "the hide's exit re-anchors the mission route's index to the reachable node nearest the hide spot [M 0x153a30:105] — got index {} want {anchor}", route.index);
+    let cr = sim.drones.list[ci].croute.as_ref().expect("the +0x860 route is rebuilt to the anchor [M 0x153a30:141-144]");
+    assert!(walker::dxz(cr.dest, anchor_pos) < 0.5,
+        "the rebuilt route ends at the anchor node ({anchor_pos:?}), not {:?} (the cover run's AI point)", cr.dest);
+    // The re-anchored route still walks: the lead machine makes progress again.
+    let d = &sim.drones.list[ci];
+    assert!(matches!(d.state, state::ALLY_LEAD | state::ALLY_LEAD_WAIT | state::PLAYER_IN_WAY | state::GO_TO_GOAL_ALLY | state::GO_TO_GOAL),
+        "the lead machine resumes after the re-anchor (state {:#x})", d.state);
+}

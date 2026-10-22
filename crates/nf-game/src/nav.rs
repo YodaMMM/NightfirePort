@@ -572,8 +572,9 @@ impl Route {
 
     fn node_pos(&self, net: &Network, k: usize) -> V3 { net.paths[self.path].nodes[self.nodes[k] as usize].pos }
 
-    /// `LinkCreep_Calc(index)`.
-    fn calc(&mut self, net: &Network, i: i32) {
+    /// `LinkCreep_Calc(index)`. `pub(crate)`: `Drone::re_find_mission_path` re-creeps the
+    /// re-anchored route [M 0x153a30:106, 174].
+    pub(crate) fn calc(&mut self, net: &Network, i: i32) {
         let count = self.nodes.len() as i32;
         if count == 0 { self.creep = Creep::new(self.start, self.dest, None); return; }
         let j = match self.mode { RouteMode::Loop => (i + 1).rem_euclid(count), _ => (i + 1).min(count - 1) };

@@ -4041,6 +4041,81 @@ impl Drone {
         }
     }
 
+    /// `NDrone2_ReFindMissionPath` (0x153a30): re-anchor the mission route (+0x970) after the lead
+    /// left it. The route's own index `+0x80` (route at Drone+0x970 → Drone+0x9F0) and node count
+    /// `+0x82` (+0x9F2) are the anchor pair; the ordered node list +0xf0 (+0xA60) indexes the path's
+    /// node array +0xf4 (+0xA64). The scan [M 0x153a30:213-273]:
+    /// - `best_reach`: the node nearest the drone's POSITION that a `MoveTest(feet, node, 0,0,1)`
+    ///   reaches [M :235-237 — the want_hit-0 / no-post-band form, `near=false` here] — a node is
+    ///   only tested while none passed and its SqDist2D < 400.0, or when closer than the incumbent
+    ///   [M the `(uVar13 == 0xffff) || (fVar15 < fVar16)` gate, `fVar16` from 400.0]; the movement
+    ///   lock (+0x4f8 & 0x10) skips the test entirely [M :225];
+    /// - `best_any`: the closest node by SqDist2D, the first one unconditionally [M :249-267].
+    /// Anchor + `LinkCreep_Calc(route, 0)` (the creep re-calc at the route's index — its Sc arg is
+    /// the back flag [M 0x159b10:16, 89]) + the `+0x670` refresh via `LinkCreep_Dest(route, 0)`
+    /// (the creep point at the current step) [M :106-133, 174-201], then:
+    /// - reachable anchor → `InvalidateRoute(+0x860)`×2 + `SetupGoalPosition(2.0, node)` +
+    ///   `MoveToGoalPosition`, return 1 — the caller (LeadHide's timer) proceeds to AllyLeadWait
+    ///   [M :202-211];
+    /// - unreachable-but-closest anchor → the same with accuracy 1.0; the move code 0..3 parks the
+    ///   drone in `DSTATE_GoToGoalPosition` 0x63 and returns 0 [M :134-158]; else the goal falls to
+    ///   the PLAYER (`SetupGoalPosition(2.0, player)`, return 0) [M :160-169];
+    /// - no route (the count-0 path) → goal = the player, return 0 [M :101 → 160-169].
+    /// The route+0xd8==9 re-resolve of Drone+0x954 inside the unreachable arm is not modelled (the
+    /// port carries no route+0xd8; *suggested* — it only fires behind the follow-failure latch).
+    fn re_find_mission_path(&mut self, d: &Data) -> bool {
+        let feet = self.feet();
+        let node_pos = |route: &crate::nav::Route, k: usize| d.nav.paths[route.path].nodes[route.nodes[k] as usize].pos;
+        let (mut best_reach, mut best_any) = (None, None); // (node list index, SqDist2D)
+        if let Some(route) = self.route.as_ref() {
+            for k in 0..route.nodes.len() {
+                let np = node_pos(route, k);
+                let sq = (np[0] - self.pos[0]).powi(2) + (np[2] - self.pos[2]).powi(2);
+                let test = match best_reach {
+                    None => sq < 400.0,
+                    Some((_, bs)) => sq < bs,
+                };
+                if test && !self.stationary {
+                    // `NDrone2_MoveTest(feet, node, 0, drone, 0, 0, 1)` [M :235-236] — the gate pair
+                    // (0, 0) runs no post band and records no hit; `near=false` here.
+                    if d.nav.move_test(d.world, feet, np, false, false).0 == 1 {
+                        best_reach = Some((k, sq));
+                    }
+                }
+                match best_any {
+                    None => best_any = Some((k, sq)),
+                    Some((_, bs)) if sq < bs => best_any = Some((k, sq)),
+                    _ => {}
+                }
+            }
+        }
+        let anchor = best_reach.or(best_any);
+        let Some((k, _)) = anchor else {
+            self.croute = None; // ResetRoute + InvalidateRoute(+0x860) [M :166-167]
+            self.goal = Some(self.player_pos); // SetupGoalPosition(2.0, the player) [M :168-169]
+            return false;
+        };
+        {
+            let route = self.route.as_mut().unwrap();
+            route.index = k as i32; // `+0x9f0 = anchor` [M :105, 173]
+            route.calc(d.nav, route.index); // `LinkCreep_Calc(route, 0)` [M :106, 174]
+            route.target = route.creep.a; // `LinkCreep_Dest(route, 0)` → +0x670 [M :108, 115-118, 176]
+        }
+        self.croute = None; // InvalidateRoute(+0x860) [M :139-140, 203-204]
+        let np = node_pos(self.route.as_ref().unwrap(), k);
+        self.goal = Some(np); // SetupGoalPosition(2.0 / 1.0, the node) [M :141-142, 205-206]
+        let code = self.move_to_goal(d); // [M :143-144, 207-208]
+        if best_reach.is_some() { return true; }
+        if matches!(code, 0..=3) {
+            self.set_state(state::GO_TO_GOAL); // `SetState(99)` [M :156]
+            return false;
+        }
+        self.croute = None;
+        self.goal = Some(self.player_pos); // the waypoint route failed → the player [M :160-169]
+        false
+    }
+
+
     /// `Switch_GetNearest` (0x1b0398) + `Switch_GetSwitchChannel` (0x1b0430): the nearest switch's
     /// channel by squared 3-D distance over the level's switches (`alarm_switches`); 0 when none.
     fn nearest_switch_channel(&self) -> u8 {
@@ -6533,7 +6608,14 @@ impl Drone {
                 }
                 true
             }
-            (LEAD_HIDE, msg::TIMER_C) => { self.set_state(ALLY_LEAD); true }
+            (LEAD_HIDE, msg::TIMER_C) => {
+                // [M 0x15ec08 case 0xc]: the hide's exit re-anchors the mission route first
+                // (`NDrone2_ReFindMissionPath` 0x153a30 — the lead may have left the route for the
+                // cover run); its 0 means it already routed the drone (state 99) or aimed it at the
+                // player and the state stays; non-0 (the reachable-anchor arm) → AllyLeadWait 0x20.
+                if self.re_find_mission_path(d) { self.set_state(ALLY_LEAD_WAIT); }
+                true
+            }
             // AllyLeadMissionWait 0x21 (0x15efc8): the route's wait-channel node parks the escort until
             // the channel fires. The port's route nodes carry no channels — the state is reachable
             // through the forced-state path only [*suggested*; documented].
