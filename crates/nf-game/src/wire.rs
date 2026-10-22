@@ -267,6 +267,11 @@ pub struct RootTrack {
 }
 
 impl RootTrack {
+    /// (`AnimGetFrameTransRaw` 0x1c73d0 — the game's helper behind `Player_CollWire` 0x197130's hand-reach
+    /// correction: `AnimSeqGetInfo` + `AnimFrameCopy(frame, out, seqinfo, 0)` for a sequence's raw frame
+    /// translation, VECTOR out — maps onto this track: the parsed `Sequence` is the seq info and these samples
+    /// are channels 0/1/2 per frame through the same `AnimFrameCopy` evaluation (`Sequence::value`); the
+    /// caller never uses VECTOR[3]. Consumed by `Bond::grab_wire` [M 0x1974b8-0x197538].)
     pub fn of(seq: &nf_formats::anim::Sequence) -> RootTrack {
         let n = seq.frames.max(1) as u32;
         RootTrack {

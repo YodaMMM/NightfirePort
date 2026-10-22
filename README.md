@@ -58,48 +58,41 @@ The port's images in this README were rendered by the port at 1280x720; the left
 
 ## Performance
 
-![Port vs PCSX2 on the same PC: fastest frame rate and CPU needed for 240 fps, plus internal before/after fixes](docs/readme/gfx/performance.svg)
+![Port vs PCSX2 on the same PC: fastest frame rate, CPU to hold 240 fps, every level's frame time](docs/readme/gfx/performance.svg)
 
-Measured on one PC (Ryzen 9 7900X, RTX 4090) on 2026-10-17 at the start of level 07000005: with the frame limiter off, PCSX2 (Vulkan, 4x internal resolution) reaches 104 fps and the port 597 fps at 2560x1440 (589 at 1920x1080, 609 at 1280x720). On a 240 Hz monitor with vsync the port holds 240 fps on 57 % of one core; PCSX2 cannot reach 240 at all. The two frame rates do not mean the same thing: PCSX2's is emulation throughput (at its "173 %" readout the whole game, logic included, runs 1.73x fast), while the port keeps the game logic at a fixed 60 Hz and renders as many interpolated frames as the hardware allows, so 597 fps is rendered frames at normal game speed. PCSX2 is also drawing a 4x upscale of the PS2's ~512x448 frame, where the port renders natively at the window size.
+Measured on one PC (Ryzen 9 7900X, RTX 4090, Windows 10) on 2026-10-21 at the start of The Exchange (level 07000005). With the frame limiter off, PCSX2 2.8.2 (Vulkan, 4x internal resolution) reaches 110 fps by its own overlay, and the port 1,220 fps by its frame log (median of three 10-second runs at a 2543x1400 window, the largest the desktop allows; 1,209 at 1920x1080, 1,210 at 1280x720). On a 240 Hz monitor with vsync the port holds 240 fps on 33 % of one core; PCSX2 cannot reach 240 at all, and at the game's own 60 fps it uses 81 % of a core.
 
-Internally, the biggest fix was the skin palette (35 ms to 1.4 ms per frame on 07000005, on a frame that had been 52 ms in total), followed by portal culling (4,526 to 177 world draws at the start of 07000007); skinning now runs on the GPU and per-frame cost budgets are checked by the test suite.
+The two frame rates do not mean the same thing. PCSX2's is emulation throughput: at its "183 %" readout the whole game, logic included, runs 1.83x fast. The port keeps the game logic at a fixed 60 Hz and renders as many interpolated frames as the hardware allows, so 1,220 fps is rendered frames at normal game speed. PCSX2 is also drawing a 4x upscale of the PS2's ~512x448 frame, where the port renders natively at the window size.
 
-### Frame time per level (2026-10-17)
+### Frame time per level (2026-10-21)
 
-A second round of render work (commit `2b8a33f7`) cut the per-frame cost on every on-foot level:
+Average frame time at each on-foot story level's start view, release build, a real 1920x1080 window, limiter off (one 10-second run per level after 20 seconds of warm-up). 240 Hz needs 4.17 ms or less.
 
-- CPU culling now runs before any per-draw work, and draws parked off the map are skipped.
-- Per-draw data is packed into one storage array (80 bytes per draw), bound once per frame and indexed by instance, instead of a dynamic-offset uniform rebind for every draw.
-- Repeated texture binds are skipped.
-- Skin-palette interpolation only touches entries that moved between ticks, and hidden characters are not posed.
+| Level | Frame time |
+|---|---|
+| 07000001 | 0.64 ms (1,551 fps) |
+| 07000002 | 0.74 ms (1,356 fps) |
+| 07000003 | 0.98 ms (1,015 fps) |
+| 07000004 | 0.57 ms (1,754 fps) |
+| 07000005 | 0.82 ms (1,216 fps) |
+| 07000006 | 0.91 ms (1,101 fps) |
+| 07000007 | 1.13 ms (888 fps) |
+| 07000008 | 0.70 ms (1,431 fps) |
+| 07000009 | 0.67 ms (1,491 fps) |
+| 0700000a | 0.85 ms (1,177 fps) |
+| 0700000b | 1.22 ms (817 fps) |
+| 0700000c | 1.26 ms (794 fps) |
+| 0700000d | 0.83 ms (1,204 fps) |
+| 07000011 | 1.48 ms (677 fps) |
+| 07000012 | 1.73 ms (579 fps) |
+| 07000013 | 0.83 ms (1,204 fps) |
+| 07000014 | 1.46 ms (684 fps) |
+| 07000015 | 1.42 ms (702 fps) |
+| 07000016 | 1.04 ms (962 fps) |
+| 0700001b | 0.59 ms (1,687 fps) |
+| 0700004a | 1.62 ms (619 fps) |
 
-Average frame time at the level start view, release build, in a real window on one PC. "Before" is the build just ahead of these changes; "after" is uncapped (no vsync).
-
-| Level | Before | After |
-|---|---|---|
-| 07000001 | 4.73 ms (212 fps) | 0.97 ms (1,028 fps) |
-| 07000002 | 5.38 ms (186 fps) | 1.04 ms (964 fps) |
-| 07000003 | 4.78 ms (209 fps) | 1.22 ms (821 fps) |
-| 07000004 | 4.16 ms (240 fps) | 0.76 ms (1,322 fps) |
-| 07000005 | 5.08 ms (197 fps) | 1.42 ms (707 fps) |
-| 07000006 | 5.90 ms (170 fps) | 1.29 ms (778 fps) |
-| 07000007 | 7.75 ms (129 fps) | 1.35 ms (743 fps) |
-| 07000008 | 4.51 ms (222 fps) | 1.22 ms (819 fps) |
-| 07000009 | 4.39 ms (228 fps) | 0.86 ms (1,159 fps) |
-| 0700000a | 5.56 ms (180 fps) | 1.16 ms (865 fps) |
-| 0700000b | 5.78 ms (173 fps) | 1.43 ms (701 fps) |
-| 0700000c | 8.36 ms (120 fps) | 2.41 ms (415 fps) |
-| 0700000d | 5.48 ms (182 fps) | 1.26 ms (793 fps) |
-| 07000011 | 6.71 ms (149 fps) | 1.76 ms (569 fps) |
-| 07000012 | 7.14 ms (140 fps) | 2.18 ms (460 fps) |
-| 07000013 | 4.19 ms (238 fps) | 1.20 ms (833 fps) |
-| 07000014 | 8.11 ms (123 fps) | 2.45 ms (409 fps) |
-| 07000015 | 7.18 ms (139 fps) | 1.15 ms (871 fps) |
-| 07000016 | 4.99 ms (200 fps) | 1.20 ms (830 fps) |
-
-Frame cost fell by 3.3x to 6.2x per level. The slowest level before was 0700000c at 8.36 ms (120 fps); the slowest after is 07000014 at 2.45 ms (409 fps). With vsync on a 240 Hz monitor, all 19 levels present a steady 240 fps.
-
-Not fixed yet: on some levels (07000007, 0700000d, 07000011, 07000015) an occasional single frame still takes 10–17 ms, a few times in 13 seconds. That is being investigated.
+The slowest level is 07000012 at 1.73 ms (579 fps). Measuring this table found a regression: a debug switch was being read once for every culled draw, which had pushed 07000007, 07000012 and 07000015 to 5.0-7.2 ms (140-200 fps). It is fixed, and the per-frame cost test is being extended to cover the render encode so a slip like it fails a test instead.
 
 ## Roadmap
 

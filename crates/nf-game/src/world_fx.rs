@@ -101,6 +101,66 @@ pub struct LeafGenFx {
     pub last_offset: [f32; 2],
 }
 
+/// One falling leaf particle — `Leaf_Update` 0x1abee0 (the motion integrator the
+/// `LeafGenFx` doc above leaves as the game's own). The game's object carries its position
+/// (+0x30/+0x34), rotation (+0x50), the generator-shared velocity (+0x10) and spin (+0x20)
+/// vectors, two life limits (instance s16+0x30 counts down 1 per tick; obj u8+0x106 is a tick
+/// budget spent at `instance u8+0x32` per tick) and the delete bit (obj+0xFE bit 0) [M 0x1abee0].
+///
+/// Per tick [M 0x1abee0:15-51] (the y wind draws `Rand_FRand(0.075)` = 0x3d99999a, the x/z drifts
+/// `Rand_FRand(0.005)` = 0x3ba3d70a; FRAME_RATE_MUL is 1.0 at the fixed 60 Hz [M GS_SetRefreshRate
+/// 0x17d2b8:15]):
+/// - `frames_left < 1` → delete; else `frames_left -= 1` (floored at 0 by the caller's `< 1` test);
+/// - `budget` (u8) − `tick_cost` ≤ 0 → delete; else `budget -= tick_cost`;
+/// - `pos += vel`, then `pos.y -= (Rand_FRand(0.075) − 0.025)` (mostly falling);
+/// - `vel.x += (Rand_FRand(0.005) − 0.0025)` and `vel.z += (Rand_FRand(0.005) − 0.0025)`;
+/// - `rot += spin`; the game also sets flags2 bit 0x20 (moved).
+/// Returns `false` when the leaf dies (the game sets the delete bit).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LeafFx {
+    /// obj+0x30: the position.
+    pub pos: V3,
+    /// obj+0x50: the rotation (the spin vector adds every tick).
+    pub rot: V3,
+    /// instance+0x10: the carried velocity (x/z drift; Leaf_Create's jitter slots).
+    pub vel: V3,
+    /// instance+0x20: the spin added to the rotation every tick.
+    pub spin: V3,
+    /// instance s16+0x30: the frame countdown.
+    pub frames_left: i16,
+    /// obj u8+0x106: the tick budget.
+    pub budget: u8,
+    /// instance u8+0x32: the per-tick budget cost.
+    pub tick_cost: u8,
+}
+
+impl LeafFx {
+    pub fn tick(&mut self, rng: &mut crate::drone::Rng) -> bool {
+        if self.frames_left < 1 {
+            return false;
+        }
+        self.frames_left -= 1;
+        let spent = self.budget as i16 - self.tick_cost as i16;
+        if spent <= 0 {
+            return false; // the game's `iVar3 > 0` guard fails → delete bit [M 0x1abee0:48-50]
+        }
+        self.budget = spent as u8;
+        for k in 0..3 {
+            self.pos[k] += self.vel[k];
+            self.rot[k] += self.spin[k];
+        }
+        self.pos[1] -= rng.frand(0.075) - 0.025;
+        self.vel[0] += rng.frand(0.005) - 0.0025;
+        self.vel[2] += rng.frand(0.005) - 0.0025;
+        true
+    }
+}
+
+/// The per-frame advance `Env_Tree_Update` 0x17c328 (`control_funcs` 0x26f890 class 0x3F)
+/// performs: `if (ScriptCam == 0) AnimObjectUpdate(obj)` — the sway script runs unless a script
+/// camera is active, and nothing else [M]. `TreeFx.paused` records the create-time pause bit; the
+/// anim-script advance itself is the world-object animation runtime's job (draw side).
+///
 /// One 0xf3 placement (`Env_Tree_Create` 0x17c200 — an object at the placement pose,
 /// `AnimObjectNew` + `AnimScriptAdd(anim)`: the sway animation; on every level but 0x7000043 the
 /// script's +0x78 gets 0x80000000 and a random start phase `Rand_FRand(anim length)` [M
@@ -245,7 +305,9 @@ pub struct ApocalypseFx {
     pub placement: usize,
     /// param 0: the latch channel.
     pub channel: u16,
-    /// param 2: the rumble strength (the port has no rumble; carried for completeness).
+    /// param 2: the rumble strength (the port has no rumble; carried for completeness —
+    /// likewise `Input_RumblePause` 0x17f710, `SP_LoadScript` 0x1dbc08:20's stop-all-pads
+    /// call before the blocking load, is a no-op here [M 0x17f710:4-9]).
     pub rumble: u16,
     /// param 3 / param 4: the whiteout / flashbang flags.
     pub whiteout: bool,
@@ -272,6 +334,11 @@ pub struct EmitterParticle {
 
 /// One 0xf2 placement.
 #[derive(Clone, Debug, PartialEq)]
+/// `Emitter_Kill` 0x17b960 (8 B) is the emitter object's `control_funcs` kill slot — entry
+/// type 0x32 at 0x26faf0 (`Emitter_Create` sets `obj+0xff = 0x32` [M 0x17ae00]) — and it is an
+/// empty `return`: emitter state dies with the object [M table dump; `control_delete_object`
+/// 0x133178 dispatches the +8 slot]. The port has no destructor table; the FX records here are
+/// recreated per level, so the null destructor needs no counterpart.
 pub struct EmitterFx {
     pub placement: usize,
     pub pos: V3,
@@ -315,6 +382,14 @@ impl EmitterFx {
 
 /// The frame's particle billboards (`Emitter_Draw` path A: a size-`def.size` rgba sprite per alive
 /// slot) — the render handoff, the way `Sim::snow_quads` exposes the snow.
+///
+/// Replaces `CreatePointerSpriteList` 0x11a160 (unported-front-end-menus-1) [M]: the game converts
+/// this same VECTOR array into one batched GIF sprite packet (56 quads per tag, texture bound by
+/// psiFont_SetTexture 0x120880; count pre-masked to a multiple of 4 by psiDrawParticleList
+/// 0x122d50:107; tint 0x3f,0x3f,0x3f,0x7f; scale 1/(PS2SnowSize·PS2SnowSizeMult)) — reached every
+/// frame via DrawDrops 0x18cb90 (rain/snow hashes 0x3000045/0x3000087) and Emitter_Draw 0x17b708
+/// (def+4) ← View_DrawObjList 0x1e69a0 ← Game_Draw. Here the quads feed the wgpu snow/particle
+/// pipelines instead (gpu.rs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParticleSprite {
     pub pos: V3,
@@ -933,3 +1008,53 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod leaf_tests {
+    use super::*;
+    use crate::drone::Rng;
+
+    // [M 0x1abee0] a live leaf falls, drifts and spins; the two life limits both kill it.
+    #[test]
+    fn leaf_falls_and_expires_through_either_limit() {
+        let mut rng = Rng::new(3);
+        let mut leaf = LeafFx {
+            pos: [0.0, 10.0, 0.0], rot: [0.0; 3], vel: [0.0, 0.0, 0.0], spin: [0.01, 0.0, 0.0],
+            frames_left: 300, budget: 200, tick_cost: 1,
+        };
+        let y0 = leaf.pos[1];
+        for _ in 0..50 {
+            assert!(leaf.tick(&mut rng));
+        }
+        assert!(leaf.pos[1] < y0, "the leaf falls: y = {} < {}", leaf.pos[1], y0);
+        assert_ne!(leaf.rot[0], 0.0, "the spin advanced the rotation");
+        assert!(leaf.vel[0] != 0.0, "the x drift accumulated");
+        // The frame limit: 300 frames minus the 50 lived — still alive at 250 left.
+        assert_eq!(leaf.frames_left, 250);
+        // Sister (can fail): the frame limit is a hard kill at < 1, not at 0 ticks left.
+        let mut dying = LeafFx { frames_left: 1, ..leaf.clone() };
+        assert!(dying.tick(&mut rng));
+        assert!(!dying.tick(&mut rng), "frames_left hit 0 — the leaf dies");
+        // The budget limit: cost 2 with budget 3 dies after one tick.
+        let mut poor = LeafFx { frames_left: 300, budget: 3, tick_cost: 2, ..leaf.clone() };
+        assert!(poor.tick(&mut rng));
+        assert!(!poor.tick(&mut rng), "the tick budget ran out");
+    }
+
+    // [M 0x1abee0] the same seed reproduces the same fall (the shared-RNG discipline).
+    #[test]
+    fn leaf_motion_is_bit_exact_per_seed() {
+        let run = |seed: u64| {
+            let mut rng = Rng::new(seed as u32);
+            let mut leaf = LeafFx {
+                pos: [1.0, 5.0, 2.0], rot: [0.0; 3], vel: [0.0; 3], spin: [0.0; 3],
+                frames_left: 30, budget: 255, tick_cost: 1,
+            };
+            for _ in 0..30 { leaf.tick(&mut rng); }
+            leaf
+        };
+        assert_eq!(run(9), run(9));
+        // Sister (can fail): a different seed moves the leaf differently.
+        assert_ne!(run(9).pos, run(10).pos);
+    }
+}

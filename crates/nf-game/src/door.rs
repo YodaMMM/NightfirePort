@@ -1,3 +1,9 @@
+// unported-misc-5 — the game's generic list containers are Rust collections here:
+// `LList_Init` 0x1cc958 (the door list's init; its other callers `Door_Init` 0x136848,
+// `control_init_object_lists` 0x134388, `Coll_ResetHitHeap` 0x1edda0, `Sensor_Init` 0x1b0868,
+// `Drone_PreLoad_Init` 0x136888, `Copter_Init` 0x17e4f0, `InitShards` 0x12bed0,
+// `Creature_Init` 0x135208) is this module's owned `Vec` — the game's LLISTINFO/LLNODE
+// linked list with the same insert-at-head/order semantics, without the manual nodes.
 //! Doors (`docs/systems/world-objects.md` "Doors"): `Door_Create` 0x136100, `Door_SetupSwing` 0x135440,
 //! `Door_SetState` 0x135618, `Door_Interp` 0x135738, `Door_ReactToHit` 0x135980, `Door_Activate` 0x135be0,
 //! `Door_DoMsg` 0x135f18, `Doors_Calc` 0x135fe0, `Door_Update` 0x1363c8 — ported from the disassembly [M] and
@@ -243,9 +249,15 @@ impl Door {
 
 /// All doors of a level, in placement (creation) order.
 #[derive(Clone, Debug)]
+/// `Door_Init` 0x136848 (60 B, from `ResetMap_GameInit` 0x1d5080:12-19 at 0x1d5184):
+/// `LList_Init(TheDoors 0x316f70, 0x80, 0)` + `memset(DoorGroupsStates 0x316ea0, 0, 0xca)` — the
+/// per-map empty of the door list and the 101×u16 group-state table. The port's `Doors::create`
+/// per level attach (drone.rs `attach_level_id`) rebuilds the list and zeroes `group_states` —
+/// this reset; the per-FRAME wipe of `DoorGroupsStates` is `Doors::begin_pass` below.
 pub struct Doors {
     pub list: Vec<Door>,
-    /// `DoorGroupsStates` (0xca bytes, cleared by `Doors_Calc` each frame): per group, the OR of the states.
+    /// `DoorGroupsStates` (0xca bytes — `Door_Init` 0x136848 zeroes it per map, `Doors_Calc`
+    /// 0x135fe0:13 wipes it per frame via `begin_pass`): per group, the OR of the door states.
     pub group_states: [u16; 101],
     /// The previous tick's `switch_channels` (`switch_channels_prev`) for the lock channel's rising edge.
     prev_channels: [u8; 256],
@@ -324,6 +336,10 @@ pub struct DoorMover {
 
 /// One `obj+0xD0` contact: the copy `Collide_Update` appends to the hit object, `+0x58` = the hitter,
 /// of whose world sphere centre the door's kind-0 reversal reads [M 0x1ea398:176-193, 0x135980:80].
+/// The game builds that hit list with the collision LList helpers — `LList_AllocnNodes` 0x1ccbe0
+/// allocates the nodes and `LList_Cut` 0x1cca80 moves the filled list onto the object (both called
+/// by `Collide_Update` 0x1ea398 / `Collide_Pick` 0x1eb320 [M]); the port's contact Vec append is
+/// that same list work.
 #[derive(Clone, Copy, Debug)]
 struct DoorContact { centre: V3, player: bool, valid: bool }
 
@@ -483,6 +499,19 @@ impl Doors {
         }
     }
 
+    /// `Door_IsLocked` 0x136810 [M :4-17]: a null obj (the port's rows always exist) or an
+    /// unwired lock channel (`ext+0x68 == 0`) is not locked; a wired channel reads
+    /// `switch_channels[ch] == 0` — locked = the channel is OFF. The game's callers are the
+    /// AI pathing links (`AINetwork_EmitPath` 0x158cf8:233, `AINetwork_Emitter_GetNodeAtDistance`
+    /// 0x159268:177, `AINetwork_DoAStarPath` 0x1571b0:269 — a link between two door-type
+    /// MAPNODEs (+4 & 2) is rejected while locked); the port's `nav::Network` route queries
+    /// do not apply the gate yet (drones open doors by contact), so this is the door-side
+    /// fn the pathfinder wiring will call [S].
+    pub fn is_locked(&self, i: usize, channels: &Channels) -> bool {
+        let d = &self.list[i];
+        d.ch_lock != 0 && !channels.on(u32::from(d.ch_lock)) // [M 0x136810:10-16]
+    }
+
     /// `Door_DoMsg` 0x135f18 [M]: the aim-ray door hint. The game's order — the `+0x74` latch sets
     /// BEFORE any check (one attempt per door ever, a locked door burns it), then the lock-channel
     /// gate (a wired channel that is OFF fails), then the state gate (`== 4` OPEN fails; grouped
@@ -492,8 +521,8 @@ impl Doors {
         if mp { return None; }
         if self.list[i].msg_shown { return None; }
         self.list[i].msg_shown = true;
+        if self.is_locked(i, channels) { return None; }
         let d = &self.list[i];
-        if d.ch_lock != 0 && !channels.on(u32::from(d.ch_lock)) { return None; }
         let state = if d.group != 0 {
             self.group_states.get(d.group as usize).copied().unwrap_or(0)
         } else {
@@ -771,8 +800,19 @@ impl Doors {
         d.flags |= 0x10;
     }
 
+    /// `Doors_Calc`'s head memset [M 0x135fe0:13 — the per-frame wipe the decompile opens with]:
+    /// the game runs `Doors_Calc` at the top of `control_movement_object_handler` 0x1336f8 (before
+    /// the object walk), so `DoorGroupsStates` starts each frame empty and `Door_Update`'s ORs
+    /// (0x1363c8:170-171) accumulate only this frame's states — `Door_IsClosed` 0x1367b0's
+    /// `== CLOSED (2)` read never sees a stale OR. The port runs `calc` at the tick's tail
+    /// (drone.rs), so the wipe rides `begin_pass` — call it before the object pass each tick.
+    pub fn begin_pass(&mut self) {
+        self.group_states = [0; 101];
+    }
+
     /// `Doors_Calc` (after every door's update): a group's members copy the first non-busy door's direction,
-    /// position, state and timer, re-pose, and every busy marker clears.
+    /// position, state and timer, re-pose, and every busy marker clears. (The game's per-frame
+    /// `DoorGroupsStates` memset is `begin_pass` above — the decompile's 0x135fe0:13.)
     pub fn calc(&mut self) {
         for master in 0..self.list.len() {
             let group = self.list[master].group;
@@ -831,36 +871,40 @@ impl Doors {
         // merge's full suite failed the three real-path E tests because the mesh, a thin plane,
         // sits 1.2-3.0 from those use points while the door's world sphere is touched. See
         // docs/systems/door-use.md and docs/reports/doors-remainder-4.md.)
-        // Doors whose glist the port never resolved (glist 0 — no obj+0xd8 in the game's terms)
-        // keep the pre-sphere placement-distance stand-in (they have no world sphere either).
+        // A door with NO resolved glist (glist 0 — no obj+0xd8) is E-DEAD, as in the game: the use
+        // pick admits a 0x101-mask object only via `obj+0xd8 != 0 && *(obj+0xd8+8) != 0` [M
+        // Collide_PickObj 0x1eae80:88-90 — Door_Create 0x136100 ORs obj+0xfa |= 0xc4, so the
+        // obj+0xfa&8 arm is clear for doors], and the game never creates such a door at all —
+        // `parsemap_create_dynamic_objects` runs only when the placement's glist resolved [M
+        // parsemap_block_map_data_dynamic 0x1d1b68:93-95]. The old placement-distance < 2.5
+        // stand-in here is DELETED (door-glist0-use-standin): the ISO-gated census
+        // (`nf-game/tests/door_glist_census_live.rs`, 21 SP levels, 443 doors) shows every created
+        // door resolves a glist, and the glist-0 records the create fallback can still produce
+        // (a broken by_hash map) are skipped below, matching the game's non-admission.
         let mut sounds = Vec::new();
         let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let mut hits = 0;
         for i in 0..self.list.len() {
             let d = &self.list[i];
+            // The game's admission gate: no obj+0xd8 (glist 0) → the pick never admits the door
+            // [M 0x1eae80:88-90]. Also drops the pre-sphere stand-in's reach for good.
+            if d.glist == 0 { continue; }
             let dx = use_point[0] - d.pos[0];
             let dy = use_point[1] - d.pos[1];
             let dz = use_point[2] - d.pos[2];
             // Broad phase: the placement's bounding sphere can hardly exceed ~3 — 6 clears the
             // scan for far doors (the game's `Collide_Pick` does the same by cel proximity).
             if dx * dx + dy * dy + dz * dz > 36.0 { continue; }
-            let contact = if d.glist != 0 {
-                // The candidate: the use sphere (r 1.0 at head + viewer dir) vs the door's live
-                // world sphere (obj+0x80 centre, obj+0x8C radius) [M Collide_PickObj 0x1eae80's
-                // 0x100/0x101 arm; Collide_Pick 0x1eb320's linked-object arm]. Strict `<`: the
-                // game returns (no node) when `radius² <= sqdist` [M both sites].
-                let (c, r) = d.live_sph();
-                let sx = use_point[0] - c[0];
-                let sy = use_point[1] - c[1];
-                let sz = use_point[2] - c[2];
-                let reach = 1.0 + r;
-                sx * sx + sy * sy + sz * sz < reach * reach
-            } else {
-                // Never-loaded glist: the pre-sphere stand-in — distance to the door's placement
-                // position < 2.5 (covers the door's extent + use radius) [S stand-in].
-                dx * dx + dy * dy + dz * dz < 6.25
-            };
-            if contact {
+            // The candidate: the use sphere (r 1.0 at head + viewer dir) vs the door's live
+            // world sphere (obj+0x80 centre, obj+0x8C radius) [M Collide_PickObj 0x1eae80's
+            // 0x100/0x101 arm; Collide_Pick 0x1eb320's linked-object arm]. Strict `<`: the
+            // game returns (no node) when `radius² <= sqdist` [M both sites].
+            let (c, r) = d.live_sph();
+            let sx = use_point[0] - c[0];
+            let sy = use_point[1] - c[1];
+            let sz = use_point[2] - c[2];
+            let reach = 1.0 + r;
+            if sx * sx + sy * sy + sz * sz < reach * reach {
                 self.activate(i, &[(head, 0.0, false)], true, channels, frame, &mut sounds);
                 hits += 1;
             }
@@ -1193,6 +1237,56 @@ mod tests {
         assert_eq!(doors3.list[0].ch_lock, 200);
     }
 
+    /// A glist-0 door (the create fallback's `unwrap_or((0, translation, 0.0))` record) is E-DEAD:
+    /// the game's use pick never admits an object without `obj+0xd8` [M Collide_PickObj 0x1eae80:88-90]
+    /// and never even creates such a door [M parsemap_block_map_data_dynamic 0x1d1b68:93-95]. This
+    /// test FAILED on the deleted placement-distance < 2.5 stand-in — at 2.0 out it activated.
+    #[test]
+    fn a_glist0_door_is_e_dead_at_the_old_stand_in_reach() {
+        let mut doors = Doors::default();
+        doors.list.push(Door {
+            placement: 0, kind: 2, group: 0, ch_open: 0, ch_lock: 0, straddle: false,
+            snd_open: 285, snd_close: 284, snd_hit: 320, flags: 0, approach: 0, locked_flag: 0,
+            keys: None, frames: 0xffff, state: CLOSED, pos01: 0.0, speed: 1.0 / 30.0,
+            dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
+            matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            // The create fallback's sphere: the placement translation, radius 0.0.
+            inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 0.0, 0.0], 0.0), sph_centre: [10.0, 0.0, 0.0], glist: 0,
+        });
+        let mut ch = channels();
+        // The use point 2.0 out (head + look): inside the old stand-in's 2.5, so the deleted arm
+        // would have activated here.
+        let (_, hits) = doors.player_use([12.0, 0.0, 0.0], [0.0, 0.0, 0.0], &mut ch, 0, &CollisionWorld::empty());
+        assert_eq!(hits, 0, "glist-0 door must not answer the use pick (game non-admission [M 0x1eae80:88-90])");
+        assert_eq!(doors.list[0].state, CLOSED, "still closed");
+        // Point blank: 0.5 out — the use sphere touches the door's zero-radius fallback point, and
+        // the game STILL does not admit it (no obj+0xd8). The stand-in also fired here (0.25 < 6.25).
+        let mut doors2 = doors.clone();
+        let (_, hits2) = doors2.player_use([10.5, 0.0, 0.0], [0.0, 0.0, 0.0], &mut ch, 0, &CollisionWorld::empty());
+        assert_eq!(hits2, 0, "point blank, still non-admitted");
+        assert_eq!(doors2.list[0].state, CLOSED);
+    }
+
+    /// Sister: the SAME record with its glist resolved answers the use pick through the live-sphere
+    /// rule — the deletion did not touch the neighbouring glist!=0 behaviour.
+    #[test]
+    fn the_same_door_with_a_glist_still_opens_on_the_sphere_rule() {
+        let mut doors = Doors::default();
+        doors.list.push(Door {
+            placement: 0, kind: 2, group: 0, ch_open: 0, ch_lock: 0, straddle: false,
+            snd_open: 285, snd_close: 284, snd_hit: 320, flags: 0, approach: 0, locked_flag: 0,
+            keys: None, frames: 0xffff, state: CLOSED, pos01: 0.0, speed: 1.0 / 30.0,
+            dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
+            matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+        });
+        let mut ch = channels();
+        // The use point 1.0 from the live sphere centre [10, 1.1, 0]: reach = 1.0 + 1.28 = 2.28 → hit.
+        let (_, hits) = doors.player_use([10.0, 1.1, 0.0], [0.0, 0.0, 1.0], &mut ch, 0, &CollisionWorld::empty());
+        assert_eq!(hits, 1, "the resolved door answers the use sphere");
+        assert_eq!(doors.list[0].state, OPENING, "and starts opening");
+    }
+
     #[test]
     fn group_members_follow_the_master() {
         let mut doors = Doors::default();
@@ -1305,5 +1399,33 @@ mod tests {
         let far = [([100.0, 1.0, 100.0], 0.4f32, false)];
         for _ in 0..12 { alone.update(0, &mut ch, &far, 0); alone.calc(); }
         assert_eq!(alone.list[0].state, CLOSED, "a door with nobody in it closes");
+    }
+}
+
+#[cfg(test)]
+mod world_helper_tests {
+    use super::*;
+
+    /// `Door_IsLocked` 0x136810 [M :10-16]: a wired lock channel reads `switch_channels[ch]`,
+    /// locked = OFF; channel 0 (unwired) is never locked.
+    #[test]
+    fn door_is_locked_reads_the_lock_channel() {
+        let mk = |ch_lock: u16| Door {
+            placement: 0, kind: 0, group: 0, ch_open: 0, ch_lock, straddle: false,
+            snd_open: 0, snd_close: 0, snd_hit: 0, flags: 0, approach: 0, locked_flag: 0,
+            keys: None, frames: 0, state: CLOSED, pos01: 0.0, speed: 1.0, dir: 0.0, swing: 0.0,
+            timer: 0, open_timer: 0, msg_shown: false, matrix: [[0.0; 4]; 4],
+            inv_closed: [[0.0; 4]; 4], pos: [0.0; 3], sph: ([0.0; 3], 0.0),
+            sph_centre: [0.0; 3], glist: 0,
+        };
+        let mut doors = Doors::default();
+        doors.list.push(mk(0x5A)); // a wired lock channel
+        doors.list.push(mk(0)); // unwired
+        let mut ch = Channels::default();
+        assert!(doors.is_locked(0, &ch), "channel OFF -> locked [M 0x136810:14-16]");
+        assert!(!doors.is_locked(1, &ch), "unwired -> never locked [M 0x136810:12-13]");
+        // sister: the same channel turned ON unlocks
+        ch.set(0x5A, 1, 0);
+        assert!(!doors.is_locked(0, &ch), "channel ON -> unlocked [M 0x136810:14-16]");
     }
 }

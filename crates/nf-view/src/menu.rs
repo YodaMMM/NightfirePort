@@ -89,6 +89,26 @@ pub const PAGE_START: u32 = 0x4000_0009;
 /// `GameState._28_4_ = 0x40000034` (decimal 28 = +0x1c); 0x2029e0:302-303 → P_LANGUAGE_Handler].
 /// The port does not model it (nor P_PS2MEMCARDINIT 0x40000048): `FrontEnd::new` opens the title.
 pub const PAGE_LANGUAGE: u32 = 0x4000_0034;
+
+/// `ConvLanguageToFlagIndex` 0x216948 — language enum → flag-spinner row. The standalone function
+/// has no callers in the decompile: GCC inlined it into `P_LANGUAGE_Handler` 0x208830 (twice —
+/// the spinner preselect at :77-95 and the 9-flag disable loop at :112-135, both the same
+/// switch), which is the page-0x40000034 dispatch arm of `Handler_HandleMessage` 0x2029e0:302.
+/// The inverse direction (row → language) is `C_LANGUAGE_Handler` 0x208c68:8-24's
+/// `LanguageToLoad` table. Ported here so the flag-spinner row math exists for the language
+/// page's future draw; every arm below is decompile-pinned [M 0x216948:6-25].
+pub fn conv_language_to_flag_index(lang: u32) -> i32 {
+    match lang {
+        0 => 0,
+        1 => 2,
+        2 => 1,
+        3 => 5,
+        4 => 3,
+        5 => 4,
+        8 => 6,
+        _ => -1,
+    }
+}
 /// P_INTRO, the boot EA/MGM logos [M 0x2029e0:427 → P_INTRO_Handler 0x209e88].
 pub const PAGE_INTRO: u32 = 0x4000_0032;
 /// P_PARISENUM, the memory-card check START opens [M 0x2029e0:531 → P_PARISENUM_Handler 0x20a648].
@@ -174,7 +194,12 @@ pub const PAGE_CN_AV: u32 = 0x4000_0031;
 /// the MISSION archives' own kind-8 menu def (entry 08000001 of each level archive, e.g. 07000001.bin
 /// [L parsed 2026-10-14]), NOT the front-end 07000048 stream — the old 0x4000000c id was the NIS page
 /// (the handler table maps 0x4000000c → P_NIS_Handler [M Handler_HandleMessage 0x2029e0])]. Its main
-/// control is 0x10000028, handled by C_GCPAUSE_Handler 0x204408.
+/// control is 0x10000028, handled by C_GCPAUSE_Handler 0x204408 — and 0x10000028 is a TYPE-6
+/// M_LISTBOX (widget-type byte 6, the List widget [D census, docs/systems/menu-list-widget.md]):
+/// the game fills its rows via `List_SendMessage` 0x2196e8 and lays them out per tick with
+/// `List_Update` 0x21a598. The port's `ListState` (nf-formats/src/menudef.rs, unported-engine-plumbing-1)
+/// models that row/cursor/scroll state; the pause rows this FE draws by hand are that widget's
+/// draw side.
 /// The IN-GAME NIS page 0x1000003e is `C_NIS_Handler` (0x205f10) [M Handler_HandleMessage
 /// 0x2029e0:224]: msg 0x51 binds the level's cut-scene controls → script hashes, 0x4b (shown)
 /// boots the level cut-scene (LoadableLoad → Script_Load → Script_Play → Camera_Enable(7)) —
@@ -269,6 +294,10 @@ pub const PAGE_MP_ONLINE_LOBBY: u32 = 0x5000_0005;
 #[derive(Clone, Debug, Default)]
 pub struct GameFlow {
     /// GameStateStack [M 0x2c7398] — the game keeps 64 u32s and wraps; ours grows.
+    /// unported-misc-5 — the game's generic STACKINFO container (`Stack_Init` 0x1cce38 in
+    /// `MenuManager_Create` 0x21b908 and `Camera_Reset` 0x1b9af0; `Stack_Top` 0x1cced0 in
+    /// `Manager_SendMessage` 0x21c858) is this owned `Vec` — the top-of-stack peek and push/pop
+    /// order match the game's node list without the manual nodes.
     pub stack: Vec<u8>,
     /// GameState+0x08: the level the loader should fetch [M 0x1d3800/0x1d6360].
     pub level_to_load: u32,
@@ -324,6 +353,10 @@ impl GameFlow {
     /// 0x1d6958 sets GameState+0x8 = 0x7000048 when it is 0 and calls `ResetMap_LevelToLoad(level, 0, 0)`
     /// — the boot load of the front-end map.
     pub fn boot() -> Self {
+        // `MenuManager_Init` 0x21b570's job (zero the five 0x1d8-byte manager slots, defaults
+        // +0x1c8 = 0x1e, `user_restarted_or_quit` 0x30d8c4 = 0, Component_InitComponents) rides
+        // the host's FrontEnd construction; the port folds the manager POOL into one GameFlow +
+        // FrontEnd (`MenuManager_Init` caller: ResetMap_GameInit 0x1d5080).
         GameFlow { stack: vec![ST_BOOT], page: PAGE_LANGUAGE, level_to_load: FRONTEND_LEVEL, ..Default::default() }
     }
 
@@ -529,6 +562,16 @@ impl GameFlow {
 /// (`C_SBNFMAP` passes them straight to `ResetMap_LevelToLoad` [M 0x20b8d8:21-24]).
 /// A DRIVING.ELF mission hash (0x09xxxxxx) — no level archive on the disc; the game hands over to
 /// the driving executable [M GameFlow state 9, psiLaunchDriving 0x120af0].
+///
+/// The handover on hardware: `psiLaunchDriving` 0x120af0 memcpy's the 0xa50-byte PTP blob to EE
+/// 0x100000, sets flag PTP+0x97c = 1, then calls `RunNextModule` 0x120008 (436 B) with the only
+/// `cdrom0:` string in ACTION.ELF — `cdrom0:\\BASE.ELF;1` at 0x2f3b00 (file 0x1eda00) [M ELF
+/// bytes]. `RunNextModule` reads the 4 KiB ELF header into 0x1e20000, memsets+loads each program
+/// header, closes the fd, re-inits the CD (`sceCdInit(5)`), kills threads 2..0xFF, deletes
+/// semaphores 0..0xFF, flushes the caches and jumps to the new `e_entry` — BASE.ELF (the boot
+/// loader, ≡ SLUS_205.79) then re-dispatches to DRIVING.ELF from the 0x100000 block [M decomp
+/// + DRIVING.ELF's own ACTION/DRIVING/BASE strings at 0x3c5ea8..]. The port stays one process:
+/// `launching_driving()` below is the state, the draw is the main agent's.
 pub fn is_driving_level(level: u32) -> bool { level >> 24 == 0x09 }
 
 /// The campaign rows' names for port-only messages (the game's own names are Txt labels; these
@@ -637,7 +680,8 @@ pub fn aux_movie_for(page_id: u32) -> u32 {
     match page_id {
         PAGE_MAIN => 0x0733_0048,
         PAGE_LANGUAGE | PAGE_CODENAME | PAGE_DIFFICULTY | PAGE_MISSION_SELECT | PAGE_DOSSIER | PAGE_RESULTS
-        | PAGE_CN_SELECT | PAGE_CN_MENU | PAGE_CN_ADVANCED | PAGE_CN_MP | PAGE_CN_AV | PAGE_CN_CONTROLS => 0x0735_0048,
+        | PAGE_CN_SELECT | PAGE_CN_MENU | PAGE_CN_ADVANCED | PAGE_CN_MP | PAGE_CN_AV | PAGE_CN_CONTROLS
+        | PAGE_NF_BONUS => 0x0735_0048, // 0x40000038's PAGE record aux 0x07350048 [D menu-def dump 2026-10-21]
         // mp-menu-flow: every MP page's PAGE record carries the same list backdrop (the menu-def
         // dump 2026-10-15: all 13 MP pages aux 0x07350048 [L]).
         PAGE_MP_JOIN | PAGE_MP_SCENARIO | PAGE_MP_MAP | PAGE_MP_SETUP | PAGE_MP_OPTIONS | PAGE_MP_RULES
@@ -876,6 +920,11 @@ pub fn menu_enable_sounds(page: u32) -> u8 {
 }
 
 // ── G-048(4): the boot card check ─────────────────────────────────────────────────────────────
+// The card-status block this walk runs on is zeroed at boot by `InitaliseMemoryCard` 0x110f48
+// (76 B, main 0x109080): `sceMcInit()`, zero MC_Info 0x316940..0x31694b, CardState 0x316950 and
+// its retry byte 0x316951, StateStack 0x30d6dc = 0, then one `PS2PollMemoryCard` 0x110fa0 kick
+// [M decomp]. The port's equivalent is this card-flow machine plus the profiles dir — there is
+// no sceMcInit to call.
 // P_PARISENUM ("Checking memory card…") opens the box and waits on the card flow: its 0x4c sets
 // the message-box mode 4 (`DAT_002e1b09 = 4`) and runs `Menu_UpdateMessageBox(page, 0, 0)`
 // [M 0x20a648:12-24], whose case 4 calls `Menu_EnumSaves(page, 1)` + `PS2_DoCardFlow`
@@ -1113,6 +1162,7 @@ const TOGGLE_HOLD: &[(u32, &str, i32)] = &[(0x2a2, "Toggle", 1), (0x2a3, "Hold",
 /// Advanced Options [M P_CNOPTIONS_Handler 0x213f08:24-71 — each row's items (label, value) and the profile byte
 /// (DAT_002a38d1/c9/d0/cc/cb/d2/d4/d3) it reads back with msg 0x35; L page 0x4000002d's controls for the y].
 pub const ADV_ROWS: &[OptRow] = &[
+    // Checkbox_SendMessage 0x1efd68 [M] / Checkbox_Init 0x1f0110 [M] — the front end's one ctype-2 control (page 0x4000002d, control 0x1000011a, this Vibration row); the port models it as this generic two-item option row.
     OptRow { ctrl: 0x1000_011a, label: 0x196, y: 104.0, items: ON_OFF, kind: OptKind::List },        // Vibration
     OptRow { ctrl: 0x1000_011b, label: 0x197, y: 136.0, items: ON_OFF, kind: OptKind::List },        // Auto Aim
     OptRow { ctrl: 0x1000_0124, label: 0x29c, y: 168.0, items: ON_OFF, kind: OptKind::List },        // Crosshairs
@@ -1942,6 +1992,15 @@ pub struct BonusFields {
 // MemCard_* states, whose message ids PS2_DoCardFlow 0x217bd8 renders as the dialog page's
 // text + buttons. The port keeps the ids and the shape, narrowed to what a file save can mean
 // (§4 of the doc: no card-hardware states — a directory of files has no "unformatted").
+// Beneath those states the game's mcman SDK sync — `sceMcSync` 0x2285e8 (jal'd from the
+// `MemCard_*` states at 0x10f4c4/0x11019c/0x110338/0x110650/0x110888/0x110c24 [M ELF jal scan])
+// → `mcDelayThread` 0x2285a0 (jal at 0x228650, SetAlarm/sleep/wait) → `mcHearAlarm` 0x228578
+// (the alarm callback, registered via the immediate at 0x2285ac [M]) — is IOP thread glue this
+// flow machine replaces with plain polling of the save directory [M unported-misc-7].
+// IOP wake glue this machine replaces (unported-misc-10): `iWakeupThread` 0x23c698 is jal'd by
+// `mcHearAlarm` 0x228578 (the IOP mcman alarm the polling flow replaces — misc-7) and by
+// `_request_call` 0x23e2c0 (SIF cmd 0xa handler, registered by `sceSifInitRpc` 0x23dcc8 —
+// docs/systems/ps2-sdk-glue.md § boot); the port has no IOP threads to wake — the flow polls.
 
 /// The card-flow messages — `DAT_002462d4` in PS2_DoCardFlow 0x217bd8's switch [M :76-152].
 /// Only the ids the port's machine can reach are variants; `label`/`buttons` cover the table.
@@ -2192,7 +2251,10 @@ pub struct FrontEnd {
     /// (label 0x31d already applied) [M 0x204408 case 1 → Menu_CreateOptionBox 0x202218 with
     /// box_id 10, ok_only 1; the box's OK row / a cancel pop it [M C_LBMSGOPTIONS 0x2022a0] and
     /// the page handler re-shows the list on msg 0x50 [M P_PAUSE_Handler 0x203c28:19-24 —
-    /// `option_return != 0` → control 8 0x2b(0)] — the port just clears the field].
+    /// `option_return != 0` → control 8 0x2b(0)] — the port just clears the field. The game's
+    /// re-read of the box's result is `Menu_UpdateOptionBox` 0x202280 (returns + zeroes
+    /// `option_return`, set by C_LBMSGOPTIONS's 0x4b/0x6d arms) — the port's modal state IS the
+    /// option_return [docs/systems/menu-alpha-text-messages.md].
     pub pause_hint: Option<u32>,
     /// fix-save-profile: the port's memory card — the profiles dir next to the port's config,
     /// one file per codename [M Menu_UpdateMessageBox 0x1f7de8:19/28 passes the codename buffer
@@ -2571,7 +2633,49 @@ pub struct FrontEnd {
     /// P_START/P_MAIN's no-input counter is not live. [`Self::reopen_queued_page`] — the load
     /// tail's stand-in — clears it.
     pub results_queued: bool,
+    /// The focus alpha pulse's phase, `Menu_AlphaUpdate` 0x1f3170's `counter` 0x30d180
+    /// ([`Self::menu_alpha_tick`]; `Menu_AlphaReset` 0x1f31e0 zeroes it).
+    pub alpha_phase: f32,
+    /// The alpha pulse value, `alpha` 0x30d17c — `(s16)(sin(counter) * 64.0)` [M 0x1f3170]; the
+    /// draw side adds it byte-wise into focused-row colours [M Menu_AlphaGet's four sites].
+    pub alpha: i16,
+    /// `Menu_UpdateTextFmt` 0x1f3328's phase `count` 0x30d18c.
+    pub text_fmt_count: f32,
+    /// `Menu_UpdateTextFmt` 0x1f3328's `throb` 0x30d188 — WRITE-ONLY in retail: it has no reader
+    /// in the whole binary (the label scales come from `Menu_GetNormalTextFmt`'s 1.0 constants),
+    /// kept here for parity only.
+    pub text_throb: f32,
 }
+
+/// `C_LANGUAGE_Handler` 0x208c68's `LanguageToLoad` 0x30d2ac table, indexed by the flag
+/// control's value 0..6 [M 0x208c68's 0x4e/0x4b arms; tLANGUAGE 0=EN 1=FR 2=DE 3=ES 4=IT 5=NL
+/// 8=SV]. The control ships as 7 flag slots on the boot page 0x40000034 (textures
+/// 0x030000c9-cf [L frontend.md]); `bDisplayLangMenu` 0x30d2a8 boots 1, so a normal boot shows
+/// the page and accepts land here.
+pub static LANGUAGE_TO_LOAD: [u32; 7] = [0, 2, 1, 4, 5, 3, 8];
+
+/// The flag slot's tLANGUAGE value [M `C_LANGUAGE_Handler` 0x208c68 msg 0x4e: reads the
+/// control's value (+0x20) and indexes the 0x30d2ac table]. Out-of-range stays EN ([S] the
+/// game reads only slots 0..6 — P_LANGUAGE_Handler 0x208830 creates exactly 7).
+pub fn language_flag_to_load(value: usize) -> u32 {
+    LANGUAGE_TO_LOAD.get(value).copied().unwrap_or(0)
+}
+
+/// `SFXSetLanguage`'s VO mapping in the accept arm [M 0x208c68 msg 0x4b: VO 2=DE, 1=FR, 3=ES,
+/// else 0=EN].
+pub fn language_sfx_vo(tlanguage: u32) -> u32 {
+    match tlanguage { 1 => 1, 2 => 2, 3 => 3, _ => 0 }
+}
+
+/// The accept arm's page change: `Manager_SendMessage(mgr, 0x44, 0x40000048, 1)` — straight to
+/// the memcard-init page [M 0x208c68 msg 0x4b; frontend.md's boot chain].
+pub const LANGUAGE_ACCEPT_NEXT_PAGE: u32 = 0x40000048;
+
+/// The per-language "~A to select" prompt strings the focus arm binds [M 0x208c68 msg 0x4e —
+/// 0x308f38/0x308f48/0x308f60/0x308f78/0x308f90/0x308fa0/0x308fb8, in EN/DE/FR/IT/NL/ES/SV
+/// order]. Draw-side; kept as the data the draw pass binds.
+pub static LANGUAGE_PROMPT_STRINGS: [u32; 7] =
+    [0x308f38, 0x308f48, 0x308f60, 0x308f78, 0x308f90, 0x308fa0, 0x308fb8];
 
 /// The codename session the window carries across front-end creates
 /// (docs/systems/profile-session.md): the game keeps it in plain globals OUTSIDE every menu
@@ -2804,6 +2908,13 @@ impl FrontEnd {
             intro_frames: 0,
             intro_live: false,
             intro_skippable: false,
+            // menu-alpha-text: Menu_AlphaReset 0x1f31e0's zero state (counter/alpha boot at 0 —
+            // .sbss) and Menu_UpdateTextFmt 0x1f3328's phase; MenuManager_Create 0x21b988 also
+            // runs the Menu_StringInit 0x1f3540 stub.
+            alpha_phase: 0.0,
+            alpha: 0,
+            text_fmt_count: 0.0,
+            text_throb: 0.0,
             // reward-after-outro (new field on its own line [WORKLOG lesson 4]).
             results_queued: false,
         };
@@ -2868,6 +2979,12 @@ impl FrontEnd {
             // boot's 1 and Quick Game's 1 both land on Arena (row 1).
             if let Some(r) = MP_SCENARIO_ROWS.iter().position(|row| row.3 == self.mp_scenario) { self.mp_scenario_row = r; }
         }
+        if matches!(p, Page::Codename | Page::CnSelect) {
+            // The 0x4c open runs Menu_SelectCodenameInControl 0x2028d8 against the codename list
+            // control 0x100000eb — the page opens with the active profile's row highlighted
+            // [M P_NFSELECT_Handler 0x20aec0:44 + P_CNSELECT_Handler 0x212ad0:42].
+            self.select_codename_in_control();
+        }
     }
 
     /// `SFXRemove(0, 0x1d7)` + `SFXRemove(0, 0x470)` [M the twelve handlers' 0x4c arm removes
@@ -2896,7 +3013,92 @@ impl FrontEnd {
     /// 0x21edc8:38-53]. Returns true so the move arms stay one-liners.
     fn focus_moved(&mut self) -> bool {
         self.sfx(MENU_SOUND_FOCUS, SFX_MENU_TICK);
+        // Page_Update 0x21edc8 (jal 0x21ee58) runs Menu_AlphaReset 0x1f31e0 when the page's
+        // focused control changes (mgr+0x1d2 set) — the per-row-move flash restart.
+        self.menu_alpha_reset();
         true
+    }
+
+    /// `Menu_AlphaReset` 0x1f31e0 (8 B): `counter = 0.0f` — nothing else (the alpha itself is not
+    /// written; the next [`Self::menu_alpha_tick`] lands on sin(0)·64 = 0) [M disasm 0x1f31e0:
+    /// `sw zero` 0x1f31e4]. Callers: Page_Update 0x21ee58 on a focus change (wired in
+    /// [`Self::focus_moved`]) + Component_SetupInstance 0x1f0e1c under setup flags 0xc0.
+    pub fn menu_alpha_reset(&mut self) {
+        self.alpha_phase = 0.0;
+    }
+
+    /// `Menu_AlphaUpdate` 0x1f3170: `counter += 0.2`, wrap at 6.2831855, `alpha = (s16)(sin
+    /// (counter) * 64.0)` [M 0x1f3170's lwc1/swc1 run; the only writer of alpha 0x30d17c].
+    /// `MenuManager_Update` 0x21c3d8:35/54 runs it per frame (twice at PS2FramesToSkip == 2).
+    pub fn menu_alpha_tick(&mut self) {
+        self.alpha_phase += 0.2;
+        // The wrap RESETS to 0.0 and the sine is PS2Sinf [M 0x1f3170] (review 2026-10-21).
+        if self.alpha_phase >= 6.283_185_5 { self.alpha_phase = 0.0; }
+        self.alpha = (nf_game::trig::sinf(self.alpha_phase) * 64.0) as i16;
+    }
+
+    /// `Menu_AlphaGet` 0x1f31e8 (8 B): `return alpha` (s16, 0x30d17c) [M disasm `lh` 0x1f31ec].
+    /// The game's four readers add it byte-wise into a colour word (Component_SetupInstance
+    /// 0x1f0dc4, Label_Update 0x218e68, List_Update 0x21b06c, MenuManager_Update 0x21c64c —
+    /// `0x201f3400 | (alpha + 0x7f)`); the draw layer consumes this getter.
+    pub fn menu_alpha_get(&self) -> i16 {
+        self.alpha
+    }
+
+    /// `Menu_UpdateTextFmt` 0x1f3328 (108 B): `count += 0.1` (wrap 2π), `throb = sin(count) ·
+    /// 0.03125 + 1.0` [M 0x1f3328 + `swc1` 0x1f3388]. `throb` has NO reader in the binary (the
+    /// labels scale 1.0 — [`Self::menu_get_normal_text_fmt`]), so the pulse is a dead retail
+    /// effect; the phase still runs from MenuManager_Update 0x21c444/0x21c4e0.
+    pub fn menu_update_text_fmt(&mut self) {
+        self.text_fmt_count += 0.1;
+        // Wrap to 0.0, PS2Sinf [M 0x1f3328] (review 2026-10-21).
+        if self.text_fmt_count >= 6.283_185_5 { self.text_fmt_count = 0.0; }
+        self.text_throb = nf_game::trig::sinf(self.text_fmt_count) * 0.031_25 + 1.0;
+    }
+
+    /// `Menu_GetNormalTextFmt` 0x1f3398 (36 B): `if (sprite) { sprite+0x40 = 1.0f; sprite+0x3c
+    /// = 1.0f; }` — the M_LABEL text sprite's (x, y) scales [M sprite = label+0xa4]. Callers:
+    /// Label_Update 0x218e48 (focus path) / 0x218f30 (un-focus path).
+    pub fn menu_get_normal_text_fmt(&self) -> (f32, f32) {
+        (1.0, 1.0)
+    }
+
+    /// `Menu_ClearDelayedMessages` 0x1f3508 (52 B): zeroes only the `when` (+4) of all 128
+    /// `menu_delay_msg` 0x2ddb00 slots — zeroed `when`s never re-fire (the clock 0x30d190 only
+    /// ever increments [M Menu_ProcessDelayedMessages 0x1f3490]), so every pending delayed
+    /// message is dropped. Callers: Manager_SendMessage 0x21c858 case 0x44 (page change, skipped
+    /// on the keep-page variant) and PS2_DoCardFlow 0x217bd8 state 8 (card-dialog teardown).
+    /// The port's queue analog is [`Self::delayed_page`] + [`Self::delayed_block`].
+    pub fn menu_clear_delayed_messages(&mut self) {
+        self.delayed_page = None;
+        self.delayed_block = None;
+    }
+
+    /// `Menu_StringInit` 0x1f3540 — literally `jr ra; nop` [M disasm]: a retail stub (the `int`
+    /// arg is ignored; MenuManager_Create 0x21b988 passes 32000). Kept as a no-op so the flow
+    /// shape matches; its companion globals (string_count.453 0x30d524, menu_counter 0x30d178)
+    /// have zero references.
+    pub fn menu_string_init(&self) {}
+
+    /// `Menu_StringKill` 0x1f3548 — literally `jr ra; nop` [M disasm]: a retail stub, the Delete
+    /// side of [`Self::menu_string_init`] (MenuManager_Delete 0x21c3a4).
+    pub fn menu_string_kill(&self) {}
+
+    /// `Menu_SelectCodenameInControl` 0x2028d8 (260 B): strcmp the active codename name
+    /// (0x2e1ae8) against `codename_buf` 0x2e1c58 (32-byte rows — 2 defaults then the saved
+    /// profiles, count 0x2e1ad4) and highlight the match with msg 0x2e: index = the match,
+    /// `count` (no row) on a miss, 0 when the name is empty or the count is 0 [M disasm].
+    /// P_NFSELECT_Handler 0x20aec0:44 and P_CNSELECT_Handler 0x212ad0:42 run it on every
+    /// page-open (msg 0x4c) against control 0x100000eb, so the codename pages open with the
+    /// active profile's row highlighted.
+    pub fn select_codename_in_control(&mut self) {
+        if !matches!(self.page, Page::Codename | Page::CnSelect) { return; }
+        if self.cn_name.is_empty() { self.cursor = 0; return; }
+        self.cursor = self
+            .profiles
+            .iter()
+            .position(|p| *p == self.cn_name)
+            .map_or(0, |i| 2 + i); // a miss highlights row 0 [disasm 0x2029a0-0x2029b0: a3 = 0] (review 2026-10-21)
     }
 
     /// Whether the cursor sits on a control the widget layer would blip for ✕/○: the rowed pages'
@@ -3028,6 +3230,12 @@ impl FrontEnd {
         }
     }
 
+    /// `Page_SetHelpText` 0x21f2b8's port side: the game binds the FOCUSED row's description
+    /// through help_table rows {control id, wildcard 0xf0f0f0f0, Txt label} to the page's help
+    /// control 0x10000225 (shipped on 8 pages [D front_end_menus_census.rs]; `Page_Update`
+    /// 0x21edc8:59-67 re-runs the walk + the bind every frame, jal 0x21eed0/0x21eee0/0x21eee8)
+    /// — this getter is what the draw code calls per focused row instead [S fold: one bind per
+    /// draw rather than per frame].
     pub fn row_label<'a>(&self, lang: Option<&'a Lang>, row: usize) -> String {
         let bind = |id: u32| lang.and_then(|l| l.bind(id)).map(str::to_string).unwrap_or_else(|| format!("<{id:#x}>"));
         match self.page {
@@ -3527,7 +3735,12 @@ impl FrontEnd {
     /// (0x21f8e0) builds it from the page def, `Radio_SendMessage` (0x21fa50) pumps it
     /// (0x10 add option, 0x1d/0x1e/0x49 select+notify), `Radio_GetIndex` (0x220130) /
     /// `Radio_SetIndex` (0x220180) are the list-index helpers; the port hand-rolls the
-    /// behaviour per page [S — same behaviour, no widget layer].
+    /// behaviour per page [S — same behaviour, no widget layer]. Its per-tick layout member
+    /// `Radio_Update` 0x21ff80 (`Menu_Update` 0x1f1dc0 walks each page's controls every tick)
+    /// resizes the M_LABEL child (+0x94) into the radio box (+0x70..+0x76 minus the scroll
+    /// arrows), hides the widget when +0x7a flags say so and re-runs `Scroll_Update` +
+    /// `Label_Update` — pure draw-time layout the port has no counterpart for (the ◀▶ step
+    /// here + the draw side's own geometry cover the job) [M 0021ff80 decomp].
     fn opt_step(&mut self, row: &OptRow, dir: i32) {
         let v = self.opt_value(row.ctrl);
         let nv = match row.kind {
@@ -3597,6 +3810,10 @@ impl FrontEnd {
         // Menu_ProcessDelayedMessages; the 0x13/0xf delays count these 60 Hz ticks (the call runs
         // twice per loop at PS2FramesToSkip == 2, 0x21c3d8:48-56)].
         self.delayed_tick();
+        // The same update's alpha pulse + text-format phase [M MenuManager_Update 0x21c3d8:35 —
+        // Menu_AlphaUpdate + Menu_UpdateTextFmt run per frame, twice at PS2FramesToSkip == 2].
+        self.menu_alpha_tick();
+        self.menu_update_text_fmt();
         self.intro_tick();
         // credits-data: the credits page's 0x50 tick; the delayed 0x44/0x5f exit routes the page
         // [M P_CREDITS_Handler 0x2152b0:103-195 — ToMain = msg 0x44/0x40000002 after the win path,
@@ -3729,6 +3946,10 @@ impl FrontEnd {
                 self.paris_card.tick();
                 self.paris_card.enum_step();
                 if self.paris_card.flow_done() {
+                    // PS2_DoCardFlow 0x217bd8 state 8: the card-dialog teardown runs
+                    // Menu_ClearDelayedMessages 0x1f3508 before the flow's queued page opens
+                    // [M 0x218470 — Clear + state[2] = 0].
+                    self.menu_clear_delayed_messages();
                     self.enter_page(Page::EstHero);
                     self.intro_step = 0; // P_ESTHERO's 0x4c [M 0x20a060:12-13]
                 }
@@ -4095,6 +4316,15 @@ impl FrontEnd {
     }
 
     /// Re-enumerate the card [M 0x1f7b78's row order: the two defaults, then the card's names].
+    /// `Menu_FlushEnum` 0x202000 (reset of `Menu_EnumSaves` 0x1f7b78's enumeration machine;
+    /// `PS2_DoCardFlow` 0x2184f0's terminal block runs it): the port has no persistent
+    /// enumeration state — this synchronous reload re-derives everything, so the flush's job is
+    /// subsumed by the rebuild itself [M docs/systems/menu-alpha-text-messages.md]. The same
+    /// terminal block's other close-out, `LS_FlushStates` 0x1ce1b0 (12 B: `Load_State = 0;
+    /// Save_State = 0` — the LS_* state machines back to idle; also called by
+    /// `Menu_UpdateMessageBox` 0x1f7de8:25 when the save gate drops the op) has nothing to
+    /// reset here: the port's save/load is a synchronous file write with no async state
+    /// machine [M 001ce1b0 + both call sites].
     pub fn reload_profiles(&mut self) {
         self.profiles = self
             .profile_dir
@@ -4831,6 +5061,35 @@ impl FrontEnd {
 
     /// One menu action. Returns true when the action changed the state.
     pub fn action(&mut self, a: Action) -> bool {
+        // The M_* widget runtime this page/action model re-expresses (misc-6 citations; the game's
+        // pages drive NEW_CONTROL-built M_* widgets through a message pump, the port folds each
+        // page's widgets into its own rows/state — the data/state/flow is here, the drawing is
+        // the main agent's):
+        // - `Manager_HandleMessage` 0x21df10 (28 B — a pure forward to `Handler_HandleMessage`
+        //   0x2029e0) sits at the end of `Manager_SendMessage` 0x21c858's dispatch; the port's
+        //   terminal per-action handler is THIS fn.
+        // - `Button_Init` 0x1efc90 (builds an M_BUTTON from its NEW_CONTROL def: kind byte +0x7b=1,
+        //   def words to +0x14/+0x18/+0x20, colours +0x70..+0x76, the M_LABEL child at +0x94 via
+        //   `Label_Init`, `Script_PrepareScripting`) — the port's per-page row construction
+        //   (`rows()`/`enter_page`/the page handlers' row tables).
+        // - `Button_SendMessage` 0x1ef7a0 (the M_BUTTON message pump: 0x14 `Script_ExitLoop`, 0x16
+        //   `Script_Play`, 0x18 → `Label_SendMessage`, 0x20 set target, 0x21 select state 0..6,
+        //   0x2b enable + `Component_SetupInstance`, 0x2f, 0x39) — the port's per-row Confirm /
+        //   step handling inside this `action` + [`Self::opt_step`].
+        // - `Window_Init` 0x224110 (M_WINDOW: +0x7b=0xd class, def words, `Script_PrepareScripting`)
+        //   and `Window_Update` 0x224270 (8 bytes: `return` — a no-op even in the game) — the
+        //   port has no per-widget window step; pages draw their frames directly.
+        // - `Font_GetAlignment` 0x1ef728 (walks the label text's embedded 0xFA.. tags and returns
+        //   the alignment byte after the 0xFA tag, default 1) — the port's alignment comes from
+        //   the page-def rows it re-expresses, not string tags (`Lang::parse` keeps no tags).
+        // Dispatch evidence: `Button_Init`/`Window_Init` are reached from `Manager_SendMessage`
+        // 0x21c858's control-create switch, `Button_SendMessage` from `__Menu_SendMessage`
+        // 0x1f1c18's per-kind dispatch [M grep over work/decomp/ACTION.ELF].
+        // `MenuManager_GetStatus` 0x21deb0 (max +0x1b4 over the five manager slots — the
+        // create-page results; callers Menu_InputAction 0x1f1f40:102 gates actions 0x1e/0x1f
+        // behind `status > 3`, P_PAUSE_Handler 0x203c28:99) — the port's gate is structural:
+        // `action` only runs while the front end owns the input (the GameFlow stack), so no
+        // status counter is needed.
         // menu-mouse-parity: any action moves the wheel under the pointer — the hover is stale.
         self.wheel_hover = None;
         // death-loop-07: a fresh input decides the restart marker anew — only the results page's
@@ -5045,6 +5304,7 @@ impl FrontEnd {
                 }
             }
             Page::CnAdvanced | Page::CnMp | Page::CnAv => {
+                // CompMenuCtrl 0x1d34c8 [M] — QuickSort comparator id 7, the row→control lookup (`Menu_FindControl` 0x1f16d8 sorts the page's controls by the s16 row/order at +4 with it, 0x1f1b34); the port's `opt_rows()` tables carry each row's ctrl, so there is nothing to sort.
                 let rows = self.opt_rows();
                 let back_row = match self.page { Page::CnAdvanced => 3, Page::CnMp => 4, _ => 5 };
                 match a {
@@ -5531,7 +5791,11 @@ impl FrontEnd {
                 // then re-shows the list on msg 0x50 [M P_PAUSE_Handler 0x203c28:19-24 —
                 // option_return != 0 → control 8 0x2b(0); the ok-only box returns 3 on OK and 4
                 // on cancel, both non-zero] — the port just clears the field. Everything else
-                // idles.
+                // idles. The game's box is the authored TYPE-6 list control 0x10000120 on that
+                // page [D census]: Menu_CreateOptionBox fills its row text via
+                // `List_SendMessage` 0x2196e8 arm 0x10 (:27-41) and calls `List_Update`
+                // 0x21a598 directly (:68) — the port's `ListState` + this modal stand in for
+                // that flow (the draw side is the main agent's).
                 if self.pause_hint.is_some() {
                     match a {
                         Action::Confirm | Action::Back => { self.pause_hint = None; return true; }
@@ -5838,8 +6102,10 @@ impl FrontEnd {
                                 return true;
                             }
                             // ✕ once joined: "Player Ready" [M C_RBMPSTART's 0x4b state-5 arm sets
-                            // mpjoin+1 = 1 and fades; P_MPJOIN's msg-0x50 arm checks
-                            // Menu_MPAreWeReady → page 0x4000001a].
+                            // mpjoin+1 = 1 and fades — the fade is Menu_MPFadeWhenReady 0x201fc0,
+                            // a 30-frame colour-fade process toward 0x60606080
+                            // (docs/systems/menu-alpha-text-messages.md); P_MPJOIN's msg-0x50 arm
+                            // checks Menu_MPAreWeReady → page 0x4000001a].
                             5 if !self.mp_join[0].ready => { self.mp_join[0].ready = true; self.enter_page(Page::MpScenario); self.cursor = 0; return true; }
                             // net-online-lobby: while hosting, the host's own panel is ready by
                             // definition (mp_host_begin set it) — ✕ walks to the scenario page
@@ -5961,6 +6227,12 @@ impl FrontEnd {
                             4 => {
                                 self.mp_handicap = MP_HANDICAPS[self.mp_setup_sel.min(MP_HANDICAPS.len() - 1)].0;
                                 self.mp_setup_state = 5;
+                                // C_RBMPFINISH_Handler 0x20db48's focus pair rides this step:
+                                // C_RBMPSETUP 0x20de58:114 activates the FINISH control 0x1000022a
+                                // (0x5a → 0x5c/0x60 focus pair, "Press ~A when ready" 0x1e9); the
+                                // handler's 0x6b back arm vetoes the pop and steps mp_stuff
+                                // +0x360+p·4 5→4. The ready/launch job itself is this arm (same
+                                // job, another name — docs/systems/menu-alpha-text-messages.md).
                                 self.mp_join[0].ready = true;
                                 self.enter_page(Page::MpOptions);
                                 self.cursor = 0;
@@ -6583,7 +6855,11 @@ impl FrontEnd {
     /// C_SBMPSCEN 0x20c600:48-145 + the disassembly's stores at 0x20c72c-0x20c864: time 10,
     /// frags 10, Deathmatch, radar on, no friendly fire, weapon set 0 (Normal), FFA, 3 bots
     /// (Drake/Kiko/Rook, all Phoenix, default stats), the map sampled from mp_level rows 0..6,
-    /// the joined players' teams/skins fixed, humans = joined count].
+    /// the joined players' teams/skins fixed, humans = joined count]. The debug 1-player map
+    /// board launch (C_LBPMMAP_Handler 0x215ac8 — `MPSettings+0x1AC = 1`,
+    /// `ResetMap_LevelToLoad`, `GameFlow_PushState(80,7,0xff)`) is UNREACHED in the shipped game
+    /// (docs/port-map/unreached.md — its page 0x40000007 never opens); this shipped path covers
+    /// the same job.
     pub fn mp_quick_start(&mut self) {
         self.mp_time_limit = 10;
         self.mp_frag_limit = 10;
@@ -6591,11 +6867,13 @@ impl FrontEnd {
         self.mp_friendly_fire = 0;            // [M +0x198 = 0]
         self.mp_weapon_set = 0;               // [M +0x1B4 = 0]
         self.mp_radar = 1;                    // [M +0x1C4 = 1]
-        self.mp_player_mods = [0, 0];         // [M the quick start writes neither +0x1BC nor +0x1C8 — the boot values 0/1 persist]
-        self.mp_envmods[0] = 2;               // [M the quick start never writes +0x1C0 — the boot value 2 (Random) persists]
-        self.mp_envmods[1] = 0;
+        // The quick start's store list (disasm 0x20c72c-0x20c768, docs/systems/quick-game.md §2)
+        // writes ONLY +0x1A0/+0x19C/+0x1A4/+0x180/+0x198/+0x1C4/+0x1B4/+0x1CC/+0x190/+0x1D4/
+        // +0x18C/+0x1D0 — NOT +0x1B8/+0x1BC/+0x1C0/+0x1C8: whatever they hold persists. Boot
+        // leaves +0x1C8 = 1 (Location Damage ON) and +0x1C0 = 2 [M bootup 0x1c7e78:45,28], and a
+        // custom visit's Player/Enviro-Mods picks survive a later Quick Game [M the store list].
         self.mp_envmods[2] = 0;               // [M 0x20c748: +0x1D4 = 0]
-        self.mp_envmods[3] = 0;
+        self.mp_envmods[3] = 0;               // [M 0x20c758: +0x1D0 = 0]
         self.mp_envmods[4] = 2;               // [M 0x20c734: +0x1CC = 2 = Helicopters (Car_Create 0x1305b0:29-40 spawns choppers on 2)]
         // The map sample: `Rand_Random() % 7` over mp_level rows 0..6 — never Ravine [M
         // 0x20c76c-0x20c7b4]. Headless determinism: the shared RNG is not wired here, so the port
@@ -7192,7 +7470,12 @@ impl FrontEnd {
     pub fn mp_net_dial(&mut self) -> bool {
         self.mp_net_error = None;
         let addr = self.mp_net_addr.trim().to_string();
-        if !mp_net_addr_ok(&addr) && nf_net::p2p::JoinCode::decode(&addr).is_err() {
+        // Every form the join box accepts — IP:PORT, the 16-symbol join code, and the 4-character
+        // lobby code the public list and friends share — is `parse_join_target`'s, the same parse
+        // the session's dial runs. The old gate here (IP:PORT or the long code only) refused every
+        // 4-character code before it reached the lookup (user report 2026-10-21: the code and the
+        // listed lobby's Enter "do nothing").
+        if !mp_net_addr_ok(&addr) && nf_net::p2p::parse_join_target(&addr).is_err() {
             self.mp_net_error = Some(MpNetError::BadAddress);
             return false;
         }
@@ -8741,7 +9024,30 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         // 0x2d0, texture control 0x100001cf at (89,112,171×256), text list 0x100001d0 at
         // (268,94,284×292) [L the menu-def dump]), WINGAME is the movie page only, CHEATMEDAL
         // has no page data (nothing static to draw).
-        Page::NfBonus | Page::WinGame | Page::CheatMedal => {}
+        // The 007 Bonus page, drawn from its page data [D menu-def page 0x40000038, dumped
+        // 2026-10-21]: header (50,40) LBL 0x2c5; the reward picture 0x100001cf (89,112,171×256) —
+        // the tier-1 texture when that line stands [M P_NFBONUS 0x209670:22-26], else the static
+        // TEX 0x03000134 (uv 0,0 173×257 from msg 0x2d); the text list 0x100001d0 (268,94,284×292)
+        // — the composed tier text [M :22-41]; the focus box 0x10000165 (62,372,61×59, b=1); the
+        // hint (50,419) LBL 0x2d0; the stamp 0x10000224 at the forced (539,393) like the results
+        // page; the logo. Draw-handoffs row 2: PCSX2 look owed (the user saw no animation).
+        Page::NfBonus => {
+            page_header(&mut h, hfont, &bind(0x2c5));
+            let pic = fe.bonus.as_ref().and_then(|b| b.texture).unwrap_or(0x0300_0134);
+            quad640(&mut h, pic, 89.0, 112.0, 171.0, 256.0, [0.0, 0.0, 173.0, 257.0], gs(0x7f7f7f, 0xff));
+            if let Some(b) = fe.bonus.as_ref().filter(|b| b.has_text) {
+                let text = b.text_labels.iter().map(|&l| bind(l)).filter(|t| !t.trim().is_empty()).collect::<Vec<_>>().join("
+");
+                for (i, line) in wrap_px(&text, font, mx(284.0)).iter().take(17).enumerate() {
+                    h.text(Anchor::Centre, font, -2, line, mx(268.0), my(94.0 + 8.0 + i as f32 * 17.0), false, cream, true);
+                }
+            }
+            frame640(&mut h, 62.0, 372.0, 61.0, 59.0);
+            quad640(&mut h, 0x0300_014c, 539.0, 393.0, 255.0, 255.0, [0.0, 0.0, 256.0, 256.0], gs(0x7f7f7f, 0xff));
+            hint_bar(&mut h, font, &hint(0x2d0, "~A Continue"), 50.0, 419.0, cream);
+            logo_stamp(&mut h);
+        }
+        Page::WinGame | Page::CheatMedal => {}
     }
     // The port's message box over whatever page is up (the option-box plate the MP pages use).
     // The MP start checks' refusal [M C_SBMPOPTIONS 0x20e818:50-130]: the game's label, with a
@@ -9175,6 +9481,9 @@ pub fn mp_textures() -> &'static [u32] {
             // handler's msg-0x24 sends [M 0x212198:159-166]) and its placeholders [L page 0x40000033].
             .chain(MP_CHARACTERS_SMALL.iter().map(|r| r.0))
             .chain([0x0300_015du32, 0x0300_0156, 0x0300_016b])
+            // The 007 Bonus page's reward pictures (REWARD_TEXT's tier textures, msg 0x24 into
+            // 0x100001cf [M P_NFBONUS 0x209670:23]) — never loaded before, so the page drew no card.
+            .chain(nf_game::progress::REWARD_TEXT.iter().flat_map(|r| r.iter().map(|t| t.1)))
             .filter(|h| *h != 0 && !MENU_TEXTURES.contains(h)).collect();
         v.sort_unstable(); v.dedup(); v
     })
@@ -10048,4 +10357,128 @@ pub static SAVE_NAMES_FROM_DISK: std::sync::atomic::AtomicBool = std::sync::atom
 fn mp_slot_name(sent: &str, slot: usize) -> String {
     let s = sent.trim();
     if s.is_empty() || s == "player" { format!("Player {}", slot + 1) } else { sent.to_string() }
+}
+
+#[cfg(test)]
+mod unported_menus5_tests {
+    use super::*;
+
+    /// The alpha pulse [M Menu_AlphaUpdate 0x1f3170]: phase +0.2 per tick, alpha = sin·64, wrap
+    /// at 2π; `Menu_AlphaReset` 0x1f31e0 zeroes the COUNTER only (alpha rides the next tick to
+    /// sin(0)·64 = 0). Sister: the un-reset phase keeps climbing (the reset demonstrably
+    /// changes the state).
+    #[test]
+    fn alpha_pulse_runs_wraps_and_resets() {
+        let mut fe = FrontEnd::new();
+        assert_eq!(fe.menu_alpha_get(), 0);
+        for _ in 0..5 { fe.menu_alpha_tick(); }
+        assert!((fe.alpha_phase - 1.0).abs() < 1e-4, "5 ticks of +0.2 = phase 1.0");
+        let rising = fe.menu_alpha_get();
+        assert!(rising > 0, "sin(1.0)·64 > 0, got {rising}");
+        let before = fe.alpha_phase;
+        fe.menu_alpha_reset();
+        assert_eq!(fe.alpha_phase, 0.0);
+        assert_eq!(fe.menu_alpha_get(), rising, "the reset does not write alpha [M 0x1f31e0]");
+        fe.menu_alpha_tick();
+        assert_eq!(fe.menu_alpha_get(), (0.2f32.sin() * 64.0) as i16, "sin(0.2)·64 ≈ 12.7 — the reset+tick landed on the fresh phase");
+        assert_ne!(fe.alpha_phase, before);
+        // The wrap: 32 more ticks cross 2π (32·0.2 = 6.4 > 6.2831855).
+        for _ in 0..32 { fe.menu_alpha_tick(); }
+        assert!(fe.alpha_phase >= 0.0 && fe.alpha_phase < 6.283_185_5);
+    }
+
+    /// The text-format phase [M Menu_UpdateTextFmt 0x1f3328]: count +0.1 per tick and the throb
+    /// is 1.0 ± 1/32 — but WRITE-ONLY in retail, so only the phase is observable; the label
+    /// scales stay 1.0 [M Menu_GetNormalTextFmt 0x1f3398]. Sister: the phase demonstrably
+    /// advances and the throb demonstrably differs from 1.0 while written.
+    #[test]
+    fn text_fmt_phase_runs_and_labels_scale_1() {
+        let mut fe = FrontEnd::new();
+        fe.menu_update_text_fmt();
+        fe.menu_update_text_fmt();
+        assert!((fe.text_fmt_count - 0.2).abs() < 1e-6);
+        let throb = fe.text_throb;
+        assert!(throb > 1.0 && throb < 1.03126, "sin(0.2)·0.03125+1 = 1.0062, got {throb}");
+        let (sx, sy) = fe.menu_get_normal_text_fmt();
+        assert_eq!((sx, sy), (1.0, 1.0), "[M 0x1f3398 — the sprite scales are 1.0 constants]");
+    }
+
+    /// `Menu_ClearDelayedMessages` 0x1f3508 drops every pending delayed message. The port
+    /// models the queue as `delayed_page`/`delayed_block`. Sister: a queue left intact still
+    /// fires (the clear demonstrably changed the state).
+    #[test]
+    fn clear_delayed_messages_drops_the_pending_page_and_block() {
+        let mut fe = FrontEnd::new();
+        fe.delayed_page = Some((3, Page::Main, 0));
+        fe.delayed_block = Some(2);
+        fe.menu_clear_delayed_messages();
+        assert!(fe.delayed_page.is_none() && fe.delayed_block.is_none());
+        // The sister: without the clear the delayed page still lands (delayed_tick consumes it).
+        let mut fe2 = FrontEnd::new();
+        fe2.delayed_page = Some((1, Page::Main, 0));
+        fe2.delayed_tick();
+        assert_eq!(fe2.page, Page::Main);
+    }
+
+    /// `Menu_SelectCodenameInControl` 0x2028d8 on the codename pages' 0x4c open: the active
+    /// name's row is highlighted (2 default rows, then saves), a miss = the row count ("no
+    /// row"), an empty name = row 0. Sister: a name that is NOT in the list demonstrably lands
+    /// on the no-row index, not a save row.
+    #[test]
+    fn codename_pages_open_on_the_active_profile_row() {
+        let mut fe = FrontEnd::new();
+        fe.profiles = vec!["BOND".into(), "OO7".into()];
+        fe.cn_name = "OO7".into();
+        fe.enter_page(Page::CnSelect);
+        assert_eq!(fe.cursor, 3, "slot 0/1 defaults + save 1 = row 3");
+        fe.page = Page::Start; // re-open through the same 0x4c path
+        fe.enter_page(Page::Codename);
+        assert_eq!(fe.cursor, 3);
+        // The miss path: after the strcmp walk the game sends msg 0x2e with a3 = 0 [disasm 0x2029a0-0x2029b0]
+        // — row 0 (review 2026-10-21: this used to pin `count`, the "no row" index).
+        fe.cn_name = "GHOST".into();
+        fe.enter_page(Page::CnSelect);
+        assert_eq!(fe.cursor, 0, "a missed codename highlights row 0");
+        // The empty-name path [M the count-0/empty arm]: row 0.
+        fe.cn_name = String::new();
+        fe.enter_page(Page::Codename);
+        assert_eq!(fe.cursor, 0);
+        // Other pages are untouched by the sync.
+        fe.cn_name = "OO7".into();
+        fe.cursor = 2;
+        fe.enter_page(Page::Main);
+        assert_eq!(fe.cursor, 2);
+    }
+
+    /// `C_LANGUAGE_Handler` 0x208c68's data: the LanguageToLoad table, the VO map and the
+    /// accept's next page. Sister: a value outside the flag slots demonstrably differs from the
+    /// in-range rows (EN fallback) and the VO map is not the identity.
+    #[test]
+    fn language_flag_maps_to_tlanguage_and_accept_advances() {
+        assert_eq!(language_flag_to_load(0), 0); // EN [M 0x30d2ac row 0]
+        assert_eq!(language_flag_to_load(1), 2); // DE
+        assert_eq!(language_flag_to_load(2), 1); // FR
+        assert_eq!(language_flag_to_load(3), 4); // IT
+        assert_eq!(language_flag_to_load(4), 5); // NL
+        assert_eq!(language_flag_to_load(5), 3); // ES
+        assert_eq!(language_flag_to_load(6), 8); // SV
+        assert_eq!(language_flag_to_load(7), 0, "out of range stays EN [S]");
+        assert_eq!(language_sfx_vo(2), 2, "DE → VO 2 [M the accept arm]");
+        assert_eq!(language_sfx_vo(1), 1, "FR → VO 1");
+        assert_eq!(language_sfx_vo(3), 3, "ES → VO 3");
+        assert_eq!(language_sfx_vo(0), 0, "EN → VO 0");
+        assert_eq!(language_sfx_vo(8), 0, "SV → VO 0 (not its tLANGUAGE id)");
+        assert_eq!(LANGUAGE_ACCEPT_NEXT_PAGE, 0x40000048, "[M the 0x44 send]");
+        assert_eq!(LANGUAGE_TO_LOAD.len(), LANGUAGE_PROMPT_STRINGS.len());
+    }
+
+    /// The string-pool stubs [M 0x1f3540/0x1f3548 are `jr ra; nop`]: callable no-ops. Sister:
+    /// the companion asserts that the calls compile AND return nothing (a real body would make
+    /// the parity observable — the stub is the parity).
+    #[test]
+    fn string_init_and_kill_are_retail_stubs() {
+        let fe = FrontEnd::new();
+        fe.menu_string_init();
+        fe.menu_string_kill();
+    }
 }

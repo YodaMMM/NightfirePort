@@ -68,6 +68,7 @@ pub mod hud;
 /// mp-lobby-settings: the spawn loadout (`MP_EquipPlayer`, the weapon-set matrix) and the MP pain
 /// scaling (`Player_HandlePain`'s MP arm) — see `equip.rs`.
 pub mod equip;
+pub mod upgrades;
 
 /// mp-combat-weapons: the online match's shared rounds/grenades/blasts and the MP pain rules
 /// (`Player_HandlePain` 0x1902c8's MP arm) — see `docs/systems/mp-combat.md`.
@@ -199,6 +200,11 @@ pub struct MpSettings {
     pub radar: u32,
     /// +0x472 (u16): the registered pickup count.
     pub registered_pickups: u16,
+    // (The registration flow's load-order gate is `IsMapLoaded` 0x1d6be8 — the `bLevelLoaded`
+    // byte `MP_RegisterPickup` 0x189d80:99, `MP_initObjExt` 0x18b7a0:36 and
+    // `MP_Pickup_PostLoadInit` 0x18b578:10 test [M]. The port parses levels synchronously
+    // (`nf-formats::Level::parse`): a constructed Level IS the loaded state — no flag, no
+    // async window [S].)
     /// +0x198 hex (Ghidra `_408_`): the friendly-fire enable in team games — 0 blocks same-team
     /// bullet hits in `MP_RegisterBulletHit` 0x1857c0:43-57 [M]. The menu's Player Mods row 0x1ae
     /// writes it [M mp-menus.md].
@@ -290,7 +296,9 @@ impl MpSettings {
     }
 }
 
-/// One 0x30-byte `SpawnPoint` of the 64-entry table (0xc00 bytes @0x2a7360): +0x00 pos vec4 (the
+/// One 0x30-byte `SpawnPoint` of the 64-entry table (0xc00 bytes @0x2a7350 — the ELF symbol
+/// `SpawnPoints`; +0x10 into the entry is 0x2a7360, the second `Vec_Copy2` source in
+/// `BOT_fellOutMap` 0x1259d0:21): +0x00 pos vec4 (the
 /// floor-snapped placement, y = floor + 1.6 — the eye), +0x10 facing vec4, +0x20 the used flag [M
 /// 0x184f20:73-94].
 #[derive(Clone, Copy, Debug, Default)]
@@ -303,7 +311,8 @@ pub struct SpawnPoint {
     pub used: u16,
 }
 
-/// The spawn globals: `SpawnPoints` (64 × 0x30 @0x2a7360), `SpawnPntTeamCount` (2 × u32), and
+/// The spawn globals: `SpawnPoints` (64 × 0x30 @0x2a7350 — the ELF symbol), `SpawnPntTeamCount`
+/// (2 × u32), and
 /// `SpawnPntCount` [M 0x184f20:81-95; `MP_Init` 0x183438:12-14 zeroes them].
 #[derive(Clone, Debug, Default)]
 pub struct MpSpawnState {
@@ -345,7 +354,12 @@ pub struct MpObjects {
     /// 0x20000004), blueprint base (4, 0x20000100), KOTH hill (9, 0x40000800/0x60001000), uplink
     /// terminal (2, 0x60000008) — *Deviation*: stored here, no object is built (phase 1).
     pub created: Vec<MpObjectRecord>,
-    /// Type 3 demolition sites (scenario 0x20000040).
+    /// Type 3 demolition sites (scenario 0x20000040). The game's live side reaches the site's
+    /// obj through the MP_OBJ_EXT indirection (`MP_getObjExtObj` 0x18bca8 reads the ext
+    /// record's obj word, as `MP_getProtectionObj_NotExt` 0x18bc68 /
+    /// `MP_getDemolitionObj_NotExt` 0x18bc88 / `MP_DemolitionProtectionUpdate` 0x1870a0
+    /// use); the port stores the records and drives the RT state directly, no indirection
+    /// [M 0x18bca8; the port's shape].
     pub demolition: Vec<MpObjectRecord>,
     /// Type 5 blueprint items (scenario 0x20000100).
     pub blueprint_items: Vec<MpObjectRecord>,
@@ -717,6 +731,36 @@ impl MpMatch {
         }
     }
 
+    /// `BOT_fellOutMap` 0x1259d0 — the MP bot's fell-out-of-the-map recovery. The game reaches
+    /// it through `Drone_FellOutMap` 0x13a878:19 when a drone-class obj escapes the cel graph
+    /// (`control_handle_cel_change` 0x133288:71,181) while an MP match runs — its gate is the
+    /// master copy (`MPSettings` byte 0x184, Ghidra decimal-388); SP takes the caller's other
+    /// arm (`obj+0xFE |= 1`, the 0x1336f8 delete pass) so SP drones are deleted and MP bots are
+    /// teleported home [M]. The detection caller itself is not ported yet (uncited-audit
+    /// queue); this is the recovery the game runs on that path. `bot_index` is the bot's
+    /// position in [`MpMatch::bots`].
+    pub fn bot_fell_out_map(&mut self, bot_index: usize, rng: &mut Rng) {
+        // The pick runs under a forced policy 1 (farthest from the enemies): the disasm saves
+        // MPSettings byte 0x1C0 (Ghidra decimal-448 — the port's `spawn_policy`), sets 1, calls
+        // `MP_GetSpawnPoint` and restores [M 0x1259d0 disasm 0x125a1c-0x125a48].
+        let saved = self.settings.spawn_policy;
+        self.settings.spawn_policy = 1;
+        let slot = self.bots[bot_index].slot;
+        // The team word `MPSettings + slot*0x30 + 0x20`, read fresh like the game does
+        // (`*(u16*)(MPSettings + *(short*)(BOT_vars+0x75C)*0x30 + 0x20)`) [M 0x1259d0:17-18].
+        let team = self.settings.players[slot].team as u16;
+        let idx = self.get_spawn_point(team, slot, rng) as usize;
+        self.settings.spawn_policy = saved;
+        let sp = self.spawns.points[idx];
+        let pos = [sp.pos[0], sp.pos[1], sp.pos[2]];
+        let yaw = sp.facing[1];
+        // The port's slot mirror of the obj position follows the teleport (the spawn picks and
+        // the contacts read it; the game's MPGame slot holds the obj pointer, whose +0x30 the
+        // Vec_Copy2 moved).
+        self.game.slots[slot].pos = Some(pos);
+        self.bots[bot_index].brain.fell_out_map(pos, yaw);
+    }
+
     /// The bot slots' shared view for the brain's `BotCtx` others table — the 8 player slots'
     /// positions/teams/scores with the bots' own words filled from [`MpBot`] (the game reads
     /// `MPGame + slot·0x30` and the objs [M 0x125390]) and the humans' from the slots the caller
@@ -899,7 +943,10 @@ impl MpMatch {
     /// mode-object creation draws (Deathmatch has none — the 0x20000040/0x20000080/0x20000100/
     /// 0x20000200 arms are the only draw paths [M 0x183a50:77-113]), `MPGame+0x420 = −1.0` [M
     /// 0x183a50:206] and the started flag [M 0x183a50:69,207]. The player creation is the caller's
-    /// (`Player_Init`'s port is `Bond::stand_at` + `set_slot`).
+    /// (`Player_Init`'s port is `Bond::stand_at` + `set_slot`). The game's line 71 also calls
+    /// `BOT_initSys` 0x1262b0 before the gate — an empty stub in the shipped binary (`jr ra; nop`,
+    /// 8 bytes, next symbol `BOT_postLoadInit` @0x1262b8; the real per-bot init is `BOT_init`
+    /// 0x1249e8 at :155) — which this port mirrors by omitting it [M].
     pub fn start(&mut self, rng: &mut Rng) {
         self.settings.started = false;
         self.settings.master_copy = self.settings.master;

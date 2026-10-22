@@ -120,6 +120,11 @@ pub struct LevelMap {
     /// Particle emitter defs (block 0x30; `Emitter_LoadDefs` 0x17ab40 fills one global hashtable —
     /// the port merges every map's block into the Level's list; the sim resolves by hash).
     pub emitter_defs: Vec<EmitterDef>,
+    /// Block-0x2c hashlist (`parsemap_block_hashlist` 0x1d1e78): the file hashes this map needs, with
+    /// the 0x06000000 sentinel dropped (`map::hashlist_entries`). The game feeds each into the
+    /// `hashtable_getitem` 0x1ca5b0 / `isLoadable` load-queue check [M 0x1d1e78]; the port's eager
+    /// whole-archive load covers the queueing, the list pins what the map demanded.
+    pub hashlist: Vec<u32>,
 }
 
 /// One block-0x26 entry: 8 floats [x, y, z, radius², pad, r, g, b] with r/g/b 0-1
@@ -332,6 +337,7 @@ impl Level {
             let mut lod = Vec::new();
             let mut radiators = Vec::new();
             let mut emitter_defs = Vec::new();
+            let mut hashlist = Vec::new();
             for blk in &mf.blocks {
                 match blk.id {
                     0x2e => pending_coll = Some(crate::collision::Collision::parse(blk.payload(data))?),
@@ -359,11 +365,24 @@ impl Level {
                     0x26 => radiators = LightRadiator::parse_block(blk.payload(data))?,
                     // `parsemap_block_particles` 0x1d2060 → `Emitter_LoadDefs` 0x17ab40 (block id 0x30,
                     // parsemap_handle_block_id 0x1d1020 case 0x30). The defs join the Level-wide table.
+                    // Emitter_LoadDefs reads its stream through the game's cursor readers — BIN_GetWord
+                    // 0x1e8af0 / BIN_GetFloat 0x1e8b48 (BIN_GetByte 0x1e8ad8 for the byte fields) [M];
+                    // `EmitterDef::parse_block` consumes the identical fields at fixed offsets.
                     0x30 => emitter_defs.extend(EmitterDef::parse_block(blk.payload(data))?),
+                    id::HASHLIST => hashlist = crate::map::hashlist_entries(blk.payload(data)),
+                    // The dispatcher 0x1d1020 also routes two ids the port consumes implicitly:
+                    // - MAP_HEADER 0x0e → `parsemap_block_map_header` 0x1d1430 reads MapEntityCount (+4)
+                    //   and path count (+8) and preallocates the cel-list table [M]; the port's per-map
+                    //   Vecs grow as the entity blocks arrive, which is the same record set without the
+                    //   count-driven preallocation.
+                    // - MEMORY_DISCARD 0x1c → `parsemap_block_memory_discard` 0x1d2538 records
+                    //   `FileDiscard = FileNextBlock` so the streamed loader can release the read buffer
+                    //   past that point [M]; the port reads whole entries through LevelBin (no stream),
+                    //   so there is no discard point to record (docs/systems/engine-plumbing.md).
                     _ => {}
                 }
             }
-            maps.push(LevelMap { entry, kind: e.kind, name: e.name.clone(), textures, objects, placements, ai_network, sounds, path_data, portals, lod, radiators, emitter_defs });
+            maps.push(LevelMap { entry, kind: e.kind, name: e.name.clone(), textures, objects, placements, ai_network, sounds, path_data, portals, lod, radiators, emitter_defs, hashlist });
         }
         let mut by_hash = HashMap::new();
         for (m, map) in maps.iter().enumerate() {

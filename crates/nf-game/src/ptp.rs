@@ -6,6 +6,11 @@
 //! writes the result flag +0x97c, the next index +0x974 and the next key +0x4f4 before BASE.ELF
 //! re-dispatches. ACTION's next boot mirrors the read (`Boot_LoadPTPData` 0x1c8560).
 //!
+//! The launch's interrupt masking has no host counterpart: `psiLaunchDriving` calls
+//! `DisableIntc` 0x23c4b0 (104 B — masks an INTC channel) around the exec jump, as
+//! `sceGsResetGraph` does around graph init [M caller scan; docs/systems/kernel-stubs-misc9.md
+//! §3] — a host process exec needs no interrupt controller.
+//!
 //! Every offset below is measured from the decompile [M], with the DRIVING-side strings from the
 //! ELF [D]. The struct models the fields the decompile writes AND reads on both sides; the gaps
 //! (e.g. +0x1b4..+0x4b4, never touched by either side's handover code) are modelled as raw bytes.
@@ -220,6 +225,14 @@ impl DriveReturn {
     /// back to the mirror the caller hands in ([M 0x1c8560:35-36 `GameState._40_4_ =
     /// DAT_0031c1d4`] — the caller owns the `GameState+0x28` mirror). The resume level itself is
     /// always [`RESUME_LEVEL`] [M 0x1c8560 tail] — the caller loads it.
+    ///
+    /// The game's boot ALSO primes the save-system input buffer with the block:
+    /// `LS_LoadFromBuffer(buf, 0x12c0)` 0x1ce1c8 [M 0x1c8560:17 — when the block's first 4 bytes
+    /// (the carried codename text) are not all zero it zeroes `InBufData` 0x3416e0 (0x1000) and
+    /// amemcpys the block in, so the LS_* save-block parser could read it] — its only caller is
+    /// this boot path (`GameFlow_Main` 0x1c98c8:80 → `Boot_LoadPTPData` 0x1c8560). The port has
+    /// no LS slot buffer: [`Self::apply`] re-applies the carried fields directly (status/stats/
+    /// difficulty) and the codename profile carries the rest [M 001ce1c8 decomp].
     pub fn apply(&self, mission: &mut crate::mission::Mission, stats: &mut DrivingStats, difficulty: &mut u32) {
         mission.set_state(self.mission_state()); // [M 0x1c8560:12-20]
         stats.set_from(&self.stats.ids, &self.stats.values); // [M 0x1c8560 `PlrStats_SetDrivingData(0x31c1e4, 0x31c214)`]

@@ -520,7 +520,9 @@ destroy props. `NONE` = no writer found on the disc — the gap later tasks can 
 
 **07000016**:
 - part 2 0x0400004e ch 0x8f enable 0x8e[trigger(1)] → trigger(1)
-- part 2 0x0400004f ch 0x90 enable 0x8f[trigger(1)] → NONE **GAP**
+- part 2 0x0400004f ch 0x90 enable 0x8f[trigger(1)] → switch #693 (the KikoDeathButton, kind 0x29,
+  p0 = 0x90, p5 = 0x8d the gate [D]; Bond's E [M Switch_Activate 0x1b02a8:22] — kiko-16-defeat;
+  the earlier scan's NONE predates the kind-0x29 census)
 
 **0700001b**:
 - part 0 0x04000059 ch 0x09 → trigger(3)
@@ -542,8 +544,9 @@ destroy props. `NONE` = no writer found on the disc — the gap later tasks can 
   castle mission's data — the Dragon Safe's open chain (map-castle's doc covers the door flow, not
   this channel). The writer would be the safe-object handler (the `DynamicObject_Create` 0x3b
   family on 03, unported).
-- **07000016 ch 0x90** ("Prevent Kiko from launching into space"): the Kiko-launch chain —
-  s/map-finale's scope (branch open, unmerged at scan time).
+- **07000016 ch 0x90** ("Prevent Kiko from launching into space"): RESOLVED (kiko-16-defeat) —
+  the writer is the KikoDeathButton switch #693 (kind 0x29, p0 = 0x90 [D]), Bond's E [M
+  Switch_Activate 0x1b02a8]; docs/levels/07000016.md §6/§7.
 - **0700000e / 0700000f / 07000010**: the mission records exist (`mission::LEVELS`) but the level
   archives are not on this ISO — nothing to scan; their ch-0(raw) objectives are driven by the
   raw `switch_channels[0]` the game's own out-0 triggers write [M 0x1827d8:33-37].

@@ -43,15 +43,17 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // placement has DropType 1 gets 128 rain-mesh slots (`DrawDrops` 0x18cb90, mesh 0x02000290) —
 // 01 and 02 are rain levels: +128 attachments, +6400 vertices, +12288 indices each; 05/0c/14 unchanged.
 const BASELINE: &[(&str, &str)] = &[
+    // Re-pinned for silencer-swap-piece (2026-10-21): the fp skin's bone-43 suppressor extra is built again as
+    // the state-8 swap piece (hidden outside the screw-on) — +4-6 meshes per level; every pinned level re-pinned.
     // Re-pinned for silencer-white-artifact (700y3, 2026-10-20): the silenced weapons' duplicate suppressor extra
     // (the record's +0x7C view-entity, drawn by the datum-0 attach instead) is no longer built (4-6 meshes per level); every pinned level re-pinned.
-    ("07000002.bin", "d96046ef6be529e6 4483059 9370089 5343 4345765 81 9802 205 28 25 8"),
-    ("07000005.bin", "a330bb32173ad130 4376991 9150171 3570 4292650 73 9721 106 19 16 6"),
-    ("0700000c.bin", "833e69b7b2f30ba1 4871032 10239654 8173 4680208 96 10988 170 22 40 15"),
+    ("07000002.bin", "31d5bf43e19366ce 4483659 9371265 5347 4346365 81 9810 205 28 25 8"),
+    ("07000005.bin", "6a43ad2ce9dee894 4377695 9151611 3576 4293354 73 9731 106 19 16 6"),
+    ("0700000c.bin", "15de2f0294792a8a 4871632 10240830 8177 4680808 96 10996 170 22 40 15"),
     // script-entity-copies (2026-10-20): one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
-    ("07000014.bin", "684c1755466d8b4a 7209202 14969940 6761 7056077 111 13440 173 41 37 32"),
-    ("07000001.bin", "2327deefebff4cfa 4395413 9209931 3480 4322111 76 9816 101 11 20 6"),
+    ("07000014.bin", "b53d96bbc1d49a08 7209906 14971380 6767 7056781 111 13450 173 41 37 32"),
+    ("07000001.bin", "ff9ab612c1051461 4396013 9211107 3484 4322711 76 9824 101 11 20 6"),
 ];
 
 #[test]

@@ -62,6 +62,9 @@ pub fn root_translation_at(seq: &Sequence, frame: f32) -> [f32; 3] {
 /// quintic samples), components masked by `axis_mask` bits 0/1/2 = x/y/z; a segment under 1e-05 becomes 0.01
 /// [M 001c4060: `fVar8 = 1e-05`, `if fVar7 < fVar8 → 0.01`]. The walk sets build z-only tables (axis mask 4,
 /// `AnimDistanceTableGet` 0x1c76f0) with `looping` set [M AnimSeqSet 0x1c7460 attaches the table to seq+0x80].
+/// (`AnimDistanceTableInit` 0x1c76e8 — called only from `AnimPreLoadInit` 0x1c63b8 — clears the game's global
+/// `nDistanceTables` counter on level load; the port builds tables lazily per sequence below, so there is no
+/// registry to reset — the fresh-per-load model covers it.)
 pub struct DistanceTable {
     pub total: f32,
     pub segments: u32,
@@ -70,6 +73,13 @@ pub struct DistanceTable {
 }
 
 impl DistanceTable {
+    // unported-misc-5 — the game's anim skin data goes through the cel hashtable:
+    // `hashtable_modify` 0x1ca648 (`AnimProcessSkinData` 0x1bd500), `hashtable_celglist_to_hashcode`
+    // 0x1ca840 (`AnimObjectNew` 0x1be910), `hashtable_get_hashtype_count` 0x1ca938 /
+    // `hashtable_get_hashtype_data` 0x1ca9a0 (`AnimPostLoadInit` 0x1be1a8, `AnimDebugCreate`
+    // 0x1bcfa8, `CreateSpaceAndPackTextures` 0x11dcf8). The port keys its anim/weapon meshes by
+    // hash directly (HashMap/BTreeMap over the same hashes), so the sectioned hashtable is a
+    // Rust map here — see scene.rs's note for the render side of the same table.
     pub fn build(seq: &Sequence, axis_mask: u32, looping: bool) -> Option<DistanceTable> {
         let frames = seq.frames.max(1) as i32;
         let n = if looping { frames } else { frames - 1 };
@@ -448,7 +458,11 @@ fn sequence_pose_n_with(seq: &Sequence, frame: f32, bones: usize, sample: &mut d
 }
 
 /// A script that is fading out (`AnimScriptAppendBlend`: fade −1, flags 0x500000): it keeps playing while its blend
-/// clock runs down; weight = clock / length.
+/// clock runs down; weight = clock / length. `AnimScriptCallOnStop` (0x1c7200) stores the game's +0x6c stop
+/// callback on that node — `DroneAnim_SetHTAnim` 0x13b1c8 arms it to `DroneAnim_AnimEndCallback` 0x13e3e8 for
+/// stop-at-end scripts, which only clears the drone's +0x579 one-shot-pending flag when the node dies; the port
+/// has no stop-callback slot, covering that clear with its per-Animator `once`/`held`/`early_end` reset on
+/// script replacement. The old script's OnStop is cleared (0) by the same call [M 0x13b1c8:84-88].
 #[derive(Clone, Debug)]
 pub struct Outgoing {
     pub script: u32,
@@ -512,6 +526,27 @@ pub fn blend_playing(current: Pose, outgoing: &[(Pose, f32)]) -> Pose {
     }
     blend(&mut out, &current, 1.0 - prev_w);
     out
+}
+
+/// The anim-object flag word at `animobj+0xc8` (the object the port folds into state lists — see
+/// `drone.rs` `aims_torso` for the aim side and the `tracking` fold for the head side).
+/// `AnimObjectIsAiming` 0x1c6900 tests `& 0x180`, `AnimObjectIsHeadTracking` 0x1c6850 tests `& 0x30` [M
+/// work/decomp/ACTION.ELF/001c6900, 001c6850].
+pub const ANIM_FLAGS_AIMING: u32 = 0x180;
+/// The head-tracking flag bits (`AnimObjectIsHeadTracking` 0x1c6850's mask) [M 001c6850].
+pub const ANIM_FLAGS_HEAD_TRACKING: u32 = 0x30;
+
+/// `AnimObjectIsAiming` 0x1c6900 [M 001c6900]: `(animobj+0xc8 & 0x180) != 0` once the object and its anim
+/// exist — the callers pass a live object, so the null arms (`obj == 0 || obj+0xdc == 0 → false`) live at the
+/// callers (`NDrone2_DoTracking` 0x1479d8 dereferences first). Reached only through the drone AI tick.
+pub fn is_aiming(flags: u32) -> bool {
+    flags & ANIM_FLAGS_AIMING != 0
+}
+
+/// `AnimObjectIsHeadTracking` 0x1c6850 [M 001c6850]: the 0x30 mask — `AnimObjectSetHeadTracking` 0x1c6748
+/// sets these bits (`drone.rs` tracking fold cites it); `NDrone2_DoHeadTracking` 0x1472c8 early-returns on it.
+pub fn is_head_tracking(flags: u32) -> bool {
+    flags & ANIM_FLAGS_HEAD_TRACKING != 0
 }
 
 #[cfg(test)]
@@ -642,6 +677,10 @@ fn script_frame_of(seq: &Sequence, time: f32) -> Option<(u32, f32)> {
 /// +0x98 writes indices 11 and 12 the same way, each guarded by the same 0.01 threshold
 /// (0.003921569 = 1/255). Under a script camera (`ScriptCam != 0`) only slot 2 applies, as a
 /// straight copy. `out` = the object's morph weight array (animData+0xb0, `count` floats).
+/// (`AnimFacialAppend` 0x1c6490 is the game's slot-2 feeder — it appends the talk script via
+/// `AnimScriptAppend` with marker 0xe0000002, stop-at-end +0xb5 = 3, and sets the anim object's
+/// speaking byte +0x109 = 2. The port's slot-2 consumer is this `slot2` parameter, but no
+/// gameplay append fills it: `Drones::speech` skips facial lines — see the note there.)
 pub fn facial_blend(out: &mut [f32], slot0: Option<&[f32]>, slot1: Option<&[f32]>, slot2: Option<&[f32]>, eyes: [u8; 2], script_cam: bool) {
     if script_cam {
         if let Some(s2) = slot2 {
@@ -667,6 +706,11 @@ pub fn facial_blend(out: &mut [f32], slot0: Option<&[f32]>, slot1: Option<&[f32]
     write_lid(out, eyes[1], 11, 12); // animObject+0x98
 }
 
+/// `control_AnimUpdate` 0x1341f0 (28 B) — the class-0x15/0x1F update dispatch slot (the .data
+/// table at 0x26f98c/0x26fa04 [D]; docs/atlas/object.md:113,119) — is a one-line forwarder to
+/// `AnimObjectUpdate` 0x1befd8 [M 0x1341f0:6], so the port's anim-object tick here does that
+/// job under this name.
+///
 /// `AnimFacialUpdate` (0x1be310) — the idle/blink driver, one call per skinned object per frame
 /// (`AnimObjectUpdate` 0x1befd8:127-136, gated on the skin's facial count, the big-skeleton flag
 /// and `AnimObjectIsClose(obj, 0xc)`; frozen under `ScriptCam` and the +0x58 bit-0x10000 facial-off
@@ -792,5 +836,41 @@ mod facial3_tests {
         let mut tmc = 0u16;
         let cmd = facial_update(&mut stc, &mut tmc, false, 3, &mut false, false, &mut rng);
         assert!(!cmd.blink && tmc == 0, "alert 3 freezes the blink");
+    }
+}
+
+#[cfg(test)]
+mod anim_object_flag_queries {
+    use super::*;
+
+    /// `AnimObjectIsAiming` 0x1c6900: the 0x180 mask — either bit alone aims, both aim, and the
+    /// head-tracking bits 0x30 are NOT aim bits [M 001c6900: `(*(uint *)(iVar1 + 200) & 0x180) != 0`].
+    /// Sister: the same word with only the 0x30/0x40/0x200 bits set does not aim.
+    #[test]
+    fn is_aiming_follows_the_0x180_mask() {
+        assert!(is_aiming(0x180), "both aim bits set [M 001c6900]");
+        assert!(is_aiming(0x080), "the 0x80 bit alone aims");
+        assert!(is_aiming(0x100), "the 0x100 bit alone aims");
+        assert!(is_aiming(0x180 | 0x30), "aim bits win over the track bits");
+        // The sister: the neighbouring flags must not leak into the aim answer.
+        assert!(!is_aiming(0x30), "head-track bits 0x30 are not aim bits");
+        assert!(!is_aiming(0x40), "0x40 (outside both masks) is not an aim bit");
+        assert!(!is_aiming(0x200), "0x200 is outside the 0x180 mask");
+        assert!(!is_aiming(0), "the idle flag word does not aim");
+    }
+
+    /// `AnimObjectIsHeadTracking` 0x1c6850: the 0x30 mask — 0x10 and 0x20 each track; the aim bits
+    /// 0x180 are NOT track bits [M 001c6850: `(*(uint *)(iVar1 + 200) & 0x30) != 0`].
+    /// Sister: the aim flag word with no track bits does not head-track.
+    #[test]
+    fn is_head_tracking_follows_the_0x30_mask() {
+        assert!(is_head_tracking(0x30), "both track bits set [M 001c6850]");
+        assert!(is_head_tracking(0x10), "the 0x10 bit alone tracks");
+        assert!(is_head_tracking(0x20), "the 0x20 bit alone tracks");
+        assert!(is_head_tracking(0x30 | 0x180), "track bits win over the aim bits");
+        // The sister: the aim bits must not leak into the track answer.
+        assert!(!is_head_tracking(0x180), "aim bits 0x180 are not track bits");
+        assert!(!is_head_tracking(0x40), "0x40 is outside the 0x30 mask");
+        assert!(!is_head_tracking(0), "the idle flag word does not track");
     }
 }

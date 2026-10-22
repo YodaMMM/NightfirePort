@@ -234,6 +234,9 @@ impl crate::drone::Drones {
                 self.music.event(6, 1);            // [M 0x190810:41] (once — the old port replayed it every tick)
             }
             self.bond_weapon = 0x47;           // Player_WeaponNone — the fists [M 0x190810:61]
+            // `GunImp_PlayerHasDied` 0x133008 — the dead player's mount drops (props.rs, the
+            // method holds the addresses).
+            self.props.gunimp_player_has_died();
             // The death sound 0x89 at Bond [M 0x190810:88].
             if let Some(t) = d.sfx { self.play_sound(bond, t.get(0x89)); }
             return;

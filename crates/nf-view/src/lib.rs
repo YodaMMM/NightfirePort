@@ -25,6 +25,7 @@ pub mod devwin;
 pub mod hud;
 pub mod credits;
 pub mod menu;
+pub mod menu_engine;
 pub mod mp_lobby;
 pub mod menu_music;
 pub mod settings;
@@ -108,6 +109,13 @@ pub fn lerp_yaw(a: f32, b: f32, t: f32) -> f32 {
 /// a render frame advances the 60 Hz clock by `dt * 60` and runs the whole ticks that appeared,
 /// capped at `max_ticks` (fix-perf-level's drop cap — capped ticks are dropped, not deferred).
 /// Logic stays fixed-60 Hz at any frame rate: faster frames just run 0 ticks more often.
+///
+/// This is the game's frame gate under another name: `main` 0x109080 → `CreateDB` 0x10b000:52 →
+/// `sceGsSyncV` 0x225930 → `VSync` 0x23c058 (mask interrupts, clear INTC stat bit 4, busy-wait
+/// the next vsync) / `VSync2` 0x23c0e8 (the same plus the kernel flag via `SetVSyncFlag`
+/// 0x23bf90, syscall 0x73) — one sim tick per vertical blank [M 0023c058/0023c0e8 decomp +
+/// caller scan]. The host render loop's `dt * 60` accumulation with whole-tick runs is the
+/// port's vsync wait (determinism rule: the tick count, not the wall clock, drives Sim).
 pub fn ticks_for_frame(anim_time: &mut f32, dt: f32, max_ticks: u32) -> u32 {
     let before = *anim_time as u32;
     *anim_time += dt * 60.0;
@@ -349,6 +357,18 @@ pub(crate) fn bug_replay_shot(scene: &scene::Scene, out: &std::path::Path) -> Re
 /// Builds the sound driver + output from the scene's bank/music, and wires the music logic. The scene's bank,
 /// music and tables are consumed (taken out) — the same path `main` uses at startup [M]. Public so the live
 /// tests drive the exact runtime driver (fix-weapon-sounds).
+///
+/// The PS2 teardown/init it replaces [M grep ACTION.ELF decomp]: `Sound_Kill` 0x1ddfd0 +
+/// `Sound_Ready` 0x1dceb8 call `SFXReset` 0x116a18 → `SFXReset2` 0x116a38 (batch op 0x0f,
+/// ES_FadeReset — the IOP ends with no active items/voices, fade back to 10000), and
+/// `Sound_Init` 0x1ddf88 calls `SFXInitialise` 0x1157b0 once per boot (bind the SFX.IRX RPC
+/// 0x40013575, replay SetLanguage/Mode/Volume, op 0x00). Dropping the old `Sound` and
+/// building a fresh `Driver` here (`Driver::new` inits `fade: 10000`) is the same state
+/// transition. `SFXSuspendFileAccess` 0x1165d0 / `SFXUnSuspendFileAccess` 0x1166f8 (ops
+/// 0x24/0x25 around `SP_LoadScript`/`Script_Free` loadable loads — IOP CD lockout) and
+/// `SFXSetFilePath` 0x116c50 (op 0x14; dead — `Sound_Init` passes 0) have no host
+/// equivalent: the port reads banks/streams from memory. `SFXSetNumberOfListeners` 0x116ec0
+/// is cited at `nf_audio::sfx::Driver::set_listener`.
 pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
     let sound = scene.sound_bank.take().map(|(slot, bank, sbf)| {
         let mut driver = nf_audio::sfx::Driver::new();
@@ -358,6 +378,11 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
         for (slot, bank, sbf) in std::mem::take(&mut scene.sound_spares) { driver.load_spare_bank(slot, bank, sbf); }
         if let Some((lut, bin)) = scene.streams.take() { driver.load_streams(lut, std::sync::Arc::new(bin)); }
         let output = nf_audio::Output::open();
+        // Diagnostic sink note (unported-misc-10): the game's printf output sinks into
+        // `deci2Putchar` 0x23cc90 — `_putchar` (OBJECT 0x2e7a58) swapped in by `scePrintf`
+        // 0x23d570, emitting the boot banner "NFSV = 0x%\n" from `PS2FreshBoot` 0x120ab0 [M
+        // chain in docs/systems/ps2-sdk-glue.md]. The port's equivalent is this eprintln!
+        // diagnostic path (no DECI2 console exists).
         if output.is_none() { eprintln!("audio: no output device; running silent"); }
         let music_files = scene.music_files.take().map(|(t, smf, ssd)| (t, smf, std::sync::Arc::new(ssd)));
         nf_audio::sfx::Sound { driver, output, captured: None, music_files, music: None, music_pending: Vec::new() }
@@ -375,6 +400,12 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
 /// pulse the first `UpdateMusicalEvents` consumes. fix-party-mission: the tests' `load` path now wires
 /// the music too (the cut-scene music jumps were test-invisible before); `build_sound` reuses this.
 fn wire_music(sim: &mut scene::Sim, mm: Vec<nf_formats::music::MapMusic>, vars: Vec<nf_formats::music::MusicVars>) {
+    // The load path's sound reboot: `ResetMap_Load` 0x1d6360:24/:131 runs `Sound_Kill` 0x1ddfd0
+    // (`SFXReset` when `Sound_Ready` had set SoundInit [M 0x1dceb8:107], SoundInit = 0) then
+    // `Sound_Init` 0x1ddf88 (`DList_Init` pool, `SFXInitialise(0)`, `memset(&EventList,0,0x100)` =
+    // the 64-u32 music event board) on EVERY load. The port takes the same job by rebuilding the
+    // audio world here (build_sound's fresh driver/banks/streams, and this fresh engine with its
+    // zeroed event board) — docs/systems/sound-lifecycle.md.
     sim.drones.attack_gate.vars = vars.iter().find(|v| v.level == sim.level).copied()
         .or(Some(nf_formats::music::MusicVars { level: sim.level, count: 2, floor: 0, window: 8, distance: 25.0 }));
     sim.drones.music = nf_game::music::Music::new(mm);
@@ -734,8 +765,23 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         .map(|e| character::parse_skeleton(lb.data(&data, e)).map(|s| (s.id as u8, s)))
         .collect::<std::result::Result<_, _>>()?;
     // The level's animations: LoaderLoad rewrites the hashcode's 0x00F00000 nibble to 0xF for loader types 0/3,
-    // so 070000NN.bin's sequences are in 07F000NN.bin (docs/formats/level-bin.md).
+    // so 070000NN.bin's sequences are in 07F000NN.bin (docs/formats/level-bin.md). `LoaderLoadAnims` 0x1d6b48
+    // is the game's thin tail call into `LoaderLoad` 0x1d4a00 for this same animation load [M 0x1d6b48];
+    // this block is the port's LoaderLoadAnims.
     let anim_name = format!("{}F{}", &archive[..2], &archive[3..]);
+    // `AnimPreLoadInit` (0x1c63b8, from `ResetMap_GameInit` 0x1d5080 / `LoadableReload` 0x1d6ab0):
+    // every level load starts the anim layer fresh — the tag/script timestamps, skin-scale globals
+    // and the pSkeletons+0x1fc scratch it resets have no port counterparts (nothing persists across
+    // loads), so these fresh skeleton/sequence/script maps ARE the reset.
+    // The same ResetMap_GameInit (0x1d5080:37) calls `AnimCacheInit` 0x1c6390 — `jr ra; nop` [M
+    // disasm 0x1c6390]: the shipped build's anim cache was emptied; there is nothing to init, so
+    // the port models no cache gate (the family's Enable 0x1c6398 / Disable 0x1c63a0 likewise).
+    // `ResetMap_Load` 0x1d6360 also calls `AnimSeqGetHdrBuf` 0x1c7998 (jal 0x1d67c4, a0=1) before
+    // this loader loop — `jr ra; or v0,zero,zero`, always 0, and the caller never reads v0 [M
+    // disasm 0x1d67c4-0x1d67d8]: a retired header-buffer hook; the port's load needs no hook.
+    // `ResetMap_GameInit` also calls `Sound_SetLogSfxFile` 0x1de368 right before `Mission_Init`
+    // [M 0x1d5080:43] — the shipped function is a bare `ret` [M 0x1de368], so the port preserves
+    // the call as nothing (docs/systems/sound-lifecycle.md).
     let mut sequences: HashMap<u8, Vec<Sequence>> = HashMap::new();
     if let Some(anim) = read(&anim_name)? {
         let alb = LevelBin::parse(&anim)?;
@@ -743,6 +789,8 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             let s = Sequence::parse(alb.data(&anim, e))?;
             sequences.entry(s.skeleton).or_default().push(s);
         }
+        // The game frees each seq's +0x84/+0x88 frame buffers with `AnimSeqDelete` (0x1c72e0) when its
+        // script dies; the port's `Sequence` owns its decoded channels and drops with these maps.
     }
     phase_mark("03 level+levelbin parse, skeletons, 07F sequences", t); t = std::time::Instant::now();
     // The level's own sleeve, before any merge lends foreign ones (see the substitution below).
@@ -1048,7 +1096,11 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                 // per-skeleton sequence list. In the port that list is order-sensitive gameplay data —
                 // `frame_of`'s `k % len` idle cycle and the skeleton-filtered `seq_index` drone lookups —
                 // and appending to it changed guards' animations and broke live tests (07000001's
-                // `dropped_guns_dim_to_the_cel_ambient` "the guard died"). The sentinel key still reaches
+                // `dropped_guns_dim_to_the_cel_ambient` "the guard died"). (`LoadableLoad` 0x1d69e8's
+                // first call `AnimCacheDisable` 0x1c63a0 — like `LoadableReload` 0x1d6ab0's
+                // `AnimCacheEnable` 0x1c6398 — is an EMPTY function in ACTION.ELF, so the port needs
+                // no anim-cache gate around this stream, only the 0x4000000 flush modelled here.)
+                // The sentinel key still reaches
                 // the by-hash map `Scene::seqs` (built by flattening every bucket), which is the only thing
                 // a cut-scene's `Script_AnimStart` resolution reads (`script_frame`'s hash → `seqs.get`).
                 4 if pe.length >= 0x40 => { let s = Sequence::parse(plb.data(&pack, pe))?; sequences.entry(s.skeleton | 0x80).or_default().push(s); }
@@ -1746,6 +1798,14 @@ fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
 
 /// One frame of sound (`Sound_UpdateListeners` → `Sound_UpdateSounds` → the batch → `SFXUpdate`): the listener is
 /// Bond's eye and view (glb_viewer[0]; the cut-scene camera's listener call is dropped by the EE batcher [M]).
+///
+/// The game's viewer is a 0x240-byte `viewer_tag` built by `build_alloc_viewer` 0x1c9378 (malloc +
+/// the +0x28 viewer index) and initialised by `Camera_Reset` 0x1b9af0 (272 B) [M]: zero pos/rot
+/// vectors (+0xc0..+0xcc / +0xe0..+0xec from the zero constant at 0x2d6200 [D]), the view MATRIX
+/// at +0x120 from zeros, +0x1a0 identity matrix, +0x2c StackInfo (cap 12), the dirty byte +0x2b,
+/// +0x108 = 1.0f (the FOV/zoom factor) and the camera radii +0x1ec/+0x1f0 = 4.0f [M
+/// 0x1b9af0:13-62]. The port's single `Viewer` struct here + the per-frame camera construction is
+/// that init (the field list is in docs/reports/unported-front-end-menus-2.md).
 /// `pub` so the headless tests drive the exact function the winit loop runs (the fix-gpu-skinning precedent).
 pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     let (pos, f) = (sim.bond.head(), sim.bond.look());
@@ -1875,9 +1935,22 @@ pub fn spot_movie_gates(state6: bool, intro_up: bool, attract_up: bool, looping:
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Blank { Always, WithFrame, Never }
 
-pub fn shot_hud(scene: &scene::Scene, aspect: f32, menu: Option<&gpu::HudFrame>) -> gpu::HudFrame {
+/// Whether the scene's script overlay (the view fade / letterbox / flash — the 3D view's) draws
+/// this frame. Not while a movie frame owns the screen (the game's movie loop draws nothing of the
+/// scene over it), and not on the front-end level 0x07000048: `ResetMap_Load` runs `Player_Start`
+/// → `Player_Init` there too [M 0x1d6360:154], arming the 45-tick entry fade [M 0x1910f8:45], but
+/// the game's front end ticks it away under the menus while the port's front-end scene never
+/// ticks — the fade sat at full black OVER the title and every backdrop-less page, and (once
+/// doublecross-transitions chained it into this overlay) over every boot/briefing movie (user
+/// report 2026-10-20: "movies arent visually there … I can hear the audio").
+pub fn scene_overlay_up(scene: &scene::Scene, movie_up: bool) -> bool {
+    !movie_up && scene.sim.as_ref().map_or(true, |s| s.level & 0xff00_ffff != menu::FRONTEND_LEVEL)
+}
+
+/// `movie_up`: a movie frame is on screen (see `scene_overlay_up`).
+pub fn shot_hud(scene: &scene::Scene, aspect: f32, menu: Option<&gpu::HudFrame>, movie_up: bool) -> gpu::HudFrame {
     let mut f = menu.map_or_else(|| overlay_for(scene, aspect), |m| m.clone());
-    f.append(&scene.script_overlay_hud(aspect));
+    if scene_overlay_up(scene, movie_up) { f.append(&scene.script_overlay_hud(aspect)); }
     f
 }
 
@@ -1928,6 +2001,15 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
             "gadgets" => menu::Page::Gadgets,
             "weapons" => menu::Page::Weapons,
             "cnselect" => menu::Page::CnSelect,
+            // Render aid: the 007 Bonus page with every tier of 07000005's reward earned (the
+            // fields bonus_enter builds, all lines standing).
+            "nfbonus" => {
+                let i = nf_game::progress::REWARDS_TABLE.iter().position(|e| e.hash == 0x0700_0005).unwrap_or(0);
+                let lines = [0usize, 1, 2, 3].map(|t| { let (label, texture) = nf_game::progress::REWARD_TEXT[i][t]; menu::RewardLine { has: true, label, texture } });
+                let text_labels = [0usize, 3, 2, 1].iter().map(|&t| lines[t].label).collect();
+                fe.bonus = Some(menu::BonusFields { level: 0x0700_0005, lines, texture: Some(lines[0].texture), text_labels, has_text: true });
+                menu::Page::NfBonus
+            }
             "cnmenu" => { fe.cn_name = "Default".into(); menu::Page::CnMenu }
             "advanced" => menu::Page::CnAdvanced,
             "mpoptions" => menu::Page::CnMp,
@@ -2246,7 +2328,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let depth = gpu::depth_view(&device, w, h);
     let (vp, vp_rot) = cam.view_proj(proj_aspect);
     let snow = snow_for(scene, cam);
-    let hud_owned = shot_hud(scene, proj_aspect, menu);
+    let hud_owned = shot_hud(scene, proj_aspect, menu, movie.is_some());
     let hud = &hud_owned;
     let movie_arg = movie.map(|(w, h, rgba)| (*w, *h, rgba.as_slice()));
     r.set_shards(&queue, &scene.shard_draws());
@@ -2396,6 +2478,11 @@ struct App {
     /// The front end (fix-menus): Some while a menu page is up (title / main / mission select /
     /// difficulty / options / pause / results). None = playing a mission directly.
     fe: Option<menu::FrontEnd>,
+    /// The Advanced options' Auto Aim (control 0x1000011b; the profile's +0x01 — default ON [M
+    /// Player_AutoAim 0x1a7c98:41 reads it]). Mirrored from the front end while it is up and kept
+    /// across missions (the front end closes during play); applied to the sim every frame. The
+    /// dev T key flips the same option.
+    auto_aim_opt: bool,
     /// net-consolidate: the ONE session layer (nf-net) while an online match runs (`--net-host` /
     /// `--net-join`, or adopted from the lobby pages' `fe.mp_session` when their match starts).
     /// None = local play, no session, no gate.
@@ -3277,6 +3364,8 @@ impl App {
         // The fresh sound stack is unpaused: reset the mirror so the per-frame diff
         // re-applies the current hold (a menu can still be up over the reload).
         self.audio_paused = false;
+        // The per-boot text globals (DoorMsg / LoadMsg) survive the level swap [M .sdata].
+        if let (Some(old), Some(new)) = (self.scene.sim.as_ref(), scene.sim.as_mut()) { new.hud.carry_boot_globals(&old.hud); }
         if let Some(start) = scene.start { self.cam = Camera { pos: Vec3::new(start.0[0], start.0[1] + 1.6, start.0[2]), yaw: start.1, pitch: 0.0, fov: GAME_FOV }; }
         self.scene = scene;
         self.anim_time = 0.0;
@@ -4089,6 +4178,12 @@ impl App {
                 // frontend-music: the menus' own audio (the jingle pair, the credits track), the
                 // page-change transitions and the per-frame pump.
                 self.menu_music_tick();
+                // The Auto Aim option reaches the game (it was stored and never read — user report
+                // 2026-10-21 "auto aim isn't working? shouldn't be a dev mode thing only").
+                if let Some(fe) = self.fe.as_ref() {
+                    if let Some(&v) = fe.opts.get(&0x1000_011b) { self.auto_aim_opt = v != 0; }
+                }
+                if let Some(sim) = self.scene.sim.as_mut() { sim.auto_aim = self.auto_aim_opt; }
                 // fix-weapon-assets: a dev-menu/panel give of a weapon the level archive lacks.
                 // The game never gives cross-level weapons, so there is no game path to mirror —
                 // the port answers the give with a warm reload of the SAME level with the weapon's
@@ -4110,6 +4205,7 @@ impl App {
                                     sim.bond = nf_game::player::Bond::stand_at(&sim.world, pos, yaw);
                                     sim.gun.switch_request = w;
                                 }
+                                if let (Some(old), Some(new)) = (self.scene.sim.as_ref(), scene.sim.as_mut()) { new.hud.carry_boot_globals(&old.hud); }
                                 self.scene = scene;
                                 if let Some(g) = &mut self.gfx {
                                     g.renderer = gpu::Renderer::new(&g.device, &g.queue, g.config.format, &self.scene, self.notex, self.nofog);
@@ -4321,6 +4417,7 @@ impl App {
                                             self.cam_cur = None;
                                             self.sound = build_sound(&mut scene);
                                             self.audio_paused = false;
+                                            if let (Some(old), Some(new)) = (self.scene.sim.as_ref(), scene.sim.as_mut()) { new.hud.carry_boot_globals(&old.hud); }
                                             self.scene = scene;
                                             if let Some(g) = &mut self.gfx {
                                                 g.renderer = gpu::Renderer::new(&g.device, &g.queue, g.config.format, &self.scene, self.notex, self.nofog);
@@ -5221,7 +5318,9 @@ impl App {
                 } else { overlay_for(&self.scene, aspect) };
                 if let Some(d) = self.dev.as_deref() { if d.overlay || d.menu { hud.append(&dev::hud(d, &self.scene, aspect, vp)); } }
                 if self.fps_meter.shown > 0.0 { hud.append(&dev::fps_counter_hud(&self.scene, aspect, self.fps_meter.shown)); }
-                hud.append(&self.scene.script_overlay_hud(aspect));
+                // The scene's script overlay belongs to the 3D view — off a movie frame and off the
+                // front-end level (`scene_overlay_up`).
+                if scene_overlay_up(&self.scene, movie_frame.is_some()) { hud.append(&self.scene.script_overlay_hud(aspect)); }
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
                 let fp_enc = std::time::Instant::now();
@@ -5477,7 +5576,7 @@ impl App {
                     (KeyCode::F3, ElementState::Pressed) if dbg => self.opts.reinforcements = !self.opts.reinforcements,
                     (KeyCode::KeyF, ElementState::Pressed) if dbg => self.opts.firing = !self.opts.firing,
                     (KeyCode::KeyN, ElementState::Pressed) if dbg => { let on = !self.noclip; self.set_noclip(on); }
-                    (KeyCode::KeyT, ElementState::Pressed) if dbg => if let Some(sim) = self.scene.sim.as_mut() { sim.auto_aim = !sim.auto_aim },
+                    (KeyCode::KeyT, ElementState::Pressed) if dbg => { self.auto_aim_opt = !self.auto_aim_opt; if let Some(fe) = self.fe.as_mut() { fe.opts.insert(0x1000_011b, self.auto_aim_opt as i32); } },
                     // Weapon switching: number keys 1–9 select directly, Q = prev, E (when not use) = next.
                     // The mapping: 1 = P2K (weapon 2), 2 = SG5 Commando (0x16), 3 = sniper (0x24), etc. The exact
                     // slot mapping follows the game's weapon order (selectable weapons with `weapon_data+0x04 == 1`).
@@ -5578,6 +5677,7 @@ impl App {
             panel_level: 0,
             panel_frames: 0,
             fe: None,
+            auto_aim_opt: true,
             level_code: 0,
             fe_music_page: None,
             menu_handle: 0,
@@ -5776,7 +5876,13 @@ impl ApplicationHandler for App {
                 let dt = self.last.elapsed().as_secs_f32().min(0.1);
                 self.last = std::time::Instant::now();
                 self.frame(dt);
-                self.draw_frame(dt);
+                // While a level loads, `frame` already drew and presented the loading screen
+                // (poll_async_load → draw_loading_screen) and returned early. The old inline body's
+                // `return` skipped the draw; since the frame/draw_frame split (7f14552b) the scene
+                // was drawn and presented right after it, so every redraw alternated loading screen /
+                // old scene hundreds of times a second (user report 2026-10-21: "loading levels is
+                // seizure inducing"). Skip the scene draw for the whole load.
+                if self.async_load.is_none() { self.draw_frame(dt); }
             }
             _ => {}
         }
@@ -6895,5 +7001,73 @@ mod headless_app_harness {
         assert!(host_events.iter().all(|e| !matches!(e, mpnet::CoreEvent::Desync { .. })));
         let client_events = client.0.borrow_mut().take_app_events();
         assert!(client_events.iter().all(|e| !matches!(e, mpnet::CoreEvent::HostTimeout)), "the client timed the host out through the load");
+    }
+
+    /// User report 2026-10-21: auto-aim only worked through the dev T key — the Advanced options'
+    /// Auto Aim (default ON, profile +0x01 [M Player_AutoAim 0x1a7c98:41]) was stored and never
+    /// read. The option now drives the sim on every frame; sister: turning it off turns it off.
+    #[test]
+    fn the_auto_aim_option_drives_the_sim() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        h.frames(2);
+        assert!(h.app.scene.sim.as_ref().unwrap().auto_aim, "Auto Aim defaults ON, as the game's profile does");
+        h.app.auto_aim_opt = false;
+        h.frames(2);
+        assert!(!h.app.scene.sim.as_ref().unwrap().auto_aim, "the option set Off turns it off");
+    }
+
+    /// The release's real path for the Auto Aim option: boot → title → main menu → Edit Codename →
+    /// Default → Advanced → Auto Aim ▶ Off → Confirm → back to the main menu → Night Fire → The
+    /// Exchange through the briefing → the loaded level's sim has auto aim OFF. The option file
+    /// goes to a scratch config dir (Confirm saves it — never the user's %APPDATA% copy).
+    #[test]
+    fn auto_aim_off_in_the_advanced_menu_reaches_the_mission() {
+        let Some(iso) = std::env::var_os("NF_ISO") else { return; };
+        let iso = iso.to_string_lossy().to_string();
+        let dir = std::env::temp_dir().join(format!("nf-autoaim-walk-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::env::set_var("NF_CONFIG_DIR", &dir);
+        let mut h = HeadlessApp::boot(&iso);
+        assert!(h.pump(60.0, |a| a.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::Start && !fe.intro_playing)), "title");
+        h.key(KeyCode::Enter);
+        assert!(h.pump(10.0, |a| a.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::EstHero)), "intro run");
+        // The intro run: skip it only while it is still up (on a movie-less image the headless
+        // countdown ends it at once — an Enter then would pick Night Fire on Main).
+        h.frames(210);
+        if h.app.fe.as_ref().is_some_and(|fe| fe.intro_playing) { h.key(KeyCode::Enter); }
+        assert!(h.pump(120.0, |a| a.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::Main && !fe.intro_playing)), "main menu");
+        // Main row 2 = Edit Codename [menus_flow the_codenames_row_reaches_the_option_pages].
+        assert!(h.key_until_page(KeyCode::ArrowDown, 4.0, |fe| fe.cursor == 2), "cursor to Edit Codename");
+        assert!(h.key_until_page(KeyCode::Enter, 4.0, |fe| fe.page == menu::Page::CnSelect), "Edit Codename opens the codename list");
+        assert!(h.key_until_page(KeyCode::Enter, 4.0, |fe| fe.page == menu::Page::CnMenu), "Default opens its wheel");
+        assert!(h.key_until_page(KeyCode::ArrowDown, 4.0, |fe| fe.cursor == 3), "the wheel to Advanced (row 3)");
+        assert!(h.key_until_page(KeyCode::Enter, 4.0, |fe| fe.page == menu::Page::CnAdvanced), "Advanced opens");
+        let auto_aim = menu::ADV_ROWS[1].ctrl;
+        assert_eq!(h.app.fe.as_ref().unwrap().opt_value(auto_aim), 1, "Auto Aim starts On");
+        assert!(h.key_until_page(KeyCode::ArrowDown, 4.0, |fe| fe.cursor == 1), "cursor to Auto Aim");
+        assert!(h.key_until_page(KeyCode::ArrowRight, 4.0, |fe| fe.opt_value(auto_aim) == 0), "▶ sets Auto Aim Off");
+        assert!(h.key_until_page(KeyCode::Enter, 4.0, |fe| fe.page != menu::Page::CnAdvanced), "Confirm keeps the edit");
+        assert_eq!(h.app.fe.as_ref().unwrap().opt_value(auto_aim), 0, "the confirmed value is Off");
+        assert!(h.key_until_page(KeyCode::Escape, 6.0, |fe| fe.page == menu::Page::Main), "back out to the main menu");
+        assert!(h.key_until_page(KeyCode::ArrowUp, 4.0, |fe| fe.cursor == 0), "cursor to Night Fire");
+        let mut on_list = false;
+        for _ in 0..20 {
+            h.key(KeyCode::Enter);
+            h.frames(10);
+            if h.app.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::MissionSelect) { on_list = true; break; }
+        }
+        assert!(on_list, "the mission list (page {:?})", h.app.fe.as_ref().map(|fe| fe.page));
+        assert!(h.key_until_page(KeyCode::ArrowDown, 4.0, |fe| fe.cursor == 1), "The Exchange row");
+        assert!(h.key_until_page(KeyCode::Enter, 8.0, |fe| fe.flow.level_to_load == 0x0710_0005), "the pick");
+        let loaded = h.pump(90.0, |a| {
+            a.fe.is_none() && a.level_code == 0x0700_0005 && a.scene.sim.is_some() && a.async_load.is_none()
+        });
+        if !loaded { h.key(KeyCode::Enter); } // a movie-bearing image: skip the briefing
+        assert!(loaded || h.pump(90.0, |a| a.fe.is_none() && a.level_code == 0x0700_0005 && a.scene.sim.is_some() && a.async_load.is_none()),
+            "The Exchange loaded (level {:#x})", h.app.level_code);
+        h.frames(2);
+        assert!(!h.app.scene.sim.as_ref().unwrap().auto_aim, "the menu's Auto Aim Off reaches the mission's sim");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

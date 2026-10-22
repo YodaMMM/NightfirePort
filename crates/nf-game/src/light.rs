@@ -1,3 +1,6 @@
+// unported-misc-5 — `Light_Init` 0x1cc340 (`ResetMap_GameInit` 0x1d5080's per-level call) is the
+// level light objects' init; the port's level lights are the loaded `Level` light records the
+// scene consumes (this module carries the runtime effects that attach to them).
 //! Level and dynamic lights (`light_tag` records), the VU1 point-light formula, and the per-object
 //! 2-light selection.
 //!
@@ -77,7 +80,10 @@ pub struct Light {
 }
 
 /// `LightList` (0x2c74c0). The game's pool grows in 32-record blocks (`Light_Create` mallocs
-/// 0xa00 = 32 × 0x50 when the free list empties), so there is no fixed cap.
+/// 0xa00 = 32 × 0x50 when the free list empties), so there is no fixed cap. The game's records hang
+/// off a free/in-use node pool managed by `DList_MoveFromFree2InUse` 0x1cccb8 (take a node from the
+/// free list at create) and `DList_RemoveFromInUse2Free` 0x1cc868 (return it at delete) [M — both
+/// called by `Light_Create` 0x1cc3d8]; the port's `Vec` growth + removal is that same pool work.
 #[derive(Default, Clone, Debug)]
 pub struct LightList {
     pub lights: Vec<Light>,
@@ -278,6 +284,9 @@ impl ResolvedLights {
             // The walk stops once 30 are accepted (`0x1d < count` [M 0x1cb2e0:68]).
             if out.len() >= 30 { break; }
         }
+        // The game orders the list with `QuickSort` 0x1d30a8 (comparator 0x1d3350 on light+0x38), whose
+        // byte-wise element exchange is `Swap` 0x1d3518 [M — Swap's only caller]; `sort_by` is the port's
+        // QuickSort+Swap.
         out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         out
     }

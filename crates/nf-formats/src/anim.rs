@@ -30,6 +30,18 @@ pub struct Sequence {
 impl Sequence {
     /// Parses header and every channel; each channel must consume exactly its byte length and its segments must
     /// reach `frames − 1` (true for all 18,244 sequences on the disc).
+    ///
+    /// `AnimSeqGetInfo` (0x1c79a0) equivalence: this reads the same raw-record fields the game copies into the
+    /// runtime sAnimSeq_tag — hashcode = the +0x94 store, `flags` = the +0x0c byte (its low nibble → the tag's
+    /// +0x98 bits, bit 3 = facial window), `frames` → +0xa6, `skeleton` → +0xa9 — at parse time instead of per
+    /// play; the game's `hashtable_getitem` step is the caller's map lookup.
+    ///
+    /// `AnimProcessSeqData` (0x1c4ce0, from `AnimLoadFile` 0x1bdf40) does the same compressed-stream walk over the
+    /// same bytes (start +0x40, +0x38 frames / +0x3a channels, the `u16 >> 6` cumulative count, the 4-byte skip
+    /// per set low-6-bit coefficient present bit) to find the stream's end — except the port PARSES the six f32
+    /// coefficients per segment and bounds each channel by its header byte length, where the game only skips them
+    /// and stores the end pointer/byte count; and the port does not apply its flag side effects (`flags & 0xf`,
+    /// `|= 7` for the hardcoded 0x0400xxxx raw/rotation ids — nothing on the disc's data needs bits 0-2 here).
     pub fn parse(data: &[u8]) -> Result<Sequence> {
         let b = Buf(data);
         let (frames, count, skeleton) = (b.u16(0x38)?, b.u16(0x3a)? as usize, b.u8(0x3c)?);
@@ -109,6 +121,11 @@ pub struct Script {
 /// One command: opcode, then its u16 arguments (count = byte 1, + 3 for opcode 0, + 2 for opcodes 1–4).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScriptCommand { pub op: u8, pub args: Vec<u16> }
+
+// `AnimScriptPeekSfx` (0x1c6ca8) walks this same command stream — count = the +6 word & 0x1ff, per-command advance
+// of (byte 1 + 3) for op 0 / (+ 2) for ops 1–4 u16s plus the 2 opcode/count bytes — looking for the FIRST op-1's
+// sound id (its 2nd u16 arg, here `args[1]`) and aborting on op > 4; the port keeps every command (no disc script
+// carries an op > 4) and plays each op-1 by frame window instead of peeking one.
 
 impl Script {
     pub fn parse(data: &[u8]) -> Result<Script> {

@@ -38,8 +38,25 @@ pub mod id {
     /// word (`celglist+0x40`) as the destroyed variant's glist (`Destroy_Smash` 0x12bb60 swaps to it).
     pub const LOD: u8 = 0x27;
     pub const MAP_SOUNDS: u8 = 0x28;
-    pub const MORPH_DATA: u8 = 0x2b;
+    // `parsemap_handle_block_id` 0x1d1020 also routes ids that NEVER occur on our disc — the measured
+    // census over all 2,230 map entries (docs/formats/map.md) lists only 0x04 0x05 0x0e 0x0f 0x10 0x12
+    // 0x16 0x19 0x1a 0x1c 0x1d 0x21 0x26 0x27 0x28 0x2b 0x2c 0x2d 0x2e 0x30 [D] — so their game
+    // handlers never run on the shipped path and the port deliberately does not implement them
+    // (docs/systems/engine-plumbing.md, "The never-occurring handlers"):
+    // - dict_xyz 0x1d2310 (cases 0x00/0x08), dict_uv 0x1d23a0 (0x01), dict_rgba 0x1d23b8 (0x02),
+    //   dict_comlist 0x1d24b0 (0x03/0x0a/0x0b), dict_norm 0x1d23d0 (0x20): shared-geometry dictionary
+    //   blocks; the port reads geometry from the PS2_GFX blocks that do occur.
+    // - coll_data 0x1d24c8 (0x22/0x23): the old collision block — shipped collision is 0x2e/0x2f
+    //   `parsemap_block_Coll_Data_New` 0x1d1810 (crates/nf-formats/src/collision.rs).
+    // - datums 0x1d24f8 (0x25).
+    // - palette_data_pc 0x1d2278 (0x11), texture_data_pc 0x1d2048 case 0x15, texture_data_GameCube
+    //   0x1d2148 (0x17), texture_data_Xbox 0x1d21e0 (0x18), texture_data_pcdx 0x1d2080 (0x29): the
+    //   other platforms' texture/palette variants; the PS2 disc carries only 0x12/0x16.
+    /// Block 0x2c handler `parsemap_block_hashlist` 0x1d1e78: `(size−4)/4` little-endian dwords, each a
+    /// file hash the map needs; values equal to the 0x06000000 sentinel are skipped before the game's
+    /// `hashtable_getitem` 0x1ca5b0 / `isLoadable` load-queue check [M 0x1d1e78].
     pub const HASHLIST: u8 = 0x2c;
+    pub const MORPH_DATA: u8 = 0x2b;
     pub const PS2_GFX: u8 = 0x2d;
     pub const COLL_DATA_NEW: u8 = 0x2e;
     pub const PARTICLES: u8 = 0x30;
@@ -56,6 +73,18 @@ pub struct Block {
 
 impl Block {
     pub fn payload<'a>(&self, map: &'a [u8]) -> &'a [u8] { &map[self.offset as usize + 4..][..self.size as usize - 4] }
+}
+
+/// `parsemap_block_hashlist` 0x1d1e78: the block payload is `(size−4)/4` little-endian dwords, each a
+/// hash of a file the map needs. The game reads every dword through `BIN_GetDWord` and skips the
+/// 0x06000000 sentinel before its `hashtable_getitem` 0x1ca5b0 / `isLoadable` load-queue check
+/// [M 0x1d1e78]; a trailing partial dword is ignored (`bh − 4 >> 2` truncating division [M]).
+/// The port returns the kept hashes; the eager archive load covers the queueing itself.
+pub fn hashlist_entries(payload: &[u8]) -> Vec<u32> {
+    payload.chunks_exact(4)
+        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .filter(|&h| h != 0x0600_0000)
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,5 +160,22 @@ pub(crate) mod tests {
         let at = u32::from_le_bytes(m[4..8].try_into().unwrap()) as usize + 4;
         m[at..at + 4].copy_from_slice(&((id::MAP_HEADER as u32) << 24 | 0xff_ffff).to_le_bytes());
         assert!(MapFile::parse(&m).is_err());
+    }
+
+    /// `parsemap_block_hashlist` 0x1d1e78: keeps every dword except the 0x06000000 sentinel, ignores a
+    /// trailing partial dword (`bh − 4 >> 2` [M]).
+    #[test]
+    fn hashlist_keeps_hashes_and_drops_the_sentinel() {
+        let payload = 0x0123_4567u32.to_le_bytes().iter().chain(0x0600_0000u32.to_le_bytes().iter())
+            .chain(0xcafe_babeu32.to_le_bytes().iter()).copied().collect::<Vec<u8>>();
+        assert_eq!(hashlist_entries(&payload), vec![0x0123_4567, 0xcafe_babe],
+            "the 0x06000000 sentinel must be dropped [M 0x1d1e78]");
+    }
+
+    /// Sister: the truncating read — a trailing 2 bytes are NOT an entry (the game divides).
+    #[test]
+    fn hashlist_ignores_a_trailing_partial_dword() {
+        assert!(hashlist_entries(&[1, 2, 3, 4, 5, 6]).len() == 1,
+            "6 bytes = 1 whole dword; if this ever reads 2 the parse has diverged from 0x1d1e78");
     }
 }

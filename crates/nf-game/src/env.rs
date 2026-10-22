@@ -1,6 +1,14 @@
 //! Weather: snow / rain drops (`Env_Create` 0x17b968, `InitDrops` 0x18bf68, `Env_Update` 0x17bc88 → `UpdateDrops`
 //! 0x18c580, `AddDrop` 0x18c278, `RainBox_Clip` 0x18d0d0). Spec: docs/systems/render.md "Snow".
 //!
+//! The load-time reset — `Env_Reset` 0x17c1b0, called by `ResetMap_GameInit` 0x1d5080 [M] —
+//! clears the effect globals (`memset(GfxList+0x10, 0, 0x540)`, `Vec_Zero(0x2d88a0)`,
+//! `GlobalEnv = 0`), calls `InitDrops(0xff)` and `InitRainBox` 0x18d838 (`RainBoxRoot = 0`, the
+//! head of the `RainBox_Create` 0x18d840 box list). The port does the same job by rebuilding its
+//! weather state per level: `Drops::new` (this file) takes a fresh box list from the level's 0x32
+//! placements each load — there is no persistent `RainBoxRoot` list to clear, and `GlobalEnv`'s
+//! sun vector is the `Env_Create` record's own field (world_fx.rs).
+//!
 //! The drops use the shared `Rand_*` generator every tick (the wind, each respawn), and `Env_Update` draws one
 //! `Rand_Rand(20000)` first; `Game_Run` calls it before the object handler, so `Drones::tick` runs it first.
 
@@ -124,6 +132,109 @@ impl Drops {
     }
 }
 
+
+/// The breath-vapor puff's mesh (`Gas_Init` arg 7 in `Env_Breath` 0x17be00: `ori $t0, $t0, 0x21d`
+/// with `lui $t0, 0x200` at 0x17bf14/0x17bfb8 [M disasm]).
+pub const BREATH_MESH: u32 = 0x0200_021d;
+
+/// `Env_WaterRipple` 0x17c118 (148 B): the hit-driven water ring. `material` is the HITDATA+0x50
+/// surface byte, `hit_point` the HITDATA+0x40 contact. The gate [M disasm 0x17c120-0x17c138]:
+/// `hit != 0` (the caller passes nothing on a null HITDATA) and `(material & 0x3f) - 0xd < 2`
+/// unsigned — surface materials 0x0d/0x0e are the water pair. The attach-cel resolution
+/// (HITDATA+0x54, else HITDATA+0x58 -> +0x20, else abort [M 0x17c140-0x17c158]) is the caller's:
+/// the port's `Gas` record carries no room/cel link (the game's `build_LinkToRoom` /
+/// `control_link_object_to_cel` cull attach — `Gas_Init` 0x1aacc8 tail), so a null cel here is
+/// only knowable upstream [S — the port's hit paths do not model cel attach yet].
+///
+/// The spawn [M disasm 0x17c160-0x17c19c]: `Gas_Init(0.5, 1.01, cel, hit+0x40, quat 0, vel 0,
+/// 0x0200_0129, kind 1, rgba 0x7f7f7f7f, rgba_end 2, life 63)` — `sw $v0(0x3f), ($sp)` at
+/// 0x17c180 is the life the decompiler drops; kind 1 with a null velocity keeps `Gas_Init`'s
+/// (0, REC, 0) default [M 0x1aacc8 tail; gas.rs `init_ex` `_` arm]. White ring, alpha 0x7f -> 2,
+/// growing 0.5 -> 1.01 over 63 ticks.
+pub fn env_water_ripple(gas: &mut crate::gas::GasPool, material: u8, hit_point: V3) {
+    if material.wrapping_sub(0x0d) & 0x3f >= 2 {
+        return;
+    }
+    gas.init_ex(crate::world_fx::RIPPLE_MESH, hit_point, 0.0, [0.0; 3], 0.5, 1.01, 1,
+        [0x7f, 0x7f, 0x7f, 0x7f], 2, 63.0);
+}
+
+/// `Env_Breath` 0x17be00 (584 B): the cold-breath vapor puffs. Args map to the game's
+/// `(VECTOR* pos, VECTOR* dir, cel_tag* cel, uint phase)` [M 0x17be00 prologue] plus the fields
+/// its gates read: `zone` = `cel+0xa0` (the per-cel breath zone byte, signed, [M 0x17be24]),
+/// `cel_env_bit` = `cel+0x3c & 0x10000000` [M 0x17beec-0x17bef4], `cam_mode` =
+/// `glb_viewer+0x236` (the viewer's cam word [M 0x17bf7c-0x17bf84]), and `env_gate` = the
+/// `GlobalEnv` pair — `Some(cond)` is the game's `GlobalEnv == 0 || GlobalEnv+0x4b != 0`
+/// disjunct result, `None` the unported-`GlobalEnv` case, which takes the `GlobalEnv == 0` arm
+/// (true) [S — the port models no GlobalEnv; the two arms differ only in variant A vs B].
+/// `frame` = `GameState+0x34` (the decompile's `_52_4_`, decimal 52) [M 0x17be3c-0x17be48; the same counter `WorldFx::tick` takes].
+///
+/// Gates [M disasm 0x17be1c-0x17bec8]: zone != 0; `(frame - phase) % (FRAME_RATE_INT/10) == 0`
+/// (the game divides the global by 10 — 60/10 = 6 at the shipped refresh, folded to the literal
+/// 10-divide at 0x17be30-0x17be40); and `(float)((frame - phase) % (FRAME_RATE_INT*2))` <=
+/// `(FRAME_RATE+FRAME_RATE) * 0.33333334` = 40.0 — a 41-of-120 sub-window.
+///
+/// The spawn, `pos + dir*0.05` (0x3dcccccd, the COP2 `_vmulbc/_vadd` both variants share):
+/// - variant A (env gate true AND cam_mode == 2 [M 0x17bed0-0x17bf84]): `Gas_Init(0.05, 0.2,
+///   cel, pos, quat {0, 0, Rand_FRand(6.2831855), ..}, dir, 0x0200_021d, kind 0, rgba
+///   0xffffffc8, rgba_end 0xff01, life 40)` [M 0x17bf8c-0x17c020; the `sw $v0(0x28), ($sp)` life
+///   at 0x17c010], then the gas object's `+0xf0 |= 0x400` [M 0x17c024-0x17c02c] — a draw flag
+///   the port's `Gas` does not model [S; the blood puff's +0xf0 |= 8 is the same class of
+///   documented deviation]. The velocity is the `dir` argument times REC_FRAME_RATE (Gas_Init's
+///   non-kind-4 `param_6 != 0` arm [M 0x1aacc8 tail]) — the puff drifts with the breath.
+/// - variant B (env gate false — any cam mode): `Gas_Init(0.05, 0.05, cel, pos, quat NULL, dir,
+///   0x0200_021d, kind 0, rgba 0xffffff80, rgba_end 0xff01, life 40)` [M 0x17bf00-0x17bf70:
+///   f13 = f12 = 0.05, t2 = 0xffffff80, the same `sw 0x28` life; a2 = 0 is the null quaternion
+///   in the decompile] — the plain puff, no random yaw, no +0xf0 flag.
+///
+/// The 0xff01 end unpacks (r,g,b,a) = (0, 0, 255, 1): the white puff fades blue as its alpha
+/// runs out (the same big-endian (r,g,b,a) packing `Gas_Init` writes to obj+0x103..0x106 [M
+/// 0x1aacc8]). The yaw draw is the pool's counter-hash stand-in, not the shared stream (the
+/// G-033/fix-world-fx discipline — `Gas_Init`'s own spin draw is the pool's [M 0x1aacc8:72-80]).
+pub fn env_breath(
+    gas: &mut crate::gas::GasPool, frame: u32, phase: u32, pos: V3, dir: V3,
+    zone: i8, cel_env_bit: bool, cam_mode: i16, env_gate: Option<bool>,
+) {
+    if zone == 0 {
+        return;
+    }
+    // Both remainders are `divu` (unsigned) on the u32 difference [M disasm 0x17be40-0x17be64].
+    let delta = frame.wrapping_sub(phase);
+    if delta % 6 != 0 {
+        return;
+    }
+    if (delta % 120) as f32 > 40.0 {
+        return;
+    }
+    // pos + dir*0.05 [M the shared COP2 prologue of both variants]
+    let at = [pos[0] + dir[0] * 0.05, pos[1] + dir[1] * 0.05, pos[2] + dir[2] * 0.05];
+    // The env gate: `GlobalEnv == 0 || GlobalEnv+0x4b != 0 || cel+0x3c & 0x10000000`
+    // [M 0x17bed0-0x17bef8]. `None` = no GlobalEnv modelled -> the `GlobalEnv == 0` arm.
+    let gate = env_gate.unwrap_or(true) || cel_env_bit;
+    if gate {
+        if cam_mode != 2 {
+            return;
+        }
+        // Variant A: quat z = Rand_FRand(2*pi) [M 0x17bf8c-0x17bfa0], kind 0, dir*REC velocity.
+        // The port passes yaw 0 — the draw ignores it (the spin comes from the pool's own
+        // counter-hash in `init_ex`), and the game's shared-stream draw is not re-based here [S].
+        gas.init_ex(BREATH_MESH, at, 0.0, dir, 0.05, 0.2, 0, [255, 255, 255, 200], 0x0000_ff01, 40.0);
+        if let Some(g) = gas.puffs.last_mut() {
+            // Gas_Init's non-kind-4 velocity arm: arg * REC_FRAME_RATE [M 0x1aacc8 tail].
+            let rec = 1.0 / 60.0;
+            g.vel = [dir[0] * rec, dir[1] * rec, dir[2] * rec];
+        }
+        // +0xf0 |= 0x400: the draw flag the port's Gas does not model [S — documented deviation].
+    } else {
+        // Variant B: null quaternion, no yaw, static 0.05 size [M 0x17bf00-0x17bf70].
+        gas.init_ex(BREATH_MESH, at, 0.0, dir, 0.05, 0.05, 0, [255, 255, 255, 128], 0x0000_ff01, 40.0);
+        if let Some(g) = gas.puffs.last_mut() {
+            let rec = 1.0 / 60.0;
+            g.vel = [dir[0] * rec, dir[1] * rec, dir[2] * rec];
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,4 +263,61 @@ mod tests {
         e.update(&mut rng, &mut fill, eye, 0.0);
         assert!(e.alive.iter().all(|&a| !a));
     }
+
+#[test]
+fn breath_gate_fires_on_the_6th_frame_window() {
+    let mut gas = crate::gas::GasPool::default();
+    // (frame - phase) % 6 == 0 and % 120 <= 40 fires: frame 42, phase 0 -> 42%6=0, 42<=40? NO.
+    env_breath(&mut gas, 42, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 2, None);
+    assert!(gas.puffs.is_empty(), "42 is inside the 6-gate but outside the 40-window");
+    // frame 36: 36%6=0, 36<=40 -> fires. Variant A (cam 2, no GlobalEnv): 0.05 -> 0.2, alpha 200.
+    env_breath(&mut gas, 36, 0, [1.0, 2.0, 3.0], [0.0, 0.0, 1.0], 1, false, 2, None);
+    assert_eq!(gas.puffs.len(), 1);
+    let g = &gas.puffs[0];
+    assert_eq!(g.mesh, BREATH_MESH);
+    assert_eq!(g.pos, [1.0, 2.0, 3.05]); // pos + dir*0.05 [M 0x17bfcc-0x17c008]
+    assert!((g.scale - 0.05).abs() < 1e-6);
+    assert!((g.scale_rate - (0.2 - 0.05) / 40.0).abs() < 1e-6); // (p2-p1)/life [M 0x1aacc8]
+    assert_eq!(g.rgba[3], 200.0); // 0xffffffc8 alpha [M 0x17c018]
+    assert_eq!(g.rgba_rate[3], (1.0 - 200.0) / 40.0); // end 0xff01 alpha 1 [M 0x17c020]
+    assert!((g.life - 40.0).abs() < 1e-6); // sw 0x28 ($sp) [M 0x17c010]
+    assert!((g.vel[2] - 1.0 / 60.0).abs() < 1e-6); // dir*REC [M 0x1aacc8 tail]
+}
+
+#[test]
+fn breath_gate_sisters_zone_and_window_edges() {
+    // Sister: the zone byte clears -> nothing, whatever the frame [M 0x17be24-0x17be28].
+    let mut gas = crate::gas::GasPool::default();
+    env_breath(&mut gas, 36, 0, [0.0; 3], [0.0; 3], 0, false, 2, None);
+    assert!(gas.puffs.is_empty());
+    // Sister: frame 41 (41%6 != 0) -> nothing [M 0x17be58].
+    env_breath(&mut gas, 41, 0, [0.0; 3], [0.0; 3], 1, false, 2, None);
+    assert!(gas.puffs.is_empty());
+    // Sister: variant B (env gate Some(false)) fires WITHOUT the cam-2 gate, alpha 128, 0.05 static.
+    env_breath(&mut gas, 36, 0, [0.0; 3], [0.0; 3], 1, false, 0, Some(false));
+    assert_eq!(gas.puffs.len(), 1);
+    assert_eq!(gas.puffs[0].rgba[3], 128.0); // 0xffffff80 [M 0x17bf60]
+    assert!((gas.puffs[0].scale_rate).abs() < 1e-6); // p1 == p2 == 0.05 [M 0x17bf00-0x17bf08]
+}
+
+#[test]
+fn water_ripple_fires_on_the_water_materials() {
+    let mut gas = crate::gas::GasPool::default();
+    env_water_ripple(&mut gas, 0x0d, [5.0, 0.5, 6.0]);
+    assert_eq!(gas.puffs.len(), 1);
+    let g = &gas.puffs[0];
+    assert_eq!(g.mesh, crate::world_fx::RIPPLE_MESH); // 0x0200_0129 [M 0x17c18c]
+    assert_eq!(g.pos, [5.0, 0.5, 6.0]); // HITDATA+0x40 [M 0x17c17c]
+    assert!((g.scale - 0.5).abs() < 1e-6 && (g.scale_rate - (1.01 - 0.5) / 63.0).abs() < 1e-6);
+    assert_eq!(g.rgba, [127.0, 127.0, 127.0, 127.0]); // 0x7f7f7f7f [M 0x17c194]
+    assert_eq!(g.rgba_rate[3], (2.0 - 127.0) / 63.0); // end 2 [M 0x17c19c], life 63 [M 0x17c180]
+    assert_eq!(g.kind, 1); // t1 [M 0x17c190]
+    // Sister: material 0x0c (just below the water pair) -> nothing [M 0x17c130-0x17c138 sltiu 2].
+    let mut gas2 = crate::gas::GasPool::default();
+    env_water_ripple(&mut gas2, 0x0c, [0.0; 3]);
+    assert!(gas2.puffs.is_empty());
+    // Sister: 0x0f (just above) -> nothing.
+    env_water_ripple(&mut gas2, 0x0f, [0.0; 3]);
+    assert!(gas2.puffs.is_empty());
+}
 }

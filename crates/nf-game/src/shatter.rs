@@ -95,6 +95,11 @@ pub const EFFECT_INFO: [EffectInfo; 23] = [
 /// leaf's re-centring [M 0x12b270:164-174]); `pos` = `avg + obj+0x30` (the LOCAL mesh plus the
 /// object's world position, no rotation — the same rule the debris uses [M 0x1ed548:114-131]).
 #[derive(Clone, Debug, PartialEq)]
+/// `InitShards` 0x12bed0 (40 B, from `ResetMap_GameInit` 0x1d5080:4-11 at 0x1d50e8, right after
+/// `GS_PauseGame(0)`): `LList_Init(ShardList 0x316dd8, 0xa0, 0)` — the per-map empty of the
+/// glass-shard pool (0xa0-byte records, count 0 = header zero only [M 0x12bed0 + LList_Init
+/// 0x1cc958]). The port's `Shatter::default()` per level attach (breakable.rs, called from
+/// `attach_level_id` drone.rs) is this reset — a fresh pool per map, no preallocation.
 pub struct Shard {
     pub verts: [ShardVert; 3],
     /// +0x20, world.

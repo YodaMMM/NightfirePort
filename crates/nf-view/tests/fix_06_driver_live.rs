@@ -19,10 +19,12 @@
 //!   shooters) [M 0x13fff0:181-235], and his death runs the shared death path with his own line:
 //!   `NDrone2_DeathTalk` 0x13eff8 defaults an unlisted voice type to line 1 (the driver's voice
 //!   type is 0xf — skin 0x35 [M 0x14b300]) while the guards' (type 1) get line 4 [M 0x13eff8:16-31].
-//! - The scare: `TruckDriverIdle` case 3 NearArmedBond → CivilianScared 0x12 [M 0x160ed0] whose
-//!   ENTER (alt mode ≠ 7 — the driver's is 0 [L probe]) goes straight to CivilianHiding 0x13, whose
-//!   ENTER plays the cower 0x19 [M 0x15d3a0:31-43, 0x15d520:17-22]; the cower anim (aset 12 → danim
-//!   159 → script 060000cd → seq 04000048) has a constant x/z root [D nf-extract] — he cowers IN
+//! - The scare: `TruckDriverIdle` case 3 `NDrone2_NearArmedBond(6.0)` 0x178678 → CivilianScared 0x12 [M
+//!   0x160ed0:26-34 — the civilian states use `NDrone2_NearArmedPerson` 0x1787c8 instead; the driver's
+//!   predicate is its own: prop 0x3c AND 0x51, the `+0x1a0` distance under the LIVE 6.0 arg, the seen bit,
+//!   then the level/armed fold] whose ENTER (alt mode ≠ 7 — the driver's is 0 [L probe]) goes straight to
+//!   CivilianHiding 0x13, whose ENTER plays the cower 0x19 [M 0x15d3a0:31-43, 0x15d520:17-22]; the cower anim
+//!   (aset 12 → danim 159 → script 060000cd → seq 04000048) has a constant x/z root [D nf-extract] — he cowers IN
 //!   PLACE, and the floor snap (`Drone_FeetOnPoint` 0x140660, the port's pos.y = floor + hip 1.0)
 //!   keeps his feet on the courtyard floor.
 //!
@@ -140,14 +142,16 @@ fn gunfire_never_arms_the_driver_and_his_death_is_his_own() {
     assert!(failed, "killing the protected driver raises ch 0x60 [M 0x145bd0 reason 3]");
 }
 
-/// The scare: armed Bond in his facing cone sends him down the scared chain, and the cower keeps
-/// him IN PLACE on the floor at the game's position (the cower anim's x/z root is constant [D
-/// 04000048], the game's CivilianScared runs straight to CivilianHiding at alt mode 0 [M 0x15d3a0],
-/// and the floor snap keeps his feet on the courtyard floor [M 0x140660]). rook-door-06-3: the
-/// scare is TruckDriverIdle's own (case 3 NearArmedPerson [M 0x160ed0]; the Mission state has NO
-/// in-tick armed-person scan [M 0x161030 case 3]), so the choreography waits for the mission route
-/// to end into Idle first ([L 06-firstsight.trace 148014] the walk; [M 0x161030 result 3] the
-/// arrival clears prop 0x1d → 0x34). Sister: he stays alive and unarmed — a scare is not a shot.
+/// Armed Bond alone does NOT scare the idle driver: TruckDriverIdle case 3's `NDrone2_NearArmedBond(6.0)`
+/// needs prop 0x51 [M 0x178678:10-13], and his live block is the placement's normal block
+/// (`DoModeSettingsNEW` 0x14c600:61-70 — the mode-init rows are unreachable for placements [D census])
+/// which lacks 0x51 [D drone-props 07000006 (66.1, 39.2, 28.9): normal block has 0x3c but no 0x51;
+/// only the alert block carries 0x50/0x51]. The scare chain itself (his other triggers — bullets,
+/// screams, the alarm) is entered directly below, and the cower must keep him IN PLACE on the floor
+/// (the cower anim's x/z root is constant [D 04000048], CivilianScared → CivilianHiding at alt mode 0
+/// [M 0x15d3a0], the floor snap [M 0x140660]) — the playtest 1011-1535 report. The route to Idle:
+/// [L 06-firstsight.trace 148014] the walk; [M 0x161030 result 3] the arrival clears prop 0x1d → 0x34.
+/// Sister: the scare never damages him.
 #[test]
 fn the_scared_cower_keeps_him_in_place_on_the_floor() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -171,13 +175,18 @@ fn the_scared_cower_keeps_him_in_place_on_the_floor() {
     let floor = floor.expect("the driver stands on floor after the start script");
     assert!((before[1] - 1.0 - floor).abs() < 0.05, "idle: the game's ground convention pos.y = floor + hip 1.0, got {} vs {floor}", before[1]);
 
-    // Armed Bond 4 units ahead in his facing cone: TruckDriverIdle case 3 NearArmedBond → 0x12.
+    // Armed Bond 4 units ahead in his facing cone: NearArmedBond(6.0) fails on prop 0x51 (normal block) —
+    // he stays idle [M 0x160ed0 case 3, 0x178678:10-13; D the placement block].
     let dyaw = sim.drones.list[di].yaw;
     stand_armed_at(sim, [before[0] + dyaw.sin() * 4.0, before[1], before[2] + dyaw.cos() * 4.0], before);
     tick_idle(sim, 180);
+    assert_eq!(sim.drones.list[di].state, state::TRUCK_DRIVER_IDLE,
+        "armed Bond within 6 does not scare the idle driver: his normal block has no prop 0x51 [D; M 0x178678]");
+    // The scare chain (entered as his bullet/scream/alarm triggers enter it): CivilianScared → Hiding.
+    sim.drones.list[di].set_state(state::CIVILIAN_SCARED);
+    tick_idle(sim, 180);
     let dr = &sim.drones.list[di];
-    assert!(matches!(dr.state, state::CIVILIAN_SCARED | state::CIVILIAN_HIDING),
-        "the driver reacts to armed Bond within 6 through TruckDriverIdle's scare [M 0x160ed0 case 3] — got {:#x}", dr.state);
+    assert!(matches!(dr.state, state::CIVILIAN_SCARED | state::CIVILIAN_HIDING), "the scared chain runs — got {:#x}", dr.state);
     assert_eq!(dr.anim.state, 0x19, "CivilianHiding ENTER plays the cower 0x19 [M 0x15d520 case 1]");
     assert!(dr.alt_mode != 7, "alt mode {} ≠ 7: CivilianScared runs straight to CivilianHiding — no run-to-point [M 0x15d3a0:31-43]", dr.alt_mode);
     // The game's position: IN PLACE (the cower anim's x/z root is constant [D seq 04000048])...

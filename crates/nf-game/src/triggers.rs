@@ -93,21 +93,39 @@ pub fn wrap_intro(code: u32) -> u32 {
 }
 
 #[derive(Clone, Debug)]
+    /// unported-misc-5 — `Discrete_Delete` 0x1c64d8 (`obj->pE0 = 0`) IS reached — through two
+    /// object-kind handler tables (word refs at 0x169a74 and 0x216798 [D ELF scan], no direct
+    /// `jal`), the game's per-kind delete slot clearing the discrete pointer. The port has no
+    /// per-object discrete pointer to clear: triggers live in the owned `triggers` Vec (removal
+    /// subsumes the store), so the function reduces to this model note.
 pub struct Trigger {
     /// Position in the main map's placement list (objects update in reverse placement order).
     pub placement: usize,
+    /// The trigger's discrete type, ext+0x38 [M `Trigger_Type` 0x1b2fa8: `return *(u16*)(obj->pE0 + 0x38)`;
+    /// `Trigger_Create` 0x1b1720:70 stores placement param +0x2c there]. The port's `kind` IS that field
+    /// (`kind::LOAD_LEVEL` == 10 — `Trigger_LoadLevelCreate` 0x1b2950:10 forces the param to 10 before
+    /// `Trigger_Create`). `Check_Target`'s 0x1d arm reads it via `Trigger_Type` [M 0x1a7810:193].
     pub kind: u8,
     pub out: u8,
     /// Contact mask (8 player, 0x10 drone, 0x18 either with the filter list).
     pub mask: u32,
     /// Touch: filter list; muxes: input channels; Out: target channels.
     pub list: Vec<u32>,
+    /// The lock channel, ext+0x24 for non-LOAD_LEVEL families [M `Trigger_Locked` 0x1b2fc8:24-29:
+    /// locked = channel non-zero AND `switch_channels[ch]` non-zero].
     pub lock: u8,
     pub hide: bool,
     /// `obj+0xF0 & 0x10` — the glist flag `Trigger_Update` requires before it deletes a finished TouchOnce
     /// (0x1b1d78-0x1b1d90) or a Bond-moment AND (out 0x65-0x6E, 0x1b1da0). `Trigger_Create` sets `obj+0xF0` from
     /// the object's glist [M 0x1b1720]; the port does not read glist+0x44 yet — live data: every TouchOnce on
     /// 07000005 carries the bit [L, trigger-port-check #6] — so the flag is modelled as set.
+    ///
+    /// The same word's low bits are the EFFECT TYPE: `Trigger_Update` 0x1b1a78:45 calls
+    /// `Control_SetEffectType` 0x134940 every tick — `*(obj+0xF0) = effect | *(obj+0xF0) & 0x30008000`
+    /// [M 0x134940:6-7], the effect taken from the trigger's glist+0x44 (or the obj's own word when
+    /// the glist is 0) [M 0x1b1a78:31-44]. The effect-type readers are render-side (the spawned
+    /// effect class); the port carries no per-trigger effect word — recorded here at the word this
+    /// field models, not silently dropped.
     pub glist_0x10: bool,
     /// `ext+0x2E` (`mask & 1`'s base channel, `Trigger_Hit` 0x1b1fc8:63-68): the filter list's 5th entry — for the
     /// Touch families that is param 6 (the same param the lock reads; both live at ext+0x24/+0x2E from slot p6).
@@ -127,7 +145,9 @@ pub struct Trigger {
     /// (verified against MIPS disassembly: `lhu v1,56(s1); sh v1,40(s0)`) [M].
     pub gate: u8,
     /// `LOAD_LEVEL` key gate (`Trigger_Activate` 0x1b2318:76-90): param 1 — if non-zero and the channel is off,
-    /// the trigger is locked (the fallback channel is set, no level load). [M]
+    /// the trigger is locked (the fallback channel is set, no level load). [M] The channel lives at ext+0x26 —
+    /// the same word `Trigger_Locked` 0x1b2fc8:14-22 reads for type-10 triggers (`Trigger_LoadLevelCreate`
+    /// 0x1b2950:13 shifts the placement's slot 10 into the +0x26 slot before `Trigger_Create`).
     pub key_gate: u8,
     /// `LOAD_LEVEL` success channel (`Trigger_Activate` 0x1b2318:100-105): param 4 — set on a successful load. [M]
     pub success: u8,
@@ -319,6 +339,7 @@ impl Trigger {
             // slot 8 keeps raw p8 and slots 9-11 are never touched. `Trigger_Create` copies 7 input ushorts from
             // slots 2..8 into ext+0x26..0x32 (ext+0x34 stays 0) and reads mask/lock/hide from slots 9/10/11
             // [M 0x1b1720:80-91 — the audit's correction of the port-map's "p1..p7 / p8 / p9 / p10" table].
+            // `Trigger_MultiplexOut` 0x1b2ed8 — the 0xEE placement wrapper [M 0x1b2ed8:11-28].
             _ => (q(0), q(9), (1..=6).map(&q).chain(std::iter::once(q(8))).collect(), q(10), q(11) != 0, 0, 0, 0, 0, 0),
         };
         // `Trigger_Create` defaults a zero mask to 2 (class-5 contacts) [M 0x1b1720:80-84].
@@ -401,6 +422,11 @@ impl Trigger {
                 let ok = match f & 0xffff {
                     0xb => drone_touch,
                     0xe => player,
+                    // (task 854: the drone side of the hash test is `Drone_GetSkinHash` 0x13a578 [M
+                    // 0013a578 decompile — `AI+0xE0`, 0 when the AI block is absent], read by
+                    // `Trigger_Hit` 0x1b1fc8 [M caller grep]; the port's `Toucher.skin` is that hash.
+                    // NOT YET FED: the port's net-body touchers still pass `skin: 0` — the SP drone
+                    // toucher build is remaining work in the task 854 report.)
                     h => touchers.iter().any(|c| c.drone && self.touched_by(c) && c.skin & 0xffff == h),
                 };
                 acc = acc && ok;
@@ -410,6 +436,21 @@ impl Trigger {
         // mask & 2 (class-5 object contacts, 0x1b1fc8:124-159): the port has no object touchers — contacts bit 1
         // never sets (documented stand-in, trigger-port-check #11).
         (m & 8 != 0 && player) || (m & 0x10 != 0 && drone_touch)
+    }
+
+    /// `Trigger_Locked` (0x1b2fc8) — the aim-hint/exit lock test over the port's fields. Type 10
+    /// (`LOAD_LEVEL`): the key gate at ext+0x26 — locked when non-zero and its `switch_channels`
+    /// entry is still OFF [M 0x1b2fc8:14-22, the channel = the LoadLevelCreate-shifted key gate].
+    /// Every other type: the lock channel at ext+0x24 — locked when non-zero and its channel is ON
+    /// [M 0x1b2fc8:24-29]. `Check_Target`'s 0x1d arm calls this before showing the exit hint
+    /// [M 0x1a7810:197-208]; `Trigger_Activate`'s key-gate block (0x1b2318:76-90) is the same test
+    /// inlined on the load path.
+    pub fn locked(&self, ch: &Channels) -> bool {
+        if self.kind == kind::LOAD_LEVEL {
+            self.key_gate != 0 && !ch.on(self.key_gate as u32)
+        } else {
+            self.lock != 0 && ch.on(self.lock as u32)
+        }
     }
 
     /// `Trigger_Activate` (0x1b2318): fires the trigger immediately from `Player_Activate`'s E-key path (routes
@@ -425,9 +466,10 @@ impl Trigger {
                 // Cancel channels 0x60–0x63 (99, 0x62, 0x61, 0x60) [M 0x1b2318:64-75]: if any is on, abort (an
                 // alarm blocks the exit).
                 if (0x60..=0x63).any(|c| ch.on(c)) { return (Vec::new(), None); }
-                // Key gate [M 0x1b2318:76-90]: if non-zero and off, the trigger is locked — locked message (label
+                // Key gate [M 0x1b2318:76-90 — `Trigger_Locked` 0x1b2fc8's type-10 arm]: if non-zero and off,
+                // the trigger is locked — locked message (label
                 // 0x2000021) + ext+0x3C cooldown (no text system in the port), NO channel write, NO load.
-                if self.key_gate != 0 && !ch.on(self.key_gate as u32) { return (Vec::new(), None); }
+                if self.locked(ch) { return (Vec::new(), None); }
                 // Auto channel [M 0x1b2318:96-108]: gate (+0x28) on → the success write (+0x2C); gate off →
                 // the fallback write (+0x2A) — and BOTH branches fall through to the level load @0x1b24b8.
                 if self.gate != 0 && ch.on(self.gate as u32) {
@@ -514,7 +556,7 @@ impl Trigger {
                 if self.gone || self.gate == 0 { return; }
                 if !ch.on(self.gate as u32) { return; }
                 if (0x60..=0x63).any(|c| ch.on(c)) { return; }
-                if self.key_gate != 0 && !ch.on(self.key_gate as u32) { return; }
+                if self.locked(ch) { return; } // the key gate [M 0x1b2318:76-90, `Trigger_Locked` 0x1b2fc8 type-10 arm]
                 if self.success != 0 { ch.set(self.success as u32, 1, frame); }
                 self.gone = true;
             }

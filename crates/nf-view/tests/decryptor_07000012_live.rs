@@ -35,6 +35,9 @@ fn load() -> (nf_view::scene::Scene, usize, [f32; 3]) {
 /// Aim the crosshair at the target (the walkreal aim loop) and fire held or not. The caller has
 /// placed Bond once; the helper never teleports — the aim chases the stable grounded eye.
 fn aim_and_fire(sim: &mut Sim, target: [f32; 3], _spot: [f32; 3], fire: bool) -> f32 {
+    // The walker's allowance: this pins the decryptor, not the firefight — the guards nearby may
+    // engage Bond (Attack's re-entry fallback, 913, has them fire from AimStand), so keep him up.
+    sim.drones.health.health = sim.drones.health.health.max(100.0);
     let eye = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
     let (dx, dz, dy) = (target[0] - eye[0], target[2] - eye[2], target[1] - eye[1]);
     let desired = dx.atan2(dz);

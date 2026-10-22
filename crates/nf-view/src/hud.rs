@@ -2,6 +2,24 @@
 //! health / armour pane (`HUD_UpdateHealthPane` 0x19b9c8) with the damage-direction glow, and the ammo pane
 //! (`HUD_UpdateAmmoPane` 0x19a7f0). Sprites from `HealthSprInfo` / `AmmoSprInfo` / `BulletImg` and font 2, read from
 //! ACTION.ELF; textures from the level archive. Sorted by layer, higher first (`CompSpr`: lower numbers on top).
+//!
+//! The health panes' percentage math runs the game's soft-float `fptodp` 0x2246d0 (the EE has no double FPU;
+//! jal'd 3× from `HUD_UpdateMPHealthPane` 0x19b630 at 0x19b948/0x19b954/0x19b960 and 3× from
+//! `HUD_UpdateHealthPane` 0x19b9c8 at 0x19c04c/0x19c058/0x19c064 [M ELF jal scan]) — the f32→f64 promotion
+//! Rust performs natively at each `as f64`/mixed-type step below [M unported-misc-7].
+//!
+//! Sprite-record primitives this immediate-mode frame replaces [M] — the game's text/bitmap sprite
+//! nodes (0x44 bytes, `SpriteList` 0x349b18, `docs/fields/sprite.md`): `Sprite_InitLists`
+//! 0x1de600 (the 512-node free/in-use pool; the port builds a fresh `HudFrame` per frame, no pool),
+//! `Sprite_Create` 0x1de808 (pop a free node, init scale 1.0 / fmt sentinel), `Sprite_SetParams`
+//! 0x1de7b0 (layer → +0x38, home+draw x/y, colour → +0x10, texture hash → +0xc) — here each is a
+//! `Hud::text`/`Hud::quad` call's layer/x/y/colour/texture args. `Sprite_SetText` 0x1de698,
+//! `Sprite_SetTextNFmt` 0x1de718 and `Sprite_SetFmt` 0x1de628 store the text/format strings and
+//! re-measure the extent via `Font_GetTextExtent` into +0x34/+0x36 — here that is `Font::layout`
+//! (nf-formats/src/hud.rs) at the draw sites: the ammo/fire-mode strings [0x19a7f0], the objective
+//! banner's status label + body [0x19c310:127-144], the two-line subtitles (`Text_Update2Line`
+//! 0x1b09f0, `docs/systems/subtitles.md`) and the load-screen lines (`ResetMap_GenLoadScreen`
+//! 0x1d5de0, the menu.rs loading overlay).
 
 use crate::gpu::{HudFrame, HudVertex};
 use nf_formats::hud::SpriteInfo;
@@ -113,6 +131,11 @@ pub fn script_overlay(fade: Option<nf_game::drone::ViewFade>, letterbox: bool, s
     }
     if let Some(f) = fade {
         if f.alpha > 0.0 {
+            // CreateTotalScreenSprite 0x1181b0's job [M]: psiFadeView 0x10b9c8 (← Game_Draw
+            // 0x1e6f50:206,354) packs the fade colour (r,g,b,a — alpha in the RGBAQ top byte) into one
+            // fullscreen SPRITE packet (Q=1.0, z-test off) per viewer. This quad is black; the game
+            // fades to the viewer's own r,g,b — a render-parity check for the main agent
+            // (docs/systems/psi-render-plumbing.md).
             h.quad(Anchor::Stretch, 0, SCOPE_STRIP_TEX, 0, 0.0, 0.0, SW, SH, [0.0; 4], (false, false), [0.0, 0.0, 0.0, f.alpha.min(1.0)]);
         }
     }
@@ -226,6 +249,12 @@ impl Hud<'_> {
     }
 
     /// A `SpriteInfo` sprite at the pane origin with colour `c`.
+    ///
+    /// On the PS2 the equivalent packet is built by `psiDrawSprites` 0x120e68 → `FillSpriteData`
+    /// 0x120cf8 (52-word GS template: GIF tags 0x6000000c/0x5000000c, TEX0 from the
+    /// texture-space entry, two vertex blocks coloured by the `SpriteColourR/G/B/A` globals
+    /// 0x2469d0..0x2469dc) [M decomp] — the colour/UV/position data that packet carried is what
+    /// this draw carries; the GS packet itself has no host equivalent.
     fn sprite(&mut self, anchor: Anchor, at: (f32, f32), s: &SpriteInfo, c: [f32; 4]) {
         let mut uv = s.uv.map(|k| k as f32);
         // Zero UV extents = the whole texture, like the zero w/h below (the Redeemer brackets 3..8: uv 0, w/h 0 —

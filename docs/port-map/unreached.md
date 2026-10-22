@@ -1,0 +1,728 @@
+# Unreached game functions (never called on any shipped path)
+
+Evidence tags: [M] decompile, [D] disc bytes. Created by unported-guard-ai-other-2
+(2026-10-21); sections are appended per task, newest last.
+
+## NDrone2_init_DMODE rows 1-22 (unported-guard-ai-other-2)
+
+The functions below are `DroneModeSettings` 0x29ad40 rows 1..22 slot +8. The only
+reader of that slot is `NDrone2_DoModeSettingsOLD` 0x14cfa0 (row `param_2` ≤ 0x23),
+whose only caller is `NDrone2_DefaultInit` 0x14b300:495-502 under placement
+parameter 5 < 0x24. The three shipped creation paths give parameter 5 = 100
+(all 555 drone placements, [D census]) or 0 (MP bots `BOT_init` 0x1249e8 and the
+coder event 0x07000001 0x0600003B — both memset the DIVars, [M 0x1249e8:101 /
+0x13a108:55]); 0 selects row 0 (`NDrone2_init_DMODE_Normal` 0x14d958 →
+`NDrone2_init_DMODE_Defaults` 0x14d528, ported) and 100 dispatches to
+`DoModeSettingsNEW` 0x14c600, which reads no row slot. No other reader exists in
+the decompile. Rows 31/32/34 (fn 0) and rows 23-30 (owned by 856) are not listed
+here.
+
+| addr | name | row (mode, team) |
+|---|---|---|
+| 0x14d978 | NDrone2_init_DMODE_Guard | 1 (mode 1, team 1) |
+| 0x14d998 | NDrone2_init_DMODE_Retreater | 2 (mode 1, team 1; alert word 1.0) |
+| 0x14d9b8 | NDrone2_init_DMODE_Sniper | 3 (mode 2, team 1) |
+| 0x14da78 | NDrone2_init_DMODE_Stealth | 4 (mode 1, team 1) |
+| 0x14dab0 | NDrone2_init_DMODE_Attacker | 5 (mode 6, team 1) |
+| 0x14dad0 | NDrone2_init_DMODE_RunToPoint | 6 (mode 7, team 1; alert 1.0) |
+| 0x14db18 | NDrone2_init_DMODE_Assassin | 7 (mode 3, team 1) |
+| 0x14db38 | NDrone2_init_DMODE_HostageKiller | 8 (mode 4, team 1) |
+| 0x14dc18 | NDrone2_init_DMODE_Hostage | 9 (mode 5, team 3) |
+| 0x14dc88 | NDrone2_init_DMODE_HostageTied | 10 (mode 5, team 3) |
+| 0x14dcf8 | NDrone2_init_DMODE_JustStand4Demo | 11 (mode 8, team 3) |
+| 0x14dd20 | NDrone2_init_DMODE_DeleteMe | 12 (mode 21, team 1) |
+| 0x14dd28 | NDrone2_init_DMODE_Civilian | 13 (mode 9, team 3) |
+| 0x14de48 | NDrone2_init_DMODE_CivilianScared | 14 (mode 10, team 3; alert 1.0) |
+| 0x14df28 | NDrone2_init_DMODE_MissionFailer | 15 (mode 11, team 1) |
+| 0x14df68 | NDrone2_init_DMODE_Mayhew | 16 (mode 12, team 2) |
+| 0x14df90 | NDrone2_init_DMODE_Ninja | 17 (mode 13, team 1) |
+| 0x14df98 | NDrone2_init_DMODE_AlarmRaiser | 18 (mode 14, team 1; alert 1.0) |
+| 0x14dfe0 | NDrone2_init_DMODE_SearchLight | 19 (mode 15, team 1) |
+| 0x14e050 | NDrone2_init_DMODE_Zoe | 21 (mode 17, team 2) |
+| 0x14e098 | NDrone2_init_DMODE_PartyGirl | 22 (mode 18, team 3) |
+
+Row 20 (`NDrone2_init_DMODE_Ambush` 0x14e018, mode 16) is not in this task's list
+and is not claimed here. `Defaults` 0x14d528 itself is reached (via row 0) and is
+ported — it is listed in the task only as the row-0 body's callee.
+
+# Unreached guard-AI functions (call-tree audit outcomes)
+
+Functions the call-tree flags that the shipped game never reaches on an on-foot level, the front
+end or MP — with the evidence. Ported/cited functions are not listed here; each has its citation at
+the Rust code that does the work.
+
+## NDrone2_DSTATE_CastleChatGuard1 0x1612e0 (state 0x36)
+
+- Handler of `NDrone2_StateFuncs[0x36]` [L 0x29b300 table read]. In-code entries: the DTYPE-0x18
+  home state (`NDrone2_GetDroneTypeAttackTypeFriend` 0x14cbd8 case 0x18 → +0x5a2 = 0x36 [M]) and the
+  PlayScript redirect (`NDrone2_DSTATE_PlayScript` 0x15ba68 case 1, `*(char*)(drone+0xc5) == 0x18` →
+  SetState(0x36) [M]).
+- The disc census over all 99 `.bin` level archives (555 kind-0x0f drone placements) shows **no
+  placement carries DTYPE (placement parameter 15) 0x18** [D census; docs/reports/
+  unported-guard-ai-other-3b.md]. The port's `dtype_of` (`NDrone2_GetDTYPENEW` 0x14c938) never
+  returns 0x18 either, so the PlayScript redirect's `+0xc5 == 0x18` precondition has no disc producer
+  [M]. The mode-keyed start-state arm the port carries (`start_state`: mode 0x18 → 0x36) mirrors the
+  game table for completeness; no disc placement produces mode 0x18 [D census of parameter 16: only
+  0x00/0x02/0x03/0x04/0x05 occur].
+- Remaining theoretical entry: a level script's Global msg-0x1d SetState (0x15b830 case 0x1d [M])
+  naming state 0x36 — script-data-driven, not exercised by any placement or start script found in
+  the census. Recorded unreached on the shipped placement data; a script-driven entry would be a new
+  finding.
+
+## NDrone2_DSTATE_InterogateWalk 0x162338 (state 0x3d)
+
+- Handler of `NDrone2_StateFuncs[0x3d]` [L 0x29b300]. **No in-code entry exists**: an exhaustive scan
+  of the decompile (SetState constant 2nd args, direct state-field stores, `return 0x3d/61` in state
+  mappers) finds none — the interrogation family's own transitions go to 0x3c/0x3a/0x56/0x60 [M
+  0x161a40/0x1616c0/0x161860; the scan is in docs/reports/unported-guard-ai-other-3b.md].
+- Entry is data-driven only: `DroneTypeSettings` rows whose start/alert state is 0x3d, or the
+  obj+0xf4 coder initial state. The interrogator DTYPEs 0x1b/0x1c come from the start-script
+  specials 0x600089c/0x6000892 [M 0x14b300:613-627]; **no placement carries DTYPE 0x1b/0x1c as its
+  parameter 15** [D census] and their DroneTypeSettings rows do not start in 0x3d
+  (docs/fields/dronetype-tables.md [D ELF data]).
+- The same Global msg-0x1d script caveat as CastleChatGuard1 applies.
+
+## Data-driven states deliberately not proven unreached
+
+- `NDrone2_DSTATE_EnemyMission` 0x15e1e8 (0x1b): entered from Idle/Alert ENTER when the mission-path
+  route has pending nodes (`+0x9f2 != 0` after `AssignAIPath`) [M 0015bf18:36-60]. Prop 0x1d is set
+  on 484/555 drone placements [D census], so the state is data-reachable; the port's route-walking
+  machinery (`update_mission_route`, 0x154a80) exists and the state's port is future work.
+- `NDrone2_DSTATE_CivilianMissionWait` 0x15dbb0 (0x17): entered from CivilianMission's msg-0x22 hold
+  command [M 0x15d860:130-136]; whether any shipped script sends 0x22 to a CivilianMission drone is
+  not censused — left open rather than claimed unreached.
+## 857-unported-guard-ai-other-4 — the NDrone2 states with no shipped-path caller
+
+Evidence basis: the exhaustive entry-path sweep in docs/systems/guard-ai-other-4.md —
+every `Drone_SM_SetState` call site (balanced-paren scan), every state-selector return, every
+`DroneAnim_CallAnim` follow-state argument, every `DroneFunc_HandleImpact` resume argument,
+every constant write to the return-state slots `+0x5A2/+0x5A0`, the full `DroneTypeSettings`
+table 0x29aee8 dump, and the spawn initial-state path (`Drone_SM_InitObject` 0x175838 ←
+`obj+0xF4`, zeroed by `NDrone2_DefaultInit` 0x14b300:58) [M].
+
+| addr | name | state | why it is never reached |
+|---|---|---|---|
+| 0x166840 | NDrone2_DSTATE_AimStandDiscard | 0x6a | No entry path anywhere in ACTION.ELF [M]: no SetState constant, no selector returns 0x6a (CombatState 0x148338 / ChooseCombatMove 0x150c18 / EnemyAlerts 0x177c18 / AlertSound 0x177800 enumerated), no CallAnim follow (AimStandReload's reload anims follow 0x68, not 0x6a [M 0x1666d8]), no `+0x5A2` writer, no DroneTypeSettings row (dumped: 6/0x29/8/0xa/0x56/0x85/0xb7/0x10/0x12/0xb5/0x1c/0xa6/0x89/0x37/4/0x2e/0x30/0xb4/0x31/0x32/0x36/0x2a/0x8e/0xbd/0xc3+), no HandleImpact resume [M]. The weapon-discard anim 0x45 with follow 0x66 (DrawWeapon) suggests a cut weapon-loss flow [S]. |
+| 0x166940 | NDrone2_DSTATE_Prone | 0x6b | Same sweep [M]: no producer of state 0x6b in any entry path. ChooseCombatMove's crouch option is 0x6f AimCrouch (prop 0x11); the prone anims are not referenced by any combat chooser. Only a script writing `obj+0xF4 = 0x6b` before `Drone_SM_InitObject` could spawn a drone into it [M]; DefaultInit zeroes the field. |
+| 0x166a28 | NDrone2_DSTATE_ProneFire | 0x6c | Only enterers are Prone itself (CallAnim follow 0x6c and HandleImpact(0x6c) [M 0x166940]) — and Prone is never entered (row above). The blind-cheat arm inside it (`switch_BLIND_DRONES` → Idle) does not create an entry path [M 0x166a28:19-25]. |
+| 0x16db90 | NDrone2_DSTATE_Tester1 | 0xb7 | Debug/test family: SetState'd only by `NDrone2_DSTATE_Tester2` 0x174150 and `NDrone2_DSTATE_Tester4` 0x1742d8 [M] — a closed tester cluster (Tester1↔2↔4) whose only outside edge is inbound-none; also `DroneTypeSettings[8].ret = 0xb7` (drone-type 8's impact-return state, table 0x29aee8+0x60 [M]) — no shipped level data is known to configure drone type 8 [D census not run; flagged [S]]. |
+
+Reached-elsewhere notes for the same task: `NDrone2_DSTATE_SeenDeadBody` 0x16acd0 (0x9e) and
+`NDrone2_DSTATE_SeenSurrenderedDrone` 0x16ade0 (0x9f) are reached only through
+`NDrone2_ReactToDroneAlertMsg` 0x1437a0, whose only caller is the MP bots'
+`NDrone2_DSTATE_BotGlobal` 0x16e060 [M] — MP counts as a shipped path, and the port now delivers
+the transition flow (`mp/bots.rs react_to_drone_alert_msg`).
+
+## The Sub_* group (unported-level-objects-1, 2026-10-21)
+
+The `SUBINFO` submarine (distinct from the `MiniSub_*` family): `Sub_Create` 0x1ad6c0 is the
+placement dispatcher's case 0x36 only (`parsemap_create_dynamic_objects` 0x1d04f0:215) [M],
+sets class 0x4A ('J') [M 0x1ad6c0:21], and `control_funcs` 0x26f890 row 74 is
+{`Sub_Update` 0x1ad200, `Sub_Collide` 0x1ad868, `Sub_Delete` 0x1ad870} [M action-symtab +
+0x26fc08-0x26fc10]. The disc placement census has **no 0x36 rows** [D
+docs/systems/script-census.md; the proof is in docs/systems/ai-spawned-objects.md "Proven
+never called on the shipped path"], so no Sub object ever exists on a shipped on-foot level,
+front end or MP map, and nothing below can dispatch.
+
+| addr | name | bytes | why never reached |
+|---|---|---|---|
+| 0x1ad200 | Sub_Update | 880 | control_funcs[74] slot 0 — runs only for a class-0x4A object; `Sub_Create`'s only caller is parsemap case 0x36, which has no disc rows [M callers / D census] |
+| 0x1ad868 | Sub_Collide | 8 | control_funcs[74] slot 1 (`Collide_Update` 0x1ea398:59-63 dispatch) — same class gate [M callers / D census] |
+| 0x1ad870 | Sub_Delete | 8 | control_funcs[74] slot 2 (`control_delete_object` 0x133178:16-17 dispatch) — same class gate [M callers / D census] |
+| 0x1acda0 | Sub_Laser | 452 | only caller is `Sub_Update` 0x1ad200:111 [M] — never runs itself |
+| 0x1acf68 | Sub_DeployTorpedoes | 664 | only caller is `Sub_Update` 0x1ad200:127 [M] — never runs itself |
+| 0x1ad570 | Sub_ApplyDammage | 328 | two callers: `Explode_Propagate` 0x17c518:207 (its case-0x3D branch checks the victim's class byte == 'J' = 0x4A first [M]) and `Sub_Update` — both need an existing Sub [M callers / D census] |
+
+The auxVec_Sub 0x1e4f48 hits in the same name grep are the vector-subtract helper
+(`Creature_CalcWaypoints` calls it), not this family.
+## NDrone2 router/debug states (unported-guard-ai-other-5, 2026-10-21)
+
+The 17 DSTATE fns of task 858 live in `NDrone2_StateFuncs` 0x29b300 at ids 0x3b, 0x57, 0x5b, 0x5d,
+0x61, 0x80, 0x9a, 0x9b, 0x9d, 0xa0, 0xa1, 0xb5, 0xb8–0xbc. Entry mechanisms in the game [M]:
+`Drone_SM_SetState` 0x1758c0 (stores the id at SMInfo+0xc) with a literal, with a variable, or with a
+message-carried id (`DSTATE_Disabled` 0x172440 does `SetState(info, *(msg+0xcd8), 0)`), plus the
+DroneTypeSettings start column ([D/L] docs/fields/dronetype-tables.md) and the cover-anim completion
+states. Evidence used per id: whole-decompile plain-name caller census, a literal + hex-assignment
+sweep of every `Drone_SM_SetState` call site, the variable-id census (131 calls — only
+`ReactToDroneAlertMsg` 0x1437a0:263 carries one of ours: 0xa0), the DTYPE start table, and the
+mode-derived starts of `DoTypeSettingsOLD` 0x14d2e8 / `GetDroneTypeAttackTypeFriend` 0x14cbd8
+({8, 0x29/0x2a, 0x85, 0x37, 0x30, 0x31, 0x36, 6, 4} — none of ours). `init_DMODE_Interogator`
+0x14e238 is a Defaults-only stub.
+
+| addr | name (state id) | row / evidence |
+|---|---|---|
+| 0x1729f0 | NDrone2_DSTATE_Interogator (0x3b) | never assigned: no SetState literal/variable path, no DTYPE start, no direct caller. Body: ENTER → Idle 4 [M 0x1729f0]. `init_DMODE_Interogator` 0x14e238 = Defaults only [M] |
+| 0x173178 | NDrone2_DSTATE_Alerted1stEncounter (0x57) | never assigned. The `0x57` in `DroneFunc_HandleImpact` 0x1469b8:266 is an ANIM id (arg of DroneAnim_CallAnim), not a state [M]. Body: ENTER → 0x5a CombatOutOfRange [M 0x173178] |
+| 0x173338 | NDrone2_DSTATE_CombatTooClose (0x5d) | never assigned by code or the DTYPE table; `DroneFunc_CombatState` 0x148338 emits 0x58/0x5a/0x5c/0x5e/0x68/0x70, not 0x5d [M — the port's coverage list]. Body: ENTER sets +0x4F8\|=0x10000 → 0x67 AimStand [M 0x173338]. Live check L-024 (docs/live/backlog.md:202, gdbwatch 0x173338) still open — the TooClose ×2 damage lives in FireWeapon's own close-threshold check [M 0x30cb14], not this state |
+| 0x173390 | NDrone2_DSTATE_Obstructed (0x61) | entered only by msg 0x1b, which has no decompiled sender [M 0x15c498:95-97 + grep — already documented at crates/nf-game/src/drone.rs PATROL UPDATE]. The `0x61`s in CreateNinjaEyes 0x149600 / SearchArea 0x165bf0 / HeardNoise* 0x16b0e0/0x16b540 are field/anim values, not SetState ids [M spot-checks] |
+| 0x173570 | NDrone2_DSTATE_HoldItRightThere (0x80) | never assigned. DefaultInit's `0x80` is a field store at +0xBA0 [M 0x14b300:825], not a state |
+| 0x173b38 | NDrone2_DSTATE_SeenOpponent (0x9d) | never assigned. Body: ENTER → 0x56 Attack [M 0x173b38] |
+| 0x173bb8 | NDrone2_DSTATE_SeenExplosive (0xa1) | never assigned. Body: no-op (accepts msgs 0/1/3) [M 0x173bb8] |
+| 0x173f68 | NDrone2_DSTATE_FailMission (0xb5) | DTYPE row 11 start state [D/L dronetype-tables.md:93], but that row's creation path (mode 11, `NDrone2_init_DMODE_MissionFailer` 0x14df28) is unreached — see the init_DMODE section above. Body: ENTER SetMissionFailReason(0) → return-state +0x5a2 [M 0x173f68]. The port folds a 0xb5 start to 0x12 defensively [M drone.rs start_state] |
+| 0x174150 | NDrone2_DSTATE_Tester2 (0xb8) | debug: ENTER plays anim 0xd, UPDATE → Tester1 0xb7 [M 0x174150]; never assigned |
+| 0x1741c8 | NDrone2_DSTATE_Tester3 (0xb9) | debug; never assigned. InjuredTalk's `0xb9` is a per-level constant (case 0x7000011..0x700004a → 0xb9 = a level table index), not a state [M 0x13fa20:33-37] |
+| 0x1742d8 | NDrone2_DSTATE_Tester4 (0xba) | debug: ENTER anim 10 + timer arm, msg 0xc → Tester1 0xb7 [M 0x1742d8]; never assigned |
+| 0x1743d8 | NDrone2_DSTATE_HangUp (0xbb) | never assigned. Body: msg 1 clears +0x98 on the two objects at drone+0x530/+0x534 [M 0x1743d8] |
+| 0x174430 | NDrone2_DSTATE_WaitForever (0xbc) | never assigned. Body: no-op parking state [M 0x174430] |
+
+Reached / cited by this task (NOT unreached): 0x173280 CombatNewSighting 0x5b and 0x1739b8/0x173ac0
+UnderCoverTypeChange/Leave 0x9a/0x9b (port consts + arms, cited in crates/nf-game/src/drone.rs),
+0x173b78 SeenDroneShot 0xa0 (entered from `ReactToDroneAlertMsg` 0x1437a0:263,368 — the port folds
+it into the FORCED_ATTACK send, cited in drone.rs). Caveat for all rows: the msg-carried state
+channel (`DSTATE_Disabled` 0x172440 reads the id from the message at +0xcd8) means a shipped level
+script could command any of these ids; no disc-side census was done in this window — a live check
+(gdbwatch on each address during a full game run) would settle it.
+
+# Unreached scripts-cluster functions (unported-scripts-1, 2026-10-21)
+
+## M_SPIN widget: Spin_Init 0x2224c8, Spin_SendMessage 0x2226d8, Spin_Update 0x222948
+
+The Spin control (menu widget type 0xb — `Spin_Init` self-stamps `+0x7b = 0xb`
+[M 002224c8:67]; dispatch arms in `__Menu_SendMessage` 0x1f1c18:45-46 and
+`Menu_Update` 0x1f1dc0:32-33) is an up/down integer spinner: a centred Label
+showing `max − step + min` [M 00222948:43] over an embedded M_SCROLL at +0x94
+whose d1 def word is the value range [M 002224c8 Scroll_Init call].
+
+The only trigger for all three is an authored **ctype-11 CONTROL** in a menu def:
+`MenuManager_Create` 0x21b908:318 → `Manager_SendMessage` 0x21c858 case 0x42
+(:158, :220-227) mallocs 0x318 bytes and calls `Spin_Init` when the NEW_CONTROL
+type byte is 0xb. Disc census [D]: kind-8 entry 08000002 of 07000048.bin (the
+whole front-end def; all pages carry file hash 0x80000002) parses to 52 pages /
+830 controls with ctypes {0 (Label): 824, 1 (Button): 1, 2 (Checkbox): 1,
+3 (Combo): 4} — **zero ctype 11** (and zero List/Radio/Scroll/Text/Window/Memo).
+A signature scan for CONTROL records with type byte 0xb over the entire 764 MB
+FILES.BIN found **0 hits** [D]. The shipped front end builds its spinner-looking
+UI from Combo/List/Label composites instead (menu.rs:1148 "row 0 is the
+controller-style spinner — the list control 0x10000025").
+
+So no caller runs on any on-foot level, the front end or MP: recorded unreached.
+`menudef.rs` already parses CONTROL ctype as a raw u8, which is the right depth
+of support for a dead widget class.
+## unported-hud-1 (2026-10-21) — M_TEXTBOX: no shipped page builds one
+
+`Text_Init(M_TEXTBOX*, NEW_CONTROL*, M_CONTROL*)` 0x222b80 (2688 B), `Text_SendMessage`
+0x223600 (456 B) and `Text_SetupChar` 0x224098 (116 B) are **not reached by the shipped game**.
+
+Evidence: the only construction path is the front-end control factory
+`Manager_SendMessage` 0x21c858, whose type-0xc arm (:206-208, `Menu_Malloc(0x9b0)` +
+`Text_Init`) runs for a page-def control whose type byte is 0xc [M]. The shipped front-end
+menu def (kind-8 entry 08000002 in 07000048.bin — the file `MenuManager_Create` 0x21b908 is
+called with, hash 0x80000002 [D]) contains **zero controls with ctype 0xc** — the census in
+`crates/nf-formats/tests/hud_pane_census.rs::menu_def_textbox_census` parses every page and
+every control and prints `[]` [D]. With no textbox control, `Text_SendMessage` (the control's
+message switch, called via `__Menu_SendMessage` 0x1f1c18 / `TextBox_Update` 0x2237c8) and
+`Text_SetupChar` (called only by `Text_Init` 0x222b80 [M grep]) are never reached either.
+
+Caveat: the census covers the one menu def the game boots with [D docs/systems/frontend.md,
+menudef.rs header]; no other kind-8 page-def entry is loaded by the boot path the port
+reconstructs. `Text_SendMessage`'s opcode surface (0x14/0x16/0x21/0x2b/0x39/0x3b/0x3d/0x47/0x53
+[M 0x223600]) is fully documented in docs/systems/hud-panes.md so a future task can port the
+control if a def with a type-0xc control ever surfaces (e.g. from a different region build).
+
+# unported-front-end-menus-3 (2026-10-21)
+
+## Camera modes 3/4/5: camera_freechase 0x1ba1c8, camera_fixed 0x1ba4e8, camera_snake 0x1baa78
+
+All three are `Player_PositionCamera` 0x18f5d8 switch arms — case 3 → `camera_freechase`
+(:157-161), case 4 → `camera_fixed` (:162-166), case 5 → `camera_snake` (:167-171) [M].
+The switched byte is `BLData+0x950` (the camera mode). Its only writer is
+`Player_SetCamMode` 0x195928:11 [M whole-decompile grep of +0x950; camera_freechase itself
+resets it to 0 at 0x1ba1c8:106]. All 20 `Player_SetCamMode` call sites pass mode
+{0, 1, 2, 0xb, 0xc, 0xd, 0xe, 0xf} — none passes 3, 4 or 5 [M census of every call site,
+0x1910f8:118 through 0x184bd0:71]. The script side's only camera-mode path is NIS event 9 →
+`Player_Cam2Mode` 0x195fc8, which maps to 2 or 0 only [M 0x195fc8:10-16]. Corroboration:
+docs/systems/uncited-audit.md:226-228 already records modes 4/5/6/0xa dead (the same census
+covers 3). So no code runs these three handlers on any on-foot level, the front end or MP:
+recorded unreached. Residual caveat: a data-driven `+0x950` write from script bytes cannot be
+fully excluded from decompile alone — a gdbwatch on `*(u8*)(BLData+0x950)` across a full
+SP+MP run would settle it conclusively.
+
+## QuickSort dead comparators: CompBoxList 0x1d3390, CompMsgTxt 0x1d3400
+
+The seven `Comp*` comparators (`CompBoxList` 0x1d3390 … `CompStrings` 0x1d34f0) are not
+passed as function pointers anywhere: they are dispatch-table targets of `QuickSort`
+0x1d30a8:61-67 — the `COMP_FUNCT` id selects a jumptable entry at 0x304fc0 [M dump of
+work/elf/ACTION.ELF: id 0→CompSpr 0x1d3320, 1→CompLight 0x1d3350, 2→CompHitData 0x1d33c0,
+3→CompDrawCels 0x1d3430, 4→CompAlphaObj 0x1d3458, 5→CompMsgTxt 0x1d3400, 6→CompTargetObj
+0x1d3490, 7→CompMenuCtrl 0x1d34c8, 8→CompStrings 0x1d34f0, 9→CompBoxList 0x1d3390, 10→
+a dynamic comparator]. A binary-wide census found exactly 15 `jal QuickSort` sites, all 15
+decompiled, and **none passes id 5 or id 9** [M]. So `CompBoxList` (key = f32 at
+`*elem+4`, the box-list entry) and `CompMsgTxt` (key = s8 `isNew` at TXTMSG+0x1d) are dead
+table entries: recorded unreached.
+
+Correction to prior art: docs/reports/objectives-0b-start.md:115 implies the objective
+message queue sorts TXTMSG records by the `isNew` byte — contradicted by the census; the
+message queue is FIFO via the CirBuf ring (CirBuf_Add 0x1cd040, replaced by the port's
+subtitle queue). Also fixes a mislabel in docs/systems/fix-cel-order.md:28, which calls
+0x1d3320 "CompLight": 0x1d3320 is CompSpr; CompLight is 0x1d3350.
+## unported-front-end-menus-5 — the debug TWEAKS pages, the FMV island, the dead hub and the C_CHCH* cheat toggles (2026-10-21)
+
+**P_TWEAKS_Handler 0x2067c8 / P_TWEAKS2_Handler 0x207950 (debug "TWEAKS" pages) — UNREACHED.**
+Sole caller `Handler_HandleMessage` 0x2029e0 (itself only fed by `Manager_HandleMessage` 0x21df10):
+they are the page handlers of menu pages **0x40000044 / 0x40000046**, routed by the receiving
+control's id [M 0x2029e0:505-507, 439-440]; the handlers then switch on the page msg id
+0x4c/0x4b/0x50/0x5d — no debug-flag gate, disasm 0x2067cc-0x20683c. The only id that can ever reach
+them is the page id itself: 0x40000044 occurs in the whole decompile only in the dispatcher,
+0x40000046 only there and in P_TWEAKS's own "more tweaks" arm, and neither occurs in any shipped
+data as a message target or `Manager_SendMessage(0x44, …)` argument [D structured walk of all 35
+kind-8 menu defs on the ISO + raw aligned dword scan of ACTION.ELF = 0]. The pages do register —
+but only in the mission archives' pause def `08000001` (sha1 f0225d338b93, all 33 mission .bins),
+whose openers are KMSG `{target −3, msg 0x44}` on the confirm scripts of three rows of hub page
+**0x40000007** — a page with no dispatcher arm, zero code references and zero data references
+anywhere in the shipped disc [D; the shipped pause rows go through C_GCPAUSE 0x204408 /
+P_PAUSE 0x203c28 only]. Debug-only leftover; the gameplay globals they tune (`DroneDamage_*`,
+`DroneArmour_*`, `Plr_DMod_*`, `DroneFiring_*`) are already modelled by
+`nf_formats::tuning::Tuning` / `read_tuning_vars` (ReadTuningVars 0x1d3a80). Note for
+docs/systems/unlock-popups.md §4: the P_CHEATMEDAL page record + its trigger row 0x1000021e ship
+in the mission pause def 08000001 behind the same dead hub (the front-end def doesn't have them).
+
+**P_FMVTEST_Handler 0x20a968 — UNREACHED** (debug). Dispatches on page **0x4000004f**, a
+movie-picker page that exists in the front-end def 08000002 [D PAGE @ ISO 0x192a8796: list control
+0x10000229 (134,75,372,331), hidden on entry, focused by the page-open script]. Nothing reaches it:
+no code path sends 0x44 → 0x4000004f (the id occurs only in the 0x2029e0 dispatch), no
+`GameState+0x28` writer stores it (writers store 0x40000034/09/1c/33/36/42/43), and a FILES.BIN-wide
+scan finds no MGRMSG/KMSG navigation to it [D]. On open it fills the list with 22 movies
+("Castle - Halo Jump" … "Menu - Making Of", 0x3090f0..) [M 0x20a968:14-36]; accept stores the pick
+into `movie_hashcode` 0x30d374 and goes to page 0x40000050 [M :10-11] — a page with **no dispatch
+arm at all** and a single placeholder control [D 0x192a886c]. Debug-only FMV preview island;
+superseded by the port's `nf-view` movie harness (cited in movie.rs).
+
+**C_LBPMMAP_Handler 0x215ac8 — UNREACHED** (debug). Dispatches on control **0x10000010**, a
+(50,64,258,376) map board that exists only on the per-level menu-def page **0x40000007** (33 defs,
+hash 0x80000002; the page-open script focuses the board and its siblings are the C_CHCH* cheat rows
+— an in-level debug menu) [D]. The page is never opened: no code references 0x40000007 (0 hits in
+the decompile; every `GameState+0x28` writer stores 0x40000034/09/1c/33/36/42/43), and no def
+MGRMSG/KMSG navigates to it [D]. Its behaviour, for the record [M 0x215ac8]: msg 0x49 stores
+GameState+0x28 = 0x40000009 (title) and GameState+8 = the board's map value; accept sets
+`MPSettings+0x1AC` (player count) = 1, `ResetMap_LevelToLoad` of the selected map,
+`GameFlow_PushState(80.0f,7,0xff)`, `SFXFadeDown(1)`, `MenuManager_Delete` — a 1-player quick
+launch; finalize adds one list item (string 0x308830, archive 0x07000048). The port's
+`mp_quick_start` already covers Quick-Game launching through the shipped scenario path (cited).
+
+**The C_CHCH* cheat-toggle controls — C_CHCHFLY 0x215c70, C_CHCHDRONES 0x215cf0, C_CHCHBLIND
+0x215d60, C_CHCHWEAP 0x215dc8, C_CHCHHEALTH 0x215ee0, C_CHCHHUD 0x215f48, C_CHCHDEBUG 0x216098,
+C_CHCHCOORDS 0x216100 — UNREACHED.** Checkbox toggles (msg 0x4b = read the widget via
+`__Menu_SendMessage(control,0x40)` into the cheat global; msg 0x51 = reply 0x2e) dispatched by
+`Handler_HandleMessage` 0x2029e0 on control ids **0x10000019 / 0x10000015 / 0x10000016 /
+0x100000e7 / 0x100000e8 / 0x1000001c / 0x10000017 / 0x1000001a** with no gate [M]. Their toggle
+targets: FLY → `debug_scanmode` 0x30cb5d (+ `debug_clipmode` 0x30cb5e, write-only) with
+`Player_ChangeSubState(glb_players, on?5:0)`; DRONES → `switch_NO_DRONES` 0x30ce2c = !checkbox;
+BLIND → `switch_BLIND_DRONES` 0x30ce30; WEAP → `CheatInfo+8` 0x2a3740 and `CheatInfo+4` 0x2a373c
+(all weapons @999 + armour 50.0 via `Player_EquipWeapon`); HEALTH → `CheatInfo` 0x2a3738 (god);
+HUD → `hud_state` 0x30d2a4 → PlayerSetting/MPSettings HUD bytes + `HUD_Enable(pane)` 0..0x15;
+DEBUG → `Drone_DebugSpr` 0x30ca9c; COORDS → `switch_SHOW_COORDS` 0x30ce7c [M — the effect readers
+are shipped gameplay code: Player_HandlePain 0x1902c8, Player_InitAmmoWeapons 0x1a17f8,
+Player_Update 0x193600, the NDrone2 combat states, HUD_UpdateHealthPane 0x19b9c8]. Nothing in code
+sends those ids (each occurs in exactly one decompile file — the dispatcher); the only senders can
+be menu-def CONTROL/KMSG data, and their only owner page in shipped data is the never-opened
+per-level hub **0x40000007** (see C_LBPMMAP above — no code reference, no navigation) [D].
+Recorded unreached.
+## unported-front-end-menus-6 (2026-10-21) — the debug-toggle handlers, the orphan FMV page and the SDK/libc set
+
+### The seven `C_CHCH*` debug-toggle handlers — their controls never shipped
+
+`C_CHCHALLOWFREEZE_Handler` 0x216258 (`switch_AllowFreeze`), `C_CHCHDUMMY_Handler` 0x2162b8
+(`Drone_DummyPlayer`), `C_CHCHDRAWALL_Handler` 0x216320 (`switch_ForceDrawAll`),
+`C_CHCHLOCKUP_Handler` 0x216400 (`bDebugLockup`), `C_CHCHBRIGHT_Handler` 0x216460
+(`bTweakBrightness` 0x30d2b4), `C_CHCHUNLOCK_Handler` 0x2164c0 (`menu_unlock_everything`
+0x30d2a7), `C_CHCHCONTROLS_Handler` 0x216520 (`bDebugControls`) are each a two-way checkbox bind
+(msg 0x4b read / 0x2e write [M the seven bodies]) dispatched by `Handler_HandleMessage` 0x2029e0
+on control ids 0x100000c7 / 0x100000bd / 0x10000101 / 0x10000169 / 0x100001f7 / 0x10000216 /
+0x1000021d [M 0x2029e0 — the seven dispatch arms; the binary's jal scan shows no other caller].
+
+The shipped front end never contains those controls: the front-end def (07000048's kind-8
+08000002) and every level archive's kind-8 08000001 were parsed and each of the eight ids —
+these seven plus the keypad's 0x100000ba — has **zero hits** outside the keypad's own in-game
+page (see the keypad census in docs/systems/keypad-menu.md) [D
+`crates/nf-formats/tests/front_end_menus_census.rs::front_end_def_has_no_debug_toggle_controls_or_tweaks_pages`].
+Their pages don't ship either: `P_TWEAKS` 0x40000044 and `P_TWEAKS2` 0x40000046 — the only pages
+the decompile shows carrying debug toggles — are **absent from the shipped front-end def** [D the
+same census asserts both]. The bound globals are otherwise known to the port where the game reads
+them: `menu_unlock_everything` = the `--unlock-all` dev flag [M 0x20b8d8:18],
+`switch_AllowFreeze` in the freeze gate (docs/port-map/core-loop.md:19), `switch_ForceDrawAll`
+the portal bypass (docs/atlas/cel.md:107), `bTweakBrightness` (docs/atlas/gs-leaf.md:121). The
+`%.2f` health-pane sprintf that prints coordinates is gated on `switch_SHOW_COORDS` [M
+0x19b9c8:266-273, written only by the same debug family] — so even printf's float path never
+runs from it.
+
+### `P_FMV_Handler` 0x2169b0 — an orphan page left in the def
+
+Page 0x4000004d EXISTS in the shipped front-end def with 2 controls [D census], and the 8-byte
+handler (`return 1` [M 002169b0]) is the dispatch arm for it [M 0x2029e0:547-550; jal 0x2033fc
+the only caller]. But nothing navigates there: no `Manager_SendMessage(…, 0x44, 0x4000004d, …)`
+anywhere in the decompile [M grep + jal scan], and no mgr-msg, control-msg or keyframe message in
+the whole def targets the id [D `front_end_menus_census.rs::fmv_page_is_orphaned_in_the_front_end_def`].
+Unreached in the shipped game (the FMV pages that DO get wired are the trailer 0x4000004e and the
+FMV player 0x40000050).
+
+### The PS2 SDK / libc set — reached only through the layers the port replaces
+
+These are Sony SDK/libc internals, not game logic. The port has no IOP RPC, no kernel semaphores
+and no libc printf; disc access is nf-extract/iso9660 direct reads and the save flow is the
+port's own. Each with its caller evidence (binary jal scan + decompile):
+
+- `CreateSema` 0x23be20 / `PollSema` 0x23be70 — kernel semaphores; callers are the SDK file-IO
+  layer (_sceFsSemInit, sceOpen/sceRead/sceLseek/sceIoctl/sceSifBindRpc/sceSifCallRpc), the CDVD
+  driver (sceCdInit's cmd_sem_init, the ncmd/scmd prechecks) and the memcard library (sceMc*,
+  jal 0x227dc8..0x228de8) [M]. Reached at boot and during disc/memcard IO in the real game —
+  but every caller is a layer the port replaces wholesale; there is nothing to port.
+- `cmd_sem_init` 0x230d58 — the CDVD driver's semaphore pair init; called by `sceCdInit` 0x2316a8
+  (jal 0x231944) on the `mode < 2` arm — main 0x109080 / FS_Init 0x10bc48 call `sceCdInit(0)` at
+  boot [M]. Replaced: the port reads the ISO directly (nf-formats iso9660.rs).
+- `cdvd_exit` 0x230df0 — the CDVD shutdown arm; called by `sceCdInit` when `mode == 5` (jal
+  0x231918), i.e. `RunNextModule` 0x120008:88's `sceCdInit(5)` at the boot module chain [M].
+  Same replacement as above.
+- `PowerOffCB` 0x230eb8 — the power-off callback `sceCdInit` registers and invokes inline at
+  init (jal 0x23194c) [M]. Console power-event plumbing; the port has no poweroff path.
+- `CB_DelayTh` 0x230b70 — the SetAlarm callback of `sceCdDelayThread` 0x230b98 (the address
+  rides the alarm registration, hence no jal) [M]; reached when the loader's synchronous waits
+  (`sceCdSync` from psiFileRead 0x10bdf0 / psiFileLoad 0x10ba38) block. Replaced: the port's
+  reads are synchronous already (nf-extract), there is no alarm to service.
+- `cvt` 0x2386a0 — the float→ASCII worker of `_vfprintf_r` (jal 0x237644) [M]. The game's only
+  float-format sprintfs are the two debug health-pane overlays, gated on `switch_SHOW_COORDS`
+  [M 0x19b9c8:266-273, 0x19b630:94-99], whose writer is the debug-toggle family above with no
+  shipped control — so the float printf path is unreachable in the shipped game [M + D census].
+  Replaced by Rust's `format!` machinery.
+- `copysignf` 0x235870 — libc float helper; its only caller is `scalbnf` 0x235710 (jal 0x235824),
+  a libc-internal repair path [M]. No game code path reaches it in the decompile (the game's own
+  float math is inline/`PS2Sin f`-style); the port's float semantics live in ps2float.rs and std
+  `f32` ops.
+
+# unported-front-end-menus-7 (2026-10-21)
+
+## libcglue `close` 0x23c288 (8 bytes) — newlib fd-close stub, never invoked
+
+The 8-byte body is `jr $ra; addiu $v0, $zero, -1` [M disassembly of work/elf/ACTION.ELF
+0x23c288-0x23c290; decompile 0023c288_close.c `return -1`]: it always fails and never
+sets errno. Its whole-ELF reference census (every PT_LOAD segment scanned for `jal`
+targets, `lui+addiu` address constructions with correct sign extension, and raw 4-byte
+data words) finds **exactly one reference**: `jal 0x23c288` at 0x23bab4 inside `_close_r`
+0x23ba98 [M]. From there the chain terminates in glue that nothing ever calls:
+
+- `_close_r` 0x23ba98 (`errno=0; close(fd); on -1 && errno: *reent = errno`) is called
+  only by `__sclose` 0x23b958 (`jal` at 0x23b964, args FILE->_data +0x54 / _file +0xe) [M].
+- `__sclose` 0x23b958 is referenced only by `std` 0x239f30, which stores it into the
+  FILE `_close` glue slot at +0x2c (lui/addiu at 0x239f48, `sw $t1, 0x2c($a0)` at
+  0x239f68; the other glue slots get `__sread` 0x23b808 / `__swrite` 0x23b870 /
+  `__sseek` 0x23b8f0) [M disassembly of std]. `std`'s only caller is `__sinit`
+  0x239fa0:11-13, wiring stdin/stdout/stderr [M]; `__sinit` runs lazily from vfprintf
+  0x237110, the FILE accessor 0x238930 and `fflush` 0x239e28 [M].
+- Nothing in ACTION.ELF ever invokes the `_close` glue: `work/action-symtab.tsv` has no
+  `fclose`/`_fclose_r`/`freopen`; a decompile grep for `__sclose` outside its own file
+  and `std` is empty; and an instruction-level census of all 172 `lw rt, 0x2c(base)`
+  sites in .text finds no same-register `jalr rt` within the following 24 instructions
+  [M census, capstone scan of ACTION.ELF .text].
+- The exit path closes nothing: `exit` 0x2358b0 (its 5 `jal` callers all sit in the
+  failure arms of `sceMtapInit` 0x226b68) runs the atexit walk, then `(*(reent+0x3c))()`
+  = `_cleanup_r` 0x239f88 (stored by `__sinit`:6 and `__smakebuf` 0x23a978), which calls
+  `_fwalk` 0x23a898 with `fflush` 0x239e28 as the per-FILE callback [M _cleanup_r:4] —
+  flush only, never close. So even the `sceMtapInit`-failure exit cannot reach `close`.
+
+The game's real file I/O never uses EE-side fds: loaders go through sce* / memcard
+primitives (`sceOpen` 0x23edd0, `sceMcOpen` 0x227f48, `strFileOpen` 0x108cc0,
+`psiFileOpen` 0x10bd08 — symtab) [M], and the Rust port reads disc data through
+nf-formats' ISO reader, which has no fd table to close. So there is no ported job to
+cite either: recorded unreached (dead libcglue stub, unreachable on every on-foot
+level, the front end and MP).
+
+Method note: the scan driver's earlier "jal" hits inside the 16-byte kernel import
+stubs (0x23bde4, 0x23bf54) are the PS2 syscall-trap word 0x0c000000, not calls; the
+census excludes it.
+
+## SFXSetFilePath 0x116c50: dead — its only call path never fires
+
+`SFXSetFilePath(path)` (164 B, batch op 0x14 + 50 words = 200 bytes of path) has exactly one
+caller: `SFXInitialise` 0x1157b0:37, guarded `if (param_1 != 0)`. `SFXInitialise`'s only caller
+is `Sound_Init` 0x1ddf88:9, which passes **0** — so the guard is never taken and the function
+never executes in the shipped game [M grep + decomp]. The IOP keeps its `.data` default path
+`\PS2\MUSIC\` (docs/systems/music.md §1.2). No port: streams resolve through
+`nf_formats::soundbank::stream_data` with explicit paths.
+
+Also recorded here because the natural alternative buckets don't fit: `SaveMemoryMap`
+0x111298 (36 B) IS reached — `CreateSpaceAndPackTextures` 0x11dcf8:310 on every level load —
+but it is a stubbed-out no-op: the disassembly (file 0xb198) shows it memsets 18 bytes of its
+own dead stack frame and returns, touching no globals, result ignored by the caller [M ELF
+bytes]. Nothing to port; noted in docs/systems/memcard-save-flow.md.
+## 863-unported-animation-1 — the anim debug family and the two wrapper-gated spawners
+
+Evidence basis: an exhaustive reference sweep for each address [M] — every `JAL` encoding in the
+loaded `.text`/`.vutext` (0x107100-0x241c80) re-derived from the instruction word, every raw
+address word in the loaded `.data`/`.rodata`/`.sdata`/`.vudata`, every `lui`+`addiu` address
+formation pair, and the decompile call graph (`work/decomp/ACTION.ELF/`). The only symbol-table
+hits outside these are the functions' own `.symtab` entries. Boot and front end included: the
+same sweep covers every caller.
+
+| addr | name | size | why it is never reached (or never acts) |
+|---|---|---|---|
+| 0x1bc6e8 | AnimDebugHandler | 2240 | No reference anywhere in the loaded image [M]: zero `JAL` encodings, zero address words in `.data`/`.rodata`/`.sdata`, zero `lui 0x1b`+`addiu 0xc6e8` formations, zero decompile callers. A debug anim-viewer state machine (reads the `AnimDebugDisplay` switch global 0x30cb5f [M symtab, 1 byte], spawns mannequin test objects per `State_223`); kept by the linker, never called. |
+| 0x1c63b0 | AnimCacheDump | 8 | Its only `JAL` is at 0x1bc6fc — inside `AnimDebugHandler` (row above) [M]; no data references, no other callers. Body is `jr ra; nop` [M disasm 0x1c63b0]. |
+| 0x1bcfa8 | AnimDebugCreate | 896 | `JAL`ed unconditionally from `Player_Init` 0x1910f8:117 [M], but the body only acts when `GameState+0xc` is 0x07000043, 0x07000049 (the all-models mannequin circle) or 0x07000041 (the body-glow figure) [M 0x1bcfa8:72,140] — the wrapper codes nothing on the retail disc ever loads: every 0xE8 placement param-0 scan found no loader of 0x07000041/43/46/49 and the decompile has no loader constant for them [D; pinned in `crates/nf-view/tests/doublecross_transitions_live.rs:44`]. They are not in the MP sound-bank family either (`Sound_Ready` gives 0x07000041 bank 0xb, an SP bank [M 0x1dceb8:91; port `sound.rs:192`]). So the shipped game runs the call but the body returns at once on every on-foot level, front end and MP. The port's `Player_Init` site cites it (scene.rs). |
+| 0x1c64e0 | AnimObjectInitialPose | 172 | Its only `JAL` is inside `AnimDebugCreate`'s never-acting body (row above) [M]; no data references, no other callers. |
+
+Reached, cited at the port's code instead (the port does the same job under another name):
+`AnimCacheInit` 0x1c6390 — `JAL`ed from `ResetMap_GameInit` 0x1d5080:37 on every level start,
+body `jr ra; nop` [M disasm] (no anim cache exists to init); cited in `nf_view::load`.
+`AnimSeqGetHdrBuf` 0x1c7998 — `JAL`ed from `ResetMap_Load` 0x1d67c4 with a0=1, body
+`jr ra; or v0,zero,zero` (returns 0) and the caller never reads v0 [M disasm 0x1d67c4-0x1d67d8];
+cited in `nf_view::load`. `AnimObjectIsHeadTracking` 0x1c6850 and `AnimObjectIsAiming` 0x1c6900
+— reached through `NDrone2_DoHeadTracking` 0x1472c8 / `NDrone2_DoTracking` 0x1479d8 (drone ticks);
+the port's folds carry the masks and cite them (`anim::is_head_tracking` / `anim::is_aiming`,
+drone.rs `tracking` fold and `aims_torso`).
+# Unreached or dead ACTION.ELF gameplay functions
+
+Recorded per the unported-function tasks: a function the shipped game never reaches on any
+on-foot level, the front end or MP — or that is reached only into a silent return — with the
+evidence. Evidence tags: [M] decompile/disassembly with the file and line, [D] disc, [L] live
+PCSX2. "No callers" below means: no direct call in the decompile, no `jal`/`j` encoding of the
+address anywhere in ACTION.ELF, and no absolute data word of the address (checked with an
+ELF scan over all load segments).
+
+## `DroneFunc_UnderCoverAimTalk` 0x13fb98 — dead in both modes
+
+Called from `NDrone2_DSTATE_UnderCoverAim` 0x16a2d0 [M caller grep], so the game does reach it —
+but the body returns before anything observable:
+
+- The first statement is `if (MPSettings+0x184 == 0) return;` [M 0013fb98:7-9] — the SP game
+  returns at once (the decompiler's `MPSettings._388_4_` is `MPSettings+0x184`; the same gate
+  field `Drone_FellOutMap` 0x13a878 branches on, SP == 0).
+- In MP the line pick runs, but `NDrone2_SpeechSFX` refuses every request in MP (speech.md
+  §2.1, [M 0x149818 disasm note]), so the play never happens.
+- The remaining writes are the would-be `CoverTalkCooldown` (`DAT_00298FC8 = now + 5·FRAME_RATE`)
+  behind a final `Rand(0) == 0` gate that is always true [M 0x13fb98:38-45] — but that store is
+  only reached after `SpeechSFX` returns non-zero, which never happens.
+
+So there is no input on which the function has an observable effect. speech.md §2.3 documents the
+same verdict for its siblings (`InjuredTalk`/`RunForCoverTalk`/`UnderCoverTalk`: "dead in both
+modes", verified in the disassembly). Not ported; no observable behaviour to pin.
+## unported-front-end-menus-2 (2026-10-21) — Creature update chain and the dead chase camera
+
+### Creature_Update 0x135268 / Creature_Hurt 0x1352d0 / Creature_Move 0x135340 / Creature_Delete 0x135230
+
+**Never reached on any shipped path** (recorded with the callers, not ported):
+
+- The four are the class-0x23 object handlers [M docs/atlas/object.md:123]: the .data dispatch
+  slots at 0x26fa34 (Update) / 0x26fa3c (Delete) in the stride-12 `{update, _, delete}` table
+  base 0x26f890 [D ELF bytes]; `Creature_Update` calls `Creature_Hurt` (+0x3c) and
+  `Creature_Move` (+0x48) [M 0x135268:9-20].
+- The only creator is `Creature_Create` 0x134ab8, whose sole caller is
+  `parsemap_create_dynamic_objects` 0x1d04f0 case **0xe0** [M 001d04f0:351-353]. The disc
+  placement census has **no rows for kind 0xe0 on any shipped level** [D census;
+  docs/systems/script-census.md:120, docs/systems/uncited-audit.md:229,
+  docs/systems/ai-spawned-objects.md:79-81]. With no creature ever created, the dispatch never
+  fires and the whole chain is dead on retail.
+- `Creature_Init` 0x135208 (the list init) **is** reached — `ResetMap_GameInit` 0x1d5080 calls it
+  unconditionally (JAL at +0x144 [D ELF]) — but on retail it only ever initialises an
+  always-empty list (`LList_Init(0x316e90, 0xf0, 0)` [M 0x135208:6-7]). Cited as the port's
+  no-op equivalent at `crates/nf-game/src/drone.rs` (`level_drones` doc, 2026-10-21).
+
+### camera_chasecam 0x1b9c00
+
+**Not reached by the shipped game** — both its call sites are in camera modes the code never
+selects:
+
+- Callers: `Player_PositionCamera` 0x18f5d8 case 6 (:172-176, JAL at 0x18f8b0 [D word
+  0x0c06e700]) and case 10 (:219-226, JAL at 0x18f8f8 [D]), guarded by `BLData+0x950` (the cam
+  mode, docs/fields/bldata.md).
+- The cam mode byte is written only by `Player_SetCamMode` 0x195928 [M]; every call site passes
+  a literal from {0, 1, 2, 0xb, 0xc, 0xd, 0xe, 0xf} — never 6 or 0xa [M grep of all sites;
+  docs/systems/uncited-audit.md:226-228]. `BLData+0x87c` (the case-10 chase-cam obj) is written
+  by `Player_Init` 0x1910f8:73 but never consumed anywhere else [M].
+- The algorithm is recorded in docs/reports/unported-front-end-menus-2.md (the five occlusion
+  probes, the 1/8-per-tick radius smoothing toward viewer+0x1f0 = 4.0, the position/angle
+  writes) in case a future build or debug mode needs it; the port's live camera modes live in
+  `crates/nf-view/src/scene.rs` (cam2/creep/script cameras) and modes 4/5/6/0xa stay absent.
+
+
+## unported-misc-4 (2026-10-21)
+
+**MiniSub_FireTorpedo 0x181888, MiniSubMove_Forward 0x1819d8, MiniSubState_Attack 0x181b00,
+MiniSub_Update 0x181f40, MiniSub_Collide 0x182128, MiniSub_Delete 0x182268 — UNREACHED**
+(never placed). The only external references are `control_funcs` 0x26f890 row 0x4D {update,
+collide, delete} [M, docs/atlas/object.md] and the internal chain Update → State_Attack →
+FireTorpedo / Move_Forward [M decompile]. The only creator is `MiniSub_Create` 0x182130 (class
+store `sb $v0, 0xff($s0)` with 0x4d at 0x1821a8 [M disasm]), dispatched solely by
+`parsemap_create_dynamic_objects` 0x1d04f0 case 0x37 [M]. **No level on the disc carries a
+placement of type 0x37**: a full census of every map archive's main-map 0x1A block (the same
+records both `parsemap_block_map_data_static` 0x1d1998 and — after the 0xa000 cel/template
+filter — the dynamic dispatcher walk, [M parsemap_parsemap 0x1d1cf0:65]) found kinds 0x2b ×3
+(07000004 ×2, 07000041 ×1), 0xf3 ×8, 0x36 ×0 and **0x37 ×0** across all 34 archives [D,
+tools census run 2026-10-21]. The NDrone2 script path's initial class 0x4D (0x14d84c) re-classes
+its objects before they tick and no class-0x4D object exists in the 07000005 start snapshot [L,
+docs/atlas/object.md snapshot check]. No drawing or sim work is owed.
+
+**Sunreflection_Update 0x18db40 — UNREACHED** (no creator). Only external reference:
+`control_funcs` 0x26f890 row 0x19 [M]. No decompiled or disassembled function stores class byte
+0x19 to obj+0xFF: a full-.text sweep (capstone over all 322,249 instructions, every `sb ,0xff(…)`
+site with 80-instruction backward value tracking — all 110 sites resolved) found stores for every
+other class (2/3/6?/0x10/0x1c/0x1d/0x25/0x2e/0x31/0x34/0x3f/0x46/0x4d/…) but **never 6 or 0x19**
+[M sweep method, run 2026-10-21]. No placement type dispatches to a Sunreflection creator
+(`parsemap_create_dynamic_objects` 0x1d04f0 has no case 0x19 [M]; the placement kind 0x19 seen on
+every level is flags 0x8019 — a cel-create record the dispatcher never sees [D census + M
+0x1d1b68's `(flags & 0xa000) == 0` gate]). Absent from every start snapshot's class histogram
+[L ee_start_05, docs/atlas/object.md]. The placement kind 0x19 byte is coincidence, not a route.
+
+**Bubble_Update 0x1aca48 — UNREACHED** (no creator). Same evidence shape as Sunreflection:
+`control_funcs` 0x26f890 row 6 is its only external reference [M]; the full-.text class-store
+sweep found no store of class byte 6 [M]; no placement creator case produces it (kind 0x21 =
+`Ripples_Create` 0x1acc90 stores class 0x34, not 6 [M 0x1acd10]); absent from the start snapshot
+class histograms [L ee_start_05]. Nothing in the shipped on-foot game can dispatch to it.
+
+## LS_LoadBonus 0x1ce488: dead — zero references in the whole ELF
+
+`LS_LoadBonus(buf, kind)` (124 B) would pull two 32-bit values from a bit buffer
+(`BIN_PullBits` twice) and apply them through `Menu_SetBonus` — a bonus-unlock parse from a
+loaded save. Nothing calls it: the full capstone scan of ACTION.ELF's LOAD segment (vaddr
+0x107100..0x30d670, every 4-byte step) finds **no jal** and **no absolute word** equal to
+0x1ce488 [M scan, task unported-misc-6]. Its decompiled C is register garbage (`unaff_s0`/
+`unaff_s1`), consistent with a function no caller ever reaches. The unlock data instead
+flows through `Menu_SetLevelBonus` 0x1ffa10 (the profile's unlock rows) and the
+cheat-codename checks. Not ported.
+## unported-misc-7 (2026-10-21) — the misc 25: soft-float doubles, mcman glue, IPU DMA, libm, CRT
+
+Method note: the caller evidence below is a machine-level scan of `work/elf/ACTION.ELF` (every
+`jal` opcode resolved to its target, plus every `lui`+`ori`/`addiu` immediate pair that builds a
+target address as a value, plus a whole-file 4-byte data-word scan), cross-checked against the
+decompile's call names. "0 references" = no jal, no data word, no immediate anywhere in the
+loaded segments.
+
+### The gcc2 soft-float double helpers — the EE has no double FPU
+
+`fptodp` 0x2246d0, `dpadd` 0x224b20, `dpsub` 0x224b78, `dpmul` 0x224be0, `dpdiv` 0x224e88,
+`dpcmp` 0x225108, `litodp` 0x225158, `dptoli` 0x225210, `dptoul` 0x2252a8, `dptofp` 0x225378
+are libgcc2's software double routines (Ghidra marks each file "inlined function"; the WARN lines
+in the callers' decompiles show the compiler injected them).
+
+- **Reached and replaced in the port** (cited at the Rust job sites, see the report):
+  `fptodp` 0x2246d0 (48 jal sites: the two live HUD panes + the P_TWEAKS handlers + the libm
+  family [M]); `dptofp` 0x225378 (jal 0x232e18 inside the live `asinf` 0x232d48 [M]);
+  `dpcmp` 0x225108 (jal 0x2352f4 inside `matherr` 0x2352e8, which the live `asinf`/`expf` jal on
+  the |x|>1 / overflow error paths at 0x232ddc/0x232f04 [M]; also 27 more jal sites in the %f
+  print path). `tanf` 0x232bc0, `asinf` 0x232d48, `expf` 0x232f70 are the libm entry points —
+  replaced by Rust `f32::tan/asin/exp` (citations in `crates/nf-game/src/drone.rs`
+  `frustum_sides`/`auto_aim`, `crates/nf-game/src/rigid_body.rs`, `crates/nf-view/src/hud.rs`).
+- **Not reached by the shipped game** — `dpadd` 0x224b20, `dpsub` 0x224b78, `dpmul` 0x224be0,
+  `dpdiv` 0x224e88, `litodp` 0x225158, `dptoli` 0x225210, `dptoul` 0x2252a8 [M]: their only jal
+  callers are the %f print machinery — `cvt` 0x2386a0 / `_dtoa_r` 0x238c58 internals
+  (0x238e88..0x239610), `printfloat` 0x23ce08 (0x23ce38/0x23ced8), the gcc2 blobs 0x240890/0x240980
+  (jal'd from printfloat 0x23cf0c), i.e. the printf %f conversion path. That path was already
+  proven dead on retail: "the game's only %f sprintfs are `switch_SHOW_COORDS`-gated debug
+  overlays whose control never ships [M 0x19b9c8:266-273 + D census]" (unported-front-end-menus-6,
+  the `cvt` row of its report). No gameplay double arithmetic exists in ACTION.ELF outside the
+  HUD panes' `fptodp` promotions. The port's native f64 ops replace all of them.
+
+### zerobss 0x2242a8 (164 bytes) — the CRT entry
+
+**Reached only as the ELF entry point** — 0 jal, 0 data, 0 immediate references [M scan]; it is
+what runs first (zero BSS from `isStarted` to `_end`, syscall 0x3c/0x3d, FlushCache, EI, jump to
+`main` 0x109080 [M decompile]). Unreached-by-replacement: the port's Rust `std` runtime start-up
+does this job; there is no BSS to zero.
+
+### DPRINT 0x226b40 (40 bytes) — dead debug stub
+
+**Never reached.** Body is a bare `return` [M decompile]; 0 jal / 0 data / 0 immediate references
+in ACTION.ELF [M scan]. Its only would-be callers are the `sceMtap*` multitap logging sites —
+and those names never appear as calls from game code either (the 8 jal sites 0x226bd0..0x226f18
+are inside the sceMtap functions themselves). No port side needed.
+
+### mcman / mcevacd memory-card SDK glue — the IOP side the port replaces
+
+- `mcDelayThread` 0x2285a0 + `mcHearAlarm` 0x228578 — **reached on hardware** (`sceMcSync` 0x2285e8
+  jal's mcDelayThread at 0x228650 [M]; mcDelayThread `SetAlarm(...,0x228578,...)` registers
+  mcHearAlarm via the immediate at 0x2285ac [M]; sceMcSync is jal'd from the six `MemCard_*`
+  game states 0x10f4c4/0x11019c/0x110338/0x110650/0x110888/0x110c24 [M]) — but it is IOP
+  thread/sleep glue with no port counterpart: the port's card flow (`crates/nf-view/src/menu.rs`
+  memcard-save-flow machine) polls a directory and has no threads to wake. Cited as replaced at
+  that machine (see the report).
+- `mceIntrReadFixAlign` 0x228248, `mceGetInfoApdx` 0x2286c8, `mceStorePwd` 0x228a08 — **never
+  referenced**: 0 jal, 0 data words, 0 immediate pairs [M scan]. Dead mcman-library weight in the
+  EE text (their IOP-side callers live in mcman.irx, not ACTION.ELF). No port side needed.
+
+### The IPU / MPEG DMA family — the front-end FMV pipeline the port skips
+
+`dmaRefImage` 0x22ffd8 (jal 0x22b664 in the `_pack_header`/demux blob), `receiveDataFromIPU`
+0x230130 (jal 0x22df7c in the `_doMC`/`_rix_000` decode blob), `setD3_CHCR` 0x2325b0 (jal
+0x2326fc/0x2327e4 in `sceIpuStopDMA`/`sceIpuRestartDMA`), `setD4_CHCR` 0x232618 (jal 0x232690 in
+`sceIpuStopDMA`), `setD4_CHCR` 0x232920 (jal 0x232990 in `sceIpuInit`, which `sceMpegInit`
+0x22a140 jal's, which `psiStartBackgroundMovie` 0x1081a8 jal's at 0x1083e4 [M]).
+
+**Reached on the shipped front end** — `psiStartBackgroundMovie` has 8 jal callers in the loader
+and front-end menu handlers (0x1d66d8 ResetMap region; 0x20a000/0x20a0f0/0x20a2c4/0x20adc0;
+0x214fa0/0x215174/0x215a08 CN-menu/keyboard region) [M]: the menu background movie's macroblocks
+and reference images cross the IPU through these DMAC channel start/stop helpers. Unreached-by-
+replacement: the port plays no FMV and has no IPU — the psi background-movie entry is absent from
+the port's front end, so this whole hardware pipeline (SPR→TADR chains, IPU_FROM/TO channels,
+CHCR STR writes) has no port side to cite. If a future build wants menu FMV, these five are the
+DMA primitives (bodies recorded here and in the decompile).
+## unported-misc-8 (2026-10-21) — the printf float branch
+
+**`isinf` 0x23b788, `isnan` 0x23b7d0, `quorem` 0x238a40 — UNREACHED on the shipped game**
+(behind a never-taken branch; their caller runs every frame). `_vfprintf_r` 0x237188 is reached
+via `sprintf` 0x2366c8 (71 decompiled callers — HUD/label/score text [M]) and its `%f/%e/%g`
+branch is the ONLY caller of `isinf` (jal 0x2375d0), `isnan` (jal 0x237608) and `cvt` 0x2386a0
+(jal 0x237644) → `_dtoa_r` 0x238c58 → `quorem` 0x238a40 [M chain]. The disc's entire .rodata
+carries exactly one float format string — `"%.2f %.2f %.2f\nFPS %d\n"` — printed by
+`HUD_UpdateHealthPane` 0x19b9c8:265-268 / `HUD_UpdateMPHealthPane` 0x19b630 only while
+`switch_SHOW_COORDS != 0` [M], the debug-coords byte only the never-opened per-level cheat hub
+writes (see the C_CHCH* entries above) [D census; the sdk.rs test re-scans the user's ISO].
+So the float branch never executes on any shipped on-foot level, the front end or MP. `isnan` is
+also listed by the decompile inside the libm NaN guards, but those reference `isnanf` 0x2356e8
+(REACHED, cited in trig.rs), not `isnan` [M jal census: `isnan`'s only jal site is 0x237608].
+`localeconv` 0x23a950, by contrast, sits at `_vfprintf_r`'s top BEFORE the format dispatch
+[0x237188:65] — reached on every sprintf, cited in crates/nf-game/src/sdk.rs.
+
+## GetMemorySize 0x23c030: termination-only — never executes in the shipped game
+
+`GetMemorySize` (16 B kernel import stub, syscall 0x7f) has exactly one caller: `InitTLB`
+0x23fdf8. `InitTLB`'s only caller is `TerminateLibrary` 0x23fc18, whose only caller is
+`Exit` 0x23fc28 — and `Exit` runs only when `main` returns (crt0's tail) or on the
+`InitTLB32MB` 0x23fe38 boot-failure paths (`Exit(1)`). `main` 0x109080 never returns: its
+frame loop ends in `goto LAB_001092a8` [M 0x109080 tail], so the console is only ever reset,
+never exited — the whole chain is dead in the shipped game [M caller scan over jal AND
+tail-j (`j`), every 4-byte step of the LOAD segment, task unported-misc-9]. Not ported.
+
+## read 0x23c210 and lseek 0x23c290: stdin/seek stdio with no users
+
+`read` (116 B) serves fd 0 only (`sceTtyRead`); its caller chain is `_read_r` ← `__sread`
+← the std FILE's read slot, wired by `std` 0x239f30 (called only by `__sinit` 0x239fa0).
+Nothing ever reads a stream: the decompile has no `scanf`/`fread`/`fgets`/`getchar`/`fgetc`
+callers at all, and all game file input runs through the sceCd/sceOpen layer, not newlib
+[M grep + caller scan]. `lseek` (8 B: `li $v0, −1; jr $ra` — the stub returns −1 without
+even a syscall) sits behind `_lseek_r` ← `__sseek`/`__swrite`, which serve seekable or
+append-mode streams — the game has none (stdout is the only stream in play, via the
+printf error paths; see docs/systems/kernel-stubs-misc9.md §4) [M caller scan]. Not ported.
+
+### unported-misc-10 (2026-10-22, branch s/unported-misc-10)
+
+12 of the 24 SDK-glue functions record here as unreached / unreached-by-replacement; the other
+12 are cited as replaced or reached-and-replaced at Rust sites (full chains and the boot/RPC/
+tty/exit/syscall-table evidence live in docs/systems/ps2-sdk-glue.md):
+
+- `kCopy` 0x23c650 and `kCopy` 0x23fda8 — registered into the `SysEntry` kernel-syscall tables
+  (0x2e7a10 / 0x2e7e70, syscall-0x5a entries; data words 0x2e7a14 / 0x2e7e74 [M symtab+scan])
+  and never invoked: no jal anywhere and no `syscall` instruction for 90/91 in ACTION.ELF [M
+  scan of every `syscall` site's `li v1,N`]. Registered-but-unused libcglue glue.
+- `serialPutchar` 0x23cd40 — the initial value of the `_putchar` OBJECT 0x2e7a58 [M symtab, D
+  ELF data word]; every `_printf` path runs after `scePrintf` swaps it to `deci2Putchar`, so
+  the serial default never executes. Its callee `kputchar` 0x23cc58 (SIO FIFO poll + write)
+  is unreached with it [M scan].
+- `QueueInit` 0x23c738 / `QueuePeekWriteDone` 0x23c760 / `QueuePeekReadDone` 0x23c7a0 — the
+  DECI2 tty line queue. `sceTtyInit` (jal 0x23cc30) runs only from `write()` fd 1/2, whose
+  only game-side trigger is libc stdio glue (`__swrite` has 0 refs; the read blob's only
+  installer is `std` 0x23f930-region code); `sceTtyHandler`/`sceTtyRead` additionally need a
+  real DECI2 host, which a retail console never has [M scan+decompile].
+- `kprintf` 0x23d538 — only the tty handler, the dead %f path (`printfloat`) and the
+  InitTLB32MB overflow checks call it [M scan] — debug-only, dead on retail.
+- `ftoi` 0x23cd78 — only `printfloat` (jal 0x23cf14) calls it; the %f print path is dead on
+  retail (menus-6 %f gate; misc-7 § dp-family) [M scan].
+- `kputs` 0x23fd78 — only `deci2Putchar`'s newline/overflow flush calls it [M decompile
+  0x23cc90]; the boot banner's trailing `%\n` is swallowed by _printf's unknown-conversion
+  default branch (no emit) [M 0x23d508], and every other `\n`-ending format string sits in a
+  non-firing error branch ("ReadCount different…" in psiFileLoad/psiFileRead, "Libcdvd bind
+  err…" / "ee call cmd search…" behind `SCE_CD_debug` = 0 [D ELF 0x2e4f90]).
+- `TerminateLibrary` 0x23fc18 (`j InitTLB`), `InitTLB` 0x23fdf8, `InitTLB32MB` 0x23fe38,
+  `Exit` 0x23fc28 — unreached-by-replacement: the exit-time teardown chain
+  (`exit`/`_exit`/`Exit`) fires only from `sceMtapInit`'s IOP bind-failure branches (do not
+  fire on retail) or `zerobss` after `main` returns (main's loop is infinite [M decompile
+  0x1092a8..0x109414]); the TLB map tables (kernelTLB 0x2e7eb0 / defaultTLB 0x2e7f80) are
+  boot/exit state the port's Rust runtime owns [M scan chains].
+

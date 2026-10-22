@@ -12,6 +12,8 @@
 //! `REC_FRAME_RATE * 0.2` = 0.2 points/s. Touch events (`touch_*`) stand in for the game's
 //! `MP_HitBy` 0x1830e0 overlap walk — the rules (team filters, state gates) are here, the spatial
 //! test is the caller's.
+//!
+//! `Cameras_PostLoad` 0x1bc3a8 [M] — per level load after `Player_Start`, creates the 3-player split-screen divider sprite only when `MPSettings+0x428 == 3` (no effect in SP/1P/2P/4P) — has no port path: the port has a single viewer.
 
 use super::{scenario, MpEndStatus, MpMatch};
 use crate::drone::Rng;
@@ -80,6 +82,15 @@ pub struct MpObjState {
     /// mp-scenarios-online: the model bounds (the contact sphere / the hill box); `None` = no
     /// contact geometry (the explicit `touch_*` events only).
     pub bounds: Option<MpObjBounds>,
+    /// unported-scripts-1: the object's ScriptPlayer state — `SP_SwitchToScript` 0x1dcad8's
+    /// observable writes on the SP at `obj+0xE0`: the current script hash `sp+0x26+slot*2`
+    /// and the SP state word `sp+0x24` [M 0x1dcad8:23-34]. The demolition/protection site's
+    /// SP object is `MPOBJECT+6` [M 0x1870a0:115]. 0/0 = the boot script still current. The
+    /// port keeps one script slot: the game's double-buffer swap (`Script_Free` of the active
+    /// SCRIPTINFO, slot toggle 0↔1, `SP_LoadScript` — 0x1dcad8:16-27) is represented by
+    /// these two fields only ([S] unverified beyond the observable id+state).
+    pub sp_script: u16,
+    pub sp_state: u8,
 }
 
 /// The scenario objects' live state — the port's `Flags`[2] @0x317210, `Bases`[2] @0x317330,
@@ -555,6 +566,15 @@ impl MpMatch {
     /// pick (a `Rand_Rand` draw on the shared RNG), the done flags clear, and every present slot's
     /// last-killer/last-shooter words reset to 0xffff. Scores are **not** cleared (multi-round
     /// Demolition/Protection); the players' respawn is the caller's (`MP_ReSpawn` per slot).
+    ///
+    /// The game's class sweeps at :44-58 — `Control_DeleteAllObjectsOfType` 0x1349e8 (sets
+    /// +0xFE |= 1 on every non-deleted object of the class; [M 0x1349e8:6-20]) for classes 5,
+    /// 0x35, 0x10, 0xe, then `Control_ReturnNextObjectOfType` 0x134a38 walks (the +0x14 next /
+    /// +0xff class list walk; [M 0x134a38:6-27]) class 0x47 deactivating gunimps with +0xf4 == 1
+    /// (`GunImp_Deactivate`) and class 0x36 releasing gun turrets with +0xf4 == 7
+    /// (`GT_LoseControl`). The port's MP runtime does not yet carry those raw classes
+    /// (bullets/debris/MP-objects/gunimp/turret instances), so the sweeps have no target here —
+    /// recorded, not silently dropped.
     pub fn restart_scenario(&mut self, rng: &mut Rng) {
         self.game.clock = 0.0; // [M 0x183fc0:40-53]
         self.game.restart_timer = 0.0;
@@ -900,6 +920,12 @@ impl MpMatch {
             self.game.team_scores[defending] += 1.0; // [M :112-124]
             if let Some(site) = &mut self.objects_rt.site {
                 site.sub = 1;
+                // The same branch switches the site's ScriptPlayer to script 1
+                // (`SP_SwitchToScript(site_sp, 1, 0)` [M 0x1870a0:115]) — script hash 1
+                // lands the SP state on 2, not 3 [M 0x1dcad8:28-33]. The damage path
+                // (:81-160) makes no SP switch, so only the timeout writes these.
+                site.sp_script = 1;
+                site.sp_state = 2;
             }
         }
     }

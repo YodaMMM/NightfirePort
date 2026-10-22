@@ -3,6 +3,18 @@
 //! briefing intro lines (the 14 single-stream scripts in 07000500.bin). Data model + the per-tick
 //! query the draw code calls. Docs: docs/systems/subtitles.md.
 //!
+//! Queue-init and queue-drain equivalents from the whole-ELF scan (`unported-hud-1`):
+//! `Text_Init(char)` 0x1b1428 — the per-level reset `ResetMap_GameInit` 0x1d5080 calls: zeroes
+//! `SubTitleMsg`, recreates the three subtitle sprites (`SubTitleSpr/1/2`, `Sprite_Create2
+//! 0x319940`), inits the 32-node `TXT_MSG` free list (`DList_Init` 0x319970) and the 0x80-entry
+//! receive buffer — is [`SubtitleTrack::new`] / [`SubtitleTrack::from_script`] (a fresh empty
+//! track; the port's `lines` Vec is the game's 0x20-node list). `Text_DelMsg(TXT_MSG*)`
+//! 0x1b1640 — unlock the message's string and return the node to the free list, which
+//! `Text_FlushAllSubtitles` 0x1b15c8 and `Text_UpdateMsg` 0x1b11d8 reach for every expired or
+//! flushed line — is the queue drop in [`SubtitleTrack::flush`] and the `push` dequeue path.
+//! `CirBuf_Init` 0x1ccfb8 [M] / `CirBuf_Add` 0x1cd040 [M] (`Text_Init` 0x1b1428 / `Text_AddMsg` 0x1b0c30's text ring) — this queue replaces the game's circular buffer.
+//! Full evidence: docs/systems/hud-panes.md.
+//!
 //! Evidence tags: [M] decomp / disassembly read here, [D] disc, [S] suggested.
 
 use nf_formats::nis::Nis;
@@ -10,6 +22,10 @@ use nf_formats::nis::Nis;
 /// One queued subtitle line on an absolute tick axis: displayed for every tick `start <= t < end`.
 ///
 /// The game stores bound strings (`Text_AddMsg`'s word-wrapped copies); the port carries the raw
+/// unported-misc-5 — `Text_AddMsg` 0x1b0c30's queue machinery: the game builds each message on
+/// the text LList (`LList_Insert` 0x1ccb68 / `LList_InsertAt` 0x1cc600, and the node pool
+/// `DList_AllocnNodes` 0x1ccd60 — its only caller) — the port's `VecDeque` IS that queue
+/// (same head-insert order, same per-message time decrement in `Text_UpdateMsg` 0x1b11d8).
 /// label and lets the draw code bind it through the level's/bank's Lang table (`Txt_BindLabel`
 /// 0x1cad60 runs inside `Script_TextStart` on the game [M 0x1db2b8], but the label survives in the
 /// op stream and the binding is a pure bank lookup — the `drones.script_msgs` pattern).
@@ -70,8 +86,10 @@ impl SubtitleTrack {
     }
 
     /// `Text_FlushAllSubtitles()` (0x1b15c8, `Script_FFwd`'s skip arm 0x1dac78:28-29) at tick
-    /// `now`: the displayed head stops at `now` and every queued line dies (the game's loop deletes
-    /// every type-4/5 node in the list [M 0x1b15c8]). Later pushes start fresh from the clamped end.
+    /// `now`: the displayed head stops at `now` and every queued line dies — each drop is
+    /// `Text_DelMsg` 0x1b1640 (unlock the string, free the `TXT_MSG` node; the port has no
+    /// strings to unlock, so the drop is the `end` clamp + the dequeue).
+    /// Later pushes start fresh from the clamped end.
     pub fn flush(&mut self, now: u32) {
         for l in self.lines.iter_mut() {
             if l.start < now && now < l.end {

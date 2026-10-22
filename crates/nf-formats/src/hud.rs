@@ -34,6 +34,12 @@ impl Font {
     /// `Lang::parse` re-encodes the bank's CP-1252 bytes as UTF-8, so a byte walk split "©" (U+00A9 → C2 A9) into
     /// glyphs 0xC2 + 0xA9 and the title's legal line read "Â©" — the main agent's 2026-10-13 render]. Chars restore
     /// the one-glyph-per-source-byte mapping: each CP-1252 byte became exactly one char, so glyph code = char code.
+    ///
+    /// The returned width is `Font_GetTextExtent` 0x1ef588's extent (the same per-glyph advance walk the
+    /// game runs through `Font_ParseFormat` 0x1ee3e0 + `__Font_DrawText` 0x1ee598's counting mode; callers:
+    /// `Sprite_SetFmt` 0x1de628, `Sprite_SetTextNFmt` 0x1de718, `Text_Init` 0x222b80, `Memo_*`, `List_Init`
+    /// 0x219488, `List_SendMessage` 0x2196e8, `Checkbox_Init` 0x1f0110, `Spin_Init` 0x2224c8,
+    /// `Menu_ClipString` 0x1f2e70) [M 001ef588 decomp].
     pub fn layout(&self, text: &str, x: f32, y: f32) -> (Vec<Placed>, f32) {
         let top = self.glyphs.first().map_or(0.0, |g| (g.h + g.yoff) as f32);
         let (mut pen, mut out, mut prev): (f32, Vec<Placed>, Option<usize>) = (x, Vec::new(), None);
@@ -65,7 +71,11 @@ impl Font {
     /// HUD pixels (`TextMsgFormats[type]`'s maxWidth — 480 for the type-2 objective text [L
     /// 0x2bf108+0x14]), the lines joined with '\n' — the string the game stores, which
     /// `__Font_DrawText`'s newline branch then lays out. Words that alone exceed `max_w` keep their
-    /// own line.
+    /// own line. The measure-each-candidate-prefix loop is also `Font_GetTextCountExtent`
+    /// 0x1ef668's job shape (count how many chars fit a clip width, extent out through the GPOINT
+    /// — `Font_ParseFormat` + `__Font_DrawText` counting mode; callers `Menu_ClipString` 0x1f2e70
+    /// and `List_SendMessage` 0x2196e8's paging); the port re-measures whole prefixes with
+    /// [`Self::layout`] instead of counting glyphs [M 001ef668 decomp].
     pub fn word_wrap(&self, text: &str, max_w: f32) -> String {
         let mut out = String::new();
         let mut line = String::new();
@@ -114,6 +124,34 @@ pub struct HudTables {
     /// The MP ammo pane's 3 text sprites (`MPAmmoPane` → `HUD_UpdateAmmoPane` 0x19a7f0,
     /// `MPAmmoSprInfo` 0x2be610) — empty when absent.
     pub mp_ammo: Vec<SpriteInfo>,
+    /// The OICW boot/zoom pane's sprites (`OICWPane` 0x2be140 → `HUD_CreateOICWPane` 0x19cc90 /
+    /// `HUD_UpdateOICWPane` 0x19cef8, `OICWSprInfo` 0x2be008 — 7 sprites [L ee_snapshot
+    /// pane-def +0x14]); the five boot text sprites sit at consecutive list slots [M 0x19cc90:44-62].
+    pub oicw: Vec<SpriteInfo>,
+    /// The nightsight pane's sprites (`NightSightPane` 0x2bd8b8 → `HUD_UpdateNightSightPane`
+    /// 0x19d218, `NightSightSprInfo` 0x2bd7b0 — 6 [L]).
+    pub nightsight: Vec<SpriteInfo>,
+    /// The x-ray pane's sprites (`XrayPane` 0x2bde90 → `HUD_UpdateXRayPane` 0x1a1410,
+    /// `XraySprInfo` 0x2bddb0 — 5 [L]).
+    pub xray: Vec<SpriteInfo>,
+    /// The security-camera wash pane's sprites (`SecCamPane` 0x2bdfe8 →
+    /// `HUD_UpdateSecCamPane` 0x1a1538, `SecCamSprInfo` 0x2bdeb0 — 7 [L]).
+    pub secam: Vec<SpriteInfo>,
+    /// The sight/ronin/laser panes' shared sprite table (`SightPane` 0x2bd5e0 →
+    /// `HUD_UpdateSightPane` 0x1a12d0 = a no-op, `SightSprInfo` 0x2bd558 — 3 [L]).
+    pub sight: Vec<SpriteInfo>,
+    /// The RC-car pane's sprites (`RCCarPane` 0x2bdd40 → `HUD_UpdateCarPane` 0x1a15a0,
+    /// `RCCarSprInfo` 0x2bdc38 — 6 [L]; the layer-byte swap is `hud_pane::car_pane_layers`).
+    pub rccar: Vec<SpriteInfo>,
+    /// The blood/death pane's sprites (`BloodPane` 0x2bd030, `BloodSprInfo` 0x2bcfd8 — 2 [L]).
+    pub blood: Vec<SpriteInfo>,
+    /// The Ronin tyre-cam pane's sprites (`RoninPane` 0x2be268, `RoninSprInfo` 0x2be160 — 6 [L]).
+    pub ronin: Vec<SpriteInfo>,
+    /// The laser-sight pane's sprites (`LaserPane` 0x2be390, `LaserSprInfo` 0x2be288 — 6 [L]).
+    pub laser: Vec<SpriteInfo>,
+    /// The micro-camera pane's sprites (`CameraPane` 0x2bd790 → `HUD_UpdateCameraPane`
+    /// 0x1a12d8, `CameraSprInfo` 0x2bd600 — 9 [L]).
+    pub camera: Vec<SpriteInfo>,
     /// Per ammo type: u, v, width, pixels per round.
     pub bullets: Vec<[f32; 4]>,
     /// Font 2 (`FONTSerpLight`, the HUD's).
@@ -179,10 +217,51 @@ impl HudTables {
         let mp_score = sprites("MPScoreInfo").unwrap_or_default();
         let mp_health = sprites("MPHealthSprInfo").unwrap_or_default();
         let mp_ammo = sprites("MPAmmoSprInfo").unwrap_or_default();
-        Ok(HudTables { health: sprites("HealthSprInfo")?, ammo: sprites("AmmoSprInfo")?, air, redeemer, space, radar, mp_score, mp_health, mp_ammo, bullets, font, font_header })
+        let oicw = sprites("OICWSprInfo")?;
+        let nightsight = sprites("NightSightSprInfo")?;
+        let xray = sprites("XraySprInfo")?;
+        let secam = sprites("SecCamSprInfo")?;
+        let sight = sprites("SightSprInfo")?;
+        let rccar = sprites("RCCarSprInfo")?;
+        let blood = sprites("BloodSprInfo")?;
+        let ronin = sprites("RoninSprInfo")?;
+        let laser = sprites("LaserSprInfo")?;
+        let camera = sprites("CameraSprInfo")?;
+        Ok(HudTables {
+            health: sprites("HealthSprInfo")?,
+            ammo: sprites("AmmoSprInfo")?,
+            air,
+            redeemer,
+            space,
+            radar,
+            mp_score,
+            mp_health,
+            mp_ammo,
+            oicw,
+            nightsight,
+            xray,
+            secam,
+            sight,
+            rccar,
+            blood,
+            ronin,
+            laser,
+            camera,
+            bullets,
+            font,
+            font_header,
+        })
     }
 }
 
+/// unported-misc-5 — the game's text-heap layer folds into this struct:
+/// `Txt_LanguageInit` 0x1cad00 (per-level, `ResetMap_GameInit` 0x1d5080's call) is the loader that
+/// fills these tables; `Txt_GetStringFromHeap` 0x1caa10 (the callers: `MP_PlayerKilled` 0x188f70,
+/// `Font_WordWrapString` 0x1ef178, the Text/HUD message adds) is the heap-slot lookup this module
+/// resolves through `bind`'s fixup+offset arithmetic; `Txt_LockString` 0x1cae68 /
+/// `Txt_UnlockString` 0x1cae10 pin/unpin heap strings around use (`Sprite_Create2` 0x1de3d8,
+/// `Sprite_Delete` 0x1de930, `Text_Init`/`Text_AddMsg`) — the port's borrowed `&str` from `data`
+/// makes that refcounting unnecessary.
 /// A language string table: one disc `*.dat` file (e.g. `USATxt.dat`, the NTSC-U default — `FNames[SelLang]`,
 /// `Txt_LoadLanguage` 0x1caad0 sprintf's `"%s%s"` over it). Layout [M 0x1caad0, verified on the disc]:
 /// `u32 dataBytes`, the data block, padded to `dataBytes + (4 - dataBytes % 4)` (the reader's advance is

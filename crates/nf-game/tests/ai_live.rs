@@ -242,8 +242,10 @@ fn guard_patrols_like_the_game() {
 fn guard_takes_cover_like_the_game() {
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data();
-    // Seed 4 (re-picked at the fix-impact-remainder2 merge: the G-041 impact draws joined the RNG; fix-ai-remainder 1).
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 4);
+    // Seed 2 (re-picked at the attack-reentry-choice merge, 913: Attack's own fallback sends the level's
+    // mode-2 guard to SniperAim 0x2a [M 0x164210:85-88] instead of Combat, shifting the shared stream;
+    // fix-impact-remainder2 had 4, fix-ai-remainder 1).
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 2);
     let mut sim = l.sim(drones, rng);
     let player = bond_at([79.86, 22.92, 96.0]);
     for _ in 0..700 { sim.tick(&d, &player); }
@@ -258,7 +260,7 @@ fn guard_takes_cover_like_the_game() {
     let err = ((g.pos[0] - 58.83).powi(2) + (g.pos[2] - 99.32).powi(2)).sqrt();
     assert!(err < 0.4, "in cover at ({:.2}, {:.2}), {err:.2} from the live position", g.pos[0], g.pos[2]);
     // Sister: with Bond 6 units away (the first test's setup) the same guard never runs for cover.
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 4);
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 2);
     let mut near = l.sim(drones, rng);
     for _ in 0..300 { near.tick(&d, &bond_at([67.31, 26.5, 99.47])); }
     assert!(near.list[gi].log.iter().all(|(_, s)| *s != 0x8c), "sister: cover must depend on the situation");
@@ -525,12 +527,14 @@ fn bond_kills_guards_with_two_torso_shots() {
     assert_eq!(log[0], state::SNIPER_IDLE, "log {:x?}", sim.list[i].log);
     assert!(log.contains(&state::SNIPER_AIM) && log.contains(&state::DEATH_ANIM) && log.contains(&state::DEAD), "log {:x?}", sim.list[i].log);
     assert!(sim.channels.on(0x0a), "death channel 0x0A raised");
-    // The gate guard: dead at the death anim's end, fading 300 ticks later, gone after the fade.
-    let (sim, i, hits) = run([66.0, 26.5, 99.5], 5, 1100, 0.0);
+    // The gate guard: dead at the death anim's end, fading `DAT_00298F58` = 10·FRAME_RATE_INT = 600
+    // ticks later [M 0x163fe8:22, 0x13a5a8:10] (daily audit 2026-10-21: the old 300 was half), gone
+    // after the fade.
+    let (sim, i, hits) = run([66.0, 26.5, 99.5], 5, 1500, 0.0);
     assert_eq!(hits.len(), 2);
     let at = |s: u8| sim.list[i].log.iter().find(|&&(_, x)| x == s).map(|&(f, _)| f);
     let (dead, fade) = (at(state::DEAD).unwrap(), at(state::FADE).unwrap());
-    assert_eq!(fade - dead, 300);
+    assert_eq!(fade - dead, 600);
     assert!(!sim.list[i].present, "faded out");
     // Sister: over the head, nothing is hit.
     let (sim, i, hits) = run([66.0, 26.5, 99.5], 5, 200, 3.0);

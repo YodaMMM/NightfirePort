@@ -8,6 +8,15 @@
 //! Mirrors `LoaderLoad` (ACTION.ELF 0x1d4a00): the game reads the directory as `round_up(dir_size, 2048)` bytes and
 //! the entries as one sector-rounded batch; on our disc `dir_size` is always a multiple of 2048, so both views agree
 //! (checked by `validate`).
+//!
+//! Two more loader-side pieces of the game the port folds away:
+//! - `LoaderShrink` 0x1d6b68 (called by `parsemap_parsemap` 0x1d1cf0 [M]) memmoves the used bytes down and calls
+//!   `Mem_ShrinkToEndOfBlock` after each streamed file, trimming the over-allocated read buffer; the port reads
+//!   whole exact-size entries out of the archive (this module), so there is no padded buffer to shrink.
+//! - `parsemap_block_memory_discard` 0x1d2538 records `FileDiscard = FileNextBlock` (the map prefix the streamed
+//!   load never needs again) [M]; with no stream there is no discard point to record.
+//! - `parsemap_reset_to_block_memory_discard` 0x1d2550 rewinds that discard state at level load [M]; the port
+//!   reads whole archive entries, so there is nothing to reset.
 
 use crate::buf::{invalid, Buf, Result};
 

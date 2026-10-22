@@ -40,14 +40,62 @@ fn the_case_use_spawns_the_keycard_through_the_real_path() {
     sim.bond.yaw = 1.710;
     sim.bond.pitch = -0.458;
     sim.step_bond(Default::default(), false, false, true); // the E press on the case
-    for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); }
+    // Stop on the creation tick: the stream re-poses the card from then on (dragon-safe-follow).
+    for _ in 0..120 {
+        sim.step_bond(Default::default(), false, false, false);
+        if sim.drones.pickups.iter().any(|p| p.kind == 2 && !p.gone) { break; }
+    }
 
     let live: Vec<&nf_game::pickup::Pickup> = sim.drones.pickups.iter().filter(|p| p.kind == 2 && !p.gone).collect();
     assert_eq!(live.len(), 1, "exactly ONE live keycard: the game's spawn creates one object [M Pickup_Create 0x18dda0]");
     let k = live[0];
     assert_eq!((k.kind, k.weapon, k.switch_channel), (2, 0, 0x4e), "kind 2 (key), id 0, switch ch 0x4E [D script 0x06000563 s1 params]");
     let d = ((k.m[3][0] - 6.61).powi(2) + (k.m[3][1] - 5.92).powi(2) + (k.m[3][2] + 42.56).powi(2)).sqrt();
-    assert!(d < 0.1, "the keycard spawns at the case interior, at ({:.2},{:.2},{:.2})", k.m[3][0], k.m[3][1], k.m[3][2]);
+    assert!(d < 0.1, "the keycard spawns at the case interior (its creation pose), at ({:.2},{:.2},{:.2})", k.m[3][0], k.m[3][1], k.m[3][2]);
+}
+
+/// The user's report ("still can't grab the dragon objective in double cross"), the real path: from
+/// the playtest spot the E press opens the case; the script's stream 0 raises the case's riser and
+/// stream 1 (parented to it) lifts the keycard — the created pickup IS the stream's entity [M 0x1d8968
+/// returns the `Pickup_Create` object; 0x1d8d78:96 stores it at stream+0x10], re-posed every tick by
+/// `Script_Interp` 0x1d9a08:94-110 (y 5.51 → 6.05 [D 0x06000563 s0/s1 keys]) with its sphere rebuilt
+/// by the movement pass (0x1336f8, the +0xFA 0x20 flag `Script_Interp` sets). Lifted above the
+/// counter's rim (y 6.00) the take's line of sight [M 0x18e148:210-214 → 0x1edf50] clears it once
+/// Bond steps back from the counter; the take writes ch 0x4E [M 0x18e650:330-333].
+/// Fail-first: frozen at its creation pose (y 5.92) no spot on the counter's front side ever saw
+/// the card (the counter's front face, x 6.446, blocked every ray).
+#[test]
+fn the_case_use_lifts_the_keycard_and_bond_takes_it() {
+    let Some(iso_v) = iso() else { eprintln!("skip: NF_ISO not set"); return };
+    let mut scene = load(&iso_v, "07000003.bin");
+    let sim = scene.sim.as_mut().expect("sim");
+    for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
+    sim.bond.pos = [5.90, 5.97, -42.41];
+    sim.bond.yaw = 1.710;
+    sim.bond.pitch = -0.458;
+    sim.step_bond(Default::default(), false, false, true); // the E press on the case
+    for _ in 0..130 { sim.step_bond(Default::default(), false, false, false); }
+    let k = sim.drones.pickups.iter().find(|p| p.kind == 2 && !p.gone).expect("the keycard is live");
+    let live_pos = [k.m[3][0], k.m[3][1], k.m[3][2]];
+    assert!(k.m[3][1] > 6.04, "the stream lifted the keycard to its last key (y 6.05); it sits at y {:.3}", k.m[3][1]);
+    // The draw: the keycard's script slot (mesh 0x020005F1) sits at the live pickup's pose.
+    let slot = scene.attachments.iter().position(|a| matches!(a.script, Some((0x0600_0563, 1, 0x0200_05F1, 0)))).expect("the keycard's script draw slot");
+    let opts = nf_view::scene::ViewOpts { reinforcements: false, firing: false, right: [1.0, 0.0, 0.0], up: [0.0, 1.0, 0.0] };
+    let m = scene.frame_state(None, 0.0, opts).attach[slot];
+    assert!((0..3).all(|j| (m[3][j] - live_pos[j]).abs() < 1e-3), "the slot draws the card at its live pose {live_pos:?}; got {:?}", m[3]);
+    let sim = scene.sim.as_mut().expect("sim");
+    // Walk back from the counter (the case faces +x; Bond backs off along −x).
+    let back = nf_game::player::Input { forward: -1.0, ..Default::default() };
+    let mut taken_at = None;
+    for t in 0..120 {
+        sim.step_bond(back.clone(), false, false, false);
+        if sim.drones.channels.v[0x4e] != 0 { taken_at = Some(t); break; }
+    }
+    assert!(taken_at.is_some(), "backing off the counter, Bond takes the keycard and ch 0x4E goes on (Bond at {:?})", sim.bond.pos);
+    assert!(sim.drones.pickups.iter().filter(|p| p.kind == 2).all(|p| p.gone), "the taken keycard is gone");
+    // Taken = deleted in the game (respawn 0): nothing of it stays drawn at the case.
+    let m = scene.frame_state(None, 0.0, opts).attach[slot];
+    assert!(m[3][1] < -1000.0, "the taken keycard's draw collapses; it sits at {:?}", m[3]);
 }
 
 /// Sister: no E press — the keycard never goes live.

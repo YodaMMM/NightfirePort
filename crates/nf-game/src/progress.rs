@@ -97,6 +97,23 @@ impl PlrMissionStats {
         moments[idx] = 1;
         self.bond_moments += 1;
     }
+    /// `PlarStat_LogTimerPause` 0x199520 [M :4-12]: the slot's +0x34 byte := 1 — the flag
+    /// that stops `PlarStat_LogUpdateElapsedTime` 0x1995a0's accumulator. Callers:
+    /// `GS_PauseGame` 0x17d178:20 and `Script_EventHandler` 0x1d94c0:120 (the cut-scene
+    /// Player_Disable arm). The port's record is the SP slot-0 record (the game's `slot < 8`
+    /// gate is structural here); the Sim's frozen frame counter already stops the clock while
+    /// paused, so the flag is belt-and-braces [S].
+    pub fn log_timer_pause(&mut self) {
+        self.timer_run = 1; // +0x34 [M 0x199520:8-11]
+    }
+    /// `PlarStat_LogTimerUnpause` 0x199550 [M :4-22]: +0x2C := psiGetTimeIn100ths() (the
+    /// accumulator's base resyncs) and +0x34 := 0. Callers: `GS_PauseGame` 0x17d178:17 (the
+    /// close arm), `Player_Init` 0x1910f8:187, `Script_Free` 0x1da880:47. `now` is the port's
+    /// frame-derived 1/100 s clock (no wall clock in the Sim).
+    pub fn log_timer_unpause(&mut self, now: u32) {
+        self.last_time = now; // +0x2C [M 0x199550:8-15]
+        self.timer_run = 0;   // +0x34 [M 0x199550:16-21]
+    }
     /// `PlarStat_LogUpdateElapsedTime` 0x1995a0: while `+0x34 == 0` (the timer runs),
     /// `+0x30 += now − +0x2C` and `+0x2C = now`. NO mission gate on this one [M the decompile:
     /// only `slot < 8` and the timer flag]. `now` is the port's frame-derived 1/100 s clock.
@@ -239,7 +256,9 @@ const fn reward(hash: u32, desc: [(u16, u16, u32); 5]) -> RewardEntry {
     } }
 }
 
-/// The 12 reward/medal entries ([L] ee_start_05.bin 0x2bc920). Descriptors 1..4 are the
+/// The 12 reward/medal entries ([L] ee_start_05.bin 0x2bc920). The count 12 is
+/// `PlrStarts_GetRewardsTableSize` 0x199b68:6 (`return 0xc;` [M]; callers `Menu_GetLevelBonuses`
+/// 0x1ffe98:13-15, `PlrStarts_ProcessRewardCounter` 0x199210). Descriptors 1..4 are the
 /// bronze..platinum counters; kind 4 descriptors with the same packed {bit, kind} word form a
 /// gold-medal group (the rank within the group widens the bit) [M `PlrStarts_ProcessRewardCounter`
 /// 0x199210].
@@ -513,6 +532,9 @@ impl Progress {
     /// 0x07/0x09 labels swapped vs the decompile (the accuracy formula in the +0x38==1 branch
     /// settles it: accuracy is an on-foot stat) — flagged in the fix-progress-remainder report.
     pub fn get_score(&mut self, base_map: u32, ms: u32, difficulty: u32, commit: bool) -> Option<Scored> {
+        // `PlrStats_GetLevelTotals` 0x199a70:9-20 — the linear hash scan over `ScoringTable`
+        // 0x2bc640 (stride 0x3c, 12 entries) returning the entry or NULL [M]; the dossier
+        // Records handler (`C_RBDSRECORDS` 0x20bf00:67-77) is the reader.
         let idx = self.table.iter().position(|e| e.hash == base_map)?;
         let s = *self.stats();
         // The row values, per source [M 0x1984b0:38-84].
@@ -802,6 +824,8 @@ impl Progress {
         let mut buf = vec![0u8; size];
         let mut pos = 64usize; // the header is bytes 0..8
         Self::push_bits(&mut buf, &mut pos, self.nightfire_status as u64, 32);
+        // `PlrStats_GetScoreTable` 0x199aa8:6-7 — `*param_1 = 0xc; return &ScoringTable;` [M];
+        // `LS_MakeMission` 0x1cd720:51-63 writes that count (8 bits) then best+rows[0] per entry.
         Self::push_bits(&mut buf, &mut pos, self.table.len() as u64, 8);
         for e in &self.table {
             Self::push_bits(&mut buf, &mut pos, e.best as u64, 32);
@@ -1155,5 +1179,27 @@ mod tests {
         assert_eq!(f.rows[6].value, 80, "the health snapshot's fptoui [M 0x1984b0:80-81]");
         // Difficulty 3 → the multiplier 2.0 [M 0x1984b0:294-297].
         assert_eq!(f.dif, 2, "difficulty 3 doubles");
+    }
+}
+
+#[cfg(test)]
+mod world_helper_tests {
+    use super::*;
+
+    /// `PlarStat_LogTimerPause` 0x199520 / `LogTimerUnpause` 0x199550 [M]: the pause byte stops
+    /// the 0x1995a0 accumulator; the unpause resyncs +0x2C and clears it.
+    #[test]
+    fn plarstat_timer_pause_unpause() {
+        let mut p = PlrMissionStats::default();
+        p.last_time = 100;
+        p.log_timer_pause();
+        p.log_update_elapsed(200);
+        assert_eq!(p.elapsed, 0, "the pause byte stops the accumulator [M 0x199520 -> 0x1995a0 gate]");
+        p.log_timer_unpause(300);
+        assert_eq!(p.timer_run, 0, "+0x34 cleared [M 0x199550:16-21]");
+        assert_eq!(p.last_time, 300, "+0x2C := now [M 0x199550:8-15]");
+        // sister: after the unpause the accumulator runs again from the resynced base
+        p.log_update_elapsed(400);
+        assert_eq!(p.elapsed, 100, "now(400) - last(300) accumulated [M 0x1995a0:10-13]");
     }
 }

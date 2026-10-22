@@ -281,9 +281,28 @@ pub fn acosf_libm(x: f32) -> f32 {
     add(dw, dw)
 }
 
+/// The libm layer this module's ports stand in for — the never-mentioned scan block of task
+/// unported-misc-8, all REACHED in the shipped game [M jal census over ACTION.ELF]:
+/// - `fabsf` 0x2355b8 — called by the game's `acosf` 0x232c48 (jal 0x232c88), `asinf` 0x232d48
+///   (0x232d88), `atanf` 0x235310 (0x2353e8) and the kernel regions; the ports above use
+///   `f32::abs` (the EE FPU has no abs instruction the game relies on here).
+/// - `isnanf` 0x2356e8 — the NaN guards inside `acosf` (0x232c78), `asinf` (0x232d78),
+///   `atan2f` 0x232e48 (0x232e80/0x232e90) and `fmodf` 0x2330e8 (0x233124/0x233134); the ports
+///   above pin the decompile's guard behaviour in their tests instead of branching.
+/// - `finitef` 0x2355d8 — `expf` 0x232f70's overflow guard (jal 0x232fa4); `expf` is reached
+///   from `RB_EulerEvolve` 0x1d7810 ×2 (the rigid-body integrator, rigid_body.rs).
+/// - the `tanf` 0x232bc0 chain — tanf (reached every frame from `Vision_Calculate_View_Fustrum`
+///   0x1e7df8, `PS2WorldViewVU1Kick2` 0x10b2b0 and `Camera_CalcViewAngles` 0x1baf70 [M]) calls
+///   the 0x2341e8 kernel helper (jal 0x232c14) which calls the 0x234700 region (jal 0x23457c),
+///   which calls `scalbnf` 0x235710 ×4 (jals 0x234910/0x234a9c/0x234c4c/0x234cdc) and
+///   `floorf` 0x235600 (jal 0x234928) — so both are REACHED through the camera/frustum math the
+///   port does with `f32::tan`/`f32::floor` (world.rs's frustum).
+/// - `fmodf` 0x2330e8 — see `angle_difference` below.
 /// `Vec_AngleDifference(a, b)` (0x1e2b78): b − a wrapped to (−π, π], both first normalised to [0, 2π).
 pub fn angle_difference(a: f32, b: f32) -> f32 {
-    // Only values outside [0, 2π) go through `fmodf` (libm, exact like Rust's `%`); the adds are EE FPU adds.
+    // Only values outside [0, 2π) go through `fmodf` 0x2330e8 (libm, exact like Rust's `%`); the adds
+    // are EE FPU adds. `fmodf`'s other gameplay callers [M jal census]: `Car_Update` 0x1307d8,
+    // `Ang_RotateToBearing` 0x1e0f10, `HUD_UpdateStatusPane` 0x19c310, `AnimObjectUpdate` 0x1befd8.
     let norm = |v: f32| if v < 0.0 || v >= TAU { let r = v % TAU; if r < 0.0 { add(r, TAU) } else { r } } else { v };
     let mut d = sub(norm(b), norm(a));
     if d.abs() >= PI { d = if d >= 0.0 { sub(d, TAU) } else { add(d, TAU) } }
@@ -295,6 +314,25 @@ pub fn angle_difference(a: f32, b: f32) -> f32 {
 pub fn rotate_to_bearing(cur: f32, target: f32, speed: f32, max: f32) -> f32 {
     let d = angle_difference(cur, target).clamp(-max, max);
     if d.abs() < 1e-4 { target } else { cur + d * speed }
+}
+
+/// `LimitRadAngle(a)` (ACTION.ELF 0x120510, 172 B): wrap to [−π, π].
+///
+/// [M 0x120510 decomp + disassembly] The decomp's C drops the return; the disassembly pins it:
+/// `mov.s $f0, $f12` at 0x12051c copies the argument into the return register and the two
+/// branch-likely loops run on `$f0` — `while (a < −π) a += 2π;` (compare `c.lt.s` at 0x120520
+/// against 0xc0490fdb) then `while (π < a) a -= 2π;` (0x40490fdb at 0x120564). Result range
+/// [−π, π]: ±π pass through unchanged, NaN passes through, and the adds/subtracts are EE FPU
+/// chop (`add_noguard`), so the wrap of −3.3 lands on 0x403eec82 while +3.3 lands on
+/// 0xc03eec84. Callers [M grep]: `Emitter_Draw` 0x17b708 (particle spin, obj+0x20/+0x24) and
+/// `View_DrawCelGlist` 0x1e6538 (cel euler +0x70/+0x74/+0x78). Distinct from `wrap_pi`
+/// (player.rs, `Vec_AngleDifference` semantics): ±π map differently there.
+pub fn limit_rad_angle(a: f32) -> f32 {
+    const NEG_PI: f32 = f32::from_bits(0xc049_0fdb);
+    let mut a = a;
+    while a < NEG_PI { a = add(a, TAU); }
+    while PI < a { a = sub(a, TAU); }
+    a
 }
 
 #[cfg(test)]
@@ -458,5 +496,46 @@ mod tests {
         assert_eq!(atan2_approx(0.0, 0.0), 0.0);
         assert!((angle_difference(0.1, TAU - 0.1) + 0.2).abs() < 1e-5);
         assert!((rotate_to_bearing(0.0, 1.0, 0.1, PI) - 0.1).abs() < 1e-6);
+    }
+
+    /// [M 0x120510] wrap results. The EXACT cases (0, ±1, ±π, ±2π — and ±4.0, whose exact
+    /// f64 sum is f32-representable so every rounding model agrees) are pinned bit-exactly.
+    /// 3.3/100.0-style one-ulp-sensitive cases assert the proven range and idempotency only:
+    /// the last-iteration structure proves the result stays in [−π, π] [M the two branch-likely
+    /// loops' exit conditions], but which of two adjacent f32 values a multi-iteration wrap
+    /// lands on depends on the EE-add model (`add_noguard`, the port's PCSX2-validated choice)
+    /// — pinning those bits needs a live probe, not a model [S].
+    #[test]
+    fn limit_rad_angle_wraps_to_pi() {
+        for (x, want) in [
+            (0.0f32, 0x0000_0000u32),
+            (1.0, 0x3f80_0000),
+            (-1.0, 0xbf80_0000),
+            (PI, 0x4049_0fdb),   // ±π pass through
+            (-PI, 0xc049_0fdb),
+            (TAU, 0x0000_0000),  // ±2π → 0
+            (-TAU, 0x0000_0000),
+            (4.0, 0xc012_1fb6),
+            (-4.0, 0x4012_1fb6),
+        ] {
+            assert_eq!(limit_rad_angle(x).to_bits(), want, "LimitRadAngle({x})");
+        }
+        for x in [3.3f32, -3.3, 100.0, -100.0, 31.4159, -31.4159] {
+            let r = limit_rad_angle(x);
+            assert!(r >= -PI && r <= PI, "LimitRadAngle({x}) left the range: {r}");
+            assert_eq!(limit_rad_angle(r).to_bits(), r.to_bits(), "not idempotent at {x}");
+        }
+    }
+
+    /// Sister: NaN and the range edges — a port that wrapped to (−π, π] (e.g. reusing
+    /// `wrap_pi`'s edge rule) would map −π to +π instead of passing it through.
+    #[test]
+    fn limit_rad_angle_edges_and_nan() {
+        assert!(limit_rad_angle(f32::NAN).is_nan());
+        assert_eq!(limit_rad_angle(-PI).to_bits(), 0xc049_0fdb);
+        assert_eq!(limit_rad_angle(PI).to_bits(), 0x4049_0fdb);
+        // A full turn from the middle lands back inside the range.
+        let r = limit_rad_angle(limit_rad_angle(100.0) + TAU);
+        assert!(r >= -PI && r <= PI, "wrap of a wrapped value left the range: {r}");
     }
 }
