@@ -9368,7 +9368,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 let c = p.centre();
                                 let e = s.bond.head();
                                 let d2 = (c[0] - e[0]).powi(2) + (c[1] - e[1]).powi(2) + (c[2] - e[2]).powi(2);
-                                if d2 < 16.0 { [flash_mod(s.drones.frame); 3] } else { one() }
+                                if s.drones.near_flash && d2 < 16.0 { [flash_mod(s.drones.frame); 3] } else { one() }
                             }
                             _ => one(),
                         }

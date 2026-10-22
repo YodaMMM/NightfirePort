@@ -265,6 +265,11 @@ pub struct Input {
     /// (both are action 0xe on the pad). Local view state, not net-encoded (the `zoom_cycle`
     /// precedent).
     pub stabilise: bool,
+    /// options-census: the Advanced options' Crouch mode (control 0x1000_0125 → PlayerSetting
+    /// +0x04): true = Toggle (stand on the crouch/jump press edge), false = Hold (stand when the
+    /// crouch action is not held) [M Player_SSCrouch 0x1924c0:84-105]. The host fills it from the
+    /// option drain each tick; the derive default (Hold) is never live — the drain always sets it.
+    pub crouch_toggle: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1396,7 +1401,11 @@ impl Bond {
             self.crouched = true;
             self.cc = CROUCH_ROOT_HEIGHT;
             self.lockout = 60;
-        } else if self.crouched && (input.crouch || input.jump) && self.lockout == 0 && !self.head_bump && headroom(world) {
+        } else if self.crouched && self.lockout == 0 && !self.head_bump && headroom(world)
+            // options-census: the stand condition follows the Crouch option [M Player_SSCrouch
+            // 0x1924c0:84-105] — Toggle (byte +0x04 != 0) stands on a press edge of action 8
+            // (crouch) or 7 (jump); Hold stands when the crouch action is NOT held.
+            && (if input.crouch_toggle { input.crouch || input.jump } else { !input.crouch }) {
             self.crouched = false;
             self.cc = ROOT_HEIGHT;
             self.lockout = 60;

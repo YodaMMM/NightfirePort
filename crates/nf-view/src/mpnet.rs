@@ -157,6 +157,9 @@ pub fn to_player_input(i: &nf_net::Input) -> player::Input {
         // net wire format is unchanged and remotes never tick the zero-g substates today.
         lift: 0.0,
         stabilise: false,
+        // options-census: not net-encoded (the wire has no mode lane); the drain sets the
+        // real value for the local player each tick, the game default for the remote arm.
+        crouch_toggle: true,
         mode_switch: i.mode_switch,
         weapon_cycle: i.weapon_cycle,
         gadget_cycle: i.gadget_cycle,

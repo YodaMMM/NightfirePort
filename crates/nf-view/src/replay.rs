@@ -75,6 +75,8 @@ impl TickInput {
             // replay format is unchanged.
             lift: 0.0,
             stabilise: false,
+            // options-census: replays carry the local-view lanes only; the drain re-sets it.
+            crouch_toggle: true,
             // microcam-wheel-zoom: the wheel's zoom steps are not part of the replay format either
             // (local view input; a replayed run holds the recorded zoom as it was recorded).
             zoom_cycle: 0,
