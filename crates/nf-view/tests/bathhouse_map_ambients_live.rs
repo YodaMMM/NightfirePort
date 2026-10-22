@@ -121,9 +121,20 @@ fn the_map_ambients_including_the_waterfall_key_on_through_the_real_path() {
     }
     assert!(free, "Bond is free after the intro");
     let got: Vec<u32> = seen.iter().map(|(w, ..)| *w).collect();
-    assert_eq!(got.len(), 4, "all four map ambients key on through the real path (the waterfall 92 among them); got {seen:?}");
+    // The key-on rule: `HandleMapSoundAllocation` 0x1dd118 (run per tick by `Sound_UpdateListeners`
+    // 0x1dd278) starts every still-inactive GMapSounds entry whose listener squared distance is
+    // inside the record's radius², one `Sound_Play3D(100.0f, pos, …)` per entry [M 0x1dd118:66-74],
+    // the entries being the four records `Sound_LoadMapSounds` 0x1ddff8 loaded from map 51's block
+    // 0x28 [D the four positions/radii above]. No per-id or budget carve-out exempts an ambient:
+    // priority 100 tops the steal scan [M SFXSetup 0x4220, docs/systems/map-ambient-sounds.md §2-3].
+    assert_eq!(got.len(), 4, "all four map ambients key on through the real path [M 0x1dd118:66-74, the records D]; got {seen:?}");
     for (want, f, l, r) in &seen {
-        assert!(*l > 0.0 && *r > 0.0, "ambient {want} keyed on at tick {f} but its front voice reached the mixer silent (l={l}, r={r})");
+        // The front gain rule: `PS2_SFXCalculate3D` 0x1060c (SFX.IRX) — the distance term clamps
+        // to 0 inside the inner radius (dist − inner·10 < 0 → 0) so att = 100 [M 0001060c:55-72],
+        // and the front gain is ((dot+1000)·att²/2000)·front·vol/100 [M :82-85]; the key-on
+        // volume is 100.0f [M 0x1dd118:70] — so a keyed-on ambient not exactly at the rear pole
+        // reaches the mixer with a positive front gain on both channels.
+        assert!(*l > 0.0 && *r > 0.0, "ambient {want} keyed on at tick {f} but its front voice reached the mixer silent (l={l}, r={r}) [M PS2_SFXCalculate3D 0x1060c:55-85, vol 100 0x1dd118:70]");
     }
     // Sister: the game keeps their voices where it keeps them — the listener is inside the 1.2·R²
     // stop gate and the budget has room (4 ambient voices ≪ 15), so all four are STILL live after
