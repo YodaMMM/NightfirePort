@@ -222,8 +222,11 @@ fn the_hides_exit_reanchors_the_mission_route_before_the_lead_resumes() {
     }
     let anchor = best.map(|(k, _)| k).expect("a route node is reachable from the hide spot");
     let anchor_pos = nav.paths[route.path].nodes[route.nodes[anchor] as usize].pos;
-    assert_eq!(route.index, anchor as i32,
-        "the hide's exit re-anchors the mission route's index to the reachable node nearest the hide spot [M 0x153a30:105] — got index {} want {anchor}", route.index);
+    // The LIVE route after the exit (the snapshot above is the last LEAD_HIDE tick's, taken before the
+    // exit tick's ReFindMissionPath [M 0x15ec08 case 0xc] re-anchors it).
+    let live_index = sim.drones.list[ci].route.as_ref().expect("the lead keeps its mission route").index;
+    assert_eq!(live_index, anchor as i32,
+        "the hide's exit re-anchors the mission route's index to the reachable node nearest the hide spot [M 0x153a30:105] — got index {live_index} want {anchor}");
     let cr = sim.drones.list[ci].croute.as_ref().expect("the +0x860 route is rebuilt to the anchor [M 0x153a30:141-144]");
     assert!(walker::dxz(cr.dest, anchor_pos) < 0.5,
         "the rebuilt route ends at the anchor node ({anchor_pos:?}), not {:?} (the cover run's AI point)", cr.dest);
