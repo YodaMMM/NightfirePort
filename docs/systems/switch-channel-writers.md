@@ -35,7 +35,7 @@ probe: placements + `Stream::decode`), every mechanism [M] as above.
 
 | level | ch | writer (the real path) | the record that carries it | state in the port |
 |---|---|---|---|---|
-| 07000003 | **0x4E** Retrieve Dragon Safe contents | `Pickup_Handler` 0x18e650:330-333 on taking the safe briefcase | script **0x06000563 stream1 cmd[6] @frame 91**: Entity obj_type 0xF0, hash 0x020005F1, params [kind 2, id 0, rounds 0, **ch 0x4E**, sound 0xffff, respawn 0] — parented to stream 0 (the safe, hash 0x020005F0) | take-write ported (drone.rs); the briefcase's SPAWN is the gap — see below |
+| 07000003 | **0x4E** Retrieve Dragon Safe contents | `Pickup_Handler` 0x18e650:330-333 on taking the safe briefcase | script **0x06000563 stream1 cmd[6] @frame 91**: Entity obj_type 0xF0, hash 0x020005F1, params [kind 2, id 0, rounds 0, **ch 0x4E**, sound 0xffff, respawn 0] — parented to stream 0 (the safe, hash 0x020005F0) | take-write ported (drone.rs); spawn reached on the real path, take fixed in batch 1022i (s/dragon-safe) — see below |
 | 07000003 | 0x51 | not yet resolved — the only records carrying 81 are the AND trigger (below) as an INPUT and float noise | — | open |
 | 07000003 | 0x52 (the exit's key gate) | `Trigger_Update`'s AND write [M 0x1b1a78] | placement idx316 (type 0xEC AND): out = param0 = 0x52, ins = {param1 = 0x4E, param2 = 0x51} — the exit unlocks when BOTH objectives' channels are on | the AND is ported; blocked on 0x4E/0x51 above |
 | 07000016 | **0x50** | script events: **0x0600090a stream21 event 0xD writes [50, 1]**; **0x060009e9 stream7 event 0xD writes [50, 0]** (the clear!) [D]; also an SP idx186 (type 0xD9, param6 = 0x50) mirrors it [M 0x1dbda8:226], and a pickup (0x02000637, param3 = 0x50) | the kiko scripts | the event/SP writers are ported; the walk beat = which fires on the real route |
@@ -70,11 +70,7 @@ probe: placements + `Stream::decode`), every mechanism [M] as above.
 5. Taking it writes ch 0x4E [M 0x18e650:330-333] → the objective completes → with 0x51, the AND
    trigger unlocks the exit (0x52).
 
-**The port gap**: the reserved slot exists (script_pickup_reservations) but sits inert at the
-RAW key (−0.089, −0.63, 0.0017) and nothing reaches frame 91: the world SP's preload stops at
-one tick (as the game's does), and the identity SP (mode 0) is never started because the port
-has not wired its trigger. **Which in-game event starts the identity SP — and where the
-briefcase really lands (the identity SP's base is the world origin)** — is a live check (below).
+**Correction (main agent, 2026-10-21, batch 1022i):** the spawn IS reached on the real path — the Action press on the case runs 0x06000563 and stream 1's Entity at frame 91 creates the pickup (doublecross_items_live `the_case_use_spawns_the_keycard_through_the_real_path`). The take was blocked because the port froze the pickup at its creation pose while the stream lifts it (y 5.92 → 6.05 with the riser); s/dragon-safe makes the pickup follow its stream entity [M `Script_Interp` 0x1d9a08:94-110] and `the_case_use_lifts_the_keycard_and_bond_takes_it` takes it (ch 0x4E on).
 
 ## Live checks for the main agent
 
