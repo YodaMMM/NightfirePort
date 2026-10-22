@@ -84,6 +84,11 @@ fn the_case_use_lifts_the_keycard_and_bond_takes_it() {
     let m = scene.frame_state(None, 0.0, opts).attach[slot];
     assert!((0..3).all(|j| (m[3][j] - live_pos[j]).abs() < 1e-3), "the slot draws the card at its live pose {live_pos:?}; got {:?}", m[3]);
     let sim = scene.sim.as_mut().expect("sim");
+    // At the counter the card is NOT taken: the counter's rim sits on the line from Bond's sphere
+    // centre to the card [L PCSX2 2026-10-22, audits/dragon-live: Square at (5.896, 5.967, -42.41)
+    // yaw 1.71, ch 0x4E still 0 four seconds later; the first back-step (x 5.55) took it].
+    for _ in 0..60 { sim.step_bond(Default::default(), false, false, false); }
+    assert_eq!(sim.drones.channels.v[0x4e], 0, "standing at the counter the take's LOS is blocked, as in the game [L]");
     // Walk back from the counter (the case faces +x; Bond backs off along −x).
     let back = nf_game::player::Input { forward: -1.0, ..Default::default() };
     let mut taken_at = None;
