@@ -87,7 +87,7 @@ fn set_crouch(w: &mut Walker, on: bool) {
 }
 
 #[test]
-#[ignore = "level-14-complete-2 state: the lip graze GROUNDS per the game's own rule [M Intersect_CylGeom 0x10a72c-34 ORs bit 0x1 into QUERY+0x9c for contacts < 0.7; Player_FeetOnPoint 0x194188:183-201 sets the grounded bit on != 0; Collide_Update 0x1ea398:46c clears it per frame] — the port's walkable arm is game-accurate on the bit (the 0.412 slab-corner graze is within 0.7; the sister test the_chute_lip_corner_graze_grounds_per_the_game_rule pins it). The WEDGE is not a grounding error: the game keeps Bond grounded while the band arm (the feet ray) decides the floor, and the drop's catcher is OPEN — the well-ladder hypothesis DIED [D probe14_wellladder: 02000751 is placement kind 0x19 ladder ART at (46.01, -1.30, 62.57) OUTSIDE the well box; script Entity type 25 rides Script_CreateEntity's generic gfx path (only stream type 0x22 maps to Ladder_Create [M 0x1d8968:66-67]); the level has NO kind-0x22 ladder at all (ladder::all = 0)]. NEXT: (1) the live checks (does the game's Bond fall off the lip, or does the threshold face wall him? — gdbwatch on substate + the grounded bit); (2) probe ALL maps' tri sets under the opening (x 39.7..41.9 / z 54.4..57.4, y < 0.4) — the port's world is missing the under-opening floor (probe14_landing: y -> -210); (3) the port-side 0.7 gate on walkable (the only divergence from [M], unpinned); (4) legs 1b/1c rewritten around whatever the game's route does at the lip."
+#[ignore = "level-14-vent-grate state: leg 1a is REWRITTEN to the game's real route - the east duct (the_vent_grill_blocks_the_west_duct_per_the_game pins the closed grill; the_east_duct_route_reaches_the_stairwell_slot carries the real-input east attempt, still ignored on the mouth lintel): the west grill plane z=58.86 is the game's own closed geometry [M parsemap 0x1d1998:92 creates the cel for the 0x8000 placement; M Collide_Pick 0x1eb320:140/:145-151 skips nodes only on glist bits 0x20 / 0x1000+query-0x20 - the grill's glist 0x1 [D plc #100] is never tested; the bit-0x1 skip that opened the grill is REVERTED in world.rs], and the crawl leaves east past lid SP #328, descends south to the stairwell slot approach (45.23, 1.07, 56.27 [D probe14_eastduct]). The walk stays ignored on the SLOT CROSSING (unchanged from level-14-complete-2): the threshold face z=55.719 [D probe14_chute] stops the capsule 0.55 short and the under-opening floor is missing in the port's world (probe14_landing: y -> -210) - what the game's Bond does there needs a fresh-boot [L] (the live checks in docs/reports/level-14-vent-grate.md). The 0.7-grounding note stays [M]: the lip graze GROUNDS per the game's rule [M Intersect_CylGeom 0x10a72c-34; Player_FeetOnPoint 0x194188:183-201; Collide_Update 0x1ea398:46c]."]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
@@ -220,32 +220,43 @@ fn walk_the_infiltration_to_the_delta_exit() {
     eprintln!("[014] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
 }
 
-/// The grill-pass sister (level-14-complete): the crawl-vent start box is OPEN at the AirConGrill1
-/// plane z=58.86 — no static world triangle sits in the grill box (the old world carried the 24
-/// AirConGrill1 tris there and sealed the only start inside; the bit-0x1 census [D] is the fix's
-/// evidence and the sealed-box contradiction its proof).
+/// The grill sister, REWRITTEN (level-14-vent-grate): the old version pinned the crawl THROUGH the
+/// AirConGrill1 plane on the bit-0x1 skip — that skip contradicts the decompile and is reverted.
+/// The game's own evidence: [M] parsemap_block_map_data_static 0x1d1998:92 creates the runtime cel
+/// for every 0x8000 placement (AirConGrill1's placement #100 carries 0x00008019 [D probe14_plcflags])
+/// and [M] Collide_Pick 0x1eb320 — the candidate stage of the movement capsule's kind-0x800 query
+/// (Collide_CylinderIntersect 0x1ecc00:61) — skips nodes only on cel+0x94 bit 0x20 (:140) and
+/// bit 0x1000 with query+0x98 bit 0x20 (:145-151); the grill's glist word is 0x1 [D], never tested.
+/// So the game's static world KEEPS the 24 grill tris at z=58.86 and nothing opens them: the west
+/// duct's south end is closed and the route leaves through the EAST duct mouth (past lid SP #328).
 #[test]
-fn the_vent_grill_no_longer_blocks_the_start_box() {
+fn the_vent_grill_blocks_the_west_duct_per_the_game() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000014.bin", false).unwrap();
     {
         let sim = scene.sim.as_mut().unwrap();
         for _ in 0..60 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
     }
-    let sim = scene.sim.as_ref().unwrap();
-    let tris = sim.world.tris_near([40.0, 2.3, 58.5], [41.6, 3.9, 59.2]);
-    // The bars were 0.06-0.07 thick in y, six of them between y 2.62 and 3.62, all at z=58.86-58.9
-    // [D probe14_tris]. The room frame's own tris there are thicker; none may be bar-thin.
-    let bars = tris.iter().filter(|t| {
-        let zs = [t[0][2], t[1][2], t[2][2]];
-        let ys = [t[0][1], t[1][1], t[2][1]];
-        zs.iter().all(|z| (58.5..59.3).contains(z))
-            && ys.iter().all(|y| (2.55..3.7).contains(y))
-            && (ys.iter().cloned().fold(f32::MAX, f32::min) - ys.iter().cloned().fold(f32::MIN, f32::max)) < 0.09
-    }).count();
-    assert_eq!(bars, 0,
-        "the AirConGrill1 bars (0.06-0.07 y-thick, six bands y 2.62..3.62) must carry no static collision [D the bit-0x1 census; was 24 tris]");
-    // And the crawl gets through: a crouched walk south crosses the plane.
+    let bar_count = {
+        let sim = scene.sim.as_ref().unwrap();
+        let tris = sim.world.tris_near([40.0, 2.3, 58.5], [41.6, 3.9, 59.2]);
+        tris.iter().filter(|t| {
+            let zs = [t[0][2], t[1][2], t[2][2]];
+            let ys = [t[0][1], t[1][1], t[2][1]];
+            zs.iter().all(|z| (58.5..59.3).contains(z))
+                && ys.iter().all(|y| (2.55..3.7).contains(y))
+                && (ys.iter().cloned().fold(f32::MAX, f32::min) - ys.iter().cloned().fold(f32::MIN, f32::max)) < 0.09
+        }).count()
+    };
+    drop(scene); // the second load doubles the footprint — this sandbox OOMs at ~2 GB
+    let bars = bar_count;
+    // The bars are 0.06-0.07 thick in y, six of them between y 2.62 and 3.62, all at z=58.86-58.9
+    // [D probe14_tris; the placement 0x8000 cel + the Collide_Pick no-0x1-skip rule above].
+    assert!(bars >= 20,
+        "the AirConGrill1 bars (24 tris, six bands y 2.62..3.62) ARE the game's static collision [M 0x1d1998:92 + 0x1eb320:140/:145-151; D plc #100 0x00008019 glist 0x1], got {bars}");
+    // And the crawl does NOT get through: a crouched walk south wedges on the grill plane —
+    // the game's Bond never crosses z=58.86 westward; the route leaves east (the walkreal's
+    // the_east_duct_route_reaches_the_stairwell_slot walks the real east path).
     let mut scene = nf_view::load(&iso, "07000014.bin", false).unwrap();
     {
         let sim = scene.sim.as_mut().unwrap();
@@ -256,7 +267,37 @@ fn the_vent_grill_no_longer_blocks_the_start_box() {
             let inp = nf_game::player::Input { forward: 1.0, ..Default::default() };
             sim.step_bond(inp, false, false, false);
         }
-        assert!(sim.bond.pos[2] < 58.4 && sim.bond.pos[2] > 55.0,
-            "the crawl crosses the grill plane z=58.86 southward, got {:?}", sim.bond.pos);
+        assert!(sim.bond.pos[2] > 58.5,
+            "the crawl wedges on the grill plane z=58.86 [M the cel-exists rule above], got {:?}", sim.bond.pos);
     }
+}
+
+/// The real east route (level-14-vent-grate): from the vent start the crawl leaves through the
+/// EAST duct mouth — past lid SP #328 (45.28, 2.37, 63.66) [D] — and descends south to the
+/// stairwell slot approach (45.23, 1.07, 56.27 [D probe14_eastduct re-run 2026-10-22, both stance
+/// probes converging there]). The west grill plane z=58.86 is closed
+/// (the_vent_grill_blocks_the_west_duct_per_the_game).
+#[test]
+#[ignore = "level-14-vent-grate: the REAL-input east crawl wedges at the duct mouth - both lanes (z=63.7 and z=65.4) stop at x=40.98 with head_bump=true (crouched, grounded; the mouth's lintel is at crawl-head height in the port's world). The probe14_eastduct scans only TELEPORT past the mouth, so nothing yet proves the spawn-side approach is open. Needed: a tri-owner dump of x 40.9..41.6, y 3.1..3.9, z 63.0..66.0 (whose object owns the lintel - a bit-0x1 label/lid art the revert restored, or the structural wall?) and a fresh-boot [L] of the game's Bond taking this mouth. NOT a regression: the pre-revert world never reached this wall honestly (the grill skip changed the same world)."]
+fn the_east_duct_route_reaches_the_stairwell_slot() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000014.bin", false).unwrap());
+    w.wait_enabled(3000, "the intro");
+    w.wait(120);
+    set_crouch(&mut w, true);
+    // East straight off the spawn along the z=65.4 lane — the probe14_eastduct scans' lane
+    // (their south-crawl starts (45.28, 3.05, 65.51) [D]).
+    w.walk_to(Wp::new(44.9, 2.4, 65.4).r(0.9), "east along the duct lane past lid #328");
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        assert!(p[0] > 43.5, "the crawl reached the east duct lane [D the mouth past lid #328], got {p:?}");
+    }
+    // South down the east duct's descent to the slot approach.
+    w.walk_to(Wp::new(45.2, 1.1, 56.6).r(0.9), "south down the east duct to the slot");
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        assert!(p[0] > 44.0 && p[2] < 57.2 && p[1] < 1.6,
+            "the descent reached the stairwell slot approach [D probe14_eastduct], got {p:?}");
+    }
+    eprintln!("[014] east route: at {:?} in {} ticks", w.scene.sim.as_ref().unwrap().bond.pos, w.total_ticks);
 }

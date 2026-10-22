@@ -385,20 +385,28 @@ impl CollisionWorld {
         let mut obj_cell: Vec<Option<u32>> = Vec::new();
         for inst in instances {
             let Some(c) = &level.maps[inst.map].objects[inst.object].collision else { continue };
-            // Glist flags bit 0x1 = the static art carries NO world collision [D — every 07000014
-            // object with the solo bit is one whose blocking is dynamic or purely visual: the
-            // shootable windows (ServerRoomGlass1-5, ServerRoomWindow, CompRoom1Window — the
-            // kind-0x20 Breakables provide the shoot state), the door arts' static twins
-            // (Door_Slide_*/Door_Win_Slide_* flags 0x40001 — the kind-0xDB doors collide), the
-            // vent grills (AirConGrill1-4 — Bond crawls through), the drain slimes and the labels;
-            // the structural art (AirConditioningRoom, the vent walls themselves) carries flags 0.
-            // On 07000014 the old include sealed the crawl-vent start box shut at the AirConGrill1
-            // plane z=58.86 (24 tris, the six 0.12-0.13 bar gaps) — a box the game cannot ship:
-            // walls z=67.2 north, grill south, floor 2.40, roof 3.86, the only start #666 inside
-            // [D probe14_walls/placements]. [M-adjacent] Control_SetGList 0x134960 masks the
-            // glist flags into obj+0xF0 and the runtime collision consumers read only that word;
-            // a live PCSX2 check (grill → the crawl passes) should pin the exact parsemap skip.
-            if level.maps[inst.map].objects[inst.object].flags & 1 != 0 {
+            // NO glist-bit-0x1 skip here (the level-14-complete/2 skip, reverted): the game's static
+            // collision is the parsemap 0x8000 cel gate plus two glist bits, and bit 0x1 is NOT one
+            // of them. [M] parsemap_block_map_data_static 0x1d1998:92 allocates a runtime cel only
+            // for a placement whose flags word carries 0x8000 (`cel+0x3c = flags & 0xffff` :102),
+            // copying the object's glist word into `cel+0x94` (:103); [M] Collide_Pick 0x1eb320
+            // — the candidate stage every query passes (the movement capsule rides
+            // Collide_CylinderIntersect 0x1ecc00:61's kind 0x800) — skips a node ONLY on
+            // `cel+0x94 & 0x20` (:140) and on `& 0x1000` when the query's HITTEST+0x98 carries
+            // bit 0x20 (:145-151); no bit-0x1 test exists anywhere in the pick path. [D
+            // probe14_plcflags on 07000014] the skipped set is real world art the game KEEPS:
+            // AirConGrill1-4/SCCP_Grate (plc 0x00008019 — kind 0x19, 0x8000 set, 24 tris each,
+            // glist 0x1), the fixed ServerRoomGlass1-5 panes, the labels, the chairbases — 96
+            // cel-placements carry bit 0x1 with tris. The door twins (Door_Slide_*, kind 0xdb,
+            // plc 0x000000db) and the Breakable windows (kind 0x20, plc 0x00000020) carry NO
+            // 0x8000 — they never had a static cel, so skipping bit 0x1 "for them" solved a
+            // non-problem while dropping the grills/glass. The grill plane at z=58.86 blocking
+            // the west duct's south end is the GAME's own geometry: the route leaves through the
+            // EAST duct mouth (past lid SP #328) and descends south to the stairwell slot —
+            // see walkreal_07000014_live and docs/levels/07000014.md §1a.
+            // [M] cel+0x94 bit 0x20 (the shadow/overlay cels: CargoArea*Shadows glist 0x21 [D
+            // probe14_plcflags]) is the real never-picked bit (Collide_Pick :140) — skip it.
+            if level.maps[inst.map].objects[inst.object].flags & 0x20 != 0 {
                 continue;
             }
             // The node's bullet-pass flag: the placement's glist flags bit 0x40 (cel+0x94 [M
