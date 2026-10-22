@@ -28,15 +28,18 @@
 //! on a no-filter pane, guns pass. The call site reads the word at `weapons.records[weapon][0x10..0x12]`
 //! like the game (drone.rs's bullet pass).
 //!
-//! The kill sound roll [M 0x12b970:65-76]: kind 2 → 0x2E with NO RNG draw; every other kind rolls
-//! `Rand_Rand(100) < 0x29` → 0x5F2 else 0x5F3, drawn only when a non-glass pane with collision
-//! records dies (the roll sits inside Break_Kill after the records gate, before Debris_Create_Loop).
+//! The kill sound [M 0x12b970:65-76]: kind 2 → 0x2E with NO RNG draw; the decompile rolls
+//! `Rand_Rand(100) < 0x29` → 0x5F2 else 0x5F3 for the other kinds — the port keeps the
+//! deterministic 0x5F3 arm and does not consume the shared RNG (the deviation below: the game's
+//! global draw order is not established, and inserting the draw shifts every downstream consumer —
+//! it broke escort_follow's tuned timing; see kill() for the experiment).
 //!
-//! The pane bodies (glass-breach lineage): the 0x20 placements do NOT bake into the static
-//! collision set (world.rs) — `Break_Kill`'s obj+0xFE |= 1 takes the pane out of the world and a
-//! static bake cannot undo it [M 0x12b970:60]. The Drones inject each INTACT pane every tick
-//! through `set_dynamic` (id 0x300_0000_0000 | placement, shape = the `shape_key` below); a broken
-//! pane injects nothing and bodies cross the opening.
+//! The pane bodies (glass-breach lineage): the game takes a killed pane out of the world
+//! (obj+0xFE |= 1, "the collision goes away" [M 0x12b970:60]). The port keeps the 0x20 placements
+//! in the STATIC bake — the documented deviation (a dead pane stays solid; the naive per-tick
+//! `set_dynamic` re-injection of the intact panes stalls the 07000001 real-path walks —
+//! level-03-interactables-3 reproduced it, see script_parts' note in drone.rs). `Break::shape_key`
+//! computes the collision-shape key the injection will need.
 //!
 //! Port deviations (documented, none tested as game behaviour):
 //! - the pieces' draw presentation (matrices, models, look) is the renderer's work; the sim
@@ -85,10 +88,10 @@ pub struct Break {
     /// the draw model's triangles (kind 2). Built at create; empty records = the silent kill
     /// [M 0x12b970:61-63].
     pub src: Source,
-    /// The collision-shape key the intact-pane injection needs: the target object's hashcode, or
-    /// world.rs's anonymous (map, object) synthetic `0x8000_0000 | (map << 16) | object` when the
-    /// hashcode is u32::MAX [S — the shapes index's own rule, world.rs build()]. 0 = no shape (the
-    /// pane injects nothing).
+    /// The collision-shape key for the deferred intact-pane injection: the target object's
+    /// hashcode, or world.rs's anonymous (map, object) synthetic `0x8000_0000 | (map << 16) |
+    /// object` when the hashcode is u32::MAX [S — the shapes index's own rule, world.rs build()].
+    /// 0 = no shape. Not consumed yet (the injection is reverted — see the module header).
     pub shape_key: u32,
 }
 
@@ -278,15 +281,12 @@ impl Breaks {
     ///
     /// The contact stands in for the game's collision pair ([M 0x12bfd8:15 — the pane's obj+0xD0
     /// list the collision pass fills): the pair exists when the body's movement CARRIES IT INTO
-    /// the pane's collision sheet — this tick's step segment crosses the pane's bounds, grown 0.7
-    /// [S — the game's contact is the body volume against the pane's glist triangles; the growth
-    /// covers the port's blocked standoff: the injected pane stops the body just short of the
-    /// sheet, and the pressed body's next step must still reach it]. A body whose approach merely
-    /// closes distance (a guard walking up to the glass, or standing near it) has no pair until
-    /// the collision engages; the injected pane stops bodies at the sheet, so the crossing IS the
-    /// engagement. The previous 0.55-grown hull zone fired ~0.6 before any physical contact — a
-    /// proximity kill the game's list cannot produce (a pressed guard's position is
-    /// collision-owned: zero net step, zero damage [M the SqDist rule]).
+    /// the pane's collision sheet — this tick's step segment crosses the pane's bounds. A body
+    /// whose approach merely closes distance (a guard walking up to the glass, or standing near
+    /// it) has no pair until the collision engages; the port's pane bake stops bodies at the
+    /// sheet, so the crossing IS the engagement. The previous 0.55-grown hull zone fired ~0.6
+    /// before any physical contact — a proximity kill the game's list cannot produce (a pressed
+    /// guard's position is collision-owned: zero net step, zero damage [M the SqDist rule]).
     ///
     /// **The scripted-walk gate (glass-breach-guards-4).** The drain is `Vec_SqDist3D(hitter+0x30,
     /// hitter+0x40)` — the hitter's current vs previous position. The movement pass copies
@@ -310,9 +310,11 @@ impl Breaks {
         let dmg = sq * 20.0;
         let mut hits = Vec::new();
         for (i, br) in self.list.iter_mut().enumerate().filter(|(_, b)| !b.dead && b.kind == 2) {
-            // The contact: this tick's step reaches the pane's bounds (the collision pair; the
-            // 0.7 growth covers the injected pane's blocked standoff [S]).
-            if Self::seg_box_grow(drone_from, drone_to, br.lo, br.hi, 0.7) {
+            // The contact: this tick's step crosses the pane's bounds (the collision pair). Grow 0:
+            // the static bake stops bodies AT the sheet, so the crossing IS the engagement (the
+            // injected-sheet variant tried a 0.7 growth [S] and was reverted with it — see
+            // script_parts' note in drone.rs).
+            if Self::seg_box_grow(drone_from, drone_to, br.lo, br.hi, 0.0) {
                 br.health -= dmg;
                 if br.health < 0.0 {
                     hits.push((i, drone_from, drone_to));
@@ -338,16 +340,15 @@ impl Breaks {
         if br.src.records.is_empty() { return None; }
         let trans = [br.matrix[3][0], br.matrix[3][1], br.matrix[3][2]];
         let centre = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
-        // The kill sound BEFORE the pieces, in the game's order: kind 2 plays 0x2E with no draw;
-        // every other kind rolls Rand_Rand(100) < 0x29 → 0x5F2 else 0x5F3 [M 0x12b970:65-76 —
-        // the roll sits after the records gate, before Debris_Create_Loop :78+].
-        let sound = if br.kind == 2 {
-            0x2E
-        } else if rng.rand(100) < 0x29 {
-            0x5F2
-        } else {
-            0x5F3
-        };
+        // The kill sound: kind 2 plays 0x2E with no draw [M 0x12b970:65]; the other kinds' roll
+        // (`Rand_Rand(100) < 0x29` → 0x5F2 else 0x5F3 [M :66-76]) is the documented deviation —
+        // the port keeps the deterministic 0x5F3 arm and does NOT consume the shared RNG. The
+        // game's draw ORDER across systems is not established ([S] unverified), and inserting the
+        // draw into the port's stream shifts every downstream consumer: escort_follow_07000001
+        // passes at master's timing without the draw and stalls with it (level-03-interactables-3
+        // measured 7.0 s vs 18-46 s stalls; master 7.2 s). Landing the roll = aligning the port's
+        // draw order first (a next task, with the live checks).
+        let sound = if br.kind == 2 { 0x2E } else { 0x5F3 };
         let (hit, normal, mat) = Self::contact(&br.src.records, a, b, trans, centre);
         // Break_Kill defaults the hit material's low 6 bits to 0x10 when zero — the debris
         // table's breakable row [M 0x12b970:137-138 `if ((hitdata+0x50 & 0x3f) == 0) = 0x10`].
@@ -452,10 +453,7 @@ mod tests {
         assert!(b.list[0].dead, "health 0 - damage < 0 → Break_Kill [M 0x12bfd8:44-50]");
         assert_eq!(kills.len(), 1);
         assert_eq!(kills[0].kind, 0);
-        // The roll against the same seed's stream: the kill's FIRST draw is the sound roll.
-        let mut probe = Rng::new(1);
-        let want = if probe.rand(100) < 0x29 { 0x5F2 } else { 0x5F3 };
-        assert_eq!(kills[0].sound, want, "the kill rolled Rand_Rand(100) < 0x29 → 0x5f2 else 0x5f3 [M 0x12b970:65-76]");
+        assert_eq!(kills[0].sound, 0x5F3, "non-glass → the deterministic 0x5F3 arm (the [M] roll is the documented no-draw deviation — see kill())");
         // The kill spawned the game's debris: one record → one piece, EffectInfo[0x10].
         assert_eq!(b.shatter.debris.len(), 1, "Debris_Create_Loop: one object per stride-3 record [M 0x1ed548]");
         assert_eq!(b.shatter.debris[0].model, EFFECT_INFO[0x10].model, "EffectInfo[hitdata+0x50 & 0x3f = 0x10] [M 0x12b970:137-141]");
@@ -563,7 +561,7 @@ mod tests {
             assert!(d.spin[k] >= -info.spin / 2.0 && d.spin[k] < info.spin / 2.0,
                 "spin[{}] in ±spin/2 (Rand_FRandHalf_Vec [M 0x1dfef0])", k);
         }
-        assert_eq!(rng.draws - draws_before, 9, "the sound roll [M 0x12b970:65-76] + eight shared draws per debris object [M 0x1aaa00:30-50]");
+        assert_eq!(rng.draws - draws_before, 8, "eight shared draws per debris object [M 0x1aaa00:30-50] (the sound roll is the no-draw deviation)");
         // The centre: avg(local verts) + the object position [M 0x1ed548:126-131] — the ray hit
         // at (5, 8, −2.5) is not the piece centre; the piece centre is the record triangle's
         // average (5.0, 7.833…, −2.5).
@@ -749,9 +747,10 @@ mod tests {
         let mut b2 = Breaks { list: vec![pane(5, 0, 0.0)], shatter: Default::default() };
         let ev3 = b2.drone_step([-1.0, 6.3, -0.5], [-1.0, 6.3, -1.6], true, false, &mut rng);
         assert!(ev3.is_empty() && !b2.broken_at(5), "the smash arm is kind-2 only [M 0x12bfd8:25]");
-        // Sister: the drain is exactly SqDist·20 — a 0.3 step (d2 0.09 → 1.8) dents a 100 pool.
+        // Sister: the drain is exactly SqDist·20 — a 0.3 step through the sheet (d2 0.09 → 1.8)
+        // dents a 100 pool.
         let mut b3 = Breaks { list: vec![pane(6, 2, 100.0)], shatter: Default::default() };
-        let ev4 = b3.drone_step([-1.0, 6.3, -0.5], [-1.0, 6.3, -0.8], true, false, &mut rng);
+        let ev4 = b3.drone_step([-1.0, 6.3, -1.0], [-1.0, 6.3, -1.3], true, false, &mut rng);
         assert!(ev4.is_empty() && !b3.broken_at(6));
         assert!((b3.list[0].health - 98.2).abs() < 1e-4, "health -= SqDist·20 [M 0x12bfd8:27], got {}", b3.list[0].health);
         // The RNG stream is untouched by a glass kill (0x2e is unconditional [M 0x12b970:65-70]):

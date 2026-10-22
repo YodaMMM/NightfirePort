@@ -13791,11 +13791,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         // The breakable drone-contact arm (`Break_Update` 0x12bfd8:23-34): snapshot the drones'
         // positions; at the tick's tail every mover tests its squared step against the level's
-        // glass (only on GameState+0x12 == 0x0700001, only kind 2 — crate::breakable). The
-        // player is a class-2 body to the collision pass too — snapshot his position the same way
-        // for the tick-tail pass (level-03-interactables' re-land).
+        // glass (only on GameState+0x12 == 0x0700001, only kind 2 — crate::breakable).
         let drone_from: Vec<V3> = self.list.iter().map(|d| d.pos).collect();
-        let player_from = player.pos;
         // glass-breach-guards-4: the root-motion flag is this tick's movement-source mark — clear
         // it before anything moves (root_motion sets it when it applies a delta).
         for dr in self.list.iter_mut() { dr.scripted_move = false; }
@@ -14789,17 +14786,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // same set_dynamic now (the game's Collide_Update is post-walk [M 0x1336f8:238]). Id: high bit 40 + the door index.
             parts.extend(drones.doors.list.iter().enumerate().filter(|(_, x)| x.glist != 0)
                 .map(|(k, x)| (0x100_0000_0000 | k as u64, x.glist, x.matrix)));
-            // The breakable panes (glass-breach lineage, the level-03 re-land): the INTACT pane is
-            // a solid body this tick (`Collide_PickObj` walks the cel-linked objects whatever
-            // moved them); a BROKEN pane injects nothing — `Break_Kill`'s obj+0xFE |= 1 takes it
-            // out of the world, the collision "goes away" [M 0x12b970:60] and bodies cross the
-            // opening. The static bake excludes the 0x20 placements (world.rs). Id: bit 42 +
-            // placement (bit 41 is the SimpleScripts'; the level-03 pick's 0x2000… id collided
-            // with theirs). Shape: `Break::shape_key` (the hashcode or the (map,object)
-            // synthetic — world.rs's shapes index [S]); 0 = no shape, inject nothing.
-            parts.extend(drones.breaks.list.iter()
-                .filter(|s| !s.dead && s.shape_key != 0)
-                .map(|s| (0x300_0000_0000 | s.placement as u64, s.shape_key, s.matrix)));
+            // NOT injecting the intact breakable panes (level-03-interactables-3 tried it, bit 42 |
+            // placement, and REVERTED it): the injection stalls the 07000001 real-path walks —
+            // walkreal_07000001's "walk past the wedged lead" pinned at (5.45, 6.68, 11.60) with
+            // `segment_to_target` hitting ~0.13 in, escort_follow's contact parked at the door —
+            // the same stall the glass-breach lineage's naive re-injection saw and documented
+            // (master's glass_breach_live note). A collision-stopped body's net step is zero, so
+            // the class-2 drain (SqDist of the step [M 0x12bfd8:26-27]) never fires against the
+            // injected sheet and the pane never opens. Master's static bake + the documented
+            // deviation (a dead pane stays solid) stands until the contact is collision-pair-based
+            // like the game's obj+0xD0 list [M 0x12bfd8:15] — a live check can measure the game's
+            // pressed-body standoff at pane 136 to size the growth.
             // The SimpleScripts too (fix-party-mission item 7): the safe door (ch 136) and the doorway
             // bolt (ch 137) are solid at their posed matrix, like the doors. Id: bit 41 + the ss index.
             parts.extend(drones.sss.list.iter().enumerate().filter(|(_, x)| x.hash != 0)
@@ -16687,11 +16684,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The drone-contact pass ([M Break_Update 0x12bfd8:23-34]: class-2 contacts damage kind-2
         // breakables by the squared step × 20, on 07000001 only). The kills join the view queue;
         // Break_Kill 0x12b970:75 plays the kill sound inline (the same presentation the bullet
-        // pass makes above). Every drone's (tick-start, now) pair, then Bond's: the player is a
-        // class-2 body to the collision pass too (the game's contact list holds every class-2
-        // body that registered — no drone-only filter in [M 0x12bfd8:23-34]); `player_from` is
-        // the tick-start cache. The port's player moves by steering, never anim root motion, so
-        // his step is always the AI-steering kind the drain reads.
+        // pass makes above).
         let level_01 = d.level == 0x0700_0001;
         for (dr, from) in self.list.iter().zip(drone_from) {
             if !dr.present || dr.corpse { continue; }
@@ -16706,15 +16699,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         if level_01 {
-            for k in self.breaks.drone_step(player_from, player.pos, level_01, false, &mut self.rng) {
-                self.break_kills.push((k.placement, k.kind, k.sound));
-                let id = u32::from(k.sound);
-                self.audio.play3d(id, k.pos, None);
-                if let Some(t) = d.sfx {
-                    let e = t.get(id);
-                    if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
-                }
-            }
+            // level-03-interactables-3 TRIED Bond here (the player is a class-2 body; 703c's join)
+            // and REVERTED it: escort_follow_07000001 stalls with the join (the contact parks while
+            // Bond's joined pass smashes panes along the route — master passes the same walk at
+            // [M master escort_follow 7s, this branch 18-46s stall]); the pane kills' Sound_Play3D
+            // [M 0x12b970:69,75] reach the escorts' hearing. The join returns with the
+            // collision-pair contact (see script_parts' note) and a fresh escort comparison.
         }
         // The kill pieces tick once per frame: `UpdateAllShards` 0x12b808 (the game runs it in
         // the frame loop, paused-gated — the Sim has no pause) and `Debris_Update` 0x1aac00 in

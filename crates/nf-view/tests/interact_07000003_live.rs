@@ -4,10 +4,13 @@
 //! its evidence: [M] the decompile function and address, [D] the disc parse. The census:
 //! docs/levels/07000003.md.
 //!
-//! Four walks stay env-gated behind NF_INTERACT03_ALL (their last-mile harness notes are in the
-//! report); the rest run always. The interior walks use a reach teleport (`Bond::stand_at` to a
-//! shot/stand spot the level's collision probe clears) and then operate everything through the
-//! real input — the level's kind-0 double swing doors wedge the nav walker (see the report).
+//! Six of the nine walks run always (the walk plate, the corridor slider, the ladder, the
+//! stereo, the pane shot and the data census — un-gated by level-03-interactables-3 after they
+//! passed for real on the re-land); three stay env-gated behind NF_INTERACT03_ALL (the E-plate,
+//! the key chain, the protected guest — the not-yet-green walks, harness notes in the report).
+//! The interior walks use a reach teleport (`Bond::stand_at` to a shot/stand spot the level's
+//! collision probe clears) and then operate everything through the real input — the level's
+//! kind-0 double swing doors wedge the nav walker (see the report).
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -101,7 +104,6 @@ fn exit_centre(w: &Walker) -> [f32; 3] {
 #[test]
 fn the_walk_plate_raises_its_channel_and_the_sister_does_not() {
     let iso = iso();
-    if std::env::var_os("NF_INTERACT03_ALL").is_none() { eprintln!("skipping (set NF_INTERACT03_ALL to run the not-yet-green walks)"); return; }
     let mut w = load_ready(&iso);
     let sim = w.scene.sim.as_ref().unwrap();
     let plate = sim.drones.triggers.iter().enumerate()
@@ -182,7 +184,6 @@ fn the_e_plate_unlocks_and_opens_the_secret_bedroom_door() {
 #[test]
 fn the_corridor_slider_opens_on_e_and_the_sister_keeps_it_shut() {
     let iso = iso();
-    if std::env::var_os("NF_INTERACT03_ALL").is_none() { eprintln!("skipping (set NF_INTERACT03_ALL to run the not-yet-green walks)"); return; }
     let mut w = load_ready(&iso);
     let sim = w.scene.sim.as_ref().unwrap();
     let di = sim.drones.doors.list.iter()
@@ -335,7 +336,6 @@ fn a_bullet_smashes_the_stereo_destroyable() {
 #[test]
 fn a_bullet_shatters_the_glass_breakable() {
     let iso = iso();
-    if std::env::var_os("NF_INTERACT03_ALL").is_none() { eprintln!("skipping (set NF_INTERACT03_ALL to run the not-yet-green walks)"); return; }
     let mut w = load_ready(&iso);
     let sim = w.scene.sim.as_ref().unwrap();
     let bi = sim.drones.breaks.list.iter().enumerate()
