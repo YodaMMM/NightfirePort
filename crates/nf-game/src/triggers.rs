@@ -1,7 +1,10 @@
 //! Switch channels and trigger objects (docs/systems/triggers.md): placements 0xEA TouchOnce, 0xEB Touch, 0xEC
 //! MultiplexIn (AND), 0xED MultiplexSIn (ordered AND), 0xEE MultiplexOut, 0xEF MultiplexOrIn (OR), 0xDC Trigger (type
 //! = p0). Volumes are the trigger model's collision triangles at the placement transform; contacts are capsules
-//! (Bond: radius 0.55 from feet + 0.55 to feet + 1.86; drones: *suggested* radius 0.4 from the feet to the head).
+//! (Bond: radius 0.55 from feet + 0.55 to feet + 1.86 — the port's measured reach rides `pos − 0.6`, see
+//! drone.rs's walk note; drones: the game's collision sphere radius is **0.4** in the normal arm
+//! [M `NDrone2_Collision` 0x140e90:96 `fVar7 = 0.4`], **0.55 for type-0xC drones** [M :97], **0.3** in the
+//! low-sphere state [M :84], swept sphere-per-arm — the port's feet−1.0→head r-0.4 capsule models the normal arm).
 
 use crate::world::V3;
 use nf_formats::level::Level;
@@ -52,9 +55,11 @@ pub fn movie_code_next_level(code: u32, fallback: u32) -> u32 {
     }
 }
 
-/// The level-exit request's resolve: the port's stand-in for `ResetMap_LevelToLoad` (0x1d3800) +
-/// `ResetMap_Load`'s phase-0/phase-2 cycle compressed to the archive the port finally loads [M
-/// 0x1d6360:29-36, 173-182]. A plain 0x0700xxxx code loads as-is. A 0x0720xxxx cut-scene code runs
+/// The level-exit request's resolve: the port's model of `ResetMap_Load`'s phase-2 fallback
+/// (`GetLevelToLoadFromMovieCode` + the GameState+8 mask — 0x1d6360:26-36 loads GameState+8's archive
+/// as-is, :173 re-reads GameState+0x10 through the movie table, and 0x1d3560:97-98's fall-through
+/// masks it `& 0xff00ffff`) [M], paired with `wrap_intro` (0x1d3800's wrap switch) as phase 0. A plain
+/// 0x0700xxxx code loads as-is. A 0x0720xxxx cut-scene code runs
 /// phase 2 (`GetLevelToLoadFromMovieCode` → a 0x0710xxxx briefing code) and then the second cycle's
 /// phase-2 fallback masks it to the playable level (0x1d3560:97-98: `GameState+8 & 0xff00ffff`).
 /// A 0x0730xxxx driving code resolves straight to its front-end landing (the table has every driving
@@ -185,7 +190,7 @@ pub struct Channels { pub v: Vec<u8>, pub time: Vec<u32>,
     /// channel-persistence: every channel a script op has ever written in this level — the script
     /// event 0xD / 0x11 writes (`Script_EventHandler` 0x1d94c0) and the SP out writes — accumulated
     /// so the census can tell script-owned channels (data-driven from the disc's own scripts) from
-    /// a port-only writer. The [S] stand-ins deliberately do NOT land here.
+    /// a port-only writer. The port's stand-in writers deliberately do NOT land here.
     pub script_channels: std::collections::BTreeSet<u8> }
 
 impl Default for Channels { fn default() -> Channels { Channels { v: vec![0; 256], time: vec![0; 256], writes: None, script_channels: std::collections::BTreeSet::new() } } }
@@ -383,7 +388,13 @@ impl Trigger {
         // Not for Bond hanging on a wire / zipline: there the bounds of the chasm's plunge volume enclose him, and
         // the containment contact fired the falling-to-death cut-scene the moment he grabbed the 07000005 cable
         // (ch 0xBE, merge of map-mayhew over fix-wire). In the game the crossing has no fall or death path at all
-        // [M Player_Wire 0x197658]. [S]: the game's exact contact rule for a hanging Bond isn't read yet.
+        // [M Player_Wire 0x197658]. THE HANG CONTACT RULE, now read: the game's wire-hang substate (6) shares the
+        // STANDING capsule arm — `Player_Collision` 0x194df0's second switch case 0 == case 6 (radius 0.275,
+        // spheres pos+0.55 / pos+0.275−cc, hittest word 0x800 [M 0x195070 case 0/6]) — there is NO special hang
+        // capsule, and the contact itself is the capsule vs the volume's own mesh through the collide walk (no
+        // containment shortcut). The port's `contain: !hanging` below is that mesh-only rule emulated for the
+        // hanging pose inside the port's small-tri containment approximation; the residual (whether the game's
+        // broad phase credits a plain bounds-sphere overlap as a trigger contact for ANY toucher) is a live check.
         // fix-objects2: containment is a PLATE/ROOM contact, not a valley-shell one. The game's contact is the
         // capsule against the volume's own mesh (the shells fire on crossing; standing strictly inside a hollow
         // volume touches nothing — 07000008's boarding platform sits INSIDE plunge #54's AABB and the game's player
@@ -408,9 +419,17 @@ impl Trigger {
     /// the base is 1, or `ch[ext+0x2E]` when `mask & 1`; every nonzero filter entry must then pass (0xB needs a drone
     /// contact, 0xE the player, anything else a drone whose skin hash matches the entry's low 16 bits). An empty
     /// filter list returns the base alone.
-    fn hit(&self, ch: &Channels, touchers: &[Toucher]) -> bool {
+    /// `blasts` are the tick's alive class-5 (explosion) contacts: `Trigger_Hit` classifies a contact entry with
+    /// class byte 5 into bit 2 [M 0x1b1fc8:30-34], the contact itself being the explosion object's sphere vs the
+    /// trigger's volume in the collide walk [M 0x1ea398]; the port sweeps the alive blasts' spheres
+    /// (`Explosion`'s (pos, radius)) through the same `touched_by` volume.
+    fn hit(&self, ch: &Channels, touchers: &[Toucher], blasts: &[BlastContact]) -> bool {
         let player = touchers.iter().any(|c| !c.drone && self.touched_by(c));
         let drone_touch = touchers.iter().any(|c| c.drone && self.touched_by(c));
+        // The class-5 contacts [M 0x1b1fc8:30-34 + the collide walk]: the blast sphere vs this volume.
+        let blasts5: Vec<&BlastContact> = blasts.iter()
+            .filter(|b| self.touched_by(&Toucher { a: b.pos, b: b.pos, r: b.r, drone: false, skin: 0, contain: false }))
+            .collect();
         let m = self.mask;
         // The filter branch runs only for types 1/2 with mask & 0x18 and a player/drone contact [M 0x1b1fc8:56].
         if m & 0x18 != 0 && (player || drone_touch) {
@@ -433,9 +452,27 @@ impl Trigger {
             }
             return acc;
         }
-        // mask & 2 (class-5 object contacts, 0x1b1fc8:124-159): the port has no object touchers — contacts bit 1
-        // never sets (documented stand-in, trigger-port-check #11).
-        (m & 8 != 0 && player) || (m & 0x10 != 0 && drone_touch)
+        // mask & 2 (class-5 contacts, 0x1b1fc8:124-159): with an explosion contact and types 1/2,
+        // every nonzero filter entry must match the explosion's id short (the game reads
+        // `*(*(obj+0xE0)+0x44)+2` off the explosion object [M :141-155]; the port's
+        // `Explosion.weapon_type` is that id); an EMPTY filter list returns 1 [M :130-135]. A
+        // class-5 contact with a non-1/2 type falls through to the fallback. The port used to
+        // model no class-5 contacts at all ("contacts bit 1 never sets", trigger-port-check #11)
+        // — the disc census (trigger_mask2_census_live) shows the default-mask-2 TouchOnce family
+        // (raw p9 = 0 → `Trigger_Create` 0x1b1828's default) is common on every story level.
+        if m & 2 != 0 && !blasts5.is_empty() && matches!(self.kind, kind::TOUCH_ONCE | kind::TOUCH) {
+            let mut acc = true;
+            let mut any = false;
+            for &f in self.list.iter().take_while(|&&f| f != 0) {
+                any = true;
+                acc = acc && blasts5.iter().any(|b| b.id == (f & 0xffff) as u16);
+            }
+            if !any { return true; }
+            return acc;
+        }
+        // The fallback [M :160-163 `return (uVar1 & uVar8) != 0`]: the full mask vs the collected
+        // contact bits (8 player, 0x10 drone, 2 class-5).
+        (m & 8 != 0 && player) || (m & 0x10 != 0 && drone_touch) || (m & 2 != 0 && !blasts5.is_empty())
     }
 
     /// `Trigger_Locked` (0x1b2fc8) — the aim-hint/exit lock test over the port's fields. Type 10
@@ -503,7 +540,7 @@ impl Trigger {
     /// `Trigger_Update` (0x1B1A78) for every type except Touch (run in `calc`). The mux input scan walks the slots
     /// as a PREFIX — a zero slot ends the list (a mid-list 0 hides everything after it) [M 0x1b1a78 case 3/4/0xC
     /// loops: `while input[k] != 0`].
-    pub fn update(&mut self, ch: &mut Channels, touchers: &[Toucher], frame: u32) {
+    pub fn update(&mut self, ch: &mut Channels, touchers: &[Toucher], blasts: &[BlastContact], frame: u32) {
         if self.gone || (self.lock != 0 && ch.on(self.lock as u32)) { return; }
         match self.kind {
             kind::TOUCH_ONCE => {
@@ -513,7 +550,7 @@ impl Trigger {
                     if self.glist_0x10 { self.gone = true; }
                     return;
                 }
-                if self.hit(ch, touchers) { ch.set(self.out as u32, 1, frame); }
+                if self.hit(ch, touchers, blasts) { ch.set(self.out as u32, 1, frame); }
             }
             kind::AND | kind::OR => {
                 // Case 3 / 0xC: the accumulator starts at 1 for the AND (an empty/zero prefix writes 1 —
@@ -629,9 +666,11 @@ pub fn build(level: &Level) -> Vec<Trigger> {
 ///    [D]], and the player's part is standing on the plate. E on that plate is REFUSED by the
 ///    game's `mask & 4` gate (0x18 & 4 = 0 [D #180 mask; M 0x1b2318:23-25]).
 ///
-/// Returns `(trigger, e_can_fire)`. The fallback choice itself is the port's survey mechanic
-/// (`// [S] unverified` as a resolution rule); every fact it rests on is tagged above. `None`
-/// when the level has no LOAD_LEVEL exit, or a mesh-less one with no reachable gate plate.
+/// Returns `(trigger, e_can_fire)`. The fallback choice is a PORT-ONLY SURVEY MECHANIC (the game has
+/// no such resolver — its triggers just run; this serves the campaign/flow legs and the tests), built
+/// entirely on the tagged facts above: the plate raises the exit's gate channel [M 0x1b1a78:162-166
+/// case 10] and the disc's own wiring connects them [D 07000001 #180 out 0x10 == the exit's gate].
+/// `None` when the level has no LOAD_LEVEL exit, or a mesh-less one with no reachable gate plate.
 pub fn exit_use_target(triggers: &[Trigger]) -> Option<(&Trigger, bool)> {
     let exit = triggers.iter().find(|t| t.kind == kind::LOAD_LEVEL && t.next_level != 0)?;
     if !exit.tris.is_empty() {
@@ -642,12 +681,19 @@ pub fn exit_use_target(triggers: &[Trigger]) -> Option<(&Trigger, bool)> {
     Some((plate, false))
 }
 
+/// One class-5 (explosion) contact candidate [M `Trigger_Hit` 0x1b1fc8:30-34 credits a class byte 5
+/// contact into bit 2]: the alive blast's sphere (the port's `Explosion` pos/radius) and the id the
+/// filter entries match (the game reads `*(*(obj+0xE0)+0x44)+2` off the explosion object [M :141-155];
+/// the port's `Explosion.weapon_type` carries it).
+#[derive(Clone, Copy, Debug)]
+pub struct BlastContact { pub pos: V3, pub r: f32, pub id: u16 }
+
 /// `Trigger_Calc` (0x1B1900): level latches, then the Touch triggers (their channels cleared, then OR-ed).
-pub fn calc(level: u32, triggers: &mut [Trigger], ch: &mut Channels, touchers: &[Toucher], frame: u32) {
+pub fn calc(level: u32, triggers: &mut [Trigger], ch: &mut Channels, touchers: &[Toucher], blasts: &[BlastContact], frame: u32) {
     if level == 0x0700_0005 && ch.on(0xa4) { ch.set(0x6f, 1, frame); }
     if level == 0x0700_000b && ch.on(0x34) { ch.set(0x2d, 1, frame); }
     for t in triggers.iter().filter(|t| t.kind == kind::TOUCH) { ch.set(t.out as u32, 0, frame); }
-    let hits: Vec<u8> = triggers.iter().filter(|t| t.kind == kind::TOUCH && !(t.lock != 0 && ch.on(t.lock as u32)) && t.hit(ch, touchers)).map(|t| t.out).collect();
+    let hits: Vec<u8> = triggers.iter().filter(|t| t.kind == kind::TOUCH && !(t.lock != 0 && ch.on(t.lock as u32)) && t.hit(ch, touchers, blasts)).map(|t| t.out).collect();
     for out in hits { ch.set(out as u32, 1, frame); }
 }
 
@@ -668,20 +714,47 @@ mod tests {
         let mut or = Trigger { kind: kind::OR, out: 0x22, list: vec![0x23, 0x24], ..plate(kind::OR, 0, 0, vec![]) };
         let away = [Toucher::player([5.0, 0.0, 5.0])];
         let on = [Toucher::player([0.5, -0.3, 0.0])];
-        once.update(&mut ch, &away, 1);
-        or.update(&mut ch, &away, 1);
+        once.update(&mut ch, &away, &[], 1);
+        or.update(&mut ch, &away, &[], 1);
         assert!(!ch.on(0x22));
-        once.update(&mut ch, &on, 2);
-        or.update(&mut ch, &on, 2);
+        once.update(&mut ch, &on, &[], 2);
+        or.update(&mut ch, &on, &[], 2);
         assert!(ch.on(0x23) && ch.on(0x22));
         // Latched: stays on after Bond leaves; the TouchOnce removes itself.
-        once.update(&mut ch, &away, 3);
-        or.update(&mut ch, &away, 3);
+        once.update(&mut ch, &away, &[], 3);
+        or.update(&mut ch, &away, &[], 3);
         assert!(ch.on(0x22) && once.gone);
         // A drone-only plate ignores Bond.
         let drone_plate = plate(kind::TOUCH_ONCE, 0x30, 0x10, vec![]);
-        assert!(!drone_plate.hit(&ch, &on));
-        assert!(drone_plate.hit(&ch, &[Toucher { drone: true, ..on[0] }]));
+        assert!(!drone_plate.hit(&ch, &on, &[]));
+        assert!(drone_plate.hit(&ch, &[Toucher { drone: true, ..on[0] }], &[]));
+    }
+
+    /// The class-5 (explosion) contact fires a default-mask-2 TouchOnce [M `Trigger_Hit`
+    /// 0x1b1fc8:124-159 — the mask&2 arm, empty filter → 1, a filter entry matches the explosion's
+    /// id short; the mask default 2 = `Trigger_Create` 0x1b1828; the disc census
+    /// trigger_mask2_census_live: the whole TouchOnce family on 07000013/15/16/4a carries raw
+    /// p9 = 0]. The stand-in ("contacts bit 1 never sets") failed the first assert.
+    #[test]
+    fn class5_blast_contact_fires_the_default_mask2_plate() {
+        let mut ch = Channels::default();
+        let mut once = plate(kind::TOUCH_ONCE, 0x08, 2, vec![]);
+        let blasts = [BlastContact { pos: [0.0, 0.5, 0.0], r: 2.0, id: 0x1a }];
+        once.update(&mut ch, &[], &blasts, 1);
+        assert!(ch.on(0x08), "the blast at the plate fires the mask-2 TouchOnce [M 0x1b1fc8:130-135]");
+        // Sister 1: a player contact cannot — mask 2 has no 0x8 bit, the fallback never fires it.
+        let mut ch2 = Channels::default();
+        let mut once2 = plate(kind::TOUCH_ONCE, 0x08, 2, vec![]);
+        once2.update(&mut ch2, &[Toucher::player([0.0, 0.0, 0.0])], &[], 1);
+        assert!(!ch2.on(0x08), "a player contact cannot fire a mask-2-only plate");
+        // Sister 2: the filtered arm — the entry must match the blast's id [M :141-155].
+        let mut ch3 = Channels::default();
+        let mut filt = plate(kind::TOUCH_ONCE, 0x08, 2, vec![0x33]);
+        filt.update(&mut ch3, &[], &blasts, 1);
+        assert!(!ch3.on(0x08), "a blast of another id does not satisfy the filter entry");
+        let mut ch4 = Channels::default();
+        filt.update(&mut ch4, &[], &[BlastContact { pos: [0.0, 0.5, 0.0], r: 2.0, id: 0x33 }], 1);
+        assert!(ch4.on(0x08), "the matching blast id satisfies the filter entry [M :141-155]");
     }
 
     /// The movie trigger (0xF4 → action 0xd), `Trigger_Update` case 0xd [M 0x1b1a78:190-201, disasm
@@ -702,11 +775,11 @@ mod tests {
         movie.movie_code = 0x0720_004a;
         let touchers: [Toucher; 0] = [];
         // Sister 2 first: the channel off → nothing (and the channel is not cleared).
-        movie.update(&mut ch, &touchers, 2);
+        movie.update(&mut ch, &touchers, &[], 2);
         assert!(!movie.movie_fired, "channel off → no fire");
         // Fire: the channel on → cleared + the movie code carried.
         ch.set(0x2a, 1, 1);
-        movie.update(&mut ch, &touchers, 3);
+        movie.update(&mut ch, &touchers, &[], 3);
         assert!(movie.movie_fired, "input slot non-zero + channel on → case 0xd fires [M 0x1b1f24-0x1b1f48]");
         assert!(!ch.on(0x2a), "the fire clears the input channel [M 0x1b1f48 `sb zero,0(a0)`]");
         assert_eq!(movie.movie_code, 0x0720_004a, "the out slot's full u32 rides (ext+0x20 → GameState+0x10 [M 0x1b1f68])");
@@ -714,14 +787,14 @@ mod tests {
         // The port's re-arm rule: the walk drains `movie_fired`; a re-armed channel fires again.
         movie.movie_fired = false;
         ch.set(0x2a, 1, 4);
-        movie.update(&mut ch, &touchers, 5);
+        movie.update(&mut ch, &touchers, &[], 5);
         assert!(movie.movie_fired, "re-armed → fires again (no latch in the game's arm)");
         // Sister 1: the disc's record shape — input slot 0 (p2 = 0 [D]) — never fires, even with
         // channel 0 armed (channel 0 is a real channel, but the SLOT guard fails first).
         let mut discs = plate(kind::MOVIE, 0, 4, vec![0]);
         discs.movie_code = 0;
         ch.set(0, 1, 6);
-        discs.update(&mut ch, &touchers, 7);
+        discs.update(&mut ch, &touchers, &[], 7);
         assert!(!discs.movie_fired, "input slot 0 → the first guard fails [M 0x1b1f24-0x1b1f28] — the 07000041 record's update path is inert");
         assert!(ch.on(0), "channel 0 untouched (the clear only runs on a fire)");
     }
@@ -755,15 +828,15 @@ mod tests {
         let mut exit = Trigger { kind: kind::LOAD_LEVEL, gate: 0x1D, next_level: 0x0700_0006, ..plate(kind::LOAD_LEVEL, 0, 8, vec![]) };
         let touchers: [Toucher; 0] = [];
         // Sister: gate off → nothing.
-        exit.update(&mut ch, &touchers, 1);
+        exit.update(&mut ch, &touchers, &[], 1);
         assert!(!exit.gone);
         // Gate on → fires, latches.
         ch.set(0x1D, 1, 1);
-        exit.update(&mut ch, &touchers, 2);
+        exit.update(&mut ch, &touchers, &[], 2);
         assert!(exit.gone);
         assert_eq!(exit.next_level, 0x0700_0006, "carries the next level hashcode");
         // Stays gone.
-        exit.update(&mut ch, &touchers, 3);
+        exit.update(&mut ch, &touchers, &[], 3);
         assert!(exit.gone);
     }
 
@@ -895,16 +968,16 @@ mod tests {
         ch.set(0x20, 1, 1);
         // Empty list → AND writes 1 (the port used to write 0).
         let mut empty = plate(kind::AND, 0x21, 0, vec![]);
-        empty.update(&mut ch, &[], 2);
+        empty.update(&mut ch, &[], &[], 2);
         assert!(ch.on(0x21), "an empty MuxIn latches its output ON (0x1b1cbc)");
         // Mid-list zero: inputs after it are invisible to the scan.
         ch.set(0x22, 1, 3);
         let mut mid = Trigger { kind: kind::AND, out: 0x23, list: vec![0x20, 0, 0x22], ..plate(kind::AND, 0, 0, vec![]) };
-        mid.update(&mut ch, &[], 4);
+        mid.update(&mut ch, &[], &[], 4);
         assert!(ch.on(0x23), "AND stops at the zero slot: only the prefix matters");
         // The same list on an OR: the zero slot also ends the scan (0x22 ignored).
         let mut orm = Trigger { kind: kind::OR, out: 0x24, list: vec![0, 0x22], ..plate(kind::OR, 0, 0, vec![]) };
-        orm.update(&mut ch, &[], 5);
+        orm.update(&mut ch, &[], &[], 5);
         assert!(!ch.on(0x24), "OR over an all-zero prefix writes 0");
     }
 
@@ -918,21 +991,21 @@ mod tests {
         ch.set(0x30, 1, 10);
         ch.set(0x31, 1, 110);
         let mut seq = Trigger { kind: kind::SEQ_AND, out: 0x32, list: vec![0x30, 0x31], ..plate(kind::SEQ_AND, 0, 0, vec![]) };
-        seq.update(&mut ch, &[], 111);
+        seq.update(&mut ch, &[], &[], 111);
         assert!(ch.on(0x32), "no upper bound on the SEQ_AND window");
         // Up to 4 frames of skew the other way is also accepted (cur older than prev).
         let mut ch = Channels::default();
         ch.set(0x30, 1, 50);
         ch.set(0x31, 1, 47); // 4 frames older: 50-4 <= 47
         let mut seq = Trigger { kind: kind::SEQ_AND, out: 0x32, list: vec![0x30, 0x31], ..plate(kind::SEQ_AND, 0, 0, vec![]) };
-        seq.update(&mut ch, &[], 51);
+        seq.update(&mut ch, &[], &[], 51);
         assert!(ch.on(0x32), "the current input may be up to 4 frames older");
         // Sister: more than 4 frames of skew the other way fails.
         let mut ch = Channels::default();
         ch.set(0x30, 1, 50);
         ch.set(0x31, 1, 45); // 5 frames older: 50-4 > 45
         let mut seq = Trigger { kind: kind::SEQ_AND, out: 0x32, list: vec![0x30, 0x31], ..plate(kind::SEQ_AND, 0, 0, vec![]) };
-        seq.update(&mut ch, &[], 51);
+        seq.update(&mut ch, &[], &[], 51);
         assert!(!ch.on(0x32));
     }
 
@@ -958,15 +1031,15 @@ mod tests {
         let away = [Toucher::player([5.0, 0.0, 5.0])];
         // Latch via touch, leave, then re-arm the channel externally: with the flag the plate deletes itself.
         let mut t = plate(kind::TOUCH_ONCE, 0x50, 8, vec![]);
-        t.update(&mut ch, &on, 1);
+        t.update(&mut ch, &on, &[], 1);
         assert!(ch.on(0x50));
-        t.update(&mut ch, &away, 2);
+        t.update(&mut ch, &away, &[], 2);
         assert!(t.gone, "glist 0x10 set: the TouchOnce deletes itself");
         // Without the glist bit the delete is refused (the port models every TouchOnce with the bit — live data).
         let mut ch2 = Channels::default();
         ch2.set(0x50, 1, 1);
         let mut keep = Trigger { glist_0x10: false, ..plate(kind::TOUCH_ONCE, 0x50, 8, vec![]) };
-        keep.update(&mut ch2, &away, 2);
+        keep.update(&mut ch2, &away, &[], 2);
         assert!(!keep.gone, "no glist 0x10: the trigger survives");
     }
 
