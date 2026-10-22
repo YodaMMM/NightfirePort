@@ -34,7 +34,14 @@ const LOST_LIMIT: f32 = 60.0 * 15.0;
 /// 3 beam (the visible cone), 4 corona (billboard at the lamp).
 #[derive(Clone, Debug)]
 pub struct Part {
-    /// Index into the main map's placements (nf-view's stand-in for the object's glist).
+    /// Index into the main map's placements — the port's handle to the SAME map object whose
+    /// celglist the game stores at `obj+0xD8` [M Searchlight_Create 0x1cb4f8:73-76
+    /// `*(obj+0xd8) = param_4`; the glist comes from the placement's map-entity id,
+    /// parsemap_block_map_data_dynamic 0x1d1b68:79,95-96 `pCelList + id*0x50` -> case 0xDE
+    /// 0x1d04f0:342-343 passes it through]. nf-view resolves the index back to the map object
+    /// (and its glist) for the draw and the gfx bounds; the part is also linked into the cel's
+    /// DYNAMIC object list in the game (`control_link_object_to_cel` 0x1c9680 -> 0x1346b8:16-24),
+    /// which is what makes it bullet-pickable while the spot ray's mask 0x18 skips it.
     pub placement: usize,
     pub kind: u8,
     /// `obj+0x30`. A spot is moved −10000 at create until the first ray hit repositions it [M].
@@ -64,8 +71,11 @@ pub struct Part {
     pub light: Option<u32>,
     /// Coronas: the alpha byte (`obj+0x106`) and scale (`obj+0xE8`).
     pub alpha: u8, pub scale: f32,
-    /// Heads and mounts: the object's gfx box (the spot ray's own-housing skip stand-in still uses it;
-    /// the bullet path tests the sphere below, U-041 ported).
+    /// Heads and mounts: the object's gfx box [D parsed bounds; [L ee_start_05.bin head 016dfe70
+    /// ~0.5 units]] — kept as parsed data (the tests' fixtures pin it). No logic reads it any more:
+    /// the spot ray's own-housing box skip is GONE (the game's mask 0x18 ray tests static geometry
+    /// only and its PickObj refusal is dead — see the spot-ray comment), and the bullet path tests
+    /// the world sphere below (U-041 ported).
     pub box_min: V3, pub box_max: V3,
     /// The part's glist bounding sphere, LOCAL (`glist+0x10` centre / `+0x1C` radius — the map object's
     /// `centre`/`radius` [D measured on AI_ShadowVolume: centre (0,1.5,0), radius 2.598 = the box half
@@ -155,9 +165,10 @@ fn cross3(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] *
 /// The fallback replaces `up` when |up·row2| > 0x3f7fbe77 (0.998993 — `lui at,3f7f; ori at,at,be77`
 /// [M 0x1df2a8 disasm 0x1df320-0x1df354], not 0.999). A degenerate vector ZEROES the row — the
 /// game's sqrt(x)==0 arms store 0.0 to all three components [M 0x1df2a8 disasm 0x1df2d8-0x1df310 /
-/// 0x1df3a8-0x1df3e0: swc1 f3(=0.0) to the vector's slots] — the old [1,0,0]/[0,1,0] stand-ins
-/// snapped the beam basis onto the world axes where the game's own math keeps the (exact-FP)
-/// cross direction sound and continuous, the playtest's "flip on its side". Normalization multiplies
+/// 0x1df3a8-0x1df3e0: swc1 f3(=0.0) to the vector's slots] (the old [1,0,0]/[0,1,0] fallback, long
+/// replaced, snapped the beam basis onto the world axes where the game's own math keeps the
+/// (exact-FP) cross direction sound and continuous — the playtest's "flip on its side").
+/// Normalization multiplies
 /// by the reciprocal [M 0x1df2f4/0x1df3c4: div.s f0,1.0,len; the VMUL], it does not divide.
 pub fn align2dir(dir: V3, up: V3, fallback: V3) -> Mat4 {
     let len = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2];
@@ -357,12 +368,24 @@ impl Searchlights {
             self.parts[m].matrix = mm;
         }
         // The spot [M]: a 100-unit ray along the aim; on a hit the spot sits on the surface, oriented by the
-        // hit normal. No hit: hidden. The ray's pick flags 0x18 do NOT exclude the player's class [M
-        // Collide_PickObj 0x1eae80:26-40 — the class-3 exclusion is mask 0x400, absent from 0x18], so when
-        // Bond stands in the beam the ray hits HIS world sphere (`obj+0x80` centre, `obj+0x8C` radius) first
-        // and the spot lands on him — that is what makes `Vec_Dist3D(spot, player) <= 2.0` [M 0x1cb900:251]
-        // arm the light in play at shallow beam angles, where a static-only ray would run past him to a far
-        // wall. The port adds the ray-vs-sphere test on top of the static segment.
+        // hit normal. No hit: hidden. The ray is `Collide_RayIntersect(pos, dir, head cel, head obj, NULL,
+        // hits, 0, mask 0x18)` [M 0x1cb900:201-208, disasm 0x1cbdb0-0x1cbe2c]. Mask 0x18's bit 0x10 makes
+        // Collide_Pick SKIP the per-cel dynamic-object walk and the ForcedList [M 0x1eb320:314-328,
+        // 370-374; disasm 0x1eb480-0x1eb49c] — the ray tests ONLY the map-static nodes (cel+0x18) and the
+        // cel's intrinsic geometry; the param_3 == param_2 source refusal lives only in Collide_PickObj
+        // [M 0x1eae80:57-59] and is DEAD on this path (PickObj runs for dynamic objects only). The
+        // searchlight parts are dynamic objects [M 0x1cb4f8:73-76 obj+0xD8 = the placement's glist;
+        // control_link_object_to_cel 0x1c9680 -> 0x1346b8:16-24], so the game's ray never tests the
+        // parts' own meshes — and nothing excludes the level's static housing geometry, which the ray
+        // legitimately hits (the port's static world measures the same first hit ~0.68 units below every
+        // 07000005 head, [L probe]). The old own-housing box skip stands in for a rule the game does not
+        // have (its PickObj refusal is unreachable under mask 0x10); REMOVED — the port's raw static
+        // segment IS the game's ray. The port's ray-vs-player-sphere test on top of the static segment is
+        // the port's own embellishment (the comment's old warrant — "flags 0x18 do not exclude the
+        // player's class" — missed that mask 0x10 skips the whole dynamic walk, Bond included): the game's
+        // spot lands on static geometry and `Vec_Dist3D(spot, player) <= 2.0` [M 0x1cb900:251] arms off
+        // the ground spot; a PCSX2 render check decides whether the spot may rest on Bond (live check in
+        // the report). The arming predicate below is untouched.
         if let Some(sp) = self.parts[head].links[2] {
             let (yaw, pitch) = (self.parts[head].yaw, self.parts[head].pitch);
             let dir = spherical(100.0, yaw, -pitch);
@@ -370,53 +393,8 @@ impl Searchlights {
             // The player's pick sphere: centre `obj+0x80` (the `Player.sph` the port fills from
             // `Bond::sphere_centre`), radius `M_CONTROL+0x8C` = 1.0576 [L ee_start_05.bin].
             const PLAYER_SPH_R: f32 = 1.0576;
-            // The game excludes the head's OWN cel and object from the spot ray (`Collide_RayIntersect`
-            // carries the source object, and `Collide_PickObj` 0x1eae80:57-59 refuses param_3 == param_2
-            // plus the hittest's two extra exclusion slots [M]). The port's ray origin sits inside the
-            // head's own platform/housing geometry, so the port skips everything the ray crosses before
-            // it exits the head's own gfx box — the same "not my own housing" effect [S for the box
-            // stand-in, M for the exclusion itself]. The box is the part's LOCAL-space bounds (the
-            // bullet stand-in tests it after the matrix's world→local transform), so the slab test runs
-            // in that local space too — the rotation preserves lengths, so the slab's t is the same
-            // parameter the world ray carries (`pos + dir·t`, |dir| = 100, t ∈ [0, 1] over the ray).
-            let mut skip = 0.0f32; // the skipped fraction of the 100-unit ray
-            {
-                let h = &self.parts[head];
-                let to_local = |v: V3| {
-                    let d = [v[0] - h.matrix[3][0], v[1] - h.matrix[3][1], v[2] - h.matrix[3][2]];
-                    [0, 1, 2].map(|k| d[0] * h.matrix[k][0] + d[1] * h.matrix[k][1] + d[2] * h.matrix[k][2])
-                };
-                let o = to_local(pos);
-                let dv = to_local([pos[0] + dir[0], pos[1] + dir[1], pos[2] + dir[2]]);
-                let (bmin, bmax) = (&h.box_min, &h.box_max);
-                let (mut t_near, mut t_far) = (f32::NEG_INFINITY, f32::INFINITY);
-                let mut inside = true;
-                for k in 0..3 {
-                    let d = dv[k] - o[k];
-                    if d.abs() < 1e-9 {
-                        if o[k] < bmin[k] || o[k] > bmax[k] { inside = false; }
-                    } else {
-                        let mut t1 = (bmin[k] - o[k]) / d;
-                        let mut t2 = (bmax[k] - o[k]) / d;
-                        if t1 > t2 { std::mem::swap(&mut t1, &mut t2); }
-                        t_near = t_near.max(t1);
-                        t_far = t_far.min(t2);
-                        if o[k] < bmin[k] || o[k] > bmax[k] { inside = false; }
-                    }
-                }
-                // Origin inside the box: skip to the exit; outside: skip the entry face. The cap keeps
-                // a wrong stand-in from pushing the start past the ray's end (the housing is a ~0.5-unit
-                // box [L ee_start_05.bin head 016dfe70]; 4 world units of skip is generous).
-                let skip_t = if inside { t_far } else if t_near <= t_far && t_near > 0.0 { t_near } else { 0.0 };
-                if skip_t.is_finite() { skip = (skip_t / 100.0).clamp(0.0, 0.04); }
-            }
-            let (skip_pos, skip_end) = if skip > 0.0 {
-                ([pos[0] + dir[0] * skip, pos[1] + dir[1] * skip, pos[2] + dir[2] * skip], end)
-            } else { (pos, end) };
-            let (mut t_hit, mut n_hit) = match d.world.segment_surface(skip_pos, skip_end, false) {
-                // t is the SUB-segment's fraction ([skip, 1] of the full ray): rebase it, so t_hit stays
-                // in the dir parametrization the player-sphere test below shares.
-                Some((t, n, _)) => (Some(skip + t * (1.0 - skip)), Some(n)),
+            let (mut t_hit, mut n_hit) = match d.world.segment_surface(pos, end, false) {
+                Some((t, n, _)) => (Some(t), Some(n)),
                 None => (None, None),
             };
             {
@@ -539,8 +517,8 @@ impl Searchlights {
         // 0x1eae80:88-90] — Searchlight_Create sets obj+0xD8 = the part's glist [M 0x1cb4f8:73-76].
         // Only the HEAD object's contacts matter: the mount is its own class-0x22 object whose update
         // returns before the walk (`if (*psVar2 != 1) return` [M 0x1cb900:89]), so its contacts — like the
-        // head's from a non-bullet attacker — are never read. The old stand-in tested the head's AND the
-        // mount's gfx boxes; the game does not.
+        // head's from a non-bullet attacker — are never read (the old box test on the head AND the
+        // mount is long replaced by this sphere pick).
         let (centre, radius) = {
             let h = &self.parts[head];
             let m = &h.matrix;
@@ -726,9 +704,9 @@ mod tests {
 
     /// The contact walk [M 0x1cb900:406-462]: a class-5 contact with damage > 0.0 on the head's world
     /// sphere breaks the light like the game — state 2, the spot/beam/corona deleted (links[2..4]
-    /// cleared), the MOUNT untouched [M :438-453], the glass 0xE6 at the head [M :455-456]. The old
-    /// stand-in (U-041) tested the head's AND the mount's gfx boxes and hid every link including the
-    /// mount — both differences this test pins.
+    /// cleared), the MOUNT untouched [M :438-453], the glass 0xE6 at the head [M :455-456]. (The
+    /// pre-U-041 port tested the head's AND the mount's gfx boxes and hid every link including the
+    /// mount — both differences this test pins against the sphere rule.)
     #[test]
     fn a_damaging_bullet_contact_breaks_the_head_like_the_game() {
         let mut sl = Searchlights::default();
@@ -745,7 +723,7 @@ mod tests {
         sl.parts[2].light = Some(7);
         // The shot crosses the head's sphere but NOT its gfx box: the sphere's radius 1 covers the box
         // half-diagonal only up to ~0.866 per axis, so the aim 0.95 off-axis is inside the sphere, outside
-        // the box — the game's pick (the sphere) contacts, the old stand-in's box test would not.
+        // the box — the game's pick (the sphere) contacts; the pre-U-041 box test would have missed it.
         let shot = Shot { from: [-3.0, 0.0, 0.95], to: [3.0, 0.0, 0.95], damage: 3.5, segment: true };
         let mut sounds = Vec::new();
         sl.bullet_check(1, &[shot], &mut sounds);
@@ -761,8 +739,8 @@ mod tests {
 
     /// Sister of the break test: a shot through the MOUNT's volume but outside the head's sphere does NOT
     /// break the light — the mount is its own class-0x22 object whose update returns before the contact
-    /// walk [M 0x1cb900:89], so nobody reads its contacts. The old stand-in walked the mount's box and
-    /// broke here (the task's U-041 symptom).
+    /// walk [M 0x1cb900:89], so nobody reads its contacts. (The pre-U-041 port walked the mount's box
+    /// and broke here — the U-041 symptom this sister guards.)
     #[test]
     fn a_mount_only_contact_does_not_break_the_head() {
         let mut sl = Searchlights::default();
