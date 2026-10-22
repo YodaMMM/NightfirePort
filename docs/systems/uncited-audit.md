@@ -209,7 +209,8 @@ greps over `work/decomp/ACTION.ELF/`; where the decompile looked incomplete the 
   to spawn, full goal-machine reset (+0x730=0xF9, +0x765=0xFF, +0x766=9), SetState(0xF9).
   Without it a bot that leaves the map wanders in the void forever.
 - **Tase scream broadcast** (`NDrone2_DroneAlertToPosition` 0x14a498 on tase ENTER, prop 0x32):
-  the port screams on bullet/punch only (cited partial at drone.rs handle_taser).
+  CLOSED by standins-drone-921 — the TASER ENTER queues the same `pending_shout` SCREAM
+  `send_hurt_scream` uses, under the same three gates [M 0x162b98:57-71 → 0x14a498:11-27].
 - **Door-guard pairing** (`NDrone2_DoorGuardHandler` 0x1416d8 + `SetDronePartner` 0x141360):
   CivilianDoorGuard 0x31 (0x160648) exists as a const with no arms (WORKLOG 3969).
 - **MP_NeedSkin / MP_setLoadingSkins / MP_Pickup_PostLoadInit** (0x120c48 / 0x1261e8 /
