@@ -35,3 +35,39 @@ The DTYPE-4 executioner and its attack beat. Handler addresses are `NDrone2_Stat
 The port is compile- and regression-covered (nf-game lib 352/0 at the time of writing). A 07000012
 real-path live test (walk to map 38's executioners, assert they pair and take state 8, then 9 on the
 Global beat) is future work — see the report's live checks.
+
+## Mission dialogue (the 0x1A monitor) — hostage-killer-dialogue, 2026-10-22
+
+`NDrone2_DSTATE_HostageKiller` case 3 calls `NDrone2_MonitorTalkToMissionObj` 0x144340 before the
+opponent look [M 0x15c728:34]; case 0x1A runs `NDrone2_TalkToMissionObj` 0x14a8b8 [M :86-89].
+
+- The sequencer [M 0x144340:10-73]: step counter `+0x4CE` (u16, DefaultInit 0x14b300:80 zeroes it),
+  the hostage obj at `+0x2B0`. Step 0: msg 0x1A to the captor's own obj, step 1 [M :18-22]. Step 1:
+  wait on the captor's own `+0x4D0` (the busy test clears a finished line in place [M :10-24]), then
+  msg 0x1A to the hostage, step 2 [M :26-29]. Step 2: wait on the HOSTAGE's `+0x4D0` — read live
+  through hostage obj+0xE0 → its drone struct — clearing a finished one [M :47-56], then msg 0x1A to
+  the captor, step 1 [M :58-73]. Captor and hostage alternate lines, each gated on the other's voice.
+- The 0x1A handler [M 0x14a8b8:8-21]: `+0xC5` 4 → `0x29 + Rand(6)`, 5 → `0x2F + Rand(4)`, else
+  nothing; `SpeechSFX(idx, 0, 0, 0)`.
+- Port (`drone.rs`): `Drone.talk_step` (+0x4CE) and `monitor_talk_to_mission_obj`, called first in
+  the `(HOSTAGE_KILLER, UPDATE)` arm (gated on the pairing link — a linkless HostageKiller UPDATE is
+  unreachable [M 0x15c728:21-29]); `(HOSTAGE_KILLER, MISSION_TALK)` reuses `talk_to_mission_obj`.
+  Self-sends ride `self_msg` (`Drone_SM_SendMsgSelf`'s port model — the game's `Drone_Message`
+  0x13a678 ends in `Drone_SM_SendMsgSelf` for any target), the hostage send rides `msg_out` →
+  `Drones::delayed_msgs`. The hostage's tick-head voice state is snapshotted in `Drones::tick`
+  (`voice_pool`) into `Drone.hostage_voice` — the game reads it live through the hostage's obj+0xE0
+  [M 0x144340:47-56], which the walk's borrow can't reach. The game's step-2 clear of the hostage's
+  finished `+0x4D0` [M :53] is flagged (`hostage_voice_clear`) and applied post-walk, before the
+  speech pass: `speech()`'s non-forced gate refuses a line while any voice is referenced [M
+  0x141848's `+0x4D0` gate], so a lingering finished voice would silence every later hostage reply.
+  **[S] port model:** the game's SpeechSFX sets `+0x4D0` synchronously inside the 0x1A handler; the
+  port's voice lands in the post-walk speech pass, so a pending `talks` entry counts as the
+  in-flight `+0x4D0` in both busy tests. The `+0x2B0 == 0` broadcast (`Drone_Message` 0 →
+  `Drone_SM_BroadcastMsg` [M 0x13a678:14-17]) is unreachable — the pairing fail arm leaves the
+  state before any UPDATE [M 0x15c728:27-29]; the port sends nothing there.
+
+> Correction (review 2026-10-21, nf-soak "review other-3b"): the shipped-game reachability of these
+> states is the mode-4 killer pairs on 07000002 (×2) and 07000003 (×2) — placement mode param 4 →
+> `+0xC5` = 4 via `NDrone2_GetDTYPENEW` 0x14c938 case 4 [M]; the k16=4 census shows no mode-4
+> placements on 07000012 (its dtype-4 placements carry mode param 0 [D drone-props]). The
+> 07000012-map-38 census above stands as recorded; the live coverage below is 07000002.
