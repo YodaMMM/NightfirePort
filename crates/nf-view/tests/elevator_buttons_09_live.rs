@@ -54,7 +54,7 @@ fn lift_doors(sim: &nf_view::scene::Sim) -> Vec<&nf_game::ss::Ss> {
     sim.drones.sss.list.iter().filter(|s| s.channel == 57).collect()
 }
 
-/// Data probe (ISO-gated): the models table resolves the panel art — #70's own model and the
+/// Data probe (ISO-gated): the models table resolves the panel art — the
 /// script entities' gfx 0x020005EA/0x020005EB — as small world-baked spheres at PANEL. Sister:
 /// an unused hash resolves to nothing.
 #[test]
@@ -65,7 +65,9 @@ fn panel_spheres_resolve_at_the_lobby_panel() {
     let sp = elevator_sp(sim);
     assert_eq!(sp.scripts[0], 0x0600_059B, "SP #70's script A is the activation FX [D param 0]");
     let models = &sim.models;
-    for (what, hash) in [("#70's own model", sp.model), ("entity A gfx", 0x0200_05EAu32), ("entity B gfx", 0x0200_05EBu32)] {
+    // (standins-nis-932 removed the SP's placement-model field: no reader left — the SP body is
+    // inert to the use pick [M Player_Activate 0x1a5170:121-122] — so only the entities' gfx are probed.)
+    for (what, hash) in [("entity A gfx", 0x0200_05EAu32), ("entity B gfx", 0x0200_05EBu32)] {
         let m = models.get(&hash)
             .unwrap_or_else(|| panic!("{what} ({hash:#x}) must resolve in the level's model table"));
         eprintln!("[09] {what} {hash:#x}: centre {:?} r {:.3}", m.centre, m.radius);
