@@ -5055,6 +5055,22 @@ impl App {
                         if !self.noclip {
                             let h = sim.bond.head();
                             self.cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom };
+                            // mp-local-look (user report 2026-10-21: online aim "very sluggish …
+                            // moving the mouse was delayed to what the screen showed"): the lockstep
+                            // runs this player's turn/look `input_delay` ticks late (3 at least, up to
+                            // 15 with the adaptive delay over the internet). The camera adds the turn/
+                            // look already scheduled but not yet run, plus the mouse gathered since the
+                            // last tick, so the view answers at once; the shared sim (shots, the body
+                            // other players see) keeps the delayed input. Not while aiming — the aim
+                            // mode spends the turn on the crosshair first (Sim::step_bond's cursor arm).
+                            if let Some(n) = self.net.as_ref() {
+                                if !sim.aiming && !sim.disabled {
+                                    let (pt, pl) = n.0.borrow().pending_local_look(self.net_tick.wrapping_sub(1));
+                                    self.cam.yaw += pt + self.turn;
+                                    let pitch = (sim.bond.pitch + pl + self.look).clamp(-1.0, 1.0);
+                                    self.cam.pitch = pitch * std::f32::consts::FRAC_PI_2;
+                                }
+                            }
                             // A script's cut-scene camera takes over the view (`Camera_Enable(4)`).
                             if let Some((p, yaw, pitch, fov)) = sim.script_camera() { self.cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; }
                             // fix-sentinel-camera-play [M `Player_PositionCamera` 0x18f5d8 case 0xc]: while the
