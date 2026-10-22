@@ -266,10 +266,11 @@ pub struct Input {
     /// precedent).
     pub stabilise: bool,
     /// options-census: the Advanced options' Crouch mode (control 0x1000_0125 → PlayerSetting
-    /// +0x04): true = Toggle (stand on the crouch/jump press edge), false = Hold (stand when the
-    /// crouch action is not held) [M Player_SSCrouch 0x1924c0:84-105]. The host fills it from the
-    /// option drain each tick; the derive default (Hold) is never live — the drain always sets it.
-    pub crouch_toggle: bool,
+    /// +0x04): false = Toggle (stand on the crouch/jump press edge — the game's default, byte 1
+    /// [M Input_Init 0x17edd8]), true = Hold (stand when the crouch action is not held) [M
+    /// Player_SSCrouch 0x1924c0:84-105]. fix-909c: inverted from `crouch_toggle` so the derived
+    /// `Default` (every headless/test/replay/shot input) is the game's Toggle, not Hold.
+    pub crouch_hold: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1405,7 +1406,7 @@ impl Bond {
             // options-census: the stand condition follows the Crouch option [M Player_SSCrouch
             // 0x1924c0:84-105] — Toggle (byte +0x04 != 0) stands on a press edge of action 8
             // (crouch) or 7 (jump); Hold stands when the crouch action is NOT held.
-            && (if input.crouch_toggle { input.crouch || input.jump } else { !input.crouch }) {
+            && (if !input.crouch_hold { input.crouch || input.jump } else { !input.crouch }) {
             self.crouched = false;
             self.cc = ROOT_HEIGHT;
             self.lockout = 60;
