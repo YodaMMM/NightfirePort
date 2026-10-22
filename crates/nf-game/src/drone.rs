@@ -1392,15 +1392,29 @@ pub struct Drone {
     /// `Drone+0x31C`: `DroneMove_NoBunching`'s (0x150ad0) obstacle flags, rebuilt every tick by
     /// `Drones::tick` from `NDrone2_Steer`'s (0x14eba8) nearest-obstacle scan (`Drone+0x314`,
     /// the nearest drone or the player within 3.0 — `EvaluateObstacle` 0x14e6f0's sqDist < 9 gate).
-    /// The game's writer rule [M 0x150ad0:21-55]: diff = `Vec_AngleDifference(atan2(obstacle − me),
-    /// yaw + the +0x570 anim offsets)` — the ATAN2 result rides the float register into the
-    /// AngleDifference call (the C's "dropped store" is a decompiler artifact; the diff also lands
-    /// at dc+0xC4 [M 0x14e6f0:139]) — then `diff < 0 → | 0x10, else → | 8` and
-    /// `|diff| < π/4 → | 2, else → | 4`. The port's writer matches term for term (`facing =
-    /// yaw + yaw_offset` is the +0x570 adjustment: & 8 → +π/2, & 0x10 → +π, & 0x20 → −π/2
-    /// [M 0x150ad0:27-35]). The consumers [M `DroneAnim_SetCombatMoveAnim` 0x13cfb0]: 2 → the
+    /// The game's writer rule, from the disassembly [M 0x150ad0 @0x150b0c-0x150ba8]: `vsub` computes
+    /// obstacle_pos − my_pos, `ATAN2_APPROX(Δx, Δz)` yields the obstacle's yaw-angle (held in $f13),
+    /// the yaw obj+0x54 is adjusted by the anim-info word +0x570 (bit 8 +π/2, 0x10 +π, 0x20 −π/2)
+    /// into $f12, and `Vec_AngleDifference(yaw_adj, atan2_result)` = wrap(angle_to_obstacle − yaw)
+    /// — then `diff < 0 → | 0x10, else → | 8` and `|diff| < π/4 → | 2, else → | 4`.
+    /// SIDE MEANING (proven this task): **bit 8 = the obstacle is on the guard's LEFT (local +X),
+    /// bit 0x10 = on the RIGHT.** The Can* "Left" probes test local +X through the obj+0x90 matrix
+    /// [M the six 0x14f640..0x150500 probes + their DSTATEs playing the same anims]; the matrix's
+    /// local +X column is (cos yaw, 0, −sin yaw) — a right-handed frame with dir = col2 =
+    /// (sin yaw, 0, cos yaw) and up = col1 [M RotMatrix 0x1e2368, Mat_GetDir 0x1e3398 /
+    /// Mat_GetUp 0x1e33b8, ApplyMatrixLVI 0x1e4960 column-major] — whose atan2(Δx, Δz) yaw-angle is
+    /// yaw + π/2, i.e. the diff > 0 side. The anim-info fold agrees: a left-moving anim's motion
+    /// yaw-angle is yaw + π/2 = the bit-8 +π/2 adjustment, backoff yaw + π = bit 0x10, right-strafe
+    /// yaw − π/2 = bit 0x20. The port's writer matches term for term (`facing = yaw + yaw_offset`
+    /// is the +0x570 adjustment: & 8 → +π/2, & 0x10 → +π, & 0x20 → −π/2 [M 0x150ad0:27-35]) —
+    /// pre-task it passed the AngleDifference args in the decompiler's printed order (atan2 first),
+    /// the disassembly's ABI order is (yaw, atan2), which flipped the side labels.
+    /// The consumers [M `DroneAnim_SetCombatMoveAnim` 0x13cfb0]: 2 → the
     /// no-move 0x5E state (:35), 8/4/0x10 block move quads 1/2/3 (:78/:247/:281) — the port's
-    /// consumers read 2 (COMBAT_WAIT) and leave the quad blockers to the strafe pick.
+    /// consumers read 2 (COMBAT_WAIT) and, since this task, the per-side bit gates in
+    /// `choose_combat_move`'s pair()/`evasive_move` (the game's Can* probes each check their side
+    /// bit: 8 for the Left probes, 0x10 for the Right [M 0x14f640/0x14f808/0x14f9e8/0x14fbe0/
+    /// 0x14fdf8/0x14ffc0/0x150338/0x150500]).
     /// The game measures "obstacle" with the swept-sphere test `SphereSphereSweep` 0x14e5b8
     /// (sole caller `EvaluateObstacle` 0x14e6f0:94; solves the quadratic for the first/last
     /// overlap times of the drone's swept sphere vs the obstacle's, out t0/t1 [M
@@ -9033,8 +9047,10 @@ impl Drone {
     /// The shared spatial test behind `NDrone2_CanStepLeft` 0x14f640 (prop 0x42, anim 0x5a, +1.8 x —
     /// 0x3fe66666) / `NDrone2_CanRollLeft` 0x150338 (prop 0x2e, anim 0x53, +5.2 x — 0x40a66666) /
     /// `NDrone2_CanStrafeDodgeLeft` 0x14fdf8 (prop 0x13, anim 0x29, +3.6 x — 0x40666666, gate
-    /// drone+0x31c bit 3 clear) / `NDrone2_CanStrafeDodgeRight` 0x14ffc0 (prop 0x13, anims 0x29 AND 0x2a,
-    /// −3.6 x — 0xc0666666, gate drone+0x31c bit 4 clear) / `NDrone2_CanMoveToRelativePos` 0x154838 (the
+    /// drone+0x31c bit 8 clear = no obstacle to the LEFT) / `NDrone2_CanStrafeDodgeRight` 0x14ffc0
+    /// (prop 0x13, anims 0x29 AND 0x2a, −3.6 x — 0xc0666666, gate drone+0x31c bit 0x10 clear = no
+    /// obstacle to the RIGHT; the side meaning is proven at the `no_bunching` field doc) /
+    /// `NDrone2_CanMoveToRelativePos` 0x154838 (the
     /// caller's (dx, dy, dz) as the probe offset — NinjaAttack's (0, 0, ±5), `IsOpponent`'s (0, 0, 0.4)) /
     /// `NDrone2_CanStrafeLeft` (0x14f9e8) / `NDrone2_CanStrafeRight` (0x14fbe0) / `NDrone2_CanStepRight`
     /// (0x14f808) / `NDrone2_CanRollRight` (0x150500) — the game's per-direction probes with the
@@ -9134,17 +9150,31 @@ impl Drone {
         }
         if opts.is_empty() { return 0; }
         let mut case = opts[rng.rand(opts.len() as u32) as usize];
-        let pair = |me: &Self, rng: &mut Rng, dist: f32, l: u8, r: u8| -> u8 {
+        // The game's pair consumer coins the side with Rand(2) (0 → right-first [M 0x150c18 case
+        // bodies]) and then calls the per-side Can* probes, EACH carrying its own full gate set:
+        // the +0x31c side bit clear (8 = an obstacle to the LEFT blocks the Left probes, 0x10 the
+        // Right [M each probe's head]), the anim CanDo checks — the right side of the dodge/strafe/
+        // step pairs additionally demands the right-side anim 0x2a / 0xd / 0x5b [M 0x14ffc0/0x14fbe0/
+        // 0x14f808; the roll pair has no extra, 0x150338/0x150500 both gate 0x53 only] — and the
+        // reach probe. (The probes' +0x4f8 & 0x10 and prop re-checks are subsumed: choose_combat_move
+        // returned already on stays() = the lock + prop 0x40, and each case arm re-gates its prop.)
+        // (The class-0x1e BOT_getMovementSpeedMul offset scale [M 0x150338:68-70, 0x126568:
+        // drone+0xb6 0→0.7/2→1.3] is unmodelled: the port's SP drones never run class 0x1e and the
+        // MP bots move through mp/bots.rs, not this path.)
+        let pair = |me: &Self, rng: &mut Rng, dist: f32, l: u8, r: u8, l_anim: u16, r_anim: u16| -> u8 {
             let order = if rng.rand(2) != 0 { [(l, dist), (r, -dist)] } else { [(r, -dist), (l, dist)] };
-            order.iter().find(|(_, x)| me.can_move(d, *x, 0.0)).map(|(s, _)| *s).unwrap_or(0)
+            order.iter().find(|(_, x)| {
+                let (side_bit, anim) = if *x > 0.0 { (8, l_anim) } else { (0x10, r_anim) };
+                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.can_move(d, *x, 0.0)
+            }).map(|(s, _)| *s).unwrap_or(0)
         };
         let result = loop {
             let r = match case {
-                1 if aimed && self.prop(d, 0x13) => pair(self, rng, 3.6, STRAFE_DODGE_LEFT, STRAFE_DODGE_RIGHT),
+                1 if aimed && self.prop(d, 0x13) => pair(self, rng, 3.6, STRAFE_DODGE_LEFT, STRAFE_DODGE_RIGHT, anim_state::DODGE_LEFT, anim_state::STRAFE_RIGHT_ALT),
                 2 if !aimed => { case = 4; continue; }
-                2 if self.prop(d, 0x41) => pair(self, rng, 1.8, STRAFE_AIM_LEFT, STRAFE_AIM_RIGHT),
-                3 if aimed && self.prop(d, 0x2e) && self.can_do(d, anim_state::ROLL_LEFT) => pair(self, rng, 5.2, ROLL_LEFT_CROUCH, ROLL_RIGHT_CROUCH), // ±5.2 — 0x40a66666 [M 0x150338:63/0x150500:63] (daily audit 2026-10-21: 842's 5.3 misread the float)
-                4 if self.prop(d, 0x42) && self.can_do(d, anim_state::STEP_LEFT) => pair(self, rng, 1.8, STEP_AIM_LEFT, STEP_AIM_RIGHT),
+                2 if self.prop(d, 0x41) => pair(self, rng, 1.8, STRAFE_AIM_LEFT, STRAFE_AIM_RIGHT, anim_state::STRAFE_LEFT, anim_state::STRAFE_RIGHT),
+                3 if aimed && self.prop(d, 0x2e) && self.can_do(d, anim_state::ROLL_LEFT) => pair(self, rng, 5.2, ROLL_LEFT_CROUCH, ROLL_RIGHT_CROUCH, anim_state::ROLL_LEFT, anim_state::ROLL_LEFT), // ±5.2 — 0x40a66666 [M 0x150338:63/0x150500:63] (daily audit 2026-10-21: 842's 5.3 misread the float)
+                4 if self.prop(d, 0x42) && self.can_do(d, anim_state::STEP_LEFT) => pair(self, rng, 1.8, STEP_AIM_LEFT, STEP_AIM_RIGHT, anim_state::STEP_LEFT, anim_state::STEP_RIGHT),
                 5 if self.prop(d, 0x11) && self.can_do(d, anim_state::CROUCH_AIM) && self.dist >= 6.0 && rng.rand(2) == 0 => AIM_CROUCH,
                 6 => break if rng.rand(4) != 0 { AIM_STAND } else { 0 },
                 7.. => break 0,
@@ -9196,11 +9226,19 @@ impl Drone {
             rng.rand(2); // no CanDo re-check here [M-dis 0x1509b4-0x1509c8]; verdicts discarded
         }
         if picked <= 3 && self.prop(d, 0x13) {
+            // The game's dodge arm calls the same CanStrafeDodgeRight/Left probes — each with its
+            // side bit (0x10 right / 8 left) and anim set (0x29 both sides, +0x2a right) [M
+            // 0x1506d8:180-194 calling 0x14ffc0/0x14fdf8]. The roll/strafe rechecks above discard
+            // their Can* verdicts, so only the dodge arm gates on them here.
+            let probe = |me: &Self, x: f32| {
+                let (side_bit, anim) = if x > 0.0 { (8, anim_state::DODGE_LEFT) } else { (0x10, anim_state::STRAFE_RIGHT_ALT) };
+                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.can_move(d, x, 0.0)
+            };
             let m = if rng.rand(2) == 0 {
-                if self.can_move(d, -3.6, 0.0) { STRAFE_DODGE_RIGHT }
-                else if self.can_move(d, 3.6, 0.0) { STRAFE_DODGE_LEFT } else { 0 }
-            } else if self.can_move(d, 3.6, 0.0) { STRAFE_DODGE_LEFT }
-            else if self.can_move(d, -3.6, 0.0) { STRAFE_DODGE_RIGHT } else { 0 };
+                if probe(self, -3.6) { STRAFE_DODGE_RIGHT }
+                else if probe(self, 3.6) { STRAFE_DODGE_LEFT } else { 0 }
+            } else if probe(self, 3.6) { STRAFE_DODGE_LEFT }
+            else if probe(self, -3.6) { STRAFE_DODGE_RIGHT } else { 0 };
             if m != 0 && self.mode != 0x1e { self.set_state(m); }
             return m;
         }
@@ -15125,7 +15163,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if let Some((_, op)) = best {
                     let angle = atan2_approx(op[0] - dr.pos[0], op[2] - dr.pos[2]);
                     let facing = dr.yaw + dr.yaw_offset;
-                    let diff = angle_difference(angle, facing);
+                    // The game's call order, from the disassembly [M 0x150ad0 @0x150b2c-0x150b98]:
+                    // the ATAN2 result (obstacle − me, args (Δx, Δz) at 0x150b20-0x150b28) sits in
+                    // $f13 and the adjusted yaw (obj+0x54, the +0x570 adds) in $f12 when
+                    // Vec_AngleDifference is jal'd — first arg = the yaw, so
+                    // diff = wrap(angle_to_obstacle − yaw). diff < 0 → the obstacle is on the
+                    // −yaw-angle side = the guard's RIGHT (bit 0x10); diff ≥ 0 → LEFT (bit 8):
+                    // the Can* "Left" probes test local +X, and the obj matrix's local +X column is
+                    // (cos yaw, 0, −sin yaw) [M RotMatrix 0x1e2368 + Mat_GetDir/GetUp 0x1e3398/0x1e33b8
+                    // column layout + ApplyMatrixLVI 0x1e4960], whose atan2(Δx, Δz) angle is yaw + π/2.
+                    // The pre-fix call had the args swapped (the decompiler prints the C's register
+                    // leftover, not the ABI), which flipped every side label.
+                    let diff = angle_difference(facing, angle);
                     dr.no_bunching |= if diff < 0.0 { 0x10 } else { 8 };
                     if diff.abs() < std::f32::consts::FRAC_PI_4 { dr.no_bunching |= 2 } else { dr.no_bunching |= 4 }
                 }
