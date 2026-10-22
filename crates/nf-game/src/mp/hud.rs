@@ -227,6 +227,15 @@ pub struct MpHudSnapshot {
     /// markers) — EMPTY when the viewer's radar toggle is off [M 0x189840:22; 0x19f6e8:102-105
     /// hides the ring the same way]. Feed to `nf_view::hud::radar_project`.
     pub radar: Vec<MpRadarObj>,
+    /// mp-never-mentioned: the viewer carries the blueprint — `MP_HasEsponage` 0x18b468 (the
+    /// `BluePrint` ext's `+0x1c` carrier is the viewer's obj [M]); the score pane re-textures
+    /// its objective icon in scenario 0x20000100 [M 0x19f0a0:75-82].
+    pub viewer_carries_blueprint: bool,
+    /// mp-never-mentioned: the viewer's team holds GoldenEye item k —
+    /// `MP_ObjTeamHasGEObj` 0x18b4a0 for items 0/1 (the item's `+0x1c` carrier's team word
+    /// equals the viewer's [M]); the score pane re-textures sprites 1/2 in scenario 0x20000200
+    /// [M 0x19f0a0:115-127].
+    pub viewer_team_ge: [bool; 2],
 }
 
 impl MpHudSnapshot {
@@ -250,6 +259,9 @@ impl MpHudSnapshot {
             names_on_radar: m.settings.radar != 0 || sc == scenario::ASSASSIN,
             radar: Vec::new(),
             rows: Vec::new(),
+            // the esp/GoldenEye getter reads (populated after the flags pass below)
+            viewer_carries_blueprint: false,
+            viewer_team_ge: [false; 2],
         };
 
         // The rows: humans 0..human_count, then the bots — the game's slot walk with its
@@ -347,6 +359,12 @@ impl MpHudSnapshot {
         // The objective status.
         for (i, f) in m.objects_rt.flags.iter().enumerate() {
             snap.flags[i] = f.as_ref().and_then(|f| f.carrier);
+        }
+        // mp-never-mentioned: the two getter reads the pane's esp/GoldenEye arms key off
+        // (`MpMatch::mp_has_esponage` / `MpMatch::mp_obj_team_has_ge_obj` in `rules`).
+        snap.viewer_carries_blueprint = m.mp_has_esponage(viewer_slot);
+        for k in 0..2 {
+            snap.viewer_team_ge[k] = m.mp_obj_team_has_ge_obj(viewer_slot, k);
         }
         if sc == scenario::UPLINK {
             for u in m.objects_rt.uplinks.iter().enumerate() {
@@ -549,6 +567,29 @@ impl MpScorePane {
                     let owner = snap.uplinks.iter().find(|u| u.index == k).map_or(2, |u| u.owner);
                     let rgba = match owner { 0 => 0xd22d_35ff, 1 => 0x2d61_d2ff, _ => 0x7f7f_7fff };
                     icons.push(icon(*sprite, 0x0300_0185, 16.0 + 16.0 * k as f32, 352.0, rgba));
+                }
+            }
+            scenario::BLUEPRINT => {
+                // mp-never-mentioned (`MP_HasEsponage` 0x18b468): the carrier's pane dims
+                // sprite 1 to layer 0x1e and re-textures it 0x300018a [M 0x19f0a0:75-82]; the
+                // template colour stays [L MPScoreInfo]. The create's else-arm (everything but
+                // 0x400/0x60000008) moved sprites 1/2 down 0x18 — the same rect CTF's flag
+                // icon shows at [M 0x19ed10:113-117].
+                if snap.viewer_carries_blueprint {
+                    icons.push(icon(1, 0x0300_018a, 16.0, 376.0, 0x7f7f_7fff));
+                }
+            }
+            scenario::GOLDENEYE => {
+                // mp-never-mentioned (`MP_ObjTeamHasGEObj` 0x18b4a0): each held item re-textures
+                // sprite 1/2 to 0x300018b/0x300018c, layer 0x1e [M 0x19f0a0:115-127]. Both icons
+                // take the same rect — the create's else-arm shifts sprites 1/2 by the same
+                // −0x18 and moves no x, so a team holding both items stacks them [M; the
+                // report's live check covers the overlap].
+                for k in 0..2 {
+                    if snap.viewer_team_ge[k] {
+                        let tex = if k == 0 { 0x0300_018b } else { 0x0300_018c };
+                        icons.push(icon(1 + k, tex, 16.0, 376.0, 0x7f7f_7fff));
+                    }
                 }
             }
             _ => {}

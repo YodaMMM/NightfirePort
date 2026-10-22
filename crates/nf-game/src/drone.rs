@@ -14607,6 +14607,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         let audio = &self.audio;
         self.script_sounds.retain(|s| !audio.finished(s.1));
+        // mp-never-mentioned: the game's walk head (0x1336f8 step 1 [M]) calls the per-frame
+        // debug-draw hook `MP_DebugDraw` 0x18bf60 (jal 0x133738) — an **empty `jr ra` stub**
+        // [M size 8 @0x18bf60]. The port mirrors the stub: no debug-draw pass either.
         let mut order: Vec<(usize, u8, usize)> = self.list.iter().enumerate().filter(|(_, x)| x.present).map(|(i, x)| (if x.spawn_seq != 0 { usize::MAX - x.spawn_seq as usize } else { x.placement }, 0, i))
             .chain(self.triggers.iter().enumerate().filter(|(_, t)| t.kind != crate::triggers::kind::TOUCH).map(|(j, t)| (t.placement, 1, j)))
             .chain(self.spawners.iter().enumerate().map(|(j, sp)| (sp.placement, 2, j)))

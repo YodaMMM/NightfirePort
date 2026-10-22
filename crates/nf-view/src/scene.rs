@@ -9652,6 +9652,9 @@ impl Sim {
     // (the ported `BotBrain::step`) → `DroneWeap_HandleFiring`; death/respawn ride the drone
     // damage path (`BOT_respawn` 0x124e38 re-inits at a spawn point), the frags credit
     // `MPGame+slot·0x30+0x18`/`+0x04`/`+0x08` [M 0x188f70].
+    // mp-never-mentioned: `BOT_update`'s own head calls `MP_pickupCountCheck` 0x18bed8
+    // (jal 0x126450) — an **empty `jr ra` stub** in the shipped build [M size 8 @0x18bed8];
+    // the port mirrors the stub (no count check around the bot walk).
 
     /// The 8-slot `others` view one brain reads (`BOT_setOtherPlayerInfo` 0x125390: the slot's
     /// obj position, the alive gate, the team word, the score/health for the trait picks).
