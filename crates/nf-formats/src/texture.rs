@@ -75,8 +75,13 @@ pub fn unswizzle_csm1(pal: &[[u8; 4]]) -> Vec<[u8; 4]> {
     out
 }
 
-/// All textures of a map entry. Textures whose pixel block is shorter than the header implies are reported as
-/// errors in the second vector (index, message) rather than failing the whole map (3 such cases, UNKNOWNS U-017).
+/// All textures of a map entry. Textures whose pixel block is shorter than the header implies are KEPT at their
+/// header position with the bytes the game itself reads — `psiCreateMapTextures` 0x11d200 memcpy's the full
+/// `width×height×frames` bytes from the header's +8 block pointer for EVERY header (no length check: the read runs
+/// on into the following map bytes, the blocks are contiguous) and gives every header a runtime slot at
+/// `map+0x10[iVar26]`, 1:1 with the disc headers — so the batch texture indices stay valid. Short of map bytes,
+/// zero-fill. Still reported in the second vector (index, message) — on the disc, 0700000d's map 49 header 0x12
+/// (18, 186 headers) is the one short block of the story archives [D probe], the UNKNOWNS U-017 case.
 ///
 /// The four game block handlers this stands in for (dispatch `parsemap_handle_block_id` 0x1d1020):
 /// `parsemap_block_texture_header` 0x1d1f80 (block 0x10, 12 bytes per texture), `parsemap_block_palette_header`
@@ -106,14 +111,23 @@ pub fn textures(map: &[u8], f: &MapFile) -> Result<(Vec<Texture>, Vec<(usize, St
         if raw_pal.len() < colours * 4 { return invalid(format!("texture {i}: palette {} bytes", raw_pal.len())); }
         let pal: Vec<[u8; 4]> = raw_pal[..colours * 4].chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
         let palette = if eight { unswizzle_csm1(&pal) } else { pal };
-        let px = data[i].payload(map);
+        // The game's byte source: the header's +8 block pointer (the payload), `need` bytes — into the following
+        // map bytes when the block is short [M 0x11d200's `amemcpy(uVar16, *(header+8), uVar6)`, uVar6 = need].
+        // Zero-fill past the map buffer (the game reads whatever follows the map in memory; not reproducible).
+        let block = data[i];
+        let px = block.payload(map);
         let count = width as usize * height as usize * frames as usize;
         let need = if eight { count } else { count.div_ceil(2) };
-        if px.len() < need {
+        let indices: Vec<u8> = if px.len() >= need {
+            if eight { px[..count].to_vec() } else { (0..count).map(|k| (px[k / 2] >> (4 * (k & 1))) & 15).collect() }
+        } else {
             bad.push((i, format!("pixel block {} bytes, header needs {need}", px.len())));
-            continue;
-        }
-        let indices = if eight { px[..count].to_vec() } else { (0..count).map(|k| (px[k / 2] >> (4 * (k & 1))) & 15).collect() };
+            let start = block.offset as usize + 4;
+            let take = need.min(map.len().saturating_sub(start));
+            let mut ext = vec![0u8; need];
+            ext[..take].copy_from_slice(&map[start..start + take]);
+            if eight { ext } else { (0..count).map(|k| (ext[k / 2] >> (4 * (k & 1))) & 15).collect() }
+        };
         // The game's Conv4to32 0x11e8d8 / Conv8to32 0x11eeb0 (per-page PageConv4to32 0x11e640 /
         // PageConv8to32 0x11eba8, unported-front-end-menus-1) re-order these SAME indices into GS
         // PSMT4/PSMT8→PSMCT32 page/block order for VRAM fetch (block_table4/8/32 + lut4/lut8); they
@@ -175,5 +189,43 @@ mod tests {
         assert_eq!(t[0].indices, [1, 2, 3, 4]);
         assert_eq!(t[1].palette[t[1].indices[0] as usize], [7, 8, 9, 0x40]);
         assert_eq!(t[1].palette_rgba8()[8][3], 128);
+    }
+
+    /// U-017's fix: a short pixel block does NOT drop its texture — it stays at its header position with the
+    /// bytes the game memcpy's across the block end (`psiCreateMapTextures` 0x11d200 reads `need` bytes from the
+    /// header's +8 block pointer, on into the following map bytes), and the NEXT texture keeps its own index
+    /// (the runtime array has no holes: every header's `map+0x10[i]` slot store [M 0x11d200]). Fails if the
+    /// drop returns.
+    #[test]
+    fn short_texture_stays_at_its_index_with_the_overread_bytes() {
+        // Two 4×1 8bpp textures (4 bytes each): header 0's block is short (2 bytes), header 1's is intact.
+        let mut hdrs = vec![0u8; 24];
+        for h in [0usize, 12] {
+            hdrs[h] = 1; // 8bpp
+            hdrs[h + 2..h + 4].copy_from_slice(&3u16.to_le_bytes()); // width 4
+            hdrs[h + 4..h + 6].copy_from_slice(&0u16.to_le_bytes()); // height 1 → 4 bytes
+            hdrs[h + 6] = 1; // frames 1
+        }
+        let pal8 = vec![0u8; 1024];
+        let m = mini_map(&[
+            (id::TEXTURE_HEADER, &hdrs),
+            (id::TEXTURE_DATA, &[0xaa, 0xbb]),              // header 0's block: short, 2 of 4 bytes
+            (id::PALETTE_DATA_PSX, &pal8),
+            (id::TEXTURE_DATA, &[0x11, 0x22, 0x33, 0x44]),  // header 1's block (intact)
+            (id::PALETTE_DATA_PSX, &pal8),
+            (id::END, &[]),
+        ]);
+        let f = MapFile::parse(&m).unwrap();
+        let (t, bad) = textures(&m, &f).unwrap();
+        assert_eq!(t.len(), 2, "the short texture is kept, not dropped (1:1 with the headers)");
+        assert_eq!((t[0].index, t[1].index), (0, 1), "the runtime array keeps every header position");
+        assert_eq!((bad.len(), bad[0].0), (1, 0), "the short one (header 0) is still reported");
+        assert_eq!(t[1].indices, [0x11, 0x22, 0x33, 0x44], "the next texture's own block is untouched");
+        assert_eq!(&t[0].indices[..2], &[0xaa, 0xbb], "the source is the block pointer: the block's own bytes come first");
+        // The read continues into the FOLLOWING MAP BYTES — whatever the file holds after the short block
+        // (mini_map lays blocks out in reverse, so the header block follows here) — not zeros, not a wrap.
+        let short = f.all(id::TEXTURE_DATA).nth(0).unwrap();
+        let start = short.offset as usize + 4;
+        assert_eq!(&t[0].indices[2..], &m[start + 2..start + 4], "the overread continues into the following map bytes");
     }
 }
