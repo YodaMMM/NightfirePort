@@ -36,60 +36,33 @@ fn card_dir(tag: &str) -> std::path::PathBuf {
     d
 }
 
-/// The (row, column) of a name-grid cell id in [`FrontEnd::CN_GRID`].
-fn grid_rc(cell: u32) -> (usize, usize) {
-    for (r, row) in FrontEnd::CN_GRID.iter().enumerate() {
-        if let Some(c) = row.iter().position(|&x| x == cell) {
-            return (r, c);
-        }
-    }
-    panic!("cell {cell} is not in the name grid");
-}
-
-/// The d-pad actions that walk the grid cursor from `from` to `to` over real cells only (the
-/// grid's rows have different lengths; a clamped move never lands, so the walk never asks for
-/// one).
+/// The d-pad actions that walk the grid focus from `from` to `to`: a breadth-first search over
+/// the real moves (`menu::cnname_move`, the game's `Menu_FindControl` scoring over the page
+/// data's cell rects), so every step the walk asks for lands.
 fn grid_walk(from: u32, to: u32) -> Vec<Action> {
+    use nf_view::menu_engine::FindDir;
     use std::collections::VecDeque;
-    let pos = grid_rc(from);
-    let goal = grid_rc(to);
-    if pos == goal {
-        return vec![];
-    }
-    let rows = FrontEnd::CN_GRID.len();
-    let cols = |r: usize| FrontEnd::CN_GRID[r].len();
-    let mut prev: Vec<Vec<Option<((usize, usize), Action)>>> =
-        (0..rows).map(|r| vec![None; cols(r)]).collect();
-    let mut q = VecDeque::new();
-    prev[pos.0][pos.1] = Some((pos, Action::Up)); // the visit marker, never walked
-    q.push_back(pos);
-    while let Some((r, c)) = q.pop_front() {
-        if (r, c) == goal {
-            break;
-        }
-        for (a, np) in [
-            (Action::Up, r.checked_sub(1).map(|nr| (nr, c))),
-            (Action::Down, Some(r + 1).filter(|&nr| nr < rows).map(|nr| (nr, c))),
-            (Action::Left, c.checked_sub(1).map(|nc| (r, nc))),
-            (Action::Right, Some(c + 1).filter(|&nc| nc < cols(r)).map(|nc| (r, nc))),
-        ] {
-            let Some((nr, nc)) = np else { continue };
-            if nc >= cols(nr) {
-                continue; // the shorter rows have no cell there
+    let pos = FrontEnd::cn_cell_index(from).expect("from is a drawn cell");
+    let goal = FrontEnd::cn_cell_index(to).expect("to is a drawn cell");
+    let mut prev: Vec<Option<(usize, Action)>> = vec![None; nf_view::menu::CNNAME_CELLS.len()];
+    prev[pos] = Some((pos, Action::Up));
+    let mut q = VecDeque::from([pos]);
+    while let Some(i) = q.pop_front() {
+        if i == goal { break; }
+        for (a, d) in [(Action::Up, FindDir::Up), (Action::Down, FindDir::Down), (Action::Left, FindDir::Left), (Action::Right, FindDir::Right)] {
+            let n = nf_view::menu::cnname_move(i, d);
+            if n != i && prev[n].is_none() {
+                prev[n] = Some((i, a));
+                q.push_back(n);
             }
-            if prev[nr][nc].is_some() {
-                continue;
-            }
-            prev[nr][nc] = Some(((r, c), a));
-            q.push_back((nr, nc));
         }
     }
     let mut path = Vec::new();
     let mut cur = goal;
     while cur != pos {
-        let ((pr, pc), a) = prev[cur.0][cur.1].expect("the grid walk is connected");
+        let (p, a) = prev[cur].expect("the grid walk is connected");
         path.push(a);
-        cur = (pr, pc);
+        cur = p;
     }
     path.reverse();
     path

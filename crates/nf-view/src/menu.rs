@@ -681,7 +681,7 @@ pub fn aux_movie_for(page_id: u32) -> u32 {
         PAGE_MAIN => 0x0733_0048,
         PAGE_LANGUAGE | PAGE_CODENAME | PAGE_DIFFICULTY | PAGE_MISSION_SELECT | PAGE_DOSSIER | PAGE_RESULTS
         | PAGE_CN_SELECT | PAGE_CN_MENU | PAGE_CN_ADVANCED | PAGE_CN_MP | PAGE_CN_AV | PAGE_CN_CONTROLS
-        | PAGE_NF_BONUS => 0x0735_0048, // 0x40000038's PAGE record aux 0x07350048 [D menu-def dump 2026-10-21]
+        | PAGE_NF_BONUS | PAGE_CN_NAME => 0x0735_0048, // 0x40000038 / P_CNNAME PAGE records aux 0x07350048 [D menu-def dump 2026-10-21]
         // mp-menu-flow: every MP page's PAGE record carries the same list backdrop (the menu-def
         // dump 2026-10-15: all 13 MP pages aux 0x07350048 [L]).
         PAGE_MP_JOIN | PAGE_MP_SCENARIO | PAGE_MP_MAP | PAGE_MP_SETUP | PAGE_MP_OPTIONS | PAGE_MP_RULES
@@ -1119,8 +1119,45 @@ pub struct PauseObjective {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SecretKey { Char(char), Space, Delete, Submit }
 
+/// The grid cells' rects (640-space), in `SECRET_GRID` order [D menu-def page 0x40000020, control
+/// 0x10000074's 39 records: labels 1..0x24 = 0-9, A-Z on rows y 161/201/241 (x 120 + 40·col) and
+/// the last six at y 281 from x 200; the three glyph cells d1 1000 ← (204,323,25×16), 1001 space
+/// (290,323,60×16), 1002 ✓ (404,319,25×24)].
+pub const CNNAME_CELLS: [(i16, i16, i16, i16); 39] = {
+    let mut r = [(0i16, 0i16, 32i16, 32i16); 39];
+    let mut i = 0;
+    while i < 36 {
+        r[i] = if i < 30 { (120 + 40 * (i as i16 % 10), 161 + 40 * (i as i16 / 10), 32, 32) } else { (200 + 40 * (i as i16 - 30), 281, 32, 32) };
+        i += 1;
+    }
+    r[36] = (204, 323, 25, 16);
+    r[37] = (290, 323, 60, 16);
+    r[38] = (404, 319, 25, 24);
+    r
+};
+
+/// The ← / space / ✓ glyph UV rects in TEX 0x03000075 [D the cells' msg-0x2d words: (u<<16|v,
+/// (w-1)<<16|(h-1)) = (0x670033, 0x12000f) / (0x880033, 0x1f000f) / (0xb10039, 0x10000c)].
+const CNNAME_GLYPH_UV: [Option<[f32; 4]>; 3] = [
+    Some([103.0, 51.0, 19.0, 16.0]),
+    Some([136.0, 51.0, 32.0, 16.0]),
+    Some([177.0, 57.0, 17.0, 13.0]),
+];
+
+/// `Menu_FindControl` 0x1f16d8 over the name grid's cell rects — the game moves the focus between
+/// the grid's cell controls by the direction scoring, not by a fixed column count. Returns the new
+/// cell, or `cur` when no candidate lies that way.
+pub fn cnname_move(cur: usize, dir: crate::menu_engine::FindDir) -> usize {
+    use crate::menu_engine::{menu_find_control, MenuControl};
+    let ctrls: Vec<MenuControl> = CNNAME_CELLS.iter().enumerate().map(|(i, &(x, y, w, h))| MenuControl {
+        next: if i + 1 < CNNAME_CELLS.len() { Some(i + 1) } else { None },
+        x, y, w, h, ctype: 1, ..Default::default()
+    }).collect();
+    menu_find_control(&ctrls, Some(0), cur.min(ctrls.len() - 1), dir).unwrap_or(cur)
+}
+
 /// The grid's cells, digits then letters then the three control cells (0-9, A-Z, ← → ✓ [D the
-/// page's cell set; the model order here is the port's — the drawn layout is the main agent's]).
+/// page's cell set, in the page data's label order — `CNNAME_CELLS` holds their rects]).
 pub static SECRET_GRID: [SecretKey; 39] = {
     let mut keys: [SecretKey; 39] = [SecretKey::Char('0'); 39];
     let mut i = 0;
@@ -4681,12 +4718,36 @@ impl FrontEnd {
         Self::CN_GRID.iter().enumerate().find_map(|(r, row)| row.iter().position(|&c| c == cell).map(|c| (r, c)))
     }
 
-    /// Moves the cursor by (dx, dy) within [`CN_GRID`], clamped at the edges.
+    /// A cell id's index in the page data's cell list [`CNNAME_CELLS`] (0-9, A-Z, ←, space, ✓);
+    /// None for the four re-labelled glyph cells, which the page data does not carry [D].
+    pub fn cn_cell_index(cell: u32) -> Option<usize> {
+        match cell {
+            0x30..=0x39 => Some((cell - 0x30) as usize),
+            0x41..=0x5a => Some((cell - 0x41) as usize + 10),
+            Self::CN_KEY_DELETE => Some(36),
+            Self::CN_KEY_SPACE => Some(37),
+            Self::CN_KEY_CONFIRM => Some(38),
+            _ => None,
+        }
+    }
+
+    pub fn cn_index_cell(i: usize) -> u32 {
+        match i {
+            0..=9 => 0x30 + i as u32,
+            10..=35 => 0x41 + (i as u32 - 10),
+            36 => Self::CN_KEY_DELETE,
+            37 => Self::CN_KEY_SPACE,
+            _ => Self::CN_KEY_CONFIRM,
+        }
+    }
+
+    /// Moves the focus one step (dx, dy) — `Menu_FindControl` 0x1f16d8's direction scoring over
+    /// the page data's cell rects [M; D page 0x40000020]; no candidate that way keeps the focus.
     pub fn cn_move(&mut self, dx: i32, dy: i32) {
-        let Some((r0, c0)) = Self::cn_find(self.cn_cell) else { return };
-        let r = (r0 as i32 + dy).clamp(0, Self::CN_GRID.len() as i32 - 1) as usize;
-        let c = (c0 as i32 + dx).clamp(0, Self::CN_GRID[r].len() as i32 - 1) as usize;
-        let next = Self::CN_GRID[r][c];
+        use crate::menu_engine::FindDir;
+        let Some(cur) = Self::cn_cell_index(self.cn_cell) else { return };
+        let dir = match (dx.signum(), dy.signum()) { (-1, _) => FindDir::Left, (1, _) => FindDir::Right, (_, -1) => FindDir::Up, _ => FindDir::Down };
+        let next = Self::cn_index_cell(cnname_move(cur, dir));
         if next != self.cn_cell {
             // The focus moved between the grid's cells: MENU_SOUND 7 [M Page_Update 0x21edc8:38-53;
             // the game's clamped edge moves keep the focus, and Page_Update only sounds on a change].
@@ -5343,10 +5404,14 @@ impl FrontEnd {
                 // `nf_game::secret_codes::submit` (Menu_SpecialCodenameCheck 0x200238's port);
                 // a match opens the 0x100029d box, a miss is silent [M :67-73].
                 match a {
-                    Action::Left if self.secret.cursor > 0 => { self.secret.cursor -= 1; return self.focus_moved(); }
-                    Action::Right if self.secret.cursor + 1 < SECRET_GRID.len() => { self.secret.cursor += 1; return self.focus_moved(); }
-                    Action::Up if self.secret.cursor >= 8 => { self.secret.cursor -= 8; return self.focus_moved(); }
-                    Action::Down if self.secret.cursor + 8 < SECRET_GRID.len() => { self.secret.cursor += 8; return self.focus_moved(); }
+                    // The focus moves by `Menu_FindControl`'s direction scoring over the cells' rects
+                    // [M 0x1f16d8; the cells are separate controls of grid 0x10000074 [D]].
+                    Action::Left | Action::Right | Action::Up | Action::Down => {
+                        use crate::menu_engine::FindDir;
+                        let d = match a { Action::Left => FindDir::Left, Action::Right => FindDir::Right, Action::Up => FindDir::Up, _ => FindDir::Down };
+                        let n = cnname_move(self.secret.cursor, d);
+                        if n != self.secret.cursor { self.secret.cursor = n; return self.focus_moved(); }
+                    }
                     Action::Confirm => { self.secret_press(); return true; }
                     Action::Back => { self.secret = SecretEntry::default(); self.enter_page(Page::CnMenu); self.cursor = 1; return true; }
                     _ => return false,
@@ -8999,24 +9064,43 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             logo_stamp(&mut h);
         }
         Page::CnName => {
-            // The Secret Unlocks letter grid (the model side; the drawn layout is the stub until
-            // the drawing task lands — the main agent owns the page's look).
-            page_header(&mut h, hfont, &bind(0x1000_02d4)); // cheat_mode's prompt label [M 0x213790:37]
-            panel(&mut h);
-            let mut grid = String::new();
-            for (i, k) in SECRET_GRID.iter().enumerate() {
-                let ch = match k { SecretKey::Char(c) => *c, SecretKey::Space => '_', SecretKey::Delete => '<', SecretKey::Submit => '+' };
-                if i == fe.secret.cursor { grid.push('['); }
-                grid.push(ch);
-                if i == fe.secret.cursor { grid.push(']'); }
-                grid.push(' ');
+            // The name-entry page, drawn from its own page data [D menu-def page 0x40000020 in
+            // 07000048.bin, parsed 2026-10-21]: the title 0x10000242 (50,40) LBL 0x1f5 "Enter New
+            // Codename" — 0x10002d4 "Secret Unlocks" in cheat mode [M 0x213790:37/41]; the two frame
+            // controls (b=1) around the typed field (117,126,406×42) and the grid (117,161,407×191);
+            // the typed field 0x10000075 (117,135,406×16), its text centred; the 39 cells of grid
+            // control 0x10000074 (`CNNAME_CELLS`), each a label coloured msg-0x1b 0x645a49ff when
+            // focused / msg-0x1c 0x73330f80 otherwise (the main menu's row convention); the ← / space
+            // / ✓ cells draw their glyphs from TEX 0x03000075 at the msg-0x2d UV rects; the hint bar
+            // (50,419) LBL 0x48e; the logo.
+            let title = if fe.cn_profile_mode { 0x1f5 } else { 0x1000_02d4 };
+            // The two entries keep separate state (profile name: `cn_*`; cheat grid: `secret`).
+            let (typed, focus): (&str, Option<usize>) = if fe.cn_profile_mode {
+                (fe.cn_typed.as_str(), FrontEnd::cn_cell_index(fe.cn_cell))
+            } else {
+                (fe.secret.typed.as_str(), Some(fe.secret.cursor))
+            };
+            page_header(&mut h, hfont, &bind(title));
+            frame640(&mut h, 117.0, 126.0, 406.0, 42.0);
+            frame640(&mut h, 117.0, 161.0, 407.0, 191.0);
+            centred(&mut h, font, -2, typed, mx(117.0 + 203.0), my(135.0 + 8.0 + 3.0), cream, true, 1.0);
+            let off = gs(0x73330f, 0x80);
+            for (i, &(x, y, w, hh)) in CNNAME_CELLS.iter().enumerate() {
+                let c = if Some(i) == focus { cream } else { off };
+                if let Some(uv) = CNNAME_GLYPH_UV[i.saturating_sub(36).min(2)].filter(|_| i >= 36) {
+                    quad640(&mut h, 0x0300_0075, x as f32, y as f32, w as f32, hh as f32, uv, c);
+                } else {
+                    let label = bind(i as u32 + 1);
+                    let text = if label.trim().is_empty() {
+                        match SECRET_GRID[i] { SecretKey::Char(ch) => ch.to_string(), _ => String::new() }
+                    } else { label };
+                    centred(&mut h, font, -2, &text, mx(x as f32 + w as f32 / 2.0), my(y as f32 + hh as f32 / 2.0 + 3.0), c, true, 1.0);
+                }
             }
-            h.text_scaled_tex(Anchor::Centre, font, -1, 0x0300_0005, &fe.secret.typed, mx(320.0), my(150.0), false, cream, true, 1.3);
-            h.text_scaled_tex(Anchor::Centre, font, -1, 0x0300_0005, &grid, mx(320.0), my(190.0), false, bright, true, 0.9);
-            if fe.secret.accepted {
-                h.text_scaled_tex(Anchor::Centre, font, -1, 0x0300_0005, "CODE ACCEPTED", mx(320.0), my(300.0), false, bright, true, 1.1); // label 0x100029d's text [S]
+            if !fe.cn_profile_mode && fe.secret.accepted {
+                centred(&mut h, font, -2, &bind(0x100_029d), mx(320.0), my(370.0), cream, true, 1.0); // "Unlock successful" [M 0x213a98:71]
             }
-            hint_bar(&mut h, font, &hint(0x5cb, "~A Select  ~H Move  ~B Back"), 50.0, 419.0, cream);
+            hint_bar(&mut h, font, &hint(0x48e, "~A Select  ~H Move  ~B Back"), 50.0, 419.0, cream);
             logo_stamp(&mut h);
         }
         Page::CnAdvanced | Page::CnMp | Page::CnAv => {
