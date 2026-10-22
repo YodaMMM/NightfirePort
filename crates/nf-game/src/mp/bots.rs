@@ -1104,6 +1104,22 @@ pub struct BotVars {
     pub opp_dist: f32,           // Drone+0x1A0 (the distance to the opponent; MAX = none)
     pub prev_opponent: Option<usize>, // [S] last tick's Drone+0x170 (the `SetOpponent` msg-0x45 edge)
     pub prev_visible: bool,      // [S] last tick's Drone+0x228 bit 2 (the `HaveOpponentSight` edge)
+    // ---- mp-bot-brain-rest: the decision-helper state (each offset cited at its user) ----
+    /// `BOT_vars+0x728` — the accumulated distraction (`BOTSTATE_increaseDistraction`
+    /// 0x129bb8 adds, the goal slot's +0x20 is the limit [M 0x129c58:13-17]).
+    pub distraction: f32,
+    /// `BOT_vars+0x71C/0x720/0x724` — the combat ranges `BOT_postLoadInit` 0x1262b8 saves
+    /// and `BOTSTATE_defaultCombatRange` 0x129b98 restores [M].
+    pub combat_range_default: [f32; 3],
+    /// `BOT_vars+0x6DC..0x71C` — `BOT_handleOpponentHistory` 0x1257c0's 16-entry ring of the
+    /// recent opponent picks. The game stores obj pointers (0 = empty); the port stores
+    /// `ctx.others` index + 1 (0 = empty — index 0 is a live row).
+    pub opp_history: [u32; 16],
+    /// `BOT_vars+0x76C` — the ring's write head, wrapped mod 16 [M 0x1257c0:22-28].
+    pub opp_history_head: u8,
+    /// `BOT_vars+0xA9` — the stats' recovery_b (`BOT_setDroneStats` 0x126318:22 copies it to
+    /// Drone+0xB9; `BOTSTATE_startRecovery` 0x1299d0 reads it as ·2/3 frames).
+    pub recovery_b: u8,
 }
 
 
@@ -1157,6 +1173,11 @@ impl Default for BotVars {
             opp_dist: f32::MAX,
             prev_opponent: None,
             prev_visible: false,
+            distraction: 0.0,
+            combat_range_default: [2.0, 20.0, 40.0],
+            opp_history: [0; 16],
+            opp_history_head: 0,
+            recovery_b: 0,
         }
     }
 }
@@ -1338,6 +1359,7 @@ impl BotBrain {
         vars.trait_id = stats[0x0B];
         vars.flags = stats[0x0C];
         vars.character = record.character(); // +0x764 [M 0x1249e8:160]
+        vars.recovery_b = stats[0x08]; // +0xA9 [M 0x126318:22]
         vars.slot = slot as i16;
         vars.bot_index = (slot - 4) as i16;
         vars.grudge = -1; // 0xFF [M 0x1249e8:163]
@@ -1348,6 +1370,13 @@ impl BotBrain {
             // the HP-regen arm: +0x738 := GameState+52 + FRAME_RATE_INT [M 0x1249e8:165-167]
             vars.regen_deadline = FRAME_RATE_INT;
         }
+        // `BOT_postLoadInit` 0x1262b8 [M :7-12]: the stats copy above is `BOT_setDroneStats`
+        // 0x126318's (aggression→+0xB4, aim→+0xB5, speed→+0xB6, recovery_a→+0xB8,
+        // recovery_b→+0xB9, weapon byte→+0xBA [M]); the port's `BotVars` carries the stats
+        // directly. The combat ranges save: +0x71C/0x720/0x724 := +0xEC/0xF0/0xFC —
+        // `BOTSTATE_defaultCombatRange` 0x129b98 restores from it. (Drone+0x4F8 |= 0x80000000
+        // marks the bot object; the port's brain is always a bot — no flag [S].)
+        vars.combat_range_default = vars.combat_range;
         let mut brain = BotBrain {
             vars,
             state: 0xC3, // BotInit
@@ -1588,6 +1617,14 @@ impl BotBrain {
         //    commit, the synthetic 0x2E (the +0x766 type write is the ported part [M 0x16e060:605]),
         //    then ENTER msg 1 — the loop repeats while ENTERs chain more SetStates [M :119-203].
         while let Some(next) = self.pending.take() {
+            // `Drone_SM_SetState` 0x1758c0:47-52 validates every bot transition through
+            // `BOT_validateStateChange` 0x124fb0 before committing (and a 0 can REPLACE the
+            // request via +0x762). The port validates at the commit — the only reader of the
+            // pending state [M].
+            let next = match self.validate_state_change(next, ctx, rng) {
+                StateChange::Refuse => continue,
+                StateChange::Allow(next) => next,
+            };
             self.vars.state_type = state_type(next as u32);
             self.enter_state(next, ctx, rng);
         }
@@ -2862,6 +2899,9 @@ impl BotBrain {
             self.item_root(ctx, target)
         };
         let mul = [0.7f32, 1.0, 1.3][(self.vars.speed as usize).min(2)]; // the speed mult [M atlas §4]
+        // ^ `BOT_getMovementSpeedMul` 0x126568 [M :6-19]: Drone+0xB6 (the stats' speed byte,
+        // `BOT_setDroneStats` 0x126318:18) 0 → 0.7 (0x3f333333), 1 → 1.0, 2 → 1.3
+        // (0x3fa66666), anything else → 1.0.
         if !self.steer_to(ctx, dest, mul.min(1.0), true) {
             return 0xC; // no route and stuck: the route failed (validateRoute → the goal ends)
         }
@@ -4262,6 +4302,460 @@ mod tests {
     }
 }
 
+// ============================================================================
+// 9. mp-bot-brain-rest: the BOT/BOTSTATE decision helpers the call-tree check
+//    listed (0x124fb0, 0x1257c0, 0x1262b8, 0x126568, 0x126618, 0x1267a0,
+//    0x128f80, 0x1292f0, 0x129658, 0x129918, 0x1299d0, 0x129b68, 0x129b98,
+//    0x129bb8, 0x129c58, 0x12b010, 0x12b140)
+// ============================================================================
+
+/// `Drone_SM_SetState` 0x1758c0:49-52 — when `BOT_validateStateChange` 0x124fb0 returns 0 the
+/// request is re-read from `BOT_vars+0x762`: a non-zero value there REPLACES the requested
+/// state, 0 refuses outright [M].
+enum StateChange {
+    Refuse,
+    Allow(u8),
+}
+
+impl BotBrain {
+    /// `BOT_validateStateChange` 0x124fb0 [M] — `Drone_SM_SetState`'s bot gate. The decompile's
+    /// early-outs, in order:
+    /// - SM current state 0 → allow (the bot's first state) [M :10-12];
+    /// - the slot status word bit 0x10 with a 0xD0/0xD6 request → replace it with
+    ///   `BOTSTATE_reallyWantACombatMove(.., 3)` [M :21-27];
+    /// - 0xEF/0xF0/0xF1 (the impact states) refused [M :31-45];
+    /// - 0xEE (heard noise) refused, +0x76F := 1 while the opponent slot is empty (Drone+0x43
+    ///   := 4 has no port reader — the byte is the SP alert anim, the MP bots' stays [S]) [M :46-51];
+    /// - a type-0xC (death) target refused [M :56-59];
+    /// - type 6 out of 0xEB with the active goal's pref bit 0x10 refused [M :60-64];
+    /// - 0xD0 while the recovery flag (bit1 of +0x734) is pending refused [M :73-76];
+    /// - 0xDE with the fists held (+0x768 == 1) inside the 0x35..0x38 anim band refused (the
+    ///   port's MP bot body runs no anim ids — the band test is taken false [S]) [M :77-82];
+    /// - out of 0xEB a type-4 target needs the seen bits or `is_distracted` [M :83-100];
+    /// - a type-4 target with the flag-carrier bit (bit2 of +0x734) refused [M :101-104];
+    /// - the current type's arms: 4/7/0xC keep 0xEE/0xEC out [M :105-112]; 5 (0xEB) raises the
+    ///   distraction (1.7 scaled (30−dist)/6·1.7 for 0xEC, 1.0 otherwise) and refuses when
+    ///   `increaseDistraction` reports the flag bit [M :113-135]; 10 (dead) only re-dies or
+    ///   respawns 0xC4 [M :136-141].
+    fn validate_state_change(&mut self, next: u8, ctx: &BotCtx, rng: &mut Rng) -> StateChange {
+        let cur = self.state;
+        if cur == 0 {
+            return StateChange::Allow(next); // [M :10-12]
+        }
+        let cur_type = state_type(cur as u32);
+        let next_type = state_type(next as u32);
+        // The 0xD0/0xD6 replacement [M :21-27]: the slot status word bit 0x10.
+        let slot_status = ctx
+            .objectives
+            .and_then(|ob| ob.status.get(ctx.my_index).copied())
+            .unwrap_or(0);
+        if slot_status & 0x10 != 0 && (next == 0xD0 || next == 0xD6) {
+            let rep = self.really_want_a_combat_move(ctx, rng, 3);
+            return if rep == 0 { StateChange::Refuse } else { StateChange::Allow(rep as u8) };
+        }
+        if next == state::BOT_IMPACT_BULLET
+            || next == state::BOT_IMPACT_EXPLOSIVE
+            || next == state::BOT_IMPACT_PUNCH
+        {
+            return StateChange::Refuse; // [M :31-45]
+        }
+        if next == state::BOT_HEARD_NOISE {
+            if self.vars.opponent.is_none() {
+                self.vars.guard_near_flag = 1; // +0x76F [M :48-50]
+            }
+            return StateChange::Refuse; // [M :46-51]
+        }
+        if next_type == 0xC {
+            return StateChange::Refuse; // [M :56-59]
+        }
+        if next_type == 6
+            && cur == state::BOT_GOTO_GOAL_POSITION
+            && self.get_active_goal().is_some_and(|g| self.vars.goals[g].pref_byte & 0x10 != 0)
+        {
+            return StateChange::Refuse; // [M :60-64]
+        }
+        if self.vars.flag_word & 2 != 0 && next == state::BOT_ATTACK_RUN {
+            return StateChange::Refuse; // [M :73-76]
+        }
+        if next == state::BOT_ATTACK_CHANGE_WEAPON && self.vars.weapon_id == 1 {
+            // + the +0x56C anim band 0x35..0x38 gate [M :77-82] — the port's MP bot body runs
+            // no anim ids, so the band test never fires here [S]
+            return StateChange::Allow(next); // the game may refuse inside the band
+        }
+        if cur == state::BOT_GOTO_GOAL_POSITION && next_type == 4 {
+            // the seen bits (+0xBC table & 6 == 6 — the port's candidate|seen flags) or the
+            // distraction let a type-4 (combat) state in [M :83-100]
+            let seen = self.vars.sighted & 4 != 0;
+            if !seen && !self.is_distracted() {
+                return StateChange::Refuse;
+            }
+        }
+        if next_type == 4 && self.vars.flag_word & 4 != 0 {
+            return StateChange::Refuse; // [M :101-104]
+        }
+        match cur_type {
+            4 | 7 | 0xC => {
+                if next != state::BOT_HEARD_NOISE && next != state::BOT_SEEN_OPPONENT {
+                    return StateChange::Allow(next); // [M :105-112]
+                }
+                StateChange::Refuse
+            }
+            5 => {
+                // from 0xEB the seen/heard requests pay the distraction first [M :113-135]
+                let amount = match next {
+                    state::BOT_SEEN_OPPONENT => {
+                        if self.vars.opponent.is_some() {
+                            let d = self.vars.opp_dist;
+                            let band = if d <= 30.0 { d.max(1.0) } else { 30.0 };
+                            ((30.0 - band) * 0.16666667).max(1.0) * 1.7
+                        } else {
+                            1.7
+                        }
+                    }
+                    state::BOT_HEARD_NOISE => 1.0,
+                    _ => {
+                        if next_type == 4 {
+                            1.0
+                        } else {
+                            return StateChange::Allow(next);
+                        }
+                    }
+                };
+                if self.increase_distraction(amount) {
+                    StateChange::Allow(next)
+                } else {
+                    StateChange::Refuse
+                }
+            }
+            10 => {
+                if next_type == 10 || next == state::BOT_RESPAWN {
+                    StateChange::Allow(next) // [M :136-141]
+                } else {
+                    StateChange::Refuse
+                }
+            }
+            _ => StateChange::Allow(next),
+        }
+    }
+
+    /// `BOTSTATE_startRecovery` 0x1299d0 [M :8-16]: while the recovery flag (bit1 of +0x734)
+    /// is clear, +0x748 := now + recovery_b·2/3 (`Drone+0xB9` = the stats' recovery_b,
+    /// `BOT_setDroneStats` 0x126318:22) and bit1 sets.
+    pub fn start_recovery(&mut self, now: u32) {
+        if self.vars.flag_word & 2 == 0 {
+            let frames = (self.vars.recovery_b as f32 * 0.6666667) as u32;
+            self.vars.regen_deadline = now + frames; // +0x748 rides the port's deadline slot
+            self.vars.flag_word |= 2;
+        }
+    }
+
+    /// `BOTSTATE_isDistracted` 0x129c58 [M :6-19]: with the flag-carrier bit (bit2 of +0x734)
+    /// clear — no active goal, or not in 0xEB, or any accumulated distraction (+0x728 != 0),
+    /// or the active goal's +0x20 limit reached — the bot is distracted.
+    pub fn is_distracted(&self) -> bool {
+        if self.vars.flag_word & 4 != 0 {
+            return false;
+        }
+        match self.get_active_goal() {
+            None => true, // +0x765 == 0xFF [M :11-13]
+            Some(g) => {
+                if self.state != state::BOT_GOTO_GOAL_POSITION || self.vars.distraction != 0.0 {
+                    return true; // [M :11-13]
+                }
+                let limit = self.vars.goals[g].scratch; // the goal's +0x20 [M :14-17]
+                limit <= self.vars.distraction
+            }
+        }
+    }
+
+    /// `BOTSTATE_increaseDistraction` 0x129bb8 [M :7-25]: into the active 0xEB goal's limit —
+    /// +0x728 += amount; below the limit it returns FALSE (the accumulate arm's own returns),
+    /// at/above it clamps and falls through to `(flag & 4) == 0`; a negative sum zeroes and
+    /// returns false. No goal / not 0xEB skips the accumulate and reports the flag bit.
+    pub fn increase_distraction(&mut self, amount: f32) -> bool {
+        let flagged = self.vars.flag_word & 4 != 0;
+        let Some(g) = self.get_active_goal() else { return !flagged };
+        if self.state != state::BOT_GOTO_GOAL_POSITION {
+            return !flagged;
+        }
+        self.vars.distraction += amount;
+        let limit = self.vars.goals[g].scratch;
+        if self.vars.distraction < limit {
+            if self.vars.distraction < 0.0 {
+                self.vars.distraction = 0.0; // [M :20-23]
+            }
+            return false; // below the limit — still accumulating [M :15-19]
+        }
+        self.vars.distraction = limit; // [M :24]
+        !flagged // [M :25]
+    }
+
+    /// `BOTSTATE_reallyCloseCombatRange` 0x129b68 [M :5-8]: +0xEC = 0.5, +0xF0 = 1.5,
+    /// +0xFC = 1.625 — the too-close / engage / too-far band the combat moves read.
+    pub fn really_close_combat_range(&mut self) {
+        self.vars.combat_range = [0.5, 1.5, 1.625];
+    }
+
+    /// `BOTSTATE_defaultCombatRange` 0x129b98 [M :5-9]: restore +0xEC/0xF0/0xFC from the
+    /// defaults `BOT_postLoadInit` 0x1262b8 saved into +0x71C/0x720/0x724.
+    pub fn default_combat_range(&mut self) {
+        self.vars.combat_range = self.vars.combat_range_default;
+    }
+
+    /// `BOTSTATE_chooseUnarmedAttackAnim` 0x1292f0 [M :6-15] via `NDrone2_CanAltAttack`
+    /// 0x1549e0 [M :11-19]: `Rand(4)` picks the punch variant (the port's sub-anim goes back to
+    /// the caller — the MP bot body runs no anim scripts), `Drone+0x1A0 <= 1.5` is the reach
+    /// gate [M 0x1549e0:17]; `CanDoAnimState(0x3d, sub)` is taken true [S — no anim pipeline].
+    /// Returns the 0x3D unarmed-attack anim id when the punch fires.
+    pub fn choose_unarmed_attack_anim(&mut self, rng: &mut Rng) -> Option<u8> {
+        let sub = rng.rand(4); // [M 0x1292f0:7]
+        let _ = sub;
+        if self.vars.opp_dist <= 1.5 {
+            Some(0x3D) // DroneAnim_CallAnim(0, 0x3d, sub, 0xcf, ..) [M 0x1292f0:11]
+        } else {
+            None
+        }
+    }
+
+    /// `BOTSTATE_reallyWantACombatMove` 0x1267a0 [M :5-98]: five `Rand` orderings over the
+    /// strafe/step moves gated by mask bit0 (0xD4/0xDB left) and bit1 (0xD5/0xDC right), each
+    /// through `BOTSTATE_checkAttackMove` 0x126a40 (the port's `can_side_move` — 1.5 strafe /
+    /// 1.0 step reach); then the `NDrone2_EvasiveMove` fall-through — the roll codes 0x79/0x7a
+    /// are not lifted, so the port runs the none-arm: mask bit2 tries the 0xD7 backoff [S].
+    /// Returns the move state or 0.
+    pub fn really_want_a_combat_move(&mut self, ctx: &BotCtx, rng: &mut Rng, mask: u32) -> u8 {
+        use state::*;
+        let check = |brain: &Self, mv: u8| -> bool {
+            let reach = if matches!(mv, BOT_ATTACK_STRAFE_AIM_LEFT | BOT_ATTACK_STRAFE_AIM_RIGHT) {
+                1.5
+            } else {
+                1.0
+            };
+            brain.can_side_move(ctx, Self::move_side(mv), reach)
+        };
+        match rng.rand(5) {
+            // [M :8-34 the four orderings]
+            0 => {
+                if mask & 1 != 0 && check(self, BOT_ATTACK_STRAFE_AIM_LEFT) {
+                    return BOT_ATTACK_STRAFE_AIM_LEFT;
+                }
+                if mask & 2 != 0 && check(self, BOT_ATTACK_STRAFE_AIM_RIGHT) {
+                    return BOT_ATTACK_STRAFE_AIM_RIGHT;
+                }
+                if mask & 1 != 0 && check(self, BOT_ATTACK_STEP_AIM_LEFT) {
+                    return BOT_ATTACK_STEP_AIM_LEFT;
+                }
+                if mask & 2 != 0 && check(self, BOT_ATTACK_STEP_AIM_RIGHT) {
+                    return BOT_ATTACK_STEP_AIM_RIGHT;
+                }
+            }
+            1 => {
+                if mask & 1 != 0 {
+                    if check(self, BOT_ATTACK_STEP_AIM_LEFT) {
+                        return BOT_ATTACK_STEP_AIM_LEFT;
+                    }
+                    if check(self, BOT_ATTACK_STRAFE_AIM_LEFT) {
+                        return BOT_ATTACK_STRAFE_AIM_LEFT;
+                    }
+                }
+                if mask & 2 != 0 && check(self, BOT_ATTACK_STRAFE_AIM_RIGHT) {
+                    return BOT_ATTACK_STRAFE_AIM_RIGHT;
+                }
+                if mask & 2 != 0 && check(self, BOT_ATTACK_STEP_AIM_RIGHT) {
+                    return BOT_ATTACK_STEP_AIM_RIGHT;
+                }
+            }
+            2 => {
+                if mask & 2 != 0 {
+                    if check(self, BOT_ATTACK_STRAFE_AIM_RIGHT) {
+                        return BOT_ATTACK_STRAFE_AIM_RIGHT;
+                    }
+                    if check(self, BOT_ATTACK_STEP_AIM_RIGHT) {
+                        return BOT_ATTACK_STEP_AIM_RIGHT;
+                    }
+                }
+                if mask & 1 != 0 && check(self, BOT_ATTACK_STEP_AIM_LEFT) {
+                    return BOT_ATTACK_STEP_AIM_LEFT;
+                }
+            }
+            3 => {
+                if mask & 2 != 0 && check(self, BOT_ATTACK_STRAFE_AIM_RIGHT) {
+                    return BOT_ATTACK_STRAFE_AIM_RIGHT;
+                }
+                if mask & 1 != 0 && check(self, BOT_ATTACK_STRAFE_AIM_LEFT) {
+                    return BOT_ATTACK_STRAFE_AIM_LEFT;
+                }
+                if mask & 2 != 0 && check(self, BOT_ATTACK_STEP_AIM_RIGHT) {
+                    return BOT_ATTACK_STEP_AIM_RIGHT;
+                }
+                if mask & 1 != 0 && check(self, BOT_ATTACK_STEP_AIM_LEFT) {
+                    return BOT_ATTACK_STEP_AIM_LEFT;
+                }
+            }
+            _ => {}
+        }
+        // the EvasiveMove fall-through [M :90-98]: the roll arms (0x79/0x7a → 0xD9/0xDA) need
+        // `BOTSTATE_EvasiveMove`, not lifted — the none-arm's mask-bit-2 0xD7 backoff stands [S].
+        if mask & 4 != 0 && check(self, BOT_ATTACK_BACKOFF) {
+            return BOT_ATTACK_BACKOFF;
+        }
+        0
+    }
+
+    /// `BOT_handleOpponentHistory` 0x1257c0 [M :27-100]: push the candidate into the 16-ring
+    /// (+0x6DC, head +0x76C), score the copy — later duplicates count, dead rows (and their
+    /// duplicates) drop, the current opponent's entries weigh ×5 — then the argmax becomes the
+    /// opponent (`NDrone2_SetOpponent`, +0x274 := 0, +0x270 := 1) when it differs; with nothing
+    /// scored the candidate itself passes through [M :85-91].
+    /// The +0x4F8 bit-0x10000 gate is the bot-object mark (bit 0x80000000 is
+    /// `BOT_postLoadInit`'s [M 0x1262b8:9]); the port's brain is always a bot [S].
+    pub fn handle_opponent_history(&mut self, ctx: &BotCtx, candidate: Option<usize>) -> Option<usize> {
+        let cand = candidate.map(|i| i as u32 + 1).unwrap_or(0);
+        let head = self.vars.opp_history_head as usize % 16;
+        self.vars.opp_history[head] = cand; // [M :27-28]
+        self.vars.opp_history_head = (head as u8 + 1) % 16; // [M :29, the >15 wrap]
+        let ring = self.vars.opp_history; // the game scores a copy (amemcpy 0x40) [M :24-26]
+        let mut scores = [0u32; 16];
+        for i in 0..16 {
+            let e = ring[i];
+            if e == 0 {
+                continue;
+            }
+            let idx = e as usize - 1;
+            let alive = ctx.others.get(idx).is_some_and(|o| o.alive); // MP_playerIsDead [M :42]
+            let mut s = 0u32;
+            for j in i + 1..16 {
+                if ring[j] == e {
+                    if alive {
+                        s += 1; // the copy's dupe zeroing [M :55-58]
+                    } else {
+                        self.vars.opp_history[j] = 0; // the dead arm prunes the ring [M :66-70]
+                    }
+                }
+            }
+            if !alive {
+                self.vars.opp_history[i] = 0; // [M :73]
+                continue; // dead entries score 0
+            }
+            if Some(idx) == self.vars.opponent {
+                s *= 5; // the current opponent weighs ×5 [M :75-78]
+            }
+            scores[i] = s;
+        }
+        let mut best: i32 = -1;
+        let mut best_s = 0u32;
+        for i in 0..16 {
+            if scores[i] > best_s {
+                best_s = scores[i];
+                best = i as i32;
+            }
+        }
+        if best < 0 {
+            // nothing scored — param_2 stays the caller's candidate and the SetOpponent arm
+            // below still runs against it [M 0x1257c0:85-91]
+            if let Some(p) = candidate {
+                if Some(p) != self.vars.opponent {
+                    self.vars.opponent = Some(p);
+                    self.vars.unseen_ticks = 0;
+                    self.vars.seen_ticks = 1;
+                }
+            }
+            return candidate;
+        }
+        let pick = ring[best as usize] as usize;
+        if pick == 0 {
+            return None;
+        }
+        let pick = pick - 1;
+        if Some(pick) != self.vars.opponent {
+            self.vars.opponent = Some(pick); // SetOpponent [M :92-94]
+            self.vars.unseen_ticks = 0; // +0x274 [M :95]
+            self.vars.seen_ticks = 1; // +0x270 [M :96]
+        }
+        Some(pick)
+    }
+
+    /// `BOTSTATE_isPathWithinObjectRange` 0x128f80 [M] — does the bot's route pass within
+    /// `radius` of `centre`? The game walks the AI-emitter node chain of `Drone+0x854`
+    /// (`Vec_LineSphereIntersection` per segment, `max_segs` budget); the port walks its own
+    /// `BotRoute` node list through the nav network [S — the segment source]. The game's caller
+    /// (`BOTSTATE_pickGoal` 0x126b88:525, pref-byte bit 0x8) passes radius 4.0 and 4 segments
+    /// around the opponent [M].
+    pub fn is_path_within_object_range(
+        &self, ctx: &BotCtx, centre: [f32; 3], radius: f32, max_segs: i32,
+    ) -> bool {
+        let Some(net) = ctx.nav else { return false };
+        let path = self.route.path;
+        let mut segs = 0;
+        let mut prev: Option<[f32; 3]> = None;
+        for &n in &self.route.nodes {
+            let Some(node) = net.paths.get(path).and_then(|p| p.nodes.get(n as usize)) else {
+                break;
+            };
+            let p = [node.pos[0], node.pos[1], node.pos[2]];
+            if let Some(a) = prev {
+                if segs >= max_segs {
+                    break;
+                }
+                segs += 1;
+                if segment_sphere_hit(a, p, centre, radius) {
+                    return true;
+                }
+            }
+            prev = Some(p);
+        }
+        // the tail leg: last node → the goal position (the game's emitter tail does the same
+        // +0x40 goal block [M 0x128f80:150-158])
+        if let Some(a) = prev {
+            if segs < max_segs && segment_sphere_hit(a, self.route.dest, centre, radius) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// `BOTSTATE_stopAnim` 0x129918 [M :4-12] — the game freezes the anim-script clock
+    /// (+0xB0 := +0x90) and deletes the script. The port's MP bot body runs no anim scripts
+    /// (the walk is the body step, `walk_body`), so the teardown is a no-op here; the ported
+    /// `BotImpactBullet` gap it serves is listed in the state table (0xEF, `Thin`). [S]
+    pub fn stop_anim(&mut self) {
+        let _ = self; // nothing to tear down — see the doc comment
+    }
+
+    /// `BOT_soundEffect` 0x126618 [M :5-27] — the bot barks: trigger 1 plays 0x152/0x157
+    /// (hurt/death variant by the DCVars+0x15 byte), 0x1E/0x1F play 0x14d..0x152+Rand(2/5),
+    /// 0x1F only when the old ref (`+0x73C`) has stopped (`Sound_Playing_Ref`). The callers are
+    /// the death states (0xF2/0xF3) and `NDrone2_DealWithObjHit`. The port's MP bots have no
+    /// bark channel — bot sound is presentation (rules.rs' note), the drivers' `Sound` sink is
+    /// not threaded into `BotBrain` — so the trigger table stands as documentation here [S].
+    pub fn bot_sound_effect(&self, trigger: u32) -> Option<(u16, u32)> {
+        let _ = self;
+        match trigger {
+            1 => Some((0x152, 3)),  // 0x152 + Rand(3); the +0x15 byte moves it to 0x157 [M :9-14]
+            0x1E => Some((0x152, 2)), // 0x152 + Rand(2) [M :15-22]
+            0x1F => Some((0x14D, 5)), // 0x14D + Rand(5), the Playing_Ref gate first [M :23-27]
+            _ => None,
+        }
+    }
+}
+
+/// The `Vec_LineSphereIntersection_THAT_DOESNT_WORK_FOR_TIM` 0x1591d8 stand-in [S — the
+/// standard segment–sphere test; the game's own name records its broken edge cases, which the
+/// goal check tolerates (a false negative just skips the verify)].
+fn segment_sphere_hit(a: [f32; 3], b: [f32; 3], centre: [f32; 3], radius: f32) -> bool {
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [centre[0] - a[0], centre[1] - a[1], centre[2] - a[2]];
+    let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+    if ab2 == 0.0 {
+        return ac[0] * ac[0] + ac[1] * ac[1] + ac[2] * ac[2] <= radius * radius;
+    }
+    let t = ((ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / ab2).clamp(0.0, 1.0);
+    let dx = a[0] + ab[0] * t - centre[0];
+    let dy = a[1] + ab[1] * t - centre[1];
+    let dz = a[2] + ab[2] * t - centre[2];
+    dx * dx + dy * dy + dz * dz <= radius * radius
+}
+
 #[cfg(test)]
 mod brain_tests {
     use super::*;
@@ -4362,6 +4856,180 @@ mod brain_tests {
                 self.brain.last_visit_stamp = (usize::MAX, 0.0);
             }
         }
+    }
+
+    // ---- mp-bot-brain-rest: the decision helpers ----
+
+    /// `BOTSTATE_startRecovery` 0x1299d0 [M :8-16]: the first call arms the deadline
+    /// (recovery_b·2/3) + bit1; a second call must NOT move it (the bit-1 gate).
+    #[test]
+    fn brain_rest_start_recovery_gate() {
+        let mut r = Rig::new();
+        r.brain.vars.recovery_b = 6; // 6 · 2/3 = 4 frames
+        r.brain.vars.flag_word &= !2;
+        r.brain.start_recovery(100);
+        assert_eq!(r.brain.vars.flag_word & 2, 2, "bit1 must set [M :14]");
+        assert_eq!(r.brain.vars.regen_deadline, 104, "now + recovery_b·2/3 [M :12]");
+        // sister: the armed flag holds the deadline — a later call is a no-op
+        r.brain.start_recovery(500);
+        assert_eq!(r.brain.vars.regen_deadline, 104, "the bit-1 gate keeps the first deadline [M :9]");
+    }
+
+    /// `BOTSTATE_increaseDistraction` 0x129bb8 + `isDistracted` 0x129c58: accumulation returns
+    /// false below the goal's +0x20 limit, true at it; `isDistracted` flips on any non-zero sum.
+    #[test]
+    fn brain_rest_distraction_accumulates() {
+        let mut r = Rig::new();
+        r.brain.vars.goals[0] = crate::mp::bots::GoalSlot { scratch: 1.7, goal_type: 1, active: 1, ..Default::default() };
+        r.brain.vars.active_goal = 0;
+        r.brain.state = state::BOT_GOTO_GOAL_POSITION;
+        r.brain.vars.flag_word &= !4;
+        assert!(!r.brain.is_distracted(), "0 sum inside 0xEB with a goal → not distracted [M 0x129c58:13-18]");
+        assert!(!r.brain.increase_distraction(1.0), "below the limit → false [M 0x129bb8:15-19]");
+        assert_eq!(r.brain.vars.distraction, 1.0);
+        assert!(r.brain.is_distracted(), "any non-zero sum → distracted [M 0x129c58:13]");
+        assert!(r.brain.increase_distraction(0.7), "reaching the limit → true [M 0x129bb8:24-25]");
+        assert_eq!(r.brain.vars.distraction, 1.7, "clamped to the +0x20 limit [M 0x129bb8:24]");
+        // sister: outside 0xEB nothing accumulates
+        r.brain.vars.distraction = 0.0;
+        r.brain.state = state::BOT_IDLE;
+        let flagged = r.brain.increase_distraction(1.0);
+        assert!(flagged && r.brain.vars.distraction == 0.0, "no accumulate off 0xEB [M 0x129bb8:10]");
+    }
+
+    /// `BOTSTATE_reallyCloseCombatRange` 0x129b68 / `defaultCombatRange` 0x129b98: the close
+    /// band 0.5/1.5/1.625, and the restore from the `BOT_postLoadInit` save.
+    #[test]
+    fn brain_rest_combat_ranges() {
+        let mut r = Rig::new();
+        let saved = r.brain.vars.combat_range; // bot_init saved it to combat_range_default [M 0x1262b8]
+        assert_eq!(r.brain.vars.combat_range_default, saved);
+        r.brain.really_close_combat_range();
+        assert_eq!(r.brain.vars.combat_range, [0.5, 1.5, 1.625], "0x3f000000/0x3fc00000/0x3fcccccd [M 0x129b68:5-8]");
+        r.brain.default_combat_range();
+        assert_eq!(r.brain.vars.combat_range, saved, "restored from +0x71C/720/724 [M 0x129b98:5-9]");
+        // sister: the restore must differ from the close band (else the pair is vacuous)
+        assert_ne!(saved, [0.5, 1.5, 1.625]);
+    }
+
+    /// `BOTSTATE_chooseUnarmedAttackAnim` 0x1292f0 via `NDrone2_CanAltAttack` 0x1549e0: the
+    /// 1.5 reach gate on Drone+0x1A0.
+    #[test]
+    fn brain_rest_unarmed_reach() {
+        let mut r = Rig::new();
+        r.brain.vars.opp_dist = 1.2;
+        assert_eq!(r.brain.choose_unarmed_attack_anim(&mut r.rng), Some(0x3D), "in reach → the 0x3D anim [M 0x1292f0:11]");
+        // sister: out of reach — no unarmed attack
+        r.brain.vars.opp_dist = 2.0;
+        assert_eq!(r.brain.choose_unarmed_attack_anim(&mut r.rng), None, "dist > 1.5 refuses [M 0x1549e0:17]");
+    }
+
+    /// `BOTWEAP_getWeaponAnimSet` 0x12b140 — table spots from every arm plus the default.
+    #[test]
+    fn brain_rest_weapon_anim_set() {
+        use crate::mp::botweap::weapon_anim_set;
+        assert_eq!(weapon_anim_set(0x00), 0x18); // [M 0x12b140 case 0]
+        assert_eq!(weapon_anim_set(0x01), 0x16);
+        assert_eq!(weapon_anim_set(0x0C), 0x1A);
+        assert_eq!(weapon_anim_set(0x11), 0x15);
+        assert_eq!(weapon_anim_set(0x15), 0x14);
+        assert_eq!(weapon_anim_set(0x2B), 0x19);
+        assert_eq!(weapon_anim_set(0x52), 0x18);
+        // sister: 0x16/0x1A have no switch arm — the default 0x14 must catch a table typo
+        assert_eq!(weapon_anim_set(0x16), 0x14, "no arm for 0x16 → default [M 0x12b140]");
+        assert_eq!(weapon_anim_set(0x1A), 0x14, "no arm for 0x1A → default [M 0x12b140]");
+    }
+
+    /// `BOT_handleOpponentHistory` 0x1257c0: the ring dedupes, weights, and the argmax sets
+    /// the opponent (+0x274 := 0, +0x270 := 1); a miss keeps the held opponent.
+    #[test]
+    fn brain_rest_opponent_history() {
+        let mut r = Rig::new();
+        let world = CollisionWorld::from_triangles(Vec::new());
+        let others = r.others.clone();
+        let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+        for _ in 0..3 {
+            let pick = r.brain.handle_opponent_history(&ctx, Some(0));
+            assert_eq!(pick, Some(0));
+        }
+        assert_eq!(r.brain.vars.opponent, Some(0), "the argmax pick [M 0x1257c0:92-94]");
+        assert_eq!(r.brain.vars.unseen_ticks, 0, "+0x274 := 0 [M :95]");
+        assert_eq!(r.brain.vars.seen_ticks, 1, "+0x270 := 1 [M :96]");
+        // sister: a dead candidate scores 0 — the candidate itself passes through (the game's
+        // best == −1 tail keeps param_2), and the held opponent is not re-Set [M :85-91]
+        let mut dead = others.clone();
+        dead[0].alive = false;
+        let ctx2 = Rig::build_ctx(0.0, &r.pickups, &dead, &world, false);
+        r.brain.vars.opponent = Some(0);
+        assert_eq!(r.brain.handle_opponent_history(&ctx2, Some(0)), Some(0), "the candidate passes through [M 0x1257c0:85-91]");
+        assert_eq!(r.brain.vars.opponent, Some(0), "no re-Set for the held opponent [M :92]");
+    }
+
+    /// `BOT_validateStateChange` 0x124fb0: the impact states and 0xEE are refused (0xEE also
+    /// latches +0x76F), a plain combat move passes.
+    #[test]
+    fn brain_rest_validate_refuses() {
+        let mut r = Rig::new();
+        r.brain.state = state::BOT_ATTACK; // a live committed state, not the SM-0 early-out
+        r.brain.vars.opponent = Some(0);
+        let world = CollisionWorld::from_triangles(Vec::new());
+        let others = r.others.clone();
+        let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+        let mut rng = Rng::new(7);
+        assert!(matches!(r.brain.validate_state_change(state::BOT_IMPACT_BULLET, &ctx, &mut rng), StateChange::Refuse), "0xEF refused [M 0x124fb0:31-34]");
+        assert!(matches!(r.brain.validate_state_change(state::BOT_IMPACT_EXPLOSIVE, &ctx, &mut rng), StateChange::Refuse), "0xF0 refused [M :35-39]");
+        assert!(matches!(r.brain.validate_state_change(state::BOT_IMPACT_PUNCH, &ctx, &mut rng), StateChange::Refuse), "0xF1 refused [M :40-45]");
+        // sister: a normal combat move request is allowed
+        assert!(matches!(r.brain.validate_state_change(state::BOT_ATTACK_STRAFE_AIM_LEFT, &ctx, &mut rng), StateChange::Allow(_)), "type-4 targets pass the type-5 checks [M :105-112]");
+    }
+
+    /// `BOTSTATE_stopAnim` 0x129918 / `BOT_soundEffect` 0x126618 — the no-anim/bark-channel
+    /// port shape: stop_anim is callable, the sound trigger table maps 1/0x1E/0x1F.
+    #[test]
+    fn brain_rest_stop_anim_and_barks() {
+        let mut r = Rig::new();
+        r.brain.stop_anim(); // the port's MP bot body has no anim scripts to tear down [S]
+        assert_eq!(r.brain.bot_sound_effect(1), Some((0x152, 3)), "trigger 1 → 0x152 + Rand(3) [M 0x126618:9-14]");
+        assert_eq!(r.brain.bot_sound_effect(0x1F), Some((0x14D, 5)), "trigger 0x1F → 0x14D + Rand(5) [M :23-27]");
+        // sister: an unknown trigger maps to None
+        assert_eq!(r.brain.bot_sound_effect(9), None, "the decompile's early return [M :10-12]");
+    }
+
+    /// `MP_resetPickupBotVisitTimes` 0x18be50 — one bot's column zeroes, the others stand.
+    #[test]
+    fn mp_rest_pickup_visit_reset() {
+        use crate::mp::reset_pickup_bot_visit_times;
+        let mut pk = vec![
+            crate::mp::bots::BotPickup { pos: [1.0; 3], weapon_id: 1, mp_class: 0, is_obj_flag2: false, visit: [0.0; 16], available: true },
+            crate::mp::bots::BotPickup { pos: [2.0; 3], weapon_id: 2, mp_class: 0, is_obj_flag2: false, visit: [0.0; 16], available: true },
+        ];
+        pk[0].visit[2] = 12.0;
+        pk[1].visit[2] = 34.0;
+        pk[0].visit[3] = 56.0;
+        reset_pickup_bot_visit_times(&mut pk, 2);
+        assert_eq!((pk[0].visit[2], pk[1].visit[2]), (0.0, 0.0), "bot 2's stamps zero across rows [M 0x18be50:8-13]");
+        // sister: another bot's column untouched
+        assert_eq!(pk[0].visit[3], 56.0);
+    }
+
+    /// `MP_sendTeamBotMessage` 0x18bbc8's payload shape and `MP_UnregisterPickup` 0x18a058's
+    /// registered-count gates.
+    #[test]
+    fn mp_rest_team_msg_and_unregister() {
+        use crate::mp::{send_team_bot_message, unregister_pickup};
+        let m = send_team_bot_message(2, 0x44, 7, 3, 5);
+        assert_eq!(m.id, 0x44);
+        assert_eq!(m.current_state, 8, "GameState+0x52 + arg4 [M 0x18bbc8:24]");
+        // sister: the sender word 2 zeroes the recipient mask [M :21-23] — assert via the
+        // payload path the port returns (the mask rides the pump wiring)
+        let m2 = send_team_bot_message(0, 0x03, 0, 0, 0);
+        assert_eq!(m2.arg, 0);
+        let mut pk = crate::mp::bots::BotPickup { pos: [1.0; 3], weapon_id: 1, mp_class: 0, is_obj_flag2: false, visit: [0.0; 16], available: true };
+        let mut count: u32 = 4;
+        assert!(unregister_pickup(&mut pk, &mut count), "a registered row unregisters [M 0x18a058:10-29]");
+        assert!(!pk.available && count == 3, "the row zeroes and the count decrements [M :21-29]");
+        // sister: an already-unregistered row is refused
+        assert!(!unregister_pickup(&mut pk, &mut count) && count == 3, "the registered gate [M :10-14]");
     }
 
     /// The goal machine round trip: BotInit → 0xF9 (the 0xC3 chain [M 0x1748c8:16-18]); the

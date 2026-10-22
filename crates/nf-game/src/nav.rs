@@ -363,6 +363,9 @@ impl Network {
     /// `AINetwork_EmitPath(limit 255)` (0x158cf8): path distances from `pos` to every node of `path` (a flood from the
     /// first reachable node, link cost len × (used + 1), the same list quirks as A*), stored as bytes:
     /// trunc(g × 255 / 256) capped at 254, 0xFF = not reached.
+    /// The MP callers route through here: `MP_Pickup_PostLoadInit` 0x18b578 emits path 0 for a
+    /// registered pickup's emitter (the bots' route-in check) and `MP_PostLoadInitObjExt`
+    /// 0x18b848 the same for a mode object's ext [M 0x18b578:5-14, 0x18b848:5-9].
     /// The `AIEmitter` scratch walk (`AINetwork_InitEmitter2` 0x15b2b8 / `AllocEmitter` 0x15b390 /
     /// `FreeEmitter` 0x15b3d8) — the port allocates per-drone scratch instead of the game's shared
     /// emitter pool at 0x29aa20 [S deviation, drone.rs links_used].

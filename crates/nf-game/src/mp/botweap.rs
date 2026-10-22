@@ -160,6 +160,22 @@ pub fn reload_anim_for_weapon(w: u8) -> bool {
     !matches!(w, 1 | 0x34..=0x37 | 0x3a..=0x41 | 0x45 | 0x52 | 0x53)
 }
 
+/// `BOTWEAP_getWeaponAnimSet` 0x12b140 [M] — the weapon id → anim-set switch
+/// (`DroneWeap_ChangeWeapon` writes it to Drone+0xDA [M 0x12a028]). Unlisted ids fall to 0x14
+/// (the default arm), as do 0x16 and 0x1a — the switch has no arms for them.
+pub fn weapon_anim_set(w: u8) -> u8 {
+    match w {
+        0 | 0x33..=0x36 | 0x39..=0x3F | 0x44 | 0x51 | 0x52 => 0x18,
+        0x01..=0x0B | 0x40 | 0x41 => 0x16,
+        0x0C => 0x1A,
+        0x0D..=0x10 => 0x17,
+        0x11..=0x14 | 0x29 | 0x2A | 0x32 => 0x15,
+        0x15 | 0x17..=0x28 => 0x14,
+        0x2B..=0x2E => 0x19,
+        _ => 0x14, // the default arm [M]
+    }
+}
+
 /// `BOTSTATE_isPreferredWeapon` 0x129580 — `class_pref` is the record's preferred-weapon-class
 /// byte (`BOT_vars+0xAA`).
 pub fn is_preferred_weapon(t: &BotWeaponTable, class_pref: u8, w: u8) -> bool {
