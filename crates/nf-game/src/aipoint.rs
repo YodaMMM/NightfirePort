@@ -87,11 +87,11 @@ pub fn closest(points: &[AiPoint], net: &Network, world: &CollisionWorld, drone_
         let matches = p.owner != 0 && p.owner == owner;
         match best {
             None => best = Some((c, i, matches)),
-            Some((bc, _, have)) if c < bc => {
-                if have && !matches { continue; } // a matching incumbent blocks generics [M 0x151b18:170-176]
-                best = Some((c, i, matches));
+            Some((bc, _, have)) => {
+                if !have && matches { best = Some((c, i, matches)); } // an owner match beats any cost [M 0x151b18:156-166]
+                else if have && !matches { continue; } // a generic never replaces a match [M 0x151b18:167-181]
+                else if c < bc { best = Some((c, i, matches)); } // else least cost wins, first on ties [M :157-159, :172-174]
             }
-            _ => {}
         }
     }
     best.map(|(_, i, _)| i)
