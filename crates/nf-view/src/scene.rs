@@ -6884,8 +6884,20 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // Obj::Entity src.0 = 0x06000047, the lib key], whose streams carry the puff meshes
             // (0x020003cc/cd/ce/c7...). Walk the op-0x1b hashes recursively (the runtime `src` is
             // the sub's own lib key, so the attachment's script tuple must carry the sub's hash).
+            // copter-script-draw (user report: "heli is missing from the exchange"): `Copter_Create`
+            // 0x17d340 attaches NO glist to the copter (obj+0xD8 = 0 [M :60-66]) — its whole look is
+            // the script player `SP_Create(.., params 4/5, mode 8, ..)` makes [M 0x17d340 SP_Create
+            // call: +0x3c/+0x40 = the assembly 0x06000051 / the flight 0x06000050 on 07000008 #45
+            // [D]]. The sim spawns the flight on the gate (Drones::tick's copter_flight), but the
+            // flight's entities (the body 0x02000427 type 0x2F and its parented parts) had no draw
+            // slots — those scripts were never in this root list.
+            let copter_scripts: Vec<u32> = level.main_map().map(|mm| level.maps[mm].placements.iter()
+                .filter(|p| p.flags & 0xff == 0x2f)
+                .flat_map(|p| [4u32, 5].map(|k| p.params.iter().find(|(i, _)| *i == k).map_or(0, |&(_, v)| v)))
+                .filter(|&h| h != 0).collect()).unwrap_or_default();
             let mut hashes: Vec<u32> = players.iter().flat_map(|p| p.scripts).filter(|&h| h != 0)
                 .chain(switch_scripts)
+                .chain(copter_scripts)
                 .chain([0x0600_0052u32, 0x0600_0027, 0x0600_004f, 0x0600_07c4]).collect();
             let mut queued: std::collections::HashSet<u32> = hashes.iter().copied().collect();
             while let Some(h) = hashes.pop() {
