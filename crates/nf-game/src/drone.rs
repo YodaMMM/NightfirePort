@@ -9698,6 +9698,16 @@ pub fn hazard_link_flag(weapon_type: u16, stuck: bool) -> Option<(f32, u16)> {
     }
 }
 
+/// The per-viewer shake amount `Camera_Shake` 0x1bc430:12-26 writes [M]: with range = 2·radius
+/// and d ≤ range, `min((int)(range·(1 − (d/range)²)), 10)`; 0 outside. Explode_Create 0x17cc28
+/// only calls it from radius ≥ 0.5. standins-drone-922.
+pub fn camera_shake_amount(radius: f32, dist: f32) -> f32 {
+    let range = radius * 2.0;
+    if dist > range { return 0.0; }
+    let inten = range * (1.0 - (dist / range) * (dist / range));
+    if inten <= 0.0 { 0.0 } else { (inten as i32).min(10) as f32 }
+}
+
 pub fn flash_amount(head: V3, blast: V3, px: f32, pz: f32, yaw: f32, has_los: bool) -> f32 {
     let dx = blast[0] - head[0];
     let dy = blast[1] - head[1];
@@ -11496,14 +11506,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // intensity = range·(1 − (d/range)²), int-truncated, capped at 10, WRITTEN — a closer
         // blast overwrites (the old `max(radius)` had no falloff, no truncation, no cap).
         if radius >= 0.5 {
-            let range = radius * 2.0;
             let dv = ((pos[0] - self.player_pos[0]).powi(2)
                 + (pos[1] - self.player_pos[1]).powi(2)
                 + (pos[2] - self.player_pos[2]).powi(2)).sqrt();
-            if dv <= range {
-                let inten = range * (1.0 - (dv / range) * (dv / range));
-                if inten > 0.0 { self.shake = (inten as i32).min(10) as f32; }
-            }
+            self.shake = camera_shake_amount(radius, dv);
         }
         self.explosions.push((pos, radius, damage, owner, weapon_type));
     }
@@ -16178,6 +16184,18 @@ mod tests {
 
     /// A drone with only the collision-relevant fields set (pos, velocity, bounded, free_root, corpse), for the
     /// gravity / down-ray tests. The hip height is the default 1.0 (`Drone::hip`).
+    // standins-drone-922: the Camera_Shake set formula [M 0x1bc430:12-26] — range = 2·radius,
+    // intensity = range·(1 − (d/range)²), int-truncated, capped at 10, 0 outside the range.
+    #[test]
+    fn the_shake_amount_follows_camera_shake() {
+        assert_eq!(camera_shake_amount(8.0, 0.0), 10.0, "2·8 = 16 at the centre → capped 10");
+        assert_eq!(camera_shake_amount(3.0, 0.0), 6.0, "2·3 = 6, under the cap");
+        assert_eq!(camera_shake_amount(3.0, 1.5), 5.0, "6·(1−0.0625) = 5.625 → (int) 5");
+        assert_eq!(camera_shake_amount(3.0, 6.0), 0.0, "d = 2r → intensity 0");
+        assert_eq!(camera_shake_amount(3.0, 6.5), 0.0, "d > 2r → outside, 0");
+        assert_eq!(camera_shake_amount(1.0, 0.0), 2.0, "2·1 = 2 — the 0.5 floor's smallest real shake");
+    }
+
     pub(crate) fn drone_at(pos: V3) -> Drone {
         let dr = Drone {
             skin: 0, anim_set: 0, weapon: 0, pos, yaw: 0.0, desired_yaw: 0.0, aim_yaw: 0.0, alert: 0.0, alert_floor: 0.0,
@@ -16185,7 +16203,7 @@ mod tests {
             gun_through_wall: false,
             dist_to_player: [100000.0; 4],
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
-            accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, visibility: 0.0,
+            accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, bond_alive: true, visibility: 0.0,
             seen_ticks: 0, unseen_ticks: 0, vision_on: false, dist: 0.0, yaw_to_opp: 0.0,
             state: 0, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: 0, alarm_point: None,

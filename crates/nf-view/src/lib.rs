@@ -7017,6 +7017,22 @@ mod headless_app_harness {
         assert!(!h.app.scene.sim.as_ref().unwrap().auto_aim, "the option set Off turns it off");
     }
 
+    // standins-drone-922: the opponent object fold — the game's `Drone_tag+0x170` points at
+    // Bond while he lives [M NDrone2_FindOpponent 0x1424e0:100-120] and zeroes when his
+    // class-3 health ≤ 0; the port stamps `bond_alive` per tick from the health.
+    #[test]
+    fn the_opponent_pointer_follows_bonds_life() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        h.frames(2);
+        assert!(h.app.scene.sim.as_ref().unwrap().drones.list.iter().all(|dr| dr.bond_alive),
+            "a live Bond is every guard's opponent");
+        h.app.scene.sim.as_mut().unwrap().drones.health.health = 0.0;
+        h.frames(1);
+        assert!(h.app.scene.sim.as_ref().unwrap().drones.list.iter().all(|dr| !dr.bond_alive),
+            "a dead Bond leaves no opponent [M 0x1424e0:110-118]");
+    }
+
     /// The release's real path for the Auto Aim option: boot → title → main menu → Edit Codename →
     /// Default → Advanced → Auto Aim ▶ Off → Confirm → back to the main menu → Night Fire → The
     /// Exchange through the briefing → the loaded level's sim has auto aim OFF. The option file
