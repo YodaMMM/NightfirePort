@@ -622,6 +622,10 @@ pub struct Player {
     pub sph: V3,
     /// Bond hangs on a wire or zipline (substate 6 / 0xF): no volume-containment trigger contacts (triggers.rs).
     pub hanging: bool,
+    /// The object's euler facing yaw (`obj+0x54`, written by the movement handler
+    /// 0x1336f8:197/356's yaw-wrap) — the flash facing factor's yaw [M Bullet_DoTrails
+    /// 0x12d890:328-330]. standins-drone-922.
+    pub yaw: f32,
     /// The collision capsule's ends (top, bottom) — the geometry the trigger contact list is built
     /// from: `Trigger_Hit` 0x1b1fc8 classifies the contacts with no geometry of its own, and
     /// `Player_Collision` 0x194df0 builds the capsule per substate off obj+0x30 with the up vector.
@@ -810,6 +814,16 @@ pub struct Drone {
     pub los: bool,
     pub seen: bool,
     pub ever_seen: bool,
+    /// The SP opponent-object test [M NDrone2_FindOpponent 0x1424e0:100-120 — ControlSTANDARD
+    /// 0x1490f0:167 runs it EVERY tick, and for a non-ally drone it points `Drone_tag+0x170` at
+    /// Bond's object unconditionally, zeroing it only when `PlrStat_OkToUpdate` fails, the
+    /// player object's class-3 health ≤ 0, or the class-0x12 body; the +0x170 == 0 state arms
+    /// (INTEROGATE 0x161a40:26, INTEROGATE_ASSIST 0x1616c0:19/43, Surrender_Anim 0x1626a0:39,
+    /// the combat re-eval 0x148338:20) therefore fire when the PLAYER IS DEAD, not when unseen
+    /// — `NDrone2_HasOpponent` 0x14ad58's pointer half is live the whole time]. The port folds
+    /// the pointer to this flag, stamped per tick in the vision pass from Bond's health.
+    /// standins-drone-922 (the old `ever_seen` fold sent never-seen guards to NoOpponent).
+    pub bond_alive: bool,
     pub visibility: f32,
     pub seen_ticks: u32,
     pub unseen_ticks: u32,
@@ -1647,7 +1661,7 @@ impl Drone {
             // (The lookup is `behaviour_util_getStats` 0x1c7e58 — `drone_stats + type·0x60 + kind·0x20`,
             // driven by `NDrone2_DoModeSettingsNEW` 0x14c600:81; its word +8 is the health [M].)
             accuracy: 5, aggression: 0, reaction: 0,
-            los: false, seen: false, ever_seen: false, visibility: 0.0, seen_ticks: 0, unseen_ticks: 0, vision_on: false,
+            los: false, seen: false, ever_seen: false, bond_alive: true, visibility: 0.0, seen_ticks: 0, unseen_ticks: 0, vision_on: false,
             dist: 0.0, yaw_to_opp: 0.0,
             state: state::GLOBAL, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: param(23) as u8, alarm_point: None,
@@ -2124,7 +2138,18 @@ impl Drone {
         self.desired_yaw = atan2_approx(target[0] - self.pos[0], target[2] - self.pos[2]);
     }
 
-    /// `DroneMove_ObjectMissionPathDistance` (0x153f50): the signed route distance between the
+    /// `DroneMove_ObjectMissionPathDistance` (0x153f50) — the game's exact shape [M
+    /// 00153f50 decompile]: scan the mission route's nodes (route at drone+0x970, node array
+    /// +0xa60, count +0x9f2, current node +0x9f0; count == 0 → return 0) for the node nearest
+    /// Bond in 2D — accepted only within 5.0 u (`Vec_SqDist2D < 25.0` after the first
+    /// candidate) and the 3D gates DAT_002c7954 = 900.0 (30 u²), |dz| ≤ DAT_002c794c = 4.0,
+    /// slope ≤ DAT_002c7944 = 0.8727 rad, AINetwork_BoundsTest gated by DAT_002c8774 = 1
+    /// [L ee_snapshot values] — then return
+    /// `AINetwork_GetRouteDistanceBetweenNodes(route, current_node, best)` (0x156160:42-75:
+    /// the summed link lengths along the route's node list, POSITIVE when Bond's node is
+    /// ahead, NEGATIVE when behind); 0 when Bond is off-route. The three Lead UPDATE handlers
+    /// are its only callers, all storing SM+0x20 [M 0x15e698:58 / 0x15eda8:33 / 0x15f120:29].
+    /// The signed route distance between the
     /// drone's current route node and the route node nearest the object. The node scan ranks by
     /// squared 2D distance from obj+0x30 — the FIRST route node is always a candidate, later ones
     /// only while strictly closer than the best (the 5.0 arg is only the initial cutoff,
@@ -7345,14 +7370,18 @@ impl Drone {
             // `NDrone2_DSTATE_NoOpponent` 0x1650a0 (state 0x60) [M]. ENTER: `AlertStatusSet(0)`, the alert-idle
             // anim 0x21, and (SP - `MPSettings+0x388` 0; this port's drone AI is SP-only) timer C = 1 s
             // (`FRAME_RATE_DIV * 60`) [M 0x1650a0:13-22]. UPDATE (SP) and timer C: an opponent object
-            // (`+0x170`; the port's stand-in is `ever_seen`) -> Attack 0x56; timer C with none re-arms 1 s
+            // (`+0x170` = Bond's object in SP [M 0x1424e0:100-120]; the port's fold is
+            // `bond_alive`) -> Attack 0x56; timer C with none re-arms 1 s
             // [M :24-42]. (The port used to drop straight to Idle.) The game's opponent test is
             // `NDrone2_HasOpponent` 0x14ad58 [M: opponent `+0x170` != 0, OR the last-opponent tick `+0x238`
             // (written with the opponent in `DroneVision_HaveOpponentSight` 0x175ef0:66-67) still within
-            // 30 ticks: `GameState+52 <= +0x238 + 0x1e`] — the port's `ever_seen` latch is the coarse fold
-            // [S]: the SP port has no opponent pointer to clear, so the 30-tick grace never expires.
+            // 30 ticks: `GameState+52 <= +0x238 + 0x1e`] — in SP the pointer half is live the whole
+            // time Bond lives (FindOpponent re-points it every tick), so the state arms fire on the
+            // player's DEATH; the port stamps `bond_alive` from Bond's health per tick
+            // (standins-drone-922; the old `ever_seen` fold wrongly sent never-seen guards here).
             // ---- `NDrone2_DSTATE_Interogate` 0x161a40 (state 0x3c) -------------------------------------
-            // ENTER [M case 1]: no opponent (+0x170; the port's `ever_seen`) → NoOpponent 0x60; a
+            // ENTER [M case 1]: no opponent (+0x170 == 0 = the player dead [M 0x1424e0:100-120];
+            // the port's `bond_alive`) → NoOpponent 0x60; a
             // civilian (`IsCivilian` — team ≠ 1) or a drone holding no gun (its own held byte
             // `obj+0xdc+0x62` ≤ 1) → Attack 0x56. Otherwise `DroneVision_BeginInterogate` 0x1782a8
             // (+0x4FC |= 0x20, the party latch DAT_0029aa86 = 1), vision on (+0x4F8 |= 0x10000),
@@ -7360,7 +7389,7 @@ impl Drone {
             // current distance, timer C = now + FRAME_RATE_DIV·60, `+0xCD8` = 0, anim 0x21.
             // (+0x4F8 |= 0x2000 has no port reader [S].)
             (INTEROGATE, msg::ENTER) => {
-                if !self.ever_seen { self.set_state(NO_OPPONENT); return true; }
+                if !self.bond_alive { self.set_state(NO_OPPONENT); return true; }
                 if self.team != 1 || (self.weapon as u8) <= 1 { self.set_state(ATTACK); return true; }
                 self.alert_bits |= 0x20;
                 self.interro_latch = Some(true);
@@ -7404,7 +7433,7 @@ impl Drone {
             // timer +60; 3 → Attack. (The 07000005 arm is unreachable: FirstSightState never returns
             // 0x3C there [M 0x147c48:92-100].)
             (INTEROGATE, msg::TIMER_C) => {
-                if !self.ever_seen { self.set_state(NO_OPPONENT); return true; }
+                if !self.bond_alive { self.set_state(NO_OPPONENT); return true; }
                 let step = self.interro_step;
                 self.interro_step += 1;
                 if d.level == 0x0700_0007 {
@@ -7438,13 +7467,13 @@ impl Drone {
             // opponent → 0x60; a goal route to within 10.0 of the opponent (`SetupGoalPositionToObj`,
             // `CanReachGoalPosition`) → +0x5A2 = 0x3a and GoToGoalPosition 0x63; else 0x3a directly.
             (INTEROGATE_ASSIST, msg::ENTER) => {
-                if !self.ever_seen { self.set_state(NO_OPPONENT); return true; }
+                if !self.bond_alive { self.set_state(NO_OPPONENT); return true; }
                 self.alert_bits |= 0x20;
                 self.timer_c = Some(frame + rng.rand(120));
                 true
             }
             (INTEROGATE_ASSIST, msg::TIMER_C) => {
-                if !self.ever_seen { self.set_state(NO_OPPONENT); return true; }
+                if !self.bond_alive { self.set_state(NO_OPPONENT); return true; }
                 self.croute = None;
                 self.goal = Some(self.target.pos);
                 if matches!(self.move_to_goal(d), 0..=3) {
@@ -7475,7 +7504,7 @@ impl Drone {
             }
             // (The UPDATE needs the source drone's +0x4FC — read at the tick, `assist_end` below.)
             (INTEROGATE_ASSIST_WAIT, msg::UPDATE) => {
-                if !self.ever_seen { self.set_state(NO_OPPONENT); return true; }
+                if !self.bond_alive { self.set_state(NO_OPPONENT); return true; }
                 if self.assist_src.is_none() || self.assist_ended { self.set_state(ATTACK); return true; }
                 self.desired_yaw = self.yaw_to_opp;
                 true
@@ -7486,9 +7515,9 @@ impl Drone {
                 self.timer_c = Some(frame + 60);
                 true
             }
-            (NO_OPPONENT, msg::UPDATE) => { if self.ever_seen { self.set_state(ATTACK); } true }
+            (NO_OPPONENT, msg::UPDATE) => { if self.bond_alive { self.set_state(ATTACK); } true }
             (NO_OPPONENT, msg::TIMER_C) => {
-                if self.ever_seen { self.set_state(ATTACK); } else { self.timer_c = Some(frame + 60); }
+                if self.bond_alive { self.set_state(ATTACK); } else { self.timer_c = Some(frame + 60); }
                 true
             }
             // `NDrone2_DSTATE_HostageDead` 0x172628 (state 0x0f) [M]. ENTER: `AlertStatusSet(3)` (level 1.0),
@@ -7721,7 +7750,10 @@ impl Drone {
             (CIVILIAN_MISSION, msg::ENTER) => {
                 // CivilianMission 0x15d860 case 1: voice 0x13 → KikoMission 0x19 (the port's skin
                 // mapping: skin 0x5e → 0x13 [M 0x14b300]); unreached by the disc's placements
-                // (kiko.rs) but ported for fidelity. fix-finale-blockers replaced the 0x0d stand-in.
+                // (kiko.rs) but ported for fidelity. fix-finale-blockers replaced the 0x0d
+                // stand-in — RESOLVED (standins-drone-922): state 0x0d is HostageIdle
+                // (0x15ce60, handler table 0x29b300+0xd·4 [L ee_snapshot]) and the current code
+                // carries no 0x0d stand-in; the note is historical.
                 if self.voice_type == 0x13 { self.set_state(crate::kiko::KIKO_MISSION); return true; }
                 self.call_anim(d, anim_state::WALK, 0, 0);
                 self.bond_talk_count = 0xff; self.bond_talk_cooldown = 0; // [M 0x15d860:23-24]
@@ -7945,7 +7977,11 @@ impl Drone {
             // HostageHide (0x15cfe0 — state 0x0e [L 0x29b300]) ENTER: +0x4f8 |= 0x4000000 (the
             // drawn-flag bit the port keys on `enabled`), +0x50c = 1.0, alert 2, the cower anim
             // 0x19 [M 0x15cfe0:12-16]; case 3 → nobody armed within 20 → HostageIdle 0x0d [M
-            // 0x15cfe0:23-29 — the port's msg-3 clock is not modelled, [S] the UPDATE-less hold].
+            // 0x15cfe0:23-29 — there IS no msg-3 clock in the game: HostageHide's case 3 is the
+            // per-UPDATE re-poll `NearArmedDrone(20.0, flag 0)` [M 0x15cfe0:23-29 — 0x41a00000 =
+            // 20.0f; ENTER arms nothing], transitioning to HostageIdle 0x0d when the coast is
+            // clear (HostageIdle 0x15ce60:28-33 is the mirror, into 0xe when one is near); the
+            // hold between UPDATEs is just message-idle (case 0 returns 1)].
             (HOSTAGE_HIDE, msg::ENTER) => {
                 self.enabled = true;
                 self.alert = 1.0; // `+0x50C = 1.0` [M 0x15cfe0:14]
@@ -7996,7 +8032,11 @@ impl Drone {
                 }
                 // The route: done → AllyLeadDone [M 0x15e698 case 3, FollowRoute branch 3].
                 // MOVING rides the RUN anim [M 0x15e698 case 3: code 0/2 → CallAnim(0x1e)] — the old
-                // walk-anim stand-in walked the whole lead at half speed and spent the test's escort
+                // the game's lead walk is anim 0x1e at the walk class — `Drone_tag+0x50c`
+                // initialised from behaviour prop 0x20 via DoModeSettingsNEW 0x14c600:71-74
+                // (table DAT_002f5cc8's 0.66 class [L ee_snapshot 0x2f5cd0 = 0.66]); there is NO
+                // 0.5 multiplier anywhere in the Lead path (the old half-speed stand-in walked
+                // the whole lead wrong and spent the test's escort
                 // window on the stairs.
                 if self.update_mission_route(d, rng, frame, anim_state::RUN) { self.set_state(ALLY_LEAD_DONE); return true; }
                 // `ReachedDestNode` queued `DSTATE_OpenDoor` — the sub-state checks below must not
@@ -8004,7 +8044,10 @@ impl Drone {
                 if self.next_state.is_some() { return true; }
                 // Bond standing in the lead's path: within the π/6 (0x3f060a92) facing cone and 3.0
                 // → PlayerInWay [M 0x15e698 case 3 + BondWithinAngle 0x154f98 — the entry is the
-                // cone, replacing fix-actors' route_blocked stand-in].
+                // cone: PlayerInWay enters Lead→0x1e when Bond is inside the 0.5236 rad (30°)
+                // cone AND Dist2D < 3.0, and exits when he leaves the 1.0472 rad (60°) cone or
+                // Dist2D ≥ 3.5 [M 0x15e698:46-55 enter / 0x15ea28:32-51 exit], replacing
+                // fix-actors' route_blocked stand-in].
                 if self.bond_band(3.0, 0.523_598_8) { self.set_state(PLAYER_IN_WAY); return true; }
                 // The escort band [M 0x15e698 case 3's `ObjectMissionPathDistance` rules, the value
                 // stored at SM+0x20]: Bond more than 9 route-units BEHIND (path < −9.0) → wait for
@@ -8043,6 +8086,10 @@ impl Drone {
             (PLAYER_IN_WAY, msg::UPDATE) => {
                 // An armed hostile within 10 → cover (`lead_take_cover`, as Lead's arm; the
                 // flag-1 prop-0x50 gate applies here too [M 0x15ea28:30 + 0x177420:57-61]);
+                // AllyLeadHide exits when `NotNearArmedDrone(14.0)` [M 0x15ec08:30 —
+                // 0x177640:98-99 holds while the stored hostile (drone+0x2b8) is within 14u],
+                // arms timer C = now + 2·FRAME_RATE_INT [M 0x15ec08:35-38] and leaves via msg
+                // 0xC → ReFindMissionPath → 0x20 AllyLeadWait [M 0x15ec08:56-62]);
                 // otherwise resume the lead once Bond leaves the stay band — inside the π/3
                 // (0x3f860a92) facing cone AND 3.5 [M 0x15ea28 case 3].
                 if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 { self.lead_take_cover(d); return true; }
@@ -8070,7 +8117,13 @@ impl Drone {
             }
             // AllyLeadMissionWait 0x21 (0x15efc8): the route's wait-channel node parks the escort until
             // the channel fires. The port's route nodes carry no channels — the state is reachable
-            // through the forced-state path only [*suggested*; documented]. The game's ENTER (case 1)
+            // through the forced-state path only — now pinned: Lead is NEVER SetState'd from
+            // outside its cluster [M: the only entries are the spawn chain — DroneTypeSettings
+            // @0x29aee8 maps type 0x0c → start state 0x1c AllyLeadInit [L ee_snapshot symbol],
+            // Global ENTER 0x15b830:38-42 jumps to `+0x5A2`, AllyLeadInit 0x15e4f0:19-48 →
+            // 0x20 Wait on player Dist2D < 3.0 → 0x1d Lead (0x15eda8:55/67); Idle/Alert's
+            // prop-0x1d arm (0x15bf18:32-37, 0x15c248:21-29) routes to 0x1b EnemyMission
+            // instead; msg 0x1b on a Lead drone forces 0x20 (0x15e698:126-129)]. The game's ENTER (case 1)
             // also runs `NDrone2_MoveTo_RouteNode(vars, 1, +0x854 = the mission route)` — the dest `+0x670`
             // = route node 1's position (fallback: the drone's own placement pos), cel `+0x680`, arrival
             // radius `+0x664` = 0.3, dist `+0x660`, angles to `+0x690` — and plays the walk 0x21 [M
@@ -8112,7 +8165,15 @@ impl Drone {
             (FOLLOW, msg::ENTER) => { self.call_anim(d, self.walk_anim(d), 0, 0); true }
             (FOLLOW, msg::UPDATE) => {
                 // Follow the mission band: beyond 8 walk at Bond, inside it stand (the game walks the
-                // route toward Bond's node; the port's band is *suggested*, documented).
+                // route toward Bond's node; the game's band [M AllyLead 0x15e698:79-90]: with
+                // the signed mission-route distance to Bond (ObjectMissionPathDistance 0x153f50,
+                // stored SM+0x20) ≥ −9.0, Lead keeps leading while `drone+0x9f8` (a per-drone
+                // spawn float with NO code writer) is ≤ 15.0 or ≥ 25.0, and only inside 15..25
+                // with Bond trailing (dist < 0.0) hands to AllyLeadBondCombat 0x22 (which holds
+                // while dist < 0 and returns at 0x15f120:52); dist < −9.0 or == 0.0 → 0x20 Wait
+                // (AllyLeadWait stays put while dist ≤ −7.0 [M 0x15eda8:36]). The port's 8.0
+                // euclidean fold lacks the +0x9f8 spawn input — the snapshot value for the
+                // escort drone is a live check (report).
                 if self.dist > 8.0 { self.desired_yaw = self.yaw_to_opp; self.request_anim(d, self.walk_anim(d)); }
                 else { self.set_stand_idle(d, rng, frame, false); }
                 true
@@ -9014,7 +9075,19 @@ impl Drone {
     /// 0xc0a66666) and `NDrone2_CanStepLeft` 0x14f640 / `NDrone2_CanStepRight` 0x14f808 (case 3/4 tail, ±1.8)
     /// [M 0x150c18:164-316]; the port's pair() probes both sides through `can_move`.
     /// `NDrone2_CanAimCrouch` (0x154960) is the crouch-roll option here (case 5); the pair()
-    /// rolls are the ChooseCombatMove (0x150c18) stand-in for `BOTSTATE_EvasiveMove` (0x129368).
+    /// rolls are the ChooseCombatMove (0x150c18) stand-in for `BOTSTATE_EvasiveMove`
+    /// (0x129368) — RESOLVED (standins-drone-922): the game's pick is NOT a weighted dice
+    /// table. EvasiveMove 0x1506d8:39-100 gates on +0x4F8 & 0x10 / OpponentIsAimingAtMe(7.5),
+    /// builds the option list roll(prop 0x2e/anim 0x53) → strafe(0x41/0xc) → dodge(0x13/0x29)
+    /// → step(0x42/0x5a) in that order, picks UNIFORMLY with `Rand_Rand(count)`, coins the
+    /// side with `Rand(2)` per move, cascades failures roll→strafe→dodge, and its step arm is
+    /// a no-op; BOTSTATE_EvasiveMove 0x129368 only maps the SP anim states (0x76→0xd5,
+    /// 0x75→0xd4, 0x79/0x7a through BOT_getMovePossibility(3)). ChooseCombatMove 0x150c18:55-161
+    /// adds the 7/15 pre-roll (`Rand_Rand(0xf) < 7` prepends dodge when aiming), the
+    /// property+CanDoAnimState gates per option, the not-aiming crouch (prop 0x11, dist ≥ 6.0
+    /// at drone+0x1a0, `Rand(2)==0`), and the always-appended stand option; the failure
+    /// cascade ends crouch→`Rand(4)` = 3/4 stand (0x67), 1/4 nothing; the tail dedups
+    /// (0x67-with-0x68 → 0, same-as-current → 0) [M :163-362].
     fn choose_combat_move(&mut self, d: &Data, rng: &mut Rng) -> u8 {
         use state::*;
         // 0x13cfb0:35-39 — `DroneAnim_SetCombatMoveAnim`'s FIRST check precedes every combat
@@ -9743,7 +9816,13 @@ impl Drone {
     /// 0x176a28 variant: bone 0x80000005 world-trans on level 0x700001b, else obj pos + 0.2/0.6 by
     /// move state with states 4/0x1a failing [M 00141150 decompile]; the fixed +0.6 fold below is
     /// the standing case the port pins).
-    /// (0x13e378) move-state switch (crouch/aim heights) is not modelled [S].
+    /// (0x13e378) move-state switch [M NDrone2_GetHeadPos 0x149aa8:41-67 —
+    /// `DroneAnim_CurrentMoveState` 0x13e378 reads the anim's class byte
+    /// `Drone_AnimInfo[anim·0x18+0x10]` (symbol @0x273200 [L symtab]); states 3 and 5 (the
+    /// crouch/aim classes) put the head at +0.2, every other state at +0.6, and states 4/0x1a
+    /// return 0 = "no head" (the callers' failure arm). The port's guards have no crouch/aim
+    /// anim classes live yet (the class table is not extracted), so the fixed +0.6 is the
+    /// standing case; the +0.2 and the no-head arms land with the class table].
     pub fn head(&self) -> V3 { [self.pos[0], self.pos[1] + 0.6, self.pos[2]] }
 }
 
@@ -9839,7 +9918,15 @@ pub fn steer_missile(dir: &mut V3, yaw_in: f32, pitch_in: f32) {
     const POLE: f32 = 0.995;      // [M 0x12e7b0:191-202]
     let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-9);
     let (x, y, z) = (dir[0] / len, dir[1] / len, dir[2] / len);
-    let pole_lim = POLE.asin(); // 1.4706 rad — the port's angle-space form of the game's ±0.995 gate [S]
+    // 1.4706 rad — the angle-space form of the game's ±0.995 component gate: the gate's test
+    // quantity is the direction's Y component [M 0x12e7b0:191-202 — `fStack_17c` is the Y the
+    // `cartesian_to_spherical_acc` call right after consumes], and sin(pitch) = Y exactly, so
+    // |Y| ≤ 0.995 ⟺ |pitch| ≤ asin(0.995) on the pitch's (−π/2, π/2) range. Residual nuance
+    // (standins-drone-922): the game tests the component BEFORE the input and zeroes an outward
+    // input (the direction may sit past ±0.995), while this clamp pins at the limit — a
+    // missile already pointing steeper than 84.26° behaves differently; see the report's live
+    // checks for the disasm pass that settles the input's sign convention.
+    let pole_lim = POLE.asin();
     // exact-sine-sites-2 (G-046): the game's spherical pitch is atan2f(y, √(x²+z²)) — the PS2 libm
     // atan2f (0x2339f8, jal'd from vecutil_cartesian_to_spherical_acc 0x1e3a70:9), NOT asin and NOT
     // ATAN2_APPROX 0x1e4528. The √ is the EE sqrt (ps2float::sqrt), the sum EE adds.
@@ -9892,10 +9979,16 @@ const LOOK_SHORT: u16 = 0x0b;
 /// `Drone_BuildDynamicAwarePoints`' record-id switch (0x138b10:36-160), link-flag half: (radius,
 /// flag) per weapon-record id for `AINetwork_SetLinksFlagInCircle` [M 0x15b548]. `None` = the
 /// switch has no case for the id (0x35 stun and 0x3a tripbomb never flag). A stuck 0x37 mine is
-/// skipped like the game's `obj+0xF4 == 3` arm [M 0x138b10:150]. [S] unverified: the game also
-/// skips 0x34/0x6c/0x3b-0x40 when the record's +0xFC float ≥ 180.0 (0x138b10:100-102) — the port's
-/// thrown objects carry no counterpart field, and the flags are write-only state (no reader in
-/// ACTION.ELF — the report's census), so the gate cannot change routing either way.
+/// skipped like the game's `obj+0xF4 == 3` arm [M 0x138b10:164 — the skip avoids BOTH halves:
+/// the aware-point record (r 8.0) AND `AINetwork_SetLinksFlagInCircle`]. RESOLVED
+/// (standins-drone-922): the game DOES more than flag links — every pushed point record lands
+/// in the 64×0x30 table at DAT_00299e20, and `DroneFunc_HandleExplosives` 0x1435f0:20-48 WALKS
+/// that table (type-1 records gate props 0x34/0x36, type-2 gate 0x3b/0x3a) and sends msg 0x21
+/// (the hazard/fear message) on a match [M] — the port's direct explosive scan stands in for
+/// that reader (documented at the InitComms walk). The 0x34/0x6c ≥ 180.0 gate [M
+/// 0x138b10:119, current line numbering] skips only the SECOND point+flag of those ids — they
+/// already pushed a 12.0/0x100 record unconditionally first; ids 0x3b-0x40's only pass is the
+/// gated one. The port's thrown objects carry no +0xFC counterpart field.
 pub fn hazard_link_flag(weapon_type: u16, stuck: bool) -> Option<(f32, u16)> {
     match weapon_type {
         0x2a | 0x2c..=0x2f | 0x34 | 0x6c | 0x3b..=0x40 => Some((12.0, 0x100)),
@@ -9903,6 +9996,16 @@ pub fn hazard_link_flag(weapon_type: u16, stuck: bool) -> Option<(f32, u16)> {
         0x37 if !stuck => Some((8.0, 0x100)),
         _ => None,
     }
+}
+
+/// The per-viewer shake amount `Camera_Shake` 0x1bc430:12-26 writes [M]: with range = 2·radius
+/// and d ≤ range, `min((int)(range·(1 − (d/range)²)), 10)`; 0 outside. Explode_Create 0x17cc28
+/// only calls it from radius ≥ 0.5. standins-drone-922.
+pub fn camera_shake_amount(radius: f32, dist: f32) -> f32 {
+    let range = radius * 2.0;
+    if dist > range { return 0.0; }
+    let inten = range * (1.0 - (dist / range) * (dist / range));
+    if inten <= 0.0 { 0.0 } else { (inten as i32).min(10) as f32 }
 }
 
 pub fn flash_amount(head: V3, blast: V3, px: f32, pz: f32, yaw: f32, has_los: bool) -> f32 {
@@ -9928,7 +10031,8 @@ pub fn flash_amount(head: V3, blast: V3, px: f32, pz: f32, yaw: f32, has_los: bo
 /// frag-throw-timing2: what the stun flash actually consumed at one pop — the exact inputs the
 /// sim recorded where it called `flash_amount` [M Bullet_DoTrails 0x12d890's flash arm,
 /// 0x12dfb0-0x12e0b8]: the blast position, the player eye the dist and LOS legs ran from, the
-/// facing yaw (the cel+0x54 stand-in), the LOS branch taken, and the factor f the formula
+/// facing yaw (the game's `obj+0x54` body yaw [M 0x12d890:330], the port's `player.yaw`), the
+/// LOS branch taken, and the factor f the formula
 /// returned (`flash_alpha` is that f, `flashbang`/`flash_total` are 600·f [M 0x12e0b8 +
 /// 0x196040]). Port-side instrumentation with NO game counterpart (the game computes and
 /// forgets): it exists so a test can assert the flash against the geometry it actually used
@@ -10197,8 +10301,10 @@ pub struct Drones {
     /// with radius f13 = +0x08. Tuple: (pos, radius, damage, owner, weapon_type, script, scale).
     pub pending_blasts: Vec<(V3, f32, f32, usize, u16, u32, f32)>,
     /// The camera-shake amount: `Explode_Create` 0x17cbd0 calls `Camera_Shake(pos, radius)` when the
-    /// radius reaches 0.5 [M 0x17cc28-0x17cc44]; the port decays it 10%/tick − 0.05 [*suggested*: the
-    /// game's `Camera_Shake` curve is view-side, not modelled]. The view reads it for the offset. fix-explosions.
+    /// radius reaches 0.5 [M 0x17cc28-0x17cc44]; the set is `Camera_Shake` 0x1bc430's per-viewer
+    /// `min((int)(2r·(1−(d/2r)²)), 10)` overwrite [M], the decay `Camera_Update` 0x1bb6d8:35-43's
+    /// uniform `shake −= Rand_FRand(shake·0.25)` per tick, floored at 0 [M]. The view reads it for
+    /// the offset. fix-explosions + standins-drone-922.
     pub shake: f32,
     pub health: crate::bullet::PlayerHealth,
     /// Every hit on Bond: (tick, shooting drone, health lost).
@@ -10216,7 +10322,11 @@ pub struct Drones {
     /// the next `fire_player` (`Bullet_init_casing_ex` 0x12f678 re-positions the casing to
     /// `AnimGetBoneWorldTrans(shooter, weapon_datum)`'s VECTOR out via
     /// `Vec_Copy2(bone_pos, obj+0x30, obj+0x40)` — the game ejects at the gun bone, not the eye).
-    /// Consumed (reset to None) by the shot; `None` falls back to the aim-basis stand-in.
+    /// Consumed (reset to None) by the shot; `None` falls back to the aim-basis stand-in —
+    /// now pinned: the game's muzzle/aim basis is `Player_GetHeadPos` + the crosshair ray
+    /// snapped by `Collide_RayIntersect` [M Player_WeaponInitBullet 0x1a4bf0:152-164, 242-247;
+    /// Player_GetAimingPoint 0x1a4a98], and the CASING eject origin is the view-model bone's
+    /// world transform [M Bullet_init_casing_ex 0x12f678:160, its yaw/pitch at :168-169].
     pub eject_gun: Option<[[f32; 4]; 4]>,
     /// The view model's eject datum (1, or 5 for the alternating guns' other side) as posed this tick and the
     /// player's y — set by the viewer before each tick while a player shell waits (`Casings::reserve`).
@@ -10289,7 +10399,16 @@ pub struct Drones {
     /// (`weapon_data+0x10`, u16) ANDs the game's mask 1 are dropped before the sum
     /// [M `Collide_FilterBullets` 0x1ece30:24-31 — the disc's bit-0 records are the fists and the
     /// 0x63-0x66 melee specials only]. The hitter is Bond (the local slot — the port's local
-    /// pipeline fires no other rounds [S]). Cleared each tick at the flight pass's head; the
+    /// pipeline fires no other rounds — CORRECTED (standins-drone-922): the fire gate is one
+    /// round per cooldown tick [M Player_WeaponFiring 0x1a5460:625-663 — BL+0x92C > 0, the
+    /// view-model state gates, `--BL+0x936`, the cooldown reset from weapon_data+0x40], and
+    /// one round = one Bullet_init call per pellet [M 0x1a4bf0:291-294; all 0x0e-disc weapon
+    /// records are single-pellet [L]]. The DEMOLITION/PROTECTION site damage claim was WRONG
+    /// as stated: the game's site sums its own HITDATA chain — filled by the global collide
+    /// pass for EVERY bullet, bot bullets included [M MP_DemolitionProtectionUpdate
+    /// 0x1870a0:81-83; the hitter list only feeds the attack-warning messages :96-110]. The
+    /// port's `site_bullet_damage` collects Bond's local bullets only, so offline-MP bot fire
+    /// at the site is dropped — left work, see the report). Cleared each tick at the flight pass's head; the
     /// driver drains it into `MpMatch::damage_site` after the tick.
     pub site_bullet_damage: f32,
     /// mp-site-damage-offline: this tick's local blasts that reach the site, as `(falloff, owner
@@ -10556,7 +10675,14 @@ pub struct Drones {
     pub pain_alpha: f32,
     /// mp-bot-weapons: an MP match takes its pickups in the shared slot-order pass
     /// (`Sim::step_mp_pickups` — `Pickup_Update` 0x18e148's humans-then-bots loop, every taker on
-    /// every machine), so `update_pickups` skips its own player touch. Port-only [S].
+    /// every machine), so `update_pickups` skips its own player touch. Port-only, now pinned:
+    /// `Pickup_Update` 0x18e148:205-253 runs BOTH loops unconditionally on its one machine —
+    /// glb_players[0..3] first (obj+0xF4 == 1, class != 0x12, radius+1.1 sphere, LOS from
+    /// obj+0x80 mask 0x721), then — only while an MP match is live (`MPSettings+0x388 != 0`) —
+    /// the MPGame bots (LOS from obj+0x30, the armed/alive property gate); the FIRST qualifying
+    /// taker per pickup per tick wins (`return` right after `Pickup_Handler`, :216/:246) and
+    /// there is NO host-only gate anywhere in the function. The port's per-machine filtering is
+    /// port design; the game-side guarantee is humans-before-bots, first-taker-wins.
     pub mp_shared_pickups: bool,
     /// The grapple points (placement 0x3A, `Grapple_Create` 0x198298; fix-gadgets).
     pub grapple_points: Vec<crate::gadget::GrapplePoint>,
@@ -11735,8 +11861,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // is very small and not accurate to the game." fix-blast-scripts2: the caller's f12 arrives
         // as the `scale` arg instead of being derived from the radius.
         self.scripts.spawn_once_scaled(usize::MAX, script, bm, scale);
-        // `Camera_Shake(pos, radius)` only from radius 0.5 [M 0x17cc28].
-        if radius >= 0.5 { self.shake = self.shake.max(radius); }
+        // `Camera_Shake(pos, radius)` only from radius 0.5 [M 0x17cc28-0x17cc44]. Camera_Shake
+        // 0x1bc430:12-26 [M]: range = 2·radius; per viewer (the port's one viewer is Bond, the
+        // `player_pos` the FX pass already tracks) with d = |blast − viewer| ≤ range:
+        // intensity = range·(1 − (d/range)²), int-truncated, capped at 10, WRITTEN — a closer
+        // blast overwrites (the old `max(radius)` had no falloff, no truncation, no cap).
+        if radius >= 0.5 {
+            let dv = ((pos[0] - self.player_pos[0]).powi(2)
+                + (pos[1] - self.player_pos[1]).powi(2)
+                + (pos[2] - self.player_pos[2]).powi(2)).sqrt();
+            self.shake = camera_shake_amount(radius, dv);
+        }
         self.explosions.push((pos, radius, damage, owner, weapon_type));
     }
 
@@ -13848,6 +13983,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         for dr in &mut self.list {
+            // standins-drone-922: the opponent pointer [M 0x1424e0:100-120] — Bond alive = the
+            // pointer set; stamped for every drone every tick, before the LOS gate.
+            dr.bond_alive = self.health.health > 0.0;
             if dr.los {
                 dr.seen_ticks += 1;
                 // fix-guard-first-shot2: `ProcessDroneSight` 0x176a28:216-223 resets the unseen
@@ -15863,9 +16001,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // the port is SP-only, so owner == usize::MAX.
                             let head = player.eye;
                             let has_los = d.world.line_of_sight(head, pos);
-                            // The facing yaw: cel+0x54 is the body matrix's yaw — the port's stand-in is
-                            // the crosshair ray's bearing (both are the camera's yaw at the blast) [*suggested*].
-                            let yaw = atan2_approx(player.aim[0], player.aim[2]);
+                            // The facing yaw [M Bullet_DoTrails 0x12d890:328-330 — the flash arm
+                            // `Vec_AngleDifference(atan2f(blast−player), *(f32*)(player+0x54))`]: the
+                            // player object's euler facing yaw (`obj+0x54`, written by the movement
+                            // handler 0x1336f8:197/356's yaw-wrap). The port's `player.yaw` is that
+                            // field; the old crosshair-bearing stand-in is gone.
+                            let yaw = player.yaw;
                             let f = flash_amount(head, pos, player.pos[0], player.pos[2], yaw, has_los);
                             // frag-throw-timing2: record the exact geometry the flash consumed (the
                             // `FlashProbe` doc) — the test asserts against these, not a reconstruction.
@@ -16073,7 +16214,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // was set to FRAME_RATE·f·10 = 600·f ticks [M 0x196040 + 0x12e0b8]). The old self-fraction
         // decay (−f/6 per tick) erased the whiteout in ~6 ticks — invisible.
         self.health.flashbang = (self.health.flashbang - 1.0).max(0.0);
-        self.shake = (self.shake * 0.9 - 0.05).max(0.0);
+        // standins-drone-922: the game's decay [M Camera_Update 0x1bb6d8:35-43] — one
+        // `Rand_FRand(shake·0.25)` draw per tick (the port's `frand`, the same shared stream),
+        // floored at 0; the old 10%/tick − 0.05 was a guess.
+        if self.shake > 0.0 {
+            self.shake = (self.shake - self.rng.frand(self.shake * 0.25)).max(0.0);
+        }
         // The SimpleScripts (`SS_Update` 0x1a9948's state machine — grates-02). The `SS_Operate`
         // 0x1a9df8 contacts, from the collision pass's registered dynamic set: the player's
         // capsule box (bit 0) and this tick's player-bullet flight (bit 1) against each SS part's
@@ -16439,6 +16585,18 @@ mod tests {
 
     /// A drone with only the collision-relevant fields set (pos, velocity, bounded, free_root, corpse), for the
     /// gravity / down-ray tests. The hip height is the default 1.0 (`Drone::hip`).
+    // standins-drone-922: the Camera_Shake set formula [M 0x1bc430:12-26] — range = 2·radius,
+    // intensity = range·(1 − (d/range)²), int-truncated, capped at 10, 0 outside the range.
+    #[test]
+    fn the_shake_amount_follows_camera_shake() {
+        assert_eq!(camera_shake_amount(8.0, 0.0), 10.0, "2·8 = 16 at the centre → capped 10");
+        assert_eq!(camera_shake_amount(3.0, 0.0), 6.0, "2·3 = 6, under the cap");
+        assert_eq!(camera_shake_amount(3.0, 1.5), 5.0, "6·(1−0.0625) = 5.625 → (int) 5");
+        assert_eq!(camera_shake_amount(3.0, 6.0), 0.0, "d = 2r → intensity 0");
+        assert_eq!(camera_shake_amount(3.0, 6.5), 0.0, "d > 2r → outside, 0");
+        assert_eq!(camera_shake_amount(1.0, 0.0), 2.0, "2·1 = 2 — the 0.5 floor's smallest real shake");
+    }
+
     pub(crate) fn drone_at(pos: V3) -> Drone {
         let dr = Drone {
             skin: 0, anim_set: 0, weapon: 0, pos, yaw: 0.0, desired_yaw: 0.0, aim_yaw: 0.0, alert: 0.0, alert_floor: 0.0,
@@ -16446,7 +16604,7 @@ mod tests {
             gun_through_wall: false,
             dist_to_player: [100000.0; 4],
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
-            accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, visibility: 0.0,
+            accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, bond_alive: true, visibility: 0.0,
             seen_ticks: 0, unseen_ticks: 0, vision_on: false, dist: 0.0, yaw_to_opp: 0.0,
             state: 0, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: 0, alarm_point: None,
