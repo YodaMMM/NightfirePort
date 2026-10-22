@@ -7470,7 +7470,12 @@ impl FrontEnd {
     pub fn mp_net_dial(&mut self) -> bool {
         self.mp_net_error = None;
         let addr = self.mp_net_addr.trim().to_string();
-        if !mp_net_addr_ok(&addr) && nf_net::p2p::JoinCode::decode(&addr).is_err() {
+        // Every form the join box accepts — IP:PORT, the 16-symbol join code, and the 4-character
+        // lobby code the public list and friends share — is `parse_join_target`'s, the same parse
+        // the session's dial runs. The old gate here (IP:PORT or the long code only) refused every
+        // 4-character code before it reached the lookup (user report 2026-10-21: the code and the
+        // listed lobby's Enter "do nothing").
+        if !mp_net_addr_ok(&addr) && nf_net::p2p::parse_join_target(&addr).is_err() {
             self.mp_net_error = Some(MpNetError::BadAddress);
             return false;
         }
