@@ -4858,7 +4858,8 @@ mod brain_tests {
         use crate::mp::{send_team_bot_message, unregister_pickup};
         let m = send_team_bot_message(2, 0x44, 7, 3, 5);
         assert_eq!(m.id, 0x44);
-        assert_eq!(m.current_state, 8, "GameState+0x52 + arg4 [M 0x18bbc8:24]");
+        assert_eq!(m.current_state, 0xC5, "msg[1] = 0xC5 [M 0x18bbc8: uStack_2c]");
+        assert_eq!(m.arg, 7, "msg[6] = arg3 [M 0x18bbc8: uStack_18]");
         // sister: the sender word 2 zeroes the recipient mask [M :21-23] — assert via the
         // payload path the port returns (the mask rides the pump wiring)
         let m2 = send_team_bot_message(0, 0x03, 0, 0, 0);
