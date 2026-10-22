@@ -8949,7 +8949,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// tests read the same gate the render walks). A script actor is hidden while its
     /// `Script_AnimStart` object is not live (created at `Script_AnimStart` 0x1d8f40, deleted by
     /// `Script_KillStream` — 0x06000072/73 set no keep-objects flag [D]); a drone-backed character is
-    /// hidden when its drone is absent or drawn-frozen: `enabled` is the port's `obj+0xF0` stand-in —
+    /// hidden when its drone is absent or drawn-frozen: `enabled` models the game's `obj+0xF0`
+    /// bit 0x10 (standins-scene-929: the mapping is the game's own, not a stand-in) —
     /// `NDrone2_Enable(0)` 0x149dd0:8-15 sets `obj+0xF0 |= 0x10`, the bit `View_AddObjects`
     /// 0x1e62d8:33 excludes from the draw list, and `Drone_EnableAll(0)` [M 0x1383e8] applies it to
     /// every present drone when a cut-scene fires event 5; a spawner-held-back reinforcement stays
@@ -9020,7 +9021,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // fix-facial3: `AnimFacialBlend` (0x1be648) — the drone's facial script slots over the track
         // weights: slot 0 (the idle face) copies straight, slot 1 (the blink) overrides |w| > 0.01.
         // The drone's script-object sibling has no slots (the game's script objects get theirs from
-        // the same driver — the difference is [S], the tracks dominate there).
+        // the same driver — the difference is [S] unverified (kept out of pass/fail; the tracks
+        // dominate there — AnimFacialBlend 0x1be648's per-object slot source not traced).
         if c.script.is_none() {
             if let Some(di) = s.char_drone.get(ci).copied().flatten() {
                 let dr = &s.drones.list[di];
@@ -9664,15 +9666,21 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
 
 
 // ── net-match-host: the online match's shared sim surface ─────────────────────────────────────
-// [S] port-only (the PS2 game has no online mode): every machine runs the same MP level from the
-// host's settings + seed and exchanges only each agent's per-tick input (deterministic lockstep,
+// port-only, with the disc census as proof [D]: ACTION.ELF's symbol table has zero
+// socket/UDP/TCP/online symbols (the only "net" names are AINetwork_* nav-pathfinding) —
+// the PS2 game has no online mode. The lockstep layer is the port's own determinism contract:
+// every machine runs the same MP level from the host's settings + seed and exchanges only each
+// agent's per-tick input (deterministic lockstep,
 // `nf-net`, the one session layer). The shared state every machine must agree on is the bonds' poses, the MP match
 // state and the shared RNG stream — `net_state_hash` folds exactly that in a fixed slot order.
 /// mp-bots-in-match: the closest-approach parameter of the segment `a→b` to `center`, when the
-/// ray passes within `radius` (the bot shots' body hit — [S], see step_mp_bots).
+/// ray passes within `radius` (the bot shots' body hit — the port's sim-level sweep; the
+/// game's bot shots are shared-system bullets [M DroneWeap_FireWeapon 0x178f68], this helper
+/// is its documented sim stand-in — see step_mp_bots' hit-model note).
 /// The bots' head above a player position (`Bond::pos` = floor + 1.1, the head `EYE` above it): a
 /// bot's `brain.pos` and every human row in its view sit at head height, so distances, sight lines
-/// and aimed rounds compare like with like [S].
+/// and aimed rounds compare like with like — the game's sight/aim is head-based too
+/// (`DroneVision_CanSeePosition` 0x178438:54-75 from `NDrone2_GetHeadPos` [M]).
 pub const BOT_EYE: f32 = nf_game::player::EYE;
 /// The walk-cycle distance a player's anim set starts at (`ANIMOBJ+0xdc` = 0.37 at `AnimSetInit`,
 /// passed by `PlayerAnimSetInitNormal` 0x18fcd8) [M mp-players.md §3, 0x1c6a48 disasm 0x1c6b58].
@@ -9681,7 +9689,9 @@ pub const MP_WALK_INIT: f32 = 0.37;
 pub const MP_WALK_STRIDE: f32 = 0.5;
 
 /// mp-world-sync: the segment `a→b`'s entry parameter into the box `lo..hi` grown by `g` (the
-/// slab test; 0 when `a` starts inside), None = a miss [S the shared shot's box contact].
+/// slab test; 0 when `a` starts inside), None = a miss — a port-only determinism helper
+/// (there is no shared-shot box contact to mirror: the game has no online mode [D symtab
+/// census, the net-match-host note above]).
 fn seg_aabb(a: [f32; 3], b: [f32; 3], lo: [f32; 3], hi: [f32; 3], g: f32) -> Option<f32> {
     let (mut t0, mut t1) = (0.0f32, 1.0f32);
     for k in 0..3 {
@@ -9797,7 +9807,10 @@ impl Sim {
                 };
             }
             // The bots (positions snapshotted this tick — the brain's own row is skipped by
-            // index). Their slots follow the humans [S mp-16-slots; the game's base was 4].
+            // index). Their slots follow the humans [M MP_Start 0x183a50:136-162 — bot slot =
+            // i + 4 after the humans; BOT_init 0x1249e8:155-156 stores slot and slot − 4]. The
+            // game clamps the bot count at 4 [M 0x183a50:133-135]; 16 slots is the port's
+            // mp-16-slots extension (more than 4 bots cycle the disc's 4 records).
             for (i, b) in m.bots.iter().enumerate() {
                 let slot = m.settings.human_count as usize + i;
                 if slot >= nf_net::MAX_AGENTS { continue; }
@@ -9819,9 +9832,13 @@ impl Sim {
     /// One bot frame: the brain's step, then the shot resolution, the death/respawn and the
     /// score bookkeeping. Shot damage: the game's raw weapon damage is `weapon_data+0x0C`
     /// (the same word the drone fire path reads [M drone.rs FireWeapon's port]); the hit model
-    /// here is a body-sphere sweep along the shot ray with the world's clear-line check — a
-    /// stand-in for the full `Collide` capsule walk ([S], the sim's bots are not drone objects
-    /// so the shared bullet system cannot hit them; see the report's left items).
+    /// here is a body-sphere sweep along the shot ray with the world's clear-line check — the
+    /// documented sim-level stand-in for the game's hit model: the game's bots ARE Drone_Create
+    /// class-2 objects hit through the shared collide pass with the drone's vertical capsule
+    /// (radius 0.4 — 0.55 in the 0xC state, 0.3 crouched; ends pos+up·0.4 and
+    /// pos+up·(0.4 − the +0xA0 hip scalar) [M NDrone2_Collision 0x140e90:73-121]). The sim's
+    /// bots are not drone objects so the shared bullet system cannot hit them (see the report's
+    /// left items — the capsule port).
     /// The MP respawn gate [M `Player_HandleDeath` 0x190bb0:41-54 — `FRAME_RATE_INT * 5` ticks
     /// from the death stamp; the port's dead-tick counters start at 0 on the stamp tick].
     pub const MP_RESPAWN_DELAY_TICKS: u32 = 300;
@@ -9833,8 +9850,12 @@ impl Sim {
     /// - The death's start tick → `MP_PlayerKilled` 0x188f70 (`Player_CheckForDeath` 0x190810:91
     ///   calls it when the health runs out). The killer resolves from the slot's last-shooter word
     ///   (+0x20 — written per allowed bullet hit [M `MP_RegisterBulletHit` 0x1857c0:34]; the game
-    ///   resolves from the same death's HitByList, the port's stand-in chain is the
-    ///   registration). Values 0xfffe (the init / the respawn reset [M 0x183438:59,
+    ///   resolves by walking the death's HitByList — `Collide_GetDamageNObjects` on obj+0xD0,
+    ///   per-hitter class switch (bot 2/0x11 → its DCVars slot, human 3/0x12 →
+    ///   `Control_Plr2Ind`), then credits `MPGame[killer*0x30+4/0x10]` and writes the
+    ///   last-killer word `MPGame[victim*0x30+0x28]` [M MP_PlayerKilled 0x188f70:121-165].
+    ///   The port's registration word is the documented equivalent: one registration per
+    ///   allowed bullet hit [M 0x1857c0:34] stands in for the per-death list walk). Values 0xfffe (the init / the respawn reset [M 0x183438:59,
     ///   0x185368:56]) and 0xffff (the restart reset [M 0x183fc0:81]) mean no credit.
     /// - After the 5 s death delay (`Player_HandleDeath` 0x190bb0:41-54 — `FRAME_RATE_INT * 5`
     ///   frames from the death stamp) the respawn runs `MP_ReSpawn` 0x185368 via
@@ -9925,7 +9946,10 @@ impl Sim {
         Some(LocalDeathFx {
             phase: d.death.phase(),
             pane_px,
-            // [S] the draw's alpha source, derived from the px rule (448 px = full cover).
+            // [S] unverified, visual-only (no draw code changed): the draw's alpha source,
+            // derived from the px rule (448 px = full cover) — the main agent's render
+            // comparison against PCSX2 owns the look; the game's death-pane alpha ramp is
+            // untraced here.
             fade_alpha: (pane_px as f32 / nf_game::death::RED_FADE_TICKS as f32).clamp(0.0, 1.0),
             // SP hides the whole HUD for the pane [M 0x190bb0:24]; MP keeps it [M :39].
             hud_hidden: !is_mp,
@@ -9985,7 +10009,9 @@ impl Sim {
                     self.mp_bonds[slot] = Some(nb);
                 }
                 self.mp_hp[slot] = hp;
-                self.mp_armour[slot] = 0.0; // mp-bot-weapons [S]
+                self.mp_armour[slot] = 0.0; // the game's bots carry NO armour: BOTWEAP_setDroneArmour
+                // 0x12af70:3-7 is an empty function (bare return) and BOT_init 0x1249e8:95-100 sets
+                // no armour word [M] — 0.0 is the game's value (standins-scene-929).
                 self.mp_dead_ticks[slot] = 0;
             }
             for b in m.bots.iter_mut() {
@@ -10002,7 +10028,10 @@ impl Sim {
                 b.dead = true;
                 b.health = 0.0;
                 b.deaths += 1;
-                b.respawn_at = frame + 180; // the bots' death delay (step_mp_bots' kill path) [S]
+                b.respawn_at = frame + 180; // the bots' death delay — the game's own constant:
+                // NDrone2_DSTATE_BotDead stamps the SM timer at GameState + FRAME_RATE_INT * 3 =
+                // 180 ticks, then BotRespawn runs BOT_respawn [M 0x171518:22-41; the human gate
+                // is FRAME_RATE_INT * 5 = 300, 0x190bb0:41] (standins-scene-929).
             }
         }
         if online {
@@ -10100,7 +10129,8 @@ impl Sim {
             let alive = !m.bots[i].dead;
             if !alive {
                 // `BOT_respawn` 0x124e38: the death handler re-inits the bot at a spawn point
-                // after the delay. The port stands in 180 ticks (3 s) [S].
+                // after the delay — the game's delay IS 180 ticks (BotDead's FRAME_RATE_INT * 3
+                // timer [M 0x171518:22-24]); the port matches (standins-scene-929).
                 if frame >= m.bots[i].respawn_at {
                     let slot = m.bots[i].slot;
                     // mp-scenarios-online (agent6): `BOT_respawn` 0x124e38:85 goes through
@@ -10142,7 +10172,11 @@ impl Sim {
             // `find_opponent` reads (bit1|bit2 [M the CanSeeObject bit]) — the eye-to-chest line
             // clear of the world. The driver passed every row with flags 0 / dist2 0, so no bot
             // ever acquired anyone and they idled in 0xF9 all match (the user: "bots need to work
-            // too"; blocked 704's item 2) [S the vision cone/range stand-in: LOS only].
+            // too"; blocked 704's item 2). PROVEN the game's rule: bot vision is LOS-only —
+            // DroneVision_CanSeePosition 0x178438:54-75 gates on the same nav cel /
+            // AINetwork_TestRayCels then Collide_LineOfSight, with NO FOV cone or range constant
+            // anywhere [M; 0x176f18:56-104 the same for objects] — the port's LOS-only read IS
+            // the game's rule (standins-scene-929).
             let me = m.bots[i].brain.pos;
             let mut seen: Vec<nf_game::mp::bots::OtherPlayer> = others.to_vec();
             // mp-perf-16: the eye-to-chest sight line (`segment_surface_bullet`, eye = `me`, chest =
@@ -10247,7 +10281,9 @@ impl Sim {
                 let end = [shot.pos[0] + shot.dir[0] * range,
                            shot.pos[1] + shot.dir[1] * range,
                            shot.pos[2] + shot.dir[2] * range];
-                // The other bots: nearest body (radius 0.6 [S]) the ray passes within, world-clear.
+                // The other bots: nearest body (the port's sim-level sphere, r 0.6 — the game's
+                // capsule spec is the step's header note [M 0x140e90:73-121]) the ray passes
+                // within, world-clear.
                 let mut best: Option<(usize, f32)> = None;
                 for (j, b) in m.bots.iter().enumerate() {
                     if j == i || b.dead { continue; }
@@ -10269,7 +10305,9 @@ impl Sim {
                     if !o.alive || o.index != h { continue; }
                     if !online && h != 0 { continue; }
                     // The human's position is the feet; the round leaves the bot at eye height
-                    // (its spawn point's floor + 1.6): the body sphere sits at the chest [S].
+                    // (its spawn point's floor + 1.6): the body sphere sits at the chest — the
+                    // documented stand-in for the game's vertical capsule (r 0.4, ends
+                    // pos+up·0.4 / pos+up·(0.4 − +0xA0) [M 0x140e90:104-121]).
                     if let Some(t) = ray_body_hit(shot.pos, end, [o.pos[0], o.pos[1] - 0.3, o.pos[2]], 0.7) {
                         if hit_human.is_none_or(|(_, bt)| t < bt) { hit_human = Some((h, t)); }
                     }
@@ -10277,14 +10315,21 @@ impl Sim {
                 // One round hits one body — the nearest, bot or human — and only when the world is
                 // clear up to it. The old gate tested the whole ray out to the weapon's range
                 // (which nearly always ends in a wall), so no bot round ever hit another bot, while
-                // the human test had no wall check at all [S the bullet-route stand-in].
+                // the human test had no wall check at all. The game fires bot shots through the
+                // SAME bullet system as humans (DroneWeap_FireWeapon 0x178f68 → Bullet_init; the
+                // world collide applies identically [M]) — the port's two routes (this sim ray
+                // for bots, the shared pipeline for the human) are the documented stand-in, with
+                // the wall check matching the game's world collide (standins-scene-929).
                 let tb = best.map_or(f32::MAX, |b| b.1);
                 let th = hit_human.map_or(f32::MAX, |h| h.1);
                 if th <= tb { best = None; } else { hit_human = None; }
                 let tt = th.min(tb);
                 // mp-bot-objectives: the Demolition/Protection site takes the round when it is the
                 // nearest thing on the ray and the world is clear up to it (the human combat's
-                // site test, `step_net_combat`; the site SP's hit damage [M 0x1870a0:81-91]) [S].
+                // site test, `step_net_combat`). The single sphere is the port's documented
+                // coarser stand-in for the game's per-stream-object walk (SP_GetHitDamage
+                // 0x1dc5f8:80-93 [M]; the site SP's hit damage [M 0x1870a0:81-91]) — the same
+                // shape the MP site damage carries.
                 if let Some((c, r)) = m.site_sphere() {
                     if let Some(ts) = ray_body_hit(shot.pos, end, c, r) {
                         let p = [shot.pos[0] + (end[0] - shot.pos[0]) * ts, shot.pos[1] + (end[1] - shot.pos[1]) * ts, shot.pos[2] + (end[2] - shot.pos[2]) * ts];
@@ -10313,7 +10358,10 @@ impl Sim {
                     let shooter = m.bots[i].slot;
                     if m.register_bullet_hit(h, shooter) {
                         // mp-lobby-settings: `Player_HandlePain`'s MP arm [M 0x1902c8:51-82]; the
-                        // bot round's chest sphere stands in for a torso part [S].
+                        // bot round's chest sphere stands in for the whole body — the game's
+                        // capsule has no bot-specific part split (the bullet event chain takes
+                        // its part from the hit on the model [M the shared bullet system]);
+                        // documented (standins-scene-929).
                         let dmg = nf_game::mp::equip::mp_pain(&m.settings, &pain, dmg, nf_game::mp::equip::PART_TORSO);
                         if online {
                             // The per-slot online combat owns the health and the death (every machine).
@@ -10368,7 +10416,10 @@ impl Sim {
     /// then the bots by slot; the first whose body is within the pickup radius + 1.1 with a clear
     /// line takes it, one taker a tick [M :147-208]. The humans: the local slot runs the full
     /// `Pickup_Handler` (`Drones::take_pickup` — inventory, auto-switch, sound); online a refused
-    /// weapon/ammo take still consumes (the inventories are per machine, the pickups shared [S]),
+    /// weapon/ammo take still consumes — the game reads the LOCAL inventory per machine
+    /// (`Pickup_Handler` 0x18e148:203-246 [M]); one machine holds one inventory, so no shared
+    /// rule exists in the game — the shared consumption is the port's determinism contract
+    /// (documented MP port design),
     /// a remote human consumes weapon/ammo and takes armour by the shared `mp_armour` (refused at
     /// 50, the game's armour rule [M 0x18e650:220-225]). The bots: `Pickup_Handler`'s class-2 arm
     /// (`BotBrain::take_pickup`) and its visit stamp [M 0x18e650:34-130]; kinds other than
