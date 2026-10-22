@@ -267,10 +267,19 @@ fn two_humans_14_bots_600_ticks_hashes_agree() {
     {
         let sim = hs.sim.as_ref().expect("host sim");
         let m = sim.mp.as_ref().expect("match");
-        assert_eq!(m.bots.len(), 14, "14 bots created (the disc's 4 records cycle) [S mp-16-slots]");
+        // mp-16-slots: the bots sit at the game's FIXED base 4 [M MP_Start 0x183a50:139
+        // `iVar4 = uVar9 + 4`], so slots 2-3 stay empty and only 12 of the requested 14 bots
+        // fit the port's 16-slot table (the old 14-at-slot-2 pin contradicted the decompile).
+        assert_eq!(m.bots.len(), 12, "12 bots created (base 4 eats the 2 humans' slots 2-3) [M 0x183a50:139]");
         assert_eq!(m.game.slots.len(), 16);
+        // Sister (the draw side): the bodies ride the game's slot layout — humans 0..1, bots
+        // 4.., NO body for the empty slots 2-3 [M 0x183a50:117-139].
+        let body_slots: Vec<usize> = sim.mp_body_chars.iter().map(|(s, _)| *s).collect();
+        assert!(!body_slots.contains(&2) && !body_slots.contains(&3), "no body for the empty slots 2-3, got {body_slots:?}");
+        assert!(body_slots.starts_with(&[0, 1]), "the humans' bodies come first");
+        assert!(body_slots.contains(&4), "bot 0's body rides slot 4 [M 0x183a50:139]");
         for (i, b) in m.bots.iter().enumerate() {
-            assert_eq!(b.slot, 2 + i, "bot {i} holds the slot after the humans");
+            assert_eq!(b.slot, 4 + i, "bot {i} sits at the game's fixed base 4 [M 0x183a50:139]");
         }
     }
     let mut desyncs: Vec<String> = Vec::new();
@@ -321,7 +330,7 @@ fn two_humans_14_bots_600_ticks_hashes_agree() {
     // them; the poses cross-check directly).
     let hp = hs.sim.as_ref().expect("host sim").mp_bot_positions();
     let cp = cs.sim.as_ref().expect("client sim").mp_bot_positions();
-    assert_eq!(hp.len(), 14);
+    assert_eq!(hp.len(), 12, "12 bots — the game's fixed base 4 [M 0x183a50:139] leaves slots 2-3 empty");
     assert_eq!(hp, cp, "the bots' brains ended in the same state on both machines");
 }
 
