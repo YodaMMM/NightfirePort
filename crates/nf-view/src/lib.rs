@@ -3345,6 +3345,8 @@ impl App {
         // The fresh sound stack is unpaused: reset the mirror so the per-frame diff
         // re-applies the current hold (a menu can still be up over the reload).
         self.audio_paused = false;
+        // The per-boot text globals (DoorMsg / LoadMsg) survive the level swap [M .sdata].
+        if let (Some(old), Some(new)) = (self.scene.sim.as_ref(), scene.sim.as_mut()) { new.hud.carry_boot_globals(&old.hud); }
         if let Some(start) = scene.start { self.cam = Camera { pos: Vec3::new(start.0[0], start.0[1] + 1.6, start.0[2]), yaw: start.1, pitch: 0.0, fov: GAME_FOV }; }
         self.scene = scene;
         self.anim_time = 0.0;
@@ -4178,6 +4180,7 @@ impl App {
                                     sim.bond = nf_game::player::Bond::stand_at(&sim.world, pos, yaw);
                                     sim.gun.switch_request = w;
                                 }
+                                if let (Some(old), Some(new)) = (self.scene.sim.as_ref(), scene.sim.as_mut()) { new.hud.carry_boot_globals(&old.hud); }
                                 self.scene = scene;
                                 if let Some(g) = &mut self.gfx {
                                     g.renderer = gpu::Renderer::new(&g.device, &g.queue, g.config.format, &self.scene, self.notex, self.nofog);
@@ -4389,6 +4392,7 @@ impl App {
                                             self.cam_cur = None;
                                             self.sound = build_sound(&mut scene);
                                             self.audio_paused = false;
+                                            if let (Some(old), Some(new)) = (self.scene.sim.as_ref(), scene.sim.as_mut()) { new.hud.carry_boot_globals(&old.hud); }
                                             self.scene = scene;
                                             if let Some(g) = &mut self.gfx {
                                                 g.renderer = gpu::Renderer::new(&g.device, &g.queue, g.config.format, &self.scene, self.notex, self.nofog);

@@ -796,15 +796,27 @@ pub struct HudState {
     /// door-text-labels: the game's `DoorMsg` global (0x30cd04, .sdata): the aim-ray door hint counter,
     /// `Check_Target` shows the 0x200000b hint only while `DoorMsg < 3` and never resets it — at most
     /// 3 door hints per boot [M 0x1a7b88-0x1a7bc0; the full gp-relative scan finds no other writer].
-    /// [S port architecture: the port's Sim is per level, so the count resets with the level; the
-    /// game's .sdata survives level loads.]
+    /// The game's .sdata survives level loads, so the cap is per BOOT; the port's Sim is per level,
+    /// so every level swap carries it over ([`HudState::carry_boot_globals`]).
     pub door_msg: u32,
     /// unported-misc-5: the game's `LoadMsg` global (0x30cd08, .sdata, next to `DoorMsg`): the aim-ray
     /// exit-hint cooldown. `Check_Target` decrements it on EVERY 6th-frame invocation (0x1a7810:78-79),
     /// and the 0x1d `Trigger_Type == 10` arm only fires while it is 0, re-arming it to
     /// `FRAME_RATE_INT * 0x14` = 1200 invocations = 7200 frames [M 0x1a7810:195-196]. Same [S port
-    /// architecture note as `door_msg`: the port resets it per level, the game's .sdata does not.
+    /// note as `door_msg`: carried across level swaps like the game's .sdata.
     pub load_msg: u32,
+}
+
+impl HudState {
+    /// The per-BOOT text globals the game keeps in .sdata across level loads — `DoorMsg` 0x30cd04
+    /// (the door-hint cap of 3) and `LoadMsg` 0x30cd08 (the exit-hint cooldown) [M 0x1a7810:78-79,
+    /// 195-196; 0x1a7b98-0x1a7bc8]. The app calls this on every level swap so a new level's Sim
+    /// starts from the old one's counts instead of zero (the per-level reset re-showed the door
+    /// prompts on every level — user report 2026-10-21).
+    pub fn carry_boot_globals(&mut self, old: &HudState) {
+        self.door_msg = old.door_msg;
+        self.load_msg = old.load_msg;
+    }
 }
 
 impl HudState {

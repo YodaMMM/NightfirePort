@@ -146,3 +146,17 @@ fn the_lock_channel_rising_edge_raises_door_unlocked_once() {
     for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(raised(sim, 0x200_0003).len(), wired, "no second 'Door Unlocked' while the channel stays on");
 }
+
+/// The door-hint cap is per BOOT: `DoorMsg` 0x30cd04 is .sdata, so a level load keeps its count
+/// [M 0x1a7b98-0x1a7bc8]. The app's level swap calls `carry_boot_globals`; after three hints on
+/// one level the next level's Sim starts at 3 and shows none. Sister: a fresh boot starts at 0.
+#[test]
+fn the_door_hint_cap_survives_a_level_swap() {
+    let mut old = nf_view::scene::HudState::default();
+    old.door_msg = 3;
+    old.load_msg = 700;
+    let mut fresh = nf_view::scene::HudState::default();
+    assert_eq!(fresh.door_msg, 0, "sister: a new boot starts at 0");
+    fresh.carry_boot_globals(&old);
+    assert_eq!((fresh.door_msg, fresh.load_msg), (3, 700), "the per-boot counts cross the level load");
+}
