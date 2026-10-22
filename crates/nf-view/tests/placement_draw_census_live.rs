@@ -113,12 +113,17 @@ fn port_kind_draws(level: &Level, m: usize, p: &Placement) -> bool {
         0x3a => true,                                          // the grapple-hook pass
         0xdb => true,                                          // the door pass
         0xf0 => true,                                          // the pickup pass
-        0x2f => {                                              // the copter SP pass (this task)
+        0x2f => {
+            // fix-909b: the copter draws through its SCRIPT PLAYER, not a placement instance —
+            // `Copter_Create` 0x17d340 attaches no glist (obj+0xD8 = 0 [M :60-66]) and
+            // SP_Create(params 4/5) instantiates the look; the body 0x0200035D is the assembly
+            // script's stream-0 entity and 0x02000427 the flight's [D 0x06000051/0x06000050].
+            // The port gives those scripts' entities draw slots (s/copter-script-draw: scene.rs
+            // roots the slot builder at the kind-0x2F params 4/5) — covered when both resolve.
             let p0 = p.params.iter().find(|(i, _)| *i == 0).map_or(0, |&(_, v)| v);
             if p0 != 0 { return false; }                       // the game's marker copter [M 0x17d340:43-45]
-            // The body is the placement's OWN hashed object; the SP scripts (params 4/5,
-            // 0x06000051/0x06000050 [D #45]) fly it.
-            p.by_hash() && level.by_hash.contains_key(&p.hashcode)
+            let sc = |k: u32| p.params.iter().find(|(i, _)| *i == k).map_or(0, |&(_, v)| v);
+            level.nis.contains_key(&sc(4)) || level.nis.contains_key(&sc(5))
         }
         _ => false,
     }
