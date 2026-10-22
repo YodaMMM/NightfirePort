@@ -99,8 +99,8 @@ pub mod states {
     pub const LEAD_MISSION_WAIT: u8 = 0x21;
     /// AllyLeadBondCombat 0x22 (0x15f120) [M]: Bond is fighting near the escort. ENTER: alert status 2,
     /// anim 0x21. UPDATE: no armed drone within 10 → `ObjectMissionPathDistance(5.0)` to Bond; negative
-    /// (no route) → stay; else → Lead 0x1D. With an armed drone within 10 → FindRunToPoint → the cover
-    /// run (the port: stand-fast — the cover nodes are the fight's business, not the escort's).
+    /// (no route) → stay; else → Lead 0x1D. With an armed drone within 10 → FindRunToPoint found →
+    /// +0x5A2 = 0x1F and AllyGoToGoalPosition 0x28, else LeadHide 0x1F (drone.rs `lead_take_cover`).
     pub const LEAD_BOND_COMBAT: u8 = 0x22;
     /// AllyFollowInit 0x24 (0x15f3c8) [M]: ENTER: alert status 1, anim 0x21. UPDATE: Bond visible
     /// (+0x228 & 4) → AllyFollow 0x25.
@@ -113,7 +113,7 @@ pub mod states {
     /// AllyFollowDone 0x27 (0x15f858) [M]: the follow route finished — stand at the goal.
     pub const FOLLOW_DONE: u8 = 0x27;
     /// AllyGoToGoalPosition 0x28 (0x15f938) [M]: walk to the saved goal position (+0x970), then the
-    /// start/return state `Drone+0x5A2` (the port: Lead 0x1D — the escort's only user).
+    /// start/return state `Drone+0x5A2` (the escort lead sets it to LeadHide 0x1F before the run).
     pub const GO_TO_GOAL: u8 = 0x28;
 }
 
