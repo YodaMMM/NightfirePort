@@ -247,6 +247,11 @@ pub struct PendingPickup {
     /// `lhu $v0, 0x40($v1)` → `sw $v0, 0x10($sp)`]. pickups-g029: the fresh-spawn arm used to
     /// drop it (respawn 0 deletes the pickup on take; the reserved arm already carried it).
     pub respawn: u16,
+    /// dragon-safe-follow: the stream object's index in `Objects::list` — the created pickup IS the
+    /// stream's entity in the game (`Script_CreateEntity` 0x1d8968 returns the `Pickup_Create`
+    /// object; `Script_EntityStart` 0x1d8d78:96 stores it at stream+0x10), so `Script_Interp`
+    /// 0x1d9a08:94-110 re-poses it (obj+0x90) every tick the stream runs.
+    pub obj: usize,
     /// The stream's posed matrix at the creation tick (the game's scratch VECTOR 0x2d6200).
     pub matrix: Mat4,
 }
@@ -684,7 +689,7 @@ impl Script {
                 objs.pending_pickups.push(PendingPickup {
                     script: self.nis.hashcode, stream: i as u8, hash,
                     kind: p(0) as u16, id: p(1) as u16, rounds: p(2) as u16 as i16,
-                    switch_ch: p(3) as u16, sound: p(4), matrix: *matrix,
+                    switch_ch: p(3) as u16, sound: p(4), matrix: *matrix, obj: pos,
                     // pickups-g029: param 5 rides like the reserved arm's [M 0x1d8bfc].
                     respawn: p(5) as u16,
                 });

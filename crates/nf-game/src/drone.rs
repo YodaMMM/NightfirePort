@@ -10158,6 +10158,12 @@ pub struct Drones {
     /// built at load (scene.rs) with `gone = true` (undrawn, inert) and goes live when the script
     /// spawns it.
     pub script_pickup_slots: HashMap<(u32, u8), usize>,
+    /// dragon-safe-follow: (pickup index, script object index, script source) for every pickup a
+    /// script's 0xF0 Entity created. The game's pickup IS the stream's entity, re-posed by
+    /// `Script_Interp` 0x1d9a08:94-110 every tick (07000003's Dragon Safe keycard rises from y 5.51
+    /// to 6.05 out of the case — frozen at its creation pose it sat behind the counter's front face
+    /// and the take's line of sight [M 0x18e148:210-214] hit the counter).
+    pub script_pickup_follow: Vec<(usize, usize, (u32, u8))>,
     /// The auto-switch request `Pickup_Handler` → `Player_EquipWeapon`'s tail wrote this tick
     /// [M 0x1a8a58: the `DAT_002a38d2[idx·0x158]` flag (live 1 [L ee_start_05]) ∧
     /// `Player_IsBetterWeapon` → `anim+0x63 = id`]. The view applies it to the draw machine
@@ -10498,6 +10504,7 @@ impl Drones {
             // script's obj_type-0xF0 Entity (`Script_CreateEntity` 0x1d8968's Pickup_Create arm);
             // built at load in scene.rs, matched by the runtime spawn.
             script_pickup_slots: Default::default(),
+            script_pickup_follow: Vec::new(),
             // fix-pickups-remainder: the pickup auto-switch request (fields on their own lines —
             // merge lesson 4).
             weapon_switch_request: None,
@@ -14778,6 +14785,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if let Some(p) = self.pickups.get_mut(k) {
                     if p.gone && p.from.is_none() {
                         activate(p, sp.matrix);
+                        self.script_pickup_follow.push((k, sp.obj, (sp.script, sp.stream)));
                         continue;
                     }
                 }
@@ -14789,11 +14797,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if let Some(mut p) = crate::pickup::Pickup::create_from_set(
                     [sp.matrix[3][0], sp.matrix[3][1], sp.matrix[3][2]], [0.0; 3], sp.kind, d.weapons, &d.models) {
                     p.m = sp.matrix;
+                    self.script_pickup_follow.push((self.pickups.len(), sp.obj, (sp.script, sp.stream)));
                     self.pickups.push(p);
                 }
                 continue;
             }
             let bounds = d.models.get(&sp.hash).copied().unwrap_or(crate::pickup::Model { centre: [0.0; 3], radius: 0.3 });
+            self.script_pickup_follow.push((self.pickups.len(), sp.obj, (sp.script, sp.stream)));
             self.pickups.push(crate::pickup::Pickup {
                 // `Pickup_Create`'s level-conditional rounds override sits INSIDE the create [M
                 // 0x18dda0:116-118: `GameState+0x12 == 0x7000008 && id == 0x2c → rounds = 4`], so the
@@ -14811,6 +14821,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // asked for a respawn.
                 respawn: sp.respawn, respawn_ticks: 0, spin: sp.kind == crate::pickup::kind::BOND_BONUS,
                 label: 0, // [M 0x1d8c1c delay slot] the script arm always passes label 0 (params 0-5 ride; record+0x44 is not read)
+            });
+        }
+        // dragon-safe-follow: the script-created pickups take their stream's pose this tick — the
+        // game's `Script_Interp` writes the pickup object's own matrix (0x1d9a08:94-110). The link
+        // ends when the pickup is taken or the stream's object is gone or replaced (a different
+        // obj_type frees it, nis.rs `Entity`).
+        if !self.script_pickup_follow.is_empty() {
+            let objs = &self.scripts.objects.list;
+            let pickups = &mut self.pickups;
+            self.script_pickup_follow.retain(|&(k, o, src)| {
+                let Some(p) = pickups.get_mut(k) else { return false };
+                if p.gone { return false; }
+                match objs.get(o) {
+                    Some(Some(crate::nis::Obj::Entity { kind: 0xF0, matrix, src: s, .. })) if *s == src => { p.m = *matrix; true }
+                    _ => false,
+                }
             });
         }
         { let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&script_parts(self, d)); }
