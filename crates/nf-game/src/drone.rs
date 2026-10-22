@@ -15152,8 +15152,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // draws — the delta is behaviour timing), so the flip waits for it. Everything here is
             // the game-true shape; the flip is one const.
             const NB_SCAN_LIVE: bool = false;
-            dr.no_bunching = 0;
+            // The per-tick zero is the scan's own head (the game's ControlSTANDARD 0x1490f0:202-226
+            // zeroes +0x31C and re-runs NoBunching in the same breath): with the scan held inert the
+            // zero goes with it, so the mirror stays whatever was set — init 0 in live sim, or a
+            // test's injected side bits exercising the pair()/evasive gates below.
             if NB_SCAN_LIVE {
+                dr.no_bunching = 0;
                 let mut best: Option<(f32, V3)> = None;
                 for (i, pos, _) in peers.iter() {
                     if *i == index || !bunching_ok[*i] { continue; }
