@@ -24,17 +24,35 @@ gate ("frozen/controlled", common to all) and the speed-mul scale
 
 | function | address | flag gate (drone+0x31c) | behaviour prop | anim state(s) (`DroneAnim_CanDoAnimState` 0x13dfc8) | probe offset (local x, y, z) |
 |---|---|---|---|---|---|
-| `NDrone2_CanStepLeft` | 0x14f640 | bit 3 clear | 0x42 | 0x5a | (+1.8, 0, 0) |
-| `NDrone2_CanRollLeft` | 0x150338 | bit 3 clear | 0x2e | 0x53 | (+5.2, 0, 0) |
-| `NDrone2_CanStrafeDodgeLeft` | 0x14fdf8 | bit 3 clear | 0x13 | 0x29 | (+3.6, 0, 0) |
-| `NDrone2_CanStrafeDodgeRight` | 0x14ffc0 | bit 4 clear | 0x13 | 0x29 AND 0x2a | (−3.6, 0, 0) |
+| `NDrone2_CanStepLeft` | 0x14f640 | bit 8 clear (obstacle LEFT) | 0x42 | 0x5a | (+1.8, 0, 0) |
+| `NDrone2_CanRollLeft` | 0x150338 | bit 8 clear (obstacle LEFT) | 0x2e | 0x53 | (+5.2, 0, 0) |
+| `NDrone2_CanStrafeDodgeLeft` | 0x14fdf8 | bit 8 clear (obstacle LEFT) | 0x13 | 0x29 | (+3.6, 0, 0) |
+| `NDrone2_CanStrafeDodgeRight` | 0x14ffc0 | bit 0x10 clear (obstacle RIGHT) | 0x13 | 0x29 AND 0x2a | (−3.6, 0, 0) |
 | `NDrone2_CanBackoff` | 0x1501a0 | — (none) | 0x06 | 4 | (0, 0, −1.8) |
 | `NDrone2_CanMoveToRelativePos` | 0x154838 | — (none) | — (none) | — (none) | (dx, dy, dz) arguments |
 
 Offsets are the decompile's float literals: 0x3fe66666 = 1.8, 0x40666666 = 3.6, 0x40a66666 = 5.2,
-0xc0666666 = −3.6, 0xbfe66666 = −1.8. The right-side twins (not this task's list, cited for the mirror):
-`CanStepRight` 0x14f808 (−1.8, anims 0x5a+0x5b, prop 0x42) and `CanRollRight` 0x150500 (−5.2, prop 0x2e).
-The strafe (non-dodge) pair: `CanStrafeLeft` 0x14f9e8 / `CanStrafeRight` 0x14fbe0 (prop 0x41, anim 0xc).
+0xc0666666 = −3.6, 0xbfe66666 = −1.8. The right-side twins:
+`CanStepRight` 0x14f808 (bit 0x10 clear, −1.8, anims 0x5a+0x5b, prop 0x42) and `CanRollRight` 0x150500
+(bit 0x10 clear, −5.2, anim 0x53 only, prop 0x2e). The strafe (non-dodge) pair: `CanStrafeLeft`
+0x14f9e8 (bit 8 clear, prop 0x41, anim 0xc) / `CanStrafeRight` 0x14fbe0 (bit 0x10 clear, prop 0x41,
+anims 0xc AND 0xd).
+
+The side meaning of drone+0x31c bit 8 vs 0x10 (drone-probe-side-gates, proven from the disassembly —
+the decompiler drops the ATAN2 store so the C alone can't settle it): **bit 8 = an obstacle to the
+guard's LEFT (the local +X half-plane the Left probes probe), bit 0x10 = RIGHT.** The chain, each link
+from raw MIPS: `DroneMove_NoBunching` 0x150ad0 holds the `ATAN2_APPROX(Δx, Δz)` result in `$f13` and
+the yaw+`+0x570`-adjusted `obj+0x54` in `$f12` when it calls `Vec_AngleDifference` [M-dis
+0x150b20-0x150b98]; `Vec_AngleDifference(a, b)` returns wrap(b − a) [M-dis 0x1e2c7c
+`sub.s $f12, $f21, $f0`, `$f21` = the normalized second arg]; the store picks bit 0x10 on diff < 0
+and bit 8 otherwise [M-dis 0x150bac-0x150bc8] — so diff < 0 = the obstacle at a NEGATIVE relative
+angle. The Left probes' offset (d, 0, 0) maps through `ApplyMatrixLVI` 0x1e4960 (column-major:
+out = col0·x + col1·y + col2·z [M-dis 0x1e4960-0x1e49d8]) to d·col0, and the matrix's col2 = dir =
+(sin yaw, 0, cos yaw) [M `Mat_GetDir` 0x1e3398 = elements 8..10], so right-handed col0 = (cos yaw,
+0, −sin yaw), whose atan2(Δx, Δz) angle is yaw + π/2 — the POSITIVE diff side. Hence positive diff →
+bit 8 = the +X side = LEFT. The `+0x570` anim-info fold agrees (a left-moving anim adjusts facing by
++π/2 = the bit-8 addend [M-dis 0x150b48-0x150b58]). The port's `Drones::tick` had the
+`angle_difference` args in the decompiler's printed order, flipping every side label — fixed this task.
 
 Callers [M, decompile grep]: `NDrone2_ChooseCombatMove` 0x150c18 (step/roll/dodge cases, right-first or
 left-first per `Rand_Rand(2)`), `NDrone2_EvasiveMove` 0x1506d8 (same option list, the dodge case's
