@@ -762,6 +762,13 @@ pub struct HudState {
     /// The health pane's `CrouchIconTimer` (60 after Bond stands; fades sprite 19 over the last 30)
     /// [M `HUD_UpdateHealthPane` 0x19b9c8:305-328].
     pub crouch_icon_timer: i32,
+    /// `BL+0x948`: the 007 Bond-moment flash timer — `PlrStat_DoneBondMoment` 0x199448:23-25
+    /// writes 200 on a NEW moment; `HUD_UpdateHealthPane` 0x19b9c8:258-260 takes FRAME_RATE_MUL
+    /// (1 at 60 Hz) per frame while ≥ 1 [M]. Drawn as health pane sprite 16 (hud.rs).
+    pub bond_moment_flash: i16,
+    /// The completed-moment count the flash last saw (None until the first tick: moments
+    /// already done when the level loads never flash).
+    pub moments_seen: Option<u32>,
     /// The pickup bar's close animation (its remaining width; `HUD_UpdateStatusPane` 0x19c310 state 4
     /// shrinks 16 px per tick — pane+0xC = 0x10 for the pickup pane).
     pub bar_close: f32,
@@ -4904,6 +4911,13 @@ impl Sim {
         // [M 0x19b9c8:305-328].
         if self.bond.crouched { self.hud.crouch_icon_timer = 60; }
         else if self.hud.crouch_icon_timer > 0 { self.hud.crouch_icon_timer -= 1; }
+        // The 007 Bond-moment flash: −1 per frame while ≥ 1 [M 0x19b9c8:258-260]; a newly done
+        // moment (the BondMoments[id − 0x65] entry going 0 → 1 in Trigger_Calc's
+        // PlrStat_DoneBondMoment) sets 200 [M 0x199448:23-25].
+        if self.hud.bond_moment_flash > 0 { self.hud.bond_moment_flash -= 1; }
+        let moments = self.drones.progress.bond_moments.iter().filter(|&&m| m != 0).count() as u32;
+        if self.hud.moments_seen.is_some_and(|n| moments > n) { self.hud.bond_moment_flash = 200; }
+        self.hud.moments_seen = Some(moments);
         // The context icon's ThirdIconTimer (0x30CCE8): held at 30 while a context id is set
         // (the game rewrites it on every shown frame [M 0x19b9c8:298]), counting down on 0xFF
         // for the 30-tick fade-out [M 0x19b9c8:275-282]. Runs with the health pane's update —
