@@ -69,3 +69,28 @@ Tests: `doors_remainder_live::the_use_pick_is_the_world_sphere_candidate` (4.0 o
 1.2 out opens / 2.3 span-side opens through the wall), the three master E tests
 (interactables_0700000b `waiting_room_door_opens_on_use`, level_end
 `door_e_opens_then_e_closes_on_07000001`, `the_walkin_leaves_a_closing_straddle_door_alone_on_07000016`).
+
+## The glist-0 door stand-in is gone (door-glist0-use-standin, 2026-10-22)
+
+`player_use`'s old fallback — a glist-0 door activating on placement distance < 2.5 [S stand-in] —
+is deleted. The game's rule, now ported:
+
+- A dynamic placement resolves its glist by-index (`ref < MapEntityCount` → `pCelList + ref·0x50`,
+  else NULL) or by-hash (`hashtable_getitem`) [M parsemap_block_map_data_dynamic 0x1d1b68:77-87],
+  and `parsemap_create_dynamic_objects` — which runs `Door_Create` 0x136100 with that glist as
+  `param_4` — is called ONLY when it resolved [M 0x1d1b68:93-95, `if (iVar5 != 0)`]. The game never
+  creates a glist-less door.
+- `Door_Create` stores the glist at `obj+0xd8` (`Control_SetGList` 0x134960) and ORs
+  `obj+0xfa |= 0xc4` — bit 3 stays clear — so the use pick's admission for the 0x101 mask
+  [M Collide_PickObj 0x1eae80:88-90: `(mask == 0x100 || (obj+0xfa & 8)) || (obj+0xd8 != 0 &&
+  *(obj+0xd8+8) != 0)`] reduces to the glist test. A glist-less door is E-dead even if one existed.
+
+The port now skips glist-0 records in `player_use` (they can still exist through the create
+fallback `unwrap_or((0, translation, 0.0))` if the by_hash map breaks — the census guards that)
+and runs the live-sphere test unconditionally otherwise. The census pin
+(`nf-game/tests/door_glist_census_live.rs`): all 21 on-foot SP archives (0700*), 443 doors, every
+one resolves a glist through the real closure — zero glist-0. Tests: `a_glist0_door_is_e_dead_at_
+the_old_stand_in_reach` + `the_same_door_with_a_glist_still_opens_on_the_sphere_rule` (nf-game
+door.rs unit), `door_glist0_e_dead_live.rs` (real path: break the glist → E-dead at the 1.6 stand
+the sphere rule opens from; sister opens). No visual difference on any shipped level — the arm was
+unreachable on real data; the main agent has nothing new to render.
