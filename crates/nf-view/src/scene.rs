@@ -963,7 +963,7 @@ fn seg_point_dist2(a: &[f32; 3], b: &[f32; 3], p: &[f32; 3]) -> f32 {
 /// Squared distance between segments `a1`-`a2` and `b1`-`b2` (clamped-parameter closest points,
 /// the standard Ericson bracketing solve) — the stunner ray vs the guards' 0x800 capsule
 /// [M Player_WeaponInitBullet 0x1a4bf0:169-200; NDrone2_Collision 0x140e90:104-121].
-fn seg_seg_dist2(a1: &[f32; 3], a2: &[f32; 3], b1: &[f32; 3], b2: &[f32; 3]) -> f32 {
+fn seg_seg_closest(a1: &[f32; 3], a2: &[f32; 3], b1: &[f32; 3], b2: &[f32; 3]) -> (f32, f32, f32) {
     let sub = |u: &[f32; 3], v: &[f32; 3]| [u[0] - v[0], u[1] - v[1], u[2] - v[2]];
     let dot = |u: &[f32; 3], v: &[f32; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
     let (d1, d2, r) = (sub(a2, a1), sub(b2, b1), sub(a1, b1));
@@ -979,7 +979,7 @@ fn seg_seg_dist2(a1: &[f32; 3], a2: &[f32; 3], b1: &[f32; 3], b2: &[f32; 3]) -> 
     let p1 = [a1[0] + d1[0] * s, a1[1] + d1[1] * s, a1[2] + d1[2] * s];
     let p2 = [b1[0] + d2[0] * t, b1[1] + d2[1] * t, b1[2] + d2[2] * t];
     let dd = sub(&p1, &p2);
-    dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2]
+    (dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2], s, t)
 }
 
 /// `vecutil_Dist2Tri` (the distance the game's `Intersect_Portal` 0x1ea7b8 version-0x101 path
@@ -4278,12 +4278,22 @@ impl Sim {
                     if is_stunner {
                         target_hit = false;
                         let range = self.weapons.records.get(self.gun.weapon as usize).map_or(5.0, |r| f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap()));
+                        // The exact shape (a world ray against the guard's 0x800 capsule, the hit
+                        // point's head-distance gated) needs the live hit-point measurement — the
+                        // capsule port broke fix_stunner_press_live's pinned press (both the ray
+                        // length and the 0.4 radius miss where the game and the pinned test hit);
+                        // the pinned sphere shape stays until the live check lands (report).
                         let end = [camera[0] + dir[0] * range, camera[1] + dir[1] * range, camera[2] + dir[2] * range];
                         for dr in self.drones.list.iter() {
                             if !dr.present || !dr.enabled || dr.corpse || dr.health <= 0.0 { continue; }
-                            if seg_seg_dist2(&camera, &end, &[dr.pos[0], dr.pos[1] - 1.0, dr.pos[2]], &dr.head()) <= 0.4 * 0.4 {
-                                target_hit = true; break;
-                            }
+                            let c = [dr.pos[0], dr.pos[1], dr.pos[2]];
+                            let ab = [end[0] - camera[0], end[1] - camera[1], end[2] - camera[2]];
+                            let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+                            let ap = [c[0] - camera[0], c[1] - camera[1], c[2] - camera[2]];
+                            let t = if ab2 > 1e-9 { (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2 } else { 0.0 };
+                            let cl = [camera[0] + ab[0] * t.clamp(0.0, 1.0), camera[1] + ab[1] * t.clamp(0.0, 1.0), camera[2] + ab[2] * t.clamp(0.0, 1.0)];
+                            let d2 = (cl[0] - c[0]).powi(2) + (cl[1] - c[1]).powi(2) + (cl[2] - c[2]).powi(2);
+                            if d2 <= 1.05 * 1.05 { target_hit = true; break; }
                         }
                     }
                     self.stunner_target = Some(target_hit);
