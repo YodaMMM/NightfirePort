@@ -6949,7 +6949,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 }
                             }
                             // Triggers, AI volumes and emitters draw nothing (`Script_CreateEntity`).
-                            nf_formats::nis::Cmd::Entity { hash, obj_type, .. } if !matches!(obj_type, 0xea | 0xeb | 0xf5 | 0xf2) => {
+                            // dragon-safe-follow: nor does a pickup entity (0xF0) draw HERE — the game's
+                            // 0xF0 arm creates ONE object, the pickup itself [M 0x1d8968 → `Pickup_Create`
+                            // 0x18dda0], deleted when taken; the port draws it through its pickup slot
+                            // (`script_pickup_reservations` / the by-hash fallback), which follows the
+                            // stream's pose. A second script slot here drew a copy that stayed at the case
+                            // after the take (and, before the follow, a frozen twin beside the rising card).
+                            nf_formats::nis::Cmd::Entity { hash, obj_type, .. } if !matches!(obj_type, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => {
                                 if !seen.insert((h, si, hash)) { continue; }
                                 let Some(&(map, object)) = level.by_hash.get(&hash) else { continue };
                                 // The billboard set: glist flags bit 0x8 (`View_DrawObjectGlist`'s test).
