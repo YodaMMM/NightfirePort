@@ -1996,6 +1996,15 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
             "gadgets" => menu::Page::Gadgets,
             "weapons" => menu::Page::Weapons,
             "cnselect" => menu::Page::CnSelect,
+            // Render aid: the 007 Bonus page with every tier of 07000005's reward earned (the
+            // fields bonus_enter builds, all lines standing).
+            "nfbonus" => {
+                let i = nf_game::progress::REWARDS_TABLE.iter().position(|e| e.hash == 0x0700_0005).unwrap_or(0);
+                let lines = [0usize, 1, 2, 3].map(|t| { let (label, texture) = nf_game::progress::REWARD_TEXT[i][t]; menu::RewardLine { has: true, label, texture } });
+                let text_labels = [0usize, 3, 2, 1].iter().map(|&t| lines[t].label).collect();
+                fe.bonus = Some(menu::BonusFields { level: 0x0700_0005, lines, texture: Some(lines[0].texture), text_labels, has_text: true });
+                menu::Page::NfBonus
+            }
             "cnmenu" => { fe.cn_name = "Default".into(); menu::Page::CnMenu }
             "advanced" => menu::Page::CnAdvanced,
             "mpoptions" => menu::Page::CnMp,
