@@ -4275,9 +4275,9 @@ impl BotBrain {
     }
 
     /// `BOTSTATE_reallyCloseCombatRange` 0x129b68 [M :5-8]: +0xEC = 0.5, +0xF0 = 1.5,
-    /// +0xFC = 1.625 — the too-close / engage / too-far band the combat moves read.
+    /// +0xFC = 1.6 (0x3fcccccd; fix-849: the branch had 1.625) — the too-close / engage / too-far band the combat moves read.
     pub fn really_close_combat_range(&mut self) {
-        self.vars.combat_range = [0.5, 1.5, 1.625];
+        self.vars.combat_range = [0.5, 1.5, 1.6];
     }
 
     /// `BOTSTATE_defaultCombatRange` 0x129b98 [M :5-9]: restore +0xEC/0xF0/0xFC from the
@@ -4682,18 +4682,18 @@ mod brain_tests {
     }
 
     /// `BOTSTATE_reallyCloseCombatRange` 0x129b68 / `defaultCombatRange` 0x129b98: the close
-    /// band 0.5/1.5/1.625, and the restore from the `BOT_postLoadInit` save.
+    /// band 0.5/1.5/1.6, and the restore from the `BOT_postLoadInit` save.
     #[test]
     fn brain_rest_combat_ranges() {
         let mut r = Rig::new();
         let saved = r.brain.vars.combat_range; // bot_init saved it to combat_range_default [M 0x1262b8]
         assert_eq!(r.brain.vars.combat_range_default, saved);
         r.brain.really_close_combat_range();
-        assert_eq!(r.brain.vars.combat_range, [0.5, 1.5, 1.625], "0x3f000000/0x3fc00000/0x3fcccccd [M 0x129b68:5-8]");
+        assert_eq!(r.brain.vars.combat_range, [0.5, 1.5, 1.6], "0x3f000000/0x3fc00000/0x3fcccccd [M 0x129b68:5-8]");
         r.brain.default_combat_range();
         assert_eq!(r.brain.vars.combat_range, saved, "restored from +0x71C/720/724 [M 0x129b98:5-9]");
         // sister: the restore must differ from the close band (else the pair is vacuous)
-        assert_ne!(saved, [0.5, 1.5, 1.625]);
+        assert_ne!(saved, [0.5, 1.5, 1.6]);
     }
 
     /// `BOTSTATE_chooseUnarmedAttackAnim` 0x1292f0 via `NDrone2_CanAltAttack` 0x1549e0: the
