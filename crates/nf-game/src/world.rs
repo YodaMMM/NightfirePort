@@ -385,6 +385,30 @@ impl CollisionWorld {
         let mut obj_cell: Vec<Option<u32>> = Vec::new();
         for inst in instances {
             let Some(c) = &level.maps[inst.map].objects[inst.object].collision else { continue };
+            // NO glist-bit-0x1 skip here (the level-14-complete/2 skip, reverted): the game's static
+            // collision is the parsemap 0x8000 cel gate plus two glist bits, and bit 0x1 is NOT one
+            // of them. [M] parsemap_block_map_data_static 0x1d1998:92 allocates a runtime cel only
+            // for a placement whose flags word carries 0x8000 (`cel+0x3c = flags & 0xffff` :102),
+            // copying the object's glist word into `cel+0x94` (:103); [M] Collide_Pick 0x1eb320
+            // — the candidate stage every query passes (the movement capsule rides
+            // Collide_CylinderIntersect 0x1ecc00:61's kind 0x800) — skips a node ONLY on
+            // `cel+0x94 & 0x20` (:140) and on `& 0x1000` when the query's HITTEST+0x98 carries
+            // bit 0x20 (:145-151); no bit-0x1 test exists anywhere in the pick path. [D
+            // probe14_plcflags on 07000014] the skipped set is real world art the game KEEPS:
+            // AirConGrill1-4/SCCP_Grate (plc 0x00008019 — kind 0x19, 0x8000 set, 24 tris each,
+            // glist 0x1), the fixed ServerRoomGlass1-5 panes, the labels, the chairbases — 96
+            // cel-placements carry bit 0x1 with tris. The door twins (Door_Slide_*, kind 0xdb,
+            // plc 0x000000db) and the Breakable windows (kind 0x20, plc 0x00000020) carry NO
+            // 0x8000 — they never had a static cel, so skipping bit 0x1 "for them" solved a
+            // non-problem while dropping the grills/glass. The grill plane at z=58.86 blocking
+            // the west duct's south end is the GAME's own geometry: the route leaves through the
+            // EAST duct mouth (past lid SP #328) and descends south to the stairwell slot —
+            // see walkreal_07000014_live and docs/levels/07000014.md §1a.
+            // [M] cel+0x94 bit 0x20 (the shadow/overlay cels: CargoArea*Shadows glist 0x21 [D
+            // probe14_plcflags]) is the real never-picked bit (Collide_Pick :140) — skip it.
+            if level.maps[inst.map].objects[inst.object].flags & 0x20 != 0 {
+                continue;
+            }
             // The node's bullet-pass flag: the placement's glist flags bit 0x40 (cel+0x94 [M
             // 0x1d1998:103]; Collide_Intersect 0x1ebaa8:143-145 turns every hit on the node into a
             // pass, and the bit-0x8 bullet queries drop those hits — bullets fly through the node).
@@ -501,6 +525,29 @@ impl CollisionWorld {
         let mut out = Vec::new();
         for o in overlapping(&self.stat, lo, hi) {
             out.extend(self.stat.tris[o.tris.clone()].iter().copied());
+        }
+        out
+    }
+
+    /// Probe support (level-14-complete-2): the missile-set (glist flags 0x1000) triangles whose
+    /// object's box meets `lo`..`hi` — solid to the ray queries, skipped by the actor-movement
+    /// capsule queries when HITTEST+0x98 carries bit 0x20 [M Collide_Pick 0x1eb320 disasm
+    /// 0x1eb480-0x1eb49c].
+    pub fn missile_tris_near(&self, lo: V3, hi: V3) -> Vec<[[f32; 3]; 3]> {
+        let mut out = Vec::new();
+        for o in overlapping(&self.missile, lo, hi) {
+            out.extend(self.missile.tris[o.tris.clone()].iter().copied());
+        }
+        out
+    }
+
+    /// Probe support: the dynamic set's triangles (the hashed glist movers — doors and the
+    /// scripted props) whose object's box meets `lo`..`hi`.
+    pub fn dynamic_tris_near(&self, lo: V3, hi: V3) -> Vec<[[f32; 3]; 3]> {
+        let d = self.dynamic.read().unwrap();
+        let mut out = Vec::new();
+        for o in overlapping(&d.geo, lo, hi) {
+            out.extend(d.geo.tris[o.tris.clone()].iter().copied());
         }
         out
     }
