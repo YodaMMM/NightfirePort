@@ -85,3 +85,23 @@ gun forever and reloads from nothing (`BOTWEAP_AmmoInGun` 0x12ae40:10-12,
   60 ticks [M 0x179d40:26-47]; a taken weapon gets fired).
 - `crates/nf-view/tests/mp_perf_16_live.rs`: the digest re-pinned for the fix (see the comment
   there — the simulated result changed on purpose: the bots fire).
+
+## The online armour take runs the class-2 case-3 arm whole (standins-scene-930)
+
+`step_net_world`'s bot armour take used to hand-roll only the health arm; the brain's armour
+pool stayed 0 online. The game's class-2 (drone) armour arm is `Pickup_Handler` 0x18e650:119-133:
+the drone's health (+0xAC) += 20.0 clamped to `BOT_vars+0xA4`, AND the armour byte (+0x769) +=
+the pickup's amount capped 0x32, then `BOTWEAP_setDroneArmour` 0x12af70 — an empty body
+[M disasm 0x12af70, size 8]. The online path now calls the same `BotBrain::take_pickup` the
+local path calls (kinds 0/1 = the arsenal cases 0/1 [M 0x18e650:61-116], kind 3 = case 3, other
+kinds consumed unhandled [M 0x18e650:117-118 → 334-348]), with the visit stamp after the switch
+for every handled kind [M 0x18e650:135-136, `BOTSTATE_setPickupVisitTime` 0x129958 stamps
+`time + 45.0`]. Test: `crates/nf-view/tests/mp_bot_armour_online_live.rs` (two machines in
+lockstep on 07000023; the pool byte after a bot armour take = min(amount, 50); sister: the
+weapon/ammo takes still flow and the machines' hashes agree every tick).
+
+The same pass's taker-loop evidence, for the record: the game's `Pickup_Update` bot loop has no
+kind filter [M 0x18e148:221-253] and measures both the distance and the line from the bot's
+obj+0x30 [M 0x18e148:240-244] (the players' loop: distance from obj+0x30, line from obj+0x80
+[M 0x18e148:210-214]). The port's bot layer models the weapon/ammo/armour kinds the arenas
+place; other kinds are the handler's consume-unhandled arm.

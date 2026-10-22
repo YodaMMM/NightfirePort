@@ -1104,6 +1104,11 @@ impl NetCore {
         self.sess.input_delay()
     }
 
+    /// mp-local-look: see `nf_net::Session::pending_local_look`.
+    pub fn pending_local_look(&self, after: u32) -> (f32, f32) {
+        self.sess.pending_local_look(after)
+    }
+
     /// net-internet: schedule the local input sampled while running `run_tick` (it lands
     /// `delay_at(run_tick)` ticks ahead — the host's adaptive delay; see
     /// `nf_net::Session::submit_local`).

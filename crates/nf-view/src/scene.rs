@@ -10516,8 +10516,11 @@ impl Sim {
     /// (documented MP port design),
     /// a remote human consumes weapon/ammo and takes armour by the shared `mp_armour` (refused at
     /// 50, the game's armour rule [M 0x18e650:220-225]). The bots: `Pickup_Handler`'s class-2 arm
-    /// (`BotBrain::take_pickup`) and its visit stamp [M 0x18e650:34-130]; kinds other than
-    /// weapon/ammo/armour are left to the humans [S]. Pickups taken here skip `update_pickups`'
+    /// (`BotBrain::take_pickup`) and its visit stamp [M 0x18e650:34-130]. The game's bot arm
+    /// handles kinds 0/1/3 and consumes every other kind unhandled [M 0x18e650:117-118 → 334-348];
+    /// the port's bot pickup layer (the visit rows `step_mp_bots` builds, the arsenal's
+    /// `BotArsenal::take_pickup`) models the weapon/ammo/armour kinds, so the taker loop offers
+    /// the bots exactly those kinds. Pickups taken here skip `update_pickups`'
     /// own touch (`Drones::mp_shared_pickups`).
     pub fn step_mp_pickups(&mut self) {
         use nf_game::pickup::kind;
@@ -10551,8 +10554,12 @@ impl Sim {
                 if taker.is_none() && matches!(p.kind, kind::WEAPON | kind::AMMO | kind::ARMOUR) {
                     for (i, bot) in m.bots.iter().enumerate() {
                         if bot.dead { continue; }
-                        // The bot's `obj+0x30` for both the distance and the line [M :180-200] —
-                        // the port's body root (the player-shaped `obj+0x30`) [S].
+                        // The game's bot loop measures the distance from the bot's `obj+0x30`
+                        // and runs the line of sight from the same `obj+0x30` [M Pickup_Update
+                        // 0x18e148:240-244] — unlike the players' loop, whose line runs from the
+                        // world sphere at obj+0x80 [M 0x18e148:210-214]. `brain.body.pos` is the
+                        // port's obj+0x30 (the body root), so the port's distance+line pair is
+                        // the bot arm's own pair.
                         let root = bot.brain.body.pos;
                         if p.touches(&self.world, bot.brain.body.cel, root, root) {
                             taker = Some(Taker::Bot(i));
@@ -10729,8 +10736,11 @@ impl Sim {
     }
 
     // ── mp-world-sync (agent 9): the arenas' world interactions online ─────────────────────────
-    // [S port design — the PS2's four players were one machine's objects, and the game's own
-    // object walks already treat every player alike]. Online every machine runs the world from
+    // [M-grounded port design — the PS2's four players were one machine's objects and the game's
+    // own walks already treat every player alike: `Pickup_Update` 0x18e148:202-253 loops the
+    // players' glb_players[0..4] and the bots' MPGame slots in one walk, `Player_Activate`
+    // 0x1a5170 runs per player, `Player_HandlePain` 0x1902c8 per player]. Online every machine
+    // runs the world from
     // the same bodies: `Drones::net_bodies` (the pickup take, the trigger touchers, the doors'
     // actors), `net_use_pass` (every slot's use key) and `step_net_world` (every slot's world
     // damage and its shots at the breakables/destroyables); `net_state_hash` folds the world's
@@ -10777,7 +10787,12 @@ impl Sim {
 
     /// Every slot's use key this tick, in slot order (`Player_Activate` 0x1a5170 per player):
     /// the doors its sphere meets (`Door_Activate`), the deferred trigger half, the class-0x25
-    /// SS pick (`SS_Activate` 0x1a9ea8) — the same reach stand-ins the local path uses in `run`.
+    /// SS pick (`SS_Activate` 0x1a9ea8 — the state + mask-4 gate, the kind:=1 latch, the channel
+    /// [M 0x1a9ea8:6-12]). The reach is the local path's documented shape (`run`'s SS arm): the
+    /// game's pick is a 1.0-radius `Collide_SphereIntersect` at head+dir walking every hit of the
+    /// use classes [M Player_Activate 0x1a5170:84-88, 120-135]; the port's per-SS probe (proj ≥ 0,
+    /// nearest within 2.2, one activation) is that arm's documented approximation, kept identical
+    /// across the SP and net paths.
     /// The mounted guns are not created in an MP match (`GunImp_Create` 0x131f20:56-58 returns
     /// unless `MPSettings+0x1B8`), so no slot can mount one.
     fn net_use_pass(&mut self, row: &[nf_net::Input; nf_net::MAX_AGENTS]) {
@@ -10835,8 +10850,10 @@ impl Sim {
     /// The shared world's per-body consequences of the tick, on the shared stream (the end of
     /// `step_bond`, online):
     /// 1. the pickup takes' shared effects — a human's armour pickup sets the slot's armour to 50
-    ///    [M Pickup_Handler 0x18e650:220-225]; a bot's raises its health by 20 to its max (the
-    ///    bot arm's case 3) — the bots' weapon/ammo inventory is not modelled [S];
+    ///    [M Pickup_Handler 0x18e650:220-225]; a bot's raises its health by 20 to its max and its
+    ///    armour byte by the pickup's amount, capped 50 (the bot arm's case 3 [M 0x18e650:119-133;
+    ///    `BOTWEAP_setDroneArmour` 0x12af70 is an empty body]); the bots' weapon/ammo inventory is
+    ///    the brain's (`BotArsenal::take_pickup` = the class-2 arm's cases 0/1 [M 0x18e650:61-116]);
     /// 2. every live body's hurt-volume contact (`Player_DealWithObjHit` 0x194458's class-0x27
     ///    arm), landing damage (type 6, `Player_CollisionHandler` 0x1949a8:117-126) and drowning
     ///    (type 7, `Player_MonitorAir` 0x191a70:136-143) into its slot's health;
@@ -10845,7 +10862,11 @@ impl Sim {
     ///    (`Destroy_CollisionHandler` 0x12bd48; the death writes its channel and, for a non-zero
     ///    type byte, `Destroy_Smash` 0x12bb60's blast — `Explode_Propagate` onto every body).
     ///    The object takes the shot only when it is nearer than every body the combat's sphere
-    ///    test would hit — the combat itself is untouched [S the ray-vs-box contact];
+    ///    test would hit — the combat itself is untouched. The contact is the shot's segment
+    ///    against the object's bounds grown 0.1, the shape `props.rs`'s `bullet_hit` uses for the
+    ///    game's bullet-vs-glist-bounds contact [M Destroy_CollisionHandler 0x12bd48 subtracts
+    ///    the damage from the record's +0x04 and kills below 0; the 0.1 growth stands in for the
+    ///    bullet's sphere — live check offered in the report];
     /// 4. a dead slot loses its armour (`MP_ReSpawn` 0x185368 re-inits the player).
     fn step_net_world(&mut self, row: &[nf_net::Input; nf_net::MAX_AGENTS]) {
         if self.mp.is_none() { return; }
@@ -10856,19 +10877,18 @@ impl Sim {
             let (kind, pweapon, prounds) = (pk.kind, pk.weapon, pk.rounds);
             eprintln!("[p-world] frame {}: {} {slot} took pickup {k} (kind {kind})", self.drones.frame, if bot { "bot" } else { "slot" });
             if bot {
-                if kind == nf_game::pickup::kind::ARMOUR {
-                    // The armour take's health arm (master's mp-world-sync stand-in for
-                    // `Pickup_Handler`'s class-2; the brain's own armour keeps 0 online [S]).
-                    if let Some(bt) = self.mp.as_mut().and_then(|m| m.bots.iter_mut().find(|b| b.slot == slot)) {
-                        bt.health = (bt.health + 20.0).min(bt.max_health);
-                    }
-                    continue;
-                }
-                // mp-bot-weapons: the bot's weapon layer takes the weapon/ammo pickup —
-                // `Pickup_Handler`'s class-2 arm (`BotBrain::take_pickup`: the arsenal update,
-                // the preferred-weapon switch request). The pickup itself is already consumed by
-                // the shared walk (`update_pickups_net`'s [S deviation]); a refused take is the
-                // brain ignoring it, the pickup stays consumed.
+                // mp-bot-weapons: the bot's weapon layer takes every pickup the shared walk
+                // recorded — `Pickup_Handler`'s class-2 arm (`BotBrain::take_pickup`): kinds 0/1
+                // the arsenal update + the preferred-weapon switch request [M 0x18e650:61-116],
+                // kind 3 the armour take — the drone's health +20 clamped to BOT_vars+0xA4 AND
+                // the armour byte +0x769 += the pickup's amount capped 50 [M 0x18e650:119-133;
+                // `BOTWEAP_setDroneArmour` 0x12af70 is an empty body], any other kind consumed
+                // unhandled [M 0x18e650:117-118]. The visit stamp follows for every handled kind
+                // [M 0x18e650:135-136]. The pickup itself is already consumed by the shared walk
+                // (the online walk consumes at the take so every machine's pickup state moves in
+                // the same tick; the game's local-MP order is consume-after-success in the
+                // handler's epilogue [M 0x18e650:334-348] — a refusal there leaves the pickup);
+                // a refused take here is the brain ignoring it, the pickup stays consumed.
                 let bi = self.mp.as_ref().and_then(|m| m.bots.iter().position(|b| b.slot == slot));
                 let Some(i) = bi else { continue };
                 let Some(t) = self.mp_bot_weapons.as_ref() else { continue };
@@ -10984,7 +11004,13 @@ impl Sim {
             let (channel, kind, blast_damage, lo, hi) = (de.channel, de.kind, de.blast_damage, de.lo, de.hi);
             self.drones.channels.set(channel as u32, 1, frame);
             if kind == 0 { continue; }
-            // `Destroy_Smash` 0x12bb60's blast (the props' radius/script stand-ins, props.rs).
+            // `Destroy_Smash` 0x12bb60's blast: radius = the obj's +0x8C sphere × the type
+            // multiplier {1→4, 2→2, else 3} [M 0x12bcdc `lwc1 $f12, 0x8c($s0)`;
+            // 0x12bc74/0x12bc84/0x12bc94], the script {1→0x06000027, 2→0x0600004f, else
+            // 0x06000052} [M 0x12bc70-0x12bc98], the damage = the record's info+0x08 float (the
+            // level's param 5) [M 0x12bd04 `lwc1 $f13, 8($s1)`; a second float arg carries
+            // kind×10.0, 0x12bd0c]. Position: the bounds centre. The +0x8C sphere itself is
+            // props.rs's half-diagonal approximation (its comment carries the live check).
             let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
             let ext = [(hi[0] - lo[0]) / 2.0, (hi[1] - lo[1]) / 2.0, (hi[2] - lo[2]) / 2.0];
             let radius = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() * match kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
@@ -11229,8 +11255,11 @@ impl Sim {
         }
     }
 
-    /// Online combat (700v6, every weapon since mp-combat-weapons) [S port design — the PS2 had
-    /// no online play]: every machine runs every human slot's shots from the session's inputs, in
+    /// Online combat (700v6, every weapon since mp-combat-weapons) [M-grounded port design — the
+    /// PS2 shipped four players on one machine (the game's own MP walks, Pickup_Update
+    /// 0x18e148:202-253) and no online mode; the port drives the game's own local-MP combat
+    /// machinery (every address below is the game's MP code) from the session's inputs]: every
+    /// machine runs every human slot's shots from the session's inputs, in
     /// slot order, on the shared stream. A shot (`Input::shot` — the sender's own fire pipeline
     /// decided the release: rate, burst, clip, the release frame) carries its description (the
     /// fired record `shot_weapon`, the aim `shot_aim`); the shared combat (`nf_game::mp::combat`)

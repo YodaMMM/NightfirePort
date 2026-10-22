@@ -1019,6 +1019,23 @@ impl<T: Transport> Session<T> {
         }
     }
 
+    /// mp-local-look: the local player's turn/look that is scheduled but has not run yet — the
+    /// ticks after `after` in the local slot's input queue plus the carried (not yet placed)
+    /// input. The view adds it so the camera answers the mouse at once instead of `input_delay`
+    /// ticks later; the shared sim still runs the delayed input (lockstep unchanged). Port-side
+    /// view prediction [S] — the PS2 game has no online play.
+    pub fn pending_local_look(&self, after: u32) -> (f32, f32) {
+        let slot = self.local_slot as usize;
+        let (mut t, mut l) = (0.0f32, 0.0f32);
+        if let Some(q) = self.inputs.get(slot) {
+            for (&k, i) in q.iter() {
+                if k > after { t += i.turn; l += i.look; }
+            }
+        }
+        if let Some(c) = &self.carry { t += c.turn; l += c.look; }
+        (t, l)
+    }
+
     /// net-internet: schedule the local input sampled while running `run_tick` — it lands on
     /// `run_tick + delay_at(run_tick)`, following the (adaptive) delay schedule. When the
     /// delay rose, the ticks the old lead never reached are filled with this sample's held
