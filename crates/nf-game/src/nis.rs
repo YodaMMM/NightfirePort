@@ -1765,10 +1765,14 @@ impl Scripts {
     /// `SP_SetPosRot(*(copter+0x2c), obj+0x90)` [M `Copter_Move` 0x17d628:115]: every flown tick
     /// the copter's SP player takes the copter object's matrix — the stream entities (the body,
     /// the parts, the sub-script spawns) pose relative to it and so ride the CopterPaths route
-    /// (copter-path-flight).
+    /// (copter-path-flight). The playing script's base (`Script::load`'s matrix, what
+    /// `Script_Interp` concats [M 0x1d9a08:106-133's tail-Concat; nis.rs interp `mul(&m,
+    /// &self.matrix)`]) is the port's SP-object matrix — both fields move.
     pub fn pose_copter_sp(&mut self, placement: usize, matrix: Mat4) {
         for p in &mut self.players {
-            if p.placement == placement { p.matrix = matrix; }
+            if p.placement != placement { continue; }
+            p.matrix = matrix;
+            if let Some(s) = p.info[p.cur].as_mut() { s.matrix = matrix; }
         }
     }
 

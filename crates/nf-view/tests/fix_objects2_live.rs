@@ -209,8 +209,22 @@ fn the_gondola_ride_runs_and_the_helicopter_completes_the_mission() {
     // The ride runs to tick 1410 of 1420 [D s46], then the cinematic (342 ticks) plays out to its
     // own ch-5 event — the budget covers both.
     assert!(wait(sim, 2600, |s| s.drones.channels.on(5)), "the ride's end cinematic (0x06000078) writes ch 5 [D script s10]");
-    // The helicopter: gate ch 5 → the flight (0x06000050, 299 ticks) → ch 0x4B [M Copter_Update].
-    assert!(wait(sim, 900, |s| s.drones.channels.on(0x4b)), "the copter's arrival writes ch 0x4B");
+    // The helicopter: gate ch 5 opens the CopterPaths flight (Copter_Move 0x17d628 — 07000008's
+    // route is one 8606-key path, step 0.253 [D the route dump], ≈34k ticks). The old pin here —
+    // "the flight (0x06000050, 299 ticks) → ch 0x4B" — was the removed one-shot stand-in's timing
+    // and CONTRADICTS the decompile: ch 0x4B (rec+0x72) is written only from state 4/5/6, and
+    // state 4 is entered only by the death tail (hp < damage, disasm 0x17e390-0x17e3c8; the disc
+    // has no kind-2 arrival path [D the route dump]). The TEST was wrong and is fixed (task
+    // copter-path-flight): the flight flies (state 1, no 0x4B) in the window, then the death is
+    // driven through the game's rule — the damage poke stands in for the un-ported part hitdata
+    // accumulation (Copter_Update 0x17dbb8:277-320).
+    assert!(wait(sim, 300, |s| s.drones.copters.iter().any(|c| c.gate == 0 && c.state == 1)),
+        "the gate opened: the copter flies (state 1) [M 0x17dbb8:138]");
+    assert!(!sim.drones.channels.on(0x4b), "no arrival while the route flies");
+    let ci = sim.drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
+    let (frame, hp) = (sim.drones.frame, sim.drones.copters[ci].hp);
+    sim.drones.copters[ci].damage = hp + 1.0;
+    assert!(wait(sim, 60, |s| s.drones.channels.on(0x4b)), "hp < damage → state 4 → rec+0x72 [M :244-254, disasm 0x17e390]");
     assert!(wait(sim, 200, |s| s.drones.mission.status() == 6), "mux #276 → ch 100 → the mission completes");
     let i8 = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0008).unwrap();
     assert_eq!(sim.drones.mission.states[i8][1], 4, "the ride objective completes [L record 3]");

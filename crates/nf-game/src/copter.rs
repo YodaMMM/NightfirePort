@@ -228,12 +228,15 @@ impl Copter {
 
     /// `Copter_Move` 0x17d628 — one flight tick. Advances the spline t along the current path,
     /// poses obj+0x90 (`self.matrix`) from the interpolation, and on a path's end picks the next
-    /// one (the damage-weighted rule). Returns the game's result: true = the path pointer is
-    /// null or the path just transitioned, false = still flying (or an empty path) [M :36-117].
-    pub fn move_tick(&mut self, paths: &[CopterPath], rng: &mut crate::drone::Rng) -> bool {
-        let Some(pi) = self.path else { return true }; // [M :45-48 — +0x54 == 0 → 1]
+    /// one (the damage-weighted rule). Returns `(game result, posed)`: the game's return — true =
+    /// the path pointer is null or the path just transitioned, false = still flying (or an empty
+    /// path) — and whether `SP_SetPosRot(*(rec+0x2c), obj+0x90)` ran (the valid-path branch,
+    /// [M :49-115]).
+    pub fn move_tick(&mut self, paths: &[CopterPath], rng: &mut crate::drone::Rng) -> (bool, bool) {
+        let Some(pi) = self.path else { return (true, false) }; // [M :45-48 — +0x54 == 0 → 1]
         let (count, step) = (paths[pi].count, paths[pi].step);
-        if count == 0 { return false; } // [M :49 — the empty path returns 0]
+        if count == 0 { return (false, false); } // [M :49 — the empty path returns 0]
+        let mut posed = false;
         // Spline_Interp(t, framelist, 0, count, out, rec+0x1c, 2); param_3 == 0 → the pose lands
         // in obj+0x90 [M :50-55]. A NULL framelist writes nothing (the matrix stays) [M 0x1e1858:100-102].
         if let Some(keys) = &paths[pi].keys {
@@ -242,6 +245,7 @@ impl Copter {
             }
         }
         self.t += step; // [M :53]
+        posed = true; // SP_SetPosRot(*(rec+0x2c), obj+0x90) — the caller poses the SP [M :115]
         if (count as f32) < self.t {
             // The latch: a patrol copter (+0x74 == 100, the Mayhew value [L the level's params])
             // sets obj+0xFE bit 1 and still re-picks below [M :63-67].
@@ -267,10 +271,9 @@ impl Copter {
             }
             let dest = next.unwrap_or(pi); // [M :110 — none → keep the current path]
             self.t = paths[dest].reset_t as f32; // [M :113 — t = the (new) path's reset-t]
-            return true; // [M :112 — uVar2 = 1: the path transitioned]
+            return (true, posed); // [M :112 — uVar2 = 1: the path transitioned]
         }
-        // SP_SetPosRot(*(rec+0x2c), obj+0x90) — the caller poses the SP [M :115].
-        false
+        (false, posed)
     }
 
     /// `Copter_Update` 0x17dbb8 — one tick. Returns `(unhide, posed)`:
@@ -302,6 +305,7 @@ impl Copter {
         }
         // The parts[6] recharge (gun B's +0xF4 → its +0xF0 bit 0x10) [M :104-113] — the port
         // keeps no part objects; not modelled.
+        let mut posed = false;
         match self.state {
             0 => {
                 // Case 0 [M :115-137]: the CopterPaths scan for the record's own group.
@@ -321,18 +325,22 @@ impl Copter {
                 // Case 1 [M :138-187]: Copter_Move, then the spot check (not ported — no cone/LOS
                 // wiring; the copter stays in state 1 and draws no RNG). The Mayhew latch keeps
                 // +0x74 != 100 copters out of the spot test entirely [M :140].
-                self.move_tick(paths, rng);
+                let (_, p) = self.move_tick(paths, rng);
+                posed = p;
             }
             2 => {
                 // Case 2 [M :188-243] (Music_Event, the missile/gun pick, the bail timers) is
                 // unreachable while the spot check is not ported; fly the move anyway if a poke
                 // puts the copter here.
-                self.move_tick(paths, rng);
+                let (_, p) = self.move_tick(paths, rng);
+                posed = p;
             }
             4 => {
                 // Case 4 [M :244-254]: finish the current path, then adopt the arrival path with
                 // t = 0 and write the arrival channel.
-                if self.move_tick(paths, rng) {
+                let (r, p) = self.move_tick(paths, rng);
+                posed = p;
+                if r {
                     self.path = self.arrival_path;
                     self.t = 0.0;
                     if self.out != 0 { ch.set(self.out as u32, 1, frame); }
@@ -342,12 +350,13 @@ impl Copter {
             5 => {
                 // Case 5 [M :255-275]: fly the arrival path; 0 → plain return (no damage tail);
                 // 1 → re-write the channel + obj+0xFE bit 1, every tick.
-                if self.move_tick(paths, rng) {
+                let (r, p) = self.move_tick(paths, rng);
+                if r {
                     if self.out != 0 { ch.set(self.out as u32, 1, frame); }
                     self.landed = true;
-                    return (unhide, true);
+                    return (unhide, p);
                 }
-                return (unhide, true);
+                return (unhide, p);
             }
             6 => {
                 // Case 6 [M :265-275]: the channel, the explosion (not ported), the flag.
@@ -367,7 +376,7 @@ impl Copter {
             self.state = if explode_level { 6 } else { 4 };
             if self.out != 0 { ch.set(self.out as u32, 1, frame); }
         }
-        (unhide, false)
+        (unhide, posed)
     }
 
     /// The copter's world position (the matrix row 3) — the viewer's draw/cull helpers.
@@ -493,10 +502,10 @@ mod tests {
     fn move_tick_returns_the_games_result() {
         let mut c = copter();
         let mut rng = crate::drone::Rng::default();
-        assert!(c.move_tick(&[], &mut rng), "+0x54 == 0 → 1");
+        assert!(c.move_tick(&[], &mut rng).0, "+0x54 == 0 → 1");
         let paths = vec![path(1, 0, 0, 0, 0, Some(keys4()))];
         c.path = Some(0);
-        assert!(!c.move_tick(&paths, &mut rng), "count == 0 → 0");
+        assert!(!c.move_tick(&paths, &mut rng).0, "count == 0 → 0");
     }
 
     // [M 0x17d628:50-63] the flight: the pose lands in obj+0x90 and t advances by the step.
@@ -506,7 +515,7 @@ mod tests {
         let mut rng = crate::drone::Rng::default();
         let paths = vec![path(1, 0, 0, 3, 0, Some(keys4()))];
         c.path = Some(0);
-        assert!(!c.move_tick(&paths, &mut rng), "still flying → 0");
+        assert!(!c.move_tick(&paths, &mut rng).0, "still flying → 0");
         assert!((c.t - 0.05).abs() < 1e-5, "t += step");
         // The pose: t≈0 sits at key 0 (the origin); after enough ticks the x grows along the line.
         assert!(c.matrix[3][0].abs() < 60.0, "t≈0 sits at key 0");
@@ -529,7 +538,7 @@ mod tests {
         c.path = Some(0);
         c.group_paths = 2; // case 0 counted the two kind-0 paths
         c.t = 3.5; // past count 3: the transition runs this tick
-        assert!(c.move_tick(&paths, &mut rng), "the transition returns 1");
+        assert!(c.move_tick(&paths, &mut rng).0, "the transition returns 1");
         assert_eq!(c.path, Some(0), "ratio 0 → pick (uint)(2·0+0.5) = 0 → the pick-0 path");
         assert!((c.t - 0.0).abs() < 1e-5, "t = the new path's reset-t");
         // A pick landing on an arrival path's index skips it (kind 2 is never adopted) [M :93-99].
@@ -540,14 +549,14 @@ mod tests {
         c.path = Some(0);
         c.group_paths = 2;
         c.t = 3.5;
-        assert!(c.move_tick(&paths2, &mut rng));
+        assert!(c.move_tick(&paths2, &mut rng).0);
         assert_eq!(c.path, Some(0), "pick 1 finds only the kind-2 path → the walk keeps the current path");
         // The clamp [M :78-80].
         c.damage = 299.0; // ratio = 299/269.1 > 0.5 → the random arm
         c.path = Some(0);
         c.t = 3.5;
         let draws = rng.draws;
-        let _ = c.move_tick(&paths2, &mut rng);
+        let _ = c.move_tick(&paths2, &mut rng).0;
         assert_eq!(rng.draws, draws + 1, "the heavy-damage arm draws Rand_Rand(rec+0x78) [M disasm 0x17d748]");
     }
 

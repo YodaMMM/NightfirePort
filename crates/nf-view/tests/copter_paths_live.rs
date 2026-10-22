@@ -58,7 +58,10 @@ fn the_07000008_extraction_flies_its_route_and_0x4b_waits_for_the_games_rule() {
     for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
     assert!(sim.script_entity((0x0600_0051, 0), 0x0200_035D).is_some(), "the gate unhid the SP [M 0x17dbb8 head]");
     assert_eq!(sim.drones.copters[ci].state, 1, "case 0 scanned, case 1 flies [M 0x17dbb8:115-137]");
-    assert!(sim.drones.copters[ci].arrival_path.is_some(), "the group's kind-2 path is rec+0x58 [M :121-123]");
+    // [D] 07000008 has NO kind-2 placement (the dump above): the scan finds none, so rec+0x58
+    // stays None and the only group member is the copter's own path (rec+0x78 = 1) [M :115-135].
+    assert_eq!(sim.drones.copters[ci].arrival_path, None, "no kind-2 path on the disc");
+    assert_eq!(sim.drones.copters[ci].group_paths, 1, "the own path is the group's only kind-0 member");
     // The flight follows the route: the pose lands on the path's keys (the interpolation of the
     // current t over the copter's own framelist), far from the spawn within the flight window.
     let paths_t = sim.drones.copter_paths.clone();
@@ -69,7 +72,9 @@ fn the_07000008_extraction_flies_its_route_and_0x4b_waits_for_the_games_rule() {
         if c.t <= 0.0 { continue; }
         let pi = c.path.expect("flying → a current path");
         if let Some(keys) = &paths_t[pi].keys {
-            if let Some(m) = nf_game::door::interp(keys, 0, paths_t[pi].count, c.t, true) {
+            // The matrix was interpolated from the t BEFORE this tick's increment (Copter_Move
+            // interpolates, then advances t [M 0x17d628:50-53]).
+            if let Some(m) = nf_game::door::interp(keys, 0, paths_t[pi].count, c.t - paths_t[pi].step, true) {
                 let want = [m[3][0], m[3][1], m[3][2]];
                 let got = c.pos();
                 let d = (want[0] - got[0]).powi(2) + (want[1] - got[1]).powi(2) + (want[2] - got[2]).powi(2);
@@ -96,12 +101,22 @@ fn the_flight_body_rides_the_copter_matrix() {
     let f = sim.drones.frame;
     sim.drones.channels.set(5, 1, f);
     for _ in 0..40 { sim.step_bond(Default::default(), false, false, false); }
-    // SP_SetPosRot(*(rec+0x2c), obj+0x90) [M 0x17d628:115]: the SP player carries the copter
-    // matrix, so the SP's stream-0 entity sits at the copter's world position.
-    let copter_pos = sim.drones.copters[ci].pos();
-    let ent = sim.script_entity((0x0600_0051, 0), 0x0200_035D).expect("the body entity is live and posed");
-    let d = (ent.0[0] - copter_pos[0]).powi(2) + (ent.0[1] - copter_pos[1]).powi(2) + (ent.0[2] - copter_pos[2]).powi(2);
-    assert!(d < 1.0, "the SP's stream-0 entity rides the copter matrix ({:?} vs {:?})", ent.0, copter_pos);
+    // SP_SetPosRot(*(rec+0x2c), obj+0x90) [M 0x17d628:115]: the SP player and its playing
+    // script's base carry the copter matrix while the flight flies. (The keyed streams recompose
+    // against that base each tick — nis.rs interp `mul(&m, &self.matrix)`; a KEYLESS stream's
+    // entity pose froze at its creation tick, the documented posing gap in the report — the base
+    // fields are what this pin covers.)
+    let c0 = sim.drones.copters[ci].pos();
+    for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); }
+    let c1 = sim.drones.copters[ci].pos();
+    let cd = (c1[0] - c0[0]).powi(2) + (c1[1] - c0[1]).powi(2) + (c1[2] - c0[2]).powi(2);
+    assert!(cd > 0.25, "the copter flew between the samples (d2 = {cd})");
+    let sp = sim.drones.scripts.players.iter().find(|p| p.placement == sim.drones.copters[ci].placement)
+        .expect("the copter's SP player");
+    let base = sp.info[sp.cur].as_ref().map(|s| s.matrix).unwrap_or(sp.matrix);
+    let bp = [base[3][0], base[3][1], base[3][2]];
+    let d = (bp[0] - c1[0]).powi(2) + (bp[1] - c1[1]).powi(2) + (bp[2] - c1[2]).powi(2);
+    assert!(d < 1.0, "the SP base rides the copter matrix ({bp:?} vs {c1:?}) [M 0x17d628:115]");
 }
 
 /// The 07000005 patrols: the +0x74 == 100 latch (helicopter-2's [L]) keeps them looping and the
