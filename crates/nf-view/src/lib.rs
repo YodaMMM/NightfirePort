@@ -2478,6 +2478,11 @@ struct App {
     /// The front end (fix-menus): Some while a menu page is up (title / main / mission select /
     /// difficulty / options / pause / results). None = playing a mission directly.
     fe: Option<menu::FrontEnd>,
+    /// The Advanced options' Auto Aim (control 0x1000011b; the profile's +0x01 — default ON [M
+    /// Player_AutoAim 0x1a7c98:41 reads it]). Mirrored from the front end while it is up and kept
+    /// across missions (the front end closes during play); applied to the sim every frame. The
+    /// dev T key flips the same option.
+    auto_aim_opt: bool,
     /// net-consolidate: the ONE session layer (nf-net) while an online match runs (`--net-host` /
     /// `--net-join`, or adopted from the lobby pages' `fe.mp_session` when their match starts).
     /// None = local play, no session, no gate.
@@ -4173,6 +4178,12 @@ impl App {
                 // frontend-music: the menus' own audio (the jingle pair, the credits track), the
                 // page-change transitions and the per-frame pump.
                 self.menu_music_tick();
+                // The Auto Aim option reaches the game (it was stored and never read — user report
+                // 2026-10-21 "auto aim isn't working? shouldn't be a dev mode thing only").
+                if let Some(fe) = self.fe.as_ref() {
+                    if let Some(&v) = fe.opts.get(&0x1000_011b) { self.auto_aim_opt = v != 0; }
+                }
+                if let Some(sim) = self.scene.sim.as_mut() { sim.auto_aim = self.auto_aim_opt; }
                 // fix-weapon-assets: a dev-menu/panel give of a weapon the level archive lacks.
                 // The game never gives cross-level weapons, so there is no game path to mirror —
                 // the port answers the give with a warm reload of the SAME level with the weapon's
@@ -5565,7 +5576,7 @@ impl App {
                     (KeyCode::F3, ElementState::Pressed) if dbg => self.opts.reinforcements = !self.opts.reinforcements,
                     (KeyCode::KeyF, ElementState::Pressed) if dbg => self.opts.firing = !self.opts.firing,
                     (KeyCode::KeyN, ElementState::Pressed) if dbg => { let on = !self.noclip; self.set_noclip(on); }
-                    (KeyCode::KeyT, ElementState::Pressed) if dbg => if let Some(sim) = self.scene.sim.as_mut() { sim.auto_aim = !sim.auto_aim },
+                    (KeyCode::KeyT, ElementState::Pressed) if dbg => { self.auto_aim_opt = !self.auto_aim_opt; if let Some(fe) = self.fe.as_mut() { fe.opts.insert(0x1000_011b, self.auto_aim_opt as i32); } },
                     // Weapon switching: number keys 1–9 select directly, Q = prev, E (when not use) = next.
                     // The mapping: 1 = P2K (weapon 2), 2 = SG5 Commando (0x16), 3 = sniper (0x24), etc. The exact
                     // slot mapping follows the game's weapon order (selectable weapons with `weapon_data+0x04 == 1`).
@@ -5666,6 +5677,7 @@ impl App {
             panel_level: 0,
             panel_frames: 0,
             fe: None,
+            auto_aim_opt: true,
             level_code: 0,
             fe_music_page: None,
             menu_handle: 0,
@@ -6989,5 +7001,19 @@ mod headless_app_harness {
         assert!(host_events.iter().all(|e| !matches!(e, mpnet::CoreEvent::Desync { .. })));
         let client_events = client.0.borrow_mut().take_app_events();
         assert!(client_events.iter().all(|e| !matches!(e, mpnet::CoreEvent::HostTimeout)), "the client timed the host out through the load");
+    }
+
+    /// User report 2026-10-21: auto-aim only worked through the dev T key — the Advanced options'
+    /// Auto Aim (default ON, profile +0x01 [M Player_AutoAim 0x1a7c98:41]) was stored and never
+    /// read. The option now drives the sim on every frame; sister: turning it off turns it off.
+    #[test]
+    fn the_auto_aim_option_drives_the_sim() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        h.frames(2);
+        assert!(h.app.scene.sim.as_ref().unwrap().auto_aim, "Auto Aim defaults ON, as the game's profile does");
+        h.app.auto_aim_opt = false;
+        h.frames(2);
+        assert!(!h.app.scene.sim.as_ref().unwrap().auto_aim, "the option set Off turns it off");
     }
 }
