@@ -112,8 +112,13 @@ fn the_rope_follows_the_opponent_down_and_lands() {
     let d = &sim.drones.list[i];
     assert!(d.pos[1] < y0 - 1.0, "the rope slide descends, {:?} → {:?}", y0, d.pos);
     assert!(d.rope[1] <= rope_y0 - 20.0, "the rope stays tracked to the opponent");
-    // The opponent level with the drone: within 3.0 → hang, and the velocity decays ×0.98/tick.
-    // The opponent level with the drone: within 3.0 → hang, and the velocity decays ×0.98/tick.
+    // The opponent level with the drone: within 3.0 → hang, and the velocity decays TWICE per
+    // tick: the hang UPDATE's ×(1.0 − FRAME_RATE_DIV·0.02) = ×0.98 [M 0x169940:33] AND the
+    // collision tail's ×0.98 on the +0x4F8 & 0x40 bit [M 0x140968:139-141 — the bit is armed for
+    // every drone at init [M 0x14b300:60], no abseil state clears it (only |0x10000), and
+    // Drone_CollisionHandler is the drone class's registered handler [D ELF 0x26f8ac class
+    // table: Drone_Control 0x139268 / Drone_CollisionHandler 0x140968 / Drone_Delete 0x136ce8])
+    // — net ×0.9604/tick.
     sim.bond.pos = [18.9, d.pos[1] - 1.0, 1.4];
     sim.step_bond(Input::default(), false, false, false);
     let d = &sim.drones.list[i];
@@ -121,7 +126,8 @@ fn the_rope_follows_the_opponent_down_and_lands() {
     let v0 = d.velocity[1];
     sim.step_bond(Input::default(), false, false, false);
     let d = &sim.drones.list[i];
-    assert!((d.velocity[1] - v0 * 0.98).abs() < 1e-5, "the hang decays the velocity [M 0x169940:33]");
+    assert!((d.velocity[1] - v0 * 0.98 * 0.98).abs() < 1e-5,
+        "the hang decays ×0.98 [M 0x169940:33] × ×0.98 [M 0x140968:139-141] per tick");
     // Landing through the sister branch: mode 0x1b (no disc instance [D] — the code path [M
     // 0x169730:23-25]) drops the rope point to −1000, the slide runs past the floors, and the
     // floor probe (anim+0x60 & 8) lands the drone on the lower office floor: the saved anim set
@@ -130,7 +136,10 @@ fn the_rope_follows_the_opponent_down_and_lands() {
     d.mode = 0x1b;
     d.next_state = Some(state::ABSEIL_SLIDE);
     let mut landed_at = None;
-    for t in 1..=300u32 {
+    // 600 ticks: the game-accurate ×0.98 collision damping [M 0x140968:139-141] caps the slide at
+    // its terminal ≈5.6 u/s (the per-tick +0x50/60 rope add vs the damping), so the ~27-unit drop
+    // from the rope top needs ≈320 ticks, not the old undamped ≈200.
+    for t in 1..=600u32 {
         sim.step_bond(Input::default(), false, false, false);
         if sim.drones.list[i].mode == 0 && !sim.drones.list[i].air { landed_at = Some(t); break; }
     }
@@ -141,7 +150,7 @@ fn the_rope_follows_the_opponent_down_and_lands() {
     assert!(d.pos[1] < 40.0 && d.on_surface, "landed on a floor under the shaft, got {:?}", d.pos);
     assert!(!d.air, "+0x23 cleared on landing [M 0x169730:34]");
     assert_eq!(d.anim_set, d.saved_anim_set, "the skin's set restored [M 0x169730:35]");
-    assert!(t < 300);
+    assert!(t < 600);
 }
 
 /// ElevatorJumper 0x8d (0x169488) — no decomp writer reaches the state, so this drives it directly:
