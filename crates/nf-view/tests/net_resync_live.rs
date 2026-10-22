@@ -20,6 +20,10 @@ use std::time::{Duration, Instant};
 
 use nf_view::mpnet::{CoreEvent, SessionProxy};
 
+/// The three tests bind the same host port (28210): run them one at a time (the test harness
+/// runs a binary's tests on parallel threads — the suite once failed two on "bind 28210").
+static PORT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
 fn sleep() { std::thread::sleep(Duration::from_millis(2)); }
@@ -225,6 +229,7 @@ fn pump_until(machines: &mut [&mut Live], secs: u64, what: &str, mut done: impl 
 /// target with no fatal event. Sisters in the other two tests.
 #[test]
 fn a_perturbed_machine_resyncs_and_the_match_runs_on() {
+    let _port = PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     let (mut h, mut c1, mut c2, _s) = three_machines(&path);
     // In sync to tick 200.
@@ -280,6 +285,7 @@ fn a_perturbed_machine_resyncs_and_the_match_runs_on() {
 /// re-announce, no fatal, for the whole run.
 #[test]
 fn without_a_perturbation_nothing_resyncs() {
+    let _port = PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     let (mut h, mut c1, mut c2, _s) = three_machines(&path);
     pump_until(&mut [&mut h, &mut c1, &mut c2], 120, "the clean run to 330", |ms| {
@@ -300,6 +306,7 @@ fn without_a_perturbation_nothing_resyncs() {
 /// lobby message's event).
 #[test]
 fn a_second_desync_within_the_window_is_fatal() {
+    let _port = PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     let (mut h, mut c1, mut c2, _s) = three_machines(&path);
     pump_until(&mut [&mut h, &mut c1, &mut c2], 90, "in sync to 60", |ms| ms.iter().all(|m| m.next >= 60));
