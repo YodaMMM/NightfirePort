@@ -1212,6 +1212,44 @@ pub const CN_CONTROLS_ROWS: &[OptRow] = &[
 /// The 8 controller-style name labels, in style order [M P_CNCONTROLS_Handler 0x213cd0:12-27 —
 /// the list rows' Txt_BindLabel ids; the same ids P_PAUSE_Handler 0x203c28 binds].
 pub const CN_CONTROLS_STYLES: [u32; 8] = [0x82, 0x91, 0xa0, 0xaf, 0xbe, 0xcd, 0x1000_018b, 0x1000_019a];
+
+/// options-census: every value row's consumer status, one entry per row of ADV_ROWS / MP_ROWS /
+/// AV_ROWS / CN_CONTROLS_ROWS (full evidence table in docs/systems/options-census.md). The
+/// census test (nf-view/tests/options_census.rs) fails when a row is missing here, so a newly
+/// added options row must land in this list with its reader — Wired = the port drains it to a
+/// consumer (lib.rs `drain_options` and on), NoPortReader = the game's reader has no PC-port
+/// counterpart, with the reason and the game address.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OptCensus { Wired, NoPortReader(&'static str) }
+pub const OPT_CENSUS: &[(u32, OptCensus)] = &[
+    // Advanced — P_CNOPTIONS_Handler 0x213f08:13-21 (PlayerSetting[slot] bytes)
+    (0x1000_011a, OptCensus::NoPortReader("Vibration: Input_RumbleStart 0x17f6b8 / Stop 0x17f748 gate the pad's psiInput_RumbleStart/Stop on the byte; the port has no haptics output (gamepad.rs maps pad input only)")),
+    (0x1000_011b, OptCensus::Wired),   // sim.auto_aim, SP arm [M Player_AutoAim 0x1a7c98:40-44]
+    (0x1000_0124, OptCensus::Wired),   // sim.drones.crosshair → the HUD crosshair draw [M HUD_UpdateCrossHair 0x19e6d0:96]
+    (0x1000_0125, OptCensus::Wired),   // sim.drones.crouch_toggle → the stand branch [M Player_SSCrouch 0x1924c0:84-105]
+    (0x1000_0126, OptCensus::NoPortReader("Manual aim toggle: Player_Weapon 0x1a24c8:45-63 reads aim action 0x13 (pad); the keyboard aims directly (D-002) and the pad arm is the gamepad feature")),
+    (0x1000_01cb, OptCensus::Wired),   // sim.drones.auto_switch at the pickup take [M Player_EquipWeapon 0x1a8a58:76]
+    (0x1000_0226, OptCensus::Wired),   // sim.drones.near_flash → the flash_mod gate [M View_SetupRenderModes_Tweak 0x1e5888:26]
+    (0x1000_023b, OptCensus::Wired),   // sim.drones.decay_gate + pain_alpha [M Player_Update 0x193600:414-429]
+    // Multiplayer — P_CNMPOPTIONS_Handler 0x2144d8:13-15
+    (0x1000_0128, OptCensus::Wired),   // fe.mp_radar → the match settings → the radar draw [M HUD_RadarUpdate 0x19f6e8:102]
+    (0x1000_011c, OptCensus::Wired),   // fe.mp_handicap → the match settings [M Player_Init 0x1910f8:128-131]
+    (0x1000_0129, OptCensus::Wired),   // sim.auto_aim, MP arm [M Player_AutoAim 0x1a7c98:44]
+    // AV — P_CNAVOPTIONS_Handler 0x214818:128-134
+    (0x1000_0135, OptCensus::Wired),   // driver.music_master [M SFXMusicSetVolume 0x116cf8:14]
+    (0x1000_0134, OptCensus::Wired),   // driver.master [M SFXSetVolume 0x116d98:14]
+    (0x1000_0136, OptCensus::Wired),   // sim.subtitle_track.enabled [M Sound_DoSubtitle 0x1dde58:21]
+    (0x1000_019a, OptCensus::NoPortReader("Split screen: Camera_CreateCameras 0x1bb2b8 lays out the 2-player viewports; the port has one camera and one window")),
+    (0x1000_0198, OptCensus::NoPortReader("Speaker mode: SFXSetMode 0x117078 configures the IOP output path; nf-audio has no mono/surround downmix (the OS mixer owns it)")),
+    (0x1000_0223, OptCensus::Wired),   // the menu draw aspect (aspect_for); the 3D projection gate is the main agent's draw side
+    // Codename Controls — P_CNCONTROLS_Handler 0x213cd0 / C_RBCONTROL_Handler 0x217908
+    (0x1000_0025, OptCensus::NoPortReader("Controller style: psiInput_MapInputs 0x10cd80:61 switches the pad→action mapping per style; the gamepad backend ships one fixed mapping")),
+    (0x1000_00c9, OptCensus::Wired),   // the host negates the look delta [M Input_Update 0x17ee88:50-52]
+];
+/// The census entry of a row control (the tests and the draw side read this).
+pub fn opt_census(ctrl: u32) -> Option<OptCensus> {
+    OPT_CENSUS.iter().find(|(c, _)| *c == ctrl).map(|(_, k)| *k)
+}
 const OPT_DESC: &[(u32, i32, u32)] = &[
     (0x1000_0002, i32::MIN, 0x100_0000), (0x1000_0003, i32::MIN, 0x100_0001), (0x1000_0004, i32::MIN, 0x100_0002), (0x1000_0008, 0, 0x100_002f),
     (0x1000_00f6, 0, 0x100_002f), (0x1000_0081, 1, 0x100_0021), (0x1000_0081, 0, 0x100_0022), (0x1000_0084, 0, 0x100_0023),
@@ -3741,7 +3779,7 @@ impl FrontEnd {
     /// arrows), hides the widget when +0x7a flags say so and re-runs `Scroll_Update` +
     /// `Label_Update` — pure draw-time layout the port has no counterpart for (the ◀▶ step
     /// here + the draw side's own geometry cover the job) [M 0021ff80 decomp].
-    fn opt_step(&mut self, row: &OptRow, dir: i32) {
+    pub fn opt_step(&mut self, row: &OptRow, dir: i32) {
         let v = self.opt_value(row.ctrl);
         let nv = match row.kind {
             OptKind::Slider => (v + 10 * dir).clamp(0, 100),
@@ -3753,6 +3791,11 @@ impl FrontEnd {
             _ => return,
         };
         self.opts.insert(row.ctrl, nv);
+        // options-census: the MP options rows ARE MPSettings — the game's page writes +0x28/+0x2c
+        // [M P_CNMPOPTIONS_Handler 0x2144d8:13-14] and the lobby edits the same record, so the
+        // port's FrontEnd fields move with the rows.
+        if row.ctrl == 0x1000_0128 { self.mp_radar = nv as u32; }
+        if row.ctrl == 0x1000_011c { self.mp_handicap = nv; }
         if nv != v {
             // menu-sfx: the spinner's ◀/▶ step, first press — MENU_SOUND 3 (0x1d8) down-count,
             // 4 (0x1d9) up-count; no sound when the value didn't move [M Scroll_Update
@@ -6226,6 +6269,10 @@ impl FrontEnd {
                             // joined human, so ready follows immediately.
                             4 => {
                                 self.mp_handicap = MP_HANDICAPS[self.mp_setup_sel.min(MP_HANDICAPS.len() - 1)].0;
+                                // options-census: same storage as the MP-options row — the lobby
+                                // writes MPSettings+slot·0x30+0x2c [M C_RBMPSETUP 0x20de58:112],
+                                // the options page seeds it [M 0x2144d8:14]. Sync fe.opts.
+                                self.opts.insert(0x1000_011c, self.mp_handicap);
                                 self.mp_setup_state = 5;
                                 // C_RBMPFINISH_Handler 0x20db48's focus pair rides this step:
                                 // C_RBMPSETUP 0x20de58:114 activates the FINISH control 0x1000022a
@@ -6671,7 +6718,14 @@ impl FrontEnd {
             1 => { self.mp_weapon_set = (self.mp_weapon_set as i32 + dir).rem_euclid(11) as u32; }
             2 => { self.mp_player_mods[0] = (self.mp_player_mods[0] as i32 ^ 1) as u32; }
             3 => { self.mp_player_mods[1] = (self.mp_player_mods[1] as i32 ^ 1) as u32; }
-            _ => { self.mp_radar = (self.mp_radar as i32 ^ 1) as u32; }
+            _ => {
+                self.mp_radar = (self.mp_radar as i32 ^ 1) as u32;
+                // options-census: the lobby row and the MP-options row are one storage — the
+                // game's lobby writes MPSettings+slot·0x30+0x28, the same record the MP options
+                // page reads back on open [M C_RBMPSETUP 0x20de58:112 / P_CNMPOPTIONS
+                // 0x2144d8:19-24]. The port keeps fe.opts (the profile) synced.
+                self.opts.insert(0x1000_0128, self.mp_radar as i32);
+            }
         }
     }
 

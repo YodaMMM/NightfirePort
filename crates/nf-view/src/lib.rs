@@ -2487,6 +2487,12 @@ struct App {
     /// across missions (the front end closes during play); applied to the sim every frame. The
     /// dev T key flips the same option.
     auto_aim_opt: bool,
+    /// options-census: the Controls page's Y-axis row (0x1000_00c9) — the look delta negation
+    /// [M Input_Update 0x17ee88:50-52 negates the two analog look channels when set].
+    look_inverted: bool,
+    /// options-census: the Advanced page's Crouch row (0x1000_0125) — Toggle (true, the game's
+    /// default [M Input_Init 0x17edd8]) or Hold; feeds the sim's stand branch [M 0x1924c0:84-105].
+    crouch_toggle_opt: bool,
     /// net-consolidate: the ONE session layer (nf-net) while an online match runs (`--net-host` /
     /// `--net-join`, or adopted from the lobby pages' `fe.mp_session` when their match starts).
     /// None = local play, no session, no gate.
@@ -4186,11 +4192,10 @@ impl App {
                 // page-change transitions and the per-frame pump.
                 self.menu_music_tick();
                 // The Auto Aim option reaches the game (it was stored and never read — user report
-                // 2026-10-21 "auto aim isn't working? shouldn't be a dev mode thing only").
-                if let Some(fe) = self.fe.as_ref() {
-                    if let Some(&v) = fe.opts.get(&0x1000_011b) { self.auto_aim_opt = v != 0; }
-                }
-                if let Some(sim) = self.scene.sim.as_mut() { sim.auto_aim = self.auto_aim_opt; }
+                // 2026-10-21 "auto aim isn't working? shouldn't be a dev mode thing only"), and
+                // options-census generalizes the same drain to every wired row
+                // (docs/systems/options-census.md).
+                self.drain_options();
                 // fix-weapon-assets: a dev-menu/panel give of a weapon the level archive lacks.
                 // The game never gives cross-level weapons, so there is no game path to mirror —
                 // the port answers the give with a warm reload of the SAME level with the weapon's
@@ -4621,9 +4626,21 @@ impl App {
                                     // 0xe) [M 0x192ab0:163-166].
                                     stabilise: false,
                                     turn: std::mem::take(&mut self.turn),
-                                    look: std::mem::take(&mut self.look),
+                                    // options-census: the Y-axis row negates the look channel
+                                    // [M Input_Update 0x17ee88:50-52] — the port's accumulated
+                                    // delta (mouse + pad merge) flips sign here.
+                                    look: std::mem::take(&mut self.look) * if self.look_inverted { -1.0 } else { 1.0 },
                                     jump: self.just.remove(&KeyCode::Space),
-                                    crouch: self.just.remove(&KeyCode::KeyC) | self.just.remove(&KeyCode::ControlLeft),
+                                    // options-census: the Crouch row picks the feed [M
+                                    // Player_SSCrouch 0x1924c0:84-105] — Toggle reads press edges
+                                    // (the game's Input_Action(8/7, 4)), Hold reads the level
+                                    // (Input_Action(8, 1)).
+                                    crouch: if self.crouch_toggle_opt {
+                                        self.just.remove(&KeyCode::KeyC) | self.just.remove(&KeyCode::ControlLeft)
+                                    } else {
+                                        self.keys.contains(&KeyCode::KeyC) || self.keys.contains(&KeyCode::ControlLeft)
+                                    },
+                                    crouch_toggle: self.crouch_toggle_opt,
                                     aiming: self.aiming,
                                     weapon_cycle: std::mem::take(&mut self.weapon_cycle),
                                     gadget_cycle: std::mem::take(&mut self.gadget_cycle),
@@ -5685,6 +5702,8 @@ impl App {
             panel_frames: 0,
             fe: None,
             auto_aim_opt: true,
+            look_inverted: false,
+            crouch_toggle_opt: true,
             level_code: 0,
             fe_music_page: None,
             menu_handle: 0,
@@ -5912,6 +5931,52 @@ pub fn apply_av_volumes(fe: &mut menu::FrontEnd, driver: Option<&mut nf_audio::s
     if let Some(d) = driver {
         d.music_master = music;
         d.master = sfx;
+    }
+}
+
+impl App {
+    /// options-census: the per-frame option drain (docs/systems/options-census.md) — the
+    /// auto-aim drain generalized to every wired row. Game-side these are profile globals read
+    /// at the point of consumption; the port's `fe.opts` is that profile and this is the read,
+    /// every frame so the values survive across missions. Volume rows commit on page exit in
+    /// the game [M P_CNAVOPTIONS_Handler 0x214818:72-81] — the per-frame apply is the same net
+    /// effect through the persisted profile.
+    fn drain_options(&mut self) {
+        let Some(fe) = self.fe.as_ref() else {
+            // The fe-less paths (the bare/mission harness, dev panels) keep the Auto Aim
+            // mirror — the dev T key and tests write it directly (the pre-census drain's
+            // only line). The windowed app always has a front end.
+            if let Some(sim) = self.scene.sim.as_mut() { sim.auto_aim = self.auto_aim_opt; }
+            return;
+        };
+        let ov = |c: u32| fe.opt_value(c);
+        // The AV volume rows reach the sound layer [M LS_LoadGlobalSettings 0x1cdbc8:69-70's
+        // SFXMusicSetVolume/SFXSetVolume — apply_av_volumes is the boot arm of the same].
+        if let Some(s) = self.sound.as_mut() {
+            s.driver.music_master = ov(0x1000_0135);
+            s.driver.master = ov(0x1000_0134);
+        }
+        // Y-axis: the game negates the two analog look channels when set [M Input_Update
+        // 0x17ee88:50-52]; the port negates the accumulated look delta at the input fill.
+        self.look_inverted = ov(0x1000_00c9) != 0;
+        self.crouch_toggle_opt = ov(0x1000_0125) != 0;
+        let Some(sim) = self.scene.sim.as_mut() else { return };
+        // Auto Aim: the SP row vs the MP row, picked by the match kind [M Player_AutoAim
+        // 0x1a7c98:39-45 picks DAT_002a38c9 vs DAT_002a38ca on MPSettings+0x180]. The port's
+        // MP matches run the shared pickup pass / carry a net session — [S] the detector, the
+        // game's flag is the MPSettings word.
+        let mp = self.net.is_some() || sim.drones.mp_shared_pickups;
+        sim.auto_aim = ov(if mp { 0x1000_0129 } else { 0x1000_011b }) != 0;
+        // Weapon Auto Switch gates the better-weapon take [M Player_EquipWeapon 0x1a8a58:76].
+        sim.drones.auto_switch = ov(0x1000_01cb) != 0;
+        // Crosshairs [M HUD_UpdateCrossHair 0x19e6d0:96], the near-flash tint [M
+        // View_SetupRenderModes_Tweak 0x1e5888:26], the health-pane fade gate [M
+        // Player_Update 0x193600:414], the Subtitles byte [M Sound_DoSubtitle 0x1dde58:21].
+        sim.drones.crosshair = ov(0x1000_0124) != 0;
+        sim.drones.near_flash = ov(0x1000_0226) != 0;
+        sim.drones.decay_gate = ov(0x1000_023b) != 0;
+        sim.drones.crouch_toggle = self.crouch_toggle_opt;
+        sim.drones.subtitle_track.enabled = ov(0x1000_0136) != 0;
     }
 }
 
@@ -7076,5 +7141,105 @@ mod headless_app_harness {
         h.frames(2);
         assert!(!h.app.scene.sim.as_ref().unwrap().auto_aim, "the menu's Auto Aim Off reaches the mission's sim");
         let _ = std::fs::remove_dir_all(&dir);
+
+    // options-census: the windowed drain (App::drain_options) moves every wired row to its
+    // consumer. Each block carries a flipped sister so a constant-pass cannot sneak in.
+    #[test]
+    fn the_option_drain_moves_the_wired_rows() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        let mut fe = menu::FrontEnd::new();
+        fe.opts = menu::default_opts();
+        // Sisters first: the defaults assert one way, the overrides the other.
+        h.app.fe = Some(fe);
+        h.app.drain_options();
+        {
+            let sim = h.app.scene.sim.as_ref().unwrap();
+            assert!(sim.drones.crosshair, "Crosshairs default On [M Input_Init 0x17edd8]");
+            assert!(sim.drones.auto_switch, "Weapon Auto Switch default On [M 0x17edd8]");
+            assert!(sim.drones.near_flash, "the near-flash gate defaults On [M 0x17edd8 +0x0c = 1]");
+            assert!(!sim.drones.decay_gate, "the pane-fade gate defaults Off [M 0x17edd8 +0x0b = 0]");
+            assert!(!sim.drones.subtitle_track.enabled, "Subtitles default Off [M bootup 0x1c7e78:34]");
+            assert!(sim.drones.crouch_toggle, "Crouch defaults Toggle [M 0x17edd8 +0x04 = 1]");
+        }
+        let fe = h.app.fe.as_mut().unwrap();
+        fe.opts.insert(0x1000_0124, 0);
+        fe.opts.insert(0x1000_01cb, 0);
+        fe.opts.insert(0x1000_0226, 0);
+        fe.opts.insert(0x1000_023b, 1);
+        fe.opts.insert(0x1000_0136, 1);
+        fe.opts.insert(0x1000_0125, 0);
+        h.app.drain_options();
+        let sim = h.app.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.crosshair, "Crosshairs Off hides the sprite [M HUD_UpdateCrossHair 0x19e6d0:96]");
+        assert!(!sim.drones.auto_switch, "Weapon Auto Switch Off gates the better-weapon take [M 0x1a8a58:76]");
+        assert!(!sim.drones.near_flash, "the near-flash tint gate Off [M View_SetupRenderModes_Tweak 0x1e5888:26]");
+        assert!(sim.drones.decay_gate, "the pane-fade gate On decays the alpha [M Player_Update 0x193600:414]");
+        assert_eq!(sim.drones.pain_alpha, 1.0, "the fade alpha sits at 1.0 until damage/pickup [M 0x1910f8:127]");
+        assert!(sim.drones.subtitle_track.enabled, "Subtitles On lets the captions through [M Sound_DoSubtitle 0x1dde58:21]");
+        assert!(!sim.drones.crouch_toggle, "Crouch Hold [M Player_SSCrouch 0x1924c0:84-105]");
+    }
+
+    // options-census: the auto-aim pair — the SP row in a single-player match, the MP row in an
+    // MP one [M Player_AutoAim 0x1a7c98:39-45 picks DAT_002a38c9 vs DAT_002a38ca on
+    // MPSettings+0x180; the port's MP detector is [S], see the drain's comment].
+    #[test]
+    fn the_mp_auto_aim_row_wins_in_mp() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        let mut fe = menu::FrontEnd::new();
+        fe.opts = menu::default_opts();
+        fe.opts.insert(0x1000_011b, 0); // the SP row Off
+        fe.opts.insert(0x1000_0129, 1); // the MP row On
+        h.app.fe = Some(fe);
+        h.app.drain_options();
+        assert!(!h.app.scene.sim.as_ref().unwrap().auto_aim, "an SP match reads the SP row");
+        h.app.scene.sim.as_mut().unwrap().drones.mp_shared_pickups = true; // the port's MP-match mark [S]
+        h.app.drain_options();
+        assert!(h.app.scene.sim.as_ref().unwrap().auto_aim, "an MP match reads the MP row [M 0x1a7c98:44]");
+    }
+
+    // options-census: the pane-fade alpha (BLData+0x8bc) decays under the gate and pins at 1.0
+    // without it [M Player_Update 0x193600:414-429].
+    #[test]
+    fn the_pain_alpha_decays_under_the_gate() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        h.app.scene.sim.as_mut().unwrap().drones.decay_gate = false;
+        h.app.scene.sim.as_mut().unwrap().drones.pain_alpha = 1.0;
+        h.frames(3);
+        assert_eq!(h.app.scene.sim.as_ref().unwrap().drones.pain_alpha, 1.0, "row Off pins 1.0 [M 0x193600:414]");
+        h.app.scene.sim.as_mut().unwrap().drones.decay_gate = true;
+        h.frames(3);
+        assert!(
+            h.app.scene.sim.as_ref().unwrap().drones.pain_alpha < 1.0,
+            "row On decays 0.0020833/tick [M 0x193600:414-429]"
+        );
+    }
+
+    // options-census: the Crouch option picks the stand condition [M Player_SSCrouch
+    // 0x1924c0:84-105]. Toggle stands on the crouch/jump press edge; Hold stands when the
+    // crouch action is not held. The transitions carry a 60-tick lockout [M 0x1924c0], so each
+    // waits it out before the next press.
+    #[test]
+    fn the_crouch_option_picks_the_stand_condition() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        let inp = |crouch: bool, toggle: bool| nf_game::player::Input { crouch, crouch_toggle: toggle, ..Default::default() };
+        let sim = h.app.scene.sim.as_mut().unwrap();
+        sim.drones.crouch_toggle = true;
+        sim.step_bond(inp(true, true), false, false, false);
+        assert!(sim.bond.crouched, "toggle: a crouch edge crouches");
+        for _ in 0..61 { sim.step_bond(inp(false, true), false, false, false); }
+        assert!(sim.bond.crouched, "toggle: no edge holds the crouch");
+        sim.step_bond(inp(true, true), false, false, false);
+        assert!(!sim.bond.crouched, "toggle: the second edge stands [M 0x1924c0:99-105]");
+        for _ in 0..61 { sim.step_bond(inp(false, false), false, false, false); }
+        sim.step_bond(inp(true, false), false, false, false);
+        assert!(sim.bond.crouched, "hold: the held action crouches [M 0x1924c0:84-88]");
+        for _ in 0..61 { sim.step_bond(inp(true, false), false, false, false); }
+        assert!(sim.bond.crouched, "hold: still held, still crouched");
+        sim.step_bond(inp(false, false), false, false, false);
+        assert!(!sim.bond.crouched, "hold: released stands [M 0x1924c0:84-88]");
     }
 }

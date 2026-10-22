@@ -10228,6 +10228,18 @@ pub struct Drones {
     /// the options save carries it (LS_MakePlrSettings 0x1cd418 bit; the port's persisted
     /// `PlayerOptions::auto_equip_best`, profile.rs). The port's runtime default is the game's.
     pub auto_switch: bool,
+    /// options-census: the Advanced rows' gates (fields on their own lines — merge lesson 4).
+    /// +0x08 crosshair [M HUD_UpdateCrossHair 0x19e6d0:96], +0x04 crouch mode [M
+    /// Player_SSCrouch 0x1924c0:85], +0x0c near-flash [M View_SetupRenderModes_Tweak 0x1e5888:26],
+    /// +0x0b health-pane fade gate [M Player_Update 0x193600:414]. Input_Init 0x17edd8 defaults.
+    pub crosshair: bool,
+    pub crouch_toggle: bool,
+    pub near_flash: bool,
+    pub decay_gate: bool,
+    /// The health-pane fade alpha (the game's BLData+0x8bc): set 1.0 on damage, pickup and init
+    /// [M 0x1902c8:27, 0x18e650:225, 0x1910f8:127], decayed while decay_gate is set [M
+    /// 0x193600:414-429]; HUD_UpdateHealthPane 0x19b9c8 scales the panes' alpha by min(4·v, 1).
+    pub pain_alpha: f32,
     /// mp-bot-weapons: an MP match takes its pickups in the shared slot-order pass
     /// (`Sim::step_mp_pickups` — `Pickup_Update` 0x18e148's humans-then-bots loop, every taker on
     /// every machine), so `update_pickups` skips its own player touch. Port-only [S].
@@ -10565,6 +10577,14 @@ impl Drones {
             // pickups-g029: the option gate, the game's default (Input_Init 0x17edd8 writes 1;
             // live 1 [L ee_start_05 0x2a38d2]). Fields on their own lines — merge lesson 4.
             auto_switch: true,
+            // options-census: the Advanced rows' gates at Input_Init 0x17edd8's defaults
+            // (crosshair/crouch/near-flash 1, fade 0); pain_alpha starts 1.0 [M 0x1910f8:127].
+            // Fields on their own lines — merge lesson 4.
+            crosshair: true,
+            crouch_toggle: true,
+            near_flash: true,
+            decay_gate: false,
+            pain_alpha: 1.0,
             // mp-bot-weapons (own line — merge lesson 4).
             mp_shared_pickups: false,
             worldobjs: Default::default(),
@@ -11302,6 +11322,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if self.health.pain_generic(&mut self.rng, ph, self.difficulty, d.level, 0) {
                 self.play_pain_grunt(player_pos);
             }
+            // options-census: damage resets the pane fade [M Player_HandlePain 0x1902c8:27 pins
+            // BLData+0x8bc to 1.0].
+            self.pain_alpha = 1.0;
             self.player_hits.push((frame, owner, before - self.health.health));
         }
         // Drones: `Drone_ExplosiveHit` 0x13aab8 — the attacker stamp (+0x2B4), then msg 9 with the
@@ -12870,6 +12893,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // is the view's held weapon (one tick stale at most). pickups-g029: the flag is
             // now READ — `(&DAT_002a38d2)[idx·0x158] != 0` [M 0x1a8a58:76] — instead of
             // standing in as always-on.
+            // options-census: ANY pickup take resets the pane fade [M Pickup_Handler 0x18e650:225
+            // writes BLData+0x8bc = 1.0].
+            self.pain_alpha = 1.0;
             if self.auto_switch && matches!(t, crate::pickup::Taken::Weapon { .. }) {
                 let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
                 if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
@@ -13049,6 +13075,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     }
 
     fn tick_inner(&mut self, d: &Data, player: &Player) {
+        // options-census: the health-pane fade alpha decays while the Advanced row (0x1000_023b,
+        // PlayerSetting+0x0b) is set [M Player_Update 0x193600:414-429 — BLData+0x8bc loses
+        // 0.0020833·FRAME_RATE_MUL per tick, clamped at 0; row 0 pins it to 1.0].
+        if self.decay_gate {
+            self.pain_alpha = (self.pain_alpha - 0.002_083_334).max(0.0);
+        }
         // The breakable drone-contact arm (`Break_Update` 0x12bfd8:23-34): snapshot the drones'
         // positions; at the tick's tail every mover tests its squared step against the level's
         // glass (only on GameState+0x12 == 0x0700001, only kind 2 — crate::breakable).
@@ -14036,6 +14068,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         if self.health.pain_generic(&mut self.rng, crate::fusebox::LIVE_WIRE_HURT, self.difficulty, d.level, 0) {
                             self.play_pain_grunt(player.pos);
                         }
+                        // options-census: damage resets the pane fade [M 0x1902c8:27].
+                        self.pain_alpha = 1.0;
                         self.player_hits.push((frame, usize::MAX, before - self.health.health));
                         let _ = at;
                     }

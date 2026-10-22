@@ -402,7 +402,10 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // fix-sentinel-camera-play: the guided ride hides it too ("no view model, no crosshair" [L PCSX2],
     // the substate-10 view [M 0x193600:242-256]).
     let zoomed = sim.map_or(false, |s| s.zoom_target > 1.0) || sim.map_or(false, |s| s.missile_cam.is_some());
-    if !zoomed {
+    // options-census: the Crosshairs row (Advanced 0x1000_0124 → PlayerSetting+0x08) hides the
+    // sprite — HUD_UpdateCrossHair 0x19e6d0:96 sets +0x38 = 0xff (not drawn) when the byte is 0.
+    let crosshair_on = sim.map_or(true, |s| s.drones.crosshair);
+    if !zoomed && crosshair_on {
         h.quad(Anchor::Centre, 49, CROSS_TEX, 0, SW / 2.0 * (1.0 + cx) - w / 2.0, SH / 2.0 * (1.0 - cy) - hh / 2.0, w, hh, [u, v, w, hh], (false, false), gs(0xff0000, 0xff));
     }
     let (Some(s), Some(t)) = (sim, scene.hud.as_ref()) else { return h.finish() };
