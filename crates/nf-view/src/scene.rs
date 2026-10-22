@@ -4803,13 +4803,15 @@ impl Sim {
             // < 5.0 [M 0x1a7b6c-0x1a7b84], level != 0x700004a [M 0x1a7b58-0x1a7b64], the boot-global
             // `DoorMsg` 0x30cd04 < 3 [M 0x1a7b88-0x1a7b90], then `Door_DoMsg` 0x135f18 → on a nonzero
             // label `DoorMsg++` and `Text_AddMsg(BL+0x94e, 0, 1, label, 0, 0xb4)` — 180 ticks [M
-            // 0x1a7b98-0x1a7bc8]. The port: the sphere pick [S, see Doors::pick_target] and the
+            // 0x1a7b98-0x1a7bc8]. The port: the door's own mesh-ray pick (Doors::pick_target —
+            // the game's front-face rule [M Intersect_RayGeom 0x10a8c8:168],
+            // docs/systems/door-aim-ray.md) and the
             // info_labels queue bound in hud_tick (the game binds at post time, before the pane).
             // unported-misc-5: the trigger pick for the class-0x1D arm below — the game's single hitlist
             // dispatches on the NEAREST hit object only, so the two aim arms must yield to each other too
             // [M 0x1a79e8-0x1a7bc8: the 0x1c/0x1d branches are else-ifs on one `bVar3`].
             let trig_pick = self.pick_trigger_target(camera, look, wall);
-            let door_pick = self.drones.doors.pick_target(camera, look, wall);
+            let door_pick = self.drones.doors.pick_target(&self.world, camera, look, wall);
             let trig_in_front_of_door = trig_pick.map_or(false, |(_, t)| door_pick.is_none_or(|(_, dt)| t < dt));
             if let Some((di, dt)) = door_pick {
                 let drone_in_front = hit.map_or(false, |(_, t)| t < dt);
@@ -4838,7 +4840,8 @@ impl Sim {
             // passing and `!Trigger_Locked` (0x1b2fc8 — for a LOAD_LEVEL exit the key gate off), the game posts
             // `Txt_BindLabel(0x2000009, 0)` for 0xb4 = 180 ticks [M 0x1a7810:201-207]. The port: the AABB pick
             // below [S stand-in — the game's ray hits the trigger's collision via the shared hitlist; the
-            // port's `world.segment` returns no object id, same [S] shape note as `Doors::pick_target`].
+            // port's `world.segment` returns no object id (the door arm's sphere note is resolved —
+            // `Doors::pick_target` now tests each door's own triangles [M 0x10a8c8:168]).]
             self.hud.load_msg = self.hud.load_msg.saturating_sub(1); // [M 0x1a7810:78-79]
             if let Some((ti, tt)) = trig_pick {
                 let drone_in_front = hit.map_or(false, |(_, t)| t < tt);

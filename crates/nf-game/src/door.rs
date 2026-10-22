@@ -24,7 +24,9 @@
 //! substate arms]: the segment-vs-sphere test — `sqdist(live obj+0x80 sphere centre, closest point on the
 //! pick capsule) < (1.5·r_obj + r_pick)²` [M `Collide_PickObj` 0x1eae80:152-168, the ×1.5 at :160].
 //! Ported as `Doors::collide_step` (called from the collide caller in `Drones::tick`, before `Doors_Calc`) —
-//! the sphere stand-in in the old `react_to_hit` is gone: the pick above IS the game's test.
+//! the sphere stand-in in the old `react_to_hit` is gone: the pick above IS the game's test, and
+//! `react_to_hit` keeps only the game's reversal arms — a closed idle door falls through every
+//! branch (kind 0 needs `obj+0xf4 & 0x18`, kind 2 `& 0x10` [M 0x135980:77, 101-104]).
 
 use crate::triggers::Channels;
 use crate::trig::sinf;
@@ -77,6 +79,7 @@ pub fn parse_keys(payload: &[u8]) -> Vec<Key> {
 
 fn dot3(a: V3, b: V3) -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] }
 fn sub(a: V3, b: V3) -> V3 { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
+fn cross3(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]] }
 
 /// `Mat_GetDir` (0x1e3398): row 2. `Mat_GetNorm` (0x1e33d8): row 0.
 fn row(m: &Mat4, r: usize) -> V3 { [m[r][0], m[r][1], m[r][2]] }
@@ -290,9 +293,10 @@ pub fn door_placements(placements: &[Placement]) -> Vec<usize> {
 
 /// `Door_Update`'s proximity test [M 0x1363c8:52-68, 121-137]: `Vec_SqDist3D(door obj+0x80, actor obj+0x80) <
 /// 2·(r_door + r_actor)²` with the `obj+0x8C` radii. `obj+0x80` is the door's LIVE world sphere (rebuilt by the
-/// moved pass after every `Door_Interp`), so a slide door's blocking zone follows the open leaf — the port used to
-/// test the fixed placement position with a 1.0 stand-in radius, which closed doors the game leaves open
-/// (core-loop §7 item 4 / door-port-check #1).
+/// moved pass after every `Door_Interp`), so a slide door's blocking zone follows the open leaf. The old
+/// fixed-placement + 1.0-radius stand-in is DELETED (it closed doors the game leaves open — core-loop §7
+/// item 4 / door-port-check #1): `blocked` IS the game's scan, re-verified line-for-line this session against
+/// 0x1363c8:52-68 (the class-2/3/0x12 walk, the `+0xf0 & 0x10` skip) and :121-137 (the auto-close arm) [M].
 fn blocked(door: (V3, f32), a: (V3, f32)) -> bool {
     let d = [door.0[0] - a.0[0], door.0[1] - a.0[1], door.0[2] - a.0[2]];
     let r = door.1 + a.1;
@@ -532,34 +536,53 @@ impl Doors {
     }
 
     /// The aim ray's door pick (`Check_Target` 0x1a7810's `Collide_RayIntersect` arm) [M disasm
-    /// 0x1a79ec-0x1a7a20: a0 = HITDATA+0x58, the hit object; class `obj+0xff` == 0x1c]. **[S
-    /// unverified as to shape]** — the game's ray hits the door's collision MESH and reports the
-    /// object; the port's `world.segment` returns no object id, so the pick tests each door's LIVE
-    /// world sphere (obj+0x80, radius obj+0x8C) and is wall-occluded like
-    /// `gadget::pick_decryptor_lock` (the caller's static-segment fraction `wall_t` caps it).
-    /// Returns `(door index, hit fraction)` of the nearest touch, or None.
-    pub fn pick_target(&self, eye: V3, dir: V3, wall_t: f32) -> Option<(usize, f32)> {
+    /// 0x1a79ec-0x1a7a20: a0 = HITDATA+0x58, the hit object; class `obj+0xff` == 0x1c]. The game's
+    /// ray is a true MESH ray (docs/systems/door-aim-ray.md): `Collide_RayIntersect` 0x1ec690
+    /// builds a mask-0x201 HITTEST and sorts per-object hits by fraction [M :95-112, :114-160];
+    /// `Collide_Intersect` 0x1ebaa8 transforms A/B into the object space of the LIVE `obj+0x90`
+    /// and calls `Intersect_RayGeom` [M :157-161, :229], which skips every triangle whose plane
+    /// denominator is non-negative (`n·dir >= 0`) and accepts only a fraction in [0, 1]
+    /// [M 0x10a8c8:168-172]. The port tests the door's own collision triangles
+    /// (`world.shape(glist)` — the same data `set_dynamic` poses for the door's solidity) at the
+    /// live pose with that front-face rule. The deleted stand-in tested the LIVE WORLD SPHERE
+    /// (obj+0x80/obj+0x8C) with the entry fraction clamped to 0 inside the sphere — reporting the
+    /// door for ANY ray from inside it, aiming away too, burning `Door_DoMsg`'s one-shot +0x74
+    /// latch [S stand-in deleted]. Returns `(door index, hit fraction)` of the nearest touch, or
+    /// None; `wall_t` still caps by the caller's static-segment fraction (the game's ray is
+    /// wall-occluded by the same walk).
+    pub fn pick_target(&self, world: &CollisionWorld, eye: V3, dir: V3, wall_t: f32) -> Option<(usize, f32)> {
         let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
         if l < 1e-9 { return None; }
         let d = [dir[0] / l, dir[1] / l, dir[2] / l];
+        let far = [eye[0] + d[0] * 50.0, eye[1] + d[1] * 50.0, eye[2] + d[2] * 50.0]; // the 50-unit Check_Target ray [M 0x1a7810:114-116]
         let mut best: Option<(f32, usize)> = None;
         for (i, door) in self.list.iter().enumerate() {
+            // The game's ray tests only glist-backed objects (the use pick's admission) [M 0x1eae80:88-90].
             if door.glist == 0 { continue; }
-            let (c, r) = door.live_sph();
-            let ap = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
-            let t = ap[0] * d[0] + ap[1] * d[1] + ap[2] * d[2];
-            if t < 0.0 { continue; }
-            let closest = [eye[0] + d[0] * t, eye[1] + d[1] * t, eye[2] + d[2] * t];
-            let d2 = (closest[0] - c[0]).powi(2) + (closest[1] - c[1]).powi(2) + (closest[2] - c[2]).powi(2);
-            if d2 > r * r { continue; }
-            // The ray-sphere entry point (closest approach t minus the half-chord). An eye already
-            // inside the sphere (the player stands against the leaf) enters at 0 — the game's mesh
-            // ray still reports the door [S stand-in].
-            let half = (r * r - d2).sqrt();
-            let entry = (t - half).max(0.0);
-            let tf = entry / 50.0; // the ray is the 50-unit Check_Target ray [M 0x1a7810:114-116]
-            if tf < 0.0 || tf >= wall_t { continue; }
-            if best.is_none_or(|(bt, _)| tf < bt) { best = Some((tf, i)); }
+            let Some(tris) = world.shape(door.glist) else { continue; };
+            // The game tests in OBJECT space: the inverse of the live `obj+0x90`, `RotPreTransVec`
+            // for A and B [M 0x1ebaa8:157-161, 193-229]. Row-vector v·M⁻¹, the rigid inverse.
+            let inv = rigid_inverse(&door.matrix);
+            let a = transform(&inv, eye);
+            let seg = sub(transform(&inv, far), a);
+            for t in tris {
+                let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                // One-sided, like the game [M Intersect_RayGeom 0x10a8c8:168: `n·dir >= 0` skips
+                // the triangle; the winding IS the facing [D — world.rs's stored-normal identity]].
+                if dot3(cross3(e1, e2), seg) >= 0.0 { continue; }
+                let p = cross3(seg, e2);
+                let det = dot3(e1, p);
+                if det.abs() < 1e-12 { continue; }
+                let inv_det = 1.0 / det;
+                let s = sub(a, t[0]);
+                let u = dot3(s, p) * inv_det;
+                if !(0.0..=1.0).contains(&u) { continue; }
+                let q = cross3(s, e1);
+                let v = dot3(seg, q) * inv_det;
+                if v < 0.0 || u + v > 1.0 { continue; }
+                let tt = dot3(e2, q) * inv_det;
+                if (0.0..=1.0).contains(&tt) && best.is_none_or(|(bt, _)| tt < bt) { best = Some((tt, i)); }
+            }
         }
         best.map(|(tf, i)| (i, tf))
     }
@@ -915,9 +938,17 @@ impl Doors {
         // [M]). The player opens them by WALKING INTO the threshold — the 07000015 top-band door
         // [32] (25.1, 41.6, 70.1, unlocked) is E-dead in the port yet must open for the level's
         // only free west crossing [D flow]. The port had the flag parsed but never consumed.
-        // Stand-in shape [S — the game's straddle test function is not pinned]: a closed straddle
-        // door activates (from_player — the lock guards hold) when the player's feet stand inside
-        // its threshold (xz 1.4, the leaf's half-width plus the capsule; y within the door band).
+        // No game straddle test exists to pin — the opener census (standins-door-933) closes the
+        // question: `Door_Activate` 0x135be0 has exactly three callers (Player_Activate
+        // 0x1a5170:100-129 the E press, Door_Update 0x1363c8's channel/close arms,
+        // NDrone2_OpenDoor 0x14aa38 the route doors) and `Door_SetState` 0x135618 exactly three
+        // (Door_Interp 0x135738, Door_ReactToHit 0x135980, Door_Activate) [M, symbol census over
+        // the whole ACTION.ELF decompile], and `Door_ReactToHit` reverses only MOVING leaves (kind
+        // 0 needs `obj+0xf4 & 0x18`, kind 2 `& 0x10` [M 0x135980:77, 101-104]) — no contact or
+        // proximity opens a closed idle door. A closed straddle door activates here (from_player —
+        // the lock guards hold) when the player's feet stand inside its threshold (xz 1.4, the
+        // leaf's half-width plus the capsule; y within the door band) — SHIM PARAMETERS, not game
+        // claims.
         // CORRECTION (level-15-complete): the "every 07000015 kind-2 door carries it" and
         // "door[32] is E-dead" claims above are DISPROVEN by the disc — none of 07000015's
         // corridor doors [29]/[32]/[49]/[50]/[51]/[52] carries a par-4 (parsed `straddle=false`,
@@ -952,9 +983,17 @@ impl Doors {
     /// doorinfo+0x4c|+0x50 bit 2]) blocks the only path, and neither `Door_Update` (a ch_open==0
     /// door skips every channel arm [M 0x1363c8: `(state & 6) == 0` / `uVar2 == 0 → LAB_00136550`])
     /// nor `Door_ReactToHit` (0x135980 reverses only MOVING leaves: kind 0 needs `state & 0x18`,
-    /// kind 2 needs `state & 0x10`) ever opens a closed idle one. The game opens it through the
-    /// collide-contact path the port has not rebuilt (U-041); until then the stand-in drives the
-    /// SAME activation from `Door_Update`'s per-tick actor list, with the game's own proximity
+    /// kind 2 needs `state & 0x10`) ever opens a closed idle one [M 0x135980:77, 101-104]. The
+    /// port's collide path IS rebuilt (fix-door-react-path: `collide_step`, called from the
+    /// collide caller in `Drones::tick`) and faithfully re-opens nothing. The old "the game opens
+    /// it through the collide-contact path the port has not rebuilt (U-041)" premise is corrected
+    /// twice over: U-041 is the searchlight head's bullet child list (docs/UNKNOWNS.md), not the
+    /// doors; and the door opener census [M — `Door_Activate` 0x135be0's three callers,
+    /// `Door_SetState` 0x135618's three, see the `player_use` walk-in note above] leaves the
+    /// player's E press as the only game route through a closed idle ch_open-0 door. Until the
+    /// live checks settle what the player actually experiences there (L-019/L-141,
+    /// docs/live/backlog.md), this shim drives
+    /// the SAME activation from `Door_Update`'s per-tick actor list, with the game's own proximity
     /// metric — `Vec_SqDist3D(door+0x80, actor+0x80) < (door+0x8C + actor+0x8C)² · 2`
     /// [M 0x1363c8 @0x136678-0x136684, the scan `Door_Update` itself runs for the auto-close] —
     /// so the open lands where the game's contact would. The lock guards hold: `activate`
@@ -972,10 +1011,10 @@ impl Doors {
     /// [M Door_Activate 0x135be0: `state & 0x12` → SetState(8)], and a leaf barely off its open
     /// end snaps straight back to OPEN. That broke 07000001's
     /// `door_e_opens_then_e_closes_on_07000001` (after the second E the state read 0x4, not
-    /// 0x10). The stand-in is the scan's open-side complement: it acts on a CLOSED IDLE door
+    /// 0x10). The shim is the scan's open-side complement: it acts on a CLOSED IDLE door
     /// only (`state == CLOSED`), never on a moving one. Two more narrowing arms, same
     /// principle: a ch_open door is `Door_Update`'s own channel arm's job [M 0x1363c8: channel
-    /// on → `Door_Activate`], so the stand-in covers only the channel-less doors (16's arrival
+    /// on → `Door_Activate`], so the shim covers only the channel-less doors (16's arrival
     /// door, ch_open 0 [M 0x136100 + glist 0x803f00a0]); and the lock pre-check is silent —
     /// the game's per-tick scan plays no lock sound (the ch_lock thud is `Door_Activate`'s
     /// E-path arm [M 0x135be0]), so the walk-in skips before `activate` instead of thudding
