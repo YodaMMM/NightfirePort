@@ -377,6 +377,20 @@ pub mod state {
     pub const ROLL_RIGHT_CROUCH: u8 = 0x7a;
 }
 
+/// The MP chatter family's four sites — `DroneFunc_InjuredTalk` 0x13fa20 (BulletImpact survival),
+/// `RunForCoverTalk` 0x13fd08, `UnderCoverTalk` 0x13fe80 (the init/return enters),
+/// `UnderCoverAimTalk` 0x13fb98. All four open with `MPSettings+0x184` (0x2a4924) ≠ 0 [M disasm of
+/// each: `lw v0, 0x4924(v1)` then `beq v0,zero` → return] while `SpeechSFX` refuses when it IS
+/// non-zero [M 0x141b00] — dead in both modes; 0 in single player [L ee_start_05.bin @0x2a4924].
+/// The port models the gate (`mp_gate`, constant false) ahead of everything — no draws, no handle
+/// clears — with the exact per-level line tables in `mp_chatter_talk` (guard-barks-first-alert).
+pub enum MpChatter {
+    Injured,
+    RunForCover,
+    UnderCover,
+    UnderCoverAim,
+}
+
 /// Messages (`*(int*)MsgObject`).
 pub mod msg {
     pub const ENTER: u8 = 1;
@@ -1121,6 +1135,14 @@ pub struct Drone {
     /// the tick from the source drone's +0x4FC (`alert_bits`) — the source exists, holds 0x200020
     /// bits and no bit outside 0x21 → false.
     pub assist_ended: bool,
+    /// `+0x4F8 & 0x70000000` — the pending-alert bits FirstAttack consumes through
+    /// `DroneFunc_FirstAlertState` (0x148010:24-27 consults it when the attack is not the drone's
+    /// own sighting and a pending alert stands): 0x10000000 the sound alert (AlertToPosition
+    /// 0x165270 case 0x14, SearchArea 0x165bf0, HeardNoiseSuspect 0x16b0e0:123), 0x20000000 the
+    /// forced attack (DoForcedAttack 0x148c60:28), 0x40000000 the alarm (EnemyAlerts 0x177c18:114).
+    /// No decomp writer clears them; a later consult is neutralised by the receiver's own +0x4FC
+    /// markers (FirstAlertState's suppress list) — the game's own mechanism.
+    pub alert_pending: u32,
     /// The wait-channel latch `+0xCD8` (`AllyLeadMissionWait`'s and the other wait states'), and the
     /// tick's read of it (fix-actors). The source word is `mission_wait_channel` (+0x12C) [M 0x15efc8].
     pub wait_channel: u16,
@@ -1736,6 +1758,7 @@ impl Drone {
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false,
+            alert_pending: 0,
             mission_wait_channel: 0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
@@ -3501,6 +3524,9 @@ impl Drone {
             });
             return true;
         }
+        // `NDrone2_BulletImpact` 0x1461c8:55 — the survival path barks (InjuredTalk; MP-dead, the
+        // gate inside refuses before any draw or handle clear).
+        self.mp_chatter_talk(d, rng, MpChatter::Injured);
         if allow {
             self.big_hit = self.last_damage > self.max_health * 0.25 && self.health > self.max_health * 0.333;
             // The game's frame counter runs from boot (108153 at a 07000005 start [L]), so unset stamps are long past.
@@ -3754,6 +3780,51 @@ impl Drone {
         self.talks.push((idx, true));
         self.talk_cooldown = frame + cooldown;
     }
+
+    /// The MP chatter family: `DroneFunc_InjuredTalk` 0x13fa20 / `RunForCoverTalk` 0x13fd08 /
+    /// `UnderCoverTalk` 0x13fe80 / `UnderCoverAimTalk` 0x13fb98. `mp_gate` refuses before any
+    /// draw or handle clear (the family is dead in both modes — see `MpChatter`); the tables are
+    /// the exact per-level picks the game would roll [M each function's decompile].
+    fn mp_chatter_talk(&mut self, d: &Data, rng: &mut Rng, kind: MpChatter) {
+        if !Self::mp_gate() { return; }
+        if self.voice_busy() || self.health <= 0.0 { return; }
+        // The per-level draws, in the C's order (the pick roll precedes the trailing Rand(0)).
+        let idx = match kind {
+            MpChatter::Injured => match d.level {
+                0x0700_000c | 0x0700_000d => Some(0xcc + rng.rand(6) as usize),
+                0x0700_0011..=0x0700_0013 | 0x0700_004a => Some(0xb9),
+                // 14–16 alt half 0x138+Rand(5) needs the `+0x108 & 1` second-weapon-set bit —
+                // not modelled (no ported drone carries it), so the primary half only.
+                0x0700_0014..=0x0700_0016 if self.voice_type != 0x10 => Some(0x133 + rng.rand(5) as usize),
+                _ => None,
+            },
+            MpChatter::RunForCover => match d.level {
+                0x0700_000c | 0x0700_000d => Some(0xd0 + rng.rand(2) as usize),
+                0x0700_0011..=0x0700_0013 | 0x0700_004a => Some(0xbd),
+                // 14–16 alt half 0x122+Rand(7): same unmodelled `+0x108 & 1` bit.
+                0x0700_0014..=0x0700_0016 if self.voice_type != 0x10 => Some(0x11b + rng.rand(7) as usize),
+                _ => None,
+            },
+            MpChatter::UnderCover => match d.level {
+                0x0700_000c | 0x0700_000d => Some(0xcf + rng.rand(3) as usize),
+                0x0700_0011..=0x0700_0013 | 0x0700_004a => Some(0xbd + rng.rand(2) as usize),
+                _ => None,
+            },
+            MpChatter::UnderCoverAim => match d.level {
+                0x0700_000c | 0x0700_000d => Some(0xd0 + rng.rand(2) as usize),
+                0x0700_0011..=0x0700_0013 | 0x0700_004a => Some(0xba + rng.rand(2) as usize),
+                _ => None,
+            },
+        };
+        if let Some(idx) = idx {
+            if rng.rand(0) == 0 { self.talks.push((idx, false)); }
+        }
+    }
+
+    /// The family's MP gate: `MPSettings+0x184` (0x2a4924) ≠ 0 happens in multiplayer only; the
+    /// port is single-player and the snapshot value is 0 [L ee_start_05.bin @0x2a4924], so the
+    /// gate is constant false — exactly the game's SP behaviour.
+    fn mp_gate() -> bool { false }
 
     fn heard_noise_talk(&mut self, saw_opp_last_frame: bool) {
         if saw_opp_last_frame { return; }
@@ -5487,7 +5558,16 @@ impl Drone {
             // [M 0x169150:21-25]) is MP-gated dead like InjuredTalk (body iff MP != 0, SpeechSFX
             // refuses in MP → silent both modes, no SP RNG draw) — the port runs nothing, exactly
             // as the shipped build. See `DroneFunc_InjuredTalk` at `NDrone2_BulletImpact`.
-            (RUN_FOR_COVER, msg::ENTER) => { self.vision_on = true; if self.goal.is_none() { self.set_state(ATTACK) } true }
+            (RUN_FOR_COVER, msg::ENTER) => {
+                self.vision_on = true;
+                // 0x169150:22-25: with the cover node already claimed (`+0x6F4` — the port's live
+                // cover goal) the enter barks and returns; without one it searches. The port's
+                // search is folded into the caller, so the bark rides the same proxy (MP-dead, the
+                // gate inside).
+                if self.goal.is_some() { self.mp_chatter_talk(d, rng, MpChatter::RunForCover); }
+                if self.goal.is_none() { self.set_state(ATTACK) }
+                true
+            }
             (RUN_FOR_COVER, msg::UPDATE) => {
                 if !in_cover_ok(self, false) || (self.seen && self.dist < 4.0) { self.set_state(ATTACK); return Some(true); }
                 match self.move_to_goal(d) {
@@ -5513,8 +5593,8 @@ impl Drone {
             }
             (UNDER_COVER_INIT, msg::ENTER) => {
                 // `DroneFunc_UnderCoverTalk` 0x13fe80 [M 0x169cc0:19 — the enter calls it]: MP-gated
-                // dead (body iff MP != 0, SpeechSFX refuses in MP → silent both modes, no SP RNG
-                // draw) — the port runs nothing, as the shipped build.
+                // dead (the gate inside refuses before any draw — see `mp_chatter_talk`).
+                self.mp_chatter_talk(d, rng, MpChatter::UnderCover);
                 self.vision_on = true;
                 self.cover_claimed = false;
                 if !self.cover_anim(d, rng, 6, UNDER_COVER_IDLE) { /* as built: the drone then waits here */ }
@@ -5566,7 +5646,8 @@ impl Drone {
                 // task 854: the game's `NDrone2_DSTATE_UnderCoverAim` 0x16a2d0 also calls
                 // `DroneFunc_UnderCoverAimTalk` 0x13fb98 — DEAD in both modes [M 0013fb98:7-9:
                 // the SP gate returns at once (`MPSettings+0x184 == 0`); SpeechSFX refuses in MP;
-                // docs/port-map/unreached.md] — nothing to port here.
+                // docs/port-map/unreached.md] — the gate lives in `mp_chatter_talk` now.
+                self.mp_chatter_talk(d, rng, MpChatter::UnderCoverAim);
                 if !self.cover_anim(d, rng, 2, UNDER_COVER_FIRE) { self.set_state(UNDER_COVER_LEAVE_NOW) }
                 true
             }
@@ -5655,7 +5736,12 @@ impl Drone {
             // dead (see UNDER_COVER_INIT above).
             // `NDrone2_DSTATE_UnderCoverReturn` 0x16a9c0 (state 0x99) — UnderCoverFire /
             // UnderCoverSniperFire SetState it when the target drops [M 0x16a3e0 / 0x16a610].
-            (UNDER_COVER_RETURN, msg::ENTER) => { if !self.cover_anim(d, rng, 4, UNDER_COVER_TYPE_CHANGE) { self.set_state(UNDER_COVER_LEAVE) } true }
+            (UNDER_COVER_RETURN, msg::ENTER) => {
+                // 0x16a9c0:25 — the return enter barks (UnderCoverTalk; MP-dead, the gate inside).
+                self.mp_chatter_talk(d, rng, MpChatter::UnderCover);
+                if !self.cover_anim(d, rng, 4, UNDER_COVER_TYPE_CHANGE) { self.set_state(UNDER_COVER_LEAVE) }
+                true
+            }
             (UNDER_COVER_RETURN, msg::UPDATE) => { if !in_cover_ok(self, false) || far_from_goal(self) { self.cover_leave |= 4 } true }
             // `NDrone2_DSTATE_UnderCoverTypeChange` 0x1739b8 ENTER (case 1) [M]: leave-flag → 0x9c,
             // else CoverNodeOK on the +0xBB4 node, else CoverAvailable → RUN_FOR_COVER, else cover anim 7.
@@ -6706,19 +6792,43 @@ impl Drone {
                 }
                 true
             }
-            // Forced attack (`Drone_Message(0x1F)` → `DroneFunc_DoForcedAttack`): another drone was seen attacking.
-            (IDLE | ALERT | PATROL, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
+            // Forced attack (`Drone_Message(0x1F)` → `DroneFunc_DoForcedAttack` 0x148c60): another drone was seen
+            // attacking. The receiver's SP path needs the alerted-by-other latch (`+0x4F8 & 0x20000`) with the first
+            // attack still pending (`+0x4F8 & 0x2000000` clear) [M 0x148c60:24-28 — `(word & 0x2020000) == 0x20000`];
+            // it clears the latch, leaves the forced-attack pending bit (`+0x4F8 |= 0x24000000` — the 0x20000000 drives
+            // FirstAttack's `FirstAlertState` consult, the 0x4000000 sighting flag is not read by the port) and Attack.
+            // The game's MP / level-07 party gate is checked at the sender (`Drones::tick`'s ConsiderAlerted loop
+            // [M 0x148c60:13-15]); msg 0x1f has no other sender. A gate failure returns 0 → the base state's default —
+            // nothing (the assisting guard's own msg 0x1f is swallowed like the game's).
+            (IDLE | ALERT | PATROL, msg::FORCED_ATTACK) => {
+                if self.alerted_by_drone && !self.first_attack_done {
+                    self.alerted_by_drone = false;
+                    self.alert_pending |= 0x2000_0000;
+                    self.set_state(ATTACK);
+                }
+                true
+            }
             // The alarm through `DroneVision_EnemyAlerts` case 0x1E (0x177c18): save the return state and home the first
-            // time, then Attack (`+0x4F8` |= 0x4000000 | 0x40000000; drone modes 9 / 0x12 / 0x1E, not modelled, ignore it).
-            (IDLE | ALERT | PATROL | ALERT_TO_POSITION | SEARCH_AREA | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT, msg::ALARM) => {
+            // time, then Attack (`+0x4F8` |= 0x4000000 | 0x40000000 [M :113-114] — the alarm-pending bit feeds
+            // FirstAttack's FirstAlertState consult). The assist-wait state routes msg 0x1e through the same
+            // EnemyAlerts [M 0x161860 case 0x1e] — its ALARM lands here (the INTEROGATE/ASSIST_WAIT arm below keeps
+            // the other alert kinds).
+            (IDLE | ALERT | PATROL | ALERT_TO_POSITION | SEARCH_AREA | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | INTEROGATE_ASSIST_WAIT, msg::ALARM) => {
                 if !self.investigating { self.resume_state = s; self.home = self.feet(); }
+                self.alert_pending |= 0x4000_0000;
                 self.set_state(ATTACK);
                 true
             }
             (IDLE | ALERT | PATROL | ALERT_TO_POSITION | SEARCH_AREA | HEARD_NOISE_AWARE, msg::SOUND) => {
                 // Aware (0x16af20): a share above 0.1 → Suspect, else nothing.
                 if s == HEARD_NOISE_AWARE { if self.sound_share > 0.1 { self.set_state(HEARD_NOISE_SUSPECT) } return true; }
-                if matches!(s, ALERT_TO_POSITION | SEARCH_AREA) && self.sound_share > 0.2 { self.set_state(ATTACK); return true; }
+                if matches!(s, ALERT_TO_POSITION | SEARCH_AREA) && self.sound_share > 0.2 {
+                    // AlertToPosition 0x165270 case 0x14 / SearchArea 0x165bf0: the sound-alert pending bit
+                    // (+0x4F8 0x10000000 with the 0x4000000 sighting flag) goes up with the forced attack.
+                    self.alert_pending |= 0x1000_0000;
+                    self.set_state(ATTACK);
+                    return true;
+                }
                 if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); }
                 true
             }
@@ -6878,7 +6988,12 @@ impl Drone {
                 true
             }
             // Suspect: any further sound → Attack. Alert (0x16b540) has no sound case (the global state's applies).
-            (HEARD_NOISE_SUSPECT, msg::SOUND) => { self.set_state(ATTACK); true }
+            (HEARD_NOISE_SUSPECT, msg::SOUND) => {
+                // 0x16b0e0 case 0x14: a share above 0.1 stamps the sound-alert pending bit (+0x4F8
+                // 0x10000000 with the 0x4000000 sighting flag), then Attack unconditionally.
+                if self.sound_share > 0.1 { self.alert_pending |= 0x1000_0000; }
+                self.set_state(ATTACK); true
+            }
             (HEARD_NOISE_ALERT, msg::ENTER) => {
                 self.noise_level = 4;
                 // [M 0x16b540:18-23] the enter arm's bark (+0x43 = 4 → … → HeardNoiseTalk).
@@ -6917,6 +7032,24 @@ impl Drone {
                 self.goal = Some(self.home);
                 self.croute = None;
                 self.set_state(GO_TO_GOAL);
+                true
+            }
+            // `DroneFunc_FirstAlertState` (0x147f58) via `DroneFunc_FirstAttack` (0x148010:22-27): a
+            // first attack that is NOT this drone's own sighting (`+0x4F8 & 0x8000000` clear —
+            // master's own_sight) with a pending alert (`+0x4F8 & 0x70000000`, stamped by
+            // DoForcedAttack / the alarm / the sound alerts) consults the first-alert route BEFORE
+            // any combat tail — an alert carried from an interrogating guard (`+0x4FC` 0x20 → the
+            // receiver's 0x200000 via the ConsiderAlerted shifted copy) becomes the interrogation
+            // assist on levels {05, 07, 41} [M 0x147f58:31-42; `Drone::first_alert_state`]. The
+            // consult draws nothing and consumes nothing: a later consult is neutralised by the
+            // receiver's own +0x4FC markers (EndInterogateAssist's 0x10 among them) — the game's
+            // own mechanism. *Ordering*: the game consults this before the FirstSightState / tail
+            // branches; the port's unarmed guard arm (weapon ≤ 1 → DrawWeapon) sits below, so an
+            // unarmed forced-attack recipient would draw his weapon first — no 07000005 guard is
+            // unarmed ([L] weapon 10 for every guard), and the armed path is exact.
+            (ATTACK, msg::ENTER) if !self.first_attack_done && !self.own_sight
+                && self.alert_pending != 0 && Self::first_alert_state(self.alert_bits, d.level) != 0 => {
+                self.set_state(state::INTEROGATE_ASSIST);
                 true
             }
             // `DroneFunc_FirstAttack` (0x148010) → `DroneFunc_FirstSightState` (0x147c48): the own-sight
@@ -7577,7 +7710,21 @@ impl Drone {
             (INTEROGATE_ASSIST, msg::TIMER_C) => {
                 if !self.bond_alive { self.set_state(NO_OPPONENT); return true; }
                 self.croute = None;
-                self.goal = Some(self.target.pos);
+                // `SetupGoalPositionToObj` 10.0 [M 0x15add0] — the goal is the OPPONENT's object
+                // with a 10-unit arrival radius, and `MoveToGoalPosition` arrives when the route
+                // distance drops under it [M 0x1517d8:80-83]; the port's GoToGoal arrives at 2.0,
+                // so the goal is the point 10 units from Bond on the guard's side (the port's
+                // stand-in for the radius — guard-barks-first-alert). Already inside the radius →
+                // straight to the wait state (the game's CanReachGoalPosition succeeds at once).
+                if self.dist <= 10.0 { self.set_state(INTEROGATE_ASSIST_WAIT); return true; }
+                let (dx, dz) = (self.pos[0] - self.target.pos[0], self.pos[2] - self.target.pos[2]);
+                let len = (dx * dx + dz * dz).sqrt();
+                let goal = if len > 1.0e-4 {
+                    [self.target.pos[0] + dx / len * 10.0, self.target.pos[1], self.target.pos[2] + dz / len * 10.0]
+                } else {
+                    self.target.pos
+                };
+                self.goal = Some(goal);
                 if matches!(self.move_to_goal(d), 0..=3) {
                     self.return_state = INTEROGATE_ASSIST_WAIT;
                     self.set_state(GO_TO_GOAL);
@@ -17086,6 +17233,7 @@ mod tests {
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
+            alert_pending: 0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
             drawn_grace: 2, // `control_init_object` 0x134630:16
