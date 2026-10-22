@@ -835,6 +835,12 @@ pub struct Sound {
 
 impl Sound {
     /// Runs one batch: the EE commands, then `SFXUpdate`, and sends the voice changes to the output.
+    ///
+    /// The game transports these EE→IOP command buffers over SIF RPC: `isceSifSendCmd` 0x23dab0
+    /// wraps `_sceSifSendCmd` inside the RPC handlers `_request_rdata` 0x23e020 (jal 0x23e078) /
+    /// `_request_bind` 0x23e0d0 (jal 0x23e178), both registered by `sceSifInitRpc` 0x23dcc8 at
+    /// boot [M scan+decompile; docs/systems/ps2-sdk-glue.md]. The port executes the batch in
+    /// process — this fn is the send.
     pub fn batch(&mut self, f: impl FnOnce(&mut Driver, &mut Vec<Cmd>)) {
         let mut out = Vec::new();
         f(&mut self.driver, &mut out);

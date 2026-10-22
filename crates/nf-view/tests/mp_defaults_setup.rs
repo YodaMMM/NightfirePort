@@ -121,13 +121,17 @@ fn enviro_value_labels_match_the_msg_0x4c_lists() {
 #[test]
 fn quick_start_writes_helicopters_and_clears_explosive() {
     // [M C_SBMPSCEN 0x20c600's row-0 stores: 0x20c734 +0x1CC = 2 (Helicopters), 0x20c748
-    // +0x1D4 = 0; +0x1C0 is not written — the boot 2 persists.]
+    // +0x1D4 = 0; +0x1C0 is not written — the boot 2 persists. The store list (disasm
+    // 0x20c72c-0x20c768) writes neither +0x1BC nor +0x1C8, and boot leaves +0x1C8 = 1
+    // (Location Damage ON) [M bootup 0x1c7e78:45] — so the pair keeps [0, 1]. The previous
+    // assertion [0, 0] pinned the port's re-stamp and contradicted both the decompile and
+    // this comment's own "0/1"; fixed to the game's behavior (quick-game-scenario).]
     let mut fe = FrontEnd::new();
     fe.mp_quick_start();
     assert_eq!(fe.mp_envmods[4], 2, "vehicles = Helicopters [M 0x20c734]");
     assert_eq!(fe.mp_envmods[2], 0, "Explosive Scenery cleared [M 0x20c748]");
     assert_eq!(fe.mp_envmods[0], 2, "view distance keeps the boot Random [M no +0x1C0 store]");
-    assert_eq!(fe.mp_player_mods, [0, 0], "+0x1BC/+0x1C8 untouched — the boot 0/1 persist");
+    assert_eq!(fe.mp_player_mods, [0, 1], "+0x1BC/+0x1C8 untouched — the boot 0/1 persist [M 0x1c7e78:46,45; no stores at 0x20c72c-0x20c768]");
 }
 
 /// app-state-parity: the confirm arm writes GameState+0x28 = 1 BEFORE the level request

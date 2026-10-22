@@ -490,3 +490,41 @@ fn a_join_code_types_and_dials() {
     assert_eq!(fake.borrow().dialed, None);
     assert_eq!(fe.mp_net_status(), Some("Enter a 4-character code, IP:PORT, or a join code"));
 }
+
+/// User report 2026-10-21 (v0.1.14): typing a friend's 4-character lobby code and pressing Enter
+/// on a listed internet lobby both "did nothing" — the join page's gate accepted only IP:PORT and
+/// the 16-symbol join code, so every 4-character code was refused as a bad address before the
+/// session's lookup ever ran. Both paths must reach the session's connect with the code.
+#[test]
+fn a_four_character_lobby_code_dials_by_typing_and_from_the_list() {
+    // Typed: the code reaches the session.
+    let (mut fe, fake) = fe_with_session();
+    to_mode(&mut fe);
+    fe.cursor = 2;
+    assert!(fe.action(Action::Confirm));
+    assert_eq!(fe.page, Page::MpNetJoin);
+    for c in "k7qx".chars() { assert!(fe.mp_net_type(c), "the code's letters type"); }
+    assert!(fe.action(Action::Confirm), "Enter on a 4-character code dials it");
+    assert_eq!(fake.borrow().dialed.as_deref(), Some("K7QX"));
+    assert_eq!(fe.mp_net_state, MpNetState::Dialing);
+    // Sister: a string that is not any accepted form still refuses (the gate is not gone).
+    let (mut fe2, fake2) = fe_with_session();
+    to_mode(&mut fe2);
+    fe2.cursor = 2;
+    assert!(fe2.action(Action::Confirm));
+    for c in "K7Q".chars() { fe2.mp_net_type(c); }
+    assert!(!fe2.action(Action::Confirm), "three symbols are not a code");
+    assert_eq!(fake2.borrow().dialed, None);
+    // From the list: an internet row's addr is its 4-character code; Enter on it dials.
+    let (mut fe3, fake3) = fe_with_session();
+    to_mode(&mut fe3);
+    fe3.cursor = 2;
+    assert!(fe3.action(Action::Confirm));
+    fe3.mp_lobby_rows = vec![nf_view::menu::MpLobbyRow {
+        name: "Host's game".into(), host: "Internet".into(), level: 0x0700_0023, scenario: 1,
+        players: 1, max_players: 8, in_progress: false, ping_ms: 0, joinable: true, addr: "K7QX".into(),
+    }];
+    fe3.cursor = 1;
+    assert!(fe3.action(Action::Confirm), "Enter on the listed lobby dials its code");
+    assert_eq!(fake3.borrow().dialed.as_deref(), Some("K7QX"));
+}
