@@ -75,17 +75,15 @@ struct Voice {
 /// The SPU reverb: the SPU2 effect area running the game's mode-4 (STUDIO_3) preset through the
 /// reverb equations ([`reverb::ReverbCore`]; PCSX2 `V_Core::DoReverb`). The per-voice wet sends
 /// (VMIXEL/VMIXER) enter at full scale; the EVOL depth scales the wet return into the mix [M
-/// sound.md §5.5; reverb.rs module comment].
+/// sound.md §5.5; reverb.rs module comment]. The core is ticked once per output frame (PCSX2's
+/// `spu2Mix` calls `DoReverb` once per sample, `spu2sys.cpp` TimeUpdate) and returns wet on BOTH
+/// channels every frame — the resampling (39-tap down/up FIRs, `ReverbResample.cpp`) lives inside
+/// the core, so no per-frame hold is needed.
 struct Reverb {
     /// The reverb delay RAM and equations, at the game's registers.
     core: reverb::ReverbCore,
     /// The current `EVOL` send depth (0..1), scaling the wet return [M].
     depth: f32,
-    /// Frame counter: one core tick every two frames — the reverb runs at half the SPU rate
-    /// (nocash psx-spx; PCSX2 downsamples by 2).
-    frame: usize,
-    /// The wet output held between ticks (zero-order hold) [S].
-    hold: [f32; 2],
 }
 
 impl Reverb {
@@ -94,19 +92,14 @@ impl Reverb {
         Reverb {
             core: reverb::ReverbCore::new(reverb::ReverbRegs::from_mode(reverb::GAME_EFFECT_MODE), reverb::game_area(0)),
             depth: 0.0,
-            frame: 0,
-            hold: [0.0; 2],
         }
     }
-    /// Process one stereo frame: `send` is the dry signal of a reverb-routed voice; returns the wet output.
+    /// Process one stereo frame: `send` is the dry signal of a reverb-routed voice; returns the wet
+    /// output on both channels (PCSX2 `DoReverb` → `ReverbUpsample`: both sides every tick).
     fn process(&mut self, send: [f32; 2]) -> [f32; 2] {
-        self.frame += 1;
-        if self.frame % 2 == 1 {
-            let to_i16 = |x: f32| (x * 32_767.0).clamp(-32_768.0, 32_767.0) as i16;
-            let wet = self.core.tick([to_i16(send[0]), to_i16(send[1])]);
-            self.hold = [wet[0] as f32 / 32_768.0, wet[1] as f32 / 32_768.0];
-        }
-        [self.hold[0] * self.depth, self.hold[1] * self.depth]
+        let to_i16 = |x: f32| (x * 32_767.0).clamp(-32_768.0, 32_767.0) as i16;
+        let wet = self.core.tick([to_i16(send[0]), to_i16(send[1])]);
+        [wet[0] as f32 / 32_768.0 * self.depth, wet[1] as f32 / 32_768.0 * self.depth]
     }
 }
 
@@ -466,5 +459,39 @@ mod tests {
         m.mix(&mut s, &mut buf);
         let q2 = m.voices.iter().find(|v| v.id == 2).unwrap().pos;
         assert!(q2 > q1, "a while-paused start still advances (the menu click): {q1} {q2}");
+    }
+
+    /// (b) A sine into the LEFT send returns wet on BOTH sides on (essentially) every output
+    /// frame — no zero gaps. PCSX2's `DoReverb` returns `ReverbUpsample` (Reverb.cpp L120), a
+    /// 39-tap FIR over both zero-stuffed side rings whose odd centre tap carries the other side's
+    /// wet from 19 ticks ago, so each call produces both channels; the branch this replaces ticked
+    /// the core every second frame and held `[wet,0]`/`[0,wet]`, leaving each channel silent half
+    /// the time. The right side is fed purely through the shared-RAM diff cross-feed (a left-only
+    /// send never writes the right rings directly), so it needs the cross-feed delay (~4.3k frames)
+    /// to wake up: warm up 6000 frames, then judge 10 000.
+    #[test]
+    fn the_reverb_returns_wet_on_both_sides_every_frame() {
+        let mut rev = Reverb::new(48_000);
+        rev.depth = 1.0;
+        // A 220 Hz sine, hard left: send[0] = s, send[1] = 0.
+        let sine = |i: usize| ((i as f64 * 2.0 * std::f64::consts::PI * 220.0 / 48_000.0).sin() * 16_000.0) as i16;
+        let mut frames = Vec::new();
+        for i in 0..16_000 {
+            let s = sine(i) as f32 / 32_768.0;
+            frames.push(rev.process([s, 0.0]));
+        }
+        let steady = &frames[6_000..];
+        // The defect signature: a frame with one side exactly 0 while the other is not (the old
+        // code produced this on EVERY frame — 10 000 of 10 000). Allow a handful of legitimate
+        // exact-zero crossings in 10 000 frames, measured against the old 50 %+ gap rate.
+        let gaps = steady.iter().filter(|f| (f[0] == 0.0) != (f[1] == 0.0)).count();
+        let both_silent = steady.iter().filter(|f| f[0] == 0.0 && f[1] == 0.0).count();
+        let (max_l, max_r) = steady.iter().fold((0.0f32, 0.0f32), |(l, r), f| (l.max(f[0].abs()), r.max(f[1].abs())));
+        assert!(max_l > 1e-3, "left wet present (max {max_l})");
+        assert!(max_r > 1e-4, "right wet present through the cross-feed (max {max_r})");
+        assert!(gaps + both_silent < 100, "no zero gaps: {gaps} one-sided + {both_silent} silent of {}", steady.len());
+        // Left is louder than right here (the right arrives via the diff cross-feed only) — both
+        // nonzero is the requirement, the ratio just documents the path.
+        assert!(max_l > max_r, "left send dominates but both sides speak: {max_l} vs {max_r}");
     }
 }

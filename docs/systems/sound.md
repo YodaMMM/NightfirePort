@@ -757,6 +757,19 @@ Final SPU level is therefore `0x3FFF * pan% * ((v²)/100) / 10000` (integer step
   `V_Reverb`/`DoReverb`) and the environment chain are ported in `nf-audio/src/reverb.rs` (G-032): the wet output runs
   the SPU2 reverb equations (IIR + 4 combs + 2 APFs over the effect area) and EVOL scales the return. A voice is sent to
   reverb when ReverbSend!=0 (VMIXEL/VMIXER bits, 0x1900/0x1B00). The per-room depth VALUE from cels/rooms is still G-016.
+* **Reverb DSP details (reverb-signed-stereo, 2026-10-22)**: the volume registers are SIGNED s16 — PCSX2 `defs.h`
+  `struct V_Reverb` declares `s16 IN_COEF_L/R, APF1_VOL/APF2_VOL, IIR_VOL/WALL_VOL, COMB1..4_VOL`, multiplied through
+  `MUL(x,y) = (x*y)>>15` on s32 (`Reverb.cpp` L97) — so STUDIO_3's comb2 0xBCE0, comb4 0xBEF0, wall 0xA680 and
+  IN_COEF 0x8000 are NEGATIVE gains (−0.525/−0.508/−0.699/−1.0), not the +1.48/+1.49/+1.30/+1.0 of a raw u16 read
+  (which makes the same/diff IIR loop gain 0.87*1.30+0.13 > 1: a full-scale limit cycle that never decays). The core is
+  ticked once per output frame (PCSX2 `spu2sys.cpp` TimeUpdate: `Cycles++` … `spu2Mix()` → `Mixer.cpp MixCore` →
+  `DoReverb`), `R = Cycles & 1` picks the side, the wet `out` lands zero-stuffed at `RevbUpBuf[R][pos]`
+  (`RevbUpBuf[!R][pos] = 0`), and the call returns `ReverbUpsample` (`ReverbResample.cpp`): a 39-tap FIR
+  (`filter_down_coefs` ×2, centre 16384→32767) over both 64-entry side rings — its even taps read the fresh side's
+  history and the odd centre tap the OTHER side's wet from 19 ticks ago, so BOTH channels return wet every frame (no
+  zero gaps; the input side runs the same 39-tap FIR as `ReverbDownsample`). Write-backs and `out` clamp to s16
+  (`clamp_mix`). Port: `ReverbCore::tick` (reverb.rs) transcribes DoReverb + both FIRs; `Reverb::process` (lib.rs)
+  ticks it every frame and scales by EVOL depth.
 
 ---------------------------------------------------------------------------------------------------
 ## 6. Per-frame SFXUpdate@4ee4 (RPC cmd 4, once per EE frame [S]) [M]

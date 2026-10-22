@@ -27,6 +27,22 @@
 //!   Lukasz Bruun), a register-compatible reimplementation of Sony's closed libsd whose per-mode
 //!   tables are the Sony presets; cross-checked against PCSX2 SPU2 (`Reverb.cpp` DoReverb +
 //!   `defs.h` V_Reverb + `RegTable.cpp`), whose equations the DSP below follows directly.
+//! - **Register signedness**: every volume register is SIGNED s16 — PCSX2 `defs.h` `struct V_Reverb`
+//!   declares `s16 IN_COEF_L/R`, `s16 APF1_VOL/APF2_VOL`, `s16 IIR_VOL/WALL_VOL`,
+//!   `s16 COMB1_VOL..COMB4_VOL`, and `DoReverb` multiplies them through `#define MUL(x, y)
+//!   ((x) * (y) >> 15)` on s32 (arithmetic shift, floors). STUDIO_3's comb2 0xBCE0, comb4 0xBEF0,
+//!   wall 0xA680 and IN_COEF 0x8000 are therefore NEGATIVE gains (−0.525/−0.508/−0.699/−1.0); the
+//!   preset halfwords stay raw u16 and are sign-reinterpreted at use (`s16()` below).
+//! - **Resampling**: PCSX2 `ReverbResample.cpp` — `ReverbDownsample`/`ReverbUpsample` are 39-tap
+//!   FIRs over `RevbDownBuf[2][64]` / `RevbUpBuf[2][64]` rings (`filter_down_coefs`, up = 2× down
+//!   clamped to s16 so the centre 16384→32767). `DoReverb` runs once per SPU output sample
+//!   (`spu2sys.cpp` TimeUpdate: `Cycles++` … `spu2Mix()` → `Mixer.cpp` `MixCore` → `DoReverb`),
+//!   `bool R = Cycles & 1` picks the side, the wet `out` lands at `RevbUpBuf[R][pos]` with
+//!   `RevbUpBuf[!R][pos] = 0` (zero-stuffed), and `return ReverbUpsample(*this)` FIRs BOTH side
+//!   rings every call — the up FIR's odd-index centre tap (2×16384→32767) reads the opposite
+//!   parity of the zero-stuffed ring, i.e. the other side's 19-ticks-ago wet sample, so both
+//!   channels return wet every tick (no zero gaps). Write-backs and `out` go through
+//!   `clamp_mix` (s16 clamp) [PCSX2 Reverb.cpp L109-120].
 //! - Mode names disagree between ps2sdk sources: `libsd-common.h` calls mode 9 PIPE, `effect.c`'s
 //!   comment calls it CLEAR. Both call mode 4 STUDIO_3 (what the game uses). Recorded, not resolved.
 
@@ -151,6 +167,33 @@ pub fn effect_esa(core: usize, mode: usize) -> u32 {
     GAME_EEA[core] - (((EFFECT_SIZES[mode] as u32) << 4) - 2)
 }
 
+/// The reverb resampler's FIR taps (PCSX2 `ReverbResample.cpp`: `NUM_TAPS = 39`,
+/// `filter_down_coefs`; `filter_up_coefs[i] = clamp(filter_down_coefs[i] * 2, s16)` — only the
+/// centre 16384×2 = 32768 clamps to 32767). Odd indices are 0 except the centre; the FIRs run over
+/// 64-entry per-side rings with wraparound.
+pub const REVERB_FIR_DOWN: [i32; 39] = [
+    -1, 0, 2, 0, -10, 0, 35, 0, -103, 0, 266, 0, -616, 0, 1332, 0, -2960, 0, 10246, 16384, 10246,
+    0, -2960, 0, 1332, 0, -616, 0, 266, 0, -103, 0, 35, 0, -10, 0, 2, 0, -1,
+];
+/// `make_up_coefs()` in ReverbResample.cpp: down × 2, clamped to i16 (16384 → 32767).
+pub const REVERB_FIR_UP: [i32; 39] = [
+    -2, 0, 4, 0, -20, 0, 70, 0, -206, 0, 532, 0, -1232, 0, 2664, 0, -5920, 0, 20492, 32767, 20492,
+    0, -5920, 0, 2664, 0, -1232, 0, 532, 0, -206, 0, 70, 0, -20, 0, 4, 0, -2,
+];
+
+/// The volume registers are signed s16 in hardware (PCSX2 `defs.h` `struct V_Reverb`; the preset
+/// halfwords are raw u16 and get sign-reinterpreted at every use in the DSP).
+#[inline]
+pub fn s16(v: u16) -> i32 {
+    v as i16 as i32
+}
+
+/// `clamp_mix` (PCSX2 SPU2): clamp an s32 intermediate into the s16 range.
+#[inline]
+fn clamp16(x: i32) -> i32 {
+    x.clamp(i16::MIN as i32, i16::MAX as i32)
+}
+
 /// The effect-area size in samples for the game's setup (the DSP delay-RAM length).
 pub fn game_area(core: usize) -> usize {
     (GAME_EEA[core] - effect_esa(core, GAME_EFFECT_MODE) + 1) as usize
@@ -215,10 +258,13 @@ impl SfxEnvironment {
 }
 
 /// The reverb DSP: the equations SPU2's reverb runs each tick (PCSX2 `V_Core::DoReverb`, "pretty
-/// much directly ripped from" drhell's PS1 SPU page). One shared delay RAM per core (the effect
-/// area); the left and right paths alternate per tick (the reverb runs at half the SPU rate —
-/// nocash psx-spx), reading/writing the same RAM through per-side offsets. MUL is `x * y >> 15`
-/// (1.15 fixed point). The caller drives the tick rate and the input (PCSX2 downsamples by 2).
+/// much directly ripped from" drhell's PS1 SPU page), plus the core's own resampling
+/// (`ReverbResample.cpp`): one shared delay RAM per core (the effect area); the left and right
+/// paths alternate per tick (`bool R = Cycles & 1`), reading/writing the same RAM through per-side
+/// offsets. All volume registers apply as s16 (`s16()`). MUL is `x * y >> 15` on s32 (1.15 fixed
+/// point, arithmetic shift). The dry stereo input goes through the 39-tap downsample FIR into the
+/// DSP, and the wet output is the 39-tap upsample FIR over the zero-stuffed per-side ring — BOTH
+/// channels every tick, PCSX2-exact.
 pub struct ReverbCore {
     regs: ReverbRegs,
     /// The effect-area ring buffer (the SPU2's delay RAM in the ESA..EEA window).
@@ -226,22 +272,74 @@ pub struct ReverbCore {
     /// The write position (the "current" reverb address, `Cycles >> 1` in PCSX2).
     pos: usize,
     tick: u32,
+    /// `RevbDownBuf[2][64]`: the last 64 dry stereo inputs, per side (Reverb.cpp L50-53).
+    down: [[i16; 64]; 2],
+    /// `RevbUpBuf[2][64]`: the zero-stuffed wet outputs, per side (Reverb.cpp L115-118).
+    up: [[i16; 64]; 2],
+    /// `RevbSampleBufPos` (Reverb.cpp L119).
+    buf_pos: usize,
 }
 
 impl ReverbCore {
     /// Builds a core for the given registers and effect-area size in samples (`game_area`).
     pub fn new(regs: ReverbRegs, area: usize) -> ReverbCore {
-        ReverbCore { regs, mem: vec![0; area.max(1)], pos: 0, tick: 0 }
+        ReverbCore {
+            regs,
+            mem: vec![0; area.max(1)],
+            pos: 0,
+            tick: 0,
+            down: [[0; 64]; 2],
+            up: [[0; 64]; 2],
+            buf_pos: 0,
+        }
+    }
+
+    /// `ReverbDownsample_reference` (ReverbResample.cpp): the 39-tap FIR over this side's input
+    /// ring, `>> 15`, clamped. The window covers `buf_pos−39 .. buf_pos−1` — the input stored this
+    /// tick enters the window on the NEXT tick, exactly like PCSX2 (the store happens before the
+    /// FIR, the buffer position increments after it).
+    fn downsample(&self, right: bool) -> i32 {
+        let idx = (self.buf_pos + 64 - 39) & 63;
+        let side = right as usize;
+        let mut out: i32 = 0;
+        for (i, c) in REVERB_FIR_DOWN.iter().enumerate() {
+            out += self.down[side][(idx + i) & 63] as i32 * c;
+        }
+        clamp16(out >> 15)
+    }
+
+    /// `ReverbUpsample_reference` (ReverbResample.cpp): the 39-tap FIR over BOTH side rings (the
+    /// up coefs are the down coefs × 2). Called with `buf_pos` already advanced, so the window is
+    /// `buf_pos−39 .. buf_pos−1` of the NEW position = the just-written slot included; the even
+    /// taps read one parity (the fresh side's history) and the odd centre tap reads the opposite
+    /// parity (the other side's wet from 19 ticks ago) — both channels return a value every call.
+    fn upsample(&self) -> [i16; 2] {
+        let idx = (self.buf_pos + 64 - 39) & 63;
+        let (mut l, mut r) = (0i32, 0i32);
+        for (i, c) in REVERB_FIR_UP.iter().enumerate() {
+            l += self.up[0][(idx + i) & 63] as i32 * c;
+            r += self.up[1][(idx + i) & 63] as i32 * c;
+        }
+        [clamp16(l >> 15) as i16, clamp16(r >> 15) as i16]
     }
 
     /// One reverb tick: `input` is the stereo dry signal of the reverb-routed voices this tick.
-    /// Returns the wet stereo output (PCSX2 zero-fills the idle side; the caller can hold it).
+    /// Returns the wet stereo output — BOTH sides, every tick (PCSX2's `DoReverb` →
+    /// `ReverbUpsample`).
     pub fn tick(&mut self, input: [i16; 2]) -> [i16; 2] {
         let r = self.regs.clone();
         let right = self.tick & 1 == 1; // PCSX2's `R = Cycles & 1`
-        let mul = |x: i32, y: i32| (x * y) >> 15;
+        // MUL is plain C s32 math in PCSX2 (`#define MUL(x, y) ((x) * (y) >> 15)`, Reverb.cpp
+        // L97): the extreme-corner product wraps on x86 like C's imul, so use wrapping_mul —
+        // identical to the C semantics in every non-corner case.
+        let mul = |x: i32, y: i32| x.wrapping_mul(y) >> 15;
         let n = self.mem.len();
         let at = |off: usize| self.mem[(self.pos + off) % n] as i32;
+
+        // Store the dry input both sides (Reverb.cpp L50-53), before the FIR.
+        let bp = self.buf_pos;
+        self.down[0][bp] = input[0];
+        self.down[1][bp] = input[1];
 
         // Sample offsets are the register value × 4 (the hardware's stored 17-bit form).
         let x4 = |v: u16| (v as usize) * 4;
@@ -258,39 +356,49 @@ impl ReverbCore {
             (x4(r.apf1_l_dst), x4(r.apf2_l_dst), x4(r.apf1_size), x4(r.apf2_size))
         };
 
-        let in_coef = if right { r.in_coef_r as i32 } else { r.in_coef_l as i32 };
-        let s_in: i32 = if right { input[1] as i32 } else { input[0] as i32 };
-        let input = mul(in_coef, s_in);
+        // `in = MUL(IN_COEF_R/L, ReverbDownsample(*this, R))` (Reverb.cpp L98): the input is the
+        // 39-tap FIR of this side's dry ring, and IN_COEF is s16 (0x8000 = −1.0).
+        let in_coef = s16(if right { r.in_coef_r } else { r.in_coef_l });
+        let input = mul(in_coef, self.downsample(right));
 
-        let wall = r.wall_vol as i32;
-        let same = mul(r.iir_vol as i32, input + mul(wall, at(same_src)) - at(same_dst.wrapping_sub(1) % n)) + at(same_dst.wrapping_sub(1) % n);
-        let diff = mul(r.iir_vol as i32, input + mul(wall, at(diff_src)) - at(diff_dst.wrapping_sub(1) % n)) + at(diff_dst.wrapping_sub(1) % n);
+        // All volumes s16 (V_Reverb fields are s16 in PCSX2 defs.h): wall 0xA680 and the combs
+        // 0xBCE0/0xBEF0 of STUDIO_3 are negative gains, not the +1.3/+1.5 of a raw u16 read.
+        let wall = s16(r.wall_vol);
+        let iir = s16(r.iir_vol);
+        let same = mul(iir, input + mul(wall, at(same_src)) - at(same_dst.wrapping_sub(1) % n)) + at(same_dst.wrapping_sub(1) % n);
+        let diff = mul(iir, input + mul(wall, at(diff_src)) - at(diff_dst.wrapping_sub(1) % n)) + at(diff_dst.wrapping_sub(1) % n);
 
-        let mut out = mul(r.comb1_vol as i32, at(comb1))
-            + mul(r.comb2_vol as i32, at(comb2))
-            + mul(r.comb3_vol as i32, at(comb3))
-            + mul(r.comb4_vol as i32, at(comb4));
+        let mut out = mul(s16(r.comb1_vol), at(comb1))
+            + mul(s16(r.comb2_vol), at(comb2))
+            + mul(s16(r.comb3_vol), at(comb3))
+            + mul(s16(r.comb4_vol), at(comb4));
 
         let a1_src = a1_dst - a1_size;
-        let apf1 = out - mul(r.apf1_vol as i32, at(a1_src));
-        out = at(a1_src) + mul(r.apf1_vol as i32, apf1);
+        let apf1 = out - mul(s16(r.apf1_vol), at(a1_src));
+        out = at(a1_src) + mul(s16(r.apf1_vol), apf1);
         let a2_src = a2_dst - a2_size;
-        let apf2 = out - mul(r.apf2_vol as i32, at(a2_src));
-        out = at(a2_src) + mul(r.apf2_vol as i32, apf2);
+        let apf2 = out - mul(s16(r.apf2_vol), at(a2_src));
+        out = at(a2_src) + mul(s16(r.apf2_vol), apf2);
 
         let set = |mem: &mut Vec<i16>, i: usize, v: i32| {
             let j = i % mem.len();
-            mem[j] = v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            mem[j] = clamp16(v) as i16;
         };
         set(&mut self.mem, self.pos + same_dst, same);
         set(&mut self.mem, self.pos + diff_dst, diff);
         set(&mut self.mem, self.pos + a1_dst, apf1);
         set(&mut self.mem, self.pos + a2_dst, apf2);
 
+        // Zero-stuffed wet ring + advance (Reverb.cpp L114-119): the computed side's `out` lands
+        // at buf_pos, the other side's slot is zeroed, then the position moves.
+        let out = clamp16(out) as i16;
+        self.up[right as usize][bp] = out;
+        self.up[!right as usize][bp] = 0;
+        self.buf_pos = (bp + 1) & 63;
+
         self.pos = (self.pos + 1) % n;
         self.tick += 1;
-        let wet = out.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-        if right { [0, wet] } else { [wet, 0] }
+        self.upsample()
     }
 }
 
@@ -426,34 +534,102 @@ mod tests {
     }
 
     /// The DSP: silence stays silence; a one-sample impulse comes back as a bounded, deterministic
-    /// left-side tail. The pinned first returns are a regression pin for the equation transcription
-    /// (same fixed-point chain, computed twice).
+    /// tail on BOTH sides (the FIR upsample returns both channels every tick). The pinned first
+    /// returns are a regression pin for the equation transcription (same fixed-point chain,
+    /// computed twice). NOTE: the pre-signedness version of this test pinned a left-only tail —
+    /// V_Reverb's volumes are s16 (PCSX2 defs.h) and DoReverb returns both sides via
+    /// ReverbUpsample, so the old pins encoded the wrong math and were recomputed.
     #[test]
     fn reverb_core_silence_impulse_and_tail() {
         let regs = ReverbRegs::from_mode(GAME_EFFECT_MODE);
         let area = game_area(0);
         let mut core = ReverbCore::new(regs, area);
         for _ in 0..100 { assert_eq!(core.tick([0, 0]), [0, 0]); }
-        // The impulse enters via the IIR path (IN_COEF 0x8000 → MUL(0x8000, x) = x>>1) and lands in
-        // the delay RAM at same/diff_dst; the combs read it back `same_dst − comb1_l_src` ticks later.
-        assert_eq!(core.tick([12345, 0]), [0, 0], "tick 0: combs read a zeroed buffer");
+        // The impulse reaches the DSP through the 39-tap downsample FIR and IN_COEF −1.0 (s16
+        // 0x8000), lands in the delay RAM at same/diff_dst, and returns through the combs and the
+        // FIR upsample on both channels.
+        assert_eq!(core.tick([12345, 0]), [0, 0], "tick 0: the FIR window is empty, combs read a zeroed buffer");
         let mut tail = Vec::new();
-        for i in 0..2000 { let w = core.tick([0, 0]); if w != [0, 0] { tail.push((i + 1, w)); } }
+        for i in 0..4000 { let w = core.tick([0, 0]); if w != [0, 0] { tail.push((i + 1, w)); } }
         assert!(!tail.is_empty(), "the impulse must come back");
-        assert!(tail.iter().all(|(_, w)| w[1] == 0 && w[0].abs() <= 12345), "left-side, bounded");
+        assert!(tail.iter().all(|(_, w)| w[0].abs() <= 12345 && w[1].abs() <= 12345), "bounded");
         // Determinism: a fresh core repeats the exact same tail.
         let mut core2 = ReverbCore::new(ReverbRegs::from_mode(GAME_EFFECT_MODE), area);
         core2.tick([12345, 0]);
         let mut tail2 = Vec::new();
-        for i in 0..2000 { let w = core2.tick([0, 0]); if w != [0, 0] { tail2.push((i + 1, w)); } }
+        for i in 0..4000 { let w = core2.tick([0, 0]); if w != [0, 0] { tail2.push((i + 1, w)); } }
         assert_eq!(tail, tail2);
-        // Pin the first three returns (948/968: the same/diff write-backs read back through the
-        // comb and prv chains; an independent python mirror of these equations agrees exactly).
-        assert_eq!(tail[0].0, 948);
-        assert_eq!(tail[0].1[0], 2531);
-        assert_eq!(tail[1].0, 968);
-        assert_eq!(tail[1].1[0], 2919);
-        assert_eq!(tail[2].0, 1624);
-        assert_eq!(tail[2].1[0], 2279);
+        // Pin the first ten returns (regression pins of the transcription; measured on this code —
+        // the pre-signedness branch pinned a left-only tail with different numbers, which encoded
+        // the u16 volume reads that PCSX2's s16 V_Reverb disproves). The left side returns first
+        // (same/diff write-backs read back through the comb chain ~970 ticks in), the right side
+        // only through the shared-RAM diff cross-feed (DIFF_L writes read at DIFF_R_SRC, 3859).
+        assert_eq!(tail[..10], [
+            (970, [-1, 0]), (974, [-3, 0]), (976, [7, 0]), (978, [-21, 0]), (980, [47, 0]),
+            (982, [-104, 0]), (984, [228, 0]), (986, [-793, 0]), (987, [-1267, 0]), (988, [-793, 0]),
+        ]);
+        assert_eq!(tail.iter().find(|(_, w)| w[1] != 0), Some(&(3859, [0, -1i16])));
+        assert_eq!(tail.iter().map(|(_, w)| w[0].abs().max(w[1].abs())).max(), Some(1462));
+    }
+
+    /// (a) A sustained FULL-SCALE noise input for 10 s of samples stays bounded and does not
+    /// saturate, and the tail decays once the input stops. This is the signedness teeth: with the
+    /// registers applied as raw u16 (wall +1.30, iir 0.87 → loop gain 1.13 > 1) the same/diff IIR
+    /// loops blow up and ride the s16 clamp; with the signed gains (wall −0.699) the DSP is
+    /// stable. A one-impulse input cannot see this. Deterministic xorshift noise, no draws from
+    /// the port's shared RNG.
+    #[test]
+    fn reverb_core_full_scale_noise_stays_bounded() {
+        let mut core = ReverbCore::new(ReverbRegs::from_mode(GAME_EFFECT_MODE), game_area(0));
+        let mut rng: u32 = 0x1234_5678;
+        let mut noise = move || {
+            rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+            (((rng >> 8) & 0xFFFF) as i32 - 0x8000) as i16 // full-scale i16 range, deterministic
+        };
+        let (mut peak, mut clamped) = (0i32, 0u32);
+        for _ in 0..480_000 {
+            let w = core.tick([noise(), noise()]);
+            for x in w {
+                let v = x as i32;
+                peak = peak.max(v.abs());
+                if v.abs() >= 32_767 { clamped += 1; }
+            }
+        }
+        let samples = 960_000u32;
+        assert!(peak > 0, "full-scale noise must produce wet output");
+        // Bounded: every sample inside i16 (the DSP clamps, like PCSX2's clamp_mix), and the clip
+        // duty is TINY — only the loud peaks touch the rails (measured 0.73 % here). The u16
+        // volume reads blow the same/diff loop up (measured 17.2 %) and pin the tail at the rails
+        // forever; the signed DSP leaves them.
+        assert!(peak <= 32_768, "bounded: peak {peak}");
+        assert!((clamped as u64) * 20 < samples as u64, "no sustained saturation: {clamped}/{samples}");
+        // Stability: after the input stops the tail DECAYS out of saturation and toward silence
+        // (measured: rails for ~10k ticks, then 6972 by 48k and falling). The u16 blow-up is a
+        // permanent full-scale limit cycle — every 4800-tick window stays at 32768.
+        let mut last_window = 0i32;
+        for half in 0..2 {
+            let mut wp = 0i32;
+            for _ in 0..48_000 { let w = core.tick([0, 0]); for x in w { wp = wp.max((x as i32).abs()); } }
+            if half == 1 { last_window = wp; }
+        }
+        assert!(last_window < 32_767, "tail leaves the rails: last window peak {last_window}");
+        assert!(last_window * 4 < peak, "tail decays: last window {last_window} vs driven peak {peak}");
+    }
+
+    /// (c) The register signs as applied: STUDIO_3's comb2/comb4/wall volumes and IN_COEFs are
+    /// NEGATIVE s16 gains. PCSX2 `defs.h` `struct V_Reverb` declares them `s16`, and `DoReverb`
+    /// multiplies them with `MUL(x, y) = (x*y) >> 15` on s32 — the raw halfwords are
+    /// sign-reinterpreted at use (`s16()` in this module, which `tick` calls for every volume).
+    #[test]
+    fn studio3_volume_registers_apply_as_negative_s16() {
+        let r = ReverbRegs::from_mode(GAME_EFFECT_MODE);
+        assert_eq!(s16(r.comb2_vol), -0x4320); // 0xBCE0 raw: -0.525, not +1.476
+        assert_eq!(s16(r.comb4_vol), -0x4110); // 0xBEF0 raw: -0.508, not +1.492
+        assert_eq!(s16(r.wall_vol), -0x5980);  // 0xA680 raw: -0.699, not +1.301
+        assert_eq!(s16(r.in_coef_l), -0x8000); // -1.0
+        assert_eq!(s16(r.in_coef_r), -0x8000);
+        // The positive ones stay positive (sign-interpreted, not negated wholesale).
+        assert!(s16(r.iir_vol) > 0 && s16(r.comb1_vol) > 0 && s16(r.comb3_vol) > 0);
+        assert!(s16(r.apf1_vol) > 0 && s16(r.apf2_vol) > 0);
     }
 }
