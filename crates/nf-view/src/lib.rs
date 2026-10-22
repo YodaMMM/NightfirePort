@@ -2138,7 +2138,7 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         fe.open_pause();
     }
     if fe.page == menu::Page::Pause {
-        if let Some(sim) = scene.sim.as_ref() { fe.pause_objectives = pause_objective_rows(sim); }
+        if let Some(sim) = scene.sim.as_ref() { fe.pause_objectives = pause_objective_rows(sim); fe.stats = pause_stats(sim); }
         // objective-hints: pre-open the ✕ hint box for the render (the row the cursor stands on) —
         // the same state `FrontEnd::action`'s Confirm sets on the OBJECTIVES tab [M 0x204408
         // 0x205b98-0x205c34: control 1's activation reads control 8's row and opens the ok-only
@@ -5401,7 +5401,7 @@ impl App {
                             }
                         }
                         if fe.page == menu::Page::Pause {
-                            if let Some(sim) = self.scene.sim.as_ref() { fe.pause_objectives = pause_objective_rows(sim); }
+                            if let Some(sim) = self.scene.sim.as_ref() { fe.pause_objectives = pause_objective_rows(sim); fe.stats = pause_stats(sim); }
                         }
                         fe.view_h = g.config.height as f32;
                         let mut f = match &self.scene.hud {
@@ -6739,6 +6739,21 @@ fn pause_objective_rows(sim: &scene::Sim) -> Vec<menu::PauseObjective> {
         .collect()
 }
 
+/// bonus-007: the pause SCORE tab's live counters, straight off the progress layer — the game's
+/// handler fills its list box from `PlrMissionStats` [M C_GCPAUSE_Handler 0x204408:447-498; the
+/// record layout is docs/fields/player-stats.md]. Shots/accuracy/time keep their existing fill.
+fn pause_stats(sim: &scene::Sim) -> menu::Stats {
+    let s = sim.drones.progress.stats();
+    menu::Stats {
+        bond_moves: s.bond_moments,
+        dispatched: s.dispatched,
+        subdued: s.disabled,
+        surrendered: s.surrendered,
+        bonus_pickups: s.bonus_pickups,
+        ..menu::Stats::default()
+    }
+}
+
 /// The mission-flow movie glue (the GameFlow state-6 briefing/outro and its decode-ahead), one call
 /// per redraw from `App::movie_tick` — a free function so the live tests drive the SAME code the
 /// window runs (playtest 1016: the briefing never showed, and no test ran this path). Returns false
@@ -7507,5 +7522,45 @@ mod headless_app_harness {
         assert!(sim.bond.crouched, "hold: still held, still crouched");
         sim.step_bond(inp(false, false), false, false, false);
         assert!(!sim.bond.crouched, "hold: released stands [M 0x1924c0:84-88]");
+    }
+}
+
+#[cfg(test)]
+mod bonus_pause_stats {
+    //! bonus-007-2: the pause SCORE tab's counter mapping — `pause_stats` reads the running
+    //! Sim's `PlrMissionStats` rows (+0x20 Bond moves / +0x0C dispatched / +0x10 subdued /
+    //! +0x14 surrendered / +0x24 the 007 bonus pickups → the tab's five counters)
+    //! [M C_GCPAUSE_Handler 0x204408:447-498; docs/fields/player-stats.md]. ISO-gated: it builds
+    //! a real level's Sim through the crate's own `load`.
+
+    #[test]
+    fn pause_stats_maps_the_progress_rows_the_tab_draws() {
+        let Some(iso) = std::env::var("NF_ISO").ok().filter(|p| std::path::Path::new(p).exists()) else {
+            eprintln!("skip: NF_ISO not set");
+            return;
+        };
+        let mut scene = crate::load(&iso, "07000005.bin", false).expect("load 07000005");
+        // Sister first: an untouched level starts with every SCORE counter at 0 — a non-zero
+        // default would make the mapping assertions below vacuous.
+        let zero = crate::pause_stats(scene.sim.as_ref().unwrap());
+        assert_eq!(
+            (zero.bond_moves, zero.dispatched, zero.subdued, zero.surrendered, zero.bonus_pickups),
+            (0, 0, 0, 0, 0),
+            "a fresh level's SCORE counters must all read 0"
+        );
+        // The main: poke the record the game's Log functions write, then assert the exact row
+        // mapping — the tab draws what `PlrMissionStats` holds, nothing else. Distinct values so
+        // any crossed wire between rows fails.
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].bond_moments = 2;
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].dispatched = 3;
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].disabled = 4;
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].surrendered = 5;
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].bonus_pickups = 6;
+        let s = crate::pause_stats(scene.sim.as_ref().unwrap());
+        assert_eq!(s.bond_moves, 2, "+0x20 → the Bond Moves row");
+        assert_eq!(s.dispatched, 3, "+0x0C → Dispatched");
+        assert_eq!(s.subdued, 4, "+0x10 → Subdued");
+        assert_eq!(s.surrendered, 5, "+0x14 → Surrendered");
+        assert_eq!(s.bonus_pickups, 6, "+0x24 → the 007 Bonus row");
     }
 }
