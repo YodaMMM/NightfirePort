@@ -3904,6 +3904,15 @@ impl Drone {
                 let facing = angle_difference(self.special_yaw, self.yaw).abs() < crate::trig::HALF_PI;
                 let bond_ok = self.special_death != 0x0600_021f || self.dist >= 2.0;
                 if bond_ok && near && facing {
+                    // The at-spot arm calls `DroneFunc_OnInitDeath` [M 0x163c68:33] before
+                    // SetDeathChannel — the same mission-fail half and the same gated
+                    // EnemyDispatched log as the DEATH_ANIM fold [M 0x145bd0:45-62].
+                    if !(self.team == 1 && self.knocked_out) {
+                        if let Some(r) = crate::ally::on_init_death(self.team, self.prop(d, 0x53), self.prop(d, 0x54), self.hit_by_player) {
+                            self.fail_reason = Some(r); // drained by the tick, next to `raise` (fix-actors)
+                        }
+                    }
+                    if self.team == 1 && !self.knocked_out && self.hit_by_player { self.dispatched_logged = true; }
                     self.set_death_channel();
                     self.death_pending = false;
                     // [M NDrone2_DSTATE_SpecialDeath_Anim 0x163c68 case 5]: when the special-death
@@ -4171,7 +4180,11 @@ impl Drone {
                         self.fail_reason = Some(r);
                     }
                 }
-                if self.team == 1 && !self.knocked_out { self.dispatched_logged = true; }
+                // `DroneFunc_OnInitDeath` 0x145bd0:45-62 (called from this ENTER [M 0x163a80:27]):
+                // the same gated log as the DEATH_ANIM fold — the last hit (+0x2B4) must be the
+                // player and the KO flag clear; a guard killed by a CROSSFIRE or scripted blast
+                // (any hitter stamps +0x2B4 [M 0x13a9f8:23, 0x13aab8:20]) logs neither stat.
+                if self.team == 1 && !self.knocked_out && self.hit_by_player { self.dispatched_logged = true; }
                 if !self.silent_kill { self.death_talk(d); }
                 self.drop_grenades(d);
                 let v = self.blast_variant();
@@ -8628,7 +8641,13 @@ impl Drone {
                 }
                 self.death_pending = true; // +0xcd8 = 1 (the EXIT's SetDeathChannel latch) [M case 1]
                 self.alert_status_set(3, frame); // `Drone_AlertStatusSet(3)` [M 0x169b28:28] — the status byte; AbseilDeath writes no +0x50C
-                if self.team == 1 && !self.knocked_out { self.dispatched_logged = true; } // LogDroneDeath [M 0x169b28:29 → 0x14ab00:11-31]
+                // LogDroneDeath 0x14ab00:14-31 (called from the ENTER [M 0x169b28:27]): the kill is
+                // logged EnemyDispatched only when the last hit (+0x2B4) is the player object (SP:
+                // `glb_players`/`DAT_00298fb4` [M :18-25]; MP: the opponent +0x170 [M :27-31]), the
+                // KO flag (+0x4F8 & 0x1000000) is clear [M :30] and +0x44 == 1 [M :31]. The port's
+                // `hit_by_player` stands for the SP +0x2B4 check — an abseiler shot down by
+                // crossfire logs neither stat.
+                if self.team == 1 && !self.knocked_out && self.hit_by_player { self.dispatched_logged = true; } // LogDroneDeath [M 0x169b28:27 → 0x14ab00:14-31]
                 self.abseil_land_latch = false; // +0xcdc = 0 [M case 1]
                 self.air = false;
                 self.call_anim(d, anim_state::DEATH, 0, 0);

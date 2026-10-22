@@ -168,3 +168,58 @@ fn the_save_carries_the_mission_fields_and_round_trips() {
     assert_eq!(r.table[1].best, 123_456);
     assert_eq!(r.bonus[0], q.bonus[0]);
 }
+
+/// ── the crossfire blast's stat gate ─────────────────────────────────────────────────────────────
+/// `OnInitDeath` 0x145bd0:45-62 logs EnemyDispatched only when the last hit (+0x2B4) is the player
+/// and the KO flag is clear; `LogDroneDeath` 0x14ab00:14-31 (the AbseilDeath fold) is the same
+/// trio. Any hitter stamps +0x2B4 [M 0x13a9f8:23 bullets, 0x13aab8:20 blasts] — the port stamps
+/// `hit_by_player` only for the player's own throw/bullet (owner `usize::MAX`), so a GUARD-owned
+/// blast (crossfire, a scripted satchel) must leave both counters alone. The blast rides the real
+/// fuse path (`Grenade` → `GrenadeEvent::Explode` → the tick's explode arm → the DEATH_BY_EXPLOSION
+/// ENTER 0x163a80). Sister: the identical blast owned by the player logs 1 dispatched.
+#[test]
+fn a_guard_owned_blast_logs_neither_stat_and_the_player_owned_one_logs_dispatched() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let frag = |owner: usize, pos: [f32; 3]| nf_game::grenade::Grenade {
+        pos, velocity: [0.0; 3], speed: 0.0, travelled: 0.0, range: 210.0,
+        damage: 50.0, radius: 4.0, weapon_type: 0x34, mesh: 0x0200_02af,
+        owner, state: 0, bounces: 0, smoke_popped: false, resting: false,
+        stuck: false, seek_target: None, phase: None,
+    };
+    let mut tallies = [0u32; 2];
+    for (case, owner) in [(0usize, 1usize), (1, usize::MAX)] {
+        let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+        let sim = scene.sim.as_mut().unwrap();
+        tick_idle(sim, 30);
+        let gi = sim.drones.list.iter().enumerate()
+            .find(|(_, d)| d.present && !d.corpse && d.team == 1 && d.health > 0.0)
+            .map(|(i, _)| i).expect("a live guard");
+        // Fresh boot: the guard has never been hit (the +0x2B4 spawn default is not the player).
+        assert!(!sim.drones.list[gi].hit_by_player, "case {case}: the guard is unhurt at spawn");
+        // The blast at the guard's feet (falloff ≈ full 50 vs 10 health) through the fuse path.
+        // The frag's fuse is ~210 ticks (BU+0xFC −= 1 per tick, explodes at < 0 [M scene.rs:4262]);
+        // a guard whose state has no case 9 drops the msg-9 damage — the game's own routing [M
+        // 0x1469b8 case 9 + 0x15b830] — so fall through to the next candidate guard.
+        let mut killed_in = None;
+        let cands: Vec<usize> = sim.drones.list.iter().enumerate()
+            .filter(|(_, d)| d.present && !d.corpse && d.team == 1 && d.health > 0.0)
+            .map(|(i, _)| i).take(3).collect();
+        'guards: for cand in cands {
+            let gpos = sim.drones.list[cand].pos;
+            sim.drones.grenades.push(frag(owner, [gpos[0], gpos[1] + 0.5, gpos[2]]));
+            for t in 1..=300u32 {
+                tick_idle(sim, 1);
+                if sim.drones.list[cand].health <= 0.0 { killed_in = Some((cand, t)); break 'guards; }
+            }
+        }
+        let (gi, t) = killed_in.expect("case {case}: the blast killed a guard within its fuse window");
+        assert!(!sim.drones.list[gi].hit_by_player || owner == usize::MAX,
+            "case {case}: the killed guard was never hit by the player");
+        tick_idle(sim, 10); // the ENTER's bookkeeping lands on the kill tick; a little slack
+        tallies[case] = sim.drones.progress.stats[0].dispatched;
+    }
+    assert_eq!(tallies[0], 0,
+        "the guard-owned blast logs NO dispatched [M 0x145bd0:45-62 via 0x163a80:27]");
+    assert_eq!(tallies[1], 1,
+        "the player-owned twin blast logs 1 dispatched (the sister) [M 0x145bd0:57-59]");
+}
