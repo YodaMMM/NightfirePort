@@ -4398,7 +4398,7 @@ impl BotBrain {
         let head = self.vars.opp_history_head as usize % 16;
         self.vars.opp_history[head] = cand; // [M :27-28]
         self.vars.opp_history_head = (head as u8 + 1) % 16; // [M :29, the >15 wrap]
-        let ring = self.vars.opp_history; // the game scores a copy (amemcpy 0x40) [M :24-26]
+        let mut ring = self.vars.opp_history; // the game scores a copy (amemcpy 0x40) [M :24-26]
         let mut scores = [0u32; 16];
         for i in 0..16 {
             let e = ring[i];
@@ -4410,15 +4410,18 @@ impl BotBrain {
             let mut s = 0u32;
             for j in i + 1..16 {
                 if ring[j] == e {
+                    // fix-849: both arms zero the later duplicate IN THE COPY, so it is not
+                    // scored again [M 0x1257c0: `*piVar6 = 0`]; the dead arm also clears it in
+                    // the real ring — entry i itself stays there (only its score is 0).
+                    ring[j] = 0;
                     if alive {
-                        s += 1; // the copy's dupe zeroing [M :55-58]
+                        s += 1;
                     } else {
-                        self.vars.opp_history[j] = 0; // the dead arm prunes the ring [M :66-70]
+                        self.vars.opp_history[j] = 0;
                     }
                 }
             }
             if !alive {
-                self.vars.opp_history[i] = 0; // [M :73]
                 continue; // dead entries score 0
             }
             if Some(idx) == self.vars.opponent {
@@ -4750,6 +4753,11 @@ mod brain_tests {
         r.brain.vars.opponent = Some(0);
         assert_eq!(r.brain.handle_opponent_history(&ctx2, Some(0)), Some(0), "the candidate passes through [M 0x1257c0:85-91]");
         assert_eq!(r.brain.vars.opponent, Some(0), "no re-Set for the held opponent [M :92]");
+        // fix-849: the dead arm clears only the LATER duplicates in the real ring; the first
+        // entry stays (its score is 0) [M 0x1257c0: `*puVar3 = 0` for j > i only].
+        let first = r.brain.vars.opp_history.iter().position(|&e| e == 1).expect("player 0 is in the ring");
+        assert_eq!(r.brain.vars.opp_history.iter().filter(|&&e| e == 1).count(), 1, "the later duplicates were pruned");
+        assert_eq!(r.brain.vars.opp_history[first], 1, "the first entry of the dead player stays in the ring");
     }
 
     /// `BOT_validateStateChange` 0x124fb0: the impact states and 0xEE are refused (0xEE also
