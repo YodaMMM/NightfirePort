@@ -124,6 +124,16 @@ pub struct GTurret {
     /// obj+0x30: the turret position — the tick copies the placement translation in
     /// (`GT_Track`'s distances and the muzzle point read obj+0x30 [M 0x17f9c8:99-118]).
     pub pos: [f32; 3],
+    /// The port's script-player indices for the two `Script_Load`s (the game's SCRIPTINFO
+    /// pointers ext+0xb0/b4; the port runs them as `Scripts::players` entries). `usize::MAX` =
+    /// not mounted. `GT_Update`'s every-tick `Script_Update` pair and its +0x9c
+    /// reads/clears go through these [M 00180498:111-112, 223-228].
+    pub script_player_a: usize,
+    pub script_player_b: usize,
+    /// ext+0x80: the create-time fire direction (facing 0 → `Mat_GetDir(obj+0x90)`, else
+    /// `Mat_GetUp` negated) — `GT_Track`'s front-cone dot test reads it [M 0017ffa0:141-147,
+    /// 0x17f9c8:252-257]. The port keys it from the placement rotation.
+    pub fire_dir: [f32; 3],
 }
 
 fn param(params: &[(u32, u32)], k: u32) -> u32 {
@@ -164,6 +174,9 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> Option<GTurret
         muzzle_offset: 0.0,
         scripts_done: true,
         pos: [0.0; 3],
+        script_player_a: usize::MAX,
+        script_player_b: usize::MAX,
+        fire_dir: [0.0, 0.0, 1.0],
     })
 }
 
@@ -265,6 +278,11 @@ pub enum GTEvent {
     /// is a port stand-in ([S] unverified — the game rotates the aim matrix by
     /// `RotMatrix(rand)` before the look-at; the draw side owns that matrix).
     Sweep { yaw: f32, pitch: f32 },
+    /// The state machine's two `SCRIPTINFO+0x9c = 0` writes — the DORMANT tail (case 0:
+    /// both scripts' delays cleared so the looping deploy anim replays) and the RESTORING
+    /// expiry (case 2's 1.2 s: both cleared for the fold) [M 00180498:223-227, 256-261].
+    /// The caller zeroes the mounted script players' `Script::delay` (the +0x9c model).
+    RewindScripts,
 }
 
 impl GTurret {
@@ -379,6 +397,17 @@ impl GTurret {
             if c.copter {
                 d2 *= 0.25;
             }
+            // The front-cone test [M 0x17f9c8:252-257]: the candidate's normalised direction
+            // from the script base dotted with the create-time fire direction (ext+0x80,
+            // `Mat_GetDir`/`Mat_GetUp`-negated of the placement matrix [M 0017ffa0:141-147])
+            // must reach 0.01 — a candidate behind the turret's facing is not shootable.
+            let m = d2.sqrt();
+            if m > 0.0 {
+                let dot = self.fire_dir[0] * (dx / m) + self.fire_dir[1] * (dy / m) + self.fire_dir[2] * (dz / m);
+                if dot < 0.01 {
+                    continue;
+                }
+            }
             if d2 < range2 && list.len() < 0x3f {
                 list.push((c.obj, d2, c.los_ok));
             }
@@ -450,8 +479,10 @@ impl GTurret {
                         return;
                     }
                 }
-                // both scripts' done flags reset, timer 0, → 1 [M case 0 tail].
+                // both scripts' done flags reset (the +0x9c = 0 write — the looping deploy
+                // replays), timer 0, → 1 [M case 0 tail: 0x180498:222-229].
                 self.scripts_done = false;
+                out.push(GTEvent::RewindScripts);
                 self.timer = 0.0;
                 self.state = gt_state::ARMING;
             }
@@ -465,7 +496,9 @@ impl GTurret {
                 self.timer += crate::grenade::REC_FRAME_RATE;
                 if self.timer > 1.2 {
                     self.timer = 0.0;
+                    // both scripts' +0x9c = 0 — the fold anims replay [M 0x180498:256-261].
                     self.scripts_done = false;
+                    out.push(GTEvent::RewindScripts);
                     self.state = gt_state::FINISHED;
                 }
             }
@@ -619,6 +652,9 @@ impl Default for GTurret {
             muzzle_offset: 0.0,
             scripts_done: true,
             pos: [0.0; 3],
+            script_player_a: usize::MAX,
+            script_player_b: usize::MAX,
+            fire_dir: [0.0, 0.0, 1.0],
         }
     }
 }
@@ -688,7 +724,9 @@ mod tests {
         let mut rng = crate::drone::Rng::new(1);
         let mut t = GTurret::default();
         assert_eq!(t.state, 0);
-        assert!(step(&mut t, &ch, &[], &mut rng).is_empty());
+        // The arming step carries the case-0 tail's SCRIPTINFO+0x9c = 0 clears as the rewind
+        // event [M 00180498:222-227] — the caller zeroes the mounted players' delays with it.
+        assert_eq!(step(&mut t, &ch, &[], &mut rng), vec![GTEvent::RewindScripts]);
         assert_eq!(t.state, 1, "case 0 tail: scripts reset, timer 0, -> 1 [M 00180498 case 0]");
         assert!(!t.scripts_done, "case 0 resets both scripts' obj+0x9c [M case 0 tail]");
         // The script VM (the tracked gap) plays both scripts and sets obj+0x9c on each —
@@ -757,6 +795,9 @@ mod tests {
         let mut t = GTurret::default();
         t.state = 4;
         t.pos = [0.0, 0.0, 0.0];
+        // The candidates sit on +x: the create-time fire direction must point at them or the
+        // front-cone test rejects everything [M 0x17f9c8:252-257].
+        t.fire_dir = [1.0, 0.0, 0.0];
         let far = [60.0, 0.0, 0.0]; // beyond the SP range (dist² 3600 > 2500) [M 0x17f9c8:92]
         let cand_far = TrackCand { obj: 7, pos: far, copter: false, los_ok: true };
         let cand_near = TrackCand { obj: 7, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true }; // inside the 50-unit SP range
@@ -780,6 +821,7 @@ mod tests {
         let mut t2 = GTurret::default();
         t2.state = 4;
         t2.pos = [0.0, 0.0, 0.0];
+        t2.fire_dir = [1.0, 0.0, 0.0]; // the +x candidate must sit in the cone [M 0x17f9c8:252-257]
         for _ in 0..6 { step(&mut t2, &ch, &[cand_near], &mut rng); }
         assert_eq!(t2.hp, 200, "6 ticks = 0.1 s exactly → not > 0.1 → no shot");
     }
@@ -791,6 +833,9 @@ mod tests {
         let mut t = GTurret::default();
         t.state = 4;
         t.pos = [0.0, 0.0, 0.0];
+        // Every candidate below sits on +x: the fire direction must face them or the
+        // front-cone dot test [M 0x17f9c8:252-257] rejects the lot.
+        t.fire_dir = [1.0, 0.0, 0.0];
         // The game compares SQUARED distance to 2500 (SP) → 50 units [M 0x17f9c8:92-99].
         // A copter at 80: 6400 × 0.25 = 1600 < 2500 → in; a ground candidate at 52 (2704) → out.
         let copter = TrackCand { obj: 3, pos: [80.0, 0.0, 0.0], copter: true, los_ok: true };
@@ -805,7 +850,7 @@ mod tests {
         assert_eq!(t.track(&[TrackCand { obj: 9, pos: [25.0, 0.0, 0.0], copter: false, los_ok: true }], true), None, "MP 25 units out");
         assert_eq!(t.track(&[TrackCand { obj: 9, pos: [20.0, 0.0, 0.0], copter: false, los_ok: true }], true), Some(9), "MP 20 units in");
         // Facing-1 (wall) turrets track Bond only — drones are candidates for facing 0 alone [M :101].
-        let mut w = GTurret { state: 4, facing: 1, ..GTurret::default() };
+        let mut w = GTurret { state: 4, facing: 1, fire_dir: [1.0, 0.0, 0.0], ..GTurret::default() };
         let near_guard = TrackCand { obj: 4, pos: [5.0, 0.0, 0.0], copter: false, los_ok: true };
         assert_eq!(w.track(&[near_guard], false), None, "a wall gun ignores guards");
         let bond = TrackCand { obj: u32::MAX, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true };
