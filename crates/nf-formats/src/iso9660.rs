@@ -54,6 +54,12 @@ pub struct IsoImage<R = File> {
 }
 
 impl IsoImage<File> {
+    /// The game's disc-file open goes through the stdio FILE table: `sceOpen` 0x23edd0 allocates
+    /// a `_iob` slot via `new_iob` 0x23e5f8 (jal 0x23ee68 [M scan]) and the read/seek/close path
+    /// looks it up with `get_iob` 0x23e680 (jals 0x23f078/0x23f208/0x23f448/0x23f6b8 in
+    /// sceClose/sceLseek/sceRead/sceIoctl). Both run at boot — `main` 0x109080 → `PS2FreshBoot`
+    /// 0x120ab0 → `RunNextModule` 0x120008 (jals 0x120030/0x120044/0x1200b8/0x1200ec [M scan];
+    /// docs/systems/ps2-sdk-glue.md § boot). The port's slot is this `IsoImage` handle.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> { Self::new(File::open(path)?) }
 }
 

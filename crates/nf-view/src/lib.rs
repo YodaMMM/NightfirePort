@@ -378,6 +378,11 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
         for (slot, bank, sbf) in std::mem::take(&mut scene.sound_spares) { driver.load_spare_bank(slot, bank, sbf); }
         if let Some((lut, bin)) = scene.streams.take() { driver.load_streams(lut, std::sync::Arc::new(bin)); }
         let output = nf_audio::Output::open();
+        // Diagnostic sink note (unported-misc-10): the game's printf output sinks into
+        // `deci2Putchar` 0x23cc90 — `_putchar` (OBJECT 0x2e7a58) swapped in by `scePrintf`
+        // 0x23d570, emitting the boot banner "NFSV = 0x%\n" from `PS2FreshBoot` 0x120ab0 [M
+        // chain in docs/systems/ps2-sdk-glue.md]. The port's equivalent is this eprintln!
+        // diagnostic path (no DECI2 console exists).
         if output.is_none() { eprintln!("audio: no output device; running silent"); }
         let music_files = scene.music_files.take().map(|(t, smf, ssd)| (t, smf, std::sync::Arc::new(ssd)));
         nf_audio::sfx::Sound { driver, output, captured: None, music_files, music: None, music_pending: Vec::new() }
