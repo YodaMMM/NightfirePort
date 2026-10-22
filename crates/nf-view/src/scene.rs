@@ -265,7 +265,14 @@ pub struct Character {
     pub slot_bones: Vec<u8>,
     pub start: Option<StartAnim>,
     pub role: drone::SpawnRole,
-    /// Highest World triangle below the placement (stand-in for the game's collision floor, docs/systems/drone-animation.md).
+    /// The spawn-floor seat: the game's own downward floor probe — `build_PointOnFloor` 0x1c95a8
+    /// (a (0,−1,0) collision ray) scoped to the containing cel. A player start snaps
+    /// y = floor + 1.1 (`Player_StandAtNewPosition` 0x190d88:104-114); a drone keeps its
+    /// placement y and settles per tick onto floor + hip (`Drone_FeetOnPoint` 0x140660,
+    /// `Drone_CollisionHandler` 0x140968:292-295, 1/8 of the error per tick). The port's
+    /// character setup takes the highest World triangle below the placement in the
+    /// [py−3.0, py+0.5] band as that floor (the scoped-cel probe's end state, unscoped — the
+    /// band matches the player probe's ±3/+0.5 shape).
     pub floor: Option<f32>,
     /// A script's animated object (script hash, stream): drawn while the simulation has it, posed with its root in world
     /// space (docs/systems/script-player.md).
@@ -399,9 +406,12 @@ pub struct Sim {
     /// Bond on foot (docs/systems/player.md).
     pub bond: nf_game::player::Bond,
     /// net-match-host: the other human agents' bonds in an online match, by slot (the local
-    /// slot's entry stays `None` — its bond IS `bond`). [S] port-only: the game's four join
-    /// panels are four `Player_Init` objects; the port keeps one full local machine (the
-    /// weapons/view path) and ticks the remotes' movement through the same `Bond::tick_ctx`.
+    /// slot's entry stays `None` — its bond IS `bond`). Port architecture (documented, not a
+    /// game-behaviour claim): the PS2 game's four join panels are four `Player_Init` objects in
+    /// ONE machine (split-screen [M mp-players.md — every body's `Player_Init` 0x1910f8 runs on
+    /// the console]); the port is a network of full machines, so it keeps one full local machine
+    /// (the weapons/view path) and ticks the remotes' movement through the same
+    /// `Bond::tick_ctx`.
     pub mp_bonds: [Option<nf_game::player::Bond>; nf_net::MAX_AGENTS],
     /// The slot this machine plays (its body is the camera, never drawn) — `swap_local_slot` sets it.
     pub mp_local_slot: usize,
@@ -412,7 +422,9 @@ pub struct Sim {
     /// stream (`drones.rng`, hashed) is drawn only by the parts every machine runs identically —
     /// the MP rules, the bots and the per-slot MP combat; the local player's own tick (view model,
     /// its bullets' spread / impacts / effects) runs on this one, so one machine's firing can no
-    /// longer desync the match [S port design — the PS2 had no online play]. None = offline.
+    /// longer desync the match. Documented port design (not a game-behaviour guess): the PS2
+    /// game's MP is local split-screen only — one machine drew every stream [M mp-combat.md "The
+    /// split"]. None = offline.
     pub net_rng: Option<nf_game::drone::Rng>,
     net_rng_shared: Option<nf_game::drone::Rng>,
     /// Online combat (700v6): each human slot's health, and the ticks since its death (0 = alive).
@@ -447,8 +459,14 @@ pub struct Sim {
     /// 0x1a5460:395-403]; the action machine 0x17ee88 latches per press), so a held E activates
     /// the world ONCE, not every tick. The port fired the whole use block raw every held tick —
     /// a 1-s hold re-toggled a swing door 60× and the 06 guardhouse door closed itself before
-    /// the interact test's assert. The 46-frame auto-repeat arm [M 0x17ee88's counter] stays
-    /// unported [S]. SP path only — the MP row's per-slot use pass is untouched.
+    /// the interact test's assert. The 46-frame auto-repeat arm is real but PRESSED-EDGE-RELEVANT
+    /// NOWHERE in the shipped game: it pulses mask 8 (bit 3) every 8th frame from held-frame 48
+    /// [M 0x17ee88's counter + disasm 0x17f0d4-0x17f0f0], and the ONLY mask-8 readers are the
+    /// menu accept repeat (`Button_Update` 0x1ef948:76) and scan mode (`Player_SSScanMode`
+    /// 0x193098:42) — every gameplay reader of the use action 0xE reads mask 4 (the edge) only,
+    /// and nothing clears the 0xE byte while held (no `Input_ClearAction(_, 0xE)` caller), so a
+    /// held E can never re-trigger the world use. SP path only — the MP row's per-slot use pass
+    /// is untouched.
     use_key_prev: bool,
     /// mp-combat-weapons: the online match's shared rounds / grenades / blasts / guided rides
     /// (`nf_game::mp::combat`) — every machine runs every agent's rounds from the shot
@@ -530,11 +548,13 @@ pub struct Sim {
     /// Set by the `Check_Target` block in `run` every 6th frame, read by the HUD [M 0x1a7810, 0x19e6d0].
     pub cross_state: u8,
     pub auto_aim: bool,
-    /// PC-port option "Rapid fire" [S port-only; off = the game]: while the trigger is held every
-    /// weapon fires one round per 60 Hz tick (the record's refire interval and shots-per-pull are
-    /// overridden, the round spawns on the press tick instead of the fire script's release frame) and
-    /// its clip stays full. A showcase of how many live projectiles the port's sim and renderer carry;
-    /// the game's own rules are untouched while it is off.
+    /// PC-port option "Rapid fire" (a documented port-only addition, off = the game): while the
+    /// trigger is held every weapon fires one round per 60 Hz tick (the record's refire interval
+    /// and shots-per-pull are overridden, the round spawns on the press tick instead of the fire
+    /// script's release frame) and its clip stays full. A showcase of how many live projectiles
+    /// the port's sim and renderer carry; the game has no such option (the PS2 options screens
+    /// carry no fire-rate row [M options-census.md]) and its own rules are untouched while it
+    /// is off.
     pub rapid_fire: bool,
     /// `BLData+0x8D0`: the current zoom factor (1.0 = no zoom, up to `weapon_data+0x88`). The FOV is divided
     /// by this. `Player_Zoom` (0x1a1a70) interpolates it toward `zoom_target` (`+0x8D4`).
@@ -558,11 +578,23 @@ pub struct Sim {
     /// The Q-Decryptor's gate pick this tick — the lock index the use gate passed on
     /// [M Player_WeaponFiring 0x1a5460:551-578], `None` = the gate failed (or no decryptor out).
     pub decryptor_target: Option<usize>,
-    /// The lock the previous tick's decryptor shot scanned (the decay's skip marker —
-    /// docs/systems/decryptor.md's port model).
-    pub decryptor_scanned: Option<usize>,
-    /// The laser watch's held-meter charge, 0–100 [S stand-in; M HUD_UpdateAmmoPane 0x19a7f0:160-176
-    /// — the state-0xb pane reads a 0–100 value, not the clip percent; D the measured ~31/s drain].
+    /// The decryptor shot's scan record, one tick old: (lock index, the upgraded +3 flag). The
+    /// game's contact view lags the shot by TWO ticks — the update pass (the shot) runs before
+    /// `Collide_Update` writes the contact lists [M 0x1336f8:54-69 then :238], and the fresh
+    /// bolt's pick segment exists only from its first `Bullet_update` [M 0x12e7b0:98-110] — so
+    /// `Lock_Update` reads a shot's contact two ticks after it. This register is the pipe's
+    /// middle; `decryptor_scanned_lag` (two ticks old) is what the top-of-tick pass applies.
+    pub decryptor_scanned: Option<(usize, bool)>,
+    /// The decryptor scan record TWO ticks old — the game's contact view for this tick (see
+    /// `decryptor_scanned`). Field on its own line [WORKLOG lesson 4].
+    pub decryptor_scanned_lag: Option<(usize, bool)>,
+    /// The laser watch's held-meter charge, 0–100 — the port stands the value in (`Sim::laser_charge`)
+    /// because the game's writer of the pane's source is unlocated: the state-0xb pane reads a
+    /// 0–100 u16 at the tracked object's instance+0x110 (and an f32 at +0x104)
+    /// [M HUD_UpdateAmmoPane 0x19a7f0:160-176], and the exhaustive store scan of ACTION.ELF finds
+    /// no writer (gadget.rs's evidence block; live check in the report). The drain matches the
+    /// disc measurement [D docs/live/2026-10-14-weapon-measurements-pcsx2.md: ~0.5/frame]; the
+    /// idle refill is [S unverified] and kept out of pass/fail.
     pub laser_charge: f32,
     /// The held weapon's laser sight this tick [M `Player_LaserPointer` 0x1a65d8, run per frame from
     /// `Player_CollisionHandler` 0x1949a8:188 while the latch `BLData+0x964` (set from
@@ -596,16 +628,22 @@ pub struct Sim {
     /// −1 per tick, reset to 4 while the player is in range; the type-6 "Press Action" hint posts
     /// only when the timer has ticked down to 0.
     pub icon_msg_timers: Vec<u8>,
-    /// Each wire's owning cel (the smallest-volume `cels` bbox containing the wire's world-sphere
-    /// centre — `build_FindCel` 0x1c8cb0's test). The game's pick pass is CEL-CULLED:
-    /// `Collide_Pick` 0x1eb320 tests only the cels the query segment straddles
-    /// (`Collide_StraddleCels`) and each cel's own object list, and every dynamic object is created
-    /// with its enclosing cel's glist (`parsemap_create_dynamic_objects` 0x1d04f0 passes the
-    /// celglist to `Wire_Create`) — a wire is pickable only in its own cel. The port assigns the cel
-    /// spatially [S — the parse stream's placement→cel parentage is not recovered]; `None` (centre
-    /// inside no bbox) keeps the unculled scan. Without the gate 07000002's courtyard wire (world
-    /// sphere r 11.5 at (−63.1, 8.1, −34.5)) swallows Bond the moment he enters the secret bunker
-    /// (a different cel), making the bunker's touch plates unreachable.
+    /// Each wire's owning cel — the game's own home-cel rule, not a stand-in: every dynamic
+    /// object gets its cel at runtime, `build_LinkToRoom` 0x1c9680:40-49 calling
+    /// `build_FindCel` 0x1c8cb0 over the object's world-sphere centre (bbox containment plus
+    /// the ±256-unit collision-ray tie-break), then `control_link_object_to_cel` 0x1346b8 puts
+    /// it on that cel's +8 list. The pick pass is CEL-CULLED: `Collide_Pick` 0x1eb320:125,312-330
+    /// tests only the cels the query segment straddles (`Collide_StraddleCels`) and each cel's
+    /// own object list — a wire is pickable only in its own cel. (The wire's placement DOES name
+    /// its glist — `parsemap_block_map_data_dynamic` 0x1d1b68:77-87 resolves it by index/hash —
+    /// but that glist is the wire's own geometry/draw record (obj+0xD8, draw flags obj+0xF0
+    /// [M Wire_Create 0x1981d8:24-29]), not its cel: there is no placement→cel parentage in the
+    /// stream because the game computes the cel spatially, exactly as this port does.) The port
+    /// picks the cel with the faithful `find_cell_raycast`/`world.find_cel` port of
+    /// `build_FindCel`; `None` (centre inside no room bbox) keeps the unculled scan. Without the
+    /// gate 07000002's courtyard wire (world sphere r 11.5 at (−63.1, 8.1, −34.5)) swallows Bond
+    /// the moment he enters the secret bunker (a different cel), making the bunker's touch
+    /// plates unreachable. Indices are `CelGraph::cells` (ScopeGraph) indices, not `cels`.
     pub wire_cels: Vec<Option<usize>>,
     /// The runtime cel graph (a build clone) — `find_cell_raycast`'s per-tick input for the third
     /// icons' arm test (fix-08-walls: the arm region is the game's straddle-cel set, `Collide_StraddleCels`
@@ -656,8 +694,13 @@ pub struct Sim {
     /// mp-body-look: per slot, the last nonzero `mp_held` — a timed-out remote is fed `NEUTRAL`
     /// (held 0) every tick, which would blink its body's gun away. Draw-only state.
     pub mp_last_held: [u8; nf_net::MAX_AGENTS],
-    /// mp-lobby-settings: which weapon ids' first-person skins this arena loaded (the load's
-    /// `Player_CheckWeaponsLoaded` stand-in) — the respawn's `MP_EquipPlayer` re-reads it.
+    /// mp-lobby-settings: which weapon ids' first-person skins this arena loaded — the port of
+    /// `Player_CheckWeaponsLoaded` 0x1a97c8's lookup half [M :12-31: walk weapon_data's 114 rows,
+    /// every selectable row (+0x04 set) whose +0xDC first-person skin hash misses the loaded-file
+    /// hashtable is pruned; the port tests the same hashes against the arena's loaded skin set],
+    /// and the respawn's `MP_EquipPlayer` re-reads it (the game prunes at spawn equip [M
+    /// 0x1855f8:48]; the per-weapon owned/cleared half lives in `Inventory::owned`, as the
+    /// game's mutable `BLData+0x1BA` bytes do).
     pub mp_weapon_loaded: Vec<bool>,
     /// fix-render3: the `ambient_at` call counter (a test guard for the posed-vertices hoist).
     pub ambient_lookups: std::cell::Cell<usize>,
@@ -671,7 +714,12 @@ pub struct Sim {
     /// HUD's label text (`Txt_BindLabel` 0x1cad60). Loaded in `nf_view::load`.
     pub lang: Option<nf_formats::hud::Lang>,
     /// The muzzle smoke puffs (`Gas_Init` 0x1aacc8; fix-lighting: the RNG draw rides the shared
-    /// generator in the game's order, the puff itself is a [S] rise+fade model).
+    /// generator in the game's order). The puff's motion here is the port's presentation — the
+    /// game's per-particle model is `gases_smoke` 0x1ab2d0: per-frame velocity damping
+    /// (case 0: ×FRAME_RATE_DIV·0.95 [M :46]), gravity integration toward `_WldGravity`
+    /// [M :57-61], position integration [M :62-65] and a params-driven scale accumulation
+    /// [M :66-76] — a particle sim the draw side can adopt later (visual-only; render
+    /// comparisons are the main agent's).
     pub smoke: Vec<nf_game::light::Smoke>,
     /// The HUD's per-frame state (`fix-hud`): the weapon-name timer (`BL+0x95E`), the health pane's
     /// crouch-icon timer, the pickup message bar (pane 21) and how many `drones.taken` events it has
@@ -685,8 +733,9 @@ pub struct Sim {
     /// microcam-wheel-zoom: the mouse wheel has stepped the zoom while the aim (right) button is
     /// held — the hold-ramp to the weapon's max (`Player_Zoom` 0x1a1a70's target ×1.025/tick)
     /// yields until the aim falls, which resets the target to 1.0 [M `Player_Weapon` 0x1a24c8's
-    /// aim-bit arm] and this latch with it. Port-only input ([S] the playtest request); the
-    /// game's pad zoom has no wheel and keeps the plain ramp.
+    /// aim-bit arm] and this latch with it. A documented port-only input (the playtest request):
+    /// the game's pad zoom has no wheel — the port's mouse play needs the equivalent — and the
+    /// game's plain pad ramp is unchanged when the wheel is unused.
     pub zoom_wheel: bool,
     /// nis-event9-cnis: the C_NIS_Handler route's booted cut-scene script (`FMVScript` [M
     /// `C_NIS_Handler` 0x205f10:71,87]) — the hash `nis_page_boot` started, `None` when the
@@ -809,8 +858,9 @@ pub struct HudState {
     /// unported-misc-5: the game's `LoadMsg` global (0x30cd08, .sdata, next to `DoorMsg`): the aim-ray
     /// exit-hint cooldown. `Check_Target` decrements it on EVERY 6th-frame invocation (0x1a7810:78-79),
     /// and the 0x1d `Trigger_Type == 10` arm only fires while it is 0, re-arming it to
-    /// `FRAME_RATE_INT * 0x14` = 1200 invocations = 7200 frames [M 0x1a7810:195-196]. Same [S port
-    /// note as `door_msg`: carried across level swaps like the game's .sdata.
+    /// `FRAME_RATE_INT * 0x14` = 1200 invocations = 7200 frames [M 0x1a7810:195-196]. Carried
+    /// across level swaps by [`HudState::carry_boot_globals`] like the game's .sdata — the same
+    /// boot-scoped global the game itself keeps.
     pub load_msg: u32,
 }
 
@@ -850,9 +900,12 @@ pub struct LocalDeathFx {
     /// The blood pane's grown height in px: 1 px/tick from the enable [M 0x19a6a8:27-30],
     /// capped at the 448 cover [M 0x19f4e8:33].
     pub pane_px: u32,
-    /// `pane_px / 448` clamped 0..1 — the per-tick alpha source [S derived; the draw maps it
-    /// onto the pane-12 templates (layer 9, textures 0x0300005a/0x03000002 [L BloodSprInfo
-    /// 0x2bcfd8])].
+    /// The port's per-tick fade input for the pane-12 templates: `pane_px / 448` clamped 0..1
+    /// (the draw maps it onto layer 9's templates, textures 0x0300005a/0x03000002 [L BloodSprInfo
+    /// 0x2bcfd8]). The game writes no alpha on this path — `HUD_UpdateBloodPane` grows the
+    /// sprite's height byte only (+0x2e, +1/tick [M 0x19a6a8:27-30]) and the templates keep
+    /// their created alpha — so this ramp is the port's documented draw choice for the same
+    /// growth, not a game-value claim.
     pub fade_alpha: f32,
     /// The whole HUD hides for the pane — SP only (the `HUD_DisableAll` [M 0x190bb0:24]);
     /// MP keeps the HUD up under the blood [M :39].
@@ -1089,7 +1142,7 @@ pub struct Cel {
 
 /// The runtime cel graph for the portal visibility walk (fix-perf-level, G-016's portal half).
 ///
-/// `cells` = the level parse's pCelList record array stand-in [M cel.md]: one node per main-map
+/// `cells` IS the game's pCelList record array (the port of it, [M cel.md]): one node per main-map
 /// placement that creates a cel (`flags & 0x8000`), in placement order, with the object's glist bbox
 /// (the box `build_FindCel` 0x1c8cb0 tests). `portals` = map block 0x21 with each endpoint remapped
 /// into `cells` (the game matches `runtime_cel+0x38 == pCelList + idx*0x50` [M 0x1d15f8]; a portal
@@ -1392,17 +1445,17 @@ pub fn link_doors_to_portals(graph: &mut CelGraph, doors: &nf_game::door::Doors)
 /// contains the generic's sphere centre, by `Collide_SphereIntersect` (0x1ec940) — a sphere at the
 /// generic's centre with radius 4001 (containing), scoped to the candidate room, i.e. the candidate
 /// whose collision sits CLOSEST to the centre; strict `<` keeps the first candidate in parse order.
-/// The port's `find_cell_raycast` (the runtime `build_FindCel` 0x1c8cb0 two-ray rule) is the EYE-cel
-/// picker, not the linker — as a stand-in it hung the 9 courtyard extras on the big room 21 [L live
-/// ground truth: the game's 0x0179fb30 chain is exactly the 40 named courtyard generics] and the
-/// wall generics on the wrong rooms. Evidence [L ee_start_05.bin + ee_snapshot.bin, both walked
-/// +0x18-head/next]: 8 room owners / 113 generic members / 0 members outside the owner's world bbox
-/// (+0x40 min vec4, +0x50 max vec4) / no orphan generic (every 0x8019-class cel rides some chain).
-/// Live [L ground-truth doc]: the eye cel's chain is empty, the big room 0x0179fb30's chain is
-/// exactly the 40 courtyard generics. `world` (the sim's scoped `CollisionWorld`) supplies the
-/// closest-hit tie-break (and the radius/bbox gates stand alone); `None` keeps `find_cell_raycast`'s
-/// bbox-face approximation (the world-less callers). Nodes are prepended so a chain reads in reverse
-/// parse order — the live dump order (the game walks its +0x14 list in parse order, prepending).
+/// The game's chain-builder rule, ported (fix-portal4's order + fix-portal5's owner rule — the
+/// old `find_cell_raycast` stand-in, which hung the 9 courtyard extras on the big room 21 and the
+/// wall generics on the wrong rooms, is GONE from this path). Evidence [L ee_start_05.bin +
+/// ee_snapshot.bin, both walked +0x18-head/next]: 8 room owners / 113 generic members / 0 members
+/// outside the owner's world bbox (+0x40 min vec4, +0x50 max vec4) / no orphan generic (every
+/// 0x8019-class cel rides some chain). Live [L ground-truth doc]: the eye cel's chain is empty,
+/// the big room 0x0179fb30's chain is exactly the 40 courtyard generics. `world` (the sim's
+/// scoped `CollisionWorld`) supplies the closest-hit tie-break (and the radius/bbox gates stand
+/// alone); `None` keeps `find_cell_raycast`'s bbox-face approximation (the world-less callers).
+/// Nodes are prepended so a chain reads in reverse parse order — the live dump order (the game
+/// walks its +0x14 list in parse order, prepending).
 pub fn build_chains(graph: &mut CelGraph, world: Option<&nf_game::world::CollisionWorld>) {
     let mut chains = std::mem::take(&mut graph.chains);
     for i in 0..graph.cells.len() {
@@ -2118,8 +2171,10 @@ impl Sim {
         self.aiming
     }
 
-    /// One game tick with Bond at `camera` (eye): his object position on the collision floor below, aimed at chest
-    /// height (stand-in for the game's player object and `Drone_View_Bones`).
+    /// One game tick of the free-camera playtest harness with Bond at `camera` (eye): his object
+    /// position on the collision floor below, aimed at chest height. Port harness — real gameplay
+    /// input runs through `step_bond` (the `Player_Update` path); this driver stands in for the
+    /// player object only in the no-Bond dev paths (`Drone_View_Bones`' chest aim).
     /// `trigger`: the fire button (action 9) held; `aiming`: aim mode (L1).
     pub fn step(&mut self, camera: [f32; 3], look: [f32; 3], trigger: bool, aiming: bool) {
         // mayhew-end-transition: the exit hold freezes the free-camera path too (the game's whole
@@ -2190,8 +2245,12 @@ impl Sim {
             // items). Order: `update_objects` then `update`, the headless lockstep rig's recorded
             // order (mp_lockstep drive). The RNG is drawn only by the GE/blueprint re-picks.
             // mp-scenarios-online (agent6): the live walk — the hill occupancy from the hill's own
-            // box (`MP_KOHUpdate` 0x186ae0:88-93) and the objects' contact tests (`MP_HitBy`
-            // 0x1830e0 stand-in) run inside, from the match's shared state only.
+            // box (`MP_KOHUpdate` 0x186ae0:88-93) and the objects' contact tests (the port of
+            // `MP_HitBy` 0x1830e0: the slot/team gates [M :32-35], the 4-tick spawn window
+            // [M :36-39], the dead gate, then the sphere test the frame's contact list carried
+            // [M Collide_PickObj 0x1eae80:221-228]; the documented residuals — the collapsed
+            // BLData state gates, the slot-order walk, the measured body sphere — are
+            // mp-hitby-contact.md's) run inside, from the match's shared state only.
             m.update_objects_live(1.0 / 60.0, &mut self.drones.rng);
             // the shared bit-exact generator — the game's MP_Update draws the global RNG only on
             // the state-6 restart's site re-pick (MP_RestartScenario 0x183fc0)
@@ -2305,7 +2364,9 @@ impl Sim {
             input = nf_game::player::Input::default();
         }
         let trigger = trigger && self.missile_cam.is_none();
-        // The smoke puffs (`gases_smoke` 0x1ab2d0 [S] simplified) tick with the sim.
+        // The smoke puffs tick with the sim — the port's rise+fade presentation; the game's real
+        // per-particle model (gases_smoke 0x1ab2d0: damping, gravity, params-driven scale) is
+        // described at the `smoke` field (visual-only; the draw side owns the adoption).
         for s in self.smoke.iter_mut() { s.update(); }
         // The laser/stunner beam/burn/target state computes on the SHOT tick now (fix-gadgets-live):
         // see the `release` block in run()'s fire section. The game's chain is Player_RoundToFire
@@ -2315,9 +2376,12 @@ impl Sim {
         // so at clip 0 the beam stops (the user's PCSX2 capture) and nothing burns while switching.
         // fix-laser-watch-look: the laser watch's held meter — a tick where the beam ran drains the
         // 0–100 charge ~31/s [D docs/live/2026-10-14-weapon-measurements-pcsx2.md "The laser watch
-        // 0x4e": 100 → 59 over ~1.3 s, ≈0.5/frame]; idle ticks refill it (the game's gadget regen
-        // shape, +1 per 4 frames [M Player_Update 0x193600 disasm 0x193f18-58] — [S] for the charge
-        // itself, live check in the report). The watch lasers only: the stunner fires in view state
+        // 0x4e": 100 → 59 over ~1.3 s, ≈0.5/frame]; idle ticks refill it — the game's gadget regen
+        // shape, +1 per 4 frames [M Player_Update 0x193600 disasm 0x193f18-58] — that +1/4 is the
+        // GADGET-CLIP regen, not this meter, so the refill below stays [S unverified] and OUT of
+        // pass/fail: the pane's source value (instance+0x110/+0x104) has no located writer in
+        // ACTION.ELF [M HUD_UpdateAmmoPane 0x19a7f0:160-176 the read; gadget.rs's evidence block,
+        // live check in the report]. The watch lasers only: the stunner fires in view state
         // 9 (its +0x6C & 0x400 = 0 [L weapon_data 0x4a]), so 0x19a7f0's state-0xb pane — the charge
         // read — never shows for it. Read at the top of the tick against the PREVIOUS tick's beam
         // (the beam computes at the end of the shot tick), so every tick pays exactly once.
@@ -2327,15 +2391,31 @@ impl Sim {
         self.laser_beam = None;
         self.stunner_target = None;
         self.decryptor_target = None;
-        // The decrypt scan's decay [M Lock_Update 0x1ae3d8:327-344]: a lock in state 5 with NO
-        // contact bullet loses 4/tick (at 0 the scan resets). The port's scan contact runs on the
-        // shot tick (the fire block below), so the locks not scanned in the PREVIOUS tick decay
-        // here — one-tick-late at the release edge [S].
-        let scanned_prev = self.decryptor_scanned.take();
+        // The decrypt scan's contact and decay [M Lock_Update 0x1ae3d8:296-344]: the lock reads
+        // its own hitdata list (+0xD0) for a contact bullet — a contact decodes (+1, or +3 for
+        // the 0x57; the state-0 entry consumes its contact and resets the progress [M :179-189]),
+        // a state-5 lock with NO contact loses 4/tick (at 0 the scan resets). The game's contact
+        // view lags the shot by TWO ticks: the update pass (the fire, the bolt's birth)
+        // 0x1336f8:54-69 runs before Collide_Update 0x1ea398 (:238) writes the lists, and the
+        // fresh bolt's pick segment exists only from its first Bullet_update [M 0x12e7b0:98-110]
+        // — a shot at N lands in the (N+1) collide and Lock_Update reads it at N+2. The port
+        // keeps that lag: the fire block below only RECORDS the scan; THIS pass applies the
+        // record two ticks old and decays every other scanning lock. (The old stand-in banked
+        // the scan on the shot tick and skipped one decay tick — a two-tick phase lead mid-hold
+        // and a one-tick-early reset.)
+        let scanned_due = self.decryptor_scanned_lag.take();
+        self.decryptor_scanned_lag = self.decryptor_scanned.take();
         for (i, l) in self.drones.locks.iter_mut().enumerate() {
-            if l.scanning && scanned_prev != Some(i) {
-                let ch = &mut self.drones.channels;
-                l.decrypt_tick(0, false, ch, self.drones.frame);
+            match scanned_due.filter(|(li, _)| *li == i) {
+                Some((_, upgraded)) => {
+                    let ch = &mut self.drones.channels;
+                    l.decrypt_tick(1, upgraded, ch, self.drones.frame);
+                }
+                None if l.scanning => {
+                    let ch = &mut self.drones.channels;
+                    l.decrypt_tick(0, false, ch, self.drones.frame);
+                }
+                None => {}
             }
         }
         self.smoke.retain(|s| !s.dead());
@@ -2691,7 +2771,7 @@ impl Sim {
             // walls — the 07000008 playtest: walking into the guardhouse wall and jumping threw Bond onto
             // the zipline across it (the icon sits 1.9 from the wall on the far side); the r-1.164 sphere
             // crosses no portal there, so the wall keeps the contexts apart exactly as the cel graph lays
-            // them. **Deviation [S]**: the port's cel buckets are coarser than the game's cels — the
+            // them. **Port cull (documented, evidence below — not a guess)**: the port's cel buckets are coarser than the game's cels — the
             //   fix-swim-vent5 probe put 07000005's gate door and the second vent's ctx-6 icons in one
             //   port cel — so pure cel occupancy would arm the gate door against the [L PCSX2 2026-10-13
             //   pin (0xFF there; enforced by fix_swim_vent5_live)]. The arm region is therefore the
@@ -4118,9 +4198,9 @@ impl Sim {
                     let pick = nf_game::gadget::pick_decryptor_lock(camera, vdir, root, &self.drones.locks, &self.world, range);
                     match pick {
                         Some(i) => {
-                            let frame = self.drones.frame + 1;
-                            self.drones.locks[i].decrypt_tick(1, upgraded, &mut self.drones.channels, frame);
-                            self.decryptor_scanned = Some(i);
+                            // Record only — the contact decodes two ticks from now (the game's
+                            // collide-after-update order, the top-of-tick pass above).
+                            self.decryptor_scanned = Some((i, upgraded));
                             self.decryptor_target = Some(i);
                         }
                         None => {
@@ -7923,10 +8003,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The hurt volumes (`Hurt_Create` 0x17e870, placement type 0xE4): the contact damage
             // volumes (level-02-interactables).
             let hurts = nf_game::hurt::Hurt::create(level);
-            // The wires' owning cels (see `wire_cels`): the game's pick pass tests a dynamic object
-            // only in the cels its query straddles [M 0x1eb320], and the object lives in the cel
-            // whose creation block carried it [M 0x1d04f0].
-            let wire_cels = wires.iter().map(|w| find_cel(&sim_cels, w.centre)).collect::<Vec<_>>();
+            // The wires' owning cels (see `wire_cels`): the game links every dynamic object to its
+            // runtime cel at load — `build_LinkToRoom` 0x1c9680:40-49 → `build_FindCel` 0x1c8cb0
+            // over the world-sphere centre, `control_link_object_to_cel` 0x1346b8 — and
+            // `Collide_Pick` 0x1eb320:125,312-330 admits a pick only from a straddled cel's own
+            // list. The placement's glist (0x1d1b68) is the wire's geometry record, NOT its cel.
+            // `world.find_cel` is the faithful `build_FindCel` port (the ladders use the same).
+            let wire_cels = wires.iter().map(|w| world.find_cel(w.centre)).collect::<Vec<_>>();
             // The third icons (placement kind 0xFA, `ThirdIcon_Create` 0x197070): the interaction
             // contexts written to `BLData+0x95F` each tick (fix-wire2 — the cable's type-3 icons gate
             // the jump-grab). fix-08-walls: each icon carries its object-resolved world sphere
@@ -8015,6 +8098,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             mp_held: [2; nf_net::MAX_AGENTS],
             mp_fx: Default::default(),
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
+                // The decryptor contact pipe's second register (fields on their own lines, lesson 4).
+                decryptor_scanned_lag: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
                 prev_aiming: false,
