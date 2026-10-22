@@ -65,7 +65,8 @@ pub struct Casing {
     /// `data+0x2c`: the mesh from `ammo_data[weapon_data+0x90]+4` [M 0x12fe2c].
     pub mesh: u32,
     /// `data+0x30`: the landing-sound material, the shooter's weapon definition +0x50 byte & 0x3f
-    /// [M 0x12f8f8] ([S] the port reads the weapon_data record byte).
+    /// [M 0x12f8f8 — `Bullet_init_casing_ex` reads `*(byte *)(*(int *)(shooter + 0xdc) + 0x50) & 0x3f`,
+    /// the weapon datum's +0x50 byte — the same record the port passes as `weapon`].
     pub material: u16,
     /// The landing sound plays once [M 0x12fb88-0x12fb94: the game parks the plane at −1000000.0
     /// after the sound, so the crossing test can never pass again]. The port mirrors that with the
@@ -76,10 +77,11 @@ pub struct Casing {
     /// runs out [M 0x12faa0:31-37]) — `local` is the weapon's eject vector (+0xf8, −+0xfc, +0x100).
     pub pending: bool,
     pub local: V3,
-    /// casings-persist [S; PC-port only, never set when keep = 0]: the casing rested on its landing
+    /// casings-persist (PORT-ONLY, unreachable in the shipped game — no keep option exists and
+    /// the game's casing never rests: class 0x0d has no collide handler, it sinks and despawns
+    /// [M 0x12faa0's flight tail]): the casing rested on its landing
     /// plane (`Casings::set_keep` > 0) — pos sits at the plane, vel/spin are zeroed, the flight
-    /// integration stops and the 240-tick despawn no longer applies (the game has no rest at all:
-    /// class 0x0d has no collide handler, the casing sinks through the floor until it despawns).
+    /// integration stops and the 240-tick despawn no longer applies.
     pub resting: bool,
     /// Which body reserved the shell — `None` = the player, `Some(i)` = drone index i. The game
     /// stamps no shooter (the pool is global, `ShellCasings[32]`); the port keys the delay-expiry
@@ -144,14 +146,20 @@ impl Casings {
     ///
     /// `weapon` is the 0x10c-byte weapon_data record: +0x50 material byte, +0x78 eject delay (u8→f32),
     /// +0x90 ammo type byte, +0xf8/+0xfc/+0x100 the local eject velocity (0xfc negated [M 0x12f838]).
-    /// `origin` is the eject position ([S] the port passes the muzzle; the game reads the view model's
-    /// bone 1/5 world transform — the main agent's render check owns the visual). `yaw`/`pitch` build
-    /// the bone-rotation stand-in ([S]). `shooter_y` is the shooter's y (`obj+0x34`). RNG order [M
+    /// `origin` is the eject position of the PORT-ONLY FALLBACK path (no posed view model:
+    /// headless callers and MP remote slots). The game's eject ALWAYS reads the view model's
+    /// bone 1/5 world transform at the delay's expiry [M `Bullet_init_casing_ex` 0x12f678:83-114
+    /// — `AnimGetBoneWorldTrans(shooter, datum)`], and the port's real loop does too: the player's
+    /// shell reserves now and re-poses from the viewer's `eject_bone_now` (drone.rs's casing
+    /// update), a guard's from its own eject bone — the main agent's render check owns the
+    /// visual. `yaw`/`pitch` build the fallback's aim-basis bone; the game's matrix carries the
+    /// view model's own orientation. `shooter_y` is the shooter's y (`obj+0x34`). RNG order [M
     /// 0x12f860..0x12f8f0]: 3× `Rand_FRand_MVar2(0.1, 0.05)` (spin), 3× `(0.01, 0.005)` (velocity
     /// jitter), 1× `Rand_FRand(0.5)` (landing plane).
     pub fn eject(&mut self, ammo: &nf_formats::sfx::AmmoData, weapon: &[u8], origin: V3, yaw: f32, pitch: f32, shooter_y: f32, rng: &mut Rng) {
-        // The bone-rotation stand-in: the shooter's yaw about y, then the pitch ([S]; the game uses
-        // `AnimGetBoneWorldTrans`'s matrix, which carries the view model's own orientation).
+        // The fallback's aim-basis bone (PORT-ONLY — the game always uses
+        // `AnimGetBoneWorldTrans`'s matrix, which carries the view model's own orientation
+        // [M 0x12f678:83-114]; the real loop takes that path via reserve/eject_bone_now).
         let (cy, sy) = (yaw.cos(), yaw.sin());
         let (cp, sp) = (pitch.cos(), pitch.sin());
         let right = [cy, 0.0, -sy];
@@ -272,7 +280,7 @@ impl Casings {
                     // The landing: the sound fires while the casing is at/below its plane, tested
                     // against the PRE-integration pos [M 0x12fb70-0x12fb80], and the game parks the
                     // plane at −1000000.0 right after the sound so it can never re-fire
-                    // [M 0x12fb88-0x12fb94] (the old [S] "re-triggers every tick" is wrong).
+                    // [M 0x12fb88-0x12fb94] (the superseded guess "re-triggers every tick" is wrong).
                     if !c.resting && c.landing_y >= c.pos[1] {
                         let plane = c.landing_y;
                         if let Some(id) = landing_sound(c.mesh, c.material) {
@@ -280,7 +288,9 @@ impl Casings {
                         }
                         c.landing_y = REST_PLANE;
                         c.landed = true;
-                        // casings-persist [S]: with the keep option the crossing becomes a rest —
+                        // casings-persist (PORT-ONLY — unreachable in the shipped game: no keep
+                        // option exists, the game's casing never rests): with the keep option the
+                        // crossing becomes a rest —
                         // the casing settles exactly on its plane (the game itself keeps falling
                         // through the floor: class 0x0d has no collide handler). No RNG draws.
                         if self.keep > 0 {
@@ -469,7 +479,8 @@ mod tests {
         let mut cs = Casings::new();
         cs.set_keep(64);
         assert_eq!(cs.keep(), 64);
-        assert_eq!(cs.list.len(), 64, "the pool grows to max(32, keep) [S]");
+        assert_eq!(cs.list.len(), 64, "the pool grows to max(32, keep) — the PC-port option's spec \
+            (the game's own pool is the fixed 32 [M 0x12fd48], this extension is port-only)");
         let a = ammo(0x0200_0548);
         let mut rng = Rng::new(7);
         for k in 0..40 {
