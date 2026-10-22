@@ -269,6 +269,28 @@ pub mod state {
     pub const INTEROGATE_ASSIST: u8 = 0x39;
     /// `NDrone2_DSTATE_InterogateAssistWait` 0x161860 (`StateFuncs[0x3a]`).
     pub const INTEROGATE_ASSIST_WAIT: u8 = 0x3a;
+    /// `NDrone2_DSTATE_EnemyRunToPoint` 0x168910 (`StateFuncs[0x85]` [L 0x29b300 + symtab]) — the
+    /// state `DroneVision_ConsiderAlerted` 0x176250:82 refuses alongside the goal walks.
+    pub const ENEMY_RUN_TO_POINT: u8 = 0x85;
+    /// `NDrone2_DSTATE_EnemyMission` 0x15e1e8 (`StateFuncs[0x1b]` [L 0x29b300 + symtab]).
+    pub const ENEMY_MISSION: u8 = 0x1b;
+    /// The 31 "unaware" states whose ENTER arm sets `+0x4F8 & 0x2000` (may-notice) [M each DSTATE's
+    /// case 1: PlayScript 0x15ba68:25, Idle 0x15bf18:31, Alert 0x15c248:20, Patrol 0x15c498:20,
+    /// HostageKiller 0x15c728:20, Civilian 0x15d118:27, CivilianPatrol 0x15d610:27, CivilianMission
+    /// 0x15d860:23, CivilianMissionWait 0x15dbb0:22, KikoMission 0x15df28:20, EnemyMission
+    /// 0x15e1e8:24, SniperIdle 0x15fab0:17, PartyGirl 0x160140:28, CivilianGuard 0x1603a8:22,
+    /// CivilianDoorGuard 0x160648:23, TruckDriverIdle 0x160ed0:20, TruckDriverMission 0x161030:23,
+    /// CastleChatGuard1 0x1612e0:22, InterogateAssistWait 0x161860:24, Interogate 0x161a40:56,
+    /// InterogateWalk 0x162338:21, AlertToPosition 0x165270:24, SearchArea 0x165bf0:21, Investigate
+    /// 0x168070:20, HeardNoiseAware 0x16af20:22, HeardNoiseSuspect 0x16b0e0:26, HeardNoiseAlert
+    /// 0x16b540:30+49, AstronautLaunch 0x16dd28:18, AstronautCombat 0x174458:17, AstronautCombatMove
+    /// 0x174550:19, SpaceDrake 0x16dee0:19 — id from the `StateFuncs` table 0x29b300 [L]].
+    /// `Drone_SM_RouteMsgDCV` clears the bit on every state change (`& 0xffffdfff` [M-dis
+    /// 0x172060-70]); the consumers are `DroneVision_ConsiderAlerted` 0x176250:35 and the
+    /// opponents' may-notice tests.
+    pub const UNAWARE: &[u8] = &[0x03, 0x04, 0x05, 0x07, 0x08, 0x11, 0x14, 0x16, 0x17, 0x19, 0x1b,
+        0x29, 0x2f, 0x30, 0x31, 0x34, 0x35, 0x36, 0x3a, 0x3c, 0x3d, 0x62, 0x65, 0x7e, 0xa3, 0xa4,
+        0xa5, 0xbd, 0xc0, 0xc1, 0xc2];
     /// The real `NDrone2_DSTATE_Hostage` (0x15cb78) — `NDrone2_StateFuncs[0x0a]` [L 0x29b300]; the
     /// captive cower the castle geishas sit in while their captor lives.
     pub const HOSTAGE: u8 = 0x0a;
@@ -5752,6 +5774,11 @@ impl Drone {
     /// `Drone_SM_RouteMsg` 0x172128 is its obj-level wrapper (`Drone_DCVfromOBJ` 0x13a0a0 resolves
     /// the object first); the port's obj half is `Drones::tick`.
     pub fn send(&mut self, d: &Data, rng: &mut Rng, frame: u32, m: u8) {
+        // The unaware-state ENTER arms set `+0x4F8 & 0x2000` (may-notice) [M each DSTATE case 1 —
+        // state::UNAWARE]; a direct ENTER to the current state (the first enter, Drones::tick's
+        // `started` arm) reaches here without a transition. The port folds the arms' set into the
+        // ENTER delivery.
+        if m == msg::ENTER && state::UNAWARE.contains(&self.state) { self.watching = true; }
         if !self.handle(d, rng, frame, self.state, m) { self.handle(d, rng, frame, state::GLOBAL, m); }
         if let Some(m2) = self.self_msg.take() { self.send(d, rng, frame, m2); }
         let mut guard = 0;
@@ -5761,6 +5788,7 @@ impl Drone {
             self.prev_state = self.state;
             self.state = n;
             self.vision_on = false; // RouteMsgDCV clears 0x4f8 0x10000 on every change
+            self.watching = false;  // ... and 0x2000 (`& 0xffffdfff`) on every change [M-dis 0x172060-70]
             // ... and the timers (C/D; the idle timeout too: *suggested*, it is re-armed by every enter that uses it).
             self.timer_c = None;
             self.idle_timeout = None;
@@ -5768,6 +5796,7 @@ impl Drone {
             self.damage_taken = 1.0; // the hit-effect multiplier +0x14C resets on every change [M-dis 0x17207c-88]
             self.entered = frame;
             self.log.push((frame, n));
+            if state::UNAWARE.contains(&n) { self.watching = true; } // the new state's ENTER arm re-sets it [M case 1]
             self.handle(d, rng, frame, n, msg::ENTER);
             if let Some(m2) = self.self_msg.take() { self.send(d, rng, frame, m2); }
             guard += 1;
@@ -12958,6 +12987,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// setPlayerStatus/objectBeingDeleted/sendTeamBotMessage/getObjExtObj family) after
     /// `Drone_DCVfromOBJ` 0x13a0a0 resolves the object (class +0xFF 2/0x11) to its drone.
     /// The port's typed `Drones`/`Drone` split IS that adapter; the pump is `Drone::send`.
+    /// `DroneVision_ConsiderAlerted` 0x176250:58-86 — the observer-state ranges (the port's
+    /// `state` ids match the `StateFuncs` table 0x29b300 [L + symtab]): refused outright are
+    /// 0x39/0x3a (InterogateAssist/Wait), 0x63/0x64 (GoToGoalPosition/Hostage — the goal walks)
+    /// and 0x85 (EnemyRunToPoint); state 3 (PlayScript) only while the alertness +0x50C is under
+    /// 1.0 (:62, `1.0 <= +0x50c` refuses [M 0x176368-0x176384]); state 0x1b (EnemyMission) only
+    /// on 0x07000014 (:66 [M 0x176390-0x17639c]). Every other state passes (the +0x2000
+    /// may-notice gate at :35 is what keeps the aware states out — RouteMsgDCV clears it on every
+    /// change and only the 31 unaware ENTERs re-set it).
+    fn consider_state_ok(state: u8, level: u32, alert: f32) -> bool {
+        match state {
+            state::INTEROGATE_ASSIST | state::INTEROGATE_ASSIST_WAIT | state::GO_TO_GOAL | state::HOSTAGE_GO_TO_GOAL | state::ENEMY_RUN_TO_POINT => false,
+            state::PLAY_SCRIPT => alert < 1.0,
+            state::ENEMY_MISSION => level != 0x0700_0014,
+            _ => true,
+        }
+    }
     pub fn tick(&mut self, d: &Data, player: &Player) {
         if self.hold_npcs && self.npc_enabled {
             self.npc_enabled = false;
@@ -13449,42 +13494,106 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.assist_ended = !(b & 0x0020_0020 != 0 && b & 0xffff_ffde == 0);
             }
         }
-        let mut alerts = Vec::new();
-        // `DroneVision_DroneCanSeeDrone` (0x1760b0, via `DroneVision_ConsiderAlerted` 0x176250):
-        // can the watching idle/alert/patrol drone see the alerting one.
-        'pairs: for (oi, o) in self.list.iter().enumerate() {
-            if !o.watching || o.alerted_by_drone || !matches!(o.state, state::IDLE | state::ALERT | state::PATROL) { continue; }
-            for (si, src) in self.list.iter().enumerate() {
-                if si == oi || !src.enabled || src.alert_bits == 0 || frame < src.attack_frame + 60 { continue; }
-                let b = src.alert_bits;
-                let accepts = b & 0x10 != 0 || (b & 2 != 0 && o.prop(d, 0x27)) || (b & 4 != 0 && o.prop(d, 0x4f))
-                    || (b & 1 != 0 && o.prop(d, 0x28)) || (b & 8 != 0 && (o.prop(d, 0x26) || o.prop(d, 0x29)));
-                if !accepts { continue; }
-                let (dx, dy, dz) = (src.pos[0] - o.pos[0], src.pos[1] - o.pos[1], src.pos[2] - o.pos[2]);
-                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                if dist > 50.0 { continue; }
-                let in_view = dist < 2.0 || ((o.half_fov == 0.0 || angle_difference(o.yaw, atan2_approx(dx, dz)).abs() <= o.half_fov) && dist <= o.sight_range);
-                if in_view && d.world.line_of_sight(o.head(), src.head()) {
-                    alerts.push((oi, b, si));
-                    if alerts.len() > 4 { break 'pairs; }
-                    continue 'pairs;
-                }
+        // `DroneVision_FindAlertedDrones` 0x1767d0 walks the list as drone pairs (with the rolling
+        // cursor 0x299098/0x29909c [M :118-125] — the port scans all pairs per frame, [S] budget)
+        // and asks `DetermineAlertCheck` 0x1766f8 per pair: exactly one of the pair must qualify
+        // (not-latched +0x20000, enabled +0x100, team +0x44 ≠ 2, alert bits +0x4FC ≠ 0 [M
+        // :12-31]) — the qualifier is the SOURCE, the other the OBSERVER. `ConsiderAlerted`
+        // 0x176250 below is the exact port (gates :35-87, the source 1-second gate :91, the
+        // 0700000c/0d speech arm :94-104, the 07000007 sight widening :106-114, the bit-accept
+        // chain :119-193 — shape from the disassembly 0x176514-0x176668, the 0x10 arm takes no
+        // prop and path A's `bit 8 & prop 0x26` accepts only through bit 2 + prop 0x27), then
+        // `DroneCanSeeDrone` 0x1760b0 (:195 — the cone pass IS ConsiderAlerted's return byte [M
+        // :195-210]; the effect needs the LOS too). FindAlertedDrones counts those returns and
+        // stops after the 5th (`if (4 < uVar4) bVar2 = true` [M 0x1767d0:75-80]); the effects
+        // (:199-208) apply INLINE, so a drone latched this frame cannot re-qualify for a later
+        // pair (the game's mid-scan latch order).
+        let mut sight_passes = 0usize;
+        'pairs: for oi in 0..self.list.len() {
+            // ---- the observer gates. DetermineAlertCheck needs the observer NOT to qualify, and
+            // with the ConsiderAlerted gates below holding (not-latched, enabled, team ≠ 2) that
+            // reduces to its own +0x4FC being 0 [M 0x1766f8:19,30].
+            {
+                let o = &self.list[oi];
+                if !o.present { continue; }
+                if !o.watching || o.team == 2 { continue; }               // 0x176250:35 (+0x4F8 & 0x2000, team +0x44)
+                if o.mode == 5 { continue; }                               // :40 — the hostage type [D dronetype-tables.md:87]
+                if o.corpse || !o.enabled || o.health <= 0.0 { continue; } // :43-57 — the universal live gate (obj+0xFF class ≠ 0x11 and obj+0xFE bit 0 fold away on SP guards [S speech.md §2.3])
+                if !Self::consider_state_ok(o.state, d.level, o.alert) { continue; } // :58-86
+                if o.alerted_by_drone || o.alert_bits != 0 { continue; }   // :87 (the +0x20000 once-latch) + 0x1766f8's observer half
             }
-        }
-        for (oi, b, si) in alerts {
-            let o = &mut self.list[oi];
-            // The game's alert receiver `NDrone2_ReactToDroneAlertMsg` 0x1437a0 routes the alert kinds
-            // straight to Attack 0x56 or, for the shot kind, parks in `NDrone2_DSTATE_SeenDroneShot`
-            // 0xa0 whose only behaviour is ENTER → 0x56 [M 0x1437a0:263,368 + 0x173b78] — the port
-            // folds both into this FORCED_ATTACK send (its intercept enters ATTACK).
-            // `DroneFunc_DoForcedAttack` 0x148c60's gate: on 07000007 while the interrogate latch
-            // (`DAT_0029aa86` — `party_loud` here) is 0, only the bouncer mode 0x13 and the
-            // CivilianMission 0x16 walkers force-attack; the guests hold the party [M 0x148c60:10-13].
-            if d.level == 0x0700_0007 && !self.party_loud && !matches!(o.mode, 0x13 | 0x16) { continue; }
-            o.alerted_by_drone = true;
-            o.alert_bits |= b << 16;
-            o.assist_src = Some(si); // `+0x528 = source` [M 0x176250:206]
-            o.send(d, &mut self.rng, frame, msg::FORCED_ATTACK);
+            for si in 0..self.list.len() {
+                if si == oi { continue; }
+                let (src_present, src_enabled, src_latched, src_team, b, attack_frame) =
+                    { let s = &self.list[si]; (s.present, s.enabled, s.alerted_by_drone, s.team, s.alert_bits, s.attack_frame) };
+                // DetermineAlertCheck 0x1766f8:27-31 — the source qualifies.
+                if !src_present || !src_enabled || src_latched || src_team == 2 || b == 0 { continue; }
+                // :91 — the source's 1-second gate on +0x524 (the game compares in float [M
+                // 0x1763b8-0x176454]; FRAME_RATE_DIV = 1.0 [L 0x30d0d4] → 60.0).
+                if (frame as f32) < (attack_frame as f32) + 60.0 { continue; }
+                // :94-114 — the mission arms, both on the OBSERVER. 0700000c/0d: voice set +0xD8
+                // 5/6 while not talking → `NDrone2_SpeechSFXd(o, 0xd0, 0, 0, 0)` [M 0x17648c-0x1764cc
+                // — repeated per considered pair, before the accept chain]. 07000007: while the
+                // interrogate latch (DAT_0029aa86 — `party_loud`) is set the observer's sight cone
+                // widens to 20.0 / π — sticky, nothing un-widens it [M 0x1764e4-0x17650c].
+                if matches!(d.level, 0x0700_000c | 0x0700_000d) {
+                    let o = &mut self.list[oi];
+                    if o.voice_type.wrapping_sub(5) < 2 && !o.voice_busy() { o.talks.push((0xd0, false)); }
+                } else if d.level == 0x0700_0007 && self.party_loud {
+                    let o = &mut self.list[oi];
+                    o.sight_range = 20.0;                 // 0x41a00000 [M 0x1764f4-0x176508]
+                    o.half_fov = std::f32::consts::PI;    // 0x40490fdb [M 0x1764fc-0x17650c]
+                }
+                // :119-193 — the bit-accept chain against the source's +0x4FC, with the OBSERVER's
+                // props (+0x4D8 block [M 0x176520 `lw $a1, 0x4d8($s0)`]).
+                let accepts = {
+                    let o = &self.list[oi];
+                    b & 0x10 != 0
+                        || (b & 0x8 != 0 && (o.prop(d, 0x29) || (o.prop(d, 0x26) && b & 0x2 != 0 && o.prop(d, 0x27))))
+                        || (b & 0x2 != 0 && o.prop(d, 0x27))
+                        || (b & 0x4 != 0 && o.prop(d, 0x4f))
+                        || (b & 0x1 != 0 && o.prop(d, 0x28))
+                        || (b & 0x1_0000 != 0 && o.prop(d, 0x28) && b & 0x20_0000 != 0)
+                };
+                if !accepts { continue; }
+                // `DroneVision_DroneCanSeeDrone` 0x1760b0 — between the two drones' own objects
+                // (+0xC → obj+0x30 [M drone.md:168]): 2500.0 < sq-dist out (:45), < 2.0 always
+                // sees (:54), else the ±e4 half-FOV cone (e4 == 0 skips the angle :62) and the e8
+                // range (:71); then `NDrone2_CanSeeObject(o, src obj, 5, 0)` for the LOS (:80).
+                let (o, src) = (&self.list[oi], &self.list[si]);
+                let (dx, dy, dz) = (src.pos[0] - o.pos[0], src.pos[1] - o.pos[1], src.pos[2] - o.pos[2]);
+                let sq = dx * dx + dy * dy + dz * dz;
+                if 2500.0 < sq { continue; }
+                let dist = sq.sqrt();
+                let in_view = dist < 2.0 || ((o.half_fov == 0.0 || angle_difference(o.yaw, atan2_approx(dx, dz)).abs() <= o.half_fov) && dist <= o.sight_range);
+                if !in_view { continue; }
+                sight_passes += 1; // the cone pass is the counted return [M 0x176250:197-210, 0x1767d0:75]
+                if !d.world.line_of_sight(o.head(), src.head()) {
+                    if sight_passes > 4 { break 'pairs; }
+                    continue;
+                }
+                // ---- the effect [M 0x176250:199-208] — before the message, so a refused
+                // forced-attack still leaves the latch, the copy and the assist pointer.
+                {
+                    let o = &mut self.list[oi];
+                    o.alerted_by_drone = true;                          // +0x4F8 |= 0x20000 [:201]
+                    let mut copy = b << 16;                              // [:202]
+                    if d.level == 0x0700_0007 { copy |= b & 0xffff_0000; } // [:203-204 — the 07 high-bit retain]
+                    o.assist_src = Some(si);                             // +0x528 = source [:206]
+                    o.alert_bits |= copy;                                // +0x4FC |= [:207]
+                    // Drone_Message(own obj, 0x1f, 0, 0) [:208] — the DSTATE case-0x1f arm is
+                    // `DroneFunc_DoForcedAttack` [M Idle 0x15bf18:129-130 and the other unaware
+                    // DSTATEs]: its gate on 07000007 while the party latch (`party_loud`) is 0
+                    // lets only the bouncer mode 0x13 and the CivilianMission 0x16 walkers force-
+                    // attack [M 0x148c60:10-13]; the port folds the message into this send (its
+                    // intercept enters ATTACK — ReactToDroneAlertMsg routes the alert kinds to
+                    // 0x56 / SeenDroneShot 0xa0 → 0x56 [M 0x1437a0:263,368 + 0x173b78]).
+                    if !(d.level == 0x0700_0007 && !self.party_loud && !matches!(o.mode, 0x13 | 0x16)) {
+                        o.send(d, &mut self.rng, frame, msg::FORCED_ATTACK);
+                    }
+                }
+                if sight_passes > 4 { break 'pairs; }                    // FindAlertedDrones stops after the 5th [M 0x1767d0:77-79]
+            }
         }
         // `Drone_InitComms` after the vision pass: an enabled (`+0x4F8 & 0x100`, set by DefaultInit / Enable), living
         // (`& 0x600` clear) drone at alertness ≥ 1 within 30 units of Bond (not team 2) raises `switch_channels[0x97]`.
