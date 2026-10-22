@@ -4712,16 +4712,18 @@ mod brain_tests {
     #[test]
     fn brain_rest_weapon_anim_set() {
         use crate::mp::botweap::weapon_anim_set;
-        assert_eq!(weapon_anim_set(0x00), 0x18); // [M 0x12b140 case 0]
-        assert_eq!(weapon_anim_set(0x01), 0x16);
-        assert_eq!(weapon_anim_set(0x0C), 0x1A);
-        assert_eq!(weapon_anim_set(0x11), 0x15);
-        assert_eq!(weapon_anim_set(0x15), 0x14);
-        assert_eq!(weapon_anim_set(0x2B), 0x19);
-        assert_eq!(weapon_anim_set(0x52), 0x18);
-        // sister: 0x16/0x1A have no switch arm — the default 0x14 must catch a table typo
-        assert_eq!(weapon_anim_set(0x16), 0x14, "no arm for 0x16 → default [M 0x12b140]");
-        assert_eq!(weapon_anim_set(0x1A), 0x14, "no arm for 0x1A → default [M 0x12b140]");
+        // The switch index is w − 1 [M-dis 0x12b140-0x12b14c] (fix-849: the branch pinned raw ids).
+        assert_eq!(weapon_anim_set(0x01), 0x18, "weapon 1 = case 0 [M 0x12b140]");
+        assert_eq!(weapon_anim_set(0x02), 0x16);
+        assert_eq!(weapon_anim_set(0x0D), 0x1A);
+        assert_eq!(weapon_anim_set(0x12), 0x15);
+        assert_eq!(weapon_anim_set(0x16), 0x14);
+        assert_eq!(weapon_anim_set(0x2C), 0x19);
+        assert_eq!(weapon_anim_set(0x53), 0x18);
+        // sisters: index 0x16 / 0x1A have no arm → the default; weapon 0 (index −1) misses the table
+        assert_eq!(weapon_anim_set(0x17), 0x14, "index 0x16 has no arm → default");
+        assert_eq!(weapon_anim_set(0x1B), 0x14, "index 0x1A has no arm → default");
+        assert_eq!(weapon_anim_set(0x00), 0x14, "weapon 0 → index −1 → `sltiu 83` fails → default [M-dis 0x12b150]");
     }
 
     /// `BOT_handleOpponentHistory` 0x1257c0: the ring dedupes, weights, and the argmax sets

@@ -164,7 +164,10 @@ pub fn reload_anim_for_weapon(w: u8) -> bool {
 /// (`DroneWeap_ChangeWeapon` writes it to Drone+0xDA [M 0x12a028]). Unlisted ids fall to 0x14
 /// (the default arm), as do 0x16 and 0x1a — the switch has no arms for them.
 pub fn weapon_anim_set(w: u8) -> u8 {
-    match w {
+    // fix-849: the switch index is `(short)(w − 1)` with a `< 83` bound [M-dis 0x12b140-0x12b154:
+    // `lui v0,0xffff; sll a0,a0,16; addu; sra 16; sltiu v1,83`] — the arms below are INDICES
+    // (case 0 = weapon 1); weapon 0 (index −1) misses the table and takes the default.
+    match w.wrapping_sub(1) {
         0 | 0x33..=0x36 | 0x39..=0x3F | 0x44 | 0x51 | 0x52 => 0x18,
         0x01..=0x0B | 0x40 | 0x41 => 0x16,
         0x0C => 0x1A,
