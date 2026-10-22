@@ -7016,4 +7016,58 @@ mod headless_app_harness {
         h.frames(2);
         assert!(!h.app.scene.sim.as_ref().unwrap().auto_aim, "the option set Off turns it off");
     }
+
+    /// The release's real path for the Auto Aim option: boot → title → main menu → Edit Codename →
+    /// Default → Advanced → Auto Aim ▶ Off → Confirm → back to the main menu → Night Fire → The
+    /// Exchange through the briefing → the loaded level's sim has auto aim OFF. The option file
+    /// goes to a scratch config dir (Confirm saves it — never the user's %APPDATA% copy).
+    #[test]
+    fn auto_aim_off_in_the_advanced_menu_reaches_the_mission() {
+        let Some(iso) = std::env::var_os("NF_ISO") else { return; };
+        let iso = iso.to_string_lossy().to_string();
+        let dir = std::env::temp_dir().join(format!("nf-autoaim-walk-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::env::set_var("NF_CONFIG_DIR", &dir);
+        let mut h = HeadlessApp::boot(&iso);
+        assert!(h.pump(60.0, |a| a.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::Start && !fe.intro_playing)), "title");
+        h.key(KeyCode::Enter);
+        assert!(h.pump(10.0, |a| a.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::EstHero)), "intro run");
+        // The intro run: skip it only while it is still up (on a movie-less image the headless
+        // countdown ends it at once — an Enter then would pick Night Fire on Main).
+        h.frames(210);
+        if h.app.fe.as_ref().is_some_and(|fe| fe.intro_playing) { h.key(KeyCode::Enter); }
+        assert!(h.pump(120.0, |a| a.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::Main && !fe.intro_playing)), "main menu");
+        // Main row 2 = Edit Codename [menus_flow the_codenames_row_reaches_the_option_pages].
+        assert!(h.key_until_page(KeyCode::ArrowDown, 4.0, |fe| fe.cursor == 2), "cursor to Edit Codename");
+        assert!(h.key_until_page(KeyCode::Enter, 4.0, |fe| fe.page == menu::Page::CnSelect), "Edit Codename opens the codename list");
+        assert!(h.key_until_page(KeyCode::Enter, 4.0, |fe| fe.page == menu::Page::CnMenu), "Default opens its wheel");
+        assert!(h.key_until_page(KeyCode::ArrowDown, 4.0, |fe| fe.cursor == 3), "the wheel to Advanced (row 3)");
+        assert!(h.key_until_page(KeyCode::Enter, 4.0, |fe| fe.page == menu::Page::CnAdvanced), "Advanced opens");
+        let auto_aim = menu::ADV_ROWS[1].ctrl;
+        assert_eq!(h.app.fe.as_ref().unwrap().opt_value(auto_aim), 1, "Auto Aim starts On");
+        assert!(h.key_until_page(KeyCode::ArrowDown, 4.0, |fe| fe.cursor == 1), "cursor to Auto Aim");
+        assert!(h.key_until_page(KeyCode::ArrowRight, 4.0, |fe| fe.opt_value(auto_aim) == 0), "▶ sets Auto Aim Off");
+        assert!(h.key_until_page(KeyCode::Enter, 4.0, |fe| fe.page != menu::Page::CnAdvanced), "Confirm keeps the edit");
+        assert_eq!(h.app.fe.as_ref().unwrap().opt_value(auto_aim), 0, "the confirmed value is Off");
+        assert!(h.key_until_page(KeyCode::Escape, 6.0, |fe| fe.page == menu::Page::Main), "back out to the main menu");
+        assert!(h.key_until_page(KeyCode::ArrowUp, 4.0, |fe| fe.cursor == 0), "cursor to Night Fire");
+        let mut on_list = false;
+        for _ in 0..20 {
+            h.key(KeyCode::Enter);
+            h.frames(10);
+            if h.app.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::MissionSelect) { on_list = true; break; }
+        }
+        assert!(on_list, "the mission list (page {:?})", h.app.fe.as_ref().map(|fe| fe.page));
+        assert!(h.key_until_page(KeyCode::ArrowDown, 4.0, |fe| fe.cursor == 1), "The Exchange row");
+        assert!(h.key_until_page(KeyCode::Enter, 8.0, |fe| fe.flow.level_to_load == 0x0710_0005), "the pick");
+        let loaded = h.pump(90.0, |a| {
+            a.fe.is_none() && a.level_code == 0x0700_0005 && a.scene.sim.is_some() && a.async_load.is_none()
+        });
+        if !loaded { h.key(KeyCode::Enter); } // a movie-bearing image: skip the briefing
+        assert!(loaded || h.pump(90.0, |a| a.fe.is_none() && a.level_code == 0x0700_0005 && a.scene.sim.is_some() && a.async_load.is_none()),
+            "The Exchange loaded (level {:#x})", h.app.level_code);
+        h.frames(2);
+        assert!(!h.app.scene.sim.as_ref().unwrap().auto_aim, "the menu's Auto Aim Off reaches the mission's sim");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
