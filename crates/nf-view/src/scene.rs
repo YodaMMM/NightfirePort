@@ -8041,11 +8041,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < map.objects.len() { Some((mi, p.index as usize)) } else { None };
                             if let Some((om, oi)) = target {
                                 let obj = &level.maps[om].objects[oi];
-                                // level-03-interactables-3: the replay mirrors build_scoped's push
-                                // filter exactly — the breakable panes (placement 0x20) are excluded
-                                // from the static bake (world.rs; the Drones inject the intact ones),
-                                // so they push no ordinal here either.
-                                if obj.collision.is_some() && obj.flags & 0x1000 == 0 && p.flags & 0xff != 0x20 { v.push(cell_counter); }
+                                if obj.collision.is_some() && obj.flags & 0x1000 == 0 { v.push(cell_counter); }
                             }
                         }
                         cell_counter += 1;
