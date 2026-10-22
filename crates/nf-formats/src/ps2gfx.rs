@@ -33,6 +33,17 @@
 //!   `main` 0x109080); the port builds per-scene state fresh at `Renderer::new` and clears the
 //!   per-frame staging each frame.
 //!
+//! The SDK interrupt/DMA-mask glue around that layer (unported-misc-10, docs/systems/ps2-sdk-glue.md):
+//! - `EnableIntc` 0x23c518 — `main` 0x109080 enables INTC causes 2+5 (jals 0x10927c/0x109284 [M
+//!   scan]) for the VBlank/VIF1-driven frame loop; the port's fixed 60 Hz tick replaces
+//!   interrupt-driven timing.
+//! - `DIntr` 0x23fbb8 / `EIntr` 0x23fc00 — CPU interrupt mask/unmask around SDK entry points
+//!   (36/41 jal sites, all inside SDK libraries [M scan]; `sceSifInitRpc` 0x23dcc8 head runs
+//!   both [M decompile]); the port is a single-threaded deterministic Sim — no mask state.
+//! - `EnableDmac` 0x23c5e8 (jal 0x23d7c0 in `sceSifInitCmd` ← `sceSifInitRpc` ← `main`) /
+//!   `DisableDmac` 0x23c580 (jal 0x23d8b0 in `sceSifExitCmd` ← `RunNextModule` 0x1200fc) — the
+//!   SIF/VIF channel masks; the port has no DMA channels (direct uploads, direct batch execution).
+//!
 //! The packet is replayed through a small VIF1 → VU1-memory model (UNPACK with STCYCL, generation-tagged qwords).
 //! At every `MSCNT`/`MSCAL`/`MSCALF` the batch is read back from VU memory at the layout the doc describes (GIF tag at
 //! B, vertex k at B+1+3k / B+2+3k / B+3+3k, UV at B+0xC7+k), and every qword read must have been written since the

@@ -680,7 +680,8 @@ pub fn aux_movie_for(page_id: u32) -> u32 {
     match page_id {
         PAGE_MAIN => 0x0733_0048,
         PAGE_LANGUAGE | PAGE_CODENAME | PAGE_DIFFICULTY | PAGE_MISSION_SELECT | PAGE_DOSSIER | PAGE_RESULTS
-        | PAGE_CN_SELECT | PAGE_CN_MENU | PAGE_CN_ADVANCED | PAGE_CN_MP | PAGE_CN_AV | PAGE_CN_CONTROLS => 0x0735_0048,
+        | PAGE_CN_SELECT | PAGE_CN_MENU | PAGE_CN_ADVANCED | PAGE_CN_MP | PAGE_CN_AV | PAGE_CN_CONTROLS
+        | PAGE_NF_BONUS => 0x0735_0048, // 0x40000038's PAGE record aux 0x07350048 [D menu-def dump 2026-10-21]
         // mp-menu-flow: every MP page's PAGE record carries the same list backdrop (the menu-def
         // dump 2026-10-15: all 13 MP pages aux 0x07350048 [L]).
         PAGE_MP_JOIN | PAGE_MP_SCENARIO | PAGE_MP_MAP | PAGE_MP_SETUP | PAGE_MP_OPTIONS | PAGE_MP_RULES
@@ -1996,6 +1997,10 @@ pub struct BonusFields {
 // → `mcDelayThread` 0x2285a0 (jal at 0x228650, SetAlarm/sleep/wait) → `mcHearAlarm` 0x228578
 // (the alarm callback, registered via the immediate at 0x2285ac [M]) — is IOP thread glue this
 // flow machine replaces with plain polling of the save directory [M unported-misc-7].
+// IOP wake glue this machine replaces (unported-misc-10): `iWakeupThread` 0x23c698 is jal'd by
+// `mcHearAlarm` 0x228578 (the IOP mcman alarm the polling flow replaces — misc-7) and by
+// `_request_call` 0x23e2c0 (SIF cmd 0xa handler, registered by `sceSifInitRpc` 0x23dcc8 —
+// docs/systems/ps2-sdk-glue.md § boot); the port has no IOP threads to wake — the flow polls.
 
 /// The card-flow messages — `DAT_002462d4` in PS2_DoCardFlow 0x217bd8's switch [M :76-152].
 /// Only the ids the port's machine can reach are variants; `label`/`buttons` cover the table.
@@ -6862,11 +6867,13 @@ impl FrontEnd {
         self.mp_friendly_fire = 0;            // [M +0x198 = 0]
         self.mp_weapon_set = 0;               // [M +0x1B4 = 0]
         self.mp_radar = 1;                    // [M +0x1C4 = 1]
-        self.mp_player_mods = [0, 0];         // [M the quick start writes neither +0x1BC nor +0x1C8 — the boot values 0/1 persist]
-        self.mp_envmods[0] = 2;               // [M the quick start never writes +0x1C0 — the boot value 2 (Random) persists]
-        self.mp_envmods[1] = 0;
+        // The quick start's store list (disasm 0x20c72c-0x20c768, docs/systems/quick-game.md §2)
+        // writes ONLY +0x1A0/+0x19C/+0x1A4/+0x180/+0x198/+0x1C4/+0x1B4/+0x1CC/+0x190/+0x1D4/
+        // +0x18C/+0x1D0 — NOT +0x1B8/+0x1BC/+0x1C0/+0x1C8: whatever they hold persists. Boot
+        // leaves +0x1C8 = 1 (Location Damage ON) and +0x1C0 = 2 [M bootup 0x1c7e78:45,28], and a
+        // custom visit's Player/Enviro-Mods picks survive a later Quick Game [M the store list].
         self.mp_envmods[2] = 0;               // [M 0x20c748: +0x1D4 = 0]
-        self.mp_envmods[3] = 0;
+        self.mp_envmods[3] = 0;               // [M 0x20c758: +0x1D0 = 0]
         self.mp_envmods[4] = 2;               // [M 0x20c734: +0x1CC = 2 = Helicopters (Car_Create 0x1305b0:29-40 spawns choppers on 2)]
         // The map sample: `Rand_Random() % 7` over mp_level rows 0..6 — never Ravine [M
         // 0x20c76c-0x20c7b4]. Headless determinism: the shared RNG is not wired here, so the port
@@ -7463,7 +7470,12 @@ impl FrontEnd {
     pub fn mp_net_dial(&mut self) -> bool {
         self.mp_net_error = None;
         let addr = self.mp_net_addr.trim().to_string();
-        if !mp_net_addr_ok(&addr) && nf_net::p2p::JoinCode::decode(&addr).is_err() {
+        // Every form the join box accepts — IP:PORT, the 16-symbol join code, and the 4-character
+        // lobby code the public list and friends share — is `parse_join_target`'s, the same parse
+        // the session's dial runs. The old gate here (IP:PORT or the long code only) refused every
+        // 4-character code before it reached the lookup (user report 2026-10-21: the code and the
+        // listed lobby's Enter "do nothing").
+        if !mp_net_addr_ok(&addr) && nf_net::p2p::parse_join_target(&addr).is_err() {
             self.mp_net_error = Some(MpNetError::BadAddress);
             return false;
         }
@@ -9012,7 +9024,30 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         // 0x2d0, texture control 0x100001cf at (89,112,171×256), text list 0x100001d0 at
         // (268,94,284×292) [L the menu-def dump]), WINGAME is the movie page only, CHEATMEDAL
         // has no page data (nothing static to draw).
-        Page::NfBonus | Page::WinGame | Page::CheatMedal => {}
+        // The 007 Bonus page, drawn from its page data [D menu-def page 0x40000038, dumped
+        // 2026-10-21]: header (50,40) LBL 0x2c5; the reward picture 0x100001cf (89,112,171×256) —
+        // the tier-1 texture when that line stands [M P_NFBONUS 0x209670:22-26], else the static
+        // TEX 0x03000134 (uv 0,0 173×257 from msg 0x2d); the text list 0x100001d0 (268,94,284×292)
+        // — the composed tier text [M :22-41]; the focus box 0x10000165 (62,372,61×59, b=1); the
+        // hint (50,419) LBL 0x2d0; the stamp 0x10000224 at the forced (539,393) like the results
+        // page; the logo. Draw-handoffs row 2: PCSX2 look owed (the user saw no animation).
+        Page::NfBonus => {
+            page_header(&mut h, hfont, &bind(0x2c5));
+            let pic = fe.bonus.as_ref().and_then(|b| b.texture).unwrap_or(0x0300_0134);
+            quad640(&mut h, pic, 89.0, 112.0, 171.0, 256.0, [0.0, 0.0, 173.0, 257.0], gs(0x7f7f7f, 0xff));
+            if let Some(b) = fe.bonus.as_ref().filter(|b| b.has_text) {
+                let text = b.text_labels.iter().map(|&l| bind(l)).filter(|t| !t.trim().is_empty()).collect::<Vec<_>>().join("
+");
+                for (i, line) in wrap_px(&text, font, mx(284.0)).iter().take(17).enumerate() {
+                    h.text(Anchor::Centre, font, -2, line, mx(268.0), my(94.0 + 8.0 + i as f32 * 17.0), false, cream, true);
+                }
+            }
+            frame640(&mut h, 62.0, 372.0, 61.0, 59.0);
+            quad640(&mut h, 0x0300_014c, 539.0, 393.0, 255.0, 255.0, [0.0, 0.0, 256.0, 256.0], gs(0x7f7f7f, 0xff));
+            hint_bar(&mut h, font, &hint(0x2d0, "~A Continue"), 50.0, 419.0, cream);
+            logo_stamp(&mut h);
+        }
+        Page::WinGame | Page::CheatMedal => {}
     }
     // The port's message box over whatever page is up (the option-box plate the MP pages use).
     // The MP start checks' refusal [M C_SBMPOPTIONS 0x20e818:50-130]: the game's label, with a
@@ -9446,6 +9481,9 @@ pub fn mp_textures() -> &'static [u32] {
             // handler's msg-0x24 sends [M 0x212198:159-166]) and its placeholders [L page 0x40000033].
             .chain(MP_CHARACTERS_SMALL.iter().map(|r| r.0))
             .chain([0x0300_015du32, 0x0300_0156, 0x0300_016b])
+            // The 007 Bonus page's reward pictures (REWARD_TEXT's tier textures, msg 0x24 into
+            // 0x100001cf [M P_NFBONUS 0x209670:23]) — never loaded before, so the page drew no card.
+            .chain(nf_game::progress::REWARD_TEXT.iter().flat_map(|r| r.iter().map(|t| t.1)))
             .filter(|h| *h != 0 && !MENU_TEXTURES.contains(h)).collect();
         v.sort_unstable(); v.dedup(); v
     })

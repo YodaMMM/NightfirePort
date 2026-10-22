@@ -378,6 +378,11 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
         for (slot, bank, sbf) in std::mem::take(&mut scene.sound_spares) { driver.load_spare_bank(slot, bank, sbf); }
         if let Some((lut, bin)) = scene.streams.take() { driver.load_streams(lut, std::sync::Arc::new(bin)); }
         let output = nf_audio::Output::open();
+        // Diagnostic sink note (unported-misc-10): the game's printf output sinks into
+        // `deci2Putchar` 0x23cc90 — `_putchar` (OBJECT 0x2e7a58) swapped in by `scePrintf`
+        // 0x23d570, emitting the boot banner "NFSV = 0x%\n" from `PS2FreshBoot` 0x120ab0 [M
+        // chain in docs/systems/ps2-sdk-glue.md]. The port's equivalent is this eprintln!
+        // diagnostic path (no DECI2 console exists).
         if output.is_none() { eprintln!("audio: no output device; running silent"); }
         let music_files = scene.music_files.take().map(|(t, smf, ssd)| (t, smf, std::sync::Arc::new(ssd)));
         nf_audio::sfx::Sound { driver, output, captured: None, music_files, music: None, music_pending: Vec::new() }
@@ -2000,6 +2005,15 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
             "gadgets" => menu::Page::Gadgets,
             "weapons" => menu::Page::Weapons,
             "cnselect" => menu::Page::CnSelect,
+            // Render aid: the 007 Bonus page with every tier of 07000005's reward earned (the
+            // fields bonus_enter builds, all lines standing).
+            "nfbonus" => {
+                let i = nf_game::progress::REWARDS_TABLE.iter().position(|e| e.hash == 0x0700_0005).unwrap_or(0);
+                let lines = [0usize, 1, 2, 3].map(|t| { let (label, texture) = nf_game::progress::REWARD_TEXT[i][t]; menu::RewardLine { has: true, label, texture } });
+                let text_labels = [0usize, 3, 2, 1].iter().map(|&t| lines[t].label).collect();
+                fe.bonus = Some(menu::BonusFields { level: 0x0700_0005, lines, texture: Some(lines[0].texture), text_labels, has_text: true });
+                menu::Page::NfBonus
+            }
             "cnmenu" => { fe.cn_name = "Default".into(); menu::Page::CnMenu }
             "advanced" => menu::Page::CnAdvanced,
             "mpoptions" => menu::Page::CnMp,
@@ -5857,7 +5871,13 @@ impl ApplicationHandler for App {
                 let dt = self.last.elapsed().as_secs_f32().min(0.1);
                 self.last = std::time::Instant::now();
                 self.frame(dt);
-                self.draw_frame(dt);
+                // While a level loads, `frame` already drew and presented the loading screen
+                // (poll_async_load → draw_loading_screen) and returned early. The old inline body's
+                // `return` skipped the draw; since the frame/draw_frame split (7f14552b) the scene
+                // was drawn and presented right after it, so every redraw alternated loading screen /
+                // old scene hundreds of times a second (user report 2026-10-21: "loading levels is
+                // seizure inducing"). Skip the scene draw for the whole load.
+                if self.async_load.is_none() { self.draw_frame(dt); }
             }
             _ => {}
         }
