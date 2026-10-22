@@ -225,9 +225,12 @@ fn the_07000016_real_walk_reaches_the_kiko_death_button_and_the_gate_arms_on_the
             |sim| sim.drones.channels.on(0x90));
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x8d), "the gate is still armed at the press [D #616 latch]");
-        assert!(!pressed && !sim.drones.channels.on(0x90),
-            "the walked press is INHIBITED by the gate [M 0x1b02a8:22 — ch 0x8d on; no disc writer clears it]");
-        assert!(sim.drones.mission.status() != 6, "the mission cannot complete through the gated press");
+        // [S] unverified — NOT a game claim: the shipped game completes this mission, so something
+        // clears ch 0x8d (or never arms it) on the real route; the port has not found that writer
+        // (task 953, the "no writer on the disc" census). Logged, kept out of pass/fail, so the
+        // test does not pin the port's blocked finale as correct.
+        eprintln!("[S] walked press: pressed={pressed} ch90={} status={} — the gate 0x8d blocks it in the port (task 953)",
+            sim.drones.channels.on(0x90), sim.drones.mission.status());
     }
 
     // SISTER (the gate-off completion, the interactables reach): a fresh load never crosses #616,
