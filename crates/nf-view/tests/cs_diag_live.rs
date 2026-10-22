@@ -3,7 +3,7 @@ fn diag_02() {
     let Some(iso) = std::env::var("NF_ISO").ok() else { return };
     unsafe { std::env::set_var("NF_SILENT", "1"); }
     let mut scene = nf_view::load(&iso, "07000002.bin", false).expect("load");
-    let mut snd = nf_audio::sfx::Sound { driver: Default::default(), output: None, music_files: None, music: None, music_pending: Vec::new() };
+    let mut snd = nf_audio::sfx::Sound { driver: Default::default(), output: None, music_files: None, music: None, music_pending: Vec::new(), captured: None };
     if let Some((slot, bank, sbf)) = scene.sound_bank.take() { snd.driver.load_bank(slot, bank, sbf); }
     if let Some((lut, bin)) = scene.streams.take() { snd.driver.load_streams(lut, std::sync::Arc::new(bin)); }
     for t in 0..1500u32 {

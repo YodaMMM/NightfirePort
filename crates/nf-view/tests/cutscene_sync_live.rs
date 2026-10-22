@@ -20,6 +20,7 @@ fn bare_sound(scene: &mut nf_view::scene::Scene) -> nf_audio::sfx::Sound {
         music_files: None,
         music: None,
         music_pending: Vec::new(),
+        captured: None,
     };
     if let Some((slot, bank, sbf)) = scene.sound_bank.take() { snd.driver.load_bank(slot, bank, sbf); }
     if let Some((lut, bin)) = scene.streams.take() { snd.driver.load_streams(lut, std::sync::Arc::new(bin)); }

@@ -7159,6 +7159,7 @@ mod headless_app_harness {
         h.frames(2);
         assert!(!h.app.scene.sim.as_ref().unwrap().auto_aim, "the menu's Auto Aim Off reaches the mission's sim");
         let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // options-census: the windowed drain (App::drain_options) moves every wired row to its
     // consumer. Each block carries a flipped sister so a constant-pass cannot sneak in.

@@ -405,6 +405,7 @@ mod tests {
             placement: 0, pos: [0.0; 3], radius: 1.0, out, key_channels: [0xffff; 2],
             burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
             kind, code, scan_progress: 0, scan_solved: 0, scanning: false,
+            burn_a: 0xff, burn_b: 0xff, grace: 0,
         }
     }
 
