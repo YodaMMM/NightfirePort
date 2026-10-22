@@ -302,7 +302,8 @@ fn the_cheat_entry_s_confirm_creates_nothing() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The grid cursor walks CN_GRID and clamps at the edges (the port's packing [S]).
+/// The grid focus moves by `Menu_FindControl` 0x1f16d8's direction scoring over the page data's
+/// cell rects [M; D page 0x40000020] and stays put when nothing lies that way.
 #[test]
 fn the_grid_cursor_walks_and_clamps() {
     let mut fe = FrontEnd::new();
@@ -311,16 +312,24 @@ fn the_grid_cursor_walks_and_clamps() {
     fe.cn_move(-1, 0);
     assert_eq!(fe.cn_cursor_cell(), 1001, "◀ from ✓ lands on the space key");
     fe.cn_move(0, -1);
-    assert_eq!(fe.cn_cursor_cell(), 0x58, "▲ keeps the column: row S-Z's 6th cell is X");
+    // ▲ from space (290,323,60×16): the x-overlapping cells above are W (280,281) and X (320,281);
+    // the score 2|Δy| + 0.1|Δx| = 84 + 1 vs 84 + 3 picks W [M 0x1f16d8 dir 1].
+    assert_eq!(fe.cn_cursor_cell(), 0x57, "▲ from space lands on W");
     fe.cn_move(0, 1);
     assert_eq!(fe.cn_cursor_cell(), 1001, "▼ back to the special row's space key");
-    fe.cn_move(0, 1); // already the bottom row — clamped
+    // ▼ from space wraps to the farthest x-overlapping cell above: '4' (280,161), −323 vs '5's −321
+    // [M 0x1f16d8 dir 2, the back list].
+    fe.cn_move(0, 1);
+    assert_eq!(fe.cn_cursor_cell(), 0x34, "▼ from the bottom row wraps to the top");
+    fe.cn_move(0, -1);
+    assert_eq!(fe.cn_cursor_cell(), 1001, "▲ from the top row wraps back to space");
     fe.cn_move(1, 0);
+    assert_eq!(fe.cn_cursor_cell(), 1002, "▶ lands on ✓");
+    // ▶ from ✓ wraps to ← (the farthest y-overlapping cell to the left, |dy| − dx = −196) [M dir 8].
     fe.cn_move(1, 0);
-    assert_eq!(fe.cn_cursor_cell(), 1002, "▶▶ lands on ✓; the bottom-right clamp holds");
-    fe.cn_move(1, 0); // already the last column — clamped
-    fe.cn_move(0, 1); // already the last row — clamped
-    assert_eq!(fe.cn_cursor_cell(), 1002, "sister: the clamp kept the ✓ focused");
+    assert_eq!(fe.cn_cursor_cell(), 1000, "▶ from ✓ wraps to ←");
+    fe.cn_move(-1, 0);
+    assert_eq!(fe.cn_cursor_cell(), 1002, "sister: ◀ from ← wraps back to ✓");
     // Confirm presses the focused cell — without a card the accept refuses (NoCard) [M the
     // game's save goes through the card flow; the port's create_codename refuses without one].
     assert!(!fe.action(Action::Confirm));

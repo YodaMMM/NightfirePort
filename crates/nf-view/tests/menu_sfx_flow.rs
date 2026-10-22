@@ -153,26 +153,28 @@ fn screen_adjust_selects_nothing() {
     assert!(drain(&mut fe).is_empty(), "no select blip on the adjust bars");
 }
 
-/// The letter grid's focus tick fires only when the cell changes [M Page_Update sounds on a
-/// focus change; a clamped edge move keeps the cell]. The SECRET_GRID arms drive it through
-/// `action()`; `cn_move` (the profile-name grid) through the direct path.
+/// The letter grid's focus tick fires on every focus change [M Page_Update sounds on a focus
+/// change]. The grid's moves are `Menu_FindControl` 0x1f16d8's scoring over the cell rects, which
+/// WRAPS at the edges (the opposite-direction candidate list), so an edge move still changes the
+/// cell. The SECRET_GRID arms drive it through `action()`; `cn_move` through the direct path.
 #[test]
 fn grid_moves_tick_only_on_change() {
     let mut fe = FrontEnd::new();
     drain(&mut fe);
     fe.page = menu::Page::CnName;
     fe.secret.cursor = 0;
-    // Sister: the top rows' Up is refused (the grid walks rows of 8) — no tick.
-    assert!(!fe.action(Action::Up), "the top row's Up is refused");
-    assert!(drain(&mut fe).is_empty(), "a refused grid move emits nothing");
-    assert!(fe.action(Action::Right), "the cell moves right");
+    // ▲ from '0' (120,161) wraps to the farthest x-overlapping cell below: K (120,241) — the wrap
+    // score dy2·2 = −96 beats A's −16 [M 0x1f16d8 dir 1, the back list].
+    assert!(fe.action(Action::Up), "the top row's Up wraps");
+    assert_eq!(fe.secret.cursor, 20, "the wrap lands on K");
     assert_eq!(drain(&mut fe), vec![MenuSfx { sound: MENU_SOUND_FOCUS, id: SFX_MENU_TICK }],
         "the grid's focus tick is MENU_SOUND 7 → 0x1da");
-    // The cn_move path: a clamped edge move keeps the cell and stays silent.
-    fe.cn_cell = menu::FrontEnd::CN_GRID[0][0];
-    fe.cn_move(0, -1);
-    assert!(drain(&mut fe).is_empty(), "the clamped move kept the cell");
+    assert!(fe.action(Action::Right), "the cell moves right");
+    assert_eq!(drain(&mut fe), vec![MenuSfx { sound: MENU_SOUND_FOCUS, id: SFX_MENU_TICK }]);
+    // The cn_move path ticks the same way.
+    fe.cn_cell = 0x30; // '0', the top-left cell
     fe.cn_move(1, 0);
+    assert_eq!(fe.cn_cell, 0x31);
     assert_eq!(drain(&mut fe), vec![MenuSfx { sound: MENU_SOUND_FOCUS, id: SFX_MENU_TICK }],
         "the profile grid's tick is the same MENU_SOUND 7 → 0x1da");
 }
