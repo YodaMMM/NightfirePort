@@ -6273,6 +6273,11 @@ pub fn run() -> Result<()> {
                 // Render aid (health-pane-fade): `NF_PANE_FADE=1` turns the pane-fade option on
                 // (`decay_gate`, PlayerSetting+0xB) from tick 1, so BL+0x8BC decays and the pane fades.
                 if t == 1 && std::env::var_os("NF_PANE_FADE").is_some() { sim.drones.decay_gate = true; }
+                // Render aid (bond-moment-flash): `NF_MOMENT_AT=t` marks Bond moment 0x65 done on tick t
+                // (the BondMoments entry PlrStat_DoneBondMoment sets), so the HUD's 007 flash runs.
+                if std::env::var("NF_MOMENT_AT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(t) {
+                    sim.drones.progress.bond_moments[0] = 1;
+                }
                 // `NF_BREAK_AT=t:i`: breakable #i is killed on tick t through `Breaks::kill` (the shot's
                 // kill path) with a ray from Bond's head to the box centre.
                 if let Some((bt, bi)) = std::env::var("NF_BREAK_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<usize>().ok()?)))) {
@@ -7131,6 +7136,27 @@ mod headless_app_harness {
         h.frames(1);
         assert!(h.app.scene.sim.as_ref().unwrap().drones.list.iter().all(|dr| !dr.bond_alive),
             "a dead Bond leaves no opponent [M 0x1424e0:110-118]");
+    }
+
+    // bond-moment-flash (user report U4): a NEW Bond moment sets BL+0x948 = 200
+    // [M PlrStat_DoneBondMoment 0x199448:23-25]; the health pane takes 1 per frame while >= 1
+    // [M HUD_UpdateHealthPane 0x19b9c8:258-260]. Sister: a moment already done when the
+    // level starts never flashes.
+    #[test]
+    fn a_new_bond_moment_flashes_the_007_for_200_frames() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        h.app.scene.sim.as_mut().unwrap().drones.progress.bond_moments[1] = 1; // done before the first tick
+        h.frames(3);
+        assert_eq!(h.app.scene.sim.as_ref().unwrap().hud.bond_moment_flash, 0, "a moment done at load does not flash");
+        h.app.scene.sim.as_mut().unwrap().drones.progress.bond_moments[0] = 1;
+        h.frames(1);
+        let f0 = h.app.scene.sim.as_ref().unwrap().hud.bond_moment_flash;
+        assert_eq!(f0, 200, "the new moment sets 200");
+        h.frames(100);
+        assert_eq!(h.app.scene.sim.as_ref().unwrap().hud.bond_moment_flash, 100, "-1 per frame");
+        h.frames(150);
+        assert_eq!(h.app.scene.sim.as_ref().unwrap().hud.bond_moment_flash, 0, "floored at 0");
     }
 
     /// The release's real path for the Auto Aim option: boot → title → main menu → Edit Codename →
