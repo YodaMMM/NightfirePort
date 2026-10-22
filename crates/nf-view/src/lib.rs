@@ -6173,6 +6173,11 @@ pub fn run() -> Result<()> {
             let (fwd, turn) = (range("NF_FWD"), range("NF_TURN"));
             for t in 1..=time as u32 {
                 if kill_at == Some(t) { let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng); h.pain_generic(r, 500.0, 1, 0x0700_0005, 0); }
+                // Render aid (copter-script-draw): `NF_CH_AT=t:ch` sets switch channel `ch` on tick t
+                // (the headless counterpart of the dev `--set-channel`).
+                if let Some((ct, cc)) = std::env::var("NF_CH_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))) {
+                    if ct == t { let f = sim.drones.frame; sim.drones.channels.set(cc, 1, f); }
+                }
                 // `NF_BREAK_AT=t:i`: breakable #i is killed on tick t through `Breaks::kill` (the shot's
                 // kill path) with a ray from Bond's head to the box centre.
                 if let Some((bt, bi)) = std::env::var("NF_BREAK_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<usize>().ok()?)))) {
