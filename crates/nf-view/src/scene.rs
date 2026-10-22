@@ -6733,11 +6733,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mp_anim_sets = drones.and_then(|d| d.mp_anims.as_ref()).map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets });
         if let (Some(mp_set), Some(d)) = (mp, drones) {
             if let (Some(skins), Some(anim_sets)) = (d.mp_skins.as_ref(), d.mp_anims.as_ref()) {
-                // mp-16-slots: humans 0..h, bots right after them (h..h+b), up to 16 [S].
+                // mp-16-slots: humans 0..h-1, bots at the game's FIXED base 4 [M MP_Start
+                // 0x183a50:117-128 (the humans' loop), :139 `iVar4 = uVar9 + 4` (the bots')] —
+                // with h < 4 the slots h..3 sit EMPTY exactly like the game's, and the game
+                // clamps bots to 4 [0x183a50:133-135]; the port's 16-slot count is the
+                // documented extension [S mp-16-slots], the bots follow the humans only past
+                // 4 humans (base = max(h, 4), the same rule `MpMatch::create_bots` runs).
                 let humans = (mp_set.human_count as usize).clamp(1, nf_game::mp::MP_MAX_SLOTS);
-                let bots = (mp_set.bot_count as usize).min(nf_game::mp::MP_MAX_SLOTS - humans);
+                let base = humans.max(4);
+                let bots = (mp_set.bot_count as usize).min(nf_game::mp::MP_MAX_SLOTS - base);
                 let mut slot_ids: Vec<usize> = (0..humans).collect();
-                slot_ids.extend(humans..humans + bots);
+                slot_ids.extend(base..base + bots);
                 for slot in slot_ids {
                     let char_idx = mp_set.players[slot].skin as usize;
                     let Some(entry) = skins.entries.get(char_idx) else {
@@ -9834,9 +9840,11 @@ impl Sim {
                 };
             }
             // The bots (positions snapshotted this tick — the brain's own row is skipped by
-            // index). Their slots follow the humans [S mp-16-slots; the game's base was 4].
-            for (i, b) in m.bots.iter().enumerate() {
-                let slot = m.settings.human_count as usize + i;
+            // index). Their slots are the bots' own — the game's FIXED base 4 [M MP_Start
+            // 0x183a50:139], which `MpMatch::create_bots` assigns; reading them back keeps the
+            // draw and the brains on one layout.
+            for b in m.bots.iter() {
+                let slot = b.slot;
                 if slot >= nf_net::MAX_AGENTS { continue; }
                 others[slot] = nf_game::mp::bots::OtherPlayer {
                     pos: b.brain.pos,
@@ -10157,9 +10165,11 @@ impl Sim {
                     let mut brain = nf_game::mp::bots::BotBrain::bot_init(&rec, slot as u8, pos, yaw);
                     m.arm_bot(&mut brain);
                     m.bots[i].brain = brain;
-                    // mp-16-slots: the bot's index is its list position (the game's slot − 4 wraps
-                    // once bots follow the humans).
-                    m.bots[i].brain.vars.bot_index = i as i16;
+                    // mp-16-slots: the bot vars index is the game's slot−4 identity [M
+                    // BOT_init 0x1249e8:67 `iVar2 = (iVar13 + -4) * 0x780`] — with the base-4
+                    // layout that equals the list position, past 4 humans it keeps the game's
+                    // identity instead.
+                    m.bots[i].brain.vars.bot_index = (m.bots[i].slot - 4) as i16;
                     m.bots[i].health = m.bots[i].max_health;
                     m.bots[i].dead = false;
                     m.bots[i].respawns += 1;

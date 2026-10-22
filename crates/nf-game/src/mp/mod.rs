@@ -90,16 +90,23 @@ pub const MP_SKINS: [u32; 29] = [
 /// The port's MP slot count: 16 participants, any human/bot mix [S
 /// mp-16-slots — the user's extension of the game's 8 records (humans 0..3 +
 /// bots 4..7 [M MP_Start 0x183a50]; every per-slot rule stays the game's,
-/// only the counts grow). Humans occupy slots 0..human_count-1, the bots
-/// follow [S].
+/// only the counts grow). Humans occupy slots 0..h-1; the bots sit at the
+/// game's FIXED base 4 [M MP_Start 0x183a50:139] — slots h..3 stay empty when
+/// h < 4 — and follow the humans only once the port's own extension puts more
+/// than 4 humans in the match (base = max(h, 4)).
 pub const MP_MAX_SLOTS: usize = 16;
 
 /// The body skin for one slot of these settings (0 = the slot is empty). The
-/// slot layout is the port's: humans 0..human_count-1, bots follow [S
-/// mp-16-slots; the game's fixed split was humans < 4, bots 4..8].
+/// slot layout is the game's: humans 0..h-1, bots at the FIXED base 4 [M
+/// MP_Start 0x183a50:117-128 (the humans' loop indexes slots 0..), :139
+/// `iVar4 = uVar9 + 4` (the bots')] — with h < 4 the slots h..3 sit EMPTY
+/// exactly like the game's. Only the port's own >4-human extension
+/// [S mp-16-slots] lets the bots follow the humans (base = max(h, 4)).
 pub fn slot_skin(s: &MpSettings, slot: usize) -> u32 {
     let h = s.human_count as usize;
-    let used = slot < h || slot.saturating_sub(h) < s.bot_count as usize;
+    let base = h.max(4);
+    // (slot >= base, not saturating_sub: with h < 4 the gap slots h..3 must read empty.)
+    let used = slot < h || (slot >= base && slot - base < s.bot_count as usize);
     if !used || slot >= s.players.len() { return 0; }
     MP_SKINS.get(s.players[slot].skin as usize).copied().unwrap_or(MP_SKINS[0])
 }
@@ -533,10 +540,13 @@ pub struct MpMatch {
     /// re-keys roles onto a bot's freshly-created obj at `BOT_respawn` 0x124e38:80; the port's
     /// slot-keyed roles survive respawn [M].
     pub assassin_target: Option<usize>,
-    /// The bots (slots human_count..human_count+bot_count — the game's order, its fixed base 4
-    /// extended to follow the humans [S mp-16-slots; the game's `MP_Start` 0x183a50:134-160 creates
-    /// one bot per enabled `MPBOTS` record — `BOT_init(slot, spawn pos, …, 0x2deeaa + i*0x12, 0)` —
-    /// after every human's `Player_Init`, in slot order [M]). mp-bots-in-match: the entities the
+    /// The bots (slots max(human_count, 4)..+bot_count — the game's FIXED base
+    /// 4 [M 0x183a50:139 `iVar4 = uVar9 + 4`], kept for every h <= 4 match;
+    /// the "follow the humans" shape only applies past 4 humans, which the
+    /// game's 8-record table never had [S mp-16-slots]. The game's
+    /// `MP_Start` 0x183a50:134-160 creates one bot per enabled `MPBOTS`
+    /// record — `BOT_init(slot, spawn pos, …, 0x2deeaa + i*0x12, 0)` — after
+    /// every human's `Player_Init`, in slot order [M]). mp-bots-in-match: the entities the
     /// sim drives (the ported `BotBrain` = the game's BOT_update family); creation is the caller's
     /// [`MpMatch::create_bots`] right after the humans' spawn picks, like the game's order.
     pub bots: Vec<MpBot>,
@@ -561,8 +571,9 @@ pub struct MpMatch {
 /// reads. The game's bot is a drone-classed obj with a player slot (0x2a499c + slot·0x30); the
 /// port carries the slot state in `MpGame::slots[slot]` and the AI in `brain`.
 pub struct MpBot {
-    /// The player slot (the game: `4 + i` [M 0x183a50:138]; the port: `human_count + i` [S
-    /// mp-16-slots]).
+    /// The player slot (the game: `4 + i`, the fixed base [M 0x183a50:138-139]; the port:
+    /// `max(human_count, 4) + i` — the game's base whenever the humans fit the game's table,
+    /// following them only in the port's >4-human extension [S mp-16-slots]).
     pub slot: usize,
     /// The bot's team word (`MPSettings + slot·0x30 + 0x20` = the record's +0x0F byte) [M 0x183a50:143-145].
     pub team: u16,
@@ -628,9 +639,10 @@ impl MpMatch {
     }
 
     /// The bots' half of `MP_Start` 0x183a50:134-160: the count from the prepared records
-    /// (clamped ≤ 4 [M 0x183a50:138-140] — the port clamps to `MP_MAX_SLOTS` minus the humans
-    /// [S mp-16-slots]), then per bot — the slot `human_count + i` (the game's `4 + i` with the
-    /// base extended [S mp-16-slots]), the team byte from the record's +0x0F into
+    /// (the game clamps it ≤ 4 [M 0x183a50:133-135] — the port clamps to `MP_MAX_SLOTS` minus
+    /// the bot base [S mp-16-slots]), then per bot — the slot `max(human_count, 4) + i` (the game's FIXED
+    /// base-4 layout `4 + i` [M 0x183a50:139]; slots h..3 sit empty when h < 4, exactly the
+    /// game's), the team byte from the record's +0x0F into
     /// `MPSettings + slot·0x30 + 0x20` [M 0x183a50:143-145], a spawn point pick for that team
     /// (`MP_GetSpawnPoint(team, 0)` [M 0x183a50:147-148]) and `BOT_init(slot, pos, …, record, 0)`
     /// [M 0x183a50:156-160]. The port: the brains init from the enabled records in order — the
@@ -665,9 +677,15 @@ impl MpMatch {
     fn create_bots_inner(&mut self, rng: &mut Rng) {
         use crate::mp::bots::{BotRecord, INITIAL_BOT_RECORDS};
         let humans = self.settings.human_count as usize;
+        // mp-16-slots: the bots' base is the game's FIXED 4 [M 0x183a50:139],
+        // so the count clamps against the base, not the humans (2 humans + 14
+        // bots now fills slots 4..15 = 12 bots — slots 2-3 stay empty like the
+        // game's). The game clamps bots to 4 [M 0x183a50:133-135]; the port's
+        // 16-slot count growth is the documented extension [S mp-16-slots].
+        let base = humans.max(4);
         let count = (self.settings.bot_count as usize)
-            .min(crate::mp::MP_MAX_SLOTS.saturating_sub(humans))
-            .min(self.settings.players.len().saturating_sub(humans));
+            .min(crate::mp::MP_MAX_SLOTS.saturating_sub(base))
+            .min(self.settings.players.len().saturating_sub(base));
         if count == 0 {
             return;
         }
@@ -683,7 +701,7 @@ impl MpMatch {
                 .unwrap_or_else(|| INITIAL_BOT_RECORDS[i % INITIAL_BOT_RECORDS.len()]))
             .collect();
         for (i, rec) in records.iter().enumerate() {
-            let slot = humans + i;
+            let slot = base + i; // the game's `4 + i` [M 0x183a50:139]; follows the humans only past 4 humans (the port's extension)
             // +0x0F, the team byte [M 0x183a50:143-145]. mp-bot-objectives: the port's records
             // are the disc's INITIAL ones (team 0) — the menu's per-bot team (the bot setup's
             // record +0x0F) reaches the match as the slot's settings team word, so a team game
