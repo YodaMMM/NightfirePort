@@ -158,8 +158,8 @@ pub fn to_player_input(i: &nf_net::Input) -> player::Input {
         lift: 0.0,
         stabilise: false,
         // options-census: not net-encoded (the wire has no mode lane); the drain sets the
-        // real value for the local player each tick, the game default for the remote arm.
-        crouch_toggle: true,
+        // real value for the local player each tick, the game default (Toggle) for the remote arm.
+        crouch_hold: false,
         mode_switch: i.mode_switch,
         weapon_cycle: i.weapon_cycle,
         gadget_cycle: i.gadget_cycle,

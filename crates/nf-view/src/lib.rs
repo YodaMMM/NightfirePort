@@ -2493,6 +2493,11 @@ struct App {
     /// options-census: the Advanced page's Crouch row (0x1000_0125) — Toggle (true, the game's
     /// default [M Input_Init 0x17edd8]) or Hold; feeds the sim's stand branch [M 0x1924c0:84-105].
     crouch_toggle_opt: bool,
+    /// fix-909c: the last option values the front end held (the game's profile globals outlive
+    /// the menus [M PlayerSetting 0x2a38c8 is read during play]). The front end is closed during
+    /// play (`fe` None), so the drain reads this copy then — without it every row fell back to
+    /// its default on the next level load and Auto Aim snapped back to the mirror.
+    opts_seen: Option<std::collections::HashMap<u32, i32>>,
     /// net-consolidate: the ONE session layer (nf-net) while an online match runs (`--net-host` /
     /// `--net-join`, or adopted from the lobby pages' `fe.mp_session` when their match starts).
     /// None = local play, no session, no gate.
@@ -4640,7 +4645,7 @@ impl App {
                                     } else {
                                         self.keys.contains(&KeyCode::KeyC) || self.keys.contains(&KeyCode::ControlLeft)
                                     },
-                                    crouch_toggle: self.crouch_toggle_opt,
+                                    crouch_hold: !self.crouch_toggle_opt,
                                     aiming: self.aiming,
                                     weapon_cycle: std::mem::take(&mut self.weapon_cycle),
                                     gadget_cycle: std::mem::take(&mut self.gadget_cycle),
@@ -5600,7 +5605,7 @@ impl App {
                     (KeyCode::F3, ElementState::Pressed) if dbg => self.opts.reinforcements = !self.opts.reinforcements,
                     (KeyCode::KeyF, ElementState::Pressed) if dbg => self.opts.firing = !self.opts.firing,
                     (KeyCode::KeyN, ElementState::Pressed) if dbg => { let on = !self.noclip; self.set_noclip(on); }
-                    (KeyCode::KeyT, ElementState::Pressed) if dbg => { self.auto_aim_opt = !self.auto_aim_opt; if let Some(fe) = self.fe.as_mut() { fe.opts.insert(0x1000_011b, self.auto_aim_opt as i32); } },
+                    (KeyCode::KeyT, ElementState::Pressed) if dbg => { self.auto_aim_opt = !self.auto_aim_opt; if let Some(fe) = self.fe.as_mut() { fe.opts.insert(0x1000_011b, self.auto_aim_opt as i32); } if let Some(o) = self.opts_seen.as_mut() { o.insert(0x1000_011b, self.auto_aim_opt as i32); } },
                     // Weapon switching: number keys 1–9 select directly, Q = prev, E (when not use) = next.
                     // The mapping: 1 = P2K (weapon 2), 2 = SG5 Commando (0x16), 3 = sniper (0x24), etc. The exact
                     // slot mapping follows the game's weapon order (selectable weapons with `weapon_data+0x04 == 1`).
@@ -5704,6 +5709,7 @@ impl App {
             auto_aim_opt: true,
             look_inverted: false,
             crouch_toggle_opt: true,
+            opts_seen: None,
             level_code: 0,
             fe_music_page: None,
             menu_handle: 0,
@@ -5942,14 +5948,17 @@ impl App {
     /// the game [M P_CNAVOPTIONS_Handler 0x214818:72-81] — the per-frame apply is the same net
     /// effect through the persisted profile.
     fn drain_options(&mut self) {
-        let Some(fe) = self.fe.as_ref() else {
-            // The fe-less paths (the bare/mission harness, dev panels) keep the Auto Aim
-            // mirror — the dev T key and tests write it directly (the pre-census drain's
-            // only line). The windowed app always has a front end.
+        // fix-909c: refresh the copy while the front end is up; read the copy while it is closed
+        // (play). A run that never had a front end (the command-line mission harness) keeps the
+        // Auto Aim mirror only — the dev T key and tests write it directly.
+        if let Some(fe) = self.fe.as_ref() {
+            if self.opts_seen.as_ref() != Some(&fe.opts) { self.opts_seen = Some(fe.opts.clone()); }
+        }
+        let Some(opts) = self.opts_seen.clone() else {
             if let Some(sim) = self.scene.sim.as_mut() { sim.auto_aim = self.auto_aim_opt; }
             return;
         };
-        let ov = |c: u32| fe.opt_value(c);
+        let ov = |c: u32| opts.get(&c).copied().unwrap_or(0);
         // The AV volume rows reach the sound layer [M LS_LoadGlobalSettings 0x1cdbc8:69-70's
         // SFXMusicSetVolume/SFXSetVolume — apply_av_volumes is the boot arm of the same].
         if let Some(s) = self.sound.as_mut() {
@@ -7180,6 +7189,33 @@ mod headless_app_harness {
         assert!(!sim.drones.crouch_toggle, "Crouch Hold [M Player_SSCrouch 0x1924c0:84-105]");
     }
 
+    // fix-909c: the front end is closed during play (`fe` None); the options must hold from the
+    // last-seen copy — a new level's fresh sim starts at the defaults and the drain re-applies
+    // the player's rows. Sister: a run that never had a front end keeps the Auto Aim mirror.
+    #[test]
+    fn options_hold_while_the_front_end_is_closed() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        h.app.drain_options();
+        assert!(h.app.scene.sim.as_ref().unwrap().auto_aim, "sister: no front end ever — the mirror (On)");
+        let mut fe = menu::FrontEnd::new();
+        fe.opts = menu::default_opts();
+        fe.opts.insert(0x1000_011b, 0); // Auto Aim Off
+        fe.opts.insert(0x1000_0124, 0); // Crosshairs Off
+        h.app.fe = Some(fe);
+        h.app.drain_options();
+        h.app.fe = None; // play: the front end closes
+        {   // a fresh level's sim starts at the defaults
+            let sim = h.app.scene.sim.as_mut().unwrap();
+            sim.auto_aim = true;
+            sim.drones.crosshair = true;
+        }
+        h.app.drain_options();
+        let sim = h.app.scene.sim.as_ref().unwrap();
+        assert!(!sim.auto_aim, "Auto Aim Off holds with the front end closed");
+        assert!(!sim.drones.crosshair, "Crosshairs Off holds with the front end closed");
+    }
+
     // options-census: the auto-aim pair — the SP row in a single-player match, the MP row in an
     // MP one [M Player_AutoAim 0x1a7c98:39-45 picks DAT_002a38c9 vs DAT_002a38ca on
     // MPSettings+0x180; the port's MP detector is [S], see the drain's comment].
@@ -7225,7 +7261,7 @@ mod headless_app_harness {
     fn the_crouch_option_picks_the_stand_condition() {
         let Ok(iso) = std::env::var("NF_ISO") else { return };
         let mut h = HeadlessApp::mission(&iso, "07000005.bin");
-        let inp = |crouch: bool, toggle: bool| nf_game::player::Input { crouch, crouch_toggle: toggle, ..Default::default() };
+        let inp = |crouch: bool, toggle: bool| nf_game::player::Input { crouch, crouch_hold: !toggle, ..Default::default() };
         let sim = h.app.scene.sim.as_mut().unwrap();
         sim.drones.crouch_toggle = true;
         sim.step_bond(inp(true, true), false, false, false);
