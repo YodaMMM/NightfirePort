@@ -63,6 +63,7 @@ fn rigid_content(scene: &nf_view::scene::Scene, vm: usize) -> Vec<(usize, [[f32;
         a.character as usize == vm
             && a.flash.is_none() && a.tracer.is_none() && a.projectile.is_none()
             && !a.dropped && a.script.is_none() && a.aims_light.is_none() && a.gas.is_none() && a.effect.is_none()
+            && !a.swap_piece
     }).map(|a| (a.bone, a.local)).collect();
     v.sort_by_key(|(b, _)| *b);
     v
@@ -95,7 +96,13 @@ fn the_silenced_p2k_draws_the_suppressor_mesh_once() {
     assert_eq!(bare.iter().filter(|&&(b, _)| b == 43).count(), 0,
         "no bone-43 attachment on the bare twin's view model (the game hides the weapon-slot objects [M 0x1a5460])");
     assert_eq!(silenced.iter().filter(|&&(b, _)| b == 43).count(), 0,
-        "no bone-43 attachment on the silenced twin's view model (the extra copy doubled the additive sheen)");
+        "no always-drawn bone-43 attachment on the silenced twin's view model (the extra copy doubled the additive sheen)");
+    // The bone-43 copy survives ONLY as the swap piece: the game clears datum 0 in state 8 [M
+    // 0x1a5460:103-104] and `View_SetDrawInNoViews` there hides the weapon-SLOT objects
+    // (BL+0x7ec..0x86c [M :87-98]), not the fp skin's extras — so the screw-on shows the skin's own
+    // suppressor piece (user report 2026-10-21: invisible until the attach finished).
+    let swap = scene.attachments.iter().filter(|a| a.character as usize == vm3 && a.swap_piece && a.bone == 43).count();
+    assert_eq!(swap, 1, "the silenced twin keeps exactly one bone-43 swap piece");
 
     // The datum-0 entry: on the silenced twin only, at the datum's bone with the datum's q/t [M
     // AnimDatumSetEntity(vm, 0, +0x7C) 0x1a5460:107 → AnimObjectDraw's QuatTransToMat].
