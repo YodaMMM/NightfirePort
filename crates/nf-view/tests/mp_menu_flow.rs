@@ -232,35 +232,86 @@ fn start_checks_refuse_single_player() {
 }
 
 #[test]
-fn quick_game_lands_on_confirm_with_three_bots() {
+fn quick_game_starts_the_games_fixed_match() {
     let mut fe = FrontEnd::new();
     enter_mp(&mut fe);
     join_agent1(&mut fe);
-    // Quick Game is row 0 — straight to the confirm page [M C_SBMPSCEN 0x20c600:48-145]. The
-    // arena is the game's Rand_Random() % 7 sample over mp_level rows 0..6 [M 0x20c600:62-63];
-    // the port takes row 0 (Skyrail) for headless determinism [S — see mp_quick_start].
+    // Quick Game is row 0 — the fixed quick-start config, straight to the confirm page [M
+    // C_SBMPSCEN 0x20c600:48-145 + disasm 0x20c72c-0x20c868, docs/systems/quick-game.md §2].
+    // The arena is the game's Rand_Random() % 7 sample over mp_level rows 0..6 [M 0x20c75c-0x20c7b4];
+    // the port takes row 0 (Skyrail) for headless determinism [S — quick-game.md §3].
     fe.mp_scenario_row = 0;
     assert!(fe.action(Action::Confirm));
     assert_eq!(fe.page, Page::MpConfirm, "Quick Game skips the setup pages [M → 0x40000049]");
-    assert_eq!(fe.mp_scenario, 1, "the quick start forces Deathmatch [M +0x1A4 = 1]");
-    assert_eq!(fe.mp_time_limit, 10);
-    assert_eq!(fe.mp_frag_limit, 10);
-    assert_eq!(fe.mp_bot_count(), 3, "the quick start enables Drake/Kiko/Rook");
-    assert_eq!(fe.mp_bots[0].character, 1);
-    assert_eq!(fe.mp_bots[1].character, 3);
-    assert_eq!(fe.mp_bots[2].character, 2);
-    assert!(fe.mp_bots.iter().take(3).all(|b| !b.team_mi6), "all three are Phoenix");
-    // Sister: the confirm's handover — the match settings mirror P_MPCONFIRM's writes and the
-    // level request rides the loader.
+    // Every store of the quick-start block, on the menu fields [M quick-game.md §2's table].
+    assert_eq!(fe.mp_scenario, 1, "+0x1A4 = 1 Deathmatch [M 0x20c740]");
+    assert_eq!(fe.mp_time_limit, 10, "+0x1A0 = 10 [M 0x20c72c]");
+    assert_eq!(fe.mp_frag_limit, 10, "+0x19C = 10 [M 0x20c738]");
+    assert_eq!(fe.mp_friendly_fire, 0, "+0x198 = 0 [M 0x20c754]");
+    assert_eq!(fe.mp_weapon_set, 0, "+0x1B4 = 0 Normal [M 0x20c760]");
+    assert_eq!(fe.mp_radar, 1, "+0x1C4 = 1 [M 0x20c750]");
+    assert_eq!(fe.mp_envmods[4], 2, "+0x1CC = 2 Helicopters [M 0x20c734]");
+    assert_eq!(fe.mp_envmods[2], 0, "+0x1D4 = 0 [M 0x20c748]");
+    assert_eq!(fe.mp_envmods[3], 0, "+0x1D0 = 0 [M 0x20c758]");
+    // The fields the quick start does NOT write keep their values [M the store list has no
+    // 0x1B8/0x1BC/0x1C0/0x1C8; boot 0x1c7e78:28,38,45,46] — location damage stays ON.
+    assert_eq!(fe.mp_player_mods[1], 1, "+0x1C8 keeps the boot 1 [M 0x1c7e78:45]");
+    assert_eq!(fe.mp_player_mods[0], 0, "+0x1BC keeps the boot 0 [M 0x1c7e78:46]");
+    assert_eq!(fe.mp_envmods[0], 2, "+0x1C0 keeps the boot 2 [M 0x1c7e78:28]");
+    assert_eq!(fe.mp_envmods[1], 0, "+0x1B8 keeps the boot 0 [M 0x1c7e78:38]");
+    // The bots: count 3, Drake/Kiko/Rook, Phoenix, enabled [M 0x20c864/0x20c86c + the records].
+    assert_eq!(fe.mp_bot_count(), 3, "0x2deea9 = 3, +0x1B0 = 3 [M 0x20c864/0x20c86c]");
+    assert_eq!(fe.mp_bots[0].character, 1, "Drake [M DAT_002deeba]");
+    assert_eq!(fe.mp_bots[1].character, 3, "Kiko [M DAT_002deecc]");
+    assert_eq!(fe.mp_bots[2].character, 2, "Rook [M DAT_002deede]");
+    assert!(fe.mp_bots.iter().take(3).all(|b| !b.team_mi6), "all three Phoenix [M record+0x0F = 0]");
+    assert!(fe.mp_bots.iter().take(3).all(|b| b.enabled), "record+0x0E = 1 [M]");
+    // Sister A: Back from the summary pops to the scenario page and the cursor re-derives from
+    // MPSettings+0x1A4 = 1 [M P_MPCONFIRM's 0x5f pop + P_MPSCENARIO 0x217348:25's re-selection].
+    assert!(fe.action(Action::Back));
+    assert_eq!(fe.page, Page::MpScenario);
+    assert_eq!(fe.mp_scenario_row, 1, "the quick start's Deathmatch drives the cursor [M +0x1A4]");
+    fe.mp_scenario_row = 0;
+    assert!(fe.action(Action::Confirm));
+    assert_eq!(fe.page, Page::MpConfirm);
     assert!(fe.action(Action::Confirm), "the confirm page's ✕ starts the match");
     let s = fe.mp_match_settings.as_ref().expect("the match config lands for the host");
-    assert_eq!(s.scenario, 1);
-    assert_eq!(s.level_code, fe.mp_level);
-    assert_eq!(s.human_count, 1);
-    assert_eq!(s.bot_count, 3);
-    assert_eq!(s.time_limit, 600, "the confirm converts minutes to seconds [M the ×0x3c]");
-    assert_eq!(s.master, 1, "[M +0x180 = 1]");
-    assert_eq!(s.players[0].team, 1, "the quick start's slot-0 team is MI6 [M disasm 0x20c7f8]");
+    // The match's fields, each cited [M quick-game.md §2-§4].
+    assert_eq!(s.scenario, 1, "+0x1A4 = 1 [M 0x20c740]");
+    assert_eq!(s.gametype_mask, 1, "the same word [M the atlas correction]");
+    assert_eq!(s.level_code, MP_MAP_ROWS[0].3, "the port's row-0 sample [S quick-game.md §3]");
+    assert!(MP_MAP_ROWS[..7].iter().all(|r| r.3 != 0x0700_004b), "rows 0..6 never Ravine [M the %7]");
+    assert_eq!(s.frag_limit, 10, "+0x19C [M 0x20c738]");
+    assert_eq!(s.time_limit, 600, "10 min ×0x3c at the confirm [M 0x20c72c + P_MPCONFIRM]");
+    assert_eq!(s.human_count, 1, "+0x1AC the joined count [M 0x20c858]");
+    assert_eq!(s.player_count, 1, "the same word [M 0x20c858]");
+    assert_eq!(s.bot_count, 3, "+0x1B0 [M 0x20c86c]");
+    assert_eq!(s.total_players, 4, "humans + bots [M MP_Start 0x183a50:164]");
+    assert_eq!(s.weapon_set, 0, "+0x1B4 [M 0x20c760]");
+    assert_eq!(s.radar, 1, "+0x1C4 [M 0x20c750]");
+    assert_eq!(s.friendly_fire, 0, "+0x198 [M 0x20c754]");
+    assert_eq!(s.location_damage, 1, "the boot value persists [M 0x1c7e78:45 — no 0x1C8 store]");
+    assert_eq!(s.capture_reward, 0, "the boot value persists [M 0x1c7e78:46 — no 0x1BC store]");
+    assert_eq!(s.spawn_policy, 2, "the boot view distance persists [M 0x1c7e78:28 — no 0x1C0 store]");
+    assert_eq!(s.gun_emplacements, 0, "the boot value persists [M 0x1c7e78:38 — no 0x1B8 store]");
+    assert_eq!(s.explosive_scenery, 0, "+0x1D4 [M 0x20c748]");
+    assert_eq!(s.grapple, 0, "+0x1D0 [M 0x20c758]");
+    assert_eq!(s.vehicles, 2, "+0x1CC Helicopters [M 0x20c734]");
+    assert_eq!(s.master, 1, "+0x180 [M 0x20c73c]");
+    assert_eq!(s.team_game, 0, "scenario 1's bit 29 [M MP_Init 0x183438:41]");
+    assert_eq!(s.players[0].team, 1, "slot 0 MI6 [M 0x20c810 sw $v1, 4($a3)]");
+    assert_eq!(s.players[0].skin, 0, "slot 0 Bond [M 0x20c818 sw $zero, 8($a3)]");
+    assert_eq!(s.players[0].codename, "Player 1", "the template codename [M Txt 0x1c3 + slot]");
+    for k in 1..4 {
+        assert_eq!(s.players[k].team, 0, "bot slot {k} is Phoenix [M record+0x0F = 0]");
+    }
+    assert_eq!(s.bot_records.len(), 3, "three prepared records [M Menu_PrepareBots + the count]");
+    assert_eq!(s.bot_records[0].character(), 1, "Drake [M DAT_002deeba]");
+    assert_eq!(s.bot_records[1].character(), 3, "Kiko [M DAT_002deecc]");
+    assert_eq!(s.bot_records[2].character(), 2, "Rook [M DAT_002deede]");
+    assert!(s.bot_records.iter().all(|r| r.enabled() && r.team() == 0), "enabled, Phoenix [M]");
+    assert_eq!(s.bot_records[0].trait_id(), 6, "Drake's preset trait [M BOT_getDefaultStats]");
+    assert_eq!(s.bot_records[2].trait_id(), 7, "Rook's preset trait [M BOT_getDefaultStats]");
     assert_eq!(fe.requested_level, Some(fe.mp_level), "the arena request rides the loader");
     // The flow machine runs the load to the arena [M ResetMap_LevelToLoad + the phases; the
     // confirm's fade hold sits on top of the load state: P_MPCONFIRM's PushState(84.0f, 7) — 84
@@ -268,6 +319,105 @@ fn quick_game_lands_on_confirm_with_three_bots() {
     for _ in 0..=84 { fe.tick(); }
     while fe.flow.get_state() == nf_view::menu::ST_MAPLOAD { fe.flow.load_tick(); }
     assert_eq!(fe.flow.current_level, fe.mp_level, "the loader reaches the arena");
+}
+
+#[test]
+fn custom_game_keeps_its_chosen_scenario() {
+    // G-053(6) sister: the quick start stomps MPSettings+0x1A4 to 1; a CUSTOM pick must still
+    // carry ITS row's word to the match (C_SBMPSCEN's row-n arm writes mp_scenario[n].id [M
+    // :41-43, disasm 0x20c9c8]).
+    let mut fe = FrontEnd::new();
+    enter_mp(&mut fe);
+    join_agent1(&mut fe);
+    // A quick game first (the stomp context), then back out to the wheel.
+    fe.mp_scenario_row = 0;
+    assert!(fe.action(Action::Confirm));
+    assert_eq!(fe.mp_scenario, 1, "the quick start forced Deathmatch [M 0x20c740]");
+    assert!(fe.action(Action::Back), "the summary pops to its opener");
+    assert_eq!(fe.page, Page::MpScenario);
+    // The custom pick: row 2 = Team Arena 0x20000002 — neither the sentinel 0 nor the quick 1.
+    fe.mp_scenario_row = 2;
+    assert!(fe.action(Action::Confirm), "an unlocked custom row navigates");
+    iris_wait(&mut fe); // [M C_SBMPSCEN 0x20c600:45 — G-048(1)]
+    assert_eq!(fe.page, Page::MpMap);
+    assert_eq!(fe.mp_scenario, 0x2000_0002, "the row's word is stored [M +0x1A4 = mp_scenario[2].id]");
+    fe.mp_map_row = 0; // Skyrail
+    assert!(fe.action(Action::Confirm));
+    assert_eq!(fe.mp_setup_state, 2, "a team game asks Choose Team [M P_MPSETUP]");
+    fe.mp_setup_sel = 1; // MI6
+    assert!(fe.action(Action::Confirm));
+    assert_eq!(fe.mp_setup_state, 3, "then the character [M C_RBMPSETUP 2 → 3]");
+    fe.mp_setup_sel = 4; // Alura, MI6 side
+    assert!(fe.action(Action::Confirm));
+    assert_eq!(fe.mp_setup_state, 4, "then the Health Handicap [M C_RBMPSETUP 3 → 4]");
+    assert!(fe.action(Action::Confirm));
+    assert_eq!(fe.page, Page::MpOptions);
+    // A lone MI6 human fails the both-sides start check [M the 0x389 box]; a Phoenix bot (the
+    // fresh record's Snow Guard) completes the sides.
+    fe.mp_bots[0].enabled = true;
+    fe.mp_options_row = 0;
+    assert!(fe.action(Action::Confirm), "1 MI6 human + 1 Phoenix bot passes");
+    assert_eq!(fe.page, Page::MpConfirm);
+    assert!(fe.action(Action::Confirm), "the custom game's confirm starts it");
+    let s = fe.mp_match_settings.as_ref().expect("the custom match config lands");
+    assert_eq!(s.scenario, 0x2000_0002, "the custom scenario reaches the match [M +0x1A4]");
+    assert_eq!(s.gametype_mask, 0x2000_0002, "the same word [M the atlas correction]");
+    assert_eq!(s.team_game, 1, "bit 29 set [M MP_Init 0x183438:41]");
+    assert_ne!(s.scenario, 1, "the quick start's Deathmatch did not leak into the custom game");
+}
+
+#[test]
+fn quick_game_keeps_a_custom_visits_mods() {
+    // Sister C: the quick start's store list writes neither +0x1BC nor +0x1C0 (nor +0x1B8/
+    // +0x1C8) [M 0x20c72c-0x20c768] — a custom visit's Professional Mode and View Distance
+    // survive a later Quick Game.
+    let mut fe = FrontEnd::new();
+    enter_mp(&mut fe);
+    join_agent1(&mut fe);
+    // The custom walk to the hub [M the setup page chain — see setup_ffa_... above].
+    fe.mp_scenario_row = 1;
+    fe.action(Action::Confirm);
+    iris_wait(&mut fe);
+    fe.mp_map_row = 0;
+    fe.action(Action::Confirm);
+    fe.mp_setup_sel = 0; // Bond (FFA)
+    fe.action(Action::Confirm);
+    fe.action(Action::Confirm); // the handicap → options
+    assert_eq!(fe.page, Page::MpOptions);
+    // Player Mods row 2 (+0x1BC Professional Mode) ◀▶ toggles it on [M P_MPPLAYERMODS 0x1ac].
+    fe.mp_options_row = 3;
+    assert!(fe.action(Action::Confirm));
+    assert_eq!(fe.page, Page::MpPlayerMods);
+    fe.cursor = 2;
+    assert!(fe.action(Action::Right));
+    assert_eq!(fe.mp_player_mods[0], 1, "+0x1BC on [M 0x2104d0:14]");
+    assert!(fe.action(Action::Confirm), "the page closes to the hub [M Manager 0x5f]");
+    assert_eq!(fe.page, Page::MpOptions);
+    // Enviro-Mods row 0 (View Distance +0x1C0) ◀▶ steps 2 → 0 Near [M P_MPENVIROMODS 0x1b0].
+    fe.mp_options_row = 4;
+    assert!(fe.action(Action::Confirm));
+    assert_eq!(fe.page, Page::MpEnviroMods);
+    fe.cursor = 0;
+    assert!(fe.action(Action::Right));
+    assert_eq!(fe.mp_envmods[0], 0, "+0x1C0 = Near [M 0x210030]");
+    assert!(fe.action(Action::Confirm), "the page closes to the hub");
+    assert_eq!(fe.page, Page::MpOptions);
+    // Back out to the scenario wheel and run Quick Game.
+    assert!(fe.action(Action::Back), "the hub pops to the setup page");
+    assert_eq!(fe.page, Page::MpSetup);
+    assert!(fe.action(Action::Back));
+    assert_eq!(fe.page, Page::MpMap);
+    assert!(fe.action(Action::Back));
+    assert_eq!(fe.page, Page::MpScenario);
+    fe.mp_scenario_row = 0;
+    assert!(fe.action(Action::Confirm), "Quick Game");
+    assert_eq!(fe.page, Page::MpConfirm);
+    assert!(fe.action(Action::Confirm), "start");
+    let s = fe.mp_match_settings.as_ref().expect("the match config lands");
+    assert_eq!(s.capture_reward, 1, "+0x1BC survives the quick start [M no 0x1BC store]");
+    assert_eq!(s.spawn_policy, 0, "+0x1C0 survives the quick start [M no 0x1C0 store]");
+    assert_eq!(s.location_damage, 1, "+0x1C8 untouched [M no 0x1C8 store]");
+    assert_eq!(s.vehicles, 2, "+0x1CC = the quick start's own write [M 0x20c734]");
 }
 
 #[test]

@@ -6857,11 +6857,13 @@ impl FrontEnd {
         self.mp_friendly_fire = 0;            // [M +0x198 = 0]
         self.mp_weapon_set = 0;               // [M +0x1B4 = 0]
         self.mp_radar = 1;                    // [M +0x1C4 = 1]
-        self.mp_player_mods = [0, 0];         // [M the quick start writes neither +0x1BC nor +0x1C8 — the boot values 0/1 persist]
-        self.mp_envmods[0] = 2;               // [M the quick start never writes +0x1C0 — the boot value 2 (Random) persists]
-        self.mp_envmods[1] = 0;
+        // The quick start's store list (disasm 0x20c72c-0x20c768, docs/systems/quick-game.md §2)
+        // writes ONLY +0x1A0/+0x19C/+0x1A4/+0x180/+0x198/+0x1C4/+0x1B4/+0x1CC/+0x190/+0x1D4/
+        // +0x18C/+0x1D0 — NOT +0x1B8/+0x1BC/+0x1C0/+0x1C8: whatever they hold persists. Boot
+        // leaves +0x1C8 = 1 (Location Damage ON) and +0x1C0 = 2 [M bootup 0x1c7e78:45,28], and a
+        // custom visit's Player/Enviro-Mods picks survive a later Quick Game [M the store list].
         self.mp_envmods[2] = 0;               // [M 0x20c748: +0x1D4 = 0]
-        self.mp_envmods[3] = 0;
+        self.mp_envmods[3] = 0;               // [M 0x20c758: +0x1D0 = 0]
         self.mp_envmods[4] = 2;               // [M 0x20c734: +0x1CC = 2 = Helicopters (Car_Create 0x1305b0:29-40 spawns choppers on 2)]
         // The map sample: `Rand_Random() % 7` over mp_level rows 0..6 — never Ravine [M
         // 0x20c76c-0x20c7b4]. Headless determinism: the shared RNG is not wired here, so the port
