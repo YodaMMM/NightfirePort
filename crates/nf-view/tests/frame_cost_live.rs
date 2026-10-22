@@ -238,6 +238,33 @@ fn time_a_level(dev: Option<&(wgpu::Device, wgpu::Queue)>, iso_path: &str, name:
         let budget = (4.167 * 0.8 - rest).max(1.2);
         eprintln!("[cost] {name} encode {enc:.3} ms (whole render(), the four enc: stages inside; other measured phases {rest:.3} ms → budget {budget:.2} ms)");
         assert_budget(&format!("{name} encode"), budget, enc);
+
+        // The per-archive teardown — the part 951 missed, which OOM'd the sweep on a desktop GPU
+        // (reverted in b4643c32). This file never submits the timed encoders (the encode is pure
+        // CPU), but `Renderer::new` uploads through `queue.write_texture` (gpu.rs:582/633/763) and
+        // `update_skin`/`render` through `queue.write_buffer` (gpu.rs:823/825/836/850/1162/1178),
+        // and in wgpu-core 30.0.1 every one of those pins a fresh staging buffer AND its
+        // destination in the queue's `PendingWrites`: write_buffer creates a `StagingBuffer::new`
+        // per call and `pending_writes.consume(staging_buffer)` keeps it (device/queue.rs:661-685),
+        // the written buffer is inserted into the pending encoder's tracker (write_staging_buffer_
+        // impl) and its later Drop routes into `pending_writes.consume_temp`
+        // (resource.rs:1115-1123) — and NOTHING releases them except `Queue::submit`
+        // (device/queue.rs:1531 `submission.submit(pending_writes)`); `Device::poll` never touches
+        // `pending_writes` (device/resource.rs:793-824). One device hoisted over 34 archives ×
+        // (vertex buffer + palette + colours + morph weights + uniforms + indirect, twice for the
+        // staging copy, plus the written textures) never freed = the `wgpu error: Out of Memory`
+        // at ~99 s. The recipe this copied (fix_0c_pylon_live.rs::render_full) submits AND polls
+        // per call (lines 56-58) and builds a fresh device each call, which is why it never
+        // accumulated. Drop the per-archive resources first, then one empty submit (flushes
+        // PendingWrites even with no command buffers) + a Wait poll (completes the copies and runs
+        // the destruction queue): every allocation above is gone before the next `Renderer::new`.
+        drop(r);
+        drop(view);
+        drop(target);
+        drop(depth);
+        let _ = queue.submit([]);
+        device.poll(wgpu::PollType::wait_indefinitely())
+            .unwrap_or_else(|e| panic!("[{name}] the per-archive GPU flush (empty submit + Wait poll) failed: {e} — the device died (OOM/lost), the class 951's sweep hit"));
     }
 
     assert_budget(&format!("{name} frame_state"), 8.0, fs);
