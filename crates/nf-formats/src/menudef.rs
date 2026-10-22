@@ -1196,11 +1196,14 @@ impl ListState {
         if self.stride > 0.0 {
             self.visible_rows = (h as f32 / self.stride).floor() as usize;
         }
-        if self.visible_rows == 0 {
-            self.top = 0;
-        } else {
-            let max_top = self.rows.len().saturating_sub(1);
-            self.top = self.top.min(max_top);
+        // `List_Update` 0x21a598:175-178: `if (count < top + visible && visible < count) top =
+        // count − visible` — only a list LONGER than its window pulls the top back so the last page
+        // is full; otherwise the top is left as it is (the cursor clamp handles it) [daily audit
+        // 2026-10-22: the port clamped to the last row and zeroed the top on a zero-height box].
+        let count = self.rows.len();
+        let vis = self.visible_rows;
+        if count < self.top + vis && vis < count {
+            self.top = count - vis;
         }
     }
 

@@ -69,8 +69,9 @@ fn the_mp_rows_move_the_mp_fields() {
     // One ◀/▶ step wraps the On/Off row to 0 and the FrontEnd field follows.
     fe.opt_step(&menu::MP_ROWS[0], 1);
     assert_eq!(fe.opt_value(0x1000_0128), 0, "the step moved the row to Off");
-    assert_eq!(fe.mp_radar, 0, "MPSettings+0x28 (fe.mp_radar) moved with it");
+    assert_eq!(fe.mp_player_radar, 0, "MPSettings+slot·0x30+0x28 (fe.mp_player_radar) moved with it [M 0x2144d8:13]");
+    assert_eq!(fe.mp_radar, 1, "sister: the match radar +0x1C4 (Player Mods) is a different setting [M 0x2104d0:16]");
     // And back.
     fe.opt_step(&menu::MP_ROWS[0], 1);
-    assert_eq!((fe.opt_value(0x1000_0128), fe.mp_radar), (1, 1));
+    assert_eq!((fe.opt_value(0x1000_0128), fe.mp_player_radar), (1, 1));
 }

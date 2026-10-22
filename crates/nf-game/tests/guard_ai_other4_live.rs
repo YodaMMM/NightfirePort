@@ -139,7 +139,9 @@ fn crouch_cover_holds_two_seconds_then_stands() {
     let player = bond_near(&sim, gi, 8.0);
     enter(&mut sim, &d, gi, state::CROUCH_COVER, &player);
     assert!(sim.list[gi].vision_on, "CrouchCover ENTER sets +0x4F8 0x10000 [M 0x166d90 case 1]");
-    assert!((sim.list[gi].alert - 0.0).abs() < f32::EPSILON, "alert status 0 → share 0.0 [M 0x166d90 case 1; table 0x2f5cc8[0]]");
+    // `Drone_AlertStatusSet(0)` writes the STATUS byte +0x51C (and its prev/time fields) only, never
+    // the alertness +0x50C [M 0x13a8d8; daily audit 2026-10-22 — the old pin read the alertness float].
+    assert_eq!(sim.list[gi].alert_status, 0, "CrouchCover ENTER sets alert status 0 [M 0x166d90 case 1 → 0x13a8d8]");
     let t0 = sim.list[gi].timer_c.expect("timer C armed on enter");
     let dt = t0 - sim.frame;
     assert!((120..=181).contains(&dt), "timer C = 2 s (120) + Rand(60) frames [M 0x166d90 case 1]; got {dt}");
@@ -188,8 +190,10 @@ fn investigate_stands_down_to_idle_when_nothing_is_found() {
 
 /// The bots' alert outcomes (`mp/bots.rs react_to_drone_alert_msg`, the SetState tail of
 /// `NDrone2_ReactToDroneAlertMsg` 0x1437a0 [M LAB_00143e30]): the dead-body shout 0x15 →
-/// SeenDeadBody 0x9e [M :307-326], the surrender shout 0x16 → SeenSurrenderedDrone 0x9f [M
-/// :283-290]; receiver modes 0x12/0x1e drop out of 0x15, receiver modes 9/10/0x12/0x13 attack on 0x16
+/// SeenDeadBody 0x9e [M :298-326], the surrender shout 0x13 (`Surrender_Anim` 0x1626a0:74) →
+/// SeenSurrenderedDrone 0x9f [M :267-292]; on 0x15 modes 9/10/0x12 attack (0x12 breaks to the 0x56 tail
+/// [M :312, :363-366]) and 0x1e drops out; on 0x13 modes 9/10/0x12/0x13 attack; 0x16 attacks for every
+/// mode but 0x1e, with no property gate [M :327-366] (daily audit 2026-10-22)
 /// (the mode byte is the HANDLING drone's [M 0x1437a0:24]). Sister: the
 /// property gates actually gate (no prop → None).
 #[test]
@@ -197,13 +201,15 @@ fn bot_alert_shouts_resolve_to_the_seen_states() {
     let all = |_p: u32| true;
     let none = |_p: u32| false;
     assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x0b, all, true), Some(0x9e), "dead-body shout, receiver mode 0x0b → 0x9e [M 0x1437a0:307-326]");
-    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x12, all, true), None, "receiver mode 0x12 drops out [M 0x1437a0:312]");
-    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x16, 0x05, all, true), Some(0x9f), "surrender shout, ordinary receiver mode → 0x9f [M 0x1437a0:283-290]");
-    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x16, 0x13, all, true), Some(0x56), "receiver mode 0x13 attacks instead [M 0x1437a0:289-292]");
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x12, all, true), Some(0x56), "receiver mode 0x12 attacks (break → the 0x56 tail) [M 0x1437a0:312, 363-366]");
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x1e, all, true), None, "receiver mode 0x1e drops out [M 0x1437a0:320-321]");
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x13, 0x05, all, true), Some(0x9f), "surrender shout 0x13, ordinary receiver mode → 0x9f [M 0x1437a0:283-290]");
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x13, 0x13, all, true), Some(0x56), "receiver mode 0x13 attacks instead [M 0x1437a0:276-282]");
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x16, 0x05, none, true), Some(0x56), "alert 0x16: no property gate, Attack for mode 5 [M 0x1437a0:327-366]");
     // Review 2026-10-21: mode 10 is in the same attack group as 9/0x12/0x13 [M 0x1437a0:336-341] (the branch left it out).
-    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x16, 0x0a, all, true), Some(0x56), "receiver mode 10 attacks too");
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x13, 0x0a, all, true), Some(0x56), "receiver mode 10 attacks too");
     // Sister: without the receiver property the shout is ignored [M 0x1437a0:271-275 (0x4F), 300-303 (0x29)].
     assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x0b, none, true), None);
-    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x16, 0x05, none, true), None);
+    assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x13, 0x05, none, true), None);
     assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x0b, all, false), None, "out of shouting range [M 0x1437a0:305]");
 }

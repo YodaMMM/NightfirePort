@@ -565,10 +565,10 @@ pub fn bot_global_dispatch(
 ///   same-team check) lands `param_3 = 0x9E` [M 0x1437a0:307-326]. ENTER plays anim 0x24 with
 ///   the body look, timer C, and falls back to `+0x5A2` [M 0x16ACD0 — the state body; the port
 ///   delivers the transition, the body presentation is the main agent's].
-/// - **`NDrone2_DSTATE_SeenSurrenderedDrone` 0x16ADE0** (state 0x9F) — alert 0x16, the surrender
-///   shout: shouting range, alert share 1.0, receiver prop 0x4F, and every receiver mode byte
-///   except 9/10/0x12/0x13 (those four attack instead, when no override came in) lands
-///   `param_3 = 0x9F` [M 0x1437a0:283-290, 329-340].
+/// - **`NDrone2_DSTATE_SeenSurrenderedDrone` 0x16ADE0** (state 0x9F) — alert 0x13, the surrender
+///   shout (`Surrender_Anim` 0x1626a0:74): shouting range, receiver prop 0x4F, and every receiver
+///   mode byte except 9/10/0x12/0x13 (those four attack instead, when no override came in) and 0x1E
+///   lands `param_3 = 0x9F` [M 0x1437a0:267-292].
 pub fn react_to_drone_alert_msg(
     alert: u8,
     receiver_mode: u8,
@@ -578,17 +578,22 @@ pub fn react_to_drone_alert_msg(
     match alert {
         // 0x15 the dead-body shout → SeenDeadBody 0x9E. Gates [M 0x1437a0:298-326]: receiver prop
         // 0x29, not already fleeing (+0x4F8 & 0x800000 clear), in shouting range, alert share
-        // +0x50C = 1.0; receiver_mode mode 0x12 drops out, 0x1E goes to the MP bot path, receiver_mode 9/10 keep
-        // the incoming override (the port's callers pass none — Attack), everyone else → 0x9E.
-        0x15 if prop(0x29) && shouting_range && receiver_mode != 0x12 && receiver_mode != 0x1e => {
-            if matches!(receiver_mode, 9 | 10) { Some(0x56) } else { Some(0x9e) }
+        // +0x50C = 1.0; receiver modes 9/10 AND 0x12 attack (0x12 `break`s to the switch tail
+        // LAB_00143e28 → 0x56 [M :312-326, :363-366]), 0x1E drops out, everyone else → 0x9E
+        // (daily audit 2026-10-22: the old arm dropped mode 0x12).
+        0x15 if prop(0x29) && shouting_range && receiver_mode != 0x1e => {
+            if matches!(receiver_mode, 9 | 10 | 0x12) { Some(0x56) } else { Some(0x9e) }
         }
-        // 0x16 the surrender shout → SeenSurrenderedDrone 0x9F. Gates [M 0x1437a0:283-340]: receiver
-        // prop 0x4F (checked before the shout branch), not fleeing, in shouting range, alert share
-        // 1.0; receiver_mode modes 9/10/0x12/0x13 attack when no state override came in, everyone else → 0x9F.
-        0x16 if prop(0x4f) && shouting_range => {
+        // 0x13 the SURRENDER shout (`Surrender_Anim` 0x1626a0:74 broadcasts alert 0x13) →
+        // SeenSurrenderedDrone 0x9F. Gates [M 0x1437a0:267-292]: in shouting range (or the +0x4F8
+        // 0x800000 flag), receiver prop 0x4F; modes 9/10/0x12/0x13 attack when no override came in,
+        // 0x1E drops out, everyone else → 0x9F.
+        0x13 if prop(0x4f) && shouting_range && receiver_mode != 0x1e => {
             if matches!(receiver_mode, 9 | 10 | 0x12 | 0x13) { Some(0x56) } else { Some(0x9f) }
         }
+        // 0x16: no property gate; not fleeing, in shouting range, alert share 1.0; every receiver mode
+        // but the 0x1E team path ends at Attack 0x56 (the switch tail) [M 0x1437a0:327-366].
+        0x16 if shouting_range && receiver_mode != 0x1e => Some(0x56),
         // The other alert ids (0x11 armed intruder, 0x12 scream, 0x14 alarm sound, 0x1E alarm) resolve
         // through the same SetState tail [M LAB_00143e30] — Attack 0x56 for the intruder/alarm arms
         // (0x1437a0:218-222, 108), 0xA0/0xA2 heard-noise for the scream/alarm-sound default receiver_modes
