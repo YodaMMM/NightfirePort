@@ -11296,12 +11296,14 @@ impl Drones {
         // SimpleScripts (`SS_Create` 0x1a9c58): the 0xE2 placements with a non-zero key count, their
         // keys from the main map's 0x19 blocks (map-tower2).
         self.sss = crate::ss::SsList::create(&level.maps[m].placements, &path_blocks, |p| {
-            // The SS's collision mesh: the placement object's glist hashcode, the same resolution
-            // `Doors::create`'s closure does (the game's SS object carries its glist at create
-            // [M SS_Create 0x1a9c58]; Collide_PickObj walks the cel-linked objects).
+            // The SS's collision mesh + world sphere: the placement object's glist hashcode and gfx
+            // sphere radius, the same resolution `Doors::create`'s closure does (the game's SS
+            // object carries its glist at create [M SS_Create 0x1a9c58], and its obj+0x8C world
+            // sphere comes from the same object record [M Control_BuildWorldSph 0x133070:48]).
             let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
                 else { level.maps[m].objects.get(p.index as usize) };
-            obj.map(|o| if o.hashcode == u32::MAX { 0x8000_0000 | ((m as u32) << 16) | p.index as u32 } else { o.hashcode }).unwrap_or(0)
+            obj.map(|o| (if o.hashcode == u32::MAX { 0x8000_0000 | ((m as u32) << 16) | p.index as u32 } else { o.hashcode }, o.radius))
+                .unwrap_or((0, 0.0))
         });
         // Sensors (`Sensor_Create` 0x1af010, placement 0x28; crate::sensor — placement order, no
         // RNG draw): the security-camera cone detectors; keys from the same 0x19 blocks.

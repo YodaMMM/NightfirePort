@@ -64,6 +64,10 @@ pub struct Ss {
     /// ext+0x14 = param 4 — the operate sound id (0xffff = none; `Sound_Play3D` at the 0x40
     /// operate arm [M 0x1a9948:86-88]). Unplayed headlessly; kept for the field map.
     pub sound: u16,
+    /// The placement object's gfx-sphere radius — the game's obj+0x8C world-sphere radius source
+    /// (`Control_BuildWorldSph` 0x133070:48 takes the glist bound radius × |scale|) — the use-key
+    /// pick's candidate radius [M Collide_PickObj 0x1eae80:219-228, `1.0 + obj+0x8C`].
+    pub radius: f32,
 }
 
 impl Ss {
@@ -88,7 +92,7 @@ pub struct SsList { pub list: Vec<Ss> }
 impl SsList {
     /// `SS_Create` over the main map's 0xE2 placements with a non-zero key count. The sphere argument
     /// is unused; the pose comes from the key list alone (key 0 = the placement transform [D]).
-    pub fn create(placements: &[Placement], path_blocks: &[&[u8]], mut hash: impl FnMut(&Placement) -> u32) -> SsList {
+    pub fn create(placements: &[Placement], path_blocks: &[&[u8]], mut hash: impl FnMut(&Placement) -> (u32, f32)) -> SsList {
         let mut list = Vec::new();
         for (i, p) in placements.iter().enumerate() {
             if p.flags & 0xff != 0xe2 { continue; }
@@ -106,6 +110,7 @@ impl SsList {
             // ext+0x08's snap [M 0x1a9dbc-0x1a9dd8 disasm]: step * (int)(rest / step).
             let step = last as f32 / rate as f32;
             let rest = if step > 0.0 { step * ((param(5) as f32 / step) as i32) as f32 } else { 0.0 };
+            let (ghash, obj_radius) = hash(p);
             list.push(Ss {
                 placement: i,
                 channel: param(3) as u16,
@@ -116,10 +121,11 @@ impl SsList {
                 mask: param(2) as u16,
                 t: 0.0,
                 matrix,
-                hash: hash(p),
+                hash: ghash,
                 rest,
                 wrap_flag: param(1) as u16,
                 sound: param(4) as u16,
+                radius: obj_radius,
             });
         }
         SsList { list }

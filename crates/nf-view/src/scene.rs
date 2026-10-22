@@ -948,6 +948,40 @@ pub fn find_cel(cels: &[Cel], p: [f32; 3]) -> Option<usize> {
         best
 }
 
+/// Squared distance from point `p` to the segment `a`-`b` — the game's 0x800 hittest's
+/// `dist(segment(h+0x20, h+0x30), obj_centre)` [M Collide_PickObj 0x1eae80:163].
+fn seg_point_dist2(a: &[f32; 3], b: &[f32; 3], p: &[f32; 3]) -> f32 {
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+    let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+    let t = if ab2 > 1e-9 { (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2 } else { 0.0 };
+    let t = t.clamp(0.0, 1.0);
+    let dx = ap[0] - ab[0] * t; let dy = ap[1] - ab[1] * t; let dz = ap[2] - ab[2] * t;
+    dx * dx + dy * dy + dz * dz
+}
+
+/// Squared distance between segments `a1`-`a2` and `b1`-`b2` (clamped-parameter closest points,
+/// the standard Ericson bracketing solve) — the stunner ray vs the guards' 0x800 capsule
+/// [M Player_WeaponInitBullet 0x1a4bf0:169-200; NDrone2_Collision 0x140e90:104-121].
+fn seg_seg_dist2(a1: &[f32; 3], a2: &[f32; 3], b1: &[f32; 3], b2: &[f32; 3]) -> f32 {
+    let sub = |u: &[f32; 3], v: &[f32; 3]| [u[0] - v[0], u[1] - v[1], u[2] - v[2]];
+    let dot = |u: &[f32; 3], v: &[f32; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    let (d1, d2, r) = (sub(a2, a1), sub(b2, b1), sub(a1, b1));
+    let (a, e) = (dot(&d1, &d1), dot(&d2, &d2));
+    let f = dot(&d2, &r);
+    let (c, b) = (dot(&d1, &r), dot(&d1, &d2));
+    let denom = a * e - b * b;
+    let (s, t) = if denom > 1e-9 {
+        ((b * f - c * e) / denom, 0.0f32)
+    } else { (0.0f32, f / e.max(1e-9)) };
+    let t = ((b * s + f) / e.max(1e-9)).clamp(0.0, 1.0);
+    let s = if b * t + c < 0.0 { 0.0 } else if b * t + c > a { 1.0 } else { (b * t + c) / a.max(1e-9) };
+    let p1 = [a1[0] + d1[0] * s, a1[1] + d1[1] * s, a1[2] + d1[2] * s];
+    let p2 = [b1[0] + d2[0] * t, b1[1] + d2[1] * t, b1[2] + d2[2] * t];
+    let dd = sub(&p1, &p2);
+    dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2]
+}
+
 /// `vecutil_Dist2Tri` (the distance the game's `Intersect_Portal` 0x1ea7b8 version-0x101 path
 /// thresholds against the straddle sphere's radius): the Euclidean distance from `p` to the
 /// triangle (a, b, c) — the standard closest-point-on-triangle construction.
@@ -2691,30 +2725,37 @@ impl Sim {
             // walls — the 07000008 playtest: walking into the guardhouse wall and jumping threw Bond onto
             // the zipline across it (the icon sits 1.9 from the wall on the far side); the r-1.164 sphere
             // crosses no portal there, so the wall keeps the contexts apart exactly as the cel graph lays
-            // them. **Deviation [S]**: the port's cel buckets are coarser than the game's cels — the
+            // them. **Deviation [L fix-swim-vent5 probe]**: the port's cel buckets are coarser than the game's cels — the
             //   fix-swim-vent5 probe put 07000005's gate door and the second vent's ctx-6 icons in one
             //   port cel — so pure cel occupancy would arm the gate door against the [L PCSX2 2026-10-13
             //   pin (0xFF there; enforced by fix_swim_vent5_live)]. The arm region is therefore the
             //   INTERSECTION: the straddle set AND the game's own SPHERE test (fix-wallhug-prompt).
-            //   Window 12.0 → 6.0 → THE GAME'S SPHERE (fix-context-hints2 → fix-wallhug-prompt): the
-            //   driver's 2026-10-14 PCSX2 side-by-side pins 07000005's grapple spot (16.5, 29.6, 58.6)
-            //   — 8.17 from the ctx-6 icon[3] (24.20, 31.93, 60.01), same port cel 15 — at NO context
-            //   and NO "Press Action" [L PCSX2 2026-10-14], while the vent crawl spot still reads 6
-            //   [L PCSX2 2026-10-13]. The game's exact volume is NOT a flat window at all: the icon
-            //   writes only into the player object its own obj+0xd0 chain names, and `Collide_Pick`
-            //   0x1eb320 admits a candidate object ONLY when its world sphere meets the picker's
-            //   sphere — `Vec_SqDist3D(picker+0x60, obj+0x80) < (picker+0x6C + obj+0x8C)²` [M
-            //   0x1eb320 LAB_001eb4e4; the picker's +0x6C copies +0x8C = the player's world-sphere
-            //   radius 1.0576 (L M_CONTROL+0x8C, ee_start_05 player 0 standing), the icon's +0x8C is
-            //   its `Control_BuildWorldSph` 0x133070 radius — r 2.2757 on 05's ctx-6 icons [D probe]],
-            //   then `Collide_Intersect` 0x1ebaa8's LAB_001ebf04 re-tests sphere-sphere and the chain
-            //   keeps only overlapping pairs. So arm = `dist(bond.sphere_centre(), icon.centre) <
-            //   1.0576 + icon.radius`, gated by the straddle-cel set (the cel-cull stand-in). The
-            //   measured pins all sit the right side of 3.333: the crawl out-point is 3.28 from
-            //   icon[1] (arms), the grapple spot 8.17 from icon[3] (silent), the gate door 24.06
-            //   (0xFF). The old [S] 6.0 window measured Bond's FEET, not the sphere centre, and
-            //   reached ~1.8× past the game's shell — the user's "its interaction prompt area is a
-            //   bit too large. Like I'm walking away from it and I still see it" (05 trench ledge).
+            //   Window 12.0 → 6.0 → THE GAME'S OWN PICK (fix-context-hints2 → fix-wallhug-prompt →
+            //   standins-scene-927): the driver's 2026-10-14 PCSX2 side-by-side pins 07000005's
+            //   grapple spot (16.5, 29.6, 58.6) — 8.17 from the ctx-6 icon[3] (24.20, 31.93, 60.01),
+            //   same port cel 15 — at NO context and NO "Press Action" [L PCSX2 2026-10-14], while
+            //   the vent crawl spot still reads 6 [L PCSX2 2026-10-13]. The game's exact volume is
+            //   NOT a flat window at all: the icon writes into the player object its own obj+0xd0
+            //   chain names, and the chain's candidate test is the walk hittest's SEGMENT test —
+            //   `dist(segment(h+0x20, h+0x30), obj_centre) < obj_r·1.5 + h+0x8C` [M Collide_PickObj
+            //   0x1eae80:152-166 — line 160 writes `h+0x6c = obj+0x8c * 1.5` and 163-164 compare the
+            //   segment distance; Collide_Pick 0x1eb320:224-233 is the same ×1.5 for glist objects].
+            //   The picker is the HITTEST at obj+0xd4 = BLData+0x740 [M Player_Init 0x1910f8:40,
+            //   Collide_Update 0x1ea398:49,84] — NOT the object and not its world sphere; the world
+            //   sphere 1.0576 (L M_CONTROL+0x8C) is never a pick operand. The segment is the
+            //   collision capsule [M Player_Collision 0x194df0:207-218 top obj+0x30+up·0.55,
+            //   :222-226 bottom obj+0x30+up·(h+0x8C−root); h+0x8C = 0.275 standing / 0.45 crouched
+            //   — the numbers the port's capsule already carries], and the icon's radius is its
+            //   `Control_BuildWorldSph` 0x133070 radius (r 2.2757 on 05's ctx-6 icons [D probe]).
+            //   So arm = `dist(capsule, icon.centre) < icon.radius·1.5 + 0.275` (0.45 crouched),
+            //   gated by the straddle-cel set — the same cel-straddle construction the game's
+            //   obj+0xd0 chain is built from [M Collide_Update 0x1ea398:160-233], precomputed at
+            //   load. The measured pins sit the right side: the crawl out-point 3.00 from icon[1]
+            //   (arms: 3.00 < 1.5·r+0.275 for r 2.2757), the grapple spot 8.17 from icon[3]
+            //   (silent), the gate door 24.06 (0xFF). The old 6.0 window (a port guess since
+            //   replaced) measured Bond's FEET, not the capsule, and reached ~1.8× past the game's
+            //   shell — the user's "its interaction prompt area is a bit too large. Like I'm walking
+            //   away from it and I still see it" (05 trench ledge).
             self.bond.icon_ctx = 0xff;
             let bond_cell = find_cell_raycast(&self.cel_graph, self.bond.pos, Some(&self.world));
             for (ii, icon) in self.icons.iter().enumerate() {
@@ -2722,20 +2763,23 @@ impl Sim {
                 let Some(cells) = self.icon_cels.get(ii) else { continue };
                 if cells.is_empty() { continue; }
                 if !bond_cell.is_some_and(|bc| cells.contains(&bc)) { continue; }
-                // The game's sphere-sphere candidate filter [M Collide_Pick 0x1eb320 LAB_001eb4e4]:
-                // `Vec_SqDist3D(picker+0x60, obj+0x80) < (picker+0x6C + obj+0x8C)²` — the PICKER's
-                // radius is the HITTEST's own +0x8C (copied to +0x6C at 0x1eb320:99), a field of the
-                // pick sphere, NOT the object's world sphere (1.0576 [L M_CONTROL+0x8C] — the
-                // previous tasks' hint-marker stand-in). The measured pins bracket it: the 05 crawl
-                // out-point arms at 3.00 from icon[1] (p > 0.73), the grapple spot stays silent at
-                // 8.17 from icon[3] (p < 5.9), the gate door silent at 24.06, and the 07000008
-                // west-ledge cable grab arms at 3.47 from the r-1.1638 icon on the jump press
-                // [M fix_08_walls_live's probe spot] (p ≥ 2.31) — 2.5 sits inside every bracket [S;
-                // the report lists the live obj+0xd4+0x8C read]. `bond.sphere_centre()` is the
-                // ported player sphere centre, NOT the root `bond.pos` the old window measured.
-                let reach = icon.radius + 2.5;
-                let c = self.bond.sphere_centre();
-                let near = (icon.centre[0] - c[0]).powi(2) + (icon.centre[1] - c[1]).powi(2) + (icon.centre[2] - c[2]).powi(2) < reach * reach;
+                // The game's walk-hittest SEGMENT test [M Collide_PickObj 0x1eae80:152-166]:
+                // `dist(segment(h+0x20, h+0x30), obj_centre) < obj+0x8C·1.5 + h+0x8C` (Collide_Pick
+                // 0x1eb320:224-233 is the same ×1.5 for glist objects). The picker is the hittest at
+                // obj+0xd4 [M Player_Init 0x1910f8:40], whose +0x8C is 0.275 standing / 0.45
+                // crouched [M Player_Collision 0x194df0:204-379] — NOT the 1.0576 world sphere the
+                // hint-marker tasks used, and not a chosen constant: the segment is the collision
+                // capsule the port already builds for `run` [M 0x194df0]. `bond.pos` is the root
+                // the capsule hangs off; `bond.cc` is the game's `root` (AnimObject+0xcc).
+                let (cap_a, cap_b, hit_r) = if self.bond.crouched {
+                    ([self.bond.pos[0], self.bond.pos[1] + 0.65 - self.bond.cc, self.bond.pos[2]],
+                     [self.bond.pos[0], self.bond.pos[1] + 0.45 - self.bond.cc, self.bond.pos[2]], 0.45f32)
+                } else {
+                    ([self.bond.pos[0], self.bond.pos[1] + 0.55, self.bond.pos[2]],
+                     [self.bond.pos[0], self.bond.pos[1] + 0.275 - self.bond.cc, self.bond.pos[2]], 0.275f32)
+                };
+                let reach = icon.radius * 1.5 + hit_r;
+                let near = seg_point_dist2(&cap_a, &cap_b, &icon.centre) < reach * reach;
                 if near {
                     self.bond.icon_ctx = icon.ctx;
                     // `ThirdIcon_Update` 0x196e80:38-53: the type-6 icon posts the generic hint
@@ -2761,7 +2805,7 @@ impl Sim {
             // cel-set test alone is coarser than the game's cels (fix-08-walls's finding), so
             // the arm region is the intersection: the straddle set AND the sphere volume (the
             // safe's control-panel marker sits 6.7 from the safe spot with r 3.889 — the game
-            // leaves it silent there [S the measured pin]).
+            // leaves it silent there [L — fix-context-hints.md's measured PCSX2 pin]).
             for (hi, h) in self.hints.iter().enumerate() {
                 if self.hint_fired.get(hi).copied().unwrap_or(true) { continue; }
                 if h.on_channel != 0 && !self.drones.channels.on(h.on_channel) { continue; }
@@ -3053,9 +3097,10 @@ impl Sim {
             if input.zoom && self.aiming {
                 // microcam-wheel-zoom: a wheel notch while the aim is held steps the zoom target
                 // ×2 (up) / ÷2 (down) within the weapon's own range [1.0, weapon_data+0x88 — the
-                // max `Player_Weapon` writes to BL+0x8D8]. The ×2 step is the port's own [S] (the
-                // playtest request; the game's own zoom is continuous — `Player_Zoom` 0x1a1a70
-                // ramps the held target ×1.025/tick). Once the wheel has stepped, the hold-ramp
+                // max `Player_Weapon` writes to BL+0x8D8]. The ×2 step is port-only design, not a
+                // game claim (the playtest request): the PS2 pad has no wheel, and the game's own
+                // zoom is continuous — `Player_Zoom` 0x1a1a70 ramps the held target ×1.025/tick
+                // [M 0x1a1a70:22-39]. Once the wheel has stepped, the hold-ramp
                 // to max yields (`zoom_wheel`) so the notch stays until the aim falls.
                 if input.zoom_cycle != 0 {
                     let step = (2.0f32).powi(input.zoom_cycle as i32);
@@ -3124,14 +3169,22 @@ impl Sim {
     }
 
     /// drive-ptp: the ACTION→DRIVING handover for a `0x0730xxxx` interlude — the port of
-    /// `GameFlow_Main` 0x1c98c8 case 9 (`Boot_GetPTPData` + `psiLaunchDriving`) with the drive
-    /// itself stood in by the dev choice (`driving_result`). Builds the PTP block from the Sim's
-    /// state, runs the DRIVING-side exit stand-in, and arms the resume: the level the return
+    /// `GameFlow_Main` 0x1c98c8 case 9 (`Boot_GetPTPData` + `psiLaunchDriving`). The DRIVING
+    /// program itself is not ported (a separate ELF; only its exit contract is — [M
+    /// psiLaunchDriving 0x120af0:12 copies the PTP block and execs]), so the drive's outcome is
+    /// the dev choice (`driving_result`). Builds the PTP block from the Sim's
+    /// state, runs the DRIVING-side exit, and arms the resume: the level the return
     /// names (`Boot_LoadPTPData` 0x1c8560's unconditional 0x07000048) as a COLD load, with the
     /// return stashed for lib.rs to apply after the reload (the mission status + the 12 stats).
     /// Pub so the headless tests drive the exact path the view's event drain runs.
     pub fn ptp_handover(&mut self, next: u32) {
-        let index = nf_game::ptp::interlude_drive_index(next); // [S — see ptp.rs]
+        // The game NEVER converts an interlude into a drive: the interlude movie ends and
+        // `GetLevelToLoadFromMovieCode` 0x1d3560:24-50 returns 0x7000048 (the hub) for EVERY drive
+        // interlude; the player then picks the mission (driving hashes included) from the sp_level
+        // list, and the state-9 handover's index is `GameState._8_4_ − 0x9000000` [M
+        // Boot_GetPTPData 0x1c8198:62]. This call is the port's dev auto-continue (the drive
+        // outcome is the dev `driving_result` anyway) — the pairing lives in ptp.rs.
+        let index = nf_game::ptp::interlude_drive_index(next);
         let map_id = 0x0900_0000 | index as u32; // GameState._8_4_ [M 0x1c8198:62]
         let block = nf_game::ptp::PtpBlock::build(&nf_game::ptp::BuildInputs {
             map_id,
@@ -3263,7 +3316,10 @@ impl Sim {
     /// Port mapping: the pack streaming is the load path's own type-0xC pass (`isLoadable`/
     /// `LoadableLoad` — the pack's scripts already sit in `drones.scripts.lib`); `Script_Load` +
     /// `Script_Play(…, 0)` is the once-mode script player (`Scripts::spawn_once`, identity matrix
-    /// [S] — the game's Script_Load carries no placement); `Player_Disable` rides the same
+    /// [M — Script_Load 0x1d8248 takes pos/rot VECTORs and bakes them into the player's matrix
+    /// through View_RotTransMatrix 0x1e5168:33-48, but the NIS caller passes the global zero
+    /// vector twice (`0x2d6200`, 0x205f10:103-106), so the page-boot player starts at identity]);
+    /// `Player_Disable` rides the same
     /// `player_events` hand-off event 4 uses; `Camera_Enable(7,0,0,0)` selects the cut-scene
     /// viewer whose view the script's kind-4 camera stream drives — the port's single
     /// `script_camera()` path. The route's `msg 0x51` bindings (≈70 `Menu_SendMessage(0x10,
@@ -3357,9 +3413,13 @@ impl Sim {
         let hanging = matches!(self.bond.substate, nf_game::player::SS_WIRE | nf_game::player::SS_ZIPLINE);
         // The game's collision capsule off `pos` (= Bond's obj+0x30): standing (case 0/6) ends
         // pos+up·0.55 / pos+up·(0.275 − cc); crouched (case 3) pos+up·(0.65 − cc) / pos+up·(0.45 − cc)
-        // [M Player_Collision 0x194df0]. Kept on `Player` for the future toucher work: the trigger
-        // toucher still uses the historical stand-in — the game-accurate capsule broke 07000005's
-        // truck chain (the class-5 object-contact stand-in, see drone.rs's toucher comment).
+        // [M Player_Collision 0x194df0]. Kept on `Player` for the toucher work: the trigger
+        // toucher keeps the MEASURED reach law (`Toucher::player(pos − 0.6)` — the live
+        // [0.557, 0.575] band below the reference, drone.rs's toucher comment [L ee_start_05.bin
+        // glb_players→+0xc4 + fix-truck's trace]); the game-accurate capsule was tried and
+        // REVERTED — it stalled 07000005's truck chain (whose game route is likely the class-5
+        // object contact, trigger-port-check #11, still unproven) and touched the ch-0x70 park
+        // plate standing.
         let capsule = if self.bond.crouched {
             ([pos[0], pos[1] + 0.65 - self.bond.cc, pos[2]], [pos[0], pos[1] + 0.45 - self.bond.cc, pos[2]])
         } else {
@@ -3488,10 +3548,16 @@ impl Sim {
                 }
             } else {
                 // Different base: holster → draw. `Player_WeaponSelect` checks +0xC4 (holster) [M 0x1a2cc0 line 33].
-                // fix-laser-beam: a fire-script LOOP left playing (the Laser/Stunner's op-1 loop — the
-                // game's held state 0xb does not reach its op-4.3 stop before the switch) dies here:
-                // the fire + release scripts' looped op-1 ids all stop [S the game's own stop point is
-                // unmeasured — the loop must not outlive the weapon; live check filed].
+                // fix-laser-beam: a fire-script LOOP left playing (the Laser/Stunner's op-1 loop) dies
+                // here. The game's own stop points are the scripts' op-4.3 `Sound_StopAllWithId(id)`
+                // [M AnimProcessScriptCmds 0x1c1b38:387-389] and the hardcoded trio 0x12/0x3d/0xf0 on
+                // substate ENTRY [M Player_ChangeSubState 0x190630:83-85, Player_Init 0x1910f8:41-43];
+                // the weapon-switch path itself performs NO stop (the census: AnimScriptAdd 0x1c6d40 /
+                // AnimScriptDelete 0x1c14f0 / AnimObjectDelete 0x1bee80 carry no sound calls — an
+                // anim-script's op-1 channels are not tracked, so in the game the loop outlives the
+                // deleted script until a substate transition or an op-4.3). The port stops the ids at
+                // the switch with the game's own id-keyed mechanism [M Sound_StopAllWithId
+                // 0x1de0c8:10-21] because its deleted script never reaches the op-4.3 it carries.
                 for id in self.gadget_loop_ids(cur_id) { self.drones.audio.stop_all_with_id(id); }
                 let holster = self.weapons.holster_script(cur_id as usize);
                 if holster != 0 {
@@ -3715,7 +3781,8 @@ impl Sim {
             // reload branches additionally gate on the VIEW state being 0 [M 0x1a5460:409 — the R-key
             // branch's `if (0xf4 == 0)` — and :447-450, the auto-reload branch's `if (0xf4 != 0)
             // return`]: a reload can only START from the fully idle view, so the switch states 1/3/8
-            // gate here too (`switching` is the port's 0xf4 stand-in for them). Without this the
+            // gate here too (`switching` = `switch_state != 0`, and the port's switch_state holds
+            // the game's own +0xF4 view-state values 1/3/8 across the holster→draw cycle). Without this the
             // variant-swap tick could start a reload whose +0xA4 script overwrote the +0xC8 variant
             // script, and the state-8 wait (which reads the variant's length) never completed.
             let len_of = |h: u32| self.scripts.get(&h).map_or(0.0, |s| s.length as f32);
@@ -3977,7 +4044,7 @@ impl Sim {
                         // `(short)FRAME_RATE_INT * 0x14 <= +0x93a`; FRAME_RATE_INT = 60 [L
                         // docs/fields/bldata.md +0x93E "= n_INT·0x14 = 1200" (the EE snapshot's own
                         // default) and +0x95E "= (char)n (60)"; door.md's n·6 = 360-tick auto-close
-                        // corroborates]. fix-weapon-anims guessed 20 [S] — 100x early: the fidget kept
+                        // corroborates]. fix-weapon-anims' first cut used 20 — 100x early: the fidget kept
                         // restarting every ~20 idle ticks and the idle script never reached its later
                         // frames (the Samurai's idle loop was choked before its own op-1s).
                         self.view_script = alert_hash;
@@ -4101,9 +4168,13 @@ impl Sim {
                 // state 0/5, within the weapon's own `weapon_data+0x1C` (2.0/4.0 [L]); else the
                 // function returns and the decryptor does NOTHING — the playtest 1017 symptom. On
                 // the pass the shot runs (the scan bullet, class 5 [M Bullet_init 0x12c5a0:87]) and
-                // `Lock_Update`'s contact scan decodes (docs/systems/decryptor.md). The port's
-                // stand-in: the pick below, then one +1/+3 scan tick [S — one contact bullet; the
-                // game's count varies with the bullet lifetime]. The spend `update_with` already
+                // `Lock_Update`'s contact scan decodes (docs/systems/decryptor.md). The port's pick
+                // below, then one +1/+3 scan tick, IS the game's per-press count: the scan bullet
+                // flies speed 33.333335 u/tick [M record+0x20, ee_start_05 @ 0x2c4b58/0x2c4c64] with
+                // range 2.0/4.0 [M record+0x1C] and dies when range < travelled [M Bullet_update
+                // 0x12e95c-0x12e984] — exactly ONE moving tick, hence exactly ONE Lock_Update
+                // contact tick per press, and the FIRST contact only flips state 0 → 5 (nothing
+                // banks [M 0x1ae3d8:163-190]). The spend `update_with` already
                 // made is refunded on a FAILED gate (the game never reaches the spend; the refund is
                 // the stunner's miss-arm shape [M 0x1a4bf0:193-199]). No bullet spawns: the record
                 // carries no beam bits (+0x6C = 0 [L]) and the lock side consumes the pulse.
@@ -4195,10 +4266,14 @@ impl Sim {
                 // the raw trigger — including through the draw/switch cycle and with an empty clip.
                 if nf_game::gadget::runs_beam(self.gun.weapon) {
                     let is_stunner = matches!(self.gun.weapon, 0x4a | 0x4c);
-                    // The stunner's target test [M 0x1a4bf0:169-200]: the ray must meet a live guard
-                    // (class byte 2/3 on the hit's straddler) within weapon_data+0x1c (5/10 [L]) —
-                    // Draw_TaserBeam's +0x95d gate [M 0x1a4298:134]. The port's ray-vs-sphere contact
-                    // (the 1.05 stand-in sphere) over the live drone list.
+                    // The stunner's target test [M 0x1a4bf0:169-200]: a Collide_RayIntersect from the
+                    // HEAD along the aiming direction; the hit is a live guard when the hit object's
+                    // class byte is 2 or 3, and `Vec_Dist3D(head, hit+0x40) < weapon_data+0x1c`
+                    // (5/10 [L]) sets +0x95d — Draw_TaserBeam's gate [M 0x1a4298:134]. The ray meets
+                    // the guard's own 0x800 walk hittest (a capsule segment; NDrone2_Collision
+                    // 0x140e90:104-121), so the port tests ray-vs-capsule over the live drone list:
+                    // the drones' body capsule (the Toucher::drone shape — pos−1.0 → head(), r 0.4)
+                    // and the head→contact distance inside the weapon's range [M the 0x1a4bf0 gate].
                     let mut target_hit = true;
                     if is_stunner {
                         target_hit = false;
@@ -4206,14 +4281,9 @@ impl Sim {
                         let end = [camera[0] + dir[0] * range, camera[1] + dir[1] * range, camera[2] + dir[2] * range];
                         for dr in self.drones.list.iter() {
                             if !dr.present || !dr.enabled || dr.corpse || dr.health <= 0.0 { continue; }
-                            let c = [dr.pos[0], dr.pos[1], dr.pos[2]];
-                            let ab = [end[0] - camera[0], end[1] - camera[1], end[2] - camera[2]];
-                            let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
-                            let ap = [c[0] - camera[0], c[1] - camera[1], c[2] - camera[2]];
-                            let t = if ab2 > 1e-9 { (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2 } else { 0.0 };
-                            let cl = [camera[0] + ab[0] * t.clamp(0.0, 1.0), camera[1] + ab[1] * t.clamp(0.0, 1.0), camera[2] + ab[2] * t.clamp(0.0, 1.0)];
-                            let d2 = (cl[0] - c[0]).powi(2) + (cl[1] - c[1]).powi(2) + (cl[2] - c[2]).powi(2);
-                            if d2 <= 1.05 * 1.05 { target_hit = true; break; }
+                            if seg_seg_dist2(&camera, &end, &[dr.pos[0], dr.pos[1] - 1.0, dr.pos[2]], &dr.head()) <= 0.4 * 0.4 {
+                                target_hit = true; break;
+                            }
                         }
                     }
                     self.stunner_target = Some(target_hit);
@@ -4359,8 +4429,11 @@ impl Sim {
                     // gated [M 0x1a4298:107-137]). fix-gadgets-live moved this out of the spawn_shot
                     // gate so the stunner's aim-off-target hold shows its blue arc light.
                     // `Player_MuzzleFlash` 0x1a4298: `Light_Create(radius = weapon_data+0x58,
-                    // intensity 2.0, the muzzle (the view model's datum 0; the sim approximates it
-                    // eye + aim·0.5 [S]), rgb = +0x56/+0x55/+0x54, channel 0, life 0 → +0x20 = 1 (one
+                    // intensity 2.0, the muzzle — the view model's DATUM 0, or datum 4 for the
+                    // +0x68 & 0x40000 dual records while BL+0x958 is clear [M 0x1a4298:66-89, the
+                    // same alternation the casing eject reads; the `view_datum` fallback below is a
+                    // guard for an unposed model, not the game's rule]), rgb = +0x56/+0x55/+0x54,
+                    // channel 0, life 0 → +0x20 = 1 (one
                     // tick), kind 1)` — its `Rand_Rand(0)` draw sits between the accuracy draws and
                     // the bullet's spread draws, as in the game. The smoke: `Gas_Init`'s
                     // `Rand_FRand(2π)` draw, unless weapon_data+0x68 & 0x2000 (no smoke).
@@ -4371,7 +4444,7 @@ impl Sim {
                         let radius = f32::from_le_bytes([w[0x58], w[0x59], w[0x5a], w[0x5b]]);
                         // muzzle-light-datum [M Player_MuzzleFlash 0x1a4298:66-89]: the light sits at the view model's
                         // DATUM 0 (the muzzle), or datum 4 for the +0x68 & 0x40000 dual records while BL+0x958 is
-                        // clear — the same alternation the casing eject reads. The old eye + aim·0.5 stand-in sat
+                        // clear — the same alternation the casing eject reads. The old eye + aim·0.5 approximation sat
                         // above and behind the gun and lit its camera-facing side; at the muzzle the light is AHEAD of
                         // the gun and the PS2 view model stays dark with a lit edge (render vs PCSX2, 07000008 launch).
                         let dual = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap()) & 0x40000 != 0 && self.gun.alt_fire_toggle == 0;
@@ -4386,7 +4459,7 @@ impl Sim {
                             // The puff itself: models-misc's gas system (`Gas_Init(0.05, 0.1, …, 0x2000039, 7,
                             // 0x48403080, end 1)` [M 0x1a4298]); Gas_Init's own draws stay un-consumed (G-033).
                             // rocket-trail-gas: the decomp-dropped 11th arg (the life) is 0x80 = 128 ticks
-                            // [M 0x1a43f8 `li $v0, 0x80` → 0x1a442c `sw $v0, 0($sp)`] — the old 8 was [S] —
+                            // [M 0x1a43f8 `li $v0, 0x80` → 0x1a442c `sw $v0, 0($sp)`] — the old value 8 was a guess —
                             // and the packed END rgba is 1 = bytes (0,0,0,1), so the alpha rate is
                             // (1−0x80)/128 [M 0x1a4440 delay slot `li $t3, 1`].
                             self.drones.gas.init_ex(nf_game::gas::SMOKE_QUAD, pos, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
@@ -4489,9 +4562,12 @@ impl Sim {
         // the action machine 0x17ee88 latches per press) — a HELD use key activates the world once per press,
         // not every tick. The port fired the block raw every held tick: a 1-s hold re-toggled the 06
         // guardhouse swing door 60× (activate's open/opening arm [M 0x135be0:121-131] turns OPENING back to
-        // CLOSING on the next tick's call) and the door was CLOSED again before the interact assert. Gate the
-        // SP use block on the rising edge; the 46-frame auto-repeat arm [M 0x17ee88's counter] stays unported
-        // [S]. The MP row path (net_use_pass) keeps its own per-slot semantics.
+        // CLOSING on the next tick's call) and the door was CLOSED again before the interact assert. The rising
+        // edge is the game's whole rule for the use key: `Player_WeaponFiring` 0x1a5460:396 reads only the
+        // fresh-press bit (mask 4) of action 0xE [M], and Input_Update 0x17ee88's repeat machinery (the arm at
+        // held-frame 46 — asm 0x17f0d4 `sltiu $v0, $v0, 0x2e`; bit 0x8 added every 8th frame thereafter, asm
+        // 0x17f0e0-0x17f0f0) has NO consumer — no caller ever masks 0x8, so there is nothing to port. The MP
+        // row path (net_use_pass) keeps its own per-slot semantics.
         let use_edge = use_key && !self.use_key_prev;
         self.use_key_prev = use_key;
         let mut crept = false;
@@ -4528,23 +4604,27 @@ impl Sim {
             // tuned to (see player_use_doors). The last argument is Bond's body position
             // (obj+0xC0) — `SP_Activate` 0x1dc338:51-53's facing-dot input (use-pick-sp-standins).
             self.drones.player_use_doors(&d, camera, look, self.drones.frame, self.bond.head(), self.bond.pos);
-            // `Player_Activate` 0x1a5170 case '%': the pick's class-0x25 SS objects activate
-            // (`SS_Activate` 0x1a9ea8 — state + mask gate, then the channel latch). The game's
-            // pick is a 1.0-radius sphere at head+look vs the SS's mesh; the port takes the
-            // nearest E-armed SS under the head ray within 2.2 (the mesh extent of a hatch panel) (the doors' reach stand-in shape).
+            // `Player_Activate` 0x1a5170's ONE pick for every class [M :100-108]: a sphere of radius
+            // exactly 1.0 (asm 0x1a5278 `lui $at, 0x3f80`) centred at head + view dir (`Mat_GetDir`
+            // of the slot viewer's matrix, asm 0x1a5250), through Collide_SphereIntersect 0x1ec940
+            // → Collide_Pick 0x1eb320's 0x101 candidate test `dist²(centre, obj+0x80) <
+            // (1.0 + obj+0x8C)²` [M Collide_PickObj 0x1eae80:219-228]; the class walk then activates
+            // EVERY hit, nearest first, no break [M 0x1a5170:113-179]. The port's world sphere is
+            // the placement object's gfx sphere (o.centre/o.radius — the Control_BuildWorldSph
+            // source, the same data Doors::create loads); the game's glist refine
+            // (Intersect_PointGeom 0x1e92d8) is not ported — a mesh veto of a sphere hit is left
+            // to the live checks (the report lists them).
             let head = [camera[0], camera[1], camera[2]];
-            let mut best: Option<(f32, usize)> = None;
+            let pick_c = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
+            let mut ss_hits: Vec<(f32, usize)> = Vec::new();
             for (i, s) in self.drones.sss.list.iter().enumerate() {
                 if s.state == 0 || s.mask & 4 == 0 { continue; }
                 let p = s.pos();
-                let to = [p[0] - head[0], p[1] - head[1], p[2] - head[2]];
-                let proj = to[0] * look[0] + to[1] * look[1] + to[2] * look[2];
-                if proj < 0.0 { continue; }
-                let cl = [head[0] + look[0] * proj, head[1] + look[1] * proj, head[2] + look[2] * proj];
-                let dd = ((p[0] - cl[0]).powi(2) + (p[1] - cl[1]).powi(2) + (p[2] - cl[2]).powi(2)).sqrt();
-                if dd > 2.2 { continue; }
-                if best.map_or(true, |(bd, _)| dd < bd) { best = Some((dd, i)); }
+                let d2 = (p[0] - pick_c[0]).powi(2) + (p[1] - pick_c[1]).powi(2) + (p[2] - pick_c[2]).powi(2);
+                let r = 1.0 + s.radius;
+                if d2 <= r * r { ss_hits.push((d2.sqrt(), i)); }
             }
+            ss_hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
             // The same creepwall arm at the second activation site: icon context 6 ONLY
             // [M Player_Activate 0x1a5170:66 `if (BL+0x95f == 6)`; L the 0xFF live pin at the
             // gate door] — the scan's own proximity never creeps.
@@ -4565,7 +4645,7 @@ impl Sim {
                 }
             }
             if !crept {
-            if let Some((_, i)) = best {
+            for (_, i) in ss_hits.iter().copied() {
                 let frame = self.drones.frame;
                 let st = self.drones.sss.list[i].state;
                 let mk = self.drones.sss.list[i].mask;
@@ -4576,19 +4656,19 @@ impl Sim {
                 if hit { eprintln!("[ss] SS #{i} (placement {}) activated by the use key", self.drones.sss.list[i].placement); }
             }
             // `Player_Activate` 0x1a5170's class walk also reaches class 0x47 — the mounted guns
-            // (`GunImp_Create` 0x131f20, `GunImp_Activate` 0x132f00). The same head-ray reach
-            // shape as the SS arm (the game's pick is one head-ray class walk; the port's 2.2 is
-            // the SS arm's reach stand-in).
+            // (`GunImp_Create` 0x131f20, `GunImp_Activate` 0x132f00). The SAME one pick serves
+            // every class [M 0x1a5170:100-179 — one Collide_SphereIntersect, one hit-list walk]:
+            // the sphere at head+look vs the gun's world sphere (1.0 + obj+0x8C, the gfx-sphere
+            // radius the props load now carries).
             let mut gbest: Option<(f32, usize)> = None;
             for (i, g) in self.drones.props.gunimps.iter().enumerate() {
                 if g.active { continue; }
-                let to = [g.pos[0] - head[0], g.pos[1] - head[1], g.pos[2] - head[2]];
-                let proj = to[0] * look[0] + to[1] * look[1] + to[2] * look[2];
-                if proj < 0.0 { continue; }
-                let cl = [head[0] + look[0] * proj, head[1] + look[1] * proj, head[2] + look[2] * proj];
-                let dd = ((g.pos[0] - cl[0]).powi(2) + (g.pos[1] - cl[1]).powi(2) + (g.pos[2] - cl[2]).powi(2)).sqrt();
-                if dd > 2.2 { continue; }
-                if gbest.map_or(true, |(bd, _)| dd < bd) { gbest = Some((dd, i)); }
+                let r = 1.0 + g.radius;
+                let d2 = (g.pos[0] - pick_c[0]).powi(2) + (g.pos[1] - pick_c[1]).powi(2) + (g.pos[2] - pick_c[2]).powi(2);
+                if d2 <= r * r {
+                    let dd = d2.sqrt();
+                    if gbest.map_or(true, |(bd, _)| dd < bd) { gbest = Some((dd, i)); }
+                }
             }
             if let Some((_, i)) = gbest {
                 let placement = self.drones.props.gunimps[i].placement;
@@ -4648,7 +4728,14 @@ impl Sim {
                 let drone_in_front = hit.map_or(false, |(_, t)| t < dt);
                 if !drone_in_front && !trig_in_front_of_door && dt * 50.0 < 5.0 && self.level != 0x0700_004a
                     && self.hud.door_msg < 3 {
-                    let mp = self.mp.is_some(); // MPSettings+0x388 — the SP/MP discriminator [S port mapping]
+                    // MPSettings._388_4_ (DECIMAL 388 = 0x184 — the decompile's _NNN_ notation; the
+                    // symbol is 476 bytes, so hex 0x388 does not exist) — the SP/MP discriminator:
+                    // copied from +0x180 (dec 384) every map load by MP_Start 0x183a50:70, driven by
+                    // ResetMap_GameInit 0x1d5080:7 ← GameState._84_4_ (set 1 by the MP-band level
+                    // pick 0x1d3800:22-26, 0 by the SP mission pick 0x20b8d8:26); ~100 readers gate
+                    // on it (e.g. Door_DoMsg 0x135f18:13, Check_Target 0x1a7810:103). The port's
+                    // `mp.is_some()` is that flag's model (an Option present iff the match is MP).
+                    let mp = self.mp.is_some();
                     if let Some(label) = self.drones.doors.do_msg(di, mp, &self.drones.channels) {
                         self.hud.door_msg += 1;
                         self.hud.info_labels.push_back((label, 180.0));
@@ -7598,7 +7685,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let n_doors = nf_game::door::door_placements(&level.maps[m].placements).len();
             // The same construction the sim's `Drones::attach_level` runs, so the slot order matches
             // the matrix upload's `sss.list` order (deterministic: placement order, same filter).
-            let ss_list = nf_game::ss::SsList::create(&level.maps[m].placements, &level.path_blocks(), |_p| 0);
+            let ss_list = nf_game::ss::SsList::create(&level.maps[m].placements, &level.path_blocks(), |_p| (0, 0.0));
             // (hash 0 here: the render pass does not need the collision hash — it reads the placement
             // object directly below; the sim's attach_level resolves the real one for set_dynamic.)
             for (si, ss) in ss_list.list.iter().enumerate() {
