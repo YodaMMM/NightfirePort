@@ -170,8 +170,11 @@ pub struct LadderCtx<'a> {
     /// `build_alloc_cel` 0x1c93f8 defaults it to −500.0 = no water; `parseentity_fixup_entity` 0x1d00c0
     /// sets it to the entity's bbox max y for flag word 0xC023). `None` = no water cel / below −400.
     pub water: Option<f32>,
-    /// Whether Bond holds the descend control this tick [S — the game's vertical swim input is not
-    /// resolved in this pass; see docs/atlas/ladder.md "Not verified"].
+    /// The descend control this tick — carried but never read: the game's vertical swim input is the
+    /// look pitch (the swim branch rides the look-directed forward [M Player_Move 0x191dd0:149-165])
+    /// and the case-3 dispatch reads no crouch/jump input [M Player_Update 0x193600 case 3;
+    /// Player_HandleJump 0x1916b0 runs only from the walk]. There is no descend control in the game's
+    /// swim; the field stays for the ctx shape (scene.rs feeds it) but nothing keys on it.
     pub sink: bool,
     /// The level's creepwall objects (class 0x2B '+', placement 0x3F), in placement order.
     pub creepwalls: &'a [crate::creepwall::CreepWall],
@@ -366,8 +369,11 @@ pub struct Bond {
     /// script's length for these non-looping scripts [D all seven scripts carry looping = false]).
     pub wire_anim_time: f32,
     /// The playing wire anim's rate (`AnimScript+0x98`): 1.0 for the grab pose, ±1.2 for everything
-    /// `Player_Wire` itself adds (the tail at 0x197ec4 sets ±1.2; a fresh script's rate is 0 → +1.2 [S —
-    /// the negative branch's trigger is not resolved]).
+    /// `Player_Wire` itself adds — the tail reads the running rate and re-arms it: negative stays
+    /// −1.2, anything else (a fresh script's 0 included) becomes +1.2 [M Player_Wire 0x197658:293-297
+    /// `if (rate < 0.0) rate = −1.2 else rate = +1.2`]. A decompile-wide scan for the −1.2 constant
+    /// (0xbf99999a) finds no other writer, so from a fresh script the negative arm is unreachable and
+    /// +1.2 is the behaviour the port implements.
     pub wire_anim_rate: f32,
     /// The camera mode the grab/drop paths set (`Player_SetCamMode`: 0xB on the wire, 0 on foot) [M
     /// CollWire 0x1975f8, Player_Wire 0x1978a8]. The renderer can adopt it; the headless sim only
@@ -375,9 +381,14 @@ pub struct Bond {
     /// 0x1bb6d8:21 calls the viewer's updator (`Player_PositionCamera` 0x18f5d8) which switches on
     /// BLData+0x950 — this byte — per frame [M].
     pub cam_mode: u16,
-    /// `BLData+0x18`: the fall-speed accumulator — the zipline ride adds FRAME_RATE_MUL·0.15 per tick
-    /// and the creep drop 0.05 [M Player_Zipline 0x198054, Player_Creep; the game's `Player_Move`
-    /// applies it [S — the atlas's BLData table]].
+    /// `BLData+0x18`: the local velocity's FORWARD lane — the +0x10 quad is (x strafe, y vertical,
+    /// z forward) and `Player_Move` writes the z lane fresh every walk tick from the +0x28 smoother
+    /// [M Player_Move 0x191dd0:167 `+0x18 = fStack_e8 · mult`], integrated along the matrix rows for
+    /// every substate [M Player_Update 0x193600:284-295]. The zipline ride accumulates 0.15/tick into
+    /// it [M Player_Zipline 0x197f50:121 `+= FRAME_RATE_MUL·0.15`] and the creep exit pushes 0.05 of
+    /// it [M Player_Creep's exit tail]. The port's zipline integration rides this field downward (a
+    /// port shape) — the ride itself is unreachable in the shipped game: both live wires are type 0
+    /// [D placements probe, grab_wire's census], so the zipline substate is never entered.
     pub fall_speed: f32,
     /// The Q-Claw grapple's runtime state (`BLData+0x140..0x160` narrowed; fix-gadgets). `Some`
     /// while the substate 2 runs [M Player_SetGrapplePoint 0x195da0 → ChangeSubState(2)].
@@ -415,9 +426,10 @@ pub struct Bond {
     /// `BL+0xd0`: the auto-stabiliser's tick window, armed to FRAME_RATE·1.5 = 90 by the
     /// action-0xe read [M Player_ZeroG 0x192ab0:163-168]. Field on its own line (merge lesson 4).
     pub stabiliser: u16,
-    /// Port bookkeeping [S]: whether `zero_g_rot` is live for the current 8/9 spell (built from
-    /// the walk yaw/pitch on the first zero-g tick, dropped on leaving the substates). Field on
-    /// its own line (merge lesson 4).
+    /// Port bookkeeping for the game's persistent orientation: `obj+0x90` is built from the walk
+    /// yaw/pitch on entering the substates (ChangeSubState 8/9 touches no rotation [M 0x190630]) and
+    /// `Player_ZeroG` composes it every tick [M 0x192ab0:136-199] — the game needs no flag; the port
+    /// tracks when its scalar `zero_g_rot` mirror is live (field on its own line, merge lesson 4).
     pub zero_g_active: bool,
     /// The post-integration, pre-push-out position — the game's hittest build point [M
     /// `Player_Collision` 0x194df0 builds BLData+0x760 from obj+0x30 AFTER `Player_Update`'s
@@ -436,14 +448,13 @@ pub struct Bond {
     /// 0x10a664-0x10a6a0]. No code writes it statically (the full-.text sdc2/sw scan at imm 0x790
     /// found nothing); its only writer is the DeltaP add-back [M Collide_Intersect 0x1ebaa8:353-373
     /// adds the world DeltaP to +0x10/+0x20/+0x30/+0x50/+0x60 per object pass with a hit], so it
-    /// is READ by the bit's dot2 [M 0x10a664-0x10a6a0] but its lifetime semantics are [S]:
-    /// the accumulator reading (0c3) rests on "no static writer" plus the bit word's per-tick
-    /// clear being unpinned (the decompile's `*(u16*)(BLData+0x7d8)` store resolves to
-    /// HITTEST+0x98 raw, `sh $s3, 0x70c($a0)` @0x194ff4, base+0xcc — not the +0x9c bit). As
-    /// built the `acc < b_pre` collapse moved every body on positive-floor levels (the held
-    /// merge's 3 failures), so hatch-crouch-0c4 keeps the accumulator FED [M Collide_Intersect
-    /// 0x1ebaa8:353-373] but does NOT gate `grounded` on the pick arm; the main agent's live
-    /// pin of the bit block decides when it returns. Field on its own line (merge lesson 4).
+    /// is READ by the bit's dot2 [M 0x10a664-0x10a6a0]; its only writer is the DeltaP add-back [M
+    /// Collide_Intersect 0x1ebaa8:353-373 adds the world DeltaP to +0x10/+0x20/+0x30/+0x50/+0x60 per
+    /// object pass with a hit]. The port feeds the accumulator but gates NO behaviour on it —
+    /// `grounded` is `walkable || band` [M Player_FeetOnPoint 0x194188:106 + 0x194df0:104] — so the
+    /// open lifetime question (the accumulator reading, 0c3) rides no shipped behaviour; the main
+    /// agent's live pin of the bit block decides when it returns (the report's live checks). Field on
+    /// its own line (merge lesson 4).
     pub pick_ref: V3,
     /// unported-front-end-menus-3: the `CAM_ORBIT` state (BLData+0xe0..0x104) [M `Camera_Orbit`
     /// 0x1bb828] — `Some` while cam_mode is 1, the GoldenEye-strike orbit (`MP_GoldenEyeUpdate`
@@ -621,9 +632,12 @@ impl Bond {
     }
 
     /// `Player_SSGrapple` 0x192860 through `gadget::grapple_tick`: the reel toward the grapple
-    /// point, the hang, and the fire's release (the substate 0; the swing momentum's restore is
-    /// [S] — the release just drops Bond for now). The reel ignores gravity [M the substate body
-    /// writes obj+0x30 directly].
+    /// point, the hang, and the fire's release (the substate 0). The release carries no momentum in
+    /// the shipped flow: the grab zeroed all four velocity triples (`Player_ClearInertia` 0x195e08
+    /// via `Player_CollWire`) and the reel moves Bond by writing obj+0x30 directly, so the +0x10
+    /// triple the game's release arm copies into the +0x20 block [M Player_SSGrapple 0x192860:59-64,
+    /// LAB_00192a24] is zero — the drop IS the game's behaviour. The reel ignores gravity [M the
+    /// substate body writes obj+0x30 directly].
     fn grapple_tick(&mut self, input: &Input) {
         let Some(st) = self.grapple.as_mut() else { self.substate = SS_WALK; return };
         let mut pos = self.pos;
@@ -655,9 +669,10 @@ impl Bond {
         }
         // The vertical comes from the look-directed forward (physics_tick's swim branch [M
         // 0x191dd0:149-165]) — NOT from crouch/jump: the game's case 3 reads no such input (the old
-        // `±2.4` on jump/crouch was [S] fiction; dive = look down + forward, surface = look up +
-        // forward). The surface clamp [M 0x193600:201-220]: `pos.y < surface − 0.3` → the world-Y
-        // move is clamped so Bond rises AT MOST to `surface − 0.3`; else any upward move is zeroed.
+        // `±2.4` on jump/crouch was a guess, replaced by the game's rule: dive = look down + forward,
+        // surface = look up + forward [M 0x191dd0:149-165]). The surface clamp [M 0x193600:201-220]:
+        // `pos.y < surface − 0.3` → the world-Y move is clamped so Bond rises AT MOST to
+        // `surface − 0.3`; else any upward move is zeroed.
         if self.pos[1] < w - 0.3 {
             self.vel[1] = self.vel[1].min((w - 0.3 - self.pos[1]) * 60.0);
         } else if self.vel[1] > 0.0 {
@@ -820,12 +835,12 @@ impl Bond {
                 let mut fwd = fwd_raw;
                 // A hit above (AnimObj flag 0x20 — the port's head_bump) blocks an up-push [M].
                 if self.head_bump && fwd > 0.0 { fwd = 0.0; }
-                // A hit below (flag 8) with a down-push dismounts [M]; the port reads the floor under
-                // Bond's feet within 1.2 units as "hit below" [S — the game's hit comes from the
-                // CollisionHandler's climb scan; see docs/atlas/ladder.md]. The read is the CEL-SCOPED
-                // straddle ray (the game's player collision tests only the cels the straddle walk
-                // keeps from obj+0x20 [M Player_FeetOnPoint 0x194188 → Collide_StraddleCels
-                // 0x1eac98]): a climb-down over the pond from the garden cel does not see the water
+                // A hit below (flag 8) with a down-push dismounts [M]; the game's flag comes from the
+                // CollisionHandler's climb scan: the tick's ladder hit, `hit(+0x40).y − BLData+0x760.y`
+                // (the pre-push base) < 0 → flag 8, > 0 → flag 0x20 [M Player_CollisionHandler
+                // 0x1949a8:59-79]. The port reads the CEL-SCOPED feet ray instead (the game's player
+                // collision tests only the cels the straddle walk keeps from obj+0x20 [M
+                // Player_FeetOnPoint 0x194188 → Collide_StraddleCels 0x1eac98]): a climb-down over the
                 // cel's bed, so the climb keeps going UNDER the surface to the bottom threshold
                 // (centre.y − radius + 1.0 [M 0x196118]) and the dismount lands the swimmer below
                 // the grab window instead of dropping him onto the bed right above it (the ladder-02
@@ -898,18 +913,20 @@ impl Bond {
         // `Player_FeetOnPoint` 0x194188 registers the stand-on contact on the ridden object's
         // `obj+0xD0` list through `Coll_AddHitToList` 0x1ede68 (dist forced 1.0, normal =
         // CONSTANT_UP1, point = obj+0x40 [M 0x194188:138-150]) — the port tracks the ground
-        // object as the `ground_move` pair instead, no contact list [S].
+        // object as the `ground_move` pair instead, no contact list (a port shape — the game keeps
+        // the ridden object's obj+0xD0 list).
         // `Player_FeetOnPoint` 0x194188's tail does ground on `HITTEST+0x9c != 0` alongside the
         // band [M 0x1943a8-0x1943bc], but the port's dot2 model — the bit needs
-        // `pick_ref_y < b_pre_y` with `pick_ref` a lifetime push accumulator — is [S]: the
-        // collapse rests on HITTEST+0x50 being never-reinitialized, and the bit word's per-tick
+        // `pick_ref_y < b_pre_y` with `pick_ref` a lifetime push accumulator — rests on HITTEST+0x50
+        // being never-reinitialized, and the bit word's per-tick
         // clear is not pinned (the decompile's `*(u16*)(BLData+0x7d8) = 0` store resolves to
         // HITTEST+0x98, base+0xcc raw — `sh $s3, 0x70c($a0)` @0x194ff4 — not the +0x9c bit).
         // As built (0c3) the arm fired on positive-floor levels wherever an up-facing contact
         // met the band's miss and moved EVERY body (the held-merge failures: mp_world_sync's
         // sub-pen plate walk, escort_follow's stairwell, the four-human digest). The 0c hatch
         // set — including the real walked route — is green WITHOUT the arm, so the grounded
-        // rule stays master's until the main agent pins the game's bit. See world.rs
+        // rule stays master's until the main agent pins the game's bit (the report's live
+        // checks). See world.rs
         // `capsule_pick_contact_scoped` and the report's live checks.
         let pick = world.capsule_pick_contact_scoped(self.cel, a, b, CLIMB_RADIUS, self.pick_ref[1]);
         let _ = pick;
@@ -935,7 +952,8 @@ impl Bond {
             (dy * dy).sqrt() - 0.1 <= self.cc
         });
         // The pick-contact arm rides the climb tick too (the same FeetOnPoint rule — see the
-        // walk tick's comment) — NOT gated: [S] unverified, see the pick call above.
+        // walk tick's comment) — NOT gated into grounded: the pick result is measured only (see
+        // the pick call above and the report's live checks).
         self.grounded = walkable || band;
         // floor_ny is the band-gated BLData+0x110 [M Player_FeetOnPoint 0x194188:85/:106-109;
         // 0x194df0:104] — see the walk tick's comment.
@@ -1010,7 +1028,10 @@ impl Bond {
         self.cam_mode = 0xB;
         // The hand-reach correction [M 0x1974b8-0x197538]: delta = root(last) − root(0) of the grab
         // anim's sequence, x −= 0.082, rotated into world by the NEW yaw and subtracted. The rotation's
-        // exact MMI signs are reconstructed [S — disasm 0x1975b0-0x197618]; the magnitude ~0.46 along
+        // exact MMI signs are the disassembly's: out.x = l.x·C + l.z·S, out.z = l.z·C − l.x·S
+        // [M disasm 0x1975dc-0x197608 — `mul.s f1,f2,f4; mul.s f3,f0,f5; add.s f1,f1,f3` stores x;
+        // `mul.s f0,f0,f4; mul.s f2,f2,f5; sub.s f0,f0,f2` stores z], the ±yaw negation gated by a
+        // flag bit (`bbit132 $sp,1` @0x1975b8); the magnitude ~0.46 along
         // the facing (the reach), erased by the grab anim's own root motion as it plays.
         if let Some(t) = ctx.wire_anims.and_then(|wa| wa.tracks.get(&0x0600_05e5)) {
             let e = t.at(t.frames as f32);
@@ -1028,7 +1049,10 @@ impl Bond {
     /// motion rotated by Bond's yaw (`AnimSeqTick`/`AnimFrameResolve`; the same convention as the
     /// drones' `root_motion`: world = l.x·(cos y, 0, −sin y) + l.z·(sin y, 0, cos y)), and reports
     /// whether the anim has reached its end (`AnimScriptIsStopped` — these scripts never loop [D]).
-    /// Missing track or no anim data = instantly stopped with no motion [S fallback].
+    /// Missing track or no anim data = the anim holds its start pose with no root motion. In the
+    /// shipped game the fallback is unreachable for the seven wire scripts — the level archives
+    /// carry them [D — the tracks measured from the archives, wire.rs's RootTrack doc]; the
+    /// fallback exists for the no-data signature (`wire_anims: None`, the unit tests).
     fn wire_anim_advance(&mut self, ctx: &LadderCtx) -> bool {
         if self.wire_anim == 0 { return true; }
         let Some(track) = ctx.wire_anims.and_then(|wa| wa.tracks.get(&self.wire_anim)) else {
@@ -1201,9 +1225,14 @@ impl Bond {
         self.creep = Some(wi);
     }
 
-    /// `Player_Creep` 0x1969d0 (substate 7) [M], with [S] the crawl motion: the game drives Bond along
-    /// the wall through the crawl anim scripts (0x600046f/0x6000471/0x6000475 — the port runs no body
-    /// anim scripts), so the port moves him along the axis at 0.02/tick (1.2 u/s) with the input.
+    /// `Player_Creep` 0x1969d0 (substate 7) [M]; the crawl motion is the port's documented shape:
+    /// the game drives Bond along the wall through the crawl anim scripts' root tracks
+    /// (AnimScriptAdd 0x600046d/0x6000471/0x600046f by the mode and the stopped state, the
+    /// AppendBlend pair 0x600046c/e [M Player_Creep 0x1969d0:172-219]) — the port parses no Bond
+    /// body-anim data (the wire tracks are the only player anim archive it reads [M wire.rs]), so
+    /// the port moves him along the axis at a constant 0.02/tick (1.2 u/s) with the input. The feel
+    /// difference (the game's anim-curve speed vs the constant) is the main agent's feel check;
+    /// the extension path is the drones' `root_motion` machinery.
     /// Every tick: the xz snaps to the closest axis point + fwd(yaw)·0.275 [M 0x1969d0:99-125], the
     /// yaw = wall.yaw + π; the 2D distances to the two ends pick the near end (iVar10) and the exits:
     /// within 1.0 of an end WITH the input toward it → `+0x942 = 7`, `ChangeSubState(0)`, cam mode 0,
@@ -1250,7 +1279,8 @@ impl Bond {
             self.push_fwd += 0.05;
             return;
         }
-        // [S] the crawl motion along the axis (the game's anim scripts carry the displacement).
+        // The crawl motion along the axis is the port's shape (the game's is the crawl anims' root
+        // tracks — see the fn doc) [M 0x1969d0:172-219].
         if pushing != 0 {
             let dir = if pushing == 2 { 1.0 } else { -1.0 };
             let (ax_s, ax_c) = (w.yaw + std::f32::consts::FRAC_PI_2).sin_cos();
@@ -1269,9 +1299,13 @@ impl Bond {
     /// 0x06000096 re-added whenever stopped, the FULL-radius pitch segment, Bond's y lifted 1.17363 for
     /// the lower-end test — within 1.0 of it → mode 9 + anim 0x06000094 — then pos = the closest point
     /// at `closest.y − 1.17363` and the fall-speed accumulator `BLData+0x18 += FRAME_RATE_MUL·0.15`
-    /// (the port integrates it as a downward velocity: the game's `Player_Move` applies +0x18 [S — the
-    /// atlas's BLData table]; the clamp projects the fall onto the line, so Bond slides down a sloped
-    /// zipline and accelerates).
+    /// (the port integrates it as a downward velocity: the game's `Player_Move` writes BLData+0x18
+    /// as the local velocity's FORWARD lane [M 0x191dd0:167] and the integration applies the +0x10
+    /// quad along the matrix rows [M 0x193600:284-295]; the zipline accumulates it at 0.15/tick
+    /// [M 0x197f50:121]). The ride is unreachable in the shipped game — both live wires are type 0
+    /// [D placements probe, grab_wire's census] — so the port's downward integration is
+    /// dead-in-shipped-play bookkeeping; the clamp projects the fall onto the line, so Bond slides
+    /// down a sloped zipline and accelerates.
     fn zipline_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, _input: &Input) {
         let wi = match self.wire {
             Some(wi) if ctx.wires.get(wi).is_some() => wi,
@@ -1304,9 +1338,11 @@ impl Bond {
             return;
         }
         // The fall-speed accumulator `BLData+0x18` [M 0x19804c-0x198054: += FRAME_RATE_MUL·0.15 per
-        // tick; the game's `Player_Move` applies it [S — the atlas's BLData table]]. The port applies it
-        // as this tick's downward velocity; the clamp below projects the fall onto the line, so Bond
-        // slides down a sloped zipline and accelerates.
+        // tick. The game's `Player_Move` writes BLData+0x18 as the forward lane of the local velocity
+        // [M 0x191dd0:167] and the integration applies the +0x10 quad along the matrix rows
+        // [M 0x193600:284-295]. The port applies it downward for the zipline ride (unreachable in
+        // the shipped game — both live wires are type 0 [D placements probe]). The clamp below
+        // projects the ride onto the line, so Bond slides down a sloped zipline and accelerates.
         self.fall_speed += 0.15;
         self.pos[1] -= self.fall_speed / 60.0;
         let lifted = [self.pos[0], self.pos[1] + 1.17363, self.pos[2]];
@@ -1334,10 +1370,12 @@ impl Bond {
         true
     }
 
-    /// `Player_MonitorAir` 0x191a70 [M], run after every substate: the head (the port uses the eye [S])
-    /// against `cel+0x90`: below the surface the air `+0x8C0` drains at 5/s from 100 and the underwater
-    /// fade `+0x8C4` rises; above it (any cel — the −500 default is far below every head) the air refills
-    /// at 20/s. At `air < 1.0` every 30 ticks (`GameState % (FRAME_RATE·0.5) == 0`):
+    /// `Player_MonitorAir` 0x191a70 [M], run after every substate: the head — the game reads the
+    /// anim head bone's world transform (`AnimGetBoneWorldTrans(param_2, bone −5, …)` [M
+    /// 0x191a70:50-53]; the port uses the fixed standing eye — it runs no Bond skeleton — the
+    /// live check pins the drown threshold) — against `cel+0x90`: below the surface the air `+0x8C0`
+    /// drains at 5/s from 100 and the underwater fade `+0x8C4` rises; above it (any cel — the −500
+    /// default is far below every head) the air refills at 20/s. At `air < 1.0` every 30 ticks (`GameState % (FRAME_RATE·0.5) == 0`):
     /// `Player_HandlePain(0x40000000 = 2.0, type 7)` [M 0x191a70:136-143, disasm 0x191d9c] — the drown
     /// damage the caller applies. The breath loop sounds (0x60c surfaced / the underwater loop on
     /// `+0x89C`) and the HUD air pane are not ported this pass.
@@ -1522,8 +1560,9 @@ impl Bond {
                     + v[2] * self.zero_g_rot[2][k];
             }
             // The port keeps obj+0x54's heading in `yaw` for the readers outside the substate
-            // (sphere_centre, the death pick) [S — the game derives it elsewhere; only the matrix
-            // is authoritative in zero-g].
+            // (sphere_centre, the death pick) — a port-read mirror: the game leaves obj+0x54 stale
+            // in the substate (Player_ZeroG 0x192ab0 stores no +0x54 [M full-file scan]) and only
+            // the matrix is authoritative in zero-g.
             self.yaw = self.zero_g_rot[2][0].atan2(self.zero_g_rot[2][2]);
         } else {
         self.yaw += turn;
@@ -1592,7 +1631,8 @@ self.local = [vs / k, vf / k];
         let mut floor = world.segment_hit_scoped(self.cel, self.pos, to);
         // The game's pass never lands over a void: `build_FindCel` 0x1c8cb0 relinks obj+0x20 by
         // tie-break rays against each candidate's own chain geometry, so the actor's cel always
-        // carries the geometry under him. The port's buckets are coarser than the game's cels [S]:
+        // carries the geometry under him. The port's buckets are coarser than the game's cels (a
+        // port-structure fact, covered by the redo below):
         // over 07000002's ladder head the scoped pass sees no floor at all (the garden-floor rim
         // sits in a bucket the straddle walk doesn't keep) and Bond fell down the shaft he had
         // just climbed (fix_ladder_live); on 07000009 the car-park stairwell steps hung outside
@@ -1614,9 +1654,8 @@ self.local = [vs / k, vf / k];
         // dot1 = dot(face normal, axis) > 0.7 (0x10a650-0x10a674, up-facing faces only), dot2 =
         // dot(HITTEST+0x50 − (B + push), axis) < 0 (0x10a66c-0x10a6a0), dot3 = dot(normalize(R),
         // axis) < 0.7 (0x10a6a8-0x10a734). The port's dot2 MODEL — HITTEST+0x50 as a lifetime push
-        // accumulator, so the arm reduces to `pick_ref_y < b_pre_y` — is [S] (the 0c3 reading; the
-        // bit word's per-tick clear is not pinned, and as built the arm moved every body on
-        // positive-floor levels: the held-merge failures). The pick result is MEASURED here but
+        // accumulator, so the arm reduces to `pick_ref_y < b_pre_y` — that reading (the 0c3
+        // attempt) rests on the bit word's unpinned per-tick clear; the pick result is MEASURED here but
         // does NOT gate `grounded` (hatch-crouch-0c4): the 0c hatch set, the real walked route and
         // the 0700004a descent are all green on master's `walkable || band` rule alone. Feeding
         // the accumulator stays [M Collide_Intersect 0x1ebaa8:353-373] for when the arm returns.
@@ -1639,7 +1678,8 @@ self.local = [vs / k, vf / k];
             let dy = self.pos[1] - hit_y;
             (dy * dy).sqrt() - 0.1 <= self.cc
         });
-        // The pick arm is NOT gated into grounded: [S] unverified — see the pick bit block above.
+        // The pick arm is NOT gated into grounded — the pick result is measured only (see the pick
+        // bit block above and the report's live checks).
         self.grounded = walkable || band;
         // `BLData+0x110` — the port's floor_ny — is the band's OTHER output, and it is band-GATED:
         // FeetOnPoint writes `*param_3 = 1.0f` first [M 0x194188:85] and overwrites it with the
@@ -2215,8 +2255,10 @@ pub fn weapon_lock_auto_draw(level: u32, on: bool, prev: bool) -> bool {
 /// `build_LinkToRoom` 0x1c9680:40, resolved like `wire::icons`) it plays the sound, posts
 /// `Text_AddMsg(BL+0x94e, 0, 1, label, 0, 0xb4)` — TXTMSG **type 1 = the INFO pane**, life 0xB4 =
 /// 180 ticks — and sets obj+0xFE bit 0, the delete flag [M 0x1b3380:24-42; obj-tag.md +0xFE bit 0
-/// = delete me]. `Hint_Create`'s stage gate (param 2: 0 = always; 5/6/7 = only on game states
-/// 1/2/3 [S — the GameState+0x40 compare]) is 0 on every hint marker found on the disc so far.
+/// = delete me]. `Hint_Create`'s stage gate is the GameState+0x40 compare [M 0x1b3248:12-21:
+/// `param2 != 0 && param2 < GameState+0x40` → refuse; `param2 == 5` → only state 1; `6` → only 2;
+/// `7` → only 3], and it is 0 on every hint marker found on the disc so far [D census] — the
+/// gate's non-zero arms never fire in the shipped data.
 ///
 /// The label id rides in the struct; the message text binds at drain (`USATxt.dat`, the scene's
 /// `lang`), so the tests can pin the game's ids without disc text.
