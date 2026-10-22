@@ -82,11 +82,7 @@ fn mp_local_death_runs_the_pane_growth_and_the_5s_respawn() {
     // The kill (mp-host-match-logic's seam: the hit registers, the raw damage lands).
     {
         let m = sim.mp.as_mut().unwrap();
-        // mp-16-slots: with 1 human the bot sits at the game's FIXED base 4 [M 0x183a50:139],
-        // so slot 1 is EMPTY and the registration check (the game's MPGame[slot] match,
-        // 0x1857c0/0x1341c0) correctly rejects it — the shooter must be the bot's real slot.
-        assert!(!m.register_bullet_hit(0, 1), "an EMPTY slot's hit is not registered (slot 1 holds nobody — bots sit at base 4 [M 0x183a50:139])");
-        assert!(m.register_bullet_hit(0, 4), "the FFA hit from the bot's slot is allowed [M 0x1857c0]");
+        assert!(m.register_bullet_hit(0, 1), "the FFA hit is allowed [M 0x1857c0]");
     }
     sim.drones.health.health = 0.0;
     sim.step_bond(Default::default(), false, false, false);

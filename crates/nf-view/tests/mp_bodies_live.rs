@@ -61,9 +61,8 @@ fn every_mp_characters_mesh_resolves_in_three_arenas() {
 fn an_mp_load_parks_one_body_per_slot_hidden_with_a_sequence_set() {
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     // Two humans (Bond 0 + a Phoenix Commando 9) and two bots (the disc's INITIAL records:
-    // the bots sit at the game's FIXED base 4 — MP_Start 0x183a50:139 `iVar4 = uVar9 + 4` —
-    // so slot 4 = character 6, slot 5 = character 7 [D INITIAL_BOT_RECORDS]; slots 2-3 stay
-    // empty exactly like the game's when h < 4).
+    // bots follow the humans since mp-16-slots — slot 2 = character 6, slot 3 = character 7
+    // [D INITIAL_BOT_RECORDS]).
     let mut settings = nf_game::mp::MpSettings::deathmatch(0x0700_0023);
     settings.human_count = 2;
     settings.bot_count = 2;
@@ -76,7 +75,7 @@ fn an_mp_load_parks_one_body_per_slot_hidden_with_a_sequence_set() {
     assert_eq!(skins, [0x0500_0089, 0x0500_00c6, 0x0500_0097, 0x0500_0098],
         "slot chars 0/9 from the settings, 6/7 from the bot records (BOT_init 0x1249e8:160) [D MP_skins]");
     for b in bodies {
-        assert_eq!(b.char_index as usize, match b.slot { 0 => 0, 1 => 9, 4 => 6, 5 => 7, s => panic!("slot {s}") });
+        assert_eq!(b.char_index as usize, match b.slot { 0 => 0, 1 => 9, 2 => 6, 3 => 7, s => panic!("slot {s}") });
         assert!(!b.chars.is_empty(), "slot {} has drawable characters", b.slot);
         for &ci in &b.chars {
             let c = &scene.characters[ci];
@@ -117,15 +116,15 @@ fn drawn_bodies_hold_their_gun_take_the_cel_light_and_walk() {
     settings.players[1].skin = 9;
     let mut scene = nf_view::load_mp_carry(&path, "07000023.bin", false, None, settings).expect("load 07000023");
     let skins: Vec<(usize, u32)> = scene.mp_bodies.iter().map(|&(slot, ci)| (slot, scene.characters[ci].skin.hashcode)).collect();
-    assert_eq!(skins, [(0, 0x0500_0089), (1, 0x0500_00c6), (4, 0x0500_0097), (5, 0x0500_0098)],
-        "the bots' bodies are their records' characters (MP_skins[6], [7]) at the game's fixed base 4 [M 0x183a50:139]");
+    assert_eq!(skins, [(0, 0x0500_0089), (1, 0x0500_00c6), (2, 0x0500_0097), (3, 0x0500_0098)],
+        "the bots' bodies are their records' characters (MP_skins[6], [7]) at slots human_count + i");
     nf_view::net_slot0_setup(scene.sim.as_mut().unwrap());
     let mut row = [nf_net::input::NEUTRAL; nf_net::MAX_AGENTS];
     row[0].held = 2;
     row[1].held = 2;
-    let bot_slots = [4usize, 5]; // the game's fixed bot base [M 0x183a50:139]
-    let mut walk_poses: Vec<Vec<[f32; 3]>> = vec![Vec::new(); 6];
-    let mut moving_ticks = [0u32; 6];
+    let bot_slots = [2usize, 3];
+    let mut walk_poses: Vec<Vec<[f32; 3]>> = vec![Vec::new(); 4];
+    let mut moving_ticks = [0u32; 4];
     for t in 0..240u32 {
         nf_view::net_slot0_tick(scene.sim.as_mut().unwrap(), &row);
         let fs = scene.frame_state(None, t as f32, Default::default());

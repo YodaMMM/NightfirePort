@@ -1117,22 +1117,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // `MPSettings+slot*0x30+0x24` (and reads the body's skin from `MP_skins[rec[0x10]]`,
     // 0x1249e8:100). The port's `MpMatch::create_bots` repeats the write when the match starts;
     // the scene build parks the bodies earlier, so it happens here off the same records.
-    // mp-body-look / mp-16-slots: the bots sit at the game's FIXED base 4 (`max(humans, 4) + i`,
-    // MP_Start 0x183a50:139 `iVar4 = uVar9 + 4` — the same rule `MpMatch::create_bots` runs),
-    // with the records cycled; this mirror once wrote slots 4.. from the first 4 records while
-    // the bots sat at 2, 3, so the bot bodies drew character 0 (Bond) instead of their records'
-    // characters (Snow Guard 6 / Black Ops 7) — render before_bot2_f200.png.
+    // mp-body-look: the bots sit at `human_count + i` with the records cycled (`MpMatch::create_bots`,
     // mp-16-slots); this mirror still wrote slots 4.. from the first 4 records, so with 2 humans
     // the bot bodies (slots 2, 3) drew character 0 (Bond) instead of their records' characters
     // (Snow Guard 6 / Black Ops 7) — render before_bot2_f200.png.
     let mp_settings = mp_settings.map(|mut st| {
         let humans = st.human_count as usize;
-        let base = humans.max(4);
         let bots = (st.bot_count as usize)
-            .min(nf_game::mp::MP_MAX_SLOTS.saturating_sub(base))
-            .min(st.players.len().saturating_sub(base));
+            .min(nf_game::mp::MP_MAX_SLOTS.saturating_sub(humans))
+            .min(st.players.len().saturating_sub(humans));
         for i in 0..bots {
-            st.players[base + i].skin = nf_game::mp::MpMatch::bot_record(&st, i).character() as u32;
+            st.players[humans + i].skin = nf_game::mp::MpMatch::bot_record(&st, i).character() as u32;
         }
         st
     });
@@ -5060,6 +5055,22 @@ impl App {
                         if !self.noclip {
                             let h = sim.bond.head();
                             self.cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom };
+                            // mp-local-look (user report 2026-10-21: online aim "very sluggish …
+                            // moving the mouse was delayed to what the screen showed"): the lockstep
+                            // runs this player's turn/look `input_delay` ticks late (3 at least, up to
+                            // 15 with the adaptive delay over the internet). The camera adds the turn/
+                            // look already scheduled but not yet run, plus the mouse gathered since the
+                            // last tick, so the view answers at once; the shared sim (shots, the body
+                            // other players see) keeps the delayed input. Not while aiming — the aim
+                            // mode spends the turn on the crosshair first (Sim::step_bond's cursor arm).
+                            if let Some(n) = self.net.as_ref() {
+                                if !sim.aiming && !sim.disabled {
+                                    let (pt, pl) = n.0.borrow().pending_local_look(self.net_tick.wrapping_sub(1));
+                                    self.cam.yaw += pt + self.turn;
+                                    let pitch = (sim.bond.pitch + pl + self.look).clamp(-1.0, 1.0);
+                                    self.cam.pitch = pitch * std::f32::consts::FRAC_PI_2;
+                                }
+                            }
                             // A script's cut-scene camera takes over the view (`Camera_Enable(4)`).
                             if let Some((p, yaw, pitch, fov)) = sim.script_camera() { self.cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; }
                             // fix-sentinel-camera-play [M `Player_PositionCamera` 0x18f5d8 case 0xc]: while the
