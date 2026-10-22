@@ -8948,6 +8948,11 @@ impl Drone {
         if self.prop(d, 0x13) && self.can_do(d, anim_state::DODGE_LEFT) { opts.push(3) }
         if self.prop(d, 0x42) && self.can_do(d, anim_state::STEP_LEFT) { opts.push(4) }
         let picked = opts.get(rng.rand(opts.len() as u32) as usize).copied().unwrap_or(0);
+        // fix-914: an empty list reads slot 0 (= 0) and the step pick (4) — both skip every recheck
+        // straight to the tail with no state [M 0x1506d8: `sVar1 < 3 && sVar1 != 1 → LAB_00150a90`,
+        // `sVar1 != 3 → LAB_00150a90`, lVar8 = 0]. The port ran the whole chain for 0 (RNG draws +
+        // a possible dodge the game never makes).
+        if picked == 0 || picked == 4 { return 0; }
         // The recheck chain from the picked entry; the roll/strafe arms consume their Rand(2) when
         // their gates pass and discard the Can* verdicts (pure probes — no RNG, no state).
         if picked <= 1 && self.prop(d, 0x2e) && !self.stationary && self.can_do(d, anim_state::ROLL_LEFT) {
