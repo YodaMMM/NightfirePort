@@ -4377,16 +4377,17 @@ impl BotBrain {
         if self.vars.flag_word & 2 != 0 && next == state::BOT_ATTACK_RUN {
             return StateChange::Refuse; // [M :73-76]
         }
-        if next == state::BOT_ATTACK_CHANGE_WEAPON && self.vars.weapon_id == 1 {
-            // + the +0x56C anim band 0x35..0x38 gate [M :77-82] — the port's MP bot body runs
-            // no anim ids, so the band test never fires here [S]
-            return StateChange::Allow(next); // the game may refuse inside the band
-        }
+        // 0xDE with the fists held (+0x768 == 1) is refused only INSIDE the +0x56C anim band
+        // 0x35..0x38 [M :77-82]; outside it the checks below still run (fix-849: the branch
+        // returned Allow here, skipping them). The port's MP bot body runs no anim ids, so the
+        // band test is false [S] and 0xDE simply falls through.
         if cur == state::BOT_GOTO_GOAL_POSITION && next_type == 4 {
-            // the seen bits (+0xBC table & 6 == 6 — the port's candidate|seen flags) or the
-            // distraction let a type-4 (combat) state in [M :83-100]
+            // Out of 0xEB a type-4 (combat) target is refused only while the bot IS distracted
+            // and has not seen its opponent: `if (isDistracted) ok = seen ? ok : 0` [M :83-100]
+            // (fix-849: the branch refused when NOT distracted). Seen = the +0xBC table & 6 == 6
+            // (the port's candidate|seen flags).
             let seen = self.vars.sighted & 4 != 0;
-            if !seen && !self.is_distracted() {
+            if self.is_distracted() && !seen {
                 return StateChange::Refuse;
             }
         }
@@ -4401,6 +4402,11 @@ impl BotBrain {
                 StateChange::Refuse
             }
             5 => {
+                // Only the 0xEB state pays (`if (iVar1 != 0xeb) return ok` [M :114-116]; fix-849:
+                // the branch charged every type-5 state).
+                if cur != state::BOT_GOTO_GOAL_POSITION {
+                    return StateChange::Allow(next);
+                }
                 // from 0xEB the seen/heard requests pay the distraction first [M :113-135]
                 let amount = match next {
                     state::BOT_SEEN_OPPONENT => {
@@ -4491,9 +4497,9 @@ impl BotBrain {
     }
 
     /// `BOTSTATE_reallyCloseCombatRange` 0x129b68 [M :5-8]: +0xEC = 0.5, +0xF0 = 1.5,
-    /// +0xFC = 1.625 — the too-close / engage / too-far band the combat moves read.
+    /// +0xFC = 1.6 (0x3fcccccd; fix-849: the branch had 1.625) — the too-close / engage / too-far band the combat moves read.
     pub fn really_close_combat_range(&mut self) {
-        self.vars.combat_range = [0.5, 1.5, 1.625];
+        self.vars.combat_range = [0.5, 1.5, 1.6];
     }
 
     /// `BOTSTATE_defaultCombatRange` 0x129b98 [M :5-9]: restore +0xEC/0xF0/0xFC from the
@@ -4614,7 +4620,7 @@ impl BotBrain {
         let head = self.vars.opp_history_head as usize % 16;
         self.vars.opp_history[head] = cand; // [M :27-28]
         self.vars.opp_history_head = (head as u8 + 1) % 16; // [M :29, the >15 wrap]
-        let ring = self.vars.opp_history; // the game scores a copy (amemcpy 0x40) [M :24-26]
+        let mut ring = self.vars.opp_history; // the game scores a copy (amemcpy 0x40) [M :24-26]
         let mut scores = [0u32; 16];
         for i in 0..16 {
             let e = ring[i];
@@ -4626,15 +4632,18 @@ impl BotBrain {
             let mut s = 0u32;
             for j in i + 1..16 {
                 if ring[j] == e {
+                    // fix-849: both arms zero the later duplicate IN THE COPY, so it is not
+                    // scored again [M 0x1257c0: `*piVar6 = 0`]; the dead arm also clears it in
+                    // the real ring — entry i itself stays there (only its score is 0).
+                    ring[j] = 0;
                     if alive {
-                        s += 1; // the copy's dupe zeroing [M :55-58]
+                        s += 1;
                     } else {
-                        self.vars.opp_history[j] = 0; // the dead arm prunes the ring [M :66-70]
+                        self.vars.opp_history[j] = 0;
                     }
                 }
             }
             if !alive {
-                self.vars.opp_history[i] = 0; // [M :73]
                 continue; // dead entries score 0
             }
             if Some(idx) == self.vars.opponent {
@@ -4722,18 +4731,19 @@ impl BotBrain {
         let _ = self; // nothing to tear down — see the doc comment
     }
 
-    /// `BOT_soundEffect` 0x126618 [M :5-27] — the bot barks: trigger 1 plays 0x152/0x157
-    /// (hurt/death variant by the DCVars+0x15 byte), 0x1E/0x1F play 0x14d..0x152+Rand(2/5),
-    /// 0x1F only when the old ref (`+0x73C`) has stopped (`Sound_Playing_Ref`). The callers are
-    /// the death states (0xF2/0xF3) and `NDrone2_DealWithObjHit`. The port's MP bots have no
-    /// bark channel — bot sound is presentation (rules.rs' note), the drivers' `Sound` sink is
-    /// not threaded into `BotBrain` — so the trigger table stands as documentation here [S].
-    pub fn bot_sound_effect(&self, trigger: u32) -> Option<(u16, u32)> {
+    /// `BOT_soundEffect` 0x126618 [M] — the bot barks, keyed by the DCVars+0x15 byte (`alt`):
+    /// trigger 1 → 0x154 + Rand(3) (0x157 + Rand(3) with `alt`); 0x1E and 0x1F → 0x14D + Rand(5)
+    /// (0x152 + Rand(2) with `alt`), 0x1F only when the old ref (`+0x73C`) has stopped
+    /// (`Sound_Playing_Ref`); other triggers return without a sound. fix-849: the branch had
+    /// trigger 1 at 0x152 and 0x1E fixed at the `alt` arm. The callers are the death states
+    /// (0xF2/0xF3) and `NDrone2_DealWithObjHit`. The port's MP bots have no bark channel — bot
+    /// sound is presentation (rules.rs' note), the drivers' `Sound` sink is not threaded into
+    /// `BotBrain` — so the trigger table stands as documentation here [S].
+    pub fn bot_sound_effect(&self, trigger: u32, alt: bool) -> Option<(u16, u32)> {
         let _ = self;
         match trigger {
-            1 => Some((0x152, 3)),  // 0x152 + Rand(3); the +0x15 byte moves it to 0x157 [M :9-14]
-            0x1E => Some((0x152, 2)), // 0x152 + Rand(2) [M :15-22]
-            0x1F => Some((0x14D, 5)), // 0x14D + Rand(5), the Playing_Ref gate first [M :23-27]
+            1 => Some((if alt { 0x157 } else { 0x154 }, 3)),
+            0x1E | 0x1F => Some(if alt { (0x152, 2) } else { (0x14D, 5) }),
             _ => None,
         }
     }
@@ -4898,18 +4908,18 @@ mod brain_tests {
     }
 
     /// `BOTSTATE_reallyCloseCombatRange` 0x129b68 / `defaultCombatRange` 0x129b98: the close
-    /// band 0.5/1.5/1.625, and the restore from the `BOT_postLoadInit` save.
+    /// band 0.5/1.5/1.6, and the restore from the `BOT_postLoadInit` save.
     #[test]
     fn brain_rest_combat_ranges() {
         let mut r = Rig::new();
         let saved = r.brain.vars.combat_range; // bot_init saved it to combat_range_default [M 0x1262b8]
         assert_eq!(r.brain.vars.combat_range_default, saved);
         r.brain.really_close_combat_range();
-        assert_eq!(r.brain.vars.combat_range, [0.5, 1.5, 1.625], "0x3f000000/0x3fc00000/0x3fcccccd [M 0x129b68:5-8]");
+        assert_eq!(r.brain.vars.combat_range, [0.5, 1.5, 1.6], "0x3f000000/0x3fc00000/0x3fcccccd [M 0x129b68:5-8]");
         r.brain.default_combat_range();
         assert_eq!(r.brain.vars.combat_range, saved, "restored from +0x71C/720/724 [M 0x129b98:5-9]");
         // sister: the restore must differ from the close band (else the pair is vacuous)
-        assert_ne!(saved, [0.5, 1.5, 1.625]);
+        assert_ne!(saved, [0.5, 1.5, 1.6]);
     }
 
     /// `BOTSTATE_chooseUnarmedAttackAnim` 0x1292f0 via `NDrone2_CanAltAttack` 0x1549e0: the
@@ -4928,16 +4938,18 @@ mod brain_tests {
     #[test]
     fn brain_rest_weapon_anim_set() {
         use crate::mp::botweap::weapon_anim_set;
-        assert_eq!(weapon_anim_set(0x00), 0x18); // [M 0x12b140 case 0]
-        assert_eq!(weapon_anim_set(0x01), 0x16);
-        assert_eq!(weapon_anim_set(0x0C), 0x1A);
-        assert_eq!(weapon_anim_set(0x11), 0x15);
-        assert_eq!(weapon_anim_set(0x15), 0x14);
-        assert_eq!(weapon_anim_set(0x2B), 0x19);
-        assert_eq!(weapon_anim_set(0x52), 0x18);
-        // sister: 0x16/0x1A have no switch arm — the default 0x14 must catch a table typo
-        assert_eq!(weapon_anim_set(0x16), 0x14, "no arm for 0x16 → default [M 0x12b140]");
-        assert_eq!(weapon_anim_set(0x1A), 0x14, "no arm for 0x1A → default [M 0x12b140]");
+        // The switch index is w − 1 [M-dis 0x12b140-0x12b14c] (fix-849: the branch pinned raw ids).
+        assert_eq!(weapon_anim_set(0x01), 0x18, "weapon 1 = case 0 [M 0x12b140]");
+        assert_eq!(weapon_anim_set(0x02), 0x16);
+        assert_eq!(weapon_anim_set(0x0D), 0x1A);
+        assert_eq!(weapon_anim_set(0x12), 0x15);
+        assert_eq!(weapon_anim_set(0x16), 0x14);
+        assert_eq!(weapon_anim_set(0x2C), 0x19);
+        assert_eq!(weapon_anim_set(0x53), 0x18);
+        // sisters: index 0x16 / 0x1A have no arm → the default; weapon 0 (index −1) misses the table
+        assert_eq!(weapon_anim_set(0x17), 0x14, "index 0x16 has no arm → default");
+        assert_eq!(weapon_anim_set(0x1B), 0x14, "index 0x1A has no arm → default");
+        assert_eq!(weapon_anim_set(0x00), 0x14, "weapon 0 → index −1 → `sltiu 83` fails → default [M-dis 0x12b150]");
     }
 
     /// `BOT_handleOpponentHistory` 0x1257c0: the ring dedupes, weights, and the argmax sets
@@ -4963,6 +4975,11 @@ mod brain_tests {
         r.brain.vars.opponent = Some(0);
         assert_eq!(r.brain.handle_opponent_history(&ctx2, Some(0)), Some(0), "the candidate passes through [M 0x1257c0:85-91]");
         assert_eq!(r.brain.vars.opponent, Some(0), "no re-Set for the held opponent [M :92]");
+        // fix-849: the dead arm clears only the LATER duplicates in the real ring; the first
+        // entry stays (its score is 0) [M 0x1257c0: `*puVar3 = 0` for j > i only].
+        let first = r.brain.vars.opp_history.iter().position(|&e| e == 1).expect("player 0 is in the ring");
+        assert_eq!(r.brain.vars.opp_history.iter().filter(|&&e| e == 1).count(), 1, "the later duplicates were pruned");
+        assert_eq!(r.brain.vars.opp_history[first], 1, "the first entry of the dead player stays in the ring");
     }
 
     /// `BOT_validateStateChange` 0x124fb0: the impact states and 0xEE are refused (0xEE also
@@ -4983,16 +5000,68 @@ mod brain_tests {
         assert!(matches!(r.brain.validate_state_change(state::BOT_ATTACK_STRAFE_AIM_LEFT, &ctx, &mut rng), StateChange::Allow(_)), "type-4 targets pass the type-5 checks [M :105-112]");
     }
 
+    /// fix-849: `BOT_validateStateChange` 0x124fb0's three arms the branch had wrong.
+    #[test]
+    fn brain_rest_validate_fix_849() {
+        let world = CollisionWorld::from_triangles(Vec::new());
+        let mut rng = Rng::new(7);
+        // (1) Out of 0xEB a type-4 target: refused only while distracted AND unseen [M :83-100].
+        {
+            let mut r = Rig::new();
+            r.brain.state = state::BOT_GOTO_GOAL_POSITION;
+            r.brain.vars.sighted = 0;
+            assert!(r.brain.is_distracted(), "no active goal: distracted [M 0x129c58:11-13]");
+            let others = r.others.clone();
+            let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+            assert_eq!(state_type(state::BOT_ATTACK as u32), 4, "0xCF is a type-4 (combat) state");
+            assert!(matches!(r.brain.validate_state_change(state::BOT_ATTACK, &ctx, &mut rng), StateChange::Refuse),
+                "distracted + unseen: refused [M 0x124fb0:83-100]");
+        }
+        // (2) A type-5 state other than 0xEB pays no distraction: `if (iVar1 != 0xeb) return ok` [M :114-116].
+        {
+            let mut r = Rig::new();
+            let t5 = (0u8..=0xff).find(|&s| s != state::BOT_GOTO_GOAL_POSITION && state_type(s as u32) == 5);
+            if let Some(t5) = t5 {
+                r.brain.state = t5;
+                let before = r.brain.vars.distraction;
+                let others = r.others.clone();
+                let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+                assert!(matches!(r.brain.validate_state_change(state::BOT_SEEN_OPPONENT, &ctx, &mut rng), StateChange::Allow(_)),
+                    "type-5 state {t5:#x} (not 0xEB) allows 0xEC outright");
+                assert_eq!(r.brain.vars.distraction, before, "and charges no distraction");
+            }
+        }
+        // (3) 0xDE outside the anim band falls through to the later gates — the carrier bit
+        // (bit2 of +0x734) refuses a type-4 target [M :77-82 then :101-104].
+        {
+            let mut r = Rig::new();
+            r.brain.state = state::BOT_ATTACK;
+            r.brain.vars.weapon_id = 1;
+            r.brain.vars.flag_word |= 4;
+            let others = r.others.clone();
+            let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+            if state_type(state::BOT_ATTACK_CHANGE_WEAPON as u32) == 4 {
+                assert!(matches!(r.brain.validate_state_change(state::BOT_ATTACK_CHANGE_WEAPON, &ctx, &mut rng), StateChange::Refuse),
+                    "0xDE with fists, outside the band, carrier bit set: refused by :101-104");
+            }
+            // sister: without the carrier bit it is allowed
+            r.brain.vars.flag_word &= !4;
+            assert!(matches!(r.brain.validate_state_change(state::BOT_ATTACK_CHANGE_WEAPON, &ctx, &mut rng), StateChange::Allow(_)),
+                "0xDE allowed without the carrier bit");
+        }
+    }
+
     /// `BOTSTATE_stopAnim` 0x129918 / `BOT_soundEffect` 0x126618 — the no-anim/bark-channel
     /// port shape: stop_anim is callable, the sound trigger table maps 1/0x1E/0x1F.
     #[test]
     fn brain_rest_stop_anim_and_barks() {
         let mut r = Rig::new();
         r.brain.stop_anim(); // the port's MP bot body has no anim scripts to tear down [S]
-        assert_eq!(r.brain.bot_sound_effect(1), Some((0x152, 3)), "trigger 1 → 0x152 + Rand(3) [M 0x126618:9-14]");
-        assert_eq!(r.brain.bot_sound_effect(0x1F), Some((0x14D, 5)), "trigger 0x1F → 0x14D + Rand(5) [M :23-27]");
-        // sister: an unknown trigger maps to None
-        assert_eq!(r.brain.bot_sound_effect(9), None, "the decompile's early return [M :10-12]");
+        assert_eq!(r.brain.bot_sound_effect(1, false), Some((0x154, 3)), "trigger 1 → 0x154 + Rand(3) [M 0x126618]");
+        assert_eq!(r.brain.bot_sound_effect(1, true), Some((0x157, 3)), "the +0x15 byte → 0x157 [M 0x126618]");
+        assert_eq!(r.brain.bot_sound_effect(0x1E, false), Some((0x14D, 5)), "0x1E → 0x14D + Rand(5) [M 0x126618]");
+        assert_eq!(r.brain.bot_sound_effect(0x1F, true), Some((0x152, 2)), "0x1F with +0x15 → 0x152 + Rand(2) [M 0x126618]");
+        assert_eq!(r.brain.bot_sound_effect(9, false), None, "the decompile's early return [M :10-12]");
     }
 
     /// `MP_resetPickupBotVisitTimes` 0x18be50 — one bot's column zeroes, the others stand.
@@ -5019,7 +5088,8 @@ mod brain_tests {
         use crate::mp::{send_team_bot_message, unregister_pickup};
         let m = send_team_bot_message(2, 0x44, 7, 3, 5);
         assert_eq!(m.id, 0x44);
-        assert_eq!(m.current_state, 8, "GameState+0x52 + arg4 [M 0x18bbc8:24]");
+        assert_eq!(m.current_state, 0xC5, "msg[1] = 0xC5 [M 0x18bbc8: uStack_2c]");
+        assert_eq!(m.arg, 7, "msg[6] = arg3 [M 0x18bbc8: uStack_18]");
         // sister: the sender word 2 zeroes the recipient mask [M :21-23] — assert via the
         // payload path the port returns (the mask rides the pump wiring)
         let m2 = send_team_bot_message(0, 0x03, 0, 0, 0);

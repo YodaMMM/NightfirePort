@@ -1197,10 +1197,15 @@ pub fn send_team_bot_message(sender_team: u32, id: u8, arg3: u32, arg4: u32, arg
         mask = 0; // [M :21-23]
     }
     let _ = mask; // the recipient mask — the port's pump consumes it when wired
+    // The MsgObject on the stack [M 0x18bbc8]: [0] id, [1] 0xC5, [2] arg5, [3] the mask,
+    // [4] GameState+0x52, [5] GameState+0x52 + arg4, [6] arg3. `BotMsg` carries [0], [6] and
+    // [1] (`current_state`) — fix-849: the branch put arg4 + arg5 in [1]; the frame words
+    // [4]/[5] and [2] ride the pump wiring (the report's next-step item) [S].
+    let _ = (arg4, arg5);
     crate::mp::bots::BotMsg {
         id,
         arg: arg3,
-        current_state: arg4.wrapping_add(arg5), // GameState+0x52 + arg4 [M :24]
+        current_state: 0xC5,
     }
 }
 
