@@ -15,8 +15,34 @@ param(
     [switch]$Draft
 )
 $ErrorActionPreference = "Stop"
-if ($NotesFile) { $Notes = [IO.File]::ReadAllText((Resolve-Path $NotesFile), [Text.Encoding]::UTF8) }
-if (-not $Notes.Trim()) { throw "release notes are required (-NotesFile or -Notes)" }
+if (-not $NotesFile) { throw "-NotesFile is required: every note item needs a row in the proof.md beside it" }
+$Notes = [IO.File]::ReadAllText((Resolve-Path $NotesFile), [Text.Encoding]::UTF8)
+if (-not $Notes.Trim()) { throw "release notes are required (-NotesFile)" }
+# The proof gate: proof.md beside the notes, one row per note item —
+#   - <words from the item> | <evidence path: the before/after real-path proof in the shipped build> | <commit sha>
+# Every bold item and every bullet of the notes must contain the words of some row; every evidence path must exist;
+# every commit must be on HEAD and NOT already in the previous release (nothing old listed as new).
+$proofFile = Join-Path (Split-Path (Resolve-Path $NotesFile)) "proof.md"
+if (-not (Test-Path $proofFile)) { throw "no proof file: $proofFile" }
+$rows = @(Get-Content $proofFile -Encoding UTF8 | Where-Object { $_ -match '^\s*-\s*(.+?)\s*\|\s*(.+?)\s*\|\s*([0-9a-f]{7,40})\s*$' } | ForEach-Object {
+    $m = [regex]::Match($_, '^\s*-\s*(.+?)\s*\|\s*(.+?)\s*\|\s*([0-9a-f]{7,40})\s*$')
+    [pscustomobject]@{ Key = $m.Groups[1].Value; Path = $m.Groups[2].Value; Sha = $m.Groups[3].Value } })
+$items = @($Notes -split "`r?`n" | Where-Object { $_ -match '^\s*(\*\*.+?\*\*|-\s+\S)' })
+$prevTag = (& gh release list --repo "YodaMMM/NightfirePort" --limit 1 --json tagName --jq '.[0].tagName' 2>$null)
+$laneForGate = if ($Lane) { $Lane } else { (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }
+$missing = @()
+foreach ($it in $items) {
+    $row = $rows | Where-Object { $it.Contains($_.Key) } | Select-Object -First 1
+    if (-not $row) { $missing += "no proof row: $it"; continue }
+    if (-not (Test-Path $row.Path)) { $missing += "evidence missing ($($row.Path)): $it"; continue }
+    & git -C $laneForGate merge-base --is-ancestor $row.Sha HEAD
+    if ($LASTEXITCODE -ne 0) { $missing += "commit $($row.Sha) not on HEAD: $it"; continue }
+    if ($prevTag) {
+        & git -C $laneForGate merge-base --is-ancestor $row.Sha $prevTag.Trim()
+        if ($LASTEXITCODE -eq 0) { $missing += "commit $($row.Sha) already shipped in $($prevTag.Trim()): $it" }
+    }
+}
+if ($missing.Count) { throw ("proof gate failed:`n" + ($missing -join "`n")) }
 if (-not $Lane) { $Lane = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }
 $repo = "YodaMMM/NightfirePort"
 $head = (git -C $Lane rev-parse HEAD).Trim()
