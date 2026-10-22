@@ -6302,27 +6302,14 @@ impl Drone {
             }
             // `DSTATE_ReturnToPatrolPath` 0x172810 (tranq-gun: the tower band's sighted wake
             // target): ENTER re-finds the mission path and falls to GO_TO_GOAL 0x63 with the
-            // Global resume +0x5a2 = 0x14 [M case 1]. ReFindMissionPath 0x153a30: the drone's
-            // current AI point (+0xA70) when its group byte (+6) is 8, else ClosestAIPoint(dc,
-            // group 8) — the hit's +0x44 yaw → Drone+0x734 (the port's alarm_yaw) and its +0x20
-            // position → the goal (the route invalidated, SetupGoalPosition + MoveToGoalPosition
-            // [M 0x153a30:12-38]); with NO group-8 point nothing is set (the fall-through returns
-            // 0 without touching the goal) and GO_TO_GOAL walks the stale goal. The port has no
-            // +0xA70 current-point latch; ClosestAIPoint over the same registry covers the search
-            // arm (the current-point arm only skips the search when the drone already owns a
-            // group-8 point — the closest-point walk lands on that same point by distance).
-            (RETURN_TO_PATROL_PATH, msg::ENTER) => {
-                let owner = d.props.get(0x11, &self.props) as i32;
-                let path = self.nav_path.flatten();
-                if let Some(pi) = crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 8, owner) {
-                    let pt = &d.ai_points[pi];
-                    self.alarm_yaw = f32::from_bits(pt.yaw_bits); // +0x44 → +0x734 [M 0x153a30:14]
-                    self.goal = Some(pt.pos); // +0x20 → the goal, route invalidated [M 0x153a30:16-30]
-                    self.move_to_goal(d); // MoveToGoalPosition [M 0x153a30:33]
-                }
-                self.set_state(GO_TO_GOAL);
-                true
-            }
+            // Global resume +0x5a2 = 0x14 [M case 1]. ReFindMissionPath 0x153a30 is NOT modelled
+            // [S]: the game walks the drone's OWN mission-path nodes (count +0x9f2, node table
+            // +0xa60/+0xa64, 0x40-byte nodes), picks the closest node (2D) that
+            // NDrone2_MoveTest reaches, then LinkCreep_Calc/Dest + SetupGoalPosition +
+            // MoveToGoalPosition, and on a failed move sets state 99 [M 0x153a30 decompile
+            // :101-211]. (fix-920: the 920 stand-in "ClosestAIPoint group 8 -> +0x734" is not in
+            // that function and was reverted.)
+            (RETURN_TO_PATROL_PATH, msg::ENTER) => { self.set_state(GO_TO_GOAL); true }
             // `NDrone2_DSTATE_InitPatrol` 0x1724f0 (state 0x06) ENTER [M case 1]: the spawn entry —
             // prop 0x24/0x25 drones take the mission path (`AssignAIPath(4)`) → Patrol 0x07, everyone
             // else Idles. The [L ee_start_05.bin] fresh-boot snapshot shows guards passing through
