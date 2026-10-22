@@ -79,6 +79,14 @@ fn driver_walks_his_mission_route_after_the_sit_script() {
     let mission_at = mission_at.expect("the driver enters TruckDriverMission (0x35) after the sit script — the game's 0x160bd0 case 5");
     let walked_at = walked_at.expect("the driver walks his mission route (>2 units from the park spot)");
     assert!(walked_at > mission_at.saturating_sub(60), "the walk begins with/after the mission enter, not before");
-    // Sister: the escort never enters the driver's mission state.
-    assert!(!esc_mission, "the escort (team-1 guard) must never enter TruckDriverMission");
+    // Sister: the escort never enters the driver's mission state. The family gate: `Global`
+    // routes a drone into the truck family ONLY on the mode byte drone+0xC5 == 0x17
+    // [M NDrone2_DSTATE_Global 0x15b830 — `cVar1 == 0x17 → state 0x32`; every other mode goes to
+    // 3 / 0xc3 / 1 / 9 / 0x1d, never 0x32..0x35], and the 0x35 enter sits inside TruckDriverInit's
+    // case 5 [M 0x160bd0:45-53], which only a family-0x32 drone runs. The escort's placement is a
+    // team-1 guard whose mode is never 0x17 — the level's only mode-0x17 drone is the driver #15
+    // [D the rook_absent_06_live census of all 26 placements: guard modes 0/2/7/0x19 on skins
+    // 0x0500002e/2f/30, mode 23 (0x17) only on the driver 0x05000035].
+    assert_ne!(esc.mode, 0x17, "the escort's placement mode is not the truck family's 0x17 [D census; M 0x15b830 routes only 0x17 to 0x32]");
+    assert!(!esc_mission, "the escort (team-1 guard, mode {} ≠ 0x17) must never enter TruckDriverMission — the family gate [M 0x15b830] never routes it to 0x32..0x35", esc.mode);
 }

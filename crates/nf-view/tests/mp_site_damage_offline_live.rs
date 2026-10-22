@@ -170,10 +170,17 @@ fn bond_shots_damage_and_destroy_the_site_offline() {
             eprintln!("[sitelog] t{t} hp {} clip {}", site_hp(&scene), sim.drones.inventory.clip[held as usize]);
         }
     }
-    assert_eq!(game_state(&scene), 6, "the site fell: the round is over");
+    // The threshold store [M MP_DemolitionProtectionUpdate 0x1870a0:125-160]: HP < 1 → the
+    // attacking team +1.0 (the slot opposite the site's team: `iVar4 = 4` when the site's team
+    // (param_3) is 0 else 0, `MPGame+iVar4+0x180 += 1.0` — the site's team 0 pays index 1
+    // [M :127-132]); the hitter's personal score `MPGame+hitter·0x30+0x18 += 1.0`, or −1.0 when
+    // the hitter is on the site's team (whose team slot then also pays 1.0) [M :133-140] — slot 0
+    // is team 1 ≠ the site's team 0, so +1.0; and the round enters state 6 at once (`MPGame._392_4_
+    // = 6`, the state field the port maps to `game.state` = MPGame+0x392) [M :160].
+    assert_eq!(game_state(&scene), 6, "the site fell: the round is over [M 0x1870a0:160]");
     let m = scene.sim.as_ref().unwrap().mp.as_ref().unwrap();
-    assert_eq!(m.game.team_scores, [0.0, 1.0], "the attacking team (1) scores");
-    assert_eq!(m.game.slots[0].score, 1.0, "the last hitter +1");
+    assert_eq!(m.game.team_scores, [0.0, 1.0], "the attacking team (1) scores [M 0x1870a0:127-132]");
+    assert_eq!(m.game.slots[0].score, 1.0, "the last hitter +1 [M 0x1870a0:133-140]");
 }
 
 /// Sister: the shot that misses leaves the site's damage at 0 — HP 2000, no recorded hitter
@@ -238,10 +245,13 @@ fn an_explosive_damages_and_destroys_the_site_offline() {
         if game_state(&scene) == 6 { break; }
         tick_fire(&mut scene, centre, t % 80 == 0);
     }
-    assert_eq!(game_state(&scene), 6, "the site fell: the round is over");
+    // The same threshold store as the bullet siege [M MP_DemolitionProtectionUpdate 0x1870a0:
+    // 125-160 — the blast's `MP_ApplyDamage` path lands in the same HP store, the state-6 set at
+    // :160, the team +1.0 at :127-132 (the site's team 0 → index 1), the hitter +1.0 at :133-140].
+    assert_eq!(game_state(&scene), 6, "the site fell: the round is over [M 0x1870a0:160]");
     let m = scene.sim.as_ref().unwrap().mp.as_ref().unwrap();
-    assert_eq!(m.game.team_scores, [0.0, 1.0], "the attacking team (1) scores");
-    assert_eq!(m.game.slots[0].score, 1.0, "the last hitter +1");
+    assert_eq!(m.game.team_scores, [0.0, 1.0], "the attacking team (1) scores [M 0x1870a0:127-132]");
+    assert_eq!(m.game.slots[0].score, 1.0, "the last hitter +1 [M 0x1870a0:133-140]");
 }
 
 // ------------------------------------------------------------------ the online agreement
