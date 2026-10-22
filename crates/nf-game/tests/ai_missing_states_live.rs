@@ -218,6 +218,65 @@ fn hostage_dead_is_a_corpse_that_fades_after_ten_seconds() {
     assert!((580..=620).contains(&t), "the fade lands on the 600-tick timer [M 0x172628:22], got {t}");
 }
 
+/// Dead 0x47's UPDATE reads `obj+0xFC`, the drawn-GRACE counter — set to 2 by the draw pass
+/// [`M 0x1e62d8:71`], decremented once per control pass [`M 0x1336f8:242-246`] — so an undrawn
+/// guard corpse is disabled + deleted on the 3rd control pass off-screen, not the first
+/// [`M-dis 0x1640d0-0x1640f8` → Enable(0) 0x149dd0 + `obj+0xFE |= 1`, the control walk's
+/// delete-me flag, consumed the same pass, 0x133864-0x133888]. Sister: walk the camera back
+/// inside the grace and the body stays (the refresh).
+#[test]
+fn a_guard_corpse_vanishes_after_the_drawn_grace_not_instantly() {
+    let Some(l) = LevelX::load(L05) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data(L05);
+    let (mut sim, gi) = guard_sim(&l);
+    let near = bond_near(&sim, gi, 4.0);
+    let far = bond_far();
+    enter(&mut sim, &d, gi, state::DEAD, &near);
+    assert!(sim.list[gi].corpse, "Dead's enter: the corpse [M 0x163fe8 case 1]");
+    sim.tick(&d, &near);
+    sim.tick(&d, &near);
+    assert!(sim.list[gi].present, "watched: the body lies there [M 0x163fe8 case 3 reads obj+0xFC == 2]");
+    // Turn away: two undrawn control passes burn the grace (2 → 1 → 0)…
+    sim.tick(&d, &far);
+    sim.tick(&d, &far);
+    assert!(sim.list[gi].present, "2 undrawn ticks: the body is STILL there — the 2-tick drawn grace [M 0x163fe8 case 3 + 0x1336f8:242-246]");
+    // …the third pass reads obj+0xFC == 0 → Enable(0) + delete-me → gone the same pass.
+    sim.tick(&d, &far);
+    assert!(!sim.list[gi].present && !sim.list[gi].enabled, "3rd undrawn tick: disabled and deleted [M-dis 0x1640e0-0x1640f8 + 0x133864-0x133888]");
+    // Sister: back inside the grace — one undrawn tick, then the camera returns: the body stays.
+    let (mut sim2, g2) = guard_sim(&l);
+    let near2 = bond_near(&sim2, g2, 4.0);
+    enter(&mut sim2, &d, g2, state::DEAD, &near2);
+    sim2.tick(&d, &far);
+    sim2.tick(&d, &near2);
+    for _ in 0..20 { sim2.tick(&d, &near2); }
+    assert!(sim2.list[g2].present, "returned within the grace: the body remains (obj+0xFC refreshed to 2 [M 0x1e62d8:71])");
+}
+
+/// HostageDead 0x0f's UPDATE is `DroneFunc_DeadDrone` ONLY — no `obj+0xFC` arm, no Enable(0),
+/// no delete-me [`M 0x172628:28-30`]: the hostage corpse stays whatever the camera does, until
+/// timer C (600) hands it to Fade 0x48, whose own undrawn arm deletes it [`M 0x172cd8 case 3`].
+/// The old port dropped it on the first undrawn tick (the 2026-10-21 audit's tick-0 fade).
+/// Sister: the watched 600-tick fade still lands (the test above).
+#[test]
+fn a_hostage_corpse_survives_off_screen_until_its_fade() {
+    let Some(l) = LevelX::load(L05) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data(L05);
+    let (mut sim, gi) = guard_sim(&l);
+    let near = bond_near(&sim, gi, 4.0);
+    let far = bond_far();
+    enter(&mut sim, &d, gi, state::HOSTAGE_DEAD, &near);
+    assert!(sim.list[gi].corpse, "SetAsDead: a corpse [M 0x172628:15]");
+    let mut gone_at = None;
+    for t in 1..=700u32 {
+        sim.tick(&d, &far);
+        if gone_at.is_none() && !sim.list[gi].present { gone_at = Some(t); }
+        if t == 595 { assert!(sim.list[gi].present && sim.list[gi].enabled, "595 undrawn ticks: the hostage body is STILL there (no obj+0xFC arm in 0x172628 case 3 [M])"); }
+    }
+    let t = gone_at.unwrap_or_else(|| panic!("the corpse must go once Fade's undrawn arm fires [M 0x172cd8 case 3]"));
+    assert!((596..=620).contains(&t), "gone right after the 600-tick timer hands it to Fade, got {t}");
+}
+
 /// `NDrone2_DSTATE_CombatWait` 0x164960 (the port's former COMBAT_DRONE_AHEAD): enter = vision on +
 /// the 3 s timer C; at the timer `DroneFunc_CombatState` decides (0 → wait again) [M :20-31, :76-86].
 /// Sister: in sight, the update aims and fires (`+0x228 & 4` set) [M :43-58].

@@ -936,10 +936,11 @@ pub struct Drone {
     pub group: u32,
     pub present: bool,
     pub started: bool,
-    /// Drawn last frame (`obj+0xFC`, set to 2 by `View_AddObjects` 0x1e62d8 when the object's world sphere
-    /// passes `Vision_InView` 0x1e89e0 over the portal-visible cels), set by `Drones::tick` through
-    /// `visible_to`: the sim-side camera frustum (`frustum_sides` — 60° view angle, 4/3 aspect) plus the
-    /// bullet-ray walk that stands in for the room gate.
+    /// Drawn this tick (the draw pass's frustum test stand-in: `View_AddObjects` 0x1e62d8 draws when
+    /// the object's world sphere passes `Vision_InView` 0x1e89e0 over the portal-visible cels, gated
+    /// on `obj+0xF0 & 0x10 == 0` [M 0x1e5fb8:89]), set by `Drones::tick` through `visible_to`: the
+    /// sim-side camera frustum (`frustum_sides` — 60° view angle, 4/3 aspect) plus the bullet-ray
+    /// walk that stands in for the room gate. The game's `obj+0xFC` COUNTER it feeds is `drawn_grace`.
     pub drawn: bool,
     pub enabled: bool,
     /// Index in `Drones::list` (cover ownership) and the state being entered during an exit message.
@@ -1486,6 +1487,12 @@ pub struct Drone {
     /// it on every sight tick while aiming (`DroneVision_GunThroughWall` 0x178520), and the combat
     /// fire requests are gated on `+0x3b = !+0x1e` (see `gun_through_wall`).
     pub gun_through_wall: bool,
+    /// `obj+0xFC` — the drawn-grace counter (docs/systems/corpse-persistence.md): 2 at spawn
+    /// [`M 0x134630:16`], set to 2 by the draw pass when drawn [`M 0x1e62d8:71`], decremented once
+    /// per control pass otherwise [`M 0x1336f8:242-246`]. The dead states' `obj+0xFC == 0` tests
+    /// (Dead 0x163fe8 case 3, Fade 0x172cd8, FadeFast 0x172dd8) read it: a corpse is removed on
+    /// the 3rd control pass after its last drawn frame.
+    pub drawn_grace: u8,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1637,6 +1644,7 @@ impl Drone {
             mission_wait_channel: 0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
+            drawn_grace: 2, // `control_init_object` 0x134630:16
             abseil_land_latch: false,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
@@ -3909,15 +3917,23 @@ impl Drone {
                 true
             }
             (DEAD, msg::UPDATE) => {
-                if !self.drawn { self.present = false; self.enabled = false; return Some(true); }
+                // `NDrone2_DSTATE_Dead` 0x163fe8 case 3 [M-dis 0x1640d0-0x1640f8]: once the drawn
+                // grace is out (`obj+0xFC == 0` — the 3rd control pass undrawn) the game calls
+                // `NDrone2_Enable(0, drone)` [M 0x149dd0:8-15: obj+0xF0 |= 0x10|0x20,
+                // +0x4F8 &= 0xffe7fe5f] and sets `obj+0xFE |= 1` — the control walk's delete-me
+                // flag [M-dis 0x133864-0x133888: bit 1 → Effect_RemoveSObjs + control_delete_object
+                // in the SAME pass]. The port folds both into present/enabled false.
+                if self.drawn_grace == 0 { self.present = false; self.enabled = false; return Some(true); }
                 if self.cull { self.set_state(FADE_FAST); }
                 true
             }
             (DEAD, msg::TIMER_C) => { self.set_state(FADE); true }
             (FADE | FADE_FAST, msg::ENTER) => { self.corpse = true; true }
             (FADE | FADE_FAST, msg::UPDATE) => {
-                // `NDrone2_FadeOut`: 0.6 per tick (8 in FadeFast); gone one tick after reaching 0, or when not drawn.
-                let gone = !self.drawn || {
+                // `NDrone2_FadeOut`: 0.6 per tick (8 in FadeFast); gone one tick after reaching 0, or
+                // when the drawn grace is out — `obj+0xFC == 0` [M 0x172cd8/0x172dd8 case 3: skip the
+                // fade, Enable(0) + obj+0xFE |= 1 → the control walk's delete].
+                let gone = self.drawn_grace == 0 || {
                     if self.alpha > 0.0 { self.alpha = (self.alpha - if s == FADE_FAST { 8.0 } else { 0.6 }).max(0.0); false } else { true }
                 };
                 // task 854: `gone` here is the game's object deletion — `control_delete_object`
@@ -7217,7 +7233,11 @@ impl Drone {
                 true
             }
             (HOSTAGE_DEAD, msg::UPDATE) => {
-                if !self.drawn { self.present = false; self.enabled = false; return true; }
+                // `NDrone2_DSTATE_HostageDead` 0x172628 case 3 [M :28-30]: DroneFunc_DeadDrone ONLY —
+                // Dead's Enable(0)/delete-me arm (0x163fe8) does NOT exist here: the hostage corpse
+                // stays (even undrawn) until timer C hands it to Fade 0x48, whose own `obj+0xFC == 0`
+                // arm deletes it [M 0x172cd8 case 3]. The old port dropped it on the first undrawn
+                // tick (the 2026-10-21 audit's tick-0 fade).
                 if self.cull { self.set_state(FADE_FAST); }
                 true
             }
@@ -13313,12 +13333,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `Monitor_Update` 0x1afcc8: the viewing monitors latch the watched sensor's
         // monitor-view channel and set its +0x60 unhide; the exit cooldown drains.
         self.monitors.tick(&mut self.sensors, &mut self.channels, frame);
-        // `Drone_InitComms`: corpses (0x0F, 0x47, 0x48 + 300, 0xBF by the time their state began); beyond 3
-        // (`DAT_00298F5C`) the oldest fades fast (`DroneFunc_DeadDrone`).
+        // `Drone_InitComms` 0x139520:214-244: corpses (0x0F, 0x47, 0xBF keyed at the state-entry
+        // time `+0x11C` — the port's `entered`; 0x48 at `+0x11C + DAT_00298F58` = 600
+        // [M 0x13a5a8:10 — the old +300 was the pre-audit timer value]); beyond 3
+        // (`DAT_00298F5C`) the smallest key goes FadeFast (`DroneFunc_DeadDrone` 0x14a298).
         let mut corpses = 0;
         let mut oldest: Option<(u32, usize)> = None;
         for (i, dr) in self.list.iter().enumerate().filter(|(_, x)| x.present) {
-            let key = match dr.state { 0x0f | state::DEAD | state::ASTRONAUT_DEATH => dr.entered, state::FADE => dr.entered + 300, _ => continue };
+            let key = match dr.state { 0x0f | state::DEAD | state::ASTRONAUT_DEATH => dr.entered, state::FADE => dr.entered + 600, _ => continue };
             corpses += 1;
             if key < oldest.map_or(frame, |o| o.0) { oldest = Some((key, i)); }
         }
@@ -14769,6 +14791,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.pos[0] = p[0];
                 dr.pos[2] = p[2];
             }
+            // `obj+0xFC` (the drawn-grace counter, `drawn_grace`): the draw pass sets 2 when drawn
+            // [M 0x1e62d8:71], the control pass decrements it otherwise [M 0x1336f8:242-246]. Updated
+            // AFTER this drone's message walk so the dead states read last tick's value — the game's
+            // X_{K+1} = drawn_K ? 2 : max(X_K − 1, 0).
+            dr.drawn_grace = if dr.drawn { 2 } else { dr.drawn_grace.saturating_sub(1) };
         }
         // `SetupHostageKiller`'s hostage half: hostage +0x2B0 = the killer [M 0x144030:57-59].
         for (hi, ki) in killer_binds { if let Some(h) = self.list.get_mut(hi) { h.captor = Some(ki); } }
@@ -15912,6 +15939,7 @@ mod tests {
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
+            drawn_grace: 2, // `control_init_object` 0x134630:16
             mission_wait_channel: 0,
             abseil_land_latch: false,
             mission_path_dist: 0.0,
