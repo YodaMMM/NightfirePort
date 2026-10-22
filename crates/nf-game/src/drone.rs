@@ -7988,7 +7988,7 @@ impl Drone {
             // return state too.
             (GO_TO_GOAL_ALLY, msg::UPDATE) => {
                 self.vision_on = true;
-                self.alert = self.alert.max(0.66); // `Drone_AlertStatusSet(2)` [M 0x15f938 case 3] — table 0x2f5cc8[2] = 0.66
+                self.alert_status_set(2, frame); // `Drone_AlertStatusSet(2)` [M 0x15f938 case 3] — the status byte +0x51C only; it never writes the alertness +0x50C [M 0x13a8d8] (fix-914: the branch raised alert to 0.66)
                 match self.move_to_goal(d) {
                     0..=2 => self.call_anim(d, anim_state::RUN, 0, 0),
                     10 => {}
