@@ -67,14 +67,18 @@ fn stand_at_door(sim: &mut nf_view::scene::Sim, di: usize) {
     face(sim, c);
 }
 
-/// Step the sim until the 0x200000b hint raises or the budget ends; returns whether it raised.
-fn aim_raised_hint(sim: &mut nf_view::scene::Sim, di: usize) -> bool {
+/// Step the sim until the 0x200000b hint raises or the budget ends; returns how many NEW
+/// raises landed (the earlier doors' 180-tick messages are still alive in the list — the delta,
+/// not the presence, is the signal).
+fn aim_hint_raises(sim: &mut nf_view::scene::Sim, di: usize) -> usize {
     stand_at_door(sim, di);
+    let before = raised(sim, 0x200_000b).len();
     for _ in 0..12 {
         sim.step_bond(Input::default(), false, false, false);
-        if !raised(sim, 0x200_000b).is_empty() { return true; }
+        let now = raised(sim, 0x200_000b).len();
+        if now > before { return now - before; }
     }
-    false
+    0
 }
 
 /// The app's level swap minus the GPU halves: the worker's build (`load_with_carry`, exactly what
@@ -113,7 +117,7 @@ fn three_hints_on_one_level_the_next_level_shows_no_fresh_hint() {
     }
     for di in [0usize, 1, 2] {
         let sim = a.sim.as_mut().unwrap();
-        assert!(aim_raised_hint(sim, di), "door {di} raised the 0x200000b hint through the aim ray");
+        assert_eq!(aim_hint_raises(sim, di), 1, "door {di} raised the 0x200000b hint exactly once through the aim ray");
         let sim = a.sim.as_ref().unwrap();
         assert!(sim.drones.doors.list[di].msg_shown, "door {di}'s +0x74 latch set [M 0x135f18:16-17]");
     }
@@ -132,7 +136,7 @@ fn three_hints_on_one_level_the_next_level_shows_no_fresh_hint() {
         assert!(!d.msg_shown, "the fresh door's latch starts clear");
     }
     let sim = b.sim.as_mut().unwrap();
-    assert!(!aim_raised_hint(sim, 0), "no hint at the cap — the boot's three hints were spent on level A");
+    assert_eq!(aim_hint_raises(sim, 0), 0, "no hint at the cap — the boot's three hints were spent on level A");
     let sim = b.sim.as_ref().unwrap();
     assert_eq!(sim.hud.door_msg, 3, "the cap count did not move");
     assert!(!sim.drones.doors.list[0].msg_shown,
@@ -144,7 +148,7 @@ fn three_hints_on_one_level_the_next_level_shows_no_fresh_hint() {
     assert_eq!(c.sim.as_ref().unwrap().hud.door_msg, 0,
         "a fresh session starts at 0 [D the ELF's .sdata image bytes for 0x30cd04 are zero]");
     let sim = c.sim.as_mut().unwrap();
-    assert!(aim_raised_hint(sim, 0), "the SAME door raises on a fresh session — the no-hint above was the carried cap, not the door");
+    assert_eq!(aim_hint_raises(sim, 0), 1, "the SAME door raises on a fresh session — the no-hint above was the carried cap, not the door");
     let sim = c.sim.as_ref().unwrap();
     assert_eq!(sim.hud.door_msg, 1, "the fresh session's first hint counts [M 0x1a7bc0]");
     assert!(sim.drones.doors.list[0].msg_shown, "the fresh session's hint latched the door [M 0x135f18:16-17]");

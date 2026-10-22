@@ -47,6 +47,12 @@ saved-game state. Docs first, then the port shape, then the tests.
   [M 0x135f18] → on a label, `door_msg += 1` + the 180-tick INFO message [M 0x1a7b98-0x1a7bc8].
 - The per-door latch: `Doors::do_msg` (crates/nf-game/src/door.rs) sets `msg_shown` before the
   lock/state checks, exactly the game's order [M 0x135f18:15-33].
+- The campaign transition survives in the port's real shape: a movie-wrapped load HOLDS the load
+  request over the still-live gameplay scene while the briefing plays (lib.rs `pending_level`
+  hold), and the phase-2 resolve re-issues it with the old scene still current — so the swap into
+  the next level is one carrying swap (old sim Some → new sim Some), and the warm `RamSave` rides
+  the same handoff. The mission-to-mission flow through the front end (results → mission list) is
+  the port's session boundary — a new session starts at 0, the sanctioned "NEW process" case.
 
 ## Tests
 
