@@ -240,7 +240,7 @@ mod tests {
             done_channel: 20 + index,
             gate_channel: 19,
             countdown: 0.0,
-            state: 1,
+            state: 0,
             launch_flag: 0,
             timer: 0,
         };
