@@ -1,7 +1,10 @@
 //! Switch channels and trigger objects (docs/systems/triggers.md): placements 0xEA TouchOnce, 0xEB Touch, 0xEC
 //! MultiplexIn (AND), 0xED MultiplexSIn (ordered AND), 0xEE MultiplexOut, 0xEF MultiplexOrIn (OR), 0xDC Trigger (type
 //! = p0). Volumes are the trigger model's collision triangles at the placement transform; contacts are capsules
-//! (Bond: radius 0.55 from feet + 0.55 to feet + 1.86; drones: *suggested* radius 0.4 from the feet to the head).
+//! (Bond: radius 0.55 from feet + 0.55 to feet + 1.86 — the port's measured reach rides `pos − 0.6`, see
+//! drone.rs's walk note; drones: the game's collision sphere radius is **0.4** in the normal arm
+//! [M `NDrone2_Collision` 0x140e90:96 `fVar7 = 0.4`], **0.55 for type-0xC drones** [M :97], **0.3** in the
+//! low-sphere state [M :84], swept sphere-per-arm — the port's feet−1.0→head r-0.4 capsule models the normal arm).
 
 use crate::world::V3;
 use nf_formats::level::Level;
@@ -52,9 +55,11 @@ pub fn movie_code_next_level(code: u32, fallback: u32) -> u32 {
     }
 }
 
-/// The level-exit request's resolve: the port's stand-in for `ResetMap_LevelToLoad` (0x1d3800) +
-/// `ResetMap_Load`'s phase-0/phase-2 cycle compressed to the archive the port finally loads [M
-/// 0x1d6360:29-36, 173-182]. A plain 0x0700xxxx code loads as-is. A 0x0720xxxx cut-scene code runs
+/// The level-exit request's resolve: the port's model of `ResetMap_Load`'s phase-2 fallback
+/// (`GetLevelToLoadFromMovieCode` + the GameState+8 mask — 0x1d6360:26-36 loads GameState+8's archive
+/// as-is, :173 re-reads GameState+0x10 through the movie table, and 0x1d3560:97-98's fall-through
+/// masks it `& 0xff00ffff`) [M], paired with `wrap_intro` (0x1d3800's wrap switch) as phase 0. A plain
+/// 0x0700xxxx code loads as-is. A 0x0720xxxx cut-scene code runs
 /// phase 2 (`GetLevelToLoadFromMovieCode` → a 0x0710xxxx briefing code) and then the second cycle's
 /// phase-2 fallback masks it to the playable level (0x1d3560:97-98: `GameState+8 & 0xff00ffff`).
 /// A 0x0730xxxx driving code resolves straight to its front-end landing (the table has every driving
@@ -185,7 +190,7 @@ pub struct Channels { pub v: Vec<u8>, pub time: Vec<u32>,
     /// channel-persistence: every channel a script op has ever written in this level — the script
     /// event 0xD / 0x11 writes (`Script_EventHandler` 0x1d94c0) and the SP out writes — accumulated
     /// so the census can tell script-owned channels (data-driven from the disc's own scripts) from
-    /// a port-only writer. The [S] stand-ins deliberately do NOT land here.
+    /// a port-only writer. The port's stand-in writers deliberately do NOT land here.
     pub script_channels: std::collections::BTreeSet<u8> }
 
 impl Default for Channels { fn default() -> Channels { Channels { v: vec![0; 256], time: vec![0; 256], writes: None, script_channels: std::collections::BTreeSet::new() } } }
@@ -383,7 +388,13 @@ impl Trigger {
         // Not for Bond hanging on a wire / zipline: there the bounds of the chasm's plunge volume enclose him, and
         // the containment contact fired the falling-to-death cut-scene the moment he grabbed the 07000005 cable
         // (ch 0xBE, merge of map-mayhew over fix-wire). In the game the crossing has no fall or death path at all
-        // [M Player_Wire 0x197658]. [S]: the game's exact contact rule for a hanging Bond isn't read yet.
+        // [M Player_Wire 0x197658]. THE HANG CONTACT RULE, now read: the game's wire-hang substate (6) shares the
+        // STANDING capsule arm — `Player_Collision` 0x194df0's second switch case 0 == case 6 (radius 0.275,
+        // spheres pos+0.55 / pos+0.275−cc, hittest word 0x800 [M 0x195070 case 0/6]) — there is NO special hang
+        // capsule, and the contact itself is the capsule vs the volume's own mesh through the collide walk (no
+        // containment shortcut). The port's `contain: !hanging` below is that mesh-only rule emulated for the
+        // hanging pose inside the port's small-tri containment approximation; the residual (whether the game's
+        // broad phase credits a plain bounds-sphere overlap as a trigger contact for ANY toucher) is a live check.
         // fix-objects2: containment is a PLATE/ROOM contact, not a valley-shell one. The game's contact is the
         // capsule against the volume's own mesh (the shells fire on crossing; standing strictly inside a hollow
         // volume touches nothing — 07000008's boarding platform sits INSIDE plunge #54's AABB and the game's player
@@ -655,9 +666,11 @@ pub fn build(level: &Level) -> Vec<Trigger> {
 ///    [D]], and the player's part is standing on the plate. E on that plate is REFUSED by the
 ///    game's `mask & 4` gate (0x18 & 4 = 0 [D #180 mask; M 0x1b2318:23-25]).
 ///
-/// Returns `(trigger, e_can_fire)`. The fallback choice itself is the port's survey mechanic
-/// (`// [S] unverified` as a resolution rule); every fact it rests on is tagged above. `None`
-/// when the level has no LOAD_LEVEL exit, or a mesh-less one with no reachable gate plate.
+/// Returns `(trigger, e_can_fire)`. The fallback choice is a PORT-ONLY SURVEY MECHANIC (the game has
+/// no such resolver — its triggers just run; this serves the campaign/flow legs and the tests), built
+/// entirely on the tagged facts above: the plate raises the exit's gate channel [M 0x1b1a78:162-166
+/// case 10] and the disc's own wiring connects them [D 07000001 #180 out 0x10 == the exit's gate].
+/// `None` when the level has no LOAD_LEVEL exit, or a mesh-less one with no reachable gate plate.
 pub fn exit_use_target(triggers: &[Trigger]) -> Option<(&Trigger, bool)> {
     let exit = triggers.iter().find(|t| t.kind == kind::LOAD_LEVEL && t.next_level != 0)?;
     if !exit.tris.is_empty() {

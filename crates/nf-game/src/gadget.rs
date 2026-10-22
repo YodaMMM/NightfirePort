@@ -75,14 +75,14 @@ pub fn is_decryptor(w: u8) -> bool {
 /// 0x1a7810]: the 50-unit crosshair ray (0x42480000 [M 0x1a7810:114-116]) must hit the lock
 /// (the game's `Collide_RayIntersect` object hit stored to BLData+0x880, then the gate re-checks
 /// the type byte 0x3a and the kind/state), and the player-to-lock distance must be within the
-/// weapon's own `weapon_data+0x1C` (2.0/4.0 [L]). The lock hit is the game's ray-vs-object-sphere
-/// rule: `Collide_RayIntersect` builds a ray HITTEST and runs `Collide_Pick` — the object walk
-/// tests the ray against each object's world sphere (obj+0x80/0x8C, `Control_BuildWorldSph`
-/// 0x133070) — then sorts every hit with the world's by t and takes the FIRST [M 0x1ec690:117-160;
-/// the picker 0x1eae80]. So the lock (radius = its glist sphere, the port's `Lock.radius`) burns
-/// the pick iff the ray's sphere-ENTRY t (`t − √(r²−d²)` for closest-approach distance d) comes
-/// before the world's first hit, and the distance gate is the player root to the lock.
-/// Returns the lock index.
+/// weapon's own `weapon_data+0x1C` (2.0/4.0 [L]). The game's lock hit runs the ray through
+/// `Collide_RayIntersect`'s HITTEST → `Collide_Pick` — the object walk tests the ray against each
+/// object's volume (the world sphere obj+0x80/0x8C, `Control_BuildWorldSph` 0x133070) and the
+/// sorted FIRST hit wins [M 0x1ec690:117-160, the picker 0x1eae80]. The port's substitute (the
+/// ray's closest approach within the lock's glist sphere + the floored 0.5 occlusion margin below)
+/// is a DOCUMENTED DEVIATION: the exact entry-t reading rejected the shipped 07000012 flow (see the
+/// block comment) — the game's keypad recess geometry is not in the port's mesh. The distance gate
+/// is the player root to the lock. Returns the lock index.
 pub fn pick_decryptor_lock(
     eye: V3,
     dir: V3,
@@ -107,14 +107,18 @@ pub fn pick_decryptor_lock(
         let closest = [eye[0] + dir[0] * t, eye[1] + dir[1] * t, eye[2] + dir[2] * t];
         let d2 = (closest[0] - lock.pos[0]).powi(2) + (closest[1] - lock.pos[1]).powi(2) + (closest[2] - lock.pos[2]).powi(2);
         if d2 > lock.radius * lock.radius { if dbg { eprintln!("decpick {i}: REJ sphere d={:?}", d2.sqrt()); } continue; }
-        // The sphere-ENTRY t: the ray touches the lock's world sphere at `t − √(r²−d²)` [M the
-        // sphere volume 0x133070; the pick's sorted first-hit 0x1ec690:120-160]. A wall in front
-        // of that entry blocks. The old stand-in (closest approach + a floored 0.5 margin) was a
-        // guess at this geometry; with `Lock.radius` = the lock's glist sphere the entry test IS
-        // the game's — the lock mounted flush on a wall has its sphere protruding past the wall
-        // face, so its entry t beats the wall's for every ray that actually reaches the keypad.
-        let t_entry = t - (lock.radius * lock.radius - d2).max(0.0).sqrt();
-        if world_t < t_entry { if dbg { eprintln!("decpick {i}: REJ occluded world_t={world_t} entry={t_entry}"); } continue; }
+        // A wall in FRONT of the lock blocks [M 0x1a7810:121; the game's sorted-first-hit pick
+        // 0x1ec690:120-160]. The exact game rule is the ray-vs-sphere ENTRY t
+        // (`t − √(r²−d²)`, the lock's glist sphere) vs the world's first hit — TRIED and REVERTED:
+        // on 07000012's #694 the port's lock sphere (glist r 0.132) sits ~0.24 behind the coarse
+        // wall mesh's face, so the exact entry test rejects every aim the game accepts (the
+        // decryptor_07000012_live flow stalled). The game's keypad recess (the wall mesh does not
+        // cover the sphere's near side, or the pick's object test reads a bigger volume) is not
+        // reproduced by the port's world mesh + lock sphere pair — so the port keeps the working
+        // approximation: the closest approach within the sphere, with the margin floored at 0.5.
+        // Live check: probe the lock object's world sphere (obj+0x80/0x8C) and the ray's
+        // sorted first-hit on a real decryptor aim.
+        if world_t < t - lock.radius.max(0.5) { continue; }
         // The distance gate is the PLAYER ROOT to the lock [M 0x1a5460:574-577 — `iVar18+0x30`].
         let dist = ((lock.pos[0] - root[0]).powi(2) + (lock.pos[1] - root[1]).powi(2) + (lock.pos[2] - root[2]).powi(2)).sqrt();
         if dist > range { continue; }
@@ -158,10 +162,13 @@ pub fn laser_tick(head: V3, dir: V3, world: &crate::world::CollisionWorld) -> (V
 /// The game's writer of those instance fields is UNLOCATED in the decompile (an exhaustive store
 /// scan of ACTION.ELF's .text finds no write at link+0x110/link+0x104 nor at the obj-relative
 /// +0x220/+0x214 — the pane reads them through the bullet walk; live check in the report) — the
-/// port stands the value in as `Sim::laser_charge` with the [D] drain. The refill below is [S]:
-/// no decompile or disc evidence pins the game's idle refill (the old "+1 per 4 frames" shape was
-/// the gadget-clip regen [M Player_Update 0x193600 disasm 0x193f18-58], which regenerates the
-/// gadget clips, not this meter); it is kept for the HUD's usability and kept OUT of pass/fail.
+/// port stands the value in as `Sim::laser_charge` with the [D] drain. The idle refill below is
+/// [S] unverified and kept OUT of pass/fail (the game's writer of link+0x110/+0x104 is unlocated —
+/// `Player_LaserPointer` 0x1a65d8:195 writes only the beam object's +0x103..105 pose bytes [M]; the
+/// old "+1 per 4 frames" shape was the gadget-clip regen [M Player_Update 0x193600 disasm
+/// 0x193f18-58], a different meter) — a fresh-boot PCSX2 measurement (drain to 0, idle, read the
+/// pane) is the live check that would settle refill-vs-no-refill and the rate. The 100-cap is the
+/// pane's own 0–100 read [D the HUD's u16].
 pub const LASER_CHARGE_DRAIN_PER_TICK: f32 = 31.0 / 60.0;
 pub const LASER_CHARGE_REFILL_PER_TICK: f32 = 0.25;
 
