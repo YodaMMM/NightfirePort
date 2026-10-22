@@ -103,7 +103,7 @@ impl L {
     }
 }
 
-pub fn bond_at(p: [f32; 3]) -> Player { Player { pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, cel: None } }
+pub fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, cel: None } }
 
 /// A live grenade at rest at `pos` (the flashbang harness's shape): the fuse is the +0x70 & 0x200
 /// record bit's 210 ticks ([L record 0x34/0x35/0x36 all carry it]), the owner usize::MAX = the

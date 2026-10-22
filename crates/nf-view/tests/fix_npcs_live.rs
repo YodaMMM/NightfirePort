@@ -134,7 +134,7 @@ fn the_spot_ray_picks_bond_and_arms_the_light_from_his_sphere() {
         sl.parts = vec![head, spot];
         // The real update path with a Player view of the airborne Bond (sph = the world sphere centre).
         let d = sim.data();
-        let player = nf_game::drone::Player {
+        let player = nf_game::drone::Player { yaw: 0.0,
             pos: bond_pos, target: bond_pos, eye: bond_pos, aim: [0.0, 0.0, 1.0], sph: centre, hanging: false,
             capsule: ([bond_pos[0], bond_pos[1] + 0.55, bond_pos[2]], [bond_pos[0], bond_pos[1] - 0.76, bond_pos[2]]),
             cel: None };
