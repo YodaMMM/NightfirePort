@@ -5384,16 +5384,26 @@ impl Sim {
     }
 }
 
-/// `FlashMod` (Check_Target 0x1a7810:95-97, the pickup/armour glow driver): a 1 Hz sine shimmer in
-/// [0.5, 1.0] — `((sin(2π·t + π/2) + 1)·0.5 + 1)·0.5` with t = the game time in seconds
-/// (GameState+0x76 = psiGetTimeIn100ths, written each main-loop pass 0x1c98c8:84; the phase is
-/// time100 · 0.01 s). Brightest at phase 0 (level start + whole seconds). The port feeds it its tick
-/// count (time100 = frame · 100/60, so the phase is frame/60) — render-side only, no sim state.
+/// `FlashMod` (Check_Target 0x1a7810:95-97): `FlashMod = (int)GameState+0x76 · 0.01`, then
+/// `((PS2Sinf(FlashMod·2π + π/2) + 1)·0.5 + 1)·0.5` — a 1 Hz sine shimmer in [0.5, 1.0], quantized
+/// to the integer 100ths clock (the sine's phase steps in 0.01 s units). GameState+0x76 is
+/// `psiGetTimeIn100ths()` = `((VBlankCount − RealTimeCount)·10) / 6` (INTEGER division, [M
+/// 0x1094a0:8]), written every in-game flow pass [M GameFlow_Main 0x1c98c8:84]. The port feeds it
+/// its tick count through the SAME integer formula (`frame·10/6`, 100ths at the fixed 60 Hz) —
+/// the rate and the quantization are the game's; the phase carries the boot→level offset (the
+/// game's clock runs from `psiInitTimeIn100ths` [M 0x109490:6], the port's from the level load —
+/// a cosmetic shimmer phase, render-side only, no sim state).
 pub fn flash_mod(frame: u32) -> f32 {
-    let t = frame as f32 / 60.0;
+    let t = (frame * 10 / 6) as f32 * 0.01; // [M 0x1a7810:95: (int)clock100 · 0.01, clock100 = 0x1094a0:8]
     let s = (t * std::f32::consts::TAU + std::f32::consts::FRAC_PI_2).sin();
     ((s + 1.0) * 0.5 + 1.0) * 0.5
 }
+
+/// The game clock the AIMS blink and FlashMod read, in the game's integer 100ths
+/// (`psiGetTimeIn100ths` 0x1094a0:8 — `((VBlankCount − RealTimeCount)·10)/6` — over the port's
+/// fixed 60 Hz ticks; the phase offset vs the game's boot-relative clock is cosmetic, the rate
+/// and quantization are exact [M GameFlow_Main 0x1c98c8:84 writes it every pass]).
+fn clock_100ths(frame: u32) -> u32 { frame * 10 / 6 }
 
 /// A rigid mesh hung on a character's datum (`AnimObjectDraw`): world = `QuatTransToMat(q, t)` · bone world.
 /// Draw slots per gas mesh (the sim's pool holds `GasPool::CAP` = 128; a puff past this index doesn't draw).
@@ -8608,20 +8618,30 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         None => far,
                     },
                     // fix-satchel-tripbomb: the satchel's countdown digits (kinds 4 = tens, 5 = units)
-                    // — the meshes SatchelDigits[sec/10]/[sec%10] [L 0x2bed90], drawn at the stuck
-                    // satchel's matrix (aligned to −normal [M 0x12ce80:266]) offset along its own
-                    // axes [*suggested*: the game offsets by its own small rotation/translation pair
-                    // 0x12d890:486-511 — the port's (±0.03, 0.032, 0.06) is cosmetic].
+                    // — the meshes SatchelDigits[sec/10]/[sec%10] [L 0x2bed90], spawned EVERY tick in
+                    // every state < 2 [M 0x12d890:418-553]. The game's placement, EXACT [M
+                    // 0x12d890:485-553]: rotation = `MulMatrix0(obj+0x90, RotMatrix((π/2, 0, π)))`
+                    // — the digit mesh's own frame turned inside the bullet's matrix — translation
+                    // = the bullet's position + the LOCAL offset through the bullet's rows only:
+                    // tens (0x3dbfe246, 0xbb15e052, 0xbdfb5d03) = (0.0936933, −0.00228693, −0.122736),
+                    // units (0x3d03cf48, …) = (0.0321801, −0.00228693, −0.122736); the old
+                    // (±0.03, 0.032, 0.06) pair was cosmetic. The bullet matrix is the bullet's OWN
+                    // obj+0x90 in every state — flight included [M 0x12d890:514/542 read obj+0x90
+                    // unconditionally; the flight matrix is the spawn-time `Mat_Align2Dir(dir,
+                    // up (0,1,0))` [M 0x12c5a0:185]]. The port's stuck matrix is the game's stick
+                    // alignment (−normal [M 0x12ce80:266]); in flight its `phase.normal` is still
+                    // the spawn placeholder (0,1,0) so its digits stand upright while the game's
+                    // ride the throw-aligned matrix — the flight pose is the one delta left (needs
+                    // the throw direction at spawn on the Grenade; live check in the report).
                     4 | 5 => {
                         // satchel-stick2: NO `stuck` gate — `Bullet_DoTrails`' 0x3b tail spawns the
                         // two digit objects EVERY tick in every state < 2 [M 0x12d890:418-553; the
                         // sim writes `digits` in flight too — grenade.rs's tail runs before the
                         // stuck early-out], so the numbers ride the satchel from the throw. The old
                         // `g.stuck` filter matched the playtest's "the numbers aren't working": a
-                        // satchel that hadn't stuck yet drew nothing. In flight `phase.normal` is
-                        // the spawn's [0, 1, 0] placeholder (the stick overwrites it with the
-                        // surface normal), so the flight digits stand upright on the satchel [S —
-                        // the game aligns them to the bullet's own matrix; the main agent renders].
+                        // satchel that hadn't stuck yet drew nothing. In flight the game keeps the
+                        // spawn-time throw-aligned matrix (the delta note above); the port's
+                        // placeholder keeps them upright until the Grenade carries the throw dir.
                         let satchels: Vec<&nf_game::grenade::Grenade> = s.drones.grenades.iter()
                             .filter(|g| g.weapon_type == 0x3b && g.state < 2 && g.phase.is_some())
                             .collect();
@@ -8630,9 +8650,22 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         let Some((tens, units)) = p.digits else { return far };
                         let digit = if kind == 4 { tens } else { units };
                         if mesh != 0x0200_0791 + digit as u32 { return far; }
-                        let mut m = nf_game::searchlight::align2dir([-p.normal[0], -p.normal[1], -p.normal[2]], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
-                        let (x, y, z) = (m[0], m[1], m[2]);
-                        let (lx, ly, lz) = if kind == 4 { (-0.03f32, 0.032f32, 0.06f32) } else { (0.03, 0.032, 0.06) };
+                        // In flight `phase.normal` is the spawn's [0, 1, 0] placeholder (the stick
+                        // overwrites it with the surface normal) — the flight delta above.
+                        let base = nf_game::searchlight::align2dir([-p.normal[0], -p.normal[1], -p.normal[2]], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+                        // [M 0x12d890:495 RotMatrix((π/2, 0, π)); :514/:542 MulMatrix0(obj+0x90, ·)]
+                        let pre = nf_formats::placement::object_matrix(
+                            [std::f32::consts::FRAC_PI_2, 0.0, std::f32::consts::PI], [0.0; 3]);
+                        let mut m = nf_formats::anim::mul(&base, &pre);
+                        // The translation reads the BULLET's rows (obj+0x90/a0/b0), not the product's
+                        // [M 0x12d890:496-510/:525-537 — the local offset through the bullet rows,
+                        // added to obj+0x30].
+                        let (x, y, z) = (base[0], base[1], base[2]);
+                        let (lx, ly, lz) = if kind == 4 {
+                            (0.093_693_3f32, -0.002_286_93f32, -0.122_736f32) // [M 0x3dbfe246/0xbb15e052/0xbdfb5d03]
+                        } else {
+                            (0.032_180_1f32, -0.002_286_93f32, -0.122_736f32) // [M 0x3d03cf48/…]
+                        };
                         m[3] = [
                             g.pos[0] + x[0] * lx + y[0] * ly + z[0] * lz,
                             g.pos[1] + x[1] * lx + y[1] * ly + z[1] * lz,
@@ -8759,8 +8792,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // fix-gadgets-live: the AIMS-20's side lights (mesh 0x2000132 on bones 8..0xB, attached
                 // in build for the 0x1a/0x1b records [M Player_WeaponFiring 0x1a5460:256-360]). Only the
                 // in-hand weapon's lights draw; the blink/off arms run here:
-                // - idle > 15 → bone 8 blinks on GameState+0x76 % 40's 20/40 duty [M 0x1a5460:264] — the
-                //   port's frame counter stands in for GameState+0x76 [S];
+                // - idle > 15 → bone 8 blinks on the game clock's 20/40 duty: dark while
+                //   `(GameState+0x76 % 40) > 0x14` [M 0x1a5460:264-266], the clock the integer
+                //   100ths `psiGetTimeIn100ths` [M 0x1094a0:8] written every flow pass [M
+                //   0x1c98c8:84] — the port runs the same integer formula over its ticks
+                //   (`clock_100ths`), a 0.4 s cycle like the game's;
                 // - the all-off gate is record-dependent (fix-aims20-lights-render below): +0x93a in
                 //   burst, clip[0x1A] in grenade [M 0x1a5460 disasm 0x1a5bf4-68];
                 // fix-aims20-modes-lights: the bone-9/10/11 gates, previously unmeasured/always lit —
@@ -8771,8 +8807,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 //   blinking in grenade mode below 3 rounds on FlashMod > 0.75 [M 0x1a5460:289-294];
                 // - bone 11 (the burst light) dark when the 0x1a clip is dry [M 0x1a5460:298-304],
                 //   blinking in burst mode below 7 rounds [M 0x1a5460:305-308]. FlashMod is the
-                //   pulsing flash global — the port's `flash_mod(frame)` stands in [S], its
-                //   0.5..1.0 sweep crossing 0.75 like the game's.
+                //   pulsing flash global = `(int)GameState+0x76 · 0.01` shimmered [M 0x1a7810:95-97],
+                //   the port's `flash_mod(frame)` runs the same integer-100ths formula — the
+                //   0.75 crossing lands on the same clock ticks the game's does.
                 let active = self.sim.as_ref().and_then(|s| self.view_models.get(&s.gun.weapon)) == Some(&(a.character as usize));
                 let Some(s) = self.sim.as_ref() else { return collapse(&datum) };
                 if !active { return collapse(&datum); }
@@ -8792,7 +8829,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     s.drones.inventory.clip.get(0x1a).copied().unwrap_or(0) > 45
                 };
                 if all_off { return collapse(&datum); }
-                if bone == 8 && idle > 15 && s.drones.frame % 40 > 20 { return collapse(&datum); }
+                if bone == 8 && idle > 15 && clock_100ths(s.drones.frame) % 40 > 20 { return collapse(&datum); }
                 if bone == 9 && s.drones.aims_raise == 0 { return collapse(&datum); }
                 if bone == 10 || bone == 11 {
                     let (wid, slot_of) = if bone == 10 { (0x1b_u8, 0x1b_usize) } else { (0x1a_u8, 0x1a_usize) };
