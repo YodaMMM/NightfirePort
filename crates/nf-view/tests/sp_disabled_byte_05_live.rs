@@ -165,7 +165,6 @@ fn the_mask0_gondola_sp_still_loads_and_runs() {
     impl nf_game::nis::World for W {
         fn anim_length(&self, _script: u32) -> Option<u16> { Some(100) }
         fn discrete0(&self, _skin: u32, _script: u32, _frame: f32) -> Option<nf_formats::anim::Mat4> { None }
-        fn level(&self) -> u32 { 0x0700_0024 }
     }
     let mut ch = nf_game::triggers::Channels { v: vec![0u8; 256], time: vec![0u32; 256], writes: None, script_channels: Default::default() };
     let mut w = W;

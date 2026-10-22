@@ -4803,13 +4803,15 @@ impl Sim {
             // < 5.0 [M 0x1a7b6c-0x1a7b84], level != 0x700004a [M 0x1a7b58-0x1a7b64], the boot-global
             // `DoorMsg` 0x30cd04 < 3 [M 0x1a7b88-0x1a7b90], then `Door_DoMsg` 0x135f18 → on a nonzero
             // label `DoorMsg++` and `Text_AddMsg(BL+0x94e, 0, 1, label, 0, 0xb4)` — 180 ticks [M
-            // 0x1a7b98-0x1a7bc8]. The port: the sphere pick [S, see Doors::pick_target] and the
+            // 0x1a7b98-0x1a7bc8]. The port: the door's own mesh-ray pick (Doors::pick_target —
+            // the game's front-face rule [M Intersect_RayGeom 0x10a8c8:168],
+            // docs/systems/door-aim-ray.md) and the
             // info_labels queue bound in hud_tick (the game binds at post time, before the pane).
             // unported-misc-5: the trigger pick for the class-0x1D arm below — the game's single hitlist
             // dispatches on the NEAREST hit object only, so the two aim arms must yield to each other too
             // [M 0x1a79e8-0x1a7bc8: the 0x1c/0x1d branches are else-ifs on one `bVar3`].
             let trig_pick = self.pick_trigger_target(camera, look, wall);
-            let door_pick = self.drones.doors.pick_target(camera, look, wall);
+            let door_pick = self.drones.doors.pick_target(&self.world, camera, look, wall);
             let trig_in_front_of_door = trig_pick.map_or(false, |(_, t)| door_pick.is_none_or(|(_, dt)| t < dt));
             if let Some((di, dt)) = door_pick {
                 let drone_in_front = hit.map_or(false, |(_, t)| t < dt);
@@ -4838,7 +4840,8 @@ impl Sim {
             // passing and `!Trigger_Locked` (0x1b2fc8 — for a LOAD_LEVEL exit the key gate off), the game posts
             // `Txt_BindLabel(0x2000009, 0)` for 0xb4 = 180 ticks [M 0x1a7810:201-207]. The port: the AABB pick
             // below [S stand-in — the game's ray hits the trigger's collision via the shared hitlist; the
-            // port's `world.segment` returns no object id, same [S] shape note as `Doors::pick_target`].
+            // port's `world.segment` returns no object id (the door arm's sphere note is resolved —
+            // `Doors::pick_target` now tests each door's own triangles [M 0x10a8c8:168]).]
             self.hud.load_msg = self.hud.load_msg.saturating_sub(1); // [M 0x1a7810:78-79]
             if let Some((ti, tt)) = trig_pick {
                 let drone_in_front = hit.map_or(false, |(_, t)| t < tt);
@@ -4874,10 +4877,15 @@ impl Sim {
         // `Player_CheckForDeath` 0x190810:91 exactly when the health runs out, then the 5 s gate
         // respawns (`Player_HandleDeath` 0x190bb0:41-54 → `MP_ReSpawn` 0x185368).
         // mp-site-damage-offline: the offline local pipeline's site feed — the sphere only on an
-        // offline load (online the shared combat owns the site; the local bullets are its visual
-        // shadow there, and a second feed would apply every online shot twice [S port
-        // architecture]). The offline gate is the Sim's own online marker pair — the same
-        // predicate `step_mp_death_respawn` runs under.
+        // offline load. The game's rule is ONE feed per site: bullets accumulate in the site
+        // object's hit lists (obj+0xD0) and are drained once per frame by
+        // MP_DemolitionProtectionUpdate 0x1870a0:81-91 (SP_GetHitDamage 0x1dc5f8), blasts apply
+        // instantly through Explode_Propagate's class-0x35 arm 0x17c518:186-188 ->
+        // MP_ApplyDamage 0x18b2c8:11-15 (its ONLY caller) — there is no second path in the game
+        // [M]. The port's online machines run that one feed in the shared combat; the local sim
+        // replaying the same shots would double-apply them, so offline-only is the gate that
+        // KEEPS the game's one-feed rule (port architecture, the same predicate
+        // `step_mp_death_respawn` runs under).
         self.drones.site_sphere = if self.net_rng.is_none() && self.net_rng_shared.is_none() {
             self.mp.as_ref().and_then(|m| m.site_sphere())
         } else {
@@ -4898,7 +4906,17 @@ impl Sim {
                 let local = self.mp_local_slot;
                 for (dmg, owner) in blasts {
                     // The owner key: `usize::MAX` = Bond's throw → the local slot; a drone-index
-                    // key has no MP slot (the MP bots are not drones) and is skipped [S].
+                    // key is UNREACHABLE here: the site exists only in an MP match (site_sphere
+                    // is `self.mp`'s), the port's MP matches create no drones (bots fire through
+                    // the botweap Bullet path, never `drones.grenades`), and the only non-MAX
+                    // blast owners are SP guards' throws [M callers: drone.throw_grenade via
+                    // 15483; grenade.rs's player/placed spawns are usize::MAX]. The GAME's
+                    // attribution, for the record: MP_ApplyDamage(falloff, mpobj, attacker obj)
+                    // [M 0x17c518:186-188 -> 0x18b2c8:11-15] resolves the attacker through
+                    // Control_Plr2Ind 0x134118 — class 2/0x11 (bots ARE drone-class) reads
+                    // DCVars+0x75C, class 3/0x12 reads BLData+0x94E, and an unregistered owner
+                    // gets −1 = no attribution [D 0x134178-0x1341d0] — the skip arm matches
+                    // that −1 case.
                     if owner == usize::MAX { m.damage_site(dmg, local); }
                 }
                 if bullets > 0.0 { m.damage_site(bullets, local); }
@@ -4917,8 +4935,16 @@ impl Sim {
         // refreshes from the live entity every tick (the game keys obj+0x90 per tick [M
         // Script_Interp 0x1d9a08:106-133]). The 07000005 create-time z-negate/+1.5-y lift is NOT
         // applied here: the script arm's object matrix is overwritten by the same tick's interp
-        // (Script_EntityStart's `Script_Interp` tail), so the lift never reaches the box [S — the
-        // placement path's lift is a create-time matrix write the script stream has no key for].
+        // [M PROVEN — the lift never reaches the box in the game either]: Script_CreateEntity's
+        // 0xF5 arm creates the volume with the global zero vector 0x2d6200 for pos AND rot
+        // [0x1d8968:132-135], Drone_AIVolume_Create's z-negate/+1.5-y lift lands on that
+        // create-time matrix only [0x1376c0:60-64 -> control_create_object 0x1344e0:27
+        // View_RotTransMatrix], and Script_EntityStart calls Script_Interp immediately after the
+        // create (disasm 0x1d8e38 create, 0x1d8e84 store obj, 0x1d8eb8 jal Script_Interp — the
+        // later Control_BuildWorldSph/build_LinkToRoom/Mat_GetNorm consumers read the POST-interp
+        // matrix 0x1d8ec0-0x1d8f08); Script_Interp's case 1 rewrites obj+0x90 unconditionally on
+        // every stream entry [0x1d9a08:105-111 Mat_Copy/Mat_Scale3f into obj+0x90]. The port's
+        // no-lift here IS the game's behaviour.
         if !self.drones.scripts.objects.pending_volumes.is_empty() {
             for v in std::mem::take(&mut self.drones.scripts.objects.pending_volumes) {
                 let half = self.glist_bounds.get(&v.hash)
@@ -5403,8 +5429,13 @@ impl Sim {
     }
 
     /// The falling drops as camera-facing quads (`DrawDrops` → `psiDrawParticleList(0.2, …, 0x808080, 0x03000045)`:
-    /// GS sprites, colour (63, 63, 63, 127) × texture, additive, depth-tested without writing). The 0.2 is taken as the
-    /// full width (*suggested*, docs/systems/render.md).
+    /// GS sprites, colour (63, 63, 63, 127) × texture, additive, depth-tested without writing). The GAME'S SIZE RULE
+    /// for the main agent's render pass: DrawDrops passes colours = NULL, so psiDrawParticleList takes the NON-colour
+    /// creator, which never reads the 0.2 [M disasm 0x18cc1c-30 mtc1 0.2/`move $t0, $zero`/jal; 0x122d50 `beqz $s4 →
+    /// CreatePointerSpriteList 0x11a160`] — the flake scale there is `1/(PS2SnowSize · PS2SnowSizeMult)` [M 0x11a160:81],
+    /// PS2SnowSize level-set (28988/12378/19746 for 0x07000005/6/8 [M 0x11e2e8:32-46]) and PS2SnowMult = 448/viewport-H
+    /// [M 0x10b2b0:100-112] — a screen-space size, not the 0.2 (VU1 sprite microcode owns the final px factor; backlog
+    /// L-706). The port's 0.1-half-extent (0.2 full width) quads stand in for that screen-space rule (visual only).
     pub fn snow_quads(&self, right: [f32; 3], up: [f32; 3]) -> Vec<Vertex> {
         let Some(env) = self.drones.env.as_ref() else { return Vec::new() };
         let h = 0.1;
@@ -5421,8 +5452,13 @@ impl Sim {
 
     /// The emitter particles as camera-facing quads (`Emitter_Draw` 0x17b708 path A →
     /// `psiDrawParticleList` 0x122d50: a size-`def.size` rgba sprite per alive slot). The game sizes
-    /// the sprite in screen space (`4·size / (PS2ParticleSize · PS2SnowSizeMult)`, 0x11e2e8:67) — the
-    /// port takes the def size as the world-space half-extent [S], the way the snow quads do. The
+    /// the sprite in screen space (`4·size / (PS2ParticleSize · PS2SnowSizeMult)`) — the port
+    /// takes the def size as the world-space half-extent, the way the snow quads do. The GAME'S SCALAR for the main
+    /// agent's render pass, EXACT [M 0x119910:81 `pDMA[4] = (uint)((1.0/(PS2ParticleSize·PS2SnowSizeMult))·4.0·size)`
+    /// — a VU1 sprite scale word next to the ST=1.0 constants]: PS2ParticleSize = Ps2Far1·0.002386635 [M 0x11e2e8:67],
+    /// PS2SnowSizeMult = (1/viewer+0x108)·(1/(viewport-H·0.002232143)) = 448/H [M 0x10b2b0:100-112] — ∝ 1/far and
+    /// ∝ viewport height, i.e. a FIXED SCREEN-SPACE size, not a world extent; the ±size/2 world-space reading is the
+    /// port's approximation (the half-vs-full factor lives in the VU1 sprite microcode, backlog L-706). The
     /// white rgb in the game's sprite comes from the bound def texture (the font-slot hash, def+0x04)
     /// modulated by the slot rgba [M 0x119910:19]; the port has no per-def texture, so the colour is
     /// the slot rgba itself — listed in the report's render follow-ups.
@@ -5513,7 +5549,17 @@ impl Sim {
     /// The first-person gun's matrix (`Player_SetWeaponAnimObj` + `Player_PositionGun` 0x1a3b40): the gun turns toward
     /// the crosshair — pitch `cy·(π/6)`, yaw aspect·`cx·(π/6)` (G+0x50 / +0x54, zoom 1) — about the view-space point
     /// (0, −0.2, 0.5): position = eye + (offset `+0xE0` + bob + (0, 0.2, −0.5))·R_gun + (0, −0.2, 0.5)·R_view. The
-    /// rotation order (`RotZYX`) and the yaw sign are *suggested*: the gun points along the turned forward.
+    /// rotation order and signs, THE GAME'S EXACT RULE for the main agent's render comparison
+    /// [M disasm 0x1a3b40-0x1a3c20]: the gun object's rotation is `objmat · RotX(−(BLData+0x8a8)·π/2) ·
+    /// RotMatrixZYX(euler)` — RotMatrixZYX 0x1e25a8 (R = Rz·Ry·Rx) on GUN+0x50..0x5b (GUN =
+    /// *(BLData+0x7e8)), where Player_WeaponRecoil writes euler X = −(BLData+0x124)·(π/6)/zoom
+    /// (the VERTICAL crosshair term), euler Y = −aspect·(BLData+0x120)·(π/6)/zoom + recoil(+0x8e4),
+    /// euler Z = 0 [M 0x1a3f64-0x1a3fbc; +0x120/+0x124 are the horizontal/vertical aim terms,
+    /// Player_GetAimingPoint 0x1a4a98:53-55]; the pivot (0, −0.2, 0.5) is rotated by (RotX∘objmat)
+    /// and added to the head + gunRot·(GUN+0x30) [0x1a3bec-0x1a3c20]. The port builds the same
+    /// orientation by turning the view basis (`fwd` by yaw about up, then pitch about the turned
+    /// right) instead of the euler product — the turned-forward construction stands in for the
+    /// matrix product (visual only; the main agent's render owns the sign/order check).
     pub fn gun_matrix(&self) -> [[f32; 4]; 4] {
         let w = &self.weapons.records[self.gun.weapon as usize];
         let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
@@ -5558,16 +5604,26 @@ impl Sim {
     }
 }
 
-/// `FlashMod` (Check_Target 0x1a7810:95-97, the pickup/armour glow driver): a 1 Hz sine shimmer in
-/// [0.5, 1.0] — `((sin(2π·t + π/2) + 1)·0.5 + 1)·0.5` with t = the game time in seconds
-/// (GameState+0x76 = psiGetTimeIn100ths, written each main-loop pass 0x1c98c8:84; the phase is
-/// time100 · 0.01 s). Brightest at phase 0 (level start + whole seconds). The port feeds it its tick
-/// count (time100 = frame · 100/60, so the phase is frame/60) — render-side only, no sim state.
+/// `FlashMod` (Check_Target 0x1a7810:95-97): `FlashMod = (int)GameState+0x76 · 0.01`, then
+/// `((PS2Sinf(FlashMod·2π + π/2) + 1)·0.5 + 1)·0.5` — a 1 Hz sine shimmer in [0.5, 1.0], quantized
+/// to the integer 100ths clock (the sine's phase steps in 0.01 s units). GameState+0x76 is
+/// `psiGetTimeIn100ths()` = `((VBlankCount − RealTimeCount)·10) / 6` (INTEGER division, [M
+/// 0x1094a0:8]), written every in-game flow pass [M GameFlow_Main 0x1c98c8:84]. The port feeds it
+/// its tick count through the SAME integer formula (`frame·10/6`, 100ths at the fixed 60 Hz) —
+/// the rate and the quantization are the game's; the phase carries the boot→level offset (the
+/// game's clock runs from `psiInitTimeIn100ths` [M 0x109490:6], the port's from the level load —
+/// a cosmetic shimmer phase, render-side only, no sim state).
 pub fn flash_mod(frame: u32) -> f32 {
-    let t = frame as f32 / 60.0;
+    let t = (frame * 10 / 6) as f32 * 0.01; // [M 0x1a7810:95: (int)clock100 · 0.01, clock100 = 0x1094a0:8]
     let s = (t * std::f32::consts::TAU + std::f32::consts::FRAC_PI_2).sin();
     ((s + 1.0) * 0.5 + 1.0) * 0.5
 }
+
+/// The game clock the AIMS blink and FlashMod read, in the game's integer 100ths
+/// (`psiGetTimeIn100ths` 0x1094a0:8 — `((VBlankCount − RealTimeCount)·10)/6` — over the port's
+/// fixed 60 Hz ticks; the phase offset vs the game's boot-relative clock is cosmetic, the rate
+/// and quantization are exact [M GameFlow_Main 0x1c98c8:84 writes it every pass]).
+fn clock_100ths(frame: u32) -> u32 { frame * 10 / 6 }
 
 /// A rigid mesh hung on a character's datum (`AnimObjectDraw`): world = `QuatTransToMat(q, t)` · bone world.
 /// Draw slots per gas mesh (the sim's pool holds `GasPool::CAP` = 128; a puff past this index doesn't draw).
@@ -5998,9 +6054,10 @@ fn add_instance(level: &Level, inst: &Instance, layer: Layer, character: Option<
     };
     // view-model-last: the first-person gun and its flash are `Game_Draw` 0x1e6f50:162-175's list 2, drawn
     // after `psiClearZ` — over everything the world and its effects drew [M]. Pass 7 draws after every
-    // other pass with its depth squashed toward the eye (gpu.rs `VMZ`), the port's stand-in for the clear:
-    // the gun still sorts its own parts, and a rocket spawned between the eye and the tube no longer
-    // paints over it (PCSX2 08 side by side, 2026-10-17).
+    // other pass with its depth squashed toward the eye (gpu.rs `VMZ`) — the port's architecture for the game's
+    // `psiClearZ` before list 2 (the renderer cannot clear mid-frame), measured against PCSX2 08 side by side,
+    // 2026-10-17: the gun still sorts its own parts, and a rocket spawned between the eye and the tube no longer
+    // paints over it.
     let pass = if node == VIEW_MODEL_NODE && matches!(layer, Layer::Character | Layer::Effect) { 7 } else { pass };
     // The object's world centre (glist sphere centre through the instance matrix) for the draw-order sort; world layers
     // keep each object apart. The world-space bounding-sphere radius (glist radius × the instance matrix's max axis
@@ -6178,11 +6235,20 @@ fn tracer_matrix(b: &nf_game::bullet::Bullet) -> Mat4 {
 /// fix-impacts-render: a shell casing's draw matrix. `Bullet_casing_update` 0x12faa0 adds the eject spin to the
 /// object's euler every tick (`rot(+0x50..+0x5b) += spin` [M]); `Bullet_init_casing_ex` 0x12f678 starts the euler
 /// at the spherical angles of the eject direction (`vecutil_cartesian_to_spherical_acc`, obj+0x58 = 0 [M]). The
-/// port reconstructs the eject direction by undoing the tick gravity (`vel[1] += GRAVITY·REC²·age`) and takes the
-/// tracer's +Z euler convention for it [S — the game eulers the weapon-local dir through the view-model basis;
-/// the port's eject origin/basis is already a documented stand-in, docs/atlas/effect.md].
+/// port reconstructs the eject direction by undoing the tick gravity (`vel[1] += GRAVITY·REC²·age`). The GAME'S RULE,
+/// corrected from the decompile: the initial euler is the WORLD-space vector `(0,0,1)` rotated through the WEAPON
+/// BONE's world matrix (palette root = the weapon obj's obj+0x90; AnimGetBoneWorldTrans 0x1c3120:131-133), converted
+/// `vecutil_cartesian_to_spherical_acc` 0x1e3a70:9-11 — elevation = atan2(y, √(x²+z²)), azimuth = atan2(x, z) — and
+/// stored as casing+0x50 = −elevation, +0x54 = azimuth, +0x58 = 0 [M 0x12f678:161-172]; the spin then adds to ALL
+/// THREE euler fields every tick [M 0x12faa0:105-113 VADD]. The port's reconstruction (undo gravity → the same
+/// atan2 pair, spin per-tick on the same fields) matches the game's convention field-for-field; what it stands in
+/// for is the SOURCE vector — the game eulers the bone's forward, the port the eject velocity (the port's eject
+/// origin/basis is already a documented stand-in, docs/atlas/effect.md), so the initial attitude can differ by the
+/// weapon's eject-offset angle. Euler→matrix order for the main agent's render check: the game's object euler path
+/// is the RotMatrixZYX family [M RotMatrixZYX 0x1e25a8], the port's `object_matrix` z-row (sin ry, −sin rx·cos ry,
+/// cos rx·cos ry) is that same Z·Y·X shape.
 fn casing_matrix(c: &nf_game::casing::Casing) -> Mat4 {
-    // casings-persist: a rested casing (the "Keep shell casings" option [S]) has no velocity left —
+    // casings-persist: a rested casing has no velocity left —
     // the in-flight reconstruction degenerates to pitch −π/2 (every shell planted nose-down), so a
     // rest draws with its own settled attitude: roughly horizontal (the eject-reconstruction maps
     // the euler's forward onto the shell's long axis), deterministically yawed by position so a
@@ -6266,10 +6332,16 @@ const DEBRIS_SLOTS: usize = 128;
 /// twist (drone-class objects only — the bots) the rotation about A; clamps: a class-3 player
 /// [−π/2, 1.2708] on the pitch (positive = down about B) and no twist, a drone ±0.9 on both; the
 /// rotation `q_A(twist) ⊗ q_B(pitch)` premultiplies bone 2's world rotation, so bone 2 and its whole
-/// subtree turn about bone 2's position. [S]: the aim point is far (head + aim·256 for a player) so
-/// the gun is turned PARALLEL to the target direction — the game's line/sphere intersection reduces
-/// to that at range; `aim` = the eased body-relative (twist, pitch) of the target direction, pitch
-/// positive up. Returns the applied (pitch about B, twist about A).
+/// subtree turn about bone 2's position. The game's geometry, EXACT [M AnimObjectAimAt 0x1bfe58]: the target is a
+/// REAL POINT — a stored VECTOR* (animobj+4) or the target object's bone world position [+210-227], not a far aim
+/// direction; the correction angle comes from a line-through-sphere construction — sphere centred at the aim bone
+/// with radius = |aim bone − projected target|, line = the weapon axis through `weaponPos + (−weaponX)·100`
+/// [0x42c80000 = 100, +244-277], angle = acos(unit(target−bone), unit(hit−bone)) signed by the scalar triple
+/// product [293-296], clamped ±0.9 (drone) / [−π/2, 1.2708] (class 3) [302-317], then rate-limited through
+/// Ang_RotateToBearing into the +0x84/+0x8c channels [394-411]. With the sphere passing through the target, that
+/// angle IS the angular error between the weapon axis and the target direction — the "turn the gun onto the target
+/// direction" the port computes with `signed(axis, g, target)`; the port's `aim` is the eased body-relative
+/// (twist, pitch) of the target direction, pitch positive up. Returns the applied (pitch about B, twist about A).
 pub fn mp_body_aim(world: &mut [Mat4], skin: &nf_formats::character::Skin, gun: Option<(usize, Mat4)>, aim: [f32; 2], drone: bool) -> Option<(f32, f32)> {
     if world.len() <= 2 { return None; }
     let (gbone, glocal) = gun.filter(|(b, _)| *b < world.len())?;
@@ -7056,7 +7128,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // weapon_data+0x4C on the datum id + 1, the muzzle [M]); shown 2 ticks per shot of
                         // the slot (`Sim::mp_fx.last_shot`). The PS2's human players draw theirs on the
                         // first-person view model only (`Draw_MuzzleFlash` 0x1a3fe0); the opponent's
-                        // third-person flash is the port's [S] so the other machine sees the shot.
+                        // third-person flash is the port's own netcode extension: in the game
+                        // the human MP body's fire path (Player_WeaponFiring ->
+                        // Player_WeaponInitBullet -> Player_MuzzleFlash) spawns NO world flash
+                        // sprite on the body — the sprite flash is
+                        // View_DrawInThisViewOnly(owner slot) [M Draw_MuzzleFlash 0x1a3fe0:116],
+                        // the owner's screen only; the other split-screen player sees the world
+                        // dynamic light [M Player_MuzzleFlash 0x1a4298:86-90 Light_Create] and
+                        // the body's firing anim-datum swap [0x1a4298:140-144], not a sprite.
+                        // (Only the bots/guards' DroneWeap_FireWeapon 0x178f68:189-213 spawns a
+                        // world-visible flash object.) The port's flash mesh here stands in for
+                        // what the game's light + datum swap show the other player.
                         if let Some((fmesh, rgb)) = wd.muzzle_flash(w) {
                             let muzzle = skin.datums.iter().find(|x| x.id == datum_id + 1 && x.bone >= 0);
                             if let (Some(&(fmap, fobject)), Some(md)) = (level.by_hash.get(&fmesh), muzzle) {
@@ -7228,7 +7310,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     attachments.push(Attachment { character: 0, bone: 0, local: tinst.matrix, flash: None, tracer: Some(MP_TRACER_BASE + k), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
                 }
             }
-            // fix-gadgets-live: the gadget BEAM draws the game's own sprites, not the trail stand-in —
+            // fix-gadgets-live: the gadget BEAM draws the game's own sprites (the old trail
+            // stand-in is gone) —
             // `Draw_LaserBeam` 0x1a4560 sets the beam object's gfx to 0x2000131 "lazer" (the class-'N'
             // 0x4E record; the 0x4F upgrade takes 0x20006c1 "uv_lazer") and `Draw_TaserBeam` 0x1a46a8
             // to 0x200026d "taser" [M], all via hashtable_set_object_to_entity_gfx; the objects resolve
@@ -7628,9 +7711,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // Scenery off), `Car_Create` 0x1305b0:12-17 (Vehicles off, and always on Ravine
             // 0x0700004b) [M]. Vehicles on: `Car_Create`'s variant — Helicopters (and Random's
             // 51 %) swap the body to entity 0x2000194 raised 1.5 [M :30-49] with the
-            // 0x2000b4d/0x2000b4e children [M Car_InitBits 0x12fec8:13-23]; the Random roll draws
-            // from the lockstep seed's own stream [S]. The vehicles draw only — the port's MP has
-            // no drivable car (docs/GAPS.md).
+            // 0x2000b4d/0x2000b4e children [M Car_InitBits 0x12fec8:13-23]. The Random roll:
+            // the game draws it from the GLOBAL RNG pair — Rand_Rand(100) < 51 -> heli [M
+            // Car_Create 0x1305b0:40, disasm 0x1306c0 jal Rand_Rand__FUi(100), 0x1306c8 sltiu
+            // 0x33; Rand_Rand 0x1e3738:6-8 mutates the shared SEED_X/SEED_Y globals] — one
+            // stream shared by every draw in the game, so its state at create time is
+            // play-history the port cannot reproduce. The port rolls the SAME rule
+            // (rand(100) < 51) from a stream seeded by the lockstep seed (`^ 0x4341_5253`), the
+            // determinism substitution that keeps every machine's draw identical; the roll
+            // probability and threshold are the game's, the stream is the documented port
+            // choice. The vehicles draw only — the port's MP has no drivable car (docs/GAPS.md).
             let ctx_level = drones.map_or(0, |d| d.level_id);
             let mut car_rng = mp.map(|ms| nf_game::drone::Rng::new(ms.seed ^ 0x4341_5253));
             for p in level.maps[m].placements.iter().filter(|p| MISC_KINDS.contains(&((p.flags & 0xff) as u8))) {
@@ -8166,8 +8256,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // reservation itself stayed a gone zombie (07000003's keycard spawned as a duplicate push while
             // slot (0x06000563,1) pointed at the armour). Offset by the placed count so the slot points at
             // the reservation actually appended. [Port bug — the game creates a fresh object every spawn
-            // (Pickup_Create 0x18dda0 via Script_CreateEntity 0x1d8968's 0xF0 arm); the slot reuse is the
-            // port's fix-safe08 stand-in and must at least point at the right entry.]
+            // (Pickup_Create 0x18dda0 via Script_CreateEntity 0x1d8968's 0xF0 arm); the port's
+            // slot reuse is its documented safe08 design and points at the right entry — the
+            // offset bug it fixes is the port's own, the game never had it.]
             drones.script_pickup_slots = sim_slots.into_iter().map(|(k, v)| (k, v + placed_len)).collect();
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
@@ -8355,8 +8446,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // script list (`Sim::mp_anim`, ticked by `advance_mp_anim` — idle, the distance-driven
             // walk/run, the strafe overlay, the stance transitions, the death [M AnimSetUpdate
             // 0x1c0938, Player_ChangeSubState 0x190630]) composed as `AnimFrameResolve` blends, then
-            // the upper-body aim on bone 2 (`AnimObjectAimAt` 0x1bfe58). Fallback when the arena lacks
-            // the player scripts: the drone set by speed [S].
+            // the upper-body aim on bone 2 (`AnimObjectAimAt` 0x1bfe58). The speed-driven
+            // drone-set fallback below is the port's own defensive path: the game REQUIRES the
+            // anim set — Player_Init adds script 0x60001d4 unconditionally [M 0x1910f8:155-158],
+            // every substate re-inits the set with no success check [M 0x190630:16-17,
+            // PlayerAnimSetInitNormal 0x18fcd8:50-51], AnimSetUpdate just bails on a null set
+            // (the body freezes unanimated, no substitute) [M 0x1c0938:83-85], and the MP load
+            // filter loads the 0x6/0x4 anim blocks unconditionally [M 0x1bdf40:55-86; FILES.BIN
+            // carries 060001d4 in every MP arena, 8x] — no fallback exists in the shipped game
+            // [D census].
             if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
                 let _pm = nf_game::prof::scope("fs: mp body (total)");
                 let s = self.sim.as_ref()?;
@@ -8841,10 +8939,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // keeping the interp translation and the interp scale `obj+0xE8` (the key scale
                     // × the script scale via `Script_GetInterp` 0x1da158:117, `Mat_Scale3f`
                     // 0x1e35f0). The port's entity matrix is rotation·s with s uniform (the interp
-                    // builds it from pos/quat/scale keys), so s = |column 0|. The obj+0x58 spin arm
-                    // (the interp X-axis re-applied over the viewer rotation) is not ported — the
-                    // blast's first-frame flash quad dominates and the puffs' spin is sub-visible
-                    // [S — live check in the report].
+                    // builds it from pos/quat/scale keys), so s = |column 0|. The obj+0x58 spin arm, the GAME'S
+                    // EXACT RULE for the main agent's render pass [M View_DrawObjectGlist 0x1e6780:48-57]: when the
+                    // entity's obj+0x58 != 0 the drawn rotation is `viewer_rot · RotZ(spin)` — RotZ about the
+                    // SCREEN-FACING axis (spin in the screen plane), built from euler (0, 0, +0x58) via
+                    // RotTransMatrix and Concat'd INSIDE the viewer alignment — not the plain viewer rotation this
+                    // port draws; the spin accumulates per tick, `obj+0x58 += def[3][0]·FRAME_RATE_MUL` in the
+                    // effect updaters (gases_smoke 0x1ab2d0:50/85/185; the rate sign flips per gas type at
+                    // def[3][0xc]). Not ported here (the blast's first-frame flash quad dominates and the puffs'
+                    // spin is sub-visible); a live check can calibrate the per-def rates from def[3] if the main
+                    // agent ports it.
                     if !self.script_billboards.contains(&hash) { return m; }
                     let s = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
                     let (r, u) = (opts.right, opts.up);
@@ -8938,8 +9042,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // fix-gadgets-live: the AIMS-20's side lights (mesh 0x2000132 on bones 8..0xB, attached
                 // in build for the 0x1a/0x1b records [M Player_WeaponFiring 0x1a5460:256-360]). Only the
                 // in-hand weapon's lights draw; the blink/off arms run here:
-                // - idle > 15 → bone 8 blinks on GameState+0x76 % 40's 20/40 duty [M 0x1a5460:264] — the
-                //   port's frame counter stands in for GameState+0x76 [S];
+                // - idle > 15 → bone 8 blinks on the game clock's 20/40 duty: dark while
+                //   `(GameState+0x76 % 40) > 0x14` [M 0x1a5460:264-266], the clock the integer
+                //   100ths `psiGetTimeIn100ths` [M 0x1094a0:8] written every flow pass [M
+                //   0x1c98c8:84] — the port runs the same integer formula over its ticks
+                //   (`clock_100ths`), a 0.4 s cycle like the game's;
                 // - the all-off gate is record-dependent (fix-aims20-lights-render below): +0x93a in
                 //   burst, clip[0x1A] in grenade [M 0x1a5460 disasm 0x1a5bf4-68];
                 // fix-aims20-modes-lights: the bone-9/10/11 gates, previously unmeasured/always lit —
@@ -8950,8 +9057,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 //   blinking in grenade mode below 3 rounds on FlashMod > 0.75 [M 0x1a5460:289-294];
                 // - bone 11 (the burst light) dark when the 0x1a clip is dry [M 0x1a5460:298-304],
                 //   blinking in burst mode below 7 rounds [M 0x1a5460:305-308]. FlashMod is the
-                //   pulsing flash global — the port's `flash_mod(frame)` stands in [S], its
-                //   0.5..1.0 sweep crossing 0.75 like the game's.
+                //   pulsing flash global = `(int)GameState+0x76 · 0.01` shimmered [M 0x1a7810:95-97],
+                //   the port's `flash_mod(frame)` runs the same integer-100ths formula — the
+                //   0.75 crossing lands on the same clock ticks the game's does.
                 let active = self.sim.as_ref().and_then(|s| self.view_models.get(&s.gun.weapon)) == Some(&(a.character as usize));
                 let Some(s) = self.sim.as_ref() else { return collapse(&datum) };
                 if !active { return collapse(&datum); }
@@ -8971,7 +9079,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     s.drones.inventory.clip.get(0x1a).copied().unwrap_or(0) > 45
                 };
                 if all_off { return collapse(&datum); }
-                if bone == 8 && idle > 15 && s.drones.frame % 40 > 20 { return collapse(&datum); }
+                if bone == 8 && idle > 15 && clock_100ths(s.drones.frame) % 40 > 20 { return collapse(&datum); }
                 if bone == 9 && s.drones.aims_raise == 0 { return collapse(&datum); }
                 if bone == 10 || bone == 11 {
                     let (wid, slot_of) = if bone == 10 { (0x1b_u8, 0x1b_usize) } else { (0x1a_u8, 0x1a_usize) };

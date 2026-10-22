@@ -10943,7 +10943,6 @@ pub fn voice_type(skin: u32) -> u16 {
 /// The script runtime's view of the level data: animation lengths and an animated object's discrete object 0.
 impl crate::nis::World for Data<'_> {
     fn anim_length(&self, script: u32) -> Option<u16> { self.scripts.get(&script).map(|s| s.length) }
-    fn level(&self) -> u32 { self.level }
     /// fix-script-objects: the glist's local bounding sphere from the level's model table (the
     /// map object's centre and radius — `Control_BuildWorldSph` 0x133070's inputs).
     fn glist_sphere(&self, hash: u32) -> Option<([f32; 3], f32)> {
@@ -11433,8 +11432,6 @@ impl Drones {
                 tick_damage: 0.0,
                 // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
                 hidden: false,
-                // The fusebox wire SP: no placement model of its own.
-                model: 0,
             });
         }
         // laser-scripts: `Switch_Create` 0x1adcc0:44-45 ends with `SP_Create(pos, rot, param 1,
@@ -11485,7 +11482,6 @@ impl Drones {
                 tick_damage: 0.0,
                 hidden: false,
                 // The laser switch's player: no placement model of its own.
-                model: 0,
             });
             // The ext+0x0C link [M 0x1adcc0:46]: Switch_Update's unpause arm and Switch_Activate's
             // idle gate reach the player through it (crate::useobj).

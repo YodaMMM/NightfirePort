@@ -240,6 +240,11 @@ fn the_leaf_generators_spawn_leaves_over_the_park() {
     let sim = w.scene.sim.as_ref().unwrap();
     let total: u32 = sim.drones.fx.leafgens.iter().map(|l| l.spawned).sum();
     assert!(total > 0, "the generators spawn leaves while the walk ticks [M 0x1acc48]");
+    // Sister (can fail): the spawns became live leaves that integrate and fall
+    // (`LeafFx`/`Leaf_Update` 0x1abee0; the spread-0 spawn lands at the generator [M 0x1abc88]).
+    assert!(!sim.drones.fx.leaves.is_empty(), "the spawns became live leaves");
+    let gen_y = sim.drones.fx.leafgens[0].pos[1];
+    assert!(sim.drones.fx.leaves.iter().any(|l| l.pos[1] < gen_y - 0.5), "a leaf has fallen below its generator");
 }
 
 /// KIND: trees 0xF3 (`Env_Tree_Create` 0x17c200 — object + AnimObjectNew + AnimScriptAdd; the
@@ -254,9 +259,14 @@ fn the_trees_carry_model_and_anim_hashes() {
     assert_eq!(sim.drones.fx.trees.len(), 2, "the two Tree placements exist [D]");
     for t in &sim.drones.fx.trees {
         assert_eq!(t.model, 0x0500_0003, "the Tree model hash [D param 0 = 83886083]");
-        assert_eq!(t.anim, 0x0600_008c, "the sway anim script [D param 1 = 100663436]; the game's
-            // 0x600008c→0x600008d Rand_Random swap is a shared-stream draw the port does not take [M 0x17c200:29-35]");
-        assert!(t.paused, "07000004 != 0x7000043 → the +0x78 pause arm [M 0x17c200:44-52]");
+        // The sway anim [D param 1 = 100663436 = 0x0600008c]: the game swaps in 0x0600008d on the
+        // load-time coin `Rand_Random() & 1` [M Env_Tree_Create 0x17c200:16-22 — the shared stream,
+        // 0x1e36f0 = SEED_X/SEED_Y]; the port counter-hashes the coin (the G-033 discipline — no
+        // load-time draws), so each tree deterministically carries one of the two hashes.
+        assert!(t.anim == 0x0600_008c || t.anim == 0x0600_008d, "the sway anim or its 0x0600008d variant, got {:#x}", t.anim);
+        assert!(t.paused, "07000004 != 0x7000043 → the +0x78 pause arm [M 0x17c200:24-31]");
+        // Sister (can fail): the start-phase unit rode the same create path [M 0x17c200:26-31].
+        assert!((0.0..1.0).contains(&t.phase_unit), "the phase unit is a [0,1) fraction");
     }
 }
 

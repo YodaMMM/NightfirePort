@@ -90,7 +90,6 @@ struct ProbeWorld;
 impl nf_game::nis::World for ProbeWorld {
     fn anim_length(&self, _script: u32) -> Option<u16> { Some(100) }
     fn discrete0(&self, _skin: u32, _script: u32, _frame: f32) -> Option<nf_formats::anim::Mat4> { None }
-    fn level(&self) -> u32 { 0x0700_0024 }
 }
 
 /// Does the gondola script player exist and move? Skyrail placement [4] (kind 0xD9, script

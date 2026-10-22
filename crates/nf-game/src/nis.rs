@@ -273,8 +273,8 @@ pub trait World {
     /// The op-1 sounds of `script` with authored frame in `(from, to]`, paired with each one's
     /// distance ahead of `from` — the `SFXPreCache` arguments (`AnimProcessScriptCmds` case 1).
     fn anim_ops1_precache(&self, script: u32, from: i32, to: i32) -> Vec<(u32, i32)> { let _ = (script, from, to); Vec::new() }
-    /// The running level (fix-finale-blockers: the 0700004a lift stand-in keys on it).
-    fn level(&self) -> u32 { 0 }
+    // The removed `level()` method keyed the 0700004a lift stand-in; the lift holds on its channel
+    // now (the state-2 unpause + the negative-delay hold) and nothing reads a running level here.
     /// fix-script-objects: a glist's LOCAL bounding sphere (the map object's centre and radius —
     /// `Control_BuildWorldSph` 0x133070 transforms the centre by the object matrix into obj+0x80,
     /// obj+0x8C carries the radius). `None` = the hash resolves to nothing above nf-game.
@@ -382,13 +382,18 @@ impl Script {
         for pass in 0..max_passes {
             for i in 0..self.streams.len() { self.run(i, subs, lib, objs, ch, w, frame, out); }
             if pass > 0 {
-                // The catch-up's subtitle adds never display as a continuing dialogue in the game [S]:
-                // `Script_FFwd` flushed the subtitles at the skip [M 0x1dac78:28-29] and the game draws a
-                // single active subtitle slot (`Text_Update` 0x1b1510) — while the port's queued HUD lines
-                // would replay the whole remaining dialogue after the skip (the user's playtest 1014-1725:
-                // "the dialogue still kept going until it finished"). Drop the Text requests the catch-up
-                // passes push; the flush request already cleared what was on screen.
-                out.retain(|r| !matches!(r, Request::Text { .. }));
+                // The catch-up's subtitle adds: the game flushes the subtitles once, at the skip
+                // (`Text_FlushAllSubtitles` [M 0x1dac78:25-29 — Input_ClearAllActions + the flush, the
+                // ScriptCam arm]), and draws ONE subtitle slot: `Text_Update` 0x1b1510:8-32 re-points the
+                // single `SubTitleMsg` sprite at whatever the list's live type-4 message is, so each
+                // `Text_AddMsg` during the catch-up overwrites the previous one — the LAST add of the
+                // fast-forward is what survives, and it expires on its own duration. (The port's queued HUD
+                // lines would replay the whole remaining dialogue after the skip — the user's playtest
+                // 1014-1725: "the dialogue still kept going until it finished".) Keep only the last Text
+                // request the catch-up passes push; the flush request already cleared what was on screen.
+                let mut last_text = None;
+                out.retain(|r| if matches!(r, Request::Text { .. }) { last_text = Some(r.clone()); false } else { true });
+                if let Some(t) = last_text { out.push(t); }
             }
             out.append(&mut self.pending);
             self.clock += 1.0;
@@ -944,10 +949,11 @@ impl Script {
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
             4 => {
-                // `Script_Interp` case 4 → `Script_UpdateCamera`: the keys' matrix (the script matrix applied,
-                // *suggested*: the decomp loses that argument; fix-final-blockers2 measured the no-base
-                // reading [M 0x1d9a08:190-200 + 0x1db518] and reverted it with the entity change — the
-                // render-verified fusebox/safe entities need the base, so the camera keeps it).
+                // `Script_Interp` case 4 → `Script_UpdateCamera`: the keys' matrix with the script base
+                // applied — PROVEN, not suggested: the game's case-4 `Script_GetInterp` call passes the
+                // base-concat flag = 1 (disasm 0x1da054-0x1da068: `addiu $v0,$zero,1; sw $v0,($sp)` — the
+                // 10th arg slot; the ABI is f12,a0,a1,a2,a3,t0,t1,t2,t3,0(sp)) and `Script_GetInterp`'s tail
+                // runs `Concat(SCRIPTINFO+0x00, out)` when that flag is non-zero [M 0x1da158:195-197].
                 // The skip's freeze: `Script_Interp` returns early while `+0xAB5 & 0x20` [M 0x1d9a08:205].
                 if self.fade_flags & 0x20 != 0 { return; }
                 let Some(o) = self.streams[i].obj else { return };
@@ -1099,11 +1105,21 @@ impl Script {
             let p = [0, 1, 2].map(|j| lerp(k[i0].pos[j], k[i1].pos[j], t));
             (p, crate::anim::slerp(k[i0].quat, k[i1].quat, t), lerp(k[i0].scale, k[i1].scale, t), lerp(k[i0].f24(), k[i1].f24(), t))
         } else {
-            // `GetSplineWeights`: Catmull-Rom over i−1..i+2 (clamped); the rotation slerps i → i+1 by t (*suggested*:
-            // the decomp loses the slerp's weight argument, U-040). The weight vector is
-            // `Spline_Eval3D` 0x1e4330's basis — its unrolled 0.5·(2p1 + (−p0+p2)t +
-            // (2p0−5p1+4p2−p3)t² + (−p0+3p1−3p2+p3)t³) is the same Catmull-Rom the weights
-            // below evaluate [M 0x1e4330:5-24; `Script_GetInterp` 0x1da158 is its caller].
+            // `GetSplineWeights` 0x1d8088: uniform Catmull-Rom weights over i−1..i+2 (clamped) — its four
+            // weights are exactly the ones below [M 0x1d8088:48-58]. THE OPEN SPLINE QUESTION (the old
+            // *suggested* "the decomp loses the slerp's weight argument", U-040, resolved to a sharper
+            // one): the disasm shows the game loads `$f12 = *(f32*)0x3498f4` = GetSplineWeights'
+            // weights[1] (w_i(t) = 1 − 2.5t² + 1.5t³, falling 1 → 0) and feeds that SAME value to BOTH
+            // `Spline_Eval3D` as its parameter (0x1da42c → jal 0x1e4330) and `Quat_Slerp_Acc` as the
+            // rotation weight (0x1da464 → jal 0x1e4188, qa = key[i]+0x10, qb = key[i+1]+0x10; the scale
+            // blend pairs s3↔weights[1] the same way, 0x1da484/0x1da48c/0x1da49c, so s3 = key[i],
+            // s4 = key[i+1]; `Quat_Slerp_Acc` 0x1e4188:18-35 = w 0 → qa, w 1 → qb). At the integer clocks
+            // the scripts actually tick (the game truncates `(int)clock` [M 0x1da158:32], the port's
+            // floor), t = 0 and weights[1] = 1 — position = CR(1) = key[i+1], rotation = key[i+1]: the
+            // game's spline samples run ONE KEY AHEAD of the port's raw-t reading, position AND rotation
+            // together. Porting that needs BOTH the position parameter and this weight switched at once
+            // (a rotation-only switch is incoherent) and a render check on a spline-scripted level —
+            // filed as a live check in the report; the port keeps the raw-t evaluation until then.
             let (ix, wt, t) = if idx < 0 || idx as usize >= n {
                 let j = idx.clamp(0, n as isize) as usize;
                 ([j; 4], [0.0, 1.0, 0.0, 0.0], 0.0)
@@ -1178,13 +1194,11 @@ pub struct Player {
     /// 66) while #241's (gate 0) plays from load — the snapshot's twin looping pairs, one +0x36 = 1
     /// (0x16ddb40) and one 0 (0x16df360) [L ee_start_05.bin; docs/systems/copter-sp-hide.md].
     pub hidden: bool,
-    /// The placement's model hash (`Placement::hashcode` when `by_hash()`, else 0) — the SP's own
-    /// art. `SCRIPTPLAYER_Elevators`' panel model is baked absolute in it (gfx bounds
-    /// [−18.38,−368.53,24.83]..[−17.78,−367.92,25.20] [D placements dump]). Use-target FALLBACK
-    /// only [S]: the game's use pick hits the class-0 script ENTITIES (`entity_use_targets`) —
-    /// the class-0x1B SP body is inert to it [M 0x1a5170:121-122] — so this stands in only when
-    /// no entity sphere resolves (elevator-buttons-09).
-    pub model: u32,
+    // The removed `model` field (the placement hash) was once the SP-body use-target FALLBACK [S];
+    // the game's use pick hits the class-0 script ENTITIES only (`entity_use_targets`) — the
+    // class-0x1B SP body is inert to it [M 0x1a5170:121-122, the class walk has no 0x1B case] — and
+    // the model-sphere/placement fallbacks the port once kept were removed (use-pick-sp-standins:
+    // nothing in 0x1a5170/0x1dc338 reads the SP body), so no reader of the field was left.
 }
 
 impl Player {
@@ -1205,7 +1219,6 @@ impl Player {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
-            model: if p.by_hash() { p.hashcode } else { 0 },
         })
     }
 
@@ -1295,10 +1308,9 @@ impl Player {
         // (:57-59), whose writer is `SP_HideObj` 0x1dcbf0 on the copter path: `Copter_Create`
         // 0x17d340:73-74 hides the copter's own SP when its gate channel is off at create, and
         // `Copter_Update` 0x17dbb8's head unhides it on the gate's first ON tick
-        // (docs/systems/copter-sp-hide.md). The port used to skip mask-0 SPs here (pickup-port-check
-        // §9's disabled-byte stand-in), which froze the multiplayer gondolas: Skyrail's carriage
-        // (placement [4], script 0x06000058, mode 8, mask 0) never loaded and the playtest
-        // 1016-1355 sees no gondolas. The prime runs for HIDDEN players too: the game primes
+        // (docs/systems/copter-sp-hide.md). (The port's old stand-in — skipping mask-0 SPs here, the
+        // disabled-byte reading from pickup-port-check §9 — is removed: it froze the multiplayer
+        // gondolas, playtest 1016-1355.) The prime runs for HIDDEN players too: the game primes
         // first (`SP_Create`'s tail into `SP_CreateScriptPlayer`) and hides second
         // (`SP_HideObj(sp, 1)` is the next statement) [M 0x1dc7e0 → 0x1db9a8 → 0x17d340:73-74] —
         // the frozen SP holds its primed pose, its entities hidden by the Script_HideObj cascade.
@@ -1379,9 +1391,11 @@ impl Player {
                             matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
                             matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
                             matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]], r),
-                        // No model above: the matrix translation, radius 0 (only a blast AT the
-                        // object's origin touches) [S].
-                        None => ([matrix[3][0], matrix[3][1], matrix[3][2]], 0.0),
+                        // No glist record (obj+0xD8 == 0): the game's `Control_BuildWorldSph` stores the
+                        // centre = the matrix translation (obj+0xC0) and radius = 0.1 [M 0x133070:19-27 +
+                        // :61-66 — the tail stores fVar3 = 0.1 into obj+0x8C unless +0xFA bit 0x100 returned
+                        // early]. A blast within 0.1 of the object's origin still touches it.
+                        None => ([matrix[3][0], matrix[3][1], matrix[3][2]], 0.1),
                     };
                     for &(bp, br) in &gate.blasts {
                         let d = ((bp[0] - centre[0]).powi(2) + (bp[1] - centre[1]).powi(2) + (bp[2] - centre[2]).powi(2)).sqrt();
@@ -1560,7 +1574,8 @@ impl Scripts {
         })
     }
 
-    /// The scripts (`lib`) and the players placed on the main map.
+    /// The scripts (`lib`) and the players placed on the main map. (The removed `level()` World method
+    /// used to key the 0700004a lift stand-in; the lift now holds on its channel — nothing reads it.)
     pub fn new(lib: HashMap<u32, Arc<Nis>>, placements: &[Placement]) -> Scripts {
         let mut players = placements.iter().enumerate().filter(|(_, p)| p.flags & 0xff == 0xd9).filter_map(|(i, p)| Player::from_placement(i, p)).collect::<Vec<_>>();
         // fix-searchlight-alarm: 07000006's courtyard searchlights. The disc's NIS 0x06000066 stream 0
@@ -1593,8 +1608,6 @@ impl Scripts {
                 tick_damage: 0.0,
                 // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
                 hidden: false,
-                // Scripts::new's synthetic copter player has no placement model.
-                model: 0,
             });
         }
         Scripts { lib, players, objects: Objects::default(), requests: Vec::new(), primed: false, skip_request: false }
@@ -1604,10 +1617,13 @@ impl Scripts {
     /// whose script is HELD (`SCRIPTINFO+0x9c != 0`) on a hit-point player [M SP_Update's damage
     /// tail 0x1dc1c0-0x1dc330 gates the accumulation on exactly that; `Script_GetObj` 0x1db688
     /// walks the records with kind 1/2]. Returns `(player index, world centre, radius)`; the
-    /// centre is the entity matrix through the glist sphere's local centre, the radius the
-    /// glist's — the game's `Control_BuildWorldSph` volume [M 0x133070:36-40, the same shape the
-    /// SP_Hit blast test sweeps]; an anim object keeps its stream matrix's translation with
-    /// radius 0 [S] (the port carries no anim volume).
+    /// centre is the object matrix through the glist sphere's local centre, the radius the
+    /// glist's — the game's `Control_BuildWorldSph` volume [M 0x133070:36-48 — centre = glist+0x10
+    /// through `Control_GetObjMatrix` (obj+0x90), radius = glist+0x1C · |obj+0xE8|; the same shape
+    /// the SP_Hit blast test sweeps and the bullet hittest tests]. An anim object carries the same
+    /// BuildWorldSph volume from ITS model glist (obj+0xD8): the port transforms the skin's glist
+    /// sphere by the stream matrix (the discrete object 0 the game keys into obj+0x90); no glist →
+    /// the translation + radius 0.1 [M 0x133070:19-27].
     pub fn held_hit_targets(&self, w: &dyn World) -> Vec<(usize, [f32; 3], f32)> {
         let mut out = Vec::new();
         for (pi, p) in self.players.iter().enumerate() {
@@ -1620,16 +1636,30 @@ impl Scripts {
                 let Some(Some(obj)) = self.objects.list.get(o) else { continue };
                 match obj {
                     Obj::Entity { hash, matrix, .. } => {
-                        let (c, r) = w.glist_sphere(*hash).unwrap_or(([0.0; 3], 0.0));
+                        let (c, r) = w.glist_sphere(*hash).unwrap_or(([0.0; 3], 0.1));
                         let centre = [
                             matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
                             matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
                             matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]];
                         out.push((pi, centre, r));
                     }
+                    Obj::Anim { skin, .. } => {
+                        // The anim object's BuildWorldSph volume: its own model glist (obj+0xD8 = the
+                        // skin) through the object matrix — the port's analog is the stream matrix
+                        // (the discrete object 0). No glist: the game's no-record path (translation,
+                        // radius 0.1) [M 0x133070:19-27].
+                        if let Some(m) = s.stream_matrix(i, &self.objects, w) {
+                            let (c, r) = w.glist_sphere(*skin).unwrap_or(([0.0; 3], 0.1));
+                            let centre = [
+                                m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
+                                m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
+                                m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
+                            out.push((pi, centre, r));
+                        }
+                    }
                     _ => {
                         if let Some(m) = s.stream_matrix(i, &self.objects, w) {
-                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.0));
+                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.1));
                         }
                     }
                 }
@@ -1696,8 +1726,6 @@ impl Scripts {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
-            // The runtime spawn has no placement model.
-            model: 0,
         });
     }
 
@@ -1722,7 +1750,6 @@ impl Scripts {
             // `SP_HideObj(sp, 1)` while the gate channel is armed and off [M 0x17d340:73-74].
             hidden: gate != 0 && !ch.on(gate as u32),
             // The runtime spawn has no placement model.
-            model: 0,
         });
     }
 
@@ -1818,6 +1845,132 @@ mod tests {
     impl World for TestWorld {
         fn anim_length(&self, _script: u32) -> Option<u16> { Some(100) }
         fn discrete0(&self, _skin: u32, _script: u32, _frame: f32) -> Option<Mat4> { None }
+    }
+
+    /// The spline keys at the CLAMPED ends: `GetSplineWeights` collapses all four indices to the end
+    /// key with weights (0,1,0,0) [M 0x1d8088:63-73], so the matrix is the end key's own — and the
+    /// LINEAR branch slerps key[i] → key[i+1] by the segment t [M disasm 0x1da378-0x1da384]. (The
+    /// open mid-segment spline question — weights[1] as the shared position/rotation parameter — is
+    /// documented at the keys() spline branch and filed as a live check; no assertion here.)
+    #[test]
+    fn spline_keys_clamp_to_the_end_key_and_linear_slerps_by_t() {
+        let keys = vec![
+            Key { pos: [0.0; 4], quat: [0.0, 0.0, 0.0, 1.0], scale: 1.0, w24: [0; 4], w28: 0.0, time: 0.5 },
+            Key { pos: [1.0; 4], quat: [0.0, 0.0, 0.0, 1.0], scale: 1.0, w24: [0; 4], w28: 0.0, time: 1.5 },
+            Key { pos: [2.0; 4], quat: [0.0, 0.0, (std::f32::consts::PI / 8.0).sin(), (std::f32::consts::PI / 8.0).cos()], scale: 1.0, w24: [0; 4], w28: 0.0, time: 2.5 },
+            Key { pos: [3.0; 4], quat: [0.0, 0.0, (std::f32::consts::PI / 4.0).sin(), (std::f32::consts::PI / 4.0).cos()], scale: 1.0, w24: [0; 4], w28: 0.0, time: 3.5 },
+        ];
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_0001, camera: false, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 3, commands: Vec::new() }],
+            keys,
+        });
+        let mut script = Script::load(nis, IDENT, 1.0);
+        script.streams[0].flags = 2;
+        // Before the first key and past the last: the clamped arm collapses to the end key's own
+        // matrix [M 0x1d8088:63-73 — all four indices = the end, weights (0,1,0,0)].
+        script.streams[0].clock = -1.0;
+        let (m0, _, _) = script.keys(0).unwrap();
+        let want0 = quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]);
+        for j in 0..4 { for i in 0..4 { assert!((m0[j][i] - want0[j][i]).abs() < 1e-5, "clamped-start m[{j}][{i}] {} != key0", m0[j][i]); } }
+        script.streams[0].clock = 10.0;
+        let (m3, _, _) = script.keys(0).unwrap();
+        let want3 = quat_trans_to_mat([0.0, 0.0, (std::f32::consts::PI / 4.0).sin(), (std::f32::consts::PI / 4.0).cos()], [3.0, 3.0, 3.0]);
+        for j in 0..4 { for i in 0..4 { assert!((m3[j][i] - want3[j][i]).abs() < 1e-4, "clamped-end m[{j}][{i}] {} != key3", m3[j][i]); } }
+        // Sister: the LINEAR branch slerps key[i] → key[i+1] by the segment t [M disasm
+        // 0x1da378-0x1da384 — f12 = the binary search's t, qa/qb = key[i]/key[i+1]+0x10].
+        script.streams[0].flags = 0;
+        script.streams[0].clock = 2.0;
+        let (ml, _, _) = script.keys(0).unwrap();
+        let q2 = [0.0, 0.0, (std::f32::consts::PI / 8.0).sin(), (std::f32::consts::PI / 8.0).cos()];
+        let want_l = quat_trans_to_mat(crate::anim::slerp([0.0, 0.0, 0.0, 1.0], q2, 0.5), [1.5, 1.5, 1.5]);
+        for j in 0..4 { for i in 0..4 { assert!((ml[j][i] - want_l[j][i]).abs() < 1e-4, "linear m[{j}][{i}] {} != slerp by t 0.5", ml[j][i]); } }
+    }
+
+    /// The SP_Hit blast test against an entity whose hash has NO glist: the game's
+    /// `Control_BuildWorldSph` no-record path stores the centre = the object matrix translation
+    /// and radius = 0.1 [M 0x133070:19-27 + :61-66] — the port used to stand in radius 0, so a
+    /// blast 0.05 from the origin missed. Sister: 0.2 away stays outside.
+    #[test]
+    fn blast_touches_a_no_glist_entity_within_0_1() {
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_0086, camera: false, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: Vec::new() }],
+            keys: Vec::new(),
+        });
+        let mut script = Script::load(nis, IDENT, 1.0);
+        script.streams[0].kind = 1;
+        let mut objs = Objects::default();
+        objs.list.push(Some(Obj::Entity { hash: 0x0BAD_BEEF, kind: 0, params: Vec::new(),
+            matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [5.0, 0.0, 0.0, 1.0]],
+            alpha: 1.0, src: (0x0600_0086, 0) }));
+        script.streams[0].obj = Some(0);
+        let mut p = Player {
+            placement: 0, scripts: [0x0600_0086, 0], modes: [1, 0], stay: false, mask: 2, out: 0, gate: 0,
+            scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [Some(script), None],
+            deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0,
+            hidden: false,
+        };
+        let mut ch = Channels::default();
+        let mut out = Vec::new();
+        // The blast centre 0.05 from the entity origin, radius 0: the game's 0.1 sphere touches.
+        let gate = SpStart { health_ok: true, mission: 0, music2: 0, blasts: vec![([5.05, 0.0, 0.0], 0.0)] };
+        p.update(&mut HashMap::new(), &mut objs, &mut ch, &TestWorld, 0, &mut out, false, gate);
+        assert_eq!(p.state, 2, "the 0.05-off blast did not touch the no-glist entity's 0.1 sphere");
+        // Sister: 0.2 away is outside the 0.1 sphere — the radius is the game's, not a guess.
+        let mut p2 = Player { placement: 0, scripts: [0x0600_0086, 0], modes: [1, 0], stay: false, mask: 2, out: 0, gate: 0,
+            scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [None, None],
+            deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false };
+        let gate2 = SpStart { health_ok: true, mission: 0, music2: 0, blasts: vec![([5.2, 0.0, 0.0], 0.0)] };
+        p2.update(&mut HashMap::new(), &mut objs, &mut ch, &TestWorld, 0, &mut out, false, gate2);
+        assert_ne!(p2.state, 2, "a blast 0.2 from the origin must stay outside the 0.1 sphere");
+    }
+
+    /// A HELD anim stream object's hit volume is the game's BuildWorldSph sphere of the anim's own
+    /// model glist through the object matrix [M 0x133070:36-48 — obj+0xD8 carries the model, radius
+    /// = glist+0x1C·|obj+0xE8|] — the port used to stand in (translation, radius 0). Sister: no
+    /// glist → the translation with the no-record 0.1 [M 0x133070:19-27].
+    #[test]
+    fn held_anim_object_carries_its_model_sphere() {
+        struct AnimWorld;
+        impl World for AnimWorld {
+            fn anim_length(&self, _s: u32) -> Option<u16> { Some(100) }
+            fn discrete0(&self, _skin: u32, _script: u32, _f: f32) -> Option<Mat4> {
+                Some([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [7.0, 0.0, 0.0, 1.0]])
+            }
+            fn glist_sphere(&self, hash: u32) -> Option<([f32; 3], f32)> {
+                (hash == 0x0500_003A).then_some(([1.0, 0.0, 0.0], 0.5))
+            }
+        }
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_0086, camera: false, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: Vec::new() }],
+            keys: Vec::new(),
+        });
+        let mut script = Script::load(nis, IDENT, 1.0);
+        script.streams[0].kind = 2;
+        script.delay = 5; // HELD: the damage tail's gate
+        let mut objs = Objects::default();
+        objs.list.push(Some(Obj::Anim { skin: 0x0500_003A, script: 0x0600_0001, frame: 1.0, weapon: 0, src: (0x0600_0086, 0), ticked: true }));
+        script.streams[0].obj = Some(0);
+        let mut scripts = Scripts::default();
+        scripts.objects = objs;
+        scripts.players.push(Player {
+            placement: 0, scripts: [0x0600_0086, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0,
+            scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [Some(script), None],
+            deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 20.0, damage: 0.0, tick_damage: 0.0,
+            hidden: false,
+        });
+        let targets = scripts.held_hit_targets(&AnimWorld);
+        assert_eq!(targets.len(), 1, "the held anim stream object must be a hit target");
+        let (_, c, r) = targets[0];
+        assert!((c[0] - 8.0).abs() < 1e-4 && c[1].abs() < 1e-4 && c[2].abs() < 1e-4, "centre = glist centre (1,0,0) through the discrete0 translation (7,0,0): {:?}", c);
+        assert!((r - 0.5).abs() < 1e-5, "radius = the model glist's 0.5, was the stand-in 0: {}", r);
+        // Sister: a skin with no glist keeps the game's no-record sphere (translation, 0.1).
+        if let Some(Some(Obj::Anim { skin, .. })) = scripts.objects.list.get_mut(0) { *skin = 0x0500_0999; }
+        let targets2 = scripts.held_hit_targets(&AnimWorld);
+        let (_, _, r2) = targets2[0];
+        assert!((r2 - 0.1).abs() < 1e-5, "the no-glist anim sphere is the game's 0.1, was 0: {}", r2);
     }
 
     /// Event 0xB (`Script_EventHandler` 0x1d94c0:152-158) writes the weapon byte on the PREVIOUS stream's Anim
@@ -1994,7 +2147,6 @@ mod tests {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
-            model: 0,
         };
         let mut lib = HashMap::new();
         lib.insert(0x0600_0421u32, nis);
@@ -2037,7 +2189,6 @@ mod tests {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
-            model: 0,
         };
         let mut objs2 = Objects::default();
         p2.load(&lib, &mut objs2, &mut ch, &world, 0, &mut out);
@@ -2082,7 +2233,7 @@ mod tests {
         let world = TestWorld;
         let mut out = Vec::new();
         let mut p = Player { placement: 0, scripts: [0x0600_0832, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0, matrix: IDENT, cur: 0, state: 7, activated: false, countdown: 0, info: [None, None], deleted: false,
-            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, model: 0 };
+            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false };
         p.load(&lib, &mut objs, &mut ch, &world, 0, &mut out);
         {
             let s = p.info[0].as_ref().unwrap();
@@ -2110,11 +2261,11 @@ mod tests {
         lib.insert(0x0600_0833u32, Arc::new(Nis {
             hashcode: 0x0600_0833, camera: false, loop_start: 0, length: 100,
             streams: vec![NisStream { first_key: 0, last_key: 0, commands: cmds.clone() }, NisStream { first_key: 0, last_key: 0, commands: ev5.clone() }],
-            keys: vec![nf_formats::nis::Key { pos: [1.0, 2.0, 3.0, 1.0], quat: [0.0, 0.0, 0.0, 1.0], scale: 1.0, w24: [0; 4], w28: 0.0, time: 0.0 }],
+            keys: vec![nf_formats::nis::Key { pos: [1.0, 2.0, 3.0, 1.0], quat: [0.0, 0.0, 0.0, 1.0], scale: 1.0, w24: [0; 4], w28: 0.0, time: 0.5 }],
         }));
         let mut objs2 = Objects::default();
         let mut p2 = Player { placement: 0, scripts: [0x0600_0833, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0, matrix: IDENT, cur: 0, state: 7, activated: false, countdown: 0, info: [None, None], deleted: false,
-            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, model: 0 };
+            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false };
         p2.load(&lib, &mut objs2, &mut ch, &world, 0, &mut out);
         {
             let s = p2.info[0].as_ref().unwrap();

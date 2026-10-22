@@ -135,7 +135,7 @@ fn armour_glow_pulses_when_bond_is_close() {
         assert_eq!(sim.drones.frame, 45);
     }
     // FlashMod inline (the same formula nf_view::scene::flash_mod ports): ((sin(2π·t + π/2)+1)·0.5+1)·0.5.
-    let flash = |frame: u32| { let t = frame as f32 / 60.0; let s = (t * std::f32::consts::TAU + std::f32::consts::FRAC_PI_2).sin(); ((s + 1.0) * 0.5 + 1.0) * 0.5 };
+    let flash = |frame: u32| { let t = (frame * 10 / 6) as f32 * 0.01; /* the integer 100ths clock [M 0x1a7810:95 + 0x1094a0:8], standins-scene-928 */ let s = (t * std::f32::consts::TAU + std::f32::consts::FRAC_PI_2).sin(); ((s + 1.0) * 0.5 + 1.0) * 0.5 };
     let fm = flash(45);
     assert!((fm - 0.75).abs() < 1e-3, "FlashMod at frame 45 is 0.75, got {fm}");
     // (the port's nf_view::scene::flash_mod ports this formula; cross-checked post-fix)
