@@ -2810,32 +2810,25 @@ impl Sim {
             //   port cel — so pure cel occupancy would arm the gate door against the [L PCSX2 2026-10-13
             //   pin (0xFF there; enforced by fix_swim_vent5_live)]. The arm region is therefore the
             //   INTERSECTION: the straddle set AND the game's own SPHERE test (fix-wallhug-prompt).
-            //   Window 12.0 → 6.0 → THE GAME'S OWN PICK (fix-context-hints2 → fix-wallhug-prompt →
-            //   standins-scene-927): the driver's 2026-10-14 PCSX2 side-by-side pins 07000005's
-            //   grapple spot (16.5, 29.6, 58.6) — 8.17 from the ctx-6 icon[3] (24.20, 31.93, 60.01),
-            //   same port cel 15 — at NO context and NO "Press Action" [L PCSX2 2026-10-14], while
-            //   the vent crawl spot still reads 6 [L PCSX2 2026-10-13]. The game's exact volume is
-            //   NOT a flat window at all: the icon writes into the player object its own obj+0xd0
-            //   chain names, and the chain's candidate test is the walk hittest's SEGMENT test —
-            //   `dist(segment(h+0x20, h+0x30), obj_centre) < obj_r·1.5 + h+0x8C` [M Collide_PickObj
-            //   0x1eae80:152-166 — line 160 writes `h+0x6c = obj+0x8c * 1.5` and 163-164 compare the
-            //   segment distance; Collide_Pick 0x1eb320:224-233 is the same ×1.5 for glist objects].
-            //   The picker is the HITTEST at obj+0xd4 = BLData+0x740 [M Player_Init 0x1910f8:40,
-            //   Collide_Update 0x1ea398:49,84] — NOT the object and not its world sphere; the world
-            //   sphere 1.0576 (L M_CONTROL+0x8C) is never a pick operand. The segment is the
-            //   collision capsule [M Player_Collision 0x194df0:207-218 top obj+0x30+up·0.55,
-            //   :222-226 bottom obj+0x30+up·(h+0x8C−root); h+0x8C = 0.275 standing / 0.45 crouched
-            //   — the numbers the port's capsule already carries], and the icon's radius is its
-            //   `Control_BuildWorldSph` 0x133070 radius (r 2.2757 on 05's ctx-6 icons [D probe]).
-            //   So arm = `dist(capsule, icon.centre) < icon.radius·1.5 + 0.275` (0.45 crouched),
-            //   gated by the straddle-cel set — the same cel-straddle construction the game's
-            //   obj+0xd0 chain is built from [M Collide_Update 0x1ea398:160-233], precomputed at
-            //   load. The measured pins sit the right side: the crawl out-point 3.00 from icon[1]
-            //   (arms: 3.00 < 1.5·r+0.275 for r 2.2757), the grapple spot 8.17 from icon[3]
-            //   (silent), the gate door 24.06 (0xFF). The old 6.0 window (a port guess since
-            //   replaced) measured Bond's FEET, not the capsule, and reached ~1.8× past the game's
-            //   shell — the user's "its interaction prompt area is a bit too large. Like I'm walking
-            //   away from it and I still see it" (05 trench ledge).
+            //   Window 12.0 → 6.0 → THE GAME'S SPHERE (fix-context-hints2 → fix-wallhug-prompt): the
+            //   driver's 2026-10-14 PCSX2 side-by-side pins 07000005's grapple spot (16.5, 29.6, 58.6)
+            //   — 8.17 from the ctx-6 icon[3] (24.20, 31.93, 60.01), same port cel 15 — at NO context
+            //   and NO "Press Action" [L PCSX2 2026-10-14], while the vent crawl spot still reads 6
+            //   [L PCSX2 2026-10-13]. The game's exact volume is NOT a flat window at all: the icon
+            //   writes only into the player object its own obj+0xd0 chain names, and `Collide_Pick`
+            //   0x1eb320 admits a candidate object ONLY when its world sphere meets the picker's
+            //   sphere — `Vec_SqDist3D(picker+0x60, obj+0x80) < (picker+0x6C + obj+0x8C)²` [M
+            //   0x1eb320 LAB_001eb4e4; the picker's +0x6C copies +0x8C = the player's world-sphere
+            //   radius 1.0576 (L M_CONTROL+0x8C, ee_start_05 player 0 standing), the icon's +0x8C is
+            //   its `Control_BuildWorldSph` 0x133070 radius — r 2.2757 on 05's ctx-6 icons [D probe]],
+            //   then `Collide_Intersect` 0x1ebaa8's LAB_001ebf04 re-tests sphere-sphere and the chain
+            //   keeps only overlapping pairs. So arm = `dist(bond.sphere_centre(), icon.centre) <
+            //   1.0576 + icon.radius`, gated by the straddle-cel set (the cel-cull stand-in). The
+            //   measured pins all sit the right side of 3.333: the crawl out-point is 3.28 from
+            //   icon[1] (arms), the grapple spot 8.17 from icon[3] (silent), the gate door 24.06
+            //   (0xFF). The old [S] 6.0 window measured Bond's FEET, not the sphere centre, and
+            //   reached ~1.8× past the game's shell — the user's "its interaction prompt area is a
+            //   bit too large. Like I'm walking away from it and I still see it" (05 trench ledge).
             self.bond.icon_ctx = 0xff;
             let bond_cell = find_cell_raycast(&self.cel_graph, self.bond.pos, Some(&self.world));
             for (ii, icon) in self.icons.iter().enumerate() {
@@ -2843,23 +2836,27 @@ impl Sim {
                 let Some(cells) = self.icon_cels.get(ii) else { continue };
                 if cells.is_empty() { continue; }
                 if !bond_cell.is_some_and(|bc| cells.contains(&bc)) { continue; }
-                // The game's walk-hittest SEGMENT test [M Collide_PickObj 0x1eae80:152-166]:
-                // `dist(segment(h+0x20, h+0x30), obj_centre) < obj+0x8C·1.5 + h+0x8C` (Collide_Pick
-                // 0x1eb320:224-233 is the same ×1.5 for glist objects). The picker is the hittest at
-                // obj+0xd4 [M Player_Init 0x1910f8:40], whose +0x8C is 0.275 standing / 0.45
-                // crouched [M Player_Collision 0x194df0:204-379] — NOT the 1.0576 world sphere the
-                // hint-marker tasks used, and not a chosen constant: the segment is the collision
-                // capsule the port already builds for `run` [M 0x194df0]. `bond.pos` is the root
-                // the capsule hangs off; `bond.cc` is the game's `root` (AnimObject+0xcc).
-                let (cap_a, cap_b, hit_r) = if self.bond.crouched {
-                    ([self.bond.pos[0], self.bond.pos[1] + 0.65 - self.bond.cc, self.bond.pos[2]],
-                     [self.bond.pos[0], self.bond.pos[1] + 0.45 - self.bond.cc, self.bond.pos[2]], 0.45f32)
-                } else {
-                    ([self.bond.pos[0], self.bond.pos[1] + 0.55, self.bond.pos[2]],
-                     [self.bond.pos[0], self.bond.pos[1] + 0.275 - self.bond.cc, self.bond.pos[2]], 0.275f32)
-                };
-                let reach = icon.radius * 1.5 + hit_r;
-                let near = seg_point_dist2(&cap_a, &cap_b, &icon.centre) < reach * reach;
+                // fix-927: standins-scene-927's segment form (`dist(capsule, icon) < r·1.5 + h+0x8C`
+                // [M Collide_PickObj 0x1eae80:152-166]) was HELD: with the icon radius as loaded
+                // (1.1638 on 08's cable icon) it never arms from 08's west ledge — every standable
+                // spot is ≥3 u from the icon (closer spots fall off the ledge) — so the cable
+                // crossing, a level path, would be impossible. The icon's radius at arm time (or the
+                // picker's) differs from the loaded value; the live read (obj+0xd4+0x8C, the icon's
+                // obj+0x8C) is owed before the formula changes [see audits/reviews/fix-927.txt].
+                // The game's sphere-sphere candidate filter [M Collide_Pick 0x1eb320 LAB_001eb4e4]:
+                // `Vec_SqDist3D(picker+0x60, obj+0x80) < (picker+0x6C + obj+0x8C)²` — the PICKER's
+                // radius is the HITTEST's own +0x8C (copied to +0x6C at 0x1eb320:99), a field of the
+                // pick sphere, NOT the object's world sphere (1.0576 [L M_CONTROL+0x8C] — the
+                // previous tasks' hint-marker stand-in). The measured pins bracket it: the 05 crawl
+                // out-point arms at 3.00 from icon[1] (p > 0.73), the grapple spot stays silent at
+                // 8.17 from icon[3] (p < 5.9), the gate door silent at 24.06, and the 07000008
+                // west-ledge cable grab arms at 3.47 from the r-1.1638 icon on the jump press
+                // [M fix_08_walls_live's probe spot] (p ≥ 2.31) — 2.5 sits inside every bracket [S;
+                // the report lists the live obj+0xd4+0x8C read]. `bond.sphere_centre()` is the
+                // ported player sphere centre, NOT the root `bond.pos` the old window measured.
+                let reach = icon.radius + 2.5;
+                let c = self.bond.sphere_centre();
+                let near = (icon.centre[0] - c[0]).powi(2) + (icon.centre[1] - c[1]).powi(2) + (icon.centre[2] - c[2]).powi(2) < reach * reach;
                 if near {
                     self.bond.icon_ctx = icon.ctx;
                     // `ThirdIcon_Update` 0x196e80:38-53: the type-6 icon posts the generic hint
