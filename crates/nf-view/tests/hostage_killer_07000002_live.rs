@@ -99,9 +99,13 @@ fn audio_step(scene: &mut nf_view::scene::Scene) {
 /// obj+0xE0, clearing a finished one [M :47-56]) then sends 0x1A to the captor [M :58-73] — the
 /// pair alternate lines, each gated on the other's voice. The 0x1A handler is
 /// `NDrone2_TalkToMissionObj` 0x14a8b8: +0xC5 4 → 0x29+Rand(6), 5 → 0x2F+Rand(4) [M :8-21].
-/// Observation: the step-1 sends ride the port's message queues (visible); the step-2/step-0
+/// Observation: the step-1 sends are observed as the step machine's 1 → 2 edge (the game
+/// dispatches them the same tick [M 0x172128] and the port delivers post-walk); the step-2/step-0
 /// self-sends ride `self_msg` (same-tick, not queued) — so the hostage-directed sends recur and
-/// the alternation is pinned by the mission voice PERIODS, correlated to the sends.
+/// the alternation is pinned by the mission voice PERIODS, correlated to the sends. One proven
+/// exception to strict alternation: the killer's pool line 0x2E carries sfxId 0 [D], SpeechSFX
+/// no-ops it [M 0x141b00] and step 1 then advances at once [M 0x144340:10-24] — the HOSTAGE speaks
+/// twice; accepted only across a gap where the killer's voice never appears.
 #[test]
 fn the_captor_and_hostage_alternate_mission_lines() {
     let mut w = Walker::new(nf_view::load(&iso(), "07000002.bin", false).expect("load 07000002"));
@@ -123,12 +127,16 @@ fn the_captor_and_hostage_alternate_mission_lines() {
     // step-2 self-send (the hostage's period just closed), or the opener (the step left 0).
     // Both drones also bark non-mission lines that can share a mission line's sfx sample.
     let mut hostage_sends = 0u32;
-    let mut periods: Vec<(u32, u32, usize)> = Vec::new(); // (start, end, drone)
+    let mut periods: Vec<(u32, u32, usize, bool)> = Vec::new(); // (start, end, drone, silent gap before it)
     let mut open: Option<(usize, u32, u32)> = None;       // (drone, start, handle)
     let mut expect: Option<(usize, u32)> = None;          // (drone, deadline)
     let mut overlap: Option<u32> = None;
     let mut paired = false;
     let mut last_handles: [Option<u32>; 2] = [None; 2];                     // last voice handle seen per drone
+    let mut k_prev_step = 0u16;                                             // the killer's talk_step last tick
+    let mut open_gap = false;                                               // silent gap of the open period
+    let mut gap_after: Option<usize> = None;                                // the drone whose period just closed
+    let mut gap_killer_voice = false;                                       // the killer's voice seen in the gap
     for t in 0..2700u32 {
         w.wait(1);
         audio_step(&mut w.scene);
@@ -139,17 +147,28 @@ fn the_captor_and_hostage_alternate_mission_lines() {
             if paired { continue; }
         }
         let (k, h) = (&sim.drones.list[ki], &sim.drones.list[hi]);
-        // Step 1's send to the hostage: pushed during the killer's UPDATE, it sits in his outbox
-        // until the next tick's drain — one post-tick sighting per send.
-        let in_outbox = k.msg_out.iter().any(|(tt, m, _)| *m == nf_game::drone::msg::MISSION_TALK && *tt == hi);
-        if in_outbox { hostage_sends += 1; expect = Some((hi, t + 4)); }
+        // Step 1's send to the hostage: the game dispatches it the same tick [M 0x172128] and the
+        // port delivers it post-walk, so the send is observed as the step machine's 1 → 2 edge
+        // (the tick the captor hands the turn over).
+        let sent = k_prev_step == 1 && k.talk_step == 2;
+        k_prev_step = k.talk_step;
+        if sent { hostage_sends += 1; expect = Some((hi, t + 4)); }
+        // The gap between periods: the killer's turn is the only thing between two hostage
+        // periods — record whether his voice appears there at all.
+        if open.is_none() {
+            if gap_after == Some(hi) { gap_killer_voice |= k.voice.is_some(); }
+        }
         // Expect the killer's reply once the hostage's mission period closes [M 0x144340:58-73].
         if let Some((d, st, _)) = open { if d == hi && h.voice.is_none() { expect = Some((ki, t + 3)); let _ = st; } }
         // Close the open period when its voice clears (both drones first, then opens — the
         // killer's reply lands the same tick the hostage's finished voice is cleared).
         for (di, voice) in [(ki, k.voice), (hi, h.voice)] {
             if voice.is_none() && open.map_or(false, |(d, _, _)| d == di) {
-                if let Some((d, st, _)) = open.take() { periods.push((st, t, d)); }
+                if let Some((d, st, _)) = open.take() {
+                    periods.push((st, t, d, std::mem::take(&mut open_gap)));
+                    gap_after = Some(d);
+                    gap_killer_voice = false;
+                }
             }
         }
         // Open a period: a mission-sfx voice with a fresh handle while an expectation is pending
@@ -165,8 +184,10 @@ fn the_captor_and_hostage_alternate_mission_lines() {
                         let opener = di == ki && k.talk_step != 0 && periods.is_empty();
                         let expected = matches!(expect, Some((d, dl)) if d == di && t <= dl);
                         if opener || expected {
+                            open_gap = gap_after == Some(di) && !gap_killer_voice;
                             open = Some((di, t, v.0));
                             expect = None;
+                            gap_after = None;
                         }
                     }
                 }
@@ -185,10 +206,163 @@ fn the_captor_and_hostage_alternate_mission_lines() {
         assert!(periods.len() >= 4, "both sides speak twice — the dialogue runs; periods {periods:?}");
         assert_eq!(periods[0].2, ki, "the opener is the captor's own line [M 0x144340:19-21]");
         for i in 1..periods.len() {
-            assert_ne!(periods[i - 1].2, periods[i].2, "period {i}: the mission lines strictly alternate [M 0x144340 step machine 0/1/2]");
+            // Strict alternation with the one proven exception (the silent-0x2E roll — see the
+            // header comment): a same-side repeat is accepted only across a gap where the
+            // killer's voice never appeared.
+            let repeat_ok = periods[i].3 && periods[i].2 == hi;
+            assert!(repeat_ok || periods[i - 1].2 != periods[i].2,
+                "period {i}: the mission lines alternate, except after the captor's silent-0x2E roll [M 0x14a8b8 Rand(6) + D 0x2E.sfx=0 + M 0x144340:10-24]; periods {periods:?}");
             assert!(periods[i].0 >= periods[i - 1].1, "period {i} starts only after the previous ended [M 0x144340 busy tests]");
         }
         let _ = (sim, k);
+    }
+}
+
+/// bathhouse-conversation-loop (2026-10-22): the conversation LOOPS. The game's monitor has no
+/// terminal step — step 2 sends 0x1A to the captor and steps back to **1** [M 0x144340:58-73],
+/// step 1 re-sends to the hostage once his own voice is done [M :10-29], and the 0x1A handler
+/// re-rolls a fresh random line every turn (+0xC5 4 → 0x29+Rand(6), 5 → 0x2F+Rand(4) [M
+/// 0x14a8b8:8-21]) — so the pair alternates lines indefinitely while the killer stays in
+/// HostageKiller (its UPDATE runs the monitor every tick before EnemyLookForOpponent [M
+/// 0x15c728 case 3]; an alert 0x11/0x12/0x14/0x15/0x16/0x1e or the execution is what ends it).
+/// The port's `monitor_talk_to_mission_obj` wraps 2 → 1 the same way (drone.rs), so this pins the
+/// LOOP itself on the real path, on BOTH placed pairs — the ch-0x17 bathhouse-floor pair and the
+/// ch-0x19 tunnel-pond pair [D placements #447/#465 and #458/#466] — with per-pair period censuses
+/// (the same correlation rules as the alternation test above): ≥ 4 full alternations each, strict
+/// alternation, no overlap, the killer opens, the step machine is seen cycling through both 1 and
+/// 2, and the hostage-directed sends keep recurring past the first exchange. A same-side repeat is
+/// accepted only across a provably silent captor turn (his pool's 0x2E carries sfxId 0 [D]; see the
+/// in-test comment).
+#[test]
+fn the_captor_and_hostage_conversations_loop_on_both_pairs() {
+    let mut w = Walker::new(nf_view::load(&iso(), "07000002.bin", false).expect("load 07000002"));
+    let (k1, h1, k2, h2) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let find = |mode: u8, x: f32, z: f32| {
+            sim.drones.list.iter().position(|d| d.mode == mode && (d.pos[0] - x).abs() < 0.5 && (d.pos[2] - z).abs() < 0.5)
+                .unwrap_or_else(|| panic!("drone mode {mode} at ({x},{z}) [D placements]"))
+        };
+        (find(4, -45.6, 10.9), find(5, -45.5, 12.2), find(4, -11.2, -37.8), find(5, -12.0, -39.1))
+    };
+    // Both channels bring the pairs in [D placements: param 3 = switch channel].
+    { let sim = w.scene.sim.as_mut().unwrap(); sim.drones.channels.set(0x17, 1, sim.drones.frame); }
+    w.wait(1);
+    { let sim = w.scene.sim.as_mut().unwrap(); sim.drones.channels.set(0x19, 1, sim.drones.frame); }
+    let (vk, vh) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (mission_set(sim, 0x29, 0x2e), mission_set(sim, 0x2f, 0x32))
+    };
+    struct Pair {
+        ki: usize, hi: usize, paired: bool, hostage_sends: u32, overlap: Option<u32>,
+        /// (start, end, speaker, silent_gap) — silent_gap: between this and the PREVIOUS period the
+        /// other side's turn produced no voice at all (the game's silent-0x2E roll, see below).
+        periods: Vec<(u32, u32, usize, bool)>,
+        open: Option<(usize, u32, u32)>, expect: Option<(usize, u32)>,
+        last_handles: [Option<u32>; 2], steps_seen: std::collections::BTreeSet<u16>, k_prev_step: u16,
+        /// The silent_gap computed when the CURRENT open period started — attached to its record
+        /// when it closes (records are appended at close time).
+        open_gap: bool,
+        /// Gap tracking: the drone whose period just closed, whether the OTHER drone showed a voice
+        /// in the gap, and the killer's step values seen in the gap.
+        gap_after: Option<usize>, gap_killer_voice: bool, gap_steps: std::collections::BTreeSet<u16>,
+    }
+    impl Pair {
+        fn step(&mut self, sim: &nf_view::scene::Sim, t: u32, vk: &std::collections::HashSet<u32>, vh: &std::collections::HashSet<u32>) {
+            let (k, h) = (&sim.drones.list[self.ki], &sim.drones.list[self.hi]);
+            if !self.paired {
+                self.paired = k.hostage_target == Some(self.hi) && k.state == nf_game::drone::state::HOSTAGE_KILLER;
+                if !self.paired { return; }
+            }
+            self.steps_seen.insert(k.talk_step);
+            if self.open.is_none() {
+                if let Some(d) = self.gap_after { if d != self.ki { self.gap_killer_voice |= k.voice.is_some(); } }
+                self.gap_steps.insert(k.talk_step);
+            }
+            // Step 1's send to the hostage, observed as the step machine's 1 → 2 edge (the port
+            // delivers it the same tick — the game's delay-0 dispatch [M 0x172128] — so there is
+            // no outbox window to catch).
+            let sent = self.k_prev_step == 1 && k.talk_step == 2;
+            self.k_prev_step = k.talk_step;
+            if sent { self.hostage_sends += 1; self.expect = Some((self.hi, t + 4)); }
+            if let Some((d, _, _)) = self.open { if d == self.hi && h.voice.is_none() { self.expect = Some((self.ki, t + 3)); } }
+            for (di, voice) in [(self.ki, k.voice), (self.hi, h.voice)] {
+                if voice.is_none() && self.open.map_or(false, |(d, _, _)| d == di) {
+                    if let Some((d, st, _)) = self.open.take() {
+                        self.periods.push((st, t, d, std::mem::take(&mut self.open_gap)));
+                        self.gap_after = Some(d);
+                        self.gap_killer_voice = false;
+                        self.gap_steps.clear();
+                    }
+                }
+            }
+            for (di, voice, set, last) in [(self.ki, k.voice, vk, 0u8), (self.hi, h.voice, vh, 1u8)] {
+                if let Some(v) = voice {
+                    if set.contains(&v.1) && self.last_handles[last as usize] != Some(v.0) {
+                        let opener = di == self.ki && k.talk_step != 0 && self.periods.is_empty();
+                        let expected = matches!(self.expect, Some((d, dl)) if d == di && t <= dl);
+                        if self.open.is_some() {
+                            if opener || expected { self.overlap = Some(t); break; }
+                        } else if opener || expected {
+                            let silent_gap = self.gap_after == Some(di) && !self.gap_killer_voice;
+                            self.open = Some((di, t, v.0));
+                            self.expect = None;
+                            self.open_gap = silent_gap;
+                            self.gap_after = None;
+                        }
+                    }
+                    self.last_handles[last as usize] = Some(v.0);
+                }
+            }
+            if let Some((_, dl)) = self.expect { if t > dl { self.expect = None; } }
+        }
+        fn done(&self) -> bool { self.periods.len() >= 8 }
+    }
+    let mut p1 = Pair { ki: k1, hi: h1, paired: false, hostage_sends: 0, overlap: None, periods: Vec::new(), open: None, expect: None, last_handles: [None; 2], steps_seen: Default::default(), k_prev_step: 0, open_gap: false, gap_after: None, gap_killer_voice: false, gap_steps: Default::default() };
+    let mut p2 = Pair { ki: k2, hi: h2, paired: false, hostage_sends: 0, overlap: None, periods: Vec::new(), open: None, expect: None, last_handles: [None; 2], steps_seen: Default::default(), k_prev_step: 0, open_gap: false, gap_after: None, gap_killer_voice: false, gap_steps: Default::default() };
+    for t in 0..6000u32 {
+        w.wait(1);
+        audio_step(&mut w.scene);
+        let sim = w.scene.sim.as_ref().unwrap();
+        p1.step(sim, t, &vk, &vh);
+        p2.step(sim, t, &vk, &vh);
+        if std::env::var_os("NF_DIALOGUE_TRACE").is_some() && t < 200 {
+            let (k, h) = (&sim.drones.list[p2.ki], &sim.drones.list[p2.hi]);
+            eprintln!("t {t:3} step {} kv {:?} hv {:?} ktalks {} out {} p1n {} p2n {}",
+                k.talk_step, k.voice.map(|v| v.0), h.voice.map(|v| v.0), k.talks.len(),
+                k.msg_out.iter().filter(|(tt, m, _)| *m == nf_game::drone::msg::MISSION_TALK && *tt == p2.hi).count(),
+                p1.periods.len(), p2.periods.len());
+        }
+        if p1.done() && p2.done() { break; }
+    }
+    for (p, name, x, z) in [(&p1, "the ch-0x17 pair", -45.6, 10.9), (&p2, "the ch-0x19 pair", -11.2, -37.8)] {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let k = &sim.drones.list[p.ki];
+        assert!(p.paired, "{name}: the killer pairs his geisha and stays HostageKiller [M 0x144030; 0x15c728:21-26]");
+        assert!(p.overlap.is_none(), "{name}: mission voices overlapped [M 0x144340 busy tests]");
+        assert!(p.hostage_sends >= 4, "{name}: the loop keeps sending 0x1A to the hostage past the first exchange; got {}",
+            p.hostage_sends);
+        assert!(p.periods.len() >= 8, "{name}: the conversation loops — 4 full alternations expected, got {} periods {periods:?}",
+            p.periods.len(), periods = p.periods);
+        assert_eq!(p.periods[0].2, p.ki, "{name}: the opener is the captor's own line [M 0x144340:19-21]");
+        for i in 1..p.periods.len() {
+            // Strict alternation, with one game-proven exception: a 1-in-6 killer turn rolls the
+            // pool's silent line 0x2E (sfxId 0 [D Drone_SfxInfo]; SpeechSFX no-ops an sfx-0 entry
+            // [M 0x141b00]), the monitor's step-1 +0x4D0==0 test then advances at once [M
+            // 0x144340:10-24] and the HOSTAGE speaks again. Such a repeat is accepted only when the
+            // gap shows the killer's full 2→1→2 wrap with NO killer voice at any census tick (the
+            // dialogue lines' repeat delays are all 0 [D], so no other refusal exists; the
+            // hostage's own pool has no silent line [D 0x2F..0x32.sfx ≠ 0], so the killer can never
+            // legitimately repeat).
+            let repeat_ok = p.periods[i].3 && p.periods[i].2 == p.hi;
+            assert!(repeat_ok || p.periods[i - 1].2 != p.periods[i].2,
+                "{name} period {i}: the lines alternate, except after the captor's silent-0x2E roll [M 0x14a8b8 Rand(6) + D 0x2E.sfx=0 + M 0x144340 step-1 advance]; periods {periods:?}",
+                periods = p.periods);
+            assert!(p.periods[i].0 >= p.periods[i - 1].1, "{name} period {i} starts only after the previous ended [M 0x144340 busy tests]");
+        }
+        assert!(p.steps_seen.contains(&1) && p.steps_seen.contains(&2),
+            "{name}: the step machine wrapped 2 → 1 (the loop itself [M 0x144340:58-73]); seen {steps:?}",
+            steps = p.steps_seen);
+        let _ = (name, x, z, k, sim);
     }
 }
 
@@ -225,6 +399,7 @@ fn a_captor_with_no_hostage_link_sends_nothing() {
     assert_eq!(k.talk_step, 0, "the monitor never engaged (no link → no UPDATE runs it [M 0x15c728:21-34])");
     assert!(sim.drones.delayed_msgs.iter().all(|(_, m, _)| *m != nf_game::drone::msg::MISSION_TALK),
         "no 0x1A was queued anywhere");
+    assert!(k.msg_now.is_empty() && k.msg_out.is_empty(), "no 0x1A was ever sent (the monitor never engaged)");
     let (vk, vh) = (mission_set(sim, 0x29, 0x2e), mission_set(sim, 0x2f, 0x32));
     let hi = sim.drones.list.iter().position(|d| (d.pos[0] + 45.5).abs() < 0.5 && (d.pos[2] - 12.2).abs() < 0.5).expect("geisha 1 by position [D]");
     assert!(!sim.drones.list[hi].voice.map_or(false, |v| vk.contains(&v.1) || vh.contains(&v.1)),

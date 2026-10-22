@@ -1558,6 +1558,15 @@ pub struct Drone {
     /// `Drone_SM_SendMsg(msg, delay, from, to)` [M 0x13a630 callers] outbox: (target drone, msg, delay
     /// ticks), moved into `Drones::delayed_msgs` by the tick and delivered when due.
     pub msg_out: Vec<(usize, u8, u32)>,
+    /// The monitor's SAME-TICK sends: (target drone, msg). The game's `Drone_Message`
+    /// 0x13a678 → `Drone_SM_SendMsgSelf` 0x175a38 with delay 0 routes through
+    /// `Drone_SM_RouteMsg` 0x172128's dispatch-NOW branch (the pending queue only takes
+    /// messages whose due frame is in the future) — the target's DSTATE handler runs during
+    /// the sender's own update [M 0x172128:62-66]. The port delivers these post-walk, before
+    /// the speech pass, so the target's voice starts the same tick and the killer monitor's
+    /// next busy test sees it (`msg_out`'s next-head delivery lagged ~2 ticks and the step-2
+    /// gate read the hostage's `+0x4D0 == 0` — the captor double-fired every cycle).
+    pub msg_now: Vec<(usize, u8)>,
     /// `Drone+0x1e` — the gun-through-wall flag: `DroneVision_SeekOpponentLOS` 0x175cb8:77-79 refreshes
     /// it on every sight tick while aiming (`DroneVision_GunThroughWall` 0x178520), and the combat
     /// fire requests are gated on `+0x3b = !+0x1e` (see `gun_through_wall`).
@@ -1728,7 +1737,7 @@ impl Drone {
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
             cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), return_state: 0, second_channel: param(6) as u8, second_tag: param(8),
             captor: None, hostage_searched: false,
-            hostage_target: None, killer_searched: false, msg_out: Vec::new(),
+            hostage_target: None, killer_searched: false, msg_out: Vec::new(), msg_now: Vec::new(),
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
             // `drone_stats[type]+8` is 0 for these guards → 10 (captains, difficulty ≥ 2 only, are not modelled).
             health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: !matches!(skin, 0x0500_003b | 0x0500_003c | 0x0500_0053), kind: setup.kind,
@@ -3972,11 +3981,15 @@ impl Drone {
     /// steps back to 1 [M :58-73]. Captor and hostage alternate lines, each gated on the other's
     /// voice. Port mapping: the self-sends ride `self_msg` (`Drone_SM_SendMsgSelf`'s port model —
     /// the game's `Drone_Message` 0x13a678 ends in `Drone_SM_SendMsgSelf` for any target), the
-    /// hostage send rides `msg_out` → `Drones::delayed_msgs`; the hostage's tick-head voice state
+    /// hostage send rides `msg_now` (see below); the hostage's tick-head voice state
     /// arrives in `hostage_voice` (`Drones::tick`'s `voice_pool` — the walk's borrow can't reach
     /// the hostage), and its finished-line clear is flagged (`hostage_voice_clear`) for the
     /// post-walk pass — `speech()`'s non-forced gate would otherwise refuse every later hostage
-    /// reply while the finished voice lingers.
+    /// reply while the finished voice lingers. The hostage send rides `msg_now` — the game's
+    /// delay-0 dispatch runs the target's handler during the sender's update [M 0x172128], so
+    /// the port delivers post-walk (same tick, before the speech pass); `msg_out`'s queue
+    /// delivered it ~2 ticks late and the step-2 busy test then read a not-yet-started line
+    /// as `+0x4D0 == 0`, double-firing the captor every cycle.
     fn monitor_talk_to_mission_obj(&mut self) {
         match self.talk_step {
             // `Drone_Message(own obj, 0x1a, 0, 0)` [M 0x144340:19-21].
@@ -3986,7 +3999,7 @@ impl Drone {
             // head-delivered 0x1A has not reached the speech pass yet.
             1 => {
                 if self.voice_busy() || !self.talks.is_empty() { return; }
-                if let Some(hi) = self.hostage_target { self.msg_out.push((hi, msg::MISSION_TALK, 0)); }
+                if let Some(hi) = self.hostage_target { self.msg_now.push((hi, msg::MISSION_TALK)); }
                 self.talk_step = 2;
             }
             // The hostage's `+0x4D0` busy test [M 0x144340:47-56], then back to the captor
@@ -15886,6 +15899,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         for hi in hostage_clears { if let Some(h) = self.list.get_mut(hi) { h.voice = None; } }
+        // The killer monitor's same-tick sends (`Drone::msg_now`): the game's `Drone_Message`
+        // 0x13a678 with delay 0 routes through `Drone_SM_RouteMsg` 0x172128's dispatch-NOW branch
+        // (only future-due messages enter the pending queue), so the target's DSTATE handler runs
+        // during the sender's own update. The port delivers post-walk — the same tick, before the
+        // speech pass — and starts the target's line here, so the monitor's next busy test sees
+        // the started `+0x4D0` and the captor/hostage alternation stays tight (the old
+        // `msg_out`-queue delivery lagged ~2 ticks and the step-2 gate read the not-yet-started
+        // line as 0 — the captor double-fired every cycle).
+        let mut now_msgs: Vec<(usize, u8)> = Vec::new();
+        for dr in self.list.iter_mut() { now_msgs.extend(dr.msg_now.drain(..)); }
+        for (t, m) in now_msgs {
+            if self.list.get(t).is_some_and(|x| x.present) {
+                let talks = { let h = self.list.get_mut(t).unwrap(); h.send(d, &mut self.rng, frame, m); std::mem::take(&mut h.talks) };
+                if !talks.is_empty() { self.speech(d, t, talks, frame); }
+            }
+        }
         // The drones' speech requests, in update order (no random draws in `SpeechSFX` / `PlaySFX`).
         for (index, talks) in talk_queue { self.speech(d, index, talks, frame); }
         // The drones' door-open sounds (`NDrone2_OpenDoor`'s `Door_Activate` events).
@@ -16982,7 +17011,7 @@ mod tests {
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
             cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), return_state: 0, second_channel: 0, second_tag: 0,
             captor: None, hostage_searched: false,
-            hostage_target: None, killer_searched: false, msg_out: Vec::new(),
+            hostage_target: None, killer_searched: false, msg_out: Vec::new(), msg_now: Vec::new(),
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
             health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: true, kind: 0,
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
