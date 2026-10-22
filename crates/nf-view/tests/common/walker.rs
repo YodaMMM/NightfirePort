@@ -393,23 +393,29 @@ impl Walker {
         got
     }
 
-    /// Cycle the weapon wheel until the gun in hand has ammo (or give up after 12 switches).
+    /// Cycle the weapon wheel until the gun in hand is a FIREARM with ammo (or give up after 12
+    /// switches). The FISTS count as armed in the port's inventory (`Inventory::level_start`
+    /// gives clip[1] = 1 [M pickup.rs]) — accepting `clip + spare > 0` on the fists made the
+    /// walker punch: the fists' hit test is a 1.8-unit-range "bullet" (`Player_WeaponInitBullet`
+    /// through the fists' record [L weapon_data: range 1.8]) that can never reach a guard 6
+    /// units away, which is the guardroom-guard "invulnerability" the 07000006 walkreal fought
+    /// (probe_guard438 evidence, level-06-guardroom-guard).
     pub fn switch_to_armed(&mut self, label: &str) -> bool {
         for k in 0..12 {
-            let (c, s) = {
+            let (w, c, s) = {
                 let sim = self.scene.sim.as_ref().unwrap();
-                (sim.gun.clip, sim.gun.spare)
+                (sim.gun.weapon, sim.gun.clip, sim.gun.spare)
             };
-            if c + s > 0 { return true; }
-            eprintln!("[walk] {label}: cycling weapons ({k})");
+            if w >= 2 && w <= 0x47 && c + s > 0 { return true; }
+            eprintln!("[walk] {label}: cycling weapons ({k}) (weapon {w:#x} clip {c} spare {s})");
             self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
             for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
         }
-        let (c, s) = {
+        let (w, c, s) = {
             let sim = self.scene.sim.as_ref().unwrap();
-            (sim.gun.clip, sim.gun.spare)
+            (sim.gun.weapon, sim.gun.clip, sim.gun.spare)
         };
-        c + s > 0
+        w >= 2 && w <= 0x47 && c + s > 0
     }
 
     /// The exposed-part aim point: enumerate the drone's hit boxes (the same boxes the port's
