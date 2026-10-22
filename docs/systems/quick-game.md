@@ -42,8 +42,9 @@ and never touches the quick fields.
 - +0x1B8 (gun emplacements), +0x1BC (professional mode), +0x1C0 (view distance), +0x1C8 (location
   damage) are absent from the store list [M 0x20c72c-0x20c768]. Boot sets +0x1BC = 0, +0x1C8 = 1
   (Location Damage ON), +0x1C0 = 2 (Random), +0x1B8 = 0 [M bootup_bootup 0x1c7e78:38,45,46,28 —
-  stores 0x1c7ff0..0x1c7ffc] — so a fresh boot's Quick Game plays with Location Damage ON, and a
-  custom visit's changes to those four survive a later Quick Game.
+  stores at 0x1c7fac (+0x1C0), 0x1c7fdc (+0x1B8), 0x1c7ff8 (+0x1C8), 0x1c7ffc (+0x1BC)] — so a
+  fresh boot's Quick Game plays with Location Damage ON, and a custom visit's changes to those
+  four survive a later Quick Game.
 
 ## 3. The arena: one shared-RNG draw, rows 0..6
 
@@ -60,7 +61,7 @@ is random; the port's rule "never add draws" bars inventing a stream position].
 
 ## 4. The joined players and the bots
 
-- The joined loop (mpjoin, 0x2dfee68, stride 0x10; 0x20c7b8-0x20c84c) counts the joined slots
+- The joined loop (mpjoin, 0x2dee68, stride 0x10; 0x20c7b8-0x20c84c) counts the joined slots
   into MPSettings+0x1AC (0x20c858) and fixes teams/skins per slot [M]: slot 0 → team 1 (MI6),
   skin 0 (Bond) (`sw $v1, 4($a3)` / `sw $zero, 8($a3)` 0x20c810/18); slots 1-3 → team 0 (Phoenix),
   skins 6/7/8 (`sw $t2, 0x18` = 6, `sw $t1, 0x28` = 7, `sw $t0, 0x38` = 8 with `$zero` to the
@@ -68,24 +69,32 @@ is random; the port's rule "never add draws" bars inventing a stream position].
   never use — the match's human slots are the joined ones only.
 - Bot count: the byte 0x2deea9 = 3 (`sb $a1, 1($v0)` 0x20c864, `$a1` = 3) and MPSettings+0x1B0 = 3
   (`sw $a2, 0x1b0` 0x20c86c) [M].
-- The three bot records (0x2deeaa, stride 0x12; the loop 0x20c870..0x20c950): +0x10 character —
-  1 (Drake), 3 (Kiko), 2 (Rook) (DAT_002deeba/cc/de stores); +0x0E enabled = 1, +0x0F team = 0
-  (Phoenix), +0x11 dirty = 0 (the `(&DAT_002deeb8/9/bb)[i·0x12]` stores); +0x00..0x0D = the 14
-  preset stat bytes amemcpy'd from `BOT_getDefaultStats(char)` 0x2027a8 (0x20c890-0x20c8b8); the
-  name goes to MPSettings+0xC0+slot·0x30 from the wheel's label (0x20c8c4-0x20c8dc) [M].
-- Then `Menu_ChangePageCloseIris(0x40000049)` (:142, disasm 0x20c950-0x20c95c) — straight to the
+- The three bot records (0x2deeaa, stride 0x12; the loop 0x20c888..0x20c970): +0x10 character —
+  1 (Drake), 3 (Kiko), 2 (Rook) (DAT_002deeba/cc/de stores, disasm 0x20c8d0/0x20c8e0/0x20c8ec);
+  +0x0E enabled = 1, +0x0F team = 0 (Phoenix), +0x11 dirty = 0 (the `(&DAT_002deeb8/9/bb)[i·0x12]`
+  stores); +0x00..0x0D = the 14 preset stat bytes amemcpy'd (0x11f5c0, 0xE bytes, dst
+  0x2deeaa+i·0x12) from `BOT_getDefaultStats(char)` 0x1263a8 (jal 0x20c8f8 — the presets table
+  0x26d2f0; 0x2027a8 is Menu_IsBotGood, not this); the name goes to MPSettings+0xC0+slot·0x30
+  (0x2a4860) from the wheel's label (Menu_GetItemFromHash 0x20c930 + Txt_BindLabel 0x20c950 +
+  strcpy 0x236b38 at 0x20c95c) [M].
+- Then `Menu_ChangePageCloseIris(0x40000049)` (:142; the third iteration exits at 0x20c974 and
+  the jal 0x202190 fires at 0x20c988, the page id built at 0x20c978/0x20c984) — straight to the
   match
   summary; the confirm page's Confirm is THE start ([M] §4 of mp-menus.md: ×0x3c on +0x1A0, the
   compaction, GameState+0x08 = +0x1A8, the push).
 
 ## 5. The port
 
-- `FrontEnd::mp_quick_start` (crates/nf-view/src/menu.rs) writes exactly the fields of §2 —
-  including NOT touching `mp_player_mods` (+0x1BC/+0x1C8) or `mp_envmods[0]/[1]` (+0x1C0/+0x1B8),
-  whose boot values [0,1]/[2,0] (FrontEnd::new, [M bootup 0x1c7e78]) and any custom visit's
-  values persist. (Fixed this task: the previous model re-stamped those fields, which would have
-  played a fresh Quick Game with Location Damage OFF and stomped a custom visit's View Distance —
-  the store list is the proof neither happens in the game.)
+- `FrontEnd::mp_quick_start` (crates/nf-view/src/menu.rs) writes 9 of §2's stores directly
+  (+0x1A0/+0x19C/+0x1A4/+0x198/+0x1B4/+0x1C4/+0x1D4/+0x1D0/+0x1CC) plus §3/§4's items; the other
+  three land where the game's own handover puts them — +0x180 = 1 at the confirm
+  (`mp_confirm_start`'s `s.master = 1`), +0x1AC/+0x1B0 derived there from the joined/bot state,
+  and +0x190/+0x18C carried as scenario 1's derivations (team_game 0) [M mp-menus.md §4].
+  Crucially it does NOT touch `mp_player_mods` (+0x1BC/+0x1C8) or `mp_envmods[0]/[1]`
+  (+0x1C0/+0x1B8), whose boot values [0,1]/[2,0] (FrontEnd::new, [M bootup 0x1c7e78]) and any
+  custom visit's values persist. (Fixed this task: the previous model re-stamped those fields,
+  which would have played a fresh Quick Game with Location Damage OFF and stomped a custom
+  visit's View Distance — the store list is the proof neither happens in the game.)
 - `mp_confirm_start` carries every field into `MpSettings` (the mapping is in mp-menus.md §4);
   the quick config reaches the match through it, so the sim's MpMatch gets scenario 1, the
   sampled arena, 10/10 limits, 3 bots, radar on, friendly fire off, weapon set 0, vehicles 2.
