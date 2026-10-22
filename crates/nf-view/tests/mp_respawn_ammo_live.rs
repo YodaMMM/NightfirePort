@@ -68,6 +68,17 @@ fn assert_kit(sim: &Sim, w: u8, what: &str) {
     assert_eq!(carried, expect, "{what}: the ammo type carries the other clip_size rounds");
 }
 
+/// mp-respawn-fists-draw: the equip leaves the fists 0x47 held with the spawn weapon pending
+/// [M 0x1855f8:50-53] and the draw runs on the next ticks through the normal switch [M
+/// 0x1a2cc0 + 0x1a2e38]. Steps the offline tick until `w` is held and the switch is idle again.
+fn wait_drawn_offline(sim: &mut Sim, w: u8) {
+    for _ in 0..180u32 {
+        sim.step_bond(nf_game::player::Input::default(), false, false, false);
+        if sim.gun.weapon == w && sim.gun.switch_state == 0 { return; }
+    }
+    panic!("the spawn weapon {w:#04x} never finished drawing (offline)");
+}
+
 // ── the offline path: the death sequence → step_mp_death_respawn ────────────────────────────
 
 fn offline_machine(weapon_set: u32) -> Scene {
@@ -80,6 +91,9 @@ fn offline_kill_and_respawn(weapon_set: u32) -> Scene {
     let w = spawn_weapon(weapon_set);
     {
         let sim = scene.sim.as_mut().unwrap();
+        // The load's equip leaves the fists 0x47 held with the spawn weapon pending [M
+        // 0x1855f8:50-53 via Player_InitWeapon 0x1a7ef8:143-145]; the draw settles first.
+        wait_drawn_offline(sim, w);
         // Sister baseline: a fresh match start holds the kit (unchanged by the fix).
         assert_kit(sim, w, "fresh match start");
     }
@@ -113,6 +127,14 @@ fn offline_kill_and_respawn(weapon_set: u32) -> Scene {
         }
     }
     assert!(respawned, "the death sequence ran and the respawn came");
+    {
+        // The respawn tick holds the fists 0x47 with the spawn weapon pending [M 0x1855f8:50-53]
+        // — the draw settles through the normal switch before the kit assert.
+        let sim = scene.sim.as_mut().unwrap();
+        assert_eq!(sim.gun.weapon, 0x47, "respawn tick: the fists are held [M 0x1855f8:50-51]");
+        assert_eq!(sim.gun.switch_request, w, "respawn tick: the spawn weapon is the switch request [M 0x1855f8:52]");
+        wait_drawn_offline(sim, w);
+    }
     scene
 }
 
@@ -165,6 +187,23 @@ impl Pair {
     }
     fn idle(&mut self, n: u32) {
         for _ in 0..n { self.tick(&[NEUTRAL; N]); }
+    }
+    /// mp-respawn-fists-draw: the equip leaves the fists 0x47 held with the spawn weapon pending
+    /// [M 0x1855f8:50-53]; ticks both machines until each local player holds `w` idle again [M
+    /// 0x1a2cc0 — the draw through the normal switch].
+    fn wait_drawn(&mut self, w: u8) {
+        for _ in 0..180u32 {
+            // The law row: every human's byte 21 is its own gun (lib.rs:4643) — the gate's held
+            // weapon follows this byte, so the draw ticks must ride the real held ids.
+            let mut row: [nf_net::Input; N] = [NEUTRAL; N];
+            row[0].held = self.a.sim.as_ref().unwrap().gun.weapon;
+            row[1].held = self.b.sim.as_ref().unwrap().gun.weapon;
+            self.tick(&row);
+            let (a, b) = (self.a.sim.as_ref().unwrap(), self.b.sim.as_ref().unwrap());
+            if a.gun.weapon == w && a.gun.switch_state == 0
+                && b.gun.weapon == w && b.gun.switch_state == 0 { return; }
+        }
+        panic!("the spawn weapon {w:#04x} never finished drawing on both machines");
     }
     fn body(&self, slot: usize) -> nf_game::player::Bond {
         let s = self.sa();
@@ -237,6 +276,12 @@ fn setup(p: &mut Pair, dist: f32) {
 fn online_respawn_rearms_and_the_machines_agree() {
     let mut p = Pair::new(0);
     let w = spawn_weapon(0);
+    // The load's equip leaves the fists 0x47 held with the spawn weapon pending [M
+    // 0x1855f8:50-53 via Player_InitWeapon 0x1a7ef8:143-145]; the draw settles first.
+    assert_eq!(p.a.sim.as_ref().unwrap().gun.weapon, 0x47, "fresh load (A): the fists are held [M 0x1855f8:51]");
+    assert_eq!(p.a.sim.as_ref().unwrap().gun.switch_request, w, "fresh load (A): the spawn weapon is the switch request [M 0x1855f8:52]");
+    assert_eq!(p.b.sim.as_ref().unwrap().gun.weapon, 0x47, "fresh load (B): the fists are held [M 0x1855f8:51]");
+    p.wait_drawn(w);
     // Sister baseline: a fresh match start — both machines' local kits and the shared gates hold
     // the set's kit, and the gate states agree.
     assert_kit(p.a.sim.as_ref().unwrap(), w, "fresh start (machine A)");
@@ -264,8 +309,12 @@ fn online_respawn_rearms_and_the_machines_agree() {
     assert_eq!(p.sa().mp_hp[1], 100.0, "armor_bonus 0 + 100 [M 0x185368:65-73]");
     assert_eq!(p.a.sim.as_ref().unwrap().mp_hp, p.b.sim.as_ref().unwrap().mp_hp, "the machines agree on the respawned health");
     // Machine B re-armed its own player through the respawn (`MP_EquipPlayer` re-runs [M
-    // 0x185368:74]): the spawn kit is back.
-    assert_kit(p.b.sim.as_ref().unwrap(), w, "respawn (machine B's local player)");
+    // 0x185368:74]). The respawn tick holds the fists 0x47 with the spawn weapon pending [M
+    // 0x1855f8:50-53]; the draw settles through the normal switch before the kit assert.
+    assert_eq!(p.b.sim.as_ref().unwrap().gun.weapon, 0x47, "respawn tick: the fists are held [M 0x1855f8:50-51]");
+    assert_eq!(p.b.sim.as_ref().unwrap().gun.switch_request, w, "respawn tick: the spawn weapon is the switch request [M 0x1855f8:52]");
+    p.wait_drawn(w);
+    assert_kit(p.b.sim.as_ref().unwrap(), w, "respawn (machine B's local player, the draw settled)");
     // The shared state agrees on every machine: slot 1's gate holds the fresh kit on both, and
     // the two machines' copies are identical.
     let ga = p.a.sim.as_ref().unwrap().mp_combat.gates[1].clone();
