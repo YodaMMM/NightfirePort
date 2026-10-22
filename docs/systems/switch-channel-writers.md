@@ -42,16 +42,16 @@ probe: placements + `Stream::decode`), every mechanism [M] as above.
 | 07000016 | **0x81** | `Trigger_Activate` on a TOUCH_ONCE plate | placement idx166 (type 0xEA): out = param0 = 0x81; a second SP idx168 (param6 = 0x81) | ported |
 | 07000016 | **0x8D** (the KikoDeathButton gate) — SET | a TOUCH_ONCE plate (idx166 second record: out = param0 = 0x8D) AND the death-button switch idx185 (hash 0x020008C1, type 0x29, param5 = 0x8D — `Switch_Activate` 0x1b02a8:25 TOGGLES it, so a second press CLEARS it) | the Kiko death button | the set is ported; **the clear** = the switch's own toggle arm — whether the real walk presses twice (or another site clears it) is open |
 | 07000016 | 0x50/0x81 note | — | the 0x02000637 pickup with param3 = 0x50 ALSO writes 0x50 on take | — |
-| 07000001 | **0x47** Escort Mayhew | placement map53 idx193, hash **0x02000675** (type 0xF0 — the escort object class), param1 = 0x47 | the escort object's channel param — the class's writer is `Copter_Update`-family (0x17dbb8) or the 0xF0 arm [S which arm — live check] | the writer family is ported; the escort class mapping needs the param→field check |
+| 07000001 | **0x47** Escort Mayhew | placement map53 idx193, hash **0x02000675** (type 0xF0 — the escort/pickup class — the 0xF0 class is BOTH the placed pickups AND the script-spawned ones [M 0x1d04f0 case 0xF0 → Pickup_Create]), param1 = 0x47 — NOTE: the pickup's channel field is param 3, not param 1, so this record's 0x47 rides a different field (id 0x47 = weapon 0x47? the fists?) — the escort writer is open | — | open (live check) |
 | 07000005 | **0x46** | the guards (type 0x47, flags 0xc047, 18 placements) carry param1 = 0x46 — the drone channel params; the death channel is param 12 [M 0x13e660] | — | open: which guard param fires 0x46 (live check) |
 | 07000008 | **137** | the fusebox chain (fix-safe08's doorway bolt) — `Switch_Activate`/the fusebox SP | the fusebox's script (0x060009E2-family) | ported (fix-safe08) |
 | 0700000a | **0x3C** | the guards: ~25 type-0x47 placements with param0/6/7/8 = 0x3C — the death channel is param 12 [M 0x13e660] | — | open (live check) |
 | 0700000a | **0x37** | a TOUCH trigger idx540 (param6 = 0x37) + an OR trigger idx543 (param2 = 0x37) | — | ported |
-| 0700000d | **200 (0xC8)** | type 0xDB placements (idx213 ×4 on map49) with param3 = 0xC8 — the destroy/hurt family [M 0x12c4f8:23] | — | needs the 0xDB param→field mapping |
+| 0700000d | **200 (0xC8)** | type 0xDB = **DOOR** [M 0x1d04f0 case 0xdb → Door_Create] — 4 door placements (idx213) carry param3 = 0xC8, but the door's channel fields are param0/1/2 (+0x6a/+0x66/+0x68 [M 0x136100:25-27]) — param3 sits beyond them, so the 200 write is NOT the door mirror | — | open (live check: which write hits 0x2a38d2+200) |
 | 0700000d | **103 (0x67)** | an SP (idx65535, hash 0x02000B51, param1 = 0x67 — the script hash slot!) + idx212 (type 0xF9, param0 = 0x67) | — | open |
 | 07000011 | **0x1F** | the exit (idx124, 0xE8 LOAD_LEVEL, param2 = 0x1F = the gate READ); a type-0xE9 record (hash 0x0200063D, param2 = 0x1F) | the writer of the gate channel itself | open |
 | 07000013 | **0x23** | an **SP (idx70, hash 0x020005E2, type 0xD9, param6 = 0x23)** — `SP_Update` 0x1dbda8:226 writes its out when its script ends | the SP's script runs to completion on the level's beat | ported mechanism; the script's start beat = live check |
-| 07000015 | **0xC8** | type 0xDB (idx126, param3 = 0xC8) — the same family as 0700000d | — | open |
+| 07000015 | **0xC8** | type 0xDB = door (idx126, param3 = 0xC8) — the same door family as 0700000d | — | open (live check) |
 
 ## The Dragon Safe chain, end to end
 
