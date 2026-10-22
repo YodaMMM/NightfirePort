@@ -132,8 +132,16 @@ fn refresh_metrics_recomputes_rows_and_clamps_top() {
     l.top = 9;
     l.refresh_metrics(92);
     assert_eq!(l.visible_rows, 5, "92 / 17.6 → 5 [M 0x21a598:174-179]");
-    assert_eq!(l.top, 2, "the top clamps to the last row [M 0x21a598:179]");
-    // Sister: a zero-height box zeroes the window (no division crash).
+    // `if (count < top + visible && visible < count) top = count − visible` [M 0x21a598:175-178]: 3 rows
+    // in a 5-row window is not longer than the window, so the top is left alone (the cursor clamp,
+    // not this one, brings it back).
+    assert_eq!(l.top, 9, "a list shorter than its window leaves the top [M 0x21a598:175-178]");
+    // Sister: a list LONGER than its window pulls the top back to the last full page.
+    for i in 3..8 { l.add_row(vec![format!("r{i}")], i as u32); }
+    l.top = 6;
+    l.refresh_metrics(92);
+    assert_eq!(l.top, 3, "8 rows, 5 visible, top 6 → 8 − 5 = 3 [M 0x21a598:175-178]");
+    // A zero-height box: no rows visible (no division crash).
     l.refresh_metrics(0);
     assert_eq!(l.visible_rows, 0, "h 0 → 0 rows");
 }

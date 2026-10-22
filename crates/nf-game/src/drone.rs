@@ -14293,12 +14293,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     o.alert_bits |= copy;                                // +0x4FC |= [:207]
                     // Drone_Message(own obj, 0x1f, 0, 0) [:208] — the DSTATE case-0x1f arm is
                     // `DroneFunc_DoForcedAttack` [M Idle 0x15bf18:129-130 and the other unaware
-                    // DSTATEs]: its gate on 07000007 while the party latch (`party_loud`) is 0
-                    // lets only the bouncer mode 0x13 and the CivilianMission 0x16 walkers force-
-                    // attack [M 0x148c60:10-13]; the port folds the message into this send (its
-                    // intercept enters ATTACK — ReactToDroneAlertMsg routes the alert kinds to
-                    // 0x56 / SeenDroneShot 0xa0 → 0x56 [M 0x1437a0:263,368 + 0x173b78]).
-                    if !(d.level == 0x0700_0007 && !self.party_loud && !matches!(o.mode, 0x13 | 0x16)) {
+                    // DSTATEs]: its gate proceeds when the level is not 07000007, OR the party latch
+                    // (`party_loud`, DAT_0029aa86) is 0, OR the mode is the bouncer 0x13 / the
+                    // CivilianMission 0x16 — i.e. it REFUSES only on 07000007 while the latch is SET
+                    // for the other modes [M 0x148c60:13-15; daily audit 2026-10-22 — the port had the
+                    // latch test inverted]; the port folds the message into this send (its intercept
+                    // enters ATTACK — ReactToDroneAlertMsg routes the alert kinds to 0x56 /
+                    // SeenDroneShot 0xa0 → 0x56 [M 0x1437a0:263,368 + 0x173b78]).
+                    if !(d.level == 0x0700_0007 && self.party_loud && !matches!(o.mode, 0x13 | 0x16)) {
                         o.send(d, &mut self.rng, frame, msg::FORCED_ATTACK);
                     }
                 }

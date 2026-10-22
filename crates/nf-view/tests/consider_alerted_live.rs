@@ -62,9 +62,9 @@ fn interrogate_to_attack() -> (walker::Walker, usize) {
 /// The headline: a party guest parked beside the interrogating-turned-attacking guard is alerted
 /// through the widened cone (party_loud: +0xE8 = 20.0, +0xE4 = π [M 0x1764d0-0x17650c]) — the
 /// copy (`+0x4FC |= 0x10 << 16` [M 0x176250:202]), the assist pointer (+0x528 [M :206]) and the
-/// forced attack (party_loud passes DoForcedAttack's 07 gate for every mode [M 0x148c60:10-13]).
+/// forced attack — REFUSED: on 07000007 with the party latched, DoForcedAttack's gate lets only modes 0x13/0x16 through [M 0x148c60:13-15] (daily audit 2026-10-22: the old pin had the latch test inverted).
 #[test]
-fn the_07_guest_copies_the_attacking_guard_and_forces_the_attack() {
+fn the_07_latched_party_guest_copies_the_guard_but_the_gate_refuses_the_attack() {
     let (mut w, g) = interrogate_to_attack();
     let o = watcher(w.scene.sim.as_ref().unwrap(), g);
     {
@@ -86,19 +86,17 @@ fn the_07_guest_copies_the_attacking_guard_and_forces_the_attack() {
     let sim = w.scene.sim.as_ref().unwrap();
     let d = &sim.drones.list[o];
     assert_eq!(high & 0x10, 0x10, "the copied half holds 0x10 << 16 [M 0x176250:202]");
-    // The forced attack ran: DoForcedAttack's SetState(0x56) on an unarmed guest falls through
-    // `DroneFunc_AttackNoWeapon` 0x14af80 to CivilianScared 0x12 (→ hiding 0x13) [M 0x164210:24-40] —
-    // she left the party either way.
-    assert!(matches!(d.state, state::CIVILIAN_SCARED | state::CIVILIAN_HIDING | state::DRAW_WEAPON | state::ATTACK),
-        "the alerted guest force-attacks (0x56 → AttackNoWeapon for the unarmed), got {:#x}", d.state);
+    // The forced attack is REFUSED: the level is 07000007, the latch DAT_0029aa86 is set and the
+    // guest's mode is neither 0x13 nor 0x16 [M 0x148c60:13-15] — she holds the party.
+    assert_eq!(d.state, state::PARTY_GIRL, "the latched 07 gate refuses the guest's forced attack [M 0x148c60:13-15], got {:#x}", d.state);
 }
 
-/// Sister: with the party NOT latched, the 07 gate refuses the forced attack — but the latch,
+/// Sister: with the party NOT latched, the 07 gate lets the forced attack through [M 0x148c60:13-15] — and the latch,
 /// the copy and the assist pointer are already in place (ConsiderAlerted's effect runs before
 /// its message [M 0x176250:199-208], and DoForcedAttack's refusal touches none of them [M
 /// 0x148c60:14-47]).
 #[test]
-fn the_07_refusal_keeps_the_latch_copy_and_assist() {
+fn the_07_calm_party_lets_the_forced_attack_through_with_the_copy_and_assist() {
     let mut w = walker::Walker::new(nf_view::load(&iso(), "07000007.bin", false).expect("load 07000007"));
     w.wait_enabled(6000, "level start");
     w.wait(120); // the level's first second is gone (the +0x524 gate on a 0 stamp [M 0x176250:91])
@@ -132,7 +130,11 @@ fn the_07_refusal_keeps_the_latch_copy_and_assist() {
     assert!(d.alerted_by_drone, "the observer latched (+0x4F8 & 0x20000) [M 0x176250:201]");
     assert_eq!(d.assist_src, Some(s), "+0x528 = the source [M 0x176250:206]");
     assert_ne!(d.alert_bits & 0x10_0000, 0, "the copy arrived [M 0x176250:202]");
-    assert_eq!(d.state, state::PARTY_GIRL, "the 07 gate refused the forced attack — the guest holds the party [M 0x148c60:10-13]");
+    // The calm party (latch 0) passes the gate [M 0x148c60:13-15]: DoForcedAttack's SetState(0x56) on an
+    // unarmed guest falls through `DroneFunc_AttackNoWeapon` 0x14af80 to CivilianScared 0x12 (→ hiding
+    // 0x13) [M 0x164210:24-40] — she leaves the party.
+    assert!(matches!(d.state, state::CIVILIAN_SCARED | state::CIVILIAN_HIDING | state::DRAW_WEAPON | state::ATTACK),
+        "the calm 07 gate lets the forced attack through, got {:#x}", d.state);
 }
 
 /// The 05 sister: the one-second gate on the source's +0x524 ([M 0x176250:91 —

@@ -2472,6 +2472,11 @@ pub struct FrontEnd {
     pub mp_weapon_set: u32,
     /// MPSettings+0x1C4 — radar [M P_MPPLAYERMODS 0x2104d0:16].
     pub mp_radar: u32,
+    /// MPSettings+slot·0x30+0x28 — the codename's own radar option, control 0x10000128
+    /// [M P_CNMPOPTIONS_Handler 0x2144d8:13]; the radar draw reads it per viewer
+    /// [M HUD_RadarUpdate 0x19f6e8:102]. A different game setting from +0x1C4 (daily audit
+    /// 2026-10-22: the port had merged the two into `mp_radar`).
+    pub mp_player_radar: u32,
     /// The Player-Mods toggles beyond ff/weapon set/radar, in page order (+0x1BC, +0x1C8) [M
     /// P_MPPLAYERMODS 0x2104d0:14-15].
     pub mp_player_mods: [u32; 2],
@@ -2865,6 +2870,7 @@ impl FrontEnd {
             mp_friendly_fire: 0,
             mp_weapon_set: 0,
             mp_radar: 1,
+            mp_player_radar: 1,
             // mp-defaults: the boot values [M bootup_bootup 0x1c7e78 — +0x1BC=0 @0x1c7ffc,
             // +0x1C8=1 @0x1c7ff8 (Location Damage On); +0x1C0=2 @0x1c7fac (row 1 = Random), the
             // other enviro rows 0; the EE snapshots read the same [L]]
@@ -3794,7 +3800,7 @@ impl FrontEnd {
         // options-census: the MP options rows ARE MPSettings — the game's page writes +0x28/+0x2c
         // [M P_CNMPOPTIONS_Handler 0x2144d8:13-14] and the lobby edits the same record, so the
         // port's FrontEnd fields move with the rows.
-        if row.ctrl == 0x1000_0128 { self.mp_radar = nv as u32; }
+        if row.ctrl == 0x1000_0128 { self.mp_player_radar = nv as u32; }
         if row.ctrl == 0x1000_011c { self.mp_handicap = nv; }
         if nv != v {
             // menu-sfx: the spinner's ◀/▶ step, first press — MENU_SOUND 3 (0x1d8) down-count,
@@ -6719,12 +6725,9 @@ impl FrontEnd {
             2 => { self.mp_player_mods[0] = (self.mp_player_mods[0] as i32 ^ 1) as u32; }
             3 => { self.mp_player_mods[1] = (self.mp_player_mods[1] as i32 ^ 1) as u32; }
             _ => {
+                // The Player Mods radar is MPSettings+0x1C4 [M 0x2104d0:16] — NOT the codename's
+                // +0x28 option (0x10000128) [daily audit 2026-10-22: the old sync wrote the profile].
                 self.mp_radar = (self.mp_radar as i32 ^ 1) as u32;
-                // options-census: the lobby row and the MP-options row are one storage — the
-                // game's lobby writes MPSettings+slot·0x30+0x28, the same record the MP options
-                // page reads back on open [M C_RBMPSETUP 0x20de58:112 / P_CNMPOPTIONS
-                // 0x2144d8:19-24]. The port keeps fe.opts (the profile) synced.
-                self.opts.insert(0x1000_0128, self.mp_radar as i32);
             }
         }
     }
@@ -7204,7 +7207,9 @@ impl FrontEnd {
         s.team_game = (self.mp_scenario >> 29) & 1;   // [M MP_Init 0x183438:41 — the core re-derives]
         for (i, team, skin, codename) in self.mp_humans() {
             if i >= s.players.len() { continue; }
-            s.players[i] = nf_game::mp::MpPlayer { team, skin, armor_bonus: 0, radar_on: 1, codename };
+            // +0x28: the codename's radar option [M 0x2144d8:13] — the local profile's (the port's
+            // one codename set; split-screen players share it [S]).
+            s.players[i] = nf_game::mp::MpPlayer { team, skin, armor_bonus: 0, radar_on: self.mp_player_radar, codename };
         }
         // mp-bot-objectives: the enabled bots' team bytes (record +0x0F — blue = MI6 = team 1,
         // the confirm summary's split [M :337-352]) ride the bot slots' team words; the bots follow
