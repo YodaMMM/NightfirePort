@@ -505,12 +505,19 @@ impl Bond {
     /// ee_start_05.bin M_CONTROL 0x16cb8a0+0x80/0x8C`; the computed centre (104.826, 24.837, 108.582)
     /// matches the player object's `+0x80` there `[L] 0x16cefe0+0x80`.
     pub fn sphere_centre(&self) -> V3 {
+        Self::sphere_centre_at(self.pos, self.yaw)
+    }
+
+    /// The world sphere centre for a feet position + yaw — the same rule as `sphere_centre`, shared
+    /// with the bodies that have no `Bond` pose of their own (the MP bots' pickup-take test reads
+    /// their obj+0x80 the same way [M `Pickup_Update` 0x18e148:212-214 over every body]).
+    pub fn sphere_centre_at(pos: V3, yaw: f32) -> V3 {
         // [L] M_CONTROL+0x80 (ee_start_05.bin, player 0 standing).
         const LOCAL: V3 = [-0.1347, -0.1267, 0.2402];
-        let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw)); // G-046: the matrix rows are PS2Sinf-built [M 0x133070]
+        let (s, c) = (crate::trig::sinf(yaw), crate::trig::cosf(yaw)); // G-046: the matrix rows are PS2Sinf-built [M 0x133070]
         // The object matrix rows [cos,0,−sin / 0,1,0 / sin,0,cos] (+ translation = pos), as read live
         // [L 0x16cefe0+0x90..0xc8] and matching `Bond::look`'s convention.
-        [self.pos[0] + LOCAL[0] * c + LOCAL[2] * s, self.pos[1] + LOCAL[1], self.pos[2] - LOCAL[0] * s + LOCAL[2] * c]
+        [pos[0] + LOCAL[0] * c + LOCAL[2] * s, pos[1] + LOCAL[1], pos[2] - LOCAL[0] * s + LOCAL[2] * c]
     }
 
     /// The view direction (pitch applied to the forward axis). In the zero-g substates the whole
