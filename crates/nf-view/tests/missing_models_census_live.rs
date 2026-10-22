@@ -20,7 +20,9 @@
 //!
 //! Zero is the goal for every column; a non-zero pinned number needs the game's own evidence
 //! (e.g. 07000014's 0x050000b1 skinless drones are the shipped game's misses too — G-021).
-//! Numbers/ids only; ISO-gated.
+//! Numbers/ids only; ISO-gated. Re-landed by missing-models-census-2: the CREATED list corrected to
+//! Script_CreateEntity 0x1d8968's dispatch (raw 0x3e has no arm), the 07000001 skin pin re-analysed
+//! against master's g-021 merge (docs/systems/missing-models-census.md).
 
 use nf_formats::iso9660::IsoImage;
 use nf_formats::level::Level;
