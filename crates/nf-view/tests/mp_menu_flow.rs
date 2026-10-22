@@ -325,7 +325,7 @@ fn quick_game_starts_the_games_fixed_match() {
 fn custom_game_keeps_its_chosen_scenario() {
     // G-053(6) sister: the quick start stomps MPSettings+0x1A4 to 1; a CUSTOM pick must still
     // carry ITS row's word to the match (C_SBMPSCEN's row-n arm writes mp_scenario[n].id [M
-    // :41-43, disasm 0x20c9c8]).
+    // :44, disasm 0x20c9c8 `sw $v0, 0x4944($t0)`]).
     let mut fe = FrontEnd::new();
     enter_mp(&mut fe);
     join_agent1(&mut fe);

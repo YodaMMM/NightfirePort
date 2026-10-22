@@ -12,11 +12,11 @@ line numbers refer to that decompile. This page only adds the Quick Game detail;
 ## 1. The trigger
 
 `C_SBMPSCEN_Handler` 0x20c600 msg 0x4b (the wheel's Confirm): the row index comes from the
-control's msg-0x40 (:32-33); the lock check reads `mp_scenario[row·0x18+0x10]` and refuses when
-the byte is 0 (:35-38, `menu_unlock_everything` bypasses) — row 0 ships unlocked. Row 0 takes the
+control's msg-0x40 (:38); the lock check reads `mp_scenario[row·0x18+0x10]` and refuses when
+the byte is 0 (:40, `menu_unlock_everything` bypasses) — row 0 ships unlocked. Row 0 takes the
 quick-start arm (:48+); any other row stores `MPSettings+0x1A4 = mp_scenario[row·0x18+0xC]`
-(:41-43, the disasm's `sw` at 0x20c9c8) and opens the map page — that arm is the CUSTOM path and
-never touches the quick fields.
+(:44, the disasm's `sw` at 0x20c9c8) and opens the map page (:45) — that arm is the CUSTOM path
+and never touches the quick fields.
 
 ## 2. The quick-start writes (the fixed config)
 
@@ -47,7 +47,8 @@ never touches the quick fields.
 
 ## 3. The arena: one shared-RNG draw, rows 0..6
 
-0x20c75c `jal 0x1e36f0` (Rand_Random), then `divu …, 7` / `mfhi` (0x20c76c-0x20c7a4): the draw
+0x20c75c `jal 0x1e36f0` (Rand_Random, decompile :62), then `divu …, 7` / `mfhi`
+(0x20c76c-0x20c7a4): the draw
 mod 7 indexes `mp_level` (0x2df400, `lui/addiu` at 0x20c770-0x20c778), stride 0x18
 (`mult $a1, $a2` 0x20c7a4), and the row's +0x0C level code lands in BOTH GameState+0x8
 (`sw $v0, 0x3770($v1)` 0x20c7b0) and MPSettings+0x1A8 (`sw $v0, 0x1a8($s0)` 0x20c7b4) [M].
@@ -72,7 +73,8 @@ is random; the port's rule "never add draws" bars inventing a stream position].
   (Phoenix), +0x11 dirty = 0 (the `(&DAT_002deeb8/9/bb)[i·0x12]` stores); +0x00..0x0D = the 14
   preset stat bytes amemcpy'd from `BOT_getDefaultStats(char)` 0x2027a8 (0x20c890-0x20c8b8); the
   name goes to MPSettings+0xC0+slot·0x30 from the wheel's label (0x20c8c4-0x20c8dc) [M].
-- Then `Menu_ChangePageCloseIris(0x40000049)` (0x20c950-0x20c95c) — straight to the match
+- Then `Menu_ChangePageCloseIris(0x40000049)` (:142, disasm 0x20c950-0x20c95c) — straight to the
+  match
   summary; the confirm page's Confirm is THE start ([M] §4 of mp-menus.md: ×0x3c on +0x1A0, the
   compaction, GameState+0x08 = +0x1A8, the push).
 
