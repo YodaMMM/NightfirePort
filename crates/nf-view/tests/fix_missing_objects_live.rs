@@ -233,7 +233,9 @@ fn census_no_unchained_generics_and_no_unexplained_skips_on_any_level() {
                         let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < map.objects.len() { Some((mi, p.index as usize)) } else { None };
                         if let Some((om, oi)) = target {
                             let obj = &level.maps[om].objects[oi];
-                            if obj.collision.is_some() && obj.flags & 0x1000 == 0 {
+                            // level-03-interactables-3: mirrors build_scoped's push filter — the
+                            // 0x20 breakable panes are excluded from the static bake (world.rs).
+                            if obj.collision.is_some() && obj.flags & 0x1000 == 0 && p.flags & 0xff != 0x20 {
                                 let c = cell_counter;
                                 let f16 = cel_graph.cells.get(c).map(|n| n.flags & 0xffff).unwrap_or(0);
                                 let owner = if matches!(f16, 0xc023 | 0xc047) { Some(c as u32) } else { node_owner.get(c).copied().flatten() };

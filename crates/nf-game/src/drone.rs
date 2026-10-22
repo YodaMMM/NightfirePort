@@ -12336,7 +12336,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // shot in the Sim's shared world pass (`Sim::step_net_world`), on every machine —
             // this machine's own bullet must not break them here alone.
             let net_world = self.net_bodies.is_some();
-            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.rng) } {
+            // The bullet's weapon-definition word at weapon_definition+0x10 — what the game hands
+            // Collide_FilterBullets [M 0x12bfd8:15 + 0x1ece30:24-33]: a class-5 hitter whose word
+            // ANDs `filter | 0x106` is dropped. Guns 0x0008, Laser 0x0002, watch 0x0100 [L dump].
+            let weapon_mask = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, weapon_mask, b.damage, &mut self.rng) } {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
                 // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
@@ -13454,19 +13458,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // `Break_Kill` 0x12b970]) and playing the break sound at the object: 0x2e for a
                 // type-2 (glass) breakable, else 0x5f2/0x5f3 by `Rand_Rand(100) < 41` [M
                 // 0x12b9b4-0x12b9f0]. The game scans the CONTROL list — placed 0x20 breakables
-                // (Break_Create) and script-created 0x20 entities alike; the port models only the
-                // script-created ones (`Objects.list`, the Entity command's obj_type is the game's
-                // obj+0xFF class byte), and its entities carry no bounding sphere, so the match is
-                // the first kind-0x20 entity within 1.0 of the position — documented-unreachable
-                // on the shipped levels: the disc's single firing (0600005b stream 8, position =
-                // stream 7's anim object) finds NO script entity of that class either way, and the
-                // near misses are the placed glass panels the port does not simulate ([D census];
-                // the game's scan is the CONTROL list — placed Break_Create 0x20 breakables AND
-                // script entities — the port carries only the script-created set; a live check
-                // could measure the game's sphere radius).
+                // (Break_Create) and script-created 0x20 entities alike, created in parsemap order
+                // so the placed panes precede the script entities [M 0x12c168:39-51] — first hit
+                // wins.
                 crate::nis::Request::DoBreak { at } => {
                     let Some(o) = at else { continue };
                     let Some(pos) = Self::script_obj_pos(&self.scripts, d, o) else { continue };
+                    // The PLACED panes first (the control list's creation order [M 0x12c168:39-51]):
+                    // `Breaks::do_break` runs the standard Break_Kill inside (the dead bit, the
+                    // sound roll, the pieces).
+                    let placed = self.breaks.do_break(pos, &mut self.rng);
+                    if !placed.is_empty() {
+                        for ev in &placed {
+                            // `Sound_Play3D(100.0, -1.0, -1.0, id, obj+0x80, custom=0)` [M 0x12b970:69,75].
+                            self.audio.play3d(ev.sound as u32, ev.pos, None);
+                        }
+                        self.break_kills.extend(placed.into_iter().map(|k| (k.placement, k.kind, k.sound)));
+                        continue;
+                    }
                     // First class-0x20 object in list order whose sphere contains the position
                     // [M 0x12c180-0x12c1cc — first hit wins]. The port's script entities carry no
                     // bounding sphere: the centre is the matrix translation, the radius a 1.0
@@ -13782,8 +13791,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         // The breakable drone-contact arm (`Break_Update` 0x12bfd8:23-34): snapshot the drones'
         // positions; at the tick's tail every mover tests its squared step against the level's
-        // glass (only on GameState+0x12 == 0x0700001, only kind 2 — crate::breakable).
+        // glass (only on GameState+0x12 == 0x0700001, only kind 2 — crate::breakable). The
+        // player is a class-2 body to the collision pass too — snapshot his position the same way
+        // for the tick-tail pass (level-03-interactables' re-land).
         let drone_from: Vec<V3> = self.list.iter().map(|d| d.pos).collect();
+        let player_from = player.pos;
         // glass-breach-guards-4: the root-motion flag is this tick's movement-source mark — clear
         // it before anything moves (root_motion sets it when it applies a delta).
         for dr in self.list.iter_mut() { dr.scripted_move = false; }
@@ -14777,6 +14789,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // same set_dynamic now (the game's Collide_Update is post-walk [M 0x1336f8:238]). Id: high bit 40 + the door index.
             parts.extend(drones.doors.list.iter().enumerate().filter(|(_, x)| x.glist != 0)
                 .map(|(k, x)| (0x100_0000_0000 | k as u64, x.glist, x.matrix)));
+            // The breakable panes (glass-breach lineage, the level-03 re-land): the INTACT pane is
+            // a solid body this tick (`Collide_PickObj` walks the cel-linked objects whatever
+            // moved them); a BROKEN pane injects nothing — `Break_Kill`'s obj+0xFE |= 1 takes it
+            // out of the world, the collision "goes away" [M 0x12b970:60] and bodies cross the
+            // opening. The static bake excludes the 0x20 placements (world.rs). Id: bit 42 +
+            // placement (bit 41 is the SimpleScripts'; the level-03 pick's 0x2000… id collided
+            // with theirs). Shape: `Break::shape_key` (the hashcode or the (map,object)
+            // synthetic — world.rs's shapes index [S]); 0 = no shape, inject nothing.
+            parts.extend(drones.breaks.list.iter()
+                .filter(|s| !s.dead && s.shape_key != 0)
+                .map(|s| (0x300_0000_0000 | s.placement as u64, s.shape_key, s.matrix)));
             // The SimpleScripts too (fix-party-mission item 7): the safe door (ch 136) and the doorway
             // bolt (ch 137) are solid at their posed matrix, like the doors. Id: bit 41 + the ss index.
             parts.extend(drones.sss.list.iter().enumerate().filter(|(_, x)| x.hash != 0)
@@ -16664,11 +16687,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The drone-contact pass ([M Break_Update 0x12bfd8:23-34]: class-2 contacts damage kind-2
         // breakables by the squared step × 20, on 07000001 only). The kills join the view queue;
         // Break_Kill 0x12b970:75 plays the kill sound inline (the same presentation the bullet
-        // pass makes above).
+        // pass makes above). Every drone's (tick-start, now) pair, then Bond's: the player is a
+        // class-2 body to the collision pass too (the game's contact list holds every class-2
+        // body that registered — no drone-only filter in [M 0x12bfd8:23-34]); `player_from` is
+        // the tick-start cache. The port's player moves by steering, never anim root motion, so
+        // his step is always the AI-steering kind the drain reads.
         let level_01 = d.level == 0x0700_0001;
         for (dr, from) in self.list.iter().zip(drone_from) {
             if !dr.present || dr.corpse { continue; }
             for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, &mut self.rng) {
+                self.break_kills.push((k.placement, k.kind, k.sound));
+                let id = u32::from(k.sound);
+                self.audio.play3d(id, k.pos, None);
+                if let Some(t) = d.sfx {
+                    let e = t.get(id);
+                    if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
+                }
+            }
+        }
+        if level_01 {
+            for k in self.breaks.drone_step(player_from, player.pos, level_01, false, &mut self.rng) {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 let id = u32::from(k.sound);
                 self.audio.play3d(id, k.pos, None);
