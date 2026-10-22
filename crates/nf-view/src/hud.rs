@@ -35,7 +35,7 @@ const SH: f32 = 448.0;
 /// the table's other four ids never resolve in `hashtable_set_sprite` and the icon stays hidden].
 /// fix-space-pane added the 0700001b missile-status pane's five (0x03000177..7B [M SpaceSprInfo 0x2be3b0 +
 /// `HUD_UpdateSpacePane` 0x19d3b8; D 0700001b.bin entry 61 sub 0..4]).
-pub const TEXTURES: [u32; 32] = [0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
+pub const TEXTURES: [u32; 33] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
     0x0300_0177, 0x0300_0178, 0x0300_0179, 0x0300_017a, 0x0300_017b];
 
 /// The 0700001b missile-status pane (pane 20: `SpacePane` 0x2be598 = {x 0, y 0, flags 0, create
@@ -822,6 +822,30 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
                 else { (0x0300_0174u32, (timer as u32 * 255 / 30).max(1)) };
             let (tw, th) = h.tex_dims(tex);
             h.quad(Anchor::Left, 29, tex, 0, 48.0, 48.0, tw, th, [0.0, 0.0, tw, th], (false, false), gs(0x7f7f7f, a));
+        }
+    }
+    // The 007 Bond-moment flash (health pane sprite 16 [M HUD_UpdateHealthPane 0x19b9c8:78 —
+    // pane+0x40], template HealthSprInfo[16]: tex 0x0300005B, flags 0x1800 = centred + clip,
+    // colour 0x7f7f7fff, w/h 0 = the texture's own size [D the table via HudTables]). While
+    // `BL+0x948` ≥ 1 [M :231-260]: position (0x100, 0x50) = (256, 80), centred (flag 0x800);
+    // above 100 the draw size is +0x2c = texw·f and +0x2e = texh·f·|s| with f = (200 − t)·0.01 and
+    // s = PS2Sinf((t − 100)·4·0.03141593 + π/2), the V extent +0x36 negated while s < 0 (the
+    // logo tumbles twice as it grows), both `(short)(int)` truncated; from 100 down it is
+    // shown with the sizes the last animated tick (t = 101) left — the game stops writing
+    // them. +0x38 = 0 (the bottom layer); at 0 the sprite hides (0xff).
+    {
+        let t = s.hud.bond_moment_flash as i32;
+        if t >= 1 {
+            let tex = 0x0300_005bu32;
+            let (tw, th) = h.tex_dims(tex);
+            if tw > 0.0 {
+                let ta = t.max(101);
+                let f = (200 - ta) as f32 * 0.01;
+                let sn = nf_game::trig::sinf(((ta - 100) * 4) as f32 * 0.031_415_93 + 1.570_796_4);
+                let w = ((tw * f) as i32) as f32;
+                let hh = ((th * f * sn.abs()) as i32) as f32;
+                h.quad(Anchor::Centre, 0, tex, 0, 256.0 - w / 2.0, 80.0 - hh / 2.0, w, hh, [0.0, 0.0, tw, th], (false, sn < 0.0), gs(0x7f7f7f, 0xff));
+            }
         }
     }
     // The context icon (health pane sprite 18, `HUD_UpdateHealthPane` 0x19b9c8:273-303 —

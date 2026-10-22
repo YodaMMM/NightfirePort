@@ -6263,6 +6263,11 @@ pub fn run() -> Result<()> {
                 if let Some((ct, cc)) = std::env::var("NF_CH_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))) {
                     if ct == t { let f = sim.drones.frame; sim.drones.channels.set(cc, 1, f); }
                 }
+                // Render aid (bond-moment-flash): `NF_MOMENT_AT=t` marks Bond moment 0x65 done on tick t
+                // (the BondMoments entry PlrStat_DoneBondMoment sets), so the HUD's 007 flash runs.
+                if std::env::var("NF_MOMENT_AT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(t) {
+                    sim.drones.progress.bond_moments[0] = 1;
+                }
                 // `NF_BREAK_AT=t:i`: breakable #i is killed on tick t through `Breaks::kill` (the shot's
                 // kill path) with a ray from Bond's head to the box centre.
                 if let Some((bt, bi)) = std::env::var("NF_BREAK_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<usize>().ok()?)))) {
