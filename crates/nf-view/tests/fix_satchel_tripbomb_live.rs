@@ -232,17 +232,19 @@ fn tripbomb_arms_draws_the_beam_and_a_guard_crossing_sets_it_off() {
     assert!(!sim.drones.list[gi].corpse, "the off-beam guard is untouched");
 }
 
-/// The 6-placed cap [M `Bullet_CollisionHandler` 0x12ce80:336-371]: never more than 6 placed
-/// tripbombs — the walk collects the class-5 objects matching the same weapon record (+0xe0→+0x44)
-/// and owner (+0xe0→+0x30), counts them (`bVar4 = iVar20 < 6`), and on the 7th marks the OLDEST
-/// dead (`+0xfe |= 1` — the same "dead" bit `Explode_Propagate` 0x17c518:78 and
-/// `MP_isPlayerOrBotDead` 0x18abc0:20 skip on). "Oldest" = the minimum `obj+0xEC`, which is the
-/// object's birth tick: `Pickup_Handler` 0x18e650:347 writes `obj+0xEC = GameState+0x34` (the
-/// global tick counter [L ee_start_05: 0x2a3768+0x34 = 55165 mid-game]; the MP spawner
-/// `MP_ReSpawn` 0x185368:90 stamps the same field). The port trims to the last 6 in spawn order —
-/// the same ordering the birth tick gives [S for the exact tie-break].
+/// The placed cap [M `Bullet_CollisionHandler` 0x12ce80:332-376]: the 0x80000 stick arm walks the
+/// class-5 objects matching the same weapon record (+0xe0→+0x44) and owner (+0xe0→+0x30) — with NO
+/// state filter and NO self-exclusion, so the sticking bullet counts itself — and when the count is
+/// NOT < 6 (`slti $v0,$s5,6`) marks the minimum-obj+0xEC one dead (`+0xfe |= 1` — the same "dead"
+/// bit `Explode_Propagate` 0x17c518:78 and `MP_isPlayerOrBotDead` 0x18abc0:20 skip on). obj+0xEC is
+/// the birth tick — `control_init_object` 0x134630:13-15 stamps the global frame counter into every
+/// new object (Bullet_init never overwrites it) — so "oldest" = earliest-created = the port's spawn
+/// order [S for the exact tie-break: same-tick ties evict the NEWEST of the pair over the game's
+/// newest-first walk]. Because the bullet counts itself, the 6th stick (5 placed + self) already
+/// evicts: the settled cap is 5 PLACED, not 6. The port used to keep 6 (its `> 6` trim fired on the
+/// 7th) — fixed to `>= 6` per the walk.
 #[test]
-fn the_seventh_tripbomb_removes_the_oldest() {
+fn the_sixth_tripbomb_evicts_the_oldest() {
     let Some(iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     let mut scene = load(&iso);
     let sim = scene.sim.as_mut().unwrap();
@@ -250,11 +252,11 @@ fn the_seventh_tripbomb_removes_the_oldest() {
     sim.disabled = false;
     for _ in 0..5 { sim.step_bond(Input::default(), false, false, false); }
     let Some((_hit, normal)) = find_wall(sim, sim.bond.pos) else { eprintln!("skip: no wall near Bond's start"); return };
-    // 7 stuck + armed tripbombs lifted 3 m above the floor and spread along the beam's side
+    // 6 stuck + armed tripbombs lifted 3 m above the floor and spread along the beam's side
     // direction, so no beam line comes within the 1.0 trigger radius of Bond (feet) or a guard.
     let side = side_of(normal);
     let base = sim.bond.pos;
-    for k in 0..7 {
+    for k in 0..6 {
         let mut g = thrown(sim, base, normal, 0x3a);
         g.pos = [base[0] + side[0] * k as f32 * 0.5, base[1] + 3.0, base[2] + side[2] * k as f32 * 0.5];
         g.velocity = [0.0; 3];
@@ -264,8 +266,49 @@ fn the_seventh_tripbomb_removes_the_oldest() {
         sim.drones.grenades.push(g);
     }
     for _ in 0..3 { sim.step_bond(Input::default(), false, false, false); }
-    let placed = sim.drones.grenades.iter().filter(|g| g.weapon_type == 0x3a && g.stuck && g.state < 2).count();
-    assert_eq!(placed, 6, "the 6-placed cap [M 0x12ce80:335-370] — pre-fix the port kept all 7, got {placed}");
+    let alive = sim.drones.grenades.iter().filter(|g| g.weapon_type == 0x3a && g.stuck && g.state < 2).count();
+    assert_eq!(alive, 5, "the 6th stick evicts the oldest (5 placed + self = 6 ≥ 6) [M 0x12ce80:344-376] — pre-fix the port kept 6, got {alive}");
+    assert_eq!(sim.drones.grenades.first().map(|g| g.state), Some(2),
+        "the FIRST-pushed (oldest birth tick [M control_init_object 0x134630:13-15]) is the one marked");
+    assert!(sim.drones.grenades.iter().skip(1).all(|g| g.state < 2), "the other five stay placed");
+}
+
+/// Sister (the per-weapdef cap): the game compares the weapon-RECORD POINTER (instance+0x44) per
+/// match [M 0x12ce80:342], so the tripbomb 0x3a and the remote mine 0x37 hold independent
+/// counters — 5 tripbombs + 1 mine place 6 objects and nothing is evicted. The old pooled cap
+/// (one 6-counter over `0x3a | 0x37`) would trim the mine (or a tripbomb) here.
+#[test]
+fn five_tripbombs_and_one_mine_all_stay() {
+    let Some(iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };
+    let mut scene = load(&iso);
+    let sim = scene.sim.as_mut().unwrap();
+    sim.bond = Bond::new([100.0, 26.0, 108.0], sim.bond.yaw);
+    sim.disabled = false;
+    for _ in 0..5 { sim.step_bond(Input::default(), false, false, false); }
+    let Some((_hit, normal)) = find_wall(sim, sim.bond.pos) else { eprintln!("skip: no wall near Bond's start"); return };
+    let side = side_of(normal);
+    let base = sim.bond.pos;
+    for k in 0..5 {
+        let mut g = thrown(sim, base, normal, 0x3a);
+        g.pos = [base[0] + side[0] * k as f32 * 0.5, base[1] + 3.0, base[2] + side[2] * k as f32 * 0.5];
+        g.velocity = [0.0; 3];
+        g.stuck = true;
+        g.state = 1;
+        g.phase = Some(Box::new(nf_game::grenade::StuckGadget { normal, arm: 0.0, armed: true, last_qs: 0, digits: None }));
+        sim.drones.grenades.push(g);
+    }
+    let mut m = thrown(sim, base, normal, 0x37);
+    m.pos = [base[0] - side[0] * 0.5, base[1] + 3.0, base[2] - side[2] * 0.5];
+    m.velocity = [0.0; 3];
+    m.stuck = true;
+    m.state = 1;
+    m.phase = Some(Box::new(nf_game::grenade::StuckGadget { normal, arm: 0.0, armed: true, last_qs: 0, digits: None }));
+    sim.drones.grenades.push(m);
+    for _ in 0..3 { sim.step_bond(Input::default(), false, false, false); }
+    let trips = sim.drones.grenades.iter().filter(|g| g.weapon_type == 0x3a && g.stuck && g.state < 2).count();
+    let mines = sim.drones.grenades.iter().filter(|g| g.weapon_type == 0x37 && g.stuck && g.state < 2).count();
+    assert_eq!((trips, mines), (5, 1),
+        "independent per-record counters [M 0x12ce80:342 — the weapdef pointer compare] place all 6");
 }
 
 /// The real fire path (the dev panel's own give → the game's loadout grant, the same path the

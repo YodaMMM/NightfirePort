@@ -13574,6 +13574,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.tick_inner(d, player);
     }
 
+    /// The placed (stuck, alive) grenade ids of ONE weapon id, oldest first — the cap walk's
+    /// per-weapdef count set (`Bullet_CollisionHandler` 0x12ce80:332-351 counts class-5 bullets
+    /// with the same weapon-record pointer + owner; the port's SP path has a single owner).
+    fn placed_grenade_ids(&self, weapon_type: u16) -> Vec<usize> {
+        self.grenades.iter().enumerate()
+            .filter(|(_, g)| g.weapon_type == weapon_type && g.stuck && g.state < 2)
+            .map(|(i, _)| i).collect()
+    }
+
     fn tick_inner(&mut self, d: &Data, player: &Player) {
         // options-census: the health-pane fade alpha decays while the Advanced row (0x1000_023b,
         // PlayerSetting+0x0b) is set [M Player_Update 0x193600:414-429 — BLData+0x8bc loses
@@ -16090,17 +16099,32 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 else { dr.send(d, &mut self.rng, frame, msg::BULLET); }
             }
         }
-        // fix-satchel-tripbomb: the tripbomb's 6-placed cap [M `Bullet_CollisionHandler` 0x12ce80:335-370
-        // — the 0x80000 stick arm walks the objects, counts the same-weapdef same-owner type-5 bullets
-        // and marks the oldest (obj+0xEC smallest [*suggested*: the port's spawn order]) `+0xFE |= 1`
-        // past 6]. Applied every tick over the placed set — the net effect matches.
+        // fix-satchel-tripbomb: the tripbomb's placed cap [M `Bullet_CollisionHandler` 0x12ce80:332-376
+        // — the 0x80000 stick arm walks DynamicObjList newest-first (`control_first_object` 0x134300
+        // → the +0x14 chain the add prepends 0x134698), counts the class-5 (+0xFF == 5) bullets with
+        // the sticking bullet's own weapon record (+0xe0→+0x44 pointer) and owner (+0xe0→+0x30),
+        // and when that count is ≥ 6 (`slti $v0, $s5, 6` fails) marks the minimum obj+0xEC one
+        // `+0xFE |= 1` (0x12d424-30; the movement delete pass then removes it silently, no
+        // explosion)]. obj+0xEC IS the birth tick — `control_init_object` 0x134630:13-15 writes
+        // `GameState._52_4_` (the global frame counter) into every new object, and Bullet_init never
+        // overwrites it — so "oldest" = earliest-created = the port's spawn order (the port appends
+        // grenades in creation order). The count includes the sticking bullet ITSELF (no self-exclusion,
+        // no state filter — in-flight same-weapdef siblings count too), so the mark fires on the 6th
+        // stick (5 placed + self) and the settled cap is 5 placed, not 6. Applied every tick over the
+        // placed set — the net effect matches (the in-flight-sibling edge: two same-weapdef projectiles
+        // airborne at one stick moment, unreachable through the ≥26-tick refire).
         // fix-remote-mine-play: the mine 0x37's stick arm carries the same walk [M 0x12ce80:296-330 —
-        // the record's base id 0x37, count < 6, else the oldest `+0xFE |= 1`]; its placed set joins
-        // the same every-tick consumer.
-        let mut placed: Vec<usize> = self.grenades.iter().enumerate()
-            .filter(|(_, g)| matches!(g.weapon_type, 0x3a | 0x37) && g.stuck && g.state < 2)
-            .map(|(i, _)| i).collect();
-        while placed.len() > 6 { let i = placed.remove(0); self.grenades[i].state = 2; }
+        // the record's base id 0x37, same count/mark]; the cap is PER WEAPON RECORD (the game compares
+        // the weapdef POINTER, so 0x3a and 0x37 hold independent counters — five tripbombs plus one
+        // mine place six objects), so each id trims its own set here. The satchel family 0x3b-0x40 has
+        // NO cap walk (the id==0x3b arm 0x12ce80:320-324 is sound+park only). Residual [S unverified]:
+        // same-tick ties — the game's strict `<` over the newest-first walk evicts the NEWEST of a
+        // tied pair, the port's first-pushed pick the oldest (one throw per refire interval makes
+        // same-tick ties unreachable in practice).
+        let mut placed_trip = self.placed_grenade_ids(0x3a);
+        let mut placed_mine = self.placed_grenade_ids(0x37);
+        while placed_trip.len() >= 6 { let i = placed_trip.remove(0); self.grenades[i].state = 2; }
+        while placed_mine.len() >= 6 { let i = placed_mine.remove(0); self.grenades[i].state = 2; }
         // fix-satchel-tripbomb: the tripbomb's laser [M `Bullet_update` case 3, the `+0x70 & 0x80000`
         // arm 0x12efb8-0x12efc8 + `PositionBeam` 0x1a9400]: per ARMED stuck tripbomb, the ray from the
         // stuck position along +normal (the stick matrix Z = −normal [M 0x12ce80:266]; the beam end =
