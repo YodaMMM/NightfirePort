@@ -5121,6 +5121,12 @@ impl App {
                                     self.cam.yaw += pt + self.turn;
                                     let pitch = (sim.bond.pitch + pl + self.look).clamp(-1.0, 1.0);
                                     self.cam.pitch = pitch * std::f32::consts::FRAC_PI_2;
+                                    // Measurement aid (NF_CAMLOG, the 0.1.18 release check): the view's
+                                    // yaw against the shared sim's each frame — the lead is the input the
+                                    // lockstep has scheduled but not yet run.
+                                    if std::env::var_os("NF_CAMLOG").is_some() {
+                                        eprintln!("[camlog] tick {} sim_yaw {:.4} cam_yaw {:.4} pending_turn {:.4}", self.net_tick, sim.bond.yaw, self.cam.yaw, pt);
+                                    }
                                 }
                             }
                             // A script's cut-scene camera takes over the view (`Camera_Enable(4)`).
