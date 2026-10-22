@@ -6225,9 +6225,11 @@ fn muzzle_flash_matrix(datum: &Mat4, seed: u32) -> Mat4 {
 /// Bullet tracer matrix: local +Z along the bullet (`Mat_Align2Dir`), scaled by its speed (one tick of travel).
 fn tracer_matrix(b: &nf_game::bullet::Bullet) -> Mat4 {
     let d = b.dir;
-    let yaw = d[0].atan2(d[2]);
-    let pitch = -d[1].atan2((d[0] * d[0] + d[2] * d[2]).sqrt());
-    let mut m = nf_formats::placement::object_matrix([pitch, yaw, 0.0], b.pos);
+    // R6 class sweep (2026-10-22): `Mat_Align2Dir(dir, (0,1,0), (1,0,0))` [M Bullet_init 0x12c5a0:185] —
+    // the placement-euler `object_matrix([pitch, yaw, 0])` this used is a different rotation order
+    // (z row (sin y, −sin x·cos y, cos x·cos y)) and bent every steep, angled tracer off its line.
+    let mut m = nf_game::searchlight::align2dir(d, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+    m[3] = [b.pos[0], b.pos[1], b.pos[2], 1.0];
     for k in 0..3 { m[2][k] *= b.speed; }
     m
 }
@@ -8588,9 +8590,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
                     let Some(t) = self.sim.as_ref().and_then(|s| s.mp_tracer(slot - MP_TRACER_BASE)) else { return far };
                     let d = t.dir;
-                    let yaw = d[0].atan2(d[2]);
-                    let pitch = -d[1].atan2((d[0] * d[0] + d[2] * d[2]).sqrt());
-                    let mut m = nf_formats::placement::object_matrix([pitch, yaw, 0.0], t.pos);
+                    // R6 class sweep: the tracer's Mat_Align2Dir, as `tracer_matrix` [M 0x12c5a0:185].
+                    let mut m = nf_game::searchlight::align2dir(d, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+                    m[3] = [t.pos[0], t.pos[1], t.pos[2], 1.0];
                     let len = t.speed.min(t.left.max(0.0));
                     for c in 0..3 { m[2][c] *= len; }
                     return m;
@@ -8702,7 +8704,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let v = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
                     let yaw = v[0].atan2(v[2]);
                     let pitch = -v[1].atan2((v[0] * v[0] + v[2] * v[2]).sqrt());
-                    let mut m = nf_formats::placement::object_matrix([pitch, yaw, 0.0], a);
+                    // R6 (2026-10-22): the beam object's matrix is `Control_GetObjMatrix` 0x134210 →
+                    // `View_RotTransMatrix` 0x1e5168 on these angles (z row (cos x·sin y, −sin x,
+                    // cos x·cos y)) — `aivolume::matrix` is that builder. The placement-euler
+                    // `object_matrix` put the far end off the crosshair on steep, angled shots
+                    // (the 05 snow capture vs PCSX2). Scale z only [M 0x134210: +0xFA bit 1].
+                    let mut m = nf_game::aivolume::matrix([pitch, yaw, 0.0], a);
                     for k in 0..3 { m[2][k] *= len; }
                     return m;
                 }
@@ -11878,6 +11885,28 @@ mod tests {
         for k in 0..3 { e[2][k] *= len; }
         let efar = nf_formats::placement::transform(&e, [0.0, 0.0, -1.0]);
         assert!((0..3).any(|k| (efar[k] - b[k]).abs() > 0.05), "the euler build should miss: {efar:?}");
+    }
+
+    /// R6: the laser beam's matrix is `View_RotTransMatrix` 0x1e5168 on the beam's spherical angles
+    /// (x = −elevation, y = azimuth of start − end [M Draw_LaserBeam 0x1a4560:65-70]), z scaled by the
+    /// length — so the sprite's −z end lands on the hit for any steep, angled beam. Sister: the
+    /// placement-euler `object_matrix` on the same angles misses it.
+    #[test]
+    fn laser_beam_far_end_lands_on_the_hit() {
+        let a = [1.0f32, 2.0, 3.0];
+        let b = [4.0f32, -1.5, 7.5]; // down, right and away — steep and angled
+        let v = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        let yaw = v[0].atan2(v[2]);
+        let pitch = -v[1].atan2((v[0] * v[0] + v[2] * v[2]).sqrt());
+        let mut m = nf_game::aivolume::matrix([pitch, yaw, 0.0], a);
+        for k in 0..3 { m[2][k] *= len; }
+        let far = nf_formats::placement::transform(&m, [0.0, 0.0, -1.0]);
+        for k in 0..3 { assert!((far[k] - b[k]).abs() < 1e-3, "beam end {far:?} vs the hit {b:?}"); }
+        let mut e = nf_formats::placement::object_matrix([pitch, yaw, 0.0], a);
+        for k in 0..3 { e[2][k] *= len; }
+        let off = nf_formats::placement::transform(&e, [0.0, 0.0, -1.0]);
+        assert!((0..3).map(|k| (off[k] - b[k]).abs()).fold(0.0f32, f32::max) > 0.5, "the placement euler misses the hit: {off:?}");
     }
 }
 
