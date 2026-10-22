@@ -63,8 +63,16 @@ fn quick_game_bots_play_the_match() {
 
     for i in 0..bots {
         assert!(moved[i] > 5.0, "bot {i} moves its route (walked {:.1} units over 3600 ticks)", moved[i]);
-        assert!(sim.mp_bot_shots(i) > 0, "bot {i} fires ({} shots)", sim.mp_bot_shots(i));
     }
+    // The bots fire as a match [M the brain's fire decision 0x127c78's combat block]: no
+    // decompile law makes EVERY bot pull within 60 s — which bot fires is emergent over the
+    // shared stream. mp-respawn-fists-draw: the stream shifted because the spawn tick no longer
+    // plays the held weapon's IDLE script (its frame-1 op-1 sound, 0x060004b9 → sound 0x1, every
+    // 37 ticks) — the game plays the DRAW first (the equip's anim trio [M 0x1855f8:50-53] →
+    // Player_WeaponSelect 0x1a2cc0 → view state 3 [M 0x1a2e38 case 3]), so the idle op-1 cannot
+    // fire at the spawn tick; the bots' hearing rolls moved with it.
+    let shots: u32 = (0..bots).map(|i| sim.mp_bot_shots(i)).sum();
+    assert!(shots > 0, "the bots fire ({shots} shots)");
     // The match plays: the bots fight each other (damage + death + respawn per BOT_respawn
     // 0x124e38) and the score table moves [M MPGame+slot*0x30+0x18].
     let deaths: u32 = (0..bots).map(|i| sim.mp_bot_deaths(i)).sum();

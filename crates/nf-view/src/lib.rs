@@ -1523,13 +1523,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // and nothing else [M 0x1a7ef8:143-145]; the per-level switch below it (whose default
             // arm handed the arenas the give-everything kit) never runs in MP.
             sim.mp_weapon_loaded = (0..0x72u8).map(loaded).collect();
-            sim.mp_equip_local();
+            // mp-respawn-fists-draw: the equip leaves the fists 0x47 held with the spawn weapon
+            // pending [M 0x1855f8:50-53 via 0x1a7ef8:143-145] — the draw runs on the first
+            // step's switch machinery. It returns the equipped id for the gate seed below
+            // (gun.weapon is 0x47 right after the equip).
+            let equipped = sim.mp_equip_local();
             // mp-shot-gate: every human slot's shared fire gate, seeded with the same equip
             // (docs/systems/mp-shot-gate.md) — the rate/ammo/holding check every machine applies
             // to every slot's shot description.
             let humans = (sim.mp.as_ref().unwrap().settings.human_count as usize).clamp(1, nf_net::MAX_AGENTS);
             sim.mp_combat.gate_setup(humans, &sim.mp.as_ref().unwrap().settings, &sim.weapons, loaded);
-            sim.gun.weapon
+            equipped
         } else {
             nf_game::player::init_level_loadout(level_id, save, &mut sim.drones.health,
                 &mut sim.drones.inventory, &mut sim.drones.channels, &sim.weapons, loaded)
@@ -3395,8 +3399,11 @@ impl App {
             if let Some(sim) = self.scene.sim.as_mut() {
                 sim.swap_local_slot(self.net_local_slot);
                 // The joiner's own slot's loadout (the scenario bonus weapon keys on its team).
+                // mp-respawn-fists-draw: the equip leaves the fists 0x47 held with the spawn
+                // weapon pending [M 0x1855f8:50-53] — the draw runs on the joiner's own machine
+                // like every other spawn's (the old `switch_request = gun.weapon` line cancelled
+                // that pending draw and left the joiner on the fists for good).
                 sim.mp_equip_local();
-                sim.gun.switch_request = sim.gun.weapon;
                 self.cam = Camera { pos: Vec3::new(sim.bond.pos[0], sim.bond.pos[1] + 1.6, sim.bond.pos[2]), yaw: sim.bond.yaw, pitch: 0.0, fov: GAME_FOV };
             }
         }

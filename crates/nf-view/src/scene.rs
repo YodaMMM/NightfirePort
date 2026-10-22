@@ -9571,8 +9571,20 @@ impl Sim {
     /// the gun drawn [M; see nf_game::mp::equip]. Every MP spawn runs it (the load, each respawn,
     /// the late join); the port used to hand out the P2K (and the load the SP default arm's
     /// give-everything kit) whatever the set.
-    pub fn mp_equip_local(&mut self) {
-        let Some(m) = self.mp.as_ref() else { return };
+    ///
+    /// mp-respawn-fists-draw: the equip does NOT hold the spawn weapon. Its tail writes the anim
+    /// trio `+0x64 = 0x47`, `+0x62 = 0x47` (the held id — the fists, the same bytes
+    /// `Player_WeaponNone` 0x1a9858:12-14 writes) and `+0x63 = the spawn weapon` (the pending
+    /// switch request), then zeroes the view state `+0xf4` [M 0x1855f8:50-53]. `Player_InitWeapon`
+    /// 0x1a7ef8:137-139 writes the same `+0x64/+0x62 = 0x47` pair before the MP arm calls it, so
+    /// EVERY spawn — the load, the respawn, the late join — holds the fists for a tick and the
+    /// spawn weapon comes in through the normal weapon switch: `Player_SetWeaponAnimObj` 0x1a2e38
+    /// (default state) notices `+0x63 != +0x62`, and `Player_WeaponSelect` 0x1a2cc0 direct-draws
+    /// (the fists row has no holster script, `weapon_data[0x47]+0xc4 == 0` [M the same field read]
+    /// → `+0x62 = +0x63`, view state 3, the draw script). The port returns the equipped id so the
+    /// load path can seed the shot gates with the real weapon (gun.weapon is 0x47 right after).
+    pub fn mp_equip_local(&mut self) -> u8 {
+        let Some(m) = self.mp.as_ref() else { return 0 };
         let row = nf_game::mp::equip::weapon_row(&m.settings);
         let loaded = &self.mp_weapon_loaded;
         let lf = |w: u8| loaded.get(w as usize).copied().unwrap_or(true);
@@ -9580,12 +9592,21 @@ impl Sim {
         let wi = req as usize;
         let clip = self.drones.inventory.clip.get(wi).copied().unwrap_or(0).max(0) as u32;
         let spare = self.drones.inventory.carried.get(self.weapons.ammo_type(wi)).copied().unwrap_or(0).max(0) as u32;
-        self.gun = nf_game::gun::Gun::new(req, clip, spare);
-        self.drones.bond_weapon = req;
+        // The trio: held = fists, saved = fists, request = the spawn weapon, view state idle —
+        // the draw runs on the next step's switch machinery [M 0x1855f8:50-53].
+        self.gun = nf_game::gun::Gun::new(0x47, clip, spare);
+        self.gun.switch_request = req;
+        self.gun.saved_weapon = 0x47;
+        self.gun.switch_state = 0;
+        // The AI's class byte (obj+0xdc+0x62) reads the fists on the equip tick [M 0x1855f8:51];
+        // the switch machinery's own rule takes over from the draw tick on (run()'s bond_weapon
+        // write — the target weapon mid-switch).
+        self.drones.bond_weapon = 0x47;
         if std::env::var_os("NF_MP_EQUIP_LOG").is_some() || std::env::var_os("NF_LOBBY_DBG").is_some() {
             let owned: Vec<usize> = (0..self.drones.inventory.owned.len()).filter(|&i| self.drones.inventory.owned[i]).collect();
-            eprintln!("[mp-equip] slot {} set {} row {:?} -> weapon {:#x} clip {} spare {} owned {:x?}", self.mp_local_slot, m.settings.weapon_set, row, req, clip, spare, owned);
+            eprintln!("[mp-equip] slot {} set {} row {:?} -> weapon {:#x} clip {} spare {} owned {:x?} (held fists, draw pending)", self.mp_local_slot, m.settings.weapon_set, row, req, clip, spare, owned);
         }
+        req
     }
 
     pub fn swap_local_slot(&mut self, slot: usize) {

@@ -13,10 +13,22 @@
 //! weapon with `clip_size·2` rounds, and the machines' shot gates re-seed the same way
 //! (scene.rs:10713 local `mp_equip_local`, :10720 `gate_equip` on every machine).
 //!
+//! mp-respawn-fists-draw: the equip does NOT hold the spawn weapon. Its tail writes the anim
+//! trio `+0x64 = 0x47`, `+0x62 = 0x47` (held = fists) and `+0x63 = the spawn weapon` (the
+//! pending switch request), then zeroes the view state [M 0x1855f8:50-53] — and
+//! `Player_InitWeapon` 0x1a7ef8:137-139 writes the same pair before the MP arm, so every spawn
+//! (the load included) holds the fists for a tick and the spawn weapon arrives through the
+//! normal weapon switch: the default view state notices `+0x63 != +0x62` and
+//! `Player_WeaponSelect` 0x1a2cc0 direct-draws (the fists row has no holster script) [M
+//! 0x1a2cc0:33-35 → 0x1a2e38 case 3]. The port had equipped the spawn weapon instantly; it now
+//! mirrors the trio and lets its own switch machinery draw.
+//!
 //! Tests (NF_ISO-gated — the arenas load from the disc; NF_SILENT, numbers only):
 //! - a 2-machine kill: the victim's gun is 0x47 while dead, the remote view holds the fists, the
 //!   kit is back with clip_size·2 after the 300-tick gate and the gates agree; sister: the
 //!   killer's gun is untouched (never 0x47, no re-grant).
+//! - the respawn tick holds the fists with the spawn weapon pending; the draw takes it a few
+//!   ticks later (the held flips, the draw script plays, the switch settles).
 //! - a 3-machine run with two deaths: `net_state_hash` equal on all three machines every tick.
 //!
 //! The one-sample lag of the byte behind the kill tick is the app's input-sampling order (the
@@ -138,6 +150,19 @@ impl Pair {
     fn idle(&mut self, n: u32) {
         for _ in 0..n { self.tick(&[NEUTRAL; N]); }
     }
+    /// The equip leaves the fists 0x47 held with the spawn weapon pending [M 0x1855f8:50-53];
+    /// the draw runs on the next ticks through the normal switch [M 0x1a2cc0 + 0x1a2e38]. Ticks
+    /// both machines (the hashes agree every tick) until each local player holds `w` idle again.
+    fn wait_drawn(&mut self, w: u8) {
+        for _ in 0..180u32 {
+            let row = self.row();
+            self.tick(&row);
+            let (a, b) = (self.sa(), self.sb());
+            if a.gun.weapon == w && a.gun.switch_state == 0
+                && b.gun.weapon == w && b.gun.switch_state == 0 { return; }
+        }
+        panic!("the spawn weapon {w:#04x} never finished drawing on both machines");
+    }
     fn body(&self, slot: usize) -> nf_game::player::Bond {
         let s = self.sa();
         if slot == s.mp_local_slot { s.bond.clone() } else { s.mp_bonds[slot].clone().unwrap() }
@@ -170,6 +195,15 @@ impl Pair {
 fn online_kill_victim_holds_the_fists_wire_byte_and_the_kit_returns() {
     let mut p = Pair::new(0x0700_0023);
     let w = spawn_weapon();
+    // The load's equip (`Player_InitWeapon` 0x1a7ef8:143-145 → MP_EquipPlayer) leaves the fists
+    // 0x47 held with the spawn weapon pending [M 0x1855f8:50-53; the SP arm writes the same
+    // +0x64/+0x62 pair at 0x1a7ef8:137-139] — the draw comes through the normal switch.
+    assert_eq!(p.sa().gun.weapon, FISTS, "fresh load (A): the fists are held [M 0x1855f8:51]");
+    assert_eq!(p.sa().gun.switch_request, w, "fresh load (A): the spawn weapon is the switch request [M 0x1855f8:52]");
+    assert_eq!(p.sb().gun.weapon, FISTS, "fresh load (B): the fists are held [M 0x1855f8:51]");
+    assert_eq!(p.sb().gun.switch_request, w, "fresh load (B): the spawn weapon is the switch request [M 0x1855f8:52]");
+    // The draw completes on both machines through the port's switch machinery [M 0x1a2cc0].
+    p.wait_drawn(w);
     // Sister baseline: the killer holds the set's spawn weapon, the kit fresh.
     assert_kit(p.sa(), w, "fresh start (the killer, machine A)");
     assert_kit(p.sb(), w, "fresh start (the victim, machine B)");
@@ -237,15 +271,45 @@ fn online_kill_victim_holds_the_fists_wire_byte_and_the_kit_returns() {
     assert!(death_active_samples >= 250, "the fists window is the game's 5 s (300 ticks [M 0x190bb0:41]); got {death_active_samples}");
     assert_eq!(death_active_samples, fists_samples, "every death-active sample carried 0x47 — no other byte in the window");
 
-    // The respawn re-equips on the victim's machine [M 0x185368:78 → 0x1855f8:14-53].
+    // The respawn re-equips on the victim's machine [M 0x185368:78 → 0x1855f8:14-53]. At the
+    // respawn tick the anim trio holds: the fists 0x47 in the held id and the saved id, the
+    // spawn weapon in the pending slot, the view state idle [M 0x1855f8:50-53] — the spawn
+    // weapon comes in through the normal switch, not instantly.
     assert!(!p.sb().drones.death.active, "the death sequence is cleared at the respawn");
-    assert_kit(p.sb(), w, "respawn (machine B's local player)");
+    assert_eq!(p.sb().gun.weapon, FISTS, "respawn tick: the fists are held [M 0x1855f8:50-51]");
+    assert_eq!(p.sb().gun.switch_request, w, "respawn tick: the spawn weapon is the switch request [M 0x1855f8:52]");
+    assert_eq!(p.sb().gun.switch_state, 0, "respawn tick: the view state is idle [M 0x1855f8:53]");
+    assert_eq!(p.sb().gun.saved_weapon, FISTS, "respawn tick: the saved id is the fists [M 0x1855f8:50]");
+    // The kit is granted at the equip tick (the clip/carried split; the held assert waits for
+    // the draw below) — assert_kit's inventory half [M 0x1855f8:22-26].
+    {
+        let s = p.sb();
+        let cs = nf_game::pickup::Inventory::clip_slot(&s.weapons, w as usize);
+        let expect = s.weapons.clip_size(w as usize) as i16;
+        assert!(s.drones.inventory.owned.get(w as usize).copied().unwrap_or(false), "respawn: the spawn weapon is owned");
+        assert_eq!(s.drones.inventory.clip.get(cs).copied().unwrap_or(-1), expect, "respawn: clip holds clip_size");
+        assert_eq!(s.drones.inventory.carried.get(s.weapons.ammo_type(w as usize)).copied().unwrap_or(-1), expect, "respawn: carried holds clip_size");
+    }
+    // The draw runs on the next tick through the normal switch: the held flips to the request
+    // and the draw state starts [M 0x1a2e38 default state → 0x1a2cc0:33-35, the fists row has
+    // no holster script]. The remote view still shows the wire's fists byte this tick (the byte
+    // was sampled before the tick).
+    {
+        let row = p.row();
+        assert_eq!(row[1].held, FISTS, "the byte sampled at the respawn tick is still the fists");
+        p.tick(&row);
+    }
+    assert_eq!(p.sb().gun.weapon, w, "the draw tick: the held id flips to the spawn weapon [M 0x1a2cc0]");
+    assert_eq!(p.sb().gun.switch_state, 3, "the draw tick: the draw state runs [M 0x1a2cc0 → 0x1a2e38 case 3]");
+    p.wait_drawn(w);
+    assert_kit(p.sb(), w, "respawn (machine B's local player, the draw settled)");
     assert_eq!(p.sa().mp_hp[1], 100.0, "armor_bonus 0 + 100 [M 0x185368:71-73]");
     assert_eq!(p.sa().mp_armour[1], 0.0, "armour zeroed [M 0x185368:69]");
     assert_eq!(p.sa().mp_hp, p.sb().mp_hp, "the machines agree on the healths");
     assert_eq!(p.sa().mp_armour, p.sb().mp_armour, "the machines agree on the armours");
     // The next wire byte is the spawn weapon again (the kit is visible to everyone).
     assert_eq!(p.sb().gun.weapon, w, "the victim's gun after the respawn");
+    assert_eq!(p.sa().mp_body_held(1), p.row()[1].held, "the remote view follows the wire byte after the draw");
     // The shot gates agree on every machine: the re-seed holds the fresh kit on both.
     let ga = p.sa().mp_combat.gates[1].clone();
     let gb = p.sb().mp_combat.gates[1].clone();
@@ -289,6 +353,17 @@ impl Trio {
     fn idle(&mut self, n: u32) {
         for _ in 0..n { self.tick(&[NEUTRAL; N]); }
     }
+    /// The load's equip leaves the fists 0x47 held with the spawn weapon pending [M
+    /// 0x1855f8:50-53]; ticks all three machines until every local player holds `w` idle again
+    /// [M 0x1a2cc0 — the draw].
+    fn wait_drawn(&mut self, w: u8) {
+        for _ in 0..180u32 {
+            let row = self.row();
+            self.tick(&row);
+            if (0..3).all(|i| { let s = self.s(i); s.gun.weapon == w && s.gun.switch_state == 0 }) { return; }
+        }
+        panic!("the spawn weapon {w:#04x} never finished drawing on all three machines");
+    }
     fn body(&self, slot: usize) -> nf_game::player::Bond {
         let s = self.s(slot);
         if slot == s.mp_local_slot { s.bond.clone() } else { s.mp_bonds[slot].clone().unwrap() }
@@ -329,6 +404,10 @@ impl Trio {
 #[test]
 fn three_machines_deaths_keep_the_state_hash_equal() {
     let mut t = Trio::new(0x0700_0024);
+    // The load's draw settles on all three machines first (the equip leaves the fists held with
+    // the spawn weapon pending [M 0x1855f8:50-53]) — the kill's shot rows below assume the
+    // spawn weapon held.
+    t.wait_drawn(spawn_weapon());
     // Death 1: slot 0 kills slot 1; the whole 300-tick window and the respawn run on the
     // shared stream, the hashes equal on every machine every tick.
     let kill1 = t.kill(0, 1);
