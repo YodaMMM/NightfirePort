@@ -4514,6 +4514,13 @@ impl App {
                     }
                 }
                 let menu_hold = self.paused || self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::Pause);
+                // `GS_IsPaused` → the health pane writes BL+0x8BC = 1.0 every paused frame [M
+                // HUD_UpdateHealthPane 0x19b9c8:117-122]: a pause brings the faded panes back. Not
+                // online (the match runs on under one machine's pause page; a local sim write would
+                // desync the lockstep).
+                if menu_hold && self.net.is_none() {
+                    if let Some(sim) = self.scene.sim.as_mut() { sim.drones.pain_alpha = 1.0; }
+                }
                 if menu_hold != self.audio_paused {
                     self.audio_paused = menu_hold;
                     // The game's pause entry IS the SFXPaused setter: `MenuManager_Create` with
@@ -6263,6 +6270,9 @@ pub fn run() -> Result<()> {
                 if let Some((ct, cc)) = std::env::var("NF_CH_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))) {
                     if ct == t { let f = sim.drones.frame; sim.drones.channels.set(cc, 1, f); }
                 }
+                // Render aid (health-pane-fade): `NF_PANE_FADE=1` turns the pane-fade option on
+                // (`decay_gate`, PlayerSetting+0xB) from tick 1, so BL+0x8BC decays and the pane fades.
+                if t == 1 && std::env::var_os("NF_PANE_FADE").is_some() { sim.drones.decay_gate = true; }
                 // `NF_BREAK_AT=t:i`: breakable #i is killed on tick t through `Breaks::kill` (the shot's
                 // kill path) with a ray from Bond's head to the box centre.
                 if let Some((bt, bi)) = std::env::var("NF_BREAK_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<usize>().ok()?)))) {
