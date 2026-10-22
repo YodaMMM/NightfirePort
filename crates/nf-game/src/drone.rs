@@ -11623,7 +11623,50 @@ impl Drones {
             // obj+0x30 = the placement translation (the port's convention, cf. Shooter.pos) —
             // `GT_Track`'s distances and the muzzle read obj+0x30 [M 0x17f9c8:99-118].
             if let Some(mut t) = crate::gt::from_placement(i, &p.params) {
+                // `GT_Create`'s Script_Load pair [M 0017ffa0:100-109]: either load failing
+                // → obj+0xfe |= 1 and return 0 — no turret exists. The port's lib miss is
+                // that load failure.
+                if !self.scripts.lib.contains_key(&t.script_a) || !self.scripts.lib.contains_key(&t.script_b) { continue; }
                 t.pos = p.translation;
+                // ext+0x80: the create-time fire direction [M 0017ffa0:141-147] — facing 0
+                // reads `Mat_GetDir(obj+0x90)` (the matrix's forward row), else `Mat_GetUp`
+                // negated (the up row, negated).
+                let m = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                t.fire_dir = if t.facing == 0 { [m[2][0], m[2][1], m[2][2]] } else { [-m[1][0], -m[1][1], -m[1][2]] };
+                // The two `Script_Load`s run as script players: `Script_Play(_, 1)` is the
+                // LOOPING play [M 001db588:16-19 — the non-zero arg sets play |= 9],
+                // `Script_Update` both once at create [M 0017ffa0:112-116] — the port's
+                // mode-8 load beat (prime → start(true) + one update) is exactly that, and
+                // the walk ticks them every frame after (the fusebox/laser mount precedent).
+                // Mask 1 so the load beat runs; no gate, no out channel (GT drives them).
+                let base = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                let mount = |hash: u32| crate::nis::Player {
+                    placement: i,
+                    scripts: [hash, 0],
+                    modes: [8, 0],
+                    stay: false,
+                    mask: 1,
+                    out: 0,
+                    gate: 0,
+                    scale: 1.0,
+                    matrix: base,
+                    cur: 0,
+                    state: 0,
+                    activated: false,
+                    countdown: 0,
+                    info: [None, None],
+                    deleted: false,
+                    live_matrix: base,
+                    subs: Vec::new(),
+                    hit_points: 0.0,
+                    damage: 0.0,
+                    tick_damage: 0.0,
+                    hidden: false,
+                };
+                t.script_player_a = self.scripts.players.len();
+                self.scripts.players.push(mount(t.script_a));
+                t.script_player_b = self.scripts.players.len();
+                self.scripts.players.push(mount(t.script_b));
                 self.gt_turrets.push(t);
             }
         }
@@ -13918,6 +13961,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let mut gt_events: Vec<(usize, crate::gt::GTEvent)> = Vec::new();
             for (ti, t) in self.gt_turrets.iter_mut().enumerate() {
                 if t.delete_flag { continue; }
+                // GT_Update's top ticks BOTH scripts then reads their +0x9c [M 0x180498:111-112,
+                // 232-233]. The port's script players tick later in the control walk (they are
+                // walk members, placement order) — the read here is the walk's last state: the
+                // park edges land one tick late vs the game (documented skew).
+                let delay = |scripts: &crate::nis::Scripts, idx: usize| -> i32 {
+                    scripts.players.get(idx).and_then(|p| p.info[p.cur].as_ref()).map_or(0, |s| s.delay)
+                };
+                t.scripts_done = delay(&self.scripts, t.script_player_a) != 0
+                    && delay(&self.scripts, t.script_player_b) != 0;
                 let ctx = crate::gt::GTCtx {
                     channels: chans,
                     mp: false, // the port's drone AI is SP-only (MPSettings stays 0)
@@ -13928,16 +13980,37 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 };
                 let mut out = Vec::new();
                 t.update(&ctx, &mut self.rng, &mut out);
+                // The rewind writes land at once: zero both mounted players' delays so the
+                // looping deploy/fold anims replay from their parks [M 0x180498:223-227,
+                // 256-261 — the game's own +0x9c = 0 writes].
+                if out.iter().any(|e| matches!(e, crate::gt::GTEvent::RewindScripts)) {
+                    for idx in [t.script_player_a, t.script_player_b] {
+                        if let Some(p) = self.scripts.players.get_mut(idx) {
+                            if let Some(s) = p.info[p.cur].as_mut() { s.delay = 0; }
+                        }
+                    }
+                }
                 for e in out { gt_events.push((ti, e)); }
             }
             self.gt_turrets.retain(|t| !t.delete_flag);
             for (ti, e) in gt_events {
                 match e {
-                    // One `Bullet_init` shot [M 0x180498 case 4/7]: the sound rides the pool;
-                    // the bullet itself needs the weapon-96 record walk (a follow-up — the
-                    // event carries muzzle+dir for it).
-                    crate::gt::GTEvent::Fire { muzzle, dir: _, sound } => {
+                    // One `Bullet_init` shot [M 0x180498 case 4:347-348]: the turret weapon
+                    // record 96 (0x2c55d0 = the table + 96·0x10c), owner −1 — every hit-time
+                    // damage modifier that reads the shooter drone skips (`Bullet_init`'s
+                    // owner is 0xffffffff; `Drone_ModBulletDamage`'s drone reads are NULL-gated)
+                    // — plus the muzzle sound the pool plays.
+                    crate::gt::GTEvent::Fire { muzzle, dir, sound } => {
                         self.audio.play3d(sound, muzzle, None);
+                        if let Some(w) = d.weapons.records.get(crate::gt::TURRET_WEAPON_RECORD) {
+                            let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                            self.bullets.push(crate::bullet::Bullet {
+                                pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
+                                damage: f32_at(0x0c), owner: usize::MAX, state: 0,
+                                weapon: crate::gt::TURRET_WEAPON_RECORD as u16,
+                                flyby: d.weapons.flyby(crate::gt::TURRET_WEAPON_RECORD), bounces: 0,
+                            });
+                        }
                     }
                     // The wreck smoke puff [M case 6]: Gas_Init(0.05, 0.25, glist 0x2000039,
                     // 7, 0x48403080, 1) — the port's gas has the searchlight-shape init only;
