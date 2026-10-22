@@ -120,11 +120,10 @@ fn port_kind_draws(level: &Level, m: usize, p: &Placement) -> bool {
             // script's stream-0 entity and 0x02000427 the flight's [D 0x06000051/0x06000050].
             // The port gives those scripts' entities draw slots (s/copter-script-draw: scene.rs
             // roots the slot builder at the kind-0x2F params 4/5) — covered when both resolve.
-            // NOT drawn yet: s/copter-script-draw (the flight scripts' slots) is held until task 958
-            // ports the CopterPaths flight — the one-shot script pass would show the 07000005
-            // copter diving under the ground. Pinned as known misses below.
-            let _ = (level, m, p);
-            false
+            let p0 = p.params.iter().find(|(i, _)| *i == 0).map_or(0, |&(_, v)| v);
+            if p0 != 0 { return false; }                       // the game's marker copter [M 0x17d340:43-45]
+            let sc = |k: u32| p.params.iter().find(|(i, _)| *i == k).map_or(0, |&(_, v)| v);
+            level.nis.contains_key(&sc(4)) || level.nis.contains_key(&sc(5))
         }
         _ => false,
     }
@@ -149,16 +148,16 @@ const KNOWN_MISSES: &[(&str, u8)] = &[
     ("07000002", 0x28), ("07000002", 0xf3),
     ("07000003", 0xd9),
     ("07000004", 0xf3),
-    ("07000005", 0x2f), ("07000005", 0xd9),
+    ("07000005", 0xd9),
     ("07000006", 0x31), ("07000006", 0xd9),
     ("07000007", 0xd9),
-    ("07000008", 0x2f), ("07000008", 0x31), ("07000008", 0xd9), ("07000008", 0xea),
+    ("07000008", 0x31), ("07000008", 0xd9), ("07000008", 0xea),
     ("07000009", 0x29), ("07000009", 0xd9),
     ("0700000a", 0x27), ("0700000a", 0x28), ("0700000a", 0x29), ("0700000a", 0xd9), ("0700000a", 0xeb),
-    ("0700000b", 0x27), ("0700000b", 0x2f), ("0700000b", 0x28), ("0700000b", 0x29), ("0700000b", 0xd9),
+    ("0700000b", 0x27), ("0700000b", 0x28), ("0700000b", 0x29), ("0700000b", 0xd9),
     ("0700000c", 0xd9),
     ("07000011", 0xd9), ("07000011", 0xea),
-    ("07000012", 0x27), ("07000012", 0x2f), ("07000012", 0x28), ("07000012", 0xd9), ("07000012", 0xea), ("07000012", 0xeb),
+    ("07000012", 0x27), ("07000012", 0x28), ("07000012", 0xd9), ("07000012", 0xea), ("07000012", 0xeb),
     ("07000013", 0xd9),
     ("07000014", 0x28), ("07000014", 0x29), ("07000014", 0x31), ("07000014", 0xd9),
     ("07000016", 0x29), ("07000016", 0xd9), ("07000016", 0xea),
@@ -216,8 +215,9 @@ fn every_sp_level_drawn_placements_have_draw_instances() {
     }).collect();
     assert!(unexpected.is_empty(), "NEW placement-draw misses ({}):\n{}", unexpected.len(),
         unexpected.iter().map(|(id, k, h, c)| format!("{id} kind {k:#04x} hash {h:#x} — {c}")).collect::<Vec<_>>().join("\n"));
-    // The copter rows (05/08/0b/12 kind 0x2F) are pinned misses until task 958 + s/copter-script-draw
-    // land; a fixed copter must then be removed from KNOWN_MISSES (the allow-list rule above).
+    // Sister: the copter must never appear as a miss (the Exchange helicopter draws).
+    assert!(!misses.iter().any(|(id, kind, _, _)| id == "07000008" && *kind == 0x2f),
+        "07000008's extraction helicopter (kind 0x2F) must have draw instances [M 0x17d340:68-70]");
 }
 
 /// The Exchange extraction helicopter (the user report 2026-10-21): 07000008 places kind-0x2F
