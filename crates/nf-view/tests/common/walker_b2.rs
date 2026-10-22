@@ -102,11 +102,12 @@ fn fail_dump(scene: &Scene, target: V3, label: &str) -> String {
     let sim = scene.sim.as_ref().unwrap();
     let p = sim.bond.pos;
     let seg = sim.world.segment(p, target);
+    let scoped_floor = sim.world.segment_hit_scoped(sim.bond.cel, p, [p[0], p[1] - 2.0, p[2]]);
     let mut s = format!(
-        "STUCK at {label}: bond=({:.2},{:.2},{:.2}) target=({:.2},{:.2},{:.2}) d={:.2} grounded={} substate={} crouched={} head_bump={} floor_ny={:.2} disabled={} health={:.1} segment_to_target={:?}\n",
+        "STUCK at {label}: bond=({:.2},{:.2},{:.2}) target=({:.2},{:.2},{:.2}) d={:.2} grounded={} substate={} crouched={} head_bump={} floor_ny={:.2} disabled={} health={:.1} segment_to_target={:?} cel={:?} scoped_floor_down2={:?}\n",
         p[0], p[1], p[2], target[0], target[1], target[2], dxz(p, target),
         sim.bond.grounded, sim.bond.substate, sim.bond.crouched, sim.bond.head_bump, sim.bond.floor_ny,
-        sim.disabled, sim.drones.health.health, seg
+        sim.disabled, sim.drones.health.health, seg, sim.bond.cel, scoped_floor
     );
     let doors: Vec<String> = sim.drones.doors.list.iter()
         .filter(|d| dxz(d.pos, p) < 4.0)
