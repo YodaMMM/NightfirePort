@@ -6949,13 +6949,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 }
                             }
                             // Triggers, AI volumes and emitters draw nothing (`Script_CreateEntity`).
-                            // dragon-safe-follow: nor does a pickup entity (0xF0) draw HERE — the game's
-                            // 0xF0 arm creates ONE object, the pickup itself [M 0x1d8968 → `Pickup_Create`
-                            // 0x18dda0], deleted when taken; the port draws it through its pickup slot
-                            // (`script_pickup_reservations` / the by-hash fallback), which follows the
-                            // stream's pose. A second script slot here drew a copy that stayed at the case
-                            // after the take (and, before the follow, a frozen twin beside the rising card).
-                            nf_formats::nis::Cmd::Entity { hash, obj_type, .. } if !matches!(obj_type, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => {
+                            nf_formats::nis::Cmd::Entity { hash, obj_type, .. } if !matches!(obj_type, 0xea | 0xeb | 0xf5 | 0xf2) => {
                                 if !seen.insert((h, si, hash)) { continue; }
                                 let Some(&(map, object)) = level.by_hash.get(&hash) else { continue };
                                 // The billboard set: glist flags bit 0x8 (`View_DrawObjectGlist`'s test).
@@ -8593,6 +8587,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
             let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
             if let Some((h, si, hash, k)) = a.script {
+                // dragon-safe-follow: a script's 0xF0 entity IS the pickup it created [M 0x1d8968 →
+                // `Pickup_Create`]; the game stops drawing it once taken (deleted, respawn 0) or while
+                // it waits to respawn (hidden) [M 0x18e650's tail]. This slot draws it at the stream's
+                // pose (the game's obj+0x90 [M 0x1d9a08:94-110]) — collapse it with the pickup.
+                if let Some(s) = self.sim.as_ref() {
+                    if let Some(p) = s.drones.script_pickup_of.get(&(h, si)).and_then(|&pk| s.drones.pickups.get(pk)) {
+                        if p.model == hash && (p.gone || p.hidden) { return far; }
+                    }
+                }
                 return self.sim.as_ref().and_then(|s| s.script_entity_k((h, si), hash, k as usize)).map(|m| {
                     // The billboard entities (`View_DrawObjectGlist` 0x1e6780:43-65): the glist flags
                     // bit 0x8 (reached via `Control_SetGList` 0x134960's `obj+0xF0 = glist+0x44`)

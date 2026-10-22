@@ -76,7 +76,14 @@ fn the_case_use_lifts_the_keycard_and_bond_takes_it() {
     sim.step_bond(Default::default(), false, false, true); // the E press on the case
     for _ in 0..130 { sim.step_bond(Default::default(), false, false, false); }
     let k = sim.drones.pickups.iter().find(|p| p.kind == 2 && !p.gone).expect("the keycard is live");
+    let live_pos = [k.m[3][0], k.m[3][1], k.m[3][2]];
     assert!(k.m[3][1] > 6.04, "the stream lifted the keycard to its last key (y 6.05); it sits at y {:.3}", k.m[3][1]);
+    // The draw: the keycard's script slot (mesh 0x020005F1) sits at the live pickup's pose.
+    let slot = scene.attachments.iter().position(|a| matches!(a.script, Some((0x0600_0563, 1, 0x0200_05F1, 0)))).expect("the keycard's script draw slot");
+    let opts = nf_view::scene::ViewOpts { reinforcements: false, firing: false, right: [1.0, 0.0, 0.0], up: [0.0, 1.0, 0.0] };
+    let m = scene.frame_state(None, 0.0, opts).attach[slot];
+    assert!((0..3).all(|j| (m[3][j] - live_pos[j]).abs() < 1e-3), "the slot draws the card at its live pose {live_pos:?}; got {:?}", m[3]);
+    let sim = scene.sim.as_mut().expect("sim");
     // Walk back from the counter (the case faces +x; Bond backs off along −x).
     let back = nf_game::player::Input { forward: -1.0, ..Default::default() };
     let mut taken_at = None;
@@ -86,10 +93,9 @@ fn the_case_use_lifts_the_keycard_and_bond_takes_it() {
     }
     assert!(taken_at.is_some(), "backing off the counter, Bond takes the keycard and ch 0x4E goes on (Bond at {:?})", sim.bond.pos);
     assert!(sim.drones.pickups.iter().filter(|p| p.kind == 2).all(|p| p.gone), "the taken keycard is gone");
-    // Drawn once, as the pickup: no script draw slot carries the keycard's mesh (0x020005F1), so
-    // nothing of it stays at the case after the take [M 0x1d8968: the 0xF0 arm's object IS the pickup].
-    assert!(scene.attachments.iter().all(|a| !matches!(a.script, Some((_, _, 0x0200_05F1, _)))),
-        "no script draw slot for the keycard mesh — the pickup slot is its only draw");
+    // Taken = deleted in the game (respawn 0): nothing of it stays drawn at the case.
+    let m = scene.frame_state(None, 0.0, opts).attach[slot];
+    assert!(m[3][1] < -1000.0, "the taken keycard's draw collapses; it sits at {:?}", m[3]);
 }
 
 /// Sister: no E press — the keycard never goes live.
