@@ -1568,6 +1568,22 @@ pub struct Drone {
     /// (Dead 0x163fe8 case 3, Fade 0x172cd8, FadeFast 0x172dd8) read it: a corpse is removed on
     /// the 3rd control pass after its last drawn frame.
     pub drawn_grace: u8,
+    /// `+0x4CE` (u16) — `NDrone2_MonitorTalkToMissionObj` 0x144340's hostage/captor dialogue step
+    /// counter, zeroed by DefaultInit 0x14b300:80: 0 the captor's opener pending, 1 the hostage's
+    /// reply pending, 2 back to the captor — the pair alternate msg-0x1A lines, each gated on the
+    /// other's `+0x4D0` voice. Only 0/1/2 are ever stored [M 0x144340:12-73].
+    pub talk_step: u16,
+    /// The hostage's tick-head voice state for the monitor's step-2 wait, refreshed for
+    /// killer-state drones from `Drones::tick`'s `voice_pool` before their UPDATE (the game reads
+    /// the hostage's `+0x4D0` live through hostage obj+0xE0 → its drone struct [M 0x144340:47-56]):
+    /// 0 no line, 1 busy (a pending `talks` entry or a playing voice), 2 a finished voice.
+    pub hostage_voice: u8,
+    /// The monitor's step-2 clear request — the game clears the hostage's finished `+0x4D0` in
+    /// place [M 0x144340:53]; the walk's borrow can't reach the hostage, so the monitor flags it
+    /// and the post-walk pass in `Drones::tick` takes and applies it before the speech pass (a
+    /// lingering finished voice would refuse the hostage's next non-forced line [M 0x141848's
+    /// `+0x4D0` gate — `speech()`'s `!force && voice.is_some()`]).
+    pub hostage_voice_clear: bool,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1745,6 +1761,7 @@ impl Drone {
             stationary: param(13) != 0 && param(13) != 0x0600_021f, alpha: 255.0, raise: None,
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
+            talk_step: 0, hostage_voice: 0, hostage_voice_clear: false,
             talk_script: 0, talk_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(), free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
             // `DroneFunc_NearPlayerCollision`'s source array (own line — merge lesson 4):
@@ -3943,6 +3960,46 @@ impl Drone {
         };
         if idx != 0 { self.talks.push((idx, false)); }
         true
+    }
+
+    /// `NDrone2_MonitorTalkToMissionObj` (0x144340) — the HostageKiller UPDATE's hostage/captor
+    /// dialogue sequencer, called before the opponent look [M 0x15c728:34]. Step counter `+0x4CE`,
+    /// hostage obj `+0x2B0`: step 0 sends msg 0x1A to the captor's own obj and steps to 1
+    /// [M :18-22]; step 1 waits on the captor's own `+0x4D0` (the busy test clears a finished
+    /// line in place [M :10-24]) then sends 0x1A to the hostage and steps to 2 [M :26-29];
+    /// step 2 waits on the HOSTAGE's `+0x4D0` — read live through hostage obj+0xE0 → its drone
+    /// struct — clearing a finished one [M :47-56], then sends 0x1A to the captor's own obj and
+    /// steps back to 1 [M :58-73]. Captor and hostage alternate lines, each gated on the other's
+    /// voice. Port mapping: the self-sends ride `self_msg` (`Drone_SM_SendMsgSelf`'s port model —
+    /// the game's `Drone_Message` 0x13a678 ends in `Drone_SM_SendMsgSelf` for any target), the
+    /// hostage send rides `msg_out` → `Drones::delayed_msgs`; the hostage's tick-head voice state
+    /// arrives in `hostage_voice` (`Drones::tick`'s `voice_pool` — the walk's borrow can't reach
+    /// the hostage), and its finished-line clear is flagged (`hostage_voice_clear`) for the
+    /// post-walk pass — `speech()`'s non-forced gate would otherwise refuse every later hostage
+    /// reply while the finished voice lingers.
+    fn monitor_talk_to_mission_obj(&mut self) {
+        match self.talk_step {
+            // `Drone_Message(own obj, 0x1a, 0, 0)` [M 0x144340:19-21].
+            0 => { self.self_msg = Some(msg::MISSION_TALK); self.talk_step = 1; }
+            // Own `+0x4D0` busy test (clears a finished line) [M 0x144340:10-24], then the
+            // hostage send [M :26-29]. A `talks` entry queued this tick counts as busy too: a
+            // head-delivered 0x1A has not reached the speech pass yet.
+            1 => {
+                if self.voice_busy() || !self.talks.is_empty() { return; }
+                if let Some(hi) = self.hostage_target { self.msg_out.push((hi, msg::MISSION_TALK, 0)); }
+                self.talk_step = 2;
+            }
+            // The hostage's `+0x4D0` busy test [M 0x144340:47-56], then back to the captor
+            // [M :58-73]. `hostage_voice == 2` also flags the hostage's finished-line clear.
+            2 => {
+                if self.hostage_voice == 1 { return; }
+                self.hostage_voice_clear = self.hostage_voice == 2;
+                self.self_msg = Some(msg::MISSION_TALK);
+                self.talk_step = 1;
+            }
+            // never stored: DefaultInit zeroes `+0x4CE`, only 0/1/2 written [M 0x144340:12-73, 0x14b300:80]
+            _ => {}
+        }
     }
 
     /// `DroneAnim_LocationDeathAnim` (0x13c780): shot in the head or chest while Bond aims → 0x42 (variant 1 when the
@@ -7935,7 +7992,20 @@ impl Drone {
             // Tick 3 [M :33-39]: EnemyLookForOpponent → combat on a sight (the port's vision pass sets
             // `seen`); msg 0x11..0x1e alerts drop to the shared EnemyAlerts fold [M :69-85]; impacts ride
             // the shared groups (impact_args + the on_explosion allow raise).
-            (HOSTAGE_KILLER, msg::UPDATE) => { if self.seen { self.set_state(ATTACK); } true }
+            (HOSTAGE_KILLER, msg::UPDATE) => {
+                // 0x15c728 case 3 [M :34]: the dialogue monitor FIRST, then the opponent look (the
+                // port's `seen` fold). The monitor needs the +0x2B0 link, which every reachable
+                // UPDATE has — the pairing beat binds it and a failed pairing leaves the state
+                // before any UPDATE [M :21-29]; the port's fail flip lands after the first UPDATE
+                // send (the tick block's set_state defers), so the gate keeps that unreachable
+                // no-link UPDATE silent (the game's +0x2B0==0 broadcast [M 0x13a678:14-17] never
+                // fires).
+                if self.hostage_target.is_some() { self.monitor_talk_to_mission_obj(); }
+                if self.seen { self.set_state(ATTACK); } true
+            }
+            // 0x15c728 case 0x1a [M :86-89] — `NDrone2_TalkToMissionObj` 0x14a8b8 (the monitor's
+            // own-obj sends land here).
+            (HOSTAGE_KILLER, msg::MISSION_TALK) => { self.talk_to_mission_obj(rng); true }
             // Case 5 = ANIM_DONE [M :40-46]: shout msg 0xb with the hostage's marker, then combat 0x56
             // (the marker shout rides the shared shout path — the port's shout outbox takes the target's
             // marker from the link; the state change is the game's).
@@ -14862,6 +14932,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for (t, m) in due {
             if self.list.get(t).is_some_and(|x| x.present) { self.list[t].send(d, &mut self.rng, frame, m); }
         }
+        // The killer dialogue monitor's tick-head voice census (`voice_pool`): the game's monitor
+        // reads the hostage's `+0x4D0` live through hostage obj+0xE0 → its drone struct
+        // [M 0x144340:47-56], which the walk's `&mut` borrow can't — so the state is snapshotted
+        // here, after this tick's head deliveries (a 0x1A landed at the head queues the hostage's
+        // `talks` before the walk). 1 = busy: a pending `talks` entry (the game's SpeechSFX sets
+        // `+0x4D0` synchronously in the 0x1A handler; the port's voice lands in the post-walk
+        // speech pass, so the pending entry is the in-flight `+0x4D0`) or a voice the audio is
+        // still playing (live test — `voice_finished` only refreshes per-drone at the pass head).
+        // 2 = a finished voice: the step-2 clear case [M 0x144340:53].
+        let voice_pool: Vec<u8> = self.list.iter().map(|x| {
+            if !x.talks.is_empty() || x.voice.is_some_and(|v| !self.audio.finished(v.0)) { 1 }
+            else if x.voice.is_some() { 2 } else { 0 }
+        }).collect();
         // fix-door-react-path: the drones' pre-walk positions — each drone's door-pick capsule is
         // anchored at its post-walk position, but a guard that walked this tick needs the walk to be
         // visible to the door pick (the game's pick runs after the whole control walk [M
@@ -15234,6 +15317,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // execution beat (HostageKiller timer 10 [M :63-68] / HostageKillerAttack timer 10
             // [M 0x15c940:86-96] — with a live hostage link the execution anim 0x58 fires).
             if dr.state == state::HOSTAGE_KILLER || dr.state == state::HOSTAGE_KILLER_ATTACK {
+                // The monitor's step-2 input: the hostage's tick-head voice state (voice_pool above).
+                if let Some(hi) = dr.hostage_target { dr.hostage_voice = voice_pool.get(hi).copied().unwrap_or(0); }
                 if !dr.killer_searched {
                     dr.killer_searched = true;
                     // [M 0x144030:22-55] walk the drone list for mode (+0xC5) 5 with +0x2B0 == 0, the
@@ -15790,6 +15875,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             });
         }
         { let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&script_parts(self, d)); }
+        // The killer monitor's step-2 clear of the hostage's finished `+0x4D0` [M 0x144340:53]:
+        // flagged during the walk (the borrow can't reach the hostage) and applied here, before
+        // the speech pass — `speech()`'s non-forced gate refuses a line while any voice is
+        // referenced, so a lingering finished hostage voice would silence every later reply.
+        let mut hostage_clears: Vec<usize> = Vec::new();
+        for dr in self.list.iter_mut() {
+            if std::mem::take(&mut dr.hostage_voice_clear) {
+                if let Some(hi) = dr.hostage_target { hostage_clears.push(hi); }
+            }
+        }
+        for hi in hostage_clears { if let Some(h) = self.list.get_mut(hi) { h.voice = None; } }
         // The drones' speech requests, in update order (no random draws in `SpeechSFX` / `PlaySFX`).
         for (index, talks) in talk_queue { self.speech(d, index, talks, frame); }
         // The drones' door-open sounds (`NDrone2_OpenDoor`'s `Door_Activate` events).
@@ -16918,6 +17014,7 @@ mod tests {
             melee_min_dist: 4.0, attack_hold: 0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(),
             voice_type: 0, female: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
+            talk_step: 0, hostage_voice: 0, hostage_voice_clear: false,
             talk_script: 0, talk_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
