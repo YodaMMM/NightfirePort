@@ -41,7 +41,7 @@ fn ray_hits(sim: &nf_view::scene::Sim) -> bool {
 fn setup_and_burn(scene: &mut nf_view::scene::Scene, outs: &[u16], ticks: u32) -> (bool, f32, f32, bool) {
     let sim = scene.sim.as_mut().unwrap();
     for k in 0..sim.drones.locks.len() {
-        if outs.contains(&sim.drones.locks[k].out) { sim.drones.locks[k].burn(&mut sim.drones.channels, 1); }
+        if outs.contains(&sim.drones.locks[k].out) { sim.drones.locks[k].burn_through(&mut sim.drones.channels, 1); }
     }
     for _ in 0..ticks { sim.step_bond(Input::default(), false, false, false); }
     let sim = scene.sim.as_ref().unwrap();
@@ -89,13 +89,27 @@ fn burning_the_four_hinges_opens_the_display_vent() {
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, [6.0, 13.8, -110.5], 0.0);
     let hinges: Vec<[f32; 3]> = sim.drones.locks.iter().filter(|l| (14..=17).contains(&l.out)).map(|l| l.pos).collect();
     assert_eq!(hinges.len(), 4, "the four hinge locks exist [D #139-142]");
+    let mut first_hinge = true;
     'outer: for h in &hinges {
-        for _ in 0..60 {
+        for tick in 1..=170u32 {
             aim_at(sim, *h);
             // Fire HELD: the burn runs only while the fire is held (fix-gadgets2, `Player_WeaponFiring` 0x1a5460:442).
+            // The REAL burn takes 84 contact ticks (−3/tick from the 0xff bytes to < 4 [M 0x1ae3d8:82-101,
+            // control_init_object 0x134630]) — the old instant-burn stand-in completed on the FIRST tick,
+            // so the mid-hold assertion below fails on it (the fail-first pin).
             sim.step_bond(Input::default(), true, false, false);
-            if sim.drones.locks.iter().filter(|l| (14..=17).contains(&l.out) && l.burned).count() == 4 { break 'outer; }
+            if tick == 40 && first_hinge {
+                let h4 = sim.drones.locks.iter().filter(|l| (14..=17).contains(&l.out) && l.burned).count();
+                assert_eq!(h4, 0, "40 contact ticks (< 84) must NOT complete a hinge [M 0x1ae3d8:82-101] — the old stand-in burned on tick 1");
+                let hb = sim.drones.locks.iter().find(|l| (14..=17).contains(&l.out)).map(|l| l.burn_b).unwrap_or(0xff);
+                assert!(hb < 0xff, "the partial burn has descended the byte (got {hb:#x}) [M :82-95]");
+            }
+            // This hinge done → the next (the clip spends 1/tick [M 0x1a18e0 +0x91 = 1]; ~85 per
+            // hinge × 4 fits the record's 500-round clip [L weapon_data 0x4E +0x92 = 500]).
+            let this = sim.drones.locks.iter().find(|l| l.pos == *h).map(|l| l.burned).unwrap_or(false);
+            if this { break; }
         }
+        first_hinge = false;
     }
     let burned = sim.drones.locks.iter().filter(|l| (14..=17).contains(&l.out) && l.burned).count();
     // The sweep: #138 (6 keys, rate 50 [D]) takes ~50 ticks — SS_Create's ext+0x04 is
@@ -167,7 +181,7 @@ fn the_warehouse_vent_latch_opens_its_hatch() {
     let (t180_done, t184_done, wrapped_back) = {
         let sim = scene.sim.as_mut().unwrap();
         let k = sim.drones.locks.iter().position(|l| l.out == 84).expect("the VentLatch lock exists [D #182]");
-        sim.drones.locks[k].burn(&mut sim.drones.channels, 1);
+        sim.drones.locks[k].burn_through(&mut sim.drones.channels, 1);
         let ss180 = sim.drones.sss.of_placement(180).expect("ventmesh SS [D #180]");
         let ss184 = sim.drones.sss.of_placement(184).expect("VentmeshBlockingPloy SS [D #184]");
         let (mut d180, mut d184, mut back) = (None, None, (false, false));

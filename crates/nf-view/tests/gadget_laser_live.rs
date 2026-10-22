@@ -30,7 +30,52 @@ fn the_watch_laser_burns_the_safe_bolt() {
     // Aim at the top bolt through the real look input and HOLD the fire: the beam burns it.
     // No aim gate on the Laser [M 0x1a5460:512-514's 0x54 check is the Micro-Camera's fire polarity].
     let target = [162.2365f32, 43.875843, -117.14455];
-    for _ in 0..300 {
+    for tick in 1..=300u32 {
+        let (turn, look) = {
+            let sim = scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let dx = target[0] - bp[0];
+            let dz = target[2] - bp[2];
+            let dy = target[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+            let desired = dx.atan2(dz);
+            let err = desired - sim.bond.yaw;
+            let want_pitch = (dy / dxz(bp, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            (err.clamp(-0.08, 0.08), (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08))
+        };
+        scene.sim.as_mut().unwrap().step_bond(Input { turn, look, ..Default::default() }, true, false, false);
+        // The fail-first pin [M 0x1ae3d8:82-101]: the real burn takes 84 contact ticks (−3/tick off
+        // the 0xff bytes until +0x105 < 4); the OLD stand-in burned on the FIRST contact tick (the
+        // aim-line + BEAM_RADIUS 0.25 test in laser_tick) and its bullets died at the record's
+        // +0x1C range (4.0 — the beam never reached the bolt at all). At tick 60 nothing may be
+        // complete yet and the byte must have descended.
+        if tick == 60 {
+            let sim = scene.sim.as_ref().unwrap();
+            let bolt = sim.drones.locks.iter().find(|l| l.out == 134).expect("the top bolt");
+            assert!(!bolt.burned, "60 contact ticks (< 84) must NOT complete the bolt [M 0x1ae3d8:82-101] — the old stand-in burned on tick 1");
+            assert!(bolt.burn_b < 0xff, "the partial burn has descended the byte (got {:#x}) [M :82-95]", bolt.burn_b);
+        }
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    assert!(sim.drones.channels.on(134), "the top bolt's burn completes: the out channel 134 rises [M 0x1ae3d8:194-195]");
+    assert!(sim.drones.locks.iter().find(|l| l.out == 134).map(|l| l.burned).unwrap_or(false), "the lock record is burned");
+    assert!(sim.laser_beam.is_some(), "the beam endpoints are parked for the renderer while the laser is out");
+}
+
+/// Sister: a PARTIAL burn heals — the game's idle arm refills the burn bytes +1/tick once the
+/// 2-tick grace runs out [M Lock_Update 0x1ae3d8:107-121], so beam-off time undoes the damage and
+/// the burn requires CONTINUOUS contact (the user's "the laser misbehaves": tap-firing did nothing
+/// on the old stand-in either way, and the stand-in had no heal at all — it burned instantly).
+#[test]
+fn the_partial_burn_heals_while_the_beam_is_off() {
+    let iso = iso();
+    let mut scene = nf_view::load(&iso, "07000008.bin", false).expect("load 07000008");
+    let sim = scene.sim.as_mut().unwrap();
+    sim.bond.pos = [160.3, 44.6, -115.4];
+    sim.bond.yaw = 0.85;
+    let draw = Input { switch_to: Some(0x4e), ..Default::default() };
+    for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    let target = [162.2365f32, 43.875843, -117.14455];
+    for _ in 0..60 {
         let (turn, look) = {
             let sim = scene.sim.as_ref().unwrap();
             let bp = sim.bond.pos;
@@ -44,10 +89,17 @@ fn the_watch_laser_burns_the_safe_bolt() {
         };
         scene.sim.as_mut().unwrap().step_bond(Input { turn, look, ..Default::default() }, true, false, false);
     }
-    let sim = scene.sim.as_ref().unwrap();
-    assert!(sim.drones.channels.on(134), "the top bolt's burn completes: the out channel 134 rises [M 0x1ae3d8:194-195]");
-    assert!(sim.drones.locks.iter().find(|l| l.out == 134).map(|l| l.burned).unwrap_or(false), "the lock record is burned");
-    assert!(sim.laser_beam.is_some(), "the beam endpoints are parked for the renderer while the laser is out");
+    let (partial, ch) = {
+        let sim = scene.sim.as_ref().unwrap();
+        let bolt = sim.drones.locks.iter().find(|l| l.out == 134).expect("the top bolt");
+        (bolt.burn_b, sim.drones.channels.on(134))
+    };
+    assert!(!ch, "60 held ticks (the aim converges in ~20, so < 84 contact ticks) leave the bolt unburnt [M 0x1ae3d8:82-101]");
+    assert!(partial < 0xff, "the partial burn descended the byte (got {partial:#x}) [M 0x1ae3d8:82-95]");
+    // The fire released: the contact stops, the grace (2) runs out, then +1/tick heal [M :107-121].
+    for _ in 0..100 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    let healed = scene.sim.as_ref().unwrap().drones.locks.iter().find(|l| l.out == 134).map(|l| l.burn_b).unwrap_or(0);
+    assert!(healed > partial, "the byte refilled while idle: {partial:#x} → {healed:#x} [M 0x1ae3d8:113-121]");
 }
 
 /// fix-gadgets2: the burn follows the button. The same aim and hold, then the release: the channel

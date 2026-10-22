@@ -43,7 +43,7 @@ fn lock_param6_tag_auto_unlocks_on_operative_only() {
     // but the laser path is moot on it): burn() reports nothing completed.
     let mut ch = nf_game::triggers::Channels::default();
     let mut locks = nf_game::lock::Lock::create(&tagged, 1, |_| None);
-    assert!(!locks[0].burn(&mut ch, 0), "an unlocked lock must not burn");
+    assert!(!locks[0].burn(3, &mut ch, 0), "an unlocked lock must not burn");
 }
 
 /// `Copter_Create` 0x17d340:76-94: `obj+0x68 = DiffMod * 299.0` with

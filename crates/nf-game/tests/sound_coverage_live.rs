@@ -162,12 +162,18 @@ fn lock_burn_through_plays_0x249_and_0x5dd() {
     let mut sim = l.sim();
     // A lock on the bullet's path: the watch shot flies -x from Bond's head.
     let lock_pos = [10.0, 1.5, 10.0];
-    sim.locks.push(nf_game::lock::Lock { placement: 0, pos: lock_pos, radius: 1.0, out: 0, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false, kind: 1, code: 0, scan_progress: 0, scan_solved: 0, scanning: false });
+    sim.locks.push(nf_game::lock::Lock { placement: 0, pos: lock_pos, radius: 1.0, out: 0, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false, kind: 1, code: 0, scan_progress: 0, scan_solved: 0, scanning: false, burn_a: 0xff, burn_b: 0xff, grace: 0 });
     let hearing = nf_formats::sfx::SfxHearing { id: 0x403, inner: 0.0, outer: 0.0, weight: 0.0, looped: false, cull: false };
-    sim.fire_player(&d, [14.0, 1.5, 10.0], [-1.0, 0.0, 0.0], 0x4f, hearing);
+    // The real burn: the 0x4F takes 10/tick off the 0xff bytes and completes at +0x105 < 4 — 26
+    // contact ticks [M Lock_Update 0x1ae3d8:66,82-101; the bytes start 0xff, control_init_object
+    // 0x134630]. The old instant-burn pin (one shot) contradicted the decompile — fixed here.
     let bond = bond_at([14.0, 1.0, 10.0]);
-    sim.tick(&d, &bond);
-    assert!(sim.locks[0].burned, "the watch bullet burns the lock");
+    for _ in 0..30 {
+        sim.fire_player(&d, [14.0, 1.5, 10.0], [-1.0, 0.0, 0.0], 0x4f, hearing);
+        sim.tick(&d, &bond);
+        if sim.locks[0].burned { break }
+    }
+    assert!(sim.locks[0].burned, "the watch bullet stream burns the lock (26 contact ticks [M 0x1ae3d8:82-101])");
     assert!(sim.audio.active_ids().contains(&0x249), "the burn-through clunk 0x249 plays");
     assert!(sim.audio.active_ids().contains(&0x5dd), "the burn finish 0x5dd plays");
     // Sister: a fresh bullet into the already-burned lock plays neither again.
