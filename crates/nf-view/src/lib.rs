@@ -1864,6 +1864,10 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
                 }
                 nf_game::sound::Cmd::Position { handle, pos } => drv.set_position(handle, None, pos),
                 nf_game::sound::Cmd::Remove { handle } => drv.remove(handle, None),
+                // `SFXPreCache` (RPC cmd 0x26 [M 0x117118]): the cut-scene line's item armed
+                // `frames + 5` ticks early — the stream decodes now, off the play tick
+                // [M 0x1c1b38 case 1].
+                nf_game::sound::Cmd::PreCache { id, frames } => drv.pre_cache(out, id, frames),
             }
         }
         // `SFXFadeDown(fadeMusic)` (the music end-sting / level-transition fade) [M sound.md §5.5].
