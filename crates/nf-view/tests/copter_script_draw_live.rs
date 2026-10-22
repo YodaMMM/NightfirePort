@@ -16,21 +16,17 @@ fn the_copter_flight_body_has_a_draw_slot_and_flies() {
     // sister: a parented part of the flight (stream 1, 0x0200035E) too
     assert!(scene.attachments.iter().any(|a| matches!(a.script, Some((0x0600_0050, 1, 0x0200_035E, _)))),
         "the flight's parented part 0x0200035E has a slot");
+    // The copter's ScriptPlayer (836, Copter_Create 0x17d340 → SP_Create modes 8,8 [M 0x1dc7e0:65-70])
+    // plays its loaded script 0x06000051 and is SP_HideObj'd while the gate channel is off [M
+    // 0x17d340:73-74]; the gate's first ON tick unhides it [M Copter_Update 0x17dbb8 head]. The
+    // flight route itself is CopterPaths (task 958), not a script one-shot.
+    assert!(scene.attachments.iter().any(|a| matches!(a.script, Some((0x0600_0051, 0, 0x0200_035D, _)))),
+        "the SP's playing script 0x06000051 stream 0 (0x0200035D) has a script draw slot");
     let sim = scene.sim.as_mut().unwrap();
     for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
-    assert!(sim.script_entity((0x0600_0050, 0), 0x0200_0427).is_none(), "no flight before the gate (ch 5 off)");
+    assert!(sim.script_entity((0x0600_0051, 0), 0x0200_035D).is_none(), "hidden before the gate (ch 5 off) [M 0x17d340:73-74]");
     let f = sim.drones.frame;
     sim.drones.channels.set(5, 1, f);
-    let mut first = None;
-    let mut moved = false;
-    for _ in 0..200 {
-        sim.step_bond(Default::default(), false, false, false);
-        if let Some(m) = sim.script_entity((0x0600_0050, 0), 0x0200_0427) {
-            let p = [m[3][0], m[3][1], m[3][2]];
-            if first.is_none() { eprintln!("FLIGHT START {p:?} frame {}", sim.drones.frame); }
-            match first { None => first = Some(p), Some(q) => if (0..3).any(|k| (p[k] - q[k]).abs() > 1.0) { moved = true; } }
-        }
-    }
-    assert!(first.is_some(), "ch 5 starts the flight: the body entity is live");
-    assert!(moved, "the body flies (moved > 1 unit along the flight's spline)");
+    for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
+    assert!(sim.script_entity((0x0600_0051, 0), 0x0200_035D).is_some(), "ch 5 unhides the copter's SP: its entity is live and drawable [M 0x17dbb8 head]");
 }

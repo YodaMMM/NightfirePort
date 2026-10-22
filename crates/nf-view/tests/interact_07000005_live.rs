@@ -312,8 +312,9 @@ fn the_sc3_plate_starts_the_gated_copter() {
     w.walk_nav_to([centre[0], centre[1], centre[2]], "onto the SC3 plate", 0.8);
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(0x42), "the plate raises ch 0x42 [D out 66]");
-    assert!(sim.drones.copters.iter().find(|c| c.gate == 66).expect("#242").started,
-        "the gate opens and #242's flight starts [M Copter_Update]");
+    // The gate's first ON tick zeroes record+0x70 [M Copter_Update 0x17dbb8 head] — find #242 by placement.
+    let c = sim.drones.copters.iter().find(|c| c.placement == 242).expect("#242");
+    assert!(c.started && c.gate == 0, "the gate opens, +0x70 is zeroed and #242's flight starts [M Copter_Update]");
 }
 
 /// KIND: SoundTrigger 0xF9 — #254 (trigger ch 139 → the sound 368 [D params (0,139),(2,368);

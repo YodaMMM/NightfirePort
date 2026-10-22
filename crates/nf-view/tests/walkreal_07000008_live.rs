@@ -48,6 +48,12 @@ fn obj08(w: &Walker) -> (u32, u32) {
 /// drives the gun bullets (the fusebox wires) and the laser beam (the safe bolts' burn [M
 /// Player_LaserPointer 0x1a65d8's hook; walker.rs tick_fire]).
 fn aim_and_fire(w: &mut Walker, target: [f32; 3], weapon: u8, fire_ticks: u32) {
+    aim_and_fire_until(w, target, weapon, fire_ticks, |_| false);
+}
+
+/// Hold the fire until `done` holds (a player lets go once the lock or wire goes) — the laser's
+/// meter drains ~31/s while held [D docs/live/2026-10-14-weapon-measurements-pcsx2.md].
+fn aim_and_fire_until(w: &mut Walker, target: [f32; 3], weapon: u8, fire_ticks: u32, done: impl Fn(&nf_view::scene::Sim) -> bool) {
     // The switch through the real weapon-change input.
     for _ in 0..240 {
         if w.scene.sim.as_ref().unwrap().gun.weapon == weapon { break; }
@@ -56,11 +62,13 @@ fn aim_and_fire(w: &mut Walker, target: [f32; 3], weapon: u8, fire_ticks: u32) {
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, weapon, "the switch to {weapon:#x} never landed");
     for t in 0..fire_ticks {
         let sim = w.scene.sim.as_ref().unwrap();
+        if done(sim) { break; }
         let head = sim.bond.head();
         let to = [target[0] - head[0], target[1] - head[1], target[2] - head[2]];
         let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
         let desired_yaw = to[0].atan2(to[2]);
-        let desired_pitch = (to[1] / l).asin();
+        // `bond.pitch` is BL+0x8A8 in units of π/2 (player.rs) — the angle converts.
+        let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
         let yaw_err = walker::wrap_pi(desired_yaw - sim.bond.yaw);
         let pitch_err = desired_pitch - sim.bond.pitch;
         let input = Input {
@@ -134,7 +142,7 @@ fn walk_the_gondola_to_the_briefcase_and_back() {
     // Collide_FilterBullets 0x1ece30:24-31 with the disc category words] — gunfire never cuts a
     // wire; the player's laser does.
     let fusebox = [154.35f32, 43.41, -119.67];
-    aim_and_fire(&mut w, fusebox, 0x4e, 420);
+    aim_and_fire_until(&mut w, fusebox, 0x4e, 420, |s| s.drones.channels.on(137));
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(137), "shooting the fusebox wires raises ch 137 [D #219 group-0; M FuseBox_Update 0x1adfe8]");
@@ -149,17 +157,19 @@ fn walk_the_gondola_to_the_briefcase_and_back() {
     w.walk_nav_to([160.0, 43.4, -117.0], "before the safe", 1.2);
     let bolts = [[162.24f32, 43.88, -117.14], [162.24, 42.70, -117.14]];
     for (k, bolt) in bolts.iter().enumerate() {
-        aim_and_fire(&mut w, *bolt, 0x4e, 120);
-        let sim = w.scene.sim.as_ref().unwrap();
         let ch = [134u32, 135][k];
+        aim_and_fire_until(&mut w, *bolt, 0x4e, 240, |s| s.drones.channels.on(ch));
+        eprintln!("[08] bolt {k} laser_charge {:.1}", w.scene.sim.as_ref().unwrap().laser_charge);
+        let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(ch), "the laser burn wrote the bolt's out channel {ch} [M Lock_Update 0x1ae3d8:194]");
     }
     // The mux folds 134|135 → 136; the safe door opens and SP #286 (SafePickUps) starts.
+    w.wait(10); // the fire stops on the burn-through tick; the mux and the SP start on the following ticks
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(136), "mux #278 folded the bolt channels into ch 136 [D]");
         assert!(sim.drones.scripts.players.iter()
-            .any(|p| p.scripts.contains(&0x0600_09e2) && p.state >= 3),
+            .any(|p| p.scripts.contains(&0x0600_09e2) && p.state >= 2), // 2 = playing, 3 = done (nis.rs SP states)
             "SP #286 SafePickUps started on ch 136 [D mask 1]");
     }
 

@@ -75,7 +75,7 @@ fn try_park(scene: &mut nf_view::scene::Scene, cand: usize) -> bool {
 /// 0x179740:100-110 vs drone.rs's fire_weapon], so filtering on `seen_ticks >= 120` samples the
 /// same subset the model describes. Sister: the gated shots still exist (the filter's skip count
 /// is logged and asserted non-negative trivially — a run with zero gated shots is a no-op).
-fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, warmup_shots: u32) -> (usize, Vec<Shot>, Vec<(f32, f32)>, f32) {
+fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, warmup_shots: u32) -> (usize, Vec<Shot>, Vec<(f32, f32, f32)>, f32) {
     // Live guards with the weapon, the standard stats and the standard ×1 damage multiplier —
     // tried in order until one actually opens fire (some are elevated or scripted and never do).
     let candidates: Vec<usize> = {
@@ -96,7 +96,7 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
     // (bullet-arrival frame, health delta, the shooter's live distance at the arrival tick) —
     // Drone_ModBulletDamage 0x139fac reads the shooter's LIVE Drone+0x1A0 when the bullet lands
     // [M], not the fire-time distance, so the band the ×2 saw is the hit-tick one.
-    let mut hit_events: Vec<(u32, f32, f32)> = Vec::new();
+    let mut hit_events: Vec<(u32, f32, f32, f32)> = Vec::new();
     // fix-guard-weapons3: per-shot gate-clean flags (aligned with `d.shots[w0..]`), for the final candidate.
     let mut gate_ok: Vec<bool> = Vec::new();
     // ai-sight-drawn-gate-3: the fire-time guard distance per collected shot (the band split).
@@ -184,8 +184,16 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
             let got = gate_ok.iter().filter(|&&c| c).count();
             let frame = sim.drones.frame;
             let gdist = sim.drones.list[guard].dist;
+            // The BACKSHOT angle [M Drone_ModBulletDamage 0x139fd4-0x13a080]: the bullet's travel yaw
+            // (shooter → Bond) against Bond's facing; under π/2 a 0x12 round doubles.
+            let gp = sim.drones.list[guard].pos;
+            let bp = sim.bond.pos;
+            let look = sim.bond.look();
+            let travel = (bp[0] - gp[0]).atan2(bp[2] - gp[2]);
+            let facing = look[0].atan2(look[2]);
+            let back = walker_wrap(travel - facing).abs();
             for &(f, owner, delta) in &sim.drones.player_hits {
-                if owner == guard { hit_events.push((f, delta, gdist)); }
+                if owner == guard { hit_events.push((f, delta, gdist, back)); }
             }
             sim.drones.player_hits.clear();
             if got >= wanted as usize + 5 { break 'guards; } // +5: let the in-flight bullets land before matching
@@ -218,7 +226,7 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
             .map(|(_, f)| *f).collect()
     };
     let mut shots = Vec::new();
-    let mut deltas: Vec<(f32, f32)> = Vec::new(); // (health delta, the shot's fire-time distance)
+    let mut deltas: Vec<(f32, f32, f32)> = Vec::new(); // (health delta, the hit-tick distance, the backshot angle)
     let mut hi = 0usize;
     for k in 0..wanted as usize {
         let f = frames[k];
@@ -227,7 +235,7 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
         let mut hit = false;
         while hi < hit_events.len() && hit_events[hi].0 < f { hi += 1; }
         while hi < hit_events.len() && hit_events[hi].0 < next {
-            hit = true; deltas.push((hit_events[hi].1, hit_events[hi].2)); hi += 1;
+            hit = true; deltas.push((hit_events[hi].1, hit_events[hi].2, hit_events[hi].3)); hi += 1;
         }
         shots.push(Shot { frame: f, hit, dist });
     }
@@ -290,7 +298,7 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             // and 100 − 98.349998 = 1.6500015. The game's health is the same float pool, so pin
             // the pool round-trip of the model value, not the raw product.
             let pool_hit = 100.0_f32 - (100.0_f32 - expected_hit);
-            for (k, &(d, dist)) in deltas.iter().enumerate() {
+            for (k, &(d, dist, back)) in deltas.iter().enumerate() {
                 // The band split on the damage too: an in-band hit is the forced ×2 [M the
                 // too_close branch] — the same event the TooClose test pins deliberately. The
                 // band is the HIT-tick distance (Drone_ModBulletDamage reads the shooter's live
@@ -301,6 +309,13 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
                 // pool of record × 2 (the measured in-band hit: 3.8499985 = 100 − (100 − 3.85),
                 // not 1.925003 × 2 = 3.850006).
                 let expect = if band_hit { pool_hit } else { 100.0_f32 - (100.0_f32 - expected_hit * 2.0) };
+                // BACKSHOT ×2 [M 0x139fd4-0x13a080]: weapon 0x12, the shooter's mode neither 2 nor
+                // 0x19, the level not 0x700001b, and the travel-vs-facing angle under π/2. The
+                // end-of-tick angle stands in for the landing's; near π/2 either value is accepted.
+                if weapon == 0x12 && d == 100.0_f32 - (100.0_f32 - expect * 2.0) {
+                    assert!(back < std::f32::consts::FRAC_PI_2 + 0.25, "{level} diff {diff}: hit #{k} doubled with the guard in front (angle {back:.3})");
+                    continue;
+                }
                 assert_eq!(d, expect, "{level} diff {diff} weapon {weapon:#x}: hit #{k} (band {}) damage {d} vs model {expected_hit} (pool {pool_hit})",
                     if band_hit { "out" } else { "TOOCLOSE" });
             }
@@ -414,4 +429,12 @@ fn the_fire_rate_matches_the_game_interval_clamp_and_burst_cut() {
     assert!(runs.iter().all(|&r| r <= 3), "weapon 0x12 burst lengths {runs:?} — the game cuts the 12-round record to 3 (aggression 0.3, 0x179f80-0x17a01c)");
     let threes: u32 = runs.iter().filter(|&&r| r == 3).sum();
     assert!(threes * 10 >= 40 * 7, "3-round bursts must govern the fire: only {threes}/40 shots in 3-runs");
+}
+
+fn walker_wrap(a: f32) -> f32 {
+    let tau = std::f32::consts::TAU;
+    let mut a = a % tau;
+    if a > std::f32::consts::PI { a -= tau; }
+    if a < -std::f32::consts::PI { a += tau; }
+    a
 }

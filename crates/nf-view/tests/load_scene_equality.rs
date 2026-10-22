@@ -48,7 +48,7 @@ const BASELINE: &[(&str, &str)] = &[
     // Re-pinned for silencer-white-artifact (700y3, 2026-10-20): the silenced weapons' duplicate suppressor extra
     // (the record's +0x7C view-entity, drawn by the datum-0 attach instead) is no longer built (4-6 meshes per level); every pinned level re-pinned.
     ("07000002.bin", "31d5bf43e19366ce 4483659 9371265 5347 4346365 81 9810 205 28 25 8"),
-    ("07000005.bin", "6a43ad2ce9dee894 4377695 9151611 3576 4293354 73 9731 106 19 16 6"),
+    ("07000005.bin", "c084ffb7ea2aa9e5 4386927 9170265 3609 4302586 73 9744 106 19 16 6"), // 1022l: the two copter SPs (836) + their script draw slots (copter-script-draw)
     ("0700000c.bin", "15de2f0294792a8a 4871632 10240830 8177 4680808 96 10996 170 22 40 15"),
     // script-entity-copies (2026-10-20): one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.

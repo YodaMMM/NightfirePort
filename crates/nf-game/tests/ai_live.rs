@@ -979,7 +979,9 @@ fn wine_truck_drives_and_parks() {
     let d = l.data();
     let (drones, _, rng) = l.drones(None, 61.342);
     let mut sim = l.sim(drones, rng);
-    assert_eq!(sim.scripts.players.len(), 6);
+    // 6 placed SPs + the two copters' SPs (#241/#242), created at load by Copter_Create's SP_Create
+    // [M 0x17d340:66-70 → 0x1dc7e0; L ee_start_05: both copter SPs exist from the create beat].
+    assert_eq!(sim.scripts.players.len(), 8);
     let away = bond_at([0.0, -500.0, 0.0]);
     let truck = |sim: &Drones| sim.scripts.objects.list.iter().flatten().find_map(|o| match o {
         Obj::Anim { skin: 0x0500_0005, script, frame, .. } => Some((*script, *frame)),

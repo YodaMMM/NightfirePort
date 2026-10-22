@@ -120,7 +120,12 @@ fn take_drop(scene: &mut Scene, k: usize, mut dev: Option<&mut Dev>) -> bool {
         let p = &sim.drones.pickups[k];
         [p.m[3][0], p.m[3][1] + 0.4, p.m[3][2]]
     };
-    for (dx, dz) in [(0.0f32, 0.0f32), (2.0, 0.0), (-2.0, 0.0), (0.0, 2.0), (0.0, -2.0)] {
+    // The stand points: on the drop, then a step off it inside the take radius (r + 1.1
+    // [M 0x18e148:210-214]) — the take's LOS ray ends ON the resting drop's floor, and straight
+    // down onto a sloped tri it can graze the surface short of the 1e-4 end tolerance (the port's
+    // [S] RayIntersect t-range, pickup.rs `touches`); a walking player reaches the drop from the
+    // side — then the old 2-unit ring.
+    for (dx, dz) in [(0.0f32, 0.0f32), (0.4, 0.0), (-0.4, 0.0), (0.0, 0.4), (0.0, -0.4), (2.0, 0.0), (-2.0, 0.0), (0.0, 2.0), (0.0, -2.0)] {
         {
             let sim = scene.sim.as_mut().unwrap();
             sim.bond = nf_game::player::Bond::stand_at(&sim.world, [at[0] + dx, at[1], at[2] + dz], 0.0);
