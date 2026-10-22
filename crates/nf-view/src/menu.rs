@@ -7274,7 +7274,11 @@ impl FrontEnd {
             if i >= s.players.len() { continue; }
             // +0x28: the codename's radar option [M 0x2144d8:13] — the local profile's (the port's
             // one codename set; split-screen players share it [S]).
-            s.players[i] = nf_game::mp::MpPlayer { team, skin, armor_bonus: 0, radar_on: self.mp_player_radar, codename };
+            // R7 (2026-10-22): read the codename's option VALUE (`opts`, loaded from the saved
+            // settings) — `mp_player_radar` alone was only set when the row was edited, so a saved
+            // Radar Off came back as On after a restart.
+            let radar_on = self.opts.get(&0x1000_0128).map_or(self.mp_player_radar, |&v| v as u32);
+            s.players[i] = nf_game::mp::MpPlayer { team, skin, armor_bonus: 0, radar_on, codename };
         }
         // mp-bot-objectives: the enabled bots' team bytes (record +0x0F — blue = MI6 = team 1,
         // the confirm summary's split [M :337-352]) ride the bot slots' team words; the bots follow
