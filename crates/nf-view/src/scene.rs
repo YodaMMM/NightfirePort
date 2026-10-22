@@ -2947,7 +2947,8 @@ impl Sim {
             // object itself [M 0x1320d8:175-194, the carry above]; cam mode 0xe is the SAME
             // first-person case as mode 0 [M 0x18f5d8:96-97], so the carried pose IS the view.
             if !self.drones.death.active && !net_dead && !self.drones.props.gunimps.iter().any(|g| g.active) {
-                self.bond.tick_ctx(&self.world, &ctx, &input);
+                { let _pphase = nf_game::prof::scope("phase: player move");
+                self.bond.tick_ctx(&self.world, &ctx, &input); }
             }
             // audit-sound-calls: drain the jump launch / head-bump sounds into the Sim's sound
             // pool (`Player_HandleJump` 0x1916b0:184,195-198 via `Bond::sfx_out`).

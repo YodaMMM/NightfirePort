@@ -14186,7 +14186,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let dx = dr.pos[0] - player.pos[0]; let dy = dr.pos[1] - player.pos[1]; let dz = dr.pos[2] - player.pos[2];
                 dr.dist_to_player = [(dx * dx + dy * dy + dz * dz).sqrt(), 100000.0, 100000.0, 100000.0]; }
         }
-        self.update_player_bullets(d, player.pos);
+        { let _p = crate::prof::scope("phase: bullets"); self.update_player_bullets(d, player.pos); }
         // The locks' idle arm (`Lock_Update` 0x1ae3d8 case 0 kind 1's tail): the +1/tick refill of
         // the burn bytes once the 2-tick grace runs out [M :107-121] — the partial burn heals. The
         // game runs `Lock_Update` per tick in the control pass; the contact side already ran above
@@ -14196,6 +14196,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The use objects' per-tick halves (`PCQWorm_Update` 0x1aee20's bullet install +
         // `Switch_Update` 0x1adea8's value/auto-return; map-tower, crate::useobj). The bullet
         // segments are this tick's paths — the game reads the class-5 contact list the same pass.
+        let _pwo = crate::prof::scope("phase: world objects");
         let (paths, weapons) = self.bullet_paths();
         let shots: Vec<(V3, V3, u16)> = paths.iter().zip(weapons).map(|(&(a, b), &w)| (a, b, w)).collect();
         self.useobjs.tick(&shots, &mut self.channels, frame, &mut self.scripts);
@@ -14237,6 +14238,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             &mut self.worldobjs, &mut self.channels, wo_viewer, d.weapons, &mut self.rng, &mut self.bullets, frame,
             &mut self.music,
         );
+        drop(_pwo);
         // `Monitor_Update` 0x1afcc8: the viewing monitors latch the watched sensor's
         // monitor-view channel and set its +0x60 unhide; the exit cooldown drains.
         self.monitors.tick(&mut self.sensors, &mut self.channels, frame);
@@ -14959,10 +14961,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.doors.begin_pass();
         // Pickups are created at run time, so they head the control list: `Pickup_Update` before the placed objects.
         // mp-world-sync: online the take walk sees every body (`update_pickups_net`).
+        { let _p = crate::prof::scope("phase: pickups");
         match self.net_bodies.take() {
             Some(bodies) => { self.update_pickups_net(d, &bodies, frame); self.net_bodies = Some(bodies); }
             None => self.update_pickups(d, player, frame),
-        }
+        } }
         // The actor list `Door_Update`'s proximity test (`dist² < (r1+r2)²·2` over classes
         // 2/3/0x12, skipping `obj+0xF0 & 0x10` candidates [M 0x136678-0x136684]) sees: the player
         // first (`glb_players`, the activator of every auto-activation) with radius 0.4, then every
@@ -15971,7 +15974,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             });
         }
-        { let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&script_parts(self, d)); }
+        { let parts = { let _p = crate::prof::scope("drones: set_dynamic parts"); script_parts(self, d) };
+          let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&parts); }
         // The killer monitor's step-2 clear of the hostage's finished `+0x4D0` [M 0x144340:53]:
         // flagged during the walk (the borrow can't reach the hostage) and applied here, before
         // the speech pass — `speech()`'s non-forced gate refuses a line while any voice is
@@ -16707,7 +16711,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.channels = ch;
         // The sound triggers (`SoundTrigger_Update` 0x1b2790 — the object walk's per-frame pass;
         // fix-06-alarm): the alarm siren starts the same frame its ON channel is up.
-        self.sound_triggers.tick(&mut self.audio, &self.channels);
+        { let _p = crate::prof::scope("phase: sound batch"); self.sound_triggers.tick(&mut self.audio, &self.channels); }
         // `Mission_Update` moved to the top of the tick (fix-objective-banner): the game's Game_Run
         // order — see the block before `fx.tick` above.
         // fix-progress: the tally folds — the per-drone `PlrStat_Log*` outboxes, `Trigger_Calc`'s
