@@ -10001,6 +10001,7 @@ pub fn hazard_link_flag(weapon_type: u16, stuck: bool) -> Option<(f32, u16)> {
 /// The per-viewer shake amount `Camera_Shake` 0x1bc430:12-26 writes [M]: with range = 2·radius
 /// and d ≤ range, `min((int)(range·(1 − (d/range)²)), 10)`; 0 outside. Explode_Create 0x17cc28
 /// only calls it from radius ≥ 0.5. standins-drone-922.
+#[allow(dead_code)] // not wired: task 969 (held for the feel test)
 pub fn camera_shake_amount(radius: f32, dist: f32) -> f32 {
     let range = radius * 2.0;
     if dist > range { return 0.0; }
@@ -10301,10 +10302,11 @@ pub struct Drones {
     /// with radius f13 = +0x08. Tuple: (pos, radius, damage, owner, weapon_type, script, scale).
     pub pending_blasts: Vec<(V3, f32, f32, usize, u16, u32, f32)>,
     /// The camera-shake amount: `Explode_Create` 0x17cbd0 calls `Camera_Shake(pos, radius)` when the
-    /// radius reaches 0.5 [M 0x17cc28-0x17cc44]; the set is `Camera_Shake` 0x1bc430's per-viewer
-    /// `min((int)(2r·(1−(d/2r)²)), 10)` overwrite [M], the decay `Camera_Update` 0x1bb6d8:35-43's
-    /// uniform `shake −= Rand_FRand(shake·0.25)` per tick, floored at 0 [M]. The view reads it for
-    /// the offset. fix-explosions + standins-drone-922.
+    /// radius reaches 0.5 [M 0x17cc28-0x17cc44]. The port keeps the old [S] set (max radius) and
+    /// decay (×0.9 − 0.05): the game's `Camera_Shake` 0x1bc430 per-viewer `min((int)(2r·(1−(d/2r)²)),
+    /// 10)` store and `Camera_Update` 0x1bb6d8:35-43's vector draw + `shake −= Rand_FRand(shake·0.25)`
+    /// are task 969 (held for the user's feel test; the int-into-float store and the RNG draws need
+    /// the disassembly). The view reads it for the offset. fix-explosions.
     pub shake: f32,
     pub health: crate::bullet::PlayerHealth,
     /// Every hit on Bond: (tick, shooting drone, health lost).
@@ -11861,17 +11863,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // is very small and not accurate to the game." fix-blast-scripts2: the caller's f12 arrives
         // as the `scale` arg instead of being derived from the radius.
         self.scripts.spawn_once_scaled(usize::MAX, script, bm, scale);
-        // `Camera_Shake(pos, radius)` only from radius 0.5 [M 0x17cc28-0x17cc44]. Camera_Shake
-        // 0x1bc430:12-26 [M]: range = 2·radius; per viewer (the port's one viewer is Bond, the
-        // `player_pos` the FX pass already tracks) with d = |blast − viewer| ≤ range:
-        // intensity = range·(1 − (d/range)²), int-truncated, capped at 10, WRITTEN — a closer
-        // blast overwrites (the old `max(radius)` had no falloff, no truncation, no cap).
-        if radius >= 0.5 {
-            let dv = ((pos[0] - self.player_pos[0]).powi(2)
-                + (pos[1] - self.player_pos[1]).powi(2)
-                + (pos[2] - self.player_pos[2]).powi(2)).sqrt();
-            self.shake = camera_shake_amount(radius, dv);
-        }
+        // `Camera_Shake(pos, radius)` only from radius 0.5 [M 0x17cc28]. fix-922: the exact
+        // Camera_Shake/Camera_Update port (camera_shake_amount) is held for the user's feel test and
+        // the open store/RNG questions (task 969) — the old shape stays.
+        if radius >= 0.5 { self.shake = self.shake.max(radius); }
         self.explosions.push((pos, radius, damage, owner, weapon_type));
     }
 
@@ -16214,12 +16209,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // was set to FRAME_RATE·f·10 = 600·f ticks [M 0x196040 + 0x12e0b8]). The old self-fraction
         // decay (−f/6 per tick) erased the whiteout in ~6 ticks — invisible.
         self.health.flashbang = (self.health.flashbang - 1.0).max(0.0);
-        // standins-drone-922: the game's decay [M Camera_Update 0x1bb6d8:35-43] — one
-        // `Rand_FRand(shake·0.25)` draw per tick (the port's `frand`, the same shared stream),
-        // floored at 0; the old 10%/tick − 0.05 was a guess.
-        if self.shake > 0.0 {
-            self.shake = (self.shake - self.rng.frand(self.shake * 0.25)).max(0.0);
-        }
+        self.shake = (self.shake * 0.9 - 0.05).max(0.0); // [S] the old shape; the exact decay is task 969
         // The SimpleScripts (`SS_Update` 0x1a9948's state machine — grates-02). The `SS_Operate`
         // 0x1a9df8 contacts, from the collision pass's registered dynamic set: the player's
         // capsule box (bit 0) and this tick's player-bullet flight (bit 1) against each SS part's
