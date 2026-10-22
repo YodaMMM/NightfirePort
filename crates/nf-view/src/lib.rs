@@ -5864,7 +5864,13 @@ impl ApplicationHandler for App {
                 let dt = self.last.elapsed().as_secs_f32().min(0.1);
                 self.last = std::time::Instant::now();
                 self.frame(dt);
-                self.draw_frame(dt);
+                // While a level loads, `frame` already drew and presented the loading screen
+                // (poll_async_load → draw_loading_screen) and returned early. The old inline body's
+                // `return` skipped the draw; since the frame/draw_frame split (7f14552b) the scene
+                // was drawn and presented right after it, so every redraw alternated loading screen /
+                // old scene hundreds of times a second (user report 2026-10-21: "loading levels is
+                // seizure inducing"). Skip the scene draw for the whole load.
+                if self.async_load.is_none() { self.draw_frame(dt); }
             }
             _ => {}
         }
