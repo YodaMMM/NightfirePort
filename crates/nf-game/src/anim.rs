@@ -213,11 +213,17 @@ pub fn script_pose(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Sequence>
     // `seq.skeleton`. Shared human tracks ride on other rigs' ids: 07000004's seated target
     // (skin 0x0500001e, skeleton 8) plays 0x0400028a, whose record byte is skeleton 0 — the
     // strict filter left him with no palette and no hit boxes (the bullets could never land).
-    // [The game's playback confirms the cross-rig read: `AnimFrameCopy` 0x1c5668 takes the walk's
-    // skeleton from the SEQUENCE tag's +0xa9 byte (:52) and gates the writes on the SKIN's bone
-    // flags (param_4+0x24) — ninja-boss-cutscene. The port's skin-skeleton walk is the standing
-    // [S] convention; the channel-count guard keeps short tracks (a 22-channel face track on a
-    // body need) rejected.]
+    // The game's own rule, verified [M `AnimFrameCopy` 0x1c5668]: the walk's skeleton comes from
+    // the SEQUENCE record's +0xa9 byte (:66) and each bone's write is gated on the SKIN's
+    // bone-flag bytes (the skin+0x24 array, bit 0x80 clear → the bone is skipped, :189); there
+    // is NO sequence-id vs skin-id comparison anywhere in the function (the skin contributes
+    // only the +0x24 pointer). The port's two-arm filter transcribes that rule for its data
+    // model: the id match takes the record's own walk; the guarded arm requires the channels to
+    // cover the skeleton's full walk — the port's conservative equivalent of the per-bone flag
+    // veto, which needs the skin flag bytes the port's `Skin` does not carry, and coincides
+    // with it for the shipped cross-rig tracks (both are full-coverage [D 07000004 seated
+    // target 0x0400028a and ninja 0x0400047a: both skeletons 73 bones]); the guard also keeps
+    // short tracks (a 22-channel face track on a body need) rejected.]
     let seq = seqs.get(&q).filter(|s| {
         s.skeleton == skin.skeleton
             || {
@@ -283,7 +289,8 @@ fn script_pose_drone_with(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Se
     // [D measured] 07000007's face seq 0x04000467, flags 0x08, 22 channels == skin 0x0500003b's
     // facial count; measured on the disc: 07000006's driver face track 04000065 channels 0..2
     // reach ~1.0 — weight values the old bone read turned into root/face-bone translations, the
-    // weights-as-bones bug). One rule everywhere (the count probe was fix-facial3's stand-in).
+    // weights-as-bones bug). One rule everywhere — the channel-count probe fix-facial3 once
+    // used here is gone, replaced by the game's own flags classifier [M 0x1c1b38: `>> 3 & 1`].
     let is_face = |q: u32| -> bool { seqs.get(&q).is_some_and(|s| s.flags & 0x8 != 0) };
     // The bones a window's channels reach; the shared-track arm mirrors `script_pose`'s filter.
     let covered = |q: u32| -> usize {
@@ -357,13 +364,15 @@ pub fn script_pose_together(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, 
     // leading [0,1] weights zero the root — the missing-cast bug. The window picker here must
     // never hand a facial window to the bone walk; the weights path (`Scene::facial_weights_now`)
     // is what consumes it. This flags rule (fix-cutscene-faces) is THE classifier everywhere —
-    // `script_pose_drone` uses it too (fix-facial3's channel-count probe was the stand-in;
-    // one rule, the game's own).
+    // `script_pose_drone` uses it too (fix-facial3's channel-count probe was replaced by it;
+    // one rule, the game's own [M 0x1c1b38]).
     let is_facial = |q: u32| seqs.get(&q).is_some_and(|s| s.flags & 0x8 != 0);
     // ninja-boss-cutscene: the window-acceptance rule, one with `script_pose`/`script_pose_drone`'s
     // channel-count guard. `AnimFrameCopy` 0x1c5668 reads the channel stream positionally over the
-    // SEQUENCE's own record skeleton (`iVar6 = pSkeletons[*(byte *)(sAnimSeq + 0xa9)]`, :52; the
-    // translation-mask test :190, the stand-in offsets :194-198) and gates each bone's write on the
+    // SEQUENCE's own record skeleton (`iVar6 = pSkeletons[*(byte *)(sAnimSeq + 0xa9)]`, :66; the
+    // translation-mask test is the skeleton's +4 bitfield, bit `bone & 0x1f`, :195-196 — a mask-clear
+    // bone takes the skeleton record's own default translation at skeleton+0x10+bone·0xc, :197-202,
+    // the game's own neutral) and gates each bone's write on the
     // SKIN's bone-flag bytes (`param_4 + 0x24`, :186-189) — no id equality anywhere. Shipped
     // cut-scenes ride cross-rig: 07000004's ninja (skin 0x0500001e, skeleton byte 8) plays 0x06000507
     // whose only window is 0x0400047a (record byte 0; both skeletons 73 bones, mask 0x1/0/0) [D
@@ -500,9 +509,20 @@ pub fn root_yaw(q: [f32; 4]) -> f32 {
 
 /// Removes `yaw` about +Y from a root rotation (pre-multiplies by the inverse turn).
 pub fn unyaw(q: [f32; 4], yaw: f32) -> [f32; 4] {
-    // G-046: the inverse-turn quat is the game's AA2Q idiom — w = PS2Sinf(θ/2 + 1.5707964), y =
-    // PS2Sinf(θ/2) [M Quat_AxisAngleToQuat 0x1e3f20's PS2Sinf2 lanes; the θ = −yaw mapping [S] — the
-    // game counterpart of this helper is otherwise unresolved (G-046's UNCLEAR note)].
+    // G-046, resolved: the game's counterpart is `AnimObjectUpdate` 0x1befd8:225-277 (the +0x78
+    // bit-0x20000 arm that `AnimScriptSetAnimRotation` 0x1c7208 arms): it extracts the root yaw
+    // (`Quat_Rot_Vec` of the root quat over (0,0,1), then `atan2f(out.x, out.z)` [M, disasm
+    // 0x1bf388/0x1bf394] — the same convention as `root_yaw`/Vec_DirToRot above) and builds the
+    // turn quat with `Quat_EulerToQuat` 0x1e3d78:29-36 from euler {0, Δ, 0} → y = sin(Δ/2),
+    // w = cos(Δ/2) — the same lanes as the AA2Q idiom this helper uses. Δ =
+    // `Vec_AngleDifference(reference, current)` = reference − current [M 0x1e2b78:14 returns
+    // p2 − p1], so the port's θ = −yaw SIGN is the game's. Scope difference (documented port
+    // choice): the game removes the gain since the per-script reference (+0xa0, primed with the
+    // sentinel 8.0f on the first flagged tick and re-primed by every SnapRotate toggle) each
+    // tick and banks the gain into obj+0x54; this helper removes the full extracted yaw once at
+    // the outgoing handover (drone.rs). Pre-multiply (turn ⊗ root) [M — the VU block loads the
+    // root first, the turn second, matching the validated `AnimObjectHeadTrack` composition,
+    // drone.rs:4422-4433].
     let ha = -yaw * 0.5;
     let s = crate::trig::sinf(ha);
     let c = crate::trig::sinf(crate::trig::ee_add(ha, crate::trig::HALF_PI));
@@ -578,8 +598,10 @@ mod tests {
     fn distance_table_maps_walked_distance_to_frames() {
         use nf_formats::anim::{Sequence, Segment};
         // 5 frames whose root z walks 1.0 per frame (channels: z = t, t = frame − 1); every channel
-        // carries a segment (`AnimFrameCopy` evaluates the tracks the sequence carries, and an
-        // empty track's `segs.last()` has no neutral stand-in on the read side).
+        // carries a segment — the game's `AnimSeqNew` 0x1c7248 zero-fills the +0x84 frame buffer
+        // [M, memset], so an unread channel reads 0.0, and the port's `value()` returns that same
+        // zero neutral for a present-but-empty channel (the old panicking `segs.last()` read is
+        // gone).
         let mk = |end: u32, z: f32| vec![Segment { end, c: [0.0, z, 0.0, 0.0, 0.0, 0.0] }];
         let seq = Sequence {
             hashcode: 1,
@@ -640,10 +662,12 @@ pub const FEMALE_FACIAL_STATE_ANIMS: [u32; 5] = [0x0600_036d, 0x0600_036f, 0x060
 /// `script+0x54 → seq+0x84`.
 ///
 /// `facial_weights` samples a face-track sequence at script time `time` the way the sequence
-/// player does (`script_frame`'s window → frame = time − first + 1; `AnimFrameCopy` evaluates
-/// each channel at the integer frame, the fractional part lerps f/f+1 — [S] for the weights
-/// buffer: `AnimFrameBlend`'s float-path lerp; the bone path's overshoot clamp/slerp does not
-/// apply to scalars). `count` = the skin's facial count (disc +0x12).
+/// player does (`script_frame`'s window → frame = time − first + 1; the game keeps the seq's
+/// +0x84 buffer current through `AnimFrameSet` = `AnimFrameCopy` + `AnimFrameBlend` [M
+/// AnimFrameSet 0x1c75a0:48-57], whose per-scalar lerp is `a + (b − a)·t` under a no-overshoot
+/// clamp [M 0x1c2b80:65-76] — inert for t ∈ [0,1], so the plain lerp below IS the game's scalar
+/// rule; `AnimFacialBlend` 0x1be648:33-34 then reads the buffer directly, never lerping).
+/// `count` = the skin's facial count (disc +0x12).
 pub fn facial_weights(seq: &Sequence, time: f32, count: usize) -> Option<Vec<f32>> {
     if count == 0 || seq.channels.len() < count { return None; }
     let (q, f) = script_frame_of(seq, time)?;
@@ -730,8 +754,11 @@ pub fn facial_blend(out: &mut [f32], slot0: Option<&[f32]>, slot1: Option<&[f32]
 /// state 2 (talk): stay while a talk script (marker 0xe0000002) plays; else state 1 + the alert
 /// changed flag (0 draws — the next frame re-appends the idle face).
 ///
-/// The game's gender select is anim-object flag bit 10 (raw+0xC8 & 0x400); the port passes its
-/// `Drone+0x15` female byte (the skin-mask stand-in — flagged in the report). Returns the table
+/// The game's gender select is bit 10 of the ANIM OBJECT's +0x58 flags word —
+/// `(int)*(uint *)(param_2 + 0x58) >> 10 & 1` [M AnimFacialUpdate 0x1be310:22-27, inside the
+/// +0x58 bit-0x10000 facial-off and ScriptCam gates]; a gameplay caller must feed that bit (the
+/// port's anim state folds +0xc8 for aim/track — the +0x58 word needs the same fold then; see
+/// the report's live checks for the bit-10 writer). Returns the table
 /// rows to append this frame.
 #[derive(Debug, Default, PartialEq)]
 pub struct FacialCmd {

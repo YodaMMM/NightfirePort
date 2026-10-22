@@ -34,11 +34,17 @@
 //!   0x17a938 over `age/life`; dead slots respawn (batch-capped) while enabled, one-shots only fire
 //!   the never-spawned slots once `expired` [M 0x17b080]. Death: 3 all-dead ticks set obj+0xFE bit 0.
 //!
-//! RNG discipline: the game draws from the shared stream (ripples 1 gate + 3, emitters 4 per spawn,
-//! the flicker spark's `Rand_Rand(5)`) — the port consumes NONE of them (the bit-exact stream must not
-//! gain draws, the `gas.rs`/searchlight discipline) and derives each value from a per-object counter
-//! hash instead [S]. Same visible behaviour, deterministic; the deviation is listed in
-//! docs/atlas/emitter.md and docs/models/misc.md.
+//! RNG discipline: the game draws from the shared stream (ripples 1 gate + 3 [M Ripples_Update
+//! 0x1ac028:34-52], emitters 4 per spawn [M Emitter_Update 0x17b080:216-247], the flicker spark's
+//! `Rand_Rand(5)` [M — behind the stubbed `Light_FindMapLight`, unreachable], leafgens 9 per spawn
+//! [M Leaf_Create 0x1abc88:31-79 — 1 discarded 0.02 draw, 2 eject draws, 3 position draws, 3 spin
+//! draws], lightning 21 per reflicker [M FractalThing 0x1a94d8:78-87 — 7 mid nodes × 3 axes]) — the
+//! port consumes NONE of them (the bit-exact stream must not gain draws — the G-033/fix-world-fx
+//! discipline, docs/atlas/emitter.md and docs/models/misc.md) and derives each value from a
+//! per-object counter hash instead. That is a deliberate, documented DEVIATION, not a guess about
+//! the game: the game's draws are cited per site below; the replacement is deterministic per
+//! object and draws from the same uniform bands, so every visible quantity lands in the game's
+//! value range with different samples.
 
 use crate::triggers::Channels;
 use crate::world::V3;
@@ -83,13 +89,12 @@ pub struct RippleFx {
     counter: u32,
 }
 
-/// One 0x2b placement (`LeafGen_Create` 0x1acbd0 — an invisible object linked to room 0;
+/// One 0x2b placement (`LeafGen_Create` 0x1acbd0 — a class-0x31 object linked to room 0;
 /// `LeafGen_Update` 0x1acc48: every tick `Rand_Rand(FRAME_RATE_INT >> 1) == 0` → one
-/// `Leaf_Create` 0x1abc88 particle: `Rand_FRand(0.02f)` x/z velocity jitter slots, a
-/// `Rand_FRandHalf_Vec(0.1f)` spin — a falling leaf by the generator). The port keeps the gate on
-/// the counter-hash (the RNG discipline — the game's leaf draws come out of the shared stream) and
-/// records the spawn's jittered position for the draw code; the leaf's own motion integrator is not
-/// ported [S unverified].
+/// `Leaf_Create(gen, 1)`). The port runs the whole chain: the gate on the counter-hash (the RNG
+/// discipline — the game's leaf draws come out of the shared stream [M Rand_Rand 0x1e3738 =
+/// SEED_X/SEED_Y]) and the leaf's own integrator — `LeafFx` below, `Leaf_Update` 0x1abee0
+/// verbatim; spawned leaves live in `WorldFx::leaves` and tick every frame after the gate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LeafGenFx {
     pub placement: usize,
@@ -97,12 +102,22 @@ pub struct LeafGenFx {
     counter: u32,
     /// Ticks since load (a spawn count the tests and the draw code read).
     pub spawned: u32,
-    /// The last spawn's jittered offset (± the `Leaf_Create` 0.02 velocity band, counter-hash).
+    /// The last spawn's position offset — `Rand_FRand(2·spread) − spread` per axis [M
+    /// Leaf_Create 0x1abc88:47-55 draws x, z, y in that order]. The spread is the generator's
+    /// obj+0x8c, which reads 0.0: `control_create_object` 0x1344e0:17 memsets the object and
+    /// `LeafGen_Create` 0x1acbd0:12-18 writes only +0xd8/+0xf0/+0xff — so the game's own jitter
+    /// is 0 and leaves spawn AT the generator (the draw still advances the stream).
     pub last_offset: [f32; 2],
+    /// The generator's euler yaw (obj+0x54 = the placement's raw ry: parsemap copies the
+    /// level_tag rotation words verbatim into obj+0x50.. [M 0x1d04f0:50-53; Leaf_Create reads
+    /// +0x54 as the Sinf2 angle]).
+    pub yaw: f32,
+    /// The generator's obj+0x8c spread — 0.0 on the traced path (the memset above).
+    pub spread: f32,
 }
 
-/// One falling leaf particle — `Leaf_Update` 0x1abee0 (the motion integrator the
-/// `LeafGenFx` doc above leaves as the game's own). The game's object carries its position
+/// One falling leaf particle — `Leaf_Update` 0x1abee0 (the integrator `WorldFx::leaves` drives;
+/// spawned by `Leaf_Create` 0x1abc88). The game's object carries its position
 /// (+0x30/+0x34), rotation (+0x50), the generator-shared velocity (+0x10) and spin (+0x20)
 /// vectors, two life limits (instance s16+0x30 counts down 1 per tick; obj u8+0x106 is a tick
 /// budget spent at `instance u8+0x32` per tick) and the delete bit (obj+0xFE bit 0) [M 0x1abee0].
@@ -130,28 +145,46 @@ pub struct LeafFx {
     pub frames_left: i16,
     /// obj u8+0x106: the tick budget.
     pub budget: u8,
-    /// instance u8+0x32: the per-tick budget cost.
+    /// instance u8+0x32: the per-tick budget cost. `Leaf_Create` 0x1abc88 never writes +0x32,
+    /// so a game-spawned leaf's cost is 0 and the 256-frame limit always kills first (the
+    /// budget guard stays for the mechanism — [M 0x1abee0:22-27]).
     pub tick_cost: u8,
+    /// The counter-hash state for the wiring's per-tick draws (the G-033 discipline).
+    counter: u32,
 }
 
 impl LeafFx {
+    /// The shared-stream form (`Leaf_Update` 0x1abee0's three draws in game order: the y wind
+    /// `Rand_FRand(0.075)` first, then the x/z drifts `Rand_FRand(0.005)` [M 0x1abee0:30-40]).
     pub fn tick(&mut self, rng: &mut crate::drone::Rng) -> bool {
+        let y = rng.frand(0.075);
+        let dx = rng.frand(0.005);
+        let dz = rng.frand(0.005);
+        self.tick_draws(y, dx, dz)
+    }
+
+    /// The same integrator with the three draws supplied — the world-FX wiring's counter-hash
+    /// form (the G-033 discipline: the game's per-leaf draws ride the shared stream, the port's
+    /// placement FX consume none).
+    pub fn tick_draws(&mut self, y_wind: f32, drift_x: f32, drift_z: f32) -> bool {
         if self.frames_left < 1 {
             return false;
         }
-        self.frames_left -= 1;
         let spent = self.budget as i16 - self.tick_cost as i16;
         if spent <= 0 {
             return false; // the game's `iVar3 > 0` guard fails → delete bit [M 0x1abee0:48-50]
         }
         self.budget = spent as u8;
+        self.frames_left -= 1;
         for k in 0..3 {
             self.pos[k] += self.vel[k];
+        }
+        self.pos[1] -= y_wind - 0.025;
+        self.vel[0] += drift_x - 0.0025;
+        self.vel[2] += drift_z - 0.0025;
+        for k in 0..3 {
             self.rot[k] += self.spin[k];
         }
-        self.pos[1] -= rng.frand(0.075) - 0.025;
-        self.vel[0] += rng.frand(0.005) - 0.0025;
-        self.vel[2] += rng.frand(0.005) - 0.0025;
         true
     }
 }
@@ -161,25 +194,41 @@ impl LeafFx {
 /// camera is active, and nothing else [M]. `TreeFx.paused` records the create-time pause bit; the
 /// anim-script advance itself is the world-object animation runtime's job (draw side).
 ///
-/// One 0xf3 placement (`Env_Tree_Create` 0x17c200 — an object at the placement pose,
-/// `AnimObjectNew` + `AnimScriptAdd(anim)`: the sway animation; on every level but 0x7000043 the
-/// script's +0x78 gets 0x80000000 and a random start phase `Rand_FRand(anim length)` [M
-/// 0x17c200:38-52]). The port records the placement and its hashes; the sway animation itself (the
-/// world-object anim-script runtime) is not ported [S unverified].
+/// One 0xf3 placement (`Env_Tree_Create` 0x17c200: a class-0x3f object at the placement pose,
+/// `AnimObjectNew(obj, param0)` [M :15] + `AnimScriptAdd(obj, param1)` [M :23] — the sway
+/// animation, with param1 == 0x600008c swapping to 0x600008d on a 50% `Rand_Random() & 1` [M
+/// :16-22; the shared stream 0x1e36f0 = SEED_X/SEED_Y]; on every level but 0x7000043 the script
+/// pauses (+0x78 bit 0x80000000) and takes a random start phase `Rand_FRand(script length)`
+/// truncated to int, stored at script+0x90 [M :24-31]). `Env_Tree_Update` 0x17c328 then only
+/// advances the anim runtime: `if (ScriptCam == 0) AnimObjectUpdate(obj)` [M :5-8]. The pose
+/// apply for world objects (the sway on the drawn tree) is the render side's job — the fields
+/// below are the data it consumes; the runtime functions are the game's own [M AnimObjectUpdate
+/// 0x1befd8 / AnimScriptTick 0x1c2630 / AnimSeqTick 0x1c28d0].
 #[derive(Clone, Debug, PartialEq)]
 pub struct TreeFx {
     pub placement: usize,
     pub pos: V3,
     pub yaw: f32,
-    /// param 0 — the model hash (the game reads `cel+0x2c` [M 0x17c200:33]; the placement's param
-    /// 0 feeds it [S — parseentity_fixup_entity's param→cel write order untraced]). 07000004's two
-    /// carry 0x05000043 "Tree" [D].
+    /// param 0 — the model hash: the placement's (index, value) params scatter to
+    /// level_tag+0x2c+4·i in the dynamic pass [M parsemap_block_map_data_dynamic 0x1d1b68:70-75]
+    /// and `Env_Tree_Create` reads param_3+0x2c for `AnimObjectNew` [M 0x17c200:15].
+    /// (`parseentity_fixup_entity` 0x1d00c0 is the STATIC pass only [M 0x1d1998:110, gated on the
+    /// 0x8000 flag :92] — never in the tree's dynamic chain [M 0x1d1b68:93-96].) 07000004's two
+    /// carry 0x05000003 "Tree" [D param 0 = 83886083, the ISO-gated test's dump].
     pub model: u32,
-    /// param 1 — the anim script hash (the game reads `cel+0x30`; 07000004: 0x06000474 [D]).
+    /// param 1 — the anim script hash (level_tag+0x30 → `AnimScriptAdd` [M 0x17c200:16-23]);
+    /// 0x600008c swaps to 0x600008d on the counter-hashed coin [M :16-22]. 07000004's two carry
+    /// 0x0600008c — the coin IS live there [D param 1 = 100663436; the ISO-gated test pins the
+    /// two-hash outcome].
     pub anim: u32,
-    /// `Env_Tree_Create` 0x17c200:44-52: level == 0x7000043 keeps the script unpaused, every other
+    /// `Env_Tree_Create` 0x17c200:24-31: level == 0x7000043 keeps the script unpaused, every other
     /// level pauses +0x78 bit 0x80000000 and takes a random phase. 07000004 != 0x7000043 → paused.
     pub paused: bool,
+    /// The start-phase unit for the paused arm: the game draws `Rand_FRand((f32)(i16)script+0xb0)`
+    /// and stores `(int)` of it at script+0x90 [M 0x17c200:26-31] — the port stores the [0,1)
+    /// counter-hash unit; the consumer multiplies by the script's length (`Script.length`, the
+    /// runtime node's +0xb0 short) and floors.
+    pub phase_unit: f32,
 }
 
 /// One 0xd4 placement.
@@ -242,8 +291,9 @@ pub struct LightningStrike {
     /// beams sit at the master's pose (`control_create_object(0, the master's pos/quat)`
     /// [M 0x18cde8:46]); the game's `FractalThing` 0x1a94d8 redistributes nodes 1..7 on the
     /// first drawn reflicker flash — here on the `super_happy && reflicker` tick with the
-    /// counter-hash jitter stand-in [S] (the game draws 21 `Rand_FRand`s from the shared
-    /// stream; the port consumes none — the G-033 discipline).
+    /// counter-hash jitter (the G-033 discipline: the game draws 21 `Rand_FRand`s from the
+    /// shared stream [M 0x1a94d8:78-87 — 7 mid nodes × 3 axis draws]; the port consumes none
+    /// and hashes the same [0, amp) band per node).
     pub nodes: [V3; 8],
     /// `Lightning_Update` 0x18cf68: false = the `View_SetDrawInNoViews` arm (hidden), true =
     /// the `SuperHappyLightningFlag` arm (the BOLT_MESH chain drawn in all views). The game's
@@ -283,8 +333,9 @@ impl LightningStrike {
 /// `Vec_Dist3D(start, end) × 0.5` in mode 0, `sqrt(dist) × 0.16666667` otherwise [M
 /// 0x1a94d8:67-76], the node position `(start+end)×0.5 + (Rand_FRand(amp) − amp/2)` per axis
 /// (3 draws [M 0x1a94d8:78-87]) written to the mid node, then the two recursions [M
-/// 0x1a94d8:92-93]. `rand` returns one `Rand_FRand(amp)` in [0, amp) — the game's shared-
-/// stream draw; the caller supplies its own stand-in (the RNG discipline).
+/// 0x1a94d8:92-93]. `rand` returns one `Rand_FRand(amp)` in [0, amp) — the game draws it from
+/// the shared stream [M Rand_FRand 0x1e3780 = SEED_X/SEED_Y]; the caller supplies the
+/// counter-hash value instead (the G-033 discipline — no shared-stream draws).
 pub fn fractal_thing(nodes: &mut [V3], i0: i32, i1: i32, start: V3, end: V3, mode: u8, rand: &mut impl FnMut(f32) -> f32) {
     if i1 - i0 <= 1 { return; }
     let sum = i0 + i1;
@@ -363,8 +414,9 @@ pub struct EmitterFx {
     pub parts: Vec<EmitterParticle>,
     counter: u32,
     /// G-041 (fix-impact-remainder): the `Effect_Create` 0x1ce688 impact arm's emitters consume
-    /// the SHARED stream (`Emitter_Update` 0x17b080's 4 × `Rand_FRandHalf(1.0)` per spawn) —
-    /// unlike the 0xf2 placements, whose counter-hash stand-in predates this task and stays.
+    /// the SHARED stream (`Emitter_Update` 0x17b080's 4 × `Rand_FRandHalf(1.0)` per spawn [M
+    /// :216-247]) — unlike the 0xf2 placements, whose counter-hash replacement is the G-033
+    /// discipline (a documented deviation: same bands, different samples).
     pub shared_rng: bool,
     /// The object basis `Mat_SetDir/SetNorm/SetUp` 0x1e3418/0x1e3458/0x1e3438 built from the hit
     /// normal (`Emitter_Create` 0x17ae00): rows [Norm = v, Up = normal, Dir = u] — the spawn's
@@ -405,6 +457,11 @@ pub struct WorldFx {
     pub flickers: Vec<FlickerFx>,
     pub ripples: Vec<RippleFx>,
     pub leafgens: Vec<LeafGenFx>,
+    /// The live falling leaves (`Leaf_Create` 0x1abc88 spawns them, `Leaf_Update` 0x1abee0
+    /// integrates them — created mid-walk objects skip their creation frame in the game's
+    /// newest-first object pass [M control_add_object_to_list 0x134698 prepends], so a leaf
+    /// spawned this tick first updates next tick — the wiring updates before spawning).
+    pub leaves: Vec<LeafFx>,
     pub trees: Vec<TreeFx>,
     pub clouds: Vec<CloudFx>,
     pub apocalypses: Vec<ApocalypseFx>,
@@ -452,6 +509,14 @@ pub fn pair_lightning_recs(recs: &[(usize, u32, i16, u16, V3)]) -> (Vec<Lightnin
     (strikes, inert)
 }
 
+/// `Env_Tree_Create` 0x17c200:16-22: the anim hash with the variant coin — param1 == 0x600008c
+/// swaps to 0x600008d on the game's `Rand_Random() & 1` (the shared stream [M 0x1e36f0 =
+/// SEED_X/SEED_Y]); the port counter-hashes the bit per placement (the G-033 discipline — no
+/// load-time draws). Any other hash passes through untouched [M — the compare is the only gate].
+pub fn tree_anim_hash(param1: u32, placement: usize) -> u32 {
+    if param1 == 0x0600_008c && jitter(placement as u32, 0x5ee) < 0.5 { 0x0600_008d } else { param1 }
+}
+
 impl WorldFx {
     /// Every FX placement of the main map, in placement order (the game creates the dynamic objects
     /// in the same `parsemap_create_dynamic_objects` 0x1d04f0 walk). The emitter defs merge from
@@ -478,15 +543,23 @@ impl WorldFx {
                     fx.ripples.push(RippleFx { placement: i, pos, spread, period, counter: i as u32 });
                 }
                 0x2b => {
-                    // `LeafGen_Create` 0x1acbd0 — the generator, no placement params read.
-                    fx.leafgens.push(LeafGenFx { placement: i, pos, counter: i as u32, spawned: 0, last_offset: [0.0; 2] });
+                    // `LeafGen_Create` 0x1acbd0 — the generator, no placement params read. The
+                    // yaw is the placement's raw euler ry (the object's +0x54 [M 0x1d04f0:50-53]);
+                    // the spread (obj+0x8c) reads 0.0 — the create memset leaves it unset
+                    // [M 0x1344e0:17, 0x1acbd0:12-18].
+                    fx.leafgens.push(LeafGenFx { placement: i, pos, counter: i as u32, spawned: 0, last_offset: [0.0; 2], yaw: p.rotation[1], spread: 0.0 });
                 }
                 0xf3 => {
                     // `Env_Tree_Create` 0x17c200: the model/anim hashes from the placement's params
-                    // 0/1 [D 07000004 #30/#31]; the pause arm — every level but 0x7000043.
+                    // 0/1 (the dynamic pass's scatter [M 0x1d1b68:70-75]); the anim variant swap
+                    // 0x600008c → 0x600008d on the game's 50% coin [M 0x17c200:16-22] —
+                    // counter-hashed (no load-time draws, the G-033 discipline); the pause arm —
+                    // every level but 0x7000043, with the start-phase unit [M :24-31].
+                    let anim = tree_anim_hash(param(1), i);
                     fx.trees.push(TreeFx {
                         placement: i, pos, yaw: p.rotation[1],
-                        model: param(0), anim: param(1), paused: level_hash != 0x0700_0043,
+                        model: param(0), anim, paused: level_hash != 0x0700_0043,
+                        phase_unit: jitter(i as u32, 0x5ef),
                     });
                 }
                 0xe3 => {
@@ -594,7 +667,9 @@ impl WorldFx {
     /// One 60 Hz tick (`Emitter_Update`/`Ripples_Update`/`cloud_update`/`Apocalypse_Update` run in
     /// the game's object handler; `Flicker_Update` likewise). `frame` = `GameState+0x52`. `rng` is
     /// the SHARED stream — consumed ONLY by the impact emitters (`shared_rng`); the 0xf2
-    /// placements keep the counter-hash stand-in (the G-033/fix-world-fx discipline).
+    /// placements keep the counter-hash replacement (the G-033/fix-world-fx discipline — a
+    /// documented deviation: the game's 4 draws per spawn [M 0x17b080:216-247] are the stream's,
+    /// the port hashes the same bands per object).
     pub fn tick(&mut self, ch: &mut Channels, player_pos: V3, frame: u32, gas: &mut crate::gas::GasPool, rng: &mut crate::drone::Rng) {
         // Flicker [M 0x1ab960]: the stubbed FindMapLight keeps the white target and the 0 stamp.
         for f in &mut self.flickers {
@@ -619,13 +694,64 @@ impl WorldFx {
             let s = jitter(r.counter, 3) * 0.05 + 0.05;
             gas.init([r.pos[0] + jx, r.pos[1], r.pos[2] + jz], 0.0, [0.0; 3], s, s + s, 6, [0x7f, 0x7f, 0x7f, 0xff], r.period as f32);
         }
-        // LeafGens [M 0x1acc48]: the gate (counter-hash for Rand_Rand(30)), one leaf spawn — the
-        // 0.02-band x/z velocity jitter the draw code reads; the leaf's own integrator is not ported.
+        // Leaves first [M Leaf_Update 0x1abee0]: a leaf created this tick must not update until
+        // next tick (the newest-first object pass skips it — the emitter note below), so the
+        // update runs BEFORE the generators' spawn pass. The three per-tick draws (y wind 0.075,
+        // then the x/z drifts 0.005 [M 0x1abee0:30-40]) come out of the per-leaf counter hash
+        // (the G-033 discipline).
+        let mut alive = Vec::with_capacity(self.leaves.len());
+        for mut leaf in self.leaves.drain(..) {
+            leaf.counter = leaf.counter.wrapping_add(0x9e37_79b9);
+            let y = jitter(leaf.counter, 30) * 0.075;
+            let dx = jitter(leaf.counter, 31) * 0.005;
+            let dz = jitter(leaf.counter, 32) * 0.005;
+            if leaf.tick_draws(y, dx, dz) {
+                alive.push(leaf);
+            }
+        }
+        self.leaves = alive;
+        // LeafGens [M 0x1acc48]: the gate (counter-hash for Rand_Rand(30)), one `Leaf_Create`
+        // spawn — the draw order and bands are the game's [M 0x1abc88:31-79], counter-hashed.
         for l in &mut self.leafgens {
             l.counter = l.counter.wrapping_add(0x9e37_79b9);
             if jitter(l.counter, 11) * 30.0 < 1.0 {
                 l.spawned += 1;
-                l.last_offset = [jitter(l.counter, 12) * 0.04 - 0.02, jitter(l.counter, 13) * 0.04 - 0.02];
+                // Leaf_Create 0x1abc88 for count = 1: draw 1 discarded (0.02), draw 2 → the x
+                // eject speed +0.01, draw 3 → the z eject speed, then the three position draws
+                // `Rand_FRand(2·spread) − spread` (x, z, y order [M :47-55]) — with the
+                // generator's spread 0.0 (obj+0x8c never written [M 0x1344e0:17 memset,
+                // 0x1acbd0:12-18]) they return 0: the leaf spawns AT the generator. The spin is
+                // `Rand_FRandHalf_Vec(0.1)` [M :75, 0x1dfef0 — 3 draws, ±0.05].
+                let _discarded = jitter(l.counter, 14) * 0.02;
+                let v7 = jitter(l.counter, 15) * 0.02 + 0.01;
+                let v8 = jitter(l.counter, 16) * 0.02;
+                let (jx, jz, jy) = (
+                    jitter(l.counter, 17) * (l.spread + l.spread) - l.spread,
+                    jitter(l.counter, 18) * (l.spread + l.spread) - l.spread,
+                    jitter(l.counter, 19) * (l.spread + l.spread) - l.spread,
+                );
+                l.last_offset = [jx, jz];
+                // The eject velocity rides the placement's raw euler yaw — obj+0x54 IS the
+                // placement ry (parsemap copies the level_tag rotation words verbatim into
+                // obj+0x50.. [M 0x1d04f0:50-53]; Leaf_Create's `PS2Sinf2(+0x54 + 1.5707964,
+                // +0x54)` → (cos, sin) [M 0x1abc88:31-33]): vel = (v7·sin, 0, (v8+0.01)·cos)
+                // [M :70-79]. The rot starts at 0 (control_create_object's rot arg is 0 → no
+                // copy [M 0x1344e0:24-31]); the budget 0xff [M :54], 256 frames [M :57].
+                let (s, c) = (crate::trig::sinf(l.yaw), crate::trig::cosf(l.yaw));
+                self.leaves.push(LeafFx {
+                    pos: [l.pos[0] + jx, l.pos[1] + jy, l.pos[2] + jz],
+                    rot: [0.0; 3],
+                    vel: [v7 * s, 0.0, (v8 + 0.01) * c],
+                    spin: [
+                        jitter(l.counter, 20) * 0.1 - 0.05,
+                        jitter(l.counter, 21) * 0.1 - 0.05,
+                        jitter(l.counter, 22) * 0.1 - 0.05,
+                    ],
+                    frames_left: 256,
+                    budget: 0xff,
+                    tick_cost: 0,
+                    counter: l.counter ^ (l.spawned << 8),
+                });
             }
         }
         // Clouds [M 0x18d768]: fmod-wrapped phases, position = player + (phase_x, height, phase_z).
@@ -778,6 +904,30 @@ mod tests {
         assert_eq!(d.colour_at(2.0)[3], 0.0, "past the last key = the last key");
     }
 
+    /// `Env_Tree_Create` 0x17c200:15-31 — the hash pass-through outside 0x600008c (the proven
+    /// gate [M: the compare is the only swap condition]), the variant coin for 0x600008c
+    /// (deterministic per placement, both outcomes possible), and the phase unit's range.
+    #[test]
+    fn tree_anim_variant_coin_and_phase_unit() {
+        // The pass-through [M :16-22 — the swap fires only for 0x600008c]:
+        assert_eq!(tree_anim_hash(0x0600_0474, 3), 0x0600_0474, "07000004's tree anim [D] passes through");
+        assert_eq!(tree_anim_hash(0x0600_008d, 7), 0x0600_008d, "the variant itself stays");
+        // The coin: deterministic per placement; every outcome is one of the two hashes.
+        let mut swapped = 0;
+        for p in 0..256u32 {
+            let a = tree_anim_hash(0x0600_008c, p as usize);
+            assert!(a == 0x0600_008c || a == 0x0600_008d, "only the two hashes, got {a:#x}");
+            assert_eq!(a, tree_anim_hash(0x0600_008c, p as usize), "deterministic per placement");
+            if a == 0x0600_008d { swapped += 1; }
+        }
+        assert!(swapped > 32 && swapped < 224, "the coin is ~50/50, got {swapped}/256");
+        // Sister (can fail): the phase unit is a [0,1) fraction, not the raw hash word.
+        for p in 0..64u32 {
+            let u = jitter(p, 0x5ef);
+            assert!((0.0..1.0).contains(&u), "the phase unit in [0,1), got {u}");
+        }
+    }
+
     /// `Flicker_Update` 0x1ab960 with the stubbed `Light_FindMapLight` 0x1cc3d0: the tint ramps
     /// white (10%/tick, min ±1) and the signal channel stamps 0 every tick, never 1.
     #[test]
@@ -792,19 +942,74 @@ mod tests {
         assert_eq!(ch.v[0x55], 0, "the stubbed FindMapLight keeps the light-on path");
     }
 
-    /// `LeafGen_Update` 0x1acc48: the Rand_Rand(30) gate fires on the counter-hash, each spawn
-    /// bumps `spawned` and jitters the last offset inside the 0.02 band.
+    /// `LeafGen_Update` 0x1acc48 + `Leaf_Create` 0x1abc88 + `Leaf_Update` 0x1abee0: the gate fires
+    /// on the counter-hash, each spawn leaves the offset at 0 (the generator's spread obj+0x8c
+    /// reads 0 [M 0x1344e0:17 memset]), the leaf spawns at the generator and falls; the live set
+    /// stays bounded (256-frame lives, ~1 spawn per 30 ticks).
     #[test]
-    fn leafgens_spawn_on_the_period_gate() {
+    fn leafgens_spawn_leaves_that_fall_and_expire() {
         let mut fx = WorldFx::default();
-        fx.leafgens.push(LeafGenFx { placement: 0, pos: [1.0, 5.0, 2.0], counter: 0, spawned: 0, last_offset: [0.0; 2] });
+        fx.leafgens.push(LeafGenFx { placement: 0, pos: [1.0, 5.0, 2.0], counter: 0, spawned: 0, last_offset: [0.0; 2], yaw: 0.5, spread: 0.0 });
         let mut gas = crate::gas::GasPool::default();
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::new(1);
         for f in 0..600 { fx.tick(&mut ch, [0.0; 3], f, &mut gas, &mut rng); }
         let l = &fx.leafgens[0];
         assert!(l.spawned >= 5, "600 ticks at the 30-tick gate → several leaf spawns, got {}", l.spawned);
-        assert!(l.last_offset[0].abs() <= 0.02 && l.last_offset[1].abs() <= 0.02, "the jitter stays in the 0.02 band");
+        // The spread-0 rule [M 0x1abc88:47-55 + 0x1344e0:17]: the position jitter is exactly 0.
+        assert_eq!(l.last_offset, [0.0, 0.0], "spread 0 → the leaf spawns at the generator");
+        assert!(!fx.leaves.is_empty(), "the spawns became live leaves");
+        assert!(fx.leaves.len() <= l.spawned as usize, "no phantom leaves");
+        // Sister (can fail): the oldest live leaf has fallen well below the generator (the net
+        // y-wind fall ≈ 0.0125/tick [M 0x1abee0:30-32] over a 256-frame life).
+        let leaf = &fx.leaves[0];
+        assert!(leaf.pos[1] < 4.0, "the oldest leaf fell: y = {}", leaf.pos[1]);
+        assert!(leaf.frames_left < 256, "the frame countdown ran");
+    }
+
+    /// `Leaf_Update` 0x1abee0's two life limits through the wiring path: the 256-frame countdown
+    /// kills (tick_cost 0 — `Leaf_Create` never writes instance+0x32), and the update order
+    /// leaves a fresh spawn untouched until the next tick (the newest-first pass [M
+    /// control_add_object_to_list 0x134698 prepends]).
+    #[test]
+    fn leaves_skip_their_creation_frame_and_die_at_the_frame_limit() {
+        let mut fx = WorldFx::default();
+        fx.leafgens.push(LeafGenFx { placement: 0, pos: [0.0, 50.0, 0.0], counter: 0, spawned: 0, last_offset: [0.0; 2], yaw: 0.0, spread: 0.0 });
+        let mut gas = crate::gas::GasPool::default();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::new(1);
+        // Force a spawn this tick (the gate rolls the counter forward each tick; 1/30 odds).
+        let mut spawned_this_run = false;
+        for _ in 0..1000 {
+            fx.tick(&mut ch, [0.0; 3], 0, &mut gas, &mut rng);
+            if fx.leafgens[0].spawned == 1 { spawned_this_run = true; break; }
+        }
+        assert!(spawned_this_run, "the gate fired within 1000 ticks");
+        let spawn_tick_leaves = fx.leaves.len();
+        assert_eq!(spawn_tick_leaves, 1, "the spawn landed");
+        // Only this leaf's lifetime is under test — stop further spawns.
+        let fresh = fx.leaves[0].clone();
+        fx.leafgens.clear();
+        assert_eq!(fresh.frames_left, 256, "the frame budget [M 0x1abc88:57]");
+        assert_eq!(fresh.tick_cost, 0, "instance+0x32 never written [M 0x1abc88]");
+        assert_eq!(fresh.pos, [0.0, 50.0, 0.0], "spread 0 → the leaf spawns AT the generator, rot 0 [M 0x1abc88]");
+        // The eject bands [M 0x1abc88:70-79]: x = v7·sin(yaw) with yaw 0 → 0; z = (v8+0.01)·cos(0)
+        // ∈ [0.01, 0.03).
+        assert_eq!(fresh.vel[0], 0.0, "yaw 0 → no x eject");
+        assert!((0.01..0.03).contains(&fresh.vel[2]), "the z eject speed in the game's band, got {}", fresh.vel[2]);
+        // One more tick: the leaf now updates (the countdown spent one); the net fall is
+        // statistical over the y-wind band (mean −0.0125/tick [M 0x1abee0:30-32]), so pin 30
+        // ticks rather than one.
+        fx.tick(&mut ch, [0.0; 3], 1, &mut gas, &mut rng);
+        assert_eq!(fx.leaves[0].frames_left, 255, "the countdown spent one");
+        let y30 = {
+            for f in 2..31 { fx.tick(&mut ch, [0.0; 3], f, &mut gas, &mut rng); }
+            fx.leaves[0].pos[1]
+        };
+        assert!(y30 < 50.0 - 0.2, "30 ticks of the y wind net-fall: y = {}", y30);
+        // 256 more ticks: the frame limit kills the leaf (tick_cost 0 → the budget never does).
+        for f in 31..320 { fx.tick(&mut ch, [0.0; 3], f, &mut gas, &mut rng); }
+        assert!(fx.leaves.is_empty(), "the 256-frame limit expired the leaf");
     }
 
     /// `Ripples_Update` 0x1ac028: with the default period 30 the gate fires (counter-hash) roughly
@@ -1020,7 +1225,7 @@ mod leaf_tests {
         let mut rng = Rng::new(3);
         let mut leaf = LeafFx {
             pos: [0.0, 10.0, 0.0], rot: [0.0; 3], vel: [0.0, 0.0, 0.0], spin: [0.01, 0.0, 0.0],
-            frames_left: 300, budget: 200, tick_cost: 1,
+            frames_left: 300, budget: 200, tick_cost: 1, counter: 0,
         };
         let y0 = leaf.pos[1];
         for _ in 0..50 {
@@ -1048,7 +1253,7 @@ mod leaf_tests {
             let mut rng = Rng::new(seed as u32);
             let mut leaf = LeafFx {
                 pos: [1.0, 5.0, 2.0], rot: [0.0; 3], vel: [0.0; 3], spin: [0.0; 3],
-                frames_left: 30, budget: 255, tick_cost: 1,
+                frames_left: 30, budget: 255, tick_cost: 1, counter: 0,
             };
             for _ in 0..30 { leaf.tick(&mut rng); }
             leaf
