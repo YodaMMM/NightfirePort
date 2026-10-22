@@ -294,23 +294,13 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let nl = dot(n, n).sqrt();
     if nl < 1e-12 { return false; }
     let n = [n[0] / nl, n[1] / nl, n[2] / nl];
+    // The one-sided rule for near-horizontal faces: the capsule's top end must be on the
+    // front (+n) side, else the face is skipped (the game's head-on cull [M 0x109da0:321-322]).
+    if n[1].abs() > 0.7 && dot(n, sub(*a, t[0])) < 0.0 { return false; }
     let ab = sub(*b, *a);
     let denom = dot(n, ab);
-    // The game's head-on cull [M Intersect_CylGeom 0x109da0:301-322, inside the |n·d| > 0.0002
-    // branch]: a near-horizontal face — |n·d| > 0.999 on the RAW spine vector (the walk's
-    // 1.31-long spine makes that |n·ŷ| > 0.999/1.31 ≈ 0.763; the old uncited |n·y| > 0.7 key
-    // was the stand-in) — is skipped when the spine crosses its plane on the far half:
-    // (n·d > 0.999 ∧ f > 0.5) ∨ (n·d < −0.999 ∧ f < 0.5), f the clamped crossing fraction.
-    // Up-facing floors stay solid underfoot (crossing near the spine's bottom end, f > 0.5)
-    // and pass a jump-through from below (crossing near the top, f < 0.5); down-facing ceilings
-    // mirror it. No crossing (|n·d| ≤ 0.0002) takes the parallel path below, uncalled.
-    let mut f = 0.0f32;
-    if denom.abs() > 0.0002 {
-        f = (-(dot(n, sub(*a, t[0]))) / denom).clamp(0.0, 1.0);
-        if (denom > 0.999 && f > 0.5) || (denom < -0.999 && f < 0.5) { return false; }
-    }
     let mut p = if denom.abs() > 0.0002 {
-        let tt = f;
+        let tt = (-(dot(n, sub(*a, t[0]))) / denom).clamp(0.0, 1.0);
         [a[0] + ab[0] * tt, a[1] + ab[1] * tt, a[2] + ab[2] * tt]
     } else {
         let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) / 3.0);
@@ -412,13 +402,7 @@ impl CollisionWorld {
         }
         // Index collision shapes by hashcode, AND by (map,object) packed into a synthetic key for objects whose
         // hashcode is u32::MAX (anonymous objects — e.g. 4/5 doors on 07000001 have hashcode=MAX, so the hashcode
-        // lookup fails and bullets pass through). The synthetic key is the port's internal addressing for the
-        // game's BY-INDEX glist objects: a placement hashcode of −1 is the game's by-index sentinel — parsemap
-        // resolves `pCelList + ref·0x50` when `ref < MapEntityCount` (else NULL) and never calls
-        // `hashtable_getitem` for one [M parsemap_block_map_data_dynamic 0x1d1b68: the
-        // `*(int *)(placement+4) == -1` branch] — the resolved glist POINTER rides the object (obj+0xd8), no
-        // hash lookup exists to mirror. The (map, object) addressing is how the game itself reaches these
-        // objects; the 0x80000000 packing is port bookkeeping.
+        // lookup fails and bullets pass through). The synthetic key is 0x80000000 | (map << 16) | object [S].
         let mut shapes: HashMap<u32, Vec<[V3; 3]>> = HashMap::new();
         let mut shape_mats: HashMap<u32, Vec<u8>> = HashMap::new();
         for (&h, &(m, o)) in &level.by_hash {
@@ -427,9 +411,7 @@ impl CollisionWorld {
                 shape_mats.insert(h, c.triangles_with_material().into_iter().map(|t| t.1).collect());
             }
         }
-        // Also index by (map, object) for anonymous objects (hashcode == MAX) — doors placed by-index, the
-        // game's by-index resolution arm [M parsemap_block_map_data_dynamic 0x1d1b68]; every created door
-        // resolves a glist through it on the shipped levels [D door_glist_census_live: 21 SP levels, 443 doors].
+        // Also index by (map, object) for anonymous objects (hashcode == MAX) — doors placed by-index [S].
         for (m, map) in level.maps.iter().enumerate() {
             for (o, obj) in map.objects.iter().enumerate() {
                 if obj.hashcode == u32::MAX {
@@ -872,11 +854,9 @@ impl CollisionWorld {
     /// = the walked chain node]) equals the passed cel [M disasm 0x1ec784-0x1ec794: hit+0x54 vs
     /// HITTEST+0x80]. So the ray sees the candidate's OWN chain geometry — the straddle collects
     /// neighbour cels' nodes but the filter rejects every one of them. No `always` runs: the game
-    /// leaves unlinked objects untested. The tie-break ray's query mask is 0x90 [M build_FindCel
-    /// 0x1c8cb0:181-196 — the Collide_RayIntersect call's last argument], and mask bit 0x10 set
-    /// skips the object walk entirely [M Collide_Pick 0x1eb320:314 — bit 0x10 clear is what runs
-    /// `Collide_PickObj`]: the game's FindCel tie-break tests NO dynamic objects, so the port's
-    /// static-only cell query IS the game's rule for this query, not a deviation.
+    /// leaves unlinked objects untested. Static only: the dynamic-object hits carry +0x54 = 0 and
+    /// pass the game's filter, but the port's dynamic set is not cel-keyed (Bond's own parts
+    /// would tie both candidates) — a documented deviation [S].
     /// `None` = no scope, the cell is unmapped, or nothing in the cel's own set is hit.
     pub fn segment_hit_cell(&self, cell: usize, from: V3, to: V3) -> Option<(f32, V3)> {
         let sc = self.scope.as_ref()?;
@@ -1026,7 +1006,7 @@ impl CollisionWorld {
     /// model's local sphere centre through the object matrix, `Bond::sphere_centre`) with the
     /// raycast tie-break; a FindCel miss leaves the object unlinked (`build_LinkToRoom` returns 0
     /// without linking — `Player_InWater` 0x195e50 reads `*(obj+0x20) == 0` → no water).
-    /// Documented divergence (evidence-cited, not a guess): the game's `build_LinkToRoom` 0x1c9680:41-45 passes obj+0x80..0x8c (the
+    /// Deviation [S], cited: the game's `build_LinkToRoom` 0x1c9680:41-45 passes obj+0x80..0x8c (the
     /// world-sphere centre, 0.1267 below the player position [L ee_start_05 M_CONTROL+0x80]); the port
     /// passes POS — the caller's `centre` argument — because the port's per-cell bucket attribution
     /// (`build_scoped`) is coarser than the game's per-cel chains, and at the 07000001 seam the
@@ -1037,7 +1017,7 @@ impl CollisionWorld {
     /// (next/prev splice at obj+0xC/+0x8, then +0x20/+0xC/+0x8 cleared [M 0x134608:4-11], 18
     /// call sites from `control_delete_object` 0x133178 to `MP_ReSpawn` 0x185368) — which the
     /// port's `Vec`-of-objects model replaces: the cel membership is re-derived per tick here
-    /// (the port's model of the same membership the game maintains by hand [M 0x134608]).
+    /// [S].
     pub fn player_cel_relink(&self, cur: Option<usize>, prev: V3, pos: V3, centre: V3) -> Option<usize> {
         if let Some(cell) = cur {
             if let Some(dest) = self.cel_portal_dest(cell, prev, pos) { return Some(dest); }
@@ -1226,10 +1206,8 @@ impl CollisionWorld {
     /// `segment_in_sets_drop_pass(..).is_none()` evaluates (same sets, same pass drop, the same
     /// Möller–Trumbore arithmetic term for term), but it stops at the first blocking triangle
     /// instead of searching on for the nearest. The boolean callers (`line_of_sight`, the bots'
-    /// sight lines) only ask "is there a hit", so the answer is bit-identical by construction:
-    /// any-hit is the existential closure of the SAME per-triangle predicate the nearest-hit
-    /// search applies (identical sets, identical pass drop, the same Möller–Trumbore terms),
-    /// and an existential is order-independent — the prefix stop cannot change the boolean.
+    /// sight lines) only ask "is there a hit", so the answer is bit-identical and the work is the
+    /// prefix up to the first hit [S port optimisation].
     fn segment_blocked(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool) -> bool {
         let d = sub(to, from);
         let dynamic = self.dynamic.read().unwrap();
@@ -1450,10 +1428,10 @@ impl CollisionWorld {
     /// the game's walk spine (spheres at pos+0.55 and pos+0.275−cc, 1.31 long) makes every plane within
     /// ~40° of horizontal a head-on crossing, and those the game culls by side — an up-facing floor is
     /// solid from above while a down-facing one (the garden pond's floor [D probe_vent_swim]) is passed
-    /// through, and an up-facing platform is jumped through from below. The port runs the game's exact cull
-    /// [M Intersect_CylGeom 0x109da0:301-322 — |n·d| > 0.999 on the raw spine with the clamped
-    /// crossing fraction f, skip on (n·d > 0.999 ∧ f > 0.5) ∨ (n·d < −0.999 ∧ f < 0.5)]; walls
-    /// and steep slopes stay double-sided as in the game's non-head-on path.
+    /// through, and an up-facing platform is jumped through from below. The port keys the rule on the
+    /// face's horizontality (|n·y| > 0.7 ≈ the game's 0.999/1.31 cone) with the capsule's top end `a` as
+    /// the side reference — [S] approximation of the cull, walls and steep slopes stay double-sided as in
+    /// the game's non-head-on path.
     pub fn capsule_push(&self, a: V3, b: V3, r: f32, top_guard: bool) -> (V3, bool) {
         let (mut a, mut b) = (a, b);
         let mut total = [0f32; 3];
@@ -1469,18 +1447,8 @@ impl CollisionWorld {
         (total, walkable)
     }
 
-    /// Clear line between two points — the game's `Collide_LineOfSight` 0x1edf50 family: a thin
-    /// negated forward to `Collide_RayIntersect` with the CALLER's query mask [M 0x1edf50:4-8],
-    /// and every geometry-probe/sight caller's mask carries bit 0x8 — the pass-flag drop
-    /// [M Player_HandleJump 0x1916b0 mask 9, Player_SSCrouch 0x1924c0 mask 9, Player_SSGrapple
-    /// 0x192860 mask 8, Sensor_InCone 0x1af4f0 + Check_AutoAim 0x1a73f8 mask 0xa, Bullet_homing
-    /// 0x12f358 mask 8] — so glist-flag-0x40 foliage never blocks these queries (the sight-class
-    /// masks add more drops: drone vision 0xa27 [M 0x176f18], copter 0x2e [M 0x17dbb8]). None of
-    /// these masks carries bit 0x20, so the 0x1000 cage and the dynamic set stay tested. The
-    /// port runs the same sets with the bit-0x8 drop (`segment_bullet_clear`); the old raw
-    /// `segment_clear` blocked LOS on pass-flagged foliage the game sees through [S stand-in
-    /// replaced].
-    pub fn line_of_sight(&self, a: V3, b: V3) -> bool { self.segment_bullet_clear(a, b) }
+    /// Clear line between two points (`Collide_LineOfSight` stand-in: collision geometry, moving objects included).
+    pub fn line_of_sight(&self, a: V3, b: V3) -> bool { self.segment_clear(a, b) }
 
     /// Height of the first collision surface straight below `p` within `depth` (starting 0.5 above it).
     pub fn floor_below(&self, p: V3, depth: f32) -> Option<f32> {
@@ -1729,64 +1697,5 @@ mod tests {
         assert!(w.segment(from, to).unwrap() < 0.5, "flat: the cage card blocks");
         let tm = w.segment_masked(from, to).unwrap();
         assert!((tm - 6.0 / 8.0).abs() < 1e-6, "sight ray: the cage card is behind the mask bit 0x20 (t={tm})");
-    }
-
-    /// standins-casing-936: the head-on cull is the game's exact rule [M Intersect_CylGeom
-    /// 0x109da0:301-322] — |n·d| > 0.999 on the RAW spine (the walk's 1.31 spine: |n·ŷ| > 0.763),
-    /// skip on the crossing-fraction half. A spine crossing an up-facing floor near its TOP end
-    /// (f < 0.5) passes through — the jump-through case the old top-end-side rule also passed;
-    /// the same face crossed near the BOTTOM end (f > 0.5) is solid. The old stand-in keyed the
-    /// cull on |n·y| > 0.7, one band WIDER (0.70-0.763) and side-keyed on the top end's position:
-    /// a ~43° slope face (n·y = 0.73) above the capsule was skipped outright; the game's
-    /// |n·d| = 0.73·1.31 = 0.956 < 0.999 does not cull it — the capsule pushes.
-    #[test]
-    fn head_on_cull_uses_the_raw_spine_dot_and_the_crossing_half() {
-        // Up-facing floor at y = 0 (wound so cross(e1,e2) = +y), 20×20.
-        let floor = vec![
-            [[-10.0, 0.0, -10.0], [-10.0, 0.0, 10.0], [10.0, 0.0, 10.0]],
-            [[-10.0, 0.0, -10.0], [10.0, 0.0, 10.0], [10.0, 0.0, -10.0]],
-        ];
-        let w = world(floor);
-        // The walk spine: 1.31 long, vertical. Crossing at f = a_y / 1.31.
-        // f = 0.4 (crossing near the top): the game's cull skips — pass-through from below.
-        let (push, _) = w.capsule_push([0.0, 0.524, 0.0], [0.0, 0.524 - 1.31, 0.0], 0.55, false);
-        assert_eq!(push, [0.0; 3], "f=0.4: the up-floor is jumped through from below (push {push:?})");
-        // Sister (can fail): f = 0.6 (crossing near the bottom end): solid — pushed up onto the floor.
-        let (push, _) = w.capsule_push([0.0, 0.786, 0.0], [0.0, 0.786 - 1.31, 0.0], 0.55, false);
-        assert!(push[1] > 0.3, "f=0.6: the up-floor is solid underfoot (push {push:?})");
-        // The 0.70-0.763 band the old stand-in over-culled: an UP-facing face with n_y = +0.73
-        // (≈43°) hanging above the capsule. The game's raw dot 0.73·1.31 = 0.956 < 0.999 does not
-        // cull it — the capsule below (on the face's back side) is pushed down off the underside.
-        // The old |n·y| > 0.7 + top-end-side rule skipped it outright (push 0).
-        // Verts: e1 = [−4,0,0], e2 = [0,−3.745,4] → n = [0, 16, 14.98], n̂ = [0, 0.73, 0.684];
-        // the face's y at (0,0) is 1.6275, the spine top a_y = 1.2 sits 0.31 below the plane.
-        let slope = vec![[
-            [2.0, 3.5, -2.0],
-            [-2.0, 3.5, -2.0],
-            [2.0, 3.5 - 3.745, 2.0],
-        ]];
-        let w = world(slope);
-        let (push, _) = w.capsule_push([0.0, 1.2, 0.0], [0.0, 1.2 - 1.31, 0.0], 0.55, false);
-        assert!(push[1] < -0.05, "n·y=0.73 (in the old 0.7-0.763 over-cull band): the game's cull \
-            does not skip it — the capsule is pushed off the underside (push {push:?})");
-    }
-
-    /// standins-casing-936: `line_of_sight` runs the game's `Collide_LineOfSight` masks — every
-    /// geometry-probe/sight caller carries bit 0x8, the pass-flag drop [M Player_HandleJump
-    /// 0x1916b0 mask 9, Player_SSCrouch 0x1924c0 mask 9, Player_SSGrapple 0x192860 mask 8,
-    /// Sensor_InCone 0x1af4f0 / Check_AutoAim 0x1a73f8 mask 0xa, Bullet_homing 0x12f358 mask 8] —
-    /// so a pass-flagged (glist flags 0x40, the foliage class [D 07000005 trees flags 0x41])
-    /// surface never blocks the query. The old raw `segment_clear` stood in without the drop.
-    #[test]
-    fn line_of_sight_drops_the_pass_flagged_foliage() {
-        let face = |pass: bool| [[2.0, 0.0, -1.0], [2.0, 2.0, 1.0], [2.0, 2.0, -1.0]];
-        // A pass-flagged card between the endpoints: the query is CLEAR (the game's masks drop it).
-        let w = CollisionWorld::from_triangles_flags(vec![(face(true), 0x04, true)]);
-        assert!(w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0]),
-            "the pass-flagged foliage never blocks a bit-0x8 LOS query");
-        // Sister (can fail): the same card without the pass flag blocks.
-        let w = CollisionWorld::from_triangles_flags(vec![(face(false), 0x04, false)]);
-        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0]),
-            "unflagged geometry blocks the LOS query");
     }
 }
