@@ -1330,8 +1330,9 @@ impl crate::menu::MpSession for SessionProxy {
     }
     fn connect(&mut self, addr: &str) -> Result<(), MpNetError> {
         let name = self.0.borrow().display_name();
-        // net-p2p: a join code or `a.b.c.d:port` (nf_net::p2p::parse_target).
-        if nf_net::p2p::parse_target(addr).is_err() {
+        // A join code, `a.b.c.d:port`, or a 4-character lobby code — `dial` below takes all three
+        // (parse_join_target); the old parse_target gate refused the short codes.
+        if nf_net::p2p::parse_join_target(addr).is_err() {
             return Err(MpNetError::BadAddress);
         }
         let r = self.0.borrow_mut().dial(addr);
