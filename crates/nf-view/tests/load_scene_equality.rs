@@ -43,17 +43,18 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // placement has DropType 1 gets 128 rain-mesh slots (`DrawDrops` 0x18cb90, mesh 0x02000290) —
 // 01 and 02 are rain levels: +128 attachments, +6400 vertices, +12288 indices each; 05/0c/14 unchanged.
 const BASELINE: &[(&str, &str)] = &[
+    // Re-pinned for watch-hands (2026-10-22): +3 hand attachments on each watch-arm view model (5 records).
     // Re-pinned for silencer-swap-piece (2026-10-21): the fp skin's bone-43 suppressor extra is built again as
     // the state-8 swap piece (hidden outside the screw-on) — +4-6 meshes per level; every pinned level re-pinned.
     // Re-pinned for silencer-white-artifact (700y3, 2026-10-20): the silenced weapons' duplicate suppressor extra
     // (the record's +0x7C view-entity, drawn by the datum-0 attach instead) is no longer built (4-6 meshes per level); every pinned level re-pinned.
-    ("07000002.bin", "31d5bf43e19366ce 4483659 9371265 5347 4346365 81 9810 205 28 25 8"),
-    ("07000005.bin", "c084ffb7ea2aa9e5 4386927 9170265 3609 4302586 73 9744 106 19 16 6"), // 1022l: the two copter SPs (836) + their script draw slots (copter-script-draw)
-    ("0700000c.bin", "15de2f0294792a8a 4871632 10240830 8177 4680808 96 10996 170 22 40 15"),
+    ("07000002.bin", "37773b0bd1266a44 4483929 9371895 5352 4346635 81 9825 205 28 25 8"),
+    ("07000005.bin", "57ab143029eee3f2 4387197 9170895 3614 4302856 73 9759 106 19 16 6"), // 1022l: the two copter SPs (836) + their script draw slots (copter-script-draw)
+    ("0700000c.bin", "3cb42bc694d09038 4871902 10241460 8182 4681078 96 11011 170 22 40 15"),
     // script-entity-copies (2026-10-20): one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
-    ("07000014.bin", "b53d96bbc1d49a08 7209906 14971380 6767 7056781 111 13450 173 41 37 32"),
-    ("07000001.bin", "ff9ab612c1051461 4396013 9211107 3484 4322711 76 9824 101 11 20 6"),
+    ("07000014.bin", "6e81aa616b60576d 7210176 14972010 6772 7057051 111 13465 173 41 37 32"),
+    ("07000001.bin", "c3615aff5574ccb2 4396283 9211737 3489 4322981 76 9839 101 11 20 6"),
 ];
 
 #[test]
