@@ -84,7 +84,10 @@ impl Sequence {
         // bones beyond keep the anim object's previous (bind) values. A channel past the list reads 0:
         // the neutral track (an all-zero polynomial), never a panic.
         let Some(segs) = self.channels.get(channel) else { return 0.0 };
-        let s = segs.iter().find(|s| t <= s.end).unwrap_or(segs.last().unwrap());
+        // A present-but-empty channel reads the same zero neutral: the game's frame buffer
+        // starts zeroed (`AnimSeqNew` 0x1c7248 memsets the +0x84 buffer) and a channel the
+        // stream never writes keeps that neutral [M].
+        let Some(s) = segs.iter().find(|s| t <= s.end).or_else(|| segs.last()) else { return 0.0 };
         let tf = t as f32;
         match arith {
             Arith::Nearest => {
@@ -400,6 +403,21 @@ mod tests {
         ch[0] += 4; // claim 4 more bytes than the segments use
         ch.extend([0; 4]);
         assert!(Sequence::parse(&sequence(5, &[ch])).is_err());
+    }
+
+    /// A present-but-empty channel reads the game's zero neutral (`AnimSeqNew` 0x1c7248 memsets
+    /// the +0x84 frame buffer — a channel the stream never writes keeps 0.0), never a panic.
+    #[test]
+    fn empty_channel_reads_the_zero_neutral() {
+        let seq = Sequence {
+            hashcode: 1, flags: 0, frames: 4, skeleton: 0,
+            channels: vec![vec![], vec![super::super::anim::Segment { end: 3, c: [5.0, 0.0, 0.0, 0.0, 0.0, 0.0] }]],
+        };
+        assert_eq!(seq.value(0, 2), 0.0, "empty channel → the zeroed-buffer neutral [M 0x1c7248]");
+        assert_eq!(seq.value(1, 2), 5.0, "the populated channel still reads");
+        // Sister (can fail): a channel past the list reads the same neutral (the narrow face
+        // tracks' read rule — `AnimFrameCopy` evaluates only the tracks the sequence carries).
+        assert_eq!(seq.value(7, 2), 0.0);
     }
 
     #[test]
