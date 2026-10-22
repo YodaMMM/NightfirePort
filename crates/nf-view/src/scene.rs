@@ -6889,17 +6889,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mp_anim_sets = drones.and_then(|d| d.mp_anims.as_ref()).map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets });
         if let (Some(mp_set), Some(d)) = (mp, drones) {
             if let (Some(skins), Some(anim_sets)) = (d.mp_skins.as_ref(), d.mp_anims.as_ref()) {
-                // mp-16-slots: humans 0..h-1, bots at the game's FIXED base 4 [M MP_Start
-                // 0x183a50:117-128 (the humans' loop), :139 `iVar4 = uVar9 + 4` (the bots')] —
-                // with h < 4 the slots h..3 sit EMPTY exactly like the game's, and the game
-                // clamps bots to 4 [0x183a50:133-135]; the port's 16-slot count is the
-                // documented extension [S mp-16-slots], the bots follow the humans only past
-                // 4 humans (base = max(h, 4), the same rule `MpMatch::create_bots` runs).
+                // mp-16-slots: humans 0..h, bots right after them (h..h+b), up to 16 [S].
                 let humans = (mp_set.human_count as usize).clamp(1, nf_game::mp::MP_MAX_SLOTS);
-                let base = humans.max(4);
-                let bots = (mp_set.bot_count as usize).min(nf_game::mp::MP_MAX_SLOTS - base);
+                let bots = (mp_set.bot_count as usize).min(nf_game::mp::MP_MAX_SLOTS - humans);
                 let mut slot_ids: Vec<usize> = (0..humans).collect();
-                slot_ids.extend(base..base + bots);
+                slot_ids.extend(humans..humans + bots);
                 for slot in slot_ids {
                     let char_idx = mp_set.players[slot].skin as usize;
                     let Some(entry) = skins.entries.get(char_idx) else {
@@ -8891,30 +8885,20 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         None => far,
                     },
                     // fix-satchel-tripbomb: the satchel's countdown digits (kinds 4 = tens, 5 = units)
-                    // — the meshes SatchelDigits[sec/10]/[sec%10] [L 0x2bed90], spawned EVERY tick in
-                    // every state < 2 [M 0x12d890:418-553]. The game's placement, EXACT [M
-                    // 0x12d890:485-553]: rotation = `MulMatrix0(obj+0x90, RotMatrix((π/2, 0, π)))`
-                    // — the digit mesh's own frame turned inside the bullet's matrix — translation
-                    // = the bullet's position + the LOCAL offset through the bullet's rows only:
-                    // tens (0x3dbfe246, 0xbb15e052, 0xbdfb5d03) = (0.0936933, −0.00228693, −0.122736),
-                    // units (0x3d03cf48, …) = (0.0321801, −0.00228693, −0.122736); the old
-                    // (±0.03, 0.032, 0.06) pair was cosmetic. The bullet matrix is the bullet's OWN
-                    // obj+0x90 in every state — flight included [M 0x12d890:514/542 read obj+0x90
-                    // unconditionally; the flight matrix is the spawn-time `Mat_Align2Dir(dir,
-                    // up (0,1,0))` [M 0x12c5a0:185]]. The port's stuck matrix is the game's stick
-                    // alignment (−normal [M 0x12ce80:266]); in flight its `phase.normal` is still
-                    // the spawn placeholder (0,1,0) so its digits stand upright while the game's
-                    // ride the throw-aligned matrix — the flight pose is the one delta left (needs
-                    // the throw direction at spawn on the Grenade; live check in the report).
+                    // — the meshes SatchelDigits[sec/10]/[sec%10] [L 0x2bed90], drawn at the stuck
+                    // satchel's matrix (aligned to −normal [M 0x12ce80:266]) offset along its own
+                    // axes [*suggested*: the game offsets by its own small rotation/translation pair
+                    // 0x12d890:486-511 — the port's (±0.03, 0.032, 0.06) is cosmetic].
                     4 | 5 => {
                         // satchel-stick2: NO `stuck` gate — `Bullet_DoTrails`' 0x3b tail spawns the
                         // two digit objects EVERY tick in every state < 2 [M 0x12d890:418-553; the
                         // sim writes `digits` in flight too — grenade.rs's tail runs before the
                         // stuck early-out], so the numbers ride the satchel from the throw. The old
                         // `g.stuck` filter matched the playtest's "the numbers aren't working": a
-                        // satchel that hadn't stuck yet drew nothing. In flight the game keeps the
-                        // spawn-time throw-aligned matrix (the delta note above); the port's
-                        // placeholder keeps them upright until the Grenade carries the throw dir.
+                        // satchel that hadn't stuck yet drew nothing. In flight `phase.normal` is
+                        // the spawn's [0, 1, 0] placeholder (the stick overwrites it with the
+                        // surface normal), so the flight digits stand upright on the satchel [S —
+                        // the game aligns them to the bullet's own matrix; the main agent renders].
                         let satchels: Vec<&nf_game::grenade::Grenade> = s.drones.grenades.iter()
                             .filter(|g| g.weapon_type == 0x3b && g.state < 2 && g.phase.is_some())
                             .collect();
@@ -8923,22 +8907,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         let Some((tens, units)) = p.digits else { return far };
                         let digit = if kind == 4 { tens } else { units };
                         if mesh != 0x0200_0791 + digit as u32 { return far; }
-                        // In flight `phase.normal` is the spawn's [0, 1, 0] placeholder (the stick
-                        // overwrites it with the surface normal) — the flight delta above.
-                        let base = nf_game::searchlight::align2dir([-p.normal[0], -p.normal[1], -p.normal[2]], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
-                        // [M 0x12d890:495 RotMatrix((π/2, 0, π)); :514/:542 MulMatrix0(obj+0x90, ·)]
-                        let pre = nf_formats::placement::object_matrix(
-                            [std::f32::consts::FRAC_PI_2, 0.0, std::f32::consts::PI], [0.0; 3]);
-                        let mut m = nf_formats::anim::mul(&base, &pre);
-                        // The translation reads the BULLET's rows (obj+0x90/a0/b0), not the product's
-                        // [M 0x12d890:496-510/:525-537 — the local offset through the bullet rows,
-                        // added to obj+0x30].
-                        let (x, y, z) = (base[0], base[1], base[2]);
-                        let (lx, ly, lz) = if kind == 4 {
-                            (0.093_693_3f32, -0.002_286_93f32, -0.122_736f32) // [M 0x3dbfe246/0xbb15e052/0xbdfb5d03]
-                        } else {
-                            (0.032_180_1f32, -0.002_286_93f32, -0.122_736f32) // [M 0x3d03cf48/…]
-                        };
+                        let mut m = nf_game::searchlight::align2dir([-p.normal[0], -p.normal[1], -p.normal[2]], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+                        let (x, y, z) = (m[0], m[1], m[2]);
+                        let (lx, ly, lz) = if kind == 4 { (-0.03f32, 0.032f32, 0.06f32) } else { (0.03, 0.032, 0.06) };
                         m[3] = [
                             g.pos[0] + x[0] * lx + y[0] * ly + z[0] * lz,
                             g.pos[1] + x[1] * lx + y[1] * ly + z[1] * lz,
@@ -10381,11 +10352,9 @@ impl Sim {
                     let mut brain = nf_game::mp::bots::BotBrain::bot_init(&rec, slot as u8, pos, yaw);
                     m.arm_bot(&mut brain);
                     m.bots[i].brain = brain;
-                    // mp-16-slots: the bot vars index is the game's slot−4 identity [M
-                    // BOT_init 0x1249e8:67 `iVar2 = (iVar13 + -4) * 0x780`] — with the base-4
-                    // layout that equals the list position, past 4 humans it keeps the game's
-                    // identity instead.
-                    m.bots[i].brain.vars.bot_index = (m.bots[i].slot - 4) as i16;
+                    // mp-16-slots: the bot's index is its list position (the game's slot − 4 wraps
+                    // once bots follow the humans).
+                    m.bots[i].brain.vars.bot_index = i as i16;
                     m.bots[i].health = m.bots[i].max_health;
                     m.bots[i].dead = false;
                     m.bots[i].respawns += 1;
