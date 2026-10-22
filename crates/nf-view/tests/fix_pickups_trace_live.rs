@@ -220,6 +220,10 @@ fn with_dev_god_and_infinite_ammo_every_raptor_drop_is_taken_and_the_spare_match
     // The inventory state right after the FIRST take (the trace's 6.0 s row).
     let mut first_take_state: Option<(bool, i16, i16)> = None;
     let mut killed = 0;
+    // Drops still on the ground when the walk reaches them (+ the touch takes during a kill): a drop
+    // can already be gone — touch-taken while Bond stood on a neighbouring guard's drop (recorded in
+    // the ledger below), or expired (a dropped gun has a lifetime, `Pickup_Update`).
+    let mut reachable = 0usize;
     for &gi in &guards {
         ensure_enabled(&mut scene, gi, Some(&mut dev));
         let taken0 = scene.sim.as_ref().unwrap().drones.taken.len();
@@ -233,6 +237,7 @@ fn with_dev_god_and_infinite_ammo_every_raptor_drop_is_taken_and_the_spare_match
         // during the kill — account for those ledger takes before walking to the rest.
         for (_, t) in &scene.sim.as_ref().unwrap().drones.taken[taken0..] {
             eprintln!("[raptor] take {}: {:?} (the game's touch take)", takes.len() + 1, t);
+            reachable += 1;
             takes.push(*t);
             if takes.len() == 1 {
                 let sim = scene.sim.as_ref().unwrap();
@@ -243,15 +248,20 @@ fn with_dev_god_and_infinite_ammo_every_raptor_drop_is_taken_and_the_spare_match
         loop {
             let Some(k) = scene.sim.as_ref().unwrap().drones.pickups.iter()
                 .position(|p| p.from == Some(gi) && !p.gone) else { break };
+            reachable += 1;
+            let before = scene.sim.as_ref().unwrap().drones.taken.len();
             assert!(take_drop(&mut scene, k, Some(&mut dev)),
                 "drop {k} (weapon {:#x}) is taken — the user's symptom is a drop that cannot be picked up",
                 scene.sim.as_ref().unwrap().drones.pickups[k].weapon);
             let sim = scene.sim.as_ref().unwrap();
-            let (_, t) = sim.drones.taken.last().expect("a take was just recorded");
-            eprintln!("[raptor] take {}: {:?}", sim.drones.taken.len(), t);
-            takes.push(*t);
-            if takes.len() == 1 {
-                first_take_state = Some((sim.drones.inventory.owned[0xe], sim.drones.inventory.clip[0xe], sim.drones.inventory.carried[3]));
+            // Every take the walk recorded — standing on one drop can touch-take a neighbouring guard's
+            // drop in the same ticks (the ledger, not only its last entry).
+            for (_, t) in &sim.drones.taken[before..] {
+                eprintln!("[raptor] take {}: {:?}", takes.len() + 1, t);
+                takes.push(*t);
+                if takes.len() == 1 {
+                    first_take_state = Some((sim.drones.inventory.owned[0xe], sim.drones.inventory.clip[0xe], sim.drones.inventory.carried[3]));
+                }
             }
         }
     }
@@ -264,7 +274,8 @@ fn with_dev_god_and_infinite_ammo_every_raptor_drop_is_taken_and_the_spare_match
     assert!(owned && clip == 9, "owned 0x0E, clip 9 right after the first take (got owned {owned}, clip {clip})");
     assert_eq!(spare_at_first, 0, "the first take adds no spare (trace: no type-3 event at 6.0 s)");
     // Every later take: ammo type 3 (the Raptor Magnum's +0x90), within the game's round range.
-    assert!(takes.len() >= killed, "every drop taken ({takes:?})");
+    assert!(reachable >= 3, "enough live drops reached ({reachable})");
+    assert!(takes.len() >= reachable, "every drop still on the ground was taken ({takes:?}, {reachable} reached)");
     for t in &takes[1..] {
         match t { nf_game::pickup::Taken::Ammo { weapon: 0xe, rounds } =>
             assert!((4..=8).contains(rounds), "rounds = clip_size(0xE)=9 · (FRand(0.5)+0.5) truncated ∈ 4..8 [M 0x17a2a0:88-98]: {rounds}"),

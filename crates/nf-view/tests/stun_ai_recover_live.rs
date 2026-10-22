@@ -70,8 +70,15 @@ fn steer_at(scene: &mut nf_view::scene::Scene, gi: usize, fire: bool, aim_dy: f3
 /// teleport rebuilds Bond (`Bond::stand_at`).
 fn place_bond(scene: &mut nf_view::scene::Scene, gi: usize, dist: f32, aim: bool) {
     let g = scene.sim.as_ref().unwrap().drones.list[gi].pos;
+    // Step back along Bond's own line from the guard (into the start pocket he came from): a fixed
+    // −x offset could put him over 07000005's drops, whose PlungeTriggers #285–#297 start the
+    // death NIS 0x06000952 and stop every guard [docs/levels/07000005.md:73] — the guard's fall spot
+    // varies with the fall-anim draw, so the fixed offset was fragile.
+    let b = scene.sim.as_ref().unwrap().bond.pos;
+    let (dx, dz) = (b[0] - g[0], b[2] - g[2]);
+    let l = (dx * dx + dz * dz).sqrt().max(1e-3);
     let mut dev = nf_view::dev::Dev { scenario: None, ..Default::default() };
-    dev.teleport(scene, [g[0] - dist, g[1], g[2]], 0.0);
+    dev.teleport(scene, [g[0] + dx / l * dist, b[1], g[2] + dz / l * dist], 0.0);
     if aim {
         for _ in 0..40 { steer(scene, gi, false); }
     }

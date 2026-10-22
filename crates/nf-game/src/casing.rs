@@ -81,6 +81,11 @@ pub struct Casing {
     /// integration stops and the 240-tick despawn no longer applies (the game has no rest at all:
     /// class 0x0d has no collide handler, the casing sinks through the floor until it despawns).
     pub resting: bool,
+    /// Which body reserved the shell — `None` = the player, `Some(i)` = drone index i. The game
+    /// stamps no shooter (the pool is global, `ShellCasings[32]`); the port keys the delay-expiry
+    /// re-pose with it: `Bullet_init_casing_ex` 0x12f678 runs `AnimGetBoneWorldTrans(shooter, datum)`
+    /// at the expiry tick, so each pending shell needs ITS shooter's bone then [M 0x12f678:83-114].
+    pub shooter: Option<usize>,
 }
 
 /// The 32-slot pool (`ShellCasings[32]` + `NextCasing`, 0x3495e0/0x3495dc [M 0x12fd48]).
@@ -104,7 +109,7 @@ impl Default for Casings { fn default() -> Self { Self::new() } }
 impl Casings {
     pub fn new() -> Casings { Casings { list: (0..POOL).map(|_| Casing {
         state: 2, delay: 0.0, pos: [0.0; 3], vel: [0.0; 3], spin: [0.0; 3], rot: 0.0, age: 0.0,
-        landing_y: 0.0, mesh: 0, material: 0, landed: false, pending: false, local: [0.0; 3],
+        landing_y: 0.0, mesh: 0, material: 0, landed: false, pending: false, local: [0.0; 3], shooter: None,
         resting: false,
     }).collect(), next: 0, keep: 0, ejected: 0 } }
 
@@ -121,6 +126,7 @@ impl Casings {
         let want = POOL.max(self.keep);
         while self.list.len() < want {
             self.list.push(Casing {
+                shooter: None,
                 state: 2, delay: 0.0, pos: [0.0; 3], vel: [0.0; 3], spin: [0.0; 3], rot: 0.0, age: 0.0,
                 landing_y: 0.0, mesh: 0, material: 0, landed: false, pending: false, local: [0.0; 3],
                 resting: false,
@@ -170,6 +176,7 @@ impl Casings {
         let delay = weapon[0x78] as f32;
         let ammo_byte = weapon[0x90] as usize;
         let Some(&mesh) = ammo.casing_mesh.get(ammo_byte) else { return };
+        let shooter = None; // the inline eject is the view-model path (the player's)
         if mesh == 0 { return; }
         let f = |o: usize| f32::from_le_bytes(weapon[o..o + 4].try_into().unwrap());
         let local = [f(0xf8), -f(0xfc), f(0x100)];
@@ -188,6 +195,7 @@ impl Casings {
         *slot = Casing {
             state: 3, delay, pos: origin, vel, spin, rot: 0.0, age: 0.0, landing_y, mesh, material, landed: false,
             pending: false, local, resting: false,
+            shooter,
         };
         self.ejected += 1;
         self.next = (self.next + 1) % self.list.len();
@@ -197,7 +205,12 @@ impl Casings {
     /// `+0x78` delay, the ammo type's shell mesh) and nothing else; the eject itself (datum, RNG, landing
     /// plane) waits for the delay [M 0x12fde0:9-30]. The Frinesi's 53-tick delay puts its shell out mid-pump,
     /// next to the camera (PCSX2 07000001, 2026-10-15) — computed at the shot it left from the pre-pump gun.
-    pub fn reserve(&mut self, ammo: &nf_formats::sfx::AmmoData, weapon: &[u8]) {
+    /// Guards reserve here too (standins-drone-925): `DroneWeap_FireWeapon` 0x178f68:263-264 calls
+    /// `Bullet_init_casing` after the pellet loop with NO RNG draw — the 7 eject draws wait for the
+    /// weapon's +0x78-tick delay in `Bullet_casing_update` 0x12faa0:29-36 → `Bullet_init_casing_ex`,
+    /// which re-poses the shooter's bone at the expiry tick [M 0x12f678:83-114]. `shooter` keys that
+    /// re-pose (`None` = the player's view model, `Some(i)` = drone i).
+    pub fn reserve(&mut self, ammo: &nf_formats::sfx::AmmoData, weapon: &[u8], shooter: Option<usize>) {
         let Some(&mesh) = ammo.casing_mesh.get(weapon[0x90] as usize) else { return };
         if mesh == 0 { return; }
         let f = |o: usize| f32::from_le_bytes(weapon[o..o + 4].try_into().unwrap());
@@ -206,6 +219,7 @@ impl Casings {
             state: 3, delay: weapon[0x78] as f32, pos: [0.0; 3], vel: [0.0; 3], spin: [0.0; 3], rot: 0.0, age: 0.0,
             landing_y: 0.0, mesh, material: (weapon[0x50] & 0x3f) as u16, landed: false, pending: true,
             local: [f(0xf8), -f(0xfc), f(0x100)], resting: false,
+            shooter,
         };
         self.ejected += 1;
         self.next = (self.next + 1) % self.list.len();
@@ -233,16 +247,19 @@ impl Casings {
     /// [M 0x12fb48..0x12fbcc]: the default shell mesh (0x2000548) with material ∉ {0xd, 0xe} → 0x1fd;
     /// otherwise by material: 1/0x14 → 0x1ff, 3/4 → 0x203, 5 → 0x204, 6 → 0x200, 10/0x15 → 0x1fe,
     /// 0xd/0xe → 0x202, 0xf..0x12 → 0x201, else silent.
-    /// `player_bone`: the view model's eject datum matrix this tick and the player's y, for reserved player
-    /// shells (`None` with no view model — a due shell is dropped).
-    pub fn update(&mut self, player_bone: Option<(&[[f32; 4]; 4], f32)>, rng: &mut Rng, mut play: impl FnMut(u16, V3)) {
+    /// `bones(shooter_key)`: the eject datum matrix THIS TICK and the shooter's y, per pending shell —
+    /// the player's key is `usize::MAX` (the view model), a guard's its drone index. The game runs
+    /// `AnimGetBoneWorldTrans(shooter, datum)` inside `Bullet_init_casing_ex` at the expiry tick
+    /// [M 0x12f678:83-114], so each pending shell re-poses ITS OWN shooter's bone then. `None` for a
+    /// due shell (no view model / no such drone) drops it — the game's NULL-datum arm.
+    pub fn update<'a>(&mut self, mut bones: impl FnMut(usize) -> Option<(&'a [[f32; 4]; 4], f32)>, rng: &mut Rng, mut play: impl FnMut(u16, V3)) {
         for c in self.list.iter_mut() {
             match c.state {
                 3 => {
                     c.delay -= 1.0;
                     if c.delay <= 0.0 {
                         if c.pending {
-                            match player_bone {
+                            match bones(c.shooter.unwrap_or(usize::MAX)) {
                                 Some((bone, y)) => { Self::arm(c, bone, y, rng); c.state = 0; }
                                 None => { c.pending = false; c.state = 2; }
                             }
@@ -348,7 +365,7 @@ mod tests {
         cs.eject(&a, &weapon(0, 1), [10.0, 1.0, 10.0], 0.0, 0.0, 1.0, &mut rng);
         assert_eq!(cs.list.iter().filter(|c| c.state == 3).count(), 1, "exactly one slot armed");
         let mut sounds = Vec::new();
-        for _ in 0..260 { cs.update(None, &mut Rng::new(1), |id, p| sounds.push((id, p))); }
+        for _ in 0..260 { cs.update(|_| None, &mut Rng::new(1), |id, p| sounds.push((id, p))); }
         let c = cs.list.iter().find(|c| c.material == 3).unwrap();
         assert!(c.landed, "the casing crossed its landing plane within its lifetime");
         assert_eq!(c.landing_y, REST_PLANE, "the game parks the plane at −1000000.0 after the sound [M 0x12fb88-94]");
@@ -433,7 +450,7 @@ mod tests {
         for k in 0..40 {
             cs.eject(&a, &weapon(0, 1), [k as f32, 1.0, 0.0], 0.0, 0.0, 1.0, &mut rng);
             for c in cs.list.iter_mut() { if c.state == 3 { c.state = 0; } }
-            cs.update(None, &mut Rng::new(1), |_, _| {});
+            cs.update(|_| None, &mut Rng::new(1), |_, _| {});
             assert!(cs.list.iter().filter(|c| c.state == 0).count() <= POOL, "the pool never exceeds 32 [M 0x12fd48]");
         }
         assert_eq!(cs.list.iter().filter(|c| c.state == 0).count(), 32, "40 rounds, 32 visible: the oldest 8 were recycled");
@@ -441,7 +458,7 @@ mod tests {
         // pool — 8 updates old (iterations k=32..39) while the untouched slots run 32..39.
         assert!((cs.list[0].age - 8.0).abs() < 1e-4, "slot 0 was recycled by the 33rd eject (round-robin, oldest-first)");
         // The lifetime: tick until every casing's age passes 240 — all despawn, none held.
-        for _ in 0..400 { cs.update(None, &mut Rng::new(1), |_, _| {}); }
+        for _ in 0..400 { cs.update(|_| None, &mut Rng::new(1), |_, _| {}); }
         assert_eq!(cs.list.iter().filter(|c| c.state != 2).count(), 0, "keep = 0: the 240-tick lifetime kills everything [M 0x12fc68]");
     }
 
@@ -458,10 +475,10 @@ mod tests {
         for k in 0..40 {
             cs.eject(&a, &weapon(0, 1), [k as f32, 1.0, 0.0], 0.0, 0.0, 1.0, &mut rng);
             for c in cs.list.iter_mut() { if c.state == 3 { c.state = 0; } }
-            cs.update(None, &mut Rng::new(1), |_, _| {});
+            cs.update(|_| None, &mut Rng::new(1), |_, _| {});
         }
         // Every casing crossed its plane quickly (origin y 1.0, plane ≤ 1.0): all rest, none despawn.
-        for _ in 0..400 { cs.update(None, &mut Rng::new(1), |_, _| {}); }
+        for _ in 0..400 { cs.update(|_| None, &mut Rng::new(1), |_, _| {}); }
         let alive: Vec<&Casing> = cs.list.iter().filter(|c| c.state != 2).collect();
         assert_eq!(alive.len(), 40, "keep = 64 holds all 40 resting casings past the 240-tick lifetime");
         assert!(alive.iter().all(|c| c.resting), "each held casing rested on its landing plane");
@@ -470,7 +487,7 @@ mod tests {
         for k in 40..65 {
             cs.eject(&a, &weapon(0, 1), [k as f32, 1.0, 0.0], 0.0, 0.0, 1.0, &mut rng);
             for c in cs.list.iter_mut() { if c.state == 3 { c.state = 0; } }
-            cs.update(None, &mut Rng::new(1), |_, _| {});
+            cs.update(|_| None, &mut Rng::new(1), |_, _| {});
         }
         // The 65th eject (k=64) recycled slot 0, the oldest — one tick into its flight.
         assert!((cs.list[0].pos[0] - 64.5).abs() < 0.05, "the 65th eject recycled slot 0, the oldest resting casing");
@@ -512,8 +529,8 @@ mod tests {
         let mut sounds_k = Vec::new();
         let mut split_at = [None; 3]; // the tick each slot's paths split (the landing)
         for t in 0..300u32 {
-            game.update(None, &mut Rng::new(1), |id, p| sounds_g.push((t, id, p)));
-            kept.update(None, &mut Rng::new(1), |id, p| sounds_k.push((t, id, p)));
+            game.update(|_| None, &mut Rng::new(1), |id, p| sounds_g.push((t, id, p)));
+            kept.update(|_| None, &mut Rng::new(1), |id, p| sounds_k.push((t, id, p)));
             for slot in 0..POOL {
                 let (g, k) = (&game.list[slot], &kept.list[slot]);
                 if k.resting {

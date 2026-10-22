@@ -126,7 +126,18 @@ fn guard_casing_ejects_from_the_weapon_datum_matrix() {
         if !sim.list[gi].shots.is_empty() { shot_tick = Some(t); break; }
     }
     let shot_tick = shot_tick.expect("the guard must fire within 400 ticks (ai_live: 59-63 + burst)"); let _ = shot_tick;
-    let fresh: Vec<&nf_game::casing::Casing> = sim.casings.list.iter().filter(|c| c.state != 2).collect();
+    // standins-drone-925: the shot only RESERVES the shell (state 3, delay weapon_data+0x78, no RNG
+    // [M Bullet_init_casing 0x12fde0:13-34]); the eject (position, velocity, the 7 draws) happens when
+    // the delay runs out, with the shooter's bone re-posed then [M Bullet_casing_update 0x12faa0:29-36
+    // → Bullet_init_casing_ex 0x12f678]. Step until the reserved shell activates.
+    assert!(sim.casings.list.iter().any(|c| c.state == 3), "the shot reserves a delayed shell (state 3)");
+    let mut m_prev = sim.list[gi].eject_matrix(&d).expect("the guard's weapon datum must resolve");
+    for _ in 0..64 {
+        if sim.casings.list.iter().any(|c| c.state == 0) { break; }
+        m_prev = sim.list[gi].eject_matrix(&d).expect("the guard's weapon datum must resolve");
+        sim.tick(&d, &player);
+    }
+    let fresh: Vec<&nf_game::casing::Casing> = sim.casings.list.iter().filter(|c| c.state == 0).collect();
     assert_eq!(fresh.len(), 1, "one shell in flight after the first shot");
     let c = fresh[0];
     let g = &sim.list[gi];
@@ -144,9 +155,10 @@ fn guard_casing_ejects_from_the_weapon_datum_matrix() {
     // The expected matrix is evaluated AFTER the tick while the eject read it at its instant inside
     // the tick (the guard's anim/position can advance past handle_firing in the same tick), so the
     // assert tolerates that one-tick pose drift.
-    for k in 0..3 {
-        assert!((c.pos[k] - m[3][k]).abs() < 5e-3, "casing pos {:?} vs eject datum world {:?}", c.pos, [m[3][0], m[3][1], m[3][2]]);
-    }
+    // The activation tick's casing pass may run before the guard's pose update in that tick, so the
+    // shell takes the pose at the start of the tick (m_prev) or after it (m) — one-tick drift.
+    let near = |mm: &[[f32; 4]; 4]| (0..3).all(|k| (c.pos[k] - mm[3][k]).abs() < 5e-3);
+    assert!(near(&m) || near(&m_prev), "casing pos {:?} vs eject datum world {:?} / {:?}", c.pos, [m[3][0], m[3][1], m[3][2]], [m_prev[3][0], m_prev[3][1], m_prev[3][2]]);
     // Velocity: the matrix rows on the local vector + 3× MVar2(0.01, 0.005) ∈ [0.005, 0.015] each.
     for k in 0..3 {
         assert!((c.vel[k] - expected_e[k]).abs() <= 0.016, "casing vel[{}] {} vs datum-eject {} ± jitter", k, c.vel[k], expected_e[k]);
