@@ -978,8 +978,16 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             let cur_pos = story_pos(cur);
             // The session gate: the front-end container (boot) and every story level BEFORE the
             // current one. A story container loaded later, and the MP/bonus containers the SP
-            // story never opens, are not sources. For a non-story load (dev/packs) the story
-            // containers stay eligible [S — no retail path pins it].
+            // story never opens, are not sources. Game side: the hashtable is rebuilt on every
+            // level load [M ResetMap_Load 0x1d6360:23,130 hashtable_initialise] and each loaded
+            // archive registers under its hash ids [M AnimLoadFile 0x1bdf40:43-47
+            // hashtable_additem], the chain bringing the shared 0x7000500 container then the
+            // level's own data [M 0x1d6360:28-36] — this gate is the port's substitute for that
+            // per-load chain. The non-story branch is a port-dev case: the shipped game's loads
+            // are all story / MP / bonus / front-end (0x7000048) walks [M 0x1d6360] and a skin
+            // hash the chain never brings in just misses — the placement draws no character [M
+            // AnimObjectNew 0x1be910:44-46]. Dev/packs loads (port-only) keep the story
+            // containers eligible.
             let session_container = |name: &str| -> bool {
                 if name.eq_ignore_ascii_case("07000048.bin") { return true; }
                 let Some(id) = name.get(..8).and_then(|s| u32::from_str_radix(s, 16).ok()) else { return false };
@@ -1356,7 +1364,12 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                 scene.start = Some((s.pos, s.yaw));
             }
         } else if let Some((pos, yaw)) = scene.start {
-            // No type-0x24 starts parsed: keep the "Player1" stand-in.
+            // No type-0x24 starts parsed: the game creates NO player here — both Player_Start
+            // passes require a kind-1 record and there is no third fallback [M 0x190fd0:11-32].
+            // The port's Bond is structural (every scene carries a sim), so the fallback stands
+            // at the "Player1" placement — the game's own start-object name — for the loads
+            // without 0x24 starts (the front end, dev maps); MP arenas take the 0x25/0x26 spawn
+            // path below [M parsemap 0x1d04f0 case 0x25/0x26].
             sim.bond = nf_game::player::Bond::stand_at(&sim.world, pos, yaw);
         }
         // mp-core: the MP arenas have no type-0x24 starts — `--mp` runs the match core instead:
@@ -1459,10 +1472,12 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // online match's bodies agree; slot 0's bond takes `sim.bond` (the pre-net behaviour) and
             // the rest park in `Sim::mp_bonds` until each machine swaps its own slot in
             // (`Sim::swap_local_slot`).
-            // The game's own human cap is 4 (its fixed 8-slot layout); the
-            // port extends the spawn walk to every human slot of the 16-cap
-            // settings [S mp-16-slots — MP_Start 0x183a50:116-128 inits
-            // humans 0..player_count, the count now reaching 16].
+            // The game's human loop is slots 0..player_count [M MP_Start 0x183a50:120-128 —
+            // MP_GetSpawnPoint then Player_Init per slot], the shipped count topping out at the
+            // 4 pad slots its menus offer; the bots clamp at 4 [M 0x183a50:135-137]. The port
+            // extends the same walk to every human slot of the 16-cap settings (the documented
+            // mp-16-slots port extension, docs/reports/mp-16-slots.md) — the game's loop is the
+            // shape this walk ports.
             let humans = (m.settings.human_count as usize)
                 .clamp(1, nf_game::mp::MP_MAX_SLOTS)
                 .min(sim.mp_bonds.len());
@@ -1488,8 +1503,13 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // 0x129e48:44-48].
             m.bot_start = Some(nf_game::mp::equip::bot_start_weapon(&nf_game::mp::equip::weapon_row(&m.settings), &sim.weapons));
             m.create_bots(&mut sim.drones.rng);
-            // The bots stand on the floor like the humans' `Bond::stand_at`: the spawn point's raw
-            // height left them floating ~4 units up, firing level over every player [S].
+            // The bots stand on the floor like the humans' `Bond::stand_at`: the game spawns
+            // BOT_init at the raw SpawnPoints entry [M MP_Start 0x183a50:139-160 → BOT_init
+            // 0x1249e8 → Drone_Create 0x136be0] and lets its collision gravity settle the drone
+            // onto the floor over the first ticks [M Drone_CollisionHandler 0x140968:176-267
+            // applies WldGravity]. The port's bot loop runs no settle physics, so `stand_at`
+            // pre-settles to the same resting pose in one step (the playtest's floating bots
+            // fired level over every player).
             for b in m.bots.iter_mut() {
                 let feet = nf_game::player::Bond::stand_at(&sim.world, b.brain.pos, b.brain.yaw).pos;
                 b.brain.pos = [feet[0], feet[1] + scene::BOT_EYE, feet[2]];
@@ -1676,7 +1696,11 @@ pub fn merge_weapon_models<R: std::io::Read + std::io::Seek>(iso: &IsoImage<R>,
 /// 0x1d0a00/0x1d0e98]) — and picks the first kind-1 entry whose gate is open, else the first
 /// kind-1 [M 0x190fd0; the kind-0 records never win either pass]. The mapping lives in
 /// `nf_game::player::starts_from_placements` (the same fn the tests call); yaw = the placement's
-/// rotation[1], the same convention the "Player1" stand-in uses (scene.rs).
+/// rotation[1] — the game copies the rotation triple into the start record [M parsemap 0x1d04f0
+/// case 0x24] and Player_Init writes its [1] into the object's euler Y (obj+0x54 = *(param_3+4),
+/// the parallel spawn record's rotation[1]) [M Player_Init 0x1910f8:76-81]; the MP human/bot
+/// spawns ride the same array (param_3 = sp*0x30 + 0x2a7360 [M 0x183a50:120-128]). scene.rs's
+/// "Player1" fallback reads the same field.
 pub fn level_starts(level: &Level) -> Vec<nf_game::player::LevelStart> {
     let Some(m) = level.main_map() else { return Vec::new() };
     nf_game::player::starts_from_placements(&level.maps[m].placements)
@@ -1754,13 +1778,14 @@ fn menu_music_files(iso_path: &str, track: i32) -> Option<(i32, nf_formats::musi
     Some((track, smf, std::sync::Arc::new(get(&nf_formats::music::music_path(n, "SSD"))?)))
 }
 
-/// The keyboard stand-ins for the game's cut-scene skip action (`Input_Action(-1, 0x19, 1)`, read by
-/// `SP_Update` state 2 [M 0x1dbda8:129-141]). Action 0x19 is bound to raw pad mask 0x840 — R1 (0x800)
-/// or D-pad DOWN (0x040), pad 0 only [M psiInput_MapInputs 0x10cd80:415-417] — so a movement key
-/// (W/A/S/D, Space, the mouse) NEVER skips a scene; the user's W press skipped the 07000007 Kimiko
-/// scene (2026-10-12 playtest). The port maps that action to ArrowDown (D-pad down) and R (R1). The
-/// viewer's dedicated keys (Esc, F1/F2/F11/F12) keep their own functions; `--skip-cutscenes` is the
-/// dev override and bypasses this.
+/// The keyboard mapping of the game's cut-scene skip action (`Input_Action(-1, 0x19, 1)`, read by
+/// `SP_Update` state 2 [M 0x1dbda8:129-141] and GameFlow case 6 [M 0x1c98c8:145-150]). Action 0x19
+/// is bound to raw pad mask 0x840 — R1 (0x800) or D-pad DOWN (0x040), pad 0 only [M
+/// psiInput_MapInputs 0x10cd80:415-417] — so a movement key (W/A/S/D, Space, the mouse) NEVER skips
+/// a scene; the user's W press skipped the 07000007 Kimiko scene (2026-10-12 playtest). The port's
+/// two keys are the game's own two bindings: ArrowDown is the mask's D-pad-down half, R the R1
+/// half. The viewer's dedicated keys (Esc, F1/F2/F11/F12) keep their own functions;
+/// `--skip-cutscenes` is the dev override and bypasses this.
 pub fn cutscene_skip_key(k: winit::keyboard::KeyCode) -> bool {
     matches!(k, winit::keyboard::KeyCode::ArrowDown | winit::keyboard::KeyCode::KeyR)
 }
@@ -2546,7 +2571,8 @@ struct App {
     /// net-match-end: the host's end wait — the finished match's session stays LIVE (polled,
     /// relaying inputs) until every human peer has acked its own final tick + debriefing, or
     /// departed, or the wall deadline passes. Only then does the session move to `net_finished`
-    /// (docs/systems/net-match-end.md §4) [S port protocol].
+    /// (docs/systems/net-match-end.md §4) — port-only: the shipped game has no online [D
+    /// action-symtab.tsv census: zero socket/TCP/UPnP symbols].
     net_end_wait: Option<NetEndWait>,
     /// The online match's wall clock (set when its level swaps in): the lockstep runs to
     /// `elapsed · 60` ticks, catching up after a stall instead of dropping the stalled ticks.
@@ -2650,20 +2676,26 @@ struct LevelLoad {
 /// 07000001 → 07000002 (PS2LSActive 2 → 0, measured in PCSX2 2026-10-15) — long enough to read
 /// the objective and the hint while the dots sweep (183.5 ms a step, the port's 11-vblank cadence
 /// exactly). The port builds a level in 1-2 s, so the screen flashed by (playtest 1015-2142); the
-/// user chose to hold it a few seconds [S — a PC-port choice, not the game's timing]. Pub for the
+/// user chose to hold it a few seconds — a documented PC-port choice (the game's disc timing is
+/// the [L] above; the port's 1-2 s builds need their own floor). Pub for the
 /// flow tests (pause-results-flows): the headless suite pins the 5 s = 300-tick window.
 pub const LOADING_HOLD: f64 = 5.0;
 
 /// microcam-wheel-zoom: where a wheel notch goes. While the aim (right) button is held on a weapon
 /// that can zoom — the game's own scope flag +0x68 & 0x40 with a magnification above 1 [M
-/// weapon_data 0x2bf150; the sim's zoom block gates on the same two] — the wheel steps the zoom
-/// [S the 2026-10-15 playtest]. Otherwise it keeps switching weapons (the pre-feature behaviour).
+/// weapon_data 0x2bf150; the sim's zoom block gates on the same two] — the wheel steps the zoom.
+/// The game steps its zoom with action 6 in aim mode (D-pad Up = −1 / Down = +1 [M
+/// docs/systems/input.md §3 style-0 table, measured]; the consumer is `Player_Zoom` 0x1a1a70:19,
+/// `Input_Actionf(player, 6, 1)` [M]) — a wheel notch is the PC surrogate for the game's own
+/// zoom-step action (the 2026-10-15 playtest chose the wheel over key repeats). Otherwise it
+/// keeps switching weapons (the pre-feature behaviour).
 pub fn wheel_steps_zoom(zoom_held: bool, weapon_flags: u32, weapon_zoom: f32) -> bool {
     zoom_held && weapon_flags & 0x40 != 0 && weapon_zoom > 1.0
 }
 
-/// net-match-end: the host's end wait (docs/systems/net-match-end.md §4) [S port protocol — the
-/// disc has no online]. The finished match's session stays live while the host's debriefing is
+/// net-match-end: the host's end wait (docs/systems/net-match-end.md §4) — port protocol, the
+/// disc has no online [D action-symtab.tsv census: zero socket/TCP/UPnP symbols]. The finished
+/// match's session stays live while the host's debriefing is
 /// up, so a client still draining its last ticks keeps its relay; the wait ends when every human
 /// peer has acked its own debriefing or departed (a dead peer cannot hold it — the deadline).
 struct NetEndWait {
@@ -2743,7 +2775,9 @@ impl App {
             if let Ok(p) = mpnet::SessionProxy::host(0) {
                 // net-p2p: the app's sessions probe internet reachability (UPnP / NAT-PMP /
                 // STUN) on listen and dial; NF_NO_REACH=1 keeps them LAN-only, NF_STUN
-                // ("host:port,host:port") replaces the public STUN list [S net-p2p §1].
+                // ("host:port,host:port") replaces the public STUN list. Port-only surface —
+                // the shipped game has no online at all [D action-symtab.tsv census: zero
+                // socket/TCP/UPnP symbols]; docs/systems/net-p2p.md §1 owns the design.
                 // net-cloud-lobby: the cloud meeting point rides along (nf-lobbyd overrides).
                 enable_net_services(&p);
                 fe.mp_session = Some(Box::new(p.clone()));
@@ -2803,12 +2837,15 @@ impl App {
             // "bksp": the address/port pages' Backspace (the host's port field starts at 27420).
             else if step == "bksp" { for _ in 0..times { if let Some(fe) = self.fe.as_mut() { fe.mp_net_backspace(); } } }
             // "lobby": one line with this machine's one-screen lobby model (the two-window
-            // settings check compares the host's and the client's lines) [S test aid].
+            // settings check compares the host's and the client's lines) — a port test aid of
+            // the NF_ENU_SCRIPT dev rig, not a game surface (no counterpart in the shipped
+            // game's flow).
             else if step == "lobby" {
                 if let Some(fe) = self.fe.as_ref() { eprintln!("[lobby] {}", fe.mp_one.debug_line()); }
             }
             // "row=Enviro(3)": real Up/Down presses until the lobby focus sits on that row id
-            // (the row list shifts with joins and bots, so fixed press counts drift) [S test aid].
+            // (the row list shifts with joins and bots, so fixed press counts drift) — same
+            // NF_ENU_SCRIPT dev-rig test aid, port-only.
             else if let Some(want) = step.strip_prefix("row=") {
                 for _ in 0..80 {
                     let Some(fe) = self.fe.as_mut() else { break };
@@ -2834,15 +2871,18 @@ impl App {
         let fe = self.fe.as_mut().unwrap();
         // State 6 (the briefings/outros): only the skip action matters [M GameFlow_Main 0x1c98c8
         // case 6 reads Input_Action(-1, 0x19, 1) and nothing else — the menu pages are not
-        // up during a movie]. The port's Confirm keys (Enter/Space) stand in for
-        // the pad's X/Start [S docs/systems/input.md §3]. The front-end intro run is NOT state 6:
+        // up during a movie]. The port's Confirm keys (Enter/Space) map the game's own menu
+        // confirm: X and Start both set action 25 for player 0 [M docs/systems/input.md §3
+        // style-0 table, measured, WORKLOG 0006]. The front-end intro run is NOT state 6:
         // it reaches `fe.action`, which honours P_ESTHERO's 180-tick grace and the boot logos'
         // no-skip [M 0x215a50:6] (fe-audit: this intercept used to swallow the intro's skip).
         if fe.flow.get_state() == menu::ST_MOVIE {
             // A movie can't be skipped in its first second on screen: the press that picked the
-            // mission (or a quick double-tap) used to skip its briefing before a frame showed
-            // [S — a port choice from the playtest; GameFlow case 6 itself skips at once,
-            // 0x1c98c8:146-150].
+            // mission (or a quick double-tap) used to skip its briefing before a frame showed.
+            // The game's case 6 itself skips at once [M 0x1c98c8:146-150]; the 1 s guard is the
+            // port's documented input-layer choice (a keyboard key both picks the mission and
+            // would skip the briefing — on the pad the two actions are separate buttons), from
+            // the 2026 playtest.
             let shown = self.movie.as_ref().map_or(f32::MAX, |p| p.shown_for());
             if a == MA::Confirm && shown >= 1.0 { fe.flow.skip_movie(); }
             return;
@@ -3449,8 +3489,12 @@ impl App {
         // per-level sim (Progress::nightfire_status), so each fresh sim is seeded from the live
         // front end here — the results page's award (results_enter → set_level_bonus → the
         // mirror) then accumulates on the session's bits instead of restarting from the boot 0x3
-        // [D ACTION.ELF .data 0x1d91e0]. Without a front end (headless loads, boot) the fresh
-        // boot value stands. [S the port's glue for the game's single store.]
+        // [D ACTION.ELF .data 0x1d91e0]; Menu_GetNightfireStatus packs the 12 flag bytes at
+        // sp_level+0x10 (0x18 stride) into one word [M 0x202360:9-19], Menu_SetLevelBonus writes
+        // them [M 0x1ffa10], and no load path resets them — Mission_Init skips the front end
+        // entirely [M 0x182270:19-22]. Without a front end (headless loads, boot) the fresh
+        // boot value stands. The seed glue below is the port's mirror of that single store:
+        // the front end holds the session's bits, every fresh sim is seeded from it.
         if let Some(fe) = self.fe.as_ref() {
             if let Some(sim) = self.scene.sim.as_mut() {
                 sim.drones.progress.nightfire_status = fe.packed_unlocks();
@@ -3476,9 +3520,10 @@ impl App {
         self.entry_save = Some(entry_checkpoint_save(self.scene.sim.as_ref().unwrap()));
     }
 
-    /// F8/F9: show the mission-complete / mission-failed results page for the loaded mission [S demo
-    /// hook — the game reaches it from `Mission_Update` 0x182c60:74's event; the port's mission-event
-    /// → results glue is listed in docs/reports/fix-menus.md as remaining host work].
+    /// F8/F9: show the mission-complete / mission-failed results page for the loaded mission —
+    /// a port-only debug hook (the game reaches the page from `Mission_Update` 0x182c60:74's
+    /// event, not from any key; the port's mission-event → results glue is listed in
+    /// docs/reports/fix-menus.md as remaining host work).
     /// mp-match-end: the local match's end handover — the `MP_Update` 0x184bd0 case-4 sequence
     /// [M :62-78: `GameState+0x1C = 0x40000033` + `ResetMap_LevelToLoad(0x7000048)` + the fade +
     /// the per-slot `Player_SetCamMode`/`GS_PausePlayer`] on the front end the SP end built
@@ -3515,7 +3560,8 @@ impl App {
         let final_tick = self.scene.sim.as_ref().map(|s| s.drones.frame).unwrap_or(0);
         fe.show_mp_debriefing(board);
         // Online: the finished match's handover (net-match-end, docs/systems/net-match-end.md
-        // §4 [S port protocol]). Every machine announces its own end first — the final tick plus
+        // §4 — port-only, the disc has no online [D action-symtab.tsv census: zero
+        // socket/TCP/UPnP symbols]). Every machine announces its own end first — the final tick plus
         // its board's fold (Data tag 4) — before anything happens to its session. The HOST then
         // holds the LIVE session until every human peer has acked or departed (a client still
         // draining its last ticks keeps the relay; a dead peer can't hold it — the wall
@@ -3624,7 +3670,9 @@ impl App {
     /// page-change transitions (the manager's msg-0x44 re-runs the new page's 0x4c arm [M
     /// 0x21c858:345-346]), applies the queued [`menu_music::MusicCmd`]s to the sound driver, and
     /// pumps the IOP stand-in while the menus are up (the sim path's `sound_tick` only runs in
-    /// the tick gate, which the front end skips). Silent under NF_SILENT: without an output
+    /// the tick gate, which the front end skips). The game runs the same shape: its frame update
+    /// calls Sound_UpdateListeners → Sound_UpdateSounds every not-frozen frame, in the same block
+    /// as MenuManager_Update [M Game_Run 0x1c9790:7-11]. Silent under NF_SILENT: without an output
     /// device `build_sound` returns None and the commands just bookkeep on the state machine.
     fn menu_music_tick(&mut self) {
         // frontend-music (menu-audio-state): the transitions + the drain live in the extracted
@@ -4154,7 +4202,8 @@ impl App {
                         events = core.take_app_events();
                     }
                     // The notices the wait saw this frame (a differing board fold, a departure)
-                    // surface on the debriefing's notice line [S].
+                    // surface on the debriefing's notice line — port net protocol, the disc has
+                    // no online [D action-symtab.tsv census: zero socket/TCP/UPnP symbols].
                     let mut board_notice = false;
                     if let Some(w) = self.net_end_wait.as_mut() {
                         for ev in events {
@@ -4532,8 +4581,10 @@ impl App {
                 }
                 // An online match never stops for one machine's pause page: the others would stall on
                 // its missing inputs (lockstep). The match runs on under the menu with this machine's
-                // player idle (NEUTRAL input below) [S port design — the PS2's couch pause stops every
-                // pad's game; online there is no shared screen to pause].
+                // player idle (NEUTRAL input below) — a port-only case, since the shipped game has
+                // no online [D action-symtab.tsv census: zero socket/TCP/UPnP symbols]; its couch
+                // pause stops the game for every pad (GS_IsPaused gates control_movement_object_handler
+                // out of Game_Run [M 0x1c9790:31-36]) and there is no shared screen to pause online.
                 let net_menu = self.net.is_some() && !self.net_await_load
                     && self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::Pause);
                 if !self.paused && (self.fe.is_none() || net_menu) {
@@ -5096,7 +5147,9 @@ impl App {
                                 self.cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov };
                             }
                         }
-                        // HUD stand-in: Bond's health (`BL+0x894`) and the hit flash (`BL+0x968`) in the title.
+                        // Dev readout in the window title (the real HUD panes are the draw code's):
+                        // the game's own pane inputs — health BL+0x894 [M HUD_UpdateHealthPane
+                        // 0x19b9c8:159] and the hit flash BL+0x968 [M 0x19b9c8:92-113].
                         if before / 30 != self.anim_time as u32 / 30 {
                             if let Some(g) = &self.gfx {
                                 let h = &sim.drones.health;
