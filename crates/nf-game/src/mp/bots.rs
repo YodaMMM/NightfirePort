@@ -4155,16 +4155,17 @@ impl BotBrain {
         if self.vars.flag_word & 2 != 0 && next == state::BOT_ATTACK_RUN {
             return StateChange::Refuse; // [M :73-76]
         }
-        if next == state::BOT_ATTACK_CHANGE_WEAPON && self.vars.weapon_id == 1 {
-            // + the +0x56C anim band 0x35..0x38 gate [M :77-82] — the port's MP bot body runs
-            // no anim ids, so the band test never fires here [S]
-            return StateChange::Allow(next); // the game may refuse inside the band
-        }
+        // 0xDE with the fists held (+0x768 == 1) is refused only INSIDE the +0x56C anim band
+        // 0x35..0x38 [M :77-82]; outside it the checks below still run (fix-849: the branch
+        // returned Allow here, skipping them). The port's MP bot body runs no anim ids, so the
+        // band test is false [S] and 0xDE simply falls through.
         if cur == state::BOT_GOTO_GOAL_POSITION && next_type == 4 {
-            // the seen bits (+0xBC table & 6 == 6 — the port's candidate|seen flags) or the
-            // distraction let a type-4 (combat) state in [M :83-100]
+            // Out of 0xEB a type-4 (combat) target is refused only while the bot IS distracted
+            // and has not seen its opponent: `if (isDistracted) ok = seen ? ok : 0` [M :83-100]
+            // (fix-849: the branch refused when NOT distracted). Seen = the +0xBC table & 6 == 6
+            // (the port's candidate|seen flags).
             let seen = self.vars.sighted & 4 != 0;
-            if !seen && !self.is_distracted() {
+            if self.is_distracted() && !seen {
                 return StateChange::Refuse;
             }
         }
@@ -4179,6 +4180,11 @@ impl BotBrain {
                 StateChange::Refuse
             }
             5 => {
+                // Only the 0xEB state pays (`if (iVar1 != 0xeb) return ok` [M :114-116]; fix-849:
+                // the branch charged every type-5 state).
+                if cur != state::BOT_GOTO_GOAL_POSITION {
+                    return StateChange::Allow(next);
+                }
                 // from 0xEB the seen/heard requests pay the distraction first [M :113-135]
                 let amount = match next {
                     state::BOT_SEEN_OPPONENT => {
@@ -4759,6 +4765,57 @@ mod brain_tests {
         assert!(matches!(r.brain.validate_state_change(state::BOT_IMPACT_PUNCH, &ctx, &mut rng), StateChange::Refuse), "0xF1 refused [M :40-45]");
         // sister: a normal combat move request is allowed
         assert!(matches!(r.brain.validate_state_change(state::BOT_ATTACK_STRAFE_AIM_LEFT, &ctx, &mut rng), StateChange::Allow(_)), "type-4 targets pass the type-5 checks [M :105-112]");
+    }
+
+    /// fix-849: `BOT_validateStateChange` 0x124fb0's three arms the branch had wrong.
+    #[test]
+    fn brain_rest_validate_fix_849() {
+        let world = CollisionWorld::from_triangles(Vec::new());
+        let mut rng = Rng::new(7);
+        // (1) Out of 0xEB a type-4 target: refused only while distracted AND unseen [M :83-100].
+        {
+            let mut r = Rig::new();
+            r.brain.state = state::BOT_GOTO_GOAL_POSITION;
+            r.brain.vars.sighted = 0;
+            assert!(r.brain.is_distracted(), "no active goal: distracted [M 0x129c58:11-13]");
+            let others = r.others.clone();
+            let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+            assert_eq!(state_type(state::BOT_ATTACK as u32), 4, "0xCF is a type-4 (combat) state");
+            assert!(matches!(r.brain.validate_state_change(state::BOT_ATTACK, &ctx, &mut rng), StateChange::Refuse),
+                "distracted + unseen: refused [M 0x124fb0:83-100]");
+        }
+        // (2) A type-5 state other than 0xEB pays no distraction: `if (iVar1 != 0xeb) return ok` [M :114-116].
+        {
+            let mut r = Rig::new();
+            let t5 = (0u8..=0xff).find(|&s| s != state::BOT_GOTO_GOAL_POSITION && state_type(s as u32) == 5);
+            if let Some(t5) = t5 {
+                r.brain.state = t5;
+                let before = r.brain.vars.distraction;
+                let others = r.others.clone();
+                let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+                assert!(matches!(r.brain.validate_state_change(state::BOT_SEEN_OPPONENT, &ctx, &mut rng), StateChange::Allow(_)),
+                    "type-5 state {t5:#x} (not 0xEB) allows 0xEC outright");
+                assert_eq!(r.brain.vars.distraction, before, "and charges no distraction");
+            }
+        }
+        // (3) 0xDE outside the anim band falls through to the later gates — the carrier bit
+        // (bit2 of +0x734) refuses a type-4 target [M :77-82 then :101-104].
+        {
+            let mut r = Rig::new();
+            r.brain.state = state::BOT_ATTACK;
+            r.brain.vars.weapon_id = 1;
+            r.brain.vars.flag_word |= 4;
+            let others = r.others.clone();
+            let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+            if state_type(state::BOT_ATTACK_CHANGE_WEAPON as u32) == 4 {
+                assert!(matches!(r.brain.validate_state_change(state::BOT_ATTACK_CHANGE_WEAPON, &ctx, &mut rng), StateChange::Refuse),
+                    "0xDE with fists, outside the band, carrier bit set: refused by :101-104");
+            }
+            // sister: without the carrier bit it is allowed
+            r.brain.vars.flag_word &= !4;
+            assert!(matches!(r.brain.validate_state_change(state::BOT_ATTACK_CHANGE_WEAPON, &ctx, &mut rng), StateChange::Allow(_)),
+                "0xDE allowed without the carrier bit");
+        }
     }
 
     /// `BOTSTATE_stopAnim` 0x129918 / `BOT_soundEffect` 0x126618 — the no-anim/bark-channel
