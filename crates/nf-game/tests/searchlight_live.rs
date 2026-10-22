@@ -200,6 +200,9 @@ fn channels_and_tracking_behave() {
     let shot = nf_game::searchlight::Shot { from: [centre[0] - 5.0, centre[1], centre[2]], to: [centre[0] + 5.0, centre[1], centre[2]], damage: 3.5, segment: true };
     let evs = s.update(&d, &far_away, &mut channels, h, &[shot], &mut rrng, 2);
     assert_eq!(s.parts[h].state, 2);
+    // The break sound: id 0xe6 at the head's obj+0x30 [M Searchlight_Update 0x1cb900:455-456 —
+    // `Sound_Play3D(0x42c80000,0xbf800000,0xbf800000,0xe6,iVar11 + 0x30,0,0,0)`, the head's
+    // position vector is the play spot].
     assert_eq!(evs, vec![(0xe6, hpos)]);
     assert!(!s.parts[beam].drawn);
     // The dark head re-lights on its channel with the relay clunk.
