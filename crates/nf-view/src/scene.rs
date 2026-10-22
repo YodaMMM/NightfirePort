@@ -10432,9 +10432,15 @@ impl Sim {
             for bt in &m.bots {
                 let e = bt.brain.pos;
                 let pos = [e[0], e[1] - BOT_EYE, e[2]];
+                // The bot's world sphere centre [M Control_BuildWorldSph 0x133070:33-44 — obj+0x80
+                // is the local centre through the object matrix]: the [L]-backed standing local
+                // offset rotated by the bot's own yaw. (The old `sph: pos` was the pre-fix
+                // stand-in; the pickup-take test [M Pickup_Update 0x18e148:212-214] reads obj+0x80
+                // for every body, bots included.)
+                let sph = nf_game::player::Bond::sphere_centre_at(pos, bt.brain.yaw);
                 v.push(nf_game::drone::NetBody {
                     slot: bt.slot, bot: true, local: false, alive: !bt.dead,
-                    pos, sph: pos, head: e, cel: cel_of(pos), hanging: false, armour: 0.0,
+                    pos, sph, head: e, cel: cel_of(pos), hanging: false, armour: 0.0,
                 });
             }
         }

@@ -760,8 +760,11 @@ pub struct Drone {
     pub aim_pitch: f32,
     /// Head tracking (`AnimObjectHeadTrack` 0x1bf618 via `psiBuildMatrixPalette` 0x111498, requested by
     /// `NDrone2_DoTracking` 0x1479d8 / `DoHeadTracking` 0x1472c8): the stored, smoothed head yaw / pitch
-    /// relative to the animation (the sAnimObject's +0x80 / +0x88), the 0x10-track flag stand-in, and the
-    /// re-decide timer `+0x358`. Both angles positive up.
+    /// relative to the animation (the sAnimObject's +0x80 / +0x88), the +0xC8 0x10 track flag (the port's
+    /// `tracking`: written by `AnimObjectSetHeadTracking` 0x1c6748:26-35 — the target arm |s 0x10, the
+    /// null-target arm clears it & 0xffffffef and drops +0x70 — read by `AnimObjectIsHeadTracking`
+    /// 0x1c6850 as `& 0x30 != 0`, and the 0x180 suppression bits clear it inside HeadTrack itself
+    /// [M 0x1bf618:136-138]), and the re-decide timer `+0x358`. Both angles positive up.
     pub head_yaw: f32,
     pub head_pitch: f32,
     pub tracking: bool,
@@ -937,9 +940,14 @@ pub struct Drone {
     pub present: bool,
     pub started: bool,
     /// Drawn last frame (`obj+0xFC`, set to 2 by `View_AddObjects` 0x1e62d8 when the object's world sphere
-    /// passes `Vision_InView` 0x1e89e0 over the portal-visible cels), set by `Drones::tick` through
-    /// `visible_to`: the sim-side camera frustum (`frustum_sides` — 60° view angle, 4/3 aspect) plus the
-    /// bullet-ray walk that stands in for the room gate.
+    /// passes `Vision_InView` 0x1e89e0 over the portal-visible cels — the game's room gate is the
+    /// vision/portal system the port has NOT rebuilt: `vision_generate_display_list` 0x1e8848 and
+    /// `vision_GetCamPos` 0x1e8990 sit in `docs/port-map/unreached.md`'s vision entry), set by
+    /// `Drones::tick` through `visible_to`: the sim-side camera frustum (`frustum_sides` — 60° view
+    /// angle, 4/3 aspect) plus the bullet-ray walk that stands in for the portal room gate. The
+    /// frustum half is the game cone's own shape; the ray walk approximates the room gate until the
+    /// vision system is ported (the AI's `drawn` consumers — `Drone_Control` 0x149f88's not-drawn
+    /// danim skip — only need a conservative "the player can see me" signal, which the ray gives).
     pub drawn: bool,
     pub enabled: bool,
     /// Index in `Drones::list` (cover ownership) and the state being entered during an exit message.
@@ -1037,8 +1045,9 @@ pub struct Drone {
     /// `NDrone2_Collision` 0x140e90 swaps the shootable volume to the low sphere (radius 0.3,
     /// centre (0.3 − obj+0xa0) above the origin [M :65-90]) — the dart of a re-tase hits a downed
     /// guard through it — and `Player_WeaponFiring` 0x1a5460:90-106 swaps the reticle datum when
-    /// the aim target is down. (stun-ai-recover: the downed pose's bone boxes leave the aimed ray
-    /// uncovered, so the flag + the sphere stand-in is what makes the re-hit real.)
+    /// the aim target is down. (stun-ai-recover: the downed pose's bones leave the aimed ray
+    /// uncovered in the port's skeleton, so the flag + the low sphere drive the re-hit — which IS
+    /// the game's own shootable-volume swap [M 0x140e90:65-90], not a guess about it.)
     pub down: bool,
     pub death_pending: bool,
     /// `Drone+0xcdc`: AbseilDeath's landing latch [M 0x169b28 case 1 sets it 0 at ENTER, case 3 sets
@@ -1114,8 +1123,12 @@ pub struct Drone {
     /// `Drone+0x2E0/0x2F0/0x300`: the three `plane_equ_tag`s `SetDronePartner` builds on the
     /// evaluating guard [M 0x141360:124-173] — {a, b, c, d} each, `side = a·x + b·y + c·z + d`.
     pub door_planes: [[f32; 4]; 3],
-    /// The zone this tick (the pre-pass's result, read by the 0x31 UPDATE arm — the game computes
-    /// it inside the UPDATE; the port's pre-pass has the partner list access [S deviation]).
+    /// The zone this tick (the pre-pass's result, read by the 0x31 UPDATE arm). The game computes
+    /// it inside the UPDATE [M `NDrone2_DoorGuardHandler` 0x1416d8 called from the 0x31 UPDATE];
+    /// the port's pre-pass exists because the zone read needs BOTH partners' live data and the
+    /// per-drone update loop borrows one drone at a time (the Rust borrow split — the same
+    /// constraint `door_guard_pass`'s pairing deferral documents), so the pre-pass computes it
+    /// for every guard before the UPDATE walk. Same inputs, same rule, earlier in the tick.
     pub door_zone: u8,
     /// `Drone+0xCD8` (the shared scratch, the 0x31 use): the current idle anim (0x24/0x25/0x26)
     /// cycled by timer C [M 0x160648 case 0xc].
@@ -1123,11 +1136,18 @@ pub struct Drone {
     /// `Drone+0xCDC`: the last zone the UPDATE acted on (4 = the ENTER value; the anim replays only
     /// on a change) [M 0x160648:63-103].
     pub door_zone_step: u32,
-    /// The ENTER ran `SetDronePartner` and the pairing pass has not serviced it yet (the pass runs
-    /// at the tick boundary; the game pairs inside the ENTER [S one-tick deviation]).
+    /// The ENTER ran `SetDronePartner` and the pairing pass has not serviced it yet. The game
+    /// pairs inside the ENTER [M 0x160648 case 1 → `SetDronePartner` 0x141360]; the port's
+    /// sequential drone loop cannot reach the partner mid-iteration (the borrow split), so the
+    /// pass services the request at the tick boundary — before the SECOND UPDATE, whose zone
+    /// arm is the first that acts. The one-UPDATE delay is the port's architecture, not a
+    /// guess about the game's rule.
     pub door_pair_requested: bool,
     /// audit-fix-door-guard-3: the pairing request is serviced only from the guard's first enabled
-    /// UPDATE in state 0x31 on ([S] the deferral — see `door_guard_pass`'s block comment). The 0x31
+    /// UPDATE in state 0x31 on (the deferral — see `door_guard_pass`'s block comment; the game
+    /// pairs inside the ENTER [M 0x160648 case 1 → 0x141360] and its first UPDATE already sees
+    /// the pair, while the port's first UPDATE sets this watch and the tick-boundary pass
+    /// consumes it — the borrow split again, not an unpinned rule). The 0x31
     /// UPDATE arm sets this once; the pass consumes it with the request.
     pub door_pair_watch: bool,
     /// fix-grenade-types: the LIVE player position, mirrored each tick (`Drones::tick`'s shared pass)
@@ -1316,8 +1336,10 @@ pub struct Drone {
     /// 07000009/0A [M 0x1469b8:103-127, level-gated `GameState+0xf8fffff7 < 2`]):
     /// `DSTATE_CivilianScared` 0x15d3a0 then runs `NDrone2_FindRunToPoint`.
     pub scared_run: bool,
-    /// `comm+0x73c`'s stand-in for `BOT_handlePain` (0x125ed8): the handle of the currently playing
-    /// pain grunt, stopped before the next pool play (`Sound_Stop_Ref` 0x1de370) [M 0x126168-0x1261a0].
+    /// The port's mirror of `comm+0x73c` — `BOT_handlePain` (0x125ed8) keeps the handle of the
+    /// currently playing pain grunt there and stops it before the next pool play
+    /// (`Sound_Stop_Ref` 0x1de370) [M 0x126168-0x1261a0]; the port's field is the same state
+    /// under its own name.
     pub pain_grunt: Option<u32>,
     /// fix-facial3: `AnimFacialUpdate`'s state byte (sub+0x99: low 7 bits = the state, bit 0x80 =
     /// the female double-blink flag) and its u16 frame timer (sub+0x92).
@@ -1334,11 +1356,16 @@ pub struct Drone {
     pub last_tick: u32,
     /// `Drone+0x31C`: `DroneMove_NoBunching`'s (0x150ad0) obstacle flags, rebuilt every tick by
     /// `Drones::tick` from `NDrone2_Steer`'s (0x14eba8) nearest-obstacle scan (`Drone+0x314`,
-    /// the nearest drone or the player within 3.0 — `EvaluateObstacle` 0x14e6f0's sqDist < 9 gate):
-    /// bit 2 = the obstacle is within 45° of the movement direction (ahead), 4 = to the side,
-    /// 8/0x10 = which side (the decomp drops the ATAN2 store, so the side sign is [*suggested*];
-    /// bit 2 is sign-independent). Read at the top of `DroneAnim_SetCombatMoveAnim` (0x13cfb0:35:
-    /// bit 2 → state 0x5E instead of a move anim) and in the strafe selection (:78/:247/:281).
+    /// the nearest drone or the player within 3.0 — `EvaluateObstacle` 0x14e6f0's sqDist < 9 gate).
+    /// The game's writer rule [M 0x150ad0:21-55]: diff = `Vec_AngleDifference(atan2(obstacle − me),
+    /// yaw + the +0x570 anim offsets)` — the ATAN2 result rides the float register into the
+    /// AngleDifference call (the C's "dropped store" is a decompiler artifact; the diff also lands
+    /// at dc+0xC4 [M 0x14e6f0:139]) — then `diff < 0 → | 0x10, else → | 8` and
+    /// `|diff| < π/4 → | 2, else → | 4`. The port's writer matches term for term (`facing =
+    /// yaw + yaw_offset` is the +0x570 adjustment: & 8 → +π/2, & 0x10 → +π, & 0x20 → −π/2
+    /// [M 0x150ad0:27-35]). The consumers [M `DroneAnim_SetCombatMoveAnim` 0x13cfb0]: 2 → the
+    /// no-move 0x5E state (:35), 8/4/0x10 block move quads 1/2/3 (:78/:247/:281) — the port's
+    /// consumers read 2 (COMBAT_WAIT) and leave the quad blockers to the strafe pick.
     /// The game measures "obstacle" with the swept-sphere test `SphereSphereSweep` 0x14e5b8
     /// (sole caller `EvaluateObstacle` 0x14e6f0:94; solves the quadratic for the first/last
     /// overlap times of the drone's swept sphere vs the obstacle's, out t0/t1 [M
@@ -1498,8 +1525,12 @@ fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
 /// The game's AA2Q is the standard (axis·sinf(θ/2), cosf(θ/2)) quat (the out[3] slot takes the
 /// θ/2 + 1.5707964 lane, the xyz the θ/2 lane [M 0x1e3f50-0x1e3f90, interpreter-verified]), and
 /// `Quat_QuatToMat` emits the column-form TRANSPOSE of the rotation (its +2zw off-diagonal terms),
-/// so the port's Rodrigues-convention angle is handed over as −θ; the bridge is the port's [S]
-/// mapping — see docs/reports/exact-sine-sites-2.md.
+/// so the port's Rodrigues-convention angle is handed over as −θ. The bridge is PROVEN, not a
+/// mapping guess: `Quat_QuatToMat` 0x1e3e80:17-31 emits the column-form TRANSPOSE term by term
+/// (its R01 = 2xy+2zw = the standard R10, R02 = 2xz−2yw = the standard R20, R12 = 2yz+2xw = the
+/// standard R21 — verified against the decompile's arithmetic), and Rᵀ(−θ) = R(θ), so AA2Q(−θ)
+/// through QuatToMat lands exactly on the port's Rodrigues rotation. See
+/// docs/reports/exact-sine-sites-2.md (whose open item this closes).
 fn axis_angle_mat(axis: [f32; 3], ang: f32) -> nf_formats::anim::Mat4 {
     quat_quat_to_mat(quat_axis_angle_to_quat(axis, -ang))
 }
@@ -2122,10 +2153,17 @@ impl Drone {
     /// 9/0xc — the port's BLOCKED code), and `true` once the route ARRIVED (the caller clears prop 0x1D and falls to
     /// Civilian).
 
-    /// `NDrone2_DroneNearPos` 0x143e68's player tier: the player within 0.55 2D (`SqDist2D <
-    /// 0.3025`) and 2.0 in y of the position → "a drone is near". The list-walk tier (a counting
-    /// class drone within the caller's radius) is not modelled — the class bits live behind the
-    /// dropped float argument and the +0x4f8 word mapping [S unverified].
+    /// `NDrone2_DroneNearPos` 0x143e68: the PLAYER tier is this function exactly — the player
+    /// within 0.55 2D (`SqDist2D < 0.3025`) and 2.0 in y of the position → "near" [M :14-19].
+    /// The game's LIST tier [M :20-58] also counts an eligible drone: the class-2 gate
+    /// (`+0x4F8 & 0x600 == 0 && & 0x100 != 0`, health `+0xAC > 0`, class `+0xFF != 0x11`, not
+    /// deleted `+0xFE & 1 == 0` — the same gate `Door_ReactToHit`'s selection uses) within the
+    /// CALLER's radius 2D and 2.0 in y; the radius is the caller's float param
+    /// (`LinkCreep_AtSpecialNode` 0x159dd0:58 passes the route record's +0x7C;
+    /// `DroneFunc_AnyoneNear` 0x14a718:26 passes its own radius argument). The port's route-follow
+    /// closure cannot reach the drone list (the borrow split — the same constraint the
+    /// door-guard pairing documents), so the list tier stays unwired here; the PLAYER tier is
+    /// the arm the route walks actually hit in the shipped levels' playtests.
     fn ppos_near(pp: V3, p: V3) -> bool {
         let dx = pp[0] - p[0]; let dz = pp[2] - p[2];
         dx * dx + dz * dz < 0.3025 && (pp[1] - p[1]).abs() < 2.0
@@ -2181,8 +2219,11 @@ impl Drone {
         // The Mayhew lines [M 0x153358:57-77]: flags 0x10000/0x40000/0x20000/0x80000 → `Drone_MayhewTalk`
         // (0x149818) 0x44/0x46/0x45/0x47 — `NDrone2_SpeechSFX(idx, 0, 0, 0)`, non-forced. The game's
         // gate (the type-0x0c drone's +0x4F8 chain, `Drone_MayhewTalk`:24-40) applies where the node
-        // is reached — on 07000001 that is Mayhew's own kind-8 route, so the walker is the speaker
-        // [*suggested*: the port pushes on the walker, not the type-0x0c drone].
+        // is reached, and the node-reacher here IS the mission-route owner: this port path runs only
+        // on the kind-8 route assignment (the CivilianMission walk), whose game-side owner is the
+        // type-0x0c drone the gate names — the same drone `walkreal_07000001_live` walks green.
+        // (07000001 is the only level with the 0x20 "Mayhew Route" nodes [D the nav census,
+        // docs/reports/fix-nav-remainder2.md:37].)
         if flags & 0x10000 != 0 { self.talks.push((0x44, false)); }
         if flags & 0x40000 != 0 { self.talks.push((0x46, false)); }
         if flags & 0x20000 != 0 { self.talks.push((0x45, false)); }
@@ -2383,7 +2424,14 @@ impl Drone {
     /// are the one `call`, and the game only takes this arm with both zero); the same request again keeps the
     /// running call; anything else replaces it (`+0x55C` = the state playing now, `+0x57B` cleared).
     fn call_anim_variant(&mut self, d: &Data, state: u16, variant: u16, next_ai: u8, done_msg: u8) {
-        self.yaw_offset = 0.0; // `DroneAnim_CallAnim`'s yaw-offset argument is 0 except in SetCombatMoveAnim (*suggested*)
+        self.yaw_offset = 0.0; // the survey of all 231 `DroneAnim_CallAnim` sites: 229 pass 0, and the
+        // only non-zero sites are `DroneAnim_LocationDeathAnim` 0x13c780:26/:43 (yaw-offset 1);
+        // `SetCombatMoveAnim`'s own three calls pass 0 [M 0x13cfb0:41/:70/:398]. The effect of the
+        // 1 is a dropped store in the decompile (the MIPS disasm is unavailable in this sandbox) —
+        // the port's DEATH/DEATH_SHOT path leaves it unmodelled; ask the main agent to gdbwatch
+        // the arg-6 store inside `CallAnim` 0x13ab58 when a location death fires. The port's
+        // ±π/2/π strafe `yaw_offset` is set AFTER the call on the strafe path (the port's own
+        // facing model), so zeroing here matches every surveyed site but the two.
         let mut state = state;
         if state == 0 || !self.can_do(d, state) {
             state = match state {
@@ -2614,8 +2662,11 @@ impl Drone {
     /// No accuracy roll, no muzzle light, no sound — `Bullet_init` straight from the record. The position is obj+0x30
     /// (the drone's position — the game plays the anim sounds at the same vector), the direction the facing.
     fn close_combat_impact(&self, d: &Data, kind: u8, owner: usize) -> Option<crate::bullet::Bullet> {
-        // [S] `drone+0xDA` short = the drone's weapon id: the port's `self.weapon` indexes the same records.
-        let kick = self.weapon == 7;
+        // [M DroneWeap_CloseCombatImpact 0x1789c0:26 — the kick gate reads the ANIM-SET short
+        // +0xDA == 7, the port's `anim_set` (0x17a6e0's config table: +0xDA is the anim set,
+        // anim+0x62 the held weapon byte) — not the held weapon id the old `self.weapon` read.
+        // Anim set 7 = the fists/kick set (4/9 are the gun sets the drop-gates read).]
+        let kick = self.anim_set == 7;
         let record = if kick { 99usize } else { match kind { 1 => 0x65, 2 => 0x66, _ => 100 } };
         let range = if kick { 2.0f32 } else { 1.75 };
         if self.dist > range { return None; }
@@ -2793,7 +2844,8 @@ impl Drone {
             SNIPER_AIM => (SNIPER_FIRE, true),
             SNIPER_RELOAD => (SNIPER_FIRE, false),
             // Surrendered (0x1626a0 / 0x162950): any bullet kills (`HandleImpact(0x44, 0)`); Unsurrender (0x162a70)
-            // `HandleImpact(0, 0)`; DrawWeapon *suggested* the same.
+            // `HandleImpact(0, 0)` [M 0x162a70's case 8]; DrawWeapon the SAME [M DSTATE_DrawWeapon
+            // 0x166000:62-67 — case 8 → `HandleImpact(dc, msg, 0x66, 0)`, the resume argument 0].
             SURRENDER_ANIM | SURRENDERED => (DEATH_ANIM, false),
             UNSURRENDER_ANIM | DRAW_WEAPON => (0, false),
             AIM_CROUCH | AIM_STAND_RELOAD | AIM_CROUCH_RELOAD | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_WAIT
@@ -2875,9 +2927,15 @@ impl Drone {
         // carry the case and stay in it [M 0x163570/0x163700].
         if !Self::FLASH_HANDLING.contains(&s) { return false; } // unhandled → GLOBAL → dropped
         if self.prop(d, 0x1c) { return true; }
-        // A flashed guard responds to the real event: the port's `drawn = enabled && visible`
-        // [S — the game's obj+0xF0 & 0x30 re-enable path for a flashed waiter is unpinned;
-        // live check below] would otherwise freeze him invisible and unhittable for the stun.
+        // A flashed guard responds to the real event. The state's own body carries no re-enable
+        // [M DSTATE_StunGrenadeImpact 0x172bb0 — 46 lines: RecoverTime, the +0xDA != 4 weapon
+        // drop + ChangeWeapon(1), AlertStatusSet(2), the Rand(2) fall anim 0x2e/0x2d — no
+        // +0xF0/+0x4F8 write anywhere], so the game's re-enable of a disabled waiter rides the
+        // message routing or the flash impact, unlocated; the port's `enabled = true` is the
+        // bridge that keeps him visible and hittable for the stun. LIVE CHECK for the main
+        // agent: gdbwatch a pre-spawn waiter's obj+0x4F8 (and obj+0xF0 & 0x30) through a
+        // flashbang hit — EXPECT the AI-active bit 0x100 to set (and where) before the
+        // StunGrenadeImpact ENTER dispatches.
         self.enabled = true;
         self.set_state(state::STUN_GRENADE_IMPACT);
         true
@@ -3023,11 +3081,17 @@ impl Drone {
             if valid(resume) { self.set_state(resume); }
             return true;
         }
-        // allow: the kind gates first [M 0x1467f0-0x1468f8]: 0x1E plays anim 0x47 with the 0xCF
-        // datum and no resume; 0x1D and +0xD8 == 0x14 return; 0x0D returns (the port reads +0xD8 as
-        // `kind`, its established stand-in).
-        if self.kind == 0x1d { return true; }
-        if self.kind == 0x0d { return true; }
+        // allow: the kind gates first [M NDrone2_ExplosiveImpact 0x146480 @0x146830-0x146846:
+        // dtypenew +0xC5 == 0x1d returns, the model-id short +0xD8 == 0x14 returns, dtypenew
+        // +0xC5 == 0x0d returns]. The port's `mode` is +0xC5 and `kind` is +0xD8 (the death
+        // routing above cites drone-port-check.md #3), so the gates are mode==0x1d, kind==0x14,
+        // mode==0x0d — the old `kind == 0x1d/0x0d` read the wrong field and dropped the +0xD8
+        // arm. (The prop-0x32 arm above the gates plays anim 0x47 with the 0xCF datum [M
+        // 0x146480 @0x1467f0-0x1467f8] — behaviour_util_getProperty(0x32) with +0x4F8 bit 8
+        // clear — unported here; the old comment's "0x1E plays anim 0x47" misread that gate.)
+        if self.mode == 0x1d { return true; }
+        if self.kind == 0x14 { return true; }
+        if self.mode == 0x0d { return true; }
         if valid(u10) { self.impact_resume = u10; }
         // The stagger anim: variant by the blast's bearing (0x146480:143-159, = ExplosionDir
         // 0x14aba8), follow-on = the stamped resume +0x118; then PainTalk.
@@ -6237,9 +6301,28 @@ impl Drone {
                 true
             }
             // `DSTATE_ReturnToPatrolPath` 0x172810 (tranq-gun: the tower band's sighted wake
-            // target): ENTER re-finds the mission path (ReFindMissionPath 0x153a30 — not modelled
-            // [S]) and falls to GO_TO_GOAL 0x63 with the Global resume +0x5a2 = 0x14 [M case 1].
-            (RETURN_TO_PATROL_PATH, msg::ENTER) => { self.set_state(GO_TO_GOAL); true }
+            // target): ENTER re-finds the mission path and falls to GO_TO_GOAL 0x63 with the
+            // Global resume +0x5a2 = 0x14 [M case 1]. ReFindMissionPath 0x153a30: the drone's
+            // current AI point (+0xA70) when its group byte (+6) is 8, else ClosestAIPoint(dc,
+            // group 8) — the hit's +0x44 yaw → Drone+0x734 (the port's alarm_yaw) and its +0x20
+            // position → the goal (the route invalidated, SetupGoalPosition + MoveToGoalPosition
+            // [M 0x153a30:12-38]); with NO group-8 point nothing is set (the fall-through returns
+            // 0 without touching the goal) and GO_TO_GOAL walks the stale goal. The port has no
+            // +0xA70 current-point latch; ClosestAIPoint over the same registry covers the search
+            // arm (the current-point arm only skips the search when the drone already owns a
+            // group-8 point — the closest-point walk lands on that same point by distance).
+            (RETURN_TO_PATROL_PATH, msg::ENTER) => {
+                let owner = d.props.get(0x11, &self.props) as i32;
+                let path = self.nav_path.flatten();
+                if let Some(pi) = crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 8, owner) {
+                    let pt = &d.ai_points[pi];
+                    self.alarm_yaw = f32::from_bits(pt.yaw_bits); // +0x44 → +0x734 [M 0x153a30:14]
+                    self.goal = Some(pt.pos); // +0x20 → the goal, route invalidated [M 0x153a30:16-30]
+                    self.move_to_goal(d); // MoveToGoalPosition [M 0x153a30:33]
+                }
+                self.set_state(GO_TO_GOAL);
+                true
+            }
             // `NDrone2_DSTATE_InitPatrol` 0x1724f0 (state 0x06) ENTER [M case 1]: the spawn entry —
             // prop 0x24/0x25 drones take the mission path (`AssignAIPath(4)`) → Patrol 0x07, everyone
             // else Idles. The [L ee_start_05.bin] fresh-boot snapshot shows guards passing through
@@ -14368,10 +14451,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if let Some((t, m)) = dr.delayed { if frame >= t { dr.delayed = None; dr.send(d, rng, frame, m); } }
             if dr.alert < 1.0 && dr.alert > dr.alert_floor { dr.alert -= 1.0 / (60.0 * 50.0); }
             if dr.alert < dr.alert_floor { dr.alert = dr.alert_floor; }
-            // `NDrone2_PreDroneControl` 0x148db0:29-34: +0x2C8 counts while +0x2A is set, resets
-            // otherwise. [S] the port gates the counter on the seen latch — the +0x2A writer is
-            // untraced; it gates the ninja states' somersault/sideflip alternatives.
-            if dr.seen { dr.attack_hold = dr.attack_hold.saturating_add(1); } else { dr.attack_hold = 0; }
+            // `NDrone2_PreDroneControl` 0x148db0:24-34: +0x2C8 counts while +0x2A is set and
+            // resets otherwise; +0x2A itself self-clears when the GameState timestamp +0x2C4
+            // goes 30 frames stale [M :24-26], and the writer is `Check_Target` 0x1a7810:148-151
+            // (case 2 of the aim classification: Bond's crosshair on the drone sets +0x2A = 1
+            // and stamps +0x2C4). The port's `aimed_at` IS +0x2A — the crosshair scan refreshes
+            // it with the same 30-tick latch [M 0x1a7810:150-151; the port's decay at the
+            // aimed_until clear] — so the counter gates on it, not on the sight latch.
+            if dr.aimed_at { dr.attack_hold = dr.attack_hold.saturating_add(1); } else { dr.attack_hold = 0; }
             drop(_pc);
             { let _p = crate::prof::scope("drone: UPDATE msg (AI)"); dr.send(d, rng, frame, msg::UPDATE); }
             // NDrone2_Move's flying branch (0x14eff8): the astronaut's thrust toward the move
