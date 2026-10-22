@@ -14595,7 +14595,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true }))
             .collect();
         drop(prof_pre);
-        { let _p = crate::prof::scope("drones: Trigger_Calc"); crate::triggers::calc(d.level, &mut self.triggers, &mut self.channels, &touchers, frame); }
+        // The class-5 contacts [M Trigger_Hit 0x1b1fc8:30-34]: the tick's alive blasts (the last
+        // tick's end set — the same list SP_Hit reads; the per-tick clear runs later) sweep their
+        // spheres against the trigger volumes.
+        let blasts5: Vec<crate::triggers::BlastContact> = self.explosions.iter()
+            .map(|(p, r, _, _, wt)| crate::triggers::BlastContact { pos: *p, r: *r, id: *wt }).collect();
+        { let _p = crate::prof::scope("drones: Trigger_Calc"); crate::triggers::calc(d.level, &mut self.triggers, &mut self.channels, &touchers, &blasts5, frame); }
         // level-0c-complete: the deferred use-key trigger half — the game's E press fires at
         // Bond's turn in the object walk, AFTER Trigger_Calc's touch clear and BEFORE the later
         // muxes' updates in the same walk [M 0x1336f8's loop; Player_Activate 0x1a5170]. Consumed
@@ -14842,7 +14847,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let drone_pre: Vec<V3> = self.list.iter().map(|x| x.pos).collect();
         for &(_, what, index) in &order {
             if what == 1 { let _pw = crate::prof::scope("ctl: kind 1");
-                self.triggers[index].update(&mut self.channels, &touchers, frame);
+                self.triggers[index].update(&mut self.channels, &touchers, &blasts5, frame);
                 // `LOAD_LEVEL` (0xE8): when the exit trigger fires, carry the next level's hashcode for the main loop
                 // to reload (`Trigger_Activate` 0x1b2318 → `ResetMap_LevelToLoad`). Also post `Music_Event(3, 1)`
                 // (the end-sting) and `GS_PauseGame(1)` (the pause during transition) [M 0x1b2318:108-110].

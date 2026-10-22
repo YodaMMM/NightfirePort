@@ -75,9 +75,14 @@ pub fn is_decryptor(w: u8) -> bool {
 /// 0x1a7810]: the 50-unit crosshair ray (0x42480000 [M 0x1a7810:114-116]) must hit the lock
 /// (the game's `Collide_RayIntersect` object hit stored to BLData+0x880, then the gate re-checks
 /// the type byte 0x3a and the kind/state), and the player-to-lock distance must be within the
-/// weapon's own `weapon_data+0x1C` (2.0/4.0 [L]). The port's stand-in [S, as laser_tick's]: the
-/// ray's closest approach within the lock's world sphere, no world hit before it, and the
-/// distance gate. Returns the lock index.
+/// weapon's own `weapon_data+0x1C` (2.0/4.0 [L]). The lock hit is the game's ray-vs-object-sphere
+/// rule: `Collide_RayIntersect` builds a ray HITTEST and runs `Collide_Pick` — the object walk
+/// tests the ray against each object's world sphere (obj+0x80/0x8C, `Control_BuildWorldSph`
+/// 0x133070) — then sorts every hit with the world's by t and takes the FIRST [M 0x1ec690:117-160;
+/// the picker 0x1eae80]. So the lock (radius = its glist sphere, the port's `Lock.radius`) burns
+/// the pick iff the ray's sphere-ENTRY t (`t − √(r²−d²)` for closest-approach distance d) comes
+/// before the world's first hit, and the distance gate is the player root to the lock.
+/// Returns the lock index.
 pub fn pick_decryptor_lock(
     eye: V3,
     dir: V3,
@@ -102,13 +107,14 @@ pub fn pick_decryptor_lock(
         let closest = [eye[0] + dir[0] * t, eye[1] + dir[1] * t, eye[2] + dir[2] * t];
         let d2 = (closest[0] - lock.pos[0]).powi(2) + (closest[1] - lock.pos[1]).powi(2) + (closest[2] - lock.pos[2]).powi(2);
         if d2 > lock.radius * lock.radius { if dbg { eprintln!("decpick {i}: REJ sphere d={:?}", d2.sqrt()); } continue; }
-        // A wall in FRONT of the lock blocks [M 0x1a7810:121] — but the lock's own plate sits
-        // flush on the wall it is mounted on, and the port's lock carries no collision box of its
-        // own (only the 0.132 keypad sphere), so the mount wall's face lands within the sphere's
-        // tolerance. The occlusion test therefore floors the margin at 0.5 [S — the game's ray
-        // hits the lock object itself in Collide_RayIntersect; the port cannot separate the mount
-        // geometry from the lock's own bounds].
-        if world_t < t - lock.radius.max(0.5) { continue; }
+        // The sphere-ENTRY t: the ray touches the lock's world sphere at `t − √(r²−d²)` [M the
+        // sphere volume 0x133070; the pick's sorted first-hit 0x1ec690:120-160]. A wall in front
+        // of that entry blocks. The old stand-in (closest approach + a floored 0.5 margin) was a
+        // guess at this geometry; with `Lock.radius` = the lock's glist sphere the entry test IS
+        // the game's — the lock mounted flush on a wall has its sphere protruding past the wall
+        // face, so its entry t beats the wall's for every ray that actually reaches the keypad.
+        let t_entry = t - (lock.radius * lock.radius - d2).max(0.0).sqrt();
+        if world_t < t_entry { if dbg { eprintln!("decpick {i}: REJ occluded world_t={world_t} entry={t_entry}"); } continue; }
         // The distance gate is the PLAYER ROOT to the lock [M 0x1a5460:574-577 — `iVar18+0x30`].
         let dist = ((lock.pos[0] - root[0]).powi(2) + (lock.pos[1] - root[1]).powi(2) + (lock.pos[2] - root[2]).powi(2)).sqrt();
         if dist > range { continue; }
