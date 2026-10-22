@@ -7531,6 +7531,29 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some(di as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
             }
+            // Copters (`Copter_Create` 0x17d340, kind 0x2F — the Exchange extraction helicopter,
+            // placement #45 = hashcode 0x200035d "Helicopter-Body" [D #45]): the create makes a
+            // class-0x7c control obj with NO glist (obj+0xD8 = 0, obj+0xFA |= 0x44 [M
+            // 0x17d340:60-66]) and hands the DRAW to a script player — `SP_Create` with the
+            // placement's params 4/5 as the SCRIPT hashcodes (0x06000051 the parts assembly,
+            // 0x06000050 the flight [D #45, copter.rs]; the props block holds prop N at
+            // +0x2c+4N, so +0x3c/+0x40 are params 4/5 — parsemap_block_map_data_dynamic
+            // 0x1d1b68:62-76). Prop 0 != 0 marks a marker copter created with no object at all
+            // [M 0x17d340:43-45]. The draw data is the placement's OWN hashed object (the body
+            // the scripts fly): drawn here at the placement transform — the SP's create pos —
+            // and posed by the flight once the sim's copter body_obj wiring rides the draw.
+            for pi in 0..level.maps[m].placements.len() {
+                let p = level.maps[m].placements[pi].clone();
+                if p.flags & 0xff != 0x2f { continue; }
+                let p0 = p.params.iter().find(|(i, _)| *i == 0).map_or(0, |&(_, v)| v);
+                if p0 != 0 { continue; }
+                if !p.by_hash() { continue; }
+                let Some((map, object)) = level.by_hash.get(&p.hashcode).copied() else { continue };
+                let obj = &level.maps[map].objects[object];
+                if !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
+                let matrix = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                add_instance(level, &Instance { map, object, matrix, placement: p.clone() }, Layer::World, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+            }
             // SimpleScripts (`SS_Create` 0x1a9c58 / `SS_Update` 0x1a9948, map-tower2): the animated 0xE2
             // placements (key count non-zero) ride the door slot space — their vertices pose from
             // `door_base + n_doors + k`, the SS list's matrices, every tick. At rest each sits at key 0
