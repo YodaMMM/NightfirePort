@@ -55,10 +55,12 @@ const RETURN_EPS: f32 = 0.01;
 /// The detection-time thresholds (the beep acceleration's 2.0/3.0 at 0x1af618:125/128 and the
 /// channel write's 2.0 at :154) [M].
 const TRIP_TIME: f32 = 2.0;
-/// The player's world-sphere radius (`obj+0x8C`) stand-in — the port's documented 0.4 for every
-/// body-radius read (triggers.rs touchers, door.rs actors) [S; the live `Control_BuildWorldSph`
-/// value is not in the snapshots].
-const TARGET_RADIUS: f32 = 0.4;
+/// The player's world-sphere radius (`obj+0x8C`): `Control_BuildWorldSph` 0x133070 builds the
+/// player's +0x80 sphere from the AnimObject local sphere (glist +0x1C radius × |obj scale
+/// +0xE8|) [M 0x133070; docs/fields/glist.md], and the player's is **1.0576** — the fresh-boot
+/// EE read recorded in docs/fields/obj-tag-player.md's +0x80 row (sphere (104.826, 24.837,
+/// 108.582) r 1.0576 ≈ the capsule) [L]. The old stand-in 0.4 was the port's generic body read.
+const TARGET_RADIUS: f32 = 1.0576;
 
 fn sub(a: V3, b: V3) -> V3 { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
 fn dot3(a: V3, b: V3) -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] }
@@ -111,13 +113,16 @@ fn quat_is_equal(a: Quat, b: Quat, eps: f32) -> bool {
 }
 
 /// The tracked orientation for `dir`: `Mat_Align2Dir` 0x1df2a8 with the game's constants
-/// up (0, 1, 0) [L 0x2d6210] and right fallback (1, 0, 0) [L 0x2d6220]. Row 2 (= `Mat_GetDir`'s
-/// axis, what the cone test uses) is exactly `dir`; the roll of rows 0/1 is the standard
-/// right-handed up-referenced basis — the game's VU transcription differs only in that roll
-/// [S unverified: the roll is invisible to the cone axis and to every channel write].
+/// up (0, 1, 0) [L 0x2d6210] and right fallback (1, 0, 0) [L 0x2d6220]: z = normalize(dir),
+/// x = normalize(cross(up, z)) — or, when |up·z| > 0.999, x = normalize(cross(right, z)) [M
+/// 0x1df2a8:53-63: the degenerate branch crosses the *fallback right vector* with z and falls
+/// through the same normalize block, it does not use (1,0,0) as x] — then y = normalize(cross(z,
+/// x)) [M 0x1df2a8:88-115, the same opmula/opmsub cross + normalize]. Row 2 (= `Mat_GetDir`'s
+/// axis, what the cone test uses) is exactly `dir`; the roll of rows 0/1 is this basis, ported
+/// verbatim (it feeds `Vec_Track` 0x1e20a0:82-84 → the tracked quat → obj+0x90).
 fn look_quat(dir: V3) -> Quat {
     let z = dir;
-    let x = if dot3(z, [0.0, 1.0, 0.0]).abs() > 0.999 { [1.0, 0.0, 0.0] } else { cross([0.0, 1.0, 0.0], z) };
+    let x = if dot3(z, [0.0, 1.0, 0.0]).abs() > 0.999 { cross([1.0, 0.0, 0.0], z) } else { cross([0.0, 1.0, 0.0], z) };
     let xl = dot3(x, x).sqrt();
     let x = if xl > 0.0 { [x[0] / xl, x[1] / xl, x[2] / xl] } else { [1.0, 0.0, 0.0] };
     let y = cross(z, x);
@@ -184,11 +189,15 @@ impl Sensor {
     /// 0x1af644/0x1af97c/0x1afae0 pass `glb_players[0]` and nothing else ever reaches here].
     fn in_cone(&self, world: &CollisionWorld, player: &crate::drone::Player) -> bool {
         let target_sph = player.sph;
-        // `Sensor_SetBeam` 0x1af398's shortcut: with a lens, the beam ray (pos + dir·range)'s
-        // FIRST hit being the tested object detects it outright (the decompile returns 1 before
-        // the cone test). The port's ray is the static world + a sphere test on the target —
-        // other dynamics between the lens and the target are not identified [S stand-in; the
-        // port's ray-vs-dynamic model has no object-identifying raycast yet].
+        // `Sensor_SetBeam` 0x1af398's shortcut [M 0x1af398:57-81]: with the lens gfx object
+        // (SENSOR+0x4C = param 0 [M Sensor_Create 0x1af010:97-103]) the beam ray pos → pos +
+        // dir·range runs `Collide_RayIntersect(start, end, cel, tested, beam_gfx, hits, 0, 8)`
+        // and DETECTS when the first hit's object (hit+0x58) is the tested object (0x1af398:79).
+        // The port's ray = the shared LOS (static + the dynamic-geo set — the geometry the game's
+        // mask-8 walk tests) + the sphere test on the target at the world-sphere radius:
+        // wall-first → no detect either way, clear-and-touching → detect either way. The residual
+        // coarseness — the game ray-tests the player's collision model, the port the ≈-capsule
+        // world sphere r 1.0576 [L obj-tag-player.md +0x80] — is the documented equivalent.
         if self.lens != 0 {
             let dir = dir_of(&self.matrix);
             let end = [self.pos[0] + dir[0] * self.range, self.pos[1] + dir[1] * self.range, self.pos[2] + dir[2] * self.range];
@@ -205,15 +214,24 @@ impl Sensor {
         // sensor position, dir = `Mat_GetDir`, sphere = the target's world sphere) [M].
         let dir = dir_of(&self.matrix);
         let proj = dot3(d, dir);
-        let hit = if proj * proj >= d2 * self.cos_half * self.cos_half && proj > 0.0 {
-            true
-        } else {
-            let t = self.cos_half * proj + self.sin_half * (d2 - proj * proj).abs().sqrt();
-            t >= 0.0 && t * t - d2 + TARGET_RADIUS * TARGET_RADIUS >= 0.0
+        // The apex-inside auto-hit [M 0x1ee100:36-54]: the cone test only runs when r² < d²; with
+        // the apex inside the target sphere the game returns 1 without testing the cone.
+        let hit = TARGET_RADIUS * TARGET_RADIUS >= d2 || {
+            if proj * proj >= d2 * self.cos_half * self.cos_half && proj > 0.0 {
+                true
+            } else {
+                let t = self.cos_half * proj + self.sin_half * (d2 - proj * proj).abs().sqrt();
+                t >= 0.0 && t * t - d2 + TARGET_RADIUS * TARGET_RADIUS >= 0.0
+            }
         };
         if !hit { return false; }
-        // The line-of-sight gate [M 0x1af4f0:84-87 `Collide_LineOfSight(pos, target+0x30, …, 10)`]
-        // — the port's static-only `line_of_sight` is the same stand-in drone vision uses.
+        // The line-of-sight gate [M 0x1af4f0:84-87 `Collide_LineOfSight(sensor+0x30, target+0x30,
+        // cel, sensor obj, target obj, 10)`] — a thin `Collide_RayIntersect(...) == 0` wrapper [M
+        // 0x1edf50], the caller's mask landing in the shared HITTEST+0x98 path (0xA = node-pass
+        // drop + material-0x10 drop, objects tested) [M 0x1eb320:149-152, 0x1ebaa8:301-314]. The
+        // port's `line_of_sight` is the same shared walk drone vision uses (static + missile cage
+        // + dynamic geo); the mask-bit material/node drops are the sight-mask work's documented
+        // deltas (world.rs `segment_masked`).
         world.line_of_sight(self.pos, player.pos)
     }
 
@@ -296,9 +314,14 @@ impl Sensor {
                         self.matrix = quat_matrix(self.quat, self.pos);
                         if quat_is_equal(self.quat, tq, RETURN_EPS) { self.state = 0; }
                     }
-                    // No keys: `Spline_Interp` writes nothing (NULL framelist [M 0x1e1858]), the
-                    // game's target quat is uninitialised stack — unobservable; the port returns
-                    // straight to the sweep [S unverified].
+                    // No keys: state 2 runs `Spline_Interp` UNCONDITIONALLY [M 0x1af618:232-234];
+                    // with a NULL/empty framelist it writes nothing [M 0x1e1858], so the game's
+                    // target quat is uninitialised stack and its `Quat_IsEqual` exit reads garbage
+                    // [M 0x1af618:231-242] — the game's own observable behaviour in this case does
+                    // not exist. The port's deterministic straight-to-sweep is the documented
+                    // equivalent; on disc, 0700000b's two sensors both carry key lists [D
+                    // sensor_live: 164 has 5 keys] and no shipped sensor is known to lack one (a
+                    // full-level key census is filed as a live check in the report).
                     None => self.state = 0,
                 }
             }
@@ -392,5 +415,98 @@ impl Sensors {
     /// The sensor of a placement index.
     pub fn of_placement(&self, placement: usize) -> Option<usize> {
         self.list.iter().position(|s| s.placement == placement)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::CollisionWorld;
+
+    fn sensor_aiming(dir: [f32; 3]) -> Sensor {
+        let mut m: Mat4 = [[0.0; 4]; 4];
+        m[2] = [dir[0], dir[1], dir[2], 0.0];
+        Sensor {
+            placement: 0,
+            pos: [0.0; 3],
+            matrix: m,
+            quat: [0.0, 0.0, 0.0, 1.0],
+            keys: Vec::new(),
+            limit: 0,
+            step: 0.0,
+            t: 0.0,
+            cos_half: 0.991_445,
+            sin_half: 0.130_526,
+            range: 20.0,
+            out: 0,
+            disable: 0,
+            monitor_id: 0,
+            listed: false,
+            lens: 0,
+            mount: 0,
+            monitor_ch: 0,
+            state: 0,
+            detect: 0.0,
+            beep: 0.0,
+            seen: 0,
+            last_hit: false,
+            unhidden: false,
+        }
+    }
+
+    fn player_at(sph: [f32; 3]) -> crate::drone::Player {
+        let mut p = crate::drone::Player::default();
+        p.sph = sph;
+        p.pos = sph;
+        p.target = sph;
+        p
+    }
+
+    /// Mat_Align2Dir's degenerate branch [M 0x1df2a8:53-63]: with dir straight up (|up·z| > 0.999)
+    /// the game crosses the FALLBACK RIGHT vector with z and normalizes — x = (0,0,1), y =
+    /// (1,0,0) — not the old port's x = (1,0,0), y = (0,0,−1). Fails on the pre-task tree.
+    #[test]
+    fn look_quat_degenerate_branch_matches_mat_align2dir() {
+        let q = look_quat([0.0, 1.0, 0.0]);
+        let m = quat_matrix(q, [0.0; 3]);
+        let want = [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        for (r, w) in m.iter().take(3).zip(want) {
+            for k in 0..3 { assert!((r[k] - w[k]).abs() < 1e-4, "row {r:?} vs {w:?}"); }
+        }
+    }
+
+    /// Sister: the non-degenerate branch keeps the up-referenced basis — dir (1,0,0): x =
+    /// cross(up, z) = (0,0,−1) [M 0x1df2a8:60-63 normal branch].
+    #[test]
+    fn look_quat_normal_branch_unchanged() {
+        let q = look_quat([1.0, 0.0, 0.0]);
+        let m = quat_matrix(q, [0.0; 3]);
+        let want = [[0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]];
+        for (r, w) in m.iter().take(3).zip(want) {
+            for k in 0..3 { assert!((r[k] - w[k]).abs() < 1e-4, "row {r:?} vs {w:?}"); }
+        }
+    }
+
+    /// The apex-inside auto-hit [M Intersect_ConeSphere 0x1ee100:36-54]: with the apex inside the
+    /// target sphere (d² ≤ r²) the game returns 1 without testing the cone — the sensor pointing
+    /// AWAY from a target hugging it still detects. Fails on the pre-task tree.
+    #[test]
+    fn in_cone_hits_when_the_apex_is_inside_the_target_sphere() {
+        let s = sensor_aiming([-1.0, 0.0, 0.0]);
+        let world = CollisionWorld::empty();
+        // The sphere centre 0.2 off the apex, BEHIND the view axis (dir −x): outside the cone, but
+        // inside the 1.0576 world sphere.
+        let behind = player_at([0.2, 0.0, 0.0]);
+        assert!(s.in_cone(&world, &behind), "apex inside the sphere detects [M 0x1ee100:36-54]");
+    }
+
+    /// Sister: the same behind-the-axis target pushed OUTSIDE the sphere (d² > r²) misses — the
+    /// auto-hit does not leak past the game's r² < d² guard [M 0x1ee100:37].
+    #[test]
+    fn in_cone_misses_behind_the_axis_outside_the_sphere() {
+        let s = sensor_aiming([-1.0, 0.0, 0.0]);
+        let world = CollisionWorld::empty();
+        let behind = player_at([1.5, 0.0, 0.0]);
+        assert!(!s.in_cone(&world, &behind), "behind the axis, outside the sphere → no detect [M 0x1ee100:37]");
     }
 }
