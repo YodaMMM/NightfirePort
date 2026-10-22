@@ -5252,10 +5252,15 @@ impl Sim {
     }
 
     /// The live animated script object from `src` (script hash, stream) on `skin`: its animation script and frame.
+    /// A hidden SP's stream objects read as absent — the Script_HideObj cascade [M 0x1db808].
     pub fn script_anim(&self, src: (u32, u8), skin: u32) -> Option<(u32, f32)> {
-        self.drones.scripts.objects.list.iter().flatten().rev().find_map(|o| match o {
-            nf_game::nis::Obj::Anim { skin: k, script, frame, src: o, .. } if *o == src && *k == skin => Some((*script, *frame)),
-            _ => None,
+        let hidden = self.drones.scripts.hidden_stream_objects();
+        self.drones.scripts.objects.list.iter().enumerate().rev().find_map(|(i, o)| {
+            if hidden.contains(&i) { return None; }
+            match o {
+                Some(nf_game::nis::Obj::Anim { skin: k, script, frame, src: o, .. }) if *o == src && *k == skin => Some((*script, *frame)),
+                _ => None,
+            }
         })
     }
 
@@ -5264,10 +5269,15 @@ impl Sim {
     pub fn script_entity(&self, src: (u32, u8), hash: u32) -> Option<Mat4> { self.script_entity_k(src, hash, 0) }
 
     /// The k-th live script entity `hash` from `src` (newest first, the order `script_entity` reads).
+    /// A hidden SP's stream objects read as absent — the Script_HideObj cascade [M 0x1db808].
     pub fn script_entity_k(&self, src: (u32, u8), hash: u32, k: usize) -> Option<Mat4> {
-        self.drones.scripts.objects.list.iter().flatten().rev().filter_map(|o| match o {
-            nf_game::nis::Obj::Entity { hash: h, matrix, src: o, .. } if *o == src && *h == hash => Some(*matrix),
-            _ => None,
+        let hidden = self.drones.scripts.hidden_stream_objects();
+        self.drones.scripts.objects.list.iter().enumerate().rev().filter_map(|(i, o)| {
+            if hidden.contains(&i) { return None; }
+            match o {
+                Some(nf_game::nis::Obj::Entity { hash: h, matrix, src: o, .. }) if *o == src && *h == hash => Some(*matrix),
+                _ => None,
+            }
         }).nth(k)
     }
     /// The game data the simulation consults, borrowed from this Sim.

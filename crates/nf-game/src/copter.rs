@@ -125,19 +125,29 @@ impl Copter {
     }
 
     /// `Copter_Update`'s channel machine. `flight_len` = the flight script's Nis length (the game's
-    /// path frame count). Returns `(started_flight, arrived)`:
+    /// path frame count). Returns `(started_flight, arrived, unhide)`:
     /// - `started_flight` — the gate just rose; the caller starts the flight script's player;
-    /// - `arrived` — the move completed this tick; `out` has been written [M cases 4/5/6].
-    pub fn tick(&mut self, ch: &mut Channels, flight_len: u32, frame: u32) -> (bool, bool) {
-        // The gate: a non-zero gate channel that is off stops everything [M 0x17dbb8 head].
-        if self.gate != 0 && !ch.on(self.gate as u32) { return (false, false); }
+    /// - `arrived` — the move completed this tick; `out` has been written [M cases 4/5/6];
+    /// - `unhide` — the gate's first ON tick: the caller runs `SP_HideObj(sp, 0)` on the copter's
+    ///   SP (`Scripts::unhide_sp`) — the game does it right here in the head, then zeroes +0x70 so
+    ///   the gate test disappears for the rest of the flight [M 0x17dbb8 head].
+    pub fn tick(&mut self, ch: &mut Channels, flight_len: u32, frame: u32) -> (bool, bool, bool) {
+        // The gate: a non-zero gate channel that is off stops everything [M 0x17dbb8 head]; on the
+        // first ON tick the head unhides the SP and zeroes the field — the copter then updates
+        // unconditionally, even if the channel turns off mid-flight [M 0x17dbb8: `+0x70 = 0`].
+        let mut unhide = false;
+        if self.gate != 0 {
+            if !ch.on(self.gate as u32) { return (false, false, false); }
+            self.gate = 0;
+            unhide = true;
+        }
         // The countdown pulse [M 0x17dbb8:16-22].
         let mut arrived = false;
         if self.countdown != 0 {
             self.countdown -= 1;
             if self.countdown == 0 && self.arrival != 0 && !self.done { ch.set(self.arrival as u32, 1, frame); }
         }
-        if self.done { return (false, false); }
+        if self.done { return (false, false, unhide); }
         if !self.started {
             self.started = true;
             self.flight_len = flight_len;
@@ -146,9 +156,9 @@ impl Copter {
                 // No flight script: the move is already complete [M Copter_Move's +0x54 == 0 → 1].
                 self.done = true;
                 if self.out != 0 { ch.set(self.out as u32, 1, frame); }
-                return (false, true);
+                return (false, true, unhide);
             }
-            return (true, false);
+            return (true, false, unhide);
         }
         // The flight: the playhead advances per tick; at the end the state machine writes `out`.
         if self.flight_t < self.flight_len { self.flight_t += 1; }
@@ -157,7 +167,7 @@ impl Copter {
             if self.out != 0 { ch.set(self.out as u32, 1, frame); }
             arrived = true;
         }
-        (false, arrived)
+        (false, arrived, unhide)
     }
 
     /// The copter's world position (the matrix row 3) — the viewer's draw/cull helpers.

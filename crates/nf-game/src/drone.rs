@@ -11302,6 +11302,16 @@ impl Drones {
             if let Some(i) = level.maps[m].placements.iter().position(|p| p.flags & 0xff == 0x0f
                 && (p.translation[0] - dr.pos[0]).abs() < 1e-3 && (p.translation[2] - dr.pos[2]).abs() < 1e-3) { dr.placement = i; }
         }
+        // `Copter_Create`'s SP beat [M 0x17d340:66-74]: each copter owns a ScriptPlayer created at
+        // load (`SP_Create` 0x1dc7e0 → `SP_CreateScriptPlayer` 0x1db9a8, modes 8,8, mask 0 → state
+        // 6, primed looping), hidden (`SP_HideObj(sp, 1)` → SP+0x36 = 1) when its gate channel
+        // (placement param 6) is armed and off — at create the channels are all off, so every
+        // gated copter's SP starts frozen (07000005's #242, [L] +0x36 = 1) while an ungated one
+        // (#241, gate 0) plays from the first tick ([L] its twin +0x36 = 0). The unhide rides the
+        // copter tick's gate edge below (docs/systems/copter-sp-hide.md).
+        for c in &self.copters {
+            self.scripts.spawn_copter_sp(c.placement, c.scripts, c.matrix, c.gate, &self.channels);
+        }
         // Spawners: their group's drones become templates, absent until spawned (`DroneSpawner_Init`).
         // (task 854: this block is `NDrone2_SetupGroups` 0x149ca0's job [M 00149ca0 decompile —
         // `NDrone2_AddToGroup` 0x1412e0 links each drone with a group id into the per-group list
@@ -14246,16 +14256,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // frame (core-loop §7 item 5). It used to snapshot at the END of the tick, so a 1-tick lock pulse was
         // invisible to the edge test.
         self.doors.end_tick(&self.channels);
-        // The helicopter (`Copter_Update` 0x17dbb8, fix-objects2): the gate check, the countdown
-        // pulse and the arrival write; on the gate's rising edge the flight script starts as a
-        // synthetic one-shot player (the game's hidden `SP_Create` inside `Copter_Create` 0x17d340).
-        let mut copter_flight: Vec<(usize, u32, nf_formats::anim::Mat4)> = Vec::new();
+        // The helicopter (`Copter_Update` 0x17dbb8, fix-objects2): the gate check (with the head's
+        // unhide + the +0x70 zeroing), the countdown pulse and the arrival write. The flight no
+        // longer spawns a synthetic one-shot player: the copter's real ScriptPlayer exists from
+        // the create beat (`spawn_copter_sp` above — the game's `SP_Create` inside
+        // `Copter_Create` 0x17d340), primed looping, hidden until this edge unhides it
+        // (`SP_HideObj(sp, 0)` [M 0x17dbb8 head]; docs/systems/copter-sp-hide.md).
         for c in &mut self.copters {
             let len = self.scripts.lib.get(&c.scripts[1]).map(|n| n.length as u32).unwrap_or(0);
-            let (started, _) = c.tick(&mut self.channels, len, frame);
-            if started { copter_flight.push((c.placement, c.scripts[1], c.matrix)); }
+            let (_, _, unhide) = c.tick(&mut self.channels, len, frame);
+            if unhide { self.scripts.unhide_sp(c.placement); }
         }
-        for (placement, script, matrix) in copter_flight { self.scripts.spawn_once(placement, script, matrix); }
         // The script players' tick head (the create-time load beat — the game does it during the
         // level load [M 0x1db9a8:81-86]): the players THEMSELVES update from the control walk
         // below, in the game's list order (fix-script-start-tick — the old all-players-here beat
