@@ -2366,7 +2366,8 @@ mod tests {
     /// fix-swim: the swim stroke rides the LOOK direction [M `Player_Move` 0x191dd0:149-165 —
     /// `RotMatrixX(obj+0x50 − BL+0x8a8·π/2)` + `Mat_GetDir`] and the case-3 tail clamps the rise at
     /// `surface − 0.3` [M 0x193600:201-220]. No crouch/jump input exists in swim [M case 3 reads
-    /// none]. Pre-fix the port moved planar-only and sank/rose ±2.4/tick on crouch/jump ([S] fiction).
+    /// none] — the pre-fix stand-in (planar-only motion, a made-up ±2.4/tick rise on crouch/jump)
+    /// is gone; the assertions below pin the game's rule.
     #[test]
     fn swim_moves_along_the_look_direction_and_the_surface_clamps() {
         let world = CollisionWorld::from_triangles(Vec::new());

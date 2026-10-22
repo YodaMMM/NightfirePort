@@ -688,9 +688,9 @@ mod tests {
         assert!(!ch3.on(0x61), "ch 0x61 never toggles from the player's E");
     }
 
-    /// A Player literal with a tunable model hash (the SP test's constructor, field on its own
-    /// line per the merge discipline).
-    fn sp_with_model(out: u16, gate: u16, mask: u16, model: u32) -> crate::nis::Player {
+    /// A Player literal (the SP test's constructor, field on its own line per the merge
+    /// discipline). The `model` arg is gone with the removed SP-body use-target field.
+    fn sp_with_model(out: u16, gate: u16, mask: u16, _model: u32) -> crate::nis::Player {
         crate::nis::Player {
             placement: 0, scripts: [1, 0], modes: [64, 0], stay: false, mask, out, gate,
             scale: 1.0, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
@@ -702,7 +702,6 @@ mod tests {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
-            model,
         }
     }
 
