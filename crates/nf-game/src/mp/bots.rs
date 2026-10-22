@@ -4506,18 +4506,19 @@ impl BotBrain {
         let _ = self; // nothing to tear down — see the doc comment
     }
 
-    /// `BOT_soundEffect` 0x126618 [M :5-27] — the bot barks: trigger 1 plays 0x152/0x157
-    /// (hurt/death variant by the DCVars+0x15 byte), 0x1E/0x1F play 0x14d..0x152+Rand(2/5),
-    /// 0x1F only when the old ref (`+0x73C`) has stopped (`Sound_Playing_Ref`). The callers are
-    /// the death states (0xF2/0xF3) and `NDrone2_DealWithObjHit`. The port's MP bots have no
-    /// bark channel — bot sound is presentation (rules.rs' note), the drivers' `Sound` sink is
-    /// not threaded into `BotBrain` — so the trigger table stands as documentation here [S].
-    pub fn bot_sound_effect(&self, trigger: u32) -> Option<(u16, u32)> {
+    /// `BOT_soundEffect` 0x126618 [M] — the bot barks, keyed by the DCVars+0x15 byte (`alt`):
+    /// trigger 1 → 0x154 + Rand(3) (0x157 + Rand(3) with `alt`); 0x1E and 0x1F → 0x14D + Rand(5)
+    /// (0x152 + Rand(2) with `alt`), 0x1F only when the old ref (`+0x73C`) has stopped
+    /// (`Sound_Playing_Ref`); other triggers return without a sound. fix-849: the branch had
+    /// trigger 1 at 0x152 and 0x1E fixed at the `alt` arm. The callers are the death states
+    /// (0xF2/0xF3) and `NDrone2_DealWithObjHit`. The port's MP bots have no bark channel — bot
+    /// sound is presentation (rules.rs' note), the drivers' `Sound` sink is not threaded into
+    /// `BotBrain` — so the trigger table stands as documentation here [S].
+    pub fn bot_sound_effect(&self, trigger: u32, alt: bool) -> Option<(u16, u32)> {
         let _ = self;
         match trigger {
-            1 => Some((0x152, 3)),  // 0x152 + Rand(3); the +0x15 byte moves it to 0x157 [M :9-14]
-            0x1E => Some((0x152, 2)), // 0x152 + Rand(2) [M :15-22]
-            0x1F => Some((0x14D, 5)), // 0x14D + Rand(5), the Playing_Ref gate first [M :23-27]
+            1 => Some((if alt { 0x157 } else { 0x154 }, 3)),
+            0x1E | 0x1F => Some(if alt { (0x152, 2) } else { (0x14D, 5) }),
             _ => None,
         }
     }
@@ -4826,10 +4827,11 @@ mod brain_tests {
     fn brain_rest_stop_anim_and_barks() {
         let mut r = Rig::new();
         r.brain.stop_anim(); // the port's MP bot body has no anim scripts to tear down [S]
-        assert_eq!(r.brain.bot_sound_effect(1), Some((0x152, 3)), "trigger 1 → 0x152 + Rand(3) [M 0x126618:9-14]");
-        assert_eq!(r.brain.bot_sound_effect(0x1F), Some((0x14D, 5)), "trigger 0x1F → 0x14D + Rand(5) [M :23-27]");
-        // sister: an unknown trigger maps to None
-        assert_eq!(r.brain.bot_sound_effect(9), None, "the decompile's early return [M :10-12]");
+        assert_eq!(r.brain.bot_sound_effect(1, false), Some((0x154, 3)), "trigger 1 → 0x154 + Rand(3) [M 0x126618]");
+        assert_eq!(r.brain.bot_sound_effect(1, true), Some((0x157, 3)), "the +0x15 byte → 0x157 [M 0x126618]");
+        assert_eq!(r.brain.bot_sound_effect(0x1E, false), Some((0x14D, 5)), "0x1E → 0x14D + Rand(5) [M 0x126618]");
+        assert_eq!(r.brain.bot_sound_effect(0x1F, true), Some((0x152, 2)), "0x1F with +0x15 → 0x152 + Rand(2) [M 0x126618]");
+        assert_eq!(r.brain.bot_sound_effect(9, false), None, "the decompile's early return [M :10-12]");
     }
 
     /// `MP_resetPickupBotVisitTimes` 0x18be50 — one bot's column zeroes, the others stand.
