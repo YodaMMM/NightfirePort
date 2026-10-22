@@ -925,7 +925,13 @@ impl Doors {
         // stands in reach: the walkreal-c stop was the ROUTE (the console placement map54 #145
         // walls the south-east corner; the nav graph's own lane reaches the doorway from the
         // north — walkreal_07000015_live now walks it green). The arm stays for the
-        // 07000016-arrival-door shape [S] and changes no E-path behaviour.
+        // 07000016-arrival-door shape as a LABELLED PLAYABILITY SHIM and changes no E-path
+        // behaviour — the game's opening surface is provably closed to contact: `Door_Activate`
+        // 0x135be0 has exactly three callers (Player_Activate 0x1a5170:100-129 the E press,
+        // Door_Update 0x1363c8's channel/close arms, NDrone2_OpenDoor 0x14aa38 the route doors),
+        // and `Door_ReactToHit` 0x135980:44-111 reverses only moving leaves (a closed idle door
+        // falls through every branch) [M] — live checks L-019/L-141 (docs/live/backlog.md) are
+        // the only remaining witness for the 16 arrival door.
         for i in 0..self.list.len() {
             let d = &self.list[i];
             if !d.straddle || d.kind == 0 || d.state & 0xc != 0 { continue; }
