@@ -10164,6 +10164,10 @@ pub struct Drones {
     /// to 6.05 out of the case — frozen at its creation pose it sat behind the counter's front face
     /// and the take's line of sight [M 0x18e148:210-214] hit the counter).
     pub script_pickup_follow: Vec<(usize, usize, (u32, u8))>,
+    /// dragon-safe-follow: (script hash, stream) → the pickup that stream's 0xF0 Entity created last.
+    /// The renderer's script slot draws that entity and collapses it once the pickup is taken or
+    /// hidden (the game's object IS the pickup).
+    pub script_pickup_of: HashMap<(u32, u8), usize>,
     /// The auto-switch request `Pickup_Handler` → `Player_EquipWeapon`'s tail wrote this tick
     /// [M 0x1a8a58: the `DAT_002a38d2[idx·0x158]` flag (live 1 [L ee_start_05]) ∧
     /// `Player_IsBetterWeapon` → `anim+0x63 = id`]. The view applies it to the draw machine
@@ -10505,6 +10509,7 @@ impl Drones {
             // built at load in scene.rs, matched by the runtime spawn.
             script_pickup_slots: Default::default(),
             script_pickup_follow: Vec::new(),
+            script_pickup_of: HashMap::new(),
             // fix-pickups-remainder: the pickup auto-switch request (fields on their own lines —
             // merge lesson 4).
             weapon_switch_request: None,
@@ -14786,6 +14791,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if p.gone && p.from.is_none() {
                         activate(p, sp.matrix);
                         self.script_pickup_follow.push((k, sp.obj, (sp.script, sp.stream)));
+                        self.script_pickup_of.insert((sp.script, sp.stream), k);
                         continue;
                     }
                 }
@@ -14798,6 +14804,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     [sp.matrix[3][0], sp.matrix[3][1], sp.matrix[3][2]], [0.0; 3], sp.kind, d.weapons, &d.models) {
                     p.m = sp.matrix;
                     self.script_pickup_follow.push((self.pickups.len(), sp.obj, (sp.script, sp.stream)));
+            self.script_pickup_of.insert((sp.script, sp.stream), self.pickups.len());
+                    self.script_pickup_of.insert((sp.script, sp.stream), self.pickups.len());
                     self.pickups.push(p);
                 }
                 continue;
