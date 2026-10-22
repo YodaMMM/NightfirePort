@@ -68,13 +68,17 @@ pub fn is_driving_interlude(code: u32) -> bool {
     code & 0xffff_0000 == 0x0730_0000
 }
 
-/// The drive index an interlude hands to — the port's stand-in for the hub menu's mission list
-/// (`sp_level`, read by `Menu_GetLevelIndex` 0x2023e8), which the retail flow consults before
-/// `ResetMap_LevelToLoad(0x900000X)` pushes GameFlow state 9 [M 0x1d3800:106]. The menu table is
-/// not readable in this session's window, so the pairing is [S]: the 8 interludes in
-/// `Mission_Update`'s measured order paired with the 8 drives in DRIVING's table order [D
-/// 0x25c948] — the castle's 0x7300004 → 1 (paris_mis01), the task's own example. A live check in
-/// the report replaces this table with the real pairing.
+/// The drive index an interlude hands to — the port's dev auto-continue for the hub menu's
+/// mission list (`sp_level` at 0x2df2e0, 12 entries × 0x18). The game NEVER converts an
+/// interlude into a drive: the interlude movie ends, `GetLevelToLoadFromMovieCode` 0x1d3560:24-50
+/// returns 0x7000048 (the hub) for EVERY drive interlude, and the PLAYER picks the next mission
+/// from the sp_level list — a `0x900000X` pick sets `GameState._8_4_` [M C_SBNFMAP_Handler
+/// 0x20b8d8:27] and the state-9 handover's index is `GameState._8_4_ − 0x9000000` [M
+/// Boot_GetPTPData 0x1c8198:62]. The SP list's driving entries, in menu/story order, are
+/// 0x9000001 (drive 1) → 0x9000005 (5) → 0x9000006 (6) → 0x9000002 (2) → 0x9000003 (3); drives
+/// 4/7/8 (jungleb_mis13b/junglec_mis13c/snow2a_race) never appear in it [M the ELF dump of
+/// sp_level, work/elf/ACTION.ELF @ 0x2df2e0]. The pairing below is therefore the port's dev
+/// convenience (the drive outcome is the dev `driving_result` anyway), NOT a game rule.
 pub fn interlude_drive_index(interlude: u32) -> u8 {
     match interlude {
         0x0730_0004 => 1,

@@ -117,6 +117,10 @@ pub struct GunImp {
     /// [D placements box], seat = −1.0771552. Residual [S]: the payload→runtime +8 shift for
     /// the bounds block is inferred from the verified centre/radius rows, not read live.
     pub seat: f32,
+    /// The placement object's gfx-sphere radius — the game's obj+0x8C world-sphere radius source
+    /// (`Control_BuildWorldSph` 0x133070:48 takes the glist bound radius × |scale|) — the use-key
+    /// pick's candidate radius [M Collide_PickObj 0x1eae80:219-228, `1.0 + obj+0x8C`].
+    pub radius: f32,
 }
 
 impl GunImp {

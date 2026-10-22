@@ -163,6 +163,14 @@ impl Props {
                         active: false, heat: 0.0, cooldown: 0.0, hot: false,
                         turret: crate::gunimp::SP_TURRET as u8,
                         seat,
+                        // The use-key pick's candidate radius: the placement object's gfx sphere
+                        // (the same resolution the seat's sane-bounds scan uses) [M 0x1eae80:219-228].
+                        radius: { let mut r = 0.0f32;
+                            if let Some(o) = if p.by_hash() { None } else { level.maps[m].objects.get(p.index as usize) } { r = o.radius; }
+                            else { for mp in &level.maps { for o in &mp.objects {
+                                if o.hashcode == p.hashcode && o.min.iter().all(|v| v.abs() < 100.0) { r = o.radius; break; } }
+                                if r != 0.0 { break; } } }
+                            r },
                     });
                 }
                 _ => {}
@@ -243,7 +251,7 @@ mod tests {
         let mut p = box_props();
         p.gunimps.push(crate::gunimp::GunImp {
             placement: 0, pos: [0.0; 3], yaw_base: 0.0, pitch: 0.0, yaw: 0.0, pitch_s: 0.0, yaw_s: 0.0,
-            active: true, heat: 0.0, cooldown: 0.0, hot: false, turret: 0xb, seat: 0.0,
+            active: true, heat: 0.0, cooldown: 0.0, hot: false, turret: 0xb, seat: 0.0, radius: 0.0,
         });
         p.gunimp_player_has_died();
         assert!(!p.gunimps[0].active);

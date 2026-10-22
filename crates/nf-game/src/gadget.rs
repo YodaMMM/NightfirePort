@@ -311,26 +311,25 @@ mod tests {
         assert!(l.unlocked, "4 of 4 digits unlock the lock");
         assert!(last, "decrypt_tick returned true exactly on the unlock tick");
         assert!(ch.on(90), "the unlock writes the lock's out switch channel");
-        // The 0x56's own timeline: 1 + 161 + 116 + 76 + 36 = 390 ticks of continuous contact — the
-        // first contact only enters state 5 and zeroes +0xF6 (no decode that tick [M 0x1ae3d8:179-189],
-        // standins-drone-926), then 161 to exceed 160 from 0, 116 to exceed 120 from 5, 76 from 5
-        // past 80, 36 past 40.
-        assert_eq!(ticks, 390, "the 0x56's per-tick +1 must take exactly 390 ticks (got {ticks})");
-        assert_eq!(solved_at, [162, 278, 354, 390], "the per-digit solve ticks");
+        // The 0x56's own timeline: the FIRST contact only flips state 0 → 5 (nothing banks
+        // [M Lock_Update 0x1ae3d8:163-190]), then 161 + 116 + 76 + 36 = 389 accumulating ticks
+        // (161 to exceed 160 from 0, then 116 to exceed 120 from 5, 76 from 5 past 80, 36 past 40)
+        // — 390 ticks of continuous contact in total.
+        assert_eq!(ticks, 390, "the flip tick + the 0x56's per-tick +1 must take exactly 390 ticks (got {ticks})");
+        assert_eq!(solved_at, [162, 278, 354, 390], "the per-digit solve ticks (tick 1 is the flip)");
     }
 
     #[test]
     fn decrypt_upgrade_runs_three_times_faster() {
         // The 0x57 adds 3/tick [M 0x1ae3d8:309-314]: from 0 to >160 needs 54 ticks (53·3=159),
         // from 5 to >120 39 (5+38·3=119), from 5 to >80 26 (5+25·3=80 is not > 80; 83 is),
-        // from 5 to >40 12 (5+11·3=38, 5+12·3=41) — 1 (the state-0 entry tick, no decode
-        // [M 0x1ae3d8:179-189]) + 54+39+26+12 = 132 ticks.
+        // from 5 to >40 12 (5+11·3=38, 5+12·3=41) — the flip tick + 54+39+26+12 = 132 ticks.
         let mut ch = Channels::default();
         let mut l = dec_lock(0, 91);
         let mut ticks = 0u32;
         while !l.unlocked && ticks < 100_000 { ticks += 1; l.decrypt_tick(1, true, &mut ch, ticks); }
         assert!(l.unlocked && ch.on(91));
-        assert_eq!(ticks, 132, "the 0x57's +3/tick takes 132 ticks (got {ticks})");
+        assert_eq!(ticks, 132, "the flip tick + the 0x57's +3/tick takes 132 ticks (got {ticks})");
     }
 
     #[test]
@@ -340,13 +339,29 @@ mod tests {
         let mut ch = Channels::default();
         let mut l = dec_lock(0, 92);
         for _ in 0..100 { l.decrypt_tick(1, false, &mut ch, 1); }
-        assert!(l.scanning && l.scan_progress > 0, "scanning after 100 ticks");
+        assert!(l.scanning && l.scan_progress == 99, "scanning after 100 ticks — the first flipped, 99 banked (progress now {})", l.scan_progress);
         for _ in 0..30 { l.decrypt_tick(0, false, &mut ch, 1); }
         assert!(!l.scanning && l.scan_solved == 0 && l.scan_progress == 0,
             "30 ticks of −4 fully reset the scan (progress now {})", l.scan_progress);
-        // And the reset scan re-accumulates from scratch (the game restarts the digits).
+        // And the reset scan re-accumulates from scratch (the game restarts the digits):
+        // the first re-contact is the flip again, so 50 ticks bank 49.
         for _ in 0..50 { l.decrypt_tick(1, false, &mut ch, 1); }
-        assert_eq!(l.scan_progress, 49, "re-contact accumulates from 0 again (the first contact only re-enters state 5 [M 0x1ae3d8:179-189])");
+        assert_eq!(l.scan_progress, 49, "re-contact accumulates from 0 again (50 ticks, one flip)");
+    }
+
+    #[test]
+    fn decrypt_first_contact_flips_state_0_to_5_and_banks_nothing() {
+        // Lock_Update 0x1ae3d8's state-0 contact arm [M :163-190]: the class-5 bullet's
+        // `+0xf6 += 1` makes the progress non-zero and the `sVar4 != 0` arm immediately moves the
+        // lock to state 5 (`+0xf4 = 5`) and resets the progress to 0 — the first contact banks
+        // NOTHING. The sister: the second contact banks the game's +1 [M :305-307].
+        let mut ch = Channels::default();
+        let mut l = dec_lock(0, 95);
+        assert!(!l.decrypt_tick(1, false, &mut ch, 1));
+        assert!(l.scanning && l.scan_progress == 0 && l.scan_solved == 0,
+            "the flip tick leaves the progress at 0 (now {})", l.scan_progress);
+        l.decrypt_tick(1, false, &mut ch, 2);
+        assert_eq!(l.scan_progress, 1, "the second contact banks the game's +1");
     }
 
     #[test]

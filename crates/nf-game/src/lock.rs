@@ -226,7 +226,10 @@ impl Lock {
     /// 0x1ae3d8:193-196] (the port's one-tick fold, as the laser burn's).
     /// The digit thresholds are `progress > (4 − digit) · 0x28` (160/120/80/40) with the digit
     /// index capped at 3 [M :347-364], one solve per tick [M the single case-5 check], and a solve
-    /// resets the progress to 5 [M :367].
+    /// resets the progress to 5 [M :367]. The FIRST contact after a reset only flips state 0 → 5:
+    /// the bullet's `+0xf6 += 1` makes the progress non-zero and the `sVar4 != 0` arm then moves
+    /// the lock to state 5 and resets the progress to 0 — nothing banks on the flip tick
+    /// [M 0x1ae3d8:163-190].
     pub fn decrypt_tick(&mut self, beams: u32, upgraded: bool, ch: &mut Channels, frame: u32) -> bool {
         if self.burned || self.unlocked { return false; }
         if self.kind != 0 && self.kind != 2 { return false; }
