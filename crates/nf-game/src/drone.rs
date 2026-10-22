@@ -12196,9 +12196,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // 0x2 → `Bullet_trail_effect_smoke`, 0x20 → the 0x2000039 exhaust, 0x80000 → the small
             // 0x2000039; L sweep +0x6c: 0x2d = 0x0001a200, 0x2c = 0x00012204, 0x2e = 0x00032200 — none
             // of 0x2/0x20/0x80000], so the old per-tick puff here was a port-only haze down the 08
-            // corridor. The thin trail is the ribbon itself — the documented unported swoosh system.
-            // No RNG draws (the game's swoosh path consumes none of the shared generator;
-            // determinism). Colour/size [S] — the main agent's render check owns the look.
+            // corridor. The thin trail is the ribbon itself — the documented unported swoosh system
+            // [M Swoosh_Create 0x18d8e8:53-59 (a class-0x41 object on gfx hash 0x20005cd, life =
+            // weapon_data+0x76 ÷ FRAME_RATE_MUL), Swoosh_Update 0x18d200:49-82 (one camera-aligned
+            // stretched quad, fade byte = life·128/max) — the colour IS the 0x20005cd texture; no
+            // colour/size rule exists in code].
+            // No RNG draws (the game's swoosh path consumes none of the shared generator [M];
+            // determinism). The puff's colour 0x30d0ff90 / sizes 0.3→0.6 / life 6.0 are the port's
+            // visual stand-in for the ribbon the renderer doesn't draw yet — the main agent's render
+            // check owns the look (compare against texture 0x20005cd on disc [D]).
             let flags6c_b = d.weapons.records.get(b.weapon as usize).map_or(0u32, |r| u32::from_le_bytes(r[0x6c..0x70].try_into().unwrap()));
             let swoosh_05cd = d.weapons.records.get(b.weapon as usize).is_some_and(|r| {
                 matches!(u16::from_le_bytes([r[0x02], r[0x03]]), 0x33 | 0x6a | 0x6e)
@@ -12227,7 +12233,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
                 // audio voice plus the hearing entry (the level's sfx-table data, the shape the
                 // script sounds use); the shatter/debris stays on the view queue. The effect's
-                // pos is the bounds centre (the port's obj+0x80 stand-in).
+                // pos is obj+0x80, the bounds centre — the game's own argument in BOTH sound arms
+                // [M 0x12b970:69,75; M-dis 0x12b9f4 `addiu $a1,$s0,0x80` → Sound_Play3D].
                 let id = u32::from(k.sound);
                 self.audio.play3d(id, k.pos, None);
                 if let Some(t) = d.sfx {
@@ -12235,9 +12242,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
                 }
             }
-            // The monitor consoles take the bullet too (`Monitor_ApplyDamage` — state 3 +
-            // `Explode_Create` 0x6000027; the game's r·6 radius reads the placed sphere, the
-            // port's blast queue takes the historical radius stand-in).
+            // The monitor consoles take the bullet too: `Monitor_Update` 0x1afcc8:34-45 (state 3;
+            // `Monitor_ApplyDamage` 0x1b0968 is an empty 8-byte stub) fires `Explode_Create(r·6.0, r,
+            // 0.5, …, obj+0x80, …, 0x6000027, 200, 200, 0, 0)` with r = the placed glist
+            // bounding-sphere radius obj+0x8C [M; M-dis 0x1afdb8-0x1afdf8] — f12 r·6 = the script
+            // presentation scale (SCRIPTINFO+0x94), f13 r = the shake radius (+ fuse r/15), f14 0.5
+            // = the damage (EXPLODEINFO+0x28; zeroed when r < 0.5), the 200s are u8 args, not damage
+            // [M-dis 0x17cc1c-0x17cd60]. The port's queue keeps the historical (3.0, 200.0, 3.0)
+            // stand-in — `Monitors` stores no per-monitor r yet [D monitor.rs], so the exact triple
+            // (r, 0.5, r·6) awaits the radius plumbing at creation.
             if self.monitors.bullet_hit(b.pos, end, b.damage) {
                 let m = self.monitors.list.iter().find(|m| m.state == 3).map(|m| m.pos);
                 if let Some(p) = m { self.pending_blasts.push((p, 3.0, 200.0, usize::MAX, 0, 0x0600_0027, 3.0)); }
@@ -12288,8 +12301,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // mask-1 read drops contacts whose weapon's category word (`weapon_data+0x10`, u16)
             // ANDs non-zero — the disc's bit-0 records are the fists and the 0x63-0x66 melee
             // specials only [D census]. The contact test is the held_targets shape (the segment
-            // vs the site sphere, no world gate — the sphere is the port's stand-in for the site
-            // SP's stream objects [S]; the online combat and the bot rounds use the same sphere).
+            // vs the site sphere, no world gate — the game's own test is per stream object:
+            // `SP_GetHitDamage` walks `Script_GetObj` over every script object of the site's current
+            // script, `Collide_FilterBullets(obj+0xd0, mask 1)` then `Collide_GetDamageNObjects`
+            // [M 0x1dc5f8:80-93], HP subtracted at obj+0xf4 [M 0x1870a0:81-83], blasts via
+            // `MP_ApplyDamage` [M 0x17c518:187]. The single sphere is the port's documented coarser
+            // stand-in (covers the gaps between the stream objects, misses their edges; the mask-1
+            // filter and the HP ledger are exact); the online combat and the bot rounds use the same sphere).
             if let Some((c, r)) = self.site_sphere {
                 let cat = d.weapons.records.get(b.weapon as usize)
                     .map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
@@ -12346,8 +12364,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let fb = crate::damage::first_box_hit(b.pos, ray, &dr.hit_boxes(d));
                 // `NDrone2_Collision` 0x140e90's down branch (+0x2f set [M :65-90]): the shootable
                 // volume is the low sphere — radius 0.3, centre (0.3 − obj+0xa0) above the origin
-                // along the up vector — while a standing guard uses 0.4/0.55. The port's standing
-                // stand-in is the posed bone boxes (established, the damage tests pin them); a
+                // along the up vector — while a standing guard uses 0.4/0.55 [M 0x140e90:65-90]. The
+                // port's standing volume is the posed bone boxes — the established documented
+                // approximation (the game's two origin-centred standing spheres are what the boxes
+                // refine; the damage tests pin them); a
                 // DOWNED guard's boxes lie along the ground and leave the aimed-at-origin ray
                 // uncovered (the playtest's re-tase did nothing), so the game's own sphere is the
                 // contact here. The port's origins rest on the floor when down (the anim root
@@ -12434,9 +12454,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // with damage > 0, and the Phoenix Samurai bolt (0x32/0x33) puffs 0x200026e at
                     // 1.0/16.0 instead (no damage gate on its case) [M 0x13fff0:235-256; the life
                     // 0x3c from the disassembly `sw $v0, ($sp)` at 0x140404/0x140460]. Only the blood
-                    // block sets the gas obj's +0xf0 |= 8 — a draw flag the port's Gas doesn't model
-                    // [S; documented deviation]. No shared-RNG draws (the gas pool's counter stand-in
-                    // — the same discipline as the port's other puff sites).
+                    // block sets the gas obj's +0xf0 |= 8 [M 0x13fff0:244-249; the bolt case :251-255
+                    // does not] — its sole reader `View_DrawObjectGlist` 0x1e6780:43-66 rotates a
+                    // bit-3 gas from the VIEWER matrix (billboard) instead of its own +0x90; the
+                    // port models the flag as the puff's `billboard` (set below, blood only).
+                    // Gas allocation: the game heap-creates every puff (control_create_object —
+                    // no pool, no counter [M 0x1aacc8:32-36]) and `Gas_Init` burns 2 shared-RNG
+                    // draws unconditionally (spin + sign [M 0x1aacc8:72-80]); the port's puffs
+                    // substitute the deterministic counter-jitter (gas.rs's documented [S]) —
+                    // the searchlight/trail/exhaust sites DO keep the game's draws [M 0x12d890:152-188].
                     let victim_puff = match b.weapon {
                         0x32 | 0x33 => Some((1.0, 16.0, 0x0200_026e)),
                         w if !matches!(w, 0x2b | 0x34 | 0x35 | 0x36 | 0x37) && hit.damage > 0.0 => Some((3.0, 6.0, 0x0200_08bc)),
@@ -12444,6 +12470,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     };
                     if let Some((s0, s1, mesh)) = victim_puff {
                         self.gas.init_ex(mesh, hit.point, 0.0, [0.0; 3], s0, s1, 5, [0xff, 0xff, 0xff, 0xff], 0, 60.0);
+                        // +0xf0 |= 8 rides the blood mesh only (the bolt's 0x0200_026e case never
+                        // sets it [M 0x13fff0:251-255]).
+                        if mesh == 0x0200_08bc {
+                            if let Some(g) = self.gas.puffs.last_mut() { g.billboard = true; }
+                        }
                     }
                 }
                 (_, Some(w)) => {
@@ -12483,7 +12514,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // (determinism).
             if b.homing {
                 // `Bullet_heatseekable` 0x12f248 [M]: a guard (class 2) is seekable while its object
-                // exists (`+0xfc != 0` — the port's `drawn`, the per-tick cull stand-in), its health
+                // exists (`+0xfc != 0` — the port's `drawn` IS that flag: View_AddObjects 0x1e62d8:70-71
+                // writes +0xFC = 2 on view-add and control_movement_object_handler 0x1336f8:242-246
+                // decrements it per tick, so the game's test survives one extra tick after the object
+                // leaves view; the port's per-tick boolean drops it one tick earlier — documented), its health
                 // (`BL+0xac`) is > 0 and its view state (`+0xf4`) is not 1 (`WAIT_SWITCH` — a
                 // spawner-held template waiting for its channel is not a live target). The game does
                 // NOT read the +0xF0 enable byte here (the port used `enabled`) and a corpse is
@@ -12612,11 +12646,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.impact_sound(d, cur, end);
                 }
                 if laser_beam {
-                    // The `Effect_Laser` stand-in: Gas_Init(2.0, 3.0, …, kind 5, 0x7f7f64ff,
-                    // life) [M 0x1cef38:60-70] — the pool's puff without its per-surface mesh
-                    // (the EffectInfo+idx*0x88+0x10 field the port doesn't parse yet [S]; the
-                    // main agent's render check owns the look).
-                    self.gas.init(hit, 0.0, [0.0; 3], 2.0, 3.0, 5, [0x7f, 0x7f, 0x64, 0xff], 8.0);
+                    // `Effect_Laser` 0x1cef38:59,80-83: the impact gas runs only when the surface
+                    // record's +0x10 entity-gfx mesh is non-zero — EffectInfo[(hit+0x50) & 0x3f]+0x10,
+                    // the ELF .rodata table the port parses (sfx.rs `gas_mesh`) [D EffectInfo@0x3037c0
+                    // read]: 0 for NONE/CARPET/GRASS/EARTH/SAND/GRAVEL/SNOW/DEEPWATER/SHALWATER/
+                    // FOLLAGE/FABRIC/LAST (12 of 23 — no puff), 0x02000215 for every other row
+                    // (PAPER/WOOD×2/METAL×2/STONE/ICE/GLASS/CERAMIC×2/GENERIC). Gas_Init(mesh, 5,
+                    // 0x7f7f64ff, life 8) [M 0x1cef38:60-70].
+                    let mesh = d.surfaces.as_ref().map_or(0, |s| s.gas_mesh(m));
+                    if mesh != 0 {
+                        self.gas.init_ex(mesh, hit, 0.0, [0.0; 3], 2.0, 3.0, 5, [0x7f, 0x7f, 0x64, 0xff], 0, 8.0);
+                    }
                 } else if let Some(nd) = self.effects.bullet_impact(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, if pierce { 0 } else { 8 }) {
                     ricochet = Some((hit, nd));
                 }
@@ -13053,8 +13093,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     fn player_use_triggers(&mut self, head: V3, look: V3, frame: u32) {
         let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let r = 1.0;
-        // Collect trigger indices whose bounding box meets the use sphere (stand-in for the game's
-        // `Collide_SphereIntersect(1.0, ...)` against the trigger's collision mesh).
+        // Collect trigger indices whose bounding box meets the use sphere — the game's test is
+        // `Collide_SphereIntersect(pos, 1.0, …, mode 0x101)`: a bounding-sphere gate (centre
+        // obj+0x80, radius obj+0x8C [M 0x1eae80:219-228]) then the point transformed by the inverse
+        // object matrix and `Intersect_PointGeom` — point-vs-glist-TRIS [M 0x1ebaa8:186-190; caller
+        // 0x1a5170:100-137]; hit type 0x1d → Trigger_Activate. The port's AABB is the documented
+        // stand-in (a superset of the mesh test — exact only where the mesh fills its box).
         let hits: Vec<usize> = (0..self.triggers.len()).filter(|&i| {
             let t = &self.triggers[i];
             !(0..3).any(|k| use_point[k] + r < t.lo[k] || use_point[k] - r > t.hi[k])
@@ -13107,7 +13151,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // [M 0x149dd0:8-15] — and sets `NPCGlobals = 0`. The re-enable (`Script_Free`'s 0x80 flag,
                 // 0x1da880:41-43) skips state-1 WaitSwitch drones [M 0x1383e8:14] — they stay disabled until
                 // their own switch channel wakes them [M 0x15b960:21-37]. The port's `enabled` is the
-                // obj+0xF0 gate's stand-in, so the freeze mirrors per drone.
+                // obj+0xF0 gate's stand-in — and `enabled` IS that gate's port: the draw pass skips
+                // on +0xF0 & 0x8010 [M 0x1e62d8:33], bullets ignore on & 0x60 [M 0x12ce80:124], and
+                // the pair is set/cleared only by NDrone2_Enable [M 0x149dd0:12-14, :24-27] — so the
+                // freeze mirrors per drone exactly.
                 crate::nis::Request::DroneEnable { on } => {
                     self.npc_enabled = on;
                     for dr in self.list.iter_mut().filter(|d| d.present) {
@@ -13141,9 +13188,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // Op 0x13: `Camera_SetFade(-f, 4, 0xff, 0)` [M 0x1db3d0, 0x1bbdd8] — a black overlay
                 // (colour 0x000000ff) whose alpha ramps 1/|f| per tick: f < 0 fades in from black,
                 // f > 0 fades out to black. The game refuses a second fade while the same viewer's
-                // pair (+0x234, +0x235) is active [M 0x1bbdd8:11]; the port's one-state stand-in
-                // re-arms only when nothing is running [S: the viewer state's exact lifecycle is not
-                // decoded]. The same state carries the script's auto-fades (Script_Update's
+                // pair (+0x234, +0x235) is active [M 0x1bbdd8:14 — the gate reads BOTH bytes:
+                // +0x234 = the fade TYPE (0 = script/cutscene, 1 = gameplay: Script_Update's
+                // auto-fades 0x1da998:76,106, Player_Init 0x1910f8:45, Player_Update 0x193600:341-349)
+                // and +0x235 = the state (1 ramping, 2 done-this-tick, 0 idle; the updater
+                // Camera_UpdateGlbVars 0x1bada0 ramps +0x228 by +0x22C, parks 2 one tick, then 0)].
+                // A running TYPE-1 fade refuses; a type-0 script fade never blocks and is overwritten
+                // mid-ramp [M-dis 0x1bbe08-0x1bbe18]. The port's one-state gate (refuse while any
+                // fade runs) is the documented stricter stand-in: it matches the type-1 refusal; the
+                // script-fade overwrite and the one-tick re-arm lag are the deviations (a live check
+                // of Camera_SetFade's type byte for op 0x13 would pin what the scripts pass).
+                // The same state carries the script's auto-fades (Script_Update's
                 // length−20 fade-out and the −22 handback fade-in) and nf-view draws it.
                 crate::nis::Request::Fade { ticks, viewer } => {
                     // `Camera_SetFade(duration, 4, 0xff, 0)` [M 0x1bbdd8]: rate = 1/duration per tick;
@@ -13293,17 +13348,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // (Break_Create) and script-created 0x20 entities alike; the port models only the
                 // script-created ones (`Objects.list`, the Entity command's obj_type is the game's
                 // obj+0xFF class byte), and its entities carry no bounding sphere, so the match is
-                // the first kind-0x20 entity within 1.0 of the position [S — the disc's single
-                // firing (0600005b stream 8, position = stream 7's anim object) finds NO script
-                // entity of that class either way; the near misses are the placed glass panels the
-                // port does not simulate — a live check could measure the game's sphere radius].
+                // the first kind-0x20 entity within 1.0 of the position — documented-unreachable
+                // on the shipped levels: the disc's single firing (0600005b stream 8, position =
+                // stream 7's anim object) finds NO script entity of that class either way, and the
+                // near misses are the placed glass panels the port does not simulate ([D census];
+                // the game's scan is the CONTROL list — placed Break_Create 0x20 breakables AND
+                // script entities — the port carries only the script-created set; a live check
+                // could measure the game's sphere radius).
                 crate::nis::Request::DoBreak { at } => {
                     let Some(o) = at else { continue };
                     let Some(pos) = Self::script_obj_pos(&self.scripts, d, o) else { continue };
                     // First class-0x20 object in list order whose sphere contains the position
                     // [M 0x12c180-0x12c1cc — first hit wins]. The port's script entities carry no
                     // bounding sphere: the centre is the matrix translation, the radius a 1.0
-                    // stand-in [S — see the arm's header note].
+                    // stand-in [D census — see the arm's header note: the 1.0 radius is never
+                    // exercised by the shipped scripts].
                     let hit = self.scripts.objects.list.iter().position(|x| match x {
                         Some(crate::nis::Obj::Entity { kind: 0x20, matrix, .. }) => {
                             let c = [matrix[3][0], matrix[3][1], matrix[3][2]];
@@ -13383,8 +13442,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// `Pickup_Handler` 0x18e650 for the local player on pickup `k` (the touch already passed):
     /// the inventory take, the respawn tail, the auto-switch, the switch channel and the take
     /// sound — `update_pickups`' take, split out for the MP shared pass (mp-bot-weapons). With
-    /// `force` a refused take still consumes the pickup (the online pass: the local inventory is
-    /// per-machine, the pickup state is shared — [S]). Returns the take.
+    /// `force` a refused take still consumes the pickup — documented MP port design (the PS2 is one
+    /// machine: `Pickup_Handler` 0x18e148:203-246 reads the LOCAL inventory [M], which no other
+    /// machine holds, so no shared rule exists to port; the shared consumption is the port's
+    /// determinism contract). Returns the take.
     pub fn take_pickup(&mut self, d: &Data, k: usize, frame: u32, force: bool) -> Option<crate::pickup::Taken> {
         let p = &mut self.pickups[k];
         let loaded = d.skins.contains_key(&d.weapons.first_person(p.weapon as usize));
@@ -13472,9 +13533,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     ///
     /// The take decision rides only state every machine holds: the armour pickup is refused at
     /// the taker's shared armour ≥ 50 [M 0x18e650:220-225]; a weapon/ammo pickup is consumed by
-    /// the first touching body even when that player's ammo is full **[S deviation]** — the
-    /// game refuses a full player there (`Player_EquipAmmo` returning 0), but that player's ammo
-    /// lives only on its own machine, so no other machine could decide the same way. The local
+    /// the first touching body even when that player's ammo is full — **documented MP deviation**:
+    /// the game refuses a full player there (`Player_EquipAmmo` returning 0 [M 0x18e650]), but that
+    /// player's ammo lives only on its own machine, so no other machine could decide the same way —
+    /// the shared consumption keeps every machine's pickup state identical. The local
     /// taker's real inventory still takes the item (`Inventory::take`, the auto-switch, the
     /// tally) — only the consumption is shared. The consumption tail is the game's: the sound,
     /// the switch channel, then respawn 0 → deleted, 0xFFFF → stays, else hidden in state 2 for
@@ -13593,6 +13655,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.tick_inner(d, player);
     }
 
+    /// The placed (stuck, alive) grenade ids of ONE weapon id, oldest first — the cap walk's
+    /// per-weapdef count set (`Bullet_CollisionHandler` 0x12ce80:332-351 counts class-5 bullets
+    /// with the same weapon-record pointer + owner; the port's SP path has a single owner).
+    fn placed_grenade_ids(&self, weapon_type: u16) -> Vec<usize> {
+        self.grenades.iter().enumerate()
+            .filter(|(_, g)| g.weapon_type == weapon_type && g.stuck && g.state < 2)
+            .map(|(i, _)| i).collect()
+    }
+
     fn tick_inner(&mut self, d: &Data, player: &Player) {
         // options-census: the health-pane fade alpha decays while the Advanced row (0x1000_023b,
         // PlayerSetting+0x0b) is set [M Player_Update 0x193600:414-429 — BLData+0x8bc loses
@@ -13615,14 +13686,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the per-frame sight counter becomes "saw last frame"; this tick's sight accumulates below.
         self.saw_opp_last_frame = self.saw_opp_this_frame;
         self.saw_opp_this_frame = false;
-        // The 07000041 wrapper end ([S] unverified — the port's flow for the task's known open
+        // The 07000041 wrapper end (documented stand-in — the port's flow for the task's known open
         // item "it must play through into 0700001b"): with the approach chain fired (ch 1, the
         // scripted-drone plate #99's out [D PL#99]) the wrapper's approach sequence runs; once it
         // has run the chain's longest script (0x06000027, 241 ticks [D the nis dump]) the level
         // ends into the space station 0x0700001b — the hand-off the game itself models as the
         // 0x7100018 briefing special case [M ResetMap_Load 0x1d6360:99-102]. 07000041.bin carries
         // no exit placement of its own [D the placement scan: no 0xE8 LOAD_LEVEL; no ch-100
-        // writer in the 7 scripts [D the nis decode]], so the timer is the port's stand-in.
+        // writer in the 7 scripts [D the nis decode]]. The game's remaining carrier is the script
+        // EVENT op 0x12 — Script_EventHandler 0x1d94c0:194-198 → ResetMap_LevelToLoad with a dword
+        // level id read from the script stream [M 0x1d94c0:83-93] — and the ELF census finds NO
+        // hardcoded 41→1b pair (all five 0x7000041 refs are gameplay special-cases; Mission_Update's
+        // ch-100 map defaults 0x7000041 → 0x7000048 [M 0x182c60:89-115]), so the end must be a
+        // type-0x12 event inside one of the 7 streams — decode pending. Note: a script 0x12 into
+        // 0x0700001b would load the 0x7100018 briefing first [M 0x1d94c0 skipbrief=0] — the port's
+        // direct jump skips it. Until the decode, the 241-tick timer stays the documented stand-in.
         if d.level == 0x0700_0041 && self.level_exit.is_none() {
             if self.channels.on(1) {
                 let t = self.wrapper_end_timer.unwrap_or(0) + 1;
@@ -13900,8 +13978,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The world objects' update pass (`control_movement_object_handler` 0x1336f8 pass 4:
         // `control_funcs[+0xFF].update` — InverterTrigger 0x1b30a8, Shooter 0x17d0c0 (fires one
         // `Bullet_init` bullet into this tick's list), DynamicObject 0x18d3b8; the camera splines
-        // stay static registration). The viewer position for the fade is `glb_viewer+0xC0` — the
-        // player's eye here (headless stand-in [S]).
+        // stay static registration). The viewer position `glb_viewer+0xC0`: the game reads the
+        // ACTIVE CAMERA's world position (written by Camera_Update 0x1bb6d8:47-50 and the cam-mode
+        // writers 0x18f5d8/0x1baa78/0x1b9c00 [M]); on-foot first-person that is the eye, so the
+        // headless port's stand-in matches on-foot and deviates for chase/scripted/vehicle cams
+        // (the reader here is the dynamic objects' distance fade [M 0x18d3b8:45-49]).
         let wo_viewer = [player.eye[0], player.eye[1], player.eye[2]];
         // `Mine_Update` 0x17c930: the bob (the fixed 60 Hz clock), then the explode arm — the
         // hit-list walk fires when the collide pass gave the mine a referenced contact. The port
@@ -14400,7 +14481,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // door-guard-pairing: `SetDronePartner` (0x141360) + `NDrone2_DoorGuardHandler` (0x1416d8)
         // for the CivilianDoorGuard pairs. The game pairs inside the 0x31 ENTER and runs the zone
         // read inside the 0x31 UPDATE; the port's pre-pass has the list access the per-drone
-        // `handle` lacks — one tick after the ENTER for the pairing [*suggested* deviation], the
+        // `handle` lacks — one tick after the ENTER for the pairing (documented deviation: the
+        // game pairs inside the 0x31 ENTER [M 0x160648:21 — SetDronePartner's sole call site];
+        // the deferral's timing awaits live check 771b), the
         // same tick for the zone (the vision pass above has run).
         self.door_guard_pass(d, player);
         // guard-blast-smoke: the smoke clouds' per-tick touch. The game's cloud is a class-0x2A
@@ -14607,6 +14690,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         let audio = &self.audio;
         self.script_sounds.retain(|s| !audio.finished(s.1));
+        // mp-never-mentioned: the game's walk head (0x1336f8 step 1 [M]) calls the per-frame
+        // debug-draw hook `MP_DebugDraw` 0x18bf60 (jal 0x133738) — an **empty `jr ra` stub**
+        // [M size 8 @0x18bf60]. The port mirrors the stub: no debug-draw pass either.
         let mut order: Vec<(usize, u8, usize)> = self.list.iter().enumerate().filter(|(_, x)| x.present).map(|(i, x)| (if x.spawn_seq != 0 { usize::MAX - x.spawn_seq as usize } else { x.placement }, 0, i))
             .chain(self.triggers.iter().enumerate().filter(|(_, t)| t.kind != crate::triggers::kind::TOUCH).map(|(j, t)| (t.placement, 1, j)))
             .chain(self.spawners.iter().enumerate().map(|(j, sp)| (sp.placement, 2, j)))
@@ -16109,17 +16195,32 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 else { dr.send(d, &mut self.rng, frame, msg::BULLET); }
             }
         }
-        // fix-satchel-tripbomb: the tripbomb's 6-placed cap [M `Bullet_CollisionHandler` 0x12ce80:335-370
-        // — the 0x80000 stick arm walks the objects, counts the same-weapdef same-owner type-5 bullets
-        // and marks the oldest (obj+0xEC smallest [*suggested*: the port's spawn order]) `+0xFE |= 1`
-        // past 6]. Applied every tick over the placed set — the net effect matches.
+        // fix-satchel-tripbomb: the tripbomb's placed cap [M `Bullet_CollisionHandler` 0x12ce80:332-376
+        // — the 0x80000 stick arm walks DynamicObjList newest-first (`control_first_object` 0x134300
+        // → the +0x14 chain the add prepends 0x134698), counts the class-5 (+0xFF == 5) bullets with
+        // the sticking bullet's own weapon record (+0xe0→+0x44 pointer) and owner (+0xe0→+0x30),
+        // and when that count is ≥ 6 (`slti $v0, $s5, 6` fails) marks the minimum obj+0xEC one
+        // `+0xFE |= 1` (0x12d424-30; the movement delete pass then removes it silently, no
+        // explosion)]. obj+0xEC IS the birth tick — `control_init_object` 0x134630:13-15 writes
+        // `GameState._52_4_` (the global frame counter) into every new object, and Bullet_init never
+        // overwrites it — so "oldest" = earliest-created = the port's spawn order (the port appends
+        // grenades in creation order). The count includes the sticking bullet ITSELF (no self-exclusion,
+        // no state filter — in-flight same-weapdef siblings count too), so the mark fires on the 6th
+        // stick (5 placed + self) and the settled cap is 5 placed, not 6. Applied every tick over the
+        // placed set — the net effect matches (the in-flight-sibling edge: two same-weapdef projectiles
+        // airborne at one stick moment, unreachable through the ≥26-tick refire).
         // fix-remote-mine-play: the mine 0x37's stick arm carries the same walk [M 0x12ce80:296-330 —
-        // the record's base id 0x37, count < 6, else the oldest `+0xFE |= 1`]; its placed set joins
-        // the same every-tick consumer.
-        let mut placed: Vec<usize> = self.grenades.iter().enumerate()
-            .filter(|(_, g)| matches!(g.weapon_type, 0x3a | 0x37) && g.stuck && g.state < 2)
-            .map(|(i, _)| i).collect();
-        while placed.len() > 6 { let i = placed.remove(0); self.grenades[i].state = 2; }
+        // the record's base id 0x37, same count/mark]; the cap is PER WEAPON RECORD (the game compares
+        // the weapdef POINTER, so 0x3a and 0x37 hold independent counters — five tripbombs plus one
+        // mine place six objects), so each id trims its own set here. The satchel family 0x3b-0x40 has
+        // NO cap walk (the id==0x3b arm 0x12ce80:320-324 is sound+park only). Residual [S unverified]:
+        // same-tick ties — the game's strict `<` over the newest-first walk evicts the NEWEST of a
+        // tied pair, the port's first-pushed pick the oldest (one throw per refire interval makes
+        // same-tick ties unreachable in practice).
+        let mut placed_trip = self.placed_grenade_ids(0x3a);
+        let mut placed_mine = self.placed_grenade_ids(0x37);
+        while placed_trip.len() >= 6 { let i = placed_trip.remove(0); self.grenades[i].state = 2; }
+        while placed_mine.len() >= 6 { let i = placed_mine.remove(0); self.grenades[i].state = 2; }
         // fix-satchel-tripbomb: the tripbomb's laser [M `Bullet_update` case 3, the `+0x70 & 0x80000`
         // arm 0x12efb8-0x12efc8 + `PositionBeam` 0x1a9400]: per ARMED stuck tripbomb, the ray from the
         // stuck position along +normal (the stick matrix Z = −normal [M 0x12ce80:266]; the beam end =

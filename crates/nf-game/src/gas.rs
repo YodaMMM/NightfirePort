@@ -77,6 +77,10 @@ pub struct Gas {
     pub life: f32,
     /// data+0x3C byte: 0 = static damped, 4 = given velocity, 7 = buoyant drift.
     pub kind: u8,
+    /// The gas obj's +0xF0 bit 3 (0x8) — set only by the blood-puff arm [M 0x13fff0:244-249; the
+    /// bolt case :251-255 does not]: `View_DrawObjectGlist` 0x1e6780:43-66 rotates a bit-3 object
+    /// from the VIEWER matrix (billboard) instead of its own +0x90. The draw side reads it.
+    pub billboard: bool,
 }
 
 #[derive(Default)]
@@ -142,6 +146,7 @@ impl GasPool {
             spin,
             life: 128.0,
             kind: 7,
+            billboard: false,
         });
         let _ = yaw; // the rot-z euler: stored to obj+0x50/0x60 in the game; the port's billboard draw reads only the spin
     }
@@ -177,6 +182,7 @@ impl GasPool {
             spin,
             life: 120.0,
             kind: 7,
+            billboard: false,
         });
         let _ = yaw; // the rotation draw: stored to obj+0x50/0x60; the port's billboard reads only the spin
     }
@@ -211,6 +217,7 @@ impl GasPool {
             spin,
             life: 64.0,
             kind: 0,
+            billboard: false,
         });
     }
 
@@ -255,6 +262,7 @@ impl GasPool {
             spin,
             life,
             kind,
+            billboard: false,
         });
         // The mesh rides alongside for the draw (the game passes it to the gfx hashtable); the port's
         // billboard draw reads it from the puff via the pool index.

@@ -240,7 +240,14 @@ impl Lock {
             }
             return false;
         }
+        let was_scanning = self.scanning;
         self.scanning = true;
+        if !was_scanning {
+            // The state-0 entry [M 0x1ae3d8:179-189]: the first contact only enters state 5 and
+            // RESETS the progress to 0 — the transition consumes the contact, it does not decode.
+            self.scan_progress = 0;
+            return false;
+        }
         self.scan_progress = (self.scan_progress + if upgraded { 3 } else { 1 })
             .min(3000); // the game's progress cap [M 0x1ae3d8:333-337]
         let digit = self.scan_solved.min(3) as u32;
