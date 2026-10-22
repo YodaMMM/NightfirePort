@@ -47,7 +47,10 @@ fn iso() -> Option<String> {
 // Re-pinned for mp-pickups-visible (700y1): the arena's set pickups now carry the match weapon set's guns
 // [M Pickup_CreateFromSet 0x18f1b0] and spin, so the bots take different weapons — kills 36, repeatable; the two
 // machines' per-tick hashes still agree.
-const PINNED_DIGEST: u64 = 0xf966_f9e3_9d01_eaf9;
+// Re-pinned for standins-scene-930: an online bot's armour pickup now runs Pickup_Handler's class-2 case 3
+// (BOT_vars+0xA4 / the armour byte += amount, capped 50 [M 0x18e650:119-133]) instead of the old +20 health,
+// so the fights run differently — kills 37; the two machines' per-tick hashes still agree.
+const PINNED_DIGEST: u64 = 0x89cb_fcb6_ae45_c2ac;
 
 const TICKS: u32 = 3600;
 

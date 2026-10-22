@@ -130,7 +130,9 @@ fn two_humans_14_bots_moving_hashes_agree() {
     // the other machine (the first diverging field: body1, tick 682, two ticks after the kill);
     // with that fixed, the replica's stale collision cel (no per-tick relink) split body1 by
     // 0.004 at tick 2738 on a crouch-walk along a wall.
-    let deaths = run(2, 14, 3600, true);
+    // 7200 ticks since standins-scene-930: bots keep the armour they pick up [M 0x18e650:119-133],
+    // so the first human death comes later than inside the old 3600 (none there; 2 in 7200).
+    let deaths = run(2, 14, 7200, true);
     if iso().is_some() { assert!(deaths > 0, "the run exercises a human death while moving"); }
 }
 
