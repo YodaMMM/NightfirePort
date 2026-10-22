@@ -1762,6 +1762,16 @@ impl Scripts {
         }
     }
 
+    /// `SP_SetPosRot(*(copter+0x2c), obj+0x90)` [M `Copter_Move` 0x17d628:115]: every flown tick
+    /// the copter's SP player takes the copter object's matrix — the stream entities (the body,
+    /// the parts, the sub-script spawns) pose relative to it and so ride the CopterPaths route
+    /// (copter-path-flight).
+    pub fn pose_copter_sp(&mut self, placement: usize, matrix: Mat4) {
+        for p in &mut self.players {
+            if p.placement == placement { p.matrix = matrix; }
+        }
+    }
+
     /// The object indices the hidden SPs' CURRENT scripts own — the port-side `Script_HideObj`
     /// cascade [M 0x1dcbf0:12-14 → 0x1db808: the kind-1..3 stream objects of the script
     /// `SCRIPTPLAYER_tag+0x2a` selects get the obj+0xF0 bit 0x10]. The nf-view entity getters

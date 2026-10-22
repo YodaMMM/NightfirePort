@@ -10779,6 +10779,9 @@ pub struct Drones {
     /// The helicopter (`Copter_Create` 0x17d340, placement 0x2F; fix-objects2): 07000008's
     /// extraction copter — gated on ch 5, its arrival writes ch 0x4B (the last mission objective).
     pub copters: Vec<crate::copter::Copter>,
+    /// `CopterPaths` — the 0x1c route nodes `Copter_Create` builds from every 0x2F placement
+    /// (`LList_Add(0x316fe0, node)` [M 0x17d340:42]; copter-path-flight).
+    pub copter_paths: Vec<crate::copter::CopterPath>,
     /// The locks (`Lock_Create` 0x1ae1f8, placement 0x2E; fix-objects2): the laser-burn targets —
     /// 07000008's safe bolts (chs 134/135 → mux 136 → the safe door).
     pub locks: Vec<crate::lock::Lock>,
@@ -11116,7 +11119,7 @@ impl Drones {
             movie_request: None,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             // fix-06-alarm (fields on their own lines — merge lesson 4).
             sound_triggers: Default::default(),
             // task 845: the shared target registry (NPCGlobals DAT_00299110).
@@ -11434,8 +11437,11 @@ impl Drones {
         // RNG draw): the security-camera cone detectors; keys from the same 0x19 blocks.
         self.sensors = crate::sensor::Sensors::create(&level.maps[m].placements, &path_blocks);
         // The helicopter (`Copter_Create` 0x17d340, placement 0x2F) and the locks (`Lock_Create`
-        // 0x1ae1f8, placement 0x2E) (fix-objects2). Neither draws RNG at create.
-        self.copters = crate::copter::Copter::create(&level.maps[m].placements, self.difficulty);
+        // 0x1ae1f8, placement 0x2E) (fix-objects2). Neither draws RNG at create. The route nodes
+        // come first — every 0x2F placement makes one (`LList_Add(0x316fe0, ..)` [M 0x17d340:42]),
+        // and the kind-0 ones then own their node as rec+0x54 (copter-path-flight).
+        self.copter_paths = crate::copter::CopterPath::create(&level.maps[m].placements, &path_blocks);
+        self.copters = crate::copter::Copter::create(&level.maps[m].placements, &self.copter_paths, self.difficulty);
         self.locks = crate::lock::Lock::create(&level.maps[m].placements, self.difficulty, |p| {
             let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
                 else { level.maps[m].objects.get(p.index as usize) };
@@ -14815,15 +14821,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // invisible to the edge test.
         self.doors.end_tick(&self.channels);
         // The helicopter (`Copter_Update` 0x17dbb8, fix-objects2): the gate check (with the head's
-        // unhide + the +0x70 zeroing), the countdown pulse and the arrival write. The flight no
-        // longer spawns a synthetic one-shot player: the copter's real ScriptPlayer exists from
+        // unhide + the +0x70 zeroing), the countdown pulse, the state machine and `Copter_Move`'s
+        // CopterPaths flight (copter-path-flight). The copter's real ScriptPlayer exists from
         // the create beat (`spawn_copter_sp` above — the game's `SP_Create` inside
         // `Copter_Create` 0x17d340), primed looping, hidden until this edge unhides it
-        // (`SP_HideObj(sp, 0)` [M 0x17dbb8 head]; docs/systems/copter-sp-hide.md).
+        // (`SP_HideObj(sp, 0)` [M 0x17dbb8 head]; docs/systems/copter-sp-hide.md). While the
+        // flight flies, `SP_SetPosRot(*(rec+0x2c), obj+0x90)` [M Copter_Move 0x17d628:115] puts
+        // the copter matrix on the SP player — its stream entities ride it.
+        // `explode_level` = GameState+0x12 ∈ {0x0700000b, 0x07000012} — the death goes to state 6
+        // there [M Copter_Update 0x17dbb8:360-363].
+        let explode_level = matches!(d.level, 0x0700_000b | 0x0700_0012);
+        let paths = self.copter_paths.clone();
         for c in &mut self.copters {
-            let len = self.scripts.lib.get(&c.scripts[1]).map(|n| n.length as u32).unwrap_or(0);
-            let (_, _, unhide) = c.tick(&mut self.channels, len, frame);
+            let (unhide, posed) = c.update(&paths, &mut self.channels, frame, explode_level, &mut self.rng);
             if unhide { self.scripts.unhide_sp(c.placement); }
+            if posed { self.scripts.pose_copter_sp(c.placement, c.matrix); }
         }
         // The script players' tick head (the create-time load beat — the game does it during the
         // level load [M 0x1db9a8:81-86]): the players THEMSELVES update from the control walk
