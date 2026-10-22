@@ -2833,16 +2833,20 @@ impl App {
         use menu::Action as MA;
         let fe = self.fe.as_mut().unwrap();
         // State 6 (the briefings/outros): only the skip action matters [M GameFlow_Main 0x1c98c8
-        // case 6 reads Input_Action(-1, 0x19, 1) and nothing else — the menu pages are not
-        // up during a movie]. The port's Confirm keys (Enter/Space) stand in for
-        // the pad's X/Start [S docs/systems/input.md §3]. The front-end intro run is NOT state 6:
+        // case 6:145-149 — it reads Input_Action(-1, 0x19, 1) and psiMovieFinished and nothing
+        // else; the menu pages are not up during a movie]. The game's skip button is action
+        // 0x19 = R1/D-pad-down, mask 0x840, pad 0 [M psiInput_MapInputs 0x10cd80:416]; the port
+        // binds those buttons' PC keys (ArrowDown/R) to the skip AT ONCE — case 6 has no time
+        // gate (App::app_key's front-end arm). The Confirm keys (Enter/Space) are NOT the game's
+        // skip button: the pad's confirm buttons (X/Start) never reach case 6, so binding them
+        // to the skip is the PC adapter's own convenience, kept behind the 1.0 s guard below so
+        // the press that picked the mission cannot skip its own briefing (the 2026-10-15
+        // playtest's double-tap) [S unverified as a game claim — the game needs no guard because
+        // its skip key is disjoint from its pick keys]. The front-end intro run is NOT state 6:
         // it reaches `fe.action`, which honours P_ESTHERO's 180-tick grace and the boot logos'
         // no-skip [M 0x215a50:6] (fe-audit: this intercept used to swallow the intro's skip).
         if fe.flow.get_state() == menu::ST_MOVIE {
-            // A movie can't be skipped in its first second on screen: the press that picked the
-            // mission (or a quick double-tap) used to skip its briefing before a frame showed
-            // [S — a port choice from the playtest; GameFlow case 6 itself skips at once,
-            // 0x1c98c8:146-150].
+            // The Confirm guard (the game's own 0x19 keys skip ungated in app_key):
             let shown = self.movie.as_ref().map_or(f32::MAX, |p| p.shown_for());
             if a == MA::Confirm && shown >= 1.0 { fe.flow.skip_movie(); }
             return;
@@ -5400,9 +5404,12 @@ impl App {
                 // Script_FFwd 0x1dac78]. Action 0x19 is bound to raw pad mask 0x840 — R1 (0x800) or
                 // D-pad DOWN (0x040), pad 0 only [M psiInput_MapInputs 0x10cd80:415-417] — so MOVEMENT
                 // NEVER SKIPS (the user's W press skipped the 07000007 Kimiko scene, 2026-10-12
-                // playtest). The port's keyboard stand-ins for that action: ArrowDown (the D-pad-down
-                // key) and R (R1). The viewer's dedicated keys keep their own functions and never skip;
-                // `--skip-cutscenes` (lib.rs 1556) still skips every tick as a dev override.
+                // playtest). The port maps that action to the same two buttons' PC keys: ArrowDown
+                // (the D-pad-down key) and R (R1) — a keyboard binding cannot carry [M]/[D]/[L]
+                // (the PS2's only input surface is the pad, which psiInput_MapInputs reads), so it
+                // is the port's documented input adapter (cutscene_skip_key; docs/systems/input.md
+                // §3 holds the pad side). The viewer's dedicated keys keep their own functions and
+                // never skip; `--skip-cutscenes` (lib.rs 1556) still skips every tick as a dev override.
                 if state == ElementState::Pressed && !repeat
                     && cutscene_skip_key(k)
                     && self.scene.sim.as_ref().is_some_and(|s| s.drones.scripts.cutscene_playing()) {
@@ -5429,12 +5436,30 @@ impl App {
                 // the MP confirm page started a second load of the same arena (playtest 1015-2231).
                 if state == ElementState::Pressed && self.fe.is_some() && self.async_load.is_some() { return false }
                 if state == ElementState::Pressed && self.fe.is_some() {
+                    // The game's own skip keys for state 6 (the briefing/outro movie): action 0x19
+                    // is R1/D-pad-down, mask 0x840, pad 0 [M psiInput_MapInputs 0x10cd80:416], and
+                    // GameFlow case 6 skips the movie THE MOMENT that action fires — Input_Action(-1,
+                    // 0x19, 1) with NO time gate [M GameFlow_Main 0x1c98c8:145-149]. The port binds
+                    // the same two buttons' PC keys (cutscene_skip_key) to that skip here, ungated —
+                    // the in-mission arm above already maps them when a script plays. Enter/Confirm
+                    // keeps its 1.0 s guard in menu_input (it is not the game's skip button).
+                    if !repeat
+                        && cutscene_skip_key(k)
+                        && self.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE)
+                    {
+                        if let Some(fe) = self.fe.as_mut() { fe.flow.skip_movie(); }
+                        return false
+                    }
                     // net-online-lobby: the join address page takes the raw keys FIRST — digits,
                     // dots and the colon type, Backspace deletes, Ctrl+C/Ctrl+V work the page's
                     // own clipboard — and every other press is swallowed, so the letter rows
                     // (W/A/S/D are the menu's own keys) never fire while an address is typed
-                    // [S docs/systems/net-online-lobby.md §2.2]. Enter/Escape still confirm and
-                    // back out below for the non-typing keys.
+                    // [D — the page is the port's own online surface: the shipped game has no net
+                    // layer at all (the ACTION.ELF symtab carries no socket/inet/htons/sockaddr
+                    // symbol; its only _bind/connection names are SIF-RPC, the multitap driver and
+                    // SFX listeners), so there is no game rule to port; the typing is the port's
+                    // documented protocol, docs/systems/net-online-lobby.md §2.2]. Enter/Escape
+                    // still confirm and back out below for the non-typing keys.
                     let ctrl = self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight);
                     // The host page's port row types digits too (Backspace deletes); its other keys
                     // (arrows, Enter, Esc) still drive the page below.
@@ -5479,12 +5504,16 @@ impl App {
                         return false
                     }
                     // create-save: the name page's typing — a typed letter/digit presses the
-                    // grid cell the game's own keyboard sends [M C_KEYBOARD 0x213a98 msg 0x4b:
-                    // the cell types the first byte of its text; the port's PC stand-in [S],
-                    // the grid stays the reference — docs/systems/profile-session.md], and
-                    // Backspace is the ← cell 1000 [M :39-42, the erase]. The other keys fall
-                    // to key_action below: Enter/Space press the focused cell (the ✓ holds the
-                    // focus on open [M 0x213790:47-48]), Esc backs out.
+                    // grid cell the game's own keyboard sends, and that cell types the FIRST BYTE
+                    // of its own text [M C_KEYBOARD_Handler 0x213a98:15 (the msg-0x4b entry),
+                    // :72-75 (the msg-0x2f read of the focused cell's text, whose first byte is
+                    // appended to the buffer)] — the port's typed key maps to the cell id and
+                    // routes through the same cn_press (cnname_char_key); a PC keyboard binding
+                    // cannot carry [M]/[D]/[L] (the pad's grid is the game's only entry surface),
+                    // so it is the port's documented adapter, the grid stays the reference —
+                    // docs/systems/profile-session.md. Backspace is the ← cell 1000 [M :39-42,
+                    // the erase]. The other keys fall to key_action below: Enter/Space press the
+                    // focused cell (the ✓ holds the focus on open [M 0x213790:47-48]), Esc backs out.
                     if self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::CnName && fe.cn_profile_mode) {
                         let fe = self.fe.as_mut().unwrap();
                         let consumed = match k {
@@ -5827,11 +5856,16 @@ impl ApplicationHandler for App {
                 }
             } else if self.grabbed && !self.noclip {
                 // microcam-wheel-zoom: while the right button (aim) is held and the held weapon can
-                // zoom, the wheel steps the zoom instead of switching [S the 2026-10-15 playtest:
-                // "have the scroll wheel do the zoom while you're right-clicking to aim in. And if
-                // you're not right-clicking, of course, weapon switch"]. Zoomable = the game's own
-                // scope flag +0x68 & 0x40 with a magnification above 1 [M weapon_data; the sim's
-                // zoom block gates on the same two]. Otherwise the wheel keeps switching weapons.
+                // zoom, the wheel steps the zoom instead of switching. The game's side: aiming a
+                // scoped weapon gates the zoom on weapon_data +0x68 & 0x40 [M Player_Weapon
+                // 0x1a24c8:195] and Player_Zoom 0x1a1a70 steps the magnification while action 6 —
+                // the zoom axis, read as an analog Input_Actionf [M 0x1a1a70:18-19; docs/systems/
+                // input.md §3 "zoom = action 6 in aim mode"] — is held. The PS2 pad has no wheel,
+                // so the binding cannot carry [M]/[D]/[L]: each wheel notch is the port's discrete
+                // stand-in for that analog axis (the 2026-10-15 playtest asked for it), and the
+                // zoomable gate below is the game's own scope flag + magnification-above-1 pair
+                // [M weapon_data 0x2bf150; the sim's zoom block gates on the same two]. Otherwise
+                // the wheel keeps switching weapons (the pre-feature behaviour).
                 let zoomable = self.scene.sim.as_ref().is_some_and(|s| {
                     wheel_steps_zoom(self.zoom, s.weapons.flags(s.gun.weapon as usize), s.weapons.zoom(s.gun.weapon as usize))
                 });
@@ -6638,7 +6672,10 @@ fn pause_objective_rows(sim: &scene::Sim) -> Vec<menu::PauseObjective> {
 /// window runs (playtest 1016: the briefing never showed, and no test ran this path). Returns false
 /// when no mission movie is due (the caller runs the page's aux loop instead).
 /// The PC-port "Rapid fire" option (`--rapid-fire`, or the dev window's Toggles page): every held
-/// weapon fires one round per tick from a full clip ([S] port-only — `Sim::rapid_fire`). Read into
+/// weapon fires one round per tick from a full clip — a documented port-only option, off = the
+/// game (the shipped game has no fire-rate control: the PS2's option screens carry no such row
+/// [D — the options census, standins-drone-926's report] and the symtab has no rapid concept; the
+/// game's cadence is the weapon data's own refire [M weapon_data]). Read into
 /// the sim before each local tick; never applied to an online match.
 pub static RAPID_FIRE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -6719,7 +6756,9 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
 }
 
 /// net-p2p: the reachability config for the app's real sessions — None with NF_NO_REACH=1 (LAN
-/// only); NF_STUN ("host:port,host:port") replaces the public STUN list [S net-p2p §1].
+/// only); NF_STUN ("host:port,host:port") replaces the public STUN list [D — the whole net layer
+/// is the port's: the shipped game's symtab carries no socket/inet symbol at all, so the env
+/// config is the port's documented protocol, net-p2p.md §1's own framing].
 fn reach_config() -> Option<nf_net::p2p::ReachConfig> {
     if std::env::var_os("NF_NO_REACH").is_some() { return None; }
     let mut cfg = nf_net::p2p::ReachConfig::default();
@@ -6742,7 +6781,9 @@ fn reach_config() -> Option<nf_net::p2p::ReachConfig> {
 
 /// net-cloud-lobby: the lobby service's URL — `NF_LOBBY_SERVICE`, else the `lobby_service = <url>`
 /// line of <config dir>/net.txt, else the built-in constant (empty until the user deploys = off).
-/// A player-set `nf-lobbyd` (`lobby_server =`) overrides it: None when the directory is set [S].
+/// A player-set `nf-lobbyd` (`lobby_server =`) overrides it: None when the directory is set
+/// [D — the game has no net layer (the symtab census), so this precedence is the port's own
+/// documented protocol, docs/systems/net-cloud-lobby.md "Override"].
 fn cloud_service_url(directory_set: bool) -> Option<String> {
     if directory_set { return None; }
     let raw = std::env::var("NF_LOBBY_SERVICE").ok().or_else(|| {
@@ -6754,7 +6795,9 @@ fn cloud_service_url(directory_set: bool) -> Option<String> {
 }
 
 /// The real sessions' net services: reachability (net-p2p) + the cloud meeting point
-/// (net-cloud-lobby, unless a player-set nf-lobbyd overrides it) [S].
+/// (net-cloud-lobby, unless a player-set nf-lobbyd overrides it) [D — both services are the
+/// port's own layer (the shipped game has none: the ACTION.ELF symtab carries no socket/inet
+/// symbol), documented in docs/systems/net-p2p.md + net-cloud-lobby.md].
 fn enable_net_services(p: &mpnet::SessionProxy) {
     let cfg = reach_config();
     if let Some(c) = &cfg { p.0.borrow_mut().enable_reach(c.clone()); }
@@ -6959,14 +7002,18 @@ mod headless_app_harness {
             if a.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE) { state6_frames += 1; }
             if a.movie.as_ref().is_some_and(|p| p.code() == 0x0710_0005) { saw_player = true; }
             // Ends when the front end closes (the resolve) or the real movie has shown
-            // 1.2 s (the skip gate opens at 1.0 [S the port's playtest guard]).
+            // 1.2 s (past the port's 1.0 s Confirm guard — the game's own skip has NO time gate
+            // [M GameFlow_Main 0x1c98c8:145-149]; the 1.0 guard is the port's Confirm adapter
+            // guard, menu_input, because Enter is the pick key, not the game's skip button).
             a.fe.is_none() || a.movie.as_ref().is_some_and(|p| p.code() == 0x0710_0005 && p.shown_for() >= 1.2)
         });
         // The hold is the game's only when a player can start: the on-foot ISO's PSS files
-        // are zero-length stubs [D /MOVIES/30_FPS — NoMovieData], the port's headless
-        // countdown pops state 6 on its first tick [S the documented stand-in], and no
-        // state-6 frame is observable between the fe ticks. briefing_plays_live pins the
-        // hold itself on a movie-bearing image.
+        // are zero-length stubs [D /MOVIES/30_FPS — NoMovieData], so the movie never starts —
+        // and the game's own no-movie path does the same thing the port's headless countdown
+        // does: psiStartBackgroundMovie leaves BGFMVPlaying 0 when the .pss fails to open
+        // [M 0x1081a8:41-50], psiMovieFinished is `BGFMVPlaying == 0` [M 0x1082e8:6], and case 6
+        // pops at once [M 0x1c98c8:145-149] — no state-6 frame is observable between the fe
+        // ticks. briefing_plays_live pins the hold itself on a movie-bearing image.
         // movie-sfx-volume: master's start takes the SFX master volume [M 0x116e18]; the
         // harness has no option file here — the boot default 100 [L 0x30c95c].
         let movie_data = crate::movie::Player::start(&iso, 0x0710_0005, 100).is_ok();
@@ -6977,7 +7024,10 @@ mod headless_app_harness {
             // plane held state 6 for real frames.
             assert!(state6_frames >= 30, "the briefing was cut before it played ({state6_frames} state-6 frames) [M 0x1c98c8 case 6 holds while BGFMVPlaying]");
             assert!(saw_player, "the briefing 07100005 never started [M psiStartBackgroundMovie 0x1081a8]");
-            // The skip (the game's action 0x19; the port's Confirm stand-in) resolves the
+            // The skip — the game's action 0x19, edge-read with NO time gate in case 6
+            // [M GameFlow_Main 0x1c98c8:145-149; the pad binding R1/D-pad-down mask 0x840, M
+            // psiInput_MapInputs 0x10cd80:416; the port binds ArrowDown/R ungated in app_key and
+            // Confirm behind the 1.0 guard in menu_input] — resolves the
             // phase-2 level and closes the front end [M 0x1d3560 + 0x1d6360 LoadState 2].
             h.key(KeyCode::Enter);
         }
@@ -6992,6 +7042,50 @@ mod headless_app_harness {
         assert!(!h.exit_requested, "the walk never asks to exit");
     }
 
+    /// (a2) The state-6 skip keys, ported from the game's rule: action 0x19 (R1/D-pad-down,
+    /// mask 0x840 [M psiInput_MapInputs 0x10cd80:416]) skips the briefing at ONCE — GameFlow
+    /// case 6 reads Input_Action(-1, 0x19, 1) with no time gate [M GameFlow_Main 0x1c98c8:145-149]
+    /// — and the port binds ArrowDown (the D-pad-down key) to that skip ungated (app_key's
+    /// front-end arm). Movies side: ArrowDown ends the hold while the movie is still young
+    /// (< 1.0 s, where the Confirm guard refuses) — fails on the stand-in, where ArrowDown was
+    /// Action::Down and died in menu_input's ST_MOVIE arm. Sister: Enter inside the 1.0 s guard
+    /// does NOT skip (the press that picked the mission must not skip its own briefing — the
+    /// neighbour arm this port sits next to). On the slim ISO the stub PSS never start a movie,
+    /// so state 6 pops at once with no key — the game's own no-movie path [M 0x1081a8:41-50 +
+    /// 0x1082e8:6 + 0x1c98c8:145-149], pinned by the resolve the test above already asserts.
+    #[test]
+    fn the_briefing_skips_on_the_games_own_keys_and_confirm_keeps_its_guard() {
+        let Some(iso) = std::env::var_os("NF_ISO") else { return; };
+        let iso = iso.to_string_lossy().to_string();
+        let movie_data = crate::movie::Player::start(&iso, 0x0710_0005, 100).is_ok();
+        #[cfg(feature = "movies")]
+        if movie_data {
+            // Fails on the stand-in: the ungated game skip key.
+            let mut h = HeadlessApp::boot(&iso);
+            h.walk_to_exchange(&iso);
+            assert!(h.pump(20.0, |a| a.movie.as_ref().is_some_and(|p| p.code() == 0x0710_0005 && p.shown_for() >= 0.2)),
+                "the briefing 07100005 never started playing");
+            h.key(KeyCode::ArrowDown);
+            let skipped = h.pump(8.0, |a| a.async_load.is_some() && a.fe.is_none());
+            assert!(skipped, "ArrowDown did not skip the young briefing (the game's action 0x19 skips at once [M 0x1c98c8:145-149])");
+            let loaded = h.pump(20.0, |a| a.level_code == 0x0700_0005 && a.async_load.is_none() && a.fe.is_none());
+            assert!(loaded, "the skip never resolved the level load");
+
+            // Sister (guards the Confirm neighbour): Enter inside the 1.0 s guard must NOT skip.
+            // The movie clock is wall time, so the press lands < 1.0 s after the pick.
+            let mut h2 = HeadlessApp::boot(&iso);
+            h2.walk_to_exchange(&iso);
+            assert!(h2.pump(20.0, |a| a.movie.as_ref().is_some_and(|p| p.code() == 0x0710_0005 && p.shown_for() >= 0.1)),
+                "the second briefing never started playing");
+            h2.key(KeyCode::Enter);
+            h2.frames(30);
+            assert!(h2.app.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE),
+                "Enter inside the 1.0 s guard skipped the briefing — the Confirm guard regressed");
+        }
+        #[cfg(not(feature = "movies"))]
+        let _ = movie_data;
+    }
+
     /// (b) Esc in a menu-started mission opens the pause page; Esc again resumes; the
     /// process never requests an exit. The old behaviour quit the game (level_code was
     /// only ever set from the command line, so the Esc arm saw no mission — the
@@ -7002,8 +7096,10 @@ mod headless_app_harness {
         let mut h = HeadlessApp::mission(iso.to_string_lossy().as_ref(), "07000005.bin");
         assert_eq!(h.app.level_code, 0x0700_0005, "the mission boot knows its level");
         h.frames(10);
-        // Esc #1: the pause page [S the game's Start pause; the game's gates: Player_Update
-        // 0x193600:72 — action 0x1e, GameState+0x36 == 0, ScriptCam == 0].
+        // Esc #1: the pause page — the port's Esc is the PC adapter for the game's Start pause
+        // (the pad has no Esc; the binding is the documented input adapter): the game's rule is
+        // action 0x1e gated on GameState+0x36 == 0 && ScriptCam == 0, opening page 0x4000004b +
+        // GS_PauseGame(1) [M Player_Update 0x193600:71-77].
         h.key(KeyCode::Escape);
         assert!(h.app.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::Pause),
             "Esc in the mission did not open the pause page");
