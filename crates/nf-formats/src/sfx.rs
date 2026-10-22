@@ -68,6 +68,10 @@ pub struct EffectGas {
 pub struct EffectRecord {
     /// +0x04: bullet-hole decal mesh hash; 0 = none (`Effect_Bullet`).
     pub decal: u32,
+    /// +0x10: the entity-gfx mesh id `Effect_Laser` 0x1cef38:59,80-83 hands to `Gas_Init` — 0 spawns
+    /// no laser-impact gas (11 of the 23 surfaces carry 0: NONE/CARPET/GRASS/EARTH/SAND/GRAVEL/SNOW/
+    /// both WATERs/FOLLAGE/FABRIC; the rest 0x02000215 [D EffectInfo@0x3037c0 read]).
+    pub gas_mesh: u32,
     /// +0x1a: `Effect_RicochetProb`'s N (0 = never; the roll is `Rand_Rand(N) & mask`).
     pub ricochet_n: u16,
     /// +0x1c: the ricochet reflection scalar, read as raw f32 bits by `Bullet_CollisionHandler`
@@ -125,6 +129,7 @@ impl SurfaceSounds {
             }).collect::<Result<Vec<_>>>()?;
             Ok(EffectRecord {
                 decal: b.u32(o + 4)?,
+                gas_mesh: b.u32(o + 0x10)?,
                 ricochet_n: b.u16(o + 0x1a)?,
                 restitution_bits: b.u32(o + 0x1c)?,
                 gas: [gas[0], gas[1], gas[2]],
@@ -141,6 +146,12 @@ impl SurfaceSounds {
     }
     /// The sound of `surface` (a `HITDATA+0x50` byte) in `column`; None for 0xFFFF / out of range.
     pub fn get(column: &[u16], surface: u8) -> Option<u32> { column.get((surface & 0x3f) as usize).copied().filter(|&v| v != 0xffff).map(|v| v as u32) }
+
+    /// `EffectInfo[(surface & 0x3f)] + 0x10` — the laser-impact gas mesh (`Effect_Laser` 0x1cef38:59,80-83;
+    /// 0 = the surface spawns no puff). Out-of-range surfaces read 0.
+    pub fn gas_mesh(&self, surface: u8) -> u32 {
+        self.effects.get((surface & 0x3f) as usize).map_or(0, |r| r.gas_mesh)
+    }
 }
 
 impl AmmoData {
