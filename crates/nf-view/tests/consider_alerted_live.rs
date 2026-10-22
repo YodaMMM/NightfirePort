@@ -188,3 +188,52 @@ fn the_05_one_second_gate_holds_then_opens() {
     assert_ne!(d.alert_bits & 0x10, 0, "the forced attack's ATTACK entry stamped bit 0x10 [M 0x148010:88]");
     assert_ne!(d.state, o_state, "the observer left {} for the attack chain, got {:#x}", format!("{o_state:#x}"), d.state);
 }
+
+/// fix-915: on 0700000c/0d an observer whose voice set (+0xD8) is 5 or 6 takes a source's alert
+/// with NO accept chain and NO sight test — the speech arm and its talking skip both branch to the
+/// effect block [M-dis 0x1764a8 / 0x1764c8 → 0x176684-0x1766c0]. Setup [S]: the observer is parked
+/// 60 units from the source (2500 < sq-dist — `DroneCanSeeDrone` 0x1760b0:45 would refuse); the
+/// pass must still latch it. Sister: a non-5/6 observer at the same spot is NOT alerted (it goes
+/// through the chain + sight and the distance refuses).
+#[test]
+fn the_0c_voice_5_6_observer_takes_the_alert_without_sight() {
+    let mut w = walker::Walker::new(nf_view::load(&iso(), "0700000c.bin", false).expect("load 0700000c"));
+    w.wait_enabled(6000, "level start");
+    w.wait(120);
+    let (s, o, other) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let ok = |d: &nf_game::drone::Drone| d.present && d.enabled && !d.corpse && d.watching && d.alert_bits == 0 && !d.alerted_by_drone && d.team != 2 && d.mode != 5;
+        let s = sim.drones.list.iter().position(|d| d.present && d.enabled && d.team == 1 && !d.corpse).expect("an enabled team-1 guard");
+        let o = sim.drones.list.iter().enumerate().position(|(i, d)| i != s && ok(d) && d.voice_type.wrapping_sub(5) < 2)
+            .expect("a watching voice-set 5/6 drone on 0700000c");
+        let other = sim.drones.list.iter().enumerate().position(|(i, d)| i != s && i != o && ok(d) && d.voice_type.wrapping_sub(5) >= 2);
+        (s, o, other)
+    };
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.drones.list[s].set_state(state::ATTACK);
+        let sp = sim.drones.list[s].pos;
+        for (k, i) in [Some(o), other].into_iter().flatten().enumerate() {
+            let d = &mut sim.drones.list[i];
+            d.pos = [sp[0] + 60.0, sp[1], sp[2] + 3.0 * k as f32];
+            d.velocity = [0.0; 3];
+        }
+    }
+    let mut hit = false;
+    for _ in 0..200u32 {
+        w.tick(Input::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let d = &sim.drones.list[o];
+        if d.alerted_by_drone { hit = true; break; }
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = &sim.drones.list[o];
+    assert!(hit, "the voice-5/6 observer 60 units away took the alert without sight [M-dis 0x1764a8/0x1764c8 → 0x176684]");
+    assert_eq!(d.assist_src, Some(s), "+0x528 = the source [M 0x1766c0 block]");
+    assert_ne!(d.alert_bits & 0x10_0000, 0, "the << 16 copy of the source's attack bit");
+    if let Some(x) = other {
+        let x = &sim.drones.list[x];
+        let far = { let (a, b) = (x.pos, sim.drones.list[s].pos); (a[0]-b[0]).powi(2) + (a[1]-b[1]).powi(2) + (a[2]-b[2]).powi(2) > 2500.0 };
+        if far { assert!(!x.alerted_by_drone || x.assist_src != Some(s), "sister: a non-5/6 observer beyond 50 units is refused by DroneCanSeeDrone [M 0x1760b0:45]"); }
+    }
+}

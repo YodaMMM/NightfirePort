@@ -13536,10 +13536,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // — repeated per considered pair, before the accept chain]. 07000007: while the
                 // interrogate latch (DAT_0029aa86 — `party_loud`) is set the observer's sight cone
                 // widens to 20.0 / π — sticky, nothing un-widens it [M 0x1764e4-0x17650c].
-                if matches!(d.level, 0x0700_000c | 0x0700_000d) {
+                // fix-915: on 0700000c/0d a voice-set-5/6 observer takes the source's alert WITHOUT the
+                // accept chain and WITHOUT `DroneCanSeeDrone`: both the speech arm and its talking
+                // skip branch to the effect block at 0x176684 [M-dis 0x1764a8 `bnel → 0x176684`,
+                // 0x1764c8 `beq zero,zero → 0x176684`; the effect 0x176684-0x1766c0 = +0x4F8 |=
+                // 0x20000, the << 16 copy, +0x528, Drone_Message 0x1f]. The return byte stays 0
+                // (no cone pass — not counted toward FindAlertedDrones' 5).
+                if matches!(d.level, 0x0700_000c | 0x0700_000d) && self.list[oi].voice_type.wrapping_sub(5) < 2 {
                     let o = &mut self.list[oi];
-                    if o.voice_type.wrapping_sub(5) < 2 && !o.voice_busy() { o.talks.push((0xd0, false)); }
-                } else if d.level == 0x0700_0007 && self.party_loud {
+                    if !o.voice_busy() { o.talks.push((0xd0, false)); }
+                    o.alerted_by_drone = true;      // +0x4F8 |= 0x20000
+                    o.assist_src = Some(si);        // +0x528 = source
+                    o.alert_bits |= b << 16;        // +0x4FC |= copy (no 07 retain off 07000007)
+                    o.send(d, &mut self.rng, frame, msg::FORCED_ATTACK); // Drone_Message(0x1f) — the 07 party gate is 07000007-only
+                    continue 'pairs;
+                }
+                if d.level == 0x0700_0007 && self.party_loud {
                     let o = &mut self.list[oi];
                     o.sight_range = 20.0;                 // 0x41a00000 [M 0x1764f4-0x176508]
                     o.half_fov = std::f32::consts::PI;    // 0x40490fdb [M 0x1764fc-0x17650c]
