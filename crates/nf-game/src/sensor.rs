@@ -490,6 +490,17 @@ mod tests {
     /// The apex-inside auto-hit [M Intersect_ConeSphere 0x1ee100:36-54]: with the apex inside the
     /// target sphere (d² ≤ r²) the game returns 1 without testing the cone — the sensor pointing
     /// AWAY from a target hugging it still detects. Fails on the pre-task tree.
+    /// The range gate's edge [M 0x1af4f0:60-62: `sqdist <= (range + obj+0x8C)^2`, the player's
+    /// +0x8C = 1.0576 L]: range 5 on the view axis detects at 6.0 and refuses at 6.5.
+    #[test]
+    fn range_gate_edge_is_range_plus_the_player_radius() {
+        let mut s = sensor_aiming([0.0, 0.0, 1.0]);
+        s.range = 5.0;
+        let world = CollisionWorld::empty();
+        assert!(s.in_cone(&world, &player_at([0.0, 0.0, 6.0])), "6.0 <= 5 + 1.0576: inside the gate");
+        assert!(!s.in_cone(&world, &player_at([0.0, 0.0, 6.5])), "sister: 6.5 > 6.0576 is refused");
+    }
+
     #[test]
     fn in_cone_hits_when_the_apex_is_inside_the_target_sphere() {
         let s = sensor_aiming([-1.0, 0.0, 0.0]);

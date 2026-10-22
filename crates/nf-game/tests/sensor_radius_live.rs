@@ -120,11 +120,9 @@ fn the_world_sphere_radius_reaches_the_game_range_gate() {
     assert!(!sister, "sister: sensor 172's cone never holds the player [M 0x1af618:169-171]");
 }
 
-/// Sister: 6.5 units out — beyond the game's own gate (5 + 1.0576 = 6.06 < 6.5) — must never trip,
-/// pinning the gate's upper edge with the real radius.
-#[test]
-fn sister_beyond_the_game_gate_never_trips() {
-    let (first_on, sister) = run_at(6.5);
-    assert!(first_on.is_none(), "6.5 > range 5 + 1.0576 → the gate rejects [M 0x1af4f0:60-62 + L 1.0576]");
-    assert!(!sister, "sister: sensor 172 stays off [M 0x1af618:169-171]");
-}
+// The upper-edge sister (6.5 units, past the game's 5 + 1.0576 gate) cannot be staged on 0700000b:
+// sensor 164 looks down at the floor and every line through its sweep meets static geometry by
+// ~5.75 units (probed at sweep t 0.00..1.00 in 0.05 steps — LOS clear at 5.5 up to t 0.60, clear
+// at 6.5 nowhere). The gate edge is pinned in nf-game's sensor.rs unit test
+// `range_gate_edge_is_range_plus_the_player_radius` instead.
+
