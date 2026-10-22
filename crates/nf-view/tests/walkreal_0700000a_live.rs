@@ -224,7 +224,7 @@ fn walk_leg_watched(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> b
 }
 
 #[test]
-#[ignore = "blocked by a port collision hole — 0700000a's west-block doorway (door #4 at (-19.5, 4.6), band x -18..-17.9, z 2..5) has no floor at the office slab and the legal player route falls through; task 941 (826e: the old route forced the drone-only ch-0x30 door and the presser's alarm is game-true [M 0x147c48:92-100, 0x162558, 0x168ea8])"]
+#[ignore = "the 1022w tree disproves the 826e premise (a dropped floor-brush class): the office floor at the west doorway IS y≈0 in the port's build and the game's own [D 0700000a ai_network: the patrol nodes 9/10/17/28 cross the doorway at disc y 0.0] — the '≈1.1 office slab' was the door pivot y (placements #83/#84/#536 all 1.09986, the door mesh spans ±1.1) misread as a floor. The ring legs walk clean (west_doorway_repro, 0 falls). The real residue: the walker's stuck→E-toggle closes the starts-open door #4 mid-leg and Bond hangs grounded=false at (+0.06 displaced rest) — the floor band [M Player_FeetOnPoint 0x194188:106: HITDATA+0xC − 0.1 <= BLData+0xCC] has only ~1.5 cm of margin at rest, so the door-slab push unhooks him; instrumented in the wedge dump, unfixed. Same threshold-strip class confirmed still missing on 07000001 (x 4.4..5.6, z 8.6..11.0 within 8.0)"]
 fn walk_office_floor_qworm_keyboard_hatch() {
     let mut w = load_carry(None);
     {
@@ -425,4 +425,102 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     }
     eprintln!("[0a] walked to the hatch in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
     for f in &w.report.falls { eprintln!("[0a] fall: {f}"); }
+}
+
+/// The task's repro (collision-0a-west-doorway-floor): walk the ring's west legs one by one and
+/// watch where Bond actually loses the floor — the real-path answer to the static probes.
+#[test]
+fn west_doorway_repro() {
+    let mut w = load_carry(None);
+    let legs: [([f32; 3], &str); 10] = [
+        ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
+        ([-7.5, 1.3, 16.5], "ring: the west hall north"),
+        ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
+        ([-20.5, 1.3, 5.5], "ring: down the west office block"),
+        ([-17.5, 1.3, 5.5], "ring: east of the west door"),
+        ([-17.5, 1.3, 2.5], "ring: down past the west door"),
+        ([-18.5, 1.3, 2.5], "ring: the door jink west"),
+        ([-18.5, 1.3, 0.5], "ring: down"),
+        ([-19.5, 1.3, 0.5], "ring: the west corridor jink 2"),
+        ([-21.5, 1.3, -1.5], "ring: down 2"),
+    ];
+    for (wp, label) in legs {
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(1.2), label);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let fl = sim.world.floor_below(p, 3.0);
+        eprintln!("[repro] after '{label}': pos ({:.2}, {:.2}, {:.2}) floor {fl:?} falls {}",
+            p[0], p[1], p[2], w.report.falls.len());
+        for f in &w.report.falls { eprintln!("[repro]   fall: {f}"); }
+        assert!(sim.drones.level_exit.is_none(), "the mission failed at '{label}'");
+    }
+}
+
+/// The wedge diagnosis: walk leg-5 then leg-6 with per-10-tick dumps of Bond's state, the cel,
+/// the scoped vs flat floor, and door #4's live sphere.
+#[test]
+fn west_doorway_wedge_dump() {
+    let mut w = load_carry(None);
+    for (wp, label) in [
+        ([-7.5f32, 1.3, 14.5], "a: security west door"),
+        ([-7.5, 1.3, 16.5], "b: west hall north"),
+        ([-20.5, 1.3, 16.5], "c: west offices north corridor"),
+        ([-20.5, 1.3, 5.5], "d: down the west office block"),
+        ([-17.5, 1.3, 5.5], "e: east of the west door"),
+    ] {
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(1.2), label);
+    }
+    // Leg-6 manually: tick with forward input toward (−17.5, 2.5), dumping every 10 ticks while
+    // ungrounded.
+    let to = [-17.5f32, 2.5];
+    let mut ungrounded_ticks = 0u32;
+    let (mut last_sample, mut sample_at) = (w.scene.sim.as_ref().unwrap().bond.pos, 0u32);
+    let mut press_e = false;
+    for tick in 0..1200u32 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let dx = to[0] - p[0];
+            let dz = to[1] - p[2];
+            let l = (dx * dx + dz * dz).sqrt();
+            if l < 1.2 { eprintln!("[wedge] arrived at tick {tick} pos ({:.2},{:.2},{:.2})", p[0], p[1], p[2]); return; }
+            // The walker's stuck bookkeeping: moved < 0.3 over 60 ticks -> press E at the nearest door (the toggle).
+            if tick - sample_at >= 60 {
+                let moved = ((p[0] - last_sample[0]).powi(2) + (p[2] - last_sample[2]).powi(2)).sqrt();
+                last_sample = p;
+                sample_at = tick;
+                if moved < 0.3 {
+                    let near = sim.drones.doors.list.iter().position(|d| ((d.pos[0] - p[0]).powi(2) + (d.pos[2] - p[2]).powi(2)).sqrt() < 2.8);
+                    press_e = near.is_some();
+                    if press_e { eprintln!("[wedge] t{tick}: stuck (moved {moved:.2}) — pressing E at the near door (the walker's toggle)"); }
+                }
+            }
+            let yaw = dx.atan2(dz);
+            let turn = { let mut d = yaw - sim.bond.yaw; while d > std::f32::consts::PI { d -= std::f32::consts::TAU; } while d < -std::f32::consts::PI { d += std::f32::consts::TAU; } d };
+            let input = nf_game::player::Input {
+                turn: turn.clamp(-0.08, 0.08),
+                forward: 1.0, strafe: 0.0,
+                ..Default::default()
+            };
+            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, press_e);
+            press_e = false;
+            let sim = w.scene.sim.as_ref().unwrap();
+            if !sim.bond.grounded { ungrounded_ticks += 1; }
+            if tick % 10 == 0 || (ungrounded_ticks > 30 && tick % 5 == 0) {
+                let p = sim.bond.pos;
+                let flat = sim.world.floor_below(p, 3.0);
+                let scoped = sim.world.segment_hit_scoped(sim.bond.cel, p, [p[0], p[1] - 2.0, p[2]]);
+                eprintln!("[wedge] t{tick} pos ({:.2},{:.2},{:.2}) grounded {} ungt{ungrounded_ticks} flat {flat:?} scoped {scoped:?} cel {:?}",
+                    p[0], p[1], p[2], sim.bond.grounded, sim.bond.cel);
+                for (di, d) in sim.drones.doors.list.iter().enumerate() {
+                    if (d.pos[0] + 19.5).abs() < 1.0 && (d.pos[2] - 4.6).abs() < 1.5 {
+                        eprintln!("[wedge]   door{di} state {:#x} pos01 {:.2} sph {:?} matrix row3 {:?}",
+                            d.state, d.pos01, d.sph, [d.matrix[3][0], d.matrix[3][1], d.matrix[3][2]]);
+                    }
+                }
+            }
+            if ungrounded_ticks > 400 { eprintln!("[wedge] the hang persists at tick {tick}"); return; }
+        }
+    }
+    eprintln!("[wedge] leg-6 budget out");
 }
