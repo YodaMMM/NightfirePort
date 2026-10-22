@@ -468,7 +468,8 @@ mod tests {
     /// the core every second frame and held `[wet,0]`/`[0,wet]`, leaving each channel silent half
     /// the time. The right side is fed purely through the shared-RAM diff cross-feed (a left-only
     /// send never writes the right rings directly), so it needs the cross-feed delay (~4.3k frames)
-    /// to wake up: warm up 6000 frames, then judge 10 000.
+    /// to wake up (~7.7k frames: the reverb address advances once per left/right pair, PCSX2
+    /// `RevbGetIndexer` `Cycles >> 1`): warm up 10 000 frames, then judge 10 000.
     #[test]
     fn the_reverb_returns_wet_on_both_sides_every_frame() {
         let mut rev = Reverb::new(48_000);
@@ -476,11 +477,11 @@ mod tests {
         // A 220 Hz sine, hard left: send[0] = s, send[1] = 0.
         let sine = |i: usize| ((i as f64 * 2.0 * std::f64::consts::PI * 220.0 / 48_000.0).sin() * 16_000.0) as i16;
         let mut frames = Vec::new();
-        for i in 0..16_000 {
+        for i in 0..20_000 {
             let s = sine(i) as f32 / 32_768.0;
             frames.push(rev.process([s, 0.0]));
         }
-        let steady = &frames[6_000..];
+        let steady = &frames[10_000..];
         // The defect signature: a frame with one side exactly 0 while the other is not (the old
         // code produced this on EVERY frame — 10 000 of 10 000). Allow a handful of legitimate
         // exact-zero crossings in 10 000 frames, measured against the old 50 %+ gap rate.

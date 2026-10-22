@@ -396,7 +396,11 @@ impl ReverbCore {
         self.up[!right as usize][bp] = 0;
         self.buf_pos = (bp + 1) & 63;
 
-        self.pos = (self.pos + 1) % n;
+        // The reverb address is `(Cycles >> 1) + offset` (PCSX2 `RevbGetIndexer`): the left and
+        // right ticks of a pair read/write the same position; it advances once per pair.
+        if right {
+            self.pos = (self.pos + 1) % n;
+        }
         self.tick += 1;
         self.upsample()
     }
@@ -550,25 +554,28 @@ mod tests {
         // FIR upsample on both channels.
         assert_eq!(core.tick([12345, 0]), [0, 0], "tick 0: the FIR window is empty, combs read a zeroed buffer");
         let mut tail = Vec::new();
-        for i in 0..4000 { let w = core.tick([0, 0]); if w != [0, 0] { tail.push((i + 1, w)); } }
+        for i in 0..9000 { let w = core.tick([0, 0]); if w != [0, 0] { tail.push((i + 1, w)); } }
         assert!(!tail.is_empty(), "the impulse must come back");
         assert!(tail.iter().all(|(_, w)| w[0].abs() <= 12345 && w[1].abs() <= 12345), "bounded");
         // Determinism: a fresh core repeats the exact same tail.
         let mut core2 = ReverbCore::new(ReverbRegs::from_mode(GAME_EFFECT_MODE), area);
         core2.tick([12345, 0]);
         let mut tail2 = Vec::new();
-        for i in 0..4000 { let w = core2.tick([0, 0]); if w != [0, 0] { tail2.push((i + 1, w)); } }
+        for i in 0..9000 { let w = core2.tick([0, 0]); if w != [0, 0] { tail2.push((i + 1, w)); } }
         assert_eq!(tail, tail2);
+        // Re-measured 2026-10-22 after the address fix (it advances once per L/R pair, PCSX2
+        // `RevbGetIndexer` `Cycles >> 1` — the first pins, 970/3859, were taken with it advancing
+        // every tick, i.e. every delay halved).
         // Pin the first ten returns (regression pins of the transcription; measured on this code —
         // the pre-signedness branch pinned a left-only tail with different numbers, which encoded
         // the u16 volume reads that PCSX2's s16 V_Reverb disproves). The left side returns first
         // (same/diff write-backs read back through the comb chain ~970 ticks in), the right side
         // only through the shared-RAM diff cross-feed (DIFF_L writes read at DIFF_R_SRC, 3859).
         assert_eq!(tail[..10], [
-            (970, [-1, 0]), (974, [-3, 0]), (976, [7, 0]), (978, [-21, 0]), (980, [47, 0]),
-            (982, [-104, 0]), (984, [228, 0]), (986, [-793, 0]), (987, [-1267, 0]), (988, [-793, 0]),
+            (1918, [-1, 0]), (1922, [-3, 0]), (1924, [7, 0]), (1926, [-20, 0]), (1928, [45, 0]),
+            (1930, [-98, 0]), (1932, [216, 0]), (1934, [-765, 0]), (1935, [-1267, 0]), (1936, [-892, 0]),
         ]);
-        assert_eq!(tail.iter().find(|(_, w)| w[1] != 0), Some(&(3859, [0, -1i16])));
+        assert_eq!(tail.iter().find(|(_, w)| w[1] != 0), Some(&(8533, [-2, -1i16])));
         assert_eq!(tail.iter().map(|(_, w)| w[0].abs().max(w[1].abs())).max(), Some(1462));
     }
 
@@ -631,5 +638,18 @@ mod tests {
         // The positive ones stay positive (sign-interpreted, not negated wholesale).
         assert!(s16(r.iir_vol) > 0 && s16(r.comb1_vol) > 0 && s16(r.comb3_vol) > 0);
         assert!(s16(r.apf1_vol) > 0 && s16(r.apf2_vol) > 0);
+    }
+
+    /// PCSX2 `RevbGetIndexer`: the address is `(Cycles >> 1) + offset` — both sides of a tick
+    /// pair share one position, so it advances once every two ticks.
+    #[test]
+    fn the_reverb_address_advances_once_per_left_right_pair() {
+        let mut c = ReverbCore::new(ReverbRegs::from_mode(GAME_EFFECT_MODE), game_area(0));
+        c.tick([0, 0]);
+        assert_eq!(c.pos, 0, "after the left tick the pair's address is unchanged");
+        c.tick([0, 0]);
+        assert_eq!(c.pos, 1, "after the right tick it advances by one");
+        for _ in 0..8 { c.tick([0, 0]); }
+        assert_eq!(c.pos, 5, "10 ticks = 5 pairs");
     }
 }
