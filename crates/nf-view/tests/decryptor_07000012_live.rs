@@ -128,6 +128,23 @@ fn decryptor_opens_the_kind0_lock_through_the_real_path_and_the_sisters_hold() {
         "40 released ticks reset the scan completely (prog {}, solved {})",
         sim.drones.locks[li2].scan_progress, sim.drones.locks[li2].scan_solved);
 
+    // --- Sister 4: the contact view lags the shot TWO ticks [M the frame order — the update pass
+    // (the fire, the bolt's birth) 0x1336f8:54-69 runs before Collide_Update 0x1ea398 (:238)
+    // writes the contact lists, and the fresh bolt's pick segment exists only from its first
+    // Bullet_update 0x12e7b0:98-110, so a shot at N lands in the (N+1) collide and Lock_Update
+    // reads it at N+2]. After the last shot the scan therefore RISES for two released ticks (the
+    // two residual contacts) and only decays on the third [M 0x1ae3d8:327-344]. The old stand-in
+    // banked the scan on the shot tick — progress decayed one tick early here.
+    for _ in 0..40 { aim_and_fire(sim, sim.drones.locks[li2].pos, spot2, true); }
+    let p0 = sim.drones.locks[li2].scan_progress;
+    assert!(p0 > 0 && p0 < 150, "the re-scan is mid-flight below the digit-0 threshold (prog {p0})");
+    for _ in 0..2 { aim_and_fire(sim, sim.drones.locks[li2].pos, spot2, false); }
+    assert_eq!(sim.drones.locks[li2].scan_progress, p0 + 2,
+        "the two residual contacts keep the scan rising two released ticks (the collide-after-update order)");
+    aim_and_fire(sim, sim.drones.locks[li2].pos, spot2, false);
+    assert_eq!(sim.drones.locks[li2].scan_progress, p0 - 2,
+        "the first −4 decay lands on the third released tick [M 0x1ae3d8:327-344]");
+
     // --- Sister 3: the laser-kind (record 0 == 1) lock ignores the decryptor [M :562].
     // A kind-1 lock beside Bond with its own out channel (200 — nothing else writes it here).
     let mut laser_lock = sim.drones.locks[li].clone();

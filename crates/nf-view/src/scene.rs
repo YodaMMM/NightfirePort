@@ -558,9 +558,16 @@ pub struct Sim {
     /// The Q-Decryptor's gate pick this tick — the lock index the use gate passed on
     /// [M Player_WeaponFiring 0x1a5460:551-578], `None` = the gate failed (or no decryptor out).
     pub decryptor_target: Option<usize>,
-    /// The lock the previous tick's decryptor shot scanned (the decay's skip marker —
-    /// docs/systems/decryptor.md's port model).
-    pub decryptor_scanned: Option<usize>,
+    /// The decryptor shot's scan record, one tick old: (lock index, the upgraded +3 flag). The
+    /// game's contact view lags the shot by TWO ticks — the update pass (the shot) runs before
+    /// `Collide_Update` writes the contact lists [M 0x1336f8:54-69 then :238], and the fresh
+    /// bolt's pick segment exists only from its first `Bullet_update` [M 0x12e7b0:98-110] — so
+    /// `Lock_Update` reads a shot's contact two ticks after it. This register is the pipe's
+    /// middle; `decryptor_scanned_lag` (two ticks old) is what the top-of-tick pass applies.
+    pub decryptor_scanned: Option<(usize, bool)>,
+    /// The decryptor scan record TWO ticks old — the game's contact view for this tick (see
+    /// `decryptor_scanned`). Field on its own line [WORKLOG lesson 4].
+    pub decryptor_scanned_lag: Option<(usize, bool)>,
     /// The laser watch's held-meter charge, 0–100 [S stand-in; M HUD_UpdateAmmoPane 0x19a7f0:160-176
     /// — the state-0xb pane reads a 0–100 value, not the clip percent; D the measured ~31/s drain].
     pub laser_charge: f32,
@@ -2327,15 +2334,31 @@ impl Sim {
         self.laser_beam = None;
         self.stunner_target = None;
         self.decryptor_target = None;
-        // The decrypt scan's decay [M Lock_Update 0x1ae3d8:327-344]: a lock in state 5 with NO
-        // contact bullet loses 4/tick (at 0 the scan resets). The port's scan contact runs on the
-        // shot tick (the fire block below), so the locks not scanned in the PREVIOUS tick decay
-        // here — one-tick-late at the release edge [S].
-        let scanned_prev = self.decryptor_scanned.take();
+        // The decrypt scan's contact and decay [M Lock_Update 0x1ae3d8:296-344]: the lock reads
+        // its own hitdata list (+0xD0) for a contact bullet — a contact decodes (+1, or +3 for
+        // the 0x57; the state-0 entry consumes its contact and resets the progress [M :179-189]),
+        // a state-5 lock with NO contact loses 4/tick (at 0 the scan resets). The game's contact
+        // view lags the shot by TWO ticks: the update pass (the fire, the bolt's birth)
+        // 0x1336f8:54-69 runs before Collide_Update 0x1ea398 (:238) writes the lists, and the
+        // fresh bolt's pick segment exists only from its first Bullet_update [M 0x12e7b0:98-110]
+        // — a shot at N lands in the (N+1) collide and Lock_Update reads it at N+2. The port
+        // keeps that lag: the fire block below only RECORDS the scan; THIS pass applies the
+        // record two ticks old and decays every other scanning lock. (The old stand-in banked
+        // the scan on the shot tick and skipped one decay tick — a two-tick phase lead mid-hold
+        // and a one-tick-early reset.)
+        let scanned_due = self.decryptor_scanned_lag.take();
+        self.decryptor_scanned_lag = self.decryptor_scanned.take();
         for (i, l) in self.drones.locks.iter_mut().enumerate() {
-            if l.scanning && scanned_prev != Some(i) {
-                let ch = &mut self.drones.channels;
-                l.decrypt_tick(0, false, ch, self.drones.frame);
+            match scanned_due.filter(|(li, _)| *li == i) {
+                Some((_, upgraded)) => {
+                    let ch = &mut self.drones.channels;
+                    l.decrypt_tick(1, upgraded, ch, self.drones.frame);
+                }
+                None if l.scanning => {
+                    let ch = &mut self.drones.channels;
+                    l.decrypt_tick(0, false, ch, self.drones.frame);
+                }
+                None => {}
             }
         }
         self.smoke.retain(|s| !s.dead());
@@ -4118,9 +4141,9 @@ impl Sim {
                     let pick = nf_game::gadget::pick_decryptor_lock(camera, vdir, root, &self.drones.locks, &self.world, range);
                     match pick {
                         Some(i) => {
-                            let frame = self.drones.frame + 1;
-                            self.drones.locks[i].decrypt_tick(1, upgraded, &mut self.drones.channels, frame);
-                            self.decryptor_scanned = Some(i);
+                            // Record only — the contact decodes two ticks from now (the game's
+                            // collide-after-update order, the top-of-tick pass above).
+                            self.decryptor_scanned = Some((i, upgraded));
                             self.decryptor_target = Some(i);
                         }
                         None => {
@@ -7996,6 +8019,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             mp_held: [2; nf_net::MAX_AGENTS],
             mp_fx: Default::default(),
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
+                // The decryptor contact pipe's second register (fields on their own lines, lesson 4).
+                decryptor_scanned_lag: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
                 prev_aiming: false,
