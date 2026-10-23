@@ -4733,6 +4733,10 @@ impl App {
                                     // 0x1a2cc0 has none either], so a port-only key would draw an
                                     // item Bond does not carry.
                                     goggles_action: false,
+                                    // The pack-flight toggle: the F key's press edge — the game's
+                                    // dev fly toggle is an input action [M Player_Update 0x193600
+                                    // disasm 0x193874-0x193880], so the port binds a key to it.
+                                    fly_toggle: self.just.remove(&KeyCode::KeyF),
                                 };
                                 (input, self.trigger, self.just.remove(&KeyCode::KeyR), self.just.remove(&KeyCode::KeyE))
                             };

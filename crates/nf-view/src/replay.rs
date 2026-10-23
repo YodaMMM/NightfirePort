@@ -82,6 +82,8 @@ impl TickInput {
             zoom_cycle: 0,
         
         goggles_action: false,
+        // Replays never carry the local toggle edge (the net-encoding precedent).
+        fly_toggle: false,
     };
         (input, self.trigger, self.reload, self.use_key)
     }

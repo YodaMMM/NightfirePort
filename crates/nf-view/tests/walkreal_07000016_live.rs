@@ -245,32 +245,50 @@ fn walk_arrival_to_the_chasers_spawn() {
 /// The finale tail: the mission completes ONLY through the KikoDeathButton #693 [D hash
 /// 020008c1]: the chaser's defeat raises nothing (param 12 = 0 [D]; the init-forced 0x90
 /// stand-in was removed in kiko-16-defeat), so this walk's kill-then-watch shape pins the REAL
-/// rule — ch 0x90 and ch 100 stay cold and the mission does not complete. PARKED on U-051
-/// (docs/UNKNOWNS.md): the ch-0xf3-gated HurtPoly-ShuttleLaunch #309 (type 2, 1000 damage [D
-/// params 0:2 1:0x3e8 2:0xf3]) goes live while this walk's Bond stands on the silo-pit floor
-/// (−23.2 — he crosses the ch-0x81 slab on the y-0.25 bridge, the launch chain plays out, and the
-/// pit floor is where both this walk and fix_finale_live's parked Bond end up), and the volume's
-/// 1000 damage kills him before the chaser's defeat — the walk observes the mission FAIL exit
-/// request instead of the kill. Open [L]: where the GAME's Bond stands when ch 243 rises, and when
-/// ch 243 rises — a fresh-boot PCSX2 watch of switch_channels[243] (0x26fc90+243) and Bond's
-/// position through the launch cinema settles whether the port's cinema-Bond placement or the
-/// volume's live window is wrong.
+/// rule — ch 0x90 and ch 100 stay cold and the mission does not complete.
+///
+/// The escape (level-16-jetpack-escape): the ch-0xf3-gated HurtPoly-ShuttleLaunch #309 (type 2,
+/// 1000 damage [D params 0:2 1:0x3e8 2:0xf3]) goes live at launch-script 0x0600090a stream-6
+/// ticks 1611..2170 [D] while this walk's Bond re-enables on the silo-pit floor (3.57, −22.76,
+/// −179.55 [D the pack cinema's single stream-8 key]; the pit floor −23.2 is inside the volume's
+/// y −24.1..−21.3 band [D]). The game's Bond survives on the pack flight — the fly substate 5
+/// ([M Player_SSScanMode 0x193098's fly arm; the dev toggle Input_Action(3,39,4) →
+/// debug_scanmode ^= 1 → ChangeSubState(5/0) [M 0x193600 disasm 0x193874-0x193880]; the shipped
+/// FLY-cheat entry C_CHCHFLY 0x215c70]), whose held jump/crouch thrust moves obj+0x34 by
+/// (a7−a8)·3.0·REC per tick [M 0x193098:121-124] — 3 units/s: Bond rises out of the volume's
+/// −21.3 top in ~0.5 s and hovers (the fly zeroes BL+0x50 [M 0x193098:126], no fall) until the
+/// window closes. The walk drives the same substate through the toggle input and the thrust.
 #[test]
-#[ignore = "U-051 ANSWERED (docs/systems/hurt-volumes.md): the volume window is 0x0600090a stream 6 ticks 1611..2170 [D] and the game's Bond escapes on the pack flight — the port has no jetpack substate, so pit-floor Bond dies; the re-seat stand-in is documented in fix_finale_live. The tail now pins the REAL defeat rule (the kill raises nothing; the button is the writer, kiko-16-defeat)"]
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(100);
-    // Straight to the launch (the walkreal-c positions: the objectives' route is covered by
-    // walk_arrival_to_the_chasers_spawn; this tail needs the chain + the fight only).
-    w.walk_to(walker::Wp::new(2.5, 1.0, -169.0).r(1.3), "door[4] through");
-    w.walk_to(walker::Wp::new(2.4, 1.0, -175.0).r(1.2), "the south room");
+    // The objectives' route is covered by walk_arrival_to_the_chasers_spawn; this tail walks the
+    // same proven legs (the shared helper) to the chain's head.
+    walk_the_launch_route(&mut w);
     w.skip_cutscenes = false;
     let chaser = {
         let mut found = None;
+        let mut flown = false;
         for _ in 0..6000u32 {
-            w.tick(Input::default(), false);
+            // The pack flight: once the cinema hands control back (Player_Enable 0x195498's
+            // teleport to the pit-floor key [M 0x195498 param_2 path]), Bond toggles the fly
+            // substate on (the game's own toggle path [M 0x193600:143-158]) and holds the jump
+            // thrust until he is ABOVE the volume's box top (y −21.3 [D #309 params]) — the
+            // escape the shipped game's pack buys, at the game's own 3.0/s climb [M 0x193098:121-124].
+            let mut input = Input::default();
+            let enabled = !w.scene.sim.as_ref().unwrap().disabled;
+            if enabled && !flown {
+                flown = true;
+                input.fly_toggle = true;
+            } else if enabled {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.bond.substate == nf_game::player::SS_FLY && sim.bond.pos[1] < -20.5 {
+                    input.lift = 1.0;
+                }
+            }
+            w.tick(input, false);
             let sim = w.scene.sim.as_ref().unwrap();
             // The chaser is the skin-0x1e dtype-0xf drone NOT in the death-ch 23..26 pit squad
             // (#294–297 [D]) — her param 12 is 0 [D #261] (the old 0x90 init stand-in is gone).
@@ -283,6 +301,18 @@ fn walk_the_chasers_defeat_completes_the_mission() {
         found.expect("the launch chain spawns the chaser (spawner #257, group 6 [D])")
     };
     let cpos = w.scene.sim.as_ref().unwrap().drones.list[chaser].pos;
+    // The window is cold by the spawn (ch 0xf3 dropped at launch-script tick 2170 [D]; the
+    // spawner writes ride at 2180 [D] — the disc's order puts the pulse before the spawners) —
+    // Bond toggles the fly off [M 0x193600:146-158's off arm] and the walk's gravity lands him
+    // back on the pit floor for the fight.
+    w.tick({ let mut i = Input::default(); i.fly_toggle = true; i }, false);
+    for _ in 0..120 { w.tick(Input::default(), false); }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.substate == nf_game::player::SS_WALK, "the fly toggle off returns the walk substate [M 0x193600:155]");
+        assert!(sim.drones.channels.on(0x81), "the launch chain ran to the spawners [D]");
+        assert!(!sim.drones.channels.on(0xf3) || sim.bond.pos[1] > -21.3, "Bond is outside the volume's box (y {:.2}) while ch 0xf3 is live", sim.bond.pos[1]);
+    }
     let _ = w.try_walk_to(walker::Wp::new(cpos[0], cpos[1] + 6.0, cpos[2] + 4.0).r(2.0), "the chaser's rim");
     assert!(w.shoot(chaser, "the chaser"), "the chaser dies to Bond's fire");
 
@@ -294,6 +324,88 @@ fn walk_the_chasers_defeat_completes_the_mission() {
         assert!(!sim.drones.channels.on(0x90), "the chaser's death raises ch 0x90 — her death channel is param 12 = 0 [D #261]; the writer is the switch #693 [D]");
         assert!(!sim.drones.channels.on(100), "mux #618 stays cold on the kill [D]");
         assert!(sim.drones.mission.status() != 6, "the mission does not complete on the kill [D AND #271 waits for the button]");
+    }
+}
+
+/// The proven launch route (walk_arrival_to_the_chasers_spawn's legs, verbatim): the corridor,
+/// the station detour (door[0]'s unlock), the descent, the trench bypass's east lane, the door
+/// panels, the silo plate and door[4] into the south room — the ch-0x81 touch trigger fires the
+/// launch chain. Shared by the tail walk and the volume sister.
+fn walk_the_launch_route(w: &mut Walker) {
+    let route: &[(&str, walker::Wp)] = &[
+        ("the corridor south", walker::Wp::new(4.3, 0.6, -72.5).r(1.2)),
+        ("door[7] through", walker::Wp::new(4.9, -0.1, -78.0).r(1.2)),
+        ("the lane east", walker::Wp::new(10.0, 0.0, -82.0).r(1.3)),
+        ("the lane south", walker::Wp::new(12.0, 0.0, -88.0).r(1.3)),
+        ("the ramp foot", walker::Wp::new(13.8, 0.0, -90.8).r(1.1)),
+        ("the ramp 1", walker::Wp::new(14.5, 0.6, -87.5).r(1.2)),
+        ("the ramp 2", walker::Wp::new(14.5, 2.4, -84.5).r(1.2)),
+        ("the ramp 3", walker::Wp::new(14.5, 4.6, -81.5).r(1.2)),
+        ("the ring east", walker::Wp::new(14.5, 5.9, -79.0).r(1.2)),
+        ("the ring 1", walker::Wp::new(6.0, 5.9, -78.5).r(1.4)),
+        ("the ring 2", walker::Wp::new(-4.0, 5.9, -79.0).r(1.4)),
+        ("the ring 3", walker::Wp::new(-11.0, 5.9, -81.0).r(1.4)),
+        ("the ring 4", walker::Wp::new(-13.0, 5.9, -86.0).r(1.4)),
+        ("the station west", walker::Wp::new(-16.5, 5.9, -88.0).r(1.3)),
+        ("the station south", walker::Wp::new(-16.3, 5.9, -93.5).r(1.2)),
+        ("the station E", walker::Wp::at(-15.2, 5.9, -94.6, walker::Act::Use { use_ticks: 120 }).r(1.2)),
+        ("the return 1", walker::Wp::new(-16.3, 5.9, -89.0).r(1.3)),
+        ("the return 2", walker::Wp::new(-13.0, 5.9, -85.0).r(1.4)),
+        ("the return 3", walker::Wp::new(-10.0, 5.9, -81.0).r(1.4)),
+        ("the return 4", walker::Wp::new(-4.0, 5.9, -79.0).r(1.4)),
+        ("the return 5", walker::Wp::new(6.0, 5.9, -78.5).r(1.4)),
+        ("the return 6", walker::Wp::new(14.5, 5.9, -79.0).r(1.2)),
+        ("the descent 1", walker::Wp::new(14.5, 4.6, -82.0).r(1.2)),
+        ("the descent 2", walker::Wp::new(14.5, 2.4, -85.0).r(1.2)),
+        ("the descent 3", walker::Wp::new(14.5, 0.6, -88.0).r(1.2)),
+        ("the east lane south", walker::Wp::new(9.5, 0.0, -100.0).r(1.6)),
+        ("the trench's west end", walker::Wp::new(4.0, 0.0, -108.0).r(1.6)),
+        ("door[0]'s west approach", walker::Wp::new(2.3, 0.0, -110.0).r(0.7)),
+        ("door[0]'s threshold", walker::Wp::new(2.3, 0.0, -113.2).r(0.7)),
+        ("door[0] through", walker::Wp::new(2.0, -0.1, -119.0).r(1.2)),
+        ("door[1] through", walker::Wp::new(2.0, -0.1, -132.0).r(1.2)),
+        ("door[3]'s panel", walker::Wp::at(3.4, 0.8, -141.5, walker::Act::Use { use_ticks: 90 }).r(0.8)),
+        ("door[3] off panel", walker::Wp::new(2.0, 0.0, -140.0).r(1.0)),
+        ("door[3] through", walker::Wp::new(2.0, -0.1, -147.0).r(1.2)),
+        ("door[2]'s panel", walker::Wp::at(3.4, 0.8, -151.9, walker::Act::Use { use_ticks: 90 }).r(0.8)),
+        ("door[2] off panel", walker::Wp::new(2.2, 0.0, -150.4).r(1.0)),
+        ("door[2] through", walker::Wp::new(2.2, -0.1, -151.5).r(1.2)),
+        ("the silo plate", walker::Wp::new(2.5, 0.3, -153.9).r(1.0)),
+        ("door[4]'s panel", walker::Wp::at(3.5, 1.0, -165.7, walker::Act::Use { use_ticks: 90 }).r(0.8)),
+        ("door[4] through", walker::Wp::new(2.5, 1.0, -169.0).r(1.3)),
+        ("the south room", walker::Wp::new(2.4, 1.0, -175.0).r(1.2)),
+    ];
+    w.walk_route(route);
+}
+
+/// Sister (the regression guard on the pack flight): the SAME re-enable on the pit floor with the
+/// fly toggle NEVER pressed — the volume's 1000 damage kills Bond in its ch-0xf3 window and the
+/// mission takes the death fail ([M Mission_Update 0x182c60:35-43 — ch 0x62 → MissionState 3,
+/// LevelToEndTo 0x7000048]; the volume #309 is live at launch-script ticks 1611..2170 [D] and the
+/// pit floor (3.57, −22.76, −179.55 [D the cinema's stream-8 key]) is inside its y
+/// −24.1..−21.3 band [D #309 params]). Fails if the flight stops being the thing that saves him
+/// (a volume that stopped hurting, or a pit-floor Bond that survives without the substate).
+#[test]
+fn the_shuttle_launch_volume_kills_pit_floor_bond_without_the_pack_flight() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(100);
+    walk_the_launch_route(&mut w);
+    w.skip_cutscenes = false;
+    // Ride the chain out with NO fly toggle: the cinema re-enables Bond on the pit floor and the
+    // pulse kills him there.
+    let mut failed = false;
+    for _ in 0..5000u32 {
+        w.tick(Input::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.mission.status() == 3 { failed = true; break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(failed, "the mission never took the death fail (status {})", sim.drones.mission.status());
+        assert_eq!(sim.drones.mission.status(), 3, "the death fail is MissionState 3 [M 0x182c60:35-43]");
+        assert!(sim.bond.pos[1] > -24.5, "Bond died on the pit floor (y {:.2}), not mid-air", sim.bond.pos[1]);
     }
 }
 

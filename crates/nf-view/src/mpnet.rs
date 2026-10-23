@@ -158,6 +158,8 @@ pub fn to_player_input(i: &nf_net::Input) -> player::Input {
         lift: 0.0,
         stabilise: false,
         goggles_action: false,
+        // The pack-flight toggle is a local view-state edge (never net-encoded).
+        fly_toggle: false,
         // options-census: not net-encoded (the wire has no mode lane); the drain sets the
         // real value for the local player each tick, the game default (Toggle) for the remote arm.
         crouch_hold: false,

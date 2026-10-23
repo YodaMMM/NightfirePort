@@ -57,6 +57,24 @@ pub const SS_CREEP: u8 = 7;
 /// `Player_Zipline` 0x197f50 — the zipline ride (wire type 2) [M dispatch case 0xF].
 pub const SS_ZIPLINE: u8 = 0xf;
 
+/// The pack flight — the game's substate 5, `Player_SSScanMode` 0x193098's fly arm [M the dispatch
+/// jump table @0x2fbf90 (17 entries, read off the EE snapshot; case 5 → 0x193b84 →
+/// `Player_SSScanMode`)]: the bit-0-clear arm of the AnimObj-flag word turns Bond from the stick
+/// (the per-tick deltas −action·π·REC_FRAME_RATE into the yaw/pitch lanes, the body rotation
+/// post-multiplied [M 0x193098:57-63, 111-117]), eases the strafe/forward lanes (targets a1·0.225 /
+/// a2·0.5, factor 0.2, caps ±0.225/±0.5 [M 0x193098:64-110]) into the BL+0x10 velocity lanes the
+/// dispatch's integration transforms by the body matrix [M 0x193600:284-295], thrusts vertically
+/// `obj+0x34 += (action 7 − action 8)·3.0·REC_FRAME_RATE` (jump up / crouch down, the same held pair
+/// zero-g reads [M 0x193098:121-124]), zeroes the vertical velocity lane and `BL+0x50` (no fall;
+/// the fly carries its own momentum) and sets stance `BLData+0x130 = 2` [M 0x193098:55-56, 126].
+/// The game's shipped entries: the FLY cheat `C_CHCHFLY_Handler` 0x215c70 (msg 0x4b → the control's
+/// 0x40 query → ChangeSubState(5/0), `debug_clipmode` = the query) and the dev toggle
+/// `Input_Action(3, 39, 4)` → `debug_scanmode ^= 1` → ChangeSubState(5/0) [M 0x193600 disasm
+/// 0x193874-0x193880] — action 39 is written by NO controller style [M 0x10cd80 census], so the
+/// shipped path is the cheats menu. The 07000016 finale's pack flight rides this substate
+/// (docs/systems/hurt-volumes.md §U-051; the port's `debug_scanmode` mirror is `Bond::scanmode`).
+pub const SS_FLY: u8 = 5;
+
 /// The zero-g substates (dispatch cases 8/9 share the `Player_ZeroG` 0x192ab0 body [M 0x193600:
 /// 238-241]). 9 is the one the game ever sets: the 0700001b spacewalk's script handler answers its
 /// 0x4b event with `ChangeSubState(glb_players, 9 | 0)` [M C_CHCHZEROG 0x216388 — 9 when its msg
@@ -280,6 +298,14 @@ pub struct Input {
     /// goggle mode 0 → 1 (night) → 2 (x-ray) → 0 — unless the aim bit (+0x60 bit 0) is up.
     /// Keyboard: N. Local view state, not net-encoded (the `stabilise` precedent).
     pub goggles_action: bool,
+    /// The pack-flight toggle's press edge — the game's dev fly toggle reads action 39 with the
+    /// edge mode 4 on slot 3 and flips `debug_scanmode`, entering/exiting substate 5
+    /// [M Player_Update 0x193600 disasm 0x193874-0x193880: `Input_Action(3, 0x27, 4)` →
+    /// `debug_scanmode ^= 1` → `ChangeSubState(5)` on, `(0)` with the look re-derive off]. The
+    /// shipped controller styles never write action 39 [M 0x10cd80 census], so the port exposes
+    /// the toggle as this input edge (the walker drives it like any other button). Local view
+    /// state, not net-encoded (the `stabilise` precedent). Field on its own line (merge lesson 4).
+    pub fly_toggle: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -467,6 +493,19 @@ pub struct Bond {
     /// 0x187568:396-398 → `Player_SetCamMode` 0x195928 case 1, the game's only mode-1 writer).
     /// Field on its own line (merge lesson 4).
     pub orbit: Option<OrbitCam>,
+    /// The game's `debug_scanmode` global narrowed to this Bond — the pack-flight toggle state
+    /// ([M Player_Update 0x193600:143-158 flips it and enters/exits substate 5;
+    /// `Player_CollisionHandler` 0x1949a8:30 reads it for the collision skip]). The port runs the
+    /// fly substate WITH the collision pass (the jetpack flight stays inside the silo shaft; the
+    /// cheat's noclip skip is not ported — see the report). Field on its own line (merge lesson 4).
+    pub scanmode: bool,
+    /// `BL+0x10`/`+0x18` narrowed to the fly: the accumulated per-tick strafe/forward velocity
+    /// lanes the fly arm eases into (`+=` the smoothed action-1/2 lanes [M Player_SSScanMode
+    /// 0x193098:64-110]) and the integration transforms by the body matrix. The walk's `local`
+    /// pair reuses the same slots per tick, so the fly keeps its own (zeroed on entry by the
+    /// toggle's substate switch — the game's ChangeSubState 0x190630 clears the +0x10 quad's
+    /// siblings). Field on its own line (merge lesson 4).
+    pub fly_v: [f32; 2],
 }
 
 impl Bond {
@@ -494,6 +533,10 @@ impl Bond {
             // unported-front-end-menus-3: no orbit until Player_SetCamMode(BL, 1) (0x195928
             // case 1) arms it. Field on its own line (merge lesson 4).
             orbit: None,
+            // level-16-jetpack-escape: the fly toggle starts off (the game's debug_scanmode boot
+            // memset) and the fly lanes start at rest. Fields on their own lines (merge lesson 4).
+            scanmode: false,
+            fly_v: [0.0; 2],
         }
     }
 
@@ -601,6 +644,23 @@ impl Bond {
         self.regrab = self.regrab.saturating_sub(1);
         self.fall_damage = None;
         self.drown_damage = None;
+        // The pack-flight toggle, read BEFORE the substate dispatch exactly where the game reads
+        // it in Player_Update [M 0x193600 disasm 0x193874-0x193880: `Input_Action(3, 39, 4)` →
+        // `debug_scanmode ^= 1`; on → `ChangeSubState(5)`, off → the look re-derive +
+        // `ChangeSubState(0)`]. The game gates the read on `MPSettings._384_4_ == 0`
+        // (single-player [M 0x193600:142]) — the port's sim is single-player, so the gate holds.
+        if input.fly_toggle {
+            self.scanmode = !self.scanmode;
+            if self.scanmode {
+                self.substate = SS_FLY;
+                self.fly_v = [0.0; 2];
+            } else {
+                // The off arm re-derives the look from the body matrix (Cartesian→spherical, +0x58
+                // = 0) [M 0x193600:146-155]; the port's scalar mirror is already the view state.
+                self.pitch = 0.0;
+                self.substate = SS_WALK;
+            }
+        }
         match self.substate {
             SS_CLIMB => self.climb_tick(world, ctx, input),
             SS_GRAPPLE => self.grapple_tick(&input),
@@ -609,6 +669,7 @@ impl Bond {
             SS_CREEP => self.creep_tick(world, ctx, input),
             SS_ZIPLINE => self.zipline_tick(world, ctx, input),
             SS_ZEROG_8 | SS_ZEROG_9 => self.zerog_tick(world, ctx, input),
+            SS_FLY => self.fly_tick(world, ctx, input),
             _ => self.walk_tick(world, ctx, input),
         }
         if !(SS_ZEROG_8..=SS_ZEROG_9).contains(&self.substate) {
@@ -623,6 +684,13 @@ impl Bond {
     /// collision tail with the walk/swim move + gravity replaced.
     fn zerog_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
         self.physics_tick(world, ctx, input, false, true);
+    }
+
+    /// `Player_SSScanMode` 0x193098's fly arm (substate 5) through `physics_tick`'s collision tail
+    /// with the walk move + gravity replaced — the same shape the zero-g ride takes. The body is
+    /// documented on `SS_FLY`.
+    fn fly_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
+        self.physics_tick(world, ctx, input, false, false);
     }
 
     /// `Player_SSWalk` 0x192310 / `Player_SSCrouch` 0x1924c0 (the walk/crouch substates share this body in
@@ -1449,6 +1517,9 @@ impl Bond {
             // zero-g (the held analog pair) [M 0x192ab0:136-138]; the crouch toggle, the jump grab
             // and the headroom checks are walk-only [M 0x193600 dispatch — HandleJump is
             // SSWalk's; case 8/9 reads none of it].
+        } else if self.substate == SS_FLY {
+            // Same in the fly: the jump/crouch pair is the thrust [M Player_SSScanMode
+            // 0x193098:121-124]; the substate body reads no crouch toggle or jump grab.
         } else if !self.crouched && self.jump == 0 && input.crouch && self.lockout == 0 {
             self.crouched = true;
             self.cc = CROUCH_ROOT_HEIGHT;
@@ -1488,7 +1559,45 @@ impl Bond {
         // local-forward push (Player_Climb's ±0x18 write) rides along once.
         let vf = vf0 + self.push_fwd;
         self.push_fwd = 0.0;
-        if zero_g {
+        if self.substate == SS_FLY {
+            // ===== Player_SSScanMode 0x193098's fly arm (the pack flight, substate 5) =====
+            // :55-56 `BLData+0x14 = 0; BLData+0x130 = 2` — the +0x10 quad's vertical lane and the
+            // stance byte; the port zeroes `vel[1]` (the fall lane) and skips the walk's crouch
+            // bookkeeping by taking this branch at all.
+            self.vel[1] = 0.0;
+            // :57-63 the turn/look rates: the per-tick deltas −action·π·REC_FRAME_RATE assigned to
+            // the yaw/pitch lanes, the body rotation post-multiplied by RotY(delta_y)·RotX(delta_x)
+            // [M :111-117 — the a0 turn lane feeds RotMatrixY, the a5 look lane RotMatrixX]. The
+            // port's `pitch` is π/2 units (BL+0x8a8), so the delta divides by π/2.
+            self.yaw -= input.turn * std::f32::consts::PI / 60.0;
+            self.pitch = (self.pitch - input.look / 30.0).clamp(-1.0, 1.0);
+            // :64-110 the strafe/forward smoothers: targets a1·0.225 / a2·0.5, eased
+            // `v += (target − v)·0.2` with the no-overshoot snap and the ±0.225/±0.5 caps, then
+            // ACCUMULATED into the +0x10/+0x18 velocity lanes (disasm 0x193218-0x19322c:
+            // `lwc1 +0x20; lwc1 +0x10; add.s; swc1 +0x10` — the fly carries momentum). The
+            // smoother state lives in the +0x20/+0x28 slots — the walk's `local` pair, whose
+            // per-tick velocity the fly never reads.
+            let ease = |cur: f32, target: f32, cap: f32| -> f32 {
+                let v = cur + (target - cur) * 0.2;
+                if (target - cur) * (target - v) < 0.0 { target } else { v }.clamp(-cap, cap)
+            };
+            self.local[0] = ease(self.local[0], input.strafe.clamp(-1.0, 1.0) * 0.225, 0.225);
+            self.local[1] = ease(self.local[1], input.forward.clamp(-1.0, 1.0) * 0.5, 0.5);
+            self.fly_v[0] += self.local[0];
+            self.fly_v[1] += self.local[1];
+            // The integration [M 0x193600:284-295]: pos += matrix·(+0x10 quad) — the local lanes
+            // through the yaw rows (the walk's own basis: forward = (sin, 0, cos)).
+            let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
+            self.pos[0] += c * self.fly_v[0] + s * self.fly_v[1];
+            self.pos[2] += -s * self.fly_v[0] + c * self.fly_v[1];
+            // :121-124 the vertical thrust: `obj+0x34 += (action 7 − action 8)·3.0·REC_FRAME_RATE`
+            // — the held jump/crouch pair, a DIRECT position write (the port's `lift` carries the
+            // same (7,1)−(8,1) analog [M the field's doc]).
+            self.pos[1] += input.lift * 3.0 / 60.0;
+            // :126 `Vec_Zero(BLData+0x50)` — the world velocity zeroes every fly tick (no fall).
+            self.vel = [0.0; 3];
+            self.grounded = false;
+        } else if zero_g {
             // ===== Player_ZeroG 0x192ab0 (the spacewalk body) =====
             // First tick of the spell builds the orientation from the walk yaw/pitch:
             // ChangeSubState 9 touches no rotation [M 0x190630:59-63]; the walk matrix is
@@ -1602,6 +1711,9 @@ self.local = [vs / k, vf / k];
             // `vel` (BL+0x50) is zeroed every zero-g tick [M 0x192ab0:71] — WldGravity has no
             // reader left and nothing integrates; the tick's whole move was the matrix·thruster
             // add above.
+        } else if self.substate == SS_FLY {
+            // The fly zeroes BL+0x50 every tick [M Player_SSScanMode 0x193098:126] — no gravity,
+            // no fall; the tick's vertical move was the direct obj+0x34 thrust.
         } else if !self.grounded || self.floor_ny < 0.5 {
             // The fall rides the level's `WldGravity` [M Player_Collision 0x194df0:107/161,
             // `vel += WldGravity · REC_FRAME_RATE`] — −9.8/60 per tick on the default levels,

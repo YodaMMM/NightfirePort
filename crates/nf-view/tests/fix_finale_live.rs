@@ -79,23 +79,30 @@ fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
     // Bond (Mission_Update 0x182c60 case 1 folds ch 100 → state 6, but its ch-0x62 fail arm —
     // Player_SetHealth(0), MissionState 3, LevelToEndTo 0x7000048 [M 0x182c60:21-43] — outranks
     // it). So the game's player leaves the pit during the launch; the test walks the same route:
-    // once the cinema hands control back, Bond is re-seated on the upper floor the descent came
-    // from, outside the volume, for the rest of the chain. U-051 ANSWERED (docs/systems/
-    // hurt-volumes.md §U-051): the game's re-enable is the pit floor — the cinema's stream-8
-    // single key (3.57, −22.76, −179.55) [D pack_cinema_16_live] teleported by Player_Enable
-    // 0x195498 [M] — and the survival is the PACK FLIGHT in the 861-tick window (the pit door's
-    // ch 0xf0 opens at 2180, after the pulse [D]). The port has no jetpack substate; this re-seat
-    // is the documented stand-in for that flight [S], needed only because the test fires ch 0x81
-    // from the upper floor instead of walking Bond to the pack.
+    // once the cinema hands control back, Bond toggles the pack flight on (the game's fly
+    // substate 5 — Player_SSScanMode 0x193098's fly arm, entered by the game's own toggle
+    // Input_Action(3,39,4) → debug_scanmode ^= 1 → ChangeSubState(5/0) [M 0x193600 disasm
+    // 0x193874-0x193880]; the shipped FLY-cheat entry C_CHCHFLY 0x215c70) and holds the jump
+    // thrust — obj+0x34 += (a7−a8)·3.0·REC per tick [M 0x193098:121-124] — until he is above the
+    // volume's box top (y −21.3 [D #309]), then hovers (the fly zeroes BL+0x50 [M 0x193098:126])
+    // through the pulse. The old re-seat stand-in (bond.pos = the upper floor) is REMOVED: the
+    // flight is the ported game path (level-16-jetpack-escape).
     let chaser = {
         let mut found = None;
-        let mut re_seated = false;
+        let mut flown = false;
         for _ in 0..4000u32 {
-            scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
-            if !re_seated && !scene.sim.as_ref().unwrap().disabled {
-                re_seated = true;
-                scene.sim.as_mut().unwrap().bond.pos = [2.5, 1.2, -153.9];
+            let mut input = Input::default();
+            let enabled = !scene.sim.as_ref().unwrap().disabled;
+            if enabled && !flown {
+                flown = true;
+                input.fly_toggle = true;
+            } else if enabled {
+                let sim = scene.sim.as_ref().unwrap();
+                if sim.bond.substate == nf_game::player::SS_FLY && sim.bond.pos[1] < -20.5 {
+                    input.lift = 1.0;
+                }
             }
+            scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             let sim = scene.sim.as_ref().unwrap();
             // The chaser is the skin-0x1e dtype-0xf drone NOT in the death-ch 23..26 pit squad
             // (#294–297 [D]) — her param 12 is 0 [D #261], so this finds her with or without the
@@ -107,6 +114,23 @@ fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
         }
         found.expect("the launch chain spawns the chaser (spawner #257, group 6 [D])")
     };
+    // The flight's job is done — the pulse window is closed (ch 0xf3 dropped at launch-script
+    // tick 2170 [D]; the spawner writes ride at 2180 [D]). Bond toggles the fly off [M
+    // 0x193600:146-158's off arm] and lands; the fight phases below run from the upper floor,
+    // so the one reach re-seat to the spot the descent came from follows the walkreal-lift
+    // re-seat pattern (the button beats re-seat the same way) — the FLIGHT itself is the ported
+    // game path, not this re-seat.
+    scene.sim.as_mut().unwrap().step_bond({ let mut i = Input::default(); i.fly_toggle = true; i }, false, false, false);
+    {
+        // The re-seat lands the SAME tick as the toggle-off — the pit squad (spawned with the
+        // chaser [D]) holds the floor he drops from, and the fight phases below run from the
+        // upper floor the descent came from.
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [2.5, 1.2, -153.9];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.fly_v = [0.0; 2];
+    }
+    for _ in 0..60 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     // Sister first: a non-chaser drone's death (the pit squad's ch 23..26 [D]) never raises ch 0x90
     // on its own. Re-baselined for fix-spawner-p7: the launch chain's ch 0x15 is the group-1
     // spawner's KILL channel [L-verified 07000005], and 07000016 is a keep level, so the chain's
