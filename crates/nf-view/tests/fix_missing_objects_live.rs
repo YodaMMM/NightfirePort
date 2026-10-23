@@ -1,7 +1,7 @@
 //! fix-missing-objects: the fountain, the guard-room furniture and the lockers on 07000006 were
 //! not drawn; the 0700000c pylon was missing at a check spot.
 //!
-//! The cause (evidence in docs/reports/fix-missing-objects.md): `CollisionWorld::build_scoped`
+//! The cause: `CollisionWorld::build_scoped`
 //! attributed each instance's collision to the smallest-volume cell bbox containing its centre —
 //! the guard-room floor landed under the table's tiny bbox, the courtyard floor under the
 //! fountain's — so at `build_chains` time every candidate room's scoped bucket read empty and

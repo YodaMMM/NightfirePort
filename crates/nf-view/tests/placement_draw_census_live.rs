@@ -138,11 +138,11 @@ fn placement_key(p: &Placement) -> (u32, u32, [u64; 3], [u64; 3]) {
 /// pinned by (level, kind) below — a NEW (level, kind) row fails the test; a row DISAPPEARING
 /// (a kind fixed) must be removed from the list here.
 const KNOWN_MISSES: &[(&str, u8)] = &[
-    // The 2026-10-22 census (docs/reports/placement-draw-census.md carries the per-kind counts):
+    // The 2026-10-22 census:
     // script-entity kinds (0xd9 SP players, 0x29 Switch's SP model, 0x31 FuseBox's SP model) and
     // the glist kinds the port has no pass for yet (0x27 GT turret, 0x28 sensor, 0x3f creepwall,
-    // 0xf3 env tree, the trigger family 0xea/0xeb/0xf4 — the trigger/sensor rows need the main
-    // agent's live check: their glists may carry the game's no-draw bit 0x10, which the port's
+    // 0xf3 env tree, the trigger family 0xea/0xeb/0xf4 — the trigger/sensor rows need a
+    // live check: their glists may carry the game's no-draw bit 0x10, which the port's
     // obj.flags mirror may not reflect for them).
     ("07000001", 0x28), ("07000001", 0xd9),
     ("07000002", 0x28), ("07000002", 0xf3),

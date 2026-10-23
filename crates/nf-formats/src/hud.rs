@@ -297,8 +297,8 @@ impl Lang {
         let mut fixups = Vec::with_capacity(nf);
         for _ in 0..nf { fixups.push(b.u32(p)?); p += 4; }
         // The bank's text is CP-1252 (the title's legal line holds "© 2002" as the lone byte 0xA9), so a
-        // raw `str::from_utf8` in `bind` failed and the string came back empty — fix-menus' unresolved
-        // legal line (docs/reports/fix-menus.md "What's left" 7). Decode to UTF-8 here and remap every
+        // raw `str::from_utf8` in `bind` failed and the string came back empty — the unresolved
+        // legal line. Decode to UTF-8 here and remap every
         // offset, so `bind` never hits invalid UTF-8.
         let raw = &data[4..data_end];
         let mut decoded = Vec::with_capacity(raw.len() + 16);

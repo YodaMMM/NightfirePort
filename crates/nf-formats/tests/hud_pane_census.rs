@@ -111,7 +111,7 @@ fn hud_tables_contain_the_new_pane_sprite_tables() {
 /// [D] the M_TEXTBOX reachability census: the control factory `Manager_SendMessage`
 /// 0x21c858:206-208 builds a textbox (type 0xc) for any page-def control whose type byte is
 /// 0xc. This parses the shipped front-end menu def (kind-8 entry 08000002 in 07000048.bin)
-/// and counts them. The result is recorded in docs/reports/unported-hud-1.md; the trio's
+/// and counts them; the trio's
 /// reachability rides on what ships here.
 #[test]
 fn menu_def_textbox_census() {

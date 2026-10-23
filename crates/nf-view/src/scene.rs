@@ -741,16 +741,14 @@ pub struct Sim {
     /// page hasn't booted one. The msg-0x4b gate re-checks `Script_IsPlaying(FMVScript)`.
     pub fmv_script: Option<u32>,
     /// unported-front-end-menus-3: `Camera_Shear`'s phase (viewer+0x1e0) [M 0x1bba38:26-34] —
-    /// advances REC_FRAME_RATE per underwater frame, wrapped into [−π, π]. Field on its own
-    /// line (merge lesson 4).
+    /// advances REC_FRAME_RATE per underwater frame, wrapped into [−π, π].
     pub shear_phase: f32,
     /// unported-front-end-menus-3: the underwater post-FX byte `GlobalBlur` — 0x91 while the
     /// shear runs [M 0x1bba38:49], 0 otherwise (the port's only writer is this trigger). The
-    /// draw side reads it for the underwater blur. Field on its own line (merge lesson 4).
+    /// draw side reads it for the underwater blur.
     pub global_blur: u8,
     /// unported-front-end-menus-3: `Camera_ApplySwing`'s phase (viewer+0x204) [M 0x1bbf40:10]
-    /// — advances 2π/(FRAME_RATE·4) per swaying frame (the 4-second cycle). Field on its own
-    /// line (merge lesson 4).
+    /// — advances 2π/(FRAME_RATE·4) per swaying frame (the 4-second cycle).
     pub swing_phase: f32,
 }
 
@@ -5025,7 +5023,7 @@ impl Sim {
         // The beam: start = the FP model's bone-4 sight datum (AnimGetBoneWorldTrans +0x7e8, 4, 0),
         // direction = the bone matrix's local +Z (rows are the axes — tracer_matrix) scaled 100
         // (0x1a65d8:104-127), ray from the HEAD (Player_GetHeadPos) with the bit-0x8 query —
-        // Collide_RayIntersect 0x1ec690's u32 = 8 drops pass-flagged hits (docs/reports/foliage-bullets.md);
+        // Collide_RayIntersect 0x1ec690's u32 = 8 drops pass-flagged hits;
         // the end clamps to the hit (0x1a65d8:129-141) and the red dot sits hit + normal·0.01, aligned
         // to the normal (0x1a65d8:189-205). Player_WeaponFiring 0x1a5460:88-98 hides the sprites every
         // frame first — a None here is exactly that hidden state.
@@ -5527,8 +5525,8 @@ impl Sim {
     /// The emitter particles as camera-facing quads (`Emitter_Draw` 0x17b708 path A →
     /// `psiDrawParticleList` 0x122d50: a size-`def.size` rgba sprite per alive slot). The game sizes
     /// the sprite in screen space (`4·size / (PS2ParticleSize · PS2SnowSizeMult)`) — the port
-    /// takes the def size as the world-space half-extent, the way the snow quads do. The GAME'S SCALAR for the main
-    /// agent's render pass, EXACT [M 0x119910:81 `pDMA[4] = (uint)((1.0/(PS2ParticleSize·PS2SnowSizeMult))·4.0·size)`
+    /// takes the def size as the world-space half-extent, the way the snow quads do. The GAME'S SCALAR for the
+    /// render pass, EXACT [M 0x119910:81 `pDMA[4] = (uint)((1.0/(PS2ParticleSize·PS2SnowSizeMult))·4.0·size)`
     /// — a VU1 sprite scale word next to the ST=1.0 constants]: PS2ParticleSize = Ps2Far1·0.002386635 [M 0x11e2e8:67],
     /// PS2SnowSizeMult = (1/viewer+0x108)·(1/(viewport-H·0.002232143)) = 448/H [M 0x10b2b0:100-112] — ∝ 1/far and
     /// ∝ viewport height, i.e. a FIXED SCREEN-SPACE size, not a world extent; the ±size/2 world-space reading is the
@@ -8372,7 +8370,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 fmv_script: None,
                 hurts,
                 // unported-front-end-menus-3: the viewer's shear/swing phases and the underwater
-                // blur byte (fields on their own lines, merge lesson 4).
+                // blur byte.
                 shear_phase: 0.0,
                 global_blur: 0,
                 swing_phase: 0.0,
@@ -9025,8 +9023,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // port draws; the spin accumulates per tick, `obj+0x58 += def[3][0]·FRAME_RATE_MUL` in the
                     // effect updaters (gases_smoke 0x1ab2d0:50/85/185; the rate sign flips per gas type at
                     // def[3][0xc]). Not ported here (the blast's first-frame flash quad dominates and the puffs'
-                    // spin is sub-visible); a live check can calibrate the per-def rates from def[3] if the main
-                    // agent ports it.
+                    // spin is sub-visible); a live check can calibrate the per-def rates from def[3] if this is
+                    // ever ported.
                     if !self.script_billboards.contains(&hash) { return m; }
                     let s = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
                     let (r, u) = (opts.right, opts.up);

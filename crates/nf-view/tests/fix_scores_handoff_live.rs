@@ -110,10 +110,8 @@ fn truck_ride_finish_produces_the_results_rows() {
     // shot tally rescales it [M PlrStat_GetScore 0x1984b0 — the store row+0x6c ← row+0x64 (the
     // count), then the DAT_002bcc24 (PlrMissionStats+0x04 shots fired) != 0 guard overwrites
     // with hits × count / fired] — a NO-SHOT run shows 100% and scores the FULL target
-    // (P_NFSTATS 0x209938:57-66 displays that value verbatim; the capture's "Accuracy 100% /
-    // 100% / 50,000" — docs/reports/nfstats-model.md). (The pre-nfstats `else { 0 }` was the
-    // misport; the held 614 tree fixed the scorer but left this loop expecting 0 — the held
-    // failure.)
+    // (P_NFSTATS 0x209938:57-66 displays that value verbatim; a capture shows "Accuracy 100% /
+    // 100% / 50,000"). (The pre-nfstats `else { 0 }` was the misport.)
     assert_eq!(f.rows[5].value, 100, "no shots → the accuracy par copies [M 0x1984b0:74-78]");
     assert_eq!(f.rows[5].raw, expect_generic(f.rows[5].count, f.rows[5].value, f.rows[5].target),
         "row 5's raw per the generic formula — 100/100 of the par is the full target");

@@ -299,7 +299,7 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // the activation writes ch 0x3A [M SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1]. The
     // walk keeps the direct channel drive because the SP-write → AND-mux #741 (0x49) follow did
     // not fire in the session's probe within 6 ticks (the same write via set_channel does fire
-    // it — the open item in docs/reports/level-0a-complete.md); the route shape is unchanged.
+    // it — an open item); the route shape is unchanged.
     assert!(w.follow_nav_route([-6.0, 1.3, 14.0], "to the security centre"), "no nav route to the keyboard");
     w.scene.sim.as_mut().unwrap().drones.set_channel(0x3a);
     w.wait(6);

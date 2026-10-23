@@ -416,26 +416,24 @@ pub struct Bond {
     pub world_gravity: [f32; 3],
     /// audit-sound-calls: the jump sounds this tick produced, `(id, pos)` — the launch 0xA3 and
     /// the head bump 0xA3/0x5FB [`Player_HandleJump` 0x1916b0:184, 195-198]. Drained by the Sim
-    /// into `drones.audio` (the Sim's sound list) and cleared there. Field on its own line
-    /// (merge lesson 4).
+    /// into `drones.audio` (the Sim's sound list) and cleared there.
     pub sfx_out: Vec<(u32, V3)>,
     /// The zero-g orientation: obj+0x90's rotation rows (right/up/forward, the game's row-vector
     /// convention). `Player_ZeroG` composes the look rates body-frame (`m := m·R`, Concat [M
     /// 0x1e4a90]) and the auto-stabiliser slerps it world-up [M 0x192ab0:160-199]; the walk
     /// yaw/pitch scalars build it on entry (ChangeSubState 9 touches no rotation [M 0x190630]).
-    /// Field on its own line (merge lesson 4).
     pub zero_g_rot: [[f32; 3]; 3],
     /// `BL+0x24`: the vertical thruster's smoother — the (action 7 − action 8)·0.1 target eased
     /// at the game's 0.04 factor [M Player_ZeroG 0x192ab0:136-159]; the third lane the walk's
-    /// `local` pair (+0x20/+0x28) doesn't cover. Field on its own line (merge lesson 4).
+    /// `local` pair (+0x20/+0x28) doesn't cover.
     pub zero_g_lift: f32,
     /// `BL+0xd0`: the auto-stabiliser's tick window, armed to FRAME_RATE·1.5 = 90 by the
-    /// action-0xe read [M Player_ZeroG 0x192ab0:163-168]. Field on its own line (merge lesson 4).
+    /// action-0xe read [M Player_ZeroG 0x192ab0:163-168].
     pub stabiliser: u16,
     /// Port bookkeeping for the game's persistent orientation: `obj+0x90` is built from the walk
     /// yaw/pitch on entering the substates (ChangeSubState 8/9 touches no rotation [M 0x190630]) and
     /// `Player_ZeroG` composes it every tick [M 0x192ab0:136-199] — the game needs no flag; the port
-    /// tracks when its scalar `zero_g_rot` mirror is live (field on its own line, merge lesson 4).
+    /// tracks when its scalar `zero_g_rot` mirror is live.
     pub zero_g_active: bool,
     /// The post-integration, pre-push-out position — the game's hittest build point [M
     /// `Player_Collision` 0x194df0 builds BLData+0x760 from obj+0x30 AFTER `Player_Update`'s
@@ -447,7 +445,7 @@ pub struct Bond {
     /// on the pre-push-out segment. A free-standing ladder's own collision triangles hold the
     /// pushed-out body at exactly RADIUS (0.55) — that spot sits ON the strict refine boundary [M
     /// Intersect_CylGeom 0x109da0:447 `dist < radius`] and never grabs, while the game's pre-push
-    /// segment (the tick's inward move included) does. Field on its own line (merge lesson 4).
+    /// segment (the tick's inward move included) does.
     pub pre_collide: V3,
     /// `HITTEST+0x50` (BLData+0x790) — the pick-bit block's reference vector [M Intersect_CylGeom
     /// 0x109da0:478-480 loads it for `R = +0x50 − (B + push)`, bit ⟺ `R·axis < 0`, disasm
@@ -458,14 +456,12 @@ pub struct Bond {
     /// Collide_Intersect 0x1ebaa8:353-373 adds the world DeltaP to +0x10/+0x20/+0x30/+0x50/+0x60 per
     /// object pass with a hit]. The port feeds the accumulator but gates NO behaviour on it —
     /// `grounded` is `walkable || band` [M Player_FeetOnPoint 0x194188:106 + 0x194df0:104] — so the
-    /// open lifetime question (the accumulator reading, 0c3) rides no shipped behaviour; the main
-    /// agent's live pin of the bit block decides when it returns (the report's live checks). Field on
-    /// its own line (merge lesson 4).
+    /// open lifetime question (the accumulator reading, 0c3) rides no shipped behaviour; a live
+    /// pin of the bit block decides when it returns.
     pub pick_ref: V3,
     /// unported-front-end-menus-3: the `CAM_ORBIT` state (BLData+0xe0..0x104) [M `Camera_Orbit`
     /// 0x1bb828] — `Some` while cam_mode is 1, the GoldenEye-strike orbit (`MP_GoldenEyeUpdate`
     /// 0x187568:396-398 → `Player_SetCamMode` 0x195928 case 1, the game's only mode-1 writer).
-    /// Field on its own line (merge lesson 4).
     pub orbit: Option<OrbitCam>,
 }
 
@@ -492,7 +488,7 @@ impl Bond {
             // 0xA3/0x5FB at the head bump (:195-198).
             sfx_out: Vec::new(),
             // unported-front-end-menus-3: no orbit until Player_SetCamMode(BL, 1) (0x195928
-            // case 1) arms it. Field on its own line (merge lesson 4).
+            // case 1) arms it.
             orbit: None,
         }
     }

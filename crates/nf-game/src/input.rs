@@ -331,7 +331,7 @@ pub struct PadDriver {
     aim_x: AccelState,
     aim_y: AccelState,
     /// The scope branch's states [M 0x1a1d28:198-232]; driven once a scoped weapon reaches the driver
-    /// (the caller passes `scoped`; see docs/reports/fix-input.md).
+    /// (the caller passes `scoped`).
     #[allow(dead_code)]
     scope_x: AccelState,
     #[allow(dead_code)]

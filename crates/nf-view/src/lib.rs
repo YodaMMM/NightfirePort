@@ -1475,7 +1475,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // MP_GetSpawnPoint then Player_Init per slot], the shipped count topping out at the
             // 4 pad slots its menus offer; the bots clamp at 4 [M 0x183a50:135-137]. The port
             // extends the same walk to every human slot of the 16-cap settings (the documented
-            // mp-16-slots port extension, docs/reports/mp-16-slots.md) — the game's loop is the
+            // mp-16-slots port extension) — the game's loop is the
             // shape this walk ports.
             let humans = (m.settings.human_count as usize)
                 .clamp(1, nf_game::mp::MP_MAX_SLOTS)
@@ -1833,7 +1833,7 @@ fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
 /// at +0x120 from zeros, +0x1a0 identity matrix, +0x2c StackInfo (cap 12), the dirty byte +0x2b,
 /// +0x108 = 1.0f (the FOV/zoom factor) and the camera radii +0x1ec/+0x1f0 = 4.0f [M
 /// 0x1b9af0:13-62]. The port's single `Viewer` struct here + the per-frame camera construction is
-/// that init (the field list is in docs/reports/unported-front-end-menus-2.md).
+/// that init.
 /// `pub` so the headless tests drive the exact function the winit loop runs (the fix-gpu-skinning precedent).
 pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     let (pos, f) = (sim.bond.head(), sim.bond.look());
@@ -1973,8 +1973,8 @@ pub enum Blank { Always, WithFrame, Never }
 /// → `Player_Init` there too [M 0x1d6360:154], arming the 45-tick entry fade [M 0x1910f8:45], but
 /// the game's front end ticks it away under the menus while the port's front-end scene never
 /// ticks — the fade sat at full black OVER the title and every backdrop-less page, and (once
-/// doublecross-transitions chained it into this overlay) over every boot/briefing movie (user
-/// report 2026-10-20: "movies arent visually there … I can hear the audio").
+/// doublecross-transitions chained it into this overlay) over every boot/briefing movie (the
+/// audio played with no picture).
 pub fn scene_overlay_up(scene: &scene::Scene, movie_up: bool) -> bool {
     !movie_up && scene.sim.as_ref().map_or(true, |s| s.level & 0xff00_ffff != menu::FRONTEND_LEVEL)
 }
@@ -3529,8 +3529,8 @@ impl App {
 
     /// F8/F9: show the mission-complete / mission-failed results page for the loaded mission —
     /// a port-only debug hook (the game reaches the page from `Mission_Update` 0x182c60:74's
-    /// event, not from any key; the port's mission-event → results glue is listed in
-    /// docs/reports/fix-menus.md as remaining host work).
+    /// event, not from any key; the port's mission-event → results glue is separate
+    /// host work).
     /// mp-match-end: the local match's end handover — the `MP_Update` 0x184bd0 case-4 sequence
     /// [M :62-78: `GameState+0x1C = 0x40000033` + `ResetMap_LevelToLoad(0x7000048)` + the fade +
     /// the per-slot `Player_SetCamMode`/`GS_PausePlayer`] on the front end the SP end built

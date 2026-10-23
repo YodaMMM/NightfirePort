@@ -17,7 +17,7 @@
 //! GameState values are AnimDebugCreate and `Env_Tree_Create` 0x17c200's per-level branch [M
 //! the decompile-wide grep] — so the 0x7000043/49 arm (and `AnimObjectInitialPose`) is
 //! unreachable on the shipped path; the 0x7000041 arm IS the shipped briefing display model
-//! (the port's stand-in documented in docs/reports). The full citation chain also lives in
+//! (the port's stand-in). The full citation chain lives in
 //! crates/nf-view/src/menu.rs's calltree-main-26 block.
 //!
 //! Behaviour [M 001ac158]:

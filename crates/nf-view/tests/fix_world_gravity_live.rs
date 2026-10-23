@@ -132,8 +132,7 @@ fn default_level_keeps_the_fall() {
 /// Real path, the zero-g level: 0700001b's start carries p3 == 2 → the load must zero Bond's
 /// WldGravity (`Vec_Zero` at the game's spawn), the death pick must be the space death, and an
 /// airborne Bond must NOT fall. FAIL-FIRST: on the pre-branch tree (the hard-coded −9.8) the
-/// same one-tick setup read `vel[1] = −0.16333` — this test fails there (probe recorded in the
-/// report).
+/// same one-tick setup read `vel[1] = −0.16333` — this test fails there.
 #[test]
 fn zero_g_level_floats() {
     let Some(iso) = iso_path() else { eprintln!("skip: NF_ISO not set"); return };

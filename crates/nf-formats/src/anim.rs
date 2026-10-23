@@ -196,7 +196,7 @@ pub fn sinf(mut x: f32) -> f32 {
 /// (x, y, z, w) and a translation → row-vector matrix. The operation order is the decompile's; the arithmetic is
 /// the EE FPU's (doubling adds exact, products chopped, no-guard sums — G-024 closed: diff_calls proves the
 /// model bit-exact on the 40 recorded `Quat_QuatToMat` calls, and the 07000001 escort divergence it used to flip
-/// is root-caused in docs/reports/fix-exact-math-swap.md — the game's own math is this path).
+/// has another root cause — the game's own math is this path).
 pub fn quat_trans_to_mat(q: [f32; 4], t: [f32; 3]) -> Mat4 {
     use crate::ps2float as pf;
     let [x, y, z, w] = q;
@@ -217,7 +217,7 @@ pub fn quat_trans_to_mat(q: [f32; 4], t: [f32; 3]) -> Mat4 {
 /// Matrix composition as `psiBuildMatrixPalette` (0x111498) runs it on the VU0 (G-024 closed): the products
 /// truncate, the running sum keeps its guard bit (`ACC = a₀·b₀; ACC += a₁·b₁; …`). Measured against the EE
 /// snapshots by `nf-extract pose-check` (docs/formats/animation.md "Arithmetic"); the escort divergence is
-/// root-caused in docs/reports/fix-exact-math-swap.md.
+/// not caused by this path.
 pub fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
     use crate::ps2float::{add, mul};
     let mut r = [[0f32; 4]; 4];

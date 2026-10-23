@@ -5,7 +5,7 @@
 //! sounds, the muzzle flash, the shell eject, the tracer, the impact puff/spark/decal, the
 //! projectile model + trail, the explosion.
 //!
-//! The audit's findings (docs/reports/fix-weapon-fx-levels.md has the full table):
+//! The audit's findings:
 //! - the per-material impact set (EffectInfo decals/debris/gas meshes), the tracer 0x02000123 and
 //!   the blast script 0x06000052 ship redundantly in EVERY story archive [D disc census] — the
 //!   game's mechanism is per-level redundancy, not a shared boot pack (`AnimLoadFile` 0x1bdf40
@@ -316,8 +316,8 @@ fn a_foreign_rifle_fires_with_flash_casing_and_impacts_on_05() {
 /// ticks after an 80-tick draw wait, with and without `aiming`, through `Sim::step_bond` only.
 /// The same "foreign weapon's held fire spawns no round" class fix-weapon-sounds saw on
 /// 07000001 (its ignored AR test). The trail code itself is exercised by the exhaust-puff arm
-/// in drone.rs and pinned by the static sweep; the fire-path debug + the live check are in the
-/// report.
+/// in drone.rs and pinned by the static sweep; the fire-path live check is still
+/// open.
 #[test]
 #[ignore = "the MGL's held fire never releases headless on a foreign level (see the comment)"]
 fn a_foreign_launcher_leaves_a_smoke_trail_and_explodes_on_02() {

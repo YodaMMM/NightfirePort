@@ -6,7 +6,7 @@
 //! detects **`glb_players[0]` only** (disasm 0x1af644 loads 0x2d88e0, both `Sensor_InCone`
 //! calls 0x1af97c/0x1afae0 pass it; no code path feeds it an NPC), so the trip test drives the
 //! PLAYER through the cone — the census's "a drone walking through sets the out channel" is not
-//! what the binary does (docs/reports/sensor-volumes.md has the contradiction and the addresses).
+//! what the binary does (see the addresses below).
 //!
 //! Pinned here (all [M] unless noted):
 //! * sweeping clears the out channel (0x1af618:169-171) — ch 40 reads 0 before the trip;

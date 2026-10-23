@@ -6,7 +6,7 @@
 //! regression was fix-cutscenes2's
 //! first-writer-wins window composition (d907aba): the intro's face-track windows won the shared
 //! pose's low bones and their zero channels collapsed every script actor's root to the world
-//! origin — off-camera in every shot, on 07000007 and 07000008 (docs/reports/fix-cutscene-draw.md).
+//! origin — off-camera in every shot, on 07000007 and 07000008.
 //! fix-cutscene-draw gave the base (widest) track the bones it covers; these tests pin the 08
 //! scene against a re-appearance of that signature (a live-but-at-the-origin actor passes a
 //! liveness check and still shows nothing — the root must sit at the body track's library mark).

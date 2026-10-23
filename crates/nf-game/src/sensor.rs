@@ -10,7 +10,7 @@
 //! as the test object to both `Sensor_InCone` calls (0x1af97c sweep, 0x1afae0 track) — the only
 //! two call sites in the ELF, and no `switch_channels` writer is driven by NPC proximity
 //! (docs/systems/script-census.md's "trip-by-anything" plain-words summary is NOT what the binary
-//! does; see docs/reports/sensor-volumes.md). After 31 ticks (0x1e+) of seeing him it alerts
+//! does). After 31 ticks (0x1e+) of seeing him it alerts
 //! (state 1), tracks him with `Vec_Track` 0x1e20a0 at 0.05/tick, and after 2 s of continuous
 //! sight writes **1 to its out switch channel** (param 3) — the alarm signal doors/scripts and
 //! the drone AI (`DroneFunc_CheckAlarmRaised` 0x1453a8) listen for. Losing him for 61 ticks

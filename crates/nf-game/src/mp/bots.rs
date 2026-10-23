@@ -296,8 +296,7 @@ pub enum StateKind {
 use state::*;
 
 /// The 55 bot states: id, address [L ee_snapshot @0x29B300], name, and the
-/// phase-4 classification (kind from reading every .c in work/decomp/ACTION.ELF;
-/// details in docs/reports/mp-bots-data.md).
+/// classification (kind from reading every .c in work/decomp/ACTION.ELF).
 pub const BOT_STATES: [BotStateInfo; BOT_STATE_COUNT] = [
     BotStateInfo { id: BOT_INIT, addr: 0x1748C8, name: "BotInit", kind: StateKind::Thin },
     BotStateInfo { id: BOT_RESPAWN, addr: 0x174938, name: "BotRespawn", kind: StateKind::Thin },
@@ -1338,7 +1337,7 @@ const BODY_STEP: f32 = 0.105;
 /// `BOTSTATE_getStateType` is already above; the states the port dispatches to.
 mod st {
     pub use super::state::*;
-    /// The attack family ids the port handles (`docs/reports/mp-bots-data.md` inventory).
+    /// The attack family ids the port handles.
     pub const BOT_ATTACK_NO_OPPONENT: u8 = 0xD3; // Stub
     pub const BOT_ATTACK_STRAFE_AIM_LEFT: u8 = 0xD4; // Full — not ported (chooseCombatMove target)
     pub const BOT_ATTACK_STRAFE_AIM_RIGHT: u8 = 0xD5; // Full — not ported

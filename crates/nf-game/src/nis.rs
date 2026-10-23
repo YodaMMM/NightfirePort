@@ -1588,8 +1588,8 @@ impl Scripts {
         // once), the way a hidden `SP_CreateScriptPlayer` one-shot runs (`spawn_once`'s precedent, the
         // copter script [M 0x1dbc08's mode dispatch]). Without it the port's courtyard heads stay state
         // 3 (dark) forever, the alarm channel 55 can never rise and the guards never react. The real
-        // activation moment (which SP fires it in the game, and on which beat) is a live check in
-        // docs/reports/fix-searchlight-alarm.md. Pinned to the level by its own data: a class-0x22 head
+        // activation moment (which SP fires it in the game, and on which beat) is an open
+        // live check. Pinned to the level by its own data: a class-0x22 head
         // placement whose alarm channel is 55 AND the script in the lib.
         let light_boot = placements.iter().any(|p| p.flags & 0xff == 0xde
             && p.params.iter().any(|&(k, v)| k == 3 && v == 55))

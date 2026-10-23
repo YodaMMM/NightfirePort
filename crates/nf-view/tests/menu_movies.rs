@@ -123,7 +123,7 @@ fn the_page_aux_movie_map_comes_from_the_page_data() {
     // The task's headline mapping, from the data itself:
     assert_eq!(nf_view::menu::aux_movie_for(Page::Main.id()), 0x0733_0048, "the main menu's backdrop is its PAGE record's 0x07330048 [L]");
     // fe-audit: Page::Start is the title 0x40000009 [M 0x2029e0:321-323], whose record carries no aux;
-    // 0x07350048 belongs to P_LANGUAGE 0x40000034 [M 0x2029e0:302] (docs/reports/fix-menu-movies.md:16).
+    // 0x07350048 belongs to P_LANGUAGE 0x40000034 [M 0x2029e0:302].
     assert_eq!(Page::Start.id(), 0x4000_0009);
     assert_eq!(nf_view::menu::aux_movie_for(Page::Start.id()), 0, "the title has no backdrop movie [L the PAGE record]");
     assert_eq!(nf_view::menu::aux_movie_for(nf_view::menu::PAGE_LANGUAGE), 0x0735_0048, "P_LANGUAGE's backdrop is 0x07350048 [L]");

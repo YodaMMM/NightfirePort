@@ -584,7 +584,7 @@ impl MpScorePane {
                 // sprite 1/2 to 0x300018b/0x300018c, layer 0x1e [M 0x19f0a0:115-127]. Both icons
                 // take the same rect — the create's else-arm shifts sprites 1/2 by the same
                 // −0x18 and moves no x, so a team holding both items stacks them [M; the
-                // report's live check covers the overlap].
+                // overlap is an open live check].
                 for k in 0..2 {
                     if snap.viewer_team_ge[k] {
                         let tex = if k == 0 { 0x0300_018b } else { 0x0300_018c };

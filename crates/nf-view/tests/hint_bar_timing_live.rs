@@ -216,7 +216,7 @@ fn queued_messages_display_their_full_life() {
     let idle = Input::default();
     // Three pickup texts through the real drain path (`drones.taken` — the events Pickup_Handler
     // 0x18e650 emits), staggered 60 ticks apart; each carries the game's 180-tick life
-    // [M 0x18e650 shared tail, docs/reports/fix-pickups-ammo.md]. Distinct kinds → distinct texts.
+    // [M 0x18e650 shared tail]. Distinct kinds → distinct texts.
     let events = [nf_game::pickup::Taken::Armour, nf_game::pickup::Taken::Key { id: 7 }, nf_game::pickup::Taken::Bonus];
     let mut seen: Vec<(String, f32)> = Vec::new(); // (text, remaining at first sight)
     let mut last_text = String::new();

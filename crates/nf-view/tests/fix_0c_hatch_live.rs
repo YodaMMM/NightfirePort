@@ -120,7 +120,7 @@ fn the_warehouse_ventmesh_sweep_takes_the_game_rate_ticks() {
 /// how the real game gets Bond onto the duct). The drop-through itself WORKS — see the duct-top
 /// test below.
 #[test]
-#[ignore = "leg 1 (the ascent to the duct top) unidentified — the game's climb is ladder-only [M 0x196118] and the vent has no ladder [D]; live check filed in docs/reports/fix-0c-hatch.md"]
+#[ignore = "leg 1 (the ascent to the duct top) unidentified — the game's climb is ladder-only [M 0x196118] and the vent has no ladder [D]; an open live check"]
 fn bond_crouches_through_the_open_vent_to_the_display_ground() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     // Bond on the walkway before the vent, facing −z (yaw π: forward = (sin, ·, cos) = (0, ·, −1)).

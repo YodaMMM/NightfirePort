@@ -73,8 +73,8 @@ pub struct Grenade {
     pub phase: Option<Box<StuckGadget>>,
 }
 
-/// fix-satchel-tripbomb: the stuck state of a +0x100 satchel/tripbomb (`Grenade.phase` — one box, the
-/// shared-constructor merge lesson 4; only the satchel 0x3b and the tripbomb 0x3a carry it).
+/// fix-satchel-tripbomb: the stuck state of a +0x100 satchel/tripbomb (`Grenade.phase` — one box;
+/// only the satchel 0x3b and the tripbomb 0x3a carry it).
 #[derive(Clone, Debug)]
 pub struct StuckGadget {
     /// The surface normal the stick aligned to (HITDATA+0x10 [M 0x12ce80:256-266]).

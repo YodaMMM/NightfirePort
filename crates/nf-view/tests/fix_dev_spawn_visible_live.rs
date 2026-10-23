@@ -49,8 +49,8 @@ fn full_layout(scene: &Scene) -> nf_view::scene::SkinLayout {
     }
 }
 
-/// The spawn dry run: Bond at the 07000005 start looking at the snow a few metres ahead (the main
-/// agent's exact spot). Returns (scene, the spawned drone index, the bound character indices).
+/// The spawn dry run: Bond at the 07000005 start looking at the snow a few metres ahead (the exact
+/// repro spot). Returns (scene, the spawned drone index, the bound character indices).
 fn spawn_dry_run(action: MenuAction) -> (Scene, usize, Vec<usize>) {
     let mut scene = nf_view::load(&iso().as_deref().expect("NF_ISO"), "07000005.bin", false).expect("load 07000005");
     let mut dev = Dev::default();

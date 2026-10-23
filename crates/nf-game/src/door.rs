@@ -893,7 +893,7 @@ impl Doors {
         // chain — its own T1 "2.3-out must not open" pin rested on that misread; the master
         // merge's full suite failed the three real-path E tests because the mesh, a thin plane,
         // sits 1.2-3.0 from those use points while the door's world sphere is touched. See
-        // docs/systems/door-use.md and docs/reports/doors-remainder-4.md.)
+        // docs/systems/door-use.md.)
         // A door with NO resolved glist (glist 0 — no obj+0xd8) is E-DEAD, as in the game: the use
         // pick admits a 0x101-mask object only via `obj+0xd8 != 0 && *(obj+0xd8+8) != 0` [M
         // Collide_PickObj 0x1eae80:88-90 — Door_Create 0x136100 ORs obj+0xfa |= 0xc4, so the

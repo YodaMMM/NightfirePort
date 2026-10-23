@@ -2,7 +2,7 @@
 //!
 //! The game's `Explode_Create` 0x17cbd0 takes a per-source effect script (its `Script_Load` arg, a3
 //! at every call site) — the port's `spawn_blast` played the generic one-shot 0x06000052 for every
-//! explosion. The census (docs/reports/fix-blast-scripts.md):
+//! explosion. The census:
 //! - `Bullet_CollisionHandler` 0x12ce80 contact arm (+0x70 & 4): 0x6000052 [M disasm 0x12d088-0x12d0c0]
 //! - `Bullet_CollisionHandler` 0x12ce80 bolt arms (+0x70 & 0x100000 / & 0x200000): 0x60007c4 [M
 //!   disasm 0x12d0e8-0x12d124, 0x12d14c-0x12d188 — the Phoenix Samurai's bolt 0x32: radius 8,

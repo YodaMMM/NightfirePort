@@ -5,7 +5,7 @@
 //! grapple point the Q-Claw latches onto (placement #282 at (13.75, 32.29, 57.3), class 'Q' 0x51
 //! per fix-qclaw). The port drew the bracket only: the hook/pulley object was missing.
 //!
-//! Why the game draws it (the fix's evidence; docs/reports/fix-grapple-hook.md has the walk):
+//! Why the game draws it (the fix's evidence):
 //! - The dynamic-block parser resolves the placement's object and hands it to the creator as the
 //!   glist argument [M parsemap_block_map_data_dynamic 0x1d1b68: hashtable_getitem(hashcode), or
 //!   pCelList + index*0x50 when the hashcode is −1 — 05's placements are the −1/index branch [D]];

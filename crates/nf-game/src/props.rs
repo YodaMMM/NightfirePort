@@ -62,8 +62,7 @@ pub struct Destroy {
 pub struct Props {
     pub subjects: Vec<CamSubject>,
     pub destroy: Vec<Destroy>,
-    /// The mounted-gun implementations (`GunImp_Create` 0x131f20, placement 0x34). Own line
-    /// (merge lesson 4).
+    /// The mounted-gun implementations (`GunImp_Create` 0x131f20, placement 0x34).
     pub gunimps: Vec<crate::gunimp::GunImp>,
 
 }

@@ -219,7 +219,7 @@ pub const SPU_RATE: f64 = 48_000.0;
 /// the PS2 SPU2 uses the same table and formula — nocash documents the SPU2 pitch counter's bit 4–11 as the
 /// 8-bit interpolation index). Cross-check: the 512 entries are identical to duckstation's
 /// `gauss` table (src/core/spu.cpp, `GenerateInterpolationCoefficients`) — independent reference;
-/// PCSX2's SPU2 gaussian is the same table (recorded in docs/reports/spu-gaussian-reverb.md). The
+/// PCSX2's SPU2 gaussian is the same table. The
 /// table is slightly bugged on hardware: each four taps
 /// (gauss[i], gauss[0xFF−i], gauss[0x100+i], gauss[0x1FF−i]) should sum to 0x8000 but sum to 0x7F7F..0x7F81 —
 /// the `gauss_quads_sum_near_0x8000` test pins that property [M nocash psx-spx].

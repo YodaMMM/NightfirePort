@@ -3481,7 +3481,7 @@ impl FrontEnd {
             Page::Options => ["Screen adjust", "Controls", "Back"][row.min(2)].into(),
             // Edit Codename: New Codename, Default, then the card's codenames [L PCSX2 m29].
             Page::CnSelect if row >= 2 => self.profiles.get(row - 2).cloned().unwrap_or_default(),
-            Page::CnSelect => bind([0x29b, 0x211][row.min(1)]),   // def_codename 0x2e1b18 [L docs/reports/fix-save-profile.md]
+            Page::CnSelect => bind([0x29b, 0x211][row.min(1)]),   // def_codename 0x2e1b18 [L]
             Page::CnMenu => bind(CN_MENU[row.min(CN_MENU.len() - 1)].1),
             Page::CnName => String::new(), // the grid has no row labels (the model draws its own)
             Page::CnAdvanced | Page::CnMp | Page::CnAv | Page::CnControls => self.opt_rows().get(row).map_or(String::new(), |r| bind(r.label)),
@@ -8324,8 +8324,8 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
     }
     match fe.page {
         // mp-menu-flow: the multiplayer pages draw from the same getters the other wheels use
-        // (mp_row_preview/mp_row_desc/mp_row_locked + row_label); the drawing itself is the main
-        // agent's task (no drawing in this task's scope) — the overlay leaves them empty here.
+        // (mp_row_preview/mp_row_desc/mp_row_locked + row_label); the drawing itself is not
+        // done here — the overlay leaves them empty.
         // Select Scenario / Select Map [L pages 0x4000001a (header 0x2c3) / 0x40000013 (header 0x158): the codename
         // wheel's layout — panel, emblem, five wheel rows, the description plate, hint 0x218; PCSX2 m45-m48].
         Page::MpScenario | Page::MpMap => {

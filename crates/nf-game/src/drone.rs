@@ -1463,7 +1463,7 @@ pub struct Drone {
     /// `Drone+0x480`: per-tick velocity; gravity accumulates here and `pos += velocity · REC_FRAME_RATE` (`Drone_CollisionHandler`
     /// 0x140968, WORKLOG 0078). Zero on the ground; the down-ray (`Drone_FeetOnPoint`) sets the on-surface flag.
     pub velocity: V3,
-    // astronaut zero-G (fields on their own lines — merge lesson 4):
+    // astronaut zero-G:
     /// Flying thrust (+0x24): NDrone2_Move's flying branch thrusts toward `goal` while set
     /// [M 0x14eff8:52-68]; Combat/Hit/Death clear it, the strafe pick and Launch set it.
     pub thrust: bool,
@@ -1632,8 +1632,7 @@ fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
 /// mapping guess: `Quat_QuatToMat` 0x1e3e80:17-31 emits the column-form TRANSPOSE term by term
 /// (its R01 = 2xy+2zw = the standard R10, R02 = 2xz−2yw = the standard R20, R12 = 2yz+2xw = the
 /// standard R21 — verified against the decompile's arithmetic), and Rᵀ(−θ) = R(θ), so AA2Q(−θ)
-/// through QuatToMat lands exactly on the port's Rodrigues rotation. See
-/// docs/reports/exact-sine-sites-2.md (whose open item this closes).
+/// through QuatToMat lands exactly on the port's Rodrigues rotation.
 fn axis_angle_mat(axis: [f32; 3], ang: f32) -> nf_formats::anim::Mat4 {
     quat_quat_to_mat(quat_axis_angle_to_quat(axis, -ang))
 }
@@ -1736,9 +1735,9 @@ impl Drone {
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip, clip_max: clip,
             grenade_weapon, grenade_count, pending_grenade: false,
             shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: rng.rand(10000), lost_sight: true, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
-            // 952: the raw accuracy roll per shot, parallel to `shots` (own line — merge lesson 4).
+            // 952: the raw accuracy roll per shot, parallel to `shots`.
             shot_rolls: Vec::new(),
-            // drone-abseil-elevator: the +0x23 rope fields (own lines — merge lesson 4). `move_ok`
+            // drone-abseil-elevator: the +0x23 rope fields. `move_ok`
             // (+0x24) is set for every drone at DefaultInit 0x14b300:771; the rest start at the
             // game's fresh-allocation values.
             air: false,
@@ -1750,7 +1749,7 @@ impl Drone {
             hang_rand: 0,
             elevator_scan: false,
             elevator_latch: false,
-            // fix-progress tally outboxes (fields on their own lines — merge lesson 4):
+            // fix-progress tally outboxes:
             surrender_logged: false,
             hit_log: 0,
             detected_logged: false,
@@ -1798,10 +1797,10 @@ impl Drone {
             talk_step: 0, hostage_voice: 0, hostage_voice_clear: false,
             talk_script: 0, talk_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(), free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
-            // `DroneFunc_NearPlayerCollision`'s source array (own line — merge lesson 4):
+            // `DroneFunc_NearPlayerCollision`'s source array:
             dist_to_player: [100000.0; 4],
             velocity: [0.0; 3], in_air: false, on_surface: true,
-            // astronaut zero-G (fields on their own lines — merge lesson 4):
+            // astronaut zero-G:
             thrust: false,
             fly_speed: 0.075,
             velocity_damping: true,
@@ -1811,18 +1810,17 @@ impl Drone {
             melee_min_dist: 4.0, attack_hold: 0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
-            // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding (fields on
-            // their own lines — the shared-constructor collisions, merge lesson 4).
+            // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
-            // fix-room-sound: the foley one-shot outbox + the pain-grunt handle (own lines — merge lesson 4).
+            // fix-room-sound: the foley one-shot outbox + the pain-grunt handle.
             foley_reqs: Vec::new(), pain_grunt: None,
             sfx_reqs: Vec::new(),
-            // ai-points: the scared-run mode marker +0xC6 (own line — merge lesson 4).
+            // ai-points: the scared-run mode marker +0xC6.
             scared_run: false,
-            // fix-facial3: the blink driver state + the facial script slots (own line — merge lesson 4).
+            // fix-facial3: the blink driver state + the facial script slots.
             facial_state: 0, facial_timer: 0, facial_reappend: false, facial_idle: None, facial_blink: None, last_tick: 0,
             alert_block: alert_props.map_or(0.0, |w| nf_formats::drone::ALERTNESS_LEVELS[d.props.get(0x20, &w) as usize & 3]),
-            // fix-cover-remainder: the scary-object flee family (fields on their own lines — merge lesson 4).
+            // fix-cover-remainder: the scary-object flee family.
             scared: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
             // fix-anim-events: the EventFunc outboxes, and `+0x3E` (the anim datum's weapon byte
             // 0x1C / 0x1D, DefaultInit 0x14b300:801-811; the port keys it on the drone's weapon id —
@@ -1834,7 +1832,7 @@ impl Drone {
             // drawable gun — [D census #464-466], the guards 0xE.
             weapon_swap: param(10) as u8, pending_melee: None, pending_weapon_swap: false,
             recoil_weapon: weapon == 0x1c || weapon == 0x1d,
-            // glass-breach-guards-4 (own line — merge lesson 4).
+            // glass-breach-guards-4.
             scripted_move: false,
             // +0x174 — the shared target registry slot, allocated on first sight.
             target_id: 0xff,
@@ -2183,8 +2181,7 @@ impl Drone {
                     // ReachedDestNode 0x153358:74 defers msg 4 by one tick [M]; the game parks it in the
                     // global delayed pool (`Drone_SM_RouteMsg` 0x172128 enqueue, `Drone_SM_SendDelayedMsgs`
                     // 0x1759a0 drain, `Drone_SM_Init` 0x1757d0 0x400-node pool init) — the port models the
-                    // delay as this per-drone one-slot queue instead (deviation noted in
-                    // docs/reports/unported-guard-ai-other-5.md).
+                    // delay as this per-drone one-slot queue instead (a noted deviation).
                     self.delayed = Some((frame + 1, msg::IDLE_TIMEOUT));
                 } else {
                     self.last_wait = None;
@@ -2340,8 +2337,7 @@ impl Drone {
         // is reached, and the node-reacher here IS the mission-route owner: this port path runs only
         // on the kind-8 route assignment (the CivilianMission walk), whose game-side owner is the
         // type-0x0c drone the gate names — the same drone `walkreal_07000001_live` walks green.
-        // (07000001 is the only level with the 0x20 "Mayhew Route" nodes [D the nav census,
-        // docs/reports/fix-nav-remainder2.md:37].)
+        // (07000001 is the only level with the 0x20 "Mayhew Route" nodes [D the nav census].)
         if flags & 0x10000 != 0 { self.talks.push((0x44, false)); }
         if flags & 0x40000 != 0 { self.talks.push((0x46, false)); }
         if flags & 0x20000 != 0 { self.talks.push((0x45, false)); }
@@ -3063,8 +3059,8 @@ impl Drone {
         // drop + ChangeWeapon(1), AlertStatusSet(2), the Rand(2) fall anim 0x2e/0x2d — no
         // +0xF0/+0x4F8 write anywhere], so the game's re-enable of a disabled waiter rides the
         // message routing or the flash impact, unlocated; the port's `enabled = true` is the
-        // bridge that keeps him visible and hittable for the stun. LIVE CHECK for the main
-        // agent: gdbwatch a pre-spawn waiter's obj+0x4F8 (and obj+0xF0 & 0x30) through a
+        // bridge that keeps him visible and hittable for the stun. OPEN LIVE CHECK:
+        // gdbwatch a pre-spawn waiter's obj+0x4F8 (and obj+0xF0 & 0x30) through a
         // flashbang hit — EXPECT the AI-active bit 0x100 to set (and where) before the
         // StunGrenadeImpact ENTER dispatches.
         self.enabled = true;
@@ -4231,8 +4227,8 @@ impl Drone {
         })
     }
 
-    /// CivilianDoorGuard 0x31 (0x160648) — the door-guard pair on 07000007 [D the census in the
-    /// report]. The pairing + the zone read live in `Drones::door_guard_pass` (list access); this
+    /// CivilianDoorGuard 0x31 (0x160648) — the door-guard pair on 07000007 [D placement
+    /// census]. The pairing + the zone read live in `Drones::door_guard_pass` (list access); this
     /// handles the state machine: ENTER/EXIT/UPDATE/TIMER_C/impacts/alerts.
     fn handle_door_guard(&mut self, d: &Data, rng: &mut Rng, frame: u32, s: u8, m: u8) -> Option<bool> {
         use state::*;
@@ -5348,8 +5344,8 @@ impl Drone {
         // 2026-10-16: the abseil/elevator guards (`air`: the feet probe the abseil states poll as
         // on_surface, no gravity, no settle) and the astronaut (mode 0x1D: the same integration). The
         // ×0.98 damping is the SHARED tail's bit test, not a per-branch or mode gate: `+0x4F8 & 0x40 →
-        // Vec_MulR32(0.98)` after the integration [M 0x140968:139-141 — the merge-log's "damping
-        // astronaut-only [S]" read it as the 0x1D arm]; the bit is armed for every drone by the init
+        // Vec_MulR32(0.98)` after the integration [M 0x140968:139-141 — an earlier "damping
+        // astronaut-only [S]" note read it as the 0x1D arm]; the bit is armed for every drone by the init
         // bundle (DefaultInit 0x14b300:60 `| 0x801e2`) and cleared only by the astronaut death move
         // [M 0x156008:45] — so abseilers damp too. Runs for corpses too (the death drift [M 0x156008]:
         // AstronautDeath's enter calls it once [M 0x1747b8:21], +0x23 stays set, the bit clear makes the
@@ -10096,7 +10092,7 @@ pub const SWOOSH_POOL: usize = 512;
 #[derive(Clone, Debug)]
 pub struct PlayerBullet { pub pos: V3, pub dir: V3, pub speed: f32, pub travelled: f32, pub range: f32, pub damage: f32, pub weapon: u16, pub first: bool, pub dead: bool,
     /// fix-impacts: the ricochet count (`Bullet_CollisionHandler` 0x12d798's bounce counter, killed
-    /// at 3). Field on its own line (merge lesson 4).
+    /// at 3).
     pub bounces: u8,
     /// fix-weapon-modes: the weapon record's `+0x6C` carries the 0x20000 homing bit — `Bullet_update`
     /// 0x12e7b0:483 runs `Bullet_homing` 0x12f358 for those bullets (the AT-600 Scorpion's
@@ -10113,7 +10109,6 @@ pub struct PlayerBullet { pub pos: V3, pub dir: V3, pub speed: f32, pub travelle
     /// Repeater 0x11 (+0x6C = 0x808 [L ee_start_05.bin @ 0x2bf150 + 0x11·0x10C]) flies its lobbed arc
     /// with this bit while its +0x70 = 0x2 carries no bounce/stick/ricochet flag [M Bullet_CollisionHandler
     /// 0x12ce80 — the bounce block gates on +0x70 & 0x80, the stick arm on 0x100, the ricochet on 0x10].
-    /// Field on its own line (merge lesson 4).
     pub gravity: bool,
     /// fix-weapon-fire-modes: the weapon record's `+0x6C` carries the 0x4 GUIDED-CAMERA bit —
     /// `Bullet_init` 0x12c5a0:234-254 hands the view to the projectile: `Player_ChangeSubState
@@ -10128,10 +10123,9 @@ pub struct PlayerBullet { pub pos: V3, pub dir: V3, pub speed: f32, pub travelle
     /// `Bullet_update` 0x12e7b0:98-108 moves the voice with the rocket every tick and clears the
     /// handle when the driver finished it; `Bullet_Delete` 0x12e660:13-16 stops it on the object's
     /// delete (disasm 0x12e680 `lw a0, 0xf0(s2)` → `jal Sound_Stop` → `sw zero, 0xf0(s2)`).
-    /// rocket-sound-leak: on its own line (merge lesson 4).
     pub snd: crate::sound::Handle,
     /// `BU+0x38`: the current swoosh segment (an index into `Drones::swooshes`) for `+0x6C & 0x10000`
-    /// records [M Bullet_init 0x12c5a0:116-133]; rocket-swoosh, on its own line (merge lesson 4).
+    /// records [M Bullet_init 0x12c5a0:116-133]; rocket-swoosh.
     pub swoosh: Option<u16>,
     /// `obj+0xEC`: the spawn frame — `Bullet_DoTrails` chains a new segment when
     /// `(frame − born) % weapon+0x74 == 0` [M 0x12d890:208].
@@ -10548,8 +10542,7 @@ pub struct Drones {
     /// Impacts this tick (for effects).
     pub impacts: Vec<crate::bullet::BulletEvent>,
     /// fix-impacts: bullet impact effects — the 200-decal FIFO and the debris
-    /// (`Effect_Bullet` 0x1ce8a8, `Debris_Create` 0x1aaa00; docs/atlas/effect.md). Fields on their
-    /// own lines (merge lesson 4).
+    /// (`Effect_Bullet` 0x1ce8a8, `Debris_Create` 0x1aaa00; docs/atlas/effect.md).
     pub effects: crate::effect::Effects,
     /// fix-impacts: ejected shell casings (`Bullet_InitCasingLists` 0x12fd48's 32-slot pool,
     /// `crates/nf-game/src/casing.rs`).
@@ -10697,8 +10690,7 @@ pub struct Drones {
     /// the game's `UpdateMusicalEvents` runs every frame whether or not an output device exists).
     pub iop_section: i32,
     /// fix-grenade-throw: the smoke grenade's occluder clouds (`Occlude_Create(pos, 1200, 1)` 0x17ea80,
-    /// mesh 0x2000273, `Occlude_Update` 0x17eba0's 1200-tick countdown). Fields on their own lines
-    /// (merge lesson 4).
+    /// mesh 0x2000273, `Occlude_Update` 0x17eba0's 1200-tick countdown).
     pub smoke_clouds: Vec<crate::grenade::SmokeCloud>,
     /// fix-grenade-types: the LIVE player position, cached at the tick head — the stun loop's
     /// kept-down test is the game's live `DroneFunc_AnyoneNear` positional query [M 0x14a718 via
@@ -10897,7 +10889,7 @@ pub struct Drones {
     /// the options save carries it (LS_MakePlrSettings 0x1cd418 bit; the port's persisted
     /// `PlayerOptions::auto_equip_best`, profile.rs). The port's runtime default is the game's.
     pub auto_switch: bool,
-    /// options-census: the Advanced rows' gates (fields on their own lines — merge lesson 4).
+    /// options-census: the Advanced rows' gates.
     /// +0x08 crosshair [M HUD_UpdateCrossHair 0x19e6d0:96], +0x04 crouch mode [M
     /// Player_SSCrouch 0x1924c0:85], +0x0c near-flash [M View_SetupRenderModes_Tweak 0x1e5888:26],
     /// +0x0b health-pane fade gate [M Player_Update 0x193600:414]. Input_Init 0x17edd8 defaults.
@@ -10927,7 +10919,7 @@ pub struct Drones {
     pub sss: crate::ss::SsList,
     /// The sensors (placement 0x28, `Sensor_Create` 0x1af010 / `Sensor_Update` 0x1af618;
     /// crate::sensor): the security-camera cone detectors that write their out switch channel
-    /// after 2 s of sight (fields on their own lines — merge lesson 4).
+    /// after 2 s of sight.
     pub sensors: crate::sensor::Sensors,
     /// The sound triggers (placement 0xF9, `SoundTrigger_Create` 0x1b2628 / `SoundTrigger_Update`
     /// 0x1b2790; fix-06-alarm): the level's channel-gated emitters — 07000006's courtyard alarm
@@ -11027,8 +11019,7 @@ pub struct Drones {
     pub missile_deploy: [u8; 8],
     /// The GT turrets — the kind-0x27 placements (`GT_Create` 0x17ffa0, 41 disc-wide [D
     /// script-census.md:141]); the creator's param map in `crate::gt`. The turret behaviours
-    /// (GT_Update 0x180498, GT_Track 0x17f9c8, GT_ApplyDamage 0x1816d8) are the tracked gap
-    /// (docs/reports/script-ops-unported.md:78-91).
+    /// (GT_Update 0x180498, GT_Track 0x17f9c8, GT_ApplyDamage 0x1816d8) are a known gap.
     pub gt_turrets: Vec<crate::gt::GTurret>,
     /// The 0700001b space laser — the kind-0x38 placement (`Create_SpaceLaser` 0x1aa8b8, one
     /// disc-wide [D script-census.md:144]); the creator's param map in `crate::space_laser`.
@@ -11206,7 +11197,7 @@ impl Drones {
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
-            // fix-06-alarm (fields on their own lines — merge lesson 4).
+            // fix-06-alarm.
             sound_triggers: Default::default(),
             // The shared target registry (NPCGlobals DAT_00299110).
             // The sight-bark latches and the talk globals.
@@ -11222,17 +11213,16 @@ impl Drones {
             // level-0c-complete: the deferred use-key trigger half (see the field).
             use_trigger_request: None,
             node_doors: None,
-            // fix-nav-remainder (fields on their own lines — merge lesson 4).
+            // fix-nav-remainder.
             node_kicks: None,
             kicked_nodes: Default::default(),
-            // mp-site-damage-offline (fields on their own lines — merge lesson 4).
+            // mp-site-damage-offline.
             site_sphere: None,
             site_bullet_damage: 0.0,
             site_blast_hits: Vec::new(),
             gas: Default::default(),
             swooshes: Vec::new(),
-            // fix-death-restart: the death sequence + the fail-menu policy (fields on their own lines
-            // — the shared-constructor collisions, merge lesson 4).
+            // fix-death-restart: the death sequence + the fail-menu policy.
             letterbox: false, view_fade: None, view_fade_script: false, script_cam_prev: false, script_msgs: Vec::new(), text_flush: false,
             // subtitles-data: the fresh profile's Subtitles byte is Off [M profile.rs]; the host
             // wires the AV row (control 0x10000136) / profile flag into `subtitle_track.enabled`.
@@ -11254,32 +11244,29 @@ impl Drones {
             script_pickup_slots: Default::default(),
             script_pickup_follow: Vec::new(),
             script_pickup_of: HashMap::new(),
-            // fix-pickups-remainder: the pickup auto-switch request (fields on their own lines —
-            // merge lesson 4).
+            // fix-pickups-remainder: the pickup auto-switch request.
             weapon_switch_request: None,
             // pickups-g029: the option gate, the game's default (Input_Init 0x17edd8 writes 1;
-            // live 1 [L ee_start_05 0x2a38d2]). Fields on their own lines — merge lesson 4.
+            // live 1 [L ee_start_05 0x2a38d2]).
             auto_switch: true,
             // options-census: the Advanced rows' gates at Input_Init 0x17edd8's defaults
             // (crosshair/crouch/near-flash 1, fade 0); pain_alpha starts 1.0 [M 0x1910f8:127].
-            // Fields on their own lines — merge lesson 4.
             crosshair: true,
             crouch_toggle: true,
             near_flash: true,
             decay_gate: false,
             pain_alpha: 1.0,
-            // mp-bot-weapons (own line — merge lesson 4).
+            // mp-bot-weapons.
             mp_shared_pickups: false,
             worldobjs: Default::default(),
-            // fix-world-fx: the presentation FX (fields on their own lines — merge lesson 4).
+            // fix-world-fx: the presentation FX.
             fx: Default::default(),
-            // level-15-interactables: the mines (fields on their own lines — merge lesson 4).
+            // level-15-interactables: the mines.
             mines: Vec::new(),
             pending_world_impacts: Vec::new(),
             effects: crate::effect::Effects::new(),
             casings: crate::casing::Casings::new(),
-            // fix-progress: the tally/scoring layer and the runtime difficulty (fields on their
-            // own lines — the shared-constructor collisions, merge lesson 4).
+            // fix-progress: the tally/scoring layer and the runtime difficulty.
             progress: Default::default(),
             // Boot default 2: `bootup` 0x1c7e78:25 stores 2 to 0x2a3790 (`sw t0,40(s1)` @0x1c7f88 —
             // Ghidra's field name `GameState._40_4_` is DECIMAL 40 = +0x28, GameState base 0x2a3768).
@@ -11288,33 +11275,32 @@ impl Drones {
             // 0x1ffb90:22 writes 1) put 1 there [L ee_start_*.bin]; the direct-level load replays it
             // (scene.rs `drones.difficulty = 1`).
             difficulty: 2,
-            // fix-cover-remainder: the HandleExplosives queue (own line — merge lesson 4).
+            // fix-cover-remainder: the HandleExplosives queue.
             explosive_queue: Vec::new(),
             // fix-grenade-throw: the smoke grenade's occluder clouds (`Occlude_Create` 0x17ea80).
             smoke_clouds: Vec::new(),
-            // fix-satchel-tripbomb: the tripbomb beams (own line — merge lesson 4).
+            // fix-satchel-tripbomb: the tripbomb beams.
             tripbomb_beams: Vec::new(),
             // fix-sg5-casings: the caller's view-model gun bone for the next shot's eject (own line).
             eject_gun: None,
             eject_bone_now: None,
-            // sensor-volumes: the 0x28 security cameras (fields on their own lines — merge lesson 4).
+            // sensor-volumes: the 0x28 security cameras.
             sensors: Default::default(),
-            // drive-ptp: the PTP handover state (fields on their own lines — merge lesson 4).
+            // drive-ptp: the PTP handover state.
             driving_stats: Default::default(),
             driving_result: crate::ptp::DriveResult::Success,
             driving_return: None,
-            // frag-throw-timing2: the stun flash's recorded geometry (own line — merge lesson 4).
+            // frag-throw-timing2: the stun flash's recorded geometry.
             flash_probe: None,
             wrapper_end_timer: None,
-            // mayhew-end-transition: no hold at build (own line — merge lesson 4).
+            // mayhew-end-transition: no hold at build.
             exit_hold: None,
-            // mp-world-sync: offline until the Sim sets the bodies (own lines — merge lesson 4).
+            // mp-world-sync: offline until the Sim sets the bodies.
             net_bodies: None,
             net_takes: Vec::new(),
             net_use_triggers: Vec::new(),
             // doublecross-transitions: the entry fade arms on every level load (the game arms it
-            // in `Player_Init` on every `Player_Start` [M 0x1910f8:45, 0x1d6360:152]) — own line
-            // (merge lesson 4).
+            // in `Player_Init` on every `Player_Start` [M 0x1910f8:45, 0x1d6360:152]).
             spawn_fade: Some((45, 45)),
     };
         drones
@@ -12052,7 +12038,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// copter/vehicle/MP/GT/sensor/monitor/sub lists yet). `script` = the per-source effect script the
     /// caller passes (the game's a3): 0x6000052 from the fuse/contact call sites, 0x60007c4 from the
     /// Samurai bolt's 0x100000/0x200000 arms, the destroyable's type script from `Destroy_Smash`
-    /// [M each site's disasm; the census in docs/reports/fix-blast-scripts.md]. `scale` = the game's
+    /// [M each site's disasm]. `scale` = the game's
     /// f12 (SCRIPTINFO+0x94, the script player's scale): the 0x4/fuse callers pass radius, the bolt
     /// arms pass 1.0 [M 0x12d0ac / 0x12d0ec-0x12d0f0; fix-blast-scripts2]. scale = radius·0.06666667
     /// [M 0x17cbd0:84-106] is the object's obj+0xE8 field, NOT the script scale; its own Sound(0x3E)
@@ -15644,7 +15630,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             //   the escort forever (walkreal_07000001's repro: parked at (3.5, 6.3, 7.1) state 0x21,
             //   "no guard to clear" — the courtyard guards stay WAIT_SWITCH, enabled=false, outside
             //   the test's clearing filter) and the fix_mission_live shoji ping-pongs. The game's
-            //   ch-0x21 writer is the live check in docs/reports/fix-nav-remainder2.md; the outbox
+            //   ch-0x21 writer is an open live check; the outbox
             //   stays (the resolution proves the node dispatch), the state entry waits for it.
             let _ = dr.ally_wait_node.take();
             // The kick request (`NDrone2_KickObject` 0x14aa00): the bound ScriptPlayer's script
@@ -16761,7 +16747,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // 12.0, flee 14.0 [M 0x138b10:113-141 + 0x1431c0:122-152]. Per drone: fear prop 0x3A/0x3B [M 0x1435f0:30-34],
         // within the radius, and the object visible [M 0x1435f0:37-44 — DroneVision_ObjectVisibility
         // 0x1781a8 ≥ 0.7 (the ±e4/≤e8/<2 cone) + CanSeeObject(5,0); the port stands the cone in with the
-        // bare segment test here — deviation recorded in docs/reports/unported-guard-ai-other-5.md].
+        // bare segment test here — a noted deviation].
         let queued = std::mem::take(&mut self.explosive_queue);
         for (p, wt) in queued {
             let cls = match wt {
@@ -17182,7 +17168,7 @@ mod tests {
             anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), started: false, early_end: false, len_cap: None },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip: 0, clip_max: 0,
             grenade_weapon: 0x35, grenade_count: 0, pending_grenade: false, shots: Vec::new(),
-            // 952: the raw accuracy roll per shot, parallel to `shots` (own line — merge lesson 4).
+            // 952: the raw accuracy roll per shot, parallel to `shots`.
             shot_rolls: Vec::new(),
             surrender_logged: false, hit_log: 0, detected_logged: false,
             hip_anim: 1.0,
@@ -17218,7 +17204,7 @@ mod tests {
             tase_fall_anim: 0,
             stationary: false, alpha: 255.0, raise: None,
             velocity: [0.0; 3], in_air: false, on_surface: true,
-            // astronaut zero-G (fields on their own lines — merge lesson 4):
+            // astronaut zero-G:
             thrust: false,
             fly_speed: 0.075,
             velocity_damping: true,
@@ -17233,20 +17219,19 @@ mod tests {
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
-            // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding (fields on
-            // their own lines — the shared-constructor collisions, merge lesson 4).
+            // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
-            // fix-room-sound: the foley one-shot outbox + the pain-grunt handle (own lines — merge lesson 4).
+            // fix-room-sound: the foley one-shot outbox + the pain-grunt handle.
             foley_reqs: Vec::new(), pain_grunt: None,
             sfx_reqs: Vec::new(),
-            // ai-points: the scared-run mode marker +0xC6 (own line — merge lesson 4).
+            // ai-points: the scared-run mode marker +0xC6.
             scared_run: false,
-            // fix-anim-events: the EventFunc outboxes (own lines — merge lesson 4).
+            // fix-anim-events: the EventFunc outboxes.
             weapon_swap: 0, pending_melee: None, pending_weapon_swap: false, recoil_weapon: false,
-            // fix-facial3: the blink driver state + the facial script slots (own line — merge lesson 4).
+            // fix-facial3: the blink driver state + the facial script slots.
             facial_state: 0, facial_timer: 0, facial_reappend: false, facial_idle: None, facial_blink: None, last_tick: 0,
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,
-            // drone-abseil-elevator: the +0x23 rope fields (own lines — merge lesson 4).
+            // drone-abseil-elevator: the +0x23 rope fields.
             air: false,
             move_ok: true,
             descend_speed: 0.0,
@@ -17256,7 +17241,7 @@ mod tests {
             hang_rand: 0,
             elevator_scan: false,
             elevator_latch: false,
-            // fix-cover-remainder: the scary-object flee family (own line — merge lesson 4).
+            // fix-cover-remainder: the scary-object flee family.
             scared: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
             scripted_move: false,
             // +0x174 — the shared target registry slot.

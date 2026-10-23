@@ -22,8 +22,8 @@
 //! (or an explicit `NF_MATRIX=07000001,...` list), or through `nf-extract weapon-matrix <iso>`.
 //!
 //! Any panic is a bug (the task's rule): the test fails the level when a cell errored, even though
-//! the matrix keeps going to measure the rest. Red cells (`I`/`F`/`R`/`W`/`B`/`S` marks) are the
-//! report's business (docs/reports/weapon-matrix.md) — they are *measurements*, and the test only
+//! the matrix keeps going to measure the rest. Red cells (`I`/`F`/`R`/`W`/`B`/`S` marks) are
+//! printed, not asserted — they are *measurements*, and the test only
 //! fails on panics and hard errors.
 
 use nf_view::matrix;

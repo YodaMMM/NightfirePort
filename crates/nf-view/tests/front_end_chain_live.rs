@@ -1,5 +1,4 @@
-//! front-end-chain: the front-end leg after a mission ends (docs/reports/campaign-flow.md
-//! blocker 7): the results/medal page (P_NFRESULTS 0x208e78) with the game's own fields, the
+//! front-end-chain: the front-end leg after a mission ends: the results/medal page (P_NFRESULTS 0x208e78) with the game's own fields, the
 //! unlock write into the progress layer (Menu_SetLevelBonus 0x1ffa10 → sp_level+0x10, packed by
 //! Menu_GetNightfireStatus 0x202360), and the mission select offering the next mission
 //! (P_NFMAP 0x20b608 / C_SBNFMAP 0x20b8d8).

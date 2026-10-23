@@ -146,7 +146,7 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
     assert_eq!(named.len(), 3, "three guards carry death channels 0x11/0x12/0x13 [D]");
     // Stage into the hall through its east door first. From the meet room the routes to the
     // west-half guards run through door #2 (−14.1,5.3,13.1) — the level's known walker wedge
-    // (docs/reports/level-01-complete.md: the solo approach wedges at the 3000-tick cap) — and a
+    // (the solo approach wedges at the 3000-tick cap) — and a
     // guard fought through that wall never exposes a part (he stands behind the hall's south
     // structure). A player enters the hall by its main door and fights inside; the east hop is
     // the route the guard-11 approach already proves (nav reached (2.97,6.38,16.27) from the
@@ -315,8 +315,8 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
     eprintln!("[01] the contact settled at ({:.1},{:.1},{:.1}), plate at ({:.1},{:.1},{:.1})",
         settled[0], settled[1], settled[2], plate[0], plate[1], plate[2]);
     assert!(walker::dxz(settled, plate) < 6.0, "the contact must walk his route to the LoadPointActivator plate");
-    // Bond walks the last leg onto the plate (the contact stalled at the stairwell head — see the
-    // report; the AND cannot fire with him outside the volume).
+    // Bond walks the last leg onto the plate (the contact stalled at the stairwell head;
+    // the AND cannot fire with him outside the volume).
     drop(sim);
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).

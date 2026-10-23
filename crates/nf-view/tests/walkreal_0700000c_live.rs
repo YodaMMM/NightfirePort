@@ -48,7 +48,7 @@ fn walk_start_to_the_st1_plate_and_the_photograph() {
     // for x ≤ 14 at y 14.2 and the raised corner box walls all four sides above y 15.2 [D
     // probes]; the game's way in/out is the vent/pulley route (`ventmesh-front` #138, `VentLatch`
     // #182 `Lock_Create` 0x1ae1f8, the `obj_stor*_pulley` 0xE2 winches) and the port's
-    // SimpleScript objects draw but do not move (docs/reports/map-powerstation.md §gaps).
+    // SimpleScript objects draw but do not move.
     // fix-swim-vent4 re-sited the stand-in onto the display ground itself, with the disc reasons
     // [D probe_planes/probe_path]: (a) the old drop (13.0, −154.3) hangs over the interior pit —
     // NO disc floor in y 9..13.5 there, so every walk after it ran 5 units UNDER the plate

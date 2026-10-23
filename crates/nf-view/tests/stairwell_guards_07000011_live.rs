@@ -172,7 +172,7 @@ fn the_flight_plate_wakes_the_0x13_guards_and_a_guard_in_view_alerts() {
 /// landings (one floating a body height above the other). Ignored until the gate
 /// is fixed; the numbers are the pin.
 #[test]
-#[ignore = "the abseiler slides past the 3.0 hang gate (measured y 22.34 vs the 32.37 gate) — see docs/reports/ai-stacked-idle-guards-11.md"]
+#[ignore = "the abseiler slides past the 3.0 hang gate (measured y 22.34 vs the 32.37 gate)"]
 fn the_mode_1c_abseiler_hangs_within_the_game_s_3_0_of_the_opponent() {
     let mut scene = load_d3();
     {

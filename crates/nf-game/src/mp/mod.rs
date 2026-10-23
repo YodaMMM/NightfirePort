@@ -19,8 +19,7 @@
 //! Match end + debriefing (mp-debriefing-data2, on top of 402's machine): the full
 //! `MP_CheckForEndCondition` 0x184268 latch/dispatch, the `MP_Update` 0x184bd0 end states with the
 //! handover/debriefing/restart requests, `MP_SortOutWhoWon` 0x1848d0's end status, and
-//! [`debrief`]'s board (`P_MPDEBRIEFING` 0x212198) — see `docs/systems/mp-debriefing.md` and the
-//! reconciliation table in `docs/reports/mp-debriefing-data2.md`.
+//! [`debrief`]'s board (`P_MPDEBRIEFING` 0x212198) — see `docs/systems/mp-debriefing.md`.
 //!
 //! Placement wiring ([M] `parsemap_create_dynamic_objects` 0x1d04f0 case 0x25/0x26 ←
 //! `parsemap_block_map_data_dynamic` 0x1d1b68): the dispatch passes the placement's translation,

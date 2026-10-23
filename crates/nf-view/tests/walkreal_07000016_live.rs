@@ -33,11 +33,10 @@ fn carry(on: &[u32]) -> RamSave {
 }
 
 /// The landed door[7] fix, focused: the door opens on Bond's pitched E from the corridor and he
-/// walks through the leaf's span. FAIL-FIRST: on the walkreal-c branch (before the straddle
-/// walk-in landed in door.rs) the E never moved the leaf (14 use_door calls, state 0x2 — the
-/// report's blocker), and with the old x 3.5 lane the walk wedged on the sealed west half at
-/// (3.5, 0.9, −73.58) even with the door open (the walkreal-c stuck dump; the lane fix is part of
-/// this task). Sisters: the static corridor floor holds Bond throughout (grounded, no sink), and
+/// walks through the leaf's span. FAIL-FIRST: before the straddle walk-in in door.rs the
+/// E never moved the leaf (14 use_door calls, state 0x2 — the blocker), and with the old x 3.5
+/// lane the walk wedged on the sealed west half at (3.5, 0.9, −73.58) even with the door open
+/// (the lane is fixed here too). Sisters: the static corridor floor holds Bond throughout (grounded, no sink), and
 /// walkreal_07000012_live's doors still open (the harness's own sister).
 #[test]
 fn door7_opens_on_bonds_e_and_bond_passes() {

@@ -245,8 +245,8 @@ fn census_no_marker_brush_drawn_on_any_level() {
     assert!(checked >= 2, "the census must have checked the archives carrying the markers (05 and 0c), got {checked}");
 }
 
-/// fix-striped-boxes2 — the gate's per-kind verdicts. Every FLAGS_COPYING-kind object the main
-/// agent's disc probe listed carries the no-draw bit (its creator copies `celglist+0x44` into
+/// fix-striped-boxes2 — the gate's per-kind verdicts. Every FLAGS_COPYING-kind object the
+/// disc probe listed carries the no-draw bit (its creator copies `celglist+0x44` into
 /// obj+0xF0 — every creator verified at the scene.rs gate comment — and nothing clears the bit), so
 /// the game never draws it: drawn must equal the UNFLAGGED count for each listed pair. The sisters
 /// pin the same kinds on objects whose glist lacks the bit (0a's monitor + 3 PCQ worms, 41's two
