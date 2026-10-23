@@ -132,23 +132,29 @@ impl Network {
     /// nodeA→nodeB segment, t clamped [M 0x157780:27-93]) is within r of the feet — **XZ-only**
     /// distance (`Vec_SqDist2D` [M 0x157780:94]) — with the feet between Q.y − 0.4 and
     /// Q.y + lerp(post heights by t) [M 0x157780:96-104], push the feet out horizontally to
-    /// distance r (the push direction / length is *suggested*: the decomp loses the stores).
-    /// The game's caller passes mask = drone+0xba4 (= 0x1c00 on the shipped paths [S]) which
-    /// skips 0x800/0x1000/0x400-flagged walls before the 0x800 double-radius rule
-    /// (0x157bd0:94-97) could matter, so that rule is not modelled here [S unverified].
+    /// distance r. The push is Q + (P−Q)·r/|P−Q| in X/Z [M 0x157bd0:100-120 — the y lane of the
+    /// direction is zeroed, normalised by `Vec_NormaliseLen`, scaled r − dist, added to P; the
+    /// algebra equals Q + (P−Q)·r/|P−Q|]. `NDrone2_Collision` 0x140e90:169-174 passes r = 0.4 and
+    /// mask = drone+0xba4, which `NDrone2_DefaultInit` 0x14b300:826 sets to 0x1c00, so the
+    /// 0x800/0x1000/0x400-flagged walls are skipped and the 0x800 double-radius rule
+    /// (0x157bd0:94-97) can never select (the mask always carries 0x800) [M].
     pub fn push_out(&self, feet: V3, r: f32) -> V3 {
         let mut p = feet;
         for w in self.walls.iter().filter(|w| w.flags & 0x1c00 == 0) {
             let q = closest_on_segment(w.a, w.b, p);
-            // [S] HELD BACK (2026-10-21): the game's hit distance is 2D X/Z (`Vec_SqDist2D` 0x1e2ef8 = x/z
-            // [M 0x157780:94]), but switching to it changes fix_guard_weapons_live's 3x3 matrix (07000001
-            // diff 1 weapon 0x12: 101/200 hits vs the 0.375 model) — the merged 864 broke master. The 3D
-            // distance stays until task 952 finds why the push changes the guards' fire (and lands X/Z).
-            let d2 = (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2);
-            // [M 0x157780:96-104] band top = closestY + node A's height (`*(iVar1 + 8)`, iVar1 = the
-            // wall's first node) — review 2026-10-21: the branch lerped hA..hB, master used min(hA,hB);
-            // the decompile reads node A's height alone.
-            let h = w.ha;
+            // [M 0x157780:94] the game's hit distance is 2D X/Z (`Vec_SqDist2D` 0x1e2ef8 = x/z;
+            // disasm 0x1578e8-0x1578f4 calls it with P and Q and compares against r² at 0x1578f4).
+            let d2 = (p[0] - q[0]).powi(2) + (p[2] - q[2]).powi(2);
+            // [M 0x157780:96-104] band top = Q.y + (hB − hA)·t + hA — the post heights LERPed by the
+            // same clamped t as Q (disasm 0x157904-0x157920: h(s2) − h(s0), × t, + h(s0), + Q.y), each
+            // node's +8 the ray-up height with the min-2.0 clamp [M AIBounds_Link2Cel 0x1d2f18:47-49].
+            // (The 2026-10-21 "node A's height alone" review misread the decompile; landed 952.)
+            let dt = [w.b[0] - w.a[0], w.b[1] - w.a[1], w.b[2] - w.a[2]];
+            let len2 = dt[0] * dt[0] + dt[1] * dt[1] + dt[2] * dt[2];
+            let t = if len2 <= 0.0 { 0.0 } else {
+                (((p[0] - w.a[0]) * dt[0] + (p[1] - w.a[1]) * dt[1] + (p[2] - w.a[2]) * dt[2]) / len2).clamp(0.0, 1.0)
+            };
+            let h = w.ha + (w.hb - w.ha) * t;
             if d2 > r * r || p[1] > q[1] + h || p[1] < q[1] - 0.4 { continue; }
             let (dx, dz) = (p[0] - q[0], p[2] - q[2]);
             let l = (dx * dx + dz * dz).sqrt();
@@ -872,7 +878,6 @@ mod tests {
     /// (`Vec_SqDist2D` [M 0x157780:94]) — a feet-Y gap does not defeat the push while the
     /// y-band holds. Sister: beyond the radius in XZ there is no push.
     #[test]
-    #[ignore = "the game's X/Z distance is held back pending task 952 (it changes fix_guard_weapons_live)"]
     fn boundary_push_distance_is_xz_only() {
         let n = Network {
             paths: vec![],
@@ -888,21 +893,27 @@ mod tests {
         assert_eq!(p, [2.5, 1.0, 5.0], "beyond r: no push");
     }
 
-    /// The y-band top is `closestY + node A's height` [M 0x157780:96-104 — `*(iVar1 + 8)`], not a lerp
-    /// of the two posts nor min(hA,hB). Sister: above node A's top there is no push.
+    /// The y-band top is `Q.y + (hB − hA)·t + hA` — the post heights LERPed by the same clamped
+    /// t as Q [M 0x157780:96-104 — `*(iVar2+8) − *(iVar1+8)) * t + *(iVar1+8)`, disasm
+    /// 0x157904-0x157920]. Sister: above the lerped post top there is no push.
     #[test]
-    #[ignore = "relies on the game's X/Z hit distance, held back pending task 952"]
-    fn boundary_band_top_is_node_a_height() {
+    fn boundary_band_top_is_the_post_height_lerp() {
         let n = Network {
             paths: vec![],
             walls: vec![Wall { a: [0.0, 0.0, 0.0], b: [10.0, 0.0, 0.0], ha: 1.0, hb: 3.0, flags: 0 }],
             bounds: true, slope_dy: 2.0, max_slope: 0.8727,
         };
-        // Mid-segment: top = 0 + hA (1.0) — feet at 0.9 are inside → pushed north to 0.4.
+        // Mid-segment: top = 0 + 1.0 + 0.5·(3.0 − 1.0) = 2.0 — feet at 0.9 are inside → pushed
+        // north to 0.4.
         let p = n.push_out([5.0, 0.9, 0.1], 0.4);
         assert!((p[2] - 0.4).abs() < 1e-4, "inside node A's band: pushed: {p:?}");
-        // Sister: feet at 1.9 sit above node A's top (1.0) though under a lerp (2.0) → unchanged.
+        // Sister: feet at 1.9 sit under the lerped top (2.0) → the game's band still holds them
+        // [M 0x157780:99] — pushed (the 2026-10-21 "node A's height alone" reading would have
+        // left them; the decompile and its disasm both read the lerp).
         let p = n.push_out([5.0, 1.9, 0.1], 0.4);
-        assert_eq!(p, [5.0, 1.9, 0.1], "above node A's top: no push (the lerp would have pushed)");
+        assert!((p[2] - 0.4).abs() < 1e-4, "under the lerped top: pushed: {p:?}");
+        // Sister: feet at 2.1 sit above the lerped top (2.0), though below hB (3.0) → unchanged.
+        let p = n.push_out([5.0, 2.1, 0.1], 0.4);
+        assert_eq!(p, [5.0, 2.1, 0.1], "above the lerped top: no push (hB alone would have pushed)");
     }
 }

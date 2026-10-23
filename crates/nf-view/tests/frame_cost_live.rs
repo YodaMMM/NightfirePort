@@ -25,8 +25,25 @@
 //! Every test is NF_ISO-gated like the other `_live` tests. The palette/colour hashes printed per
 //! level are the bit-identity vehicle for cost fixes: run before and after a change and compare.
 //!
-//! Sister assertion: `a_deliberately_slow_closure_fails_the_budget_helper` (no ISO, no release
-//! gate) proves the budget helper actually fails — a 25 ms closure against a 5 ms budget panics.
+//! The GPU-side encode (frame-cost-encode-budget): `frame_budgets_hold_on_every_single_player_archive`
+//! also builds the REAL render path headless — the `--shot` machinery's wgpu device without a window
+//! (`fix_0c_pylon_live.rs::render_full`'s recipe) — at each level's start view, times N frames of the
+//! WHOLE encode with the same median helper, and budgets it per level. The whole encode =
+//! `Renderer::render` (gpu.rs:884), the call the window's redraw makes after `update_skin`: it runs
+//! the four `nf_game::prof` scopes (`enc: cull filter` gpu.rs:1006, `enc: sort` :1080,
+//! `enc: uniforms + light picks` :1093, `enc: record draws` :1166) plus the render-pass setup and the
+//! snow/HUD queue writes, and nothing is submitted (the encoder is dropped unfinished) — pure CPU,
+//! exactly the cost class the 2026-10-21 measurement caught on master: a per-draw `env::var_os` in
+//! the encode cull filter (d707d44c) cost 4-5 ms a frame on 07000007/12/15 (commit 8402b6c4), and no
+//! budget in this file looked at the encode. No adapter on the machine (CI) → the encode part skips
+//! with a printed reason; the CPU phases and both sisters still run.
+//!
+//! Sister assertions: `a_deliberately_slow_closure_fails_the_budget_helper` (no ISO, no release gate)
+//! proves the budget helper actually fails — a 25 ms closure against a 5 ms budget panics — and
+//! `a_per_draw_env_read_in_the_cull_filter_fails_the_encode_budget` (ISO, release, no GPU needed)
+//! rebuilds the reverted cull-filter diagnostic (gpu.rs at d707d44c: a per-draw `env::var_os` on every
+//! cel-culled draw) over the level's real draw population and proves the per-level encode budget
+//! rejects exactly that class.
 
 use nf_view::scene::{self, Scene, ViewOpts};
 
@@ -56,6 +73,22 @@ fn fnv_f32s<'a>(it: impl Iterator<Item = &'a f32>) -> u64 {
 }
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
+
+/// The headless wgpu device the `--shot` machinery builds (`fix_0c_pylon_live.rs::render_full`'s
+/// recipe, without the PNG): adapter → device, no window, no surface. `None` = no adapter or no
+/// device on this machine (CI) — the encode budgets skip with the reason printed, never a silent
+/// pass; everything else in this file keeps running.
+fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
+        Ok(a) => a,
+        Err(e) => { eprintln!("[enc] no GPU adapter ({e}) — the encode budgets are skipped (CI)"); return None }
+    };
+    match pollster::block_on(adapter.request_device(&Default::default())) {
+        Ok(dq) => Some(dq),
+        Err(e) => { eprintln!("[enc] no wgpu device ({e}) — the encode budgets are skipped"); None }
+    }
+}
 
 /// gpu.rs:543 `Renderer::depth0_game` — copied (it is a private method): the game's depth-0 planes.
 fn depth0_game(planes: &[[f32; 4]; 6], eye: [f32; 3]) -> [[f32; 4]; 5] {
@@ -103,8 +136,10 @@ fn on_foot_levels(iso_path: &str) -> Vec<String> {
     names.sort(); names.dedup(); names
 }
 
-/// One level's per-frame medians, printed and budget-asserted. Returns nothing; panics on breach.
-fn time_a_level(iso_path: &str, name: &str) {
+/// One level's per-frame medians, printed and budget-asserted. `dev` = the headless device (None =
+/// no GPU here: only the encode budgets are skipped, with the reason printed by `headless_device`).
+/// Returns nothing; panics on breach.
+fn time_a_level(dev: Option<&(wgpu::Device, wgpu::Queue)>, iso_path: &str, name: &str) {
     let load_scene = || -> Option<Scene> {
         match nf_view::load(iso_path, name, false) { Ok(s) => Some(s), Err(e) => { eprintln!("[cost] {name} not loadable: {e}"); None } }
     };
@@ -166,6 +201,72 @@ fn time_a_level(iso_path: &str, name: &str) {
         );
     }
 
+    // The GPU-side encode on the real render path headless (the `--shot` machinery without the
+    // PNG): a full `Renderer` at this level's start view, N frames' whole encode (`render()` — the
+    // four `enc:` prof scopes run inside it) timed with the same median helper. Same recipe as
+    // fix_0c_pylon_live.rs::render_full: cel_visibility → update_skin → lights → render.
+    if let Some((device, queue)) = dev {
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = nf_view::gpu::Renderer::new(device, queue, format, &scene, false, false);
+        let vis = r.cel_visibility(eye, vp, scene.sim.as_ref().map(|s| &s.world), None);
+        let mut eopts = opts;
+        // pitch is 0.0 in this file's `view_proj` call — the start-view basis for opts.right/up.
+        let fw = glam::Vec3::new(yaw.sin(), 0.0, yaw.cos()).normalize();
+        let s = fw.cross(glam::Vec3::Y).normalize();
+        eopts.right = s.to_array(); eopts.up = s.cross(fw).to_array();
+        r.update_skin(queue, &scene, None, t, eopts, vis.as_deref());
+        r.lights = scene.frame_lights();
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None, size: wgpu::Extent3d { width: 1280, height: 720, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let depth = nf_view::gpu::depth_view(device, 1280, 720);
+        let enc = median_ms(2, 7, || {
+            let e = r.render(device, queue, &view, &depth, vp, vp, eye, t as u32, &[], &nf_view::gpu::HudFrame::default(), None, None);
+            std::hint::black_box(e); // dropped unfinished: nothing is submitted — the pure CPU encode
+        });
+        // The per-level budget: 240 fps = 4.167 ms (the playtest target). The encode gets what the
+        // frame's OTHER measured phases leave, minus a 20 % margin for the pieces this file cannot
+        // time (update_skin's buffer writes, the submit, the present, the window's own work). The
+        // floor 1.2 ms = 70 % of the worst post-fix WHOLE frame the 2026-10-21 measurement printed
+        // (1.14/1.70/1.46 ms on 07000007/12/15, commit 8402b6c4) and ~4x under that regression's
+        // 4-5 ms: on a slow machine it clamps the formula instead of letting it fight its own
+        // arithmetic, and the bug class still fails the budget 4x over.
+        let rest = fs + cm + sp + hud + cel;
+        let budget = (4.167 * 0.8 - rest).max(1.2);
+        eprintln!("[cost] {name} encode {enc:.3} ms (whole render(), the four enc: stages inside; other measured phases {rest:.3} ms → budget {budget:.2} ms)");
+        assert_budget(&format!("{name} encode"), budget, enc);
+
+        // The per-archive teardown — the part 951 missed, which OOM'd the sweep on a desktop GPU
+        // (reverted in b4643c32). This file never submits the timed encoders (the encode is pure
+        // CPU), but `Renderer::new` uploads through `queue.write_texture` (gpu.rs:582/633/763) and
+        // `update_skin`/`render` through `queue.write_buffer` (gpu.rs:823/825/836/850/1162/1178),
+        // and in wgpu-core 30.0.1 every one of those pins a fresh staging buffer AND its
+        // destination in the queue's `PendingWrites`: write_buffer creates a `StagingBuffer::new`
+        // per call and `pending_writes.consume(staging_buffer)` keeps it (device/queue.rs:661-685),
+        // the written buffer is inserted into the pending encoder's tracker (write_staging_buffer_
+        // impl) and its later Drop routes into `pending_writes.consume_temp`
+        // (resource.rs:1115-1123) — and NOTHING releases them except `Queue::submit`
+        // (device/queue.rs:1531 `submission.submit(pending_writes)`); `Device::poll` never touches
+        // `pending_writes` (device/resource.rs:793-824). One device hoisted over 34 archives ×
+        // (vertex buffer + palette + colours + morph weights + uniforms + indirect, twice for the
+        // staging copy, plus the written textures) never freed = the `wgpu error: Out of Memory`
+        // at ~99 s. The recipe this copied (fix_0c_pylon_live.rs::render_full) submits AND polls
+        // per call (lines 56-58) and builds a fresh device each call, which is why it never
+        // accumulated. Drop the per-archive resources first, then one empty submit (flushes
+        // PendingWrites even with no command buffers) + a Wait poll (completes the copies and runs
+        // the destruction queue): every allocation above is gone before the next `Renderer::new`.
+        drop(r);
+        drop(view);
+        drop(target);
+        drop(depth);
+        let _ = queue.submit([]);
+        device.poll(wgpu::PollType::wait_indefinitely())
+            .unwrap_or_else(|e| panic!("[{name}] the per-archive GPU flush (empty submit + Wait poll) failed: {e} — the device died (OOM/lost), the class 951's sweep hit"));
+    }
+
     assert_budget(&format!("{name} frame_state"), 8.0, fs);
     assert_budget(&format!("{name} colour_mults"), 8.0, cm);
     assert_budget(&format!("{name} skin_palette"), 8.0, sp);
@@ -186,10 +287,91 @@ fn time_a_level(iso_path: &str, name: &str) {
 #[cfg(not(debug_assertions))]
 fn frame_budgets_hold_on_every_single_player_archive() {
     let Some(iso_path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    // One headless device for the whole sweep. None (no adapter — CI) skips ONLY the encode part
+    // below, with the reason printed by headless_device(); every CPU phase still runs and fails.
+    let dev = headless_device();
     let mut levels = on_foot_levels(&iso_path);
     assert!(levels.len() >= 27, "expected the 27 on-foot archives, got {}", levels.len());
     for code in 0x23u32..=0x29 { levels.push(format!("{:08x}.bin", 0x0700_0000 | code)); }
-    for lvl in &levels { time_a_level(&iso_path, lvl); }
+    for lvl in &levels { time_a_level(dev.as_ref(), &iso_path, lvl); }
+}
+
+/// The sister (ISO, release, NO GPU needed): the reverted cull-filter diagnostic rebuilt test-only
+/// over the level's real draw population — gpu.rs at d707d44c read `std::env::var_os` per cel-culled
+/// draw before the near test (the shape commit 8402b6c4 replaced with a OnceLock); its per-draw cost
+/// was ~1 µs (a locked GetEnvironmentVariableW — gpu.rs's perf-culldiff comment) and it cost 4-5 ms
+/// a frame on 07000007/12/15 (thousands of cel-culled draws). glibc's getenv is ~30x cheaper (~33 ns
+/// measured), so a literal single read is NOT a violation on Linux — the sister therefore scales
+/// THIS machine's measured per-call env cost up to the documented ~1 µs per draw with a repeated
+/// read (k printed), reproducing the regression's per-draw cost portably, and the same per-level
+/// encode budget formula MUST reject it on each documented repro level. The cel-culled set is the
+/// real one: the game mask from the headless portal walk (`portal_visible_cels_game_from_cell_doors`)
+/// against each World material's `node` (gpu.rs:1031-1035's test; the `orphan_nodes` rescue is
+/// Renderer-private — its members only ADD draws back, so the population here is the superset that
+/// pays the cost).
+#[test]
+#[cfg(not(debug_assertions))]
+fn a_per_draw_env_read_in_the_cull_filter_fails_the_encode_budget() {
+    use nf_view::scene::Layer;
+    let Some(iso_path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut ran = 0usize;
+    for lvl in ["07000007.bin", "07000012.bin", "07000015.bin"] {
+        let mut scene = match nf_view::load(&iso_path, lvl, false) { Ok(s) => s, Err(e) => { eprintln!("{lvl} not loadable: {e}"); continue } };
+        if let Some(sim) = scene.sim.as_mut() { for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); } }
+        let opts = ViewOpts::default();
+        let t = 120.0f32;
+        let (pos, yaw) = scene.start.clone().unwrap_or(([0.0; 3], 0.0));
+        let eye = [pos[0], pos[1] + 1.6, pos[2]];
+        let vp = view_proj(eye, yaw, 0.0, 16.0 / 9.0);
+        // The per-level budget from the same phases as the main test (CPU only — no device).
+        let (layout, _attrs) = scene.skin_layout();
+        let fs = median_ms(2, 5, || { let _ = scene.frame_state(None, t, opts); });
+        let cm = median_ms(2, 5, || { let _ = scene.colour_mults(); });
+        let sp = median_ms(2, 5, || { let _ = scene.skin_palette(&layout, None, t, opts, None); });
+        let hud = median_ms(2, 5, || { let _ = nf_view::hud::overlay(&scene, 16.0 / 9.0); });
+        let rest = fs + cm + sp + hud;
+        let budget = (4.167 * 0.8 - rest).max(1.2);
+        // The game mask from the headless portal walk (time_a_level's cel_once, cell level).
+        let planes = nf_view::gpu::extract_frustum(vp);
+        let depth0 = depth0_game(&planes, eye);
+        let sides = [planes[0], planes[1], planes[2], planes[3]];
+        let world = scene.sim.as_ref().map(|s| &s.world);
+        let game = scene::eye_cell(&scene.cel_graph, &mut scene::ViewerCel::default(), eye, world)
+            .and_then(|cell| scene::portal_visible_cels_game_from_cell_doors(&scene.cel_graph, cell, eye, &depth0, &sides, None));
+        let Some(game) = game else { eprintln!("[sister] {lvl}: the portal walk returned no game mask — skipped"); continue };
+        // This machine's per-call env cost → the k that reproduces the documented ~1 µs per draw.
+        let per_call_ns = {
+            let mut v: Vec<f64> = (0..5).map(|_| {
+                let t0 = std::time::Instant::now();
+                for _ in 0..50_000 { std::hint::black_box(std::env::var_os("NF_SISTER_MISSING").is_some()); }
+                t0.elapsed().as_secs_f64() * 1e9 / 50_000.0
+            }).collect();
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap()); v[2]
+        };
+        let k = ((1000.0 / per_call_ns).ceil() as usize).max(1);
+        // The cel-culled population (gpu.rs:1031-1035's test over this level's real materials).
+        let d2 = |c: [f32; 3]| (c[0] - eye[0]).powi(2) + (c[1] - eye[1]).powi(2) + (c[2] - eye[2]).powi(2);
+        let n = scene.materials.iter().filter(|m| m.layer == Layer::World && m.node != u32::MAX
+            && !game[m.node as usize]).count();
+        if n == 0 { eprintln!("[sister] {lvl}: no cel-culled World draws — skipped"); continue }
+        // The reverted filter body (gpu.rs:1040's shape at d707d44c): the env read per cel-culled
+        // draw, then the near test. Timed with the same median helper.
+        let ms = median_ms(1, 5, || {
+            let mut near = 0usize;
+            for m in &scene.materials {
+                if m.layer != Layer::World { continue; }
+                if m.node == u32::MAX || game[m.node as usize] { continue; }
+                for _ in 0..k { if std::env::var_os("NF_SISTER_CULLDIFF").is_some() { near += 1; } }
+                if d2(m.centre) < 400.0 + m.radius * m.radius && !nf_view::gpu::sphere_outside(&planes, m.centre, m.radius) { near += 1; }
+            }
+            std::hint::black_box(near);
+        });
+        ran += 1;
+        eprintln!("[sister] {lvl}: {n} cel-culled draws x k={k} env reads ≈ 1 µs/draw documented → {ms:.3} ms vs the {budget:.2} ms encode budget");
+        let failed = std::panic::catch_unwind(|| assert_budget(&format!("{lvl} per-draw env cull filter (k={k})"), budget, ms)).is_err();
+        assert!(failed, "{lvl}: the reintroduced per-draw env::var_os over {n} cel-culled draws took {ms:.3} ms and PASSED the {budget:.2} ms encode budget — the guard misses exactly the class commit 8402b6c4 fixed");
+    }
+    assert!(ran > 0, "none of the documented repro levels (07000007/12/15) produced a cel-culled population — the sister never ran");
 }
 
 /// The in-repo proof that `skin_palette`'s per-attachment fallback loop (scene.rs:6790, removed in

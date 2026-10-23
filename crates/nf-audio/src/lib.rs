@@ -6,6 +6,7 @@
 //! Gaussian interpolation (G-032d: the nocash PSX-SPX coefficient table), summed and clamped.
 
 pub mod music;
+pub mod reverb;
 pub mod sfx;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -36,9 +37,10 @@ pub enum Cmd {
     MusicGain(f32),
     /// Key off the music and empty its queue; the sample counter restarts at 0.
     MusicStop,
-    /// `psiSetReverb` / `PS2_SetupReverb`: the SPU reverb depth (EVOL, 0..1) applied to voices with `ReverbSend`.
-    /// The SPU's effect preset is mode 4 (delay 30, feedback 200 [M §5.5, slightly ambiguous]); the output runs a
-    /// delay line at this depth — the exact preset coefficients are pending a `PS2_SetupReverb` register dump [S].
+    /// `psiSetReverb` / `PS2_SetupReverb`: the SPU reverb depth (EVOL, 0..1) applied to voices with
+    /// `ReverbSend`. The SPU's effect preset is mode 4 STUDIO_3 — the exact 32-register set lives in
+    /// [`crate::reverb`] (ps2sdk libsd `effect.c`'s Sony preset tables, cross-checked against PCSX2's
+    /// SPU2 `V_Reverb`/`DoReverb`), and the wet output runs the SPU2 reverb equations at that preset.
     Reverb { depth: f32 },
 }
 
@@ -70,38 +72,34 @@ struct Voice {
     reverb: bool,
 }
 
-/// The SPU reverb: a stereo comb-filter delay line at the `EVOL` depth [M sound.md §5.5]. The SPU's effect preset is
-/// mode 4 (delay 30, feedback 200) — the `sceSdEffectAttr` layout is partially mangled in the decompile [M §9], so the
-/// exact preset is deferred (GAPS G-032d); this single-comb stand-in gives an audible reverb tail at the right depth.
+/// The SPU reverb: the SPU2 effect area running the game's mode-4 (STUDIO_3) preset through the
+/// reverb equations ([`reverb::ReverbCore`]; PCSX2 `V_Core::DoReverb`). The per-voice wet sends
+/// (VMIXEL/VMIXER) enter at full scale; the EVOL depth scales the wet return into the mix [M
+/// sound.md §5.5; reverb.rs module comment]. The core is ticked once per output frame (PCSX2's
+/// `spu2Mix` calls `DoReverb` once per sample, `spu2sys.cpp` TimeUpdate) and returns wet on BOTH
+/// channels every frame — the resampling (39-tap down/up FIRs, `ReverbResample.cpp`) lives inside
+/// the core, so no per-frame hold is needed.
 struct Reverb {
-    /// Delay-line buffers (left, right), sized to ~25 ms (a small room) [S].
-    buf: [Vec<f32>; 2],
-    /// Write index into each buffer [S].
-    w: usize,
-    /// Feedback coefficient [S].
-    fb: f32,
-    /// The current `EVOL` send depth (0..1) [M].
+    /// The reverb delay RAM and equations, at the game's registers.
+    core: reverb::ReverbCore,
+    /// The current `EVOL` send depth (0..1), scaling the wet return [M].
     depth: f32,
 }
 
 impl Reverb {
     fn new(rate: u32) -> Reverb {
-        let len = (rate as f64 * 0.025) as usize;
-        Reverb { buf: [vec![0.0; len.max(1)], vec![0.0; len.max(1)]], w: 0, fb: 0.5, depth: 0.0 }
+        let _ = rate;
+        Reverb {
+            core: reverb::ReverbCore::new(reverb::ReverbRegs::from_mode(reverb::GAME_EFFECT_MODE), reverb::game_area(0)),
+            depth: 0.0,
+        }
     }
-    /// Process one stereo frame: `send` is the dry signal of a reverb-routed voice; returns the wet output.
+    /// Process one stereo frame: `send` is the dry signal of a reverb-routed voice; returns the wet
+    /// output on both channels (PCSX2 `DoReverb` → `ReverbUpsample`: both sides every tick).
     fn process(&mut self, send: [f32; 2]) -> [f32; 2] {
-        let n = self.buf[0].len();
-        let r = self.w.checked_sub(1).unwrap_or(n - 1);
-        let (pl, pr) = (self.buf[0][r], self.buf[1][r]);
-        let d = self.depth;
-        // The voice's dry signal, scaled by EVOL, feeds the delay line; the line feeds back at `fb` [S topology].
-        let (il, ir) = (send[0] * d, send[1] * d);
-        self.buf[0][self.w] = il + pl * self.fb;
-        self.buf[1][self.w] = ir + pr * self.fb;
-        self.w = (self.w + 1) % n;
-        // The wet output is the delayed signal at the send depth.
-        [pl * d, pr * d]
+        let to_i16 = |x: f32| (x * 32_767.0).clamp(-32_768.0, 32_767.0) as i16;
+        let wet = self.core.tick([to_i16(send[0]), to_i16(send[1])]);
+        [wet[0] as f32 / 32_768.0 * self.depth, wet[1] as f32 / 32_768.0 * self.depth]
     }
 }
 
@@ -171,8 +169,8 @@ impl Mixer {
             }
         }
         self.voices.retain(|v| !ended.contains(&v.id));
-        // The SPU reverb: each reverb-routed voice's dry signal feeds the delay line at `EVOL`; the wet output is
-        // mixed back in. A single comb per channel (the exact `PS2_SetupReverb` preset is deferred, GAPS G-032d) [S].
+        // The SPU reverb: each reverb-routed voice's dry signal feeds the effect area at full send;
+        // the wet output returns scaled by EVOL (reverb.rs has the register-exact preset) [M §5.5].
         if self.reverb.depth > 0.0 && channels > 1 {
             for fi in 0..frames {
                 let wet = self.reverb.process(rev_buf[fi]);
@@ -219,7 +217,10 @@ pub const SPU_RATE: f64 = 48_000.0;
 /// The SPU's 4-point Gaussian interpolation coefficients (G-032d): 512 16-bit entries from the nocash PSX-SPX
 /// documentation, "SPU ADPCM Sample Decoding" → "4-Point Gaussian Interpolation" (problemkaputt.de/psx-spx.htm;
 /// the PS2 SPU2 uses the same table and formula — nocash documents the SPU2 pitch counter's bit 4–11 as the
-/// 8-bit interpolation index). The table is slightly bugged on hardware: each four taps
+/// 8-bit interpolation index). Cross-check: the 512 entries are identical to duckstation's
+/// `gauss` table (src/core/spu.cpp, `GenerateInterpolationCoefficients`) — independent reference;
+/// PCSX2's SPU2 gaussian is the same table (recorded in docs/reports/spu-gaussian-reverb.md). The
+/// table is slightly bugged on hardware: each four taps
 /// (gauss[i], gauss[0xFF−i], gauss[0x100+i], gauss[0x1FF−i]) should sum to 0x8000 but sum to 0x7F7F..0x7F81 —
 /// the `gauss_quads_sum_near_0x8000` test pins that property [M nocash psx-spx].
 pub const GAUSS: [i16; 512] = [
@@ -458,5 +459,40 @@ mod tests {
         m.mix(&mut s, &mut buf);
         let q2 = m.voices.iter().find(|v| v.id == 2).unwrap().pos;
         assert!(q2 > q1, "a while-paused start still advances (the menu click): {q1} {q2}");
+    }
+
+    /// (b) A sine into the LEFT send returns wet on BOTH sides on (essentially) every output
+    /// frame — no zero gaps. PCSX2's `DoReverb` returns `ReverbUpsample` (Reverb.cpp L120), a
+    /// 39-tap FIR over both zero-stuffed side rings whose odd centre tap carries the other side's
+    /// wet from 19 ticks ago, so each call produces both channels; the branch this replaces ticked
+    /// the core every second frame and held `[wet,0]`/`[0,wet]`, leaving each channel silent half
+    /// the time. The right side is fed purely through the shared-RAM diff cross-feed (a left-only
+    /// send never writes the right rings directly), so it needs the cross-feed delay (~4.3k frames)
+    /// to wake up (~7.7k frames: the reverb address advances once per left/right pair, PCSX2
+    /// `RevbGetIndexer` `Cycles >> 1`): warm up 10 000 frames, then judge 10 000.
+    #[test]
+    fn the_reverb_returns_wet_on_both_sides_every_frame() {
+        let mut rev = Reverb::new(48_000);
+        rev.depth = 1.0;
+        // A 220 Hz sine, hard left: send[0] = s, send[1] = 0.
+        let sine = |i: usize| ((i as f64 * 2.0 * std::f64::consts::PI * 220.0 / 48_000.0).sin() * 16_000.0) as i16;
+        let mut frames = Vec::new();
+        for i in 0..20_000 {
+            let s = sine(i) as f32 / 32_768.0;
+            frames.push(rev.process([s, 0.0]));
+        }
+        let steady = &frames[10_000..];
+        // The defect signature: a frame with one side exactly 0 while the other is not (the old
+        // code produced this on EVERY frame — 10 000 of 10 000). Allow a handful of legitimate
+        // exact-zero crossings in 10 000 frames, measured against the old 50 %+ gap rate.
+        let gaps = steady.iter().filter(|f| (f[0] == 0.0) != (f[1] == 0.0)).count();
+        let both_silent = steady.iter().filter(|f| f[0] == 0.0 && f[1] == 0.0).count();
+        let (max_l, max_r) = steady.iter().fold((0.0f32, 0.0f32), |(l, r), f| (l.max(f[0].abs()), r.max(f[1].abs())));
+        assert!(max_l > 1e-3, "left wet present (max {max_l})");
+        assert!(max_r > 1e-4, "right wet present through the cross-feed (max {max_r})");
+        assert!(gaps + both_silent < 100, "no zero gaps: {gaps} one-sided + {both_silent} silent of {}", steady.len());
+        // Left is louder than right here (the right arrives via the diff cross-feed only) — both
+        // nonzero is the requirement, the ratio just documents the path.
+        assert!(max_l > max_r, "left send dominates but both sides speak: {max_l} vs {max_r}");
     }
 }
