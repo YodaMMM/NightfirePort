@@ -29,3 +29,7 @@ claimed-by: sandbox3 at 2026-10-23T15:32Z
 ## Report (done, 2026-10-23T17:27Z)
 
 Closed by the driver: the report is on `s/984-break-sound-roll` (docs/reports/984-break-sound-roll.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-10-23T17:44Z)
+
