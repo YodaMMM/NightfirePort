@@ -209,14 +209,22 @@ impl Props {
     /// destroyable smashes that carry a blast (`Destroy_Smash` 0x12bb60's `Explode_Create` for a
     /// non-zero type byte): `(smash position, radius, damage, kind)` — the caller queues the blast
     /// (the game's blast runs inside the smash, on the bullet's owner as the attacker).
-    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon: u16, damage: f32, ch: &mut Channels, frame: u32) -> Vec<(V3, f32, f32, u8)> {
-        let mut smashes = Vec::new();
+
+    /// The 0x54 camera-subject arm of `bullet_hit`, split out so the SP bullet pass can run it
+    /// beside the merged nearest-solid contact rule (the subjects are a shot DETECTOR, not a
+    /// solid contact — the round is not consumed by them).
+    pub fn camera_shot_hit(&mut self, a: V3, b: V3, weapon: u16, ch: &mut Channels, frame: u32) {
         for s in self.subjects.iter_mut().filter(|s| !s.hit) {
             if weapon == 0x54 && Self::seg_box(a, b, s.lo, s.hi) {
                 s.hit = true;
                 ch.set(s.channel as u32, 1, frame);
             }
         }
+    }
+
+    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon: u16, damage: f32, ch: &mut Channels, frame: u32) -> Vec<(V3, f32, f32, u8)> {
+        let mut smashes = Vec::new();
+        self.camera_shot_hit(a, b, weapon, ch, frame);
         for d in self.destroy.iter_mut().filter(|d| !d.dead) {
             if Self::seg_box(a, b, d.lo, d.hi) {
                 d.health -= damage;

@@ -13002,25 +13002,67 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // weapon-definition word at `weapon_definition+0x10` [M 0x12bfd8:15 + 0x1ece30:24-33;
             // the same read the fusebox pass makes below].
             let weapon_word = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
-            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, weapon_word, b.damage, &mut self.rng) } {
-                self.break_kills.push((k.placement, k.kind, k.sound));
-                // A script pane's kill deletes its object (Break_Kill's obj+0xFE bit 0 [M
-                // 0x12b970:60]): the pane leaves the collision set (the next `script_parts`
-                // carries it no more) and the draw — the same removal the fusebox wire cuts do.
-                if let Some(o) = k.script_obj {
-                    if let Some(slot) = self.scripts.objects.list.get_mut(o) { *slot = None; }
+            // The ONE collide list, sorted nearest-first, stops at the first solid node [M
+            // Collide_Update 0x1ea398:216-229 — the copy walk's stop on the first non-pass HITDATA;
+            // the node order is the QuickSort on HITDATA+0xc]: the contact goes to the NEAREST
+            // solid dynamic object and the round dies on it [M Bullet_CollisionHandler 0x12ce80
+            // disasm 0x12cff0-0x12cff4 — state 2 on the same hit]. The world's part of the list is
+            // the first NON-pass static node (the pass flag rides the surface byte's bit 0x40 [M
+            // 0x1ea398:219 `+0x50 >> 6`; segment_bullet's drop rule]). The contact's damage is the
+            // round's per-tick HITTEST+0x90 [M Bullet_update 0x12e7b0 disasm 0x12f05c-0x12f060]
+            // — bullet_contact_damage, not the raw record word — which BOTH victim handlers
+            // subtract (Break_Update 0x12bfd8:37, Destroy_CollisionHandler 0x12bd48:31).
+            let contact_dmg = d.weapons.bullet_contact_damage(b.weapon);
+            let mut contact: Option<(f32, usize)> = None;
+            // The drone candidate — part of the SAME sorted collide list [M 0x1ea398:120-158] —
+            // queried here (pure), applied in the match below.
+            let mut best: Option<(usize, i16, f32)> = None;
+            if !net_world {
+                let tstop = d.world.segment_bullet(b.pos, end);
+                for (i, br) in self.breaks.list.iter().enumerate().filter(|(_, x)| !x.dead) {
+                    // `Collide_FilterBullets` [M 0x1ece30:24-33]: the weapon's category word
+                    // against the pane's mask | 0x106 — non-zero AND drops the contact.
+                    if weapon_word & (br.filter | 0x106) != 0 { continue; }
+                    if let Some(t) = crate::breakable::Breaks::seg_box_t(b.pos, end, br.lo, br.hi) {
+                        if contact.is_none_or(|(bt, _)| t < bt) { contact = Some((t, i)); }
+                    }
                 }
-                // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
-                // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
-                // audio voice plus the hearing entry (the level's sfx-table data, the shape the
-                // script sounds use); the shatter/debris stays on the view queue. The effect's
-                // pos is obj+0x80, the bounds centre — the game's own argument in BOTH sound arms
-                // [M 0x12b970:69,75; M-dis 0x12b9f4 `addiu $a1,$s0,0x80` → Sound_Play3D].
-                let id = u32::from(k.sound);
-                self.audio.play3d(id, k.pos, None);
-                if let Some(t) = d.sfx {
-                    let e = t.get(id);
-                    if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
+                if let Some((t, _)) = contact {
+                    // The drone candidate is part of the SAME sorted list — a guard nearer than
+                    // the scenery takes the round instead [M 0x1ea398:216-229]. The application
+                    // (the hit + the AI message) stays in the match below.
+                    if !best.as_ref().is_none_or(|(_, _, bt)| t < *bt) { contact = None; }
+                    else if !tstop.is_none_or(|ts| t <= ts) { contact = None; }
+                }
+                if let Some((_, i)) = contact {
+                    // The round dies on the first solid object hit — the glass absorbs it
+                    // [M 0x12cff0-4]; nothing behind it scores or stops it this tick.
+                    b.dead = true;
+                    let br = &mut self.breaks.list[i];
+                    br.health -= contact_dmg;
+                    if br.health < 0.0 {
+                        if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
+                            self.break_kills.push((k.placement, k.kind, k.sound));
+                            // A script pane's kill deletes its object (Break_Kill's obj+0xFE
+                            // bit 0 [M 0x12b970:60]): the pane leaves the collision set and
+                            // the draw — the same removal the fusebox wire cuts do.
+                            if let Some(o) = k.script_obj {
+                                if let Some(slot) = self.scripts.objects.list.get_mut(o) { *slot = None; }
+                            }
+                            // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
+                            // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
+                            // audio voice plus the hearing entry (the level's sfx-table data, the shape the
+                            // script sounds use); the shatter/debris stays on the view queue. The effect's
+                            // pos is obj+0x80, the bounds centre — the game's own argument in BOTH sound arms
+                            // [M 0x12b970:69,75; M-dis 0x12b9f4 `addiu $a1,$s0,0x80` → Sound_Play3D].
+                            let id = u32::from(k.sound);
+                            self.audio.play3d(id, k.pos, None);
+                            if let Some(t) = d.sfx {
+                                let e = t.get(id);
+                                if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
+                            }
+                        }
+                    }
                 }
             }
             // The monitor consoles take the bullet too: `Monitor_Update` 0x1afcc8:34-45 (state 3;
@@ -13032,9 +13074,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // [M-dis 0x17cc1c-0x17cd60]. The port's queue keeps the historical (3.0, 200.0, 3.0)
             // stand-in — `Monitors` stores no per-monitor r yet [D monitor.rs], so the exact triple
             // (r, 0.5, r·6) awaits the radius plumbing at creation.
-            if self.monitors.bullet_hit(b.pos, end, b.damage) {
+            if !net_world && self.monitors.bullet_hit(b.pos, end, b.damage) {
                 let m = self.monitors.list.iter().find(|m| m.state == 3).map(|m| m.pos);
                 if let Some(p) = m { self.pending_blasts.push((p, 3.0, 200.0, usize::MAX, 0, 0x0600_0027, 3.0)); }
+            }
+            // The 0x54 camera-subject detector rides the same pass (a shot marker, not a solid
+            // contact — it does not consume the round [M props.rs camera_shot_hit]).
+            if !net_world {
+                self.props.camera_shot_hit(b.pos, end, b.weapon, &mut self.channels, frame);
             }
             for (pos, radius, damage, kind) in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.channels, frame) } {
                 let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
@@ -13157,7 +13204,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // on the flagged tree's first face — the pass does NOT lift the flight stop. The
             // bit-0x8 drop is the AIM/LOS family's (segment_bullet).
             let tw = d.world.segment(b.pos, end);
-            let mut best: Option<(usize, i16, f32)> = None;
             for (i, dr) in self.list.iter().enumerate() {
                 // `Drone_CollisionHandler` 0x140968:62 returns while `NPCGlobals == 0` (the NIS freeze:
                 // drones take no damage) and `Collide_PickObj` 0x1eae80:26-30 drops `obj+0xF0 & 0x20`
@@ -13193,8 +13239,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
             let at = |t: f32| [b.pos[0] + ray[0] * t, b.pos[1] + ray[1] * t, b.pos[2] + ray[2] * t];
+            // The first solid node wins the round [M 0x1ea398:216-229 + 0x12cff0-4]: a scenery
+            // contact taken above (contact.is_some) kills the walk — nothing farther applies.
             match (best, tw) {
-                (Some((i, part, t)), w) if w.is_none_or(|w| t < w) => {
+                (Some((i, part, t)), w) if w.is_none_or(|w| t < w) && contact.is_none_or(|(ct, _)| t < ct) => {
                     b.dead = true;
                     let hit = Hit { part, ray, point: at(t), damage: b.damage, weapon: b.weapon };
                     self.player_impacts.push(PlayerImpact::Drone { drone: i, part, at: hit.point });
@@ -13281,7 +13329,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         }
                     }
                 }
-                (_, Some(w)) => {
+                (_, Some(w)) if contact.is_none_or(|(ct, _)| w < ct) => {
+                    // The walk stopped at the scenery contact (nearer than the wall) — the round
+                    // never reached the static node behind it [M 0x1ea398:216-229].
                     // fix-gas-rng4 (111d3's deferral ported onto the G-041 walk): the world hit's
                     // RNG draws belong to the game's COLLIDE pass — `Bullet_CollisionHandler`
                     // 0x12ce80 runs under `Collide_Update` 0x1ea398 [M control_movement_object_
