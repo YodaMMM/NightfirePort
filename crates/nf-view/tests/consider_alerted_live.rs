@@ -174,14 +174,23 @@ fn the_05_one_second_gate_holds_then_opens() {
         assert_ne!(sim.drones.list[s].alert_bits & 0x10, 0, "the source's bits are up — only the gate holds");
     }
     // Past it: the alert lands and the forced attack proceeds (07000005 has no party gate).
+    // The game's write order inside the pass frame decides WHAT survives it [M 0x176250:199-208 —
+    // the effect (latch :201, copy :202/:207, assist :206) ends with Drone_Message(0x1f) :208;
+    // 0x175a38 sends delay-0 → Drone_SM_RouteMsgDCV 0x171df8 calls the DSTATE func inline; Idle
+    // 0x15bf18:129-130 case 0x1f → DoForcedAttack 0x148c60:24-28 — the latch is CONSUMED
+    // (`& 0xfffdffff` :27), 0x24000000 stamped and SetState(0x56)]: the frame leaves the copy +
+    // the assist pointer and a CLEARED latch. The cleared latch is the proof the forced attack
+    // RAN — a refused one keeps the latch (the_07_latched_party_guest pins that half). (The old
+    // pin `alerted_by_drone == true` here contradicted 0x148c60:27: it held on master only
+    // because the port then ignored the consumption; fixed with the addresses, 2026-10-23.)
     let mut hit = false;
     for _ in 0..120u32 {
         w.tick(Input::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.list[o];
-        if d.alerted_by_drone && d.assist_src == Some(s) && d.alert_bits & 0x10_0000 != 0 { hit = true; break; }
+        if !d.alerted_by_drone && d.assist_src == Some(s) && d.alert_bits & 0x10_0000 != 0 { hit = true; break; }
     }
-    assert!(hit, "the gate opened and the alert landed");
+    assert!(hit, "the gate opened and the alert landed (the latch consumed by the same-frame forced attack [M 0x148c60:27])");
     let sim = w.scene.sim.as_ref().unwrap();
     let d = &sim.drones.list[o];
     // The forced attack ran on 05 for every mode [M 0x148c60:9 — the 07 arm is level-gated]:
@@ -221,16 +230,23 @@ fn the_0c_voice_5_6_observer_takes_the_alert_without_sight() {
             d.velocity = [0.0; 3];
         }
     }
+    // The speech arm's effect block ends with Drone_Message(0x1f) [M-dis 0x1764a8/0x1764c8 →
+    // 0x176684-0x1766c0] and DoForcedAttack consumes the latch in the same frame [M 0x148c60:27
+    // `& 0xfffdffff`; the dispatch is inline — 0x175a38 delay-0 → 0x171df8 → the DSTATE case-0x1f
+    // 0x15bf18:129-130]: what survives is the assist pointer and the << 16 copy, with the latch
+    // cleared. (The old pin `alerted_by_drone == true` contradicted 0x148c60:27: it held on
+    // master only because the port then ignored the consumption; fixed with the addresses,
+    // 2026-10-23.)
     let mut hit = false;
     for _ in 0..200u32 {
         w.tick(Input::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.list[o];
-        if d.alerted_by_drone { hit = true; break; }
+        if !d.alerted_by_drone && d.assist_src == Some(s) && d.alert_bits & 0x10_0000 != 0 { hit = true; break; }
     }
     let sim = w.scene.sim.as_ref().unwrap();
     let d = &sim.drones.list[o];
-    assert!(hit, "the voice-5/6 observer 60 units away took the alert without sight [M-dis 0x1764a8/0x1764c8 → 0x176684]");
+    assert!(hit, "the voice-5/6 observer 60 units away took the alert without sight [M-dis 0x1764a8/0x1764c8 → 0x176684] (the latch consumed by the same-frame forced attack [M 0x148c60:27])");
     assert_eq!(d.assist_src, Some(s), "+0x528 = the source [M 0x1766c0 block]");
     assert_ne!(d.alert_bits & 0x10_0000, 0, "the << 16 copy of the source's attack bit");
     if let Some(x) = other {
