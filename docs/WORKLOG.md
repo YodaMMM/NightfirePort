@@ -58,4 +58,27 @@ Work log:
   sister (07000005: 14 prop-0x1d guards, zero kind-8 paths [D census] → no drone ever enters
   0x1b over 30 s). Fail-first verified: with the drone.rs fix reverted the walk test FAILS
   (no 0x1b entry), the sister holds; with the fix both pass.
+- (17:45-18:05) independent audit (subagent, branch-by-branch vs the decompiles): the ENTER/UPDATE
+  logic verified faithful (order, 0.66 thresholds, the 0x35/0x37/0x21/10/0x56/4 constants, the
+  ChangeToAttackMode flush). Three fixes applied:
+  1. The impact msgs ride the port's SHARED dispatch (`impact_args` / `on_explosion`'s group
+     allow / `on_dart_impact`'s whitelist), not the per-state match rows — ENEMY_MISSION was
+     missing from all three, so the live path resumed the flinch into the current state instead
+     of 0x56 and dropped the tranq dart entirely. Now: `impact_args` → (0x56, 0) [M 0x15e1e8
+     cases 6/8], the on_explosion group allow [M the 7/9/0x17/0x18/0x19 arm], the dart whitelist
+     [M case 0x19 → 0x50].
+  2. msg 0x1e (ALARM) moved to the shared ALARM row (EnemyAlerts case 0x1e → Attack) — it was on
+     the case-0x14 AlertSound fold [M 0x177c18:87-118].
+  3. The blocked/hurt arm's SetStandIdleAnim(1) → set_stand_idle(force=false) — the game's arg 1
+     skips a live stand window (0x13ca68:19-21), the port's force bool is the inverse polarity.
+  The audit also flagged (NOT touched, other tasks' gaps): the Idle case-1 Drake arm
+  (0x15bf18:19-24 — level 0x700001b + voice-set 0x14 → 0xc2) has no port counterpart anywhere;
+  the INVESTIGATE state has the same dead-impact-row idiom (0x7e missing from impact_args);
+  assign_path's |dy| ≤ 2.0 filter (drone.rs 2141) has no decompile counterpart (pure 2D at
+  0x154190:84-89 — all six census binds are same-floor, no disc impact); the game's Idle/Alert
+  ENTER checks +0x9f2 != 0 unconditionally (a stale pending route with no prop would enter 0x1b)
+  while the port requires prop && assign — no live instance constructible, noted as a deliberate
+  narrowing.
+- (18:08) audit fixes committed and pushed; the full suite restarted on the final tree.
+
 
