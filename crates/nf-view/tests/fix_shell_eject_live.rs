@@ -1,5 +1,5 @@
 //! The player's shell ejects when the weapon's +0x78 delay runs out, from the view model's eject datum
-//! as posed THEN (the user, 1015-0046: "I don't see any shotgun shells flying out").
+//! as posed THEN (no shotgun shells were seen flying out).
 //!
 //! Evidence base:
 //! - `Bullet_init_casing` 0x12fde0: at the shot only the pool slot, state 3, the mesh and the delay

@@ -1,7 +1,6 @@
 //! fix-wire2 — the 07000005 cable crossing through the REAL input path, and the 07000014 fusebox
-//! dev scenario. The user's playtest of 2026-10-12: "pressing e didnt do anything so I lept at it
-//! over the ledge and it kind of grabbed it. I then couldnt really move forward so I kept jumping
-//! 2 more times to the other side."
+//! dev scenario. Observed in play: E did nothing at the cable; a leap over the ledge grabbed it,
+//! but Bond could not move forward along it and crossed by jumping twice more.
 //!
 //! The game's law (the decompile):
 //! - E does NOT grab wires — `Player_Activate` 0x1a5170's dispatch has no class-0x2C arm [M].
@@ -20,7 +19,7 @@ use nf_view::dev;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
-/// The user's sequence at the ledge: standing at the wire icons (south ledge), E does nothing
+/// The play sequence at the ledge: standing at the wire icons (south ledge), E does nothing
 /// (game-faithful), the JUMP grabs the nearest cable (the icon-context path), and Bond hangs.
 #[test]
 fn the_jump_at_the_cable_grabs_it_and_e_does_nothing() {
@@ -102,7 +101,7 @@ fn the_hand_over_hand_move_crosses_on_the_strafe_axis() {
     assert!(sim.drones.health.health > 0.0, "alive after the crossing");
 }
 
-/// The 07000014 fusebox dev scenario: Bond starts CROUCHED inside the crawl vent (the user's ask),
+/// The 07000014 fusebox dev scenario: Bond starts CROUCHED inside the crawl vent,
 /// with the Laser out for the sabotage.
 #[test]
 fn the_fusebox_scenario_starts_crouched_inside_the_vent() {
@@ -116,7 +115,7 @@ fn the_fusebox_scenario_starts_crouched_inside_the_vent() {
         assert_eq!(sim.level, 0x0700_0014);
         let p = sim.bond.pos;
         assert!((p[0] - 41.0).abs() < 0.2 && (p[2] - 62.0).abs() < 0.2, "Bond inside the vent's north run, got {p:?}");
-        assert!(sim.bond.crouched, "the scenario starts Bond CROUCHED (the user's ask)");
+        assert!(sim.bond.crouched, "the scenario starts Bond CROUCHED");
         assert!((sim.bond.cc - nf_game::player::CROUCH_ROOT_HEIGHT).abs() < 1e-4, "the crouch root height");
         // Inside the crawl tunnel: the ceiling within ~1.5 of the floor [D probe_vent2: headroom
         // 1.46 at (41.0, 2.40, 62.0)].

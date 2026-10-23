@@ -1,4 +1,4 @@
-//! fix-render4: the 07000002 "drawn but never attacks / can't be damaged" pass the user asked for
+//! fix-render4: the 07000002 "drawn but never attacks / can't be damaged" pass
 //! (after fix-drone2, no R pressed). Runs the real viewer path (nf_view::load + Sim::step_bond),
 //! walks Bond to the bathhouse, steps him over the TOUCH_ONCE plates 341/383 (the ones play raises
 //! channel 21 through), then dumps EVERY drawn drone that either takes no damage or isn't running

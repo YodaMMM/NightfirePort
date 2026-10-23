@@ -1,6 +1,6 @@
-//! Headless NF_ISO tests for the external dev panel (fix-dev-panel): the user's main test tool must be
-//! exact — "a frag grenade spawns what looks to be a stun grenade that explodes like a frag grenade.
-//! I cant tell whats what. no clue what the rocket launcher is."
+//! Headless NF_ISO tests for the external dev panel (fix-dev-panel): the main test tool must be
+//! exact — the "frag" row spawned what looked like a stun grenade that exploded like a frag, and the
+//! rows (the rocket launcher included) could not be told apart.
 //!
 //! The game's own names come from `USATxt.dat` bound through the weapon's name label
 //! (`Txt_BindLabel(weapon_data[w]+0x38)`, the SP pickup-name lane — `Pickup_Handler` 0x18e650:246
@@ -27,7 +27,7 @@
 //!   the record's own clip slot to the record's clip size, and the switch request is that id.
 //! - `level_kit_grants_the_games_loadout` — `do=levelkit` reproduces `Player_InitWeapon`
 //!   (0x1a7ef8) for the current level exactly (the port's `nf_game::player::init_level_loadout`
-//!   against a cleared inventory), so a playtest starts like the real game.
+//!   against a cleared inventory), so a test run starts like the real game.
 //! - `panel_shows_the_current_fire_mode_and_ammo_type` — the catalog exposes the current weapon's
 //!   fire-mode label text (`+0x30 + mode*4`, the HUD's own read — `HUD_UpdateAmmoPane` 0x19a7f0:229)
 //!   and ammo type (its `ammo_data` name label + the spare/clip counts).
@@ -128,7 +128,7 @@ fn dump_panel_ground_truth() {
 /// (+0x7C), the third-person/pickup model (+0x80) and the flying projectile's mesh (+0x5C) —
 /// `Bullet_update` 0x12e7b0:483 sets +0x5C on the bullet object (`hashtable_set_object_to_entity_gfx`)
 /// and the draw machine sets +0x7C on the view entity (`AnimDatumSetEntity`, 0x1a5460:106) [M].
-/// The old catalog had none of the three: the user literally could not tell what a row would spawn.
+/// The old catalog had none of the three: there was no telling what a row would spawn.
 #[test]
 fn panel_entries_carry_the_record_meshes() {
     let Some(scene) = loaded() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -160,8 +160,8 @@ fn panel_entries_carry_the_record_meshes() {
 /// Every entry shows the game's own name: `Txt_BindLabel(weapon_data[w]+0x38)` from USATxt.dat
 /// (`Pickup_Handler` 0x18e650:246 binds the same lane for the pickup message; `HUD_UpdateAmmoPane`
 /// 0x19a7f0 draws it in the ammo pane) [M]. The old hardcoded table disagreed with the bank — its
-/// "Frag Grenade" sat on 0x34 while the atlas pins 0x35 = Frag Grenade [L+M], the user's
-/// "a frag grenade spawns what looks to be a stun grenade".
+/// "Frag Grenade" sat on 0x34 while the atlas pins 0x35 = Frag Grenade [L+M], so the frag row
+/// spawned a stun grenade.
 #[test]
 fn panel_names_are_the_games_own() {
     let Some(scene) = loaded() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -188,7 +188,7 @@ fn panel_names_are_the_games_own() {
     }
     eprintln!("[names] {named} entries carry bank names");
     assert!(named >= 40, "the bank should name most records (got {named})");
-    // The exact rows the user called out: the grenades and the rocket launcher. Whatever the bank
+    // The exact rows that were wrong: the grenades and the rocket launcher. Whatever the bank
     // binds for them IS the panel's string (pinned here so a regression can't silently shift them).
     let name_of = |id: u8| entries.iter().find(|e| e["id"] == format!("{id}")).map(|e| e["name"].clone()).unwrap_or_default();
     for id in [0x34u8, 0x35, 0x36, 0x37, 0x3a] {

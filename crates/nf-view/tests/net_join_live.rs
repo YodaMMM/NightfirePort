@@ -5,7 +5,7 @@
 //! three sims run on with all per-tick state hashes agreeing — the joined
 //! slot's agent spawned at the announced tick the game's own MP way on every
 //! machine. NF_ISO-gated (the arena loads from the disc like
-//! `net_match_live`); serial (three full arena sims per test, a 3 GB sandbox
+//! `net_match_live`); serial (three full arena sims per test, a 3 GB test machine
 //! OOMs on parallel runs).
 
 use std::time::Instant;

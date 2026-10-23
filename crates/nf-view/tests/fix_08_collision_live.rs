@@ -1,4 +1,4 @@
-//! fix-08-collision (100j): the playtest's "the wall is still there but invisible" inside
+//! fix-08-collision: an invisible wall that still collided inside
 //! 07000008's missile room (`Room_Guardhouse_F2`, graph cell 48) at
 //! `--bond 155.19,43.12,-113.38,1.57,0` with portal culling ON.
 //!
@@ -37,7 +37,7 @@ fn load_08(iso: &str) -> nf_view::scene::Scene {
     scene
 }
 
-/// Fail-first repro: from the user's playtest spot inside the missile room, walking NORTH (yaw π,
+/// Fail-first repro: from the repro spot inside the missile room, walking NORTH (yaw π,
 /// the −z facing) hits the exterior slabs' west face (z −118.0 [D probe]) — pre-fix the flat
 /// capsule push stopped Bond at z ≈ −117.5 (face + radius) and squeezed him UP the invisible
 /// wall (y 43.75 → 44.17 over ticks 59-68) before shoving him over the top; post-fix the slabs
@@ -98,7 +98,7 @@ fn the_missile_rooms_real_west_wall_still_blocks() {
     assert!(sim.bond.pos[1] > 40.0, "the floor held (got {:?})", sim.bond.pos);
 }
 
-/// Sister (the playtest's own walk): eastward from the user spot reaches the room's real east
+/// Sister (the repro's own walk): eastward from the repro spot reaches the room's real east
 /// wall — the fix must not open the building.
 #[test]
 fn the_missile_rooms_real_east_wall_still_blocks() {

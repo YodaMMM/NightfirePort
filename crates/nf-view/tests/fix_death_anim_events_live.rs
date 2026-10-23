@@ -1,4 +1,4 @@
-//! fix-death-anim-events: the death script 0x06000151's op-4 events on Bond (task 110i).
+//! fix-death-anim-events: the death script 0x06000151's op-4 events on Bond.
 //!
 //! Evidence base:
 //! - `Player_ChangeSubState` 0x190630 case 0xd: `AnimScriptAdd(obj, 0x6000151)` (the gravity

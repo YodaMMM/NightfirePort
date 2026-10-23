@@ -1,6 +1,4 @@
-//! ladder-underwater-02 (750a): the underwater ladder(s) on 07000002 softlock the game — the user's
-//! THIRD report (2026-10-16 evening): "ladder on 02 underwater is fucked and softlocks the game.
-//! I already told you about this."
+//! ladder-underwater-02: the underwater ladder(s) on 07000002 softlocked the game.
 //!
 //! The disc ladders that reach into water [D probe `disc_ladders_and_water_cels` below, nf-formats
 //! parse of 07000002.bin]:
@@ -180,8 +178,8 @@ fn push_off_clears(sim: &mut Sim, lad: &nf_game::ladder::Ladder, budget: usize) 
 }
 
 /// SCENARIO 1+2, the DEEP ladder: swim INTO it from underwater, climb UP out of the water. The
-/// pre-750a port WEDGED at the grab depth (the fat 0.55 stance capsule in the climb pass) — the
-/// user's "ladder on 02 underwater … softlocks the game". With the game's climb capsule [M
+/// old port WEDGED at the grab depth (the fat 0.55 stance capsule in the climb pass) — the
+/// underwater-ladder softlock. With the game's climb capsule [M
 /// 0x194df0 case 0] the climb carries him up out of the water body (the surface is 3.765 here
 /// [D]) and HOLDS him in control above it. The final exit into the bathhouse is blocked by the
 /// CLOSED bath hatch (SimpleScript 0xE2 #269, solid at y 4.74 [D probe], the USE-operate path —
@@ -219,7 +217,7 @@ fn deep_ladder_swim_in_climbs_out_of_the_water() {
 /// below-hit [M Player_Climb 0x196310:63-78, AnimObj+0x60 bit 8] (under the column the tunnel
 /// floor is within the climb capsule's below reach long before the 0.547 bottom threshold), the
 /// swim entry overwrites the regrab with 5 [M Player_InWater 0x195e50] — and the push-off must
-/// clear the grab column (the pre-750a port re-latched every cycle: the user's softlock).
+/// clear the grab column (the old port re-latched every cycle: the softlock).
 #[test]
 fn deep_ladder_climb_down_push_off_clears_the_ladder() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -261,8 +259,8 @@ fn deep_ladder_let_go_mid_water_push_off_clears() {
     eprintln!("  push-off cleared the column: dxz {dxz:.3}");
 }
 
-/// The hut pocket swim-out (playtest 1016: "swimming from the pond, back out to the pond … swims
-/// past the ladder"). PCSX2 truth, 2026-10-16 [L, fresh 07000002 boot via goto_level, Bond placed by
+/// The hut pocket swim-out (swimming from the pond back out to the pond, past the ladder).
+/// PCSX2 truth, 2026-10-16 [L, fresh 07000002 boot via goto_level, Bond placed by
 /// PINE in the pond cel 0x1708870, stick forward held]: from the pocket spot (−76.27, 3.17, 22.14),
 /// 0.955 to the side of the ladder axis, yaw 0.4 swims PAST the ladder to (−71.14, 3.63, 27.94) and
 /// yaw 0.7 to (−69.16, ·, 28.55); yaw ≥ 1.3 (into the rungs) grabs. The pre-fix port grabbed at

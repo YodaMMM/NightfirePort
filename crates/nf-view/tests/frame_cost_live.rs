@@ -1,13 +1,12 @@
-//! frame-cost-guard: headless per-frame CPU cost budgets, so the playtest lag cannot come back.
+//! frame-cost-guard: headless per-frame CPU cost budgets, so the in-game lag cannot come back.
 //!
-//! The user's 2026-10-15 playtest ran 07000005 at ~52 ms/frame, 34 ms of which was
+//! 07000005 once ran at ~52 ms/frame, 34 ms of which was
 //! `Scene::colour_mults` walking every character vertex for the effect pools' attachments (8561
 //! attachments on 73 characters); master's "fix the in-game lag" (c49f8b69) computes the
 //! multipliers once per pickup and per attachment instead, and `skin_palette` is now ~1.4 ms.
 //! This file pins the per-frame CPU phases the `RedrawRequested` handler runs (lib.rs:2460) with
 //! median-of-N timings after warm-up on EVERY single-player level archive, and asserts generous
-//! budgets so a regression fails a test instead of a playtest. Measured numbers are printed for
-//! the report table.
+//! budgets so a regression fails a test instead of reaching play. Measured numbers are printed.
 //!
 //! What is timed (the per-frame CPU chain, gpu.rs `cel_visibility` → the lib.rs `skin_palette` gate →
 //! `Renderer::update_skin`'s CPU half → `hud::overlay`/`menu_overlay`; line numbers as of this branch):
@@ -227,7 +226,7 @@ fn time_a_level(dev: Option<&(wgpu::Device, wgpu::Queue)>, iso_path: &str, name:
             let e = r.render(device, queue, &view, &depth, vp, vp, eye, t as u32, &[], &nf_view::gpu::HudFrame::default(), None, None);
             std::hint::black_box(e); // dropped unfinished: nothing is submitted — the pure CPU encode
         });
-        // The per-level budget: 240 fps = 4.167 ms (the playtest target). The encode gets what the
+        // The per-level budget: 240 fps = 4.167 ms (the frame-rate target). The encode gets what the
         // frame's OTHER measured phases leave, minus a 20 % margin for the pieces this file cannot
         // time (update_skin's buffer writes, the submit, the present, the window's own work). The
         // floor 1.2 ms = 70 % of the worst post-fix WHOLE frame the 2026-10-21 measurement printed
@@ -433,9 +432,8 @@ fn crate_texture(hash: u32) -> nf_view::scene::TextureImage {
     nf_view::scene::TextureImage { key: (0, hash), width: w as u32, height: h as u32, rgba: vec![255; (w * h * 4) as usize], more: vec![], rate: 1 }
 }
 
-/// drake-cutscene-06: the 07000006 dressing cut-scene (0x06000071, SP #810, the playtest
-/// 1015-2142 "drake cutscene on o6 has some lag" report) — 649's budgets extended to a running
-/// cut-scene. The scene is driven through the real path (the truck-ride carry, the LoadPoint
+/// drake-cutscene-06: the 07000006 dressing cut-scene (0x06000071, SP #810, which
+/// lagged) — the frame budgets extended to a running cut-scene. The scene is driven through the real path (the truck-ride carry, the LoadPoint
 /// trigger #746 → ch 0x83), and at three scene ticks (the hold, the mid-swap cut, the closing
 /// sweep) the window's per-frame phases are timed with the SCENE's script camera. The sim tick's
 /// own median over the scene is budgeted too: the profile found `Pickup_Update`'s port casting a

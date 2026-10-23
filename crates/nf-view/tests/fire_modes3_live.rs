@@ -274,7 +274,7 @@ fn launcher_guided_rides_and_unguided_fires_four() {
     assert!(scene.sim.as_ref().unwrap().missile_cam.is_none(), "the unguided twin never rides the camera");
 }
 
-/// The MGL family (Militek MGL 0x2A ↔ 0x2B, the user's report): 'Grenade' 0x2A detonates ON the
+/// The MGL family (Militek MGL 0x2A ↔ 0x2B): 'Grenade' 0x2A detonates ON the
 /// wall (contact, within ~2 s), 'Delay' 0x2B never does and dies on its 210-tick fuse
 /// [M Bullet_DoTrails 0x12d890:262-281] — both through the REAL mode press.
 #[test]
@@ -421,7 +421,7 @@ fn crossbow_mode_press_is_inert_and_fires_single() {
     // arm kills it at the wall with the standard impact effect. delta-repeater moved the dispatch
     // to the gravity-AND-family-flag gate: the bolt is a straight player bullet now, not a
     // grenade (the old "grenade-path projectile" model bounced it off walls with the grenade
-    // sounds — playtest 1015-1738).
+    // sounds).
     {
         let sim = scene.sim.as_ref().unwrap();
         let f6c = u32::from_le_bytes(sim.weapons.records[0x11][0x6c..0x70].try_into().unwrap());

@@ -134,7 +134,7 @@ fn the_page_aux_movie_map_comes_from_the_page_data() {
 }
 
 /// The menu loop movie decodes with the game's own geometry, and a frame's RGB8 SHA-1 pins the
-/// decoder end to end (numbers only — the main agent compares the pixels).
+/// decoder end to end (numbers only — no pixel compare here).
 #[cfg(feature = "movies")]
 #[test]
 fn the_menu_loop_movie_decodes() {

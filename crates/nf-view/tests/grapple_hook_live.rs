@@ -1,6 +1,6 @@
 //! fix-grapple-hook: the grapple point's pulley-with-hook mesh is drawn.
 //!
-//! The playtest (07000005 at `--bond 16.5,29.6,58.6,-2.01,0.24`, main agent 2026-10-13): the real
+//! At 07000005 `--bond 16.5,29.6,58.6,-2.01,0.24` the real
 //! game shows a PULLEY WITH A HOOK hanging from the T-shaped bracket on the castle wall — the
 //! grapple point the Q-Claw latches onto (placement #282 at (13.75, 32.29, 57.3), class 'Q' 0x51
 //! per fix-qclaw). The port drew the bracket only: the hook/pulley object was missing.
@@ -31,7 +31,7 @@ use nf_formats::{disc, level::Level};
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The two 07000005 grapple placements [D nf-extract placements 07000005.bin 3a]: record index,
-/// translation, and the resolved object's name. #282 is the playtest point (the Q-Claw's target).
+/// translation, and the resolved object's name. #282 is the check point (the Q-Claw's target).
 const PLACEMENTS_05: &[(usize, [f32; 3], &str)] = &[
     (281, [-3.3962271, 42.940285, -71.76922], "graple_pulley"),
     (282, [13.752469, 32.291878, 57.303413], "graple_pulley"),
@@ -87,7 +87,7 @@ fn the_pulley_draws_at_both_07000005_grapple_points() {
     }
 
     // The draw: one instance per placement (the counter the sweep keeps, like ladders_drawn).
-    assert_eq!(scene.grapple_hooks_drawn, 2, "both 07000005 grapple points draw their pulley (0 = the user's symptom)");
+    assert_eq!(scene.grapple_hooks_drawn, 2, "both 07000005 grapple points draw their pulley (0 = the old symptom)");
 
     // And the drawn geometry really is the pulley at each spot: the pulley's full vertex set lands
     // inside its own world box, exactly (nothing else intrudes — checked on the fixed tree).
@@ -101,7 +101,7 @@ fn the_pulley_draws_at_both_07000005_grapple_points() {
 /// [D nf-extract placements <level> 3a] over every FILES.BIN archive: the story levels (05, 0a, 0c,
 /// 0d, 11, 12, 14, 41), the multiplayer arena 4b, and the driving-mission archives (23–29). Each
 /// drawn count must equal its placement count — a miss is a level whose hooks stay invisible (the
-/// user's symptom on that map) or a double draw.
+/// old symptom on that map) or a double draw.
 #[test]
 fn one_hook_per_grapple_point_on_every_level() {
     let iso = iso();

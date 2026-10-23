@@ -1,10 +1,9 @@
 //! fix-swim: the 07000002 garden pond swim (substate 3) and the water ladder under the hut, through
 //! the REAL viewer path (`nf_view::load` + `Sim::step_bond`). Opt-in via `NF_ISO`.
 //!
-//! User playtest (results 1013-1825, `--bond -82.3,5.3,32.05,1.57`): "This is hardly swimming …
-//! spamming the crouch button, and I very, very slowly got into the water", "I could hear my
-//! footsteps too", "I can get in the water, but I can't crouch in water. I'm not sure how to swim",
-//! "There's a ladder in the water under that hut. I can't latch onto it and climb it".
+//! Symptoms (at `--bond -82.3,5.3,32.05,1.57`): entering the water took slow crouch-spamming and
+//! barely counted as swimming; footsteps played in the water; there was no way to dive; and the
+//! ladder in the water under the hut could not be grabbed and climbed.
 //!
 //! Game evidence (ACTION.ELF):
 //! - `Player_InWater` 0x195e50: cel+0x90 > pos.y − 0.3 → `ChangeSubState(3)`, run as the FIRST
@@ -40,7 +39,7 @@ fn step(sim: &mut Sim, input: nf_game::player::Input) {
 }
 
 /// The pond's water cels [D probe]: 4 and 16 at 3.765, 6 at 4.339, 17 at 3.768.
-const BANK: [f32; 3] = [-82.3, 5.3, 32.05]; // the user's `--bond` spot, yaw 1.57 walks +X into the pond
+const BANK: [f32; 3] = [-82.3, 5.3, 32.05]; // the repro `--bond` spot, yaw 1.57 walks +X into the pond
 
 /// Walk Bond from the bank into the pond on the real path; returns (entry tick, sim).
 fn swim_in(sim: &mut Sim) -> usize {
@@ -80,7 +79,7 @@ fn walking_off_the_bank_enters_the_swim_at_the_game_speed() {
 /// The swim stroke rides the LOOK direction: looking down + forward DIVES, looking up + forward
 /// surfaces and the rise clamps at `surface − 0.3` [M 0x191dd0:149-165 + 0x193600:201-220]. Pre-fix
 /// the stroke was planar-only and crouch/jump sank/rose ±2.4/tick ([S] fiction — the game's case 3
-/// reads no such input, the user's "I can't crouch in water. I'm not sure how to swim").
+/// reads no such input).
 #[test]
 fn swim_dives_and_surfaces_with_the_look_direction() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return; };
@@ -107,7 +106,7 @@ fn swim_dives_and_surfaces_with_the_look_direction() {
 
 /// No footstep sounds while swimming: the game's step needs a cached ground hit the swim capsule
 /// never gets [M Effect_Create 0x1ce688:63]; the pond surface's slosh id (129 [D probe]) played every
-/// stride pre-fix — the user's "I could hear my footsteps too".
+/// stride pre-fix — footsteps in the water.
 #[test]
 fn no_footstep_sounds_play_while_swimming() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return; };

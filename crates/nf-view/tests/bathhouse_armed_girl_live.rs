@@ -1,9 +1,9 @@
-//! bathhouse-armed-girl-02 (playtest 1017-1139): "one of the bathhouse girls had a gun and
-//! started shooting at me" (07000002, F12 at --bond -43.11,6.46,10.37 frame 4206).
+//! bathhouse-armed-girl-02: one of the bathhouse girls appeared to have a gun and shoot at Bond
+//! (07000002, seen at --bond -43.11,6.46,10.37 frame 4206).
 //!
 //! The placement [D — the 07000002 census, `census_07000002_drones.rs`]: the bathhouse girls are
 //! the three skin-0x05000034 drone placements #464 (-37.5,6.5,4.4), #465 (-45.5,5.8,12.2 — the
-//! F12 girl, 2.9 units from the playtest camera) and #466 (-12.0,6.6,-39.1): kind 8, dtype 0xE
+//! girl in view, 2.9 units from the camera) and #466 (-12.0,6.6,-39.1): kind 8, dtype 0xE
 //! (param 15) → team 3 — the civilian team [M NDrone2_GetDroneTypeAttackTypeFriend 0x14cbd8's
 //! team switch; `NDrone2_IsCivilian` 0x14aae0], weapon parameter 9 = 1 (the fists) and
 //! weapon-swap parameter 10 = 1 [D]. The game's weapon store is `NDrone2_DefaultInit` 0x14b300:
@@ -73,12 +73,12 @@ fn every_02_civilian_spawns_unarmed_with_no_drawable_swap_id() {
     }
     assert_eq!(girls, 4, "the census's four civilian placements (#463-466) are in the level [D]");
     assert!(guards >= 15, "the census's guard block (#442-#462) backs the sister ({guards} found)");
-    assert_eq!(named, Some(0x1c), "the F12-scene guard #448 (skin 0x05000036) holds weapon 0x1c [D census #448]");
+    assert_eq!(named, Some(0x1c), "the in-view guard #448 (skin 0x05000036) holds weapon 0x1c [D census #448]");
 }
 
-/// The playtest's shot: the terrace pads wake the bathhouse block (the girls' and their guards'
+/// The repro shot: the terrace pads wake the bathhouse block (the girls' and their guards'
 /// switch channel, placement parameter 3 = 22/23/25 [D census; the wake is the pads' out-channel
-/// write — WAIT_SWITCH UPDATE `channel_on` → start state]). With Bond at the playtest spot, the
+/// write — WAIT_SWITCH UPDATE `channel_on` → start state]). With Bond at the repro spot, the
 /// mode-7 girl #464 runs her course and her chain reaches Attack; the game answers an unarmed
 /// attacker with no swap id with CivilianScared [M AttackNoWeapon 0x14af80], so she never plays
 /// the draw anim, never takes the case-2 sidearm and never fires. The armed guard on the same
@@ -96,7 +96,7 @@ fn the_woken_girl_never_draws_or_fires_and_the_guard_still_fires() {
         sim.drones.set_channel(22);
         sim.drones.set_channel(23);
         sim.drones.set_channel(25);
-        sim.bond.pos = [-43.11, 6.46, 10.37]; // the playtest camera [L the playtest report]
+        sim.bond.pos = [-43.11, 6.46, 10.37]; // the repro camera
         sim.bond.prev_pos = sim.bond.pos;
     }
     let mut ever_fired = false;

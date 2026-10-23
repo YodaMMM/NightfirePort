@@ -1,7 +1,6 @@
-//! fix-silencer-visual: the silenced twins' silencer MESH on the view model (task 109m).
+//! fix-silencer-visual: the silenced twins' silencer MESH on the view model.
 //!
-//! User (playtest 1014-1725, level 05): "The suppressor still stays on the gun, but visually
-//! it's not there" — the mode press lands the silenced twin (its dead flash and own sound are
+//! Symptom (level 05): the suppressor was on the gun in the sim but did not draw — the mode press lands the silenced twin (its dead flash and own sound are
 //! right, fix-weapon-sounds / fire_modes3), but the port never draws the silencer tube on the gun.
 //!
 //! The game's attachment, decoded [M]: while the HELD record's flags (+0x68) carry 0x800,

@@ -1,8 +1,7 @@
 //! fix-weapon-fx-levels live tests: every weapon's EFFECTS on every level.
 //!
-//! The user: weapons must work "no matter what level, with sounds and proper animations and
-//! particles". 100a made the fp models load on every level (the give path's asset merge); this
-//! task audits the effects the same way — per level × weapon: the fire sound, the reload/draw
+//! Weapons must work on any level, with sounds, proper animations and particles. The give path's
+//! asset merge makes the fp models load on every level; this file audits the effects the same way — per level × weapon: the fire sound, the reload/draw
 //! sounds, the muzzle flash, the shell eject, the tracer, the impact puff/spark/decal, the
 //! projectile model + trail, the explosion.
 //!
@@ -249,9 +248,9 @@ fn every_story_level_resolves_every_weapons_fx() {
             miss.sort();
             miss.dedup();
             // The residual: a couple of records' +0x80 HELD-model hash lives only in non-story
-            // archives (the merge pool is the story order + the skin's owner) — documented in the
-            // report as the one asset class this session did not extend the merge to. Everything
-            // else (the effects the user sees: the muzzle flashes, the casings, the tracer, the
+            // archives (the merge pool is the story order + the skin's owner) — the one asset
+            // class the merge does not cover yet. Everything
+            // else (the visible effects: the muzzle flashes, the casings, the tracer, the
             // impact set, the sounds, the blast) must be clean.
             if miss.iter().any(|&m| m != 'h') { total_missing += 1; }
             else if !miss.is_empty() { residual_h.push(w); }

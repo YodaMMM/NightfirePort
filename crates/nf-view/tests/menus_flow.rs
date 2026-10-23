@@ -283,7 +283,7 @@ fn the_results_pages_split_complete_from_failed() {
     fe.mission_ended(Outcome::Complete, Stats { shots_fired: 120, shots_hit: 40, accuracy_pct: 33, time_s: 754, ..Stats::default() });
     assert_eq!(fe.flow.page, 0x4000_0036);
     // reward-after-outro [M 0x182c60:72-74 / 0x1d6360:160-163]: the page QUEUES at the end — no
-    // MenuManager runs until the load's tail (the old assert pinned the playtest bug: the reward
+    // MenuManager runs until the load's tail (the old assert pinned the bug: the reward
     // page before the ending cut-scene).
     assert!(fe.results_queued, "the page queues at the end [M 0x182c60:72]");
     assert_eq!(fe.page, Page::Start, "no manager is up during the load [M 0x1d6360:160-163]");
@@ -454,10 +454,9 @@ fn the_menu_overlay_draws_the_game_pages_with_their_own_sprites() {
     assert!(has(0x4000_0023, 0x0300_00a5), "the difficulty page draws its emblem [M control 0x100000be TEX 0x030000a5]");
     // The mission list's ring preview is PER ROW: row 0 (Paris Prelude) must draw Paris Prelude's own
     // preview 0x03000085 = sp_level[0]+0x00 [L ee_snapshot 0x2df2e0; M 0x1f8388's msg 0x24] — the port
-    // drew The Exchange's 0x03000084 here (the constant 0x10000020 default), which is exactly the
-    // symptom the driver reported.
+    // drew The Exchange's 0x03000084 here (the constant 0x10000020 default).
     assert!(has(0x4000_001c, 0x0300_0085), "Paris Prelude's own ring preview [M sp_level[0]+0x00]");
-    assert!(!has(0x4000_001c, 0x0300_0084), "row 0 must NOT show The Exchange's preview 0x03000084 (the reported symptom)");
+    assert!(!has(0x4000_001c, 0x0300_0084), "row 0 must NOT show The Exchange's preview 0x03000084 (the old symptom)");
     // The dossier's emblem is the wheel table's per-row preview [L 0x2dfcd0 row 0 = 0x300019b Records;
     // the page's static 0x030000c4 is the Gadgets row].]
     assert!(has(0x4000_002b, 0x0300_019b), "the dossier draws its Records row's preview [L table 0x2dfcd0]");
@@ -687,7 +686,7 @@ fn the_campaign_is_sp_level_on_the_disc() {
 // --- fix-menus3: the 2026-10-13 render-vs-PCSX2 gaps ---
 
 /// Framing: the real game draws the 640×480 menu space as a CENTRED 4:3 picture with black bars at
-/// the sides [L the main agent's PCSX2 captures 2026-10-13]; the port stretched it across the 16:9
+/// the sides [L PCSX2 captures]; the port stretched it across the 16:9
 /// window (Anchor::Stretch quads). Every overlay vertex must stay inside the window's central 4:3
 /// band (|x| ≤ (4/3)/aspect), and at a 4:3 window the full-screen plate still spans it edge to edge.
 #[test]
@@ -710,7 +709,7 @@ fn the_menus_draw_inside_a_centred_4_3_band() {
     assert!(worst >= 0.999, "at 4:3 the full-screen art reaches the window edges (worst x {worst})");
 }
 
-/// The ring preview is clipped to the ring's circle [L the main agent's render: a visible square box
+/// The ring preview is clipped to the ring's circle [L render compare: a visible square box
 /// around the emblem / mission preview]. Every preview vertex (640-space) must sit inside the
 /// inscribed circle of the emblem rect (114,118,150×150); the ring quad itself may reach the box.
 #[test]
@@ -742,7 +741,7 @@ fn the_ring_preview_is_clipped_to_the_ring_circle() {
     assert!(preview_verts >= 20 * 6, "the preview drew as the circle strips ({preview_verts} verts)");
 }
 
-/// PC port: the hint bars name keyboard keys, not the PlayStation pad buttons (the user, 2026-10-15). The ~A/~B/~Y/
+/// PC port: the hint bars name keyboard keys, not the PlayStation pad buttons. The ~A/~B/~Y/
 /// ~V/~H tokens map to the keys `key_action` uses — Enter / Esc / Tab / the arrows — and draw as keycaps, so no
 /// specialchar pad tile (the ✕ at (235,1), the □ at (235,61)) is drawn on the codename page's hint any more. Sister:
 /// the objective bullets ~I/~J are not buttons and keep the game's glyphs.
@@ -768,7 +767,7 @@ fn the_hint_bars_name_keyboard_keys() {
 }
 
 /// The title's legal block wraps inside its plate (50,332,540×108) and every line is centred at the
-/// plate's centre x=320 [L the main agent's captures: the raw run went off the right edge]; and "©"
+/// plate's centre x=320 [L PCSX2 captures: the raw run went off the right edge]; and "©"
 /// lays out as ONE glyph (the CP-1252 decode + a char walk — the byte walk drew C2+A9 = "Â©").
 #[test]
 fn the_legal_line_wraps_inside_its_plate_and_keeps_the_copyright() {
@@ -1075,8 +1074,8 @@ fn the_title_prompt_uses_the_page_colour() {
 
 // --- fix-pause-menu2: the pause page's tab contents ---
 
-/// The yellow arrow cursor left of the selected MISSION row [L the main agent's PCSX2 captures
-/// 2026-10-13; the port had none]. The cursor is the page's only yellow draw (menu.rs `YELLOW`, the page
+/// The yellow arrow cursor left of the selected MISSION row [L PCSX2 captures; the port had
+/// none]. The cursor is the page's only yellow draw (menu.rs `YELLOW`, the page
 /// data's 0x7f621f since fix-menus-real; it was 0xfec43e when this test was written), so its colour pins it.
 #[test]
 fn the_pause_mission_tab_has_the_yellow_row_cursor() {
@@ -1238,7 +1237,7 @@ fn the_page_headers_draw_the_header_font_atlas() {
     }
 }
 
-/// The Dossier wheel opens at row 0 and CLAMPS — the playtest's "the port adds Weapons" was the
+/// The Dossier wheel opens at row 0 and CLAMPS — the extra Weapons row was the
 /// stale missions cursor riding into the wheel (with the wrap, Up at Records teleported to
 /// Weapons). Evidence [M P_DOSSIER_Handler 0x216de0:9-16 resets the wheel (msg 0x2e param 0) when
 /// the page opens from missions/results/stats; Scroll_SendMessage 0x221810:98-106 rejects
@@ -1398,7 +1397,7 @@ fn the_mouse_drives_the_menus() {
     assert_eq!(p.cursor, 1, "hovering RESTART selects it");
 }
 
-// --- attract-mode (task 625): the no-input attract sequence [docs/systems/attract-mode.md] ---
+// --- attract-mode: the no-input attract sequence [docs/systems/attract-mode.md] ---
 
 #[test]
 fn the_attract_timeout_fires_at_the_games_frame_count() {

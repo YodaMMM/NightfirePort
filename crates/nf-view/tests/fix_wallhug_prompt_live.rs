@@ -1,9 +1,8 @@
 //! fix-wallhug-prompt: the wall-shimmy prompt's volume and the Q-Claw's silent latch, through the
 //! REAL input path (`nf_view::load` + `Sim::step_bond`, the Input the window builds).
 //!
-//! The user (playtest 1014-1725, 05 trench ledge): "That wall walking ledge area, its interaction
-//! prompt area is a bit too large. Like I'm walking away from it and I still see it." and "hook
-//! latched, pulled me in, but I also heard a bullet impact".
+//! Symptoms (05 trench ledge): the wall-shimmy prompt area was too large — the prompt stayed up
+//! while walking away — and the hook latch also played a bullet-impact sound.
 //!
 //! The game's prompt volume is NOT a flat window: `Player_CollisionHandler` 0x1949a8:22 clears
 //! BLData+0x95F = 0xFF each tick and `ThirdIcon_Update` 0x196e80 writes the context only into the
@@ -49,8 +48,8 @@ fn nearest_ctx6(sim: &Sim, p: [f32; 3]) -> (usize, f32) {
 
 /// The prompt arms only inside the game's sphere (1.0576 + the icon's 2.2757 = 3.333 around the
 /// SPHERE CENTRE, not the feet): the vent mouth (3.0 from icon[1]) still reads ctx 6 and posts the
-/// "Press Action" hint; 1.6 further out (~4.9, inside the old flat 6.0) reads NONE — the user's
-/// "I'm walking away from it and I still see it". Sisters: the grapple spot (8.17 [L PCSX2
+/// "Press Action" hint; 1.6 further out (~4.9, inside the old flat 6.0) reads NONE — no prompt
+/// while walking away. Sisters: the grapple spot (8.17 [L PCSX2
 /// 2026-10-14]) and the gate door (24.1 [L PCSX2 2026-10-13]) stay silent.
 #[test]
 fn the_crawl_prompt_arms_only_inside_the_games_sphere() {
@@ -82,7 +81,7 @@ fn the_crawl_prompt_arms_only_inside_the_games_sphere() {
     assert!(sim.hud.info_msgs.iter().any(|m| m.label == 0x100_0291),
         "the mouth must post the 'Press Action' hint (0x1000291)");
 
-    // 1.6 further out: no context, no hint — the user's walking-away symptom.
+    // 1.6 further out: no context, no hint — the walking-away symptom.
     sim.hud.info_msgs.clear();
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, mid, 0.0);
     for _ in 0..5 { sim.step_bond(Input::default(), false, false, false); }
@@ -101,8 +100,8 @@ fn the_crawl_prompt_arms_only_inside_the_games_sphere() {
 
 /// The Q-Claw's bolt is SILENT on world hits: the records carry +0x70 = 0x40 — the grapple bit,
 /// no effects bit — so `Bullet_CollisionHandler` 0x12ce80:187-190 never raises the effect flags
-/// to 0x61 and `Effect_Bullet` 0x1ce8a8:86-90's 0x40 sound arm never runs. The user's "hook
-/// latched, pulled me in, but I also heard a bullet impact" is the bolt that flies when the aim
+/// to 0x61 and `Effect_Bullet` 0x1ce8a8:86-90's 0x40 sound arm never runs. The bullet impact heard
+/// on a hook latch is the bolt that flies when the aim
 /// misses the pick on the press tick (the port latches only when the pick accepts; a missed pick
 /// lets the fire machine spawn the real claw bolt, which dies on the wall). The port played the
 /// surface impact unconditionally. Sister: the same harness with the P2K (+0x70 = 0x12 [L]) DOES
@@ -112,7 +111,7 @@ fn the_q_claw_latch_plays_no_bullet_impact() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut sim = load(&iso);
     wait_for_control(&mut sim);
-    // The user's playtest spot; the wall-shot phase aims at the wall BEHIND the spot — outside
+    // The repro spot; the wall-shot phase aims at the wall BEHIND the spot — outside
     // the pick's acceptance sphere (the ray points away from the point), so the press tick FIRES
     // the real claw bolt, which dies on that wall. (The forward castle wall at the pulley has no
     // collision at the bracket gap — the bolt dies at its range cap unsounded there; the mechanism

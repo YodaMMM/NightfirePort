@@ -1,11 +1,10 @@
-//! oddjob-hat — the playtest spree leg: 10 RAPID throws keep the game's count of live hats, the
+//! oddjob-hat — the spree leg: 10 RAPID throws keep the game's count of live hats, the
 //! oldest recycled only the game's way. Through the REAL input path (`nf_view::load_weapons` +
-//! `Sim::step_bond`), playtest 1014-1725's "if you throw enough of them, you stop seeing them
-//! flying".
+//! `Sim::step_bond`): after enough throws, the hats stopped drawing in flight.
 //!
 //! What the disc says:
 //! - The fire interval is the record's +0x40 = 0x1a (26 ticks) [L ee_start_05.bin @0x2c398c] — a
-//!   held trigger throws a hat every 26 ticks (the playtest's rapid spree).
+//!   held trigger throws a hat every 26 ticks (the rapid spree).
 //! - The sim keeps EVERY hat until its own expiry: a stuck hat holds its 1500-tick lifetime
 //!   [M `Bullet_CollisionHandler` 0x12ce80:315] and nothing recycles it early — the only caps in
 //!   `Bullet_CollisionHandler`'s stick arm are the 6-placed SAME-WEAPDEF counts for the satchel
@@ -17,7 +16,7 @@
 //!   reuse, so all ten stay visible (the pre-fix port dropped hats 9+ behind its 8-slot pool).
 //! - Each hat spends the record's +0x91 = 100 rounds [M 0x1a5460:654 `RoundToFire(+0x91, +0x91)`],
 //!   so the spree pins the clip the dev panel's own way (clip = max(clip, clip_size) per tick —
-//!   the playtest ran with the dev panel's infinite ammo).
+//!   the repro ran with the dev panel's infinite ammo).
 
 use nf_game::player::Input;
 
@@ -27,7 +26,7 @@ fn q(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
-/// Load pre-merged for the weapon, give it through the panel (the user's path), wait for the draw.
+/// Load pre-merged for the weapon, give it through the panel (the dev-menu path), wait for the draw.
 fn load_weapon(iso: &str, id: u8, rounds: i16) -> nf_view::scene::Scene {
     let mut scene = nf_view::load_weapons(iso, "07000005.bin", false, &[id]).expect("load 05");
     let (msg, switch_to) = nf_view::panel::apply(&mut scene, &q(&[("do", "weapon"), ("id", &id.to_string()), ("rounds", &rounds.to_string())]));
@@ -65,7 +64,7 @@ fn ten_rapid_throws_keep_the_games_count_of_live_hats() {
     }
     // The rapid spree: PRESS-RELEASE cycles at the record's +0x40 interval (26 ticks [L
     // ee_start_05.bin @0x2c398c]) — the throw is semi-auto (a held trigger re-throws nothing:
-    // the fire gate wants a fresh press edge), so the playtest's rapid spree is press, release,
+    // the fire gate wants a fresh press edge), so the rapid spree is press, release,
     // press at the interval. Each hat spends +0x91 = 100 rounds, so the clip is pinned the dev
     // panel's own way per tick.
     let mut throws: Vec<u32> = Vec::new(); // the tick each hat spawned
@@ -130,7 +129,7 @@ fn ten_rapid_throws_keep_the_games_count_of_live_hats() {
         });
         if !hit { missing += 1; eprintln!("[draw] UNDRAWN hat at {:?} (stuck={})", g.pos, g.stuck); }
     }
-    assert_eq!(missing, 0, "{missing} live hat(s) did not draw — the spree went invisible (the user's symptom)");
+    assert_eq!(missing, 0, "{missing} live hat(s) did not draw — the spree went invisible (the old symptom)");
     // Sister: the stuck hats keep their 1500-tick lifetime — 300 ticks later the count is still 10
     // (the oldest was not recycled), and each still draws.
     for _ in 0..300 {

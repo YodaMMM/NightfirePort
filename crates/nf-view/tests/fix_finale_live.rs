@@ -409,7 +409,7 @@ fn the_unported_start_states_behave_like_the_game() {
         assert!(free(sim, 1800), "Bond is free");
         let m7: Vec<u8> = sim.drones.list.iter().filter(|d| d.present && d.mode == 7).map(|d| d.state).collect();
         assert!(!m7.is_empty(), "07000011 has mode-7 drones [D sweep]");
-        // Merge batch-1016c (s/ai-points wires `FindRunToPoint`): EnemyRunToPoint's found arm goes
+        // With `FindRunToPoint` wired (ai-points): EnemyRunToPoint's found arm goes
         // to GoToGoalPosition 99 (class byte +0x44 == 1) or HostageGoToGoalPosition 100, the
         // none-found arm to the return state [M 0x168910:32-45 — ACTION.ELF decompile read at the
         // merge]; the old pin assumed none-found. Either way never stuck in 0x85.

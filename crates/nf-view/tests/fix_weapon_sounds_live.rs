@@ -62,7 +62,7 @@ fn owning(banks: &HashMap<usize, (Bank, Vec<u8>)>, own: usize, id: u32) -> (usiz
 
 fn load(archive: &str) -> Option<nf_view::scene::Scene> {
     // Never through the speakers: `build_sound` opens the real output device unless NF_SILENT is
-    // set, and these tests fire weapons back to back (a plain `cargo test` once blasted the user).
+    // set, and these tests fire weapons back to back (a plain `cargo test` once blasted them at full volume).
     // SAFETY: set before any audio thread starts; every test in this binary sets the same value.
     unsafe { std::env::set_var("NF_SILENT", "1"); }
     let iso = std::env::var("NF_ISO").ok()?;
@@ -174,7 +174,7 @@ fn a_native_weapons_sounds_come_from_the_levels_own_bank() {
     }
 }
 
-/// THE repro (the user's "any weapon on any level"): the AR (0x1a) given on 07000005 — a weapon the
+/// THE repro (any weapon on any level): the AR (0x1a) given on 07000005 — a weapon the
 /// level doesn't carry. Its fire (0x406/0x407) and reload (0x40a/0x40d) sounds are NOT in bank 5; the
 /// draw (0x282) is. Pre-fix the fire/reload ids never started a voice (the driver's `SFXStart3D`
 /// returned 1: no effect row in the one loaded bank). Post-fix they start from the owning spare bank

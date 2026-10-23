@@ -1,7 +1,7 @@
 //! fix-oddjob-hat — Oddjob's hat (0x45): a thrown one-shot kill, not a grenade, through the REAL
 //! input path (`nf_view::load_weapons` + `Sim::step_bond`).
 //!
-//! The playtest (1013-2313): "Oddjob's hat should be a one-shot kill but it acts like a grenade."
+//! The symptom: Oddjob's hat acted like a grenade instead of a one-shot kill.
 //! What the disc says:
 //! - The hat's record [L ee_start_05.bin @0x2c398c]: damage 100.0 (+0x0C — one shot kills any
 //!   guard), speed 0.6667 (+0x20), range 1000 (+0x1C), `+0x6C` = 0x20C08 — gravity (0x8), NO
@@ -35,7 +35,7 @@ fn q(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
-/// Load pre-merged for the weapon, give it through the panel (the user's path), wait for the draw.
+/// Load pre-merged for the weapon, give it through the panel (the dev-menu path), wait for the draw.
 fn load_weapon(iso: &str, id: u8) -> nf_view::scene::Scene {
     let mut scene = nf_view::load_weapons(iso, "07000005.bin", false, &[id]).expect("load 05");
     let (msg, switch_to) = nf_view::panel::apply(&mut scene, &q(&[("do", "weapon"), ("id", &id.to_string()), ("rounds", "5")]));
@@ -154,7 +154,7 @@ fn the_thrown_hat_kills_the_guard_in_one_hit_and_never_bounces() {
         if scene.sim.as_ref().unwrap().drones.list[victim].health <= 0.0 { break; }
     }
     let sim = scene.sim.as_ref().unwrap();
-    assert!(sim.drones.list[victim].health <= 0.0, "the hat killed nobody (the user's symptom)");
+    assert!(sim.drones.list[victim].health <= 0.0, "the hat killed nobody (the old symptom)");
     assert_eq!(bounces_51c, 0, "the hat played the 0x51c grenade bounce (pre-fix it dug in and hopped like a grenade)");
     assert!(clangs_4a7 <= 1, "more than one 0x4a7 clang before the kill landed");
     assert!(sim.drones.explosions.is_empty(), "the hat exploded (it must never blast)");

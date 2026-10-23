@@ -1,11 +1,11 @@
-//! fix-0c-hatch: the display vent's two playtest symptoms (results 1013-1758, 0700000c):
-//! 1. "the hatch actually opened very slowly" — the SS playhead rate. The game's `SS_Create`
+//! fix-0c-hatch: the display vent's two symptoms (0700000c):
+//! 1. the hatch opened very slowly — the SS playhead rate. The game's `SS_Create`
 //!    0x1a9c58:51 computes the per-tick step ONCE as `(key count − 1) / rate` (ext+0x04), and
 //!    `SS_Update` 0x1a9948:103-108 advances `t += step * FRAME_RATE_MUL` (`GS_SetRefreshRate`
 //!    0x17d2b8:15: MUL = 60/FRAME_RATE = 1.0 at the game's 60 Hz) — so the rate word is the whole
 //!    sweep's duration in ticks: `ventmesh-front` #138 (6 keys, rate 50 [D]) opens in 50 ticks.
 //!    The port moved the playhead 1/rate per tick — 250 ticks, five times slow.
-//! 2. "he still can't get through because he can't crouch through" — after the hatch slides down
+//! 2. Bond still could not get through because he could not crouch through — after the hatch slides down
 //!    (its top edge lands at y 15.86, the wall opening tops at y 17.50 [D #138 box]) the crouched
 //!    capsule (top = feet + 0.65 + radius 0.55 [M Player_Collision 0x194df0]) fits the 1.64 gap;
 //!    the real input path must carry Bond through to the display ground (y ~ 7.3 at (5.4, −113)).

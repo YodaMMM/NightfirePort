@@ -71,7 +71,7 @@ fn the_shot_leaves_a_smoke_puff() {
 /// must select the muzzle light. The branch as it stood passed 0x80 for every draw, so the level's
 /// permanent kind-0 ambient radiators (`Light_SetAmbientRadiators` 0x1caeb8 — 07000005 has 23, four
 /// of them within 10 units of the player start [D probe]) qualified on every draw and filled both
-/// slots — the user's approved muzzle glow was gone. The real gate is the source object's glist
+/// slots — the muzzle glow was gone. The real gate is the source object's glist
 /// flags word (`Control_SetGList` 0x134960 → obj+0xF0; cels: cel+0x94): 07000005's world cels carry
 /// NO 0x80 [D probe], so the radiators never light world geometry and the kind-1 muzzle light (only
 /// gated on !0x100, `Lights_CalcClosestLights` 0x1cb2e0) wins.
@@ -94,7 +94,7 @@ fn the_world_draw_nearest_the_muzzle_selects_it() {
     assert!(d < 1e-4, "the draw's slot-0 light is the muzzle light (dist {d})");
     assert_eq!(lp[1], [0.0; 4], "no second light qualifies: with the real flags the radiators are gated off");
     // The pre-fix behaviour, kept as the bug's permanent witness: with the hardcoded 0x80 the same
-    // draw selects a kind-0 radiator instead of the muzzle (this is what the user's play lost).
+    // draw selects a kind-0 radiator instead of the muzzle (this is what play lost).
     let (old_lp, _) = view.pick2([m.centre[0], m.centre[1], m.centre[2], m.radius], 0x80);
     let old_is_muzzle = ((old_lp[0][0] - muzzle.pos[0]).powi(2) + (old_lp[0][1] - muzzle.pos[1]).powi(2) + (old_lp[0][2] - muzzle.pos[2]).powi(2)).sqrt() < 1e-4;
     assert!(!old_is_muzzle, "with the old hardcoded 0x80 the muzzle was crowded out — the regression is gone");
@@ -136,8 +136,8 @@ fn the_shaded_colour_matches_the_vu1_byte_scale_and_clamps_at_255() {
 }
 
 /// The characters keep the level radiators: the guard/weapon skins' glist flags carry 0x80
-/// (0x8a0 / 0x28a0 [D probe]) and no 0x100, so kinds 0 and 1 both apply — the user's "lights fall
-/// on characters". The effect objects (bullet holes, sparks: 0x0321 [D]) carry 0x100 and are
+/// (0x8a0 / 0x28a0 [D probe]) and no 0x100, so kinds 0 and 1 both apply — lights fall
+/// on characters. The effect objects (bullet holes, sparks: 0x0321 [D]) carry 0x100 and are
 /// muzzle-excluded, like the game's own emitter rule.
 #[test]
 fn character_skins_take_radiators_and_the_muzzle_world_cels_do_not() {

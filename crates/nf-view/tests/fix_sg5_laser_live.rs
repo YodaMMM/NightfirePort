@@ -1,8 +1,7 @@
 //! sg5-semi-laser — the SG5 Commando's semi-auto mode lights its laser sight, through the real
 //! path (`nf_view::load` + `Sim::step_bond`).
 //!
-//! Playtest 1015-1738: "the SG5, when you turn on semi-auto, it's supposed to have a laser ...
-//! turn on, and it doesn't". The game: the sight is the weapon record's `+0x68` bit 0x8 —
+//! The SG5's laser sight did not turn on in semi-auto. The game: the sight is the weapon record's `+0x68` bit 0x8 —
 //! `Player_SetWeaponAnim` 0x1a9338:21-26 latches it into `BLData+0x964` on every completed
 //! draw/switch, and `Player_LaserPointer` 0x1a65d8 (per frame from `Player_CollisionHandler`
 //! 0x1949a8:188) beams from the first-person model's bone-4 sight datum along the bone's local
@@ -15,7 +14,7 @@ use nf_game::player::Input;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
-/// The 07000005 load + the dev give of the SG5 (the user's weapon), settled to idle.
+/// The 07000005 load + the dev give of the SG5, settled to idle.
 fn scene_with_sg5(iso: &str) -> nf_view::scene::Scene {
     let mut scene = nf_view::load(iso, "07000005.bin", false).expect("load 07000005");
     for _ in 0..4 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
@@ -46,7 +45,7 @@ fn semi_auto_lights_the_sight_and_the_beam_ends_on_a_surface() {
     scene.sim.as_mut().unwrap().bond.pitch = -0.5;
     for _ in 0..4 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
 
-    // FULL-AUTO (0x16, no record bit [D]): the sight is off — the playtest's "it doesn't" is
+    // FULL-AUTO (0x16, no record bit [D]): the sight is off — no sight is
     // correct for this mode; the port must show nothing.
     {
         let s = scene.sim.as_ref().unwrap();

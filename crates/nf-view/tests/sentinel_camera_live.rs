@@ -2,9 +2,9 @@
 //! the fire all ride the window's own `Input` lanes (`switch_to`, `mode_switch`, `fire` through
 //! `Sim::step_bond`), never the gun's internal setters.
 //!
-//! The user's playtest 1014-1725 (`nf-view <iso> <level> --dev`, 07000005 `--give 0x2c,0x2a`, and
-//! 08): "The rocket launcher doesn't do the first person. The rockets are way too slow." Two
-//! halves, both failing on master:
+//! Symptoms (`nf-view <iso> <level> --dev`, 07000005 `--give 0x2c,0x2a`, and 08): the rocket
+//! launcher's guided view never took over, and the rockets flew far too slow. Two halves, both
+//! failing before the fix:
 //!
 //! 1. The rockets fly at the QUARTERED INIT speed only (0.0625 u/tick for the guided 0x2c) —
 //!    the game's flight is 4.04× that: the 'Unguided' 0x2d's BU+0xF8 reads 0.33666 u/frame,

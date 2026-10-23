@@ -1,9 +1,9 @@
-//! fix-stunner-press (109b): the Stunner 0x4A fires on the PRESS and the tase stuns the guard.
+//! fix-stunner-press: the Stunner 0x4A fires on the PRESS and the tase stuns the guard.
 //!
 //! Ground truth [D docs/live/2026-10-14-weapon-measurements-pcsx2.md]: the real stunner activates on
 //! the press (the device swings forward, the tip lights blue), holds while fire is held, swings back
-//! on the release, and spends no charge with no target. The user's playtest 1014-1725: "Doesn't
-//! fucking work. It only really activates on releasing the key."
+//! on the release, and spends no charge with no target. The port used to activate it only on
+//! the key's release.
 //!
 //! The port-side failure this file pins: the tase kill route. The game's shot spawns a zero-damage
 //! bullet with the fired record itself [M Player_WeaponInitBullet 0x1a4bf0:176-203 — the 0x4A/0x4C
@@ -41,7 +41,7 @@ fn setup_stunner_on_guard(scene: &mut nf_view::scene::Scene) -> (usize, [f32; 3]
         if scene.sim.as_ref().unwrap().gun.weapon == 0x4a { ok = true; break; }
     }
     assert!(ok, "the Stunner (0x4a) did not equip");
-    // Settle: the draw finishes — the user sees the device in hand before pressing.
+    // Settle: the draw finishes — the device is in hand before pressing.
     for _ in 0..70 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     // Converge the aim on the guard without the fire.
     for _ in 0..60 {

@@ -1,9 +1,8 @@
-//! fix-ladder-water (109i): the ladder dismount into the pond — the infinite re-latch — through the
+//! fix-ladder-water: the ladder dismount into the pond — the infinite re-latch — through the
 //! REAL viewer path (`nf_view::load` + `Sim::step_bond`). Opt-in via `NF_ISO`.
 //!
-//! User playtest (1014-1725, level 07000002, real-input build): "I'm also trying to climb off the
-//! ladder and get back into the water, and there's a bug with that. I'm infinitely latching onto the
-//! ladder, and I can't get off of it."
+//! Symptom (07000002): climbing off the ladder back into the water re-latched onto the ladder
+//! endlessly, with no way off.
 //!
 //! Game evidence (ACTION.ELF):
 //! - The dismount [M `Player_Climb` 0x196310:88-96 + the below-bottom branch] sets regrab
@@ -46,7 +45,7 @@ fn hut_ladder(sim: &Sim) -> (usize, nf_game::ladder::Ladder) {
     (li, sim.ladders[li].clone())
 }
 
-/// The user's get-off: climb the hut ladder out of the pond, action-dismount back into the water,
+/// The get-off: climb the hut ladder out of the pond, action-dismount back into the water,
 /// keep the stick pulled back (the natural "push off the ladder" hold). The dismount leaves Bond
 /// facing the ladder, so the back-stick swims him AWAY from it — with the mesh-scale swim reach the
 /// 5-tick regrab drift (≈0.2 [M 0x191dd0 ramp]) clears the grab and he swims free; with the walk
@@ -120,9 +119,8 @@ fn swimming_into_the_ladder_still_grabs() {
     eprintln!("swim-grab pin: grabbed at +{t}, climbed out to y {y:.3}");
 }
 
-/// fix-ladder-water part 2 — the cut-scene skip must stop the playing voice:
-/// user playtest 1014-1725: "Skip the cutscene in the middle of dialogue, and the dialogue still kept
-/// going until it finished... just like the voice line itself." Level 07000004's intro runs the
+/// fix-ladder-water part 2 — the cut-scene skip must stop the playing voice (skipped mid-dialogue,
+/// the dialogue and its voice line used to run on to the end). Level 07000004's intro runs the
 /// engine cut-scene with live kind-5 voice streams (5 at once [probe]).
 ///
 /// Game evidence (ACTION.ELF):

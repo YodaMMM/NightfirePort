@@ -1,4 +1,4 @@
-//! The HUD fixes from the user's playtest of fix-hud (2026-10-11), each against the decompile:
+//! The HUD follow-up fixes after fix-hud, each against the decompile:
 //! - the weapon-switch labels: sprite +0x38 is the draw LAYER (0x1C = drawn, 0xFF = hidden); while `BL+0x95E`
 //!   runs only the name shows (no ammo text, no rounds strip), at rest the ammo + the fire mode
 //!   [M HUD_UpdateAmmoPane 0x19a7f0:176-189, 218-226, 248-300];

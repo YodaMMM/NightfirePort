@@ -1,4 +1,4 @@
-//! fix-grenade-release (109e) — the two playtest-1014-1725 symptoms, driven through the REAL input
+//! fix-grenade-release — two grenade symptoms, driven through the REAL input
 //! path (`nf_view::load_weapons` + the panel give + `Sim::step_bond` with the trigger the window
 //! builds from the mouse).
 //!
@@ -32,7 +32,7 @@ fn q(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
-/// The user's level with the frag pre-merged, given through the panel (the dev-menu path), switched
+/// The repro level with the frag pre-merged, given through the panel (the dev-menu path), switched
 /// in through the real `switch_to` input, settled.
 fn load_frag_on_15(iso: &str) -> nf_view::scene::Scene {
     let mut scene = nf_view::load_weapons(iso, "07000015.bin", false, &[0x34]).expect("load 07000015");
@@ -83,7 +83,7 @@ fn the_frag_leaves_the_hand_on_the_release_frame_after_the_pin_pull() {
             // (case 0xb's AnimScriptIsStopped gate :499-507) — the playhead compared against +0x44 = 26
             // is the +0xB4 script's (starts at 1.0 [M AnimScriptInit 0x1c1600:37], 1.0/tick [M
             // AnimScriptTick 0x1c2630]). The old assertion (the fire script's frame-26 crossing at 1.5×)
-            // pinned the case-9 gate the family never runs — the playtest's "way too soon".
+            // pinned the case-9 gate the family never runs — the release came far too soon.
             assert!(sim.view_script == 0x0600_049e && (25.5..=26.5).contains(&frame),
                 "the spawn lands on the +0xB4 script's playhead 26 (+0x44), i.e. AFTER the wind-up — \
                 got view {:#x} frame {frame}", sim.view_script);
@@ -96,7 +96,7 @@ fn the_frag_leaves_the_hand_on_the_release_frame_after_the_pin_pull() {
     // fix-frag-throw-timing [M 0x1a5460:676-685 + 0x1a2e38 cases 0xb/0xc]: the 70-frame fire script
     // plays out at 1.5× (ceil(69/1.5) = 46 ticks), then the +0xB4 playhead (1 + k) reaches +0x44 = 26
     // after 25 more → the release at press+71. The old window (+17, the fire script's playhead-26
-    // crossing) was the case-9 gate the family never runs — the playtest's "way too soon".
+    // crossing) was the case-9 gate the family never runs — the release came far too soon.
     assert!((70..=72).contains(&lag), "the grenade leaves the hand {} ticks after the press (the game: the +0xB4 playhead 26 = +71)", lag);
 }
 
@@ -105,7 +105,7 @@ fn the_frag_leaves_the_hand_on_the_release_frame_after_the_pin_pull() {
 fn the_blast_puffs_draw_camera_facing() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     // The blast script's entities build only where the level archive carries 0x06000052 — 07000005
-    // does (the probe); the user's 07000015 archive does not [D probe: no 0x0600_0052 attachments].
+    // does (the probe); the 07000015 archive does not [D probe: no 0x0600_0052 attachments].
     let mut scene = {
         let mut scene = nf_view::load_weapons(&iso, "07000005.bin", false, &[0x34]).expect("load 07000005");
         let (msg, sw) = nf_view::panel::apply(&mut scene, &q(&[("do", "weapon"), ("id", "52"), ("rounds", "5")]));

@@ -1,4 +1,4 @@
-//! fix-switch-after-cold-load: a weapon switch is ignored after a cold load (task 110n).
+//! fix-switch-after-cold-load: a weapon switch is ignored after a cold load.
 //!
 //! Evidence base:
 //! - The number-key/quick-select request is the game's `anim+0x63` byte. The cycle write is

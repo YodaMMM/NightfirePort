@@ -1,4 +1,4 @@
-//! script-negative-delay (task 732, GAPS G-047): the 0700001b solar panels. The 16
+//! script-negative-delay (GAPS G-047): the 0700001b solar panels. The 16
 //! `ScriptPlayer_SolarPanel` SPs (placements 41-56, type 0xD9, mode 1, hit points 20 = param 7
 //! [D the placements]) play script 0x06000832; its stream 11's Event 3 p0 = 0 at t0 sets
 //! `SCRIPTINFO+0x9C` to −1 and a NEGATIVE delay HOLDS the script [M Script_Update 0x1da9c4-

@@ -29,8 +29,8 @@
 //! - The port resolves every pistol id from slot 22 with the own bank's decode (the repro below);
 //!   the resolution is NOT the bug. The remaining game-vs-port deviation on this shot is the op-1
 //!   pitch jitter — the game draws `Rand(500)−250` per op-1 sound [M docs/systems/anim-engine.md
-//!   op 1; 0x178f68's bot call shows the same shape], the port's op-1 site carries no pitch —
-//!   reported to the driver with live checks in docs/reports/pistol-sound-12.md.
+//!   op 1; 0x178f68's bot call shows the same shape], the port's op-1 site carries no pitch
+//!   (still open).
 //!
 //! Assertions are numeric through the real path: `nf_view::load` → `Sim::step_bond` (fire/reload
 //! input) → the view-script tick's op-1 plays → `Sounds` pool → `nf_view::sound_tick` → the driver;

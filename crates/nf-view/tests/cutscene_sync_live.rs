@@ -4,7 +4,7 @@
 //! IOP holds the item with `KeyOnFrameDelay = frames + 5` and the stream decodes OFF the play
 //! tick; the real start takes the countdown item over on the authored frame (sound.md §3.2
 //! step 3). Without it the port decoded each line's stream ON the play tick — the line started
-//! late by the decode hitch, the user's "cutscenes are not synced to their audio".
+//! late by the decode hitch, so cut-scenes fell out of sync with their audio.
 //!
 //! Numbers only, NF_SILENT, through the real path (`nf_view::load` + `step_bond` +
 //! `sound_tick`). Opt-in via NF_ISO.

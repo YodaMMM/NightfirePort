@@ -142,7 +142,7 @@ fn the_ledge_scene_actors_resolve() {
 }
 
 /// The Drake fly-through (07000007 pack 07900007.bin, 0x06000072): the 13 guest anim skins [D] all
-/// resolve and build (the user's "models in that cutscene aren't accurate" inventory check).
+/// resolve and build (the inventory check for that cut-scene's models).
 #[test]
 fn the_drake_flythrough_guest_skins_resolve() {
     if iso().is_none() { eprintln!("NF_ISO not set — skipping"); return };

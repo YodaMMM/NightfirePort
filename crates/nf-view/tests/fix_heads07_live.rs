@@ -1,5 +1,4 @@
-//! fix-heads-07 — the playtest 1014-1725 head bug (07000007, user "It looks awful. I took an F12"):
-//! at the F12 spots the guests' heads lie sideways on their shoulders/back (spots 1 and 3), and the
+//! fix-heads-07 — the head bug (07000007): at the repro spots the guests' heads lie sideways on their shoulders/back (spots 1 and 3), and the
 //! hair mesh rides at the collar (spot 2) instead of on the head.
 //!
 //! Root cause [M `AnimObjectHeadTrack` 0x1bf618 via `psiBuildMatrixPalette` 0x111498]: the game
@@ -14,8 +13,8 @@
 //! The port multiplied the head bone's FULL 4×4 world matrix by the two track rotations, which
 //! rotated the translation row about the object origin too: at the saturated track angles (a guest
 //! at ~1 unit from Bond drives yaw to the ±1.1 clamp and pitch to the up-clamp [M HeadTrack's
-//! clamp block; the game's pitch range is [-1.0, +0.6] in its positive-down convention,
-//! docs/reports/fix-head-look.md]) the head position swung ~0.5 units off the neck onto the
+//! clamp block; the game's pitch range is [-1.0, +0.6] in its positive-down convention])
+//! the head position swung ~0.5 units off the neck onto the
 //! shoulders/back, and attachment meshes anchored to the head bone (the hair) followed it down.
 //! Measured pre-fix at the spot-3 placement: neck→head dir.y 0.308/0.298 (upright anims hold
 //! ~0.97..0.99), head 0.49 off the neck (0.40 in the anim).
@@ -28,8 +27,8 @@ fn row(m: &[[f32; 4]; 4], r: usize) -> [f32; 3] { [m[r][0], m[r][1], m[r][2]] }
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 { a[0]*b[0] + a[1]*b[1] + a[2]*b[2] }
 fn norm(a: [f32; 3]) -> [f32; 3] { let l = dot(a, a).sqrt(); [a[0]/l, a[1]/l, a[2]/l] }
 
-/// Bond stands at the playtest spot-3 F12 placement (`--bond 40.58,44.13,-70.77,0.682,-0.080`,
-/// frame 1488 of the user's run) with no other input — the headless real-input path
+/// Bond stands at the spot-3 placement (`--bond 40.58,44.13,-70.77,0.682,-0.080`,
+/// frame 1488 of the repro run) with no other input — the headless real-input path
 /// (`Sim::step_bond`). Two guests end up inside the head-track range tracking him hard enough to
 /// saturate the stored angles. For every strongly tracking head:
 /// - the head bone's world position stays ON the anim's neck (the +0x30 translation row the game

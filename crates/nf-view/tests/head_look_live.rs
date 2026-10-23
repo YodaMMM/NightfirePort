@@ -1,5 +1,5 @@
-//! fix-head-look — the playtest 1013-1758 head-look bugs (07000007): "the models are looking kind
-//! of weird, where their heads are turning kind of the wrong direction, wrong angle". Compared in
+//! fix-head-look — the head-look bugs (07000007): heads turned the wrong direction, at the wrong
+//! angle. Compared in
 //! PCSX2: the port's guard head ROLLED sideways toward the camera (the real game's guard keeps his
 //! head upright and only yaws it); the guest's head tipped UP well past the camera.
 //!
@@ -41,7 +41,7 @@ fn head_stats(world: &[[[f32; 4]; 4]], target: [f32; 3]) -> (f32, f32) {
 }
 
 /// An enabled, alive drone nearest to Bond (the head-track code is shared by guards and guests;
-/// the playtest bugs showed on both).
+/// the bugs showed on both).
 fn enabled_drones(sim: &nf_view::scene::Sim) -> Vec<usize> {
     let bp = sim.bond.pos;
     let mut v: Vec<usize> = (0..sim.drones.list.len())
@@ -114,7 +114,7 @@ fn tracking_head_stays_upright_and_points_at_bond() {
         }
     }
     assert!(upness > 0.99,
-        "the tracked head's world up stays within ~8° of vertical (playtest: the head ROLLED sideways toward the camera), got {upness:.4}");
+        "the tracked head's world up stays within ~8° of vertical (the old head ROLLED sideways toward the camera), got {upness:.4}");
     assert!(ang < 0.25,
         "the tracked head's forward points at Bond within the ease convergence, got {ang:.3} rad");
 }

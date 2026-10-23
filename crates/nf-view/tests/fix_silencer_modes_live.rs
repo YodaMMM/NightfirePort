@@ -1,5 +1,5 @@
-//! fix-silencer-modes (102b): the P2K silencer (twin 0x02 'Semi' <-> 0x03 'Silenced') and the SSG's
-//! semi-auto pace, from the 1013-1825 playtest on 07000006/07000005.
+//! fix-silencer-modes: the P2K silencer (twin 0x02 'Semi' <-> 0x03 'Silenced') and the SSG's
+//! semi-auto pace, on 07000006/07000005.
 //!
 //! - "swap out, swap back, it didn't stay": the game remembers the equipped twin in
 //!   `BLData+0x1BC + base·0xC` (written by `Player_WeaponSelect` 0x1a2cc0:15-16/27-28 on every
@@ -70,7 +70,7 @@ fn the_silenced_twin_survives_a_weapon_swap_round_trip() {
     }
     let sim = scene.sim.as_ref().unwrap();
     assert_eq!(sim.gun.weapon, 3,
-        "cycling back to the P2K family hands the SILENCED twin [M 0x1a6f80:180-190; L the 1013-1825 playtest] (got {:#x})", sim.gun.weapon);
+        "cycling back to the P2K family hands the SILENCED twin [M 0x1a6f80:180-190] (got {:#x})", sim.gun.weapon);
     // Sister: the fire-mode toggle from the silenced twin returns to the bare 0x02 and CLEARS the
     // marker (the same-base request 0x03 → 0x02 writes (0x02 − 0x02) = 0 [M 0x1a2cc0:15-16]).
     let mut scene = scene;
@@ -115,7 +115,7 @@ fn dev_infinite_ammo_keeps_the_snipers_magazine_full() {
     }
     let sim = scene.sim.as_ref().unwrap();
     assert_eq!(sim.weapons.records[0x24][0x92], 5, "the sniper's clip size is 5 [L weapon_data +0x92]");
-    assert_eq!(min_clip, 5, "the magazine stays full every tick [L the 1013-1825 playtest: 'the magazine didn't stay full']");
+    assert_eq!(min_clip, 5, "the magazine stays full every tick (it used not to)");
     assert_eq!(reload_ticks_seen, 0, "no auto-reload ever starts with the clip pinned");
     let gaps: Vec<i64> = shots.windows(2).map(|a| a[1] as i64 - a[0] as i64).collect();
     assert!(gaps.iter().all(|&g| (118..=135).contains(&g)),

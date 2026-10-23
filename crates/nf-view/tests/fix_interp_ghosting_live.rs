@@ -1,4 +1,4 @@
-//! fix-interp-ghosting: the playtest gun/arm smear while moving (2026-10-13, 07000005). With the
+//! fix-interp-ghosting: the gun/arm smear while moving (07000005). With the
 //! 120 fps interpolation (G-043) the draw loop blends the previous tick's skin palette into the
 //! latest one (`lerp_palette`) while the camera blends by angle (`lerp_cam`). The view model (the
 //! hands and gun) is posed in world space from each tick's camera ([M `Player_PositionGun`
@@ -134,7 +134,7 @@ fn worst_rot(a: &Mat4, b: &Mat4) -> (f32, usize, usize) {
 /// The named contract: at alpha ½ across one 30° camera-turn tick, every view model palette
 /// entry's camera-space matrix equals the average of its two ticks' camera-space matrices.
 /// The old path (component-wise world lerp, no camera-space re-attach) fails this — that is the
-/// reported smear.
+/// observed smear.
 #[test]
 fn view_model_stays_glued_in_camera_space_across_a_turn() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -203,7 +203,7 @@ fn view_model_stays_glued_in_camera_space_across_a_turn() {
         let mut expected = rel_a;
         for i in 0..4 { for j in 0..4 { expected[i][j] = (rel_a[i][j] + rel_b[i][j]) * 0.5; } }
         let rel_drawn = mat_mul(&drawn[k], &c_mid);
-        // Run-wide diagnostics first (the profile reads like the playtest report), then the asserts.
+        // Run-wide diagnostics first, then the asserts.
         let (mt, jt) = worst_trans(&expected, &rel_drawn);
         let (mr, ri, rj) = worst_rot(&expected, &rel_drawn);
         eprintln!("[interp-ghost] entry {k}: max translation delta {mt:.6} (comp {jt}), max rotation delta {mr:.6} (comp [{ri}][{rj}])");
@@ -214,7 +214,7 @@ fn view_model_stays_glued_in_camera_space_across_a_turn() {
 /// Sister (no ISO): the world-matrix blend is a rotation — slerp of the rotation part + lerp of
 /// the translation keeps every interpolated matrix orthonormal, and the 4-unit snap for
 /// teleports/cuts is intact. The old component-wise lerp fails the orthonormal rows (two 30°-apart
-/// rotations average to row length cos 15° ≈ 0.966) — the reported shear/shrink.
+/// rotations average to row length cos 15° ≈ 0.966) — the observed shear/shrink.
 #[test]
 fn interpolated_world_matrices_stay_orthonormal() {
     let r0 = cam_rows([1.0, 2.0, 3.0], 0.0, 0.0);

@@ -7,7 +7,7 @@
 //! (vaddr 0x107100 @ file 0x1000), so file offset = vaddr − 0x106100 [D readelf + the dump that
 //! verified sp_level 0x2df2e0 → 0x1d91e0]. Rows are 0x18-byte records {u32 preview, u32 name,
 //! u32 desc, u32 id, u8 unlocked, u32 locked-desc} [M Menu_UpdateWheel 0x1f8388]. Numbers only —
-//! the main agent compares the pixels.
+//! no pixel compare here.
 
 use nf_formats::iso9660::IsoImage;
 use nf_view::menu::{MP_BOTS_ROWS, MP_CHARACTER_SIDE_MI6, MP_CHARACTERS, MP_MAP_ROWS, MP_OPTIONS_ROWS, MP_SCENARIO_ROWS};

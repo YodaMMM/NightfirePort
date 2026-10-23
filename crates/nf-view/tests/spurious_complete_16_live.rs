@@ -1,5 +1,5 @@
-//! spurious-complete-16: playtest 1013-1825's "I also saw a mission complete thing pop up for
-//! some reason in this mission, but I still couldn't continue" (07000016).
+//! spurious-complete-16: a mission-complete banner popped up on 07000016 while the mission could
+//! not actually continue.
 //!
 //! ROOT CAUSE [L ee_start_0700000a.bin @ 0x2a3f78 — the game's own `.data` at a mid-mission level
 //! start]: at 0700000a's start, 07000009's prior-part record holds the FIRED ch-0x47 record at
@@ -8,11 +8,11 @@
 //! without a mission snapshot (a cold load: the pause-menu Restart, the driving return, boot
 //! level-select; the whole pre-map-tower2 campaign flow) re-completed every carried record on the
 //! first monitor tick: N× "OBJECTIVE COMPLETE" banners stack at the arrival while the mission is
-//! still open — the playtest's "mission complete thing … still couldn't continue".
+//! still open — the spurious completion.
 //!
 //! The fix (as of 2026-10-13) was `Mission::init`'s prior-part fabricator. objectives-0b-start
 //! (2026-10-17) REPLACED it: the fabricator contradicted the disc ([D] every record ships state
-//! 0 — a cold boot must announce the priors, the main agent's PCSX2 fresh 0700000b load) and the
+//! 0 — a cold boot must announce the priors, [L] a PCSX2 fresh 0700000b load) and the
 //! warm arrivals it modelled now carry the real snapshot (`with_mission` + `restore`, the game's
 //! persisted `.data` [M 0x1cd720/0x1cd880]). This test's carry therefore rides the snapshot —
 //! the same assertions, the game-faithful shape.

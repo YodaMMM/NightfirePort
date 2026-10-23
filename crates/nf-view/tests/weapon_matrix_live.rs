@@ -1,4 +1,4 @@
-//! The weapon matrix test (task 100d): every on-foot level × every weapon the dev tools hand Bond.
+//! The weapon matrix test: every on-foot level × every weapon the dev tools hand Bond.
 //!
 //! One #[test] per level (the suite runs binaries with `--test-threads=1` and a per-binary wall
 //! clock, so the level tests interleave in the output and one slow level cannot eat the rest).

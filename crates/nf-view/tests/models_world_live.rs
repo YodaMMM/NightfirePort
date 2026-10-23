@@ -1,4 +1,4 @@
-//! models-world (task 041): every level's world geometry and placed static objects.
+//! models-world: every level's world geometry and placed static objects.
 //!
 //! The inventory lives in `docs/models/world.md`; the golden test below pins the per-level counts
 //! (numbers and hashes only — no game bytes). Run the survey with
@@ -568,8 +568,8 @@ fn probe_blocker_object() {
 
 /// `--bond x,y,z,yaw,pitch` spots for the visual check (docs/models/world.md): for every class of
 /// world model, one spot per level where it appears — a door, a breakable, a SimpleScript prop, a
-/// baked shadow decal, an env-map object — computed from the real placements so the main agent can
-/// render and eyeball each one [D].
+/// baked shadow decal, an env-map object — computed from the real placements so each one can be
+/// rendered and eyeballed [D].
 #[test]
 #[ignore]
 fn bond_spots_for_every_model_class() {

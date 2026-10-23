@@ -17,41 +17,20 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 /// `(hash, vertices, indices, materials, char_verts, characters, attachments, colliders, cels, drones, pickups)`
 /// from `load_scene_digest.rs` on the pre-optimization tree. The full FNV hash pins the contents;
 /// the counts pin the shape.
-// Re-pinned at merge batch 1016b: master gained scene content since the branch cut (e.g. the
-// quiver bolt pool); the digests were re-captured on origin/master bee8c129 (no cuts) and the
-// merged tree (cuts) builds them identically on all 5 levels.
-// Re-pinned at batch 1016c: the per-character light pick (characters key their draws per character —
-// the game picks lights per object [M View_DrawObjList 0x1e69a0:73-81]) splits the shared character
-// groups, so ONLY the material count and the hash move; vertices, indices, char verts, characters,
-// attachments, colliders, cels, drones and pickups are unchanged on all 5 levels.
-// Re-pinned at rocket-look: the swoosh ribbon pools (2 meshes x 128 slots) and Bond's projectile slots
-// 8 -> 32 per projectile mesh add attachments (+496..+640) and their vertices, plus one material (the
-// ribbons' additive batch); characters, colliders, cels, drones and pickups are unchanged on all 5.
-// Re-pinned at batch 1017a: laser-scripts spawns the switch-script lasers' ON art at the load beat,
-// which 07000014 carries: +2 attachments (+100 vertices, +168 indices, +5 materials); the other 4 unchanged.
-// Re-pinned at drone-skins-g021: the captains draw their swapped skins (`NDrone2_DefaultInit`
-// 0x14b300:563-565 — 07000002's two kind-1 captains and 07000001's now build the captain skin's
-// meshes) and 07000014's 0x050000b1 session merge is gone (carried only by 07000015/16 [D] — the
-// game's hashtable misses it, AnimObjectNew 0x1be910:44-46): 02 +259 tris/+2 materials, 14
-// −127984 tris/−462 materials/−23 characters, 01 +57 verts; 05 and 0c unchanged byte-for-byte.
-// (Merged onto 1017m: 07000014 also carries the laser delta above.)
-// Re-pinned at the breakables draw (main-agent render check, 07000007): the 0x20 placements left the
-// static World draw for the posed door/SS slot space (a broken one stops drawing — `Break_Kill`
-// 0x12b970), so 01/02/14's World materials merge into per-slot Character groups: vertices and
-// triangles unchanged, materials and the Character-vertex split move; 05 and 0c carry no 0x20.
-// Re-pinned at the rain streaks (main-agent render check, 0700000b): a level whose SNOW_gen (0xDF)
-// placement has DropType 1 gets 128 rain-mesh slots (`DrawDrops` 0x18cb90, mesh 0x02000290) —
-// 01 and 02 are rain levels: +128 attachments, +6400 vertices, +12288 indices each; 05/0c/14 unchanged.
+// The baseline is re-pinned only for deliberate scene-content changes. Those so far: the per-character
+// light pick (the game picks lights per object [M View_DrawObjList 0x1e69a0:73-81]); the swoosh ribbon
+// pools and 32 projectile slots per projectile mesh; the switch-script lasers' ON art (07000014); the
+// captains' swapped skins (`NDrone2_DefaultInit` 0x14b300:563-565) and the dropped 0x050000b1 session
+// merge on 07000014 (the game's hashtable misses it, AnimObjectNew 0x1be910:44-46); the 0x20
+// breakables in the posed slot space (`Break_Kill` 0x12b970); the rain-mesh slots on DropType-1
+// SNOW_gen levels (`DrawDrops` 0x18cb90, mesh 0x02000290); the watch-hand attachments; the
+// suppressor swap piece (bone 43, state 8) without the duplicate +0x7C view-entity extra; and one
+// draw slot per ScriptPlayer running a script.
 const BASELINE: &[(&str, &str)] = &[
-    // Re-pinned for watch-hands (2026-10-22): +3 hand attachments on each watch-arm view model (5 records).
-    // Re-pinned for silencer-swap-piece (2026-10-21): the fp skin's bone-43 suppressor extra is built again as
-    // the state-8 swap piece (hidden outside the screw-on) — +4-6 meshes per level; every pinned level re-pinned.
-    // Re-pinned for silencer-white-artifact (700y3, 2026-10-20): the silenced weapons' duplicate suppressor extra
-    // (the record's +0x7C view-entity, drawn by the datum-0 attach instead) is no longer built (4-6 meshes per level); every pinned level re-pinned.
     ("07000002.bin", "37773b0bd1266a44 4483929 9371895 5352 4346635 81 9825 205 28 25 8"),
-    ("07000005.bin", "57ab143029eee3f2 4387197 9170895 3614 4302856 73 9759 106 19 16 6"), // 1022l: the two copter SPs (836) + their script draw slots (copter-script-draw)
+    ("07000005.bin", "57ab143029eee3f2 4387197 9170895 3614 4302856 73 9759 106 19 16 6"), // the two copter SPs + their script draw slots
     ("0700000c.bin", "3cb42bc694d09038 4871902 10241460 8182 4681078 96 11011 170 22 40 15"),
-    // script-entity-copies (2026-10-20): one draw slot per ScriptPlayer running a script — 14's nine
+    // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     ("07000014.bin", "6e81aa616b60576d 7210176 14972010 6772 7057051 111 13465 173 41 37 32"),
     ("07000001.bin", "c3615aff5574ccb2 4396283 9211737 3489 4322981 76 9839 101 11 20 6"),

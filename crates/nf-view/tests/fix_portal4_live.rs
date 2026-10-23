@@ -1,4 +1,4 @@
-//! fix-portal4: the 07000006 courtyard wall cels against the main agent's live ground truth
+//! fix-portal4: the 07000006 courtyard wall cels against the live PCSX2 ground truth
 //! (docs/live/2026-10-13-portal-ground-truth.md). The real game's main view at
 //! `--bond 7.24,42.03,-39.31,10.161,0.428` holds EXACTLY two cels [L gdbcall 0x1e86e8,
 //! frames 27567-27569]: the eye cel 0x0179f230 (class 0x0804c047, sphere (4.5, 43.5, -42.1)

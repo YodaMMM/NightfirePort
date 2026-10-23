@@ -1,5 +1,4 @@
-//! Playtest 1016 (and 5+ earlier reports, with screenshots): "the room culling fucking up the player model" —
-//! the first-person hands/gun vanish. `Scene::skin_palette` sent every non-guard character to the FAR
+//! Room culling broke the player model — the first-person hands/gun vanished. `Scene::skin_palette` sent every non-guard character to the FAR
 //! matrix when the room at its position was not in the frame's visibility mask; the view model is posed
 //! just in front of the camera, so in a doorway or at a room edge its point fell in an unmarked cel and
 //! the whole model collapsed. The game draws the view model in its own list-2 pass after the world, never

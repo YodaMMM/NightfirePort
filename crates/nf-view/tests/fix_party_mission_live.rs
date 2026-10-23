@@ -1,7 +1,7 @@
 //! fix-party-mission repro/verification tests (07000007 party + 07000008 gondola), driven through the
 //! REAL path (`nf_view::load` + `Sim::step_bond`).
 //!
-//! Playtest 2026-10-12 items this file pins:
+//! Items this file pins:
 //! 1. the start guards shoot Bond (they must not until he is armed/sees a weapon);
 //! 2. punching a guard fails the mission at once; shooting a guest does not;
 //! 3. punching a guest T-poses the other guests;
@@ -56,8 +56,7 @@ fn probe_party_start_guards() {
 }
 
 /// ── Item 1: the entrance bouncers must not shoot unarmed Bond at the party start ────────────────
-/// Playtest 2026-10-12: "At start of this mission, enemies, the guards, are shooting at me. They
-/// shouldn't be shooting at me at all. It's only the ones in the beginning."
+/// The guards at the mission start shot Bond; they must not.
 ///
 /// The game's gate: CivilianGuard UPDATE (0x1603a8 case 3) attacks only when
 /// `NDrone2_NearArmedPerson` 0x1787c8 (prop 0x3c + Bond in sight `+0x228 & 4` +
@@ -82,7 +81,7 @@ fn the_party_entrance_guards_never_shoot_unarmed_bond_at_the_start() {
     assert!(combat.is_empty(), "no drone is in combat at the party start, got {combat:?} states {:?}",
         combat.iter().map(|&i| sim.drones.list[i].state).collect::<Vec<_>>());
     assert_eq!(sim.drones.health.health, 100.0,
-        "Bond takes no damage from the party guards [playtest: they shot him]");
+        "Bond takes no damage from the party guards (they used to shoot him)");
 }
 
 /// Probe: bouncer props (0x3c, 0x1f, 0x33) + sight variables.
@@ -115,8 +114,8 @@ fn probe_bouncer_props() {
 }
 
 /// ── Item 2: punching a guard fails at once; shooting a guest fails ──────────────────────────────
-/// Playtest: "If you punch a guard, it should be an automatic mission fail" and the guests07 check
-/// ("shooting a guest doesn't fail it — It doesn't work").
+/// Punching a guard is an automatic mission fail, and shooting a guest fails it too (the guests07
+/// check: it used not to).
 ///
 /// The game's writers:
 /// - `NDrone2_PunchImpact` 0x145f28:45-56: on 07000007 a punch on an UNARMED drone (ObjectIsArmed
@@ -165,7 +164,7 @@ fn shooting_a_guest_through_the_bullet_path_fails_the_mission() {
     let mut failed = false;
     for _ in 0..120 { sim.step_bond(Input::default(), false, false, false);
         if sim.drones.mission.state == 2 { failed = true; break; } }
-    assert!(failed, "shooting a guest fails the mission [playtest: It doesn't work]");
+    assert!(failed, "shooting a guest fails the mission");
 }
 
 /// Probe: guest hit boxes + bullet flight.
@@ -263,11 +262,11 @@ fn punching_a_bouncer_fails_the_mission_at_once() {
     let mut failed = false;
     for _ in 0..120 { sim.step_bond(Input::default(), false, false, false);
         if sim.drones.mission.state == 2 { failed = true; break; } }
-    assert!(failed, "punching a guard fails the mission [playtest: automatic fail]");
+    assert!(failed, "punching a guard fails the mission (automatic fail)");
 }
 
 /// ── Item 3: punching a guest must not T-pose the other guests ───────────────────────────────────
-/// Playtest: "Punching a guest makes all the other guests T-pose." A T-pose = no animation playing
+/// Punching a guest made all the other guests T-pose. A T-pose = no animation playing
 /// (`anim.script == None`, the bind pose). Reproduced through the real punch path (fire_player with
 /// the fists on a guest → msg 6 → `NDrone2_PunchImpact`).
 #[test]
@@ -281,7 +280,7 @@ fn punching_a_guest_keeps_the_other_guests_animated() {
     let (gp, gy) = { let g = &sim.drones.list[guest]; (g.pos, g.yaw) };
     let from = [gp[0] + gy.sin() * 1.3, gp[1] + 0.6, gp[2] + gy.cos() * 1.3];
     sim.bond.pos = from;
-    // Bond holds the fists and punches through the REAL input path until the guest drops (the playtest's
+    // Bond holds the fists and punches through the REAL input path until the guest drops (the
     // punch KOs the guest), then watches the others' animations.
     sim.gun.weapon = 1; sim.gun.switch_request = 1; sim.gun.switch_state = 0;
     let mut ko = false;
@@ -297,12 +296,12 @@ fn punching_a_guest_keeps_the_other_guests_animated() {
         .map(|(i, d)| (i, d.state, d.anim.script, d.anim.danim)).collect();
     eprintln!("[party] after the punch-ko ({ko}): guest states {states:?}");
     let tposed: Vec<usize> = states.iter().filter(|(i, _, s, dn)| *i != guest && (s.is_none() || *dn == 0)).map(|(i, _, _, _)| *i).collect();
-    assert!(tposed.is_empty(), "punching a guest T-poses the others (no anim on {tposed:?}) [playtest item 3]");
+    assert!(tposed.is_empty(), "punching a guest T-poses the others (no anim on {tposed:?})");
 }
 
 /// ── Item 4: the music changes at NIS start and end ──────────────────────────────────────────────
-/// Playtest: "The mission music keeps playing over the cut-scenes", and on 07000008 "the cutscene
-/// music still hasn't finished while playing".
+/// The mission music kept playing over the cut-scenes (and on 07000008 over the cut-scene's own
+/// music).
 ///
 /// The game's per-level music updaters jump sections on the NIS events: 07000008's
 /// `UpdateMFX_01CastleD` 0x1133b8 — the intro NIS 0x06000077's Music_Event(0xB, script) at start
@@ -370,11 +369,11 @@ fn probe_objective_banners() {
 }
 
 /// ── Item 5: the banners wait for the cut-scene, and carry the objective text ────────────────────
-/// Playtest: "It just says new objective" (the user's build predates fix-mission's text binding —
+/// The banner said only "new objective" (an older build predates fix-mission's text binding —
 /// `Mission_MonitorObjectives` 0x1827d8 posts the objective record's label [0x04000000/0x02000000
 /// style] and the port binds it through the USATxt.dat table; the bound text is pinned by
-/// `the_07000001_banner_survives_the_intro_cutscene` and `no_status_pane…` below), "they show during cut-scenes — It needs to wait until after the
-/// cutscene's finished", and on 07000001 "no banner came up": its only banner ("Escort Mayhew to
+/// `the_07000001_banner_survives_the_intro_cutscene` and `no_status_pane…` below); banners showed during cut-scenes instead of waiting until after
+/// them; and on 07000001 no banner came up: its only banner ("Escort Mayhew to
 /// bunker") is announced by the state-0 arm [M 0x1827d8:41-54] at mission start — while the intro
 /// NIS holds control from tick 0 to ~2120 — and died at tick 300 in the pre-fix build.
 ///
@@ -401,7 +400,7 @@ fn the_07000001_banner_survives_the_intro_cutscene() {
         let msgs: Vec<&str> = sim.hud.objective_msgs.iter().map(|m| m.text.as_str()).collect();
         eprintln!("[party] 07000001 after the intro NIS (t={nis_end}): {msgs:?}");
         assert!(msgs.iter().any(|t| *t == "Escort Mayhew to bunker"),
-            "the mission-start banner survives the intro cut-scene (playtest: 'no banner came up')");
+            "the mission-start banner survives the intro cut-scene (no banner came up)");
         assert!(!sim.hud.objective_msgs.is_empty() && sim.hud.objective_msgs.front().unwrap().time > 250.0,
             "the banner's timer did not run while the NIS played [M 0x1b11d8:16-18]");
     }
@@ -540,7 +539,7 @@ fn probe_drone23() {
 }
 
 /// ── Item 6: after the Kimiko cut-scene the guards are where the game puts them ──────────────────
-/// Playtest: "Guards aren't in the proper place after the Kimiko cut-scene."
+/// The guards were not in the proper place after the Kimiko cut-scene.
 ///
 /// The game's post-NIS repositioning is exactly two things [M]:
 /// - the PLAYER is teleported to the marker entity the script's event 6 named: `Script_Free`
@@ -613,11 +612,11 @@ fn the_guards_reappear_at_their_places_after_the_kimiko_scene() {
 }
 
 /// ── Item 7: the 07000008 safe chain works in play ───────────────────────────────────────────────
-/// Playtest: "There's a giant pillar just blocking" the missile closet (spot 152.35,43.13,-120.76:
+/// A giant "pillar" blocked the missile closet (spot 152.35,43.13,-120.76:
 /// the locked GuardRoom door #122 + bolt #217 + safe door #205 [D placements] — with nothing to
-/// open them: the fusebox stand-in was invisible, the laser burn had no caller), "the gondola can't
-/// be activated" (ch 0x4A is written only by the briefcase inside the sealed safe [D #290 →
-/// Pickup_Handler 0x18e650:330-333]) and "Still can't pick up the rocket launcher" (behind the same
+/// open them: the fusebox stand-in was invisible, the laser burn had no caller), the gondola could not
+/// be activated (ch 0x4A is written only by the briefcase inside the sealed safe [D #290 →
+/// Pickup_Handler 0x18e650:330-333]) and the rocket launcher could not be picked up (behind the same
 /// door [D #291, id 0x2C]).
 ///
 /// The game's chain [M/D]: the GuardRoom fusebox #219 (0x31, script 0x060008AD) cuts a wire on the
@@ -628,7 +627,7 @@ fn the_guards_reappear_at_their_places_after_the_kimiko_scene() {
 /// the mux #278 ANDs them into ch 136 [D] → the safe door SS #205 opens → the briefcase (ch 0x4A)
 /// and the rocket launcher are reachable → the gondola ride starts (fix-objects2's chain).
 ///
-/// Fail-first shown on the pre-fix tree: no fusebox SP, no mesh entity (the user's pillar had no
+/// Fail-first shown on the pre-fix tree: no fusebox SP, no mesh entity (the "pillar" had no
 /// opener in play), and the watch burned nothing.
 #[test]
 fn the_07000008_safe_chain_works_in_play() {

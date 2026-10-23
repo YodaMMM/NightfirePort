@@ -248,7 +248,7 @@ fn the_vent_grill_blocks_the_west_duct_per_the_game() {
                 && (ys.iter().cloned().fold(f32::MAX, f32::min) - ys.iter().cloned().fold(f32::MIN, f32::max)) < 0.09
         }).count()
     };
-    drop(scene); // the second load doubles the footprint — this sandbox OOMs at ~2 GB
+    drop(scene); // the second load doubles the footprint — a small test machine OOMs at ~2 GB
     let bars = bar_count;
     // The bars are 0.06-0.07 thick in y, six of them between y 2.62 and 3.62, all at z=58.86-58.9
     // [D probe14_tris; the placement 0x8000 cel + the Collide_Pick no-0x1-skip rule above].

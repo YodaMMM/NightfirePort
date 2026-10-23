@@ -138,7 +138,7 @@ fn the_gate_edge_unhides_the_frozen_sp() {
 
 /// The sister: Skyrail's (MP map 0x07000024) mask-0 gondola SP — placement 4, kind 0xD9, script
 /// 0x06000058, mode 8, mask 0 [D the mp-map-objects census] — still loads and runs. The old
-/// prime-skip stand-in froze exactly these (the playtest 1016-1355's "no gondolas"): the gondola
+/// prime-skip stand-in froze exactly these (no gondolas): the gondola
 /// is the original victim of skipping the prime for mask-0 SPs. Guards the prime path the copter
 /// SPs now share. Driven on the level's own Scripts (the MP map has no campaign flow to walk).
 #[test]

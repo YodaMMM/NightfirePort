@@ -23,7 +23,7 @@ fn load(iso_v: &str, archive: &str) -> nf_view::scene::Scene {
     nf_view::load(iso_v, archive, false).expect(archive)
 }
 
-/// The case use through the real walk: the F12 playtest spot (07000003 --bond 5.90,5.97,-42.41,
+/// The case use through the real walk: the repro spot (07000003 --bond 5.90,5.97,-42.41,
 /// 1.710,-0.458) faces the display case; one E press activates the case's script player [M 0x1a5170],
 /// the script reaches the Entity command and the keycard goes live [M 0x1d8968's 0xF0 arm].
 #[test]
@@ -54,8 +54,8 @@ fn the_case_use_spawns_the_keycard_through_the_real_path() {
     assert!(d < 0.1, "the keycard spawns at the case interior (its creation pose), at ({:.2},{:.2},{:.2})", k.m[3][0], k.m[3][1], k.m[3][2]);
 }
 
-/// The user's report ("still can't grab the dragon objective in double cross"), the real path: from
-/// the playtest spot the E press opens the case; the script's stream 0 raises the case's riser and
+/// The dragon objective in Double Cross could not be grabbed; the real path: from
+/// the repro spot the E press opens the case; the script's stream 0 raises the case's riser and
 /// stream 1 (parented to it) lifts the keycard — the created pickup IS the stream's entity [M 0x1d8968
 /// returns the `Pickup_Create` object; 0x1d8d78:96 stores it at stream+0x10], re-posed every tick by
 /// `Script_Interp` 0x1d9a08:94-110 (y 5.51 → 6.05 [D 0x06000563 s0/s1 keys]) with its sphere rebuilt

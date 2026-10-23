@@ -1,5 +1,5 @@
-//! probe_striped_box (task 102k): locate the red/yellow diagonal-striped box the port draws on
-//! 07000005 (trench right, against the castle wall) with NF_NOPORTAL=1 — the driver's shot
+//! probe_striped_box: locate the red/yellow diagonal-striped box the port draws on
+//! 07000005 (trench right, against the castle wall) with NF_NOPORTAL=1 — the shot
 //! `nf-view <iso> 07000005 --bond 16.67,30.04,58.60,1.755,-0.001 --skip-cutscenes --frame 30 --shot a.png`.
 //! Stripes like that are usually an editor/marker texture the game never draws, so:
 //!   1. decode every map texture, flag red+yellow candidates, print an ASCII preview (no GPU here);

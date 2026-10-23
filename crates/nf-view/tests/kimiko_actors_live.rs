@@ -1,4 +1,4 @@
-//! kimiko-actors live tests (task 701): the 07000007 cut-scene actor sets — what the scripts
+//! kimiko-actors live tests: the 07000007 cut-scene actor sets — what the scripts
 //! create (`Script_AnimStart` 0x1d8f40 / `Script_EntityStart` 0x1d8d78) versus what the port
 //! DRAWS per scene phase, with no duplicates. The draw set is read through `Scene::char_hidden`
 //! — the same gate the render's `frame_state` walks — so the assertions are about the picture,

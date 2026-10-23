@@ -15,7 +15,7 @@
 //! `ThirdIcon_Create` 0x197070, live obj+0xF0 = 0x1050 [L ee_start_05.bin 0x016d43e0]) and
 //! "WallHug_Blocker1_Short"/"WallHug_Blocker2_Windows" (kind 0x3b → `DynamicObject_Create`
 //! 0x18dbf8, +0xF0 = *(glist+0x44) = 0x10). The port's models-misc sweep drew the 0xfa/0x3b ones
-//! because it lacked the gate — the user's box.
+//! because it lacked the gate — the striped box.
 //!
 //! The test drives the real input path (`nf_view::load`) and reads the built draw list:
 //! `Material.lflags` is the low 16 bits of the source object's glist flags word and
@@ -118,7 +118,7 @@ fn game_drawn_0x10_exceptions(level: &Level) -> usize {
     n
 }
 
-/// The user's symptom: on 07000005 the port draws the striped marker brushes (the trench-right box
+/// The symptom: on 07000005 the port drew the striped marker brushes (the trench-right box
 /// is "WallHug_Blocker1_Short", kind 0x3b, at the placement (24.75, 32.17, 65.60) right of the
 /// camera axis; "TouchPlate_GrappleLedge", kind 0xfa, world-baked at (−18.46, 37.43, −72.49)).
 /// Post-fix: zero World draws carry the game's no-draw bit or the marker texture.
@@ -154,12 +154,12 @@ fn striped_marker_brushes_not_drawn_on_07000005() {
         panic!("07000005 must carry the Door_Gate8 LOAD_LEVEL placement (the castle gate)");
     }
     // Sister: the grapple-point pulleys are REAL draws (class-0x51 objects hold the graple_pulley
-    // glist, +0xF0 = 0x4000, +0xF8 = 0x1f [L ee_start_05.bin 0x16d80a0/0x16d81c0]; the user's
-    // playtest sees them). The new gate must not eat them.
+    // glist, +0xF0 = 0x4000, +0xF8 = 0x1f [L ee_start_05.bin 0x16d80a0/0x16d81c0]; they show
+    // in play). The new gate must not eat them.
     assert_eq!(sc.grapple_hooks_drawn, 2, "the two 07000005 grapple pulleys must keep drawing");
 }
 
-/// Sister: 0700000c — the user's check found no striped boxes there (after fix-gadgets2 removed
+/// Sister: 0700000c — no striped boxes there (after fix-gadgets2 removed
 /// the roof markers nothing references the stripe texture any more: map 9 carries it unused [D
 /// probe_striped_box.rs]), and "laptops" — an object whose own 16×16 hazard texture looks
 /// striped but whose glist flags are 0 (the game draws it) — must keep drawing.

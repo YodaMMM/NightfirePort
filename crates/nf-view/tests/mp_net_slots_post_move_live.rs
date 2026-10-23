@@ -8,8 +8,8 @@
 //! on every tick while slot 5 moves, each human slot's match record equal to its
 //! body's post-move position on BOTH machines every tick, and the sister 4-human
 //! digest pin. Harness shape: mp_16_slots_live's direct `Session`s over 127.0.0.1 —
-//! 2 simmed machines (one arena load is ~875 MB measured; 4 concurrent loads OOM the
-//! sandbox — the 2-of-8 precedent), the other four sessions still feed real inputs and
+//! 2 simmed machines (one arena load is ~875 MB measured; 4 concurrent loads OOM a
+//! 3 GB test machine — as in mp_16_slots_live), the other four sessions still feed real inputs and
 //! gate every `ready_inputs`; the replay pass then runs each remaining local slot alone
 //! over the recorded rows through the same `nf_view::net_tick` (the app's own
 //! late-join verification shape, `mp_late_join_catchup`) so all six machines' hashes
@@ -59,7 +59,7 @@ struct Peer {
 /// Bring up `humans` real sessions over 127.0.0.1 (the host listens on `port`, the
 /// clients dial one at a time so the join order is stable), hand out the host's match
 /// (all humans, no bots), and load the sims for `sim_slots` — one arena load at a time
-/// (the sandbox's RAM), each with its per-machine generator (the online start seeds it
+/// (the test machine's RAM), each with its per-machine generator (the online start seeds it
 /// by slot) and its own slot swapped in as the local body. Returns the settings, the
 /// peers (peers[0] is the host) and the (slot, scene) pairs.
 fn bring_up(

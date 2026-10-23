@@ -217,8 +217,8 @@ fn walk_start_to_the_st1_plate_and_the_photograph() {
     // `Player_Collision` 0x194df0's DEFAULT hittest arm (r 0.55) [M the substate−1 switch's jump
     // table @0x2fc0d0: walk 0 → −1 → the unsigned bounds check fails → 0x1953f4], so the walker
     // stopped 0.4985 off the rung plane (the wall ~0.05 recessed behind it [D probes]) is inside
-    // the grab reach. (The pre-ladder-0c 0.275 walk arm — the CLIMB substate's arm — never touched:
-    // the user's "the ladder doesnt work", playtest 2026-10-18; the old stand-in is gone.)
+    // the grab reach. (The pre-ladder-0c 0.275 walk arm — the CLIMB substate's arm — never touched,
+    // so the ladder did not work; the old stand-in is gone.)
     // The walk-in from the leg-4 yard position stays real: walk to the base, then face + push.
     w.walk_to(Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach");
     let mut climbed = false;
@@ -238,7 +238,7 @@ fn walk_start_to_the_st1_plate_and_the_photograph() {
         if sim.bond.substate == nf_game::player::SS_CLIMB { climbed = true; break; }
     }
     assert!(climbed,
-        "walking into the yard ladder #164 never grabbed it — the walk substate must ride the switch's DEFAULT arm r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]; the 0x275 climb arm leaves this ladder unclimbable (the playtest's broken ladder)");
+        "walking into the yard ladder #164 never grabbed it — the walk substate must ride the switch's DEFAULT arm r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]; the 0x275 climb arm leaves this ladder unclimbable (the old broken ladder)");
     // Climb for real: hold forward until the mantle fires (the dismount at pos.y > climb_top
     // 12.139 [M Player_Climb 0x196310:54-62 + Player_CollLadder 0x196118's +0.85 top]) and the
     // walk resumes, then keep the stick forward through the lunge (+0.6 [M 0x196310:56]) so Bond

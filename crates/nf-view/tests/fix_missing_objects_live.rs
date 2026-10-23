@@ -1,5 +1,5 @@
 //! fix-missing-objects: the fountain, the guard-room furniture and the lockers on 07000006 were
-//! not drawn; the 0700000c pylon was reported missing at the user's spot.
+//! not drawn; the 0700000c pylon was missing at a check spot.
 //!
 //! The cause (evidence in docs/reports/fix-missing-objects.md): `CollisionWorld::build_scoped`
 //! attributed each instance's collision to the smallest-volume cell bbox containing its centre —
@@ -56,7 +56,7 @@ fn view_proj(pos: [f32; 3], yaw: f32, pitch: f32, aspect: f32) -> [[f32; 4]; 4] 
     (proj * view).to_cols_array_2d()
 }
 
-/// The user's spots (main agent, 2026-10-13). Eye = bond y + 0.7 (`Bond::head()` at these
+/// The check spots. Eye = bond y + 0.7 (`Bond::head()` at these
 /// floors — probe 6 measured eye = stand_at(pos).head() = [14.22, 16.965, -139.54] on 0c).
 const FOUNTAIN_SPOT: ([f32; 3], f32) = ([21.12, 39.04 + 0.7, -0.48], 8.683);
 const GUARDROOM_SPOT: ([f32; 3], f32) = ([33.50, 41.13 + 0.7, -17.90], 9.158);
@@ -92,7 +92,7 @@ fn game_mask(sc: &nf_view::scene::Scene, eye: [f32; 3], yaw: f32) -> (usize, Vec
     (cell, mask)
 }
 
-/// ── 1: the named objects are in the drawn set at the user's spots ──────────────────────────────
+/// ── 1: the named objects are in the drawn set at the check spots ───────────────────────────────
 /// A generic draws only from its owner room's +0x18 chain under `Vision_InView`
 /// (`View_AddCels` 0x1e6ba0 [M fix-portal5 §1]); the renderer's World cull hides every material
 /// whose node the game mask leaves out (gpu.rs render's `cell_visible` check). Pre-fix the
@@ -116,7 +116,7 @@ fn the_named_objects_are_in_the_drawn_set_at_the_user_spots() {
             assert!(owner.is_some(), "{name} (node {node}): unchained — the game's load-time linker \
                 build_link_objects_to_rooms 0x1c9150 leaves no 0x8019 generic unchained (fix-portal5 §4)");
             assert!(mask[node as usize], "{name} (node {node}): not in the game mask at the {spot_name} spot \
-                — the renderer culls every material at this node (the user's missing object)");
+                — the renderer culls every material at this node (the missing object)");
         }
     }
     // Sister: the materials the renderer holds at those nodes — every World draw keyed to the
@@ -139,13 +139,13 @@ fn the_named_objects_are_in_the_drawn_set_at_the_user_spots() {
     assert_eq!(lamp_owner, Some(34), "OBJECT_LampPost1 keeps its owner room 34");
 }
 
-/// ── 2: the 0c pylon at the user's spot ─────────────────────────────────────────────────────────
-/// Reported missing (main agent render, 2026-10-13) with its baked shadow drawn. On the current
+/// ── 2: the 0c pylon at the check spot ──────────────────────────────────────────────────────────
+/// Seen missing in a render, with its baked shadow drawn. On the current
 /// tree the four pylon parts (`pylon`/`pylon_back`/`pylon_left`/`pylon_right`, placements
 /// 160–163, world-baked at x 44–60, z −115..−106) resolve eye cell 91 from the real
 /// stand_at+head camera, all four nodes ride owner room 77's chain, pass `Vision_InView` and
 /// every one of their 14 materials survives the mask and the frustum (probe 6). This test pins
-/// that state as a regression guard; the report asks the main agent for a live re-render.
+/// that state as a regression guard; a live re-render is still open.
 #[test]
 fn the_0c_pylon_is_in_the_drawn_set_at_the_user_spot() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -165,7 +165,7 @@ fn the_0c_pylon_is_in_the_drawn_set_at_the_user_spot() {
             .unwrap_or_else(|| panic!("{name}: placement {pi} has no own cel"));
         let owner = g.chains.iter().enumerate().find(|(_, ch)| ch.contains(&node)).map(|(ri, _)| ri);
         assert!(owner.is_some(), "{name} (node {node}): unchained");
-        assert!(mask[node as usize], "{name} (node {node}): not in the game mask at the user's spot");
+        assert!(mask[node as usize], "{name} (node {node}): not in the game mask at the check spot");
     }
     // Sister: the pylon's materials all survive the renderer's two gates.
     let vp = view_proj(eye, yaw, 0.0, 16.0 / 9.0);

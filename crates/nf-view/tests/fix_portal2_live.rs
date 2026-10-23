@@ -60,7 +60,7 @@ fn mats_in_cell(scene: &scene::Scene, cell: usize) -> usize {
 }
 
 /// The `+0x18` chain pass rescues World-drawing cells the strict VisCelList mask hides — along the
-/// user's truck→courtyard route and at the courtyard spot itself. The pre-fix mask was the strict
+/// truck→courtyard route and at the courtyard spot itself. The pre-fix mask was the strict
 /// walk only (no chain pass): every rescued cell below is a draw the port used to hide.
 #[test]
 fn the_chain_pass_rescues_the_cels_the_strict_walk_hides() {

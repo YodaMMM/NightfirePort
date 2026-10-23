@@ -1,5 +1,5 @@
 //! mp-screens: the multiplayer front-end pages' data/state pins (numbers/ids only) and the
-//! spot-shot's movie gates. The draw itself is the main agent's task; these pin the data it
+//! spot-shot's movie gates. The draw itself is the draw side's; these pin the data it
 //! draws and the window-parity decision the F12 shot makes.
 //!
 //! Evidence tags: [M] the decompile (file:line), [D] disc, [L] EE snapshot. A guess is never a

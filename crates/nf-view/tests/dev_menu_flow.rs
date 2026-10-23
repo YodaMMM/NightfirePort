@@ -10,7 +10,7 @@
 //! - `typing_laser_finds_the_q_laser` — type-to-filter narrows the weapons page to the laser rows.
 //! - `menu_teleport_page_moves_bond_to_the_display_vent_and_he_grounds` — the Teleport page moves
 //!   Bond to the named spot and he's grounded after 60 ticks.
-//! - `spawn_with_the_menu_open_while_paused_is_safe` — the user's 07000015 crash (pausing to spawn
+//! - `spawn_with_the_menu_open_while_paused_is_safe` — the 07000015 crash (pausing to spawn
 //!   grenades from the panel): give grenades + spawn an NPC with the menu OPEN (sim paused), then
 //!   resume — no panic, the inventory and the NPC are right.
 //! - `every_panel_command_has_a_menu_row` — nothing from the browser panel is left behind.
@@ -161,7 +161,7 @@ fn menu_teleport_page_moves_bond_to_the_display_vent_and_he_grounds() {
     assert_eq!(d.page, 0, "Backspace with an empty filter returns to the index");
 }
 
-/// The user's 07000015 crash: pausing to spawn grenades from the panel hard-crashed the game. In
+/// The 07000015 crash: pausing to spawn grenades from the panel hard-crashed the game. In
 /// the port the menu PAUSES the sim while open (`paused_tick_count`), the give/spawn actions land
 /// through panel::apply between frames, and resuming runs the real tick path over the new state —
 /// no panic, the inventory and the spawned NPC are right.
@@ -251,7 +251,7 @@ fn every_panel_command_has_a_menu_row() {
     let idx = dev::menu_items(&d, Some(&scene));
     assert_eq!(idx.len(), 9, "the index lists the nine panel sections");
     for (l, _, a) in &idx { assert!(matches!(a, dev::MenuAction::Page(_)), "index row {l} opens a page"); }
-    // --dev-page resolves every page name (the render lane for the main agent).
+    // --dev-page resolves every page name (the headless render path).
     for name in dev::PAGES { assert_eq!(dev::page_index(name), Some(dev::PAGES.iter().position(|p| p == name).unwrap()), "page name {name}"); }
     assert!(dev::page_index("nope").is_none());
 }

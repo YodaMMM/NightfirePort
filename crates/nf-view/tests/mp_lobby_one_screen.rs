@@ -407,7 +407,7 @@ fn every_row_is_reachable_with_the_bots_off() {
     }
 }
 
-/// The user, 2026-10-19: "I started a game with 16 bots and no bots spawned" — the match was on Ravine, where the
+/// A match set to 16 bots spawned none — the match was on Ravine, where the
 /// game takes no bots [M P_MPMAP 0x217678:20-25; Menu_PrepareBots 0x1f94a0:85-88], but the lobby let the host turn
 /// them on. On Ravine the bot rows read "Not on this map" and can't be edited; the start carries no bots.
 #[test]

@@ -1,12 +1,12 @@
 //! fix-ladder2: the ladder draw, the climb look, the weapon save/restore and the hands fire gate,
 //! through the REAL viewer path (`nf_view::load` + `Sim::step_bond`). Opt-in via `NF_ISO`.
 //!
-//! User playtest after fix-ladder (master 415faa6+):
-//! - "The ladders aren't drawn." — the 0x22 placements got no instance (`instances(cels_only=true)`
+//! Symptoms after fix-ladder:
+//! - The ladders were not drawn — the 0x22 placements got no instance (`instances(cels_only=true)`
 //!   skips every placement without the 0x8000 flag; ladders never carry it [M 0x1d1998/0x1d1b68]).
-//! - "The camera can't be moved while on a ladder." — `Player_Climb`'s look: the turn channel still
+//! - The camera could not be moved on a ladder — `Player_Climb`'s look: the turn channel still
 //!   integrates [M 0x193600] inside the eased ±90° window, and the pitch offset is free [M 0x1a1d28/0x1a92e8].
-//! - "Getting off doesn't re-equip the weapon… the hands-only state fires once." — `Player_WeaponNone`
+//! - Getting off did not re-equip the weapon, and the hands-only state fired once — `Player_WeaponNone`
 //!   saves the id on the grab [M 0x1a9858], the dismount carry restores it [M 0x196310:99-102 +
 //!   0x1a2e38:197-201], and the hands record has no fire scripts so no round can spawn [D probe +
 //!   M 0x1a5460:681-690].
@@ -104,7 +104,7 @@ fn grab_nearest_ladder(sim: &mut Sim) -> (usize, nf_game::ladder::Ladder) {
 fn ladder_meshes_are_instanced_exactly_once() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let scene = nf_view::load(&iso, "07000002.bin", false).expect("load 07000002");
-    assert!(scene.ladders_drawn > 0, "no ladder instance was built — the ladders are invisible (the user's symptom)");
+    assert!(scene.ladders_drawn > 0, "no ladder instance was built — the ladders are invisible (the old symptom)");
     assert_eq!(scene.ladders_drawn, 4, "07000002 has 4 ladder placements [D]; a mismatch means a double draw or a missed resolution");
     // Sister: an independent sweep (the gameplay list) agrees on the count, so the draw count tracks
     // the placements rather than a hardcoded number.
@@ -141,7 +141,7 @@ fn camera_looks_during_the_climb() {
     // The equilibrium deviation under a held turn is turn/0.2 (the per-tick ease `yaw += diff·0.2`
     // opposes the turn channel [M 0x196310:18-33]) — 0.05/0.2 = 0.25 here. Pre-fix the turn input
     // never reached the climb, so the deviation stayed exactly 0.
-    assert!(dev > 0.1, "the turn input did not move the yaw during the climb (deviation {dev}) — the camera is stuck (the user's symptom)");
+    assert!(dev > 0.1, "the turn input did not move the yaw during the climb (deviation {dev}) — the camera is stuck (the old symptom)");
     assert!(dev <= std::f32::consts::FRAC_PI_2 + 1e-3, "the yaw left the ±90° ladder window: {dev}");
     // Pitch: look up for a second — the offset must move (ViewClamping ±1.0 [M 0x1a92e8]).
     let look = nf_game::player::Input { look: 0.05, ..Default::default() };
@@ -172,7 +172,7 @@ fn weapon_saved_on_grab_restored_on_dismount_and_hands_cannot_fire() {
     let fire = nf_game::player::Input::default();
     for _ in 0..20 { sim.step_bond(fire, true, false, false); }
     assert_eq!(sim.drones.bullets.len(), bullets_before,
-        "the hands class fired ({} bullets) — the user's 'fires once' symptom", sim.drones.bullets.len() - bullets_before);
+        "the hands class fired ({} bullets) — the old 'fires once' symptom", sim.drones.bullets.len() - bullets_before);
     // Climb to the top: the dismount restores the saved weapon through WeaponSelect [M 0x196310:99-102].
     let fwd = nf_game::player::Input { forward: 1.0, ..Default::default() };
     let mut restored = false;
@@ -198,7 +198,7 @@ fn weapon_saved_on_grab_restored_on_dismount_and_hands_cannot_fire() {
 /// sit at the surface — the walking root stands 1.03 above the bed, above the bbox, so the game's
 /// Bond never tests the bed while on the bank: he falls in and `Player_InWater` 0x195e50 (root − 0.3
 /// < surface) enters the swim substate. The port's flat world grounded him on the mat-14 bed instead —
-/// the user's "walks on the water". The port now drops mat-0xE triangles from the player's grounding
+/// walking on the water. The port now drops mat-0xE triangles from the player's grounding
 /// ray and capsule (the material form of the cel scoping).
 #[test]
 fn swim_repro_walks_on_the_water_from_the_bank() {
@@ -226,7 +226,7 @@ fn swim_repro_walks_on_the_water_from_the_bank() {
         sim.step_bond(fwd, false, false, false);
         if sim.bond.substate == nf_game::player::SS_SWIM { swam = Some(t); break; }
     }
-    let t = swam.expect("Bond never entered the water from the bank — he walks on it (the user's symptom)");
+    let t = swam.expect("Bond never entered the water from the bank — he walks on it (the old symptom)");
     let surface = c.water;
     assert!(sim.bond.pos[1] - 0.3 < surface, "at the swim entry pos.y − 0.3 = {} is not under the surface {surface}", sim.bond.pos[1]);
     eprintln!("entered the swim substate at tick {t}, y {:.3} (surface {surface})", sim.bond.pos[1]);

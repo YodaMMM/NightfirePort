@@ -28,7 +28,7 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 /// window, not a pinned game number. The pinned facts are the chain and the channels.
 const WINDOW: u32 = 4500;
 
-/// Bond at the elevator panel (the playtest spot: the game pos (−18.1, −367.4, 26.1), the port's
+/// Bond at the elevator panel (the check spot: the game pos (−18.1, −367.4, 26.1), the port's
 /// panel at (−18.08, −368.23, 25.02) [D placements], the port run's `--bond -18.3,-368.4,27.0`).
 const PANEL: [f32; 3] = [-18.3, -368.4, 27.0];
 

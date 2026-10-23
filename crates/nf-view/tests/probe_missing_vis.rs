@@ -1,5 +1,5 @@
 //! fix-missing-objects probe 4: the per-frame visibility verdict for the named objects at the
-//! user's spots — the exact draw-list input (`scene::eye_cell` + `portal_visible_cels_game_from_cell`,
+//! check spots — the exact draw-list input (`scene::eye_cell` + `portal_visible_cels_game_from_cell`,
 //! gpu.rs's `cel_visibility` composition), plus each named object's node/chain owner. Opt-in NF_ISO.
 
 use nf_view::scene;

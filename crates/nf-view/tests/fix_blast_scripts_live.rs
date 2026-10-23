@@ -25,7 +25,7 @@ fn q(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
-/// Give a weapon through the dev panel (the user's `--give` path) and wait for the switch.
+/// Give a weapon through the dev panel (the `--give` path) and wait for the switch.
 fn give_and_switch(scene: &mut nf_view::scene::Scene, id: u8) {
     let (msg, switch_to) = nf_view::panel::apply(scene, &q(&[("do", "weapon"), ("id", &id.to_string()), ("rounds", "5")]));
     eprintln!("[give] {id:#04x}: {msg} -> {switch_to:?}");

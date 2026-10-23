@@ -59,7 +59,7 @@ fn the_gondola_mission_completes_and_hands_off_to_the_driving_level() {
     }
     // The boarding (ch 0x4A) and the ride (ch 0x4B): their writers are the loadable-pack scripts
     // (SP #295 "ScriptPlayer_CableCar" 0x0600004C behind mux #235 = AND(0x4A, ch 4) [D levels.md
-    // §5.3]) — the pack scripts are not parsed yet (docs/levels/07000008.md §2, the reported gap).
+    // §5.3]) — the pack scripts are not parsed yet (docs/levels/07000008.md §2, a known gap).
     // Drive the two channels the way the ride script's events would.
     {
         let sim = scene.sim.as_mut().unwrap();

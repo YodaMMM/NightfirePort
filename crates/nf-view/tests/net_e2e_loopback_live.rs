@@ -1,4 +1,4 @@
-//! net-e2e-loopback (task 706): the full online match, end to end over
+//! net-e2e-loopback: the full online match, end to end over
 //! 127.0.0.1, every menu step through FrontEnd actions (no direct page
 //! writes). The host FE walks Multiplayer → Host Online → types the port →
 //! Start Listening → the lobby; the client FE walks Join Online → types

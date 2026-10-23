@@ -1,6 +1,6 @@
 //! flesh-hit-effects live tests: the guard hit's blood puff, end to end.
 //!
-//! Playtest 1015-1738: bullet hits on people show "No red puffs".
+//! Symptom: bullet hits on people showed no red puffs.
 //!
 //! The game's flesh visual [M]: a bullet hit on a person carries `HITDATA+0x50 = 0` ([M
 //! `Collide_Jointy` 0x1ec180:125/173 — the anim-coll write; +0x52 = the bone id]), so
@@ -108,7 +108,7 @@ fn a_guard_hit_spawns_the_blood_puff_and_the_mesh_has_draw_slots() {
     // hashes `level.by_hash` resolves, a slot is the "this mesh draws on this level" proof.
     let slots = |mesh: u32| scene.attachments.iter()
         .filter(|a| matches!(a.gas, Some((_, m)) if m == mesh)).count();
-    assert!(slots(0x0200_08bc) > 0, "no gas draw slot for the blood puff 0x0200_08bc — the pool puff would still be invisible (the playtest's 'no red puffs')");
+    assert!(slots(0x0200_08bc) > 0, "no gas draw slot for the blood puff 0x0200_08bc — the pool puff would still be invisible (no red puffs)");
     assert!(slots(0x0200_026e) > 0, "no gas draw slot for the Samurai bolt puff 0x0200_026e (the same hardcoded-site family)");
     assert!(slots(0x0200_001f) > 0, "no gas draw slot for the projectile trail smoke 0x0200_001f");
 }

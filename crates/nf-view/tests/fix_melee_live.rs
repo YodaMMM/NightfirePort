@@ -126,7 +126,7 @@ fn three_punches_on_a_05_guard_do_the_games_damage() {
 /// ── The punched guard turns hostile at once ────────────────────────────────────────────────────
 /// `Drone_AlertStatusSet(2)` 0x145f28:30 → the port's alert ≥ 0.66, and the tail's resume
 /// `SetState` (the common (ATTACK, false) pair) takes the idle guard straight into the attack
-/// machinery — the reaction the driver's playtest described. Sister: the KO'd-by-punch team-1
+/// machinery — the reaction seen in play. Sister: the KO'd-by-punch team-1
 /// guard never fails the mission (0x145bd0:20-22 — the death half's team-1 arm has no civilian
 /// reason, unlike the guests').
 #[test]

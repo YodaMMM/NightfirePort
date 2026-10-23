@@ -1,6 +1,6 @@
 //! tranq-gun (750l): the Korsakov K5's dart puts a guard to sleep — the game's msg-0x19 route.
 //!
-//! The user, 2026-10-16 evening: "tranq gun doesnt work". The K5 (weapon 0x43) is the start
+//! The tranquilizer gun did not work. The K5 (weapon 0x43) is the start
 //! loadout of 07000009 "Night of the Agent" (Tower A) [M Player_InitWeapon 0x1a7ef8 case
 //! 0x7000009 — `Upgrade_Weapon(0x43)`, 999 rounds, SELECTED; the port's fresh_09]. The game's
 //! hit route: `NDrone2_DealWithObjHit` 0x13fff0 case 5 (:269-306) — the bullet's weapon record

@@ -1,9 +1,8 @@
-//! head-track — the verification round for playtests 1013-1758 / 1015-0046 ("how all the models
-//! are looking kind of weird, where their heads are turning kind of the wrong direction, wrong
-//! angle" / "how weird their head looks when they're turning").
+//! head-track — verification for the head-tracking symptom: characters' heads turned the wrong
+//! direction, at the wrong angle.
 //!
 //! A frame-stepped headless trace through the REAL input path (`Sim::step_bond`, no page/state
-//! pokes — Bond is staged by placement like fix_heads07's F12 spots), for three poses of a tracked
+//! pokes — Bond is staged by placement like fix_heads07's spots), for three poses of a tracked
 //! drone — Bond beside it on side A (`cross(up, fwd)` off its yaw), side B, and ABOVE it (the
 //! 07000007 balcony the fix_heads07 trace proved saturates) — asserting every tick's stored head
 //! yaw/pitch against values computed from the game's formula, independently transcribed HERE:
@@ -32,7 +31,7 @@
 //! (they are 0x1bf618's, not the drone state machine's). The head-track code is shared.
 //!
 //! On top of the per-tick formula equality, the trace asserts the DIRECTION end to end from the
-//! posed head bone (the thing the playtests saw): the head's world forward turns TOWARD Bond in
+//! posed head bone (the thing that shows on screen): the head's world forward turns TOWARD Bond in
 //! every pose, the head stays upright (no roll — the real game yaws about the neck and pitches
 //! about the side axis only), and the saturated poses sit at the clamps.
 
@@ -80,7 +79,7 @@ fn head_uprightness(world: &[[[f32; 4]; 4]]) -> f32 { norm(row(&world[5], 1))[1]
 
 /// The port's tracked-drone pick: an enabled, alive, UNARMED drone nearest to Bond (the game's
 /// armed gate: `ObjectIsArmed` 0x178768 = weapon 2..=0x46 or 0x6a..=0x71 — the port's aims_torso
-/// weapon gate; the head-track code is shared by guards and guests, the playtest bugs on both).
+/// weapon gate; the head-track code is shared by guards and guests, the bug showed on both).
 fn nearest_unarmed_drone(sim: &nf_view::scene::Sim) -> Option<usize> {
     let bp = sim.bond.pos;
     let mut best: Option<(i64, usize)> = None;
@@ -148,8 +147,8 @@ fn trace_tick(scene: &mut nf_view::scene::Sim, di: usize) -> (f32, f32, f32, f32
 }
 
 /// ── The 3-pose trace ────────────────────────────────────────────────────────────────────────────
-/// Bond beside the tracked drone on both sides (its own floor) and above it (the fix_heads07 F12
-/// balcony, whose guests the 1014-1725 trace measured at yaw ±1.100 / pitch +1.000); every tick's
+/// Bond beside the tracked drone on both sides (its own floor) and above it (the fix_heads07
+/// balcony, whose guests a trace measured at yaw ±1.100 / pitch +1.000); every tick's
 /// stored angles follow the game's formula, the head turns toward Bond and stays upright, and the
 /// saturated poses sit at the clamps (|yaw| 1.1; pitch the game's −1.0 up-limit = the port's
 /// +1.0 positive-up). Finally Bond steps beyond the 3.0 range and the stored angles ease back to
@@ -235,17 +234,17 @@ fn head_track_trace_left_right_above_matches_the_game_formula() {
             "{name}: the stored yaw must stay within the game's ±1.1 clamp; max {max_yaw:.3}");
         if tracked_ticks >= 30 {
             assert!(min_angle < 0.6,
-                "{name}: while tracking, the head's world forward turns toward Bond (the playtest's 'wrong direction' check); min angle {min_angle:.3} rad");
+                "{name}: while tracking, the head's world forward turns toward Bond (the 'wrong direction' check); min angle {min_angle:.3} rad");
             assert!(min_upright >= 0.9,
-                "{name}: the head must stay upright — the game's head-track only yaws about the neck and pitches about the side axis, no roll (the 1013-1758 roll bug); min {min_upright:.3}");
+                "{name}: the head must stay upright — the game's head-track only yaws about the neck and pitches about the side axis, no roll (the old roll bug); min {min_upright:.3}");
         }
     }
 
-    // Above: Bond on the playtest F12 balcony (spot 3 of the 1014-1725 run, fix_heads07's
+    // Above: Bond on the balcony (spot 3, fix_heads07's
     // placement) — the guests below him within the 3.0 gate pitch up to the game's −1.0
     // (positive-down) clamp = the port's +1.0 positive-up.
     let di = {
-        // The fix_heads07 F12 spots (the 1014-1725 run measured guests below these at yaw ±1.100 /
+        // The fix_heads07 spots (a trace measured guests below these at yaw ±1.100 /
         // pitch +1.000): try each until one has an unarmed drone below Bond within the gate.
         let spots = [[39.78f32, 44.10, -70.86], [40.58, 44.13, -70.77], [41.71, 44.13, -72.05]];
         let mut found = None;

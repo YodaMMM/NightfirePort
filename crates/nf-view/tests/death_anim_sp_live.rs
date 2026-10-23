@@ -1,6 +1,5 @@
 //! death-animation-sp: Bond's death plays the death script, holds the death camera and waits the
-//! game's time before the failed page (playtest 1015-0046, restart after dying: "missing death
-//! animation").
+//! game's time before the failed page (the death animation was missing).
 //!
 //! Evidence base:
 //! - The death starts [M `Player_CheckForDeath` 0x190810:34-97]: ch 0x5e, `Music_Event(6,1)`,
@@ -20,7 +19,7 @@
 //!   → `Player_GetHeadPos` 0x195aa0:39-51: eye = obj+0x30/34/38 + BL+0x908 − BL+0x90c; the dead
 //!   arm zeroes BL+0x90c [M 0x18f5d8:130-132], BL+0x908 lerps to 0 on land [M 0x18f5d8:113-128]]:
 //!   a frozen first-person eye at the death spot. The visible "death animation" is the view model
-//!   posed from the body's collapsing bones — the drawing side (the main agent's render task).
+//!   posed from the body's collapsing bones — the drawing side.
 //! - The script's clock [M `AnimScriptInit` 0x1c1600 sets the script time (+0x90) to 1.0 on
 //!   `AnimScriptAdd`; [L] the PCSX2 death trace: +2.0 frames per dead tick] — the port's
 //!   `DEATH_SCRIPT_FRAMES_PER_TICK` 2.0 at the fixed 60 Hz; end mode 0 stops at the length [M

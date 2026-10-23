@@ -1,4 +1,4 @@
-//! fix-casings-16 — 07000016's playtest symptoms through the real path (`nf_view::load` +
+//! fix-casings-16 — 07000016's symptoms through the real path (`nf_view::load` +
 //! `Sim::step_bond`).
 //!
 //! 1. The walk continues: the arrival walkway's first door (glist 0x803f00a0 — kind 2 slide,
@@ -9,15 +9,15 @@
 //!    opens a closed idle one; the game's contact path (U-041) is stood in by the per-tick
 //!    straddle walk-in with `Door_Update`'s own proximity metric
 //!    `Vec_SqDist3D(door+0x80, actor+0x80) < (door+0x8C + actor+0x8C)² · 2` [M 0x1363c8
-//!    @0x136678-0x136684]. The user's "mission complete thing pop up ... but I still couldn't
-//!    continue": the banners at the arrival are the game's own ("OBJECTIVE COMPLETE" for the
+//!    @0x136678-0x136684]. A completion banner popped up yet play could not continue: the
+//!    banners at the arrival are the game's own ("OBJECTIVE COMPLETE" for the
 //!    carried 07000015 objective — the spawn plate #252 writes ch 0x8e as Bond arrives [D
 //!    docs/levels/07000016.md §2] — plus the enabled "Reach Drake's launch silo" announce), but
 //!    the walk then dead-ended at this door.
 //! 2. Walking backwards ejects nothing: `Bullet_init_casing` 0x12fde0 runs only from
 //!    `Player_WeaponInitBullet` 0x1a4bf0:306 (the shot's release) and `DroneWeap_FireWeapon`
-//!    0x178f68:264 (a guard's shot) — never from movement. The user's "casings flying when I
-//!    walk backwards" is the eject pool's 240-tick life [M Bullet_casing_update 0x12faa0]:
+//!    0x178f68:264 (a guard's shot) — never from movement. Casings flying while walking
+//!    backwards are the eject pool's 240-tick life [M Bullet_casing_update 0x12faa0]:
 //!    casings from their own shots are still airborne during the backpedal, not new spawns.
 
 use nf_game::player::Input;

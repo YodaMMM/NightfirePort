@@ -112,7 +112,7 @@ fn the_difficulty_scales_a_guards_damage_to_bond_by_the_decompile_factor() {
     // The sister assertion first: the DEFAULT difficulty (2) is what a fresh Sim boots with.
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
     let sim = scene.sim.as_mut().unwrap();
-    // The direct-level load replays the user's live sessions (difficulty 1, the old pre-menu
+    // The direct-level load replays the recorded live sessions (difficulty 1, the old pre-menu
     // constant); a fresh `Drones::new` boots at the game's default 2 [M 0x1c7e78:25].
     assert_eq!(sim.drones.difficulty, 1, "the direct-level session difficulty");
     {

@@ -1,5 +1,5 @@
-//! guard-first-shot-timeline (playtest 1016): "guards still shoot way too quickly" and "literally
-//! cant even stun the starting guard without him shooting me instantly before he can even turn".
+//! guard-first-shot-timeline: guards fired too quickly — the starting guard shot Bond instantly,
+//! before even turning, so he could not be stunned.
 //!
 //! The starting guard of 07000001 (drone 0, placement #158) plays start script 0x06000169 through
 //! PlayScript (3) — a 181-frame scripted walk down the drive [M NDrone2_DSTATE_PlayScript 0x15ba68
@@ -10,7 +10,7 @@
 //! scripted guard NEVER sight-interrupts (the guard's behaviour prop 0x20 = 3 → alertness 1.0 [D
 //! placement #158 words 18-20 through behaviour_util_get 0x1c7a98; the alertness table {0,0,0.66,1.0}
 //! [D ee_start_07000001.bin @ 0x2f5cc8]). The port interrupted at the sight ack (+17 ticks after
-//! control) and his first bullet landed at +20 — the playtest's instant opening fire.
+//! control) and his first bullet landed at +20 — the instant opening fire.
 //!
 //! The script's own end directs AimStandFire: DSTATE_PlayScript case 5 for 0x6000168/0x6000169 →
 //! `CallAnim(0, 10, 0, 0x68, 0, 0)` [M 0x15ba68 case 5] — ported. From there the fire chain is the
@@ -68,7 +68,7 @@ fn a_starting_guard_finishes_his_start_script_before_any_shot() {
     // cone [L tests/traces/01-doors.trace lines 0-150]. The sight ack lands DURING the script
     // (Bond is visible; the 10-tick reaction [M DroneFunc_ReactionTime 0x14ac60 default arm] runs)
     // but the script is not interrupted [M 0x177ed0:12-14]. The port used to leave the script at
-    // the ack (+17) and fired at +20 — the playtest's instant opening fire.
+    // the ack (+17) and fired at +20 — the instant opening fire.
     assert!(los_while_script, "the guard never had Bond in sight during his script — the \
         pre-condition died (the vision pass should see a 5 u Bond in the cone)");
     assert!(ack_while_script, "the sight ack never landed during the script — the 10-tick \
@@ -85,10 +85,10 @@ fn a_starting_guard_finishes_his_start_script_before_any_shot() {
     }
 }
 
-/// The playtest's exact play: Bond walks BEHIND the starting guard while the guard is still
+/// The exact play: Bond walks BEHIND the starting guard while the guard is still
 /// scripting, touches him with the stunner and holds. The guard must not fire while his script
 /// still runs (Bond behind him gives no cone sight, and the full-alert script gate [M 0x177ed0:12-14]
-/// holds the interrupt); the user's whole stun window IS that script walk.
+/// holds the interrupt); the whole stun window IS that script walk.
 #[test]
 fn a_starting_guard_walked_behind_never_fires_during_his_script() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };

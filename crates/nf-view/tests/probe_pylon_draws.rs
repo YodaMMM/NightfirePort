@@ -36,8 +36,8 @@ const SHADOW_NODE: u32 = 74;
 fn probe_pylon_draw_data() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut sc: Scene = match nf_view::load(&iso, "0700000c.bin", false) { Ok(s) => s, Err(e) => { eprintln!("0700000c: {e}"); return } };
-    // The real --bond path with the USER's pitch (−0.269): the render camera's pitch matters for
-    // the projection verdicts (the 102e probe used the stand pitch 0).
+    // The real --bond path with the repro's pitch (−0.269): the render camera's pitch matters for
+    // the projection verdicts (an earlier probe used the stand pitch 0).
     let sim = sc.sim.as_mut().unwrap();
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, [14.22, 16.28, -139.54], 0.986);
     for _ in 0..5 { sim.step_bond(Default::default(), false, false, false); }

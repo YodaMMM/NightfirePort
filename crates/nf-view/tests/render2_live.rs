@@ -1,4 +1,4 @@
-//! Headless NF_ISO tests for the fix-render2 follow-ups (the user's playtest 2026-10-11 follow-up):
+//! Headless NF_ISO tests for the fix-render2 follow-ups:
 //! the script-character/cut-scene ambient dim, the dropped-gun and placed-pickup tint, the truck,
 //! the doors, the first-guard cel snap, and the merge regression on the placed-pickup draw.
 //!
@@ -94,8 +94,8 @@ fn placed_pickup_charvertices_survived_the_merge() {
     assert!(sim.drones.pickups.iter().any(|p| p.from.is_none()), "no placed pickup in the sim");
 }
 
-/// The user's check of fix-render: "every cut-scene still draws characters at the old, over-bright
-/// level." Root cause: `Sim::characters_script_pos` resolved script characters through
+/// After fix-render, every cut-scene still drew its characters at the old, over-bright
+/// level. Root cause: `Sim::characters_script_pos` resolved script characters through
 /// `script_entity`, which matches only `Obj::Entity` — script Anim characters (Obj::Anim) never got
 /// an ambient target, so `char_ambient` stayed at the 0xff sentinel and the multiplier stayed 1.0.
 /// [L ee_start_07000001.bin] the opening cut-scene's script-created character objects carry
@@ -162,8 +162,8 @@ fn cutscene_script_characters_dim_to_their_cel_ambient() {
     assert!(cels.iter().any(|c| c.ambient[0] == [40, 30, 26]), "no parsed cel carries the [L] (40,30,26) ambient");
 }
 
-/// The user's check: "weapons lying on the ground are far too bright. fix-render left dropped guns
-/// at 1.0. Port their tint, and check placed pickups too." The game's pickups are character-lit
+/// Weapons lying on the ground were far too bright: fix-render left dropped guns at 1.0 (placed
+/// pickups likewise). The game's pickups are character-lit
 /// objects: `Pickup_Create` (0x18dda0) forces obj+0xF0 = glist_flags & ~0x2000 | 0x840 — the 0x800
 /// ambient dim — except kind 3 (armour) and kind 6 (007 bonus), which get 0x800 cleared. [L
 /// ee_start_05.bin] the placed sniper pickup obj 0x01382bc0 reads +0xF0 = 0x880, ambient
@@ -289,7 +289,7 @@ fn dropped_guns_dim_to_the_cel_ambient() {
     assert!(!close(want, [1.0; 3]), "the drop's cel ambient is white — nothing to assert");
 }
 
-/// The user's check: "The 07000005 truck is too bright." The truck is the script Anim object of
+/// The 07000005 truck was too bright. The truck is the script Anim object of
 /// skin 0x05000005 (script-player.md [D]: ScriptPlayer #37, stream 1, nine rigid parts); its nine
 /// discrete game objects carry obj+0xF0 = 0x8880 with ambient (57, 70, 86) [L ee_start_05.bin
 /// 0x0137C8A0…, gs-leaf.md's 0x0137bfa0 row]. The port draws it as a script character, whose
@@ -327,8 +327,8 @@ fn the_truck_takes_the_0x800_ambient() {
     assert!(!close(m, [1.0; 3]), "the truck stayed at the pre-fix 1.0 multiplier");
 }
 
-/// The user's check: "The first guard at the start of 07000001 looks too dark, but guards later in
-/// the level look right." [L ee_start_07000001.bin] the game's drones read, in list order:
+/// The first guard at the start of 07000001 looked too dark, while guards later in the level looked
+/// right. [L ee_start_07000001.bin] the game's drones read, in list order:
 /// drone 0 (-4.92, 6.34, -0.09) cel 0x191f0e0 amb (20,20,20); drone 1 (-7.70, 6.34, -7.62) cel
 /// 0x191c860 amb (40,30,26); drone 2 (-30.06, 10.31, 13.44) amb (60,60,60); drones 5-7 amb
 /// (80,80,70); drones 8/13 amb (45,30,30). Every guard's multiplier must match the game's cel
@@ -365,7 +365,7 @@ fn the_first_guard_snaps_to_the_game_ambient() {
     assert!(matched >= 3, "only {matched} guards matched a [L] snapshot position");
 }
 
-/// The playtest R3: "Doors don't take the ambient lighting while they open and close." The
+/// R3: doors did not seem to take the ambient lighting while they open and close. The
 /// evidence says the proposed fix shape is WRONG: the doors' glist flags carry NO 0x800
 /// ([D 07000005.bin via the port's parse — Door_Locked_3/Door_UNLocked/Door_Locked_4 all flags
 /// 0x0]), `Door_Create` (0x136100) only calls `Control_SetGList` (which merges glist+0x44 into
@@ -397,8 +397,8 @@ fn doors_carry_no_0x800_and_stay_untinted() {
     }
 }
 
-/// The playtest R4 / the user's performance check: "the frame rate drops badly looking towards the
-/// party level's grandfather clock" and "the frame rate is still very poor (07000006, 07000007)".
+/// R4: the frame rate dropped badly looking towards the party level's grandfather clock, and stayed
+/// poor on 07000006/07000007.
 /// The renderer submitted every material every frame (the cull was off by default after A-11's
 /// vanish bug). fix-render2 scopes the default cull to the static World layer (gpu.rs): the moving
 /// layers keep drawing, the static bulk skips off-screen. This counts what the render loop would

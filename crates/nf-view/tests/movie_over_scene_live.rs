@@ -1,5 +1,4 @@
-//! movie-over-scene (2026-10-20, user report "movies arent visually there on the latest build. I can
-//! hear the audio"): since doublecross-transitions chained `Player_Init`'s entry fade (45 ticks,
+//! movie-over-scene (movies played their audio but showed no picture): since doublecross-transitions chained `Player_Init`'s entry fade (45 ticks,
 //! [M 0x1910f8:45]) into the scene's script overlay, the idle scene behind the boot/briefing movies
 //! held it at full black — it only counts down while the sim ticks — and the HUD pass drew it OVER
 //! the movie plane. The movie owns the screen: no scene overlay while a movie frame is up.

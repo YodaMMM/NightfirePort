@@ -11,7 +11,7 @@
 //! hand-back cut-scene (0x06000073, 4326 ticks) and the gondola level's intro (0x06000077, 3880 ticks) exist
 //! nowhere else on the disc.
 //!
-//! The user's playtest (2026-10-11): the cut-scene where Bond first sees Drake (07000007, the party) doesn't
+//! The symptoms: the cut-scene where Bond first sees Drake (07000007, the party) doesn't
 //! play, and on the level after the party (07000008, the gondola) the cut-scene that should start almost
 //! immediately doesn't play. Before the fix the port's script lib held only the level archive's type-7 entries,
 //! so the mode-0 ScriptPlayers deleted themselves on their first trigger (`Player::load`'s missing-script arm

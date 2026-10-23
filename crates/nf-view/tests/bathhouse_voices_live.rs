@@ -1,5 +1,5 @@
-//! bathhouse-voices-02 (playtest 1017-1139): "I went through one of the tunnels to go underneath the
-//! bathhouse, and I couldn't hear any of the guards doing their voice lines."
+//! bathhouse-voices-02: in the tunnels under the bathhouse, none of the guards' voice lines
+//! could be heard.
 //!
 //! The census and the game's rule (docs/systems/under-bathhouse-voices.md):
 //! - The guards around/under the bathhouse's south side are three switch-channel groups on the main

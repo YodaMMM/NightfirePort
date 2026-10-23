@@ -1,4 +1,4 @@
-//! The playtest crash 1015-2142 (the attract trailer's return and the dossier page both died in
+//! A crash (the attract trailer's return and the dossier page both died in
 //! nf-audio `Driver::update`, `fx.subs[cued[k]]`: "the len is 0 but the index is 0"). The front
 //! end restarts its music pair (0x1d7 / 0x470) over the live one; the per-id voice limit rejects
 //! the new start in `SFXSetup`, and the rejected item stayed in the list with an empty cue list

@@ -1,7 +1,7 @@
 //! mission-unlock-flow headless tests: completing a mission unlocks the next Single Player row,
 //! in the game's order, surviving the MSSN save/load; "Play without saving" keeps the unlocks
 //! session-only; the driving rows confirm into GameFlow state 9 (the DRIVING.ELF handover).
-//! Numbers/ids only — no drawing (the main agent renders the pages against PCSX2).
+//! Numbers/ids only — no drawing.
 //!
 //! Evidence: docs/systems/mission-unlock-flow.md — P_NFRESULTS_Handler 0x208e78:77/169,
 //! Menu_SetLevelBonus 0x1ffa10:62-66 (row i AND i+1, hash-agnostic), Menu_Get/SetNightfireStatus
@@ -68,7 +68,7 @@ fn first_three_completions_unlock_in_game_order_and_survive_save_load() {
     assert!(fe.results_enter(&mut progress, 0x0700_0005, 6, 2, None), "the results fields built");
     // The GAME's award flags (packed_unlocks = sp_level+0x10) stay exactly the game's; the port's
     // `unlocked_row` additionally opens a row behind an unlocked DRIVING row, because the port can't
-    // play driving yet (playtest 1015-2231: a fresh profile was stuck on Paris Prelude) [S].
+    // play driving yet (a fresh profile was stuck on Paris Prelude) [S].
     assert_eq!(fe.packed_unlocks() & 0b100, 0b100, "row 2 awarded by row 1's completion [M 0x1ffa10:63-65]");
     assert_eq!(fe.packed_unlocks() & 0b1000, 0, "the game's flag for row 3 is still clear");
     assert!(fe.unlocked_row(0) && fe.unlocked_row(1), "sister: no regression — the game's flags never clear");
@@ -144,7 +144,7 @@ fn sp_confirm_splits_on_foot_from_driving() {
 
     // Row 0 is the DRIVING 0x09000001. The game hands over to DRIVING.ELF in GameFlow state 9 [M
     // 0x1d3800:105-108]; the port has no driving executable, and entering state 9 left the flow
-    // stuck for good (playtest 1015-2231). The port shows a notice instead: the flow stays in the
+    // stuck for good. The port shows a notice instead: the flow stays in the
     // runner and no level load goes out [S port choice].
     assert!(fe.action(Action::Confirm));
     assert_ne!(fe.flow.get_state(), ST_LAUNCH_DRIVING, "the port never enters the dead state 9");

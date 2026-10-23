@@ -20,8 +20,8 @@
 //! (`src/bin/nf-cpd-child.rs`, spawned via `CARGO_BIN_EXE_` — no libtest harness in the child) in
 //! TWO CHILD PROCESSES, the TICK stream read back per child. This is the literal lockstep
 //! condition (two machines are two processes); it needs honest process semantics — where a
-//! sandbox breaks grandchild plumbing (pipes EOF early, the child's own file creations stay
-//! invisible to the live parent — both observed in the worker sandbox), it SKIPs with the
+//! sandboxed environment breaks grandchild plumbing (pipes EOF early, the child's own file
+//! creations stay invisible to the live parent — both observed), it SKIPs with the
 //! evidence rather than failing the suite, and the in-process guard above still holds the line.
 //!
 //! THE TRIP TEST (`the_guard_trips_on_a_deliberately_order_dependent_stream`): the sister that
@@ -192,9 +192,9 @@ fn the_guard_trips_on_a_deliberately_order_dependent_stream() {
 
 /// Spawn the child runner and read its TICK stream back from the file `NF_OUT` — the honest
 /// two-process form of the guard (two processes, two whole-process HashMap seed sets). The child's
-/// TICK stream also rides stderr; under a sandbox that breaks grandchild plumbing (pipes EOF
-/// early, the child's own file creations invisible to the live parent — both observed in the
-/// worker sandbox), the TICK file arrives empty: the test SKIPs with the evidence instead of
+/// TICK stream also rides stderr; under a sandboxed environment that breaks grandchild plumbing
+/// (pipes EOF early, the child's own file creations invisible to the live parent — both
+/// observed), the TICK file arrives empty: the test SKIPs with the evidence instead of
 /// failing the suite, and the in-process guard holds the line.
 fn run_child(toy: bool, seq: usize) -> Option<Vec<(u32, u64, u64)>> {
     let exe = env!("CARGO_BIN_EXE_nf-cpd-child");
@@ -213,7 +213,7 @@ fn run_child(toy: bool, seq: usize) -> Option<Vec<(u32, u64, u64)>> {
     if ticks.len() != TICKS as usize {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let done = stderr.contains("[cpd] done");
-        eprintln!("[cpd] SKIP the two-process leg: the sandbox broke the parent↔child plumbing \
+        eprintln!("[cpd] SKIP the two-process leg: the environment broke the parent↔child plumbing \
 (status {:?}, {} TICK lines{}; stderr tail: {:?}) — the in-process guard covers this tree",
             out.status.code(), ticks.len(),
             if done { ", the child itself finished" } else { "" },
@@ -226,7 +226,7 @@ fn run_child(toy: bool, seq: usize) -> Option<Vec<(u32, u64, u64)>> {
 /// THE CROSS-PROCESS GUARD: 600 ticks of 07000005 combat in two child processes of the same
 /// binary — bit-identical per-tick state fingerprints. Two processes carry different whole-process
 /// HashMap seeds, so any order-dependent site feeding the sim fails this. SKIPs (with evidence)
-/// where the sandbox breaks the plumbing.
+/// where the environment breaks the plumbing.
 #[test]
 fn two_child_processes_produce_bit_identical_tick_streams() {
     if iso().is_none() { eprintln!("skip: NF_ISO not set"); return; }

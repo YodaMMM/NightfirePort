@@ -224,8 +224,8 @@ fn bots_fight_take_pickups_and_switch_in_lockstep() {
     assert!(t.weapons_seen.len() >= 2, "more than the start weapon was used: {t:?}");
 }
 
-/// mp-bot-weapons: the start weapon 6 fires (the reported "bot in 0xD4 with the fire latch set
-/// never fires" does not reproduce on the merged tree) and honours the game's interval floor:
+/// mp-bot-weapons: the start weapon 6 fires (a bot in 0xD4 with the fire latch set that never
+/// fires does not reproduce here) and honours the game's interval floor:
 /// no two weapon-6 shots of one bot land within 60 ticks [M DroneWeap_NextBulletTime
 /// 0x179d40:26-47 — the min-60 clamp for weapons 6/0xA/0xE..0x10]. Sister: a picked-up weapon
 /// is not only taken but fired — the preference choice leads the take → switch → fire chain.

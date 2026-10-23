@@ -125,8 +125,8 @@ fn walk_to_the_gatehouse_and_ride_the_truck() {
 /// unreachable from here. Whether that wall is the game's own collision (the tower's
 /// Object_Tower_Gate_* / the BlockingPolys family — the level's 0x19 census has 113 entries, several
 /// named BlockingPoly_*), or the port's collision of it, or simply the wrong lane (the disc's real
-/// route to the cable may cross the gatehouse interior or drop to the west road), needs the main
-/// agent's render/trace: see docs/reports/level-05-complete.md "Live checks for the main agent".
+/// route to the cable may cross the gatehouse interior or drop to the west road), needs a
+/// render/trace (open live check).
 #[test]
 #[ignore]
 fn walk_the_west_ledge_and_cross_the_cable() {

@@ -1,6 +1,5 @@
-//! fix-guard-first-shot: 07000006 — "Shots are still happening instantly" (playtest 1014-1725,
-//! real-input build). Through the REAL path (`nf_view::load` + `Sim::step_bond` with the window's
-//! `Input`), Bond stands in the courtyard searchlight's sweep (the alarm path the user's walk-in
+//! fix-guard-first-shot: 07000006 — guard shots still came instantly. Through the REAL path (`nf_view::load` + `Sim::step_bond` with the window's
+//! `Input`), Bond stands in the courtyard searchlight's sweep (the alarm path a walk-in
 //! takes), the alarm wakes the guards [M PreDroneControl 0x148db0:51-61], and per guard we measure
 //! FIRST SIGHT (the LOS tick) → first bullet (`Drone.shots`) against the game's chain:
 //! - the reaction ack: `HaveOpponentSight` 0x175ef0:41-44 returns until `+0x270 >= ReactionTime`

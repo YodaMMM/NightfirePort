@@ -22,7 +22,7 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 fn load_warm() -> Walker {
     // Single load: the level's own boot state IS the carried state (health 100, the 0a
     // loadout [L loadout print]) — the old cold-load capture applied the boot's own values
-    // back and doubled the memory peak (the sandbox OOM-kills the second load). The carried
+    // back and doubled the memory peak (a small test machine OOM-kills the second load). The carried
     // channels of the real run (objectives 3-6 + the hatch unlock) [M 0x195670:13].
     let mut w = Walker::new(nf_view::load_with_carry(&iso(), "0700000b.bin", false, None).expect("load"));
     for c in [0x46u8, 0x47, 0x48, 0x49, 0x4a] { w.scene.sim.as_mut().unwrap().drones.set_channel(c); }

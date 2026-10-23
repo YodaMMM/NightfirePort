@@ -8,8 +8,8 @@
 //! - every created pickup is takeable from where a player stands: the game's own touch
 //!   predicate (`Pickup_Update` 0x18e148:203-214, radius + 1.1, LOS from the sphere centre) and
 //!   `Pickup_Handler`'s consume rules (armour ≥ 50 refuses; ammo at cap refuses; a first-person
-//!   model missing from the level archive refuses — the user's "can't pick up the rocket
-//!   launcher" on 07000008);
+//!   model missing from the level archive refuses — why the rocket launcher could not be
+//!   picked up on 07000008);
 //! - the kind census: which PICKUPINFO kinds the disc's SP levels actually place (7-11 =
 //!   `Pickup_CreateFromSet` 0x18f1b0 are the MP weapon sets; SP use would need porting).
 //!

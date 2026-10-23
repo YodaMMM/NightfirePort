@@ -1,7 +1,7 @@
 //! fix-wire repro (pre-fix evidence): Bond standing next to 07000005's cable, pressing E. This probe
 //! only uses the pre-fix API (load + step_bond), so it runs against both the old and the new code.
-//! Old code: no wire substate exists — the substate stays 0 (walk) and nothing grabs (the user's
-//! "pressing E plays the falling-to-death animation" — he walks off the cliff instead of crossing).
+//! Old code: no wire substate exists — the substate stays 0 (walk) and nothing grabs (E
+//! played the falling-to-death animation — he walked off the cliff instead of crossing).
 //! New code: the grab scan puts him on the wire (substate 6, the grab pose).
 //! Run with: `NF_ISO=… cargo test -p nf-view --test wire_repro -- --nocapture`
 
@@ -10,7 +10,7 @@ use nf_formats::iso9660::IsoImage;
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
 #[test]
-// Ignored at the fix-wire2 merge (main agent): E is action 0xE → `Player_Activate` 0x1a5170, which has no
+// Ignored: E is action 0xE → `Player_Activate` 0x1a5170, which has no
 // class-0x2C (wire) arm; the game grabs a wire by walking into it or by the jump with the icon context.
 #[ignore = "E never grabs a wire in the game (Player_Activate has no wire arm); see fix_wire2_live"]
 fn repro_e_near_the_07000005_cable() {

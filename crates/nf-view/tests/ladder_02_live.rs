@@ -1,19 +1,18 @@
-//! ladder-02 (691): the 07000002 bunker ladder and the pond water ladder through the REAL viewer
+//! ladder-02: the 07000002 bunker ladder and the pond water ladder through the REAL viewer
 //! path (`nf_view::load` + `Sim::step_bond`). Opt-in via `NF_ISO`.
 //!
-//! Playtests 1011-1732 / 1014-1725 (level 07000002): "You can't move your camera while on the
-//! ladders"; "When you get on the ladder, it unequips your weapon. And when you get off the ladder,
-//! it doesn't re-equip"; "I'm infinitely latching onto the ladder, and I can't get off of it"
-//! (climbing off into the water).
+//! Symptoms on 07000002: the camera could not move on the ladders; getting on unequipped the weapon
+//! and getting off did not re-equip it; and climbing off into the water re-latched onto the ladder
+//! endlessly.
 //!
 //! The mechanisms were ported by fix-ladder2 (the climb look [M Player_Climb 0x196310:18-33 +
 //! Player_Update 0x193600 + Player_Aiming 0x1a1d28 + ViewClamping 0x1a92e8], the weapon save/redraw
 //! [M Player_WeaponNone 0x1a9858 + the Player_Climb 0x196310:99-102 carry]) and fix-ladder-water
 //! (the mesh-scale swim reach + the InWater regrab [M Player_InWater 0x195e50:27,
-//! FRAME_RATE_DIV = 1.0 [L 0x30d0d4] → regrab 5]). This task locks them on BOTH 07000002 ladders —
+//! FRAME_RATE_DIV = 1.0 [L 0x30d0d4] → regrab 5]). This file locks them on BOTH 07000002 ladders —
 //! the bunker exit ladder (≈(−26.9, 2.3, 42.2), yaw −π, top 5.96 [D atlas/ladder.md]) and the pond
 //! hut ladder (≈(−74.8, 4.0, 22.2), bottom 2.83 under the 3.765 surface [D probe_ladder2]) — with
-//! the climb-DOWN dismount at the bottom (the playtest's "climbing off into the water"), which the
+//! the climb-DOWN dismount at the bottom (climbing off into the water), which the
 //! earlier tests did not drive.
 
 use nf_view::scene::Sim;
@@ -130,8 +129,8 @@ fn bunker_ladder_look_dismount_and_weapon() {
 
 fn wrap_pi(d: f32) -> f32 { let mut d = d + std::f32::consts::PI; while d < 0.0 { d += 2.0 * std::f32::consts::PI; } while d >= 2.0 * std::f32::consts::PI { d -= 2.0 * std::f32::consts::PI; } d - std::f32::consts::PI }
 
-/// The pond hut ladder, climbed DOWN off the bottom into the water — the playtest's "climbing off
-/// into the water … infinitely latching onto the ladder". The below-bottom dismount [M
+/// The pond hut ladder, climbed DOWN off the bottom into the water — without endlessly re-latching
+/// onto the ladder. The below-bottom dismount [M
 /// Player_Climb 0x196310:79-86] fires at root < 2.83; the swim entry then OVERWRITES the dismount's
 /// 60-tick regrab with 5 [M Player_InWater 0x195e50:27, FRAME_RATE_DIV = 1.0 [L 0x30d0d4]] — so the
 /// no-re-latch must hold on the geometry, not just the timer: Bond hangs at the dismount depth
@@ -177,7 +176,7 @@ fn water_ladder_bottom_dismount_does_not_relatch() {
     // (bottom threshold only) leaned on the pond's collision sitting in the wrong scope bucket —
     // `Geo::push_flags` dropped empty collision meshes and shifted every later owner, so the
     // pond cel's bed was in no straddled bucket at all. With the buckets aligned the bed is the
-    // pond cel's own geometry; the user-facing guarantee is the no-re-latch below.
+    // pond cel's own geometry; the player-facing guarantee is the no-re-latch below.
     let bed = sim.world.segment_hit_scoped(sim.bond.cel, [sim.bond.pos[0], dy + 0.5, sim.bond.pos[2]], [sim.bond.pos[0], dy - 1.2, sim.bond.pos[2]]);
     assert!(dy <= lad.bottom() + 1e-3 || bed.is_some(),
         "the dismount fired above the bottom threshold with no bed below: y {dy:.3} vs bottom {}", lad.bottom());
@@ -190,8 +189,7 @@ fn water_ladder_bottom_dismount_does_not_relatch() {
     assert!(in_water, "the bottom dismount did not reach the water (ended at y {dy:.3})");
     assert!(sim.bond.regrab > 0, "the swim entry lost the regrab lockout (InWater's overwrite)");
 
-    // The playtest's complaint — "I'm infinitely latching onto the ladder, and I can't get off of
-    // it" (climbing off into the water): the swimmer who pushes off (the stick held away, the
+    // The endless re-latch (climbing off into the water): the swimmer who pushes off (the stick held away, the
     // natural get-off — kept held from the dismount tick on) must swim free and never re-latch.
     // The pre-109i port re-grabbed every cycle even then.
     for t in 0..300 {

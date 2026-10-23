@@ -9,8 +9,7 @@
 //!    OICW pane (17), 0x32/0x33 the Laser pane (19, the Ronin), 0x54/0x55 the Camera pane (11, the
 //!    watch's viewfinder; 0x55 is the taser twin that saves as 0x54), any other scoped weapon (the
 //!    sniper 0x24, zoom 10) the Sight pane (6, the scope). The port drew the scope for every zoom —
-//!    the user: "The micro camera, when you zoom in, doesn't actually have the camera overlay, but
-//!    the scope of a sniper."
+//!    the zoomed micro camera showed the sniper scope instead of its camera overlay.
 //! Opt-in via `NF_ISO`.
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
@@ -65,7 +64,7 @@ fn the_gun_tilt_divides_by_the_zoom() {
 }
 
 /// The zoom overlay selection, drawn: the sniper keeps the scope; the watch (0x54) draws the camera
-/// viewfinder (the user's bug — it drew the sniper scope); the OICW its circle; the Ronin its laser
+/// viewfinder (the old bug — it drew the sniper scope); the OICW its circle; the Ronin its laser
 /// frame; unzoomed, nothing. 07000014 ships the scope (0x03000034), viewfinder (0x03000055/56/57)
 /// and OICW (0x03000141) textures [D tex-list].
 #[test]

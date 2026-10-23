@@ -1,7 +1,6 @@
 //! fix-restart-health: the restart/checkpoint health — die and restart through the real flow, the
-//! game's health/armour (the user: "if I die and it takes you to the beginning of the level, I
-//! should be at full health. This is ridiculous." and (07): "I'm not really sure I believe you
-//! when you say you start with half health at a checkpoint.").
+//! game's health/armour (a restart after death at the level's start gives full health; a checkpoint
+//! restart's "half health" is only the game's floor).
 //!
 //! The game's model, end to end:
 //! - EVERY level load ends in an unconditional `Player_RamSave` [M `Player_InitWeapon` 0x1a7ef8:325
@@ -61,12 +60,12 @@ fn die_to_restart(sim: &mut nf_view::scene::Sim, level: u32) {
     tick(sim, 4);      // MissionState 3 → 7 → 4, the menu opens and auto-restarts [M 0x182c60]
 }
 
-/// ── 1. The user's report: die on a cold-loaded level → Restart → FULL health ────────────────────
+/// ── 1. Die on a cold-loaded level → Restart → FULL health ───────────────────────────────────────
 /// The level was loaded COLD (the mission's first entry, or after the pause menu's cold Restart):
 /// the game's buffer holds the POST-load re-save [M 0x1a7ef8:325] — health 100, the fresh loadout,
 /// the clean channels — and the floored serve gives max(100, 50) = 100. The port's old model kept
-/// the save the level was LOADED with (`None` here) and served a ZEROED buffer: 50.0, the
-/// playtest's "half health".
+/// the save the level was LOADED with (`None` here) and served a ZEROED buffer: 50.0,
+/// "half health".
 #[test]
 fn restart_after_death_on_a_cold_level_gives_full_health() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -108,7 +107,7 @@ fn restart_after_death_on_a_cold_level_gives_full_health() {
     let mut clean = load(&iso, "07000005.bin");
     tick(clean.sim.as_mut().unwrap(), 5);
     let (rr, c) = (r.sim.as_ref().unwrap(), clean.sim.as_ref().unwrap());
-    assert_eq!(rr.drones.health.health, 100.0, "RESTARTED AT FULL HEALTH — the user's report [M 0x1a7ef8:325]");
+    assert_eq!(rr.drones.health.health, 100.0, "RESTARTED AT FULL HEALTH [M 0x1a7ef8:325]");
     assert_eq!(rr.drones.health.armour, 0.0, "armour 0 [M 0x1910f8:130]");
     assert_eq!(rr.drones.channels.v, c.drones.channels.v, "the channels match a clean load's [M 0x1957a8:17]");
     assert_eq!(rr.drones.inventory.owned, c.drones.inventory.owned, "the loadout is the fresh one [M 0x1a7ef8 case 0x7000005]");
@@ -126,7 +125,7 @@ fn rr_sim(r: &mut nf_view::scene::Scene) -> &mut nf_view::scene::Sim { r.sim.as_
 /// ── 2. (07)'s doubt: the checkpoint floor is real, but it is a FLOOR, not the rule ──────────────
 /// `max(entry health, 50.0)`: entering 07000007 at FULL health and dying restarts at FULL 100; the
 /// 50.0 ("half health") only bites when the last save was under 50 — a hurt entry (the warm carry
-/// of a 37-health exit). The user was right to disbelieve an unconditional half health: the game
+/// of a 37-health exit). Half health is not unconditional: the game
 /// floors, it does not set [M 0x1957a8:20-31, the max idiom + disasm].
 #[test]
 fn restart_health_is_the_entry_health_floored_at_the_50_boost() {
@@ -184,7 +183,7 @@ fn restart_health_is_the_entry_health_floored_at_the_50_boost() {
         assert!(r.sim.as_ref().unwrap().drones.level_exit.is_none());
     }
     // (ii) A hurt entry (37) → die → Restart → the 50.0 floor: "half health" IS the game's answer
-    // when the last save was under 50 — the user's doubt resolved: a floor, not the rule.
+    // when the last save was under 50 — a floor, not the rule.
     {
         let mut scene = load_carry(&iso, "07000007.bin", Some(&exit_hurt));
         let entry = {

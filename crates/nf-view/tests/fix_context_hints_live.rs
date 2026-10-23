@@ -1,6 +1,6 @@
-//! fix-context-hints (100h): the context indicator + the hint bar.
+//! fix-context-hints: the context indicator + the hint bar.
 //!
-//! Two PCSX2 symptoms from the main agent (2026-10-13): standing at a usable thing the real game
+//! Two PCSX2 comparisons: standing at a usable thing the real game
 //! shows (1) the hint bar at the top ("Hint: Use Watch Laser" in front of the 07000008 safe,
 //! `--bond 155.19,43.12,-113.38,1.57,0`) and (2) the context icon (the game's third-icon system:
 //! `ThirdIcon_Update` 0x196e80 writes the enabled icon's context type into `BLData+0x95F`, the
@@ -94,7 +94,7 @@ fn dump_context_data_07000008_and_05() {
 // (1) The hint bar at the 07000008 safe.
 // ---------------------------------------------------------------------------
 
-/// The main agent's safe spot [D PCSX2 2026-10-13]: the level's watch-laser hint marker
+/// The safe spot [D PCSX2 2026-10-13]: the level's watch-laser hint marker
 /// (label 0x0200000A = "Hint: Use Watch Laser" [D USATxt.dat entry 1822]) sits 5.5 units away
 /// (158.88, 42.22, −117.34, r 6.458) and fires once — a type-1 INFO message with life 0xB4.
 #[test]
@@ -166,7 +166,7 @@ fn the_control_panel_hint_stays_silent_from_the_safe_spot() {
 // (2) The context icon at the 07000005 grapple spot.
 // ---------------------------------------------------------------------------
 
-/// The main agent's grapple spot [D PCSX2 2026-10-13]: the ctx-6 icon at (24.20, 31.93, 60.01)
+/// The grapple spot [D PCSX2 2026-10-13]: the ctx-6 icon at (24.20, 31.93, 60.01)
 /// (cel 14) arms 8.1 units away — `BLData+0x95F` reads 6, the HUD shows the table's ctx-6
 /// texture 0x0300006A (the standing figure [D 07000008.bin entry 53 tex 3]), and the type-6
 /// icon posts the generic "Press Action" hint (0x1000291) once.

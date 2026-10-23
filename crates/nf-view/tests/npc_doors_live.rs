@@ -1,6 +1,6 @@
-//! npc-doors: the drone side of door use, re-verified against the real levels after the
-//! 1012-1723 / 1013-1825 playtests ("npcs cant open doors", "NPC still can't open doors" on
-//! 07000001 / 06 / 07 — the escort stalls at doors, guards and guests don't path through them).
+//! npc-doors: the drone side of door use, re-verified against the real levels (NPCs could not
+//! open doors on 07000001 / 06 / 07 — the escort stalled at doors, guards and guests did not path
+//! through them).
 //!
 //! The game's chain, all cited [M]:
 //! - `NDrone_InitDoorNodes` 0x139a70: every door-flagged route node (MAPNODE flags bit 1) binds
@@ -134,7 +134,7 @@ fn probe_01_wall_at_the_stall() {
 
 /// Zero-interference watch on 07000007: the party guests and staff walk their CivilianMission
 /// routes through the doorway node pairs (paths 3/6/7 carry door-flagged pairs → doors #3/#1).
-/// The playtests say "guards and guests don't path through them" — this watches whether the
+/// Guards and guests did not path through them — this watches whether the
 /// guests' own routes work the doors, stall in DSTATE_OpenDoor, or never reach the pair.
 #[test]
 fn watch_07_guests_path_through_doors() {

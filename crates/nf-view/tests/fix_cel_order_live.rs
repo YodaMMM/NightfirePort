@@ -8,7 +8,7 @@
 //! chain and draw at ±dist² [L ee_start_05.bin: 19 rooms + 113 inner cels; 0c/07 disc probe: every
 //! decal is a 0x8019 placement]. models-world's "chain ≈ placement-parse order" put 0700000c's
 //! pylonshadow decal (chain 68) before the ground room under it (chain 88) — the decal darkened
-//! the fog clear colour and its depth write rejected the ground: the user's pale lattice.
+//! the fog clear colour and its depth write rejected the ground: a pale lattice.
 
 use nf_formats::disc;
 use nf_formats::iso9660::IsoImage;
@@ -58,7 +58,7 @@ fn the_quick_sort_orders_viscel_by_depth_like_the_game() {
 /// The 0700000c pin: the baked `pylonshadow` decal (material 3380, texture 002d:003b) must draw
 /// AFTER the ground room under it. models-world's parse-order key drew it first (chain 68 < the
 /// ground's 88): it darkened the fog clear colour and its depth write rejected the ground — the
-/// user's pale lattice (the real game shows a dark lattice). Under the cel-chain law the decal is
+/// pale lattice (the real game shows a dark lattice). Under the cel-chain law the decal is
 /// a non-room 0x8019 placement = a +0x18 inner node at ±dist², the ground room a −90000 + 10·k
 /// chain entry — the decal always draws after every room.
 #[test]

@@ -1,6 +1,5 @@
-//! fix-cutscene-brightness (102g): the 07000002 intro's cut-scene actors lit near-white — the
-//! playtest's "the models in the game during the cutscene are extremely bright" (results
-//! 1013-1825, the screenshot at `--bond -82.30,5.30,32.05` frame 170 shows the port's Bond and
+//! fix-cutscene-brightness: the 07000002 intro's cut-scene actors lit near-white (the
+//! screenshot at `--bond -82.30,5.30,32.05` frame 170 shows the port's Bond and
 //! the man at the computer near-white where PCSX2's 02 intro lights them darkly to match the
 //! room).
 //!
@@ -26,7 +25,7 @@ fn load_02_intro() -> nf_view::scene::Scene {
     let mut scene = nf_view::load(iso().as_deref().expect("NF_ISO"), "07000002.bin", false).expect("load 07000002");
     let sim = scene.sim.as_mut().unwrap();
     let idle = Input::default();
-    // Into the intro (the user's screenshot is frame ~170): no skip — the cut-scene plays.
+    // Into the intro (the repro screenshot is frame ~170): no skip — the cut-scene plays.
     for _ in 0..200 { sim.step_bond(idle, false, false, false); }
     scene
 }
@@ -49,9 +48,9 @@ fn the_02_intro_actors_take_the_rooms_ambient_not_full_bright() {
         if sim.script_anim(src, skin).is_none() { continue; }
         cast.push(ci);
     }
-    assert!(!cast.is_empty(), "the intro's script actors have live animations at frame ~200 [D the playtest's screenshot moment]");
+    assert!(!cast.is_empty(), "the intro's script actors have live animations at frame ~200 [D the screenshot moment]");
     // The bunker room's ambient — the target every actor in the set ramps to. Dark: every channel
-    // well under the full-bright sentinel [D the playtest's screenshot].
+    // well under the full-bright sentinel [D the screenshot].
     let bunker = sim.ambient_at(sim.bond.pos).expect("the bunker cel resolves at Bond's intro spot");
     eprintln!("the bunker's ambient: {:?}; live script actors: {:?}", bunker, cast);
     assert!(bunker.iter().all(|&b| b < 0x40), "the bunker cel's ambient is dark (got {:?})", bunker);

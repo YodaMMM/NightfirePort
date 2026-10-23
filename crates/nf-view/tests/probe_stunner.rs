@@ -37,7 +37,7 @@ fn probe_stunner_fire_timing() {
     }
     assert!(ok, "the Stunner (0x4a) did not equip — owned {:?}", scene.sim.as_ref().unwrap().drones.inventory.owned.get(0x4a));
     eprintln!("stunner equipped at frame {}", scene.sim.as_ref().unwrap().drones.frame);
-    // Settle: let the draw finish (idle, no fire) — the user sees the device in hand before pressing.
+    // Settle: let the draw finish (idle, no fire) — the device is in hand before pressing.
     for _ in 0..70 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     {
         let sim = scene.sim.as_ref().unwrap();

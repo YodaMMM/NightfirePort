@@ -1,6 +1,6 @@
 //! fix-pause-audio live tests: the pause page's sound hold through the real input path.
 //!
-//! The user's playtest (2026-10-13): with the pause menu open, the ambient sound keeps playing,
+//! The symptom: with the pause menu open, the ambient sound keeps playing,
 //! including the truck-driving loop on 07000005. The port stops ticking the sim while a menu is up
 //! (so `sound_tick` — and with it every new key-on — stops), but nothing pauses the sound output:
 //! the already-keyed looping voices keep mixing and the music queue keeps draining.
@@ -43,7 +43,7 @@ fn bare_sound(scene: &mut nf_view::scene::Scene) -> nf_audio::sfx::Sound {
     snd
 }
 
-/// 07000005 (the playtest level): the truck-driving ambient loop keeps playing under the pause menu.
+/// 07000005 (the repro level): the truck-driving ambient loop keeps playing under the pause menu.
 /// The loop keys on through the real path (`sound_tick` → the EE pool → `Driver::start`); the pause
 /// page's `Sound::set_paused` must hold it — no recompute, no key-ons — and the unpause must restore
 /// it on the next full update. Sister: unpaused, the per-frame recompute runs.

@@ -1,4 +1,4 @@
-//! The playtest 1015-2231 walk the task pins: pick a character for player 1, back out one page,
+//! The walk this file pins: pick a character for player 1, back out one page,
 //! back to the main MP menu, forward again — and the match can still start afterwards. Driven
 //! ONLY through `action()` / `tick()` from `FrontEnd::new()` (menus_e2e.rs style — the older flow
 //! tests jumped to pages by assignment and missed exactly this class of bug).

@@ -370,7 +370,7 @@ fn walk_the_gondola_ride_to_the_end() {
     eprintln!("[08] the gondola walked start to finish in {} ticks; falls {:?}", w.total_ticks, w.report.falls);
 }
 
-/// The ally rule (the playtest's "Zoe shooting at Bond at the gondola"): the dtype-0xC ally
+/// The ally rule (Zoe once shot at Bond at the gondola): the dtype-0xC ally
 /// (KikoMission [M 0x14c938:54-59]) never targets or fires at Bond while Bond walks the whole
 /// route. Sister: the placed guards DO engage (their combat states appear once the zone plates
 /// fire) — the ally is not one of them.

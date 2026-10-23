@@ -1,8 +1,8 @@
 //! guided-rocket-sound-stop live tests: every voice the Sentinel's guided launch starts is either
-//! gone at the detonation or riding the rocket — none stays "where I was standing".
+//! gone at the detonation or riding the rocket — none stays at the launch spot.
 //!
-//! Playtest 1015-1738 (07000005): "when the rocket finishes, I can still hear a sound being played
-//! from where I was standing". s/rocket-sound-leak fixed the launch whoosh 0x10e (looped [L
+//! Symptom (07000005): after the rocket finished, a sound kept playing from the launch spot.
+//! rocket-sound-leak fixed the launch whoosh 0x10e (looped [L
 //! SFXOutputData @0x2c94a0 entry 0x10e looped byte 1, inner 5 / outer 30]; handle BU+0xF0 [M
 //! Bullet_init 0x12c5a0:277-282]; moved with the rocket per tick [M Bullet_update 0x12e7b0:98-108];
 //! stopped at the delete [M Bullet_Delete 0x12e660:13-16 — disasm 0x12e680 `lw a0,0xf0(s2)` →
@@ -90,8 +90,8 @@ fn driver_whoosh_items(sound: &nf_audio::sfx::Sound) -> usize {
 /// THE flight-loop contract: while the guided rocket flies, the launch whoosh's tracked position
 /// moves WITH THE ROCKET (the game's per-tick `Sound_SetPosition(handle, obj)` [M Bullet_update
 /// 0x12e7b0:104]) and NOT with Bond — it leaves the launch spot behind at the rocket's flight step.
-/// Pre-fix (fire-and-forget) the voice sat at the muzzle forever: the playtest's "a sound being
-/// played from where I was standing".
+/// Pre-fix (fire-and-forget) the voice sat at the muzzle forever: a sound kept playing
+/// from the launch spot.
 #[test]
 fn the_flight_loop_tracks_the_rocket_not_bond() {
     let Some(mut scene) = load("07000005.bin") else { eprintln!("NF_ISO not set — skipping"); return };
@@ -141,7 +141,7 @@ fn the_flight_loop_tracks_the_rocket_not_bond() {
 /// `Bullet_Delete` [M 0x12e660:13-16], the same pass that starts the guided camera's 15-tick
 /// restore ([M :22-31 `BL+0x944 = 0xf`]) — so by the FIRST restore tick the voice is gone from
 /// both layers, before the hand-back completes; and after the hand-back no voice the launch
-/// started is still playing anywhere near the launch spot (the playtest symptom, swept over EVERY
+/// started is still playing anywhere near the launch spot (the symptom, swept over EVERY
 /// live driver item, not just 0x10e — if any other launch-started voice leaked, this catches it).
 #[test]
 fn the_voice_dies_at_the_delete_not_at_the_handback() {
@@ -197,7 +197,7 @@ fn the_voice_dies_at_the_delete_not_at_the_handback() {
     }
     assert!(handed_back, "the guided camera never handed back");
 
-    // THE sweep (the playtest symptom, any id): no voice the launch started is still playing near
+    // THE sweep (the symptom, any id): no voice the launch started is still playing near
     // where Bond was standing. Every live driver item that was not live before the shot must sit
     // away from the launch spot; 2.0 u² = ~1.4 u around it.
     let mut checked = 0usize;

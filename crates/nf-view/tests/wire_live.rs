@@ -15,8 +15,8 @@ fn read_archive(iso: &str, archive: &str) -> Vec<u8> {
     img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read")
 }
 
-/// The user's play, end to end [D the user report: "at the cable left of the castle gate, pressing E
-/// plays the falling-to-death animation instead of the hand-over-hand crossing"]: Bond walks into
+/// The real play, end to end (at the cable left of the castle gate, E played the falling-to-death
+/// animation instead of the hand-over-hand crossing): Bond walks into
 /// 07000005's cable's grab zone (the wire placement −23.4855, 34.4676, 6.2629 [D placements probe],
 /// yaw −1.5708, sphere radius 4.039 [L ee_start_05.bin 016dc430]) and crosses it hand over hand to the
 /// far end, alive. The grab here is the COLLISION path [M Player_DealWithObjHit 0x194458 — the
@@ -27,8 +27,8 @@ fn read_archive(iso: &str, archive: &str) -> Vec<u8> {
 /// Sister (the no-input control leg): without the strafe input Bond stays at his end of the wire —
 /// the movement below comes from the input, not from the grab itself.
 #[test]
-// Ignored at the fix-wire2 merge (main agent, 2026-10-13): a walk-in grab swallows Bond in 07000002's secret
-// bunker (walkreal_07000002 goes red; the user walked that bunker in the real game ungrabbed), and the walking
+// Ignored: a walk-in grab swallows Bond in 07000002's secret
+// bunker (walkreal_07000002 goes red; the real game walks that bunker ungrabbed), and the walking
 // query does not reach Collide_PickObj's world-sphere branch (versions 0x200/0x201 only [M 0x1eae80]). The certain
 // grab is the jump grab with the icon context (fix_wire2_live). Re-enable if a live census shows a walk-in grab.
 #[ignore = "walk-in wire grab not modelled: see the comment"]
@@ -102,8 +102,8 @@ fn walking_into_the_07000005_cable_grabs_it_and_crosses_it_hand_over_hand() {
 /// grab → cross → dismount chain must work there (the world sphere is offset from the translation, so
 /// this also pins `Wire::create`'s centre rotation).
 #[test]
-// Ignored at the fix-wire2 merge (main agent, 2026-10-13): a walk-in grab swallows Bond in 07000002's secret
-// bunker (walkreal_07000002 goes red; the user walked that bunker in the real game ungrabbed), and the walking
+// Ignored: a walk-in grab swallows Bond in 07000002's secret
+// bunker (walkreal_07000002 goes red; the real game walks that bunker ungrabbed), and the walking
 // query does not reach Collide_PickObj's world-sphere branch (versions 0x200/0x201 only [M 0x1eae80]). The certain
 // grab is the jump grab with the icon context (fix_wire2_live). Re-enable if a live census shows a walk-in grab.
 #[ignore = "walk-in wire grab not modelled: see the comment"]

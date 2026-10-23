@@ -1,5 +1,5 @@
-//! Headless NF_ISO tests for fix-render3: the 07000006/07/02 frame-cost work (the user's post-
-//! fix-render2 report) and the cel visibility cull (G-016's View_AddCels half).
+//! Headless NF_ISO tests for fix-render3: the 07000006/07/02 frame-cost work (after
+//! fix-render2) and the cel visibility cull (G-016's View_AddCels half).
 //!
 //! Evidence base:
 //! - `View_AddCels` (0x1e6ba0) [M, docs/atlas/cel.md §Visibility]: per viewer, iterate the room cels,
@@ -94,11 +94,11 @@ fn cel_cull_keeps_the_start_views_intact() {
     }
 }
 
-/// The measured finding on 07000007 (the user's "lag depends on view direction"): the START view
+/// The measured finding on 07000007 (the lag depends on view direction): the START view
 /// faces all 32 room cels — every cel box intersects the frustum, so the cel test relieves nothing
 /// there (4526 submitted; the draw cost in that view is real front-facing geometry), while looking
 /// away the existing sphere cull already drops 97 %+ (measured 64 submitted). This test pins the
-/// direction-dependence the user reported and the attribution the cull needs; the next lever for
+/// direction-dependence and the attribution the cull needs; the next lever for
 /// the start view is occlusion (the portal graph, map block 0x21 — outside this task's file set),
 /// recorded in GAPS G-016.
 #[test]

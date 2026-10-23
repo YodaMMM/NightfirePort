@@ -1,7 +1,5 @@
-//! microcam-wheel-zoom (the 2026-10-15 playtest, results id 1015-1738):
-//! "It'd be cool if we could add some zoom to the micro camera and have the scroll wheel do the
-//! zoom while you're right-clicking to aim in. And if you're not right-clicking, of course,
-//! weapon switch."
+//! microcam-wheel-zoom: the micro camera zooms with the scroll wheel while the right button aims
+//! in; without the right button the wheel still switches weapons.
 //!
 //! While the aim (right) button is held, a wheel notch steps the zoom target ×2 / ÷2 within the
 //! held weapon's own range [1.0, weapon_data+0x88] — the max `Player_Weapon` 0x1a24c8:156-187

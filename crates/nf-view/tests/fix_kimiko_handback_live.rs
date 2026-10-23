@@ -1,5 +1,5 @@
-//! The 07000007 Kimiko scene's hand-back (playtest 1015-0046: "after it finished, it faded to black, and I
-//! couldn't continue playing"). The scene fades its cut-scene viewer to black near its end (`Camera_SetFade(.., 0)`,
+//! The 07000007 Kimiko scene's hand-back (after it finished, the screen faded to black and play
+//! could not continue). The scene fades its cut-scene viewer to black near its end (`Camera_SetFade(.., 0)`,
 //! the script viewer); when the script camera hands back, the gameplay view must not stay black.
 use nf_game::player::Input;
 

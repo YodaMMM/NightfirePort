@@ -1,5 +1,5 @@
-//! fix-cutscene-brightness2: the held brightness fix (102g, 0cbfbf8) makes the 07000002 intro's
-//! cut-scene actors VANISH — the main agent's render at the user's spot
+//! fix-cutscene-brightness2: an earlier brightness fix (0cbfbf8) made the 07000002 intro's
+//! cut-scene actors VANISH — a render at the repro spot
 //! (`--bond -82.30,5.30,32.05,1.570,-0.100 --frame 170`) shows master drawing Bond and the man at
 //! the computer desk (too bright), master + 0cbfbf8 drawing the same room with NO characters.
 //!
@@ -29,7 +29,7 @@ fn load_02_intro(ticks: u32) -> nf_view::scene::Scene {
     let mut scene = nf_view::load(iso().as_deref().expect("NF_ISO"), "07000002.bin", false).expect("load 07000002");
     let sim = scene.sim.as_mut().unwrap();
     let idle = Input::default();
-    // Into the intro (the user's screenshot is frame ~170): no skip — the cut-scene plays.
+    // Into the intro (the repro shot is frame ~170): no skip — the cut-scene plays.
     for _ in 0..ticks { sim.step_bond(idle, false, false, false); }
     scene
 }
@@ -78,7 +78,7 @@ fn the_02_intro_actors_draw_in_the_set_not_at_the_camera() {
         if sim.script_anim(src, skin).is_none() { continue; }
         seen += 1;
         let (_, world, m) = fs.posed[ci].as_ref()
-            .unwrap_or_else(|| panic!("the live intro actor char[{ci}] is posed — master draws it (the main agent's render)"));
+            .unwrap_or_else(|| panic!("the live intro actor char[{ci}] is posed — master draws it (render check)"));
         assert!(!fs.hidden[ci], "the live intro actor char[{ci}] is drawn");
         // The render-verified object model [M Obj::Anim doc; 0x2d6200 is the origin vector
         // [L ACTION.ELF] → Script_AnimStart 0x1d8f40 creates the object at the origin]: the
@@ -90,12 +90,12 @@ fn the_02_intro_actors_draw_in_the_set_not_at_the_camera() {
                  the held fix's live_matrix put the actors at the NIS camera and they vanished",
                 m[r], cm[r]);
         }}
-        // The drawn world position: the pose's root, in the set beside Bond (the main agent's
+        // The drawn world position: the pose's root, in the set beside Bond (the
         // master render: Bond in the doorway, the man by the computer desk).
         let root = [world[0][3][0], world[0][3][1], world[0][3][2]];
         let d = dist(root, bond);
         assert!(d < 3.0, "char[{ci}] draws at its anim's world root {root:?} beside Bond {bond:?} (dist {d:.2}) — not off in the scene graph");
-        // Visible through the intro's own NIS camera (the user's beat: both actors on screen).
+        // Visible through the intro's own NIS camera (the beat: both actors on screen).
         let (x, y) = screen_of(cam_pos, cam, fov, root)
             .unwrap_or_else(|| panic!("char[{ci}] at {root:?} is OUTSIDE the intro camera's frustum (cam {cam_pos:?})"));
         // The colour: the room's dark ambient — non-zero (drawn), non-white (not the old bug).
@@ -104,7 +104,7 @@ fn the_02_intro_actors_draw_in_the_set_not_at_the_camera() {
         assert!(mul.iter().all(|&f| f < 0.5), "char[{ci}]'s draw multiplier is the dark room ambient, not the white sentinel (got {mul:?})");
         eprintln!("char[{ci}] root {root:?} screen ({x:.2},{y:.2}) mul {mul:?}");
     }
-    assert_eq!(seen, 2, "the intro's two live script actors at frame 170 [D the main agent's master render: Bond and the man at the desk]");
+    assert_eq!(seen, 2, "the intro's two live script actors at frame 170 [D the master render: Bond and the man at the desk]");
 }
 
 /// Sister: the ambient ramp samples the DRAWN position — the render path's own root (in a cel,

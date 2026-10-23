@@ -1,5 +1,5 @@
 //! Local-MP end-to-end, driven ONLY through `action()` / `tick()` / host-side calls from
-//! `FrontEnd::new()` — no `page`/`cursor`/state assignments anywhere (the playtest 1015-2231
+//! `FrontEnd::new()` — no `page`/`cursor`/state assignments anywhere (the
 //! rule: the older flow tests jumped to pages by assignment, so the real paths were never
 //! exercised). This file walks EVERY scenario row, EVERY map row, both team/FFA setups, every
 //! options-hub sub-page, the back-out of every page at every prompt, the locked rows' refusals
@@ -392,7 +392,7 @@ fn every_options_subpage_moves_its_values_and_rides_them() {
 
 /// Back out of EVERY page at EVERY prompt and walk forward again, on a TEAM scenario: the setup
 /// page must re-enter on the team prompt for the scenario's team bit [M P_MPSETUP 0x20d7a8] —
-/// the playtest's stale-prompt bug — and the match still reaches its request.
+/// the stale-prompt bug — and the match still reaches its request.
 #[test]
 fn back_out_of_every_page_and_walk_forward_again_team() {
     let mut fe = FrontEnd::new();
@@ -410,7 +410,7 @@ fn back_out_of_every_page_and_walk_forward_again_team() {
     assert_eq!(fe.page, Page::MpJoin);
     // The re-entered join page is a FRESH join [M P_MPJOIN 0x20ca00's 0x4c — the enter memsets
     // the mpjoin array and zeroes the per-agent states on every 0x4c]: the stale ready panel a
-    // back-out left must not survive it (playtest 1015-2231's forward-again walk).
+    // back-out left must not survive it (the forward-again walk).
     assert_eq!(fe.mp_join[0].state, 0, "the re-entered page resets the agent");
     assert!(!fe.mp_join[0].ready);
     // [M P_MPJOIN 0x20ca00's 0x4c: the re-entered join page memsets mpjoin, so the panel's âœ• joins again]
@@ -458,7 +458,7 @@ fn back_out_of_every_page_and_walk_forward_again_team() {
     assert!(act(&mut fe, Action::Confirm), "the handicap");
     assert_eq!(fe.page, Page::MpOptions);
     // The hub's Back re-runs P_MPSETUP's enter: the TEAM prompt, not the stale character one
-    // (playtest 1015-2231) [M P_MPSETUP 0x20d7a8]. Forward again through all three prompts.
+    // [M P_MPSETUP 0x20d7a8]. Forward again through all three prompts.
     assert!(act(&mut fe, Action::Back), "the hub's Back");
     assert_eq!(fe.page, Page::MpSetup);
     assert_eq!(fe.mp_setup_state, 2, "the hub re-enters the setup on the team prompt");

@@ -1,4 +1,4 @@
-//! cutscene-faces — why no face moves in the cut-scenes (playtest 1015-1738), and the sim/data
+//! cutscene-faces — why no face moved in the cut-scenes, and the sim/data
 //! side the renderer reads. The game's mechanism, from the decompile:
 //!
 //! 1. The cut-scene anim script's op-0 windows start per actor [M `AnimProcessScriptCmds`
@@ -25,8 +25,7 @@
 //! The port's sim side: `Scene::facial_weights_now/at` (the getter the renderer reads) samples
 //! the playing script's facial-flagged window per actor; `animate()` applies the CPU morph term
 //! for script characters (fix-facial2). The GPU skin path (the default draw) does not apply the
-//! weights yet — the held 108c `s/fix-gpu-facial-morphs` carries that half for the main agent's
-//! draw wiring. Opt-in via NF_ISO.
+//! weights yet (open draw-side work). Opt-in via NF_ISO.
 
 use nf_game::player::Input;
 
@@ -138,7 +137,7 @@ fn the_02_intro_actors_face_tracks_start_and_move_the_morph_weights() {
             eprintln!("[intro] char[{ci}] skin {skin:08x} tick {step} frame {frame} max {:.3} {}",
                 w_live.iter().cloned().fold(0.0f32, f32::max), if closed { "(closed)" } else { "" });
         }
-        assert_eq!(seen, 2, "the intro's two script actors [D the main agent's master render: Bond and the desk man]");
+        assert_eq!(seen, 2, "the intro's two script actors [D the master render: Bond and the desk man]");
     }
     // The mouth channels move over each actor's whole track (the jaw/lip group): the sweep pins
     // the track data. The game's eye bytes own indices 11-14 [M 0x1be648]; the MOUTH group is the

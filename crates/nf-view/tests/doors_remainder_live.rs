@@ -191,7 +191,7 @@ fn door_labels_fire_per_the_decompile_rules() {
 
 /// (c) The proxy path: a closing door that meets Bond reverses (the anti-crush) — `Collide_Update`
 /// post-walk fills the records, `Door_ReactToHit` (0x135980) consumes them the same frame.
-/// (Un-ignored at merge batch 1021c: door-react-path6's `Doors::collide_step` — the game's
+/// (Enabled since `Doors::collide_step` — the game's
 /// `Collide_PickObj` 0x1eae80 pick + `Door_ReactToHit` 0x135980 — reverses the sweep off Bond.)
 #[test]
 fn a_closing_door_reverses_off_bond() {
@@ -258,7 +258,7 @@ fn a_closing_door_reverses_off_bond() {
 /// door on every level bin, tried at 1.2 out along its through-axis with a converged aim.
 /// The 2026-10-20 numbers: 175 doors, 13 opened — the rest fail on stand-spot geometry (the
 /// through sign per door, floors, walls), NOT on the pick (T1 pins the pick on a controlled
-/// spot). The per-level list goes to the report; the main agent's live census is the follow-up.
+/// spot). The per-level list is printed; a live census is still open.
 #[test]
 fn census_every_door_opens_at_its_approach() {
     if std::env::var_os("NF_ISO").is_none() { eprintln!("skip: NF_ISO not set"); return; }

@@ -14,7 +14,7 @@ use nf_game::player::Input;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// Merge batch-1016c (with script-negative-delay's G-047 hold): the MissileDissarm scripts
+/// With the G-047 hold (a negative delay holds the script): the MissileDissarm scripts
 /// (0x060007e2..0x060007ea) pause on their stream-1 Event 3 p0 0 at t650 (`SCRIPTINFO+0x9C = -1`
 /// holds - `Script_Update` 0x1da9c4 runs only a zero delay [M disasm]) until `SP_UnPause`
 /// 0x1dca58 zeroes it (SP_Update's damage tail at the hit points [M 0x1dc1c0-0x1dc330]; the
@@ -192,7 +192,7 @@ fn the_missile_abort_path_fails_the_mission_on_ch_199() {
 /// AstronautLaunch [L 0x29b300 + 0xbd·4]) and the health `DroneInit_TakeXHits(hits, 0x33)` =
 /// weapon_data[0x33]+0xc × (difficulty==1 ? 1 : 2), ×3 for Drake [M 0x14d928, :734-739] — 60.0 at
 /// the port's boot difficulty 2. Before this force the port ran Drake as a generic mode-0 guard
-/// (the playtest: "none of the mechanics are set for this fight properly") — he entered Idle and
+/// (none of the fight's mechanics worked) — he entered Idle and
 /// fell through the station in gravity. The zero-g drift/thruster movement itself
 /// (`DroneMove_Astronaut*`) is s/astronaut-guards-1b's family, not ported here.
 #[test]
@@ -222,7 +222,7 @@ fn drake_initializes_as_the_zero_g_boss() {
         let sim = scene.sim.as_ref().unwrap();
         let d = &sim.drones.list[drake];
         assert_eq!(d.mode, 0x1d, "skin kind 0x18 forces mode +0xC5 = 0x1d [M 0x14b300:722]");
-        // Merge batch-1016c: master's astronaut family (astronaut-guards-1b) runs the launch UPDATE's
+        // The astronaut family runs the launch UPDATE's
         // route-done exit → 0xC1 AstronautCombatMove [M 0x16dd28:54] on the first tick (the port's
         // spawn-point hold is "arrived"), so after the settle he is in 0xbd or its successor 0xc1.
         assert!(matches!(d.state, 0xbd | 0xc1), "the start state is AstronautLaunch [M 0x14b300:723; L 0x29b300+0xbd·4] → 0xc1 [M 0x16dd28:54], got {:#x}", d.state);

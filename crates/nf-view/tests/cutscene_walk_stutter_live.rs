@@ -1,6 +1,6 @@
-//! cutscene-walk-stutter (task 686) — the 07000007 Kimiko scene's walking guest (the red dress,
-//! skin 0x0500003b, anim script 0x060004f1, body sequence 0x04000332) "stuttered a little bit while
-//! she was walking towards the other two" (playtest 1015-1738).
+//! cutscene-walk-stutter — the 07000007 Kimiko scene's walking guest (the red dress,
+//! skin 0x0500003b, anim script 0x060004f1, body sequence 0x04000332) stuttered while walking
+//! towards the other two.
 //!
 //! The headless trace (through the real trigger path: Bond into TouchOnce #412 → SP #420 plays the
 //! scene script 0x06000073 → its op-2 commands start the guests' anim scripts) shows:

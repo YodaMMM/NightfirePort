@@ -266,7 +266,7 @@ fn walk_the_party_start_to_finish() {
 }
 
 /// The party's zoning rules, walked: the guests stand in groups until their plate fires, then the
-/// prop-0x1D walkers take their kind-8 mission routes — the user report's "the guests' party rules"
+/// prop-0x1D walkers take their kind-8 mission routes — the guests' party rules
 /// and the hall walkers' walk (the six kind-8 paths [D the level's nav dump: paths 2-7, kind 0x8]).
 /// [M] the chain: `NDrone2_DSTATE_Global` 0x15b830 ENTER → WaitSwitch (switch_channel param 3) →
 /// `DSTATE_WaitSwitch` 0x15b960 case 3 (the channel on) → the start state → `PartyGirlInit`

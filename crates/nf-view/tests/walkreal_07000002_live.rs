@@ -224,7 +224,7 @@ fn walk_the_castle_all_objectives_to_the_exit() {
     //    sweep); the remaining mechanism is the un-ported Monitor console (type 0x30,
     //    `Monitor_Update` 0x1afcc8 writes the target's data+0x5C channel [M]). Hand it the way
     //    that layer would, then the mission's all-objectives channel closes [M 0x1827d8 bVar9 arm].
-    //    [S] stand-in — a live check for the main agent (docs/reports/level-02-complete.md).
+    //    [S] stand-in — an open live check.
     let sim = w.scene.sim.as_mut().unwrap();
     sim.drones.channels.set(0x4d, 1, sim.drones.frame);
     drop(sim);

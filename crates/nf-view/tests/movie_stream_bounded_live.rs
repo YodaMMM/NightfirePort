@@ -1,4 +1,4 @@
-//! crash-fix (playtest 1016: "at the end of a starting level cutscene, it froze then crashed"): the
+//! crash-fix (at the end of a level-start cut-scene the game froze, then crashed): the
 //! briefing starts during the map-load fade (decode-ahead) and nobody pulls frames until state 6. The
 //! worker's channel was unbounded, so it decoded the whole movie into RAM ahead of playback. The worker
 //! must stop STREAM_AHEAD pictures ahead, and stopping it while it waits on a full channel must not

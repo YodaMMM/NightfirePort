@@ -1,6 +1,6 @@
 //! fix-fusebox-cut: the fusebox wires are cut by HITS (the Laser's beam bullets), not by pressing E.
 //!
-//! The user's play (2026-10-12): on 07000008 the guard-room fusebox has to be burned with the laser
+//! On 07000008 the guard-room fusebox has to be burned with the laser
 //! gadget; the port opened it with two E presses (the fix-objects2 stand-in).
 //!
 //! The game's cut [M]: `FuseBox_Update` 0x1adfe8:88 filters each wire's hit list with

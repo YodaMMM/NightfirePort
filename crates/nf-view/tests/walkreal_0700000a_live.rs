@@ -283,7 +283,7 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // [M PCQWorm_Update 0x1aee20's seg test]. The game's own walkthrough (walk_0700000a_live)
     // hand-places Bond INSIDE the cubicle at 0.71 — unreachable by walking. docs/levels/
     // 0700000a.md's route says the vent shortcut is the way in; the port has no vent crawl.
-    // Live check for the main agent: in PCSX2 walk to Q-WORM_PC_1 on 0700000a and report whether
+    // Open live check: in PCSX2 walk to Q-WORM_PC_1 on 0700000a and see whether
     // the real game lets Bond inside the cubicle (if yes, the port's collision for this office
     // cell is the bug; the fix belongs to the collision owner).
     let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 2.2, 900, "the Q-Worm shot (documented blocker)", &|sim| sim.drones.channels.on(0x48));

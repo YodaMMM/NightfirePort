@@ -6,7 +6,7 @@
 //! 1. the SISTER: outside any cut-scene the banner shows and sounds AT ONCE (the game's pane
 //!    polls `Text_UpdateMsg` every frame; nothing delays it when the viewer's +0x2a HUD gate is
 //!    up [M 0x1b11d8:16-18, 0x19c310 case 0]);
-//! 2. the Kimiko hold through the 06 → 07 CARRY (the playtests' real flow), with the mission
+//! 2. the Kimiko hold through the 06 → 07 CARRY (the real play flow), with the mission
 //!    states a finished-06 player carries — the announce waits for the hand-back there too;
 //! 3. the case-3 chime shape: the game plays PlayMe1st one pane frame AFTER the open and only
 //!    while `ScriptCam == 0` [M 0x19c310:219-229] — a scene starting inside a banner's flash
@@ -71,7 +71,7 @@ fn outside_a_cutscene_the_banner_shows_and_sounds_at_once() {
     eprintln!("[banner] sister: queued {queued_at}, opened {opened_at}, 1532@{t1}, 469@{t2}");
 }
 
-/// ── The Kimiko hold through the 06 → 07 carry (the playtests' real flow) ────────────────────────
+/// ── The Kimiko hold through the 06 → 07 carry (the real play flow) ──────────────────────────────
 /// A finished-06 player's carried states (every earlier part's objectives complete, the snapshot
 /// riding the load the way the game's `.data` does [M LS_MakeMission/LS_LoadMission 0x1cd720/
 /// 0x1cd880; map-tower2]), then the real trigger: TouchOnce #412 (out 0x48) starts SP #420 (the
@@ -142,7 +142,7 @@ fn the_carry_holds_the_kimiko_announce_until_the_handback() {
         assert!(t < 5100, "the Kimiko scene never handed control back");
     }
     let handback = handback.expect("the scene must end");
-    assert!(sfx.is_empty(), "no banner SFX during the Kimiko scene (the user's 'plays the sound immediately'), got {sfx:?}");
+    assert!(sfx.is_empty(), "no banner SFX during the Kimiko scene (the sound must wait for the scene), got {sfx:?}");
     // The hand-back: the COMPLETE announce (obj 0, completed by the trigger) opens first — 468.
     let (t468, id468) = loop {
         let sim = scene.sim.as_mut().unwrap();

@@ -23,8 +23,8 @@
 //!
 //! Master's failures this file pins:
 //! 1. The renderer started the beam at the view model Character's STATIC creation matrix (identity)
-//!    — the world origin — so the beam stretched from the map's origin and the user never saw it
-//!    ("the laser isnt visible").
+//!    — the world origin — so the beam stretched from the map's origin and was never
+//!    visible.
 //! 2. The beam's +z pointed start→end (the port's `object_matrix` convention), so the −z sprite
 //!    stretched backwards through the camera instead of to the wall ("The laser watch sucks").
 //! 3. No held charge existed — the HUD kept the clip percent, draining ~12%/s of the 500 clip

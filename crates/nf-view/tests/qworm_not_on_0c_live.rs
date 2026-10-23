@@ -1,6 +1,6 @@
 //! qworm-not-on-0c: the Q-Worm (0x58) must not join the loadout on levels whose session hashtable
-//! misses its first-person skin — the user's "qworm shouldnt be on that map" (playtest 2026-10-18,
-//! dist/nf-shots/014-0700000c.png frame 12579: Bond holding the Q-Worm on 0700000c).
+//! misses its first-person skin (seen at frame 12579: Bond holding the Q-Worm on 0700000c, which
+//! does not carry it).
 //!
 //! The game's rule, with addresses:
 //! - `Player_InitWeapon` 0x1a7ef8 case 0x700000c (disasm 0x1a8568-0x1a85e4) equips the whole kit —
@@ -48,7 +48,7 @@ fn owned_cold(archive: &str) -> Option<(HashSet<u8>, u8)> {
 /// kit's grapple/camera/laser own (their fp skins ride 0700000c.bin [D]), the decryptor and the
 /// Q-Worm do NOT (0x050005c and 0x050005b are on no 0c-session container [D]), and the held weapon
 /// is the sniper (request 0x1e [M `sb s6,99(v1)` 0x1a85e4]). This is the repro: before the fix the
-/// dev asset merge supplied 0x050005b and owned[0x58] was true — the user's screenshot.
+/// dev asset merge supplied 0x050005b and owned[0x58] was true — the repro screenshot.
 #[test]
 fn the_0700000c_start_inventory_is_the_games() {
     let Some((owned, req, _skins)) = owned_dev("0700000c.bin") else { eprintln!("NF_ISO not set — skipping"); return };

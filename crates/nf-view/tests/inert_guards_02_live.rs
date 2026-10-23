@@ -1,7 +1,6 @@
-//! inert-guards-02 (694): the 07000002 drone census and the AI wake locks — the playtests'
-//! "npcs that shouldnt be able to be shot and some of the enemies are invincible with no AI"
-//! and "one specific guard … standing next to a civilian that won't move, no AI, doesn't do
-//! anything". Opt-in via `NF_ISO`.
+//! inert-guards-02: the 07000002 drone census and the AI wake locks — some NPCs looked
+//! shootable when they should not be, some enemies looked invincible with no AI, and one guard
+//! stood next to a civilian, neither moving nor doing anything. Opt-in via `NF_ISO`.
 //!
 //! The mechanism, from the decomp: every 07000002 guard carries a switch channel (placement
 //! parameter 3, DCVars+0x134 [M NDrone2_DefaultInit 0x14b300 / the port's Drone::new]); a drone
@@ -105,7 +104,7 @@ fn the_guards_wake_from_their_zone_pads_and_take_damage() {
     }
 
     // ── The terrace pad (placement 342, out 23) wakes the guard + civilian pair ───────────────
-    // The playtest's "a guard standing next to a civilian that won't move": d05 (placement 447,
+    // The guard standing next to a civilian that won't move: d05 (placement 447,
     // the terrace guard) and d23 (placement 465, the kind-8 civilian) stand 1.3 units apart, both
     // gated on ch 23 [D the census]. The pad's volume x −35.9..−34.5, y 5.8..7.2, z 3.3..6.9.
     teleport(&mut sim, [-35.2, 6.4, 5.0]);

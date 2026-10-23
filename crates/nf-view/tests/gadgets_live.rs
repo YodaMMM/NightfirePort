@@ -1,14 +1,14 @@
 //! fix-gadgets-live: the laser's charge/beam/light, the stunner's target economics, the AIMS-20's
 //! side lights — through the real input path (`nf_view::load_weapons` + `Sim::step_bond`).
 //!
-//! The playtest (2026-10-13 night, on the master after 101e/101f): the laser showed NO beam, NO wall
-//! light and NO charge movement; the stunner "doesn't work". What the disc says [M decompile]:
+//! The symptom: the laser showed NO beam, NO wall light and NO charge movement; the stunner did
+//! nothing. What the disc says [M decompile]:
 //! - The whole gadget fire chain rides the REFIRE that spent a round: `Player_RoundToFire` 0x1a18e0
 //!   spends `weapon_data+0x91` (1 for both [L]) from the clip slot `BLData+0x1B8 + w·0xC`
 //!   (`Player_AmmoInGun` 0x1a9190), then `Player_WeaponInitBullet` 0x1a4bf0 runs on the same tick;
 //!   its +0x95b latch makes `Player_CollisionHandler` 0x1949a8 call `Player_MuzzleFlash` 0x1a4298,
 //!   whose `Light_Create` (rgb +0x56/+0x55/+0x54, radius +0x58) and `Draw_LaserBeam`/`Draw_TaserBeam`
-//!   are the visible shot. At clip 0 `RoundToFire` fails — the beam STOPS (the user's capture:
+//!   are the visible shot. At clip 0 `RoundToFire` fails — the beam STOPS (PCSX2 capture:
 //!   the HUD bar 31→0 as `clip·100/clip_size` [M HUD_UpdateAmmoPane 0x19a7f0:177-183], the laser's
 //!   clip 500 / the stunner's 100 [L records]).
 //! - The stunner's miss arm (no class-2/3 target within +0x1c) REGENS +0x91 and returns before
@@ -31,7 +31,7 @@ fn settle(scene: &mut nf_view::scene::Scene, want: u8) {
     panic!("weapon {want:#04x} never settled (disabled or switch stuck)");
 }
 
-/// The playtest spot on 07000008 with `--give 0x4e` (the laser in hand, clip 500 [L]).
+/// The check spot on 07000008 with `--give 0x4e` (the laser in hand, clip 500 [L]).
 fn laser_scene() -> nf_view::scene::Scene {
     let mut scene = nf_view::load_weapons(&iso(), "07000008.bin", false, &[0x4e]).expect("load 08");
     {
@@ -73,13 +73,13 @@ fn the_lasers_charge_drains_the_light_flashes_and_the_beam_stops_at_zero() {
         }
         assert!(sim.laser_beam.is_some() || t < 5, "the beam parks while firing (tick {t})");
     }
-    assert!(saw_beam, "no beam while firing (the user's symptom)");
-    assert!(saw_light, "no muzzle light while firing (the user's symptom)");
+    assert!(saw_beam, "no beam while firing (the old symptom)");
+    assert!(saw_light, "no muzzle light while firing (the old symptom)");
     // The light is the record's red: the newest light carries rgb (64, 10, 10) [L +0x54..0x56].
     let l = sim.drones.lights.lights.last().expect("a light");
     assert_eq!(l.rgb, [64, 10, 10], "the laser's muzzle light is red [L weapon_data+0x54..0x56]");
-    // Keep firing past the clip: 500 rounds at 1/tick. The beam must stop EXACTLY at charge 0 (the
-    // user's capture); the game then reloads from the reserve if it has rounds [M 0x1a5460:449-460]
+    // Keep firing past the clip: 500 rounds at 1/tick. The beam must stop EXACTLY at charge 0 (PCSX2
+    // capture); the game then reloads from the reserve if it has rounds [M 0x1a5460:449-460]
     // — so the lasting assertion is the off-at-0 edge, not a permanent off.
     let mut stopped_at_zero = false;
     for _ in 0..600 {
@@ -87,7 +87,7 @@ fn the_lasers_charge_drains_the_light_flashes_and_the_beam_stops_at_zero() {
         sim.step_bond(Input::default(), true, false, false);
         if empty_at_start {
             // A tick that STARTED at charge 0 fires nothing: no beam, no shot.
-            assert!(sim.laser_beam.is_none(), "the beam stops at charge 0 (the user's capture)");
+            assert!(sim.laser_beam.is_none(), "the beam stops at charge 0 (PCSX2 capture)");
             stopped_at_zero = true;
         }
         if stopped_at_zero && sim.laser_beam.is_none() && sim.gun.clip == 0 { break; }
@@ -145,7 +145,7 @@ fn the_stunner_spends_only_on_a_target_and_holds_its_charge_aimed_off() {
 }
 
 /// The AIMS-20's four side lights: mesh 0x2000132 on the 0x1a view model's bones 8..0xB
-/// [M 0x1a5460:256-360], lit while the gun is in hand (the user's "row of RED lights, lit" — the port
+/// [M 0x1a5460:256-360], lit while the gun is in hand (a row of lit red lights — the port
 /// showed them dark). Sister: the idle timer runs (the blink/off arms read it).
 #[test]
 fn the_aims20s_side_lights_attach_to_its_view_model() {
@@ -178,8 +178,8 @@ fn the_aims20s_side_lights_attach_to_its_view_model() {
 /// Oddjob's hat (0x45): a thrown hat KILLS ON CONTACT (the record's damage 100.0 [L +0x0C] through
 /// the standard bullet hit — `Bullet_CollisionHandler` 0x12ce80's 0x45 arm + msg 8) and NEVER
 /// explodes (the fuse arm only sets the post-hit lifetime [M 0x12e7b0:368-373]; Bullet_Delete's
-/// effect kind 0 spawns nothing). Before the fix the port's grenade path fuse-blasted it — the
-/// user's "should be a one-shot kill but it acts like a grenade". Sister: a guard standing beside
+/// effect kind 0 spawns nothing). Before the fix the port's grenade path fuse-blasted it like a
+/// grenade instead of a one-shot kill. Sister: a guard standing beside
 /// the victim survives (no blast radius).
 #[test]
 fn oddjobs_hat_kills_on_contact_and_never_explodes() {
@@ -227,6 +227,6 @@ fn oddjobs_hat_kills_on_contact_and_never_explodes() {
     for _ in 0..420 { sim.step_bond(Input::default(), true, false, false); }
     // The witness is the OTHER guard of the pair — find it again by proximity to the victim.
     let victim_dead = sim.drones.list.iter().filter(|d| d.health <= 0.0).count();
-    assert!(victim_dead >= 1, "the hat killed nobody on contact (the user's symptom)");
+    assert!(victim_dead >= 1, "the hat killed nobody on contact (the old symptom)");
     assert!(sim.drones.explosions.is_empty(), "the hat exploded (the grenade path's blast)");
 }

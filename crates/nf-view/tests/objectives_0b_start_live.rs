@@ -19,7 +19,7 @@
 //!   `record.level <= GameState._12_4_` (0x1827d8:41-54) — 0x07000009/0x0700000a ≤ 0x0700000b —
 //!   in table order, as plain "%s" texts (0x1827d8:43-45; the "%s: %s" fail format is case 2's
 //!   only, 0x1827d8:72-74);
-//! - [L] the main agent's PCSX2 fresh load shows exactly those announcements.
+//! - [L] a PCSX2 fresh load shows exactly those announcements.
 //!
 //! The port's removed `fix-objective-messages` fabricator had marked prior parts announced
 //! (3/2) on every no-snapshot load, so nothing announced, the spawn plate's ch 0x4b folded the

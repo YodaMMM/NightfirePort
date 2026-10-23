@@ -1,6 +1,6 @@
 //! fix-start-loadouts: the per-level start loadouts — `Player_InitWeapon` (0x1a7ef8)'s whole switch on
-//! the level id, the parts the port had as "the 07000005 set everywhere". The user-visible symptoms
-//! (playtest 1014-1725 + the 2026-10-14 measurements): 07000014 starts with the Delta Repeater crossbow
+//! the level id, the parts the port had as "the 07000005 set everywhere". The player-visible symptoms
+//! (with the 2026-10-14 PCSX2 measurements): 07000014 starts with the Delta Repeater crossbow
 //! 0x11 in hand ("3-9 Single", in a crawl vent) — the port handed the 05 kit; the 07000015 gadget cycle
 //! begins at the Laser 0x4e — the port's cycle begins at the Stunner 0x4a (the 05 kit's first gadget).
 //!

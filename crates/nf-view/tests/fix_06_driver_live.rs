@@ -1,8 +1,7 @@
 //! fix-06-driver: the 07000006 friendly truck driver (skin 0x05000035, dtype 13 → dtypenew 0x17,
-//! team 3), driven through the real paths (`nf_view::load` + `Sim::step_bond`). Playtest
-//! 1011-1535 (06): "he does get scared, but because of where he's standing, he like crouches on
-//! top of the boxes that he's next to... Also, you can still shoot him, and he like flies back
-//! like a guard would with the same guard death sound."
+//! team 3), driven through the real paths (`nf_view::load` + `Sim::step_bond`). Symptoms
+//! (06): when scared he crouched on top of the boxes beside him, and when shot he flew back like a
+//! guard with the guard death sound.
 //!
 //! The chain of facts (each cited at the asserts):
 //! - The game's driver states have NO msg-0x14 (SOUND) arm: `TruckDriverIdle` 0x160ed0 routes
@@ -11,7 +10,7 @@
 //!   → 0x33 [M 0x160bd0:97-105]; `TruckDriverInitAlert` 0x160d98 handles no sound msg at all. The
 //!   port's extra SOUND halves ran the guard heard-noise chain (0xa2-0xa5) on him, whose ATTACK
 //!   path drew a weapon (DRAW_WEAPON 0x66 EXIT: weapon 6, anim set 4 — the guard's set): the
-//!   playtest's "flies back like a guard with the same guard death sound". Fixed: the driver never
+//!   guard-like fly-back with the guard death sound. Fixed: the driver never
 //!   hears gunfire; his scare paths are NearArmedBond (Idle case 3, [M 0x160ed0:60-70]), the
 //!   bullets, the screams/shouts and the alarm — exactly the game's.
 //! - Shooting him IS game-accurate: `NDrone2_DealWithObjHit` case 5 — the shooter is the player
@@ -130,7 +129,7 @@ fn gunfire_never_arms_the_driver_and_his_death_is_his_own() {
     assert!(dr.talks.contains(&(1usize, true)) || playing == s1,
         "the driver's death sound is line 1 (voice type 0xf default [M 0x13eff8 default arm]): queued {:?} or line 1's sfx {s1:?} playing, got {playing:?}", dr.talks);
     // This level's voice bank shares line 1's sfx with the guards' line 4 (both 139 [L d.voices]) —
-    // the game itself gives the driver the "guard death sound"; the playtest's deviation was the
+    // the game itself gives the driver the "guard death sound"; the port's deviation was the
     // guard death ANIM (the weapon draw's anim set 12 → 4), which the SOUND-arm fix removes.
     // The protected actor: team 3 with props 0x53/0x54 → his death raises ch 0x60 ("Killed
     // Civilians") [M OnInitDeath 0x145bd0:21-24, reason 3].
@@ -149,7 +148,7 @@ fn gunfire_never_arms_the_driver_and_his_death_is_his_own() {
 /// only the alert block carries 0x50/0x51]. The scare chain itself (his other triggers — bullets,
 /// screams, the alarm) is entered directly below, and the cower must keep him IN PLACE on the floor
 /// (the cower anim's x/z root is constant [D 04000048], CivilianScared → CivilianHiding at alt mode 0
-/// [M 0x15d3a0], the floor snap [M 0x140660]) — the playtest 1011-1535 report. The route to Idle:
+/// [M 0x15d3a0], the floor snap [M 0x140660]). The route to Idle:
 /// [L 06-firstsight.trace 148014] the walk; [M 0x161030 result 3] the arrival clears prop 0x1d → 0x34.
 /// Sister: the scare never damages him.
 #[test]
@@ -193,7 +192,7 @@ fn the_scared_cower_keeps_him_in_place_on_the_floor() {
     let moved = ((dr.pos[0] - before[0]).powi(2) + (dr.pos[2] - before[2]).powi(2)).sqrt();
     assert!(moved < 0.05, "the cower happens where he stands (the game moves him nothing) — moved {moved:.3}");
     // ...ON THE FLOOR: the feet stay at the courtyard floor the floor snap found [M 0x140660] —
-    // the playtest's old build drifted him onto the neighbouring crates (the no-gravity stand-in);
+    // the old build drifted him onto the neighbouring crates (the no-gravity stand-in);
     // with the game's gravity he crouches at ground level.
     assert!((dr.pos[1] - 1.0 - floor).abs() < 0.05, "the scared pose keeps his feet on the floor ({} vs floor {floor})", dr.pos[1]);
     // Sisters: a scare is not a shot — alive, and never the guard set.

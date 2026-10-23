@@ -1,8 +1,7 @@
 //! fix-npc-doors-escort: the NPCs open the doors on their own paths (07000001 "Paris Prelude").
 //!
-//! The user's playtest (2026-10-12): "npcs cant open doors" on every level; "mahew doesnt really
-//! follow properly" — the screenshot (`07000001 --bond 6.28,6.47,6.20,6.338,-0.083`) shows Mayhew
-//! stuck facing a shoji door. The game's path: `NDrone2_ReachedDestNode` (0x153358) stands the
+//! Symptoms: NPCs could not open doors on any level, and Mayhew did not follow properly — at
+//! `07000001 --bond 6.28,6.47,6.20,6.338,-0.083` he stood stuck facing a shoji door. The game's path: `NDrone2_ReachedDestNode` (0x153358) stands the
 //! route's door node binding (`NDrone_InitDoorNodes` 0x139a70) in `Drone+0xBA8` and enters
 //! `DSTATE_OpenDoor` 0x1681f8 (state 0x81 [L 0x29b300 + 0x81·4]), which calls `NDrone2_OpenDoor`
 //! 0x14aa38 → `Door_Activate(door, drone, 0)` and re-tries on timer C every 2 ticks until
@@ -70,7 +69,7 @@ fn clear_guard(w: &mut Walker, g: usize) -> bool {
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// A short dump of the escort + nearby doors (a failure reads like the user's bug report).
+/// A short dump of the escort + nearby doors (a failure reads like the original symptom).
 fn doors_dump(w: &Walker, ci: usize) -> String {
     let sim = w.scene.sim.as_ref().unwrap();
     let c = sim.drones.list[ci].pos;
@@ -84,11 +83,11 @@ fn doors_dump(w: &Walker, ci: usize) -> String {
 }
 
 #[test]
-// Ignored at the merge (main agent, 2026-10-13): after master's later merges re-positioned the stairwell fight, the
+// Ignored: after the stairwell fight was re-positioned, the
 // walker's ammo-resupply detour presses E on door #2 every tick while the escort works the same door in
-// DSTATE_OpenDoor — the double-activation deadlock this branch's report proves is the game's own behaviour
+// DSTATE_OpenDoor — the double-activation deadlock is the game's own behaviour
 // (Door_Activate 0x135be0 reverses an opening door; the busy marker skips its motion tick). The port is faithful;
-// the harness must stop pressing while the escort holds the door, as fix_mission_live now does. Owner: 045g-fix-walkreal-b2's walker.
+// the harness must stop pressing while the escort holds the door, as fix_mission_live now does.
 #[ignore = "walker resupply deadlocks door #2 with the escort's DSTATE_OpenDoor (harness, not the port)"]
 fn the_escort_opens_the_interior_doors_on_his_route() {
     let iso = iso();
@@ -108,7 +107,7 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
     let sim = w.scene.sim.as_ref().unwrap();
     let ci = sim.drones.list.iter().position(|d| d.skin == 0x0500_004f).expect("the contact");
     let cpos0 = sim.drones.list[ci].pos;
-    // The interior doors the route crosses (the user's screenshot has Mayhew facing one of them).
+    // The interior doors the route crosses (the stuck Mayhew faced one of them).
     let doors0: Vec<(usize, [f32; 3])> = sim.drones.doors.list.iter().enumerate()
         .map(|(i, d)| (i, d.pos)).collect();
     drop(sim);
@@ -240,9 +239,9 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
     eprintln!("[01] the escort settled at ({:.2},{:.2},{:.2}); plate ({:.1},{:.1},{:.1})",
         cpos1[0], cpos1[1], cpos1[2], plate[0], plate[1], plate[2]);
     // 1. The escort crossed BOTH interior shoji doors on his route: door #1 (7.9, 5.3, 11.14 — the
-    //    door the user's screenshot shows Mayhew facing) and door #2 (−14.06, 5.35, 13.05): he must
+    //    door the stuck Mayhew faced) and door #2 (−14.06, 5.35, 13.05): he must
     //    stand west of #2's plane (x < −15). Pre-fix he settled against
-    //    door #1 (state 0x1d/0x1f at z ≈ 13 with the door CLOSED — the playtest symptom).
+    //    door #1 (state 0x1d/0x1f at z ≈ 13 with the door CLOSED — the old symptom).
     assert!(cpos1[0] < -15.0,
         "the escort never led past the interior shoji doors (settled at ({:.1},{:.1},{:.1}))",
         cpos1[0], cpos1[1], cpos1[2]);
@@ -254,7 +253,7 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
     let bond_d1: f32 = d1.rsplit("bond→contact ").next().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
     eprintln!("[01] door #1 opened with Bond {bond_d1:.1} from the contact");
     assert!(bond_d1 > 2.5, "door #1 opened with Bond too close ({bond_d1:.1}) — not the escort's doing? ({d1})");
-    // 3. And he is not parked against a still-closed door (the user's screenshot symptom):
+    // 3. And he is not parked against a still-closed door (the old symptom):
     //    every door within 2.5 of his settled position is OPEN.
     let blocking: Vec<String> = w.scene.sim.as_ref().unwrap().drones.doors.list.iter().enumerate()
         .filter(|(_, d)| walker::dxz(d.pos, cpos1) < 2.5 && d.state & 0x12 != 0)

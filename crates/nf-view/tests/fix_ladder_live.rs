@@ -1,8 +1,7 @@
 //! fix-ladder: ladders and swimming through the REAL viewer path (`nf_view::load` + `Sim::step_bond`).
 //!
-//! The user's playtest (docs/playtests/2026-10-11.md, the 07000002 report): "Bond starts in an
-//! underground bunker and can't get out — the exit is a ladder, and ladders aren't implemented", and
-//! "07000002 has water that Bond should be able to swim in; right now he walks on top of it."
+//! The 07000002 symptoms: Bond starts in an underground bunker whose exit is a ladder, and ladders
+//! were not implemented; and 07000002's water should be swimmable, but Bond walked on top of it.
 //!
 //! The tests drive the exact functions the viewer's play path uses: the input reaches
 //! `Player_Update` 0x193600 through `Sim::step_bond`, which now hands the tick the ladder context
@@ -87,8 +86,8 @@ fn ladder_walk_into_it_climbs_to_the_garden_and_walks_away() {
         if grabbed.is_none() && sim.bond.substate == nf_game::player::SS_CLIMB { grabbed = Some(t); }
         if sim.bond.pos[1] >= 5.8 - 0.5 && sim.bond.grounded && sim.bond.substate == nf_game::player::SS_WALK { break; }
     }
-    let grabbed = grabbed.expect("walking into the bunker ladder never attached (substate stayed 0) — the user's symptom");
-    // The climb ends on the garden floor (y ≈ 5.8 near (−38, 39.7) per the playtest).
+    let grabbed = grabbed.expect("walking into the bunker ladder never attached (substate stayed 0) — the old symptom");
+    // The climb ends on the garden floor (y ≈ 5.8 near (−38, 39.7)).
     assert!(sim.bond.pos[1] > 5.8 - 0.6, "Bond left the ladder at y {} — not the garden floor 5.8 (grab at tick {grabbed})", sim.bond.pos[1]);
     assert!(sim.bond.substate == nf_game::player::SS_WALK, "still in substate {} after the climb", sim.bond.substate);
     // …and walks away (the climb released him onto walkable ground, not stuck on the ladder).
@@ -132,7 +131,7 @@ fn walk_into_water_enters_the_swim_substate() {
         sim.step_bond(fwd, false, false, false);
         if sim.bond.substate == nf_game::player::SS_SWIM { swam = true; break; }
     }
-    assert!(swam, "walking into the 07000002 water (cel surface {w}) never entered substate 3 — Bond walked on top of it (the user's symptom)");
+    assert!(swam, "walking into the 07000002 water (cel surface {w}) never entered substate 3 — Bond walked on top of it (the old symptom)");
     assert!(sim.bond.pos[1] - 0.3 < w, "swimming but Bond's y {} is above the surface {w}", sim.bond.pos[1]);
     // Sister: dry land at the bunker start never enters swim.
     let mut sim = load(&iso);
@@ -160,7 +159,7 @@ fn ladder_and_water_counts_per_level() {
         let water_cels = level.maps.iter().flat_map(|m| &m.placements).filter(|p| p.creates_cel() && (p.flags & 0xffff) == 0xc023).count();
         println!("{code:08x}: ladders {} {:?} water_cels {}", ladders.len(), ladders, water_cels);
         let _ = water;
-        // Sister: 07000002 must have the bunker-exit ladder (the playtest's item).
+        // Sister: 07000002 must have the bunker-exit ladder.
         if code == 0x07000002 { assert!(ladders.len() >= 4, "07000002 lost its ladders"); }
     }
 }

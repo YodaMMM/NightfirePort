@@ -1,6 +1,6 @@
 //! civilian-no-shoot — the red no-shoot crosshair over non-enemies [M `Check_Target`
-//! 0x1a7810], what it does and does NOT gate. The playtest premise ("the game refuses to
-//! fire") is contradicted by the disc: the repo's own PCSX2 trace of this exact play
+//! 0x1a7810], what it does and does NOT gate. The premise that the game refuses to
+//! fire is contradicted by the disc: the repo's own PCSX2 trace of this exact play
 //! (tests/traces/02-civilian.trace, 2026-10-11) shows the P2K clip falling on EVERY trigger
 //! pull under the red mark [L], and the whole fire pipeline reads nothing the mark writes —
 //! BLData+0x133's only reader is the HUD draw [M `HUD_UpdateCrossHair` 0x19e6d0:69], and
@@ -36,7 +36,7 @@ fn load_and_skip() -> Option<nf_view::scene::Scene> {
 }
 
 /// The civilian beside Bond's start: kind 9, team 2, drawn, ~3.5 units ahead [D 07000002's
-/// placement; the playtest's target]. Aims Bond's eye at the target's chest.
+/// placement; the traced target]. Aims Bond's eye at the target's chest.
 const CIVILIAN: usize = 21;
 const GUARD: usize = 0;
 

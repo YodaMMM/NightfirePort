@@ -1,5 +1,5 @@
-//! fix-render-artifacts probes: the user's 2026-10-12 screenshot spots. Opt-in via NF_ISO.
-//! Spots (from the task):
+//! fix-render-artifacts probes: the artifact screenshot spots. Opt-in via NF_ISO.
+//! Spots:
 //! - 07000012 cross   --bond -3.36,1.13,35.13,4.424,-0.124
 //! - 07000012 sun     --bond 26.81,1.13,33.17,6.287,-0.097
 //! - 0700000c roof    --bond 14.22,16.73,-154.43,9.919,-0.349
@@ -139,9 +139,9 @@ fn probe_characters_near_a_point() {
 }
 
 /// The RUNTIME draw list near NF_PROBE_BOND=x,y,z,yaw,pitch after NF_PROBE_TICKS idle steps (default 1790,
-/// the user's screenshot frame): every material whose posed box reaches within 4 units of the eye, World statics
+/// the screenshot frame): every material whose posed box reaches within 4 units of the eye, World statics
 /// included, with draw state, texture, posed vertex colour and the owning character's drone state. This is the
-/// user's screenshot reproduced headlessly. Opt-in via NF_ISO.
+/// screenshot reproduced headlessly. Opt-in via NF_ISO.
 #[test]
 fn probe_play_draws_near() {
     let Some(iso_path) = iso() else { return };

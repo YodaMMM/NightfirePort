@@ -1,7 +1,6 @@
-//! fix-08-walls (101h): two 07000008 symptoms from the 1013-1758 playtest at the safe/briefcase
-//! area (~(155, 43, -113)).
+//! fix-08-walls: two 07000008 symptoms at the safe/briefcase area (~(155, 43, -113)).
 //!
-//! (1) "I walked into a wall and it threw me onto a zip line on the other side of the wall" — the
+//! (1) Walking into a wall threw Bond onto a zipline on the other side of the wall — the
 //! jump-grab's arm test was a flat 12.0-unit radius around each third icon [M `Player_HandleJump`
 //! 0x1916b0:118-147 reads `BLData+0x95F`, written by `ThirdIcon_Update` 0x196e80 off the icon's
 //! obj+0xd0 chain], so jumping while hugging the guardhouse wall armed 07000008's type-3
@@ -15,17 +14,15 @@
 //! scene.rs (`icon_cels` / `icon_straddle_cels` + the FindCel arming test) and wire.rs
 //! (`Icon::centre`/`radius`).
 //!
-//! (2) "the big wall is still clipping into the missile room" — `Room_Outside_3` (the castle's east
+//! (2) A big wall clipped into the missile room — `Room_Outside_3` (the castle's east
 //! exterior cel, graph cell 15) carries the exterior wall slabs whose triangles cross the whole
 //! `Room_Guardhouse_F2` interior (mats with tris-box x 155.0..166.5 over the room's x 154.5..163.1
-//! [D per-tri probe]; fix-safe08.md measured the protrusion). The game hides the exterior cel
+//! [D per-tri probe]). The game hides the exterior cel
 //! indoors because `View_AddCels` 0x1e6ba0 draws only the `Vision_Portal_Recurse` 0x1e86e8 set —
 //! this file pins the port's game-mask (`portal_visible_cels_game_from_cell`, the fix-portal2
-//! port) to the same exclusion at the user's spot. The 1013-1758 playtest build predates the
-//! portal-sweep merge (fix-portal-sweep landed 2026-10-14 01:10 UTC, the playtest is 17:58 UTC
-//! [git log]); at master the mask already excludes cell 15 from the missile room at every sampled
-//! view — pinned here as the regression guard the task asks for, with live checks listed in the
-//! report for the main agent's render.
+//! port) to the same exclusion at the repro spot. The build that showed it predated
+//! fix-portal-sweep; with it the mask already excludes cell 15 from the missile room at every
+//! sampled view — pinned here as a regression guard.
 //!
 //! Opt-in via NF_ISO (the slim ISO is enough).
 
@@ -57,7 +54,7 @@ fn the_wire_icons_straddle_set_is_its_own_west_room_cel() {
     assert_eq!(icon.centre, icon.pos, "the icon object's bounds centre is the placement origin [D probe]");
     assert_eq!(sim.icon_cels[0], vec![12u32 as usize].iter().map(|&v| v).collect::<Vec<_>>(),
         "the r-1.164 sphere crosses no portal: the straddle set is the icon's own cel (the west room, graph cell 12)");
-    // Sisters: the FindCel cel of the two playtest sides.
+    // Sisters: the FindCel cel of the two wall sides.
     let east = nf_view::scene::find_cell_raycast(&sim.cel_graph, [144.0, 45.0, -104.0], Some(&sim.world));
     let west = nf_view::scene::find_cell_raycast(&sim.cel_graph, [132.0, 46.7, -104.0], Some(&sim.world));
     assert_eq!(east, Some(43usize), "the guardhouse-balcony spot finds the east junction room (cell 43)");
@@ -80,7 +77,7 @@ fn the_guardhouse_wall_stops_the_wire_grab() {
         "the wall side reads no icon [M ThirdIcon_Update 0x196e80 walks the straddle chain only] (got {})", sim.bond.icon_ctx);
     for t in 0..8 { sim.step_bond(Input { jump: true, ..Input::default() }, false, false, false); }
     assert_eq!(sim.bond.substate, SS_WALK,
-        "jumping against the guardhouse wall must not grab the far-side zipline [M 0x1916b0 reads +0x95F == 3 only; L the 1013-1758 playtest] (substate {})", sim.bond.substate);
+        "jumping against the guardhouse wall must not grab the far-side zipline [M 0x1916b0 reads +0x95F == 3 only] (substate {})", sim.bond.substate);
     assert!(sim.bond.wire.is_none(), "no wire was grabbed");
     assert!(sim.bond.pos[0] > 140.0, "Bond stayed on the east side (got {:?})", sim.bond.pos);
 }
@@ -106,7 +103,7 @@ fn the_hand_over_hand_grab_still_fires_on_the_icons_side() {
     assert_eq!(sim.bond.wire, Some(0), "the level's only wire is grabbed");
 }
 
-/// The missile room's visible-instance set excludes the exterior wall: from the user's spot inside
+/// The missile room's visible-instance set excludes the exterior wall: from the repro spot inside
 /// `Room_Guardhouse_F2` (graph cell 48), the game-mask walk (`Vision_Portal_Recurse` 0x1e86e8 +
 /// the `View_AddCels` 0x1e6ba0 chain pass, the fix-portal2 port) never marks the east exterior
 /// room (cell 15, `Room_Outside_3` — the slabs whose tris cross the room interior [D]) visible,

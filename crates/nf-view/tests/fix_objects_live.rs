@@ -1,10 +1,10 @@
 //! fix-objects repro tests, driven through the real path (`nf_view::load` + `Sim::step_bond`).
 //!
-//! The user's reports (master 0a2fcc4, screenshots on 07000001):
-//! 1. TOP: "Where an armour pickup belongs (on a small chest of drawers), a spinning gold 007 bonus
-//!    model is drawn" and "a dead guard's drop shows a 007 bonus icon on the floor where it should be
-//!    ammunition" — the drawn model and the pickup at a spot disagree.
-//! 2. "Every dead guard drops several objects" on all enemies (the sim drops one — fix-player3 pinned
+//! The symptoms (07000001):
+//! 1. TOP: a spinning gold 007 bonus model drew where an armour pickup belongs (on a small chest of
+//!    drawers), and a dead guard's ammunition drop drew as a 007 bonus icon — the drawn model and
+//!    the pickup at a spot disagree.
+//! 2. Every dead guard appeared to drop several objects (the sim drops one — fix-player3 pinned
 //!    that — so the extra objects must be drawn ones).
 //! 3. Two placed piles swapped: an ammo pile behaves as armour, an armour piece as ammo.
 //!
@@ -41,7 +41,7 @@ fn tick_idle(sim: &mut nf_view::scene::Sim, n: u32) {
 /// live pickup under a drawn instance, so the mesh↔matrix pair is an identity. The port's
 /// `update_pickups` ended with `self.pickups.retain(|p| !p.gone)`: the first take (or lifetime
 /// expiry) shifts every later index, and every placed mesh after it is drawn at another pickup's or
-/// a drop's matrix — the user's "007 model at the armour spot" and "wrong model at the drop".
+/// a drop's matrix — the 007 model at the armour spot and the wrong model at the drop.
 #[test]
 fn pickup_slots_keep_their_pickup_after_a_take() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -131,7 +131,7 @@ fn placed_pickup_models_match_their_kind() {
 /// (−3.25, 5.85, −9.06) and (−6.52, 5.85, −9.06) with params kind 1, id 6, rounds 20; two
 /// "PICKUP_BodyArmourHeavy" at (17.44, 6.25, −3.16) and (−14.36, 6.51, 16.06) with kind 3, id 0x47
 /// (0x47 is in `Pickup_CreateSimple`'s refuse list — placed armour is a different path), rounds 50.
-/// The port must give each pile its disc kind AND its own mesh (the user's swap: an ammo pile acted
+/// The port must give each pile its disc kind AND its own mesh (the swap: an ammo pile acted
 /// as armour and an armour piece as ammo).
 #[test]
 fn the_two_piles_on_07000001_have_their_disc_kinds_and_meshes() {
@@ -195,10 +195,10 @@ fn dynamic_vertex_records_match_their_instances() {
 }
 
 /// ── 5: the death-drop dump ───────────────────────────────────────────────────────────────────────
-/// "Every dead guard drops several objects (the user sees it on all enemies)". The game's death
+/// Every dead guard appeared to drop several objects (on all enemies). The game's death
 /// creates exactly ONE pickup (the base weapon, kind 0 — `DroneWeap_DropWeapon` 0x17a2a0), plus the
 /// hidden 0x1B twin for 0x1A and a captain's grenade pickup (`DroneFunc_DropGrenade` 0x14b158) —
-/// fix-player3 pinned the sim side. The extra VISIBLE objects the user saw were the placed meshes
+/// fix-player3 pinned the sim side. The extra VISIBLE objects were the placed meshes
 /// drawn at shifted matrices (the `retain` desync, test 1). This walks the real path: kill a guard,
 /// dump every pickup (kind, id, rounds, hidden, gone, drawn slot), and assert the drawn set is
 /// exactly: every live placed pickup at its OWN matrix, plus the drop at the corpse.

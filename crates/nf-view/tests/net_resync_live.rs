@@ -108,7 +108,7 @@ impl Live {
                     // the host's log headless, compare the hash, confirm. The
                     // frozen machine's old scene drops first — the replay replaces
                     // it wholesale on success (the app keeps the old scene visible;
-                    // this harness does not render, and the sandbox's 4 GB cannot
+                    // this harness does not render, and a 4 GB test machine cannot
                     // hold four MP scenes at once).
                     self.scene = None;
                     let iso_v = iso().expect("NF_ISO");

@@ -1,8 +1,7 @@
 //! fix-qclaw: the Q-Claw's real ids and fire path through the real input path.
 //!
-//! The playtest (results 1013-1758, 07000005 at `--bond 16.5,29.6,58.6,0,0.25 --give 0x50`, beside
-//! grapple point #282): "the grapple hook isn't there; using the hook within range makes a bullet
-//! impact". What the disc says [L ee_start_05.bin @ weapon_data 0x2bf150 + USATxt.dat]:
+//! The symptom (07000005 at `--bond 16.5,29.6,58.6,0,0.25 --give 0x50`, beside grapple point #282):
+//! no grapple hook model, and firing it within range made a bullet impact. What the disc says [L ee_start_05.bin @ weapon_data 0x2bf150 + USATxt.dat]:
 //! - **0x50/0x51 are the Q-Claw** — the bank's own name "Grapple" (+0x38 label 0x05000044),
 //!   `weapon_data+0x70 & 0x40` (the grapple-bolt flag `Bullet_Delete` 0x12e660:33 latches on), max
 //!   range +0x1C = 50.0 / 100.0, clip 0 (not a clip weapon), damage 0.
@@ -21,7 +20,7 @@ use nf_game::player::Input;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// The playtest spot, ~4.05 units from point #282 (13.7525, 32.2919, 57.3034 [L ee_start_05.bin obj+0x30]).
+/// The check spot, ~4.05 units from point #282 (13.7525, 32.2919, 57.3034 [L ee_start_05.bin obj+0x30]).
 const SPOT: [f32; 3] = [16.5, 29.6, 58.6];
 const TARGET: [f32; 3] = [13.752469, 32.291878, 57.303413];
 
@@ -41,7 +40,7 @@ fn give_claw(scene: &mut nf_view::scene::Scene) {
     sim.gun.switch_request = 0x50;
 }
 
-/// The main playtest flow: `--give 0x50` (the real claw id) draws the claw view model, and the held
+/// The main flow: `--give 0x50` (the real claw id) draws the claw view model, and the held
 /// fire at point #282 latches, reels Bond to the point and hangs him — with NO laser beam (the old
 /// "bullet impact" was `is_laser_weapon(0x50)`'s beam endpoint) and NO bullet decals (the game's
 /// claw bolt spawns none: effect kind 0 [M 0x1ce688 dispatch; L +0x70 = 0x40]).
@@ -112,12 +111,12 @@ fn the_claw_draws_and_the_held_fire_latches_reels_and_hangs_with_no_beam_and_no_
 fn the_stunner_does_not_grapple_and_the_claw_does_not_beam() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
-    // The id sets themselves (the regression that made the playtest's "bullet impact").
+    // The id sets themselves (the regression that made the bullet impact).
     assert!(nf_game::gadget::is_grapple(0x50) && nf_game::gadget::is_grapple(0x51),
         "0x50/0x51 are the Q-Claw [L bank 'Grapple' 0x05000044; +0x70 & 0x40]");
     assert!(!nf_game::gadget::is_grapple(0x4a) && !nf_game::gadget::is_grapple(0x4c),
         "0x4A/0x4C are the Stunner [L bank 'Stunner' 0x05000042]");
-    assert!(!nf_game::gadget::is_laser_weapon(0x50), "0x50 must NOT run the beam (the playtest's bug)");
+    assert!(!nf_game::gadget::is_laser_weapon(0x50), "0x50 must NOT run the beam (the old bug)");
     assert!(nf_game::gadget::is_laser_weapon(0x4e), "the Laser 0x4E keeps the beam [L +0x68 laser-pointer]");
     // The ranges are the table's own +0x1C: 50.0 for the claw (0x50), 100.0 for the upgrade (0x51),
     // NOT the old 5.0/10.0 (the Stunner's ranges).
@@ -148,7 +147,7 @@ fn the_stunner_does_not_grapple_and_the_claw_does_not_beam() {
     assert!(scene.sim.as_ref().unwrap().laser_beam.is_none(), "the Stunner does not beam either");
 }
 
-/// The user's other report spot (`--bond -18.28,38.19,-71.83,-4.717,0.151`): the nearest point is
+/// The second repro spot (`--bond -18.28,38.19,-71.83,-4.717,0.151`): the nearest point is
 /// 15.4 units out — beyond the OLD 5.0 "range" the port grappled with, well inside the claw's real
 /// 50.0 bolt range [L +0x1C], so the held fire latches there too.
 #[test]
@@ -173,7 +172,7 @@ fn the_users_report_spot_latches_within_the_real_range() {
         .map(|p| (dist(p.pos, spot), p.pos))
         .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap()).unwrap();
     assert!(nearest.0 < nf_game::gadget::grapple_range(&sim.weapons, 0x50),
-        "the user's spot is {:.1} from the nearest point — inside the claw's real 50.0 range", nearest.0);
+        "the repro spot is {:.1} from the nearest point — inside the claw's real 50.0 range", nearest.0);
     let dir = {
         let d = [nearest.1[0] - head[0], nearest.1[1] - head[1], nearest.1[2] - head[2]];
         let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
@@ -181,7 +180,7 @@ fn the_users_report_spot_latches_within_the_real_range() {
     };
     assert!(nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, head, dir,
         nf_game::gadget::grapple_range(&sim.weapons, 0x50)).is_some(),
-        "the bolt sweep accepts the point from the user's spot");
+        "the bolt sweep accepts the point from the repro spot");
 }
 
 fn aim_inputs(scene: &nf_view::scene::Scene, target: [f32; 3]) -> (f32, f32) {

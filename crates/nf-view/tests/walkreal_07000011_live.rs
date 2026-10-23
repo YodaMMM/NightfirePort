@@ -85,8 +85,8 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     // 0.2-up kerb slab at (8.6,−6.0) [D fl2] — the straight push, the free walk and the jump all
     // pin at (8.79,−5.44)/(10.19,−4.42) (the capsule rides the kerb edge / the W1 face). The
     // game's own nav graph has NO link across here either (the office-floor component ends at
-    // n45/n46/n47; the stair chain starts fresh at n94 [D nav BFS]) — the crossing needs the
-    // main agent's live check (the report lists it). The placement drops Bond 1.5 m past the
+    // n45/n46/n47; the stair chain starts fresh at n94 [D nav BFS]) — the crossing needs a
+    // live check (still open). The placement drops Bond 1.5 m past the
     // parapet onto the flight's west piece; EVERY flight of the descent after this is walked.
     {
         let sim = w.scene.sim.as_mut().unwrap();

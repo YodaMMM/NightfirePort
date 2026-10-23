@@ -14,7 +14,7 @@ fn settle(scene: &mut nf_view::scene::Scene, ticks: u32) {
 
 /// 07000006 first frames: every placed guard must be POSED from the first ticks (the game gives
 /// each drone its start danim in `NDrone2_DefaultInit`, so frame 0 is already a pose — never the
-/// bind pose the user filmed as "crazy model stuff").
+/// bind pose, which showed as broken models).
 #[test]
 fn the_06_guards_are_posed_from_their_first_frames() {
     let mut scene = nf_view::load(&iso(), "07000006.bin", false).expect("load 07000006");
@@ -28,7 +28,7 @@ fn the_06_guards_are_posed_from_their_first_frames() {
             if !un.is_empty() { bad_at.push((t, un)); }
         }
     }
-    assert!(bad_at.is_empty(), "guards unposed on their first frames at ticks {:?} (the user's \"crazy models\")",
+    assert!(bad_at.is_empty(), "guards unposed on their first frames at ticks {:?} (bind-pose models)",
         bad_at.iter().map(|(t, _)| t).collect::<Vec<_>>());
 }
 
@@ -245,7 +245,7 @@ fn probe_sniper_direct_bullet() {
     assert!(hp < 9.99, "the sniper's damage path stopped working: health {hp} after the live-centre shot");
 }
 
-/// 0700000c: the rooftop sniper shoots Bond (the user "heard sniper shots") but Bond's shots do
+/// 0700000c: the rooftop sniper shoots Bond (sniper shots are heard) but Bond's shots do
 /// nothing to him. Find the sniper (the Winter sniper 0x1E drone on the highest perch), then shoot
 /// him through the REAL fire path (the walker's aim + trigger + flanks) and require damage.
 #[test]
@@ -269,12 +269,12 @@ fn the_0c_sniper_takes_damage_when_shot() {
         .expect("0700000c has a sniper-weapon drone");
     let sp = { let sim = scene.sim.as_ref().unwrap(); (sim.drones.list[si].pos, sim.drones.list[si].pos[1]) };
     eprintln!("[sniper] {all} drones, snipers {snipers:?}, rooftop target #{si} at ({:.2},{:.2},{:.2})", sp.0[0], sp.0[1], sp.0[2]);
-    // The sniper must be armed and firing in the real game (the user HEARD him): assert the port
+    // The sniper must be armed and firing in the real game (he is HEARD): assert the port
     // gives him a weapon at all.
     assert!(matches!(scene.sim.as_ref().unwrap().drones.list[si].weapon, 0x1e | 0x1f | 0x24 | 0x25), "the rooftop drone lost his sniper weapon");
     // The sniper waits on a switch channel (WAIT_SWITCH 0x33, enabled=false — the game's trigger
     // writes it when the player reaches the yard). Raise it the way the level's trigger does, then
-    // stand Bond at a standable yard vantage with clear LOS (the user looked UP at him — the aim
+    // stand Bond at a standable yard vantage with clear LOS (Bond looks UP at him — the aim
     // pitch needs the AIM hold, whose clamp is the game's ±0.9 [M 0x1bfe58]).
     let ch = scene.sim.as_ref().unwrap().drones.list[si].switch_channel;
     eprintln!("[sniper] enabling rooftop sniper #{si} via switch channel {ch}");

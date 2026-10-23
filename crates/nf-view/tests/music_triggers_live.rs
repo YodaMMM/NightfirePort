@@ -1,4 +1,4 @@
-//! music-triggers (task 750): the music trigger placements (0xfb → `MusicTrigger_Create`
+//! music-triggers: the music trigger placements (0xfb → `MusicTrigger_Create`
 //! 0x1b30e0 + `MusicTrigger_Update` 0x1b31a0) through the real path — the trigger exists after
 //! the level load, raising switch channel p0 fires `Music_Event(p2, 2)` every tick
 //! (`UpdateMusicalEvents` pins `bonus = 600` / `under_attack`), and clearing the channel lets the

@@ -1,4 +1,4 @@
-//! fix-cutscene-letterbox — the cut-scene picture must match the game's. The main agent's PCSX2
+//! fix-cutscene-letterbox — the cut-scene picture must match the game's. A PCSX2
 //! compare of the 07000007 Kimiko scene (trigger 0x48, script 0x06000073) found two gaps:
 //! (1) the game draws the black letterbox bars top and bottom through the whole scene
 //! (`Script_CameraStart` 0x1d9140 creates the two 0x2c9468 border sprites — 512×64 at y 0 and

@@ -1,5 +1,4 @@
-//! fix-06-alarm: the courtyard's alarm SOUND (the user's playtest 1013-1825: the guards react, "but
-//! there's no alarm that goes off").
+//! fix-06-alarm: the courtyard's alarm SOUND (the guards reacted, but no alarm sounded).
 //!
 //! The game's alarm path from the searchlight spot, all evidenced:
 //! - the armed head writes alarm channel 55 every tick [M Searchlight_Update 0x1cb900:142-144]

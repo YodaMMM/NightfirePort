@@ -1,17 +1,17 @@
 //! party07-start-rules: the 07000007 party's start rules, from a COLD start AND from the 06 → 07
 //! carry, driven through the REAL path (`nf_view::load` / `load_with_carry` + `Sim::step_bond`).
 //!
-//! Playtest 1011-1535 / 1011-1616 / 1012-1723 (07000007) items pinned here:
-//! 1. "the guards immediately start shooting at me because I start with my gun drawn" — the
+//! 07000007 items pinned here:
+//! 1. the guards started shooting at once because Bond started with his gun drawn — the
 //!    loadout must be the FISTS [M Player_InitWeapon 0x1a7ef8 case 0x7000007 → +0x63 = 1,
 //!    armour 0] and the bouncers stay calm while Bond is unarmed [M CivilianGuard 0x1603a8
 //!    case 3: attack only when NearArmedPerson 0x1787c8 / ObjectIsArmed(Bond) 0x178768 + seen];
-//! 2. "If you punch a guard, it should be an automatic mission fail" [M PunchImpact 0x145f28:45-56
+//! 2. punching a guard is an automatic mission fail [M PunchImpact 0x145f28:45-56
 //!    → reason 5 → label 0x4000033 + ch 99 [M 0x13e560] → MissionState 2 + the "Mission Fail"
 //!    banner → 0x7000048, M 0x182c60:45-57];
 //! 3. guests T-posing or not reacting — every guest binds an anim at the start (T-pose =
 //!    `anim.script == None`), and the panic cower plays on the scream [M CivilianHiding];
-//! 4. "one male guest shooting" — no guest is armed [M GetDTYPENEW 0x14c938: dtype 10 →
+//! 4. a male guest was shooting — no guest is armed [M GetDTYPENEW 0x14c938: dtype 10 →
 //!    PartyGirlInit/CivilianInit, prop 0x1f = 0 (deaf to sound alerts, M 0x148a30:45-49),
 //!    prop 0x54 = 1 (protected); the weapon class only comes from placement param 9] and no
 //!    guest ever attacks even with gunfire around;
@@ -59,7 +59,7 @@ fn assert_party_start_rules(sim: &nf_view::scene::Sim, what: &str) {
         .filter(|(_, d)| d.present && d.dtype == 10 && !d.corpse).map(|(i, d)| (i, d.weapon, d.state)).collect();
     assert!(!guests.is_empty(), "{what}: the party has guests");
     for &(i, w, _) in &guests {
-        assert!(!armed_class(w), "{what}: guest {i} is armed (weapon class {w:#x}) — no guest fires [playtest item 4; M 0x14c938 dtype 10 → CivilianInit/PartyGirlInit]");
+        assert!(!armed_class(w), "{what}: guest {i} is armed (weapon class {w:#x}) — no guest fires [item 4; M 0x14c938 dtype 10 → CivilianInit/PartyGirlInit]");
     }
     let d = &data;
     for &(i, _, _) in &guests {
@@ -70,7 +70,7 @@ fn assert_party_start_rules(sim: &nf_view::scene::Sim, what: &str) {
     let tposed: Vec<usize> = guests.iter()
         .filter(|&&(i, _, _)| { let a = &sim.drones.list[i].anim; a.script.is_none() || a.danim == 0 })
         .map(|&(i, _, _)| i).collect();
-    assert!(tposed.is_empty(), "{what}: guests are T-posed at the start (no anim on {tposed:?}) [playtest item 3]");
+    assert!(tposed.is_empty(), "{what}: guests are T-posed at the start (no anim on {tposed:?}) [item 3]");
 }
 
 /// ── Rule 1/3/4, cold start ──────────────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ fn cold_start_opens_on_fists_with_a_calm_animated_party() {
     }
     settle(scene.sim.as_mut().unwrap());
     let s = scene.sim.as_mut().unwrap();
-    assert!(s.drones.health.health > 99.0, "cold: Bond takes no damage at the start [playtest item 1]");
+    assert!(s.drones.health.health > 99.0, "cold: Bond takes no damage at the start [item 1]");
     assert!(s.drones.channels.on(0x47), "the spawn plate #411 fired ch 0x47 [D placements]");
     assert_party_start_rules(s, "cold");
 }
@@ -195,7 +195,7 @@ fn carry_punch_a_bouncer_fails_the_mission() {
     assert_eq!(sim.drones.mission.fail_label, 0x0400_0033, "carry: FailLabel 0x4000033");
     for _ in 0..120 { sim.step_bond(Default::default(), false, false, false);
         if sim.drones.mission.state == 2 { break; } }
-    assert_eq!(sim.drones.mission.state, 2, "carry: the punch fails the mission [playtest item 2]");
+    assert_eq!(sim.drones.mission.state, 2, "carry: the punch fails the mission [item 2]");
 }
 
 /// ── Rule 4: gunfire does not panic the guests (they ignore sound alerts) and no guest fires ─────
@@ -239,7 +239,7 @@ fn gunfire_does_not_panic_the_deaf_guests_and_no_guest_fires() {
     }
     let _ = (after, panicked); // the sound-deafness assert above is the pinned rule
     assert!(combat_states(sim).iter().all(|&i| sim.drones.list[i].dtype != 10),
-        "no guest is in a combat state after gunfire [playtest item 4]");
+        "no guest is in a combat state after gunfire [item 4]");
 }
 
 /// ── Rule 5 (the new port): tasing an unarmed person on the party level fails the mission ────────

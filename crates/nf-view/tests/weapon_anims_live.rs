@@ -1,4 +1,4 @@
-//! fix-weapon-anims (task 103k): the per-weapon first-person view-model animations.
+//! fix-weapon-anims: the per-weapon first-person view-model animations.
 //!
 //! Six weapons covering every reload kind — the P2K 0x02 (magazine, silenced twin 0x03), the
 //! Frinesi Auto-12 0x1C (per-shell start/loop/end + the Auto twin 0x1D), the Winter Covert Sniper

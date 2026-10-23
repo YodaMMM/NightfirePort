@@ -122,7 +122,7 @@ fn the_mark_is_the_zero_placement_condition_and_the_sandals_carry_it() {
 #[test]
 fn the_sandals_draw_at_the_games_measured_position() {
     let level_data = load_level("07000002.bin");
-    // The draw at the driver's doorway eye (the playtest spot).
+    // The draw at the doorway eye (the repro spot).
     let mut scene = nf_view::load(&iso(), "07000002.bin", false).expect("load 07000002");
     let sim = scene.sim.as_mut().unwrap();
     sim.drones.hold_npcs = true;

@@ -1,7 +1,7 @@
 //! frag-throw-timing repro/pin tests, driven through the real input path (`nf_view::load` + `Sim::step_bond`).
 //!
-//! Playtest 1016-1355 (07000014): "frag grenades are flying out way too soon. They don't let the
-//! animation finish." The game's release for the grenade family (`weapon_data+0x6C & 0x400` with a
+//! Symptom (07000014): frag grenades left the hand far too soon, before the animation finished.
+//! The game's release for the grenade family (`weapon_data+0x6C & 0x400` with a
 //! `+0xB4` script): the fire script plays at 1.5× in view state 0xb [M `Player_WeaponFiring`
 //! 0x1a5460:676-685 — the state store and the `AnimList+0x98 = 1.5` rate], the state machine moves
 //! to 0xc only when that script has ENDED [M `Player_SetWeaponAnimObj` 0x1a2e38 case 0xb —
@@ -103,7 +103,7 @@ fn frag_spawns_on_the_game_release_tick() {
     let expected = windup + (falen - 1);
     let (first, scripts) = throw_and_measure(sim);
     // The old behaviour (the case-9 check during the fire script) released at the playhead-26
-    // crossing — 17 ticks into the 46-tick wind-up: the user's "way too soon".
+    // crossing — 17 ticks into the 46-tick wind-up: far too soon.
     let old_crossing = ((falen as f32 - 1.0) / 1.5).ceil() as u32;
     assert_ne!(first, Some(old_crossing), "the grenade must not spawn at the fire script's frame-{} crossing (the playhead 26 tick)", falen);
     assert_eq!(first, Some(expected),

@@ -1,4 +1,4 @@
-//! settings-persist: the option file (`settings.toml` in the user's config dir) round-trips
+//! settings-persist: the option file (`settings.toml` in the player's config dir) round-trips
 //! through the real input path — the option pages' Confirm/Back raise
 //! `FrontEnd::settings_save_pending`, the host drains it into `settings::save_opts`, and the
 //! boot (`settings::load_default`) applies the file over `default_opts`. Keys are the game's

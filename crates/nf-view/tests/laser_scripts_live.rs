@@ -1,6 +1,6 @@
 //! laser-scripts: the level laser-grid beams run through the switches' embedded ScriptPlayers.
 //!
-//! The user (2026-10-16): "lasers arent accurate to the port look closely at their scripts". The
+//! The lasers did not match the game; their scripts drive them. The
 //! beams are NOT static placements: every laser-grid level drives its beams from a switch
 //! (placement type 0x29) whose **param 1 is a NIS script** — `Switch_Create` 0x1adcc0:44-45 ends
 //! with `SP_Create(pos, rot, param 1, 0, 8, 0, obj, 0)`, an embedded ScriptPlayer playing that

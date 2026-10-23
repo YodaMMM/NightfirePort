@@ -220,7 +220,7 @@ fn every_sp_level_drawn_placements_have_draw_instances() {
         "07000008's extraction helicopter (kind 0x2F) must have draw instances [M 0x17d340:68-70]");
 }
 
-/// The Exchange extraction helicopter (the user report 2026-10-21): 07000008 places kind-0x2F
+/// The Exchange extraction helicopter: 07000008 places kind-0x2F
 /// copters; the game draws the body as a script entity over the placement's param-4/5 object
 /// hashcodes [M Copter_Create 0x17d340:43-45, 68-70] — both hashes must resolve here, and Rook's
 /// kind-0xF placement must carry a resolvable skin (the character pass draws him).

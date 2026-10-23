@@ -1,6 +1,6 @@
-//! fix-0c-vent2: the display vent's remaining traversal legs (0700000c, the playtest's
-//! "he can't crouch through"). 101g-fix-0c-hatch verified the drop through the open wall hole
-//! onto the inner ledge; this session mapped the rest of the route and found the next blockers:
+//! fix-0c-vent2: the display vent's remaining traversal legs (0700000c, where Bond could not
+//! crouch through). fix-0c-hatch verified the drop through the open wall hole onto the inner
+//! ledge; the rest of the route, mapped here, had these blockers:
 //!
 //! 1. **Channel 0 was a dead channel in the port.** The level's pulley winches #351/#364/#377 —
 //!    the level doc's "the vent route ... is the way down" — are SimpleScripts listening on

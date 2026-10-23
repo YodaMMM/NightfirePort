@@ -1,6 +1,5 @@
-//! rook-door-06: Rook (the ally who leads Bond) stalls in a doorway on 07000006 — playtests
-//! 2026-10-15 ("rook gets stuck on a door") and 2026-10-16 ("rook gets stuck in the doorway
-//! on 06. again"); the 663 npc-doors merge did not fix it.
+//! rook-door-06: Rook (the ally who leads Bond) stalled in a doorway on 07000006; the
+//! npc-doors fix alone did not cure it.
 //!
 //! This probe drives the level's REAL path — the truck-ride carry (start #496), the arrival
 //! plates (ch 185 = 0xB9, the driver greeting + the escort's enable channel), Bond following

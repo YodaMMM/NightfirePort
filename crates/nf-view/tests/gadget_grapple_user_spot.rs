@@ -1,6 +1,6 @@
-//! fix-gadgets2 bug 3: the grapple "doesn't work at all" from the user's play spot.
+//! fix-gadgets2: the grapple did nothing from a play spot.
 //!
-//! The user's screenshot spot on 07000005: `--bond -18.28,38.19,-71.83,-4.717,0.151` — the gadget is
+//! The repro spot on 07000005: `--bond -18.28,38.19,-71.83,-4.717,0.151` — the gadget is
 //! selected, labelled "Grapple", aimed at the point on the wall, and firing does nothing.
 //!
 //! What the decompile says [M]:
@@ -8,25 +8,25 @@
 //!   commits the velocity and STAYS; the RELEASE moves to phase 4 and detaches. Phase 1 (the reel)
 //!   reads no fire input at all (:79-121). The pre-fix port did the opposite (the reel jumped to the
 //!   hang on fire; the hang released on fire), so a human click — press, hold a few ticks, let go —
-//!   latched and detached within ~3 ticks: invisible, "doesn't work at all".
+//!   latched and detached within ~3 ticks: invisible, as if nothing happened.
 //! - The reach (fix-qclaw correction): the claw bolt dies at the claw's OWN `weapon_data+0x1c`
 //!   [M Bullet_update 0x12e7b0:158] — **50.0 for 0x50, 100.0 for 0x51 [L ee_start_05.bin]**, not the
 //!   5.0/10.0 the old port read off the STUNNER records 0x4A/0x4C (the hardcoded table's shift).
-//!   The user's spot is 15.4 units from the nearest point — inside the claw's real range, so the
+//!   The repro spot is 15.4 units from the nearest point — inside the claw's real range, so the
 //!   held fire latches there too.
 
 use nf_game::player::Input;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// The user's spot: (-18.28, 38.19, -71.83), yaw -4.717, pitch 0.151.
+/// The repro spot: (-18.28, 38.19, -71.83), yaw -4.717, pitch 0.151.
 const SPOT: [f32; 3] = [-18.28, 38.19, -71.83];
 const YAW: f32 = -4.717;
 const PITCH: f32 = 0.151;
 
-/// From the user's spot the nearest point is 15.4 units out [D the parsed placement]: INSIDE the
+/// From the repro spot the nearest point is 15.4 units out [D the parsed placement]: INSIDE the
 /// claw's real 50.0 bolt range [L weapon_data[0x50]+0x1c; the old 5.0 was the Stunner's], so the
-/// held fire LATCHES from the user's own report spot.
+/// held fire LATCHES from the repro spot.
 #[test]
 fn the_users_spot_latches_within_the_claws_real_range() {
     let iso = iso();
@@ -49,14 +49,14 @@ fn the_users_spot_latches_within_the_claws_real_range() {
     // The held click latches: the spot is within the claw's real bolt range.
     let mut latched = false;
     for _ in 0..60 { sim.step_bond(Input::default(), true, false, false); if sim.bond.grapple.is_some() { latched = true; break; } }
-    assert!(latched, "the held fire from the user's spot must latch (the nearest point is 15.4 out, the claw's range 50.0)");
+    assert!(latched, "the held fire from the repro spot must latch (the nearest point is 15.4 out, the claw's range 50.0)");
     let sim = scene.sim.as_ref().unwrap();
     assert_eq!(sim.bond.substate, nf_game::player::SS_GRAPPLE, "the grapple substate runs");
 }
 
 /// Close-up (within the claw's real 50.0 bolt range): the held fire latches, the reel runs while
 /// held (no fire test in phase 1 [M 0x192860:79-121]), Bond hangs and STAYS while the fire is held,
-/// and the RELEASE detaches — the game's polarity, the user's fix.
+/// and the RELEASE detaches — the game's polarity.
 #[test]
 fn the_q_claw_holds_while_held_and_releases_on_the_button_up() {
     let iso = iso();

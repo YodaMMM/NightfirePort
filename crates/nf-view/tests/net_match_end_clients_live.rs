@@ -23,7 +23,7 @@ fn iso() -> Option<String> {
 /// Distinct per test binary: the binaries' tests run in parallel threads.
 const PORT: u16 = 28177;
 const PORT_FRAG: u16 = 28187;
-const ARENA: u32 = 0x0700_004B; // MP_MAP_ROWS[7] = Ravine — the lightest arena that fits three scenes in the sandbox (Skyrail OOMs at 3 × ~1 GB)
+const ARENA: u32 = 0x0700_004B; // MP_MAP_ROWS[7] = Ravine — the lightest arena that fits three scenes in a 4 GB test machine (Skyrail OOMs at 3 × ~1 GB)
 
 /// One action, then the frames a player would wait (net_e2e_loopback_live's act): the
 /// page-change frames and a slice of real time for the lobby's exchange; every peer FE breathes
@@ -198,7 +198,7 @@ impl Mach {
     }
 }
 
-/// The main agent, 2026-10-19: after the fixed-step loop, pump until all three have run `to` (bounded). UDP delivery is
+/// After the fixed-step loop, pump until all three have run `to` (bounded). UDP delivery is
 /// asynchronous, so a step can leave a machine behind — and a machine behind never submitted the ticks it missed
 /// (`submit` sends its CURRENT tick), so it submits its current tick here too. Without this the "all three ran the
 /// same ticks" asserts failed 1-2 runs in 3 under load.
@@ -290,7 +290,7 @@ fn start_three_machine_match(path: &str, port: u16, limit_left: usize, duration_
     assert_eq!(cs2.human_count, 3);
 
     // The arena loads, one machine at a time: three concurrent scene loads
-    // spike past a 4 GB sandbox (OOM-kill, dmesg `anon-rss` 2.9 GB). Every
+    // spike past a 4 GB test machine (OOM-kill, dmesg `anon-rss` 2.9 GB). Every
     // session is still polled throughout each blocking load, so a load longer
     // than the 5 s session timeout must not drop a peer — the property the
     // old three-worker load exercised, with one load's transient at a time.
@@ -483,7 +483,7 @@ fn a_host_departure_mid_match_is_still_host_left() {
         m2.submit();
         // Two pump passes: the relay converges within the step (the host's
         // catch of a client's fresh input and the clients' catch of the relay
-        // both land here), so a step runs one tick at any sandbox speed.
+        // both land here), so a step runs one tick at any machine speed.
         mh.pump();
         m1.pump();
         m2.pump();
@@ -524,7 +524,7 @@ fn a_client_departure_mid_match_still_runs_the_match_on() {
         m1.submit();
         m2.submit();
         // Two pump passes, as in the host-departure sister: the relay
-        // converges within the step, so a step runs one tick at any sandbox
+        // converges within the step, so a step runs one tick at any machine
         // speed (one pass left every step at the relay's mercy — two
         // iterations per tick on a fast loop).
         mh.pump();

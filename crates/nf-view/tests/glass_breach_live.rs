@@ -1,8 +1,8 @@
 //! glass-breach-guards (750p): the Mayhew-start glass breach — the guards charge through the
 //! entry-hall windows.
 //!
-//! The user, 2026-10-16 evening: "beginning of mayhew level guards are supposed to break through
-//! the glass". The level is 07000001 (Paris Prelude, Castle A — the Mayhew estate's grounds and
+//! At the beginning of the Mayhew level the guards are supposed to break through the glass.
+//! The level is 07000001 (Paris Prelude, Castle A — the Mayhew estate's grounds and
 //! entry hall, docs/levels/07000001.md). The game's mechanism [M]:
 //!
 //! - **`Break_Update` 0x12bfd8:23-34** — the class-2 (drone/player) smash arm, gated on

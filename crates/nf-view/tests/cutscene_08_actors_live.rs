@@ -2,8 +2,8 @@
 //! script's nine `Script_AnimStart` actors, through the REAL start path, every one live, bound to
 //! its skin and posed for the whole early window, and drawn by the render path's palette.
 //!
-//! The playtest (1013-1758): "Kiko is the only one showing in this cutscene besides me... I can't
-//! see any other models. Any character models." The regression was fix-cutscenes2's
+//! The symptom: only Kiko and Bond drew in this cut-scene, no other character models. The
+//! regression was fix-cutscenes2's
 //! first-writer-wins window composition (d907aba): the intro's face-track windows won the shared
 //! pose's low bones and their zero channels collapsed every script actor's root to the world
 //! origin — off-camera in every shot, on 07000007 and 07000008 (docs/reports/fix-cutscene-draw.md).

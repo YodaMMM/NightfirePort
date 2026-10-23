@@ -1,7 +1,7 @@
 //! fix-portal-sweep: portal culling must never hide what the player can see, on every level.
 //!
-//! The playtest found 07000005 `--bond 16.67,30.04,58.60,1.755,-0.001` (a snow trench between
-//! stone walls near grapple point #282) with the walk ON showing through the trench walls to the
+//! 07000005 `--bond 16.67,30.04,58.60,1.755,-0.001` (a snow trench between
+//! stone walls near grapple point #282) showed, with the walk ON, through the trench walls to the
 //! distant cliff: the near room itself is culled. `NF_NOPORTAL=1` draws the walls and the wall-hug
 //! marker. This file (1) probes the walk at that spot headlessly, (2) runs the near-visibility
 //! sweep over every on-foot level: every World cel the frustum alone keeps, within ~30 units of
@@ -61,7 +61,7 @@ fn world_draw_hidden_frustum(m: &scene::Material, room_vis: &[bool]) -> bool {
     m.cel.is_some_and(|c| !room_vis[c as usize])
 }
 
-/// The playtest's trench spot on 07000005 (the probe convention: bond y + 0.7 is the camera head,
+/// The trench spot on 07000005 (the probe convention: bond y + 0.7 is the camera head,
 /// the pitch is the game's half-radian word — the render path multiplies by π/2).
 const TRENCH: ([f32; 3], f32, f32) = ([16.67, 30.04 + 0.7, 58.60], 1.755, -0.001 * std::f32::consts::FRAC_PI_2);
 

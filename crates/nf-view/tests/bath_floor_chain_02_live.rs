@@ -5,8 +5,8 @@
 //! small generics at (−39.07, 5.40, 9.96) r 0.38 / (−39.10, 5.39, 11.27) r 0.34). The owner pick
 //! (`build_link_objects_to_rooms` 0x1c9150, `Collide_SphereIntersect` scoped to each candidate
 //! room's own collision [M]) measured other rooms' geometry while the scope buckets were keyed by
-//! push ordinal; the floor then hung on the big room and vanished through the doorway (user F12
-//! 1017, 005-07000002). Opt-in via NF_ISO.
+//! push ordinal; the floor then hung on the big room and vanished through the doorway.
+//! Opt-in via NF_ISO.
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 

@@ -82,7 +82,7 @@ fn bright_in(w: u32, h: u32, rgba: &[u8], x0: u32, y0: u32, x1: u32, y1: u32) ->
     n
 }
 
-/// The user's playtest spot (`--bond 14.22,16.28,-139.54,0.986,-0.269`), pitch 0 so the whole
+/// The repro spot (`--bond 14.22,16.28,-139.54,0.986,-0.269`), pitch 0 so the whole
 /// tower sits in frame. The pylon (placements 160-163, x 44-60, z -115..-106) projects to the
 /// tower rect below; its 12 materials ride the alpha list (pass 3, zwrite off).
 #[test]
@@ -99,7 +99,7 @@ fn the_0c_pylon_is_on_screen_at_the_user_spot() {
     // pre-fix that band is pure bright sky/sea, post-fix the lattice struts cross it).
     let lattice = dark_in(w, h, &rgba, 590, 90, 730, 400);
     eprintln!("lattice dark pixels in the tower band: {lattice}");
-    assert!(lattice > 3000, "the 0c pylon's lattice is not on screen at the user spot (dark pixels in the tower band: {lattice})");
+    assert!(lattice > 3000, "the 0c pylon's lattice is not on screen at the repro spot (dark pixels in the tower band: {lattice})");
     // Sister: the sky beside the tower stays bright (the fix must not repaint the backdrop).
     let sky = bright_in(w, h, &rgba, 900, 100, 1150, 400);
     eprintln!("sky bright pixels beside the tower: {sky}");

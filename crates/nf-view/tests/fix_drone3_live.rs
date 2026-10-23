@@ -1,6 +1,6 @@
 //! fix-drone3 repro tests, driven through the real path (`nf_view::load` + `Sim::step_bond`).
 //!
-//! The user's multi-level playtest (docs/playtests/2026-10-11.md, the fix-drone3 follow-ups):
+//! The multi-level follow-ups of fix-drone3:
 //! C1 the 07000006 friendly driver (hands behind back, torso twisting to follow Bond, shootable);
 //! C2/C3 the frozen non-guard characters (07000002 hostage-side NPC, 07000007 guests and bouncers —
 //!       "NPCs only turn, never walk");
@@ -232,5 +232,5 @@ fn the_searchlight_beam_arms_raises_the_alarm_channel_and_wakes_its_guards() {
     }
     assert!(lit, "the light lights (state 0 sweep) once its on-channel is raised");
     assert!(alarmed, "tracking raises the alarm channel 55 [M inst+0x36 = param 3]");
-    assert!(woke, "the ch-55 guards wake through WaitSwitch (the user's frozen-gatehouse guards)");
+    assert!(woke, "the ch-55 guards wake through WaitSwitch (the old frozen-gatehouse guards)");
 }

@@ -1,5 +1,5 @@
 //! fix-missing-objects probe: the 07000006 fountain / guard-room furniture / lockers + fusebox
-//! and the 0700000c pylon. Dumps every main-map placement near the user's spots with the port's
+//! and the 0700000c pylon. Dumps every main-map placement near the check spots with the port's
 //! draw-path classification (the same predicates scene.rs `build` applies), plus a per-level census
 //! of placements whose mesh nothing draws. Opt-in via NF_ISO.
 

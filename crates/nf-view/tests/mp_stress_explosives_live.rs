@@ -1,4 +1,4 @@
-//! mp-stress-explosives (the user, 2026-10-19: "What if I rapidfired rockets? Would it keep its sync?").
+//! mp-stress-explosives: lockstep sync must hold under rapid-fire rockets.
 //!
 //! The worst case the wire allows: a shot is a description in the input row (`Input::shot` +
 //! `shot_weapon` + `shot_aim`) that every machine simulates, so a player can send one EVERY tick, past

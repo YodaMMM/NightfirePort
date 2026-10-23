@@ -1,7 +1,7 @@
 //! fix-dev-spawn-visible: the dev window's NPC spawns must produce a guard that shows up and fights,
 //! through the REAL dev path (`dev::apply_menu_action_to_scene` + `Sim::step_bond`). Opt-in via `NF_ISO`.
 //!
-//! The main agent's dry run on master (`nf-view <iso> 07000005 --dev`, Bond at the spawn (105, 25, 109)
+//! Observed with `nf-view <iso> 07000005 --dev` (Bond at the spawn (105, 25, 109)
 //! looking at the snow a few metres ahead): both "spawn at crosshair" (`MenuAction::Spawn` →
 //! `Dev::spawn_guard`, the log's `[dev] guard #16: spawned (normal) at (101.2,24.3,106.4)`) and the skin
 //! rows ("skin 05000030 (1/3)", `MenuAction::SpawnNpcSkin` → `panel::spawn_npc`, the pool dropping to
@@ -140,7 +140,7 @@ fn spawn_at_crosshair_guards_on_the_floor_in_front_and_fighting() {
             eprintln!("palette[char {ci}] object at ({:.1},{:.1},{:.1})", m[3][0], m[3][1], m[3][2]);
         }
     }
-    // HE FIGHTS: the playtest's own flow — Bond walks up to him. Inside 2 m the game's visibility
+    // HE FIGHTS: the real flow — Bond walks up to him. Inside 2 m the game's visibility
     // score is the guaranteed 1.0 (`DroneVision_OpponentVisibility` 0x175af0's dist < 2 arm [M]),
     // which bypasses the 0.25 shadow volume Bond starts in [L WORKLOG 0032], so a normal-mode guard
     // sees him and opens fire. No warm-up shot: the level's own placement HP for these guards is 10

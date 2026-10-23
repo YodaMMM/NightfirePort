@@ -63,7 +63,7 @@ fn the_watch_laser_burns_the_safe_bolt() {
 
 /// Sister: a PARTIAL burn heals — the game's idle arm refills the burn bytes +1/tick once the
 /// 2-tick grace runs out [M Lock_Update 0x1ae3d8:107-121], so beam-off time undoes the damage and
-/// the burn requires CONTINUOUS contact (the user's "the laser misbehaves": tap-firing did nothing
+/// the burn requires CONTINUOUS contact (tap-firing did nothing
 /// on the old stand-in either way, and the stand-in had no heal at all — it burned instantly).
 #[test]
 fn the_partial_burn_heals_while_the_beam_is_off() {
@@ -219,10 +219,9 @@ fn the_decryptor_burns_the_safe_bolt() {
     assert!(sim.drones.channels.on(134), "the decryptor's beam burns the top bolt [M 0x1ae3d8:57-63]");
 }
 
-// ---- fix-laser-beam: the playtest symptoms ----
+// ---- fix-laser-beam: the symptoms ----
 
-/// The user's playtest (1013-1758): holding fire with the Laser "sounds like a rapid fire of bullet
-/// impacts" and shows no beam; the loop sound keeps playing after release. The game's model: every
+/// Holding fire with the Laser sounded like rapid-fire bullet impacts and showed no beam; the loop sound keeps playing after release. The game's model: every
 /// held tick is a shot [L weapon_data 0x4E +0x40 = 1] whose world death is `Effect_Laser` [M
 /// Bullet_CollisionHandler 0x12ce80:186-192] — NO bullet decal and NO wall-impact sound — while the
 /// loop (0x12, the fire script's op-1 [L 0x060004e9]) holds ONE voice and the release script's
@@ -279,7 +278,7 @@ fn the_laser_hold_spawns_no_bullet_impacts_and_keeps_one_loop_voice() {
 /// The beam's far end equals the crosshair ray's world hit [M Player_MuzzleFlash 0x1a4298:107-132 —
 /// the shot ray's `Collide_RayIntersect` first hit caps the beam; Player_WeaponInitBullet 0x1a4bf0
 /// :152-159 aims through `Player_GetAimingPoint`]. The old bond.look() ray missed the crosshair
-/// offset — the user's "the laser isn't accurate" on the 0700000c display vent.
+/// offset, so the laser was inaccurate on the 0700000c display vent.
 #[test]
 fn the_beam_end_equals_the_crosshair_rays_hit() {
     let iso = iso();
@@ -345,7 +344,7 @@ fn the_stunner_without_a_target_shoots_nothing() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000008.bin", false).expect("load 07000008");
     let sim = scene.sim.as_mut().unwrap();
-    // `--give 0x4e,0x4a` is the playtest's equip path; the test equips through the same switch.
+    // `--give 0x4e,0x4a` is the dev equip path; the test equips through the same switch.
     sim.bond.pos = [160.3, 44.6, -115.4];
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4a), ..Default::default() };

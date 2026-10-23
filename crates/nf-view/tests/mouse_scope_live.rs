@@ -1,5 +1,4 @@
-//! The mouse's scope button (playtest 1014-1725, zoom2: "Scope doesn't work, you broke it. Right
-//! clicking literally does nothing.").
+//! The mouse's scope button (zoom2: the scope stopped working; right-click did nothing).
 //!
 //! lib.rs mapped the right mouse button to `Input::zoom` only (PLAN.md D-002: the mouse aims directly, no
 //! free-aim cursor). fix-aim-raise made the zoom start on the aim BIT's rise (`Player_Weapon` 0x1a24c8:
@@ -99,7 +98,7 @@ fn the_pad_aim_button_still_enters_free_aim() {
     assert!(s.aiming && s.free_aim, "the P2K (no raise script) aims at once on the pad button and enters free-aim");
 }
 
-/// The user (2026-10-14, right-click on the pistol): "why is manual aim a thing". The mouse scope button reaches the
+/// Right-click on the pistol must not enter a manual aim stance. The mouse scope button reaches the
 /// aim bit only on a scoped weapon (+0x68 bit 0x40); on the PP7 it does nothing — no aim stance, no zoom.
 #[test]
 fn the_mouse_scope_button_does_nothing_on_an_unscoped_gun() {

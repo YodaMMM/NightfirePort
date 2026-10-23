@@ -14,7 +14,7 @@
 //!     ladder is the only way out.
 //!   * The top dismount lunge (+0.6 local forward [M Player_Climb 0x196310]) carries Bond from the
 //!     ladder column (z 41.73) to z 42.35, over the garden band (floor 4.82–4.91, root ≈ 5.95) that
-//!     starts at z ≈ 42.4 — the game's main floor here ("the playtest's garden", docs/atlas/ladder.md).
+//!     starts at z ≈ 42.4 — the game's main floor here (the garden, docs/atlas/ladder.md).
 //!
 //! This test drives Bond with `Sim::step_bond(Input{..}, …)` ONLY (the walker harness) along that
 //! route and asserts he climbs the ladder and lands on the main floor (y > 4.5), then that the

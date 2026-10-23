@@ -1,4 +1,4 @@
-//! fix-searchlight-spotray (task 934): the spot ray IS the game's mask-0x18 static ray.
+//! fix-searchlight-spotray: the spot ray IS the game's mask-0x18 static ray.
 //!
 //! The game casts `Collide_RayIntersect(head pos, 100-unit aim, head cel, head obj, NULL, hits, 0,
 //! 0x18)` [M Searchlight_Update 0x1cb900:201-208, disasm 0x1cbdb0-0x1cbe2c]; mask 0x18's bit 0x10

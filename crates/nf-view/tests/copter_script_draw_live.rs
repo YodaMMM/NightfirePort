@@ -1,4 +1,4 @@
-//! copter-script-draw (user report 2026-10-21: "heli is missing from the exchange"): the 07000008
+//! copter-script-draw (the helicopter was missing from The Exchange): the 07000008
 //! extraction helicopter has no glist of its own — `Copter_Create` 0x17d340 hands its look to the
 //! script player made from the placement's params 4/5 (0x06000051 the assembly, 0x06000050 the
 //! flight [D #45]). The flight script's body entity 0x02000427 (type 0x2F) needs a draw slot,
@@ -19,7 +19,7 @@ fn the_copter_flight_body_has_a_draw_slot_and_flies() {
     // The copter's ScriptPlayer (836, Copter_Create 0x17d340 → SP_Create modes 8,8 [M 0x1dc7e0:65-70])
     // plays its loaded script 0x06000051 and is SP_HideObj'd while the gate channel is off [M
     // 0x17d340:73-74]; the gate's first ON tick unhides it [M Copter_Update 0x17dbb8 head]. The
-    // flight route itself is CopterPaths (task 958), not a script one-shot.
+    // flight route itself is CopterPaths, not a script one-shot.
     assert!(scene.attachments.iter().any(|a| matches!(a.script, Some((0x0600_0051, 0, 0x0200_035D, _)))),
         "the SP's playing script 0x06000051 stream 0 (0x0200035D) has a script draw slot");
     let sim = scene.sim.as_mut().unwrap();

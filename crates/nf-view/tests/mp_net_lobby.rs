@@ -141,7 +141,7 @@ fn host_flow_listen_agents_choices_and_start() {
     let (mut fe, fake) = fe_with_session();
     to_mode(&mut fe);
     // Host Online → the host page; the port default, then the port row is a TYPED field
-    // (the playtest 1015-2142 "why does the port count down": ◀ ▶ / click-stepping is gone).
+    // (the port number used to count down: ◀ ▶ / click-stepping is gone).
     fe.cursor = 1;
     assert!(fe.action(Action::Confirm), "Host Online confirm must navigate");
     assert_eq!(fe.page, Page::MpHost);
@@ -438,7 +438,7 @@ fn mouse_rows_hover_and_click_the_new_pages() {
     assert!(fe.mouse_click(320.0, 183.0), "the click confirms");
     assert_eq!(fe.page, Page::MpHost);
     // Clicks on the port row never change the port (the old ◀ ▶ value columns knocked it down on
-    // every click — the playtest 1015-2142 report).
+    // every click).
     fe.mouse_move(320.0, 151.0);
     assert_eq!(fe.cursor, 0);
     fe.mouse_click(370.0, 151.0);
@@ -491,8 +491,8 @@ fn a_join_code_types_and_dials() {
     assert_eq!(fe.mp_net_status(), Some("Enter a 4-character code, IP:PORT, or a join code"));
 }
 
-/// User report 2026-10-21 (v0.1.14): typing a friend's 4-character lobby code and pressing Enter
-/// on a listed internet lobby both "did nothing" — the join page's gate accepted only IP:PORT and
+/// In v0.1.14, typing a friend's 4-character lobby code and pressing Enter on a listed internet
+/// lobby both did nothing — the join page's gate accepted only IP:PORT and
 /// the 16-symbol join code, so every 4-character code was refused as a bad address before the
 /// session's lookup ever ran. Both paths must reach the session's connect with the code.
 #[test]

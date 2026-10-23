@@ -23,8 +23,8 @@ fn the_completed_results_page_continues_to_the_mission_list() {
     fe.mission_ended(Outcome::Complete, Stats::default());
     // reward-after-outro: case 4 only QUEUES the page — GameState+0x1c (Ghidra `_28_4_`, decimal) = 0x40000036 [M 0x182c60:72];
     // the MenuManager_Create runs at the load's tail [M 0x1d6360:160-163], after the outro movie.
-    // The old `assert_eq!(fe.page, Page::Results)` HERE pinned the pre-fix order the playtest
-    // reported as "reward screen appearing before ending cutscene" — fixed with the addresses.
+    // The old `assert_eq!(fe.page, Page::Results)` HERE pinned the pre-fix order (the reward
+    // screen before the ending cut-scene) — fixed with the addresses.
     assert_ne!(fe.page, Page::Results, "queued, not open [M 0x1d6360:160-163]");
     assert!(fe.results_queued, "the queued page's gate is live");
     assert_eq!(fe.flow.page, 0x4000_0036);

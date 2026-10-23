@@ -202,7 +202,7 @@ fn probe_07000005_truck_script_entities() {
     }
 }
 
-/// Bug 2 repro: the user's play — walk to the gatehouse plate, ride the truck to the castle, park with
+/// Bug 2 repro: the real play — walk to the gatehouse plate, ride the truck to the castle, park with
 /// Bond in the back. The level must end (ch 0x70+0x71+0x72 → mux 0x65 → SP #320 → 0x1D → LOAD_LEVEL 118
 /// → 0x07000006). Traces the chain every 100 ticks.
 ///
@@ -248,7 +248,7 @@ fn truck_ride_to_the_castle_ends_the_level() {
             eprintln!("[ride] script trigger out {:#x} tris {} lo {:?} hi {:?}", t.out, t.tris.len(), t.lo, t.hi);
         }
     }
-    assert_eq!(sim.drones.level_exit, Some(0x0700_0006), "the truck ride must end the level (the user's reference behaviour)");
+    assert_eq!(sim.drones.level_exit, Some(0x0700_0006), "the truck ride must end the level (the reference behaviour)");
 }
 
 /// Bug 1 (fix-level): the level-transition reload. `LoaderLoad` (0x1d4a00) masks the loader nibble
