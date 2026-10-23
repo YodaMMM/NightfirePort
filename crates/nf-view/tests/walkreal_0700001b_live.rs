@@ -306,7 +306,7 @@ fn the_zero_g_entry_floats_bond_off_the_deck() {
     let _ = min_x;
 }
 
-/// The sealed-shaft wall, decided (level-1b-drake-3): the face that stops the float at x ≈ 4.98
+/// The sealed-shaft wall, decided: the face that stops the float at x ≈ 4.98
 /// IS the game's own boundary, and the game's body collides with it — the port's capsule stop is
 /// the game's behaviour, not a port artefact.
 ///
@@ -390,7 +390,7 @@ fn the_boundary_wall_stops_the_float_and_passes_bullets() {
          [D plc #128; M the kind-0x800 body, no bit-0x8 drop; M CylGeom two-sided], got min x {min_x:.3}");
 }
 
-/// The iris doors, decided (level-1b-drake-3): the z ±8.82 booths' doors — SP#141/#142
+/// The iris doors, decided: the z ±8.82 booths' doors — SP#141/#142
 /// "ScriptPlayer_IrisDoorOpen" [D placement names/positions (5.23, 9.45, ∓8.82)], script
 /// 0x06000818 [D p0] — are LOAD-TIME LOOPERS, not missile-triggered pieces: the create runs
 /// `SP_LoadScript` for mode ∉ {0,1} [M SP_CreateScriptPlayer 0x1db9a8 tail] and its mode-8 arm

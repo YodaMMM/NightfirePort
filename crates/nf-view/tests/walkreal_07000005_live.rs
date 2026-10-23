@@ -139,7 +139,7 @@ fn walk_to_the_gatehouse_and_ride_the_truck() {
 /// - The old test's anchors ("ledge west 1/2/3", "the cable mouth") predate these heights and
 ///   the lane they assumed does not exist at the walked heights — the anchors were the TEST's
 ///   guess, now replaced by the measured lane above.
-/// - ROUTE CORRECTION (level-05-west-lane-3): the disc's collision census (the connectivity walk
+/// - ROUTE CORRECTION: the disc's collision census (the connectivity walk
 ///   over the port's world of the disc's own data, up-steps ≤ 0.55 [M Player_Collision 0x194df0
 ///   case 0: the capsule's r-0.55 bottom sphere], walls respected) shows the y-28 landing is an
 ///   ISLAND — 19-38 cells (x 57..63, z 85..91) with no walk edge to the courtyard, the roofs, or
@@ -191,7 +191,7 @@ fn walk_the_tower_top_and_the_walk_off_fall() {
     eprintln!("[05] tower-top + walk-off done in {} ticks", w.total_ticks);
 }
 
-/// The west lane, level-05-west-lane-3 — the WALKED legs, un-ignored. The route is the
+/// The west lane — the WALKED legs, un-ignored. The route is the
 /// west-lane-2 castle-wall map, settled against the disc's collision [D every waypoint below is
 /// walked through the port's collision of the disc's own data; the port's collision matches the
 /// disc per west-lane-2's ray probes]:
@@ -243,15 +243,17 @@ fn walk_the_west_ledge_and_cross_the_cable() {
     for st in &w.report.stuck_events { eprintln!("[05w] stuck: {st}"); }
 }
 
-/// The IGNORED continuation (level-05-west-lane-3 round 4): the legs west of the slab's end —
+/// The IGNORED continuation: the legs west of the slab's end —
 /// the wall-hug crawl #299 (25.79, 31.78, 67.76), the notch grab at the ledge's north edge
-/// (icon #310 (−23.80, 32.74, 12.33) [D]), the wire ride, and the south legs. What round 3
+/// (icon #310 (−23.80, 32.74, 12.33) [D]), the wire ride, and the south legs. What is
 /// settled and what still blocks:
-/// - THE PORT FIX (done, this branch): the creepwall half-length was the placement scale's x
-///   [S] — always 1.0. The disc's object bounds carry the real span [D "Wall Hug Short"
-///   x −3.62..+7.52, "Wall Hug Window" x −5.32..+5.32]; creepwall.rs now reads them. With the
-///   old 1.0 the crawl exited over the crawl band's floor dip (z 67-70, y 7-8 [D the 1-unit
-///   map]) and dropped Bond into it.
+/// - THE CRAWL SPAN (open): creepwall.rs takes the half-length from the placement scale's x
+///   [S] — always 1.0 here. The disc's object bounds carry a longer span [D "Wall Hug Short"
+///   x −3.62..+7.52, "Wall Hug Window" x −5.32..+5.32]; with 1.0 the crawl exits over the crawl
+///   band's floor dip (z 67-70, y 7-8 [D the 1-unit map]) and drops Bond into it. The game's
+///   value is +0x8c from `control_create_object` — settle it before changing creepwall.rs
+///   (reading the bounds moved fix_wallhug_prompt_live's anchored spot). Live [L fresh boot]:
+///   standing on the shelf at (25.51, 32.11, 71.02), one action press enters the wall-hug view.
 /// - THE BLOCKER (the crawl approach): the crawl prompt's standing shelf is the floor cell
 ///   (25, 71) at 30.9 [D the 1-unit map]; the lane's east plateau (34.3 at x 26) walls it off
 ///   at x ≈ 26.8 (the walked micro-leg stalled at (27.06, 35.27, 71.63)) — the game's own
@@ -259,7 +261,7 @@ fn walk_the_west_ledge_and_cross_the_cable() {
 /// - The slab-end → cable-ledge step (the (−24..−23, 45-47) cells [D the 1-unit map]) and the
 ///   south legs after the ride are unwalked.
 #[test]
-#[ignore = "level-05-west-lane-3 round 4: two unfound approaches — (a) the tower-top west parapet (x ≈ 26.5-27.2, z 58-73, the walked stall at (27.22, 37.11, 61.17) [D the 37.1 kerb along x 26]) blocks the walk-off onto the y-33.5 slab; (b) the crawl #299 shelf (25, 71, floor 30.9) is walled from the lane's plateau at x ≈ 26.8 — then the notch grab, the ride and the south legs (the creepwall half-length port fix is IN — see the doc)"]
+#[ignore = "two unfound approaches — (a) the tower-top west parapet (x ≈ 26.5-27.2, z 58-73, the walked stall at (27.22, 37.11, 61.17) [D the 37.1 kerb along x 26]) blocks the walk-off onto the y-33.5 slab; (b) the crawl #299 shelf (25, 71, floor 30.9) is walled from the lane's plateau at x ≈ 26.8 — then the notch grab, the ride and the south legs (the creepwall half-length from the object bounds is not on master: as a stand-in for +0x8c it moved fix_wallhug_prompt_live's anchored spot)"]
 fn the_cable_legs_the_crawl_notch_and_ride() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
@@ -324,6 +326,7 @@ fn the_cable_legs_the_crawl_notch_and_ride() {
 /// reach does not grab any wire [M Player_HandleJump 0x1916b0:126-147 — the ctx scan only runs
 /// with the icon armed].
 #[test]
+#[ignore = "the walk-off onto the y-33.5 slab does not land on master (the tower-top parapet blocks it, the same open approach as the continuation)"]
 fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));

@@ -1,4 +1,4 @@
-//! level-1b-drake-3 probe: the shaft wall at x ≈ 4.43 (z −8..0) and the shaft mouths at
+//! Probe: the shaft wall at x ≈ 4.43 (z −8..0) and the shaft mouths at
 //! z ±8.82. Assertion-free diagnostic, run with --ignored --nocapture.
 //!
 //! A. [D] every placement whose collision tris meet the wall box — name, kind, glist flags,
