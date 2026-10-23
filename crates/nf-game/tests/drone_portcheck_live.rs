@@ -182,7 +182,7 @@ fn auto_aim_skips_non_enemies_on_07000002() {
             let p = [g[0] + off[0], g[1], g[2] + off[2]];
             let fy = l.world.floor_below(p, 4.0).unwrap_or(g[1] - 1.0);
             let q = [p[0], fy + 1.0, p[2]];
-            if !l.world.line_of_sight(q, b2) { continue; }
+            if !l.world.line_of_sight(q, b2, nf_game::world::LOS_GUARD_VISION) { continue; }
             let bq = bond_at(q);
             let look = { let v = [b2[0] - bq.eye[0], b2[1] - bq.eye[1], b2[2] - bq.eye[2]];
                 let ln = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); [v[0] / ln, v[1] / ln, v[2] / ln] };

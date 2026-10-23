@@ -76,7 +76,7 @@ fn a_player_bullet_breaks_a_courtyard_head_like_the_game() {
     let mut placed = false;
     for &(dx, dz) in &[(0.0f32, 9.0), (0.0, -9.0), (9.0, 0.0), (-9.0, 0.0), (7.0, 7.0), (-7.0, 7.0), (7.0, -7.0), (-7.0, -7.0)] {
         let spot = [centre[0] + dx, centre[1] - 0.5, centre[2] + dz];
-        if !sim.world.line_of_sight([spot[0], spot[1] + 1.5, spot[2]], centre) { continue; }
+        if !sim.world.line_of_sight([spot[0], spot[1] + 1.5, spot[2]], centre, nf_game::world::LOS_PROBE_8) { continue; }
         sim.bond = nf_game::player::Bond::stand_at(&sim.world, spot, 0.0);
         placed = true;
         eprintln!("[sl] bond at {spot:?} (offset {dx},{dz})");
@@ -161,7 +161,7 @@ fn a_mount_only_shot_does_not_break_the_head() {
     let mut placed = false;
     for &(dx, dz) in &[(0.0f32, 9.0), (0.0, -9.0), (9.0, 0.0), (-9.0, 0.0), (7.0, 7.0), (-7.0, 7.0), (7.0, -7.0), (-7.0, -7.0)] {
         let spot = [aim[0] + dx, aim[1] - 0.5, aim[2] + dz];
-        if !sim.world.line_of_sight([spot[0], spot[1] + 1.5, spot[2]], aim) { continue; }
+        if !sim.world.line_of_sight([spot[0], spot[1] + 1.5, spot[2]], aim, nf_game::world::LOS_PROBE_8) { continue; }
         // The discriminator's premise: the line from the eye through `aim` passes the mount's box
         // (the stand-in would break) while missing the head's sphere by a clear margin.
         sim.bond = nf_game::player::Bond::stand_at(&sim.world, spot, 0.0);

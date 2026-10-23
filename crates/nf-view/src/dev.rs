@@ -1311,7 +1311,7 @@ mod scenarios {
                 if (floor_y - guard_pos[1]).abs() > 3.0 { continue; }
                 let bond_pos = [cx, floor_y + 1.0, cz];
                 let bond_eye = [bond_pos[0], bond_pos[1] + 1.0, bond_pos[2]];
-                if !world.line_of_sight(bond_eye, guard_head) { continue; }
+                if !world.line_of_sight(bond_eye, guard_head, nf_game::world::LOS_GUARD_VISION) { continue; }
                 let dx = guard_pos[0] - bond_pos[0];
                 let dz = guard_pos[2] - bond_pos[2];
                 let yaw = dx.atan2(dz);

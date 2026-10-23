@@ -360,7 +360,7 @@ impl Pickup {
         // is `(surface & 0x3f) - 0xd < 2` [M-dis Intersect_PointGeom 0x1e92d8 @0x1e9890]).
         // What never blocks, per the same chain: the DROPPED GUN's and the CORPSE's own shapes —
         // `Pickup_Create` 0x18dda0:137 gives the pickup obj bits `glist+0x44 & ~0x200 | 0x840`, the corpse
-        // gets bit 0x20 (`NDrone2_SetAsDead` 0x14a2f0), and `Collide_PickObj` 0x1eae80:56-64 skips bit 0x20
+        // gets bit 0x20 (`NDrone2_SetAsDead` 0x14a2f0), and `Collide_PickObj` 0x1eae80:72-78 skips bit 0x20
         // for EVERY query and bit 0x40 (pickups) when the query flags carry 0x8 — the ground ray
         // `build_PointOnFloor` 0x1c95a8:52 runs 0x70c (bit 0x8 set). So Bond never stands on a drop or a
         // corpse in the game, and the port registers neither — `Bond::stand_at` at floor + 1.1 is the game's

@@ -1,5 +1,5 @@
 //! fix-progress-remainder FAIL-FIRST probes — run against the UNFIXED source to record the
-//! symptoms (the driver's "show it failing first"). Master-safe API only (no new fields):
+//! symptoms ("show it failing first"). Master-safe API only (no new fields):
 //! 1. a guard spotting Bond never increments `PlrMissionStats+0x00` (the vision-log call site is
 //!    unhooked) — the `detected >= 1` assert fails on master;
 //! 2. the Q-Claw's auto-aim stops at `Autoaim_Range` 25 (its weapon_data+0x1c cap 50 is not
@@ -59,7 +59,7 @@ fn fail2_the_q_claw_auto_aim_snaps_at_30_units() {
         if (b.pos[1] - g[1]).abs() > 3.0 { continue; }
         let head = [b.pos[0], b.pos[1] + 1.0, b.pos[2]];
         let target = [g[0], g[1] + 0.6, g[2]];
-        if sim.world.line_of_sight(head, target) { spot = Some((b, p)); break; }
+        if sim.world.line_of_sight(head, target, nf_game::world::LOS_PROBE_8) { spot = Some((b, p)); break; }
     }
     let Some((b, p)) = spot else { panic!("no open 30-unit spot") };
     sim.bond = b;

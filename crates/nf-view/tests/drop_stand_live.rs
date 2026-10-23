@@ -2,7 +2,7 @@
 //! path (`nf_view::load` + `Sim::step_bond`). Opt-in via `NF_ISO`.
 //!
 //! The game's ground ray skips both the drop and the corpse: `build_PointOnFloor` 0x1c95a8:52 runs
-//! flags 0x70c (bit 0x8 → `Collide_PickObj` 0x1eae80:56-64 adds the skip bit 0x40 = pickups) and the
+//! flags 0x70c (bit 0x8 → `Collide_PickObj` 0x1eae80:72-78 adds the skip bit 0x40 = pickups) and the
 //! base filter skips bit 0x20 (the corpse bit `NDrone2_SetAsDead` 0x14a2f0 sets) for EVERY query —
 //! so Bond stands at floor + 1.1 over any drop, never lifted onto it [M]. The take ray
 //! (`Pickup_Update` 0x18e148:210-214, flags 0x721, the pickup's own obj excluded) ends on the
@@ -64,7 +64,7 @@ fn kill_guard(scene: &mut Scene, gi: usize, mut dev: Option<&mut Dev>) -> bool {
     let mut spot = 0usize;
     for t in 0..2000 {
         let (gp, gchest) = { let dr = &scene.sim.as_ref().unwrap().drones.list[gi]; (dr.pos, [dr.pos[0], dr.pos[1] + 0.3, dr.pos[2]]) };
-        let los = |from: [f32; 3]| scene.sim.as_ref().unwrap().world.line_of_sight([from[0], from[1] + 1.0, from[2]], gchest);
+        let los = |from: [f32; 3]| scene.sim.as_ref().unwrap().world.line_of_sight([from[0], from[1] + 1.0, from[2]], gchest, nf_game::world::LOS_PROBE_8);
         let floor = scene.sim.as_ref().unwrap().world.floor_below(gp, 6.0).unwrap_or(gp[1]);
         let cands = spots(gp, floor);
         if t == 0 || !los(cands[spot % cands.len()]) {
@@ -84,7 +84,7 @@ fn kill_guard(scene: &mut Scene, gi: usize, mut dev: Option<&mut Dev>) -> bool {
 }
 
 /// Bond placed exactly on a resting guard drop stands at floor + 1.1 (never lifted onto the drop or
-/// the corpse — the game's ground ray skips both [M 0x1c95a8:52 + 0x1eae80:56-64]) and the take
+/// the corpse — the game's ground ray skips both [M 0x1c95a8:52 + 0x1eae80:72-78]) and the take
 /// happens through the real tick path (the ray ends on the resting floor contact; the end band
 /// absorbs the rest noise, pickup.rs `touches`).
 #[test]

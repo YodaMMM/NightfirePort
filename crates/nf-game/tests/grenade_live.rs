@@ -211,7 +211,7 @@ fn guard_decides_to_throw_grenade_unforced() {
         let p = [g[0] + off[0], g[1] + off[1], g[2] + off[2]];
         let fy = l.world.floor_below(p, 4.0).unwrap_or(g[1] - 1.0) + 1.0;
         let bp = [p[0], fy, p[2]];
-        if l.world.line_of_sight([g[0], g[1] + 0.6, g[2]], [bp[0], bp[1] + 0.5, bp[2]]) {
+        if l.world.line_of_sight([g[0], g[1] + 0.6, g[2]], [bp[0], bp[1] + 0.5, bp[2]], nf_game::world::LOS_GUARD_VISION) {
             bond = bond_at(bp);
             best_los = true;
             eprintln!("[scenario] Bond at ({:.1}, {:.1}, {:.1}) — clear LOS from guard at ({:.1}, {:.1}, {:.1})",

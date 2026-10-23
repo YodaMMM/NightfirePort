@@ -1295,11 +1295,11 @@ impl Default for BotRoute {
 /// boundary walls + portals; the collision world stands in, as `nav::Network::move_test` does].
 fn walk_clear(world: &CollisionWorld, a: [f32; 3], b: [f32; 3]) -> bool {
     (b[1] - a[1]).abs() < 1.5
-        && world.line_of_sight([a[0], a[1] - 0.1, a[2]], [b[0], b[1] - 0.1, b[2]])
+        && world.line_of_sight([a[0], a[1] - 0.1, a[2]], [b[0], b[1] - 0.1, b[2]], crate::world::LOS_PROBE_8)
         // mp-bot-objectives: and the knee line (floor + 0.35) — the floor+1.0 line alone passed
         // over a ramp's side wall, so a bot cut the corner onto 07000023's pit ramp from the side
         // and pushed into its edge for good (the Espionage carrier, the KOTH walkers) [S]
-        && world.line_of_sight([a[0], a[1] - 0.75, a[2]], [b[0], b[1] - 0.75, b[2]])
+        && world.line_of_sight([a[0], a[1] - 0.75, a[2]], [b[0], b[1] - 0.75, b[2]], crate::world::LOS_PROBE_8)
 }
 
 fn dist2d(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -2600,7 +2600,7 @@ impl BotBrain {
     /// when it is within sq-dist 16.0, inside the vision cone and visible
     /// (`NDrone2_CanSeeObject(.., 5, 0)`), and tells itself the objective goal is complete
     /// (`MP_sendBotMessage(.., 0x3b, 1, 0)` → `setGoalComplete(1)`) [M]. The cone half-angle
-    /// (`Drone+0xE4`) is not lifted — 90° [S]; the sight is the driver's seen bit on the row.
+    /// (`Drone+0xE4`) is not lifted — 90° [S]; the sight is the seen bit on the row.
     fn find_site_opponent(&mut self, ctx: &BotCtx) {
         if self.vars.opponent.is_some_and(|i| i >= OBJ_ROW) {
             return; // the site is already the opponent [M 0x1424e0:541 `iVar7 != +0x170`]

@@ -8,7 +8,7 @@
 //!   0x12f014-0x12f02c and `BU+0xF4` keeps the overshoot, so the next tick's case-1 check kills
 //!   the round]. NOT `BU+0xFC`.
 //! - **`BU+0xFC` is the fuse/arm clock** [M `Bullet_init` 0x12c5a0:103 writes 210.0 with the
-//!   per-id overrides :255-283 — 0x3b/0x69/0x37; `Bullet_update` counts it down per tick ONLY for
+//!   per-id overrides :199-228 — 0x3b/0x69/0x37; `Bullet_update` counts it down per tick ONLY for
 //!   `weapon+0x70 & 0x80000` records (explode at ≤ 0, 0x12ee08-0x12ee24) and for id 0x45 (die at
 //!   ≤ 0, 0x12efa4-0x12efc4, the 1.0/tick constant at 0x30D0D8)]. The merged task-831 claim that
 //!   0x12efa4 is the general death-range read was the id-0x45-only arm.
@@ -26,7 +26,7 @@ fn weapon_data() -> WeaponData {
 }
 
 /// The game's `Bullet_init` fuse write (`BU+0xFC`), verbatim from 0x12c5a0: the 210.0 default
-/// [:103], the 300.0 `+0x70 & 0x10000` arm [:196-208ish], and the per-id overrides :255-283 —
+/// [:103], the 300.0 `+0x70 & 0x10000` arm [:192-198], and the per-id overrides :199-228 —
 /// 0x3b (`((w+0x00 − id)·5 + 5)·60`, 0x6c → 900), 0x69 → 5, 0x37 → 420 (7777 when the owner is a
 /// class-3 drone). This is the FUSE/ARM clock in ticks, not a distance.
 fn bullet_init_fuse(w: &[u8]) -> f32 {
@@ -54,7 +54,7 @@ fn census_flight_range_plus_1c_vs_fuse_clock() {
     assert_eq!(wd.records.len(), 115);
     let f = |w: &[u8], o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
     // [M 0x12c5a0: the 300.0 arm keys on `weapon+0x70 & 0x10000` and runs BEFORE the id
-    // overrides (:216-222 vs :255-283), so an id-override record that carries the bit ends at
+    // overrides (:192-198 vs :199-228), so an id-override record that carries the bit ends at
     // the override value anyway]. Exactly one disc record carries the bit: rec 55 (id 0x37,
     // +0x70 = 0x18300 [D weapon_data]) — its 300.0 is overwritten by the 0x37 chain to
     // 420.0/7777.0, so no disc record's FINAL fuse is the flag's 300.0.
@@ -94,7 +94,7 @@ fn census_flight_range_plus_1c_vs_fuse_clock() {
     assert_eq!(f(&wd.records[0x1c], 0x1c), 25.0, "Spas");
     assert_eq!(f(&wd.records[0x1e], 0x1c), 1200.0, "sniper family");
     // The satchel family bases itself: rec 59 (0x3b, w0 0x3b) → 300 ticks; rec 108 (id 0x3b,
-    // w0 0x6c) → the 900.0 special arm [M 0x12c5a0:255-262].
+    // w0 0x6c) → the 900.0 special arm [M 0x12c5a0:199-205].
     assert_eq!(bullet_init_fuse(&wd.records[59]), 300.0, "rec 59 satchel fuse ticks");
     assert_eq!(bullet_init_fuse(&wd.records[108]), 900.0, "rec 108 (w0 0x6c) fuse ticks");
     assert_eq!(bullet_init_fuse(&wd.records[60]), 600.0, "rec 60 fuse ticks");

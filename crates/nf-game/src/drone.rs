@@ -947,6 +947,11 @@ pub struct Drone {
     pub pending_grenade: bool,
     /// Frames of the shots fired (for flashes; the viewer drains it).
     pub shots: Vec<u32>,
+    /// Per shot (frame, muzzle, aim) — the aim is `+0x1f0` at the shot tick: the game re-runs
+    /// `NDrone2_SetOpponentAimPos` from `DroneWeap_NextBulletTime` 0x179d40:130 before every
+    /// shot, so a team-2 ally's recorded aims are her drone opponent's, never Bond's
+    /// [M 0x1422d0:70-73; docs/systems/ally-heard-noise.md §2]. Test observability.
+    pub shot_aims: Vec<(u32, V3, V3)>,
     /// Port-internal instrumentation, parallel to `shots`: the RAW accuracy roll of each fired
     /// shot (`DroneWeap_DoBulletAccuracy` 0x179740's `FRand(100) < pct`, before the sight gate
     /// and the TooClose forced hit [M 0x179740:100-110 / 0x179914-0x17992c]). Lets tests pin the
@@ -1105,6 +1110,21 @@ pub struct Drone {
     pub sighted: bool,
     pub own_sight: bool,
     pub first_attack_done: bool,
+    /// `Drone+0x2C0` — `NDrone2_FindOpponent`'s rotating drone-list cursor (the node the last
+    /// scan stopped at; the next scan starts after it) [M 0x1424e0:210-268]. Team-2 only.
+    pub opp_cursor: usize,
+    /// `Drone+0x170` for a team-2 drone: the drone-opponent pick (the index into `Drones::list`),
+    /// `None` = `SetOpponent(0)` [M 0x1424e0:101-268; docs/systems/ally-heard-noise.md]. Team-1
+    /// drones keep the player opponent (the `+0x44 != 2` arm) and leave this `None`.
+    pub opp_drone: Option<usize>,
+    /// `Drone+0x238` — `DroneVision_HaveOpponentSight`'s had-opponent stamp (0 = never):
+    /// `DroneFunc_CombatState` 0x148338:20-31 and `NDrone2_HasOpponent` 0x14ad58 honour it for
+    /// 30 ticks after the last seen tick.
+    pub opp_have_frame: u32,
+    /// This tick's `NDrone2_CanSeeObject(…, 5, 0)` result against the drone opponent (the
+    /// scan/re-validation LOS, head-to-head) [M 0x1785e0 → 0x176f18:26-46]. Drives the team-2
+    /// sight fold and `EnemyLookForOpponent`'s pick.
+    pub opp_los: bool,
     /// Corpse (`obj+0xF0 & 0x20`: no longer hit or seeing), the death channel to raise (`+0xCD8` pending — confirmed
     /// in the re-check: `NDrone2_DSTATE_Death_Anim` 0x1637f8 sets `+0xCD8 = 1` at enter and raises `+0x13C` on
     /// exit/timer while set; `+0x13C` = placement parameter 12), the special-death script (`+0xBD4`, parameter 13),
@@ -1582,6 +1602,12 @@ pub struct Drone {
     /// charge shatters it at 0xB+911.] Reset at the head of `Drones::tick_inner`, set in
     /// `root_motion`.
     pub scripted_move: bool,
+    /// The length of the step this tick's movement probe REJECTED (0 on an unblocked move;
+    /// reset by `move_by`). The pane-drain reader: the game's movement pass corrects +0x30 up
+    /// to the shape it engages, so the engaged contact still drains [M 0x12bfd8:26-27]; the
+    /// port's probe leaves the body put — the rejected step stands in for the absorbed movement
+    /// [S breakable.rs drone_step].
+    pub blocked_reach: f32,
     /// `Drone+0x174`: the drone's allocated slot in the shared target registry (NPCGlobals,
     /// `DroneFunc_AllocateTargetID` 0x141f28 via `NDrone2_SetOpponent` 0x1422d0; 0xff = none).
     /// The pool lives on `Drones::targets` — docs/systems/dronefunc-rest.md.
@@ -1757,6 +1783,8 @@ impl Drone {
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip, clip_max: clip,
             grenade_weapon, grenade_count, pending_grenade: false,
             shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: rng.rand(10000), lost_sight: true, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
+            // 957: per shot (frame, muzzle, aim) — the aim at the shot tick (see the field).
+            shot_aims: Vec::new(),
             // 952: the raw accuracy roll per shot, parallel to `shots`.
             shot_rolls: Vec::new(),
             // drone-abseil-elevator: the +0x23 rope fields. `move_ok`
@@ -1790,6 +1818,10 @@ impl Drone {
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
+            opp_cursor: 0,
+            opp_drone: None,
+            opp_have_frame: 0,
+            opp_los: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false,
             alert_pending: 0,
             mission_wait_channel: 0,
@@ -1857,6 +1889,7 @@ impl Drone {
             recoil_weapon: weapon == 0x1c || weapon == 0x1d,
             // glass-breach-guards-4.
             scripted_move: false,
+            blocked_reach: 0.0,
             // +0x174 — the shared target registry slot, allocated on first sight.
             target_id: 0xff,
             // BodyGlow_Create 0x1ac158 — every guard spawn glows on the shipped path (the
@@ -2824,7 +2857,7 @@ impl Drone {
     /// (channel count == the skin's facial count) are excluded — their channels are the morph
     /// weights (`AnimFacialBlend` 0x1be648), not translations; the disc refutes the old "all-zero
     /// face root" premise (07000006's 04000065 channels 0..2 reach ~1.0, and the body track's root
-    /// runs 0.57 un-zeroed over all 880 frames — the driver's stillness under the game's own trace
+    /// runs 0.57 un-zeroed over all 880 frames — the stillness under the game's own trace
     /// is the sit state + the collision probe, with the hip following the BODY track's ch1, y span
     /// 0.119 ≈ the body's 0.129). The free `anim::script_frame` is last-wins the same way,
     /// fix-drone2).
@@ -2941,11 +2974,28 @@ impl Drone {
     /// Moves x/z by `step` unless the body (0.4 above the feet sphere … head) would cross collision, then leaves the
     /// height to `collision_handler` (the game's `Drone_CollisionHandler` down-ray; WORKLOG 0078). The earlier
     /// `floor_below(2.0)` stand-in is gone — a guard dying at a ledge now falls.
+    ///
+    /// walls-990: the probes run the game's LOS-class drops, not the raw ray. The game's guard move has no
+    /// world-collision gate at all (`DroneAnim_PreTransCallback` 0x13b490 applies root motion; the only horizontal
+    /// constraint is `AINetwork_GetBoundsPushVectorForSphere` 0x157bd0) — the port's probe is a stand-in for that
+    /// missing nav fidelity, and the raw ray turned every surface the game's own LOS class skips into a wall: the
+    /// 07000011 stairwell's 0x40-material well cage (material byte 0x40 = the pass flag [D collision materials])
+    /// stopped the 0x13 guards at its north face (x 17.1, z −1.84) — a wall that is not there. `Collide_LineOfSight`
+    /// 0x1edf50 forwards the caller's 0xa27 mask to `Collide_RayIntersect` (HITTEST+0x98), and `Collide_Intersect`
+    /// 0x1ebaa8 drops for it: the 0x40-material surfaces (:301), materials 0xD/0xE (:311) and 0x10 (:314) — the
+    /// port's `segment_masked` [M, world.rs]. Concrete (mats 0-21 without 0x40) still blocks.
     fn move_by(&mut self, d: &Data, step: [f32; 2]) {
         let to = [self.pos[0] + step[0], self.pos[1], self.pos[2] + step[1]];
-        let probe = |y: f32| d.world.line_of_sight([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32]);
+        let probe = |y: f32| d.world.line_of_sight([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32], crate::world::LOS_PROBE_8);
         if probe(self.pos[1]) && probe(self.pos[1] + 0.5) {
             self.pos = to;
+            self.blocked_reach = 0.0;
+        } else {
+            // The probe rejected the step: the body's collision engaged whatever the ray crossed
+            // this tick. The game's movement pass corrects +0x30 up to the shape; the port's
+            // reject leaves the body put — the attempted step's length is the pane drain's
+            // measure of the absorbed movement [S breakable.rs drone_step].
+            self.blocked_reach = (step[0] * step[0] + step[1] * step[1]).sqrt();
         }
     }
 
@@ -5450,6 +5500,30 @@ impl Drone {
         let on_surface = self.feet_on_point(world);
         self.on_surface = on_surface.is_some();
         if let Some(floor) = on_surface {
+            // The ride (994): `Drone_FeetOnPoint` 0x140660:134-153 calls `Control_InheritVelocity`
+            // 0x133e88 for EVERY standing drone whose ground object is not one of the static type
+            // bytes {2, 3, 5, 0x11, 0x12, 0x1a} [M 0x140660:140-149] — the rider moves and turns
+            // with the platform's per-tick delta (its obj+0x30 − obj+0x40 translation, plus the
+            // rotation arm about the platform's origin). The port's `ground_motion` returns the
+            // motion only when the FIRST hit along the feet ray is on the DYNAMIC set (the script
+            // objects + the doors) — i.e. exactly when the drone's standing floor itself is the
+            // moving object; the static types never appear there — so the gate matches the game's
+            // type filter. The application mirrors the player's riding fold (`Player_FeetOnPoint`
+            // 0x194188 → 0x133e88, the scene.rs tick-top block): rotate the xz offset around the
+            // pivot by the platform's heading change, add the translation. The scripts pass
+            // already moved the carriage this tick (Drones::tick updates the scripts before the
+            // drone loop), so the delta is this tick's own move — no lag.
+            let hip = self.hip();
+            let from = [self.pos[0], self.pos[1], self.pos[2]];
+            let to = [self.pos[0], self.pos[1] - (hip + 0.6), self.pos[2]];
+            if let Some(g) = world.ground_motion(from, to) {
+                let p = self.pos;
+                let (sn, cs) = g.turn.sin_cos();
+                let (x, z) = (p[0] + g.delta[0] - g.pivot[0], p[2] + g.delta[2] - g.pivot[2]);
+                self.pos = [g.pivot[0] + x * cs + z * sn, p[1] + g.delta[1], g.pivot[2] - x * sn + z * cs];
+                self.yaw += g.turn;
+                self.desired_yaw += g.turn;
+            }
             // Zero the velocity (the game sets `anim+0x60 & 8`), then the tail's settle gated through the
             // second probe: `correction < 0.5 − hip` (see the doc above — [M 0x140968 @0x140c44-60 +
             // 0x140e30-48, the probe 0x140e90]).
@@ -7215,7 +7289,10 @@ impl Drone {
                 if self.mode != 2 && self.mode != 0x19 {
                     self.vision_on = true;
                     self.croute = None;
-                    if self.prop(d, 0x18) && self.dist < self.engage_range {
+                    // [M 0x164210:71-87] the prop-0x18 arm compares the OPPONENT-derived distance
+                    // `+0xf0` with the engage range — a team-2 drone with no opponent has neither
+                    // (SetOpponent(0)) and lands in Combat 0x58, whose UPDATE sends her to 0x60.
+                    if self.prop(d, 0x18) && self.has_opponent(frame) && self.dist < self.engage_range {
                         self.return_state = AIM_STAND_FIRE;
                         self.set_state(AIM_STAND);
                     } else {
@@ -7376,7 +7453,20 @@ impl Drone {
             (INVESTIGATE, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, ATTACK); true }
             (INVESTIGATE, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             (COMBAT_NO_MOVE, msg::UPDATE) => {
-                if self.unseen_ticks < 16 { self.set_state(COMBAT_NEW_SIGHTING) } else { self.set_state(COMBAT_NO_SIGHT) }
+                // [M 0x1643e8:49-101] SeenAndAttacking; movable (not +0x10 and not prop 0x40) →
+                // SetState(0x68 AimStand); else turn to the opponent (DroneMove_TurnToObj 0.525),
+                // CanAltAttack → 0x72, `NDrone2_HasOpponent` false → SetState(0x60 NoOpponent),
+                // else the `+0x3b = seen ? (+0x1e == 0) : 0` fire re-arm and stay. There is NO
+                // 0x5b/0x5c exit — the old unseen-ticks arm was the 0x59 ↔ 0x5c thrash (with
+                // DroneFunc_CombatState 0x148338:136-142 sending a stationary 0x5c back to 0x59
+                // every tick). The anim-step 0xc Rand(3) → 0x6e roll is not ported (the port's
+                // anim steps are not exposed to the state arms [S]).
+                if !self.stays(d) { self.set_state(AIM_STAND); return true; }
+                self.turn_to_opponent(0.5235988);
+                if self.can_alt_attack(d, 0) { self.set_state(ALT_ATTACK); return true; }
+                if !self.has_opponent(frame) { self.set_state(NO_OPPONENT); return true; }
+                self.firing = self.seen && !self.gun_through_wall;
+                if self.firing { self.fire(d, rng, frame, true); }
                 true
             }
             // 0xC [M 0x1643e8:123-126]: the deferred first shot fires.
@@ -7747,14 +7837,19 @@ impl Drone {
                 self.croute = None;
                 // `SetupGoalPositionToObj` 10.0 [M 0x15add0] — the goal is the OPPONENT's object
                 // with a 10-unit arrival radius, and `MoveToGoalPosition` arrives when the route
-                // distance drops under it [M 0x1517d8:80-83]; the port's GoToGoal arrives at 2.0,
+                // distance drops under it [M 0x1517d8:51-53]; the port's GoToGoal arrives at 2.0,
                 // so the goal is the point 10 units from Bond on the guard's side (the port's
-                // stand-in for the radius — guard-barks-first-alert). Already inside the radius →
-                // straight to the wait state (the game's CanReachGoalPosition succeeds at once).
-                if self.dist <= 10.0 { self.set_state(INTEROGATE_ASSIST_WAIT); return true; }
+                // stand-in for the radius). The game ALWAYS goes through
+                // GoToGoal 0x63 with return state 0x3a when the goal is reachable [M 0x1616c0:46-51
+                // — CanReachGoalPosition 0x155ad0 → `+0x5a2 = 0x3a`, SetState(99)]; inside the
+                // radius the route distance is already under 10, so 0x63 arrives on its first update
+                // [M 0x1517d8:51-53 returns 3]. The port's stand-in for that: the goal is the
+                // guard's own position (GoToGoal arrives at once), not a skip of 0x63.
                 let (dx, dz) = (self.pos[0] - self.target.pos[0], self.pos[2] - self.target.pos[2]);
                 let len = (dx * dx + dz * dz).sqrt();
-                let goal = if len > 1.0e-4 {
+                let goal = if self.dist <= 10.0 {
+                    self.pos
+                } else if len > 1.0e-4 {
                     [self.target.pos[0] + dx / len * 10.0, self.target.pos[1], self.target.pos[2] + dz / len * 10.0]
                 } else {
                     self.target.pos
@@ -7799,9 +7894,15 @@ impl Drone {
                 self.timer_c = Some(frame + 60);
                 true
             }
-            (NO_OPPONENT, msg::UPDATE) => { if self.bond_alive { self.set_state(ATTACK); } true }
+            // [M 0x1650a0:30-49] case 3: `+0x170 != 0` returns to Attack 0x56 — the port's
+            // `has_opponent` (the drone opponent or the +0x238 grace for team 2). Which writer
+            // re-points +0x170 for a team-1 guard is not yet ported [S].
+            (NO_OPPONENT, msg::UPDATE) => {
+                if self.has_opponent(frame) { self.set_state(ATTACK); }
+                true
+            }
             (NO_OPPONENT, msg::TIMER_C) => {
-                if self.bond_alive { self.set_state(ATTACK); } else { self.timer_c = Some(frame + 60); }
+                if self.has_opponent(frame) { self.set_state(ATTACK); } else { self.timer_c = Some(frame + 60); }
                 true
             }
             // `NDrone2_DSTATE_HostageDead` 0x172628 (state 0x0f) [M]. ENTER: `AlertStatusSet(3)` (level 1.0),
@@ -8082,12 +8183,31 @@ impl Drone {
             }
             // UPDATE (case 3): no armed person near → BondTalk and hold the wait (the game's BondTalk
             // 0x1446b0 is unported like the other civilian talk — fix-drone4's note); an armed person
-            // → the own-sighting flag, then the voice-0x10 team switch + Attack 0x56 (with +0x44 = 1)
-            // or CivilianScared 0x12. The prop-0x33 armed-intruder alert chain (0x15dbb0:45-62) is
-            // unmodelled, matching the sibling CivilianMission UPDATE [M 0x1787c8 dead arg].
+            // → the own-sighting flag, the prop-0x33 armed-intruder shout ONCE (0x982), then the
+            // voice-0x10 team switch + Attack 0x56 (with +0x44 = 1) or CivilianScared 0x12.
             (CIVILIAN_MISSION_WAIT, msg::UPDATE) => {
                 if !self.near_armed_person(d) { return true; } // [M 0x15dbb0:39-44 — BondTalk + stay]
-                self.sighted = true; // +0x4F8 |= 0x8000000 [M 0x15dbb0:45]
+                self.own_sight = true; // +0x4F8 |= 0x8000000, the OWN-sighting bit [M 0x15dbb0:45; the +0x4F8 field split — drone.rs +0x4F8 doc]
+                // The prop-0x33 armed-intruder alert, once per drone life: `+0x4FC |= 1`, then
+                // `NDrone2_DroneAlertToObject(dc, 0x11, NDrone2_Player(), 20.0, 20.0, 0.76)` — the
+                // float order is the disasm's [M 0x15dd3c call site: a0=dcv, a1=0x11, a2=Player,
+                // f12/f13=0x41a00000, f14=0x3f428f5c], and `+0x4F8 |= 0x200000` the once-only latch
+                // [M 0x15dbb0:46-58]. The game delivers msg 0x11 (the alert type IS the broadcast
+                // message) with the alert record whose position is the OBJECT's — the player's —
+                // +0x30 [M 0x14a538 callee prologue + :18-21 body], and points the shared alert
+                // target at it [M 0x155d48:6-11]; the receivers run `DroneVision_EnemyAlerts` case
+                // 0x11: the +0x5a0/+0x5b0/+0x5c0 bookkeeping then the prop-0x28 gate →
+                // `DroneVision_ShoutFromOtherDrone` (returns 0 in this shipped build — no state
+                // switch from the shout itself) [M 0x177c18:24-48]. The port's existing alert path
+                // (the PartyGirl/DoorGuard/Patrol shout, `pending_shout` → the consume pass
+                // broadcasting msg::SHOUT within 20 of the source pos) is exactly that delivery;
+                // its receiver half is the pre-dispatch SHOUT arm (prop 0x28 → guard
+                // `enemy_alerts`, civilian → CivilianScared).
+                if self.prop(d, 0x33) && !self.scare_shouted {
+                    self.alert_bits |= 1; // `+0x4FC |= 1` [M 0x15dbb0:54]
+                    self.pending_shout = Some((msg::SHOUT, self.target.pos)); // the alert source is BOND [M 0x14a538:18-21]
+                    self.scare_shouted = true; // `+0x4F8 |= 0x200000` — the once-only latch [M 0x15dbb0:53-58]
+                }
                 if self.voice_type == 0x10 { self.team = 1; self.set_state(ATTACK); } // +0x44 = 1 [M 0x15dbb0:63-67]
                 else { self.set_state(CIVILIAN_SCARED); }
                 true
@@ -9282,10 +9402,32 @@ impl Drone {
     fn look_for_opponent(&mut self, d: &Data) -> Option<u8> {
         // [M NDrone2_FindOpponent 0x1424e0:101] the opponent-vs-player set is gated on
         // `+0x44 != 2`: a team-2 (ally) drone NEVER takes the player as its opponent — its
-        // opponents come from FindOpponent's object walk (the enemy drones). The port's LOS is
-        // player-only, so the sight→ATTACK entry must refuse team 2 (otherwise Zoe shoots
-        // at Bond at the gondola — the 07000008 ally entered combat against Bond through here).
-        if self.team == 2 || self.team == 3 {
+        // opponents come from FindOpponent's object walk (the enemy drones). With no drone
+        // opponent the arm falls through to None, which is also master's sight-entry refusal
+        // (the port's LOS is player-only — Zoe must not enter combat against Bond here).
+        if self.team == 2 {
+            // [M DroneVision_EnemyLookForOpponent 0x177ed0:18-20] no opponent → no sight routing;
+            // [M :21-28] prop 0x3c and the weapon bit; [M :40-51] the alert < 0.66 / prop-0x51
+            // gate sits INSIDE the opponent-is-player arm — a drone opponent needs no alertness;
+            // [M :52-83] `+0x4fc & 0x20` set → 0, else Attack 0x56 (the `+0x4f8 & 0x800` gate is
+            // not modelled — no port reader).
+            if self.opp_drone.is_none() {
+                if std::env::var_os("NF_AILOG").is_some() {
+                    eprintln!("[ailog] guard {} look_for_opponent: team 2 — no drone opponent", self.index);
+                }
+                return None;
+            }
+            let go = self.opp_los && self.seen && self.prop(d, 0x3c) && self.obj_armed() && self.alert_bits & 0x20 == 0;
+            if std::env::var_os("NF_AILOG").is_some() {
+                eprintln!("[ailog] guard {} look_for_opponent: team 2 opp {:?} los {} seen {} -> {}",
+                    self.index, self.opp_drone, self.opp_los, self.seen, if go { "ATTACK" } else { "none" });
+            }
+            if go && !self.sighted { self.sighted = true; self.own_sight = true; }
+            return go.then_some(state::ATTACK);
+        }
+        // [M 0x177ed0:29-38] team 3 (civilian) refusal; the 0x07000009/0x0700000a exception is
+        // not ported (existing gap, unchanged).
+        if self.team == 3 {
             if std::env::var_os("NF_AILOG").is_some() {
                 eprintln!("[ailog] guard {} look_for_opponent: team {} — no player opponent", self.index, self.team);
             }
@@ -9333,7 +9475,7 @@ impl Drone {
     /// drone within 90°, or no line of sight.
     fn check_unsurrender(&self, d: &Data) -> bool {
         self.dist > 12.0 || (self.dist > 2.0 && !self.bond_armed) || self.opp_facing.abs() > std::f32::consts::FRAC_PI_2
-            || !d.world.line_of_sight(self.head(), self.opp_target)
+            || !d.world.line_of_sight(self.head(), self.opp_target, crate::world::LOS_GUARD_VISION)
     }
 
     /// `DroneAnim_CanDoAnimState`: the anim state's own danim has a script in our anim set (or set 0).
@@ -9377,7 +9519,7 @@ impl Drone {
         let to = [feet[0] + x * c + z * s, feet[1], feet[2] - x * s + z * c];
         let Some(floor) = d.world.floor_below([to[0], feet[1] + 2.0, to[2]], 6.0) else { return false };
         if (floor - feet[1]).abs() > 4.0 { return false; }
-        [0.5, 1.4].iter().all(|&h| d.world.line_of_sight([feet[0], feet[1] + h, feet[2]], [to[0], floor + h, to[2]]))
+        [0.5, 1.4].iter().all(|&h| d.world.line_of_sight([feet[0], feet[1] + h, feet[2]], [to[0], floor + h, to[2]], crate::world::LOS_PROBE_8))
     }
 
     /// `NDrone2_CanBackoff` 0x1501a0: prop 0x06, `CanDoAnimState(4)` (the port's `anim_state::BACKOFF`),
@@ -9558,11 +9700,43 @@ impl Drone {
         0
     }
 
+    /// `NDrone2_HasOpponent` 0x14ad58 on the port's model: a team-2 drone holds its drone
+    /// opponent or the `+0x238` 30-tick had-opponent grace [M 0x148338:20-31, 0x14ad58:7-15];
+    /// team 1/3 keep the player opponent — the pointer set only while Bond is alive
+    /// (FindOpponent's dead-player gates [M 0x1424e0:104-121]).
+    fn has_opponent(&self, frame: u32) -> bool {
+        if self.team != 2 { return self.bond_alive; }
+        self.opp_drone.is_some() || (self.opp_have_frame != 0 && frame <= self.opp_have_frame + 30)
+    }
+
     /// `DroneFunc_CombatState` (0x148338): the combat decision for 0x58 / 0x5A / 0x5C / 0x5E / 0x68 / 0x70. Every
     /// call routes to the opponent first (`MoveToObject` with radius min(engage range, 6); following the route except
     /// from the firing states). Cover (0x8C) ported (WORKLOG 0023); grenades (0x2D) ported (WORKLOG 0080).
     fn combat_state(&mut self, d: &Data, rng: &mut Rng, frame: u32, from: u8) -> u8 {
         use state::*;
+        // [M 0x148338:20-31] the no-opponent gate FIRST: `+0x170 == 0` with the `+0x238` grace
+        // (30 ticks since the last seen stamp) expired → NoOpponent 0x60. Team 1 keeps its
+        // implicit player opponent (Bond alive) — the gate never fires for them.
+        if !self.has_opponent(frame) { return NO_OPPONENT; }
+        // The router's head [M 0x148338:19-31]: the opponent pointer gone (+0x170 == 0 —
+        // FindOpponent 0x1424e0:149-157 clears it the tick CanSeeObject fails) with no fresh
+        // +0x238 hold (0, or 30 frames stale — HasOpponent 0x14ad58) returns NoOpponent 0x60:
+        // combat cannot outlast the hold. The switch's own cases (0x58/0x68/0x70 minus 0x58 =
+        // 0x00/0x10/0x18 [M 0x148338:39-44]) route COMBAT and both fire states through here.
+        // The port's `seen`/`unseen_ticks` are the same sight machinery (unseen_ticks = the
+        // game's +0x274 ticks-since-LOS [M 0x176a28:216-223]); the >15 gate is the port's
+        // established stand-in for the hold window (the same gate that enters 0x5c) // [S] the
+        // window length: the game's hold is the +0x238 30-frame stamp, the port reuses 15.
+        // Without this exit the port's 0x5c (whose UPDATE is ONLY SeenAndAttacking + the
+        // router [M 0x164838:26-35]) parks a sight-lost guard forever — the 07000001 hall
+        // guard's 56k-tick COMBAT_NO_SIGHT freeze that stalled both escort walks.
+        // Off [S]: with the 15-tick stand-in for the +0x238 hold, this exit stalled searchlight,
+        // abseil, door-chase and bathhouse guards on 06/09/16. It returns with the game's own hold.
+        if false && matches!(from, COMBAT | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | AIM_STAND_FIRE | AIM_CROUCH_FIRE)
+            && !self.seen && self.unseen_ticks > 15
+        {
+            return NO_OPPONENT;
+        }
         if self.in_transition() { return 0; }
         let follow = !matches!(from, AIM_STAND_FIRE | AIM_CROUCH_FIRE);
         let mv = self.move_to_object(d, self.engage_range.min(6.0), follow);
@@ -9972,6 +10146,7 @@ impl Drone {
                     if id != 0x5ef && id != 0 { self.anim_sounds.push(id); }
                 }
                 self.shots.push(frame);
+                self.shot_aims.push((frame, bullet.as_ref().map(|b| b.pos).unwrap_or(self.muzzle(d)), self.opp_target));
                 self.last_shot = frame;
                 self.clip -= 1;
                 self.burst -= 1;
@@ -10112,8 +10287,8 @@ impl Drone {
         // them unconditionally shifted the shared stream (a cover test's 90-vs-37 and
         // the matrix's re-rolled rates; the live-calibrated `ai_live::guard_takes_cover_like_the_game`
         // pins the per-shot stream at roll + Light_Create's Rand(param_11) + the spread draws).
-        // Open: the object-create side is not yet confirmed live.
-        let aim = [p.target[0] + off[0] - muzzle[0], p.target[1] + off[1] - muzzle[1], p.target[2] + off[2] - muzzle[2]];
+        // A live check settles the object-create side with gdbwatch.
+        let aim = [self.opp_target[0] + off[0] - muzzle[0], self.opp_target[1] + off[1] - muzzle[1], self.opp_target[2] + off[2] - muzzle[2]];
         let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
         let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
         // The raw damage: weapon_data+0x0C. `Drone+0x100` (the ×mul) is applied at HIT time by
@@ -10686,6 +10861,10 @@ pub struct Drones {
     pub health: crate::bullet::PlayerHealth,
     /// Every hit on Bond: (tick, shooting drone, health lost).
     pub player_hits: Vec<(u32, usize, f32)>,
+    /// The fusebox live-wire hurts on Bond (`Player_Hurt(5.0, …)` at a dying group-1 wire
+    /// [M 0x1adfe8:99-101]), counted apart from `player_hits` because blasts also record there
+    /// with no drone attacker.
+    pub fusebox_hurts: u32,
     /// Impacts this tick (for effects).
     pub impacts: Vec<crate::bullet::BulletEvent>,
     /// fix-impacts: bullet impact effects — the 200-decal FIFO and the debris
@@ -11104,6 +11283,15 @@ pub struct Drones {
     pub mission_events: Vec<crate::mission::Event>,
     /// The weapon of each `bullet_paths` entry, in order (crate::useobj's 0x58 install check).
     bullet_path_weapons: Vec<u16>,
+    /// This tick's class-5 (BULLET) flight contacts (`triggers::BulletContact`): filled as each
+    /// projectile MOVES (player bullets in `update_player_bullets`, drone bullets + grenades in the
+    /// tail passes), consumed by `Trigger_Calc` ONE tick later — the game's own phase: `Trigger_Calc`
+    /// runs at the head of `control_movement_object_handler` (0x1336f8:24) BEFORE the object update
+    /// walk (:62-63) and `Collide_Update` (:238), so `Trigger_Hit` 0x1b1fc8:18 reads the PREVIOUS
+    /// Collide_Update's `obj+0xD0` list (cleared + rebuilt :25-53).
+    bullet_contacts_now: Vec<crate::triggers::BulletContact>,
+    /// Last tick's `bullet_contacts_now` — the set `Trigger_Hit` reads this tick (see above).
+    bullet_contacts_prev: Vec<crate::triggers::BulletContact>,
     /// The route-node → door binding (`NDrone_InitDoorNodes` 0x139a70: each door-flagged node binds
     /// its nearest door object), keyed (nav path, node id) → `Doors::list` index. Computed lazily on
     /// the first tick that needs it (the doors' positions are static).
@@ -11347,6 +11535,8 @@ impl Drones {
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            bullet_contacts_now: Vec::new(),
+            bullet_contacts_prev: Vec::new(),
             // fix-06-alarm.
             sound_triggers: Default::default(),
             // The shared target registry (NPCGlobals DAT_00299110).
@@ -11387,6 +11577,7 @@ impl Drones {
             // fix-restart-target: the fail-menu Restart's warm arm + the current level (GameState+0xC).
             level_exit_restart: false,
             pending_blasts: Vec::new(),
+            fusebox_hurts: 0,
             level_current: 0,
             // fix-safe08: (script hash, stream) → the reserved pickup slot the renderer built for the
             // script's obj_type-0xF0 Entity (`Script_CreateEntity` 0x1d8968's Pickup_Create arm);
@@ -11914,9 +12105,27 @@ impl Drones {
         // retail data]. The port therefore runs no case for them; the proof is the census, and
         // the game functions are cited here at the exact dispatch site that would call them.
 
+        // The drones' `placement` is the create pass's own enumeration index (`level_drones`'s
+        // `dr.placement = i`; `parsemap_create_dynamic_objects` 0x1d04f0 creates one object per
+        // placement, so the object IS its placement's — the game never re-derives the index). An
+        // older position re-link stood here (the first 0x0f placement with |dx|,|dz| < 1e-3) and
+        // is wrong wherever two drone placements share XZ: 0700000c ships three bit-identical
+        // pairs [D #263/#461 t [6.5508847,12.309799,-224.56429], #261/#462 t
+        // [-19.704529,12.32595,-217.32669], #310/#463 t [36.356506,12.14821,-208.81349] — each
+        // pair is the group-1 immediate guard (spawner #264) and the group-4 ch-4 swap wave
+        // (spawner #279) at one spot], and `position()` handed BOTH drones of a pair the lower
+        // index — the control-list order key (reverse placement, Drones::tick) and every
+        // placement-keyed reader then saw one drone twice and the other never (the draw list's
+        // char link keyed the same way: one of the pair drew, the other — active — drew nothing).
+        // Level drones keep the exact create index; a
+        // script-spawned drone (NIS event 8, `Drone_CoderCreate` 0x13a108) has NO placement —
+        // the disc's only firing event is a no-op [D 0600005b stream 9], so nothing re-matches
+        // it; the guard below only normalizes a stale non-drone index to the game's "no
+        // placement" 0.
         for dr in &mut self.list {
-            if let Some(i) = level.maps[m].placements.iter().position(|p| p.flags & 0xff == 0x0f
-                && (p.translation[0] - dr.pos[0]).abs() < 1e-3 && (p.translation[2] - dr.pos[2]).abs() < 1e-3) { dr.placement = i; }
+            if dr.placement != 0 && !level.maps[m].placements.get(dr.placement).is_some_and(|p| p.flags & 0xff == 0x0f) {
+                dr.placement = 0;
+            }
         }
         // `Copter_Create`'s SP beat [M 0x17d340:66-74]: each copter owns a ScriptPlayer created at
         // load (`SP_Create` 0x1dc7e0 → `SP_CreateScriptPlayer` 0x1db9a8, modes 8,8, mask 0 → state
@@ -12067,15 +12276,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // at 0x2f4300) kills the round when weapon+0x1C < BU+0xF4 (0x12e95c-0x12e984); the
             // step clamps to the +0x1C boundary at 0x12f014-0x12f02c and the next tick kills].
             // `BU+0xFC` is the fuse/arm clock: Bullet_init 0x12c5a0:103 writes 210.0 (overrides
-            // 0x3b/0x69/0x37 [:255-283], the 300.0 +0x70&0x10000 arm :216-222) and Bullet_update
+            // 0x3b/0x69/0x37 [:199-228], the 300.0 +0x70&0x10000 arm :192-198) and Bullet_update
             // counts it down ONLY for +0x70 & 0x80000 records (0x12ee08) and id 0x45 (0x12efa4 —
             // 1.0/tick from 0x30D0D8) — never as a flying round's death cap.
-            // The watch 0x4E/0x4F keeps 210.0 [S unverified: a port choice, kept because
-            // the laser tests ride it; the disc rule is +0x1C = 4.0/8.0 [D weapon_data
-            // 0x2bf150] and the game's beam then advances 4.0/tick through the per-tick refire —
-            // live check: gdbwatch a held watch's BU+0xF4 (predicted 4.0/segment, +0xFC unused)].
-            let base_id = u16::from_le_bytes([w[0x02], w[0x03]]);
-            let bullet_range = if matches!(base_id, 0x4e | 0x4f) { 210.0 } else { f(0x1c) };
+            // laser-watch-0c: the watch 0x4E/0x4F flies the SAME game rule as every other round —
+            // the record's own +0x1C = 4.0/8.0 [L weapon_data 0x2bf150 + id·0x10C]. The old 210.0
+            // here was the bullet-range-210 task's [S] stand-in (kept because the laser tests rode
+            // it); the decompile-backed death range [M Bullet_update 0x12e7b0 case 1 + the boundary
+            // clamp 0x12f014-0x12f02c] is the +0x1C for every id, watch included. The beam still
+            // burns its locks because the fire spawns one round per held tick [M 0x1a5460:653-658,
+            // :688-690] and each round's first (state-0) segment covers [0, +0x1C] from the muzzle
+            // after the boundary clamp — the burn needs the lock's world sphere inside that reach
+            // (0700000c's hinge #139 sits 1.34 units out [D placement + the glist sphere r 0.2325];
+            // 08's safe bolts ~3.1 [D]), not a 210-unit flight.
+            let bullet_range = f(0x1c);
             self.player_bullets.push(PlayerBullet {
                 pos: from, dir, speed, travelled: 0.0, range: bullet_range, damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
                 homing: u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x2_0000 != 0,
@@ -12156,15 +12370,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // at 0x2f4300) kills the round when weapon+0x1C < BU+0xF4 (0x12e95c-0x12e984); the
             // step clamps to the +0x1C boundary at 0x12f014-0x12f02c and the next tick kills].
             // `BU+0xFC` is the fuse/arm clock: Bullet_init 0x12c5a0:103 writes 210.0 (overrides
-            // 0x3b/0x69/0x37 [:255-283], the 300.0 +0x70&0x10000 arm :216-222) and Bullet_update
+            // 0x3b/0x69/0x37 [:199-228], the 300.0 +0x70&0x10000 arm :192-198) and Bullet_update
             // counts it down ONLY for +0x70 & 0x80000 records (0x12ee08) and id 0x45 (0x12efa4 —
             // 1.0/tick from 0x30D0D8) — never as a flying round's death cap.
-            // The watch 0x4E/0x4F keeps 210.0 [S unverified: a port choice, kept because
-            // the laser tests ride it; the disc rule is +0x1C = 4.0/8.0 [D weapon_data
-            // 0x2bf150] and the game's beam then advances 4.0/tick through the per-tick refire —
-            // live check: gdbwatch a held watch's BU+0xF4 (predicted 4.0/segment, +0xFC unused)].
-            let base_id = u16::from_le_bytes([w[0x02], w[0x03]]);
-            let bullet_range = if matches!(base_id, 0x4e | 0x4f) { 210.0 } else { f(0x1c) };
+            // laser-watch-0c: the watch 0x4E/0x4F flies the SAME game rule as every other round —
+            // the record's own +0x1C = 4.0/8.0 [L weapon_data 0x2bf150 + id·0x10C]. The old 210.0
+            // here was the bullet-range-210 task's [S] stand-in (kept because the laser tests rode
+            // it); the decompile-backed death range [M Bullet_update 0x12e7b0 case 1 + the boundary
+            // clamp 0x12f014-0x12f02c] is the +0x1C for every id, watch included. The beam still
+            // burns its locks because the fire spawns one round per held tick [M 0x1a5460:653-658,
+            // :688-690] and each round's first (state-0) segment covers [0, +0x1C] from the muzzle
+            // after the boundary clamp — the burn needs the lock's world sphere inside that reach
+            // (0700000c's hinge #139 sits 1.34 units out [D placement + the glist sphere r 0.2325];
+            // 08's safe bolts ~3.1 [D]), not a 210-unit flight.
+            let bullet_range = f(0x1c);
             self.player_bullets.push(PlayerBullet {
                 pos: from, dir, speed, travelled: 0.0, range: bullet_range, damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
                 homing: flags6c & 0x2_0000 != 0,
@@ -12587,6 +12806,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let ray = [b.dir[0] * l, b.dir[1] * l, b.dir[2] * l];
             let end = [b.pos[0] + ray[0], b.pos[1] + ray[1], b.pos[2] + ray[2]];
             self.bullet_paths.push((b.pos, end));
+            // The class-5 trigger contact (`Trigger_Hit` 0x1b1fc8:124-163's input): the round's
+            // per-tick swept segment + its weapon-definition id (`weapon_data+0x02` — what :147
+            // reads off `*(*(obj+0xE0)+0x44)+2`). Consumed by Trigger_Calc next tick (the game's
+            // own phase — see tick_inner's rotation).
+            let bid = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x02], r[0x03]]));
+            self.bullet_contacts_now.push(crate::triggers::BulletContact { a: b.pos, b: end, id: bid });
             // The searchlight contact feed (U-041 ported): the segment, the HITTEST's damage (the
             // weapon's contact damage — `Bullet_update` 0x12e7b0's per-tick +0x90 write) and the pick
             // mode (the slow-tick point arm when the raw step is under the 0.125 threshold — the
@@ -12652,6 +12877,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // shot in the Sim's shared world pass (`Sim::step_net_world`), on every machine —
             // this machine's own bullet must not break them here alone.
             let net_world = self.net_bodies.is_some();
+            // The reject word: `Collide_FilterBullets(list, filter | 0x106)` reads the bullet's
+            // weapon-definition word at `weapon_definition+0x10` [M 0x12bfd8:15 + 0x1ece30:24-33;
+            // the same read the fusebox pass makes below].
+            let weapon_word = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
             // The ONE collide list, sorted nearest-first, stops at the first solid node [M
             // Collide_Update 0x1ea398:216-229 — the copy walk's stop on the first non-pass HITDATA;
             // the node order is the QuickSort on HITDATA+0xc]: the contact goes to the NEAREST
@@ -12670,7 +12899,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if !net_world {
                 let tstop = d.world.segment_bullet(b.pos, end);
                 for (i, br) in self.breaks.list.iter().enumerate().filter(|(_, x)| !x.dead) {
-                    if br.filter != 0 && br.filter & (1u16 << (b.weapon & 15)) != 0 { continue; }
+                    // `Collide_FilterBullets` [M 0x1ece30:24-33]: the weapon's category word
+                    // against the pane's mask | 0x106 — non-zero AND drops the contact.
+                    if weapon_word & (br.filter | 0x106) != 0 { continue; }
                     if let Some(t) = crate::breakable::Breaks::seg_box_t(b.pos, end, br.lo, br.hi) {
                         if contact.is_none_or(|(bt, _, _)| t < bt) { contact = Some((t, false, i)); }
                     }
@@ -12697,6 +12928,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         if br.health < 0.0 {
                             if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
                                 self.break_kills.push((k.placement, k.kind, k.sound));
+                                // A script pane's kill deletes its object (Break_Kill's obj+0xFE
+                                // bit 0 [M 0x12b970:60]): the pane leaves the collision set and
+                                // the draw — the same removal the fusebox wire cuts do.
+                                if let Some(o) = k.script_obj {
+                                    if let Some(slot) = self.scripts.objects.list.get_mut(o) { *slot = None; }
+                                }
                                 // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
                                 // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
                                 // audio voice plus the hearing entry (the level's sfx-table data, the shape the
@@ -13318,7 +13555,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let dyaw = angle_difference(yaw, dv[0].atan2(dv[2]));
             if dyaw.abs() >= h { continue; }
             let dpitch = angle_difference(pitch, (dv[1] / dist).clamp(-1.0, 1.0).asin());
-            if dpitch.abs() >= v || !d.world.line_of_sight(head, p) { continue; }
+            if dpitch.abs() >= v || !d.world.line_of_sight(head, p, crate::world::LOS_SENSOR) { continue; }
             best = dist;
             found = Some((i, dyaw, dpitch));
         }
@@ -14184,6 +14421,69 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.tick_inner(d, player);
     }
 
+    /// `NDrone2_FindOpponent` 0x1424e0's team-2 arm, per tick (the ControlSTANDARD 0x1490f0:167
+    /// call; docs/systems/ally-heard-noise.md §1). For every present team-2 drone:
+    /// re-validate the held opponent — `NDrone2_CanSeeObject(…, 5, 0)` head-to-head plus the
+    /// alive filter [M 0x1424e0:148-190]; then the drone-list scan [M :210-268] from the
+    /// rotating `+0x2c0` cursor, skipping self and the held opponent's node, whose first
+    /// team-1 alive candidate within the range gate runs the ONE LOS check of the tick (the
+    /// `DAT_00299092` counter rule [M :259-262] — candidates examined after any LOS call stop
+    /// the walk) and wins `SetOpponent` on a pass. The range is 800² (640000.0) when there was
+    /// no held opponent to re-validate, the engage range squared when there was [M :191-209,
+    /// 251-255]; the scan runs even when the held opponent was re-validated (the switching arm
+    /// [M :210-268 after the keep fall-through]). Returns per list index the pick
+    /// (opponent index, its position, the 3D distance, the yaw) and the advanced cursors.
+    /// Not ported: the class-0x3b control-object arm [M :124-146] (no object-class model).
+    /// The port's LOS is the collision world's line of sight — the documented stand-in for
+    /// `AINetwork_TestRayCels` + `Collide_LineOfSight` [S, the drone-vision note in tick_inner].
+    fn team2_opponent_picks(&self, d: &Data) -> (Vec<Option<(usize, V3, f32, f32)>>, Vec<usize>) {
+        let n = self.list.len();
+        let mut picks: Vec<Option<(usize, V3, f32, f32)>> = vec![None; n];
+        let mut cursors: Vec<usize> = (0..n).map(|i| self.list[i].opp_cursor).collect();
+        let alive = |i: usize| self.list[i].present && self.list[i].enabled && !self.list[i].corpse;
+        for i in 0..n {
+            let dr = &self.list[i];
+            if !dr.present || dr.team != 2 { continue; }
+            // (a) the re-validation: a held opponent survives the tick only while visible
+            // [M 0x1424e0:148-156]; a drone-class one also re-checks the alive filter [M :157-166].
+            let mut held_ok = false;
+            if let Some(cur) = dr.opp_drone {
+                if cur < n && alive(cur) && d.world.line_of_sight(dr.head(), self.list[cur].head(), crate::world::LOS_GUARD_VISION) {
+                    held_ok = true;
+                }
+            }
+            // (b) the scan [M :210-268]: one LOS per tick (the re-validation's CanSeeObject
+            // already consumed the frame's budget when an opponent was held).
+            let range2 = if dr.opp_drone.is_some() { dr.engage_range * dr.engage_range } else { 640000.0 };
+            let mut budget_used = dr.opp_drone.is_some();
+            let mut pick = None;
+            let start = cursors[i] % n.max(1);
+            let mut stop = cursors[i];
+            for k in 0..n {
+                let c = (start + k) % n;
+                stop = (c + 1) % n;
+                if c == i || dr.opp_drone == Some(c) { continue; } // skipped before the else [M :223-226]
+                let cd = &self.list[c];
+                let dx = cd.pos[0] - dr.pos[0];
+                let dz = cd.pos[2] - dr.pos[2];
+                let cheap = alive(c) && cd.team == 1 && dx * dx + dz * dz < range2;
+                if cheap && d.world.line_of_sight(dr.head(), cd.head(), crate::world::LOS_GUARD_VISION) { pick = Some(c); break; }
+                if budget_used || cheap { break; } // the counter rule [M :259-262]
+            }
+            cursors[i] = stop;
+            // The scan's win replaces the held opponent; otherwise the re-validated one stays
+            // [M :247-256 → SetOpponent only on a scan win; the keep falls through].
+            let opp = pick.or(if held_ok { dr.opp_drone } else { None });
+            if let Some(c) = opp {
+                let cd = &self.list[c];
+                let d3 = ((cd.pos[0] - dr.pos[0]).powi(2) + (cd.pos[1] - dr.pos[1]).powi(2) + (cd.pos[2] - dr.pos[2]).powi(2)).sqrt();
+                let yaw = atan2_approx(cd.pos[0] - dr.pos[0], cd.pos[2] - dr.pos[2]);
+                picks[i] = Some((c, cd.pos, d3, yaw));
+            }
+        }
+        (picks, cursors)
+    }
+
     /// The placed (stuck, alive) grenade ids of ONE weapon id, oldest first — the cap walk's
     /// per-weapdef count set (`Bullet_CollisionHandler` 0x12ce80:332-351 counts class-5 bullets
     /// with the same weapon-record pointer + owner; the port's SP path has a single owner).
@@ -14210,6 +14510,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let _prof_all = crate::prof::scope("drones.tick (total)");
         let prof_pre = crate::prof::scope("drones: shared passes");
         self.frame += 1;
+        // The trigger contacts' phase rotation: `Trigger_Hit` reads the PREVIOUS tick's collide
+        // contacts (`Trigger_Calc` 0x1336f8:24 runs before the update walk :62-63 and Collide_Update
+        // :238; the lists are cleared + rebuilt in Collide_Update 0x1ea398:25-53). Everything that
+        // moves after this line pushes into `bullet_contacts_now`; the trigger passes below consume
+        // `bullet_contacts_prev`.
+        self.bullet_contacts_prev = std::mem::take(&mut self.bullet_contacts_now);
         self.player_pos = player.pos;
         // `Drone_InitComms` 0x139520:263-273: the latch `0x298f84 = 0x298fa0` then `0x298fa0 = 0` —
         // the per-frame sight counter becomes "saw last frame"; this tick's sight accumulates below.
@@ -14531,14 +14837,35 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let armed = (2..0x47).contains(&self.bond_weapon) || (0x6a..=0x71).contains(&self.bond_weapon);
             // `PlrStat_OkToUpdate` 0x1993e0: MP master → 1; else Mission_Status < 2 (0 or 1) → 1 [M 0x1993e0].
             let stat_ok = self.mp_master != 0 || self.mission.status() < 2;
-            for dr in self.list.iter_mut().filter(|x| x.present) { dr.light = light; dr.opponent_info(player); dr.player_pos = player.pos; dr.seen = false; dr.bond_armed = armed; dr.stat_ok = stat_ok;
+            // `NDrone2_FindOpponent` 0x1424e0 (the ControlSTANDARD 0x1490f0:167 per-tick call):
+            // team 2 (dtype 0xC allies [M 0x14cbd8:57-63]) NEVER takes the player [M 0x1424e0:101]
+            // — its opponent is the drone-list walk's pick (docs/systems/ally-heard-noise.md §1).
+            let (team2_picks, team2_cursors) = self.team2_opponent_picks(d);
+            for (i, dr) in self.list.iter_mut().enumerate().filter(|(_, x)| x.present) {
+                dr.light = light; dr.opponent_info(player); dr.player_pos = player.pos; dr.seen = false; dr.bond_armed = armed; dr.stat_ok = stat_ok;
+                if dr.team == 2 {
+                    // Apply the pick: the guard feeds the opponent-derived fields; no pick is
+                    // `SetOpponent(0)` — the aim offset zeroes (the aim position degenerates to
+                    // the drone's own position [M 0x1422d0:25-29]) while `+0xf0`/`+0x1d4` keep
+                    // their stale values (the game does not rewrite them).
+                    dr.opp_cursor = team2_cursors[i];
+                    dr.opp_los = team2_picks[i].is_some();
+                    dr.opp_drone = team2_picks[i].map(|(c, _, _, _)| c);
+                    if let Some((_, opos, odist, oyaw)) = team2_picks[i] {
+                        dr.dist = odist;
+                        dr.yaw_to_opp = oyaw;
+                        dr.opp_target = opos;
+                    } else {
+                        dr.opp_target = dr.pos;
+                    }
+                }
                 // `NDrone2_PreDroneControl` 0x148db0:35-48: the +0x154 per-player distance fill
                 // (Vec_Dist3D of the two obj+0x30s; 100000.0 for a null slot). The port's single
                 // player is slot 0 [S one player]; slots 1..3 keep the empty-slot value.
                 let dx = dr.pos[0] - player.pos[0]; let dy = dr.pos[1] - player.pos[1]; let dz = dr.pos[2] - player.pos[2];
                 dr.dist_to_player = [(dx * dx + dy * dy + dz * dz).sqrt(), 100000.0, 100000.0, 100000.0]; }
         }
-        { let _p = crate::prof::scope("phase: bullets"); self.update_player_bullets(d, player.pos); }
+        { let _p = crate::prof::scope("phase: bullets"); self.breaks.frame = self.frame; self.update_player_bullets(d, player.pos); }
         // The locks' idle arm (`Lock_Update` 0x1ae3d8 case 0 kind 1's tail): the +1/tick refill of
         // the burn bytes once the 2-tick grace runs out [M :107-121] — the partial burn heals. The
         // game runs `Lock_Update` per tick in the control pass; the contact side already ran above
@@ -14645,7 +14972,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // crossed AI cels, walls first [M 0x15ab78]); the port swaps that for the static
                 // collision world's line of sight — the same deviation the nav `move_test`
                 // documents [S].
-                dr.los = d.world.line_of_sight(dr.head(), player.target);
+                dr.los = d.world.line_of_sight(dr.head(), player.target, crate::world::LOS_GUARD_VISION);
                 // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
                 // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
                 // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
@@ -14659,6 +14986,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // standins-drone-922: the opponent pointer [M 0x1424e0:100-120] — Bond alive = the
             // pointer set; stamped for every drone every tick, before the LOS gate.
             dr.bond_alive = self.health.health > 0.0;
+            if dr.team == 2 { continue; } // the team-2 sight state is the opponent fold below
             if dr.los {
                 dr.seen_ticks += 1;
                 // fix-guard-first-shot2: `ProcessDroneSight` 0x176a28:216-223 resets the unseen
@@ -14727,6 +15055,34 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.seen_ticks = 0;
                 dr.unseen_ticks += 1;
                 dr.lost_sight = true;
+            }
+        }
+        // The team-2 opponent-sight fold: `DroneVision_ProcessDroneSight` 0x176a28 runs against
+        // the OPPONENT (+0x170) — for a team-2 ally that is the drone opponent (or nothing),
+        // never the player [M 0x1424e0:101]. The Bond-keyed pass above skipped them; the
+        // opponent-derived state re-folds here (docs/systems/ally-heard-noise.md §3):
+        // an opponent-visible tick resets +0x274 [M 0x176a28:216-223], accumulates the sight
+        // counter and — behind the reaction gate — sets the seen flag and stamps +0x238
+        // [M 0x175ef0:40-44, 66-68]. Without an opponent the game leaves +0x274 frozen; the
+        // port forces the refuse value 16 so every `+0x274` gate (DoFiring 0x17a080:24-25
+        // included) refuses — no shot can leave a team-2 drone without a drone opponent [S
+        // safety fold, the frozen-counter case].
+        for dr in &mut self.list {
+            if !dr.present || dr.team != 2 { continue; }
+            if dr.opp_drone.is_some() {
+                dr.seen_ticks += 1;
+                dr.unseen_ticks = 0;
+                dr.lost_sight = false;
+                if dr.seen_ticks >= dr.reaction_time(d.level) {
+                    dr.seen = true;
+                    dr.ever_seen = true;
+                    dr.opp_have_frame = frame;
+                }
+            } else {
+                dr.seen_ticks = 0;
+                dr.seen = false;
+                dr.unseen_ticks = 16;
+                dr.lost_sight = false;
             }
         }
         // `Drone_InitComms` order: `ProcessDroneSight` (vision, line of sight, `FindAlertedDrones`), the 0x97 check, then
@@ -14833,7 +15189,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let in_view = dist < 2.0 || ((o.half_fov == 0.0 || angle_difference(o.yaw, atan2_approx(dx, dz)).abs() <= o.half_fov) && dist <= o.sight_range);
                 if !in_view { continue; }
                 sight_passes += 1; // the cone pass is the counted return [M 0x176250:197-210, 0x1767d0:75]
-                if !d.world.line_of_sight(o.head(), src.head()) {
+                if !d.world.line_of_sight(o.head(), src.head(), crate::world::LOS_GUARD_VISION) {
                     if sight_passes > 4 { break 'pairs; }
                     continue;
                 }
@@ -15150,7 +15506,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true }))
             .collect();
         drop(prof_pre);
-        { let _p = crate::prof::scope("drones: Trigger_Calc"); crate::triggers::calc(d.level, &mut self.triggers, &mut self.channels, &touchers, frame); }
+        { let _p = crate::prof::scope("drones: Trigger_Calc"); crate::triggers::calc(d.level, &mut self.triggers, &mut self.channels, &touchers, &self.bullet_contacts_prev, frame); }
         // level-0c-complete: the deferred use-key trigger half — the game's E press fires at
         // Bond's turn in the object walk, AFTER Trigger_Calc's touch clear and BEFORE the later
         // muxes' updates in the same walk [M 0x1336f8's loop; Player_Activate 0x1a5170]. Consumed
@@ -15188,10 +15544,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let (unhide, posed) = c.update(&paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng);
             if unhide { self.scripts.unhide_sp(c.placement); }
             if posed { self.scripts.pose_copter_sp(c.placement, c.matrix); }
+            // obj+0xFE bit 0 (`landed`: the +0x74 == 100 route end [M Copter_Move 0x17d628:63-65],
+            // state 5's arrival and state 6 [M Copter_Update 0x17dbb8:255-275]) is the object
+            // loop's delete flag [M control_movement_object_handler 0x1336f8:77-87 →
+            // control_delete_object] → `Copter_Delete` 0x17e568: SP_Delete on the copter's SP and
+            // the list remove (below, after the walk).
+            if c.landed { self.scripts.delete_copter_sp(c.placement); }
             // PlrStat_LogShotHitEnemy(0) [M 0x17dbb8:314-316, jal 0x199840]: the walk's roll is
             // per tick; the stats fold below counts it exactly once (the flag holds until the
             // next update overwrites it).
         }
+        // Copter_Delete 0x17e568: LList_Remove(0x2a3830, rec) [M :9] — the deleted copters leave the list.
+        self.copters.retain(|c| !c.landed);
         // The script players' tick head (the create-time load beat — the game does it during the
         // level load [M 0x1db9a8:81-86]): the players THEMSELVES update from the control walk
         // below, in the game's list order (fix-script-start-tick — the old all-players-here beat
@@ -15245,6 +15609,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // bolt (ch 137) are solid at their posed matrix, like the doors. Id: bit 41 + the ss index.
             parts.extend(drones.sss.list.iter().enumerate().filter(|(_, x)| x.hash != 0)
                 .map(|(k, x)| (0x200_0000_0000 | k as u64, x.hash, x.matrix)));
+            // The breakable panes (placement 0x20) are solid while alive: the game's pane object
+            // stands on its own collision block (Collide_PickObj walks the cel-linked objects)
+            // and a KILLED one leaves the world — obj+0xFE |= 1, "the collision goes away"
+            // [M Break_Kill 0x12b970:60]. The port holds them in the SAME per-tick set_dynamic
+            // set as the doors/SS shapes: a kill drops the part and the rebuild leaves the pane
+            // out of the collision world (no re-injection machinery; the unchanged-matrix fast
+            // path keeps the rest ticks cheap). Id: bit 42 + the breakable list index (stable —
+            // kills only flag; the list never reorders). A JUST-killed pane keeps its part for
+            // the death tick: the game's collide pass registers the killing bullet's contact
+            // BEFORE Break_Kill takes the collision away (the contact list is the collide pass's
+            // product, Break_Update walks it same tick), so the tick's deferred HITDATA re-trace
+            // still sees the sheet.
+            // NOT ridden yet [S]: with these parts in the set, real-path walks, guard sight and
+            // dropped items on 01/09/0a/0b/14 stop at shapes where no pane stands in the game
+            // (the shape-key/matrix pairing is unresolved), so the panes stay out of the
+            // collision world until that pairing is proven.
+            let _pane_parts = drones.breaks.list.iter().enumerate()
+                .filter(|(_, b)| (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
+                .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix));
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,
@@ -15296,6 +15679,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         }
                         // options-census: damage resets the pane fade [M 0x1902c8:27].
                         self.pain_alpha = 1.0;
+                        self.fusebox_hurts += 1;
                         self.player_hits.push((frame, usize::MAX, before - self.health.health));
                         let _ = at;
                     }
@@ -15331,6 +15715,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             Some(bodies) => { self.update_pickups_net(d, &bodies, frame); self.net_bodies = Some(bodies); }
             None => self.update_pickups(d, player, frame),
         } }
+        // `Destroy_Update` 0x12c4f8's second arm (30-35): a live destroyable whose +0x10 word
+        // (placement param 1 [M 0x12c318:36]) names an ON channel smashes, the word clears. 07000008's
+        // GuardRoom SmallExplosionBox #234 carries +0x10 = 137 — the FUSEBOX_GuardRoomDoorLock's
+        // channel [D the census] — so the fusebox cut smashes it (996-level-08-decomp-audit; the
+        // "out ch 137" reading in docs/levels/07000008.md had the direction reversed). The blast
+        // rides the same queue the bullet-path smash uses (Destroy_Smash 0x12bb60's Explode_Create,
+        // the damage = param 5 × 0.01 [M 0x12c424]).
+        for (pos, radius, damage, kind) in self.props.channel_kills(&self.channels) {
+            let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
+            self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius));
+        }
         // The actor list `Door_Update`'s proximity test (`dist² < (r1+r2)²·2` over classes
         // 2/3/0x12, skipping `obj+0xF0 & 0x10` candidates [M 0x136678-0x136684]) sees: the player
         // first (`glb_players`, the activator of every auto-activation) with radius 0.4, then every
@@ -15424,7 +15819,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let drone_pre: Vec<V3> = self.list.iter().map(|x| x.pos).collect();
         for &(_, what, index) in &order {
             if what == 1 { let _pw = crate::prof::scope("ctl: kind 1");
-                self.triggers[index].update(&mut self.channels, &touchers, frame);
+                self.triggers[index].update(&mut self.channels, &touchers, &self.bullet_contacts_prev, frame);
                 // `LOAD_LEVEL` (0xE8): when the exit trigger fires, carry the next level's hashcode for the main loop
                 // to reload (`Trigger_Activate` 0x1b2318 → `ResetMap_LevelToLoad`). Also post `Music_Event(3, 1)`
                 // (the end-sting) and `GS_PauseGame(1)` (the pause during transition) [M 0x1b2318:108-110].
@@ -16339,6 +16734,28 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             });
         }
+        // The script-created breakables (`Script_CreateEntity` 0x1d8968's 0x20 arm — the
+        // gondola's 16 windows ride the carriage): upsert/refresh each live 0x20 entity's pane
+        // row every tick. The game re-poses obj+0x90 from the stream keys per `Script_Interp`
+        // [M 0x1d9a08:94-112] and the bullet's `Collide_Intersect` tests the pane's CURRENT local
+        // space [M 0x1ebaa8:157-177]; the port re-derives the pane's world bounds from the live
+        // matrix (the same shapes the dynamic set carries). A pane whose object died (the kill's
+        // deletion, a `Script_KillStream`) drops its row.
+        {
+            let live: Vec<usize> = self.scripts.objects.list.iter().enumerate().filter_map(|(i, o)| match o {
+                Some(crate::nis::Obj::Entity { kind: 0x20, .. }) => Some(i),
+                _ => None,
+            }).collect();
+            self.breaks.retain_script_panes(&live);
+            for (o, hash, params, m) in self.scripts.objects.list.iter().enumerate().filter_map(|(i, o)| match o {
+                Some(crate::nis::Obj::Entity { hash, kind: 0x20, params, matrix, .. }) => Some((i, *hash, params.clone(), *matrix)),
+                _ => None,
+            }) {
+                if let Some(shape) = d.world.shape(hash) {
+                    self.breaks.script_pane(o, &params, shape, m);
+                }
+            }
+        }
         { let parts = { let _p = crate::prof::scope("drones: set_dynamic parts"); script_parts(self, d) };
           let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&parts); }
         // The killer monitor's step-2 clear of the hostage's finished `+0x4D0` [M 0x144340:53]:
@@ -16457,6 +16874,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let viewer = player.pos;
         for b in &mut self.bullets {
             let (from, dir) = (b.pos, b.dir);
+            let alive_in = b.state < 2;
             if let Some(ev) = b.update(d.world, &vol, viewer, &mut self.rng) {
                 match ev {
                     crate::bullet::BulletEvent::World(p) => {
@@ -16588,6 +17006,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
                 self.impacts.push(ev);
             }
+            // The class-5 trigger contact for a drone round that flew this tick (`Trigger_Hit`
+            // 0x1b1fc8:124-163's input — same shape as the player bullets' push in
+            // `update_player_bullets`; consumed next tick). A round that died on the world this
+            // tick moved no further (the port's Bullet::update returns before the move), so its
+            // contact is the residual from its earlier segments [*deviation*: the game's picker
+            // still sweeps the death tick's partial step — Collide_Update runs on the just-moved
+            // path before the handler kills the round; the port's world trace and the move are
+            // one decision].
+            if alive_in {
+                let bid = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x02], r[0x03]]));
+                self.bullet_contacts_now.push(crate::triggers::BulletContact { a: from, b: b.pos, id: bid });
+            }
         }
         self.bullets.retain(|b| b.state < 2);
         // fix-gas-rng4: the player bullets' impact draws at the game's collide pass — after the
@@ -16638,6 +17068,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             out
         } else { Vec::new() };
         for g in &mut self.grenades {
+            // The class-5 trigger contact (Trigger_Hit 0x1b1fc8:124-163's input): the grenade's
+            // per-tick swept segment with its weapon-def id (`Grenade.weapon_type` IS
+            // `weapon_data+0x02` [M the throw site's `[wd[2], wd[3]]`]). A STUCK gadget (state ≥ 2
+            // or the stuck phase) contributes nothing: the game's picker gate ht+0x94 is written
+            // only while state < 2 [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f03c — `slti
+            // v0, state, 2` closes it otherwise], and a zero-length segment touches no triangle.
+            let gprev = g.pos;
+            let galive = g.state < 2;
             // fix-oddjob-hat: the hat's homing — `Bullet_update` 0x12e7b0:476-478 runs
             // `Bullet_homing` 0x12f358 after every flying tick for bullets whose `+0x6C` carries
             // 0x20000. The hat's record does — +0x6C = 0x20C08, the only 0x20000 carrier among the
@@ -16830,7 +17268,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // in SP (`MPSettings._388_4_ == 0`) only a PLAYER thrower (obj+0xFF == 3) broadcasts —
                         // the port is SP-only, so owner == usize::MAX.
                             let head = player.eye;
-                            let has_los = d.world.line_of_sight(head, pos);
+                            let has_los = d.world.line_of_sight(head, pos, crate::world::LOS_SENSOR);
                             // The facing yaw [M Bullet_DoTrails 0x12d890:328-330 — the flash arm
                             // `Vec_AngleDifference(atan2f(blast−player), *(f32*)(player+0x54))`]: the
                             // player object's euler facing yaw (`obj+0x54`, written by the movement
@@ -16866,7 +17304,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                     if !present || corpse { continue; }
                                     // The vicinity radius: `Vec_Dist3D(obj+0x30, blast+0x30) <= 20.0` [M 0x13a438:28-29].
                                     if (dpos[0] - pos[0]).powi(2) + (dpos[1] - pos[1]).powi(2) + (dpos[2] - pos[2]).powi(2) > 400.0 { continue; }
-                                    if !d.world.line_of_sight(dpos, pos) { continue; }
+                                    if !d.world.line_of_sight(dpos, pos, crate::world::LOS_GUARD_VISION) { continue; }
                                     self.list[i].send(d, &mut self.rng, frame, msg::FLASH);
                                 }
                             }
@@ -16909,6 +17347,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         break;
                     }
                 }
+            }
+            // The class-5 trigger contact push (after the update moved `g.pos`; see the loop head's
+            // note). Alive through the tick = the swept segment; the death tick still swept its
+            // path (the game picks the moved segment before the handler kills the object).
+            if galive {
+                self.bullet_contacts_now.push(crate::triggers::BulletContact { a: gprev, b: g.pos, id: g.weapon_type });
             }
         }
         // The queued blasts (`Explode_Create` 0x17cbd0): the full blast — propagate, the 0x6000052
@@ -17048,7 +17492,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let (dx, dy, dz) = (dr.pos[0] - p[0], dr.pos[1] - p[1], dr.pos[2] - p[2]);
                 if dx * dx + dy * dy + dz * dz > radius * radius { continue; }
                 if !dr.prop(d, 0x3a) && !dr.prop(d, 0x3b) { continue; }
-                if !d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p) { continue; }
+                if !d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p, crate::world::LOS_GUARD_VISION) { continue; }
                 dr.explosive_msg = Some((p, run, ret, frame + ticks));
                 dr.send(d, rng, frame, msg::EXPLOSIVE);
             }
@@ -17154,8 +17598,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let level_01 = d.level == 0x0700_0001;
         for (dr, from) in self.list.iter().zip(drone_from) {
             if !dr.present || dr.corpse { continue; }
-            for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, &mut self.rng) {
+            for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, 0.0 /* the rejected-step drain waits on the pane ride [S] */, &mut self.rng) {
                 self.break_kills.push((k.placement, k.kind, k.sound));
+                if std::env::var("TASE_DBG").is_ok() { eprintln!("[brk-contact] f{} placement {} kind {} sound {} at ({:.1},{:.1},{:.1})", self.frame, k.placement, k.kind, k.sound, k.pos[0], k.pos[1], k.pos[2]); }
                 let id = u32::from(k.sound);
                 self.audio.play3d(id, k.pos, None);
                 if let Some(t) = d.sfx {
@@ -17461,7 +17906,7 @@ mod tests {
             shot_rolls: Vec::new(),
             surrender_logged: false, hit_log: 0, detected_logged: false,
             hip_anim: 1.0,
-            log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script: 0, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: 0, lost_sight: false,
+            shot_aims: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script: 0, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: 0, lost_sight: false,
             damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
             route: None, last_wait: None, idle_timeout: None, delayed: None, sm_id: 0, stand_until: 0,
             croute: None, nav_path: None, move_quad: 0, yaw_offset: 0.0, no_route_odd: false, target: PlayerTarget::default(), links_used: Vec::new(),
@@ -17476,6 +17921,10 @@ mod tests {
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
+            opp_cursor: 0,
+            opp_drone: None,
+            opp_have_frame: 0,
+            opp_los: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
             alert_pending: 0,
             armed_peer_exit_dist: f32::MAX,
@@ -17534,6 +17983,7 @@ mod tests {
             // fix-cover-remainder: the scary-object flee family.
             scared: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
             scripted_move: false,
+            blocked_reach: 0.0,
             // +0x174 — the shared target registry slot.
             target_id: 0xff,
         };

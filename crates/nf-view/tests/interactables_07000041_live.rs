@@ -95,9 +95,28 @@ fn the_glass_pan_shatters_under_the_real_fire() {
     assert!(shot, "the glass pane shatters under the held fire [M Break_Kill 0x12b970]");
 }
 
-/// The pickup ("Pickup X9", 0xF0, PL#101 at (20.66, 0, −39.34) [D]): the walk-over take fires —
-/// `Pickup_Handler` 0x18e650's take. Sister: Bond away → nothing taken.
-#[ignore = "the walk-over take does not fire on this level's deck (the 1b session's same gap — the take path is proven on 09/05; this level's pickup sits at the hull's edge and the pick never credits)"]
+/// The pickup ("Pickup X9", 0xF0, PL#101 at (20.66, 0, −39.34), kind 0, weapon 0x1e, 10 rounds
+/// [D the probe dump]): the walk-over take fires — `Pickup_Handler` 0x18e650's take — once Bond's
+/// sniper pool has room, and is refused while it is full.
+///
+/// The game loads this wrapper with `Player_InitWeapon` 0x1a7ef8's DEFAULT arm: 0x7000041 is in
+/// none of the switch's cases (0x7000001..0x700001b only [M 0x1a7ef8:149-289]) — the port's own
+/// load line agrees (40 owned weapons, the give-everything kit). The default list equips the
+/// sniper with 999 rounds [M 0x1a7ef8 default: `Player_EquipWeapon(param_1, 0x1e, 999)`] and
+/// `Player_EquipWeapon` 0x1a8a58 clamps the carried pool to the `ammo_data` cap — Bond arrives
+/// with 0x1e owned and the pool FULL. The handler's case-0 owned arm is `Player_EquipAmmo`
+/// 0x1a8d18, which refuses while `carried[type] >= ammo_data cap` (returns 0) and the handler
+/// `return`s on that 0 [M 0x18e650: `lVar21 = Player_EquipAmmo(…); if (lVar21 == 0) { return; }`]
+/// — the pickup stays on the floor. This session's first cut was ignore-listed believing a
+/// hull-edge gap in `Pickup_Update`'s take condition; the take-test probe (NF_PICKUPLOG) shows
+/// the opposite: the distance gate and the LOS pass every tick of the walk-over (dist 1.117 <
+/// r 1.825, los true) and the refusal is the handler's own full-pool arm — the game refuses this
+/// walk-over too until Bond spends sniper rounds. Both legs are pinned on the real input path:
+/// the sister first — the fresh loadout's walk-over never credits and the pickup stays
+/// [M 0x18e650's owned arm]; then one sniper round plus the reload key (the real action 14
+/// [M 0x1a5460 disasm 0x1a5fe8 → 0x1a61d0 via gun.rs]) moves a shell from the carried pool into
+/// the clip — the same +0x170/+0x1B8 pair `Player_EquipAmmo` reads [M 0x1a8d18] — and the same
+/// walk-over takes [M 0x18e148:203-216's touch → 0x18e650's ammo arm].
 #[test]
 fn the_pickup_takes_on_the_walk_over() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -105,17 +124,56 @@ fn the_pickup_takes_on_the_walk_over() {
     let sim = scene.sim.as_mut().unwrap();
     settle(sim);
     assert_eq!(sim.drones.pickups.len(), 1, "one pickup parses [D PL#101]");
-    let weapon = sim.drones.pickups[0].weapon;
+    let p = &sim.drones.pickups[0];
+    assert_eq!((p.kind, p.weapon, p.rounds), (0, 0x1e, 10), "kind 0, weapon 0x1e, 10 rounds [D the probe dump]");
     let taken0 = sim.drones.taken.len();
+    // The sniper pool at the load: the default arm's EquipWeapon(0x1e, 999) clamps the carried
+    // pool to the cap [M 0x1a7ef8 default + 0x1a8a58] — the state the game's own walk-over hits.
+    let t = sim.weapons.ammo_type(0x1e);
+    let cap = sim.weapons.ammo_cap.get(t).copied().unwrap_or(0) as i32;
+    assert!(cap > 0, "the sniper's ammo type has a cap [M 0x1a8d18's ammo_data cap read]");
+    let carried0 = sim.drones.inventory.carried[t] as i32;
+    assert!(carried0 >= cap, "the default arm loads the sniper pool full (carried {carried0} >= cap {cap}) [M 0x1a8a58's clamp]");
+    // Sister first: the fresh loadout's walk-over is refused and the pickup stays [M 0x18e650's
+    // owned arm — Player_EquipAmmo returns 0 on the full pool and the handler returns]. The same
+    // walk geometry the take leg reuses.
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, [20.66, 1.4, -38.6], std::f32::consts::PI);
     let mut input = Input::default();
     input.forward = 1.0;
+    for _ in 0..300 { sim.step_bond(input, false, false, false); }
+    assert_eq!(sim.drones.taken.len(), taken0, "sister: the full-pool walk-over never credits [M 0x18e650 case 0 → 0x1a8d18's cap refuse]");
+    assert!(!sim.drones.pickups[0].gone && !sim.drones.pickups[0].hidden, "sister: the pickup stays on the floor [M 0x18e650's return on the 0]");
+    // Free one shell of pool room on the real input path: the number-key select draws the sniper,
+    // one held-trigger shot spends a round, the reload key (action 14) refills the clip from the
+    // carried pool [M 0x1a5460's reload arms via gun.rs].
+    let mut sel = Input::default();
+    sel.switch_to = Some(0x1e);
+    for _ in 0..120 { sim.step_bond(sel, false, false, false); if sim.gun.weapon == 0x1e { break; } }
+    assert_eq!(sim.gun.weapon, 0x1e, "the number-key select draws the sniper [M Player_WeaponSelect]");
+    let clip_size = sim.weapons.clip_size(0x1e) as u32;
+    let mut shot = false;
+    for _ in 0..600 {
+        sim.step_bond(Input::default(), true, false, false);
+        if sim.gun.clip < clip_size { shot = true; break; }
+    }
+    assert!(shot, "the held trigger spends a sniper round (clip {} < {})", sim.gun.clip, clip_size);
+    // Hold the reload key (action 14) through the poll: the shot's fire view-script keeps the gun
+    // busy for its tail (gun.rs's `busy`), which swallows the reload arms until it ends — the
+    // game's own hold-R behaviour [M 0x1a5460's reload arms via gun.rs].
+    let mut reloaded = false;
+    for k in 0..600 {
+        sim.step_bond(Input::default(), false, true, false);
+        if !sim.gun.reloading() && sim.gun.clip >= clip_size { reloaded = true; break; }
+    }
+    assert!(reloaded, "the reload refills the clip from the pool [M 0x1a5460's reload arms]");
+    let carried1 = sim.drones.inventory.carried[t] as i32;
+    assert!(carried1 < cap, "the reload freed pool room (carried {carried0} -> {carried1}, cap {cap}) [M 0x1a8d18's +0x170 read]");
+    // The same walk-over now takes [M 0x18e148:203-216's touch → 0x18e650's ammo arm]: the pool
+    // is below the cap, Player_EquipAmmo credits the 10 rounds and the handler's tail runs.
+    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [20.66, 1.4, -38.6], std::f32::consts::PI);
     let mut took = false;
     for _ in 0..300 { sim.step_bond(input, false, false, false); if sim.drones.taken.len() > taken0 { took = true; break; } }
-    assert!(took, "the walk-over take fires [M Pickup_Handler 0x18e650]; taken {:?}", sim.drones.taken.last().map(|t| t.1));
-    let t = sim.drones.taken.last().unwrap().1;
-    let _ = weapon; // the take's what is the disc's own decode; the assert is the take firing
-    let _ = t;
+    assert!(took, "the walk-over take fires once the pool has room [M 0x18e148 + 0x18e650 case 0's ammo arm]; taken {:?}", sim.drones.taken.last().map(|t| t.1));
 }
 
 /// The third icons (0xFA ×2 [D PL#105/#114]): HUD context icons keyed by their channels — #105

@@ -410,16 +410,19 @@ impl Level {
     /// animated `Tree`s), drawn as the skin's main meshes at the placement transform in bind pose. Sleeve entries
     /// (substituted at run time) and skins from other archives are skipped; the second value counts placements
     /// skipped for a missing skin.
-    pub fn character_instances(&self) -> (Vec<Instance>, usize) {
+    /// Each instance rides its placement's own index — the drone link (`Scene::char_drone`) keys
+    /// on it, because placements can share a translation bit-for-bit (0700000c's three duplicate
+    /// pairs [D #263/#461, #261/#462, #310/#463]).
+    pub fn character_instances(&self) -> (Vec<(usize, Instance)>, usize) {
         let Some(m) = self.main_map() else { return (Vec::new(), 0) };
         let (mut out, mut missing) = (Vec::new(), 0);
-        for p in &self.maps[m].placements {
+        for (pi, p) in self.maps[m].placements.iter().enumerate() {
             let Some(&(_, skin)) = p.params.iter().find(|(i, _)| *i == 0) else { continue };
             if skin >> 24 != 5 { continue; }
             let Some(s) = self.skins.get(&skin) else { missing += 1; continue };
             for h in s.main.iter().flatten() {
                 if let Some(&(map, object)) = self.by_hash.get(h) {
-                    out.push(Instance { map, object, matrix: placement::object_matrix(p.rotation, p.translation), placement: p.clone() });
+                    out.push((pi, Instance { map, object, matrix: placement::object_matrix(p.rotation, p.translation), placement: p.clone() }));
                 }
             }
         }
@@ -494,18 +497,48 @@ impl Level {
         (out, missing)
     }
 
+    /// The collision/scene instance list. With `cels_only` this is EVERY map's `creates_cel`
+    /// placements in map order — the same walk `parse_cel_graph` does (scene.rs) — so the k-th
+    /// instance stays the k-th scope cell (the build_scoped/attribute_scope pairing). The old
+    /// main-map-only walk desynced that pairing AND dropped the non-main maps' real world
+    /// geometry: 0700000a's corridor floor strips live in map37 (plc286/287, the mouth bridge at
+    /// x −11.43..−10.39, z −19.36..−18.03 [D the disc tri dump]) and the guards walk them [D the
+    /// ai nodes] while the port's world had a hole there. The library maps' origin placements
+    /// mostly carry no collision block (the build skips those); the rest sit at the world origin
+    /// outside the playable space.
+    /// The collision/scene instance list. With `cels_only` this walks the main map's
+    /// `creates_cel` placements (the same order `parse_cel_graph` gives the main-map cells) PLUS
+    /// — appended after them, so the k-th cel instance stays the k-th scope cell — every map's
+    /// kind-0x19 mesh placements whose object carries a collision block. Those pieces are the
+    /// game's room-join geometry: 0700000a's corridor floor bridge (map37 plc286/287, x
+    /// −11.43..−10.39, z −19.36..−18.03 [D the disc tri dump]) that the guards walk [D the ai
+    /// nodes] and 07000001's shoji-threshold strips — the port's world had holes there because
+    /// the mesh pieces are not cels (no 0x8000) and never joined the collision build. The game
+    /// creates them as view objects whose glist collision rides `Collide_Update`'s dynamic list
+    /// [M object.md's movement pass]; the port folds them into the static set (they never move).
     pub fn instances(&self, cels_only: bool) -> (Vec<Instance>, usize) {
-        let Some(m) = self.main_map() else { return (Vec::new(), 0) };
+        let Some(main) = self.main_map() else { return (Vec::new(), 0) };
         let mut out = Vec::new();
         let mut missing = 0;
-        for p in &self.maps[m].placements {
+        for p in &self.maps[main].placements {
             if cels_only && !p.creates_cel() { continue; }
-            let target = if p.by_hash() { self.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < self.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+            let target = if p.by_hash() { self.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < self.maps[main].objects.len() { Some((main, p.index as usize)) } else { None };
             match target {
                 Some((map, object)) => out.push(Instance { map, object, matrix: placement::object_matrix(p.rotation, p.translation), placement: p.clone() }),
                 None => missing += 1,
             }
         }
+        if cels_only {
+            for (mi, m) in self.maps.iter().enumerate() {
+                if mi == main { continue; }
+                for p in &m.placements {
+                    if p.creates_cel() || p.flags & 0xff != 0x19 { continue; }
+                    let target = if p.by_hash() { self.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < m.objects.len() { Some((mi, p.index as usize)) } else { None };
+                    let Some((map, object)) = target else { missing += 1; continue };
+                    if self.maps[map].objects[object].collision.is_none() { continue; }
+                    out.push(Instance { map, object, matrix: placement::object_matrix(p.rotation, p.translation), placement: p.clone() });
+                }
+            }
+        }
         (out, missing)
-    }
-}
+    }}
