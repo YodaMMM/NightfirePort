@@ -88,3 +88,27 @@ removed) with the game's chain.
 - `fix_level_0c_live` (0c): the four hinges burn through the real path (~85 ticks each, the clip
   500 [L `+0x92`] covers the 4 × ~85 spend) and open the display vent.
 - `fix_safe08_live` (08): the fusebox → both bolts → ch 136 → the pickups chain.
+
+## Correction (bullet-range-210, 2026-10-23): `BU+0xFC` is not the death cap
+
+The disassembly of `Bullet_update` 0x12e7b0 refutes the "the HITTEST range `BU+0xFC` is the
+death cap" claim above (see docs/systems/bullet-flight-range.md for the full chain):
+
+- Case 1 (the flying state — state 1 → 0x12e95c via the state jump table at 0x2f4300) kills the
+  round when **`weapon_data+0x1C` < `BU+0xF4`** (`lwc1 $f1, 0x1c($v1)` / `c.olt.s` at
+  0x12e95c-0x12e984), with the step clamped to the +0x1C boundary (0x12f014-0x12f02c) and
+  `BU+0xF4` keeping the overshoot for the next tick's kill. The "range-clamped" segment above is
+  clamped by `+0x1C`, not `BU+0xFC`.
+- The 0x12efa4 read of `BU+0xFC` this doc cited as "the death cap per tick" is the **id-0x45-only
+  arm** (`bnel $v1, $a0(0x45), 0x12efd8` at 0x12ef98 gates it): a 1.0/tick countdown (the
+  constant at 0x30D0D8 [D ELF]) that kills the round at ≤ 0 — the mine/stick arm timer, not a
+  flight range. The other `BU+0xFC` consumer is the `+0x70 & 0x80000` fuse countdown at
+  0x12ee08 (explode at ≤ 0). `Bullet_init`'s 210.0/300.0/0x3b/0x69/0x37 values [M 0x12c5a0:103,
+  :255-283] are that clock's initial values, in TICKS.
+- The watch's record `+0x1C` = 4.0/8.0 is therefore its real per-segment flight range, and the
+  game's beam still burns locks because the chain above fires **one round per tick** [M
+  0x1a5460:653-658, :688-690]: the 4.0-unit segments tile the ray at 240 units/s, the front
+  reaches the lock in ~distance/4 ticks, and the 84 contact ticks follow. The port keeps the
+  210.0 range for the watch's bullets for now [S unverified — task 831's port choice; the merged
+  laser tests ride it] and the live check (gdbwatch a held watch's `BU+0xF4`: predicted
+  ~4.0/segment with `BU+0xFC` untouched at 210) settles which model the game runs.
