@@ -7747,14 +7747,19 @@ impl Drone {
                 self.croute = None;
                 // `SetupGoalPositionToObj` 10.0 [M 0x15add0] — the goal is the OPPONENT's object
                 // with a 10-unit arrival radius, and `MoveToGoalPosition` arrives when the route
-                // distance drops under it [M 0x1517d8:80-83]; the port's GoToGoal arrives at 2.0,
+                // distance drops under it [M 0x1517d8:51-53]; the port's GoToGoal arrives at 2.0,
                 // so the goal is the point 10 units from Bond on the guard's side (the port's
-                // stand-in for the radius — guard-barks-first-alert). Already inside the radius →
-                // straight to the wait state (the game's CanReachGoalPosition succeeds at once).
-                if self.dist <= 10.0 { self.set_state(INTEROGATE_ASSIST_WAIT); return true; }
+                // stand-in for the radius). The game ALWAYS goes through
+                // GoToGoal 0x63 with return state 0x3a when the goal is reachable [M 0x1616c0:46-51
+                // — CanReachGoalPosition 0x155ad0 → `+0x5a2 = 0x3a`, SetState(99)]; inside the
+                // radius the route distance is already under 10, so 0x63 arrives on its first update
+                // [M 0x1517d8:51-53 returns 3]. The port's stand-in for that: the goal is the
+                // guard's own position (GoToGoal arrives at once), not a skip of 0x63.
                 let (dx, dz) = (self.pos[0] - self.target.pos[0], self.pos[2] - self.target.pos[2]);
                 let len = (dx * dx + dz * dz).sqrt();
-                let goal = if len > 1.0e-4 {
+                let goal = if self.dist <= 10.0 {
+                    self.pos
+                } else if len > 1.0e-4 {
                     [self.target.pos[0] + dx / len * 10.0, self.target.pos[1], self.target.pos[2] + dz / len * 10.0]
                 } else {
                     self.target.pos
@@ -12067,7 +12072,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // at 0x2f4300) kills the round when weapon+0x1C < BU+0xF4 (0x12e95c-0x12e984); the
             // step clamps to the +0x1C boundary at 0x12f014-0x12f02c and the next tick kills].
             // `BU+0xFC` is the fuse/arm clock: Bullet_init 0x12c5a0:103 writes 210.0 (overrides
-            // 0x3b/0x69/0x37 [:255-283], the 300.0 +0x70&0x10000 arm :216-222) and Bullet_update
+            // 0x3b/0x69/0x37 [:199-228], the 300.0 +0x70&0x10000 arm :192-198) and Bullet_update
             // counts it down ONLY for +0x70 & 0x80000 records (0x12ee08) and id 0x45 (0x12efa4 —
             // 1.0/tick from 0x30D0D8) — never as a flying round's death cap.
             // The watch 0x4E/0x4F keeps 210.0 [S unverified: a port choice, kept because
@@ -12156,7 +12161,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // at 0x2f4300) kills the round when weapon+0x1C < BU+0xF4 (0x12e95c-0x12e984); the
             // step clamps to the +0x1C boundary at 0x12f014-0x12f02c and the next tick kills].
             // `BU+0xFC` is the fuse/arm clock: Bullet_init 0x12c5a0:103 writes 210.0 (overrides
-            // 0x3b/0x69/0x37 [:255-283], the 300.0 +0x70&0x10000 arm :216-222) and Bullet_update
+            // 0x3b/0x69/0x37 [:199-228], the 300.0 +0x70&0x10000 arm :192-198) and Bullet_update
             // counts it down ONLY for +0x70 & 0x80000 records (0x12ee08) and id 0x45 (0x12efa4 —
             // 1.0/tick from 0x30D0D8) — never as a flying round's death cap.
             // The watch 0x4E/0x4F keeps 210.0 [S unverified: a port choice, kept because
@@ -15115,10 +15120,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let (unhide, posed) = c.update(&paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng);
             if unhide { self.scripts.unhide_sp(c.placement); }
             if posed { self.scripts.pose_copter_sp(c.placement, c.matrix); }
+            // obj+0xFE bit 0 (`landed`: the +0x74 == 100 route end [M Copter_Move 0x17d628:63-65],
+            // state 5's arrival and state 6 [M Copter_Update 0x17dbb8:255-275]) is the object
+            // loop's delete flag [M control_movement_object_handler 0x1336f8:77-87 →
+            // control_delete_object] → `Copter_Delete` 0x17e568: SP_Delete on the copter's SP and
+            // the list remove (below, after the walk).
+            if c.landed { self.scripts.delete_copter_sp(c.placement); }
             // PlrStat_LogShotHitEnemy(0) [M 0x17dbb8:314-316, jal 0x199840]: the walk's roll is
             // per tick; the stats fold below counts it exactly once (the flag holds until the
             // next update overwrites it).
         }
+        // Copter_Delete 0x17e568: LList_Remove(0x2a3830, rec) [M :9] — the deleted copters leave the list.
+        self.copters.retain(|c| !c.landed);
         // The script players' tick head (the create-time load beat — the game does it during the
         // level load [M 0x1db9a8:81-86]): the players THEMSELVES update from the control walk
         // below, in the game's list order (fix-script-start-tick — the old all-players-here beat

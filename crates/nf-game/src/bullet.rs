@@ -18,7 +18,7 @@ pub struct Bullet {
     /// via the state jump table at 0x2f4300) kills the round when `weapon+0x1C < BU+0xF4`
     /// (0x12e95c-0x12e984); the step clamps to the +0x1C boundary (0x12f014-0x12f02c) and
     /// `BU+0xF4` keeps the overshoot, so the next tick kills it]. NOT `BU+0xFC` — that is the
-    /// fuse/arm clock `Bullet_init` 0x12c5a0:103 writes (210.0, per-id overrides :255-283) and
+    /// fuse/arm clock `Bullet_init` 0x12c5a0:103 writes (210.0, per-id overrides :199-228) and
     /// `Bullet_update` counts down only for `+0x70 & 0x80000` records (0x12ee08) and id 0x45
     /// (0x12efa4, 1.0/tick). The one deliberate deviation: the Laser watch 0x4E/0x4F keeps 210.0
     /// at its spawn sites [S unverified — a port choice; the disc +0x1C is 4.0/8.0].

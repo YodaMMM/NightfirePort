@@ -5,26 +5,18 @@
 //! enum) and crates/nf-game/src/body_glow.rs (AnimDebugCreate).
 //!
 //! Assertions:
-//! 1. NO shipped menu-def (the front end 07000048/08000002, plus every per-level kind-8 def)
-//!    defines a control with any of the debug-toggle handler ids: the eleven exact dispatch ids
-//!    [M Handler_HandleMessage 0x2029e0's compare arms: C_CHCHWEAP 0x100000e7, C_CHCHHEALTH
-//!    0x100000e8, C_CHCHHUD 0x1000001c, C_CHCHCOORDS 0x1000001a, C_CHCHDUMMY 0x100000bd,
-//!    C_CHCHALLOWFREEZE 0x100000c7, C_CHCHDRAWALL 0x10000101, C_CHCHLOCKUP 0x10000169,
-//!    C_CHCHBRIGHT 0x100001f7, C_CHCHUNLOCK 0x10000216, C_CHCHCONTROLS 0x1000021d] and NO control
-//!    id at all inside the 0x10000012..=0x1000001f debug-toggle block (which also covers
-//!    C_CHCHFLY / C_CHCHDEBUG, whose Ghidra-decompiled dispatch arms are range tests, not
-//!    literals — the whole block's arms are C_CHCH* toggles [M 0x2029e0]).
-//! 2. NO shipped def defines a page 0x40000044 / 0x40000045 / 0x40000046 (P_TWEAKS, P_TWEAKS2)
-//!    or 0x4000004f / 0x40000050 (P_FMVTEST + its play page), and no message anywhere in any def
-//!    targets those ids either — the debug pages are unreachable through the shipped front end.
-//!    Sister: 0x4000004d (P_FMV 0x2169b0's dispatch arm) EXISTS as a page but is targeted by no
-//!    message (the orphan), and the def parses at all (pages > 0, the main menu 0x40000002
-//!    present) — a parse regression flips those.
-//! 3. NO shipped def defines a control of ctype 0xb (the SPIN class, `Spin_Update` 0x222948's
-//!    `Menu_Update` 0x1f1dc0:33 arm) or ctype 200 (the MEMOBOX class, `Memo_Update`'s arm; the
-//!    type's `Memo_Init` 0x21df38 / `Memo_SendMessage` 0x21e108) — the widget classes never
-//!    instantiate in retail data. Sister: the ctype histogram is non-empty (types the game
-//!    demonstrably uses — Button 1, Label 5 — do appear).
+//! 1. Recorded, not asserted: where the debug-toggle control ids ship (the eleven exact
+//!    dispatch ids [M Handler_HandleMessage 0x2029e0's compare arms] and the
+//!    0x10000012..=0x1000001f C_CHCH* block). The per-level defs do ship family members (e.g.
+//!    C_CHCHMUSIC 0x1000001b on the pause page) [D], so the reachability proof is item 2's
+//!    message-target check, not absence.
+//! 2. The debug pages 0x40000044 / 0x40000045 / 0x40000046 (P_TWEAKS, P_TWEAKS2) and
+//!    0x4000004f / 0x40000050 (P_FMVTEST + its play page) are targeted by NO message in any def
+//!    (where they ship is recorded). Sister: the front end 07000048/0x80000002 parses, has the
+//!    main menu 0x40000002 and 0x4000004d (P_FMV 0x2169b0's arm), and nothing targets 0x4000004d.
+//! 3. No shipped control has class 0xb (SPIN, `Spin_Update` 0x222948's `Menu_Update`
+//!    0x1f1dc0:33 arm); the MEMOBOX class 200 DOES ship (the Memo_Init 0x21df38 /
+//!    Memo_SendMessage 0x21e108 reachability) [D]. Sister: Button 1 and Label 5 appear.
 use nf_formats::disc;
 use nf_formats::iso9660::{IsoImage, SECTOR_SIZE};
 use nf_formats::levelbin;
