@@ -1,4 +1,4 @@
-//! level-16-jetpack-escape-3 probe: the blast-room blocking polys' raw quad vertices (the ramp
+//! Probe: the blast-room blocking polys' raw quad vertices (the ramp
 //! direction), and the hurt #309 planes' solidity check around the re-enable spot.
 //! Opt-in via NF_ISO.
 use nf_formats::{disc, iso9660::IsoImage, level::Level, levelbin::LevelBin};

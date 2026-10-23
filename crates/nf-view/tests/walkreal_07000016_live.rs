@@ -241,7 +241,7 @@ fn walk_arrival_to_the_chasers_spawn() {
     }
 }
 
-/// SISTER (level-16-jetpack-escape-3): an idle Bond at the pit floor dies to the ch-243 pulse and
+/// SISTER: an idle Bond at the pit floor dies to the ch-243 pulse and
 /// the mission fails ~449 ticks after the pulse rises — the game's own +454 [L fresh boot, god
 /// mode, Bond placed on trigger #255] within sampling noise — NOT one tick. The chain, all [M]:
 /// the pulse makes HurtPoly-ShuttleLaunch #309 live (Hurt_Update 0x17e5d0:98-103 arms state 1 on
@@ -313,7 +313,7 @@ fn the_pit_pulse_kills_an_idle_bond_about_450_ticks_later_like_the_game() {
 /// 020008c1]: the chaser's defeat raises nothing (param 12 = 0 [D]; the init-forced 0x90
 /// stand-in was removed in kiko-16-defeat), so this walk's kill-then-watch shape pins the REAL
 /// rule — ch 0x90 and ch 100 stay cold and the mission does not complete. PARKED (re-derived in
-/// level-16-jetpack-escape-3) on the pulse-1 survival window, with the round-2 timeline CORRECTED:
+/// the pit work) on the pulse-1 survival window, with the round-2 timeline CORRECTED:
 /// - **The corrected timeline.** The doc's round-2 expectation "ch 243 rises ~863 ticks after the
 ///   re-enable" was an arithmetic error (1611−748 double-counts the cinema): the launch script
 ///   0x0600090a starts at the pack cinema 0x06000631's ch-185 write (cinema t748 [D stream 7]),
@@ -350,7 +350,7 @@ fn the_pit_pulse_kills_an_idle_bond_about_450_ticks_later_like_the_game() {
 /// missing escape. gdbwatch on switch_channels[0x81] (0x26fc90+129·4) and Bond's obj+0x30 from
 /// the south-room approach through the cinema, FRESH boot.
 #[test]
-#[ignore = "pulse-1 survival has no disc-visible real-input escape (re-derived level-16-jetpack-escape-3): the six-band hurt stack tiles the whole pit with overlapping quads [D], the blast rooms are sealed by static BlockingPolys with unreachable roofs [D], the lift (the only spot above the stack, low point −21.22 vs band top −21.32) is script-summoned at 2240 — 630 ticks into the 559-tick pulse [D + the ch-80 writer census] — and no pickup/substate/Bond stream exists [D+M]; the round-2 '~863 ticks after re-enable' line was an arithmetic error, the model (1611−1 ≈ 1610) matches the live 1591 [L]; the kill/fail timing is pinned by the un-ignored sister. The one open lead is the live ch-0x81→re-enable 553-vs-747 gap (the report's live checks)"]
+#[ignore = "pulse-1 survival has no disc-visible real-input escape (re-derived): the six-band hurt stack tiles the whole pit with overlapping quads [D], the blast rooms are sealed by static BlockingPolys with unreachable roofs [D], the lift (the only spot above the stack, low point −21.22 vs band top −21.32) is script-summoned at 2240 — 630 ticks into the 559-tick pulse [D + the ch-80 writer census] — and no pickup/substate/Bond stream exists [D+M]; the round-2 '~863 ticks after re-enable' line was an arithmetic error, the model (1611−1 ≈ 1610) matches the live 1591 [L]; the kill/fail timing is pinned by the un-ignored sister. The one open lead is the live ch-0x81→re-enable 553-vs-747 gap (the report's live checks)"]
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());

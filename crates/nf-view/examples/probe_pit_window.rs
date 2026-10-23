@@ -1,4 +1,4 @@
-//! level-16-jetpack-escape-2 probe: play the launch chain in the port's sim with Bond parked at
+//! Probe: play the launch chain in the port's sim with Bond parked at
 //! the pit floor (probe-only placement) and log the window: ch 243 (the hurt gate), ch 240 (the
 //! pit door), ch 80 (the shuttle-bay lift summon), the lift platform entity 02000a79's keyed
 //! matrix, and Bond's health. The launch script's stream 6 writes ch 243=1 at stream tick 1611

@@ -1,4 +1,4 @@
-//! level-16-jetpack-escape-3 probe: the #309 hurt volume's per-band quad layout in WORLD coords
+//! Probe: the #309 hurt volume's per-band quad layout in WORLD coords
 //! (placement pos (2.30,−22.70,−164.17)) — where exactly the 18 quads of each band sit, so gaps
 //! (safe spots) are visible. Opt-in via NF_ISO.
 use nf_formats::{disc, iso9660::IsoImage, level::Level, levelbin::LevelBin};

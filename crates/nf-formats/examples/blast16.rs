@@ -1,4 +1,4 @@
-//! level-16-jetpack-escape-3 probe: the pit blast rooms' collision layout — tri y-bands and
+//! Probe: the pit blast rooms' collision layout — tri y-bands and
 //! xz spans, plus the blocking polys, so the survive-the-pulse shelter is pinned. Opt-in via NF_ISO.
 use nf_formats::{disc, iso9660::IsoImage, level::Level, levelbin::LevelBin};
 

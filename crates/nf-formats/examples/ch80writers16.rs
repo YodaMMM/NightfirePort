@@ -1,4 +1,4 @@
-//! level-16-jetpack-escape-3 probe: every 07000016 placement whose params name channel 80 (the
+//! Probe: every 07000016 placement whose params name channel 80 (the
 //! lift summon), 240/241/242/243/244 (the launch window) or 123 (0x7b the fail) — triggers, ANDs,
 //! blockers — with kind, pos, params. Opt-in via NF_ISO.
 use nf_formats::{disc, iso9660::IsoImage, level::Level, levelbin::LevelBin};

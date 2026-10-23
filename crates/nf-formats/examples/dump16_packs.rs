@@ -1,4 +1,4 @@
-//! level-16-jetpack-escape-3 probe: dump the 07900016 (06000632) and 07a00016 (06000633) pack
+//! Probe: dump the 07900016 (06000632) and 07a00016 (06000633) pack
 //! scripts the round-2 probe skipped, plus the 07F00016.bin world pack if it carries scripts.
 //! Opt-in via NF_ISO.
 use nf_formats::{disc, iso9660::IsoImage, levelbin::LevelBin, nis::Nis};

@@ -1,4 +1,4 @@
-//! level-16-jetpack-escape-3 probe: every 07000016 main-map placement inside the launch-pit bbox
+//! Probe: every 07000016 main-map placement inside the launch-pit bbox
 //! (x −35..40, y −28..3, z −200..−128), with its kind, so the pit's ladders (0x22), creepwalls,
 //! doors, lifts and triggers are visible; then the ladder/door/rim objects' world bounds.
 //! Opt-in via NF_ISO.

@@ -1,4 +1,4 @@
-//! level-16-jetpack-escape-2 probe: the launch sequence's script truth. Dumps every kind-7 script
+//! Probe: the launch sequence's script truth. Dumps every kind-7 script
 //! of 07000016.bin and the loadable pack 07800016.bin — per stream the decoded commands with a
 //! cumulative Wait clock (the script tick), every key (pos/time) — so the Bond-actor streams and
 //! the player-addressed events (0x04 disable, 0x06 snapshot, 0x0f handler call, 0x12 events) of

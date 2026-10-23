@@ -1,4 +1,4 @@
-//! level-16-jetpack-escape-2 probe: the pit's hurt volumes and the shuttle-bay lift.
+//! Probe: the pit's hurt volumes and the shuttle-bay lift.
 //! Dumps the 07000016 main-map placements of kinds 0xE4 (hurt), 0x3B (blocks), 0xD9 (script
 //! players), the pit-region collision bboxes, and — the point — each hurt placement's framelist:
 //! the game's level-tag +8 = m_paths[placement+0x44] [M parsemap_block_map_data_dynamic
