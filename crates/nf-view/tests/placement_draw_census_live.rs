@@ -175,7 +175,7 @@ fn every_sp_level_drawn_placements_have_draw_instances() {
         // The port's covered sets per gatherer family (the clones carry the placement).
         let (scene, _) = level.scene_instances(true);
         let scene_set: HashSet<_> = scene.iter().map(|i| placement_key(&i.placement)).collect();
-        let char_set: HashSet<_> = level.character_instances().0.iter().map(|i| placement_key(&i.placement)).collect();
+        let char_set: HashSet<_> = level.character_instances().0.iter().map(|(_, i)| placement_key(&i.placement)).collect();
         let sky_set: HashSet<_> = level.sky_instances().iter().map(|(i, _)| placement_key(&i.placement)).collect();
         for p in &level.maps[m].placements {
             let Some((create, _, _)) = game_draws(&level, m, p) else { continue };

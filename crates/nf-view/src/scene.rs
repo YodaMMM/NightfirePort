@@ -6647,7 +6647,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // door/SS slot space below so a killed one stops drawing (`Break_Kill` 0x12b970 sets
         // obj+0xFE bit 0 and the delete pass removes the object [M]). `own_cells` drops them too.
         instances.retain(|i| !(i.placement.flags & 0xff == 0x20 && !i.placement.creates_cel()));
-        let (mut char_instances, chars_missing) = level.character_instances();
+        // (pi, inst): the placement's OWN index rides each instance — the drone link keys on it
+        // (992-0c: 0c ships three bit-identical-XZ drone placement pairs [D #263/#461, #261/#462,
+        // #310/#463], so a translation key gave both of a pair's characters to one drone and left
+        // the other, active, with nothing drawn).
+        let (char_insts_pi, chars_missing) = level.character_instances();
+        let mut char_instances: Vec<(Option<usize>, Instance)> =
+            char_insts_pi.into_iter().map(|(pi, i)| (Some(pi), i)).collect();
         // drone-skins-g021: the drone's object is built from the hash `NDrone2_DefaultInit`
         // 0x14b300:563-565 hands `AnimObjectNew` — the placement param 0 as the captain swap
         // (:536-555) left it in +0xe0 (the sim's `dr.skin`). `character_instances` keyed the
@@ -6662,7 +6668,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // `captain_skin` is pure (params + property tables + difficulty): the drones do not
             // exist yet at this point in the build (b9b creates them after the characters).
             if let Some(props) = d.props.as_ref() {
-                for p in level.maps[m].placements.iter() {
+                for (pi, p) in level.maps[m].placements.iter().enumerate() {
                     if p.flags & 0xff != 0x0f { continue; }
                     let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
                     let raw = param(0);
@@ -6677,11 +6683,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // all and the swapped skin's mains are ADDED; a swapped skin the table lacks
                     // (the game's `AnimObjectNew` 0x1be910:44-46 miss) draws nothing.
                     let bits = p.translation.map(f32::to_bits);
-                    char_instances.retain(|i| i.placement.translation.map(f32::to_bits) != bits);
+                    char_instances.retain(|(_, i)| i.placement.translation.map(f32::to_bits) != bits);
                     if let Some(sk) = level.skins.get(&swapped) {
                         for h in sk.main.iter().flatten() {
                             if let Some(&(map, object)) = level.by_hash.get(h) {
-                                char_instances.push(Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() });
+                                char_instances.push((Some(pi), Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() }));
                             }
                         }
                     }
@@ -6695,7 +6701,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let pool_sentinel = |t: [f32; 3]| t[1] <= -999_000.0;
         {
             let mut first: Vec<(u32, [u32; 3])> = Vec::new();
-            for inst in &char_instances {
+            for (_, inst) in &char_instances {
                 if inst.placement.flags & 0xff != 0x0f { continue; }
                 let skin = inst.placement.params.iter().find(|(i, _)| *i == 0).map_or(0, |&(_, v)| v);
                 if skin == 0 || !level.skins.contains_key(&skin) || first.iter().any(|(s, _)| *s == skin) { continue; }
@@ -6705,7 +6711,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             for (slot, (_, t)) in first.iter().enumerate() {
                 for k in 0..NPC_POOL {
                     let tr = [-1.0e6 - (slot * NPC_POOL + k) as f32, -1.0e6, -1.0e6];
-                    for inst in char_instances.iter().filter(|i| i.placement.translation.map(f32::to_bits) == *t) {
+                    for inst in char_instances.iter().filter(|(_, i)| i.placement.translation.map(f32::to_bits) == *t).map(|(_, i)| i) {
                         let mut placement = inst.placement.clone();
                         placement.translation = tr;
                         let mut matrix = inst.matrix;
@@ -6714,7 +6720,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     }
                 }
             }
-            char_instances.extend(extra);
+            // The pool copies never link at load (the dev panel binds them at runtime): no placement index.
+            char_instances.extend(extra.into_iter().map(|i| (None, i)));
         }
         let mut npc_pool: Vec<NpcSlot> = Vec::new();
         let sky = level.sky_instances();
@@ -6884,17 +6891,21 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut characters = Vec::new();
         crate::phase_mark("b4 static world instances", t); t = std::time::Instant::now();
         let (mut attachments, mut armed, mut weapons_missing) = (Vec::new(), std::collections::HashSet::new(), 0);
-        // Spawner roles of the main map's drone placements, keyed by translation (docs/systems/drone-animation.md).
-        let roles: HashMap<[u32; 3], drone::SpawnRole> = match level.main_map() {
+        // Spawner roles of the main map's drone placements, keyed by the placement's own index
+        // (the translation key collapsed 0c's bit-identical pairs — 992-0c).
+        let roles: HashMap<usize, drone::SpawnRole> = match level.main_map() {
             Some(m) => {
                 let ps = &level.maps[m].placements;
                 let list: Vec<(u32, Vec<(u32, u32)>)> = ps.iter().map(|p| (p.flags & 0xff, p.params.clone())).collect();
-                let drones_in_order = ps.iter().filter(|p| p.flags & 0xff == 0x0f);
-                drones_in_order.zip(drone::spawn_roles(&list)).map(|(p, r)| (p.translation.map(f32::to_bits), r)).collect()
+                ps.iter().enumerate().filter(|(_, p)| p.flags & 0xff == 0x0f)
+                    .map(|(i, _)| i).zip(drone::spawn_roles(&list)).collect()
             }
             None => HashMap::new(),
         };
-        for inst in &char_instances {
+        // The placement index of each character, aligned with `characters` (None = not a drone
+        // placement's mesh: MP bodies, script characters, view models, the dev pool copies).
+        let mut char_placements: Vec<Option<usize>> = Vec::new();
+        for (inst_pi, inst) in &char_instances {
             let obj = &level.maps[inst.map].objects[inst.object];
             let raw_hash = inst.placement.params.iter().find(|(i, _)| *i == 0).map(|&(_, v)| v).unwrap_or(0);
             // drone-skins-g021: the captain-swapped drone draws its swapped skin (`+0xe0`,
@@ -6922,7 +6933,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             });
             let pooled = pool_sentinel(inst.placement.translation);
             let role = if pooled { drone::SpawnRole::Reinforcement { channel: 0 } } else {
-                roles.get(&inst.placement.translation.map(f32::to_bits)).copied().unwrap_or(drone::SpawnRole::Placed)
+                inst_pi.and_then(|pi| roles.get(&pi).copied()).unwrap_or(drone::SpawnRole::Placed)
             };
             if pooled {
                 let ci = characters.len();
@@ -6934,6 +6945,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let morph_of_main = skin.main.iter().flatten()
                 .filter_map(|mh| level.by_hash.get(mh).and_then(|&(m2, o2)| level.maps[m2].objects[o2].morph_targets.clone()))
                 .next();
+            char_placements.push(*inst_pi);
             characters.push(Character { matrix: inst.matrix, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones: obj.gfx.slot_bones.clone(), start, role, floor: None, script: None, morph_targets: obj.morph_targets.clone().or(morph_of_main) });
             // The held weapon (`AnimObjectDraw`): weapon_data[w] +0x80 mesh on the datum whose id is +0x50 (0xFF → 0),
             // once per drone (a skin may have several main meshes).
@@ -7015,6 +7027,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         let morph_of_main = skin.main.iter().flatten()
                             .filter_map(|mh2| level.by_hash.get(mh2).and_then(|&(m2, o2)| level.maps[m2].objects[o2].morph_targets.clone()))
                             .next();
+                        char_placements.push(None);
                         characters.push(Character { matrix, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones: obj.gfx.slot_bones.clone(), start: None, role: drone::SpawnRole::Placed, floor: None, script: None, morph_targets: obj.morph_targets.clone().or(morph_of_main) });
                         chars.push(characters.len() - 1);
                     }
@@ -7165,6 +7178,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         }
                     }
                 }
+                char_placements.push(None);
                 characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones: level.maps[map].objects[object].gfx.slot_bones.clone(), start: None, role: drone::SpawnRole::Placed, floor: None, script: None , morph_targets: None });
                 view_models.insert(wid, ci as usize);
             }
@@ -7196,6 +7210,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     add_instance(level, &pinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                     attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
                 }
+                char_placements.push(None);
                 characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones, start: None, role: drone::SpawnRole::Placed, floor: None, script: None, morph_targets: morph });
                 mp_bodies.push((slot, ci as usize));
                 // The held weapon (`AnimObjectDraw`): weapon_data[w]+0x80 on the datum +0x50 names, as a
@@ -7322,6 +7337,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                     add_instance(level, &pinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                                     attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
                                 }
+                                char_placements.push(None);
                                 characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones, start: None, role: drone::SpawnRole::Placed, floor: None, script: Some((h, si as u8)), morph_targets: morph_of_object.clone() });
                                 script_objects += 1;
                                 // The held weapon (`AnimObjectDraw` 0x1c4490:256-265): Event 0xB on the next stream
@@ -8200,9 +8216,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let mut lights = nf_game::light::LightList::default();
             let list = nf_game::drone::level_drones(&data, level, &mut rng, &mut lights);
             // Every drone placement; spawner templates stay absent until a spawner brings them in.
-            let by_pos: HashMap<[u32; 3], usize> = list.iter().enumerate()
-                .map(|(i, dr)| (level.maps[m].placements[dr.placement].translation.map(f32::to_bits), i)).collect();
-            let char_drone = characters.iter().map(|c| by_pos.get(&[c.matrix[3][0], c.matrix[3][1], c.matrix[3][2]].map(f32::to_bits)).copied()).collect();
+            // The character link keys on the placement's OWN index (`level_drones` records it, the
+            // instances carry it): 0c ships three bit-identical-XZ drone placement pairs [D
+            // #263/#461 t [6.5508847,12.309799,-224.56429], #261/#462, #310/#463 — the group-1
+            // immediate guard and the group-4 ch-4 swap wave at one spot], and the old
+            // translation key gave both of a pair's characters to ONE drone, leaving the other —
+            // active, patrolling, shooting — with nothing drawn at all (992-0c-invisible-soldiers;
+            // the game's objects carry their own placement, `parsemap_create_dynamic_objects`
+            // 0x1d04f0, and never re-derive it by position).
+            let by_placement: HashMap<usize, usize> =
+                list.iter().enumerate().map(|(i, dr)| (dr.placement, i)).collect();
+            let char_drone = char_placements.iter()
+                .map(|cp| cp.and_then(|pi| by_placement.get(&pi).copied())).collect();
             // Per-character ambient state (`Lights_CalcAmbientLight` 0x1cb178): the 0xff,ff,ff sentinel of
             // `control_init_object` (0x134630) until the first cel link snaps it.
             let char_ambient = vec![[0xffu8; 3]; characters.len()];
