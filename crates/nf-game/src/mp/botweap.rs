@@ -31,15 +31,12 @@ pub const PREFERENCE: [u8; 60] = [
     0x07, 0x03, 0x02, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x34, 0x52, 0x3a, 0x35, 0x36, 0x37,
 ];
 
-/// `PickupMatrix` @0x2b9100 rows 0..4 (the static weapon sets; row 5 is the Random set
-/// `Pickup_MakeRandomWeaponSet` 0x18f098 fills at run time) [D ACTION.ELF file 0x1b3000].
-pub const PICKUP_MATRIX: [[u16; 10]; 5] = [
-    [0x06, 0x1c, 0x1e, 0x18, 0x2c, 0x02, 0x06, 0x0a, 0x10, 0x42],
-    [0x12, 0x15, 0x18, 0x1c, 0x52, 0x0e, 0x1e, 0x11, 0x24, 0x32],
-    [0x2a, 0x2c, 0x3a, 0x2e, 0x1a, 0x35, 0x34, 0x3a, 0x37, 0x3b],
-    [0x02, 0x11, 0x37, 0x24, 0x42, 0x0a, 0x1e, 0x52, 0x1a, 0x32],
-    [0x1a, 0x3b, 0x32, 0x3a, 0x2c, 0x15, 0x16, 0x37, 0x11, 0x24],
-];
+/// `PickupMatrix` @0x2b9100, re-exported from [`crate::mp::equip`] (mp-pickups-respawn-2: the
+/// botweap copy read the table as 5 rows of 10 u16 — sets 0..4 of a 20-BYTE stride — so
+/// `start_weapon` armed bots of sets 1..4 with sets 2,4,6,8's spawn weapons; the game indexes
+/// `PickupMatrix + set·10` in BYTES [M 0x129e48:44 `PickupMatrix + MPSettings._436_4_ * 10`],
+/// i.e. 11 rows of 5). The single source of truth is `equip::PICKUP_MATRIX` [D the ELF bytes].
+pub use crate::mp::equip::PICKUP_MATRIX;
 
 /// `Plr_DMod_Multi` — `ReadTuningVars` 0x1d3a80:272 writes 4.0 for the MP arenas
 /// 0x7000021..29/4B/4C (the same group as `Plr_DMod_Head` 4.0, the limbs 0.8) [M].
@@ -137,8 +134,13 @@ impl BotWeaponTable {
         if r.twin && self.row(r.base).ammo_type == r.ammo_type { r.base as usize } else { w as usize }
     }
 
-    /// `startweap` = `weapon_data[PickupMatrix[set·10]].base` [M 0x129e48:44-45]. Sets past the
-    /// static rows (the Random set) fall back to row 0 [S].
+    /// `startweap` = `weapon_data[PickupMatrix[set·10]].base` [M 0x129e48:44-45] — the byte
+    /// stride makes this TRUE row `set`'s first entry (mp-pickups-respawn-2 fixed the table
+    /// above; sets 1..4 previously armed with sets 2/4/6/8's spawn weapons). Set 10 reads the
+    /// SHIPPED zero row here — the game's live matrix re-rolls it per `MP_Init` [M 0x183438:11],
+    /// and the match path carries that re-rolled row via `equip::weapon_row` +
+    /// `equip::bot_start_weapon` (the loader's `MpMatch::bot_start`) [S]. Sets > 10 clamp to
+    /// row 0 [S].
     pub fn start_weapon(&self, set: u32) -> u8 {
         let row = PICKUP_MATRIX.get(set as usize).unwrap_or(&PICKUP_MATRIX[0]);
         self.row(row[0] as u8).base

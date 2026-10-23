@@ -68,6 +68,13 @@ pub mod hud;
 /// mp-lobby-settings: the spawn loadout (`MP_EquipPlayer`, the weapon-set matrix) and the MP pain
 /// scaling (`Player_HandlePain`'s MP arm) — see `equip.rs`.
 pub mod equip;
+
+/// mp-pickups-respawn-2: the MP registered-pickup layer (`MP_RegisterPickup` 0x189d80 /
+/// `MP_UnregisterPickup` 0x18a058 / `MP_Pickup_Process` 0x18a168, the visit stamps) and the
+/// enviro toggles (`GunImp_Create` 0x131f20, `Car_Create` 0x1305b0) — see `pickups.rs`.
+pub mod pickups;
+
+pub use pickups::{car_kind, gun_imp_class, weapon_for_kind, MpPickupRecord, MpPickups};
 pub mod upgrades;
 
 /// mp-combat-weapons: the online match's shared rounds/grenades/blasts and the MP pain rules
@@ -555,6 +562,11 @@ pub struct MpMatch {
     /// [`MpMatch::update_objects`] (the fixed 60 Hz) — only differences inside the 4-frame window
     /// read it [S alignment]. Zero on the struct literal path.
     pub tick: u32,
+    /// mp-pickups-respawn-2: the registered-pickup store — the 64 `MPpickups` records and the
+    /// ring cursors (`PickupNextAddIndex`/`PickupLastDeletedIndex`), see [`pickups`]. The
+    /// registered count itself is [`MpSettings::registered_pickups`] (`MPSettings+0x1D8` u16),
+    /// like the game's [M 0x189d80:107].
+    pub pickups: MpPickups,
 }
 
 /// One MP bot: the ported brain (`BOT_vars` stand-in) plus the per-slot bookkeeping the match
@@ -624,7 +636,43 @@ impl MpMatch {
             bots: Vec::new(),
             bot_start: None,
             tick: 0,
+            pickups: MpPickups::new(),
         }
+    }
+
+    /// `MP_RegisterPickup` 0x189d80 through [`MpPickups::register`]: registers `obj` (the port's
+    /// pickup index) at `pos`, keeps `MPSettings+0x1D8` in step and returns the slot
+    /// (`usize::MAX` = the game's −1, nothing free and nothing evictable). The game also stores
+    /// the slot into `PICKUPINFO+0x30` [M 0x189d80:98] — the caller's pickup record does that
+    /// through its own MP slot field. Count semantics per the game: a normal register bumps
+    /// +1 [M :107]; a full-ring register evicts through `MP_UnregisterPickup` first (−1) and
+    /// then bumps (+1) — net unchanged [M :76 + 0x18a058:29].
+    pub fn register_pickup(&mut self, obj: usize, pos: [f32; 3], cel: u32, lifetime: u16) -> usize {
+        let count = self.settings.registered_pickups;
+        let (slot, evicted) = self.pickups.register(obj, pos, cel, lifetime, count);
+        if slot != usize::MAX {
+            self.settings.registered_pickups = if evicted { count } else { count + 1 };
+        }
+        slot
+    }
+
+    /// `MP_UnregisterPickup` 0x18a058 through [`MpPickups::unregister`]: clears the row,
+    /// records `PickupLastDeletedIndex` and drops the registered count [M :24-29]. The game
+    /// further frees the row's AI emitter and zeroes the obj's 0x40 ext with `+0x30 = 0xffff`
+    /// [M :21-28] — the port's pickup records carry neither yet [S].
+    pub fn unregister_pickup(&mut self, slot: usize) {
+        if slot < 64 && self.pickups.records[slot].obj.is_some() {
+            self.pickups.unregister(slot);
+            self.settings.registered_pickups = self.settings.registered_pickups.saturating_sub(1);
+        }
+    }
+
+    /// `MP_Pickup_Process` 0x18a168 through [`MpPickups::process`] with the match's registered
+    /// count — `MP_Update`'s phase-0 arm calls it every tick [M 0x184bd0:38]. `clock` is the
+    /// game's `MPGame+0x19C` float.
+    pub fn pickup_process(&mut self, clock: f32) {
+        let count = self.settings.registered_pickups;
+        self.pickups.process(clock, count);
     }
 
     /// The bots' half of `MP_Start` 0x183a50:134-160: the count from the prepared records
