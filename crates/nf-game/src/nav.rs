@@ -731,9 +731,16 @@ impl Route {
             reached = Some(node);
         }
         // Blocked toward the target: step back (`LinkCreep_Decrement`).
-        if net.bounds && (feet[0] - self.target[0]).powi(2) + (feet[1] - self.target[1]).powi(2) + (feet[2] - self.target[2]).powi(2) >= 1.0
+        // [M 0x15a2c8] the Handler gates the whole block check on `Vec_SqDist2D(feet, target) < 1.0`
+        // (2D) — within 1.0 of the step point the guard walks, no boundary read.
+        if net.bounds && (feet[0] - self.target[0]).powi(2) + (feet[2] - self.target[2]).powi(2) >= 1.0
             && !net.bounds_node_test(0.2, feet, self.target) {
-            if self.creep.step >= 1 && net.bounds_node_test(0.1, feet, self.creep.point(self.creep.step - 1)) {
+            // [M 0x15a148] the step-back's own test carries the same 1.0 escape: within 1.0 of the
+            // PREVIOUS step point the game steps back without consulting the boundary posts
+            // (`SqDist2D(feet, prev) < 1.0 → clear`).
+            let prev = self.creep.point(self.creep.step - 1);
+            let near_prev = dist2d(feet, prev) < 1.0;
+            if self.creep.step >= 1 && (near_prev || net.bounds_node_test(0.1, feet, prev)) {
                 self.creep.step -= 1;
                 self.target = self.creep.point(self.creep.step);
                 return (follow::MOVING, reached);
@@ -751,16 +758,24 @@ impl Route {
             }
             return (follow::BLOCKED, reached);
         }
-        // `LinkCreep_Increment`.
+        // `LinkCreep_Increment` [M 0x159f28]: the next step point q, `Vec_Dist2D(feet, q)`; the
+        // boundary read carries the same 1.0 escape as the Handler — `SqDist2D(feet, q) < 1.0 →
+        // pass` — and its radius is 0.35 (0x3ecccccd), not the 0.4 of the close arm. A guard
+        // walking a pinch between two boundary posts sits at 0.4..1.0 of the next point, where
+        // the game advances WITHOUT the post test: without that band the creep never advances
+        // and the guard freezes mid-patrol (0700000c drone 15's wedge at (9.30, 12.24, -220.82)).
         if self.creep.step >= self.creep.steps {
             self.next_node(net, 1);
             return (follow::MOVING, reached);
         }
         let q = self.creep.point(self.creep.step + 1);
         let d = dist2d(feet, q);
-        if d < self.lookahead && (d < 0.4 || net.bounds_node_test(0.4, feet, q)) {
-            self.creep.step += 1;
-            self.target = q;
+        if d < self.lookahead {
+            let clear = !net.bounds || d * d < 1.0 || net.bounds_node_test(0.35, feet, q);
+            if d < 0.4 || clear {
+                self.creep.step += 1;
+                self.target = q;
+            }
         }
         (follow::MOVING, reached)
     }
@@ -847,6 +862,57 @@ mod tests {
         assert_eq!(flags[0][0], 0x100, "the short way is the flagged way");
         let (res, nodes, _) = n.astar(&w, 0, [0.0, 0.0, -1.0], [10.0, 0.0, 9.5], &goal, &[0; 6]).unwrap();
         assert_eq!((res, nodes), (0, vec![0, 1, 2]), "through the 0x100 link, like the game");
+    }
+
+    /// `LinkCreep_Increment`'s 1.0 escape and far band [M 0x159f28]: within 1.0 (2D) of the next
+    /// step point the game advances WITHOUT reading the boundary posts (`SqDist2D < 1.0 → pass`),
+    /// and past 1.0 its post test runs at r = 0.35 (0x3ecccccd). The port ran the post test at 0.4
+    /// with no escape, so a guard whose next creep point sat 0.4..1.0 ahead of a post froze
+    /// mid-patrol (0700000c drone 15's wedge). Sister: past 1.0 a post within the radius still
+    /// holds the step — the far band is what keeps a genuinely sealed approach from marching.
+    #[test]
+    fn creep_increment_escapes_the_post_test_within_1_and_holds_beyond() {
+        // A corridor along +x; a boundary post line whose near post sits 0.1 off the creep line.
+        let mut n = net(&[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]], &[(0, 1)], 4);
+        n.bounds = true;
+        n.walls.push(Wall { a: [1.65, 0.0, 0.1], b: [1.65, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0 });
+        let mut r = Route::for_path(&n, 0, 0);
+        r.creep.step = 3; // target (1.2, 0, 0), next point q ≈ (1.6, 0, 0)
+        r.target = r.creep.point(3);
+        // Feet 0.4 from q, post within the post-test radius of the feet→q segment: the game's
+        // escape (0.4² = 0.16 < 1.0) advances anyway. The old port ran the test and froze here.
+        let feet = [1.2, 0.0, 0.0];
+        assert!(!n.bounds_node_test(0.35, feet, r.creep.point(4)), "the post really blocks the segment — the case is live");
+        let (code, _) = r.follow(&n, feet, &|_| false);
+        assert_eq!((code, r.creep.step), (follow::MOVING, 4), "within 1.0 of q the game advances without the post test [M 0x159f28]");
+        // Sister: feet 1.1 from the same q (past the escape band) — the post holds the step.
+        let mut r = Route::for_path(&n, 0, 0);
+        r.creep.step = 3;
+        r.target = r.creep.point(3);
+        let feet = [0.5, 0.0, 0.0];
+        let (code, _) = r.follow(&n, feet, &|_| false);
+        assert_eq!((code, r.creep.step), (follow::MOVING, 3), "past 1.0 the 0.35 post test holds the step [M 0x159f28]");
+    }
+
+    /// `LinkCreep_Decrement`'s 1.0 escape on the step-back test [M 0x15a148]: blocked toward the
+    /// target but within 1.0 of the PREVIOUS step point, the game steps back without the post
+    /// read (`SqDist2D(feet, prev) < 1.0 → clear`). The old port ran the 0.1 test bare and
+    /// latched BLOCKED instead.
+    #[test]
+    fn creep_decrement_steps_back_within_1_of_the_previous_point() {
+        let mut n = net(&[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]], &[(0, 1)], 4);
+        n.bounds = true;
+        // A post 0.03 off the line right at the previous step point (0.8): the 0.1 post test on
+        // feet(0.1)→prev(0.8) fails, and the same post blocks the feet→target read at 0.2.
+        n.walls.push(Wall { a: [0.83, 0.0, 0.03], b: [0.83, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0 });
+        let mut r = Route::for_path(&n, 0, 0);
+        r.creep.step = 3; // target (1.2, 0, 0), prev (0.8, 0, 0)
+        r.target = r.creep.point(3);
+        let feet = [0.1, 0.0, 0.0];
+        assert!(!n.bounds_node_test(0.2, feet, r.creep.point(3)), "blocked toward the target");
+        assert!(!n.bounds_node_test(0.1, feet, r.creep.point(2)), "the bare 0.1 test on prev fails — only the 1.0 escape steps back");
+        let (code, _) = r.follow(&n, feet, &|_| false);
+        assert_eq!((code, r.creep.step), (follow::MOVING, 2), "within 1.0 of prev the game steps back without the post read [M 0x15a148]");
     }
 
     #[test]
