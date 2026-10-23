@@ -23,7 +23,7 @@ The disc holds two engines: `ACTION.ELF` (Eurocom's on-foot engine; shipped unst
 
 In short:
 
-- **On foot:** all 27 on-foot archives on the disc load and run. Every story level has a headless walkthrough test that reaches its exit, and most also have a walkthrough that drives Bond through the same input path a player uses. Those real-input walks still stop at known spots on seven levels: The Exchange (the 07000005 cable route, the 07000006 guardhouse fight), Night Shift (the 0700000a west doorway), Phoenix Fire (the 0700004a lift), Countdown (the 07000014 vent route, the 07000016 jetpack escape) and Equinox (the 0700001b Drake fight). Each level's page in `docs/levels/` explains its stop.
+- **On foot:** all 27 on-foot archives on the disc load and run. Not every level can be finished yet. The walkthrough tests that drive Bond through the same input a player uses still stop on seven levels (07000005, 07000006, 0700000a, 07000014, 07000016, 0700001b, 0700004a), and other levels have known problems. Each level's page in `docs/levels/` lists them.
 - **Driving:** the five driving missions can't be played. Picking one in the mission list shows a notice and unlocks the next mission. Parts of the driving engine exist as model code only: vehicle physics, the road network, AI traffic, input mapping, HUD data and mission scripts.
 - **Front end:** it follows the game's own menu flow. With the `movies` feature, the disc's videos play where the game plays them: the boot logos, the intro, the menu backdrops, and each mission's briefing and outro.
 - **Multiplayer:** the game's on-foot match rules and modes run on the 8 arenas, with bots, on one screen. There is no split screen. Online play is new in the port (see below).
@@ -210,7 +210,7 @@ Behaviour is checked against the original by recording PCSX2 calls and traces an
 The test suite has about 3,400 `#[test]` functions across 735 integration test files. The last full run on master (2026-10-22) was 3,190 passed, 0 failed, 147 ignored.
 
 - **Walkthroughs:** 26 `walk_*` and 48 `walkreal_*` test files drive the story levels headless; the `walkreal_*` ones drive Bond through the real input path.
-- **Placements and archives:** every placement on all 27 story levels is checked to resolve, and all 27 on-foot archives run 1,800 ticks without a panic.
+- **Placements and archives:** every placement on all 27 story levels is checked to resolve, and all 27 on-foot archives run 600 ticks without a panic.
 - **Performance:** per-frame cost budgets are part of the same suite.
 
 Open work is tracked in a gaps list (`docs/GAPS.md`: 49 items, 23 still open or partly open) and open questions in `docs/UNKNOWNS.md` (48: 21 open, 7 partly answered).

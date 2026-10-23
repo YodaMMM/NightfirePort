@@ -4,7 +4,7 @@
   <rect x="0.5" y="0.5" width="879" height="639" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 
   <text x="24" y="38" font-size="18" font-weight="600" fill="#1f2328">Nightfire Rust — status at a glance</text>
-  <text x="856" y="38" font-size="12" fill="#656d76" text-anchor="end">as of 2026-10-22 (coverage bars: 2026-10-16)</text>
+  <text x="856" y="38" font-size="12" fill="#656d76" text-anchor="end">as of 2026-10-22</text>
 
   <!-- ===== Decompile coverage ===== -->
   <text x="24" y="76" font-size="13" font-weight="600" fill="#1f2328">Decompile coverage: functions of each PS2 program cited in the Rust crates or docs</text>
@@ -14,44 +14,44 @@
     <text x="24" y="104" fill="#1f2328" font-weight="600">ACTION.ELF</text>
     <text x="118" y="104" fill="#656d76">functions</text>
     <rect x="250" y="93" width="500" height="14" rx="3" fill="#e1e4e8"/>
-    <rect x="250" y="93" width="356.5" height="14" rx="3" fill="#2f6fcf"/>
-    <text x="762" y="104" fill="#1f2328">71.3 %  <tspan fill="#656d76">2,166 of 3,038</tspan></text>
+    <rect x="250" y="93" width="450.0" height="14" rx="3" fill="#2f6fcf"/>
+    <text x="762" y="104" fill="#1f2328">90.0 %  <tspan fill="#656d76">2,734 of 3,038</tspan></text>
 
     <!-- row 2: ACTION.ELF bytes -->
     <text x="118" y="134" fill="#656d76">code bytes</text>
     <rect x="250" y="123" width="500" height="14" rx="3" fill="#e1e4e8"/>
-    <rect x="250" y="123" width="421.5" height="14" rx="3" fill="#2f6fcf"/>
-    <text x="762" y="134" fill="#1f2328">84.3 %  <tspan fill="#656d76">of 1,273,792</tspan></text>
+    <rect x="250" y="123" width="476.5" height="14" rx="3" fill="#2f6fcf"/>
+    <text x="762" y="134" fill="#1f2328">95.3 %  <tspan fill="#656d76">of 1,273,792</tspan></text>
 
     <!-- row 3: SFX.IRX functions -->
     <text x="24" y="172" fill="#1f2328" font-weight="600">SFX.IRX</text>
     <text x="118" y="172" fill="#656d76">functions</text>
     <rect x="250" y="161" width="500" height="14" rx="3" fill="#e1e4e8"/>
-    <rect x="250" y="161" width="271.5" height="14" rx="3" fill="#2f6fcf"/>
-    <text x="762" y="172" fill="#1f2328">54.3 %  <tspan fill="#656d76">153 of 282</tspan></text>
+    <rect x="250" y="161" width="289.0" height="14" rx="3" fill="#2f6fcf"/>
+    <text x="762" y="172" fill="#1f2328">57.8 %  <tspan fill="#656d76">163 of 282</tspan></text>
 
     <!-- row 4: SFX.IRX bytes -->
     <text x="118" y="202" fill="#656d76">code bytes</text>
     <rect x="250" y="191" width="500" height="14" rx="3" fill="#e1e4e8"/>
-    <rect x="250" y="191" width="386" height="14" rx="3" fill="#2f6fcf"/>
-    <text x="762" y="202" fill="#1f2328">77.2 %  <tspan fill="#656d76">of 84,564</tspan></text>
+    <rect x="250" y="191" width="384.5" height="14" rx="3" fill="#2f6fcf"/>
+    <text x="762" y="202" fill="#1f2328">76.9 %  <tspan fill="#656d76">of 84,564</tspan></text>
 
     <!-- row 5: DRIVING.ELF functions -->
     <text x="24" y="240" fill="#1f2328" font-weight="600">DRIVING.ELF</text>
     <text x="118" y="240" fill="#656d76">functions</text>
     <rect x="250" y="229" width="500" height="14" rx="3" fill="#e1e4e8"/>
-    <rect x="250" y="229" width="15.5" height="14" rx="3" fill="#2f6fcf"/>
-    <text x="762" y="240" fill="#1f2328">3.1 %  <tspan fill="#656d76">286 of 9,169</tspan></text>
+    <rect x="250" y="229" width="19.0" height="14" rx="3" fill="#2f6fcf"/>
+    <text x="762" y="240" fill="#1f2328">3.8 %  <tspan fill="#656d76">348 of 9,169</tspan></text>
 
     <!-- row 6: DRIVING.ELF bytes -->
     <text x="118" y="270" fill="#656d76">code bytes</text>
     <rect x="250" y="259" width="500" height="14" rx="3" fill="#e1e4e8"/>
-    <rect x="250" y="259" width="33.5" height="14" rx="3" fill="#2f6fcf"/>
-    <text x="762" y="270" fill="#1f2328">6.7 %  <tspan fill="#656d76">of 2,090,256</tspan></text>
+    <rect x="250" y="259" width="34.5" height="14" rx="3" fill="#2f6fcf"/>
+    <text x="762" y="270" fill="#1f2328">6.9 %  <tspan fill="#656d76">of 2,090,256</tspan></text>
   </g>
 
   <text x="24" y="300" font-size="11.5" fill="#656d76">"Cited" means the function's address or name appears somewhere in the crates or docs. It is an upper bound on "ported":</text>
-  <text x="24" y="316" font-size="11.5" fill="#656d76">the port-map docs grade each function ported / partial / stub / stand-in / not started. Three functions are proven bit-exact against PCSX2.</text>
+  <text x="24" y="316" font-size="11.5" fill="#656d76">the port-map docs grade each function ported / partial / stub / stand-in / not started.</text>
 
   <!-- ===== Playable? ===== -->
   <line x1="24" y1="338" x2="856" y2="338" stroke="#d0d7de"/>
@@ -65,9 +65,9 @@
     <text x="216" y="26" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">playable</text>
     <g font-size="11.5" fill="#1f2328">
       <text x="14" y="54">27 archives on the disc; all 27 load and</text>
-      <text x="14" y="70">run 1,800 headless ticks without a panic.</text>
-      <text x="14" y="92">Headless walkthroughs reach every story</text>
-      <text x="14" y="108">level's exit; 7 real-input walks still stop.</text>
+      <text x="14" y="70">run 600 ticks without a panic.</text>
+      <text x="14" y="92">Not every level can be finished yet:</text>
+      <text x="14" y="108">7 real-input level walks still stop.</text>
       <text x="14" y="130">Menus, briefing, level, outro and results</text>
       <text x="14" y="146">run end to end.</text>
       <text x="14" y="168" fill="#656d76">Open items per level: docs/GAPS.md and</text>
@@ -88,7 +88,7 @@
       <text x="14" y="108">network, AI traffic, input mapping, HUD</text>
       <text x="14" y="124">data, mission scripts.</text>
       <text x="14" y="146">DRIVING.ELF is a second, stripped engine;</text>
-      <text x="14" y="162">3.1 % of its functions are cited.</text>
+      <text x="14" y="162">3.8 % of its functions are cited.</text>
       <text x="14" y="184" fill="#656d76">Phased plan in docs/atlas/driving.md.</text>
     </g>
   </g>

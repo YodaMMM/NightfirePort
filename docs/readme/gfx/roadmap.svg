@@ -28,7 +28,7 @@
 
     <rect x="512" y="100" width="168" height="48" rx="6" fill="#dbe6f6" stroke="#2f6fcf" stroke-width="1.5"/>
     <text x="596" y="121" font-size="13.5" font-weight="600" fill="#1f2328" text-anchor="middle">Verify against PS2</text>
-    <text x="596" y="138" font-size="11" fill="#656d76" text-anchor="middle">3 functions bit-exact so far</text>
+    <text x="596" y="138" font-size="11" fill="#656d76" text-anchor="middle"></text>
 
     <rect x="688" y="100" width="168" height="48" rx="6" fill="#dbe6f6" stroke="#2f6fcf" stroke-width="1.5"/>
     <text x="772" y="121" font-size="13.5" font-weight="600" fill="#1f2328" text-anchor="middle">Remaining systems</text>
