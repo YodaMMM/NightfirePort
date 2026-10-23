@@ -448,15 +448,34 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
     }
     if !exited {
         // The contact finishes the route onto the plate → the AND → the exit (Bond leads from the
-        // plate; the wait loop gives the descent its window).
+        // plate; the wait loop gives the descent his window). The game's own escort STOP: while
+        // Bond stands within 3.5 dxz inside the contact's π/3 facing cone, PlayerInWay (0x1e)
+        // HOLDS — the case-3 stay arm returns 1 while `Dist2D(Bond) < 3.5` [M 0x15ea28:32-47],
+        // and the 3.5-exit/Lead re-entry is the only release (the wedge is the game's rule, not a
+        // port stall — 957's guard-combat rework shifted the endgame race so Bond's plate-first
+        // parking now lands inside the band). A real player steps aside; the harness does the
+        // same through the real input path: retreat to the stairwell-head anchor (outside the
+        // plate's y band AND the 3.5 band) whenever the contact is wedged, and let the lead
+        // resume before re-taking the plate.
         for _ in 0..80 {
             if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break; }
-            w.wait(60);
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let cp = sim.drones.list[ci].pos;
+                let wedged = sim.drones.list[ci].state == 0x1e // PLAYER_IN_WAY [M 0x15ea28]
+                    || walker::dxz(cp, sim.bond.pos) < 3.5;
+                drop(sim);
+                if wedged && !on_plate(cp) {
+                    w.walk_nav_to([-30.8, 6.4, 13.1], "step aside (the PlayerInWay release [M 0x15ea28])", 1.2);
+                }
+            }
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break; }
             if on_plate(w.scene.sim.as_ref().unwrap().drones.list[ci].pos)
                 && !w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) {
                 w.walk_nav_to(plate, "the plate (re-take)", 1.2);
             }
             if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break; }
+            w.wait(60);
         }
     }
     let sim = w.scene.sim.as_ref().unwrap();

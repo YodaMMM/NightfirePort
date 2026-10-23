@@ -448,3 +448,155 @@ fn the_ally_never_shoots_bond_on_the_walk() {
     assert!(!sim.drones.list.iter().any(|d| d.present && d.dtype == 0xc && d.hit_by_player),
         "the ally was never shot by Bond");
 }
+
+/// The heard-noise path (the user's repeat: "zoe still shoots at you at the gondola"): the dtype-0xC
+/// ally rides the SAME walked route down to the gondola mouth and through the ride while the guards
+/// fight Bond. The game's rule set (docs/systems/ally-heard-noise.md): FindOpponent never gives a
+/// team-2 drone the player [M 0x1424e0:101-121], the heard-noise chain DOES walk her into Attack
+/// 0x56 (Suspect's sound case 0x14 and Alert's timer case 0xc are unconditional SetState(0x56)
+/// [M 0x16b0e0:118-124, 0x16b540:78-82]) but `DroneFunc_CombatState`'s opening gate sends an
+/// opponentless drone to NoOpponent 0x60 [M 0x148338:20-31], CombatNoMove 0x59 has no 0x5b/0x5c
+/// exit [M 0x1643e8:49-101] (the old port arm thrashed 0x59 ↔ 0x5c every tick), and every shot's
+/// aim is the OPPONENT's position (`SetOpponentAimPos` per shot [M 0x179d40:130, 0x1422d0:70-73]) —
+/// never Bond's chest. Sister: the team-1 guards on the same route still fight Bond.
+#[test]
+fn the_ally_fights_only_the_guards_through_the_noise_path() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000008.bin", false).expect("load 07000008"));
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        for ch in [0x45u32, 0x70, 0x02, 0x48] { sim.drones.channels.set(ch, 1, sim.drones.frame); }
+        // The briefcase channel stand-in (mux #235 ANDs it with the floor plate), as the ride walk does.
+        sim.drones.channels.set(0x4a, 1, sim.drones.frame);
+    }
+    w.wait_enabled(3000, "the station start");
+    w.wait(30);
+    // The walked descent (the repro's route; the walkway plates wake the ambush).
+    w.walk_nav_to([139.2, 49.5, -81.2], "to the intro plate", 1.3);
+    w.wait_enabled(4500, "the station-intro scene");
+    w.wait(60);
+    for (name, at) in [
+        ("the station hall", [139.0f32, 49.5, -93.0]),
+        ("the station doors", [139.5, 49.5, -97.5]),
+        ("the walkway head", [144.0, 46.0, -105.0]),
+        ("the walkway mid", [145.5, 45.0, -108.6]),
+        ("the lower landing", [150.0, 43.5, -116.0]),
+        ("the landing east", [151.2, 42.5, -120.5]),
+        ("the ramp south", [153.1, 41.2, -116.0]),
+        ("the ramp mid", [153.2, 39.7, -111.7]),
+        ("the ramp turn", [148.3, 38.5, -110.9]),
+        ("the mid level", [143.3, 36.5, -111.5]),
+        ("the mid doors", [135.5, 36.5, -112.2]),
+        ("the mid west", [132.1, 36.2, -112.3]),
+        ("the long link", [120.5, 34.1, -112.5]),
+        ("the hall y33", [118.2, 33.9, -111.0]),
+        ("the hall y33 south", [113.2, 33.7, -106.4]),
+        ("the stairwell top", [108.2, 31.5, -106.3]),
+    ] {
+        w.walk_nav_to(at, name, 1.5);
+    }
+    w.climb_stairs([107.25, 27.7, -119.5], "the stairwell down", 1.6, 4200);
+    for (name, at) in [
+        ("the lower level east", [110.7f32, 27.7, -121.5]),
+        ("the gondola mouth", [112.0, 27.4, -122.0]),
+        ("the platform west", [110.3, 27.3, -122.2]),
+        ("the west ledge south", [110.0, 27.0, -124.5]),
+        ("the west ledge at the cabin", [110.0, 27.0, -126.3]),
+    ] {
+        w.walk_nav_to(at, name, 1.4);
+    }
+    // The briefcase channel stand-in again: the walked descent below runs ~16k ticks and some
+    // writer clears ch 0x4a on the way (the ride walk's shorter leg set keeps it; the mux #235
+    // needs it ON at the board). The real chain is walk_the_gondola_to_the_briefcase_and_back.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.drones.channels.set(0x4a, 1, sim.drones.frame);
+    }
+    let (zi, zpos) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let hit = sim.drones.list.iter().enumerate()
+            .find(|(_, d)| d.present && d.dtype == 0xc)
+            .map(|(i, d)| (i, d.pos))
+            .expect("the ally (dtype 0xC, Zoe) is placed");
+        hit
+    };
+    eprintln!("[08 noise] zoe #{zi} at {zpos:?} after the walk (tick {}) ch4a {} ch1 {}", w.total_ticks,
+        w.scene.sim.as_ref().unwrap().drones.channels.on(0x4a) as u8, w.scene.sim.as_ref().unwrap().drones.channels.on(1) as u8);
+    // Board the carriage (the real floor plate), then ride while collecting.
+    {
+        let mut last = [0.0f32, 0.0];
+        let mut still = 0u32;
+        for t in 0..1200u32 {
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(4) { break; }
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let target = [112.0f32, 28.0, -127.0];
+            let use_key = if (p[0] - last[0]).abs() < 0.01 && (p[2] - last[1]).abs() < 0.01 {
+                still += 1; still % 30 == 0
+            } else { still = 0; last = [p[0], p[2]]; false };
+            let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let input = Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() > 1.0 { 0.0 } else { 1.0 }, ..Default::default() };
+            w.tick(input, use_key);
+            if t % 300 == 0 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[08 noise board t{t}] bond {:?} ch4 {}", sim.bond.pos, sim.drones.channels.on(4) as u8);
+            }
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(4), "the floor plate fired ch 4 [D #236 mask 8]");
+    }
+    let mut ch83 = false;
+    for t in 0..3600u32 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x53) { ch83 = true; break; }
+        w.tick(Input::default(), false);
+        if t % 600 == 0 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let z = &sim.drones.list[zi];
+            eprintln!("[08 noise ride t{t}] zoe state {:#x} pos {:?} opp {:?} shots {} | bond {:?} ch1 {} ch4 {} ch4a {}", z.state, z.pos, z.opp_drone, z.shots.len(), sim.bond.pos, sim.drones.channels.on(1) as u8, sim.drones.channels.on(4) as u8, sim.drones.channels.on(0x4a) as u8);
+        }
+    }
+    assert!(ch83, "the ride ran to its ch-83 writer (the window covers the repro's fight) [D stream 46]");
+
+    // ── the assertions ──────────────────────────────────────────────────────────────────────────
+    let sim = w.scene.sim.as_ref().unwrap();
+    let zoe = &sim.drones.list[zi];
+    // Sister (can fail): a team-1 guard on the same route entered the combat family — the ambush
+    // is alive and guard combat is not what this task broke.
+    let guard_fought = sim.drones.list.iter()
+        .any(|d| d.present && d.team == 1 && d.log.iter().any(|(_, s)| matches!(s, 0x56..=0x72 | 0x7f | 0x8c)));
+    assert!(guard_fought, "sister: a team-1 guard fought on the same route [M the 0x228&4 combat arms]");
+    // The ally walked the noise chain (the repro's 0xa2 → 0xa5 → 0x56 flow): the heard-noise
+    // states or the Attack/Combat/NoOpponent family appear in her state log.
+    let chain = zoe.log.iter().any(|(_, s)| matches!(s, 0xa2..=0xa5 | 0x56 | 0x58 | 0x60));
+    assert!(chain, "the ally's noise chain ran (0xa2..0xa5 or 0x56/0x58/0x60 in her log), log {:?}",
+        &zoe.log[..zoe.log.len().min(24)]);
+    // No per-tick 0x59 ↔ 0x5c thrash: no (x, y, x) subsequence with x/y ∈ {0x59, 0x5c} spanning
+    // ≤ 4 ticks.
+    for win in zoe.log.windows(3) {
+        let (fa, sa) = (win[0].0, win[0].1);
+        let (_, sb) = (win[1].0, win[1].1);
+        let (fc, sc) = (win[2].0, win[2].1);
+        let thrash = matches!(sa, 0x59 | 0x5c) && matches!(sb, 0x59 | 0x5c) && sa == sc && sb != sa
+            && fc.saturating_sub(fa) <= 4;
+        assert!(!thrash, "the 0x59 ↔ 0x5c per-tick thrash is gone [M 0x1643e8 has no 0x5b/0x5c exit], window {win:?}");
+    }
+    // Every shot the ally fired aimed at her drone opponent — the aim ray misses Bond's own hit
+    // cylinder (the port's guard-bullet volume, r 0.25) with the spread margin; a shot that
+    // never intersects his cylinder cannot damage him [M 0x179d40:130 re-aims every shot].
+    let bond_feet = [sim.bond.pos[0], sim.bond.pos[1] - 0.4, sim.bond.pos[2]];
+    let vol = nf_game::bullet::PlayerVolume { feet: bond_feet, height: 1.8, radius: 0.25 };
+    let mut bond_shots = 0usize;
+    for (f, m, aim) in &zoe.shot_aims {
+        let slack = [aim[0] - bond_feet[0], aim[1] - bond_feet[1], aim[2] - bond_feet[2]];
+        let miss = (slack[0] * slack[0] + slack[1] * slack[1] + slack[2] * slack[2]).sqrt() > 1.0
+            && nf_game::bullet::segment_cylinder(*m, *aim, &vol).is_none();
+        if !miss { bond_shots += 1; }
+        let _ = f;
+    }
+    assert_eq!(bond_shots, 0,
+        "the ally never targets or fires at Bond on the noise path [M 0x1424e0:101 + 0x148338:20-31], aims {:?}",
+        &zoe.shot_aims[..zoe.shot_aims.len().min(8)]);
+    eprintln!("[08 noise] zoe states {:?} shots {} aims {}", &zoe.log[..zoe.log.len().min(20)], zoe.shots.len(), zoe.shot_aims.len());
+    let _ = zpos;
+}
