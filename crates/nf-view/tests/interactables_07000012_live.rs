@@ -87,53 +87,54 @@ fn aim_input(w: &Walker, target: [f32; 3]) -> (nf_game::player::Input, bool) {
     (input, on)
 }
 
-/// The doors: walking at one opens it (Door_Update's proximity arm), a door left alone stays shut.
-/// door[0] is office-G_door1 by the west offices [D placements dump: the 0xdb list].
+/// The doors: a closed idle door answers the USE KEY (the E edge runs `Player_Activate`
+/// 0x1a5170 -> `Door_Activate` 0x135be0) — the game's opener census is explicit that NO contact or
+/// proximity opens a closed idle door: `Door_Activate` 0x135be0 has exactly three callers (the E
+/// press, `Door_Update` 0x1363c8's channel/auto-close arms, `NDrone2_OpenDoor` 0x14aa38) and
+/// `Door_ReactToHit` 0x135980 reverses only MOVING leaves [M]. The old premise (walking at one
+/// opens it) contradicted that census — the TEST was wrong (this rewrite, with the address).
+/// The real walk: the proven lobby legs south, the lane past the class-0x15 wall (z -3.81, x
+/// <= 11 [D ray dump]) and the desk row, E door[14] open, through; a far door left untouched
+/// stays shut. door[14] carries ch_lock 0 — unlocked [D placements]; doors 0-3 carry ch_lock 200
+/// (0xc8) with NO writer on the level [D census: no trigger/SP/lock/mux out 0xc8] — they stay
+/// locked, the E arm refuses (the `ch_lock != 0 && !on && state & 0x12` guard [M 0x135be0]).
 #[test]
-#[ignore = "the door-open mechanism itself is proven by the keypad test's ch 0xa edge on door[19]; this test's proximity arm needs a walk to the west wing the walker cannot route (the core walls, see the report)"]
-fn doors_open_on_the_walk_and_stay_shut_untouched() {
+fn doors_open_on_the_use_key_and_stay_shut_untouched() {
     let mut w = load();
     w.top_up_health = true;
     w.lenient = true;
-    let far = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        // door[19] — the keypad door by the security centre, far from the west office wing.
-        sim.drones.doors.list.iter().enumerate()
-            .find(|(_, d)| (d.pos[2] - 0.2).abs() < 2.0 && d.pos[0] > 6.0)
-            .map(|(i, d)| (i, d.pos))
-            .expect("the keypad door[19] by (7.0, 1.58, 0.19) [D]")
-    };
-    // The sister first: the far door is closed before anything (CLOSED = 2, OPENING = 8, OPEN = 4).
+    // The sister first: door[14] is closed before anything, and the far locked door[3] too
+    // (CLOSED = 2; the movement bits 0x8 OPENING / 0x4 OPEN).
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert_eq!(sim.drones.doors.list[far.0].state & 0xc, 0,
-            "the untouched keypad door is not opening [D]");
+        assert_eq!(sim.drones.doors.list[14].state & 0xc, 0, "door[14] closed before the E [D]");
+        assert_eq!(sim.drones.doors.list[3].state & 0xc, 0, "the far door[3] closed [D]");
+        assert!(sim.drones.doors.list[3].ch_lock != 0, "door[3] carries a lock channel [D]");
     }
-    // Walk at the west office door through the real path.
-    let near = {
+    // The proven walkreal legs: the lobby south, the floor south, the keypad approach, then the
+    // lane south past the wall/desks to door[14]'s north side.
+    w.walk_to(Wp::new(14.0, 1.1, 6.0).r(1.2), "the lobby south");
+    w.walk_to(Wp::new(10.0, 1.1, 2.0).r(1.2), "the floor south 2");
+    w.walk_to(Wp::new(9.3, 1.1, -0.6).r(1.0), "the keypad approach");
+    w.walk_nav_to([19.5, 1.1, -7.0], "the lane past the wall", 1.2);
+    w.walk_nav_to([15.2, 1.1, -10.6], "door[14] north side", 1.0);
+    // The real E edge on the door (pulsed like the game's Input_Action mask-4 edge [M 0x1a5460:396]).
+    let mut opened = false;
+    for _ in 0..6 {
+        // Arrive at r 2.0 — the use pick's reach (the sphere r 1.0 at head + look vs the door's
+        // world sphere [M Player_Activate 0x1a5170:100-108]) — not the leaf's swung slab.
+        w.walk_to(Wp::at(14.68, 1.1, -11.29, walker::Act::Use { use_ticks: 60 }).r(2.0), "E door[14]");
         let sim = w.scene.sim.as_ref().unwrap();
-        sim.drones.doors.list.iter().enumerate()
-            .min_by(|a, b| walker::dxz(a.1.pos, [-32.6, 1.1, 14.9]).total_cmp(&walker::dxz(b.1.pos, [-32.6, 1.1, 14.9])))
-            .map(|(i, d)| (i, d.pos))
-            .expect("the office-G door")
-    };
-    let mut moved = false;
-    // Teleport to reach the west wing (the walker's westward legs are walled by the core [D probes
-    // — the walkreal route's leg notes]); the approach and the door's own proximity arm stay real.
+        if sim.drones.doors.list[14].state & 0xc != 0 { opened = true; break; }
+    }
+    assert!(opened, "E at the unlocked door[14] opens it [M Player_Activate 0x1a5170 -> Door_Activate 0x135be0]");
+    // Through, then the sister: the untouched far door[3] never moved.
+    w.walk_nav_to([14.7, 1.1, -12.9], "through door[14]", 1.0);
     {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [near.1[0] + 1.0, near.1[1], near.1[2] - 1.0];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(10);
-    for _ in 0..150 {
-        w.tick(nf_game::player::Input::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
-        if sim.drones.doors.list[near.0].state & 0xc != 0 { moved = true; break; }
+        assert_eq!(sim.drones.doors.list[3].state & 0xc, 0,
+            "the far locked door[3] stays shut untouched [D ch_lock 200, no writer on the level]");
     }
-    assert!(moved, "walking at office-G_door{} opens it [M Door_Update 0x1363c8's proximity arm]", near.0);
-    let sim = w.scene.sim.as_ref().unwrap();
-    assert_eq!(sim.drones.doors.list[far.0].state & 0xc, 0, "the far keypad door stays shut [D]");
 }
 
 /// The keypad locks: the loadout's Q-Decryptor (0x4E) burns "Lock - KeypadLocked" (#919/#957,
@@ -339,42 +340,87 @@ fn the_monitor_enters_the_camera_view_on_e() {
 /// ScriptPlayer #1028 on E (its trigger channel [D param 6 = 0x34]), and the MultiplexSIn ANDs
 /// (#949 [0x34,0x42]→0x41, #953 [0x34,0x43]→0x44 [D]) stay off while their second inputs are low.
 /// Sister: no E — ch 0x34 stays off.
+///
+/// The real walk (probe-verified legs): the proven lobby legs south, the lane past the class-0x15
+/// wall (z -3.81, x <= 11 [D ray dump]) and the desk row at x 13..16, E door[14]/[15] open
+/// ([M Player_Activate 0x1a5170 -> Door_Activate 0x135be0; both ch_lock 0 [D]]), the south-west
+/// corridor to the PC at (-16.88, 1.19, -32.15) [D]. The aim is REAL INPUT ONLY (turn/look through
+/// the input; the E edge pulses once the view is on the PC) — the old teleport+direct-write shape
+/// was the port-side shortcut the task rule forbids.
 #[test]
-#[ignore = "the E pick geometry is right (the sphere fix below is unit-tested) but the port's look-cursor chase fights the test's aim writes; needs the cursor model — see the report's live checks"]
+#[ignore = "the real route is proven down to the door[15] threshold (the E-opens work: [14] 0x2->0x4, [15] 0x2->0x8 through the real use path), but the doorway's SOUTH vestibule pins Bond in a class-0x15 pillar pocket (x 10.07..10.62, z -15.6..-16.3 [D ray dump]: west face +z-south face, the free west lane only north of z -15.55) — the swinging leaf pushes him in and the r 0.55 capsule [M 0x194df0] has no exit the walker can route. The same funnel class as the door[19] pincer the walkreal route documents (the game passes it; the port's per-triangle separation wedges — an open live check). Needs the funnel fix or the live check; the aim half is ready (real turn/look + the E edge on the converged view)"]
 fn the_hack_computer_starts_the_q_worm_sp() {
     let mut w = load();
     w.top_up_health = true;
+    w.lenient = true;
     let sp = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.scripts.players.iter().position(|p| p.out == 0x34)
             .expect("the Q-Worm ScriptPlayer (trigger ch 0x34) [D]")
     };
-    // The PC sits at (−16.88, 1.19, −32.15) [D placements dump]; the E pick is the 1.0-radius
-    // sphere at the view point [M Player_Activate 0x1a5170], so stand close and aim AT it.
-    let mut hacked = false;
     let pc_pos = {
         let sim = w.scene.sim.as_ref().unwrap();
         let pc = &sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x34).expect("the hack PC");
         eprintln!("[pc] pos {:?} r {}", pc.pos, pc.radius);
         pc.pos
     };
-    'outer: for ring in [0.9f32, 1.3, 1.8] {
-        for k in 0..8 {
-            let a = k as f32 * std::f32::consts::FRAC_PI_4;
-            {
-                let sim = w.scene.sim.as_mut().unwrap();
-                sim.bond.pos = [pc_pos[0] + ring * a.cos(), 0.9, pc_pos[2] + ring * a.sin()];
-                sim.bond.yaw = (pc_pos[0] - sim.bond.pos[0]).atan2(pc_pos[2] - sim.bond.pos[2]);
-                sim.bond.pitch = 0.0;
-                sim.bond.vel = [0.0; 3];
-            }
-            w.wait(4);
-            for _ in 0..25 {
-                let (input, _) = aim_input(&w, pc_pos);
-                w.tick(input, true);
-                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x34) { hacked = true; break 'outer; }
-            }
-        }
+    // The south route to the PC (see the doors test for the shared head legs).
+    w.walk_to(Wp::new(14.0, 1.1, 6.0).r(1.2), "the lobby south");
+    w.walk_to(Wp::new(10.0, 1.1, 2.0).r(1.2), "the floor south 2");
+    w.walk_to(Wp::new(9.3, 1.1, -0.6).r(1.0), "the keypad approach");
+    w.walk_nav_to([19.5, 1.1, -7.0], "the lane past the wall", 1.2);
+    w.lenient = true;
+    w.walk_nav_to([15.0, 1.1, -9.6], "door[14] north side", 1.0);
+    w.lenient = true;
+    for _ in 0..6 {
+        w.walk_to(Wp::at(14.68, 1.1, -11.29, walker::Act::Use { use_ticks: 60 }).r(2.0), "E door[14]");
+        if w.scene.sim.as_ref().unwrap().drones.doors.list[14].state & 0xc != 0 { break; }
+    }
+    w.walk_nav_to([14.7, 1.1, -12.9], "through door[14]", 1.0);
+    w.lenient = true;
+    w.walk_nav_to([10.2, 1.1, -13.2], "door[15] north side", 1.0);
+    w.lenient = true;
+    for _ in 0..6 {
+        w.walk_to(Wp::at(9.91, 1.1, -14.47, walker::Act::Use { use_ticks: 60 }).r(2.0), "E door[15]");
+        if w.scene.sim.as_ref().unwrap().drones.doors.list[15].state & 0xc != 0 { break; }
+    }
+    // Cross the door[15] threshold at its WEST half (the east half dead-ends in the class-0x15
+    // pocket at x 10.07..10.62, z -15.7..-16.3 [D ray dump]; south of x 9 is CLEAR to z -22).
+    // The swinging leaf pushes Bond south into the class-0x15 pocket (x 10.07..10.62, z
+    // -15.6..-16.3 [D ray dump]); step back OUT (north) first, then cross the threshold's WEST
+    // half (south of x 9 is CLEAR to z -22 [D ray]).
+    w.walk_to(Wp::new(10.2, 1.05, -14.4).r(0.7), "out of the leaf pocket");
+    w.walk_to(Wp::new(9.4, 1.05, -15.1).r(0.8), "through door[15] west half");
+    w.walk_to(Wp::new(8.6, 1.05, -17.0).r(0.9), "the south-west bend");
+    w.walk_nav_to([8.0, 1.1, -20.0], "the south corridor", 1.3);
+    w.lenient = true;
+    w.walk_nav_to([-5.5, 1.1, -20.8], "the corridor west", 1.3);
+    w.lenient = true;
+    w.walk_nav_to([-10.58, 1.1, -19.29], "door[17]", 1.2);
+    w.lenient = true;
+    for _ in 0..6 {
+        w.walk_to(Wp::at(-10.58, 1.1, -19.29, walker::Act::Use { use_ticks: 60 }).r(2.0), "E door[17]");
+        if w.scene.sim.as_ref().unwrap().drones.doors.list[17].state & 0xc != 0 { break; }
+    }
+    w.walk_nav_to([-12.5, 1.1, -19.5], "through door[17]", 1.0);
+    w.lenient = true;
+    w.walk_nav_to([-15.0, 1.1, -26.0], "the PC approach", 1.3);
+    w.lenient = true;
+    w.walk_nav_to([-15.7, 1.1, -31.0], "the PC side", 1.1);
+    w.lenient = true;
+    eprintln!("[pc walk] bond at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+
+    // The real aim: turn/look inputs converge the view on the PC; E pulses on the converged edge.
+    let mut hacked = false;
+    let start = w.total_ticks;
+    loop {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.channels.on(0x34) { hacked = true; break; }
+        assert!(w.total_ticks - start < 900, "E at the hack computer never wrote ch 0x34 [D param 1]");
+        let (input, on) = aim_input(&w, pc_pos);
+        // Pulse the use key only when the view is ON the PC (the game's pick is the head+look
+        // sphere [M Player_Activate 0x1a5170:100-108]; pressing while off-target is noise).
+        w.tick(input, on);
     }
     assert!(hacked, "E at the hack computer writes ch 0x34 [D param 1]");
     let sim = w.scene.sim.as_ref().unwrap();
