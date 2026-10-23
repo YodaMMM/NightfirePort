@@ -2795,7 +2795,9 @@ impl FrontEnd {
                 const IDS: [u32; 9] = [0x1000_00e7, 0x1000_00e8, 0x1000_00bd, 0x1000_00c7, 0x1000_0101, 0x1000_0169, 0x1000_01f7, 0x1000_0216, 0x1000_021d];
                 if let Some(i) = IDS.iter().position(|&id| id == ctrl) { self.cheat_misc[i] = checked; }
             }
-            _ => self.cheat_fly = checked,
+            // Any other control is not a cheat-page toggle: ignore it (the fly flag is only
+            // C_CHCHFLY's 0x10000010/0x10000011 rows above).
+            _ => {}
         }
     }
 

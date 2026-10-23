@@ -4719,9 +4719,13 @@ impl App {
                                     scope: self.zoom,
                                     // The fire-mode button (pad ○; keyboard M) [M Player_Weapon 0x1a24c8].
                                     mode_switch: self.just.remove(&KeyCode::KeyB),
-                                    // The goggles key (pad action 13 via the styles; keyboard N)
-                                    // [M HUD_MonitorNightSight 0x19e9d8:74].
-                                    goggles_action: self.just.remove(&KeyCode::KeyN),
+                                    // The goggles key: pad action 13 only (the styles). No keyboard
+                                    // bind — the disc grants the goggles nowhere, and the game's
+                                    // latch-clear press requests item 0x5d with no ownership check
+                                    // [M HUD_MonitorNightSight 0x19e9d8:82-84; Player_WeaponSelect
+                                    // 0x1a2cc0 has none either], so a port-only key would draw an
+                                    // item Bond does not carry.
+                                    goggles_action: false,
                                 };
                                 (input, self.trigger, self.just.remove(&KeyCode::KeyR), self.just.remove(&KeyCode::KeyE))
                             };
