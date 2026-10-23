@@ -862,6 +862,16 @@ pub struct HudState {
     /// across level swaps by [`HudState::carry_boot_globals`] like the game's .sdata — the same
     /// boot-scoped global the game itself keeps.
     pub load_msg: u32,
+    /// The goggles flow controller (`HUD_MonitorNightSight` 0x19e9d8): the view mode (viewer
+    /// +0x236: 0 off / 1 night sight / 2 x-ray), the battery (BL+0x920, 0..1800) and the
+    /// BL+0x961 latch. Ticked per frame in `hud_tick` — the game calls it from `HUD_Update`
+    /// 0x19a088:19 inside `Player_Update`. Consumers read it via `Sim::goggle_mode` /
+    /// `Sim::goggle_battery`; docs/systems/goggles.md holds the evidence map.
+    pub goggles: nf_game::hud_pane::MonitorNightSight,
+    /// The goggles key's press edge this tick, stashed by `step_bond` from
+    /// `Input::goggles_action` and consumed by `hud_tick` (which runs inside `run`, later in
+    /// the same tick — the game's `Input_Action(p, 0xd, 4)` reads the same edge).
+    pub goggles_press: bool,
 }
 
 impl HudState {
@@ -2061,6 +2071,18 @@ impl Sim {
     /// the room cel's list, not the big overlapping box's). Fix-render2's first-guard report ("the first
     /// guard looks too dark") could not be reproduced at any [L] position with this tie-break.
     pub fn cel_at(&self, p: [f32; 3]) -> Option<usize> { find_cel(&self.cels, p) }
+
+    /// The goggles' view mode (viewer `+0x236`): 0 off, 1 night sight, 2 x-ray [M
+    /// `HUD_MonitorNightSight` 0x19e9d8]. The renderer's consumers (the night/x-ray pane
+    /// data, the crosshair, `AnimObjectDraw`'s night lighting, `BodyGlow_Update`'s mode-2
+    /// glow) read this; docs/systems/goggles.md has the consumer list.
+    pub fn goggle_mode(&self) -> u16 { self.hud.goggles.mode }
+
+    /// The goggles battery (BL+0x920), 0..1800: −FRAME_RATE_MUL per tick while a mode is up,
+    /// +3·FRAME_RATE_MUL capped at 1800 while off (the cap is the EE's `MIN.S` — disasm
+    /// 0x19ec68, op 0x29 per ps2tek; FRAME_RATE_MUL = 1 at the fixed 60 Hz) [M 0x19e9d8:154-162].
+    /// At ≤ 0 with a mode up the game zeroes it and drops the mode to 0 [M :163-193].
+    pub fn goggle_battery(&self) -> f32 { self.hud.goggles.fade }
     /// The ambient triple a 0x800 object at `p` ramps toward: `base = cel + switch_channels[cel+0xa2]`,
     /// read at `base+0x9a/0x9c/0x9e` (`Lights_CalcAmbientLight` 0x1cb178). The port's live switch-channel
     /// table stands in for the game's; values above 1 clamp to 1 (only the 0/1 shift has defined bytes).
@@ -2267,6 +2289,9 @@ impl Sim {
         // The port ticks the hold and skips the world (docs/systems/exit-hold.md); the host
         // defers the level load until it clears.
         if self.drones.tick_exit_hold() { return; }
+        // goggles: the action-13 press edge rides into this tick's `hud_tick` (the game's
+        // `Input_Action(p, 0xd, 4)` reads the same edge inside HUD_Update) [M 0x19e9d8:74].
+        self.hud.goggles_press = input.goggles_action;
         // mp-core: `MP_Update` 0x184bd0 runs per frame in the gameplay flow state [M 0x184bd0:17-21];
         // the port's fixed tick stands in for the game's wall-clock delta (the module doc's
         // *Deviation*). Arena loads only — `None` on every campaign level.
@@ -3208,7 +3233,16 @@ impl Sim {
         // back at the script's matrix (on the floor below it), facing its +Z.
         for e in std::mem::take(&mut self.drones.player_events) {
             match e {
-                nf_game::nis::Request::PlayerDisable => self.disabled = true,
+                nf_game::nis::Request::PlayerDisable => {
+                    self.disabled = true;
+                    // goggles: `Player_SetCamMode` 0x195928 clears viewer+0x236 on every camera
+                    // -mode change (arms :15/:23/:27/:40) and `Camera_Reset` 0x1b9af0:50 clears
+                    // it too — a cut-scene's cam hand-off kills the goggles view. The battery
+                    // (BL+0x920) is untouched — only the mode byte drops.
+                    self.hud.goggles.mode = 0;
+                    self.hud.goggles.night_pane_on = false;
+                    self.hud.goggles.xray_pane_on = false;
+                }
                 // nis-event9-cnis: `Player_Cam2Mode` 0x195fc8 [M — mode 3 → `Player_SetCamMode(BL, 2)`
                 // 0x195928 (the cut-scene behind-Bond orbit, `Player_PositionCamera` 0x18f5d8 case 2);
                 // anything else → `BL+0x8a8 = 0` + `SetCamMode(0)` + `Player_ChangeSubState(player, 0)`
@@ -3542,6 +3576,12 @@ impl Sim {
         // The reload states block it here too (the game's refused view-state set {1,3,5,6,7,8,9,0xb,
         // 0xd..0x10} covers 5/6/7): a pending request simply waits for the reload to finish [M 0x1a6f80:33-47].
         if self.gun.switch_state == 0 && self.gun.reload_state == 0 && self.gun.switch_request != self.gun.weapon {
+            // goggles: every switch start saves the outgoing weapon to `anim+0x64` (the port's
+            // `saved_weapon`) [M Player_SetWeaponAnimObj 0x1a2e38:197-198 disasm 0x1a31e8-0x1a31fc;
+            // Player_WeaponChange 0x1a6f80:142 writes the same at the request]. The goggles arm
+            // path reads it for the auto-stow (hud_tick): the goggles return to the weapon they
+            // were drawn from, clamped {0x47,0x5d,0x5e} → 1 [M 0x19e9d8:56-66].
+            self.gun.saved_weapon = self.gun.weapon;
             let cur_id = self.gun.weapon;
             let req_id = self.gun.switch_request;
             let cur_base = self.weapons.base(cur_id as usize);
@@ -5091,6 +5131,49 @@ impl Sim {
     /// `Text_AddMsg` 0x1b0c30; `Text_UpdateMsg` 0x1b11d8 decrements the head's time by FRAME_RATE_MUL
     /// = 1 and deletes it at ≤ 0).
     fn hud_tick(&mut self) {
+        // The goggles flow controller first — the game's `HUD_Update` 0x19a088 calls
+        // `HUD_MonitorNightSight` 0x19e9d8 right after the crosshair, before the pane walk
+        // [M :19]. The guard ladder's inputs, each per its decompile line:
+        // - hud_active: BL+0x94a is the player-update countdown (1 = run) [M 0x193600:79-88];
+        //   `Player_Update` calls `HUD_Update` [M :76] only on that path, and the port's
+        //   `disabled` (cutscene/vehicle/gunimp) stands for the not-running states.
+        // - viewer_state: player+0xf4 — 1 plays, 2/3 are the death states [M 0x190810:66].
+        // - weapon_class: player+0xff == 0x12 blocks; Bond's class byte is never 0x12 in SP
+        //   play (0x12 is the MP body class) — `// [S] unverified` that no SP path sets it.
+        // - gadget_sub: player+0xf6 — the port's `bond.substate` (0 or 3..5 pass) [M :37-47].
+        // - zoom_pane_on: BL+0x7e8 → +0xf4, the fp view model's anim id — the port's view
+        //   machine's switch (1/2/3/8), fire (9) and reload (5/6/7) states [M 0x1a2cc0/0x1a2e38].
+        // - weapon_bit0: weapon+0x60 bit 0 — the aim-mode bit [M Player_Weapon 0x1a24c8:47-67
+        //   sets it from action 19; Player_WeaponChange refuses while it is up] = `self.aiming`.
+        let press = std::mem::take(&mut self.hud.goggles_press);
+        let out = self.hud.goggles.tick(&nf_game::hud_pane::MonitorInputs {
+            hud_active: !self.disabled,
+            viewer_state: if self.drones.death.active { 2 } else { 1 },
+            mp: self.mp.is_some(),
+            weapon_class: 0,
+            gadget_sub: self.bond.substate as i16,
+            goggles_equipped: self.gun.weapon == 0x5d,
+            zoom_pane_on: self.gun.switch_state != 0 || self.gun.fire_state || self.gun.reload_state != 0,
+            toggle_action: press,
+            weapon_bit0: self.aiming,
+        });
+        if let Some(out) = out {
+            if let Some(id) = out.item_class_override {
+                // The latch-clear press: `weapon+0x63 = 0x5d` — request the goggles item
+                // [M 0x19e9d8:56-58, disasm 0x19eb40-0x19eb50]. No owned gate exists in the
+                // game's request path; the port's switch machine applies it like any request.
+                self.gun.switch_request = id;
+            }
+            if out.armed {
+                // The arm path's `weapon+0x63 = weapon+0x64` restore + the {0x47,0x5d,0x5e} → 1
+                // clamp [M 0x19e9d8:56-66, disasm 0x19ead0-0x19eb14; the +0x64 writer is the
+                // switch start 0x1a2e38:197-198 / 0x1a6f80:142]: the goggles item auto-stows to
+                // the weapon it was drawn from (specials clamp to 1) as soon as its draw ends,
+                // while the VIEW mode stays on — the mode is a view state, not an item state.
+                self.gun.switch_request =
+                    nf_game::hud_pane::MonitorNightSight::clamp_item_class(self.gun.saved_weapon);
+            }
+        }
         // The weapon-name timer (`HUD_UpdateAmmoPane` 0x19a7f0:212-217): while a switch request
         // differs from the current weapon (drone+0x63 vs +0x62) and the two records' +2 words
         // differ, the timer is RE-SET to FRAME_RATE (60) every pending frame — the name covers the

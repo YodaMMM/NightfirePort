@@ -4719,6 +4719,9 @@ impl App {
                                     scope: self.zoom,
                                     // The fire-mode button (pad ○; keyboard M) [M Player_Weapon 0x1a24c8].
                                     mode_switch: self.just.remove(&KeyCode::KeyB),
+                                    // The goggles key (pad action 13 via the styles; keyboard N)
+                                    // [M HUD_MonitorNightSight 0x19e9d8:74].
+                                    goggles_action: self.just.remove(&KeyCode::KeyN),
                                 };
                                 (input, self.trigger, self.just.remove(&KeyCode::KeyR), self.just.remove(&KeyCode::KeyE))
                             };
