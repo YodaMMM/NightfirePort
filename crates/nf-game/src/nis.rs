@@ -1860,6 +1860,15 @@ impl Scripts {
         }
     }
 
+    /// `Copter_Delete` 0x17e568's `SP_Delete(*(rec+0x2c))` [M :8]: the copter `placement`'s SP
+    /// player goes to its delete state (state 5 frees both scripts on its next update — the
+    /// same path the script ops' SP_Delete takes).
+    pub fn delete_copter_sp(&mut self, placement: usize) {
+        for p in &mut self.players {
+            if p.placement == placement { p.state = 5; }
+        }
+    }
+
     /// The object indices the hidden SPs' CURRENT scripts own — the port-side `Script_HideObj`
     /// cascade [M 0x1dcbf0:12-14 → 0x1db808: the kind-1..3 stream objects of the script
     /// `SCRIPTPLAYER_tag+0x2a` selects get the obj+0xF0 bit 0x10]. The nf-view entity getters

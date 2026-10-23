@@ -5236,7 +5236,7 @@ impl Sim {
         if let Some(out) = out {
             if let Some(id) = out.item_class_override {
                 // The latch-clear press: `weapon+0x63 = 0x5d` — request the goggles item
-                // [M 0x19e9d8:56-58, disasm 0x19eb40-0x19eb50]. No owned gate exists in the
+                // [M 0x19e9d8:82-83, disasm 0x19eb40-0x19eb50]. No owned gate exists in the
                 // game's request path; the port's switch machine applies it like any request.
                 self.gun.switch_request = id;
             }

@@ -2,7 +2,7 @@
 //! path (`nf_view::load` + `Sim::step_bond`). Opt-in via `NF_ISO`.
 //!
 //! The game's ground ray skips both the drop and the corpse: `build_PointOnFloor` 0x1c95a8:52 runs
-//! flags 0x70c (bit 0x8 → `Collide_PickObj` 0x1eae80:56-64 adds the skip bit 0x40 = pickups) and the
+//! flags 0x70c (bit 0x8 → `Collide_PickObj` 0x1eae80:72-78 adds the skip bit 0x40 = pickups) and the
 //! base filter skips bit 0x20 (the corpse bit `NDrone2_SetAsDead` 0x14a2f0 sets) for EVERY query —
 //! so Bond stands at floor + 1.1 over any drop, never lifted onto it [M]. The take ray
 //! (`Pickup_Update` 0x18e148:210-214, flags 0x721, the pickup's own obj excluded) ends on the
@@ -84,7 +84,7 @@ fn kill_guard(scene: &mut Scene, gi: usize, mut dev: Option<&mut Dev>) -> bool {
 }
 
 /// Bond placed exactly on a resting guard drop stands at floor + 1.1 (never lifted onto the drop or
-/// the corpse — the game's ground ray skips both [M 0x1c95a8:52 + 0x1eae80:56-64]) and the take
+/// the corpse — the game's ground ray skips both [M 0x1c95a8:52 + 0x1eae80:72-78]) and the take
 /// happens through the real tick path (the ray ends on the resting floor contact; the end band
 /// absorbs the rest noise, pickup.rs `touches`).
 #[test]

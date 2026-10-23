@@ -210,7 +210,8 @@ pub struct PartHit {
     pub class: u16,
 }
 
-/// The 9-entry `Bits` table the damage walk scales and filters with [L EE 0x2a37e8, 72 bytes,
+/// The 9-entry `Bits` table the damage walk scales and filters with [D ACTION.ELF .data 0x2a37e8,
+/// 72 bytes: scales 2.0, 3.0, 1.0, 2.0, 100.0 (filter 0x10), 1.0, then three zero entries; L the same 72 bytes,
 /// identical in work/ee_snapshot.bin and work/ee_start_05.bin — `{u16 filter, f32 scale}` per
 /// part]. Filters are 0 everywhere but slot 4 (0x10): a 0 filter keeps every hit
 /// [M Collide_FilterBullets 0x1ece30:26 — `mask & 0 == 0` never drops]; slot 4 keeps only
@@ -908,7 +909,7 @@ mod tests {
         assert!((m[3][0] - 900.0).abs() < 60.0, "the straight line at t=1.5 sits midway");
     }
 
-    // copter-hitdata-damage [M Copter_Update 0x17dbb8:277-320; L the Bits table, EE 0x2a37e8]:
+    // copter-hitdata-damage [M Copter_Update 0x17dbb8:277-320; D the Bits table, ACTION.ELF .data 0x2a37e8]:
     // the walk scales each counted hit by its slot's Bits entry into rec+0x64 AND rec+0x6c, and
     // the slot-4 filter (0x10) drops the class-0x10 weapon hits [M Collide_FilterBullets
     // 0x1ece30:25-33].
