@@ -151,7 +151,7 @@ pub fn laser_tick(head: V3, dir: V3, world: &crate::world::CollisionWorld) -> (V
 /// docs/live/2026-10-14-weapon-measurements-pcsx2.md "The laser watch 0x4e": 100 → 59 over ~1.3 s].
 /// The game's writer of those instance fields is UNLOCATED in the decompile (an exhaustive store
 /// scan of ACTION.ELF's .text finds no write at link+0x110/link+0x104 nor at the obj-relative
-/// +0x220/+0x214 — the pane reads them through the bullet walk; live check in the report) — the
+/// +0x220/+0x214 — the pane reads them through the bullet walk) — the
 /// port stands the value in as `Sim::laser_charge` with the [D] drain. The refill below is [S]:
 /// no decompile or disc evidence pins the game's idle refill (the old "+1 per 4 frames" shape was
 /// the gadget-clip regen [M Player_Update 0x193600 disasm 0x193f18-58], which regenerates the

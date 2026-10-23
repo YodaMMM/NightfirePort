@@ -286,8 +286,8 @@ impl MpHudSnapshot {
         if viewer_radar_on {
             // Player blips: every live slot but the viewer [M 0x189840:29-96]. The game's
             // +0xff state gates (2/4 limbo, 3 the +0x894 arm) ride the BLData pipeline the
-            // port's players don't have — the port's `MpSlot::dead` is the stand-in [S, see
-            // the report's deviations].
+            // port's players don't have — the port's `MpSlot::dead` is the stand-in [S,
+            // deviation].
             for slot in 0..humans {
                 if slot == viewer_slot || m.game.slots[slot].dead {
                     continue;

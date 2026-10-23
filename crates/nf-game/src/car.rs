@@ -81,7 +81,7 @@ pub struct Car {
     /// `obj+0x90` — the live matrix; `TankSpawns[slot]` on the port side is `spawn_matrix`
     /// (the game copies the spawn pose in at create and back at deactivate — the two
     /// `Mat_Copy(obj+0x90, TankSpawns+slot*0x40)` call sites [M 0x1305b0:74, 0x131d88:74];
-    /// the decompiler's arg order is ambiguous, disasm check listed in the report).
+    /// the decompiler's arg order is ambiguous; a disasm check is still open).
     pub matrix: Mat4,
     pub spawn_matrix: Mat4,
     /// `CAR_INFO+0xf8` — the collision damage accumulator (hits add; deactivate > 200)

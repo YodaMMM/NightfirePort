@@ -384,8 +384,8 @@ impl Searchlights {
         // the port's own embellishment (the comment's old warrant — "flags 0x18 do not exclude the
         // player's class" — missed that mask 0x10 skips the whole dynamic walk, Bond included): the game's
         // spot lands on static geometry and `Vec_Dist3D(spot, player) <= 2.0` [M 0x1cb900:251] arms off
-        // the ground spot; a PCSX2 render check decides whether the spot may rest on Bond (live check in
-        // the report). The arming predicate below is untouched.
+        // the ground spot; a PCSX2 render check decides whether the spot may rest on Bond (open live
+        // check). The arming predicate below is untouched.
         if let Some(sp) = self.parts[head].links[2] {
             let (yaw, pitch) = (self.parts[head].yaw, self.parts[head].pitch);
             let dir = spherical(100.0, yaw, -pitch);

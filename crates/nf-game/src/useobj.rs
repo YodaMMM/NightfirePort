@@ -513,7 +513,7 @@ mod tests {
         let mut scripts = crate::nis::Scripts::default();
         let mut ch = chans(&[]);
         // E on the keycard lock (ch 9) — the direct walk keeps its placement-origin reach
-        // (not this task's scope).
+        // (not ported here).
         assert!(u.player_activate(&mut scripts, &mut ch, [0.0, 1.6, 0.0], [0.0, -1.0, 0.0], 1, &TestWorld, [0.0, 0.0, 0.0]));
         assert!(ch.on(9), "the switch toggles ch 9 [M 0x1b02a8]");
         assert!(!ch.on(0x7c), "the alarm pull is out of reach here");

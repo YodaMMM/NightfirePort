@@ -15,7 +15,7 @@
 //! [M centre/radius = glist+0x20/+0x30 per docs/formats/level.rs; the ladder sphere's +0x84 (centre y) and
 //! +0x8C (radius) are what `Player_CollLadder` 0x196118 and `Player_Climb` 0x196310 clamp against].
 //!
-//! Spec: docs/atlas/ladder.md (this session), docs/systems/player.md.
+//! Spec: docs/atlas/ladder.md,docs/systems/player.md.
 
 use crate::world::V3;
 use nf_formats::level::{Level, MapObject};

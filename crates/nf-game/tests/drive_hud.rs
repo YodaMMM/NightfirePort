@@ -121,7 +121,7 @@ fn objective_records_keep_the_game_shape_and_states() {
 }
 
 /// ETargetBeaconOnOff (321/323) toggles in place — the position stands [M the toggle;
-/// the target struct is open, see the report's live checks].
+/// the target struct is an open live check].
 #[test]
 fn beacon_toggles_in_place() {
     let mut hud = DriveHud::new();

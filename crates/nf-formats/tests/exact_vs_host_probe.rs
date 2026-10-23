@@ -1,12 +1,12 @@
 //! fix-exact-math-swap3 probe: how far the EE-exact path can move from the host path, per function.
-//! The merge held because renders moved "far more than float precision can explain"; this measures
+//! Renders moved far more than float precision can explain; this measures
 //! each swapped function's host-vs-exact divergence over a wide domain so the camera dump can point
 //! at the right layer.
 
 use nf_formats::anim::{mul, quat_trans_to_mat, Mat4};
 use nf_formats::placement::object_matrix;
 
-/// master's host `object_matrix` (crates/nf-formats/src/placement.rs @ origin/master).
+/// The former host-float `object_matrix` (before the EE-exact path).
 fn host_object_matrix(rot: [f32; 3], trans: [f32; 3]) -> [[f32; 4]; 4] {
     let (sx, cx) = rot[0].sin_cos();
     let (sy, cy) = rot[1].sin_cos();
@@ -19,7 +19,7 @@ fn host_object_matrix(rot: [f32; 3], trans: [f32; 3]) -> [[f32; 4]; 4] {
     ]
 }
 
-/// master's host `quat_trans_to_mat`.
+/// The former host-float `quat_trans_to_mat`.
 fn host_quat_trans_to_mat(q: [f32; 4], t: [f32; 3]) -> Mat4 {
     let [x, y, z, w] = q;
     let (y2, z2, xx2, xw2) = (y + y, z + z, (x + x) * x, (x + x) * w);
@@ -31,7 +31,7 @@ fn host_quat_trans_to_mat(q: [f32; 4], t: [f32; 3]) -> Mat4 {
     ]
 }
 
-/// master's host `mul`.
+/// The former host-float `mul`.
 fn host_mul(a: &Mat4, b: &Mat4) -> Mat4 {
     let mut r = [[0f32; 4]; 4];
     for i in 0..4 { for j in 0..4 { r[i][j] = (0..4).map(|k| a[i][k] * b[k][j]).sum(); } }

@@ -44,12 +44,12 @@
 //! gadget itself was previously not ported (docs/port-map/gadgets.md — all of 0x4A..0x5E are out of
 //! selection), so the burn was a method the (future) `Player_LaserPointer` 0x1a65d8 calls per tick
 //! while its ray hits the lock's world sphere, and tests could drive it directly. The framelist
-//! open-animation is not posed — render-side, noted in the report.
+//! open-animation is not posed (render-side).
 //! ported (docs/port-map/gadgets.md — all of 0x4A..0x5E are out of selection), so the burn is a
 //! method the (future) `Player_LaserPointer` 0x1a65d8 calls per tick while its ray hits the lock's
 //! world sphere, and tests can drive it directly. The bolt meshes are not drawn yet (the 0x2E
 //! placements are not in the port's dynamic draw list) and the framelist open-animation is not
-//! posed — both render-side, noted in the report.
+//! posed (both render-side).
 
 use crate::drone::Rng;
 use crate::triggers::Channels;

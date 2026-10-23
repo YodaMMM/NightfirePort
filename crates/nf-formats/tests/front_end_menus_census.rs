@@ -43,7 +43,7 @@ fn menu_def(iso: &IsoImage) -> MenuDef {
     MenuDef::parse(lb.data(&data, e), 0x8000_0002).expect("parse the menu def")
 }
 
-/// The eight Handler_HandleMessage control ids this task's handlers own [M 0x2029e0].
+/// The eight Handler_HandleMessage control ids these handlers own [M 0x2029e0].
 const DEBUG_IDS: [u32; 8] = [
     0x1000_00c7, // C_CHCHALLOWFREEZE_Handler 0x216258
     0x1000_00bd, // C_CHCHDUMMY_Handler    0x2162b8

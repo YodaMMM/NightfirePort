@@ -1,4 +1,4 @@
-//! unported-guard-ai-other-4 (857): the three states this task ports (HostageDie 0x0b, CrouchCover
+//! unported-guard-ai-other-4: the three states ported here (HostageDie 0x0b, CrouchCover
 //! 0x6e, Investigate 0x7e) through the level load + `Drones::tick`, plus the bots' alert-outcome
 //! mapping. Opt-in: `NF_ISO`. Addresses and evidence in docs/systems/guard-ai-other-4.md.
 
@@ -116,7 +116,7 @@ fn enter(sim: &mut Drones, d: &Data, gi: usize, s: u8, player: &Bond) {
 
 fn entered(sim: &Drones, gi: usize, s: u8) -> bool { sim.list[gi].log.iter().any(|&(_, x)| x == s) }
 
-/// The state ids this task ports sit at the `NDrone2_StateFuncs` 0x29b300 indices the decompile
+/// The state ids ported here sit at the `NDrone2_StateFuncs` 0x29b300 indices the decompile
 /// dispatches [M table read]: HostageDie 0x0b, CrouchCover 0x6e, Investigate 0x7e. Sister: the
 /// neighbouring ids are NOT these states (a shifted constant would break every router arm).
 #[test]

@@ -80,9 +80,9 @@ fn census_flight_range_plus_1c_vs_fuse_clock() {
         // The flight-death range is the record's own +0x1C — including the 0.0 records (the
         // thrown-grenade family never runs the flying case-1 state) and the 5000.0 records
         // (the stick/satchel records fly as thrown objects, not case-1 bullets).
-        let _ = death; // enumerated in the report's table; the pins below carry the numbers
+        let _ = death; // enumerated, not asserted; the pins below carry the numbers
     }
-    // The named pins (the report cites these) [D weapon_data 0x2bf150]:
+    // The named pins [D weapon_data 0x2bf150]:
     // P2K 2/3 (id 0x02): +0x1C = 50.0 — the round dies at 50 units [M 0x12e95c], NOT 210.
     assert_eq!(f(&wd.records[2], 0x1c), 50.0, "P2K flight death range");
     assert_eq!(f(&wd.records[3], 0x1c), 50.0, "P2K twin");

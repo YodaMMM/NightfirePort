@@ -178,7 +178,7 @@ pub struct Sensor {
     pub beep: f32,
     /// `obj+0xF6` — the consecutive seen/lost tick counter (both states use it).
     pub seen: i16,
-    /// The last detection result (for the report/tests; not a game field).
+    /// The last detection result (for tests; not a game field).
     pub last_hit: bool,
     /// `SENSOR+0x60` — set while a monitor views this sensor (the unhide) [M 0x1afcc8].
     pub unhidden: bool,
@@ -321,7 +321,7 @@ impl Sensor {
                     // not exist. The port's deterministic straight-to-sweep is the documented
                     // equivalent; on disc, 0700000b's two sensors both carry key lists [D
                     // sensor_live: 164 has 5 keys] and no shipped sensor is known to lack one (a
-                    // full-level key census is filed as a live check in the report).
+                    // full-level key census is an open live check).
                     None => self.state = 0,
                 }
             }

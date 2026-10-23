@@ -1,7 +1,7 @@
 //! Golden tests for the driving missions' data (`DRIVING/*.VIV`, `*.MUS`, `*EN.SPE`, `DRIVING.SYM`).
 //!
 //! Opt-in: the archives' bytes are stripped from the slim NF_ISO image (the directory entries are there,
-//! the extents are zero), so the test reads them from the extracted `DRIVING/` folder (the task's
+//! the extents are zero), so the test reads them from the extracted `DRIVING/` folder (from
 //! `Nightfire-driving.7z`, byte-identical to the disc — see `cross_check_against_the_disc_golden`).
 //! Point `NF_DRIVING` at a folder, or leave it unset to try `<repo>/DRIVING`. Without the folder every
 //! test here prints "skip" and passes.

@@ -286,8 +286,8 @@ fn cross(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * 
 ///   The bit block's outer `0.7 < dot1` gate is NOT ported as a hard gate: read as `normal·axis`
 ///   it would refuse the 0700000c pier ramp (a ~58° face, `normal·axis ≈ 0.53`) that the game's
 ///   own ride grounds on (the ray tolerance is exceeded at the skin-rest equilibrium on that
-///   steep a face, so the pick arm must fire — hatch-crouch-0c report); see the report's live
-///   checks for the confirm-the-gate probe.
+///   steep a face, so the pick arm must fire); confirming the gate is an
+///   open live check.
 fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool) -> bool {
     let tl = [0, 1, 2].map(|k| t[0][k].min(t[1][k]).min(t[2][k]));
     let th = [0, 1, 2].map(|k| t[0][k].max(t[1][k]).max(t[2][k]));

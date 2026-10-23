@@ -295,7 +295,7 @@ pub fn door_placements(placements: &[Placement]) -> Vec<usize> {
 /// 2·(r_door + r_actor)²` with the `obj+0x8C` radii. `obj+0x80` is the door's LIVE world sphere (rebuilt by the
 /// moved pass after every `Door_Interp`), so a slide door's blocking zone follows the open leaf. The old
 /// fixed-placement + 1.0-radius stand-in is DELETED (it closed doors the game leaves open — core-loop §7
-/// item 4 / door-port-check #1): `blocked` IS the game's scan, re-verified line-for-line this session against
+/// item 4 / door-port-check #1): `blocked` IS the game's scan, verified line-for-line against
 /// 0x1363c8:52-68 (the class-2/3/0x12 walk, the `+0xf0 & 0x10` skip) and :121-137 (the auto-close arm) [M].
 fn blocked(door: (V3, f32), a: (V3, f32)) -> bool {
     let d = [door.0[0] - a.0[0], door.0[1] - a.0[1], door.0[2] - a.0[2]];

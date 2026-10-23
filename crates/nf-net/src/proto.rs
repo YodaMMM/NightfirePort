@@ -291,7 +291,7 @@ pub enum Packet {
     /// net-desync-detail: the first diverging component's per-item hashes for the mismatched
     /// tick (the item layout per component is documented on
     /// `nf_view::scene::Sim::net_component_items`; at most [`HASH_DETAIL_CAP`] items ride one
-    /// packet — a bigger world truncates the tail, the report says so).
+    /// packet — a bigger world truncates the tail, the desync report says so).
     HashDetail {
         tick: u32,
         component: u8,

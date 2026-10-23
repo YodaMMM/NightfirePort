@@ -105,7 +105,7 @@ fn known_mission_end_produces_the_handlers_rows() {
     assert_eq!(cell(0x163).total, "332,555"); // base + bonus
 }
 
-/// The PCSX2 capture on 07000005 (the task's golden, numbers only): a clean 01:19 run —
+/// The PCSX2 capture on 07000005 (the golden, numbers only): a clean 01:19 run —
 /// nothing killed, nothing collected, full health, perfect accuracy — at Operative (difficulty 1). Every cell
 /// matches the real page.
 #[test]

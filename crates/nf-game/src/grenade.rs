@@ -58,7 +58,7 @@ pub struct Grenade {
     /// hat-only [M `Bullet_update` case 3 0x12e7b0:363-371 — `weapon+2 != 0x45` skips it]. The
     /// mine 0x37 / tripbomb 0x3a / satchel 0x3b-0x40 records also carry +0x100 [L ee_start_05.bin
     /// sweep] — their stick branches (no 1500 re-arm, no countdown, trigger-detonated) are the
-    /// satchel task's scope; the port sticks the hat only.
+    /// satchel port's scope; the port sticks the hat only.
     pub stuck: bool,
     /// fix-oddjob-hat: `BU+0x40` — the hat's heat-seek target (`Bullet_homing` 0x12f358 stores the
     /// acquired object there; the collision handler's stick path reuses the slot for the object it
@@ -323,8 +323,7 @@ impl Grenade {
         // family test only zeroes the probe radius (the MGL 0x2c..0x31/0x62/0x6d → always the ray);
         // the 0x201 ray's length is `max(1.0, move)` [M :443-465]]. NOT landed here: the look-ahead
         // shifts the pinned blast geometry (fix_grenade_types_live's stun whiteout pins the old
-        // landing; the re-pin needs the game's own landing measured live — see the report's live
-        // checks). The bouncing family keeps the move-length ray for now; the settle-sound mechanics
+        // landing; the re-pin needs the game's own landing measured live). The bouncing family keeps the move-length ray for now; the settle-sound mechanics
         // below (the dot gate, the cap, the park order) are the rattle's fix.
         let sticky = matches!(self.weapon_type, 0x37 | 0x3a | 0x3b);
         const PROBE_RADIUS: f32 = 0.25;
@@ -355,7 +354,7 @@ impl Grenade {
                 // the kind-2/3/0x15 hit flag (iStack_100) [:398-407] and the world path sets
                 // neither. The port freezes the velocity and reports Stick; the countdown runs in
                 // the stuck branch above. (The mine/satchel records also carry +0x100 — their
-                // branches are the satchel task's scope, see the `stuck` field.)
+                // branches are the satchel port's scope, see the `stuck` field.)
                 if self.weapon_type == 0x45 {
                     self.pos = hit;
                     self.velocity = [0.0; 3];

@@ -757,8 +757,8 @@ pub fn facial_blend(out: &mut [f32], slot0: Option<&[f32]>, slot1: Option<&[f32]
 /// The game's gender select is bit 10 of the ANIM OBJECT's +0x58 flags word —
 /// `(int)*(uint *)(param_2 + 0x58) >> 10 & 1` [M AnimFacialUpdate 0x1be310:22-27, inside the
 /// +0x58 bit-0x10000 facial-off and ScriptCam gates]; a gameplay caller must feed that bit (the
-/// port's anim state folds +0xc8 for aim/track — the +0x58 word needs the same fold then; see
-/// the report's live checks for the bit-10 writer). Returns the table
+/// port's anim state folds +0xc8 for aim/track — the +0x58 word needs the same fold then; the
+/// bit-10 writer is an open live check). Returns the table
 /// rows to append this frame.
 #[derive(Debug, Default, PartialEq)]
 pub struct FacialCmd {

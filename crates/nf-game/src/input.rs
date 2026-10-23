@@ -411,7 +411,7 @@ impl PadDriver {
             self.cursor_x *= 0.5;
             self.cursor_y *= 0.5;
         }
-        let _ = scoped; // the scope branch (Plr_ScopeSpeed_*) rides the same AccelStates; see the report
+        let _ = scoped; // the scope branch (Plr_ScopeSpeed_*) rides the same AccelStates
         (input, a)
     }
 

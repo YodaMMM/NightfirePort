@@ -972,7 +972,7 @@ mod tests {
 
     /// `GetLevelToLoadFromMovieCode` (0x1d3560): the story cut-scene codes map to the NEXT level's
     /// briefing code, the driving interludes map to the front end, and everything else falls back to
-    /// `GameState+8 & 0xff00ffff` [M the decomp's every arm]. The numbers are the task's chain table:
+    /// `GameState+8 & 0xff00ffff` [M the decomp's every arm]. The numbers are the decomp's chain table:
     /// 06→07, 09→0a, 0a→0b, 11→12, 12→4a, 4a→13 ride exactly these pairs.
     #[test]
     fn movie_code_table_matches_the_decomp() {
@@ -996,7 +996,7 @@ mod tests {
     }
 
     /// `resolve_exit_code`: the port's compression of `ResetMap_LevelToLoad` + `ResetMap_Load`'s
-    /// phase-0/phase-2 cycle [M 0x1d3800/0x1d6360/0x1d3560]. The numbers are the task's chains:
+    /// phase-0/phase-2 cycle [M 0x1d3800/0x1d6360/0x1d3560]. The numbers are the decomp's chains:
     /// 4a's cut-scene request lands on 13, a driving exit lands on the front end, and a plain
     /// 0xE8 hashcode passes through untouched.
     #[test]

@@ -934,7 +934,7 @@ impl Script {
                 // at a parent-chain end" per the case-1 tail-Concat structure [M 0x1d9a08:106-133] — it
                 // REVERTED: 07000014's fusebox wire and 07000008's safe entities key LOCAL offsets and are
                 // render-verified with the base applied, so the game composes the base for unparented
-                // streams too (the decompile loses the step). See the report: #289's marker stays the
+                // streams too (the decompile loses the step). #289's marker stays the
                 // open question (base-composed −107.66 = void on its column; raw −54.13 = the freeze pose;
                 // the game's mode-1 SphereIntersect rescue is the live check).)
                 let mut p = s.parent;
@@ -1118,7 +1118,7 @@ impl Script {
             // game's spline samples run ONE KEY AHEAD of the port's raw-t reading, position AND rotation
             // together. Porting that needs BOTH the position parameter and this weight switched at once
             // (a rotation-only switch is incoherent) and a render check on a spline-scripted level —
-            // filed as a live check in the report; the port keeps the raw-t evaluation until then.
+            // an open live check; the port keeps the raw-t evaluation until then.
             let (ix, wt, t) = if idx < 0 || idx as usize >= n {
                 let j = idx.clamp(0, n as isize) as usize;
                 ([j; 4], [0.0, 1.0, 0.0, 0.0], 0.0)

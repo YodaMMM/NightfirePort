@@ -14,7 +14,7 @@
 //!   continuous sight writes `switch_channels[out] = 1` (0x1af618:154-157) — the channel
 //!   therefore turns on no earlier than tick 32 + 120 = 152;
 //! * the sister sensor whose cone the player never enters keeps its channel at 0 the whole run
-//!   (the "empty volume" half of the task's sister pair).
+//!   (the "empty volume" half of the sister pair).
 
 use nf_formats::anim::Script;
 use nf_formats::iso9660::IsoImage;

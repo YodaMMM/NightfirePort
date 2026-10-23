@@ -282,7 +282,7 @@ impl MpSettings {
     /// `MP_GetSpawnPoint` 0x185098:85-98: team games (and Assassin) split the 64-entry table
     /// [0,0x20)/[0x20,0x40); FFA uses the whole range. `team == 2` is rejected outright [M
     /// 0x184f20:51-53]; team > 1 in a team game is the game's undefined range (the decompile leaves
-    /// the low bound unwritten) — the port treats it as team 1's range and the report notes it.
+    /// the low bound unwritten) — the port treats it as team 1's range.
     fn team_range(&self, team: u16) -> (u16, u16) {
         if team == 2 {
             return (0, 0); // the caller rejects; here: an empty range
@@ -1062,8 +1062,8 @@ impl MpMatch {
         }
     }
 
-    /// `MP_CheckForEndCondition` 0x184268 — the full rule set (reconciled against the decomp in
-    /// mp-debriefing-data2; the reconciliation table is in the report):
+    /// `MP_CheckForEndCondition` 0x184268 — the full rule set (reconciled against the
+    /// decomp):
     ///
     /// - the clocks: the elapsed delta (+0x19C) adds always, the round clock (+0x190) when not
     ///   paused [M 0x184268:44-46,55,140] (the fixed tick stands in for the wall clock);
@@ -1189,7 +1189,7 @@ pub fn mp_sound_play(sink: &mut crate::sound::Sounds, id: u32) -> crate::sound::
 /// announce (`BotAttackChangeWeapon` 0x1750c8), the Demolition/Protection site updates
 /// (0x1870a0), `MP_PlayerKilled` 0x188f70 and `Player_SetWeaponAnimObj` 0x1a2e38. The port's
 /// brain-internal message flow has no cross-bot pump yet — this is the mask/payload shape,
-/// the pump wiring is the report's next-step item [S].
+/// the pump wiring is not done yet [S].
 pub fn send_team_bot_message(sender_team: u32, id: u8, arg3: u32, arg4: u32, arg5: u32) -> crate::mp::bots::BotMsg {
     let mut mask = !sender_team;
     if sender_team == 2 {
@@ -1199,7 +1199,7 @@ pub fn send_team_bot_message(sender_team: u32, id: u8, arg3: u32, arg4: u32, arg
     // The MsgObject on the stack [M 0x18bbc8]: [0] id, [1] 0xC5, [2] arg5, [3] the mask,
     // [4] GameState+0x52, [5] GameState+0x52 + arg4, [6] arg3. `BotMsg` carries [0], [6] and
     // [1] (`current_state`) — fix-849: the branch put arg4 + arg5 in [1]; the frame words
-    // [4]/[5] and [2] ride the pump wiring (the report's next-step item) [S].
+    // [4]/[5] and [2] ride the pump wiring (not done yet) [S].
     let _ = (arg4, arg5);
     crate::mp::bots::BotMsg {
         id,

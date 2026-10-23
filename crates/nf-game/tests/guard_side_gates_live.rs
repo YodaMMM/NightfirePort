@@ -129,7 +129,7 @@ fn bring_to_combat(l: &Level05, seed: u32) -> Option<(Drones, usize, u32)> {
     aim.map(|a| (sim, gi, a))
 }
 
-/// Which anims the guard's set can do — the census the tests pick from (printed for the report).
+/// Which anims the guard's set can do — the census the tests pick from (printed).
 fn census(l: &Level05, gi: usize, drones: &[Drone]) {
     let d = l.data();
     let set = drones[gi].anim_set;

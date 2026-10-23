@@ -928,7 +928,7 @@ impl Bond {
         // sub-pen plate walk, escort_follow's stairwell, the four-human digest). The 0c hatch
         // set — including the real walked route — is green WITHOUT the arm, so the grounded
         // rule stays as is until a live check pins the game's bit. See world.rs
-        // `capsule_pick_contact_scoped` and the report's live checks.
+        // `capsule_pick_contact_scoped`.
         let pick = world.capsule_pick_contact_scoped(self.cel, a, b, CLIMB_RADIUS, self.pick_ref[1]);
         let _ = pick;
         self.head_bump = push[1] < -1e-4;
@@ -954,7 +954,7 @@ impl Bond {
         });
         // The pick-contact arm rides the climb tick too (the same FeetOnPoint rule — see the
         // walk tick's comment) — NOT gated into grounded: the pick result is measured only (see
-        // the pick call above and the report's live checks).
+        // the pick call above).
         self.grounded = walkable || band;
         // floor_ny is the band-gated BLData+0x110 [M Player_FeetOnPoint 0x194188:85/:106-109;
         // 0x194df0:104] — see the walk tick's comment.
@@ -1617,8 +1617,7 @@ self.local = [vs / k, vf / k];
         // The game's push-tail q-span guard rides the SWIM path only: it is [M]-evidenced there
         // (Intersect_CylGeom 0x109da0's `dot(q − A, B − A) > 0` gate + the 02 fin wedge the PS2
         // rounds [L]); the port's walk/NPC paths still depend on the unguarded through-push
-        // (escort_follow_07000001_live regressed with it on) — the port divergence is documented
-        // in the report.
+        // (escort_follow_07000001_live regressed with it on) — a known port divergence.
         let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming);
         // The floor ray: from = obj+0x30, to = capsuleB + up·(−(cc+0.6)) [M Player_FeetOnPoint
         // 0x194188:89-98 loads HITTEST+0x30 = BLData+0x770 — the B arm Player_Collision 0x194df0
@@ -1680,7 +1679,7 @@ self.local = [vs / k, vf / k];
             (dy * dy).sqrt() - 0.1 <= self.cc
         });
         // The pick arm is NOT gated into grounded — the pick result is measured only (see the pick
-        // bit block above and the report's live checks).
+        // bit block above).
         self.grounded = walkable || band;
         // `BLData+0x110` — the port's floor_ny — is the band's OTHER output, and it is band-GATED:
         // FeetOnPoint writes `*param_3 = 1.0f` first [M 0x194188:85] and overwrites it with the

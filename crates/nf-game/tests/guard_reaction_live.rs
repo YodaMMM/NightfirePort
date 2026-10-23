@@ -115,7 +115,7 @@ fn attack_tick(g: &Drone, warm: u32) -> Option<u32> {
     g.log.iter().find(|(_, s)| *s == nf_game::drone::state::ATTACK).map(|(f, _)| f - warm)
 }
 
-/// The three sighting paths, measured and printed as the report table. The assertions pin the
+/// The three sighting paths, measured and printed as a table. The assertions pin the
 /// game-anchored floors so a future change that fires earlier fails here first.
 #[test]
 fn sight_to_first_shot_for_the_three_sighting_paths() {

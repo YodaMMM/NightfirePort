@@ -606,8 +606,8 @@ mod tests {
     }
 
     /// `UpdateMusicalEvents` 0x114e70:61-64: while `SFXPaused` stands (the pause page's `SFXPause`
-    /// op 9 [M 0x116b70:11-13; `MenuManager_Create` 0x21b908:121-124 pause_sound=1 — the task's
-    /// "the pause entry's music calls"]), every music event is frozen and PERSISTS. The one
+    /// op 9 [M 0x116b70:11-13; `MenuManager_Create` 0x21b908:121-124 pause_sound=1 — the pause
+    /// entry's music calls]), every music event is frozen and PERSISTS. The one
     /// exception is the level-start restart, which runs before the gate [M 0x114e70:43-54].
     /// Sister: unpaused, the same events process.
     #[test]

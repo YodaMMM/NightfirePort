@@ -9,8 +9,8 @@ pub mod mission;
 pub mod physics;
 pub mod road;
 
-// 506's physics landed as the single file `driving.rs`; this task moved it to `physics.rs`
-// (507's `driving/` directory made the two layouts collide, rustc E0761). The re-export keeps
-// every public path 506's tests and callers use: `nf_game::driving::{Car, CarInput, CarParams,
+// The car physics lives in `physics.rs` (a single `driving.rs` beside this `driving/`
+// directory would collide, rustc E0761). The re-export keeps every public path the tests and
+// callers use: `nf_game::driving::{Car, CarInput, CarParams,
 // FlatWorld, Rigid, Tuning, DT, Friction, SURFACES}`.
 pub use physics::{Car, CarInput, CarParams, DT, FlatWorld, Friction, Rigid, SURFACES, Tuning};
