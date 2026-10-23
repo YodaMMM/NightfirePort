@@ -919,7 +919,7 @@ mod tests {
         assert_eq!(blast_falloff([0.0; 3], 0.0, 100.0, [0.1, 0.0, 0.0], 1.0), 0.0);
         // Sister: the port's SP `explode::propagate` overshoots deep inside a sphere (its negative
         // truncation), the game's select does not.
-        let t = crate::explode::Targets { drones: &[(0, [-1.5, 0.0, 0.0], 3.0)], player: [1e6; 3], breaks: &[], destroys: &[] };
+        let t = crate::explode::Targets { drones: &[(0, [-1.5, 0.0, 0.0], 3.0)], player: [1e6; 3], breaks: &[], destroys: &[], copters: &[] };
         let sp = crate::explode::propagate([0.0; 3], 8.0, 100.0, 0, &t).drones[0].1;
         assert_ne!(sp, blast_falloff([0.0; 3], 8.0, 100.0, [-1.5, 0.0, 0.0], 3.0));
     }

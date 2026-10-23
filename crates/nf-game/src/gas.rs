@@ -221,6 +221,39 @@ impl GasPool {
         });
     }
 
+    /// The copter's damage smoke (`Copter_Update` 0x17dbb8:321-353): past half hp a 1-in-10 roll
+    /// spawns `Gas_Init` at the slot-3 emitter's obj+0x80. The caller has already consumed the
+    /// walk's own draws (`Rand_Rand(10)`, `Rand_FRand(π)` 0x17e320, `Rand_FRand(2.0)` 0x17e338);
+    /// this site consumes `Gas_Init`'s two kind-agnostic internal draws [M 0x1aacc8:72-80 — the
+    /// spin `Rand_FRand(π/2 · REC_FRAME_RATE)` and the sign `Rand_Rand(0x100)`; kind 3 takes the
+    /// default (0, REC, 0) velocity branch, no wind draws [M :89-141's else]]. Mesh 0x200001f and
+    /// kind 3 are the call's own [M 0x17dbb8:347-349]; the colour word packs
+    /// `amount = (1 − damage/hp)·127` as `amount<<24 | amount<<16 | amount<<8 | (0xbf−amount)`
+    /// [M :339-350] — the port reads its bytes as [a, b, g, r] like `init_ex`'s packed end does.
+    /// The decomp drops `Gas_Init`'s life argument here (the 11th, as at 0x1cbce0); the port
+    /// keeps 64.0 — `// [S] unverified`, presentation only, no pass/fail assertion reads it.
+    pub fn init_copter_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3, yaw: f32, size: f32, amount: u8) {
+        let spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
+        let spin = if rng.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
+        let amount = amount as f32;
+        let rgba = [amount, amount, amount, 191.0 - amount]; // 0xbf = 191
+        if self.puffs.len() >= Self::CAP { return; }
+        self.puffs.push(Gas {
+            pos,
+            vel: [0.0, REC_FRAME_RATE, 0.0], // [M 0x1aacc8:89-141's else]
+            mesh: 0x0200_001f, // [M 0x17dbb8:348]
+            scale: 2.0, // [M :347's f12 = 2.0]
+            scale_rate: (size - 2.0) / 64.0,
+            rgba,
+            rgba_rate: [0.0; 4],
+            spin,
+            life: 64.0, // [S] unverified — the decompile drops the life arg
+            kind: 3, // [M :349]
+            billboard: false,
+        });
+        let _ = yaw; // the rot-z euler (the searchlight's shape); the port's billboard reads only the spin
+    }
+
     /// The full form the `Effect_Bullet` gas entries need [M disasm 0x1ce964..0x1cea90]: the entry's own
     /// mesh hash (the callers' SMOKE_QUAD is only the common case) and the packed rgba END (the game
     /// fades start→end; `init`'s callers pass ~0). Fix-impacts hook, additive.

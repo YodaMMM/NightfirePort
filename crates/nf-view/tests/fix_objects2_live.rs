@@ -215,19 +215,79 @@ fn the_gondola_ride_runs_and_the_helicopter_completes_the_mission() {
     // and CONTRADICTS the decompile: ch 0x4B (rec+0x72) is written only from state 4/5/6, and
     // state 4 is entered only by the death tail (hp < damage, disasm 0x17e390-0x17e3c8; the disc
     // has no kind-2 arrival path [D the route dump]). The TEST was wrong and is fixed (task
-    // copter-path-flight): the flight flies (state 1, no 0x4B) in the window, then the death is
-    // driven through the game's rule — the damage poke stands in for the un-ported part hitdata
-    // accumulation (Copter_Update 0x17dbb8:277-320).
+    // copter-path-flight): the flight flies (state 1, no 0x4B) in the window, then the death
+    // takes the game's rule (hp < damage, disasm 0x17e390-0x17e3c8).
     assert!(wait(sim, 300, |s| s.drones.copters.iter().any(|c| c.gate == 0 && c.state == 1)),
         "the gate opened: the copter flies (state 1) [M 0x17dbb8:138]");
     assert!(!sim.drones.channels.on(0x4b), "no arrival while the route flies");
+    // copter-hitdata-damage: the death now runs on REAL shots. The game's damage walks the 9
+    // part slots' hit chains every tick (Copter_Update 0x17dbb8:277-320 — the collide pass fills
+    // each part's obj+0xD0; the Bits scales 2/3/1/2/100/1 sum into rec+0x64) and the death fires
+    // when hp < damage (disasm 0x17e390-0x17e3c8) — Bond just has to land the rounds. The
+    // harness stands him beside the flying Hind and press/release-fires the semi-auto at it,
+    // re-tracking every press while the route flies (step 0.253/tick [D the route dump]).
     let ci = sim.drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
-    let (frame, hp) = (sim.drones.frame, sim.drones.copters[ci].hp);
-    sim.drones.copters[ci].damage = hp + 1.0;
-    assert!(wait(sim, 60, |s| s.drones.channels.on(0x4b)), "hp < damage → state 4 → rec+0x72 [M :244-254, disasm 0x17e390]");
+    let hp = sim.drones.copters[ci].hp;
+    let mut shots = 0u32;
+    let deadline = sim.drones.frame + 60000;
+    while sim.drones.frame < deadline && !sim.drones.channels.on(0x4b) {
+        let press = sim.drones.frame % 2 == 0;
+        if press {
+            // Stand 2.5 units from the copter and aim the view at its centre — the bullets
+            // cross the part spheres on the way (the copter's own SP pose, one tick stale, the
+            // same lag the game's collide pass reads [M 0x1336f8:238]).
+            let p = sim.drones.copters[ci].pos();
+            sim.bond.pos = [p[0] + 2.5, p[1], p[2] + 1.0];
+            let d = [p[0] - sim.bond.pos[0], p[1] - (sim.bond.pos[1] + 1.0), p[2] - sim.bond.pos[2]];
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if len > 1e-4 {
+                sim.bond.pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
+                sim.bond.yaw = d[0].atan2(d[2]);
+            }
+        }
+        sim.step_bond(Input::default(), press, false, false);
+        if !press { shots += 1; }
+    }
+    let (damage, took) = (sim.drones.copters[ci].damage, shots);
+    eprintln!("copter-hitdata-damage: hp {hp} at the gate; {took} trigger pulls; damage {damage}");
+    assert!(sim.drones.channels.on(0x4b), "the shots pushed damage {damage} past hp {hp} → state 4 → rec+0x72 [M :358-370]");
+    assert!(damage > hp, "the walk's accumulation, not a poke, crossed hp");
     assert!(wait(sim, 200, |s| s.drones.mission.status() == 6), "mux #276 → ch 100 → the mission completes");
     let i8 = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0008).unwrap();
     assert_eq!(sim.drones.mission.states[i8][1], 4, "the ride objective completes [L record 3]");
+}
+
+/// Sister (copter-hitdata-damage): the same ride WITHOUT firing never reaches ch 0x4B — the
+/// route flight alone never writes it, only the death tail (hp < damage) and cases 4/5/6 do
+/// [M 0x17dbb8:244-275, :358-370], and with no shots the walk's damage never leaves 0
+/// [L Bits 0x2a37e8 — no hits, no accumulation].
+#[test]
+fn the_hind_never_falls_without_shots() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = nf_view::load(&iso, "07000008.bin", false).expect("load 07000008");
+    let sim = scene.sim.as_mut().unwrap();
+    for _ in 0..10 { sim.step_bond(Input::default(), false, false, false); }
+    for ch in [0x45u32, 0x70, 0x02, 0x48] { sim.drones.channels.set(ch, 1, sim.drones.frame); }
+    sim.drones.channels.set(0x49, 1, sim.drones.frame);
+    sim.step_bond(Input::default(), false, false, false);
+    let frame = sim.drones.frame;
+    for k in 0..sim.drones.locks.len() { sim.drones.locks[k].burn_through(&mut sim.drones.channels, frame); }
+    sim.bond.pos = [172.7, 44.6, -116.2];
+    assert!(wait(sim, 120, |s| s.drones.channels.on(0x4a)), "the briefcase taken");
+    // The boarding beats (the main test's): the floor switch, the mux, the descending carriage.
+    sim.bond.pos = [112.0, 28.0, -127.4];
+    assert!(wait(sim, 120, |s| s.drones.channels.on(4)), "the cable-car floor writes ch 4");
+    assert!(wait(sim, 60, |s| s.drones.channels.on(1)), "mux #235 fires ch 1 [D #235]");
+    let carriage = |s: &nf_view::scene::Sim| s.drones.scripts.objects.list.iter().flatten()
+        .find_map(|o| match o { nf_game::nis::Obj::Entity { hash: 0x0200_038a, matrix, .. } => Some(matrix[3][1]), _ => None });
+    let y0 = carriage(sim).expect("OBJECT_Carriage exists once the ride starts");
+    sim.bond.pos = [114.5, 28.0, -121.0];
+    assert!(wait(sim, 2500, |s| carriage(s).is_none_or(|y| y < y0 - 5.0)), "the carriage descends");
+    assert!(wait(sim, 2600, |s| s.drones.channels.on(5)), "the ride's end cinematic writes ch 5 [D script s10]");
+    assert!(wait(sim, 300, |s| s.drones.copters.iter().any(|c| c.state == 1)), "the copter flies");
+    for _ in 0..3000 { sim.step_bond(Input::default(), false, false, false); }
+    assert!(sim.drones.copters.iter().all(|c| c.damage == 0.0), "no shots → the walk's damage never moves [M 0x17dbb8:293]");
+    assert!(!sim.drones.channels.on(0x4b), "the route flight alone never writes 0x4B [M :244-275]");
 }
 
 /// Sister: boarding without the briefcase never starts the ride — mux #235 needs BOTH channels

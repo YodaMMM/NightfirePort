@@ -158,14 +158,18 @@ pub struct Copter {
     /// `obj+0xF6`: the spot/attack timer [M 0x17dbb8:141]. Never moves while the spot check is
     /// not ported.
     pub timer: i16,
-    /// `rec+0x64`: the accumulated damage [M 0x17dbb8:306]. The port has no part hit chains —
-    /// only a caller poke moves it (documented gap).
+    /// `rec+0x64`: the accumulated damage [M 0x17dbb8:306 — the part walk sums every counted
+    /// hit × the slot's Bits scale into it].
     pub damage: f32,
     /// `obj+0x68` = 299.0 x the difficulty multiplier [M `Copter_Create` 0x17d340:76-94]:
     /// d1 x1.0 (the decomp's fall-through default), d2 x1.5, d3 x2.0, d4 x4.0.
     pub hp: f32,
     /// obj+0xFE bit 1 — set by the +0x74 == 100 latch (Copter_Move) and cases 5/6 [M].
     pub landed: bool,
+    /// The walk's per-tick `PlrStat_LogShotHitEnemy(0)` roll [M 0x17dbb8:314-316]: true when a
+    /// counted hit's bullet traces back to the player (every port player bullet does). The
+    /// caller folds it into the stats outbox; overwritten each `update`.
+    pub shot_hit_enemy: bool,
     /// `*(rec+0x38)` — part slot 2, the body entity id (`Copter_Register` 0x17e530:7-8 fills the
     /// slots from the SP script entities; the port captures the body when the assembly script
     /// spawns it). None until captured.
@@ -174,7 +178,55 @@ pub struct Copter {
     /// (slots 5/6) [M `Copter_FireGun` 0x17d828:63-65, 93-96]. [0] = gun A (rec+0x44),
     /// [1] = gun B (rec+0x48).
     pub gun_counters: [u16; 2],
+    /// `rec+0x6c`: the attack accumulator — the same walk feeds it beside rec+0x64 [M
+    /// 0x17dbb8:307]; case 2's bail gate reads it against 100.0 [M :205]. Unported state 2
+    /// reads nothing yet; the field exists because the game writes it on every counted hit.
+    pub attack_acc: f32,
+    /// This tick's bullet contacts on the part objects (`update_player_bullets` feeds them;
+    /// the game's collide pass fills each part's obj+0xD0 chain and `Collide_Update` clears
+    /// the chains at the head of the next frame [M 0x1ea398 head]). Consumed by `update`'s
+    /// damage walk, then cleared.
+    pub part_hits: Vec<PartHit>,
+    /// Slot 3's object bounds centre (obj+0x80) — the gas emitter [M 0x17dbb8:331-348 reads
+    /// `*(int*)(rec+0x3c)` and its +0x80]. None = the slot unregistered (`rec+0x3c == 0`,
+    /// the branch's own gate). The caller refreshes it from the SP part targets each tick.
+    pub slot3_pos: Option<V3>,
 }
+
+/// One bullet contact on a part object, the port's HITDATA entry (`Coll_AddHitToList` node: +4
+/// next, +8 the damage float the caller stores [M Explode_Propagate 0x17c518:215-217 stores the
+/// blast amount to +8; the bullet collide pass stores the weapon's contact damage], +0x58 the
+/// class-5 bullet object). The port's player bullets are always Bond's class-3 shots, so the
+/// walk's owner roll (PlrStat) folds into the stats outbox, not the entry.
+#[derive(Clone, Copy, Debug)]
+pub struct PartHit {
+    /// The part slot the contact landed on (the game's `Coll_AddHitToList(part+0xD0)` — the
+    /// port's slot = the SP stream index, `Copter_Register` 0x17e530:6).
+    pub slot: u8,
+    /// `HITDATA+8`: the hit's damage [M 0x17dbb8:291 reads it].
+    pub damage: f32,
+    /// The bullet's weapon class word (`weapon_data+0x10`) — what `Collide_FilterBullets`
+    /// masks the slot's filter against [M 0x1ece30:26].
+    pub class: u16,
+}
+
+/// The 9-entry `Bits` table the damage walk scales and filters with [L EE 0x2a37e8, 72 bytes,
+/// identical in work/ee_snapshot.bin and work/ee_start_05.bin — `{u16 filter, f32 scale}` per
+/// part]. Filters are 0 everywhere but slot 4 (0x10): a 0 filter keeps every hit
+/// [M Collide_FilterBullets 0x1ece30:26 — `mask & 0 == 0` never drops]; slot 4 keeps only
+/// weapon classes outside bit 0x10 (records 51/96/97/103/106-113 [L the same snapshot's
+/// weapon_data 0x2bf150 census]) and scales the rest x100.
+pub const PART_BITS: [(u16, f32); 9] = [
+    (0x0000, 2.0),
+    (0x0000, 3.0),
+    (0x0000, 1.0),
+    (0x0000, 2.0),
+    (0x0010, 100.0),
+    (0x0000, 1.0),
+    (0x0000, 0.0),
+    (0x0000, 0.0),
+    (0x0000, 0.0),
+];
 
 /// The per-difficulty health multiplier (`Copter_Create` 0x17d340:76-93): 2 -> 1.5, 3 -> 2.0,
 /// 4 -> 4.0, everything else (d1) -> 1.0 [M].
@@ -219,8 +271,12 @@ impl Copter {
                 damage: 0.0, // [M 0x17d340:93]
                 hp: copter_hp_mult(difficulty) * 299.0, // [M 0x17d340:94]
                 landed: false,
+                shot_hit_enemy: false,
                 body_obj: None,
                 gun_counters: [0; 2],
+                attack_acc: 0.0, // [M 0x17d340:93 — +0x6c zeroed at create (memset + the +0x64 store)
+                part_hits: Vec::new(),
+                slot3_pos: None,
             });
         }
         out
@@ -285,6 +341,7 @@ impl Copter {
         &mut self,
         paths: &[CopterPath],
         ch: &mut Channels,
+        gas: &mut crate::gas::GasPool,
         frame: u32,
         explode_level: bool,
         rng: &mut crate::drone::Rng,
@@ -366,11 +423,51 @@ impl Copter {
             }
             _ => {}
         }
-        // The damage tail [M :277-371]. The 9-part hit walk that accumulates `damage` is not
-        // ported (no part hit chains — `damage` only moves by a caller poke). The death:
-        // states 4/5 exempt (`sltiu(state-4, 2)` skips, disasm 0x17e390-0x17e39c); every other
-        // state with hp < damage → 4, or 6 on 0x0700000b/0x07000012 [M :358-370]; the arrival
-        // channel writes either way [M disasm 0x17e3bc-0x17e3c8].
+        // The damage tail [M :277-371]. The 9-part walk [M :277-320, jal FilterBullets
+        // 0x17e1bc, the accumulate stores swc1 → +0x64/+0x6c at 0x17e23c/0x17e250]: per slot,
+        // `Collide_FilterBullets` drops the bullet hits whose weapon class ANDs the slot's
+        // Bits filter [M 0x1ece30:25-33], then every remaining entry with damage > 0 adds
+        // `damage · Bits.scale` to BOTH rec+0x64 and rec+0x6c [M :293-307]. The port's
+        // `part_hits` are this tick's contacts (update_player_bullets); the owner roll inside
+        // the counted branch — the class-5 bullet whose BU+0x30 shooter is class 3 — is true
+        // for every port player bullet, and sets the game's `PlrStat_LogShotHitEnemy(0)`
+        // [M :294-304 + :314-316, jal 0x199840]: the caller folds it into the stats outbox.
+        let mut shot_hit_enemy = false;
+        for i in 0..9 {
+            let (filter, scale) = PART_BITS[i];
+            for h in self.part_hits.iter().filter(|h| h.slot as usize == i) {
+                if h.class & filter != 0 { continue; } // [M 0x1ece30:26-33 — the hit is dropped]
+                if h.damage > 0.0 {
+                    self.damage += h.damage * scale; // [M :306]
+                    self.attack_acc += h.damage * scale; // [M :307]
+                    shot_hit_enemy = true;
+                }
+            }
+        }
+        self.part_hits.clear();
+        self.shot_hit_enemy = shot_hit_enemy;
+        // The smoke/gas branch [M :321-353]: past half hp, with the slot-3 emitter present
+        // (`rec+0x3c != 0`), `Rand_Rand(10)` rolls every tick and the >= 8 arm spawns
+        // `Gas_Init` at the emitter's obj+0x80 with amount `(1 - damage/hp) · 127` packing the
+        // colour word [M :339-350]; the arm's own draws are `Rand_FRand(π)` [:341] and
+        // `Rand_FRand(2.0)` [:346] (jal 0x1e3780 at 0x17e320/0x17e338). Gas_Init's internal
+        // spin draws are kind-3's two [M Gas_Init 0x1aacc8:72-80 — the searchlight's
+        // init_searchlight_smoke consumes the same pair]; the port's `init_copter_smoke`
+        // replays them through the shared RNG in the game's order.
+        if self.hp * 0.5 < self.damage {
+            if let Some(p) = self.slot3_pos {
+                if rng.rand(10) >= 8 {
+                    let ratio = 1.0 - self.damage / self.hp;
+                    let amount = (ratio * 127.0) as u8; // [M :339]
+                    let yaw = rng.frand(std::f32::consts::PI); // [M :341]
+                    let size = rng.frand(2.0) + 3.0; // [M :346-348]
+                    gas.init_copter_smoke(rng, p, yaw, size, amount);
+                }
+            }
+        }
+        // The death: states 4/5 exempt (`sltiu(state-4, 2)` skips, disasm 0x17e390-0x17e39c);
+        // every other state with hp < damage → 4, or 6 on 0x0700000b/0x07000012 [M :358-370];
+        // the arrival channel writes either way [M disasm 0x17e3bc-0x17e3c8].
         let exempt = self.state == 4 || self.state == 5;
         if !exempt && self.hp < self.damage {
             self.state = if explode_level { 6 } else { 4 };
@@ -478,6 +575,10 @@ mod tests {
             landed: false,
             body_obj: Some(0x1234),
             gun_counters: [0; 2],
+            attack_acc: 0.0,
+            part_hits: Vec::new(),
+            slot3_pos: None,
+            shot_hit_enemy: false,
         }
     }
 
@@ -500,6 +601,7 @@ mod tests {
     // [M 0x17d628:45-49] the return values: a null path → 1, an empty path → 0.
     #[test]
     fn move_tick_returns_the_games_result() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         let mut rng = crate::drone::Rng::default();
         assert!(c.move_tick(&[], &mut rng).0, "+0x54 == 0 → 1");
@@ -511,6 +613,7 @@ mod tests {
     // [M 0x17d628:50-63] the flight: the pose lands in obj+0x90 and t advances by the step.
     #[test]
     fn move_tick_poses_the_matrix_and_advances_t() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         let mut rng = crate::drone::Rng::default();
         let paths = vec![path(1, 0, 0, 3, 0, Some(keys4()))];
@@ -526,6 +629,7 @@ mod tests {
     // [M 0x17d628:71-80] the pick: undamaged → deterministic 0; heavy damage → the shared RNG.
     #[test]
     fn move_tick_picks_the_next_path() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         let mut rng = crate::drone::Rng::default();
         let keys = keys4();
@@ -564,6 +668,7 @@ mod tests {
     // resolution. [S] the placement below is synthetic; the ISO test pins real records.
     #[test]
     fn path_node_build_matches_the_record() {
+        let mut gas = crate::gas::GasPool::default();
         let mut p = Placement {
             index: 0, hashcode: u32::MAX, flags: 0x2f,
             translation: [0.0; 3], rotation: [0.0; 3], params: Vec::new(), extra: [0; 9],
@@ -592,6 +697,7 @@ mod tests {
     // [M 0x17dbb8:115-137] case 0: the group scan fills rec+0x58 and rec+0x78, then state 1.
     #[test]
     fn case_0_scans_the_group() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         c.path = Some(0);
         let keys = keys4();
@@ -603,7 +709,7 @@ mod tests {
         ];
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::default();
-        c.update(&paths, &mut ch, 0, false, &mut rng);
+        c.update(&paths, &mut ch, &mut gas, 0, false, &mut rng);
         assert_eq!(c.state, 1, "case 0 → 1");
         assert_eq!(c.arrival_path, Some(3), "the kind-2 group member → rec+0x58");
         assert_eq!(c.group_paths, 2, "the kind-0 group members counted into rec+0x78");
@@ -612,6 +718,7 @@ mod tests {
     // [M 0x17dbb8 head, :244-254] the gate edge and case 4: the arrival path + the channel.
     #[test]
     fn gate_edge_then_case_4_writes_the_arrival() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         c.gate = 5;
         c.out = 0x4b;
@@ -624,11 +731,11 @@ mod tests {
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::default();
         // The gate off: nothing runs.
-        let (unhide, posed) = c.update(&paths, &mut ch, 1, false, &mut rng);
+        let (unhide, posed) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng);
         assert!(!unhide && !posed, "gated off → nothing");
         assert_eq!(c.state, 0, "still state 0 behind the gate");
         ch.set(5, 1, 0);
-        let (unhide, _) = c.update(&paths, &mut ch, 2, false, &mut rng);
+        let (unhide, _) = c.update(&paths, &mut ch, &mut gas, 2, false, &mut rng);
         assert!(unhide, "the gate's first ON tick unhides [M head]");
         assert_eq!(c.gate, 0, "+0x70 zeroed [M head]");
         assert_eq!(c.state, 1, "case 0 ran this tick");
@@ -639,7 +746,7 @@ mod tests {
         c.t = 3.5; // past count 1
         let mut fired = false;
         for f in 3..10 {
-            let (_, _) = c.update(&paths, &mut ch, f, false, &mut rng);
+            let (_, _) = c.update(&paths, &mut ch, &mut gas, f, false, &mut rng);
             if ch.on(0x4b) { fired = true; break; }
         }
         assert!(fired, "case 4's transition writes rec+0x72 [M :249-252]");
@@ -652,6 +759,7 @@ mod tests {
     // is exempt from the death; a state-1 copter with hp < damage goes to 4 (6 on 0b/12).
     #[test]
     fn state_5_holds_and_the_death_takes_the_other_states() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         c.out = 0x4b;
         c.path = Some(0);
@@ -662,7 +770,7 @@ mod tests {
         // State 5, the path just ended: the channel re-writes and obj+0xFE sets, every tick.
         c.state = 5;
         c.t = 3.5;
-        let (_, _) = c.update(&paths, &mut ch, 1, false, &mut rng);
+        let (_, _) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng);
         assert!(c.landed, "obj+0xFE bit 1 [M LAB_0017e16c]");
         assert!(ch.on(0x4b), "the channel re-write [M :260-263]");
         // The death: state 1 with hp < damage → 4 (07000005-like), 6 on 0b/12.
@@ -670,14 +778,14 @@ mod tests {
         d.path = Some(0);
         d.hp = 299.0;
         d.damage = 300.0;
-        let (_, _) = d.update(&paths, &mut ch, 2, false, &mut rng);
+        let (_, _) = d.update(&paths, &mut ch, &mut gas, 2, false, &mut rng);
         assert_eq!(d.state, 4, "hp < damage outside states 4/5 → 4 [M disasm 0x17e3b8-0x17e3c0]");
         assert!(ch.on(0x4b), "the death writes the arrival channel [M disasm 0x17e3bc]");
         let mut e = copter();
         e.path = Some(0);
         e.hp = 299.0;
         e.damage = 300.0;
-        let (_, _) = e.update(&paths, &mut ch, 3, true, &mut rng);
+        let (_, _) = e.update(&paths, &mut ch, &mut gas, 3, true, &mut rng);
         assert_eq!(e.state, 6, "0x0700000b/0x07000012 explode instead [M :360-363]");
         // States 4/5 are exempt (sltiu(state-4, 2) skips, disasm 0x17e398-0x17e39c).
         let mut g = copter();
@@ -685,22 +793,23 @@ mod tests {
         g.state = 4;
         g.hp = 299.0;
         g.damage = 300.0;
-        let (_, _) = g.update(&paths, &mut ch, 4, false, &mut rng);
+        let (_, _) = g.update(&paths, &mut ch, &mut gas, 4, false, &mut rng);
         assert_eq!(g.state, 4, "state 4 is exempt from the death");
     }
 
     // [M 0x17dbb8:98-103] the countdown pulse: +0x76 hits 0 → the +0x74 channel.
     #[test]
     fn countdown_pulses_its_channel() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         c.countdown = 2;
         c.arrival = 0x33;
         let paths = Vec::new();
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::default();
-        c.update(&paths, &mut ch, 1, false, &mut rng);
+        c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng);
         assert!(!ch.on(0x33), "1 tick left: no pulse yet");
-        c.update(&paths, &mut ch, 2, false, &mut rng);
+        c.update(&paths, &mut ch, &mut gas, 2, false, &mut rng);
         assert!(ch.on(0x33), "the countdown hit 0 → ch +0x74 [M :99-103]");
         assert_eq!(c.countdown, 0);
     }
@@ -708,6 +817,7 @@ mod tests {
     // [M 0x17e4b8:6-9] the hide-gate: gate set + channel off → absent; channel on or gate 0 → body.
     #[test]
     fn body_respects_the_hide_gate() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         c.gate = 5;
         assert_eq!(c.body(false), None, "gated and off → SP_HideObj'd, absent");
@@ -719,6 +829,7 @@ mod tests {
     // [M 0x17d828:63-65] the 6-tick cadence: fires when the OLD counter value > 4.
     #[test]
     fn fire_gun_fires_every_sixth_call() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         let player = [100.0, 10.0, 0.0];
         let gun = [0.0, 0.0, 0.0];
@@ -732,6 +843,7 @@ mod tests {
     // [M 0x17d828:86-89] the weapon id: 0x71 normally, 0x61 on 0700008.
     #[test]
     fn fire_gun_weapon_id_per_level() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         for _ in 0..5 { c.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], false); }
         assert_eq!(c.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], false).unwrap().2, 0x71);
@@ -743,6 +855,7 @@ mod tests {
     // [M 0x17d828:93-96] after a fire: firing counter resets to 0, the sister's becomes 2.
     #[test]
     fn fire_gun_swaps_the_counters() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         for _ in 0..5 { c.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], false); }
         c.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], false);
@@ -760,6 +873,7 @@ mod tests {
     // [M 0x17d828:66-84] the muzzle sits radius units along the aim direction from the gun.
     #[test]
     fn muzzle_is_radius_along_the_aim() {
+        let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         for _ in 0..5 { c.fire_gun_tick(true, [0.0; 3], 1.0, [0.0; 3], false); }
         let (muzzle, dir, _) = c.fire_gun_tick(true, [0.0, 0.0, 0.0], 3.0, [4.0, 3.0, 0.0], false).unwrap();
@@ -775,6 +889,7 @@ mod tests {
     // [M 0x17e568:8-12] the delete removes the copter from the list.
     #[test]
     fn delete_removes_from_the_list() {
+        let mut gas = crate::gas::GasPool::default();
         let mut v = vec![copter(), copter()];
         v[1].placement = 7;
         assert!(Copter::delete(&mut v, 1));
@@ -787,8 +902,79 @@ mod tests {
     // identity rotation).
     #[test]
     fn interp_serves_the_framelist() {
+        let mut gas = crate::gas::GasPool::default();
         let keys = keys4();
         let m = interp(&keys, 0, 3, 1.5, true).unwrap();
         assert!((m[3][0] - 900.0).abs() < 60.0, "the straight line at t=1.5 sits midway");
+    }
+
+    // copter-hitdata-damage [M Copter_Update 0x17dbb8:277-320; L the Bits table, EE 0x2a37e8]:
+    // the walk scales each counted hit by its slot's Bits entry into rec+0x64 AND rec+0x6c, and
+    // the slot-4 filter (0x10) drops the class-0x10 weapon hits [M Collide_FilterBullets
+    // 0x1ece30:25-33].
+    #[test]
+    fn the_part_walk_accumulates_the_bits_scales_and_drops_the_filtered_class() {
+        let mut gas = crate::gas::GasPool::default();
+        let mut c = copter();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        // Slots 0/1/2 (scales 2/3/1), damage 10 each, the pistol's class 0x8 [L weapon_data
+        // 0x2bf150+0x10 census]. Damage must stay below half hp so the gas branch draws nothing.
+        c.part_hits = vec![
+            PartHit { slot: 0, damage: 10.0, class: 0x8 },
+            PartHit { slot: 1, damage: 10.0, class: 0x8 },
+            PartHit { slot: 2, damage: 10.0, class: 0x8 },
+        ];
+        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng);
+        assert!((c.damage - 60.0).abs() < 1e-4, "10·2 + 10·3 + 10·1 = 60, got {}", c.damage);
+        assert!((c.attack_acc - 60.0).abs() < 1e-4, "the same sum lands in rec+0x6c [M :307]");
+        assert!(c.shot_hit_enemy, "a counted player shot sets the PlrStat roll [M :314-316]");
+        // Slot 4 (scale 100, filter 0x10): the class-0x10 hit (a turret/missile-class round,
+        // [L the weapon census]) is DROPPED; the class-0x8 hit counts ×100.
+        let mut c = copter();
+        c.part_hits = vec![
+            PartHit { slot: 4, damage: 1.0, class: 0x10 },
+            PartHit { slot: 4, damage: 1.0, class: 0x8 },
+        ];
+        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng);
+        assert!((c.damage - 100.0).abs() < 1e-4, "the 0x10 hit is dropped, the 0x8 hit ×100, got {}", c.damage);
+        // Sister: a zero-damage contact (the game stores the hit before the damage write) counts
+        // nothing and the walk stays silent on the empty slots.
+        let mut c = copter();
+        c.part_hits = vec![PartHit { slot: 5, damage: 0.0, class: 0x8 }, PartHit { slot: 3, damage: 4.0, class: 0x8 }];
+        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng);
+        assert!((c.damage - 8.0).abs() < 1e-4, "slot 3 ×2 counts, the 0-damage and scale-0 slots do not, got {}", c.damage);
+        assert!(c.shot_hit_enemy, "the counted 4.0 slot-3 hit sets the roll (the 0-damage contact alone would not)");
+    }
+
+    // The death through the real walk: hits past hp take the state to 4 (the exempt tail's rule,
+    // disasm 0x17e390-0x17e3c8) and write rec+0x72 [M :358-370]; the arrival then rides case 4.
+    #[test]
+    fn real_hits_past_hp_write_the_arrival_channel() {
+        let mut gas = crate::gas::GasPool::default();
+        let mut c = copter();
+        c.out = 0x4b;
+        c.hp = 299.0;
+        c.state = 1;
+        // 299.1 damage through slot 0's ×2: 150 hits of 1.0.
+        c.part_hits = (0..150).map(|_| PartHit { slot: 0, damage: 1.0, class: 0x8 }).collect();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        // slot3_pos stays None: the gas branch's `rec+0x3c == 0` gate must consume no RNG [M :326].
+        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng);
+        assert!(c.hp < c.damage, "150·2 = 300 > 299");
+        assert_eq!(c.state, 4, "hp < damage off the exempt states → 4 [M :358-359]");
+        assert!(ch.on(0x4b), "the death writes rec+0x72 [M disasm 0x17e3bc-0x17e3c8]");
+        // Sister: the same walk one hit short stays alive and writes nothing.
+        let mut c = copter();
+        c.out = 0x4b;
+        c.state = 1;
+        c.part_hits = (0..149).map(|_| PartHit { slot: 0, damage: 1.0, class: 0x8 }).collect();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng);
+        assert!((c.damage - 298.0).abs() < 1e-4);
+        assert_eq!(c.state, 1, "298 < 299: still flying");
+        assert!(!ch.on(0x4b), "no arrival below hp");
     }
 }
