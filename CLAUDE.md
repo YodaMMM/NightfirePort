@@ -17,10 +17,11 @@ logic, not an emulator wrapper or a static recompiler. Read `docs/PLAN.md` first
 
 - **Docs first:** `docs/systems/<system>.md` / `docs/formats/<format>.md` (addresses, offsets, confidence,
   unknowns) before code that implements them.
-- **Ledgers:** `docs/WORKLOG.md` (numbered entries, including what failed and why), `docs/GAPS.md` (unfinished
-  work), `docs/UNKNOWNS.md` (open questions). Edit them with the file editor tool, never PowerShell regexes.
+- **Ledgers:** `docs/GAPS.md` (unfinished work), `docs/UNKNOWNS.md` (open questions). Edit them with the file
+  editor tool, never PowerShell regexes. The repo holds only what the port uses: no work journals, task reports,
+  playtest notes or merge records.
 - **Source edits:** use the Write/Edit tools for Rust and scripts. The Bash tool collapses `\\` to `\` inside
-  heredocs (and therefore inside Python heredocs that write Rust), which turned `"\\t"` into real tabs (WORKLOG 0001).
+  heredocs (and therefore inside Python heredocs that write Rust), which once turned `"\\t"` into real tabs.
 - **Tests:** never commit game bytes. Golden snapshots hold numbers, SHA-1s and identifiers (paths, archive entry
   names, symbol names) only. ISO-reading tests are opt-in via `NF_ISO=<path to the image>`. Every golden test has a
   sister assertion proving the comparison can fail.
