@@ -74,3 +74,31 @@ Work log:
   capsule presses it — the port's push tail is not obviously missing the lift; the walk path's ease
   may have missed the base. Reading the game's Player_Collision + the +0xCC (anim root height)
   writers next to settle the rest model (strict contact 1.0347 vs anim-driven root).
+- (23:20) [M Intersect_CylGeom 0x109da0 disasm] the push tail read: after ASH_vecutil_Dist2Tri
+  (0x109770 called at 0x10a324/0x10a4fc) the game tests the Dist2Tri status (0xb0(sp) == 0/0x63
+  skip, 0x10a32c/0x10a520), the ≤ 0 lane guard (0x10a568), dist ≥ 0, then dist < r (f3 vs
+  HITTEST+0x8c at 0x10a5c8), push = dir·(r − dist) (0x10a5d8-0x10a5f8) accumulating HITTEST+0x10 —
+  the same shape the port's capsule_tri_contact models; the VU0 macro pairs hide the exact
+  lane math (the open disasm item).
+- (23:30) [M Player_Collision 0x194df0 disasm 0x194e2c-0x194e34] **the cc is ANIM-DRIVEN**:
+  `lw $a0, 0xdc($s3)` (the AnimObject) then `lwc1 $f22, 0xcc($a0)` EVERY collision tick — the
+  root height comes from AnimFrameResolve (docs/fields/animobject.md:66, [L-read] standing
+  1.0347). The port's cc is the constant ROOT_HEIGHT (player.rs:15) — matches standing but
+  carries no walk-cycle bob.
+- (23:45) [M Player_StandAtNewPosition 0x190d88 disasm 0x190ee0-0x190f18] the spawn rule:
+  build_FindCel from pos+0.1f → build_PointOnFloor (the (0,−1,0)·3.0 world ray [M 0x1c95a8]) →
+  y += 1.1f (0x3f8ccccd). The port's stand_at (player.rs:506) is the same rule over the flat
+  static floor — the game's cel-scoped ray finds −0.0109 under the cab (the snapshot root
+  1.0891 [L]), the port's finds 0.0000 → the port spawns 1.1000.
+- (23:52) THE LEDGER CLOSES: the game's hall glide 1.1147 [L driver] = the spawn 1.0891 + the
+  0.1622-tall doorway wall-base climb at x −8.304 (the base is in the port's world too [D tris];
+  the touch at x ≈ −7.98, the driver's "climbs at x −7.75") settling via the band catch; the
+  port's hall glide 1.1000 = its spawn height (its walked line missed the base). 1.1147 − 1.1000
+  = 0.0147 = 0.0256 (the climb) − 0.0109 (the spawn). The corner: the port enters the lift
+  dither at 1.1297 → 1.1957 (repro'd), the game at 1.1147 walks through (1.127 → 1.120 [L]).
+- (23:58) LANDED: three #[ignore]d sister tests in walkreal_0700000a_live.rs pinning the [L]
+  numbers (the spawn 1.0891, the hall glide 1.1147 ±0.003, the corner crossing ~25 frames at
+  y 1.120) with the evidence in the ignore messages; the main walk stays ignored (the wedge
+  needs the spawn-floor fix + the corner push landing). The non-ignored tests pass (repro
+  3.5 s, wedge_dump 3.1 s). The full suite.py baseline was killed between tool calls (empty
+  suite.out — background jobs die here); the touched binary ran green.
