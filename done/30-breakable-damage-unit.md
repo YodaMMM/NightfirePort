@@ -25,3 +25,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-10-23T20:27Z
+
+---
+## Report (done, 2026-10-23T22:09Z)
+
+Closed by the driver: the report is on `s/breakable-damage-unit` (docs/reports/breakable-damage-unit.md); the worker didn't run finish.sh.
