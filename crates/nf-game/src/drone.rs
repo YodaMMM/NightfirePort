@@ -3921,23 +3921,38 @@ impl Drone {
         self.bond_talk_done += 1;
     }
 
-    /// The Bond-talk SpeechSFX request `SpeechSFX(idx, 0, 1, 1)` (useFacial + facialOnly): the game's
-    /// FACIAL path never returns a handle — `return 0` on every arm, and an entry without a facial anim
-    /// goes to FACIAL(0), which plays nothing [M 0x141b00; speech.md §1.3]. Success is read from
-    /// `+0x53C` (a facial anim attached) by the callers. The port has no facial system, so these lines
-    /// stay silent and never advance the Bond-talk bookkeeping (843 returned the sfx id for non-facial
-    /// entries, advancing the cooldown/count on lines the game never plays — review 2026-10-21).
-    /// [S] gap: an entry WITH a facial id whose script is not loaded on the level takes the hashtable-miss
-    /// arm (facialAnimId := 0, then DIRECT — it plays and returns a handle) [M 0x141b00; speech.md §1.3];
-    /// the port has no facial-script presence test, and `Drones::speech` skips facial-id lines — task 945.
-    fn speech_request(&mut self, _d: &Data, _idx: usize, _force: bool) -> u32 { 0 }
+    /// The Bond-talk SpeechSFX request `SpeechSFX(idx, 0, 1, 1)` (useFacial + facialOnly) —
+    /// `NDrone2_SpeechSFX` 0x141b00 [M; speech.md §1.3]: an entry without a facial id goes
+    /// FACIAL(0) — nothing, no handle [M :13-14]; an entry with a facial id whose script IS in
+    /// the level stays on the (unported) FACIAL path — no handle [M :17]; the hashtable-miss arm
+    /// zeroes `facialAnimId` (permanent) and goes DIRECT — the line plays as plain audio and
+    /// returns a handle [M :18-28; the miss test's port source is `Data.scripts`, the level
+    /// archive's kind-5 0x06 anim-script entries [D census: 07000005 carries none of the 61
+    /// speech facial hashes, 07000007 carries 54]]. The DIRECT gates the port folds here: the
+    /// entry's sfx non-zero and the `+0x4D0` busy test [M :21-26 — `voice_busy`, the port's
+    /// +0x4D0 fold]; the 30-frame post-load and global repeat-delay gates ride the queue
+    /// processor (`speech()`), and the callers' cooldown bookkeeping (480/600 frames) exceeds
+    /// both [S]. The 843 form always returned 0, so Bond-talk never advanced on miss levels —
+    /// review 2026-10-21.
+    fn speech_request(&mut self, d: &Data, idx: usize, _force: bool) -> u32 {
+        let Some(l) = d.voices.and_then(|v| v.get(idx)) else { return 0 };
+        if l.facial == 0 { return 0; } // facialOnly → FACIAL(0), nothing [M 0x141b00:13-14]
+        if d.scripts.contains_key(&l.facial) { return 0; } // present script → FACIAL, no handle [M :17]
+        // hashtable miss → DIRECT [M :18-28].
+        if l.sfx == 0 { return 0; }
+        if self.voice_busy() { return 0; }
+        self.talks.push((idx, false));
+        l.sfx
+    }
 
     /// `SpeechSFX(idx, 0, 0, 0)` — the DIRECT path [M 0x141b00; speech.md §1.3]: plays when the entry has
-    /// an sfx and no facial anim (and the +0x4D0 busy test, which the callers already passed); returns
-    /// the handle (the port: the sfx id, queued on `talks`).
+    /// an sfx and no facial anim — where "no facial anim" includes a facial id whose script is absent
+    /// from the level (the miss arm zeroed it [M 0x141b00:18-19; the presence test: `Data.scripts`,
+    /// the level archive's kind-5 0x06 entries [D census]]) — and the +0x4D0 busy test (which the
+    /// callers already passed); returns the handle (the port: the sfx id, queued on `talks`).
     fn speech_direct(&mut self, d: &Data, idx: usize) -> u32 {
         match d.voices.and_then(|v| v.get(idx)) {
-            Some(l) if l.sfx != 0 && l.facial == 0 => { self.talks.push((idx, false)); l.sfx }
+            Some(l) if l.sfx != 0 && (l.facial == 0 || !d.scripts.contains_key(&l.facial)) => { self.talks.push((idx, false)); l.sfx }
             _ => 0,
         }
     }
@@ -11608,7 +11623,50 @@ impl Drones {
             // obj+0x30 = the placement translation (the port's convention, cf. Shooter.pos) —
             // `GT_Track`'s distances and the muzzle read obj+0x30 [M 0x17f9c8:99-118].
             if let Some(mut t) = crate::gt::from_placement(i, &p.params) {
+                // `GT_Create`'s Script_Load pair [M 0017ffa0:100-109]: either load failing
+                // → obj+0xfe |= 1 and return 0 — no turret exists. The port's lib miss is
+                // that load failure.
+                if !self.scripts.lib.contains_key(&t.script_a) || !self.scripts.lib.contains_key(&t.script_b) { continue; }
                 t.pos = p.translation;
+                // ext+0x80: the create-time fire direction [M 0017ffa0:141-147] — facing 0
+                // reads `Mat_GetDir(obj+0x90)` (the matrix's forward row), else `Mat_GetUp`
+                // negated (the up row, negated).
+                let m = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                t.fire_dir = if t.facing == 0 { [m[2][0], m[2][1], m[2][2]] } else { [-m[1][0], -m[1][1], -m[1][2]] };
+                // The two `Script_Load`s run as script players: `Script_Play(_, 1)` is the
+                // LOOPING play [M 001db588:16-19 — the non-zero arg sets play |= 9],
+                // `Script_Update` both once at create [M 0017ffa0:112-116] — the port's
+                // mode-8 load beat (prime → start(true) + one update) is exactly that, and
+                // the walk ticks them every frame after (the fusebox/laser mount precedent).
+                // Mask 1 so the load beat runs; no gate, no out channel (GT drives them).
+                let base = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                let mount = |hash: u32| crate::nis::Player {
+                    placement: i,
+                    scripts: [hash, 0],
+                    modes: [8, 0],
+                    stay: false,
+                    mask: 1,
+                    out: 0,
+                    gate: 0,
+                    scale: 1.0,
+                    matrix: base,
+                    cur: 0,
+                    state: 0,
+                    activated: false,
+                    countdown: 0,
+                    info: [None, None],
+                    deleted: false,
+                    live_matrix: base,
+                    subs: Vec::new(),
+                    hit_points: 0.0,
+                    damage: 0.0,
+                    tick_damage: 0.0,
+                    hidden: false,
+                };
+                t.script_player_a = self.scripts.players.len();
+                self.scripts.players.push(mount(t.script_a));
+                t.script_player_b = self.scripts.players.len();
+                self.scripts.players.push(mount(t.script_b));
                 self.gt_turrets.push(t);
             }
         }
@@ -12933,9 +12991,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// (The game's FACIAL branch for a line with a loaded facial script — `AnimScriptPeekSfx` 0x1c6ca8 for the
     /// script's own op-1 sfx → SFXPreCache + a T+20 pending append via +0x4c/+0x37/+0x48, else
     /// `AnimFacialAppend` 0x1c6490 appends the mouth-flap script at once into +0x53c, per docs/systems/speech.md
-    /// §1.3–1.4 — is NOT ported: this loop skips `l.facial != 0` lines, so those lines are silent here. On the
-    /// port's tested level 07000005 no facial scripts load, and the game's own fallback (hashtable miss clears
-    /// `facialAnimId` to 0, permanent) then plays the line directly — the skip stands in for the whole path [S].)
+    /// §1.3–1.4 — is NOT ported: entries whose script IS loaded stay silent here [M 0x141b00:15-17]. Entries
+    /// whose script is absent from the level take the hashtable-miss arm (facialAnimId := 0, permanent) and
+    /// play DIRECT below — 945 modeled it [M 0x141b00:18-28; the presence source: `Data.scripts` [D census]].)
     // task 854: the game's SpeechSFX play path also touches the anim-script machinery that the
     // port folds into the animator/voice bookkeeping: `AnimScriptNew` 0x1C1398 (a fresh script for
     // the facial track), `AnimFacialAppend` 0x1C6490 (append the facial events),
@@ -12949,7 +13007,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for (idx, force) in talks {
             let Some(l) = lines.get(idx).copied() else { continue };
             if frame < 30 || self.voice_last[idx].is_some_and(|t| frame < t + l.repeat) { continue; }
-            if l.sfx == 0 || l.facial != 0 { continue; }
+            if l.sfx == 0 { continue; }
+            // §1.3: a facial-id entry whose script is absent from the level takes the hashtable-miss
+            // arm — facialAnimId := 0 (permanent) and the line goes DIRECT [M 0x141b00; the miss
+            // test's port source is `Data.scripts`, the level archive's kind-5 0x06 anim-script
+            // entries [D census: 07000005 carries none of the 61 speech facial hashes, 07000007
+            // carries 54]]. A present script stays on the (unported) FACIAL path — no handle,
+            // silent here [M 0x141b00:15-17]. The game zeroes only when a useFacial call tests
+            // the entry; the port's seqs/scripts map is level-static, so testing the presence
+            // directly is equivalent [S].
+            if l.facial != 0 && d.scripts.contains_key(&l.facial) { continue; }
             if !force && self.list[index].voice.is_some() { continue; }
             self.voice_last[idx] = Some(frame);
             self.list[index].last_voice = frame; // `*(drone+0x4D4) = now` [M 0x141848, speech.md §1.2]
@@ -13903,6 +13970,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let mut gt_events: Vec<(usize, crate::gt::GTEvent)> = Vec::new();
             for (ti, t) in self.gt_turrets.iter_mut().enumerate() {
                 if t.delete_flag { continue; }
+                // GT_Update's top ticks BOTH scripts then reads their +0x9c [M 0x180498:111-112,
+                // 232-233]. The port's script players tick later in the control walk (they are
+                // walk members, placement order) — the read here is the walk's last state: the
+                // park edges land one tick late vs the game (documented skew).
+                let delay = |scripts: &crate::nis::Scripts, idx: usize| -> i32 {
+                    scripts.players.get(idx).and_then(|p| p.info[p.cur].as_ref()).map_or(0, |s| s.delay)
+                };
+                t.scripts_done = delay(&self.scripts, t.script_player_a) != 0
+                    && delay(&self.scripts, t.script_player_b) != 0;
                 let ctx = crate::gt::GTCtx {
                     channels: chans,
                     mp: false, // the port's drone AI is SP-only (MPSettings stays 0)
@@ -13913,16 +13989,37 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 };
                 let mut out = Vec::new();
                 t.update(&ctx, &mut self.rng, &mut out);
+                // The rewind writes land at once: zero both mounted players' delays so the
+                // looping deploy/fold anims replay from their parks [M 0x180498:223-227,
+                // 256-261 — the game's own +0x9c = 0 writes].
+                if out.iter().any(|e| matches!(e, crate::gt::GTEvent::RewindScripts)) {
+                    for idx in [t.script_player_a, t.script_player_b] {
+                        if let Some(p) = self.scripts.players.get_mut(idx) {
+                            if let Some(s) = p.info[p.cur].as_mut() { s.delay = 0; }
+                        }
+                    }
+                }
                 for e in out { gt_events.push((ti, e)); }
             }
             self.gt_turrets.retain(|t| !t.delete_flag);
             for (ti, e) in gt_events {
                 match e {
-                    // One `Bullet_init` shot [M 0x180498 case 4/7]: the sound rides the pool;
-                    // the bullet itself needs the weapon-96 record walk (a follow-up — the
-                    // event carries muzzle+dir for it).
-                    crate::gt::GTEvent::Fire { muzzle, dir: _, sound } => {
+                    // One `Bullet_init` shot [M 0x180498 case 4:347-348]: the turret weapon
+                    // record 96 (0x2c55d0 = the table + 96·0x10c), owner −1 — every hit-time
+                    // damage modifier that reads the shooter drone skips (`Bullet_init`'s
+                    // owner is 0xffffffff; `Drone_ModBulletDamage`'s drone reads are NULL-gated)
+                    // — plus the muzzle sound the pool plays.
+                    crate::gt::GTEvent::Fire { muzzle, dir, sound } => {
                         self.audio.play3d(sound, muzzle, None);
+                        if let Some(w) = d.weapons.records.get(crate::gt::TURRET_WEAPON_RECORD) {
+                            let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                            self.bullets.push(crate::bullet::Bullet {
+                                pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
+                                damage: f32_at(0x0c), owner: usize::MAX, state: 0,
+                                weapon: crate::gt::TURRET_WEAPON_RECORD as u16,
+                                flyby: d.weapons.flyby(crate::gt::TURRET_WEAPON_RECORD), bounces: 0,
+                            });
+                        }
                     }
                     // The wreck smoke puff [M case 6]: Gas_Init(0.05, 0.25, glist 0x2000039,
                     // 7, 0x48403080, 1) — the port's gas has the searchlight-shape init only;

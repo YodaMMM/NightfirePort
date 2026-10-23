@@ -231,13 +231,24 @@ fn walk_to_the_gallery(w: &mut Walker, cut: bool) {
 /// the walk's one documented gap (see the header) — the LoadPoint chain it feeds (ch 0x83 →
 /// ch 0x02 → level_exit 07000007) is pinned green through the real trigger on master by
 /// walk_07000006_live.rs.
-/// [ignore] OPEN (level-06-complete): the walked route reaches the guardroom, where the scripted
-/// idle guard #438 (skin 0x500002e, drone 2) engages at (36.0, 41.0, −18.9) and never dies —
-/// 8 real-fire shoot() rounds with the carried P2K leave it alive (its position barely moves;
-/// the idle-scripted guards may be invulnerable [D #438 script 0x0600021F, census §4]) and its
-/// body wedges the walked lane. The route is proven to that point; next session: the guard's
-/// shootability flag in the decompile (Drone_Damage 0x18c330 vs the idle-script arm), then the
-/// gallery → dressing-room leg (see the header's OPEN LEG).
+/// [ignore] OPEN (level-06-guardroom-guard): the walked route reaches the guardhouse courtyard,
+/// where the idle guard #438 (skin 0x05000030, drone 2, placement (27.51, 39.18, −10.19) [D
+/// census: p3 switch channel 0, p13 = 0x0600021F the special-death script]) blocks the lane to
+/// door #47 and the fight cannot kill him through the real fire path. THE DIAGNOSIS (this task's
+/// probes, docs/reports/level-06-guardroom-guard.md): the guard is a NORMAL idle guard — the
+/// port's damage path for his IDLE state is present ([M] impact_args IDLE → (ATTACK, 0); his 16
+/// hit boxes sit at his body and a camera ray hits the head box at t 0.157 vs the first world hit
+/// 0.439) — the wedge is the PLAYER's fire path: (1) the harness `switch_to_armed` accepted the
+/// FISTS (their clip 1 passes the old `clip + spare > 0` test — fixed in walker.rs; the previous
+/// session's "8 rounds from the carried P2K" were punches, the fists' hit test is a 1.8-unit-range
+/// bullet); (2) with the P2K equipped the fire path still lands at most ONE bullet per engagement —
+/// the first press spawns ON the press tick but at a view rotated −1.38 rad from the aimed yaw
+/// (an intra-tick body turn measured at the fire site: bond.yaw −3.3134 vs the sampled −1.9311,
+/// coincident with the fire script's start), and every later press — 20-tick taps, held fire,
+/// idle-gated presses, 40-tick taps — spawns nothing (the fire script machine never releases a
+/// second round: 12 presses → 1 bullet, probe logs). The port gap to root-cause next: the
+/// press-tick yaw turn and the fire-script refire starvation (Player_SetFiringAnim 0x1a3c70 /
+/// Player_WeaponFiring 0x1a5460 / Gun::update_with), then un-ignore both tests.
 #[test]
 #[ignore]
 fn walk_the_castle_interior_to_the_upper_gallery() {
@@ -275,7 +286,7 @@ fn walk_the_castle_interior_to_the_upper_gallery() {
 /// Sister: the same walk that stops before the tunnel never ends the level — no alarm-channel
 /// dependency, no ch 0x83, no objective fold, no exit. The gallery walk's asserts depend on the
 /// walked route, not on any earlier scripted hand-out.
-/// [ignore] with the full walk above (the same guard wedge).
+/// [ignore] with the full walk above (the same fire-path wedge).
 #[test]
 #[ignore]
 fn stopping_before_the_tunnel_never_ends_the_castle() {

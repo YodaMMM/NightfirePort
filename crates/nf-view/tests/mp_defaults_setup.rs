@@ -262,3 +262,19 @@ fn handicaps_match_the_handlers_nodes() {
     let texts: Vec<&str> = MP_HANDICAPS.iter().map(|h| h.1).collect();
     assert_eq!(texts, ["-75", "-50", "-25", "0", "+25", "+50", "+75", "+100"]);
 }
+
+/// R7: the codename's saved Radar option (ctrl 0x10000128, loaded into `opts` from settings.toml)
+/// reaches the match's per-player radar word — the game's `+0x28` read [M 0x2144d8:13, the
+/// radar draw gate HUD_RadarUpdate 0x19f6e8:102]. Before the fix only an in-menu edit set it,
+/// so a saved Off started every match with the radar on. Sister: the saved On keeps it on.
+#[test]
+fn a_saved_radar_off_reaches_the_match() {
+    for (saved, want) in [(0, 0u32), (1, 1u32)] {
+        let mut fe = FrontEnd::new();
+        fe.opts.insert(0x1000_0128, saved);
+        fe.mp_join[0].joined = true;
+        assert!(fe.mp_confirm_start());
+        let s = fe.mp_match_settings.as_ref().expect("the confirm built the settings");
+        assert_eq!(s.players[0].radar_on, want, "saved radar {saved} → the match's radar_on");
+    }
+}
