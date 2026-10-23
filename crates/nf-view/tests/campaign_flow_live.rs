@@ -345,7 +345,11 @@ fn drive_08(w: &mut Walker) -> String {
     note.push_str("walkway descent walked to the floor plate; mux ch 1; ");
     // The ride: SP #295 (mask 1 on ch 1) plays 0x0600004C from the LEVEL BIN — the carriage
     // stream carries the cab (and Bond on its floor) down to (112.0, 18.0, −179.4), fires
-    // ch 83 at t1410; ch 83 starts the pack cinematic SP #296 → ch 5 → the copter writes 0x4B.
+    // ch 83 at t1410; ch 83 starts the pack cinematic SP #296 → ch 5 → the copter's gate opens.
+    // The faithful machine writes ch 0x4B ONLY from the death tail (hp < damage → state 4,
+    // disasm 0x17e390-0x17e3c8 [M 0x17dbb8:355-370]) — the route flight alone never writes it
+    // (no kind-2 arrival path on 08 [D the route dump]) — so after the gate, Bond shoots the
+    // Hind down with real trigger pulls (the 9-part hit walk, [M :277-353]; no damage pokes).
     let mut rode = false;
     let mut ch83_seen = false;
     for t in 0..3200 {
@@ -363,16 +367,55 @@ fn drive_08(w: &mut Walker) -> String {
             w.scene.sim.as_mut().unwrap().drones.channels.set(5, 1, frame);
             note.push_str("ch 5 at the warm-load pack-cinematic gap (cold runs it, probe); ");
         }
-        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { rode = true; break; }
+        if w.scene.sim.as_ref().unwrap().drones.copters.iter().any(|c| c.out == 0x4b && (1..=2).contains(&c.state)) { rode = true; break; }
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(rode && sim.drones.channels.on(0x4b),
-            "the gondola ride chain completes: carriage → ch 83 → the cinematic → ch 5 → the copter → ch 0x4B [D 07000008.md §5.3]");
+        assert!(rode,
+            "the gondola ride chain completes: carriage → ch 83 → the cinematic → ch 5 → the copter flies (state 1/2) [D 07000008.md §5.3; M 0x17dbb8 head]");
         assert!(sim.bond.pos[2] < floor[2] - 40.0,
             "Bond rode the carriage down the mountain (z {:.1} from {:.1})", sim.bond.pos[2], floor[2]);
     }
-    note.push_str("the real carriage ride → ch 0x4B");
+    note.push_str("the real carriage ride → the copter flies; ");
+    // Bond shoots the Hind down with real trigger pulls — the position stand-in is the harness's
+    // (the copter is mid-route, 0.253/tick [D the route dump]); the DAMAGE is the game's own
+    // 9-part walk. No damage pokes. Wait for the cinematic's disable window to end first.
+    for _ in 0..3000 {
+        if !w.scene.sim.as_ref().unwrap().disabled { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    let ci = w.scene.sim.as_ref().unwrap().drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
+    let hp = w.scene.sim.as_ref().unwrap().drones.copters[ci].hp;
+    let deadline = w.scene.sim.as_ref().unwrap().drones.frame + 60000;
+    let mut shots = 0u32;
+    while w.scene.sim.as_ref().unwrap().drones.frame < deadline
+        && !w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) {
+        let press = w.scene.sim.as_ref().unwrap().drones.frame % 2 == 0;
+        if press {
+            let sim = w.scene.sim.as_mut().unwrap();
+            let p = sim.drones.copters[ci].pos();
+            sim.bond.pos = [p[0] + 2.5, p[1], p[2] + 1.0];
+            sim.bond.vel = [0.0; 3];
+            let d = [p[0] - sim.bond.pos[0], p[1] - (sim.bond.pos[1] + 1.0), p[2] - sim.bond.pos[2]];
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if len > 1e-4 {
+                sim.bond.pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
+                sim.bond.yaw = d[0].atan2(d[2]);
+            }
+        }
+        w.scene.sim.as_mut().unwrap().step_bond(Input::default(), press, false, false);
+        w.total_ticks += 1;
+        if !press { shots += 1; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let damage = sim.drones.copters[ci].damage;
+        eprintln!("[flow 08] the shoot-down: {shots} trigger pulls; damage {damage} vs hp {hp}");
+        assert!(sim.drones.channels.on(0x4b),
+            "the shots pushed damage {damage} past hp {hp} → state 4 → rec+0x72 [M :358-370]");
+        assert!(damage > hp, "the walk's accumulation, not a poke, crossed hp");
+    }
     note
 }
 

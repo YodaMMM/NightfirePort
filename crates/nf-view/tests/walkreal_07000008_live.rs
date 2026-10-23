@@ -344,13 +344,50 @@ fn walk_the_gondola_ride_to_the_end() {
             "SP #296 (0x06000078) ran on ch 83 [D]");
         assert!(sim.drones.channels.on(5), "the cinematic wrote ch 5 [D stream 10]");
     }
-    // The helicopter flies on ch 5 and writes ch 0x4B [M Copter_Update 0x17dbb8 cases 4/5/6].
-    let mut ch4b = false;
-    for _ in 0..2400 {
-        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
+    // The helicopter: gate ch 5 opens the route flight (state 1) [M Copter_Update 0x17dbb8 head].
+    // The faithful machine writes the out channel (rec+0x72 = param 7 = ch 0x4B [D #45 p7; M
+    // 0x17d4ac]) ONLY from the death tail — hp < damage → state 4, disasm 0x17e390-0x17e3c8 — or
+    // cases 4/5/6, which only the death (or a kind-2 arrival path; none exists on 08 [D the route
+    // dump]) reaches. The old pin here — "the flight → ch 0x4B" — was the removed stand-in's
+    // behaviour; the walk now shoots the Hind down with REAL trigger pulls (the 9-part hit walk
+    // accumulates the weapon contact damage into rec+0x64 [M 0x17dbb8:277-353]), no damage pokes.
+    let mut flying = false;
+    for _ in 0..600 {
+        if w.scene.sim.as_ref().unwrap().drones.copters.iter().any(|c| c.out == 0x4b && (1..=2).contains(&c.state)) { flying = true; break; }
         w.tick(Input::default(), false);
     }
-    assert!(ch4b, "the helicopter's flight wrote ch 0x4B [M record+0x72; Copter_Update 0x17dbb8]");
+    assert!(flying, "the gate ch 5 opened the route flight (state 1/2) [M 0x17dbb8 head]");
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b), "no arrival while the route flies");
+    let ci = w.scene.sim.as_ref().unwrap().drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
+    let hp = w.scene.sim.as_ref().unwrap().drones.copters[ci].hp;
+    let mut shots = 0u32;
+    let mut ch4b = false;
+    for _ in 0..60000 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
+        // Press/release the semi-auto at the flying Hind: every press re-stands Bond 2.5 u from
+        // it and aims the view at its centre (the bullets cross the part spheres on the way — the
+        // copter's SP pose is one tick stale, the same lag the game's collide pass reads
+        // [M 0x1336f8:238]). The position stand-in is the harness's; the DAMAGE is the game's.
+        let press = w.total_ticks % 2 == 0;
+        if press {
+            let sim = w.scene.sim.as_mut().unwrap();
+            let p = sim.drones.copters[ci].pos();
+            sim.bond.pos = [p[0] + 2.5, p[1], p[2] + 1.0];
+            sim.bond.vel = [0.0; 3];
+            let d = [p[0] - sim.bond.pos[0], p[1] - (sim.bond.pos[1] + 1.0), p[2] - sim.bond.pos[2]];
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if len > 1e-4 {
+                sim.bond.pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
+                sim.bond.yaw = d[0].atan2(d[2]);
+            }
+        }
+        let input = Input { aiming: true, ..Default::default() };
+        if press { w.tick_fire(input); } else { w.tick(input, false); shots += 1; }
+    }
+    let damage = w.scene.sim.as_ref().unwrap().drones.copters[ci].damage;
+    eprintln!("[08] the shoot-down: {shots} trigger pulls; damage {damage} vs hp {hp}");
+    assert!(ch4b, "the shots pushed damage {damage} past hp {hp} → state 4 → rec+0x72 [M :358-370]");
+    assert!(damage > hp, "the walk's accumulation, not a poke, crossed hp");
     for _ in 0..120 {
         if obj08(&w).1 == 4 { break; }
         w.tick(Input::default(), false);

@@ -144,7 +144,23 @@ fn walk_balcony_to_the_roof_jump() {
         assert!(sim.drones.channels.on(0x59), "060004FA stream 13 @0x991 → ch 0x59 (objective 10) [D]");
         assert!(sim.drones.channels.on(0x57), "060004FA stream 6 @0x991 → ch 0x57 (the fall-web AND #324) [D]");
         assert!(sim.drones.channels.on(0x2a), "060004FA stream 14 @0x990 → ch 0x2A (the helicopter gate) [D]");
-        assert!(sim.drones.channels.on(0x66), "the helicopter flew (gate 0x2A, flight 060008BE 299 ticks) → out ch 0x66 [M 0x17dbb8:249-268]");
+        // The gate opened the roof copter's route flight (#328: gate p6 = 42 = ch 0x2A, out p7 =
+        // 102 = ch 0x66 [D placements; M 0x17d4ac record+0x70/0x72 = params 6/7]). The OLD pin —
+        // "the flight → out ch 0x66" — was the removed stand-in's behaviour and contradicts the
+        // decompile: rec+0x72 is written ONLY from cases 4/5/6 and the death tail, and state 4/6
+        // is entered ONLY by the death (hp < damage; states 4/5 exempt — sltiu(state-4, 2), disasm
+        // 0x17e390-0x17e3c8; on 0b the death goes straight to state 6) [M 0x17dbb8:244-275,
+        // :355-370]; no kind-2 arrival path exists on 0b [D the route dump]. Bond never fires at
+        // the hovering copter (the objective is to take its parachute — 0700000b.md), and nothing
+        // on 0b reads ch 0x66 (the complete chain is ch 0x3F AND ch 0x40 → ch 0x41 → mux #304 →
+        // ch 0x5A + ch 100 [D 0700000b.md §objectives]). The TEST was wrong; fixed
+        // (copter-real-path-walks): the copter FLIES and the out channel stays off.
+        let c = sim.drones.copters.iter().find(|c| c.out == 0x66).expect("the roof copter #328 (out ch 0x66; the gate field zeroes on its edge [M 0x17dbb8 head])");
+        assert!((1..=2).contains(&c.state),
+            "the gate opened the copter's flight (state {}, the fly/attack pair) [M 0x17dbb8 head, :188]", c.state);
+        assert_eq!(c.out, 0x66, "rec+0x72 = param 7 = ch 0x66 [D #328 p7]");
+        assert!(!sim.drones.channels.on(0x66),
+            "the flight (state {}) never writes the out channel — only the death tail (hp < damage → state 6 on 0b) and cases 4/5/6 do [M 0x17dbb8:244-275, :355-370]", c.state);
         // Observation, not a pin: the deck point sits inside #245's volume, but the port's touch
         // did not raise ch 0x75 in this window in the walkthrough run (the focused test shows the
         // re-place itself works). Follow-up item in the report.
@@ -244,8 +260,12 @@ fn walk_balcony_to_the_roof_jump() {
 /// The roof cut-scene's channel tail, alone: the disc's writer of objective 10's ch 0x59, the
 /// fall-web's ch 0x57 and the helicopter's gate ch 0x2A [D pack 0790000b, 060004FA streams
 /// 6/13/14/15], played end-to-end through the port's real SP machinery (PlayerDisable at the
-/// start, the event-6 re-place at 0x98f, the channel writes at 0x990/0x991, then the parked
-/// helicopter's flight → out ch 0x66 [M 0x17dbb8:249-268]). Sister assertion: the pre-gate
+/// start, the event-6 re-place at 0x98f, the channel writes at 0x990/0x991). The gate opens the
+/// parked copter's route flight — but the OUT channel (rec+0x72 = ch 0x66 [D #328 p7]) is written
+/// ONLY from cases 4/5/6 and the death tail (hp < damage → state 6 on 0b, disasm 0x17e390-0x17e3c8
+/// [M 0x17dbb8:244-275, :355-370]); the flight alone NEVER writes it, so the pin asserts the
+/// flight (state 1/2) and the channel's absence (the old "flight → ch 0x66" was the removed
+/// stand-in's behaviour). Sister assertion: the pre-gate
 /// baseline — none of the tail channels rise while the gate is off (fails on any tree that
 /// boots the script unprompted or drives the channels at load).
 #[test]
@@ -275,7 +295,13 @@ fn the_roof_cutscene_060004fa_writes_ch59_ch57_and_arms_the_helicopter_gate() {
         assert!(sim.drones.channels.on(0x59), "stream 13 @0x991 → ch 0x59 [D]");
         assert!(sim.drones.channels.on(0x57), "stream 6 @0x991 → ch 0x57 [D]");
         assert!(sim.drones.channels.on(0x2a), "stream 14 @0x990 → ch 0x2A [D]");
-        assert!(sim.drones.channels.on(0x66), "the copter's flight → ch 0x66 [M 0x17dbb8]");
+        // The gate opened the flight; the out channel stays OFF (see the header comment — the
+        // death is the only writer, and Bond never fires at the hovering copter).
+        let c = sim.drones.copters.iter().find(|c| c.out == 0x66).expect("the roof copter #328 (out ch 0x66; the gate field zeroes on its edge [M 0x17dbb8 head])");
+        assert!((1..=2).contains(&c.state),
+            "the gate opened the copter's flight (state {}) [M 0x17dbb8 head, :188]", c.state);
+        assert!(!sim.drones.channels.on(0x66),
+            "the flight (state {}) never writes the out channel — only the death tail (hp < damage → state 6 on 0b) and cases 4/5/6 do [M 0x17dbb8:244-275, :355-370]", c.state);
         assert!(!sim.drones.channels.on(100), "no mission-complete leak (the copter's countdown pulse is unarmed: param 9 = 0 [D #328])");
         // The event-6 re-place: Bond on the helipad deck at key 448 [−14.71, 58.00, −2.06] [D].
         let p = sim.bond.pos;
