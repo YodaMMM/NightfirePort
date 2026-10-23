@@ -160,3 +160,10 @@ exactly. Real input only via step_bond; port what the game does from the decompi
   Sister added (no-reseat composed-handback + open-air census) GREEN; walkreal stays parked with
   the sharpened blocker + two exact live checks (tower2-lift-ride.md §4). Probes l2/l2b/l2c/l2d
   committed as the evidence trail. No src changes.
+- (21:36 UTC) Finish steps ran: the report docs/reports/level-4a-lift-2.md committed and pushed;
+  finish.sh registered done/10-level-4a-lift-2.md (its relative-path cat missed the report body —
+  attached and pushed to the queue by hand); the ntfy delivered via curl (id Mr3N74bsAPSq).
+  Suite at the deadline: 287 binaries — 944 passed / 0 failed, 0 TIMEOUT/FAILED, 8 CRASH (OOM,
+  my concurrent runs' fault); did not finish inside the window. The round's deliverable stands:
+  the hand-back position settled [M chain], the open-air column census, the sister green, two
+  exact live checks named for the main agent.
