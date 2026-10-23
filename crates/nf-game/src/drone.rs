@@ -6280,6 +6280,7 @@ impl Drone {
             self.damage_taken = 1.0; // the hit-effect multiplier +0x14C resets on every change [M-dis 0x17207c-88]
             self.entered = frame;
             self.log.push((frame, n));
+            if std::env::var("TASE_DBG").is_ok() { eprintln!("[st] f{} i{} skin {:x} {:#x}->{:#x} at ({:.1},{:.1},{:.1})", frame, self.index, self.skin, self.prev_state, n, self.pos[0], self.pos[1], self.pos[2]); }
             if state::UNAWARE.contains(&n) { self.watching = true; } // the new state's ENTER arm re-sets it [M case 1]
             self.handle(d, rng, frame, n, msg::ENTER);
             if let Some(m2) = self.self_msg.take() { self.send(d, rng, frame, m2); }
@@ -7799,7 +7800,15 @@ impl Drone {
                 self.timer_c = Some(frame + 60);
                 true
             }
-            (NO_OPPONENT, msg::UPDATE) => { if self.bond_alive { self.set_state(ATTACK); } true }
+            (NO_OPPONENT, msg::UPDATE) => {
+                // The game's case 3 [M 0x1650a0:38-49]: `+0x170 != 0` — FindOpponent's re-sight
+                // re-points the opponent — is what returns to Attack 0x56. The port's `seen` is
+                // that per-tick sight flag (SetOpponent's stand-in [M 0x1422d0 path]); the old
+                // bond_alive fold bounced every living-Bond 0x60 straight back out (one tick of
+                // look-about), so the state could never hold.
+                if self.seen { self.set_state(ATTACK); }
+                true
+            }
             (NO_OPPONENT, msg::TIMER_C) => {
                 if self.bond_alive { self.set_state(ATTACK); } else { self.timer_c = Some(frame + 60); }
                 true
@@ -9563,6 +9572,23 @@ impl Drone {
     /// from the firing states). Cover (0x8C) ported (WORKLOG 0023); grenades (0x2D) ported (WORKLOG 0080).
     fn combat_state(&mut self, d: &Data, rng: &mut Rng, frame: u32, from: u8) -> u8 {
         use state::*;
+        // The router's head [M 0x148338:19-31]: the opponent pointer gone (+0x170 == 0 —
+        // FindOpponent 0x1424e0:149-157 clears it the tick CanSeeObject fails) with no fresh
+        // +0x238 hold (0, or 30 frames stale — HasOpponent 0x14ad58) returns NoOpponent 0x60:
+        // combat cannot outlast the hold. The switch's own cases (0x58/0x68/0x70 minus 0x58 =
+        // 0x00/0x10/0x18 [M 0x148338:39-44]) route COMBAT and both fire states through here.
+        // The port's `seen`/`unseen_ticks` are the same sight machinery (unseen_ticks = the
+        // game's +0x274 ticks-since-LOS [M 0x176a28:216-223]); the >15 gate is the port's
+        // established stand-in for the hold window (the same gate that enters 0x5c) // [S] the
+        // window length: the game's hold is the +0x238 30-frame stamp, the port reuses 15.
+        // Without this exit the port's 0x5c (whose UPDATE is ONLY SeenAndAttacking + the
+        // router [M 0x164838:26-35]) parks a sight-lost guard forever — the 07000001 hall
+        // guard's 56k-tick COMBAT_NO_SIGHT freeze that stalled both escort walks.
+        if matches!(from, COMBAT | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | AIM_STAND_FIRE | AIM_CROUCH_FIRE)
+            && !self.seen && self.unseen_ticks > 15
+        {
+            return NO_OPPONENT;
+        }
         if self.in_transition() { return 0; }
         let follow = !matches!(from, AIM_STAND_FIRE | AIM_CROUCH_FIRE);
         let mv = self.move_to_object(d, self.engage_range.min(6.0), follow);
@@ -12658,6 +12684,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let weapon_mask = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
             for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, weapon_mask, b.damage, &mut self.rng) } {
                 self.break_kills.push((k.placement, k.kind, k.sound));
+                if std::env::var("TASE_DBG").is_ok() { eprintln!("[brk-bullet] f{} placement {} kind {} sound {} at ({:.1},{:.1},{:.1})", frame, k.placement, k.kind, k.sound, k.pos[0], k.pos[1], k.pos[2]); }
                 // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
                 // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
                 // audio voice plus the hearing entry (the level's sfx-table data, the shape the
@@ -13816,6 +13843,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // sound roll, the pieces).
                     let placed = self.breaks.do_break(pos, &mut self.rng);
                     if !placed.is_empty() {
+                        if std::env::var("TASE_DBG").is_ok() { eprintln!("[brk-dobreak] f{} placements {:?}", self.frame, placed.iter().map(|k| k.placement).collect::<Vec<_>>()); }
                         for ev in &placed {
                             // `Sound_Play3D(100.0, -1.0, -1.0, id, obj+0x80, custom=0)` [M 0x12b970:69,75].
                             self.audio.play3d(ev.sound as u32, ev.pos, None);
@@ -17103,6 +17131,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if !dr.present || dr.corpse { continue; }
             for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, &mut self.rng) {
                 self.break_kills.push((k.placement, k.kind, k.sound));
+                if std::env::var("TASE_DBG").is_ok() { eprintln!("[brk-contact] f{} placement {} kind {} sound {} at ({:.1},{:.1},{:.1})", self.frame, k.placement, k.kind, k.sound, k.pos[0], k.pos[1], k.pos[2]); }
                 let id = u32::from(k.sound);
                 self.audio.play3d(id, k.pos, None);
                 if let Some(t) = d.sfx {
