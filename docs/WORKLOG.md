@@ -160,3 +160,23 @@ un-ignore with a sister that can fail. Real input only via step_bond.
   an invisible wall at x ≈ 4.98 spanning at least z −1.5..−3.8 (the "sealed shaft") — the
   next step is mapping the wall (a westward segment scan over y/z) to find the game's opening
   (over the top, or the SP#141/#142 shaft rides at z ±8.82).
+
+### level-1b-drake-2 (21:20-21:40 UTC, close)
+
+- The sealed wall mapped [D probe run]: the westward world-segment scan (probe1b_float::
+  scan_the_x5_wall_openings) shows the capsule ray hitting at t 0.079 (face x ≈ 4.43) across
+  the full scanned band z −8..−0.5, y −2.4..+2.5, while the BULLET segment crosses everywhere
+  — a glass wall you can shoot through but not float through. The stall at x 4.98 is the
+  capsule radius off that face.
+- walkreal walk_arrival_to_drakes_defeat re-#[ignore]d at the NEW precise blocker (the sealed
+  shaft wall; the next step is the shaft mouths z ±8.82 — SP#141/#142's looping zero-G scripts
+  0x06000818, out ch 0x1c/0x18). The interactables drake_defeat blocker message rewritten with
+  the [M 0x137cb0:30] min-distance explanation (the arena-floor gate drive can never spawn).
+- The crossing leg itself is real-input proven up to the wall: the deck walk → ch 0x0a →
+  Drake spawns+enables → the slit → the 0x4b pulse → substate 9 grabbed (asserted) → the
+  steered thruster float rounds the island south (z −3.8) and stops on the wall. All
+  step_bond movement; the steered-float code stays in the test body for the next round.
+- Ran: walkreal 3p/3i(0f), interactables_0700001b_live 0p/2i(0f), probe1b_float/probe1b_scripts
+  0f, fix_finale_live 4p, walk_0700001b_live 2p, simplescript_live 1p, nf-game lib 522p. The
+  background suite.py died in the first minute (cargo off PATH in the nohup env — the prior
+  task hit the same wall); foreground chunks are what fit the window.

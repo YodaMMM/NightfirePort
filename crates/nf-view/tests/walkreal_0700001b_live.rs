@@ -138,6 +138,7 @@ fn the_slit_float_carries_bond_west_without_a_fall() {
 /// way). Drake spawns INSTANTLY from the pit's edge (spawner #187, trigger 10 [D];
 /// probe1b_drake.rs) and his wait-switch enables him — the arena floor is never stood on first.
 #[test]
+#[ignore = "the reached blocker: the sealed shaft wall — the float (substate 9, entered via the ported 0x4b handler [M 0x216388]) is capsule-stopped at x 4.98 (face ≈ 4.43) across z −8..−0.5 at y −2.4..+2.5, while the BULLET pass crosses everywhere (glass — probe1b_float::scan_the_x5_wall_openings); the game's route out is the shaft mouths at z ±8.82 (SP#141/#142's looping zero-G scripts 0x06000818) — map those entries next"]
 fn walk_arrival_to_drakes_defeat() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());

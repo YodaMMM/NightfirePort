@@ -177,7 +177,7 @@ fn missile_console_chain_disarms_and_the_gateless_missile_aborts() {
 /// 0x1d94c0 case 0x11] — ch 100 is the mission end → 0x0730001b [M 0x182c60:114-116].
 /// Sister: the unfought gate leaves Drake unspawned and the mission running.
 #[test]
-#[ignore = "the reached blocker: spawner #187 (gate ch 10 [D]) does not spawn Drake in the port even with Bond walked onto the arena floor (the walk arrives at (-5.81,-1.90,0.14)) and ch 0x0a driven — the same defeat chain walkreal_0700001b_live pins behind the hub crossing; un-ignore when the spawner lands"]
+#[ignore = "the reached blocker, now explained: the spawner's min-distance screen [M 0x137cb0:30 — a PRE-selection usability test] refuses Drake's spot while Bond stands in the arena basin (the walk arrives at (-5.81,-1.90,0.14), ~1.5 from the spawn spot) — the game's own beat fires the gate ch 0x0a from the DECK (walkreal's the_fight_gate_spawns_drake_from_the_deck pins the spawn); this test must re-route through the deck gate + the zero-G float crossing, which is blocked on the sealed shaft wall (walkreal's ignore message)"]
 fn drake_defeat_by_real_fire_ends_the_mission() {
     let mut w = load();
     // Sister: no gate, no Drake, mission running.
