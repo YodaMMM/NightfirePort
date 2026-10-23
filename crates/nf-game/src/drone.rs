@@ -12640,7 +12640,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // shot in the Sim's shared world pass (`Sim::step_net_world`), on every machine —
             // this machine's own bullet must not break them here alone.
             let net_world = self.net_bodies.is_some();
-            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.rng) } {
+            // The bullet's weapon-definition word at weapon_definition+0x10 — what the game hands
+            // Collide_FilterBullets [M 0x12bfd8:15 + 0x1ece30:24-33]: a class-5 hitter whose word
+            // ANDs `filter | 0x106` is dropped. Guns 0x0008, Laser 0x0002, watch 0x0100 [L dump].
+            let weapon_mask = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, weapon_mask, b.damage, &mut self.rng) } {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
                 // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
@@ -13767,19 +13771,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // `Break_Kill` 0x12b970]) and playing the break sound at the object: 0x2e for a
                 // type-2 (glass) breakable, else 0x5f2/0x5f3 by `Rand_Rand(100) < 41` [M
                 // 0x12b9b4-0x12b9f0]. The game scans the CONTROL list — placed 0x20 breakables
-                // (Break_Create) and script-created 0x20 entities alike; the port models only the
-                // script-created ones (`Objects.list`, the Entity command's obj_type is the game's
-                // obj+0xFF class byte), and its entities carry no bounding sphere, so the match is
-                // the first kind-0x20 entity within 1.0 of the position — documented-unreachable
-                // on the shipped levels: the disc's single firing (0600005b stream 8, position =
-                // stream 7's anim object) finds NO script entity of that class either way, and the
-                // near misses are the placed glass panels the port does not simulate ([D census];
-                // the game's scan is the CONTROL list — placed Break_Create 0x20 breakables AND
-                // script entities — the port carries only the script-created set; a live check
-                // could measure the game's sphere radius).
+                // (Break_Create) and script-created 0x20 entities alike, created in parsemap order
+                // so the placed panes precede the script entities [M 0x12c168:39-51] — first hit
+                // wins.
                 crate::nis::Request::DoBreak { at } => {
                     let Some(o) = at else { continue };
                     let Some(pos) = Self::script_obj_pos(&self.scripts, d, o) else { continue };
+                    // The PLACED panes first (the control list's creation order [M 0x12c168:39-51]):
+                    // `Breaks::do_break` runs the standard Break_Kill inside (the dead bit, the
+                    // sound roll, the pieces).
+                    let placed = self.breaks.do_break(pos, &mut self.rng);
+                    if !placed.is_empty() {
+                        for ev in &placed {
+                            // `Sound_Play3D(100.0, -1.0, -1.0, id, obj+0x80, custom=0)` [M 0x12b970:69,75].
+                            self.audio.play3d(ev.sound as u32, ev.pos, None);
+                        }
+                        self.break_kills.extend(placed.into_iter().map(|k| (k.placement, k.kind, k.sound)));
+                        continue;
+                    }
                     // First class-0x20 object in list order whose sphere contains the position
                     // [M 0x12c180-0x12c1cc — first hit wins]. The port's script entities carry no
                     // bounding sphere: the centre is the matrix translation, the radius a 1.0
@@ -15122,6 +15131,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // same set_dynamic now (the game's Collide_Update is post-walk [M 0x1336f8:238]). Id: high bit 40 + the door index.
             parts.extend(drones.doors.list.iter().enumerate().filter(|(_, x)| x.glist != 0)
                 .map(|(k, x)| (0x100_0000_0000 | k as u64, x.glist, x.matrix)));
+            // NOT injecting the intact breakable panes (level-03-interactables-3 tried it, bit 42 |
+            // placement, and REVERTED it): the injection stalls the 07000001 real-path walks —
+            // walkreal_07000001's "walk past the wedged lead" pinned at (5.45, 6.68, 11.60) with
+            // `segment_to_target` hitting ~0.13 in, escort_follow's contact parked at the door —
+            // the same stall the glass-breach lineage's naive re-injection saw and documented
+            // (master's glass_breach_live note). A collision-stopped body's net step is zero, so
+            // the class-2 drain (SqDist of the step [M 0x12bfd8:26-27]) never fires against the
+            // injected sheet and the pane never opens. Master's static bake + the documented
+            // deviation (a dead pane stays solid) stands until the contact is collision-pair-based
+            // like the game's obj+0xD0 list [M 0x12bfd8:15] — a live check can measure the game's
+            // pressed-body standoff at pane 136 to size the growth.
             // The SimpleScripts too (fix-party-mission item 7): the safe door (ch 136) and the doorway
             // bolt (ch 137) are solid at their posed matrix, like the doors. Id: bit 41 + the ss index.
             parts.extend(drones.sss.list.iter().enumerate().filter(|(_, x)| x.hash != 0)
@@ -17040,6 +17060,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
                 }
             }
+        }
+        if level_01 {
+            // level-03-interactables-3 TRIED Bond here (the player is a class-2 body; 703c's join)
+            // and REVERTED it: escort_follow_07000001 stalls with the join (the contact parks while
+            // Bond's joined pass smashes panes along the route — master passes the same walk at
+            // [M master escort_follow 7s, this branch 18-46s stall]); the pane kills' Sound_Play3D
+            // [M 0x12b970:69,75] reach the escorts' hearing. The join returns with the
+            // collision-pair contact (see script_parts' note) and a fresh escort comparison.
         }
         // The kill pieces tick once per frame: `UpdateAllShards` 0x12b808 (the game runs it in
         // the frame loop, paused-gated — the Sim has no pause) and `Debris_Update` 0x1aac00 in

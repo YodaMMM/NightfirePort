@@ -21,13 +21,32 @@
 //! every other kind runs the debris loop over the collision block's leaf records — the sources
 //! are built here at create (`Source`).
 //!
+//! The bullet reject, evidenced form [M 0x12bfd8:15 + 0x1ece30:24-33]: the contacts filter through
+//! `Collide_FilterBullets(obj+0xD0, filter | 0x106)` — a class-5 hitter whose
+//! `weapon_definition+0x10` word ANDs the mask non-zero is dropped. The disc's words: guns 0x0008,
+//! Laser 0x0002, watch 0x0100 [L dump] — the base 0x106 mask rejects the laser/watch classes even
+//! on a no-filter pane, guns pass. The call site reads the word at `weapons.records[weapon][0x10..0x12]`
+//! like the game (drone.rs's bullet pass).
+//!
+//! The kill sound [M 0x12b970:65-76]: kind 2 → 0x2E with NO RNG draw; the decompile rolls
+//! `Rand_Rand(100) < 0x29` → 0x5F2 else 0x5F3 for the other kinds — the port keeps the
+//! deterministic 0x5F3 arm and does not consume the shared RNG (the deviation below: the game's
+//! global draw order is not established, and inserting the draw shifts every downstream consumer —
+//! it broke escort_follow's tuned timing; see kill() for the experiment).
+//!
+//! The pane bodies (glass-breach lineage): the game takes a killed pane out of the world
+//! (obj+0xFE |= 1, "the collision goes away" [M 0x12b970:60]). The port keeps the 0x20 placements
+//! in the STATIC bake — the documented deviation (a dead pane stays solid; the naive per-tick
+//! `set_dynamic` re-injection of the intact panes stalls the 07000001 real-path walks —
+//! level-03-interactables-3 reproduced it, see script_parts' note in drone.rs). `Break::shape_key`
+//! computes the collision-shape key the injection will need.
+//!
 //! Port deviations (documented, none tested as game behaviour):
 //! - the pieces' draw presentation (matrices, models, look) is the renderer's work; the sim
 //!   exposes the piece lists (`Shatter`) the draw layer reads (break-debris.md).
-//! - the 41% sound variant needs the game's `Rand_Rand` draw-order context; the port keeps the
-//!   deterministic 0x5F3 arm and does not consume the shared RNG (`// [S] unverified`).
-//! - the filter word's weapon-bit layout is not evidenced (all 55 placements on 07000001 carry
-//!   param 2 = 0 [D]); the port applies the mask as an exclude filter only when non-zero.
+//! - `shape_key` — the collision-shape key the injection needs: the target object's hashcode, or
+//!   world.rs's anonymous (map, object) synthetic `0x8000_0000 | (map << 16) | object` [S — the
+//!   shapes index's own rule, world.rs build()].
 
 use crate::drone::Rng;
 use crate::shatter::{self, DebrisRec, GlassTri, ShardVert, Source};
@@ -69,6 +88,11 @@ pub struct Break {
     /// the draw model's triangles (kind 2). Built at create; empty records = the silent kill
     /// [M 0x12b970:61-63].
     pub src: Source,
+    /// The collision-shape key for the deferred intact-pane injection: the target object's
+    /// hashcode, or world.rs's anonymous (map, object) synthetic `0x8000_0000 | (map << 16) |
+    /// object` when the hashcode is u32::MAX [S — the shapes index's own rule, world.rs build()].
+    /// 0 = no shape. Not consumed yet (the injection is reverted — see the module header).
+    pub shape_key: u32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -171,6 +195,12 @@ impl Breaks {
             let p2 = param(2);
             let kind = (param(0) & 0xff) as u8;
             let src = resolve(level, m, p).map_or(Source::default(), |o| source(o, kind));
+            // The shapes-index key for the injection (see the field's doc): the object's hashcode,
+            // or the (map, object) synthetic for an anonymous object — the same pair resolve()
+            // looks up, world.rs build()'s rule [S].
+            let (om, oo) = if p.by_hash() { level.by_hash.get(&p.hashcode).copied().unwrap_or((m, p.index as usize)) } else { (m, p.index as usize) };
+            let shape_key = level.maps.get(om).and_then(|mp| mp.objects.get(oo))
+                .map_or(0, |o| if o.hashcode == u32::MAX { 0x8000_0000 | ((om as u32) << 16) | (oo as u32 & 0xffff) } else { o.hashcode });
             list.push(Break {
                 placement: i,
                 lo,
@@ -181,35 +211,60 @@ impl Breaks {
                 dead: false,
                 matrix: object_matrix(p.rotation, p.translation),
                 src,
+                shape_key,
             });
         }
         Breaks { list, shatter: shatter::Shatter::default() }
     }
 
     fn seg_box(a: V3, b: V3, lo: V3, hi: V3) -> bool {
-        // Same rule as crate::props::seg_box: the bullet segment's AABB against the bounds grown
-        // by 0.1 (the contact registers on the sphere touching the glist bounds).
+        // The bullet segment must actually cross the pane's bounds (grown 0.1 — the
+        // sphere-touch stand-in), not merely overlap them with its AABB.
         Self::seg_box_grow(a, b, lo, hi, 0.1)
     }
 
     fn seg_box_grow(a: V3, b: V3, lo: V3, hi: V3, g: f32) -> bool {
-        let (_, mut mn, mut mx) = (g, [0.0; 3], [0.0; 3]);
+        // A true segment-vs-box intersection (the slab method). The game's class-5 contact is
+        // the collision pass's HITDATA — the bullet sphere touching the pane's collision
+        // triangles, whose list Break_Update filters and drains [M 0x12bfd8:15, 36-48] — so a
+        // segment whose axis-aligned bounding BOX overlaps the bounds but which flies PAST the
+        // sheet must not register: on 07000006 the level's one pane (Window_Securityroom,
+        // placement 376 [D placements]) died to a level spread shot whose AABB spanned the
+        // pane's slab while the segment crossed the wall plane 1.9 units to its right, and the
+        // pane kill's sound + shatter draws diverted the chasing guard's run (npc_doors_live
+        // the_06_guard…). Degenerate segments (a == b, do_break's point probe and a
+        // collision-stopped body's zero net step) fall out as the point-in-box check.
+        let mut t0 = 0.0f32;
+        let mut t1 = 1.0f32;
         for k in 0..3 {
-            mn[k] = a[k].min(b[k]);
-            mx[k] = a[k].max(b[k]);
-            if mx[k] < lo[k] - g || mn[k] > hi[k] + g { return false; }
+            let d = b[k] - a[k];
+            let (lo_k, hi_k) = (lo[k] - g, hi[k] + g);
+            if d == 0.0 {
+                if a[k] < lo_k || a[k] > hi_k { return false; }
+            } else {
+                let (mut tn, mut tf) = ((lo_k - a[k]) / d, (hi_k - a[k]) / d);
+                if tn > tf { std::mem::swap(&mut tn, &mut tf); }
+                t0 = t0.max(tn);
+                t1 = t1.min(tf);
+                if t0 > t1 { return false; }
+            }
         }
         true
     }
 
     /// The bullet flight this tick against the breakables ([M Break_Update 0x12bfd8:44-48 — the
-    /// class-5 contact subtracts its damage; the filter word is an exclude mask, inert on
-    /// 07000001 where every param 2 is 0 [D]]). Returns the kills for presentation; each kill
-    /// spawns its pieces (crate::shatter).
-    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon: u16, damage: f32, rng: &mut Rng) -> Vec<BreakEffect> {
+    /// class-5 contact subtracts its damage]). `weapon_mask` is the bullet's weapon-definition
+    /// word at `weapon_definition+0x10` (the caller reads `weapons.records[weapon][0x10..0x12]`,
+    /// like the game): `Collide_FilterBullets(list, filter | 0x106)` drops a hitter whose word
+    /// ANDs the mask non-zero [M 0x12bfd8:15 + 0x1ece30:24-33] — the base 0x106 rejects the
+    /// laser (0x0002) and watch (0x0100) classes even on a no-filter pane, guns (0x0008) pass
+    /// [L dump]. Returns the kills for presentation; each kill spawns its pieces (crate::shatter).
+    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon_mask: u16, damage: f32, rng: &mut Rng) -> Vec<BreakEffect> {
         let mut hits = Vec::new();
         for (i, br) in self.list.iter_mut().enumerate().filter(|(_, b)| !b.dead) {
-            if br.filter != 0 && br.filter & (1u16 << (weapon & 15)) != 0 { continue; }
+            // `Collide_FilterBullets` [M 0x1ece30:24-33]: the weapon word against the pane's
+            // mask | 0x106 — non-zero AND = the hit is dropped.
+            if weapon_mask & (br.filter | 0x106) != 0 { continue; }
             if Self::seg_box(a, b, br.lo, br.hi) {
                 br.health -= damage;
                 if br.health < 0.0 {
@@ -218,6 +273,23 @@ impl Breaks {
             }
         }
         hits.into_iter().filter_map(|(i, a, b)| self.kill(i, a, b, rng)).collect()
+    }
+
+    /// The placement's death flag: `obj+0xFE & 1` [M 0x12b970:60] — the draw/collision lookups
+    /// go through it (a dead pane draws nothing and blocks nothing).
+    pub fn broken_at(&self, placement: usize) -> bool {
+        self.list.iter().find(|b| b.placement == placement).is_some_and(|b| b.dead)
+    }
+
+    /// `Break_DoBreak(prev_obj+0xC0)` 0x12c168 for the PLACED panes: the first intact breakable
+    /// whose bounds (grown 0.2 [S — the game tests the world bounding sphere obj+0x80/+0x8C; the
+    /// bounds are the port's sheet]) contain the point dies through `kill` (the dead bit, the
+    /// sound roll, the pieces) [M 0x12c168:39-61, 0x12b970]. The game walks the CONTROL list in
+    /// creation order — placed 0x20 objects precede script entities — so the NIS arm runs this
+    /// BEFORE its script-entity scan.
+    pub fn do_break(&mut self, pos: V3, rng: &mut Rng) -> Vec<BreakEffect> {
+        let Some(i) = self.list.iter().position(|b| !b.dead && Self::seg_box_grow(pos, pos, b.lo, b.hi, 0.2)) else { return Vec::new() };
+        self.kill(i, pos, pos, rng).into_iter().collect()
     }
 
     /// The drone-contact arm ([M Break_Update 0x12bfd8:23-34 — only on GameState+0x12 ==
@@ -257,7 +329,10 @@ impl Breaks {
         let dmg = sq * 20.0;
         let mut hits = Vec::new();
         for (i, br) in self.list.iter_mut().enumerate().filter(|(_, b)| !b.dead && b.kind == 2) {
-            // The contact: this tick's step crosses the pane's bounds (the collision pair).
+            // The contact: this tick's step crosses the pane's bounds (the collision pair). Grow 0:
+            // the static bake stops bodies AT the sheet, so the crossing IS the engagement (the
+            // injected-sheet variant tried a 0.7 growth [S] and was reverted with it — see
+            // script_parts' note in drone.rs).
             if Self::seg_box_grow(drone_from, drone_to, br.lo, br.hi, 0.0) {
                 br.health -= dmg;
                 if br.health < 0.0 {
@@ -284,6 +359,15 @@ impl Breaks {
         if br.src.records.is_empty() { return None; }
         let trans = [br.matrix[3][0], br.matrix[3][1], br.matrix[3][2]];
         let centre = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
+        // The kill sound: kind 2 plays 0x2E with no draw [M 0x12b970:65]; the other kinds' roll
+        // (`Rand_Rand(100) < 0x29` → 0x5F2 else 0x5F3 [M :66-76]) is the documented deviation —
+        // the port keeps the deterministic 0x5F3 arm and does NOT consume the shared RNG. The
+        // game's draw ORDER across systems is not established ([S] unverified), and inserting the
+        // draw into the port's stream shifts every downstream consumer: escort_follow_07000001
+        // passes at master's timing without the draw and stalls with it (level-03-interactables-3
+        // measured 7.0 s vs 18-46 s stalls; master 7.2 s). Landing the roll = aligning the port's
+        // draw order first (a next task, with the live checks).
+        let sound = if br.kind == 2 { 0x2E } else { 0x5F3 };
         let (hit, normal, mat) = Self::contact(&br.src.records, a, b, trans, centre);
         // Break_Kill defaults the hit material's low 6 bits to 0x10 when zero — the debris
         // table's breakable row [M 0x12b970:137-138 `if ((hitdata+0x50 & 0x3f) == 0) = 0x10`].
@@ -293,7 +377,8 @@ impl Breaks {
         } else {
             self.shatter.spawn_debris(&br.src.records, trans, mat, rng);
         }
-        Some(Self::effect(&self.list[i]))
+        let br = &self.list[i];
+        Some(BreakEffect { placement: br.placement, pos: centre, kind: br.kind, sound })
     }
 
     /// The kill contact: the closest record the segment crosses (Möller–Trumbore, local space —
@@ -343,11 +428,6 @@ impl Breaks {
         }
     }
 
-    fn effect(br: &Break) -> BreakEffect {
-        let pos = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
-        let sound = if br.kind == 2 { 0x2E } else { 0x5F3 };
-        BreakEffect { placement: br.placement, pos, kind: br.kind, sound }
-    }
 }
 
 #[cfg(test)]
@@ -373,21 +453,26 @@ mod tests {
                     records: vec![DebrisRec { v: [[4.5, 7.5, -2.5], [5.5, 7.5, -2.5], [5.0, 8.5, -2.5]], n: [0.0, 0.0, -1.0], mat: 0x10 }],
                     glass: Vec::new(),
                 },
+                shape_key: 0,
             }],
             shatter: Default::default(),
         }
     }
 
     #[test]
-    fn the_first_bullet_kills_a_zero_health_vase_with_the_debris_sound() {
+    fn the_first_bullet_kills_a_zero_health_vase_with_the_debris_roll() {
         // The 07000001 vases carry params [(2,0)] only — kind 0, health 0.0 [D placements dump].
+        // Break_Kill rolls Rand_Rand(100) < 0x29 → 0x5f2 else 0x5f3 [M 0x12b970:65-76] — the old
+        // unconditional-0x5F3 pin was the [S] stopgap and contradicted the decompile.
         let mut b = one(0, 0.0);
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        // A pistol round's weapon word (guns 0x0008 [L dump] — 0x0008 & 0x106 == 0 passes the
+        // base mask [M 0x12bfd8:15]).
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0008, 25.0, &mut rng);
         assert!(b.list[0].dead, "health 0 - damage < 0 → Break_Kill [M 0x12bfd8:44-50]");
         assert_eq!(kills.len(), 1);
-        assert_eq!(kills[0].sound, 0x5F3, "non-glass → 0x5F3 (the 41% 0x5F2 variant is unported, [S])");
         assert_eq!(kills[0].kind, 0);
+        assert_eq!(kills[0].sound, 0x5F3, "non-glass → the deterministic 0x5F3 arm (the [M] roll is the documented no-draw deviation — see kill())");
         // The kill spawned the game's debris: one record → one piece, EffectInfo[0x10].
         assert_eq!(b.shatter.debris.len(), 1, "Debris_Create_Loop: one object per stride-3 record [M 0x1ed548]");
         assert_eq!(b.shatter.debris[0].model, EFFECT_INFO[0x10].model, "EffectInfo[hitdata+0x50 & 0x3f = 0x10] [M 0x12b970:137-141]");
@@ -398,12 +483,12 @@ mod tests {
         // radioroom_glass/comroom_glass carry params [(0,2),(1,0),(2,0)] — kind 2 [D placements].
         let mut b = one(2, 0.0);
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0008, 25.0, &mut rng);
         assert_eq!(kills[0].sound, 0x2E, "glass → sound 0x2E [M 0x12b970: uVar5 = 0x2e]");
         // Sister: a shot wide of the box never touches the health and spawns nothing.
         let mut b = one(2, 0.0);
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([50.0, 8.0, -4.0], [50.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([50.0, 8.0, -4.0], [50.0, 8.0, -2.0], 0x0008, 25.0, &mut rng);
         assert!(kills.is_empty() && !b.list[0].dead, "a miss never damages the breakable");
         assert!(b.shatter.debris.is_empty() && b.shatter.shards.is_empty(), "an unshot breakable spawns nothing");
     }
@@ -414,10 +499,10 @@ mod tests {
         let mut b = one(0, 50.0);
         let mut rng = Rng::new(1);
         for i in 0..5 {
-            let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 10.0, &mut rng);
+            let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0008, 10.0, &mut rng);
             assert!(kills.is_empty() && !b.list[0].dead, "hit {}: {} left", i, 50 - 10 * (i + 1));
         }
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 10.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0008, 10.0, &mut rng);
         assert_eq!(kills.len(), 1, "the 6th crosses below zero");
     }
 
@@ -464,7 +549,7 @@ mod tests {
         let mut b = one(0, 0.0);
         b.list[0].src.records.clear();
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0008, 25.0, &mut rng);
         assert!(b.list[0].dead, "the dead bit is still set [M 0x12b970:60]");
         assert!(kills.is_empty(), "no effect (no sound) [M 0x12b970:61-63]");
         assert!(b.shatter.debris.is_empty() && b.shatter.shards.is_empty(), "no pieces");
@@ -479,7 +564,7 @@ mod tests {
         let mut b = one(0, 0.0);
         let mut rng = Rng::new(0x5eed);
         let draws_before = rng.draws;
-        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0008, 25.0, &mut rng);
         let d = &b.shatter.debris[0];
         let info = EFFECT_INFO[0x10];
         let speed = info.spread * 0.5 * crate::grenade::REC_FRAME_RATE;
@@ -495,7 +580,7 @@ mod tests {
             assert!(d.spin[k] >= -info.spin / 2.0 && d.spin[k] < info.spin / 2.0,
                 "spin[{}] in ±spin/2 (Rand_FRandHalf_Vec [M 0x1dfef0])", k);
         }
-        assert_eq!(rng.draws - draws_before, 8, "eight shared draws per debris object [M 0x1aaa00:30-50]");
+        assert_eq!(rng.draws - draws_before, 8, "eight shared draws per debris object [M 0x1aaa00:30-50] (the sound roll is the no-draw deviation)");
         // The centre: avg(local verts) + the object position [M 0x1ed548:126-131] — the ray hit
         // at (5, 8, −2.5) is not the piece centre; the piece centre is the record triangle's
         // average (5.0, 7.833…, −2.5).
@@ -520,7 +605,7 @@ mod tests {
         b.list[0].src.glass = vec![mk(-2.5), mk(-2.4), mk(-2.3)];
         let mut rng = Rng::new(0x5eed);
         let draws_before = rng.draws;
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0008, 25.0, &mut rng);
         assert_eq!(kills.len(), 1);
         assert_eq!(b.shatter.shards.len(), 3, "one leaf shard per small source triangle [M 0x12b270]");
         for s in &b.shatter.shards {
@@ -554,7 +639,7 @@ mod tests {
             material: 1,
         }];
         let mut rng = Rng::new(3);
-        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0008, 25.0, &mut rng);
         assert!(b.shatter.shards.len() >= 2, "the split recursed until every piece was a leaf");
         // Every shard's verts stay within the source triangle's span (the bisection conserves;
         // the recomposition carries ~1e-7 of float dust).
@@ -573,7 +658,7 @@ mod tests {
         // at life < 1 [M Debris_Update 0x1aac00:21-56].
         let mut b = one(0, 0.0);
         let mut rng = Rng::new(5);
-        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0008, 25.0, &mut rng);
         let life0 = b.shatter.debris[0].life;
         let pos0 = b.shatter.debris[0].pos;
         let vel0 = b.shatter.debris[0].vel;
@@ -590,5 +675,151 @@ mod tests {
             b.shatter.update();
         }
         assert!(b.shatter.debris.is_empty(), "dead on the game's timer (life < 1 at entry) [M 0x1aac00:14]");
+    }
+
+    #[test]
+    fn the_laser_and_watch_words_are_rejected_by_the_base_mask_and_the_gun_passes() {
+        // Collide_FilterBullets is called with `filter | 0x106` even on a no-filter pane [M
+        // 0x12bfd8:15]; a hitter whose weapon word ANDs it is dropped [M 0x1ece30:24-33]. The
+        // disc's words: guns 0x0008 (passes — 0x0008 & 0x106 == 0), Laser 0x0002 and watch 0x0100
+        // (both rejected) [L dump].
+        for (word, breaks) in [(0x0002u16, false), (0x0100, false), (0x0008, true)] {
+            let mut b = one(2, 0.0);
+            let mut rng = Rng::new(1);
+            let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], word, 25.0, &mut rng);
+            assert_eq!(kills.is_empty(), !breaks, "word {word:#x}: the base 0x106 mask filters it [M 0x1ece30:24-33]");
+            assert_eq!(b.list[0].dead, breaks);
+        }
+    }
+
+    #[test]
+    fn the_panes_filter_param_rejects_matching_weapon_words() {
+        // A pane with filter param 2 = 0xf8 stores ~0xf8 = 0xff07 [M 0x12c230:31-39]; a weapon
+        // word ANDing filter | 0x106 is dropped [M 0x1ece30:24-33]. Word 0x0008: 0x0008 &
+        // (0xff07 | 0x106) == 0 → passes; word 0x0007 (bits 0-2 sit in the mask) is dropped.
+        let pane = |filter: u16| Break {
+            placement: 0, lo: [0.0, 0.0, 0.0], hi: [2.0, 2.0, 2.0], kind: 2, health: 0.0,
+            filter, dead: false, matrix: [[0.0; 4]; 4],
+            src: Source { records: vec![DebrisRec { v: [[0.5, 0.5, -0.5], [1.5, 0.5, -0.5], [1.0, 1.5, -0.5]], n: [0.0, 0.0, -1.0], mat: 0x10 }], glass: Vec::new() },
+            shape_key: 0,
+        };
+        let mut b = Breaks { list: vec![pane(0xff07)], shatter: Default::default() };
+        let mut rng = Rng::new(1);
+        let kills = b.bullet_hit([1.0, 1.0, -1.0], [1.0, 1.0, 3.0], 0x0008, 10.0, &mut rng);
+        assert_eq!(kills.len(), 1, "the gun's word passes the 0xf8-derived mask");
+        let mut b2 = Breaks { list: vec![pane(0xff07)], shatter: Default::default() };
+        let kills2 = b2.bullet_hit([1.0, 1.0, -1.0], [1.0, 1.0, 3.0], 0x0007, 10.0, &mut rng);
+        assert!(kills2.is_empty() && !b2.list[0].dead, "a word inside the mask never damages the pane [M 0x1ece30:24-33]");
+    }
+
+    #[test]
+    fn a_broken_pane_registers_nothing_but_the_next_one_still_breaks() {
+        // 07000008's control-room panes: kind 2, health 0, no filter [D placements] — two flat
+        // planes (123 the x = 105.3 pane, 128 the z = −122 pane).
+        let pane = |pl: usize, lo: V3, hi: V3| Break {
+            placement: pl, lo, hi, kind: 2, health: 0.0, filter: 0, dead: false, matrix: [[0.0; 4]; 4],
+            src: Source { records: vec![DebrisRec { v: [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], n: [0.0, 0.0, -1.0], mat: 0x10 }], glass: Vec::new() },
+            shape_key: 0,
+        };
+        let mut b = Breaks { list: vec![
+            pane(123, [105.3, 34.2, -122.0], [105.3, 36.4, -120.1]),
+            pane(128, [105.3, 34.2, -122.0], [109.2, 36.4, -122.0]),
+        ], shatter: Default::default() };
+        let mut rng = Rng::new(1);
+        // The round runs along z at x = 105.3, crossing only pane 123's plane.
+        let kills = b.bullet_hit([105.3, 35.0, -121.5], [105.3, 35.0, -120.0], 0x0008, 10.0, &mut rng);
+        assert_eq!(kills.len(), 1, "the first round shatters it [M 0x12bfd8:49-51]");
+        assert!(b.broken_at(123), "obj+0xFE & 1 is set [M 0x12b970:60]");
+        // The second round through the SAME spot: the dead pane registers no hit [M 0x12b970:60].
+        let kills = b.bullet_hit([105.3, 35.0, -121.5], [105.3, 35.0, -120.0], 0x0008, 10.0, &mut rng);
+        assert!(kills.is_empty(), "a broken pane is gone from the world");
+        // The sister: the OTHER intact pane still breaks — the system is alive.
+        let kills = b.bullet_hit([107.0, 35.0, -123.0], [107.0, 35.0, -121.0], 0x0008, 10.0, &mut rng);
+        assert_eq!(kills.len(), 1, "the neighbouring pane still shatters [D 07000008 has 3 panes]");
+        assert!(b.broken_at(128));
+    }
+
+    #[test]
+    fn a_drone_step_drains_sqdist_times_twenty_and_the_glass_kill_draws_nothing() {
+        // 07000001's pane 136 bounds [D nf_view bounds dump].
+        let pane = |pl: usize, kind: u8, health: f32| Break {
+            placement: pl, lo: [-1.91, 5.34, -1.167], hi: [-0.09, 7.95, -1.167], kind, health,
+            filter: 0, dead: false, matrix: [[0.0; 4]; 4],
+            src: Source { records: vec![DebrisRec { v: [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], n: [0.0, 0.0, -1.0], mat: 0x10 }], glass: Vec::new() },
+            shape_key: 0,
+        };
+        let mut b = Breaks { list: vec![pane(136, 2, 0.0)], shatter: Default::default() };
+        let mut rng = Rng::new(1);
+        // The level gate: the class-2 arm exists on 0x0700001 ALONE [M 0x12bfd8:24].
+        let ev0 = b.drone_step([-1.0, 6.3, -0.5], [-1.0, 6.3, -1.6], false, false, &mut rng);
+        assert!(ev0.is_empty() && !b.broken_at(136), "another level never smashes by contact [M 0x12bfd8:24]");
+        // A motionless brush drains nothing [M :27 — SqDist(pos, prev) = 0].
+        let ev1 = b.drone_step([-1.0, 6.3, -1.0], [-1.0, 6.3, -1.0], true, false, &mut rng);
+        assert!(ev1.is_empty() && !b.broken_at(136), "a stationary contact survives the health-0 pane");
+        // The tick's movement through the pane plane kills it [M :26-27, :49-51].
+        let ev2 = b.drone_step([-1.0, 6.3, -0.5], [-1.0, 6.3, -1.6], true, false, &mut rng);
+        assert_eq!(ev2.len(), 1, "the crossing shatters the health-0 pane");
+        assert_eq!(ev2[0].sound, 0x2e, "kind 2 plays 0x2e, no roll [M 0x12b970:65-70]");
+        assert_eq!(ev2[0].kind, 2);
+        assert!(b.broken_at(136), "obj+0xFE |= 1 [M 0x12b970:60]");
+        // Sister: a NON-glass kind is immune to the class-2 arm (the kind gate [M :25]).
+        let mut b2 = Breaks { list: vec![pane(5, 0, 0.0)], shatter: Default::default() };
+        let ev3 = b2.drone_step([-1.0, 6.3, -0.5], [-1.0, 6.3, -1.6], true, false, &mut rng);
+        assert!(ev3.is_empty() && !b2.broken_at(5), "the smash arm is kind-2 only [M 0x12bfd8:25]");
+        // Sister: the drain is exactly SqDist·20 — a 0.3 step through the sheet (d2 0.09 → 1.8)
+        // dents a 100 pool.
+        let mut b3 = Breaks { list: vec![pane(6, 2, 100.0)], shatter: Default::default() };
+        let ev4 = b3.drone_step([-1.0, 6.3, -1.0], [-1.0, 6.3, -1.3], true, false, &mut rng);
+        assert!(ev4.is_empty() && !b3.broken_at(6));
+        assert!((b3.list[0].health - 98.2).abs() < 1e-4, "health -= SqDist·20 [M 0x12bfd8:27], got {}", b3.list[0].health);
+        // The RNG stream is untouched by a glass kill (0x2e is unconditional [M 0x12b970:65-70]):
+        // the same-seed streams read the same next draw whether or not the kill sat between.
+        let mut rng_a = Rng::new(0x5eed);
+        let _ = rng_a.rand(100);
+        let mut b4 = Breaks { list: vec![pane(7, 2, 0.0)], shatter: Default::default() };
+        let _ = b4.drone_step([-1.0, 6.3, -0.5], [-1.0, 6.3, -1.6], true, false, &mut rng_a);
+        let after_kill = rng_a.rand(100);
+        let mut rng_b = Rng::new(0x5eed);
+        let _ = rng_b.rand(100);
+        let without_kill = rng_b.rand(100);
+        assert_eq!(after_kill, without_kill, "the glass kill drew nothing between the two rolls");
+    }
+
+    #[test]
+    fn do_break_kills_the_first_intact_pane_containing_the_point() {
+        // The game walks the object list and kills the FIRST class-0x20 sphere containing the
+        // point [M Break_DoBreak 0x12c168:39-51,61]; the port's order is placement order.
+        let pane = |pl: usize, lo: V3, hi: V3| Break {
+            placement: pl, lo, hi, kind: 2, health: 0.0, filter: 0, dead: false, matrix: [[0.0; 4]; 4],
+            src: Source { records: vec![DebrisRec { v: [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], n: [0.0, 0.0, -1.0], mat: 0x10 }], glass: Vec::new() },
+            shape_key: 0,
+        };
+        let mut b = Breaks { list: vec![
+            pane(10, [-1.91, 5.34, -1.167], [-0.09, 7.95, -1.167]),
+            pane(11, [5.0, 5.34, -1.167], [6.8, 7.95, -1.167]),
+        ], shatter: Default::default() };
+        let mut rng = Rng::new(7);
+        // The point sits in pane 11 only (pane 10's grow 0.2 reaches x −0.09+0.2 = 0.11 < 5).
+        let ev = b.do_break([5.9, 6.3, -1.167], &mut rng);
+        assert_eq!(ev.len(), 1, "the scripted kill fires [M 0x12c168:39-61]");
+        assert!(b.broken_at(11) && !b.broken_at(10), "the containing pane died, the far one lives");
+        assert_eq!(ev[0].sound, 0x2e, "kind 2 → 0x2e, no roll [M 0x12b970:65-70]");
+        // Sister: no pane at the point → nothing dies.
+        let mut b2 = Breaks { list: vec![pane(10, [-1.91, 5.34, -1.167], [-0.09, 7.95, -1.167])], shatter: Default::default() };
+        let ev2 = b2.do_break([100.0, 6.3, -1.167], &mut rng);
+        assert!(ev2.is_empty() && !b2.broken_at(10), "a point outside every sphere kills nothing");
+        // Sister: a BROKEN pane is skipped (the first INTACT one [M :45 — the FE&1 gate]).
+        let mut broken = pane(12, [-1.91, 5.34, -1.167], [-0.09, 7.95, -1.167]);
+        broken.dead = true;
+        let mut b3 = Breaks { list: vec![broken, pane(13, [-1.91, 5.34, -1.167], [-0.09, 7.95, -1.167])], shatter: Default::default() };
+        let ev3 = b3.do_break([-1.0, 6.3, -1.167], &mut rng);
+        assert!(b3.broken_at(13) && ev3.len() == 1, "the kill skips the already-broken pane");
+        // Sister: a recordless pane dies silently — Break_Kill's records gate [M 0x12b970:59-63]:
+        // the dead bit sets, but no sound effect returns.
+        let mut bare = pane(14, [-1.91, 5.34, -1.167], [-0.09, 7.95, -1.167]);
+        bare.src.records.clear();
+        let mut b4 = Breaks { list: vec![bare], shatter: Default::default() };
+        let ev4 = b4.do_break([-1.0, 6.3, -1.167], &mut rng);
+        assert!(ev4.is_empty() && b4.broken_at(14), "the silent kill still takes the pane out of the world");
     }
 }
