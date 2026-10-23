@@ -98,3 +98,29 @@ Progress:
   suite from s/enemy-mission-kind8, freed disk (target examples/debug, scratch probes), fetched
   origin, created this branch from origin/master, restored docs/WORKLOG.md from
   s/enemy-mission-kind8 (WORKLOG is not on master yet).
+
+### level-12-hack-computer-2 (continued, 19:40-20:15 UTC)
+
+- The blocker was STALE: the ignore message blamed the look-cursor chase, but the E pick reads
+  `bond.look()` (the raw view) — the teleported ring run today passed the ch 0x34 write on the
+  first try. What actually failed was the test's own assert: it expected the SP `activated`
+  latch (+0x2c), which only `SP_Activate` 0x1dc338's E-entity route sets. The decompile chain
+  for the channel route: `PCQWorm_Update` 0x1aee20 writes ch 0x34; `SP_Hit` 0x1dc470:11-13
+  returns the out-channel read as trigger bit 0 (mask 0x1 [D param 5]); `SP_Update` 0x1dbda8
+  case 6 (the mode-8 primed looping state, [M 0x1db9a8:81-86]) clears SCRIPTINFO+0x9c — the
+  held script (delay −1, the event-3 hold [M 0x1d94c0:98-117]) unpauses. Test fixed to pin the
+  unpause (+ state 6 stays, single script) with the held pre-state and a no-E sister.
+- The teleports replaced by the real walk: the proven tower2 legs + the door[19] doorway
+  stand-in, then new south-west legs (found with a navgrid probe over capsule-height rays:
+  east corridor x −5.75..3 z −6..−8.5, wing corridor x −9.5..−6.5 z −9..−18, the west pinch
+  x −20..−18.5 z −25..−26.5, the south channel x −16.25..−13.25 z −27..−30) to the stand spot
+  (−15.1, −30.9) r 0.2. Two measured misses fixed on the way: r 0.4 let the walker stop 0.32
+  short (pick dist 1.524 vs need 1.501 — the desk blocks the last 1.2 to the PC) and the aim
+  break needed the pitch term (the free-aim cursor absorbs the convergence tail; 0.1/0.15 rad
+  is far inside the pick's 36° slack at 2.2 units, from the [M] radii).
+- The test passes un-ignored (the file's other ignore — the doors proximity test — is the
+  earlier task's, untouched). Ran: interactables_07000012_live 8 pass, walkreal_07000012_live
+  1 pass, use_key_census_live 20 pass, nf_game lib 522 pass. The full 1249-binary suite does
+  not fit the window: background jobs are killed between tool calls in this sandbox (three
+  setsid/nohup attempts died within a minute), and the foreground chunks above are what fit.
+  No src code changed — the branch is master + this test file + docs.
