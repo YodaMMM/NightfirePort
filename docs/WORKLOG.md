@@ -19,3 +19,25 @@ Plan:
 Work log:
 - (18:22) branch created, WORKLOG started; repo/ISO/work/queue-worktree present from the previous
   session (disk 2.0 G free).
+- (18:30) reproduce: the ignored walk fails at ring leg 6 "down past the west door" — STUCK at
+  (−17.87, 1.18, 4.87) target (−17.5, 1.3, 2.5), grounded=false, floor_ny 1.00, cel 182,
+  floor_below ≈ 0.0000002, door#4 state 0x4 pos01 0.000 (open; the walker's use_door sees open and
+  never toggles — the ignore message's E-toggle premise is stale on this master).
+- (18:50) per-tick probe (scratch, removed): from t+16 a per-tick push (−0.0156, +0.0165, +0.0988)
+  cancels the walk's south-east press; y dithers 1.1336↔1.2019, grounded flips each few ticks
+  (pick_ref grows +0.016/tick). The contacts (named by replicating capsule_tri_contact per
+  triangle): thin 1.1-tall plates at z ≈ 4.5−4.6 spanning x −19.5..−17.5 (the stair stringer,
+  [D]) whose north face pushes +z, and a 0.734..0.838 step block at x −17.5..−16.59, z 4.43..4.79
+  ([D]) whose west face pushes −x; the below-B edge contacts add the +y lift.
+- (19:10) the band chain: Bond glides out of the lift at y 1.1336 over the y-0 office floor (the
+  walk-off glide — the band [M Player_FeetOnPoint 0x194188:106] holds while the floor is within
+  cc+0.1 = 1.1347 below), so his rest sits 0.0011 under the band's unhook edge. The corner lift
+  crosses the edge → grounded=false → gravity → fall → re-ground → infinite dither, z frozen, the
+  6000-tick cap. The game's own push tail [M Intersect_CylGeom 0x109da0 ~:412-470: v = q −
+  HITTEST+0x28 (the A arm), push = v/|v|·(+0x4c − |v|)] produces the SAME negative-magnitude
+  upward flip for below-span contacts — the lift is game-shaped; what the game does with it
+  (the handler-side clamp 0x1949a8:136-140, or the slide the real player makes) is the
+  un-pinned piece.
+- (19:31) the un-ignore is NOT achieved; root cause instrumented, live checks written into the
+  report. Baseline: the file's other 2 tests pass (the ring legs west_doorway_repro walks clean).
+  Finishing blocked — the next message continues from this branch.
