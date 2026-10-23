@@ -78,7 +78,11 @@ Baseline (same sandbox, master tree, 16:21-16:57 UTC): 4 FAILED disc/identity te
 slim-ISO golden misses, the task's documented exception) + 5 OOM CRASHes
 (mp_stress_explosives_live, mp_bots_moving_live, net_match_end_clients_live,
 walkreal_probe13, mp_online_failures — the box's 4 GB kills the 2.9 GB MP tests;
-environmental, present on master too).
+environmental, present on master too). The roll-tree run by 17:43 UTC (45 binaries in):
+`fix_0c_pylon_live` ×2 FAILED — the documented no-GPU pylon render class (417bc6a0e,
+559511469) — and `net_join_live` CRASH (the OOM class); no new failure class, and every
+breakable/escort/walk-related binary passed (the ones the suite had reached, plus the manual
+canary set above).
 
 ## What's left
 
