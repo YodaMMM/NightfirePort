@@ -335,58 +335,124 @@ fn the_monitor_enters_the_camera_view_on_e() {
         "the watched sensor belongs to the monitor's group [M 0x1b0058's param-6 match]");
 }
 
-/// The hack computer ("Computer to hack", 0x35, out ch 0x34 [D param 1]) starts the Q-Worm
-/// ScriptPlayer #1028 on E (its trigger channel [D param 6 = 0x34]), and the MultiplexSIn ANDs
-/// (#949 [0x34,0x42]→0x41, #953 [0x34,0x43]→0x44 [D]) stay off while their second inputs are low.
-/// Sister: no E — ch 0x34 stays off.
+/// The hack computer ("Computer to hack", 0x35, out ch 0x34 [D param 1]) starts the install on E:
+/// `PCQWorm_Activate` 0x1b0840 (param 2 ≠ 0 [D], state 0 → 1) and `PCQWorm_Update` 0x1aee20
+/// writes ch 0x34 one tick later. The channel is the Q-Worm ScriptPlayer's (#765, mode 8 loop,
+/// out 0x34 [D param 6], mask 0x1 [D param 5]) UNPAUSE trigger: `SP_Hit` 0x1dc470:11-13 returns
+/// bit 0 = the out-channel read, and `SP_Update` 0x1dbda8 case 6 (the primed looping state)
+/// clears SCRIPTINFO+0x9c — the held script (delay −1, the script's event-3 hold [M
+/// 0x1d94c0:98-117]) resumes. The `activated` latch (+0x2c) is NOT set by this route — the
+/// earlier draft asserted it and contradicted the decompile (that write lives only in
+/// `SP_Activate` 0x1dc338's E-entity route); the assert now pins the unpause. The MultiplexSIn
+/// ANDs (#949 [0x34,0x42]→0x41, #953 [0x34,0x43]→0x44 [D]) stay off while their second inputs
+/// are low. Sister: no E — ch 0x34 stays off and the script stays held.
 #[test]
-#[ignore = "the E pick geometry is right (the sphere fix below is unit-tested) but the port's look-cursor chase fights the test's aim writes; needs the cursor model — see the report's live checks"]
 fn the_hack_computer_starts_the_q_worm_sp() {
     let mut w = load();
     w.top_up_health = true;
     let sp = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.scripts.players.iter().position(|p| p.out == 0x34)
-            .expect("the Q-Worm ScriptPlayer (trigger ch 0x34) [D]")
+            .expect("the Q-Worm ScriptPlayer (out ch 0x34 [D param 6])")
     };
-    // The PC sits at (−16.88, 1.19, −32.15) [D placements dump]; the E pick is the 1.0-radius
-    // sphere at the view point [M Player_Activate 0x1a5170], so stand close and aim AT it.
-    let mut hacked = false;
+    // The pre-state: the mode-8 SP primed looping in state 6 with the script HELD (the event-3
+    // hold parks SCRIPTINFO+0x9c = −1 [M 0x1d94c0:98-117]) and ch 0x34 off.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = &sim.drones.scripts.players[sp];
+        assert_eq!(p.state, 6, "the mode-8 SP primes looping in state 6 [M 0x1db9a8:81-86]");
+        assert_eq!(p.info[p.cur].as_ref().expect("the Q-Worm script loads at create [M 0x1db9a8:81-86]").delay, -1,
+            "the Q-Worm script sits at the event-3 hold [M 0x1d94c0:98-117]");
+        assert!(!sim.drones.channels.on(0x34), "no install before the E [D]");
+    }
+    // The walk: the proven south legs (tower2.rs walk_12's leg 1), the door[19] doorway
+    // stand-in (tower2.rs leg 3's documented pincer — the walkreal report's live checks), then
+    // the south-west walk to the PC room (the navgrid probe: the east corridor x −5.75..3
+    // z −6..−8.5, the wing corridor x −9.5..−6.5 z −9..−18, the big room, the west pinch
+    // x −20..−18.5 z −25..−26.5, the south channel x −16.25..−13.25 z −27..−30).
+    w.walk_to(Wp::new(14.0, 1.1, 6.0).r(1.2), "the lobby south");
+    w.walk_to(Wp::new(10.0, 1.1, 2.0).r(1.2), "the floor south 2");
+    w.walk_to(Wp::new(9.3, 1.1, -0.6).r(1.0), "the keypad approach");
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [6.4, 1.03, -1.5];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(10);
+    w.walk_to(Wp::new(1.0, 1.1, 4.0).r(1.5), "the office floor north");
+    w.walk_to(Wp::new(2.0, 1.0, 1.0).r(1.5), "the floor east jog");
+    w.walk_to(Wp::new(1.0, 0.5, -3.0).r(1.5), "the floor east 2");
+    w.walk_to(Wp::new(0.5, 0.5, -6.5).r(1.5), "the east corridor");
+    w.walk_to(Wp::new(-5.0, 0.5, -7.8).r(1.5), "the corridor west");
+    w.walk_to(Wp::new(-8.0, 0.5, -10.5).r(1.5), "the wing corridor 1");
+    w.walk_to(Wp::new(-8.0, 0.5, -16.5).r(1.5), "the wing corridor 2");
+    w.walk_to(Wp::new(-9.0, 0.5, -19.4).r(1.5), "the corridor mouth");
+    w.walk_to(Wp::new(-14.0, 0.5, -20.8).r(1.5), "the west open");
+    w.walk_to(Wp::new(-16.0, 0.5, -23.0).r(1.5), "the sw room");
+    w.walk_to(Wp::new(-19.0, 0.5, -25.9).r(1.2), "the west pinch");
+    w.walk_to(Wp::new(-17.5, 0.5, -26.6).r(1.2), "the pinch exit");
+    w.walk_to(Wp::new(-15.8, 0.5, -27.5).r(1.2), "the south channel");
+    w.walk_to(Wp::new(-15.0, 1.1, -29.5).r(1.2), "the pc room north");
+    // The stand spot 2.2 north-east of the PC (−16.88, 1.19, −32.15 [D placements]): the desk
+    // cells block the last 1.2 (the navgrid probe), but the pick reaches from here — the 1.0
+    // sphere at head + view [M Player_Activate 0x1a5170:100-108] vs the posed PC sphere
+    // (obj+0x80/0x8C, r 0.5 [M Control_BuildWorldSph 0x133070]): pick centre 1.18 ≤ 1.5.
+    w.walk_to(Wp::new(-15.1, 1.12, -30.9).r(0.2), "the pc stand spot");
+    // Aim through the real turn/look path. The port's aim-box cursor absorbs small inputs until
+    // pinned (the free-aim cursor model, the pad's Player_Aiming 0x1a1d28 shape), so the view
+    // converges to ~one tick's turn of the target; the pick's angular slack at 1.9 units
+    // (θ ≤ 57° for the r-1.5 reach) covers the remainder by arithmetic on the [M] numbers.
     let pc_pos = {
         let sim = w.scene.sim.as_ref().unwrap();
         let pc = &sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x34).expect("the hack PC");
         eprintln!("[pc] pos {:?} r {}", pc.pos, pc.radius);
         pc.pos
     };
-    'outer: for ring in [0.9f32, 1.3, 1.8] {
-        for k in 0..8 {
-            let a = k as f32 * std::f32::consts::FRAC_PI_4;
-            {
-                let sim = w.scene.sim.as_mut().unwrap();
-                sim.bond.pos = [pc_pos[0] + ring * a.cos(), 0.9, pc_pos[2] + ring * a.sin()];
-                sim.bond.yaw = (pc_pos[0] - sim.bond.pos[0]).atan2(pc_pos[2] - sim.bond.pos[2]);
-                sim.bond.pitch = 0.0;
-                sim.bond.vel = [0.0; 3];
-            }
-            w.wait(4);
-            for _ in 0..25 {
-                let (input, _) = aim_input(&w, pc_pos);
-                w.tick(input, true);
-                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x34) { hacked = true; break 'outer; }
-            }
-        }
+    let mut aimed = false;
+    for _ in 0..600 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let eye = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
+        let desired = (pc_pos[0] - bp[0]).atan2(pc_pos[2] - bp[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let want_pitch = ((pc_pos[1] - eye) / walker::dxz(bp, pc_pos).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+        let perr = want_pitch - sim.bond.pitch;
+        let (input, _) = aim_input(&w, pc_pos);
+        w.tick(input, false);
+        // The cursor absorbs the tail of the convergence (the view stops when it un-pins), so
+        // the reachable residual is ~one input tick; 0.1/0.15 rad is far inside the pick's
+        // angular slack at 2.2 units (θ ≤ 36° for the 1.5 reach, from the [M] radii).
+        if err.abs() < 0.1 && perr.abs() < 0.15 { aimed = true; break; }
     }
-    assert!(hacked, "E at the hack computer writes ch 0x34 [D param 1]");
-    let sim = w.scene.sim.as_ref().unwrap();
-    assert!(sim.drones.scripts.players[sp].activated,
-        "the Q-Worm SP activates on the channel [M SP_Activate 0x1dc338]");
-    assert!(!sim.drones.channels.on(0x41) && !sim.drones.channels.on(0x44),
-        "the ANDs stay off while 0x42/0x43 are low [D #949/#953]");
-    // Sister: no E.
+    assert!(aimed, "the walk-real aim converges on the PC [M Player_Aiming 0x1a1d28's shape]");
+    // E: pulse the use key through the real edge (Input_Action's fresh-press bit [M 0x17f208]).
+    let mut hacked = false;
+    for _ in 0..8 {
+        w.tick(nf_game::player::Input::default(), true);
+        for _ in 0..6 { w.tick(nf_game::player::Input::default(), false); }
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x34) { hacked = true; break; }
+    }
+    assert!(hacked, "E at the hack computer writes ch 0x34 [D param 1; M PCQWorm_Update 0x1aee20]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = &sim.drones.scripts.players[sp];
+        assert_eq!(p.info[p.cur].as_ref().expect("loaded").delay, 0,
+            "the channel trigger unpauses the held script [M SP_Update 0x1dbda8 case 6; SP_Hit 0x1dc470:11-13]");
+        assert_eq!(p.state, 6,
+            "a single-script SP stays in state 6 (no reload route) [M 0x1dbda8 case 6]");
+        assert!(!sim.drones.channels.on(0x41) && !sim.drones.channels.on(0x44),
+            "the ANDs stay off while 0x42/0x43 are low [D #949/#953]");
+    }
+    // Sister: no E — the channel stays off and the script stays held.
     let mut w = load();
     for _ in 0..30 { w.tick(nf_game::player::Input::default(), false); }
-    let sim = w.scene.sim.as_ref().unwrap();
-    assert!(!sim.drones.channels.on(0x34), "no E, no ch 0x34 [D]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x34), "no E, no ch 0x34 [D]");
+        let p = &sim.drones.scripts.players[sp];
+        assert_eq!(p.info[p.cur].as_ref().expect("loaded").delay, -1,
+            "no E, the Q-Worm script stays held [M 0x1d94c0:98-117's hold]");
+    }
 }
 
 /// The pickups: walking over the Rlaunch ("oPickUp_Rlaunch", item 0x2e [D param 1] — the AT-600
