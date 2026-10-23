@@ -180,3 +180,15 @@ un-ignore with a sister that can fail. Real input only via step_bond.
   0f, fix_finale_live 4p, walk_0700001b_live 2p, simplescript_live 1p, nf-game lib 522p. The
   background suite.py died in the first minute (cargo off PATH in the nohup env — the prior
   task hit the same wall); foreground chunks are what fit the window.
+
+## level-1b-drake-3
+Started 2026-10-23 22:15 UTC. Branch s/level-1b-drake-3 = origin/master 8b101249d + s/level-1b-drake-2 cf56f98b9.
+Task: 0700001b — decide the wall at x 4.43 (triangles, owners, flags, capsule admission [M
+Collide_Intersect]); map the shaft mouths z ±8.82 and the SP#141/#142 route; the landing, the
+fight, the defeat on real input only; un-ignore the walk and the interactables tests with sisters.
+Plan:
+1. Merge drake-2 into a fresh master branch (done — master's drake-fight merge taken for the
+   shared test files; drake-2's probe1b_float superset kept).
+2. Wall triangles at x 4.43, z -8..0: owning object + flags; capsule admission per [M].
+3. Shaft mouths at z ±8.82; SP#141/#142 entry route.
+4. Un-ignore walk + interactables with sisters; run the touched crates; full suite.py.
