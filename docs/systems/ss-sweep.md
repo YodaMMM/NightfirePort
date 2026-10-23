@@ -3,8 +3,8 @@
 Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] decomp / disassembly read here, [D] disc bytes, [L] EE snapshots,
 [S] suggested. Port: `crates/nf-game/src/ss.rs` (`SsList::create` / `SsList::tick` / `Ss::sweep`). The
 struct is the SIMPLESCRIPT the 0xE2 placements carry; `SS_Create` 0x1a9c58 builds it, `SS_Update` 0x1a9948
-ticks it, `SS_Operate` 0x1a9df8 is its trigger test. Task 787 (winch-sweep-0c): the render check of the
-level-0c-complete (712b) build saw a shot winch stall at one step (t = 0.04, state 0x40, 120 ticks) —
+ticks it, `SS_Operate` 0x1a9df8 is its trigger test. A render check of the
+0c build saw a shot winch stall at one step (t = 0.04, state 0x40, 120 ticks) —
 this doc is the semantics that answer it, and the port's current shape.
 
 ## The field map [M SS_Create 0x1a9c58]
@@ -39,7 +39,7 @@ and `switch_channels[ch]` ≠ 0 [M :47-51]).
   `t += step` (× `FRAME_RATE_MUL` = 1.0 at 60 Hz [M GS_SetRefreshRate 0x17d2b8:15; the 2-key case adds
   the step alone — identical at 1.0 [M :103-108]).
 * **1 (playing)**: the shared body every tick — **no operate needed** [M :92-129]. The sweep runs to the
-  wrap on its own. This is the answer to task 787's question: **one contact starts the full sweep** —
+  wrap on its own. This is the answer: **one contact starts the full sweep** —
   state change, play to the end key, then the wrap.
 * **8 (looping)**: pose, advance, wrap `t` to 0 past the end key, stay 8 [M :48-71].
 * **other**: nothing.
@@ -83,7 +83,7 @@ write [M 0x1a9948:18-23]; ch 0 is a real channel (fix-0c-vent2). The winch sweep
 the end pose held after the wrap, the disc params above — is pinned by
 `crates/nf-view/tests/fix_ss_operate_0c_live.rs` through the real fire path.
 
-## Live checks for the main agent
+## Live checks (open)
 
 - PCSX2, 0700000c, the storage balcony (winch #351 at (5.92, 14.50, −115.90), object
   `obj_stor1_pully02`): shoot the pulley once — the pulley should sweep over ~75 ticks (1.25 s) along

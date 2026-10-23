@@ -1,10 +1,9 @@
 # The codename session and the window wiring (profile-session / create-save)
 
-The user, 2026-10-16: "you wont let me create a save" — Select Codename → New Codename should
+Symptom (2026-10-16): a save could not be created. Select Codename → New Codename should
 open the name entry, take a name, save it to the port's memory card (the profile files), and
 offer it on the next boot; finishing a mission under it saves progress. The front end's own
-flow is complete and tested (docs/systems/codename-entry.md, docs/systems/memcard-save-flow.md,
-docs/reports/fix-save-profile.md). What was missing is the WINDOW layer: `crates/nf-view/src/lib.rs`
+flow is complete and tested (docs/systems/codename-entry.md, docs/systems/memcard-save-flow.md). What was missing is the WINDOW layer: `crates/nf-view/src/lib.rs`
 never wired the card, so every flow that needs it failed silently in the real game window while
 every headless test (which calls `set_profile_dir` itself) passed.
 
@@ -23,7 +22,7 @@ slot and play-without-saving never prompt) [M P_NFRESULTS_Handler 0x208e78:30/19
 medal line's `sprintf(&medal_buffer_271, …, 0x2e1ae8)` [M :145-152]. The game's menu manager is
 created and deleted around every page change and level load (MenuManager_Create/Delete), but
 these globals stand — the session outlives every manager exactly like the music statics
-`DAT_002e1b11` / `MusicMasterVolume` (docs/reports + frontend-music, menu-audio-state).
+`DAT_002e1b11` / `MusicMasterVolume` (docs/systems/frontend-music.md).
 
 The port models one manager as `FrontEnd`, so the session must ride the App across every
 `FrontEnd` create/drop the window does (boot, the gameplay pause's `get_or_insert_with`, the
@@ -33,18 +32,17 @@ as `stash_music_statics`/`inherit_music_statics` [M lib.rs, the menu-audio-state
 ## The port's memory card [M + S]
 
 `nf_game::profile` stores one IFF chain per codename at `<dir>/<codename>.profile`
-[docs/reports/fix-save-profile.md; the chain PLRS/MSSN/MPSG/GSET/CHET/BNUS [L ee_start
+[the chain PLRS/MSSN/MPSG/GSET/CHET/BNUS [L ee_start
 InBufData 0x3416e0]]. The card's directory is the port's stand-in for the PS2 memory card:
 `settings::config_dir()` — `%APPDATA%\NightfirePort` on Windows, `XDG_CONFIG_HOME|~/.config +
-/NightfirePort` elsewhere, `NF_CONFIG_DIR` overriding for the tests [S settings.rs; the task's
-named stand-in path]. The options file `settings.toml` already lives there (settings-persist),
+/NightfirePort` elsewhere, `NF_CONFIG_DIR` overriding for the tests [S settings.rs]. The options file `settings.toml` already lives there (settings-persist),
 so the card and the settings share the one directory.
 
 Boot enumeration is `Menu_EnumSaves` 0x1f7b78's walk [M]; the port does it in
 `FrontEnd::set_profile_dir` → `reload_profiles` (the row order 0 "New Codename", 1 "Default",
 2+ the card's names [M Menu_PutCodenamesIntoControl 0x1f79c0]).
 
-## The three window breaks this task fixes
+## The three window breaks (fixed)
 
 1. **No card at boot.** `run()`'s front-end boot built `FrontEnd::new()` and loaded the option
    file but never called `set_profile_dir` — `profile_dir` stayed `None`, so on the name page
@@ -56,7 +54,7 @@ Boot enumeration is `Menu_EnumSaves` 0x1f7b78's walk [M]; the port does it in
 2. **Typed letters never reached the name grid.** The window's menu key branch mapped only
    `key_action`'s keys (arrows/WASD, Enter/Space, Esc/Backspace, Tab/E); the MP join/host pages
    had their own typing branches, the name page had none — `cn_type_char` had no caller outside
-   tests, so the user could not enter a name from the PC keyboard. The game's own path sends
+   tests, so a name could not be typed from the PC keyboard. The game's own path sends
    every key through the grid control's msg 0x4b [M C_KEYBOARD 0x213a98:15-85], so the port's
    window branch maps a typed character to the same cell press (`cn_press(cell = the byte)`)
    and Backspace to cell 1000 [M :39-42], which keeps `del_when_keypressed`'s first-press clear

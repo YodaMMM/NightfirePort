@@ -65,7 +65,7 @@ puts the `+0x6C & 0x400` + `+0xB4` family into view state 0xb at 1.5×, case 0xb
 fire script to END, and case 0xc's release check [M 0x1a2e38:505-519, disasm 0x1a3268-0x1a32c4]
 compares the +0xB4 script's playhead (starts 1.0, +1.0/tick [M AnimScriptInit 0x1c1600:37,
 AnimScriptTick 0x1c2630]) against `+0x44` — the frag releases at press+71, not press+17 (the
-full audit: docs/reports/frag-throw-timing.md). The pop lands 210 ticks after the release, and
+full audit in the WORKLOG). The pop lands 210 ticks after the release, and
 with the later release the grenade can still be rolling at the pop — anything reconstructing
 the blast from a previously sampled position drifts.
 

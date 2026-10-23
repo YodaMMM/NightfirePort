@@ -1,8 +1,7 @@
-# Break kill pieces — glass shards and debris (playtest 1017-1139)
+# Break kill pieces — glass shards and debris
 
-What a killed 0x20 breakable spawns. The user report: "it disappears, but shouldn't it like
-break and shatter into like smaller pieces?" — origin/master removed the killed pane from the
-draw (`obj+0xFE` bit 0) and spawned nothing. This is the sim-side piece list the draw layer
+What a killed 0x20 breakable spawns. The port used to remove the killed pane from the
+draw (`obj+0xFE` bit 0) and spawn nothing; the game shatters it into pieces. This is the sim-side piece list the draw layer
 renders each tick: `crates/nf-game/src/shatter.rs` (`Shatter`), fed by `crate::breakable`'s
 kill path. See also `docs/systems/breakables.md` (the damage/kill rules — unchanged here).
 
@@ -130,7 +129,7 @@ Per-tick `Debris_Update` 0x1aac00: `INFO+0x30 < 1` → dead (`obj+0xFE |= 1`); e
 ticks), `INFO+0x30 −= 1`, `pos += vel`, `vel += WldGravity · REC_FRAME_RATE²` (the `obj+0xF4`
 gate is clear at create), `rot += spin` [M 0x1aac00:12-56]. The drawn rotation accumulates
 `spin` per tick on `obj+0x50`; the fade byte is exposed as-is (no draw-side alpha read found
-for class-0x10 objects — the main agent's render check owns the look).
+for class-0x10 objects — the look needs a render check).
 
 ## Port shape
 
@@ -147,7 +146,7 @@ for class-0x10 objects — the main agent's render check owns the look).
   pass's direct edit all route through it); `bullet_hit`/`drone_step` grew the `rng` param.
 - The 41% sound roll still consumes no draw (the documented breakables.md deviation).
 
-## Live checks for the main agent
+## Live checks (open)
 
 - A shot 07000001 vase: the debris count equals Σ over its collision leaves of
   `ceil((end−start)/3)` [M stride 3], each piece's model hash 0x0200012d, and the launch

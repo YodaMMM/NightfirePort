@@ -31,7 +31,7 @@ carries no text call at all [M — the decompile has no `Txt_BindLabel`/`Text_Ad
 5. `DOORINFO+0x68 = 0` — the lock channel field is cleared: the door is unlocked **for good**;
 6. busy marker set (`+0x70 |= 0x10`) [M decompile lines 105-107].
 
-Order proven by the decompile; the port's `Doors::update` already did steps 4-6 (the rising-edge unlock) — this task
+Order proven by the decompile; the port's `Doors::update` already did steps 4-6 (the rising-edge unlock); the port
 adds the message raise (step 2-3) before `activate`.
 
 ## Site 2 — 0x200000b "Press Action to open door": the aim ray in `Check_Target` 0x1a7810
@@ -67,7 +67,7 @@ So the hint ("Press Action to open door") shows once per door, max 3 per boot, w
 at a closed door they can open. A locked (lock channel down) door raises **nothing** — the locked feedback is
 `Door_Activate`'s hit sound only [M 0x135be0 LAB_00135cf8].
 
-## Sibling (context, not this task)
+## Sibling (context)
 
 The same ray's class-0x1d trigger arm shows label **0x2000009** (also "Press Action to open door") for a type-10
 trigger within 5 units when `Trigger_Locked(obj) == 0`, under the 20-tick `LoadMsg` (0x30cd08) cooldown and level
@@ -91,7 +91,7 @@ trigger within 5 units when `Trigger_Locked(obj) == 0`, under the 20-tick `LoadM
   survives level loads (it is .sdata, never reset); the port's Sim is per level, so it resets with the level — the
   per-boot cap of 3 within one level is preserved.]
 - The labels ride the existing type-1 INFO pipeline: `info_labels` → bound in `hud_tick` → `info_msgs` → the INFO
-  pane (`hud.rs`). The main agent's draw code needs nothing new — the pane already draws `info_msgs`.
+  pane (`hud.rs`). The draw code needs nothing new — the pane already draws `info_msgs`.
 
 ## Tests (`crates/nf-view/tests/door_text_labels_live.rs`)
 

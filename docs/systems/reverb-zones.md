@@ -8,7 +8,7 @@ system (rain drops, wind, breath — `Env_Update` 0x17bc88, `Env_Create` 0x17b96
 to do with this system; the sound path is `Sound_UpdateListeners` → the SFX.IRX environment block.
 
 Port status: **ported** (fix-room-sound landed the cel parse + the per-frame send; the IOP side
-landed with WORKLOG 0075; this task adds the systems doc, the per-level [D] census and the
+landed with WORKLOG 0075; this page adds the systems doc, the per-level [D] census and the
 position-pinned zone tests on the indoor/outdoor pair 07000006/07000005).
 
 ## 1. The level data: which placements carry a reverb value
@@ -149,7 +149,7 @@ fraction), `Driver::environment()` (test accessor for the targets), run per fram
 - `crates/nf-view/tests/fix_room_sound_live.rs` (fix-room-sound): the 07000005 parse pin (19 room
   cels, 15 × env 0 dry / 4 × env 40 underwater [L ee_start_05.bin]) and one end-to-end
   teleport into an env-40 cel.
-- `crates/nf-view/tests/reverb_zones_live.rs` (this task): position-pinned zones on the
+- `crates/nf-view/tests/reverb_zones_live.rs`: position-pinned zones on the
   **indoor/outdoor pair** — 07000005 (the castle approach, outdoor: the spawn yard is env 0 dry,
   small interior pockets env 40) and 07000006 (the castle interior, indoor: spawn hall env 50,
   cellar pockets env 90, side rooms 30/70) — each through the real `sound_tick` path with sister

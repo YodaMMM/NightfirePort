@@ -3,8 +3,8 @@
 The codename wheel's row 1 ("Controls" — the wheel's label 0x1f3 [L ee_snapshot wheel table
 0x2dfc28 row 1; the same id is the page's header label 499 [L the page dump]) opens
 **P_CNCONTROLS 0x40000022** [M C_SBCNOPTIONS_Handler 0x213528:38-39 — case 1 → 0x40000022 →
-`Manager_SendMessage(0x44, page)`]. The port had no model for it; this adds the data, the flow and
-the getters (the main agent draws).
+`Manager_SendMessage(0x44, page)`]. The port had no model for it; this adds the data, the flow,
+the getters and the draw.
 
 ## The page's data
 
@@ -28,7 +28,7 @@ the decompile under `work/decomp/ACTION.ELF/`.
   `PlayerSetting+0x0 == 0`, else `Txt_BindLabel(0x206)` ("Inverted") [M 0x213cd0:31-38] — the same
   label pair the pause options' inversion row uses [M 0x203c28:80-93].
 - **Header 499 (0x1f3), hint 1175 (0x497)** [L the dump, controls 39/43]. The pad diagram is the
-  page's line-art controls (0x10000061, tex 50331714) [L]; the drawing is the main agent's.
+  page's line-art controls (0x10000061, tex 50331714) [L].
 
 ## The settings behind the page
 

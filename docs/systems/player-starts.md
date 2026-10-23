@@ -1,6 +1,6 @@
 # Player starts — the registration and `Player_Start`'s pick
 
-*Task start-slot-0x2d, 2026-10-17. Evidence tags: [M] decompile/disassembly (ACTION.ELF), [D] disc
+*2026-10-17. Evidence tags: [M] decompile/disassembly (ACTION.ELF), [D] disc
 bytes read through the port's parsers, [S] suggested.*
 
 ## The two sets and their kinds
@@ -37,7 +37,7 @@ two passes over the records in registration order (= placement order, 0x195c00 a
    0x1910c4 `sw zero, 0x50`].
 
 **Kind-0 records never win either pass** [M both loops `bne v0, 1`]. The 0x2D set is written and
-then read by nothing in the on-foot runtime — the task-709 census speculation that Bond "may spawn
+then read by nothing in the on-foot runtime — the script census's speculation that Bond "may spawn
 at the wrong start" on levels shipping both sets is refuted by the kind check: the port's 0x24-only
 pick already matched the game's outcome; what the port lacked was the second set's registration
 (the census gap). MP matches do not use `player_start` at all — `MP_Start` 0x183a50 spawns humans
@@ -53,7 +53,7 @@ map has at least one kind-1 start [D].
 
 - Every archive's kind-0 shell map carries a dummy pair, 0x24 (0,0,0) and 0x2D (0,0,0) — the
   main-map parse never reads them (above), and the port's `level_starts` reads the main map only
-  (the pinned convention behind the spawn playtests).
+  (the pinned convention behind the spawn checks).
 - Main maps: **38 kind-1** starts and **18 kind-0** starts across the disc's 07* archives
   (the census's 51 = 18 main-map + 33 shell-map dummies).
 - 07000007: two 0x24 (33.40,44.50,−70.63 gate 0; 115.56,44.50,−88.17 gate 0) then four 0x2D in the
@@ -80,18 +80,18 @@ map has at least one kind-1 start [D].
 - `crates/nf-view/tests/start_slot_0x2d_live.rs` (ISO-gated): the disc sweep totals + the
   07000007/0b/0c layouts + the real-path loads (0700000b spawns at the kind-1 start despite the
   leading 0x2D; 07000007 spawns at the party plate #0 with the second set registered).
-- Fail-first proof (2026-10-17): with the 0x2D arm disabled (the pre-task 0x24-only behaviour),
+- Fail-first proof (2026-10-17): with the 0x2D arm disabled (the earlier 0x24-only behaviour),
   `registration_maps_0x24_to_kind_1_and_0x2d_to_kind_0` fails (2 registered vs 3) and
   `disc_sweep_registers_both_sets_with_the_game_kinds` fails on 07000007 ((2,0) vs (2,4)); the two
   load-path sisters keep passing (the spawn outcome was already kind-1-correct). Restored → 8/8.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **07000007 cold-boot spawn** (no measurement exists in docs/live): PCSX2, FRESH boot
    (a save-state resume skips the boot path), select the party level and read Bond's BLData
    position (the trans at BLData+0x0-ish — the same address fieldprobe reads for Bond). Expect
    ≈ (33.4, 44.5, −70.6) facing yaw ≈ 1.57 — the kind-1 plate #0 [D placements; M 0x190fd0]. If
    the game instead stands Bond at (52.1, 44.5, −50.7) or any of the four 0x2D spots, the kind
-   semantics above are wrong and this task's pick must flip.
+   semantics above are wrong and the pick must flip.
 2. **0700000b cold-boot spawn**: expect ≈ (28.9, 13.3, 28.7) — NOT (9.9, 48.5, 21.5), the 0x2D
    that precedes it in parse order [D placements]. Same decision rule.

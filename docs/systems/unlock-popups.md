@@ -1,15 +1,15 @@
 # The unlock pages after a mission's results (007 Bonus / win / cheat-medal)
 
-unlock-popups (2026-10-15, branch `s/unlock-popups`). [M] = decompile read in this task
+2026-10-15. [M] = decompile read for this page
 (`work/decomp/ACTION.ELF/<addr>_<name>.c`, line numbers refer to those files), [L] = a dump made
-in this task, [S] = suggested. The port side is `crates/nf-view/src/menu.rs` (the `Page::NfBonus`
+for it, [S] = suggested. The port side is `crates/nf-view/src/menu.rs` (the `Page::NfBonus`
 / `WinGame` / `CheatMedal` variants, `PAGE_NF_BONUS` / `PAGE_WIN_GAME` / `PAGE_CHEAT_MEDAL`,
 `BonusFields` / `RewardLine`, `FrontEnd::bonus` / `results_level` / `win_movie` / `win_movie_vol`
 / `cheat_medal_sel` / `medal_from_cheat`, the methods `bonus_enter` / `win_enter` /
 `win_movie_finished` / `cheat_medal_confirm`) and `crates/nf-game/src/progress.rs`
 (`REWARD_TEXT`). Tests: `crates/nf-view/tests/unlock_popups.rs` (12 headless) and
 `unlock_popups_live.rs` (the ISO-gated menu-def pins). No drawing — the draw arm is an empty
-match leg for the main agent (its data sources are listed in the arm's comment).
+match leg (its data sources are listed in the arm's comment).
 
 ## 0. The page ids (the dispatcher)
 
@@ -77,7 +77,7 @@ DOSSIER — the stats-page round trip.)
 
 The port: `FrontEnd::bonus_enter(progress, level, has_text)` builds `BonusFields { level,
 lines: [RewardLine; 4], texture: Option<u32>, text_labels: Vec<u32> (the 1→4→3→2 order),
-has_text }`; the draw arm tells the main agent the control geometry. Tests pin the record
+has_text }`; the draw arm carries the control geometry. Tests pin the record
 (`unlock_popups.rs::bonus_enter_*`) and the layout (`unlock_popups_live.rs`).
 
 ## 3. P_WINGAME 0x40000053 — the end-of-campaign page
@@ -134,10 +134,10 @@ the mission-end path from it.
 
 ## 5. What is NOT ported / open questions
 
-- The draw pass for all three pages (the main agent's; NFBONUS's geometry + label ids are pinned
+- The draw pass for all three pages ( NFBONUS's geometry + label ids are pinned
   in the live test and the draw-arm comment).
 - `medal_from_cheat`'s consumer and the 0x27031c/0x270320 readers — write-only in ACTION.ELF [M];
-  the CHEATMEDAL page's opener, likewise. Live checks for the main agent: on a PCSX2 run, watch
+  the CHEATMEDAL page's opener, likewise. Live checks (open): on a PCSX2 run, watch
   `switch_channels[99]/[100]` (0x26fc90+0x18c/0x190) AND `switch_channels_time[99]/[100]`
   (0x27031c/0x270320) through a mission end — if any code READS 0x27031c/0x270320 during the
   results→bonus→map walk, gdbwatch will catch it; also watch `medal_from_cheat` 0x30cc74 while

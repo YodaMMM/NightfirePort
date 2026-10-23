@@ -1,6 +1,6 @@
 # net-soak-faults — the long faulty-network soak
 
-Status: **in progress** (branch `s/net-soak-faults`, 2026-10-19). The soak
+Status: **in progress** (2026-10-19). The soak
 exists and runs; phase 0 is verified end-to-end; phase 1 uncovered a real
 readiness deadlock that is not yet root-caused (see §4).
 
@@ -34,7 +34,7 @@ Every phase asserts: no `Event::Desync` on any machine, the two simmed
 machines' per-tick hashes agree (`net_tick`'s hash — the full real path:
 `step_bond` + the bots inside + `step_net_combat`), and the match reaches its
 end (both sims' `game.state == 5` + `request_debriefing`). Slots 5/11 run
-session-only — the sandbox cannot hold four full arena sims (2 loads = 1.75
+session-only — a small machine cannot hold four full arena sims (2 loads = 1.75
 GB fit, 4 = OOM-killed [D mp_16_slots_live.rs:119-127]) — they still feed
 real inputs every tick and gate the lockstep (the host requires every human
 slot's input [M session.rs `ready_inputs`]); the sim-hash agreement is
@@ -46,7 +46,7 @@ session's payload counters — `sent_totals()` [M session.rs] and the new
 ms a machine spent waiting for the row) plus the count of ticks that waited
 >100 ms and the session-level `Stalled` events.
 
-## 2. Additions to nf-net (this task)
+## 2. Additions to nf-net
 
 - `UdpTransport::stall_sends_for(ms)` + `Session::inject_send_stall(ms)`
   [S net-soak-faults]: swallow every send for `ms` of the session's logical

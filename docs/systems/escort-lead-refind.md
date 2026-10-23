@@ -1,6 +1,6 @@
 # The escort lead's mission re-path (`NDrone2_ReFindMissionPath` 0x153a30)
 
-The escort lead's cover behaviour (835) leaves the mission route (`Drone+0x970`, the port's
+The escort lead's cover behaviour leaves the mission route (`Drone+0x970`, the port's
 `Drone::route`) stale: `FindRunToPoint` 0x153168 invalidates the combat route (+0x860) and runs the
 lead to a group-9 AI point, off the escort route. The game re-joins the lead at the hide's exit;
 the port used to resume the stale route and wedge. This page pins the rule.

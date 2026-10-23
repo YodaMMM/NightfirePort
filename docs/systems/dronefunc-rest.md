@@ -1,8 +1,8 @@
 # DroneFunc / Drone helpers: the alert getters, the behaviour switch, the target registry, the message pump
 
 Sources: ACTION.ELF decompile (`work/decomp/ACTION.ELF`, function address = filename prefix). [M] = read in
-the code, [D] = disc bytes, [L] = live, [S] = suggested. This chapter closes the call-tree gap for the 13
-functions listed in task 845: every one is ported, or cited at the port code that does its work, or its
+the code, [D] = disc bytes, [L] = live, [S] = suggested. This chapter closes the call-tree gap for 13
+`DroneFunc_*` functions: every one is ported, or cited at the port code that does its work, or its
 absence is a documented deviation — no silent skips. Port: `crates/nf-game/src/drone.rs`,
 `crates/nf-game/src/mp/bots.rs`, and the new `crates/nf-game/src/target_registry.rs`.
 
@@ -49,7 +49,7 @@ drone.rs:1468). The game points `+0x4D8` (the active props) at it when `DroneFun
 Port status [S deviation]: the port parses the block (and its alertness level) but never swaps the
 active props at runtime — every prop ask reads the first block — and `+0x29` has no port field. The
 GoToGoalPosition tail's escort arm is the documented [S] stand-in (drone.rs, the GO_TO_GOAL fail arm).
-Cited at the `alert_props` parsing site; consequences listed in the task report.
+Cited at the `alert_props` parsing site; consequences noted there.
 
 ## The first-attack stamps and the comms-alert state
 

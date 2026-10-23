@@ -1,6 +1,6 @@
 # `DroneWeap_GetWeaponInfo` 0x17a5a0 — the held weapon's datum, sound and muzzle transform
 
-Task 859 (`unported-guard-ai-other-6`). Evidence tags: [M] = decompile (address = filename stem,
+Evidence tags: [M] = decompile (address = filename stem,
 `:NN` = line in the .c), [S] = port choice, [D] = disc.
 
 ## What the game does

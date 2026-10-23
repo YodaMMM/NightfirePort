@@ -4,7 +4,7 @@ Which audio the menus play — title, main menu, the list pages, the results pag
 setup — and over the pause page: what starts, what stops, what hands over to what. This doc is
 the data + state + flow the port implements (`crates/nf-view/src/menu_music.rs`, the host wiring
 in `crates/nf-view/src/lib.rs`, `Driver::set_primary` in `crates/nf-audio/src/sfx.rs`); the
-DRAWING of every page is the main agent's. The in-game music system (level music, sections,
+DRAWING of the pages is separate. The in-game music system (level music, sections,
 crossfades) is docs/systems/music.md — the front end sits almost entirely OUTSIDE it (§1), with
 one exception: the credits (§4).
 
@@ -202,7 +202,7 @@ when the front end is the loaded level [M lib.rs `menu_music_tick`'s `front_end_
   `movie_tick` — applies the page-change transitions (Credits leave on the page changing away,
   then the new page's enter [M §3/§4]), drains the queue onto the sound driver, and pumps the
   driver once per frame while the menus are up. The boot (`run()`, the front-end level) and the
-  async-load hook (`poll_async_load`'s swap — master's `start_async_load` worker lands the
+  async-load hook (`poll_async_load`'s swap — the `start_async_load` worker lands the
   scene in `swap_in_scene`, the hook runs right after it) both consume the flip:
   `front_end_sound_ready()` → `Driver::set_primary(slot)` → `jingles_up = false` (the
   `MenuManager_Create` reset) → `fe_music_page = None` (the re-create re-runs the page's 0x4c).
@@ -233,4 +233,3 @@ can fail:
   jingle but still 0x1da; the credits track 0x27 resolves through MFXINFO.MXI to a parseable
   SMF + non-empty SSD.
 
-What ran before the push: see docs/reports/frontend-music.md.

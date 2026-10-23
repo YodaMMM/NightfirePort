@@ -1,9 +1,9 @@
 # Unreached game functions (never called on any shipped path)
 
 Evidence tags: [M] decompile, [D] disc bytes. Created by unported-guard-ai-other-2
-(2026-10-21); sections are appended per task, newest last.
+(2026-10-21); sections are appended per scan, newest last.
 
-## NDrone2_init_DMODE rows 1-22 (unported-guard-ai-other-2)
+## NDrone2_init_DMODE rows 1-22
 
 The functions below are `DroneModeSettings` 0x29ad40 rows 1..22 slot +8. The only
 reader of that slot is `NDrone2_DoModeSettingsOLD` 0x14cfa0 (row `param_2` ≤ 0x23),
@@ -41,9 +41,8 @@ here.
 | 0x14e050 | NDrone2_init_DMODE_Zoe | 21 (mode 17, team 2) |
 | 0x14e098 | NDrone2_init_DMODE_PartyGirl | 22 (mode 18, team 3) |
 
-Row 20 (`NDrone2_init_DMODE_Ambush` 0x14e018, mode 16) is not in this task's list
-and is not claimed here. `Defaults` 0x14d528 itself is reached (via row 0) and is
-ported — it is listed in the task only as the row-0 body's callee.
+Row 20 (`NDrone2_init_DMODE_Ambush` 0x14e018, mode 16) is not claimed here. `Defaults` 0x14d528 itself is
+reached (via row 0) and is ported — it appears here only as the row-0 body's callee.
 
 # Unreached guard-AI functions (call-tree audit outcomes)
 
@@ -58,8 +57,7 @@ the Rust code that does the work.
   PlayScript redirect (`NDrone2_DSTATE_PlayScript` 0x15ba68 case 1, `*(char*)(drone+0xc5) == 0x18` →
   SetState(0x36) [M]).
 - The disc census over all 99 `.bin` level archives (555 kind-0x0f drone placements) shows **no
-  placement carries DTYPE (placement parameter 15) 0x18** [D census; docs/reports/
-  unported-guard-ai-other-3b.md]. The port's `dtype_of` (`NDrone2_GetDTYPENEW` 0x14c938) never
+  placement carries DTYPE (placement parameter 15) 0x18** [D census of the 555 kind-0x0f drone placements]. The port's `dtype_of` (`NDrone2_GetDTYPENEW` 0x14c938) never
   returns 0x18 either, so the PlayScript redirect's `+0xc5 == 0x18` precondition has no disc producer
   [M]. The mode-keyed start-state arm the port carries (`start_state`: mode 0x18 → 0x36) mirrors the
   game table for completeness; no disc placement produces mode 0x18 [D census of parameter 16: only
@@ -74,7 +72,7 @@ the Rust code that does the work.
 - Handler of `NDrone2_StateFuncs[0x3d]` [L 0x29b300]. **No in-code entry exists**: an exhaustive scan
   of the decompile (SetState constant 2nd args, direct state-field stores, `return 0x3d/61` in state
   mappers) finds none — the interrogation family's own transitions go to 0x3c/0x3a/0x56/0x60 [M
-  0x161a40/0x1616c0/0x161860; the scan is in docs/reports/unported-guard-ai-other-3b.md].
+  0x161a40/0x1616c0/0x161860].
 - Entry is data-driven only: `DroneTypeSettings` rows whose start/alert state is 0x3d, or the
   obj+0xf4 coder initial state. The interrogator DTYPEs 0x1b/0x1c come from the start-script
   specials 0x600089c/0x6000892 [M 0x14b300:613-627]; **no placement carries DTYPE 0x1b/0x1c as its
@@ -91,7 +89,7 @@ the Rust code that does the work.
 - `NDrone2_DSTATE_CivilianMissionWait` 0x15dbb0 (0x17): entered from CivilianMission's msg-0x22 hold
   command [M 0x15d860:130-136]; whether any shipped script sends 0x22 to a CivilianMission drone is
   not censused — left open rather than claimed unreached.
-## 857-unported-guard-ai-other-4 — the NDrone2 states with no shipped-path caller
+## The NDrone2 states with no shipped-path caller
 
 Evidence basis: the exhaustive entry-path sweep in docs/systems/guard-ai-other-4.md —
 every `Drone_SM_SetState` call site (balanced-paren scan), every state-selector return, every
@@ -107,13 +105,13 @@ table 0x29aee8 dump, and the spawn initial-state path (`Drone_SM_InitObject` 0x1
 | 0x166a28 | NDrone2_DSTATE_ProneFire | 0x6c | Only enterers are Prone itself (CallAnim follow 0x6c and HandleImpact(0x6c) [M 0x166940]) — and Prone is never entered (row above). The blind-cheat arm inside it (`switch_BLIND_DRONES` → Idle) does not create an entry path [M 0x166a28:19-25]. |
 | 0x16db90 | NDrone2_DSTATE_Tester1 | 0xb7 | Debug/test family: SetState'd only by `NDrone2_DSTATE_Tester2` 0x174150 and `NDrone2_DSTATE_Tester4` 0x1742d8 [M] — a closed tester cluster (Tester1↔2↔4) whose only outside edge is inbound-none; also `DroneTypeSettings[8].ret = 0xb7` (drone-type 8's impact-return state, table 0x29aee8+0x60 [M]) — no shipped level data is known to configure drone type 8 [D census not run; flagged [S]]. |
 
-Reached-elsewhere notes for the same task: `NDrone2_DSTATE_SeenDeadBody` 0x16acd0 (0x9e) and
+Reached-elsewhere notes for the same scan: `NDrone2_DSTATE_SeenDeadBody` 0x16acd0 (0x9e) and
 `NDrone2_DSTATE_SeenSurrenderedDrone` 0x16ade0 (0x9f) are reached only through
 `NDrone2_ReactToDroneAlertMsg` 0x1437a0, whose only caller is the MP bots'
 `NDrone2_DSTATE_BotGlobal` 0x16e060 [M] — MP counts as a shipped path, and the port now delivers
 the transition flow (`mp/bots.rs react_to_drone_alert_msg`).
 
-## The Sub_* group (unported-level-objects-1, 2026-10-21)
+## The Sub_* group (2026-10-21)
 
 The `SUBINFO` submarine (distinct from the `MiniSub_*` family): `Sub_Create` 0x1ad6c0 is the
 placement dispatcher's case 0x36 only (`parsemap_create_dynamic_objects` 0x1d04f0:215) [M],
@@ -135,9 +133,9 @@ front end or MP map, and nothing below can dispatch.
 
 The auxVec_Sub 0x1e4f48 hits in the same name grep are the vector-subtract helper
 (`Creature_CalcWaypoints` calls it), not this family.
-## NDrone2 router/debug states (unported-guard-ai-other-5, 2026-10-21)
+## NDrone2 router/debug states (2026-10-21)
 
-The 17 DSTATE fns of task 858 live in `NDrone2_StateFuncs` 0x29b300 at ids 0x3b, 0x57, 0x5b, 0x5d,
+These 17 DSTATE functions live in `NDrone2_StateFuncs` 0x29b300 at ids 0x3b, 0x57, 0x5b, 0x5d,
 0x61, 0x80, 0x9a, 0x9b, 0x9d, 0xa0, 0xa1, 0xb5, 0xb8–0xbc. Entry mechanisms in the game [M]:
 `Drone_SM_SetState` 0x1758c0 (stores the id at SMInfo+0xc) with a literal, with a variable, or with a
 message-carried id (`DSTATE_Disabled` 0x172440 does `SetState(info, *(msg+0xcd8), 0)`), plus the
@@ -165,7 +163,7 @@ mode-derived starts of `DoTypeSettingsOLD` 0x14d2e8 / `GetDroneTypeAttackTypeFri
 | 0x1743d8 | NDrone2_DSTATE_HangUp (0xbb) | never assigned. Body: msg 1 clears +0x98 on the two objects at drone+0x530/+0x534 [M 0x1743d8] |
 | 0x174430 | NDrone2_DSTATE_WaitForever (0xbc) | never assigned. Body: no-op parking state [M 0x174430] |
 
-Reached / cited by this task (NOT unreached): 0x173280 CombatNewSighting 0x5b and 0x1739b8/0x173ac0
+Reached / cited (NOT unreached): 0x173280 CombatNewSighting 0x5b and 0x1739b8/0x173ac0
 UnderCoverTypeChange/Leave 0x9a/0x9b (port consts + arms, cited in crates/nf-game/src/drone.rs),
 0x173b78 SeenDroneShot 0xa0 (entered from `ReactToDroneAlertMsg` 0x1437a0:263,368 — the port folds
 it into the FORCED_ATTACK send, cited in drone.rs). Caveat for all rows: the msg-carried state
@@ -173,7 +171,7 @@ channel (`DSTATE_Disabled` 0x172440 reads the id from the message at +0xcd8) mea
 script could command any of these ids; no disc-side census was done in this window — a live check
 (gdbwatch on each address during a full game run) would settle it.
 
-# Unreached scripts-cluster functions (unported-scripts-1, 2026-10-21)
+# Unreached scripts-cluster functions (2026-10-21)
 
 ## M_SPIN widget: Spin_Init 0x2224c8, Spin_SendMessage 0x2226d8, Spin_Update 0x222948
 
@@ -198,7 +196,7 @@ controller-style spinner — the list control 0x10000025").
 So no caller runs on any on-foot level, the front end or MP: recorded unreached.
 `menudef.rs` already parses CONTROL ctype as a raw u8, which is the right depth
 of support for a dead widget class.
-## unported-hud-1 (2026-10-21) — M_TEXTBOX: no shipped page builds one
+## M_TEXTBOX: no shipped page builds one (2026-10-21)
 
 `Text_Init(M_TEXTBOX*, NEW_CONTROL*, M_CONTROL*)` 0x222b80 (2688 B), `Text_SendMessage`
 0x223600 (456 B) and `Text_SetupChar` 0x224098 (116 B) are **not reached by the shipped game**.
@@ -216,10 +214,9 @@ message switch, called via `__Menu_SendMessage` 0x1f1c18 / `TextBox_Update` 0x22
 Caveat: the census covers the one menu def the game boots with [D docs/systems/frontend.md,
 menudef.rs header]; no other kind-8 page-def entry is loaded by the boot path the port
 reconstructs. `Text_SendMessage`'s opcode surface (0x14/0x16/0x21/0x2b/0x39/0x3b/0x3d/0x47/0x53
-[M 0x223600]) is fully documented in docs/systems/hud-panes.md so a future task can port the
-control if a def with a type-0xc control ever surfaces (e.g. from a different region build).
+[M 0x223600]) is fully documented in docs/systems/hud-panes.md so the control can be ported if a def with a type-0xc control ever surfaces (e.g. from a different region build).
 
-# unported-front-end-menus-3 (2026-10-21)
+# Front-end and camera functions (2026-10-21)
 
 ## Camera modes 3/4/5: camera_freechase 0x1ba1c8, camera_fixed 0x1ba4e8, camera_snake 0x1baa78
 
@@ -250,12 +247,12 @@ decompiled, and **none passes id 5 or id 9** [M]. So `CompBoxList` (key = f32 at
 `*elem+4`, the box-list entry) and `CompMsgTxt` (key = s8 `isNew` at TXTMSG+0x1d) are dead
 table entries: recorded unreached.
 
-Correction to prior art: docs/reports/objectives-0b-start.md:115 implies the objective
+Correction to prior art: an earlier note implied the objective
 message queue sorts TXTMSG records by the `isNew` byte — contradicted by the census; the
 message queue is FIFO via the CirBuf ring (CirBuf_Add 0x1cd040, replaced by the port's
 subtitle queue). Also fixes a mislabel in docs/systems/fix-cel-order.md:28, which calls
 0x1d3320 "CompLight": 0x1d3320 is CompSpr; CompLight is 0x1d3350.
-## unported-front-end-menus-5 — the debug TWEAKS pages, the FMV island, the dead hub and the C_CHCH* cheat toggles (2026-10-21)
+## The debug TWEAKS pages, the FMV island, the dead hub and the C_CHCH* cheat toggles (2026-10-21)
 
 **P_TWEAKS_Handler 0x2067c8 / P_TWEAKS2_Handler 0x207950 (debug "TWEAKS" pages) — UNREACHED.**
 Sole caller `Handler_HandleMessage` 0x2029e0 (itself only fed by `Manager_HandleMessage` 0x21df10):
@@ -317,7 +314,7 @@ sends those ids (each occurs in exactly one decompile file — the dispatcher); 
 be menu-def CONTROL/KMSG data, and their only owner page in shipped data is the never-opened
 per-level hub **0x40000007** (see C_LBPMMAP above — no code reference, no navigation) [D].
 Recorded unreached.
-## unported-front-end-menus-6 (2026-10-21) — the debug-toggle handlers, the orphan FMV page and the SDK/libc set
+## The debug-toggle handlers, the orphan FMV page and the SDK/libc set
 
 ### The seven `C_CHCH*` debug-toggle handlers — their controls never shipped
 
@@ -388,7 +385,7 @@ port's own. Each with its caller evidence (binary jal scan + decompile):
   float math is inline/`PS2Sin f`-style); the port's float semantics live in ps2float.rs and std
   `f32` ops.
 
-# unported-front-end-menus-7 (2026-10-21)
+# SDK stubs and dead audio paths (2026-10-21)
 
 ## libcglue `close` 0x23c288 (8 bytes) — newlib fd-close stub, never invoked
 
@@ -443,7 +440,7 @@ Also recorded here because the natural alternative buckets don't fit: `SaveMemor
 but it is a stubbed-out no-op: the disassembly (file 0xb198) shows it memsets 18 bytes of its
 own dead stack frame and returns, touching no globals, result ignored by the caller [M ELF
 bytes]. Nothing to port; noted in docs/systems/memcard-save-flow.md.
-## 863-unported-animation-1 — the anim debug family and the two wrapper-gated spawners
+## The anim debug family and the two wrapper-gated spawners
 
 Evidence basis: an exhaustive reference sweep for each address [M] — every `JAL` encoding in the
 loaded `.text`/`.vutext` (0x107100-0x241c80) re-derived from the instruction word, every raw
@@ -494,7 +491,7 @@ but the body returns before anything observable:
 So there is no input on which the function has an observable effect. speech.md §2.3 documents the
 same verdict for its siblings (`InjuredTalk`/`RunForCoverTalk`/`UnderCoverTalk`: "dead in both
 modes", verified in the disassembly). Not ported; no observable behaviour to pin.
-## unported-front-end-menus-2 (2026-10-21) — Creature update chain and the dead chase camera
+## The Creature update chain and the dead chase camera (2026-10-21)
 
 ### Creature_Update 0x135268 / Creature_Hurt 0x1352d0 / Creature_Move 0x135340 / Creature_Delete 0x135230
 
@@ -527,13 +524,13 @@ selects:
   a literal from {0, 1, 2, 0xb, 0xc, 0xd, 0xe, 0xf} — never 6 or 0xa [M grep of all sites;
   docs/systems/uncited-audit.md:226-228]. `BLData+0x87c` (the case-10 chase-cam obj) is written
   by `Player_Init` 0x1910f8:73 but never consumed anywhere else [M].
-- The algorithm is recorded in docs/reports/unported-front-end-menus-2.md (the five occlusion
+- The algorithm (kept here in case a future build or debug mode needs it): the five occlusion
   probes, the 1/8-per-tick radius smoothing toward viewer+0x1f0 = 4.0, the position/angle
-  writes) in case a future build or debug mode needs it; the port's live camera modes live in
+  writes; the port's live camera modes live in
   `crates/nf-view/src/scene.rs` (cam2/creep/script cameras) and modes 4/5/6/0xa stay absent.
 
 
-## unported-misc-4 (2026-10-21)
+## Misc dead paths (2026-10-21)
 
 **MiniSub_FireTorpedo 0x181888, MiniSubMove_Forward 0x1819d8, MiniSubState_Attack 0x181b00,
 MiniSub_Update 0x181f40, MiniSub_Collide 0x182128, MiniSub_Delete 0x182268 — UNREACHED**
@@ -573,11 +570,11 @@ class histograms [L ee_start_05]. Nothing in the shipped on-foot game can dispat
 (`BIN_PullBits` twice) and apply them through `Menu_SetBonus` — a bonus-unlock parse from a
 loaded save. Nothing calls it: the full capstone scan of ACTION.ELF's LOAD segment (vaddr
 0x107100..0x30d670, every 4-byte step) finds **no jal** and **no absolute word** equal to
-0x1ce488 [M scan, task unported-misc-6]. Its decompiled C is register garbage (`unaff_s0`/
+0x1ce488 [M scan]. Its decompiled C is register garbage (`unaff_s0`/
 `unaff_s1`), consistent with a function no caller ever reaches. The unlock data instead
 flows through `Menu_SetLevelBonus` 0x1ffa10 (the profile's unlock rows) and the
 cheat-codename checks. Not ported.
-## unported-misc-7 (2026-10-21) — the misc 25: soft-float doubles, mcman glue, IPU DMA, libm, CRT
+## The misc 25 (2026-10-21): soft-float doubles, mcman glue, IPU DMA, libm, CRT
 
 Method note: the caller evidence below is a machine-level scan of `work/elf/ACTION.ELF` (every
 `jal` opcode resolved to its target, plus every `lui`+`ori`/`addiu` immediate pair that builds a
@@ -653,7 +650,7 @@ replacement: the port plays no FMV and has no IPU — the psi background-movie e
 the port's front end, so this whole hardware pipeline (SPR→TADR chains, IPU_FROM/TO channels,
 CHCR STR writes) has no port side to cite. If a future build wants menu FMV, these five are the
 DMA primitives (bodies recorded here and in the decompile).
-## unported-misc-8 (2026-10-21) — the printf float branch
+## The printf float branch (2026-10-21)
 
 **`isinf` 0x23b788, `isnan` 0x23b7d0, `quorem` 0x238a40 — UNREACHED on the shipped game**
 (behind a never-taken branch; their caller runs every frame). `_vfprintf_r` 0x237188 is reached
@@ -663,7 +660,7 @@ branch is the ONLY caller of `isinf` (jal 0x2375d0), `isnan` (jal 0x237608) and 
 carries exactly one float format string — `"%.2f %.2f %.2f\nFPS %d\n"` — printed by
 `HUD_UpdateHealthPane` 0x19b9c8:265-268 / `HUD_UpdateMPHealthPane` 0x19b630 only while
 `switch_SHOW_COORDS != 0` [M], the debug-coords byte only the never-opened per-level cheat hub
-writes (see the C_CHCH* entries above) [D census; the sdk.rs test re-scans the user's ISO].
+writes (see the C_CHCH* entries above) [D census; the sdk.rs test re-scans the disc image].
 So the float branch never executes on any shipped on-foot level, the front end or MP. `isnan` is
 also listed by the decompile inside the libm NaN guards, but those reference `isnanf` 0x2356e8
 (REACHED, cited in trig.rs), not `isnan` [M jal census: `isnan`'s only jal site is 0x237608].
@@ -678,7 +675,7 @@ also listed by the decompile inside the libm NaN guards, but those reference `is
 `InitTLB32MB` 0x23fe38 boot-failure paths (`Exit(1)`). `main` 0x109080 never returns: its
 frame loop ends in `goto LAB_001092a8` [M 0x109080 tail], so the console is only ever reset,
 never exited — the whole chain is dead in the shipped game [M caller scan over jal AND
-tail-j (`j`), every 4-byte step of the LOAD segment, task unported-misc-9]. Not ported.
+tail-j (`j`), every 4-byte step of the LOAD segment]. Not ported.
 
 ## read 0x23c210 and lseek 0x23c290: stdin/seek stdio with no users
 
@@ -691,7 +688,7 @@ even a syscall) sits behind `_lseek_r` ← `__sseek`/`__swrite`, which serve see
 append-mode streams — the game has none (stdout is the only stream in play, via the
 printf error paths; see docs/systems/kernel-stubs-misc9.md §4) [M caller scan]. Not ported.
 
-### unported-misc-10 (2026-10-22, branch s/unported-misc-10)
+### PS2 SDK runtime glue (2026-10-22)
 
 12 of the 24 SDK-glue functions record here as unreached / unreached-by-replacement; the other
 12 are cited as replaced or reached-and-replaced at Rust sites (full chains and the boot/RPC/

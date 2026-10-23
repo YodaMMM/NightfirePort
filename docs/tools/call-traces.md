@@ -2,7 +2,7 @@
 
 `tools/trace/gdbcall.py` records calls of one game function in the GDB-server PCSX2 (docs/tools/pcsx2-gdb.md): the
 inputs at entry and the outputs at return. The port replays each call through its own version of the function and
-must produce the same bits (`crates/nf-game/tests/diff_calls.rs`, queued as `045n-verify-bitexact`). Files live in
+must produce the same bits (`crates/nf-game/tests/diff_calls.rs`). Files live in
 `tests/calls/<function>.calls`. They hold runtime register and memory values only (positions, seeds, matrices): no
 disc bytes.
 
@@ -47,7 +47,7 @@ record the memory the function writes instead.
 | `Player_AutoAim.calls` (0x1a7c98) | `io:@(a0+0xe0)+0x114:0x20 in:@(a0+0xdc)+0x60:4` | 80 | recorded under play in aim mode: the aim bit set on all 80, the cursor non-zero, the block changed by the 0.5 easing on 76 |
 | `Check_Target.calls` (0x1a7810) | `io:@(a0+0xe0)+0x130:4` | 40 | no target under the crosshair (+0x132 = 0, +0x133 = 2) on all 40: the no-hit path only |
 
-## Harness status (045n verify-bitexact, 2026-10-13; ledger added by verify-ledger 2026-10-15)
+## Harness status (2026-10-13; ledger added 2026-10-15)
 
 `crates/nf-game/tests/diff_calls.rs` replays every recording through a port adapter and requires the same bits:
 `PS2Sinf` 40/40, `Quat_QuatToMat` 40/40 (EE-FPU op order from the decompile), `Rand_Rand` 40/40 including the

@@ -1,7 +1,7 @@
 # The bathhouse girls' arms — why no 02 civilian may draw a gun
 
-Task `bathhouse-armed-girl-02` (playtest 1017-1139: "one of the bathhouse girls had a gun and
-started shooting at me" — 07000002, F12 at `--bond -43.11,6.46,10.37`, frame 4206).
+Symptom: a bathhouse girl on 07000002 drew a gun and fired (seen at `--bond -43.11,6.46,10.37`,
+frame 4206). The game never arms them.
 
 ## The placement [D]
 
@@ -10,7 +10,7 @@ dump `crates/nf-view/tests/census_07000002_drones.rs`, run 2026-10-19):
 
 - #464 (-37.5, 6.5, 4.4) — dtype 0xE (param 15), mode block 3 (param 16) → mode 7
   (EnemyRunToPoint) [M `NDrone2_GetDTYPENEW` 0x14c938:111-117]
-- #465 (-45.5, 5.8, 12.2) — the F12 girl, 2.9 units from the playtest camera; mode 5 (Hostage,
+- #465 (-45.5, 5.8, 12.2) — the girl at that spot, 2.9 units from the camera; mode 5 (Hostage,
   `GetDTYPENEW` dtype 0xE + prop 0x4E → 5 [M 0x14c938:80-85])
 - #466 (-12.0, 6.6, -39.1) — mode 5
 
@@ -56,7 +56,7 @@ only as a comment), and the DrawWeapon EXIT hardcoded case 2's sidearm (weapon 6
 16 rounds) without any swap-id gate — the girl drew a gun in combat. The port also never parsed
 `+0x45` (the field existed, documented "not parsed from the setup word yet", always 0).
 
-## The fix (this branch)
+## The fix
 
 `crates/nf-game/src/drone.rs`:
 
@@ -75,16 +75,16 @@ reaches it (every 02 civilian is unarmed), and no test pins a team-3 armed attac
 `crates/nf-view/tests/bathhouse_armed_girl_live.rs` (opt-in NF_ISO):
 - `every_02_civilian_spawns_unarmed_with_no_drawable_swap_id` — every 02 civilian placement
   spawns weapon 1 / swap id 1 / civilian team; every guard-skin drone spawns armed with a
-  drawable swap id; #448 (the F12-scene guard) holds 0x1c [D].
+  drawable swap id; #448 (the guard in that scene) holds 0x1c [D].
 - `the_woken_girl_never_draws_or_fires_and_the_guard_still_fires` — the pads' channels
-  (22/23/25 [D params 3]) wake the bathhouse block with Bond at the playtest spot; the mode-7
+  (22/23/25 [D params 3]) wake the bathhouse block with Bond at that spot; the mode-7
   girl's state log answers her unarmed attack with CivilianScared, never DrawWeapon; no
   civilian ever owns a bullet; the armed guard on the same channels opens fire (the sister that
   fails pre-fix — the girl carried weapon 6 in combat ~tick 700 before the fix).
 
-## Live checks for the main agent
+## Live checks (open)
 
 None required — no visual change is claimed (the girls' towel model/pose is untouched; the fix
-only removes a state path the game never takes). If wanted: PCSX2 at the playtest spot after
+only removes a state path the game never takes). If wanted: PCSX2 at that spot after
 the terrace pads, watch `Drone+0x62` (anim weapon byte) of the skin-0x05000034 drones —
 expected 1 (fists) throughout; the port matches.

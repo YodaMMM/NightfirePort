@@ -130,7 +130,7 @@ first three rows (unlocks in the game's order, no regression of earlier rows, MS
 through save/load), the play-without-saving session rule, and the driving-row confirm's state-9
 handover with the `Menu_IsDrivingLevel` gate.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. gdbwatch 0x2df2f0 (sp_level[0]+0x10): complete the first on-foot mission in PCSX2 — expect a
    byte write 1 from `Menu_SetLevelBonus` (0x1ffa10) while the results page is up, and the SP list

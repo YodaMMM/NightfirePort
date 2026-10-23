@@ -1,6 +1,6 @@
 # HITDATA_tag, the DroneSpawner block, and the ally / mission-fail drone fields
 
-Task 4-e (2026-10-13). Proof levels per [README](README.md): [S] guess, [M1] one reader/writer
+2026-10-13. Proof levels per [README](README.md): [S] guess, [M1] one reader/writer
 read by hand, [M] the function+address (all readers/writers found listed), [M*] every reader/writer and they agree,
 [L-read] a value read in an EE snapshot (file offset == EE address). Decompile: work/decomp/ACTION.ELF (one .c per
 function, filename = ADDRESS_Name). No game bytes below — offsets, addresses, values, names only.
@@ -235,7 +235,7 @@ together on the protected classes, the observable rule stays "team 1 → 2/4, te
 ## Disagreements
 
 1. **Spawner p7 (+0x14 → +0x20 latch): arm vs kill.** fix-actors/actors.md/spawners.rs: arm — an armed spawner
-   spawns without the trigger (playtest C2 evidence, `the_spawner_arrives_on_its_channels`). My decompile read of
+   spawns without the trigger (`the_spawner_arrives_on_its_channels`). My decompile read of
    `DroneSpawner_Control` 0x137e68: the latch routes to the 0x138014 cleanup block (disable spawned drones + the
    spawner; `obj+0xFC`-gated on 0x11/0x12/0x13/0x16/0x4A) and skips the spawn machinery — the old
    triggers.md:51 "kill channel". Both agree on the offsets. [L] 07000005: the group-2 spawner holds p4 = 0x22 and
@@ -247,7 +247,7 @@ together on the protected classes, the observable rule stays "team 1 → 2/4, te
    pinned by drone-damage.md's box-order finding instead.
 3. **OnInitDeath's prop corners** (port vs decompile) — see §5 bullet 1.
 
-## Live checks for the main agent
+## Live checks (open)
 
 Group 1 (HITDATA): 07000005, shoot a guard in the torso then the head with the P2K. With a PINE watch on a HITDATA
 node (find it via a bullet obj: walk `obj+0xD0` of the victim right after the shot): expect `+0x08` = 3.5 × multipliers,
@@ -280,7 +280,7 @@ msg 0xC two frames later and the escort resumes the lead.
 - HITTEST_tag's own field map (+0x62 weapon-class byte, +0x8C radius, +0x90 damage, +0x94 shape type, +0x98/0x9A
   request flags, +0x9C result flags) is only sketched here from the readers HITDATA needs.
 
-## Live result: p7 is the KILL channel (main agent, 2026-10-12)
+## Live result: p7 is the KILL channel (2026-10-12)
 
 GDB-server PCSX2, 07000005, nobody playing. Channels written directly in `switch_channels` 0x26FC90 (PINE); RAM
 from slot-9 save states (`drones_snapshot.py`); gate spawner object 0x016da670, data block 0x016da780.
@@ -293,8 +293,8 @@ from slot-9 save states (`drones_snapshot.py`); gate spawner object 0x016da670, 
 | script ends (`Script_Free` re-enables NPCs) | **+0x20 → 1**, +0x1E → 0, both slots zeroed, the spawner's `obj+0xFE` → 1 (it deletes itself) | **13: both gate guards removed** |
 
 So the decompile's cleanup branch (0x137e68:235-288) is what runs: **p7 = the kill channel**, triggers.md's original
-reading. fix-actors' ARM reading is refuted. Its 07000011 playtest symptom fits the cleanup's level split: on
-0x11..0x13, 0x16 and 0x4A only drones with `obj+0xFC` == 0 are removed. The port fix is queued as `046b-fix-spawner-p7`.
+reading. fix-actors' ARM reading is refuted. Its 07000011 symptom fits the cleanup's level split: on
+0x11..0x13, 0x16 and 0x4A only drones with `obj+0xFC` == 0 are removed. The port follows it (spawners.rs).
 
 ## Ported: fix-spawner-p7 (2026-10-12)
 
@@ -305,8 +305,8 @@ mode/group/slot checks), the stop-channel pause/delete split, the done-path wait
 level split and the kept-drone count. Tests: `nf-game/tests/spawner_kill.rs` (the unit shapes),
 `nf-view/tests/spawner_kill_live.rs` (07000005 end-to-end + the 07000011 stairwell keep),
 `fix_actors_live.rs::the_spawner_arrives_on_its_channels` (the arrival, re-driven through the trigger).
-The pre-fix failure was shown on master's code: the same 07000005 flow left both guards alive (the arm
-reading) — the symptom this task fixes.
+The pre-fix failure was shown: the same 07000005 flow left both guards alive (the arm
+reading).
 
 `obj+0xFC` (byte, on the NPC object) — the **draw counter** the kill gate reads [M `lbu $v0, 0xfc($s0)`
 0x13805c]: the renderer sets it to 2 for every object added to the draw list [M `View_AddObjects`
@@ -317,7 +317,7 @@ with a non-zero value. (Other object classes use the same offset as a float time
 cars 0x130060 — a per-class field, not a global.) The port's per-drone `drawn` visibility flag stands in,
 snapshotted at control-walk start so the scan reads last frame's value like the game's.
 
-### Correction from real play (main agent + the user, 2026-10-12): the swap is instant
+### Correction from real play (2026-10-12): the swap is instant
 
 `tests/traces/05-gate-swap.trace` (07000005 played from the start, the gate guards left alive, god mode). Frame by frame:
 - 173757: ch 0x22 → the two gate guards spawn at (28.3, 44.9) and (32.1, 44.9) (state 4); the two placed guards behind
@@ -330,4 +330,4 @@ The "Live result" table above (channels written by hand over PINE) saw `NPCGloba
 there is no such delay, so treat that delay as an artefact of the hand-written channels. **What the port must do:** remove
 the spawned pair and enable the placed pair on the same tick. (Before this, the port removed the pair on the touch
 tick, which is right, but kept the placed pair hidden until the shimmy script ended, about 1,400 ticks, so the gate sat
-empty: the user's `gate05` report.)
+empty.)

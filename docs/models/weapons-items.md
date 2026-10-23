@@ -1,11 +1,11 @@
-# Lane models-weapons-items: weapons, gadgets, pickups, projectiles
+# Models: weapons, gadgets, pickups, projectiles
 
-Status after `s/models-weapons-items`. Everything [D] (disc scans through the repo's own
+Status 2026-10-12. Everything [D] (disc scans through the repo's own
 `Level::parse`/`weapon_data`, the tests in `crates/nf-view/tests/models_weapons_live.rs`) or [M]
 (ACTION.ELF decompile + disassembly) unless tagged [S]. The proof harness is that test file
 (4 tests, NF_ISO; each fix was shown failing first by neutralizing it).
 
-## 1. What the lane covers and what resolves
+## 1. What this page covers and what resolves
 
 Every weapon's first-person view model (Bond's hands/sleeve + the rigid parts), every third-person
 held gun, every gadget's models, every pickup's model, dropped weapons and the projectiles. The
@@ -16,7 +16,7 @@ projectile meshes of every weapon the level can fire (numbers only, `golden_weap
   0x1c4490 [M]): every armed drone's gun resolves on every level, with two measured exceptions that
   the shipped game shares (§3).
 - **Muzzle flashes** (`+0x4C`, e.g. 0x02000261 `Pistol_Muz` [M `AnimDatumGetWeaponInfo`]): resolve
-  everywhere — after the session-object-table fix (§2), which is this lane's main defect found.
+  everywhere — after the session-object-table fix (§2), which was the main defect found.
 - **Placed pickups** (type 0xF0): every placement resolves its model object on every story level —
   the O2 "armour plate drawn nowhere" class is clean level-wide (fix-player2's instancing held).
 - **Projectiles** (`+0x5C`, the flying mesh): `Bullet_update` state 0 sets the weapon's mesh on the
@@ -46,7 +46,7 @@ the latest earlier story archive that holds it (the story order is the case orde
 §1]). Appending maps never shifts an existing (map, object) index and `by_hash` is first-wins, so
 every local resolution is unchanged. Test: `tower_2_guards_get_their_muzzle_flashes_from_the_session`.
 
-The story arcs 0700000c/14 also get whole-archive skin merges from the characters lane's G-021
+The story arcs 0700000c/14 also get whole-archive skin merges from the characters work's G-021
 (same load path; the weapon-model merge runs after it so no map is taken twice).
 
 ## 3. The shipped game's own artifacts (measured, not port defects)
@@ -56,9 +56,9 @@ The story arcs 0700000c/14 also get whole-archive skin merges from the character
 | 07000001, 07000003 | The stun-throwing guards (param 11 selects weapon 0x36 [M `NDrone2_DefaultInit` 0x14b300]) throw grenades whose mesh 0x0200071f is on NO archive the session has loaded by those levels [D scan] — `Bullet_update` skips the draw when the hashtable misses (the `iVar14 == 0` arm [M 0x12e7b0]): the stun grenade flies invisible in the shipped game | the golden's proj_miss 1 on those levels; `Bullet_update` decompile |
 | 07000004 ×1, 07000016 ×2 | The SMG guards (weapon 0x12, `+0x50` datum 4) carry skin 0x0500001e, which has no datum 4 [D] — `AnimDatumSetEntity` (0x1c7848) walks the skin's datum list and no-ops on a missing id [M]: the game draws that guard unarmed | the golden's tp_miss; the datum list [D 07000004.bin] |
 
-## 4. Render spots (one per level; the main agent renders and eyeballs)
+## 4. Render spots (one per level, for visual checks)
 
-Stand at the spot facing `yaw 0` (north): a placed pickup of the lane's kinds is 3 units ahead.
+Stand at the spot facing `yaw 0` (north): a placed pickup of these kinds is 3 units ahead.
 Pickup kinds: 0 weapon, 1 ammo, 3 armour. Every level has at least one (0700001b's pickups come
 from script/drops only — use the dev panel's Frag Grenade there).
 
@@ -88,7 +88,7 @@ from script/drops only — use the dev panel's Frag Grenade there).
 The thrown-grenade check on any level: give the Frag Grenade (dev panel), pull the trigger — the
 grenade body (0x02000726) arcs and tumbles to the bounce.
 
-## 5. Dev view models (folded from 190-fix-dev2)
+## 5. Dev view models
 
 Each level archive ships only its own weapons' first-person skins (+0xDC) — the dev panel showed
 "no 1st-person model here" for most weapons. With `--dev` the missing FP skins merge from their
@@ -134,17 +134,15 @@ level    drones tp_ok tp_miss flash flash_miss pickups miss proj proj_miss fp_pr
 07000007's party and 07000009/0a's switch-gated guards carry no weapon ids their param-9 slots
 resolve — their gun resolution runs when the switch/spawner arms them, with the same tables.)
 
-## 7. Still open in this lane
+## 7. Still open
 
-- **The "torn guns" user report** has no playtest entry to reproduce from; the likeliest visible
-  causes in this lane (a held mesh missing its flash or its pickup twin drawing at the wrong slot)
-  are covered by the tests above. If it survives the session-merge fix, it needs a fresh screenshot
-  with the level and spot named.
+- "Torn" gun meshes: no reproduction exists; the likeliest causes (a held mesh missing its flash, or
+  its pickup twin drawing at the wrong slot) are covered by the tests above.
 - **R1 over-bright (the TWEAK)** on guns: the 0x800 multiplier root cause is fix-render2's
   (characters.md G-042 pinned the source texels); nothing in the gun path adds brightness. Watch
   the §4 spots.
 - **The Q-Worm projectile mesh** (0x0200025f) resolves on most levels (the golden counts it) but
-  the gadget itself is unported (docs/port-map/gadgets.md — another lane's function work); the mesh
+  the gadget itself is unported (docs/port-map/gadgets.md); the mesh
   draws for Bond's own worm once fired.
 - **FP flash meshes on the dev-merged view models** use `weapon_data+0x48`; a few weapons (the
   snipers) have 0 there — the game draws no FP flash for them either [L].

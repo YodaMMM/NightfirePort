@@ -62,7 +62,7 @@ both items re-pick a random pool spawn (`Rand_Rand(GoldenEyeSpawnCounts[type != 
 matrix copies, state 0, unlink/rebuild) (:129-179). No area damage: the only wound is the
 target's [M :98-108].
 
-## The port (this task)
+## The port
 
 - `MpObjectsRt.ge_flight_ticks: u16` — the flight length, filled by the live load from the
   arena's own script: `level.nis.get(0x0600_003e).map(|n| n.length)` (299 on 07000023 [D]).

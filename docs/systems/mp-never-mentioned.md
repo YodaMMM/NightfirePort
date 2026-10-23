@@ -1,6 +1,6 @@
 # MP never-mentioned functions — the 8 `MP_*` gameplay getters/hooks (unported-multiplayer-1)
 
-The whole-ELF scan (master 20874c31, 2026-10-20) flagged eight ACTION.ELF multiplayer
+The whole-ELF scan (2026-10-20) flagged eight ACTION.ELF multiplayer
 functions whose name/address appeared nowhere in `crates/*/src`. This note pins each one's
 caller chain and where the port now carries it. Evidence tags: [M] decompile/disassembly,
 [D] disc, [L] EE snapshot. The ELF byte scans below were made this session over
@@ -56,7 +56,7 @@ sprites 1 and 2 down 0x18 from the shared base y 400 [M :113-117; the 0x400 arm 
 
 The port's `MpHudSnapshot` now carries `viewer_carries_blueprint` / `viewer_team_ge` (read
 through the two getters at build), and `MpScorePane::build` adds the two scenario arms —
-the data the main agent's draw code needs (no drawing here).
+the data the draw code needs (no drawing here).
 
 ## `MP_isPlayerOrBotDead` 0x18abc0 — the exact predicate
 
@@ -74,7 +74,7 @@ is the one that runs in the shipped game. The port's `koth_update` gates on
 `do_respawn` (the `MP_ReSpawn` port) — which is the same job at the port's abstraction;
 the citation comment carries the full predicate for whoever ports the ext-flags reader.
 
-## Gaps / live checks for the main agent
+## Gaps / live checks (open)
 
 1. **GoldenEye stacked icons** — run a GoldenEye match, let one team hold both items, and
    check the score pane: the game draws both 0x300018b and 0x300018c at the same rect
@@ -83,8 +83,8 @@ the citation comment carries the full predicate for whoever ports the ext-flags 
 2. **Espionage icon swap** — carry the blueprint and confirm the pane's objective icon
    becomes the "carrying" glyph (0x300018a) for the carrier only, other viewers unchanged.
 3. **`MP_isObjectOnTeam` MP arm** — `Check_Target`'s class-2/class-3 friendly gates
-   (0x1a7a48/0x1a7a7c) are not modelled in the port's crosshair walk (SP-only, per
-   docs/reports/civilian-no-shoot.md). The getter exists; wiring it into the aim path is
+   (0x1a7a48/0x1a7a7c) are not modelled in the port's crosshair walk (SP-only, as
+   the civilian no-shoot icon is). The getter exists; wiring it into the aim path is
    future MP-visual work (the markers at ext+0x133/ext+0x132).
 4. `MPSettings+0x184` (`_388_`, the `MP_Start` master-copy that gates `Check_Target`'s MP
    arms) is documented `master_copy` in `mp/mod.rs` — its Ghidra print there says "+0x388",

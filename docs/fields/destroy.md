@@ -5,7 +5,7 @@ Proof levels: see [README.md](README.md). Instance size 0x18 from `Destroy_Creat
 (dispatch 0x1d04f0:358-363, gated on its `param_7 != 0`). Level: ee_start_05 (07000005 at start)
 unless noted.
 
-The game pairs this with the breakable (`Break_Create` 0x12bfd8, class 0x20, another worker's
+The game pairs this with the breakable (`Break_Create` 0x12bfd8, class 0x20, another page's
 lane): Destroy is the object that *reacts* — it takes the bullet damage, smashes (model swap +
 explosion), then after a delay fires its output channel and re-classes to 1 (a draw-only object).
 

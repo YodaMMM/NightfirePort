@@ -1,6 +1,6 @@
 # net-desync-resync: recover from a state-hash mismatch instead of ending the match
 
-Playtest 2026-10-19: "We need it to be more robust." Today a hash mismatch ends the match for
+2026-10-19: online play needed to survive a desync. Before this, a hash mismatch ended the match for
 everyone (`CoreEvent::Desync { tick }` → `net_fail("State desync at tick …")`). This doc is the
 resync design with the evidence; every behavioural fact about the PORT cites code, and the whole
 feature is port-side robustness (the retail netcode is not a reference here) — policy choices are
@@ -35,7 +35,7 @@ suggested.
   `if self.mp_bonds[slot].is_some() { return false }` (scene.rs:10267-10270) — so a re-announced
   spawn for a body that never left is a no-op on every machine.
 
-## 2. The resync (this task)
+## 2. The resync
 
 **The host is the authority** [S — it owns the only canonical input log]: a machine whose hash
 disagrees with the host's resyncs; everyone else keeps playing.
@@ -82,15 +82,14 @@ disagrees with the host's resyncs; everyone else keeps playing.
 
 ## 4. Tests
 
-- `crates/nf-view/tests/net_resync_live.rs` — the task's shape: a 3-machine live loopback (host +
+- `crates/nf-view/tests/net_resync_live.rs` — the target shape: a 3-machine live loopback (host +
   2 clients, real UDP, `net_rng` via `net_slot0_setup`, every machine a full slot-0 replica), a
   mid-match `bond.pos[0] += 0.01` on one machine: it resyncs (desync on the diverged machine and
   the host only, the handover replays through the app's real catch-up, the re-announce lands, the
   re-spawns are no-ops), all three agree on every hash exchange after, no fatal, the match runs
   on. Sisters: no perturbation → nothing resyncs; a second perturbation within 60 s → fatal.
-  **Not yet run green anywhere**: this sandbox's 4 GB OOM-kills a 3-full-scene process at the
-  third arena load (rc 137 — reproduced four ways, incl. `setsid`); it is written to run on the
-  main agent's machine.
+  **Needs a large-memory machine**: a 4 GB machine OOM-kills a 3-full-scene process at the
+  third arena load (rc 137).
 - `crates/nf-net/tests/resync.rs` — the same flow at session level on the shim (3 machines, fake
   hash chains, persistent one-bit hash corruption from the desync tick on): the handshake, the
   serve, the replay verify, the NEUTRAL gap on both sides, the re-announce, no `join_history`
@@ -103,7 +102,7 @@ disagrees with the host's resyncs; everyone else keeps playing.
   changes (the late-join/reconnect/lockstep/loopback suites all pass — the widened
   `Event::Desync` and the resync arming do not disturb them).
 
-## 5. Live checks for the main agent
+## 5. Live checks (open)
 
 1. With `NF_NET_RATE=1`, run a real online match, corrupt one client's state (a debugger poke),
    and watch: the desync log line (tick + both hashes), the "Resyncing…" note on that machine

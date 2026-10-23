@@ -2,7 +2,7 @@
 
 Drones (placement object type 0x0F, `Drone_Create` 0x136be0) choose animations through three static tables in
 ACTION.ELF and the drone's type and anim set. Code: `crates/nf-formats/src/drone.rs`; the tables are read from the
-user's ACTION.ELF through its symbol table (never committed). Everything here is *measured* from the decomp unless
+disc's ACTION.ELF through its symbol table (never committed). Everything here is *measured* from the decomp unless
 tagged; none of it is confirmed live yet (U-028).
 
 ## Parameters

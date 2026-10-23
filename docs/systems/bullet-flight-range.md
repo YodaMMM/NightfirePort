@@ -1,8 +1,8 @@
-# The bullet flight death range: `weapon_data+0x1C`, not `BU+0xFC` (bullet-range-210)
+# The bullet flight death range: `weapon_data+0x1C`, not `BU+0xFC`
 
-What kills a flying bullet, and what `BU+0xFC` is instead. This doc is the record of the
-bullet-range-210 task, which set out to port `BU+0xFC` = 210.0 as "the round's death range" (the
-merged laser-watch-contact task 831's reading) and found the disassembly says otherwise.
+What kills a flying bullet, and what `BU+0xFC` is instead. An earlier reading (in
+docs/systems/laser-watch-contact.md) took `BU+0xFC` = 210.0 as "the round's death range"; the
+disassembly says otherwise.
 
 ## The flight death chain [M Bullet_update 0x12e7b0]
 
@@ -36,7 +36,7 @@ $v1, 5` → table at 0x12e830-0x12e84c): state 0 → 0x12e854 (the first-tick se
    grenade/stick tick fuse the port's `scene.rs` grenade block already models (210/300 ticks).
 2. **The id-0x45 countdown** (0x12ef98 `bnel $v1, $a0(0x45)` gate → 0x12efa4-0x12efc4):
    `BU+0xFC -=` the 1.0 constant at 0x30D0D8 [D ELF] per tick; at ≤ 0 the round is deleted
-   silently. This is the read task 831 cited as "the death cap per tick" — it is the mine/stick
+   silently. This is the read laser-watch-contact.md cited as "the death cap per tick" — it is the mine/stick
    arm timer, gated to id 0x45 alone.
 
 `Bullet_CollisionHandler` 0x12ce80 also WRITES `BU+0xFC` (the tripbomb stick's 120.0 arm delay
@@ -68,7 +68,7 @@ death range is the record's own `+0x1C`):
   the guards' `fire_weapon` (:9898), the melee `close_combat_impact` (:2761), the gun-imp mount
   (:13202), the GT turret (:14007), and `worldobj.rs`'s Shooter — all already game-exact. The
   one deviation: the Laser watch 0x4E/0x4F keeps 210.0 at `fire_player`/`fire_remote_cosmetic`
-  **[S unverified]** — task 831's port choice, kept because the merged laser tests ride it; the
+  **[S unverified]** — an earlier port choice, kept because the laser tests ride it; the
   game rule is +0x1C = 4.0/8.0 with the per-tick refire tiling the beam (see the correction in
   docs/systems/laser-watch-contact.md).
 - The MP paths (`mp/botweap.rs`, `mp/combat.rs`) already read `+0x1C` — unchanged.
@@ -85,7 +85,7 @@ death range is the record's own `+0x1C`):
   would have reached); a 1200-record round flies ~119 to the same tree — far past the P2K's
   boundary.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **A P2K round's flight on a fresh boot (gdbwatch)**: watch `BU+0xF4` (the travelled float at
    `BU = obj+0xE0`) and `BU+0xFC` through a P2K shot at open space. Predicted: `BU+0xF4` rises

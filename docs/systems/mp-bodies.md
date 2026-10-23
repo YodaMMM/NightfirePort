@@ -11,7 +11,7 @@ Evidence tags: [M] decompile, [D] disc/ELF data, [L] live, [S] port stand-in. Co
 table (the record's +0x10 character index). The bodies run the PLAYER animation set (`PlayerAnimSetInitNormal`
 0x18fcd8 and its siblings, which branch on the MP flag) [M].
 
-## What the port does (2026-10-18, the user's "they cant see eachother")
+## What the port does (2026-10-18: players could not see each other)
 
 - **Build:** `DroneContext::mp_body_skins` carries one skin per slot (`nf_game::mp::slot_skin`: humans
   `0..human_count`, bots `4..4 + bot_count`, else 0). For each, `Scene::build` registers a Character from the skin's

@@ -127,7 +127,7 @@ which calls `Trigger_Activate` for class-0x1D objects [M 0x1a5170:134-137]. Rout
 (`Trigger_Update` case 10, set by the EndLevel script's event 0x11).
 
 `NF_LEVELLOG=1` traces: script events, switch-channel writes (rising edge), and each LOAD_LEVEL trigger's gate check
-(once per second). Lets the user see why the level doesn't end — e.g. ch 0x1D is off because the EndLevel script
+(once per second). Shows why a level doesn't end — e.g. ch 0x1D is off because the EndLevel script
 never ran (ch 0x65 never fired because the gate-guard drone wasn't at post).
 
 ## 5. Level-start and intro cut-scenes (fix-cutscenes)
@@ -213,8 +213,9 @@ which is not in the table → no intro), plus the driving codes 0x7300004/8/b/d/
 Measured content [D]: every one of the 14 scripts is a single stream of op-0x1E `Script_TextStart` commands —
 subtitle timings for the intro MOVIE (the `GameFlow_PushState(0,6)` background video), not an in-engine
 cut-scene. The port plays neither movies nor subtitles (no PSS player), so there is nothing to port here beyond
-what exists: the port's `load` skips the intro SP creation and the playtest symptom "no intro" is the movie
-gap (GAPS, `ResetMap_Load` row), not a ScriptPlayer bug.
+what exists: the port's `load` skipped the intro SP creation and the "no intro" symptom was the movie
+gap, not a ScriptPlayer bug. (Status 2026-10-22: movies and the intro scripts play — docs/systems/movies.md,
+GAPS G-031.)
 
 ## 6. Open items
 
@@ -382,12 +383,12 @@ level**; the counts below are the improvement targets, each with the game functi
 | 07000007 | 0 | 0 | 0x3b DynamicObject_Create | 1 ({b4: 1}) | 0 / 0 | 0/3 | 488878 |
 | 07000008 | 0 | 0 | 0xe7 ThirdCam_Create | 0 | 0 / 0 | 0/8 | 462801 |
 | 07000009 | 0 | 0 | — | 0 | 0 / 0 | 0/3 | 195855 |
-| 0700000a | 0 | 0 | 0x35 PCQWorm_Create 0x1b07a8 (the Q-Worm PC — lands with s/map-tower), 0x3a Grapple_Create (grapple points) | 0 | 0 / 0 | 0/5 | 243974 |
-| 0700000b | 0 | 0 | 0x21 Ripples_Create (water ripples; presentation), 0x35 PCQWorm_Create 0x1b07a8 (the Q-Worm PC — lands with s/map-tower) | 0 | 0 / 0 | 0/5 | 351940 |
+| 0700000a | 0 | 0 | 0x35 PCQWorm_Create 0x1b07a8 (the Q-Worm PC — useobj.rs), 0x3a Grapple_Create (grapple points) | 0 | 0 / 0 | 0/5 | 243974 |
+| 0700000b | 0 | 0 | 0x21 Ripples_Create (water ripples; presentation), 0x35 PCQWorm_Create 0x1b07a8 (the Q-Worm PC — useobj.rs) | 0 | 0 / 0 | 0/5 | 351940 |
 | 0700000c | 0 | 0 | 0x3a Grapple_Create (grapple points), 0x3b DynamicObject_Create, 0xe7 ThirdCam_Create, 0xff no case in 0x1d04f0 (static) | 0 | 0 / 0 | 0/15 | 434064 |
 | 0700000d | 0 | 0 | 0x3a Grapple_Create (grapple points), 0x3b DynamicObject_Create, 0x3f CreepWall_Create (creep walls), 0xd8 RB_Create (rigid bodies), 0xe7 ThirdCam_Create, 0xff no case in 0x1d04f0 (static) | 0 | 0 / 0 | 0/16 | 533627 |
-| 07000011 | 0 | 0 | 0x35 PCQWorm_Create 0x1b07a8 (the Q-Worm PC — lands with s/map-tower), 0x3a Grapple_Create (grapple points) | 2 ({85: 2}) | 0 / 0 | 0/13 | 439488 |
-| 07000012 | 0 | 0 | 0x35 PCQWorm_Create 0x1b07a8 (the Q-Worm PC — lands with s/map-tower), 0x3a Grapple_Create (grapple points), 0x41 InverterTrigger_Create | 1 ({85: 1}) | 0 / 0 | 0/18 | 444509 |
+| 07000011 | 0 | 0 | 0x35 PCQWorm_Create 0x1b07a8 (the Q-Worm PC — useobj.rs), 0x3a Grapple_Create (grapple points) | 2 ({85: 2}) | 0 / 0 | 0/13 | 439488 |
+| 07000012 | 0 | 0 | 0x35 PCQWorm_Create 0x1b07a8 (the Q-Worm PC — useobj.rs), 0x3a Grapple_Create (grapple points), 0x41 InverterTrigger_Create | 1 ({85: 1}) | 0 / 0 | 0/18 | 444509 |
 | 07000013 | 0 | 0 | — | 2 ({85: 2}) | 0 / 0 | 0/7 | 297822 |
 | 07000014 | 0 | 0 | 0x3a Grapple_Create (grapple points), 0x3b DynamicObject_Create, 0x41 InverterTrigger_Create, 0x4a Apocalypse_Create, 0xf2 Emitter_CreatePlist (particles) | 0 | 0 / 0 | 0/32 | 591431 |
 | 07000015 | 0 | 0 | 0x4a Apocalypse_Create, 0xd2 Shooter_Create (turret shooters), 0xf2 Emitter_CreatePlist (particles), 0xfc Corona_Create (dynamic coronas) | 1 ({85: 1}) | 0 / 0 | 0/12 | 413266 |
@@ -395,7 +396,7 @@ level**; the counts below are the improvement targets, each with the game functi
 | 0700001b | 0 | 0 | 0x38 Create_SpaceLaser (space-station laser), 0x39 Create_SpaceMissile, 0x3b DynamicObject_Create, 0x4a Apocalypse_Create | 0 | 11 / 11 | 0/7 | 284445 |
 | 07000041 | 0 | 0 | 0x21 Ripples_Create (water ripples; presentation), 0x23 (no case in 0x1d04f0), 0x3a Grapple_Create (grapple points), 0x3b DynamicObject_Create, 0x3f CreepWall_Create (creep walls), 0x4a Apocalypse_Create, 0xd2 Shooter_Create (turret shooters), 0xd4 Cloud_Create, 0xd5 OneSided_Create, 0xd8 RB_Create (rigid bodies), 0xe3 Flicker_Create, 0xe7 ThirdCam_Create, 0xf4 Trigger_MoviePlayer, 0xfc Corona_Create (dynamic coronas) | 0 | 0 / 0 | 0/1 | 488781 |
 | 07000043 | 0 | 0 | — | 0 | 0 / 0 | 0/0 | 77727 |
-| 07000046 | 0 | 0 | 0x35 PCQWorm_Create 0x1b07a8 (the Q-Worm PC — lands with s/map-tower), 0xda Car_Create, 0xf2 Emitter_CreatePlist (particles) | 0 | 0 / 0 | 0/2 | 488921 |
+| 07000046 | 0 | 0 | 0x35 PCQWorm_Create 0x1b07a8 (the Q-Worm PC — useobj.rs), 0xda Car_Create, 0xf2 Emitter_CreatePlist (particles) | 0 | 0 / 0 | 0/2 | 488921 |
 | 07000048 | 0 | 0 | — | 0 | 0 / 0 | 0/0 | 3072 |
 | 07000049 | 0 | 0 | — | 0 | 0 / 0 | 0/0 | 77727 |
 | 0700004a | 0 | 0 | 0xd2 Shooter_Create (turret shooters) | 0 | 0 / 0 | 0/0 | 459997 |
@@ -405,7 +406,7 @@ Update (fix-world-objects, 2026-10-13): 0x41, 0xd2, 0x3b and 0xe7 are ported sin
 written — `crates/nf-game/src/worldobj.rs` (docs/atlas/world-objects.md), swept into the census
 (`levels_sweep_live.rs` HANDLED). The kinds above still unported: 0xd8 (RB rigid bodies), 0xda
 (Car), plus the presentation families the table already routes elsewhere (0x21/0x4e/0xfc lights
-and coronas, 0xf2/0xf3 particles and trees, 0xd4/0xd5/0xe3 weather, 0x35 PCQWorm → s/map-tower,
+and coronas, 0xf2/0xf3 particles and trees, 0xd4/0xd5/0xe3 weather, 0x35 PCQWorm → useobj.rs,
 0x3a/0x3f grapple/creep walls → their owners).
 
 The unhandled types are **not crashes** — the port draws their placements as static geometry
@@ -535,8 +536,8 @@ destroy props. `NONE` = no writer found on the disc — the gap later tasks can 
 ### 7.3 The gaps, with the game function that would write them
 
 - **0700000a ch 0x48 / 0700000b ch 0x4c** (the two Q-Worm installs): written by `PCQWorm_Update`
-  0x1aee20's `switch_channels[param1] = 1` when the weapon-0x58 bullet enters the PC — ported on
-  **s/map-tower** (unmerged at scan time, so the scan cannot see it); the walkthroughs prove it.
+  0x1aee20's `switch_channels[param1] = 1` when the weapon-0x58 bullet enters the PC — ported
+  (useobj.rs); the walkthroughs prove it.
 - **07000008 ch 0x4b** (the cable-car ride): the SP chain `mux #235 = AND(ch 0x4A, ch 4)` →
   ScriptPlayer #295 (script 0x0600004C, mode 64) — the pack script's SP plays but raises no event
   0xD for 0x4B on the disc [D decode]; the writer is the game's cable-car ride logic around

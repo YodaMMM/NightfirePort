@@ -44,7 +44,7 @@ in-game menus (`MenuManager_Monitor` 0x21d508:124,240). `GS_PauseGame(0)`: `Rese
 
 | Address | Name | What it does (one line) | Rust location | Status | Gaps |
 |---|---|---|---|---|---|
-| 0x1c9790 | `Game_Run` | One video frame: input, menus, text, snow, then the gated object handler + cameras. | `nf-view/src/lib.rs:649-687` (RedrawRequested tick loop) + `scene.rs:237` (`step_bond`) / `scene.rs:409` (`run`) | partial | No `FreezeGame`/`switch_AllowFreeze`/`sloflag` (no slow-mo, no freeze); no `MenuManager_*`/`Mission_Update`/`MP_Update` (mission end/fail screens, the 0x0700004x wrappers); `psiMovieFinished`/`psiDecompressWoman`/`UpdateAllShards`/`SSys_Monitor`/`Light_Update`/`Camera_UpdateAll`/`psi*Game_Run` have no ports. The pause-byte gate is replaced by `App.paused` (user Esc-pause) — see §7 item 3. |
+| 0x1c9790 | `Game_Run` | One video frame: input, menus, text, snow, then the gated object handler + cameras. | `nf-view/src/lib.rs:649-687` (RedrawRequested tick loop) + `scene.rs:237` (`step_bond`) / `scene.rs:409` (`run`) | partial | No `FreezeGame`/`switch_AllowFreeze`/`sloflag` (no slow-mo, no freeze); no `MenuManager_*`/`Mission_Update`/`MP_Update` (mission end/fail screens, the 0x0700004x wrappers); `psiMovieFinished`/`psiDecompressWoman`/`UpdateAllShards`/`SSys_Monitor`/`Light_Update`/`Camera_UpdateAll`/`psi*Game_Run` have no ports. The pause-byte gate is replaced by `App.paused` (Esc pause) — see §7 item 3. |
 | 0x109520 / 0x109580 | `psiPreGame_Run` / `psiPostGame_Run` | IOP sound RPC pump before/after the frame. | `nf-audio` (its own thread) | STANDIN | The port runs audio on a host thread instead of the IOP; per-frame ordering with the tick is not the game's. |
 | 0x1a9c80* | `Input_Update` | Polls pads into the action map. | `lib.rs:520-600` (winit key events → `Input`) | partial | Keyboard/mouse only; no pad, no `Input_Action` repeat/edge semantics (action 0x19 "skip cut-scene" missing — see `SP_Update`). |
 | 0x17d1e8 | `GS_IsPaused` | `-1` + single player: `GameState[0x50]`; `-1` + MP: AND of the MPGame slots; per-player: `MPGame[p*0x30]`. | none (`App.paused` + `Drones::paused` stand in) | STANDIN | The port has no pause byte: nothing distinguishes "pause menu" from "cut-scene" — divergence 3 in §7. |
@@ -170,8 +170,8 @@ the mask at `+0x36` and the message countdown at `+0x3C` are separate fields.
 |---|---|---|---|---|---|
 | 0x1b1a78 | `Trigger_Update` | `+0x3C` countdown decrement; locked (`ch[+0x24]` on) → `obj+0xF0 \|= 0x30` **when hide (+0x3A) ≠ 0** (0x1b1a78:50-57), return either way; path anim pose + clock advance (wrap past frames); `Trigger_Hit`; then per type — **1** TouchOnce: out on → delete (if `obj+0xF0 & 0x10`), else **falls through into 2**; **2** Touch: `ch[out] \|= hit` (+timestamp), channel 0x7D only on 0x07001500; **3** AND: `ch[out] = AND(inputs)` stopping at the first 0 (+timestamp, Bond-moment 0x65-0x6E + `obj+0xF0 & 0x10` → delete); **4** SEQ AND: AND with the window predicate `time[prev_input] − 4 <= time[input]` — **no upper bound** (an input any time after the previous passes, and so does one up to 4 frames *before* it) [M 0x1b1a78:135-136]; **5** Out: copy `ch[out]` to up to 8 targets; **10** LOAD_LEVEL: `ch[+0x28]` on → `Trigger_Activate(this, glb_players)`; **0xC** OR: `ch[out] = OR(inputs)`; **0xD** MoviePlayer: input on → clear that channel, `GameState._16_4_ = out`, `GameState[0x14] = 0`, `GameFlow_PushState(0,6)`, `GameFlow_PushState(30.0,7)` (0x41f00000 [M 0x1b1a78:190-199]). | `triggers.rs:233` (`update`), per-type arms; Touch run in `calc` (`triggers.rs:291`) | partial | TouchOnce deletes without the glist 0x10 check (`triggers.rs:237`) — a TouchOnce whose glist lacks bit 0x10 keeps firing in the game (harmless on 07000005: the OR write makes it equivalent); the AND/Bond-moment self-delete (`triggers.rs:240-244`) and case 0xD (MoviePlayer) are missing; the path-anim pose and the `+0x3C` countdown are missing; **case 4's port window `b >= a && b - a <= 4` (`triggers.rs:249`) is tighter than the game's lower-bound-only predicate — divergence 6**; AND with an *empty* input list writes 1 in the game (bVar11 init 1, 0x1b1a78:91-103), the port writes 0 (`triggers.rs:242`). |
 | 0x1b1fc8 | `Trigger_Hit` | Contact bits from the object's collider contacts: class 3 → 8 (player), 2/0x4A → 0x10 (drone/pickup), 5 → 2 (object) [M 0x1b1fc8:24-47]; for **types 1/2 only** (0x1b1fc8:56): mask 0x18 + filter list — 0xB needs a drone, 0xE the player, else drone skin-hash low 16 bits; **mask bit 1 seeds the result with `ch[+0x2E]`** (= filter[4], placement p6) instead of 1 (0x1b1fc8:63-68); mask & 2 walks the class-5 contacts against the filter list (0x1b1fc8:124-159); default `mask & contacts`. | `triggers.rs:185` (`hit`) | partial | Contact bit 2 (class-5 objects touching) has no port touchers (touchers are Bond + enabled drones only, `drone.rs:3892-3894`); mask bit 1's channel gate is missing; the type 1/2 gate on the 0x18 branch is missing (the port applies the filter semantics to every mask); mask 2/4/0x20-0x3F arms fall into the generic AND (`triggers.rs:202`) which is right for 8/0x10 but silently drops bit 2. The port's contacts come from its own capsule test (grow +0.1, `triggers.rs:174`) not the game's collider contact list — equivalent for the plates measured so far [S]. |
-| 0x1b2318 | `Trigger_Activate` | Fired by `Trigger_Update` case 10 and `Player_Activate`. Guard: activator must be class 3; cancel if `ch[0x63/0x62/0x61/0x60]`; key gate `+0x26` (p1) off → locked message (label 0x2000021) + 3 s message timer, **return, no load**; type 2 (Touch): `ch[out] = 1` if activated-flag; type 1: + self-delete; type 0xD: movie push; **type 10**: if `ch[+0x28]` (p2 auto) on → set success `+0x2C` (p4) … then **both paths fall into**: `Music_Event(3,1)`, `GS_PauseGame(1)`, `ResetMap_LevelToLoad(level,1,0)`, `GameFlow_PushState(300.0,7)`, type ← 99 (never again), `Player_RamSave`. The auto-off path sets `+0x2A` (p3) first — **the level still loads**. | `triggers.rs:210` (`activate_request`) + `drone.rs:4007-4017` (LOAD_LEVEL arm) + `door.rs:580`/`drone.rs:3612` (E-key) | partial | The port sets the success channel unconditionally and the fallback **p3** only when the *key gate* blocks (`triggers.rs:216-222`) — the game sets p3 when the *auto channel* is off and still loads; `Music_Event(3,1)` ported (`drone.rs:4013`); `GS_PauseGame`, the state-7 push, type←99 (→ `gone` latch), `Player_RamSave` folded into the synchronous level swap; TouchOnce/Touch E-key arms ignore the mask&4-activated check (`triggers.rs:225-227`). **FIXED (s/fix-level2)**: `activate_request` begins the TOUCH_ONCE/TOUCH arms with the `mask & 4` gate (+ out ≠ 0 on type 2) and refuses a spent (`gone` = type-99) LOAD_LEVEL — the mask-8 plunge/death triggers can no longer fire the death NIS from the use key; the success/fallback write order now matches the game (auto on → success, else fallback, both → load). The synchronous carry-over (`Player_RamSave`/`RamLoad`, the gated start scan, `Player_InitWeapon`) is ported in `player.rs` + `nf-view`'s `load_with_carry` (playtest F1/F2/F4/F5; WORKLOG fix-level2). |
-| 0x1b2790 / 0x1b31a0 / 0x1b30a8 | `SoundTrigger_Update` / `MusicTrigger_Update` / `InverterTrigger_Update` | Their channel reads + `Sound_Play` / `Music_Event` / invert. | none | not started | 07000005 placements 0xF9/0xFB/0x41: none in the main map [D per the survey in `levels.md` §2], so nothing playtest-visible yet. |
+| 0x1b2318 | `Trigger_Activate` | Fired by `Trigger_Update` case 10 and `Player_Activate`. Guard: activator must be class 3; cancel if `ch[0x63/0x62/0x61/0x60]`; key gate `+0x26` (p1) off → locked message (label 0x2000021) + 3 s message timer, **return, no load**; type 2 (Touch): `ch[out] = 1` if activated-flag; type 1: + self-delete; type 0xD: movie push; **type 10**: if `ch[+0x28]` (p2 auto) on → set success `+0x2C` (p4) … then **both paths fall into**: `Music_Event(3,1)`, `GS_PauseGame(1)`, `ResetMap_LevelToLoad(level,1,0)`, `GameFlow_PushState(300.0,7)`, type ← 99 (never again), `Player_RamSave`. The auto-off path sets `+0x2A` (p3) first — **the level still loads**. | `triggers.rs:210` (`activate_request`) + `drone.rs:4007-4017` (LOAD_LEVEL arm) + `door.rs:580`/`drone.rs:3612` (E-key) | partial | The port sets the success channel unconditionally and the fallback **p3** only when the *key gate* blocks (`triggers.rs:216-222`) — the game sets p3 when the *auto channel* is off and still loads; `Music_Event(3,1)` ported (`drone.rs:4013`); `GS_PauseGame`, the state-7 push, type←99 (→ `gone` latch), `Player_RamSave` folded into the synchronous level swap; TouchOnce/Touch E-key arms ignore the mask&4-activated check (`triggers.rs:225-227`). **FIXED**: `activate_request` begins the TOUCH_ONCE/TOUCH arms with the `mask & 4` gate (+ out ≠ 0 on type 2) and refuses a spent (`gone` = type-99) LOAD_LEVEL — the mask-8 plunge/death triggers can no longer fire the death NIS from the use key; the success/fallback write order now matches the game (auto on → success, else fallback, both → load). The synchronous carry-over (`Player_RamSave`/`RamLoad`, the gated start scan, `Player_InitWeapon`) is ported in `player.rs` + `nf-view`'s `load_with_carry` (WORKLOG fix-level2). |
+| 0x1b2790 / 0x1b31a0 / 0x1b30a8 | `SoundTrigger_Update` / `MusicTrigger_Update` / `InverterTrigger_Update` | Their channel reads + `Sound_Play` / `Music_Event` / invert. | none | not started | 07000005 placements 0xF9/0xFB/0x41: none in the main map [D per the survey in `levels.md` §2], so nothing visible yet. |
 | 0x1adea8 / 0x1b02a8 | `Switch_Update` / `Switch_Activate` (class 0x39, placement 0x29) | Use-key/periodic channel **toggle** with debounce (`+0xF4` mirror, `+0xF6` repeat timer, `SP_UnPause` on flip); Activate: toggle `ch[out]` when the E-key activator is class 3, the gate `+0x14` is off, and the linked ScriptPlayer is in state 0. | none | not started | Switch objects on 07000005: none in the main map [D]; other levels use them (the FuseBox 0x31 family is separate). |
 
 ### 3.3 Add/remove during the walk
@@ -246,10 +246,10 @@ ee_start_05.bin@0x2A3768]: `_8_4_` = 0x07000005 (level to load), `_12_4_` = 0x07
 
 \* `GameStateStack` / `StackIndex` — addresses in `work/action-symtab.tsv`.
 
-## 7. Top 10 divergences likely to cause playtest bugs
+## 7. Top 10 divergences likely to cause visible bugs
 
 Ranked by (a) how often the affected code runs, (b) how visible the wrongness is. Each row: the game's behaviour
-[evidence], ours [evidence], and the playtest symptom it explains or risks.
+[evidence], ours [evidence], and the symptom it explains or risks.
 
 **1. Drones freeze during every cut-scene, not just the ones that ask for it (and the port ignores the game's own
 freeze request).** Game: `control_movement_object_handler` runs whenever `GameState[0x50] == 0` — `ScriptCam` plays
@@ -264,7 +264,7 @@ guards frozen only by accident of the port's coarser gate. The B-10 symptom ("cu
 skipped") was the *opposite* gating bug: freezing the whole tick stopped `Trigger_Calc` + `SP_Update`, so
 `PlayerEnable` never arrived; the fix moved the freeze inside the drone loop, which restored scripts/triggers/doors
 but froze drones game-wide. **The correct shape is: port event 5/7 (`Drone_EnableAll`) as the drone gate and drop
-`Drones::paused`.** — **FIXED (s/fix-core)**: `Drones::npc_enabled` (NPCGlobals) replaces `Drones::paused`; event 5 →
+`Drones::paused`.** — **FIXED**: `Drones::npc_enabled` (NPCGlobals) replaces `Drones::paused`; event 5 →
 `Request::DroneEnable{on:false}`, `Script::free` → `DroneEnable{on:true}` on flag 0x80 [M 0x1d94c0 case 5,
 0x1da880:41-43, 0x1383e8]; `DroneSpawner_Control`'s gate [M 0x137e68:21] and the `Drone_InitComms` shared passes'
 gate [M 0x139520:124] are ported too (ProcessOpponents, ProcessDroneSight+FindAlertedDrones, 0x97, sound alerts,
@@ -275,8 +275,8 @@ doesn't burst stale alerts.
 runs the object handler only when `GS_IsPaused == 0` **and `ScriptCam == 0`**. The decomp gates it on
 `GS_IsPaused(-1) == 0` alone [M 0x1c9790:30-35]; `ScriptCam` picks `Text_Update2Line` vs `Text_Update` (line 17)
 and the else-branch's `Light_Update` (and — with `psiMovieFinished` — the 2Line text choice). Any future work keyed to that comment (e.g. "skip Sim when a camera is up")
-would re-introduce the B-10 freeze. Fix: correct the comment when touching this code (doc-only task, so it stands
-here). — **FIXED (s/fix-core)**: `scene.rs` no longer sets any paused flag from `Sim::disabled` and the comment now
+would re-introduce the B-10 freeze. Fix: correct the comment when touching this code (this audit was doc-only, so it stands
+here). — **FIXED**: `scene.rs` no longer sets any paused flag from `Sim::disabled` and the comment now
 states the `GS_IsPaused`-only gate [M 0x1c9790:30-35].
 
 **3. The pause byte does not exist; the port cannot distinguish "pause menu" from "level transition" from
@@ -284,8 +284,8 @@ states the `GS_IsPaused`-only gate [M 0x1c9790:30-35].
 above it [M 0x17d1e8, 0x17d178, §0 caller list]. Port: `App.paused` (viewer pause, ticks stop entirely — the game
 keeps rendering while paused) and `Drones::paused` (§ item 1). Risks: the level-transition pause hides one frame of
 post-fire trigger updates (the port's synchronous swap runs the whole tick first); a future pause menu ported
-literally would stop the drone/audio state the game keeps ticking. No current playtest symptom, but every
-"why did the level end / not end" report routes through this gate.
+literally would stop the drone/audio state the game keeps ticking. No current symptom, but every
+"why did the level end / not end" question routes through this gate.
 
 **4. Door auto-close blocking zone is the wrong sphere in the wrong place (the 07000001 auto-close symptom).**
 Game: the auto-close proximity scan tests `Vec_SqDist3D(door obj+0x80, actor obj+0x80) < (r_door + r_actor)²·2`
@@ -307,7 +307,7 @@ same pulse is only visible to the *next* tick — and if it lasted exactly one t
 Effect: a 1-tick lock-channel pulse (script event 0xD writing 1 then a trigger clearing it) fails to unlock doors
 in the port; `Player_Weapon`'s `ch[0x48]` prev read (0x1a24c8:247) has no port counterpart yet. Fix shape: snapshot
 the channels right after `triggers::calc` in `Drones::tick` and feed `doors.update` from it. — **FIXED
-(s/fix-core)**: `Doors::end_tick` is called right after `triggers::calc`, before the walk.
+**: `Doors::end_tick` is called right after `triggers::calc`, before the walk.
 
 **6. Mux (0xEC/0xED/0xEE/0xEF) parameters read from the wrong slots, and the SEQ_AND window is the wrong
 predicate — 7-input muxes, any mux with a non-zero p8/p9/p10, and all SEQ_AND chains misbehave.** Game: the mux wrappers shift every param down by one (out p0 → slot 1, inputs = raw
@@ -322,10 +322,10 @@ within 4 frames *after* the previous one, while the game's predicate is `time[pr
 0x1b1a78:135-136] — no upper bound at all (and the game re-stamps times on every non-zero write, the port only on
 rising edges): a correct-order SEQ_AND chain with a >4-frame gap works in the game and never fires in the port.
 Fix shape: correct `from_params`'s `_` arm, make the mux loops stop at the first zero, and use the game's
-window predicate. — **FIXED (s/fix-core)**: `from_params`'s mux arm reads mask q(8), list q(1..=7), lock q(9),
+window predicate. — **FIXED**: `from_params`'s mux arm reads mask q(8), list q(1..=7), lock q(9),
 hide q(11); LOAD_LEVEL's mask is the hard 0xE [M 0x1b2950]; AND/OR scan the input prefix (zero slot ends the list;
 empty AND writes 1 [M 0x1b1cbc]); SEQ_AND's window is `time[prev]−4 <= time[cur]` [M 0x1b1e04]; `Channels::set`
-re-stamps on every nonzero write. **Slot-mapping correction (s/fix-core audit)**: the table above mis-traced the
+re-stamps on every nonzero write. **Slot-mapping correction (core-loop audit)**: the table above mis-traced the
 wrapper's loop bound — it writes slot[k] = p(k−1) for k = 2..7 only (`while (uVar3 < 8)`, 0x1b2c68), so slot 8
 keeps raw p8 and slots 9-11 are untouched; `Trigger_Create` copies 7 inputs from slots 2..8 [M 0x1b1720]. The mux
 inputs are therefore raw **p1..p6 + p8** (p7 is overwritten and lost), mask = **p9** (default 2 when 0
@@ -339,7 +339,7 @@ OR (`ch[out] |= hit`) and case 1 **falls through into case 2** every frame while
 0x1b1a78:73-88]. Port: `triggers.rs:236-238` deletes unconditionally and ORs via `set` — equivalent while the
 channel only feeds OR-style consumers, wrong the moment a mux ANDs that channel with others *and* the plate is
 re-touchable. Low probability on current levels [D], cheap to fix with `from_params`'s missing glist-flag read. — **FIXED
-(s/fix-core)**: `Trigger.glist_0x10` models the check (live data: every TouchOnce carries the bit [L]);
+**: `Trigger.glist_0x10` models the check (live data: every TouchOnce carries the bit [L]);
 case 3's Bond-moment delete (out 0x65-0x6E) uses it too.
 
 **8. The level-intro cut-scenes never play (the `SP_Create` intro-script path is unported).** Game:
@@ -347,10 +347,10 @@ case 3's Bond-moment delete (out 0x65-0x6E) uses it too.
 from a 14-entry movie-code → hash table (0x7100001→0x0600095A, 0x7100005→0x06000961, the 0x730000xx driving codes,
 …) [M 0x1d6360:39-99]; levels whose code is not in the table get no intro in the game either. Port: `lib.rs:90` builds
 the level archive directly and never creates the intro player. Effect: starting a level begins gameplay
-immediately where the game plays the intro fly-by — users see "missing intro", and the `GameState._16_4_` movie
-code machinery (`GetLevelToLoadFromMovieCode`) has no counterpart. — **NOT FIXED in s/fix-core**: the intro
-ScriptPlayer is created in `nf-view/src/lib.rs`'s build path, which this task's file scope (triggers/nis/drone.rs +
-scene.rs's drone-gate lines) does not cover.
+immediately where the game plays the intro fly-by — the intro looks missing, and the `GameState._16_4_` movie
+code machinery (`GetLevelToLoadFromMovieCode`) has no counterpart. — **not fixed in this pass**: the intro
+ScriptPlayer is created in `nf-view/src/lib.rs`'s build path. (Status 2026-10-22: the intro scripts play — pack
+loading in `nf_view::load_with_carry`, GAPS G-031/G-040.)
 
 **9. Runtime-spawned objects update at the wrong end of the control list.** Game: `control_add_object_to_list`
 prepends, so spawner drones and script-created objects update **before** every placement object (they see this
@@ -361,7 +361,7 @@ explicit first pass (`drone.rs:3989`), script trigger volumes are re-created eac
 **spawner-spawned drones** ride their *template placement's* index and script *entities* have no list position at
 all. Effect: ordering-sensitive chains — a gate guard spawning onto a TouchOnce plate the same frame, or a script
 entity's channel feeding a placement mux in the same tick — resolve one tick late. The A-12e truck-chain test
-passes because its chain spans multiple ticks [M test]; a one-tick chain would not. — **PARTLY FIXED (s/fix-core)**:
+passes because its chain spans multiple ticks [M test]; a one-tick chain would not. — **PARTLY FIXED**:
 spawner drones now carry `spawn_seq`/`spawn_frame` — newest-first ordering [M 0x134698 prepend] and the spawn-tick
 skip (the game's walk cursor is already past the head when the spawner runs). Script entities still have no list
 position (their triggers get `usize::MAX - o`; the entities' channel writes ride the walk — the players update from
@@ -385,7 +385,7 @@ the guard [M placements; A-12e]; (ii) the guard's patrol AI (guard-ai port map, 
 plate — the tests pin it [S; A-12e]; (iii) divergence 1 freezes the guard during any cut-scene that runs while it
 still needs to touch — and the toucher list only carries `enabled` drones (`drone.rs:3892-3894`). None of these is a core-loop bug: the port's `Trigger_Calc`/mux/SP/LOAD_LEVEL path verifiably
 fires the chain when the inputs hold (A-12e test `route_a_gatehouse_walk_spawns_guard_and_ends_level`). What the
-core loop owes this symptom: divergence 1 (drone gating) and 9 (same-tick ordering) — both addressed in s/fix-core;
+core loop owes this symptom: divergence 1 (drone gating) and 9 (same-tick ordering) — both addressed since;
 the route-a test still passes (5 passed in `level_end_live`), i.e. the mux/LL fixes neither blocked nor unblocked
 the chain (07000005's muxes read ≤ 4 inputs, p7..p11 = 0 [D]).
 
@@ -447,6 +447,5 @@ sources; all core claims reproduced. Corrections they forced into this document 
   `GameState._52_4_` = 108153 [L].
 
 Not fully verified by the auditors: the disc-side placement parameter values (p7..p11 of 07000005's muxes) behind
-divergence 6 — the wrapper decompile is measured, the level data was not re-parsed this session (no Rust toolchain
-in the sandbox; `nf-extract placements` needs cargo). The A/B/C/D audits are recorded here as the task's evidence;
-their verdict lines are in the session WORKLOG entry.
+divergence 6 — the wrapper decompile is measured, the level data was not re-parsed then (`nf-extract placements` needs cargo). The A/B/C/D audits are recorded
+here; their verdict lines are in the WORKLOG entry.

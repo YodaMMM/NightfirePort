@@ -2,11 +2,11 @@
 
 *All of this page is port design [S]: the PS2 game has no online mode (docs/systems/net-lobby-list.md,
 docs/systems/net-p2p.md) and the only game facts involved are the lobby pages those docs already cover.
-The user chose the shape (2026-10-19): "go with the cloudflare lobby" — a small free Cloudflare Worker as
-the game's built-in meeting point; play stays peer-to-peer.*
+The shape (2026-10-19): a small Cloudflare Worker as the game's built-in meeting point; play stays
+peer-to-peer.*
 
-Task 700x1 (`s/net-short-codes`, docs/systems/net-short-codes.md) built 4-character codes on the
-player-set home server `nf-lobbyd` (UDP). This task swaps the **transport and meeting point** to the
+docs/systems/net-short-codes.md built 4-character codes on the
+player-set home server `nf-lobbyd` (UDP). This page moves the **transport and meeting point** to the
 cloud service; `nf-lobbyd` keeps working as the optional override.
 
 ## 1. What the service is (`tools/lobby-worker/`)
@@ -28,8 +28,8 @@ rate-limit windows.
 
 ## 2. The game side (nf-net / nf-view, no new crates)
 
-- `nf_net::cloud::LOBBY_SERVICE_URL` — the deployed `*.workers.dev` URL, a constant **empty until the
-  user deploys** (= the service is off). Overridable: `NF_LOBBY_SERVICE` env, else the
+- `nf_net::cloud::LOBBY_SERVICE_URL` — the deployed `*.workers.dev` URL (set since 2026-10-19;
+  an empty value turns the service off). Overridable: `NF_LOBBY_SERVICE` env, else the
   `lobby_service = <url>` line of `%APPDATA%\NightfirePort\net.txt` (the same file `lobby_server`
   already rides; never built into the exe beyond the empty default).
 - **Transport**: the system `curl` (`curl.exe` on Windows) in a **background thread**, exactly the
@@ -53,7 +53,7 @@ rate-limit windows.
 - **Override**: when `lobby_server = host:port` (nf-lobbyd) is set it wins over the cloud service —
   the UDP REGISTER/LOOKUP path of net-short-codes runs as before; the cloud service is the default
   meeting point when nothing else is set.
-- **Getters for the draw code** (the main agent draws every page): `MpSession::cloud_lobbies()`,
+- **Getters for the draw code**: `MpSession::cloud_lobbies()`,
   `MpSession::join_code_display()` (already there), `MpSession::public_lobby()`.
 
 ## 3. Version
@@ -65,8 +65,7 @@ row applies).
 
 ## 4. Tests
 
-- **The worker** (`tools/lobby-worker/test/handler.test.mjs`, plain `node:test` — no Miniflare in the
-  sandbox): the handler logic against a fake DO environment — register/refresh stability, code
+- **The worker** (`tools/lobby-worker/test/handler.test.mjs`, plain `node:test`, no Miniflare): the handler logic against a fake DO environment — register/refresh stability, code
   alphabet, list filters (version + public), code lookup, expiry, DELETE, rate limits, name
   filtering, size caps.
 - **The game** (`crates/nf-net/tests/cloud_lobby.rs`): a local mock HTTP server (`std::TcpListener`

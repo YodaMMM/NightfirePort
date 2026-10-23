@@ -105,7 +105,7 @@ Slider behaviour [M `C_SBSCREEN_Handler` 0x217b08, size 204]:
   - The SIGN convention (whether a positive X shifts the drawn picture left or right on the TV —
     DISPLAY's DX selects where the read starts) is not decidable from the decompile alone; the
     renderer applies the fraction and the direction is confirmed by the live check in
-    docs/reports/screen-adjust-model.md. [S]
+    the port's model. [S]
 
 - PAL note: `sceGsSetDefDispEnv`'s PAL bases are DX 0x290 / DY 0x48 [M 0x226370:83-96], but
   `VBlankInt` writes the NTSC bases unconditionally; on this NTSC-U disc `PS2Region` is 0 and

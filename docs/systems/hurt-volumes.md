@@ -1,6 +1,6 @@
 # Hurt volumes (placement 0xE4, class 0x27) — the spec, from the decompile
 
-Written for the port task that implements them. Everything below cites the decompile; nothing is
+Written as the spec for the port (crates/nf-game/src/hurt.rs). Everything below cites the decompile; nothing is
 asserted from memory. 07000006 carries exactly one: **#373 "Hurt_A"**, the well shaft's kill volume
 (docs/levels/07000006.md §5.10).
 
@@ -29,7 +29,7 @@ is set and LOW at create: `obj+0xF0 |= 0x20` (inactive until it rises).
 #747's neighbour **#373**: params [6, 1000, 0, 0xffff, 1, 0] → type 6 (fall), 1000 damage, no gate,
 no activation sound, who-mask 1, one-shot 0 (re-arms), anim duration = object index 373 − 1 = 372
 keys [D #373; the framelist lives at `tag+8` — the placement block's +8 word, i.e. the HASHCODE
-slot... **live check for the main agent**: dump `tag+8` for #373 on 07000006 and read the framelist
+slot... **open live check**: dump `tag+8` for #373 on 07000006 and read the framelist
 it points at — the decompiler's `tag` here is the level-tag the creator receives, whose +0x2C+4k
 carries the params (the same layout SoundTrigger_Create uses), so +8 is BEFORE the params: it is
 the tag's own +8 word, not a param].
@@ -68,7 +68,7 @@ volume's glist geometry gets the contact, and the victim's damage pass calls `Hu
 damage volumes today (`bullet.rs`'s PlayerHealth damage types 1..7 — falls 6, drowning 7, hurt
 volumes).
 
-## Port plan (the next task)
+## Port plan (as written before the port)
 
 1. `crates/nf-game/src/hurt.rs`: create from the 0xE4 placements (the same param layout as
    SoundTrigger: `tag+0x2C+4k` = param k), the volume from the placement's glist tris — reuse
@@ -86,7 +86,7 @@ volumes).
    `classify` path can print #373's glist object; a live PCSX2 check of `Hurt_GetDamage`'s caller
    settles the application point.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. PCSX2, fresh boot of 07000006: walk Bond over the well mouth and let him drop. Measure the
    drop and the health after landing (does the REAL game's well shaft reach a kill depth, or is
@@ -121,9 +121,9 @@ So the kind port is visible play on 05 / 08 / 0a / 11 / 15 / 1b — not on 06 (w
 is the inert one). The 07000005 #331–333 trio sits at the chasm the plunge triggers already cover
 [docs/levels/07000005.md] — worth checking whether the game doubles the kill (plunge + hurt) there.
 
-## The port as merged (level-08-interactables-2, re-landing 708a onto master's one system)
+## The port
 
-`crates/nf-game/src/hurt.rs` is the ONE hurt module (the 708a `Drones::hurts` variant is retired):
+`crates/nf-game/src/hurt.rs` is the ONE hurt module (an earlier `Drones::hurts` variant is retired):
 master's `Sim.hurts` (`nf-view/src/scene.rs` creates them with the level and ticks them in the
 scene pass next to the drown tick). `Hurt_Update` 0x17e5d0's contact law lives in
 `Hurt::update_touch(gate_on, a, b, r, drone)` — the gate maintenance (the live 0x20 bit), the
@@ -156,12 +156,12 @@ platform stand + the real walk off the boarding platform: the fall, the plunge, 
 hold, hits == 0), `hurt_02_live`, `interact_07000006_live` (#373 inert), `fix_finale_live` +
 `spurious_complete_16_live` (#309 stays dead during the fight).
 
-### Live checks for the main agent (the 705d coordination)
+### Live checks (open) (the 16 ShuttleLaunch question)
 
 3. PCSX2, fresh boot of 07000016: watch `switch_channels[243]` (0xf3) and the Mission state
    (0x182c60) through the chaser fight. Expected: the channel rises with (or after) Mission
    state 6 — the chasers' defeat — never before; #309 (gate 0xf3, 1000 damage) must stay
-   disabled for the whole fight. Settles the ShuttleLaunch question 705d and this task both need.
+   disabled for the whole fight. Settles the ShuttleLaunch question.
 4. PCSX2, fresh boot of 07000008: let a guard (or drive the chopper's passengers) onto the y
    −24.1 valley floor under #42–44 — expect the drone's health to drop by 1000·damage_taken and
    the death selector to fire (the drone-side delivery the port infers from NDrone2_DealWithObjHit
@@ -206,7 +206,7 @@ pack buys:
    fires; the re-enable then leaves him where he already was). `walkreal_07000016_live`'s tail
    stays `#[ignore]`d for the same reason (its reason text cites this section).
 
-**Live checks for the main agent (U-051 closure):**
+**Live checks (open) (U-051 closure):**
 5. PCSX2, fresh boot of 07000016, play to the pack pickup: watch `switch_channels[243]`
    (0x26fc90 + 243·4) and the player position (obj+0x30) from the pack cinema's end to the launch.
    Expected: position == (3.57, −22.76, −179.55) at the re-enable; the player RISES out of the pit

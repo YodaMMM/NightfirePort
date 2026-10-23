@@ -6,11 +6,10 @@ profile byte each row reads/writes (in `PlayerSetting[slot]` 0x2a38c8 / `MPSetti
 0x2a47a0 / the GSET globals), the boot defaults, and the runtime function that reads each byte.
 The menu-def page records live in 07000048.bin kind-8 entry 08000002 (pages 0x4000001d wheel,
 0x4000002d Advanced, 0x4000002e MP, 0x40000031 AV); `crates/nf-view/src/menu.rs` documents the tag
-format and carries the row tables (`ADV_ROWS` / `MP_ROWS` / `AV_ROWS`) the main agent draws.
+format and carries the row tables (`ADV_ROWS` / `MP_ROWS` / `AV_ROWS`) the pages draw.
 
-Originally written by task 610 (`s/profile-options`, never merged); re-landed by
-`profile-options-2` onto the tree that carries options-census + fix-909c — the wiring table below
-is updated to that reality and cross-references `docs/systems/options-census.md` instead of
+The wiring table below
+reflects the tree with the options census and cross-references `docs/systems/options-census.md` instead of
 duplicating it.
 
 Port side: the save model is `crates/nf-game/src/profile.rs` (the PLRS/MPSG/GSET/CHET blocks,
@@ -58,7 +57,7 @@ On open (msg 0x4b) the handler fetches each row's current value with `Menu_Send(
 Defaults: `Input_Init` 0x17edd8 (memset 0, then +0x0C = 1 and the bits above); the "New Codename"
 template [L 0x2e1b18] matches it except `controller_style` = 7.
 
-Note on +0x0C: task 610 modelled it as `flashing_objects: bool` + a reserved bit, but the page's
+Note on +0x0C: an earlier model had it as `flashing_objects: bool` + a reserved bit, but the page's
 On item writes **2** (not 1) — the u8 `aux_style` (master's model, kept) is the faithful shape;
 the runtime gate is `!= 0`, which the port's `Drones::near_flash` carries.
 
@@ -130,14 +129,14 @@ row with its consumer or its NoPortReader reason (full table: `docs/systems/opti
 - **Split-screen** (0x1b2b8's 2-player viewports), **speaker mode** (0x117078's IOP path),
   **vibration**, **controller style mapping**: census NoPortReader entries with the reasons.
 - **Secret Unlocks codes** (the 0x40000020 page): the unlock fields live in the progress layer's
-  BNUS/MSSN blocks; the page itself is the main agent's draw work.
+  BNUS/MSSN blocks; the page itself is draw-side work.
 - The MP options page's working-copy statics (`MPSettings+0x40/+0x44` [M 0x2144d8]) vs the saved
   `slot·0x30+0x28/+0x2c`: the page's seed path (which slot the codename editor targets) is [S]
   "the active codename's slot" — a live check would settle it.
 - The Manual Aim toggle has no PC reader (above); if the port ever grows a pad aim action, the
   game's semantics are pinned here (0x1a24c8:45-52).
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **HUD Always On vs Off**: on any level, set +0x0B = 1 (Off) via the page and stand still ~4 s:
    the panes fade out; taking damage pops them back. gdbwatch `BL+0x8BC` (expected: 1.0 → decays
@@ -156,8 +155,8 @@ row with its consumer or its NoPortReader reason (full table: `docs/systems/opti
   signed; +0x0C = 2 keeps its bit; sisters on the extremes).
 - The AV sliders' driver masters: `the_av_volume_rows_reach_the_driver_masters` inside
   `crates/nf-view/src/lib.rs`'s harness module (the drain path, with the lowered-slider and
-  boot-defaults sisters) — the one 610 test whose mechanism (`Drones.options`) master replaced.
-- Master's own options-census suite covers the runtime effects this task once wired (crouch,
+  boot-defaults sisters) — the test whose mechanism (`Drones.options`) the current code replaced.
+- The options-census suite covers the runtime effects (crouch,
   crosshair, pane fade, auto-aim pair, auto-switch): `the_option_drain_moves_the_wired_rows`,
   `the_crouch_option_picks_the_stand_condition`, `the_pain_alpha_decays_under_the_gate`,
   `the_mp_auto_aim_row_wins_in_mp`, `options_hold_while_the_front_end_is_closed`.

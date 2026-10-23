@@ -1,6 +1,6 @@
 # mp-respawn-ammo — every MP respawn re-arms the game's spawn loadout
 
-The user (an MP match from the menus, 2026-10-19): "you respawn with no ammo".
+Symptom (an MP match from the menus, 2026-10-19): players respawned with no ammo.
 
 ## The game's respawn loadout [M]
 
@@ -61,7 +61,7 @@ Each drives the real paths and pins numbers only, each with a can-fail sister:
   weapon dry through the real trigger taps → health 0 → the death sequence → the 5 s respawn → the
   kit is back exactly: the spawn weapon drawn and owned, `clip[clip_slot]` = `clip_size`, the ammo
   type carrying the other `clip_size`, health = armor_bonus(0)+100 [M 0x185368:65-73]. These FAILED
-  on the pre-fix tree (clip 0 after the respawn — the user's symptom).
+  on the pre-fix tree (clip 0 after the respawn — the symptom).
 - `online_respawn_rearms_and_the_machines_agree`: two machines in lockstep (`nf_view::net_tick`,
   every tick's hash asserted); the fresh kits and the shared gate's split (sister) → a real P2K
   kill of slot 1 → the 5 s wait → the respawn: machine B's local kit restored, both machines' gate

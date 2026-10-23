@@ -1,6 +1,6 @@
 # 09 security-room alarm (security-room-alarm-09)
 
-Why the 07000009 security guards never raise the alarm on Bond in the port (playtest 2026-10-17,
+Why the 07000009 security guards never raise the alarm on Bond in the port (2026-10-17,
 07000009: Bond at the elevator panel — the game raises ch 0x61 within seconds; the port ran 900
 ticks with no alarm and no fail).
 
@@ -57,7 +57,7 @@ the standing monitor hook turns ch 0x61 into FailLabel 0x4000032 "Alarm Raised" 
   CivilianChallenge divert) [M 0x147c48:142-153 + 0x148010].
 - State 0x3E CivilianChallenge was not ported [M 0x162558].
 
-## Live checks for the main agent
+## Live checks (open)
 
 - `tools/trace/fieldprobe.py`: place Bond at the panel (−18.1, −367.4, 26.1) in a session where
   the guards have patrolled ~1 min, and watch the closest guard's DSTATE (+0x5A0) walk
@@ -104,10 +104,10 @@ NPC hold (`--hold-npcs` [M lib.rs:5763/5901], `Drones::hold_npcs` drone.rs:8353 
 allowance walkreal_07000009's route already uses), with the unheld sight repro kept by
 `security_alarm_09_live::the_panel_guard_raises_the_alarm_and_fails_the_mission`.
 
-The fresh-boot PCSX2 confirmation of the full walk belongs to the main agent (live checks
+The fresh-boot PCSX2 confirmation of the full walk is open (live checks
 below; a save-state resume skips the boot path and would not re-arm the intro's patrol).
 
-## Live checks for the main agent (added 2026-10-19, security-room-alarm-09-2)
+## Live checks (open) (added 2026-10-19, security-room-alarm-09-2)
 
 - Fresh boot → walk the route car park (3.6, −377, 40) → stairwell door #107 → the stairs →
   lobby door #97 → the lobby → the panel (−18.1, −367.4, 26.1), hands off the triggers:

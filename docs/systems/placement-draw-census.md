@@ -23,7 +23,7 @@ object:
   (`Script_CreateEntity` 0x1d8968 → `hashtable_hashcode_to_celglist`);
 - **sky object** (0x2a / 0xd4).
 
-## The Exchange helicopter (the user report) — root cause
+## The Exchange helicopter — root cause
 
 Placement #45 on 07000008 (kind 0x2F, hashcode 0x200035d "Helicopter-Body" [D #45]): the game's
 `Copter_Create` 0x17d340 creates a class-0x7c control obj with **NO glist** (obj+0xD8 = 0,
@@ -37,7 +37,7 @@ hashcode object as a World instance at the placement transform (the SP's create 
 
 Rook: every kind-0xF placement on 07000008 resolves its param-0 skin (0x5000012/13/14 guards,
 0x500002e/2f/30/3b — the probe test prints them) — the character pass draws them at level start,
-so the census finds no missing actor placement there; "Rook missing" needs the main agent's
+so the census finds no missing actor placement there; "Rook missing" needs a
 render check of the ride itself (the copter's flight script poses the body; Rook boarding it is
 script-side).
 
@@ -109,7 +109,7 @@ statics (0x8000) via `scene_instances(true)`; breakables 0x20; unanimated 0xE2 (
 SS pass); characters 0xf (resolvable skins) via `character_instances`; sky 0x2a/0xd4 via
 `sky_instances`; the MISC_KINDS pass 0x2e/0x30/0x34/0x35/0x3b/0x71/0xd5/0xd8/0xe1/0xe3/0xda/0xfa/
 0xfd/0xfe/0x4a; grapple 0x3a; wires 0x3e; ladders 0x22; doors 0xdb; searchlight parts 0xde;
-LOAD_LEVEL triggers 0xe8; pickups 0xf0; coronas 0xfc; **copters 0x2f (this task)**.
+LOAD_LEVEL triggers 0xe8; pickups 0xf0; coronas 0xfc; **copters 0x2f**.
 
 ## The remaining misses (the census table, 378 placements over 21 levels)
 
@@ -130,16 +130,16 @@ list prints from the census test (`--nocapture`):
 A NEW (level, kind) miss row fails the census; fixing a kind removes its row from
 `KNOWN_MISSES` in the test.
 
-## Render spots for the main agent (the copter fix)
+## Render spots (the copter fix)
 
 - `--bond` at the Exchange extraction pad watching placement #45 (Helicopter-Body): the copter
   body should now stand at its placement before the extraction; the flight still won't move it
-  (the sim's `body_obj` wiring is not posing the instance yet) — the static pose is this task's
+  (the sim's `body_obj` wiring is not posing the instance yet) — the static pose is the port's
   deliverable.
 - 07000012/07000014: the SP entities (0xd9) listed in the census — expected still missing
   (documented misses).
 
-## Live checks for the main agent
+## Live checks (open)
 
 - 07000005's touch-once trigger (0xea) glist: gdbwatch `obj+0xF0` for a trigger obj during play —
   does *(glist+0x44) carry 0x10 (no-draw)? If NOT, the game renders trigger boxes and the port's

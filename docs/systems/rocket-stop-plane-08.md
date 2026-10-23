@@ -52,7 +52,7 @@ the live −100.0 [D cage triangles; L].
 
 ## Port status
 
-The port already carries the same collision and law — no code fix was needed; the task's probe had
+The port already carries the same collision and law — no code fix was needed; the earlier probe had
 been taken against the static/pre-tick world (the doors enter `CollisionWorld`'s dynamic set on
 the first tick — `world.rs` `set_dynamic` via `drone.rs`, closed key-1 pose from `door.rs`
 `Doors::create`, the MAX-hashcode shapes indexed under the synthetic `0x8000_0000 | map << 16 |

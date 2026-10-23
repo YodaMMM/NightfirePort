@@ -93,7 +93,7 @@ numbers and SHA-1s only) adds the movie legs G-008 asked for, measured on the re
   0730000D −3040, 073B0048 −2880, 07300017 −2160, 073F0048 −1200, 073A0048 −1160 milli-frames (i.e. 1.2–3.0
   frames of extra audio). This is a property of the files, not a decoder error: the sample counts are
   structural (`SSbd body / (2·channels)`), the counts reproduce byte-identically across the two independent
-  demux runs (`pss_movies.tsv` from the earlier retail-image task and this recheck), and ffprobe confirms the
+  demux runs (`pss_movies.tsv` from the earlier retail-image run and this recheck), and ffprobe confirms the
   video side independently (0730000D: 1700 frames at 30 fps — the same count the port's scan produces;
   ffmpeg's `pss` demuxer exposes video only, so the audio leg has no third-party counter beyond the structural
   identity). They are recorded in `RECORDED_AUDIO_LONG`; any other file drifting past a frame fails the test.
@@ -105,7 +105,7 @@ numbers and SHA-1s only) adds the movie legs G-008 asked for, measured on the re
   a tampered picture coding type drops the scan by exactly one and the walk tracks it; a flipped ES byte
   changes the all-frames hash.
 
-The VAG half (this branch re-verified the unmerged verify-pss-vag work and added the loop points):
+The VAG half (re-verified, with the loop points added):
 `crates/nf-formats/tests/pss_vag_golden.rs` — all 25 banks parse and decode with 0 errors on the slim image,
 `.SHF` sizes fill the `.SBF`, every extent ends with the end flag, **every looped sample's loop points are
 validated** (frame multiples, start < end, end = the extent) and pinned per bank (`loop_sha1` +

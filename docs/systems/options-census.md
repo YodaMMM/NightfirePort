@@ -1,9 +1,9 @@
 # Options census — every options row and its consumer
 
 Census of every player-changeable option row: the profile byte the game writes, every game
-reader of that byte, and the port's consumer on the real path. Driven by the user report
-2026-10-21 ("Auto Aim did nothing" — only 3 values were read anywhere; Auto Aim itself was
-wired by `s/auto-aim-option`).
+reader of that byte, and the port's consumer on the real path. Started
+2026-10-21, when the Auto Aim option did nothing (only 3 values were read anywhere; Auto Aim itself is
+wired since — `sim.auto_aim` from 0x1000011b in nf-view's lib.rs).
 
 All option bytes live in two per-player structs:
 
@@ -36,7 +36,7 @@ value survives across missions like the game's profile globals.
 | 0x10000126 | Manual Aim Toggle/Hold | +0x03 (`DAT_002a38cb`) | 0 (Hold) | `Player_Weapon` 0x1a24c8:45-63 — 0=Hold: aim bit (obj+0x60 bit0) cleared each frame, set while action 0x13 held; 1=Toggle: aim bit XORed on press edge | **None on the keyboard path.** The mouse aims directly (D-002) and its right button is the scope (`lib.rs` 5850). The pad aim action is the `gamepad` feature's `aiming`; a pad toggle is a future item. |
 | 0x100001cb | Weapon Auto Switch | +0x0a (`DAT_002a38d2`) | 1 | `Player_EquipWeapon` 0x1a8a58:76-79 — `!= 0 ∧ Player_IsBetterWeapon` → picked-up weapon becomes current | `sim.auto_switch` (field existed; now drained from the row) — read at the pickup take (`drone.rs`) |
 | 0x10000226 | Near-flash (label 0x5b7) | +0x0c (`DAT_002a38d4`, 2-bit) | 1 | `View_SetupRenderModes_Tweak` 0x1e5888:22-45 — when on, objects with render flag 0x80000 within 4 units get their tint multiplied by `FlashMod` (1 Hz pulse 0.5..1.0, `Check_Target` 0x1a7810:95-97) | `sim.near_flash` gates `scene::flash_mod` application (`scene.rs`) |
-| 0x1000023b | Health-pane fade (label 0x5bd) | +0x0b (`DAT_002a38d3`) | 0 | `Player_Update` 0x193600:414-429 — 0 pins BLData+0x8bc to 1.0, non-0 decays it (1.0 − 0.0020833·MUL/tick); set 1.0 by `Player_HandlePain` 0x1902c8:27, `Pickup_Handler` 0x18e650:225, `Player_Init` 0x1910f8:127; `HUD_UpdateHealthPane` 0x19b9c8 multiplies the health/armor pane alpha by min(4·v, 1) | `sim.decay_gate` + `Bond::pain_alpha` (sim timer ported; the HUD alpha multiply is the main agent's draw side) |
+| 0x1000023b | Health-pane fade (label 0x5bd) | +0x0b (`DAT_002a38d3`) | 0 | `Player_Update` 0x193600:414-429 — 0 pins BLData+0x8bc to 1.0, non-0 decays it (1.0 − 0.0020833·MUL/tick); set 1.0 by `Player_HandlePain` 0x1902c8:27, `Pickup_Handler` 0x18e650:225, `Player_Init` 0x1910f8:127; `HUD_UpdateHealthPane` 0x19b9c8 multiplies the health/armor pane alpha by min(4·v, 1) | `sim.decay_gate` + `Bond::pain_alpha` (sim timer ported; the HUD alpha multiply is draw-side) |
 
 ## Multiplayer options (page 0x4000002e) — P_CNMPOPTIONS_Handler 0x2144d8:13-15
 
@@ -55,7 +55,7 @@ value survives across missions like the game's profile globals.
 | 0x10000136 | Subtitles | `DAT_002a37c8` (GameState+0x60) | 0 (bootup 0x1c7e78:34); auto-on for non-English (`Menu_WillRunMiniMission` 0x202450) | `Sound_DoSubtitle` 0x1dde58:21 (drops captions when 0 unless forced), `Text_AddMsg` 0x1b0c30:148, `ResetMap_Load` 0x1d6360:40 | `sim.subtitle_track.enabled` (drained per frame) |
 | 0x1000019a | Split Screen | `DrawInfo` 0x2a37c0 | 0 (Horizontal) | `Camera_CreateCameras` 0x1bb2b8:44 (viewport rects), `Camera_CalcViewAngles` 0x1baf70:35 (aspect ×0.5/×2), `HUD_ValidateXY` 0x19a250:35, `HUD_FixMP` 0x19b110:33, `MP_Start` 0x183a50:188 | **None — the port has no 2-player viewports** (one camera, one window). Future item. |
 | 0x10000198 | Speaker mode | `SFXModeNumber` (`SFXSetMode` 0x117078:14, immediate) | 1 = Stereo (bootup 0x1c7e78:85 `SFXSetMode(1)`) | the IOP output config (batch cmd 0x1c) | **None — no mono/surround downmix in `nf-audio`.** The OS mixer owns the output. |
-| 0x10000223 | Widescreen | `DAT_002a37c4` (+ mirror `switch_CONFIG_WIDESCREEN`, `C_CHCHWS_Handler` 0x216168:9-10) | 0 | `Camera_CalcViewAngles` 0x1baf70:29-32 — projection aspect 1.3333 (4:3) vs 1.7778 (16:9) | The menu draw aspect already reads it (`menu.rs` `aspect_for`); the 3D view's projection gate is the main agent's draw side (the port renders at the window aspect; the pillar seam is `gpu.rs`) |
+| 0x10000223 | Widescreen | `DAT_002a37c4` (+ mirror `switch_CONFIG_WIDESCREEN`, `C_CHCHWS_Handler` 0x216168:9-10) | 0 | `Camera_CalcViewAngles` 0x1baf70:29-32 — projection aspect 1.3333 (4:3) vs 1.7778 (16:9) | The menu draw aspect already reads it (`menu.rs` `aspect_for`); the 3D view's projection gate is draw-side (the port renders at the window aspect; the pillar seam is `gpu.rs`) |
 | 0x10000137 | Screen Adjust (action) | → subscreen 0x40000047 | — | `psiSetScreenPos` 0x10b910 (GS display offset) | **N/A — PS2 display centering has no PC counterpart** (the window is the screen). |
 | 0x100001a3 | Restore Defaults (action) | writes control values 0x214818:96-110 | — | the changed controls' own commit path | Wired: sets the port's AV row values to the game's Defaults (music 70, sfx 100, subtitles 0, split 0, speaker 1, widescreen 0). |
 | 0x10000138 / 0x10000222 | action rows | subscreen jumps (0x214818:91-93/112-114) | — | page scripts | navigation rows, no profile byte — out of the value census. |

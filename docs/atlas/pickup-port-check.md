@@ -6,7 +6,7 @@ Every place `crates/nf-game/src/{pickup,nis}.rs` (and their two call sites, `dro
 
 Tags: `[M]` measured in the decompile, `[L]` snapshot-verified, `[S]` suggested. No Rust code was changed.
 
-**Update (fix-player, s/fix-player):** §1 (take-ray origin), §2 (keys), §3 (param indices) and §4
+**Update:** §1 (take-ray origin), §2 (keys), §3 (param indices) and §4
 (`Upgrade_Weapon`) are fixed, with tests that failed before the fix. §5 is fixed for the stream halt (the
 opcodes now consume their arguments and the stream continues; sprites/lights/text/subscripts/fade are still
 not modelled — view/audio-side objects the port does not have). §8 is fixed for mask ≠ 0 (the live EndLevel
@@ -43,12 +43,12 @@ tick, falling drops included — pickup.md "Untouchable-pickup conditions".)
 
 | file:line | game | port | severity |
 |---|---|---|---|
-| `drone.rs:3662` (+ `pickup.rs:157`) | LOS from player `obj+0x80` | LOS from `player.pos` | **bug** — take-ray origin differs from the game's; suspected cause of the playtest symptom |
+| `drone.rs:3662` (+ `pickup.rs:157`) | LOS from player `obj+0x80` | LOS from `player.pos` | **bug** — take-ray origin differs from the game's; suspected cause of the observed symptom |
 
 **Fix**: pass the player's sphere centre (what `obj+0x80` holds: the capsule's `Control_BuildWorldSph` centre)
 as the third argument.
 
-**FIXED** (s/fix-player): `Bond::sphere_centre()` (player.rs) ports the player branch of
+**FIXED**: `Bond::sphere_centre()` (player.rs) ports the player branch of
 `Control_BuildWorldSph` 0x133070 — the local centre at `M_CONTROL+0x80 = (−0.1347, −0.1267, 0.2402)`, r
 1.0576 `[L ee_start_05.bin 0x16cb8a0+0x80/0x8C]`, through the yaw matrix; it reproduces the snapshot's
 `obj+0x80` (104.826, 24.837, 108.582) to <2e-3 [L]. `drone::Player` gained a `sph` field, `scene.rs` passes
@@ -70,7 +70,7 @@ pickup is never consumed and no key flag exists.
 |---|---|---|---|
 | `pickup.rs:266` | key always taken, `BLData+0x70C+id = 1` | `None` — stays forever | **gap** (no kind-2 pickups on 07000005/01 `[L]`; blocks key-gated levels) |
 
-**FIXED** (s/fix-player): `Inventory` gained `keys: Vec<bool>` (`BLData+0x70C+id`), `take` has a `kind::KEY`
+**FIXED**: `Inventory` gained `keys: Vec<bool>` (`BLData+0x70C+id`), `take` has a `kind::KEY`
 arm that always takes and sets the flag [M 0x1a97a0:7], and `Pickup` carries `switch_channel` (+0x28) so the
 take flips it (`switch_channels[+0x28] = 1` + time stamp [M 0x18e650:330-333]) — which the port also never
 did for any kind. `Taken::Key { id }` for the 0x2000010 message. Unit test `a_key_is_always_taken_and_sets_its_flag`.
@@ -93,7 +93,7 @@ skipped index shifts every later field (e.g. a switch channel landing in the rou
 
 **Fix**: look up the pair by its index, as `nis.rs:491` already does.
 
-**FIXED** (s/fix-player): the placement closure looks up `p.params.iter().find(|(i, _)| *i == idx)` —
+**FIXED**: the placement closure looks up `p.params.iter().find(|(i, _)| *i == idx)` —
 by index, absent index reads 0 [M 0x1d04f0:457-462].
 
 ### 4. `Upgrade_Weapon` remap missing — a drop can hand over the wrong weapon id `[M]`
@@ -110,7 +110,7 @@ divergence for any level placing weapon 10.
 |---|---|---|---|
 | `pickup.rs:246` | id → `Upgrade_Weapon(id)` | raw id | **gap** (low until upgrades exist; id 10 case is live) |
 
-**FIXED** (s/fix-player): `Inventory::upgrade_weapon(id, upgrades, clock)` ports 0x1a8f30 (6 via
+**FIXED**: `Inventory::upgrade_weapon(id, upgrades, clock)` ports 0x1a8f30 (6 via
 `UpgradedHandguns[Upgrades]`, 0x1E/0x24/0x43/0x4A/0x4E/0x56 via their tables, **10 → 0xC while
 `GameState[0x52]` ≠ 0** [M]; 0x54's weapon_data zoom mutation noted unmodelled). The tables' slot 0 = the
 base ids and `Upgrades` = 0 `[L ee_start_05.bin 0x2bee08..0x2beeaf]`; the port passes `upgrades = 0` (no
@@ -198,7 +198,7 @@ decremented on a touch tick.
 
 ---
 
-## fix-player2 (s/fix-player2) — the drop/take and drawn-instance findings
+## The drop/take and drawn-instance findings
 
 - **§1 follow-up (the real "never picks up")**: a resting drop whose model centre y ≈ 0 (live: the
   07000001 weapon-0xe drop [L, NF_PICKUPLOG log]) ends the take ray ON the floor triangle; the port's

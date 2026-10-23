@@ -1,10 +1,10 @@
-# The player camera trio: orbit, underwater shear, weapon swing (unported-front-end-menus-3)
+# The player camera trio: orbit, underwater shear, weapon swing
 
 The per-frame camera pipeline the game runs for a viewer: `Camera_UpdateAll` 0x1bbd68
 loops `glb_viewer[0..10]` → `Camera_Update` 0x1bb6d8 calls the viewer's updator fnptr
 (viewer+0x68, set by `Camera_SetUpdator` 0x1bc370 — on-foot it is
 `Player_PositionCamera` 0x18f5d8), then shears when the eye is under water, adds shake,
-and finalizes the matrices. This doc covers the three pieces this task ported; the dead
+and finalizes the matrices. This doc covers the three pieces ported here; the dead
 modes 3/4/5 and the rest of the pipeline are in docs/port-map/unreached.md and
 docs/systems/uncited-audit.md.
 
@@ -34,8 +34,7 @@ an identity+skew matrix (scale 1+xs, 1+ys, 1+xs) concats into the view matrix an
 `GlobalBlur = 0x91` [M :36-49]. Port: `scene::camera_shear_step` (the pure step),
 `Sim::camera_shear` (sets the blur byte), `Sim.shear_phase` / `Sim.global_blur` (viewer
 state), wired in the Sim tick keyed on the port's cel+0x90 comparison
-(`Bond::underwater`). The skew matrix concat and the blur render are the draw side's
-(main agent): `global_blur != 0` marks the underwater frame, `shear_phase` is the
+(`Bond::underwater`). The skew matrix concat and the blur render are the draw side's: `global_blur != 0` marks the underwater frame, `shear_phase` is the
 oscillator, `(xs, ys)` the per-frame skew factors.
 
 ## Camera_ApplySwing 0x1bbf40 (weapon-aim sway) — ported
@@ -57,7 +56,7 @@ side may fold pitch/yaw only).
 All game behaviour above is [M] (decompile function + line). The port's stand-ins
 (head position via `Player_GetHeadPos` instead of the bone trans; the world-sphere query
 instead of `Collide_SphereIntersect`; `Sim.zoom` instead of viewer+0x108) are port
-choices noted at each site. Nothing here is drawn yet — the main agent renders; suggested
+choices noted at each site. Nothing here was drawn when written; suggested
 compare spots: (1) eye under water in any water level — the frame should wobble at 1 Hz
 (xs/ys ±0.025) and blur; (2) a GoldenEye-strike MP match — the holder's view orbits the
 head at ~0.7 rad/s starting at r = 0.15 easing out to 1.5; (3) zoomed sniper fire — the

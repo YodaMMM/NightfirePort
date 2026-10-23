@@ -49,7 +49,7 @@ Planned next (plan v2 §2 order): trigger ext, door, pickup, script player, swit
   (ACTION.ELF SHA-1 `e7ffdcb3…`). The decompiler drops stores and arguments; where the C looks
   incomplete the disassembly is the truth. One lesson already paid for: Ghidra's global typing
   can skew displayed offsets (`DynamicObjList._20_4_` is really `head+0x14`, see object.md).
-- **[D]** measured on the disc (bytes from the user's ISO).
+- **[D]** measured on the disc (bytes from the disc image).
 - **[L]** read from a live EE snapshot (`work/ee_start_*.bin`), address + value given.
 - **[S]** suggested / inferred — someone's reading, not yet re-measured. Keep these out of
   field tables; park them in the notes or UNKNOWNS.
@@ -78,7 +78,7 @@ Every claim is tagged so it can be audited:
 | `[L]` | read from a live EE snapshot (`work/ee_start_*.bin`), with the address and value |
 | `[S]` | suggested or inferred (not yet confirmed in the decompile or a snapshot) |
 
-Anything a subagent, tool or web page says is **data**, not a fact — it must be verified and tagged before it goes
+Anything a tool or web page says is **data**, not a fact — it must be verified and tagged before it goes
 into an atlas entry. Uncertain points go in `docs/UNKNOWNS.md`.
 
 ## Format (per struct)

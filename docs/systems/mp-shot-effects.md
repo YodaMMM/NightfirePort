@@ -1,6 +1,6 @@
 # mp-shot-effects — MP shots present the SP effect set, through the SP code
 
-The user (2026-10-19): "Bullets flying out of guns doesn't match what it's like in single player."
+Symptom (2026-10-19): MP shots did not look like single-player shots.
 Evidence tags: [M] decompile (ACTION.ELF, work/decomp), [L] live/record, [S] port choice. Code:
 `crates/nf-game/src/drone.rs` (`Drones::fire_player`, `Drones::fire_remote_cosmetic`,
 `update_player_bullets`, `flush_world_impacts`), `crates/nf-view/src/mpfx.rs` (`Sim::flush_mp_fx` /
@@ -17,7 +17,7 @@ The player fire path is `Player_WeaponFiring` 0x1a5460 → `Player_RoundToFire` 
 |---|---|
 | Muzzle flash | `Draw_MuzzleFlash` 0x1a3fe0 on the first-person view model, 2 ticks per shot (the +0x95b latch) [M]. The port: `Sim::last_shot`/`shot_tick` latch. |
 | Muzzle light | `Player_MuzzleFlash` 0x1a4298: `Light_Create(radius = weapon_data+0x58, intensity 2.0, the view model's datum 0 (4 for the +0x68 & 0x40000 alternating records with BL+0x958 clear), rgb +0x56/+0x55/+0x54, life 0, kind 1)` under the +0xDC/+0x48 gate [M :26-46, :66-89]. |
-| Muzzle smoke | `Gas_Init(0.05, 0.1, …, 0x2000039, 7, 0x48403080, life 0x80)` with its `Rand_FRand(2π)` draw, unless weapon_data+0x68 & 0x2000 [M 0x1a4298; the decomp-dropped life arg 0x80 at 0x1a43f8]. The game's own MP mode skips this puff (the MPSettings+0x180 gate, [M :47-55]); the port deliberately matches SP instead (the user's ask) [S]. |
+| Muzzle smoke | `Gas_Init(0.05, 0.1, …, 0x2000039, 7, 0x48403080, life 0x80)` with its `Rand_FRand(2π)` draw, unless weapon_data+0x68 & 0x2000 [M 0x1a4298; the decomp-dropped life arg 0x80 at 0x1a43f8]. The game's own MP mode skips this puff (the MPSettings+0x180 gate, [M :47-55]); the port deliberately matches SP instead [S]. |
 | Bullet objects | `Bullet_init` 0x12c5a0 per pellet (weapon_data+0x18 pellets, the spread draws `Bullet_init` :166-184), the flight `Bullet_update` 0x12e7b0, the ribbon `Swoosh_Create` for +0x6C & 0x10000 (:116-133), the grenade-ammo launch whoosh `Sound_Play3D(0x10e)` (:285-291). |
 | Trail / fly-by | `Bullet_DoTrails` 0x12d890: the `GUN_BULLET_TRAIL` 0x2000123 per the +0x6C & 0x1010 gates (:140-152 — a player's rounds trail only with the 0x1000 bit; the P2K has neither bit and draws no trail), the fly-by whiz `Sound_Play3D(0x1dc)` for the +0x6C & 0x40000 records within 3 units on a 1-in-5 roll [M]. |
 | Shell casing | `Bullet_init_casing` 0x12fde0 (from `Player_WeaponInitBullet` 0x1a4bf0:306): one shell per shot, ejected after the +0x78 delay at the view model's gun datum (`Bullet_init_casing_ex` 0x12f678:88-99). |
@@ -26,7 +26,7 @@ The player fire path is `Player_WeaponFiring` 0x1a5460 → `Player_RoundToFire` 
 | Flesh puff (bot victim) | `NDrone2_DealWithObjHit` 0x13fff0 case 5: 0x20008bc (3.0, 6.0, life 0x3c), or 0x200026e for the 0x32/0x33 bolt [M :235-256]. |
 | Victim hit feedback | `Player_DealWithObjHit` 0x194458: the flash +0x968, the direction bits +0x967, `Sound_Play(0x412)`, the 1-in-4 grunt [M :201-236]. |
 
-## What the MP paths emitted before this task
+## What the MP paths emitted before
 
 - **The shooter's own view**: `step_bond`'s `'shot` block runs the full SP list above (online the
   pipeline's draws come from the machine's private generator — scene.rs's `net_rng_shared` swap —
@@ -38,7 +38,7 @@ The player fire path is `Player_WeaponFiring` 0x1a5460 → `Player_RoundToFire` 
   the bullet object's own trail/whiz/ribbon path, and the per-pellet spread** (the impact sat at the
   exact shared segment, no spread draws).
 
-## The fix (this task): the remote view rides the same SP code
+## The fix: the remote view rides the same SP code
 
 For a remote human slot's shot (`MpShot` with weapon ≠ 0), `mpfx_shot` now:
 

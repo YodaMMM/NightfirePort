@@ -1,10 +1,10 @@
 # HUD panes: PaneList, the create/update dispatch, and the Text queues
 
-Task `unported-hud-1`. The whole-ELF scan found 18 ACTION.ELF functions with no mention in
+The whole-ELF scan found 18 ACTION.ELF functions with no mention in
 `crates/*/src` (13 `HUD_*` pane functions + 5 `Text_*`). This document is the evidence map for
 them; the Rust homes are `crates/nf-game/src/hud_pane.rs` (the OICW boot + nightsight state),
 `crates/nf-formats/src/hud.rs` (the sprite tables), and `crates/nf-game/src/subtitle.rs`
-(citations for the subtitle Text_* pair). Drawing stays with the main agent.
+(citations for the subtitle Text_* pair). Drawing is nf-view's.
 
 ## The pane-def table (`PaneList` 0x2be5b8)
 
@@ -54,7 +54,7 @@ above are [L ee_snapshot.bin 0x319710/0x319810/0x319910]. MP uses a second table
   entry's update fn (`entry+0x14`) runs.
 
 So every function below is **reached** on every on-foot level (SP and MP), unless its own body
-says otherwise. Nothing in this task is debug-only or driving-only.
+says otherwise. Nothing here is debug-only or driving-only.
 
 ## The 13 HUD functions
 
@@ -186,9 +186,8 @@ viewer `+0xf6` (gadget sub-state) in 0..5 only. Then [M :43-101]:
 
 Ported as `MonitorNightSight` over explicit inputs (`goggles_equipped`, `toggle_action`,
 `zoom_pane_on`) producing `mode` (0/1/2) + `fade` — the state the pane updates and the
-renderer consume. The port has no goggle item wiring yet (scene.rs:1921 notes goggles are not
-ported), so the struct is delivered as the flow + getters, not wired into the sim's item loop;
-wiring that loop is the follow-up task's seam and is marked `[S] unverified` there.
+renderer consume. When this was written the port had no goggle item wiring, so the struct was delivered as the flow +
+getters; it is wired since (docs/systems/goggles.md).
 
 ## The Text functions
 
@@ -230,11 +229,10 @@ The port's `SubtitleTrack` (subtitle.rs) implements the same queue under other n
 Reachability: the factory arm is [M]; whether a shipped page instantiates one is a disc data
 question. The disc census in `crates/nf-formats/tests/hud_pane_census.rs` parses the kind-8
 menu def (08000002 in 07000048.bin, the file the port's `menudef.rs` already reads) and counts
-`ctype == 0xc` controls [D]. The result is recorded in
-`docs/reports/unported-hud-1.md`; if the census finds none, the trio is recorded unreached in
-`docs/port-map/unreached.md` with that evidence.
+`ctype == 0xc` controls [D]. The census found none, and the trio is recorded unreached in
+`docs/port-map/unreached.md` ("M_TEXTBOX: no shipped page builds one").
 
-## What the main agent must draw (not drawn here)
+## What the renderer must draw (not drawn here)
 
 1. **Nightsight pane** (slot 7): two full-screen sprites — 0 the tint/scanline (colour pulsing
    `Rand(0x18)+7 | 0xff0000`, v re-rolled on odd ticks), 1 the brightness step at

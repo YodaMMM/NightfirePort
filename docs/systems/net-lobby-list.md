@@ -1,7 +1,7 @@
-# net-lobby-list — the Join Online page's list of open games (task 700v3)
+# net-lobby-list — the Join Online page's list of open games
 
 Evidence tags: [S] port-only design (the PS2 game has no online mode [D], net-online-lobby.md §1), [L] a live run on
-the user's PC. Code: `crates/nf-net/src/discovery.rs`, the app glue in `crates/nf-view/src/mpnet.rs`, the page in
+one PC. Code: `crates/nf-net/src/discovery.rs`, the app glue in `crates/nf-view/src/mpnet.rs`, the page in
 `crates/nf-view/src/menu.rs` (`MpNetJoin`).
 
 ## 1. Wire [S]

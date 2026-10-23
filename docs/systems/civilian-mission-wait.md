@@ -1,7 +1,6 @@
 # CivilianMissionWait (drone state 0x17) — the mission civilian's wait-channel pause
 
-Task `civilian-mission-wait-2` re-lands task 735 (`s/civilian-mission-wait`, never merged) onto
-current master. This doc is re-written against the decompile on this branch (2026-10-22).
+Written against the decompile (2026-10-22).
 
 ## What it is
 
@@ -60,8 +59,7 @@ read 2026-10-22):
 
 ## Where msg 0x22 comes from
 
-The decompile holds **no literal sender** for DSTATE msg 0x22 (the old task's sweep, 2026-10-16,
-quoted from its report): every `Drone_SM_SendMsgSelf` 0x175a38 / `Drone_SM_SendMsg` 0x13a630 /
+The decompile holds **no literal sender** for DSTATE msg 0x22 (an earlier sweep, 2026-10-16): every `Drone_SM_SendMsgSelf` 0x175a38 / `Drone_SM_SendMsg` 0x13a630 /
 `Drone_SM_BroadcastMsg` 0x175aa8 / `Drone_Message` 0x13a678 call site was disassembled and none
 passes 0x22; no `li reg, 0x22` in the DSTATE region is a message id (they are
 `DroneAnim_CallAnim` anim ids). The id arrives data-driven — the level side supports it:

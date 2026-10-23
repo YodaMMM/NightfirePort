@@ -196,7 +196,7 @@ little-endian):
     input[1] = p2); (b) the type-2 row's "shared tail also self-deletes … Bond moment" — the
     decompile's case 2 ends in `break` with no Bond tail (the tail belongs to case 3 and the
     case-1 channel-on branch).
-11. **`gate` mislabelled as a DOORINFO field** (comment-only, found by agent 2-b, re-verified here):
+11. **`gate` mislabelled as a DOORINFO field** (comment-only, re-verified here):
     triggers.rs:50-52 says *"The gate is `DOORINFO+0x28` = original `param[2]` of the placement
     (verified against MIPS disassembly: `lhu v1,56(s1); sh v1,40(s0)`) [M]"*. The offset and
     param are right but the struct is the **TRIGGER ext+0x28**: `Trigger_LoadLevelCreate`
@@ -206,7 +206,7 @@ little-endian):
     `Trigger_Activate` 0x1b2318:77/89/95. DOORINFO (0x80 bytes, class 0x1C) has no +0x28 field
     at all (docs/fields/door.md). The `param[2]`/semantics half of the comment is correct.
 
-## Live checks (main agent)
+## Live checks (open)
 
 The interesting fields are the LL gate (+0x28) and the lock (+0x24). Instance chain:
 `DynamicObjList` 0x2705a0 → head+0x14 → next obj+0x14; filter `obj+0xFF == 0x1D`; ext = u32 at

@@ -15,7 +15,7 @@ verdict-channel clear), the port fix is the per-tick lock hold in `crates/nf-gam
 | 1 | 07000012 | **"Escape through the elevator shaft" (0x04000038)** | **0x4d = 77** | 0x49 |
 | 2 | 0700004a | "Gain access to lobby" (0x04000039) | 0x4a (74) | 0x4d |
 
-Ch 77 is the task's channel: **the writer is NOT on 07000012.**
+Ch 77 is the channel in question: **the writer is NOT on 07000012.**
 
 ## Who writes ch 0x4d (77) [D]
 
@@ -63,7 +63,7 @@ stand-in" is always a fiction.
    re-holds per tick in the object-pass slot (`Drones::tick_inner`, after Env_Update — the game's
    object handler order [M 0x1c9790:24-34]); channel_persist's owner set gained the same family.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. The tower mission's ch-100 writer: does 07000013's data (triggers/scripts) write ch 0x64? The
    monitor's self-reference means the mission completes only through a level-side write; watch

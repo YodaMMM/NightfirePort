@@ -1,6 +1,6 @@
 # misc-9: the kernel-import / libc seam — the 25 never-mentioned functions
 
-Task `unported-misc-9` (whole-ELF scan, master 20874c31). All 25 sit in the 0x23bdc0+
+Whole-ELF scan (2026-10-21). All 25 sit in the 0x23bdc0+
 region: fifteen 16-byte PS2 kernel import stubs (`li $v1, <syscall#>; syscall; jr $ra; nop`
 — disassembled from the ELF, [M]), two real vertical-sync routines, and the newlib libc
 syscall hooks. These are the seams where the game talks to the PS2 OS; the port talks to

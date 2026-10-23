@@ -120,7 +120,7 @@ game's vertical swim control is not resolved; enter/leave/surface/drowning are [
 ## Disc data [D] (`crates/nf-view/tests/fix_ladder_live.rs ladder_and_water_counts_per_level`)
 
 Ladder placements (type 0x22) and 0xC023 water cels per story level: 07000002 has **4 ladders**
-(incl. the bunker exit at ≈(−26.9, 2.3, 42.2), yaw −π, world top 5.96 — the playtest's garden) and
+(incl. the bunker exit at ≈(−26.9, 2.3, 42.2), yaw −π, world top 5.96 — the garden) and
 **5 water cels** (surfaces 3.76–4.34); 07000003: 1 ladder; 07000005: 1 (60.9, 29.9, 89.2); 07000008: 4;
 0700000a: 1; 0700000c/0d: 3 each; 07000015: 3; 07000016: 1 ladder + 1 water cel; the rest: 0. The EE
 snapshot check (07000005's ladder at (60.9, 29.9, 89.2)) was not run — ee_start_05.bin covers the level

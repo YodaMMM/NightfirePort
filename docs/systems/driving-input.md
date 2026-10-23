@@ -240,7 +240,7 @@ deflection) and does not re-stretch the surviving range.
   [S: it sits behind `FUN_0025a4a8`; the driving ELF strings contain PADMAN and PsIIlibpad].
 - The binding DATA (which value index binds to which GAMEACTION with which type/arg) is runtime
   data parsed from the control configs (`data\Control\Master.def`/`FrontEnd.def` [D, in the
-  mission VIVs; not extractable in this sandbox — the slim ISO's DRIVING extents are zero-byte]).
+  mission VIVs; not extractable from the slim ISO — its DRIVING extents are zero-byte]).
   The evaluator and the action ids are decoded; the shipped default bindings are not [S].
 - The type-6/7 flag `*(u32*)(0x3c8780+0x20)` semantics (frontend active? paused?) is unpinned [M
   read, S meaning].
@@ -262,4 +262,4 @@ brake down through the Y negation), A/D → LX bytes 0/255 (steer left/right), S
 (handbrake), mouse buttons → △/○ (primary/secondary fire), arrow cluster → the D-pad bits
 (camera). These are the port's bindings, not the shipped ones (§11) — a driving level would call
 `poll_device` on its pad slot each tick (where `FUN_00168280` runs in the engine) and feed the
-result through its own binding table; the driving levels themselves stay unwired per the task.
+result through its own binding table; the driving levels themselves stay unwired.

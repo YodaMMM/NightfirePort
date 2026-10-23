@@ -27,14 +27,16 @@ disassembly, [L] matched against a live snapshot, [S] suggested/inferred.
 | not started | 5 |
 | **Total** | **268** |
 
-The user's initial estimate was ~108 functions; the thorough enumeration here covers every per-state
+An initial estimate was ~108 functions; the thorough enumeration here covers every per-state
 handler in `NDrone2_StateFuncs` the guard AI exercises on the test level 07000005 (50+ `NDrone2_DSTATE_*`),
 every `DroneAnim_*` helper the Rust port folds into `call_anim`/`set_danim`/`call_handler` (~22), every
 `AINetwork_*` route helper the port calls (~18), and every `DroneVision_*` / `DroneWeap_*` / `NDrone2_*`
 helper referenced by `drone.rs`. The seven STANDINs and the three stun-grenade receiving states are called
 out explicitly below.
 
-The seven explicit STANDINs (the user's known list):
+The seven explicit STANDINs (as listed when this page was written; status 2026-10-22: 1 and 2 are ported —
+the ricochet in `crates/nf-game/src/effect.rs` (GAPS G-041) and the per-material bounce table at 0x3037dc in
+`grenade.rs` — and 5 is ported in drone.rs; the others not re-checked):
 
 1. `0x12ce80` `Bullet_CollisionHandler` — the ricochet path is not ported (only the grenade bounce in
    `grenade.rs`).
@@ -48,8 +50,9 @@ The seven explicit STANDINs (the user's known list):
    players) is not ported.
 7. `0x173658` `NDrone2_DSTATE_RecoverFromScaryObject` — sets the state but does not run the flee route update.
 
-The three stun-grenade receiving states (`0x1631c0`, `0x163350`, `0x172bb0`) are stubs (the user listed
-"Stun grenade receiving states are not ported").
+The three stun-grenade receiving states (`0x1631c0`, `0x163350`, `0x172bb0`) were stubs when this was
+written (status 2026-10-22: all three are in drone.rs — `StunGrenadeImpact`, `StunGrenadeLoop`,
+`StunGrenadeRecover`).
 
 Trivial DroneAnim wrappers that the port folds into a single function (`call_anim`, `set_danim`,
 `call_handler`) — `0x13db30 GetDAnimForCall`, `0x13dbf8 CanSetAnimCall`, `0x13dc90 ZeroAnimCall`,
@@ -459,16 +462,16 @@ The 5 "not started" rows are `0x1499d0 DroneFunc_ClampPosToCollisionCylinder`,
 `0x178520 DroneVision_GunThroughWall`, `0x1789c0 DroneWeap_CloseCombatImpact`. Each is flagged for
 traceability; porting them is G-026 / G-028 remainder.
 
-The user's original estimate of 108 functions was the count of "major" guard-AI entries; the thorough
+The original estimate of 108 functions was the count of "major" guard-AI entries; the thorough
 enumeration here adds the per-state handlers (50+ `NDrone2_DSTATE_*`), the per-anim helpers (~22
 `DroneAnim_*`), the per-route helpers (~18 `AINetwork_*`), and the `DroneVision_*` / `DroneWeap_*` /
-`NDrone2_*` helpers that the Rust port calls but the user's list did not break out. The seven STANDINs and
+`NDrone2_*` helpers that the Rust port calls but that estimate did not break out. The seven STANDINs and
 the three stun-grenade receiving states are called out explicitly above.
 
 ## Audit findings (WORKLOG 0086)
 
-Four auditor subagents audited 30 functions in batches of 10, plus the tests and dev scenarios. Findings verified
-by the developer before acting.
+30 functions were audited in batches of 10, plus the tests and dev scenarios; findings were verified before
+acting.
 
 ### Fixed in this pass
 
@@ -518,7 +521,7 @@ by the developer before acting.
 ### Dev scenario audit
 
 - None of the 13 scenarios add RNG draws ✓
-- None have been visually verified (no lavapipe in the sandbox) ✗
+- None had been visually verified then (no GPU renderer available) ✗
 - friendly-actor team=2→3 bug FIXED
 - searchlight-tracks-bond and door-anti-crush don't verify a searchlight/door is present (noted)
 

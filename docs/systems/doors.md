@@ -65,7 +65,7 @@ when in the frame — plus the port's mapping.
   game's calc clears it before any `Door_Update` reads it (step 7), the port's calc sits at the
   tick's end (its placement is prior tasks'), so before-calc reproduces the game's observable.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. On 07000005 or 01, walk a door obj (TheDoors list → obj) and read `obj+0xF0`: expect bit
    `0x20000000` set (the ForcedList membership the pick relies on) [M build_LinkToRoom:63-66].

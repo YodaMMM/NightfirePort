@@ -1,6 +1,6 @@
-# The never-mentioned animation queries, the anim-cache stubs and the debug spawners (task 863 `unported-animation-1`)
+# The never-mentioned animation queries, the anim-cache stubs and the debug spawners
 
-The whole-ELF scan (master 20874c31, queue `backlog/unported-all-2026-10-20.md`) found 8 animation
+The whole-ELF scan (2026-10-20) found 8 animation
 functions whose name or address appears nowhere in `crates/*/src`. This file classifies each; the
 citations live in the Rust code so the scan sees them. Evidence tags: [M] decompiled code
 (`work/decomp/ACTION.ELF/00<addr>_<name>.c`) or my own disassembly reads, [D] disc, [L] live
@@ -35,7 +35,7 @@ bits are not aim bits).
 ### `AnimCacheInit` 0x1c6390 — empty; cited at `nf_view::load`
 Body `jr ra; nop` [M disasm]. Caller: `ResetMap_GameInit` 0x1d5080:37, on every level start [M].
 There is no anim cache in the shipped build to init (the whole family 0x1c6390/0x1c6398 Enable/
-0x1c63a0 Disable is empty — 0x1c6398/0x1c63a0 already covered by task 850's `anim-script-rest.md`).
+0x1c63a0 Disable is empty — 0x1c6398/0x1c63a0 already covered by `anim-script-rest.md`).
 Cited at the port's level load (`nf-view/src/lib.rs`, next to the existing `AnimPreLoadInit`
 0x1c63b8 note): the fresh per-load maps ARE the reset.
 
@@ -82,7 +82,7 @@ to 0, clears the 0x80000000 loop bit, ticks `AnimObjectUpdate`, reads bone 0x800
 position via `AnimGetBoneWorldTrans`, deletes the script and returns that Y [M 001c64e0 — the float
 return is `fVar11 - AnimObjectInitialPose(obj)` at the caller, i.e. the root-bone height above 0].
 Its only `JAL` is inside `AnimDebugCreate`'s never-acting body [M]; no data references, no other
-callers. Task 850 already listed it among `AnimScriptDelete`'s callers [M
+callers. anim-script-rest.md already lists it among `AnimScriptDelete`'s callers [M
 `anim-script-rest.md`]; nothing reaches it.
 
 ## Scan / calltree

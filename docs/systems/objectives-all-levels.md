@@ -56,7 +56,7 @@ The writer for each channel is the level's own interactive layer — TouchOnce p
 (`Player_HandleDeath` 0x190bb0 writes ch 0x62), switch triggers, script players and monitors. The
 per-level mapping with addresses lives in `docs/levels/<map>.md` §Objectives for the levels already
 walked (07000009/0a/16/4a/4b…), and the walkreal tests pin the writers through the real input path.
-The port runs the whole mission layer above (this task's census test exercises all 55 records).
+The port runs the whole mission layer above (the census test exercises all 55 records).
 
 Known gaps (objectives that cannot complete in a real walk today):
 

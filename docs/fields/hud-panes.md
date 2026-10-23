@@ -141,7 +141,7 @@ pixels-per-round} [M 0x19a7f0:103,116-123,172,199,211,247,254-269,275,287,301].
   exclusion — worth a comment/test if the pane system is ever generalised.
 - Not decoded: template +0x20 (style) and +0x28 (viewer link) — no functional impact today.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **The pane count gate**: `watch 0x016c8638+0x18 2 readwrite` (pane[0]'s count = 8) during a weapon
    switch — `HUD_UpdateAmmoPane`'s per-sprite gates (>1, ≥3, >5, >6, >7) should be the only readers.

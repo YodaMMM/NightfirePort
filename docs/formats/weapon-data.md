@@ -7,7 +7,7 @@ single-precision multiplies). *Measured*.
 
 ## How we get it
 
-`nf_formats::ee::Machine` runs that initialiser over the user's ACTION.ELF (PT_LOAD image, small stack, `memset`
+`nf_formats::ee::Machine` runs that initialiser over the disc's ACTION.ELF (PT_LOAD image, small stack, `memset`
 done natively, FPU single ops rounded toward zero). It implements only the instructions the initialiser uses and
 errors on anything else. Code: `crates/nf-formats/src/ee.rs`, `weapon.rs`; `nf-extract weapons <iso> [live.bin]`.
 

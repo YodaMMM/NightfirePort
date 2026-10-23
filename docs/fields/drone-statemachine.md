@@ -227,7 +227,7 @@ all [L ee_start_05.bin / ee_snapshot.bin @0x29B300+k·4].
   that handler runs** (direct `RouteMsgDCV` call, M-dis 0x175a90); the port defers `self_msg` until the handler returns
   (drone.rs:2450, 2462).
 
-## Live checks for the main agent
+## Live checks (open)
 
 All addresses are EE addresses (PINE / gdb-server). Best situation: **07000005 at level start** (the ee_start_05 state): 13 drones;
 guards 1-4 in Idle(4) from InitPatrol(6); five ch-waiters in WaitSwitch(1) on channels 34/164/67; drone 2 (016ecc10) in
@@ -264,7 +264,7 @@ HostageKiller(7); the sniper as the LAST list node (inst 13) in SniperIdle(0x29)
    write shows up, the census missed a reader; report back). `+0x12C` returns to 0 after InitObject unless some SetState caller
    passed a nonzero third argument (only ExplosiveImpact's pointer path could).
 
-## Port fixes driven by this map (044y-fields-actors)
+## Port fixes driven by this map
 
 - Every state change now clears timer D as well as timer C and resets the hit-effect multiplier (`+0x14C` = the
   port's `damage_taken`) to 1.0 [M-dis 0x17207c-88]; test `fields_actors_live::a_state_change_clears_both_message_timers`

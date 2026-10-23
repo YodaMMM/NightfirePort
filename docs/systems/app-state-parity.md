@@ -1,6 +1,6 @@
 # App state parity — the fields the game updates per load or per menu choice
 
-Task `app-state-parity` (2026-10-17). `App::level_code` was the found instance of this bug class
+2026-10-17. `App::level_code` was the found instance of this bug class
 (initialised from the command-line level, never updated by a load — fixed 2026-10-16 in
 `poll_async_load`). This audit walks the rest of the `App` initialiser
 (`crates/nf-view/src/lib.rs`, `run()`'s `App { ... }`) and asks for every field: where does the

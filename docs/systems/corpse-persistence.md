@@ -86,8 +86,8 @@ here was checked in the disassembly.
 
 ## The audit premise, corrected
 
-The task brief said the game "does NOT delete the object" and ports "a disabled corpse that
-stays until its timer fades it". The decompile says otherwise, at instruction level on both
+An earlier reading said the game does not delete the object and keeps a disabled corpse that
+stays until its timer fades it. The decompile says otherwise, at instruction level on both
 ends (the setter 0x1640f0-0x1640f8, the consumer 0x133864-0x133888): **guard corpses DO get
 removed when off-screen** — after the 2-tick drawn grace, disabled and deleted in the same
 pass. What the 2026-10-21 audit actually caught (the HostageDead fade test passing on tick 0

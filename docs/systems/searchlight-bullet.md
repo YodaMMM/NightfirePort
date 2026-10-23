@@ -2,7 +2,7 @@
 
 What happens when a player bullet reaches a searchlight. Everything here is [M] unless tagged:
 ACTION.ELF addresses from the decompile and the disassembly (`work/decomp/ACTION.ELF`, capstone
-dumps in this task's session). Port side: `crates/nf-game/src/searchlight.rs` (`bullet_check`,
+dumps). Port side: `crates/nf-game/src/searchlight.rs` (`bullet_check`,
 `Shot`), `crates/nf-game/src/drone.rs` (`sl_shots`), `crates/nf-formats/src/weapon.rs`
 (`bullet_contact_damage`), `crates/nf-view/src/scene.rs` (`frame_lights`' node-death gate).
 

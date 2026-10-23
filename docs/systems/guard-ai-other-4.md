@@ -1,8 +1,8 @@
-# Guard AI — the 25 never-mentioned NDrone2 states (857-unported-guard-ai-other-4)
+# Guard AI — the 25 never-mentioned NDrone2 states
 
-The whole-ELF never-mentioned scan (master 20874c31, backlog/unported-all-2026-10-20) listed 25
+The whole-ELF never-mentioned scan (2026-10-20) listed 25
 `NDrone2_DSTATE_*` handlers whose name/address appeared nowhere in `crates/*/src`. This file is the
-per-function disposition; the report is `docs/reports/unported-guard-ai-other-4.md`. Evidence tags:
+per-function disposition. Evidence tags:
 [M] decompile, `work/decomp/ACTION.ELF/<addr>_<name>.c`; [L] EE snapshot; [S] suggested.
 
 ## How states are entered (the analysis method)
@@ -30,7 +30,7 @@ caller sweep of every entry path found in the decompile:
 
 ## Dispositions
 
-### Ported this task (reached, had no port body)
+### Ported (reached, had no port body)
 
 - `NDrone2_DSTATE_Investigate` 0x168070 (state 0x7e): entered when the shipped blind-enemies cheat
   (`C_CHCHBLIND_Handler` 0x215d60 sets `switch_BLIND_DRONES` 0x30ce30) makes
@@ -55,7 +55,7 @@ caller sweep of every entry path found in the decompile:
   (0x9f) are SetState'd by its msg-0x15 / msg-0x16 arms [M 0x1437a0:307-326, 283-290]; the only
   caller of 0x1437a0 is `NDrone2_DSTATE_BotGlobal` 0x16e060 [M], i.e. the MP bots. Port:
   `mp/bots.rs react_to_drone_alert_msg` (transition flow; the state bodies' presentation is not
-  drawn — the main agent owns drawing).
+  drawn — drawing is separate).
 
 ### Already implemented — citations added at the Rust code
 
@@ -83,7 +83,7 @@ UnderCoverLeave 0x173ac0 [M].
 `NDrone2_DSTATE_AimStandDiscard` 0x166840 (0x6a), `NDrone2_DSTATE_Prone` 0x166940 (0x6b),
 `NDrone2_DSTATE_ProneFire` 0x166a28 (0x6c), `NDrone2_DSTATE_Tester1` 0x16db90 (0xb7).
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. Blind-cheat Investigate: enable the "Blind Enemies" cheat (front end), play any guard level,
    shoot a guard beyond his combat range — expect him to route to Bond's last position and then

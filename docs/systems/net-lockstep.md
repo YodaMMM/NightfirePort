@@ -1,7 +1,7 @@
 # Net lockstep — the MP match sim as a pure function
 
 Status: **determinism proven for the MP core + bots; the UDP session layer is `crates/nf-net`** —
-the ONE session layer since net-consolidate (2026-10-16): 051's `nf-net` crate absorbed 053's
+the ONE session layer since 2026-10-16: the `nf-net` crate absorbed
 `nf_game::net` (deleted) and now carries the full `MpSettings` wire fidelity (protocol 2: per-player
 `radar_on` + `registered_pickups`), the lobby display codename + `agents()`, the
 refuse-when-started gate, the FNV `Hasher` (`nf_net::hash::Hasher`), and the DATA tunnel the
@@ -10,7 +10,7 @@ the MP tick was checked against the code, the two real ones were fixed, and the 
 pinned by tests that hash the whole state every tick. Facts are tagged [M] code (function + address),
 [D] disc, [L] EE snapshot, [S] suggested — the repo's evidence rules (`docs/fields/README.md`).
 
-Branch: `s/net-determinism` (2026-10-15). Deliverables: `nf_game::mp::hash` (`state_hash`),
+Determinism work (2026-10-15): `nf_game::mp::hash` (`state_hash`),
 `nf_game::mp::replay` (the recorded-input harness), `crates/nf-game/tests/mp_lockstep.rs` (6 tests).
 
 ## 1. The contract
@@ -119,10 +119,9 @@ no ISO, ~1.3 s. Every assertion has a sister that would fail if the property wer
   `update_objects`/events/bots into the host tick is the pre-netcode step (their absence is why the
   current loop is trivially deterministic).
 
-## 7. Live checks for the main agent
+## 7. Live checks (optional)
 
-Nothing is required to merge this — the tests are headless and the findings are code-level. If you
-want on-hardware confirmation of F1's premise (the PS2 game's own trig), a `gdbwatch.py` watch on
+The tests are headless and the findings are code-level. For on-hardware confirmation of F1's premise (the PS2 game's own trig), a `gdbwatch.py` watch on
 the bot aim during a bots-on MP match (the `ATAN2_APPROX` call site 0x1e4528) recording a few
 (dx, dz) → yaw samples would let us assert the port's `atan2_approx` against real bot turns, the
 way `diff_calls.rs` does for `PS2Sinf`.
@@ -132,12 +131,9 @@ The MP session layer for online play: a deterministic-lockstep session over
 UDP where every machine runs the same match from the same seed and settings
 and exchanges only per-tick inputs; a per-tick state hash detects desyncs.
 This is a port feature — the PS2 game has no network mode — so wire choices
-here are [S] unless they carry a game fact. Task 050 (determinism /
-`state_hash(&MpWorld)`) has NOT landed; this session takes the per-tick hash
-as an opaque `u64` from the caller (`Session::submit_hash`) and 050's
-`state_hash(&MpWorld) -> u64` wires in there. [S] branch state 2026-10-15:
-`origin/s/net-determinism` contains only a WORKLOG entry, and no
-`state_hash` exists anywhere in `crates/`.
+here are [S] unless they carry a game fact. The session takes the per-tick hash
+as an opaque `u64` from the caller (`Session::submit_hash`); the app feeds it
+`Sim::net_state_hash`.
 
 ## Why a separate crate
 
@@ -164,7 +160,7 @@ rule forbids wall clocks in the sim, so tests drive logical milliseconds and
 the app passes real ones. `ready_inputs` must be called sequentially
 (start_tick, +1, ...) — that sequence produces `Event::Stalled` /
 `Event::Resumed`. The app samples local controls once per 60 Hz frame and
-schedules them `input_delay` ticks ahead (config, default 3, task range
+schedules them `input_delay` ticks ahead (config, default 3, range
 2..=4); while stalled it keeps sampling — inputs for future ticks are
 sampled from present controls, never invented.
 
@@ -283,51 +279,51 @@ loss/latency/jitter, logical ms — `shim.rs`):
 * `real_udp_loopback_sync` — real `std::net::UdpSocket`s on 127.0.0.1, 300
   ticks, hashes agree.
 
-## Live checks for the main agent
+## Live checks
 
 None needed — the PS2 game has no network mode, so there is nothing to
 observe in PCSX2. The game-side facts this doc cites (pad-disconnect shape,
 bot slot rules, quit path) were verified from the decompile and can be
 spot-checked there if desired.
 
-## 9. The consolidation (net-consolidate, 2026-10-16, branch `s/net-consolidate`)
+## 9. The consolidation (2026-10-16)
 
-Two workers built two UDP sessions in parallel (051 `nf-net`, 053 `nf_game::net`); the app wired
-053's. This task made ONE session layer and deleted the other:
+Two UDP session layers existed (`nf-net` and `nf_game::net`); the app used the second. They were merged into
+ONE session layer:
 
-- **Kept 051's `crates/nf-net`** — the stronger protocol, measured by tests: a contiguous ack +
+- **Kept `crates/nf-net`** — the stronger protocol, measured by tests: a contiguous ack +
   32-tick bitmap so the full unacked window rides every packet (an isolated loss can never lose a
-  tick; 053 had no acks — after >3 losses an input was gone until the 5 s timeout killed the
+  tick; `nf_game::net` had no acks — after >3 losses an input was gone until the 5 s timeout killed the
   match); a configurable input delay 2..=4 carried in WELCOME; hash exchanges every
   `hash_every` ticks with the previous hash piggybacking on every HASH packet; keepalives; GO
-  retransmit; the deterministic loss/reorder/latency shim its tests run on (053's live-socket
-  tests were flaky under load — its own comments say so). Wire input 24 B vs 053's 20 B: the
+  retransmit; the deterministic loss/reorder/latency shim its tests run on (the old live-socket
+  tests were flaky under load). Wire input 24 B vs the old 20 B: the
   `trigger`/`reload`/`use_key` lanes (`Sim::step_bond`'s separate args) ride the wire now.
-- **Ported 053's unique features**: the full `MpSettings` fidelity (protocol 2: settings 208 B —
+- **Ported the old layer's unique features**: the full `MpSettings` fidelity (protocol 2: settings 208 B —
   per-player `radar_on` [M `MP_GetRadarObjects` 0x189840, `HUD_RadarUpdate` 0x19f6e8] and
   `registered_pickups` +0x472); the lobby display codename (the HELLO/WELCOME 32 B payload is now
   a display name — the compatibility gate is protocol + build) with `Session::agents()`;
   `RefuseReason::Started` (a HELLO after GO is refused — no mid-match join);
-  `nf_net::hash::Hasher` (moved verbatim); and the `MpSettings` match handover (053's START now
+  `nf_net::hash::Hasher` (moved verbatim); and the `MpSettings` match handover (the old START now
   rides a tagged DATA tunnel, because the WELCOME at join time cannot know the confirm page's
   final settings — the host sends the payload on arm, before GO).
 - **Wired both consumers to it**: the app's flag path (`--net-host`/`--net-join`) drives
-  `nf_view::mpnet::NetCore` directly; the lobby's `FrontEnd::mp_session` (052's `MpSession`
+  `nf_view::mpnet::NetCore` directly; the lobby's `FrontEnd::mp_session` (the `MpSession`
   trait) is now a real `nf_view::mpnet::SessionProxy` over the same core (created when the online
   pages open, adopted as the lockstep gate when their match starts); the page logic and the 9
   lobby tests are unchanged (the trait kept its shape).
 - **Proof**: `crates/nf-net/tests/loopback_e2e.rs` — host + 2 clients over real 127.0.0.1 UDP
   with 8% injected loss and 25% injected transpositions, 600 ticks, identical per-tick state
-  hashes on all peers; sister test: one corrupted input trips the desync detector. 053's tests
+  hashes on all peers; sister test: one corrupted input trips the desync detector. The old layer's tests
   are ported in `crates/nf-net/tests/ported_session.rs` (built/codename refusal on the raw wire,
   forged-hash desync, silent-peer timeout + NEUTRAL continuation; the delay-1 clean-link
   per-tick run is `#[ignore]`d with the reason inline — the e2e pins the same contract under
   worse links). The app-level sims test is ported in `crates/nf-view/tests/net_match_live.rs`
   (two real MP sims, 1000 ticks, per-tick hash equality; forced desync; disconnect keeps the
   match running on NEUTRAL — the game's own dead-pad shape [M `psiInput_PollDevices` 0x10ca78],
-  replacing 053's terminal PeerLost).
+  replacing the old terminal PeerLost).
 
-## 10. The app's online match loop — what the two-window check fixed (2026-10-18, main agent) [S]
+## 10. The app's online match loop — what the two-window check fixed (2026-10-18) [S]
 
 The first real two-window run on one PC (host + joiner, `--net-host` / `--net-join`) froze, then desynced; each
 cause and its fix (crates/nf-view/src/lib.rs unless noted):
@@ -355,7 +351,7 @@ cause and its fix (crates/nf-view/src/lib.rs unless noted):
 7. **The pause page** no longer stops one machine (the others would stall): the match runs on under the menu
    with that player idle.
 
-Still open (queued): every human slot must run the full player (weapons, damage, death) on every machine —
-a shot desyncs today (700v6); the bodies use the drone idle/walk/run scripts until the player anim set lands
-(700v7). Diagnostics: `NF_NET_HASHDBG=a-b` (per-frame state dump), `NF_NET_RATE` (ticks/stalls per second),
+Open when this was written: every human slot running the full player (weapons, damage, death) on every
+machine, and the bodies' player anim set. (Status 2026-10-22: shared rounds for every weapon and the remote
+players' body animation are in — docs/systems/mp-shot-effects.md, mp-remote-fx.md, mp-bodies.md.) Diagnostics: `NF_NET_HASHDBG=a-b` (per-frame state dump), `NF_NET_RATE` (ticks/stalls per second),
 `NF_MP_FACE_OTHER`, `NF_NET_SHOT=<tick>` (render-check aids).

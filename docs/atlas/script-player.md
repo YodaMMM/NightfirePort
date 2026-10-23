@@ -6,7 +6,7 @@ placement type 0xD9 by `SP_CreateScriptPlayer` (0x1db9a8). It owns up to two loa
 `SP_Update` (0x1dbda8) is `control_funcs[0x1B].update` (read live in `ee_start_05.bin`).
 
 Tags: `[M]` decompile (fn@addr:line), `[L]` live snapshot (file offset = EE address), `[D]` disc, `[S]` suggested.
-No disassembler in this sandbox; decompiler-dropped arguments are marked.
+No disassembler was used here; decompiler-dropped arguments are marked.
 
 ## Name, size, allocation site
 

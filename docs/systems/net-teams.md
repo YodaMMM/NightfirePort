@@ -1,8 +1,7 @@
 # mp-teams — team selection for the online lobby's team modes
 
-Task 700v2 ("optional team selection depending on the mode"). The state lives in
-`crates/nf-net/src/teams.rs` — its own module the lobby page (700v1, unmerged when this landed)
-calls; nothing here draws (the main agent owns every page).
+Optional team selection depending on the mode. The state lives in
+`crates/nf-net/src/teams.rs` — its own module the lobby page calls; nothing here draws.
 
 ## 1. What the game does (the evidence)
 
@@ -89,7 +88,7 @@ the both-teams gate with no edits; an FFA default of all-Phoenix keeps the ≤1-
    `MpSettings.players[slot].team`, where every ported rule reads them [M the citations in §1].
    The host then runs the match exactly as the couch confirm does [M mp-menus.md §4].
 
-## 4. Tests (numbers/ids only; the main agent draws)
+## 4. Tests (numbers/ids only)
 
 - `crates/nf-net/src/teams.rs` (unit): the column gate over all 12 wheel ids [L], the labels,
   the start gates against the couch errors, the pick rejections, the deterministic auto-balance
@@ -103,7 +102,7 @@ the both-teams gate with no edits; an FFA default of all-Phoenix keeps the ≤1-
   gate [M :179-184]), the friendly-fire gate blocks the same-team hit with the 3 s warn [M
   0x1857c0], and the spawn table splits per the picked teams [M 0x184f20:54-67].
 
-## 5. Live checks for the main agent
+## 5. Live checks (open)
 
 - **PCSX2, a team scenario (Team Arena or CTF), the Join page with 2 pads**: the team pick state
   offers Phoenix/MI6 [M 0x20de58:130-139]; pick opposite sides, start, confirm the radar tints

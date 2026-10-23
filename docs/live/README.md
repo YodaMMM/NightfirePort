@@ -1,6 +1,6 @@
 # docs/live — ground truth from the real game
 
-Records of what the retail game (007: Nightfire, PS2 NTSC-U) actually does, measured by the main agent in
+Records of what the retail game (007: Nightfire, PS2 NTSC-U) actually does, measured in
 PCSX2 with the trace tools (`tools/trace/pcsx2_shot.py`, `gdbwatch.py`, `gdbcall.py`, `fieldprobe.py`,
 `pad_log.py`, `goto_level.py`, PINE). Files are dated measurement sessions; the port's fixes cite them as
 [L] evidence.
@@ -17,10 +17,7 @@ PCSX2 with the trace tools (`tools/trace/pcsx2_shot.py`, `gdbwatch.py`, `gdbcall
 
 Every open question that needs the real game lives in **`backlog.md`** — one ledger row per question, with its
 procedure (level, spot, tool, what to read), the expected answers and what each would change in the port, the
-evidence so far, and a status (open / answered / obsolete). It is harvested from every report's "Live checks
-for the main agent" section and from the `UNKNOWNS.md`/`GAPS.md` rows that need live play.
+evidence so far, and a status (open / answered / obsolete). It collects the open live checks of the docs and the `UNKNOWNS.md`/`GAPS.md` rows that need live play.
 
-**New reports add their live checks to `docs/live/backlog.md` with a row id (L-NNN), not only in the report.**
-When a check is answered, mark its row `answered` with `SETTLED:` naming the `docs/live/` file (or report)
-that records the answer, and add the answer to the session that measured it. A check settled by a live session
-but left only in the report is a check lost.
+New live checks get a row id (L-NNN) in `docs/live/backlog.md`. When a check is answered, its row is marked
+`answered` with `SETTLED:` naming the `docs/live/` file that records the answer.

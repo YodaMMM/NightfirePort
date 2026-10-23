@@ -1,6 +1,6 @@
 # Cover node loading: which placements become live nodes (U-050)
 
-`s/cover-nodes` (task 746) built cover nodes from every map entry of the level archive. This
+An earlier port change built cover nodes from every map entry of the level archive. This
 note is the decompile + disc answer to whether the game does that: **it does not — the game
 creates live dynamic objects (cover nodes included) from ONE map's placement block only: the
 LAST map entry the loader parses, which on every mission level is the kind-1 main map.** The
@@ -70,7 +70,7 @@ So the create at `ResetMap_Load` sees the main map's placements only: the live c
 list is the main map's 0xe5/0xe6 placements in placement order, nothing else. 010000f3's pair
 is dead data in mission levels.
 
-## Why the s/cover-nodes scan broke the three measured tests
+## Why the every-map scan broke the three measured tests
 
 The scan (cover nodes from `level.maps` — every entry) added two (0,0,0) nodes the game never
 creates. Prepended, they shifted the live indices (the 07000005 chase-trace node moved 1 → 3
@@ -78,7 +78,7 @@ creates. Prepended, they shifted the live indices (the 07000005 chase-trace node
 nodes became selectable cover for guards whose measured walks the tests pin
 (guard_reaction_live, escort_follow_07000001_live, npc_doors_live). The tests are right; the
 scan contradicted the loader. `cover.rs`'s doc comment and the two `#[ignore]`d tests in
-`cover_nodes_live.rs` claimed the every-map creation — fixed in this task (the decompile
+`cover_nodes_live.rs` claimed the every-map creation — since fixed (the decompile
 chain above).
 
 ## Tests
@@ -90,7 +90,7 @@ placement order — the [M] chain's consequence). `cover_nodes_live.rs`'s two sc
 pin the main-map counts (07000006: 114 = 80+34) and that the template pair stays out of the
 live list (07000004: empty) while its bytes stay pinned in the level parse.
 
-## Live checks for the main agent
+## Live checks (open)
 
 PCSX2, fresh boot (a save-state resume skips the boot path):
 

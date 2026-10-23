@@ -1,4 +1,4 @@
-# Guard talk, sight barks and object cleanup — task 854 (unported-guard-ai-other-1)
+# Guard talk, sight barks and object cleanup
 
 The 25 never-mentioned guard-AI functions (backlog `unported-all-2026-10-20.md`, guard-ai-other
 1/6): where each lives in the game, whether the shipped game reaches it, and where the port now
@@ -94,6 +94,6 @@ existing test level's draw sequence untouched.
 
 - `NDrone2_SetupHostageExecute` 0x14A808: the port has no `HostageKillerAttack` state to hang it
   on; the mutual-position/yaw setup (+0x670/+0x694) is documented at the `+0x2B0` captor link and
-  left for the hostage-execution task.
+  left for the hostage-execution port (docs/systems/speech.md).
 - `Drone_GetSkinHash` 0x13A578: the trigger-side hash test exists (`Toucher.skin`), but the port's
   drone toucher build does not feed the hash yet (SP drone touchers are built without `skin`).

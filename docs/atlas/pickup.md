@@ -7,7 +7,7 @@ updated by `Pickup_Update` (0x18e148, `control_funcs[0x2F].update`, read live in
 
 Tags: `[M]` decompile (`work/decomp/ACTION.ELF/`, fn@addr:line), `[L]` live snapshot (`work/ee_start_05.bin` =
 07000005, `work/ee_start_07000001.bin` = 07000001; file offset = EE address), `[D]` disc, `[S]` suggested.
-No disassembler in this sandbox: where the decompiler dropped arguments they are marked and cited to the
+No disassembler was used here: where the decompiler dropped arguments they are marked and cited to the
 line that shows the field being written instead.
 
 ## Name, size, allocation site
@@ -218,7 +218,7 @@ while falling, refusal leaves the pickup untouched, and the single `Rand_FRand` 
 
 ## Port status (fix-objects): the drawn model and the kind come from one source now
 
-Three port divergences matched the user's reports (master 0a2fcc4, screenshots on 07000001: a gold
+Three port divergences matched observed symptoms (07000001: a gold
 "007" mesh at an armour spot, a wrong mesh at a guard drop, extra visible objects at corpses):
 
 1. **The draw-slot desync.** `Drones::update_pickups` ended with `self.pickups.retain(|p| !p.gone)`,
@@ -237,22 +237,22 @@ Three port divergences matched the user's reports (master 0a2fcc4, screenshots o
 3. **Taken drops stayed drawn.** The dropped-gun attachment search (`p.from == Some(di)`) did not
    exclude `gone`, so a tombstoned drop kept the gun visible after taking. Fixed with `!p.gone`.
 
-Tests: `crates/nf-view/tests/fix_objects_live.rs` — slot identity after a take (fails on master:
-index out of bounds / len shift), kind↔model for every placed pickup on 07000001 + 07000005 (fails
-on master: `kind-1 pickup draws <unresolved 0xffffffff>`), the four 07000001 piles against their
+Tests: `crates/nf-view/tests/fix_objects_live.rs` — slot identity after a take (failed on the earlier code:
+index out of bounds / len shift), kind↔model for every placed pickup on 07000001 + 07000005 (failed
+before: `kind-1 pickup draws <unresolved 0xffffffff>`), the four 07000001 piles against their
 disc kinds/ids/rounds/meshes, the death-dump (one visible drop; placed slots unmoved), and the
 afc60ed guard (dynamic-vertex tail pairs 1:1 with `char_verts`; every placed pickup, door and
 searchlight slot has vertices).
 
 ## PCSX2 trace check (tests/traces/01-raptor.trace, 2026-10-11) [L]
 
-User play on 07000001 (god + infinite ammo; inventory logged as change events):
+Real play on 07000001 (god + infinite ammo; inventory logged as change events):
 
 - t = 6.0 s: weapon **0x0E** becomes owned with clip 9 — the first Raptor drop gives the weapon. (The port's pickups call the Raptor weapon 6; 0x0E is what the game equips — check `Upgrade_Weapon` 0x1a8f30 / the base-id mapping.)
-- Every later Raptor drop gave ammo type 3 (spare BLData+0x170+3·2): +6 (19.8 s), +7 (71.0 s), +7 (74.3 s), +5 (76.3 s). Every drop the user walked over was taken.
+- Every later Raptor drop gave ammo type 3 (spare BLData+0x170+3·2): +6 (19.8 s), +7 (71.0 s), +7 (74.3 s), +5 (76.3 s). Every drop walked over was taken.
 - Other takes in the run: weapon 0x12 (clip 32) at +17.6 s, 0x1C (clip 8, shotgun) at +50.6 s, 0x35 (count 1, frag) at +52.9 s; ammo types 1 (+20, +9), 9 (+6, +5), 23 (+1), 2 (+16, +11).
 
-**Resolved (fix-pickups-trace, s/fix-pickups-trace).** The chain, all measured:
+**Resolved.** The chain, all measured:
 
 - The "Raptor" is **weapon 0x0E**, not 6: `weapon_data[0x0E]` = base 0x0E, selectable, flags68 0x1000,
   **ammo type 3** (+0x90, ".357 Magnum rounds", cap 36), **clip 9** (+0x92), name label +0x38 =

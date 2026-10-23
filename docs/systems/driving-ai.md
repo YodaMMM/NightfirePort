@@ -1,12 +1,12 @@
 # The driving missions' AI cars — road network, path following, speed, spawn
 
-Status: **ported** (task `drive-ai-traffic`, branch `s/drive-ai-traffic`, 2026-10-15). The port lives in
+Status: **ported** (2026-10-15). The port lives in
 `crates/nf-game/src/driving/` (`road.rs` the RNgp/Wmap-side data model + `ai.rs` the AI car step) with the
 RNgp container decode on top of `nf_formats::crp`. Evidence tags: [M] code (function + address,
 DRIVING.ELF — EE address = file offset + 0x107080), [D] disc bytes, [L] EE snapshot, [S] suggested.
-Everything below was read out of `work/decomp/DRIVING.ELF/` for this task; nothing from memory. The
+Everything below was read out of `work/decomp/DRIVING.ELF/`; nothing from memory. The
 container/carrier facts (CARP records, RNgp as the road-network article) come from
-docs/formats/crp.md (task drive-crp-format).
+docs/formats/crp.md.
 
 ## 1. The road network: the `RNgp` article and its five arrays [M]
 
@@ -217,7 +217,7 @@ Tests (`crates/nf-game/tests/driving_ai_follow.rs`): a synthetic but format-exac
 ISO/DRIVING-gated (`NF_DRIVING` set, like driving_golden.rs): parse the real `MIS01.VIV` track RNgp,
 walk an AI car along a real segment chain, pin the real record counts (numbers only).
 
-## 6. Live checks for the main agent
+## 6. Live checks (open)
 
 - **L-1 — rs+0x4c is the speed limit**: breakpoint FUN_0012e808 0x12e808 during a traffic mission;
   confirm the float read at `*(rs)+0x4c` lands in +0x8c and matches the mission's traffic speed
@@ -244,14 +244,13 @@ walk an AI car along a real segment chain, pin the real record counts (numbers o
 - The AIEl chunk binary layout inside the `.crp` (record +0x44.. is proven from the parsed runtime
   records; the on-disc AIEl chunk record layout itself is [S] — the port reads AIEl only through the
   documented slots, real-data AIEl parsing is a live check).
-- 506's physics (s/drive-physics) landed beside this: the seam is wired as of `drive-ai-traffic2`
-  (2026-10-15) — see §8 (`SimCar::of_car` + `AiDriver`, no trait needed).
+- The driving physics landed beside this: the seam is wired (2026-10-15) — see §8 (`SimCar::of_car` + `AiDriver`, no trait needed).
 
 ## 8. The physics wiring (`drive-ai-traffic2`, 2026-10-15)
 
-507 landed the AI beside 506's physics with `SimCar` as the unwired seam; 506 then merged as the
-single file `driving.rs`, and `drive-ai-traffic2` moved it to `driving/physics.rs` (507's
-`driving/` directory had made the two layouts collide, rustc E0761) with a top-level re-export
+The AI landed beside the physics with `SimCar` as the unwired seam; the physics then moved from the
+single file `driving.rs` to `driving/physics.rs` (the `driving/` directory had made the two layouts collide,
+rustc E0761) with a top-level re-export
 keeping every public path (`nf_game::driving::{Car, CarInput, CarParams, DT, FlatWorld, Rigid,
 Tuning, Friction, SURFACES}` — the module test pins them). The wiring:
 

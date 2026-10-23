@@ -1,10 +1,9 @@
 # Atlas: multiplayer — the arenas, the modes, the bots, split screen
 
-research-multiplayer (2026-10-13). Everything here is first-hand: [M] = decompile/disassembly read in
-this task (ACTION.ELF SHA-1 `e7ffdcb3…`), [D] = disc content measured by `mp_arenas_live.rs` or the
-level survey, [S] = suggested/inferred, needs a live check or more reading. Sub-reports (full detail,
-scratch): the three research files this doc condenses were `mp-arenas.md`, `mp-bots.md`,
-`mp-splitscreen.md` (worker sandbox scratch, not committed). Nothing in `nf-game` changed — this is a
+2026-10-13. Everything here is first-hand: [M] = decompile/disassembly read for
+this page (ACTION.ELF SHA-1 `e7ffdcb3…`), [D] = disc content measured by `mp_arenas_live.rs` or the
+level survey, [S] = suggested/inferred, needs a live check or more reading. This doc condenses three
+uncommitted research notes (arenas, bots, split screen). Nothing in `nf-game` changed — this is a
 research deliverable plus one opt-in test.
 
 ## 1. The arenas
@@ -188,7 +187,7 @@ arithmetic 0x179d40), the trait switch 0x128b50, and the msg-3 heartbeat of 0xC5
 (the forced-to-0xC5 delivery of `RouteMsgDCV` 0x171df8:78-86). Corrections this pass: the goal
 duration is 300.0 (not 5 s — see bot-vars.md +0x28); `+0x76E` is the last-pickup index (reader
 found); the mode-objective bitmask is `MPGame+0x1A8+team*2` (not MPSettings+0x1A4); `pickGoal`'s
-class-2 objects are never scored. Not ported yet (gaps in docs/reports/mp-bots-states.md): the
+class-2 objects are never scored. Not ported when written: the
 cover family, the move states 0xD4/0xD5/0xDB/0xDC (chooseCombatMove's targets — the roll consumes
 the RNG and the bot stays 0xCF), the death branch, the weapon re-choice chain, the AINetwork
 route wiring for the arenas (the port walks straight-line at the stats' speed multiplier).
@@ -280,7 +279,7 @@ work/decomp/ACTION.ELF [D]):
 2. **Deathmatch end-to-end** — kill scoring (MP_HitBy/PlayerKilled/BulletHit), MPGame scores, HUD
    score/time panes (viewer 5 overlay), respawn (MP_ReSpawn). ~25 functions, size M.
 3. **Split screen** — viewer rects for 2/4 players + scissor + per-view crosshair + MapPlayerToSlot
-   input. ~15 functions (camera/view/input), size M. Needs the main agent's render check (lesson 6).
+   input. ~15 functions (camera/view/input), size M. Needs a render check.
 4. **The bots** — BOT_init + BOT_vars + goal layer (pickup/objective scoring) + the DSTATE_Bot combat
    states already partially shared with the drone port. ~40 functions, size L. Depends on the drone
    port's state-machine coverage.
@@ -289,7 +288,7 @@ work/decomp/ACTION.ELF [D]):
 6. **Radar + MP panes + weapon sets** — MPpickups respawn, PickupMatrix random sets, radar
    unprojection. ~15 functions, size S–M.
 
-**Live checks for the main agent** (none runnable here):
+**Live checks (open)** (none runnable here):
 1. Boot an MP deathmatch in PCSX2; watch MPSettings+0x420 (w) — expect the menu's scenario id;
    MPSettings+0x428 (w) — expect the human count; MPGame+0x400 (r per frame) — the round clock.
 2. `fieldprobe` MPSettings+0x424 after selecting map "Arena 1" — expect 0x07000023.

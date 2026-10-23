@@ -90,7 +90,7 @@ the exact `Control_SetGList` call in the player's creation; `glb_viewer`'s slot 
 players); the `benchmark` gate setter (Player_Update 0x193600:161); Check_Target's +0x132/+0x133
 target-id bytes beyond the crosshair mapping (they are in [bldata.md](bldata.md)).
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **The class byte**: `watch 0x016cf0d7 1` (obj 0x16cefe0 + 0xF7? no — +0xFF = 0x016cf0df) during a death
    on any level — it should flip 3 → 0x12 exactly when the death anim starts, and back on an MP respawn.

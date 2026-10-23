@@ -29,7 +29,7 @@ writer inventory, with evidence, and the census method that checks the port agai
 | Script events | the op's target channel — event 0xD (`ch = param1`), event 0x11 (conditional pick of two channels) | `Script_EventHandler` 0x1d94c0 case 0xD / 0x11 (the stamp at 0x1d94c0:112) |
 | Script players | the SP's own OUT while its trigger bits hold | `SP_Update` 0x1dc1c0's out write (the port's nis.rs `Player::update` tail) |
 | Script-created triggers | `Script_CreateEntity` 0xEA/0xEB build type-1/type-2 trigger objects — they write like the placed families | 0x1d8968; the port rebuilds them per tick from live entities (drone.rs, `script: Some`) |
-| SimpleScripts' operate latch | each SS's channel word (ext+0x10) while the mask word's bit 0 is CLEAR — the operate result into a 0-valued `switch_channels[ch]`, every tick while the channel reads 0; on E, `SS_Activate` 0x1a9ea8:11-13 latches it 1 (the ported `Ss::activate`) | `SS_Update` 0x1a9948:18-23 + `SS_Operate` 0x1a9df8 (the operate result: the contact-class bits AND the mask, else the channel half); the walk dispatches SS_Update for every class-0x25 object each frame [M control_movement_object_handler 0x1336f8's control_funcs loop]. Ported by level-0c-complete-2 (the held s/level-0c-complete's SS_Operate change, un-held). Disc example: 07000002's SS #308 (mask 0x0004, ch 0x02) — the game writes ch 0x02 = 0 every tick until something raises it [D census probe] |
+| SimpleScripts' operate latch | each SS's channel word (ext+0x10) while the mask word's bit 0 is CLEAR — the operate result into a 0-valued `switch_channels[ch]`, every tick while the channel reads 0; on E, `SS_Activate` 0x1a9ea8:11-13 latches it 1 (the ported `Ss::activate`) | `SS_Update` 0x1a9948:18-23 + `SS_Operate` 0x1a9df8 (the operate result: the contact-class bits AND the mask, else the channel half); the walk dispatches SS_Update for every class-0x25 object each frame [M control_movement_object_handler 0x1336f8's control_funcs loop]. Ported (the `SS_Operate` contact half). Disc example: 07000002's SS #308 (mask 0x0004, ch 0x02) — the game writes ch 0x02 = 0 every tick until something raises it [D census probe] |
 | Bond-moment sweep | READS 0x65-0x6E (no write) → `PlrStat_DoneBondMoment` | `Trigger_Calc` 0x1b1900:12-20 |
 
 Ported (level-0c-complete-2): the SimpleScript operate arm — the table row above. The 0x1a9948
@@ -37,9 +37,9 @@ latch needs the presence result, so it landed together with `SS_Operate` 0x1a9df
 (the port's collision-pass product per SS part: the player capsule → class 3 → mask 0x8, a
 player-bullet flight → class 5 → 0x2; the drone class 2 → 0x10 has no disc SS [D census]).
 
-## The 750q "open port bug" was the disc's own OUT copy
+## The "open port bug" was the disc's own OUT copy
 
-750q's repro (`docs/reports/cutscene-guard-models.md`, "Open port bug"): on 07000001,
+The repro: on 07000001,
 `Channels::set(0x33, 1)` then one `step_bond` read 0 — read as "some port system clears channels
 within one tick". The census traced the writer: **the disc's OUT placement #296 (out 0x32, input
 51 = 0x33) [D 07000001 placements]** — `Trigger_Update` case 5 copies `switch_channels[0x32]`
@@ -61,7 +61,7 @@ object of the families above (or the documented stand-ins below). Script-owned c
 (`Channels::script_channels`) are exempt as their own class — the port's script path writes what
 the disc's scripts say [D], same as the game's 0x1d94c0 path.
 
-Census result (2026-10-17, this branch): **all 23 levels pass** — no port-only per-tick writer
+Census result (2026-10-17): **all 23 levels pass** — no port-only per-tick writer
 exists. Owner sets per level are printed by the run (e.g. 07000001: 0x04, 0x05, 0x0b, 0x10, 0x33,
 0x97, 0x99 at enable).
 

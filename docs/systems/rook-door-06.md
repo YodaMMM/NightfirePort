@@ -1,8 +1,8 @@
-# The 07000006 truck driver — walk start and the mission route (rook-door-06-2)
+# The 07000006 truck driver — walk start and the mission route
 
-The playtest symptom (2026-10-15/16): "rook gets stuck in the doorway on 06". Task 750b found
-the port never even STARTS the walk — no drone moves after the ch-185 arrival plates. This doc
-is the game's walk-start chain with the evidence; the fix and the test live on the branch.
+Symptom (2026-10-15/16): an NPC (Rook) stuck in a doorway on 06. The first finding: the port never
+even STARTED the driver's walk — no drone moved after the ch-185 arrival plates. This doc is the game's
+walk-start chain with the evidence; the fix is in drone.rs and `rook_door_06_walk_live`.
 
 ## The driver's chain [M]
 
@@ -58,10 +58,10 @@ was partly the probe's own mover filter — `moved` compared against `lastpos` s
 iteration, so a walker's ~0.04-0.08/iteration never crossed the 0.15 threshold; the position
 census (start vs end) is the reliable signal and now shows the walk.
 
-So the user's doorway stall is NOT the driver on his mission route. The remaining candidates,
-in check order for the next session/live pass:
+So the doorway stall is NOT the driver on his mission route. The remaining candidates,
+in check order:
 
-1. Which NPC does the user see stall — the escort (#12) or a scripted interior guard? The
+1. Which NPC stalls — the escort (#12) or a scripted interior guard? The
    interior door-node pairs are path 7 n0–n1 → door #1 (36.50, 40.00, −16.25, the
    courtyard→castle entrance) and path 3 n11–n14 → door #4 (4.00, 49.00, −64.88, upper floor)
    [D probe dump]. Whoever walks THOSE routes (patrols, the escort after his script, an
@@ -74,22 +74,22 @@ in check order for the next session/live pass:
    should land back on his start state (0x6 InitPatrol — no path → Idle). Needs the live check
    below before pinning anything.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. Fresh boot of 07000006, truck-ride entry: after the arrival cut-scene, does the DRIVER
    (skin 0x05000035) walk away east along the truck park and stop at the far (east) end —
    matching the port's path-10 walk? (Position over ~30 s vs (66.1,28.9) → (84.6,23.6).)
-2. The user's stall: WHICH NPC stands in which doorway — the escort (skin 0x0500002e) at the
+2. The stall: WHICH NPC stands in which doorway — the escort (skin 0x0500002e) at the
    courtyard door #1 (36.5, 40, −16.25)? Watch his state byte (0x81 expected if the door path
    engages), `Drone+0xBA8` (the bound door, non-null), the door's `obj+0xF4` (2/4/8/0x10).
 3. Does the escort walk anywhere after his start script (with Bond unarmed at distance)? If he
    follows the driver east, the port's escort chain (PlayScript → resume) needs the same real-
    path treatment as the driver's.
 
-## rook-door-06-3: the [L] walk proof and the driver-test re-derivation
+## The [L] walk proof and the driver-test re-derivation
 
-The held merge (818's s/rook-door-06-2 onto master) failed 5 driver tests that pin
-"ANIM_DONE → TruckDriverIdle (0x34)". Re-derived onto the game's own evidence — the pins were
+With the walk start ported, 5 driver tests that pinned
+"ANIM_DONE → TruckDriverIdle (0x34)" failed. Re-derived onto the game's own evidence — the pins were
 written before the walk start was found and over-generalised one branch of case 5:
 
 - **The gate's two halves [M].** Case 1 (0x160bd0) calls `AssignAIPath(8)` 0x154190 only when
@@ -111,10 +111,10 @@ written before the walk start was found and over-generalised one branch of case 
   armed-person scan [M 0x161030 case 3]). A second witness for the scare chain from the sit:
   `tests/traces/06-searchlight.trace` shows a 0x13 drone holding the park spot (66.1, ~39,
   28.9) for 2850 samples (frames 140866..144629) — scared off the sit, cowering IN PLACE.
-- **Conclusion.** The 06-2 port behaviour (route → Mission, walk, arrival → Idle [M 0x161030
+- **Conclusion.** The ported behaviour (route → Mission, walk, arrival → Idle [M 0x161030
   case 3 result 3]) is the game's. The 5 tests' "0x34 after the sit" pins predate the walk
   start and cited only "[M 0x160bd0 case 5]" — the +0x9f2-clear premise is false on 07000006.
-  Re-derived (this branch, rook-door-06-3):
+  Re-derived:
   - `fix_driver_air_live`: the post-sit state pin 0x34 → 0x35 ([L 148014]); the settle sister
     now measures on the walking driver (the settle gate is the hip's, not the state's [M
     0x140968 tail + 0x140e30-48]).
@@ -124,6 +124,6 @@ written before the walk start was found and over-generalised one branch of case 
     0x160ed0] — the Mission state must not be scared by proximity alone).
   - `fix_drone3_live`: the driver test asserts 0x35 at the sit's done, waits for the arrival,
     then the same Idle scare + the never-aims + grounded sisters.
-  All 5 re-derived tests pass on this branch with the 06-2 drone.rs UNCHANGED
-  — the merge held, the rook door still works on the real path (`rook_door_06_walk_live`
+  All 5 re-derived tests pass with the walk-start drone.rs unchanged
+  — the rook door still works on the real path (`rook_door_06_walk_live`
   green), and the driver's states are the game's.

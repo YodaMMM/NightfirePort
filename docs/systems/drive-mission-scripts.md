@@ -1,6 +1,6 @@
 # The driving missions' script data — `Rule` / `MSet` / `Trgr` and the mission state machine
 
-Status: **first working port** (task `drive-mission-scripts`, 2026-10-16). The mission logic of
+Status: **first working port** (2026-10-16). The mission logic of
 the driving levels (MIS01.VIV … RACE.VIV) lives in the track `.crp` inside each mission archive:
 the `Map ` pool record's `Rule`/`MSet`/`Trgr` children. The headless state machine is
 `crates/nf-game/src/driving/mission.rs`; the container walk is `nf_formats::crp`. Evidence tags:
@@ -127,7 +127,7 @@ port: it fires its channel like any rule).
   [30,24], all 8 mission archives parse (`MIS11`/`MIS13A/B/C`/`MIS3`/`MIS4`/`RACE` included),
   a headless scripted run over the real paris rules, trigger stability.
 
-## 7. Live checks for the main agent
+## 7. Live checks (open)
 
 - **L-1**: breakpoint FUN_00209d98 0x209d98 (SRuleAlways's descriptor +0x14) during a paris
   drive — confirm it runs every frame and what it writes into the display entry (the +0x1c

@@ -1,7 +1,7 @@
 # Dynamic objects at level start (07000005): searchlights (WORKLOG 0072) and coronas (0073) ported; the rest not drawn yet
 
 Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] decomp, [L] snapshot `work/ee_start_05.bin`, [S] suggested. Source: a
-research pass (subagent, 2026-10-09). **Searchlights re-checked here 2026-10-10** (disassembly of 0x1cb4f8/0x1cb900
+research pass (2026-10-09). **Searchlights re-checked here 2026-10-10** (disassembly of 0x1cb4f8/0x1cb900
 plus the snapshot; corrections below); **coronas re-checked 2026-10-10** (disassembly + snapshot + the `control_funcs`
 table); the rest is the research pass, not yet re-checked.
 
@@ -31,7 +31,7 @@ table); the rest is the research pass, not yet re-checked.
 | Searchlights (7 mounts, 7 heads, 6 beams, 7 coronas, 2 spots) | 0xDE ×29 | `Searchlight_Create` 0x1cb4f8 / `Searchlight_Update` 0x1cb900 — **spec re-checked 2026-10-10, see below** |
 | ~~Coronas~~ | 0xFC ×13 | `Corona_Create` 0x18da00 — **ported (WORKLOG 0073), see below**; `Corona_Update` 0x18da78 is a different, runtime class (0x45, U-042) |
 | ~~Doors (5)~~ | 0xDB | `Door_Create` 0x136100 … `Doors_Calc` 0x135fe0 — **ported (WORKLOG 0074), see below** |
-| Level-exit gates (2) | 0xE8 | `Trigger_LoadLevelCreate` 0x1b2950 → `Trigger_Create` (both point at level 0x07000066; part of the exit-trigger task) |
+| Level-exit gates (2) | 0xE8 | `Trigger_LoadLevelCreate` 0x1b2950 → `Trigger_Create` (both point at level 0x07000066; part of the exit-trigger work) |
 | Helicopter | 0x2F ×2 (+ ScriptPlayers `06000046` / `06000047`) | `Copter_Create` 0x17d340 / `Copter_Update` 0x17dbb8 |
 | Ladder, zip wire, grapple pulleys, placed pickups | 0x22, 0x3E (rotation z negated), 0x3A, 0xF0 | `Ladder_Create` 0x1966c0, `Wire_Create` 0x1981d8, `Grapple_Create` 0x198298, `Pickup_Create` |
 

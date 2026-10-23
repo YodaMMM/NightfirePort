@@ -1,9 +1,9 @@
 # The level-exit sequence (the screen fade + the music fade-out)
 
-Playtest 1017-1139: riding the 09 lift out, "level end doesn't match how the game does it. Music
-fades to black. This one just cuts with a little bit of lag." The port froze the world for the
+Riding the 09 lift out, the level end did not match the game's: the game fades the screen to
+black, the port cut with a short stall. The port froze the world for the
 exit (`ExitHold`, docs/systems/exit-hold.md) but drew no fade and never ran the music's exit arm
-on most levels — freeze ("a little bit of lag"), then a hard cut. This doc is the game's whole
+on most levels — a freeze, then a hard cut. This doc is the game's whole
 exit sequence with the evidence; the port now follows it.
 
 ## 1. The exit trigger's tail (the LOAD_LEVEL trigger)
@@ -72,7 +72,7 @@ own updater — **but only while `MusicWaitForEnd` (0x30c8e0) is clear** [M disa
 v0,-32144(gp)`; `bne v0,zero,0x115554` skips the whole per-level switch]. Once an end-wait stands,
 the board never requests another section this level.
 
-`UpdateMFX_03TowerA` 0x113558 (07000009 — the playtest's level), the shared exit block [M :9-33]:
+`UpdateMFX_03TowerA` 0x113558 (07000009), the shared exit block [M :9-33]:
 `e[3] || e[8]` (the trigger exit / the mission-success pulse 0x182c60:31) → scan the MapMusic
 record's +0x24 combat set for `MusicLastJump`: hit → jump `+0x14` (end_combat), miss → `+0x18`
 (end_calm), **instant**; then `SFXFadeDown(0)` and `MusicWaitForEnd = 1`. The same block is in

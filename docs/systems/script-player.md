@@ -114,7 +114,7 @@ records (`LoaderProcess` 0x1d4880 case 0xC: u32 hash + u8 flag at +4). The port 
 the animation set at level load (the game streams lazily on first use; the port loads eagerly — same content,
 no RNG order impact). `docs/systems/levels.md` §5 lists every loadable cut-scene per level: the party's
 Drake fly-through (0x06000072), the party hand-back (0x06000073) and the gondola intro (0x06000077) were the
-user's two broken cut-scenes; live tests in `crates/nf-view/tests/fix_cutscenes_live.rs` drive Bond into the
+two broken cut-scenes; live tests in `crates/nf-view/tests/fix_cutscenes_live.rs` drive Bond into the
 real trigger volumes (`step_bond` → TouchOnce → ch → SP) and fail on the pre-fix code. Still unported: the
 `SP_Hit` proxy bits (07000007's urn break, mask 2) and the `GameFlow_PushState(12.0, 0xD, 0xFF)` streaming
 loading screen (`SP_Update` state 0's `isLoadable` arm — the port loads eagerly, no screen).

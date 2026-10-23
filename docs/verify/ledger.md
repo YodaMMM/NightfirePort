@@ -2,7 +2,7 @@
 
 Idea from REA (morluto/rea, MIT): `compare_functions` / `verify_reconstruction` judge a reconstruction against a
 finite, explicit specification, and **a pass covers only the declared claims**. NightfirePort already has that
-machinery for three functions (task 045n-verify-bitexact: `tools/trace/gdbcall.py` records real calls in PCSX2,
+machinery for three functions (`tools/trace/gdbcall.py` records real calls in PCSX2,
 `docs/tools/call-traces.md` is the format, `tests/calls/*` the recordings, `crates/nf-game/tests/diff_calls.rs`
 the replay harness). This ledger is the claim inventory: **one row per ported game function the sim depends on**,
 with the strongest claim the evidence supports. A "bit-exact" claim here is enforced by the guard test
@@ -28,7 +28,7 @@ adapter registered for that Name in `adapters()`, and (e) a real address (not `-
 duplicate addresses, and a file name that disagrees with the header fail the test. Non-bit-exact rows are free
 text; the guard only checks that they use the grammar above.
 
-Recording a new function (the main agent, in PCSX2):
+Recording a new function (in PCSX2):
 ```
 python -I tools/trace/gdbcall.py <Function|0xaddr> --spec "<regions>" [--calls N] [--seconds S] --out tests/calls/<Function>.calls
 ```
@@ -74,7 +74,7 @@ recorded calls from registers + captured memory alone (yes / partial / no + why)
 | 0x1a7810 | Check_Target | `drones.rs` crosshair scan (scene-coupled) | unverified (recording exists; no adapter) | `Check_Target.calls` | no (needs the scene) |
 | 0x1a7c98 | Player_AutoAim | `Drones::auto_aim` (scene-coupled) | unverified (recording exists; no adapter) | `Player_AutoAim.calls` | no (needs the scene) |
 
-### Recording requests (exact commands for the main agent; PCSX2-gdb with the level loaded)
+### Recording requests (exact commands; PCSX2-gdb with the level loaded)
 
 All `--out tests/calls/<Name>.calls`. Registers ride the format's `gpr`/`fpr` lines automatically — float args in
 `f12..f15` and every GPR need no region; regions below capture the memory the function reads (`in`) and writes
@@ -163,7 +163,7 @@ python -I tools/trace/gdbcall.py AnimFrameSet 0x1c75a0 --spec "in:a0:4 in:a1:0xb
   evaluated frame buffer head (first 0x800 of `*(seq+0x84)`) pin the frame arithmetic (⌊f⌋+1 clamp, the
   |frac| ≤ 0.0002 gate) without the variable-length channel blob [S].
 
-### Check_Target with a hit (carried over from 045n)
+### Check_Target with a hit (carried over from the first harness)
 
 ```
 python -I tools/trace/gdbcall.py Check_Target 0x1a7810 --spec "io:@(a0+0xe0)+0x130:4" --calls 80 --seconds 120  # 07000005, aim mode with a drone actually under the crosshair
@@ -569,7 +569,7 @@ starts "unverified" and moves up only through the recording + replay route above
 | 0x1b1fc8 | Trigger_Hit | triggers.rs:185 (hit) | unverified | - | frame/triggers; partial; Contact bit 2 (class-5 objects touching) has no port touchers (touchers are Bond + enabled drones only, drone.rs:3892-3894); mask bit 1's channel gate is mis... |
 | 0x1b2318 | Trigger_Activate | - | unverified | - | level load; ported; Trigger::update (the LOAD_LEVEL arm, the Music_Event(3,1), the GS_PauseGame). |
 | 0x1b2628 | SoundTrigger_Create (0xF9) | none | unverified | - | frame/triggers; not started;  |
-| 0x1b2790 | SoundTrigger_Update / MusicTrigger_Update / InverterTrigger_Update | none | unverified | - | frame/triggers; not started; 07000005 placements 0xF9/0xFB/0x41: none in the main map [D per the survey in levels.md §2], so nothing playtest-visible yet. |
+| 0x1b2790 | SoundTrigger_Update / MusicTrigger_Update / InverterTrigger_Update | none | unverified | - | frame/triggers; not started; 07000005 placements 0xF9/0xFB/0x41: none in the main map [D per the survey in levels.md §2], so nothing visible yet. |
 | 0x1b2950 | Trigger_LoadLevelCreate | triggers.rs:149 (LOAD_LEVEL arm) | unverified | - | frame/triggers; ported; mask hard 0xE not copied (unused by case 10). |
 | 0x1b2a08 | Trigger_MoviePlayer_Create (0xF4) | none | unverified | - | frame/triggers; not started; Found in the 0x1d04f0 dispatch; not in docs/systems/triggers.md's type table. |
 | 0x1b2aa8 | Trigger_Touch / Trigger_TouchOnce | triggers.rs:143-144 | unverified | - | frame/triggers; ported; — |

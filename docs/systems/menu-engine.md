@@ -1,11 +1,11 @@
-# Menu engine — control/component/sprite helpers (task unported-front-end-menus-4)
+# Menu engine — control/component/sprite helpers
 
 The front end's runtime menu engine under the parsed page data: per-control rects, the
 component sprite-set layout, cursor hit-testing and directional focus movement, the combo
 widget and the allocator/menu-sprite helpers. All facts are [M] — ACTION.ELF decompile
 under `work/decomp/ACTION.ELF/`, cross-checked against the disassembly where Ghidra dropped
 arguments (noted inline). The port lives in `crates/nf-view/src/menu_engine.rs`
-(data/state/flow only — the draw code is `menu_overlay`'s, which the main agent renders).
+(data/state/flow only — the draw code is `menu_overlay`'s).
 
 ## Dispositions (the 25 never-mentioned functions)
 
@@ -148,7 +148,7 @@ arguments (noted inline). The port lives in `crates/nf-view/src/menu_engine.rs`
 
 - Focus movement: `FrontEnd::action()` (menu.rs) models each page's cursor moves by hand;
   the generic scorer is now ported as `menu_find_control`.
-- Cursor hit-test: the port's mouse path (docs/reports/menu-mouse-parity.md) feeds
+- Cursor hit-test: the port's mouse path (menu.rs hit-test) feeds
   page-space points; `menu_cursor_over_me` is the game's own test.
 - Combo wheels: the port's `wheel`/`wheel_at` (menu.rs) draw the game's combo pages;
   `Combo` here is the widget's own data/flow.

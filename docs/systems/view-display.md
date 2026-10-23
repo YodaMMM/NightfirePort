@@ -1,9 +1,8 @@
 # The view system: display masks, the object matrix, the glist draw entry, the sprite queue
 
-Never-mentioned render-side batch `unported-render-side-1` (whole-ELF scan, master 20874c31,
-queue `backlog/unported-all-2026-10-20.md`). All six functions are REACHED on the shipped
+Never-mentioned render-side functions (whole-ELF scan, 2026-10-20). All six functions are REACHED on the shipped
 on-foot path — every one has callers in code the game runs every level [M]. Port: `crates/nf-game/src/view.rs`
-(no drawing — the pixels stay the main agent's; this delivers the data, state, flow and getters).
+(no drawing — this page covers the data, state, flow and getters).
 
 Proof levels: [M] code with address, [D] disc, [L] EE snapshot. Decompiler caveats handled by
 disassembly: `work/elf/ACTION.ELF` re-read word by word for 0x1e4ff0/0x1e7848/0x1e7ac8/0x1e7b30
@@ -102,7 +101,7 @@ the draw side supplies `psiDrawSprites`.
 `obj+0xDC != 0`, write the same mask to each of the skin's attachments
 (`skin+0x2D` count over `anim+0xC0` array) [M disasm 0x1e7ac8..0x1e7b24].
 
-Caller [M]: `BodyGlow_Update` 0x1ac2c8:223,257 — the glow body and each child sprite (the update loop walks 15, `uVar16 < 0xf` — the count master's review pinned)
+Caller [M]: `BodyGlow_Update` 0x1ac2c8:223,257 — the glow body and each child sprite (the update loop walks 15, `uVar16 < 0xf` — the count a review pinned)
 sprites get the per-viewer mask (`uVar11 & 0xffff | 0x10`): the bit per OTHER viewer whose
 view mode is 2 or whose HUD block +0x244 is set, OR 0x10 (bit 4) always. The port's
 `body_glow.rs` carries the spawn record; the update-side mask math is `view::set_view_mask`'s
@@ -132,7 +131,7 @@ consumer test.
 | `View_DrawInThisViewOnly` 0x1e7b30 | `draw_in_this_view_only(&mut ObjMask, view)` |
 | — | `viewer_display_mask(view)` / `passes_display_mask` (the CaptureScene/AddObjects filter) |
 
-Draw work for the main agent (needs the renderer, not this module): the sky-slot matrices
+Draw work (needs the renderer, not this module): the sky-slot matrices
 (`View_DrawSky`'s 0x1e4ff0 use, `--bond` spot: any outdoor level slot), the laser ray's
 per-frame matrix, and the split-screen per-view object filtering through
 `passes_display_mask` (observable in MP split screen: each player's own weapon/muzzle flash

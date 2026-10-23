@@ -1,6 +1,6 @@
 # The Q-Decryptor (weapons 0x56/0x57): the chain
 
-Playtest 1017: "decryptor doesnt work." This document is the game's own chain, every step
+The Q-Decryptor did not work in the port. This document is the game's own chain, every step
 addressed. Tags: [M] decompile, [D] disc bytes, [L] EE snapshot / live measurement, [S] suggested.
 
 ## The weapon
@@ -27,8 +27,8 @@ addressed. Tags: [M] decompile, [D] disc bytes, [L] EE snapshot / live measureme
    laser-burn lock) and its **state `obj+0xf4` must be 0 or 5** (0x1a5460:559-566).
 4. The **distance** `Vec_Dist3D(player+0x30, lock+0x30)` must be ≤ `weapon_data+0x1C`
    (2.0/4.0, :574-577).
-5. Any check fails → **return before `Player_RoundToFire`** — no shot, no sound, no UI. This is
-   the user's symptom: in the port there was no `+0x880` aim target at all, so the decryptor
+5. Any check fails → **return before `Player_RoundToFire`** — no shot, no sound, no UI. This was
+   the port's symptom: there was no `+0x880` aim target at all, so the decryptor
    could never fire.
 
 ## The shot and the contact
@@ -93,7 +93,7 @@ and neither `Player_WeaponFiring` nor `Player_WeaponChange` changes substate. Th
 "on select: enters substate 5" was a guess and is wrong for the decryptor chain; the decode
 runs entirely in `Lock_Update` while the weapon is out and firing.
 
-## Port model (this task)
+## Port model
 
 - `Lock` gains `kind` (param 0), `code` (param 1) and the scan state (`scan_progress`, solved
   digits, unlocked) with `decrypt_tick(beams, upgraded)` — the state-0/5 machine above.

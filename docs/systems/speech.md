@@ -1,7 +1,7 @@
 # Guards' speech and streamed effects
 
 Build: ACTION.ELF `e7ffdcb3…`, SFX.IRX `65c4c97e…`. Tags: [M] code, [D] disc, [L] snapshot, [S] suggested. Written by a
-research pass (subagent, 2026-10-09; PlaySFX / SpeechSFX / AnimScriptPeekSfx checked against its own disassembly) and
+research pass (2026-10-09; PlaySFX / SpeechSFX / AnimScriptPeekSfx checked against its own disassembly) and
 confirmed on all 823 STREAMS entries. Port: `nf_formats::sfx::voice_lines` (Drone_SfxInfo),
 `nf_formats::soundbank::{stream_lut, stream_data}`, the driver's streamed sub-tracks (`nf_audio::sfx`, 2 slots),
 the talk functions in `nf_game::drone` and `Drones::speech` (SpeechSFX / PlaySFX).

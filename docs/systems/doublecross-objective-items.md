@@ -1,9 +1,9 @@
 # Double-Cross objective items (0700 stages 01–04): the case keycard and the census
 
-Playtest 1017: "cant grab objective items either. look at f12." Two F12 spots. Build: ACTION.ELF
+Objective items could not be taken at two spots. Build: ACTION.ELF
 `e7ffdcb3…`. Tags: [M] decomp, [D] disc level-bin data, [S] suggested.
 
-## The 07000003 keycard (the glass display case, F12 --bond 5.90,5.97,-42.41,1.710,-0.458)
+## The 07000003 keycard (the glass display case, --bond 5.90,5.97,-42.41,1.710,-0.458)
 
 - **What it is [D]**: script **0x06000563** stream 1 carries an obj_type-0xF0 `Entity` command for the
   `Pheonix Keycard` object with params `[kind 2, id 0, rounds 0, switch 0x4E, sound 0xFFFF, respawn 0]`.
@@ -48,10 +48,10 @@ Nightfire has **no crossbow weapon**: the weapon table's names ([D] `weapon_data
 USATxt.dat) list Phoenix **Samurai** 0x32/0x33 (a crossbow) — and **no Samurai object, placement or
 script spawn exists in 07000001–04 at all** [D the full object/placement/script scan]. Stage 01's data
 holds exactly 6 pickups (armour ×2 kind 3, ammo ×2 kind 1 id 6, Pickup 007 ×2 kind 6) [D], its scripts
-spawn only fax/particle props (obj_types 0x31/0xd9) [D]. The F12 object at (−0.34, 6.47, −6.22) is not
+spawn only fax/particle props (obj_types 0x31/0xd9) [D]. The object seen at (−0.34, 6.47, −6.22) is not
 a pickup the game data can create; the nearest candidates are the meeting-room statics (the 0xDB shoji
 door #14, G-050's known render query). Nothing to fix in the take path there; the render identification
-belongs to the main agent's F12 pass.
+is open.
 
 ## The sweep (01–04)
 
@@ -68,7 +68,7 @@ objective watch channels [D the census test]:
 ## Test
 
 `crates/nf-view/tests/doublecross_items_live.rs` (NF_ISO-gated):
-- `the_case_use_spawns_the_keycard_through_the_real_path` — the F12 spot, one E press, the live kind-2
+- `the_case_use_spawns_the_keycard_through_the_real_path` — that spot, one E press, the live kind-2
   pickup with switch 0x4E at the case, exactly one (sister: no press → inert, ch 0x4E untouched).
 - `taking_the_keycard_sets_the_objective_channel_and_the_monitor_completes_it` — kind 2 never refuses
   [M 0x18e650:217-219], `Player_EquipKey` sets the flag [M 0x1a97a0], ch 0x4E drives record 0x0400000a

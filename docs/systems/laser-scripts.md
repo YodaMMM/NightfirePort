@@ -127,7 +127,7 @@ tree). After (all [M]-cited):
   the placement/origin transform [M]) — the channel changes only through other writers in play.
 - The show's sound (0x4a1/0x4a0) and the AMBER/OFF swap cycle only run after an unpause; a fresh
   level shows the static ON art, matching the game's load beat [D the t2 hold; M the delay rules].
-- Live checks for the main agent (PCSX2): on 07000009, EE-watch `switch_channels[0x37]`
+- Live checks (open) (PCSX2): on 07000009, EE-watch `switch_channels[0x37]`
   (@0x26FC90+0x37) while using the lobby-area laser switch — expect 0→1 with the beam art still
   drawn (the beams never toggle off; only the NEXT level's touch triggers disarm); and confirm
   the lobby grid draws the ON art from level start (art object 0x020005ed alive at

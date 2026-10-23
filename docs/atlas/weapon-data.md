@@ -19,7 +19,7 @@ Tags: `[M]` decompile, `[L]` `work/ee_start_05.bin` snapshot, `[S]` suggested.
 
 The bytes on the disc are zero. The table is filled at boot by the C++ static initialiser `_GLOBAL_$I$weapon_data`
 (32 B), which calls `gcc2_compiled_(1, 0xffff)` (`0x1b3488`, 25 720 B: constant stores, unaligned 64-bit copies,
-20 `memset` calls). The Rust port runs that initialiser over the user's ELF via `nf_formats::ee::Machine`
+20 `memset` calls). The Rust port runs that initialiser over the disc's ELF via `nf_formats::ee::Machine`
 (`crates/nf-formats/src/weapon.rs:20` `WeaponData::from_action_elf`) `[M]`.
 
 ## Record size

@@ -70,8 +70,7 @@ it shows were spot-checked in the disassembly at 0x20a220-0x20a384]:
 Both codes are in the `UsingMovie` whitelist [M 0x107eb8; the port's copy is
 `movie::USING_MOVIE`], so they map to real files: `cdrom0:\movies\30_FPS\073A0048.PSS` and
 `073B0048.PSS` [M the sprintf in 0x1081a8]. The on-foot slim ISO carries them as zero-byte stubs
-[L]; their picture counts (the real attract lengths) are not measured in this sandbox — see
-"Live checks" in the report.
+[L]; their picture counts (the real attract lengths) are not measured (an open live check).
 
 ## While it plays
 

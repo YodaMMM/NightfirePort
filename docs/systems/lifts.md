@@ -4,7 +4,7 @@
 (nf-extract dumps of the level archives), [L] EE snapshot, [S] suggested (port-only choice).
 Every assertion about the game cites its evidence; port-only choices are marked [S].*
 
-Task lifts-buttons-all-levels. Sweep of 07000001-0d, 11-16, 1b, 41, 4a. One table per level
+Sweep of 07000001-0d, 11-16, 1b, 41, 4a. One table per level
 (§5). The mechanism chapters first: what a lift IS in this engine, and the exact chain from a
 button press to Bond standing on a moving cab.
 
@@ -90,8 +90,8 @@ ground_motion` (world.rs `GroundMotion`) consumed in `scene.rs`'s step (gated on
 the 0x1949a8:24 gate; the relink segment starts at the previous tick's end position,
 fix-swim-entry). Proven live on the 07000005 truck, the 07000008 gondola
 (walkreal_07000008 `walk_the_gondola_ride_to_the_end`: "the carriage carries Bond"), the
-0700004a platform (fix_finale_live) and the 0700000b paternoster (this task's
-`lifts_ride_live::the_paternoster_carries_bond_from_load`).
+0700004a platform (fix_finale_live) and the 0700000b paternoster
+(`lifts_ride_live::the_paternoster_carries_bond_from_load`).
 
 ## 4. Cab doors
 
@@ -99,9 +99,9 @@ Lift/cab doors are ordinary doors and SSs: swing/slide doors (class 0x1C, `Door_
 0x135be0 via the use key) and SS leaves gated on a channel (docs/fields/ss.md §state machine —
 the 0x40 state waits for `SS_Operate` = the channel half). The 0700000a cab-mouth doors
 #524/#525 are SSs whose create-sweep (param 0 = 1 armed) poses them OPEN and holds the end pose
-(wrap flag 1) — resolved by task 710a; walkreal_0700000a walks out through the open mouth and
+(wrap flag 1) — resolved; walkreal_0700000a walks out through the open mouth and
 asserts the sweep. The 07000009 LIFTDOORS_LEFT/RIGHT_ENDLEVELDOORS #2/#3 wait on ch 0x39 (57)
-which the lobby panel button writes (docs/systems/elevator-button.md — the whole chain, task 700).
+which the lobby panel button writes (docs/systems/elevator-button.md — the whole chain).
 
 ## 5. Per-level census
 
@@ -147,7 +147,7 @@ Explicit: "no lifts/elevators, no buttons/switches (0x29)".
 
 No button/keypad operates the gondola — the "switch" is the cab floor plus the briefcase.
 
-### 07000009 Tower A — THE MAIN ELEVATOR (the task-700 level) [D 07000009.md:46-96,135-147]
+### 07000009 Tower A — THE MAIN ELEVATOR [D 07000009.md:46-96,135-147]
 
 | piece | id / kind | channel / script | the game does | port |
 |---|---|---|---|---|
@@ -165,7 +165,7 @@ objective 3 "Take main elevator to office floor" at the spawn [L 0x47 on at load
 
 | piece | id / kind | channel | the game does | port |
 |---|---|---|---|---|
-| cab-mouth doors | #524/#525 SS | ch 0 (none), p0 = 1 armed, wrap 1 | the create-sweep poses them OPEN and holds (75-tick sweep [M 0x1a9c58:51]) | ported; walkreal_0700000a asserts the sweep and walks the mouth (task 710a — the old "missing writer" ignore premise was stale) |
+| cab-mouth doors | #524/#525 SS | ch 0 (none), p0 = 1 armed, wrap 1 | the create-sweep poses them OPEN and holds (75-tick sweep [M 0x1a9c58:51]) | ported; walkreal_0700000a asserts the sweep and walks the mouth (the old "missing writer" ignore premise was stale) |
 | shaft fall | #745-749 HP | p1 = 1000 | the lift-shaft fall volumes at y −29.2 | ported; asserted live by the census test |
 
 No lift SP/buttons on 0a; the ride here is the 09→0a level load.
@@ -178,7 +178,7 @@ No lift SP/buttons on 0a; the ride here is the 09→0a level load.
 | the hold | — | stream 3: `Event{kind 3, params [0x1f4]}` at t0 and t630 | the script holds itself 499 ticks at each end of the cycle (event 3 → the delay = p0 − 1 [M 0x1da998]) — the bottom hold is pinned by the test while ch 0x75 is off | ported; pinned by `lifts_ride_live` |
 | the retirement | #245 TRIG Touch (roof deck, y 56.8..63.8) | out 0x75 | Bond on the roof deck → ch 0x75 → **SP_Update case 6**: the cycle script is freed, script B (0x06000A09, mode 1, 10 ticks) loads → its end deletes the SP (stay 1) — the paternoster stops once Bond reached the roof | ported (case 6); pinned by `lifts_ride_live` |
 | mid-shaft plate | #171 TRIG TouchOnce | out 0x53 | the exec-floor boarding marker | ported |
-| the ride gap (STALE) | — | — | docs/levels/0700000b.md:164 "the port does not carry a Bond standing on it" **predates the Control_InheritVelocity port**; the carry is proven (§3, this task's test). The walkreal's teleport stand-in for the balcony→exec leg remains (route shape, not the lift mechanism) | test added this task |
+| the ride gap (STALE) | — | — | docs/levels/0700000b.md:164 "the port does not carry a Bond standing on it" **predates the Control_InheritVelocity port**; the carry is proven (§3, `lifts_ride_live`). The walkreal's teleport stand-in for the balcony→exec leg remains (route shape, not the lift mechanism) | `lifts_ride_live` |
 
 The exec→roof leg itself is the roof cut-scene (SP #177 0x060004FA: event 6 re-places Bond at
 [−14.71, 58.00, −2.06] — inside #245's volume [D pack 0790000b]) — the lift is the way DOWN
@@ -216,7 +216,7 @@ No floor selection — one call button per channel; the ride is 4a's script.
 
 | piece | id / kind | channel / script | the game does | port |
 |---|---|---|---|---|
-| fake-lift panel | #161 SP, mode 64, mask 4, out 0x23 | script 0x06000959 (25 ticks) | E the west-wall panel → entity light-up (0x02000A2C/0x02000A2B swap) → ch 0x23 | ported; gate13_live (task 716b — §4's "no writer" reading superseded) |
+| fake-lift panel | #161 SP, mode 64, mask 4, out 0x23 | script 0x06000959 (25 ticks) | E the west-wall panel → entity light-up (0x02000A2C/0x02000A2B swap) → ch 0x23 | ported; gate13_live (§4's "no writer" reading superseded) |
 | Shutters2 | #149 SS | ch 0x23, spline, 2 keys, rate 240 | the front-entrance gate leaf rises +4.824 y on ch 0x23 | ported; gate13_live |
 | dormant twin | #427 SP at the world origin | same script, mode 0x40 | the origin-placed SP is unreachable to the use pick (the "09 family" origin-SP shape; its script-keyed matrix is the unported part) — dead disc data, never the route | documented (useobj.rs NOTE) |
 
@@ -224,8 +224,7 @@ Never a ride — the fake lift is scenery; no cab exists.
 
 ### 07000014 EvilBase — no lift content [D 07000014.md:1,3,12-64; corrected by 0700004a.md:4-6]
 The header's `UpdateMFX_HT_Level_Tower2Elevator` music pin is a **mis-pin the 4a doc corrects**
-(the music switch maps it to 0700004a; 14's own doc still carries the stale name — one-line doc
-fix, not this task's code). The vertical content is the crawl-vent start and a static-art
+(the music switch maps it to 0700004a; 14's own doc header is corrected as of 2026-10-22). The vertical content is the crawl-vent start and a static-art
 "Vent_StoreRoom_Ladder" (kind 0x19, not a ladder). **There is no elevator on 07000014.**
 
 ### 07000015 missile silo — no lift content [D 07000015.md:84-106,92-93]
@@ -255,20 +254,20 @@ The only "ride" is the tether-wire crossing (five Wire placements); no lift mach
 | floor plates | 13 × TRIG TouchOnce | 0x17/0x3d/0x18/0x3f/0x19/0x45/0x1a/0x3e/0x1b/0x4f/0x84 (+0x1c/0x4d at the top) | each fires its floor channel as the lift descends | ported |
 | objective complete | ch 0x4A | **no disc writer** (scanned: triggers, 11 scripts' events, drone deaths, SP outs, 42 maps) | the port writes it when the lift script ends (platform parked at the lobby) — the documented stand-in [S], nis.rs keyed to 0700004a + 0x06000571 | stand-in; fix_finale_live pins the ride + completion |
 | known gap | the shaft doors' auto-open on the lift's approach | — | a rider is scraped off around the −52 floor mid-ride in the port; the test re-seats Bond along the script's key line | documented gap (0700004a.md:44) |
-| parked walkreal | walkreal_0700004a_live | — | parked on the #289 enable-marker contradiction (the event-6 snapshot matrix vs the world-space-keys reading) — reverted once because the same change displaced 07000014's fusebox wire and 07000008's safe entities; needs the main agent's live check | parked (fix-final-blockers2; the live check is restated in §7) |
+| parked walkreal | walkreal_0700004a_live | — | parked on the #289 enable-marker contradiction (the event-6 snapshot matrix vs the world-space-keys reading) — reverted once because the same change displaced 07000014's fusebox wire and 07000008's safe entities; needs a live check | parked (the live check is restated in §7) |
 
 ## 6. The mechanisms and their tests (one live test per distinct mechanism)
 
 | mechanism | levels | proof |
 |---|---|---|
-| E button → SP latch → channel → SS doors (the use key) | 09, 12, 13 | elevator_buttons_09_live; walk_07000012_live; gate13_live (all pre-existing, re-run green this task) |
+| E button → SP latch → channel → SS doors (the use key) | 09, 12, 13 | elevator_buttons_09_live; walk_07000012_live; gate13_live (all pre-existing) |
 | SP mode-64 armed → channel start → the ride script moves the cab; Bond carried | 08 | walkreal_07000008 walk_the_gondola_ride_to_the_end (pre-existing, re-run green) |
-| SP mode-8 prime → the cab cycles from load; Bond carried; the roof touch retires the SP (case 6) | 0b (09's cab pair: the prime alone) | **lifts_ride_live (this task)** — `the_paternoster_carries_bond_from_load` (prime, the bottom hold, the carry, the case-6 retirement) and `the_09_cab_pair_loops_from_load` |
+| SP mode-8 prime → the cab cycles from load; Bond carried; the roof touch retires the SP (case 6) | 0b (09's cab pair: the prime alone) | **lifts_ride_live** — `the_paternoster_carries_bond_from_load` (prime, the bottom hold, the carry, the case-6 retirement) and `the_09_cab_pair_loops_from_load` |
 | SS create-sweep cab-mouth doors | 0a | walkreal_0700000a (pre-existing, re-run green) |
 | SP mode-1 scripted platform descent with Bond aboard | 4a | fix_finale_live (pre-existing, re-run green) |
 | SS channel-swap lift doors/screens | 12 | walkreal_07000012_live (pre-existing, re-run green) |
 
-## 7. Live checks for the main agent
+## 7. Live checks (open)
 
 1. **0700004a, the −52 landing**: gdbwatch the enable matrix + Bond's y through the −52 landing
    (the #289 NIS enable placement vs the platform's live pose — the parked walkreal's

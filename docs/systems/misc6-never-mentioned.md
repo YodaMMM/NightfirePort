@@ -1,9 +1,9 @@
 # misc-6: the 25 never-mentioned functions — evidence and the port's mapping
 
-Task `unported-misc-6` (whole-ELF scan, master 20874c31). For each: the callers in
+Whole-ELF scan (2026-10-21). For each: the callers in
 `work/decomp/ACTION.ELF` [M], whether the shipped game reaches it on an on-foot level / the
 front end / MP, and where the port does the same job under another name. Nothing here is
-drawn by the port — the drawing is the main agent's; these are the data/state/flow/getters.
+drawn by the port — these are the data/state/flow/getters.
 
 Three families sit under one roof each:
 

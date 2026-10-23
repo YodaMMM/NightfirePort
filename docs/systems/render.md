@@ -1,7 +1,7 @@
 # World rendering: fog, GS state per leaf, lighting, snow, output (07000005)
 
 Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] decomp, [L] snapshot `work/ee_start_05.bin`, [S] suggested. Source: a
-research pass (subagent, 2026-10-09; decoded all 713 ps2gfx leaves of 07000005); not yet re-checked here.
+research pass (2026-10-09; decoded all 713 ps2gfx leaves of 07000005); not yet re-checked here.
 **Status (2026-10-22):** this page is the original spec; the renderer it describes is ported in
 `crates/nf-view` (`gpu.rs`, `scene.rs`) — per-leaf GS state (GAPS G-018), portal visibility (G-016), GPU
 skinning and interpolation (G-043), lighting, snow and the shard pass. Individual differences from the PS2 are
@@ -187,7 +187,7 @@ draw the flash glist instead of the normal one; reflicker-type flash ticks raise
 [0x30d0b8], which shows the 8-beam lightning polyline (`Lightning_Update` 0x18cf68, re-fractaled by
 `Reflicker` via `FractalThing`; the beams follow the player). **The flash does not light the level**: no
 ambient write and no `Light_Create` in the path — the level-side evidence is the beams only; the port
-leaves a marked hook (`sky::Sky.globals.super_happy`) for 050-fix-lighting. RNG order per tick: flash start
+leaves a marked hook (`sky::Sky.globals.super_happy`) for the lighting work. RNG order per tick: flash start
 = `Rand_Rand(interval)` then `Rand_Rand(100)` (plus `Rand_Rand(120)` on the non-reflicker branch); a
 flashing tick = one `Rand_Rand(100)`; dark ticks draw nothing [M 0x1e5ad0:92-158].
 
@@ -213,7 +213,7 @@ sky_gs_live]: the 0700000a Thunderhead's first CNT carries **no A+D writes at al
 the pass-initial 0x2a / TEST_1 0x5001b), while 0700001b's SKY_StarField writes its own ALPHA_1 0x44
 (normal blend), TEST_1 0x5001b and ZBUF_1 0x1_31000000. gpu.rs's sky pipelines (pass 0: depth Always, no
 write; pass 4: LessEqual, no write, far-pin) stay as modeled; the exact ZMSK state the GS holds during the
-sky draws is a live check for the main agent below.
+sky draws is an open live check below.
 
 **Snow and rain** are not sky-pass draws: `DrawDrops` 0x18cb90 runs after the alpha list (blend 2, no
 lights, `Game_Draw`). The physics/density live in `nf_game::env.rs` (`InitDrops` 0x18bf68 etc.). The look,

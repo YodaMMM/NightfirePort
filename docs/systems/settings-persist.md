@@ -24,7 +24,7 @@ tables `ADV_ROWS`/`MP_ROWS`/`AV_ROWS` in menu.rs]:
 ride the save's global-settings blob (`LS_MakeGlobalSettings` 0x1cd9d0 — the screen offset too
 [M 0x1cd9d0; docs/systems/screen-adjust.md §3/§5]) while campaign progress rides the save-game
 records the front end enumerates (`Menu_EnumSaves` 0x1f7b78). This port keeps exactly that
-split: **progress stays in the save-game/profile model (task 635-memcard-save-flow's
+split: **progress stays in the save-game/profile model (docs/systems/memcard-save-flow.md's
 `Profile`, the `profile_dir` flow, `save_profile`); `settings.toml` is settings only** and
 nothing in it can advance a campaign, unlock a reward, or touch a profile. The Screen Adjust
 offset (`screen_x`/`screen_y`, the game's `PS2ScreenXPos` 0x30c75c/0x30c760) is written by the
@@ -32,8 +32,7 @@ AV page's Screen Adjust subscreen and saved in the game's global settings blob �
 persists the option rows the pages show; the screen offset itself is not (yet) in the file —
 listed in §6.
 
-**Window settings: nothing to persist yet.** The task's "also persist the window settings the
-port already has, if they exist as state" — they don't: the main window is created with
+**Window settings: nothing to persist yet** — the port has none as state: the main window is created with
 winit's default attributes (lib.rs `resumed`, `Window::default_attributes().with_title`), and
 the port has no size/fullscreen state anywhere. When such state lands, its rows belong in this
 file's `[window]` section (the parser already skips unknown sections — §4).
@@ -42,10 +41,10 @@ file's `[window]` section (the parser already skips unknown sections — §4).
 
 `settings.toml` in the user's config dir:
 
-- `NF_CONFIG_DIR` set (tests, sandboxes) → that directory;
+- `NF_CONFIG_DIR` set (tests) → that directory;
 - Windows → `%APPDATA%\NightfirePort`;
 - else `$XDG_CONFIG_HOME/NightfirePort`, or `$HOME/.config/NightfirePort` (std only — the
-  workspace has no `dirs` crate and got none [S the task's rule]).
+  workspace has no `dirs` crate and got none [S]).
 
 Shape (a TOML subset written and read with std only):
 

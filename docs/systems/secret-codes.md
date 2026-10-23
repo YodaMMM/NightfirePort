@@ -150,10 +150,10 @@ see the open item below.
   open items).
 - `nf_view::menu` (`crates/nf-view/src/menu.rs`): `Page::CnName` (id 0x40000020), the
   `SecretEntry` model (`cursor`/`typed`/`accepted`/`pending_submit`), `SECRET_GRID` (39 cells:
-  0-9, A-Z, ← Delete, → Space, ✓ Submit — the drawn layout is the drawing task's), `secret_press`
+  0-9, A-Z, ← Delete, → Space, ✓ Submit — the drawn layout is draw-side), `secret_press`
   (append with the 8-char cap / delete / space / flag submit) and `secret_submit(&mut Progress)`
   (the host drains it — the same split as `results_enter`). The codename wheel's row 0 routes to
-  the page [M C_SBCNOPTIONS 0x213528 case 0]; the overlay draws a stub grid until the drawing task
+  the page [M C_SBCNOPTIONS 0x213528 case 0]; the overlay draws a stub grid until the draw pass
   lands.
 
 ## Tests

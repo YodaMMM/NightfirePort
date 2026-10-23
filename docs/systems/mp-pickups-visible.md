@@ -1,6 +1,6 @@
 # mp-pickups-visible — MP arena weapon pickups: the match's weapon set and the weapon's own model
 
-*The user (2026-10-19, MP from the menus): "You can't see weapon drops on the ground." Everything game-side here
+*Symptom (2026-10-19, MP from the menus): weapon drops were invisible on the ground. Everything game-side here
 cites the decompile [M] or the arena archives on disc [D]; port choices are [S].*
 
 ## 1. What the game does
@@ -23,7 +23,7 @@ refusal 0x18de0c) intercepts kinds **7..11** (`kind-7 < 5` unsigned, 0x18de4c-0x
   only required to resolve for the gate.
 - Special case (0x18f280-0x18f300): row entry 0x1A (AIMS-20) additionally spawns a kind-1 ammo pile of weapon 0x1B
   (model 0x02007c4, +0.1/+0.1) — the port documents this as an unmodelled remainder (pickup.rs `create_from_set`);
-  sets 0 and 1 contain no 0x1A, and this task leaves it as documented.
+  sets 0 and 1 contain no 0x1A, and it stays as documented.
 
 **MP-only extras [M 0x18dda0:138-144, 197-199].** In a match (`MPSettings+0x180 ≠ 0`) every created pickup spins
 (`+0x38 = 1`, ~1 rad/s about +Y, applied per tick by `Pickup_Update` 0x18e148:193-201) and registers in the
@@ -61,7 +61,7 @@ by index like `parsemap` does):
   **`PICKUP_MATRIX_ROW0`** — the wrong row whenever the lobby's weapon set ≠ 0 (the weapons the sim hands out do
   not match the models the draw side builds) — and also overrode `obj` with the placement object.
 - Net effect: every set pickup on 07000023/07000024 drew the arena's generic `PICKUP` marker (hashcode 0xFFFFFFFF,
-  not a weapon), instead of the weapon's own world model [M §1] — the user sees no weapon pickups on the ground.
+  not a weapon), instead of the weapon's own world model [M §1] — no weapon pickups show on the ground.
   (Dropped guns ride `weapon_data[id]+0x80` and resolve [D §2]; the placed set pickups were the invisible ones.)
 
 ## 4. The fix (port)

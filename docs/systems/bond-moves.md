@@ -29,15 +29,14 @@ Moves row and the 007 Bonus score) are awarded per level for specific actions. E
   `C_GCPAUSE_Handler` 0x204408:447-498).
 - Reset: `PlrStat_ResetForMission` 0x1993a0 memsets both the record and BondMoments [M].
 
-Port side (bonus-007-2 on current master): `crates/nf-game/src/progress.rs`
+Port side: `crates/nf-game/src/progress.rs`
 (`PlrMissionStats.done_bond_moment`, `Progress.stats()` — the pause SCORE tab's `pause_stats`
 reads the record through it), the per-tick award fold `crates/nf-game/src/drone.rs`
 (`Trigger_Calc`'s scan), `crates/nf-game/src/sound.rs` `SoundTriggers` (0xF9 placements), and the
-HUD timer — master models BL+0x948 view-side, `crates/nf-view/src/scene.rs`
+HUD timer — the port models BL+0x948 view-side, `crates/nf-view/src/scene.rs`
 `HudState.bond_moment_flash` (written 200 on a new moment via `moments_seen`, decayed −1/frame in
-`hud_tick` [M 0x199448:23-25 + 0x19b9c8:258-260]; batch 1022n) with the draw in `hud.rs` — the
-old branch's nf-game `PlayerHealth.bond_moment_flash` was master's replacement target and is NOT
-re-landed (the addendum).
+`hud_tick` [M 0x199448:23-25 + 0x19b9c8:258-260]) with the draw in `hud.rs` (an earlier nf-game
+`PlayerHealth.bond_moment_flash` model was replaced by it).
 
 ## The sound ids (the chime family)
 
@@ -83,21 +82,20 @@ plus every bond SoundTrigger the census lists under the level's other maps. The 
 per-level summary. MP archives (07800007/07900007/07F00007) were not censused (SP-only counters
 gate on the mission status; DoneBondMoment's MP arm exists but the MP UI is out of scope).
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. On 07000005 (the truck ride or any award), `gdbwatch` on `BondMoments` 0x2bcde0 (expect the
    awarding id's halfword 1) and `PlrMissionStats+0x20` 0x2bcc40 (expect +1), and on Bond's
    BLData+0x948 (expect 200 at the award tick, then −1 per frame).
 2. The award moment on PCSX2 should flash the 007 icon by the health pane and play the CAS
-   family sting; the port's draw + timer are on master (batch 1022n, `HudState.bond_moment_flash`
-   + the hud.rs draw) — the pause SCORE tab's live counters (`pause_stats`) are the bonus-007-2
-   re-land's delivery.
+   family sting; the port's draw + timer are `HudState.bond_moment_flash`
+   + the hud.rs draw; the pause SCORE tab's live counters are `pause_stats`.
 
 ## What remains
 
-- DONE on master (batch 1022n): the 007-icon draw (`hud.rs`, sprite 16, tex 0x0300005B) + the
+- DONE: the 007-icon draw (`hud.rs`, sprite 16, tex 0x0300005B) + the
   timer (`HudState.bond_moment_flash`; the game's sprite animation is `HUD_UpdateHealthPane`
   0x19b9c8:239-257).
 - The pause SCORE tab's shots/accuracy/time still fill 0 (pre-existing gap, unchanged here).
 - The per-level "what the player does" table (the chains behind channels 61/62/112/113/127-129…)
-  is one more hop of census + playtests.
+  is one more hop of census + live checks.

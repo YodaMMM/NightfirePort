@@ -4,7 +4,7 @@ The in-mission pause page (menu-def page 0x4000004b, handler `C_GCPAUSE_Handler`
 §5/§8) has four tabs; the OBJECTIVES tab lists the mission's announced objectives and its ✕ shows the selected
 objective's hint in a modal option box. This doc is the data model + flow the port implements (`Mission::objective_state`
 in `crates/nf-game/src/mission.rs`, the `pause_*` fields/getters on `FrontEnd` in `crates/nf-view/src/menu.rs`); the
-DRAWING is the main agent's (the rows and the box).
+DRAWING (the rows and the box) is draw-side.
 
 Tags: [M] decompile (work/decomp/ACTION.ELF, address + function), [L] EE snapshot / .data dump, [S] suggested.
 Every test uses numbers/ids only; the label strings resolve through `Lang::bind` (USATxt.dat).
@@ -132,7 +132,7 @@ objective_hints_flow.rs` — the flow (the last-row initial selection, ✕ on ro
 fallback, the modal, Back closing, the re-selection on tab entry; one NF_ISO-gated check binds 0x202/0x31d/0x266
 from the disc's USATxt.dat). Each has a sister assertion that can fail.
 
-## 6. Live checks for the main agent
+## 6. Live checks (open)
 
 1. **The last-row selection**: PCSX2, 07000005 pause → OBJECTIVES (1 announced objective — sel = 0; use a later
    level with several). gdbwatch on control 8's selection word is awkward; instead: with ≥ 2 announced objectives

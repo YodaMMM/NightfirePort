@@ -1,6 +1,6 @@
 # Coronas (glow quads) — placement path ported, runtime class dead (U-042 closed)
 
-Task `find-corona-creator` (2026-10-15): hunt the creator of the runtime class-0x45 coronas
+2026-10-15: the hunt for the creator of the runtime class-0x45 coronas
 (U-042, G-034). Result: **no creator exists on the disc's paths — `Corona_Update` is dead code.**
 This page carries the full mechanism and the caller scan that proves it.
 
@@ -27,8 +27,8 @@ This page carries the full mechanism and the caller scan that proves it.
 ## The corona table row
 
 `control_funcs[0x45] = { update: Corona_Update 0x18da78, collide: NULL, third: NULL }`
-[table dump @0x26f890 + 0x45·0xC = 0x26fbcc; M]. This is the link-time "slot assignment" the
-task asked about — there is no other.
+[table dump @0x26f890 + 0x45·0xC = 0x26fbcc; M]. This is the link-time "slot assignment" —
+there is no other.
 
 ## Corona_Create 0x18da00 (the placement path — ported)
 

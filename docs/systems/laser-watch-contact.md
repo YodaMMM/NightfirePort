@@ -24,7 +24,7 @@ removed) with the game's chain.
      USE/fire distance gate, NOT the bullet's range (the decryptor's gate reads `+0x1C` at
      0x1a5460:574-577). `Bullet_update`'s disasm reads `BU+0xFC` per tick at 0x12efa4 for the
      death cap. The port's old `+0x1C` range kept the watch's rounds alive for 4.0 units — the
-     beam's bullet stream never reached the locks at all (the user's "the laser isn't accurate").
+     beam's bullet stream never reached the locks at all (the visible symptom: the laser seemed inaccurate).
    - the per-tick segment: A = `obj+0x30`, B = `obj+0x30 + dir·max(step,1)`, range-clamped;
      the HITTEST type **0x201** (`+0x94`, `Bullet_update`'s tail disasm 0x12efd8-0x12f188 — the
      0x101 point arm only for raw steps under 0.125; the watch's step is 33.33 [L `+0x20`]).
@@ -109,6 +109,6 @@ death cap" claim above (see docs/systems/bullet-flight-range.md for the full cha
   game's beam still burns locks because the chain above fires **one round per tick** [M
   0x1a5460:653-658, :688-690]: the 4.0-unit segments tile the ray at 240 units/s, the front
   reaches the lock in ~distance/4 ticks, and the 84 contact ticks follow. The port keeps the
-  210.0 range for the watch's bullets for now [S unverified — task 831's port choice; the merged
+  210.0 range for the watch's bullets for now [S unverified — the port's choice; the
   laser tests ride it] and the live check (gdbwatch a held watch's `BU+0xF4`: predicted
   ~4.0/segment with `BU+0xFC` untouched at 210) settles which model the game runs.

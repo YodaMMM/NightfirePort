@@ -77,7 +77,7 @@ hiding at the stairwell head could not reach the > 14.0 exit (the guard sits at 
 through the descent) and never finished his mission route to the LoadPointActivator plate. With
 the gate he stops being a peer the moment the line blocks, exactly as the game reads it.
 
-The other side of the same coin (701d): while the escort descends the stairwell, a LIVING armed
+The other side of the same coin: while the escort descends the stairwell, a LIVING armed
 guard on the landing above (guard 2, ≈ 4 from the contact) must STILL count — the hide's run-to
 points walk the contact west to the AND plate (placement #180, Touch out 0x10, filter skin 0x4F
 [D triggers]) only while a peer is within 10.0. The raw `segment` blocked that head-to-head ray
@@ -93,7 +93,7 @@ crosses the masked classes.
 - `LEAD_HIDE` exits at > 14.0 with the 2-tick timer C latch [M 0x15ec08 case 3].
 - The hostage save states (20.0, flag 0) ride the same snapshot.
 
-## Live checks for the main agent
+## Live checks (open)
 
 - [L wanted] 07000001, after the meet scene: watch Drone+0x2B8 (the armed-peer latch) of the
   skin-0x4F contact during the stairwell approach — write watch, expect 0 until a hide-enter,

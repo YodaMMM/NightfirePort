@@ -247,12 +247,12 @@ player path reads: +0x184 (HandleDeath gate), +0x1A4, +0x244 (night-sight on). +
   14.89, −30.6) at level start — a pre-debug writer was not located (honesty).
 - **The armour**: types 1..7 bypass it (now ported); the CHEAT skip of the health subtraction is unported.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **Armour bypass**: in 07000005 give Bond the armour pickup (or `poke` BL+0x8B0 = 50 at 0x016cf0f0+0x8B0),
    step off the castle stairs to trigger a fall (`watch 0x016cf984 4 readwrite` = BL+0x894 — it should drop
    WITHOUT BL+0x8B4+0xFC... precisely BL+0x8B0 at 0x016cf990 staying 50.0). The pre-fix port drained the armour.
-2. **Grenade-belt regen**: `watch 0x016cf5e4 2` (= BL+0x4F4; corrected from 0x016cf8e4 by the main agent) for 2 s of play on 07000005 after throwing a
+2. **Grenade-belt regen**: `watch 0x016cf5e4 2` (= BL+0x4F4; corrected from 0x016cf8e4) for 2 s of play on 07000005 after throwing a
    grenade — the value should climb +1 per 6 frames toward 100. (The snapshot starts it at 0.)
 3. **Switch timer writer**: `gdbwatch 0x016cf0f0+0x95e 1 write --seconds 4` while switching weapons — the
    expected writer is `HUD_UpdateAmmoPane` (0x19a7f0+0x…), NOT the weapon-switch state machine.
@@ -264,7 +264,7 @@ which should surface exactly the accessors in the rows above; any extra accessor
 reader. Priority ranges: 0x118-0x134 (the crosshair block — Check_AutoAim/Check_Target/Aiming), 0x92C-0x960
 (the fire/switch block) and 0x4F4/0x530/0x548/0x560/0x56C/0x41C (the regen slots).
 
-## Live census (main agent, 2026-10-12)
+## Live census (2026-10-12)
 
 `tools/trace/gdbwatch.py`, GDB-server PCSX2, 07000005 just after the start, **nobody playing** (idle: aim mode
 off, no targets), BL = 0x016cf0f0 [L: `PLAYERS` 0x2D88E0 → 0x016cefe0, `obj+0xE0` → 0x016cf0f0]. Per field,
@@ -286,9 +286,9 @@ read and write traced separately, 4-6 s each. Instruction addresses are the acce
 Not yet run: the fire/switch block 0x92C-0x960 and the other regen slots under play (walk-switch-shoot needs
 someone at the controls), and the aim-mode-on pass for +0x128..+0x131 writers.
 
-### Live census of the fire/switch block, under play (main agent + the user, 2026-10-12)
+### Live census of the fire/switch block, under play (2026-10-12)
 
-07000005, the user walking, switching weapons and gadgets, aiming and firing (god mode); BL = 0x016cf0f0; range
+07000005, walking, switching weapons and gadgets, aiming and firing (god mode); BL = 0x016cf0f0; range
 BL+0x92C..+0x960 (0x016cfa1c..0x016cfa50). The census covers the whole range, so the rows above still assign each
 accessor to its field.
 

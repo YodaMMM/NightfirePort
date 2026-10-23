@@ -1,6 +1,6 @@
 # Drone-to-drone alerts: `DroneVision_FindAlertedDrones` → `DetermineAlertCheck` → `ConsiderAlerted` → `DroneCanSeeDrone`
 
-Task consider-alerted-exact (915). The port's stand-in (drone.rs's "Drones noticing drones that
+The port's earlier stand-in (drone.rs's "Drones noticing drones that
 attack" pass) approximated this chain; the exact rules are here. All facts [M] = decompile
 (ACTION.ELF, address = filename prefix, `:NN` = line in the .c file) or the disassembly of
 `DroneVision_ConsiderAlerted` 0x176250 (1192 bytes, checked instruction-by-instruction at

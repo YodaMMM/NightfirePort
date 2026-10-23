@@ -1,13 +1,11 @@
 # The MP match end and the debriefing
 
-mp-debriefing-data2 (2026-10-16, branch `s/mp-debriefing-data2`). This lands 621's
-(`s/mp-debriefing-data`, HELD) match-end + debriefing port on top of master's 402
-(`s/mp-match-rules`) single state machine. Everything here is first-hand: [M] = decompile/
-disassembly read in this task or re-read from 621's task (`work/decomp/ACTION.ELF/<addr>_<name>.c`,
-line numbers refer to those files; disassembly addresses are exact), [L] = a byte dump made in
-621's task (from `work/elf/ACTION.ELF`, byte-identical to the ISO's /ACTION.ELF; .data file
+2026-10-16. The match-end + debriefing port, on top of the MP rules' single state machine
+(docs/systems/mp-match-rules.md). Everything here is first-hand: [M] = decompile/
+disassembly read for this page (`work/decomp/ACTION.ELF/<addr>_<name>.c`,
+line numbers refer to those files; disassembly addresses are exact), [L] = a byte dump (from `work/elf/ACTION.ELF`, byte-identical to the ISO's /ACTION.ELF; .data file
 offset = vaddr − 0x106100), [S] = suggested/inferred. The port side: `crates/nf-game/src/mp/mod.rs`
-(the end-condition/state-machine completion, 402's file), `crates/nf-game/src/mp/rules.rs`
+(the end-condition/state-machine completion), `crates/nf-game/src/mp/rules.rs`
 (`MP_SortOutWhoWon`'s body, 402's file) and `crates/nf-game/src/mp/debrief.rs` (the debriefing
 data builder, 621's file), exposed through `crates/nf-view/src/menu.rs` (`FrontEnd::
 open_mp_debriefing` + the `mp_debriefing_*` getters), tests `crates/nf-game/tests/
@@ -95,7 +93,7 @@ The switch on `MPGame+0x188` [M 0x184bd0:36-93; offsets confirmed by disasm — 
     qualifier tied the minimum (nothing followed); otherwise "Player %s Won" 0x2000022 with the
     codename at `MPSettings+slot·0x30` [M 0x1848d0:27-53].
   - FFA (`MPSettings+0x18C == 0`): every slot whose score (`+0x18` f32) ≥ the frag limit
-    (`MPSettings+0x19C` as float) qualifies — **no obj gate in this branch** [M :55-71]; exactly
+    (`MPSettings+0x19C` as float) qualifies — **no obj gate in this arm** [M :55-71]; exactly
     one qualifier → "Game Over : %s Won" with the codename (0x2000024 + 0x2000027), otherwise
     (0 or ≥2) → "Game Over : A Draw" [M :72-85].
   - Team games: always "Game Over : A Draw" — the team winner is announced on the debriefing
@@ -164,7 +162,7 @@ menu-def** (checked all 56 pages) — a dead send [L+M 0x212198:157,214].
 ### The populate — `P_MPDEBRIEFING_Handler` 0x212198, msg 0x4c
 
 [M 0x212198:83-250; the pair layout and the winner sprintf pinned in disasm 0x2121d0-0x212a94;
-re-read in this task]:
+re-read]:
 
 1. If `menu_movie == 0`: remove SFX 0x1d7/0x470, start them, set the flag (the page's music
    stinger) [M :85-91].
@@ -210,8 +208,7 @@ re-read in this task]:
 
 ### The return flow — `C_MPDBG_Handler` 0x217860
 
-Exactly two arms (decomp: 0xa8 bytes, only 0x4b/0x5d branches; no init arm; re-read in this
-task) [M :8-16]:
+Exactly two arms (decomp: 0xa8 bytes, only 0x4b/0x5d branches; no init arm; re-read) [M :8-16]:
 
 - **0x4b (Continue, ~A)**: `Menu_RestoreMPSettings` 0x202848 (MPSettings' first 0x1dc bytes
   back from the backup @0x2dec68 + the four 0x158-byte PlayerSetting records from @0x2de708,
@@ -254,9 +251,8 @@ task) [M :8-16]:
   page (C_MPDBG 0x4b; the port keeps the menu-side MP state — the game's restore exists because
   the match compacted MPSettings in place, which the port's copy never does). The confirm
   start hands the joined agents' codenames to `MpPlayer`.
-- The debriefing page's DRAW is still the main agent's (the menu-def's plate/rows render from
-  the getters above; `Page::MpDebriefing` draws nothing yet — reported, with the widget table
-  in §4).
+- The debriefing page's DRAW (when written): the menu-def's plate/rows render from the getters above;
+  `Page::MpDebriefing` drew nothing then (the widget table is in §4; see docs/systems/mp-screens.md).
 - mp-hud-real (2026-10-18) — the draw checked against the real game: PCSX2 debriefing of a
   1-human + 3-bot Team Arena (reached by a natural time-up through `tools/trace/mp_goto.py`)
   vs the port's `--page mpdebrief` render (the same participants). Fixed from the menu-def rects
@@ -274,7 +270,7 @@ task) [M :8-16]:
   the fiery backdrop is the page's aux FMV 0x07350048 (headless renders without the `movies`
   feature show the dark plate).
 
-## 6. Live checks for the main agent (PCSX2; none runnable here)
+## 6. Live checks (open) (PCSX2; none runnable here)
 
 1. Watch `GameState+0x1C` @0x2a3784 (w) when a match ends naturally (frag limit in Arena) —
    expect 0x40000033 (disasm 0x184e80); then `GameState+0x24` @0x2a378c — expect 1.

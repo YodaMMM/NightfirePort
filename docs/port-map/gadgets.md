@@ -2,9 +2,11 @@
 
 The gadgets are weapons 0x4A..0x5E that trigger player substates instead of firing bullets. Each is a full
 subsystem: the grapple moves Bond through the air on a rope; the decryptor opens a scan-mode UI; the laser
-burns through locks; the watch fires a laser or taser. **None are ported.** Until they are, they are removed
-from the selection cycle (the user's instruction: "if you can't finish one, remove it from selection rather
-than ship it broken").
+burns through locks; the watch fires a laser or taser. **Status 2026-10-22:** this page was written before the
+gadgets were ported; they are now in `crates/nf-game/src/gadget.rs` (the Q-Claw grapple, the Q-Laser and laser
+watch burns with the `Lock_Update` 0x1ae3d8 contact chain, the Q-Decryptor, the micro-camera / AIMS-20 and the
+stunner — see docs/systems/laser-watch-contact.md, docs/systems/decryptor.md). The per-function rows below are
+the original survey. (Originally, unfinished gadgets were kept out of the selection cycle.)
 
 Tags: [M] decompile, [D] disc, [L] snapshot, [S] suggested.
 

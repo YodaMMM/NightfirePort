@@ -135,7 +135,7 @@ the yaw, stopped by collision), and the drone object is put `Drone+0xA0` above t
 Open: frame blending (f/f+1); facial morphs; head tracking and aim overrides in `psiBuildMatrixPalette`;
 `sAnimObject+0x60`; opcodes 1 and 4.
 
-### Arithmetic (045n addendum, 2026-10-13)
+### Arithmetic (addendum, 2026-10-13)
 
 `PS2Sinf` (0x120700) is ported bit-exactly as `nf_formats::anim::sinf` (its own range reduction + VU0
 polynomial; `PS2Sinf2`/`PS2Sinf3` are the same polynomial on 2/3 lanes), proven against 40 calls recorded from

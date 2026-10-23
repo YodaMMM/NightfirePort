@@ -1,6 +1,6 @@
 # The drawn gate (`obj+0xFC`) — the sim-side frustum
 
-*Task ai-sight-drawn-gate (2026-10-20). The writer the sim replaces, the game's test, and every
+*2026-10-20. The writer the sim replaces, the game's test, and every
 reader the flag feeds.*
 
 ## What the game writes
@@ -55,7 +55,7 @@ wide): looking up left horizon guards "drawn" the game puts below the tilted bot
 guard 45° off the aim was "drawn" the game leaves outside the 37.57° half-angle. The bullet-ray
 walk STAYS — it stands in for the portal/cel room gate the sim has no graph for (guards-0c: the
 BULLET segment, pass-flagged occluders drop [M Collide_Intersect 0x1ebff0-0x1ec010], so glass and
-foliage don't hide a guard — the 0c museum playtests).
+foliage don't hide a guard — the 0c museum case).
 
 ## Readers the flag feeds (all [M])
 

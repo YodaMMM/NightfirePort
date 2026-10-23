@@ -1,12 +1,12 @@
 # The multiplayer front end: the page flow, the lists, the match handover
 
-mp-menu-flow (2026-10-15, branch `s/mp-menu-flow`). Everything here is first-hand: [M] = decompile
-read in this task (`work/decomp/ACTION.ELF/<addr>_<name>.c`, line numbers refer to those files),
-[L] = a byte dump or capture made in this task, [S] = suggested/inferred. The port side is
+2026-10-15. Everything here is first-hand: [M] = decompile
+read for this page (`work/decomp/ACTION.ELF/<addr>_<name>.c`, line numbers refer to those files),
+[L] = a byte dump or capture made for it, [S] = suggested/inferred. The port side is
 `crates/nf-view/src/menu.rs` (the `MP_*` tables, the `Page::Mp*` variants, `FrontEnd`'s `mp_*`
 fields and methods) with `mp_menu_flow.rs` (headless) and `mp_menu_lists_live.rs` (ISO-gated).
 
-**Atlas correction this task settles** — the decompiler prints struct offsets in DECIMAL, so the
+**Atlas correction settled here** — the decompiler prints struct offsets in DECIMAL, so the
 multiplayer atlas's "MPSettings+0x420/+0x424/+0x428/+0x432" rows are +0x1A4/+0x1A8/+0x1AC/+0x1B0
 in hex. `MPSettings._424_4_ == 0x700004b` [M P_MPOPTIONS 0x217678:20-25] reads the LEVEL code at
 0x2A4948, and `MPSettings._420_4_` (0x2A4944) is BOTH the scenario word and the gametype bitmask
@@ -235,7 +235,7 @@ P_MPCONFIRM 0x20ec00 msg 0x4b (:53-94), in order:
 `scenario` (+0x1A4 — and derives team_game/bit30 from it exactly as MP_Init 0x183438 does),
 `level_code` (+0x1A8), `frag_limit` (+0x19C), `time_limit` (+0x1A0 — the menu hands SECONDS per
 the confirm's ×0x3c; the existing `--mp` path hands raw minutes, which looks wrong against
-MPGame+0x404 — flagged to the main agent), `human_count` (+0x1AC), `bot_count` (+0x1B0, clamped ≤
+MPGame+0x404), `human_count` (+0x1AC), `bot_count` (+0x1B0, clamped ≤
 4 by MP_Start 0x183a50 which also re-reads the teams into the per-player records), `weapon_set`
 (+0x1B4 → the PickupMatrix row), `radar` (+0x1C4), `master` (+0x180), `player_count` (+0x1AC) and
 the per-player `team`/`skin`. The menu's handover is `FrontEnd::mp_confirm_start` →
@@ -275,7 +275,7 @@ the menu) — flagged as a deviation [S].
   names, the composed "Setup Bot n : Playing Yes/No" rows), `mp_row_preview(row)`,
   `mp_row_desc(row)` (with the locked-desc swap), `mp_row_locked(row)` (the dim), plus
   `mp_confirm_lines(lang)` for the summary page's six lines, `mp_human_count()`, `mp_bot_count()`.
-- Keyboard-only, agent 1: Confirm joins / picks the codename / readies on the Join page; agents
+- Keyboard-only, player 1: Confirm joins / picks the codename / readies on the Join page; agents
   2-4 keep their "Press ~A to join" prompt and can never join (the game needs their pads — msg
   0x6a [M P_MPJOIN]). The main menu's Multiplayer row now navigates (C_GOMULTIPLAYER).
 
@@ -286,7 +286,7 @@ disc's ACTION.ELF). Every flow step keeps a sister assertion.
 
 ## 7. Gaps and what's left (for the next pass)
 
-- **Drawing**: the overlay's MP arms are empty — the main agent draws the 13 pages (the getters
+- **Drawing** (when written): the overlay's MP arms were empty (the getters
   above are the intended surface; the wheel renderer `Menu_UpdateWheel`'s ribbon/preview/desc
   rules in §2 apply to all five MP wheels the same way they already do for the campaign's).
 - **Rewards → MP unlocks**: `Menu_UnlockMPSettings`/`UnlockMPSkins` map the campaign rewards
@@ -301,9 +301,9 @@ disc's ACTION.ELF). Every flow step keeps a sister assertion.
   reachable only once a match can end (nf-game's MP layer owns that).
 - **Quick Game's map sample** is deterministic row 0 (§5).
 - **`--mp` time units**: the existing `MpSettings::deathmatch` path hands minutes where the game's
-  menu hands seconds (§4) — the main agent may want `--mp` to ×60 for parity.
+  menu hands seconds (§4) — `--mp` would need ×60 for parity.
 
-## Live checks for the main agent (PCSX2; none runnable here)
+## Live checks (PCSX2, open)
 
 1. `fieldprobe` MPSettings+0x1A4 (0x2A4944, w) after confirming Arena on the scenario wheel —
    expect 0x00000001; then +0x1A8 (0x2A4948, w) after confirming Skyrail — expect 0x07000024.

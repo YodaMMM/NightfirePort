@@ -1,7 +1,6 @@
 # Script & event census — what the disc ships vs what the port handles
 
-Task script-census (709). The question: "are there scripts and whatnot we haven't found yet?"
-This census enumerates every 0x07 archive on the disc (34 level archives incl. the front end,
+This census looks for scripts and events the port does not handle yet. It enumerates every 0x07 archive on the disc (34 level archives incl. the front end,
 27 loadable pack archives, 38 per-level anim archives), and counts — per archive — every NIS
 script and its command opcodes and event kinds, every anim script (kind 5) and its opcodes,
 every trigger placement and action code, every dynamic-object placement type, and every
@@ -124,17 +123,17 @@ does not act on, plus 4 one-per-level marker types neither side touches. (The ga
 (0xE5 cover corner 584 and 0xE6 cover low 384 were listed here by the original census; the port
 has spawned them since — `nf-game/src/cover.rs` `from_placement`/`build`, `Drone_CoverCornerNode`
 0x136ff0 / `Drone_CoverLowNode` 0x137340, from EVERY map entry per the loader dispatch
-[task cover-nodes, 2026-10-17].)
+[2026-10-17].)
 (0x2c lightning 15 was listed here by the original census; the port now pairs the records into
 strikes and runs `Lightning_Update` — `nf-game/src/world_fx.rs` `pair_lightning_recs` +
 `LightningStrike::tick`, `Lightning_Create` 0x18cde8 / `Lightning_Update` 0x18cf68
-[task script-ops-unported, 2026-10-18].)
+[2026-10-18].)
 (0xFB music trigger 15 was listed here by the original census; the port now creates the trigger
 and runs its update — `nf-game/src/worldobj.rs` `MusicTrigger`, `MusicTrigger_Create` 0x1b30e0 /
-`MusicTrigger_Update` 0x1b31a0 [task music-triggers, 2026-10-17].)
+`MusicTrigger_Update` 0x1b31a0 [2026-10-17].)
 (0x2d start-slot 51 was listed here by the original census; the port now registers the second
 start set with the game's kind 0 — `nf-game/src/player.rs` `starts_from_placements`,
-`Player_AddNewStartPos` 0x195c00's u16 at entry+0x22 [task start-slot-0x2d, 2026-10-17].)
+`Player_AddNewStartPos` 0x195c00's u16 at entry+0x22 [2026-10-17].)
 
 | type | count | port | game spawn fn |
 |---|---|---|---|
@@ -145,7 +144,7 @@ start set with the game's kind 0 — `nf-game/src/player.rs` `starts_from_placem
 | 0x39 | 8 | PORTED (space_missile.rs, drone.rs 0x39 walk) | Create_SpaceMissile 0x1a9ef0 |
 | 0xdd | 33 | — | — none (game ignores) |
 | 0xe4 | 64 | — | Hurt_Create 0x17e870 |
-| 0xe9 | 162 | PORTED (aipoint.rs, task ai-points) | Drone_AIPoint 0x137550 |
+| 0xe9 | 162 | PORTED (aipoint.rs) | Drone_AIPoint 0x137550 |
 | 0xf3 | 8 | PORTED (world_fx.rs `TreeFx`) | Env_Tree_Create 0x17c200 |
 | 0xf6 | 33 | — | — none (game ignores) |
 | 0xf7 | 33 | — | — none (game ignores) |
@@ -337,12 +336,12 @@ Ignored by the game too (not port debt): 0xDD/0xF6/0xF7/0xFF placements (138), f
 records (165), NIS op none, anim ops 2/3 (0), event kinds 0x0e/0x10/0x13 (0), entry kinds
 9/0xa/0xd/0xe (0).
 
-## Top 10 ready-to-queue tasks
+## Top 10 port candidates found by the census
 
 1. **AI cover nodes (0xE5 + 0xE6, 968 placements, every mission level).** ~~Port~~ **DONE
-   (task cover-nodes, 2026-10-17):** the nodes spawn from every map entry (`cover.rs` `build`),
+   (2026-10-17):** the nodes spawn from every map entry (`cover.rs` `build`),
    07000006 pins 81+35, and a guard under fire takes a game cover node (`cover_nodes_live.rs`).
-   The original task text: port `Drone_CoverCornerNode` 0x136ff0 and `Drone_CoverLowNode`
+   Originally: port `Drone_CoverCornerNode` 0x136ff0 and `Drone_CoverLowNode`
    0x137340 into the drone AI: nodes bind to the cover graph guards query when engaging.
 2. **AI waypoints (0xE9, 162).** `Drone_AIPoint` 0x137550: patrol graph points. Port the record
    (params unknown — check `Drone_AIPoint` reads) and wire into patrol pathing. Verify: 07000007
@@ -350,7 +349,7 @@ records (165), NIS op none, anim ops 2/3 (0), event kinds 0x0e/0x10/0x13 (0), en
 3. **Hurt volumes (0xE4, 64).** `Hurt_Create` 0x17e870: damage volumes (params carry damage
    kind/rate — read the decomp). Verify: standing in one drains Bond's armour/health; 07000005
    has 13 (the Alpine incursion? verify level name at render time).
-4. ~~**Sensor volumes (0x28, 62).**~~ PORTED 2026-10-17 (branch s/sensor-volumes, crate::sensor).
+4. ~~**Sensor volumes (0x28, 62).**~~ PORTED 2026-10-17 (crate::sensor).
    Correction to the plan text: `Sensor_Update` 0x1af618 detects **glb_players[0] only**
    (disasm 0x1af644 loads 0x2d88e0; both `Sensor_InCone` calls 0x1af97c/0x1afae0 pass it; no
    switch_channels writer is NPC-driven) — a cone detector with range + `Intersect_ConeSphere`
@@ -362,30 +361,30 @@ records (165), NIS op none, anim ops 2/3 (0), event kinds 0x0e/0x10/0x13 (0), en
 4. **Sensor volumes (0x28, 62).** `Sensor_Create` 0x1af010: trip-by-anything volumes writing
    switch channels (not player-only like 0xEA/0xEB). Verify: a drone walking through sets the
    sensor's out channel; drives doors/alarm logic the port currently needs touch triggers for.
-5. **Music triggers (0xFB, 15).** ~~Port~~ **DONE (task music-triggers, 2026-10-17):** the
+5. **Music triggers (0xFB, 15).** ~~Port~~ **DONE (2026-10-17):** the
    trigger is created with the game's gates and its update runs each control-object pass
    (`worldobj.rs` `MusicTrigger`); 07000001 pins the real path — channel 13 on fires
    `Music_Event(2, 2)` into the alarm hysteresis, clearing it lets the 0x1e countdown expire.
-   The original task text: `MusicTrigger_Create` 0x1b30e0 + `MusicTrigger_Update` 0x1b31a0.
-6. **Lightning (0x2C, 15; 07000001 ×11, 07000041 ×4).** ~~Port~~ **DONE (task
-   script-ops-unported, 2026-10-18):** `world_fx.rs` `pair_lightning_recs`/`LightningStrike` —
+   Originally: `MusicTrigger_Create` 0x1b30e0 + `MusicTrigger_Update` 0x1b31a0.
+6. **Lightning (0x2C, 15; 07000001 ×11, 07000041 ×4).** ~~Port~~ **DONE
+   (2026-10-18):** `world_fx.rs` `pair_lightning_recs`/`LightningStrike` —
    the pairing (the finder of the key match is the master, 07000001 chains 9 strikes off its
    two ladders), the hide/draw arms reading the port's `LightningGlobals` copy, and
    `fractal_thing` 0x1a94d8 with caller-supplied draws (the 21 shared-stream `Rand_FRand`s
    stay out of the sim's stream — the counter-hash stand-in [S]). `lightning_live.rs` pins
    both levels. The storm timers (sky.rs `Sky`) are NOT sim-driven yet — the bolts rest hidden
-   until the sky pass lands. The original task text: `Lightning_Create` 0x18cde8: storm
-   flashes. Visual — needs the main agent's render pass to confirm the flash/timing model.
+   until the sky pass lands. Originally: `Lightning_Create` 0x18cde8: storm
+   flashes. Visual — needs a render check to confirm the flash/timing model.
 7. **NIS event kinds 0x08/0x09/0x0a (script 0600005b, 07000001).** Three single-line handlers:
    `Drone_CoderCreate` 0x13a108 (spawn coder drone: params skin 0x0500001b, anim 0x060000a6,
    0x10, 1), `Player_Cam2Mode(0, p0)` 0x195fc8, `Break_DoBreak` 0x12c168 at the stream object.
    Small, fully specified, unblocks the training level's gadget-drone intro cut-scene.
 8. **GT object (0x27, 41 — two per MP map).** `GT_Create` 0x17ffa0, `GT_Update` 0x180498,
    `GT_Activate`/`GT_TakeControl`: a controllable special object [UNCERTAIN semantics — needs
-   an EE probe of the object it builds before queuing the port]. Two per MP map suggests
+   an EE probe of the object it builds before porting]. Two per MP map suggests
    objective equipment.
 9. ~~**Start-position slot 0 (0x2D, 51, one per level incl. every MP map).**~~ PORTED 2026-10-17
-   (branch s/start-slot-0x2d, `nf-game/src/player.rs` `starts_from_placements` + `pick_start`).
+   (`nf-game/src/player.rs` `starts_from_placements` + `pick_start`).
    Correction to the plan text: the "may be spawning Bond at the wrong start" worry is REFUTED —
    `Player_Start` 0x190fd0 only ever picks the kind-1 entries (both passes `bne v0, 1` on
    entry+0x22, disasm 0x191028/0x1910b0), so the 0x2D set (kind 0) is written by
@@ -403,7 +402,7 @@ menus; kind-15 icon — cosmetic; anim op-4 kinds 1/3/7 — 109 commands, minor.
 
 ## The pinning test
 
-`crates/nf-formats/tests/script_census.rs` (added by this task) re-runs the census through the
+`crates/nf-formats/tests/script_census.rs` re-runs the census through the
 port's own parsers on every 07* archive and pins the handled sets and the headline counts as
 constants: 20 NIS opcodes handled, 14 event kinds, 7 trigger actions, 63 placement types; and
 the disc totals (468 NIS scripts, 5,263 streams, 851 events with 3 on unhandled kinds, 18,231
@@ -420,7 +419,7 @@ fails the test — update it and the tables here together.
   `GT_Create` 0x17ffa0 [M 0x1d94c0 callers], Mine_Update 0x17c930, FMV handlers).
 - Text label resolution for the 81 Text commands (needs the USATxt.dat banks).
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **animobj+0x70 during op-4 kind-2 replay.** In PCSX2 with gdbwatch, watch a drone's anim
    object +0x70 (word) during a walk anim in any level, access type R, expect: 0 for player

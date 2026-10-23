@@ -1,9 +1,9 @@
 # The KikoDeathButton gate (07000016) — the route answer
 
-Task `kiko-button-real-walk` (2026-10-22). The finale's defeat writer is the KikoDeathButton
+2026-10-22. The finale's defeat writer is the KikoDeathButton
 switch #693 (hash 020008c1 at (7.02, 1.16, −155.61), p0 = 0x90, p5 = the gate 0x8d [D]), and the
 level doc parked one question: *whether the game's route presses the button before touching the
-mid-corridor gate plate #616*. This task walked the real route and settled the mechanics.
+mid-corridor gate plate #616*. Walking the real route settled the mechanics.
 
 ## The press path ([M], machine-verified)
 
@@ -44,7 +44,7 @@ ProcessTouch — the presence family. A type-1 plate latches its channel permane
   **80**/204/205, the pack cinema 0x06000631 writes 185/21/180(=0), the bay-lift script 0x60009e9
   writes 80(=0) — **no 141**.
 - No trigger, mux, switch or drone placement writes 0x8d (the census in docs/levels/07000016.md §7;
-  re-verified this task from the raw placements).
+  re-verified from the raw placements).
 - `Init_SwitchChannels` 0x134310 (the only bulk clearer) has exactly one caller, in the level-load
   path (jal at 0x1d5208, next to `SSys_Init`/`Mission_Init`) — never mid-level.
 
@@ -65,9 +65,9 @@ pack-flight stand-in after the cinema, before the ch-0xf3 pulse) and pins:
   room, #616 never crossed) fires ch 0x90 → mux #618 → ch 100 → MissionState 6 → 0x7300017
   [M 0x182c60:111-112].
 
-## The open link — live check for the main agent
+## The open link — live check
 
-The one step this task could not close from the sandbox: whether the GAME's contact pass registers
+The one step not closed without the real game: whether the GAME's contact pass registers
 #616 for the walking player at all. The game's `Trigger_Hit` 0x1b1fc8 does no geometry of its own —
 it classifies the object's contact list (obj+0xD0, built by the collision pass against the
 trigger's **glist bounds**); the port's touch test is the target object's collision tris. If the

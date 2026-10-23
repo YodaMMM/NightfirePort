@@ -10,8 +10,8 @@ event pushes in `Sim::step_net_combat` / `Sim::step_mp_bots` (scene.rs), the dra
 The combat code records every resolved shot as an `MpShot` (shooter, bot or human, weapon, origin, direction,
 contact point, what it hit: `Miss` / `World{normal, material}` / `Human(slot)` / `Bot(slot)` / `Site`, damage).
 Both producers run inside the shared lockstep tick, so every machine records the same events. The humans' shots
-come from `step_net_combat` (the hitscan of 700v6); the bots' from `step_mp_bots`. A later projectile combat
-(agent 10's work) only has to push the same `MpShot` at its contact.
+come from `step_net_combat` (the hitscan); the bots' from `step_mp_bots`. A later projectile combat
+only has to push the same `MpShot` at its contact.
 
 `Sim::flush_mp_fx` turns the events into effects at the end of the tick — online after `step_net_combat`,
 offline at the end of `step_bond`. It writes only draw/audio state: `drones.effects` (decals, debris),
@@ -66,6 +66,6 @@ disabled, and all three hashes agree on every tick.
 - The bots' pain/death voice: `BOT_handlePain` 0x125ed8 picks from the drone pain pool with `Rand_Rand`, which is a
   shared-stream draw in the game.
 - Ricochet chains of remote rounds are not followed.
-- Remote grenades and rockets need projectile combat (agent 10).
+- Remote grenades and rockets need projectile combat (docs/systems/mp-combat.md).
 - No PCSX2 comparison yet: split-screen MP on the PS2 would show whether the light flickers and how the death
   body ends.

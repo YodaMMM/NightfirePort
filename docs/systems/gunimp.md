@@ -89,7 +89,7 @@ the door's health drains 50/shot and its death writes ch 0x1f — objective 6 co
 fires ch 100, the mission status reaches 6. The pre-fix tree has no gunimp: the use does
 nothing, ch 0x1f stays off — the sister that fails.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. On 0700000d, stand at the laser prototype (≈(137, 8, −322)), press use: expect the mounted
    camera (cam mode 0xe) and no held weapon (`Player_WeaponNone`). gdbwatch `BLData+0x878`
@@ -127,4 +127,4 @@ object position [M 0x132c18:33-47]; the port zeroes the velocity (the game's BL+
 zeroing [M 0x132c18:44-45]) and the walk resumes from the mount.
 
 The mount approach: #225 stands on the 7.98 deck [D coll-floor probes] — standing Bond's
-position rides ≈ 9.1 [L main agent, PCSX2]. Tests: `crates/nf-view/tests/gunimp_mounted_live.rs`.
+position rides ≈ 9.1 [L PCSX2]. Tests: `crates/nf-view/tests/gunimp_mounted_live.rs`.

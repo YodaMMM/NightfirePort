@@ -87,7 +87,7 @@ Which of the pair actually sounds is the bank's decision:
   MENU_SOUND); `id` is the bank id [M the mapping in §1-2].
 - `FrontEnd.sfx_out: Vec<MenuSfx>` accumulates in play order; `drain_sfx()` hands it to the host.
   The host plays each id through `nf-audio`'s 2-D start; a bank miss stays silent exactly like the
-  game's lookup [S the host wiring — this task delivers the events, not the host loop].
+  game's lookup [S the host wiring — the events, not the host loop].
 - `FrontEnd.enabled_sound_flags: u8` = 0x0b [L] gates MENU_SOUND 0/1/2/8 in `sfx()` [M 0x1f3278].
 - `FrontEnd.menu_movie: bool` gates `open_pair_sfx()`; `enter_page()` (every page change funnels
   through it) emits the pair on transitions into Start/Main/MissionSelect/Results/Credits/
@@ -120,7 +120,7 @@ clears `enabled_sound_flags` and asserts silence; the move test asserts the top-
 nothing; the value tests assert a clamped slider and an Action row emit nothing; the pair test
 asserts the second open is silent.
 
-## 5. Live checks for the main agent
+## 5. Live checks (open)
 
 1. **The open pair's alternation**: boot to the title, then `gdbwatch` `SFXStart` 0x115a68's `$a0`
    (first arg = the id) through boot: expect 0x1d7 AND 0x470 attempted, with only the loaded

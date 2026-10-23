@@ -89,13 +89,13 @@ renders them at 22–34 %. **The missing operation is the ambient multiply for 0
 `vertex_rgba × (obj+0x103..0x105 tint × obj+0x100..0x102 ambient / 255)` — the `TAmbient` VU1
 ambient term uploaded by `FillMatrixChainSkin` 0x122788 / `FillMatrixChainRot` 0x122310.
 
-Fix shape (renderer work, not this task): per Character-layer/view-model instance, maintain an
+Fix shape (renderer work): per Character-layer/view-model instance, maintain an
 ambient RGB stepped toward the level's ambient bytes as `Lights_CalcAmbientLight` does (rate 0.1
 per frame, doubling under the 0x10000 flag), and multiply it (times the tint) into the vertex
 colour or a per-instance uniform for Character/view-model draws only. World geometry must stay
 untouched — the game's world-cel path forces the white tweak.
 
-**FIXED (s/fix-render)**: the port now applies exactly this shape. `Sim` carries per-character
+**FIXED**: the port now applies exactly this shape. `Sim` carries per-character
 `obj+0x100..0x102` state (init 0xff,ff,ff), snapped/ramped per tick by `Sim::ramp_char_ambient`
 (`clr_step` = `ClrStep` 0x1e8a48 disassembled: `(target−cur)·0.1`, min ±1), toward
 `Sim::ambient_at` = the room-cel ambient through `cel + switch_channels[cel+0xa2]`
@@ -137,4 +137,4 @@ level ambient; the 0x800 bit alone decides who gets dimmed.
   `View_SetupRenderModes_Tweak` — the multiply happens either way, only the carrier differs.
 - The meaning of the +2 DMA words gated by `TweakRGBA`; `bTweakBrightness`'s reader.
 - The view model's exact draw function (its psiDraw call site was not isolated this pass; it is
-  skinned geometry on the 0x800 path per the user-visible symptom).
+  skinned geometry on the 0x800 path per the visible symptom).

@@ -1,7 +1,6 @@
 # Player bug reports
 
-The user's requirement (2026-10-19): players need a way to report bugs that is robust and gives us every detail we
-need. The inbox is GitHub Issues (`YodaMMM/NightfirePort`, label `bug-report`).
+Players report bugs from the game (F10) or the launcher, with every detail a fix needs attached. The inbox is GitHub Issues (`YodaMMM/NightfirePort`, label `bug-report`).
 
 ## The player's side
 
@@ -36,8 +35,7 @@ replayable).
   what the report recorded; `--shot` renders Bond's view at the end.
 - `NF_ISO=<iso> python -I tools/bugreport/fetch.py [--exe <nf-view.exe>]` lists new open `bug-report` issues,
   downloads every report zip attached to the issue or its comments into `work/bugreports/<issue>/`, runs
-  `--bug-replay` on each and writes `summary.txt` (the issue text, report.txt, the replay result). The main agent runs
-  it with the merge routine and turns each report into a queue task (or a fix) the same day.
+  `--bug-replay` on each and writes `summary.txt` (the issue text, report.txt, the replay result). 
 
 Test aids: `NF_BUG_REPORT_AT=<tick>` takes an F10 report at that level tick; `NF_BUG_REPORT_NO_OPEN` keeps the browser
 and Explorer closed; `NF_TEST_PANIC_AT=<tick>` panics on purpose (the crash path).

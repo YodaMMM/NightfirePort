@@ -1,7 +1,7 @@
 # HUD (single player, on foot)
 
 Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] decomp, [L] snapshot `work/ee_start_05.bin`, [S] suggested. Source: a
-research pass (subagent, 2026-10-09); "checked" = read here (the tables are read from ACTION.ELF by
+research pass (2026-10-09); "checked" = read here (the tables are read from ACTION.ELF by
 `nf_formats::hud::HudTables` and asserted against the snapshot in `hud_tables_match_the_snapshot`).
 
 ## Framework [M]
@@ -55,7 +55,7 @@ the Sim writes it per tick from the level's third icons — fix-wire2/fix-08-wal
 - Cleared (0x95F == 0xFF): the icon fades out over ThirdIconTimer, alpha = timer·255/30, colour 0x7f7f7f00|alpha
   [M 0x19c160-0x19c1d4]; hidden once it reaches 0.
 - The template: `HealthSprInfo[18]` tex 0x0300006A, layer 255 (hidden), (320, −300), w/h 0 [L 0x2BD368].
-- **Position caveat**: the task's PCSX2 observation described the indicator "at the bottom-left ring"; the code
+- **Position caveat**: an earlier PCSX2 observation described the indicator "at the bottom-left ring"; the code
   draws sprite 18 at (400, 48). The live check (below) settles the screen position from the real machine.
 - The Q-Claw marker (ammo-pane sprite 7, flags 0x900, 3D-positioned) turns magenta (0xff00ff) while the context
   is 2 [M HUD_UpdateAmmoPane 0x19a7f0:330-336] — not ported (the marker itself is not drawn).

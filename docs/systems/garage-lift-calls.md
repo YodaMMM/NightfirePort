@@ -54,11 +54,11 @@ line (the use-pick origin), the behaviour was already carried by the script runt
 
 - The bug: `player_use_doors` fed the SP arm the RENDER CAMERA as the pick origin, while the
   game builds the sphere at Bond's head. The camera hangs ~2.5 behind Bond; the station
-  entities sat outside its reach and the buttons never responded (playtest 1017). Fix: the SP
+  entities sat outside its reach and the buttons never responded. Fix: the SP
   arm of `player_activate` now takes Bond's head (`Bond::head()`, the `Player_GetHeadPos`
   analog); the doors/triggers/monitors keep the camera origin their reaches were tuned to
   (the game builds them from the same head ray — unifying them re-tunes every door reach and is
-  its own task).
+  separate work).
 - The sub-script entities (button art, symbols, lightmaps) were already created and posed by the
   script runtime (they live in `Scripts::objects` with `src` = the sub's hash) — the draw side
   needs nothing new; `Scripts::entities()`/`Sim::script_entity` are the getters.

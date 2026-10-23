@@ -2,7 +2,7 @@
 
 The batch-1022l finding: on 07000001 a dead guard's dropped gun rests with its centre ON the floor,
 and `Bond::stand_at` exactly over it reportedly left Bond's root 0.139 higher than floor + 1.1,
-with the take's LOS ray then refusing (`pickup.rs touches`). This task settled the game's rules and
+with the take's LOS ray then refusing (`pickup.rs touches`). The game's rules below were settled and the port
 re-verified the port against them (2026-10-22).
 
 ## The game's filter chain (what each query skips)
@@ -41,8 +41,7 @@ skipped, and the surface classes 0xd/0xe dropped (`Intersect_PointGeom` 0x1e92d8
 A resting drop's sphere centre sits |centre.y| above the floor hit [M the fall rest at 0x18e148].
 The Raptor's model centre y ≈ 5e-7 [L the drop-stand-height probe: bounds centre (0.0002, −0.0000,
 0.0000), the floor ray at the drop xz 5.3452096 vs the centre 5.3452] — the take ray's endpoint
-effectively touches the floor plane. The game takes these drops anyway [L 01-raptor.trace 6.0 s and
-the playtests], so the game's triangle test absorbs the contact: its VU0 fixed-point path quantizes
+effectively touches the floor plane. The game takes these drops anyway [L 01-raptor.trace 6.0 s], so the game's triangle test absorbs the contact: its VU0 fixed-point path quantizes
 to 2^-14 (the 6.103888e-05 constant in `Intersect_PointGeom`'s decompile) — a sub-quantum endpoint
 contact lands ON the plane and does not produce a blocking hit short of the end.
 
@@ -73,8 +72,8 @@ and a real low static kerb near the batch's coordinates (x 6..8, z 18.84..18.91,
 here (`fix_pickups_trace_live with_dev_god...`) killed 4 Raptors with every drop taken, one resting
 ON that kerb (centre 5.551 = kerb top + ε, Bond over it 6.651 = kerb + 1.1 — correct standing ON
 the kerb, take succeeded). The 0.139 lift did not reproduce in any run; per the settled filters
-nothing in the game or the port should lift Bond there. The report's live checks ask the main agent
-for the PCSX2 ground ray behaviour if the phantom ever resurfaces.
+nothing in the game or the port should lift Bond there. If the phantom ever resurfaces, the open
+live check is the PCSX2 ground ray behaviour.
 
 ## Tests
 

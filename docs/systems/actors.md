@@ -94,7 +94,7 @@ Key state facts [M]:
   "Killed Civilians", the mission fails.
 The monitor's standing hooks (ch 0x60/0x61 → the label + ch 99 [M 0x1827d8:98-107]) turn these into the fail.
 **85 drones across 14 levels carry the props** — every party guest (07), the office workers (0a, 11, 12), the
-hotel staff (09), the mayhew/Zoe VIPs (01, 02, 08), the 06 driver (the C1 playtest item), the 02/03 staff.
+hotel staff (09), the mayhew/Zoe VIPs (01, 02, 08), the 06 driver, the 02/03 staff.
 
 Bond's bullets hurt team 2/3 in the game: `NDrone2_DealWithObjHit` 0x13fff0 case 5 selects the message by the
 WEAPON (1/0x4B/0x4D → the punch, 0x4A/0x4C → the taser, else the bullet) with no team gate — the gate the
@@ -148,7 +148,7 @@ The port (`crates/nf-game/src/spawners.rs`) models all nine. **p7's history**: t
 a kill channel with kill-all semantics everywhere; fix-actors refuted that as an "arm channel" (07000011's
 stairwell spawner died instead of arriving); the live measurement (07000005 in the GDB-server PCSX2,
 docs/fields/hitdata-spawner-ally.md "Live result", 2026-10-12) settled it as the **kill channel** and
-explained the playtest with the cleanup's level split: on 0x07000011..13, 0x07000016 and 0x0700004A the
+explained the observed behaviour with the cleanup's level split: on 0x07000011..13, 0x07000016 and 0x0700004A the
 cleanup removes only drones whose `obj+0xFC` draw counter is 0 (not drawn in the last 2 frames — the
 renderer sets it to 2 per drawn frame [M 0x1e62d8:71], the per-frame pass decrements [M 0x1336f8:239-247]),
 so on-screen guards survive — the stairwell guards were drawn when the channel fired.

@@ -1,9 +1,9 @@
-# AI navigation helpers — the call-tree remainder (task ai-network-route)
+# AI navigation helpers — the call-tree remainder
 
 The call-tree check (`tools/calltree/calltree.py --all-mentioned-dstates --list`) flagged 8
 AI-navigation helpers reachable from the ported guard states that no Rust file named. Each one
 is the port's own work under another name; the citations now carry the game name and address.
-After the task the check lists none of them. The port code itself is unchanged (comment-only
+The check now lists none of them. The port code itself is unchanged (comment-only
 diff) — everything here was already wired and tested; this note is the map.
 
 Evidence tags per `docs/fields/README.md`: [M] decompile (`work/decomp/ACTION.ELF/`), [S]
@@ -98,4 +98,4 @@ cost the counters feed; `scary_links_flag_inside_the_radius_and_the_cycle_clears
 — the boundary intersection band and the creep's full-loop walk) and the guard AI live tests.
 The full four-crate suite on this tree: **2683 passed / 11 failed / 144 ignored**, the same 11
 pre-existing environmental failures as the untouched base (the disc-identity group and the
-nf-view pylon probes — this sandbox's ISO is not the golden build).
+nf-view pylon probes — the image used there was not the golden build).

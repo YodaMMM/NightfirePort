@@ -1,7 +1,7 @@
 # The driving atlas — DRIVING.ELF and the driving missions (research phase)
 
-Status: **first map, research-only** (task `research-driving`) + **the handover block ported**
-(task `drive-ptp`: `crates/nf-game/src/ptp.rs` + the nf-view level-transition hook — see §2's
+Status: **first map, research-only** + **the handover block ported**
+(`crates/nf-game/src/ptp.rs` + the nf-view level-transition hook — see §2's
 "Ported" note). The port covers ACTION.ELF; this
 file is the starting map for a later driving phase. Evidence tags: [M] code (function+address),
 [D] disc bytes, [L] EE snapshot, [S] suggested. Nothing here is committed from memory.
@@ -106,7 +106,7 @@ the same loader (its read of the block is the remaining [S] — decompile in
   (`sp_level`, `Menu_GetLevelIndex` 0x2023e8) before `ResetMap_LevelToLoad(0x900000X)` pushes
   GameFlow state 9 [M 0x1d3800:106]; the table is not read yet. The port pairs the 8 interludes
   in `Mission_Update`'s order with the 8 drives in DRIVING's table order [D 0x25c948] (the
-  castle's 0x7300004 → 1, paris_mis01 — the task's own example).
+  castle's 0x7300004 → 1, paris_mis01).
 
 ## 3. Main, the boot sequence and the game loop
 
@@ -193,7 +193,7 @@ Reuse: BIGF (done), ASF audio (done), the animation/skeleton loaders (the drivin
 the same file shapes [D]), the sprite/font/HUD machinery (expected same shapes [S]).
 New: RefPack, `.crp`, `.bnk`-driving, the whole vehicle/physics/AI stack, the PTP protocol.
 
-## 7. Open questions / live checks for the main agent
+## 7. Open questions / live checks (open)
 
 1. Boot-loader dispatch: after DRIVING exits into `BASE.ELF`, watch the loader read EE
    0x100000..0x101000 and pick `cdrom0:\ACTION.ELF;1` vs `cdrom0:\DRIVING.ELF;1` (which block

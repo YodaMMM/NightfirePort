@@ -1,9 +1,9 @@
 # The M_LISTBOX widget (the menu List family) — data, state, flow
 
-Task unported-engine-plumbing-1 (2026-10-21). All six owned functions are REACHED in the
+2026-10-21. All six functions are REACHED in the
 shipped game; the port had **no List runtime at all** (its FE hand-rolls the on-screen
 lists). This session ports the data/state/flow into `crates/nf-formats/src/menudef.rs`
-(`ListRow`, `ListState`); the DRAWING stays the main agent's.
+(`ListRow`, `ListState`); the DRAWING is separate.
 
 ## The byte that classifies a control (corrects an earlier census)
 
@@ -98,7 +98,7 @@ embedded lists; direct calls from Menu_CreateOptionBox :68 / PS2_DoCardFlow :246
    focus state +0x1c = 0x20 (selected) / 0x10 by `page+0xac → +0x18 == list+0x18`.
 3. **Cursor scroll-into-view** (:216-233): when the cursor +0x560 ≠ 0, `List_GetIndex`
    it and re-clamp top so the cursor row ∈ [top, top + rows).
-4. **Per-row draw layout** (:234-528) — the DRAW half the main agent renders: stripe
+4. **Per-row draw layout** (:234-528) — the DRAW half: stripe
    sprites, per-column x from widths × (w−0x10) × 0.01, cell text sprites at
    x = colOff + page.x + list.x + comp + 6 + 2, y = (row−top)×stride + list.y + comp
    + 8 + off, the cursor row re-measured with the highlight font, per-column
@@ -108,7 +108,7 @@ embedded lists; direct calls from Menu_CreateOptionBox :68 / PS2_DoCardFlow :246
 ## Port notes (this session's scope)
 
 `ListState` in menudef.rs models the state + the four helpers + arms 0xf/0x13/0x1d +
-Update halves 2-3. The draw half stays the main agent's (list what must be drawn:
+Update halves 2-3. The draw half is separate (what must be drawn:
 row cell texts at the layout above, the cursor bar, the embedded scrollbar).
 
 Anomaly left open [S]: `Combo_Update` 0x1f0498:116 sends msg **0x3b** to the list,

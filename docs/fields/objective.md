@@ -70,8 +70,8 @@ encodes the same records from the disc data].
 The banner side of this record is now verified in play on the port branch: the objective's text
 label binds through the language table and the banner CARRIES it (probe pinned "Breach the castle
 walls" / "Find a way inside to the party" / "Rendezvous with undercover agents…" on 07000007,
-"Escort Mayhew to bunker" on 07000001, the 07000008 set — playtest item 5's "it just says new
-objective" was the user's pre-fix-mission build). The NIS hold-off is ported too: while
+"Escort Mayhew to bunker" on 07000001, the 07000008 set — an earlier "it just says new
+objective" banner came from a build before the mission layer). The NIS hold-off is ported too: while
 `Script_CameraStart` 0x1d9140:41-43 has the viewers' HUD gate off (viewer+0x2a = 0 [M
 Camera_Enable 0x1b9920]), `Text_UpdateMsg` 0x1b11d8:16-18 runs no timers and the pane
 (`HUD_UpdateStatusPane` 0x19c310 case 0) stays closed — a banner queued mid-cut-scene waits and

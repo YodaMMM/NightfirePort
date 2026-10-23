@@ -2,8 +2,8 @@
 
 *Evidence tags: [M] decompile (`work/decomp/ACTION.ELF/<addr>_<name>.c`, disassembly-checked
 where the C looks incomplete), [D] disc bytes, [L] EE snapshot, [S] port-only choice.
-doors-remainder-4 (820c) re-derived the pick chain below Player_Activate; the 820b leaf-mesh
-read was wrong and this document is the correction of record.*
+This page re-derives the pick chain below Player_Activate; an earlier leaf-mesh
+reading was wrong and this document is the correction of record.*
 
 ## 1. The dispatch chain [M]
 
@@ -20,7 +20,7 @@ read was wrong and this document is the correction of record.*
    `HITDATA+0x58` object dispatches on `obj+0xFF`; `0x1C → Door_Activate(obj, player, 1)`
    (0x1a5170:113-137).
 
-## 2. The candidate is sphere-vs-sphere [M — the part 820b misread]
+## 2. The candidate is sphere-vs-sphere [M — the part the earlier reading got wrong]
 
 `Collide_Pick` 0x1eb320 walks the cels the pick sphere straddles (`Collide_StraddleCels`) and
 fills the HITDATA list from two routes, both sphere-based:
@@ -66,7 +66,7 @@ stand-in (< 2.5) [S]. The aim-hint route (`Doors::pick_target`, Check_Target 0x1
 different pick and keeps its own documented stand-in.
 
 Tests: `doors_remainder_live::the_use_pick_is_the_world_sphere_candidate` (4.0 out short /
-1.2 out opens / 2.3 span-side opens through the wall), the three master E tests
+1.2 out opens / 2.3 span-side opens through the wall), the three existing E tests
 (interactables_0700000b `waiting_room_door_opens_on_use`, level_end
 `door_e_opens_then_e_closes_on_07000001`, `the_walkin_leaves_a_closing_straddle_door_alone_on_07000016`).
 
@@ -93,4 +93,4 @@ one resolves a glist through the real closure — zero glist-0. Tests: `a_glist0
 the_old_stand_in_reach` + `the_same_door_with_a_glist_still_opens_on_the_sphere_rule` (nf-game
 door.rs unit), `door_glist0_e_dead_live.rs` (real path: break the glist → E-dead at the 1.6 stand
 the sphere rule opens from; sister opens). No visual difference on any shipped level — the arm was
-unreachable on real data; the main agent has nothing new to render.
+unreachable on real data; nothing new to render.

@@ -1,9 +1,8 @@
 # Sound coverage: every ACTION.ELF sound call vs the port
 
-Audit (audit-sound-calls, 2026-10-15). Every call site of `Sound_Play3D`, `Sound_Play`,
+Audit (2026-10-15). Every call site of `Sound_Play3D`, `Sound_Play`,
 `Music_Event` and the ambient/loop starters in ACTION.ELF, with the port's status. The site list
-is mechanical: a `jal`-scan of the ELF's .text (script `scripts/sound_call_scan.py` in the
-session sandbox) cross-checked against the decompile's call lines (`work/decomp/ACTION.ELF`).
+is mechanical: a `jal`-scan of the ELF's .text (a `jal`-scan script, not committed) cross-checked against the decompile's call lines (`work/decomp/ACTION.ELF`).
 **195 direct call sites** in 46+28+28 caller files. The decompiler scrambles the float-taking
 prototypes (`Sound_Play3D(uint id, VECTOR* pos, float, float, float, short, uint, int)` prints
 the floats first), so every id below was read from the **disassembly's `$a0`** / the decomp call
@@ -125,7 +124,7 @@ burn-through, 0x148 special-death cry.
 0x470 select) × 2 each + `P_CREDITS` SFXStartMusic/SFXStopMusic(0x27) — the front-end UI sounds.
 The port's front-end (`nf-view/menu.rs`) plays none of these; out of scope for the on-foot Sim.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **Head-bump variant** (`level_tag+0x50`): in PCSX2, jump under a low ceiling on 07000005 and
    07000007 with gdbwatch on `Sound_Play3D`'s `$a0` (0x1dd548): the id at the bump (0x5FB vs

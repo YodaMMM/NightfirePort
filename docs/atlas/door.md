@@ -238,9 +238,9 @@ invisible to the auto-close scan) [L]. Cross-checked against 07000005's snapshot
 All five: p2 = p3 = 0 (no open/lock channel), p4 = 1 (portal-linked). Live snapshot ↔ disc
 agreement on four fields per door (flags, state, group, positions) [L vs D].
 
-## The user's report vs the code
+## An auto-close report vs the code
 
-The user says the 07000001 sliding doors do NOT auto-close in the real game. The game's own code
+It was reported that the 07000001 sliding doors do NOT auto-close in the real game. The game's own code
 and data say they do: the auto-close branch (0x136624) is taken for placements 13/14/69 (flags
 0x02/0x03, keep-open clear) and the two snapshot/disc sources agree the running doors carry those
 flags. WORKLOG A-12c reached the same conclusion; this pass re-verified it from the decomp, the
@@ -269,11 +269,11 @@ docs/atlas/trigger-port-check.md.
 
 ## PCSX2 trace check (tests/traces/01-doors.trace, 2026-10-11) — U-046 resolved [L]
 
-User play on 07000001 with `tools/trace/trace_record.py` (door state obj+0xF4 and quiet timer ext+0x72 per frame):
+Real play on 07000001 with `tools/trace/trace_record.py` (door state obj+0xF4 and quiet timer ext+0x72 per frame):
 
 - Door 1 (ext 0x01fbcd90): opening 17.4 s → open 17.9 s; the quiet timer advanced only while Bond was clear of the door (242 at 34.0 s while he stood near it), reached 360, closing at 36.0 s, closed 36.4 s.
 - Door 2: open 34.5 s; Bond walked away; closing at 40.5 s — exactly 360 ticks after opening.
 - Door 3: open 43.0 s → closing 61.0 s. Door 2 re-opened at 44.2 s with Bond ~18 m away (a drone opened it).
 - The two gallery secret doors (flags 0x22) never moved; their timers stayed 0.
 
-**The sliding doors auto-close in the real game** (the 6 s quiet rule with the proximity pause), so the port's auto-close is correct; the earlier playtest recollection that they don't was mistaken.
+**The sliding doors auto-close in the real game** (the 6 s quiet rule with the proximity pause), so the port's auto-close is correct; the earlier report that they don't was mistaken.

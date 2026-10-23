@@ -80,9 +80,9 @@ receives the raw `MovieVolume*100` (0..10000).
 
 **Scale.** The SPU2 input-volume DSP behaviour is hardware, not in any decompile, so the register's full
 scale is the one [S] in the chain. The port uses the signed-16-bit register range 0x7fff (gain =
-`MovieVolume*100 / 32767`, boot ≈ 0.305) — consistent with playtest 1016's "the port's full scale was about
-3x too loud" (0x3fff would give only 1.6x). The 0x3fff game-voice convention is the alternative; a live
-check is listed in docs/reports/movie-volume-options.md.
+`MovieVolume*100 / 32767`, boot ≈ 0.305) — consistent with the port's full scale having measured about
+3x too loud (0x3fff would give only 1.6x). The 0x3fff game-voice convention is the alternative; a live
+check is open.
 
 **Read-once.** `MovieVolume` has exactly two readers in the whole ACTION.ELF decompile: the store at
 0x1081a8 and `audioDecStart` 0x107360 — no mid-movie re-read, so an options change while a movie plays
@@ -100,14 +100,14 @@ boot default equals the pre-options fixed `MOVIE_GAIN`.
 * Demuxer verified on all 22 movies; PCM audio fixed (was RC2's ADPCM-only); MPEG-2 decoding behind the opt-in
   cargo feature `movies` (`oxideav-mpeg12video` 0.0.13, MIT); headless frame dumps
   (`nf-view --movie <code> --frame N --shot out.png`) verified on 07100001 f0 and 073F0048 f600
-  (docs/reports/fix-movies.md).
+  (crates/nf-formats/src/pss.rs).
 * **Wired (fix-movie-playback)**: the mission-flow playback — GameFlow state 6 plays the real briefing/outro
   movies through `movie::Player` (whitelist gate, worker-thread decode, cpal PCM, a full-screen 512×448 plane,
   skip on the Confirm keys), the briefing wrap implements 0x1d3800's switch (0x700001b → 0x7100018 included),
   `outro_for` implements Mission_Update case 6's switch, and phase 2 implements `GetLevelToLoadFromMovieCode`
-  0x1d3560 (outros return to the map with the results page). See docs/reports/fix-movie-playback.md.
+  0x1d3560 (outros return to the map with the results page). See docs/systems/mission-movies.md.
   The decode is a whole-stream pass (~23 s on 07100001) — the host starts it when the menu picks the mission
   so state 6 opens on frames.
 * Still on the countdown/plate model: the title/menu background movies (P_INTRO's 0x7370048/0x7380048 and the
-  FILES.BIN page+0xC4 codes — task 183's scope) and the FILES.BIN page+0xC4 menu-BG loopers. Also open: the
+  FILES.BIN page+0xC4 codes) and the FILES.BIN page+0xC4 menu-BG loopers. Also open: the
   0x72xxxxxx codes only `GetLevelToLoadFromMovieCode` sees.

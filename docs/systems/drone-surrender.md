@@ -1,7 +1,7 @@
 # Surrender: a guard caught from behind gives up
 
 Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] decomp (work/decomp/ACTION.ELF), [L] level-start snapshot
-`work/ee_start_05.bin`, [S] suggested. Source: a research pass (subagent, 2026-10-09); "checked" = re-read here.
+`work/ee_start_05.bin`, [S] suggested. Source: a research pass (2026-10-09); "checked" = re-read here.
 
 **There is no disarm button.** The guard surrenders by itself when its first sighting of Bond is from close behind;
 it drops its gun as an ordinary pickup (docs/systems/pickups.md), which Bond collects by walking over it.

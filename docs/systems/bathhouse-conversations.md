@@ -1,9 +1,8 @@
 # The bath-house conversations (07000002): the game LOOPS them
 
 Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] code (function@addr), [D] disc bytes, [L] live PCSX2, [S] suggested.
-Written by `bathhouse-conversation-loop` (2026-10-22; user question: "bath house conversations should loop?
-research"). Prior art: docs/systems/under-bathhouse-voices.md (776 — the combat shouts), docs/systems/map-ambient-sounds.md
-(790 — the map ambients + the driver budget). The port: `crates/nf-game/src/drone.rs`
+2026-10-22. Question: do the bath-house conversations loop? Prior art: docs/systems/under-bathhouse-voices.md
+(the combat shouts), docs/systems/map-ambient-sounds.md (the map ambients + the driver budget). The port: `crates/nf-game/src/drone.rs`
 (`monitor_talk_to_mission_obj`, `talk_to_mission_obj`, `msg_now`), tests
 `crates/nf-view/tests/hostage_killer_07000002_live.rs`.
 
@@ -58,7 +57,7 @@ mode-5 drone within 5.0, both `+0x2B0` links set) on the HostageKiller ENTER [M 
   are unreached — **no DTYPE-0x18 placement exists on any disc level** [D census;
   docs/port-map/unreached.md].
 - The combat barks (AttackTalk 0x13eac0, HeardNoise 0x149920, …) re-arm on state re-entry under per-line
-  repeat delays — that layer is 776's, unchanged.
+  repeat delays — that layer is unchanged (docs/systems/under-bathhouse-voices.md).
 
 ## The port: the loop was there, the timing was not
 
@@ -68,10 +67,10 @@ immediately**: `Drone_Message` 0x13a678 → `Drone_SM_SendMsgSelf` 0x175a38 (del
 0x172128's dispatch-NOW branch — only future-due messages enter the pending queue [M 0x172128:62-66]. With
 the lag, the monitor's step 2 read the hostage's `+0x4D0 == 0` (the line not yet started) and advanced —
 **the captor spoke twice per cycle** (two captor lines per geisha line; the per-tick trace showed voice
-handles 8 → 11 → 15 → 19 alternating captor/captor/geisha). That is the user-visible "conversations
+handles 8 → 11 → 15 → 19 alternating captor/captor/geisha). That is the visible "conversations
 don't loop properly" shape: the exchange degenerated instead of trading turns.
 
-**Fix** (this task): a `Drone::msg_now` outbox delivered post-walk, before the speech pass, with the
+**Fix**: a `Drone::msg_now` outbox delivered post-walk, before the speech pass, with the
 target's line started in the same tick — the port's same-tick model of the dispatch-NOW branch. The
 monitor's next step-2 then sees the hostage's voice live and waits: tight alternation, silent rolls only.
 

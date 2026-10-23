@@ -1,6 +1,6 @@
 # The multiplayer front-end pages (mp-screens)
 
-The user (2026-10-16 evening): "missing mp screens". This doc lists every multiplayer front-end
+Several multiplayer screens were missing (2026-10-16). This doc lists every multiplayer front-end
 page in the game, its handler, and the port's state — data/flow ported vs the draw (the main
 agent draws every page and compares against PCSX2). Evidence: [M] ACTION.ELF decompile
 (function:line), [D] disc data, [L] an EE snapshot.
@@ -68,7 +68,7 @@ the front-end level's void rendered black: an all-dark png. The fix mirrors the 
 gates (`spot_movie_gates`): the state-6 briefing / intro / attract players blank the overlay,
 the looping page backdrop draws under it, and the shot passes the live frame.
 
-## What the draw code still needs (the main agent's renders)
+## What the draw code still needs
 
 - `Page::MpSetup` (0x40000051) and `Page::MpConfirm` (0x40000049) draw from
   `mp_setup_panels(lang)` / `mp_confirm_summary(lang)` — the four panel rects are the menu-def's

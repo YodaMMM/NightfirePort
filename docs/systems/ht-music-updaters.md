@@ -95,7 +95,7 @@ reader.
 
 ## Where the port takes it
 
-`crates/nf-game/src/music.rs`: the shared exit block was already dispatched for these ids; this task
+`crates/nf-game/src/music.rs`: the shared exit block was already dispatched for these ids; the port
 adds the per-level halves as `tower2_b` / `tower2_c` (its pre-exit attack jump) / `evil_base` /
 `evil_silo` / `evil_base_c` / `tower2_elevator`, each cited with its address, dispatched from
 `Music::update` under the same `!wait_for_end` gate, with the machine state as new fields

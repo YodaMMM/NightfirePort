@@ -17,9 +17,9 @@ Remote Serial Protocol server for the EE (127.0.0.1:10501) and the IOP (10502), 
   LF endings made `cmd` silently skip half the script. `build-shaderc-only.bat` re-runs shaderc with retried renames,
   because Defender briefly locks freshly extracted folders.
 - PCSX2: `build-pcsx2-nf.bat` (CMake + Ninja, Release, Qt).
-- Install: `C:\Users\Player\Downloads\PS2\PCSX2-gdb` (portable; copies of the user's BIOS, inis, memcards and the resume
+- Install: `C:\Users\Player\Downloads\PS2\PCSX2-gdb` (portable; its own copies of the BIOS, inis, memcards and the resume
   state; `[EmuCore] EnableEEGDBServer/EnableIOPGDBServer = true`, ports 10501/10502; PINE stays on 28011, so the
-  existing tools work against either PCSX2, one at a time). The user's own PCSX2 is untouched.
+  existing tools work against either PCSX2, one at a time). A separate regular PCSX2 install is left untouched.
 
 ## Use
 

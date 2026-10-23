@@ -1,8 +1,7 @@
 # The under-bathhouse guards' voices (07000002)
 
 Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] code (function@addr), [D] disc bytes, [L] EE snapshot, [S] suggested.
-Written by bathhouse-voices-02 (playtest 1017-1139: "I went through one of the tunnels to go underneath the
-bathhouse, and I couldn't hear any of the guards doing their voice lines"). The speech machinery itself is
+Symptom: under the bathhouse (through the tunnels), none of the guards' voice lines could be heard. The speech machinery itself is
 docs/systems/speech.md; this note is the 07000002 census and the level's rule.
 
 ## Census — the guards around/under the bathhouse's south side
@@ -60,7 +59,7 @@ the shout ids go live in the EE sound pool; the sister (ch-0x15 five) through th
 
 ## Open items
 
-- **Live checks for the main agent** (the headless run cannot see the real mixer):
+- **Live checks (open)** (the headless run cannot see the real mixer):
   1. PCSX2, 07000002: walk the tunnel route to the yard without touching plates 385–387, step on plate
      #389 (−47.0, 6.0, −23.3) — EXPECT ch 0x81 rises and guards 455/456/457 wake; when they spot Bond and
      (re-)enter Attack, EXPECT the stream shouts (sfx 111–115) audible.
@@ -71,6 +70,6 @@ the shout ids go live in the EE sound pool; the sister (ch-0x15 five) through th
      and, if so, why the port's SB_2 sample 207 start fails.
 - [S] The port's driver emits the shout voice Plays (an instrumented trace showed `start id 113 → 2 Plays`)
   yet the item disappears from `items_probe` within the same tick; the EE-pool assertion in
-  `bathhouse_voices_live` pins the audible half. If a real-output playtest still hears nothing, the next
+  `bathhouse_voices_live` pins the audible half. If a real-output run still hears nothing, the next
   suspect is the driver's 3-D priority/budget reject (`setup()`, tracking-2 + priority-99 voices vs the
-  map ambients' 8 live voices) — a live `NF_MPFX_LOG` run on the playtest machine would settle it.
+  map ambients' 8 live voices) — a live `NF_MPFX_LOG` run would settle it.

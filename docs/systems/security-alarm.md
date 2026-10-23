@@ -1,7 +1,7 @@
 # The security-subsystem alarm (SSys) — SSys_Init 0x1b01b0, SSys_Monitor 0x1ad998, SSys_Msg 0x1ad878, SSys_RamLoad 0x1b0208
 
 The four Phoenix Building security subsystems (laser 1, laser 2, camera 1, camera 2) and their
-escalating alarm countdown. Ported to `crates/nf-game/src/ssys.rs` (task unported-misc-4).
+escalating alarm countdown. Ported to `crates/nf-game/src/ssys.rs`.
 
 ## Reachability [M]
 

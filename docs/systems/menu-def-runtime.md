@@ -105,7 +105,7 @@ rect +0x70..+0x77.
   controls matched by any-at-rect), runs every page through page-open + 1200 ticks and pins
   that non-scripted controls hold their authored rects, and pins the two control fixups.
 
-## Wiring notes for the renderer (main agent)
+## Wiring notes for the renderer
 
 - Build `MenuRuntime::new(&page_def)` when a page opens, call `page_shown(0x4c)`, then
   `tick()` once per frame and read `draw_list()`.

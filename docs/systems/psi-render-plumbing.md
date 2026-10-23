@@ -1,6 +1,6 @@
 # psi render plumbing — the never-mentioned front-end/render cluster (unported-front-end-menus-1)
 
-The whole-ELF scan (master 20874c31, 2026-10-20) flagged 25 ACTION.ELF functions in the
+The whole-ELF scan (2026-10-20) flagged 25 ACTION.ELF functions in the
 `psi*`/GS-render/`Car_*` area whose names appeared nowhere in `crates/*/src`. Survey result:
 **all 25 are reached by the shipped game** (chains below, [M] = decompile + grep caller links;
 ELF word-refs/jals verified in work/elf/ACTION.ELF), so none go to `docs/port-map/unreached.md`.
@@ -70,7 +70,7 @@ mp_map_objects_live::probe_cars_on_all_arenas], so the whole row is live in MP.
   for the caller to emit (the port keeps Sound/Bullet with the sim caller).
 - New `Car` fields: `damage`, `turret_pitch`, `turret_yaw`, `mg_cooldown`, `mg_ammo`.
 
-## Draw-side observation points for the main agent (no drawing done here)
+## Draw-side observation points (no drawing done here)
 
 1. **Fade colour**: `psiFadeView` 0x10b9c8 fades to the viewer's own r,g,b (the 4 u8 args of
    CreateTotalScreenSprite 0x1181b0, alpha in the RGBAQ top byte); the port's hud.rs fade quad is
@@ -89,4 +89,4 @@ mp_map_objects_live::probe_cars_on_all_arenas], so the whole row is live in MP.
 [M] decompile files in `work/decomp/ACTION.ELF/` (file = function, `:line` = decompile line) and
 grep caller links; ELF references verified against `work/elf/ACTION.ELF` (4-byte word scan + jal
 scan). [D] only for the car-placement census (cited from mp_map_objects_live). No [L] items —
-no live PCSX2 checks were needed; proposed live checks are in the task report.
+no live PCSX2 checks were needed; proposed live checks were not needed either.

@@ -1,6 +1,6 @@
 # The headless App harness (`headless-app-harness`)
 
-The window host `App` (`crates/nf-view/src/lib.rs`) owned the three 2026-10-16 playtest
+The window host `App` (`crates/nf-view/src/lib.rs`) owned the three 2026-10-16
 bugs — the state-6 briefing popped before it showed, Esc in a menu-started mission quit
 the game (`level_code` was only ever set from the command line), and the online session
 went unpolled through the loading screen. None of that code was reachable from a test:
@@ -38,7 +38,7 @@ it lived inline in `ApplicationHandler::window_event`'s `RedrawRequested` and
 
 The key handling is **`App::app_key(&mut self, k: KeyCode, state: ElementState,
 repeat: bool) -> bool`** — the whole old `KeyboardInput` arm: the cutscene-skip keys,
-the F12 shot, the front-end typing pages, `menu_input`, the dev-menu keys, and the
+the F12 screenshot, the front-end typing pages, `menu_input`, the dev-menu keys, and the
 mission Esc arm (pause open [S the game's Start pause; the gates M Player_Update
 0x193600:72]). It returns `true` only where the old code called `el.exit()` — the bare
 viewer's un-grabbed Esc — and the window event loop turns that into `el.exit()`. No

@@ -1,4 +1,4 @@
-# models-world: every level's world geometry and placed static objects (task 041)
+# models-world: every level's world geometry and placed static objects
 
 Lane: the room/cel geometry and every static placed object on the 27 on-foot levels
 (`docs/systems/levels.md` §1) — walls, floors, terrain, props, decorations (0x47), breakables in
@@ -53,7 +53,7 @@ batch). LOD blocks (map block 0x1f, `parsemap_block_LOD` 0x1d1f10 — the switch
 `control_movement_object_handler` 0x1336f8) never occur on the disc (docs/formats/map.md's measured
 block table; probe: 0 blocks in all 2,230 maps) — no hidden swap-variant models exist.
 
-## 2. Placement types of this lane — ported and verified
+## 2. Placement types covered here — ported and verified
 
 | Type | Class | Draw | Evidence |
 |---|---|---|---|
@@ -112,8 +112,8 @@ disc — no LOD blocks) carry distance keys. So the game's list 0 is: **all visi
 placement-parse order, then the dynamic objects front-to-back**.
 
 The port sorted everything front-to-back by object centre — which could draw a baked shadow decal
-(nearer centre) before the wall it lies on, its depth write rejecting the wall (the user's navy
-blocks, R2). fix-render4's `alpha_shaped` reorder was a texture-shape stand-in. The port now
+(nearer centre) before the wall it lies on, its depth write rejecting the wall (the navy
+blocks seen on 07000007). fix-render4's `alpha_shaped` reorder was a texture-shape stand-in. The port now
 implements the game's key exactly (`Material::chain`, gpu.rs sort): statics first in parse order,
 dynamics by dist². The alpha_shaped hack is retired (the classifier stays, pinned by
 `decal_order_live`). Also: a glist-flag-0x1 **static** no longer moves to the alpha list — the
@@ -227,14 +227,14 @@ Meshed dynamic placements the port does not draw yet — the per-level counts ar
 `models_survey`'s `undrawn` column. The MP-gated creators (0x24/0x25/0x26) don't create their
 objects in single-player, so their markers are correctly absent.
 
-- **misc (044)**: 0x28 sensor, 0x29 switch, 0x2e lock, 0x2f copter, 0x30 monitor, 0x31 fuse box
+- **misc** (models/misc.md): 0x28 sensor, 0x29 switch, 0x2e lock, 0x2f copter, 0x30 monitor, 0x31 fuse box
   (up to 129 on 0700001b), 0x32 rain box, 0x33 hint, 0x35 PCQ worm, 0x38/0x39 space laser/missile,
   0x3b DynamicObject (45 on 07000014), 0x3f creep wall, 0x4a apocalypse, 0x4e light, 0x71 rotor,
   0xd4 cloud, 0xd5 one-sided, 0xd8 rigid body (21 on 07000002), 0xda car, 0xe1 destroyable
   (48 on 07000014), 0xe3 flicker, 0xe4 hurt, 0xfe mine, 0x2d leaf generator, 0xdf snow generator,
   0xea/0xeb touch triggers (up to 28), 0xf2 emitter (35 on 07000014), 0xf3 env tree, 0xf4 movie
   trigger, 0xf9 sound trigger, 0xfa third icon, 0xfd cam subject, 0x27 GT.
-- **items (043)**: 0xfa third icons (07000005/07000011/07000012/07000014/07000041), 0x2e locks.
+- **items** (models/weapons-items.md): 0xfa third icons (07000005/07000011/07000012/07000014/07000041), 0x2e locks.
 
 ## 7. Known data quirks (no port defect)
 
@@ -248,14 +248,14 @@ objects in single-player, so their markers are correctly absent.
   `Ps2NumVerts` statistic; the geometry itself is validated by the fresh-qword invariant, the
   bit-exact box bounds and the nfre cross-check in ps2gfx.md).
 
-## 8. What's left (this lane)
+## 8. What's left
 
 - The VU1 microcode reading (G-014): the decoder's invariants (fresh qwords, w ∈ {0,−1}, GIF tag
   shape) hold on every batch of every level [D], and the nfre cross-check agrees on 6,227 objects —
-  the microcode itself remains unread (no VU disassembler in this sandbox; the ELF is at
+  the microcode itself remains unread (no VU disassembler was available then; the ELF is at
   `work/elf/ACTION.ELF`, `.vutext` at 0x241c80, file offset 0x13bb80, 0x2880 bytes).
 - The viewer's sim-side swaps (breakable shatter, SS key animation, door swing) are the other
-  systems' work (world-objects.md); this lane pinned the intact-state draws and their draw states.
-- The main agent's render pass should eyeball §5's spots — especially 07000041's env-map object
+  systems' work (world-objects.md); this page pinned the intact-state draws and their draw states.
+- A render pass should check §5's spots — especially 07000041's env-map object
   (the new blend 4) and any level where a glist-flag-0x1 static moved from the alpha list to list 0
   (§4; e.g. 07000005's pine trees).

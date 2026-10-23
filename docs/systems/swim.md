@@ -1,6 +1,6 @@
 # Swim — the substate-3 tick, the hittest capsule arms, and the pond settle
 
-The 02-pond playtest (2026-10-18): "the swimmer floats ~0.5 too high". PCSX2 truth [L, fresh
+On the 02 pond (2026-10-18) the swimmer floated ~0.5 too high. PCSX2 truth [L, fresh
 07000002 boot, Bond placed by PINE in the pond cel 0x1708870, stick forward held]: swimming into
 the hut pocket under the hut ladder (centre (−74.84, ·, 22.22)) the PS2 root settles at y 3.17 at
 (−76.27, 3.17, 22.14); in open water near (−71.1, ·, 27.9) it sits at y 3.48. The port rose to

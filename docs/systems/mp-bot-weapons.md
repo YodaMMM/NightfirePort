@@ -3,9 +3,8 @@
 The bots' weapons on the ported MP branch: the `BOTWEAP_*` family (`crates/nf-game/src/mp/botweap.rs`),
 the firing pipeline's armed arm (`BotBrain::handle_firing_armed`, `crates/nf-game/src/mp/bots.rs`), the
 pickup take (the shared `update_pickups_net` walk + the bot arm in `Scene::step_net_world`), and the
-weapon choice (`BotBrain::weapon_choice` → `combat_choice`). Salvaged from agent 7's branch
-(`s/bot-weapons-salvage` 1e50c22f), merged onto master's MP work (start weapons, shared rounds,
-objectives, lazy sight), and fixed for the never-fire wedge below (776-bot-weapons-finish).
+weapon choice (`BotBrain::weapon_choice` → `combat_choice`). Built on the MP work (start weapons, shared rounds,
+objectives, lazy sight), with the never-fire wedge below fixed.
 
 ## The firing pipeline and the never-fire wedge (the fix)
 
@@ -36,7 +35,7 @@ cleared latch made the next 0xD2/move enter a *fresh* `DroneWeap_Fire` — whose
 [M 0x17a8c0:12-13] re-pushed the deadline to `now + delay`. The combat bounce (0xD2's 1-in-3 exit
 roll [M 0x16f5e8:48-52], the moves' 2–9 s timers [M 0x16f850 msg 1]) never stays anywhere for the
 ≥ 60 ticks a fresh deadline needs, so the deadline receded forever: **the bot alternated strafes
-(0xD4) with the fire latch set and never fired** — the playtest's symptom, with weapon 6 (the
+(0xD4) with the fire latch set and never fired** — the observed symptom, with weapon 6 (the
 deathmatch set-0 start weapon, `PICKUP_MATRIX` row 0 → 6) as the gun every bot holds.
 
 The fix keeps the latch set through the combat arms (0xD0/0xD7/0xD2-tail no longer clear it): the
@@ -48,7 +47,7 @@ the pinned run), kills 28 → 35, and the two-machine hashes still agree.
 
 ## The pickup take and the preference
 
-- The shared take pass is master's `update_pickups_net` (`Drones::net_bodies`, the game's taker
+- The shared take pass is `update_pickups_net` (`Drones::net_bodies`, the game's taker
   order: the humans by slot, then the bots [M Pickup_Update 0x18e148:203-246]); a bot's weapon/ammo
   take updates the bot's weapon layer in `step_net_world`'s apply loop via
   `BotBrain::take_pickup` → `BotArsenal::take_pickup` (`Pickup_Handler` 0x18e650's class-2 arm),

@@ -1,7 +1,7 @@
-# The animation-script helpers the AI reaches (call-tree gap, task 850 `anim-script-rest`)
+# The animation-script helpers the AI reaches (call-tree gap)
 
-The call-tree check (`tools/calltree/calltree.py --all-mentioned-dstates --list`, master 20874c31) walks the
-game's code from every DSTATE handler the port mentions. This task owns the 19 animation-script functions the
+The call-tree check (`tools/calltree/calltree.py --all-mentioned-dstates --list`) walks the
+game's code from every DSTATE handler the port mentions. This page covers the 19 animation-script functions the
 walk reaches but the port never named. Every one is now classified here and cited at the Rust that does (or
 deliberately does not do) the work — none is silently skipped. Citations live in the code; this file is the map.
 
@@ -125,7 +125,7 @@ mode adds 0x40 (+0x50 with param 6, which also stores the bone byte +0x104), tar
 (`drone.rs`, the `tracking`/`track_recheck` fields) is cited there: `tracking` = the 0x10 flag,
 `track_recheck` = the re-decide timer, 3.0² = the +0xE8 range², clear = the `tracking = false` arms.
 Not modelled (stated in the citation): the +0x106 random snap-delay draw, the 0x40 target-is-object bits —
-`HeadTrackObj` 0x14ada0's arbitrary-target form is unported (that task owns it; the mention here is an honest
+`HeadTrackObj` 0x14ada0's arbitrary-target form is unported (the mention here is an honest
 "unported" note, not an equivalence claim).
 
 ### `AnimTagGetUnique` 0x1c77c0 — the stamp counter; cited at `next_stamp`
@@ -136,7 +136,7 @@ never 0) is that counter — the `Layer.stamp` field annotated `+0x84` — cited
 ## The facial-speech pair — caller branch NOT ported (documented gap, not claimed equivalent)
 
 61 of 346 `Drone_SfxInfo` entries carry a facial anim id [L, docs/systems/speech.md §1.2], so on levels that
-load facial scripts this branch is live. On the port's tested level 07000005 no facial scripts load: the
+load facial scripts this branch of the game's code is live. On the port's tested level 07000005 no facial scripts load: the
 game's own `hashtable_getitem` miss clears `e.facialAnimId` to 0 (permanent) and the line falls through to the
 direct play [M 0x141b00, speech.md §1.3]. The port's `Drones::speech` skips `l.facial != 0` lines entirely —
 conservative, and the whole branch is documented as unported there [S standing note].
@@ -156,11 +156,11 @@ sub-branches end here — at once when the script has no op-1 sfx, at the +0x48 
 `NDrone2_ControlSTANDARD` 0x1490f0 §1.4 when it has), `AnimDebugHandler`/`Create` (debug only). The port's
 slot-2 consumer exists — `facial_blend(out, slot0, slot1, slot2, …)` (`nf-game/src/anim.rs`, cited) — but the
 scene passes `slot2 = None` and nothing appends. Porting it needs the speech-side talk slot plus the pending
-timer state (+0x4c/+0x37/+0x48) and is queued, not smuggled in here.
+timer state (+0x4c/+0x37/+0x48); it is not done here.
 
-## Live checks for the main agent
+## Live checks (open)
 
-None required for what landed (comment/doc-only; no behaviour change). If the facial port is queued, the
+None required for what is here (comment/doc-only; no behaviour change). For a facial port, the
 useful spot-checks on a level WITH facial scripts loaded would be: watch `Drone_SfxInfo[idx]+4/+8` and drone
 bytes +0x35/+0x36/+0x37 / +0x53c while a guard with a facial line talks (`tools/trace/gdbwatch.py`, expect the
 +0x37=1 → T+21 append → +0x36=1 sequence of speech.md §1.3-1.4).

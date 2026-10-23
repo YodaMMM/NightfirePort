@@ -1,8 +1,7 @@
 # The DMODE inits: `DroneModeSettings` and the OLD mode chain
 
 Tags: [M] decompile/disassembly read here (ACTION.ELF), [D] disc bytes, [S] suggested.
-Owner task: unported-guard-ai-other-2 (2026-10-21). Sibling evidence: the 856 report
-(docs/reports/unported-guard-ai-other-3.md) covers rows 23-30 the same way.
+2026-10-21. Rows 23-30 are covered the same way in docs/port-map/unreached.md.
 
 ## The table [M 0x14cfa0 / D ELF data]
 

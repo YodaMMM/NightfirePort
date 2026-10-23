@@ -46,16 +46,16 @@ placement's param 0 skin hash); the sway anim (a per-bone rotation loop) is the 
 0x1b2a08:10-15]. `Trigger_Update` case 0xD (0x1b1a78:190-199): when the gate fires, the movie hash
 goes to `GameState+0x16` and full-screen FMV states 6/7 push — the display is taken over; the
 in-world screen texture NEVER receives frames [M]. The port's trigger kinds (triggers.rs) have no
-0xD and there is no PSS player (docs/reports/fix-cutscenes.md: the demuxer exists,
-nf-formats/src/pss.rs, no decoder) — wiring the placement = a 0xD trigger kind + the movie player,
+0xD and there was no PSS player then (the demuxer existed,
+nf-formats/src/pss.rs, no decoder; movies play since — docs/systems/movies.md) — wiring the placement = a 0xD trigger kind + the movie player,
 out of scope here, recorded as the hook.
 
 ## SpaceLaser (0x38) / SpaceMissile (0x39) on 0700001b — not gameplay blockers
 
-docs/reports/fix-finale-blockers.md:102-107: the finale completes via Drake's defeat NIS writing
+On 0700001b the finale completes via Drake's defeat NIS writing
 ch 100 directly; the missiles' per-missile channels (21/22/27) are choreography/fail-path writers
-whose launch-order chain (ch 19 = AND(0xc1, 0xc2)) has no writer on the disc data. Per the task's
-rule ("if they block the mission, they're gameplay") they stay unported; the mechanics are
+whose launch-order chain (ch 19 = AND(0xc1, 0xc2)) has no writer on the disc data. Since they do not block the mission they were left unported here (SpaceMissile is ported since,
+`space_missile.rs`; SpaceLaser in `space_laser.rs`); the mechanics are
 documented in docs/levels/0700001b.md and the decompile (Create_SpaceLaser 0x1aa8b8 /
 SpaceLaser_Update 0x1aa3f8 — states 0-4, the script-driven aim/fire, 2 shared-RNG draws [M];
 Create_SpaceMissile 0x1a9ef0 / SpaceMissile_Update 0x1aa118 — the state jump table at 0x2fcc30 the

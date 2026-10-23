@@ -74,12 +74,12 @@ Parsed (+2 cap, +8 label, the +0x90 link) [M weapon.rs:14-18,33-37,93-100]. **Mi
 id** (the `Bullet_init_casing` path — the port has no shell casings). The reserve/clip/clamp arithmetic is
 modelled in `Inventory`/`gun.rs`; the cheat seed (DAT_002a373c) is not.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **The clamp**: pick up ammo over the cap on 07000005 (`watch 0x016cf0f0+0x170+2·1 2` = reserve[1]) —
    it must stop at 70 (rec 1's max) regardless of further pickups.
 2. **The casing id**: fire the P2K (ammo 1) — the eject mesh `hashtable_set_object_to_entity_gfx` receives
-   0x0200043F; the port has no casings, so this is the main agent's check when casings get ported.
+   0x0200043F; the port has no casings, so this is an open check (casings are ported since).
 
 ## The census to run
 

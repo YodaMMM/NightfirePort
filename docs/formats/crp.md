@@ -1,6 +1,6 @@
 # The `.crp` CARP container (the driving side's core resource format)
 
-Status: **decoded and pinned** (task `drive-crp-format`, 2026-10-15). Parser:
+Status: **decoded and pinned** (2026-10-15). Parser:
 `crates/nf-formats/src/crp.rs`; goldens: `crates/nf-formats/golden/crp_golden.tsv` (all 89 `.crp`
 entries of the 23 driving archives) in `crates/nf-formats/tests/driving_golden.rs`. Evidence tags:
 [M] code (function + address), [D] disc bytes, [S] suggested. DRIVING.ELF is stripped; EE address =
@@ -122,7 +122,7 @@ directory (`CODE:size:payload_off`), the ELF header triple `t<e_type>.m<e_machin
 re-diff + tamper sister) and `driving_crp_structure_matches_the_consumer_split` (the consumer split
 above: 8 tracks with DBN+MapN+RNgp+CDat, 5 plain MISC cars, 89 ELF modules).
 
-## 7. Open questions / live checks for the main agent
+## 7. Open questions / live checks
 
 1. **Track name registration** (PCSX2): breakpoint the `FUN_002a9760` (strlen) call in
    `FUN_0022f898` 0x22f898 right after the `DBN ` scan; confirm the string at the resolved payload
@@ -134,7 +134,7 @@ above: 8 tracks with DBN+MapN+RNgp+CDat, 5 plain MISC cars, 89 ELF modules).
    consumer (grep candidates `FUN_0022faf8`/`FUN_00230730`/`FUN_00230ab0`/`FUN_00176658`/`FUN_00212ce8`,
    which reference `Map ` constants) and that the string matches the golden.
 4. **Article payloads** (`CDat`, `RNgp`, `Map `, `Arti`): the binary layouts inside the payloads are
-   the next format task; the goldens pin their container offsets and sizes so the next pass starts
+   the next format pass; the goldens pin their container offsets and sizes so the next pass starts
    from measured ground.
 5. **ELF module identity**: `ELFd` payloads start `\x7fELF` ET_REL MIPS — worth a disassembly pass
    (`readelf`-style) against `work/elf/DRIVING.ELF` to see whether the embedded modules are compiled

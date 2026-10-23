@@ -245,7 +245,7 @@ draw and the live field is rewritten.)
   and example functions were recorded during this pass); they restate docs/systems/drone-*.md
   claims that were themselves written from this decomp, but were not re-measured here. Treat them
   as "documented, not independently re-checked".
-- No Rust code was changed in this task (atlas-1 scope).
+- No Rust code was changed by this check.
 
 ## Trace replay (fix-ai-traces): the guards against the real game's recordings
 
@@ -271,11 +271,11 @@ up. Comparisons use the game's own alignment facts, all measured from this repla
   0.142, over the placement y). A disabled drone's anim object never ticks ([L] the trace's WAIT_SWITCH
   rows match the port's raw y exactly), so the lift applies only to enabled drones. The harness converts
   with the port's anim root track; the residuals vs the game (0.023–0.167) are the converter's gap —
-  `animobj+0x5c` is NOT the root track's y (a live check is in the report). The AI conclusion is unaffected:
+  `animobj+0x5c` is NOT the root track's y (an open live check). The AI conclusion is unaffected:
   x/z match to 0.001 and every state matches.
-- **The user's kills are injected**: Bond's pitch is not recorded, so the port's Bond cannot hit what the
-  user hit. When the game's list loses a drone and the tail aligns shifted, the harness force-removes that
-  port drone (reported as `user-kill`) so the OTHER drones keep being compared.
+- **The player's kills are injected**: Bond's pitch is not recorded, so the port's Bond cannot hit what the
+  recorded player hit. When the game's list loses a drone and the tail aligns shifted, the harness force-removes that
+  port drone (reported as `user-kill`, the recorded player's kill) so the OTHER drones keep being compared.
 
 ### First divergence per drone (pinned in ai_traces_live; counts = trace lines matched)
 
@@ -288,7 +288,7 @@ alerts, paths and fights on time (line 0 pos residuals are the hip conversion). 
 | drone | first divergence | what |
 |---|---|---|
 | 3 | 506 (frame 29828) | the port entered SURRENDER_ANIM (0x3f) where the game stayed IDLE — unresolved (needs the surrender trigger's [L] check) |
-| 4–11 | 885 / 2168 | the game's list lost the user-killed drones (injected; the port's own AI held to that line) |
+| 4–11 | 885 / 2168 | the game's list lost the player-killed drones (injected; the port's own AI held to that line) |
 | 12 (sniper) | 0 pos only | state 41 matches from line 0 |
 | 13 | 7049 (frame 36372) | the port entered 0x6F where the game was IDLE — near the truck park; unresolved |
 
@@ -296,7 +296,7 @@ alerts, paths and fights on time (line 0 pos residuals are the hip conversion). 
 
 | drone | first divergence | what |
 |---|---|---|
-| 0 | 0 (pos) | FIXED this task: the guard has a start script and the game starts it in **PlayScript (3)** (`NDrone2_DSTATE_PlayScript` 0x15ba68 = StateFuncs[3]; the script is `Drone+0x554` = param 1, `NDrone2_DefaultInit` 0x14b300). The port skipped it and went straight to its start state → AIM_STAND (0x67) at tick 1 (instantly "alerted"). Now ported: Global 0x15b830 enters 3 when `+0x554 != 0`; ENTER plays the script per the decomp's variants (resume `+0xCD8`: ATTACK for the default/0x60005e6/0x60008ae, the start state for 0x6000168/0x6000169/0x60007ac); UPDATE runs the opponent look. The state matches from line 0 in both traces; the remaining pos divergence (0.597) is the script's root-motion step |
+| 0 | 0 (pos) | FIXED: the guard has a start script and the game starts it in **PlayScript (3)** (`NDrone2_DSTATE_PlayScript` 0x15ba68 = StateFuncs[3]; the script is `Drone+0x554` = param 1, `NDrone2_DefaultInit` 0x14b300). The port skipped it and went straight to its start state → AIM_STAND (0x67) at tick 1 (instantly "alerted"). Now ported: Global 0x15b830 enters 3 when `+0x554 != 0`; ENTER plays the script per the decomp's variants (resume `+0xCD8`: ATTACK for the default/0x60005e6/0x60008ae, the start state for 0x6000168/0x6000169/0x60007ac); UPDATE runs the opponent look. The state matches from line 0 in both traces; the remaining pos divergence (0.597) is the script's root-motion step |
 | 1 | 0 (state) | Mayhew (ally, 0x1C ALLY_LEAD_INIT in the port) — the game holds him in WAIT_SWITCH (1) until channel 0xb: the ally's start gating ignores his switch channel in the port — OPEN |
 | 15/16 | 63/64–76 | the port entered RUN_FOR_COVER (0x8c) where the game was in COMBAT (0x58/0x103) — the first fight's cover choice diverges — OPEN |
-| 2–13 | 346/375 | the first user kill (injected shift) |
+| 2–13 | 346/375 | the first player kill (injected shift) |

@@ -7,8 +7,8 @@ a cel record for every placement whose flags have bit 0x8000, copies the glist p
 rotation → cel+0x70..0x7c) and the glist flags word (cel+0x94 = celglist+0x44), then runs
 `parseentity_fixup_entity` 0x1d00c0 and `parseentity_transform_bounding_box` 0x1d0fb0.
 
-This page replaces 786's reading (which made the port skip every identity-rotation 0x8019/0x8018
-and broke `decal_order_live` on master batch 1020b — 07000007's `hall_shadows*` /
+This page replaces an earlier reading (which made the port skip every identity-rotation 0x8019/0x8018
+and broke `decal_order_live` — 07000007's `hall_shadows*` /
 `OBJECT_banistershadows*` dropped and their textures never loaded).
 
 ## What the 0x8000000 mark actually is [M]
@@ -75,12 +75,12 @@ the bathhouse doorway — the port does the same — while the fresh-boot PCSX2 
 doorway eye [L 2026-10-20] shows nothing there. The static analysis could not pin the last
 step (the likely candidates are depth occlusion by the shared MergedEntity/bath_dressingroom
 wall — the eye at (−43.11, 6.46, 10.37) is outside the dressing room, the sandals inside at its
-west wall — or the sandals' own visibility at ~4.5 m), so this is held open under
-"Live checks" in the task report; no port-side hide rule is invented for it.
+west wall — or the sandals' own visibility at ~4.5 m), so this is held open as a
+live check; no port-side hide rule is invented for it.
 
 ## The port
 
-`scene.rs`'s static World walk draws every resolved placement — 786's identity-rows skip is
+`scene.rs`'s static World walk draws every resolved placement — the earlier identity-rows skip is
 REMOVED (this page's first section). The port's chain/visibility model already mirrors the
 game's draw chain: `build_chains` (scene.rs) implements `build_link_objects_to_rooms`'s owner
 pick (`link_owner_room`), the glist+0x44 bit-0x10 skip is `skipped_by_cel_pass`
@@ -89,7 +89,7 @@ pick (`link_owner_room`), the glist+0x44 bit-0x10 skip is `skipped_by_cel_pass`
 first, then ±dist²) is gpu.rs's pass-1 sort. Collision is untouched.
 
 Tests: `crates/nf-view/tests/baked_statics_02_live.rs` — the sandals draw AT the game's
-measured position (the inverse of 786's assertion), the 0x8000000 mark mirrors 0x1d00c0's
+measured position (the inverse of the earlier assertion), the 0x8000000 mark mirrors 0x1d00c0's
 zero-placement condition, the rotated `northerngarden4_lightfixture` (yaw 0.733) still draws,
 and the room cels survive; `decal_order_live` (07000007's shadow decals and their textures)
 must stay green.

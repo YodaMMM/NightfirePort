@@ -89,7 +89,7 @@ ee_start_0700000a.bin / ee_snapshot.bin @ 0x2d8890..9c all read (0, −9.8, 0) �
 
 No type-0x24 start (no `Player_Init` on the SP path → the vector keeps its previous value; the
 port's load leaves the constructor default (0, −9.8, 0)): 07000023 and 07000026 (the MP arenas —
-`MP_Start`'s own `Player_Init` hands the spawn block, out of this task's SP scope [S]), 07000048,
+`MP_Start`'s own `Player_Init` hands the spawn block, out of this page's SP scope [S]), 07000048,
 0700004b, 07000500, 07000999. 07000023 having none matches mp-core's WORKLOG note.
 
 **0700001b is the disc's only zero-g level** (the spacewalk; p3 == 2 on its single start).
@@ -108,7 +108,7 @@ port's load leaves the constructor default (0, −9.8, 0)): 07000023 and 0700002
 - Not ported (out of scope, noted): the other WldGravity consumers (grenades/casings/pickups/
   gas/rigid bodies keep their −9.8 constants), the MP spawn-block path, the boot zero.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **PCSX2, 0700001b**: break on `Vec_Zero` (0x1e2d58) at the level's spawn — expect exactly one
    call with a0 = 0x2d8890 during `Player_Init` (0x1910f8); then read 0x2d8894 — expect

@@ -1,7 +1,6 @@
 # The mission part lifecycle — what a level entry keeps, resets, and re-runs
 
-Settle of the 824-vs-822 fold conflict on mission 0x07000011's 4a leg
-(`s/script-end-writer-4a-2`). Every fact carries its evidence tag: [M] ACTION.ELF decompile
+Settles how mission 0x07000011's 4a leg folds into its parts. Every fact carries its evidence tag: [M] ACTION.ELF decompile
 (function + address; disassembly checked where the C looked incomplete), [D] disc bytes, [L]
 EE snapshot (file offset = EE address) or the port's real-path test run.
 
@@ -81,14 +80,14 @@ every `switch_channels[...] =` write in ACTION.ELF were censused [D
 docs/systems/tower2-lift-ride.md §2 step 8]. The writer is 07000013's spawn touch #153 (out
 0x4a, covering the start) [D 07000013.bin]; walk_07000013_live pins the real chain [L]:
 ch 0x4a fires after the warm load into 07000013, 17.obj0 folds (state 4) and 18.obj0
-announces (enable 0x4a). Under 824's real ride-end writer the lift script ends writing NO
+announces (enable 0x4a). Under the real ride-end writer the lift script ends writing NO
 channel (the removed stand-in wrote ch 0x4a there).
 
-**Verdict** (the task's question): the real ride end neither resets nor re-runs 07000012's
-records ([M 0x182270 §2 — previous parts get no store; M 0x1827d8 — no case 4]) and 824's
+**Verdict**: the real ride end neither resets nor re-runs 07000012's
+records ([M 0x182270 §2 — previous parts get no store; M 0x1827d8 — no case 4]) and the ride-end
 writer fires at the right time and place ([D census + D 07000013.bin + L walk_07000013_live]).
-822's sister assertion "12's override objective stays complete through the fold [M 0x182270
-keeps previous parts]" is CORRECT and stands. What was wrong was 822's third assertion —
+The level-12 objective test's sister assertion "12's override objective stays complete through the fold [M 0x182270
+keeps previous parts]" is CORRECT and stands. What was wrong was its third assertion —
 "4a's own objective folded at the ride's end (ch 0x4a)": it pinned the removed stand-in's
 write. The game's record 17 can only ANNOUNCE on the 4a leg (enable 0x4d fires via touch
 #277; cond 0x4a never does): `states[4a][0] == 3` at the ride's end, the fold happening on

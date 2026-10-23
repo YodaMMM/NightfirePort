@@ -7,7 +7,7 @@ Strings are from the disc's language bank: `Txt_BindLabel` 0x1cad60 resolves lab
 layout `crates/nf-formats/golden/files_bin.tsv`; the bank format is
 `u32 blobSize, blob, pad4, u32 numEntries, numEntries-1 u32 offsets, u32 numFixups, fixups`
 — M `Txt_LoadLanguage` 0x1caad0]. This doc covers the FLOW around the profile; the save
-file's contents are `docs/systems/` + `docs/reports/fix-save-profile.md` (already ported).
+file's contents are in `nf_game::profile` (already ported).
 
 ## 1. When the game saves
 

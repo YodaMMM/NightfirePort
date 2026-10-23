@@ -185,7 +185,7 @@ fix_audio2_live drives 07000001's intro, 07000005's ride dialogue (ScriptPlayer 
 fly-through through it. Not yet: facial
 sequences, distance-table speed modes 1–3, head tracking (`AnimObjectHeadTrack`), the far-object blend path.
 
-**fix-anim-blend (2026-10-13, branch s/fix-anim-blend):** the frame-blend side is now exact and
+**Frame blending (2026-10-13):** the frame-blend side is now exact and
 the speed-mode machinery exists. `nf_game::anim::slerp` is `Quat_Slerp_Acc` (0x1e4188) verbatim:
 dot = q0·q1, `neg` = dot < 0 with **w0** (the q0 coefficient) negated after the branch — not q1;
 the slerp branch runs while `0.01 < 1 − dot` (the port's old 0.9995 gate was wrong), weights
@@ -214,7 +214,7 @@ building the player's walk sets (master +0xB4=1, slave +0xB4=2, `sAnimSet` +0x24
 accumulator, +0x28 = 0.5 stride factor [L docs/fields/animobject.md]), which is the remaining
 work; the guards play mode-0 scripts at `Drone_AnimInfo +0x14`, as in the game.
 
-**fix-anim-events (2026-10-13, branch s/fix-anim-events, G-030):** the disc-wide census (all 99
+**Anim events (2026-10-13, G-030):** the disc-wide census (all 99
 FILES.BIN archives, 18,231 scripts, 50,279 commands, 0 parse failures) shows only opcodes 0 / 1 /
 4 exist; op-4 carries kinds 0 (34) / 1 (52, player toggle) / 2 (12,947 — `DroneAnim_EventFunc`) /
 3 (53, stop sfx 18 / 61 / 1479) / 4 (6,925) / 5 (6,976, footsteps) / 6 (1,294, `Effect_Create`)

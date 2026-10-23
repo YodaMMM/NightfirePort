@@ -2,7 +2,7 @@
 
 The shared shot gate (`MpCombat::gate_tick`, docs/systems/mp-shot-gate.md) carries the reload
 state machine that blocks a slot's shots while that slot reloads. 700y2
-(docs/reports/mp-shot-effects.md "Findings") caught the gate and the shooter's own weapon
+(docs/systems/mp-shot-effects.md) caught the gate and the shooter's own weapon
 pipeline disagreeing at a clip boundary. This page pins the game's auto-reload rule and the
 reload timing with addresses, and states the rule the gate (and the local pipeline) follow.
 

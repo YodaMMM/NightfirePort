@@ -1,7 +1,7 @@
 # mp-bot-brain-rest — the MP bot decision helpers (BOTSTATE / BOT / BOTWEAP / MP object+sound)
 
-The call-tree check (`tools/calltree/calltree.py`, master 20874c31) listed 25 reachable
-functions the port never mentioned. This task ports or cites each one. Everything here is
+The call-tree check (`tools/calltree/calltree.py`) listed 25 reachable
+functions the port never mentioned. Each one is ported or cited. Everything here is
 `crates/nf-game/src/mp/bots.rs` (`BotBrain`/`BotVars`), `botweap.rs`, `mp/mod.rs` and one
 doc-cite in `nav.rs` — data, state, flow and getters only; nothing draws.
 
@@ -59,7 +59,7 @@ index+1 encoding), `opp_history_head` (+0x76C), `recovery_b` (+0xA9).
 `mp_rest_team_msg_and_unregister` — each with a sister assertion that can fail. All 358
 `nf-game` lib tests pass with the validation wired into the live commit path.
 
-## Not wired yet (explicit, for the next task)
+## Not wired yet (explicit)
 
 - `handle_opponent_history` at the `find_opponent` tail (the port's scan overwrite stands).
 - `is_path_within_object_range` inside `pick_goal_scan`'s pref-byte bit-3 verify arm.

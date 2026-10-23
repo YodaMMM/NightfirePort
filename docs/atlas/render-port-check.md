@@ -4,11 +4,11 @@ Plan v2 §2: "Any `+0xNNN` in a comment must exist in the atlas." This file audi
 and searchlight-side claims measured for atlas-5 against `docs/atlas/gs-leaf.md`, `cel.md`,
 `searchlight.md` and the decomp (ACTION.ELF `e7ffdcb3…`). Verdicts: **OK**, **OK-with-note**,
 **MISMATCH** (port does what the game does not — a port bug), **UNVERIFIED** (not re-measured).
-Rust line numbers refer to master 5d0d1c5.
+Rust line numbers refer to commit 5d0d1c5.
 
 ## 1. The brightness bug — characters and view models too bright (scene.rs, gpu.rs)
 
-### 1.1 FIXED (s/fix-render) — per-object ambient multiply for 0x800 objects (scene.rs, gpu.rs)
+### 1.1 FIXED — per-object ambient multiply for 0x800 objects (scene.rs, gpu.rs)
 
 Game [M 0x1e5888 (View_SetupRenderModes_Tweak) + 0x1cb178 (Lights_CalcAmbientLight)]:
 
@@ -22,10 +22,10 @@ with obj+0xF0 & 0x800:
 RGB 0x39/0x46/0x56 ≈ 22–34 % albedo [L]). Port (pre-fix): `scene.rs` pushed leaf/skin vertex colours
 verbatim for world and `Layer::Character` alike; `gpu.rs:39` `o.c = c * (255.0/128.0)` was the only
 colour op in the shader. **Net: characters and the first-person gun rendered at ~100 % albedo where
-the game renders them at 22–34 %.** This was the exact cause of the user's report ("characters and
-guns are too bright while the world is right").
+the game renders them at 22–34 %.** This was the exact cause of characters and
+guns looking too bright while the world was right.
 
-Fixed on s/fix-render: per-character ambient state snapped/ramped toward the room-cel ambient
+Fixed: per-character ambient state snapped/ramped toward the room-cel ambient
 (`cel + switch_channels[cel+0xa2]`), multiplied into the Character-layer tail and flagged non-cel
 world instances; world-cel geometry untouched. Full notes + deviations in gs-leaf.md "FIXED".
 Tests: `crates/nf-view/tests/character_lighting_live.rs` (all four NF_ISO tests green).
@@ -59,7 +59,7 @@ trailing writes carried to the next leaf) — consistent with the game's "each D
 its packet position" semantics documented in ps2gfx.md/render.md. No disagreement found this pass;
 the sniper-gun transparency regression it mentions is not contradicted by the decomp reading.
 
-### 1.6 FIXED (s/fix-render) — the HUD hid during cut-scenes (lib.rs `overlay_for`)
+### 1.6 FIXED — the HUD hid during cut-scenes (lib.rs `overlay_for`)
 
 Game [M]: `Script_CameraStart` 0x1d9140 → `Camera_Enable` 0x1b9920 clears `viewer+0x2a` (the
 sprite-draw flag) on the gameplay viewers, and `Game_Draw` 0x1e6f50 skips the whole

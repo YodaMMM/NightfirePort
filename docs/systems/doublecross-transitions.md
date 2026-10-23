@@ -1,10 +1,10 @@
 # The Double Cross level transitions (mission 0x07000001, parts 07000001→02→03→04)
 
-Playtest 1017: "all of the doublecross level transitions are missing." This doc is the chain and
+The Double Cross level transitions were missing in the port. This doc is the chain and
 the between-levels sequence with the evidence; the port now runs the real path on every hop.
 Tags: **[M]** code (function + address + decompile line), **[D]** disc, **[L]** EE snapshot,
 **[S]** suggested. Decompile files live in `work/decomp/ACTION.ELF/` (citation `0xaddr:lines`);
-disc measurements were taken with `nf-extract` (raw dumps: the task's `/tmp` scratch, not committed).
+disc measurements were taken with `nf-extract` (raw dumps not committed).
 
 ## 1. The chain [D]
 
@@ -148,9 +148,9 @@ with a sister that can fail):
    that has none keeps its straight load"; no Double-Cross exit references the wrapper codes
    0x07000041/43/46/49 [D].
 
-## 7. The entry fade is on the player's viewer, not the cut-scene (doublecross-transitions-2)
+## 7. The entry fade is on the player's viewer, not the cut-scene
 
-The main agent held 779's merge on a render comparison (2026-10-19): the port faded 07000002's
+A render comparison (2026-10-19): the port faded 07000002's
 opening cut-scene up from black over 45 frames; the PS2 (GDB build, the level loaded through
 goto_level.py's push = `ResetMap_LevelToLoad(0x07000002, 0, 1)`, captures timed by
 GameState+0x34) shows the loading screen at +1/+2 and the same cut-scene at FULL brightness

@@ -1,7 +1,7 @@
 # Plan
 
 Goal: a native Rust port of 007: Nightfire (PS2, SLUS-20579) — rebuilt from the game's own data and logic (Ghidra
-decomp of the user's ELFs as the behaviour reference), identical behaviour with a controller, best performance, and
+decomp of the disc's ELFs as the behaviour reference), identical behaviour with a controller, best performance, and
 first-class mouse & keyboard. Model: rerac (Ratchet & Clank 1, Rust); methodology lessons in
 `docs/research/native-port-methodology.md`.
 
@@ -69,12 +69,12 @@ tools/              ghidra scripts, cross-check scripts, trace tools, release sc
 ## Input design (from docs/systems/input.md)
 
 - Devices map to **game actions**, not fake pad bytes. Controller: reproduce the original pipeline exactly
-  (dead zone 40, `MapAnalogStick` table read from the user's ELF, axis snap, styles, ramps, `FRAME_RATE_MUL`).
+  (dead zone 40, `MapAnalogStick` table read from the disc's ELF, axis snap, styles, ramps, `FRAME_RATE_MUL`).
 - Mouse look: raw deltas × sensitivity → yaw/pitch radians straight into the player's view angles; no dead zone,
   no curve, no ramp, optional invert. Bindings in a config file (`config/bindings.toml`), rebindable.
 - **D-001 (deviation):** auto-aim off by default when the mouse is the active aim device; configurable. Controller
   keeps the original difficulty-based behaviour.
-- **D-002 (decision, user 2026-10-09):** no manual-aim mode with a mouse — the mouse aims directly (the L1 cursor box
+- **D-002 (decision, 2026-10-09):** no manual-aim mode with a mouse — the mouse aims directly (the L1 cursor box
   is a controller feature); a controller keeps the original aim mode.
 - Controller play stays bit-faithful; verified against PCSX2 traces (G-003).
 
@@ -87,7 +87,7 @@ An optional "PS2 pacing" mode can reproduce the 30 Hz fallback once U-013 is mea
 
 ## Workflow rules
 
-See `CLAUDE.md` (evidence tags, docs first, ledgers, tests, cross-checks, licences, asking before downloads).
+See `CLAUDE.md` (evidence tags, docs first, ledgers, tests, cross-checks, licences).
 
 ## Verification sources
 

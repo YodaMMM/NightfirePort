@@ -55,5 +55,5 @@ Every helicopter placement (type 0x2F) owns a ScriptPlayer created at level load
   trigger); the tests drive ch 0x42 through `Channels::set_channel` as the documented harness
   stand-in for walking to the plate.
 - The copter's own path timing stays the module's documented [S] deviation (Copter_Move's exact
-  per-path advance is not modelled); this task only moves the SP freeze/unfreeze onto the game's
+  per-path advance is not modelled); this page only moves the SP freeze/unfreeze onto the game's
   rule.

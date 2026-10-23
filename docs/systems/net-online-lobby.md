@@ -9,12 +9,12 @@ The PS2 game has no online mode — every multiplayer path is couch play on four
 page joins agents through per-pad messages, P_MPJOIN 0x20ca00 msg 0x6a; there is no network page in
 the menu-def (08000002 of 07000048.bin, parsed 2026-10-15)]. Online play is a **port feature**. The
 plan is deterministic lockstep over UDP: every machine runs the same MP match from the same seed and
-settings and exchanges only per-tick input (the plan is the main agent's [S]). This task adds the
-**front-end model** — the pages, the state, the flow, the getters the draw code calls — and puts the
-network session behind a trait so the real transport can land underneath it (051, net-lockstep-core)
-without touching the pages again.
+settings and exchanges only per-tick input [S]. This page covers the
+**front-end model** — the pages, the state, the flow, the getters the draw code calls — with the
+network session behind a trait so the transport (`crates/nf-net`) sits underneath it
+without touching the pages.
 
-Nothing here renders. All drawing is the main agent's.
+Nothing here renders; the drawing is in nf-view's menu overlay.
 
 ## 2. The page flow
 
@@ -106,21 +106,19 @@ pub trait MpSession {
 }
 ```
 
-Why a trait and not a crate: 051 (net-lockstep-core, in flight on `origin/s/net-lockstep-core`)
-owns the wire (deterministic lockstep over `std::net::UdpSocket`, no crate downloads). Building the
-crate twice in parallel would collide; the front end needs only the surface above. When 051 lands,
-its session implements this trait (or a ≤30-line adapter wraps it); `FrontEnd::mp_session` takes
-any `Box<dyn MpSession>`. **nf-net was NOT created** — the trait lives beside its only consumer.
+Why a trait: `crates/nf-net` owns the wire (deterministic lockstep over `std::net::UdpSocket`); the front end
+needs only the surface above, and `FrontEnd::mp_session` takes any `Box<dyn MpSession>` (the app's is
+`nf_view::mpnet::SessionProxy`, net-lockstep.md §9). The trait lives beside its only consumer.
 
 The front end mirrors the session into the game's own structures (mp_join slots), so the existing
 join-page getters, the start checks (C_SBMPOPTIONS 0x20e818:50-130's team/FFA gates) and the
 confirm-page line builder all work over network agents unchanged [M].
 
-Deviations from the couch flow (all [S], all for the report):
+Deviations from the couch flow (all [S]):
 - Remote agents arrive joined + ready; the game's per-agent codename/team/skin picks at
   0x40000019/0x40000051 are the LOCAL agent's picks. Clients do not pick team/character in this
   first cut — the host's published `MpSettings.players[slot]` carries the defaults for remote slots
-  (team 0, skin 0). A later task can carry per-client picks through the session.
+  (team 0, skin 0).
 - The client does not run the game's start checks; the host's confirm gate is the single gate.
 
 ## 4. Mouse support (the PC-mouse pattern)
@@ -147,10 +145,9 @@ the transitions) implements `MpSession`:
   connected → the lobby mirrors the host's choices → match start hands over;
 - refused / timed-out / Back-cancels-cleanly on both sides, page ids of the port-only pages.
 
-## 6. The one-screen lobby (mp-lobby-one-screen, 2026-10-18)
+## 6. The one-screen lobby (2026-10-18)
 
-The user: "we need a custom lobby screen where all the settings can be set on one screen." The
-online path stops walking the couch pages; it gets **one page** that holds every MpSettings field
+The online path does not walk the couch pages; it gets **one page** that holds every MpSettings field
 the couch pages set, the per-player rows and the Start. The LOCAL couch flow is untouched — every
 couch page, handler and test stays exactly as it is [M the couch pages are the game's own; see §2
 for the walk they keep].
@@ -174,7 +171,7 @@ the game's `0x4000_00xx` and the old port-only ids stay untouched [S]. Both role
                         → PAGE_MP_ONLINE_LOBBY (the same screen; the client edits only its own row)
 
 The old walk (Join Game as the host lobby → Scenario → Map → Setup → Options → Confirm) and the
-old client mirror page (PAGE_MP_LOBBY §2.2) are no longer on the online path [S — this task
+old client mirror page (PAGE_MP_LOBBY §2.2) are no longer on the online path [S — the one-screen lobby
 replaces it]; their code and tests stay for the couch flow's sake.
 
 ### 6.2 The model (`MpLobby`, crates/nf-view/src/mp_lobby.rs)
@@ -202,7 +199,7 @@ One struct owns the screen [S]; every field cites the couch page that sets the s
   scenario has the team bit 0x2000_0000 [M P_MPSETUP 0x20d7a8's state-2 arm], 0 Phoenix / 1 MI6
   [M C_RBMPSETUP 0x20de58]), ready flag, ping (display, the session's RTT [S]).
 - Start row: host-only. Enabled when every joined human is ready and at least one human is in
-  [S — the task's gate; the game's own ready gate is per-panel Menu_MPAreWeReady 0x1f78d8]. Press
+  [S — the port's gate; the game's own ready gate is per-panel Menu_MPAreWeReady 0x1f78d8]. Press
   it and the lobby runs the game's own start checks [M C_SBMPOPTIONS 0x20e818:50-130 — the
   FFA good-side cap, the both-sides team gate, the two-player minimum] and then builds the
   MpSettings exactly as the couch confirm builds it [M P_MPCONFIRM 0x20ec00:53-94 — the port

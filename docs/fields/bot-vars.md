@@ -2,7 +2,7 @@
 
 Proof levels: see [README.md](README.md). Evidence tags: [M] = decompile (`work/decomp/ACTION.ELF/`,
 function address = filename prefix, `:NN` = line), [L] = EE snapshot read (`work/ee_snapshot.bin`,
-file offset == EE address), [S] = suggested. Worker task `mp-bots-data` 2026-10-15.
+file offset == EE address), [S] = suggested. 2026-10-15.
 
 ELF symbols [M-sym]: `BOT_vars` @0x26D660, size 7680 = 4 × 0x780 (player slots 4..7, slot−4 =
 index). An MP bot is an ordinary campaign Drone (`Drone_tag` = obj+0xE0/0x110, see
@@ -118,7 +118,7 @@ slots (17 goal-relative fields), and 36 instance fields ≥ +0xB0. Unmapped: the
 [drone-statemachine.md](drone-statemachine.md)'s AINetwork section) and the +0xB0 block's
 +0x00/+0x08 words (never read individually — only the flags word and dist² are consumed).
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **Goal timeout constant**: `gdbwatch` `0x26D660+0x28` (w) — expect **300.0** (`gotoGoal`
    0x1278a8:58 writes `VIDEO_FRAME_RATE * 5`; the write site is now known — re-pinned from the
@@ -138,4 +138,4 @@ slots (17 goal-relative fields), and 36 instance fields ≥ +0xB0. Unmapped: the
 
 Note: the atlas (docs/atlas/multiplayer.md §4) says the per-bot visit floats sit at
 `MP_PICKUP+0x70`; the decompile writes `+0x80 + idx*4` [M 0x129958:24] — the atlas row needs
-the +0x80 correction (applied to the atlas in this branch).
+the +0x80 correction (applied to the atlas).

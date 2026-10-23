@@ -1,6 +1,6 @@
 # The elevator button (07000009) — the class-0 entity use path
 
-Task elevator-buttons-09. The user: "09 level elevator buttons dont work". Root cause and fix, all
+Symptom: 07000009's elevator buttons did nothing. Root cause and fix, all
 addresses from the ACTION.ELF decompile in `work/decomp/ACTION.ELF/`.
 
 ## The symptom in the port
@@ -10,7 +10,7 @@ at **its placement matrix** — and `SCRIPTPLAYER_Elevators` (#70 on 07000009) s
 [D placements dump: `t [0.0, 0.0, -0.0]`], its art being baked absolute in the model. Nothing is ever
 near (0,0,0), so the use never landed, ch 0x39 (57) never fired, objective 2 (ch 0x46 = AND(ch 0x39)
 [D mux #274]) stayed incomplete and the two LIFTDOORS SS (waiting on ch 57 [D params (3,57)]) never
-opened. The old test stood in with `set_channel(0x39)` — the stand-in is what this task replaces.
+opened. The old test stood in with `set_channel(0x39)` — the real use path replaces that stand-in.
 
 ## The game's real chain [M unless noted]
 
@@ -58,7 +58,7 @@ opened. The old test stood in with `set_channel(0x39)` — the stand-in is what 
   entity object, each as (world centre, radius) = `World::glist_sphere(hash)` transformed by the
   stream matrix (the same math `Scripts::held_hit_targets` already uses for the bullet pass).
 - `useobj::UseObjects::player_activate` takes the world and, per mask-4 SP, tests the use sphere
-  against the entity targets. The model-sphere and placement-matrix fallbacks this task originally
+  against the entity targets. The model-sphere and placement-matrix fallbacks originally
   kept for "SPs whose scripts have created nothing yet" are REMOVED (use-pick-sp-standins):
   `Player_Activate` 0x1a5170's class walk (0x1a5170:126-175) has no 0x1B case, so a mask-4 SP
   with no live entity sphere is simply not use-activatable — the game has no such route either.

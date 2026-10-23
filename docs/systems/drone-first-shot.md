@@ -1,7 +1,6 @@
 # The guard's first-shot timeline (register → first bullet)
 
-Task `guard-first-shot-timeline` (playtest 1016: "guards still shoot way too quickly", "literally
-cant even stun the starting guard without him shooting me instantly before he can even turn").
+Symptom: guards fired almost instantly, before the starting guard could even be stunned.
 The chain below is the game's own, from the tick a guard first registers Bond to the tick his
 first bullet spawns, with the port's status per step. Evidence tags: [M] decompile (+address),
 [D] disc bytes, [L] a live measurement (fresh-boot PCSX2 or the repo's game traces), [S] suggested.
@@ -49,7 +48,7 @@ Patrol/PlayScript/SniperIdle/... — opens with a gate the port was missing:
   script-info; L 01-doors: the guard drifts x −4.919 → −7.17 across lines 0-150].
 
 Port status: **was missing the gate** — the guard interrupted at the ack (control +17) and his
-first bullet landed at control +20. Fixed in this task (drone.rs `look_for_opponent`), plus the
+first bullet landed at control +20. Fixed (drone.rs `look_for_opponent`), plus the
 missing PlayScript sound/alarm arms [M 0x15ba68:180-195] that the gunfire path needs (the cover
 suite's 06 guard pins them).
 
@@ -85,7 +84,7 @@ From 0x68 the game's chain [M]:
 - The stunner contact (05 gate-trench guard): the guard reacts (0x72 — alerted by the contact),
   turns toward Bond, and hits him WHILE the tase drains (~1.5 s of contact to stun; the drain
   ~32/s [L the same doc]).
-- The starting guard's scripted walk (01): the user gets control for the whole 181-frame script
+- The starting guard's scripted walk (01): the player has control for the whole 181-frame script
   (~3 s) before the guard's first combat state — the stun window [L 01-doors.trace].
 
 ## 4. The stun race (Bond touching the guard's back with the stunner)

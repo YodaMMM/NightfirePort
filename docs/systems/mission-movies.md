@@ -1,7 +1,7 @@
 # The mission movies (every SP row's briefing and outro through the window's own path)
 
 **Port status: EXTENDED (mission-movies-e2e, 2026-10-19).** The briefing timeline was pinned for
-The Exchange only (briefing_plays_live, playtest 1016); this doc covers EVERY single-player
+The Exchange only (briefing_plays_live); this doc covers EVERY single-player
 campaign row: which rows wrap to a briefing/outro movie, the state-6 hold, the worst-case-clock
 contract, and the no-movie rows. Facts are tagged [M] code (function + address + decompile line),
 [D] disc, [L] EE snapshot (address + value), [S] suggested.
@@ -62,7 +62,7 @@ completion, e.g. on 0x07000011 itself) hits the default arm → the front-end ma
 **The no-movie rows, listed:** the five driving rows (0x09000001/05/06/02/03 — their codes are
 not in `UsingMovie` and never wrap; the game hands over to DRIVING.ELF in state 9 [M
 0x1d3800:104-108]; the port, which has no DRIVING.ELF, shows its driving notice instead and never
-requests a load [S port choice, playtest 1015-2231]); mission 0x0700000e's end 0x0700000f →
+requests a load [S port choice]); mission 0x0700000e's end 0x0700000f →
 0x0730000f, which is IN the outro switch but NOT in the whitelist, so its "outro" exits state 6
 on frame 1 [M 0x107eb8 + 0x1082e8 — the explicit routing entry exists for exactly that]; and any
 non-end part through the default arm (the map, no movie at all).
@@ -98,8 +98,8 @@ countdown model) the pop rides the frame countdown instead.
 0x183054-60, 0x20ba50-5c]; the abort-while-fading guard 0x1c9f88/0x1c9fa8) — so state 6 opens on
 its first frame with BGFMVPlaying already 1. Without it, one redraw's worst-case 8 front-end
 ticks could carry the flow from the fade through phase 0's state-6 push to its pop before the
-host ever saw ST_MAPLOAD — the briefing skipped (playtest 1016, The Exchange, bisected to the
-gameflow-state-stack merge; fixed on master by starting the decode ahead of state 6 whenever a
+host ever saw ST_MAPLOAD — the briefing skipped (The Exchange, after the
+gameflow-state-stack change; fixed by starting the decode ahead of state 6 whenever a
 briefing is pending).
 
 ## 5. The window's own path (what the tests drive)

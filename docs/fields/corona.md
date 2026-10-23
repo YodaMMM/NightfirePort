@@ -68,7 +68,7 @@ their glist flags +0xF0&0xffff ∈ {0x22D, 0x229}):
 4. **no instance** — obj+0xE0 = obj+0x110 for every class-1 object and the update that would read
    the instance (Corona_Update) is unreachable for class 1; nothing else dereferences it.
 
-## Live checks (for the main agent)
+## Live checks (open)
 
 Pointer chain: `DynamicObjList 0x2705a0 → u32@head+0x14 → obj → +0x14 …`, class byte obj+0xFF ==
 1, glist flags obj+0xF0. On 07000005 at start, corona 0x016df690 (Window_corona, in view of the

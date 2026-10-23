@@ -141,7 +141,7 @@ control label exists in the whole table [M-negative, whole-word scan]. The front
 controller-style list (`Menu_DisplayControllerStyleList` 0x1f44d8, 8 styles) has **no driving
 style** — the 0x30a block is never bound by ACTION.ELF's decomp; it is the driving manual/controls
 vocabulary. `PC_DRIVING_CONTROLS` in `crates/nf-view/src/menu.rs` (next to the on-foot
-`PC_CONTROLS`) carries (key, label id, fallback) rows for the main agent's draw pass; the two rows
+`PC_CONTROLS`) carries (key, label id, fallback) rows for a draw pass; the two rows
 without a game label (B Alt. Fire, R Reload) use id 0 + fallback text like the on-foot table does.
 
 ## 5. The port (`crates/nf-game/src/input/driving.rs`)
@@ -176,10 +176,10 @@ full-chain test runs W+D through 5 ticks (steer 0.25→1.0, throttle 1.0) then r
 the disc's USATxt.dat ($NF_ISO-gated) and asserts the expected words, with sister assertions
 (wrong-word negatives) that can fail.
 
-## 7. Live checks for the main agent
+## 7. Live checks (open)
 
 The shipped `Master.def` bindings are unextractable here, so these PCSX2 checks would settle what
-the sandbox cannot:
+the slim image cannot:
 
 1. **Steer binding shape**: in a driving mission (e.g. MIS01), set a watch on the car's raw steer
    `car+0x2c4` (car pointer at `*(u32*)(0x339190+0xdcc)`) while steering with the **left stick
@@ -197,9 +197,9 @@ the sandbox cannot:
 
 ## 8. What's left
 
-- The main agent's draw pass for a driving controls page: consume `PC_DRIVING_CONTROLS`
+- A draw pass for a driving controls page: consume `PC_DRIVING_CONTROLS`
   (crates/nf-view/src/menu.rs, next to `PC_CONTROLS`) — data only, no drawing delivered.
-- The driving level loop stays unwired (per the task): `PcDrivingInput::tick` is the entry a
+- The driving level loop stays unwired: `PcDrivingInput::tick` is the entry a
   driving level calls per 60 Hz step; nothing in the level code calls it yet.
 - The shipped `Master.def`/`FrontEnd.def` binding data (mission VIVs) remains unextractable on the
   slim ISO — the §3 table is the port's design [S], evidence-tagged per row.

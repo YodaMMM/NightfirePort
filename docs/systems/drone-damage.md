@@ -2,7 +2,7 @@
 
 Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] read in our decomp export (work/decomp/ACTION.ELF) or disassembly,
 [L] read in the level-start snapshot `work/ee_start_05.bin` (07000005, difficulty `GameState+0x28` = 1), [S] suggested.
-Source: a research pass (subagent, 2026-10-09) re-checked here where marked "checked"; the rest is that pass's reading.
+Source: a research pass (2026-10-09) re-checked here where marked "checked"; the rest is that pass's reading.
 
 ## Tuning (`ReadTuningVars` 0x1d3a80) [M, checked]
 

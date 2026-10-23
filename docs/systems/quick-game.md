@@ -1,9 +1,9 @@
 # Quick Game: the scenario wheel's row 0 and the match it starts
 
-quick-game-scenario (2026-10-21, branch `s/quick-game-scenario`) — GAPS G-053 item 6. The
+2026-10-21 — GAPS G-053 item 6. The
 `mp_scenario` wheel's row 0 carries scenario word 0 (a sentinel, not a gametype [D
 MP_SCENARIO_ROWS — see `docs/systems/mp-menus.md` §2]) and its confirm runs the game's own
-"no choices" preset. Everything below is first-hand: [M] = read in this task
+"no choices" preset. Everything below is first-hand: [M] = read for this page
 (`work/decomp/ACTION.ELF/0020c600_C_SBMPSCEN_Handler__FUcP9M_CONTROLUiUiii.c` + a capstone
 disassembly of 0x20c600..0x20c870, `work/elf/ACTION.ELF`, LOAD vaddr−0x106100 = file offset);
 line numbers refer to that decompile. This page only adds the Quick Game detail;
@@ -92,7 +92,7 @@ is random; the port's rule "never add draws" bars inventing a stream position].
   and +0x190/+0x18C carried as scenario 1's derivations (team_game 0) [M mp-menus.md §4].
   Crucially it does NOT touch `mp_player_mods` (+0x1BC/+0x1C8) or `mp_envmods[0]/[1]`
   (+0x1C0/+0x1B8), whose boot values [0,1]/[2,0] (FrontEnd::new, [M bootup 0x1c7e78]) and any
-  custom visit's values persist. (Fixed this task: the previous model re-stamped those fields,
+  custom visit's values persist. (Fixed: the previous model re-stamped those fields,
   which would have played a fresh Quick Game with Location Damage OFF and stomped a custom
   visit's View Distance — the store list is the proof neither happens in the game.)
 - `mp_confirm_start` carries every field into `MpSettings` (the mapping is in mp-menus.md §4);

@@ -1,7 +1,7 @@
 # psi texture-space pipeline (ACTION.ELF) — Reduce, FillTextureDMA, width helpers
 
 The level-load texture pipeline that packs every map texture into PS2 VRAM "texture space".
-`master 20874c31`'s whole-ELF scan flagged several of these as never-mentioned; this doc is
+The whole-ELF scan (2026-10-20) flagged several of these as never-mentioned; this doc is
 the port-side record. Evidence tags: [M] code (decompile file + address), [D] disc.
 
 ## Flow at level load

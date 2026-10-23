@@ -7,20 +7,21 @@ Status: implemented (session + app wiring + tests). Evidence tags: [M] code (fun
 
 The PS2 game has no online mode — every multiplayer path is couch play on four pads [D: the join
 page joins agents through per-pad messages, P_MPJOIN 0x20ca00; there is no network page in the
-menu-def 08000002 of 07000048.bin, parsed 2026-10-15 by the lobby task]. Online play is a port
-feature (the user, 2026-10-15: "I want online support where we can host a mp server and other
-clients can join"). The plan (main agent): **deterministic lockstep over UDP** — every machine runs
+menu-def 08000002 of 07000048.bin, parsed 2026-10-15]. Online play is a port
+feature: **deterministic lockstep over UDP** — every machine runs
 the same MP match from the same seed and settings and exchanges only each agent's per-tick input; a
-per-tick state hash detects desyncs. Direct connect: the host listens on a UDP port, clients join
-by IP:port (internet play needs the host to forward the port; no relay/infrastructure).
+per-tick state hash detects desyncs. This first cut was direct connect: the host listens on a UDP port, clients join
+by IP:port. (Status 2026-10-22: superseded for joining by docs/systems/net-p2p.md, net-short-codes.md and
+net-cloud-lobby.md — join codes, UPnP/NAT-PMP, hole punching and a public lobby list; up to 16 participants with
+bots, `nf_net::MAX_AGENTS`.)
 
-This task wires the lockstep session into the running app: the match start (the same level from
+This page covers the lockstep session's wiring into the running app: the match start (the same level from
 the host's settings + seed), the per-tick input exchange with the sim gate, the per-machine
 camera, the state hash, and the desync/disconnect path back to the lobby.
 
 ## 2. The session layer (consolidated 2026-10-16 into `crates/nf-net`)
 
-> **net-consolidate**: this module (`nf_game::net`) is DELETED. The ONE session layer is 051's
+> This module (`nf_game::net`) is DELETED. The ONE session layer is
 > `crates/nf-net` (stronger protocol: acks + 32-tick bitmap + full unacked-window retransmit,
 > input delay, hash piggyback, keepalives, deterministic shim — see `net-lockstep.md` §9); the
 > features below that the app depends on moved into it or into `nf_view::mpnet`:
@@ -34,14 +35,11 @@ camera, the state hash, and the desync/disconnect path back to the lobby.
 > own disconnected-pad shape [M `psiInput_PollDevices` 0x10ca78]) — the old `PeerLost` ends the
 > match instead; the app's `CoreEvent::ClientLeft` just logs it.
 
-The original 053 design (kept for the record): the networking lived in `nf_game::net`
+The original design (kept for the record): the networking lived in `nf_game::net`
 (crates/nf-game/src/net.rs), not a new `nf-net` crate, for three reasons [S]: (a) it consumes
 `mp::MpSettings` and `player::Input` directly — a crate would either depend on nf-game or
-duplicate the types; (b) the lobby task's design doc already noted that building the same
-networking module twice in parallel collides — a module inside nf-game merges more easily with
-051's `s/net-lockstep-core` work when it lands; (c) no rendering and no new dependencies
-(`std::net::UdpSocket` only) either way. The API is the one task 051
-specifies: `poll() -> Vec<NetEvent>`, `local_input(tick, input)`, `ready_inputs(tick) ->
+duplicate the types; (b) a module inside nf-game avoided a second copy of the session layer; (c) no rendering and no new dependencies
+(`std::net::UdpSocket` only) either way. The API: `poll() -> Vec<NetEvent>`, `local_input(tick, input)`, `ready_inputs(tick) ->
 Option<[Input; 4]>`, plus `host(port)` / `connect(addr, codename)`, `start_match(&settings)`,
 `send_state_hash(tick, hash)`, `agents()`, `close()`.
 
@@ -68,13 +66,13 @@ sim **stalls that tick** (never guesses). A peer silent for 5 s (wall clock, out
 session never feeds sim state, so the no-wall-clock determinism rule holds) is dropped: PeerLost,
 the match ends. The game's nearest behaviour: the join page resets a panel when its agent leaves
 [P_MPJOIN's per-pad leave messages], so the port ends the match and returns to the lobby rather
-than impersonating the leaver with a bot — the bot groundwork (bots.rs) is data-only and not wired
-into the sim yet.
+than impersonating the leaver with a bot — the bots were data-only then (status 2026-10-22: bots play in
+matches, docs/systems/mp-bot-brain-rest.md).
 
 ## 3. The app wiring (`crates/nf-view`)
 
 **Match start.** The menu's confirm builds `MpSettings` and sets `mp_match_settings` +
-`requested_level` [M mp-menu-flow's `mp_confirm_start`, menu.rs]. Before this task the settings
+`requested_level` [M mp-menu-flow's `mp_confirm_start`, menu.rs]. Before this wiring the settings
 were **never read**: the load path always built `MpSettings::deathmatch(level_id)` [M lib.rs's
 `load_impl` mp block], and the menu path loaded through `start_async_load` → `load_with_carry`
 with `mp = false` — the MP core never ran from the menu at all. Now `menu_after`/`movie_tick` move
@@ -120,8 +118,8 @@ through `load_mp_carry`.
 
 **Runnable path.** `--net-host [port] [arena]` (default 27420, Arena 0x07000023) listens and arms
 the demo match for the first join; `--net-join host:port` dials. The lobby pages themselves are
-task 052's (`s/net-online-lobby`'s design doc: mode → host/join pages around the game's own join
-flow); the session behind them implements the same surface this task wired.
+docs/systems/net-online-lobby.md (mode → host/join pages around the game's own join
+flow); the session behind them implements the same surface.
 
 ## 4. The state hash
 
@@ -136,7 +134,7 @@ tick = the shared state agrees; the exchange compares both directions at the sam
 side's hash arrives first is stored; the second one compares — pinned by
 `net_session.rs::forged_hash_desyncs`).
 
-## 5. Deviations and limits of this first cut (all [S], all for the follow-up)
+## 5. Deviations and limits of this first cut (all [S]; several closed since — see net-lockstep.md §10)
 
 - **The shared core is the movement**: remote agents tick `Bond::tick_ctx` (walk/strafe/turn/look/
   jump/crouch, the same ladder/wire/creepwall context as the local body, `water = None` — no swim
@@ -149,13 +147,12 @@ side's hash arrives first is stored; the second one compares — pinned by
   hash desync rather than silently diverging — that is the hash doing its job.
 - **`ready_inputs` returns `Option<[Input; 4]>`** (051's text) with absent slots defaulted; the
   app ticks bonds only for live slots (human_count from the settings).
-- **2–4 agents**: tested host + 1 client (two sims in one process, the 3 GB sandbox cannot hold
-  four full sims); the session layer handles up to 3 clients (slots 1..3) and the level spawn
+- **2–4 agents**: tested host + 1 client (two sims in one process; four full sims did not fit the test
+  machine's memory); the session layer handles up to 3 clients (slots 1..3) and the level spawn
   loop is slot-count driven.
 - **No input delay yet**: pure lockstep (advance t only when all inputs for t arrived). On
-  loopback/LAN the stall is invisible; WAN latency stretches frames. 051's task carries the
-  2–4-tick input delay + ack tuning — the session's INPUT redundancy is already in.
-- **The lobby UI is 052's**: until its pages land, `--net-host`/`--net-join` run the match.
+  loopback/LAN the stall is invisible; WAN latency stretches frames. (The input delay + ack tuning are in `nf-net` since.)
+- `--net-host`/`--net-join` run the match without the lobby UI.
 
 ## 6. Tests
 
@@ -165,18 +162,18 @@ lockstep ticks with the hash exchange (per-tick input equality on both sides); a
 desyncs BOTH sides at that tick; a wrong build id is denied (reason 1) before any slot is
 assigned; a silent peer is dropped inside a shrunk timeout (PeerLost, Failed).
 
-`crates/nf-view/tests/net_match_live.rs` (NF_ISO-gated; serial — two full arena sims per test,
-a 3 GB sandbox OOMs on parallel runs): two app sims in one process over loopback play 1 000 ticks
+`crates/nf-view/tests/net_match_live.rs` (NF_ISO-gated; serial — two full arena sims per test
+run out of memory in parallel on small machines): two app sims in one process over loopback play 1 000 ticks
 of scripted input through the real `load_mp_carry` path (the host's settings + seed on both
 machines, both slots spawned in slot order, each machine swapped to its own slot) — the hashes
 agree at every 15-tick exchange and the final poses cross-check in slot order; a forced desync
 (an extra shared-RNG draw on one side at tick 30) is detected within one cadence; a disconnect is
 reported as PeerLost and the match ends.
 
-## 7. Live checks for the main agent
+## 7. Live checks
 
-Nothing visual ships in this cut (no drawing changed; the MpJoin message box is the only new
-pixels). If the main agent wants to see the flow: two machines (or two processes) with
+Nothing visual shipped in this cut (no drawing changed; the MpJoin message box is the only new
+pixels). To see the flow: two machines (or two processes) with
 `cargo run --release -- --net-host 27420 07000023` + `--net-join <host>:27420`, then:
 - both windows load the arena with **two bonds at two spawn points**; each window's view starts
   at ITS agent's spawn (the host's at spawn 0);

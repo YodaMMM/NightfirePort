@@ -1,7 +1,6 @@
-# Missing-models census (every on-foot level, every model lane)
+# Missing-models census (every on-foot level, every model path)
 
-Task `missing-models-census-2` (re-landing task 725's `missing-models-census`, which was finished but never
-merged): for each on-foot story level, a census through `nf_view::load` counting every lane a model can go
+For each on-foot story level, a census through `nf_view::load` counting every path a model can go
 missing in, pinned per level as numbers; zero misses is the goal. Test:
 `crates/nf-view/tests/missing_models_census_live.rs` (ISO-gated; numbers/ids only).
 
@@ -46,7 +45,7 @@ dispatch's raw types; those all resolve (entity_miss = 0 on every level with the
 **Pinned non-zero numbers (game behaviour, not port defects).**
 - 07000014 `skinless_drones` = 5: the 0x050000b1 non-captain drones — the skin rides only 07000015/16, which
   the fresh session has not loaded when 14 boots. The shipped game renders them skinless too ([D
-  drone-skins-g021 scan of all 99 archives]; master's `drone_skins_all_levels_live` pins the same drones as
+  drone-skins-g021 scan of all 99 archives]; `drone_skins_all_levels_live` pins the same drones as
   `b1_drones − b1_captains`).
 - 07000001 `skinless_script` = 1, RAW ARCHIVE (the one known remaining gap): script 0x0600005b stream 7 asks
   for skin 0x05000037, which 07000005 and 07000006 carry ([Disc probe: census carrier scan]). The game's
@@ -54,13 +53,13 @@ dispatch's raw types; those all resolve (entity_miss = 0 on every level with the
   so the game resolves it. Master's session-skins merge (lib.rs g-021, `wanted` + `session_container`) covers
   drone placements (0x0f param 0) and 0xd9 ScriptPlayer placements' DIRECT `Cmd::Anim` skins only — and
   0x0600005b is reachable from none of 01's 0xd9 placements (0x06000016/86/87) [Disc probe], so the sim still
-  lacks the skin post-load (the census prints it as a diagnostic). Closing the lane is a loader change (the
-  merge appends the foreign archive's maps, so it needs its own golden + main-agent render checks) — left open.
+  lacks the skin post-load (the census prints it as a diagnostic). Closing it is a loader change (the
+  merge appends the foreign archive's maps, so it needs its own golden + render checks) — left open.
 
 ## Tests
 
 - `on_foot_levels_census` — the pinned walk (all numbers asserted per level; the 07000001 raw-archive skin
-  gap pinned at 1 with its lane analysis).
+  gap pinned at 1 with its analysis).
 - `fallback_materials_diagnostic` (`--ignored`, `NF_CENSUS_LEVEL=<level>`) — prints a level's fallback
   material keys per map; the tool that localized the drift.
 - Sister: `nf_formats::texture::tests::short_texture_stays_at_its_index_with_the_overread_bytes` asserts the

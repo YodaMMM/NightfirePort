@@ -1,8 +1,8 @@
 # models-misc — vehicles, effects, broken pieces, front-end, cut-scene props
 
-Lane 044: every remaining model class — the vehicles and big movers, the effect meshes, the broken
-states, the front-end models and the script-only props. Companion to `models/characters.md` (042) and
-the world/weapon lanes. Every claim is tagged [M] (code, function + address), [D] (disc bytes),
+Every remaining model class — the vehicles and big movers, the effect meshes, the broken
+states, the front-end models and the script-only props. Companion to `models/characters.md` and
+the world/weapon pages. Every claim is tagged [M] (code, function + address), [D] (disc bytes),
 [L] (EE snapshot), [S] (the port's suggestion where the decompile is incomplete).
 
 The draw that every class here shares: a dynamic object's visible mesh is `obj+0xD8` (the glist) drawn
@@ -17,8 +17,8 @@ the post list; `psiDrawObjectMatrix` no-ops on an empty glist, so collision-only
 
 ## The kind census (what the disc carries)
 
-`nf-extract kind-census` (this branch) counts, per level archive: kind → placements / resolved / with
-gfx / with collision. Models-lane highlights of the 35 archives (27 on-foot story + MP + front end):
+`nf-extract kind-census` counts, per level archive: kind → placements / resolved / with
+gfx / with collision. Highlights of the 35 archives (27 on-foot story + MP + front end):
 
 | kind | creator [M] | placements | with mesh | drawn by the game? |
 |---|---|---|---|---|
@@ -57,15 +57,15 @@ Kinds whose creators attach NO mesh — the port must not draw them (the sweep a
 - **0x36/0x37 subs** (`Sub_Create` 0x1ad6c0, `MiniSub_Create` 0x182130 — AnimObject 0x5000068/0x5000074
   + anim scripts): **no placements on any on-foot main map** [D kind-census], so nothing to draw.
 
-## Port status per lane item
+## Port status per item
 
-**Static dynamic entities — ported this lane** (`misc_static_sweep` in scene.rs, `Scene::misc_drawn`
+**Static dynamic entities — ported** (`misc_static_sweep` in scene.rs, `Scene::misc_drawn`
 per kind; the census test recomputes every level's expectation from the placements independently):
 0x2E, 0x30, 0x34 (parent), 0x35, 0x3A, 0x3B (visible ones), 0x3F, 0x71, 0xD5, 0xD8, 0xE1, 0xE3, 0xDA
 (+ the two fixed parts), 0xFA/0xFD/0x4A (mesh-ful only). Drawn as World-layer instances at the placement
 transform with the 0x800 ambient dim and the mirror-only (glist 0x400) skip [M 0x1e62d8:38-47].
 
-**Explosion visual — ported this lane.** `Explode_Create` 0x17cbd0 Script_Loads **0x6000052** on every
+**Explosion visual — ported.** `Explode_Create` 0x17cbd0 Script_Loads **0x6000052** on every
 disc caller (0x12cd98, 0x12ce80, 0x17ffa0, 0x180498, the copter's 0x17dbb8 case 6), aligns the script
 matrix to the blast direction (0x2d6210/0x2d6220) and plays it at scale = radius·0.06666667 [M
 0x17cbd0:84-106]. The script's ~40 entities are keyframed glist meshes: `cloud_1` 0x0200021a (4v/2t),
@@ -77,7 +77,7 @@ their live matrices. *Still wrong*: the game's `Mat_Align2Dir` tilts the blast t
 direction — the port's blasts play axis-aligned [S]; overlapping blasts share the newest live entity
 set (`script_entity` finds the newest object).
 
-**Smoke and gas — ported this lane.** One shared mesh: `Gas_Init` 0x1aacc8 attaches 0x0200039
+**Smoke and gas — ported.** One shared mesh: `Gas_Init` 0x1aacc8 attaches 0x0200039
 `smoke_1_dust` (4v/2t [D gfx-list]) to every puff [M 0x1aacc8:81]. Scale starts at param 1 and grows by
 (param 2 − param 1)/life; the rgba starts at the packed param 9 (the muzzle's 0x48403080) and fades to
 the callers' ~0; the spin is `Rand_FRand(π/2·REC)` sign-flipped by a coin; velocity by type (4 given,
@@ -90,12 +90,12 @@ jitter comes from a counter hash; the decomp drops both call sites' life argumen
 
 **Muzzle flash — resolved** (previous lanes; scene.rs Flash layer, roll/scale/alpha randomisation per
 `Draw_MuzzleFlash` 0x1a3fe0). *Remaining*: the muzzle dynamic light's radius/colour wiring, the
-+0x51/+0x52 per-weapon alpha range, and the 0x2000039 smoke puff IS this lane's gas (done).
++0x51/+0x52 per-weapon alpha range, and the 0x2000039 smoke puff IS the gas system's puff (done).
 
 **Coronas (0xFC) — resolved** (corona.rs + scene.rs; the 13/13 golden). The searchlight family's
 corona alpha byte/scale are the known G-033 remainder (the "white blobs").
 
-**Sky clouds (0xD4) — ported this lane**: `sky_instances` also carries them (slot = param 4 [M
+**Sky clouds (0xD4) — ported**: `sky_instances` also carries them (slot = param 4 [M
 0x18d620:27], the variant flag only applies to 0x2A). 07000041 and 07000006 each carry one.
 
 **Front end — measured, no 3D models to port.** 07000048's main map (0100009a) is 291 textures, ONE
@@ -103,7 +103,7 @@ placement (a 0x31 fusebox — a meshless-creator kind, correctly undrawn) and no
 the four sub-maps' objects are sprite/menu resources [D block dump + kind census]. The game's front-end
 visuals are the kind-8 menu-def archive entry (`LoaderProcess` 0x1d4880 case 8 → `MenuManager_Load`)
 drawn as sprite pages by `MenuManager_Create` 0x21b908 — a sprite pipeline the port does not have
-(fix-frontend is its own task; the entry exists, asserted in models_misc_live::frontend_level).
+(the front end is covered elsewhere; the entry exists, asserted in models_misc_live::frontend_level).
 
 **Cut-scene props (`Script_CreateEntity` 0x1d8968) — resolved** by the earlier lanes' machinery
 (nis.rs records `Obj::Entity`; scene.rs poses the non-trigger kinds via `level.by_hash` at the live
@@ -124,7 +124,7 @@ script-spawned breakables/destroyables/pickups (G-031).
    the countdowns, plays sounds 0x5D/0x5E and rolls the 20 % reflicker). `level.rs` still skips the
    variant slots (G-019). Everything needed is measured; the RNG discipline question (FractalThing's 21
    draws) is the same one gas.rs answered with the counter hash.
-2. **Breakables' broken states** — the intact 0x20 meshes draw (world lane's sweep); the death is
+2. **Breakables' broken states** — the intact 0x20 meshes draw (the world sweep); the death is
    unported. [M] `Break_Kill` 0x12b970 spawns debris per COLLIDATA triangle (`Debris_Create_Loop`
    0x1ed548), each piece a real object whose mesh = the material table HEINFO@0x3037c0 +0x74 hashcode
    (`Debris_Create` 0x1aaa00:57); glass (param 0 == 2) shatters into procedural 2-tri VU packets carved
@@ -132,7 +132,7 @@ script-spawned breakables/destroyables/pickups (G-031).
    global shard pool `UpdateAllShards` 0x12b808 / `DrawAllShards` 0x12bef8). Needs the HEINFO table
    (ELF data, the G-041 companion) and the class-0x20 damage plumbing.
 3. **Destroy swap path** — `Destroy_Smash` 0x12bb60 swaps to `celglist+0x40` = the block-0x27 LOD entry
-   (arg proven by disasm 0x12bbb8 `lw a1,0(s1)`); the parser landed this lane (`Map::lod_target`), and
+   (arg proven by disasm 0x12bbb8 `lw a1,0(s1)`); the parser is in (`Map::lod_target`), and
    the C5 doors on 0700000d have NO variant (their map's block is all −1 but 010000cf's) so they stay
    drawn intact after the smash — game-accurate. The swap needs wiring into the draw when a variant
    exists (only 7-16 objects per level carry LOD entries [D]).
@@ -149,9 +149,9 @@ script-spawned breakables/destroyables/pickups (G-031).
    0x17c200:17-25]) — 8 placements on 07000002/04; needs the skins-path extension for hash-resolved
    rigid anim objects.
 
-## --bond render spots (for the main agent)
+## --bond render spots (for visual checks)
 
-One spot per level where a lane model appears; the class and what it should show:
+One spot per level where one of these models appears; the class and what it should show:
 
 | level | --bond x,y,z,yaw,pitch | shows |
 |---|---|---|

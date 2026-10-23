@@ -1,6 +1,6 @@
 # The car models (`data\car\model\<car>.crp` + the shared `.ssh` sheet)
 
-Status: **decoded to the draw buffers** (task `drive-car-models`, 2026-10-15). Parser:
+Status: **decoded to the draw buffers** (2026-10-15). Parser:
 `crates/nf-formats/src/carmodel.rs`; goldens: `crates/nf-formats/golden/carmodel_golden.tsv`
 (the five plain `MISC.VIV` cars) in `crates/nf-formats/tests/carmodel_golden.rs`; CLI:
 `nf-extract carmodels <file.crp|file.viv> [out-dir]` (writes OBJ/buffers locally, never
@@ -128,7 +128,7 @@ golden pins both totals per model.
 The variants are the game's damage/state sets: taxi variant 0.0 = 1087 verts → variant 7.1 =
 0 (fully damaged LOD) [D].
 
-## 8. Live checks for the main agent
+## 8. Live checks (open)
 
 - **C-1 — the wheel parts resolve**: breakpoint `FUN_001c9980` 0x1c9980 during a Paris drive
   with the player taxi; expect the name argument to point at `leftfrontwheel`/… and the

@@ -1,9 +1,9 @@
-# Uncited ACTION.ELF gameplay audit (task 710, 2026-10-16)
+# Uncited ACTION.ELF gameplay audit (2026-10-16)
 
-Branch `s/uncited-gameplay-audit`. The 2026-10-16 coverage pass counted 1979 of 3038 ACTION.ELF
+The 2026-10-16 coverage pass counted 1979 of 3038 ACTION.ELF
 functions cited by the port. This audit re-derived that number, worked through the uncited
 gameplay groups, added citations where the port already covers the function, and ranks the real
-gaps by player impact with ready-to-queue task descriptions.
+gaps by player impact.
 
 ## Method
 
@@ -11,13 +11,12 @@ gaps by player impact with ready-to-queue task descriptions.
   each filename, base = the name before `__` mangling).
 - A function counts as cited if its base name or its address (`0x…`, short or 8-digit form)
   appears in `crates/`, `docs/`, `tools/` or `tests/`.
-- Script: `/home/z/my-project/scripts/uncited_inventory.py` (worker scratch, not in the repo).
 - Before the citations below: **1984 cited / 1054 uncited** (65%). After: **2063 / 975** (68%)
   — 79 functions newly counted, all of them real equivalents that already existed in the port.
   The residual delta vs the coverage pass's 1979 is method noise (their scorer differs slightly;
   e.g. it may not scan `tools/`).
 - Inventory false positives this audit found and corrected: `TextBox_Update` and `C_NIS_Handler`
-  were "cited" only via mentions in `docs/WORKLOG.md` (a task plan, not a citation); both are now
+  were "cited" only via mentions in `docs/WORKLOG.md` (a plan, not a citation); both are now
   cited for real at their port equivalents (see below).
 
 Everything below carries the [M]/[D]/[L]/[S] tags. Decomp C was cross-checked against caller
@@ -97,9 +96,8 @@ greps over `work/decomp/ACTION.ELF/`; where the decompile looked incomplete the 
   `update()` / `register_*` / `set_slot` (lib.rs:977-1020, scene.rs:1852). No scenario can be
   scored or won in a real ride.
 - **Player impact:** every MP mode degrades to spawn + clocks + debrief.
-- **Note:** branch `s/mp-bots-in-match` (task 704) already wired menu→match settings→load and
-  diagnosed the bots starving on empty pickup/opponent inputs; this task is the sibling wiring
-  fix on the live host. Rebase onto it rather than redoing.
+- **Note:** the menu→match settings→load wiring and the bots starving on empty pickup/opponent
+  inputs were diagnosed separately.
 - **Acceptance:** a headless-vs-live parity test: a scripted CTF capture scores in the live host
   the same as in `mp_match_rules.rs`.
 
@@ -199,7 +197,7 @@ greps over `work/decomp/ACTION.ELF/`; where the decompile looked incomplete the 
   cut-scene scripts fire event 9 (determines whether (b) is worth queueing alone).
 - **Acceptance:** (a) event-9 test pins the camera orbit params; (b) census-driven.
 
-### Runners-up (queued behind the top 10)
+### Runners-up (behind the top 10)
 - **DROUTE_Nearest dest pull-back** (`AINetwork_AlterDestFor_DROUTE_Nearest` 0x156088): drones
   chasing a target behind cover fail/stick instead of closing to the nearest reachable point.
 - **CivilianMissionWait** (0x15dbb0, state 0x17): mission civilians must pause at wait-channel
@@ -217,7 +215,7 @@ greps over `work/decomp/ACTION.ELF/`; where the decompile looked incomplete the 
   0x18b578): per-character anim-set loading + pickup AI-path emit — invisible until bots render
   and animate; queue with any bot-render work.
 - **MP_objectBeingDeleted** (0x18ac90) / **MP_getObjExtObj** (0x18bca8): scenario-object
-  deletion/re-resolve — only matters once live objects can be deleted (task 4 dependency).
+  deletion/re-resolve — only matters once live objects can be deleted (depends on item 4).
 - **Scary-link routing** (`AINetwork_SetLinksFlagInCircle` 0x15b548): the port scans radii
   directly (drone.rs:9370-9376 region) but A* ignores the link flags — guards can path straight
   through grenade radii.
@@ -234,7 +232,7 @@ greps over `work/decomp/ACTION.ELF/`; where the decompile looked incomplete the 
   no +0x5A2 store (the live alert-2 look is 0xa5/0x56).
 - **Interogate cluster 0x39-0x3D (0x1616c0/0x161860/0x162338/0x1729f0) + the DroneVision
   interrogate-assist trio (0x178308/0x178318/0x178348):** self-contained (only mutual callers);
-  one agent read an 07000007 mission use, the caller grep found none — resolve with the live
+  one reading found an 07000007 mission use, the caller grep found none — resolve with the live
   check below before spending effort.
 - **DSTATE_AbseilInit/Hang 0x8E/0x90 (+0x8F/0x91/0x92): dormant** — start states of
   DroneTypeSettings rows 27/28; no disc placement uses dtype 27/28 [D census].
@@ -308,10 +306,10 @@ inline in the port): `NDrone2_HasOpponent` 0x14ad58 (seen/lost_sight), `SeenAndA
 ## Coverage corrections
 
 - `TextBox_Update` (0x2237c8) and `C_NIS_Handler` (0x205f10) were counted "cited" by name greps
-  that matched `docs/WORKLOG.md` mentions (this task's own plan) — not real citations. Both now
+  that matched `docs/WORKLOG.md` mentions (a plan) — not real citations. Both now
   carry real citations (above). Future coverage passes should exclude WORKLOG from the corpus.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **OLD-chain census (decides the init_DMODE_* family):** parse every level's drone placements
    (kind 0x0F) and list the behaviour id (param 5, `piVar19[0x12]` [M 0x14b300:495-503]). If any
@@ -320,11 +318,11 @@ inline in the port): `NDrone2_HasOpponent` 0x14ad58 (seen/lost_sight), `SeenAndA
 2. **Interrogate reachability:** in level 07000007 (or wherever a challenge/interrogate
    trigger exists), watch whether `DroneVision_SetInterogateAssist` (0x178308) is ever entered
    (a call-count watch on the function entry suffices). Expected: 0 hits → the Interogate
-   cluster is dead; >0 → queue the assist states.
+   cluster is dead; >0 → the assist states need porting.
 3. **C_NIS_Handler census:** list which mission archives' kind-8 menu defs bind page
    0x1000003e controls (the 0x308840..0x308ca0 range) to script hashes, and which loadable
    cut-scene scripts fire NIS event 9. Decides whether the mission-driven cut-scene route is
-   worth queueing alone.
+   worth porting alone.
 4. **Alarm switch live view (gap 1):** on 07000009/0A, trigger a guard to run to the alarm
    (or fieldprobe the alarm switch object) and record: the switch channel state byte before/
    after the press anim, and `SetMissionFailReason`'s slot (+0x594=0x32 path). Anchors the
@@ -332,10 +330,3 @@ inline in the port): `NDrone2_HasOpponent` 0x14ad58 (seen/lost_sight), `SeenAndA
 5. **Astronaut render check (gap 7):** `--bond` spot in 0700001b at a suited guard mid-combat —
    should show the float bob (no floor snap) and, after a hit, the AstronautHit variant.
 
-## What ran
-
-- `cargo build --offline --release -p nf-game -p nf-view -p nf-formats` — clean (warnings
-  pre-existing). The diff is comment-only; no behaviour change is possible from this branch's
-  code edits.
-- Full suite (fast runner, `tools/test/suite.py`) started 17:52 UTC on this branch's tree —
-  results reported in `docs/reports/uncited-gameplay-audit.md`.

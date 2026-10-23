@@ -1,6 +1,6 @@
 # SpaceLaser_Update 0x1aa3f8 — the arm/fire state machine (port plan)
 
-Owner task: unported-scripts-1 (2026-10-21) researched and documented this; the code port is
+Researched and documented 2026-10-21; the code port is
 **remaining work**. The creator's data is already ported (`crates/nf-game/src/space_laser.rs`,
 `from_placement` = `Create_SpaceLaser` 0x1aa8b8). The disc ships exactly one kind-0x38
 placement: 0700001b PL#108 — armed by switch channel 19, killed by channel 14 [D
@@ -81,7 +81,7 @@ Pre-switch (every tick, :60-66): if the arm channel word (+4) is 0 **or**
 2. `SpaceLaser::update(&mut self, ...)` mirroring the five states with the port's switch
    channel API (`switch_channels` equivalent), the port's ray (`Collide_RayIntersect`
    stand-in), `Bullet_init` and a beam-object record (the game's class-0x40 object: store
-   `{pos, hit_point}` — the draw side is the main agent's).
+   `{pos, hit_point}` — the draw side is separate).
 3. `register_pos(&self) -> [f32; 3]` = the Register callback (returns obj+0xC0).
 4. Real-path test: 0700001b live (the placement's params drive ch 5/6/7), assert: idle →
    (arm channel 19 set) state 1 with player-0 target; state 2 fires a beam + resets

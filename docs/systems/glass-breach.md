@@ -1,8 +1,7 @@
 # The Mayhew glass breach — guards through the windows
 
-The user, 2026-10-16 evening: "beginning of mayhew level guards are supposed to break through the
-glass". Level 07000001 (Double Cross part 1 — the Mayhew estate). Builds on 750e
-glass-shatter's breakables (`docs/systems/breakables.md`, `crates/nf-game/src/breakable.rs`).
+At the start of 07000001 (Double Cross part 1 — the Mayhew estate) guards break through the window
+glass. Builds on the breakables (`docs/systems/breakables.md`, `crates/nf-game/src/breakable.rs`).
 
 ## The scene
 
@@ -49,7 +48,7 @@ health < 0.0 → Break_Kill(pane, lastHit)                          // :49-51
   the guard walks through) and the sound: **kind 2 always 0x2e** (no RNG draw — the shared stream
   is untouched by glass kills [M 0x12b970:65-76]).
 - The pane's triangles are surface 0x10 glass; `Bullet_CollisionHandler`'s glass rule lets ROUNDS
-  pierce (750e), but the class-2 body contact is the collision pass's ordinary mirrored hit — the
+  pierce, but the class-2 body contact is the collision pass's ordinary mirrored hit — the
   pane DOES stop/blocks bodies while intact (the guards pile against it until it breaks).
 - `Break_DoBreak` 0x12c168 (the scripted kill): walks the object list for the **first** intact
   class-0x20 object whose world sphere contains the point [M :39-51], builds the synthetic
@@ -68,7 +67,7 @@ health < 0.0 → Break_Kill(pane, lastHit)                          // :49-51
   by the body radius 0.35 [*suggested* — the port's standing body half-width; the game's contact
   is the full collision volume against the pane's triangles], drain `SqDist(prev, pos)·20`, kill
   at < 0 with sound 0x2e, no RNG [M 0x12bfd8:23-51, 0x12b970:65-76]. Kind-2 kills never draw the
-  shared stream (750e's determinism rule holds).
+  shared stream (the determinism rule holds).
 - `Breakables::do_break(pos)`: `Break_DoBreak` [M 0x12c168] — the first intact breakable whose
   bounds (grown 0.2 [*suggested*; the game's sphere is the glist world-sphere]) contains pos, the
   standard kill. Wired to NIS event 0x0A in `nis.rs` (the previous-stream object's position, the

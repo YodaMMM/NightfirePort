@@ -1,6 +1,6 @@
 # The silencer's white artifact: the skin-extra copy of the +0x7C view-entity (2026-10-20)
 
-User (2026-10-19): "weapon attachments, like the silencer, have a weird white thing on them."
+Symptom (2026-10-19): weapon attachments such as the silencer showed a white artifact.
 The silenced P2K (record 0x03) drew the suppressor mesh TWICE: once as the fp skin's rigid
 extra part and once as the +0x7C datum-0 attach (fix-silencer-visual). Both copies carry the
 mesh's additive sheen batch, so the two adds stack — a blown-out white sleeve around the
@@ -29,7 +29,7 @@ attach stays the mesh's only draw.
    ALPHA_1 = 0x7f00000048 (additive Cs·As + Cd [M render.md]), ZBUF_1 = 0x0131000000 (no depth
    write), TEST_1 = 0x5001b inherited, vertex rgba (255,255,255,64), map texture 3 = 64×64 opaque
    (alpha 255 everywhere) specular gradient with 384/4096 pure-white texels. Two overlapping
-   additive copies double the add — the user's white artifact. The first batch (the tube, 34
+   additive copies double the add — the white artifact. The first batch (the tube, 34
    verts, ALPHA_1 0x44 normal, vertex alpha 128) is unaffected by the doubling (opaque replace).
 5. **Datum 0 sits at the muzzle** [D the skin's datum table]: id 0, bone 38, t (−0.0013, 0.0909,
    0.1415), q ≈ identity — the datum attach and the bone-43 extra occupy the same world spot.
@@ -51,7 +51,7 @@ once (the datum-0 attach). No draw code changes; the GPU/blend paths are untouch
   both textures resolve in the scene (the white-fallback count of the view model stays 0);
 - the sister weapon without an attachment: the bare P2K's body parts keep their textures.
 
-## Live checks for the main agent
+## Live checks (open)
 
 - `--give 2 --bond <05 spawn> --shot`: the bare P2K first person, close on the muzzle — NO
   suppressor, no white sleeve (pre-fix: the suppressor's tube+sheen sat on the gun).

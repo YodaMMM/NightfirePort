@@ -14,7 +14,7 @@ channel-writer chain the ride end rides on.
 | The −52 landing cut-scene SP #289 (m41, at 0, −53.53, −3.38) | kind 0xD9, script 0x060006cf, mode 0, stay 1, **mask 1**, **out 0x40**, gate 0 [D placement params] |
 | The landing script 0x060006cf (**loadable pack 0780004a.bin**, the 0xC record (0x060006cf, 1)) | len 575; s9 t0 **event 0x04** (Player_Disable); s26 t575 **event 0x06 [1]** (the handback pose); s27 t575 **event 0x0d [0x22, 1]** [D decode] |
 | The lobby cut-scene SP #276 (m41) | kind 0xD9, script 0x060006d3, mode 0, stay 1, **mask 1**, **out 0x84** [D placement params] |
-| The lobby script 0x060006d3 (**pack 0790004a.bin**, the 0xC record (0x060006d3, 2)) | len 800; s9 t0 event 0x04 (Player_Disable); s9 t800 **event 0x12 [0x0720004a]** — the level exit (a movie code; `GetLevelToLoadFromMovieCode` 0x1d3560 → 0x07000013, docs/reports/fix-level-chain.md) [D decode] |
+| The lobby script 0x060006d3 (**pack 0790004a.bin**, the 0xC record (0x060006d3, 2)) | len 800; s9 t0 event 0x04 (Player_Disable); s9 t800 **event 0x12 [0x0720004a]** — the level exit (a movie code; `GetLevelToLoadFromMovieCode` 0x1d3560 → 0x07000013) [D decode] |
 | The bottom plate #62 (m41, 3.03, −156.21, −3.35) | TouchOnce, out **0x84** [D placement params] |
 | 07000013's spawn touch #153 | TouchOnce, out **0x4a**, covering the start #9 (2.16, −369.10, 10.96) [D 07000013.bin; walk_07000013_live] |
 
@@ -60,7 +60,7 @@ channel-writer chain the ride end rides on.
    trigger (mask 1 = the out channel, step 3) → the lobby cut-scene 0x060006d3 (pack 0790004a)
    plays; at its t800 the **event 0x12 [0x0720004a]** exits the level [D; M 0x1d94c0 case 12:
    `Player_RamSave` + `ResetMap_LevelToLoad(p0, 1, 0)`] → 0x07000013 (the movie-code resolve,
-   docs/reports/fix-level-chain.md).
+   the level-chain work).
 10. **07000013** — Bond spawns INTO touch #153, which writes **ch 0x4a** [D]. The mission monitor
     watches every part's records of the mission [M Mission_MonitorObjectives 0x1827d8:22-38 — the
     rows filter on BaseMap; the port: mission.rs monitor() over `LEVELS`], so 4a's "Gain access to
@@ -77,7 +77,7 @@ channel-writer chain the ride end rides on.
   real writer is 07000013's spawn touch #153 (step 10) [D], already pinned live by
   `walk_07000013_live::the_warm_chain_arrives_with_all_previous_channels_on`.
 
-## 4. Open item (not this task's)
+## 4. Open item
 
 The handback pose (step 7): the event-6 record's object matrix composition — base-composed
 (1.80, −107.66, −6.83, a void column) vs raw (1.80, −54.13, −3.45, the freeze pose on the

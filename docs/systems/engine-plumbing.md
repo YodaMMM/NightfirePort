@@ -1,8 +1,8 @@
 # Engine plumbing the guard AI reaches: parse / list / loader equivalents
 
 The call-tree check (`tools/calltree/calltree.py`) walks the game's code from every guard-AI DSTATE
-the port mentions and lists functions the port never names. This doc covers the 31 engine-plumbing
-functions task `plumbing-equivalents` owns: the map parser's block handlers, its binary-reader
+the port mentions and lists functions the port never names. This doc covers 31 engine-plumbing
+functions: the map parser's block handlers, its binary-reader
 primitives, the generic list/stack containers, and the streaming loader tail. For each: what the
 game does [M], and where the port does the same work (with the citation the check greps for), or
 why the port never reaches it on the shipped path.
@@ -96,7 +96,7 @@ identical byte sequence [M]. Cited at both sites.
   only caller is `parsemap_parsemap` 0x1d1cf0 [M]. The port reads whole, exact-size entries through
   LevelBin (crates/nf-formats/src/levelbin.rs) — nothing streams, nothing to shrink; cited there.
 
-## Port-side changes in this task
+## Port-side changes
 
 - `parsemap_block_hashlist` 0x1d1e78 ported as `map::hashlist_entries` (crates/nf-formats/src/map.rs):
   `(size−4)/4` little-endian dwords, `0x06000000` entries dropped (the game skips that value before
@@ -105,7 +105,7 @@ identical byte sequence [M]. Cited at both sites.
   over every map entry on the disc with a sister assertion.
 - Citations added at the port's equivalent-work sites listed above; nothing else behavioural.
 
-## Live checks for the main agent
+## Live checks (open)
 
 None needed: every claim here is [M] decompile or [D] the measured disc census; no new field
 meanings were read from memory.

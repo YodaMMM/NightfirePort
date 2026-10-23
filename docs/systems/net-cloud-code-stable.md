@@ -8,7 +8,7 @@ hosting session: a friend who was given HXKR must still be able to join after th
 
 Two-window test against the live Cloudflare service: the host got code `HXKR`, the entry listed and let a
 joiner in. When the match started, the host's reach line showed code `CSVD` — the host re-registered under a
-new code at the match start. (Observed against the deployed worker; not reproducible in the sandbox.)
+new code at the match start. (Observed against the deployed service; not reproducible offline.)
 
 ## The mechanism [S port design, cited to the code]
 

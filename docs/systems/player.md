@@ -1,7 +1,7 @@
 # Bond on foot: movement, collision, camera, aim, crosshair
 
 Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] decomp export (work/decomp/ACTION.ELF), [L] level-start snapshot
-`work/ee_start_05.bin`, [S] suggested. Source: two research passes (subagents, 2026-10-09); the items marked
+`work/ee_start_05.bin`, [S] suggested. Source: two research passes (2026-10-09); the items marked
 "checked" were re-read here. 60 Hz: `FRAME_RATE_MUL` 1, `REC_FRAME_RATE` 1/60 [L].
 
 ## Objects

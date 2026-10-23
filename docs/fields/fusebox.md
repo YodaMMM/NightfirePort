@@ -125,7 +125,7 @@ decompile:
 7. **`gone`** — the port sets `gone` when both groups are empty (fusebox.rs:107); the game
    keeps the object alive (inert) forever.
 
-## Live checks (main agent)
+## Live checks (open)
 
 Needs 07000014 (the port's fusebox level). Chain: `DynamicObjList` 0x2705a0 → head+0x14 →
 next obj+0x14; filter `obj+0xFF == 0x3C`; ext = u32 at obj+0xE0.

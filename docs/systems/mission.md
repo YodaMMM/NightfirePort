@@ -1,9 +1,8 @@
 # The mission layer (`Mission_*`, nf-game::mission)
 
 The game's mission/objective system, ported from ACTION.ELF (fix-mission). The data model, the per-tick
-update, the events the view renders, and the level-end/restart flow. **The parallel tasks (032–037
-per-mission walkthroughs, 038-fix-actors, 210-fix-progress) build on this module — this document is the
-API contract.**
+update, the events the view renders, and the level-end/restart flow. **The per-mission walkthroughs, the actors and the progress layer build on this module — this document is
+the API contract.**
 
 Tags: [M] decompile (work/decomp/ACTION.ELF), [L] EE snapshot / static data, [S] suggested.
 
@@ -124,7 +123,7 @@ state id mapped to a standing HostageIdle, which is why he never walked). Ported
 mission path, done → Done, Bond far behind → Wait), AllyLeadWait 0x20 (0x15eda8), AllyLeadDone 0x23
 (0x15f2e8). The ch 0xB release comes from the level-start intro's event 0xD [L ee_start_07000001] — the
 escort flow end to end: intro → ch 0xB → Mayhew leads Bond along path 0 (kind 8) to the bunker plate →
-Touch #137 (out 0x10, filters [player, skin 0x4F]) → LOAD_LEVEL → 0x07000002. Not ported (038-fix-actors):
+Touch #137 (out 0x10, filters [player, skin 0x4F]) → LOAD_LEVEL → 0x07000002. Not ported when written (most since ported — docs/systems/actors.md):
 the flee/combat sub-states 0x1e PlayerInWay, 0x1f Hide, 0x21 MissionWait, 0x22 BondCombat, 0x28
 GoToGoalPosition, and the exact `ObjectMissionPathDistance` (0x153f50) wait rules (the port uses
 straight-line stand-ins).
@@ -135,7 +134,7 @@ straight-line stand-ins).
   0x182540, drawn by `C_GCPAUSE_Handler` 0x204408) is not ported~~ → the data + flow are ported
   (objective-hints: `Mission::num_vis_objectives`/`objective_state`, the `pause_objectives`/
   `pause_objectives_sel`/`pause_hint` FrontEnd state and the ✕ flow — docs/systems/objective-hints.md);
-  the DRAWING of the ✕ hint box is the main agent's.
+  the DRAWING of the ✕ hint box is draw-side.
 - The fail/death 0x40000042 menu is a level restart; the red death fade is not drawn.
 - ~~`DroneFunc_SetMissionFailReason` (0x13e560) is not wired to the drone paths that call it~~ → wired
   (fix-party-mission: the punch reasons 5/6 `punch_impact`, the death reasons `on_init_death`, the
@@ -143,7 +142,7 @@ straight-line stand-ins).
   taser family's own case-7 arms bypass it, and Stunned_Recover's forwarded case 7 re-runs it). The
   channels 0x60/0x61 hooks are, and `mission_fail_reason` mirrors 0x13e560's label/channel switch.
 - A cold load of a mid-mission level leaves previous parts' objectives at their `.data` states (the
-  game's saves carry them via LS_MakeMission — `MissionSave` is the port's hook for 210-fix-progress).
+  game's saves carry them via LS_MakeMission — `MissionSave` is the port's hook for the progress layer, docs/systems/progress.md).
 - Ch-0 conditions read the raw `switch_channels[0]` (the game has no zero guard [M 0x1827d8:33-37]);
   the port's `Channels::set` refuses 0, so an out-0 trigger cannot set it.
 
@@ -161,7 +160,7 @@ The full path the player sees, ported end to end (nf-game::death + mission.rs):
    two blood sprites 1 px/tick and sets the pane's state word to 1 at full cover [M :23-34]. The gate is
    `w − viewer.w ≥ viewer.h`, viewer.h = 448 [M 0x19f4e8:33], template width 512 [L BloodSprInfo 0x2bcfd8]
    → **448 ticks (~7.5 s)**. The pane's template colours are 0x007f7fff (two sprites, layer 9, textures
-   0x0300005a/0x03000002 [L 0x2bcfd8]) — the render-side fade is the main agent's check.
+   0x0300005a/0x03000002 [L 0x2bcfd8]) — the render-side fade needs a render check.
 3. **The channel** — ch 0x62 rises when the pane covers the screen or the player presses action 25 (✕ /
    Start, player 0 — the skip), unless the menu already resolved the death [M 0x190bb0:29-33].
    `Mission_Update` reads ch 0x62 [M 0x182c60:21] — **not health**; the port's old health read fired the
@@ -183,7 +182,7 @@ The full path the player sees, ported end to end (nf-game::death + mission.rs):
    multiplayer it is the current level instead [M 0x1830a0:6-9].
 6. **The port's API** — `Mission.menu_open` / `menu_choice` (`MenuChoice::Restart|Quit`), the
    `Event::MenuOpen` event, and `Drones::fail_menu_open()` / `fail_choose_restart()` /
-   `fail_choose_quit()` (crate::death) for 180-fix-menus to draw and answer. While nothing draws the
+   `fail_choose_quit()` (crate::death) for the front end to draw and answer. While nothing draws the
    menu, `Drones.auto_restart` (default true) answers Restart the tick the menu opens — the pre-menu
    behaviour, behind the flag. Quit queues `level_exit = 0x07000048`; the viewer logs it and holds (the
    front end is not ported).
@@ -191,7 +190,7 @@ The full path the player sees, ported end to end (nf-game::death + mission.rs):
 **What the Restart restores (fix-restart-target)** — the fail/death menu's Restart is the WARM arm
 `IsWarmReset = 1` [M 0x216618:20], and it is aimed at `GameState+0xC` — the level Bond is on — NOT
 `BaseMap` (that is the PAUSE menu's Restart, `C_GCPAUSE_Handler` 0x204408:139, which the port keeps
-cold-to-BaseMap; the playtest that named "the very beginning map, 05" was the fail menu). What the
+cold-to-BaseMap; the earlier "back to the very beginning map" observation was the fail menu). What the
 reload produces [M]:
 
 - **The channels survive** — `Init_SwitchChannels` only runs `IsWarmReset == 0` [M 0x1d5080:48-50],
@@ -244,13 +243,13 @@ corrected this section: the fail/death menu's Restart is WARM on the entry check
 COLD arm — the PAUSE menu's Restart [M 0x204408:139] — and the mission-select cold load). The
 trigger-exit level change is the other WARM arm (`ResetMap_LevelToLoad(next, 1, 0)` +
 `Player_RamSave` [M 0x1b2318:111-116], fix-level2's carry). The carry is exactly what looped the
-user's 07000007 session (playtest 2026-10-12) — but only because that reload carried the DYING
+07000007 session (2026-10-12) — but only because that reload carried the DYING
 state's ch 99; the game's entry checkpoint predates the fail, and the fixed restart no longer loops
 (the NF_ISO tests prove both arms).
 
 Falling deaths and the chasm/death-NIS volumes reach this path through Bond's health; the death NIS
 scripts themselves (`Script_IsDeathNIS` 0x1dae60, the 07000011 atrium fall) play their script and the
-sim's death sequence runs underneath — the render-side check is the main agent's. **Verified
+sim's death sequence runs underneath — the render-side check is open. **Verified
 (fix-restart-target)**: the NF_ISO tests `fail_restart_reloads_the_current_level_warm` and
 `restart_restores_the_entry_checkpoint_with_the_health_floor` (crates/nf-view/tests/
 fix_restart_target_live.rs) drive the real fail path on 07000007 — the punched-guest ch 0x60 → ch 99
@@ -267,7 +266,7 @@ triggers none of it.
 
 - ~~The pause-screen objectives list (as before) is not ported~~ → ported (objective-hints, above).
 - ~~The fail/death 0x40000042 menu is a level restart; the red death fade is not drawn~~ → the menu
-  logic + API are ported (§8); the menu DRAWING is 180-fix-menus'; the red fade drawing (pane 12's
+  logic + API are ported (§8); the menu DRAWING is the front end's; the red fade drawing (pane 12's
   growing sprites, `death.pane_on`/`death.ticks`/`death.covered`) is render-side, not drawn yet.
 - `DroneFunc_SetMissionFailReason` (as before) — the 0x60/0x61 hooks are ported.
 - The death substate's animation (substate 0xd's fall) is not animated by the sim; Bond just stops

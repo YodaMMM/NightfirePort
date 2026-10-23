@@ -2,8 +2,8 @@
 
 *All of this page is a port feature [S]: the PS2 game has no online mode (docs/systems/net-lobby-list.md,
 docs/systems/net-p2p.md). The only game facts involved are the lobby pages themselves, already covered by
-those docs. The user's request (2026-10-19): "fuck off with your 30 character code. make it 4 characters",
-their chosen shape: "Home server, set by players".*
+those docs. The goal (2026-10-19): 4-character codes instead of the long code, through a home server set by
+players.*
 
 The long self-contained join code (docs/systems/net-p2p.md §2, 16 Crockford base32 symbols, `H0K7-RRBB-3G40-0612`)
 stays exactly as it is and remains the fallback. When the player has set a lobby server
@@ -15,7 +15,7 @@ into the exe), hosts get a **4-character code** from that server and joiners can
 - Alphabet `SHORT_CODE_ALPHABET` (`directory.rs`): `23456789ABCDEFGHJKMNPQRSTVWXYZ` — digits 2-9 plus the
   Crockford letters minus I/L/O/U, 30 symbols; 30^4 = 810 000 codes [S]. No 0/O and no 1/I/L can be confused
   (U is excluded for V, as in Crockford base32 — the long code's alphabet, `joincode.rs`).
-- 4 symbols, shown bare (`ABCD`, no dash — the user asked for 4 characters).
+- 4 symbols, shown bare (`ABCD`, no dash).
 - The server assigns it to a REGISTER's entry, unique among the live entries, stable while the host keeps
   refreshing (the entry is keyed by the source address, directory.rs), expiring with the entry (`EXPIRE_MS`).
   Generation: a std-only xorshift seeded from the clock + `RandomState` [S]; collisions are re-drawn.
@@ -59,7 +59,7 @@ Versioning and compatibility:
   `LOOKUP_WINDOW_MAX` = 30 [S] — codes are brute-forceable at 810 k); over the limit → `NFDN` reason 1.
   Unknown code → reason 0. Bad version → reason 2. `LIST` is untouched.
 
-## 4. Front-end surface (no drawing here — the main agent draws)
+## 4. Front-end surface (no drawing here)
 
 - `MpSession::join_code_display() -> Option<String>` (menu.rs): the short code while fresh, else the host's
   long code — what the lobby's code line shows (it is also what `MpReach.code` carries now, so the existing

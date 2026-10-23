@@ -1,10 +1,9 @@
 # The night-sight / x-ray goggles (viewer+0x236, BL+0x920)
 
-Task `goggles-nightsight-xray` (2026-10-23). The flow controller is `HUD_MonitorNightSight`
+2026-10-22. The flow controller is `HUD_MonitorNightSight`
 0x19e9d8 (820 B), called by `HUD_Update` 0x19a088 **line 19** (right after the crosshair,
 before the pane walk), which `Player_Update` 0x193600:76 calls per frame. Port: the machine
-is `nf_game::hud_pane::MonitorNightSight` (delivered by the unported-hud-1 census task); this
-task wired it into the Sim — `Sim::hud_tick` ticks it (inside `run`, the same tick order),
+is `nf_game::hud_pane::MonitorNightSight` (docs/systems/hud-panes.md), wired into the Sim — `Sim::hud_tick` ticks it (inside `run`, the same tick order),
 `HudState::goggles` holds the state, `Sim::goggle_mode()` / `Sim::goggle_battery()` are the
 getters for the renderer's consumers.
 
@@ -20,7 +19,7 @@ getters for the renderer's consumers.
 
 ## The guard ladder [M 0x19e9d8:17-49, each in decompile order]
 
-1. `BL+0x94a == 0` → return. **This byte is NOT the goggles-carried flag** (the task brief's
+1. `BL+0x94a == 0` → return. **This byte is NOT the goggles-carried flag** (an earlier
    guess): its writers are `Player_Init` 0x1910f8:150 (=1), `Player_Enable` 0x195498:51 (=2),
    `Player_Disable` 0x195f70:16 (=0), and `Player_Update` 0x193600:79-88 runs the player only
    while it is 1 (values >1 tick down one per frame — a re-enable delay). It is the
@@ -38,7 +37,7 @@ While the held weapon's id byte (`player+0xDC` weapon block +0x62) is 0x5D (']')
 - gate: `*(short*)(BL+0x7e8 → +0xF4) != 0` → return. BL+0x7e8 is the FIRST-PERSON VIEW MODEL
   object (`Player_InitWeapon` 0x1a7ef8:64 stores it) and +0xF4 is its current anim id —
   `Player_WeaponSelect` 0x1a2cc0 writes 8/3/1 there (the variant-swap/draw/holster states).
-  The old hud_pane comment called this "the zoom pane" — wrong reader, fixed in this task.
+  The old hud_pane comment called this "the zoom pane" — wrong reader, since fixed.
 - `viewer+0x236 = 1` (mode 1 forced, every frame the item is out and the anim is idle);
 - night pane enable = 1 (+0x102 = 0);
 - `BL+0x961 = 1`;
@@ -106,7 +105,7 @@ the latch [M :56-58]. The request path has no owned gate in the decompile, so wh
 real game arms the view on a goggles-less level after the key press (the switch machinery
 drawing an unowned 0x5D) is **open** — see the live checks below.
 
-## Port mapping (this task)
+## Port mapping
 
 | game | port |
 |------|------|
@@ -117,12 +116,12 @@ drawing an unowned 0x5D) is **open** — see the live checks below.
 | weapon block +0x62 / +0x63 / +0x64 | `gun.weapon` / `gun.switch_request` / `gun.saved_weapon` (now written at every switch start) |
 | view-model anim +0xF4 | `gun.switch_state != 0 \|\| gun.fire_state \|\| gun.reload_state != 0` |
 | weapon+0x60 bit 0 | `self.aiming` |
-| `Input_Action(p, 0xd, 4)` | `Input::goggles_action` (pad action 13 edge via `PadDriver::tick`'s `mask_of`; keyboard N in lib.rs) — stashed to `HudState::goggles_press` in `step_bond`, consumed in `hud_tick` |
+| `Input_Action(p, 0xd, 4)` | `Input::goggles_action` (pad action 13 edge via `PadDriver::tick`'s `mask_of`; no keyboard key — the disc grants the goggles nowhere) — stashed to `HudState::goggles_press` in `step_bond`, consumed in `hud_tick` |
 | `Player_SetCamMode`/`Camera_Reset` clears | the `nis::Request::PlayerDisable` arm clears mode + pane enables |
 
 Not net-encoded (the `stabilise` precedent — the wire has no lane; MP is gated anyway [M :28]).
 
-## Consumers (for the renderer tasks — the main agent draws these)
+## Consumers (for the renderer)
 
 The panes' data getters exist in `hud_pane.rs` (`NightSightFx`: the tint/jitter/step per
 `HUD_UpdateNightSightPane` 0x19d218 / `HUD_UpdateXRayPane` 0x1a1410). Mode readers elsewhere:
@@ -140,7 +139,7 @@ the crosshair 0x19e6d0:80, `Player_LaserPointer` 0x1a65d8:151, `Env_Breath` 0x17
    `switch_request = 0x5d` but never touches the mode or the latch [M :56-58];
 4. the arm path auto-stows the item to the pre-goggles weapon and the mode + latch persist.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. Fresh boot (no save-state resume), a level WITHOUT the goggles (e.g. 07000005), press the
    goggles key once: watch viewer+0x236 (expect 0 until/unless the item equips) and the

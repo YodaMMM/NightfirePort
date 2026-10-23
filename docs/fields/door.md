@@ -85,7 +85,7 @@ slots, one per group id. `DoorMsg` 0x30cd04 (u32) gates `Door_DoMsg` in `Check_T
 | tag+0x02 / tag+0x04 | +0x6E frames−1 / +0x54 speed (1/rate, rate 0 → 1/30) |
 | tag+0x08 | +0x0C anim id (`m_paths[record+0x44]`) |
 
-(The task brief's probe — "DOORINFO+0x28 = LOAD_LEVEL gate channel from placement param 2,
+(An earlier probe — "DOORINFO+0x28 = LOAD_LEVEL gate channel from placement param 2,
 `lhu v1,56(s1); sh v1,40(s0)`" — is **not a DOORINFO field**. Those two instructions are
 `Trigger_Create` 0x1b1720 writing byte **0x28 of the TRIGGER instance** (`__s + 10` on an
 `undefined4*` base = byte 0x28) from tag+0x38, and the value is the *original* param 2 only

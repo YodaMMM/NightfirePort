@@ -2,7 +2,7 @@
 
 The MP body data: who the 29 playable characters are, which archive carries each mesh, and the
 animation set a third-person body runs. Everything here is the game's own tables, read from
-ACTION.ELF and the arena archives; the drawing itself is the app's (this task delivers data only).
+ACTION.ELF and the arena archives; the drawing itself is the app's (data only here).
 
 Rust side: `nf_formats::mpanim` (the tables + the pure pose), `Scene::mp_bodies` (the parked
 bodies), `nf_game::mp::MpSettings::players[slot].skin` (the per-slot character word).
@@ -200,7 +200,7 @@ mechanism the port's drone held-weapons use. The muzzle offset for effects is `w
 - Render aids: `nf-view <iso> 07000023.bin --mp-match 2,2,0,9 --frame 60 --mp-look 1,2.6,1.3,0.6
   --shot out.png`.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. `MP_skins` bytes [D already — the ELF is the evidence]; the disc-vs-snapshot flag column:
    confirm a PCSX2 save-state mid-MP-match shows `MP_skins[i]+0x0c` (0x26d488 + i·0x10 + 0xc) =

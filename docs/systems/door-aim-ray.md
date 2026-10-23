@@ -55,7 +55,7 @@ Nearest-door selection, the 50-unit ray, the wall cap and the caller wiring
 - `aim_ray_inside_the_sphere_away_reports_nothing` — the eye parked inside a shape-backed
   door's live world sphere (half the radius out along the through-axis), ray pointing away
   from the leaf: the pick is None. The deleted stand-in returned the door here (entry
-  clamped to 0) — this test fails on the pre-task tree.
+  clamped to 0) — this test fails on the earlier code.
 - Sister `aim_ray_inside_the_sphere_at_the_leaf_still_reports_the_door` — the same eye aiming
   at the leaf: the pick returns that door with a fraction in (0, 1) — the front-face hit the
   game reports, and the case the sphere pick got right.

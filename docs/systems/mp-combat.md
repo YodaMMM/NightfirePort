@@ -1,6 +1,6 @@
 # MP combat online — every weapon, identical on every machine
 
-mp-combat-weapons (agent 10, 2026-10-18). Code: `crates/nf-game/src/mp/combat.rs` (the shared
+2026-10-18. Code: `crates/nf-game/src/mp/combat.rs` (the shared
 rounds/grenades/blasts and the MP pain rules), `Sim::step_net_combat` / `Sim::mp_hurt` /
 `Sim::mp_combat_bodies` (crates/nf-view/src/scene.rs), the shot description in
 `nf_net::Input` (crates/nf-net/src/input.rs) and the app's hand-off (crates/nf-view/src/lib.rs,
@@ -139,7 +139,7 @@ torso-band contact more than 0.22 off the centre line sideways → 0x14 (upper a
   ×1.25 [M 0x194458:31-41]) is the next step.
 - Rounds neither pierce nor ricochet online; the stun's flash and the smoke cloud have no shared
   effect (the stun has no damage branch in the game either).
-- Armour pickups online belong to the shared pickup work (agent 9): `mp_armour` is ready for them.
+- Armour pickups online belong to the shared pickup work: `mp_armour` is ready for them (status 2026-10-22: wired — `Pickup_Handler` class 2, GAPS G-029).
 - Local-only damage sources other than blasts (falls, hurt volumes) still write the local health
   directly (world interactions).
 - The body hit zones are the cylinder stand-in above.

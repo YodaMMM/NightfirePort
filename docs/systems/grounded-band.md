@@ -113,7 +113,7 @@ that value: `Player_Collision` 0x194df0 applies gravity when `flag8 == 0 || BL+0
 [M 0x194df0:104] — a steep surface only pulls Bond off his feet when the band PASSED on it.
 
 The port's `floor_ny` took the hit normal regardless of the band. That was harmless while the
-ray was `pos − (cc+0.6)` (master) — a hit past the band edge was rare — but the B-hop ray
+ray was `pos − (cc+0.6)` (before) — a hit past the band edge was rare — but the B-hop ray
 reaches ~0.48 further down (standing: `0.55f32 − cc` = −0.4847183 of extra reach), and on the
 07000005 upper ledge it now hits the ny 0.45 slope ~1.85 below the walkable rest every tick.
 The port then fed 0.45 into the gravity gate on ticks Bond was walkable-grounded, gravity fired

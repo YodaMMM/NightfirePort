@@ -1,6 +1,6 @@
 # Drive physics — the DRIVING.ELF car physics step (CARP)
 
-Status: first port pass (task `drive-physics`). Evidence tags: [M] code (function + address,
+Status: first port pass. Evidence tags: [M] code (function + address,
 DRIVING.ELF unless named; decompile under `work/decomp/DRIVING.ELF/`), [D] disc, [L] live/trace,
 [S] suggested. File offset = EE − 0x107080 (docs/atlas/driving.md build identity). The per-frame
 loop, scheduler and 60 Hz tick are docs/atlas/driving-elf.md §1 (the timestep is `1/FUN_002d6b90()`
@@ -50,7 +50,7 @@ The Physics namespaces register into fixed globals:
   0x33911c = 40.0, `MICRO_THRESHOLD` 10.0, `GROUND_RESTITUTION` 0.5, `CAR_COLLIDE_COG_SCALE`
   0.4, `BUILDING_*` 0x339134-0x339148, `PF_SCALE` 10.0 [M .data initials; identical to the
   shipped `Physics\Rigid\default.tun` [D]]. The shipped .tun trio is byte-identical in all 8
-  mission VIVs [D; extracted set under /tmp on the research sandbox].
+  mission VIVs [D; an extracted set, not committed].
 - **Physics:Physical** — 21 vars by `FUN_00185668` → 0x331970-0x3319d4: `PAD_DEAD_ZONE` 0.2,
   `SKID_AUDIO_SCALE` 0x3319a0 = 0.15, `ROLLING_RESISTANCE` 0x3319a4 = 0.1, `TWO_WHEEL_*`,
   `TYRE_DAMAGE_RADIUS` 1.25, `BASE_FRICTION_MASS` 0x331974 = 8.0, `SHRED_DRAG` 0x331980 = 2.0,

@@ -66,7 +66,7 @@ head; the field is the draw layer, docs/fields' HUD sprite note), `+0x39` = the 
 index (5 down to 0, the `glb_viewer` walk). `SubTitleSpr` is `Sprite_Create2(&SubtitlesInfo@0x319940)`
 [M `Text_Init` 0x1b1428] — the template sits in .sbss and is zero at rest [L symtab, section 15], so the
 sprite's own fmt/geometry come from whatever the font load wrote there before the first line; the port
-models the track only (the main agent draws).
+models the track only (drawing is separate).
 
 **Type 5 — `Text_Update2Line` (0x1b09f0)** [M]: the head's text wraps at `0.6 × TextMsgFormats[5].width`
 (= 276 px) into `SubTitleStr` and the remainder at 460 px into `SubTitleStr2`; the two sprites are
@@ -152,5 +152,5 @@ read and the table are documented here for whoever ports it.
   explicitly (it sets the flag).
 * Not ported: the spoken-line barks (source 3), the word-wrap part split (a text-layout concern the
   draw code owns — the track stores labels), and the type-4→5 retype's presenter difference (both
-  types ride the same track; the main agent's draw code chooses the presenter the way `Game_Run` does:
+  types ride the same track; the draw code chooses the presenter the way `Game_Run` does:
   `ScriptCam != 0 || movie playing` → 1-line, else 2-line).

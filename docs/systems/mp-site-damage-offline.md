@@ -77,16 +77,16 @@ The game's two paths map onto it like this:
   gated on no session (the driver sets the site sphere only when `net` is none) — otherwise every
   online shot would apply twice [S port architecture].
 - **Bots' shots** already damage the site the same way (`step_mp_bots`' site round, the
-  mp-bot-objectives block) — not this task's change.
+  mp-bot-objectives block) — not changed here.
 - **The hitters**: Bond's local bullets are the local slot [S — the port's local pipeline fires
   no other rounds]; a blast's owner key `usize::MAX` (the established player-throw key) maps to
   the local slot, a drone-index key has no MP slot (the MP bots are not drones) and is skipped
   [S].
 
 `damage_site` itself is untouched: the threshold, the scoring, the own-goal, the state-6 latch
-and the 5 s restart all stand as merged (mp-scenarios-online).
+and the 5 s restart all stand as before (mp_scenarios_live).
 
-## Live checks for the main agent
+## Live checks (open)
 
 - `gdbwatch` the site MPOBJECT+0xF4 (HP, i16) while a guard shoots the site in a bot match: the
   value should drop by the weapon's +0x0C per contact tick (the port's bots already do this; the

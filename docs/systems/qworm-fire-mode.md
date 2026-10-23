@@ -1,7 +1,7 @@
-# The Q-Worm's fire-mode press (playtest 1017-1139)
+# The Q-Worm's fire-mode press
 
-The playtest: 0700000a (reached by riding the 09 lift), "I pressed the change fire rate on the
-Qworm gadget and now I'm soft locked with my weapon and can't really switch weapons."
+Symptom: on 0700000a (reached by riding the 09 lift), pressing the fire-mode key with the Q-Worm out
+reportedly left the weapon switch locked.
 
 ## What the game does for a gadget with no second mode
 
@@ -37,16 +37,16 @@ switch state in the game.
 - The loaded record matches the snapshot [L probe: `+5=0 +0x2e=1 flags68=0x0000a0a0`].
 
 Tests: `crates/nf-view/tests/qworm_fire_mode_live.rs` (3 tests, ISO-gated): the record pins, the
-playtest sequence (equip → mode press → switch away completes via `obj+0x63` and via the
+reported sequence (equip → mode press → switch away completes via `obj+0x63` and via the
 number-key lane), and the sister (the P2K's real second mode still toggles 0x02↔0x03).
 
-## The playtest symptom — not reproduced on this tree
+## The symptom — not reproduced
 
 Nine adversarial sequences through `Sim::step_bond` all leave the switch machine usable: mode ×1
 / ×2, throw + mode, mode during the throw script (view state 9), aim + mode, mode + G-cycle,
 mode + weapon cycle, fire + mode same tick, and the two request/number-key lanes afterwards. The
-mode press is inert and every switch lands (details in the report). What could NOT be checked
-here: the playtest session's exact state (the recorded inputs are not in the repo). Suspicion
+mode press is inert and every switch lands. What could NOT be checked
+here: the reported session's exact state (no recorded inputs). Suspicion
 list, in order, with the addresses to watch:
 
 1. The throw's view-state-9 window: the Q-Worm's fire script 0x060005ae holds while the trigger
@@ -57,7 +57,7 @@ list, in order, with the addresses to watch:
 3. A `switch_state` stuck at 1/3 by a script whose length never resolves (the view machine's
    completion reads the resolved script length).
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. PCSX2, 0700000a fresh boot, give the Q-Worm (`give 0x58`), equip it, press the mode button
    (SQUARE in Classic Bond [D docs/systems/weapons.md]), then cycle weapons. Expect: nothing

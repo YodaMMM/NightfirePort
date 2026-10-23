@@ -9,9 +9,9 @@ In an MP match the HUD shows per-agent info (score / frags, the match timer, the
 objective status, the radar's blips). The game reads all of it straight out of the MP globals
 every frame: `HUD_Update` 0x19a088 walks the pane list and calls each pane's update fn pointer
 [M 0x19a088:60-63; the MP set is `MPPaneList`, picked by `HUD_Init` when `MPSettings+0x384 != 0`
-[M 0x199e88:36]], and the panes read `MPGame`/`MPSettings`/the scenario globals directly. This
-task ports that read side as a **per-frame snapshot struct with getters** — `nf_game::mp::hud`
-(crates/nf-game/src/mp/hud.rs) — that the main agent's draw code consumes. Nothing here renders.
+[M 0x199e88:36]], and the panes read `MPGame`/`MPSettings`/the scenario globals directly. The port
+models that read side as a **per-frame snapshot struct with getters** — `nf_game::mp::hud`
+(crates/nf-game/src/mp/hud.rs) — that the draw code consumes. Nothing here renders.
 
 ## 2. The reads, and what the snapshot carries
 
@@ -52,7 +52,7 @@ loss at :68 — the second `%s` is the player string], tinted `0xff0000ff` for t
 packed RGBA at +0x10, u16 kind at +0x14) [M]; `HUD_RadarUpdate` is its only caller and the
 port's `nf_view::hud::radar_project` already implements its transform (0x19f6e8:108-153 — the
 inverse viewer matrix, the unit direction, the `len·0.02` rim clamp, the dead height cue) [M,
-checked against the disassembly]. The projection takes `pos/argb/kind` records — **this task
+checked against the disassembly]. The projection takes `pos/argb/kind` records — **the port
 builds those records**:
 
 - **Gate**: the viewer's per-player radar toggle `MPSettings + viewer·0x30 + 0x28` — 0 returns
@@ -134,7 +134,7 @@ owner+controller+RGB / the Assassin target marker ride the snapshot.
   folded in); the game stores minutes and converts at the confirm. The doc comment in mod.rs
   says minutes. Not changed here (shared struct) — flagged for the owners.
 
-## 6. Live checks for the main agent
+## 6. Live checks (open)
 
 1. **The radar toggle's record**: on a 2-player split-screen MP match, poke
    `MPSettings + 1·0x30 + 0x28` (0x2a47a0 + 0x58 = **0x2a47f8**) to 0 with gdbwatch — expect
@@ -161,7 +161,7 @@ The port allows 16 participants (700v8 mp-16-slots); the game's layout is 8 (4 h
   16-participant list is 15 players + 8 uplink terminals = 23 — inside the cap
   (`hud::RADAR_BLIP_CAP`, pinned by `tests/mp_hud_16.rs`).
 
-Before this task the port drew NONE of the MP panes in a match: `nf_view::hud::overlay` is the
+Before this the port drew NONE of the MP panes in a match: `nf_view::hud::overlay` is the
 SP pane set and `radar_frame` had no caller; the radar textures were not loaded. The port's
 in-match MP draw (`nf_view::hud::mp_panes`, called from `overlay` when `Sim::mp` is set):
 

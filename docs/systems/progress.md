@@ -2,7 +2,7 @@
 
 **Port status: PORTED (fix-progress, 2026-10-13).** The evidence doc is
 [fields/player-stats.md](../fields/player-stats.md) (the verified decompile doc); this entry is the
-port map. Everything here cites the game address it implements. 180-fix-menus owns the screens and
+port map. Everything here cites the game address it implements. The front end owns the screens and
 calls this layer's API; this crate owns the data and the logic.
 
 ## Where the port keeps it
@@ -134,13 +134,13 @@ The readers, per the decompile (all wired to `Drones::difficulty` / `Data::diffi
 
 Pickups and objective lists have NO direct difficulty reader in the game [M `Pickup_Handler`
 0x18e650, `Mission_Init` 0x182270 — no +0x40 access]; per-difficulty objective differences arrive
-through level scripts/tags (070-fix-mission's data — not forked here).
+through level scripts/tags (the mission layer's data — not forked here).
 
 ## The save
 
 `Progress::encode_save` / `decode_save` (and `save_to_file` / `load_from_file`) reproduce the
 game's data-file layout for the progress blocks ([M] the LS dossier in
-docs/reports/fix-progress.md): blocks `{u32 id; u32 size; payload}` chained (`LS_GetSaveStuff`
+crates/nf-game/src/progress.rs): blocks `{u32 id; u32 size; payload}` chained (`LS_GetSaveStuff`
 0x1cd0d8's walk), LSB-first bit packing (`BIN_PushBits` 0x1e8b88), then the CRC-32 of the chain
 appended LE (`crc32buf` 0x120670, the zlib table — `nf_formats::png::crc32`).
 
@@ -154,7 +154,7 @@ when the save holds 0 [M `Menu_SetNightfireStatus` 0x2023a0]. The port does not 
 CHET/MPSG (the options blocks — the menus' owners) or the MC directory furniture; the file is the
 block chain + CRC, deterministic (no timestamps).
 
-## The API for the menus (180-fix-menus)
+## The API for the menus
 
 `Drones::set_difficulty(u32)` · `drones.progress.stats[0]` (the live tally) ·
 `Progress::get_score(base_map, status, difficulty, commit) -> Option<Scored>` (medal in

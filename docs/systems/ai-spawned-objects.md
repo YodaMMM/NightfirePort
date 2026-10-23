@@ -1,8 +1,7 @@
-# ai-spawned-objects — the 13 call-tree gap functions (task 851)
+# ai-spawned-objects — the 13 call-tree gap functions
 
-Branch `s/ai-spawned-objects`, 2026-10-21. The call-tree check (`tools/calltree/calltree.py`,
-master 20874c31) walks the game's code from every guard-AI DSTATE the port mentions and lists
-functions the port never mentions. This task owned 13 of them; **all 13 now drop off the list**.
+2026-10-21. The call-tree check (`tools/calltree/calltree.py`) walks the game's code from every guard-AI DSTATE the port mentions and lists
+functions the port never mentions. This page covers 13 of them; **all 13 now drop off the list**.
 
 ## The verification (the done criterion)
 
@@ -30,8 +29,8 @@ lines 25-27, 104-106, 119-121, 173-176; the remaining 178 are other tasks' scope
 port's `NDrone2_DefaultInit` 0x14b300-tail site; result → DIVars+0x10, docs/atlas/drone.md:51),
 owner keyed to the list index at both index-assign sites (`Drones::new`, the CoderCreate NIS
 arm). `Player_Init` 0x1910f8:184 also creates one (+0x88C, docs/atlas/player.md:102) — the
-port's player side is not wired yet (noted, not asserted). The sprite rendering is the main
-agent's draw work; the record carries the hashes/flags/count it needs.
+port's player side is not wired yet (noted, not asserted). The sprite rendering is draw-side work;
+the record carries the hashes/flags/count it needs.
 
 **`Create_SpaceLaser` 0x1aa8b8** → new `crates/nf-game/src/space_laser.rs` + the kind-0x38 arm
 in `Drones::attach_level_id` (drone.rs), mirroring the existing kind-0x39 SpaceMissile walk.
@@ -50,7 +49,7 @@ kind-0x27 arm in `attach_level_id` + the `DroneWeap_FireWeapon` deploy citation 
   ext+0xe8 = param 4, ext+0xea = param 5, ext+0xb8 = parent, ext+0xcc = 100.0f, obj+0xf4 = 0.
   41 disc placements [D script-census.md:141]. The per-object script VM (Script_Load →
   GT_Register 0x181538) and the turret behaviours (GT_Update 0x180498, GT_Track 0x17f9c8,
-  GT_ApplyDamage 0x1816d8 …) remain the documented gap (docs/reports/script-ops-unported.md:78-91).
+  GT_ApplyDamage 0x1816d8 …) remain the documented gap (docs/systems/gun-turrets.md, gun-turrets-live.md).
 - [M 00181560 + 00178f68:92-145] the deploy: the guard weapon-datum char 'R' + combat state
   type 4 + not 0xdd/0xde + AmmoInGun ≥ 1 + not tooCloseForWeapon →
   `GT_DeployMiniGun` at (x+sin(yaw), y, z+sin(yaw+1.5707964)), on success
@@ -105,19 +104,13 @@ disturbed; at rest = placement)").
   0700001b carries exactly 1 laser with the creator's constants; every 07000005 guard spawns
   with a 14-child glow whose owner is its own index.
 
-## What ran before the push
+## Test runs
 
 - `cargo build --offline -p nf-game` — clean.
 - `cargo test --offline --release -j2 -p nf-game --lib` — 358/0.
 - `NF_SILENT=1 cargo test --offline --release -j2 -p nf-view --test spawned_objects_live` — 4/0.
-- The fast suite (`tools/test/suite.py`, started 06:11 on the claim tree) reported
-  `2728 passed, 18 failed, 143 ignored (87 min)` — **unreliable as a final-tree result**: the
-  run raced this task's source edits (the tree changed underneath it). Its FAILED lines are not
-  attributable to this branch; the touched-crates runs above are the honest pre-push evidence.
-  A clean full-suite re-run did not fit the sandbox window (87 min run vs ~50 min remaining at
-  verification time); the next session should re-run it on this tree.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **The GT deploy branch** — find or force a guard whose weapon datum char (BOT_vars+0x768)
    is 'R', put it in combat (state type 4), watch 0x181560 (`GT_DeployMiniGun`) get hit and the

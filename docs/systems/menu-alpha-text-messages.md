@@ -35,7 +35,7 @@ All [M] = ACTION.ELF decompile + disassembly (`work/decomp/ACTION.ELF/`,
 Port: `FrontEnd::alpha_phase` (counter) + `FrontEnd::alpha` (the s16);
 `FrontEnd::menu_alpha_tick()` = the update, `menu_alpha_reset()` = counter 0 (wired into
 `focus_moved`, the Page_Update focus-change analog), `menu_alpha_get()` = the getter. The byte-wise
-colour application is draw-side (main agent).
+colour application is draw-side.
 
 ## Text formats
 
@@ -116,7 +116,7 @@ per-language strings 0x308f38.. (EN/DE/FR/IT/NL/ES/SV). Msg **0x4b** (accept): t
 
 Port: `LANGUAGE_TO_LOAD` + `language_flag_to_load()` + `language_sfx_vo()` +
 `language_accept_next_page()` (constant 0x40000048). The page itself stays unmodelled in the
-boot walk (FrontEnd::new opens the title) — wiring it in is the main agent's boot-flow decision.
+boot walk (FrontEnd::new opens the title) — wiring it in is a boot-flow decision.
 
 ## `C_RBMPFINISH_Handler` 0x20db48 (MP setup FINISH)
 

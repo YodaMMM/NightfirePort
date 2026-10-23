@@ -1,9 +1,9 @@
 # MP death effects (the local player's death presentation in multiplayer)
 
-The user's report (2026-10-19): in an MP match the local player dies and respawns with none of the
+Symptom (2026-10-19): in an MP match the local player dies and respawns with none of the
 SP death presentation. This doc pins what the GAME does on an MP death, what the port already ran,
 and the getters the draw code reads. The sister doc for the SP sequence is
-`docs/systems/mission.md` §8 + `docs/reports/death-animation-sp.md`; this doc covers the MP side
+`docs/systems/mission.md` §8; this doc covers the MP side
 and the shared pieces.
 
 ## The game's MP death sequence
@@ -49,7 +49,7 @@ keeps it as `Drones::mp_master`) is the branch everywhere.
    ticks to full cover. **In MP the respawn at 300 < 448 ends the sequence first: the pane grows
    to 300 px (62.5% of full cover) and never reaches the covered state.** The pane data: pane 12,
    two sprites, layer 9, textures 0x0300005a / 0x03000002, template colour 0x007f7fff [L
-   BloodSprInfo 0x2bcfd8] (the draw itself is the main agent's task).
+   BloodSprInfo 0x2bcfd8] (the draw itself is separate).
 5. **The respawn** — `MP_ReSpawn` 0x185368 (via the HandleDeath wait): the guard (:16-18 — no
    respawn in SP, after `MPGame+0x188`, or the scenario-0x10 lives-out arm), the policy's spawn
    pick (`MP_GetSpawnPoint` 0x185098, :23), the position copy (:30-54), the slot resets
@@ -61,7 +61,7 @@ keeps it as `Drones::mp_master`) is the branch everywhere.
    to the spawn (`Camera_Set(viewer, obj+0x30, obj+0x50)` :79-80), state 0 / substate 0 /
    `obj+0xff = 3` (:81-83), `Player_StandAtNewPosition` (:87) and a fresh stamp `obj+0xec` (:90).
 
-## What the port ran before this task
+## What the port ran before
 
 The sim side was already game-faithful (`crates/nf-game/src/death.rs`, both MP arms):
 `Drones::death_tick` runs the whole sequence for MP too — the pane data (`pane_on`, `ticks`), the
@@ -75,9 +75,9 @@ the frozen camera were in.
 
 What was missing was the VIEW surface: nothing read `death.pane_on/ticks/covered` (the SP red fade
 is a documented undrawn gap — `docs/systems/mission.md` §7 known-gaps), so MP had no data to draw
-either. This task adds the getters; the main agent draws the overlay.
+either. The getters are here; the overlay draw is separate.
 
-## The getters (this task's delivery)
+## The getters
 
 `crates/nf-game/src/death.rs` — on `Death` (the game state):
 - `phase() -> u8` — 0 none, 1 the sequence is running, 2 covered (pane state word [M 0x19a6a8:24];

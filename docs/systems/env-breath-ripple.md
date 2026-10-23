@@ -1,6 +1,6 @@
 # Env_Breath and Env_WaterRipple — cold-breath puffs and hit water rings
 
-Task `unported-misc-3`. Both functions live in the `Env_*` weather/effects family
+Both functions live in the `Env_*` weather/effects family
 (`crates/nf-game/src/env.rs`, next to the snow/rain `Drops`). The gas pool API is
 `crate::gas::GasPool` (`Gas_Init` 0x1aacc8's port); drawing the puffs is the main
 agent's (the pool records are the getters: `pos`, `vel`, `mesh`, `scale`, `scale_rate`,
@@ -37,7 +37,7 @@ this arg), velocity = the `dir` argument · REC_FRAME_RATE (`Gas_Init`'s non-kin
 The env gate is `GlobalEnv == 0 || GlobalEnv+0x4b != 0 || cel+0x3c & 0x10000000` [M
 0x17bed0-0x17bef8]. The port models no `GlobalEnv`: `env_breath`'s `env_gate: Option<bool>`
 takes `None` for the unported case, which takes the `GlobalEnv == 0` arm (true). The
-cam-mode read and the `+0xf0 |= 0x400` flag are wiring points for the main agent (the
+cam-mode read and the `+0xf0 |= 0x400` flag are wiring points for the draw side (the
 flag is the same class of draw-flag the port's `Gas` does not model — the blood puff's
 `+0xf0 |= 8` deviation, gas.rs).
 
@@ -67,9 +67,9 @@ Wiring point: the port's actor-hit path (the per-hit dispatch the ledger records
 standin, docs/verify/ledger.md:342 — `NDrone2_DealWithObjHit`/`Player_DealWithObjHit`)
 does not yet carry water-surface HITDATAs; the function is ready for that dispatch.
 
-## Related findings from this task (not this task's functions)
+## Related findings (other functions)
 
-- The ambient `Ripples_Update` 0x1ac028 site (ported before this task) maps
+- The ambient `Ripples_Update` 0x1ac028 site (ported earlier) maps
   `Gas_Init`'s args differently: the game passes kind = t1 = **1**, rgba 0x7f7f7fff,
   rgba_end = t3 = **6**, life = **42** (`sw $v0(0x2a), ($sp)` at 0x1ac114), while
   world_fx.rs's ambient ripple spawns kind 6, no end colour, life = the placement's

@@ -62,7 +62,7 @@ and never links — the measured orphan [L spot 016e8ec0, docs/atlas/searchlight
   tests pin this; `searchlight-tracks-bond`'s removal stands (the six heads cannot track in the
   game either).
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **No late creation** — fresh boot into 07000005, breakpoint `Searchlight_Create` 0x001cb4f8
    with a hit counter. Expected: exactly 29 hits, all during the loading screen; zero hits

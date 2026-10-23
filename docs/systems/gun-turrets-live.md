@@ -1,8 +1,8 @@
 # gun-turrets-live — the kind-0x27 gun turrets deploy and shoot
 
 The GUNTURRET records (`GT_Create` 0x17ffa0, class 0x36) run `GT_Update` 0x180498 every tick.
-Before this task the port's turrets sat in ARMING forever (the state machine waited for the two
-turret scripts' done flags; nothing ran them) and a "fire" only played a sound. This task runs the
+Before this port the turrets sat in ARMING forever (the state machine waited for the two
+turret scripts' done flags; nothing ran them) and a "fire" only played a sound. The port now runs the
 scripts through the port's script player and fires real bullets.
 
 ## The game's chain (all [M] unless tagged)
@@ -63,8 +63,8 @@ scripts through the port's script player and fires real bullets.
   fly and damage Bond through the same `pain_from` chain.
 - `GT_Track`'s front-cone dot test added (the fire direction keyed from the placement matrix at
   the build). The LOS walk is still caller-supplied true (the port has no turret collide ray —
-  the documented stand-in, as before this task).
-- Known gaps (draw-side / data-side, listed for the main agent): the `GT_Register` slots
+  the documented stand-in, as before).
+- Known gaps (draw-side / data-side): the `GT_Register` slots
   (ext+0xc0/c4/c8) are not mapped to the script-created objects (the flash-object hide gate and
   the barrel-matrix spin stay events for the renderer); `muzzle_offset` (ext+0xd0) stays 0.0 —
   the game computes it from the script entities' glist bboxes at create, the port's bullets spawn
@@ -76,7 +76,7 @@ scripts through the port's script player and fires real bullets.
 carry ch 17/16/15/15), scripts 0x06000041/0x06000042 (the loader's id→hash resolution of params
 0x06000101/0x06000102), at (9.84, 2.28, 17.48) yaw −π/2 and (26.18, 2.28, 4.98).
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. [L] Fresh boot PCSX2, 0700000a: raise ch 18 (the wall guns' enable channel — the level raises
    it via its own triggers; find the writer with gdbwatch on `switch_channels[18]` 0x26fd90+18·1).

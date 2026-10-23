@@ -81,4 +81,4 @@ world alpha pass in nf-view's gpu.rs/scene.rs; docs/systems/break-debris.md) and
   occurrence on the disc, script 0600005b of 07000001 [D script census]): finds the first
   class-0x20 object inside the point's own sphere and kills it [M 0x12c168:39-61].
 - `Bullet_CollisionHandler`'s class-0x28 arm (sensor volumes pass only with
-  `weapon_data+0x70 & 0x100` [M 0x12ce80:129-134]) — the sensor-volumes task's ground.
+  `weapon_data+0x70 & 0x100` [M 0x12ce80:129-134]) — see crates/nf-game/src/sensor.rs.

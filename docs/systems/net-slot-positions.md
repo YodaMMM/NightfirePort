@@ -3,7 +3,7 @@
 GAPS G-053 item 4. One rule, stated once: **after a net tick's movement, every active
 slot's match record takes that slot's body post-move position, written in the same
 place for every slot, with no fixed 4.** This doc is the mechanism, the history of the
-fixed-4 defect, and the writers' audit (2026-10-20, task mp-net-slots-post-move).
+fixed-4 defect, and the writers' audit (2026-10-20).
 
 ## 1. The state and who reads it
 
@@ -63,10 +63,9 @@ sources]:
 - 30a3cf69 (2026-10-18, the "desync when I move with bots" fix) widened BOTH sites in
   the same commit — the tick path from `1..MAX_AGENTS`+slot 0 to
   `0..MAX_AGENTS` with the local-slot skip, and the live loop from `0..4` to
-  `0..MAX_AGENTS` [M the commit's lib.rs diff]. It reached the MP lineage at the
-  876307b5 merge (2026-10-19) and master from there; master e5638828 carries it.
+  `0..MAX_AGENTS` [M the commit's lib.rs diff]. It reached the main line on 2026-10-19 (e5638828 carries it).
 
-So on current master the code change the GAPS item asks for is present — and this task
+So the code change GAPS G-053 (4) asked for was present; the remaining work
 narrowed it to one place: the two per-tick write sites (the tick path's all-16 loop and
 the live loop's post-30a3cf69 all-16 loop) are now one shared
 `write_net_slot_positions` (the drift that produced the fixed 4 cannot reintroduce at
@@ -83,7 +82,7 @@ digest pin.
 
 - `six_human_loopback_slot5_moves_hashes_agree_every_tick` — 6 real sessions over
   127.0.0.1 (the mp_16_slots_live direct-`Session` shape), 2 simmed machines (the RAM
-  bound: one arena load is ~875 MB measured on the 3 GB sandbox; 4 concurrent loads
+  bound: one arena load is ~875 MB measured on a 3 GB machine; 4 concurrent loads
   OOM — mp_16_slots_live's 2-of-8 precedent), slot 0 and slot 5, both with `net_rng`
   set, 240 ticks through `nf_view::net_tick`. Every tick: the two sims' hashes agree;
   every human slot's match record equals its body's post-move position on BOTH machines;
@@ -92,9 +91,9 @@ digest pin.
   remaining local (1..=4) is replayed alone over the recorded rows through the same
   `nf_view::net_tick` — the app's own late-join verification shape
   (`mp_late_join_catchup`) — and must reproduce the recorded hash at every tick: all
-  six machines' states and hashes agree, within the sandbox's RAM.
+  six machines' states and hashes agree, within a small machine's RAM.
 - Sister `four_human_session_digest_is_pinned` — the same harness with 4 humans; the
-  final digest is pinned to the value measured on the pre-task tree (master e5638828).
+  final digest is pinned to the value measured before the change (e5638828).
   A digest change means the 4-human path moved; re-pin consciously.
 
 Both can fail, and the shape of the failure is the GAPS item's own: with the shared
@@ -103,7 +102,6 @@ fails at tick 0 — slot 5's machine's hash disagrees with the host's (the match
 sees the frozen record) — while the 4-human sister still passes, because all four of
 its slots sit inside the fixed window: exactly the blind spot the pre-16-slot tests
 had. The unified writer keeps the pinned 4-human digests bit-identical
-(0x5c0bb60a8cdf8938 at tick 0, 0xfb7b58f73e340ec3 at tick 240 — measured on the
-task's tree before the refactor and reproduced after it).
+(0x5c0bb60a8cdf8938 at tick 0, 0xfb7b58f73e340ec3 at tick 240 — measured before the refactor and reproduced after it).
 
 NF_ISO-gated (the arena loads from the disc like the other net tests).

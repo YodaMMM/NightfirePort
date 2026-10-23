@@ -72,7 +72,7 @@ No class-0x48 object exists in ee_start_05.bin (07000005), ee_start_07000001.bin
 class byte obj+0xFF histogram — 0x48 absent everywhere]. The port's two live users are on
 0700000c/0700000d placements [D], for which no snapshot exists in work/. Nothing to read live.
 
-## Live checks (for the main agent)
+## Live checks (open)
 
 Load 0700000c (jetpack display). Find the class-0x48 object: walk `DynamicObjList 0x2705a0 →
 u32@head+0x14 → obj+0x14 …` until obj+0xFF == 0x48; its channel = u16 at obj+0xF6 (expect 0x1c).

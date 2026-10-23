@@ -1,10 +1,10 @@
 # The map ambient sounds and the IOP voice budget (bathhouse-voices-02b)
 
 Build: ACTION.ELF `e7ffdcb3…`, SFX.IRX in `work/decomp/SFX.IRX/`. Tags: [M] code (function@addr), [D] disc
-bytes, [L] EE snapshot, [S] suggested. Written for playtest 1017-1139's "no guard voices under the
+bytes, [L] EE snapshot, [S] suggested. Written for the missing "guard voices under the
 bathhouse" follow-up: lead 1 (the IOP voice budget/priority reject vs the guards' shout) and lead 2 (the
-waterfall ambient, map-ambient id 92, whose start emitted no Play in 776's headless runs). The speech
-machinery itself is docs/systems/speech.md + docs/systems/under-bathhouse-voices.md (776).
+waterfall ambient, map-ambient id 92, whose start emitted no Play in the headless runs). The speech
+machinery itself is docs/systems/speech.md + docs/systems/under-bathhouse-voices.md.
 
 ## Lead 2 — why the waterfall never played: the port read the wrong map's block 0x28
 
@@ -26,7 +26,7 @@ archive order. So after a level load, `GMapSounds` holds the **last** archive ma
 | 3 | 0x40000087 → 135 | (−50.51, 8.91, 4.48) | 96.67 | 87.00 |
 
 The port's `MapSounds::new(level.maps[main].sounds.clone())` took the **main map's** list — empty on
-07000002 — so no map ambient ever started there; the waterfall's "start emitted no Play" in 776 was a
+07000002 — so no map ambient ever started there; the waterfall's "start emitted no Play" earlier was a
 start that never happened. **Fix**: `Level::parse` records the last-wins list as `Level.map_sounds`
 (the game's global), `Drones` builds `MapSounds` from it.
 
@@ -78,12 +78,12 @@ tracking 2, inner 2, outer 50, max_voices 5, priority 99, ducker 10; sub = one s
 - even at 20 active voices (budget 15): 2666 ≪ 9900; a guard metres away has proximity 100.
 
 So the game does not reject the shout here, and neither does the port; the remaining difference between
-776's headless chain and an audible playtest is only the output device (streams report their ends; the
+the headless chain and an audible run is only the output device (streams report their ends; the
 mixer mixes). Tests pin the outcome on the real path (`bathhouse_shout_mixer_live`): the shout's stream
 Play (pitch 0x759 = 1881 [M `StartSample` 0x3524]) reaches the captured batch at non-zero volume while
 the four ambients keep their voices.
 
-## What reaches the mixer, per id (for the main agent's live comparison)
+## What reaches the mixer, per id (for a live comparison)
 
 On the real path (`nf_view::load` + `Sim::step_bond` + `nf_view::sound_tick`, the batch commands the
 output would receive):
@@ -98,7 +98,7 @@ output would receive):
 - All four ambients keep their voices through the shout (the steal never reaches them: 4-8 voices vs
   budget ≥ 10, and their priority 100 tops the steal scan).
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. PCSX2 07000002, fresh boot, tunnel route to plate #389 (−47.0, 6.0, −23.3): with the ambients fixed,
    EXPECT the waterfall (and the three pool-area ambients) audible near the underground pool, and the

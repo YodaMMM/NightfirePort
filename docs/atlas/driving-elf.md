@@ -1,6 +1,6 @@
 # The DRIVING.ELF map — main loop, subsystem inventory, shared code, the .crp consumer
 
-Status: **phase 3 research** (task `drive-elf-map`), building on docs/atlas/driving.md (§6 phase 3).
+Status: **phase 3 research**, building on docs/atlas/driving.md (§6 phase 3).
 Evidence tags: [M] code (function+address, DRIVING.ELF unless another ELF is named), [D] disc,
 [L] live/trace, [S] suggested. Nothing from memory. All addresses are EE addresses; for
 DRIVING.ELF file offset = EE − 0x107080 (docs/atlas/driving.md build identity).
@@ -160,7 +160,7 @@ order); anchors are the mission-setup prints (§1.4), the RTTI/symbol-pool class
 | 0x2e0000–0x310000 | audio streams (ASF) + SIF RPC + mpeg/IPU decode | `FUN_002e96b8`, `FUN_002ec408`, `FUN_002f9740` [M]; `AStream`, `AVoice`, `ASystem` [D]; libmpeg matches §3 |
 | 0x310000–0x326000 | libmpeg/IPU movie decode (matched to ACTION, §3) | `_updateRefImage` etc. [M] |
 
-Sym-hint status: `DRIVING.SYM` could **not** be re-extracted in this sandbox — the rebuilt
+Sym-hint status: `DRIVING.SYM` could **not** be re-extracted from the slim image — the rebuilt
 on-foot ISO zeroes the DRIVING directory records' extent/size fields (checked by raw ISO9660
 parse: /DRIVING records carry LBA 0/size 0 while the root records are intact) [D], which also
 explains `nf-extract drivingsym` failing with an empty buffer. The 12,719-name parse quoted in
@@ -252,10 +252,10 @@ So driving.md §7 Q5 is answered: **the `.crp` consumer is the track object at `
 Wmap data (CARP physics) is phase-4 work; the heaviest `DAT_0033aac8`-referencing clusters are
 0x145000–0x159000 (14 functions) and 0x21xxxx–0x23xxxx (§2).
 
-## 5. Phase 4 task description (vehicle physics) — for the driver's next dispatch
+## 5. Phase 4 plan (vehicle physics)
 
-**Task `drive-carp-physics` (suggested name), branch `s/drive-carp-physics`** — port the
-vehicle physics core, keeping docs/atlas/driving.md §6's phase-4 row as the scope header.
+Port the
+vehicle physics core (since started: docs/systems/drive-physics.md), keeping docs/atlas/driving.md §6's phase-4 row as the scope header.
 
 1. **The car object**: from the class names [D], `PVehicle`/`PBondCar` (0x376180/0x376190) and
    `PhysicsObject`/`COLLISION_INFO` (0x376170/0x3761a8) are the structs. Entry points: the
@@ -273,11 +273,11 @@ vehicle physics core, keeping docs/atlas/driving.md §6's phase-4 row as the sco
    deterministic fixed 60 Hz steps, the shared bit-exact RNG rules.
 4. **Tests**: golden numbers only (counts, ids, hashes), each with a sister assertion; the
    `.crp` of a small mission (e.g. snow2a_race) as the fixture source via the existing
-   `unviv_bigf.py` path; live checks below for the main agent's PCSX2 confirmations.
+   `unviv_bigf.py` path; live checks below for PCSX2 confirmations.
 5. **Out of scope for phase 4**: actors in cars (`Act*`), traffic AI (`AIVehicle`), camera,
    HUD, audio placement (phases 5–6).
 
-## 6. Live checks for the main agent
+## 6. Live checks (open)
 
 - **L-1 — frame counter**: watch EE 0x3c80d4 (word) during a driving mission with gdbwatch:
   expect +1 per vblank (60/s NTSC) [S from the reader FUN_00261038 0x261038; the writer is

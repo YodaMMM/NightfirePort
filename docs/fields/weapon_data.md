@@ -86,7 +86,7 @@ consumer): +0x7C view-model hash, +0x8C camera swing, +0x94 rumble, +0x40 refire
 rounds-per-shot, +0x06 class, +0x08 min-range, +0x1C range, +0x84 aimable, +0x58 flash intensity, +0xF8
 casing vec3, +0xB8/+0xBC hashes.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **+0x60 is a datum id**: in PCSX2, `AnimDatumGetWeaponInfo` 0x1c7900's third out-param should equal
    `weapon_data[w]+0x60` (u16) for any weapon draw — `watch 0x2bf150 + w·0x10C + 0x60 2` on a weapon

@@ -1,8 +1,8 @@
 # The field map
 
 What every field of the game's runtime structs means, and **how sure we are**. Started 2026-10-12 after several
-confident misreadings by worker sessions (a draw layer read as alpha, an objective channel read from the wrong record,
-a team gate that the decompile contradicts), each of which cost a playtest round.
+confident misreadings (a draw layer read as alpha, an objective channel read from the wrong record,
+a team gate that the decompile contradicts).
 
 ## Proof levels (every field row carries one)
 
@@ -40,17 +40,17 @@ Lessons so far:
 | ammo_data (34 × 12) | [ammo-data.md](ammo-data.md) | 4/record + the weapon→ammo map | full dump | fields-player 2026-10 |
 | PlrStat_* / ScoringTable / RewardsTable | [player-stats.md](player-stats.md) | 14 + 11 + row layout | 4 | fields-player 2026-10; the whole system is unported (documented) |
 | obj_tag class-3 (the player) | [obj-tag-player.md](obj-tag-player.md) | ~25 | snapshot cross-checked | fields-player 2026-10; corrected the +0xCC root-height story; class 3 ↔ 0x12 |
-| Drone_tag (the AI/drone record, obj+0x110, 0xD20 bytes) — the +0x4F8 bit census, +0x2B0/+0x2B4, the alertness block, +0x5A2/+0x5A4, the secondary offsets | [drone.md](drone.md) | 32 bits + 21 fields | 0 (live pass owed) | 044y-fields-actors 2026-10-13; drove the port fixes listed in the doc |
-| DCVars_tag + StateMachineInfo_tag (Drone+0x108) + the SM message protocol | [drone-statemachine.md](drone-statemachine.md) | 4 + 11 + 20 msg ids | 0 (live pass owed) | 044y-fields-actors; obj+0xE0 = Drone_tag*, SMI embedded |
-| DroneTypeSettings (0x29aee8, 85×12) + NDrone2_StateFuncs (0x29b300, 250 entries) | [dronetype-tables.md](dronetype-tables.md) | 4 row fields + 250 states | tables read from 4 snapshots [L] | 044y-fields-actors |
-| AnimObject (obj+0xDC, 0x120 bytes): weapon bytes +0x62/+0x63/+0x64, LOD fade bytes +0x110..0x113 | [animobject.md](animobject.md) | 20 | 0 (live pass owed) | 044y-fields-actors; character alpha is obj+0x103..0x106, NOT the fade bytes |
-| HITDATA_tag (0x60) + the spawner block (obj+0xE0) + the ally/mission-fail fields | [hitdata-spawner-ally.md](hitdata-spawner-ally.md) | 15 + 12 + 12 | spawner offsets [L ee_start_05] | 044y-fields-actors; the spawner p7 arm-vs-kill disagreement is written up with a decisive live check |
+| Drone_tag (the AI/drone record, obj+0x110, 0xD20 bytes) — the +0x4F8 bit census, +0x2B0/+0x2B4, the alertness block, +0x5A2/+0x5A4, the secondary offsets | [drone.md](drone.md) | 32 bits + 21 fields | 0 (live pass owed) | actors field pass 2026-10-13; drove the port fixes listed in the doc |
+| DCVars_tag + StateMachineInfo_tag (Drone+0x108) + the SM message protocol | [drone-statemachine.md](drone-statemachine.md) | 4 + 11 + 20 msg ids | 0 (live pass owed) | actors field pass; obj+0xE0 = Drone_tag*, SMI embedded |
+| DroneTypeSettings (0x29aee8, 85×12) + NDrone2_StateFuncs (0x29b300, 250 entries) | [dronetype-tables.md](dronetype-tables.md) | 4 row fields + 250 states | tables read from 4 snapshots [L] | actors field pass |
+| AnimObject (obj+0xDC, 0x120 bytes): weapon bytes +0x62/+0x63/+0x64, LOD fade bytes +0x110..0x113 | [animobject.md](animobject.md) | 20 | 0 (live pass owed) | actors field pass; character alpha is obj+0x103..0x106, NOT the fade bytes |
+| HITDATA_tag (0x60) + the spawner block (obj+0xE0) + the ally/mission-fail fields | [hitdata-spawner-ally.md](hitdata-spawner-ally.md) | 15 + 12 + 12 | spawner offsets [L ee_start_05] | actors field pass; the spawner p7 arm-vs-kill disagreement is written up with a decisive live check |
 
 ## Coverage — the world-object structs (fields-world, 2026-10-12)
 
-Worker task `fields-world` (branch s/fields-world): the generic object header, the placement
+The generic object header, the placement
 parameter block, and every per-type instance struct. Proof levels as above; the [L-verified]
-count is 0 everywhere — these docs are the static pass ([M]/[M1]/[M\*]), the main agent's live
+count is 0 everywhere — these docs are the static pass ([M]/[M1]/[M\*]), the live
 pass (fieldprobe/gdbwatch, each doc's "Live checks" section) comes next.
 
 | Struct | Doc | Instance | Notes |
@@ -74,10 +74,10 @@ pass (fieldprobe/gdbwatch, each doc's "Live checks" section) comes next.
 | glist (celglist_tag) | [glist.md](glist.md) | 0x50 in pCelList | +0x44 → obj+0xF0 copy; +0x40 id (Destroy's swap watch) |
 | leaf / obj colour bytes | [leaf.md](leaf.md) | obj+0x100..0x106 | deep GS walk stays in docs/atlas/gs-leaf.md |
 
-**Port fixes this task** (all fail-first, see docs/reports/fields-world.md): fusebox hurt
+**Port fixes** (all fail-first): fusebox hurt
 polarity + +0x5C clear (fusebox.rs), switch inhibit-gate polarity + busy one-shot latch
 (useobj.rs), raw-0DC trigger param shift (triggers.rs); tests in-crate plus
 `crates/nf-game/tests/fields_live.rs` (NF_ISO).
 
-Static passes for the remaining structs are queued as worker tasks (`docs/fields/<struct>.md`, [M*] level); the main
-agent then runs the live pass for the fields the port relies on.
+Static passes for the remaining structs are still to do (`docs/fields/<struct>.md`, [M*] level), followed by the live
+pass for the fields the port relies on.

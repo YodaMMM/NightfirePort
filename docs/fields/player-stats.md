@@ -127,7 +127,7 @@ through the save.
 6. `Player_SetWatch` 0x1a69d0 also touches PlrMissionStats (the watch gadget's stats display) — not traced.
 7. Row 7's signed/unsigned edge cases in the decompile are branch noise — copy the float math.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **The accuracy row**: fire 10 rounds at a wall (scenery) on 07000005 — `+0x04` should net to the shots
    that hit enemies only (`PlrStat_LogShotHitScenery` decrements); P_NFSTATS should show 0% until a guard
@@ -168,7 +168,7 @@ the shipped game does not have):
 - the only autoaim consumers, `Check_AutoAim` 0x1a73f8 and `Player_AutoAim` 0x1a7c98, touch
   `Autoaim_Range/Angle_H/Angle_V/Easy/Normal/Hard/LockOnMul` only [M decomp; fix-progress-
   remainder's gp-relative + symbolic lui/addiu scans found no other reader];
-- fix-progress-remainder (110d) fixed the real gap instead: `Player_AutoAim` seeds the scan cap
+- The progress remainder fixed the real gap instead: `Player_AutoAim` seeds the scan cap
   from `Autoaim_Range` (25.0) except the Q-Claw (0x50/0x51), whose cap is its `weapon_data+0x1c`
   (50.0/100.0 [L]).
 

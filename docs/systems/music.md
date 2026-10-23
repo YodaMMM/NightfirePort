@@ -1,7 +1,7 @@
 # Music
 
 Build: ACTION.ELF `e7ffdcb3…`, SFX.IRX `65c4c97e…`. Tags: [M] code, [D] disc, [L] snapshot, [S] suggested. Written by a
-research pass (subagent, 2026-10-09) from the decompilation and disc files; the port re-checked
+research pass (2026-10-09) from the decompilation and disc files; the port re-checked
 `DroneFunc_CheckAlarmRaised` (0x1453a8) and `NDrone2_SeenAndAttacking` (0x145150) here. Port: `nf_formats::music`
 (MXI, SMF, SSD, MapMusic / MapDroneData), `nf_audio::music::Player` (the IOP stream player), `nf_game::music`
 (event board, `UpdateMusicalEvents`, `UpdateMFX_01CastleA`, the attack gate). Helper: `tools/audio/smf.py`.

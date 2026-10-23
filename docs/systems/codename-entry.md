@@ -7,7 +7,7 @@ Its letter grid is control 0x10000074, handled by **C_KEYBOARD_Handler 0x213a98*
 validator is **Menu_IsValidCodename 0x1f9930**; the default proposal comes from the strings at
 0x30d530 / 0x30d2d8 and the reserved-name list from **def_codename 0x2e1b18** [M symtab]. The port keeps
 the game's data and flow in `crates/nf-view/src/menu.rs` (`Page::CodenameEntry`, the `cn_*` API) and the
-card in `nf_game::profile` (docs/reports/fix-save-profile.md); the main agent draws every page.
+card in `nf_game::profile`; nf-view draws the pages.
 
 ## The three entries and cheat_mode [M]
 
@@ -68,7 +68,7 @@ CODENAME" or "DEFAULT" case-insensitively. C_KEYBOARD binds the returned label o
 ✓ with a valid name: `DAT_002e1ae0 = 999` (a NEW save slot), `strcpy(0x2e1ae8, buffer)` (the working
 codename), `PlrStats_ResetScoring`, `ls = 1`, `DAT_002e1ad8 = 0x4000001d` (the continuation), box mode
 `DAT_002e1b09 = 1` [M 0x213a98:53-65] — and `Menu_UpdateMessageBox` 0x1f7de8 case 1 runs **LS_Save
-(0x2e1ae8)**: the file name IS the codename [M docs/reports/fix-save-profile.md]. P_CNNAME's 0x50 tick
+(0x2e1ae8)**: the file name IS the codename [M 0x1f7de8 case 1]. P_CNNAME's 0x50 tick
 watches option box **4** (the card flow's overwrite question, MemCard_ASK_OVERWRITE 0x10ee38) and saves on
 YES [M 0x213790:62-76]; the port refuses instead and surfaces `cn_box = (4, 0)` [M the existing
 create_codename note]. After the save the flow lands on the wheel 0x4000001d, whose init forwards to

@@ -155,7 +155,7 @@ divergences:
 9. **No SSysItems registration** — param 6's `SSysItems[p·8+4] = (u8)ch` write (0x1adcc0:29-31)
    has no port equivalent, so the sound-system alarm items never see switch channels.
 
-## Live checks (main agent)
+## Live checks (open)
 
 No switch exists on 07000005, so pick a level with 0x29 placements (the port models the Tower
 levels 07000009/a/b). Chain: `DynamicObjList` 0x2705a0 → head+0x14 → next obj+0x14; filter

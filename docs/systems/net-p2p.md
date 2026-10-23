@@ -3,7 +3,7 @@
 Evidence tags: [S] port-only design (the PS2 game has no online mode at all [D], docs/systems/net-online-lobby.md §1),
 [R] an RFC / UPnP spec (cited by number and section). Nothing here is a game claim.
 
-Task 700v4 (the user: "surely we could make something p2p or the host uses upnp"). Code: `crates/nf-net/src/p2p/`
+Peer-to-peer joining with UPnP on the host. Code: `crates/nf-net/src/p2p/`
 (std only, no new crates). The session layer (net-lockstep.md) is unchanged: star topology, clients talk to the
 host. This layer only makes the host's UDP port reachable from the internet and tells each side what to type.
 
@@ -64,7 +64,7 @@ JoinReach { state: Resolving | Connecting | Punching | Connected | Failed(reason
 ## 5. Optional lobby directory (700v4 item 5)
 
 Not built in this pass (items 1-4 first). The listing address will be a setting, default empty; the server is the
-user's own and is never hard-coded.
+player's own and is never hard-coded.
 
 ## 6. Tests
 
@@ -75,7 +75,7 @@ HTTP/SOAP client; a fake NAT-PMP gateway on 127.0.0.1; the punch state machine o
 
 ## 7. Live checks
 
-- 2026-10-19, the user's home router (UPnP IGD at 192.168.1.1:5000): `cargo run -p nf-net --example upnp_probe` —
+- 2026-10-19, a home router (UPnP IGD at 192.168.1.1:5000): `cargo run -p nf-net --example upnp_probe` —
   SSDP found the IGD, `AddPortMapping` UDP 27420 (lease 60 s) succeeded, `GetExternalIPAddress` matched the public
   address, `DeletePortMapping` removed it [L].
 - Same day, two game instances on that PC (`--net-host 27420` with reach on; the joiner dialled the host's printed join

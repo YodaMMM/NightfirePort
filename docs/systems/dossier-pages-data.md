@@ -1,8 +1,8 @@
 # The Dossier's Rewards / Gadgets / Weapons pages (dossier-pages-data)
 
 The Dossier wheel (Records / Rewards / Gadgets / Weapons) had only Records ported. This doc is the
-evidence base for the other three pages' DATA, STATE, FLOW and GETTERS — no drawing (the main agent
-draws each page and compares against PCSX2). Everything here is delivered in
+evidence base for the other three pages' DATA, STATE, FLOW and GETTERS — no drawing (each page's draw is
+compared against PCSX2 separately). Everything here is delivered in
 `crates/nf-view/src/menu.rs` (`FrontEnd` getters + `Page` variants + `action()`) and
 `crates/nf-game/src/progress.rs` (`Progress::object_upgrade_level`).
 
@@ -55,7 +55,7 @@ Handler message ids (the same convention as every P_/C_ handler pair):
 
 Up/Down step the index ±1 and CLAMP at both ends; the wrap to the other end happens only when the
 scroll's +0x144 flag is set, and that flag is set only by msg 0x69 (Scroll_SendMessage :136-139),
-which no menu-def control carries (the parsed stream has zero 0x69 — the Records task's dump). Every
+which no menu-def control carries (the parsed stream has zero 0x69 — the Records page's dump). Every
 move plays a menu sound and sends 0x49 to the owner, which rebinds the page's texts. The wheel's
 five visible slots come from `Menu_UpdateWheel` 0x1f8388 (below).
 
@@ -203,4 +203,4 @@ tree.
   `FrontEnd::weapon_overview_row()` (the watch), `Progress::object_upgrade_level(object, slot)`.
 - Tables as cited statics: `WEAPONS_TABLE`, `GADGETS_TABLE`, `REWARD_BONUS` (labels + textures).
 - `--page rewards|gadgets|weapons` render hooks in `crates/nf-view/src/lib.rs` (additive; minimal
-  draw arms in `menu_overlay` — the main agent's draw pass replaces them against PCSX2).
+  draw arms in `menu_overlay` — a draw pass replaces them against PCSX2).

@@ -1,7 +1,7 @@
-# The in-game keypad menu (page 0x40000021) — and the front-end never-mentioneds this task closed
+# The in-game keypad menu (page 0x40000021) — and the front-end never-mentioned functions
 
 Evidence tags: [M] ACTION.ELF decompile (`work/decomp/ACTION.ELF/`), [D] disc bytes, [L] EE
-snapshot, [S] port choice. Task unported-front-end-menus-6 (branch `s/unported-front-end-menus-6`).
+snapshot, [S] port choice. 
 
 ## The keypad mini-game
 
@@ -40,11 +40,11 @@ state to 3 and arms the flow [M 001aed00_Lock_Activate__FP7obj_tagT0.c:20-29].
 Port (nf-game `lock.rs`): `KeyCodes::init` ([S] private-stream digits — the real boot draws are
 pre-consumed by the level-start snapshot; the shape/count/domain are [M]), `Keypad::arm/digit/
 display/hint/tick/close` — the exact buffer, wrap, inclusive display and match semantics above,
-unit-tested with a fixed code (`lock_keypad.rs`). The view work (main agent): draw the page's 24
+unit-tested with a fixed code (`lock_keypad.rs`). The view work: draw the page's 24
 controls from the level def, the digit grid bound to `Keypad::digit`, the display label to
 `Keypad::display`, the Q-Worm hint line to `Keypad::hint`.
 
-## The front-end functions this task disposed
+## The front-end functions disposed here
 
 - **The debug-toggle handlers** (`C_CHCHALLOWFREEZE/DUMMY/DRAWALL/LOCKUP/BRIGHT/UNLOCK/CONTROLS`
   0x216258/0x2162b8/0x216320/0x216400/0x216460/0x2164c0/0x216520) — two-way checkbox binds

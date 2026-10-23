@@ -100,7 +100,7 @@ pick, outside the Sim).
 - Existing level-load tests (`level_carry_live`, `level_reload_live`, `walkreal_*`) cover the
   sync path, which is untouched.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **The dots animate across a level transition.** Play 07000001 → exit through the mission's
    level-exit trigger (warm load into 07000002): the LOADING screen must show the six dots

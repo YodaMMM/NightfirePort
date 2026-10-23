@@ -1,6 +1,6 @@
-# Lane models-characters: every skinned character
+# Models: every skinned character
 
-Status after `s/models-characters`. Everything [D] (disc scans, `nf-extract` / the repo's own
+Status 2026-10-12. Everything [D] (disc scans, `nf-extract` / the repo's own
 `Level::parse`) or [M] (ACTION.ELF decompile) unless tagged [S]. The proof harness:
 `crates/nf-view/tests/models_characters_live.rs` (6 tests, NF_ISO).
 
@@ -30,13 +30,13 @@ outside 0x05xxxxxx and for misses — those two actors cannot draw in the game e
   `ee_start_05.bin` (07000005), `ee_start_07000001.bin`, `ee_start_0700000a.bin` — worst local
   0.00e0 on all three. The only nonzero world deltas sit on the one drone whose sAnimObject+0x58
   carries the live head-track/aim flags (0x40f) — the game's runtime look-at state, not a port
-  error. G-024's world-matrix 4.6e-5 item stays owned by `250-fix-bitexact`.
+  error. G-024's world-matrix 4.6e-5 item is GAPS G-024's (closed).
 - The two-bone blend and the palette are pinned GPU = CPU by `gpu_skin_live` (existing).
 
-## 3. Tint / ambient (playtest R1) and the texel check (G-042)
+## 3. Tint / ambient and the texel check (G-042)
 
 - The 0x800 TWEAK/ambient multiplier root cause is fixed (fix-render2, gs-leaf.md §1.1): 0x800
-  objects multiply by tint × cel ambient >> 8. This lane adds the source-side pin:
+  objects multiply by tint × cel ambient >> 8. The source-side pin:
   `g042_the_bathhouse_civilian_skin_texels_are_not_white` — 07000002's civilian body skin
   0x05000034 ("polySurface2") decodes with non-white texels on every batch texture (≥ 8 checked);
   the old over-bright was the lighting path, not white source data.
@@ -46,7 +46,7 @@ outside 0x05xxxxxx and for misses — those two actors cannot draw in the game e
   object) is in the port's `anim_start`. The reported vanish was the pre-fix-render2
   script-character resolution. Regression: `f3_both_dressing_actors_resolve_and_pose`.
 
-## 4. Render spots (one per level; the main agent renders and eyeballs)
+## 4. Render spots (one per level, for visual checks)
 
 Stand 3 units north of each level's first placed drone group, facing it:
 
@@ -77,7 +77,7 @@ Cut-scene actors render via the ScriptPlayer paths already exercised by `fix_cut
 (the truck, the dressing, the intros); the scene builds one character per script Anim stream and
 poses it from the anim script's sequences.
 
-## 5. Still open in this lane
+## 5. Still open
 
 - **The gondola riding inherit** is fix-objects2's leftover (script-ENTITY parts vs the truck's
   ANIM parts — the ground-motion path), not a model issue; listed here because it shows on a

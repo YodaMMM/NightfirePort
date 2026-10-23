@@ -92,7 +92,7 @@ The spawn uses the game's own spawn path (`Drone::new` + `present`/`enabled`/`ll
 The force / impulse / SpecialDeath set the same fields the game's own state machine would. God mode, infinite ammo and
 no reload set the same fields `Player_HandlePain` / `Player_WeaponFiring` / the reload read (the inventory at
 `BL+0x170`/`+0x1B8`). The HUD's ammo strip clamps what it draws to the clip size (`hud::strip_clip`), so a
-dev-refilled clip can't overflow the pane (the stacked/garbled icons the user screenshotted). The ammo pane's
+dev-refilled clip can't overflow the pane (it used to draw stacked/garbled icons). The ammo pane's
 "clip-spare" text keeps the real numbers.
 
 ## Skipping cut-scenes (any key)
@@ -122,7 +122,7 @@ Tests: `crates/nf-view/tests/dev_tools_live.rs` (NF_ISO) + the nis.rs unit test
 
 ## Scenarios (`--scenario <name>`)
 
-Each places Bond and the guards and prints what to check. The user should see the named behaviour in under a minute.
+Each places Bond and the guards and prints what to check; the named behaviour shows within a minute.
 
 | Name | What to see |
 |---|---|
@@ -147,9 +147,8 @@ Each places Bond and the guards and prints what to check. The user should see th
 
 ## Input record / replay (`--record` / `--replay`) — B-5
 
-Every other session kept shipping "fixes" that failed in the user's play because nobody could reproduce what the
-user did. `nf-view` now records and replays the exact input stream the Sim consumes, so a bug the user sees can be
-captured as a file and replayed bit-for-bit (headless, no GPU) in a test.
+`nf-view` records and replays the exact input stream the Sim consumes, so a bug seen in play can be captured as a
+file and replayed bit-for-bit (headless, no GPU) in a test.
 
 ### Recording
 
@@ -176,7 +175,7 @@ nf-view <iso> 07000005 --replay tests/replays/bug.nfr
 
 `nf_view::replay::replay_headless(&mut scene, &replay)` runs the recording through the real `Sim` (no GPU, no window)
 and returns the state at each tick (`TickState`: Bond pos/yaw/pitch, weapon, clip, spare, RNG x/y, frame). This is
-how tests reproduce a user's session and assert on the result.
+how tests reproduce a recorded session and assert on the result.
 
 ### Determinism
 

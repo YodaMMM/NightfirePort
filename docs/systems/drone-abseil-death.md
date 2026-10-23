@@ -1,8 +1,7 @@
 # The abseil death (killing a guard on the rope) — what the game does
 
-Task abseil-death-11 (playtest 2026-10-18, 07000011: "guards rapelling and not rapelling and not
-falling when they die"). The abseil family's states are in docs/reports/drone-abseil-elevator.md
-(the 720 task); this page is the hit/kill half: what a bullet or blast does to a guard on the
+Symptom (2026-10-18, 07000011): abseiling guards did not fall when killed. The abseil family's states
+are in drone.rs (`AbseilInit`/`AbseilHang`/`AbseilSlide`); this page is the hit/kill half: what a bullet or blast does to a guard on the
 rope, and which 07000011 guards rope at all.
 
 ## Which guards abseil on 07000011
@@ -40,7 +39,7 @@ DSTATE case 8/9 pass resume 0, allow 0 [M 0x169610:48-50 / 0x169730:68-70 / 0x16
 Port bug fixed: the port's bullet death selector only knew 0x1d → 0xbf, its blast selector read
 the **voice set `+0xD8`** (the port's `kind`) where the game reads the **mode `+0xC5`** —
 drone-port-check.md #3 again — and `Death_Anim` had no re-route. A shot abseiler died into
-Death_Anim, which leaves `+0x23` set: he stayed on the rope, the playtest's f8063.
+Death_Anim, which leaves `+0x23` set: he stayed on the rope (seen at frame 8063).
 
 ## AbseilDeath 0x92 (0x169b28) — the release
 
@@ -83,5 +82,5 @@ flag clears that tick → the corpse falls from the rope point under WldGravity 
 ## Rope rendering
 
 The port renders no rope line (nothing in ACTION.ELF's symtab draws one from `+0x670`; the
-grapple rope `Player_GrappleSetRope` 0x192728 is Bond's own). The F12s' rope is the game's drone
-renderer — a live check for the main agent below.
+grapple rope `Player_GrappleSetRope` 0x192728 is Bond's own). A visible rope would be the game's drone
+renderer — an open live check below.

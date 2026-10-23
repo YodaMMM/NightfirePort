@@ -1,6 +1,6 @@
 # The level-exit hold — `GS_PauseGame(1)` + the 300-frame fade before the load
 
-*mayhew-end-transition (task 750o), 2026-10-17. The end of 07000005 (Mayhew): the end trigger
+*2026-10-17. The end of 07000005 (The Exchange, part 1): the end trigger
 fires, and the game does NOT load the next level immediately — it freezes the world and fades
 to black over 300 frames, and only then runs the loader. The port used to drain `level_exit`
 into the loading screen the same frame.*
@@ -21,8 +21,7 @@ When a `LOAD_LEVEL` (0xE8) trigger activates — the truck chain's auto-fire thr
    (`ResetMap_Load`) onto the GameFlow stack [M 0x1d3800 tail];
 5. **`GameFlow_PushState(300.0f, 7, 0xff)`** [M 0x1b2318:92] — the push converts state 7 → 8
    and runs `Camera_SetFade(6, 300.0f, 1)` first [M 0x1c9f38:18-24; the ABI
-   `PushState(float duration, uint state, uint colour)` is disasm-pinned in
-   docs/reports/gameflow-state-stack.md];
+   `PushState(float duration, uint state, uint colour)` is disasm-pinned];
 6. the trigger is spent (type := 99) and `Player_RamSave()` runs [M 0x1b2318:93-96].
 
 With state 8 on top of the stack, `GameFlow_Main` waits while the fade camera's busy byte

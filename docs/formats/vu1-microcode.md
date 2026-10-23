@@ -1,6 +1,6 @@
 # VU1 microcode (ACTION.ELF `.vutext`) — the renderer's batch program
 
-Status: read 2026-10-15 (task 110v, G-014). The disassembler is `tools/vu1dis.py`
+Status: read 2026-10-15 (G-014). The disassembler is `tools/vu1dis.py`
 (python3, no deps). Everything below is [M] code — disassembly of the bytes in
 `work/elf/ACTION.ELF` — unless tagged otherwise. Addresses are VU1 micro-program
 qword indexes (`micro 0x000` = program start) unless a `data 0x..` prefix marks
@@ -157,7 +157,7 @@ ST out = LQIxy(B+0xc7+i) · Q ; out.zw = (1.0, ...) ← ST scaled by Q, output Q
 | Lighting: none in the batch path | **Confirmed as far as the code was read** — no light-vector dot products anywhere in the transform/clip/emission paths; vertex RGBA passes through. The EE-side lighting (if any) happens before the unpack. |
 | Signed V4-8 = normal + no-kick flag | **Partially confirmed.** The interleaved per-vertex record (pos/rgba/nrm at stride 3, nrm.w sign-extended to {0,−1}) is exactly what the microcode walks. The consumption point of the w flag (the per-vertex strip-break) is in the not-yet-read handler tails (0x2e0-0x4f4); the output-NLOOP counter vi11 proves the VU decides per-vertex what enters the output packet. Keep "medium" until the tail is read. |
 
-No renderer changes were made in this task (per the task brief); nothing above
+No renderer changes came with this reading; nothing above
 contradicts the port's implemented behavior.
 
 ## Not yet read / open
@@ -174,7 +174,7 @@ contradicts the port's implemented behavior.
   [vi01]). PCSX2's interpreter tables have no entry either, so this path may
   be dead on real hardware too.
 
-## Live checks for the main agent (PCSX2)
+## Live checks (PCSX2, open)
 
 1. MSCALF immediate: break VIF1 on MSCALF; confirm imm 0 for clipped batches
    and 2 for unclipped ones, once per object (not per batch).
@@ -187,5 +187,5 @@ contradicts the port's implemented behavior.
    log vi14 and vf02-vf05 to identify the 14 unknown encodings.
 5. Watch data 0x14.z toggle between 0x25 and 0x3e across successive batches.
 
-nf-view `--bond` spots: none — this task made no renderer changes and asserts
+nf-view `--bond` spots: none — this reading made no renderer changes and asserts
 nothing visible.

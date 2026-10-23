@@ -28,7 +28,7 @@ main (0x109080) loop ─ vblank pacing (§6) ─ GameFlow_Main
   `scePadEnterPressMode`; state 99 = ready.
 - `scePadRead` buffer at slot+0x124. Buttons: `~(data[2]<<8 | data[3])` stored at slot+0x122 (held) and
   slot+0x120 (newly pressed). Analog bytes at slot+0x128..0x12b.
-- Pad layout (*measured*, PCSX2 trace WORKLOG 0006 — the user pressed each input in a known order; matches the
+- Pad layout (*measured*, PCSX2 trace WORKLOG 0006 — each input pressed in a known order; matches the
   standard libpad layout): slot+0x128 RX, +0x129 RY, +0x12a LX, +0x12b LY (0 = left/up, 255 = right/down);
   buttons (game's u16 at slot+0x122): 0x0100 Select, 0x0200 L3, 0x0400 R3, 0x0800 Start, 0x1000 Up,
   0x2000 Right, 0x4000 Down, 0x8000 Left, 0x0001 L2, 0x0002 R2, 0x0004 L1, 0x0008 R1, 0x0010 △, 0x0020 ○,
@@ -98,7 +98,7 @@ clamp at the end of `Input_Update`, exactly as the decomp has it.
 - `MapAnalogStick(x)` (0x17f958): `i = (int)(x·127)`, `|i|` clamped to 128,
   `out = sign · gAnalogStickMappingFunction[|i|] / 255` (table at **0x2a3840**, 129 bytes; an identical copy at
   0x2455c0 is not used by this function). The table starts with a run of zeros (an extra radial dead zone) and
-  reaches 255 at the end. Its bytes are game data: the port reads them from the user's ELF, never commits them.
+  reaches 255 at the end. Its bytes are game data: the port reads them from the disc's ELF, never commits them.
 - `StickCompensation3(a, b)` (0x17f850): axis snap. If one axis is within ±0.707107 and the other is beyond it,
   the other becomes exactly ±1.
 - Application per player: styles 2 and 5: Comp2(3,4), Comp3(0,2). All other styles: Comp2(3,4), Comp2(0,5),
@@ -191,7 +191,7 @@ manually aiming, the smoothed cursor (+0x120/+0x124) moves halfway to the raw cu
 
 `nf_game::input` carries the game's pad path as code + generated data; `nf-view`'s `gamepad` cargo
 feature feeds a real pad into it. Everything below cites the decomp; the [L] tests run the game's own
-functions in the R5900 interpreter over the user's ACTION.ELF (`crates/nf-game/tests/input_styles_live.rs`,
+functions in the R5900 interpreter over the disc's ACTION.ELF (`crates/nf-game/tests/input_styles_live.rs`,
 `input_ramp_live.rs`).
 
 1. **Dead zone** (`input::dead_zone`): `psiInput_PollDevices` 0x10ca78 — per axis, `v = byte − 127`,
@@ -210,7 +210,7 @@ functions in the R5900 interpreter over the user's ACTION.ELF (`crates/nf-game/t
    `StickCompensation3` 0x17f850 (axis snap) with `MapAnalogStick` 0x17f958 — the game multiplies by the
    literal 0.003921569 (not ÷255; the constant's rounding differs by 1 ulp). Per style: Comp2(3,4) then
    Comp3(0,2) for styles 2/5, else Comp2(3,4), Comp2(0,5), Comp3(1,2). The curve table
-   (`gAnalogStickMappingFunction`, 129 bytes at 0x2a3840) is read from the user's ELF, never committed.
+   (`gAnalogStickMappingFunction`, 129 bytes at 0x2a3840) is read from the disc's ELF, never committed.
 4. **Ramps** (`input::AccelState`): `AccelFunc0` 0x1a9218 — the state moves toward `base` (|stick| <
    hi) or `base·mul` by `(base·mul − base)/steps` per tick, |stick| ≤ lo resets to base, clamp
    ±base(1+mul); the target is UNSIGNED, the stick's sign rides the multiply outside (`Player_Move`

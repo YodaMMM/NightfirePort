@@ -1,8 +1,8 @@
 # The tranquilizer dart (Korsakov K5) — the sleep path
 
-The user, 2026-10-16 evening: "tranq gun doesnt work". The dart hit ran the plain-bullet route
+The tranquilizer gun did not work (2026-10-16): the dart hit ran the plain-bullet route
 (0.1 damage + a flinch); the game's route puts the guard to sleep. This doc maps the whole
-mechanism; the port's gap and the fix are in `docs/reports/tranq-gun.md`.
+mechanism; the port follows it since.
 
 ## The weapon
 

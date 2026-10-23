@@ -96,7 +96,7 @@ LERPed by the same t [M 0x157780:96-104, disasm 0x157904-0x157920]. The push lan
 (P + (P−Q)·(r−|P−Q|)/|P−Q|, the y lane zeroed [M 0x157bd0:100-120]). Without it a sidestep left a guard 0.11
 from the gate pillar's post and every route segment failed the post test (WORKLOG 0023). Because the distance is X/Z,
 a guard whose feet are ELEVATED inside the band (e.g. on a floor above the wall's posts — the post height is the ray-up
-to the first ceiling [M AIBounds_Link2Cel 0x1d2f18:47-49]) is still nudged; the port matches (task 952: the old 3D
+to the first ceiling [M AIBounds_Link2Cel 0x1d2f18:47-49]) is still nudged; the port matches (the old 3D
 stand-in changed fix_guard_weapons_live's guard parking by mm–cm and with it the bullet-landing geometry).
 
 Translation is root motion; `NDrone2_Steer` turns 0.1 per tick toward `+0x694` (plus the anim yaw offset

@@ -70,7 +70,7 @@ the blank spacer (the static string 0x30d2d8, before Subtotal [M :117]).
 
 - Normal rows (0-3, 5): `raw = ceil₁ₑ₋₅(max × min(count, value) / count)`, ratio =
   round½↑(min/count × 100) × 0.01 clamped [0,1] [M 0x1984b0:171-199 — the `1e-05` bump is the
-  ceil]. **The port truncated instead of ceiling — fixed in this task** (the golden's Dispatched
+  ceil]. **The port truncated instead of ceiling — fixed** (the golden's Dispatched
   2/30 must show 3,334, not 3,333.33→3,333).
 - Row 4 stealth: detections over par → `raw = ceil₁ₑ₋₅(max(1 − (det − par) × penalty, 0) × max)`
   (penalty = entry+0x14, code default 0.03 [M 0x1984b0:201-224]); within par → raw = max,
@@ -79,7 +79,7 @@ the blank spacer (the static string 0x30d2d8, before Subtotal [M :117]).
   above max [M 0x1984b0:118-170: under-par branch multiplies max × par and divides by
   max(elapsed, 1); the over-par branch divides by elapsed/par — the same expression]. The
   capture's 01:19 / 09:00 → 170,887 = ceil(25000 × 540 / 79) proves it. **The port capped the
-  under-par arm at max — fixed in this task.**
+  under-par arm at max — fixed.**
 - Row 8 bonus pickups: all-or-nothing (count ≤ value → max, ratio 1) [M 0x1984b0:255-268].
 - `base = Σ raw` (f32 accumulate, trunc on store) [M :288-293]; difficulty multiplier
   `fptoui` of `ScoringTableDifMul` 0x2bc910: difficulty 1 → [0] = 0.0, 2 → [1] = 1.0, else →

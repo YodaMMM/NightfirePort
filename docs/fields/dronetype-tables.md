@@ -1,6 +1,6 @@
 # DroneTypeSettings (0x29aee8) and NDrone2_StateFuncs (0x29b300)
 
-Proof levels: see [README.md](README.md). Static pass, 2026-10-12, worker 4-c. Sources: the decomp
+Proof levels: see [README.md](README.md). Static pass, 2026-10-12. Sources: the decomp
 `work/decomp/ACTION.ELF/` [M] (file + decompiled line), `work/action-symtab.tsv` [M-sym], and the EE snapshots
 `work/ee_start_05.bin`, `ee_start_07000001.bin`, `ee_start_0700000a.bin`, `ee_snapshot.bin` (file offset == EE
 address) [L]. Reconciles `docs/systems/actors.md` (§1/§2) — disagreements listed at the end, none silent.
@@ -165,7 +165,7 @@ States named via NDrone2_StateFuncs (§ below). "by mode" = start −1. Reachabi
 | 83 | f800 … | 0xf8 BotGuardFriendFollow | | | | |
 | 84 | f900 … | 0xf9 BotIdle | | | | |
 
-Sanity checks vs the task brief and docs §1: row 0/2/12/13/25/30 bytes match the brief's samples exactly [L];
+Sanity checks vs the earlier samples and docs §1: row 0/2/12/13/25/30 bytes match the samples exactly [L];
 docs §1 rows 0-2, 4-10, 12-14, 16-17, 19, 22-25, 29 match the bytes; row 3 does not (docs error); rows 18, 21,
 27, 28 and the whole 30..84 block are missing from docs §1 (now above).
 
@@ -462,7 +462,7 @@ Astronaut/SpaceDrake, and nothing of the Bot block 0xC3-0xF9.
    routing actually uses before trusting the comment's id.
 7. docs §2's state names all check out against the table [M-sym]; no disagreement there.
 
-## Live checks for the main agent
+## Live checks (open)
 
 No game bytes here; EE addresses only. Static data is plain writable EE RAM — the tables are poke-able.
 `fieldprobe` CLI: `python -I tools/trace/fieldprobe.py <cmd>` (dump/find/ptrs/watch/poke/diff/shot; PINE, one client).
@@ -486,9 +486,9 @@ No game bytes here; EE addresses only. Static data is plain writable EE RAM — 
 
 - Who (if anything) writes the byte-0x304 hook — no writer in ACTION.ELF; assume another module or never used.
 - Whether behaviour id 0x23 (OLD path, reads the alias row → +0xC5 = 0xFF, OOB row read) occurs on disc — needs
-  the level behaviour roll (task-2 territory).
+  the level behaviour roll.
 - The exact placement-param ↔ behaviour-block byte mapping (bytes 0/4/0x10 → +0xC7/+0xC8/+0xC9) — behaviour
-  format is task-2; here only `DoModeSettingsNEW` 0x14c600:77-79 is cited.
+  format is separate; here only `DoModeSettingsNEW` 0x14c600:77-79 is cited.
 - The mode-0x17 → state 0x32 (TruckDriverInit) bypass in Global/Disabled/WaitSwitch: three sites agree, but the
   design intent (undercover guard row 23 also starts 0x32 via its own row) vs the CivilianScared alt is not
   chased to a disc placement.

@@ -35,5 +35,5 @@ test on the load path.
 ## Tests (crates/nf-view/tests/exit_aim_hint_live.rs)
 - `aiming_at_a_load_level_exit_raises_the_hint_once_and_arms_the_cooldown` — real path on
   07000005: aim at the exit → label 0x2000009 for 180 ticks; `load_msg` == 60 and no second raise
-  inside the cooldown window. Fails on the pre-task stand-in (no trigger arm at all).
+  inside the cooldown window. Fails on the earlier stand-in (no trigger arm at all).
 - `trigger_locked_arms_match_the_decompile` — both `Trigger_Locked` arms on/off pairs [M 0x1b2fc8].

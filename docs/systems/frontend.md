@@ -88,7 +88,7 @@ the unlock rule — with NF_ISO sisters against USATxt.dat and the EE snapshot).
 
 ## The 2026-10-13 render gaps, closed (fix-menus3)
 
-The main agent's `nf-view --shot` renders next to the PCSX2 captures found eight differences; what each
+`nf-view --shot` renders next to the PCSX2 captures found eight differences; what each
 was and what fixed it:
 
 1. **Framing** — the game draws the 640×480 menu space as a centred 4:3 picture [L PCSX2 captures]; the

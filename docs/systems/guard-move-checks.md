@@ -52,7 +52,7 @@ out = col0·x + col1·y + col2·z [M-dis 0x1e4960-0x1e49d8]) to d·col0, and the
 0, −sin yaw), whose atan2(Δx, Δz) angle is yaw + π/2 — the POSITIVE diff side. Hence positive diff →
 bit 8 = the +X side = LEFT. The `+0x570` anim-info fold agrees (a left-moving anim adjusts facing by
 +π/2 = the bit-8 addend [M-dis 0x150b48-0x150b58]). The port's `Drones::tick` had the
-`angle_difference` args in the decompiler's printed order, flipping every side label — fixed this task.
+`angle_difference` args in the decompiler's printed order, flipping every side label — fixed.
 
 Callers [M, decompile grep]: `NDrone2_ChooseCombatMove` 0x150c18 (step/roll/dodge cases, right-first or
 left-first per `Rand_Rand(2)`), `NDrone2_EvasiveMove` 0x1506d8 (same option list, the dodge case's
@@ -68,7 +68,7 @@ Port mapping: `Drone::can_move(d, x, z)` is the shared probe (the y leg of
 documents). The prop/anim gates live at the call sites, exactly as the game's callers gate them:
 `choose_combat_move` cases 1/3/4 carry prop 0x13/0x2e/0x42 + the 0x29/0x53/0x5a `can_do` checks;
 `can_backoff` carries prop 0x06 + anim 4 + the (0, −1.8) probe. The mp bot side's `can_side_move`
-(bots.rs) is the BOTSTATE stand-in ([S], documented there). **Correction this task made**: the port's
+(bots.rs) is the BOTSTATE stand-in ([S], documented there). **Correction**: the port's
 roll pair probed ±5.2 — the decompile's literal 0x40a66666 IS 5.2 (842 misread it as 5.3; daily audit 2026-10-21 restored 5.2)
 [M 0x150338 / 0x150500].
 

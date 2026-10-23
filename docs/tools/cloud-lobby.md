@@ -29,7 +29,7 @@ Published netfire-lobby (0.01 sec)
 ## The URL in the game
 
 The deployed URL is built into every exe: `LOBBY_SERVICE_URL` in `crates/nf-net/src/cloud.rs`, currently
-`https://netfire-lobby.netfire-lobby-worker.workers.dev` (deployed 2026-10-19 on the user's account). Players set
+`https://netfire-lobby.netfire-lobby-worker.workers.dev` (deployed 2026-10-19). Players set
 nothing. A player may override it with a `lobby_service = <url>` line in `%APPDATA%\NightfirePort\net.txt` or the
 `NF_LOBBY_SERVICE` environment variable (the env var wins; an empty value turns the service off: long codes and LAN
 lobbies only).

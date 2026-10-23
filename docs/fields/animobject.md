@@ -14,7 +14,7 @@ passes around (0x70–0x11F). Created by: `Player_Init` 0x1910f8, `NDrone2_Defau
 `MiniSub_Create`, `Env_Tree_Create`, `Script_AnimStart` (cut-scene doubles), `AnimDebugCreate/Handler`
 [ callers of 0x1be910 ]. Deleted by `AnimObjectDelete` 0x1bee80 (frees +0xA4/+0xAC/+0xB0/+0xB4/+0xB8/+0xBC/+0xC0, then the block).
 
-**obj+0xDC vs obj+0xE0** (for the StateMachineInfo worker): no union, no overlap — two different allocations.
+**obj+0xDC vs obj+0xE0** (for the StateMachineInfo map): no union, no overlap — two different allocations.
 +0xDC is the AnimObject for *every* anim class. +0xE0 is the per-class state block: player → `BLData`
 (AnimObjectUpdate 0x1befd8:161 writes `BL+0x924`), drone → `DCVars` (NDrone2_PostLoad_Init 0x14d890:
 `NDrone2_DefaultInit(*(obj+0xE0)+0xC00)`, `Drone_SM_InitObject` writes DCVars+0x108…0x130), the weapon-model
@@ -143,7 +143,7 @@ Live confirmation of real values pending (below).
   contexts, but 0x18 is a real entry in the drone anim-set table (set 5) and draws a laser sight in AnimObjectDraw —
   the exact weapon-name mapping lives in weapon-data.md, not here.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. **Pointer chain**: `PLAYERS` 0x2D88E0 → obj → `obj+0xDC` (07000005: 016cefe0 → 016cb8a0; block ends at
    016cb9c0 = +0x120). Drone 0: obj 016ed940 → anim 01fbd470.

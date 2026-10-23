@@ -217,7 +217,7 @@ u32@0x30ca98 = 523); filter class byte obj+0xFF == 0x22 → 29; instance = u32 a
    +0xF0 0x229, +0xFC 0. Beams of active heads carry +0xFA = 0x0004 (the beam block's 0x24 with
    0x20 consumed); the dark head's beam 016e92e0 sits at 0x0000/0xFC 0.
 
-## Live checks (for the main agent)
+## Live checks (open)
 
 Pointer chain: `DynamicObjList 0x2705a0 → u32@head+0x14 → obj → +0x14 …`; a class-0x22 obj's
 instance = `u32@obj+0xE0`. On 07000005 at start the dark head with the linked spot is obj

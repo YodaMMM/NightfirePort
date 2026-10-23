@@ -37,7 +37,7 @@ docs/fields/level-tag.md (param k = level_tag+0x2C+4k; header +0x02 key count = 
 | Update | `DynamicObject_Update` 0x18d3b8: (1) if p0 ≠ 0: `switch_channels[p0]` off → inert return; on → `obj+0xF0 = instance[4..6]` (restore the glist base word). (2) mode byte p3 == 0: p1 armed → `obj+0xFE |= 1` (deleted by the same tick's delete pass); p1 off or 0 → fall through. mode ≠ 0: p1 armed → `obj+0xF0 |= 0x30`, else restore the base word. (3) distance fade: if p2 ≠ 0 and `Vec_Dist3D(obj+0x80, glb_viewer+0xC0) < (int)p2`, `obj+0x106 = (int)(clamp(d/p2 − 0.5, 0, …) · 2 · 255)` — the alpha byte falls from 255 at the radius to 0 at half of it | [M 0x18d3b8] |
 | obj+0x80 | The world sphere centre the fade reads: the movement pass rebuilds it from the object matrix and the glist sphere (`Control_BuildWorldSph`); the port uses the placement translation + the rotated glist centre | [M 0x1336f8 pass 6; port stand-in documented] |
 | Instances | 07000002/03 (one each: chB 1, mode 0 — a prop deleted when ch 1 fires); 07000005 ×2 (chB 0x71, mode 1, glist base 0x10 — flags gain 0x30 when ch 0x71 arms); 0700000c ×5 (two with p2 = 9, no channels — pure distance fades); 07000014 ×45 (channel PAIRS: chB 0x51 + chA 0x51, chB 0x5c + chA 0x5c, chB 0x78 + chA 0x78 … the deleter and the gated prop of one channel) | [D placement scan] |
-| Port | `worldobj::DynObject.tick` — the gate, the mode-0 delete (retained out of the list), the mode-1 flags, the fade into `alpha` (renderer consumption is a later task's concern; the state is kept) | port |
+| Port | `worldobj::DynObject.tick` — the gate, the mode-0 delete (retained out of the list), the mode-1 flags, the fade into `alpha` (renderer consumption is separate; the state is kept) | port |
 
 ## ThirdCam — placement 0xe7, class 0xC
 
@@ -63,7 +63,7 @@ docs/fields/level-tag.md (param k = level_tag+0x2C+4k; header +0x02 key count = 
   the MP gate `MPSettings+0x460`, the 0x0700046b refusal) — driving-adjacent, out of this session.
 - The **renderer side**: obj+0xF0 bit 0x10 hiding, obj+0x106 alpha, the ThirdCam camera wiring.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. `--bond` at the 0700004a space-laser gun ([3.04, −48.40, −1.67], facing +z): poke switch channel
    0x22 to 1 — a 2000-damage straight-down beam bullet should spawn and the gun should fire once

@@ -3,7 +3,7 @@
 The cel-visibility walk honours the game's portal↔door link: a closed door ends its portal, so
 the room behind it is not walked into and its World geometry does not draw; an open door's portal
 crosses as before. This page documents the link, the walk gate, and the per-level facts the tests
-pin. The port landed with `fix-door-portal-links` (docs/reports/fix-door-portal-links.md); this
+pin. The port is in scene.rs (the door-link portal gate); this
 page adds the 07000007 facts and the never-adds/draw-count verification.
 
 ## The link [M]
@@ -78,8 +78,8 @@ headless at the pinned fixtures:
 
 - **07000007 start view** (`scene.start` + 1.6 eye, start yaw, 60°/16:9): **177** with the legacy
   walk (every portal open — the pre-link port), **177** with the door gate at create, **177**
-  all-open. The game measured **177** World draws on this view [L fix-perf-level, live PCSX2
-  measurement recorded in docs/atlas/cel.md and docs/reports/fix-portal.md — "4526 → 177"]. The
+  all-open. The game measured **177** World draws on this view [L live PCSX2
+  measurement recorded in docs/atlas/cel.md — "4526 → 177"]. The
   gate neither adds nor removes a draw here, matching the empty link table above.
 - Other 07000007 ground-truth spots: ballroom window (cell 25) 268 → 268; clock hall (cell 33)
   294 → 294; the sister sweep (16 yaws around the start eye, plus both spots) adds **0** cels.
@@ -102,5 +102,5 @@ headless at the pinned fixtures:
 3. `the_walk_never_adds_cels_in_any_direction` — 16 yaws × 3 pitches on both levels' fixtures:
    gated ⊆ legacy always (adds == 0), all-open == legacy per-cell in every direction.
 
-`crates/nf-view/tests/door_portal_live.rs` (the previous task's) stays: the 07000001 links, the
+`crates/nf-view/tests/door_portal_live.rs` stays: the 07000001 links, the
 shut-door block from both sides, the draw-while-shut pin, the real-use open.

@@ -1,13 +1,13 @@
-# NDrone2 helper helpers — the call-tree remainder (task ai-ndrone2-rest)
+# NDrone2 helper helpers — the call-tree remainder
 
 The call-tree check (`tools/calltree/calltree.py`, `--all-mentioned-dstates --list`) flagged 18
 `NDrone2_*` helpers reachable from the ported guard states that the port never named. This note
 records, for each: what the game does [M], who calls it, and where the port lands it — ported
-into the caller, cited at the Rust that already does the work, or pinned as a stub. After the
-task the check lists none of them.
+into the caller, cited at the Rust that already does the work, or pinned as a stub. The check now
+lists none of them.
 
 Evidence tags per `docs/fields/README.md`: [M] decompile (`work/decomp/ACTION.ELF/`, `:NN` =
-line), [L] live measurement (PCSX2 playtest), [S] suggested/port choice.
+line), [L] live measurement (PCSX2), [S] suggested/port choice.
 
 ## Ported into the caller
 
@@ -28,7 +28,7 @@ the driver to that one; fixed.
   placements [D census; docs/port-map/unreached.md]. His normal block has 0x3c but **no 0x51**
   (only the alert block carries 0x50/0x51) [D `nf-extract drone-props … 07000006.bin`, (66.1, 39.2,
   28.9) k15 13]. So the game's NearArmedBond is 0 while he idles: armed Bond alone does not scare
-  him. 844 had forced 0x51 for mode 0x17, citing the playtest observation "he does get scared" —
+  him. An earlier port change forced 0x51 for mode 0x17 on the observation that he gets scared —
   that observation was of the port, not the game. No runtime writer of prop 0x51 exists outside
   the init rows [M grep setProperty(0x51)].
 - Test: `nf-view/tests/fix_06_driver_live.rs::the_scared_cower_keeps_him_in_place_on_the_floor`
@@ -53,7 +53,7 @@ the driver to that one; fixed.
 | `NDrone2_Player` | 0x149768 | the `Drones::tick` opponent pass — `glb_players` or the MP active-player global [M 0x149768]; the port has one Bond |
 | `NDrone2_HeadTrackObj` | 0x14ada0 | the per-tick head-tracking block — the Bond-talk request behind the prop-0x4c gate: `AnimObjectSetHeadTracking(3.0, 0.13, …)` [M 0x14ada0:9-15]; the port's tracking covers it with the same 3.0 range |
 | `NDrone2_DoTypeSettingsOLD` | 0x14d2e8 | the abseil dtypenew comment (full name now at the 0x14b300:676 site) |
-| `NDrone2_CreateNinjaEyes` | 0x149600 | the `NinjaStand` 0xa6 ENTER doc — two gfx objects (hash 0x2000132, bones 0x54/0x60) spawned by `ControlDTYPE_Ninja` 0x14b0f8:6 / `PreDroneControl` 0x148db0:126 [M]; visual-only, the AI reads the eyes datum for the BLIND_DRONES cheat arm only — the main agent renders |
+| `NDrone2_CreateNinjaEyes` | 0x149600 | the `NinjaStand` 0xa6 ENTER doc — two gfx objects (hash 0x2000132, bones 0x54/0x60) spawned by `ControlDTYPE_Ninja` 0x14b0f8:6 / `PreDroneControl` 0x148db0:126 [M]; visual-only, the AI reads the eyes datum for the BLIND_DRONES cheat arm only — draw-side |
 
 ## Cited at the caller (mp/bots.rs — the MP data layer, phase 4 ports)
 
@@ -70,9 +70,8 @@ the driver to that one; fixed.
   0x1b; no decompiled sender of msg 0x1b exists [M grep] — the port has no 0x1b arm, cited at
   the `PATROL` UPDATE.
 
-## Tests run for this task
+## Tests
 
 - `nf-view --test fix_06_driver_live` (both tests, the scare + the gunfire sister) — green
   after the fix, red on the scare before it (the driver stayed 0x34: prop 0x51 missing).
-- `nf-game` lib + integration, `nf-formats`, `nf-audio`, `nf-view` — see
-  `docs/reports/ai-ndrone2-rest.md` for the exact totals.
+- `nf-game` lib + integration, `nf-formats`, `nf-audio`, `nf-view`.

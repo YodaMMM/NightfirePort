@@ -2,12 +2,12 @@
 
 Status: implemented (session protocol + app surface + tests). Evidence tags: [M] code (function +
 address), [D] disc, [L] EE snapshot, [S] suggested / port-only design. **Online play is a port
-feature — the PS2 game has no late join** (a HELLO after GO was refused before this task), so every
+feature — the PS2 game has no late join** (a HELLO after GO was refused before late join), so every
 wire choice here is [S]; the game facts it leans on are cited.
 
 ## 1. What this is
 
-The user (2026-10-18): "a way to join ongoing matches". The online match is deterministic lockstep
+Late join lets a player join a match that is already running (2026-10-18). The online match is deterministic lockstep
 (`docs/systems/net-lockstep.md`, `net-match-host.md`): same seed + settings on every machine, only
 per-tick inputs exchanged, a per-tick state hash detects desyncs. Late join exploits exactly that:
 
@@ -110,7 +110,7 @@ per-tick hashes agree to the end with the joined agent's body at the same spawn 
 the sister test corrupts one log input — the replay hash diverges, the joiner refuses itself and
 the host reports `ClientLeft { JoinVerifyFailed }` with the roster untouched.
 
-Measured catch-up (the sandbox, release build): 301 ticks in 1194 ms ≈ **251 ticks/s** headless —
+Measured catch-up (release build): 301 ticks in 1194 ms ≈ **251 ticks/s** headless —
 a 20-minute match limit (72 000 ticks) back-fills in ~286 s of wall time, during which the match
 keeps running (the joiner catches up live through the relay after the snapshot).
 
@@ -140,7 +140,7 @@ keeps running (the joiner catches up live through the relay after the snapshot).
 - Tests: `crates/nf-net/tests/drop_rejoin.rs` (shim, lossy), `crates/nf-net/src/proto.rs`
   `join_begin_history_roundtrip_and_truncation`, `crates/nf-view/tests/mp_online_failures.rs`.
 
-## 7. Live checks for the main agent
+## 7. Live checks (open)
 
 None required — the PS2 has no late join to observe and the tests are headless. The visible work
 (the joining page, the notice on the host's lobby, the new agent popping in) is the draw code's;

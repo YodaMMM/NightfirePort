@@ -1,14 +1,11 @@
 # Releases and the launcher's self-update
 
-The user's rule (2026-10-19, revised the same evening — "Might be putting releases out too frequently"): green
-batches merge to master all day, and **one public GitHub release goes out each evening (~9 pm MST)** with everything
-that passed since the last one. An urgent fix for something badly broken may go out sooner. Players' launchers
-install it automatically on launch.
+Releases are published as GitHub releases; players' launchers install a newer one automatically on launch.
 
 ## What a release is
 
 Just `NightfirePort.exe` on a GitHub release of `YodaMMM/NightfirePort`, with `NightfirePort.exe.sha256` beside it
-(the user, 2026-10-19: "no reason to zip when we just have an exe"). The exe is the one program (GUI subsystem):
+(no zip). The exe is the one program (GUI subsystem):
 double-clicked, it's the launcher (disc picker, PLAY, self-update, Report crash); PLAY runs the same file as
 `NightfirePort.exe <iso> --game`, the game (`nf_view::run`), with its output sent to `nf-view.log`.
 
@@ -31,8 +28,7 @@ No game data: players supply their own disc image. Online play uses join codes (
 - `tools/release/publish.ps1 [-Lane <checkout>]` refuses unless HEAD is on `origin/master` and the tree is clean,
   takes the newest release's tag + 1 patch, runs make-release (the bridge zip on 0.1.3 only), and `gh release create`s
   the tag on HEAD with the files and the required plain-English summary (`-NotesFile notes.md`; `-Notes` text breaks on straight double quotes), with nothing appended. `-Draft`
-  for a draft. Mission names in the notes come from the mission-select table (`CAMPAIGN` in menu.rs), never from
-  memory or docs titles.
+  for a draft. Mission names in the notes come from the mission-select table (`CAMPAIGN` in menu.rs).
 
 ## The self-update (crates/nf-view/src/launcher/update.rs)
 

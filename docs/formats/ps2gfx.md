@@ -6,7 +6,7 @@ Reader: `crates/nf-formats/src/ps2gfx.rs`. Golden: `golden/geometry.tsv` (per ar
 0x1230d8 (*measured*); the disc bytes of all 2,230 maps (*measured*); GIF tag / VIF / DMA tag field layouts from the
 PS2 hardware docs (*sourced*: standard EE/GS user's manual layouts as also used by PCSX2). Confidence: high for the
 container and batch layout (invariants checked on every batch). The VU1 microcode itself has now been read
-(docs/formats/vu1-microcode.md, task 110v): entry points 0 = clipped / 2 = unclipped are confirmed (the VU builds
+(docs/formats/vu1-microcode.md): entry points 0 = clipped / 2 = unclipped are confirmed (the VU builds
 the clipped output with a Sutherland–Hodgman pass; entry 0 sets the clip-enable flag), the UV handling is confirmed
 (the VU multiplies the raw disc ST by 1/w and outputs Q = 1.0, so the port's direct-UV reading matches what the GS
 interpolates), and no lighting terms exist in the microprogram (colors are pre-lit upstream). Still medium: the

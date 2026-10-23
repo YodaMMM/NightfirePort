@@ -80,7 +80,7 @@ right 0×516 / 2×59 / 1×3; wide rows 270, two-column rows 308 [M the parsed ta
 Kinds as line kinds: kind 0 = name lines (the big count), kind 2 = section headings (also the
 kind-1/wide EUROCOM-and-friends lines at the roll's opening: entry 53 "EUROCOM" is kl=1/kr=1
 two-column [M entry 53]), kind 1 = the three highlighted roles. The kind-0/1/2 → face mapping is
-mechanical from the pointers; which face id maps to which font file is draw-side (the main agent).
+mechanical from the pointers; which face id maps to which font file is draw-side.
 
 ## Positions (the 512×448 menu space)
 
@@ -143,10 +143,10 @@ else **0x404040ff** [M 0x2152b0:83-88]. `GameState[0x52]` is the level-bonus/med
 - `crates/nf-view/src/menu.rs` — `Page::Credits` (id 0x40000030), `FrontEnd::credits` +
   `credits_from`, `open_credits(from_page, music_vol, bonus_flag)`; the tick integrates the roll
   and routes the delayed exit (ToMain → Page::Main, PopBack → the opener); the AV Options Credits
-  row (0x10000138) confirms into `open_credits`. Drawing the roll is left to the main agent
-  (`fe.credits.visible()`).
+  row (0x10000138) confirms into `open_credits`. The draw reads
+  `fe.credits.visible()`.
 
-## Live checks for the main agent
+## Live checks (open)
 
 - [ ] PCSX2, AV Options → Credits: confirm the roll's first visible rows are the label-0x10002a5/6/7
       headings (wide, centred) and that entry 53's "EUROCOM" row is two-column kind-1 — pins the

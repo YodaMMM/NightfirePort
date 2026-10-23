@@ -2,8 +2,8 @@
 
 Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] decomp / disassembly read here, [D] disc bytes, [L] EE snapshots,
 [S] suggested. Port: `crates/nf-game/src/anim.rs` (`script_pose_together`), draw path
-`crates/nf-view/src/scene.rs` (`frame_state_for`'s script branch). Symptom (playtest 1017): "ninja boss is
-missing from last cutscene of that level" — the final level of the Double-Cross chain, 07000004.
+`crates/nf-view/src/scene.rs` (`frame_state_for`'s script branch). Symptom: the ninja boss was
+missing from the last cut-scene of the final level of the Double-Cross chain, 07000004.
 
 ## The cut-scene and its actor list [D]
 
@@ -93,7 +93,7 @@ port's skin-skeleton walk is the standing [S] convention the drone path already 
   and moves between two ticks, and the character is not hidden; the sister arm poses streams 1/2's actors
   (unchanged, finite) and would fail if the new arm broke the matching path.
 
-## Live checks for the main agent
+## Live checks (open)
 
 - PCSX2, 07000004 fresh boot, the story scene (after the intro): the ninja should stand/walk with Bond and
   the ally during the 830-tick scene (a `--bond` inside the cut-scene camera's view; the scene's camera key

@@ -4,7 +4,7 @@ The player-facing entry point: the only thing a player supplies is the disc imag
 
 - **First run:** "Select disc image" (the system open dialog) or drop the `.iso` on the window. The image is checked
   by `nf_formats::identity` (volume id `NIGHTFIRE`, `SYSTEM.CNF` boots `SLUS_205.79` with `VMODE = NTSC`, the boot
-  ELF and `ACTION.ELF` SHA-1s from build-identity.md, not truncated) — a few MB read, ~7 ms on the user's disc
+  ELF and `ACTION.ELF` SHA-1s from build-identity.md, not truncated) — a few MB read, ~7 ms on the retail disc
   (*measured*, `tests/identity_disc.rs`). A wrong image gets a plain-language reason (another game, PAL release,
   incomplete copy, patched executable).
 - **Remembered** in `launcher.toml` beside `settings.toml` (`%APPDATA%\NightfirePort`; `NF_CONFIG_DIR` overrides).

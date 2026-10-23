@@ -1,7 +1,7 @@
 # The 02 bath hatch over the deep ladder (07000002)
 
-The deep ladder on 07000002 (centre (−50.35, ·, 5.50), yaw π/2, top 5.531, bottom 0.547 —
-`docs/reports/ladder-underwater-02.md`) climbs out of the undergarden water tunnel into the
+The deep ladder on 07000002 (centre (−50.35, ·, 5.50), yaw π/2, top 5.531, bottom 0.547)
+climbs out of the undergarden water tunnel into the
 bathhouse. Its exit is closed by a hatch SimpleScript; this note is the disc + decompile answer
 to how the game opens it, and what the port runs.
 
@@ -68,7 +68,7 @@ panel), below #500, so the moment only fires through the open hatch.
 
 ## The port
 
-`fix-npc-doors-escort` (2026-10-13, master ac86a176) ported `SS_Activate` (`ss.rs Ss::activate`)
+The door/escort work (2026-10-13) ported `SS_Activate` (`ss.rs Ss::activate`)
 and the use-key pick arm for class 0x25 in `nf_view/src/scene.rs` (the nearest E-armed SS under
 the head ray within 2.2 — the reach stand-in shape the doors use; the game's pick is the sphere
 vs the mesh). `nf_game::ss`'s state machine (grates-02) sweeps and holds the open pose; the
@@ -79,7 +79,7 @@ plates (61, 62, moment 101), dismount grounded in the bathhouse (y 6.64), walk a
 end to end through `nf_view::load` + `Sim::step_bond` in
 `crates/nf-view/tests/bath_hatch_02_live.rs`.
 
-## Live checks for the main agent
+## Live checks (open)
 
 PCSX2, 07000002, fresh boot (the save-state resume skips the boot path):
 

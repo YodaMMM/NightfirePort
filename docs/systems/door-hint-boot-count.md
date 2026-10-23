@@ -12,7 +12,7 @@ saved-game state. Docs first, then the port shape, then the tests.
   `lw` + 0x1a7bc0 `sw` — the `DoorMsg + 1`; decompile 0x1a7810:186-191]. The gate short-circuits
   BEFORE the `Door_DoMsg` call, so an attempt the cap blocks never reaches the door and burns
   nothing.
-- The full gp-relative scan (this task, over the whole ACTION.ELF, gp 0x314670 → immediate
+- The full gp-relative scan (over the whole ACTION.ELF, gp 0x314670 → immediate
   0x8694): exactly those THREE references exist, and no absolute `lui`-based reference to
   0x0030cd04 — no other reader, no other writer, no reset anywhere in the on-foot ELF
   [M the scan; decompile grep: `DoorMsg` appears only in Check_Target].
@@ -64,7 +64,7 @@ saved-game state. Docs first, then the port shape, then the tests.
 - `crates/nf-view/tests/door_text_labels_live.rs` (from door-text-labels): the latch, the locked
   door's burn, the open-door failure, the per-door one-shot, and the cap gate.
 
-## Live checks for the main agent
+## Live checks (open)
 
 1. Memory-watch `0x30cd04` (EE, data breakpoint) through play: expect +1 only on shown hints,
    no write at a level transition, none at the pause-menu Restart, none on death-retry.

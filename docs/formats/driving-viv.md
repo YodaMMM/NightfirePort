@@ -3,7 +3,7 @@
 The BIGF container itself is `docs/formats/bigf.md` (layout *measured*; golden
 `golden/bigf_entries.tsv`: 23 archives, 1,499 entries, per-entry content SHA-1 — that golden was
 measured through the ISO reader on the full disc image). This file records what is *inside* the
-entries: the census the `research-driving` task measured over every one of the 1,499 entries
+entries: the census measured over every one of the 1,499 entries
 (*measured*, [D]; repro: `crates/nf-formats/tests/driving_golden.rs`, golden
 `golden/driving_census.tsv`).
 

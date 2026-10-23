@@ -2,7 +2,7 @@
 
 Proof levels: see [README.md](README.md). Evidence tags: [M] = decompile (function = filename stem, address =
 filename prefix, `:NN` = line in the .c file), [M-dis] = checked against raw MIPS in `work/ee_start_05.bin`, [L] = EE snapshot read.
-Worker task 4-b2. Context: `Drone_tag` = `obj+0xE0` (embedded at `obj+0x110`, 0xD20 bytes — see
+Context: `Drone_tag` = `obj+0xE0` (embedded at `obj+0x110`, 0xD20 bytes — see
 [dcvars-statemachine.md](drone-statemachine.md)); drone list head = u32 0x298E14.
 
 Method note: the bit census was mechanical — every `.c` in `work/decomp/ACTION.ELF/` scanned for `+ 0x4f8)`, the enclosing
@@ -163,7 +163,7 @@ targets, `SetHTAnim` 0x13b1c8:129-147), **+0x544** = per-drone update hook calle
 6. **Brief's "HostageKiller reads opponent's obj→?+0xAC"** — resolved: `HostageKiller` 0x15c728:64 reads
    `+0x2B0 → obj+0xE0 → drone+0xAC`; the health float lives on the drone (writers listed above), not on obj_tag.
 
-## Live checks for the main agent
+## Live checks (open)
 
 Pointer chain: u32 **0x298E14** = first Drone_tag* (07000005 start: 0x016EDA50); drone+0x04 next, +0x0C obj, obj+0xE0 → drone
 [dcvars doc]. Suggested situations: 07000005 at start (13 drones; guards Idle(4), ch-waiters WaitSwitch(1), drone 2
@@ -188,7 +188,7 @@ HostageKiller(7), sniper last node in 0x29), then shoot a guard.
 7. **byte range / access type**: whole drone = obj+0x110 .. obj+0xE2F (0xD20 bytes), all u32 fields little-endian; +0x4F8
    word is only ever accessed as u32 (plus one u64 read at DoForcedAttack:28 and the signed-`<0` bit31 test at 0x140e90:169).
 
-## Port fixes driven by this map (044y-fields-actors)
+## Port fixes driven by this map
 
 - `alert_block`'s doc said `+0x504`: the live alertness is `+0x50C` (the port's `alert` field, already used by the
   vision code), `alert_block` is the resting value `+0x500`, `alert_floor` is the alt profile's `+0x504` — comment

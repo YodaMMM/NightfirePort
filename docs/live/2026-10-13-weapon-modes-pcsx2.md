@@ -1,6 +1,6 @@
 # Weapon fire modes in the real game (PCSX2, 2026-10-13)
 
-Measured by the main agent in a multiplayer Arena match. The setup:
+Measured in a multiplayer Arena match. The setup:
 - **Match:** Skyrail, one Snow Guard bot, weapon set Normal, PCSX2 2.x with the keyboard-mapped pad.
 - **Weapons:** given through PINE: the owned byte `BL+0x1BA+w*0xC`, the clip `BL+0x1B8+w*0xC` and the switch request `anim+0x63`.
 - **Player pointers in MP:** `*(0x2D88E0)` = the player object; `obj+0xDC` = anim, `obj+0xE0` = BLData. These are the same offsets as single player.
@@ -26,7 +26,7 @@ Screenshots stayed in the session (no game images in the repo). The numbers belo
   - The switch needed the twin to have rounds (`Player_WeaponHasAmmo`): with 0x2B empty the press did nothing; with rounds it switched (anim+0x62/0x63 = 0x2B).
 - **0x2A "Grenade": impact detonation.** Fired at a rock wall ~10 units away, it exploded **on contact**, within about 0.3 s of the shot (the next captured frame).
 - **0x2B "Delay": timed fuse.** Fired at the same wall, the round **bounced off it**, dropped and rolled left, and exploded **about 3–4 s** after the shot (the match clock went 07:09 → 07:05; the capture timing is coarse, so take the fuse from the decompile).
-- The user's report "the MGL is always delayed" matches: the port lacks the impact mode.
+- The port's MGL was always delayed: it lacked the impact mode.
 
 ## The mode button
 
