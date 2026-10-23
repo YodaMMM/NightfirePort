@@ -410,16 +410,19 @@ impl Level {
     /// animated `Tree`s), drawn as the skin's main meshes at the placement transform in bind pose. Sleeve entries
     /// (substituted at run time) and skins from other archives are skipped; the second value counts placements
     /// skipped for a missing skin.
-    pub fn character_instances(&self) -> (Vec<Instance>, usize) {
+    /// Each instance rides its placement's own index — the drone link (`Scene::char_drone`) keys
+    /// on it, because placements can share a translation bit-for-bit (0700000c's three duplicate
+    /// pairs [D #263/#461, #261/#462, #310/#463]; task 992-0c-invisible-soldiers).
+    pub fn character_instances(&self) -> (Vec<(usize, Instance)>, usize) {
         let Some(m) = self.main_map() else { return (Vec::new(), 0) };
         let (mut out, mut missing) = (Vec::new(), 0);
-        for p in &self.maps[m].placements {
+        for (pi, p) in self.maps[m].placements.iter().enumerate() {
             let Some(&(_, skin)) = p.params.iter().find(|(i, _)| *i == 0) else { continue };
             if skin >> 24 != 5 { continue; }
             let Some(s) = self.skins.get(&skin) else { missing += 1; continue };
             for h in s.main.iter().flatten() {
                 if let Some(&(map, object)) = self.by_hash.get(h) {
-                    out.push(Instance { map, object, matrix: placement::object_matrix(p.rotation, p.translation), placement: p.clone() });
+                    out.push((pi, Instance { map, object, matrix: placement::object_matrix(p.rotation, p.translation), placement: p.clone() }));
                 }
             }
         }

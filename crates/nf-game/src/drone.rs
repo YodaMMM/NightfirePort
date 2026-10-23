@@ -12038,9 +12038,27 @@ impl Drones {
         // retail data]. The port therefore runs no case for them; the proof is the census, and
         // the game functions are cited here at the exact dispatch site that would call them.
 
+        // The drones' `placement` is the create pass's own enumeration index (`level_drones`'s
+        // `dr.placement = i`; `parsemap_create_dynamic_objects` 0x1d04f0 creates one object per
+        // placement, so the object IS its placement's — the game never re-derives the index). An
+        // older position re-link stood here (the first 0x0f placement with |dx|,|dz| < 1e-3) and
+        // is wrong wherever two drone placements share XZ: 0700000c ships three bit-identical
+        // pairs [D #263/#461 t [6.5508847,12.309799,-224.56429], #261/#462 t
+        // [-19.704529,12.32595,-217.32669], #310/#463 t [36.356506,12.14821,-208.81349] — each
+        // pair is the group-1 immediate guard (spawner #264) and the group-4 ch-4 swap wave
+        // (spawner #279) at one spot], and `position()` handed BOTH drones of a pair the lower
+        // index — the control-list order key (reverse placement, Drones::tick) and every
+        // placement-keyed reader then saw one drone twice and the other never (the draw list's
+        // char link keyed the same way: one of the pair drew, the other — active — drew nothing,
+        // task 992-0c-invisible-soldiers). Level drones keep the exact create index; a
+        // script-spawned drone (NIS event 8, `Drone_CoderCreate` 0x13a108) has NO placement —
+        // the disc's only firing event is a no-op [D 0600005b stream 9], so nothing re-matches
+        // it; the guard below only normalizes a stale non-drone index to the game's "no
+        // placement" 0.
         for dr in &mut self.list {
-            if let Some(i) = level.maps[m].placements.iter().position(|p| p.flags & 0xff == 0x0f
-                && (p.translation[0] - dr.pos[0]).abs() < 1e-3 && (p.translation[2] - dr.pos[2]).abs() < 1e-3) { dr.placement = i; }
+            if dr.placement != 0 && !level.maps[m].placements.get(dr.placement).is_some_and(|p| p.flags & 0xff == 0x0f) {
+                dr.placement = 0;
+            }
         }
         // `Copter_Create`'s SP beat [M 0x17d340:66-74]: each copter owns a ScriptPlayer created at
         // load (`SP_Create` 0x1dc7e0 → `SP_CreateScriptPlayer` 0x1db9a8, modes 8,8, mask 0 → state
