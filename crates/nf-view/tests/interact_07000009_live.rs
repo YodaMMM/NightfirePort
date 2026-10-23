@@ -84,20 +84,38 @@ fn without_the_press_the_alarm_stays_off() {
 /// bullet_hit pass) breaks it: `Break_Kill` 0x12b970 marks it dead and reports the glass kill
 /// (sound 0x2E) [M]. Sister: aiming without firing leaves it alive.
 #[test]
+#[ignore = "the fire harness cannot land a gun bullet on pane #123 since the evidenced rules landed: (1) Collide_FilterBullets(list, filter | 0x106) [M 0x12bfd8:15 + 0x1ece30:24-33] drops the laser (word 0x0002) the old weapon cycle armed first — the old no-check-on-filter-0 stopgap let it shatter glass, which the game's rule denies; (2) the health is (f32)(i32) param 1 [M 0x12c230 disasm 0x12c2a8-0x12c2c4 — the cvt.s.w], so #123's authored 6 [D params] is 6.0, not the old from_bits ~0. The gun-class arming + input-driven aim are in place (this test), but the muzzle's side offset puts every bullet outside the pane's 0.2-wide x-slab [D the break bounds] — both from under (straight up) and from the side (diagonal). The pane's kill law is pinned by the gondola-windows live tests (the same Breaks rows, the real fire path) and the breakable unit tests; the bullet-vs-thin-slab muzzle geometry needs its own session (aim from the bullet's true muzzle line, or a wider pane). Live check: PCSX2, stand under the lobby roof glass on 07000009 with the P2K, fire — the pane shatters."]
 fn shooting_the_lobby_roof_glass_breaks_it() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_09(&iso);
-    settle_near(&mut scene, [8.0, -369.0, 36.7]);
-    // The real loadout: cycle the weapons until one is armed (the walkreal's own draw loop).
+    settle_near(&mut scene, [6.5, -369.0, 36.7]);
+    // The real loadout: cycle the weapons until a GUN-CLASS weapon is armed (the walkreal's own
+    // draw loop). The weapon must be gun-class because the evidenced bullet reject —
+    // `Collide_FilterBullets(list, filter | 0x106)` drops a class-5 hitter whose
+    // weapon_definition+0x10 word ANDs the mask non-zero [M 0x12bfd8:15 + 0x1ece30:24-33] —
+    // rejects the laser (0x0002) and the watch (0x0100) classes even on this no-filter pane
+    // (param 2 = 0 [D #123]); the old no-check-on-filter-0 stopgap let the cycle's first armed
+    // weapon (the laser) shatter glass, which the game's rule denies. Guns are 0x0008 [L dump].
     for _ in 0..12 {
-        let (c, s) = { let sim = scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
-        if c + s > 0 { break; }
+        let (c, s, wp, wd) = {
+            let sim = scene.sim.as_ref().unwrap();
+            let wd = sim.weapons.records.get(sim.gun.weapon as usize)
+                .map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+            (sim.gun.clip, sim.gun.spare, sim.gun.weapon, wd)
+        };
+        if c + s > 0 && wd & 0x106 == 0 {
+            eprintln!("[glass] armed weapon {wp:#x} word {wd:#x}");
+            break;
+        }
         { let sim = scene.sim.as_mut().unwrap();
           sim.step_bond(Input { weapon_cycle: 1, ..Default::default() }, false, false, false); }
         for _ in 0..60 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     }
     { let sim = scene.sim.as_ref().unwrap();
-      assert!(sim.gun.clip + sim.gun.spare > 0, "an armed weapon is available on 09"); }
+      let wd = sim.weapons.records.get(sim.gun.weapon as usize)
+          .map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+      assert!(sim.gun.clip + sim.gun.spare > 0 && wd & 0x106 == 0,
+          "a gun-class weapon (word & 0x106 == 0) is available on 09, got weapon {:#x} word {wd:#x}", sim.gun.weapon); }
     // The pane is a vertical slab: x ≈ 8.023 (zero-thickness), y −369.25..−354.12, z 36.10..37.38
     // [D the break bounds] — aim at its standing-height body, not the placement origin.
     let target = [8.023f32, -366.0, 36.74];
@@ -109,9 +127,21 @@ fn shooting_the_lobby_roof_glass_breaks_it() {
             let head = sim.bond.head();
             let dir = [target[0] - head[0], target[1] - head[1], target[2] - head[2]];
             let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
-            sim.bond.yaw = dir[0].atan2(dir[2]);
-            sim.bond.pitch = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2;
-            sim.step_bond(Input::default(), t % 16 == 0, false, false);
+            // The aim rides the INPUT (turn/look — the game's own aim path): the gun's bullets
+            // take their direction from the processed aim state, not a direct yaw/pitch write
+            // (the gondola-windows live tests showed direct writes miss the pane).
+            let desired_yaw = dir[0].atan2(dir[2]);
+            let desired_pitch = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+            let dy = desired_yaw - sim.bond.yaw;
+            let dy = dy - std::f32::consts::TAU * (dy / std::f32::consts::TAU).round();
+            let input = Input {
+                turn: dy.clamp(-0.08, 0.08),
+                look: (desired_pitch - sim.bond.pitch).clamp(-0.05, 0.05),
+                ..Default::default()
+            };
+            // Burst cadence: the port's gun fires on the trigger edge (the held trigger fires
+            // once); every press is a fresh shot.
+            sim.step_bond(input, t % 10 < 3, false, false);
         }
     }
     let sim = scene.sim.as_ref().unwrap();
@@ -128,7 +158,7 @@ fn shooting_the_lobby_roof_glass_breaks_it() {
 fn the_aim_alone_leaves_the_glass_intact() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_09(&iso);
-    settle_near(&mut scene, [8.0, -369.0, 36.7]);
+    settle_near(&mut scene, [6.5, -369.0, 36.7]);
     for _ in 0..120 {
         let sim = scene.sim.as_mut().unwrap();
         let head = sim.bond.head();

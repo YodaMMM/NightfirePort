@@ -12828,8 +12828,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // shot in the Sim's shared world pass (`Sim::step_net_world`), on every machine —
             // this machine's own bullet must not break them here alone.
             let net_world = self.net_bodies.is_some();
-            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.rng) } {
+            // The reject word: `Collide_FilterBullets(list, filter | 0x106)` reads the bullet's
+            // weapon-definition word at `weapon_definition+0x10` [M 0x12bfd8:15 + 0x1ece30:24-33;
+            // the same read the fusebox pass makes below].
+            let weapon_word = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, weapon_word, b.damage, &mut self.rng) } {
                 self.break_kills.push((k.placement, k.kind, k.sound));
+                // A script pane's kill deletes its object (Break_Kill's obj+0xFE bit 0 [M
+                // 0x12b970:60]): the pane leaves the collision set (the next `script_parts`
+                // carries it no more) and the draw — the same removal the fusebox wire cuts do.
+                if let Some(o) = k.script_obj {
+                    if let Some(slot) = self.scripts.objects.list.get_mut(o) { *slot = None; }
+                }
                 // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
                 // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
                 // audio voice plus the hearing entry (the level's sfx-table data, the shape the
@@ -16569,6 +16579,28 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     _ => false,
                 }
             });
+        }
+        // The script-created breakables (`Script_CreateEntity` 0x1d8968's 0x20 arm — the
+        // gondola's 16 windows ride the carriage): upsert/refresh each live 0x20 entity's pane
+        // row every tick. The game re-poses obj+0x90 from the stream keys per `Script_Interp`
+        // [M 0x1d9a08:94-112] and the bullet's `Collide_Intersect` tests the pane's CURRENT local
+        // space [M 0x1ebaa8:157-177]; the port re-derives the pane's world bounds from the live
+        // matrix (the same shapes the dynamic set carries). A pane whose object died (the kill's
+        // deletion, a `Script_KillStream`) drops its row.
+        {
+            let live: Vec<usize> = self.scripts.objects.list.iter().enumerate().filter_map(|(i, o)| match o {
+                Some(crate::nis::Obj::Entity { kind: 0x20, .. }) => Some(i),
+                _ => None,
+            }).collect();
+            self.breaks.retain_script_panes(&live);
+            for (o, hash, params, m) in self.scripts.objects.list.iter().enumerate().filter_map(|(i, o)| match o {
+                Some(crate::nis::Obj::Entity { hash, kind: 0x20, params, matrix, .. }) => Some((i, *hash, params.clone(), *matrix)),
+                _ => None,
+            }) {
+                if let Some(shape) = d.world.shape(hash) {
+                    self.breaks.script_pane(o, &params, shape, m);
+                }
+            }
         }
         { let parts = { let _p = crate::prof::scope("drones: set_dynamic parts"); script_parts(self, d) };
           let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&parts); }
