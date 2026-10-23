@@ -136,8 +136,7 @@ fn the_map_ambients_including_the_waterfall_key_on_through_the_real_path() {
         // guarantee a strictly positive gain: a source exactly on the −ListenerNorm pole (dot
         // −1000) drives L to 0, and the rear term can clamp both channels to 0 — so the old
         // l>0&&r>0 pin asserted more than the decompile says. The strict positivity is now
-        // [S] unverified, out of pass/fail; the real waterfall gains are under "Live checks" in
-        // docs/reports/audit-unproven-1022.md.
+        // [S] unverified, out of pass/fail; the real waterfall gains need a live read (open).
         assert!(0.0 <= *l && *l <= 1.0 && 0.0 <= *r && *r <= 1.0,
             "ambient {want} keyed on at tick {f} but its front voice left the game's clamped gain range (l={l}, r={r}) [M PS2_SFXCalculate3D 0x1060c:99-113]");
     }

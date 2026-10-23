@@ -87,7 +87,7 @@ fn esponage_pane_icon_shows_for_the_carrier_only() {
     // the pane origin + the MPScoreInfo record (sprite x/y at record+0xc/+0xe [M Sprite_Create2
     // 0x1de3d8]) + the create's −0x18 else-arm [M 0x19ed10:72-76], but the disc record 1 reads
     // (0, 448) and the origin path (HUD_ValidateXY 0x19a250) did not resolve to (16, 392) here.
-    // The live check in docs/reports/audit-unproven-1022.md settles the on-screen rect.
+    // A live read of the on-screen rect settles it (open).
     let _ = (bp[0].x, bp[0].y);
     let p0 = pane(&m, 0);
     assert!(

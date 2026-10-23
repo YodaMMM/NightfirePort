@@ -180,7 +180,7 @@ fn bullets_shatter_the_glass_and_vases_and_the_sister_stays_whole() {
         "the bullet kills the breakable and the kill records queue [M 0x12bfd8:44-50, 0x12b970]");
     // Sister: a fresh load, no shots — the scenery the guards cannot touch stays whole. The
     // game's own intro smashes the entry-hall glass: the woken squad's class-2 contact [M
-    // Break_Update 0x12bfd8:23-34] is the user-reported breach scene (docs/systems/glass-breach.md),
+    // Break_Update 0x12bfd8:23-34] is the breach scene (docs/systems/glass-breach.md),
     // and the contact rule reproduces it. So the pin is the kind gate [M :25 — the class-2 drain
     // hits kind 2 only]: nothing but glass may die without a bullet, and every kind-0 vase stays
     // whole (the old "every breakable whole" pin predated the working breach and contradicted the

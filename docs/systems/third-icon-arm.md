@@ -98,6 +98,6 @@ it had only armed through the [S] `icon.radius + 2.5` sphere stand-in. Standable
 - The straddle-cel gate stays the port's documented stand-in (`icon_cels`, the icon's own
   sphere-straddle set vs the game's pick-side straddle) — fix-08-walls' evidence stands.
 - The swim pick (substates 13/14) is bone-anchored in the game; the port approximates with the
-  position anchor (`pick_arm`'s walk arm) — the swim tests pass on the slim ISO; a live
-  bone-position check is listed in the task report if the main agent wants it.
+  position anchor (`pick_arm`'s walk arm) — the swim tests pass; a live
+  bone-position check is still open.
 - [S] unverified: nothing in the arm path; every constant above carries [M]/[L]/[D].

@@ -557,7 +557,7 @@ attack is NOT the drone's own sighting (`+0x4F8 & 0x8000000` clear) and a pendin
   HeardNoiseSuspect 0x16b0e0:123 share > 0.1), 0x40000000 by the alarm (EnemyAlerts 0x177c18:114).
   No decomp writer clears them; a later consult is neutralised by the receiver's own +0x4FC markers
   (EndInterogateAssist's 0x10 among them) — the game's own mechanism. Port: `Drone::alert_pending`.
-- The assist states [M, task 856's port kept]: 0x39 `NDrone2_DSTATE_InterogateAssist` 0x1616c0
+- The assist states [M]: 0x39 `NDrone2_DSTATE_InterogateAssist` 0x1616c0
   (ENTER: SetInterogateAssist +0x4FC |= 0x20 [M 0x178308], timer C at now + Rand(120); TIMER_C: the
   goal at the opponent's object with the 10-unit arrival radius — `SetupGoalPositionToObj` 10.0
   [M 0x15add0], `MoveToGoalPosition` arrives under it [M 0x1517d8:80-83] — reachable → GoToGoal

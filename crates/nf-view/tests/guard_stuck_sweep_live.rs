@@ -1,6 +1,5 @@
-//! guard-barks-first-alert-3: the stuck-guard sweep (task 961b's sweep tool). User report
-//! (2026-10-22, playing 0.1.17): "The exchange had a few guards stuck in the helipad section",
-//! then "Not just 05" — symptom only, the cause not known; this sweep MEASURES it.
+//! The stuck-guard sweep: measures guards that stop moving while their state wants them to travel
+//! (seen around 07000005's helipad and on other levels).
 //!
 //! Method per on-foot SP level: load through the real path (`nf_view::load`), let the level start,
 //! then wake every live watching guard through the game's OWN alarm path — msg 0x1e (ALARM)
@@ -26,8 +25,7 @@
 //! `route_blocked` (the nav follow's BLOCKED/NO_PATH latch [M `Network::push_out` /
 //! `update_mission_route`]), the goal distance, and whether it stands inside 07000005's helipad
 //! courtyard box (the parked helicopter statics' spheres (−17.0, 43.0..44.8, −37.2..−43.6) [D
-//! fix-portal5.md §6] — the user's reported section). This test is LOG-ONLY (a measurement, not a
-//! pin): the hits' table goes to docs/reports/guard-barks-first-alert-3.md; a follow-up fix turns
+//! fix-portal5.md §6]). This test is LOG-ONLY (a measurement, not a pin); a follow-up fix turns
 //! the exact rows into assertions.
 
 #[path = "common/walker.rs"]

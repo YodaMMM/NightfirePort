@@ -1,4 +1,4 @@
-//! copter-path-flight (task 958): the extraction copter flies the game's CopterPaths route —
+//! The extraction copter flies the game's CopterPaths route —
 //! `Copter_Move` 0x17d628 over the 0x1c nodes `Copter_Create` 0x17d340 builds from the level's
 //! 0x2F placements — not the old one-shot script pass. Real-path pins on the four copter levels
 //! (05, 08, 0b, 12 — the placement census's kind-0x2F set); the printed route facts are the [D]

@@ -15,7 +15,7 @@
 //! HostageGoToGoal 0x64 (0x165a68), SearchArea 0x65, HeardNoise 0xa2-0xa5, RunForCover 0x8c.
 //!
 //! Opt-in: `NF_ISO`. Diagnostic: prints the hit table and a TOTAL line; asserts nothing so the
-//! suite never blocks on a census. Addresses in docs/reports/stuck-guards-sweep.md.
+//! suite never blocks on a census.
 
 use nf_formats::anim::Script;
 use nf_formats::iso9660::IsoImage;

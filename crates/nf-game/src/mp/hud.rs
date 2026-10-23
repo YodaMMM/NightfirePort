@@ -577,7 +577,7 @@ impl MpScorePane {
                 // template colour stays [D MPScoreInfo 0x2be888 = 7f7f7fff]. The create's
                 // else-arm (everything but 0x400/0x60000008) moved sprites 1/2 down 0x18 and no
                 // x [M 0x19ed10:72-76]; the absolute rect (16, 376) is the port's modelling
-                // [S unverified — see docs/reports/audit-unproven-1022.md].
+                // [S unverified — a live read of the on-screen rect is open].
                 if snap.viewer_carries_blueprint {
                     icons.push(icon(1, 0x0300_018a, 16.0, 376.0, 0x7f7f_7fff));
                 }
