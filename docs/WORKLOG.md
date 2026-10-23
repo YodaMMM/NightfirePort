@@ -45,3 +45,32 @@ Work log:
   (docs only), so the state is valid — /home/z/suite_0a_hatch2_state.json, logs
   /home/z/chunk_0a_hatch2_*.out; chunk 2's 51 binaries all green so far. Re-invoke
   `python3 tools/test/chunk_suite.py /home/z/suite_0a_hatch2_state.json` until ALL DONE.
+
+## level-0a-office-hatch-3
+Started 2026-10-23 22:07 UTC. Branch s/level-0a-office-hatch-3 from origin/master 8b101249d,
+merged s/level-0a-office-hatch-2 (docs only — -2 ended with no source deltas).
+Task: the 0700000a west-hall glide height (the port 1.1336/1.1000 vs the game 1.1147) + the corner
+wedge; un-ignore walkreal_0700000a_live::walk_office_floor_qworm_keyboard_hatch.
+
+Work log:
+- (22:15) suite.py baseline started in the background (suite.out).
+- (22:30) the slim work/decomp lacks the player functions (only the 0xa00000 region); extracted
+  ACTION.ELF (2.36 MB) from the ISO and wrote a capstone MIPS disassembler (scratch, /home/z/mipsdis.py).
+- (22:40) [L ee_start_0700000a.bin] the game's player position record at 0x18694e0 reads
+  (-3.9319, 1.0891, 10.3978) — the game's spawn root is 1.0891; the port spawns 1.1000.
+- (22:50) [D] the start #0 placement (map37 plc 0, flags 0x24) translation y = 5.55e-17 — both sides
+  raise the spawn: [M Player_StandAtNewPosition 0x190d88 disasm 0x190ee0-0x190f18] build_PointOnFloor
+  (ray, arg 3.0) then + 1.1f (0x3f8ccccd) — the game's spawn = floor_ray + 1.1; the port's
+  Bond::stand_at = floor_below + 1.1 (player.rs:506). Same rule, DIFFERENT floor: the game's ray
+  finds -0.0109 under the cab (1.0891 [L]), the port's floor_below finds 0.0000.
+- (23:00) [D port world] fine floor grid + tri dumps: the port's world floor is 0.0000 everywhere
+  along the route (cab interior, lobby, hall, corner); no 0.08 sill, no threshold at x -7.75; the
+  doorway has roomjoin17 a/b (jambs) and a 0.1622-tall wall base at x -8.304 (z 14.3..16.3) IN the
+  port's world; the SS cab dynamic floor is not in the port's static world.
+- (23:05) [port] scratch walkout with the door wait: the port walks cab->hall at y 1.1000 FLAT
+  (no climb, no ride) — the -2 session's "leaves the cab at 1.1336" did not reproduce on a straight
+  real-input walk; the wedge dither remains the -2 finding at the corner.
+- (23:10) [port] capsule_push probe at the x -8.304 wall base DOES lift (+y up to 0.15) when the
+  capsule presses it — the port's push tail is not obviously missing the lift; the walk path's ease
+  may have missed the base. Reading the game's Player_Collision + the +0xCC (anim root height)
+  writers next to settle the rest model (strict contact 1.0347 vs anim-driven root).
