@@ -36,6 +36,15 @@ type Mat4 = nf_formats::anim::Mat4;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GroundMotion { pub delta: V3, pub turn: f32, pub pivot: V3 }
 
+/// The game's `Collide_LineOfSight` 0x1edf50 filter masks (HITTEST+0x98), each including the
+/// wrapper's own `| 4` [M disasm 0x176fec/0x1770b0 — docs/systems/drone-armed-peer.md:53-57].
+/// Drop semantics: `Collide_Intersect` 0x1ebaa8:300-319 + `Collide_Pick` 0x1eb320:140-152 (see
+/// `CollisionWorld::line_of_sight`).
+pub const LOS_GUARD_VISION: u32 = 0xa27; // DroneVision_CanSeeObjectFrom 0x176f18:69/95 and its family (CanSeePosition 0x178438:70, LineOfSightToObject 0x178390:22, DroneCanSeeDrone 0x1760b0:80, NDrone2_CheckUnsurrender 0x14a168:30, HandleExplosives 0x1435f0:40, MessageObjVicinity 0x13a438:31 — the 0x500 arg is dead, class-5 blast takes the plain-0xa27 else branch)
+pub const LOS_PLAYER_HEADROOM: u32 = 0xd; // Player_SSCrouch 0x1924c0:100-101 / Player_HandleJump 0x1916b0:161-162 mask 9 | 4
+pub const LOS_PROBE_8: u32 = 0xc; // mask 8 | 4 — Player_SSGrapple 0x192860:86-88, Searchlight_Update 0x1cb900:338-340, Sensor_SetBeam 0x1af398:73-75, Bullet_homing 0x12f358:92-93
+pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
+
 #[derive(Default)]
 struct Geo {
     tris: Vec<[V3; 3]>,
@@ -299,14 +308,40 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let nl = dot(n, n).sqrt();
     if nl < 1e-12 { return false; }
     let n = [n[0] / nl, n[1] / nl, n[2] / nl];
-    // The one-sided rule for near-horizontal faces: the capsule's top end must be on the
-    // front (+n) side, else the face is skipped (the game's head-on cull [M 0x109da0:321-322]).
-    if n[1].abs() > 0.7 && dot(n, sub(*a, t[0])) < 0.0 { return false; }
+    // The game's head-on cull [M Intersect_CylGeom 0x109da0:302-322, inside the |n·d| > 0.0002
+    // branch]: the 0.999 compare is unit-scale, and the spine is NORMALIZED before the triangle
+    // loop [M the Vec_Normalise 0x1e3000 call at 0x109f74, immediately before the per-box walk;
+    // on the raw walk spine |d| = 0.7597 [L ee_start_05 BL 0x16cf0f0: HITTEST+0x30 − +0x20 =
+    // −0.7597198] a raw-dot 0.999 threshold is unreachable — and the raw reading is refuted on
+    // the real path: with it the walk cannot descend the 07000001 stairwell (exit_aim_01_live:
+    // Bond floats at the stairwell head, the step behind/above pushing him down, grounded=false
+    // oscillation — the game obviously walks stairs). Direction: the normalized vector points
+    // DOWN (B − A; the UP normalisation feeds the walkable/pick gate at :473, and an UP cull dot
+    // would cull the floor underfoot), f is the plane-crossing fraction along the raw B − A from
+    // A = param_1[2] (clamped :310-320; scale-invariant), and the face is skipped when
+    // (n·d̂ > 0.999 ∧ f > 0.5) ∨ (n·d̂ < −0.999 ∧ f < 0.5) (:321-322). The port's `a`/`b` ARE the
+    // game's A/B in that order: walk A = HITTEST+0x20 = BLData+0x760 = pos + up·0.275 (the TOP),
+    // B = HITTEST+0x30 = BLData+0x770 = pos + up·(0.55 − cc) [M Player_Collision 0x194df0 disasm
+    // 0x195444/0x195464], climb A = pos+up·0.55, B = pos+up·(0.275−cc) [M 0x194df0 case 0/6,
+    // |d| = 1.3097183] — f means the game's fraction from the top end. The cull therefore lives
+    // for faces within ~2.6° of horizontal (|n·ŷ| > 0.999): a step behind/above (f = 0 < 0.5) is
+    // skipped — stairs descend; a floor crossed in the spine's TOP half (f < 0.5) is jumped
+    // through from below; the same face crossed in the BOTTOM half (f > 0.5) is solid. Faces the
+    // old |n·y| > 0.7 + top-end-side rule culled in the 0.70-0.763 band (≈45-77° slopes above the
+    // capsule) are TESTED here, exactly as the game tests them.
     let ab = sub(*b, *a);
     let denom = dot(n, ab);
+    let mut f = 0.0f32;
+    if denom.abs() > 0.0002 {
+        f = (-(dot(n, sub(*a, t[0]))) / denom).clamp(0.0, 1.0);
+        let ab_len = dot(ab, ab).sqrt();
+        if ab_len > 1e-6 {
+            let nd = denom / ab_len;
+            if (nd > 0.999 && f > 0.5) || (nd < -0.999 && f < 0.5) { return false; }
+        }
+    }
     let mut p = if denom.abs() > 0.0002 {
-        let tt = (-(dot(n, sub(*a, t[0]))) / denom).clamp(0.0, 1.0);
-        [a[0] + ab[0] * tt, a[1] + ab[1] * tt, a[2] + ab[2] * tt]
+        [a[0] + ab[0] * f, a[1] + ab[1] * f, a[2] + ab[2] * f]
     } else {
         let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) / 3.0);
         closest_on_segment(*a, *b, c)
@@ -1524,14 +1559,19 @@ impl CollisionWorld {
     /// the segment point where it meets the plane (clamped; the point nearest the centroid when parallel), the closest
     /// triangle point to it, and when that lies on an edge the segment point nearest it; closer than `r` → pushed out
     /// along the separation. Returns the summed push and whether a walkable face (normal y > 0.7) touched below `b`.
-    /// One-sided for near-horizontal faces [M Intersect_CylGeom 0x109da0:302-322 + Player_Collision 0x194df0 case 0/6]:
-    /// the game's walk spine (spheres at pos+0.55 and pos+0.275−cc, 1.31 long) makes every plane within
-    /// ~40° of horizontal a head-on crossing, and those the game culls by side — an up-facing floor is
-    /// solid from above while a down-facing one (the garden pond's floor [D probe_vent_swim]) is passed
-    /// through, and an up-facing platform is jumped through from below. The port keys the rule on the
-    /// face's horizontality (|n·y| > 0.7 ≈ the game's 0.999/1.31 cone) with the capsule's top end `a` as
-    /// the side reference — [S] approximation of the cull, walls and steep slopes stay double-sided as in
-    /// the game's non-head-on path.
+    /// One-sided head-on cull, the game's exact rule [M Intersect_CylGeom 0x109da0:302-322]:
+    /// |n·d̂| > 0.999 on the NORMALIZED spine (the Vec_Normalise 0x1e3000 at 0x109f74 precedes the
+    /// tri loop; the raw-dot reading is refuted by the stairwell — see capsule_tri_contact) with
+    /// the crossing fraction f from A = param_1[2], skip on (n·d̂ > 0.999 ∧ f > 0.5) ∨ (n·d̂ <
+    /// −0.999 ∧ f < 0.5). The port's `a`/`b` are the game's HITTEST+0x20/+0x30 in that order
+    /// (walk: A = pos+up·0.275 top, B = pos+up·(0.55−cc) bottom [M 0x194df0 disasm
+    /// 0x195444/0x195464; L ee_start_05 |d| = 0.7597198], climb: A = pos+up·0.55, B =
+    /// pos+up·(0.275−cc) [M 0x194df0 case 0/6], |d| = 1.3097183), so f means the game's fraction
+    /// from the top end. The cull lives for faces within ~2.6° of horizontal: the step
+    /// behind/above (f = 0) is skipped — stairs descend; a face crossed in the spine's TOP half
+    /// is jumped through from below; the BOTTOM half is solid. The old stand-in's wider
+    /// 0.70-0.763 band (≈45-77° slopes above the capsule) is gone — those faces push, as the
+    /// game's non-head-on path tests them.
     pub fn capsule_push(&self, a: V3, b: V3, r: f32, top_guard: bool) -> (V3, bool) {
         let (mut a, mut b) = (a, b);
         let mut total = [0f32; 3];
@@ -1547,8 +1587,39 @@ impl CollisionWorld {
         (total, walkable)
     }
 
-    /// Clear line between two points (`Collide_LineOfSight` stand-in: collision geometry, moving objects included).
-    pub fn line_of_sight(&self, a: V3, b: V3) -> bool { self.segment_clear(a, b) }
+    /// Clear line between two points — the game's `Collide_LineOfSight` 0x1edf50 →
+    /// `Collide_RayIntersect` 0x1ec690 ray (type +0x94 = 0x201) with the CALLER's filter mask on
+    /// HITTEST+0x98. The drop semantics live in `Collide_Intersect` 0x1ebaa8:300-319 (and
+    /// `Collide_Pick` 0x1eb320:140-152): bit 0x800 drops hits whose per-triangle surface byte has
+    /// bit 0x40; bit 0x1 drops surface classes 0xd/0xe; bit 0x2 drops class 0x10; bit 0x8 drops
+    /// hits on NODE-flagged cels (cel+0x94 bit 0x40 → HITDATA+0x51 bit 2 via :93-99/:143-145);
+    /// bit 0x20 skips the 0x1000-flagged nodes (the port's missile cage). `mask` already includes
+    /// the wrapper's own `| 4` [M disasm 0x176fec/0x1770b0 — docs/systems/drone-armed-peer.md].
+    /// Each caller passes the mask its game call site passes — see the `LOS_*` constants.
+    pub fn line_of_sight(&self, a: V3, b: V3, mask: u32) -> bool {
+        let d = sub(b, a);
+        let dynamic = self.dynamic.read().unwrap();
+        let skip_cage = mask & 0x20 != 0;
+        let (drop_node, drop_surface, drop_de, drop_10) =
+            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+        let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
+        for g in sets.into_iter().flatten() {
+            for o in along(g, a, b) {
+                for k in o.tris.clone() {
+                    let m = g.mats[k];
+                    let low = m & 0x3f;
+                    if drop_node && g.pass[k] { continue; }
+                    if drop_surface && m & 0x40 != 0 { continue; }
+                    if drop_de && (low == 0xd || low == 0xe) { continue; }
+                    if drop_10 && low == 0x10 { continue; }
+                    let t = &g.tris[k];
+                    if dot(cross(sub(t[1], t[0]), sub(t[2], t[0])), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                    if seg_tri_hit(a, b, t) { return false; }
+                }
+            }
+        }
+        true
+    }
 
     /// Height of the first collision surface straight below `p` within `depth` (starting 0.5 above it).
     pub fn floor_below(&self, p: V3, depth: f32) -> Option<f32> {
@@ -1751,9 +1822,9 @@ mod tests {
             [[-5.0, 0.0, 5.0], [5.0, 3.0, 5.0], [5.0, 0.0, 5.0]], [[-5.0, 0.0, 5.0], [-5.0, 3.0, 5.0], [5.0, 3.0, 5.0]],
         ]);
         assert_eq!(w.floor_below([1.0, 1.1, 1.0], 3.0), Some(0.0));
-        assert!(w.line_of_sight([0.0, 1.0, 0.0], [0.0, 1.0, 4.9]));
-        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [0.0, 1.0, 6.0]));
-        assert!(w.line_of_sight([0.0, 4.0, 0.0], [0.0, 4.0, 6.0]), "over the wall");
+        assert!(w.line_of_sight([0.0, 1.0, 0.0], [0.0, 1.0, 4.9], LOS_PROBE_8));
+        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [0.0, 1.0, 6.0], LOS_PROBE_8));
+        assert!(w.line_of_sight([0.0, 4.0, 0.0], [0.0, 4.0, 6.0], LOS_PROBE_8), "over the wall");
     }
 
     /// The sight-class mask 0xa27 (`DroneVision_CanSeeObjectFrom` 0x176f18 ORs it into every
@@ -1797,5 +1868,122 @@ mod tests {
         assert!(w.segment(from, to).unwrap() < 0.5, "flat: the cage card blocks");
         let tm = w.segment_masked(from, to).unwrap();
         assert!((tm - 6.0 / 8.0).abs() < 1e-6, "sight ray: the cage card is behind the mask bit 0x20 (t={tm})");
+    }
+
+    /// capsule-headon-cull-redo: the head-on cull is the game's exact rule [M Intersect_CylGeom
+    /// 0x109da0:302-322] — |n·d̂| > 0.999 on the NORMALIZED spine [M the Vec_Normalise at
+    /// 0x109f74 before the tri loop; the raw-dot reading is refuted by the stairwell
+    /// (exit_aim_01_live) — see the capsule_tri_contact note], skip on the crossing-fraction
+    /// half. This test feeds the 1.31-long CLIMB spine directly. A spine crossing an up-facing
+    /// floor near its TOP end (f < 0.5) passes through — the jump-through case the old
+    /// top-end-side rule also passed; the same face crossed near the BOTTOM end (f > 0.5) is
+    /// solid. The old stand-in keyed the cull on |n·y| > 0.7, one band WIDER (0.70-0.763) and
+    /// side-keyed on the top end's position: a ~43° slope face (n·y = 0.73) above the capsule was
+    /// skipped outright; the game's |n·d̂| = 0.73 < 0.999 does not cull it — the capsule pushes.
+    #[test]
+    fn head_on_cull_uses_the_raw_spine_dot_and_the_crossing_half() {
+        // Up-facing floor at y = 0 (wound so cross(e1,e2) = +y), 20×20.
+        let floor = vec![
+            [[-10.0, 0.0, -10.0], [-10.0, 0.0, 10.0], [10.0, 0.0, 10.0]],
+            [[-10.0, 0.0, -10.0], [10.0, 0.0, 10.0], [10.0, 0.0, -10.0]],
+        ];
+        let w = world(floor);
+        // The climb spine: 1.31 long, vertical. Crossing at f = a_y / 1.31.
+        // f = 0.4 (crossing near the top): the game's cull skips — pass-through from below.
+        let (push, _) = w.capsule_push([0.0, 0.524, 0.0], [0.0, 0.524 - 1.31, 0.0], 0.55, false);
+        assert_eq!(push, [0.0; 3], "f=0.4: the up-floor is jumped through from below (push {push:?})");
+        // Sister (can fail): f = 0.6 (crossing near the bottom end): solid — pushed up onto the floor.
+        let (push, _) = w.capsule_push([0.0, 0.786, 0.0], [0.0, 0.786 - 1.31, 0.0], 0.55, false);
+        assert!(push[1] > 0.3, "f=0.6: the up-floor is solid underfoot (push {push:?})");
+        // The 0.70-0.763 band the old stand-in over-culled: an UP-facing face with n_y = +0.73
+        // (≈43°) hanging above the capsule. The game's raw dot 0.73·1.31 = 0.956 < 0.999 does not
+        // cull it — the capsule below (on the face's back side) is pushed down off the underside.
+        // The old |n·y| > 0.7 + top-end-side rule skipped it outright (push 0).
+        // Verts: e1 = [−4,0,0], e2 = [0,−3.745,4] → n = [0, 16, 14.98], n̂ = [0, 0.73, 0.684];
+        // the face's y at (0,0) is 1.6275, the spine top a_y = 1.2 sits 0.31 below the plane.
+        let slope = vec![[
+            [2.0, 3.5, -2.0],
+            [-2.0, 3.5, -2.0],
+            [2.0, 3.5 - 3.745, 2.0],
+        ]];
+        let w = world(slope);
+        let (push, _) = w.capsule_push([0.0, 1.2, 0.0], [0.0, 1.2 - 1.31, 0.0], 0.55, false);
+        assert!(push[1] < -0.05, "n·y=0.73 (in the old 0.7-0.763 over-cull band): the game's cull \
+            does not skip it — the capsule is pushed off the underside (push {push:?})");
+    }
+
+    /// capsule-headon-cull-redo: the walk spine (0.7597 [L ee_start_05 BL 0x16cf0f0]) culls ONLY
+    /// within the ~2.6° horizontal cone (|n·ŷ| > 0.999 on the normalized spine) — a 43° slope
+    /// face above the capsule (n·y = 0.73, the old stand-in's 0.70-0.763 over-cull band) is
+    /// TESTED and pushes; a FLAT floor crossed in the spine's TOP half (f < 0.5) IS culled — the
+    /// game's jump-through, which the old top-end-side rule refused (a above the plane → push).
+    #[test]
+    fn walk_spine_culls_only_near_flat_faces() {
+        // Flat floor crossed at f = 0.4 of the walk spine: culled — pass-through from below.
+        let floor = vec![
+            [[-10.0, 0.0, -10.0], [-10.0, 0.0, 10.0], [10.0, 0.0, 10.0]],
+            [[-10.0, 0.0, -10.0], [10.0, 0.0, 10.0], [10.0, 0.0, -10.0]],
+        ];
+        let w = world(floor);
+        let (push, _) = w.capsule_push([0.0, 0.30388, 0.0], [0.0, 0.30388 - 0.7597, 0.0], 0.55, false);
+        assert_eq!(push, [0.0; 3], "walk spine, flat floor at f=0.4: the game's cull skips it (push {push:?})");
+        // Sister (can fail): the same floor crossed in the BOTTOM half (f = 0.6): solid.
+        let (push, _) = w.capsule_push([0.0, 0.4558, 0.0], [0.0, 0.4558 - 0.7597, 0.0], 0.55, false);
+        assert!(push[1] > 0.3, "walk spine, flat floor at f=0.6: solid underfoot (push {push:?})");
+        // The 43° slope above the capsule: n·d̂ = 0.73 < 0.999 — NOT culled (the old |n·y| > 0.7
+        // rule skipped it outright); the capsule below is pushed off the underside.
+        let slope = vec![[
+            [2.0, 3.5, -2.0],
+            [-2.0, 3.5, -2.0],
+            [2.0, 3.5 - 3.745, 2.0],
+        ]];
+        let w = world(slope);
+        let (push, _) = w.capsule_push([0.0, 1.2, 0.0], [0.0, 1.2 - 0.7597, 0.0], 0.55, false);
+        assert!(push[1] < -0.05, "n·y=0.73 on the walk spine: no cull — pushed off the underside (push {push:?})");
+    }
+
+    /// capsule-headon-cull-redo: `line_of_sight` applies the CALLER's game mask — the drops
+    /// differ per mask [M Collide_Intersect 0x1ebaa8:300-319, Collide_Pick 0x1eb320:140-152]:
+    /// guard vision 0xa27 drops surface-0x40 and the classes but NOT node-flagged cels and NOT
+    /// the 0x1000 cage... (0xa27 DOES carry bit 0x20 — the cage is skipped); the crouch/jump
+    /// headroom 0xd (9|4) drops node-flagged cels and the classes but NOT surface-0x40.
+    #[test]
+    fn line_of_sight_applies_the_callers_game_mask() {
+        let face = |m: u8| [[2.0, 0.0, -1.0], [2.0, 2.0, 1.0], [2.0, 2.0, -1.0]];
+        // A surface-0x40 card between the endpoints: guard vision (0x800) sees through it,
+        // the crouch headroom (no 0x800 bit) does not.
+        let w = CollisionWorld::from_triangles_flags(vec![(face(0x04), 0x44, false)]);
+        assert!(w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_GUARD_VISION),
+            "guard vision drops the surface-0x40 card [M 0x1ebaa8:300-302]");
+        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_PLAYER_HEADROOM),
+            "the headroom mask (9|4) has no 0x800 bit — the surface-0x40 card blocks");
+        // A NODE-flagged card (the placement glist bit 0x40): the headroom mask's bit 0x8 drops
+        // it; guard vision (0xa27 has NO bit 0x8) does NOT — the card blocks.
+        let w = CollisionWorld::from_triangles_flags(vec![(face(0x04), 0x04, true)]);
+        assert!(w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_PLAYER_HEADROOM),
+            "the headroom mask drops node-flagged cels [M 0x1ebaa8:317-319]");
+        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_GUARD_VISION),
+            "0xa27 has no bit 0x8 — the node-flagged card blocks guard vision");
+        // A class-0x10 card: both masks drop it (0xa27 bit 0x2, 0xd bit 0x1 covers 0xd/0xe only —
+        // class 0x10 is dropped by bit 0x2, which 0xd lacks). So: guard vision drops, headroom blocks.
+        let w = CollisionWorld::from_triangles_flags(vec![(face(0x04), 0x10, false)]);
+        assert!(w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_GUARD_VISION),
+            "guard vision drops class 0x10 [M 0x1ebaa8:314-316]");
+        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_PLAYER_HEADROOM),
+            "the headroom mask (9|4) has no 0x2 bit — class 0x10 blocks");
+        // The 0x1000 cage (the port's missile set): guard vision's bit 0x20 skips it; the
+        // headroom mask (no 0x20) still tests it.
+        let mut w = CollisionWorld::from_triangles_flags(vec![]);
+        w.missile.push(std::iter::once((face(0x0a), 0x0a)));
+        w.missile.chunk(16);
+        assert!(w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_GUARD_VISION),
+            "guard vision skips the 0x1000 cage [M 0x1eb320:145-152]");
+        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_PLAYER_HEADROOM),
+            "the headroom mask has no 0x20 bit — the cage blocks");
+        // Sister (can fail): an unflagged plain card blocks every mask.
+        let w = CollisionWorld::from_triangles_flags(vec![(face(0x04), 0x04, false)]);
+        for (name, m) in [("guard", LOS_GUARD_VISION), ("headroom", LOS_PLAYER_HEADROOM)] {
+            assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], m), "{name}: plain geometry blocks");
+        }
     }
 }

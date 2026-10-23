@@ -103,7 +103,7 @@ fn main() {
         sim.bond.pos = [g[0] + dx * 10.0, g[1] + 0.14, g[2] + dz * 10.0];
         sim.bond.yaw = (g[0] - sim.bond.pos[0]).atan2(g[2] - sim.bond.pos[2]);
         let bp = sim.bond.pos;
-        if !sim.world.line_of_sight([g[0], g[1] + 1.5, g[2]], [bp[0], bp[1] + 1.5, bp[2]]) { continue 'dirs; }
+        if !sim.world.line_of_sight([g[0], g[1] + 1.5, g[2]], [bp[0], bp[1] + 1.5, bp[2]], nf_game::world::LOS_PROBE_8) { continue 'dirs; }
         for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
         let y = sim.bond.pos[1];
         if (y - (g[1] + 0.14)).abs() < 1.0 { placed = true; break 'dirs; }

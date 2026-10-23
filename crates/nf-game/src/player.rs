@@ -1442,7 +1442,7 @@ impl Bond {
             (axis(self.local[0], target_s) * k, axis(self.local[1], target_f) * k)
         };
         // `Player_HandleJump`: crouch (toggle) and jump. Case 3 (swim) doesn't call it [M].
-        let headroom = |w: &CollisionWorld| w.line_of_sight(self.pos, [prev[0], prev[1] + 0.95, prev[2]]);
+        let headroom = |w: &CollisionWorld| w.line_of_sight(self.pos, [prev[0], prev[1] + 0.95, prev[2]], crate::world::LOS_PLAYER_HEADROOM);
         if swimming {
         } else if zero_g {
             // No `Player_HandleJump` here: the jump/crouch actions ARE the vertical thruster in

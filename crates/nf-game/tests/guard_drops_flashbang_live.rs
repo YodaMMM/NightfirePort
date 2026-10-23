@@ -104,7 +104,7 @@ pub fn clear_bond_spot(sim: &Drones, d: &Data, i: usize) -> Player {
     'outer: for o in offs {
         let b = [g[0] + o[0], g[1] + 0.5, g[2] + o[1]];
         let eye = [b[0], b[1] + 1.0, b[2]];
-        if !d.world.line_of_sight(eye, [g[0], g[1] + 0.6, g[2]]) { continue; }
+        if !d.world.line_of_sight(eye, [g[0], g[1] + 0.6, g[2]], nf_game::world::LOS_GUARD_VISION) { continue; }
         let ab = [g[0] - b[0], g[1] - b[1], g[2] - b[2]];
         let l2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
         for (j, other) in sim.list.iter().enumerate() {

@@ -92,7 +92,7 @@ fn kill_guard(scene: &mut Scene, gi: usize, mut dev: Option<&mut Dev>) -> bool {
     let mut spot = 0usize;
     for t in 0..2000 {
         let (gp, gchest) = { let dr = &scene.sim.as_ref().unwrap().drones.list[gi]; (dr.pos, [dr.pos[0], dr.pos[1] + 0.3, dr.pos[2]]) };
-        let los = |from: [f32; 3]| scene.sim.as_ref().unwrap().world.line_of_sight([from[0], from[1] + 1.0, from[2]], gchest);
+        let los = |from: [f32; 3]| scene.sim.as_ref().unwrap().world.line_of_sight([from[0], from[1] + 1.0, from[2]], gchest, nf_game::world::LOS_GUARD_VISION), nf_game::world::LOS_GUARD_VISION;
         let floor = scene.sim.as_ref().unwrap().world.floor_below(gp, 6.0).unwrap_or(gp[1]);
         let cands = spots(gp, floor);
         // Move on when the current spot lost sight (the guard runs) or at the start.

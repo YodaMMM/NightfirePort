@@ -49,7 +49,7 @@ fn try_park(scene: &mut nf_view::scene::Scene, cand: usize) -> bool {
             // never accumulates the 120 sighting ticks). The game's own sight test is the guard's
             // head → Bond's target ray [M DroneVision_ProcessDroneSight 0x176a28].
             let bp = sim.bond.pos;
-            if !sim.world.line_of_sight([g[0], g[1] + 1.5, g[2]], [bp[0], bp[1] + 1.5, bp[2]]) { continue; }
+            if !sim.world.line_of_sight([g[0], g[1] + 1.5, g[2]], [bp[0], bp[1] + 1.5, bp[2]], nf_game::world::LOS_PROBE_8) { continue; }
             for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
             let sim = scene.sim.as_ref().unwrap();
             let (y, gy) = (sim.bond.pos[1], sim.drones.list[cand].pos[1]);

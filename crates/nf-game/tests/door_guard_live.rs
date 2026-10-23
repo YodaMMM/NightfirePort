@@ -249,14 +249,14 @@ fn zone_bands_drive_the_challenge_and_the_mission_fail() {
             for (dx, dz) in [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)] {
                 let cand = [anchor[0] + face[0] * k as f32 + dx as f32 * 0.3, anchor[1], anchor[2] + face[2] * k as f32 + dz as f32 * 0.3];
                 let (s0, s1, s2) = (side(planes[0], cand), side(planes[1], cand), side(planes[2], cand));
-                if !d.world.line_of_sight([cand[0], cand[1] + 1.0, cand[2]], [anchor[0], anchor[1] + 1.4, anchor[2]]) { continue; }
+                if !d.world.line_of_sight([cand[0], cand[1] + 1.0, cand[2]], [anchor[0], anchor[1] + 1.4, anchor[2]], nf_game::world::LOS_GUARD_VISION) { continue; }
                 if (0.0..2.0).contains(&s0) && s1 >= 0.0 && s2 >= 0.0 {
                     challenge.push((ev, cand));
                     // The height-gate sister spot: the same spot with Bond 2.5 above the guard's
                     // floor — past the [M 0x1416d8:22] gate — provided the world ray from the
                     // raised eye still reaches the guard (so vision cannot mask the gate).
                     let up = [cand[0], anchor[1] + 2.5, cand[2]];
-                    if d.world.line_of_sight([up[0], up[1] + 1.0, up[2]], [anchor[0], anchor[1] + 1.4, anchor[2]]) {
+                    if d.world.line_of_sight([up[0], up[1] + 1.0, up[2]], [anchor[0], anchor[1] + 1.4, anchor[2]], nf_game::world::LOS_GUARD_VISION) {
                         raised.push((ev, up));
                     }
                 }

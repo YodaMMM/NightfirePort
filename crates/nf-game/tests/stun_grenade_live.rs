@@ -112,7 +112,7 @@ fn bond_near(world: &nf_game::world::CollisionWorld, g: [f32; 3]) -> Player {
         let p = [g[0] + off[0], g[1], g[2] + off[2]];
         let fy = world.floor_below(p, 4.0).unwrap_or(g[1] - 1.0) + 1.0;
         let bp = [p[0], fy, p[2]];
-        if world.line_of_sight([g[0], g[1] + 0.6, g[2]], [bp[0], bp[1] + 0.5, bp[2]]) {
+        if world.line_of_sight([g[0], g[1] + 0.6, g[2]], [bp[0], bp[1] + 0.5, bp[2]], nf_game::world::LOS_GUARD_VISION) {
             return bond_at(bp);
         }
     }
