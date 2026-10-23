@@ -241,21 +241,116 @@ fn walk_arrival_to_the_chasers_spawn() {
     }
 }
 
+/// SISTER (level-16-jetpack-escape-3): an idle Bond at the pit floor dies to the ch-243 pulse and
+/// the mission fails ~449 ticks after the pulse rises — the game's own +454 [L fresh boot, god
+/// mode, Bond placed on trigger #255] within sampling noise — NOT one tick. The chain, all [M]:
+/// the pulse makes HurtPoly-ShuttleLaunch #309 live (Hurt_Update 0x17e5d0:98-103 arms state 1 on
+/// the raw channel byte); the pit-floor capsule contacts a plane of the six-band stack and
+/// `Player_DealWithObjHit` 0x194458:95-101 (the class-0x27 arm) calls
+/// `Player_HandlePain(impact + Hurt_GetDamage = 1000 [D params], type 2)` — types 1..7 give
+/// armourFraction 0 [M 0x1902c8:84-99] so health 100−1000 → 0 the same tick [M 0x1902c8:131-134;
+/// Hurt_Update itself carries NO damage and NO delay: state 1 with key count 0 returns at once,
+/// 0x17e5d0:106-108]; the death sequence then runs `Player_HandleDeath` 0x190bb0:29-33, which
+/// raises ch 0x62 only when the blood pane's state is non-zero, and `HUD_UpdateBloodPane`
+/// 0x19a6a8:23-30 grows that pane 1 px/tick to the 448 cover (`RED_FADE_TICKS`, death.rs) —
+/// `Mission_Update` 0x182c60:21,35-42 reads ch 0x62 → MissionState 3 (the fail). The port models
+/// every step (crate::death), so the fail lands at pulse+~450; the live run's +454 (with god mode
+/// rewriting health each frame — the fail is NOT health-gated, it rides the death sequence) is the
+/// same chain plus the live session's sampling. ch 240 and ch 80 stay 0 through the fail on both
+/// sides [L; D stream ticks 2180/2240 land after it]. Bond's small drift during the window
+/// ((3.57,−22.76,−179.55) → (3.62,−23.90,−178.31) [L]) is the settle onto the grate plus the death
+/// anim — the port's settle differs in y because its capsule rests differently [S], not asserted.
+#[test]
+fn the_pit_pulse_kills_an_idle_bond_about_450_ticks_later_like_the_game() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+    // The sister pins the death/fail TIMING, so the walkreal allowances are off: the hurt contact
+    // must land (no top-up) and the pack cinema must play out (no skip) — the live session's own
+    // shape [L no input].
+    w.top_up_health = false;
+    w.skip_cutscenes = false;
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        for _ in 0..600 { sim.step_bond(Input::default(), false, false, false); }
+        // The live session's own setup [L]: Bond placed on the bridge trigger #255, no input —
+        // the touch fires the chain head (ch 0x81), the pack cinema drops him at the pit floor.
+        sim.bond.pos = [2.4, 1.2, -175.5];
+    }
+    let (mut t_reenable, mut t243, mut t_dead, mut t_fail) = (None, None, None, None);
+    for t in 0..4200u32 {
+        w.tick(Input::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if t_reenable.is_none() && sim.bond.pos[1] < -20.0 { t_reenable = Some(t); }
+        if t243.is_none() && sim.drones.channels.on(243) { t243 = Some(t); }
+        if t243.is_some() && t_dead.is_none() && sim.drones.health.health <= 0.0 { t_dead = Some(t); }
+        if sim.drones.mission.status() == 3 { t_fail = Some(t); break; }
+    }
+    let t_reenable = t_reenable.expect("the cinema re-enables Bond at the pit floor [D stream-8 t747 key]");
+    let t243 = t243.expect("the launch script's stream 6 raises ch 243 [D @1611 absolute]");
+    let t_dead = t_dead.expect("the pulse's 1000-damage contact kills Bond [M 0x194458 + 0x1902c8]");
+    let t_fail = t_fail.expect("the death sequence raises ch 0x62 at the 448 cover and Mission_Update fails [M]");
+    eprintln!("[pit] re-enable t{t_reenable}, ch243 t{t243} (+{}), dead t{t_dead} (+{}), MissionState 3 t{t_fail} (+{})",
+        t243 - t_reenable, t_dead - t243, t_fail - t243);
+    // The kill is the same tick family as the live run's health collapse (the live god-mode rewrite
+    // hides the exact tick; the port's contact applies the 1000 on the pulse's first contact [M]).
+    assert!(t_dead - t243 <= 2, "the contact kills within the pulse's first ticks (dead +{}), not delayed", t_dead - t243);
+    // THE TIMING PIN: fail − pulse ≈ 448 (the blood-pane cover [M 0x19a6a8 + RED_FADE_TICKS]) + the
+    // death tick + Mission_Update's read [M 0x182c60] ≈ 450; the game measured +454 [L fresh boot].
+    let delta = t_fail - t243;
+    assert!((440..=470).contains(&delta),
+        "the mission fail lands ~450 ticks after the pulse (got +{delta}) — the game's own +454 [L], not one tick");
+    // The "escapes" are post-pulse on both sides: ch 240 (the launch script's stream 7 @2180 [D])
+    // and ch 80 (the lift summon, stream 21 @2240 [D]) are still cold at the fail [L].
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(240), "ch 240 stays 0 through the fail [L; D @2180 lands later]");
+        assert!(!sim.drones.channels.on(80), "ch 80 stays 0 through the fail [L; D @2240 lands later]");
+        assert_eq!(sim.drones.death.ch62, true, "the fail rode the death sequence's ch 0x62 [M 0x190bb0:32]");
+    }
+}
+
 /// The finale tail: the mission completes ONLY through the KikoDeathButton #693 [D hash
 /// 020008c1]: the chaser's defeat raises nothing (param 12 = 0 [D]; the init-forced 0x90
 /// stand-in was removed in kiko-16-defeat), so this walk's kill-then-watch shape pins the REAL
-/// rule — ch 0x90 and ch 100 stay cold and the mission does not complete. PARKED on U-051
-/// (docs/UNKNOWNS.md): the ch-0xf3-gated HurtPoly-ShuttleLaunch #309 (type 2, 1000 damage [D
-/// params 0:2 1:0x3e8 2:0xf3]) goes live while this walk's Bond stands on the silo-pit floor
-/// (−23.2 — he crosses the ch-0x81 slab on the y-0.25 bridge, the launch chain plays out, and the
-/// pit floor is where both this walk and fix_finale_live's parked Bond end up), and the volume's
-/// 1000 damage kills him before the chaser's defeat — the walk observes the mission FAIL exit
-/// request instead of the kill. Open [L]: where the GAME's Bond stands when ch 243 rises, and when
-/// ch 243 rises — a fresh-boot PCSX2 watch of switch_channels[243] (0x26fc90+243) and Bond's
-/// position through the launch cinema settles whether the port's cinema-Bond placement or the
-/// volume's live window is wrong.
+/// rule — ch 0x90 and ch 100 stay cold and the mission does not complete. PARKED (re-derived in
+/// level-16-jetpack-escape-3) on the pulse-1 survival window, with the round-2 timeline CORRECTED:
+/// - **The corrected timeline.** The doc's round-2 expectation "ch 243 rises ~863 ticks after the
+///   re-enable" was an arithmetic error (1611−748 double-counts the cinema): the launch script
+///   0x0600090a starts at the pack cinema 0x06000631's ch-185 write (cinema t748 [D stream 7]),
+///   one tick AFTER the re-enable key (stream 8's single t747 pit-floor pose [D]), so the model is
+///   re-enable → ch 243 = 1611 − 1 ≈ 1610 ticks [M nis.rs:446-451 absolute Waits + D dumps].
+///   The live fresh boot measured 1591 [L] — the model CONFIRMED within 20; the port's probe
+///   (chain+2355 = 748 + 1611 + the SP-start latency) confirms it in-port. The remaining open
+///   number is the live ch-0x81 → re-enable delta (measured 553 [L] vs the modeled 747 [D t747])
+///   — see the report's live checks.
+/// - **The kill is not instant on either side.** The pulse's contact applies the 1000 damage the
+///   same tick family (Player_DealWithObjHit 0x194458:95-101 → Player_HandlePain type 2 → health
+///   0 [M 0x1902c8:84-134]), but the MISSION fail rides the death sequence: the blood pane covers
+///   in 448 ticks, Player_HandleDeath raises ch 0x62 at the cover [M 0x190bb0:29-33,
+///   0x19a6a8:23-30] and Mission_Update → MissionState 3 [M 0x182c60:21,35-42]. Port +449, game
+///   +454 [L] — pinned by the un-ignored sister above.
+/// - **No disc-visible real-input escape during pulse 1 (559 ticks, 1611..2170 [D])**, re-checked
+///   against the data this round: the six-band hurt stack (world y −24.08..−21.32) covers the
+///   whole pit footprint with OVERLAPPING quads — no gaps to stand in [D tri dump]; the blast
+///   rooms on the pit floor (the obvious shelters, base −23.0, roofs −19.53) are SEALED by static
+///   BlockingPolys (2-tri walls x 19.60..23.22 / z −174.84..−169.00, y −22.08..−19.53 [D obj
+///   117/118]) and their roofs are 4.4 above the grate — no jump, no ladder (the pit's only
+///   kind-0x2d ladder is a 0.5×2×0.8 "PlayerStart" box at the rim [D place[256]/obj[167]]); the
+///   shuttle-bay lift's LOW point (−21.22 [D keys]) sits 0.10 above the top band — the one safe
+///   floor in the pit — but ch 80's ONLY writers are the scripts (0600090a stream 21 @2240,
+///   06000632 stream 19 @1606 [D]; the full-placement census found NO trigger/AND/blocker naming
+///   80), so the platform does not exist until 630 ticks into the pulse; the pit squad
+///   (spawners #294-296, ch 187 @1512 [D]) is dropped into the pit 99 ticks before the pulse to
+///   die in it — the game's own demonstration that the floor is lethal; and no pickup/substate/
+///   Bond-actor stream exists [D+M, the round-2 census]. ch 240's writer is the stream-7 event
+///   @2180 — post-pulse; no door placement carries it [D census].
+/// The un-ignore requires the live check that could still hide a mechanism: the game's
+/// ch-0x81 → re-enable delta of 553 [L] vs the modeled 747 [D]. If the pack cinema really started
+/// ~194 ticks before the touch trigger's ch 0x81, something else starts it — that starter is the
+/// missing escape. gdbwatch on switch_channels[0x81] (0x26fc90+129·4) and Bond's obj+0x30 from
+/// the south-room approach through the cinema, FRESH boot.
 #[test]
-#[ignore = "U-051 ANSWERED (docs/systems/hurt-volumes.md): the volume window is 0x0600090a stream 6 ticks 1611..2170 [D] and the game's Bond escapes on the pack flight — the port has no jetpack substate, so pit-floor Bond dies; the re-seat stand-in is documented in fix_finale_live. The tail now pins the REAL defeat rule (the kill raises nothing; the button is the writer, kiko-16-defeat)"]
+#[ignore = "pulse-1 survival has no disc-visible real-input escape (re-derived level-16-jetpack-escape-3): the six-band hurt stack tiles the whole pit with overlapping quads [D], the blast rooms are sealed by static BlockingPolys with unreachable roofs [D], the lift (the only spot above the stack, low point −21.22 vs band top −21.32) is script-summoned at 2240 — 630 ticks into the 559-tick pulse [D + the ch-80 writer census] — and no pickup/substate/Bond stream exists [D+M]; the round-2 '~863 ticks after re-enable' line was an arithmetic error, the model (1611−1 ≈ 1610) matches the live 1591 [L]; the kill/fail timing is pinned by the un-ignored sister. The one open lead is the live ch-0x81→re-enable 553-vs-747 gap (the report's live checks)"]
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
