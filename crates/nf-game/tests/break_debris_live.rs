@@ -82,7 +82,8 @@ fn a_shot_vase_spawns_the_games_debris_count_and_launch_numbers() {
         assert!(d.pos.iter().zip(centre).all(|(p, c)| (p - c).abs() <= 3.0),
             "piece {k} at {:?} near the object centre {center:?}", d.pos, center = centre);
     }
-    // The eight shared draws per piece [M 0x1aaa00:30-50]: a fresh kill on a twin vase draws 8×count.
+    // The kill's draws [M 0x12b970:66 + 0x1aaa00:30-50]: the sound roll first, then the eight
+    // shared draws per piece — 1 + 8×count on a fresh kill of a twin vase.
     let mut br2 = Breaks::create(&level);
     let j = br2.list.iter().enumerate().find(|(_, b)| b.kind == 0 && !b.src.records.is_empty() && !b.dead).map(|(j, _)| j).unwrap();
     let (lo, hi) = (br2.list[j].lo, br2.list[j].hi);
@@ -92,7 +93,7 @@ fn a_shot_vase_spawns_the_games_debris_count_and_launch_numbers() {
     let before = rng.draws;
     br2.bullet_hit(a, b, 0x1e, 25.0, &mut rng);
     let n = br2.shatter.debris.len();
-    assert_eq!(rng.draws - before, 8 * n as u64, "eight draws per debris object [M 0x1aaa00:30-50]");
+    assert_eq!(rng.draws - before, 1 + 8 * n as u64, "the Rand_Rand(100) sound roll + eight draws per debris object [M 0x12b970:66 the roll precedes the debris loop + 0x1aaa00:30-50]");
 }
 
 #[test]
