@@ -1000,7 +1000,7 @@ fn blend_colour(start: u32, target: u32, tick: i32, delay: i32) -> u32 {
 // MC-dialog list 0x100000fc, ~9-10 per level's in-game def 08000001) [D
 // census] plus the M_LISTBOX every Combo embeds at +0x94
 // [M Combo_Init 0x1f0248:105]. The draw half of `List_Update` (:234-528) is
-// the main agent's; this is the data, state and flow.
+// the draw side's; this is the data, state and flow.
 // ============================================================================
 
 /// One `LIST_ROW` — the game's 0x2d0 malloc: `{+0x0 next, +8.. text cells

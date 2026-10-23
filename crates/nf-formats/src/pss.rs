@@ -294,7 +294,7 @@ impl<'a> Audio<'a> {
             // the left channel, then `interleave` bytes of the right, in turn [D measured 2026-10-16 on
             // 073B0048: the block reading's mean |Δ| per sample is 350 vs 607 read sample-interleaved].
             // Read as L R pairs, each channel got every OTHER sample of one channel (double speed, high
-            // pitched) with a channel swap at every 512-byte block (static) — the user's playtest.
+            // pitched) with a channel swap at every 512-byte block (static).
             let ch = self.header.channels as usize;
             let il = (self.header.interleave as usize).max(2);
             let per_block = il / 2; // samples per channel per block
@@ -377,7 +377,7 @@ mod tests {
     fn pcm_audio_kind_1() {
         // Block-interleaved stereo: `interleave` bytes of L, then the same of R, per block [L the disc's
         // movies — tests/movie_audio_layout_live.rs; the sample-interleaved reading played static at
-        // the wrong pitch, playtest 1016]. Two blocks of 256 samples per channel.
+        // the wrong pitch]. Two blocks of 256 samples per channel.
         let l: Vec<i16> = (0..512i32).map(|i| ((i * 137) % 6553) as i16 - 3276).collect();
         let r: Vec<i16> = (0..512i32).map(|i| -(((i * 59) % 4099) as i16)).collect();
         let mut body = Vec::new();

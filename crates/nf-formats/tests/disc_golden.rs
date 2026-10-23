@@ -1,4 +1,4 @@
-//! Golden tests against the user's own disc image. Opt-in: set `NF_ISO` to the path of the
+//! Golden tests against a real disc image. Opt-in: set `NF_ISO` to the path of the
 //! 007: Nightfire (USA) image (docs/build-identity.md); without it every test here prints "skip" and passes.
 //!
 //! The snapshots in `golden/` hold paths/names, numbers and SHA-1s only. Each golden comparison has a sister

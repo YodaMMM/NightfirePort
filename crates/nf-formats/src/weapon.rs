@@ -1,5 +1,5 @@
 //! `weapon_data` (ACTION.ELF 0x2bf150, 115 × 0x10C bytes): zero on the disc, filled at boot by the static
-//! initialiser `_GLOBAL_$I$weapon_data`. We run that initialiser over the user's ELF (`ee::Machine`).
+//! initialiser `_GLOBAL_$I$weapon_data`. We run that initialiser over the disc's ELF (`ee::Machine`).
 //! Spec: docs/formats/weapon-data.md.
 
 use crate::buf::{invalid, Buf, Result};
@@ -84,7 +84,7 @@ impl WeaponData {
     /// latches it into `BLData+0x964` on every weapon draw/switch, and `Player_LaserPointer`
     /// 0x1a65d8:93-99 gates the sight beam on that latch (re-checking the bit on the record OR its
     /// `+0x05` twin). The SG5's semi-auto twin 0x17 carries it (`+0x68` = 0x00000088), the
-    /// full-auto 0x16 does not (0x00000080) [D weapon_data 0x2bf150] — the playtest 1015-1738 sight.
+    /// full-auto 0x16 does not (0x00000080) [D weapon_data 0x2bf150] — the sight shows in semi-auto only.
     pub fn has_laser_sight(&self, weapon: usize) -> bool {
         self.flags(weapon) & 0x08 != 0
     }

@@ -104,7 +104,7 @@ fn driving_archives_match_the_golden_census() {
 #[test]
 fn driving_entries_hash_like_the_disc() {
     let Some(dir) = driving_dir() else { eprintln!("skip: NF_DRIVING/DRIVING not available"); return };
-    // golden/bigf_entries.tsv was measured through the ISO reader on the user's full disc image;
+    // golden/bigf_entries.tsv was measured through the ISO reader on the full retail disc image;
     // matching it proves the extracted DRIVING/ folder is byte-identical to the disc (all 1,499 entries).
     let golden = include_str!("../golden/bigf_entries.tsv");
     let mut expected: std::collections::HashMap<String, &str> = Default::default();
@@ -268,7 +268,7 @@ fn refpack_golden_covers_every_refpack_entry_of_all_23_archives() {
         "no .MUS/.SPE archive may carry refpack streams");
 }
 
-// ---- The .crp CARP container (driving phase 1, task 503) -------------------------------------------
+// ---- The .crp CARP container (driving phase 1) --------------------------------------------------
 //
 // Every `.crp` of the 23 archives (89 entries [D, golden/crp_golden.tsv]) is RefPack-compressed or,
 // for the five MISC.VIV cars, plain, and decompresses to a CARP record pool: a root `CARP` record,

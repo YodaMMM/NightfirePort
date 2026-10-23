@@ -36,8 +36,8 @@ fn autoaim_accuracy_is_the_f32_at_plus_0x14() {
 fn the_sg5_semi_twin_carries_the_laser_sight_bit() {
     let Some(wd) = weapon_data() else { eprintln!("skip: NF_ISO not set"); return };
     // [D weapon_data 0x2bf150, records 0x16/0x17]: the SG5's full-auto +0x68 = 0x00000080 (no bit
-    // 0x8), the semi-auto twin +0x68 = 0x00000088 — the sight lights in semi only (playtest
-    // 1015-1738). `Player_SetWeaponAnim` 0x1a9338:21-26 latches BLData+0x964 from this bit.
+    // 0x8), the semi-auto twin +0x68 = 0x00000088 — the sight lights in semi only.
+    // `Player_SetWeaponAnim` 0x1a9338:21-26 latches BLData+0x964 from this bit.
     assert!(!wd.has_laser_sight(0x16), "full-auto 0x16: +0x68 bit 0x8 clear");
     assert!(wd.has_laser_sight(0x17), "semi 0x17: +0x68 bit 0x8 set (the mode that lights the sight)");
     // Sister: the P2K's two records carry no sight bit — the accessor reads the record's OWN

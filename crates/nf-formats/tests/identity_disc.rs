@@ -1,4 +1,4 @@
-//! The launcher's disc identity check (`nf_formats::identity`) against the user's own image. Opt-in: `NF_ISO`.
+//! The launcher's disc identity check (`nf_formats::identity`) against a real disc image. Opt-in: `NF_ISO`.
 //! Sister: the same image fails against an expected identity with one SHA-1 character changed.
 
 use nf_formats::identity::{check_path, Expected, IdentityError, NIGHTFIRE_NTSC_U};

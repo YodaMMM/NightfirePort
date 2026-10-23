@@ -32,7 +32,7 @@ impl Font {
     ///
     /// Iterates chars, not bytes [M: the game's renderer walks NUL-terminated byte strings — one glyph per byte;
     /// `Lang::parse` re-encodes the bank's CP-1252 bytes as UTF-8, so a byte walk split "©" (U+00A9 → C2 A9) into
-    /// glyphs 0xC2 + 0xA9 and the title's legal line read "Â©" — the main agent's 2026-10-13 render]. Chars restore
+    /// glyphs 0xC2 + 0xA9 and the title's legal line read "Â©" — seen in a render]. Chars restore
     /// the one-glyph-per-source-byte mapping: each CP-1252 byte became exactly one char, so glyph code = char code.
     ///
     /// The returned width is `Font_GetTextExtent` 0x1ef588's extent (the same per-glyph advance walk the
