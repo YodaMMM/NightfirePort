@@ -10941,6 +10941,10 @@ pub fn close_threshold(level: u32) -> f32 {
 }
 
 /// All drones of a level plus the round-robin line-of-sight cursor.
+/// Whether a breakable contact must come before the static world's first bullet stop (see the
+/// breaks arm of `update_player_bullets`).
+const BREAK_WORLD_STOP: bool = false;
+
 pub struct Drones {
     pub list: Vec<Drone>,
     pub frame: u32,
@@ -13032,7 +13036,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // the scenery takes the round instead [M 0x1ea398:216-229]. The application
                     // (the hit + the AI message) stays in the match below.
                     if !best.as_ref().is_none_or(|(_, _, bt)| t < *bt) { contact = None; }
-                    else if !tstop.is_none_or(|ts| t <= ts) { contact = None; }
+                    // The world stop is not applied yet [S]: the breakables' own meshes still sit in
+                    // the static world, so `segment_bullet` reports the pane or vase itself (or the
+                    // surface it rests on) before its bounds — a 07000007 vase at point-blank range
+                    // stopped every round at t 0.01. It returns once the live breakables leave the
+                    // static set (the pane collision work).
+                    else if BREAK_WORLD_STOP && !tstop.is_none_or(|ts| t <= ts) { contact = None; }
                 }
                 if let Some((_, i)) = contact {
                     // The round dies on the first solid object hit — the glass absorbs it
