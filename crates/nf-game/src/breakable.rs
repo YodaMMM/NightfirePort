@@ -269,7 +269,7 @@ impl Breaks {
         // +0x80/+0x8c sphere], but the port cannot know the real region's extent here. The old
         // segment-AABB overlap stands for these until the shape lands — the port's own coarse
         // stand-in, documented [S] (a long step's AABB covers the point's neighbourhood even when
-        // the ray misses; the real region shape is a live check for the main agent).
+        // the ray misses; the real region shape is an open live check).
         if lo == hi {
             let mut over = true;
             for k in 0..3 {
