@@ -86,3 +86,23 @@ fn dump_fa_icons_all_maps_08() {
         }
     }
 }
+
+#[test]
+#[ignore = "assertion-free probe dump; run with --ignored"]
+fn dump_wires_08() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
+    let data = read_archive(&iso, "07000008.bin");
+    let lv = Level::parse(&data).expect("parse");
+    let mm = lv.main_map().unwrap();
+    for (i, p) in lv.maps[mm].placements.iter().enumerate() {
+        if p.flags & 0xff != 0x3e { continue; }
+        let target = if p.by_hash() { lv.by_hash.get(&p.hashcode).copied() }
+            else if (p.index as usize) < lv.maps[mm].objects.len() { Some((mm, p.index as usize)) } else { None };
+        let Some((om, oi)) = target else { println!("#{i} wire UNRESOLVED"); continue };
+        let o = &lv.maps[om].objects[oi];
+        let t = p.translation;
+        println!("#{i} wire \"{}\" @({:.4},{:.4},{:.4}) rot ({:.4},{:.4},{:.4}) centre ({:.4},{:.4},{:.4}) r {:.4} min ({:.2},{:.2},{:.2}) max ({:.2},{:.2},{:.2})",
+            o.name.trim(), t[0], t[1], t[2], p.rotation[0], p.rotation[1], p.rotation[2],
+            o.centre[0], o.centre[1], o.centre[2], o.radius, o.min[0], o.min[1], o.min[2], o.max[0], o.max[1], o.max[2]);
+    }
+}
