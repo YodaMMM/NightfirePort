@@ -93,14 +93,17 @@ fn the_hand_over_hand_grab_still_fires_on_the_icons_side() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_08(&iso);
     let sim = scene.sim.as_mut().unwrap();
-    // fix-wallhug-prompt: the spot stays the [D probe spot] — 3.47 (sphere centre) from the icon
-    // (133.43, 48.33, −101.21), inside the PICK-SPHERE shell 2.5 + 1.1638 = 3.66 [M Collide_Pick
-    // 0x1eb320 LAB_001eb4e4 — the picker radius is the hittest's own +0x8C, a bigger pick sphere
-    // than the object's world sphere 1.0576 [L M_CONTROL+0x8C]; the pins bracket it 2.31..5.9,
-    // see scene.rs]. The old [S] 12.0/6.0 window masked the pick sphere entirely.
-    sim.bond = nf_game::player::Bond::new([132.0, 46.7, -104.0], 0.0);
+    // context-icon-arm-radius: the spot moves onto the ledge band the game's own walk pick
+    // covers [M Collide_PickObj 0x1eae80:152-166: reach = icon r·1.5 + picker 0.55 = 2.2957;
+    // picker +0x8C = 0.55 and the seg offsets [L ee_start_05 BL+0x740, substate 0]. The ledge
+    // climbs toward the anchor (stood_y 46.49 @x130.4 → 48.72 @x133.4, probe
+    // ledge_standable_probe): (132.5,−102.5) stands at y 48.14, seg_dist 1.6507 — inside
+    // 2.2957 with 0.645 margin. The old (132.0,−104.0) spot sits seg_dist 3.14 away — outside
+    // the game's reach; it only armed via the [S] `radius + 2.5` sphere, now replaced.
+    sim.bond = nf_game::player::Bond::new([132.5, 48.5, -102.5], 0.0);
     for _ in 0..90 { sim.step_bond(Input::default(), false, false, false); }
-    assert_eq!(sim.bond.icon_ctx, 3, "the west ledge reads the cable icon [D probe spot; the pick-sphere shell 2.5 + 1.1638 = 3.66 covers the 3.47 spot]");
+    assert!((sim.bond.pos[1] - 48.14).abs() < 0.3, "Bond stands on the ledge band (got {:?})", sim.bond.pos);
+    assert_eq!(sim.bond.icon_ctx, 3, "the west ledge reads the cable icon [M 0x1eae80:152-166 reach 1.1638·1.5 + 0.55 = 2.2957; the spot's seg_dist 1.65] (got {} at pos {:?})", sim.bond.icon_ctx, sim.bond.pos);
     for t in 0..8 { sim.step_bond(Input { jump: true, ..Input::default() }, false, false, false); }
     assert_eq!(sim.bond.substate, SS_ZIPLINE, "the intended zipline grab fires on the icon's side (substate {})", sim.bond.substate);
     assert_eq!(sim.bond.wire, Some(0), "the level's only wire is grabbed");

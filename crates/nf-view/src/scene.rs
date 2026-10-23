@@ -2861,27 +2861,43 @@ impl Sim {
                 let Some(cells) = self.icon_cels.get(ii) else { continue };
                 if cells.is_empty() { continue; }
                 if !bond_cell.is_some_and(|bc| cells.contains(&bc)) { continue; }
-                // fix-927: standins-scene-927's segment form (`dist(capsule, icon) < r·1.5 + h+0x8C`
-                // [M Collide_PickObj 0x1eae80:152-166]) was HELD: with the icon radius as loaded
-                // (1.1638 on 08's cable icon) it never arms from 08's west ledge — every standable
-                // spot is ≥3 u from the icon (closer spots fall off the ledge) — so the cable
-                // crossing, a level path, would be impossible. The icon's radius at arm time (or the
-                // picker's) differs from the loaded value; the live read (obj+0xd4+0x8C, the icon's
-                // obj+0x8C) is owed before the formula changes [see audits/reviews/fix-927.txt].
-                // The game's sphere-sphere candidate filter [M Collide_Pick 0x1eb320 LAB_001eb4e4]:
-                // `Vec_SqDist3D(picker+0x60, obj+0x80) < (picker+0x6C + obj+0x8C)²` — the PICKER's
-                // radius is the HITTEST's own +0x8C (copied to +0x6C at 0x1eb320:99), a field of the
-                // pick sphere, NOT the object's world sphere (1.0576 [L M_CONTROL+0x8C] — the
-                // previous tasks' hint-marker stand-in). The measured pins bracket it: the 05 crawl
-                // out-point arms at 3.00 from icon[1] (p > 0.73), the grapple spot stays silent at
-                // 8.17 from icon[3] (p < 5.9), the gate door silent at 24.06, and the 07000008
-                // west-ledge cable grab arms at 3.47 from the r-1.1638 icon on the jump press
-                // [M fix_08_walls_live's probe spot] (p ≥ 2.31) — 2.5 sits inside every bracket [S;
-                // the report lists the live obj+0xd4+0x8C read]. `bond.sphere_centre()` is the
-                // ported player sphere centre, NOT the root `bond.pos` the old window measured.
-                let reach = icon.radius + 2.5;
-                let c = self.bond.sphere_centre();
-                let near = (icon.centre[0] - c[0]).powi(2) + (icon.centre[1] - c[1]).powi(2) + (icon.centre[2] - c[2]).powi(2) < reach * reach;
+                // The arm IS the player's own walk pick [M Collide_Update 0x1ea398:72-84 runs
+                // `Collide_Pick` on obj+0xd4 (the BL+0x740 HITTEST) and mirrors every picked
+                // object a node about the pick owner :160-233; ThirdIcon_Update 0x196e80:36-52
+                // arms only on a node whose +0x58 is the class-3 player]. The pick's 0x800 query
+                // test [M Collide_PickObj 0x1eae80:152-166, Collide_Pick 0x1eb320:224-241]:
+                // `dist(segment [+0x20,+0x30], obj+0x80) < obj+0x8C·1.5 + HITTEST+0x8C`.
+                // EVERY input is now pinned:
+                // - icon radius: the placement scale words at +0x34..+0x40 read (1,1,1) on every
+                //   0xFA icon of 07000005/08 [D icon_radius_probe], and obj+0xE8 = 1.0 live
+                //   [L ee_start_05 icon 0x16dbf10+0xE8 — ThirdIcon_Create 0x197070 never writes
+                //   it; control_init_object 0x134630:17 sets 1.0], so obj+0x8C = glist+0x1C raw:
+                //   [L] obj+0x8C 2.2757196 == glist 0x170b7b0+0x1C == the record radius [D].
+                // - picker: [L ee_start_05 player 0 (M_CONTROL 0x16cb8a0, substate 0)] hittest
+                //   BL+0x740: mask +0x94 = 0x800, +0x8C = 0.55, seg A = eye+0.275, seg B =
+                //   eye−0.4847 = eye + (0.55 − cc) with cc = parent+0xCC = 1.0347183 — exactly
+                //   `pick_arm`'s walk arm anchored at the position (obj+0x30 = the position copy
+                //   [M Control_CreateObjEx 0x1343c8:24-27], the port's `pre_collide`).
+                // - Player_CollisionHandler 0x1949a8:22 clears BL+0x95F = 0xFF every tick, so the
+                //   arm is same-tick — no persistence.
+                // The old [S] sphere stand-in (`icon.radius + 2.5` over `sphere_centre`) both
+                // over-armed (the ledge band x 130.5..131.0, z −103..−102 seg_dist 3.1..3.6 armed
+                // at reach 3.6638) and mis-pinned the grab spot: the old (132.0,−104.0) spot sits
+                // seg_dist 3.14 from the icon — outside the game's 2.2957 reach; the ledge CLIMBS
+                // toward the anchor (stood_y 46.49 at x 130.4 → 48.72 at x 133.4 [probe
+                // ledge_standable_probe]) and arms from ~1.2..2.3 seg_dist across x 131.5..133.4,
+                // z −103..−100. fix_08_walls_live's grab spot moves onto that band.
+                let (pao, pbo, par) = nf_game::player::pick_arm(self.bond.substate, self.bond.crouched, self.bond.cc);
+                let px = self.bond.pre_collide;
+                let (ay, by) = (px[1] + pao, px[1] + pbo);
+                let seg_len = by - ay;
+                let t = if seg_len.abs() > 1e-6 { ((icon.centre[1] - ay) / seg_len).clamp(0.0, 1.0) } else { 0.0 };
+                let cy = ay + seg_len * t;
+                let dx = icon.centre[0] - px[0];
+                let dz = icon.centre[2] - px[2];
+                let dy = icon.centre[1] - cy;
+                let reach = icon.radius * 1.5 + par;
+                let near = dx * dx + dy * dy + dz * dz < reach * reach;
                 if near {
                     self.bond.icon_ctx = icon.ctx;
                     // `ThirdIcon_Update` 0x196e80:38-53: the type-6 icon posts the generic hint
