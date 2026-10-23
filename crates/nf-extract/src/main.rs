@@ -1,4 +1,4 @@
-//! `nf-extract`: reads the user's own 007: Nightfire (PS2, NTSC-U) disc image. Nothing it writes is committed.
+//! `nf-extract`: reads the player's own 007: Nightfire (PS2, NTSC-U) disc image. Nothing it writes is committed.
 //!
 //! ```text
 //! nf-extract info <iso>                    build identity and sectors no directory entry covers
@@ -15,7 +15,7 @@
 //! nf-extract bigf-extract <iso> <archive> <out-dir>   unpack one BIGF archive (e.g. /DRIVING/MISC.VIV)
 //! nf-extract symtab <elf>                  an ELF's .symtab as TSV (stdout)
 //! nf-extract drivingsym <iso>              DRIVING/DRIVING.SYM as TSV (stdout)
-//! nf-extract weapon-matrix <iso> [levels]  the weapon matrix (task 100d): every on-foot level ×
+//! nf-extract weapon-matrix <iso> [levels]  the weapon matrix: every on-foot level ×
 //!                                          every weapon — load, give, draw, fire ×3, reload,
 //!                                          switch away/back; the mark table + aggregates + red
 //!                                          cells. `levels` = comma list (e.g. 07000005,07000011)
