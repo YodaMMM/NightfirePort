@@ -2,6 +2,8 @@
 
 On master the west lane walks green (`walkreal_07000005_live`, real input). `walk_the_west_ledge_and_cross_the_cable` stays ignored at two unfound approaches: the tower-top west parapet (x ~26.5-27.2, z 58-73; the walker stalls near x 27.22, y 37.1) and the drop from the lane plateau (y ~34-36) onto the creepwall shelf at y ~30.9 around (25, 71). The creepwall #299 "Wall Hug Short" (25.79, 31.78, 67.76) half-length is the object's own bound half-span along local x, the port's stand-in for the game's +0x8c [S].
 
+Live [L fresh boot]: standing on the shelf at (25.51, 32.11, 71.02), one action press enters the wall-hug view of #299 (third-person, back to the wall, the crawl icon). The entry works; only the route onto the shelf is open.
+
 1. Map the parapet and the shelf at 0.25-unit resolution (x 24-27, z 58-76) and find where a real player gets from the plateau onto the shelf (a walk-off, a step, a gap).
 2. Then the crawl through #299 with the real use press, the slab-end to cable-ledge step (cells around (-24..-23, 45-47) [D]), the notch grab at icon #310 (-23.80, 32.74, 12.33), the ride, the south ledge, the window-ledge crawl #35 and the exit leg.
 3. Settle the creepwall half-length/axis from `control_create_object`'s +0x8c write [M] if it can be read; otherwise keep the [S] mark.
