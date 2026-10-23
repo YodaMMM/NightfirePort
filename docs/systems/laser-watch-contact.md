@@ -107,8 +107,12 @@ death cap" claim above (see docs/systems/bullet-flight-range.md for the full cha
   :255-283] are that clock's initial values, in TICKS.
 - The watch's record `+0x1C` = 4.0/8.0 is therefore its real per-segment flight range, and the
   game's beam still burns locks because the chain above fires **one round per tick** [M
-  0x1a5460:653-658, :688-690]: the 4.0-unit segments tile the ray at 240 units/s, the front
-  reaches the lock in ~distance/4 ticks, and the 84 contact ticks follow. The port keeps the
-  210.0 range for the watch's bullets for now [S unverified — the port's choice; the
-  laser tests ride it] and the live check (gdbwatch a held watch's `BU+0xF4`: predicted
-  ~4.0/segment with `BU+0xFC` untouched at 210) settles which model the game runs.
+  0x1a5460:653-658, :688-690]: each round's first (state-0) segment covers **[0, +0x1C] from the
+  muzzle** after the boundary clamp, and a fresh round spawns every held tick, so the burn needs
+  the lock's world sphere inside that reach — 08's bolts ~3.1 units [D], 0c's hinge #139 1.34
+  [D placement + the glist sphere r 0.2325]. **laser-watch-0c: the port's 210.0 stand-in for the
+  watch is REMOVED** — `fire_player`/`fire_remote_cosmetic` feed `+0x1C` for every id now
+  (crates/nf-game/src/drone.rs), and `nf-game`'s `the_watch_round_dies_at_plus_1c_after_the_
+  first_segment` pins the 4.0/8.0 boundary death [M 0x12e95c-0x12e984 + 0x12f014-0x12f02c]. The
+  remaining live check below (gdbwatch a held watch's `BU+0xF4`) still settles the model on
+  hardware: predicted ~4.0/segment with `BU+0xFC` untouched at 210.
