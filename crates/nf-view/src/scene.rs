@@ -6648,6 +6648,20 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // obj+0xFE bit 0 and the delete pass removes the object [M]). `own_cells` drops them too.
         instances.retain(|i| !(i.placement.flags & 0xff == 0x20 && !i.placement.creates_cel()));
         let (mut char_instances, chars_missing) = level.character_instances();
+        // ghost-guards-990: the game's create gate — `Drone_Create` 0x136be0 (first branch) makes
+        // NOTHING for a drone placement whose level tag (parameter 2) exceeds the load's
+        // difficulty (GameState+0x40): no object, nothing drawn. `character_instances` built every
+        // 0x05-skin placement's meshes regardless, so a skipped placement kept characters the sim
+        // list has no drone for: `char_drone` (keyed on the sim drones' placement translations)
+        // missed them and `char_hidden`'s Placed arm drew them at their placement matrix — T-posed,
+        // full-ambient (their `char_ambient` never leaves the 0xff sentinel) — the 07000011
+        // stairwell's T-posed guards in the doorway and in the air over the well. The same gate
+        // guards the captain re-add below (a gated captain gets no object either).
+        let gated = |p: &nf_formats::placement::Placement| {
+            p.flags & 0xff == 0x0f
+                && p.params.iter().find(|(j, _)| *j == 2).map_or(false, |&(_, v)| v > difficulty)
+        };
+        char_instances.retain(|i| !gated(&i.placement));
         // drone-skins-g021: the drone's object is built from the hash `NDrone2_DefaultInit`
         // 0x14b300:563-565 hands `AnimObjectNew` — the placement param 0 as the captain swap
         // (:536-555) left it in +0xe0 (the sim's `dr.skin`). `character_instances` keyed the
@@ -6663,7 +6677,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // exist yet at this point in the build (b9b creates them after the characters).
             if let Some(props) = d.props.as_ref() {
                 for p in level.maps[m].placements.iter() {
-                    if p.flags & 0xff != 0x0f { continue; }
+                    if p.flags & 0xff != 0x0f || gated(p) { continue; } // ghost-guards-990: no create, no captain object [M 0x136be0]
                     let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
                     let raw = param(0);
                     if raw >> 24 != 5 { continue; }

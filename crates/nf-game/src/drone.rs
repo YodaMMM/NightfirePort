@@ -2941,9 +2941,19 @@ impl Drone {
     /// Moves x/z by `step` unless the body (0.4 above the feet sphere … head) would cross collision, then leaves the
     /// height to `collision_handler` (the game's `Drone_CollisionHandler` down-ray; WORKLOG 0078). The earlier
     /// `floor_below(2.0)` stand-in is gone — a guard dying at a ledge now falls.
+    ///
+    /// walls-990: the probes run the game's LOS-class drops, not the raw ray. The game's guard move has no
+    /// world-collision gate at all (`DroneAnim_PreTransCallback` 0x13b490 applies root motion; the only horizontal
+    /// constraint is `AINetwork_GetBoundsPushVectorForSphere` 0x157bd0) — the port's probe is a stand-in for that
+    /// missing nav fidelity, and the raw ray turned every surface the game's own LOS class skips into a wall: the
+    /// 07000011 stairwell's 0x40-material well cage (material byte 0x40 = the pass flag [D collision materials])
+    /// stopped the 0x13 guards at its north face (x 17.1, z −1.84) — a wall that is not there. `Collide_LineOfSight`
+    /// 0x1edf50 forwards the caller's 0xa27 mask to `Collide_RayIntersect` (HITTEST+0x98), and `Collide_Intersect`
+    /// 0x1ebaa8 drops for it: the 0x40-material surfaces (:301), materials 0xD/0xE (:311) and 0x10 (:314) — the
+    /// port's `segment_masked` [M, world.rs]. Concrete (mats 0-21 without 0x40) still blocks.
     fn move_by(&mut self, d: &Data, step: [f32; 2]) {
         let to = [self.pos[0] + step[0], self.pos[1], self.pos[2] + step[1]];
-        let probe = |y: f32| d.world.line_of_sight([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32]);
+        let probe = |y: f32| d.world.segment_masked([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32]).is_none();
         if probe(self.pos[1]) && probe(self.pos[1] + 0.5) {
             self.pos = to;
         }

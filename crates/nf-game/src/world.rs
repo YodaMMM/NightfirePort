@@ -1556,6 +1556,16 @@ impl CollisionWorld {
         let to = [p[0], p[1] - depth, p[2]];
         self.segment(from, to).map(|t| from[1] + (to[1] - from[1]) * t)
     }
+
+    /// walls-990 debug: the static objects whose bounds contain `p` (expanded 0.05), as
+    /// `(min, max)` pairs — a probe hit's owner candidates, printed by the stairwell-walls test
+    /// to name the invisible wall the guards stop against. Static set only (the moving set's
+    /// matrices live in `last_objects`; the stairwell stalls are static hits).
+    pub fn objects_with_bound(&self, p: V3) -> Vec<(V3, V3)> {
+        self.stat.objects.iter().filter(|o| {
+            (0..3).all(|k| p[k] >= o.lo[k] - 0.05 && p[k] <= o.hi[k] + 0.05)
+        }).map(|o| (o.lo, o.hi)).collect()
+    }
 }
 
 fn closest_on_segment(a: V3, b: V3, p: V3) -> V3 {
