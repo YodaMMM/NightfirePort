@@ -218,17 +218,36 @@ impl Breaks {
     }
 
     fn seg_box(a: V3, b: V3, lo: V3, hi: V3) -> bool {
-        // Same rule as crate::props::seg_box: the bullet segment's AABB against the bounds grown
-        // by 0.1 (the contact registers on the sphere touching the glist bounds).
+        // The bullet segment must actually cross the pane's bounds (grown 0.1 — the
+        // sphere-touch stand-in), not merely overlap them with its AABB.
         Self::seg_box_grow(a, b, lo, hi, 0.1)
     }
 
     fn seg_box_grow(a: V3, b: V3, lo: V3, hi: V3, g: f32) -> bool {
-        let (_, mut mn, mut mx) = (g, [0.0; 3], [0.0; 3]);
+        // A true segment-vs-box intersection (the slab method). The game's class-5 contact is
+        // the collision pass's HITDATA — the bullet sphere touching the pane's collision
+        // triangles, whose list Break_Update filters and drains [M 0x12bfd8:15, 36-48] — so a
+        // segment whose axis-aligned bounding BOX overlaps the bounds but which flies PAST the
+        // sheet must not register: on 07000006 the level's one pane (Window_Securityroom,
+        // placement 376 [D placements]) died to a level spread shot whose AABB spanned the
+        // pane's slab while the segment crossed the wall plane 1.9 units to its right, and the
+        // pane kill's sound + shatter draws diverted the chasing guard's run (npc_doors_live
+        // the_06_guard…). Degenerate segments (a == b, do_break's point probe and a
+        // collision-stopped body's zero net step) fall out as the point-in-box check.
+        let mut t0 = 0.0f32;
+        let mut t1 = 1.0f32;
         for k in 0..3 {
-            mn[k] = a[k].min(b[k]);
-            mx[k] = a[k].max(b[k]);
-            if mx[k] < lo[k] - g || mn[k] > hi[k] + g { return false; }
+            let d = b[k] - a[k];
+            let (lo_k, hi_k) = (lo[k] - g, hi[k] + g);
+            if d == 0.0 {
+                if a[k] < lo_k || a[k] > hi_k { return false; }
+            } else {
+                let (mut tn, mut tf) = ((lo_k - a[k]) / d, (hi_k - a[k]) / d);
+                if tn > tf { std::mem::swap(&mut tn, &mut tf); }
+                t0 = t0.max(tn);
+                t1 = t1.min(tf);
+                if t0 > t1 { return false; }
+            }
         }
         true
     }
