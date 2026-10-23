@@ -58,3 +58,22 @@ fn scan_the_pit_westward_openings() {
         }
     }
 }
+
+#[test]
+#[ignore = "assertion-free dump; run with --ignored --nocapture"]
+fn scan_the_x5_wall_openings() {
+    let iso = iso();
+    let scene = nf_view::load(&iso, "0700001b.bin", false).expect("load 1b");
+    let sim = scene.sim.as_ref().unwrap();
+    println!("=== westward segments from (5.5,y,z) to (-8,y,z): t = None means open ===");
+    for y in [-2.4f32, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0, 21.0] {
+        for z in [-0.5f32, -1.5, -2.5, -3.5, -4.5, -6.0, -8.0] {
+            let hit = sim.world.segment([5.5, y, z], [-8.0, y, z]);
+            let hitb = sim.world.segment_bullet([5.5, y, z], [-8.0, y, z]);
+            if hit.is_none() || hitb.is_none() {
+                println!("y {y:+.1} z {z:+.1}: OPEN seg {hit:?} bullet {hitb:?}");
+            }
+        }
+    }
+    println!("=== (all other cells are walled) ===");
+}
