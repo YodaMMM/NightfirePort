@@ -117,67 +117,68 @@ fn walk_to_the_gatehouse_and_ride_the_truck() {
     }
 }
 
-/// The cable route: the west walk, the ladder, the upper ledge, the E-grabbed wire ride, the zip
-/// door's fallback exit. STILL IGNORED (level-05-complete 2026-10-17): the walk reaches the ladder
-/// top [61.64, 34.62, 89.20] through the real path, but the ledge west of it dead-ends — every yaw
-/// sweep from the top stalls at x ≈ 57.9-58.0 (Bond holds y 34.7, grounded flickering, the yaw-5.89
-/// walk drops off the ledge's south edge to y 28) — the wire #251 grab spot (−23.5, 34.5, 6.3) is
-/// unreachable from here. Whether that wall is the game's own collision (the tower's
-/// Object_Tower_Gate_* / the BlockingPolys family — the level's 0x19 census has 113 entries, several
-/// named BlockingPoly_*), or the port's collision of it, or simply the wrong lane (the disc's real
-/// route to the cable may cross the gatehouse interior or drop to the west road), needs a
-/// render/trace (open live check).
+/// The cable route (level-05-west-lane-2, round 2 — the blocker ANSWERED, the crossing still
+/// open). Round 1's reason ("every yaw sweep stalls at x ≈ 57.9-58.0 — the game's collision, the
+/// port's, or the wrong lane?") is settled: it is the WRONG LANE, stopped by the game's own
+/// parapet. The ladder balcony is a closed perch — its west face stops a real walk at x ≈
+/// 57.7-58.2 and its south face at z ≈ 85-86 [D the 07000005 collision world: westward rays from
+/// (61.6, 34.6, 89.2) hit x 57.74-58.16 at z 86-89.2; southward rays along x 58-60 hit z
+/// 85.1-86.2; no walkable floor at x 52-62 south of z 84 down to y 20]. The REAL west lane is a
+/// separate system, mapped by the two-hit floor map of the disc collision [D]:
+/// - the lane runs from the courtyard's west strip (x 28-56, z 92, y 26.3-30.3) SOUTH along the
+///   castle wall (x 24-48, z 44-92, y 28-36; the guard cover nodes #75-#78 sit on it [D]) to the
+///   tower top (x 28-32, z 44-62, y 36.0) and west down its slope (x 20-24, z 52-64, y 31-34);
+/// - the "Wall Hug" placements are CREEPWALLS (class 0x3F → `CreepWall_Create` 0x196fc8, the
+///   crawl substate 7 — the port's creepwall.rs): "Wall Hug Short" #299 (25.79, 31.78, 67.76)
+///   with the type-6 third-icon crawl prompts #256/#257 (24.2, 31.9, 60-70.6) [D], and "Wall Hug
+///   Window" #35 (−34.10, 37.28, −31.65) on the window ledge;
+/// - the wire #251 "Wire_Cable" (−23.49, 34.47, 6.26 [D]) crosses an 8-unit NOTCH in the cable
+///   ledge (the ledge y 30.8-33.3 at x −25..−23 spans z −10..46 EXCEPT z ≈ 4-10 where the floor
+///   dips to y 17-25 [D the fine map]) — the 3rd-person grab icons #277/#300 (−23.56, 32.24,
+///   0.2-2.65) and the big icon #310 (−23.80, 32.74, 12.33) mark the standing grab spots at the
+///   notch's edges [D];
+/// - STILL OPEN (the round-3 work): the crawl legs through #299/#35 and the walk/crawl link from
+///   the lane to the cable ledge (the fine map's y-30-34 pieces at x −26..−24 z 34-46, x −4..0
+///   z 46-54 and x 10-24 z 54-56 are separated by 5-10-unit gaps at 2-unit probe resolution —
+///   the wall-hug crawls are the suspected bridges); then the jump/E grab at the notch's edge
+///   and the ride south.
 #[test]
-#[ignore]
+#[ignore = "level-05-west-lane-2 round 2: the wrong-lane blocker is answered (the game's own parapet — see the doc); the remaining link is the wall-hug crawls #299/#35 through the lane's narrow sections and the notch grab — the crawl legs need harness verification (round 3)"]
 fn walk_the_west_ledge_and_cross_the_cable() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
     w.wait(30);
-    // West along the courtyard, through door #153, up ladder #151.
+    // The real west lane [D the floor map in the doc comment]. The first two legs walked green
+    // in the round-2 run ("courtyard west" (53.2, 27.7, 96.2); "the lane north end"
+    // (44.4, 29.7, 91.1)); the bend anchors are tightened to the lane's 4-8-unit strip (the
+    // round-2 direct line (44.4, 91.1) → (30, 84) cut the corner over the void at x 23-24,
+    // z 88-92 and Bond fell to y 0.3 at (23.0, 92.8) — the strip is x 28-52 at z 92 but only
+    // x 24-36 at z 80-86 [D the fine map]).
     for (name, at) in [
-        ("courtyard west", [62.0f32, 26.0, 96.0]),
-        ("door #153", [57.8, 26.0, 89.4]),
-        ("ladder #151 base", [60.9, 29.9, 89.2]),
+        ("courtyard west", [52.0f32, 26.0, 96.0]),
+        ("the lane north end", [44.0, 28.0, 90.0]),
+        ("the lane bend", [36.0, 29.5, 90.0]),
+        ("the lane, wall south 1", [30.0, 31.5, 86.0]),
+        ("the lane, wall south 2", [29.0, 32.6, 80.0]),
+        ("the lane, tower north", [29.0, 33.7, 74.0]),
+        ("the tower top", [30.0, 36.0, 58.0]),
+        ("the tower west slope", [24.0, 34.0, 54.0]),
+        ("the lane, west run", [12.0, 29.3, 56.0]),
     ] {
-        w.walk_nav_to(at, name, 1.4);
+        w.walk_nav_to(at, name, 1.5);
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05c] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
     }
-    w.walk_to(walker::Wp { at: [60.9, 29.9, 89.2], act: walker::Act::Ladder { top_y: 34.7 }, arrive: 0.9 }, "ladder #151");
+    // The wall-hug crawl [D "Wall Hug Short" #299 (25.79, 31.78, 67.76) + the type-6 icon
+    // prompts #256/#257]: face the creepwall and pulse E — the third-icon context 6 routes the
+    // use into Player_CollCreepWall [M 0x1a5170:66-97] and the crawl (substate 7) carries Bond
+    // along the wall's axis (yaw 1.57 + π/2 = east-west [M 0x196758:80-90]). The round-3 legs
+    // continue from the crawl's west exit to the cable ledge and the notch grab.
+    w.walk_to(walker::Wp { at: [25.8, 31.8, 67.8], act: walker::Act::Use { use_ticks: 90 }, arrive: 1.2 },
+        "the wall-hug creepwall");
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05] the ladder top at tick {} bond {:?}", w.total_ticks, sim.bond.pos);
-        assert!(sim.bond.pos[1] > 33.0, "Bond must stand on the ledge (y {:.2})", sim.bond.pos[1]);
+        eprintln!("[05c] after the creepwall E: tick {} bond {:?} substate {} ch113 {}",
+            w.total_ticks, sim.bond.pos, sim.bond.substate, sim.drones.channels.on(113) as u8);
     }
-    // The upper ledge west to the cable. The anchors follow the ledge's walked lane; the nav graph
-    // has no cross-map coverage on this level [D the probe: no route from the spawn].
-    for (name, at) in [
-        ("ledge west 1", [45.0f32, 34.5, 80.0]),
-        ("ledge west 2", [20.0, 34.5, 55.0]),
-        ("ledge west 3", [-5.0, 34.5, 30.0]),
-        ("the cable mouth", [-20.0, 34.5, 8.0]),
-    ] {
-        w.walk_nav_to(at, name, 1.6);
-    }
-    // E-grab the cable and ride it [M Player_CollWire 0x197130; Player_Wire 0x197658].
-    w.walk_to(walker::Wp { at: [-23.5, 34.5, 6.3], act: walker::Act::WireRide, arrive: 0.9 }, "the cable");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05] after the cable at tick {} bond {:?} falls {:?}", w.total_ticks, sim.bond.pos, w.report.falls);
-    }
-    // Walk to the zip door #112 and E it: the fallback 0x1E loads 07000006 [D #112 gate 0].
-    for (name, at) in [
-        ("back ledge", [-10.0f32, 34.5, -20.0]),
-        ("the zip door approach", [30.0, 45.0, -60.0]),
-    ] {
-        w.walk_nav_to(at, name, 1.6);
-    }
-    let sim = w.scene.sim.as_ref().unwrap();
-    let exit = sim.drones.triggers.iter()
-        .find(|t| t.kind == walker::trigger_kind::LOAD_LEVEL && (t.fallback == 0x1e)).map(|t| t.centre()).expect("the zip door #112");
-    drop(sim);
-    w.walk_to(walker::Wp { at: exit, act: walker::Act::Use { use_ticks: 90 }, arrive: 1.6 }, "E the zip door");
-    let sim = w.scene.sim.as_ref().unwrap();
-    assert_eq!(sim.drones.level_exit, Some(0x0700_0006), "the zip door's fallback 0x1E loads 07000006 [M 0x1b2318:91-107]");
-    eprintln!("[05] cable route done in {} ticks; falls: {:?}", w.total_ticks, w.report.falls);
-    for f in &w.report.falls { eprintln!("[05] fall: {f}"); }
-    for s in &w.report.stuck_events { eprintln!("[05] stuck: {s}"); }
 }

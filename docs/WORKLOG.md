@@ -24,3 +24,37 @@ Plan:
 Work log:
 - (17:52) branch created from origin/master a67f1a27e, WORKLOG started. Round 1's branch
   carries no work; the findings above are the test's doc + docs/levels/07000005.md.
+
+Work log:
+- (18:10) The disc probes (scratch examples, not committed): the west-region placements, the
+  two-hit floor map of the collision world, and the 1-2-unit fine maps of the ladder balcony,
+  the lane, the tower descent, the cable ledge and the wall's west face.
+- (18:30) THE BLOCKER ANSWERED [D]: the round-1 lane was wrong. The ladder balcony is a closed
+  perch — the game's own parapet stops a real walk at x ≈ 57.7-58.2 (westward rays from
+  (61.6, 34.6, 89.2): hits at (57.74, z 89.2) and (58.16, z 86)) and at z ≈ 85-86 southward
+  (rays along x 58-60 hit z 85.1-86.2); no walkable floor at x 52-62 south of z 84 down to
+  y 20. Not a port collision bug — the disc's own tris.
+- (18:40) The REAL west lane mapped [D the two-hit floor map + the fine maps]: the courtyard's
+  west strip (x 28-56, z 92, y 26.3-30.3) → south along the wall (x 24-48, z 44-92, y 28-36;
+  the guard cover nodes #75-#78 sit on it) → the tower top (x 28-32, z 44-62, y 36.0) → the
+  west slope (x 20-24, z 52-64). The "Wall Hug" placements are CREEPWALLS (class 0x3F →
+  `CreepWall_Create` 0x196fc8, the crawl substate 7 — the port's creepwall.rs): "Wall Hug
+  Short" #299 (25.79, 31.78, 67.76) with the type-6 crawl-prompt icons #256/#257, "Wall Hug
+  Window" #35 (−34.10, 37.28, −31.65). The wire #251 crosses an 8-unit NOTCH in the cable
+  ledge (the ledge y 30.8-33.3 at x −25..−23 spans z −10..46 except z ≈ 4-10 where the floor
+  dips to y 17-25); the grab icons #277/#300/#310 mark the notch's edges (the wire's r-4
+  sphere reaches a standing head).
+- (18:50) The walk attempt on the new anchors: "courtyard west" and "the lane north end" walk
+  green (real input, (53.2, 27.7, 96.2) → (44.4, 29.7, 91.1)); the third leg's direct line cut
+  the corner over the void (Bond fell to y 0.3 at (23.0, 92.8) — the strip narrows to x 24-36
+  at z 80-86) — the anchors tightened.
+- (19:12) The test rewritten: the corrected doc (the answered blocker + the found lane + the
+  open crawl/cable legs), the updated anchors, the creepwall-E leg. STILL #[ignore] — the
+  crawl legs + the notch grab need round-3 harness verification; the ignore reason now states
+  the answered blocker instead of the stale open question.
+
+Stage summary:
+- Round 2's deliverable: the wrong-lane proof [D], the real lane's walkable map [D], the
+  wall-hug = creepwall identification [D+M], the notch/wire grab geometry [D], the walkable
+  legs verified green through the lane's north half. The crossing itself is round 3: the
+  crawl through #299/#35, the lane→ledge link, the jump/E grab, the ride.
