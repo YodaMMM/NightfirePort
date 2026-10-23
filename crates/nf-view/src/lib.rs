@@ -2603,6 +2603,13 @@ struct App {
     net_armed: Option<nf_game::mp::MpSettings>,
     /// The current level's hashcode (the archive name), for the pause page's restart / the results.
     level_code: u32,
+    /// Port dev aid (playtest checks, not game behaviour): the `--bond x,y,z[,yaw,pitch]` spot,
+    /// re-applied once when the level's opening cut-scene hands Bond back (its hand-back moves
+    /// him to the scene's end pose) — so a check starts where it says. Cleared after the first
+    /// re-apply, or after 900 ticks when the level has no opening scene.
+    dev_bond: Option<[f32; 5]>,
+    /// `dev_bond`'s latch: an opening cut-scene (sim.disabled) has been seen.
+    dev_bond_cut: bool,
     /// frontend-music: the front-end page the music transitions last saw (the manager's msg-0x44
     /// page change re-runs the new page's 0x4c arm [M 0x21c858:345-346]); None before the first.
     fe_music_page: Option<menu::Page>,
@@ -4911,6 +4918,18 @@ impl App {
                             // an online match keeps every machine on the game's rules (lockstep).
                             sim.rapid_fire = RAPID_FIRE.load(std::sync::atomic::Ordering::Relaxed) && self.net.is_none();
                             sim.step_bond(input, trigger, reload, use_key);
+                            // Port dev aid: re-apply `--bond` after the opening cut-scene's hand-back.
+                            if let Some(b) = self.dev_bond {
+                                if sim.disabled {
+                                    self.dev_bond_cut = true;
+                                } else if self.dev_bond_cut {
+                                    sim.bond = nf_game::player::Bond::new([b[0], b[1], b[2]], b[3]);
+                                    sim.bond.pitch = b[4];
+                                    self.dev_bond = None;
+                                } else if sim.drones.frame > 900 {
+                                    self.dev_bond = None;
+                                }
+                            }
                             // weapon-matrix: the "Test weapon" run watches the tick's result (the
                             // phase machine in dev.rs; `sim` and `self.dev` are disjoint fields).
                             if let Some(d) = self.dev.as_deref_mut() { d.test_observe(&*sim); }
@@ -5830,6 +5849,8 @@ impl App {
             crouch_toggle_opt: true,
             opts_seen: None,
             level_code: 0,
+            dev_bond: None,
+            dev_bond_cut: false,
             fe_music_page: None,
             menu_handle: 0,
             lang: None,
@@ -6548,7 +6569,11 @@ pub fn run() -> Result<()> {
         app.fe = Some(menu::FrontEnd::new());
         // boot-flow: the window boot runs P_INTRO's EA + MGM logos before the title [M 0x209e88];
         // the headless --shot/--page paths build their own FrontEnd and stay on the page they ask for.
-        if let Some(fe) = app.fe.as_mut() { fe.start_boot_intro(); }
+        // `--no-intro`: port dev aid for the playtest checks (the game's intro is unskippable
+        // [M 0x209e88]) — open straight on the title.
+        if !std::env::args().any(|a| a == "--no-intro") {
+            if let Some(fe) = app.fe.as_mut() { fe.start_boot_intro(); }
+        }
         // frontend-music: the boot front end's own `Sound_Ready` case 0x7000048 consumes the
         // flip [M 0x1dceb8:94-101 — DAT_002e1b11 (.bss) = 0 → bank 0xc resident, DAT → 1;
         // P_START's once arm pins it right after, 0x20a408:31]. The port consumes it here so
@@ -6615,7 +6640,11 @@ pub fn run() -> Result<()> {
     if let Some(i) = args.iter().position(|a| a == "--bond") {
         if let (Some(v), Some(sim)) = (args.get(i + 1), app.scene.sim.as_mut()) {
             let v: Vec<f32> = v.split(',').filter_map(|t| t.parse().ok()).collect();
-            if v.len() >= 3 { sim.bond = nf_game::player::Bond::new([v[0], v[1], v[2]], v.get(3).copied().unwrap_or(sim.bond.yaw)); if let Some(&pt) = v.get(4) { sim.bond.pitch = pt; } }
+            if v.len() >= 3 {
+                sim.bond = nf_game::player::Bond::new([v[0], v[1], v[2]], v.get(3).copied().unwrap_or(sim.bond.yaw));
+                if let Some(&pt) = v.get(4) { sim.bond.pitch = pt; }
+                app.dev_bond = Some([v[0], v[1], v[2], sim.bond.yaw, sim.bond.pitch]);
+            }
         }
     }
     // net-match-host: `--net-host [port] [arena]` listens for clients and starts the match (the
