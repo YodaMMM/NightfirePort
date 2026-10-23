@@ -34,7 +34,9 @@ research pass (subagent, 2026-10-09); "checked" = read here (the tables are read
 - Damage glow sprites 20–23: full screen, additive, textures 0x0300018D (20, 21 flipped V) / 0x0300018E (22, 23
   flipped U), red at alpha `BL+0x968`, per bit of `BL+0x967` (direction from `Player_DealWithObjHit`; 0xC both
   sides from `Player_HandlePain`).
-- Also: Bond-moment icon (16) — not ported; context icon (18) and crouch icon (19, 0x03000173 / 0x03000174) — see the sections below.
+- Also: Bond-moment icon (16) — ported since: the 007 flash, tex 0x0300005B at (256, 80), grows and tumbles for
+  100 ticks, holds 100, hides [M HUD_UpdateHealthPane 0x19b9c8:231-260; PlrStat_DoneBondMoment 0x199448:23-25
+  writes 200] (hud.rs); context icon (18) and crouch icon (19, 0x03000173 / 0x03000174) — see the sections below.
 
 ## Context icon (health pane sprite 18) [M] (ported by fix-context-hints)
 

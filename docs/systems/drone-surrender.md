@@ -50,5 +50,6 @@ WORKLOG 0045: the sighting flags, the surrender gate in Attack's enter, states 0
 Attack, Bond's weapon lent to the drones. Test `guard_surrenders_to_bond_behind_him`: placement 6 with Bond 1.5 behind
 it surrenders at tick 69 (Attack → 0x3F), its SG5 lies on the ground, the hands-up transition (danim 0x141, script
 0x060001B0) ends in Surrendered at 279 (hands-up loop danim 0x174); Bond 15 away → 0x41 → Attack → DrawWeapon →
-weapon 6 → InitPatrol; sister: in front of it, a normal attack. Not ported: KnockedOut (no melee), CivilianScared,
-the sidearm's own mesh in nf-view. Open: U-038.
+weapon 6 → InitPatrol; sister: in front of it, a normal attack. Not ported when written: KnockedOut (no melee), CivilianScared,
+the sidearm's own mesh in nf-view. (Update 2026-10-22: KnockedOut — `NDrone2_DSTATE_KnockedOut_Anim` 0x172a30,
+state 0x42 — and CivilianScared 0x12 are in crates/nf-game/src/drone.rs; the sidearm mesh not re-checked.) Open: U-038.

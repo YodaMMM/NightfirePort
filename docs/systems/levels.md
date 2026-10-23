@@ -16,40 +16,42 @@ nearest at or below it — `CAMPAIGN` in crates/nf-view/src/menu.rs (sp_level +0
 07000001, The Exchange 07000005, Night Shift 07000009, Chain Reaction 0700000c, Phoenix Fire 07000011, Countdown
 07000014, Equinox 0700001b (Paris Prelude, Alpine Escape, Enemies Vanquished, Deep Descent and Island Infiltration are
 driving missions, 0x09…). Content agrees: 07000001's exit loads 07000002 [D], whose objective is "Destroy Mayhew's
-computer"; 07000007 is the party where Bond first sees Drake. The game's internal MFX names are the other way round
-(`01Castle*` = Mayhew's estate, `02Mayhew*` = Drake's castle); this table used to take the mission names from them
-and from the row position, which was wrong.
+computer"; 07000007 is the party where Bond first sees Drake. The game's music-updater names do not follow the
+missions: `UpdateMFX_02Mayhew*` (0x111ed8/0x112270/0x112730/0x112bf8) run on 07000001-04 (Double Cross) and
+`UpdateMFX_01Castle*` (0x112d78/0x113060/0x113188/0x1133b8) on 07000005-08 (The Exchange) [M, the per-level list in
+crates/nf-game/src/music.rs]. (Corrected 2026-10-22: this table had the two families swapped, and 07000015/16's
+updaters shifted by one.)
 Level names are the `UpdateMFX_*` function names (ACTION.ELF symbol table) and the `Txt_BindLabel` ids (*sourced*,
 wiki.nightfire.dev, CC BY 4.0 — facts with attribution).
 
 | Code | Name (MFX updater / mission) | Maps | Objects | Placements | Drones | Collision | Parse | Game logic¹ | Render² |
 |---|---|---|---|---|---|---|---|---|---|
-| 07000001 | Double Cross pt. 1 `UpdateMFX_01CastleA` | 54 | 215 | 331 | 20 | 190 | ok | ok | 07000005's systems³ |
-| 07000002 | Double Cross pt. 2 `UpdateMFX_01CastleB` | 52 | 353 | 502 | 25 | 321 | ok | ok | ³ |
-| 07000003 | Double Cross pt. 3 `UpdateMFX_01CastleC` | 51 | 347 | 511 | 20 | 335 | ok | ok | ³ |
-| 07000004 | Double Cross pt. 4 `UpdateMFX_01CastleD` | 50 | 54 | 70 | 1 | 42 | ok | ok | ³ |
-| 07000005 | The Exchange pt. 1 `UpdateMFX_02MayhewA` | 51 | 178 | 363 | 16 | 120 | ok | ok | **the test level** |
-| 07000006 | The Exchange pt. 2 `UpdateMFX_02MayhewB` | 49 | 223 | 813 | 32 | 174 | ok | ok | ³ |
-| 07000007 | The Exchange pt. 3 `UpdateMFX_02MayhewC` | 48 | 291 | 513 | 58 | 256 | ok | ok | ³ |
-| 07000008 | The Exchange pt. 4 `UpdateMFX_02MayhewD` | 52 | 208 | 308 | 26 | 170 | ok | ok | ³ |
+| 07000001 | Double Cross pt. 1 `UpdateMFX_02MayhewA` | 54 | 215 | 331 | 20 | 190 | ok | ok | 07000005's systems³ |
+| 07000002 | Double Cross pt. 2 `UpdateMFX_02MayhewB` | 52 | 353 | 502 | 25 | 321 | ok | ok | ³ |
+| 07000003 | Double Cross pt. 3 `UpdateMFX_02MayhewC` | 51 | 347 | 511 | 20 | 335 | ok | ok | ³ |
+| 07000004 | Double Cross pt. 4 `UpdateMFX_02MayhewD` | 50 | 54 | 70 | 1 | 42 | ok | ok | ³ |
+| 07000005 | The Exchange pt. 1 `UpdateMFX_01CastleA` | 51 | 178 | 363 | 16 | 120 | ok | ok | **the test level** |
+| 07000006 | The Exchange pt. 2 `UpdateMFX_01CastleB` | 49 | 223 | 813 | 32 | 174 | ok | ok | ³ |
+| 07000007 | The Exchange pt. 3 `UpdateMFX_01CastleC` | 48 | 291 | 513 | 58 | 256 | ok | ok | ³ |
+| 07000008 | The Exchange pt. 4 `UpdateMFX_01CastleD` | 52 | 208 | 308 | 26 | 170 | ok | ok | ³ |
 | 07000009 | Night Shift pt. 1 `UpdateMFX_03TowerA` | 40 | 151 | 288 | 6 | 120 | ok | ok | ³ |
-| 0700000a | (Tower B) `UpdateMFX_03TowerB` | 38 | 601 | 800 | 20 | 543 | ok | ok | ³ |
-| 0700000b | (Tower C) `UpdateMFX_03TowerC` | 51 | 242 | 380 | 10 | 177 | ok | ok | ³ |
-| 0700000c | `UpdateMFX_PowerStationA1` | 46 | 274 | 575 | 40 | 231 | ok | ok | ³ |
-| 0700000d | `UpdateMFX_PowerStationA2` | 50 | 218 | 568 | 41 | 189 | ok | ok | ³ |
-| 07000011 | `UpdateMFX_HT_Level_Tower2A` | 44 | 195 | 319 | 37 | 157 | ok | ok | ³ |
-| 07000012 | `UpdateMFX_HT_Level_Tower2B` | 39 | 612 | 792 | 32 | 569 | ok | ok | ³ |
-| 07000013 | `UpdateMFX_HT_Level_Tower2C` | 42 | 77 | 173 | 12 | 69 | ok | ok | ³ |
-| 07000014 | `UpdateMFX_HT_Level_EvilBase` | 55 | 340 | 1034 | 61 | 273 | ok | ok | ³ |
-| 07000015 | `UpdateMFX_HT_Level_EvilBase` | 55 | 181 | 638 | 20 | 173 | ok | ok | ³ |
-| 07000016 | `UpdateMFX_HT_Level_EvilSilo` | 64 | 189 | 360 | 20 | 170 | ok | ok | ³ |
-| 0700001b | `UpdateMFX_HT_Level_SpaceStationD` | 27 | 181 | 304 | 20 | 89 | ok | ok | ³ |
+| 0700000a | Night Shift pt. 2 `UpdateMFX_03TowerB` | 38 | 601 | 800 | 20 | 543 | ok | ok | ³ |
+| 0700000b | Night Shift pt. 3 `UpdateMFX_03TowerC` | 51 | 242 | 380 | 10 | 177 | ok | ok | ³ |
+| 0700000c | Chain Reaction pt. 1 `UpdateMFX_PowerStationA1` | 46 | 274 | 575 | 40 | 231 | ok | ok | ³ |
+| 0700000d | Chain Reaction pt. 2 `UpdateMFX_PowerStationA2` | 50 | 218 | 568 | 41 | 189 | ok | ok | ³ |
+| 07000011 | Phoenix Fire pt. 1 `UpdateMFX_HT_Level_Tower2A` | 44 | 195 | 319 | 37 | 157 | ok | ok | ³ |
+| 07000012 | Phoenix Fire pt. 2 `UpdateMFX_HT_Level_Tower2B` | 39 | 612 | 792 | 32 | 569 | ok | ok | ³ |
+| 07000013 | Phoenix Fire pt. 4 `UpdateMFX_HT_Level_Tower2C` | 42 | 77 | 173 | 12 | 69 | ok | ok | ³ |
+| 07000014 | Countdown pt. 1 `UpdateMFX_HT_Level_EvilBase` | 55 | 340 | 1034 | 61 | 273 | ok | ok | ³ |
+| 07000015 | Countdown pt. 2 `UpdateMFX_HT_Level_EvilSilo` | 55 | 181 | 638 | 20 | 173 | ok | ok | ³ |
+| 07000016 | Countdown pt. 3 `UpdateMFX_HT_Level_EvilBaseC` | 64 | 189 | 360 | 20 | 170 | ok | ok | ³ |
+| 0700001b | Equinox `UpdateMFX_HT_Level_SpaceStationD` | 27 | 181 | 304 | 20 | 89 | ok | ok | ³ |
 | 07000041 | (a scripted interlude wrapper — the space-station approach; no music-switch case [M 0x114e70]) | 100 | 94 | 120 | 1 | 81 | ok | ok | ³ |
 | 07000043 | (cut-scene / wrapper) | 78 | 2 | 2 | 1 | 2 | ok | ok | ³ |
 | 07000046 | (cut-scene / wrapper) | 93 | 26 | 75 | 1 | 25 | ok | ok | ³ |
 | 07000048 | (cut-scene / wrapper) | 5 | 1 | 1 | 0 | 1 | ok | ok | ³ |
 | 07000049 | (cut-scene / wrapper) | 71 | 2 | 2 | 1 | 2 | ok | ok | ³ |
-| 0700004a | `UpdateMFX_HT_Level_Tower2Elevator` (the Tower-2 mission, part 2 [L]) | 42 | 72 | 294 | 38 | 66 | ok | ok | ³ |
+| 0700004a | Phoenix Fire pt. 3 `UpdateMFX_HT_Level_Tower2Elevator` (mission 0x07000011, part 2 [L]) | 42 | 72 | 294 | 38 | 66 | ok | ok | ³ |
 | 0700004b | (a multiplayer arena — the loading-image switch groups it with 0x07000021-29/4c [M 0x1d5258:369-386]; not a story level) | 110 | 113 | 225 | 1 | 108 | ok | ok | ³ |
 
 ¹ "Game logic ok" = `nf-extract ai-sim <iso> <level>` runs 5+ ticks without panic: the collision world builds, drones

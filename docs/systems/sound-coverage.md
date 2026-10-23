@@ -22,8 +22,8 @@ front-end only). Ported-this-pass items link the test (`crates/nf-game/tests/sou
 | Weapons/bullets (fire, impacts, fly-by, casings) | 25 | PORTED except 0x28D (class-0x51 bullet-end) |
 | World objects (doors, searchlights, pickups, hints, sound triggers, locks) | 30 | PORTED except the picklock beeps 0x5DB/0x5DA + activate sounds, `Hurt` loop |
 | Drones/guards (foley, pain, gunfire, deaths, seen-music) | 25 | PORTED except class-specific extras (below) |
-| Security cameras (`Sensor_Update`) | 7 | MISSING — the class (0x29) is unported whole |
-| SpaceLaser (0x50), SS (0x25), Break (0x20) classes | 10 | MISSING — classes unported whole |
+| Security cameras (`Sensor_Update`) | 7 | Update 2026-10-22: the class is ported in `crates/nf-game/src/sensor.rs`, which carries 0x4AA / 0x4A9 / 0x4DD; the rows below predate it |
+| SpaceLaser (0x50), SS (0x25), Break (0x20) classes | 10 | Update 2026-10-22: all three classes are ported (`space_laser.rs`, `ss.rs`, `breakable.rs` — the Break kill sounds 0x5F2/0x5F3 are in breakable.rs); per-id coverage not re-checked (unverified, 2026-10-22) |
 | Sky thunder (`View_DrawSky`) | 2 | MISSING — the lightning tick (`sky.rs`) is not wired into the sim (G-019) |
 | Front-end menus (`P_*_Handler`, `Menu_PlaySound`) | 40 | N/A (front-end) |
 | Vehicles/driving/MP (`Car_*`, `Copter_*`, `Sub_*`, `GT_*`, `MPSound_*`) | 22 | N/A |

@@ -11,7 +11,7 @@ bit-identical to a normal run that happens to start in the same state.
 nf-view <iso> 07000005 --dev --scenario <name>
 ```
 
-The scenarios (level 07000005 "Paris Prelude / Mayhew A"):
+The scenarios (level 07000005, The Exchange part 1):
 
 | Scenario | What it does | What to check |
 |---|---|---|

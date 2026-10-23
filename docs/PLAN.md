@@ -17,9 +17,25 @@ Two engines, one disc:
 - Hand-off between the two: a "PTP" state block (*suggested:* wiki.nightfire.dev, 0x0031CF90 → 0x100000; to measure).
 - The PC version is a different game (Gearbox, GoldSrc) and is irrelevant (*sourced*, docs/research/pc-version-and-emulator-patches.md).
 
+## Status (2026-10-22)
+
+- Formats, the asset viewer, the engine core, the on-foot gameplay, audio and the front end exist as code in the six
+  crates below. All 27 on-foot archives load and run; the story levels' headless walkthroughs (`walk_*` tests) reach
+  each level's exit, and real-input walkthroughs (`walkreal_*`) still have parked spots on 07000005, 07000006,
+  0700000a, 07000014, 07000016, 0700001b and 0700004a (see each test's `#[ignore]` note and docs/levels/).
+- The driving engine (phase 4's second half) has model code only (input mapping, AI traffic, mission scripts, HUD
+  data under `nf_game::driving` / `nf_game::input::driving`); the five driving missions are not playable — the front
+  end shows a notice and unlocks the next mission (`menu.rs`).
+- Multiplayer: the game's on-foot match rules and bots on a single screen, plus a port-only online mode (`nf-net`:
+  UDP lockstep, peer-to-peer with a lobby service for public lists and short join codes). No split screen.
+- Phase 6 (polish): widescreen, high refresh with interpolation, and optional gamepad support exist; rebinding,
+  rumble and accessibility do not.
+- Open work: docs/GAPS.md; open questions: docs/UNKNOWNS.md.
+
 ## Phases
 
-Each phase ends with verified steps committed with a WORKLOG entry. Estimates are not in years: the action engine is
+Each phase ends with verified steps committed with a WORKLOG entry. (Written 2026-10-08; see Status above for where
+each phase stands.) Estimates are not in years: the action engine is
 symbol-rich, two community projects already document most formats (facts only), and the RC2 tooling carries over.
 
 1. **Formats** (now). Disc ✔, BIGF ✔, ELF ✔. Next: FILES.BIN `FileList` reader; the level `.bin` archive (hashcode
@@ -37,17 +53,17 @@ symbol-rich, two community projects already document most formats (facts only), 
 
 ## Crate layout
 
+The planned split (nf-input / nf-engine / nf-driving / nf-render / nf-app) was not kept. The workspace as built:
+
 ```
-crates/nf-formats   disc/archive/asset readers (no I/O policy, no game logic)        [exists]
-crates/nf-extract   CLI over the user's ISO (dev tool, writes to work/)             [exists]
-crates/nf-input     device layer → game actions; mouse look; bindings config         [phase 3]
-crates/nf-engine    main loop, objects, camera, collision, scripts                    [phase 3]
-crates/nf-game      player, drones, weapons, missions (Action engine)                 [phase 4]
-crates/nf-driving   EA driving engine                                                 [phase 4]
-crates/nf-render    wgpu renderer (PS2 GS semantics where they matter)                [phase 2]
-crates/nf-audio     SPU/EA audio, mixer (cpal)                                         [phase 5]
-crates/nf-app       the executable                                                    [phase 2→]
-tools/              ghidra scripts, cross-check scripts, trace tools (never product deps)
+crates/nf-formats   disc/archive/asset readers (no I/O policy, no game logic)
+crates/nf-extract   dev CLI over the disc image (writes to work/)
+crates/nf-game      the fixed-tick simulation: input mapping, player, drones, weapons, scripts,
+                    missions, MP rules/bots, the driving model code (nf_game::driving)
+crates/nf-view      window, wgpu renderer, menus, launcher, movies: the playable app (NightfirePort.exe)
+crates/nf-audio     SPU voices mixed in software, played through cpal
+crates/nf-net       the UDP lockstep session, P2P join codes, lobby client
+tools/              ghidra scripts, cross-check scripts, trace tools, release scripts (never product deps)
 ```
 
 ## Input design (from docs/systems/input.md)

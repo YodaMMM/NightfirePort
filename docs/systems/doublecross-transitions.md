@@ -15,10 +15,10 @@ placements <iso> <L>.bin e8`, every 0xE8 param 0 on the disc scanned):
 
 | level | exit (0xE8) | next (param 0) | gate [D] |
 |---|---|---|---|
-| 07000001 Castle A | #18 "Load Point" | 0x07000002 | auto ch 0x10 — Touch #180 (out 0x10, mask 0x18, filter skin 0x4F: Bond AND the contact on the plate) |
-| 07000002 Castle B | #206 "Load Point 2" | 0x07000003 | key gate 0x4C (AND #480 = [0x48, 0x4b]) — E-key only (param 2 = 0) |
-| 07000003 Castle C | #451 "Load Point" | 0x07000004 | key gate 0x52 (AND #435 = [0x4e, 0x51]) — E-key only |
-| 07000004 Castle D | **none** | — | the mission ends in the mission layer (§5) |
+| 07000001 part 1 | #18 "Load Point" | 0x07000002 | auto ch 0x10 — Touch #180 (out 0x10, mask 0x18, filter skin 0x4F: Bond AND the contact on the plate) |
+| 07000002 part 2 | #206 "Load Point 2" | 0x07000003 | key gate 0x4C (AND #480 = [0x48, 0x4b]) — E-key only (param 2 = 0) |
+| 07000003 part 3 | #451 "Load Point" | 0x07000004 | key gate 0x52 (AND #435 = [0x4e, 0x51]) — E-key only |
+| 07000004 part 4 | **none** | — | the mission ends in the mission layer (§5) |
 
 **No wrapper/interlude level is in the chain.** Nothing on disc or in ACTION.ELF loads
 0x07000041/43/46/49 [D: every 0xE8 param-0 + every kind-7 script's event-0x12 scanned — event
@@ -75,7 +75,7 @@ pops when `BGFMVPlaying == 0`]. **The game plays no movie on a Castle hop.**
 **Net sequence on a hop**: exit trigger → end sting + pause → 300-tick fade to black →
 (wrapped load, no movie, no state-6 hold) → loading screen → archive load → the entry fade
 arms (§7: on the player's viewer — DRAWN only when no script camera owns the view, so the
-cut-scene openings show no fade-up; Castle C's camera-free load does) →
+cut-scene openings show no fade-up; part 3's camera-free load does) →
 
 ## 4. The next level's intro [M/D]
 
@@ -85,15 +85,15 @@ cut-scene openings show no fade-up; Castle C's camera-free load does) →
   docs/systems/level-exit-fade.md §2]]. `ResetMap_Load` phase 3 runs `Player_Start` on every
   level load [M 0x1d6360:152], so the fade arms before the first gameplay frame (the loading
   screen ends at phase 3's tail [M :169-170]).
-- **The auto-play intro scripts** [D]: each part's mode-1 ScriptPlayer plays at load — Castle A
-  SP #277 (0x06000087, pack 07800001; writes ch 0xB — the contact's enable), Castle B SP #400
-  (0x06000084), Castle C — (mode-0/64 players only: 0x06000563/0x06000080 wait on triggers),
-  Castle D SP #3 (0x06000083). Ported since fix-cutscenes (`load_with_carry` merges the type-0xC
+- **The auto-play intro scripts** [D]: each part's mode-1 ScriptPlayer plays at load — part 1
+  SP #277 (0x06000087, pack 07800001; writes ch 0xB — the contact's enable), part 2 SP #400
+  (0x06000084), part 3 — (mode-0/64 players only: 0x06000563/0x06000080 wait on triggers),
+  part 4 SP #3 (0x06000083). Ported since fix-cutscenes (`load_with_carry` merges the type-0xC
   packs; docs/systems/levels.md §5).
 
-## 5. Castle D's end (the mission layer, not a level exit) [D/M]
+## 5. part 4's end (the mission layer, not a level exit) [D/M]
 
-Castle D has **no 0xE8** [D §1]. The end chain: intro 0x06000083 (500 ticks, mode 1) fires
+part 4 has **no 0xE8** [D §1]. The end chain: intro 0x06000083 (500 ticks, mode 1) fires
 `0xD [0x38,1]` → SP #2 plays 0x06000082 (830 ticks), whose last event `0xD [0x53,1]` enables
 the mission record's only objective "Defeat the assassin" (channel 0x54, enable 0x53) [L
 mission/c07000004.rs]. The assassin is the level's only drone — "oDrone" placement 1, **death
@@ -132,15 +132,15 @@ phase 2 resolves it to the front end 0x07000048 with the results page queued (0x
 
 `crates/nf-view/tests/doublecross_transitions_live.rs` (ISO-gated where they read the disc, each
 with a sister that can fail):
-1. Castle A's real route (intro → contact → the AND-touch plate) fires the exit and the sequence
+1. part 1's real route (intro → contact → the AND-touch plate) fires the exit and the sequence
    runs: exit 0x07000002 → wrap 0x07100002 → not whitelisted → resolve 0x07000002 → the Double
    Cross loading group → the entry fade falls 1.0 → 0.0 over 45 ticks. Sister: Bond alone on the
    plate fires nothing (the AND needs the contact).
-2. Castle B's exit: key gate 0x4C locked (E does nothing), gate on → E loads 0x07000003 through
+2. part 2's exit: key gate 0x4C locked (E does nothing), gate on → E loads 0x07000003 through
    the same wrap/resolve; entry fade on 07000003. Sister: locked E fires no load.
-3. Castle C's exit: gate 0x52 → E loads 0x07000004 through the wrap/resolve; loading group +
+3. part 3's exit: gate 0x52 → E loads 0x07000004 through the wrap/resolve; loading group +
    objective label. Sister: without the gate the exit stays locked.
-4. Castle D: the intro chain enables the assassin objective (ch 0x53 via the two scripts), the
+4. part 4: the intro chain enables the assassin objective (ch 0x53 via the two scripts), the
    kill raises 0x54, the mission ends to `LevelToEndTo 0x07300004`, resolved to the front end.
    Sister: a non-end level maps to the default arm (0x07000048, no outro) — pinned on 0x07000011.
 5. The table pins: wrap switch rows for the whole Double Cross row set + the unwrapped codes;
@@ -177,10 +177,10 @@ the fade exists, but the port drew it on the wrong viewer:
    cut-scene end resurrects it — by the time gameplay returns the fade is expired (a cut-scene
    shorter than 45 ticks would hand the remainder back to the player viewer; none of the
    Castle intros is that short [D §4 — 500/830-tick scripts]).
-4. Where the game DOES draw it: a load with no auto-play intro. Castle C (07000003) has
+4. Where the game DOES draw it: a load with no auto-play intro. part 3 (07000003) has
    mode-0/64 script players only [D §4], its port sim runs no script camera for the whole
    window, so viewer 0 stays drawn and the fade-up shows for its 45 ticks [M 0x1e6f50 draws
-   every +0x2a viewer's fade]. Castle A/B/D open under their auto-play intros (SP #277/#400/#3
+   every +0x2a viewer's fade]. part 1/B/D open under their auto-play intros (SP #277/#400/#3
    [D §4]) — hidden, like 02.
 
 **Port shape (unchanged draw code)**: `Drones::spawn_fade` still arms (45, 45) at every load
@@ -189,4 +189,4 @@ and ticks 1/tick; `spawn_fade_view()` now returns None while a script camera own
 exit → entry). Tests pin both halves: `doublecross_transitions_live::assert_entry_fade_runs`
 walks 46 ticks per part — the raw ramp exactly (45−n, 45) with expiry at 45, the view None
 under the cut-scene camera (01/02/04, the PS2-pinned case) and the exact drawn ramp on
-Castle C (the game-draws-it case).
+part 3 (the game-draws-it case).

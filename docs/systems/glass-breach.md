@@ -1,7 +1,7 @@
 # The Mayhew glass breach — guards through the windows
 
 The user, 2026-10-16 evening: "beginning of mayhew level guards are supposed to break through the
-glass". Level 07000001 (Paris Prelude, Castle A — the Mayhew estate). Builds on 750e
+glass". Level 07000001 (Double Cross part 1 — the Mayhew estate). Builds on 750e
 glass-shatter's breakables (`docs/systems/breakables.md`, `crates/nf-game/src/breakable.rs`).
 
 ## The scene

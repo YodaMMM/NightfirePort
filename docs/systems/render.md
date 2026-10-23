@@ -2,7 +2,10 @@
 
 Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] decomp, [L] snapshot `work/ee_start_05.bin`, [S] suggested. Source: a
 research pass (subagent, 2026-10-09; decoded all 713 ps2gfx leaves of 07000005); not yet re-checked here.
-**Status: spec only — the render subsystem is not ported yet** (planned after animation).
+**Status (2026-10-22):** this page is the original spec; the renderer it describes is ported in
+`crates/nf-view` (`gpu.rs`, `scene.rs`) — per-leaf GS state (GAPS G-018), portal visibility (G-016), GPU
+skinning and interpolation (G-043), lighting, snow and the shard pass. Individual differences from the PS2 are
+tracked in docs/GAPS.md.
 
 Ranked by visual impact: depth fog, snow, per-leaf blend / test / depth-write state, the ×1.13 output gain, the
 alpha-list distance fade, environment mapping, dynamic lights / motion blur / breath puffs.

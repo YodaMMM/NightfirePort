@@ -16,7 +16,7 @@ mechanism; the port's gap and the fix are in `docs/reports/tranq-gun.md`.
 | speed +0x20 / range +0x1C | 1.5 (0x44: 2.0) / 45 (0x44: 100) | [L] |
 | projectile mesh +0x5C | 0x020008bd (the dart) | [L] |
 | bullet_flags +0x6C / +0x70 | 0xA00 / 0x2 — **+0x70 bit 0x2 is NOT the sleep trigger**: `Bullet_CollisionHandler` 0x12ce80:183-185 turns it into `Effect_Create` flags 0x61 (the world-impact bundle; the P2K carries 0x12 and nobody sleeps from it) | [M 0x12ce80:183-192] |
-| carried where | the START LOADOUT of 07000009/0a/0b only (Night of the Agent, Tower A/B/C): `Player_InitWeapon` 0x1a7ef8 case 0x7000009 equips `Upgrade_Weapon(0x43)` with 999 rounds and SELECTS it; no tranq pickups exist on any story archive; the fp skin 0x050000a3 resolves only on 09/0a/0b's own packs | [M 0x1a7ef8 case 0x7000009; [D] archive scan (weapon-model-coverage.md); [L] probe] |
+| carried where | the START LOADOUT of 07000009/0a/0b only (Night Shift, Tower A/B/C): `Player_InitWeapon` 0x1a7ef8 case 0x7000009 equips `Upgrade_Weapon(0x43)` with 999 rounds and SELECTS it; no tranq pickups exist on any story archive; the fp skin 0x050000a3 resolves only on 09/0a/0b's own packs | [M 0x1a7ef8 case 0x7000009; [D] archive scan (weapon-model-coverage.md); [L] probe] |
 
 ## The hit route — the game's [M] chain
 

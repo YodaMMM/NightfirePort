@@ -100,8 +100,9 @@ to the first ceiling [M AIBounds_Link2Cel 0x1d2f18:47-49]) is still nudged; the 
 stand-in changed fix_guard_weapons_live's guard parking by mm–cm and with it the bullet-landing geometry).
 
 Translation is root motion; `NDrone2_Steer` turns 0.1 per tick toward `+0x694` (plus the anim yaw offset
-`+0x4C4`: the body faces desired − offset). Obstacle avoidance (drones and the player within 3 units) is not ported
-yet.
+`+0x4C4`: the body faces desired − offset). Obstacle avoidance (drones and the player within 3 units) was not ported when this was
+written; it is now: `DroneMove_NoBunching` 0x150ad0's flags (`Drone+0x31C`) rebuilt every tick from
+`EvaluateObstacle` 0x14e6f0's sqDist < 9 gate (crates/nf-game/src/drone.rs; GAPS G-027).
 
 `DroneAnim_SetCombatMoveAnim`: a = diff(yaw to move target, yaw to opponent) → quad with hysteresis (previous 0:
 |a| > 2.356 → 2, > 0.925 → side; previous 1/3: |a| > 2.496 → 2, toward the other side past 0.785 / 0.925;

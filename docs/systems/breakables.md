@@ -66,7 +66,11 @@ e.g. the 08 corridor window) is not a 0x20 object: it never breaks [M + D].
   a broken pane's instance (`scene_instances` appends the 0x20 placements in the same order as
   `Breakables::list`).
 
-## Not ported
+## Not ported (as first written)
+
+Update 2026-10-22: both items below are ported since — the shards (`crates/nf-game/src/shatter.rs`, drawn as a
+world alpha pass in nf-view's gpu.rs/scene.rs; docs/systems/break-debris.md) and the guards-smash-glass drain
+(`Vec_SqDist3D(contact+0x30, contact+0x40) · 20.0` in `crates/nf-game/src/breakable.rs`; docs/systems/glass-breach.md).
 
 - The kind-2 shard render stream and the debris (`ShardList` 0x316dd8, `UpdateAllShards`
   0x12b808 / `DrawAllShards` 0x12bef8, `Debris_Create_Loop` 0x1ed548) — presentation; the draw

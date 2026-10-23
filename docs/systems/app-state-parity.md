@@ -52,8 +52,9 @@ suggested.
 
 ## Open items (not fixed here)
 
-- The cheats page (`CheatInfo`) and the controls page (`PlayerSetting` invert) are unported; their
-  game-side writers are cited in the table so the pages' tasks can wire the same events.
+- The cheats page (`CheatInfo`) was unported when this was written; its game-side writers are cited in
+  the table. The controls page (`PlayerSetting` style + Y invert) is ported since (P_CNCONTROLS 0x40000022,
+  docs/systems/cn-controls-page.md); the cheats page was not re-checked (unverified, 2026-10-22).
 - The mini-mission launch (`Menu_RunMiniMission` 0x1ffb90, from P_PARISENUM) writes difficulty 1
   and loads the driving map 0x9000001; the port refuses driving maps from the menus, so the event
   cannot fire yet.

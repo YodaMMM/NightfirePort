@@ -37,14 +37,14 @@ Per-level census of the retail disc [D] (main map, `Level::parse` — the probe
 
 | level | 0xc023 cels (param 3) | 0xc047 cels (env values) |
 |---|---|---|
-| 07000001 intro | 0 | 11 (0) |
-| 07000002 The Exchange | **5 (param 3 = 0/1)** | 23 (0, 10, 15, 50, 80) |
+| 07000001 Double Cross pt. 1 | 0 | 11 (0) |
+| 07000002 Double Cross pt. 2 | **5 (param 3 = 0/1)** | 23 (0, 10, 15, 50, 80) |
 | 07000003 / 04 / 24 / 29 / 4b | 0 | all env 0 (04: 2, one 80) |
-| 07000005 Mayhew A | 0 | 19 (0, 40) |
-| 07000006 Mayhew B | 0 | 37 (0, 20, 30, 35, 40, 50, 60, 70, 90) |
-| 07000007 Mayhew C | 0 | 32 (0, 30, 40, 50, 60, 80) |
-| 07000008 Mayhew D (gondola) | 0 | 18 (0, 50, 60, 69, 80, 100) |
-| 07000009 Night of the Agent (Tower A) | 0 | 14 (20, 40, 80, 100) |
+| 07000005 The Exchange pt. 1 | 0 | 19 (0, 40) |
+| 07000006 The Exchange pt. 2 | 0 | 37 (0, 20, 30, 35, 40, 50, 60, 70, 90) |
+| 07000007 The Exchange pt. 3 | 0 | 32 (0, 30, 40, 50, 60, 80) |
+| 07000008 The Exchange pt. 4 (gondola) | 0 | 18 (0, 50, 60, 69, 80, 100) |
+| 07000009 Night Shift pt. 1 (Tower A) | 0 | 14 (20, 40, 80, 100) |
 | 0700000a / 0b / 0d / 11 / 12 / 14 / 15 | 0 | mixed, see probe |
 | 0700000c power station 1 | 0 | 22 (0, 40, 50, 70, 80, 90) |
 | 07000041 / 16 | 1 (param 3 = 0) | 41: 7 (0, 60, 100) / 16: 7 (0, 20, 60, 100) |

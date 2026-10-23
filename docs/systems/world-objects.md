@@ -117,8 +117,8 @@ channel 200, sounds none/none/320, no anim; `Door_UNLocked` ×1 (153), the swing
 `nf-view` posed Character-layer instances at `obj+0x90` (the draw honours `NF_HIDE` for A/B) + collision via
 `set_dynamic` (the object's own collision mesh, at most one tick behind the visual) + the E key in nf-view.
 Golden `doors_live.rs` (kinds, channels, sounds, flags, the 1/14 speed, the swing sign, the keys, the closed
-matrix against the live `obj+0x90` words). Not ported: portal links, the text labels, the exact proxy-list
-path (G-035).
+matrix against the live `obj+0x90` words). Since ported (2026-10-22): portal links, the text labels and
+`Door_ReactToHit` as the collide step — see GAPS G-035.
 
 ## The truck [M, L]
 

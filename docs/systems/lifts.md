@@ -109,32 +109,32 @@ Kinds shorthand: SP = 0xD9 ScriptPlayer, SS = 0xE2 SimpleScript, DOOR = 0xDB, TR
 touch (once) trigger, SW = 0x29 switch, HP = 0xE4 hurt poly. "Port" = the port's status with
 its proof (test name) where one exists.
 
-### 07000001 Paris Prelude — no lift content [D docs/levels/07000001.md, whole-file sweep]
+### 07000001 Double Cross pt. 1 — no lift content [D docs/levels/07000001.md, whole-file sweep]
 No lift/elevator/platform/cab placement, no lift channel. Vertical travel is the stairwell
 (ladders) — ladder.rs.
 
-### 07000002 The Exchange — no lift content [D 07000002.md]
+### 07000002 Double Cross pt. 2 — no lift content [D 07000002.md]
 Nothing lift-shaped; the walkreal route touches no cab.
 
-### 07000003 Alpine Escape — no lift content [D 07000003.md]
+### 07000003 Double Cross pt. 3 — no lift content [D 07000003.md]
 One ladder; the rail/roof routes are geometry.
 
-### 07000004 Enemies Vanish — no lift content [D 07000004.md:67,71-72]
+### 07000004 Double Cross pt. 4 — no lift content [D 07000004.md:67,71-72]
 Explicit absence: "lifts and their call buttons (no lift kind exists)" in the zero-kinds census;
 "the cable car / gondola pieces: absent" (the carpark Limo parts are kind-0x19 static cels).
 
-### 07000005 Mayhew A — no lift; the ride here is the truck [D 07000005.md:45-50]
+### 07000005 The Exchange pt. 1 — no lift; the ride here is the truck [D 07000005.md:45-50]
 The scripted ride is the truck chain (SP #37 0x06000A22 + touch plates → mux #316 → ch 0x1D) —
 a vehicle, out of lift scope; its carry is the Control_InheritVelocity proof level
 (truck_ride_to_the_castle_ends_the_level, level_reload_live).
 
-### 07000006 Mayhew B — no lift content [D 07000006.md:40-47]
+### 07000006 The Exchange pt. 2 — no lift content [D 07000006.md:40-47]
 Kind census has no lift kind; the 28 SSs are touch/bullet-driven panels.
 
-### 07000007 Mayhew C — no lift content [D 07000007.md:123-124]
+### 07000007 The Exchange pt. 3 — no lift content [D 07000007.md:123-124]
 Explicit: "no lifts/elevators, no buttons/switches (0x29)".
 
-### 07000008 Mayhew D — THE GONDOLA (the cable car) [D 07000008.md:36-49,138-142]
+### 07000008 The Exchange pt. 4 — THE GONDOLA (the cable car) [D 07000008.md:36-49,138-142]
 
 | piece | id / kind | channel / script | the game does | port |
 |---|---|---|---|---|
