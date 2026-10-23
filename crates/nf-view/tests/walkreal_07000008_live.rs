@@ -449,7 +449,7 @@ fn the_ally_never_shoots_bond_on_the_walk() {
         "the ally was never shot by Bond");
 }
 
-/// The heard-noise path (the user's repeat: "zoe still shoots at you at the gondola"): the dtype-0xC
+/// The heard-noise path (Zoe must never fire at Bond at the gondola): the dtype-0xC
 /// ally rides the SAME walked route down to the gondola mouth and through the ride while the guards
 /// fight Bond. The game's rule set (docs/systems/ally-heard-noise.md): FindOpponent never gives a
 /// team-2 drone the player [M 0x1424e0:101-121], the heard-noise chain DOES walk her into Attack

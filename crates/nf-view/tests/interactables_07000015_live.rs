@@ -401,13 +401,13 @@ fn the_mine_explodes_when_bond_walks_into_its_beam() {
 /// unlinked ladder only from an EMPTY straddle set ([M Collide_Pick 0x1eb320:125-134]), i.e.
 /// only mid-void. The port-side mechanics themselves are proven: a fall started inside the
 /// shaft's airspace (x 84.0-85.5, feet 24.5..40) grabs at t ≤ 16, snaps to the plane offset and
-/// climbs [L port sim, walkreal_probe15f/i]. Live checks for the main agent: (1) [L] a FRESH-boot
+/// climbs [L port sim, walkreal_probe15f/i]. Live checks (open): (1) [L] a FRESH-boot
 /// 07000015 snapshot — the ladder objects' obj+0x20 cel links (are they really unlinked, or does
 /// the game's build_LinkToRoom resolve them where the port's find_cel does not?); (2) [L] PCSX2:
 /// stand Bond crouched on the east room's floor at (84.0, 40.28, −1.4) facing the ladder — does
 /// the climb engage? (3) [L] PCSX2: walk Bond off the east floor's south edge — is there any
 /// in-game route onto this ladder, or are the three ladders sealed decor?
-#[ignore = "the grab cannot fire from any reachable standing spot: the east room's south side is a solid wall at z −1.95 [D], the deck ends 3 units west of the plane [D], and the straddled-cel scoping skips the unlinked ladder (build_FindCel → None on all three [L live]) everywhere Bond can stand — only mid-void falls admit it [M 0x1eb320:125-134]. The port's fall+strafe grab is proven [L probe15f/i]. Needs the main agent's live checks (the ladder obj+0x20 links on a fresh boot; the in-game grab from the room floor)"]
+#[ignore = "the grab cannot fire from any reachable standing spot: the east room's south side is a solid wall at z −1.95 [D], the deck ends 3 units west of the plane [D], and the straddled-cel scoping skips the unlinked ladder (build_FindCel → None on all three [L live]) everywhere Bond can stand — only mid-void falls admit it [M 0x1eb320:125-134]. The port's fall+strafe grab is proven [L probe15f/i]. Needs a live check's live checks (the ladder obj+0x20 links on a fresh boot; the in-game grab from the room floor)"]
 #[test]
 fn the_ladder_takes_the_climb() {
     let mut w = load15();

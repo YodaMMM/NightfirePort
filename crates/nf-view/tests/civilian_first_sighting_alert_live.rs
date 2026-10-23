@@ -1,5 +1,5 @@
 //! 982-civilian-first-sighting-alert: CivilianMissionWait's case-3 first-sighting alert
-//! (`NDrone2_DSTATE_CivilianMissionWait` 0x15dbb0 case 3, the part task 962 left out).
+//! (`NDrone2_DSTATE_CivilianMissionWait` 0x15dbb0 case 3).
 //!
 //! A waiting civilian who SEES an armed Bond: `NDrone2_NearArmedPerson` gates [M 0x15dbb0:39-44],
 //! `+0x4F8 |= 0x8000000` (the own-sighting bit) [M :45], then the prop-0x33 armed-intruder shout

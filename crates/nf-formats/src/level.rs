@@ -412,7 +412,7 @@ impl Level {
     /// skipped for a missing skin.
     /// Each instance rides its placement's own index — the drone link (`Scene::char_drone`) keys
     /// on it, because placements can share a translation bit-for-bit (0700000c's three duplicate
-    /// pairs [D #263/#461, #261/#462, #310/#463]; task 992-0c-invisible-soldiers).
+    /// pairs [D #263/#461, #261/#462, #310/#463]).
     pub fn character_instances(&self) -> (Vec<(usize, Instance)>, usize) {
         let Some(m) = self.main_map() else { return (Vec::new(), 0) };
         let (mut out, mut missing) = (Vec::new(), 0);

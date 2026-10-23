@@ -1,5 +1,5 @@
 //! fix-progress-remainder FAIL-FIRST probes — run against the UNFIXED source to record the
-//! symptoms (the driver's "show it failing first"). Master-safe API only (no new fields):
+//! symptoms ("show it failing first"). Master-safe API only (no new fields):
 //! 1. a guard spotting Bond never increments `PlrMissionStats+0x00` (the vision-log call site is
 //!    unhooked) — the `detected >= 1` assert fails on master;
 //! 2. the Q-Claw's auto-aim stops at `Autoaim_Range` 25 (its weapon_data+0x1c cap 50 is not

@@ -1,6 +1,6 @@
 # Ally heard-noise combat: the team-2 opponent model (FindOpponent's drone arm)
 
-The user report: "zoe still shoots at you at the gondola" (07000008). The port's drone combat
+Symptom: Zoe fired at Bond at the gondola (07000008). The port's drone combat
 aimed every drone at Bond and had no opponent concept, so the dtype-0xC ally (Zoe, team 2
 [M 0x14cbd8:57-63 — `switch(dtype) { 10|0xb|0xd|0xe → 3, 0xc → 2, default → 1 }` → `+0x44`])
 entered the heard-noise attack chain and fired at Bond, then thrashed CombatNoMove 0x59 ↔
@@ -135,7 +135,7 @@ anim 0x21 + timer C = 60 ticks [M :15-28]; UPDATE and TIMER_C return to Attack 0
   combat route stays Bond-node-keyed — a stationary ally at the gondola mouth never walks it;
   the guards' own chase is untouched).
 
-## Live checks for the main agent
+## Live checks (open)
 
 - `gdbwatch` on Drone #21 (07000008, the gondola mouth) `+0x170` during the guard fight: the
   expectation is the pointer to a team-1 guard's obj while he is within range and visible,

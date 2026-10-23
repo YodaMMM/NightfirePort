@@ -1,16 +1,16 @@
 //! copter-05-flight: the 07000005 gate-0 helicopter (#241) flies its CopterPaths route from the
 //! load. The release 0.1.18 audit (proof/09-copters) rendered it FROZEN — frame 60 == frame 180
 //! from (104.95, 24.98, 108.83) yaw −3.08 — because that cut predates the merged
-//! s/copter-path-flight work (Copter_Move 0x17d628 + CopterPaths + SP_SetPosRot posing; task 958):
+//! s/copter-path-flight work (Copter_Move 0x17d628 + CopterPaths + SP_SetPosRot posing):
 //! in the 0.1.18 tree the copter's look was a one-shot script stand-in whose keyless stream
-//! entity froze at its creation-tick pose (the posing gap in docs/reports/copter-path-flight.md)
+//! entity froze at its creation-tick pose (the posing gap)
 //! and nothing wrote obj+0x90. This file pins the flight the merged tree flies, through the real
 //! path only: #241's gate is 0 (placement param 6 = 0 [D the 07000005 census — "no gate → active
 //! from the start, the ambient fly-by"]), so the game flies it from the load with no channel
 //! poke — every leg below runs on plain 60 Hz steps.
 //!
 //! The PINE diff points: the test prints the copter position at frames 60 / 120 / 180 / 720 from
-//! the load (the audit's f60/f180 anchor included). The live read the main agent should make on a
+//! the load (the audit's f60/f180 anchor included). The live read to make on a
 //! fresh-boot PCSX2: the SP player 0x16df360 (#241's twin, +0x36 = 0 [L ee_start_05.bin]) —
 //! SP+0xE0 → +0xC + *(ushort*)(SP+0xE0+0x2A)·4 = the playing SCRIPTINFO pointer
 //! [M SP_SetPosRot 0x1dc9e8], whose first 64 bytes are the flight matrix `Script_SetPosRot`

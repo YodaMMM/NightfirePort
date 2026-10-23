@@ -6,7 +6,7 @@
 //!    the skin resolves (`AnimObjectNew` 0x1be910's substitution + `hashtable_getitem` 0x1ca5b0 —
 //!    prior art G-021, docs/systems/drone-skins.md), and whether the scene holds a character for
 //!    it (`Sim::char_drone`, the draw list's drone→character link) while it is present.
-//! 2. `yard_walk_draws_every_present_drone` — the real-input walk to the playtest's yard-ladder
+//! 2. `yard_walk_draws_every_present_drone` — the real-input walk to the yard-ladder
 //!    spot (`--bond 11.64,1.04,-184.13,-2.578,0`): teleport to the documented stand-in east of
 //!    the secret door (walkreal_0700000c's route), then REAL legs west to the ladder base. Every
 //!    tick asserts: every present, enabled, alive drone has a linked character and that
@@ -228,7 +228,7 @@ fn yard_walk_draws_every_present_drone() {
         w.walk_to(Wp::new(at[0], at[1], at[2]).r(1.5), label);
         check(&mut w, &mut violations, &mut seen);
     }
-    // Hold at the yard-ladder spot (the playtest spot --bond 11.64,1.04,-184.13,-2.578,0) for
+    // Hold at the yard-ladder spot (the spot --bond 11.64,1.04,-184.13,-2.578,0) for
     // 10 s of ticks: the spawners' releases and the patrols all run.
     for _ in 0..600 { w.tick(Input::default(), false); check(&mut w, &mut violations, &mut seen); }
     eprintln!("=== yard walk: {} distinct drones went active; {} violations ===", seen.len(), violations.len());

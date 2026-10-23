@@ -16,7 +16,7 @@
 //!     (obj+0xff ∉ {2, 3, 5, 0x11, 0x12, 0x1a}), so a drone on the moving carriage moves with it].
 //!
 //! (b) is GREEN on this branch (the riding port, drone.rs collision_handler). (a) is the
-//! EXPECTED red this branch leaves for task 957b's team-2 opponent model — the failure message
+//! EXPECTED red this branch leaves for the team-2 opponent model — the failure message
 //! names it; the ride trace above the failure shows (b) holding.
 //!
 //! Sisters (kept on purpose): the placed guards (team 1) DO engage Bond on the walked descent —
@@ -238,12 +238,12 @@ fn zoe_rides_the_carriage_and_never_targets_bond() {
     }
     // (a) the ally never targets or hits Bond [M 0x1424e0:101 — the opponent is never the player
     //     for team 2; 0x179d40:130 re-runs SetOpponentAimPos on the OPPONENT before every shot].
-    //     EXPECTED RED until task 957b's team-2 opponent model lands (docs/systems/
+    //     EXPECTED RED until the team-2 opponent model lands (docs/systems/
     //     ally-heard-noise.md): the port's fire path still aims `opp_target` (= p.target) at Bond
     //     for the noise-path combat her behaviour props put her in. This branch ports the riding
-    //     half only; see docs/reports/994-zoe-gondola-real-path.md for the stream evidence that
+    //     half only; see the stream evidence that
     //     keeps the model out of this batch.
-    assert!(ally_hits == 0, "the ally's round hit Bond {ally_hits} times — team 2 never takes the player [M 0x1424e0:101; the fix is task 957b's team-2 opponent model]");
+    assert!(ally_hits == 0, "the ally's round hit Bond {ally_hits} times — team 2 never takes the player [M 0x1424e0:101; the fix is the team-2 opponent model]");
     for r in &rounds {
         assert!(r.to_bond > 2.0, "an ally-fired round at t{} was aimed at Bond (perp {:.2} from his head) [M 0x1424e0:101]",
             r.tick, r.to_bond);

@@ -4093,7 +4093,7 @@ impl Sim {
                     // anim-pass machinery, not `Player_WeaponFiring`'s] and the case-9 stop check below
                     // re-arms the script when it ends. The port ran the advance and the stop check only on
                     // non-fired ticks — with interval 1 [L +0x40 = 1] the held decryptor froze at frame 0
-                    // forever (the driver's "does not continue its animation").
+                    // forever ("does not continue its animation").
                     let len = self.scripts.get(&self.view_script).map_or(0.0, |s| s.length as f32);
                     self.view_time = (self.view_time + self.view_speed).min((len - 1.0).max(0.0));
                 }

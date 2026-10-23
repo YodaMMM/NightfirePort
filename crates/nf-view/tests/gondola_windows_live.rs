@@ -1,4 +1,4 @@
-//! The gondola's windows must shoot out (task 995-gondola-windows-08). The 07000008 cabin's 16
+//! The gondola's windows must shoot out. The 07000008 cabin's 16
 //! windows are script entities: the ride script 0x0600004C (a kind-7 entry of the LEVEL BIN)
 //! creates them with op-7 Entity streams 7-18/23-26, obj_type 0x20, parented to stream 2, params
 //! [2, 1, 0] [D decode — gondola_windows_script.rs] — `Script_CreateEntity` 0x1d8968:120-123's

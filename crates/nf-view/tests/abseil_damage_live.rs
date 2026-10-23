@@ -36,7 +36,7 @@ fn aim_at(sim: &mut nf_view::scene::Sim, target: [f32; 3]) {
 
 const LEVEL: &str = "07000011.bin";
 
-/// The reported repro geometry [L the driver's render: `--bond 22.40,24.01,-1.39`, a roping
+/// The reported repro geometry [L render: `--bond 22.40,24.01,-1.39`, a roping
 /// guard]: Bond stands at the repro spot, the flight plate's channel 0x13 wakes the abseiler
 /// [D docs/levels/07000011.md], he runs Init → Slide, and Bond's real trigger rounds — aimed at
 /// the guard's live chest every volley from the wake on — hit and kill him while he ropes: the

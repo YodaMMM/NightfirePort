@@ -1,5 +1,5 @@
-//! decryptor-hold-real-path (988): the driver's own scenario on the real input path. On 07000012
-//! Bond stands where the driver stood — `--bond 7.0,0.5,2.4,3.1416,0` (the red keypad locks beside
+//! decryptor-hold-real-path (988): the reported scenario on the real input path. On 07000012
+//! Bond stands at the reported spot — `--bond 7.0,0.5,2.4,3.1416,0` (the red keypad locks beside
 //! the door, disc placements m38 #919/#957 [D census: "Lock - KeypadLocked" @(7.01,1.58,0.19) and
 //! @(6.74,1.58,0.18), params 0:0x0 kind, 5:0xa out]) — the Decryptor given and equipped through the
 //! real equip/switch paths, then the fire input HELD through `step_bond` for the game's scan
@@ -22,7 +22,7 @@
 //!   [M 0x1a5460:664-672]; the anim object still ticks every frame [M AnimScriptTick 0x1c2630]
 //!   and the case-9 stop check runs every frame [M Player_SetWeaponAnimObj 0x1a2e38:449-456] —
 //!   the scan animation LOOPS while held. The port ran its advance and stop check only on
-//!   non-fired ticks (the master bug: the held decryptor froze at frame 0 — the driver's "does
+//!   non-fired ticks (the master bug: the held decryptor froze at frame 0 — "does
 //!   not continue its animation").
 //! - Each held tick's scan bullet decodes +1 [M Lock_Update 0x1ae3d8:305-315]; the digits solve
 //!   at progress 160/120/80/40 (425 contact ticks for the 0x56, the last digit crossing twice
@@ -35,7 +35,7 @@ use nf_view::scene::Sim;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// The driver's spot: `--bond 7.0,0.5,2.4,3.1416,0` on 07000012 (facing the keypad wall).
+/// The reported spot: `--bond 7.0,0.5,2.4,3.1416,0` on 07000012 (facing the keypad wall).
 const BOND_SPOT: [f32; 3] = [7.0, 0.5, 2.4];
 const BOND_YAW: f32 = 3.1416;
 const BOND_PITCH: f32 = 0.0;

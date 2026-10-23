@@ -2857,7 +2857,7 @@ impl Drone {
     /// (channel count == the skin's facial count) are excluded — their channels are the morph
     /// weights (`AnimFacialBlend` 0x1be648), not translations; the disc refutes the old "all-zero
     /// face root" premise (07000006's 04000065 channels 0..2 reach ~1.0, and the body track's root
-    /// runs 0.57 un-zeroed over all 880 frames — the driver's stillness under the game's own trace
+    /// runs 0.57 un-zeroed over all 880 frames — the stillness under the game's own trace
     /// is the sit state + the collision probe, with the hip following the BODY track's ch1, y span
     /// 0.119 ≈ the body's 0.129). The free `anim::script_frame` is last-wins the same way,
     /// fix-drone2).
@@ -10282,7 +10282,7 @@ impl Drone {
         // them unconditionally shifted the shared stream (a cover test's 90-vs-37 and
         // the matrix's re-rolled rates; the live-calibrated `ai_live::guard_takes_cover_like_the_game`
         // pins the per-shot stream at roll + Light_Create's Rand(param_11) + the spread draws).
-        // The main agent's live check (the report) settles the object-create side with gdbwatch.
+        // A live check settles the object-create side with gdbwatch.
         let aim = [self.opp_target[0] + off[0] - muzzle[0], self.opp_target[1] + off[1] - muzzle[1], self.opp_target[2] + off[2] - muzzle[2]];
         let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
         let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
@@ -12106,8 +12106,8 @@ impl Drones {
         // (spawner #279) at one spot], and `position()` handed BOTH drones of a pair the lower
         // index — the control-list order key (reverse placement, Drones::tick) and every
         // placement-keyed reader then saw one drone twice and the other never (the draw list's
-        // char link keyed the same way: one of the pair drew, the other — active — drew nothing,
-        // task 992-0c-invisible-soldiers). Level drones keep the exact create index; a
+        // char link keyed the same way: one of the pair drew, the other — active — drew nothing).
+        // Level drones keep the exact create index; a
         // script-spawned drone (NIS event 8, `Drone_CoderCreate` 0x13a108) has NO placement —
         // the disc's only firing event is a no-op [D 0600005b stream 9], so nothing re-matches
         // it; the guard below only normalizes a stale non-drone index to the game's "no

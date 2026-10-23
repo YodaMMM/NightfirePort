@@ -2600,7 +2600,7 @@ impl BotBrain {
     /// when it is within sq-dist 16.0, inside the vision cone and visible
     /// (`NDrone2_CanSeeObject(.., 5, 0)`), and tells itself the objective goal is complete
     /// (`MP_sendBotMessage(.., 0x3b, 1, 0)` → `setGoalComplete(1)`) [M]. The cone half-angle
-    /// (`Drone+0xE4`) is not lifted — 90° [S]; the sight is the driver's seen bit on the row.
+    /// (`Drone+0xE4`) is not lifted — 90° [S]; the sight is the seen bit on the row.
     fn find_site_opponent(&mut self, ctx: &BotCtx) {
         if self.vars.opponent.is_some_and(|i| i >= OBJ_ROW) {
             return; // the site is already the opponent [M 0x1424e0:541 `iVar7 != +0x170`]
