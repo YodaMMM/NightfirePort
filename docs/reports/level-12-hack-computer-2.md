@@ -60,10 +60,14 @@ use moment):
   (walk → aim → E pulse) writes ch 0x34, unpauses the Q-Worm SP, and the sister (fresh load, no
   E) holds ch 0x34 off and the script held — removing the E (or the pick, or the SP trigger)
   fails it.
-- Ran (NF_ISO set, release, --test-threads=1): `interactables_07000012_live` 8 passed /
-  1 ignored (the doors-proximity test — the earlier task's documented blocker, untouched),
-  `walkreal_07000012_live` 1 passed, `use_key_census_live` 20 passed, `nf_game` lib 522 passed,
-  `campaign_flow_live` 5 passed (the SP-heavy chain).
+- Ran after the final merge (master was already an ancestor), NF_ISO set, release,
+  --test-threads=1 — 578 passed / 0 failed across 11 binaries + the lib:
+  `interactables_07000012_live` 8 passed / 1 ignored (the doors-proximity test — the earlier
+  task's documented blocker, untouched), `walkreal_07000012_live` 1, `use_key_census_live` 20,
+  `nf_game` lib 522 (the useobj/pcqworm unit tests among them), `campaign_flow_live` 5 (the
+  SP-heavy chain), `walk_0700000a_live` 3 (the other Q-Worm PC), `simplescript_live` 2,
+  `objective_banner_timing_live` 3, `interact_0700004a_live` 5 / 2 ignored (pre-existing),
+  `fix_actors_live` 4, `spawner_kill_live` 5.
 - The full 1249-binary suite does NOT fit this window: background jobs are killed between tool
   calls in this sandbox (three setsid/nohup attempts died within a minute, `suite.out` empty),
   and the foreground runs above consumed the time the suite would have needed. No src code

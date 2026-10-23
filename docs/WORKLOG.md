@@ -124,3 +124,8 @@ Progress:
   not fit the window: background jobs are killed between tool calls in this sandbox (three
   setsid/nohup attempts died within a minute), and the foreground chunks above are what fit.
   No src code changed — the branch is master + this test file + docs.
+- Post-finish suite chunks (all green): walk_0700000a_live 3, simplescript_live 2,
+  objective_banner_timing_live 3, interact_0700004a_live 5/2 ign, fix_actors_live 4,
+  spawner_kill_live 5 — 578 passed / 0 failed total across the 11 binaries + the lib.
+  The finish steps ran: the branch pushed (aa0da4136 + the report), finish.sh registered
+  (queue e5e396498), the ntfy delivered (curl, id 1krndDAnXcJk).
