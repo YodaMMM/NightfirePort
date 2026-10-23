@@ -1,4 +1,4 @@
-//! `nf-lobbyd` — the NightfirePort lobby directory for the user's home server
+//! `nf-lobbyd` — the NightfirePort lobby directory for a self-hosted server
 //! (docs/tools/listing-server.md). It only lists lobbies; play stays peer-to-peer.
 //! Usage: nf-lobbyd [bind address, default 0.0.0.0:27500]
 

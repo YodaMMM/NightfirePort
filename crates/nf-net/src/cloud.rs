@@ -16,7 +16,7 @@
 //! - [`CloudLookup`]: one code lookup (`GET /v1/code/{CODE}`) → the host's public endpoint (+ its LAN
 //!   endpoint for the same-network path) — the joiner then dials exactly as a long code does.
 //!
-//! The service URL: [`LOBBY_SERVICE_URL`] (empty until the user deploys = off), overridable by
+//! The service URL: [`LOBBY_SERVICE_URL`] (empty = off), overridable by
 //! `NF_LOBBY_SERVICE` or the `lobby_service =` line of net.txt — resolved in nf-view, which owns the
 //! config dir; every client takes its URL explicitly so tests can point at a local mock server.
 //! When the player-set `nf-lobbyd` (`lobby_server =`) is configured it overrides this service entirely.
@@ -28,9 +28,8 @@ use std::sync::mpsc;
 
 use crate::directory::{SHORT_CODE_ALPHABET, SHORT_CODE_LEN};
 
-/// The deployed service's URL, built into every exe (the user's choice, 2026-10-19: "go with the cloudflare lobby";
-/// deployed on their account the same day — the live probe hosted, listed, looked up and removed a lobby). Players
-/// set nothing; `NF_LOBBY_SERVICE` or a `lobby_service =` line in `%APPDATA%\NightfirePort\net.txt` overrides it
+/// The deployed service's URL (a Cloudflare Worker), built into every exe (a live probe hosted, listed, looked up
+/// and removed a lobby through it). Players set nothing; `NF_LOBBY_SERVICE` or a `lobby_service =` line in `%APPDATA%\NightfirePort\net.txt` overrides it
 /// (empty = off).
 pub const LOBBY_SERVICE_URL: &str = "https://netfire-lobby.netfire-lobby-worker.workers.dev";
 /// The host refreshes every 30 s (the entry expires after 90 s) [S].

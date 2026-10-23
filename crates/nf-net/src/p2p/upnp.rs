@@ -51,7 +51,7 @@ pub fn discover_locations(ssdp: &str, wait: Duration) -> Result<Vec<String>, Upn
     let to: SocketAddr = ssdp.parse().map_err(|_| UpnpError::Io(format!("bad ssdp addr {ssdp}")))?;
     // Bind to the LAN interface for the real multicast search: on a PC with virtual adapters
     // (Hyper-V / WSL's vEthernet) a 0.0.0.0 socket's multicast leaves on the wrong interface and
-    // no router answers [L 2026-10-18 on the user's PC: 0 answers unbound, the OpenWRT IGD bound].
+    // no router answers [L 2026-10-18 on a Windows PC with Hyper-V: 0 answers unbound, the OpenWRT IGD bound].
     let bind = match (to.ip().is_multicast(), super::local_ipv4()) {
         (true, Some(ip)) => SocketAddr::new(ip.into(), 0),
         _ => "0.0.0.0:0".parse().expect("static"),

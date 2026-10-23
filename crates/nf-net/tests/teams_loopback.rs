@@ -1,7 +1,7 @@
 //! mp-teams loopback: the team picks travel the session's DATA tunnel — a client's `TeamEdit`
 //! reaches the host and the host's applied `MatchSettings` (with the teams in the player records)
 //! reached every client through the handshake (`Event::Connected`), so both sides' effective teams
-//! agree. Numbers/ids only (the main agent draws the pages).
+//! agree. Numbers/ids only (the draw side draws the pages).
 
 use std::time::{Duration, Instant};
 

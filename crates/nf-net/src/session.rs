@@ -12,7 +12,7 @@
 //! * [`Session::ready_inputs`] — `Some([Input; 4])` when every agent's input
 //!   for `tick` is known; run the sim tick only then. `None` = stall.
 //! * [`Session::submit_hash`] — report the local state hash after running a
-//!   tick (opaque u64; task 050's `state_hash(&MpWorld)` wires in here).
+//!   tick (opaque u64; the game's MP state hash wires in here).
 //! * [`Session::start_match`] (host) / [`Session::leave`].
 //!
 //! Lockstep invariants:
@@ -2926,7 +2926,7 @@ impl<T: Transport> Session<T> {
         for (slot, remote) in peers_hashes {
             // cross-process-determinism: the ticks are compared in ascending order, not the
             // HashMap's per-process random order — the sim state is untouched, but WHICH desync
-            // tick gets reported first (the diagnostic the user sees) must not depend on the
+            // tick gets reported first (the diagnostic the player sees) must not depend on the
             // process's RandomState.
             let mut ticks: Vec<u32> = remote.keys().copied().collect();
             ticks.sort_unstable();
