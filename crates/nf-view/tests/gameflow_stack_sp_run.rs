@@ -46,8 +46,8 @@ fn the_sp_run_stack_matches_the_game() {
 
     // --- the title → intro run → main menu: the game's intro is the P_PARISENUM/P_ESTHERO pages'
     // own background FMVs with GameFlow in its runner state — no PushState there [M P_PARISENUM
-    // 0x20a648:43, P_ESTHERO 0x20a060:16-45]. (Batch 1016b: the branch's state-6 intro model was
-    // the pre-fe-audit port; re-seated on master's decompile-backed walk.)
+    // 0x20a648:43, P_ESTHERO 0x20a060:16-45]. (An older state-6 intro model predated fe-audit; this
+    // follows the decompile-backed walk.)
     assert!(fe.action(Action::Confirm), "START");
     for _ in 0..8 { if fe.intro_movie { break; } fe.tick(); }
     assert!(fe.intro_movie, "P_ESTHERO's movie is up");

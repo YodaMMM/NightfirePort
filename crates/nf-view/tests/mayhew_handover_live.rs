@@ -12,8 +12,7 @@
 //! the gate-guard ch 0x72 (placement #318); mux #316 = AND(0x70, 0x71, 0x72) → SP #320
 //! "EndLevel" (0x06000A23, event 0x11 at t 300 [D]) → ch 0x1D → #118 loads 07000006.
 //!
-//! The user's report ("mayhew is bugged with walking to the exit as well before the mid
-//! cutscene") is this chain: walked Bond must reach the gatehouse edge INSIDE the plate's
+//! Mayhew's walk to the exit before the mid cut-scene was broken; the fault is in this chain: walked Bond must reach the gatehouse edge INSIDE the plate's
 //! live window. The probe on master (2026-10-17): the real-input walker arrives at the edge
 //! (99.69, 25.85, 106.98) at t ≈ 373, waits, ch 0x5C fires while the window is open, SP #38
 //! re-places Bond on the truck bed and ch 0x71 follows the ride. There is NO Mayhew drone on

@@ -1,5 +1,5 @@
-//! fix-portal3: the 07000006 courtyard holes persist at the eye-cel state. The main agent's render
-//! of the fix-portal2 branch showed `--bond 7.24,42.03,-39.31,10.161,0.428 --frame 120` still
+//! fix-portal3: the 07000006 courtyard holes persist at the eye-cel state. A render
+//! after fix-portal2 showed `--bond 7.24,42.03,-39.31,10.161,0.428 --frame 120` still
 //! hiding the masonry under the left walkway and the lower right castle wall (sky through the
 //! hole) while `NF_NOPORTAL=1` draws them. fix-portal2's chain pass is evidence-based and kept —
 //! the residue is the `Camera_CheckLocation` (0x1bae90) viewer-cel state the port resolves at the
@@ -467,7 +467,7 @@ fn the_placed_viewer_cel_resolves_where_the_game_finds_it() {
     assert_eq!(state.cell, Some(cell));
 }
 
-/// The pinned fix, part 2 — the user's actual case: the truck→courtyard walk extended to the spot.
+/// The pinned fix, part 2 — the real-play case: the truck→courtyard walk extended to the spot.
 /// The persistent `Camera_CheckLocation` state carries through the portals; the courtyard masonry
 /// (cell 19 — the wall the failing view looks at) stays in the game mask along the final leg.
 #[test]
@@ -505,7 +505,7 @@ fn the_user_route_walk_keeps_the_courtyard_walls() {
             eprintln!("[pin2] t={t:.2} eye ({:.1},{:.1},{:.1}) cell {:?} strict {} game {}",
                 eye[0], eye[1], eye[2], state.cell, strict.iter().filter(|&&v| v).count(), game.iter().filter(|&&v| v).count());
         }
-        // The user's reported symptom was the level collapsing to nothing; the game-faithful
+        // The symptom was the level collapsing to nothing; the game-faithful
         // walk must keep submitting World draws at every step, and the eye cel must always be
         // the game's own resolution (never stuck on the world's first cel).
         assert!(state.cell.is_some(), "t={t:.2}: the viewer cel failed to resolve");
@@ -515,16 +515,16 @@ fn the_user_route_walk_keeps_the_courtyard_walls() {
         if t > 0.6 && game.get(19) == Some(&true) { cell19_leg += 1; }
     }
     eprintln!("[pin2] cell-19-visible steps on the final leg: {cell19_leg}, min game draws over the route: {min_game}");
-    assert!(min_game > 0, "the walk collapsed to zero game draws somewhere on the route — the user's symptom regressed");
+    assert!(min_game > 0, "the walk collapsed to zero game draws somewhere on the route — the old symptom regressed");
 }
 
 /// The live-gated wall-cel case (see the report's "Live checks"): whether the REAL game draws
 /// wall cels 20/22/38/5/13/23 at the exact placed camera. The port's verified walk rule
 /// ([M] 0x1e82e0 + [L] portal sides + [M] fov 60°) does not reach them from any candidate start;
-/// `NF_NOPORTAL` draws them because it skips the walk. Ignored until the main agent's gdbwatch
+/// `NF_NOPORTAL` draws them because it skips the walk. Ignored until a live watch
 /// of VisCelList (0x34b3b0) at the spot settles which side is the game's.
 #[test]
-#[ignore = "live-gated: needs the main agent's VisCelList watch at the failing spot (docs/reports/fix-portal3.md)"]
+#[ignore = "live-gated: needs a VisCelList watch (0x34b3b0) at the failing spot"]
 fn the_courtyard_wall_cels_at_the_exact_spot() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let sc = match nf_view::load(&iso, "07000006.bin", false) { Ok(s) => s, Err(e) => { eprintln!("07000006: {e}"); return } };

@@ -36,8 +36,8 @@ pub struct ReachConfig {
     pub natpmp_gateway: Option<SocketAddr>,
     /// Try UPnP / NAT-PMP at all (off: STUN only — the joiner side and tests).
     pub map: bool,
-    /// The optional internet lobby directory (`directory`, the user's home server) — None unless
-    /// the user's setting names one; never a built-in address.
+    /// The optional internet lobby directory (`directory`, a self-hosted server) — None unless
+    /// the player's setting names one; never a built-in address.
     pub directory: Option<SocketAddr>,
 }
 

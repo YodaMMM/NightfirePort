@@ -1,5 +1,5 @@
-//! The movie player never runs faster than real time (playtest 1015-2142: "the opening movie ... has
-//! the 007 white dots, those go by in a microsecond"). The decoder warms up behind the clock; the old
+//! The movie player never runs faster than real time (the opening movie's 007 white dots
+//! flashed by in an instant). The decoder warms up behind the clock; the old
 //! catch-up then showed one movie frame per RENDER frame (100+ fps on a fast display). Presented at a
 //! fast render rate, the picture must change at most at the game's 30 fps (main 0x00109080 decodes on
 //! every second 60 Hz vblank [M]).

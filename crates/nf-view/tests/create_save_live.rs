@@ -1,4 +1,4 @@
-//! create-save: the user's 2026-10-16 report "you wont let me create a save".
+//! create-save: creating a save was impossible.
 //!
 //! Select Codename → New Codename opens the name entry (P_CNNAME 0x40000020, the
 //! C_KEYBOARD 0x213a98 grid), the ✓ confirms, the codename is created and saved to the
@@ -46,7 +46,7 @@ fn act(fe: &mut FrontEnd, a: Action) -> bool {
 /// The whole journey through the window's action path, on a boot the way the window builds it.
 /// The profile card the tests use is the temp dir; the window seeds it at boot through the
 /// same `ProfileSession` the real boot runs (the fix's surface — on master NOTHING seeded it,
-/// which is exactly the user's bug).
+/// which was exactly the bug).
 fn walk_to_name_entry(fe: &mut FrontEnd) {
     assert_eq!(fe.page, Page::Start, "the boot opens the title");
     assert!(act(fe, Action::Confirm), "the title's Enter");
@@ -59,7 +59,7 @@ fn walk_to_name_entry(fe: &mut FrontEnd) {
     assert_eq!(fe.page, Page::CnName, "P_CNNAME 0x40000020");
 }
 
-/// The user's journey: a fresh boot, Select Codename → New Codename, the game's own proposal
+/// The player's journey: a fresh boot, Select Codename → New Codename, the game's own proposal
 /// "BOND" confirmed with the ✓ — the codename must be created and saved to the card.
 /// [M the proposal 0x30d530 = "BOND" (codename-entry.md), the ✓ focuses itself on open
 /// [M 0x213790:47-48], the accept arms the save [M 0x213a98:53-65] and the card flow's tick
@@ -143,7 +143,7 @@ fn the_saved_codename_is_offered_on_the_next_boot() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The typed letters reach the grid through the window's key mapping: the user types their
+/// The typed letters reach the grid through the window's key mapping: the player types their
 /// own name (the proposal "JAMES 0" first press clears it [M del_when_keypressed 0x213a98:
 /// 18-27 — the clear falls through to the append; only the space CELL is swallowed]), the
 /// 8-char cap refuses the ninth [M :75-77], and the ✓ saves the normalized name.
@@ -167,7 +167,7 @@ fn typed_letters_reach_the_grid_and_the_name_saves() {
     }
     // The first press cleared the proposal, so typing B-O-N-D over "BOND" lands on "BOND".
     assert_eq!(fe.cn_typed_name(), "BOND");
-    // A real second name: the user erases back to empty (4 ← presses), then types JAMES 0.
+    // A real second name: the player erases back to empty (4 ← presses), then types JAMES 0.
     for _ in 0..4 {
         assert!(type_key(&mut fe, KeyCode::Backspace), "the ← cell erases");
     }

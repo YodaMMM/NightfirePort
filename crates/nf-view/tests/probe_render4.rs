@@ -68,7 +68,7 @@ fn probe_decal_objects_07000007() {
 }
 
 /// Every draw whose bounds come within 3 units of `NF_PROBE_AT=x,y,z` on `NF_PROBE_LEVEL`: its draw state, texture
-/// (with alpha min/max) and nearest object name. For user screenshot spots (nf-shots). Opt-in via NF_ISO.
+/// (with alpha min/max) and nearest object name. For F12 screenshot spots. Opt-in via NF_ISO.
 #[test]
 fn probe_draws_near_a_point() {
     let Some(iso_path) = iso() else { return };

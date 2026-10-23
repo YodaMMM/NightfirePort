@@ -209,8 +209,8 @@ fn replay(level_file: &str, level: u32, frames: &[TFrame], limit: usize, fire_en
         prev_pad = f.pad;
         // Compare the post-step state with this trace line.
         let sim = scene.sim.as_mut().unwrap();
-        // The user's kills are not reproducible from the trace alone (Bond's pitch is not recorded, so
-        // the port's Bond cannot hit what the user hit): when the game's list loses a drone and the
+        // The player's kills are not reproducible from the trace alone (Bond's pitch is not recorded, so
+        // the port's Bond cannot hit what the player hit): when the game's list loses a drone and the
         // rest aligns shifted by one, force-remove the port's drone at the shift (LList_Remove after
         // DEAD/FADE [M Drone_InitComms corpses]) so the OTHER drones' AI keeps being compared. The
         // forced removal is reported as the drone's first divergence.
@@ -242,7 +242,7 @@ fn replay(level_file: &str, level: u32, frames: &[TFrame], limit: usize, fire_en
                 if let Some(d) = per_drone.get_mut(r) {
                     if d.matched == usize::MAX {
                         d.matched = t; d.kind = "user-kill"; d.at_frame = f.frame;
-                        d.detail = format!("the game removed this drone (the user's kill; the port left it in state {} — Bond's shots cannot be reproduced from the trace, no pitch recorded); forced out to keep the others comparable", pd_state);
+                        d.detail = format!("the game removed this drone (the player's kill; the port left it in state {} — Bond's shots cannot be reproduced from the trace, no pitch recorded); forced out to keep the others comparable", pd_state);
                     }
                 }
                 eprintln!("[{level_file}] line {t} (frame {}): the game's list lost a drone (user kill) — port llist[{r}] forced out", f.frame);
@@ -325,7 +325,7 @@ fn ai_05_truck() {
     let limit = std::env::var("NF_AI_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
     let segs = report("05-truck", "07000005.bin", "05-truck.trace", limit, true);
     if segs.is_empty() { return; }
-    // 07000005: drone 2 matched the WHOLE level (7851 frames); the others held until the user's first
+    // 07000005: drone 2 matched the WHOLE level (7851 frames); the others held until the player's first
     // kill (llist removal at line 885/2168) or the hip-conversion noise; the sniper (12) is state-matched
     // from line 0 (the group-1 spawner's immediate respawn).
     // Drone 13's pin was 7049 (his first divergence at the frame-36372 0x6F guard event) until

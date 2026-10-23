@@ -1,9 +1,8 @@
 //! fix-guest-reactions — the party guests' reactions to an assault, and the death→restart flow
 //! (07000007, driven through the REAL path: `nf_view::load` + `Sim::step_bond`).
 //!
-//! Playtest (2026-10-12, on 07000007): "the moment I started punching a guest, all the other guests
-//! T-posed. And once I died, we went into a replay loop where it kept replaying at the start of the
-//! mission over and over again"; also "If you punch a guard, it should be an automatic mission fail".
+//! Symptoms on 07000007: punching a guest T-posed all the other guests; after a death the mission
+//! replayed from the start in a loop; and punching a guard must be an automatic mission fail.
 //!
 //! The game's chains, ported here:
 //! - `NDrone2_PunchImpact` 0x145f28:30 sets `Drone_AlertStatusSet(2)` on the victim; :45-56 on
@@ -13,7 +12,7 @@
 //!   the alert source. The receivers' DSTATE case 0x12 → `DroneVision_EnemyAlerts` 0x177c18:41-51
 //!   gates on prop 0x27 → `DroneVision_ShoutFromOtherDrone` → CivilianScared 0x12, whose ENTER
 //!   (0x15d3a0) runs to CivilianHiding 0x13 with `CallAnim(0x19)` — the cower [M 0x15d520]. That
-//!   cower is the animation the user's build was missing (the T-pose).
+//!   cower is the animation the old build was missing (the T-pose).
 //! - The death → the 0x40000042 fail/death menu → `P_ENDMISSION_Handler` 0x216618:19-21: Restart is
 //!   a WARM reload of the CURRENT level on the ENTRY checkpoint (`Player_RamLoad(Bond, 1)`, the
 //!   50.0 health floor [L 0x30cc34-3c]) — one restart, no replay loop (fix-restart-target's port).
@@ -65,8 +64,8 @@ fn punch_once(sim: &mut nf_view::scene::Sim, guest: usize) {
 /// ── The punch = automatic mission fail (the protected actors) ───────────────────────────────────
 /// `NDrone2_PunchImpact` 0x145f28:45-56: on 07000007 a punch on an UNARMED drone (the party
 /// guests and bouncers all read unarmed — `ObjectIsArmed` 0x178768 on the class byte) raises
-/// `DroneFunc_SetMissionFailReason(drone, 5)` [M 0x13e560 → ch 99] — the playtest's "if you punch
-/// a guard, it should be an automatic mission fail". Sister: the victim's health drops.
+/// `DroneFunc_SetMissionFailReason(drone, 5)` [M 0x13e560 → ch 99] — punching a guard is an
+/// automatic mission fail. Sister: the victim's health drops.
 #[test]
 fn punching_a_guest_fails_the_mission_at_once() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -112,8 +111,8 @@ fn punching_a_guest_panics_the_other_guests_into_the_cower() {
         }
         if scared > 0 { break; }
     }
-    assert!(scared > 0, "punching a guest panics the guests near the scream into CivilianScared/Hiding (playtest: the T-posed crowd)");
-    assert!(cowering > 0, "a hiding guest plays the cower anim 0x19 (the animation the user's build was missing — the T-pose)");
+    assert!(scared > 0, "punching a guest panics the guests near the scream into CivilianScared/Hiding (not the T-posed crowd)");
+    assert!(cowering > 0, "a hiding guest plays the cower anim 0x19 (the animation the old build was missing — the T-pose)");
 }
 
 /// Sister (the armed scare): the PartyGirl update 0x160140:44-76 — an armed person within 10
@@ -156,7 +155,7 @@ fn an_armed_bond_scares_a_guest_who_shouts_the_intruder() {
 /// ── Die once → exactly one restart ──────────────────────────────────────────────────────────────
 /// The death sequence ends in the 0x40000042 menu; its Restart (`P_ENDMISSION_Handler`
 /// 0x216618:19-21) reloads the CURRENT level warm on the ENTRY checkpoint — exactly once. The
-/// port's replay loop (the user's "kept replaying at the start of the mission over and over")
+/// port's replay loop (the mission restarting over and over)
 /// re-entered the death sequence after the reload; the entry-checkpoint save predates the fail
 /// (fix-restart-target), so the reload cannot re-die. Sister: a second `fail_choose_restart` is a
 /// no-op (the menu is consumed by the first answer).
@@ -188,7 +187,7 @@ fn one_death_restarts_exactly_once() {
     assert!(!sim.drones.fail_menu_open() && sim.drones.level_exit == Some(level),
         "the menu is consumed and the restart target is unchanged [M 0x216618]");
     for _ in 0..300 { sim.step_bond(Input::default(), false, false, false); }
-    assert_eq!(sim.drones.level_exit, Some(level), "no further restart is queued — exactly one [playtest: the replay loop]");
+    assert_eq!(sim.drones.level_exit, Some(level), "no further restart is queued — exactly one (no replay loop)");
     assert!(!sim.drones.fail_menu_open() && !sim.drones.mission.menu_open,
         "the death sequence does not re-enter the menu after the answer (the reload's entry save predates the fail)");
 }

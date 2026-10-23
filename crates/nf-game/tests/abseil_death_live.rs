@@ -1,5 +1,5 @@
-//! abseil-death-11 live tests: a hit/kill during the rope descent (playtest 2026-10-18,
-//! 07000011 "guards rapelling and not rapelling and not falling when they die").
+//! abseil-death-11 live tests: a hit/kill during the rope descent (07000011: abseiling
+//! guards must fall when they die).
 //! Run with: `NF_ISO=… cargo test -p nf-game --test abseil_death_live -- --test-threads=1`
 //!
 //! Disc reach [D]: exactly five placements carry param 1 = 0x06000892 — 07000011 ×2 (skins

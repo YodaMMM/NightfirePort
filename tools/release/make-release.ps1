@@ -1,5 +1,4 @@
-# Builds a NightfirePort release: just NightfirePort.exe (the launcher, and the game with --game; the user, 2026-10-19:
-# "no reason to zip when we just have an exe"), built with the release version (NF_RELEASE_VERSION — the self-update
+# Builds a NightfirePort release: just NightfirePort.exe (the launcher, and the game with --game; no zip), built with the release version (NF_RELEASE_VERSION — the self-update
 # compares against it), the commit (NF_GIT_HASH, for bug reports) and the licence notices (NF_NOTICES_FILE, baked in
 # by crates/nf-view/build.rs; the launcher writes them to %APPDATA%\NightfirePort\THIRD_PARTY_NOTICES.txt). No game
 # data: players supply their own disc image.

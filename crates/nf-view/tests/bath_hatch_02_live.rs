@@ -1,7 +1,7 @@
 //! bath-hatch-02: the 02 bath hatch above the deep ladder. The deep ladder on 07000002
 //! (centre (−50.35, ·, 5.50), yaw π/2) climbs out of the water into the bathhouse, but the
-//! climb stops under a CLOSED hatch — the user cannot get out of the water route (the
-//! ladder-underwater-02 report's remaining-gap note). On the PS2 the player opens it.
+//! climb stops under a CLOSED hatch — the player cannot get out of the water route (the
+//! remaining gap after ladder-underwater-02). On the PS2 the player opens it.
 //!
 //! What the disc says (all measured here through the real loaders):
 //! - The hatch over the deep ladder is the SimpleScript **#308** (type 0xE2, at

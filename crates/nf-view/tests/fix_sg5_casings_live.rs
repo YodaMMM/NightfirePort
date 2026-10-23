@@ -1,8 +1,8 @@
 //! fix-sg5-casings — the SG5 Commando's ejected shell casings through the real path
 //! (`nf_view::load` + `Sim::step_bond`, the `Input` the window builds).
 //!
-//! The playtest 1014-1725 (user 05, walking forward + firing the SG5): "I could see the bullet
-//! casings flying across my screen, like super large". The PCSX2 ground truth
+//! The symptom (05, walking forward + firing the SG5): huge bullet casings flew across the
+//! screen. The PCSX2 ground truth
 //! (docs/live/2026-10-14-weapon-measurements-pcsx2.md, "The SG5 Commando 0x16 casings while walking
 //! forward"): the casings are **small brass shells** ejected from the right side of the receiver,
 //! flying **up and to the LEFT, away from the camera**, gone off the top-left of the view within
@@ -32,7 +32,7 @@ fn view_basis(fwd: [f32; 3]) -> ([f32; 3], [f32; 3]) {
 
 fn give_sg5(scene: &mut nf_view::scene::Scene) {
     for _ in 0..4 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
-    // The user's path: the dev give (`do=weapon&id=0x16`), then the equip switch it returns.
+    // The repro path: the dev give (`do=weapon&id=0x16`), then the equip switch it returns.
     let (status, switch_to) = nf_view::panel::apply(scene, &[("do".to_string(), "weapon".to_string()), ("id".to_string(), "0x16".to_string())]);
     assert!(status.contains("gave"), "the give equips: {status}");
     {
@@ -45,7 +45,7 @@ fn give_sg5(scene: &mut nf_view::scene::Scene) {
     assert_eq!(scene.sim.as_ref().unwrap().gun.weapon, 0x16, "the SG5 is drawn from the give");
 }
 
-/// Walking forward while firing the SG5 (the user's scenario): the shell ejects at the VIEW-MODEL
+/// Walking forward while firing the SG5 (the repro scenario): the shell ejects at the VIEW-MODEL
 /// GUN — a pre-eject distance from the eye on the record's +0xE0 scale (~0.25 for the SG5), not
 /// ≈ 0 (the eye itself, the "super large" frames) — and drifts up and to the LEFT in view space
 /// [L the PCSX2 measurement]. Sister: through the whole walked burst no shell ever comes back to
@@ -56,7 +56,7 @@ fn the_sg5_shell_ejects_at_the_gun_not_the_eye() {
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
     give_sg5(&mut scene);
 
-    // Walk forward + hold fire, the user's repro. Record each slot's FIRST flying frame.
+    // Walk forward + hold fire, the repro. Record each slot's FIRST flying frame.
     let mut ejects: Vec<(usize, f32, [f32; 3])> = Vec::new(); // (slot, eye distance, vel)
     let mut seen: std::collections::HashSet<usize> = Default::default();
     let mut min_seen = f32::MAX;
@@ -86,7 +86,7 @@ fn the_sg5_shell_ejects_at_the_gun_not_the_eye() {
         assert!(vl > 0.0 && vu > 0.0, "shell slot {slot} eject velocity view-left {vl:.4} / up {vu:.4} — the measured shells fly up and to the LEFT [L docs/live/2026-10-14]");
     }
     // Sister: walking forward never brings a shell back to the eye ("they never get large").
-    assert!(min_seen >= 0.1, "a shell came within {min_seen:.4} of the eye during the walked burst — the camera overtook it (the user's 'flying across my screen')");
+    assert!(min_seen >= 0.1, "a shell came within {min_seen:.4} of the eye during the walked burst — the camera overtook it (casings flying across the screen)");
 }
 
 /// The SG5 (ammo 5) ejects its own shell mesh 0x02000447 [L ammo-data.md, the +4 casing id].

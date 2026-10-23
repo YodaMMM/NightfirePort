@@ -1,4 +1,4 @@
-//! guard-blast-smoke (task 727, uncited-audit gap 2) on 07000005 — grenades and smoke did nothing
+//! guard-blast-smoke on 07000005 — grenades and smoke did nothing
 //! to guards: the port applied the blast as direct damage × `+0x14C` and sent msg 8 (the bullet
 //! route), and the smoke cloud was visual-only.
 //!

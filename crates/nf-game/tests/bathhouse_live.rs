@@ -1,5 +1,5 @@
-//! 07000002 bathhouse: the user's playtest shows one guard standing next to a civilian with **no AI**,
-//! never moving (fix-drone2 bug 2). The bathhouse drones wait on switch channels raised by TOUCH_ONCE
+//! 07000002 bathhouse: one guard stood next to a civilian with **no AI**,
+//! never moving. The bathhouse drones wait on switch channels raised by TOUCH_ONCE
 //! plates, so the headless repro walks Bond onto each plate and requires every guard on that channel to
 //! wake and run (or, if the disc never raises its channel, to stay inactive and undrawn — the atlas
 //! "present / started / enabled / in-llist" semantics, docs/atlas/drone.md).

@@ -133,8 +133,8 @@ fn drive_09(w: &mut Walker) -> String {
             "the walk must not raise the alarm (the switches are never touched)");
     }
     // SP #70's activation writer is the level's documented blocker (the E path has no reach for
-    // it — walkreal_07000009 pins every dead end; the main agent's gdbwatch on ch 57 is the
-    // live check). Drive ch 0x39 exactly as docs/levels/07000009.md's walkthrough does.
+    // it — walkreal_07000009 pins every dead end; a live watch on ch 57 is the
+    // open check). Drive ch 0x39 exactly as docs/levels/07000009.md's walkthrough does.
     w.scene.sim.as_mut().unwrap().drones.set_channel(0x39);
     w.wait(6);
     {
@@ -189,9 +189,9 @@ fn drive_0a(w: &mut Walker) -> String {
     let landed = shoot_gadget_at(w, [pc[0], pc[1] + 0.55, pc[2]], 2.2, 600, &|sim| sim.drones.channels.on(0x48));
     if !landed {
         // The cubicle-collision blocker: every eye-ray from every walked ring position is
-        // blocked (walkreal_0700000a's 112-shot probe + this session's segment survey — a
-        // full-height wall with normal (0.30, 0, 0.95) across the cubicle opening). Live check
-        // for the main agent: walk to Q-WORM_PC_1 in PCSX2 — the wall is the port's bug.
+        // blocked (walkreal_0700000a's 112-shot probe + a segment survey — a
+        // full-height wall with normal (0.30, 0, 0.95) across the cubicle opening). Open live
+        // check: walk to Q-WORM_PC_1 in PCSX2 — the wall is the port's bug.
         w.scene.sim.as_mut().unwrap().drones.set_channel(0x48);
         w.wait(6);
         note.push_str("ch 0x48 at the documented cubicle-collision blocker; ");

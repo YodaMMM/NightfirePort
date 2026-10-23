@@ -1,7 +1,7 @@
 //! weapon-model-coverage: every weapon has its first-person model on every level.
 //!
-//! The user: "Every single weapon needs to have a first person model" (the dev panel's weapon
-//! gives on any level), and load logs still printed "27 weapon-model hashes still missing"
+//! Every weapon needs a first-person model (the dev panel's weapon gives on any level), and load
+//! logs still printed "27 weapon-model hashes still missing"
 //! (07000005's session mesh merge). The census [D, through the port's own parsers]:
 //!
 //! - every weapon id 1..=0x72's fp skin (+0xDC) lives on the disc except the model-less gadget
@@ -19,7 +19,7 @@
 //!   resolve either (the same class as the invisible stun grenade 0x0200071f, docs/models/
 //!   weapons-items.md §3).
 //!
-//! Tests (NF_ISO; numbers, not images — the main agent renders):
+//! Tests (NF_ISO; numbers, not images):
 //! - `dev_panel_weapons_resolve_on_three_levels`: `load_weapons` with every fp-armed id on
 //!   07000005, 0700000C, 07000014 — every one builds its view model;
 //! - `census_every_story_level_resolves_the_table`: through the real merge functions on all 20

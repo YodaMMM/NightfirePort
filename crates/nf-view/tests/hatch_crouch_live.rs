@@ -1,16 +1,15 @@
-//! hatch-crouch-0c: the 0700000c display-vent traversal end to end (playtests 1012-1723,
-//! 1013-1758, 1014-1725: "he still can't get through because he can't crouch through" — Bond
-//! blocked and soft-locked under the hatch). The route: from the duct/hatch top the open hatch's
+//! hatch-crouch-0c: the 0700000c display-vent traversal end to end (Bond could not
+//! crouch through, blocked and soft-locked under the hatch). The route: from the duct/hatch top the open hatch's
 //! hole drops the crouched capsule onto the inner ledge/balcony (14.61–14.81), and the balcony
 //! runs SOUTH past the vent well to the far walkway (14.61 at z −126.5+); the drop leg needs the
 //! crouch (the hole's clear band over the open panel), the south leg is the balcony floor.
-//! The blocker this task fixes: the port grounded Bond only off the floor ray / a walkable
+//! The blocker: the port grounded Bond only off the floor ray / a walkable
 //! (ny > 0.7) push, while the game grounds on ANY capsule pick contact
 //! (`Player_FeetOnPoint` 0x194188:176-185 sets `obj+0x60 |= 8` when `HITTEST+0x9c != 0` OR the
 //! floor ray lands within `cc + 0.1` [M 0x194188:106]; the history shift at `Player_CollisionHandler`
 //! 0x1949a8:78-82). Riding the balcony's south pier ramp (14.61 → 16.49 over z −121..−122) the
 //! push lifts the capsule past the ray tolerance (crouch rest 0.646 vs the 0.55+0.1 gate) and
-//! Bond bounced ungrounded at the base forever — the playtest's stuck-at-the-hatch symptom.
+//! Bond bounced ungrounded at the base forever — the stuck-at-the-hatch symptom.
 //! The crouched capsule (top = feet + 1.20 = cc 0.55 + 0.65 [M Player_Collision 0x194df0 case 3:
 //! radius 0x3f0ccccd, A = 0.1 − (cc − 0.55), B = 0.45 − cc]) is the ported model; the standing
 //! slim arm (case 0/6: radius 0x3e8ccccd = 0.275, A = pos + 0.55, B = pos + 0.275 − cc) gives the
@@ -88,7 +87,7 @@ fn from_the_hatch_top_the_open_hole_drops_the_crouch_onto_the_balcony() {
 }
 
 /// The south leg: crouch-walking the balcony south past the vent well reaches the far walkway
-/// (floor 14.61 continuing at z −126.5+ [D probes]). Crouched, as the playtester travelled.
+/// (floor 14.61 continuing at z −126.5+ [D probes]). Crouched, as the player travels.
 #[test]
 fn crouch_walking_the_balcony_south_reaches_the_far_walkway() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };

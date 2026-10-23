@@ -6,7 +6,7 @@
 //! common/walker.rs:209). The hatch opening itself is the established laser stand-in
 //! (`Lock_Update::burn`, the helper `hatch_crouch_live` uses; the beam CONTACT side is
 //! fix-gadgets' and covered there). The duct ascent above the ramp top remains the level's one
-//! unidentified leg [L live check in docs/reports/fix-0c-hatch.md — the game's climb is
+//! unidentified leg [L open live check — the game's climb is
 //! ladder-only, M Player_CollLadder 0x196118, and the vent carries no ladder [D]], so the route
 //! starts on the ramp top like the sister tests do; every metre after that is walked.
 //!

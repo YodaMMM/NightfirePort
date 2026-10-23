@@ -60,8 +60,8 @@ pub fn parse(payload: &[u8]) -> Result<Vec<Placement>> {
 /// row 3), entries exactly as the decomp computes them: two `PS2Sinf3` calls (`(rx+π/2, rx, ry+π/2)` then
 /// `(rz+π/2, rz, ry)`) with cosines as sin(angle + π/2), then the nine products/sums in the decompile's order on
 /// the EE FPU. G-017 closed: the sines are the game's own `PS2Sinf` (`anim::sinf`, bit-exact on the recorded
-/// calls and the interpreter samples); the escort divergence this swap used to flip is root-caused in
-/// docs/reports/fix-exact-math-swap.md — the game's own math is this path.
+/// calls and the interpreter samples); the escort divergence this swap used to flip has another root
+/// cause — the game's own math is this path.
 pub fn object_matrix(rot: [f32; 3], trans: [f32; 3]) -> [[f32; 4]; 4] {
     use crate::anim::sinf;
     use crate::ps2float as pf;

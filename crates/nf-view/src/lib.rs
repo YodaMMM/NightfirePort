@@ -1,4 +1,4 @@
-//! `nf-view`: level viewer for 007: Nightfire (PS2), reading the user's own disc image.
+//! `nf-view`: level viewer for 007: Nightfire (PS2), reading the player's own disc image.
 //!
 //! ```text
 //! nf-view [<iso>] <level> [--all] [--seq K] [--frame F] [--fire] [--reinforcements] [--shot out.png [--cam x y z yaw pitch] [--pull T1,T2…]]
@@ -44,7 +44,7 @@ pub mod loading;
 pub mod async_load;
 /// The launcher (`NightfirePort` binary): pick the disc image once, then PLAY.
 pub mod launcher;
-/// The weapon matrix (task 100d): every on-foot level × every weapon, measured headless.
+/// The weapon matrix: every on-foot level × every weapon, measured headless.
 pub mod matrix;
 
 use anyhow::{bail, Context, Result};
@@ -125,7 +125,7 @@ pub fn ticks_for_frame(anim_time: &mut f32, dt: f32, max_ticks: u32) -> u32 {
 /// palette into the latest one while `lerp_cam` blends the camera by angle. fix-interp-ghosting:
 /// world matrices blend as ROTATION (slerp of the rotation part [M `Quat_Slerp_Acc` 0x1e4188] — a
 /// component-wise lerp of a rotation is not a rotation, it shears and shrinks mid-way, the
-/// playtest's arm/gun smear) + component lerp of the translation. Matrices whose 3×3 is not a
+/// arm/gun smear) + component lerp of the translation. Matrices whose 3×3 is not a
 /// rotation (the collapse/FAR hides, the camera-facing billboards) keep the component lerp, where
 /// slerp has no defined meaning. Pub for the headless interpolation tests (fix-interp-ghosting) to
 /// drive the exact path the `RedrawRequested` handler runs.
@@ -325,7 +325,7 @@ impl Camera {
         let fw = self.dir().normalize();
         // The right axis from the yaw alone (the game builds its view from yaw/pitch angles, not a
         // look-at): `fw × Y` degenerates at ±90° pitch (the game's own clamp limit, `Player_ViewClamping`
-        // 0x1a92e8 ±1.0) and flipped the screen upside down there (the user, 1015-0046). For |pitch| < 90°
+        // 0x1a92e8 ±1.0) and flipped the screen upside down there. For |pitch| < 90°
         // this is the same vector `fw × Y` normalised.
         let s = self.right();
         let u = s.cross(fw);
@@ -672,7 +672,7 @@ pub fn load_with_carry_weapons_difficulty(iso: &str, archive: &str, all: bool, s
 /// buffer as of this level's load — with the boost floor: after a COLD load the buffer holds the
 /// fresh load's health 100 (`Player_Init` 0x1910f8:128-138 sets it; the `Player_RamLoad` body is
 /// gated on `IsWarmReset` [M 0x1957a8:9], so nothing overwrites it; the unconditional re-save
-/// captures it) — the user's "if I die ... I should be at full health". `entry = None` = no load
+/// captures it) — a restart after death starts at full health. `entry = None` = no load
 /// has completed yet (the game's BSS zeros — unreachable in play, since every load ends in the
 /// 0x1a7ef8:325 re-save): the shapes are zeroed at the live sizes and the boost keeps the health
 /// at the floor (max(0, 50.0) = 50.0 [M 0x1957a8:21-34]).
@@ -833,8 +833,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // the session-accumulated ones the g-021 merge models below. The dev/`--give` asset merge's
     // foreign skins are a PORT viewing aid (they must not leak into the loadout, or the kit's
     // gadget lines — e.g. 0c's own EquipWeapon(0x58, 0) [M 0x1a8568] — own the Q-Worm on levels
-    // whose session hashtable misses it: the user's "qworm shouldnt be on that map", playtest
-    // 2026-10-18). Snapshots: before the asset merge, after it, after g-021.
+    // whose session hashtable misses it). Snapshots: before the asset merge, after it, after g-021.
     let loadout_skins_pre_assets: std::collections::HashSet<u32> = level.skins.keys().copied().collect();
     if weapon_wanted != weapon_assets::Wanted::None {
         // weapon_data once for the whole load (the EE initialiser run the merge needs is the same
@@ -1081,7 +1080,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // → 07800008.bin / 07900008.bin likewise. These scripts exist nowhere else — the party's Drake fly-through
     // (0x06000072), the party's hand-back cut-scene (0x06000073) and the gondola level's intro (0x06000077)
     // are pack-only. Without the packs the port's ScriptPlayers hit the missing-script arm of `Player::load`
-    // (state 5, deleted) on their first trigger and the cut-scene never plays (the user's playtest). The
+    // (state 5, deleted) on their first trigger and the cut-scene never plays. The
     // pack's kind-7 entries go into `level.nis` (the same lib `Scripts::new` reads) and kind-4 into
     // `sequences`, mirroring `parsemap_parsemap` (LoaderProcess case 2 → the map parser walks the entries:
     // kind 7 → `Script_Load`, kinds 3/4/5 → `AnimLoadFile`).
@@ -1146,7 +1145,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // the level has stayed local.
         scripts: level_scripts,
         level_id: u32::from_str_radix(&archive[..8], 16).unwrap_or(0),
-        // weapon_data is built at boot by its static initialiser; run it over the user's ELF (docs/formats/weapon-data.md).
+        // weapon_data is built at boot by its static initialiser; run it over the disc's ELF (docs/formats/weapon-data.md).
         props: nf_formats::drone::PropertyTables::from_action_elf(&elf).ok(),
         // Built once above (the merge consumes the same table); `Player_Init` (0x1910f8)'s override
         // of weapon_data[1]+0xDC (the fists skin) is already applied.
@@ -1324,7 +1323,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // previous level's exit left them (they survive the warm reset, `Init_SwitchChannels` runs only
     // when `IsWarmReset == 0` [M 0x1d5080]); the kind-0 entries never win either pass [M 0x190fd0
     // disasm 0x191028/0x1910b0]. Then the per-level loadout switch. The port used to stand Bond at
-    // the first "Player1" placement with the [L] 07000005 loadout at EVERY level (playtest F1/F2/F4).
+    // the first "Player1" placement with the [L] 07000005 loadout at EVERY level.
     if let Some(sim) = scene.sim.as_mut() {
         // The mission globals ride the RamSave (the game keeps them in `.data` across the load; the
         // port restores them at the `Mission_Init` latch — map-tower2).
@@ -1476,7 +1475,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // MP_GetSpawnPoint then Player_Init per slot], the shipped count topping out at the
             // 4 pad slots its menus offer; the bots clamp at 4 [M 0x183a50:135-137]. The port
             // extends the same walk to every human slot of the 16-cap settings (the documented
-            // mp-16-slots port extension, docs/reports/mp-16-slots.md) — the game's loop is the
+            // mp-16-slots port extension) — the game's loop is the
             // shape this walk ports.
             let humans = (m.settings.human_count as usize)
                 .clamp(1, nf_game::mp::MP_MAX_SLOTS)
@@ -1508,8 +1507,8 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // 0x1249e8 → Drone_Create 0x136be0] and lets its collision gravity settle the drone
             // onto the floor over the first ticks [M Drone_CollisionHandler 0x140968:176-267
             // applies WldGravity]. The port's bot loop runs no settle physics, so `stand_at`
-            // pre-settles to the same resting pose in one step (the playtest's floating bots
-            // fired level over every player).
+            // pre-settles to the same resting pose in one step (unsettled, the bots
+            // floated and fired level over every player).
             for b in m.bots.iter_mut() {
                 let feet = nf_game::player::Bond::stand_at(&sim.world, b.brain.pos, b.brain.yaw).pos;
                 b.brain.pos = [feet[0], feet[1] + scene::BOT_EYE, feet[2]];
@@ -1782,7 +1781,7 @@ fn menu_music_files(iso_path: &str, track: i32) -> Option<(i32, nf_formats::musi
 /// `SP_Update` state 2 [M 0x1dbda8:129-141] and GameFlow case 6 [M 0x1c98c8:145-150]). Action 0x19
 /// is bound to raw pad mask 0x840 — R1 (0x800) or D-pad DOWN (0x040), pad 0 only [M
 /// psiInput_MapInputs 0x10cd80:415-417] — so a movement key (W/A/S/D, Space, the mouse) NEVER skips
-/// a scene; the user's W press skipped the 07000007 Kimiko scene (2026-10-12 playtest). The port's
+/// a scene (a W press must not skip the 07000007 Kimiko scene). The port's
 /// two keys are the game's own two bindings: ArrowDown is the mask's D-pad-down half, R the R1
 /// half. The viewer's dedicated keys (Esc, F1/F2/F11/F12) keep their own functions;
 /// `--skip-cutscenes` is the dev override and bypasses this.
@@ -1834,7 +1833,7 @@ fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
 /// at +0x120 from zeros, +0x1a0 identity matrix, +0x2c StackInfo (cap 12), the dirty byte +0x2b,
 /// +0x108 = 1.0f (the FOV/zoom factor) and the camera radii +0x1ec/+0x1f0 = 4.0f [M
 /// 0x1b9af0:13-62]. The port's single `Viewer` struct here + the per-frame camera construction is
-/// that init (the field list is in docs/reports/unported-front-end-menus-2.md).
+/// that init.
 /// `pub` so the headless tests drive the exact function the winit loop runs (the fix-gpu-skinning precedent).
 pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     let (pos, f) = (sim.bond.head(), sim.bond.look());
@@ -1931,7 +1930,7 @@ pub fn overlay_for(scene: &scene::Scene, aspect: f32) -> gpu::HudFrame {
 /// confined to the band that fits the window (pillar-boxed black on a wider window); the game's
 /// letterbox bars ride INSIDE the band (`hud::script_overlay`, `gpu::render`'s viewport). The
 /// game rendered every cut-scene at the console's 4:3 frame — the port's widescreen projection
-/// showed more at the sides than the game's frame (the main agent's PCSX2 compare, frame 400:
+/// showed more at the sides than the game's frame (PCSX2 compare, frame 400:
 /// Dominique waiting in the left doorway visible in the port, outside the game's frame).
 /// Gameplay keeps the window's full widescreen. Returns (projection aspect, the band [x, y, w, h]
 /// in target pixels).
@@ -1974,8 +1973,8 @@ pub enum Blank { Always, WithFrame, Never }
 /// → `Player_Init` there too [M 0x1d6360:154], arming the 45-tick entry fade [M 0x1910f8:45], but
 /// the game's front end ticks it away under the menus while the port's front-end scene never
 /// ticks — the fade sat at full black OVER the title and every backdrop-less page, and (once
-/// doublecross-transitions chained it into this overlay) over every boot/briefing movie (user
-/// report 2026-10-20: "movies arent visually there … I can hear the audio").
+/// doublecross-transitions chained it into this overlay) over every boot/briefing movie (the
+/// audio played with no picture).
 pub fn scene_overlay_up(scene: &scene::Scene, movie_up: bool) -> bool {
     !movie_up && scene.sim.as_ref().map_or(true, |s| s.level & 0xff00_ffff != menu::FRONTEND_LEVEL)
 }
@@ -2192,7 +2191,7 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
     (Some(menu::menu_overlay(&fe, &tables.font, &tables.font_header, lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)), movie)
 }
 
-/// The ISO path for `read_files_bin` (the NF_ISO env or the default sandbox path).
+/// The ISO path for `read_files_bin` (the NF_ISO env or the default image name).
 fn scene_iso_name() -> String {
     std::env::var("NF_ISO").unwrap_or_else(|_| "Nightfire-onfoot.iso".to_string())
 }
@@ -2207,7 +2206,7 @@ pub fn movie_iso_name(iso_path: &str) -> String {
 }
 
 /// Renders one frame offscreen and writes it as a PNG. `menu` = a front-end overlay frame (fix-menus2:
-/// `--shot` on the front-end boot draws the menu pages too, so the main agent can compare with PCSX2).
+/// `--shot` on the front-end boot draws the menu pages too, for comparison with PCSX2).
 /// The `--mp-look slot[,dist,height,angle]` camera: `dist` (2.5) from that slot's body, `angle` (0 = in
 /// front) around its yaw, `height` (1.2) above its feet, looking at its chest.
 fn mp_look_camera(scene: &scene::Scene, v: &[f32]) -> Option<Camera> {
@@ -2327,7 +2326,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     // The doors' `Door_IsClosed` snapshot for the walk's portal gate (fix-door-portal-links).
     let door_closed = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
     // Render aid (NF_NO_PORTAL_CULL): draw every cel — the dev panel's portal-culling OFF — for shots from a `--bond`
-    // spot the eye's cel walk doesn't resolve (the main agent's pickup render checks, 2026-10-19).
+    // spot the eye's cel walk doesn't resolve.
     let world = if std::env::var_os("NF_NO_PORTAL_CULL").is_some() { None } else { scene.sim.as_ref().map(|s| &s.world) };
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, world, door_closed.as_deref());
     // Objects are never room-culled (see the live path).
@@ -2462,7 +2461,7 @@ struct App {
     /// (`entry_checkpoint_save` — the game's `Player_InitWeapon` re-save [M 0x1a7ef8:325]; cold
     /// loads included, whose capture holds `Player_Init`'s health 100). The old model kept the
     /// save the level was loaded with — `None` after a cold load — and the restart served the
-    /// zeroed buffer: health 50.0, the playtest's "half health".
+    /// zeroed buffer: health 50.0, half health.
     entry_save: Option<nf_game::player::RamSave>,
     /// The `--all` flag (draw dynamic entities at their placements, not only 0x8000 cels) — reused on level reload.
     all: bool,
@@ -2599,11 +2598,11 @@ struct App {
     /// the fail box follows).
     desync_wait: Option<(u32, std::time::Instant)>,
     /// The `--net-host` demo arm: the settings waiting for the first client to join (the lobby
-    /// pages are task 052's; the flag path starts the match as soon as someone connects).
+    /// pages are separate; the flag path starts the match as soon as someone connects).
     net_armed: Option<nf_game::mp::MpSettings>,
     /// The current level's hashcode (the archive name), for the pause page's restart / the results.
     level_code: u32,
-    /// Port dev aid (playtest checks, not game behaviour): the `--bond x,y,z[,yaw,pitch]` spot,
+    /// Port dev aid (not game behaviour): the `--bond x,y,z[,yaw,pitch]` spot,
     /// re-applied once when the level's opening cut-scene hands Bond back (its hand-back moves
     /// him to the scene's end pose) — so a check starts where it says. Cleared after the first
     /// re-apply, or after 900 ticks when the level has no opening scene.
@@ -2643,8 +2642,8 @@ struct App {
     /// decides which one the game would be playing and `present()` feeds the ONE plane in
     /// gpu.rs. Cleared by the skip, the end of a non-looping stream, or a code change.
     movie: Option<movie::Player>,
-    /// `--dev`: the dev menu in its own native window beside the game (devwin.rs; the user: "outside of the game, but
-    /// not in a browser"). None without `--dev`, or when the window couldn't open (the F2 overlay is the fallback).
+    /// `--dev`: the dev menu in its own native window beside the game (devwin.rs; a native window, not a browser
+    /// page). None without `--dev`, or when the window couldn't open (the F2 overlay is the fallback).
     devwin: Option<devwin::DevWindow>,
     /// The sound hold's mirror (fix-pause-audio): true while a menu page is up or the viewer pause
     /// holds the sim. The diff in `RedrawRequested` applies it to `sound` on the edge — the game's
@@ -2682,8 +2681,8 @@ struct LevelLoad {
 /// The loading screen's minimum time on screen. The PS2's disc load kept it up ~11.5 s on
 /// 07000001 → 07000002 (PS2LSActive 2 → 0, measured in PCSX2 2026-10-15) — long enough to read
 /// the objective and the hint while the dots sweep (183.5 ms a step, the port's 11-vblank cadence
-/// exactly). The port builds a level in 1-2 s, so the screen flashed by (playtest 1015-2142); the
-/// user chose to hold it a few seconds — a documented PC-port choice (the game's disc timing is
+/// exactly). The port builds a level in 1-2 s, so the screen flashed by; the
+/// port holds it a few seconds — a documented PC-port choice (the game's disc timing is
 /// the [L] above; the port's 1-2 s builds need their own floor). Pub for the
 /// flow tests (pause-results-flows): the headless suite pins the 5 s = 300-tick window.
 pub const LOADING_HOLD: f64 = 5.0;
@@ -2694,7 +2693,7 @@ pub const LOADING_HOLD: f64 = 5.0;
 /// The game steps its zoom with action 6 in aim mode (D-pad Up = −1 / Down = +1 [M
 /// docs/systems/input.md §3 style-0 table, measured]; the consumer is `Player_Zoom` 0x1a1a70:19,
 /// `Input_Actionf(player, 6, 1)` [M]) — a wheel notch is the PC surrogate for the game's own
-/// zoom-step action (the 2026-10-15 playtest chose the wheel over key repeats). Otherwise it
+/// zoom-step action (the wheel, not key repeats). Otherwise it
 /// keeps switching weapons (the pre-feature behaviour).
 pub fn wheel_steps_zoom(zoom_held: bool, weapon_flags: u32, weapon_zoom: f32) -> bool {
     zoom_held && weapon_flags & 0x40 != 0 && weapon_zoom > 1.0
@@ -2884,8 +2883,8 @@ impl App {
         // gate (App::app_key's front-end arm). The Confirm keys (Enter/Space) are NOT the game's
         // skip button: the pad's confirm buttons (X/Start) never reach case 6, so binding them
         // to the skip is the PC adapter's own convenience, kept behind the 1.0 s guard below so
-        // the press that picked the mission cannot skip its own briefing (the 2026-10-15
-        // playtest's double-tap) [S unverified as a game claim — the game needs no guard because
+        // the press that picked the mission cannot skip its own briefing (a
+        // double-tap) [S unverified as a game claim — the game needs no guard because
         // its skip key is disjoint from its pick keys]. The front-end intro run is NOT state 6:
         // it reaches `fe.action`, which honours P_ESTHERO's 180-tick grace and the boot logos'
         // no-skip [M 0x215a50:6] (fe-audit: this intercept used to swallow the intro's skip).
@@ -2921,7 +2920,7 @@ impl App {
         }
         // settings-persist: the option pages' Confirm/Back raised the flag — write the option
         // file (crates/nf-view/src/settings.rs). The headless render path never runs this, so
-        // a render can't touch the user's settings.
+        // a render can't touch the player's settings.
         if fe.settings_save_pending {
             fe.settings_save_pending = false;
             if let Some(p) = settings::default_path() {
@@ -2965,7 +2964,7 @@ impl App {
             // half [M P_ENDMISSION_Handler 0x216618:19-21] — mark the serve so the reload comes
             // off the ENTRY checkpoint (the restart arm), not the dying sim's live capture: the
             // carried fail channel re-failed the mission the tick it came back — the 07000007
-            // replay loop (playtest 1012-1723). Consumed with the request, one pick only.
+            // replay loop. Consumed with the request, one pick only.
             let replay_pick = std::mem::take(&mut fe.requested_restart);
             if replay_pick { if let Some(sim) = self.scene.sim.as_mut() { sim.drones.level_exit_restart = true; } }
             self.pending_level = Some(code);
@@ -2993,8 +2992,8 @@ impl App {
     /// SFXFadeDown(1), no explicit pair remove]; the port's banks swap without that reset, so
     /// the close removes the pair explicitly through the driver (all instances of the id — the
     /// IOP's KillSFX semantics [M IRX 0x1f88 → KillSFX 0x1ea4]). Without it the looped items
-    /// played on through gameplay and the pause (the playtest's "music continues after I leave
-    /// the menu").
+    /// played on through gameplay and the pause (the menu music continued after the menu
+    /// closed).
     fn close_front_end(&mut self) {
         let rm: Vec<u32> = self.fe.as_mut().map(|fe| fe.drain_sfx_removes().collect()).unwrap_or_default();
         if let Some(snd) = self.sound.as_mut() {
@@ -3052,7 +3051,7 @@ impl App {
     }
 
     // ── net-match-host: the online session's app surface ────────────────────────────────────────
-    /// Host: listen on `port` (slot 0 is this machine's agent). The lobby pages are task 052's;
+    /// Host: listen on `port` (slot 0 is this machine's agent). The lobby pages are separate;
     /// the flag path (`--net-host`) arms the demo match for the first join.
     pub fn net_host(&mut self, port: u16) -> Result<(), String> {
         // net-p2p: an ephemeral placeholder, reach on, then the real port — so the mapping /
@@ -3162,7 +3161,7 @@ impl App {
     /// net-desync-resync: the draw code's "Resyncing..." read — true while this
     /// machine is recovering from a state-hash mismatch (it asked the host to
     /// re-serve the match state; the machine replays the host's log headless
-    /// and rejoins at the re-announce). The main agent renders the note; the
+    /// and rejoins at the re-announce). The draw code renders the note; the
     /// text lives beside it so draw and tests share one string.
     pub fn net_resyncing(&self) -> bool {
         self.net_resyncing
@@ -3252,9 +3251,9 @@ impl App {
         let aspect = g.config.width as f32 / g.config.height.max(1) as f32;
         // One pick per load (the game builds the load screen once [M ResetMap_GenLoadScreen 0x1d5de0]):
         // the port re-picked every redraw with a clock seed, so the hint line flickered through the
-        // pool many times a second (the user's "loading hints run 10000 mph").
+        // pool many times a second.
         // One pick per load (`loading::HintPick` [M ResetMap_GenLoadScreen 0x1d5de0]): the port re-picked
-        // every redraw with a clock seed, so the hint line flickered through the pool (playtest 1016).
+        // every redraw with a clock seed, so the hint line flickered through the pool.
         let mut seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(1) | 1;
         let hint = self.loading_hint.get(level, || { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; seed >> 8 });
         let hud = match self.scene.hud.as_ref() {
@@ -3301,8 +3300,8 @@ impl App {
             // evidence (`P_ENDMISSION_Handler` 0x216618:19-21 + `Player_RamLoad`'s floored
             // buffer). fix-restart-health: the entry save is the POST-load capture the
             // load arm makes (`Player_InitWeapon`'s unconditional `Player_RamSave`
-            // [M 0x1a7ef8:325]) — after a cold load it holds health 100, the user's "I
-            // should be at full health" (the old zero-buffer fallback served 50.0).
+            // [M 0x1a7ef8:325]) — after a cold load it holds health 100, full health
+            // (the old zero-buffer fallback served 50.0).
             Some(fail_restart_save(self.entry_save.as_ref(), self.scene.sim.as_ref().unwrap()))
         } else {
             self.scene.sim.as_ref().map(|sim| nf_game::player::RamSave::capture(
@@ -3368,13 +3367,13 @@ impl App {
                 // The level now running (GameState+0xc [M ResetMap_Load phase 2]). It was only ever
                 // set from the command line, so a mission reached through the menus still read as the
                 // front end: Esc found "no mission", released the mouse, and the next Esc quit the
-                // game (playtest 1016 "esc is just closing the game").
+                // game.
                 self.level_code = load.next;
                 // A real level loaded from the front end: the menu manager is gone [M the MP
                 // confirm's / the SP pick's MenuManager_Delete — "the host closing the overlay once
                 // the load leaves the front-end map"]. The MP start loads its arena directly (no
                 // briefing hand-over), and the front end stayed open over it — the arena never
-                // showed, only the menu's backdrop (playtest 1015-2231 "cant get into a match").
+                // showed, only the menu's backdrop.
                 if load.next != menu::FRONTEND_LEVEL
                     && self.fe.as_ref().is_some_and(|fe| fe.flow.get_state() != menu::ST_MOVIE)
                 {
@@ -3422,7 +3421,7 @@ impl App {
         // The previous scene's skin palette and its interpolation cameras belong to the OLD skin
         // layout: uploading them into the new renderer overran its palette buffer every frame
         // until a tick rebuilt them — and a level that doesn't tick at once (an MP arena with the
-        // menu still up) never did (the 787 GPU validation errors, playtest 1015-2231).
+        // menu still up) never did (787 GPU validation errors).
         self.pal_cur = None;
         self.pal_prev = None;
         self.cam_prev = None;
@@ -3512,7 +3511,7 @@ impl App {
         // IN PLACE — the window and surface must survive the level change (the game's window
         // does not close). Dropping `Gfx` here closed the window and nothing recreated it
         // (winit's `resumed` only runs at startup), so the process sat on a headless event
-        // loop with the audio still playing (the user's report).
+        // loop with the audio still playing.
         if let Some(g) = &mut self.gfx {
             g.renderer = gpu::Renderer::new(&g.device, &g.queue, g.config.format, &self.scene, self.notex, self.nofog);
         }
@@ -3524,14 +3523,14 @@ impl App {
         // armour 0 [M 0x1910f8:128-138] stand and the arm's loadout/armour are
         // captured). The old model kept the save the level was LOADED with —
         // `None` after a cold load — and the restart then served the zeroed
-        // buffer: health 50.0, the playtest's "half health".
+        // buffer: health 50.0, half health.
         self.entry_save = Some(entry_checkpoint_save(self.scene.sim.as_ref().unwrap()));
     }
 
     /// F8/F9: show the mission-complete / mission-failed results page for the loaded mission —
     /// a port-only debug hook (the game reaches the page from `Mission_Update` 0x182c60:74's
-    /// event, not from any key; the port's mission-event → results glue is listed in
-    /// docs/reports/fix-menus.md as remaining host work).
+    /// event, not from any key; the port's mission-event → results glue is separate
+    /// host work).
     /// mp-match-end: the local match's end handover — the `MP_Update` 0x184bd0 case-4 sequence
     /// [M :62-78: `GameState+0x1C = 0x40000033` + `ResetMap_LevelToLoad(0x7000048)` + the fade +
     /// the per-slot `Player_SetCamMode`/`GS_PausePlayer`] on the front end the SP end built
@@ -3633,8 +3632,7 @@ impl App {
         }
         // profile-session: the fresh manager inherits the standing session — without it the
         // results page's save gate (`1 < DAT_002e1ae0` [M 0x208e78:30/194]) never held and
-        // finishing a mission under a codename could not save progress (the user's report's
-        // other half).
+        // finishing a mission under a codename could not save progress.
         self.inherit_profile_session(&mut fe);
         // settings-persist: this fresh front end boots the option file's values too — its
         // defaults would otherwise ride the results page's quit back into the front end.
@@ -3814,8 +3812,7 @@ impl App {
                         // frontend-music: P_ATTRACT's 0x4c removes the menu-music pair before the
                         // movie (menu_movie = 0) [M 0x20a1f0:20-22] — the trailer's own soundtrack
                         // replaces it. Missing here, the menu music kept playing over the trailer
-                        // (the user's "the cutscene that plays if you don't touch anything should
-                        // have its own audio").
+                        // (the attract movie has its own audio).
                         fe.music.movie_started();
                     }
                     Err(e) => {
@@ -3935,8 +3932,8 @@ impl App {
         // movie plane and the redraw blanks/replaces the overlay by the same gates. spot_shot
         // dropped the frame (movie: None): with `fe.backdrop_live` standing (the live loop set
         // it) the overlay skips its dark plate, the movie plane draws nothing and a front-end
-        // page shots the raw black void of the front-end level — the user's all-dark
-        // nf-shots/001-07000048.png (F12 on a menu page).
+        // page shots the raw black void of the front-end level — an all-dark
+        // capture (F12 on a menu page).
         match self.capture_png(&png) {
             Ok(()) => format!("saved {} ({line})", png.display()),
             Err(e) => format!("screenshot failed: {e} ({line})"),
@@ -4050,7 +4047,7 @@ impl App {
 
     /// fix-weapon-assets: true when the weapon's first-person assets are absent (its `+0xDC` skin
     /// is in no merged archive) — the view model would not build and the view scripts would not
-    /// resolve, exactly the user's symptom on any weapon the level doesn't carry.
+    /// resolve, on any weapon the level doesn't carry.
     fn weapon_needs_assets(&self, w: u8) -> bool {
         self.scene.sim.as_ref().is_some_and(|sim| {
             let fp = sim.weapons.first_person(w as usize);
@@ -4123,8 +4120,8 @@ impl App {
             if let Some(g) = self.gfx.as_mut() { g.renderer.viewer_cel = crate::scene::ViewerCel::default(); }
         }
         // "spawn at crosshair" (`Dev::spawn_guard`) adds a Character; the renderer's skin layout was
-        // built for the old count and `skin_palette` indexed past it (a panic on the next frame — the
-        // main agent's playtest-check dry run). Rebuild the renderer like the weapon-asset reload does.
+        // built for the old count and `skin_palette` indexed past it (a panic on the next frame).
+        // Rebuild the renderer like the weapon-asset reload does.
         if let Some(g) = self.gfx.as_mut() {
             if g.renderer.skin_layout.char_base.len() != self.scene.characters.len() {
                 g.renderer = gpu::Renderer::new(&g.device, &g.queue, g.config.format, &self.scene, self.notex, self.nofog);
@@ -4257,8 +4254,7 @@ impl App {
                 // frontend-music: the menus' own audio (the jingle pair, the credits track), the
                 // page-change transitions and the per-frame pump.
                 self.menu_music_tick();
-                // The Auto Aim option reaches the game (it was stored and never read — user report
-                // 2026-10-21 "auto aim isn't working? shouldn't be a dev mode thing only"), and
+                // The Auto Aim option reaches the game (it was stored and never read), and
                 // options-census generalizes the same drain to every wired row
                 // (docs/systems/options-census.md).
                 self.drain_options();
@@ -4318,7 +4314,7 @@ impl App {
                 // to normal play.
                 // The online session keeps pumping through the loading screen: the frame returns
                 // early below, and a load longer than the session's 5 s timeout (a 5.2 s arena load
-                // on the user's PC) dropped the other player before tick 0. Its events wait in
+                // was measured) dropped the other player before tick 0. Its events wait in
                 // the core until the load ends and the normal drain below runs.
                 if self.async_load.is_some() {
                     if let Some(session) = self.net.as_mut() { session.0.borrow_mut().poll(); }
@@ -4477,7 +4473,7 @@ impl App {
                                 // (`mp_late_join_catchup`), compares the hash, then confirms
                                 // or refuses. The replay is seconds of sim — the flag path
                                 // runs it inline here (the draw code may thread it later);
-                                // the main agent's joining page owns the pacing.
+                                // the joining page owns the pacing.
                                 eprintln!("[net] late join: slot {slot} handover, replaying {} ticks from the host's log", snapshot_tick + 1);
                                 match crate::mp_late_join_catchup_joins(&self.iso, *settings.clone(), &log, snapshot_tick, &joins) {
                                     Ok((scene, hash)) => {
@@ -4674,7 +4670,7 @@ impl App {
                                 net_ran += 1;
                             }
                             // B-5 record/replay: when `--replay` is set, the input comes from the recording, not the
-                            // keyboard. The recorded tick drives `step_bond` exactly as it did when recorded; the user
+                            // keyboard. The recorded tick drives `step_bond` exactly as it did when recorded; the player
                             // can only watch (Esc to quit). When the recording ends, the sim pauses.
                             let (mut input, trigger, reload, use_key) = if let Some(rp) = &self.replay {
                                 if self.replay_idx < rp.ticks.len() {
@@ -5133,8 +5129,7 @@ impl App {
                         if !self.noclip {
                             let h = sim.bond.head();
                             self.cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom };
-                            // mp-local-look (user report 2026-10-21: online aim "very sluggish …
-                            // moving the mouse was delayed to what the screen showed"): the lockstep
+                            // mp-local-look (online aim lagged the mouse): the lockstep
                             // runs this player's turn/look `input_delay` ticks late (3 at least, up to
                             // 15 with the adaptive delay over the internet). The camera adds the turn/
                             // look already scheduled but not yet run, plus the mouse gathered since the
@@ -5159,7 +5154,7 @@ impl App {
                             if let Some((p, yaw, pitch, fov)) = sim.script_camera() { self.cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; }
                             // fix-sentinel-camera-play [M `Player_PositionCamera` 0x18f5d8 case 0xc]: while the
                             // guided camera rides the missile, the view IS the missile's (`Sim::view_override`
-                            // = its pos/dir) — the user's "doesn't go into first person": the window never
+                            // = its pos/dir) — without it the view stayed in first person: the window never
                             // consulted the override (the sim side rode; the matrix's gcam saw it). The HUD
                             // ammo pane stays; the view model and the crosshair do not draw (frame_state's
                             // ride hide + hud.rs's gate).
@@ -5168,7 +5163,7 @@ impl App {
                             }
                             // fix-wallhug-prompt [M `Player_PositionCamera` 0x18f5d8 case 0xb → `camera_tracking`
                             // 0x1ba5e0]: the wall shimmy's camera is the game's third-person tracking camera
-                            // (the user's "when I entered a prompt it was in first person. should be 3rd person").
+                            // (third person, not first).
                             if let Some((p, yaw, pitch, fov)) = sim.creep_camera() {
                                 self.cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov };
                             }
@@ -5222,7 +5217,7 @@ impl App {
         // fe-60hz: the front end is the game's 60 Hz menu tick (`MenuManager_Update` 0x21c3d8 runs once
         // per game frame, NTSC 60 Hz [M main 0x109080's vblank pacing]). Ticking it once per RENDERED
         // frame ran every menu timer — the 2700-tick attract countdown, the P_INTRO/P_ESTHERO movie
-        // budgets, the Press START flash — 2.4× fast on the user's 144 Hz display (attract after
+        // budgets, the Press START flash — 2.4× fast on a 144 Hz display (attract after
         // ~19 s instead of 45; the boot intro cut short). Its own clock, at most 8 ticks per frame.
         // Moved here from the draw half (headless-app-harness): the draw built its HUD from the
         // same post-tick state, and the async-load early return above skipped it exactly as now.
@@ -5287,8 +5282,7 @@ impl App {
                 let pal_rebuilt = self.ticked || self.pal_cur.is_none();
                 if pal_rebuilt { PAL_REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
                 if pal_rebuilt {
-                    // The user (2026-10-18): "culling should only happen on map geometry, no characters
-                    // or items" — characters, doors, pickups and props are never room-culled; only the
+                    // Culling applies to map geometry only — characters, doors, pickups and props are never room-culled; only the
                     // World draws take the room/portal cull (render()).
                     let fp_pal = std::time::Instant::now();
                     let new = self.scene.skin_palette(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None);
@@ -5418,7 +5412,7 @@ impl App {
                                 let mut changed = false;
                                 // The paused frames' own 60 Hz clock: `frame_ticks` is the GAME's tick count and stays frozen
                                 // at its last value while a menu is up, so ticking by it ran the figure once per render frame
-                                // × that stale count (several times too fast on a fast display — the user's playtest).
+                                // × that stale count (several times too fast on a fast display).
                                 self.menu_clock += dt;
                                 let n = (self.menu_clock * 60.0) as u32;
                                 self.menu_clock -= n as f32 / 60.0;
@@ -5436,7 +5430,7 @@ impl App {
                         };
                         // fix-pause-menu2: the in-game HUD stays visible under the pause page —
                         // the game's pause menu draws OVER the paused frame and its HUD (radar
-                        // ring, ammo pane) [L the main agent's PCSX2 captures 2026-10-13; the
+                        // ring, ammo pane) [L PCSX2 captures; the
                         // port replaced the HUD with the overlay]. The HUD's quads go FIRST so
                         // the menu draws over them (frame order = draw order).
                         if fe.page == menu::Page::Pause && !matches!(fe.flow.get_state(), menu::ST_MOVIE) {
@@ -5501,8 +5495,7 @@ impl App {
                 // `Script_FFwd(cur, 1)` unless the script is a death NIS [M SP_Update 0x1dbda8:129-141,
                 // Script_FFwd 0x1dac78]. Action 0x19 is bound to raw pad mask 0x840 — R1 (0x800) or
                 // D-pad DOWN (0x040), pad 0 only [M psiInput_MapInputs 0x10cd80:415-417] — so MOVEMENT
-                // NEVER SKIPS (the user's W press skipped the 07000007 Kimiko scene, 2026-10-12
-                // playtest). The port maps that action to the same two buttons' PC keys: ArrowDown
+                // NEVER SKIPS (a W press must not skip the 07000007 Kimiko scene). The port maps that action to the same two buttons' PC keys: ArrowDown
                 // (the D-pad-down key) and R (R1) — a keyboard binding cannot carry [M]/[D]/[L]
                 // (the PS2's only input surface is the pad, which psiInput_MapInputs reads), so it
                 // is the port's documented input adapter (cutscene_skip_key; docs/systems/input.md
@@ -5515,8 +5508,8 @@ impl App {
                 }
                 // fix-menus: while a menu page is up, the keys drive the menu and never the game.
                 // F12 stays the viewer's screenshot — fix-pause-menu: it previously fell through to
-                // the menu branch (key_action(F12) is None → early return), so the user could not
-                // capture the pause menu (the task's report request).
+                // the menu branch (key_action(F12) is None → early return), so the pause menu could not
+                // be captured.
                 if state == ElementState::Pressed && k == KeyCode::F12 {
                     let m = self.spot_shot();
                     eprintln!("[spot] {m}");
@@ -5531,7 +5524,7 @@ impl App {
                 // No menu input while a level load runs: the loading screen owns the frame and the
                 // game's main loop runs no menu manager inside ResetMap_Load [M 0x1d6360 state 3].
                 // Keys pressed there used to reach the still-open front end — a second Enter on
-                // the MP confirm page started a second load of the same arena (playtest 1015-2231).
+                // the MP confirm page started a second load of the same arena.
                 if state == ElementState::Pressed && self.fe.is_some() && self.async_load.is_some() { return false }
                 if state == ElementState::Pressed && self.fe.is_some() {
                     // The game's own skip keys for state 6 (the briefing/outro movie): action 0x19
@@ -5622,7 +5615,7 @@ impl App {
                     }
                     // Windows key auto-repeat never confirms, backs out or skips: the game's actions
                     // are edge-triggered [M Input_Action(.., 1)], and a held Enter's repeats skipped
-                    // the briefing the moment it started (playtest 1015-2231 "no intro"). Held
+                    // the briefing the moment it started. Held
                     // arrows still scroll.
                     if let Some(a) = menu::key_action(k) {
                         if repeat && matches!(a, menu::Action::Confirm | menu::Action::Back) { return false }
@@ -5670,7 +5663,7 @@ impl App {
                     (KeyCode::Escape, ElementState::Pressed) => {
                         // Esc in a mission ALWAYS pauses, grabbed or not: the briefing hand-over left the
                         // mouse un-grabbed, and the un-grabbed Esc quit the game from inside a mission
-                        // (playtest 1016 "froze then crashed" / "pause menu wasnt working"). Only the bare
+                        // instead of pausing. Only the bare
                         // viewer (no mission) quits on an un-grabbed Esc.
                         let in_mission = self.scene.sim.is_some() && self.level_code != 0 && self.level_code != menu::FRONTEND_LEVEL;
                         if self.grabbed || in_mission {
@@ -5760,7 +5753,7 @@ impl App {
                     // the gadget ids [D ACTION.ELF weapon_data] and the switch/equip path is tested
                     // (gadget_select_live). The gadgets' fire-side substates land per gadget.
                     (KeyCode::KeyG, ElementState::Pressed) => if self.grabbed && !self.noclip { self.gadget_cycle = 1 },
-                    // The fire-mode button is the game's ○ (action 12); the keyboard binding is B (the user's choice),
+                    // The fire-mode button is the game's ○ (action 12); the keyboard binding is B (a port choice),
                     // which the catch-all below already lands in `just` (read in the Input build:
                     // `mode_switch`) [M Player_Weapon 0x1a24c8: `Input_Action(slot, 0xc, 4)`].
                     // Turn every switch channel on: drones waiting for one (WaitSwitch) start (triggers are not ported).
@@ -5785,7 +5778,7 @@ impl App {
     /// output device). The window `run()` and the headless harness build the SAME skeleton and apply their knobs on
     /// top, so a headless frame runs the exact per-frame path the window runs. The driver is built HERE: run() used to
     /// build it beside this call and drop it, so the front end had no driver and every menu sound was silent in every
-    /// build from 2026-10-17 to v0.1.6 (the user's "menu sounds are missing entirely").
+    /// build from 2026-10-17 to v0.1.6.
     fn bare(iso: String, mut scene: scene::Scene, cam: Camera, opts: scene::ViewOpts, choice: Option<usize>, anim_time: f32) -> App {
         let sound = build_sound(&mut scene);
         App {
@@ -5962,7 +5955,7 @@ impl ApplicationHandler for App {
                 // the zoom axis, read as an analog Input_Actionf [M 0x1a1a70:18-19; docs/systems/
                 // input.md §3 "zoom = action 6 in aim mode"] — is held. The PS2 pad has no wheel,
                 // so the binding cannot carry [M]/[D]/[L]: each wheel notch is the port's discrete
-                // stand-in for that analog axis (the 2026-10-15 playtest asked for it), and the
+                // stand-in for that analog axis, and the
                 // zoomable gate below is the game's own scope flag + magnification-above-1 pair
                 // [M weapon_data 0x2bf150; the sim's zoom block gates on the same two]. Otherwise
                 // the wheel keeps switching weapons (the pre-feature behaviour).
@@ -6057,8 +6050,7 @@ impl ApplicationHandler for App {
                 // (poll_async_load → draw_loading_screen) and returned early. The old inline body's
                 // `return` skipped the draw; since the frame/draw_frame split (7f14552b) the scene
                 // was drawn and presented right after it, so every redraw alternated loading screen /
-                // old scene hundreds of times a second (user report 2026-10-21: "loading levels is
-                // seizure inducing"). Skip the scene draw for the whole load.
+                // old scene hundreds of times a second (a strobing flash). Skip the scene draw for the whole load.
                 if self.async_load.is_none() { self.draw_frame(dt); }
             }
             _ => {}
@@ -6318,7 +6310,7 @@ pub fn run() -> Result<()> {
             let zoom_hold = args.iter().any(|a| a == "--zoom-hold");
             // fix-aims20-lights-render: hold a strafe stick deflection every tick — the analog half of the
             // idle-counter reset (DAT_002a3a1c [M 0x17ee88:80-84]), so the aims lights' gates evaluate on a
-            // moving Bond exactly as the main agent's strafing render does, instead of the dead-still all-off
+            // moving Bond exactly as a strafing render does, instead of the dead-still all-off
             // state 0.75 s in.
             let strafe_hold = args.iter().any(|a| a == "--strafe-hold");
             let shot_input = nf_game::player::Input { aiming: zoom_hold, zoom: zoom_hold, strafe: if strafe_hold { 1.0 } else { 0.0 }, ..Default::default() };
@@ -6351,8 +6343,8 @@ pub fn run() -> Result<()> {
             if let Some(w) = draw { sim.step_bond(nf_game::player::Input { switch_to: Some(w), ..shot_input }, false, false, false); }
             // fix-aims20-lights-render: the headless `--shot` path honours `--give` too — the same equip +
             // switch_request the window path applies below (the shot path returned before that block, so
-            // `nf-view <iso> <level> --dev --give 0x1a --shot …` rendered the level's starting gun and the
-            // main agent could never get the AIMS-20's view model into a headless render). Runs BEFORE the
+            // `nf-view <iso> <level> --dev --give 0x1a --shot …` rendered the level's starting gun, so the
+            // AIMS-20's view model never reached a headless render). Runs BEFORE the
             // ticks, so the draw anim completes and the aims lights' gates evaluate on the held 0x1a/0x1b.
             if let Some(list) = args.iter().position(|a| a == "--give").and_then(|i| args.get(i + 1)) {
                 let wd = sim.weapons.clone();
@@ -6471,8 +6463,8 @@ pub fn run() -> Result<()> {
             }
         }
         // fix-ingame-dev-menu: `--dev-page <name>` draws the F2 menu's page (menu/weapons/gadgets/
-        // grenades/ammo/npcs/teleport/level/toggles/screenshot) over the game HUD, so the main agent
-        // can render and check each page headless.
+        // grenades/ammo/npcs/teleport/level/toggles/screenshot) over the game HUD, so each page
+        // can be rendered and checked headless.
         if let Some(pg) = args.iter().position(|a| a == "--dev-page") {
             let name = args.get(pg + 1).context("--dev-page needs a page name")?;
             let page = dev::page_index(name).with_context(|| format!("--dev-page: unknown page {name:?} (one of: {})", dev::PAGES.join(", ")))?;
@@ -6502,7 +6494,7 @@ pub fn run() -> Result<()> {
             return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
         }
         // Render aid (NF_SHOT_AT_PICKUP=k): frame pickup k from its DRAWN matrix (`Pickup::m`, what the renderer
-        // places), 1.8 units out on x and z and 1.2 up — no coordinate guessing (the main agent's pickup checks).
+        // places), 1.8 units out on x and z and 1.2 up — no coordinate guessing.
         if let Some(k) = std::env::var("NF_SHOT_AT_PICKUP").ok().and_then(|v| v.parse::<usize>().ok()) {
             let p = scene.sim.as_ref().and_then(|s| s.drones.pickups.get(k)).map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]]).context("NF_SHOT_AT_PICKUP: no such pickup")?;
             let eye = [p[0] + 1.8, p[1] + 1.2, p[2] + 1.8];
@@ -6562,14 +6554,14 @@ pub fn run() -> Result<()> {
     }
     // fix-menus: the front end — the level code, the game's strings, and the boot page.
     app.level_code = u32::from_str_radix(level.trim_end_matches(".bin"), 16).unwrap_or(0);
-    // Every mission open in the window unless `--locked` (the user's playtest request, 2026-10-16) — set
+    // Every mission open in the window unless `--locked` (a port choice) — set
     // before any front end exists, so the boot, pause, quit and debriefing managers all see it.
     menu::UNLOCK_ALL.store(!std::env::args().any(|a| a == "--locked"), std::sync::atomic::Ordering::Relaxed);
     if front_end {
         app.fe = Some(menu::FrontEnd::new());
         // boot-flow: the window boot runs P_INTRO's EA + MGM logos before the title [M 0x209e88];
         // the headless --shot/--page paths build their own FrontEnd and stay on the page they ask for.
-        // `--no-intro`: port dev aid for the playtest checks (the game's intro is unskippable
+        // `--no-intro`: port dev aid (the game's intro is unskippable
         // [M 0x209e88]) — open straight on the title.
         if !std::env::args().any(|a| a == "--no-intro") {
             if let Some(fe) = app.fe.as_mut() { fe.start_boot_intro(); }
@@ -6608,8 +6600,8 @@ pub fn run() -> Result<()> {
         // settings' own directory, %APPDATA%\NightfirePort — docs/systems/profile-session.md).
         // The boot enumerates the saved codenames the way the game's card enums run [M
         // Menu_EnumSaves 0x1f7b78] — without it the name page's ✓ refused silently
-        // (`request_create` without a dir) and Select Codename listed nothing: the user's
-        // "you wont let me create a save", 2026-10-16. The validator's reserved names come
+        // (`request_create` without a dir) and Select Codename listed nothing, so no save
+        // could be created. The validator's reserved names come
         // from the two def_codename labels through the language bank [M Menu_IsValidCodename
         // 0x1f9930 strstr's the uppercased name against them — 0x29b "New Codename",
         // 0x211 "Default"; both [D USATxt.dat]].
@@ -6629,7 +6621,7 @@ pub fn run() -> Result<()> {
         // options-persist-roundtrip: a mission started straight from the command line boots
         // the persisted volumes too — the game's boot applies them before any menu exists
         // [M Boot_LoadPTPData 0x1c8560:81-82 SFXSetVolume/SFXMusicSetVolume(DAT_0031c17c/78)].
-        // The headless --shot path returned above and never touches the user's config.
+        // The headless --shot path returned above and never touches the player's config.
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
         let music = opts.get(&0x1000_0135).copied().unwrap_or(70);
@@ -6649,8 +6641,8 @@ pub fn run() -> Result<()> {
     }
     // net-match-host: `--net-host [port] [arena]` listens for clients and starts the match (the
     // demo settings: an Arena deathmatch with a fresh per-match seed) when the first one joins;
-    // `--net-join host:port` dials it. The lobby pages are task 052's — these flags are the
-    // runnable path until they land. The seed comes from the wall clock OUTSIDE the Sim: it is
+    // `--net-join host:port` dials it. These flags are the runnable path
+    // without the lobby pages. The seed comes from the wall clock OUTSIDE the Sim: it is
     // matchmaking data (sent to every machine in the START packet), never sim state.
     if let Some(i) = args.iter().position(|a| a == "--net-host") {
         let port = args.get(i + 1).and_then(|v| v.parse::<u16>().ok()).unwrap_or(27420);
@@ -6694,7 +6686,7 @@ pub fn run() -> Result<()> {
         else { eprintln!("[net] dialing {addr}"); }
     }
     // `--give id[,id...]` (hex like 0x50 or decimal): equip those weapons/gadgets at the start, the way the dev panel's
-    // weapon button does (`Player_EquipWeapon` 0x1a8a58 + three clips of ammo), and draw the first one. For playtest
+    // weapon button does (`Player_EquipWeapon` 0x1a8a58 + three clips of ammo), and draw the first one. For
     // checks that need a gadget the level hasn't handed out yet.
     if let Some(i) = args.iter().position(|a| a == "--give") {
         if let (Some(list), Some(sim)) = (args.get(i + 1), app.scene.sim.as_mut()) {
@@ -6709,7 +6701,7 @@ pub fn run() -> Result<()> {
                     sim.drones.inventory.equip_ammo(&wd, id, (rounds * 3).max(rounds));
                     // The panel give's twin fill (fix-aims20-modes-lights, panel.rs): a twin-linked record
                     // (+0x05, the AIMS-20 0x1a ↔ its grenade 0x1b) needs rounds in the twin's own slot or
-                    // the mode press is refused (`Player_WeaponHasAmmo` 0x1a16c0) — the playtest check's
+                    // the mode press is refused (`Player_WeaponHasAmmo` 0x1a16c0) — a bare
                     // `--give 0x1a` left B dead and the grenade light dark.
                     let twin = wd.records.get(id).map(|r| r[5] as i8).unwrap_or(0);
                     if twin != 0 {
@@ -6725,7 +6717,7 @@ pub fn run() -> Result<()> {
                     // 0x50 on 07000005 is owned at the start [L Inventory::level_start] with ammo type 0's
                     // cap 0 [L +0x90/+0x92], so `Player_EquipWeapon` 0x1a8a58's owned branch declines it
                     // [M]). The give's contract is to DRAW the thing: the switch request is the game's own
-                    // `Player_WeaponSelect` path for an owned weapon. Without this the playtest's
+                    // `Player_WeaponSelect` path for an owned weapon. Without this
                     // `--give 0x50` printed "refused" and Bond stayed on the P2K — firing gave the real
                     // bullet impact instead of the grapple.
                     first.get_or_insert(id as u8);
@@ -6740,8 +6732,8 @@ pub fn run() -> Result<()> {
     // fix-restart-health: the level opened from the command line is a load too — the game re-saves
     // the RamSave buffer with the post-load state on EVERY load [M `Player_InitWeapon` 0x1a7ef8:325],
     // so a fail-Restart serves health 100. Only the in-play level change set `entry_save`; the
-    // first level kept None and its Restart served the zero buffer's 50 floor (the main agent's
-    // dry run on 07000005). Taken after `--give` so the restart keeps the given gear.
+    // first level kept None and its Restart served the zero buffer's 50 floor (seen on
+    // 07000005). Taken after `--give` so the restart keeps the given gear.
     app.entry_save = app.scene.sim.as_ref().map(entry_checkpoint_save);
     // B-5: start the recorder AFTER the scenario is applied (so the header captures the post-scenario starting state:
     // Bond near a guard, the RNG seed, etc.). On replay, the same starting state is reproduced.
@@ -6792,7 +6784,7 @@ fn pause_stats(sim: &scene::Sim) -> menu::Stats {
 
 /// The mission-flow movie glue (the GameFlow state-6 briefing/outro and its decode-ahead), one call
 /// per redraw from `App::movie_tick` — a free function so the live tests drive the SAME code the
-/// window runs (playtest 1016: the briefing never showed, and no test ran this path). Returns false
+/// window runs (the briefing once never showed, and no test ran this path). Returns false
 /// when no mission movie is due (the caller runs the page's aux loop instead).
 /// The PC-port "Rapid fire" option (`--rapid-fire`, or the dev window's Toggles page): every held
 /// weapon fires one round per tick from a full clip — a documented port-only option, off = the
@@ -6806,7 +6798,7 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
     if fe.flow.get_state() == menu::ST_MOVIE {
         // psiStartBackgroundMovie replaces whatever the one BGFMV slot holds [M 0x1081a8] —
         // a looping page backdrop standing in the slot must yield to the state-6 movie
-        // (menu-audio-leaks: the playtest's menu music under the EA logo).
+        // (menu-audio-leaks: menu music played under the EA logo).
         if slot.as_ref().is_some_and(|p| p.is_looping()) {
             if let Some(p) = slot.take() { let c = p.code(); p.stop(); eprintln!("movie: stopped {c:08x} (state 6 replaces the backdrop)"); }
         }
@@ -6864,8 +6856,8 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
                         // BGFMVPlaying = 1 from the start [M psiStartBackgroundMovie 0x1081a8]: state 6
                         // (pushed by ResetMap_Load phase 0 with no frame budget of its own) must see
                         // the movie as playing on its first tick, or the countdown pops it at once
-                        // and the briefing never shows (playtest 1016 "went straight to the
-                        // loading screen"; it only worked while the boot intro left a budget behind).
+                        // and the briefing never shows (straight to the
+                        // loading screen; it only worked while the boot intro left a budget behind).
                         fe.flow.movie_playing = true;
                         eprintln!("movie: decoding {code:08x} ahead of state 6");
                     }
@@ -6903,7 +6895,7 @@ fn reach_config() -> Option<nf_net::p2p::ReachConfig> {
 }
 
 /// net-cloud-lobby: the lobby service's URL — `NF_LOBBY_SERVICE`, else the `lobby_service = <url>`
-/// line of <config dir>/net.txt, else the built-in constant (empty until the user deploys = off).
+/// line of <config dir>/net.txt, else the built-in constant (empty until a service is deployed = off).
 /// A player-set `nf-lobbyd` (`lobby_server =`) overrides it: None when the directory is set
 /// [D — the game has no net layer (the symtab census), so this precedence is the port's own
 /// documented protocol, docs/systems/net-cloud-lobby.md "Override"].
@@ -6938,8 +6930,8 @@ static NET_STALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 // headless-app-harness: the window host's test surface. `App` grew its per-frame
 // logic (`frame`) and its key handling (`app_key`) as methods with no winit/wgpu
 // objects; this module builds one with `gfx: None` and a silent sound stack and
-// drives the EXACT path the window's event loop drives — the three playtest bugs
-// of 2026-10-16 (the briefing pop, the mission Esc quit, the unpolled session
+// drives the EXACT path the window's event loop drives — three earlier bugs
+// (the briefing pop, the mission Esc quit, the unpolled session
 // through the load) all lived in code no test ran.
 // ---------------------------------------------------------------------------
 #[cfg(test)]
@@ -7088,7 +7080,7 @@ mod headless_app_harness {
         }
     }
 
-    /// The user, 2026-10-19: "menu sounds are missing entirely". run() built the sound driver and dropped it, so the
+    /// Menu sounds were missing entirely: run() built the sound driver and dropped it, so the
     /// front end had none; the event-level tests (menu_sfx_flow) and the driver MODEL (menu_audio_flows) could not see
     /// it. This drives the REAL nf-audio driver through the real boot (silent: NF_SILENT, no output device): the
     /// driver exists, and START on the title starts the select blip 0x1da [docs/systems/menu-sfx.md §1 MENU_SOUND 0]
@@ -7143,7 +7135,7 @@ mod headless_app_harness {
         #[cfg(feature = "movies")]
         if movie_data {
             // Sister (fails on the pre-a2cdd771 behaviour: state 6 popped on its first
-            // tick — the playtest's "went straight to the loading screen"): the movie
+            // tick — straight to the loading screen): the movie
             // plane held state 6 for real frames.
             assert!(state6_frames >= 30, "the briefing was cut before it played ({state6_frames} state-6 frames) [M 0x1c98c8 case 6 holds while BGFMVPlaying]");
             assert!(saw_player, "the briefing 07100005 never started [M psiStartBackgroundMovie 0x1081a8]");
@@ -7211,8 +7203,7 @@ mod headless_app_harness {
 
     /// (b) Esc in a menu-started mission opens the pause page; Esc again resumes; the
     /// process never requests an exit. The old behaviour quit the game (level_code was
-    /// only ever set from the command line, so the Esc arm saw no mission — the
-    /// playtest's "esc is just closing the game").
+    /// only ever set from the command line, so the Esc arm saw no mission).
     #[test]
     fn esc_in_a_mission_pauses_then_resumes_and_never_quits() {
         let Some(iso) = std::env::var_os("NF_ISO") else { return; };
@@ -7327,7 +7318,7 @@ mod headless_app_harness {
         assert!(client_events.iter().all(|e| !matches!(e, mpnet::CoreEvent::HostTimeout)), "the client timed the host out through the load");
     }
 
-    /// User report 2026-10-21: auto-aim only worked through the dev T key — the Advanced options'
+    /// Auto-aim only worked through the dev T key — the Advanced options'
     /// Auto Aim (default ON, profile +0x01 [M Player_AutoAim 0x1a7c98:41]) was stored and never
     /// read. The option now drives the sim on every frame; sister: turning it off turns it off.
     #[test]
@@ -7357,7 +7348,7 @@ mod headless_app_harness {
             "a dead Bond leaves no opponent [M 0x1424e0:110-118]");
     }
 
-    // bond-moment-flash (user report U4): a NEW Bond moment sets BL+0x948 = 200
+    // bond-moment-flash: a NEW Bond moment sets BL+0x948 = 200
     // [M PlrStat_DoneBondMoment 0x199448:23-25]; the health pane takes 1 per frame while >= 1
     // [M HUD_UpdateHealthPane 0x19b9c8:258-260]. Sister: a moment already done when the
     // level starts never flashes.
@@ -7381,7 +7372,7 @@ mod headless_app_harness {
     /// The release's real path for the Auto Aim option: boot → title → main menu → Edit Codename →
     /// Default → Advanced → Auto Aim ▶ Off → Confirm → back to the main menu → Night Fire → The
     /// Exchange through the briefing → the loaded level's sim has auto aim OFF. The option file
-    /// goes to a scratch config dir (Confirm saves it — never the user's %APPDATA% copy).
+    /// goes to a scratch config dir (Confirm saves it — never the player's %APPDATA% copy).
     #[test]
     fn auto_aim_off_in_the_advanced_menu_reaches_the_mission() {
         let Some(iso) = std::env::var_os("NF_ISO") else { return; };

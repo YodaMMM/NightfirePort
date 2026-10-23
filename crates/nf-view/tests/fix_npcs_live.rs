@@ -27,7 +27,7 @@ fn load(archive: &str) -> nf_view::scene::Scene {
 /// The mid-intro freeze (07000002, tick 120 — the level-start NIS holds ~1540 ticks): every present drone
 /// is disabled — invisible to the renderer and immune to bullets — exactly like the game's
 /// `Drone_EnableAll(0)`; and once the intro ends the ch-waiter statues stay disabled while the civilian
-/// (team 2, HostageIdle) stands visible. This is the user's bathhouse C2 report: on the pre-fix port the
+/// (team 2, HostageIdle) stands visible. This is the bathhouse C2 symptom: on the pre-fix port the
 /// frozen drones stayed `enabled` (drawn mid-intro, damageable by a bullet already in flight).
 #[test]
 fn the_intro_freeze_disables_every_drone_and_shields_them_from_bullets() {
@@ -188,7 +188,7 @@ fn an_idle_gate_guard_sees_and_attacks_bond_on_the_same_floor() {
     assert!(attacked, "the idle guard alerts and leaves IDLE for combat (EnemyLookForOpponent → 0x56, 0x177ed0)");
 }
 
-/// The user's 07000007 guest retest result: fix_drone4's walk (`a_party_guest_walks_her_mission_route`)
+/// The 07000007 guest retest: fix_drone4's walk (`a_party_guest_walks_her_mission_route`)
 /// still passes with the freeze mirror in — the routed guest walks her route, the PartyGirls stand
 /// (game-accurate [M 0x160140 case 3]) and the waiter guests stay disabled on their channels. Locked by
 /// fix_drone4_live; this test only re-checks the waiter half on the post-freeze timeline, where the

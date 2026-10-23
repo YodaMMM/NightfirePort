@@ -79,7 +79,7 @@ fn probe_cell_stickiness_after_panel_teleport() {
         eprintln!("[probe] after the rise wait: pos ({:.2},{:.2},{:.2}) cel {:?} grounded {}",
             sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.cel, sim.bond.grounded);
     }
-    // Walk east again (the legs 716b reported falling).
+    // Walk east again (the legs an earlier walk saw falling).
     let legs = [(-16.0f32, -368.4, 25.0), (-12.0, -368.4, 28.0), (-6.0, -368.4, 35.0),
         (0.0, -368.4, 45.0), (3.0, -368.4, 50.0)];
     for (i, (x, y, z)) in legs.iter().enumerate() {

@@ -1,4 +1,4 @@
-//! The user's playtest request (2026-10-16, "unlock all the levels"): the window sets `menu::UNLOCK_ALL`
+//! Every level unlocked (a port convenience): the window sets `menu::UNLOCK_ALL`
 //! before creating any front end, and every `FrontEnd` then opens every mission row [S port choice].
 //! Sister: without the switch a fresh profile keeps the game's locks.
 

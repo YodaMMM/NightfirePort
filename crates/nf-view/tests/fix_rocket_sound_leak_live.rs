@@ -1,8 +1,7 @@
 //! rocket-sound-leak live tests: the guided (AT-420 Sentinel 0x2c) rocket's launch whoosh 0x10e.
 //!
-//! Playtest 1015-1738: after a guided rocket finishes, "I can still hear a sound being played from
-//! where I was standing when I shot the rocket, and it doesn't stop, and it can stack up the more
-//! times I shoot rockets".
+//! Symptom: after a guided rocket finished, a sound kept playing from the launch spot without
+//! stopping, stacking up with every rocket fired.
 //!
 //! The game's lifecycle [M]: `Bullet_init` 0x12c5a0:277-282 plays the whoosh 0x10e for every
 //! ammo-type-0x0e weapon and stores its handle at BU+0xF0; `Bullet_update` 0x12e7b0:98-108 moves the
@@ -150,7 +149,7 @@ fn three_guided_rockets_leave_no_looping_whoosh_behind() {
             tick(&mut sound, &mut scene);
         }
         assert!(died, "rocket {rocket}: the guided ride never ended");
-        // THE assertion (the playtest symptom): nothing left behind, in either layer.
+        // THE assertion (the symptom): nothing left behind, in either layer.
         assert_eq!(driver_whoosh_items(&sound), 0,
             "rocket {rocket}: a live looping 0x10e item stayed in the driver after the rocket died — the leak");
         assert_eq!(ee_whoosh_nodes(&scene), 0,

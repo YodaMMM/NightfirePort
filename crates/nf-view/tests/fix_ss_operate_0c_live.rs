@@ -78,7 +78,7 @@ fn the_bullet_driven_winch_sweeps_on_a_shot_and_holds_without_one() {
     // The full sweep [M 0x1a9948's state 1]: one operate tick is enough — state 1 sweeps every
     // tick to the wrap (t past the last key → t = 0, state = wrap_flag == 0 ? 0x40 : 0), no
     // further contact needed. The old port re-required operate every tick, so the shot's single
-    // contact tick stalled the render at t = one step (task 787's follow-up).
+    // contact tick stalled the render at t = one step.
     let (keys_n, rate, wrap_flag) = {
         let sim = w.scene.sim.as_ref().unwrap();
         let s = &sim.drones.sss.list[wi];

@@ -1,5 +1,5 @@
 //! fix-drone4 dump: the C2-class "drawn but never attacks / can't be damaged" drones on 07000002 and
-//! 07000006, driven through `nf_view::load` + `Sim::step_bond`. Bond is stood at the reported spots,
+//! 07000006, driven through `nf_view::load` + `Sim::step_bond`. Bond is stood at the repro spots,
 //! then every drawn drone near him is dumped with present/started/enabled/in-llist/held/drawn/team/
 //! mode/dtypenew/channel, and the closest drawn one is SHOT to test hittability.
 //! Opt-in via `NF_ISO`.

@@ -145,7 +145,7 @@ impl Casings {
     /// `weapon` is the 0x10c-byte weapon_data record: +0x50 material byte, +0x78 eject delay (u8→f32),
     /// +0x90 ammo type byte, +0xf8/+0xfc/+0x100 the local eject velocity (0xfc negated [M 0x12f838]).
     /// `origin` is the eject position ([S] the port passes the muzzle; the game reads the view model's
-    /// bone 1/5 world transform — the main agent's render check owns the visual). `yaw`/`pitch` build
+    /// bone 1/5 world transform — the visual is a render check). `yaw`/`pitch` build
     /// the bone-rotation stand-in ([S]). `shooter_y` is the shooter's y (`obj+0x34`). RNG order [M
     /// 0x12f860..0x12f8f0]: 3× `Rand_FRand_MVar2(0.1, 0.05)` (spin), 3× `(0.01, 0.005)` (velocity
     /// jitter), 1× `Rand_FRand(0.5)` (landing plane).

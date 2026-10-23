@@ -1,6 +1,6 @@
 //! Drone (NPC) animation choice: which animation script a drone starts with. Spec: docs/systems/drone-animation.md.
 //!
-//! The tables (`DroneAnimStates`, `Drone_AnimInfo`, `Drone_AnimTables`) are read from the user's ACTION.ELF through
+//! The tables (`DroneAnimStates`, `Drone_AnimInfo`, `Drone_AnimTables`) are read from the disc's ACTION.ELF through
 //! its symbol table; the rules that index them are ported from `NDrone2_DefaultInit` (ACTION.ELF 0x14b300),
 //! `DroneAnim_SetDAnimInternal` (0x13aee8) and `DroneAnim_GetDAnimForAnimState` (0x13de40).
 

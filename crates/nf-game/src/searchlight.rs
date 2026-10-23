@@ -11,7 +11,7 @@
 //! Not ported yet (G-033): the spot's dynamic light (illumination is renderer work) and `Gas_Init` smoke
 //! for broken lights (no particle system; its 6 RNG draws per puff are therefore not consumed either).
 //! `Control_NextLOD`'s damaged-model swap on kill/break (obj+0xD8 ← glist+0x40 [M 0x1cb900:138,454]) is
-//! visual — the port keeps the intact model (a renderer note for the main agent).
+//! visual — the port keeps the intact model (a renderer note).
 
 use crate::drone::{Data, Player, Rng};
 use crate::trig::{angle_difference, atan2_approx, sinf, PI, TAU};
@@ -167,7 +167,7 @@ fn cross3(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] *
 /// game's sqrt(x)==0 arms store 0.0 to all three components [M 0x1df2a8 disasm 0x1df2d8-0x1df310 /
 /// 0x1df3a8-0x1df3e0: swc1 f3(=0.0) to the vector's slots] (the old [1,0,0]/[0,1,0] fallback, long
 /// replaced, snapped the beam basis onto the world axes where the game's own math keeps the
-/// (exact-FP) cross direction sound and continuous — the playtest's "flip on its side").
+/// (exact-FP) cross direction sound and continuous — the light flipped on its side).
 /// Normalization multiplies
 /// by the reciprocal [M 0x1df2f4/0x1df3c4: div.s f0,1.0,len; the VMUL], it does not divide.
 pub fn align2dir(dir: V3, up: V3, fallback: V3) -> Mat4 {
@@ -384,8 +384,8 @@ impl Searchlights {
         // the port's own embellishment (the comment's old warrant — "flags 0x18 do not exclude the
         // player's class" — missed that mask 0x10 skips the whole dynamic walk, Bond included): the game's
         // spot lands on static geometry and `Vec_Dist3D(spot, player) <= 2.0` [M 0x1cb900:251] arms off
-        // the ground spot; a PCSX2 render check decides whether the spot may rest on Bond (live check in
-        // the report). The arming predicate below is untouched.
+        // the ground spot; a PCSX2 render check decides whether the spot may rest on Bond (open live
+        // check). The arming predicate below is untouched.
         if let Some(sp) = self.parts[head].links[2] {
             let (yaw, pitch) = (self.parts[head].yaw, self.parts[head].pitch);
             let dir = spherical(100.0, yaw, -pitch);
@@ -427,7 +427,7 @@ impl Searchlights {
                 // aivolume::matrix is that builder (verified against the live volume matrix). The old
                 // reading put atan2(n.z, |n.xz|) in the pitch slot of the PLACEMENT-Euler object_matrix
                 // with the yaw in the roll slot — on wall/slope/Bond-sphere normals the disc's plane
-                // folded onto its edge (the user's "it will flip on its side").
+                // folded onto its edge.
                 let pitch = crate::trig::HALF_PI - atan2_approx(n[1], (n[0] * n[0] + n[2] * n[2]).sqrt());
                 let yaw = atan2_approx(n[0], n[2]);
                 spot.matrix = crate::aivolume::matrix([pitch, yaw, 0.0], spot.pos);
@@ -838,7 +838,7 @@ mod tests {
     /// The spot disc's orientation [M 0x1cb900 hit branch + 0x134210/0x1e5168]: the disc mesh lies in
     /// its local XZ plane (bbox y = 0 [D 'Searchlight1']), so its world normal is the matrix's ROW 1 —
     /// it must equal the hit normal. The old placement-Euler reading folded it onto its edge on
-    /// vertical normals (the user's "flip on its side").
+    /// vertical normals.
     #[test]
     fn the_spot_disc_faces_the_hit_normal() {
         let nrm = |n: V3| {

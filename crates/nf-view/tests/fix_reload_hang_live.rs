@@ -1,7 +1,7 @@
 //! fix-reload-hang: the reload state machine hangs (state 6, clip 0). The silenced twin 0x03's
 //! auto-reload sticks (`rel=6` forever, `gun.clip` never refills although carried > 0) and every
 //! later switch is refused while the view anim is not idle [M `Player_WeaponChange` 0x1a6f80:33-47;
-//! docs/reports/weapon-matrix2.md "The remaining red cells" — the D/M/R mass]. The AT-420 Sentinel
+//! the weapon matrix's D/M/R red cells]. The AT-420 Sentinel
 //! 0x2D's reload (the 5/6/7 machine) never returns either, and a shotgun's per-shell loop must be
 //! interruptible by fire.
 //!

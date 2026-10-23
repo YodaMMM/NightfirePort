@@ -1,5 +1,5 @@
-//! fix-foliage-bullets: the playtest's "those trees are, for some reason, bulletproof, like the
-//! leaves" (07000005, the small trees near the start). What the game's data and code actually say:
+//! fix-foliage-bullets: the trees' leaves seemed bulletproof (07000005, the small trees near the
+//! start). What the game's data and code actually say:
 //!
 //! - The foliage pass machinery is real [M]: `Collide_Intersect` 0x1ebaa8 ORs `HITDATA+0x51` bit 1
 //!   from the glist node's flags bit 0x40 (cel+0x94 = the placement's `celglist+0x44` [M
@@ -38,7 +38,7 @@ fn in_tree_span_x(x: f32) -> bool { x >= TREE_LO[0] - 0.2 && x <= TREE_HI[0] + 0
 /// trace reports — while the aim/LOS family's trace (bit 0x8 [M 0x1ebff0-0x1ec010]) reports the
 /// unflagged wood core (obj 97, 0x04 [D]) behind the skipped shell. The fired round's impact lands
 /// on the shell, with the shell's class-19 record: no decal, no gas puff [D EffectInfo] — the
-/// playtest's "bulletproof" look.
+/// "bulletproof" look.
 #[test]
 fn flight_stops_on_the_flagged_shell_while_the_aim_trace_skips_it() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -46,7 +46,7 @@ fn flight_stops_on_the_flagged_shell_while_the_aim_trace_skips_it() {
     {
         let sim = scene.sim.as_mut().unwrap();
         sim.step_bond(Default::default(), false, false, false);
-        // Stand 6 units east of the tree, aim at its crown line (the playtest's shot).
+        // Stand 6 units east of the tree, aim at its crown line (the repro shot).
         sim.bond.pos = [97.0, 24.30, 90.80];
         let eye = [sim.bond.pos[0], sim.bond.pos[1] + 0.70, sim.bond.pos[2]];
         let target = [91.0f32, 25.5f32, 90.8f32];

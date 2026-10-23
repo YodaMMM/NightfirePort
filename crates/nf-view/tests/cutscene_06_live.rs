@@ -1,5 +1,5 @@
-//! drake-cutscene-06: the 07000006 dressing cut-scene (0x06000071, ScriptPlayer #810) — the
-//! playtest 1015-2142 "drake cutscene on o6 has some lag and glitchiness with objects".
+//! drake-cutscene-06: the 07000006 dressing cut-scene (0x06000071, ScriptPlayer #810), which
+//! lagged and glitched objects.
 //!
 //! Part 2 (the object glitches), headless: the cut-scene runs to completion through the real
 //! path (the LoadPoint trigger #746 → ch 0x83 → SP #810), every matrix the scene drives is
@@ -58,7 +58,7 @@ fn the_dressing_scene_runs_headless_and_every_matrix_is_continuous_except_the_ga
     let mut scene = nf_view::load_with_carry(&iso, "07000006.bin", false, Some(&carry(&[0x1d, 0x45, 0x70]))).expect("load 07000006");
     {
         let sim = scene.sim.as_mut().unwrap();
-        // The truck-ride spawn (#496, gate 0x1D) — the playtest route.
+        // The truck-ride spawn (#496, gate 0x1D) — the real play route.
         for _ in 0..3000 { sim.step_bond(Input::default(), false, false, false); if !sim.disabled { break; } }
         assert!(!sim.disabled, "Bond is free after the level-start intro");
         let mut input = Input::default();

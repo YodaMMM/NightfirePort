@@ -37,7 +37,7 @@ fn near(a: f32, b: f32, tol: f32) -> bool { (a - b).abs() < tol }
 /// kinds, in parse order. Totals [D]: 38 kind-1 (0x24) and 18 kind-0 (0x2d) on the main maps —
 /// the census's 51 counts the disc's type-0x2d records including each archive's kind-0 shell-map
 /// (0,0,0) dummy, which the main-map parse never reads [M `ResetMap_Load` 0x1d6360:150 parses the
-/// loaded map's dynamic block; the port's `main_map` convention is pinned by the spawn playtests]. ──
+/// loaded map's dynamic block; the port's `main_map` convention is pinned by the spawn tests]. ──
 #[test]
 fn disc_sweep_registers_both_sets_with_the_game_kinds() {
     let Some(path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };

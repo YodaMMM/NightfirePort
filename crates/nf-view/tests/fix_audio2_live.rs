@@ -1,8 +1,8 @@
 //! fix-audio2 live tests: the animation scripts' op-1 sounds (`AnimProcessScriptCmds` 0x1c1b38 case 1) through
 //! the real `Script_Interp` case 2 path (`nf_view::load` + `Sim::step_bond`).
 //!
-//! The user's playtest (2026-10-12): "voices are missing everywhere — cut-scenes on 07000001, 07000005 (the
-//! truck ride end: 'it transitioned but there were no voicelines') and 07000007". The voices are op-1 commands
+//! Voices were missing everywhere — the cut-scenes on 07000001, 07000005 (the truck ride end transitioned
+//! with no voice lines) and 07000007. The voices are op-1 commands
 //! in the cut-scene characters' ANIMATION scripts (e.g. 07000005's ride script 0x06000994 starts anim
 //! 0x06000996 whose op-1 at frame 769 is sfx 223 → STREAMS.BIN LUT[249], a voice line); the game fires them
 //! from `Script_Interp` case 2 (0x1d9a08), which overrides the anim script's time with the stream's frame and

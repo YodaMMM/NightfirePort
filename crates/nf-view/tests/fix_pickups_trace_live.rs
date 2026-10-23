@@ -11,8 +11,8 @@
 //!   grows only by real takes (0→6→13→20→25, never topped, always below the type-3 cap 36 [D ammo_data]);
 //!   the drop rounds are `clip_size(0xE)=9 · (Rand_FRand(0.5)+0.5)` truncated = 4..8 (the clip < 10
 //!   branch [M 0x17a2a0:88-98]) — all four trace deltas sit in that window;
-//! - with the recorder's cheat (tools/trace/trace_record.py --god --ammo, what the user played with)
-//!   every drop the user walked over was taken: the cheat tops each **owned** weapon's clip and each
+//! - with the recorder's cheat (tools/trace/trace_record.py --god --ammo, as the trace was recorded)
+//!   every drop the player walked over was taken: the cheat tops each **owned** weapon's clip and each
 //!   spare type back to the most seen this run, so spares never exceed a take and no cap refuses.
 //!
 //! The port's bug: the dev-mode infinite-ammo topping wrote `carried[i] = max(carried[i], 200)` —
@@ -45,7 +45,7 @@ fn load(iso: &str, level: &str) -> Scene {
     scene
 }
 
-/// The user's play setup (the trace header `god=1` + the recorder's --ammo): god mode and the
+/// The trace's play setup (the trace header `god=1` + the recorder's --ammo): god mode and the
 /// infinite-ammo topping, applied after every tick the way the App loop does (lib.rs: the dev
 /// after-tick runs `Dev::after_tick` once per stepped tick).
 fn cheats() -> Dev { let mut d = Dev::default(); d.god_mode = true; d.infinite_ammo = true; d }
@@ -199,8 +199,8 @@ fn the_first_raptor_drop_is_weapon_0x0e_clip_9_and_the_hud_names_it() {
     assert!(named, "the HUD names the take: {:?}", scene.sim.as_ref().unwrap().hud.msgs.iter().map(|m| &m.text).collect::<Vec<_>>());
 }
 
-/// ── the user's symptom, under the play cheats ────────────────────────────────────────────────────
-/// god=1 + the recorder's infinite ammo (the user's session): kill the Raptor guards one by one and
+/// ── the symptom, under the play cheats ───────────────────────────────────────────────────────────
+/// god=1 + the recorder's infinite ammo (the traced session): kill the Raptor guards one by one and
 /// walk over each drop. The trace: EVERY drop is taken; the first as weapon 0x0E clip 9 (no spare
 /// event), the later ones as ammo type 3, each within the game's round range 4..8
 /// (`9 · (Rand_FRand(0.5)+0.5)` truncated, one draw per drop [M 0x17a2a0:88-98]), the spare growing
@@ -251,7 +251,7 @@ fn with_dev_god_and_infinite_ammo_every_raptor_drop_is_taken_and_the_spare_match
             reachable += 1;
             let before = scene.sim.as_ref().unwrap().drones.taken.len();
             assert!(take_drop(&mut scene, k, Some(&mut dev)),
-                "drop {k} (weapon {:#x}) is taken — the user's symptom is a drop that cannot be picked up",
+                "drop {k} (weapon {:#x}) is taken — the symptom is a drop that cannot be picked up",
                 scene.sim.as_ref().unwrap().drones.pickups[k].weapon);
             let sim = scene.sim.as_ref().unwrap();
             // Every take the walk recorded — standing on one drop can touch-take a neighbouring guard's

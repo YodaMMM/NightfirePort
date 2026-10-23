@@ -15,7 +15,7 @@
 //! [M centre/radius = glist+0x20/+0x30 per docs/formats/level.rs; the ladder sphere's +0x84 (centre y) and
 //! +0x8C (radius) are what `Player_CollLadder` 0x196118 and `Player_Climb` 0x196310 clamp against].
 //!
-//! Spec: docs/atlas/ladder.md (this session), docs/systems/player.md.
+//! Spec: docs/atlas/ladder.md,docs/systems/player.md.
 
 use crate::world::V3;
 use nf_formats::level::{Level, MapObject};
@@ -152,8 +152,7 @@ impl Ladder {
     /// ladder's collision triangles — the wall behind the 0700000c yard ladder's plane sits ~0.05
     /// recessed [D probes], stopping the walker at 0.4985) is still INSIDE the grab reach (0.4985
     /// < 0.55) and the walk-in grabs — the fix-ladder-water2 walk mapping (0.275 for substate 0)
-    /// read the switch on the raw substate and left that ladder unclimbable (playtest 2026-10-18
-    /// "the ladder doesnt work"). The dismount escape still clears the fatter arm: the dismount
+    /// read the switch on the raw substate and left that ladder unclimbable. The dismount escape still clears the fatter arm: the dismount
     /// hop −0.05 [M Player_Climb 0x196310:88-96, consumed the same tick by the integration
     /// Player_Update 0x193600:284-295] leaves the stander 0.55 off a FLAT rung plane (the yard
     /// ladder's mesh is z-degenerate [D bounds]) and the refine's strict `dist < radius` [M
@@ -350,7 +349,7 @@ mod tests {
     /// replace fix-ladder-water2's walk-arm units, which mapped the switch on the raw substate and
     /// pinned the 0.275 climb arm for the walk — the 0700000c yard ladder #164 (a z-degenerate rung
     /// plane [D bounds], the wall ~0.05 recessed behind it) stopped the walker at 0.4985 and the
-    /// 0.275 arm never touched: the user's "the ladder doesnt work" (playtest 2026-10-18).
+    /// 0.275 arm never touched: the ladder did not work.
     #[test]
     fn walk_grab_is_the_default_arm_the_jump_table_routes_substate_zero_to_0x1953f4() {
         let cc = 1.0347f32;
@@ -376,7 +375,7 @@ mod tests {
         // Sister that FAILS on the pre-ladder-0c code: the same spot under the old 0.275 walk arm
         // (the climb arm) never touches — pinned here so the arm mapping can't silently regress.
         assert!(!yard.capsule_hits([9.92, 1.02, -186.91], crate::player::WALK_PICK_RADIUS, cc),
-            "the 0.275 climb arm must NOT reach the walker's stop (that's the playtest's broken ladder)");
+            "the 0.275 climb arm must NOT reach the walker's stop (that's the broken ladder)");
         // The grab-snap spot (0.5 in front of the plane [M 0x196118:36-44]): inside the default arm.
         assert!(yard.capsule_hits_default([9.9493, 5.5266, -186.9282], r, cc));
         // The just-dismounted stander: snap 0.5 + the one-tick hop −0.05 [M Player_Climb 0x196310:88-96

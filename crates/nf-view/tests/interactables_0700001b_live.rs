@@ -169,7 +169,7 @@ fn missile_console_chain_disarms_and_the_gateless_missile_aborts() {
 
 /// Drake (drone #186, skin 0x050000ba [D §4]) dies to Bond's own fire after the fight gate,
 /// and his defeat NIS ends the mission. The route to the arena is walkreal's (blocked at the
-/// hub crossing, docs/reports/walkreal-c.md); the test teleports to the arena floor — the
+/// hub crossing); the test teleports to the arena floor — the
 /// documented spot — and operates the fight through the REAL fire path (the walker's shoot).
 /// The fight gate ch 0x0a (NIS 0x060008f0 t104 [D]; SP#126's second script [D]) is driven the
 /// documented way. The defeat NIS (SP#198 → 0x06000a20 [D]) plays OUT (no skip): its t600

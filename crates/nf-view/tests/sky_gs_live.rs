@@ -55,7 +55,7 @@ fn sky_pass_gs_state_from_the_first_cnt() {
     // the pass state entirely: ALPHA_1 = 0x2a (replace) from psiSetUpColourBlend(2), no fog change (the
     // psiFog stub), and whatever depth state the frame set before the sky draws. The renderer's
     // zwrite=false on both sky passes models that inherited depth state; pinning the exact ZBUF_1 the GS
-    // holds during the sky draws is a live check for the main agent (report: fix-sky).
+    // holds during the sky draws is an open live check.
     let alpha = gs.iter().find(|&&(r, _)| r == 0x42).map(|&(_, v)| v).unwrap_or(0x2a);
     let test = gs.iter().find(|&&(r, _)| r == 0x47).map(|&(_, v)| v).unwrap_or(0x5001b);
     let zbuf = gs.iter().find(|&&(r, _)| r == 0x4e).map(|&(_, v)| v).unwrap_or(0x3100_0002);
@@ -89,7 +89,7 @@ fn sky_pass_gs_state_from_the_first_cnt() {
         assert!(gs.iter().all(|&(r, _)| matches!(r, 0x42 | 0x47 | 0x4e)), "only the modeled registers occur");
         // MEASURED [D]: SKY_StarField writes its own state — ALPHA_1 0x44 (normal), TEST_1 0x5001b
         // (As ≥ 1), ZBUF_1 0x1_31000000 (ZPSM 32-bit Z, ZMSK bit 20 — the exact write-disable bit and
-        // its state during the sky draws is a live check for the main agent, report: fix-sky).
+        // its state during the sky draws is an open live check).
         let alpha = gs.iter().find(|&&(r, _)| r == 0x42).map(|&(_, v)| v).unwrap_or(0x2a);
         if alpha != 0x2a {
             let (a, b, c, _f, _d) = decode_alpha(alpha);

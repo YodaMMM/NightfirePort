@@ -1,6 +1,6 @@
-//! dronefunc-rest (the call-tree gap task 845): the ported helpers' real-path pin.
+//! dronefunc-rest: the ported helpers' real-path pin.
 //!
-//! The bathhouse wake scenario (level 07000002, channels 22/23/25, Bond at the playtest spot —
+//! The bathhouse wake scenario (level 07000002, channels 22/23/25, Bond at the repro spot —
 //! the armed-girl test's loader) drives a team-1 guard into combat. Pins, all [M]-backed:
 //! - the shared target registry (NPCGlobals, `DroneFunc_AllocateTargetID` 0x141f28 /
 //!   `DroneFunc_TargetSeen` 0x14a008): a team-1 guard that acquired the opponent holds a claimed
@@ -44,7 +44,7 @@ fn the_target_registry_and_first_attack_stamps_follow_the_game() {
         sim.drones.set_channel(22);
         sim.drones.set_channel(23);
         sim.drones.set_channel(25);
-        sim.bond.pos = [-43.11, 6.46, 10.37]; // the playtest camera [L the playtest report]
+        sim.bond.pos = [-43.11, 6.46, 10.37]; // the repro camera
         sim.bond.prev_pos = sim.bond.pos;
     }
     // The stamp is read on the tick the first ATTACK runs: afterwards gunfire keeps adding sound

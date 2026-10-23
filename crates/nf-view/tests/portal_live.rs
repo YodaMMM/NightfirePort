@@ -167,7 +167,7 @@ fn the_portal_graph_planes_point_into_cel_a() {
 
 /// Cold start on every story level: `load_with_carry(None)` + 30 ticks must leave Bond armed —
 /// the P2K drawn with ammo on the HUD everywhere except the party level 07000007 (fists, the
-/// disguise lock). This is the user's no-weapon report (07000006 --frame 30, "switch request 0")
+/// disguise lock). This is the no-weapon symptom (07000006 --frame 30, "switch request 0")
 /// driven through the real viewer path, per level.
 #[test]
 fn cold_loadout_arms_bond_on_every_story_level() {

@@ -1,6 +1,6 @@
-//! stun-ai-recover (654): the stunned guard completes the animation and returns to combat, and
-//! the re-hit rules behave like the game. The playtest 1015-1738 (07000005, the Stunner): guards
-//! "get stunned infinitely and don't complete the animation".
+//! stun-ai-recover: the stunned guard completes the animation and returns to combat, and
+//! the re-hit rules behave like the game. The symptom (07000005, the Stunner): guards stayed
+//! stunned forever and never completed the animation.
 //!
 //! Ground truth [M]:
 //! - the tase route: `NDrone2_DealWithObjHit` 0x13fff0:269-300 — the stunner's bullets 0x4A/0x4C
@@ -27,13 +27,13 @@
 //! - the downed guard is SHOOTABLE through `NDrone2_Collision` 0x140e90's down branch: the low
 //!   sphere (radius 0.3) replaces the standing volume while +0x2f is set [M :65-90] — the re-tase
 //!   dart reaches him (the port's downed-pose bone boxes left the aimed ray uncovered, which is
-//!   why the playtest's re-hit never landed).
+//!   why the re-hit never landed).
 //!
 //! The stun lifecycle below runs on the real input path (`nf_view::load` + `Sim::step_bond`, the
-//! stunner equipped through the switch input) on 07000005, like the playtest. The `Dev::teleport`
+//! stunner equipped through the switch input) on 07000005, like the repro. The `Dev::teleport`
 //! placements are the dev helper the other live tests use; they happen only at the decision
 //! moments (a teleport early in the wait can hand the fallen guard to the level's proximity
-//! spawner, whose despawn is the level's own behaviour — the playtest's user never leaves).
+//! spawner, whose despawn is the level's own behaviour — the repro's player never leaves).
 
 use nf_game::drone::{state, anim_state};
 use nf_game::player::Input;
@@ -130,7 +130,7 @@ fn is_combat(s: u8) -> bool {
 
 /// The full game-timer ride: TASER 0x4a (the 30-tick fall wait, the beam's re-arms held off) →
 /// STUNNED 0x4b → with nobody near, STUNNED_RECOVER 0x4c → the get-up 0x76 completes into the
-/// combat family 0x56. The playtest's "stunned infinitely and don't complete the animation" is
+/// combat family 0x56. The endless stun was
 /// this walk stalled; the game's rules walk it to the end.
 #[test]
 fn the_stunned_guard_rides_the_game_timers_and_returns_to_combat() {
@@ -201,7 +201,7 @@ fn the_player_near_keeps_him_down_and_a_retase_behaves_like_the_game() {
     }
     let stunned_at = stunned_at.expect("the twitch ends into DSTATE_Stunned 0x4b");
     let stun_frame = scene.sim.as_ref().unwrap().drones.frame;
-    // Bond stays where he tased from (2.5 u — inside AnyoneNear's band; the playtest's player
+    // Bond stays where he tased from (2.5 u — inside AnyoneNear's band; the repro's player
     // stands over the guard too). Ride PAST the RecoverTime expiry (stun_frame + 1200): the
     // check must re-arm, not recover [M 0x162eb0 case 0xc].
     while scene.sim.as_ref().unwrap().drones.frame < stun_frame + 1350 {

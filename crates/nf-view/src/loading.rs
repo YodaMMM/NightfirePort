@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(strip_hint("HINT If you"), "If you");
     }
 
-    /// Playtest 1016: "loading hints run 10000 mph" — the port re-picked every redraw. One pick per load:
+    /// The port used to re-pick every redraw (the hints flickered). One pick per load:
     /// the same level keeps its hint across redraws whatever the random source says; a reset re-picks.
     #[test]
     fn the_loading_hint_is_picked_once_per_load() {

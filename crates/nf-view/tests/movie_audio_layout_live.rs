@@ -1,7 +1,7 @@
 //! movie-audio: the PSS PCM body (kind 1) is BLOCK-interleaved — `interleave` (512) bytes of the left
 //! channel, then 512 of the right, in turn [D measured 2026-10-16 on 073B0048]. Read as L/R sample pairs,
 //! each channel played every other sample of one channel (double speed, high pitched) with a channel
-//! swap at every block (static): the user's playtest 1016. The decode must be the smooth reading.
+//! swap at every block (static). The decode must be the smooth reading.
 //! Needs a retail image with movie data (`NF_ISO`).
 
 #[cfg(feature = "movies")]

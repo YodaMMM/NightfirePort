@@ -10,7 +10,7 @@
 //! - The spawners: `DroneSpawner_Create` 0x1378d0 puts param 7 at +0x14 — the KILL channel, latched
 //!   in `DroneSpawner_Control` 0x137e68 (`ch[p7] → +0x20 = 1` → the cleanup block) [L-verified
 //!   07000005, fix-spawner-p7]; fix-actors' ARM reading was refuted by the live measurement, and its
-//!   07000011 playtest is explained by the cleanup's keep-level split (07000011 keeps drawn drones).
+//!   07000011 symptom is explained by the cleanup's keep-level split (07000011 keeps drawn drones).
 //! - The boss: 07000004's assassin (skin 0x0500001e, dtype 15 → ATTACK start [L DroneTypeSettings[15]],
 //!   death channel param 12 = 0x54 [D]) — killing him raises the "Defeat the assassin" channel [L
 //!   c07000004.rs].
@@ -91,7 +91,7 @@ fn killing_a_protected_guest_fails_the_mission_but_scaring_him_does_not() {
 /// The stairwell reinforcements arrive: 07000011's group-1 spawner (p4 = trigger ch 0x15 ← touch
 /// #182, p5 = stop ch 0x16, p7 = kill ch 0x1D ← the stairwell Touch #285 [D]) — fix-spawner-p7
 /// settled p7 as the KILL channel [L-verified 07000005]; fix-actors' ARM reading is refuted. What
-/// this test pins is the playtest symptom itself: the guards come in on their trigger channel
+/// this test pins is the symptom itself: the guards come in on their trigger channel
 /// (in play the player crosses #182 before the stairwell, so the arrival precedes the kill). The
 /// kill channel's drawn-guard keep is pinned by
 /// `spawner_kill_live::tower2_stairwell_the_kill_channel_keeps_the_drawn_guard`.

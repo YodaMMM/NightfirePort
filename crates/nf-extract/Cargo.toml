@@ -3,7 +3,7 @@ name = "nf-extract"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "Reads the user's own 007: Nightfire disc image"
+description = "Reads the player's own 007: Nightfire disc image"
 
 [dependencies]
 nf-formats = { path = "../nf-formats" }

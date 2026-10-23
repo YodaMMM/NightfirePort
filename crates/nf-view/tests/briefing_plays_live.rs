@@ -1,5 +1,5 @@
-//! Playtest 1016: "cutscene didnt play when I started the exchange, it went straight to the loading
-//! screen then to game". ResetMap_Load phase 0 pushes GameFlow state 6 with no frame budget of its own
+//! Starting The Exchange skipped the briefing cut-scene and went straight to the loading screen,
+//! then the game. ResetMap_Load phase 0 pushes GameFlow state 6 with no frame budget of its own
 //! [M 0x1d6360:101] and starts the movie in the same phase [M 0x1d6360:111 psiStartBackgroundMovie], so
 //! BGFMVPlaying = 1 [M 0x1081a8] and case 6 holds until psiMovieFinished [M 0x1c98c8 case 6, 0x1082e8]. The port's
 //! countdown popped state 6 on its first tick because the host had not reported the decode-ahead
@@ -227,7 +227,7 @@ fn equinox_briefing_wraps_to_07100018_and_plays() { briefing_row(&ROWS[11]); }
 /// The five driving rows never wrap [M 0x1d3800:104-108 — the DRIVING branch pushes state 9 with
 /// GameState+0x8 = the hash and no 0x71 code] and their hashes are not in `UsingMovie` [M
 /// 0x107eb8]. The port, which has no DRIVING.ELF, refuses the row with its driving notice instead
-/// of pushing state 9 [S port choice, playtest 1015-2231] — either way no movie is due: no
+/// of pushing state 9 [S port choice] — either way no movie is due: no
 /// movie_pending, no state 6, no player, no level request. This is the no-movie path every
 /// not-in-USING_MOVIE row must take.
 #[test]

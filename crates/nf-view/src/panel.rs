@@ -131,7 +131,7 @@ function draw() {
   const c = document.getElementById('cons'); c.innerHTML = '';
   // The grenade ids are the game's own: 0x34 (52) Fragmentation, 0x35 (53) Stun, 0x36 (54) Smoke
   // [L USATxt.dat via Txt_BindLabel(+0x38); the old buttons gave 0x35 for "Frag" — the STUN
-  // grenade — the user's "a frag grenade spawns what looks to be a stun grenade"].
+  // grenade — the "Frag" button spawned a stun grenade].
   for (const [label, q] of [['Full health', 'do=health'], ['Full armour', 'do=armour'], ['Fragmentation grenades ×5', 'do=weapon&id=52&rounds=5'], ['Stun grenades ×5', 'do=weapon&id=53&rounds=5'], ['Smoke grenades ×5', 'do=weapon&id=54&rounds=5'], ['Ammo for every owned weapon', 'do=ammo_all']])
     c.append(el(`<div class="row"><span class="name">${label}</span><button onclick="cmd('${q}')">Give</button></div>`));
 }
@@ -149,8 +149,7 @@ load(); setInterval(load, 1000);
 /// The old hardcoded table asserted from memory and was wrong all over (it put the AT-600 Scorpion on
 /// 0x3A — the bank's Laser Tripbomb; "Korsakov K5" on 0x33 — the bank's Phoenix Samurai; "Militek
 /// MGL" on 0x45 — the bank's Oddjob's Hat; "Q-Laser"/"Laser Watch" on 0x50/0x54 — the bank's
-/// Grapple/Micro-Camera), which is the user's "I can't tell what's what / no clue what the rocket
-/// launcher is": the real rocket launchers are 0x2C AT-420 Sentinel and 0x2E AT-600 Scorpion, and the
+/// Grapple/Micro-Camera), so the names were misleading: the real rocket launchers are 0x2C AT-420 Sentinel and 0x2E AT-600 Scorpion, and the
 /// grenades are 0x34 Fragmentation (radius 8, dmg 100 [L +0x08/+0x0C]) / 0x35 Stun (radius 10, dmg 0)
 /// / 0x36 Smoke / 0x37 Remote Mine. 0x01 (fists) carries no label — the game's own code equips it as
 /// the fists tail (`Player_InitWeapon` 0x1a7ef8:319) [M]. Anything else unnamed shows its id.
@@ -211,7 +210,7 @@ pub fn catalog_entries(scene: &crate::scene::Scene) -> Vec<Entry> {
         // noise rows: the 0x48/0x49 padding, the AI-clip records 0x61/0x71, the AI rocket record
         // 0x62, and the 0x68..0x6F drop/AI variants that borrow OTHER weapons' name labels (0x69
         // binds the Smoke Grenade label, 0x6A/0x6E the Q-Claw's, 0x6D the AT-600 Scorpion's, 0x6F
-        // the Militek MGL's [L ee_start_05.bin 0x2bf150]) — the user's "I can't tell what's what".
+        // the Militek MGL's [L ee_start_05.bin 0x2bf150]).
         // INCLUDING the clip-0 gadgets (0x50 Grapple, 0x56/0x57 Decryptor, 0x58 Q-Worm: tp model 0
         // and clip 0, but named and selectable, and the game's loadouts grant them — the old
         // filter's `model==0 && clip<=0` silently dropped them).
@@ -423,7 +422,7 @@ pub fn apply(scene: &mut crate::scene::Scene, q: &[(String, String)]) -> (String
         }
         // The game's own loadout for the current level: `Player_InitWeapon` (0x1a7ef8) on a cold
         // load (`save = None` clears through `Player_InitAmmoWeapons` first), the same call the
-        // level-load path runs — so a playtest starts like the real game (weapons AND gadgets).
+        // level-load path runs — so a test run starts like the real game (weapons AND gadgets).
         "levelkit" => {
             let Some(sim) = scene.sim.as_mut() else { return ("no game".into(), None) };
             let wd = sim.weapons.clone();
@@ -492,7 +491,7 @@ pub fn spawn_npc(scene: &mut crate::scene::Scene, skin: u32, mode: Option<u32>) 
         // floor as the fallback. The old `floor_below(eye+1, depth 20)` scanned 20 units down and
         // fell THROUGH the slope the player sees onto a surface ~8 m lower (the 07000005 spawn's
         // snow bank: the guard spawned at y 15.9 under Bond's 24.2 floor and settled inside the
-        // terrain — the main agent's "no guard appeared in front of Bond", the pool count dropping
+        // terrain — no guard appeared in front of Bond, the pool count dropping
         // while nothing shows). The bank also drops ~8 m between 3 and 4 m out at this spot, so the
         // candidates walk IN from 4 m and take the first whose ground sits within 1.5 of Bond's —
         // the spawn placements' own shape (a guard on the ground near the player).

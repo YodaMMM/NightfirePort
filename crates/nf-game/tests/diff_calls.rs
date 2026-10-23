@@ -4,7 +4,7 @@
 //! and memory values only — no disc bytes).
 //!
 //! A function with a registered adapter must match every recorded call; a function without one is reported as
-//! `not covered` (the recording requests table in docs/reports/verify-bitexact.md says what to record next).
+//! `not covered`.
 //! The sister test proves the comparison catches a one-bit change in a recorded output.
 
 use std::fs;

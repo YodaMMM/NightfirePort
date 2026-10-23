@@ -1,4 +1,4 @@
-//! The disc-wide weapon asset index + loader (task 100a, `fix-weapon-assets`).
+//! The disc-wide weapon asset index + loader.
 //!
 //! A level archive ships only its own weapons' first-person skins (`weapon_data+0xDC`, kind-3
 //! `05xxxxxx` entries), so a weapon handed over by `--give` or the dev menu on a level that does
@@ -6,7 +6,7 @@
 //! (silent fire). The real game never hits this — a level only ever offers its own set — but the
 //! port's dev tools hand Bond ANY weapon on ANY level on purpose.
 //!
-//! This module indexes the disc once per ISO (cached as a small text file in the user's temp dir,
+//! This module indexes the disc once per ISO (cached as a small text file in the system temp dir,
 //! keyed by the ISO's size and a SHA-1 over the FILES.BIN table, never game bytes and never in the
 //! repo) and merges a weapon's assets from the archive that owns them into the scene's tables —
 //! the way `merge_dev_view_models` (folded 190-fix-dev2) already did for `--dev`, generalized to a

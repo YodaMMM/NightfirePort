@@ -1,4 +1,4 @@
-//! delta-repeater: the two playtest-1015-1738 fixes for the Delta Repeater (the crossbow 0x11),
+//! delta-repeater: two fixes for the Delta Repeater (the crossbow 0x11),
 //! through the real input path (`nf_view::load_weapons` + `Sim::step_bond`).
 //!
 //! 1. **The bolt's world hit.** The game's bolt is a GRAVITY bullet — `weapon_data+0x6C & 0x8`
@@ -9,8 +9,7 @@
 //!    (0x10) arms — record 0x11 carries +0x6C = 0x00000808, +0x70 = 0x00000002
 //!    [L ee_start_05.bin @ 0x2bf150 + 0x11·0x10C]. The port's old dispatch routed every
 //!    `+0x6C & 8` weapon into the GRENADE path, so the bolt bounced off walls with the grenade
-//!    bounce sounds — the user's "it sounds like a grenade is bouncing when the crossbow flies
-//!    out and bounces against the wall when it shouldn't be bouncing". The new gate is the
+//!    bounce sounds. The new gate is the
 //!    gravity bit AND a grenade-family collision flag (0x4 / 0x80 / 0x100); the record sweep
 //!    [L] moves exactly 0x11 off the grenade path.
 //! 2. **The loaded bolts.** `Player_WeaponFiring` 0x1a5460:331-381 re-issues the view model's
@@ -18,7 +17,7 @@
 //!    0x0200816, the flying projectile's own mesh) on datum 4 when count > 0 (NOT while the view
 //!    state is 9), datum 5 when > 1, datum 6 when >= 3; count = clip[0x11], +1 while the fire
 //!    script plays, min(carried[+0x90 = 0x0F], clip_size +0x92 = 3) once the reload script
-//!    passes frame 80 [M]. The user's "model is missing the arrows".
+//!    passes frame 80 [M]. Without them the model drew no bolts.
 
 use nf_game::player::Input;
 use nf_game::drone::PlayerImpact;

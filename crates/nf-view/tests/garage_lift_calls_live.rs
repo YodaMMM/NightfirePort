@@ -31,7 +31,7 @@
 //! The port bug: the use pick ran from the RENDER CAMERA (`player_use_doors`'s head arg), while
 //! the game builds it at Bond's head (`Player_GetHeadPos` [M 0x1a5170:100-108]); the camera hangs
 //! ~2.5 behind Bond, and the station entities (door spheres r 1.451 at z 26.32, the button art
-//! r 0.20) sat outside the camera-based sphere — the buttons never responded (playtest 1017).
+//! r 0.20) sat outside the camera-based sphere — the buttons never responded.
 //!
 //! Run: `NF_ISO=… cargo test -p nf-view --test garage_lift_calls_live -- --test-threads=1`
 

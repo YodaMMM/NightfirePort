@@ -226,7 +226,7 @@ fn build_map(d: &Disc, weapons: &nf_formats::weapon::WeaponData) -> Vec<(u32, Ca
 // The tests
 // ---------------------------------------------------------------------------
 
-/// The map itself, printed (the doc table's source — docs/playtest/gadget-carry.md).
+/// The map itself, printed.
 #[test]
 fn print_the_carry_map() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -291,7 +291,7 @@ fn captain_grenade_drops_match_the_decompile() {
 
 /// The tripbomb's absence rows: 07000001 and 07000009 carry no tripbomb 0x3a from ANY source
 /// (loadout, placed pickup, script spawn, captain drop, drone drop, drone throw) — the game's own
-/// data. The main agent must not `give 0x3a` there expecting level-native meshes.
+/// data. A `give 0x3a` there does not get level-native meshes.
 #[test]
 fn tripbomb_is_absent_where_the_map_says() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -346,16 +346,16 @@ fn placed_gadget_pickups_match_the_archive_scan() {
     }
 }
 
-/// The wall spot for the tripbomb and the satchel: 07000005 (the gadget playtest level, 05's spawn
+/// The wall spot for the tripbomb and the satchel: 07000005 (05's spawn
 /// courtyard), standing ~1.7 m from the courtyard's flat south wall (normal (−0.91, 0, −0.41),
 /// measured by the direction fan — 12 of 48 rays hit this one wall, everything else is clear ≥ 3 m).
 /// Headless checks: grounded after 60 ticks, a wall hit within 2 m ahead. This is the `--bond`
-/// spot the main agent throws from (docs/playtest/gadget-carry.md §wall spots).
+/// spot to throw from.
 #[test]
 fn the_07000005_wall_spot_holds_for_the_tripbomb_and_the_satchel() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     // 07000005 carries camera 0x54 by loadout; the tripbomb/satchel ride the --give path, so load
-    // them the way the main agent's dev give does (load_weapons + panel::apply).
+    // them the way the dev give does (load_weapons + panel::apply).
     let mut scene = nf_view::load_weapons(&iso, "07000005.bin", false, &[0x3b, 0x3a]).expect("load 05 with the gadgets");
     let sim = scene.sim.as_mut().unwrap();
     sim.bond = nf_game::player::Bond::new([106.29, 24.87, 110.25], 1.178);

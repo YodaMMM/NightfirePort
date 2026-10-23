@@ -1,4 +1,4 @@
-//! fix-render-artifacts (045i): the user's 2026-10-12 playtest render-artifact items, pinned headlessly.
+//! fix-render-artifacts: a set of render-artifact items, pinned headlessly.
 //!
 //! What this file pins (NF_ISO, real disc data through `nf_view::load`):
 //! 1. The subtractive baked-shadow blend lead: ALPHA_1 0x7F00000042 = (2,0,0,1) = Cd − Cs·As maps to the
@@ -6,12 +6,12 @@
 //!    shape occurs on the disc (models/world.md's 312 writes). Verified on HEAD: the mapping was never
 //!    additive/normal, so the "shadows brighten because the subtractive shape is mis-mapped" hypothesis
 //!    does not hold on this branch — these tests keep it from regressing.
-//! 2. The three shadow-decal objects the user's screenshots show (0700000c `pylonshadow`, 07000012
+//! 2. The three shadow-decal objects in the artifact screenshots (0700000c `pylonshadow`, 07000012
 //!    `SHADOW_Map`/`Office-Z_shadowmaps`) parse with the game's own state [D disc data]: ALPHA_1 0x44
 //!    normal, dark vertex rgb, shape in texture alpha — the GS/ported math darkens the destination for
 //!    both. The port's material state matches the disc state; if a future fix changes what the game does
 //!    at runtime (the VU1 shadow path), these pins make the disc-state baseline explicit.
-//! 3. The cull-hole exclusion: from the user's screenshot spots, no in-frustum World static is dropped by
+//! 3. The cull-hole exclusion: from the screenshot spots, no in-frustum World static is dropped by
 //!    the renderer's sphere or cel-box culls — the "sky shows through cull holes" theory is excluded on
 //!    HEAD (the pale-blue fog colour would otherwise fill every hole).
 
@@ -50,7 +50,7 @@ fn the_subtractive_shadow_blend_maps_to_the_exact_gs_equation() {
         "world blend 2 must stay ReverseSubtract with factors (SrcAlpha, One) = Cd − Cs·As");
 }
 
-/// The two shadow-decal textures the user's artifacts draw (0700000c `pylonshadow` tex 002d:003b,
+/// The two shadow-decal textures the artifacts draw (0700000c `pylonshadow` tex 002d:003b,
 /// 07000012 `SHADOW_Map` tex 0026:005b) and their object state on the disc.
 #[test]
 fn the_artifact_decal_objects_parse_with_their_disc_state() {
@@ -117,7 +117,7 @@ fn the_artifact_decal_objects_parse_with_their_disc_state() {
 /// The A-11e sphere cull must be SOUND: every World material's bounding radius must cover its own drawn
 /// vertices (max |v − centre|). The glist radius undershoots the drawn geometry on the disc (0700000c's
 /// floor decal at (28.54, 0.33, −182.49): glist r 0.6, drawn verts reach 0.644) — an under-covering sphere
-/// lets `sphere_outside` cull draws that still have visible geometry at the frustum edge (the user's
+/// lets `sphere_outside` cull draws that still have visible geometry at the frustum edge (the
 /// pale fog-coloured patches appear where the port skips what the game draws). The game's own cull
 /// consults the bbox next to the sphere (`View_AddObjects` 0x1e62d8 passes obj+0x8c AND obj+0x80 to
 /// `Vision_InView` 0x1e89e0). Fail-first: pre-fix this reads 0.6 < 0.644 on the disc.

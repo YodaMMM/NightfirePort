@@ -298,7 +298,7 @@ use dev as _dev;
 // ── Castle gate door visibility (A-12d) ───────────────────────────────────────
 
 /// The castle gate door (placement 118, 0xE8 LOAD_LEVEL, mesh `Door_Gate8`) must be drawn in the scene —
-/// the user reported "no door to interact with at the castle gate". The mesh was filtered out by `cels_only`
+/// without it there was no door to interact with at the castle gate. The mesh was filtered out by `cels_only`
 /// (no 0x8000 CREATE_CEL bit); the A-12d fix adds a 0xE8 draw loop in scene.rs. This test asserts the mesh
 /// appears in the scene's materials (i.e. it has vertices + indices in the World layer). Sister: a level
 /// with no 0xE8 placements (e.g. 07000001) has no `Door_Gate8` mesh.

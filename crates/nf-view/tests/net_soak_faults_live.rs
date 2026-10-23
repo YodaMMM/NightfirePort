@@ -9,7 +9,7 @@
 //! 20% loss → clean to the time-limit end.
 //!
 //! Every phase asserts: the two simmed machines' per-tick hashes agree (the
-//! sandbox cannot hold four full arena sims — 2 loads = 1.75 GB fit, 4 =
+//! 3 GB test machine cannot hold four full arena sims — 2 loads = 1.75 GB fit, 4 =
 //! OOM-killed [D mp_16_slots_live.rs:119-127]; slots 5/11 run session-only,
 //! which still feeds real inputs every tick and gates the lockstep), no
 //! Desync event fires on any machine, and the match reaches its time-limit
@@ -242,8 +242,8 @@ impl Clone for PhaseStats {
 impl Copy for PhaseStats {}
 
 /// The full soak. `long` = the 30-game-minute match (NF_SOAK_LONG=1); the
-/// default is the suite's 5 game-minutes (the main agent, 2026-10-19: the 10-minute default
-/// took 939 s on the merge PC, over the suite's 900 s per-binary limit; that run passed all 8
+/// default is the suite's 5 game-minutes (a 10-minute default
+/// took 939 s on a desktop PC, over the suite's 900 s per-binary limit; that run passed all 8
 /// phases, worst input-wait 2.9 s in the 2 s stall phase).
 fn run_soak(long: bool) {
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };

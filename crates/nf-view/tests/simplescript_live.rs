@@ -1,6 +1,6 @@
 //! 0xE2 placements (`SS_Create` 0x1a9c58, "SimpleScript"): the game creates them as drawn, room-linked objects that
 //! sit at their placement until a channel activates them [M]. The port skipped them, so 07000006's barrel trap
-//! (barrels on sawhorses by the courtyard canopy) was missing (user's PCSX2 screenshot). Opt-in: NF_ISO.
+//! (barrels on sawhorses by the courtyard canopy) was missing (PCSX2 screenshot). Opt-in: NF_ISO.
 
 use nf_formats::{disc, iso9660::IsoImage, level::Level};
 

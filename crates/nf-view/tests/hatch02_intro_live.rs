@@ -1,4 +1,4 @@
-//! hatch-02-intro (task 715): "the hatch still doesn't open" (playtest 1014-1725, [intro02]).
+//! hatch-02-intro: the 07000002 intro hatch appeared not to open.
 //!
 //! What the disc says — every claim measured here through the real loaders:
 //! - 07000002's level-start NIS (`SP` placement #400, mode 1, script 0x06000084 of pack
@@ -19,8 +19,8 @@
 //!   MultiplexIn #397's AND of ch 0x29/0x2a/0x88/0x49 — no placement on any of the 52 maps
 //!   writes any of those channels (scan), so ch 0x35 can never rise.
 //!
-//! So current master already behaves like the game (grates-02, merged): E opens the bed grate
-//! and it holds the open pose; the playtest predates that merge. These tests PIN the behaviour
+//! So the port already behaves like the game (grates-02): E opens the bed grate
+//! and it holds the open pose; the symptom predates grates-02. These tests PIN the behaviour
 //! — they fail on the pre-grates-02 channel-seek tick (a ch-0 grate's playhead never moved, so
 //! the matrix stayed at key 0 forever) — plus the intro-side premises above.
 
@@ -89,7 +89,7 @@ fn the_intro_animates_no_hatch_and_ends_on_the_objective_gate() {
     assert!(moved > 0.5, "the pearl never left its first key (moved {moved:.3}) — the entity stream is dead");
 }
 
-/// The game's own answer to the playtest: from the bunker (the intro area), Bond walks to the
+/// The game's own answer: from the bunker (the intro area), Bond walks to the
 /// bed under `grill1` #440 and presses E — the hatch's transform changes by the animation's
 /// delta (the last key's pose) and holds. Sister: before the key it is closed (key 0).
 /// Fails on the pre-grates-02 channel-seek tick (the ch-0 grate never moved).

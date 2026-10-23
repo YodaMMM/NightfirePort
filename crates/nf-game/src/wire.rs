@@ -165,7 +165,7 @@ fn param(p: &Placement, k: u32) -> u32 { p.params.iter().find(|(i, _)| *i == k).
 ///
 /// Consumers: `Player_HandleJump` 0x1916b0:118–147 grabs the NEAREST wire (class 0x2C within 1000
 /// units) when the jump is pressed while +0x95F == 3 — the cable-crossing grab; `Player_Activate`
-/// 0x1a5170:67 grabs a creep wall when +0x95F == 6 (E, not this task).
+/// 0x1a5170:67 grabs a creep wall when +0x95F == 6 (E, not ported here).
 ///
 /// [D probe] 07000005 map 50 has three type-3 icons under the wire — (−23.58, 32.24, 2.65),
 /// (−23.56, 32.24, 0.21), (−23.80, 32.74, 12.33), the wire at (−23.49, 34.47, 6.26) — all param 1 = 0

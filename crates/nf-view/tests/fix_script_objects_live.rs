@@ -1,4 +1,4 @@
-//! Headless NF_ISO tests for fix-script-objects (task 289) — GAPS G-031's script-created objects:
+//! Headless NF_ISO tests for fix-script-objects — GAPS G-031's script-created objects:
 //!
 //! 1. **The `SP_Hit` mask-2 flag** (`SP_Hit` 0x1dc470, called from `SP_Update` 0x1dbda8:66 while
 //!    the countdown byte is 0): an explosion reaching one of the current script's stream objects

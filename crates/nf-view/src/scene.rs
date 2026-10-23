@@ -718,8 +718,7 @@ pub struct Sim {
     /// game's per-particle model is `gases_smoke` 0x1ab2d0: per-frame velocity damping
     /// (case 0: ×FRAME_RATE_DIV·0.95 [M :46]), gravity integration toward `_WldGravity`
     /// [M :57-61], position integration [M :62-65] and a params-driven scale accumulation
-    /// [M :66-76] — a particle sim the draw side can adopt later (visual-only; render
-    /// comparisons are the main agent's).
+    /// [M :66-76] — a particle sim the draw side can adopt later (visual-only).
     pub smoke: Vec<nf_game::light::Smoke>,
     /// The HUD's per-frame state (`fix-hud`): the weapon-name timer (`BL+0x95E`), the health pane's
     /// crouch-icon timer, the pickup message bar (pane 21) and how many `drones.taken` events it has
@@ -733,7 +732,7 @@ pub struct Sim {
     /// microcam-wheel-zoom: the mouse wheel has stepped the zoom while the aim (right) button is
     /// held — the hold-ramp to the weapon's max (`Player_Zoom` 0x1a1a70's target ×1.025/tick)
     /// yields until the aim falls, which resets the target to 1.0 [M `Player_Weapon` 0x1a24c8's
-    /// aim-bit arm] and this latch with it. A documented port-only input (the playtest request):
+    /// aim-bit arm] and this latch with it. A documented port-only input:
     /// the game's pad zoom has no wheel — the port's mouse play needs the equivalent — and the
     /// game's plain pad ramp is unchanged when the wheel is unused.
     pub zoom_wheel: bool,
@@ -742,16 +741,14 @@ pub struct Sim {
     /// page hasn't booted one. The msg-0x4b gate re-checks `Script_IsPlaying(FMVScript)`.
     pub fmv_script: Option<u32>,
     /// unported-front-end-menus-3: `Camera_Shear`'s phase (viewer+0x1e0) [M 0x1bba38:26-34] —
-    /// advances REC_FRAME_RATE per underwater frame, wrapped into [−π, π]. Field on its own
-    /// line (merge lesson 4).
+    /// advances REC_FRAME_RATE per underwater frame, wrapped into [−π, π].
     pub shear_phase: f32,
     /// unported-front-end-menus-3: the underwater post-FX byte `GlobalBlur` — 0x91 while the
     /// shear runs [M 0x1bba38:49], 0 otherwise (the port's only writer is this trigger). The
-    /// draw side reads it for the underwater blur. Field on its own line (merge lesson 4).
+    /// draw side reads it for the underwater blur.
     pub global_blur: u8,
     /// unported-front-end-menus-3: `Camera_ApplySwing`'s phase (viewer+0x204) [M 0x1bbf40:10]
-    /// — advances 2π/(FRAME_RATE·4) per swaying frame (the 4-second cycle). Field on its own
-    /// line (merge lesson 4).
+    /// — advances 2π/(FRAME_RATE·4) per swaying frame (the 4-second cycle).
     pub swing_phase: f32,
 }
 
@@ -879,7 +876,7 @@ impl HudState {
     /// (the door-hint cap of 3) and `LoadMsg` 0x30cd08 (the exit-hint cooldown) [M 0x1a7810:78-79,
     /// 195-196; 0x1a7b98-0x1a7bc8]. The app calls this on every level swap so a new level's Sim
     /// starts from the old one's counts instead of zero (the per-level reset re-showed the door
-    /// prompts on every level — user report 2026-10-21).
+    /// prompts on every level).
     pub fn carry_boot_globals(&mut self, old: &HudState) {
         self.door_msg = old.door_msg;
         self.load_msg = old.load_msg;
@@ -959,8 +956,8 @@ impl Sim {
     /// translation is the object position `Lights_CalcAmbientLight` (0x1cb178) reads. fix-render2:
     /// the old version looked the skin up through `script_entity`, which matches only `Obj::Entity`
     /// — script Anim characters (the cut-scene actors, the truck) never resolved and kept the white
-    /// 0xff sentinel, which is the user's "every cut-scene still draws characters at the old,
-    /// over-bright level" and "the 07000005 truck is too bright".
+    /// 0xff sentinel, so every cut-scene drew its characters over-bright (and the 07000005 truck
+    /// too bright).
     pub fn characters_script_pos(&self, ci: usize) -> Option<[f32; 3]> {
         let src = self.char_script.get(ci).copied().flatten()?;
         let skin_hash = (*self.char_script_skin.get(ci)?)?;
@@ -1618,7 +1615,7 @@ pub fn los_ray_clear(world: &nf_game::world::CollisionWorld, eye: [f32; 3], targ
     world.segment_hit_static(eye, to).is_none()
 }
 
-/// The near-LOS rescue (fix-portal-sweep): the playtest found 07000005
+/// The near-LOS rescue (fix-portal-sweep): 07000005
 /// `--bond 16.67,30.04,58.60,1.755,-0.001` (the snow trench between stone walls) culling the near
 /// trench walls with the walk ON. The chain there is sound per the game's own rules — the trench
 /// generics sit (per `build_link_objects_to_rooms` 0x1c9150's closest-hit owner pick, the metric
@@ -2227,7 +2224,7 @@ impl Sim {
         self.aiming
     }
 
-    /// One game tick of the free-camera playtest harness with Bond at `camera` (eye): his object
+    /// One game tick of the free-camera test harness with Bond at `camera` (eye): his object
     /// position on the collision floor below, aimed at chest height. Port harness — real gameplay
     /// input runs through `step_bond` (the `Player_Update` path); this driver stands in for the
     /// player object only in the no-Bond dev paths (`Drone_View_Bones`' chest aim).
@@ -2397,12 +2394,11 @@ impl Sim {
             if let Some(b) = live {
                 // `steer_missile` takes the game's analog units (full stick = 1.0 → π/128 per tick). The
                 // mouse delivers `turn` in radians (look in π/2 units), so convert, capped at full stick:
-                // the raw radians steered at ~3% of the game's rate (the user: guided missiles "still
-                // don't work").
+                // the raw radians steered at ~3% of the game's rate.
                 const K: f32 = 0.024_543_693;
                 // Signs: `steer_missile` SUBTRACTS (the game's raw-stick convention) while Bond's view ADDS the
                 // port's `turn`/`look` (player.rs: `yaw += turn`, `pitch += look`) — negate, so the mouse turns
-                // the rocket the way it turns Bond's view (the user: "the controls are reversed when flying").
+                // the rocket the way it turns Bond's view (not reversed).
                 let yaw_in = (-input.turn / K).clamp(-1.0, 1.0);
                 let pitch_in = (-input.look * std::f32::consts::FRAC_PI_2 / K).clamp(-1.0, 1.0);
                 nf_game::drone::steer_missile(&mut b.dir, yaw_in, pitch_in);
@@ -2432,7 +2428,7 @@ impl Sim {
         // 0x1a18e0 (the spend) → Player_WeaponInitBullet 0x1a4bf0 (the +0x95b latch, the stunner's
         // target test) → Player_CollisionHandler 0x1949a8:189-191 → Player_MuzzleFlash 0x1a4298 →
         // Draw_LaserBeam/Draw_TaserBeam — everything rides the refire that actually spent a round,
-        // so at clip 0 the beam stops (the user's PCSX2 capture) and nothing burns while switching.
+        // so at clip 0 the beam stops (PCSX2 capture) and nothing burns while switching.
         // fix-laser-watch-look: the laser watch's held meter — a tick where the beam ran drains the
         // 0–100 charge ~31/s [D docs/live/2026-10-14-weapon-measurements-pcsx2.md "The laser watch
         // 0x4e": 100 → 59 over ~1.3 s, ≈0.5/frame]; idle ticks refill it — the game's gadget regen
@@ -2516,8 +2512,7 @@ impl Sim {
         // The right mouse button is the scope/aim button for the mouse (lib.rs sets `scope` and `zoom`): it drives the
         // aim bit (the raise, then the zoom) exactly like the pad's aim button; only the pad's button also
         // enters free-aim (the cursor window), since the mouse aims directly (D-002).
-        // The user (2026-10-14): right-click must not put an unscoped gun into the aim stance ("why is manual aim a
-        // thing"). The mouse button is a SCOPE button: it reaches the aim bit only on a weapon with a scope
+        // Right-click must not put an unscoped gun into the aim stance. The mouse button is a SCOPE button: it reaches the aim bit only on a weapon with a scope
         // (weapon_data +0x68 bit 0x40, the pad path's `scoped` [input.rs]); on every other weapon it does nothing.
         let scoped = self.weapons.records.get(self.gun.weapon as usize)
             .and_then(|w| w.get(0x68..0x6c)).map_or(false, |b| u32::from_le_bytes(b.try_into().unwrap()) & 0x40 != 0);
@@ -2827,7 +2822,7 @@ impl Sim {
             // icon's own world-sphere radius, e.g. 07000008's "Hand_Over_Hand" r 1.164 [D probe]) and
             // tests the player's FindCel cel [M build_FindCel 0x1c8cb0: room cels + the collision
             // tie-break, `find_cell_raycast`] against it. The old flat 12.0-unit radius armed through
-            // walls — the 07000008 playtest: walking into the guardhouse wall and jumping threw Bond onto
+            // walls — on 07000008, walking into the guardhouse wall and jumping threw Bond onto
             // the zipline across it (the icon sits 1.9 from the wall on the far side); the r-1.164 sphere
             // crosses no portal there, so the wall keeps the contexts apart exactly as the cel graph lays
             // them. **Port cull (documented, evidence below — not a guess)**: the port's cel buckets are coarser than the game's cels — the
@@ -2852,8 +2847,8 @@ impl Sim {
             //   measured pins all sit the right side of 3.333: the crawl out-point is 3.28 from
             //   icon[1] (arms), the grapple spot 8.17 from icon[3] (silent), the gate door 24.06
             //   (0xFF). The old [S] 6.0 window measured Bond's FEET, not the sphere centre, and
-            //   reached ~1.8× past the game's shell — the user's "its interaction prompt area is a
-            //   bit too large. Like I'm walking away from it and I still see it" (05 trench ledge).
+            //   reached ~1.8× past the game's shell — the prompt stayed up while walking away
+            //   (05 trench ledge).
             self.bond.icon_ctx = 0xff;
             let bond_cell = find_cell_raycast(&self.cel_graph, self.bond.pos, Some(&self.world));
             for (ii, icon) in self.icons.iter().enumerate() {
@@ -2939,7 +2934,7 @@ impl Sim {
                 self.hud.info_labels.push_back((h.label, 180.0));
                 if h.sound != 0 { self.drones.audio.play3d(h.sound, self.bond.head(), None); }
             }
-            // No walk-in or use-key wire grab (main agent at the fix-wire2 × walkreal-b2 merge): the game's
+            // No walk-in or use-key wire grab: the game's
             // grab that is certain is the JUMP grab [M Player_HandleJump 0x1916b0:107-147 — action 7 is the
             // jump (the same press plays the refused-jump sound 0x1db on 07000007), with the icon context
             // +0x95F == 3], ported in `Bond::physics_tick`. E is action 0xE → `Player_Activate` 0x1a5170, which
@@ -3135,8 +3130,8 @@ impl Sim {
         // 1.65 — EXCEPT while the CLIMB substate (1) runs, where it is 0.4125 and the step is the fixed
         // `Sound_Play3D(0x286)` at Bond (the rung sound); every other step is `Effect_Create(…, foot|0x42)`
         // → the floor surface's footstep (`EffectInfo+0x16`) at the floor point, AI alertness 0
-        // (`Sound_SetAlertness(0)` [M]). fix-ladder2: the port had the 0.4125/0x286 pair on CROUCH — the
-        // user's "rapid footsteps on metal" while crouch-walking. The game's crouch steps run the normal
+        // (`Sound_SetAlertness(0)` [M]). fix-ladder2: the port had the 0.4125/0x286 pair on CROUCH — rapid
+        // footsteps on metal while crouch-walking. The game's crouch steps run the normal
         // 1.65 surface path; the crouch anim's smaller per-tick displacement slows them naturally.
         // *Suggested*: the distance is Bond's movement per tick (horizontal; 3D while climbing, where the
         // game's `anim+0xD8` follows the climbing anim up the rungs).
@@ -3148,7 +3143,7 @@ impl Sim {
             // The swim gate [M]: the game's step is `Effect_Create` off the CACHED ground hit
             // (0x1ce688:63 early-outs unless `(hit+0x50 & 0x3f) != 0`); the swim capsule (0x194df0
             // case 3) hangs under the surface and never touches the pond bed, so swimming plays NO
-            // footstep (the user's "I could hear my footsteps too"). The port's floor ray still
+            // footstep. The port's floor ray still
             // finds the bed mid-pond, so the substate is the gate here.
             self.step_dist += moved;
             let stride = if climbing { 0.4125 } else { 1.65 };
@@ -3217,7 +3212,7 @@ impl Sim {
                 // microcam-wheel-zoom: a wheel notch while the aim is held steps the zoom target
                 // ×2 (up) / ÷2 (down) within the weapon's own range [1.0, weapon_data+0x88 — the
                 // max `Player_Weapon` writes to BL+0x8D8]. The ×2 step is port-only design, not a
-                // game claim (the playtest request): the PS2 pad has no wheel, and the game's own
+                // game claim: the PS2 pad has no wheel, and the game's own
                 // zoom is continuous — `Player_Zoom` 0x1a1a70 ramps the held target ×1.025/tick
                 // [M 0x1a1a70:22-39]. Once the wheel has stepped, the hold-ramp
                 // to max yields (`zoom_wheel`) so the notch stays until the aim falls.
@@ -3352,8 +3347,8 @@ impl Sim {
     }
 
     /// The wall-shimmy's third-person tracking camera (`Player_PositionCamera` 0x18f5d8 case 0xb →
-    /// `camera_tracking` 0x1ba5e0), Some only while the creep substate (7) runs — the user's "when I
-    /// entered a prompt it was in first person. should be 3rd person". Position, yaw, pitch (radians,
+    /// `camera_tracking` 0x1ba5e0), Some only while the creep substate (7) runs (third person, not
+    /// first). Position, yaw, pitch (radians,
     /// the window's Camera convention) and the FOV factor 1.0 (`viewer+0x108 = 1.0` [M 0x18f5d8:233]).
     ///
     /// The game, per creep tick [M 0x1ba5e0:69-110]:
@@ -3906,9 +3901,7 @@ impl Sim {
             // ((*(uint *)(weapon_data + iVar4 + 0x68) & 0x100400) != 0)) { uVar8 = weapon+0x6c; } else
             // { Player_SetFiringAnim(...) }`]. Without this gate a held gadget whose fire script has a
             // release frame (the Q-Laser's +0x44 = 20) restarts the script every refire tick, the frame
-            // never reaches the release, and the shot only spawns after the button comes up — the
-            // user's "when I let go, they actually release and actually do what they're supposed to do
-            // briefly".
+            // never reaches the release, and the shot only spawns after the button comes up.
             let was_fire_state = self.gun.fire_state;
             let rd0 = |o: usize| u32::from_le_bytes(w[o..o + 4].try_into().unwrap());
             // The gun's animation is busy while a fire script plays (gun state 9; idle = 0), and the
@@ -3992,7 +3985,7 @@ impl Sim {
             // `Player_SetWeaponAnimObj` 0x1a2e38:41-44 RESETS +0x93a on such ticks instead of
             // counting. The port never reset the counter on input, so in play (walking, aiming)
             // it climbed past the 15/45 thresholds and the side lights went dark 0.75 s into any
-            // move — the user's "lights on the aim 20 arent on". The same block owns +0x93e
+            // move. The same block owns +0x93e
             // (`aims_raise`, the bone-9 light's gate [M 0x1a5460:275-281]): decremented while the
             // view is idle (0x1a2e38:47-50), refilled to 1200 on every non-idle tick (0x1a2e38:54-57;
             // [L ee_start_05 BL+0x93e = 1200]).
@@ -4030,7 +4023,7 @@ impl Sim {
                 // The hold applies to the laser/stunner family too (+0x68 & 0x400, +0x44 = 0): measured in PCSX2
                 // (07000005, held 1.5 s, per frame) the stunner's fire script plays 1→11 once and HOLDS at its last
                 // frame while held (the laser 1→16), with the meter draining every frame — no restart. The port's
-                // per-refire re-queue kept restarting the push-forward (the user: "still not pushing forward").
+                // per-refire re-queue kept restarting the push-forward.
                 if script != 0 && !(was_fire_state && flags & 0x100400 != 0) {
                     self.view_script = script;
                     // [M `Player_WeaponFiring` 0x1a5460:676-685]: a record with +0x6C & 0x400 and a +0xB4
@@ -4038,7 +4031,7 @@ impl Sim {
                     // (`*(script + 0x98) = 0x3fc00000`) — the hand grenades 0x34..0x37 [L +0x6C 0x8c08/0x8c0a].
                     // Measured in PCSX2 (07000015, the frag): script time +1.5 per frame from the press,
                     // frame 26 (the release, +0x44) at +17 frames. At 1.0 the port released at +25 with the
-                    // hand still on the pin (the user's report, four rounds).
+                    // hand still on the pin.
                     let speed = if rd(0x6c) & 0x400 != 0 && rd(0xb4) != 0 { 1.5 } else { 1.0 };
                     (self.view_time, self.view_speed) = (0.0, speed);
                 } else if script != 0 && was_fire_state && flags & 0x400 != 0 && fire_anim_len == 0 {
@@ -4130,8 +4123,8 @@ impl Sim {
                         // stop the game runs `Player_ReloadAmmoType(player, 1)` — the refill lands
                         // HERE, before the draw — then queues the draw (state 3). Without it the clip
                         // sat 0 until the next idle tick's auto-reload branch, and the press that
-                        // came during the draw hit an empty clip and did nothing (the playtest's
-                        // "heavy delay between me being able to throw multiple"). The dry arm
+                        // came during the draw hit an empty clip and did nothing (a long delay
+                        // between throws). The dry arm
                         // (Player_HandleHasNoAmmo :524-543) stays with the auto-reload path below.
                         let p = nf_game::gun::GunParams::from_record(w, self.drones.inventory.fire_mode.get(self.gun.weapon as usize).copied().unwrap_or(0) as usize, |h| scripts.get(&h).map(|s| s.length as u32));
                         self.gun.reload_one(p);
@@ -4243,8 +4236,7 @@ impl Sim {
             // compares against `+0x44` is the +0xB4 script's, which starts at 1.0 [M AnimScriptInit
             // 0x1c1600:37] and advances 1.0/tick [M AnimScriptTick 0x1c2630 mode 0]. The port ran case 9's
             // check during the fire script itself: the frag (fire 70 frames at 1.5×, +0x44 = 26) released at
-            // press+17, mid-wind-up — the playtest's "flying out way too soon, they don't let the animation
-            // finish". The gate below (the view is on the +0xB4 script) is the case-0xb → case-0xc phase.
+            // press+17, mid-wind-up, before the animation finished. The gate below (the view is on the +0xB4 script) is the case-0xb → case-0xc phase.
             let release_family = rd(0x6c) & 0x400 != 0 && rd(0xb4) != 0;
             let release = if fire_anim_len == 0 { fired }
                 else if release_family { self.view_script == rd(0xb4) && self.gun.release_frame_reached(self.view_time, fire_anim_len) }
@@ -4274,12 +4266,12 @@ impl Sim {
                             // makes no noise — the held Stunner's 0x0600048a has none [D], and the old hardcoded
                             // "every other weapon is a P2K shot" table fed a 0x403 gunshot (weight 65) every tick of
                             // the hold: the tased guard maxed his alertness, reacted in 0 ticks and shot Bond before
-                            // the tase could drop him (playtest 1016).
+                            // the tase could drop him.
                             if let Some(e) = self.sfx.as_ref().map(|t| t.get(id)) { self.drones.hear(camera, e); }
                             if std::env::var_os("NF_SOUNDLOG").is_some() { eprintln!("tick {}: gun script {:08x} frame {f}: sound {:#x} (remapped from {:#x} for weapon {:#x}, looped {looped})", self.drones.frame, self.view_script, id, c.args[1], wid); }
                         }
                     }
-                    // fix-gadgets2, the user's "the sounds keep playing after you stop": `AnimProcessScriptCmds`
+                    // fix-gadgets2 (the sounds kept playing after the stop): `AnimProcessScriptCmds`
                     // op 4 sub-op 3 is `Sound_StopAllWithId(cmd[3])` [M 0x1c1b38:388] — the fire scripts stop
                     // their own loop sounds at a scripted frame. The port played the op-1 starts and dropped
                     // the op-4.3 stops, so every gadget loop (the watch-laser burn, the decryptor decode) leaked
@@ -4300,7 +4292,7 @@ impl Sim {
                 // BEFORE `Player_RoundToFire` — the aim target (the 50-unit crosshair ray's first
                 // hit, `Check_Target` 0x1a7810) must be a lock (type 0x3a) of record kind 0/2 in
                 // state 0/5, within the weapon's own `weapon_data+0x1C` (2.0/4.0 [L]); else the
-                // function returns and the decryptor does NOTHING — the playtest 1017 symptom. On
+                // function returns and the decryptor does NOTHING. On
                 // the pass the shot runs (the scan bullet, class 5 [M Bullet_init 0x12c5a0:87]) and
                 // `Lock_Update`'s contact scan decodes (docs/systems/decryptor.md). The port's pick
                 // below, then one +1/+3 scan tick, IS the game's per-press count: the scan bullet
@@ -4396,7 +4388,7 @@ impl Sim {
                 // latch makes the next tick's Player_CollisionHandler 0x1949a8 call Player_MuzzleFlash
                 // 0x1a4298, which re-casts the muzzle→aim ray and draws the beam [M 0x1a4298:107-137]).
                 // Gating on `release` is also the CLIP gate: at clip 0 `update_with` never fires and
-                // the beam stops (the user's capture). The old top-of-tick block burned and beamed on
+                // the beam stops (PCSX2 capture). The old top-of-tick block burned and beamed on
                 // the raw trigger — including through the draw/switch cycle and with an empty clip.
                 if nf_game::gadget::runs_beam(self.gun.weapon) {
                     let is_stunner = matches!(self.gun.weapon, 0x4a | 0x4c);
@@ -4465,8 +4457,7 @@ impl Sim {
                 // +0x70 = 0x2 [L ee_start_05.bin @ 0x2bf150 + 0x11·0x10C]) flies its lobbed arc as a
                 // plain bullet — its wall hit is the standard impact effect (flags 0x61) and a DEAD
                 // bullet (state 2, no bounce/stick/ricochet bit set) [M 0012ce80]. The old gravity-only
-                // gate made the port's bolt a bouncing grenade — the playtest's "sounds like a grenade
-                // is bouncing … bounces against the wall when it shouldn't be bouncing" (1015-1738).
+                // gate made the port's bolt a bouncing grenade that bounced off walls.
                 // Record sweep [L ee_start_05.bin]: this gate moves exactly record 0x11 off the grenade
                 // path; every other gravity record (0x2a/0x2b/0x34–0x37/0x3a–0x3c/0x45) carries 0x4,
                 // 0x80 or 0x100 and keeps today's routing.
@@ -4633,8 +4624,8 @@ impl Sim {
                         // The player arm [M 0x12f678:88-99]: `AnimGetBoneWorldTrans(BL+0x7e8, 1, 0, pos, MATRIX)` —
                         // DATUM 1 (a non-negative id is a datum [M 0x1c3120]); the 0x40000 alternating records with
                         // `BL+0x958 == 0` use datum 5 (the other gun). The view model's origin (`gun_matrix`) sits
-                        // ~0.43 behind the eye: shells ejected there spawned at the camera — "big on my screen, but
-                        // I can't really see them" (the user, 1015-0046).
+                        // ~0.43 behind the eye: shells ejected there spawned at the camera, huge on screen but
+                        // unreadable.
                         let alt = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap()) & 0x40000 != 0 && self.gun.alt_fire_toggle == 0;
                         self.drones.eject_gun = Some(self.view_datum_matrix(if alt { 5 } else { 1 }).unwrap_or_else(|| self.gun_matrix()));
                         // rocket-origin: the bullet's start is the head, moved to the MIDPOINT of the head and the
@@ -4692,7 +4683,7 @@ impl Sim {
         // 0x1a2cc0 copies the request (+0x63) into it at the switch's START (the `weapon_data[+0x64].+0xc4
         // == 0` arm — +0x64 is 0x47 from InitWeapon 0x1a7ef8:137-139), so mid-holster the AI already reads
         // the TARGET weapon: at the party Bond reads as the fists (unarmed, class 1) from the first tick,
-        // not as the carried P2K for the ~100 switch ticks (playtest item 1: the entrance bouncers shot).
+        // not as the carried P2K for the ~100 switch ticks (the entrance bouncers shot).
         self.drones.bond_weapon = if self.gun.switch_state != 0 && self.gun.switch_request != 0x47 {
             self.gun.switch_request
         } else {
@@ -5048,7 +5039,7 @@ impl Sim {
         // The beam: start = the FP model's bone-4 sight datum (AnimGetBoneWorldTrans +0x7e8, 4, 0),
         // direction = the bone matrix's local +Z (rows are the axes — tracer_matrix) scaled 100
         // (0x1a65d8:104-127), ray from the HEAD (Player_GetHeadPos) with the bit-0x8 query —
-        // Collide_RayIntersect 0x1ec690's u32 = 8 drops pass-flagged hits (docs/reports/foliage-bullets.md);
+        // Collide_RayIntersect 0x1ec690's u32 = 8 drops pass-flagged hits;
         // the end clamps to the hit (0x1a65d8:129-141) and the red dot sits hit + normal·0.01, aligned
         // to the normal (0x1a65d8:189-205). Player_WeaponFiring 0x1a5460:88-98 hides the sprites every
         // frame first — a None here is exactly that hidden state.
@@ -5311,8 +5302,7 @@ impl Sim {
         // fix-objective-banner: the drain used to sit behind the frozen check and play the SFX as
         // the event landed, so on 07000007 the Kimiko trigger's ch 0x48 announced (and played
         // 1532+469) on the trigger tick — one tick before the scene's `Script_CameraStart` set the
-        // freeze — which the user heard as "obj doesnt wait for kimiko cutscene and plays the
-        // sound immediately".
+        // freeze — so the objective sound played before the Kimiko cut-scene.
         let mut events = std::mem::take(&mut self.drones.mission_events);
         for ev in events.drain(..) {
             match ev {
@@ -5365,8 +5355,7 @@ impl Sim {
                         // interludes ride the same code [M 0x1d3560]). The host runs the end
                         // sequence (`mission_ended` → outro → results); the driving return is
                         // still stashed for the hub. Missing glue before 2026-10-15: a finished
-                        // mission only logged "not ported" — no outro, no results (playtest
-                        // 1015-2231 "beginning and ending mission cutscenes are missing").
+                        // mission only logged "not ported" — no outro, no results.
                         if nf_game::ptp::is_driving_interlude(next) {
                             self.ptp_handover(next);
                             // The handover's hub resume (0x7000048) is the end sequence's job now:
@@ -5387,7 +5376,7 @@ impl Sim {
         }
         // `Text_UpdateMsg` 0x1b11d8: time −= 1 per frame, delete at ≤ 0 — but the viewer's +0x2a HUD
         // flag returns early while a cut-scene camera runs [M 0x1b11d8:16-18], freezing every message
-        // until the NIS ends (playtest item 5). The port: no countdown and no bar close while frozen.
+        // until the NIS ends. The port: no countdown and no bar close while frozen.
         if self.drones.hud_frozen {
             return;
         }
@@ -5396,8 +5385,7 @@ impl Sim {
         // node (`*param_3` — the out-param the pane state machine 0x19c310 re-looks-up on expiry),
         // so a message queued behind another keeps its FULL life until it reaches the front; the
         // port used to tick every member in parallel, which expired the queued texts before they
-        // ever showed — they flashed past one per frame once they surfaced (playtest 1016-1355,
-        // "the hints are being displayed at 1,000 miles an hour", 07000005).
+        // ever showed — they flashed past one per frame once they surfaced (07000005).
         if let Some(m) = self.hud.msgs.front_mut() {
             m.time -= 1.0;
             if m.time <= 0.0 { self.hud.msgs.pop_front(); }
@@ -5498,7 +5486,7 @@ impl Sim {
     /// 0x1a5460:155-194): the scanning lock's index, progress (`obj+0xf6`, the +1/+3 accumulator)
     /// and solved digit count (`DAT_002a37e3`) — `None` when no scan runs. The unsolved digits'
     /// randomization is the game's `Rand_Rand(10)` cosmetic [M 0x1ae3d8:351-363] — the port does
-    /// not draw it (no RNG draws added; the main agent's render compares against PCSX2).
+    /// not draw it (no RNG draws added).
     pub fn decryptor_scan(&self) -> Option<(usize, u32, u8)> {
         self.drones.locks.iter().position(|l| l.scanning)
             .map(|i| (i, self.drones.locks[i].scan_progress, self.drones.locks[i].scan_solved))
@@ -5530,7 +5518,7 @@ impl Sim {
 
     /// The falling drops as camera-facing quads (`DrawDrops` → `psiDrawParticleList(0.2, …, 0x808080, 0x03000045)`:
     /// GS sprites, colour (63, 63, 63, 127) × texture, additive, depth-tested without writing). The GAME'S SIZE RULE
-    /// for the main agent's render pass: DrawDrops passes colours = NULL, so psiDrawParticleList takes the NON-colour
+    /// for the render pass: DrawDrops passes colours = NULL, so psiDrawParticleList takes the NON-colour
     /// creator, which never reads the 0.2 [M disasm 0x18cc1c-30 mtc1 0.2/`move $t0, $zero`/jal; 0x122d50 `beqz $s4 →
     /// CreatePointerSpriteList 0x11a160`] — the flake scale there is `1/(PS2SnowSize · PS2SnowSizeMult)` [M 0x11a160:81],
     /// PS2SnowSize level-set (28988/12378/19746 for 0x07000005/6/8 [M 0x11e2e8:32-46]) and PS2SnowMult = 448/viewport-H
@@ -5553,8 +5541,8 @@ impl Sim {
     /// The emitter particles as camera-facing quads (`Emitter_Draw` 0x17b708 path A →
     /// `psiDrawParticleList` 0x122d50: a size-`def.size` rgba sprite per alive slot). The game sizes
     /// the sprite in screen space (`4·size / (PS2ParticleSize · PS2SnowSizeMult)`) — the port
-    /// takes the def size as the world-space half-extent, the way the snow quads do. The GAME'S SCALAR for the main
-    /// agent's render pass, EXACT [M 0x119910:81 `pDMA[4] = (uint)((1.0/(PS2ParticleSize·PS2SnowSizeMult))·4.0·size)`
+    /// takes the def size as the world-space half-extent, the way the snow quads do. The GAME'S SCALAR for the
+    /// render pass, EXACT [M 0x119910:81 `pDMA[4] = (uint)((1.0/(PS2ParticleSize·PS2SnowSizeMult))·4.0·size)`
     /// — a VU1 sprite scale word next to the ST=1.0 constants]: PS2ParticleSize = Ps2Far1·0.002386635 [M 0x11e2e8:67],
     /// PS2SnowSizeMult = (1/viewer+0x108)·(1/(viewport-H·0.002232143)) = 448/H [M 0x10b2b0:100-112] — ∝ 1/far and
     /// ∝ viewport height, i.e. a FIXED SCREEN-SPACE size, not a world extent; the ±size/2 world-space reading is the
@@ -5649,7 +5637,7 @@ impl Sim {
     /// The first-person gun's matrix (`Player_SetWeaponAnimObj` + `Player_PositionGun` 0x1a3b40): the gun turns toward
     /// the crosshair — pitch `cy·(π/6)`, yaw aspect·`cx·(π/6)` (G+0x50 / +0x54, zoom 1) — about the view-space point
     /// (0, −0.2, 0.5): position = eye + (offset `+0xE0` + bob + (0, 0.2, −0.5))·R_gun + (0, −0.2, 0.5)·R_view. The
-    /// rotation order and signs, THE GAME'S EXACT RULE for the main agent's render comparison
+    /// rotation order and signs, THE GAME'S EXACT RULE for render comparison
     /// [M disasm 0x1a3b40-0x1a3c20]: the gun object's rotation is `objmat · RotX(−(BLData+0x8a8)·π/2) ·
     /// RotMatrixZYX(euler)` — RotMatrixZYX 0x1e25a8 (R = Rz·Ry·Rx) on GUN+0x50..0x5b (GUN =
     /// *(BLData+0x7e8)), where Player_WeaponRecoil writes euler X = −(BLData+0x124)·(π/6)/zoom
@@ -5659,7 +5647,7 @@ impl Sim {
     /// and added to the head + gunRot·(GUN+0x30) [0x1a3bec-0x1a3c20]. The port builds the same
     /// orientation by turning the view basis (`fwd` by yaw about up, then pitch about the turned
     /// right) instead of the euler product — the turned-forward construction stands in for the
-    /// matrix product (visual only; the main agent's render owns the sign/order check).
+    /// matrix product (visual only; the sign/order check is a render check).
     pub fn gun_matrix(&self) -> [[f32; 4]; 4] {
         let w = &self.weapons.records[self.gun.weapon as usize];
         let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
@@ -5755,8 +5743,8 @@ pub struct Attachment {
     /// 0x06000A3B).
     pub script: Option<(u32, u8, u32, u8)>,
     /// `Some(bone)`: one of the AIMS-20's four side lights (`Player_WeaponFiring` 0x1a5460:256-360
-    /// attaches mesh 0x2000132 to the view model's bones 8..0xB every tick — the user's "row of RED
-    /// lights, lit"). fix-gadgets-live; the blink/off arms live in `frame_state`.
+    /// attaches mesh 0x2000132 to the view model's bones 8..0xB every tick — a row of lit red
+    /// lights). fix-gadgets-live; the blink/off arms live in `frame_state`.
     pub aims_light: Option<u8>,
     /// `Some(slot)`: a gas/smoke puff (`Gas_Init` 0x1aacc8) showing `sim.drones.gas.puffs[slot]` —
     /// a billboarded `smoke_1_dust` quad scaled by the puff's scale, faded by its rgba.
@@ -5771,8 +5759,7 @@ pub struct Attachment {
     pub effect: Option<(u8, usize, u32)>,
     /// fix-silencer-visual follow-up: the silenced twins' +0x7C tube. `Player_WeaponFiring` 0x1a5460:96-110 clears
     /// datum 0 while the view anim is in state 8 (the swap/holster) — the swap anim screws its own part-bone 43
-    /// piece on — so the tube hides during the swap (the user: "it looks like it's already on and you're screwing
-    /// it on tighter").
+    /// piece on — so the tube hides during the swap (otherwise it looks already attached while being screwed on).
     pub silencer: bool,
     /// delta-repeater: one of the Delta Repeater's three loaded-bolt slots — the datum id 4/5/6
     /// the quiver arm attaches the bolt mesh (`weapon_data+0x5C` = 0x0200816) to, per the bolt
@@ -5958,7 +5945,7 @@ pub struct Scene {
     /// camera-facing — the drawn rotation is the VIEWER's, with the interp's translation and the
     /// interp scale (`obj+0xE8`, the key scale × the script scale, e.g. the blast radius). The
     /// explosion script 0x0600052's puffs are such meshes; drawn with the raw interp matrix they
-    /// sit in their authored plane and read edge-on as "a very thin wall" (playtest 1014-1725).
+    /// sit in their authored plane and read edge-on as a very thin wall.
     /// Collected at build time (the parsed level is not kept on the Scene).
     pub script_billboards: std::collections::HashSet<u32>,
     pub bounds: ([f32; 3], [f32; 3]),
@@ -5982,7 +5969,7 @@ pub struct Scene {
     /// How many grapple-point (0x3A) placements got a World-layer instance (fix-grapple-hook's
     /// draw sweep). The game draws each point's pulley mesh exactly once through the dynamic-object
     /// path [M View_DrawObjList 0x1e69a0 → View_DrawObjectGlist 0x1e6780]; 0 on a level with 0x3A
-    /// placements means the hooks are invisible (the user's symptom).
+    /// placements means the hooks are invisible.
     pub grapple_hooks_drawn: usize,
     /// Models-misc: how many static dynamic entities got a World-layer instance, per placement kind
     /// (`misc_static_sweep` in `build`). Zero for a kind the census says the level carries means the
@@ -6180,7 +6167,7 @@ fn add_instance(level: &Level, inst: &Instance, layer: Layer, character: Option<
     // [M View_DrawObjList 0x1e69a0:73-81 → Lights_CalcClosestLights(obj+0x80, obj+0xF0)]; the shared
     // `[0; 3]` key merged every character with the same texture into ONE draw lit at ONE centre (the
     // last instance's — the bind-time origin for script actors), so cut-scene faces got no point lights
-    // (the user, 2026-10-16: "work on character lighting. especially in cutscenes"). The tag SKIN_TAG in
+    // (flat-lit cut-scene characters). The tag SKIN_TAG in
     // slot 2 lets the material build recover the (character, attachment) pair.
     let ikey = if matches!(layer, Layer::World) { centre.map(f32::to_bits) }
         // Keyed per CHARACTER only: an attachment (the held gun) lights with its owner, and the pools that
@@ -6218,7 +6205,7 @@ fn add_instance(level: &Level, inst: &Instance, layer: Layer, character: Option<
         // glist sphere is exact, but the glist radius can undershoot the drawn geometry [D 0700000c.bin: the
         // floor decal at glist centre (28.54, 0.33, −182.49) carries r 0.6 while its drawn verts span a
         // 1.1×0.9×1.0 box — half-diagonal 0.87]. A too-small sphere drops draws whose geometry IS in the
-        // frustum (the user's pale fog-coloured patches: the skipped quad uncovers the fog-coloured clear).
+        // frustum (pale fog-coloured patches: the skipped quad uncovers the fog-coloured clear).
         // The game's own cull consults the bbox as well as the sphere (`View_AddObjects` 0x1e62d8 passes
         // obj+0x8c sphere AND obj+0x80 bbox to `Vision_InView` 0x1e89e0), so the group's real bound belongs
         // in the test: every batch expands its group's radius to cover its transformed verts.
@@ -6346,7 +6333,7 @@ fn tracer_matrix(b: &nf_game::bullet::Bullet) -> Mat4 {
 /// atan2 pair, spin per-tick on the same fields) matches the game's convention field-for-field; what it stands in
 /// for is the SOURCE vector — the game eulers the bone's forward, the port the eject velocity (the port's eject
 /// origin/basis is already a documented stand-in, docs/atlas/effect.md), so the initial attitude can differ by the
-/// weapon's eject-offset angle. Euler→matrix order for the main agent's render check: the game's object euler path
+/// weapon's eject-offset angle. Euler→matrix order for the render check: the game's object euler path
 /// is the RotMatrixZYX family [M RotMatrixZYX 0x1e25a8], the port's `object_matrix` z-row (sin ry, −sin rx·cos ry,
 /// cos rx·cos ry) is that same Z·Y·X shape.
 fn casing_matrix(c: &nf_game::casing::Casing) -> Mat4 {
@@ -6354,8 +6341,8 @@ fn casing_matrix(c: &nf_game::casing::Casing) -> Mat4 {
     // the in-flight reconstruction degenerates to pitch −π/2 (every shell planted nose-down), so a
     // rest draws with its own settled attitude: roughly horizontal (the eject-reconstruction maps
     // the euler's forward onto the shell's long axis), deterministically yawed by position so a
-    // pile of kept shells doesn't all lie identically. No RNG (determinism); the main agent's
-    // render check owns the look.
+    // pile of kept shells doesn't all lie identically. No RNG (determinism); the look is a
+    // render check.
     if c.resting {
         let yaw = c.pos[0] * 0.7 + c.pos[2] * 1.3;
         return nf_formats::placement::object_matrix([0.12, yaw, 0.08], c.pos);
@@ -6408,7 +6395,7 @@ fn z_basis(dir: [f32; 3], pos: [f32; 3]) -> [[f32; 4]; 4] {
 /// newest-first [M `control_link_object_to_cel` 0x1346b8 prepends], so a full ring reuses the OLDEST-ADDED
 /// entries: the game keeps the NEWEST 512 objects per view. The pre-fix pool showed only the FIRST 8 grenades
 /// — with the stuck hats holding slots for their 1500-tick life [M 0x12e7b0:363-371], every later throw flew
-/// INVISIBLE (the user's "if you throw enough of them, you stop seeing them flying in the air"); the slot
+/// INVISIBLE; the slot
 /// mapping below is therefore newest-first, so an overflow drops the oldest exactly like the ring.
 const GRENADE_SLOTS: usize = 512;
 /// Bond's live projectiles drawn at once (rapid fire keeps 100+ rockets in the air; the game draws
@@ -6773,8 +6760,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // Bug 3 diagnostic (`NF_COLL=1`): log objects that have collision but are not drawn — the "invisible walls".
         // An object is an invisible wall if it has collision triangles but: it's skipped by the cel pass (flag 0x10),
         // it's a door/searchlight/corona that the static pass skips (drawn elsewhere — but if those paths also skip
-        // it, it's invisible), or its gfx leaves are all empty (no visible mesh). The user can then check the named
-        // object against PCSX2 to see if the game hides, destroys or never creates it.
+        // it, it's invisible), or its gfx leaves are all empty (no visible mesh). The named object can then be checked
+        // against PCSX2 to see if the game hides, destroys or never creates it.
         let coll_debug = std::env::var_os("NF_COLL").is_some();
         let mut invisible = 0;
         // The list-0 key (`Material::chain`/`Material::node`): `View_AddCels` (0x1e6ba0, disassembled)
@@ -7079,7 +7066,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // extra bone 43 = 0x02000842 [D]; likewise 05000047→0x020001f2, 05000050→0x020005b2,
                 // 050000a8→0x0200099d, 050000a9→0x020009a3, all bone 43). Drawing it here as well as
                 // the datum attach doubled the mesh's additive sheen batch (ALPHA_1 0x7f00000048 [D])
-                // — the user's "weird white thing" on attachments. Skip the extra whose hash is the
+                // — a white artifact on attachments. Skip the extra whose hash is the
                 // record's +0x7C; the twin arm (0x1a5460:111-118) and the datum attach keep the bare
                 // twin bare and the silenced twin with exactly one suppressor.
                 let r = &wd.records[wid as usize];
@@ -7100,8 +7087,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
                 // fix-gadgets-live: the AIMS-20's four side lights [M Player_WeaponFiring 0x1a5460:256-360 —
                 // for the records whose class halfword (+0x02) is 0x1a/0x1b, `AnimDatumSetEntity(animobj,
-                // bone, 0x2000132, 0xff)` runs every tick on bones 8..0xB: the gun's row of red lights, the
-                // user's "lights on the AIMS-20 aren't on"]. The port attaches the mesh to the same bones;
+                // bone, 0x2000132, 0xff)` runs every tick on bones 8..0xB: the gun's row of red lights]. The port attaches the mesh to the same bones;
                 // the blink/off arms (idle > 15 → bone 8 blinks on GameState+0x76 % 40's 20/40 duty; idle
                 // > 45 → all four off) live in `frame_state` off `drones.aims_idle`. The bone-9/10/11
                 // extra gates (+0x93e / +0x2fc / +0x2f0) are unmeasured — live check in the report.
@@ -7112,7 +7098,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // datum 0 is the same call): each datum carries its own bone and local q/t, and
                         // `AnimObjectDraw` 0x1c4490 draws the entity at `QuatTransToMat(datum.q, datum.t) · bone
                         // world`. Treated as raw bone indices with no local, the four quads sat ~1.3 units from the
-                        // receiver — off the gun, never seen (the user: "lights I still don't show on it").
+                        // receiver — off the gun, never seen.
                         for id in 8u8..=11 {
                             let Some(dt) = skin.datums.iter().find(|d| d.id == id as u32 && d.bone >= 0) else { continue };
                             let linst = Instance { map: lmap, object: lobject, matrix: ident, placement: placement.clone() };
@@ -7121,9 +7107,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         }
                     }
                 }
-                // fix-silencer-visual: the silenced twins' view-entity — the silencer MESH the user
-                // doesn't see ("The suppressor still stays on the gun, but visually it's not
-                // there"). While the HELD record's flags (+0x68) carry 0x800, `Player_WeaponFiring`
+                // fix-silencer-visual: the silenced twins' view-entity — the silencer MESH (the
+                // suppressor stayed on the gun in the sim but did not draw). While the HELD record's flags (+0x68) carry 0x800, `Player_WeaponFiring`
                 // 0x1a5460:96-110 attaches the mesh at weapon_data+0x7C to DATUM 0 of the weapon
                 // AnimObj (BL+0x7e8) every tick — `AnimDatumSetEntity(vm, 0, weapon+0x7C, 0xff)`,
                 // cleared in the swap/holster state 8 and by the twin arm (0x1a5460:111-118) on the
@@ -7143,8 +7128,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: true, quiver_bolt: None, swap_piece: false, watch_hand: None });
                     }
                 }
-                // delta-repeater: the Delta Repeater's loaded bolts — the playtest's "model is missing
-                // the arrows" (1015-1738). The game re-issues the attachments EVERY tick in
+                // delta-repeater: the Delta Repeater's loaded bolts (the model
+                // drew without them). The game re-issues the attachments EVERY tick in
                 // `Player_WeaponFiring` 0x1a5460:331-381 for the records whose base (+0x02) is 0x11:
                 // clear the view model's datums 4/5/6, then `AnimDatumSetEntity(vm, d, 0x0200816, 0xff)`
                 // — datum 4 when count > 0 (NOT while the view state is 9, the fire script's), datum 5
@@ -7184,7 +7169,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 view_models.insert(wid, ci as usize);
             }
         }
-        // MP bodies (the user's two-window check: "they cant see eachother"): one character per used
+        // MP bodies (without them the players could not see each other): one character per used
         // player slot with the slot's `MP_skins` body [M Player_Init 0x1910f8:111], parked at the origin
         // and posed each frame from the slot's movement (`Scene::mp_body_state`).
         let mut mp_bodies: Vec<(usize, usize)> = Vec::new();
@@ -7289,7 +7274,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // Obj::Entity src.0 = 0x06000047, the lib key], whose streams carry the puff meshes
             // (0x020003cc/cd/ce/c7...). Walk the op-0x1b hashes recursively (the runtime `src` is
             // the sub's own lib key, so the attachment's script tuple must carry the sub's hash).
-            // copter-script-draw (user report: "heli is missing from the exchange"): `Copter_Create`
+            // copter-script-draw (the helicopter was missing from The Exchange): `Copter_Create`
             // 0x17d340 attaches NO glist to the copter (obj+0xD8 = 0 [M :60-66]) — its whole look is
             // the script player `SP_Create(.., params 4/5, mode 8, ..)` makes [M 0x17d340 SP_Create
             // call: +0x3c/+0x40 = the assembly 0x06000051 / the flight 0x06000050 on 07000008 #45
@@ -7374,7 +7359,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 // One draw slot per ScriptPlayer running this script: every SP creates its own
                                 // copy of the stream's entities (07000014's three vent lids are nine SPs on
                                 // 0x06000A3B — one slot drew only the newest lid; the hatch under the spawn
-                                // stayed invisible while it opened [the user, 1016-1355 vent14k]).
+                                // stayed invisible while it opened).
                                 let copies = players.iter().filter(|p| p.scripts.contains(&h)).count().clamp(1, 16);
                                 let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
                                 for k in 0..copies {
@@ -7528,14 +7513,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // The gas puffs (`Gas_Init` 0x1aacc8): one draw slot per pool index for each mesh a puff can carry —
                 // SMOKE_QUAD (muzzle smoke, searchlight smoke, trails) and every `EffectInfo` gas mesh (the impact
                 // puffs: snow material 12's only effect is its 0x02000039 floor puff). The draw side (`a.gas`) was
-                // written with the gas system but no slot was ever created, so no puff ever drew — the user's
-                // "when you shoot the snow, there's no impact" (snow leaves no decal).
+                // written with the gas system but no slot was ever created, so no puff ever drew — shooting
+                // snow showed no impact (snow leaves no decal).
                 let mut gas_meshes: Vec<u32> = surf.effects.iter().flat_map(|r| r.gas.iter().map(|g| g.mesh)).filter(|m| *m != 0).collect();
                 // flesh-hit-effects: the pool's OWN spawn meshes too — the blood puff 0x0200_08bc
                 // (`NDrone2_DealWithObjHit` 0x13fff0's flesh arm), the bolt puff 0x0200_026e and the
                 // trail smoke 0x0200_001f are hardcoded `Gas_Init` sites, not `EffectInfo` rows, and
-                // had no slot: the puff sat in the pool with nothing to draw it through (the user's
-                // "no red puffs", 1015-1738). The list lives with the spawners (`gas::POOL_MESHES`).
+                // had no slot: the puff sat in the pool with nothing to draw it through (no red
+                // puffs). The list lives with the spawners (`gas::POOL_MESHES`).
                 gas_meshes.extend_from_slice(nf_game::gas::POOL_MESHES);
                 gas_meshes.sort(); gas_meshes.dedup();
                 {
@@ -7752,7 +7737,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // reads the AABB [M 0018d0d0:20-35]); 0x38/0x39 space laser/missile (invisible controllers, visuals
         // via scripts); 0xF2 emitter (no glist ever [M 0017ae00:100-101]); 0xD4 cloud (sky pipeline, drawn by
         // sky_instances); 0xF3 tree (anim-object path, like characters).
-        // fix-gadgets2, the user's "red and yellow boxes ... for the wall shimmy and one for the grapple":
+        // fix-gadgets2 (red/yellow boxes drew at the wall shimmy and the grapple):
         // 0x3F creep walls are invisible: the creator builds a bare control object and attaches NO gfx
         // hash — `CreepWall_Create` 0x196fc8 sets class 0x2B with no gfx attach — so `View_DrawObjList`'s
         // empty-glist no-op never draws them; live, the 0x2B glists chain to boxes 0 [L ee_start_05.bin:
@@ -7772,7 +7757,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // bit 0 passes `View_CaptureScene` 0x1e6df0's `object_display_mask = 1 << viewer_LOD`, 0x30d87c),
         // and the psiDraw chain glist+4 → +8 → +4 lands on box tree 0x9b3260 — DRAWABLE. The zero
         // `hashtable_set_object_to_entity_gfx` calls fix-gadgets2 cited are irrelevant: the glist comes
-        // in as an argument, not from a hash attach. The user's PCSX2 playtest shows the pulley at the
+        // in as an argument, not from a hash attach. PCSX2 shows the pulley at the
         // spot; the port drew only the bracket. obj+0xF0 & 0x800 is clear, so no ambient dim (the
         // `View_SetupRenderModes_Tweak` 0x1e5888 white-tweak branch, like the ladders).
         if cels_only {
@@ -7883,8 +7868,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // `Mine_Create` 0x17ce28 (0xfe, verified the same way; `Mine_Update` 0x17c930:142's 0x30
                 // store is the mine hiding ITSELF when armed, not a glist copy). Bit 0x10 marks
                 // collision-only brushes which `Collide_Pick` (no 0x10 test) keeps solid while nothing
-                // ever draws them. The sweep drew the striped ones because it lacked the gate — the
-                // user's red/yellow striped box on 07000005's trench.
+                // ever draws them. The sweep drew the striped ones because it lacked the gate — a
+                // red/yellow striped box on 07000005's trench.
                 const FLAGS_COPYING: [u8; 11] = [0x30, 0x34, 0x35, 0x3b, 0x71, 0xda, 0xe1, 0xe3, 0xfa, 0xfd, 0x4a];
                 if obj.flags & 0x10 != 0 && FLAGS_COPYING.contains(&kind) { continue; }
                 if !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) || obj.flags & 0x400 != 0 { continue; }
@@ -8015,7 +8000,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // `Trigger_LoadLevelCreate` (0x1b2950) → `Trigger_Create` (0x1b1720) calls `control_create_object`
             // which attaches the glist to `obj+0xF0`, so the trigger entity IS drawn. The port's `instances()`
             // skips these placements (no 0x8000 CREATE_CEL bit), so without this loop the castle gate door is
-            // invisible in play — the user sees "nothing to interact with" at the gate. Draw them here as
+            // invisible in play — nothing to interact with at the gate. Draw them here as
             // static World-layer meshes at their placement transform (they don't animate) [M 0x1b2950, 0x1b1720].
             for p in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0xe8) {
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
@@ -8047,7 +8032,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if is.is_empty() { continue; }
             // fix-render-artifacts: the cull sphere must contain the group's DRAWN geometry — the glist
             // radius can undershoot it (0700000c's floor decal: glist r 0.6 vs a 0.87 half-diagonal box),
-            // which dropped in-view statics at the frustum edge (the user's pale fog-coloured patches).
+            // which dropped in-view statics at the frustum edge (pale fog-coloured patches).
             // The game's cull consults the bbox next to the sphere (`View_AddObjects` 0x1e62d8 passes
             // obj+0x8c AND obj+0x80 to `Vision_InView` 0x1e89e0); this is that bbox term.
             // level-load-time: this pass is NOT redundant with add_instance's per-batch fold — that
@@ -8401,7 +8386,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 fmv_script: None,
                 hurts,
                 // unported-front-end-menus-3: the viewer's shear/swing phases and the underwater
-                // blur byte (fields on their own lines, merge lesson 4).
+                // blur byte.
                 shear_phase: 0.0,
                 global_blur: 0,
                 swing_phase: 0.0,
@@ -8540,7 +8525,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // [L ACTION.ELF], so `Script_AnimStart` 0x1d8f40 creates the object at the origin]).
                 // The held fix substituted `Player::live_matrix` — stream 0's object ∘ the script
                 // matrix, for the 07000002 intro the CAMERA (obj[0] trans == player[1] live trans
-                // [-27.25, 1.41, 34.39]) — which drew the actors inside the camera: the main agent's
+                // [-27.25, 1.41, 34.39]) — which drew the actors inside the camera: a
                 // render showed the intro room with NO characters at all.
                 return Some((anim::skin_matrices(&world, &c.skin), world, c.matrix));
             }
@@ -8767,8 +8752,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // AnimGetBoneWorldTrans(BLData+0x7e8, 0, 0) [M 0x1a4560:20] — composed with the
                     // object matrix (the first-person gun transform), the same composition the
                     // attachment draw below uses. The old read took the Character's STATIC creation
-                    // matrix (identity) — the beam started at the WORLD ORIGIN and the user never
-                    // saw it ("the laser isnt visible").
+                    // matrix (identity) — the beam started at the WORLD ORIGIN and was never
+                    // visible.
                     if s.first_person {
                         if let Some(vm) = self.view_models.get(&s.gun.weapon) {
                             if let Some((_, world, m)) = &posed[*vm] {
@@ -8780,7 +8765,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                     // non-negative [M 0x1c3120: param_2 >= 0 looks up the skin's datum list,
                                     // `QuatTransToMat(datum.q, datum.t) · bone world`; only negative ids index
                                     // bones]: datum 0 of the watch view model — the watch face. Bone 0 put the
-                                    // beam's wide end at the screen edge (the main agent's 08 render).
+                                    // beam's wide end at the screen edge (an 08 render).
                                     let c = &self.characters[*vm];
                                     let bm = match c.skin.datums.iter().find(|d| d.id == 0 && d.bone >= 0) {
                                         Some(dt) => anim::mul(&anim::mul(&anim::quat_trans_to_mat(dt.q, dt.t), &world[dt.bone as usize]), m),
@@ -8821,7 +8806,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if a.silencer && self.sim.as_ref().is_some_and(|s| s.gun.switch_state == 8) {
                 return [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
             }
-            // …and the swap piece is the one visible exactly then (user report 2026-10-21: the
+            // …and the swap piece is the one visible exactly then (the
             // silencer was invisible through the screw-on after silencer-white-artifact dropped it).
             if a.swap_piece && !self.sim.as_ref().is_some_and(|s| s.gun.switch_state == 8) {
                 return [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
@@ -8864,7 +8849,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // assigns `weapon+0x5C` (`hashtable_set_object_to_entity_gfx`, disasm 0x12e8f0-0x12e900
                         // [M]) on the projectile's first update. The port drew it on the spawn tick at the
                         // camera — a screen-filling frag on the release frame, which PCSX2 frozen at that frame
-                        // doesn't show (the user's "released while I'm still pulling the pin").
+                        // doesn't show (released while the pin was still being pulled).
                         Some(g) if g.state == 1 => {
                             // fix-satchel-tripbomb: a stuck satchel/tripbomb draws aligned to the
                             // NEGATED surface normal (the stick arm's `Mat_Align2Dir(obj+0x90,
@@ -8887,7 +8872,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     match s.drones.player_bullets.get(slot as usize - GRENADE_SLOTS - TRACER_SLOTS) {
                         // The ridden guided rocket is never drawn in its own camera: `Player_PositionCamera`
                         // 0x18f5d8 case 0xc `View_SetDrawInOtherViewsOnly(BL+0x878, view)` [M]. Drawing it put
-                        // the eye inside the rocket's mesh — the big dark octagon the user saw instead of the view.
+                        // the eye inside the rocket's mesh — a big dark octagon instead of the view.
                         Some(b) if b.guided_cam && s.missile_cam.is_some() => return far,
                         Some(b) if !b.dead => (b.pos, b.dir, s.weapons.projectile_mesh(b.weapon as usize)),
                         _ => return far,
@@ -9001,11 +8986,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // two digit objects EVERY tick in every state < 2 [M 0x12d890:418-553; the
                         // sim writes `digits` in flight too — grenade.rs's tail runs before the
                         // stuck early-out], so the numbers ride the satchel from the throw. The old
-                        // `g.stuck` filter matched the playtest's "the numbers aren't working": a
+                        // `g.stuck` filter hid the numbers: a
                         // satchel that hadn't stuck yet drew nothing. In flight `phase.normal` is
                         // the spawn's [0, 1, 0] placeholder (the stick overwrites it with the
                         // surface normal), so the flight digits stand upright on the satchel [S —
-                        // the game aligns them to the bullet's own matrix; the main agent renders].
+                        // the game aligns them to the bullet's own matrix].
                         let satchels: Vec<&nf_game::grenade::Grenade> = s.drones.grenades.iter()
                             .filter(|g| g.weapon_type == 0x3b && g.state < 2 && g.phase.is_some())
                             .collect();
@@ -9047,15 +9032,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // × the script scale via `Script_GetInterp` 0x1da158:117, `Mat_Scale3f`
                     // 0x1e35f0). The port's entity matrix is rotation·s with s uniform (the interp
                     // builds it from pos/quat/scale keys), so s = |column 0|. The obj+0x58 spin arm, the GAME'S
-                    // EXACT RULE for the main agent's render pass [M View_DrawObjectGlist 0x1e6780:48-57]: when the
+                    // EXACT RULE for the render pass [M View_DrawObjectGlist 0x1e6780:48-57]: when the
                     // entity's obj+0x58 != 0 the drawn rotation is `viewer_rot · RotZ(spin)` — RotZ about the
                     // SCREEN-FACING axis (spin in the screen plane), built from euler (0, 0, +0x58) via
                     // RotTransMatrix and Concat'd INSIDE the viewer alignment — not the plain viewer rotation this
                     // port draws; the spin accumulates per tick, `obj+0x58 += def[3][0]·FRAME_RATE_MUL` in the
                     // effect updaters (gases_smoke 0x1ab2d0:50/85/185; the rate sign flips per gas type at
                     // def[3][0xc]). Not ported here (the blast's first-frame flash quad dominates and the puffs'
-                    // spin is sub-visible); a live check can calibrate the per-def rates from def[3] if the main
-                    // agent ports it.
+                    // spin is sub-visible); a live check can calibrate the per-def rates from def[3] if this is
+                    // ever ported.
                     if !self.script_billboards.contains(&hash) { return m; }
                     let s = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
                     let (r, u) = (opts.right, opts.up);
@@ -9268,8 +9253,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let Some(s) = self.sim.as_ref() else { return false };
         // A first-person view model that is not the held weapon's is never drawn: only the held
         // one is placed at the eye (`frame_state`'s view arm); the rest sat at their load matrix
-        // near the world origin — the "all the weapons in one spot, seen through the map" cluster
-        // (user F12 0700000a 003, 2026-10-17).
+        // near the world origin — every weapon in one spot, seen through the map (0700000a).
         if self.view_models.values().any(|&v| v == ci) {
             return self.view_models.get(&s.gun.weapon) != Some(&ci);
         }
@@ -9638,8 +9622,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // pass after the world, not through any cel's object list [M Game_Draw: the view model's
             // list-2 draw after psiLight_SetLights(0); View_SetDrawInNoViews is its only hide]. The
             // room test here sent the hands/gun to FAR whenever the point in front of the camera fell
-            // in a cel the walk had not marked (doorways, room edges) — the user's "room culling
-            // fucking up the player model / my hands missing", reported 5+ times.
+            // in a cel the walk had not marked (doorways, room edges), so the hands and gun
+            // vanished.
             let view_model = self.view_models.values().any(|&v| v == ci);
             if !live_drone(ci) && !view_model && !vis_room([cpos[0], cpos[1], cpos[2]]) { for k in 0..=nb { p[base + k] = FAR; } continue; }
             match &fs.posed[ci] {
@@ -9821,7 +9805,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // instead of rehash-growing to 12k+ entries every ticked frame.
         let mut pickup_mult: Vec<[f32; 3]> = Vec::with_capacity(self.sim.as_ref().map_or(0, |s| s.drones.pickups.len()));
         let mut attach_mult: Vec<[f32; 3]> = Vec::with_capacity(self.attachments.len());
-        // The lag fix (the user's "very laggy" playtest): the keys were collected by walking EVERY character
+        // The lag fix: the keys were collected by walking EVERY character
         // vertex — the effect pools (decal/casing/debris/gas/projectile slots, 8561 attachments on 07000005)
         // made that 34 ms of a 52 ms frame. The multiplier depends only on the key, so it is computed once per
         // pickup and per attachment; keys no vertex carries are never read (the palette's colour slot and
@@ -10256,8 +10240,8 @@ impl Sim {
             phase: d.death.phase(),
             pane_px,
             // [S] unverified, visual-only (no draw code changed): the draw's alpha source,
-            // derived from the px rule (448 px = full cover) — the main agent's render
-            // comparison against PCSX2 owns the look; the game's death-pane alpha ramp is
+            // derived from the px rule (448 px = full cover) — the look needs a render
+            // comparison against PCSX2; the game's death-pane alpha ramp is
             // untraced here.
             fade_alpha: (pane_px as f32 / nf_game::death::RED_FADE_TICKS as f32).clamp(0.0, 1.0),
             // SP hides the whole HUD for the pane [M 0x190bb0:24]; MP keeps it [M :39].
@@ -10480,8 +10464,7 @@ impl Sim {
             // This bot's view of the others: the squared distance and the candidate + seen bits
             // `find_opponent` reads (bit1|bit2 [M the CanSeeObject bit]) — the eye-to-chest line
             // clear of the world. The driver passed every row with flags 0 / dist2 0, so no bot
-            // ever acquired anyone and they idled in 0xF9 all match (the user: "bots need to work
-            // too"; blocked 704's item 2). PROVEN the game's rule: bot vision is LOS-only —
+            // ever acquired anyone and they idled in 0xF9 all match. PROVEN the game's rule: bot vision is LOS-only —
             // DroneVision_CanSeePosition 0x178438:54-75 gates on the same nav cel /
             // AINetwork_TestRayCels then Collide_LineOfSight, with NO FOV cone or range constant
             // anywhere [M; 0x176f18:56-104 the same for objects] — the port's LOS-only read IS
@@ -11346,8 +11329,7 @@ impl Sim {
     /// `+0x50`, `AnimObjectDraw` 0x1c4490:256-266): a bot's is its brain's current weapon
     /// (`BOT_vars+0x768`, the id its shots fire — `bot_init` gives the P2K at spawn); a human's rides
     /// the session input (`mp_held`). The bots have no session input — `step_net_combat` copies the
-    /// empty row's 0 into their `mp_held` every tick, which hid every bot's gun (the user's "bots
-    /// spawn with no weapon visible").
+    /// empty row's 0 into their `mp_held` every tick, which hid every bot's gun.
     pub fn mp_body_held(&self, slot: usize) -> u8 {
         if let Some(b) = self.mp.as_ref().and_then(|m| m.bots.iter().find(|b| b.slot == slot)) {
             return b.brain.vars.weapon_id;
@@ -12042,8 +12024,8 @@ impl Sim {
     /// phase) into xs.234 @0x30d798 / ys.235 @0x30d79c, both × 0.025], advances the shear
     /// phase (viewer+0x1e0) by REC_FRAME_RATE and wraps it into [−π, π] [M :26-34], and sets
     /// `GlobalBlur = 0x91` [M :49]. The game builds the identity+skew matrix (scale 1+xs,
-    /// 1+ys, 1+xs) and concats it into the view matrix — the draw side's job (the main agent
-    /// renders; the port's Camera has no roll/shear slot yet).
+    /// 1+ys, 1+xs) and concats it into the view matrix — the draw side's job (the port's Camera has
+    /// no roll/shear slot yet).
     pub fn camera_shear(&mut self) -> (f32, f32) {
         let (xs, ys) = camera_shear_step(&mut self.shear_phase);
         self.global_blur = 0x91; // [M 0x1bba38:49]

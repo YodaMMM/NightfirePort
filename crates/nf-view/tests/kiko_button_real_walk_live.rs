@@ -31,7 +31,7 @@
 //!   room, #616 never crossed — the interactables shape) fires ch 0x90 → mux #618 → ch 100 →
 //!   MissionState 6 → 0x7300017 [M 0x182c60:111-112].
 //!
-//! Live check for the main agent (the one link machine evidence cannot close from here): whether
+//! Open live check (the one link machine evidence cannot close from here): whether
 //! the GAME's contact pass registers #616 for the walking player at all — its Trigger_Hit is
 //! contact-list-based on the trigger's glist bounds, the port's on the target object's collision
 //! tris. Fresh-boot PCSX2, walk z −144..−147 in the mid-corridor, watch `switch_channels[141]`
@@ -227,9 +227,9 @@ fn the_07000016_real_walk_reaches_the_kiko_death_button_and_the_gate_arms_on_the
         assert!(sim.drones.channels.on(0x8d), "the gate is still armed at the press [D #616 latch]");
         // [S] unverified — NOT a game claim: the shipped game completes this mission, so something
         // clears ch 0x8d (or never arms it) on the real route; the port has not found that writer
-        // (task 953, the "no writer on the disc" census). Logged, kept out of pass/fail, so the
+        // (the "no writer on the disc" census). Logged, kept out of pass/fail, so the
         // test does not pin the port's blocked finale as correct.
-        eprintln!("[S] walked press: pressed={pressed} ch90={} status={} — the gate 0x8d blocks it in the port (task 953)",
+        eprintln!("[S] walked press: pressed={pressed} ch90={} status={} — the gate 0x8d blocks it in the port",
             sim.drones.channels.on(0x90), sim.drones.mission.status());
     }
 

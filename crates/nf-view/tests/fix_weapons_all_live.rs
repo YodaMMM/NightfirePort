@@ -1,11 +1,11 @@
-//! fix-weapons-all: the 2026-10-12 playtest weapon bugs, through the real input path (the dev panel's
+//! fix-weapons-all: a set of weapon bugs, through the real input path (the dev panel's
 //! give commands + `Sim::step_bond` fire input). Opt-in: set `NF_ISO` to the disc image.
 //!
 //! - **nades05** "a frag grenade spawns what looks to be a stun grenade … no clue what the rocket
 //!   launcher is": the panel's quick buttons give decimal ids 53/54 = 0x35/0x36 (correct since the
 //!   panel parses decimal), so the audit locks the give ids, the pinned projectile meshes
 //!   [L ee_start_05.bin 0x2bf150: 0x35 → 0x02000726, 0x36 → 0x0200071f, 0x3A → 0x0200074f] and the
-//!   panel NAMES (0x3A had no name at all — the user could not find the rocket launcher).
+//!   panel NAMES (0x3A had no name at all, so the rocket launcher could not be found).
 //! - **The frag "blows up immediately as soon as it hits the ground"**: `Bullet_CollisionHandler`
 //!   0x12ce80 NEVER explodes a bouncing grenade — a slow bounce zeroes the speed (LAB_0012d4bc tail:
 //!   `speed < FRAME_RATE_MUL·0.01 → speed = 0`, state stays 1) and the 20th bounce (count reaching
@@ -58,12 +58,12 @@ fn throw_held(scene: &mut nf_view::scene::Scene, expect_grenade: bool) -> Option
 }
 
 /// nades05: the panel's give list hands out exactly the named weapon, with its own view model and
-/// the pinned projectile meshes. Sister assertion inside: the catalog names 0x3A (the user could not
-/// find the rocket launcher because it showed as "weapon 0x3a").
+/// the pinned projectile meshes. Sister assertion inside: the catalog names 0x3A (it used to show as
+/// "weapon 0x3a").
 #[test]
 fn panel_give_list_matches_weapon_data() {
     let iso_v = iso();
-    let mut scene = nf_view::load_dev(&iso_v, "07000012.bin", false).expect("load 07000012 (the user's level)");
+    let mut scene = nf_view::load_dev(&iso_v, "07000012.bin", false).expect("load 07000012");
     let wd = scene.sim.as_ref().unwrap().weapons.clone();
     // The pinned projectile meshes [L ee_start_05.bin @ 0x2bf150 + w*0x10C + 0x5C]. The disc labels
     // name the records [L USATxt.dat via Txt_BindLabel(+0x38), re-verified by fix-dev-panel's dump]:
@@ -75,9 +75,9 @@ fn panel_give_list_matches_weapon_data() {
     // 0x3A is the bank's "Laser Tripbomb" (its ammo type 28 binds the same name) — the rocket
     // LAUNCHERS are 0x2C "AT-420 Sentinel" (Guided) and 0x2E "AT-600 Scorpion" (Heatseeker), whose
     // ammo type 14 is the bank's "Rockets" [L USATxt.dat]. The old "0x3A = Scorpion (rocket
-    // launcher)" pin was the user's misread that fix-dev-panel corrected.
+    // launcher)" pin was a misread that fix-dev-panel corrected.
     assert_eq!(wd.projectile_mesh(0x3a), 0x0200_074f, "laser tripbomb projectile mesh [L]");
-    // Distinct first-person models (the user: "a frag grenade spawns what looks to be a stun grenade"
+    // Distinct first-person models (the frag button spawned a stun grenade
     // — the panel had the names one id off; fix-explosions2 aligns them with the disc labels).
     assert_ne!(wd.first_person(0x34), wd.first_person(0x35), "frag and stun have their own view skins [L +0xDC 0x05000041 vs 0x05000070]");
     for &(id, label) in &[(0x34u8, "Fragmentation Grenade"), (0x35, "Stun Grenade"), (0x3a, "Laser Tripbomb")] {
@@ -87,8 +87,7 @@ fn panel_give_list_matches_weapon_data() {
         assert_eq!(scene.sim.as_ref().unwrap().gun.weapon, id, "{label} must be the equipped weapon");
         assert!(scene.view_models.contains_key(&id), "{label} (0x{id:02x}) needs a first-person view model (the dev panel's 'Every single weapon needs to have a first person model')");
     }
-    // The catalog JSON must not leave any record unnamed (the user's "no clue what the rocket
-    // launcher is"): no bare "weapon 0x" fallback for the ids the panel lists. The rocket launchers
+    // The catalog JSON must not leave any record unnamed: no bare "weapon 0x" fallback for the ids the panel lists. The rocket launchers
     // are the bank's "AT-420 Sentinel" (0x2C) / "AT-600 Scorpion" (0x2E) [L USATxt.dat].
     let cat = nf_view::panel::catalog(&scene);
     assert!(!cat.contains("weapon 0x3a"), "0x3A must carry the bank's own name (Laser Tripbomb): {cat}");
@@ -171,8 +170,8 @@ fn stun_grenade_never_kills_but_frag_does() {
 }
 
 /// "Every single weapon needs to have a first person model": every selectable weapon whose record
-/// carries a first-person skin (+0xDC) must have a view model after the dev merge on the user's
-/// level. Prints the full gap list (the playtest's "still missing models").
+/// carries a first-person skin (+0xDC) must have a view model after the dev merge on the
+/// level. Prints the full gap list.
 #[test]
 fn every_fp_weapon_has_a_view_model_on_07000012() {
     let iso_v = iso();
@@ -187,7 +186,7 @@ fn every_fp_weapon_has_a_view_model_on_07000012() {
     }
     eprintln!("[view-models] {checked} selectable weapons with fp skins, {} without a view model: {:?}",
         missing.len(), missing.iter().map(|w| format!("0x{w:02x}")).collect::<Vec<_>>());
-    // The user's daily drivers must never be missing.
+    // The common weapons must never be missing.
     for w in [0x02u8, 0x35, 0x36, 0x3a] {
         assert!(scene.view_models.contains_key(&w), "weapon 0x{w:02x} has no first-person view model on 07000012");
     }

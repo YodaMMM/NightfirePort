@@ -67,7 +67,7 @@
 //! UPDATE the same re-route with the +0x2C8 Rand(2) evasion chain, fire or 0xac ≤ 2; TIMER_C
 //! Rand(2) → 0xab else the evasion chain. Death/pain → alive ? PainTalk : 0x42/0x44 [M].
 //!
-//! **The melee chain, ported as of this task** — the state-id ↔ function table is `NDrone2_StateFuncs`
+//! **The melee chain, ported** — the state-id ↔ function table is `NDrone2_StateFuncs`
 //! (EE 0x29b300, 4-byte fn pointers) [L ee_snapshot: 0xab → 0x16cb70, 0xac → 0x16d100, 0xad →
 //! 0x16d298, 0xae → 0x16d430, **0xaf → 0x173e08 Sideflip (the ±3 router)**, **0xb0 → 0x16cdd0
 //! (anim 0x68)**, **0xb1 → 0x16cf68 (anim 0x69)**, 0xb2 → 0x16d5b8, **0xb3 → 0x16d878 NoRoute**]

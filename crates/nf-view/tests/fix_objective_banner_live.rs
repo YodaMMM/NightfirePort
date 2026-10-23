@@ -1,9 +1,8 @@
 //! fix-objective-banner — the objective banner's timing, text and layout, driven through the REAL
 //! path (`nf_view::load` + `Sim::step_bond`).
 //!
-//! Playtest (dist-side results, 2026-10-12), on 07000007:
-//! 1. "obj doesnt wait for kimiko cutscene and plays the sound immediately" — the banner and its
-//!    SFX fired the moment the Kimiko cut-scene started instead of after it ended;
+//! Symptoms on 07000007:
+//! 1. the banner and its SFX fired the moment the Kimiko cut-scene started instead of after it ended;
 //! 2. banners said a generic "NEW OBJECTIVE" instead of the objective's own text;
 //! 3. the fail message was off-centre.
 //!
@@ -33,7 +32,7 @@ fn level_index(level: u32) -> usize {
 /// when they reach 07000007 through 07000005→07000006 (the warm carry; `Mission_Init` keeps
 /// previous parts' states [M 0x182270:68-129]). Without this a cold load also announces the
 /// earlier parts' state-0 objectives at tick 1 — the game's own cold-load behaviour, but not the
-/// state the playtest ran in.
+/// state real play runs in.
 fn carry_earlier_parts_complete(sim: &mut nf_view::scene::Sim) {
     let m = &mut sim.drones.mission;
     for (i, l) in LEVELS.iter().enumerate() {
@@ -108,7 +107,7 @@ fn the_kimiko_scene_holds_the_announce_until_the_handback() {
         for c in sim.drones.audio.take_commands() {
             if let nf_game::sound::Cmd::Start { id, .. } = c {
                 assert!(!matches!(id, 0x5fc | 0x1d5 | 0x1d4),
-                    "banner SFX {id} played during the Kimiko scene (+{t} after the trigger) — the user's 'plays the sound immediately'");
+                    "banner SFX {id} played during the Kimiko scene (+{t} after the trigger) — the sound must wait for the scene");
             }
         }
         // The game's `Text_AddMsg` queues during the cut-scene (Mission_Update runs every tick);

@@ -34,7 +34,7 @@ fn q(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
 }
 
 /// Load pre-merged for the grenade (the assets the level archive lacks), give it through the panel
-/// (ownership + ammo, the user's path), and wait for the switch.
+/// (ownership + ammo, the dev-menu path), and wait for the switch.
 fn load_grenade(iso: &str, id: u8) -> nf_view::scene::Scene {
     let mut scene = nf_view::load_weapons(iso, "07000005.bin", false, &[id]).expect("load");
     let (msg, switch_to) = nf_view::panel::apply(&mut scene, &q(&[("do", "weapon"), ("id", &id.to_string()), ("rounds", "5")]));
@@ -104,8 +104,7 @@ fn the_frag_throws_on_the_release_frame_and_refires_at_the_interval() {
 /// ── The blast effect plays at the game's scale: SCRIPTINFO+0x94 = radius ─────────────────────────
 /// `Explode_Create` gets f12 = weapon_data+0x08 (the radius) [M disasm 0x12ce1c] and stores it in
 /// SCRIPTINFO+0x94 [M 0x17cbd0]; `Script_GetInterp` multiplies the key scales by it [M 0x1da158:117].
-/// The port used radius·0.0667 (obj+0xE8's value — a field nothing visual reads) — 15× too small:
-/// the user's "The explosion is very small and not accurate to the game."
+/// The port used radius·0.0667 (obj+0xE8's value — a field nothing visual reads) — 15× too small.
 #[test]
 fn the_frag_blast_effect_plays_at_the_game_scale() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -131,8 +130,7 @@ fn the_frag_blast_effect_plays_at_the_game_scale() {
 /// The slow-bounce tail zeroes the bullet's speed and `Bullet_update`'s re-normalise keeps a rested
 /// bullet's velocity at zero — it never moves, never collides, never sounds again [M 0x12ce80 tail +
 /// 0x12f020-0x12f030]. The port's velocity kept re-accumulating gravity while at rest, so the
-/// grenade re-collided EVERY tick: the user's "once it settles it makes a rapid sound as if it's
-/// rapidly contacting the ground". The bounce sound itself is gated: the counter even and < 0xF
+/// grenade re-collided EVERY tick: a settled grenade made a rapid contact sound. The bounce sound itself is gated: the counter even and < 0xF
 /// [M 0x12ce80] — at most 8 sounds, all within the first moments after the impacts.
 #[test]
 fn a_resting_grenade_stops_playing_bounce_sounds() {
@@ -169,7 +167,7 @@ fn a_resting_grenade_stops_playing_bounce_sounds() {
 /// ── The smoke grenade pops its cloud and damages no one ─────────────────────────────────────────
 /// 0x36's record is radius 0 / damage 0 [L]; its death branch pops `Occlude_Create(pos, 1200, 1)` +
 /// Sound 0x14 and re-arms the fuse +1200 [M 0x12e114-0x12e1b4]. The port played the pop but spawned
-/// no visual: the user's "Smoke grenade didn't work."
+/// no visual.
 #[test]
 fn the_smoke_grenade_pops_a_cloud_and_damages_no_one() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };

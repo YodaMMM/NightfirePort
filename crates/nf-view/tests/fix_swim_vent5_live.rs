@@ -55,7 +55,7 @@ fn the_icon_context_is_none_at_the_gate_door_and_the_level_start() {
     assert_eq!(sim.bond.icon_ctx, 6, "the vent entry must read the crawl icon (got {})", sim.bond.icon_ctx);
 }
 
-/// The user's symptom: E at the gate door crawled the second vent's wall (substate 7 on a creepwall
+/// The symptom: E at the gate door crawled the second vent's wall (substate 7 on a creepwall
 /// ~31 units away, squared 971 < 1000) instead of opening the door. The context gate alone decides
 /// [M Player_Activate 0x1a5170:66]; the scan's proximity never creeps.
 #[test]

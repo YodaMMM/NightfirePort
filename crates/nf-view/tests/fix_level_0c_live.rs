@@ -1,4 +1,4 @@
-//! fix-level-0c: the hatch chain (the user's soft lock, playtest 2026-10-12). Evidence base
+//! fix-level-0c: the hatch chain (a soft lock). Evidence base
 //! (docs/levels/0700000c.md §3/§6 + the disc placements):
 //! - The display vent: `ventmesh-front` #138 (class 0xE2, param 3 = ch 18, 6 keys — the hatch
 //!   slides from y 16.40 down to 14.76), four burnable hinges `hingelock1/3` #139–142 (class 0x2E
@@ -50,7 +50,7 @@ fn setup_and_burn(scene: &mut nf_view::scene::Scene, outs: &[u16], ticks: u32) -
     (sim.drones.channels.on(18), sim.drones.sss.list[ss138].t, sim.drones.sss.list[ss179].t, ray_hits(sim))
 }
 
-/// The user's soft lock, reproduced: with the hinges intact the opening is SHUT — the ray through
+/// The soft lock, reproduced: with the hinges intact the opening is SHUT — the ray through
 /// it hits the hatch/blocker meshes at their key-0 poses, and ch 18 is off (it can only rise
 /// through the AND mux #505 of the four hinges' burn channels [D #505]).
 #[test]

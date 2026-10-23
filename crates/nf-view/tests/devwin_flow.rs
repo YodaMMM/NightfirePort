@@ -1,5 +1,5 @@
-//! The dev window (devwin.rs): the dev menu in its own native window beside the game (the user, 2026-10-13: "the dev
-//! menu should manifest outside of the game, but not in a browser"). The window itself can't open in a test, so these
+//! The dev window (devwin.rs): the dev menu in its own native window beside the game (outside the game, not in a
+//! browser). The window itself can't open in a test, so these
 //! drive its pure parts: the layout at small and large window sizes, and the input path (`devwin::input`, which the
 //! window's event handler calls after `devwin::decode`) through to the shared action router
 //! (`dev::apply_menu_action_to_scene` → `panel::apply`, what `App::apply_menu_action` runs).

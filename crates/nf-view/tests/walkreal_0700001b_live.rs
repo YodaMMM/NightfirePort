@@ -1,7 +1,7 @@
 //! walkreal-c: 0700001b (the space station) walked with the player's own movement — no
 //! `bond.pos` writes after the spawn.
 //!
-//! UPDATED (level-1b-complete, task 720b) — the mapped structure (probe1b_route.rs +
+//! UPDATED (level-1b-complete) — the mapped structure (probe1b_route.rs +
 //! probe1b_rover.rs): the shuttle-arrival NIS holds Bond ~2100 ticks, then the spawn platform
 //! (x 15–24, z 1–7) and the EAST HUB DECK (x 8–28, z −8..2, floor ≈ −2.4) are walked. The
 //! central pit is an east-west SLIT at z ≈ 0 (±0.9) — the deck has no floor there — and an

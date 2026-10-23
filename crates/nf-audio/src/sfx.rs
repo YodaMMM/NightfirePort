@@ -290,7 +290,7 @@ impl Driver {
         // A start `SFXSetup` rejected (the distance/budget reject, `max_reject`, or the per-id
         // `max_voices` limit) never keyed a voice and never cued a sample: it goes now, and the
         // start reports the failure. Left in the list it reached the next `update` before the kill
-        // pass, and the polyphonic arm indexed its empty `cued` — the playtest crash (1015-2142,
+        // pass, and the polyphonic arm indexed its empty `cued` — a crash (at
         // sfx.rs `fx.subs[cued[k]]`) when the front end restarted its music pair over the live one.
         if self.items[0].delete { self.items.remove(0); }
         1

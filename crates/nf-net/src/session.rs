@@ -12,7 +12,7 @@
 //! * [`Session::ready_inputs`] — `Some([Input; 4])` when every agent's input
 //!   for `tick` is known; run the sim tick only then. `None` = stall.
 //! * [`Session::submit_hash`] — report the local state hash after running a
-//!   tick (opaque u64; task 050's `state_hash(&MpWorld)` wires in here).
+//!   tick (opaque u64; the game's MP state hash wires in here).
 //! * [`Session::start_match`] (host) / [`Session::leave`].
 //!
 //! Lockstep invariants:
@@ -178,7 +178,7 @@ pub enum Event {
     LateJoinSlot { slot: u8, join_tick: u32 },
 }
 
-/// Session configuration. Defaults are the task's recommended values.
+/// Session configuration. Defaults are the recommended values.
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Handshake protocol version; mismatched clients are refused.
@@ -486,7 +486,7 @@ const JOIN_LOG_WINDOW: u16 = 16;
 
 /// net-desync-resync: the resync window — a machine that desyncs again
 /// within 60 s of its last resync request falls back to ending the match
-/// (the task's fallback rule; the session's logical clock, not the Sim's).
+/// (the fallback rule; the session's logical clock, not the Sim's).
 const RESYNC_RETRY_WINDOW_MS: u64 = 60_000;
 /// Ticks between the host's live head and the announced join tick: the
 /// joiner — already caught up at JOIN_READY — schedules its inputs there and
@@ -571,7 +571,7 @@ pub struct Session<T: Transport> {
     /// JOIN_BEGIN — the host never served).
     resync_deadline_ms: u64,
     /// net-desync-resync: the last resync REQUEST (the 60 s window — a
-    /// second mismatch inside it is fatal, per the task's fallback rule).
+    /// second mismatch inside it is fatal, per the fallback rule).
     last_resync_ms: Option<u64>,
     /// net-desync-resync: host — the desync we are watching: (slot, tick,
     /// deadline). The offending client is expected to request a resync; the
@@ -1280,7 +1280,7 @@ impl<T: Transport> Session<T> {
     }
 
     /// net-desync-detail: send the first diverging component's per-item hashes for `tick`
-    /// (the report's slot diagnosis). Peers see [`Event::HashDetail`]. At most
+    /// (the desync report's slot diagnosis). Peers see [`Event::HashDetail`]. At most
     /// [`proto::HASH_DETAIL_CAP`] items ride one packet (a bigger world truncates the tail).
     pub fn send_hash_detail(&mut self, tick: u32, component: u8, items: Vec<u64>) {
         let pkt = Packet::HashDetail { tick, component, items };
@@ -2926,7 +2926,7 @@ impl<T: Transport> Session<T> {
         for (slot, remote) in peers_hashes {
             // cross-process-determinism: the ticks are compared in ascending order, not the
             // HashMap's per-process random order — the sim state is untouched, but WHICH desync
-            // tick gets reported first (the diagnostic the user sees) must not depend on the
+            // tick gets reported first (the diagnostic the player sees) must not depend on the
             // process's RandomState.
             let mut ticks: Vec<u32> = remote.keys().copied().collect();
             ticks.sort_unstable();

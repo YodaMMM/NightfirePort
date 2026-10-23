@@ -51,7 +51,7 @@ fn probe_take_los_blockers() {
         sim.bond.yaw = 1.583;
         sim.bond.pitch = -0.495;
         for _ in 0..10 { sim.step_bond(Input::default(), false, false, false); }
-        // Open the safe the fast way (the chain's channels), then re-pose Bond at the user's spot.
+        // Open the safe the fast way (the chain's channels), then re-pose Bond at the take spot.
         sim.drones.set_channel(134);
         sim.drones.set_channel(135);
         for _ in 0..520 { sim.step_bond(Input::default(), false, false, false); }

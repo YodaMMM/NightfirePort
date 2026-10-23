@@ -73,8 +73,8 @@ fn containing(cels: &[scene::Cel], p: [f32; 3]) -> Vec<usize> {
 /// 07000007 (the party): every drone-backed character must carry its OWN cel's ambient — the port's
 /// stand-in for the game's linked-cel ramp — and the 0xff sentinel may remain only on characters the
 /// game itself leaves unlinked (no cel contains their position: the origin script actors; the port's
-/// dev-pool copies are parked outside every cel too). The visible difference the user reported
-/// ("characters lit by the room": no) would show here as a full-bright (1.0) guest or a guest
+/// dev-pool copies are parked outside every cel too). The visible difference
+/// (characters not lit by the room) would show here as a full-bright (1.0) guest or a guest
 /// carrying another room's ambient.
 #[test]
 fn ballroom_guests_lit_by_their_own_room_on_07000007() {

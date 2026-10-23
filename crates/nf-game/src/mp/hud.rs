@@ -1,5 +1,5 @@
 //! The MP HUD's data model — what the in-match HUD reads, as a per-frame snapshot with getters.
-//! Port-only delivery shape (the main agent draws): the game's HUD reads these values straight
+//! Port-only delivery shape (the draw side reads it): the game's HUD reads these values straight
 //! out of the MP globals each frame (`HUD_Update` 0x19a088 dispatches the per-pane updates over
 //! the `MPPaneList` fn pointers [M 0x199b70:42, 0x199e88:36]); the port's snapshot folds the same
 //! reads into one struct per frame. No rendering here — `nf_view::hud::radar_project` consumes
@@ -286,8 +286,8 @@ impl MpHudSnapshot {
         if viewer_radar_on {
             // Player blips: every live slot but the viewer [M 0x189840:29-96]. The game's
             // +0xff state gates (2/4 limbo, 3 the +0x894 arm) ride the BLData pipeline the
-            // port's players don't have — the port's `MpSlot::dead` is the stand-in [S, see
-            // the report's deviations].
+            // port's players don't have — the port's `MpSlot::dead` is the stand-in [S,
+            // deviation].
             for slot in 0..humans {
                 if slot == viewer_slot || m.game.slots[slot].dead {
                     continue;
@@ -587,7 +587,7 @@ impl MpScorePane {
                 // sprite 1/2 to 0x300018b/0x300018c, layer 0x1e [M 0x19f0a0:115-127]. Both icons
                 // take the same rect — the create's else-arm shifts sprites 1/2 by the same
                 // −0x18 and moves no x, so a team holding both items stacks them [M 0x19ed10:72-76;
-                // the report's live check covers the overlap and the absolute rect].
+                // the overlap and the absolute rect are an open live check].
                 for k in 0..2 {
                     if snap.viewer_team_ge[k] {
                         let tex = if k == 0 { 0x0300_018b } else { 0x0300_018c };

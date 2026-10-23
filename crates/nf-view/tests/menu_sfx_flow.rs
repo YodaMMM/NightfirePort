@@ -324,7 +324,7 @@ fn open_pause_clears_menu_movie_and_starts_no_pair() {
 }
 
 /// menu-music-stack: the page-open pair never reaches the driver through the sfx channel — the music
-/// channel alone starts the loaded bank's one jingle (the user's "multiple songs" playtests).
+/// channel alone starts the loaded bank's one jingle (no more multiple songs at once).
 #[test]
 fn the_jingle_pair_is_not_started_twice() {
     use nf_view::menu::{SFX_MENU_OPEN_MOVE, SFX_MENU_OPEN_SELECT};

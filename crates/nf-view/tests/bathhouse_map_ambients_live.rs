@@ -4,7 +4,7 @@
 //! (`Sound_LoadMapSounds` 0x1ddff8, called from `parsemap_handle_block_id` 0x1d1020 case 0x28
 //! for each block `parsemap_parsenextblock` 0x1d12e8 walks; maps parse in archive order, so the
 //! LAST block wins). 07000002's block lives on map 51: four ambients, among them the waterfall
-//! id 0x5c (92) the playtest should hear under the bathhouse. The lead-1 side (the IOP voice
+//! id 0x5c (92) that should be heard under the bathhouse. The lead-1 side (the IOP voice
 //! budget/priority reject, `SFXSetup` 0x4220) matches the port line for line — see
 //! docs/systems/map-ambient-sounds.md for the rule and the shout's margin math.
 //!

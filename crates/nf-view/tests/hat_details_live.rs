@@ -1,8 +1,8 @@
 //! fix-hat-details — Oddjob's hat (0x45): the wall-contact sound and the in-flight cap, through the
-//! REAL input path (`nf_view::load_weapons` + `Sim::step_bond`), playtest 1014-1725.
+//! REAL input path (`nf_view::load_weapons` + `Sim::step_bond`).
 //!
-//! The user: "It makes a weird sound when it hits a wall. I'm not sure if that's accurate to the
-//! game. And also, if you throw enough of them, you stop seeing them flying in the air."
+//! Symptoms: an odd sound when the hat hits a wall, and after enough throws the hats stopped
+//! drawing in flight.
 //!
 //! What the disc says:
 //! - The wall contact [M `Bullet_CollisionHandler` 0x12ce80 — the +0x100 sticky arm, disasm
@@ -26,7 +26,7 @@
 //!   +0x5C glist draws through it [M `Bullet_update` state 0 → `hashtable_set_object_to_entity_gfx`
 //!   0x12e8f0-0x12e900] — there is no projectile count limit below the ring.
 //!   The port's draw pools the projectiles into GRENADE_SLOTS static slots (pre-fix 8) and draws
-//!   only `Sim::drones.grenades[0..8]` — hats 9+ are INVISIBLE while they fly (the user's
+//!   only `Sim::drones.grenades[0..8]` — hats 9+ are INVISIBLE while they fly (the
 //!   symptom: the stuck hats occupy the early slots for their 1500-tick life [M 0x12e7b0:363-371],
 //!   so every later throw is unseen). The fix sizes the pool to the game's draw list (512,
 //!   oldest-ADDED-first overwrite — the port's Vec order is spawn order, so the newest 512 draw,
@@ -40,7 +40,7 @@ fn q(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
-/// Load pre-merged for the weapon, give it through the panel (the user's path), wait for the draw.
+/// Load pre-merged for the weapon, give it through the panel (the dev-menu path), wait for the draw.
 fn load_weapon(iso: &str, id: u8, rounds: i16) -> nf_view::scene::Scene {
     let mut scene = nf_view::load_weapons(iso, "07000005.bin", false, &[id]).expect("load 05");
     let (msg, switch_to) = nf_view::panel::apply(&mut scene, &q(&[("do", "weapon"), ("id", &id.to_string()), ("rounds", &rounds.to_string())]));
@@ -138,8 +138,7 @@ fn the_hats_wall_contact_is_the_single_game_clang() {
 /// oldest-ADDED-first reuse [M `View_AddObjects` 0x1e62d8 `cursor = (cursor+1) & (size-1)`;
 /// [L ee_snapshot.bin viewer[0] sizes 512/512/128] — a count no hat spree reaches. The port's
 /// pre-fix draw pool showed only the FIRST 8 grenades (`GRENADE_SLOTS = 8`): with the stuck hats
-/// holding slots for their 1500-tick life, hat 9+ flew INVISIBLE — the user's "if you throw
-/// enough of them, you stop seeing them flying in the air".
+/// holding slots for their 1500-tick life, hat 9+ flew INVISIBLE.
 #[test]
 fn every_thrown_hat_still_draws_while_it_flies() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -147,11 +146,11 @@ fn every_thrown_hat_still_draws_while_it_flies() {
     park_guards_behind(&mut scene);
     let mesh = hat_mesh(&scene);
     assert_ne!(mesh, 0, "the hat's +0x5C mesh did not resolve");
-    // The playtest ran `nf-view <iso> <level> --dev`, whose dev panel pins the CURRENT weapon's
+    // The repro ran `nf-view <iso> <level> --dev`, whose dev panel pins the CURRENT weapon's
     // clip at its `weapon_data+0x92` size every tick (`dev.rs`'s infinite_ammo arm — on by
     // default: `dev.then(|| Dev { infinite_ammo: true, .. })` in lib.rs's App build). Without
     // the pin each hat spends the record's +0x91 = 100 [M 0x1a5460:654 — the fire's
-    // `RoundToFire(+0x91, +0x91)`] and the reload gate starves the spree; the user's session
+    // `RoundToFire(+0x91, +0x91)`] and the reload gate starves the spree; the repro
     // threw at the record's 26-tick interval (+0x40 = 0x1a [L ee_start_05.bin @0x2c398c]). The
     // pin lines below are the dev arm's own (clip = max(clip, clip_size) on the inventory slot
     // and the live gun).

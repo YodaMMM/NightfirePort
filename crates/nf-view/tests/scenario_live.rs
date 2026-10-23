@@ -38,19 +38,19 @@ fn tick(scene: &mut nf_view::scene::Scene, n: u32) {
     }
 }
 
-/// Assert the common invariants the user demanded: the chosen guard is active, in the llist, and Bond's spot is not
+/// Assert the common invariants: the chosen guard is active, in the llist, and Bond's spot is not
 /// sealed (≥2 walkable directions). Also that Bond stands on collision floor (y not far below the floor).
 fn assert_active_and_walkable(scene: &nf_view::scene::Scene, gi: usize) {
     let sim = scene.sim.as_ref().expect("sim");
     let dr = &sim.drones.list[gi];
-    // B-7: the user's demanded definition — present + enabled + alive + drawn + in-llist + channel on.
+    // B-7: the active-guard definition — present + enabled + alive + drawn + in-llist + channel on.
     assert!(dev::is_active_guard(&sim.drones, gi),
         "guard #{gi} is not active: present={} enabled={} corpse={} health={} drawn={} in_llist={}",
         dr.present, dr.enabled, dr.corpse, dr.health, dr.drawn, sim.drones.llist.contains(&gi));
     assert!(sim.drones.llist.contains(&gi), "guard #{gi} not in llist — the game won't run its AI");
     assert!(dr.drawn, "guard #{gi} not drawn (obj+0xFC) — the game won't render or run it in play");
     let dirs = dev::walkable_directions(&sim.world, sim.bond.pos, 5.0);
-    assert!(dirs >= 2, "Bond's spot is sealed (only {dirs} walkable direction(s)) — the user would be stuck");
+    assert!(dirs >= 2, "Bond's spot is sealed (only {dirs} walkable direction(s)) — Bond would be stuck");
     // Bond stands on collision floor: the floor is within 2 m below him (not floating / not falling).
     let floor = sim.world.floor_below(sim.bond.pos, 4.0);
     assert!(floor.is_some(), "no collision floor below Bond at {:?}", sim.bond.pos);
@@ -89,7 +89,7 @@ fn scenario_guard_falls_off_ledge_drops_to_floor() {
 
 // ── grenade-bounce-explode (REMOVED B-10) — same root as grenade-throw. ─────────────────────────────────────
 
-// ── ambush (07000005) — the user said this works ───────────────────────────────
+// ── ambush (07000005) ──────────────────────────────────────────────────────────
 
 #[test]
 fn scenario_ambush_enters_ambush_state() {
@@ -107,14 +107,14 @@ fn scenario_ambush_enters_ambush_state() {
     assert!(st != 4, "ambush guard stayed Idle (state 4) for 180 ticks — the ambush AI did not activate");
 }
 
-// ── door-anti-crush (07000005) — the user said this works ──────────────────────
+// ── door-anti-crush (07000005) ─────────────────────────────────────────────────
 
 #[test]
 fn scenario_door_anti_crush_has_door() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let scene = apply(&iso, "07000005.bin", "door-anti-crush").expect("scenario applied");
     // The scenario checks for doors; the test just asserts a door exists on the level (the anti-crush behaviour is
-    // interactive: the user opens a door and stands in it). This is a placement sanity check.
+    // interactive: the player opens a door and stands in it). This is a placement sanity check.
     let has_door = scene.sim.as_ref().is_some_and(|s| s.drones.doors.list.iter().any(|d| d.glist != 0));
     assert!(has_door, "no doors on 07000005 — door-anti-crush cannot work");
 }
@@ -176,9 +176,9 @@ fn cutscene_pause_fix_drones_paused_but_scripts_run() {
     eprintln!("[scenario_live] cutscene pause fix: ok (frame {frame_before}->{})", sim.drones.frame);
 }
 
-/// B-12: the REAL end-to-end cutscene regression test. The user demanded: "start the gatehouse cut-scene, and
-/// assert PlayerEnable arrives and Bond gets control back." The scenario now places Bond at (100, 26, 108) — the
-/// gatehouse plate — which the main agent confirmed triggers the cut-scene headless. This test:
+/// B-12: the REAL end-to-end cutscene regression test: start the gatehouse cut-scene, and
+/// assert PlayerEnable arrives and Bond gets control back. The scenario places Bond at (100, 26, 108) — the
+/// gatehouse plate — which triggers the cut-scene headless. This test:
 ///  (1) applies the scenario (Bond at the plate),
 ///  (2) ticks the real Sim,
 ///  (3) asserts the cut-scene STARTS (Sim::disabled flips to true — PlayerDisable arrived),
@@ -188,7 +188,7 @@ fn cutscene_pause_fix_drones_paused_but_scripts_run() {
 #[test]
 fn scenario_cutscene_ai_pause_end_to_end() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
-    // B-12: try BOTH the scenario path AND the raw --bond path (the main agent confirmed `--bond 100,26,108
+    // B-12: try BOTH the scenario path AND the raw --bond path (`--bond 100,26,108
     // --frame 1200` works). The scenario may interfere; the raw path sets Bond and ticks.
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
     // Set Bond at the plate, exactly as `--bond 100,26,108` does in lib.rs.
@@ -211,7 +211,7 @@ fn scenario_cutscene_ai_pause_end_to_end() {
     }
     eprintln!("[scenario_live] cutscene-ai-pause (raw --bond): started={:?}, ended={:?}, drones_froze={drones_froze}", started_at, ended_at);
     if started_at.is_none() {
-        eprintln!("[scenario_live] cutscene-ai-pause: SKIP — the gatehouse cut-scene did not fire headless from (100,26,108) in 1500 ticks. The main agent reported it fires with `--frame 1200 --shot`; the trigger may need a condition not met in the test (a switch channel, or a walk path). The unit test `cutscene_pause_fix_drones_paused_but_scripts_run` verifies the fix.");
+        eprintln!("[scenario_live] cutscene-ai-pause: SKIP — the gatehouse cut-scene did not fire headless from (100,26,108) in 1500 ticks. It fires with `nf-view --frame 1200 --shot`; the trigger may need a condition not met in the test (a switch channel, or a walk path). The unit test `cutscene_pause_fix_drones_paused_but_scripts_run` verifies the fix.");
         return; // not a hard failure — the unit test covers the fix; this is a known gap.
     }
     assert!(ended_at.is_some(), "the cut-scene started but never handed control back");

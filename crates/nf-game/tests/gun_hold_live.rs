@@ -250,7 +250,7 @@ fn harness_wall(l: &Level05) -> (CollisionWorld, f32, f32, [f32; 3], u32, f32) {
 /// The full case-3 hold window (no second burst while latched) is NOT pinned here: in the searched
 /// scenarios (seeds 1-12 x dist 5-9) the stand guard sidesteps (0x73/0x74) and the crouch guard
 /// drifts to the cover family after the first burst, whose fire arms carry the later bursts — a
-/// real-path window where the case-3 request itself rides was not found this session (report).
+/// real-path window where the case-3 request itself rides has not been found.
 #[test]
 fn buried_muzzle_latches_through_the_sight_tick() {
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };

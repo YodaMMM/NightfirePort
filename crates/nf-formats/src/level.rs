@@ -462,7 +462,7 @@ impl Level {
     /// door placement's record +0x44 indexes the MAIN map's 0x19 blocks. Verified against `work/ee_start_05.bin`'s
     /// DOORINFO+0xC on 07000005 (7 blocks, index 3 = `Door_UNLocked`'s 3 keys) and against the 5 doors on 07000001
     /// (their record +0x44 indices match the main map's blocks; sub-maps' 0x19 blocks would shift the indices and the
-    /// doors would render at the wrong positions — the bug behind the user's "doors don't work" report on 07000001).
+    /// doors would render at the wrong positions — the bug behind non-working doors on 07000001).
     pub fn path_blocks(&self) -> Vec<&[u8]> {
         self.main_map()
             .map(|m| self.maps[m].path_data.iter().map(Vec::as_slice).collect())

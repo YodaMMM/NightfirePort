@@ -163,7 +163,7 @@ fn every_movie_on_the_disc_demuxes_to_the_golden_numbers() {
 
 fn diff_tsv_n(a: &str, b: &str) -> usize { nf_formats::golden::diff_tsv(a, b).len() }
 
-/// The demuxer's stream classification, on the movie the task's flow research centres on: the first briefing.
+/// The demuxer's stream classification, on the movie the flow research centres on: the first briefing.
 /// Pins the exact per-kind stream ids (video E0, private-1 audio channel 0, the system header as "other") —
 /// not just counts — plus the end code and the 4 trailing pad bytes every movie has.
 #[test]

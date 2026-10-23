@@ -26,7 +26,7 @@
 //! Door_Tunnel_G9_2 (4.00, 49.00, −64.88) → the upper gallery (y≈50.1, the WineTruck building's
 //! top corridor, z −65..−70).
 //!
-//! THE OPEN LEG (the walk's one gap, see docs/reports/level-06-complete.md): the gallery → the
+//! THE OPEN LEG (the walk's one gap): the gallery → the
 //! dressing room (the LoadPoint #746 at (35.5, 44.5, −54.1)). The port's collision gives no
 //! walked connection yet: the gallery's north lip at z≈−65.5 (x 20–30) blocks both walking and
 //! jumping [D probe: grounded at 50.4 across 400 ticks with jump pulses], the east corridor
@@ -234,8 +234,8 @@ fn walk_to_the_gallery(w: &mut Walker, cut: bool) {
 /// [ignore] OPEN (level-06-guardroom-guard): the walked route reaches the guardhouse courtyard,
 /// where the idle guard #438 (skin 0x05000030, drone 2, placement (27.51, 39.18, −10.19) [D
 /// census: p3 switch channel 0, p13 = 0x0600021F the special-death script]) blocks the lane to
-/// door #47 and the fight cannot kill him through the real fire path. THE DIAGNOSIS (this task's
-/// probes, docs/reports/level-06-guardroom-guard.md): the guard is a NORMAL idle guard — the
+/// door #47 and the fight cannot kill him through the real fire path. THE DIAGNOSIS (from
+/// probes): the guard is a NORMAL idle guard — the
 /// port's damage path for his IDLE state is present ([M] impact_args IDLE → (ATTACK, 0); his 16
 /// hit boxes sit at his body and a camera ray hits the head box at t 0.157 vs the first world hit
 /// 0.439) — the wedge is the PLAYER's fire path: (1) the harness `switch_to_armed` accepted the

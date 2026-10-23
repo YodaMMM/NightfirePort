@@ -1,4 +1,4 @@
-//! mp-map-objects (task 744) — the `Car` state machine (the MP remote tank / helicopter),
+//! mp-map-objects — the `Car` state machine (the MP remote tank / helicopter),
 //! pinned to the decompile. Headless: no ISO needed.
 //!
 //! Every assertion cites its [M] address. The drive physics beyond `drive_step_heli`'s input

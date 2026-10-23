@@ -30,8 +30,7 @@
 //!
 //! The port stores the placement-derived record; the script VM (`Script_Load/Play/Update` per
 //! object) and the turret behaviours (`GT_Update` 0x180498, `GT_Track` 0x17f9c8,
-//! `GT_ApplyDamage` 0x1816d8, `GT_Deploy`/`TakeControl` — the full function map in
-//! docs/reports/script-ops-unported.md:78-91) are the tracked gap: the turret records carry
+//! `GT_ApplyDamage` 0x1816d8, `GT_Deploy`/`TakeControl`) are a known gap: the turret records carry
 //! the data those ports (and the draw code) need.
 //!
 //! `GT_DeployMiniGun` 0x181560 [M 00181560 — Ghidra spills the stack args; the flow]: copy the
@@ -252,8 +251,8 @@ pub struct GTCtx<'a> {
     pub mount: Option<(f32, f32, bool, bool)>,
 }
 
-/// What one `GT_Update` tick produced — the data/flow half of the draw/sound work (the main
-/// agent draws and plays; these are the exact game calls [M 00180498]).
+/// What one `GT_Update` tick produced — the data/flow half of the draw/sound work (the view
+/// side draws and plays; these are the exact game calls [M 00180498]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GTEvent {
     /// The top-of-update hide gate: registered[0]'s script state 0/1 → that object's

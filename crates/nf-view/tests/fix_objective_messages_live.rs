@@ -1,4 +1,4 @@
-//! fix-objective-messages — the playtest's banner bugs (results 1013-1758 / 1013-1825), each driven
+//! fix-objective-messages — the banner bugs, each driven
 //! through the REAL path (`nf_view::load` + `Sim::step_bond`, the drawn rows measured off
 //! `hud::overlay`'s quads, the layout the game computes in `HUD_UpdateStatusPane` 0x19c310):
 //!
@@ -88,7 +88,7 @@ impl Rows {
 /// untouched ([M 0x182270:92-95, 120-121] — the mode-1/4 arms never write a record) and the
 /// monitor's case 0 announces every state-0 record whose `record.level <= GameState._12_4_`
 /// ([M 0x1827d8:41-54]). So at a COLD boot the game DOES announce the prior parts' objectives —
-/// [L] the main agent's PCSX2 fresh load of 0700000b shows part-0/1 records announcing over the
+/// [L] a PCSX2 fresh load of 0700000b shows part-0/1 records announcing over the
 /// first ~520 frames, and fix_objective_banner_live's harness already called it "the game's own
 /// cold-load behaviour". The old test asserted the opposite from the warm-arrival snapshot
 /// ([L ee_start_0700000a.bin @ 0x2a3f78: states 2/3/4]) — that state belongs to a WARM arrival,
@@ -163,7 +163,7 @@ fn cold_07000008_announces_the_prior_parts_then_its_own() {
 fn an_objective_complete_banner_draws_one_row_not_two() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load");
-    // The warm carry from 05/06 (the state the playtest ran in): the earlier parts' records preset
+    // The warm carry from 05/06 (the state real play runs in): the earlier parts' records preset
     // complete, 07's own first objective carried complete too — the window under test is the
     // trigger's one completion, exactly as fix-objective-banner's test frames it.
     {
@@ -210,7 +210,7 @@ fn an_objective_complete_banner_draws_one_row_not_two() {
     let status = rows.band(0.0, 24.0);
     assert!(status.is_some(), "the OBJECTIVE COMPLETE status label draws");
     // …and the body row (template y 40) draws NOTHING for a complete message — the port used to
-    // draw the same string there again, the user's "two objective completion messages".
+    // draw the same string there again: two objective-completion messages.
     assert!(!rows.any_in(0.0, 512.0, 24.0, 46.0),
         "the body row must stay hidden while OBJECTIVE COMPLETE displays");
     // Sister: the status row's text is centred on the box (16..496 → centre 256).

@@ -1,5 +1,5 @@
-//! scorpion-rocket-speed: the AT-600 Scorpion's rockets fly at the game's flight speed — playtest
-//! 1016-1355 (MP): "Scorpion rockets are way too slow".
+//! scorpion-rocket-speed: the AT-600 Scorpion's rockets fly at the game's flight speed (in MP they
+//! flew far too slow).
 //!
 //! The Sentinel's flight scale was measured live: the 'Unguided' 0x2d's BU+0xF8 reads 0.33666
 //! u/frame, constant over the flight, = (+0x20 0.3333 [L] × the 0x200 quarter [M `Bullet_init`
@@ -17,7 +17,7 @@
 //! direction only and never writes BU+0xF8 [M :126-166], and the guided cam is init-time only [M
 //! `Bullet_init` 0x12c5a0:234-254]. So the ×4.04 scale applies: predicted flight 0x2e = 0.2525,
 //! 0x2f = 0.336667 u/tick (the 0x2d's measured value — its flags are identical). The port flew
-//! them init-only (0.0625 / 0.0833) — 4.04× slow, the user's complaint to the digit.
+//! them init-only (0.0625 / 0.0833) — 4.04× slow.
 //!
 //! Through the REAL input path (the give, the switch and the fire ride the window's `Input`
 //! lanes through `Sim::step_bond`), like the sister `sentinel_camera_live.rs`. Opt-in via NF_ISO.
@@ -54,7 +54,7 @@ fn give_and_select(scene: &mut Scene, weapon: u8) {
 /// [M Bullet_init 0x12c5a0:207-211; Bullet_DoTrails 0x12d890:134-138] to the game's flight speed:
 /// the Heatseeker 0x2e cruises at 0.0625 + 38 × 0.005 = 0.2525 u/tick and the Unguided 0x2f at
 /// 0.0833 + 38 × 0.00667 = 0.336667 (= the measured 0x2d's flight [L PCSX2 2026-10-14] — its +0x6C
-/// is byte-identical [L]) — not the init-only 0.0625/0.0833 the playtest called "way too slow".
+/// is byte-identical [L]) — not the init-only 0.0625/0.0833, which flew far too slow.
 /// Sisters: the homing bit lands on the bullet the game's way (0x2e true, 0x2f false [L +0x6C 0x32200
 /// vs 0x1a200]), and neither twin rides the camera (no 0x4 [L]). (rocket-ramp: the old pin read an
 /// early-flight displacement against a constant ×4.04 stand-in.)
@@ -94,6 +94,6 @@ fn the_scorpion_rockets_fly_at_the_game_flight_speed() {
         eprintln!("[scorpion] weapon {weapon:#04x}: speed {last:.5} after {steps} ticks (want {want:.5})");
         assert!(steps >= 40, "the rocket flew {steps} ticks — too short to reach its cruise");
         assert!((last - want).abs() < 1e-4,
-            "the {weapon:#04x} rocket cruises at {last:.5} u/tick, the game's flight speed is {want:.5} (master's init-only speed was 4.04× slower — the playtest's complaint)");
+            "the {weapon:#04x} rocket cruises at {last:.5} u/tick, the game's flight speed is {want:.5} (the old init-only speed was 4.04× slower)");
     }
 }

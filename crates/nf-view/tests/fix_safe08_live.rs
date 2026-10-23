@@ -1,8 +1,8 @@
 //! fix-safe08: the 07000008 bedroom — the safe's pickups and the exterior block. Driven through the
 //! REAL path (`nf_view::load` + `Sim::step_bond`).
 //!
-//! Playtest 2026-10-12 (safe08, after fix-party-mission): "cant pickup the briefcase or rocket
-//! launcher, big … obstacle in the way". Two findings:
+//! safe08 (after fix-party-mission): the briefcase and rocket launcher could not be picked up, and a
+//! big obstacle stood in the way. Two findings:
 //! 1. The takeable items are spawned by the SafePickUps script 0x060009E2 (`Script_CreateEntity`
 //!    0x1d8968's obj_type-0xF0 arm → `Pickup_Create` 0x18dda0, rest = 1 [M disasm 0x1d8bcc-0x1d8c20])
 //!    at the safe's shelves when ch 136 opens; the disc's parked 0xF0 placements (#290/#291) sit at
@@ -286,7 +286,7 @@ fn probe_blue_block_and_take_rays() {
 }
 
 /// ── Bond walks from the bedroom door to the safe without the blue block ─────────────────────────
-/// The user's playtest: "big … obstacle in the way" — `Room_Outside_3`'s (map51 obj16) collision tris
+/// The big obstacle in the way — `Room_Outside_3`'s (map51 obj16) collision tris
 /// stand in the bedroom. The game never collides them from indoors: `Collide_Pick` (0x1eb320) tests
 /// only the cels `Collide_StraddleCels` (0x1eac98) collects through portals the query straddles
 /// (`Intersect_Portal` 0x1ea7b8), and the bedroom's cell has no portal path to the exterior's cell
@@ -303,7 +303,7 @@ fn bond_walks_from_the_bedroom_door_to_the_safe_without_the_block() {
     let mut scene = load(&iso, "07000008.bin");
     for _ in 0..60 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     let sim = scene.sim.as_mut().unwrap();
-    // The bedroom door (the user's render spot for the block), facing the safe.
+    // The bedroom door (the render spot for the block), facing the safe.
     sim.bond.pos = [155.19, 43.12, -113.38];
     sim.bond.yaw = (161.87f32 - 155.19).atan2(-116.54 - -113.38);
     sim.bond.pitch = 0.0;
@@ -311,7 +311,7 @@ fn bond_walks_from_the_bedroom_door_to_the_safe_without_the_block() {
     assert!(sim.bond.cel.is_some(), "the walk's start cell resolved (the scope is engaged)");
     let input = Input { forward: 1.0, ..Default::default() };
     let mut min_dist = f32::INFINITY;
-    let safe = [161.87, 43.39, -116.54]; // the user's take spot in the safe doorway
+    let safe = [161.87, 43.39, -116.54]; // the take spot in the safe doorway
     for t in 0..600 {
         sim.step_bond(input, false, false, false);
         let p = sim.bond.pos;
@@ -467,7 +467,7 @@ fn the_briefcase_is_not_takeable_before_the_safe_opens() {
     assert!(sim.drones.taken.is_empty(), "nothing was taken at the closed safe");
 }
 
-/// ── The safe's pickups take at the safe (the user's spot) ────────────────────────────────────────
+/// ── The safe's pickups take at the safe (the take spot) ──────────────────────────────────────────
 /// Bond walks from the fusebox to the safe, opens it (ch 136), and takes the briefcase (kind 4 →
 /// ch 0x4A, `Pickup_Handler` 0x18e650:330-333) and the rocket launcher (id 0x2C) standing where the
 /// user stood — never teleported into the safe.
@@ -478,7 +478,7 @@ fn the_safe_pickups_take_after_the_safe_opens() {
     for _ in 0..120 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     open_safe(&mut scene);
     let sim = scene.sim.as_mut().unwrap();
-    // The user's spot: in the doorway, both items visible right in front.
+    // The take spot: in the doorway, both items visible right in front.
     sim.bond.pos = [161.87, 43.39, -116.54];
     sim.bond.yaw = 1.583;
     sim.bond.pitch = -0.495;

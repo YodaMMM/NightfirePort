@@ -1,6 +1,6 @@
-//! playtest_spots_live — docs/playtest/spots.md checked headlessly, one test per level.
+//! playtest_spots_live — the per-level feature spots checked headlessly, one test per level.
 //!
-//! For every playtest feature: load the level, wait out the intro the way the game's own skip does
+//! For every feature spot: load the level, wait out the intro the way the game's own skip does
 //! (`scripts.skip_request` while disabled), place Bond exactly where the window's `--bond x,y,z,yaw,pitch`
 //! puts him (`Bond::new(pos, yaw)` + raw `bond.pitch`, lib.rs:2977-2982), run 60 fixed-60 Hz ticks and
 //! assert he is GROUNDED (not falling; SS_SWIM where the spot is in the pond) and the feature object is
@@ -8,8 +8,7 @@
 //! Q-Worm shot 2.0) plus a clear eye ray where the game's own path needs one (the laser's beam, the
 //! Q-Worm's bullet, the Q-Claw's bolt, a guard in view). Numbers only — no game bytes.
 //!
-//! Every spot's coordinates and their sources live in docs/playtest/spots.md; the object positions are
-//! the disc placements ([D]) the cited tests already assert against.
+//! The object positions are the disc placements ([D]) the cited tests already assert against.
 
 use nf_game::player::{Bond, Input};
 use nf_game::triggers::kind;
@@ -68,12 +67,12 @@ fn require_los(sim: &nf_view::scene::Sim, to: V3, label: &str) {
 
 // ---------------------------------------------------------------------------
 // 07000005 — the grapple points, the cable, the gate guards' ledge, the
-// Scorpion's patrol guard, the crawl vent. docs/playtest/spots.md §05.
+// Scorpion's patrol guard, the crawl vent.
 // ---------------------------------------------------------------------------
 
-/// Q-Claw grapple #282 (13.752, 32.292, 57.303) from the main-agent playtest spot [D #282;
-/// grapple_hook_live.rs:35-38 + fix-grapple-hook.md:151]; #281 (−3.396, 42.940, −71.769) from the
-/// user's reported spot [gadget_grapple_user_spot.rs:22-25]. The bolt's range is 50.0
+/// Q-Claw grapple #282 (13.752, 32.292, 57.303) from its check spot [D #282;
+/// grapple_hook_live.rs:35-38]; #281 (−3.396, 42.940, −71.769) from the
+/// second spot [gadget_grapple_user_spot.rs:22-25]. The bolt's range is 50.0
 /// [M weapon_data[0x50]+0x1C, Bullet_update 0x12e7b0:158] and the bolt flies — distance + LOS.
 #[test]
 fn spots_07000005_grapple_points_in_reach() {
@@ -82,14 +81,14 @@ fn spots_07000005_grapple_points_in_reach() {
     let sim = scene.sim.as_mut().unwrap();
     free(sim);
 
-    // #282: the playtest spot — 4.05 out, yaw −2.01 faces the point (atan2 of the offset).
+    // #282: the check spot — 4.05 out, yaw −2.01 faces the point (atan2 of the offset).
     place_and_ground(sim, [16.5, 29.6, 58.6], -2.01, 0.24, "05 grapple #282");
     let d = d3(sim.bond.pos, [13.752, 32.292, 57.303]);
     assert!(d < 50.0, "05 grapple #282: {d:.2} exceeds the Q-Claw bolt range 50.0 [M 0x12e7b0:158]");
     require_los(sim, [13.752, 32.292, 57.303], "05 grapple #282");
     eprintln!("[05 grapple #282] distance {d:.2}");
 
-    // #281: the user's spot — 15.4 out (yaw −4.717 ≡ 1.566 wrapped).
+    // #281: the second spot — 15.4 out (yaw −4.717 ≡ 1.566 wrapped).
     place_and_ground(sim, [-18.28, 38.19, -71.83], -4.717, 0.151, "05 grapple #281");
     let d = d3(sim.bond.pos, [-3.396, 42.940, -71.769]);
     assert!(d < 50.0, "05 grapple #281: {d:.2} exceeds the bolt range 50.0");
@@ -120,8 +119,8 @@ fn spots_07000005_cable_in_reach() {
 
 /// The gate guards' ledge: the posts (28.34, 37.12, 44.86)/(32.06, 37.12, 44.86) [D; docs/levels/
 /// 07000005.md §4], the stand 3.0 north of the first post facing it [S characters.md:59]. The pair
-/// is spawner-held until ch 0x22 — the check is the POSTS' reach (the playtest walks the courtyard
-/// first, then spawns here; see the doc's gotcha).
+/// is spawner-held until ch 0x22 — the check is the POSTS' reach (in play the courtyard is walked
+/// first, then the pair spawns here).
 #[test]
 fn spots_07000005_gate_guard_ledge_in_reach() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -175,7 +174,7 @@ fn spots_07000005_scorpion_guard_in_view() {
     require_los(sim, sim.drones.list[di].pos, "05 scorpion guard");
 }
 
-/// The crawl vent (the real one is 05's, not 02's — docs/playtest/spots.md §02 note): creepwall
+/// The crawl vent (the real one is 05's, not 02's): creepwall
 /// #35 "Wall Hug Window" (−34.103, 37.279, −31.652) [D placement; fix_swim_vent_live.rs:48-50's
 /// stand spot on the wall's axis]. E with the crawl context enters SS_CREEP [M 0x196758].
 #[test]
@@ -329,7 +328,7 @@ fn spots_0700000c_jetpack_photo_in_reach() {
 // 07000002 — the water bank, the pond swim + the ladder out, the bathhouse hatches.
 // ---------------------------------------------------------------------------
 
-/// The bank spot [D fix_swim_live.rs:43 — the user's own reported spot]: floor 4.155, the pond's west
+/// The bank spot [D fix_swim_live.rs:43]: floor 4.155, the pond's west
 /// edge 2.0 ahead (+x, yaw 1.57). Grounded on the bank, and the pond's west edge (water cel 17
 /// x −80.3..−54.1, surface 3.765 [D fix_swim_entry_live.rs:17-24]) within a stride.
 #[test]

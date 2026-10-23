@@ -44,9 +44,9 @@
 //!
 //! fix-death-restart had the restart COLD to `Mission_BaseMapHCode()`, citing 0x204408 — that is
 //! the PAUSE menu's Restart, not the fail menu's (the handler routing, above). Carrying the DYING
-//! state is what looped the 07000007 session (playtest 2026-10-12): a capture taken at the fail
+//! state is what looped the 07000007 session: a capture taken at the fail
 //! brings ch 99 back. The game never does that — the restart restores the ENTRY checkpoint, whose
-//! channels predate the fail (fix-restart-target; docs/reports/fix-restart-target.md).
+//! channels predate the fail (fix-restart-target).
 
 /// The red fade's tick count (`RED_FADE_TICKS`): see the module docs — sprite width 512 [L
 /// BloodSprInfo 0x2bcfd8], the cover gate `viewer.h = 448` [M 0x19f4e8:33].

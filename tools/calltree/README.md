@@ -9,7 +9,6 @@ name or address appears nowhere in `crates/*/src`. "Mentioned" is not "ported co
 never-mentioned reachable function is certainly missing (or must be proven unused / replaced, with a
 citation in the code).
 
-**The rule (the user, 2026-10-20):** a feature is not done while its entry reports never-mentioned
-callees. Every task that ports a game function runs this on that function before pushing and lists
-the result in its report: each remaining callee is ported, or cited in the code as replaced by a
-named port function, or proven never called on the shipped path.
+**The rule:** a feature is not done while its entry reports never-mentioned callees. Each remaining
+callee is ported, or cited in the code as replaced by a named port function, or proven never called
+on the shipped path.

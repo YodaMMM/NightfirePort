@@ -301,7 +301,7 @@ fn a_scenario_object_desync_is_detected() {
     let r = row(None, 2);
     let [(sa, la), (sb, lb)] = p.sims();
     assert_ne!(machine(sa, la, &r), machine(sb, lb, &r), "a flag-counter difference shows in the hash");
-    // release the pair before the next load — four live arena scenes overflow this sandbox
+    // release the pair before the next load — four live arena scenes overflow a small test machine
     // (memory hygiene only; the asserts are unchanged)
     drop(p);
     // and a team score

@@ -1,4 +1,4 @@
-//! level-0b model sweep (task 711a): every material on 0700000b resolves a texture — no white
+//! level-0b model sweep: every material on 0700000b resolves a texture — no white
 //! fallback — and every placement's world instance resolves its mesh (the loader census prints
 //! "0 unresolved" for the level). The GPU's missing-texture path draws a 1×1 white;
 //! `NF_TEX_TRACE=1` prints the fallbacks at load; this test pins the same condition through the

@@ -44,12 +44,12 @@
 //! gadget itself was previously not ported (docs/port-map/gadgets.md — all of 0x4A..0x5E are out of
 //! selection), so the burn was a method the (future) `Player_LaserPointer` 0x1a65d8 calls per tick
 //! while its ray hits the lock's world sphere, and tests could drive it directly. The framelist
-//! open-animation is not posed — render-side, noted in the report.
+//! open-animation is not posed (render-side).
 //! ported (docs/port-map/gadgets.md — all of 0x4A..0x5E are out of selection), so the burn is a
 //! method the (future) `Player_LaserPointer` 0x1a65d8 calls per tick while its ray hits the lock's
 //! world sphere, and tests can drive it directly. The bolt meshes are not drawn yet (the 0x2E
 //! placements are not in the port's dynamic draw list) and the framelist open-animation is not
-//! posed — both render-side, noted in the report.
+//! posed (both render-side).
 
 use crate::drone::Rng;
 use crate::triggers::Channels;
@@ -329,7 +329,7 @@ impl KeyCodes {
 ///   closed without a match → state 0 (re-armable). The per-frame `MenuManager_Enable(1, slot)`
 ///   keep-alive is the manager-pool housekeeping the port folds into `open` staying true.
 ///
-/// The view draws (main agent): the keypad page's 24 controls as laid out in the level def —
+/// The view draws: the keypad page's 24 controls as laid out in the level def —
 /// the digit grid, and the display label 0x10000075 bound to [`Self::display`]; when
 /// `code_shown` the hint line shows the code (`Lock_Update` case 3 binds the sprintf'd
 /// "%d%d%d%d" through Txt_BindLabel 0x2000014 + Text_AddMsg 0xb4 [M 0x1ae3d8:249-258]).

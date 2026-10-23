@@ -1,12 +1,12 @@
 //! fix-player3 repro tests, driven through the REAL path the viewer uses (`nf_view::load` + `Sim::step_bond`).
 //!
-//! The user's playtest (master afc60ed, 07000001 unless noted):
+//! The symptoms (07000001 unless noted):
 //! 1. a dead guard drops his gun PLUS a separate ammo pickup — the game drops only the gun;
 //! 2. armour pickups should glow (the game's close-up pulse);
 //! 3. reloading from empty (the Raptor at 0) plays the wrong animation;
 //! 4. switching weapons mid-reload breaks shooting permanently;
-//! 5. the thrown grenade "doesn't really happen" and there is no explosion;
-//! 6. the PS2 game (per the user) won't fire while the red "no" crosshair shows — the decompile says otherwise.
+//! 5. the thrown grenade does nothing and there is no explosion;
+//! 6. the claim that the PS2 game won't fire while the red "no" crosshair shows — the decompile says otherwise.
 //!
 //! Opt-in via `NF_ISO`.
 
@@ -186,7 +186,7 @@ fn reload_from_empty_plays_the_1_35x_loop_and_lands_on_idle() {
     let mut scene = load(&iso, "07000001.bin");
     let sim = scene.sim.as_mut().unwrap();
     tick_idle(sim, 2);
-    // The user's path: the clip empties with NO spare (so no auto-reload), he picks up ammo, presses R.
+    // The repro path: the clip empties with NO spare (so no auto-reload), he picks up ammo, presses R.
     let atype = sim.weapons.ammo_type(2);
     sim.drones.inventory.carried[atype] = 0;
     aim_at(sim, [sim.bond.head()[0], sim.bond.head()[1] + 30.0, sim.bond.head()[2] + 5.0]);
@@ -199,7 +199,7 @@ fn reload_from_empty_plays_the_1_35x_loop_and_lands_on_idle() {
     let p = nf_game::pickup::Pickup::create_placed(sim.bond.pos, [0.0; 3], nf_game::pickup::kind::AMMO, 2, 30, 0, 0xFFFF, 0, 0, model, bounds, &sim.weapons, &std::collections::HashMap::new()).expect("ammo pickup");
     sim.drones.pickups.push(p);
     // The take and the game's auto-reload (branch B: not newly pressed + clip < ammo_per_shot + spare
-    // now > 0 [M 0x1a5460:442-462]) land on the SAME tick — the user's extra R press is a no-op then.
+    // now > 0 [M 0x1a5460:442-462]) land on the SAME tick — the extra R press is a no-op then.
     sim.step_bond(Default::default(), false, false, false);
     assert!(sim.drones.inventory.carried[atype] > 0, "the ammo pickup was taken");
     if sim.gun.reload_state == 0 {
@@ -277,7 +277,7 @@ fn switching_mid_reload_is_refused_and_firing_recovers() {
     sim.gun.switch_request = 2;
     tick_idle(sim, 90);
     assert_eq!(sim.gun.weapon, 2);
-    // Firing works — the user's "breaks shooting permanently" must not happen.
+    // Firing works — shooting must not break permanently.
     tick_idle(sim, 5);
     let before = sim.drones.player_bullets.len();
     let mut fired = false;

@@ -1,4 +1,4 @@
-//! fix-weapon-anims (task 103k): the per-weapon first-person view-model animations.
+//! fix-weapon-anims: the per-weapon first-person view-model animations.
 //!
 //! Six weapons covering every reload kind — the P2K 0x02 (magazine, silenced twin 0x03), the
 //! Frinesi Auto-12 0x1C (per-shell start/loop/end + the Auto twin 0x1D), the Winter Covert Sniper
@@ -9,7 +9,7 @@
 //! hashes, playback speeds and tick lengths for draw → fire → reload → mode switch → holster,
 //! plus the idle fidget (+0xCC) and the aim raise/lower (+0xB8/+0xBC).
 //!
-//! Game side: the census table in docs/reports/fix-weapon-anims.md (script hashes + frame lengths
+//! Game side: the census (script hashes + frame lengths
 //! measured off the disc's 07000029.bin archive via examples/probe_weapon_anims.rs) and the
 //! decompile round on `Player_SetWeaponAnimObj` 0x1a2e38 / `Player_Weapon` 0x1a24c8 /
 //! `Player_WeaponSelect` 0x1a2cc0 / `Player_WeaponFiring` 0x1a5460 (the case table in the report).
@@ -133,7 +133,7 @@ fn load(iso: &str) -> Scene {
     scene
 }
 
-/// The script frame length from the disc census (docs/reports/fix-weapon-anims.md).
+/// The script frame length from the disc census.
 fn len_of(scene: &Scene, h: u32) -> u32 {
     scene.sim.as_ref().unwrap().scripts.get(&h).unwrap_or_else(|| panic!("script {h:#x} missing")).length as u32
 }

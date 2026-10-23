@@ -73,8 +73,8 @@ fn panel_entries_match_the_weapon_table() {
         assert_eq!(e.gadget, (0x4a..=0x5e).contains(&e.id), "entry {:#04x}: the gadget flag must be the game's gadget cycle", e.id);
         assert!((1..=0x46).contains(&e.id) || (0x4a..=0x5e).contains(&e.id), "entry {:#04x} sits outside both cycles", e.id);
     }
-    // The records the game never equips on Bond are not rows (the user's "I can't tell what's
-    // what"): the padding, the AI rocket record 0x62, and the 0x68..0x6F drop/AI variants that
+    // The records the game never equips on Bond are not rows (they made the list confusing):
+    // the padding, the AI rocket record 0x62, and the 0x68..0x6F drop/AI variants that
     // borrow OTHER weapons' name labels (0x69 binds the Smoke Grenade label, 0x6A/0x6E the
     // Q-Claw's, 0x6D the AT-600 Scorpion's, 0x6F the Militek MGL's [L ee_start_05.bin 0x2bf150]).
     for noise in [0x48u8, 0x49, 0x62, 0x68, 0x69, 0x6a, 0x6d, 0x6e, 0x6f] {
@@ -92,7 +92,7 @@ fn panel_entries_match_the_weapon_table() {
     assert_eq!(gren(0x34).proj, 0x0200_02af, "the frag's projectile mesh [L +0x5C]");
     assert_eq!(gren(0x35).proj, 0x0200_0726, "the stun's projectile mesh [L +0x5C]");
     assert_ne!(gren(0x34).proj, gren(0x35).proj, "the frag and the stun draw different bodies");
-    // The rocket launchers say their own names (the user: "no clue what the rocket launcher is").
+    // The rocket launchers say their own names.
     assert_eq!(gren(0x2c).name, "AT-420 Sentinel");
     assert_eq!(gren(0x2e).name, "AT-600 Scorpion");
     assert_eq!(gren(0x2c).proj, 0x0200_0432, "the Sentinel's rocket mesh [L +0x5C]");

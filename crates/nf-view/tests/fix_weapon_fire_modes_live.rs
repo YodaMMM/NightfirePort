@@ -5,8 +5,8 @@
 //! Ground truth: docs/live/2026-10-13-weapon-modes-pcsx2.md — the Militek MGL is a TWIN pair,
 //! 0x2A 'Grenade' = IMPACT detonation, 0x2B 'Delay' = a ~210-tick fuse; the AT-420 Sentinel 0x2C
 //! 'Guided' puts the view ON the rocket and the look input steers it, until impact (red static,
-//! then Bond's view). The user: "The MGL grenade launcher is always delayed when I believe it
-//! should be impact for one of the modes."
+//! then Bond's view). The MGL grenade launcher was always delayed, though one of its modes should
+//! detonate on impact.
 //!
 //! fix-fire-modes2: every impact blast flows through master's single path — the bullet world-hit
 //! queues `pending_blasts` (`Bullet_CollisionHandler` 0x12d068-0x12d0bc [M]) and the grenade
@@ -148,7 +148,7 @@ fn mgl_grenade_0x2a_detonates_on_impact_and_delay_0x2b_runs_its_fuse() {
             sim.step_bond(if t == 0 { input } else { Input::default() }, t == 0, false, false);
             if sim.drones.explosions.len() > before { contact_boom = Some(t); break; }
         }
-        assert!(contact_boom.is_none(), "0x2B 'Delay' must not explode on contact — the wall shot at tick {:?} detonated early (the user's symptom is the reverse pairing)", contact_boom);
+        assert!(contact_boom.is_none(), "0x2B 'Delay' must not explode on contact — the wall shot at tick {:?} detonated early (the old symptom is the reverse pairing)", contact_boom);
     }
     let mut fuse_boom = None;
     for _ in 0..260 {

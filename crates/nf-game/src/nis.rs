@@ -342,7 +342,7 @@ impl Script {
         out.push(Request::Event { kind: 0x40, params: vec![self.nis.hashcode] });
         // The ScriptCam arm's other half [M 0x1dac78:26-30]: `Input_ClearAllActions(-1)` (the port's skip is
         // edge-latched, nothing to clear) and `Text_FlushAllSubtitles()` — the shown dialogue line dies with
-        // the skip (the user's playtest 1014-1725: the port kept it). Reaching here means the camera flag is
+        // the skip (the port used to keep it). Reaching here means the camera flag is
         // set (the top gate), which is the game's `ScriptCam != 0`.
         out.push(Request::TextFlush);
     }
@@ -388,8 +388,7 @@ impl Script {
                 // single `SubTitleMsg` sprite at whatever the list's live type-4 message is, so each
                 // `Text_AddMsg` during the catch-up overwrites the previous one — the LAST add of the
                 // fast-forward is what survives, and it expires on its own duration. (The port's queued HUD
-                // lines would replay the whole remaining dialogue after the skip — the user's playtest
-                // 1014-1725: "the dialogue still kept going until it finished".) Keep only the last Text
+                // lines would replay the whole remaining dialogue after the skip.) Keep only the last Text
                 // request the catch-up passes push; the flush request already cleared what was on screen.
                 let mut last_text = None;
                 out.retain(|r| if matches!(r, Request::Text { .. }) { last_text = Some(r.clone()); false } else { true });
@@ -779,8 +778,8 @@ impl Script {
                 }
             }
             // Case 5: `Sound_Stop(stream+0x10)` [M 0x1d9860:96-99] — the NIS voice/sound stream dies with
-            // the script (the skip's catch-up frees the script mid-line; the user's playtest 1014-1725:
-            // "the voice line itself" kept going to its end because the port never stopped it).
+            // the script (the skip's catch-up frees the script mid-line; the voice line used to
+            // run to its end because the port never stopped it).
             5 => self.pending.push(Request::SoundStop { src: (self.nis.hashcode, i as u8) }),
             _ => {}
         }
@@ -823,7 +822,7 @@ impl Script {
     #[allow(clippy::too_many_arguments)]
     fn event(&mut self, i: usize, kind: u8, p: Vec<u32>, objs: &Objects, ch: &mut Channels, frame: u32, out: &mut Vec<Request>) {
         // NF_SCRIPTLOG=1 (or NF_LEVELLOG=1): every script event (op 0x12) fired — tick (script clock), game frame,
-        // owning ScriptPlayer's placement index, script hashcode, stream, event kind, params. Lets the user see
+        // owning ScriptPlayer's placement index, script hashcode, stream, event kind, params. Shows
         // e.g. that 07000005's EndLevel script (0x06000A23) fires event 0x11 → ch 0x1D, or that the truck script
         // (0x06000A22) fires only events 0xC and 0xD (not 0x12) [M Script_EventHandler 0x1d94c0].
         if std::env::var("NF_SCRIPTLOG").is_ok_and(|v| v == "1") || std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1") {
@@ -935,7 +934,7 @@ impl Script {
                 // at a parent-chain end" per the case-1 tail-Concat structure [M 0x1d9a08:106-133] — it
                 // REVERTED: 07000014's fusebox wire and 07000008's safe entities key LOCAL offsets and are
                 // render-verified with the base applied, so the game composes the base for unparented
-                // streams too (the decompile loses the step). See the report: #289's marker stays the
+                // streams too (the decompile loses the step). #289's marker stays the
                 // open question (base-composed −107.66 = void on its column; raw −54.13 = the freeze pose;
                 // the game's mode-1 SphereIntersect rescue is the live check).)
                 let mut p = s.parent;
@@ -1119,7 +1118,7 @@ impl Script {
             // game's spline samples run ONE KEY AHEAD of the port's raw-t reading, position AND rotation
             // together. Porting that needs BOTH the position parameter and this weight switched at once
             // (a rotation-only switch is incoherent) and a render check on a spline-scripted level —
-            // filed as a live check in the report; the port keeps the raw-t evaluation until then.
+            // an open live check; the port keeps the raw-t evaluation until then.
             let (ix, wt, t) = if idx < 0 || idx as usize >= n {
                 let j = idx.clamp(0, n as isize) as usize;
                 ([j; 4], [0.0, 1.0, 0.0, 0.0], 0.0)
@@ -1310,7 +1309,7 @@ impl Player {
         // `Copter_Update` 0x17dbb8's head unhides it on the gate's first ON tick
         // (docs/systems/copter-sp-hide.md). (The port's old stand-in — skipping mask-0 SPs here, the
         // disabled-byte reading from pickup-port-check §9 — is removed: it froze the multiplayer
-        // gondolas, playtest 1016-1355.) The prime runs for HIDDEN players too: the game primes
+        // gondolas.) The prime runs for HIDDEN players too: the game primes
         // first (`SP_Create`'s tail into `SP_CreateScriptPlayer`) and hides second
         // (`SP_HideObj(sp, 1)` is the next statement) [M 0x1dc7e0 → 0x1db9a8 → 0x17d340:73-74] —
         // the frozen SP holds its primed pose, its entities hidden by the Script_HideObj cascade.
@@ -1589,8 +1588,8 @@ impl Scripts {
         // once), the way a hidden `SP_CreateScriptPlayer` one-shot runs (`spawn_once`'s precedent, the
         // copter script [M 0x1dbc08's mode dispatch]). Without it the port's courtyard heads stay state
         // 3 (dark) forever, the alarm channel 55 can never rise and the guards never react. The real
-        // activation moment (which SP fires it in the game, and on which beat) is a live check in
-        // docs/reports/fix-searchlight-alarm.md. Pinned to the level by its own data: a class-0x22 head
+        // activation moment (which SP fires it in the game, and on which beat) is an open
+        // live check. Pinned to the level by its own data: a class-0x22 head
         // placement whose alarm channel is 55 AND the script in the lib.
         let light_boot = placements.iter().any(|p| p.flags & 0xff == 0xde
             && p.params.iter().any(|&(k, v)| k == 3 && v == 55))
@@ -1883,8 +1882,8 @@ impl Scripts {
     /// walk (`SP_LoadScript`'s trailing `Script_Update` [M 0x1dbc08:56]); the objects after it see
     /// event 5's `Drone_EnableAll(0)` before their own control funcs run. (The port used to update
     /// every player together BEFORE the walk — a script triggered by a placement trigger saw the
-    /// channel one tick late and the spawners acted a tick before the freeze: the 07000005 playtest
-    /// had the gate guards vanish on the touch tick instead of after the wall-hug scene.)
+    /// channel one tick late and the spawners acted a tick before the freeze: on 07000005
+    /// the gate guards vanished on the touch tick instead of after the wall-hug scene.)
     pub fn update_player(&mut self, i: usize, ch: &mut Channels, w: &dyn World, frame: u32, skip: bool, gate: SpStart) {
         if i >= self.players.len() { return; }
         self.players[i].update(&self.lib, &mut self.objects, ch, w, frame, &mut self.requests, skip, gate);
@@ -2256,7 +2255,7 @@ mod tests {
         assert!(s2.play & 2 == 0 || s2.clock < 100.0, "the death NIS was not fast-forwarded (clock {} play {:#x})", s2.clock, s2.play);
     }
 
-    /// The held-script rule (GAPS G-047, task 732): a NEGATIVE delay HOLDS — the streams stop,
+    /// The held-script rule (GAPS G-047): a NEGATIVE delay HOLDS — the streams stop,
     /// the clock freezes, the delay does not count down — and a held entity sits at its FIRST
     /// KEY's position [M Script_Update 0x1da9c4-0x1da9dc: `blez` → the epilogue, no store, no
     /// decrement; Script_EntityStart 0x1d8d78 tails with `Script_Interp`, so the object is

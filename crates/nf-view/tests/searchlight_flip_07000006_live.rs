@@ -1,6 +1,6 @@
 //! searchlight-flip-06: the 07000006 courtyard searchlights' beam basis must stay CONTINUOUS tick
-//! to tick over the sweep (playtest 1013-1825: "sometimes a spotlight will cover a piece of ground
-//! and it will like flip on its side"). Driven through the real path (`nf_view::load` +
+//! to tick over the sweep (a spotlight covering a piece of ground
+//! sometimes flipped on its side). Driven through the real path (`nf_view::load` +
 //! `Sim::step_bond`), Bond parked inside head #2's sweep so the aim crosses the Bond−head direction
 //! every period — the `Mat_Align2Dir` 0x1df2a8 near-degenerate window (`|up·row2| > 0.999`
 //! [M 0x1df2a8: the 0x3f7fbe77 threshold]; the searchlight beam passes up = fallback = Bond − head
@@ -35,7 +35,7 @@ fn every_06_beam_basis_stays_continuous_over_the_sweep() {
     }
     assert!(lit, "a courtyard head sweeps (the boot raised its on-channel)");
     // Bond parks inside head #2's sweep: the aim crosses his direction every period — the
-    // near-degenerate window — and the spot's pass may arm the tracker (state 1), the playtest's
+    // near-degenerate window — and the spot's pass may arm the tracker (state 1), the
     // sustained-tracking case.
     sim.bond.pos = BEAM_SPOT;
 
@@ -98,7 +98,7 @@ fn every_06_beam_basis_stays_continuous_over_the_sweep() {
     for v in violations.iter().take(12) { eprintln!("[flip] {v}"); }
     eprintln!("[flip] tracked={tracked} violations={}", violations.len());
     assert!(violations.is_empty(),
-        "a searchlight part's basis snapped tick-to-tick (the playtest's 'flip on its side'); \
+        "a searchlight part's basis snapped tick-to-tick (the 'flip on its side'); \
          first: {}", violations[0]);
 }
 
@@ -139,7 +139,7 @@ fn a_straight_down_beam_uses_the_games_fallback() {
     }
 }
 
-/// The playtest's scenario: Bond WALKS through the courtyard across the beam lines — the spots
+/// The play scenario: Bond WALKS through the courtyard across the beam lines — the spots
 /// sweep over moving ground, heads arm/track/lose — the beam basis must stay continuous through
 /// all of it (the same tick-to-tick assert, Bond at walking speed, no fixed parking spot).
 #[test]

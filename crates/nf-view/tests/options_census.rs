@@ -51,8 +51,8 @@ fn the_no_port_reader_entries_cite_their_reason() {
     }
 }
 
-/// The Auto Aim pair is classified Wired — the user report 2026-10-21 that started the census
-/// ("Auto Aim did nothing") is the regression this list guards.
+/// The Auto Aim pair is classified Wired — the bug that started the census (Auto Aim did
+/// nothing) is the regression this list guards.
 #[test]
 fn the_auto_aim_rows_are_wired() {
     assert_eq!(menu::opt_census(0x1000_011b), Some(OptCensus::Wired), "SP auto aim [M 0x1a7c98:41]");

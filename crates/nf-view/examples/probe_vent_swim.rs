@@ -135,7 +135,7 @@ fn main() {
     }
 
     // Bank candidates around the pond: probe a ring of columns 2..8 units outside the bbox for the
-    // highest up-facing floor within 3..8, i.e. where the user would walk from.
+    // highest up-facing floor within 3..8, i.e. where the player would walk from.
     println!("bank ring (floor_below one-sided, from y=8):");
     for (dx, dz, label) in [(1.0, 0.0, "E+1"), (2.0, 0.0, "E+2"), (4.0, 0.0, "E+4"), (-1.0, 0.0, "W-1"), (-2.0, 0.0, "W-2"), (0.0, 2.0, "N+2"), (0.0, -2.0, "S-2")] {
         let x = if dx > 0.0 { c.max[0] + dx } else if dx < 0.0 { c.min[0] + dx } else { cx };

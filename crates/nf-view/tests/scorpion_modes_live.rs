@@ -1,5 +1,5 @@
-//! scorpion-modes-12: the AT-600 Scorpion's fire modes through the real input path — playtest
-//! 1012-1723 (07000012): "the scorpion launcher heat seeker mode doesn't work".
+//! scorpion-modes-12: the AT-600 Scorpion's fire modes through the real input path (07000012:
+//! the heat-seeker mode did not work).
 //!
 //! The mode pair [L ee_start_05.bin weapon_data, pinned below against the ISO parse]: record
 //! 0x2E 'Heatseeker' carries the `+0x6C` 0x20000 homing bit, 'Unguided' 0x2F does not; the pair

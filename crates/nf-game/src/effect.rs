@@ -32,7 +32,7 @@ const PUFF_OFFSET: f32 = 0.05;
 /// One bullet-hole decal (a pool node at 0x3496e0, 0x60 bytes each): position, surface normal and the
 /// `EffectInfo+4` mesh hash. Static hits ride the cel, dynamic hits the object (`HITDATA+0x54/+0x58`);
 /// the port keeps only the world-space result — dynamic hosts are not modelled (no marks on moving
-/// doors yet, listed in the report).
+/// doors yet).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Decal {
     pub pos: V3,
@@ -240,7 +240,7 @@ impl Effects {
                     let p = if wall { [pos[0] + n[0] * PUFF_OFFSET, pos[1] + n[1] * PUFF_OFFSET, pos[2] + n[2] * PUFF_OFFSET] } else { pos };
                     // The velocity: wall puffs get `Vec_NormToRot(normal)` (0x1ce96c); floor puffs get
                     // zero or the euler vector by flag +0x1b. The port zeroes both ([S] — the drift is
-                    // a visual; `Vec_NormToRot`/`ATAN2_APPROX` are not ported, see the report).
+                    // a visual; `Vec_NormToRot`/`ATAN2_APPROX` are not ported).
                     let _ = g.orient_normal;
                     let rgba = [((g.rgba[0] >> 24) & 0xff) as u8, ((g.rgba[0] >> 16) & 0xff) as u8, ((g.rgba[0] >> 8) & 0xff) as u8, (g.rgba[0] & 0xff) as u8];
                     gas.init_ex(g.mesh, p, 0.0, [0.0; 3], g.scale[0], g.scale[1], g.kind as u8, rgba, g.rgba[1], g.life as f32);

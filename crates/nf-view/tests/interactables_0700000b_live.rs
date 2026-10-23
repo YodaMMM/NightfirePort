@@ -1,7 +1,7 @@
 //! interactables-0b: one live test per KIND of player-touchable placement on 0700000b (Tower C,
 //! the executive floor and the roof), driven the way a player drives it (the walk, the use key,
 //! the trigger pull, the walk-over), each asserting the game's effect with its sister. The census
-//! with the type table lives in docs/levels/0700000b.md (task 711a); the end-to-end route is
+//! with the type table lives in docs/levels/0700000b.md; the end-to-end route is
 //! walkreal_0700000b_live.rs.
 //!
 //! Evidence tags: [M] the decompile address, [D] the disc bytes, [L] the EE snapshot. A teleport

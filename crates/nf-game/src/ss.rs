@@ -195,8 +195,8 @@ impl SsList {
                     // needed) until the wrap re-arms 0x40 / disarms 0. This is what makes a
                     // single bullet drive the winch's full sweep: the contact chain is rebuilt
                     // per tick [M Collide_Update 0x1ea398:10-27 clears obj+0xD0 each pass], so
-                    // a re-required operate stalled the render at t = one step (task 787's
-                    // shot-winch follow-up).
+                    // a re-required operate stalled the render at t = one step (the shot
+                    // winch).
                     s.state = 1;
                     Self::sweep(s, last, step); // the sound arm [M 0x1a9948:86-89] is unplayed
                 }

@@ -1,4 +1,4 @@
-//! In-game test tooling, gated behind `--dev` (WORKLOG 0081). Tools only call into existing systems or set state the
+//! In-game test tooling, gated behind `--dev`. Tools only call into existing systems or set state the
 //! way the game itself would — never change game logic or the order of RNG calls. Logic stays at a fixed 60 Hz; the
 //! time scale changes the number of ticks run per render frame, not the tick rate.
 //!
@@ -126,7 +126,7 @@ impl Dev {
     /// `BL+0x1B8` rounds in each weapon's clip), which `Sim::run` reads into `gun.clip`/`gun.spare` at the top
     /// of every tick and writes back at its end (scene.rs; the C-10 fix). The old refill only topped the gun's
     /// transient copies, so the next tick re-read the drained inventory: the gun stopped firing while the HUD
-    /// still showed a full clip (the user's "infinite ammo isn't always reliable" — and it broke hardest for
+    /// still showed a full clip (infinite ammo was unreliable — and it broke hardest for
     /// other ammo types, after a weapon switch, and across a level carry-over, exactly the cases where the
     /// drained slot differs from the current weapon's). No reload tops only the current weapon's clip to its
     /// `weapon_data+0x92` size.
@@ -201,8 +201,8 @@ impl Dev {
                 }
                 // fix-silencer-modes: with infinite ammo the CURRENT weapon's clip stays at its
                 // `weapon_data+0x92` size EVERY tick (both the live `gun.clip` and the inventory slot).
-                // The 30-frame inventory top alone left the live magazine drained between tops — the
-                // user's "the reserves filled, but the magazine didn't stay full" — and for the 5-round
+                // The 30-frame inventory top alone left the live magazine drained between tops (the
+                // reserves filled, the magazine did not stay full) — and for the 5-round
                 // sniper (0x24, clip 5 [L weapon_data]) the drained magazine kept triggering the
                 // auto-reload, which is the "semi-auto doesn't shoot fast enough on the SSG" half: with
                 // the clip pinned the refire is the table's +0x40 (120 frames) with no reload gap. The
@@ -232,7 +232,7 @@ impl Dev {
     /// geometry is uploaded at build time (`Scene::char_verts`, the tail of `vertices` from the
     /// Character-layer draw groups) — a `Character` pushed here after the build gets palette slots
     /// (the renderer rebuild in `App::apply_menu_action` covers `char_base`) but has NO vertices in
-    /// the buffer, so nothing draws no matter what the palette carries (the main agent's dry run:
+    /// the buffer, so nothing draws no matter what the palette carries (seen as
     /// "[dev] guard #16: spawned (normal) at (101.2,24.3,106.4)" and no guard anywhere). The pool
     /// copies are ordinary build-time characters (their meshes ARE in the buffer), bound to the drone
     /// through `Sim::char_drone`, and `frame_state` poses a bound character at the drone's position.
@@ -276,7 +276,7 @@ impl Dev {
             _ => params.iter().find(|(i, _)| *i == k).map_or(0, |&(_, v)| v),
         };
         // Face the guard at Bond (the skin rows' convention), so a normal-mode guard's sight cone
-        // can take the player the playtest checks put him in front of.
+        // can take the player standing in front of him.
         let yaw = {
             let sim = scene.sim.as_ref()?;
             let b = sim.bond.pos;
@@ -379,7 +379,7 @@ pub fn hud(dev: &Dev, scene: &Scene, aspect: f32, view_proj: [[f32; 4]; 4]) -> H
     h.finish()
 }
 
-/// The always-on frame counter, top right (the user's 240 Hz target): presented frames per second.
+/// The always-on frame counter, top right (a 240 Hz target): presented frames per second.
 pub fn fps_counter_hud(scene: &Scene, aspect: f32, fps: f32) -> HudFrame {
     let mut h = Hud { quads: Vec::new(), aspect, textures: &scene.hud_textures };
     if let Some(t) = scene.hud.as_ref() {
@@ -454,7 +454,7 @@ fn menu(h: &mut Hud, dev: &Dev, scene: &Scene) {
     let font = &t.font;
     let items = menu_items(dev, Some(scene));
     // B-11: layout from the REAL font metrics (17 HUD-px glyphs — measured by `menu_font_metrics_measured`).
-    // The old ROW_H=12 caused rows to overlap at ~40 window-px each (the user's screenshot).
+    // The old ROW_H=12 caused rows to overlap at ~40 window-px each.
     const ROW_H: f32 = MENU_ROW_H;
     const PANEL_X: f32 = MENU_PANEL_X;
     const PANEL_W: f32 = MENU_PANEL_W;
@@ -528,7 +528,7 @@ fn menu(h: &mut Hud, dev: &Dev, scene: &Scene) {
             y += DESC_H + 1.0;
         }
     }
-    // Footer hint (compact, ASCII). The fire-mode key (the user chose B): B = the game's ○
+    // Footer hint (compact, ASCII). The fire-mode key (B, a port choice): B = the game's ○
     // (`Player_Weapon` 0x1a24c8's action 12) — the twin/mode switch (fix-weapon-modes).
     h.text(Anchor::Left, font, 69, "arrows/enter pgup/dn type=bksp F2", PANEL_X, y, false, [0.55, 0.55, 0.55, 1.0], false);
 }
@@ -565,9 +565,9 @@ pub const TELEPORT_SPOTS: &[(&str, [f32; 3])] = &[
 /// column; labels are owned Strings now — catalog rows carry the game's own names.)
 pub type MenuRow = (String, &'static str, MenuAction);
 
-/// The Weapons page's "Test weapon" run (task 100d): draw the held weapon, fire it 3 times,
+/// The Weapons page's "Test weapon" run: draw the held weapon, fire it 3 times,
 /// reload — the same per-cell sequence the headless matrix measures
-/// (`crates/nf-view/src/matrix.rs`), live so the user can watch it. The phases feed the real
+/// (`crates/nf-view/src/matrix.rs`), live and watchable. The phases feed the real
 /// input path: App's tick loop asks `Dev::test_inputs` what this tick wants (the same lanes the
 /// keyboard uses — `switch_to`, the trigger, the R edge) and calls `Dev::test_observe` after
 /// `step_bond` to advance the phase machine.
@@ -813,7 +813,7 @@ pub fn menu_items(dev: &Dev, scene: Option<&Scene>) -> Vec<MenuRow> {
     v
 }
 
-/// The level-select list (fix-dev T5): the level archives on the user's disc (`FILES.BIN` manifest), in
+/// The level-select list (fix-dev T5): the level archives on the player's disc (`FILES.BIN` manifest), in
 /// archive order. Jumping feeds `pending_level` — the same warm-transition path a level exit uses.
 pub const LEVELS: &[u32] = &[
     0x0700_0001, 0x0700_0002, 0x0700_0003, 0x0700_0004, 0x0700_0005, 0x0700_0006, 0x0700_0007, 0x0700_0008,
@@ -845,8 +845,8 @@ pub enum MenuAction {
     Back,
     /// Give a weapon/gadget/grenade: `rounds` None = a full clip (the panel's Give button).
     GiveWeapon { id: u8, rounds: Option<i16> },
-    /// The Weapons page's "Test weapon" row (task 100d): draw the held weapon, fire it 3 times,
-    /// reload — the headless matrix's per-cell sequence, live so the user can watch it.
+    /// The Weapons page's "Test weapon" row: draw the held weapon, fire it 3 times,
+    /// reload — the headless matrix's per-cell sequence, live and watchable.
     TestWeapon,
     GiveAmmoFor(u8), GiveAmmoAll, LevelKit, Health, Armour,
     /// Spawn a pool NPC of `skin` (hex) with the mode picked on the page.
@@ -960,8 +960,8 @@ pub fn apply_menu_action_to_scene(dev: &mut Dev, scene: &mut Scene, action: Menu
             // own convention (`Drone_CollisionHandler` 0x140968 port: `pos.y = floor + self.hip()`, the
             // hip 1.0). A root AT the hit surface puts the feet 1 m underground: the grounding ray
             // (`feet_on_point`, 1.6 down from the root) starts past the surface, the guard falls
-            // through the world and settles on whatever is far below — the main agent's dry run saw
-            // no guard "there or anywhere around Bond".
+            // through the world and settles on whatever is far below — no guard
+            // anywhere around Bond.
             let pos = hit.map_or([eye[0] + look[0] * 5.0, eye[1], eye[2] + look[2] * 5.0], |t| [eye[0] + (look[0] * 30.0) * t, eye[1] + (look[1] * 30.0) * t + 1.0, eye[2] + (look[2] * 30.0) * t]);
             dev.spawn = pick;
             let gi = dev.spawn_guard(scene, pos, yaw);
@@ -1192,9 +1192,8 @@ pub fn state_name(s: u8) -> &'static str {
 /// pre-tick after the scenario turns channels on.
 ///
 /// B-6/B-7: the old filter was `present` only, which picked guards that exist in the list but never activate in
-/// play (WAIT_SWITCH drones, spawner templates) — the user saw "no guard". The drawn + in-llist checks are the
-/// user's explicit demand: "Find the game's own definition of an active guard: spawned, in the llist, alive, and
-/// the drawn flag (obj+0xFC)." Pub for tests.
+/// play (WAIT_SWITCH drones, spawner templates), so no guard showed. The game's own definition of an active
+/// guard: spawned, in the llist, alive, and the drawn flag (obj+0xFC). Pub for tests.
 pub fn is_active_guard(drones: &nf_game::drone::Drones, gi: usize) -> bool {
     let Some(dr) = drones.list.get(gi) else { return false };
     dr.present && dr.enabled && !dr.corpse && dr.health > 0.0 && dr.drawn
@@ -1227,7 +1226,7 @@ pub fn walkable_directions(world: &nf_game::world::CollisionWorld, pos: [f32; 3]
     n
 }
 
-/// The named scenarios. Each places Bond and the guards and returns the instruction text the user should see.
+/// The named scenarios. Each places Bond and the guards and returns the instruction text to show.
 /// (B-3a/b: the five scenarios that used to live in `main.rs::apply_scenario` — weapon-switch / sg5-pickup /
 /// wire-music / autoaim / sniper-scope — are merged into this single registry so `--scenario` only has one source
 /// of truth.)
@@ -1332,7 +1331,7 @@ mod scenarios {
     }
 
     /// Log the chosen guard's activation status — placement index, present / started / enabled / held-by-spawner /
-    /// in-llist / drawn — so the user can see WHY a guard was (or wasn't) picked, and verify it is active in play.
+    /// in-llist / drawn — to show WHY a guard was (or wasn't) picked, and verify it is active in play.
     fn log_guard_diagnostics(sim: &crate::scene::Sim, gi: usize) {
         let dr = &sim.drones.list[gi];
         let in_llist = sim.drones.llist.contains(&gi);
@@ -1347,7 +1346,7 @@ mod scenarios {
     /// so scenarios no longer turn on every channel. Only guards already active in play are picked.
 
     /// How many of the 4 cardinal directions (N/S/E/W) Bond can walk `dist` metres from `pos` without hitting a
-    /// wall (a chest-height segment test). The user's rule: the spot must connect to the rest of the level — at least
+    /// wall (a chest-height segment test). The rule: the spot must connect to the rest of the level — at least
     /// two clear directions, so Bond isn't sealed in a pocket. B-6.
     fn walkable_directions(world: &nf_game::world::CollisionWorld, pos: [f32; 3], dist: f32) -> usize {
         let eye = [pos[0], pos[1] + 1.0, pos[2]];
@@ -1622,15 +1621,15 @@ mod scenarios {
             }
         }
     }
-    /// B-12: cutscene-ai-pause. Places Bond on the gatehouse wall top (100, 26, 108) — the main agent confirmed
+    /// B-12: cutscene-ai-pause. Places Bond on the gatehouse wall top (100, 26, 108) — confirmed:
     /// this position triggers the gatehouse cut-scene headless (`nf-view <iso> 07000005 --bond 100,26,108 --frame
     /// 1200 --shot`). The cut-scene fires within ~1 s, runs ~15-20 s, then hands control back (PlayerEnable). An
-    /// active guard is placed nearby so the user can see it stands still during the cut-scene (the B-10/B-11 fix:
+    /// active guard is placed nearby to show it stands still during the cut-scene (the B-10/B-11 fix:
     /// `Drones::paused` skips the per-drone update while `Sim::disabled`).
     pub fn cutscene_ai_pause(scene: &mut Scene) {
         if let Some(sim) = scene.sim.as_mut() {
             // B-12: the gatehouse plate is at y≈27.05; placing Bond at (100, 26, 108) puts him on the plate.
-            // Use Bond::new (not stand_at) to match the main agent's `--bond 100,26,108` path — Bond starts at
+            // Use Bond::new (not stand_at) to match the `--bond 100,26,108` path — Bond starts at
             // the exact position and the cut-scene trigger fires within ~1 s of ticking.
             let pos = [100.0, 28.0, 108.0]; // y=28: above the plate (y≈27.05), so Bond falls onto it and triggers the cut-scene
             sim.bond = nf_game::player::Bond::new(pos, sim.bond.yaw);
@@ -1638,7 +1637,7 @@ mod scenarios {
                 pos[0], pos[1], pos[2]);
         }
         // B-12: do NOT call place_bond_near_guard — it would move Bond off the plate and the cut-scene wouldn't fire.
-        // The existing guards on the level are the ones the user checks (they're within ~40 m of the plate).
+        // The existing guards on the level are the ones to check (they're within ~40 m of the plate).
     }
     #[allow(dead_code)] // B-8: removed from registry until its test passes
     pub fn bullet_flyby(scene: &mut Scene) {
@@ -1807,11 +1806,11 @@ mod scenarios {
         eprintln!("[dev] shotgun-reload: Bond has the SG5 Commando (0x16) with an empty clip. Press R to reload (loads all rounds at once — the shell-by-shell loop needs a shotgun 0x1c which is not in this level's archive).");
     }
 
-    /// fix-wire2 — the 07000014 fusebox sabotage demo. The user's playtest: the fusebox spot spawned
+    /// fix-wire2 — the 07000014 fusebox sabotage demo. The old fusebox spot spawned
     /// him ABOVE the vent he was supposed to be in. This scenario starts Bond CROUCHED INSIDE the
     /// level's crawl vent — the [D]-proven crawl tunnel system at x 31-41 (headroom 1.44-1.46 over
     /// floor 2.15-2.40; the cold start (40.81, 2.40, 65.08) is the tunnel's north end). The spot
-    /// (41.0, 2.45, 62.0) is inside the north run's 1.46 headroom [D probe_vent2]. From there the user
+    /// (41.0, 2.45, 62.0) is inside the north run's 1.46 headroom [D probe_vent2]. From there the player
     /// crawls south (hold C) to the vent drop (TouchOnce #301 at 39.68..41.75, 2.07..4.14,
     /// 37.62..40.40 [D]) and plays the chain to the sabotage. The Laser (0x4E — the disc's cutting
     /// weapon, bullet category 0x0002 [L weapon_data; M Collide_FilterBullets 0x1ece30]) is owned,

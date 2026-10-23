@@ -35,8 +35,8 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     // Agent difficulty (3): the keypad locks' param-6 tag auto-unlocks them at create on
     // Operative [M 0x1ae1f8 tail], and the route's burn leg pins the Agent+ behaviour
     // (the burn writes ch 0xa; the Operative create-unlock writes nothing [M Lock_Unlock
-    // 0x1b0650's flag arm]). The block drops the scene before the next level loads (the 4 GB
-    // sandbox OOMs three resident levels).
+    // 0x1b0650's flag arm]). The block drops the scene before the next level loads (a 4 GB
+    // test machine OOMs with three resident levels).
     let save = {
         let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3).unwrap());
         tower2::walk_12(&mut w);

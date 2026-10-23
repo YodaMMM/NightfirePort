@@ -1,6 +1,6 @@
 //! fix-player2 repro tests, driven through the REAL path the viewer uses (`nf_view::load` + `Sim::step_bond`).
 //!
-//! The user's playtest on master 75fbad4 (07000001 unless noted):
+//! The symptoms (07000001 unless noted):
 //! 1. throwing a grenade does nothing and breaks shooting afterwards;
 //! 2. Raptor drop pickups are unreliable (several passes needed, some never pick up, none after the first);
 //! 3. the armour pickup is taken but its model is invisible;
@@ -215,7 +215,7 @@ fn raptor_drops_are_all_taken_when_walked_over() {
         }
     }
     let missing: Vec<_> = sim.drones.pickups.iter().filter(|p| !p.gone).map(|p| (p.weapon, p.kind, p.rounds, p.from.is_some())).collect();
-    // The bug under test is the GUARD DROP (the user's symptom); placed pickups on pedestals/shelves can
+    // The bug under test is the GUARD DROP (the symptom); placed pickups on pedestals/shelves can
     // be legitimately walled off from a teleport (the game takes them by walking the route). Every drop
     // must be taken; the log above shows the take tests for the rest.
     // Every REACHABLE guard drop must be taken. A drop that landed inside geometry (no walkable floor

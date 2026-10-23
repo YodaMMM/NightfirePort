@@ -1,7 +1,7 @@
 //! The codename profile save (`fix-save-profile`): the game's PLRS / MPSG / GSET / CHET blocks
 //! around the progress layer's MSSN / BNUS, one file per codename.
 //!
-//! Evidence (all in docs/reports/fix-save-profile.md): the block table `SaveIFFBlocks` 0x2c74d8
+//! Evidence: the block table `SaveIFFBlocks` 0x2c74d8
 //! holds 6 records {mask, id, make, load} in chain order PLRS, MSSN, MPSG, GSET, CHET, BNUS
 //! [L ee_start_07000001.bin @ 0x2c74d8; NumSaveBlocks 0x30cf10 = 6], and the game's own loaded
 //! chain sits in `InBufData` 0x3416e0 in every ee_start snapshot [L]: PLRS 11 B, MSSN 68 B,

@@ -167,7 +167,7 @@ fn g042_the_bathhouse_civilian_skin_texels_are_not_white() {
     eprintln!("[g-042] {checked} textures of skin 05000034 carry non-white texels");
 }
 
-/// Playtest F3 (the dressing cut-scene, 07000006): Bond's suit actor (0x05000007) and tuxedo actor
+/// The dressing cut-scene (07000006): Bond's suit actor (0x05000007) and tuxedo actor
 /// (0x0500000d — the third-person skin [D SP #810's streams]) both resolve and pose throughout; the
 /// mid-script skin swap (`Script_AnimStart` 0x1d8f40 kills the stream's old object) must not leak
 /// duplicate Anim objects.

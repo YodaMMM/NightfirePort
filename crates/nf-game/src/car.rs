@@ -1,10 +1,9 @@
-//! The MP remote vehicles (playtest 1016-1355: "remote tanks and like helicopters that you
-//! should be able to pilot") — the `Car_*` family of ACTION.ELF, class 0x28.
+//! The MP remote vehicles (pilotable remote tanks and helicopters) — the `Car_*` family of ACTION.ELF, class 0x28.
 //!
 //! The disc's 0xDA placements (`Car_Create`) exist on every arena except Sub Pen [D census,
 //! mp_map_objects_live::probe_cars_on_all_arenas]. The Enviro-Mods menu row (`MPSettings+0x460`,
 //! `P_MPENVIROMODS_Handler` 0x210030, options Off/Tanks/Helicopters/Random, docs/systems/
-//! mp-menus.md:186) picks the variant: the "Helicopters" the playtest names are the SAME object
+//! mp-menus.md:186) picks the variant: the "Helicopters" are the SAME object
 //! with the model swapped to 0x2000194 and +1.5 bounds [M 0x1305b0:53-58].
 //!
 //! Status: the data model, the create gates, the activate/deactivate state machine and the
@@ -82,7 +81,7 @@ pub struct Car {
     /// `obj+0x90` — the live matrix; `TankSpawns[slot]` on the port side is `spawn_matrix`
     /// (the game copies the spawn pose in at create and back at deactivate — the two
     /// `Mat_Copy(obj+0x90, TankSpawns+slot*0x40)` call sites [M 0x1305b0:74, 0x131d88:74];
-    /// the decompiler's arg order is ambiguous, disasm check listed in the report).
+    /// the decompiler's arg order is ambiguous; a disasm check is still open).
     pub matrix: Mat4,
     pub spawn_matrix: Mat4,
     /// `CAR_INFO+0xf8` — the collision damage accumulator (hits add; deactivate > 200)

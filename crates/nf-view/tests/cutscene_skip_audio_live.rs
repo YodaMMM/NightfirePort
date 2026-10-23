@@ -1,6 +1,5 @@
-//! cutscene-skip-audio: skipping a cut-scene stops its voice (playtest 1014-1725, 07000002:
-//! "Skip the cutscene in the middle of dialogue, and the dialogue still kept going until it
-//! finished").
+//! cutscene-skip-audio: skipping a cut-scene stops its voice (07000002: skipped
+//! mid-dialogue, the dialogue used to run on to the end).
 //!
 //! The game's mechanism, all [M]:
 //! - `Script_FFwd` 0x1dac78 arms the skip: fade ≤ 45 frames and `Music_Event(5, hash)`.

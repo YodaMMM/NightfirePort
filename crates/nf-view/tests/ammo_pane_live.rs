@@ -30,7 +30,7 @@ fn action_elf() -> Vec<u8> {
 }
 
 /// The game's weapon table from the DISC, through the port's own loader: `WeaponData::from_action_elf`
-/// runs the game's boot static initialiser over the user's ELF (docs/formats/weapon-data.md "How we
+/// runs the game's boot static initialiser over the disc's ELF (docs/formats/weapon-data.md "How we
 /// get it") — the same boot fill that produced the [L] ee_snapshot values the assertions expect.
 fn weapon_data() -> nf_formats::weapon::WeaponData {
     let elf = action_elf();
@@ -182,7 +182,7 @@ fn the_kind_1f_display_is_the_depleted_clip_of_max_minus_12() {
 /// local dump, NOT in the repo (CLAUDE.md: no game bytes; merge checkouts don't have it), so the
 /// live tests above assert the [L] literals instead and this runs only where a snapshot exists.
 #[test]
-#[ignore = "needs the local PCSX2 EE snapshot work/ee_snapshot.bin (not in the repo); run with --ignored on a sandbox that has it"]
+#[ignore = "needs the local PCSX2 EE snapshot work/ee_snapshot.bin (not in the repo); run with --ignored on a machine that has it"]
 fn probe_weapon_table_matches_the_boot_snapshot() {
     let Some(_iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let Ok(snap) = std::fs::read(repo("work/ee_snapshot.bin")) else { eprintln!("no work/ee_snapshot.bin — nothing to cross-check"); return };

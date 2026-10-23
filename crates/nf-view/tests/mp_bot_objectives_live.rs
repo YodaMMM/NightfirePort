@@ -249,7 +249,7 @@ fn demolition_bots_shoot_the_site() {
 /// `LinkCreep_Increment` 0x159f28 / `LinkCreep_ForNodes` 0x159810 [M]) — so a bot dropped on
 /// 07000023's pit floor climbs the pit ramp. The plain node chase it replaced steered straight
 /// at node #95 and pushed into the ramp's side (>1.5 under the node root, its reached test never
-/// passed) [L the playtest + this test on the pre-fix code: the 27-node route stayed at idx 1
+/// passed) [L a live run + this test on the pre-fix code: the 27-node route stayed at idx 1
 /// (walking toward #95) with stuck hits climbing, under root y −12 for the whole 4000 ticks].
 #[test]
 fn pit_bot_climbs_the_ramp() {
@@ -258,7 +258,7 @@ fn pit_bot_climbs_the_ramp() {
     let s = settings(scenario::DEMOLITION, [0, 0], &[1, 1]);
     let mut a = machine(&path, &s, 0);
     let mut b = machine(&path, &s, 1);
-    // The pit floor node: the bot-path node nearest the playtest's stuck spot (−0.17, ·, 0.17)
+    // The pit floor node: the bot-path node nearest the observed stuck spot (−0.17, ·, 0.17)
     // [L NF_NAVDBG dump: the bot path's n96 (−0.17, −13.67, 0.17), the ramp links n96→n95
     // (3.58, −12.09, −3.69) → n94 (6.66, −10.35, −6.66) → n82 (8.54, −10.35, −8.92)].
     let pit = {
@@ -298,7 +298,7 @@ fn pit_bot_climbs_the_ramp() {
         let bot = m(&a).bots.iter().find(|b| b.slot == 2).unwrap();
         let root_y = bot.brain.pos[1] - nf_game::player::EYE;
         if top_t.is_none() && root_y > -9.3 { top_t = Some(t); } // past the ramp-top node #82's root −9.65 [L the dump]
-        if site_t.is_none() && root_y > -3.5 { site_t = Some(t); } // the site's storey (the demo dest root −1.9 [L the playtest])
+        if site_t.is_none() && root_y > -3.5 { site_t = Some(t); } // the site's storey (the demo dest root −1.9 [L the live run])
         if site_t.is_some() {
             eprintln!("pit bot: ramp top at tick {:?}, site storey at tick {t} (root y {root_y})", top_t);
             break;

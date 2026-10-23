@@ -1,4 +1,4 @@
-//! fix-hud-zoom-tilt (GAPS G-044, task 110z) — the exact terms of the view-model tilt.
+//! fix-hud-zoom-tilt (GAPS G-044) — the exact terms of the view-model tilt.
 //!
 //! `Player_WeaponRecoil` 0x1a3de8:52-57 writes the gun rot every tick:
 //!   rot+0x50 = BL+0x124 · (−π/6) / viewer+0x108
@@ -39,8 +39,8 @@ fn the_aspect_constant_is_the_games_bits() {
     assert_eq!(4.0f32 / 3.0, f32::from_bits(0x3faaaaab), "viewer+0x114 [L ee_start_05]");
 }
 
-/// The exact terms at zoom 1 and zoom 2 (task 110z: "at zoom 2 the tilt term is half its zoom-1
-/// value ... and the aspect term matches the decompile's constant"). The Ronin (0x32) is scoped
+/// The exact terms at zoom 1 and zoom 2 (at zoom 2 the tilt term is half its zoom-1 value, and
+/// the aspect term matches the decompile's constant). The Ronin (0x32) is scoped
 /// [L ee_start_05 weapon_data 0x2bf150+0x32·0x10c+0x68 = 0x12040] with zoom 3.5; the zoom here is
 /// set to 1.0 / 2.0 directly = BL+0x8D0 mid-ramp (the real ramp is exercised by the next test);
 /// `Player_PositionCamera` 0x18f5d8 feeds viewer+0x108 from it verbatim every frame.

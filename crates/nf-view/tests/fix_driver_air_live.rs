@@ -1,7 +1,7 @@
 //! fix-driver-air: the 07000006 truck driver's start sit (skin 0x05000035, dtype 13 → dtypenew 0x17,
 //! start script 0600011d — the 880-frame sit-in-truck one-shot [D nf-extract script-info]), through
-//! the real paths (`nf_view::load` + `Sim::step_bond`, `Input` the window builds). Playtest 1014-1725
-//! (06 start): "he's sitting in the air, why didnt you test this."
+//! the real paths (`nf_view::load` + `Sim::step_bond`, `Input` the window builds). Symptom
+//! (06 start): the driver sat in mid-air.
 //!
 //! The game's own numbers (the ground truth this file pins):
 //! - [L 05-truck.trace 07000006 segment (frames 37174..37878), drone 13, state 0x32 the whole

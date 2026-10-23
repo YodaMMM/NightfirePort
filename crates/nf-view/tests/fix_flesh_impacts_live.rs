@@ -124,7 +124,7 @@ fn a_p2k_body_shot_spawns_the_blood_puff_at_the_hit_point() {
 /// HITDATA+0x52 only feeds `NDrone2_DoHitEffects`'s 0x601/0x413 sounds], so a head shot puffs the
 /// same mesh — the dedicated head-shot run was tried and the 07000005 doorway geometry blocks the
 /// head line at the reachable spots (the ray eats the door frame: World hits above the head box);
-/// the main agent's PCSX2 head-shot check is in the report.
+/// a PCSX2 head-shot check is still open.
 #[test]
 fn every_drone_hit_carries_exactly_one_blood_puff() {
     let Some(mut scene) = load_05() else { return };

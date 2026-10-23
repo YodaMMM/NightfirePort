@@ -77,8 +77,8 @@ fn lit_bones(scene: &nf_view::scene::Scene) -> Vec<u8> {
 /// The lights must survive walking: the game resets the idle counter on every deflected analog
 /// input (`Input_Update` 0x17ee88 → `Player_SetWeaponAnimObj` 0x1a2e38:41-57), so in play the row
 /// never crosses the 15/45-frame blink/off thresholds. Before the fix the port's counter climbed
-/// while the stick moved, and the whole row went dark 0.75 s into any walk — the user's "lights on
-/// the aim 20 arent on". Sister: dead-still idle for 60 ticks DOES kill the row (0x1a5460:314).
+/// while the stick moved, and the whole row went dark 0.75 s into any walk (the AIMS-20's lights
+/// looked off). Sister: dead-still idle for 60 ticks DOES kill the row (0x1a5460:314).
 #[test]
 fn the_side_lights_survive_stick_input_and_die_when_dead_still() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -161,7 +161,7 @@ fn the_lights_show_the_ammo_pattern() {
 fn the_mode_press_swaps_only_with_grenade_rounds() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load(&iso);
-    // The dev give (the user's path): the panel's `do=weapon&id=0x1a` command.
+    // The dev give (the dev-menu path): the panel's `do=weapon&id=0x1a` command.
     let (status, switch_to) = nf_view::panel::apply(&mut scene, &[("do".to_string(), "weapon".to_string()), ("id".to_string(), "0x1a".to_string())]);
     assert!(status.contains("gave"), "the give equips: {status}");
     {
@@ -218,7 +218,7 @@ fn the_mode_press_swaps_only_with_grenade_rounds() {
             if g == 0 { break; }
             sim.step_bond(Input::default(), true, false, false); // hold fire: the launcher spends a round
             for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
-            sim.drones.health.health = 100.0; // the playtest's god cheat (Dev::after_tick's exact write)
+            sim.drones.health.health = 100.0; // the god cheat (Dev::after_tick's exact write)
         }
         let g = sim.drones.inventory.clip.get(0x1b).copied().unwrap_or(0);
         assert_eq!(g, 0, "the launcher's fire path drained the grenade magazine");

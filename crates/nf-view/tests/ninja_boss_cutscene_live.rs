@@ -1,7 +1,7 @@
 //! ninja-boss-cutscene: the Double-Cross pt. 4 (07000004) story cut-scene's third actor — the ninja
 //! (skin 0x0500001e) — must exist, pose and draw.
 //!
-//! The user (playtest 1017): "ninja boss is missing from last cutscene of that level". The cut-scene
+//! The ninja boss was missing from the level's last cut-scene. The cut-scene
 //! is 0x06000082 (830 ticks), played by the main map's ScriptPlayer #2 right after the intro
 //! 0x06000083 hands over (its stream-6 event 0xD writes switch_channels[56] = 1 at tick 500; #2 waits
 //! on mask 1 / channel 56 — SP_Hit 0x1dc470:15-17 bit 1, SP_Update 0x1dbda8's health/MissionState==1

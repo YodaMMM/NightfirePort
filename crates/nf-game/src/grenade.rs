@@ -58,7 +58,7 @@ pub struct Grenade {
     /// hat-only [M `Bullet_update` case 3 0x12e7b0:363-371 — `weapon+2 != 0x45` skips it]. The
     /// mine 0x37 / tripbomb 0x3a / satchel 0x3b-0x40 records also carry +0x100 [L ee_start_05.bin
     /// sweep] — their stick branches (no 1500 re-arm, no countdown, trigger-detonated) are the
-    /// satchel task's scope; the port sticks the hat only.
+    /// satchel port's scope; the port sticks the hat only.
     pub stuck: bool,
     /// fix-oddjob-hat: `BU+0x40` — the hat's heat-seek target (`Bullet_homing` 0x12f358 stores the
     /// acquired object there; the collision handler's stick path reuses the slot for the object it
@@ -73,8 +73,8 @@ pub struct Grenade {
     pub phase: Option<Box<StuckGadget>>,
 }
 
-/// fix-satchel-tripbomb: the stuck state of a +0x100 satchel/tripbomb (`Grenade.phase` — one box, the
-/// shared-constructor merge lesson 4; only the satchel 0x3b and the tripbomb 0x3a carry it).
+/// fix-satchel-tripbomb: the stuck state of a +0x100 satchel/tripbomb (`Grenade.phase` — one box;
+/// only the satchel 0x3b and the tripbomb 0x3a carry it).
 #[derive(Clone, Debug)]
 pub struct StuckGadget {
     /// The surface normal the stick aligned to (HITDATA+0x10 [M 0x12ce80:256-266]).
@@ -314,9 +314,8 @@ impl Grenade {
         // The satchel's speed is 0.0667 u/tick [L ee_start_05.bin weapon_data 0x3b +0x20], so its
         // whole 1-2 m approach runs in the 0x101 sphere form: the game PARKS the satchel the
         // moment a face comes within 0.25 u — grazing the wall top, hugging the wall, or a
-        // close-range throw all stick where the old port's 0.067 u ray sailed past (the playtest's
-        // "even standing directly at a wall and throwing it at it, it still bounced": no ray
-        // crossing, no stick, the satchel flies on). Scoped to the +0x100 sticky family this arm
+        // close-range throw all stick where the old port's 0.067 u ray sailed past (a throw straight
+        // at a wall from point-blank still bounced: no ray crossing, no stick, the satchel flies on). Scoped to the +0x100 sticky family this arm
         // serves (0x37/0x3a/0x3b — the hat 0x45 keeps its verified path); the bouncing family
         // (0x34…) keeps the old move-length ray — the game gives it the same two forms [S backlog:
         // a 1.0 u look-ahead would shift every pinned frag bounce point].
@@ -324,8 +323,7 @@ impl Grenade {
         // family test only zeroes the probe radius (the MGL 0x2c..0x31/0x62/0x6d → always the ray);
         // the 0x201 ray's length is `max(1.0, move)` [M :443-465]]. NOT landed here: the look-ahead
         // shifts the pinned blast geometry (fix_grenade_types_live's stun whiteout pins the old
-        // landing; the re-pin needs the game's own landing measured live — see the report's live
-        // checks). The bouncing family keeps the move-length ray for now; the settle-sound mechanics
+        // landing; the re-pin needs the game's own landing measured live). The bouncing family keeps the move-length ray for now; the settle-sound mechanics
         // below (the dot gate, the cap, the park order) are the rattle's fix.
         let sticky = matches!(self.weapon_type, 0x37 | 0x3a | 0x3b);
         const PROBE_RADIUS: f32 = 0.25;
@@ -356,7 +354,7 @@ impl Grenade {
                 // the kind-2/3/0x15 hit flag (iStack_100) [:398-407] and the world path sets
                 // neither. The port freezes the velocity and reports Stick; the countdown runs in
                 // the stuck branch above. (The mine/satchel records also carry +0x100 — their
-                // branches are the satchel task's scope, see the `stuck` field.)
+                // branches are the satchel port's scope, see the `stuck` field.)
                 if self.weapon_type == 0x45 {
                     self.pos = hit;
                     self.velocity = [0.0; 3];
@@ -414,7 +412,7 @@ impl Grenade {
                 // contact the grenade is already SEPARATING from (the 1 u look-ahead ray's hit while
                 // climbing) parks and counts but leaves the velocity/speed alone — the port's
                 // unconditional reflect flipped such a contact back INTO the surface and re-collided
-                // every tick (the playtests' "rapidly contacting the ground"). The cap [M 0x12d578-
+                // every tick (rapid ground contacts). The cap [M 0x12d578-
                 // 0x12d57c — `sltiu $v1, $v1, 0x14; beqz → 0x12d6a0`]: the 20th bounce does NOT
                 // reflect or scale — but the gate's ELSE arm (0x12d6a0-0x12d6bc) aligns the matrix
                 // to the velocity and zeroes BU+0xF8 (`sw $zero, 0xf8($s0)`) with NO dot gate, so
@@ -447,8 +445,8 @@ impl Grenade {
                         // (`Vec_NormaliseLen` stores the length back, disasm 0x12f020-0x12f030)
                         // keeps a zero-speed bullet's move at zero — a rested grenade never
                         // re-collides. fix-grenade-throw: the port's velocity kept re-accumulating
-                        // gravity at rest, so the grenade re-collided EVERY tick (the user's "rapid
-                        // sound as if it's rapidly contacting the ground").
+                        // gravity at rest, so the grenade re-collided EVERY tick (a rapid
+                        // contact sound).
                         let speed = (self.velocity[0] * self.velocity[0] + self.velocity[1] * self.velocity[1] + self.velocity[2] * self.velocity[2]).sqrt();
                         if speed < BOUNCE_MIN_SPEED {
                             self.velocity = [0.0; 3];
@@ -794,8 +792,8 @@ mod tests {
     /// 0x1e92d8 + `Dist2Tri_PointGeom` 0x1dfac8; the satchel's 0.0667 u/tick throw [L ee_start_05.bin
     /// weapon_data 0x3b +0x20] never leaves that form until gravity builds |v| past 0.125]: a
     /// satchel flying PARALLEL to a face within 0.25 u of it sticks on the first tick — there is
-    /// no ray crossing to wait for. The old port ran a move-length ray and flew on (the playtest's
-    /// "it still bounced": the throw passes just over/along the wall and nothing catches it).
+    /// no ray crossing to wait for. The old port ran a move-length ray and flew on (it still
+    /// bounced: the throw passes just over/along the wall and nothing catches it).
     #[test]
     fn satchel_flying_along_a_wall_within_the_probe_radius_sticks_at_once() {
         let w = wall_world();

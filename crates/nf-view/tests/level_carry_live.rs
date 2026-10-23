@@ -1,5 +1,5 @@
-//! Headless NF_ISO tests for the level-transition carry-over and per-level rules (fix-level2, playtest
-//! 2026-10-11 items F1/F2/F4/F5). These drive the REAL paths — `nf_view::load_with_carry` (the reload
+//! Headless NF_ISO tests for the level-transition carry-over and per-level rules (fix-level2).
+//! These drive the REAL paths — `nf_view::load_with_carry` (the reload
 //! the viewer performs), `Sim::step_bond` (the player tick), and the sim's own trigger evaluation — so a
 //! passing test means the mechanism works in play.
 //!
@@ -62,7 +62,7 @@ fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
 /// 07000005's plunge triggers (TouchOnce, out 0xBE, mask 8) gate the falling-death NIS 0x06000952
 /// (ScriptPlayer #284, mask bit 1 = the out channel) [D placements; M 0x1b2318:38-40]. `Trigger_Activate`
 /// begins its type-1 arm with the `mask & 4` gate [M 0x1b2318:38-40]: the use key can never fire them.
-/// The port used to latch ch 0xBE from the use-key path — the user's death cut-scene at doors and the
+/// The port used to latch ch 0xBE from the use-key path — the death cut-scene played at doors and the
 /// wire. Sister: a TouchOnce WITH mask bit 4 still activates, and the kind-10 LOAD_LEVEL arm is
 /// untouched.
 #[test]
@@ -83,7 +83,7 @@ fn plunge_trigger_ignores_the_use_key() {
             "the use key must NOT activate a mask-8 plunge trigger (got {sets:?})");
     }
 
-    // Bond at the zip-wire handle (placement 251 [D] ≈ (−23.5, 34.5, 6.3)), E pressed — the user's
+    // Bond at the zip-wire handle (placement 251 [D] ≈ (−23.5, 34.5, 6.3)), E pressed — the player's
     // action. The death NIS's ScriptPlayer (#284, script 0x06000952) must never leave state 0.
     let wire: [f32; 3] = [-23.49, 34.47, 6.26];
     step_at(&mut scene, wire, 0.0, true);
@@ -96,7 +96,7 @@ fn plunge_trigger_ignores_the_use_key() {
 
 // ── F1: the spawn point matches the exit taken ─────────────────────────────────────────────────────
 
-/// The castle-door route (the user's report): Bond at the castle door presses E → `Trigger_Activate`
+/// The castle-door route: Bond at the castle door presses E → `Trigger_Activate`
 /// (0x1b2318) — the gate (0x1D) is off → the FALLBACK channel 0x1F is written [M :91-107] — then the
 /// level loads. On 07000006 the type-0x24 starts are gated: 0x1D (the truck-ride spawn), 0x1F, 0x1E
 /// [D placements 496/510/511]. `Player_Start` (0x190fd0) must therefore pick the 0x1F start — the other
@@ -126,7 +126,7 @@ fn castle_door_route_spawns_at_the_matched_entry() {
     assert!(close(pos, [28.75, 37.67, 46.57], 2.0),
         "the door route spawns at the 0x1F entry (got {pos:?})");
     assert!(!close(pos, [57.18, 39.73, 22.61], 2.0),
-        "NOT the truck-ride spawn — that is the user's bug");
+        "NOT the truck-ride spawn — that is the old bug");
 }
 
 /// Sister (F1): the truck route — the EndLevel script's event 0x11 writes ch 0x1D, the LOAD_LEVEL

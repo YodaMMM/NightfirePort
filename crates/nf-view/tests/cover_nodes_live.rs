@@ -1,4 +1,4 @@
-//! cover-nodes (task 746; the sub-map half re-answered by cover-nodes-submap): the AI cover node
+//! cover-nodes (the sub-map half answered by cover-nodes-submap): the AI cover node
 //! placements (0xE5 corner / 0xE6 low) become live nodes from the MAIN MAP's placement block only
 //! — the way the game creates them — and a 07000006 guard under fire takes one of the game's own
 //! cover nodes instead of standing in the open.
@@ -11,8 +11,8 @@
 //! LAST-parsed map entry's placements. Every mission archive lists its kind-1 main map LAST
 //! [D — docs/systems/cover-nodes-load.md], so the live list is the main map's 0xE5/0xE6
 //! placements in placement order; the shared sub-map 010000f3's template pair is never
-//! instantiated. The earlier "every map entry" claim (task 746's scan, ignored at merge
-//! batch-1016c) contradicted this chain — the tests below pin the proven behaviour now.
+//! instantiated. An earlier "every map entry" claim contradicted this chain — the tests below
+//! pin the proven behaviour.
 //! Opt-in: `NF_ISO`.
 
 use nf_view::dev::Dev;
@@ -30,7 +30,7 @@ fn settle(scene: &mut nf_view::scene::Scene, ticks: u32) {
 /// entry's block 0x1a, the main map on every mission archive [D — docs/systems/cover-nodes-load.md]).
 /// 07000006's main map 01000098 holds 80 corner + 34 low cover placements [D placement bytes,
 /// docs/systems/script-census.md census]; its 010000f3 sub-map holds 1+1 more that the game never
-/// instantiates — the level-wide scan (task 746's) would make 81+35, and this fails 114 != 116
+/// instantiates — a level-wide scan would make 81+35, and this fails 114 != 116
 /// if the scan ever comes back.
 #[test]
 fn cover_06_spawns_the_main_map_s_nodes() {

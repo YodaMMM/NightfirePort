@@ -1,9 +1,8 @@
-//! fix-satchel-stick-play: the user's playtest 1015-0046 (07000005, `--give 0x3b,0x3a`, mouse +
-//! keyboard): "[The satchel] doesn't stick to walls or to the ground and it bounces." The tripbomb
-//! task's probe covered the plain lob (released at press+75, stuck on the snow at ~105). These
+//! fix-satchel-stick-play (07000005, `--give 0x3b,0x3a`, mouse + keyboard): the satchel did not
+//! stick to walls or to the ground; it bounced. The tripbomb probe covered the plain lob (released at press+75, stuck on the snow at ~105). These
 //! tests walk the cases the probe missed, all through the REAL input path (`nf_view::load_weapons`
 //! → the panel give → `switch_to` → the fire pipeline → `Sim::step_bond`):
-//! - the user's own spot `--bond 105.97,24.87,110.12,-4.369,-0.166` and the 05 spawn's low wall
+//! - the repro spot `--bond 105.97,24.87,110.12,-4.369,-0.166` and the 05 spawn's low wall
 //!   at 1–3 units;
 //! - a throw while moving;
 //! - a steep / non-axis-aligned surface;
@@ -17,12 +16,12 @@ use nf_game::player::{Bond, Input};
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
-/// The user's spot: pos + yaw −4.369, pitch −0.166 (`--bond 105.97,24.87,110.12,-4.369,-0.166`).
+/// The repro spot: pos + yaw −4.369, pitch −0.166 (`--bond 105.97,24.87,110.12,-4.369,-0.166`).
 const USER_POS: [f32; 3] = [105.97, 24.87, 110.12];
 const USER_YAW: f32 = -4.369;
 const USER_PITCH: f32 = -0.166;
 
-/// Draw the satchel through the panel give + the switch machine and park Bond at the user's spot.
+/// Draw the satchel through the panel give + the switch machine and park Bond at the repro spot.
 fn draw(id: u8) -> nf_view::scene::Scene {
     let iso = iso().expect("NF_ISO");
     let mut scene = nf_view::load_weapons(&iso, "07000005.bin", false, &[0x3b, 0x3a]).expect("load 05");
@@ -40,7 +39,7 @@ fn draw(id: u8) -> nf_view::scene::Scene {
         let gun = &sim.gun;
         if gun.weapon == id && gun.switch_state == 0 && gun.reload_state == 0 { drawn = true; break; }
     }
-    assert!(drawn, "{id:#04x} drew at the user's spot");
+    assert!(drawn, "{id:#04x} drew at the repro spot");
     // The probe's 150 idle ticks settle the scene.
     for _ in 0..150 { sim.step_bond(Input::default(), false, false, false); }
     scene
@@ -67,7 +66,7 @@ fn throw_once(scene: &mut nf_view::scene::Scene, moving: bool, aim: Option<(f32,
     spawn
 }
 
-/// The full user sequence at the user's spot: draw, park, idle 150, one trigger tick.
+/// The full repro sequence at the repro spot: draw, park, idle 150, one trigger tick.
 fn draw_and_throw(id: u8, moving: bool) -> (nf_view::scene::Scene, usize) {
     let mut scene = draw(id);
     let sim = scene.sim.as_mut().unwrap();
@@ -147,20 +146,20 @@ fn wall_probe(scene: &nf_view::scene::Scene) -> String {
     out
 }
 
-/// The user's own case: the satchel at the user's spot aimed at the low wall — it must STICK
-/// (the plain-case probe stuck on the snow; the user reports bounces).
+/// The repro case: the satchel at the repro spot aimed at the low wall — it must STICK
+/// (the plain-case probe stuck on the snow; play showed bounces).
 #[test]
 fn satchel_at_the_users_spot_sticks() {
     let Some(_iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     let (mut scene, spawn) = draw_and_throw(0x3b, false);
-    eprintln!("== wall probe at the user's spot ==\n{}", wall_probe(&scene));
+    eprintln!("== wall probe at the repro spot ==\n{}", wall_probe(&scene));
     eprintln!("== trace (spawn at press+{}) ==\n{}", spawn, trace(&mut scene, false));
     let sim = scene.sim.as_ref().unwrap();
     let g = sim.drones.grenades.iter().find(|g| g.weapon_type == 0x3b);
     assert!(g.is_some_and(|g| g.stuck || g.state >= 2), "the satchel stuck or exploded, never bounced; trace above");
 }
 
-/// A throw while walking forward (the user plays mouse + keyboard, always moving).
+/// A throw while walking forward (mouse + keyboard play, always moving).
 #[test]
 fn satchel_thrown_while_moving_sticks() {
     let Some(_iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };
@@ -172,7 +171,7 @@ fn satchel_thrown_while_moving_sticks() {
     assert!(g.is_some_and(|g| g.stuck || g.state >= 2), "the moving satchel stuck or exploded, never bounced; trace above");
 }
 
-/// A throw at a NON-AXIS-ALIGNED surface: the level's own walls around the user's spot are yawed
+/// A throw at a NON-AXIS-ALIGNED surface: the level's own walls around the repro spot are yawed
 /// (normal (−0.914, 0, −0.407) — ~24° off the z axis) and the floor itself is tilted
 /// ((−0.046, 0.995, 0.083) on the down ray). The fan search re-aims Bond at a hit face through
 /// the real path; the satchel must stick, whatever the face's yaw.
@@ -180,7 +179,7 @@ fn satchel_thrown_while_moving_sticks() {
 fn satchel_sticks_at_a_non_axis_surface() {
     let Some(_iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     let mut scene = draw(0x3b);
-    // Find a steep face around the user's spot: a 16-ray × 3-pitch fan, hits with a tilted normal.
+    // Find a steep face around the repro spot: a 16-ray × 3-pitch fan, hits with a tilted normal.
     let sim = scene.sim.as_mut().unwrap();
     let mut target: Option<([f32; 3], [f32; 3])> = None;
     'search: for py in [-0.5f32, -0.25, -0.05] {
@@ -199,7 +198,7 @@ fn satchel_sticks_at_a_non_axis_surface() {
             }
         }
     }
-    let Some((from, n)) = target else { eprintln!("skip: no steep face near the user's spot"); return };
+    let Some((from, n)) = target else { eprintln!("skip: no steep face near the repro spot"); return };
     // Park Bond at `from` (y on the level's floor there), aim at the face, throw.
     let sim = scene.sim.as_mut().unwrap();
     sim.bond.pos = from;
@@ -216,7 +215,7 @@ fn satchel_sticks_at_a_non_axis_surface() {
     assert!(g.is_some_and(|g| g.stuck || g.state >= 2), "the satchel sticks on the steep face (trace above)");
 }
 
-/// The user's multi-throw: the second satchel at the same wall while the first is stuck — the
+/// The multi-throw: the second satchel at the same wall while the first is stuck — the
 /// game's move test includes objects (HITDATA+0x58 [M Bullet_update]), a non-char hit is
 /// acquired and the throw continues [:243-246]; the port's grenade ignores objects and sticks on
 /// the wall behind. Either way BOTH must end stuck — never a bounce.
@@ -299,7 +298,7 @@ fn probe_walk_up_to_the_wall_and_throw() {
         g.map(|g| g.stuck).unwrap_or(false), g.map(|g| g.state).unwrap_or(9),
         g.map(|g| g.pos.iter().map(|v| format!("{v:.3}")).collect::<Vec<_>>()));
 }
-/// satchel-stick2: the pitch fan at the user's spot — EVERY throw sticks on the low wall (the
+/// satchel-stick2: the pitch fan at the repro spot — EVERY throw sticks on the low wall (the
 /// top face, normal ≈ +y), none flies off or comes back. This is the regression net for the
 /// hittest forms: with `Bullet_update`'s 0x101 sphere probe (0x12e7b0:425-444) the stick happens
 /// at or before the old crossing point, never later.
@@ -384,8 +383,8 @@ fn satchel_walk_up_throw_parks_on_the_walls_near_side() {
 
 /// satchel-stick2: the countdown digits ride the satchel FROM THE THROW — `Bullet_DoTrails`' 0x3b
 /// tail spawns the two digit objects every tick in every state < 2 [M 0x12d890:418-553], so the
-/// numbers are present IN FLIGHT, not only after the stick (the playtest's "the numbers aren't
-/// working" — the old view gate hid them until the stick).
+/// numbers are present IN FLIGHT, not only after the stick (the old view gate hid them until the
+/// stick).
 #[test]
 fn satchel_digits_are_present_in_flight() {
     let Some(_iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };

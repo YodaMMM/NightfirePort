@@ -97,7 +97,7 @@ fn bots_disabled_leaves_only_the_human() {
     assert!(sim.drones.health.health > 0.0, "the human stands alone and unhurt");
 }
 
-/// The bots roam and hunt (the user's "bots dont move"): 2 bots + the idle human on the first
+/// The bots roam and hunt (they used to stand still): 2 bots + the idle human on the first
 /// arena, 3600 ticks. Per bot: the path length, the farthest point from its spawn, the distinct
 /// 4-unit grid cells it stood in, and the closest it came to the human. No tick's step may pass
 /// through a wall (the eye-height segment between consecutive positions stays world-clear).

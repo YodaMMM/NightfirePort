@@ -463,7 +463,7 @@ fn completing_the_mission_reaches_the_results_and_the_next_pages() {
     fe.mission_ended(Outcome::Complete, Stats::default());
     // reward-after-outro [M 0x182c60:72-74 / 0x1d6360:160-163]: case 4 only QUEUES the page —
     // GameState+0x28 = 0x40000036 — no MenuManager_Create runs here, so no page is up yet (the
-    // old assert pinned the playtest bug: the reward page before the ending cut-scene).
+    // old assert pinned the bug: the reward page before the ending cut-scene).
     assert!(fe.results_queued, "the page queues at the end [M 0x182c60:72]");
     assert_eq!(fe.page, Page::Start, "no manager is up during the load [M 0x1d6360:160-163]");
     assert_eq!(fe.requested_level.take(), Some(menu::outro_for(0x0700_0005)), "the end code rode the request");

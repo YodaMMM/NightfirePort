@@ -1,4 +1,4 @@
-//! The weapon matrix test (task 100d): every on-foot level × every weapon the dev tools hand Bond.
+//! The weapon matrix test: every on-foot level × every weapon the dev tools hand Bond.
 //!
 //! One #[test] per level (the suite runs binaries with `--test-threads=1` and a per-binary wall
 //! clock, so the level tests interleave in the output and one slow level cannot eat the rest).
@@ -22,8 +22,8 @@
 //! (or an explicit `NF_MATRIX=07000001,...` list), or through `nf-extract weapon-matrix <iso>`.
 //!
 //! Any panic is a bug (the task's rule): the test fails the level when a cell errored, even though
-//! the matrix keeps going to measure the rest. Red cells (`I`/`F`/`R`/`W`/`B`/`S` marks) are the
-//! report's business (docs/reports/weapon-matrix.md) — they are *measurements*, and the test only
+//! the matrix keeps going to measure the rest. Red cells (`I`/`F`/`R`/`W`/`B`/`S` marks) are
+//! printed, not asserted — they are *measurements*, and the test only
 //! fails on panics and hard errors.
 
 use nf_view::matrix;

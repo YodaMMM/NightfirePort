@@ -1,8 +1,8 @@
 //! blood-puff-render live tests: the blood puff's RENDER side, end to end.
 //!
 //! fix_flesh_hit_effects proved the POOL half (the 0x0200_08bc puff with the game's `Gas_Init`
-//! data + the draw slots). The playtest symptom survived it: the main agent's render
-//! (2026-10-16, master a4156da0) still showed nothing — so this file pins the DRAW chain through
+//! data + the draw slots). The symptom survived it: a render
+//! still showed nothing — so this file pins the DRAW chain through
 //! the real fire path, the state the GPU actually consumes, and the two defects the task found:
 //!
 //! 1. `Layer::frustum_cullable`: the Effect pools never frustum-cull. Their build-time sphere is

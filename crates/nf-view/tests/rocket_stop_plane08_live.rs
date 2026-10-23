@@ -106,7 +106,7 @@ fn the_straight_shot_pierces_the_glass_pane_to_the_back_wall() {
 /// pinned unit-side below — so the round explodes at the hit point (the live −96.71 stop; the
 /// flight light rides the rocket's own position one tick behind — the live −96.2 read). The
 /// end-to-end steered shot needs a held aim offset this harness's strafe-then-fire does not
-/// reproduce deterministically (the aim inertia) — the main agent's live render owns that check.
+/// reproduce deterministically (the aim inertia) — that check needs a live render.
 #[test]
 fn the_steer_line_lands_on_the_wood_stile_at_the_games_z() {
     let Some(iso) = iso() else { return };

@@ -1,8 +1,8 @@
 //! fix-searchlight-alarm: 07000006's courtyard searchlights and the guards' reaction, driven through
 //! the real path (`nf_view::load` + `Sim::step_bond`).
 //!
-//! The user's playtest (2026-10-12): "searchlights don't raise the alarm" and "guards shoot way too
-//! soon upon spotting you". The game's measured anchors [tests/traces/06-firstsight.trace]:
+//! Symptoms: the searchlights did not raise the alarm, and guards fired too soon after spotting
+//! Bond. The game's measured anchors [tests/traces/06-firstsight.trace]:
 //! - a guard's alertness (`Drone+0x50C`) jumps 0.1 → 1.0 on the sighting tick [L trace d9 @148595,
 //!   d1 @148537];
 //! - the first hit on Bond lands 70 frames (d9, 15.7 units) and 128 frames (d1, 9.6 units) after the
@@ -58,7 +58,7 @@ fn a_courtyard_searchlight_arms_and_raises_the_alarm_channel() {
         if alarm.is_none() && sim.drones.channels.on(55) { alarm = Some(t); break; }
     }
     let alarm = alarm.expect("standing in the beam raises alarm channel 55 (pre-fix: the head could \
-        never arm, so the channel stayed low and no guard reacted — the user's 'no alarm')");
+        never arm, so the channel stayed low and no guard reacted — the old 'no alarm')");
     let armed = armed.expect("the head tracked (state 1) before the alarm channel rose");
     assert!(alarm >= armed, "the alarm channel only writes from the tracking state [M 0x1cb900:142-144]");
     assert!(alarm <= lit + 720, "the arm beat follows the light-up within a sweep period (the game: within ~1 s of \

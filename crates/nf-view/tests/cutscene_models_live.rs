@@ -1,7 +1,7 @@
 //! fix-cutscene-models: the cut-scene actor draw census (the REGRESSION probe).
 //!
-//! The playtest (1013-1758): in the cut-scenes only Bond draws — on 07000008 "Kiko is the only
-//! one showing besides me", on 07000007 "only my player character". The port draws a script actor
+//! The symptom: in the cut-scenes only Bond drew — on 07000008 only Kiko besides him, on 07000007
+//! only Bond. The port draws a script actor
 //! only while `Sim::script_anim(src, skin_hash)` resolves a live `Obj::Anim` (scene.rs
 //! `frame_state`'s `hidden` collapse; scene.rs:4052) AND its pose
 //! (`script_pose_together` → `world_pose` → `skin_matrices`) is finite. This probe runs each
@@ -80,7 +80,7 @@ fn probe_kimiko_scene_actor_census() {
 }
 
 /// 07000007's Drake fly-through (0x06000072, TouchOnce #356): the live party AND the script's
-/// guests drew in the earlier playtest.
+/// guests used to draw together.
 #[test]
 fn probe_flythrough_actor_census() {
     let Some(mut scene) = load("07000007.bin") else { return };
@@ -167,7 +167,7 @@ fn depth0_game(vp: [[f32; 4]; 4], eye: [f32; 3]) -> [[f32; 4]; 5] {
 /// render loop runs `cel_visibility` (→ `eye_cell`'s persistent `ViewerCel`) every frame at the
 /// draw camera, and the script camera CUTS between positions. A cut that portal-move-relinks to
 /// the wrong cel (or a FindCel miss that keeps the stale cel) walks the WRONG rooms and the
-/// palette's `vis_room` moves every actor to FAR — the playtest's missing cut-scene cast. This
+/// palette's `vis_room` moves every actor to FAR — the missing cut-scene cast. This
 /// test carries ONE ViewerCel across the whole scene, updating it per tick from the script
 /// camera exactly like the render loop, and censuses the palette at checkpoints.
 #[test]
@@ -233,7 +233,7 @@ fn probe_render_path_census_07() {
 /// `mask`) — then the census at three checkpoints. A scene counts as running at a checkpoint when
 /// any of its pre-built characters has a live `Obj::Anim`; while it runs, ALL of its characters
 /// must be live (no `frame_state` collapse) with finite poses. This is the regression net: the
-/// playtest's "only Bond draws in cut-scenes" means some scene's actors collapse or pose NaN.
+/// symptom "only Bond draws in cut-scenes" means some scene's actors collapse or pose NaN.
 #[test]
 fn every_scene_on_05_06_07_08_draws_its_actors() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };

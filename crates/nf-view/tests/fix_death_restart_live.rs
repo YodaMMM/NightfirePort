@@ -1,4 +1,4 @@
-//! fix-death-restart: dying, failing and restarting like the game (playtest 2026-10-11/12).
+//! fix-death-restart: dying, failing and restarting like the game.
 //!
 //! Evidence base:
 //! - `Player_CheckForDeath` 0x190810: on health ≤ 0 — ch 0x5e, `Music_Event(6,1)`, `Player_WeaponNone`,
@@ -46,13 +46,13 @@ fn exit(sim: &nf_view::scene::Sim) -> (Option<u32>, bool) {
     (sim.drones.level_exit, sim.drones.level_exit_cold)
 }
 
-/// ── 1. The restart target (the user's 07000007 report) ───────────────────────────────────────────
+/// ── 1. The restart target (07000007) ─────────────────────────────────────────────────────────────
 /// Punching a guest kills them → "Killed Civilians" ch 0x60 (`DroneFunc_SetMissionFailReason`
 /// reasons 1/3/6/9 [M 0x13e560], the port's `on_init_death` team-2/3 arm) → the 0x61/0x60 hook
 /// raises ch 99 [M 0x1827d8:98-117] → Mission Fail [M 0x182c60 case 2] → the menu → Restart. The
 /// game's fail-menu Restart is `P_ENDMISSION_Handler` 0x216618:19-21: the CURRENT level, WARM, on
-/// the entry checkpoint — 07000007, NOT the mission's base map 07000005 (the port's old behaviour —
-/// the user's report; the cold BaseMap restart is the PAUSE menu's, `C_GCPAUSE_Handler` 0x204408:139).
+/// the entry checkpoint — 07000007, NOT the mission's base map 07000005 (the port's old behaviour;
+/// the cold BaseMap restart is the PAUSE menu's, `C_GCPAUSE_Handler` 0x204408:139).
 #[test]
 fn fail_restart_reloads_the_current_level_warm() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -78,7 +78,7 @@ fn fail_restart_reloads_the_current_level_warm() {
 }
 
 /// The loop mechanism itself: carrying the DYING state's capture (ch 99 up) re-fails the mission
-/// the tick the level comes back — no input needed (the user's "replay loop"). This is why the
+/// the tick the level comes back — no input needed (the replay loop). This is why the
 /// game's Restart re-serves the ENTRY checkpoint (whose channels predate the fail) instead of
 /// capturing at the fail [M 0x216618:21 → 0x1957a8:17-20; fix-restart-target]. Sister: the COLD
 /// reload (the pause menu's arm, 0x204408:139) also comes back clean.
@@ -101,7 +101,7 @@ fn carried_restart_replays_the_fail_but_the_cold_one_does_not() {
     let sim = warm.sim.as_mut().unwrap();
     tick(sim, 6);
     assert!(sim.drones.channels.on(99) && sim.drones.mission.status() == 2,
-        "the carried ch 99 keeps the mission failed with no input — the user's replay loop");
+        "the carried ch 99 keeps the mission failed with no input — the replay loop");
     // The carried mission is back in the flow (the restored InternalState falls through to 1), the
     // carried ch 99 re-fails it, and after the banner the menu auto-restarts AGAIN — the replay loop.
     tick(sim, 320);
@@ -190,7 +190,7 @@ fn death_menu_applies_by_itself_after_the_red_fade() {
 /// `Player_RamLoad` body is gated on `IsWarmReset` [M 0x1957a8:9], so `Player_Init`'s health 100 /
 /// armour 0 [M 0x1910f8:128-138] stand and the 05 case's fresh loadout is what's captured). The
 /// fail-menu's `Player_RamLoad(Bond, 1)` floors that at 50.0 — max(100, 50) = **100: FULL health**
-/// (fix-restart-health; the old zero-buffer model here asserted the playtest's "half health" 50.0).
+/// (fix-restart-health; the old zero-buffer model here asserted "half health" 50.0).
 /// Sister: the DYING state's capture does NOT match (health 0, the channels carried) — the loop's
 /// mechanism, why the game re-serves the entry buffer.
 #[test]
@@ -208,7 +208,7 @@ fn restart_of_a_cold_loaded_level_restores_the_post_load_entry_checkpoint() {
         z
     };
     assert_eq!(save.health, 100.0, "a cold load's buffer holds Player_Init's health 100 [M 0x1910f8:138, 0x1a7ef8:325]");
-    // release the first load before the second — two live arena scenes overflow this sandbox
+    // release the first load before the second — two live arena scenes overflow a small test machine
     // (memory hygiene only; the asserts are unchanged)
     drop(scene);
     // Kill → the sequence → the auto-restart, through the real input path.
@@ -240,7 +240,7 @@ fn restart_of_a_cold_loaded_level_restores_the_post_load_entry_checkpoint() {
     let mut clean = load(&iso, "07000005.bin");
     tick(clean.sim.as_mut().unwrap(), 5); // the same ticks, so the monitor's states line up
     let (r, c) = (restarted.sim.as_ref().unwrap(), clean.sim.as_ref().unwrap());
-    assert_eq!(r.drones.health.health, 100.0, "the restart gives FULL health — max(entry 100, the 50.0 floor) [M 0x1a7ef8:325 + 0x1957a8; the user's report]");
+    assert_eq!(r.drones.health.health, 100.0, "the restart gives FULL health — max(entry 100, the 50.0 floor) [M 0x1a7ef8:325 + 0x1957a8]");
     assert_eq!(r.drones.health.armour, 0.0, "the entry checkpoint's armour 0 [M 0x1910f8:130, 0x1957a8:36]");
     assert_eq!(r.drones.channels.v, c.drones.channels.v, "the entry checkpoint's channels match a clean load's [M 0x1957a8:17]");
     assert_eq!(r.drones.inventory.carried, c.drones.inventory.carried, "the loadout re-equips over the entry blocks [M 0x1a7ef8]");

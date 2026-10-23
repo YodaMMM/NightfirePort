@@ -4,7 +4,7 @@
 //! Every F2 action needs a headless test (no panic + the effect), and each fix needs a test that would have
 //! failed before it:
 //!
-//! - `dev_infinite_ammo_survives_sustained_fire` — the user's "infinite ammo isn't always reliable": the old
+//! - `dev_infinite_ammo_survives_sustained_fire` — infinite ammo was unreliable: the old
 //!   refill only topped the gun's transient `gun.clip`/`gun.spare` copies, but `Sim::run` reads the INVENTORY
 //!   (the game's own store, `BL+0x170`/`+0x1B8`) into those copies every tick, so the ammo kept emptying and
 //!   the gun stopped firing while the HUD still showed a full clip. The test fires sustained shots through the
@@ -17,7 +17,7 @@
 //!   exact field the viewer's key handler writes (`Scripts::skip_request`) and asserts the cut-scene ends with
 //!   its end-of-script effects applied (the player handback). Sister phase: without skip the cut-scene is still
 //!   running 150 ticks later.
-//! - `hud_ammo_strip_clamped` — the user's stacked/garbled ammo icons: the strip's drawn height is clamped to
+//! - `hud_ammo_strip_clamped` — stacked/garbled ammo icons: the strip's drawn height is clamped to
 //!   the weapon's clip size, so a dev-refilled clip (or any clip above its size) can't overflow the pane.
 //! - `dev_level_select_rows_and_load` — the F2 level-select rows exist for every level archive on the disc and
 //!   the archives load headless through the same `nf_view::load` path the menu action feeds.
@@ -48,7 +48,7 @@ fn clip_size_of(scene: &nf_view::scene::Scene) -> f32 {
     u16::from_le_bytes(sim.weapons.records[w][0x92..0x94].try_into().unwrap()) as f32
 }
 
-/// Sustained fire with infinite ammo must never run out — the user's "isn't always reliable".
+/// Sustained fire with infinite ammo must never run out.
 ///
 /// Before the fix the refill only touched `gun.clip`/`gun.spare` (transient copies `Sim::run` overwrites from
 /// the inventory each tick), so the inventory emptied, the gun stopped firing, and the HUD still showed a full
@@ -222,7 +222,7 @@ fn dev_skip_ends_the_gatehouse_cutscene() {
     assert!(control, "control did not return after the skipped cut-scene (the end-of-script handback never ran)");
 }
 
-/// The HUD ammo strip clamps what it draws to the weapon's clip size — the user's stacked/garbled icons when
+/// The HUD ammo strip clamps what it draws to the weapon's clip size — the stacked/garbled icons when
 /// a dev tool pushes the clip past its size.
 #[test]
 fn hud_ammo_strip_clamped() {
@@ -251,7 +251,7 @@ fn hud_ammo_strip_clamped() {
     }).fold(0.0f32, f32::max);
     let limit = cs * hpr / 224.0 * 1.02 + 1e-4;
     eprintln!("[hud] clip 500 vs size {cs}: tallest bullets-strip quad {max_h:.4} NDC, limit {limit:.4}");
-    assert!(max_h <= limit, "the ammo strip drew {:.4} NDC tall (> {:.4}): the infinite-ammo overflow the user screenshotted", max_h, limit);
+    assert!(max_h <= limit, "the ammo strip drew {:.4} NDC tall (> {:.4}): the infinite-ammo overflow", max_h, limit);
 }
 
 /// The F2 level-select rows exist for every level archive on the disc, the menu action carries the right id,

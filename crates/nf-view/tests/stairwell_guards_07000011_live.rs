@@ -1,5 +1,5 @@
-//! stairwell-guards-11: the 07000011 stairwell guards' wake + alert chain (playtest 2026-10-18,
-//! F12s 006-008: pairs standing inside each other and idle guards ignoring Bond). Pins the game's
+//! stairwell-guards-11: the 07000011 stairwell guards' wake + alert chain (symptoms: pairs
+//! standing inside each other and idle guards ignoring Bond). Pins the game's
 //! own design against the decompile:
 //!   - the stairwell guards are oDrone placements woken by the flight-plate TouchOnces (param 3 =
 //!     the switch channel [M NDrone2_DefaultInit 0x14b300:463-471 → Drone+0x134]; plates #250-253/
@@ -96,7 +96,7 @@ fn stairwell_guards_load_disabled_undrawn_at_their_disc_pairs() {
             let dxz2 = (a.pos[0] - b.pos[0]).powi(2) + (a.pos[2] - b.pos[2]).powi(2);
             let dy = (a.pos[1] - b.pos[1]).abs();
             assert!(dxz2.sqrt() > 0.5 || dy > 2.5,
-                "p{pa}/p{pb} coincide in XZ ({:.3}) at nearly the same height (dy {dy:.3}) — the stacking the playtest saw",
+                "p{pa}/p{pb} coincide in XZ ({:.3}) at nearly the same height (dy {dy:.3}) — the old stacking",
                 dxz2.sqrt());
         }
     }
@@ -105,7 +105,7 @@ fn stairwell_guards_load_disabled_undrawn_at_their_disc_pairs() {
 #[test]
 fn the_flight_plate_wakes_the_0x13_guards_and_a_guard_in_view_alerts() {
     let mut scene = load_d3();
-    // Bond onto the east connector at the 0x13 plate #253 (23.1, 29.9, 3.9) [D] — the F12 f6186
+    // Bond onto the east connector at the 0x13 plate #253 (23.1, 29.9, 3.9) [D] — the frame-6186
     // spot. The touch runs the real Trigger_Calc (the same volume test the game's walk applies).
     {
         let sim = scene.sim.as_mut().unwrap();
@@ -137,7 +137,7 @@ fn the_flight_plate_wakes_the_0x13_guards_and_a_guard_in_view_alerts() {
             assert!(t <= 60, "all five 0x13 guards enabled within 60 ticks of the channel (took {t})");
             break;
         }
-        assert!(t < 59, "the 0x13 guards never woke after the channel fired at tick {woke_at} — the playtest's frozen idles");
+        assert!(t < 59, "the 0x13 guards never woke after the channel fired at tick {woke_at} — the old frozen idles");
     }
     // Bond stands in the open ~1.5-2 m from the pair — the woken guards' sight accrues and the
     // combat chain starts within the reaction band [M 0x175ef0:41-44 + 0x14ac60 = 10 ticks; the
@@ -169,10 +169,10 @@ fn the_flight_plate_wakes_the_0x13_guards_and_a_guard_in_view_alerts() {
 /// by the 0x13 plate) must hang within 3.0 above Bond's height, not slide past it. MEASURED on the
 /// current code (this task's probe, d3, Bond parked at (22.34, 29.37, 3.52)): p258 slid to y 22.34
 /// before hanging — 10.0 past the 32.37 gate — leaving him hanging mid-well beside the y-24
-/// landings (the playtest's "one floating a body height above the other"). Ignored until the gate
+/// landings (one floating a body height above the other). Ignored until the gate
 /// is fixed; the numbers are the pin.
 #[test]
-#[ignore = "the abseiler slides past the 3.0 hang gate (measured y 22.34 vs the 32.37 gate) — see docs/reports/ai-stacked-idle-guards-11.md"]
+#[ignore = "the abseiler slides past the 3.0 hang gate (measured y 22.34 vs the 32.37 gate)"]
 fn the_mode_1c_abseiler_hangs_within_the_game_s_3_0_of_the_opponent() {
     let mut scene = load_d3();
     {

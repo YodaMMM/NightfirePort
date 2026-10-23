@@ -88,10 +88,10 @@ fn the_truck_park_announces_the_first_objective_and_exits_to_the_castle() {
     }
     let sim = scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(0x70), "the crouched ride parks on the ch-0x70 plate [D; fix-truck]");
-    // Merge note (main agent): the objective record is `46 00 01 45` at +0x0C [L ee_start_05.bin 0x2a3e34]: it is
-    // ANNOUNCED on ch 0x45 and COMPLETED on ch 0x46, not ch 0x70 (map-mayhew's first table read 0x70; fix-mission's
+    // The objective record is `46 00 01 45` at +0x0C [L ee_start_05.bin 0x2a3e34]: it is
+    // ANNOUNCED on ch 0x45 and COMPLETED on ch 0x46, not ch 0x70 (an earlier table read gave 0x70; this
     // decode is the right one). No writer of ch 0x46 on 07000005 has been found yet, so the objective stays shown (3).
-    // The open item is in docs/levels/07000005.md and the merge log.
+    // The open item is in docs/levels/07000005.md.
     let st = sim.drones.mission.states[nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0005).expect("level in the mission table")][0];
     assert_eq!(st, 3, "'Breach the castle walls' is announced (ch 0x45) and waits on ch 0x46 [L]");
     assert_eq!(sim.drones.level_exit, Some(0x0700_0006), "the truck chain's ch 0x1D ends the level into 07000006");

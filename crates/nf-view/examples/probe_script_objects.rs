@@ -1,4 +1,4 @@
-//! Scratch probe (task 289): the urn SP's prime state + the truck script's stream 2.
+//! Scratch probe: the urn SP's prime state + the truck script's stream 2.
 use nf_formats::nis::Cmd;
 
 fn main() {

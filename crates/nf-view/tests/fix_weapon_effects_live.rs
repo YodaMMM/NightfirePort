@@ -22,7 +22,7 @@ fn q(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
-/// Give a weapon through the dev panel (the user's `--give` path) and wait for the switch.
+/// Give a weapon through the dev panel (the `--give` path) and wait for the switch.
 fn give_and_switch(scene: &mut nf_view::scene::Scene, id: u8) {
     let (msg, switch_to) = nf_view::panel::apply(scene, &q(&[("do", "weapon"), ("id", &id.to_string()), ("rounds", "5")]));
     eprintln!("[give] {id:#04x}: {msg} -> {switch_to:?}");
@@ -40,7 +40,7 @@ fn alive_casings(scene: &nf_view::scene::Scene) -> usize {
 
 /// ── Nothing spawns while walking: the casings fly only on the shot's release tick ───────────────
 /// `Bullet_init_casing` 0x12fde0 is called from `Player_WeaponInitBullet` 0x1a4bf0:306 (the shot's
-/// release), never from a movement path. The user saw casings fly while walking backwards on
+/// release), never from a movement path. Casings flew while walking backwards on
 /// 07000016; through the real path walking must spawn no casing, no bullet, no blast, no light.
 #[test]
 fn walking_backwards_spawns_nothing() {
@@ -53,7 +53,7 @@ fn walking_backwards_spawns_nothing() {
     let (c0, e0, l0) = (alive_casings(&scene), scene.sim.as_ref().unwrap().drones.explosions.len(), scene.sim.as_ref().unwrap().drones.lights.lights.len());
     for _ in 0..240 {
         let sim = scene.sim.as_mut().unwrap();
-        // Backwards: forward < 0 (the walk input the user held), no trigger.
+        // Backwards: forward < 0 (the walk input held), no trigger.
         sim.step_bond(Input { forward: -1.0, ..Default::default() }, false, false, false);
         let sim = scene.sim.as_ref().unwrap();
         assert!(sim.drones.player_bullets.is_empty(), "a bullet spawned while walking");
@@ -114,7 +114,7 @@ fn a_plain_gun_bullet_never_explodes() {
 
 /// ── The MGL's 'Grenade' twin detonates on contact; the 'Delay' twin bounces ────────────────────
 /// [L docs/live/2026-10-13-weapon-modes-pcsx2.md: 0x2A exploded on contact within ~0.3 s, 0x2B
-/// bounced and exploded 3-4 s later; the user's "the MGL is always delayed"].
+/// bounced and exploded 3-4 s later; the MGL seemed always delayed].
 #[test]
 fn the_mgl_grenade_mode_detonates_on_contact() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };

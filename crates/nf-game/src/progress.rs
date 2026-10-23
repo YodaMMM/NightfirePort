@@ -1118,8 +1118,7 @@ mod tests {
     }
 
     /// The level-end hand-off (fix-scores-handoff): `finish_level` produces the rows the results
-    /// screen would read, as plain data, and a run with no kills gives the zero rows (the task's
-    /// sister). Read-mode: the entry's best/last are untouched (the commit belongs to the
+    /// screen would read, as plain data, and a run with no kills gives the zero rows. Read-mode: the entry's best/last are untouched (the commit belongs to the
     /// results page's own `GetScore(0)` [M 0x208e78:77, 0x1984b0:301-315]).
     #[test]
     fn finish_level_handoff_no_kills_zero_rows() {

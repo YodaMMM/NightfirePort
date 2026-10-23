@@ -11,8 +11,8 @@
 //! * `MatchSettings` carries the host's `MpSettings` values (field mapping
 //!   documented in [`settings`]);
 //! * the per-tick state hash is an opaque `u64` the caller reports via
-//!   [`Session::submit_hash`] — task 050's `state_hash(&MpWorld)` wires in
-//!   there once it lands (it does not exist yet, checked 2026-10-15);
+//!   [`Session::submit_hash`] — the game's MP state hash
+//!   (`nf_game::mp::hash::state_hash`) wires in there;
 //! * [`Input`] maps to `nf_game::player::Input` + the separate
 //!   `trigger/reload/use_key` args of `Sim::step_bond` (mapping documented).
 //!
@@ -53,8 +53,8 @@ pub use teams::{scenario_has_teams, start_check, team_label, StartError, TeamEdi
 /// 4..4+bot_count-1 [M] (`work/decomp` MP_Start;
 /// `crates/nf-game/src/mp/mod.rs:59,664`; `docs/atlas/multiplayer.md`
 /// "MP 1-4"). The PORT extends the cap to 16 participants, any mix of humans
-/// and bots (humans 1..16, bots 0..15, humans + bots ≤ 16) [S — the user's
-/// request; every per-slot rule stays the game's, only the counts grow]. The
+/// and bots (humans 1..16, bots 0..15, humans + bots ≤ 16) [S — a port
+/// extension; every per-slot rule stays the game's, only the counts grow]. The
 /// slot ORDER stays the game's shape: humans 0..humans-1, bots follow
 /// (humans..humans+bots-1) — the game's order, extended [S].
 pub const MAX_AGENTS: usize = 16;

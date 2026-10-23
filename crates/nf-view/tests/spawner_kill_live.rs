@@ -3,7 +3,7 @@
 //! two gate guards; ch 0x43 (the wall-hug plate) runs SP 298's script (0x06000994 — event 5 freezes
 //! the NPCs on the TOUCH TICK, the game's one-walk order), and when the script's end re-enables the
 //! NPCs the kill latch removes both guards and the spawner — the placed pair behind the gate swaps
-//! in at the same moment. Plus 07000011's stairwell (the fix-actors playtest case): the keep-level
+//! in at the same moment. Plus 07000011's stairwell (the fix-actors case): the keep-level
 //! split keeps a drawn guard. Every step goes through the real input path: `step_bond` with Bond
 //! teleported into the disc's touch volumes. Opt-in: NF_ISO.
 
@@ -80,7 +80,7 @@ fn the_wall_hug_scene_holds_the_gate_pair_and_swaps_the_pairs_at_its_end() {
         assert_eq!(present(sim, &group2(sim)), 2, "no kill channel: both guards stay");
     }
     // The kill channel: Bond onto the wall-hug plate (placement 301, out 0x43 [D]) — with the
-    // combat event QUIET, as the main agent's PINE probe had it (a fresh room, nobody attacking):
+    // combat event QUIET, as the PINE probe had it (a fresh room, nobody attacking):
     // wait out any yard alert so `SP_Update`'s state-0 gate lets the script start [M 0x1dbda8:96-100].
     {
         let sim = scene.sim.as_mut().unwrap();
@@ -149,7 +149,7 @@ fn the_wall_hug_scene_holds_the_gate_pair_and_swaps_the_pairs_at_its_end() {
     assert_eq!(present(sim, &group2(sim)), 0, "the spawner never spawns again");
 }
 
-/// The real-play case (trace `tests/traces/05-gate-swap.trace` 174328→174329): the user stepped on the
+/// The real-play case (trace `tests/traces/05-gate-swap.trace` 174328→174329): the player stepped on the
 /// ledge plate #301 (ch 0x43) while the courtyard sniper had been cycling SNIPER_AIM/SNIPER_FIRE on him
 /// since frame 173533 (the 173599 hit) — `NDrone2_SeenAndAttacking` (0x145150) had the combat-music event
 /// live (EventList[2] = 5). `SP_Update`'s state-0 start checks [M 0x1dbda8:80-106] refuse the ledge
@@ -161,7 +161,7 @@ fn the_wall_hug_scene_holds_the_gate_pair_and_swaps_the_pairs_at_its_end() {
 /// death on ch 0xA4 posts event 2 = 3 for the first 58 ticks]: Bond kills ch-0xA4 death-channel guard
 /// #65 through the real weapon path. Sister:
 /// `the_wall_hug_scene_holds_the_gate_pair_and_swaps_the_pairs_at_its_end` — with the event QUIET (the
-/// hand-written ch 0x43 the main agent probed over PINE) the same script DOES start and freezes.
+/// hand-written ch 0x43 probed over PINE) the same script DOES start and freezes.
 #[test]
 #[ignore = "the fix's own assertions all pass (no freeze, SP #298 refused to state 5, npc_enabled stays up); the remaining failure is TEST SETUP: the spawned gate pair reads hp 10 at spawn [L probe] and takes a stray death during the yard wait, so the pair-present assertions can't hold yet — the next session re-tunes the wait (shorter, or a quieter yard spot)"]
 fn the_wall_hug_plate_swaps_without_the_cut_scene_while_the_combat_music_is_on() {
@@ -356,7 +356,7 @@ fn the_kill_channel_waits_for_the_npcs_to_be_re_enabled() {
     assert_eq!(present(sim, &group2(sim)), 0, "the removal lands once Control runs [L]");
 }
 
-/// 07000011, map-tower2's stairwell (the fix-actors playtest case): the group-1 spawner (mode 3,
+/// 07000011, map-tower2's stairwell (the fix-actors case): the group-1 spawner (mode 3,
 /// waves 2, trigger ch 0x15 ← TouchOnce #182, stop ch 0x16 ← #183, kill ch 0x1D ← Touch #285 [D])
 /// brings its guard in on the trigger, and the kill channel behaves as the keep-level split says
 /// [M 0x137e68:235-262]: a guard the game is drawing (`obj+0xFC` != 0 — the port's per-tick

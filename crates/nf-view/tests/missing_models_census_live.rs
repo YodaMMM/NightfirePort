@@ -125,7 +125,7 @@ fn census(iso_path: &str, name: &str) -> Row {
     // skin no 0xd9 placement reaches is NOT merged — 07000001's 0x05000037 ask sits in script
     // 0x0600005b stream 7 [D probe: 01's 0xd9 scripts are 0x06000016/86/87; 0x0600005b is not
     // reachable from them], so the sim still lacks it post-load. Diagnostic (not a pin: the lane is
-    // an OPEN gap — closing it is a loader change needing the main agent's render checks).
+    // an OPEN gap — closing it is a loader change needing render checks).
     if let Some(sim) = scene.sim.as_ref() {
         let unmerged: Vec<String> = anim_miss_hashes.iter().filter(|sh| !sim.skins.contains_key(sh)).map(|sh| format!("{sh:#010x}")).collect();
         if !unmerged.is_empty() { eprintln!("census {name}: raw-missing script skins NOT merged at load: {}", unmerged.join(" ")); }

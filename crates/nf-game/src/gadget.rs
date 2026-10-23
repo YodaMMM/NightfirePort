@@ -130,7 +130,7 @@ pub fn pick_decryptor_lock(
 /// `head`/`dir` are THE CROSSHAIR RAY the caller fires bullets down (the game's shot ray runs from
 /// `Player_GetHeadPos` through `Player_GetAimingPoint` [M Player_WeaponInitBullet 0x1a4bf0:152-159],
 /// and the beam draws from the muzzle to that ray's re-cast hit [M 0x1a4298:107-132]) — the old
-/// `bond.look()` ray was the user's "the laser isn't accurate" on the 0700000c display vent.
+/// `bond.look()` ray made the laser inaccurate on the 0700000c display vent.
 /// Returns the beam's endpoints (the hand end is the caller's; here the head) and the hit point
 /// for the renderer.
 pub fn laser_tick(head: V3, dir: V3, world: &crate::world::CollisionWorld) -> (V3, V3) {
@@ -151,7 +151,7 @@ pub fn laser_tick(head: V3, dir: V3, world: &crate::world::CollisionWorld) -> (V
 /// docs/live/2026-10-14-weapon-measurements-pcsx2.md "The laser watch 0x4e": 100 → 59 over ~1.3 s].
 /// The game's writer of those instance fields is UNLOCATED in the decompile (an exhaustive store
 /// scan of ACTION.ELF's .text finds no write at link+0x110/link+0x104 nor at the obj-relative
-/// +0x220/+0x214 — the pane reads them through the bullet walk; live check in the report) — the
+/// +0x220/+0x214 — the pane reads them through the bullet walk) — the
 /// port stands the value in as `Sim::laser_charge` with the [D] drain. The refill below is [S]:
 /// no decompile or disc evidence pins the game's idle refill (the old "+1 per 4 frames" shape was
 /// the gadget-clip regen [M Player_Update 0x193600 disasm 0x193f18-58], which regenerates the

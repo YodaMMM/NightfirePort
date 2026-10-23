@@ -1,6 +1,6 @@
-//! npc-doors: the drone side of door use, re-verified against the real levels after the
-//! 1012-1723 / 1013-1825 playtests ("npcs cant open doors", "NPC still can't open doors" on
-//! 07000001 / 06 / 07 — the escort stalls at doors, guards and guests don't path through them).
+//! npc-doors: the drone side of door use, re-verified against the real levels (NPCs could not
+//! open doors on 07000001 / 06 / 07 — the escort stalled at doors, guards and guests did not path
+//! through them).
 //!
 //! The game's chain, all cited [M]:
 //! - `NDrone_InitDoorNodes` 0x139a70: every door-flagged route node (MAPNODE flags bit 1) binds
@@ -134,7 +134,7 @@ fn probe_01_wall_at_the_stall() {
 
 /// Zero-interference watch on 07000007: the party guests and staff walk their CivilianMission
 /// routes through the doorway node pairs (paths 3/6/7 carry door-flagged pairs → doors #3/#1).
-/// The playtests say "guards and guests don't path through them" — this watches whether the
+/// Guards and guests did not path through them — this watches whether the
 /// guests' own routes work the doors, stall in DSTATE_OpenDoor, or never reach the pair.
 #[test]
 fn watch_07_guests_path_through_doors() {
@@ -190,7 +190,7 @@ fn watch_07_guests_path_through_doors() {
 /// game's own escort behaviour, so Bond clears the intro's guards through the real fire path
 /// (the walkreal-a/fix_npc_doors pattern) — the DOOR work itself is all Mayhew's.
 #[test]
-#[ignore = "level-05-complete-2: the harness's guard-clear ordering steals the escort's door work under the measured reach (the channel-write SETS are identical to the old toucher — probe-proven; a 6-tick guard-death phase shift reorders the rounds). The real gap: the port's drone blocked at a closed door stalls 0.4-1.0 from the node, where LinkCreep_AtSpecialNode 0x159dd0 defers to NDrone2_DroneNearPos 0x143e68 — the port now implements the player tier (0.55/2.0 [M]) but Bond's crossing passes 1.2 west of the node and the game's creep-stall distance and the dropped radius float need live measurement before the last arm can be pinned. Live checks in docs/reports/level-05-complete-2.md. The 0x81 node dispatch itself stays pinned by the green -0.4-order path and the isolation drive below."]
+#[ignore = "level-05-complete-2: the harness's guard-clear ordering steals the escort's door work under the measured reach (the channel-write SETS are identical to the old toucher — probe-proven; a 6-tick guard-death phase shift reorders the rounds). The real gap: the port's drone blocked at a closed door stalls 0.4-1.0 from the node, where LinkCreep_AtSpecialNode 0x159dd0 defers to NDrone2_DroneNearPos 0x143e68 — the port now implements the player tier (0.55/2.0 [M]) but Bond's crossing passes 1.2 west of the node and the game's creep-stall distance and the dropped radius float need live measurement before the last arm can be pinned. The 0x81 node dispatch itself stays pinned by the green -0.4-order path and the isolation drive below."]
 fn the_escort_opens_his_door_without_bonds_help() {
     let Some(iso) = std::env::var("NF_ISO").ok() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));

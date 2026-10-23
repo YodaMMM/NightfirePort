@@ -34,7 +34,7 @@ fn menu_def() -> MenuDef {
     MenuDef::parse(lb.data(&data, e), 0x8000_0002).expect("parse the menu def")
 }
 
-/// (pane-def vaddr, create fn, update fn, sprite count) for the `.data` defs the task's 13
+/// (pane-def vaddr, create fn, update fn, sprite count) for the `.data` defs the 13 pane
 /// functions live in. Values read straight from the disc ELF's `.data` [D]; the symbol names
 /// and the +0x08/+0x0c/+0x14 layout per docs/systems/hud-panes.md [M + L ee_snapshot.bin].
 const PANES: [(u32, &str, u32, u32, u32); 15] = [
@@ -55,7 +55,7 @@ const PANES: [(u32, &str, u32, u32, u32); 15] = [
     (0x2be6_98, "MPAmmoPane", 0x1a0e_d8, 0x19a7_f0, 3),
 ];
 
-/// [D] every task pane def on the disc carries the task function as its create or update
+/// [D] every listed pane def on the disc carries its pane function as its create or update
 /// pointer — the dispatch table `HUD_Init` 0x199e88:44-58 walks and `HUD_Update` 0x19a088:20-69
 /// ticks. Sister: each def's sprite count comes out non-zero (a swapped pointer pair would
 /// zero it).
@@ -111,7 +111,7 @@ fn hud_tables_contain_the_new_pane_sprite_tables() {
 /// [D] the M_TEXTBOX reachability census: the control factory `Manager_SendMessage`
 /// 0x21c858:206-208 builds a textbox (type 0xc) for any page-def control whose type byte is
 /// 0xc. This parses the shipped front-end menu def (kind-8 entry 08000002 in 07000048.bin)
-/// and counts them. The result is recorded in docs/reports/unported-hud-1.md; the trio's
+/// and counts them; the trio's
 /// reachability rides on what ships here.
 #[test]
 fn menu_def_textbox_census() {
@@ -124,7 +124,7 @@ fn menu_def_textbox_census() {
             }
         }
     }
-    // Print for the report (cargo shows captured output on failure or with --nocapture).
+    // Print the counts (cargo shows captured output on failure or with --nocapture).
     println!("type-0xc (M_TEXTBOX) controls on the shipped pages: {:?}", hits);
     assert!(
         !md.pages.is_empty(),

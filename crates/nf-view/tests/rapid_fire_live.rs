@@ -1,5 +1,5 @@
-//! The PC-port "Rapid fire" option (`--rapid-fire`, the dev Toggles page): the user (2026-10-16) "pc
-//! port should have a rapid fire option just to show the possibilities of performance". [S port-only:
+//! The PC-port "Rapid fire" option (`--rapid-fire`, the dev Toggles page), a showcase of the
+//! PC's performance headroom. [S port-only:
 //! the game has no such mode.] Held fire shoots one round per tick from a full clip; off, the weapon
 //! keeps the game's own refire rules. Drives the real `step_bond` path. Opt-in: `NF_ISO`.
 

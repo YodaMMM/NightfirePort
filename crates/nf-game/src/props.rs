@@ -62,8 +62,7 @@ pub struct Destroy {
 pub struct Props {
     pub subjects: Vec<CamSubject>,
     pub destroy: Vec<Destroy>,
-    /// The mounted-gun implementations (`GunImp_Create` 0x131f20, placement 0x34). Own line
-    /// (merge lesson 4).
+    /// The mounted-gun implementations (`GunImp_Create` 0x131f20, placement 0x34).
     pub gunimps: Vec<crate::gunimp::GunImp>,
 
 }
@@ -216,7 +215,7 @@ impl Props {
                     // 0x12bc50]. Radius [M 0x12bcdc `lwc1 f12,140(s0)` × the type mult 4/2/3
                     // (0x12bc74/0x12bc84/0x12bc94)] reads the placed obj's +0x8C sphere — a field
                     // the port doesn't parse; the bounds' half-diagonal stands in [*suggested*],
-                    // live check in the report. Position: the obj's own `+0x80` [M 0x12bd08 a1 =
+                    // open live check. Position: the obj's own `+0x80` [M 0x12bd08 a1 =
                     // s3 = obj+0x80]; the port uses the bounds centre.
                     if d.kind != 0 {
                         let c = [(d.lo[0] + d.hi[0]) / 2.0, (d.lo[1] + d.hi[1]) / 2.0, (d.lo[2] + d.hi[2]) / 2.0];

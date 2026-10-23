@@ -80,13 +80,13 @@ fn census_flight_range_plus_1c_vs_fuse_clock() {
         // The flight-death range is the record's own +0x1C — including the 0.0 records (the
         // thrown-grenade family never runs the flying case-1 state) and the 5000.0 records
         // (the stick/satchel records fly as thrown objects, not case-1 bullets).
-        let _ = death; // enumerated in the report's table; the pins below carry the numbers
+        let _ = death; // enumerated, not asserted; the pins below carry the numbers
     }
-    // The named pins (the report cites these) [D weapon_data 0x2bf150]:
+    // The named pins [D weapon_data 0x2bf150]:
     // P2K 2/3 (id 0x02): +0x1C = 50.0 — the round dies at 50 units [M 0x12e95c], NOT 210.
     assert_eq!(f(&wd.records[2], 0x1c), 50.0, "P2K flight death range");
     assert_eq!(f(&wd.records[3], 0x1c), 50.0, "P2K twin");
-    // The Laser watch 0x4E/0x4F: +0x1C = 4.0/8.0 (task 831's [L]; the disc confirms).
+    // The Laser watch 0x4E/0x4F: +0x1C = 4.0/8.0 ([L]; the disc confirms).
     assert_eq!(f(&wd.records[0x4e], 0x1c), 4.0, "Laser 0x4E flight death range");
     assert_eq!(f(&wd.records[0x4f], 0x1c), 8.0, "Laser 0x4F flight death range");
     // The SG5 0x16/0x17 = 450; the Spas 0x1c/0x1d = 25; the sniper-family 0x1e-0x29 = 1200.

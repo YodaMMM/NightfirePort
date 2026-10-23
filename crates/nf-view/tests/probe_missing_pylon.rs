@@ -1,5 +1,5 @@
 //! fix-missing-objects probe 6: the pylon spot through the REAL camera path — Bond stood at the
-//! user's `--bond` spot (`Bond::stand_at` → `head()`), the sim ticked, then the exact draw-list
+//! check `--bond` spot (`Bond::stand_at` → `head()`), the sim ticked, then the exact draw-list
 //! input. Also dumps the pylon materials' draw states. Opt-in NF_ISO.
 
 use nf_view::scene;

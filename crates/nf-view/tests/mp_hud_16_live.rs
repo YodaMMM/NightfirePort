@@ -32,7 +32,7 @@ fn sixteen_participants_draw_fifteen_radar_blips() {
     assert_eq!(m.bots.len(), 15, "15 bots created");
     let slot = |h: u32| scene.hud_textures.iter().position(|(k, _)| *k == h).map(|i| i + 1);
     let (ring, blip) = (slot(0x0300_0088).expect("the radar ring texture loads in MP"), slot(0x0300_016f).expect("the blip sheet loads in MP"));
-    // The ring's template [L RadarSprInfo @0x2bdd60, read from the user's ACTION.ELF]: texture
+    // The ring's template [L RadarSprInfo @0x2bdd60, read from the disc's ACTION.ELF]: texture
     // 0x03000088, layer 0x1e, flags 0 (plain blend), colour 0x7f7f7fff.
     let t = scene.hud.as_ref().expect("hud tables");
     assert_eq!(t.radar.len(), 1);

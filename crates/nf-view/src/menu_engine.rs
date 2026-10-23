@@ -1,6 +1,5 @@
-//! The menu engine's control/component/sprite helpers — task unported-front-end-menus-4.
-//! Data/state/flow only (nf-view's `menu_overlay` does the drawing, which the main agent
-//! renders). Every function cites its game address; the full evidence write-up is
+//! The menu engine's control/component/sprite helpers.
+//! Data/state/flow only (nf-view's `menu_overlay` does the drawing). Every function cites its game address; the full evidence write-up is
 //! docs/systems/menu-engine.md. Facts are [M] unless marked [S].
 //!
 //! Game base: ACTION.ELF decompile under work/decomp/ACTION.ELF/. Where Ghidra dropped

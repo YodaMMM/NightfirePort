@@ -1,7 +1,6 @@
-//! mp-map-objects (task 744) — probe: what does the port's sim already do with the MP maps'
-//! movers? Playtest 1016-1355: "on the multiplayer maps, like Gondola (Skyrail), it's missing
-//! the actual gondolas. It has these things called remote tanks and like helicopters that you
-//! should be able to pilot, and you can't."
+//! mp-map-objects — probe: what does the port's sim already do with the MP maps'
+//! movers? (Skyrail's gondolas were missing, and the pilotable remote tanks/helicopters did
+//! nothing.)
 //!
 //! Evidence so far [D census, work/ scratch mp_census]:
 //! - Skyrail 0x07000024 main-map placement [4]: kind 0xD9 SP_CreateScriptPlayer, params

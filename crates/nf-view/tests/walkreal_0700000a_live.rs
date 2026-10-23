@@ -283,7 +283,7 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // [M PCQWorm_Update 0x1aee20's seg test]. The game's own walkthrough (walk_0700000a_live)
     // hand-places Bond INSIDE the cubicle at 0.71 — unreachable by walking. docs/levels/
     // 0700000a.md's route says the vent shortcut is the way in; the port has no vent crawl.
-    // Live check for the main agent: in PCSX2 walk to Q-WORM_PC_1 on 0700000a and report whether
+    // Open live check: in PCSX2 walk to Q-WORM_PC_1 on 0700000a and see whether
     // the real game lets Bond inside the cubicle (if yes, the port's collision for this office
     // cell is the bug; the fix belongs to the collision owner).
     let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 2.2, 900, "the Q-Worm shot (documented blocker)", &|sim| sim.drones.channels.on(0x48));
@@ -299,7 +299,7 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // the activation writes ch 0x3A [M SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1]. The
     // walk keeps the direct channel drive because the SP-write → AND-mux #741 (0x49) follow did
     // not fire in the session's probe within 6 ticks (the same write via set_channel does fire
-    // it — the open item in docs/reports/level-0a-complete.md); the route shape is unchanged.
+    // it — an open item); the route shape is unchanged.
     assert!(w.follow_nav_route([-6.0, 1.3, 14.0], "to the security centre"), "no nav route to the keyboard");
     w.scene.sim.as_mut().unwrap().drones.set_channel(0x3a);
     w.wait(6);

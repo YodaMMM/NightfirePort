@@ -1,5 +1,5 @@
-//! The optional internet lobby directory (700v4 item 5; docs/tools/listing-server.md) [S port design]:
-//! a tiny UDP server (`nf-lobbyd`, the user's home server) that only LISTS lobbies — play stays P2P.
+//! The optional internet lobby directory (docs/tools/listing-server.md) [S port design]:
+//! a tiny UDP server (`nf-lobbyd`, self-hosted) that only LISTS lobbies — play stays P2P.
 //!
 //! - A host sends REGISTER from its GAME socket every `REGISTER_EVERY_MS` (`NFDR` + the
 //!   `discovery::LobbyInfo` record). The server keys the lobby by the datagram's SOURCE address — the
@@ -17,7 +17,7 @@
 //!   per source address (codes are brute-forceable). The long self-contained join code
 //!   (p2p/joincode.rs) stays the fallback whenever no server answered.
 //! The server's address is a game setting, default empty — never hard-coded (nothing registers or
-//! lists unless the user sets it).
+//! lists unless the player sets it).
 
 use std::collections::BTreeMap;
 use std::hash::{BuildHasher, Hasher};
@@ -100,7 +100,7 @@ pub fn normalize_short_code(s: &str) -> Option<[u8; SHORT_CODE_LEN]> {
     Some(out)
 }
 
-/// The code as it displays: four bare symbols (the user asked for 4 characters) [S].
+/// The code as it displays: four bare symbols (a port choice) [S].
 pub fn short_code_string(code: &[u8; SHORT_CODE_LEN]) -> String {
     code.iter().map(|&b| b as char).collect()
 }

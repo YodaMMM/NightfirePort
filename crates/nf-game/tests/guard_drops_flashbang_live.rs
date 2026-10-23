@@ -1,6 +1,5 @@
-//! guard-drops-flashbang (task 681) on 07000005 — the playtest 1011-1655 symptoms:
-//! "all enemies are dropping multiple objects" and "the flashbang item is killing enemies even if I
-//! dont throw it directly at them".
+//! guard-drops-flashbang on 07000005 — two symptoms: every enemy dropped multiple objects, and
+//! the flashbang killed enemies it was not thrown at.
 //!
 //! The game's drops [M]:
 //! - `DroneWeap_DropWeapon` 0x17a2a0: at the death anim (Death_Anim 0x1637f8 case 3's `+0x3b`/weapon
@@ -478,8 +477,8 @@ fn a_flashed_guard_killed_after_drops_nothing_more() {
     assert!(drops_after_flash >= 1, "the flash dropped the held gun");
     // Kill them DOWN — the frag (0x34, radius 8 / damage 100 [L record]) while every yard guard is
     // still stunned: they die holding the FISTS (1), whose record has model 0 [L record 1], so
-    // `DropWeapon`'s `weapon_data[w]+0x80 != 0` gate [M 0x17a2a0] drops NOTHING — the playtest's
-    // "multiple objects" never stacks pickups onto a death.
+    // `DropWeapon`'s `weapon_data[w]+0x80 != 0` gate [M 0x17a2a0] drops NOTHING — the
+    // "multiple objects" symptom never stacks pickups onto a death.
     let rec34 = &d.weapons.records[0x34];
     let f32_at34 = |o: usize| f32::from_le_bytes(rec34[o..o + 4].try_into().unwrap());
     sim.grenades.push(nf_game::grenade::Grenade {

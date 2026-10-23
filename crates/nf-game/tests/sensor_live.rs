@@ -1,4 +1,4 @@
-//! The 0700000b sensors (sensor-volumes, task 749): playtest gap "sensor volumes (0x28)" —
+//! The 0700000b sensors (sensor-volumes, 0x28) —
 //! `docs/systems/script-census.md` top-10 item 4. 0700000b carries two main-map sensors
 //! [D placement 164: pos (−10.38, 49.64, 11.16), cone 15°, range 5, out ch 0x28 (40), disable
 //! ch 0x3c; placement 172: pos (9.25, 49.64, 11.16), cone 15°, range 5, out ch 0x27 (39)] —
@@ -6,7 +6,7 @@
 //! detects **`glb_players[0]` only** (disasm 0x1af644 loads 0x2d88e0, both `Sensor_InCone`
 //! calls 0x1af97c/0x1afae0 pass it; no code path feeds it an NPC), so the trip test drives the
 //! PLAYER through the cone — the census's "a drone walking through sets the out channel" is not
-//! what the binary does (docs/reports/sensor-volumes.md has the contradiction and the addresses).
+//! what the binary does (see the addresses below).
 //!
 //! Pinned here (all [M] unless noted):
 //! * sweeping clears the out channel (0x1af618:169-171) — ch 40 reads 0 before the trip;
@@ -14,7 +14,7 @@
 //!   continuous sight writes `switch_channels[out] = 1` (0x1af618:154-157) — the channel
 //!   therefore turns on no earlier than tick 32 + 120 = 152;
 //! * the sister sensor whose cone the player never enters keeps its channel at 0 the whole run
-//!   (the "empty volume" half of the task's sister pair).
+//!   (the "empty volume" half of the sister pair).
 
 use nf_formats::anim::Script;
 use nf_formats::iso9660::IsoImage;

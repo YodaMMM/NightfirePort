@@ -235,7 +235,7 @@ fn guard_patrols_like_the_game() {
 /// (58.83, 99.32). Seed 4 (re-picked at the fix-impact-remainder2 merge: the G-041 impact draws joined the RNG — the
 /// guard's own misses now draw the debris/ricochet stacks plus the impact emitter's burst on the tick after each wall
 /// hit, exactly as `Bullet_CollisionHandler` 0x12ce80 + `Effect_Create` 0x1ce688 + `Emitter_Update` 0x17b080 interleave
-/// them; the per-tick call log is in docs/reports/fix-impact-remainder2.md. fix-ai-remainder had 1, fix-impacts 3,
+/// them. fix-ai-remainder had 1, fix-impacts 3,
 /// 0072 1, 0056 2, 0037 before the snow also 1) makes the port's rolls pick no first-sight move and the lean cover type,
 /// as the game did here.
 #[test]
@@ -271,8 +271,7 @@ fn guard_takes_cover_like_the_game() {
 /// scenario above. `AnimSeqTick` 0x1c28d0 only READS the script's float clock (+0x90; seq.frame = time − start + 1.0),
 /// so the wrap-end's last-two-frames sample must not write it: writing `ftime` there made `begin_blend` start the
 /// outgoing fade one frame early and replay the old script's last step on the switch tick — the pre-blend port moved
-/// exactly 0 there (its integer sampler clamps to the sequence's last frame) [L both trees' per-tick position dump,
-/// docs/reports/fix-anim-blend2.md]. Sister: the walk DOES move on the following tick, so a frozen sim can't pass.
+/// exactly 0 there (its integer sampler clamps to the sequence's last frame) [L both trees' per-tick position dump]. Sister: the walk DOES move on the following tick, so a frozen sim can't pass.
 #[test]
 fn blended_switch_tick_applies_no_root_step() {
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };

@@ -7,7 +7,7 @@
 //! 0x1c8560:81-82]. Back on a page throws the edits away (the file re-saves the RESTORED
 //! values). Unknown keys and out-of-range values in the file are tolerated (clamped).
 //!
-//! Everything writes under a temp dir through `NF_CONFIG_DIR` — never the user's config.
+//! Everything writes under a temp dir through `NF_CONFIG_DIR` — never the player's config.
 //! Two documented host-side assists stand in for the windowed host (the card dir is "next to
 //! the port's config" [M nf-game/src/profile.rs's profiles-dir doc]; the name types through
 //! `cn_type_char` like the grid tests): the OPTION PAGES themselves move by actions only.

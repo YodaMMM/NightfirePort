@@ -132,7 +132,7 @@ pub struct LobbyList {
     entries: BTreeMap<SocketAddr, LobbyEntry>,
     protocol: u16,
     build: u32,
-    /// The internet directory (`directory`, the user's home server) — None unless the setting names one.
+    /// The internet directory (`directory`, a self-hosted server) — None unless the setting names one.
     directory: Option<SocketAddr>,
 }
 

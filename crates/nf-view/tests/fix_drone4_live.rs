@@ -1,7 +1,7 @@
 //! fix-drone4 repro tests, driven through the real path (`nf_view::load` + `Sim::step_bond`).
 //!
-//! The user's retest of the party level (docs/playtests/2026-10-11.md C3 follow-up): "the 07000007
-//! guests no longer T-pose, but they don't move or walk at all". Root cause [M InitAIPath 0x153720]:
+//! The party level after the T-pose fix: the 07000007 guests no longer T-posed, but did not move
+//! or walk at all. Root cause [M InitAIPath 0x153720]:
 //! the guests carry prop 0x1D and the level places kind-8 (mission) paths under them, so the game
 //! starts them in CivilianMission (0x16) walking the path chain — the port had no 0x16 handler and its
 //! `Route::for_path` collapsed every open chain (endpoint nodes) to a single node.
@@ -47,7 +47,7 @@ fn a_party_guest_walks_her_mission_route() {
     assert_eq!(dr.state, 0x16, "still walking her route at tick 300 (pre-fix: fallen to Civilian 0x11)");
     assert_eq!(dr.anim.state, 0x37, "the walk danim holds while the route runs");
 
-    // Sister: she actually covers ground — the user's symptom is the standing still.
+    // Sister: she actually covers ground — the symptom was standing still.
     let start = dr.pos;
     for _ in 0..300 { sim.step_bond(Default::default(), false, false, false); }
     let dr = &sim.drones.list[walker];

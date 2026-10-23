@@ -1,6 +1,5 @@
-//! The settled grenade's bounce sounds (grenade-rattle): playtests 1013-1825 "once it kind of settles, it's
-//! rapidly ... contacting the ground" and 1013-2313 "when a grenade is on the ground it makes rapid bouncing
-//! sounds". The game's bounce-sound call and its conditions [M Bullet_CollisionHandler 0x12ce80, the block at
+//! The settled grenade's bounce sounds (grenade-rattle): a grenade resting on the ground made rapid bouncing
+//! sounds. The game's bounce-sound call and its conditions [M Bullet_CollisionHandler 0x12ce80, the block at
 //! 0x12d4bc-0x12d580, disassembled]: the flash record (+0x70 & 0x2000) plays 0x15 and the smoke record
 //! (+0x70 & 0x20000) plays 0x13 on the FIRST bounce only (the pre-increment counter == 0); every other weapon
 //! plays 0x51c when the pre-increment counter is EVEN and < 0xF — counters 0,2,4,…,14, 8 sounds max, gain 100.0

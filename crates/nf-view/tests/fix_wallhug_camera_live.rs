@@ -1,7 +1,7 @@
 //! fix-wallhug-prompt: the wall shimmy's THIRD-PERSON camera, through the REAL input path.
 //!
-//! The user (playtest 1014-1725): "near the wall edging area I kept seeing a prompt and when I
-//! entered a prompt it was in first person. should be 3rd person."
+//! Entering the wall-shimmy prompt switched to first person; the game uses a third-person
+//! camera there.
 //!
 //! The game: entering the crawl (`Player_CollCreepWall` 0x196758:114-127) holsters the weapon
 //! (`Player_WeaponNone`), sets cam mode 0xB, and every creep tick `Player_PositionCamera`

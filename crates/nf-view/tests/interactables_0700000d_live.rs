@@ -1,7 +1,7 @@
 //! interactables-0d: one live test per KIND of player-touchable placement on 0700000d (the power
 //! station, part 2), driven the way a player drives it (the walk, the use key, the trigger pull,
 //! the walk-over), each asserting the game's effect with its sister. The census with the type
-//! table lives in docs/levels/0700000d.md §7 (task 713a); the end-to-end route is
+//! table lives in docs/levels/0700000d.md §7; the end-to-end route is
 //! walkreal_0700000d_live.rs.
 //!
 //! Evidence tags: [M] the decompile address, [D] the disc bytes, [L] the EE snapshot. A teleport

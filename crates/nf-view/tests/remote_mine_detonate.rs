@@ -32,7 +32,7 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
 fn load(iso: &str) -> Scene {
     // The give ids preloaded (the fp models in memory — Player_EquipWeapon 0x1a8a58:20 refuses a
-    // weapon whose +0xDC model was never loaded; the user's --give 0x37,0x38 does the same).
+    // weapon whose +0xDC model was never loaded; `--give 0x37,0x38` does the same).
     let mut scene = nf_view::load_weapons(iso, "07000005.bin", false, &[0x37, 0x38, 0x34]).expect("load 07000005");
     for _ in 0..7200 {
         if scene.sim.as_ref().map_or(false, |s| !s.disabled) { break; }
@@ -54,7 +54,7 @@ fn settle_idle(scene: &mut Scene, ticks: usize) {
     }
 }
 
-/// Gives `id` through the dev panel (the give is the user's `--give` path) and selects it
+/// Gives `id` through the dev panel (the give is the `--give` path) and selects it
 /// through the direct switch (`switch_to` — owned[] is per base, and 0x37 IS a base).
 fn give_and_reach(scene: &mut Scene, id: u8) {
     let (status, _sw) = nf_view::panel::apply(scene, &[

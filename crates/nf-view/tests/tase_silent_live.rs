@@ -1,5 +1,4 @@
-//! Playtest 1016: "literally cant even stun the starting guard without him shooting me instantly before he can
-//! even turn." The held Stunner was heard as a P2K gunshot every tick: the port's hearing used a hardcoded
+//! The starting guard could not be stunned: he shot Bond instantly, before even turning. The held Stunner was heard as a P2K gunshot every tick: the port's hearing used a hardcoded
 //! weapon→sound table whose default was 0x403 (weight 65, outer 40), while the game's guards hear the fire
 //! script's own op-1 `Sound_Play3D` [M AnimProcessScriptCmds 0x1c1b38 op 1; Sound_Alertness 0x1ddc48 skips
 //! looped sounds]. The Stunner's fire script has no gunshot, so the tase is silent; the guard's alertness
@@ -7,12 +6,12 @@
 //! drops him first (accumulator past 2·health [M 0x1469b8:126-130]).
 //!
 //! (The setup below is fix_stunner_press_live's, with Bond placed BEHIND the guard.)
-//! fix-stunner-press (109b): the Stunner 0x4A fires on the PRESS and the tase stuns the guard.
+//! fix-stunner-press: the Stunner 0x4A fires on the PRESS and the tase stuns the guard.
 //!
 //! Ground truth [D docs/live/2026-10-14-weapon-measurements-pcsx2.md]: the real stunner activates on
 //! the press (the device swings forward, the tip lights blue), holds while fire is held, swings back
-//! on the release, and spends no charge with no target. The user's playtest 1014-1725: "Doesn't
-//! fucking work. It only really activates on releasing the key."
+//! on the release, and spends no charge with no target. The port used to activate it only on
+//! the key's release.
 //!
 //! The port-side failure this file pins: the tase kill route. The game's shot spawns a zero-damage
 //! bullet with the fired record itself [M Player_WeaponInitBullet 0x1a4bf0:176-203 — the 0x4A/0x4C
@@ -53,7 +52,7 @@ fn setup_stunner_on_guard(scene: &mut nf_view::scene::Scene) -> (usize, [f32; 3]
         if scene.sim.as_ref().unwrap().gun.weapon == 0x4a { ok = true; break; }
     }
     assert!(ok, "the Stunner (0x4a) did not equip");
-    // Settle: the draw finishes — the user sees the device in hand before pressing.
+    // Settle: the draw finishes — the device is in hand before pressing.
     for _ in 0..70 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     // Converge the aim on the guard without the fire.
     for _ in 0..60 {

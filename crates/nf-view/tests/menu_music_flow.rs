@@ -1,5 +1,5 @@
 //! frontend-music headless tests: which audio the front end plays, and the transitions — numbers
-//! and ids only (the main agent draws every page). The state machine under test is
+//! and ids only (no drawing). The state machine under test is
 //! `nf_view::menu_music::MenuMusic`, the port of the game's menu music calls.
 //!
 //! Evidence: the six restart handlers (P_START 0x20a408:17-22, P_MAIN 0x20a7b0:42-47, P_NFMAP

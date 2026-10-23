@@ -1,7 +1,7 @@
 //! interactables-12: one live test per KIND of player-touchable placement on 07000012 (HT Tower2 B
 //! — the security centre, the elevator), driven the way a player drives it (the walk, the use key,
 //! the trigger pull, the walk-over), each asserting the game's effect with its sister. The census
-//! with the type table lives in docs/levels/07000012.md §7 (task 715a).
+//! with the type table lives in docs/levels/07000012.md §7.
 //!
 //! Evidence tags: [M] the decompile address, [D] the disc bytes, [L] the EE snapshot. A teleport to
 //! reach a spot is used only where the walk there is a separately documented blocker (the door[19]

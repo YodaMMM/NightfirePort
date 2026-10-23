@@ -1,5 +1,4 @@
-//! cutscene-audio-sync: the level start/end cut-scene audio measurement (docs/reports/
-//! cutscene-audio-sync.md). For each voice line / music cue the script starts — stream sounds
+//! cutscene-audio-sync: the level start/end cut-scene audio measurement. For each voice line / music cue the script starts — stream sounds
 //! (op 0x16) and anim op-1 voice lines — this logs the script tick it fired on and the sound's
 //! real length from the disc (decoded PCM / pitch, or the STREAMS.BIN entry), so the drift
 //! (if any) is a number, not a guess.

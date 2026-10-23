@@ -1,7 +1,7 @@
 //! fix-gadgets: the gadget selection through the real input path (the G cycle, `Input::gadget_cycle`).
 //!
-//! The user's playtest (2026-10-12): "can't equip the camera gadget" (0700000c), "it wouldn't let me
-//! switch to it" (07000012's briefcase), "cant find the gadget" (0700000a's Q-Worm). The gadget
+//! Symptoms: the camera gadget could not be equipped (0700000c), the briefcase could not be
+//! switched to (07000012), and the Q-Worm could not be found (0700000a). The gadget
 //! machinery was headless-complete (the cycle, the toggle-back, the equip) but the viewer's G key
 //! was commented out (lib.rs), and the port-map claimed the gadgets were unselectable — the
 //! weapon_data says otherwise: +0x04 (selectable) is 1 for 0x4A/0x4C/0x4E/0x4F/0x50/0x51/0x52/0x53/

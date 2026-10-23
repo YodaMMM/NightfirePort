@@ -19,7 +19,7 @@
 //! tests/traces/05-truck.trace]. Bond move 105 (0x69, mux 0x80 = AND(127,128,129,133), the four
 //! courtyard plates) does NOT fire on this ride — the sister.
 //!
-//! The HUD flash TIMER itself is master's (batch 1022n, s/bond-moment-flash):
+//! The HUD flash TIMER itself lives in the HUD (bond-moment-flash):
 //! `HudState.bond_moment_flash` in scene.rs — written 200 on a new moment (`moments_seen`),
 //! decayed −1/frame in `hud_tick`, drawn in hud.rs — and master's timer test pins 200 on a new
 //! moment / −1 per frame / a moment done at load never flashing. The walker below drives the
@@ -102,8 +102,8 @@ fn truck_ride_awards_bond_move_101_with_flash_and_chime() {
     assert!((award_tick as i32 - t65 as i32).abs() <= 1, "the award tick {award_tick} rides with ch 0x65 {t65}");
 
     // THE HUD FLAG (BL+0x948 = 200 at the award, −1/tick [M 0x199448:25; 0x19b9c8:258-260]) is
-    // master's `HudState.bond_moment_flash` (batch 1022n) — the walker's `step_bond` path does
-    // not run `hud_tick`, so the timer values are pinned by master's timer test, not here; the
+    // `HudState.bond_moment_flash` — the walker's `step_bond` path does
+    // not run `hud_tick`, so the timer values are pinned by the HUD timer test, not here; the
     // COUNT below is the sim-side fact this test guards.
     // THE CHIME: the level's SoundTrigger (placement 82, gate 0x65 → id 331) played.
     let chime_tick = chime_tick.expect("the gate-0x65 SoundTrigger must play id 331 on the award");

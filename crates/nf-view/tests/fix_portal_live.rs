@@ -104,8 +104,8 @@ fn world_counts(scene: &scene::Scene, vp: [[f32; 4]; 4], _eye: [f32; 3], vis: Op
     (submitted, culled_sphere, culled_vis)
 }
 
-/// The 07000006 collapse walk, now fixed: the truck spawn to the courtyard (the user's report:
-/// the whole level hid with the walk on — empty night sky over water). Per tick the visible World
+/// The 07000006 collapse walk, now fixed: the truck spawn to the courtyard (the
+/// whole level hid with the walk on — empty night sky over water). Per tick the visible World
 /// draw count must stay well above zero while the frustum sees geometry, the eye's room cel must
 /// always stay visible, and the persistent `Camera_CheckLocation` cel must follow the walk through
 /// the gatehouse (29 → 36 → 37), which the old per-frame smallest-volume re-pick could not.
@@ -138,7 +138,7 @@ fn the_07000006_walk_keeps_the_level_visible() {
         }
     }
     eprintln!("[walk06] min walk draws {min_sub}, min visited rooms {min_visited}, cells followed {cells_seen:?}");
-    // The collapse pinned: the walk kept at least this many World draws on every tick (the user's
+    // The collapse pinned: the walk kept at least this many World draws on every tick (the
     // "empty night sky over water" was the walk submitting ~nothing; the fixed walk's minimum along
     // this route is the courtyard's own shell looking out at the water, 104 draws).
     assert!(min_sub >= 100, "the walk collapsed to {min_sub} draws along the truck→courtyard route");
@@ -173,7 +173,7 @@ fn the_walk_propagates_through_the_castle_door() {
     assert!(vis[castle], "the castle hall (room {castle}, cell 34) is not visible through its own door");
 }
 
-/// The playtest's second symptom: on 07000007 at `--bond 61.11,44.12,-52.58,-2.541,-0.010` (looking
+/// The second symptom: on 07000007 at `--bond 61.11,44.12,-52.58,-2.541,-0.010` (looking
 /// out of a ballroom window) a lit room box floated in the snow, and with the walk on two
 /// partygoers inside that hidden room still drew (the walk culled only World draws; the game also
 /// skips the objects of hidden cels — `View_DrawObjList` 0x1e69a0 walks the visible cels' object

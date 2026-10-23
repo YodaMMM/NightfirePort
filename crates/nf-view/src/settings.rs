@@ -1,9 +1,9 @@
-//! settings-persist: the PC port's own options file — `settings.toml` in the user's config
+//! settings-persist: the PC port's own options file — `settings.toml` in the player's config
 //! directory (`%APPDATA%\NightfirePort` on Windows, `$XDG_CONFIG_HOME|~/.config` +
 //! `/NightfirePort` elsewhere). The front-end option pages (Advanced / Multiplayer / Audio-video)
 //! reset to `default_opts()` on every launch before this; on PS2 the values live in the memory-card
 //! save's global-settings blob (`LS_MakeGlobalSettings` 0x1cd9d0 — the game progress itself stays in
-//! the save-game model, task 635's flow; THIS file is settings only and never touches progress).
+//! the save-game model; THIS file is settings only and never touches progress).
 //!
 //! File shape (a TOML subset written and read here with std only — the workspace has no toml crate):
 //!
@@ -66,8 +66,8 @@ pub fn config_dir() -> Option<PathBuf> {
 }
 
 /// Where the game writes its side files: screenshots (`nf-shots/`), `movie-timing.log`, `nf-view-crash.log`. A release
-/// build writes them to the config dir (the user, 2026-10-19: a NightfirePort.exe run from the Desktop left
-/// movie-timing.log there); a dev build keeps the working folder (the playtest tools read `nf-shots/` there).
+/// build writes them to the config dir (never beside the exe, e.g. on the Desktop); a dev build keeps the working
+/// folder (the dev tools read `nf-shots/` there).
 pub fn output_dir() -> PathBuf {
     if crate::launcher::update::current_version().is_some() {
         if let Some(d) = config_dir() {

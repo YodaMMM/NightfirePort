@@ -1,6 +1,5 @@
-//! death-loop-07 — dying on 07000007 must not loop the reload (playtest 1012-1723: "once I
-//! died, we went into a replay loop where it kept replaying at the start of the mission over
-//! and over again. I had to quickly close out").
+//! death-loop-07 — dying on 07000007 must not loop the reload (a death used to
+//! replay the start of the mission over and over).
 //!
 //! The fail path, end to end [M]:
 //! - the death (health zero, `Player_CheckForDeath` 0x190810) or the guest-shot fail (a punch

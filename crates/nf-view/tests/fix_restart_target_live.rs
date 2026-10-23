@@ -1,6 +1,5 @@
 //! fix-restart-target: the fail/death menu's Restart reloads the CURRENT level, warm, on the entry
-//! checkpoint (playtest 2026-10-13: "rather than go to the start of the level it goes to the very
-//! beginning map, 05").
+//! checkpoint (the port used to restart at the mission's first map, 05, instead).
 //!
 //! Evidence base (all [M] work/decomp/ACTION.ELF unless noted):
 //! - The 0x40000042 fail/death menu's handler is `P_ENDMISSION_Handler` 0x216618 —
@@ -55,12 +54,12 @@ fn exit(sim: &nf_view::scene::Sim) -> (Option<u32>, bool, bool) {
     (sim.drones.level_exit, sim.drones.level_exit_cold, sim.drones.level_exit_restart)
 }
 
-/// ── 1. The restart target (the user's 07000007 report) ─────────────────────────────────────────
+/// ── 1. The restart target (07000007) ───────────────────────────────────────────────────────────
 /// A punched guest → "Killed Civilians" ch 0x60 (`DroneFunc_SetMissionFailReason` reason [M
 /// 0x13e560]) → the 0x60 hook raises ch 99 [M 0x1827d8:103-107] → Mission Fail (MissionState 2 [M
 /// 0x182c60:47]) → the 0x40000042 menu [M 0x182c60:77-81] → Restart. The game's Restart is
 /// `P_ENDMISSION_Handler` row 0: the CURRENT level, warm, + `Player_RamLoad(Bond, 1)` — 07000007,
-/// NOT the mission's base map 07000005 (the port's old behaviour — the user's report).
+/// NOT the mission's base map 07000005 (the port's old behaviour).
 /// Sister: the pause-menu Restart stays BaseMap-cold (`C_GCPAUSE_Handler` 0x204408:139).
 #[test]
 fn fail_restart_reloads_the_current_level_warm() {
@@ -134,7 +133,7 @@ fn restart_restores_the_entry_checkpoint_with_the_health_floor() {
     assert!(!r.drones.channels.on(0x62), "Player_Init cleared the death channel [M 0x1910f8:26,30]");
     assert!(!r.drones.death.active, "the death state is fresh");
     assert_eq!(r.drones.mission.status(), 1, "the mission is playing again [M 0x182270:28]");
-    // The loop check: 6 seconds of play on the restarted level must NOT re-fail (the user's loop
+    // The loop check: 6 seconds of play on the restarted level must NOT re-fail (the old loop
     // was: reload → the carried ch 99 re-fails → the menu → restart → repeat).
     let sim = restarted.sim.as_mut().unwrap();
     tick(sim, 360);

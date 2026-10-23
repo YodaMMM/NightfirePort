@@ -100,8 +100,8 @@ fn signum(v: f32) -> f32 { if v > 0.0 { 1.0 } else if v < 0.0 { -1.0 } else { 0.
 
 // fix-ai-remainder: head tracking (`NDrone2_DoTracking` 0x1479d8 / `DoHeadTracking` 0x1472c8 /
 // `AnimObjectHeadTrack` 0x1bf618) and the aim pitch (`AnimObjectAimAt` 0x1bfe58's second angle).
-// The user's playtest: guards never look at or aim at Bond in the pose — the torso twist fix
-// (015-fix-npcs) landed the yaw; this pins the head bone and the pitch through the real tick.
+// Guards never looked at or aimed at Bond in the pose — the torso twist fix
+// landed the yaw; this pins the head bone and the pitch through the real tick.
 
 /// fix-ai-remainder: an alerted-but-not-yet-aiming guard turns his head toward Bond (the tracked
 /// point stands in Bond's eye), with HeadTrack's clamps (yaw ±1.1, 0 beyond 2.6; pitch [-1.0, +0.6]);
@@ -196,7 +196,7 @@ fn head_tracks_bond_until_the_aim_takes_over() {
 
 /// fix-ai-remainder: the aim pitch (`AnimObjectAimAt` 0x1bfe58 computes yaw AND pitch; mode-0 clamps
 /// ±0.9). A guard aiming at a Bond above him pitches the spine up, at a Bond below pitches down —
-/// before this port the spine only yawned (the playtest's flat-aim look).
+/// before this port the spine only yawned (a flat-aim look).
 #[test]
 fn the_aim_pitch_follows_bond_across_heights() {
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };

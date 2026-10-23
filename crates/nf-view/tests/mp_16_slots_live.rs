@@ -68,8 +68,8 @@ fn machine_tick(
 }
 
 /// 8 humans over 127.0.0.1: 8 sessions, one sim each, 600 lockstep ticks —
-/// every hash exchange agrees on every machine [S mp-16-slots: the cap is the
-/// user's request; the per-tick rules are the game's/lockstep's own].
+/// every hash exchange agrees on every machine [S mp-16-slots: the cap is a
+/// port extension; the per-tick rules are the game's/lockstep's own].
 #[test]
 fn eight_humans_600_ticks_hashes_agree() {
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
@@ -117,7 +117,7 @@ fn eight_humans_600_ticks_hashes_agree() {
         std::thread::sleep(Duration::from_millis(1));
     }
     // One sim per SIMMED machine — the host plus the first client. The
-    // sandbox holds 3 GB and one arena load is ~875 MB (measured: 2 loads =
+    // test machine holds 3 GB and one arena load is ~875 MB (measured: 2 loads =
     // 1.75 GB fit, 4 = OOM-killed), so 8 full sims cannot run here. The
     // other six sessions run session-only: they still feed real inputs every
     // tick and gate `ready_inputs` — the lockstep never runs a tick without

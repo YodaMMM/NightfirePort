@@ -2,7 +2,7 @@
 //! twin's view model — once as the fp skin's rigid extra part (bone 43) and once as the record's
 //! +0x7C datum-0 attach (fix-silencer-visual) — and both copies carry the mesh's ADDITIVE sheen
 //! batch (ALPHA_1 0x7f00000048 [D 07000005.bin map 45 obj 3 0x02000842 leaf 0 batch 1]), so the
-//! two adds stacked into the user's "weird white thing" (2026-10-19).
+//! two adds stacked into a white artifact.
 //!
 //! The game's chain [M]: `Player_WeaponFiring` 0x1a5460:96-110 attaches the +0x7C mesh at DATUM 0
 //! every tick while the held record's flags (+0x68) carry 0x800 (the twin arm 0x1a5460:111-118
@@ -100,7 +100,7 @@ fn the_silenced_p2k_draws_the_suppressor_mesh_once() {
     // The bone-43 copy survives ONLY as the swap piece: the game clears datum 0 in state 8 [M
     // 0x1a5460:103-104] and `View_SetDrawInNoViews` there hides the weapon-SLOT objects
     // (BL+0x7ec..0x86c [M :87-98]), not the fp skin's extras — so the screw-on shows the skin's own
-    // suppressor piece (user report 2026-10-21: invisible until the attach finished).
+    // suppressor piece (it was invisible until the attach finished).
     let swap = scene.attachments.iter().filter(|a| a.character as usize == vm3 && a.swap_piece && a.bone == 43).count();
     assert_eq!(swap, 1, "the silenced twin keeps exactly one bone-43 swap piece");
 
@@ -125,7 +125,7 @@ fn the_silenced_p2k_draws_the_suppressor_mesh_once() {
 /// The suppressor mesh's blend modes and texture resolution [D 07000005.bin map 45 obj 3]: batch 0
 /// (the tube) ALPHA_1 0x44 normal, batch 1 (the sheen) ALPHA_1 0x7f00000048 additive with no depth
 /// write — and the mesh's two textures (map 45 indices 0 and 3) resolve into the scene, so the view
-/// model keeps no white-fallback material: the user's white thing was the doubled additive sheen,
+/// model keeps no white-fallback material: the white artifact was the doubled additive sheen,
 /// not a missing texture.
 #[test]
 fn the_suppressor_mesh_batches_carry_the_games_blend_modes_and_resolve() {

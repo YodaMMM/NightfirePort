@@ -1,9 +1,8 @@
 //! fix-searchlights-guards: 07000006's searchlight alarm through the REAL walked path, and the
 //! guards' first-shot gates, driven through `nf_view::load` + `Sim::step_bond`.
 //!
-//! The user's playtest (results 1013-1825): "Alarm still isn't going off" when walking into a
-//! courtyard searchlight beam; "a spotlight will cover a piece of ground and it will flip on its
-//! side"; "his gun's firing before it lowers at me". The walk here is what fix-searchlight-alarm's
+//! Symptoms: no alarm when walking into a courtyard searchlight beam; a spotlight flipping on its
+//! side; a guard firing before his gun was lowered at Bond. The walk here is what fix-searchlight-alarm's
 //! tests stood in for with a teleport (`sim.bond.pos` writes) — this file walks Bond from the truck
 //! start with `Input` only.
 //!
@@ -42,7 +41,7 @@ const ANCHORS: [[f32; 3]; 5] = [
     [46.0, 38.5, 16.5],  // into the crate & well area (nav C56's node)
 ];
 
-/// The walk the user plays: truck start → the courtyard beam, REAL INPUT ONLY (no `bond.pos`
+/// The walk as played: truck start → the courtyard beam, REAL INPUT ONLY (no `bond.pos`
 /// writes after the spawn). The alarm channel 55 — the searchlights' write while tracking
 /// [M Searchlight_Update 0x1cb900:142-144], the guards' second switch (+0x135 = 55) — must rise
 /// from the walk itself; fix-searchlight-alarm's test teleported to the spot and pre-set ch 12.
@@ -78,7 +77,7 @@ fn the_walked_beam_entry_raises_the_alarm_channel() {
     }
     let alarm = alarm.expect("the WALKED beam entry raises alarm channel 55 (the head arms off the \
         spot ray on Bond's sphere [M 0x1cb900:251-263]; fix-searchlight-alarm's teleport already \
-        proved the channel from the spot — the walk is the user's path)");
+        proved the channel from the spot — the walk is the real play path)");
     let armed = armed.expect("a head tracked (state 1) before the alarm rose");
     assert!(alarm >= armed, "the alarm channel only writes from the tracking state [M 0x1cb900:142-144]");
     // The guards consume the channel through their second switch [M PreDroneControl 0x148db0:51-61].

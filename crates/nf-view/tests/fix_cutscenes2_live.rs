@@ -1,5 +1,5 @@
-//! fix-cutscenes2 — the cut-scenes play (fix-cutscenes); make them right. The user's playtests
-//! (2026-10-11/12, party07b): movement keys skipped the Kimiko scene (and its objective banner+sound
+//! fix-cutscenes2 — the cut-scenes play (fix-cutscenes); make them right. The symptoms
+//! (party07b): movement keys skipped the Kimiko scene (and its objective banner+sound
 //! came through); the Drake fly-through drew the live party AND the script's guests; the mouths never
 //! moved (the face tracks were not played); no voice lines fired.
 
@@ -20,8 +20,8 @@ fn playing(s: &nf_view::scene::Scene, hash: u32) -> bool {
 
 /// The skip action is the game's `Input_Action(-1, 0x19, 1)` [M SP_Update 0x1dbda8:129-141], bound to
 /// raw pad mask 0x840 — R1 (0x800) or D-pad DOWN (0x040), pad 0 only [M psiInput_MapInputs
-/// 0x10cd80:415-417]. Movement keys never skip; the user's W press skipped the 07000007 Kimiko scene
-/// (2026-10-12 playtest). The port maps the action to ArrowDown and R; the viewer's dedicated keys
+/// 0x10cd80:415-417]. Movement keys never skip (a W press used to skip the 07000007 Kimiko
+/// scene). The port maps the action to ArrowDown and R; the viewer's dedicated keys
 /// keep their own functions.
 #[test]
 fn only_the_game_skip_action_keys_skip_a_cutscene() {
@@ -38,7 +38,7 @@ fn only_the_game_skip_action_keys_skip_a_cutscene() {
 /// `Drone_EnableAll(0, hash)` [M Script_EventHandler 0x1d94c0 case 5 → 0x1383e8; `NDrone2_Enable(0)`
 /// 0x149dd0 sets obj+0xF0 |= 0x10|0x20: not drawn, not picked] — and event 7 near its end (flag 0x80,
 /// `Script_Free` 0x1da880 re-enables through `NDrone2_Enable(1)`, which restarts each anim at script
-/// time 1). Before: the port drew the live party AND the script's guests (the user's duplicated
+/// time 1). Before: the port drew the live party AND the script's guests (duplicated
 /// models, frame 1790).
 #[test]
 fn the_drake_flythrough_hides_the_live_party_and_restores_it() {
@@ -76,8 +76,8 @@ fn the_drake_flythrough_hides_the_live_party_and_restores_it() {
 /// 4326 ticks). Movement input must NOT skip it (the game's skip is the 0x19 action only), and the
 /// objective banner hold (`hud_frozen`, set by the scene's camera request at tick 0, cleared at
 /// `Script_Free` [M Script_CameraStart 0x1d9140:46-49; the banner SFX hold reads ScriptCam,
-/// HUD_UpdateStatusPane 0x19c310:219-235]) must last the whole scene — the user's "obj doesnt wait
-/// for kimiko cutscene and plays the sound immediately" was the W-skip.
+/// HUD_UpdateStatusPane 0x19c310:219-235]) must last the whole scene — the objective sound playing before
+/// the Kimiko cut-scene was the W-skip.
 #[test]
 fn movement_input_leaves_the_kimiko_scene_playing_and_the_objective_held() {
     let Some(mut scene) = load("07000007.bin") else { return };

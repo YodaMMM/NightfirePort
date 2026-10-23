@@ -177,8 +177,8 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
     // y 1.14 @z 9.4 → 0.32 @z 13.4) with a floor trench at x 5.0..5.5 (no floor to −2 [D probe
     // 12d]). The game passes the pinch on the same key data — its cylinder move (Intersect_CylGeom
     // 0x109da0) resolves the penetration along the move rather than as a full two-sided
-    // depenetration (the same funnel class as the door[19] pincer below; live-check item in the
-    // report). The stand-in crosses the wall onto the ramp; the touch and the exit stay REAL.
+    // depenetration (the same funnel class as the door[19] pincer below; an open live-check
+    // item). The stand-in crosses the wall onto the ramp; the touch and the exit stay REAL.
     // The screen-shutter/screen-lift SS pairs (#697/#698, #700/#701) sit at the world ORIGIN
     // (baked art [D probe 12c]: matrices (0,0,0)/(0,−1.10,0)) and do not bound this funnel.
     {

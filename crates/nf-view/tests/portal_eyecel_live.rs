@@ -1,7 +1,7 @@
 //! fix-portal-eyecel: the trench eye cel must resolve like the game's, and the near walls must
 //! draw on the RENDERED path.
 //!
-//! The playtest spot `07000005 --bond 16.67,30.04,58.60,1.755,-0.001` culled the near trench
+//! The spot `07000005 --bond 16.67,30.04,58.60,1.755,-0.001` culled the near trench
 //! walls: the eye cel resolved to the giant outdoor room (the port's cell 14) instead of the
 //! trench room (cell 15), so `View_AddCels` (0x1e6ba0) never visited the rooms whose `+0x18`
 //! chains hold the trench generics and the walls vanished (sky through stone). The game's eye
@@ -50,7 +50,7 @@ fn view_proj(pos: [f32; 3], yaw: f32, pitch: f32, aspect: f32) -> [[f32; 4]; 4] 
     (proj * view).to_cols_array_2d()
 }
 
-/// The playtest's trench spot (the probe convention: bond y + 0.7 is the camera head, the pitch
+/// The trench spot (the probe convention: bond y + 0.7 is the camera head, the pitch
 /// is the game's half-radian word — the render path multiplies by π/2).
 const TRENCH: ([f32; 3], f32, f32) = ([16.67, 30.04 + 0.7, 58.60], 1.755, -0.001 * std::f32::consts::FRAC_PI_2);
 
@@ -89,7 +89,7 @@ fn trench_eye_cel_is_15_and_the_near_walls_draw() {
     // draw within 45 units of the eye that the frustum keeps and whose LOS to the eye is clear
     // and whose node rides a chain the walk visits must be KEPT by the mask. On master the eye
     // cel 14 never visits rooms 15/24, so the trench walls (the 0x8019 nodes of room 15's chain
-    // around the eye) are all dropped — this is the playtest's see-through-stone.
+    // around the eye) are all dropped — this is the see-through stone.
     let mats: Vec<&scene::Material> = sc.materials.iter().filter(|m| m.layer == scene::Layer::World).collect();
     let d2 = |c: [f32; 3]| (c[0] - eye[0]).powi(2) + (c[1] - eye[1]).powi(2) + (c[2] - eye[2]).powi(2);
     let hidden: Vec<(&scene::Material, f32)> = mats.iter().filter_map(|m| {

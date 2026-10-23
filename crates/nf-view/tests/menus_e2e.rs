@@ -1,5 +1,5 @@
 //! End-to-end menu paths, driven ONLY through `action()` and `tick()` from `FrontEnd::new()` — no
-//! page/cursor writes. The playtest 1015-2231 found every one of these broken while each page's own
+//! page/cursor writes. Every one of these was once broken while each page's own
 //! tests (which jumped to the page by assignment) passed: no single-player mission could be started
 //! (the first unlocked row is a driving mission and the flow hung in the DRIVING.ELF state), local
 //! MP backed out into the wrong setup prompt, a second Enter re-requested the level, and a notice
@@ -115,7 +115,7 @@ fn local_mp_backs_out_of_setup_and_still_reaches_one_match_request() {
     assert!(act(&mut fe, Action::Confirm), "the handicap");
     assert_eq!(fe.page, Page::MpOptions);
     // Back out of the options hub: the setup page re-enters on the character prompt again — not
-    // the team prompt the stale state left (playtest 1015-2231).
+    // the team prompt the stale state left.
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::MpSetup);
     assert_eq!(fe.mp_setup_state, 3, "back on the character prompt");
@@ -151,7 +151,7 @@ fn local_mp_backs_out_of_setup_and_still_reaches_one_match_request() {
     let want = fe.requested_level.expect("the match requests its arena");
     assert_eq!(fe.mp_match_settings.as_ref().map(|s| s.bot_count), Some(1), "the bot rides the settings");
     assert!(fe.mp_match_settings.is_some(), "the settings ride the request");
-    // A second Enter is refused — it started a second load of the arena (playtest 1015-2231).
+    // A second Enter is refused — it started a second load of the arena.
     assert!(!act(&mut fe, Action::Confirm), "no second start");
     assert_eq!(fe.requested_level, Some(want));
 }

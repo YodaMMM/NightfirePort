@@ -1,6 +1,6 @@
-//! The HUD pane state machines from the whole-ELF scan task `unported-hud-1` — the parts of
-//! ACTION.ELF's pane functions that are *state and flow* (the drawing stays with the main
-//! agent; the sprite tables live in `nf-formats::hud`). Evidence map: docs/systems/hud-panes.md.
+//! The HUD pane state machines — the parts of
+//! ACTION.ELF's pane functions that are *state and flow* (the drawing stays on the view
+//! side; the sprite tables live in `nf-formats::hud`). Evidence map: docs/systems/hud-panes.md.
 //!
 //! Three machines, all per the decompile:
 //!

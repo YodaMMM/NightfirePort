@@ -1,6 +1,6 @@
 //! credits-data: the credits roll's data, scroll rate and exit — P_CREDITS_Handler 0x2152b0 /
-//! Menu_SetupCredits 0x1f9a88. Pure-data tests (numbers/ids only — the drawing is the main
-//! agent's), plus one NF_ISO pin that the AV Options row this page is opened from is really the
+//! Menu_SetupCredits 0x1f9a88. Pure-data tests (numbers/ids only — no
+//! drawing), plus one NF_ISO pin that the AV Options row this page is opened from is really the
 //! Credits row.
 
 use nf_view::credits::{

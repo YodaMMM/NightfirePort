@@ -23,8 +23,8 @@
 //! The port keeps the count in the per-level Sim's HUD, so the scene-to-scene handoff must carry
 //! it: every scene replacement in the app (`App::swap_in_scene` — level loads, both Restart arms,
 //! the campaign transition; the weapon-asset warm reload; the MP late-join replay) calls
-//! `HudState::carry_boot_globals`. This test drives that exact shape minus the GPU halves this
-//! sandbox cannot run: the worker's `load_with_carry` build, then the carry line.
+//! `HudState::carry_boot_globals`. This test drives that exact shape minus the GPU halves a
+//! headless test cannot run: the worker's `load_with_carry` build, then the carry line.
 //!
 //! Fixtures [D placements, the probe in this file's history]: 07000001 doors 0/1/2 and 07000002
 //! door 0 — kind-2 sliders, closed (state 2), no lock channel, ungrouped, live spheres the aim

@@ -127,8 +127,8 @@ fn main() {
             // order this process's RandomState picked.
             for k in toy_map.keys().copied().collect::<Vec<u32>>() { th.u32(k); th.u32(toy_map[&k]); }
         }
-        // The TICK stream rides stderr (an inherited fd → the parent's log file): this sandbox
-        // makes a child's own file creations invisible to the live parent, while writes to an
+        // The TICK stream rides stderr (an inherited fd → the parent's log file): some sandboxed
+        // environments make a child's own file creations invisible to the live parent, while writes to an
         // inherited descriptor land in the parent-created log at once. NF_OUT keeps a copy.
         let line = format!("TICK {} {:016x} {:016x}", sim.drones.frame, sh, th.finish());
         eprintln!("{line}");

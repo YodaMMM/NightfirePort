@@ -1,12 +1,12 @@
 //! Headless tests for every F2 dev-menu action (B-10).
 //!
-//! The user reported that "Spawn guard" crashed in play. Every menu action must run without panicking
+//! "Spawn guard" once crashed in play. Every menu action must run without panicking
 //! (the result message is shown on screen; a panic kills the window). Each test loads the scene, applies
 //! the action through the real `dev` API (the same path the viewer's `apply_menu_action` uses), ticks the
 //! sim a few frames, and asserts no panic + a sane result. Opt-in via `NF_ISO`.
 //!
 //! These tests also serve as regression guards: if a future change breaks a menu action, the test fails
-//! instead of the user's window crashing.
+//! instead of the window crashing.
 
 use nf_view::dev;
 
@@ -42,8 +42,8 @@ fn font_metrics(scene: &nf_view::scene::Scene) -> (f32, f32, f32) {
 
 #[test]
 fn menu_font_metrics_measured() {
-    // B-11: measure the real font glyph height so the menu layout is computed from it, not guessed. The user
-    // reported rows overlap at ~40 px each — this test prints the actual glyph h + the HUD scale, so we can set
+    // B-11: measure the real font glyph height so the menu layout is computed from it, not guessed. Rows used to
+    // overlap at ~40 px each — this test prints the actual glyph h + the HUD scale, so we can set
     // ROW_H correctly. At a 2000x1094 window, 1 HUD-px = 1094/448 = 2.44 window-px vertically.
     let Some((scene, _)) = loaded() else { eprintln!("NF_ISO not set — skipping"); return };
     let (max_h, max_h_yoff, top) = font_metrics(&scene);
@@ -68,8 +68,7 @@ fn menu_font_metrics_measured() {
 }
 
 /// B-11: compute each menu row's text bounding box from the font metrics, and assert no two rows overlap and
-/// everything fits inside the panel. This is the layout test the user demanded: "compute each row's text bounding
-/// box from the font metrics, and assert there's no overlap and everything fits inside the panel." It catches the
+/// everything fits inside the panel. It catches the
 /// B-10 regression (ROW_H=12 with 17px glyphs → overlap) that headless action tests can't see.
 #[test]
 fn menu_layout_no_row_overlap_and_fits_panel() {
@@ -244,7 +243,7 @@ fn menu_toggle_god_and_ammo_do_not_panic() {
     let cs = sim.weapons.clip_size(wi);
     // fix-dev: the refill tops the INVENTORY (the game's own store) to the weapon's clip size, and the
     // gun's HUD copy follows — the old gun-only refill (clip >= 40) was overwritten by the next tick's
-    // inventory read, which is why ammo still ran out (the user's "isn't always reliable").
+    // inventory read, which is why ammo still ran out.
     assert!(sim.gun.clip >= 3, "infinite ammo did not refill the clip (got {})", sim.gun.clip);
     assert_eq!(sim.drones.inventory.clip[wi], cs, "infinite ammo did not top the inventory's clip slot to the clip size ({})", cs);
     assert!(sim.gun.clip >= cs.max(0) as u32, "the gun's HUD copy ({}) is below the topped clip size ({})", sim.gun.clip, cs);

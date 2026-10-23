@@ -6,7 +6,7 @@
 //! - `psiInput_PollDevices` 0x10ca78: the per-axis dead zone (threshold 40, scale 1.4597701 = 127/87)
 //!   that overwrites the raw bytes in place — G-012.
 //! - `StickCompensation2/3` 0x17f798/0x17f850 with `MapAnalogStick` 0x17f958 and the game's curve
-//!   table `gAnalogStickMappingFunction` (129 bytes at 0x2a3840; read from the user's ELF, never committed).
+//!   table `gAnalogStickMappingFunction` (129 bytes at 0x2a3840; read from the disc's ELF, never committed).
 //! - `AccelFunc0` 0x1a9218: the ramp ("acceleration") helper; `Player_Aiming` 0x1a1d28 inlines the same
 //!   shape for its edge/free-look states (+0x8f4/+0x8f8/+0x900, scope +0x8ec/+0x8f0).
 
@@ -143,7 +143,7 @@ pub fn dead_zone(b: u8) -> u8 {
 }
 
 /// The game's curve table and the style, bound once [M gAnalogStickMappingFunction 0x2a3840].
-/// The 129 bytes come from the user's ACTION.ELF (`from_action_elf`); the game never reads them
+/// The 129 bytes come from the disc's ACTION.ELF (`from_action_elf`); the game never reads them
 /// through a symbol the port could miss — they are straight data.
 #[derive(Clone)]
 pub struct PadConfig {
@@ -331,7 +331,7 @@ pub struct PadDriver {
     aim_x: AccelState,
     aim_y: AccelState,
     /// The scope branch's states [M 0x1a1d28:198-232]; driven once a scoped weapon reaches the driver
-    /// (the caller passes `scoped`; see docs/reports/fix-input.md).
+    /// (the caller passes `scoped`).
     #[allow(dead_code)]
     scope_x: AccelState,
     #[allow(dead_code)]
@@ -411,7 +411,7 @@ impl PadDriver {
             self.cursor_x *= 0.5;
             self.cursor_y *= 0.5;
         }
-        let _ = scoped; // the scope branch (Plr_ScopeSpeed_*) rides the same AccelStates; see the report
+        let _ = scoped; // the scope branch (Plr_ScopeSpeed_*) rides the same AccelStates
         (input, a)
     }
 

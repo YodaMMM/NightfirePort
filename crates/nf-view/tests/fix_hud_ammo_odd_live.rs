@@ -1,5 +1,5 @@
 //! fix-hud-ammo-odd: the ammo pane's numbers for the Samurai, the detonator and the thrown weapons
-//! (the main agent's dry run of the playtest checks on master, `nf-view <iso> 07000005 --dev --give …`):
+//! (seen with `nf-view <iso> 07000005 --dev --give …`):
 //!
 //! - the detonator (0x38, base 0x37, +0x05 = 0xFF): the game's pane reads the clip through
 //!   `Player_AmmoIndex` 0x1a9148 — the twin-resolved slot — so holding the detonator shows the MINE's

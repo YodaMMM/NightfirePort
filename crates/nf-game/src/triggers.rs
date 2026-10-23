@@ -222,7 +222,7 @@ impl Channels {
         if value != 0 { self.time[c as usize] = frame; }
         if let Some(w) = &mut self.writes { w.push((c as u8, value, frame, 0)); }
         // NF_LEVELLOG=1: every switch-channel write that turns a channel on (rising edge), with the frame
-        // and the new value. Lets the user trace e.g. ch 0x1D being set by the EndLevel script's event 0x11.
+        // and the new value. Traces e.g. ch 0x1D being set by the EndLevel script's event 0x11.
         if std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1") && value != 0 && self.v[c as usize] == 0 {
             eprintln!("[levellog] frame {} channel 0x{:02x} = {}", frame, c, value);
         }
@@ -422,11 +422,11 @@ impl Trigger {
                 let ok = match f & 0xffff {
                     0xb => drone_touch,
                     0xe => player,
-                    // (task 854: the drone side of the hash test is `Drone_GetSkinHash` 0x13a578 [M
+                    // (the drone side of the hash test is `Drone_GetSkinHash` 0x13a578 [M
                     // 0013a578 decompile — `AI+0xE0`, 0 when the AI block is absent], read by
                     // `Trigger_Hit` 0x1b1fc8 [M caller grep]; the port's `Toucher.skin` is that hash.
                     // NOT YET FED: the port's net-body touchers still pass `skin: 0` — the SP drone
-                    // toucher build is remaining work in the task 854 report.)
+                    // toucher build is remaining work.)
                     h => touchers.iter().any(|c| c.drone && self.touched_by(c) && c.skin & 0xffff == h),
                 };
                 acc = acc && ok;
@@ -483,7 +483,7 @@ impl Trigger {
             kind::TOUCH_ONCE => {
                 // `Trigger_Activate` (0x1b2318:38-49) type-1 arm: begins with the `mask & 4` gate — a
                 // trigger whose mask lacks bit 4 is NOT player-activatable (07000005's plunge/death
-                // triggers are mask 8: pressing E near one must never fire it — playtest F5). The port
+                // triggers are mask 8: pressing E near one must never fire it). The port
                 // used to fire them from the use-key path. Then the out write (skipped when out = 0,
                 // :41-44) — the glist-0x10 self-delete latch is the caller's (`gone`, set by
                 // player_use_triggers like the game's `obj+0xFE |= 1`).
@@ -972,7 +972,7 @@ mod tests {
 
     /// `GetLevelToLoadFromMovieCode` (0x1d3560): the story cut-scene codes map to the NEXT level's
     /// briefing code, the driving interludes map to the front end, and everything else falls back to
-    /// `GameState+8 & 0xff00ffff` [M the decomp's every arm]. The numbers are the task's chain table:
+    /// `GameState+8 & 0xff00ffff` [M the decomp's every arm]. The numbers are the decomp's chain table:
     /// 06→07, 09→0a, 0a→0b, 11→12, 12→4a, 4a→13 ride exactly these pairs.
     #[test]
     fn movie_code_table_matches_the_decomp() {
@@ -996,7 +996,7 @@ mod tests {
     }
 
     /// `resolve_exit_code`: the port's compression of `ResetMap_LevelToLoad` + `ResetMap_Load`'s
-    /// phase-0/phase-2 cycle [M 0x1d3800/0x1d6360/0x1d3560]. The numbers are the task's chains:
+    /// phase-0/phase-2 cycle [M 0x1d3800/0x1d6360/0x1d3560]. The numbers are the decomp's chains:
     /// 4a's cut-scene request lands on 13, a driving exit lands on the front end, and a plain
     /// 0xE8 hashcode passes through untouched.
     #[test]

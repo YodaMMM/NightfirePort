@@ -75,7 +75,7 @@ fn mission_complete_hands_over_through_the_ptp_block() {
     let sim = scene.sim.as_ref().unwrap();
     // The resume target is still the front end [M 0x1c8560 tail], but the host's end sequence owns
     // it now: the interlude code goes to `mission_end` (outro → results → the front end) instead of
-    // a bare front-end load that skipped the outro (playtest 1015-2231).
+    // a bare front-end load that skipped the outro.
     assert_eq!(sim.drones.mission_end, Some(0x0730_0004));
     assert_eq!(sim.drones.level_exit, None);
     assert_eq!(nf_game::ptp::RESUME_LEVEL, 0x0700_0048);
@@ -118,7 +118,7 @@ fn the_fail_choice_takes_the_abort_path() {
     assert_eq!(ret.status_byte, 4);
     assert_eq!(ret.mission_state(), 3, "status 4 → Mission_SetStatus(3) [M 0x1c8560:16-20]");
     // The interlude is the mission's end: the host's end sequence plays the outro, then the front
-    // end (the hub resume) — the bare 0x7000048 load skipped the outro (playtest 1015-2231).
+    // end (the hub resume) — the bare 0x7000048 load skipped the outro.
     assert_eq!(sim.drones.mission_end, Some(0x0730_0004), "the end sequence gets the interlude code");
     assert_eq!(sim.drones.level_exit, None, "the end sequence owns the next load, whatever the result");
 }

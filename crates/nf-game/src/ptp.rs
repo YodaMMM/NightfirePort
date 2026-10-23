@@ -164,7 +164,7 @@ impl DrivingStats {
 }
 
 /// The dev stand-in's chosen outcome for a skipped drive (the real DRIVING.ELF decides on the
-/// track; the port cannot run it, so the choice is a knob the report lists).
+/// track; the port cannot run it, so the choice is a knob).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum DriveResult {
     /// The drive's success path: DRIVING main's exit writes `PTP+0x974 = DAT_0032e6ac` (the next

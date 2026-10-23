@@ -8,8 +8,8 @@
 //! way on one thread: the main thread blocks in `ResetMap_Load` 0x1d6360 state 3 while
 //! `VBlankInt` 0x124088 steps the six dots every 11 vblanks, ping-pong 0→6→0.
 //!
-//! The old model blocked the window thread inside the load, so the dots never moved — the user's
-//! symptom this task fixes.
+//! The old model blocked the window thread inside the load, so the dots never moved — the
+//! symptom this fixes.
 
 use nf_view::async_load::Job;
 use nf_view::loading::dots_lit;

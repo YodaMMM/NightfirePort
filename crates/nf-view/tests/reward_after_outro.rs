@@ -1,4 +1,4 @@
-//! reward-after-outro (playtest 2026-10-18: "reward screen appearing before ending cutscene"):
+//! reward-after-outro (the reward screen appeared before the ending cut-scene):
 //! the game's mission-end order is Mission_Update case 6 → case 4's load request + fade [M
 //! 0x182c60:65-76] → the loader wraps the 0x7300xx outro code into GameFlow state 6 and plays the
 //! ending movie [M ResetMap_Load 0x1d6360:101-112 + GameFlow_Main 0x1c98c8 case 6, which pops on
@@ -10,7 +10,7 @@
 
 use nf_view::menu::{Action, FrontEnd, Outcome, Page, Stats};
 
-/// The reward page opens only after the ending movie finishes — 07000013 (the playtest's tower
+/// The reward page opens only after the ending movie finishes — 07000013 (the tower
 /// chain; outro code 0x7300013 [M 0x182c60:109-110]).
 #[test]
 fn the_reward_page_opens_only_after_the_ending_script_ends() {

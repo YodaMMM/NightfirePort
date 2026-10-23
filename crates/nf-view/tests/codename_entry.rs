@@ -296,7 +296,7 @@ fn the_cheat_entry_s_confirm_creates_nothing() {
     fe.cn_open(0x4000_001d); // from the wheel — cheat_mode [M P_CNNAME 0x213790:33]
     type_name(&mut fe, "PASSPORT");
     assert!(fe.cn_press(FrontEnd::CN_KEY_CONFIRM));
-    assert!(fe.cn_cheat_checked, "the special-codename check ran (not ported — reported)");
+    assert!(fe.cn_cheat_checked, "the special-codename check ran (not ported)");
     assert_eq!(fe.cn_box, None, "sister: no validator box stands on the cheat path");
     assert!(fe.profiles.is_empty(), "the cheat path never saves a profile");
     let _ = std::fs::remove_dir_all(&dir);

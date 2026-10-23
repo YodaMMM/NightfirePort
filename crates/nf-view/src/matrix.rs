@@ -1,6 +1,6 @@
-//! The weapon matrix (task 100d): every on-foot level × every weapon the dev tools can hand Bond.
+//! The weapon matrix: every on-foot level × every weapon the dev tools can hand Bond.
 //!
-//! weapon-matrix4 (task 105a) made the runner measure WEAPONS only. Three harness repairs, each
+//! The runner measures WEAPONS only. Three harness repairs, each
 //! on the game's own evidence:
 //! 1. **Bond alive and unhurt for the whole sweep** (`god`/`step`): the recorder cheat's write
 //!    (health 100 / armour 50 / flash 0 every frame — cheats.py, dev.rs's god arm) around every
@@ -33,12 +33,12 @@
 //! a crashed run: the cell's sequence runs under `catch_unwind` and the level is reloaded after one.
 //!
 //! The watch gadgets (Q-Claw grapple, Q-Laser, stunner) are always carried on every single-player
-//! map (the user's correction, 2026-10-13), so their `fire` results are informational (`q`/`s`
+//! map, so their `fire` results are informational (`q`/`s`
 //! marks), not failures: the Q-Claw's quietness here only says the test spot has no grapple point.
 //!
-//! weapon-matrix2 (task 103b) additions: the give now runs the REAL give path — the level is
+//! The give runs the REAL give path — the level is
 //! pre-merged for the whole catalog through `nf_view::load_weapons` (the `--give`/lazy-give asset
-//! merge 100a built), and the inventory is reset per cell from the load's own state, so a cell's
+//! merge), and the inventory is reset per cell from the load's own state, so a cell's
 //! give is what a player's give is (the old run's `.` wall — the shared ammo bank filling across
 //! 99 consecutive gives — was the harness, not the game: `Player_EquipWeapon` 0x1a8a58's owned
 //! branch refuses at cap, and no play session gives 99 weapons in a row). Each cell also checks
@@ -274,7 +274,7 @@ pub fn run_level(iso: &str, level: &str, log: &mut dyn FnMut(&str)) -> anyhow::R
     let weapons: Vec<(u8, String)> = panel::catalog_entries(&scene).into_iter().map(|e| (e.id, e.name)).collect();
     // The REAL give path (100a): the level pre-merged for the whole catalog — the same
     // `load_weapons` merge a `--give`/dev-menu give runs — so a cell measures the weapon the way
-    // the user's give draws it, not a stub with the fp skin missing.
+    // a dev-menu give draws it, not a stub with the fp skin missing.
     let ids: Vec<u8> = weapons.iter().map(|(id, _)| *id).collect();
     scene = crate::load_weapons(iso, &level, false, &ids)?;
     anyhow::ensure!(scene.sim.is_some(), "level {level} loaded without a sim (merged)");

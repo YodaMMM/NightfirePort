@@ -5,7 +5,7 @@
 //! The game, measured in PCSX2 (docs/live/2026-10-14-weapon-measurements-pcsx2.md, "The side
 //! lights"): the four round lights are **lit red from the moment the gun is drawn and STAY LIT
 //! WHILE IDLE** — the port darkened the whole row after ~0.75 s with no stick input in BOTH
-//! modes, which is what the main agent's render showed.
+//! modes, which is what a render showed.
 //!
 //! The code [M 0x1a5460 disasm 0x1a5bf4-68, read this time in the DISASSEMBLY not the C]: the
 //! all-off gate's `sVar5` chain at the C's lines 305-314 is a decompiler artifact. The BNEL at

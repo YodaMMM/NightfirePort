@@ -274,7 +274,7 @@ pub struct BotStateInfo {
     pub addr: u32,
     /// Short name (the decompile symbol minus prefixes).
     pub name: &'static str,
-    /// Classification for the phase-4 port (see the report): Full (real logic),
+    /// Classification for the phase-4 port: Full (real logic),
     /// Stub (ENTER → one SetState), Thin (a few shared-helper calls), Empty.
     pub kind: StateKind,
 }
@@ -296,8 +296,7 @@ pub enum StateKind {
 use state::*;
 
 /// The 55 bot states: id, address [L ee_snapshot @0x29B300], name, and the
-/// phase-4 classification (kind from reading every .c in work/decomp/ACTION.ELF;
-/// details in docs/reports/mp-bots-data.md).
+/// classification (kind from reading every .c in work/decomp/ACTION.ELF).
 pub const BOT_STATES: [BotStateInfo; BOT_STATE_COUNT] = [
     BotStateInfo { id: BOT_INIT, addr: 0x1748C8, name: "BotInit", kind: StateKind::Thin },
     BotStateInfo { id: BOT_RESPAWN, addr: 0x174938, name: "BotRespawn", kind: StateKind::Thin },
@@ -558,13 +557,13 @@ pub fn bot_global_dispatch(
 /// [M 0x1437a0 — the per-case gates]. Returns the state the receiver's SMI is SetState'd to
 /// [M LAB_00143e30 `Drone_SM_SetState(smi, param_3, 0)`].
 ///
-/// The two states this task owns (857-unported-guard-ai-other-4):
+/// The two states ported here:
 /// - **`NDrone2_DSTATE_SeenDeadBody` 0x16ACD0** (state 0x9E) — alert 0x15, the dead-body shout:
 ///   receiver prop 0x29, no `+0x4F8 & 0x800000`, in shouting range, alert share `+0x50C = 1.0`,
 ///   then every receiver mode byte except 9/10 (which keep the incoming override) and 0x1E (MP
 ///   same-team check) lands `param_3 = 0x9E` [M 0x1437a0:307-326]. ENTER plays anim 0x24 with
 ///   the body look, timer C, and falls back to `+0x5A2` [M 0x16ACD0 — the state body; the port
-///   delivers the transition, the body presentation is the main agent's].
+///   delivers the transition, the body presentation is the draw side's].
 /// - **`NDrone2_DSTATE_SeenSurrenderedDrone` 0x16ADE0** (state 0x9F) — alert 0x13, the surrender
 ///   shout (`Surrender_Anim` 0x1626a0:74): shouting range, receiver prop 0x4F, and every receiver
 ///   mode byte except 9/10/0x12/0x13 (those four attack instead, when no override came in) and 0x1E
@@ -597,8 +596,8 @@ pub fn react_to_drone_alert_msg(
         // The other alert ids (0x11 armed intruder, 0x12 scream, 0x14 alarm sound, 0x1E alarm) resolve
         // through the same SetState tail [M LAB_00143e30] — Attack 0x56 for the intruder/alarm arms
         // (0x1437a0:218-222, 108), 0xA0/0xA2 heard-noise for the scream/alarm-sound default receiver_modes
-        // [M 0x1437a0:106-108, 253-258]. Their per-receiver_mode gates are the SP alert family's, not this
-        // task's functions — the coarse outcomes only.
+        // [M 0x1437a0:106-108, 253-258]. Their per-receiver_mode gates are the SP alert family's, not these
+        // functions' — the coarse outcomes only.
         0x11 if prop(0x28) && shouting_range => Some(0x56),
         0x12 if prop(0x27) && shouting_range && receiver_mode != 0x12 => Some(0xa0),
         0x14 if prop(0x1f) && receiver_mode != 0x16 && receiver_mode != 9 => Some(0xa2),
@@ -647,7 +646,7 @@ pub struct GoalSlot {
     pub start: f32,
     /// +0x28 — duration := `VIDEO_FRAME_RATE * 5` (= 300.0 at 60 Hz) [M 0x1278a8:50,58; the
     /// atlas's "5 s" gloss was the pre-correction reading — it is 5 s × frame-rate on a
-    /// seconds clock, see the report].
+    /// seconds clock].
     pub duration: f32,
     /// +0x2C — pickup class 3 (health) weight, clamped ≤ 25.0 [M 0x128298:74-81].
     pub weight_health: f32,
@@ -711,7 +710,7 @@ pub struct BotPickup {
     /// +0x08 — the registered position.
     pub pos: [f32; 3],
     /// `MPOBJECT+0x24` — the weapon id (0 = not resolved; the MP weapon-set ids are runtime
-    /// random via `Pickup_MakeRandomWeaponSet`, the matrix is not lifted — see the report).
+    /// random via `Pickup_MakeRandomWeaponSet`, the matrix is not lifted).
     pub weapon_id: u16,
     /// `MPOBJECT+0x22` — the pickup class (0 weapon, 1 ammo, 3 health per the pickGoal dispatch
     /// [M 0x126b88:431-477]).
@@ -779,7 +778,7 @@ pub struct BotCtx<'a> {
     /// The bot's max HP (`BOT_vars+0xA4`).
     pub max_health: f32,
     /// The attack states' stationary gate: behaviour prop 0x40 / `Drone+0x4F8` bit 0x10
-    /// [M 0x16f198:42-45, 0x16f5e8:56-60]. The "stand" preset maps here [S — see the report].
+    /// [M 0x16f198:42-45, 0x16f5e8:56-60]. The "stand" preset maps here [S].
     pub stationary: bool,
     /// mp-perf-16: the caller left the seen bits (0x6) of `others` unset and `find_opponent` runs
     /// the sight line itself — the bot's eye (`pos`) to the other's chest (eye − 0.4), clear of the
@@ -1338,7 +1337,7 @@ const BODY_STEP: f32 = 0.105;
 /// `BOTSTATE_getStateType` is already above; the states the port dispatches to.
 mod st {
     pub use super::state::*;
-    /// The attack family ids the port handles (`docs/reports/mp-bots-data.md` inventory).
+    /// The attack family ids the port handles.
     pub const BOT_ATTACK_NO_OPPONENT: u8 = 0xD3; // Stub
     pub const BOT_ATTACK_STRAFE_AIM_LEFT: u8 = 0xD4; // Full — not ported (chooseCombatMove target)
     pub const BOT_ATTACK_STRAFE_AIM_RIGHT: u8 = 0xD5; // Full — not ported
@@ -1484,7 +1483,7 @@ impl BotBrain {
             | st::BOT_ATTACK_STEP_AIM_LEFT | st::BOT_ATTACK_STEP_AIM_RIGHT => self.bot_attack_move_enter(next, rng),
             state::BOT_ATTACK_RELOAD => self.bot_attack_reload_enter(ctx),
             state::BOT_ATTACK_CHANGE_WEAPON => self.bot_attack_change_weapon_enter(ctx),
-            _ => {} // 0xF2/0xF6/0xD3… not ported (the report lists the gap)
+            _ => {} // 0xF2/0xF6/0xD3… not ported (known gap)
         }
     }
 
@@ -2485,7 +2484,7 @@ impl BotBrain {
 
     /// `NDrone2_FindOpponent` 0x1424e0 (the port's minimal pick): accept the nearest live
     /// candidate the pass found (the gate [M 0x1424e0:164-167 — 0x600 clear, 0x100 set,
-    /// health > 0]; the full score/history selection is not lifted — [S], see the report).
+    /// health > 0]; the full score/history selection is not lifted — [S]).
     /// Team reads are `MP_getObjectTeam` (0x18b6c0).
     pub fn find_opponent(&mut self, ctx: &BotCtx) {
         // The hold [M 0x1424e0:355-365]: the current opponent survives only while it is valid
@@ -2670,7 +2669,7 @@ impl BotBrain {
         }
         self.vars.state_type = state_type(self.state as u32); // [M :90]
         // (the death branch [M :91-119] is the test's alive-bot path — the port carries it as
-        // the caller's responsibility until the death states land; see the report)
+        // the caller's responsibility until the death states land)
         // tick reset: the +0x72C requested state [M :121-130]
         if self.vars.requested_state != 0 {
             if self.state as u32 != self.vars.requested_state {
@@ -2975,7 +2974,7 @@ impl BotBrain {
                     // no avoidance — on 07000023 it pushed a bot from the pit floor into the
                     // pit ramp's side below node #95, over 1.5 under the node root, so its
                     // reached test (2D 0.8 + |dy| 1.5) could never pass [L the demolition
-                    // playtest, mp_bot_objectives_live].
+                    // run, mp_bot_objectives_live].
                     self.follow_route(ctx, net);
                     way = self.route.target;
                 }
@@ -3563,7 +3562,7 @@ impl BotBrain {
         // cleared the latch, so the next 0xD2/move enter was a fresh `DroneWeap_Fire` whose
         // `NextBulletTime` pushed the bullet deadline out again — with weapon 6's 60-tick
         // minimum and the 1-in-3 exit roll the deadline always receded and the bot never
-        // fired (the playtest's "0xD4 strafe, latch set, never fires" wedge).
+        // fired (the "0xD4 strafe, latch set, never fires" wedge).
     }
 
     /// `DroneWeap_NextBulletTime` 0x179d40 (the port's lift): the interval from the weapon

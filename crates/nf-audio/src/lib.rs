@@ -219,7 +219,7 @@ pub const SPU_RATE: f64 = 48_000.0;
 /// the PS2 SPU2 uses the same table and formula — nocash documents the SPU2 pitch counter's bit 4–11 as the
 /// 8-bit interpolation index). Cross-check: the 512 entries are identical to duckstation's
 /// `gauss` table (src/core/spu.cpp, `GenerateInterpolationCoefficients`) — independent reference;
-/// PCSX2's SPU2 gaussian is the same table (recorded in docs/reports/spu-gaussian-reverb.md). The
+/// PCSX2's SPU2 gaussian is the same table. The
 /// table is slightly bugged on hardware: each four taps
 /// (gauss[i], gauss[0xFF−i], gauss[0x100+i], gauss[0x1FF−i]) should sum to 0x8000 but sum to 0x7F7F..0x7F81 —
 /// the `gauss_quads_sum_near_0x8000` test pins that property [M nocash psx-spx].
@@ -310,8 +310,7 @@ pub fn resample_gauss(data: &[i16], pos: f64) -> i16 {
 }
 
 /// The port's overall output level, applied to everything that reaches the speakers (the game mixer here and the
-/// movie player's stream, nf-view movie.rs) after the game's own volume math (the user, 2026-10-19: "need to lower
-/// the volume by 75%"). A port choice, not the game's: the PS2's levels stay as they are inside the mix.
+/// movie player's stream, nf-view movie.rs) after the game's own volume math (−75%). A port choice, not the game's: the PS2's levels stay as they are inside the mix.
 pub const OUTPUT_GAIN: f32 = 0.25;
 
 /// `NF_SILENT` is set (any value): open no audio device. The test runner (tools/test/suite.py) sets it.
@@ -319,7 +318,7 @@ pub fn silent() -> bool { std::env::var_os("NF_SILENT").is_some() }
 
 impl Output {
     /// Opens the default output device. `None` when there is none (the game runs silent), or when
-    /// `NF_SILENT` is set: the test runner sets it so no test ever plays through the user's speakers
+    /// `NF_SILENT` is set: the test runner sets it so no test ever plays through the speakers
     /// (the weapon-sound tests once fired bursts of shots at full volume through them).
     pub fn open() -> Option<Output> {
         if silent() { return None; }

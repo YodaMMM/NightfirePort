@@ -1,4 +1,4 @@
-// The handler logic's unit tests (plain node:test, no Miniflare — the sandbox has none): the same
+// The handler logic's unit tests (plain node:test, no Miniflare needed): the same
 // routes the game's client speaks, driven directly against the store (docs/systems/net-cloud-lobby.md).
 import test from "node:test";
 import assert from "node:assert/strict";

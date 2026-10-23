@@ -1,12 +1,11 @@
 //! fix-weapon-fx-levels live tests: every weapon's EFFECTS on every level.
 //!
-//! The user: weapons must work "no matter what level, with sounds and proper animations and
-//! particles". 100a made the fp models load on every level (the give path's asset merge); this
-//! task audits the effects the same way — per level × weapon: the fire sound, the reload/draw
+//! Weapons must work on any level, with sounds, proper animations and particles. The give path's
+//! asset merge makes the fp models load on every level; this file audits the effects the same way — per level × weapon: the fire sound, the reload/draw
 //! sounds, the muzzle flash, the shell eject, the tracer, the impact puff/spark/decal, the
 //! projectile model + trail, the explosion.
 //!
-//! The audit's findings (docs/reports/fix-weapon-fx-levels.md has the full table):
+//! The audit's findings:
 //! - the per-material impact set (EffectInfo decals/debris/gas meshes), the tracer 0x02000123 and
 //!   the blast script 0x06000052 ship redundantly in EVERY story archive [D disc census] — the
 //!   game's mechanism is per-level redundancy, not a shared boot pack (`AnimLoadFile` 0x1bdf40
@@ -249,9 +248,9 @@ fn every_story_level_resolves_every_weapons_fx() {
             miss.sort();
             miss.dedup();
             // The residual: a couple of records' +0x80 HELD-model hash lives only in non-story
-            // archives (the merge pool is the story order + the skin's owner) — documented in the
-            // report as the one asset class this session did not extend the merge to. Everything
-            // else (the effects the user sees: the muzzle flashes, the casings, the tracer, the
+            // archives (the merge pool is the story order + the skin's owner) — the one asset
+            // class the merge does not cover yet. Everything
+            // else (the visible effects: the muzzle flashes, the casings, the tracer, the
             // impact set, the sounds, the blast) must be clean.
             if miss.iter().any(|&m| m != 'h') { total_missing += 1; }
             else if !miss.is_empty() { residual_h.push(w); }
@@ -317,8 +316,8 @@ fn a_foreign_rifle_fires_with_flash_casing_and_impacts_on_05() {
 /// ticks after an 80-tick draw wait, with and without `aiming`, through `Sim::step_bond` only.
 /// The same "foreign weapon's held fire spawns no round" class fix-weapon-sounds saw on
 /// 07000001 (its ignored AR test). The trail code itself is exercised by the exhaust-puff arm
-/// in drone.rs and pinned by the static sweep; the fire-path debug + the live check are in the
-/// report.
+/// in drone.rs and pinned by the static sweep; the fire-path live check is still
+/// open.
 #[test]
 #[ignore = "the MGL's held fire never releases headless on a foreign level (see the comment)"]
 fn a_foreign_launcher_leaves_a_smoke_trail_and_explodes_on_02() {

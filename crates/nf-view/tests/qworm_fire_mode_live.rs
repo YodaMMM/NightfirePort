@@ -1,5 +1,5 @@
 //! qworm-firemode-softlock-0a: the fire-mode press on a gadget with no second mode moves nothing,
-//! and switching away from the Q-Worm completes — the playtest 1017-1139 soft-lock's game shape.
+//! and switching away from the Q-Worm completes — the game's shape for an observed soft-lock.
 //!
 //! Game behavior [M `Player_Weapon` 0x1a24c8:188-231]: the mode press (`Input_Action(slot, 0xc, 4)`;
 //! the watch pair 0x54/0x55 ORs the fire edge :189-192) with the view idle (:198) runs:
@@ -51,7 +51,7 @@ fn the_q_worm_record_has_no_second_mode_and_the_p2k_has_one() {
     assert_eq!(p2k[5] as i8, 1, "P2K +0x05 (s8 twin) = +1: a real second mode exists for the sister [L]");
 }
 
-/// The playtest's sequence: the Q-Worm out, the fire-mode press, then switching away completes.
+/// The repro sequence: the Q-Worm out, the fire-mode press, then switching away completes.
 /// Sister within: the P2K's mode press still toggles onto its twin (a real second mode) [M].
 #[test]
 fn mode_press_on_the_q_worm_moves_nothing_and_the_switch_completes() {

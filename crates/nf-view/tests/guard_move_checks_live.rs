@@ -1,7 +1,7 @@
 //! guard-move-checks (the call-tree gap task): the NDrone2 move-check family's real-path pin.
 //!
-//! The bathhouse scenario (the armed-girl playtest's level 07000002, wake channels 22/23/25, Bond
-//! at the playtest spot) runs the armed guards' combat loop — `AimStandFire` 0x68 →
+//! The bathhouse scenario (the armed-girl repro's level 07000002, wake channels 22/23/25, Bond
+//! at the repro spot) runs the armed guards' combat loop — `AimStandFire` 0x68 →
 //! `NDrone2_ChooseCombatMove` 0x150c18 — whose cases probe `NDrone2_CanStrafeDodgeLeft/Right`
 //! (0x14fdf8/0x14ffc0, ±3.6), `NDrone2_CanRollLeft/Right` (0x150338/0x150500, ±5.2) and
 //! `NDrone2_CanStepLeft/Right` (0x14f640/0x14f808, ±1.8) before setting the move state, and whose
@@ -58,7 +58,7 @@ fn combat_move_states_belong_to_armed_guards_and_never_to_civilians() {
         sim.drones.set_channel(22);
         sim.drones.set_channel(23);
         sim.drones.set_channel(25);
-        sim.bond.pos = [-43.11, 6.46, 10.37]; // the playtest camera [L the playtest report]
+        sim.bond.pos = [-43.11, 6.46, 10.37]; // the repro camera
         sim.bond.prev_pos = sim.bond.pos;
     }
     for _ in 0..1800u32 {

@@ -1,4 +1,4 @@
-//! R2 (user playtest, 07000007 nf-shots 002/003/005): baked shadow decals left navy holes in the walls up close. They
+//! R2 (07000007): baked shadow decals left navy holes in the walls up close. They
 //! share the walls' list-0 draw state, and the front-to-back sort drew a decal before the wall it lies on, so its
 //! depth write rejected the wall. The renderer now draws alpha-shaped list-0 textures after the opaque ones
 //! (`gpu::alpha_shaped`). This pins the classification on the real data. Opt-in: NF_ISO.

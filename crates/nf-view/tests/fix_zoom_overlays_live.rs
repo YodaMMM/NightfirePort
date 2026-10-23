@@ -1,6 +1,6 @@
 //! fix-zoom-overlays: the zoom overlays draw as the game draws them — one frame, not a 2×2 grid.
 //!
-//! The user's playtest (2026-10-13): zoomed with the Micro-Camera (0x54, 07000005) and the AIMS-20
+//! The symptom: zoomed with the Micro-Camera (0x54, 07000005) and the AIMS-20
 //! (0x1a, 07000016 — [L weapon_data 0x2bf150+0x38 = "AIMS-20", the Burst rifle] bound over USATxt.dat)
 //! the port drew four copies of the frame with a black cross through the middle. The game's sprites
 //! carry flag 0x400, and `View_DrawSprites` 0x1e5290:52-162 splits such a sprite into
@@ -72,7 +72,7 @@ fn assert_one_frame(quads: &[Q], rect: (f32, f32, f32, f32), tile: (f32, f32), u
         "{what}: the horizontal centre must not jump in V");
 }
 
-/// The Micro-Camera (0x54, the user's 07000005 spot): hold aim + the zoom key through
+/// The Micro-Camera (0x54, the 07000005 repro spot): hold aim + the zoom key through
 /// `Player_Zoom` 0x1a1a70 (the real input path), the viewfinder 0x03000055 draws as ONE frame —
 /// four 256×224 mirror tiles over the whole 512×448 screen of the 128×64 quarter texture.
 #[test]
@@ -104,10 +104,10 @@ fn the_micro_camera_viewfinder_is_one_frame() {
     assert!(quads_of(&scene, &f, 0x0300_0034, 2).is_empty(), "no sniper scope on the Micro-Camera");
 }
 
-/// The AIMS-20 (0x1a, the user's 07000016 rifle — the Burst one): its OICW zoom circle
+/// The AIMS-20 (0x1a, the 07000016 rifle — the Burst one): its OICW zoom circle
 /// 0x03000141 (64×64 quarter [D 07000016.bin]) draws as ONE circle — four 64×64 mirror tiles
 /// inside the 128×128 block at (192,160). Before the fix the port drew the sprite once with the
-/// wrapped UV: the 2×2 grid the user saw.
+/// wrapped UV: a 2×2 grid.
 #[test]
 fn the_aims20_zoom_circle_is_one_frame() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };

@@ -55,7 +55,7 @@ fn camera_zoomed_at(w: &mut nf_view::scene::Scene, at: [f32; 3], face_di: usize)
         sim.bond.yaw = d[0].atan2(d[2]);
     }
     // Equip the Micro-Camera through the REAL number-key switch, settle the swap, then raise+zoom
-    // through the held aim/zoom buttons (the user's right click; a raise queued mid-swap is
+    // through the held aim/zoom buttons (the right click; a raise queued mid-swap is
     // refused — one queue point, and a held button never re-edges).
     for _ in 0..4 { w.sim.as_mut().unwrap().step_bond(Input { switch_to: Some(0x54), ..Input::default() }, false, false, false); }
     for _ in 0..90 { w.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
@@ -170,7 +170,7 @@ fn a_corpse_gets_no_bracket() {
 }
 
 /// Sister: the brackets draw through a wall — the projection has no LOS test [M 0x1a12d8 creates
-/// the sprite at the drone's position unconditionally; the user saw them through walls].
+/// the sprite at the drone's position unconditionally; they show through walls].
 #[test]
 fn brackets_draw_through_a_wall() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };

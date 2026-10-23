@@ -5,8 +5,8 @@
 //! 0x1910f8 :160-165, now ported]. These tests drive
 //! the real input path (`Sim::step_bond`) on 0700001b with the slit's script entry (ChangeSubState
 //! 9 — the port's tests assign it directly, the swim-entry
-//! precedent, until the C_CHCHZEROG 0x216388 msg-0x4b wire lands — [S] unverified: 0x216388 is C_CHCHZEROG_Handler (its msg-0x4b arm sets substate 9 or 0); nothing there ties it to a slit zone; see
-//! docs/reports/zero-g-movement-1b.md): the thrusters move Bond along the object matrix, `vel`
+//! precedent, until the C_CHCHZEROG 0x216388 msg-0x4b wire lands — [S] unverified: 0x216388 is C_CHCHZEROG_Handler (its msg-0x4b arm sets substate 9 or 0); nothing there ties it to a slit zone):
+//! the thrusters move Bond along the object matrix, `vel`
 //! (BL+0x50) stays zero [M 0x192ab0:71], and nothing pulls him down.
 //!
 //! Opt-in: set `NF_ISO` to the disc image.

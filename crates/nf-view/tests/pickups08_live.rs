@@ -1,5 +1,5 @@
-//! pickups-08: the 07000008 safe room's briefcase and rocket launcher (playtests 1012-2337,
-//! 1013-1758: "cant pickup the briefcase or rocket launcher"; the invisible wall there is fixed
+//! pickups-08: the 07000008 safe room's briefcase and rocket launcher (they could not
+//! be picked up; the invisible wall there is fixed
 //! by fix-safe08/fix-safe08b).
 //!
 //! Where the items come from: the SafePickUps script 0x060009E2 spawns both when ch 136 fires
@@ -97,7 +97,7 @@ fn the_safe_spawns_sit_at_the_script_keys_after_the_open() {
     assert_eq!(case.1.rounds, 0, "the kind-4 case carries no rounds");
 }
 
-/// The user's symptom, the game-faithful resolution: standing in the safe doorway after walking in
+/// The symptom, the game-faithful resolution: standing in the safe doorway after walking in
 /// (the spot the capsule settles at), BOTH items collect — the briefcase through ch 0x4A, the
 /// rocket into the inventory with the HUD "Picked up" message. The doorway ray grazes the safe's
 /// own shell at some body-yaws (surface 6 survives every filter of the 0x725 query, header above),
@@ -109,7 +109,7 @@ fn the_safe_pickups_collect_from_the_doorway() {
     for _ in 0..120 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     open_safe(&mut scene);
     let sim = scene.sim.as_mut().unwrap();
-    sim.bond.pos = [161.87, 43.39, -116.54]; // the doorway (the user's spot, fix-safe08)
+    sim.bond.pos = [161.87, 43.39, -116.54]; // the doorway (the take spot, fix-safe08)
     sim.bond.vel = [0.0; 3];
     let (rockets_before, carried_before) = (
         sim.drones.inventory.owned.get(0x2c).copied().unwrap_or(false),

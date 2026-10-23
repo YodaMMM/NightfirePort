@@ -1,5 +1,4 @@
-//! The dev window: the dev menu in its OWN native window beside the game (the user, 2026-10-13: "the dev menu should
-//! manifest outside of the game, but not in a browser"). A second `winit` window on the same event loop, with its own
+//! The dev window: the dev menu in its OWN native window beside the game (outside the game, not in a browser). A second `winit` window on the same event loop, with its own
 //! `wgpu` surface on the game's device, drawn with the game's HUD font. The game keeps running while it's used (the
 //! in-game F2 overlay paused the sim; this window doesn't), and every action goes through the same
 //! `dev::apply_menu_action_to_scene` → `panel::apply` path as the overlay and the old HTTP panel.

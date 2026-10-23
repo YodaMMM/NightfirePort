@@ -55,8 +55,8 @@ fn live_ids(scene: &nf_view::scene::Scene, snd: &nf_audio::sfx::Sound) -> Vec<u3
 /// are voice type 2 [L snapshot, speech.md §2.1], so a gunshot heard behind one never keys the
 /// heard-noise line (sfx 114, entry 0x26) — the `+0xd8 == 1` gate [M 0x149920:24]. The positive
 /// arm (a vt-1 guard barking on 07000002) needs an awake guard with the global sight latch clear —
-/// the census's vt-1 groups all sleep on plates and wake seeing Bond; listed as a live check in
-/// docs/reports/ai-talk-barks.md.
+/// the census's vt-1 groups all sleep on plates and wake seeing Bond; an open live
+/// check.
 #[test]
 fn the_heard_noise_line_never_keys_for_voice_type_2() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };

@@ -87,7 +87,7 @@ fn set_crouch(w: &mut Walker, on: bool) {
 }
 
 #[test]
-#[ignore = "level-14-vent-grate state: leg 1a is REWRITTEN to the game's real route - the east duct (the_vent_grill_blocks_the_west_duct_per_the_game pins the closed grill; the_east_duct_route_reaches_the_stairwell_slot carries the real-input east attempt, still ignored on the mouth lintel): the west grill plane z=58.86 is the game's own closed geometry [M parsemap 0x1d1998:92 creates the cel for the 0x8000 placement; M Collide_Pick 0x1eb320:140/:145-151 skips nodes only on glist bits 0x20 / 0x1000+query-0x20 - the grill's glist 0x1 [D plc #100] is never tested; the bit-0x1 skip that opened the grill is REVERTED in world.rs], and the crawl leaves east past lid SP #328, descends south to the stairwell slot approach (45.23, 1.07, 56.27 [D probe14_eastduct]). The walk stays ignored on the SLOT CROSSING (unchanged from level-14-complete-2): the threshold face z=55.719 [D probe14_chute] stops the capsule 0.55 short and the under-opening floor is missing in the port's world (probe14_landing: y -> -210) - what the game's Bond does there needs a fresh-boot [L] (the live checks in docs/reports/level-14-vent-grate.md). The 0.7-grounding note stays [M]: the lip graze GROUNDS per the game's rule [M Intersect_CylGeom 0x10a72c-34; Player_FeetOnPoint 0x194188:183-201; Collide_Update 0x1ea398:46c]."]
+#[ignore = "level-14-vent-grate state: leg 1a is REWRITTEN to the game's real route - the east duct (the_vent_grill_blocks_the_west_duct_per_the_game pins the closed grill; the_east_duct_route_reaches_the_stairwell_slot carries the real-input east attempt, still ignored on the mouth lintel): the west grill plane z=58.86 is the game's own closed geometry [M parsemap 0x1d1998:92 creates the cel for the 0x8000 placement; M Collide_Pick 0x1eb320:140/:145-151 skips nodes only on glist bits 0x20 / 0x1000+query-0x20 - the grill's glist 0x1 [D plc #100] is never tested; the bit-0x1 skip that opened the grill is REVERTED in world.rs], and the crawl leaves east past lid SP #328, descends south to the stairwell slot approach (45.23, 1.07, 56.27 [D probe14_eastduct]). The walk stays ignored on the SLOT CROSSING (unchanged from level-14-complete-2): the threshold face z=55.719 [D probe14_chute] stops the capsule 0.55 short and the under-opening floor is missing in the port's world (probe14_landing: y -> -210) - what the game's Bond does there needs a fresh-boot [L]. The 0.7-grounding note stays [M]: the lip graze GROUNDS per the game's rule [M Intersect_CylGeom 0x10a72c-34; Player_FeetOnPoint 0x194188:183-201; Collide_Update 0x1ea398:46c]."]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
@@ -248,7 +248,7 @@ fn the_vent_grill_blocks_the_west_duct_per_the_game() {
                 && (ys.iter().cloned().fold(f32::MAX, f32::min) - ys.iter().cloned().fold(f32::MIN, f32::max)) < 0.09
         }).count()
     };
-    drop(scene); // the second load doubles the footprint — this sandbox OOMs at ~2 GB
+    drop(scene); // the second load doubles the footprint — a small test machine OOMs at ~2 GB
     let bars = bar_count;
     // The bars are 0.06-0.07 thick in y, six of them between y 2.62 and 3.62, all at z=58.86-58.9
     // [D probe14_tris; the placement 0x8000 cel + the Collide_Pick no-0x1-skip rule above].

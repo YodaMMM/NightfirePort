@@ -1,5 +1,5 @@
 //! fix-level-chain: the no-obvious-exit levels chain the way the game does. The mechanisms, found in
-//! the data and the decompile (docs/reports/fix-level-chain.md):
+//! the data and the decompile:
 //! - 07000006: the party-entrance TOUCH (main map, out ch 0x83) triggers ScriptPlayer #220 (script
 //!   0x06000071); its stream 9 fires script event 0x12 = LoadLevel 0x07000007 [D probe; M
 //!   Script_EventHandler 0x1d94c0 case 0x12 → Player_RamSave + ResetMap_LevelToLoad(param,1,0)].

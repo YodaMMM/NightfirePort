@@ -9,7 +9,7 @@
 //! bots re-arm through `BOT_respawn` 0x124e38 → `BOTWEAP_InitWeapon` 0x129e48:44-48 (the set's
 //! spawn weapon, `clip_size·2` [M nf-game::mp::equip::bot_start_weapon]).
 //!
-//! The user's report (an MP match from the menus): "you respawn with no ammo" — the offline
+//! The symptom (an MP match from the menus): respawning with no ammo — the offline
 //! death→respawn path (`Sim::step_mp_death_respawn`) never re-equipped; the online path
 //! (`step_net_combat`) did. These tests pin the respawned kit through the real paths: offline
 //! (the death sequence → `mp_respawn`), and online (a real P2K kill, then the shared respawn —
@@ -99,7 +99,7 @@ fn offline_kill_and_respawn(weapon_set: u32) -> Scene {
     }
     // Spend the spawn kit through the real fire path (the trigger taps — the P-series is
     // semi-auto [M the fire-mode byte] — so the trigger gets a fresh edge every few ticks) until
-    // the weapon is dry — the user died having fired their rounds. `step_bond` is the app's
+    // the weapon is dry — the player dies having fired their rounds. `step_bond` is the app's
     // offline tick (the death bracket + the respawn run inside it).
     let mut dry = false;
     for t in 0..900u32 {

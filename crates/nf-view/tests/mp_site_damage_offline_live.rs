@@ -260,7 +260,7 @@ fn an_explosive_damages_and_destroys_the_site_offline() {
 /// the site (the strongest plain bullet's +0x0C word) — the local pipeline's visual bullets
 /// never feed it online (the offline gate holds there; without it every online shot would
 /// apply twice). One machine: the cross-machine hash agreement is the suite's
-/// `demolition_online`; the OOM ceiling of this sandbox can't hold two arena sims.
+/// `demolition_online`; a small test machine's memory can't hold two arena sims.
 #[test]
 fn online_shot_takes_exactly_one_round_of_site_damage() {
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };

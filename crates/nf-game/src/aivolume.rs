@@ -82,7 +82,7 @@ impl AiVolume {
 
 /// `Drone_ProcessOpponents`: the product of the factors of the visibility boxes (kind 0) holding `p`; ×0.75 when Bond
 /// crouches (player `obj+0xF6` = 4).
-/// (task 854: `Drone_VisibilityForPosition` 0x13a1f8 [M 0013a1f8 decompile, from
+/// (`Drone_VisibilityForPosition` 0x13a1f8 [M 0013a1f8 decompile, from
 /// `DroneVision_ProcessDroneSight` 0x176a28] is the same product — boxes whose `+0x24` kind matches
 /// the caller's zone argument and whose `Intersect_PointOOBox` holds the point multiply their
 /// `+0x20` factor into 1.0; the port's kind-0 filter is the ProcessOpponents call passing zone 0.

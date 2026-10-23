@@ -35,7 +35,7 @@ fn the_use_key_activates_an_ss_grate() {
 /// through the STATE sweep alone (state 1 poses and advances unconditionally [M 0x1a9948:92-108]),
 /// then the wrap (`(int)last < (int)t`) disarms them at state 0 with the OPEN pose held (states
 /// 0/0x40 never re-pose [M 0x1a9948:74-83]). The port's old channel-seek tick never moved them
-/// (ch 0 never latched → target 0.0) — "the grate won't open", playtests 1011-1732/1012-1723.
+/// (ch 0 never latched → target 0.0) — the grate would not open.
 fn open_by_use(sim_has: &mut nf_view::scene::Scene, ss_i: usize) {
     let (p, yaw0) = {
         let sim = sim_has.sim.as_mut().unwrap();

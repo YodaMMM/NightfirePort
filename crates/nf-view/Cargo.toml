@@ -3,7 +3,7 @@ name = "nf-view"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "Level viewer for 007: Nightfire (PS2) data read from the user's own disc image"
+description = "Level viewer for 007: Nightfire (PS2) data read from the player's own disc image"
 
 [dependencies]
 libc = "0.2"
@@ -33,6 +33,6 @@ nf-game = { path = "../nf-game", features = ["mp-bots"] }
 # builds and tests without it (and without gilrs in the dep tree). Needs libudev to build
 # (gilrs-core's Linux hotplug).
 gamepad = ["dep:gilrs"]
-# The decoder (oxideav-mpeg12video, MIT) stays opt-in until the user approves it: `--features movies`
+# The decoder (oxideav-mpeg12video, MIT) is opt-in: `--features movies`
 # enables nf-formats/movies, the --movie CLI and the movie tests.
 movies = ["nf-formats/movies"]

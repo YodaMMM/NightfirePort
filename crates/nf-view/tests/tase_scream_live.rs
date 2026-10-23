@@ -1,4 +1,4 @@
-//! tase-scream-broadcast (task 736, the uncited-gameplay audit runner-up): entering the tase
+//! tase-scream-broadcast: entering the tase
 //! state broadcasts the scream — `NDrone2_DSTATE_Taser` 0x162b98's case-1 tail [M, disasm
 //! 0x162d0c-0x162d40]: prop 0x32 set, the once-per-life bit clear (+0x4F8 & 8 — the bit the
 //! hurt scream shares, `DroneFunc_SendHurtMessage` 0x145e28), the active type id not 2 (+0xC5),

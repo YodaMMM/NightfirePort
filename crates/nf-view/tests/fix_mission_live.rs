@@ -141,7 +141,7 @@ fn mission_completes_when_every_objective_channel_is_on() {
         if sim.drones.mission_end == Some(0x0700_0048) { ended = true; break; }
     }
     // The mission's own end goes to the host's end sequence (outro + results) — not a bare front-end
-    // load, which skipped both (playtest 1015-2231).
+    // load, which skipped both.
     assert!(ended, "the mission end reports LevelToEndTo 0x07000048 [M 0x182c60 case 6 default, case 4]");
     assert_eq!(sim.drones.level_exit, None, "sister: no bare level load of the front end");
     assert_eq!(sim.drones.mission.status(), 6, "MissionState = 6 [M 0x182c60:86]");

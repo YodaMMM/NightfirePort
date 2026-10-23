@@ -21,8 +21,7 @@
 //!   load's (skin, meshes, datums, scripts, view-model slots) and nothing was added.
 //! - `ids_without_a_first_person_model`: the expected no-model list with the reason.
 //!
-//! Opt-in via NF_ISO (the slim ISO is enough). Numbers, not images — the main agent renders the
-//! `--bond` spots listed in the report.
+//! Opt-in via NF_ISO (the slim ISO is enough). Numbers, not images.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;

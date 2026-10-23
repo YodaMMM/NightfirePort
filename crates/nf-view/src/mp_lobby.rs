@@ -1,7 +1,7 @@
 //! The one-screen online lobby model (mp-lobby-one-screen, docs/systems/net-online-lobby.md §6).
 //!
 //! One page state holds every MpSettings word the couch pages set, the per-player rows and the
-//! host-only Start. Nothing here draws — the main agent renders through [`MpLobby::rows`],
+//! host-only Start. Nothing here draws — the draw side renders through [`MpLobby::rows`],
 //! [`MpLobby::players`] and [`MpLobby::start_enabled`]. The couch flow is untouched; this model
 //! is the ONLINE path only [S — port-only, the PS2 game has no network mode].
 //!
@@ -233,7 +233,7 @@ impl MpLobby {
              host_can, true, &mut self.focus);
         for i in 0..2u8 {
             // The couch Player Mods page's own labels [L USATxt]: 0x1ac "Professional Mode", 0x24e "Location Damage"
-            // (the lobby showed "Professional Mode 1/2" — the user, 2026-10-19: "no fucking clue what enviromods mean").
+            // (the lobby used to show "Professional Mode 1/2").
             push(MpLobbyRowId::PlayerMod(i), [0x1ac, 0x24e][i as usize], "Player Mod",
                  if self.player_mods[i as usize] != 0 { 0x1b7 } else { 0x1b6 }, String::new(),
                  host_can, true, &mut self.focus);
@@ -256,8 +256,8 @@ impl MpLobby {
         }
         // Ravine takes no bots: the game locks the AI Bots row there [M P_MPMAP 0x217678:20-25] and the match start
         // zeroes them [M Menu_PrepareBots 0x1f94a0:85-88] (`FrontEnd::mp_bot_count`). The lobby used to let the host
-        // turn bots on for Ravine and then start with none — the user's "started a game with 16 bots and no bots
-        // spawned" (2026-10-19). On Ravine the bot rows show "Not on this map" and can't be edited.
+        // turn bots on for Ravine and then start with none (16 bots set, no bots
+        // spawned). On Ravine the bot rows show "Not on this map" and can't be edited.
         let no_bots = self.level == 0x0700_004b;
         for (i, b) in self.bots.iter().enumerate() {
             if no_bots {

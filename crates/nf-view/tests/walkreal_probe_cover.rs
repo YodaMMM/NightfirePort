@@ -12,7 +12,7 @@ fn dump_cover_wedge() {
     eprintln!("=== cover wedge probe ===");
     eprintln!("nav: bounds={} walls={}", nav.bounds, nav.walls.len());
 
-    // The AI points around the reported goal (2.95, 5.35, 9.94) and the stalled lead (3.5, 6.3, 7.9).
+    // The AI points around the observed goal (2.95, 5.35, 9.94) and the stalled lead (3.5, 6.3, 7.9).
     let near = |p: [f32; 3], c: [f32; 3], r: f32| (p[0]-c[0]).powi(2) + (p[2]-c[2]).powi(2) < r*r;
     for (i, ap) in sim.ai_points.iter().enumerate() {
         if near(ap.pos, [2.95, 5.35, 9.94], 25.0) || near(ap.pos, [3.5, 6.3, 7.9], 25.0) {

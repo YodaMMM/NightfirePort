@@ -65,8 +65,8 @@ fn assert_no_wrapper_target(sim: &nf_view::scene::Sim, level: &str) {
 ///   0x1db3d0:10). `Game_Draw` draws `psiFadeView` per viewer from that viewer's own fade
 ///   bytes [M 0x1e6f50:186-212], and PushStates/PopStates save only +0x29/+0x2a [M
 ///   0x1bbc60/0x1bbcd0]. So the view read is None exactly while a script camera owns the view:
-///   the PS2 shows 07000002's opening cut-scene at full brightness from +3 [L, the main
-///   agent's GDB-build capture, 2026-10-19]. On a load with no auto-play intro — Castle C's
+///   the PS2 shows 07000002's opening cut-scene at full brightness from +3 [L, a
+///   GDB-build capture, 2026-10-19]. On a load with no auto-play intro — Castle C's
 ///   script bank is mode-0/64 only [D, the §4 census] — the player viewer stays drawn and the
 ///   fade-up really shows for its 45 ticks.
 /// Sisters that can fail: the exact per-tick raw ramp (a tick drift fails), the per-level

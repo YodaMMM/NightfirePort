@@ -1,6 +1,6 @@
 //! PSS movie (FMV) support for nf-view: load a movie from the disc image, decode video frames (behind the
 //! cargo feature `movies`, i.e. `nf-formats::mpeg2`), decode the PCM audio, and dump frames headlessly
-//! (`nf-view --movie 07100001 --frame N --shot out.png` — no GPU needed; the main agent checks the pixels).
+//! (`nf-view --movie 07100001 --frame N --shot out.png` — no GPU needed).
 //!
 //! **Game references** (ACTION.ELF): the player is `psiStartBackgroundMovie__FUiScUi` (0x001081a8) — filename
 //! `sprintf("%s%s%8.8x.pss%s", HostName "cdrom0:\movies\", DirName "30_FPS\", code, EndTag ";1")`, gated by the
@@ -189,8 +189,7 @@ pub struct Player {
     timing: Timing,
 }
 
-/// Per-movie playback timing, one log line per movie (playtest 1016's lag report: real-path
-/// evidence from the user's own runs). Port diagnostics only.
+/// Per-movie playback timing, one log line per movie (real-path lag evidence). Port diagnostics only.
 #[derive(Default)]
 struct Timing {
     last_present: Option<std::time::Instant>,
@@ -290,7 +289,7 @@ impl Player {
         // Never faster than real time: when the decoder falls behind (its warm-up on the first
         // frames, a slow GOP) the clock slips instead of the picture racing to catch up — the old
         // catch-up showed one movie frame per RENDER frame, so the intro's opening (the 007 white
-        // dots) flashed by at 100+ fps (playtest 1015-2142). The audio rides the frames, so it
+        // dots) flashed by at 100+ fps. The audio rides the frames, so it
         // stays with the picture.
         if due > self.tick.wrapping_add(2) && self.last.is_some() {
             self.started = Some(now - std::time::Duration::from_secs_f64(self.tick as f64 / 30.0));
@@ -416,8 +415,8 @@ fn chrono_now() -> String {
 /// The register's full scale is the SPU2 volume register's signed-16-bit 0x7fff [S unverified —
 /// the SPU2's input-volume DSP curve is hardware, not in any decompile; the game's own voice/reverb
 /// writes use 0x3fff as 100% (sound.md §5.4), so 0x7fff is the other candidate. Boot gain
-/// 10000/0x7fff ≈ 0.305 matches playtest 1016's "full scale is about 3x too loud"; 10000/0x3fff
-/// ≈ 0.610 would be only 1.6x. A live check is requested in docs/reports/movie-volume-options.md].
+/// 10000/0x7fff ≈ 0.305 matches full scale playing about 3x too loud; 10000/0x3fff
+/// ≈ 0.610 would be only 1.6x. Not yet confirmed live].
 pub const MOVIE_FULL_SCALE: f32 = 32767.0;
 
 /// The port's movie gain for `movie_volume` in the game's SfxMasterVolume scale (0..100):
@@ -432,7 +431,7 @@ pub fn movie_input_volume(movie_volume: u32) -> u32 { movie_volume * 100 }
 
 /// The boot default: `SfxMasterVolume` is 100 in the fresh-boot EE snapshot [L 0x30c95c], so the
 /// boot movie gain is `movie_gain(100)`. Before movie-volume-options the port played every movie
-/// at this fixed gain — about 3x too loud (playtest 1016) — because the options' SFX volume was
+/// at this fixed gain — about 3x too loud — because the options' SFX volume was
 /// not plumbed into the player.
 pub const MOVIE_GAIN: f32 = (100.0 * 100.0) / 32767.0;
 
@@ -624,7 +623,7 @@ pub const STREAM_AHEAD: usize = 60;
 /// Movie decode threads. One thread decodes these 512x448 MPEG-2 movies at ~34 fps on an idle
 /// 24-thread desktop, and the heaviest GOPs of the 07300004 briefing run at 108 ms a picture —
 /// a third of real time [L probe 2026-10-16]; the 2 s lead drained on those GOPs and the
-/// picture stalled (playtest 1016: "starting and ending movies of missions are lagging"). The GOP
+/// picture stalled (mission start/end movies lagged). The GOP
 /// units are independent decodes (a closed GOP alone, an open one with its predecessor in front),
 /// so they decode in parallel, round-robin, and come back out in order.
 pub const DECODE_THREADS: usize = 4;
@@ -754,7 +753,7 @@ impl MovieStream {
         // crash-fix: BOUNDED. The unbounded channel let the worker decode the whole movie ahead
         // of playback — a briefing started during the map-load fade (decode-ahead) piled every
         // picture in RAM (~350 KB each, thousands of them): freeze, then crash at the briefing's
-        // end (playtest 1016). ~2 s of pictures is plenty of lead.
+        // end. ~2 s of pictures is plenty of lead.
         // The lead is split over the decode threads' channels.
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let pictures = nf_formats::mpeg2::picture_counts(&movie.demuxed.video).0;
@@ -909,8 +908,7 @@ pub fn briefing_subtitles(iso_path: &str, movie_code: u32, enabled: bool) -> Res
 }
 
 
-/// playtest 1016: "starting and ending movies of missions are lagging … it throws the audio out of
-/// sync". [L probe 2026-10-16: one decode thread ran the 07300004 briefing at ~34 fps on an idle
+/// Mission start/end movies lagged and the audio drifted out of sync. [L probe 2026-10-16: one decode thread ran the 07300004 briefing at ~34 fps on an idle
 /// desktop, its heaviest GOPs at 108 ms a picture.] [S port engineering: decode throughput and the
 /// A/V clock; the game's own rule is that the audio streams on and the picture skips frames to keep
 /// up — PS2FramesToSkip, audioDecSendToIOP 0x107100.]

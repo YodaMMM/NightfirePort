@@ -3,7 +3,7 @@
 //! `requested_level.take()` + the flow state the host owns around `mission_ended` [M lib.rs
 //! demo_results 2076-2077], `results_enter`, `bonus_enter`, `sync_profile_progress`,
 //! `win_movie_finished`, the card flow's dialog answers). No `page`/`cursor`/state-field
-//! writes to get anywhere. The playtest 1015-1738 found the menus broken end to end even
+//! writes to get anywhere. The menus were once broken end to end even
 //! though every page had passed its own unit tests — those set `fe.page = ...` directly, so
 //! the real paths were never exercised.
 
@@ -165,7 +165,7 @@ fn fresh_profile_to_the_exchange(fe: &mut FrontEnd) -> u32 {
     assert_eq!(level, CAMPAIGN[1].3);
     assert_eq!(level, 0x0700_0005);
     // A second Enter while the request stands is refused (the game deletes the menu manager
-    // with it) — the playtest's "a second Enter during a load started a second load".
+    // with it) — a second Enter during a load used to start a second load.
     assert!(!fe.action(Action::Confirm), "no second request");
     assert_eq!(fe.requested_level.take(), Some(level)); // [host] the level loads
     level
@@ -444,7 +444,7 @@ fn a_completed_mission_routes_the_results_save_and_the_next_row() {
     assert_eq!(fe.cursor, 1, "the list opens on the highest unlocked row [M 0x20b608:60-64]");
 
     // Paris Prelude is the driving row: the notice, dismiss, The Exchange. The second Enter
-    // is refused while the request stands — the playtest's "a second Enter started a second load".
+    // is refused while the request stands — a second Enter used to start a second load.
     let level = {
         assert!(act(&mut fe, Action::Up), "Up to Paris Prelude");
         assert!(act(&mut fe, Action::Confirm), "Paris Prelude");

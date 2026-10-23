@@ -1,5 +1,5 @@
-//! fix-12-enemies: the 07000012 guard-damage audit (playtest 2026-10-15: "There were some killable
-//! MP, unkillable NPCs, like enemies"). Every guard class is fired at through the real input path
+//! fix-12-enemies: the 07000012 guard-damage audit (some enemies seemed unkillable). Every guard
+//! class is fired at through the real input path
 //! (`nf_view::load` + `Sim::step_bond`): the load-enabled guards, a guard woken by its wing touch
 //! plate (the real trigger touch), and a spawner-spawned reinforcement. All three take damage and
 //! die — the audit found NO port-side damage bug on this level; the report lists the live checks

@@ -61,7 +61,7 @@ fn golden_rows() -> Vec<String> {
 }
 
 /// The committed digest itself is well-formed and its recorded PSNR column (the port-vs-reference
-/// cross-check measured when it was made) stays above the task's tight bound. Sister: a tampered
+/// cross-check measured when it was made) stays above the tight 40 dB bound. Sister: a tampered
 /// row (one hex digit of the block grid) must fail the parser's grid check.
 #[test]
 fn the_reference_digest_is_well_formed_and_above_the_bound() {
@@ -87,7 +87,7 @@ fn the_reference_digest_is_well_formed_and_above_the_bound() {
 
 /// The real thing: decode the backdrop movie and require, for every one of the 120 frames, the
 /// exact decode pin AND the reference block-grid agreement (a ghosted/smearing decode moves block
-/// means far more than the 2.0 bound — the symptom this task started from was a mean abs RGB diff
+/// means far more than the 2.0 bound — the original symptom was a mean abs RGB diff
 /// of ~31 in the figure region).
 #[test]
 #[cfg(feature = "movies")]

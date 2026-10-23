@@ -1,5 +1,5 @@
-//! 07000005 ledge cut-scene (fix-drone2 bug 3): the user's playtest shows the cut-scene on the ledge
-//! left of the castle gate **missing its guard**. The cut-scene is ScriptPlayer 298's NIS 0x06000994
+//! 07000005 ledge cut-scene: the cut-scene on the ledge left of the castle gate played
+//! **missing its guard**. The cut-scene is ScriptPlayer 298's NIS 0x06000994
 //! (camera, length 1400): streams 1/3/14 are `Anim { script: 0x06000996/0x06000997/0x06000995, skin:
 //! 0x05000030 / 0x0500002e (guards), 0x05000007 (Bond) }` [D nf-extract nis 07000005.bin]. It is started
 //! by the TOUCH_ONCE plate 301 (out 0x43, lock 0xb3) at (24–26, 31–33, 71–72) — the ledge left of the

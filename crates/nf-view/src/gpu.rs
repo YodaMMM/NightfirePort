@@ -648,8 +648,8 @@ impl Renderer {
         }
         let material_tex: Vec<usize> = scene.materials.iter()
             .map(|m| m.key.and_then(|k| scene.textures.iter().position(|t| t.key == k)).map_or(0, |i| i + 1)).collect();
-        // Bug A-2a diagnostic: log every material that falls back to the 1×1 white texture (index 0), so the user
-        // can tell whether the "white-translucent character" symptom on a level is the texture fallback (key=None or
+        // Bug A-2a diagnostic: log every material that falls back to the 1×1 white texture (index 0), to
+        // tell whether the "white-translucent character" symptom on a level is the texture fallback (key=None or
         // missing TextureImage) or a blend-mode mismatch (alpha & 0xff == 0x48 = additive — see scene.rs).
         if std::env::var_os("NF_TEX_TRACE").is_some() {
             for (m, &t) in scene.materials.iter().zip(&material_tex) {
@@ -793,10 +793,10 @@ impl Renderer {
                 None => (None, None),
             }
         } else { (None, None) };
-        // cull-relax (the user's playtest, 2026-10-17: objects and rooms vanished in doorways and
+        // cull-relax (objects and rooms vanished in doorways and
         // between areas): every cel one portal beyond the walk's set draws too, so a room being
         // stepped into or looked through is never cut at the threshold. Port choice, not the game's
-        // walk — the walk is exact only where the port's cel attribution is, and the user ranks
+        // walk — the walk is exact only where the port's cel attribution is, and the port ranks
         // nothing-missing above the culled frames (the draws stay frustum-culled per draw).
         let widen = |m: Option<Vec<bool>>| m.map(|mut v| {
             let seed = v.clone();
@@ -946,7 +946,7 @@ impl Renderer {
             // parts, muzzle flashes, tracers — the Character/Effect layers) and the sky follows the
             // viewer, so those only cull under the NF_CULL test override. The HUD draws from its own
             // buffer below and is never in this list. This was A-11's vanish bug: the full cull made
-            // the truck and the HUD disappear by view direction (user playtest); scoping the cull to
+            // the truck and the HUD disappear by view direction; scoping the cull to
             // the static World layer keeps every moving thing drawn while still skipping the bulk —
             // 07000006's start view submits ~4k draws unculled (render2_live counts them).
             let test_cull = std::env::var_os("NF_CULL").is_some();
@@ -982,7 +982,7 @@ impl Renderer {
             // creates_cel placement (u32::MAX = the distance-keyed objects, gated by their
             // containing room as before).
             let cell_visible: Option<&Vec<bool>> = self.last_cell_vis.as_ref();
-            // portal-orphans (the user's 07000015 F12 004: the silo tunnel walls missing): a node no
+            // portal-orphans (07000015: the silo tunnel walls were missing): a node no
             // room's chain owns and no portal reaches can never be marked by the walk, so the cel
             // cull dropped it from every position. The game draws its unlinked objects from the
             // forced list (`View_AddForcedObjects` 0x1e5fb8) — they take only the frustum test.
@@ -1370,8 +1370,7 @@ mod tests {
 
 #[cfg(test)]
 mod shader_tests {
-    /// The WGSL must parse and validate offline (the sandbox has no GPU adapter; the main agent's
-    /// picture checks run elsewhere). fix-lighting touched the main shader's uniform struct and
+    /// The WGSL must parse and validate offline (no GPU adapter needed). fix-lighting touched the main shader's uniform struct and
     /// light block — a syntax or validation error would break every draw at Renderer::new.
     #[test]
     fn the_shaders_parse_and_validate() {
@@ -1395,9 +1394,8 @@ mod shader_tests {
 }
 
 /// The room/portal cull is ON for the MAP GEOMETRY only (cull-on, 2026-10-18; characters and items are
-/// never room-culled — the user's rule): Nightfire's maps overlap rooms in space and the portal walk is
+/// never room-culled): Nightfire's maps overlap rooms in space and the portal walk is
 /// what keeps them apart — with it off, 07000011's stairwell drew a neighbouring room's
-/// brown wall slab straight across the corridor (the user's playtest F12s 003-005, "the map cutting
-/// into itself"). The walk is widened one portal (cull-relax) so a room being stepped into is never
+/// brown wall slab straight across the corridor (the map cutting into itself). The walk is widened one portal (cull-relax) so a room being stepped into is never
 /// cut at the threshold. `NF_NOROOMCULL=1` turns it off (debug only).
 pub fn room_cull_enabled() -> bool { std::env::var_os("NF_NOROOMCULL").is_none() }

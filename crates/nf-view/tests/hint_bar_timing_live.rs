@@ -1,4 +1,4 @@
-//! hint-bar-speed-05 (task 739): the hint bar's timing — the game's tick count, the fade step,
+//! hint-bar-speed-05: the hint bar's timing — the game's tick count, the fade step,
 //! frame-rate independence, and the head-ticks-alone queue semantics.
 //!
 //! Game path, for every assertion here [M unless tagged]:
@@ -208,8 +208,7 @@ fn the_info_text_fades_17_per_tick_over_the_last_15() {
 /// The head ticks alone [M 0x1b11d8:48-73 — the out-param IS the head; the queue behind waits]:
 /// a message queued behind another displays its FULL life when it surfaces. The port used to tick
 /// every member in parallel, which spent the queued texts' lives before they ever showed — they
-/// flashed past one after another (playtest 1016-1355, "the hints are being displayed at 1,000
-/// miles an hour", 07000005).
+/// flashed past one after another (07000005).
 #[test]
 fn queued_messages_display_their_full_life() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -217,7 +216,7 @@ fn queued_messages_display_their_full_life() {
     let idle = Input::default();
     // Three pickup texts through the real drain path (`drones.taken` — the events Pickup_Handler
     // 0x18e650 emits), staggered 60 ticks apart; each carries the game's 180-tick life
-    // [M 0x18e650 shared tail, docs/reports/fix-pickups-ammo.md]. Distinct kinds → distinct texts.
+    // [M 0x18e650 shared tail]. Distinct kinds → distinct texts.
     let events = [nf_game::pickup::Taken::Armour, nf_game::pickup::Taken::Key { id: 7 }, nf_game::pickup::Taken::Bonus];
     let mut seen: Vec<(String, f32)> = Vec::new(); // (text, remaining at first sight)
     let mut last_text = String::new();

@@ -20,7 +20,7 @@
 //!
 //! The mount: 0d #225 `PowerStationGunImpBase` (137.27, 9.33, −324.66, identity rotation
 //! [D placements]). The catwalk deck floors at 7.98 around it [D coll-floor probes], so
-//! standing Bond's position rides at ≈ 9.1 — the main agent's PCSX2 spot [L]. The test places
+//! standing Bond's position rides at ≈ 9.1 — the PCSX2 spot [L]. The test places
 //! him on the deck south of the mount and walks the final approach through the real use pick.
 //!
 //! Run: `NF_ISO=… cargo test -p nf-view --test gunimp_mounted_live -- --test-threads=1`

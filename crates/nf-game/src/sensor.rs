@@ -10,7 +10,7 @@
 //! as the test object to both `Sensor_InCone` calls (0x1af97c sweep, 0x1afae0 track) — the only
 //! two call sites in the ELF, and no `switch_channels` writer is driven by NPC proximity
 //! (docs/systems/script-census.md's "trip-by-anything" plain-words summary is NOT what the binary
-//! does; see docs/reports/sensor-volumes.md). After 31 ticks (0x1e+) of seeing him it alerts
+//! does). After 31 ticks (0x1e+) of seeing him it alerts
 //! (state 1), tracks him with `Vec_Track` 0x1e20a0 at 0.05/tick, and after 2 s of continuous
 //! sight writes **1 to its out switch channel** (param 3) — the alarm signal doors/scripts and
 //! the drone AI (`DroneFunc_CheckAlarmRaised` 0x1453a8) listen for. Losing him for 61 ticks
@@ -178,7 +178,7 @@ pub struct Sensor {
     pub beep: f32,
     /// `obj+0xF6` — the consecutive seen/lost tick counter (both states use it).
     pub seen: i16,
-    /// The last detection result (for the report/tests; not a game field).
+    /// The last detection result (for tests; not a game field).
     pub last_hit: bool,
     /// `SENSOR+0x60` — set while a monitor views this sensor (the unhide) [M 0x1afcc8].
     pub unhidden: bool,
@@ -321,7 +321,7 @@ impl Sensor {
                     // not exist. The port's deterministic straight-to-sweep is the documented
                     // equivalent; on disc, 0700000b's two sensors both carry key lists [D
                     // sensor_live: 164 has 5 keys] and no shipped sensor is known to lack one (a
-                    // full-level key census is filed as a live check in the report).
+                    // full-level key census is an open live check).
                     None => self.state = 0,
                 }
             }

@@ -1,4 +1,4 @@
-//! Minimal R5900 (EE) interpreter for running the game's own static initialisers over the user's ELF, so tables the
+//! Minimal R5900 (EE) interpreter for running the game's own static initialisers over the disc's ELF, so tables the
 //! game builds at boot (`weapon_data`, filled by `_GLOBAL_$I$weapon_data` → `gcc2_compiled.` 0x1b3488) can be read
 //! without committing their bytes. Only the instructions those initialisers use are implemented; anything else is an
 //! error, not a guess. `memset` (the only call they make) is run natively. Spec: docs/formats/weapon-data.md.

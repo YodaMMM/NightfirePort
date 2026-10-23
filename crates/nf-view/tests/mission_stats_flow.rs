@@ -53,7 +53,7 @@ fn the_0x5e_action_opens_stats_and_back_returns() {
 }
 
 /// `stats_enter` against a live `Progress`: the rows land on the front end and the page draw
-/// carries them (numbers/ids only — the pixel compare is the main agent's).
+/// carries them (numbers/ids only — no pixel compare here).
 #[test]
 fn stats_enter_fills_the_rows_and_the_draw_takes_them() {
     let font = test_font();

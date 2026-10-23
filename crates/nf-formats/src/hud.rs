@@ -32,7 +32,7 @@ impl Font {
     ///
     /// Iterates chars, not bytes [M: the game's renderer walks NUL-terminated byte strings — one glyph per byte;
     /// `Lang::parse` re-encodes the bank's CP-1252 bytes as UTF-8, so a byte walk split "©" (U+00A9 → C2 A9) into
-    /// glyphs 0xC2 + 0xA9 and the title's legal line read "Â©" — the main agent's 2026-10-13 render]. Chars restore
+    /// glyphs 0xC2 + 0xA9 and the title's legal line read "Â©" — seen in a render]. Chars restore
     /// the one-glyph-per-source-byte mapping: each CP-1252 byte became exactly one char, so glyph code = char code.
     ///
     /// The returned width is `Font_GetTextExtent` 0x1ef588's extent (the same per-glyph advance walk the
@@ -297,8 +297,8 @@ impl Lang {
         let mut fixups = Vec::with_capacity(nf);
         for _ in 0..nf { fixups.push(b.u32(p)?); p += 4; }
         // The bank's text is CP-1252 (the title's legal line holds "© 2002" as the lone byte 0xA9), so a
-        // raw `str::from_utf8` in `bind` failed and the string came back empty — fix-menus' unresolved
-        // legal line (docs/reports/fix-menus.md "What's left" 7). Decode to UTF-8 here and remap every
+        // raw `str::from_utf8` in `bind` failed and the string came back empty — the unresolved
+        // legal line. Decode to UTF-8 here and remap every
         // offset, so `bind` never hits invalid UTF-8.
         let raw = &data[4..data_end];
         let mut decoded = Vec::with_capacity(raw.len() + 16);

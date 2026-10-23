@@ -1,5 +1,5 @@
-//! The 0700000c guards' AI and walking (guards-0c): playtests 1012-1723 / 1012-2105 — "All of the AI
-//! in this level is bugged as hell. The walking animation is kind of fucked too." Lists every 0c
+//! The 0700000c guards' AI and walking (guards-0c): the level's AI and walk animation were broken.
+//! Lists every 0c
 //! drone at start and over 1800 ticks: class/mode, state transitions, route, the anim state/danim
 //! and fractional frame per tick; per drone the walked distance, the anim's frame advance, and the
 //! anim-rate-vs-speed slide metric (the walk danim's natural ground speed = its root-motion table
