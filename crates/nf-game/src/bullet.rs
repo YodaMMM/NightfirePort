@@ -12,8 +12,16 @@ pub struct Bullet {
     pub dir: V3,
     /// Units per tick (`BU+0xF8` = `weapon_data+0x20`).
     pub speed: f32,
-    /// Distance travelled (`BU+0xF4`) and the weapon's range (`weapon_data+0x1C`).
+    /// Distance travelled (`BU+0xF4`).
     pub travelled: f32,
+    /// The flight death range: `weapon_data+0x1C` [M `Bullet_update` 0x12e7b0 — case 1 (state 1
+    /// via the state jump table at 0x2f4300) kills the round when `weapon+0x1C < BU+0xF4`
+    /// (0x12e95c-0x12e984); the step clamps to the +0x1C boundary (0x12f014-0x12f02c) and
+    /// `BU+0xF4` keeps the overshoot, so the next tick kills it]. NOT `BU+0xFC` — that is the
+    /// fuse/arm clock `Bullet_init` 0x12c5a0:103 writes (210.0, per-id overrides :255-283) and
+    /// `Bullet_update` counts down only for `+0x70 & 0x80000` records (0x12ee08) and id 0x45
+    /// (0x12efa4, 1.0/tick). The one deliberate deviation: the Laser watch 0x4E/0x4F keeps 210.0
+    /// at its spawn sites [S unverified — task 831's port choice; the disc +0x1C is 4.0/8.0].
     pub range: f32,
     /// Damage after `Drone_ModBulletDamage` (applied when it hits Bond).
     pub damage: f32,
@@ -276,6 +284,41 @@ pub fn damage_factor(level: u32, difficulty: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// bullet-range-210: the flight death range is `weapon_data+0x1C` [M `Bullet_update` case 1,
+    /// 0x12e95c-0x12e984 via the state jump table @0x2f4300], with the step clamped to the
+    /// +0x1C boundary [M 0x12f014-0x12f02c] and the death on the NEXT tick (BU+0xF4 keeps the
+    /// overshoot). A P2K round (`+0x1C` = 50.0 [D weapon_data 0x2bf150]) flying through open
+    /// space stops at ~50 and dies; a round whose record flies 210-class ranges (`+0x1C` 1200,
+    /// the sniper family [D]) is alive well past 150 — the same world, same tick count.
+    #[test]
+    fn p2k_round_stops_at_plus_1c_while_a_1200_record_passes_150() {
+        let world = CollisionWorld::empty();
+        let vol = PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
+        // The P2K: range 50.0 (the disc's +0x1C), speed 5.0 (+0x20 [D census rec 2]).
+        let mut p2k = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 5.0, travelled: 0.0, range: 50.0,
+            damage: 0.0, owner: 0, state: 0, weapon: 0x02, flyby: false, bounces: 0 };
+        let mut rng = crate::drone::Rng::new(3);
+        for _ in 0..40 { if p2k.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng).is_some() { break } }
+        assert_eq!(p2k.state, 2, "the P2K round dies past its +0x1C = 50 [M 0x12e95c]");
+        let along = p2k.pos[2];
+        assert!((45.0..=50.5).contains(&along), "the final position sits at the clamped +0x1C boundary, got {along}");
+        assert!(p2k.travelled > 50.0, "BU+0xF4 keeps the overshoot past the boundary [M 0x12f010]");
+        // The sniper-family record flies 1200: alive and past 150 after the same 40 ticks.
+        let mut sn = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 5.0, travelled: 0.0, range: 1200.0,
+            damage: 0.0, owner: 0, state: 0, weapon: 0x1e, flyby: false, bounces: 0 };
+        let mut rng2 = crate::drone::Rng::new(3);
+        for _ in 0..40 { if sn.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng2).is_some() { break } }
+        assert_eq!(sn.state, 1, "the 1200 record's round is still flying");
+        assert!(sn.pos[2] >= 150.0, "it passes 150 (got {}), the range the 831 note expected the P2K to fly", sn.pos[2]);
+        // The clamp is exact: a 1.0-speed round with range 50 lands its FINAL position within one
+        // step of 50.0 [M 0x12f020-0x12f02c clamps the step to the boundary].
+        let mut slow = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 1.0, travelled: 0.0, range: 50.0,
+            damage: 0.0, owner: 0, state: 0, weapon: 0x02, flyby: false, bounces: 0 };
+        let mut rng3 = crate::drone::Rng::new(3);
+        for _ in 0..80 { if slow.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng3).is_some() { break } }
+        assert!((slow.pos[2] - 50.0).abs() < 1.01, "the clamped boundary: {} vs 50.0", slow.pos[2]);
+    }
 
     /// fields-player: the armour gate of `Player_HandlePain`'s pain-type switch
     /// [M 0x1902c8:84-104]: ONLY type 0 (the default/bullet arm) lets armour absorb;

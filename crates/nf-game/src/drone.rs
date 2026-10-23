@@ -11926,14 +11926,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.swoosh_create(from, from, i16::from_le_bytes([w[0x76], w[0x77]]), 0x0200_0918, 1)
                 } else { None }
             };
-            // [M Bullet_init 0x12c5a0 — `pfVar3[0x3f] = 210.0`]: the bullet's death cap is the
-            // HITTEST's range `BU+0xFC` (`Bullet_update` disasm 0x12efa4 reads it per tick), a
-            // 210.0 default with per-id overrides (0x3b/0x69/0x37 [M :255-283]) — NOT the record's
-            // +0x1C (the use/fire distance gate). The watch 0x4E/0x4F carries +0x1C = 4.0 [L
-            // ee_start_05.bin @ weapon_data 0x2bf150] — on +0x1C the beam's rounds die at the
-            // muzzle (the user's "the laser isn't accurate": the bullet stream never reached the
-            // locks and only the aim-line stand-in burned). The watch gets the game's 210.0; the
-            // other weapons keep the port's +0x1C model (a port-wide question, the report's note).
+            // bullet-range-210 CORRECTION of the 831 note below: the flight death range IS the
+            // record's +0x1C — [M Bullet_update 0x12e7b0 case 1 (state 1 via the state jump table
+            // at 0x2f4300) kills the round when weapon+0x1C < BU+0xF4 (0x12e95c-0x12e984); the
+            // step clamps to the +0x1C boundary at 0x12f014-0x12f02c and the next tick kills].
+            // `BU+0xFC` is the fuse/arm clock: Bullet_init 0x12c5a0:103 writes 210.0 (overrides
+            // 0x3b/0x69/0x37 [:255-283], the 300.0 +0x70&0x10000 arm :216-222) and Bullet_update
+            // counts it down ONLY for +0x70 & 0x80000 records (0x12ee08) and id 0x45 (0x12efa4 —
+            // the arm 831 cited; 1.0/tick from 0x30D0D8) — never as a flying round's death cap.
+            // The watch 0x4E/0x4F keeps 210.0 [S unverified: task 831's port choice, kept because
+            // the merged laser tests ride it; the disc rule is +0x1C = 4.0/8.0 [D weapon_data
+            // 0x2bf150] and the game's beam then advances 4.0/tick through the per-tick refire —
+            // live check: gdbwatch a held watch's BU+0xF4 (predicted 4.0/segment, +0xFC unused)].
             let base_id = u16::from_le_bytes([w[0x02], w[0x03]]);
             let bullet_range = if matches!(base_id, 0x4e | 0x4f) { 210.0 } else { f(0x1c) };
             self.player_bullets.push(PlayerBullet {
@@ -12011,14 +12015,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.swoosh_create(from, from, i16::from_le_bytes([w[0x76], w[0x77]]), 0x0200_0918, 1)
                 } else { None }
             };
-            // [M Bullet_init 0x12c5a0 — `pfVar3[0x3f] = 210.0`]: the bullet's death cap is the
-            // HITTEST's range `BU+0xFC` (`Bullet_update` disasm 0x12efa4 reads it per tick), a
-            // 210.0 default with per-id overrides (0x3b/0x69/0x37 [M :255-283]) — NOT the record's
-            // +0x1C (the use/fire distance gate). The watch 0x4E/0x4F carries +0x1C = 4.0 [L
-            // ee_start_05.bin @ weapon_data 0x2bf150] — on +0x1C the beam's rounds die at the
-            // muzzle (the user's "the laser isn't accurate": the bullet stream never reached the
-            // locks and only the aim-line stand-in burned). The watch gets the game's 210.0; the
-            // other weapons keep the port's +0x1C model (a port-wide question, the report's note).
+            // bullet-range-210 CORRECTION of the 831 note below: the flight death range IS the
+            // record's +0x1C — [M Bullet_update 0x12e7b0 case 1 (state 1 via the state jump table
+            // at 0x2f4300) kills the round when weapon+0x1C < BU+0xF4 (0x12e95c-0x12e984); the
+            // step clamps to the +0x1C boundary at 0x12f014-0x12f02c and the next tick kills].
+            // `BU+0xFC` is the fuse/arm clock: Bullet_init 0x12c5a0:103 writes 210.0 (overrides
+            // 0x3b/0x69/0x37 [:255-283], the 300.0 +0x70&0x10000 arm :216-222) and Bullet_update
+            // counts it down ONLY for +0x70 & 0x80000 records (0x12ee08) and id 0x45 (0x12efa4 —
+            // the arm 831 cited; 1.0/tick from 0x30D0D8) — never as a flying round's death cap.
+            // The watch 0x4E/0x4F keeps 210.0 [S unverified: task 831's port choice, kept because
+            // the merged laser tests ride it; the disc rule is +0x1C = 4.0/8.0 [D weapon_data
+            // 0x2bf150] and the game's beam then advances 4.0/tick through the per-tick refire —
+            // live check: gdbwatch a held watch's BU+0xF4 (predicted 4.0/segment, +0xFC unused)].
             let base_id = u16::from_le_bytes([w[0x02], w[0x03]]);
             let bullet_range = if matches!(base_id, 0x4e | 0x4f) { 210.0 } else { f(0x1c) };
             self.player_bullets.push(PlayerBullet {
