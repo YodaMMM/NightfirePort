@@ -8,7 +8,7 @@ and continues at once. ("log" mode only prints in PCSX2 developer builds, so bre
 Usage: python -I tools/trace/gdbwatch.py <start> <end> <read|write|readwrite> [--hits N] [--seconds S]
   Prints a table: PC, function (+offset), hit count. Example (the HUD switch timer BL+0x95E, 1 byte):
     python -I tools/trace/gdbwatch.py 0x016cfa4e 0x016cfa4f write --seconds 20
-The game must be running in the GDB-server PCSX2 (C:\\Users\\Player\\Downloads\\PS2\\PCSX2-gdb), EE server on 10501.
+The game must be running in the GDB-server PCSX2 (NF_PCSX2_GDB), EE server on 10501.
 """
 import bisect
 import os

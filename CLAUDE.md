@@ -30,8 +30,8 @@ logic, not an emulator wrapper or a static recompiler. Read `docs/PLAN.md` first
   by measuring.
 - **Ask the user before** installs, downloads or anything outward-facing. Otherwise keep going. Stop and report
   after 3 identical failed attempts.
-- Don't touch `C:\Users\Player\Desktop\RC2Port` or `RC2Recomp` (the Ghidra install under `RC2Recomp\tools` is used
-  read-only).
+- Don't touch sibling projects outside this repo (`CLAUDE.local.md` lists them on a given machine); the Ghidra install
+  is used read-only.
 
 ## Licences (decision per project)
 
@@ -49,17 +49,19 @@ logic, not an emulator wrapper or a static recompiler. Read `docs/PLAN.md` first
 | vgmstream | ISC | reuse allowed with notice |
 | bethington/ghidra-mcp | Apache-2.0 | tool use only |
 
-## Local paths
+## Local setup
 
-- **User's ISO:** `C:\Users\Player\Downloads\PS2\007 - Nightfire (USA).iso`
-- **Ghidra:** `C:\Users\Player\Desktop\RC2Recomp\tools\ghidra_12.1.4_PUBLIC` (+ ghidra-emotionengine-reloaded),
-  JDK `C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot`. Project: `work/ghidra/NightfirePort.gpr`
+Machine-specific paths live in `CLAUDE.local.md` (git-ignored, never committed). The tools read them from
+environment variables: `NF_ISO` (the disc image), `NF_GHIDRA` / `NF_GHIDRA_TOOLS` (the Ghidra install),
+`NF_PCSX2`, `NF_PCSX2_RESUME`, `NF_PCSX2_SSTATES`, `NF_PCSX2_GDB` (PCSX2 and its GDB build).
+
+- **Ghidra:** 12.1.4 + ghidra-emotionengine-reloaded, JDK 21. Project: `work/ghidra/NightfirePort.gpr`
   (built by `tools/ghidra/build-project.ps1`); decomp export: `work/decomp/<program>/index.tsv`.
-- **Ghidra MCP:** `tools/ghidra/start-ghidra-mcp.ps1` (port 8089; stop RC2's server first), then
+- **Ghidra MCP:** `tools/ghidra/start-ghidra-mcp.ps1` (port 8089), then
   `connect_instance("NightfirePort")`. Don't run `build-project.ps1` while it holds the project.
 - **Cross-checks:** `tools/crosscheck/iso-7zip.sh`, `nfre_files_bin.py` (nightfire-re venv), `unviv_bigf.py`
   (unvivtool venv); third-party repos and venvs live in `work/third_party/` (never committed).
-- **PCSX2 (portable):** `C:\Users\Player\Downloads\PS2\PCSX2\pcsx2-qt.exe`, PINE slot 28011 (needs a PCSX2 restart
+- **PCSX2 (portable, `NF_PCSX2`):** PINE slot 28011 (needs a PCSX2 restart
   after enabling). Launch from PowerShell with Windows paths (`-statefile "<…\sstates\SLUS-20579 (5B86BB62).resume.p2s>"
   -- "<iso>"`); Git Bash forward-slash paths fail ("does not exist" dialog). Consistent memory snapshots:
   `python tools/trace/snapshot.py 9 work/ee_snapshot.bin` (saves state slot 9 — never the user's slots 1/resume —

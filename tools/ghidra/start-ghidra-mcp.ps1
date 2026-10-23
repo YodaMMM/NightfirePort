@@ -6,7 +6,7 @@
 param([int]$Port = 8089, [string]$Program = 'ACTION.ELF')
 
 $root   = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-$tools  = 'C:\Users\Player\Desktop\RC2Recomp\tools'
+$tools  = $env:NF_GHIDRA_TOOLS  # the folder holding the Ghidra install and ghidra-mcp (set NF_GHIDRA_TOOLS)
 $ghidra = "$tools\ghidra_12.1.4_PUBLIC"
 $jar    = "$tools\ghidra-mcp\build\libs\GhidraMCP-7.0.0.jar"
 $env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot'

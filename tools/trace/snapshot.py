@@ -15,7 +15,7 @@ import sys
 import time
 import zipfile
 
-SSTATES = r"C:\Users\Player\Downloads\PS2\PCSX2\sstates"
+SSTATES = os.environ.get("NF_PCSX2_SSTATES", "")  # PCSX2's sstates folder
 
 
 def save_state(slot, port=28011):

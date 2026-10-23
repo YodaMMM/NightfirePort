@@ -21,3 +21,8 @@ suite*.log
 # probe output (disc textures) from crates/nf-view/tests/ctx2_probe*.rs
 /crates/ctx2-dump/
 __pycache__/
+
+# machine-local (never commit)
+CLAUDE.local.md
+__pycache__/
+*.pyc

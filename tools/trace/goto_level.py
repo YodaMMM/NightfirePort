@@ -24,9 +24,9 @@ STACK = 0x2C7398
 STACK_INDEX = 0x30CECE
 IS_WARM_RESET = 0x30D001
 DRONE_LIST = 0x298E14
-PCSX2 = r"C:\Users\Player\Downloads\PS2\PCSX2\pcsx2-qt.exe"
-RESUME = r"C:\Users\Player\Downloads\PS2\PCSX2\sstates\SLUS-20579 (5B86BB62).resume.p2s"
-ISO = r"C:\Users\Player\Downloads\PS2\007 - Nightfire (USA).iso"
+PCSX2 = os.environ.get("NF_PCSX2", "")  # pcsx2-qt.exe
+RESUME = os.environ.get("NF_PCSX2_RESUME", "")  # the resume save state (.p2s)
+ISO = os.environ.get("NF_ISO", "")
 
 
 def connect(launch):

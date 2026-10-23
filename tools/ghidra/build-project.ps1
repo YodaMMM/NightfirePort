@@ -8,7 +8,7 @@
 # overlays that took level 0 from 180 to 3,722 functions (RC2Port WORKLOG 0008). Programs already exported are skipped.
 param(
     [string]$ElfDir = '',
-    [string]$Ghidra = 'C:\Users\Player\Desktop\RC2Recomp\tools\ghidra_12.1.4_PUBLIC',
+    [string]$Ghidra = $env:NF_GHIDRA,  # the Ghidra install folder (set NF_GHIDRA)
     [switch]$Force
 )
 $ErrorActionPreference = 'Stop'

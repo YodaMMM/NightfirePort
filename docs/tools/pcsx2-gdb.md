@@ -7,7 +7,7 @@ Remote Serial Protocol server for the EE (127.0.0.1:10501) and the IOP (10502), 
 
 ## The local build (2026-10-12)
 
-- Source: `C:\Users\Player\Desktop\pcsx2-gdb` (the fork at 7235a04 = official PCSX2 056de99 + 11 commits). The fork's diff
+- Source: `<your pcsx2-gdb checkout>` (the fork at 7235a04 = official PCSX2 056de99 + 11 commits). The fork's diff
   against official was reviewed before building: the servers are hard-coded to 127.0.0.1; no process launching or
   downloads; file deletions only in its own time-save pruning window.
 - **Local fix**: `pcsx2/DebugTools/GDBServer.cpp` `split_args` kept a `string_view` into a destroyed temporary, so every
@@ -17,7 +17,7 @@ Remote Serial Protocol server for the EE (127.0.0.1:10501) and the IOP (10502), 
   LF endings made `cmd` silently skip half the script. `build-shaderc-only.bat` re-runs shaderc with retried renames,
   because Defender briefly locks freshly extracted folders.
 - PCSX2: `build-pcsx2-nf.bat` (CMake + Ninja, Release, Qt).
-- Install: `C:\Users\Player\Downloads\PS2\PCSX2-gdb` (portable; its own copies of the BIOS, inis, memcards and the resume
+- Install: `<your PCSX2-gdb folder>` (`NF_PCSX2_GDB`) (portable; its own copies of the BIOS, inis, memcards and the resume
   state; `[EmuCore] EnableEEGDBServer/EnableIOPGDBServer = true`, ports 10501/10502; PINE stays on 28011, so the
   existing tools work against either PCSX2, one at a time). A separate regular PCSX2 install is left untouched.
 

@@ -10,7 +10,7 @@ number on another disc.
 | Region / video | NTSC-U, NTSC | *measured:* `SYSTEM.CNF` |
 | Disc version | 1.00 | *measured:* `SYSTEM.CNF` `VER=1.00` |
 | Volume creation date | 2002-10-20 00:32:12 | *measured:* PVD+813 `2002102000321200` |
-| Image | `C:\Users\Player\Downloads\PS2\007 - Nightfire (USA).iso`, 2,439,315,456 bytes = 1,191,072 sectors (matches PVD volume size) | *measured* |
+| Image | `007 - Nightfire (USA).iso` (NTSC-U), 2,439,315,456 bytes = 1,191,072 sectors (matches PVD volume size) | *measured* |
 | Image SHA-1 | `03717059f97630e9ee2fd56dcf537c6fe3ed96d1` | *measured* (`sha1sum`) |
 | Image MD5 | `008302d82a305e9ad04e349f1f6982ee` | *measured* |
 | Image CRC-32 | `848bacb6` | *measured* |
