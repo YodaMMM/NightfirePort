@@ -26,7 +26,7 @@ fn dump_cover_wedge() {
     let dy = b[1] - a[1];
     let h2 = (b[0]-a[0]).powi(2) + (b[2]-a[2]).powi(2);
     eprintln!("dxz {:.3} dy {:.3} h2+dy2 {:.3}", h2.sqrt(), dy, h2 + dy*dy);
-    eprintln!("world LOS at +1: {:?}", sim.world.line_of_sight([a[0], a[1]+1.0, a[2]], [b[0], b[1]+1.0, b[2]]));
+    eprintln!("world LOS at +1: {:?}", sim.world.line_of_sight([a[0], a[1]+1.0, a[2]], [b[0], b[1]+1.0, b[2]], nf_game::world::LOS_GUARD_VISION));
     eprintln!("world seg at feet y: {:?}", sim.world.segment(a, b));
     let (mt, hit) = nav.move_test(&sim.world, a, b, true, false);
     eprintln!("move_test near=true: {mt} hit {hit:?}");

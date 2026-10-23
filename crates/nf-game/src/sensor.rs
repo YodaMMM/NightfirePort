@@ -201,7 +201,7 @@ impl Sensor {
         if self.lens != 0 {
             let dir = dir_of(&self.matrix);
             let end = [self.pos[0] + dir[0] * self.range, self.pos[1] + dir[1] * self.range, self.pos[2] + dir[2] * self.range];
-            if world.line_of_sight(self.pos, end) && segment_hits_sphere(self.pos, end, target_sph, TARGET_RADIUS) {
+            if world.line_of_sight(self.pos, end, crate::world::LOS_PROBE_8) && segment_hits_sphere(self.pos, end, target_sph, TARGET_RADIUS) {
                 return true;
             }
         }
@@ -232,7 +232,7 @@ impl Sensor {
         // port's `line_of_sight` is the same shared walk drone vision uses (static + missile cage
         // + dynamic geo); the mask-bit material/node drops are the sight-mask work's documented
         // deltas (world.rs `segment_masked`).
-        world.line_of_sight(self.pos, player.pos)
+        world.line_of_sight(self.pos, player.pos, crate::world::LOS_SENSOR)
     }
 
     /// One `Sensor_Update` 0x1af618 tick.

@@ -98,7 +98,7 @@ fn run_at(dist: f32) -> (Option<u32>, bool) {
     let bisector = interp(&s164.keys, 0, s164.limit, 0.5, true).expect("sensor 164 has a sweep");
     let dir = [bisector[2][0], bisector[2][1], bisector[2][2]];
     let at = [s164.pos[0] + dist * dir[0], s164.pos[1] + dist * dir[1], s164.pos[2] + dist * dir[2]];
-    assert!(l.world.line_of_sight(s164.pos, at), "precondition: clear static LOS to the {dist} spot [M 0x1af4f0:84-87]");
+    assert!(l.world.line_of_sight(s164.pos, at, nf_game::world::LOS_SENSOR), "precondition: clear static LOS to the {dist} spot [M 0x1af4f0:84-87]");
     let mut bond = Player { pos: [at[0], at[1] - 0.9, at[2]], ..Default::default() };
     bond.target = bond.pos;
     bond.sph = at; // the world-sphere centre the cone test reads [M 0x1af4f0:61]

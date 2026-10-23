@@ -201,14 +201,14 @@ fn the_q_claw_auto_aim_reaches_past_the_gun_range() {
         if (b.pos[1] - g[1]).abs() > 3.0 { continue; }
         let head = [b.pos[0], b.pos[1] + 1.0, b.pos[2]];
         let target = [g[0], g[1] + 0.6, g[2]];
-        if sim.world.line_of_sight(head, target) { spot = Some((b, head, target)); break; }
+        if sim.world.line_of_sight(head, target, nf_game::world::LOS_PROBE_8) { spot = Some((b, head, target)); break; }
     }
     let Some((b, head, target)) = spot else { panic!("no open 30-unit spot around the guard at {g:?}") };
     sim.bond = b;
     sim.bond.yaw = yaw_to(sim.bond.pos, g);
     tick_idle(sim, 2);
     assert!((30.0 - dist(head, target)).abs() < 4.0, "the spot is ~30 units from the guard");
-    assert!(sim.world.line_of_sight(head, target), "open LOS from the spot to the guard");
+    assert!(sim.world.line_of_sight(head, target, nf_game::world::LOS_PROBE_8), "open LOS from the spot to the guard");
     // The claw out and auto-aim on (the profile's default [M profile.rs auto_aim: true]; the Sim
     // defaults it off for the raw viewer — the options path turns it on, the test mirrors that).
     // The scan runs OUTSIDE aim mode [M 0x1a7c98's aim-bit branch] — no aiming input here.

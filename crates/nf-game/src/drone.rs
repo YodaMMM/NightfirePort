@@ -2986,7 +2986,7 @@ impl Drone {
     /// port's `segment_masked` [M, world.rs]. Concrete (mats 0-21 without 0x40) still blocks.
     fn move_by(&mut self, d: &Data, step: [f32; 2]) {
         let to = [self.pos[0] + step[0], self.pos[1], self.pos[2] + step[1]];
-        let probe = |y: f32| d.world.segment_masked([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32]).is_none();
+        let probe = |y: f32| d.world.line_of_sight([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32], crate::world::LOS_PROBE_8);
         if probe(self.pos[1]) && probe(self.pos[1] + 0.5) {
             self.pos = to;
             self.blocked_reach = 0.0;
@@ -9467,7 +9467,7 @@ impl Drone {
     /// drone within 90°, or no line of sight.
     fn check_unsurrender(&self, d: &Data) -> bool {
         self.dist > 12.0 || (self.dist > 2.0 && !self.bond_armed) || self.opp_facing.abs() > std::f32::consts::FRAC_PI_2
-            || !d.world.line_of_sight(self.head(), self.opp_target)
+            || !d.world.line_of_sight(self.head(), self.opp_target, crate::world::LOS_GUARD_VISION)
     }
 
     /// `DroneAnim_CanDoAnimState`: the anim state's own danim has a script in our anim set (or set 0).
@@ -9511,7 +9511,7 @@ impl Drone {
         let to = [feet[0] + x * c + z * s, feet[1], feet[2] - x * s + z * c];
         let Some(floor) = d.world.floor_below([to[0], feet[1] + 2.0, to[2]], 6.0) else { return false };
         if (floor - feet[1]).abs() > 4.0 { return false; }
-        [0.5, 1.4].iter().all(|&h| d.world.line_of_sight([feet[0], feet[1] + h, feet[2]], [to[0], floor + h, to[2]]))
+        [0.5, 1.4].iter().all(|&h| d.world.line_of_sight([feet[0], feet[1] + h, feet[2]], [to[0], floor + h, to[2]], crate::world::LOS_PROBE_8))
     }
 
     /// `NDrone2_CanBackoff` 0x1501a0: prop 0x06, `CanDoAnimState(4)` (the port's `anim_state::BACKOFF`),
@@ -13431,7 +13431,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let dyaw = angle_difference(yaw, dv[0].atan2(dv[2]));
             if dyaw.abs() >= h { continue; }
             let dpitch = angle_difference(pitch, (dv[1] / dist).clamp(-1.0, 1.0).asin());
-            if dpitch.abs() >= v || !d.world.line_of_sight(head, p) { continue; }
+            if dpitch.abs() >= v || !d.world.line_of_sight(head, p, crate::world::LOS_SENSOR) { continue; }
             best = dist;
             found = Some((i, dyaw, dpitch));
         }
@@ -14842,7 +14842,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // crossed AI cels, walls first [M 0x15ab78]); the port swaps that for the static
                 // collision world's line of sight — the same deviation the nav `move_test`
                 // documents [S].
-                dr.los = d.world.line_of_sight(dr.head(), player.target);
+                dr.los = d.world.line_of_sight(dr.head(), player.target, crate::world::LOS_GUARD_VISION);
                 // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
                 // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
                 // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
@@ -15059,7 +15059,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let in_view = dist < 2.0 || ((o.half_fov == 0.0 || angle_difference(o.yaw, atan2_approx(dx, dz)).abs() <= o.half_fov) && dist <= o.sight_range);
                 if !in_view { continue; }
                 sight_passes += 1; // the cone pass is the counted return [M 0x176250:197-210, 0x1767d0:75]
-                if !d.world.line_of_sight(o.head(), src.head()) {
+                if !d.world.line_of_sight(o.head(), src.head(), crate::world::LOS_GUARD_VISION) {
                     if sight_passes > 4 { break 'pairs; }
                     continue;
                 }
@@ -17104,7 +17104,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // in SP (`MPSettings._388_4_ == 0`) only a PLAYER thrower (obj+0xFF == 3) broadcasts —
                         // the port is SP-only, so owner == usize::MAX.
                             let head = player.eye;
-                            let has_los = d.world.line_of_sight(head, pos);
+                            let has_los = d.world.line_of_sight(head, pos, crate::world::LOS_SENSOR);
                             // The facing yaw [M Bullet_DoTrails 0x12d890:328-330 — the flash arm
                             // `Vec_AngleDifference(atan2f(blast−player), *(f32*)(player+0x54))`]: the
                             // player object's euler facing yaw (`obj+0x54`, written by the movement
@@ -17140,7 +17140,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                     if !present || corpse { continue; }
                                     // The vicinity radius: `Vec_Dist3D(obj+0x30, blast+0x30) <= 20.0` [M 0x13a438:28-29].
                                     if (dpos[0] - pos[0]).powi(2) + (dpos[1] - pos[1]).powi(2) + (dpos[2] - pos[2]).powi(2) > 400.0 { continue; }
-                                    if !d.world.line_of_sight(dpos, pos) { continue; }
+                                    if !d.world.line_of_sight(dpos, pos, crate::world::LOS_GUARD_VISION) { continue; }
                                     self.list[i].send(d, &mut self.rng, frame, msg::FLASH);
                                 }
                             }
@@ -17322,7 +17322,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let (dx, dy, dz) = (dr.pos[0] - p[0], dr.pos[1] - p[1], dr.pos[2] - p[2]);
                 if dx * dx + dy * dy + dz * dz > radius * radius { continue; }
                 if !dr.prop(d, 0x3a) && !dr.prop(d, 0x3b) { continue; }
-                if !d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p) { continue; }
+                if !d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p, crate::world::LOS_GUARD_VISION) { continue; }
                 dr.explosive_msg = Some((p, run, ret, frame + ticks));
                 dr.send(d, rng, frame, msg::EXPLOSIVE);
             }

@@ -172,7 +172,9 @@ impl Network {
         if h2 + dy * dy > 900.0 || dy.abs() > 4.0 { return (0, None); }
         if dy.abs() > self.slope_dy && dy.abs().atan2(h2.sqrt()) > self.max_slope { return (0, None); }
         // Deviation: portal connectivity → static collision line of sight at +1.
-        if !world.line_of_sight([a[0], a[1] + 1.0, a[2]], [b[0], b[1] + 1.0, b[2]]) { return (0, None); }
+        // [S] the stand-in mask: the game's NDrone2_MoveTest 0x155330 runs AINetwork_BoundsTest only
+        // (no collision LOS) — the port's probe takes the nearest evidenced ray mask (8 | 4).
+        if !world.line_of_sight([a[0], a[1] + 1.0, a[2]], [b[0], b[1] + 1.0, b[2]], crate::world::LOS_PROBE_8) { return (0, None); }
         if !self.bounds { return (1, None); }
         self.bounds_test(a, b, near, want_hit)
     }

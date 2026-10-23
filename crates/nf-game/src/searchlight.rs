@@ -480,7 +480,7 @@ impl Searchlights {
                 let scale = a * 4.0;
                 let alpha = (a * 255.0) as u8;
                 let mut scale = scale;
-                if alpha != 0 && d.world.line_of_sight(player.eye, corona_pos) { scale *= 1.5; }
+                if alpha != 0 && d.world.line_of_sight(player.eye, corona_pos, crate::world::LOS_PROBE_8) { scale *= 1.5; }
                 let corona = &mut self.parts[c];
                 corona.pos = corona_pos;
                 corona.drawn = true;
