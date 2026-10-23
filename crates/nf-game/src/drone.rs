@@ -1582,6 +1582,12 @@ pub struct Drone {
     /// charge shatters it at 0xB+911.] Reset at the head of `Drones::tick_inner`, set in
     /// `root_motion`.
     pub scripted_move: bool,
+    /// The length of the step this tick's movement probe REJECTED (0 on an unblocked move;
+    /// reset by `move_by`). The pane-drain reader: the game's movement pass corrects +0x30 up
+    /// to the shape it engages, so the engaged contact still drains [M 0x12bfd8:26-27]; the
+    /// port's probe leaves the body put — the rejected step stands in for the absorbed movement
+    /// [S breakable.rs drone_step].
+    pub blocked_reach: f32,
     /// `Drone+0x174`: the drone's allocated slot in the shared target registry (NPCGlobals,
     /// `DroneFunc_AllocateTargetID` 0x141f28 via `NDrone2_SetOpponent` 0x1422d0; 0xff = none).
     /// The pool lives on `Drones::targets` — docs/systems/dronefunc-rest.md.
@@ -1857,6 +1863,7 @@ impl Drone {
             recoil_weapon: weapon == 0x1c || weapon == 0x1d,
             // glass-breach-guards-4.
             scripted_move: false,
+            blocked_reach: 0.0,
             // +0x174 — the shared target registry slot, allocated on first sight.
             target_id: 0xff,
             // BodyGlow_Create 0x1ac158 — every guard spawn glows on the shipped path (the
@@ -2946,6 +2953,13 @@ impl Drone {
         let probe = |y: f32| d.world.line_of_sight([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32]);
         if probe(self.pos[1]) && probe(self.pos[1] + 0.5) {
             self.pos = to;
+            self.blocked_reach = 0.0;
+        } else {
+            // The probe rejected the step: the body's collision engaged whatever the ray crossed
+            // this tick. The game's movement pass corrects +0x30 up to the shape; the port's
+            // reject leaves the body put — the attempted step's length is the pane drain's
+            // measure of the absorbed movement [S breakable.rs drone_step].
+            self.blocked_reach = (step[0] * step[0] + step[1] * step[1]).sqrt();
         }
     }
 
@@ -14465,7 +14479,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let dx = dr.pos[0] - player.pos[0]; let dy = dr.pos[1] - player.pos[1]; let dz = dr.pos[2] - player.pos[2];
                 dr.dist_to_player = [(dx * dx + dy * dy + dz * dz).sqrt(), 100000.0, 100000.0, 100000.0]; }
         }
-        { let _p = crate::prof::scope("phase: bullets"); self.update_player_bullets(d, player.pos); }
+        { let _p = crate::prof::scope("phase: bullets"); self.breaks.frame = self.frame; self.update_player_bullets(d, player.pos); }
         // The locks' idle arm (`Lock_Update` 0x1ae3d8 case 0 kind 1's tail): the +1/tick refill of
         // the burn bytes once the 2-tick grace runs out [M :107-121] — the partial burn heals. The
         // game runs `Lock_Update` per tick in the control pass; the contact side already ran above
@@ -15172,6 +15186,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // bolt (ch 137) are solid at their posed matrix, like the doors. Id: bit 41 + the ss index.
             parts.extend(drones.sss.list.iter().enumerate().filter(|(_, x)| x.hash != 0)
                 .map(|(k, x)| (0x200_0000_0000 | k as u64, x.hash, x.matrix)));
+            // The breakable panes (placement 0x20) are solid while alive: the game's pane object
+            // stands on its own collision block (Collide_PickObj walks the cel-linked objects)
+            // and a KILLED one leaves the world — obj+0xFE |= 1, "the collision goes away"
+            // [M Break_Kill 0x12b970:60]. The port holds them in the SAME per-tick set_dynamic
+            // set as the doors/SS shapes: a kill drops the part and the rebuild leaves the pane
+            // out of the collision world (no re-injection machinery; the unchanged-matrix fast
+            // path keeps the rest ticks cheap). Id: bit 42 + the breakable list index (stable —
+            // kills only flag; the list never reorders). A JUST-killed pane keeps its part for
+            // the death tick: the game's collide pass registers the killing bullet's contact
+            // BEFORE Break_Kill takes the collision away (the contact list is the collide pass's
+            // product, Break_Update walks it same tick), so the tick's deferred HITDATA re-trace
+            // still sees the sheet.
+            parts.extend(drones.breaks.list.iter().enumerate()
+                .filter(|(_, b)| (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
+                .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix)));
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,
@@ -17081,7 +17110,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let level_01 = d.level == 0x0700_0001;
         for (dr, from) in self.list.iter().zip(drone_from) {
             if !dr.present || dr.corpse { continue; }
-            for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, &mut self.rng) {
+            for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, dr.blocked_reach, &mut self.rng) {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 let id = u32::from(k.sound);
                 self.audio.play3d(id, k.pos, None);
@@ -17461,6 +17490,7 @@ mod tests {
             // fix-cover-remainder: the scary-object flee family.
             scared: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
             scripted_move: false,
+            blocked_reach: 0.0,
             // +0x174 — the shared target registry slot.
             target_id: 0xff,
         };
