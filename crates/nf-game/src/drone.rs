@@ -6354,6 +6354,7 @@ impl Drone {
             self.damage_taken = 1.0; // the hit-effect multiplier +0x14C resets on every change [M-dis 0x17207c-88]
             self.entered = frame;
             self.log.push((frame, n));
+            if std::env::var("TASE_DBG").is_ok() { eprintln!("[st] f{} i{} skin {:x} {:#x}->{:#x} at ({:.1},{:.1},{:.1})", frame, self.index, self.skin, self.prev_state, n, self.pos[0], self.pos[1], self.pos[2]); }
             if state::UNAWARE.contains(&n) { self.watching = true; } // the new state's ENTER arm re-sets it [M case 1]
             self.handle(d, rng, frame, n, msg::ENTER);
             if let Some(m2) = self.self_msg.take() { self.send(d, rng, frame, m2); }
@@ -7889,10 +7890,14 @@ impl Drone {
                 self.timer_c = Some(frame + 60);
                 true
             }
-            // [M 0x1650a0:30-48] UPDATE / TIMER_C return to Attack 0x56 the moment the opponent
-            // (`+0x170`) is non-null — the ally-heard-noise port's `has_opponent` (the drone
-            // opponent or the +0x238 grace for team 2); the old `bond_alive` stand-in predates it.
-            (NO_OPPONENT, msg::UPDATE) => { if self.has_opponent(frame) { self.set_state(ATTACK); } true }
+            // [M 0x1650a0:30-49] case 3: `+0x170 != 0` returns to Attack 0x56. A team-2 ally holds a
+            // drone opponent (FindOpponent's drone arm, `has_opponent` incl. the +0x238 grace); every
+            // other drone's opponent is Bond, re-pointed only by a fresh sighting (`seen`) — the old
+            // bond_alive fold bounced a living-Bond 0x60 straight back out.
+            (NO_OPPONENT, msg::UPDATE) => {
+                if (self.team == 2 && self.has_opponent(frame)) || (self.team != 2 && self.seen) { self.set_state(ATTACK); }
+                true
+            }
             (NO_OPPONENT, msg::TIMER_C) => {
                 if self.has_opponent(frame) { self.set_state(ATTACK); } else { self.timer_c = Some(frame + 60); }
                 true
@@ -9710,6 +9715,23 @@ impl Drone {
         // (30 ticks since the last seen stamp) expired → NoOpponent 0x60. Team 1 keeps its
         // implicit player opponent (Bond alive) — the gate never fires for them.
         if !self.has_opponent(frame) { return NO_OPPONENT; }
+        // The router's head [M 0x148338:19-31]: the opponent pointer gone (+0x170 == 0 —
+        // FindOpponent 0x1424e0:149-157 clears it the tick CanSeeObject fails) with no fresh
+        // +0x238 hold (0, or 30 frames stale — HasOpponent 0x14ad58) returns NoOpponent 0x60:
+        // combat cannot outlast the hold. The switch's own cases (0x58/0x68/0x70 minus 0x58 =
+        // 0x00/0x10/0x18 [M 0x148338:39-44]) route COMBAT and both fire states through here.
+        // The port's `seen`/`unseen_ticks` are the same sight machinery (unseen_ticks = the
+        // game's +0x274 ticks-since-LOS [M 0x176a28:216-223]); the >15 gate is the port's
+        // established stand-in for the hold window (the same gate that enters 0x5c) // [S] the
+        // window length: the game's hold is the +0x238 30-frame stamp, the port reuses 15.
+        // Without this exit the port's 0x5c (whose UPDATE is ONLY SeenAndAttacking + the
+        // router [M 0x164838:26-35]) parks a sight-lost guard forever — the 07000001 hall
+        // guard's 56k-tick COMBAT_NO_SIGHT freeze that stalled both escort walks.
+        if matches!(from, COMBAT | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | AIM_STAND_FIRE | AIM_CROUCH_FIRE)
+            && !self.seen && self.unseen_ticks > 15
+        {
+            return NO_OPPONENT;
+        }
         if self.in_transition() { return 0; }
         let follow = !matches!(from, AIM_STAND_FIRE | AIM_CROUCH_FIRE);
         let mv = self.move_to_object(d, self.engage_range.min(6.0), follow);
@@ -14324,7 +14346,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // [M 0x1424e0:148-156]; a drone-class one also re-checks the alive filter [M :157-166].
             let mut held_ok = false;
             if let Some(cur) = dr.opp_drone {
-                if cur < n && alive(cur) && d.world.line_of_sight(dr.head(), self.list[cur].head()) {
+                if cur < n && alive(cur) && d.world.line_of_sight(dr.head(), self.list[cur].head(), crate::world::LOS_GUARD_VISION) {
                     held_ok = true;
                 }
             }
@@ -14343,7 +14365,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let dx = cd.pos[0] - dr.pos[0];
                 let dz = cd.pos[2] - dr.pos[2];
                 let cheap = alive(c) && cd.team == 1 && dx * dx + dz * dz < range2;
-                if cheap && d.world.line_of_sight(dr.head(), cd.head()) { pick = Some(c); break; }
+                if cheap && d.world.line_of_sight(dr.head(), cd.head(), crate::world::LOS_GUARD_VISION) { pick = Some(c); break; }
                 if budget_used || cheap { break; } // the counter rule [M :259-262]
             }
             cursors[i] = stop;
@@ -17430,6 +17452,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if !dr.present || dr.corpse { continue; }
             for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, dr.blocked_reach, &mut self.rng) {
                 self.break_kills.push((k.placement, k.kind, k.sound));
+                if std::env::var("TASE_DBG").is_ok() { eprintln!("[brk-contact] f{} placement {} kind {} sound {} at ({:.1},{:.1},{:.1})", self.frame, k.placement, k.kind, k.sound, k.pos[0], k.pos[1], k.pos[2]); }
                 let id = u32::from(k.sound);
                 self.audio.play3d(id, k.pos, None);
                 if let Some(t) = d.sfx {

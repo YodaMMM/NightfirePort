@@ -1324,7 +1324,7 @@ fn route(iso: &IsoImage, level_name: &str, from: [f32; 3], to: [f32; 3]) -> Resu
     let path = nav.nav_path_for(from);
     println!("navigation path for the start: {:?}", path.map(|p| (p, &nav.paths[p].name)));
     println!("direct move test: {:?}", nav.move_test(&world, from, to, true, false));
-    println!("  collision LOS at +1: {}, bounds test (near): {:?}, bounds (far): {:?}", world.line_of_sight([from[0], from[1] + 1.0, from[2]], [to[0], to[1] + 1.0, to[2]]),
+    println!("  collision LOS at +1: {}, bounds test (near): {:?}, bounds (far): {:?}", world.line_of_sight([from[0], from[1] + 1.0, from[2]], [to[0], to[1] + 1.0, to[2]], nf_game::world::LOS_GUARD_VISION),
         nav.bounds_test(from, to, true, false), nav.bounds_test(from, to, false, false));
     for (pi, p) in nav.paths.iter().enumerate().filter(|(_, p)| p.kind & 0xd == 0) {
         println!("  path {pi} {:?}: target nodes {:?}", p.name, nav.target_nodes(&world, pi, to, 36.0));
