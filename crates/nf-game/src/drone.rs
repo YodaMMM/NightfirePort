@@ -3034,6 +3034,10 @@ impl Drone {
             // InterogateAssistWait 0x161860 cases 6-9/0x17-0x19 → (0x56, 1) [M].
             INTEROGATE => (ATTACK, false),
             INTEROGATE_ASSIST_WAIT => (ATTACK, true),
+            // EnemyMission 0x15e1e8: the same pair — cases 6/8 → HandleImpact(0x56, 0), the
+            // 7/9/0x17/0x18/0x19 group (0x56, 1) [M 0x15e1e8:84-96,120]; the group's allow is
+            // raised in `on_explosion` below.
+            state::ENEMY_MISSION => (ATTACK, false),
             _ => return None,
         })
     }
@@ -3180,6 +3184,8 @@ impl Drone {
             // HostageKiller(Attack)'s 7/9/0x17/0x18/0x19 group arm passes allow = 1 [M
             // 0x15c728:47-62, 0x15c940:66-85] — the blast staggers the executioner too.
             | HOSTAGE_KILLER | HOSTAGE_KILLER_ATTACK
+            // EnemyMission's 7/9/0x17/0x18/0x19 group is (0x56, 1) like Idle's [M 0x15e1e8:87-95].
+            | state::ENEMY_MISSION
             // escort-lead-substates (835): the ally family's group arm (resume, 1).
             | ALLY_LEAD_INIT | ALLY_LEAD | PLAYER_IN_WAY | LEAD_HIDE | ALLY_LEAD_WAIT | LEAD_MISSION_WAIT | LEAD_BOND_COMBAT
             | ALLY_LEAD_DONE | FOLLOW_INIT | FOLLOW | FOLLOW_WAIT | FOLLOW_DONE | GO_TO_GOAL_ALLY);
@@ -6212,7 +6218,8 @@ impl Drone {
                 | DRONE_STUCK | OPEN_DOOR | KICK_OBJECT | ACTION_ANIM | STAND_FIDDLE | RUN_AWAY_FROM_OBJECT
                 | HIDE_FROM_SCARY_OBJECT | RUN_FOR_COVER | UNDER_COVER_INIT | UNDER_COVER_IDLE | UNDER_COVER_AIM
                 | UNDER_COVER_FIRE | UNDER_COVER_SNIPER_FIRE | UNDER_COVER_SNIPER_RELOAD | UNDER_COVER_RETURN
-                | UNDER_COVER_LEAVE_NOW | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | ALT_ATTACK) {
+                | UNDER_COVER_LEAVE_NOW | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | ALT_ATTACK
+                | state::ENEMY_MISSION) {
             return false;
         }
         // `PlrStat_LogShotHitEnemy(0)` — UNCONDITIONAL here (no team gate; the msg-8 route's gate
@@ -6854,8 +6861,9 @@ impl Drone {
             // time, then Attack (`+0x4F8` |= 0x4000000 | 0x40000000 [M :113-114] — the alarm-pending bit feeds
             // FirstAttack's FirstAlertState consult). The assist-wait state routes msg 0x1e through the same
             // EnemyAlerts [M 0x161860 case 0x1e] — its ALARM lands here (the INTEROGATE/ASSIST_WAIT arm below keeps
-            // the other alert kinds).
-            (IDLE | ALERT | PATROL | ALERT_TO_POSITION | SEARCH_AREA | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | INTEROGATE_ASSIST_WAIT, msg::ALARM) => {
+            // the other alert kinds); EnemyMission's case 0x1e is the same EnemyAlerts arm [M 0x15e1e8:102-112].
+            (IDLE | ALERT | PATROL | ALERT_TO_POSITION | SEARCH_AREA | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | INTEROGATE_ASSIST_WAIT
+                | ENEMY_MISSION, msg::ALARM) => {
                 if !self.investigating { self.resume_state = s; self.home = self.feet(); }
                 self.alert_pending |= 0x4000_0000;
                 self.set_state(ATTACK);
@@ -8174,7 +8182,7 @@ impl Drone {
                             self.desired_yaw = self.yaw_to_opp;
                             self.call_anim(d, anim_state::AIM_STAND, 0, 0);
                         } else {
-                            self.set_stand_idle(d, rng, frame, true); // [M 0x15e1e8:60 SetStandIdleAnim(1)]
+                            self.set_stand_idle(d, rng, frame, false); // [M 0x15e1e8:60 SetStandIdleAnim(1) — the game arg skips a live stand window (0x13ca68:19-21), the port's force=false]
                         }
                     }
                     return true;
@@ -8201,13 +8209,17 @@ impl Drone {
                 true
             }
             // The impact family [M 0x15e1e8:84-96 + 120]: `HandleImpact(…, 0x56, allow)` — msgs 6/8
-            // allow 0, 7/9/0x17/0x18/0x19 allow 1 (the Idle 0x15bf18:97-112 split).
+            // allow 0, 7/9/0x17/0x18/0x19 allow 1 (the Idle 0x15bf18:97-112 split). The LIVE route is
+            // the shared dispatch (`impact_args` → (0x56, 0), the `on_explosion` group's allow 1, the
+            // `on_dart_impact` whitelist — all carry ENEMY_MISSION now); these rows mirror the
+            // per-state documentation idiom the INVESTIGATE rows set.
             (ENEMY_MISSION, msg::BULLET | msg::PUNCH) => self.on_bullet_resume(d, rng, frame, ATTACK, false),
             (ENEMY_MISSION, msg::TASE | msg::EXPLOSION | msg::FLASH | msg::SMOKE | msg::STUN_DART) => self.on_bullet_resume(d, rng, frame, ATTACK, true),
             // The alert family [M 0x15e1e8:97-112]: 0x11/0x12/0x14/0x15/0x16/0x1e →
             // `DroneVision_EnemyAlerts`, a pick SetStates (0x11/0x12 ride the shared SHOUT/SCREAM
-            // row above; 0x15/0x16 have no decompiled sender — the msg census).
-            (ENEMY_MISSION, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            // row above; 0x1e the shared ALARM row above; 0x15/0x16 have no decompiled sender — the
+            // msg census).
+            (ENEMY_MISSION, msg::SOUND) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
             // [M 0x15e1e8:113-115] `DroneFunc_DoForcedAttack` — the shared arm's body.
             (ENEMY_MISSION, msg::FORCED_ATTACK) => {
                 if self.alerted_by_drone && !self.first_attack_done {
