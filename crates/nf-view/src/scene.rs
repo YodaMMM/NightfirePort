@@ -3963,6 +3963,23 @@ impl Sim {
                 }
             }
             let (trigger, reload) = if can_fire && (has_fire_script || !hands) { (trigger, reload) } else { (false, reload) };
+            // decryptor-hold-real-path: the Q-Decryptor's use gate runs BEFORE `Player_RoundToFire`
+            // [M Player_WeaponFiring 0x1a5460:551-590 — on the fire-held branch the aim target
+            // (`BLData+0x880`, Check_Target 0x1a7810's 50-unit crosshair ray :114-125) must be a
+            // lock (type 0x3a) of record kind 0/2 in state 0/5 (:557-566) within
+            // `weapon_data+0x1C` (2.0/4.0 [L ee_start_05.bin @ 0x2c4b58/0x2c4c64]); ANY failure
+            // RETURNS before the pull — no burst arm, no spend, no fire anim, no bullet]. The
+            // port ran the pull first and refunded the spend on a refused pick; the leftover
+            // deviation was the fire script queueing on refused ticks (the game's view stays
+            // idle). The pick is computed once here and consumed by the shot block below — the
+            // same `camera` the game's Check_Target caches into +0x880 every 6th frame.
+            let decryptor_weapon = nf_game::gadget::is_decryptor(self.gun.weapon);
+            let decryptor_pick = if decryptor_weapon && trigger {
+                let range = self.weapons.records.get(self.gun.weapon as usize).map_or(2.0, |r| f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap()));
+                let vdir = self.bond.look();
+                nf_game::gadget::pick_decryptor_lock(camera, vdir, self.bond.pos, &self.drones.locks, &self.world, range)
+            } else { None };
+            let (trigger, reload) = if decryptor_weapon && trigger && decryptor_pick.is_none() { (false, reload) } else { (trigger, reload) };
             let fired = self.gun.update_with(trigger, reload, busy, params);
             // fix-gadgets-live: the AIMS-20's idle timer (`BLData+0x93a`): the game increments it while
             // the view anim is idle and resets on any fire/reload/switch anim [M Player_SetWeaponAnimObj
@@ -4040,6 +4057,18 @@ impl Sim {
                     // object regardless [M 0x1c2630]), parking at its last frame (`AnimScriptEnd`).
                     let len = self.scripts.get(&self.view_script).map_or(0.0, |s| s.length as f32);
                     self.view_time = (self.view_time + self.view_speed).min((len - 1.0).max(0.0));
+                } else if script != 0 && was_fire_state && flags & 0x100400 != 0 && flags & 0x400 == 0 && fire_anim_len == 0 {
+                    // decryptor-hold-real-path: the Q-Decryptor's held tick — the ONLY records with the
+                    // state-9 suppress and NO 0x400 hold bit are 0x56/0x57 (flags68 = 0x1820a0 [L
+                    // ee_start_05.bin @ weapon_data 0x2c4b58/0x2c4c64]; every other 0x100400 record
+                    // carries 0x400). The game skips `Player_SetFiringAnim` [M 0x1a5460:664-672] but the
+                    // anim object still ticks every frame [M AnimScriptTick 0x1c2630 — the advance is
+                    // anim-pass machinery, not `Player_WeaponFiring`'s] and the case-9 stop check below
+                    // re-arms the script when it ends. The port ran the advance and the stop check only on
+                    // non-fired ticks — with interval 1 [L +0x40 = 1] the held decryptor froze at frame 0
+                    // forever (the driver's "does not continue its animation").
+                    let len = self.scripts.get(&self.view_script).map_or(0.0, |s| s.length as f32);
+                    self.view_time = (self.view_time + self.view_speed).min((len - 1.0).max(0.0));
                 }
             } else if self.gun.reload_state != 0 && was_reloading == 0 {
                 // Reload just started [M Player_WeaponFiring's shared tail 0x1a6250-0x1a631c]: state 6
@@ -4087,22 +4116,30 @@ impl Sim {
                 // (both 0x6000485), so without this gate the reset fires during state 3 (drawing), zeroing
                 // view_time before the state-3→0 check can succeed, leaving switch_state stuck at 3 forever.
                 if self.gun.switch_state == 0 && self.view_script == rd(0xa0) && self.view_time >= len - 1.0 { self.view_time = 0.0; }
-                // The fire script ended: state 9 → 0, the idle script re-queued (unless flags68 & 0x1000)
-                // [M Player_SetWeaponAnimObj case 9 0x1a2e38:449-456 via AnimScriptIsStopped].
-                // fix-laser-beam: the +0x68 & 0x400 family (the Laser 0x4E/0x4F, the Stunner 0x4A/0x4C
-                // [L weapon_data]) runs the game's state-0xb transition instead [M 0x1a2e38 case 0xb
-                // :499-507 — the fire script stopped → AnimScriptAdd(+0xB4), the RELEASE script whose
-                // op-4.3 frame 1 STOPS the loop sound (0x12/0x3d [L 0x060004e8/0x06000488]), at 1.5×
-                // [M 0x1a5460:677-679]. The port kept fire_state through the +0xB4 play so its own
-                // finish lands in the idle arm below (the game's case 0xc → 0 does the same).
-                let fire_last = rd(0xb4);
-                // The laser/stunner family holds its fire script's last frame while the trigger is held and plays
-                // the release script only on release, at 1.0 [L PCSX2: release → a 27-frame script at +1.0/frame,
-                // then idle; the port played it at 1.5 the moment the script ended, trigger or not].
-                let holding = flags & 0x400 != 0 && fire_last != 0 && self.view_script == rd(0xb0) && trigger;
-                if self.gun.fire_state && !holding && (self.view_script == rd(0xb0) || (fire_last != 0 && self.view_script == fire_last))
-                    && self.view_time >= len - 1.0 {
-                    if flags & 0x400 != 0 && fire_last != 0 && self.view_script == rd(0xb0) {
+                // decryptor-hold-real-path: the fire script's stop check MOVED below the fire/reload chain
+                // (it was the tail of this non-fired arm): the game's case-9 `AnimScriptIsStopped` check
+                // runs every frame [M Player_SetWeaponAnimObj case 9 0x1a2e38:449-456], not only on ticks
+                // without a shot — the held decryptor fires every tick (interval 1 [L weapon_data
+                // 0x2c4b58 +0x40]) and its script must still end → state 9 → 0 → the idle re-queue, so the
+                // next fire tick re-queues the fire script and the scan animation loops while held.
+            }
+            // decryptor-hold-real-path: the fire script's stop check (was the non-fired arm's tail —
+            // `Player_SetWeaponAnimObj` case 9's end [M 0x1a2e38:449-456 via AnimScriptIsStopped]; the
+            // +0x68 & 0x400 family runs the game's state-0xb transition instead [M 0x1a2e38 case 0xb
+            // :499-507 — the fire script stopped → AnimScriptAdd(+0xB4), the RELEASE script whose
+            // op-4.3 frame 1 STOPS the loop sound (0x12/0x3d [L 0x060004e8/0x06000488]), at 1.5×
+            // [M 0x1a5460:677-679]; the port keeps fire_state through the +0xB4 play so its own
+            // finish lands in the idle arm — the game's case 0xc → 0 does the same]).
+            // The laser/stunner family holds its fire script's last frame while the trigger is held and plays
+            // the release script only on release, at 1.0 [L PCSX2: release → a 27-frame script at +1.0/frame,
+            // then idle]. `end_len` is the CURRENT view script's (the game reads the playing script's own
+            // stop state); on a just-restarted fire script (view_time 0) the check is a natural no-op.
+            let fire_last = rd(0xb4);
+            let holding = flags & 0x400 != 0 && fire_last != 0 && self.view_script == rd(0xb0) && trigger;
+            let end_len = self.scripts.get(&self.view_script).map_or(0.0, |s| s.length as f32);
+            if self.gun.fire_state && !holding && (self.view_script == rd(0xb0) || (fire_last != 0 && self.view_script == fire_last))
+                && self.view_time >= end_len - 1.0 {
+                if flags & 0x400 != 0 && fire_last != 0 && self.view_script == rd(0xb0) {
                         self.view_script = fire_last;
                         (self.view_time, self.view_speed) = (0.0, 1.0);
                     } else if rd(0x6c) & 0x400 != 0 && fire_last != 0 && self.view_script == rd(0xb0) {
@@ -4141,8 +4178,8 @@ impl Sim {
                         if flags & 0x1000 == 0 { self.view_script = rd(0xa0); (self.view_time, self.view_speed) = (0.0, 1.0); }
                         self.gun.end_fire_state();
                     }
-                }
-                // fix-weapon-anims: the idle-alert fidget (`Player_SetWeaponAnimObj` 0x1a2e38:79-136).
+            }
+            // fix-weapon-anims: the idle-alert fidget (`Player_SetWeaponAnimObj` 0x1a2e38:79-136).
                 // In view state 0 with substate +0x959 == 0, once the idle counter (+0x93a) reaches
                 // 0x14*FRAME_RATE_INT = 1200 idle ticks [M 0x1a2e38:83; L bldata.md +0x93E = 1200], a record
                 // with an idle-alert script (+0xCC) queues it at 1.0 ONCE and sets substate 1 [M :79-136];
@@ -4158,8 +4195,11 @@ impl Sim {
                         // reset [M 0x1a2e38:40-58].
                         self.view_alert = false;
                         self.drones.aims_idle = 0;
-                    } else if self.view_alert && self.view_script == alert_hash && self.view_time >= len - 1.0 {
+                    } else if self.view_alert && self.view_script == alert_hash
+                        && self.view_time >= self.scripts.get(&self.view_script).map_or(0.0, |s| s.length as f32) - 1.0 {
                         // The fidget stopped: idle re-queues, substate 0, counter reset [M :63-73].
+                        // (The stop check runs every tick now — the length read is the playing alert
+                        // script's own, the game reads the same object's stop state [M 0x1a2e38:63-73].)
                         self.view_script = idle_hash;
                         (self.view_time, self.view_speed) = (0.0, 1.0);
                         self.view_alert = false;
@@ -4216,7 +4256,6 @@ impl Sim {
                         self.view_aim_raising = false;
                     }
                 }
-            }
             // fix-aim-raise: another script displacing the aim raise/lower (a fire/reload/switch
             // queued over it) clears the marker — the raise never finished, so the aim bit stays
             // clear until the next press [M AnimScriptAdd 0x1c6d40 deletes the playing script].
@@ -4305,15 +4344,14 @@ impl Sim {
                 // the stunner's miss-arm shape [M 0x1a4bf0:193-199]). No bullet spawns: the record
                 // carries no beam bits (+0x6C = 0 [L]) and the lock side consumes the pulse.
                 if nf_game::gadget::is_decryptor(self.gun.weapon) {
-                    let range = self.weapons.records.get(self.gun.weapon as usize).map_or(2.0, |r| f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap()));
                     let upgraded = self.gun.weapon == 0x57;
-                    let root = self.bond.pos;
-                    // Check_Target's ray is the VIEW matrix's dir, not the fired bullet's aim point —
-                    // no auto-aim offsets ride on it [M 0x1a7810:117-121 Mat_GetDir of the head
-                    // matrix vs Player_GetAimingPoint's offsets in the bullet path].
-                    let vdir = self.bond.look();
-                    let pick = nf_game::gadget::pick_decryptor_lock(camera, vdir, root, &self.drones.locks, &self.world, range);
-                    match pick {
+                    // decryptor-hold-real-path: the pick was computed BEFORE the pull (the game's
+                    // order — the gate at 0x1a5460:551-586 returns before `Player_RoundToFire`
+                    // :590, so a fired tick implies a passed gate); the same `camera` and view
+                    // dir feed both, so the stashed pick IS this tick's gate result. `fired` on
+                    // this tick implies the gate passed — a None here is unreachable; the refund
+                    // arm stays for robustness.
+                    match decryptor_pick {
                         Some(i) => {
                             // Record only — the contact decodes two ticks from now (the game's
                             // collide-after-update order, the top-of-tick pass above).
