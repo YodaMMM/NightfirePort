@@ -79,12 +79,44 @@ channel-writer chain the ride end rides on.
 
 ## 4. Open item
 
-The handback pose (step 7): the event-6 record's object matrix composition — base-composed
-(1.80, −107.66, −6.83, a void column) vs raw (1.80, −54.13, −3.45, the freeze pose on the
-platform). fix-final-blockers2/walkreal-c hold the analysis and the live check (gdbwatch the
-enable matrix + Bond's y through the −52 landing); the port currently base-composes, so the
-rider falls after the landing cut-scene. The CHANNEL chain above is independent of it: the
-script end, ch 0x22's writer and ch 0x4a's writer behave as documented either way.
+The handback pose (step 7) — **the POSITION is settled (level-4a-lift-2, 2026-10-23)**: the
+event-6 snapshot = SP #289's base composed onto the unparented marker's key =
+**(1.799, −107.662, −6.830)** [M 0x1dbc08:37-40 + 0x1d8248:148 — the base is the SP placement
+(0,−53.534,−3.377) [D]; the unparented stream's base compose happens INSIDE Script_GetInterp —
+the case-1 call's 9th (stack char) arg = (stream parent == −1) [M disasm 0x1d9a7c-0x1d9a98] and
+GetInterp's tail runs `Concat(SCRIPTINFO+0x00, out)` when it is non-zero [M 0x1da158 tail]; the
+parented path composes the base once at the chain end [M 0x1d9a08:114-135]; the snapshot reads
+the PREVIOUS stream's object (the handler's stream base +0x80 vs Script_Run's +0xa8 =
+stream[i−1], kind gate 1/2 [M 0x1d94c0 case 6 + 0x1d8548]) into SCRIPTINFO+0x40; Script_Free
+enables Bond there [M 0x1da880:46-49] and Player_Enable applies the translation VERBATIM — no
+ground snap [M 0x195498:54-89]. The early fix-final-blockers2 reading ("world-space keys, no
+base") and its 17.5-above-the-cab probe were wrong about the composition; the
+landing-matrix round's compose is right and `fix_landing_matrix_live` plus the new no-reseat
+sister (`walkreal_0700004a_live::the_handback_lands_bond_at_the_composed_marker_and_the_column_is_open_air`)
+pin it.
+
+**What stays open is the POST-enable world.** The composed spot floats in open air: the disc's
+collision has NO floor in the column x 1.8 / z −6.83 (floor_below −104..−507 None [L probes
+walkreal_probe_l2b/l2d — the bottom −156 slab ends at z −1..−1.5; the guards' −104 walkway at
+x −4.34 / z −0.58 sits 6 units north]; no walls within 30 units horizontally), so the port's
+Bond falls forever after the enable (probe l2: airborne t2188→t3501, y −989, hp 100). What the
+SHIPPED game does with that fall — the resumed cab, a room-linked cel the port's flat world
+misses, a void recovery, or death — needs the fresh-boot PCSX2 measurement below; the walkreal's
+scrape/fall-exempt logic must be reworked around it before the ride → landing → lobby walk can
+be pinned. The CHANNEL chain above is independent of it: the script end, ch 0x22's writer and
+ch 0x4a's writer behave as documented either way.
+
+### Live checks for the main agent (fresh boot, save-state resumes don't count)
+
+1. gdbwatch the player object's position `glb_players → obj+0x30` (x/y/z, the matrix
+   translation Player_Enable writes [M 0x195498:60-63]) through t2190..2800 (the −52 landing
+   scene's end + the fall): expect the write to (1.80, −107.66, −6.83) at the enable tick, then
+   the fall trajectory — and WHAT ENDS IT (a landing on the resumed cab / the −108 walkway / a
+   substate change / death). Also watch `BLData+0x94a` (the substate Player_Enable sets to 2)
+   and the player's health byte for the fall's outcome.
+2. The floor probe at (1.80, −107.66, −6.83): a Collide_RayIntersect straight down on the real
+   game — does the game's room-scoped collision find a floor the port's flat world (built from
+   the same cels) reports None on? Expected per the port's census: None.
 
 ## Tests
 

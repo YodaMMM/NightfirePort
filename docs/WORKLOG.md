@@ -147,3 +147,16 @@ the platform's span). Settle the hand-back position the game uses [M Player_Enab
 the event-6 snapshot]; if it needs a live read of Bond's position at re-enable, name it
 exactly. Real input only via step_bond; port what the game does from the decompile [M]/disc
 [D]; un-ignore with a sister that can fail.
+- (20:56 UTC) The hand-back position SETTLED, every disasm link read this round: the case-1
+  GetInterp 9th arg = (parent == −1) [M 0x1d9a7c-0x1d9a98], GetInterp's tail Concat(SCRIPTINFO,
+  out) when non-zero [M 0x1da158 tail] — unparented streams compose the base INSIDE GetInterp
+  (my own first polarity flip, corrected by the callee's tail); the base = the SP placement via
+  SP_LoadScript+Script_Load [M 0x1dbc08:37-40, 0x1d8248:148]; the event-6 snapshot reads the
+  PREVIOUS stream's object (handler +0x80 vs Script_Run's +0xa8 = stream[i−1]) [M 0x1d94c0 +
+  0x1d8548]; Player_Enable applies it verbatim, no ground snap [M 0x195498]. Hand-back =
+  (1.799,−107.662,−6.830), 54 below the parked cab. NEW: the column is OPEN AIR — the disc's
+  collision has no floor −104..−507 at x 1.8/z −6.83 (probes l2b/l2d; the −156 bottom slab ends
+  z −1..−1.5; the guards' −104 walkway is 6 north) and the port's Bond falls forever (probe l2).
+  Sister added (no-reseat composed-handback + open-air census) GREEN; walkreal stays parked with
+  the sharpened blocker + two exact live checks (tower2-lift-ride.md §4). Probes l2/l2b/l2c/l2d
+  committed as the evidence trail. No src changes.

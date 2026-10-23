@@ -47,7 +47,7 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 //    t2188..2312, grounded t2313 at y −75.50, 0.4 below the key line, riding on to the lobby).
 //    The ride-loop scrape check exempts the disabled window plus the fall (until 5 grounded ticks).
 #[test]
-#[ignore = "level-4a-lift-landing: the handback matrix itself is RESOLVED (fix_landing_matrix_live pins it green): the event-6 snapshot = SP #289's base [D (0,-53.534,-3.377), rot 0] composed onto the unparented marker's key [D (1.799,-54.128,-3.453)] = (1.799,-107.662,-6.830) — the base-concat flag is (stream parent == -1) at Script_Interp's GetInterp calls [M disasm 0x1d9ab4/0x1d9c10], the camera's is 1 always [M 0x1da054]; the port composes it (scriptlog: snapshot (1.80,-107.66,-6.83)) and Player_Enable applies it. The ride -> lobby walk stays parked on the POST-enable behaviour: the game re-enables Bond 54 BELOW the parked cab (the cab sits at -53.76 during the hold) at the shaft's mid-landing level (guards #250/#251 stand at y -102.8/-106.8 [D census] — real floors the port's rays miss at x 1.80/z -6.83, probe fb6g), then the cab resumes on ch 0x22. Whether the game lands him on that mid-landing geometry or the fall carries him to the cab/bottom needs the fresh-boot PCSX2 measurement (gdbwatch Bond's y through t2190..2500 and the floor at (1.80,-6.83,-107.66)); the walkreal's scrape/fall-exempt logic must be reworked around whatever the game does before the walk can pin the ride -> landing -> lobby route"]
+#[ignore = "level-4a-lift-2: the HAND-BACK POSITION is settled this round, every link verified in the disasm/decompile: SP_LoadScript passes the SP object's +0x30/+0x50 into Script_Load [M 0x1dbc08:37-40] which builds SCRIPTINFO+0x00 = View_RotTransMatrix(rot, pos) [M 0x1d8248:148] = SP #289's placement (0,-53.534,-3.377) rot 0 [D]; Script_Interp's case-1 GetInterp call passes the 9th (stack char) arg = (stream parent == -1) [M disasm 0x1d9a7c-0x1d9a98: lb 0x25/nor/sltiu/sw ($sp); the ABI is f12,a0,a1,a2,a3,t0,t1,t2,t3,0(sp)] and Script_GetInterp's tail runs Concat(SCRIPTINFO+0x00, out) when that flag is non-zero [M 0x1da158 tail] — so the UNPARENTED marker (s25, parent None [D]) composes the base, obj+0x90 = (1.799,-107.662,-6.830); the parented path composes it once at the chain end [M 0x1d9a08:114-135]; the event-6 snapshot reads the PREVIOUS stream's object (the handler's stream base +0x80 vs Script_Run's +0xa8 = stream[i-1], kind gate 1/2, stream->0x10 [M 0x1d94c0 case 6 + 0x1d8548], default Bond's own glb_players+0x90 when none) into SCRIPTINFO+0x40; Script_Free calls Player_Enable(glb_players, +0x40, +0xab6) on the +0xaa8 bit 0x100 [M 0x1da880:46-49]; Player_Enable applies the matrix translation VERBATIM (obj+0x30 <- m+0x30, copied to +0x40; yaw/pitch from Mat_GetDir; the velocity vectors zeroed; substate 2; the param-3 sphere scan handles only wire/creepwall cels — NO ground snap) [M 0x195498:54-89]. The port does exactly this (the sister below pins it through the real path with no re-seats). THE BLOCKER is the POST-enable world: the composed spot floats in OPEN AIR — the disc's collision has NO floor in the column x 1.8/z -6.83 (floor_below -104..-507 None [L probes l2b/l2d; the bottom -156 slab ends at z -1..-1.5]; no walls within 30 horizontally, the walkway edge 5.5 north), so the port's Bond falls forever (probe l2: airborne from t2188, y -989 at t3501, hp 100) and the shipped game's catch is unknown — the fresh-boot PCSX2 live check decides (gdbwatch glb_players+0x30 x/y/z + health + BLData+0x94a substate through t2190..2800 after the -52 landing scene: does the fall end on the resumed cab, the -108 walkway, a void recovery, or death?), and the scrape/fall-exempt logic must be reworked around whatever that shows before the ride -> landing -> lobby walk can be pinned"]
 fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700004a.bin", false).unwrap());
@@ -145,5 +145,54 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.mission.states[17][0] != 0, "the objective holds through the walk-out");
+    }
+}
+
+/// level-4a-lift-2 SISTER: the hand-back position through the REAL path — board with movement
+/// input, ride with none, the landing scene plays un-skipped — and the first post-enable tick
+/// places Bond at the composed marker matrix (1.799,−107.662,−6.830) [M: SP base 0x1dbc08:37-40 +
+/// 0x1d8248:148 from the SP #289 placement (0,−53.534,−3.377) [D]; the unparented marker's base
+/// compose inside Script_GetInterp, disasm 0x1d9a7c-0x1d9a98 + the tail Concat 0x1da158; the
+/// prev-stream snapshot 0x1d94c0 case 6 + 0x1d8548; the verbatim apply 0x195498:54-72]. No
+/// re-seats anywhere (fix_landing_matrix_live re-seats the ride; this one does not). The second
+/// half pins the column's open air [L probes l2b/l2d]: floor_below −507 from the hand-back spot
+/// is None and the bottom −156 slab ends at z −1..−1.5 — the disc's own collision, which any
+/// future "catch" (a recovery script, a moving solid, a room-linked cel) must explain against.
+#[test]
+fn the_handback_lands_bond_at_the_composed_marker_and_the_column_is_open_air() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700004a.bin", false).unwrap());
+    // Board: the walkreal's own settle steps (real movement input, the reveal plate underfoot).
+    for k in 0..84 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let target = if k < 42 { [3.2, 0.0, -2.2] } else { [3.2, 0.0, -3.8] };
+        let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, ..Default::default() }, false);
+    }
+    assert!(w.scene.sim.as_ref().unwrap().bond.grounded, "Bond boards the platform");
+    w.skip_cutscenes = false;
+    // Ride with no input until the landing scene's end enables Bond (ch 0x22 rises the same tick,
+    // [D 0780004a.bin 0x060006cf s26/s27 at t575]).
+    let mut handback: Option<[f32; 3]> = None;
+    for _ in 0..3000u32 {
+        w.tick(Default::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.channels.on(0x22) && !sim.disabled && handback.is_none() {
+            handback = Some(sim.bond.pos);
+            break;
+        }
+    }
+    let p = handback.expect("the enable lands within the ride window (ch 0x22 at the scene's end)");
+    assert!((p[0] - 1.799).abs() < 0.05 && (p[1] - (-107.662)).abs() < 0.5 && (p[2] - (-6.830)).abs() < 0.05,
+        "the hand-back = SP #289's base composed onto the unparented marker's key [M chain], got {p:?}");
+    // The column's open air [L]: nothing below within 400 units; the walkway edge is 5.5 north.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.world.floor_below([1.8, -107.0, -6.83], 400.0).is_none(),
+            "the composed hand-back column is open air in the disc's collision [L l2d]");
+        assert!(sim.world.floor_below([-4.34, -102.0, -0.58], 8.0).is_some(),
+            "the guards' own column (x -4.34, z -0.58) has the -104 walkway [L l2b] — the floors exist, 6 units north of the hand-back");
     }
 }
