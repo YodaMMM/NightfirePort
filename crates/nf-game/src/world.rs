@@ -44,6 +44,12 @@ pub const LOS_GUARD_VISION: u32 = 0xa27; // DroneVision_CanSeeObjectFrom 0x176f1
 pub const LOS_PLAYER_HEADROOM: u32 = 0xd; // Player_SSCrouch 0x1924c0:100-101 / Player_HandleJump 0x1916b0:161-162 mask 9 | 4
 pub const LOS_PROBE_8: u32 = 0xc; // mask 8 | 4 — Player_SSGrapple 0x192860:86-88, Searchlight_Update 0x1cb900:338-340, Sensor_SetBeam 0x1af398:73-75, Bullet_homing 0x12f358:92-93
 pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
+/// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
+/// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
+pub const LOS_MASKS_ON: bool = false;
+/// The normalized-spine head-on cull below is not applied yet [S]: with it on, real-path door,
+/// pickup, turret and gondola walks on 06/08/09/16 broke.
+pub const HEAD_ON_CULL_ON: bool = false;
 
 #[derive(Default)]
 struct Geo {
@@ -329,6 +335,8 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // through from below; the same face crossed in the BOTTOM half (f > 0.5) is solid. Faces the
     // old |n·y| > 0.7 + top-end-side rule culled in the 0.70-0.763 band (≈45-77° slopes above the
     // capsule) are TESTED here, exactly as the game tests them.
+    // The previous one-sided rule stays in force until the game's cull is on (HEAD_ON_CULL_ON).
+    if !HEAD_ON_CULL_ON && n[1].abs() > 0.7 && dot(n, sub(*a, t[0])) < 0.0 { return false; }
     let ab = sub(*b, *a);
     let denom = dot(n, ab);
     let mut f = 0.0f32;
@@ -337,7 +345,7 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
         let ab_len = dot(ab, ab).sqrt();
         if ab_len > 1e-6 {
             let nd = denom / ab_len;
-            if (nd > 0.999 && f > 0.5) || (nd < -0.999 && f < 0.5) { return false; }
+            if HEAD_ON_CULL_ON && ((nd > 0.999 && f > 0.5) || (nd < -0.999 && f < 0.5)) { return false; }
         }
     }
     let mut p = if denom.abs() > 0.0002 {
@@ -1597,6 +1605,7 @@ impl CollisionWorld {
     /// the wrapper's own `| 4` [M disasm 0x176fec/0x1770b0 — docs/systems/drone-armed-peer.md].
     /// Each caller passes the mask its game call site passes — see the `LOS_*` constants.
     pub fn line_of_sight(&self, a: V3, b: V3, mask: u32) -> bool {
+        if !LOS_MASKS_ON { let _ = mask; return self.segment_clear(a, b); }
         let d = sub(b, a);
         let dynamic = self.dynamic.read().unwrap();
         let skip_cage = mask & 0x20 != 0;
@@ -1891,6 +1900,7 @@ mod tests {
     /// side-keyed on the top end's position: a ~43° slope face (n·y = 0.73) above the capsule was
     /// skipped outright; the game's |n·d̂| = 0.73 < 0.999 does not cull it — the capsule pushes.
     #[test]
+    #[ignore = "HEAD_ON_CULL_ON is off until the cull keeps the real-path walks green"]
     fn head_on_cull_uses_the_raw_spine_dot_and_the_crossing_half() {
         // Up-facing floor at y = 0 (wound so cross(e1,e2) = +y), 20×20.
         let floor = vec![
@@ -1928,6 +1938,7 @@ mod tests {
     /// TESTED and pushes; a FLAT floor crossed in the spine's TOP half (f < 0.5) IS culled — the
     /// game's jump-through, which the old top-end-side rule refused (a above the plane → push).
     #[test]
+    #[ignore = "HEAD_ON_CULL_ON is off until the cull keeps the real-path walks green"]
     fn walk_spine_culls_only_near_flat_faces() {
         // Flat floor crossed at f = 0.4 of the walk spine: culled — pass-through from below.
         let floor = vec![
@@ -1958,6 +1969,7 @@ mod tests {
     /// the 0x1000 cage... (0xa27 DOES carry bit 0x20 — the cage is skipped); the crouch/jump
     /// headroom 0xd (9|4) drops node-flagged cels and the classes but NOT surface-0x40.
     #[test]
+    #[ignore = "LOS_MASKS_ON is off until the masks keep guard cover and the 08 escort green"]
     fn line_of_sight_applies_the_callers_game_mask() {
         let face = |m: u8| [[2.0, 0.0, -1.0], [2.0, 2.0, 1.0], [2.0, 2.0, -1.0]];
         // A surface-0x40 card between the endpoints: guard vision (0x800) sees through it,
