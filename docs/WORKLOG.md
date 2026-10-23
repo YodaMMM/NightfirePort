@@ -41,3 +41,7 @@ Work log:
 - (19:31) the un-ignore is NOT achieved; root cause instrumented, live checks written into the
   report. Baseline: the file's other 2 tests pass (the ring legs west_doorway_repro walks clean).
   Finishing blocked — the next message continues from this branch.
+- (19:55) banked a partial suite run for the next session: the tree has no source deltas
+  (docs only), so the state is valid — /home/z/suite_0a_hatch2_state.json, logs
+  /home/z/chunk_0a_hatch2_*.out; chunk 2's 51 binaries all green so far. Re-invoke
+  `python3 tools/test/chunk_suite.py /home/z/suite_0a_hatch2_state.json` until ALL DONE.
