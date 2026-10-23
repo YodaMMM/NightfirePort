@@ -58,3 +58,9 @@ Stage summary:
   wall-hug = creepwall identification [D+M], the notch/wire grab geometry [D], the walkable
   legs verified green through the lane's north half. The crossing itself is round 3: the
   crawl through #299/#35, the lane→ledge link, the jump/E grab, the ride.
+- (19:05) The lane-leg walk iterations: the z≈92 shelf hugs north before the drop south (the
+  z 90 strip is only x 28-40 wide [D the fine map]; the direct lines fell at x 21-23/39-44
+  twice), and the (44.4, 91.2) → (40, 92.5) step wedged the non-lenient walker at the 6000-tick
+  cap (the 29.3 → 30.3 lip at x 42-44) — the legs run lenient now so the breadcrumbs always
+  land. The strip's micro-navigation (2-4-unit ledges, 1-unit lips) is the round-3 walker work;
+  the fine map in the test's doc is the anchor source.

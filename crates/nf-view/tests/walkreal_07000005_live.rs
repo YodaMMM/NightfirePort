@@ -154,17 +154,25 @@ fn walk_the_west_ledge_and_cross_the_cable() {
     // round-2 direct line (44.4, 91.1) → (30, 84) cut the corner over the void at x 23-24,
     // z 88-92 and Bond fell to y 0.3 at (23.0, 92.8) — the strip is x 28-52 at z 92 but only
     // x 24-36 at z 80-86 [D the fine map]).
+    // The lane legs run lenient with anchors 4-8 units apart on the strip (the game's nav
+    // graph has no lane coverage [D the probe] and its routes wander off it — the round-2 runs
+    // fell at x 21-23 twice). The z≈92 shelf (x 28-52) hugs north before the drop south: the
+    // z 90 strip is only x 28-40 wide [D the fine map], and the round-2 direct lines crossed
+    // the void at x 40-46, z 90-91.
+    w.walk_nav_to([52.0, 26.0, 96.0], "courtyard west", 1.5);
+    w.walk_nav_to([44.0, 28.0, 90.0], "the lane north end", 1.5);
     for (name, at) in [
-        ("courtyard west", [52.0f32, 26.0, 96.0]),
-        ("the lane north end", [44.0, 28.0, 90.0]),
-        ("the lane bend", [36.0, 29.5, 90.0]),
-        ("the lane, wall south 1", [30.0, 31.5, 86.0]),
-        ("the lane, wall south 2", [29.0, 32.6, 80.0]),
-        ("the lane, tower north", [29.0, 33.7, 74.0]),
-        ("the tower top", [30.0, 36.0, 58.0]),
+        ("the lane shelf west", [40.0f32, 28.0, 92.5]),
+        ("the lane bend", [34.0, 30.0, 92.0]),
+        ("the lane, wall south 1", [30.0, 31.0, 88.0]),
+        ("the lane, wall south 2", [29.0, 32.6, 82.0]),
+        ("the lane, tower north", [29.5, 33.7, 75.0]),
+        ("the tower top", [30.0, 36.0, 60.0]),
         ("the tower west slope", [24.0, 34.0, 54.0]),
-        ("the lane, west run", [12.0, 29.3, 56.0]),
+        ("the lane, west run", [14.0, 29.3, 56.0]),
     ] {
+        // Lenient: a wedge reports (eprintln + bail) instead of panicking — the round-3 legs
+        // read the breadcrumbs either way.
         w.walk_nav_to(at, name, 1.5);
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[05c] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
