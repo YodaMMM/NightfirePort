@@ -146,7 +146,7 @@ fn the_slit_float_carries_bond_west_without_a_fall() {
 /// the carry never lands in the port. The thrust loop below drives the same plan and records
 /// progress without pinning a crossing.
 #[test]
-#[ignore = "the shaft is sealed: the slab at y 16.74 covers the whole deck cross-section and the west wall (x 4.43, body-solid, bullet-pass) spans every scanned z below it — no disc opening (probe1b_float/spawner); the game's route is the SP#211 fly-by whose event-6 player-carry never lands in the port (no event 6 in 0x060008f0's parsed streams; the ch-74 tail pulse is the unmeasured candidate — the report's live check)"]
+#[ignore = "the shaft is sealed BY THE GAME: the west wall is plc #128 OBJECT_Boundary_1 (mat 0x40, x 4.433, y −16.56..+16.74 — probe1b_wall), body-solid per [M] (the 0x40 drop is the bit-0x8 bullet queries only; CylGeom 0x109da0 rejects no vertical face by side; Player_ZeroG 0x192ab0 adds no bypass — the_boundary_wall_stops_the_float_and_passes_bullets pins it), so no real-input float crosses; the z ±8.82 mouths are SP#141/#142's iris-door booths EAST of the boundary (load-time loopers [M 0x1db9a8 + 0x1dbc08], not a route). The game's crossing past x 4.43 must be a scripted carry: the SP#211 chain (0x060007fd → 0x060008f0) pulses ch 75 (the float entry) and its tail pulses ch 74 (0x600096e, t392-399 [D]) — the unmeasured candidate. LIVE CHECKS for the main agent: (1) fresh boot, during the slit crossing — does the game's Bond pass x 4.43 westward in substate 9, or is he stopped like the port? (2) watch switch_channels[74] and the shuttle entity's matrix through 0x060008f0's t392-399 — does the player's position follow an entity (the carry), and at which address does the player object's position get written"]
 fn walk_arrival_to_drakes_defeat() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
@@ -388,6 +388,69 @@ fn the_boundary_wall_stops_the_float_and_passes_bullets() {
     assert!(min_x > 4.85 && min_x < 5.15,
         "the float thrusts west and the boundary stops the capsule at 4.433 + 0.55 ≈ 4.98 \
          [D plc #128; M the kind-0x800 body, no bit-0x8 drop; M CylGeom two-sided], got min x {min_x:.3}");
+}
+
+/// The iris doors, decided (level-1b-drake-3): the z ±8.82 booths' doors — SP#141/#142
+/// "ScriptPlayer_IrisDoorOpen" [D placement names/positions (5.23, 9.45, ∓8.82)], script
+/// 0x06000818 [D p0] — are LOAD-TIME LOOPERS, not missile-triggered pieces: the create runs
+/// `SP_LoadScript` for mode ∉ {0,1} [M SP_CreateScriptPlayer 0x1db9a8 tail] and its mode-8 arm
+/// starts the script LOOPING (`Script_Play(script, 1)`) in state 6 [M SP_LoadScript 0x1dbc08:46-48].
+/// The script's per-loop shape [D decode]: the 8 iris-panel entities (0x02000834..3b) animate
+/// OPEN at keys 0..120, the script HOLDS at t208 (stream 9 ev0x03 p0=0 — the −1 delay), the
+/// panels CLOSE at 480..600 with the door sounds (stream 10: 0x000004c4 at start, 0x000004c3 at
+/// t480), and the missile-done channels 0x18/0x1c are CLEARED at t550 (streams 12/13) — each
+/// ~10 s loop clears the missile bookkeeping. The channel-RISE restart does NOT apply: [M
+/// SP_Update 0x1dbda8 case 6] reloads only through the OTHER script slot, and both SPs carry a
+/// single script (hash[1] = 0 [D live players]) — the rise never starts them. The doors are NOT
+/// the route west either way: their meshes sit at x 5.23, east of the boundary [D probe1b_wall;
+/// the boundary pin test above].
+#[test]
+fn the_iris_doors_are_load_time_loopers() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    w.wait_enabled(3000, "the shuttle arrival");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        // The create/load semantics: primed PLAYING loopers (state 6 = the mode-8 arm's
+        // Script_Play(loop=1) [M 0x1dbc08:46-48]) on their own out channels [D p6].
+        for plc in [141usize, 142] {
+            let p = sim.drones.scripts.players.iter().find(|p| p.placement == plc).unwrap();
+            assert_eq!(p.scripts[0], 0x0600_0818, "SP#{plc} carries the iris-door script [D p0]");
+            assert_eq!(p.modes[0], 8, "SP#{plc} is a mode-8 looper [D p2]");
+            assert_eq!((p.state, p.info[0].is_some()), (6, true),
+                "SP#{plc} primed PLAYING (state 6, script loaded) from the level load [M 0x1db9a8 + 0x1dbc08]");
+            assert_eq!(p.out, if plc == 141 { 0x1c } else { 0x18 }, "SP#{plc} fires on its own out channel [D p6]");
+        }
+        // The 8 iris-panel entities exist (the playing script created them [D streams 1-8,
+        // hashes 0x02000834..3b]). Their stored matrices are the streams' local keys — the world
+        // placement folds the parent chain (Script_Interp's live-matrix walk), so only the
+        // existence and the hash band are pinned here.
+        let mut panels = 0usize;
+        for o in sim.drones.scripts.objects.list.iter().flatten() {
+            if let nf_game::nis::Obj::Entity { hash, .. } = o {
+                if (0x0200_0834..=0x0200_083b).contains(hash) { panels += 1; }
+            }
+        }
+        assert!(panels >= 8, "the 8 iris-panel entities exist [D streams 1-8], found {panels}");
+        // The channel-rise sister: [M 0x1dbda8 case 6] reloads only through the other slot
+        // (hash[1] = 0 [D]) — a ch rise on the out channel starts NOTHING.
+        assert_eq!(sim.drones.scripts.players.iter().find(|p| p.placement == 141).unwrap().state, 6,
+            "sister: the doors stay looping loopers regardless of the missile channels");
+    }
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.drones.channels.set(0x1c, 1, sim.drones.frame);
+        sim.drones.channels.set(0x18, 1, sim.drones.frame);
+    }
+    w.tick(Input::default(), false);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for plc in [141usize, 142] {
+            let p = sim.drones.scripts.players.iter().find(|p| p.placement == plc).unwrap();
+            assert_eq!(p.state, 6,
+                "sister: the ch 0x18/0x1c rise does NOT restart SP#{plc} [M 0x1dbda8 case 6 needs the other slot]");
+        }
+    }
 }
 
 /// The spawn pin (green): with ch 0x0a driven from the WALKED deck route, spawner #187 produces
