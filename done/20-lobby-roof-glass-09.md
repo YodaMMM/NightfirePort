@@ -22,3 +22,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox2 at 2026-10-23T20:23Z
+
+---
+## Report (done, 2026-10-23T21:52Z)
+
+Closed by the driver: the report is on `s/lobby-roof-glass-09` (docs/reports/lobby-roof-glass-09.md); the worker didn't run finish.sh.
