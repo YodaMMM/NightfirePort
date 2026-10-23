@@ -173,6 +173,28 @@ impl Toucher {
     pub fn player(feet: V3) -> Toucher { Toucher { a: [feet[0], feet[1] + 0.55, feet[2]], b: [feet[0], feet[1] + 1.86, feet[2]], r: 0.55, drone: false, skin: 0, contain: true } }
 }
 
+/// One class-5 (BULLET) contact for this tick: a projectile's per-tick flight segment and its
+/// weapon-definition id — the two facts `Trigger_Hit` 0x1b1fc8:124-159 reads off a class-5 node in
+/// the trigger's `obj+0xD0` list. The class byte itself is fixed (a bullet object's `obj+0xff` = 5,
+/// `Bullet_init` 0x12c5a0:87), so the port folds it into the type.
+/// - `a` → `b`: this tick's swept path. The game's picker is the BULLET (`Bullet_update` 0x12e7b0
+///   arms its embedded HITTEST `obj+0xD4` = BU+0x50 every flying tick — `Bullet_init` 0x12c5a0:102;
+///   mode ht+0x94 = 0x201 swept-segment or 0x101 point-sphere written at 0x12f134/0x12f154, closed
+///   to 0 at 0x12e7f4/0x12e818 and whenever state ≥ 2, 0x12f030-0x12f03c) and `Collide_PickObj`
+///   0x1eae80:93-107 tests the closest point on that segment against the TARGET object's world
+///   sphere (centre obj+0x80, radius obj+0x8C). `Collide_Intersect` 0x1ebaa8 then tests the real
+///   geometry — the trigger's glist collision triangles (`Trigger_Create` 0x1b1720:92 stores the
+///   glist at obj+0xD8) via `Intersect_CylGeom` 0x109da0, which writes the HITDATA distance as 1e8
+///   on a miss (:587), and the distance sort drops every 1e8 node (`Collide_Update` 0x1ea398:118-158).
+///   So the surviving contact = the segment actually crossing the trigger's collision triangles —
+///   the port's `touched_by` mesh test with a zero-radius capsule.
+/// - `id`: `*(s16*)(weapon_definition + 2)` — `Trigger_Hit` 0x1b1fc8:146-147 dereferences the
+///   bullet's `*(*(obj+0xE0)+0x44)+2`; BU+0x44 is the `weapon_definition_tag*` the round was born
+///   with (`Bullet_init` 0x12c5a0:109 `pfVar3[0x11] = param_4`), and +2 is the record's weapon id
+///   (the grenade doc's `weapon_type`, e.g. 0x3b satchel [L weapon_data]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BulletContact { pub a: V3, pub b: V3, pub id: u16 }
+
 /// The channel table (`switch_channels`) with the frame each channel was last set (`switch_channels_time`).
 #[derive(Clone, Debug)]
 pub struct Channels { pub v: Vec<u8>, pub time: Vec<u32>,
@@ -408,9 +430,23 @@ impl Trigger {
     /// the base is 1, or `ch[ext+0x2E]` when `mask & 1`; every nonzero filter entry must then pass (0xB needs a drone
     /// contact, 0xE the player, anything else a drone whose skin hash matches the entry's low 16 bits). An empty
     /// filter list returns the base alone.
-    fn hit(&self, ch: &Channels, touchers: &[Toucher]) -> bool {
+    /// `bullets` are this tick's class-5 (BULLET) contacts — `Trigger_Hit` reads them off the trigger's
+    /// `obj+0xD0` HITDATA list, which `Collide_Update` 0x1ea398 rebuilds EVERY tick (cleared :25-53, refilled
+    /// by the bullet picker + the :160-233 reflection into the trigger's list) — with the mask-2 arm at
+    /// :124-163: any class-5 contact lights bit 1 of the collected class word; types 1/2 then require EVERY
+    /// nonzero filter entry (+0x26.., up to 8) to equal some touching bullet's weapon-definition id
+    /// (`*(*(obj+0xE0)+0x44)+2`, :146-147), an EMPTY filter list returning 1 (:130-135); any other type falls
+    /// through to the fallback `(mask & bits) != 0` (:161-163) — any class-5 contact fires. The arm is only
+    /// reached when the 0x18 filter branch did not already return (no player/drone contact, or mask & 0x18 == 0).
+    fn hit(&self, ch: &Channels, touchers: &[Toucher], bullets: &[BulletContact]) -> bool {
         let player = touchers.iter().any(|c| !c.drone && self.touched_by(c));
         let drone_touch = touchers.iter().any(|c| c.drone && self.touched_by(c));
+        // The class-5 contacts [M 0x1b1fc8:38-39 + the collide walk — see BulletContact]: the bullet's
+        // per-tick segment vs this trigger's collision triangles (zero-radius capsule; the game's exact
+        // pass `Intersect_CylGeom` 0x109da0:587 vetoes a sphere-picked node whose segment misses the glist).
+        let bullets5: Vec<&BulletContact> = bullets.iter()
+            .filter(|b| self.touched_by(&Toucher { a: b.a, b: b.b, r: 0.0, drone: false, skin: 0, contain: false }))
+            .collect();
         let m = self.mask;
         // The filter branch runs only for types 1/2 with mask & 0x18 and a player/drone contact [M 0x1b1fc8:56].
         if m & 0x18 != 0 && (player || drone_touch) {
@@ -433,9 +469,31 @@ impl Trigger {
             }
             return acc;
         }
-        // mask & 2 (class-5 object contacts, 0x1b1fc8:124-159): the port has no object touchers — contacts bit 1
-        // never sets (documented stand-in, trigger-port-check #11).
-        (m & 8 != 0 && player) || (m & 0x10 != 0 && drone_touch)
+        // mask & 2 (class-5 contacts, 0x1b1fc8:124-163): the arm reads the trigger's obj+0xD0 list, which the
+        // collide pass fills with the class-5 objects whose per-tick flight segment crossed the trigger's
+        // collision triangles (BulletContact — see the struct note). With a contact and types 1/2, every
+        // nonzero filter entry must match some touching bullet's weapon-definition id (`*(*(obj+0xE0)+0x44)+2`,
+        // :146-147; the port's `BulletContact.id`); an EMPTY filter list returns 1 [:130-135]. A class-5
+        // contact with a non-1/2 type falls through to the fallback [:161-163] — any contact fires. The port
+        // used to model no class-5 contacts at all ("contacts bit 1 never sets", trigger-port-check #11 —
+        // the stand-ins-gadget-937 stopgap fed the arm the explosion list instead; the disc arm has no
+        // explosion input: the reader is the bullet object's own weapon def, :147).
+        if m & 2 != 0 && !bullets5.is_empty() {
+            if matches!(self.kind, kind::TOUCH_ONCE | kind::TOUCH) {
+                let mut acc = true;
+                let mut any = false;
+                for &f in self.list.iter().take_while(|&&f| f != 0) {
+                    any = true;
+                    acc = acc && bullets5.iter().any(|b| b.id == (f & 0xffff) as u16);
+                }
+                if !any { return true; }
+                return acc;
+            }
+            return true;
+        }
+        // The fallback [M :160-163 `return (uVar1 & uVar8) != 0`]: the full mask vs the collected class
+        // word (8 player, 0x10 drone, 2 class-5).
+        (m & 8 != 0 && player) || (m & 0x10 != 0 && drone_touch) || (m & 2 != 0 && !bullets5.is_empty())
     }
 
     /// `Trigger_Locked` (0x1b2fc8) — the aim-hint/exit lock test over the port's fields. Type 10
@@ -503,7 +561,7 @@ impl Trigger {
     /// `Trigger_Update` (0x1B1A78) for every type except Touch (run in `calc`). The mux input scan walks the slots
     /// as a PREFIX — a zero slot ends the list (a mid-list 0 hides everything after it) [M 0x1b1a78 case 3/4/0xC
     /// loops: `while input[k] != 0`].
-    pub fn update(&mut self, ch: &mut Channels, touchers: &[Toucher], frame: u32) {
+    pub fn update(&mut self, ch: &mut Channels, touchers: &[Toucher], bullets: &[BulletContact], frame: u32) {
         if self.gone || (self.lock != 0 && ch.on(self.lock as u32)) { return; }
         match self.kind {
             kind::TOUCH_ONCE => {
@@ -513,7 +571,7 @@ impl Trigger {
                     if self.glist_0x10 { self.gone = true; }
                     return;
                 }
-                if self.hit(ch, touchers) { ch.set(self.out as u32, 1, frame); }
+                if self.hit(ch, touchers, bullets) { ch.set(self.out as u32, 1, frame); }
             }
             kind::AND | kind::OR => {
                 // Case 3 / 0xC: the accumulator starts at 1 for the AND (an empty/zero prefix writes 1 —
@@ -643,11 +701,11 @@ pub fn exit_use_target(triggers: &[Trigger]) -> Option<(&Trigger, bool)> {
 }
 
 /// `Trigger_Calc` (0x1B1900): level latches, then the Touch triggers (their channels cleared, then OR-ed).
-pub fn calc(level: u32, triggers: &mut [Trigger], ch: &mut Channels, touchers: &[Toucher], frame: u32) {
+pub fn calc(level: u32, triggers: &mut [Trigger], ch: &mut Channels, touchers: &[Toucher], bullets: &[BulletContact], frame: u32) {
     if level == 0x0700_0005 && ch.on(0xa4) { ch.set(0x6f, 1, frame); }
     if level == 0x0700_000b && ch.on(0x34) { ch.set(0x2d, 1, frame); }
     for t in triggers.iter().filter(|t| t.kind == kind::TOUCH) { ch.set(t.out as u32, 0, frame); }
-    let hits: Vec<u8> = triggers.iter().filter(|t| t.kind == kind::TOUCH && !(t.lock != 0 && ch.on(t.lock as u32)) && t.hit(ch, touchers)).map(|t| t.out).collect();
+    let hits: Vec<u8> = triggers.iter().filter(|t| t.kind == kind::TOUCH && !(t.lock != 0 && ch.on(t.lock as u32)) && t.hit(ch, touchers, bullets)).map(|t| t.out).collect();
     for out in hits { ch.set(out as u32, 1, frame); }
 }
 
@@ -668,20 +726,20 @@ mod tests {
         let mut or = Trigger { kind: kind::OR, out: 0x22, list: vec![0x23, 0x24], ..plate(kind::OR, 0, 0, vec![]) };
         let away = [Toucher::player([5.0, 0.0, 5.0])];
         let on = [Toucher::player([0.5, -0.3, 0.0])];
-        once.update(&mut ch, &away, 1);
-        or.update(&mut ch, &away, 1);
+        once.update(&mut ch, &away, &[], 1);
+        or.update(&mut ch, &away, &[], 1);
         assert!(!ch.on(0x22));
-        once.update(&mut ch, &on, 2);
-        or.update(&mut ch, &on, 2);
+        once.update(&mut ch, &on, &[], 2);
+        or.update(&mut ch, &on, &[], 2);
         assert!(ch.on(0x23) && ch.on(0x22));
         // Latched: stays on after Bond leaves; the TouchOnce removes itself.
-        once.update(&mut ch, &away, 3);
-        or.update(&mut ch, &away, 3);
+        once.update(&mut ch, &away, &[], 3);
+        or.update(&mut ch, &away, &[], 3);
         assert!(ch.on(0x22) && once.gone);
         // A drone-only plate ignores Bond.
         let drone_plate = plate(kind::TOUCH_ONCE, 0x30, 0x10, vec![]);
-        assert!(!drone_plate.hit(&ch, &on));
-        assert!(drone_plate.hit(&ch, &[Toucher { drone: true, ..on[0] }]));
+        assert!(!drone_plate.hit(&ch, &on, &[]));
+        assert!(drone_plate.hit(&ch, &[Toucher { drone: true, ..on[0] }], &[]));
     }
 
     /// The movie trigger (0xF4 → action 0xd), `Trigger_Update` case 0xd [M 0x1b1a78:190-201, disasm
@@ -702,11 +760,11 @@ mod tests {
         movie.movie_code = 0x0720_004a;
         let touchers: [Toucher; 0] = [];
         // Sister 2 first: the channel off → nothing (and the channel is not cleared).
-        movie.update(&mut ch, &touchers, 2);
+        movie.update(&mut ch, &touchers, &[], 2);
         assert!(!movie.movie_fired, "channel off → no fire");
         // Fire: the channel on → cleared + the movie code carried.
         ch.set(0x2a, 1, 1);
-        movie.update(&mut ch, &touchers, 3);
+        movie.update(&mut ch, &touchers, &[], 3);
         assert!(movie.movie_fired, "input slot non-zero + channel on → case 0xd fires [M 0x1b1f24-0x1b1f48]");
         assert!(!ch.on(0x2a), "the fire clears the input channel [M 0x1b1f48 `sb zero,0(a0)`]");
         assert_eq!(movie.movie_code, 0x0720_004a, "the out slot's full u32 rides (ext+0x20 → GameState+0x10 [M 0x1b1f68])");
@@ -714,14 +772,14 @@ mod tests {
         // The port's re-arm rule: the walk drains `movie_fired`; a re-armed channel fires again.
         movie.movie_fired = false;
         ch.set(0x2a, 1, 4);
-        movie.update(&mut ch, &touchers, 5);
+        movie.update(&mut ch, &touchers, &[], 5);
         assert!(movie.movie_fired, "re-armed → fires again (no latch in the game's arm)");
         // Sister 1: the disc's record shape — input slot 0 (p2 = 0 [D]) — never fires, even with
         // channel 0 armed (channel 0 is a real channel, but the SLOT guard fails first).
         let mut discs = plate(kind::MOVIE, 0, 4, vec![0]);
         discs.movie_code = 0;
         ch.set(0, 1, 6);
-        discs.update(&mut ch, &touchers, 7);
+        discs.update(&mut ch, &touchers, &[], 7);
         assert!(!discs.movie_fired, "input slot 0 → the first guard fails [M 0x1b1f24-0x1b1f28] — the 07000041 record's update path is inert");
         assert!(ch.on(0), "channel 0 untouched (the clear only runs on a fire)");
     }
@@ -755,15 +813,15 @@ mod tests {
         let mut exit = Trigger { kind: kind::LOAD_LEVEL, gate: 0x1D, next_level: 0x0700_0006, ..plate(kind::LOAD_LEVEL, 0, 8, vec![]) };
         let touchers: [Toucher; 0] = [];
         // Sister: gate off → nothing.
-        exit.update(&mut ch, &touchers, 1);
+        exit.update(&mut ch, &touchers, &[], 1);
         assert!(!exit.gone);
         // Gate on → fires, latches.
         ch.set(0x1D, 1, 1);
-        exit.update(&mut ch, &touchers, 2);
+        exit.update(&mut ch, &touchers, &[], 2);
         assert!(exit.gone);
         assert_eq!(exit.next_level, 0x0700_0006, "carries the next level hashcode");
         // Stays gone.
-        exit.update(&mut ch, &touchers, 3);
+        exit.update(&mut ch, &touchers, &[], 3);
         assert!(exit.gone);
     }
 
@@ -895,16 +953,16 @@ mod tests {
         ch.set(0x20, 1, 1);
         // Empty list → AND writes 1 (the port used to write 0).
         let mut empty = plate(kind::AND, 0x21, 0, vec![]);
-        empty.update(&mut ch, &[], 2);
+        empty.update(&mut ch, &[], &[], 2);
         assert!(ch.on(0x21), "an empty MuxIn latches its output ON (0x1b1cbc)");
         // Mid-list zero: inputs after it are invisible to the scan.
         ch.set(0x22, 1, 3);
         let mut mid = Trigger { kind: kind::AND, out: 0x23, list: vec![0x20, 0, 0x22], ..plate(kind::AND, 0, 0, vec![]) };
-        mid.update(&mut ch, &[], 4);
+        mid.update(&mut ch, &[], &[], 4);
         assert!(ch.on(0x23), "AND stops at the zero slot: only the prefix matters");
         // The same list on an OR: the zero slot also ends the scan (0x22 ignored).
         let mut orm = Trigger { kind: kind::OR, out: 0x24, list: vec![0, 0x22], ..plate(kind::OR, 0, 0, vec![]) };
-        orm.update(&mut ch, &[], 5);
+        orm.update(&mut ch, &[], &[], 5);
         assert!(!ch.on(0x24), "OR over an all-zero prefix writes 0");
     }
 
@@ -918,21 +976,21 @@ mod tests {
         ch.set(0x30, 1, 10);
         ch.set(0x31, 1, 110);
         let mut seq = Trigger { kind: kind::SEQ_AND, out: 0x32, list: vec![0x30, 0x31], ..plate(kind::SEQ_AND, 0, 0, vec![]) };
-        seq.update(&mut ch, &[], 111);
+        seq.update(&mut ch, &[], &[], 111);
         assert!(ch.on(0x32), "no upper bound on the SEQ_AND window");
         // Up to 4 frames of skew the other way is also accepted (cur older than prev).
         let mut ch = Channels::default();
         ch.set(0x30, 1, 50);
         ch.set(0x31, 1, 47); // 4 frames older: 50-4 <= 47
         let mut seq = Trigger { kind: kind::SEQ_AND, out: 0x32, list: vec![0x30, 0x31], ..plate(kind::SEQ_AND, 0, 0, vec![]) };
-        seq.update(&mut ch, &[], 51);
+        seq.update(&mut ch, &[], &[], 51);
         assert!(ch.on(0x32), "the current input may be up to 4 frames older");
         // Sister: more than 4 frames of skew the other way fails.
         let mut ch = Channels::default();
         ch.set(0x30, 1, 50);
         ch.set(0x31, 1, 45); // 5 frames older: 50-4 > 45
         let mut seq = Trigger { kind: kind::SEQ_AND, out: 0x32, list: vec![0x30, 0x31], ..plate(kind::SEQ_AND, 0, 0, vec![]) };
-        seq.update(&mut ch, &[], 51);
+        seq.update(&mut ch, &[], &[], 51);
         assert!(!ch.on(0x32));
     }
 
@@ -958,15 +1016,15 @@ mod tests {
         let away = [Toucher::player([5.0, 0.0, 5.0])];
         // Latch via touch, leave, then re-arm the channel externally: with the flag the plate deletes itself.
         let mut t = plate(kind::TOUCH_ONCE, 0x50, 8, vec![]);
-        t.update(&mut ch, &on, 1);
+        t.update(&mut ch, &on, &[], 1);
         assert!(ch.on(0x50));
-        t.update(&mut ch, &away, 2);
+        t.update(&mut ch, &away, &[], 2);
         assert!(t.gone, "glist 0x10 set: the TouchOnce deletes itself");
         // Without the glist bit the delete is refused (the port models every TouchOnce with the bit — live data).
         let mut ch2 = Channels::default();
         ch2.set(0x50, 1, 1);
         let mut keep = Trigger { glist_0x10: false, ..plate(kind::TOUCH_ONCE, 0x50, 8, vec![]) };
-        keep.update(&mut ch2, &away, 2);
+        keep.update(&mut ch2, &away, &[], 2);
         assert!(!keep.gone, "no glist 0x10: the trigger survives");
     }
 
@@ -1052,5 +1110,184 @@ mod tests {
         // Sister: the mission-start briefing wrap is a different code (and the only Double Cross
         // one in UsingMovie — pinned against the port's whitelist in nf-view).
         assert_eq!(wrap_intro(0x0700_0001), 0x0710_0001);
+    }
+
+    // ===== mask & 2 — the class-5 (BULLET) contact arm, Trigger_Hit 0x1b1fc8:124-163 =====
+    //
+    // The contacts are the port's LIVE bullet objects: a grenade ticked through its real
+    // `Grenade::update` (gravity, the real step integration) contributes its actual per-tick
+    // swept segment, exactly what `Drones::tick` pushes into `bullet_contacts_now` and what the
+    // game's bullet picker (`Bullet_update` arms its HITTEST 0x201/0x101, `Collide_PickObj`
+    // 0x1eae80:93-107 + `Collide_Intersect`/`Intersect_CylGeom` vs the trigger's glist tris)
+    // turns into the trigger's obj+0xD0 entry.
+
+    /// The trigger-plate quad as a `BulletContact` source: a real satchel (0x3b) dropped through
+    /// it. `satchel_seg` ticks the grenade once and returns the swept segment.
+    fn tick_grenade_seg(g: &mut crate::grenade::Grenade, rng: &mut crate::drone::Rng) -> BulletContact {
+        let prev = g.pos;
+        let alive = g.state < 2;
+        let _ = g.update(&crate::world::CollisionWorld::empty(), rng);
+        assert!(alive, "grenade alive through the tick");
+        BulletContact { a: prev, b: g.pos, id: g.weapon_type }
+    }
+
+    fn falling_grenade(id: u16) -> crate::grenade::Grenade {
+        crate::grenade::Grenade {
+            pos: [0.0, 1.5, 0.0], velocity: [0.0, -1.0, 0.0], speed: 1.0, travelled: 0.0, range: 300.0,
+            damage: 0.0, radius: 0.0, mesh: 0, owner: usize::MAX, state: 0, bounces: 0,
+            smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None,
+            weapon_type: id,
+        }
+    }
+
+    /// A satchel's flight segment crossing the plate fires a Touch plate whose filter wants the
+    /// satchel's weapon-def id 0x3b [M 0x1b1fc8:136-158 — `*(short *)(filter) ==
+    /// *(short *)(*(*(obj+0xE0)+0x44)+2)`; the satchel's `Grenade.weapon_type` IS that id, the
+    /// throw site's `[wd[2], wd[3]]`]. The filter list here is the 937-census shape: one entry.
+    #[test]
+    fn a_satchel_flight_segment_fires_the_satchel_filtered_plate() {
+        let mut ch = Channels::default();
+        let mut plate = plate(kind::TOUCH, 0x40, 2, vec![0x3b]);
+        let mut g = falling_grenade(0x3b);
+        let mut rng = crate::drone::Rng::new(0x5eed);
+        let mut fired_at = None;
+        for t in 1..200u32 {
+            let seg = tick_grenade_seg(&mut g, &mut rng);
+            crate::triggers::calc(0, std::slice::from_mut(&mut plate), &mut ch, &[], &[seg], t);
+            if ch.on(0x40) { fired_at = Some(t); break; }
+        }
+        assert!(fired_at.is_some(), "the satchel's flight through the plate fired it");
+    }
+
+    /// Sister [M 0x1b1fc8:144-148]: a different weapon's round does not satisfy the filter — the
+    /// frag's id 0x34 walks the class-5 nodes, misses the 0x3b compare on every one, and the
+    /// entry's carry (`cVar10 = cVar9`) returns 0.
+    #[test]
+    fn a_frags_flight_segment_does_not_fire_the_satchel_filtered_plate() {
+        let mut ch = Channels::default();
+        let mut plate = plate(kind::TOUCH, 0x40, 2, vec![0x3b]);
+        let mut g = falling_grenade(0x34);
+        let mut rng = crate::drone::Rng::new(0x5eed);
+        for t in 1..200u32 {
+            let seg = tick_grenade_seg(&mut g, &mut rng);
+            crate::triggers::calc(0, std::slice::from_mut(&mut plate), &mut ch, &[], &[seg], t);
+            assert!(!ch.on(0x40), "tick {t}: the frag's id 0x34 must not satisfy the 0x3b filter");
+        }
+    }
+
+    /// Every nonzero filter entry must be satisfied [M 0x1b1fc8:136-158 — the AND carry across the
+    /// ≤8 entries], each by SOME touching bullet. Two entries (0x3b + 0x34): both rounds through
+    /// the plate in one tick fire it; either one alone does not.
+    #[test]
+    fn every_filter_entry_needs_a_matching_bullet() {
+        let mut ch = Channels::default();
+        let mut both = plate(kind::TOUCH, 0x40, 2, vec![0x3b, 0x34]);
+        let mut satchel = falling_grenade(0x3b);
+        let mut frag = falling_grenade(0x34);
+        let mut rng = crate::drone::Rng::new(0x5eed);
+        let mut satchel_crossed = false;
+        for t in 1..200u32 {
+            let seg_a = tick_grenade_seg(&mut satchel, &mut rng);
+            let seg_b = tick_grenade_seg(&mut frag, &mut rng);
+            crate::triggers::calc(0, std::slice::from_mut(&mut both), &mut ch, &[], &[seg_a], t);
+            if ch.on(0x40) { panic!("tick {t}: the satchel alone must not satisfy both entries"); }
+            crate::triggers::calc(0, std::slice::from_mut(&mut both), &mut ch, &[], &[seg_a, seg_b], t);
+            if ch.on(0x40) { satchel_crossed = true; break; }
+        }
+        assert!(satchel_crossed, "both rounds through the plate satisfy both entries");
+    }
+
+    /// An EMPTY filter list returns 1 [M 0x1b1fc8:130-135 — `*(short *)(param_2 + 0x26) == 0`
+    /// returns `cVar9 = 1`], and the unfiltered default-mask-2 plate (the `Trigger_Create`
+    /// mask default [M 0x1b1720:80-84]) fires on ANY class-5 contact.
+    #[test]
+    fn an_unfiltered_mask2_plate_fires_on_any_round_through_it() {
+        let mut ch = Channels::default();
+        let mut any = plate(kind::TOUCH, 0x40, 2, vec![]);
+        let mut g = falling_grenade(0x34);
+        let mut rng = crate::drone::Rng::new(0x5eed);
+        let mut fired = false;
+        for t in 1..200u32 {
+            let seg = tick_grenade_seg(&mut g, &mut rng);
+            crate::triggers::calc(0, std::slice::from_mut(&mut any), &mut ch, &[], &[seg], t);
+            if ch.on(0x40) { fired = true; break; }
+        }
+        assert!(fired, "the frag's flight through the unfiltered plate fired it");
+    }
+
+    /// A TouchOnce plate fires the same way through `Trigger_Update`'s case-1 path (the port's
+    /// `update`) [M 0x1b1a78's case 1 → Trigger_Hit], and latches.
+    #[test]
+    fn a_touch_once_mask2_plate_fires_and_latches() {
+        let mut ch = Channels::default();
+        let mut once = plate(kind::TOUCH_ONCE, 0x41, 2, vec![0x3b]);
+        let mut g = falling_grenade(0x3b);
+        let mut rng = crate::drone::Rng::new(0x5eed);
+        let mut fired = false;
+        for t in 1..200u32 {
+            let seg = tick_grenade_seg(&mut g, &mut rng);
+            once.update(&mut ch, &[], &[seg], t);
+            if ch.on(0x41) { fired = true; break; }
+        }
+        assert!(fired, "the satchel's flight fired the TouchOnce plate");
+        // The case-1 delete runs on a LATER update while the channel is on [M 0x1b1d78-0x1b1d90].
+        once.update(&mut ch, &[], &[], 999);
+        assert!(once.gone, "a spent TouchOnce with glist 0x10 removes itself");
+    }
+
+    /// A STUCK gadget contributes nothing: the game's bullet picker gate (ht+0x94) is written only
+    /// while the bullet's state < 2 [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f03c — `slti
+    /// v0, state, 2` closes it otherwise; `Bullet_init` 0x12c668 zeroes it at spawn], so a satchel
+    /// resting on the plate pushes no contact. The port's model of the same fact here: a
+    /// zero-length segment (a == b — what a resting gadget would sweep) touches no triangle. A
+    /// TOUCH plate's channel is the per-tick clear + OR [M Trigger_Calc 0x1b1900], so under
+    /// rest-only contacts it reads 0 every tick — a resting gadget neither fires a fresh plate nor
+    /// holds a crossed one on.
+    #[test]
+    fn a_stuck_gadget_resting_on_the_plate_neither_fires_nor_holds_it() {
+        let mut ch = Channels::default();
+        // The resting gadget: zero-length segment inside the volume, every tick.
+        let rest = BulletContact { a: [0.0, 0.02, 0.0], b: [0.0, 0.02, 0.0], id: 0x3b };
+        let mut fresh = plate(kind::TOUCH, 0x42, 2, vec![0x3b]);
+        for t in 1..100u32 {
+            crate::triggers::calc(0, std::slice::from_mut(&mut fresh), &mut ch, &[], &[rest], t);
+            assert!(!ch.on(0x42), "tick {t}: the resting gadget's zero-length segment never fires the plate");
+        }
+        // The same rest-only contacts cannot hold a plate whose flight already crossed (the
+        // per-tick clear + OR re-evaluates from THIS tick's contacts alone).
+        let mut crossed = plate(kind::TOUCH, 0x40, 2, vec![0x3b]);
+        let seg = BulletContact { a: [0.0, 0.5, 0.0], b: [0.0, -0.5, 0.0], id: 0x3b };
+        crate::triggers::calc(0, std::slice::from_mut(&mut crossed), &mut ch, &[], &[seg], 1);
+        assert!(ch.on(0x40), "the crossing segment fired the plate");
+        crate::triggers::calc(0, std::slice::from_mut(&mut crossed), &mut ch, &[], &[rest], 2);
+        assert!(!ch.on(0x40), "rest-only contacts: the Touch channel re-evaluates off");
+        // The latch semantics live on the TouchOnce arm (pinned in the test above).
+    }
+
+    /// The 0x18 filter branch still returns first [M 0x1b1fc8:56-123]: with a player/drone contact
+    /// on a type-1/2 trigger whose mask carries 0x18 bits, the filter chain consumes the call — its
+    /// list entries are drone skin hashes there, NOT weapon ids — and the mask-2 arm never runs.
+    /// Without a player/drone contact the same plate reads the mask-2 arm, where the list entries
+    /// ARE weapon ids.
+    #[test]
+    fn the_player_arm_returns_before_the_mask2_filter() {
+        let mut ch = Channels::default();
+        let dual = plate(kind::TOUCH, 0x43, 0x1a, vec![0x3b]);
+        let on = [Toucher::player([0.5, -0.3, 0.0])];
+        let satchel = BulletContact { a: [0.0, 0.5, 0.0], b: [0.0, -0.5, 0.0], id: 0x3b };
+        let frag = BulletContact { a: [0.0, 0.5, 0.0], b: [0.0, -0.5, 0.0], id: 0x34 };
+        // No player: the mask-2 arm runs, the list entries are weapon ids.
+        assert!(dual.hit(&ch, &[], &[satchel]), "the mask-2 filter matches the satchel's id [M :146-147]");
+        assert!(!dual.hit(&ch, &[], &[frag]), "the mask-2 filter refuses the frag [M :144-148]");
+        // A player contact: the 0x18 branch consumes the call — 0x3b is a drone-hash entry there
+        // (no drone toucher → the entry fails) and the mask-2 arm is never reached.
+        assert!(!dual.hit(&ch, &on, &[satchel]), "the 0x18 branch returned before the mask-2 arm [M :56-123]");
+        assert!(!dual.hit(&ch, &on, &[]), "the empty-bullet case reads the same 0x18 chain");
+        // The empty-list 0x1a plate: the 0x18 chain's base alone [M :70-72] — any player contact
+        // fires with or without class-5 traffic.
+        let mixed = plate(kind::TOUCH, 0x44, 0x1a, vec![]);
+        assert!(mixed.hit(&ch, &on, &[]));
+        assert!(mixed.hit(&ch, &on, &[frag]));
+        assert!(mixed.hit(&ch, &[], &[satchel]), "no player: the mask-2 arm — an empty filter fires on any contact [M :130-135]");
     }
 }

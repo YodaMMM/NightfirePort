@@ -10964,6 +10964,15 @@ pub struct Drones {
     pub mission_events: Vec<crate::mission::Event>,
     /// The weapon of each `bullet_paths` entry, in order (crate::useobj's 0x58 install check).
     bullet_path_weapons: Vec<u16>,
+    /// This tick's class-5 (BULLET) flight contacts (`triggers::BulletContact`): filled as each
+    /// projectile MOVES (player bullets in `update_player_bullets`, drone bullets + grenades in the
+    /// tail passes), consumed by `Trigger_Calc` ONE tick later — the game's own phase: `Trigger_Calc`
+    /// runs at the head of `control_movement_object_handler` (0x1336f8:24) BEFORE the object update
+    /// walk (:62-63) and `Collide_Update` (:238), so `Trigger_Hit` 0x1b1fc8:18 reads the PREVIOUS
+    /// Collide_Update's `obj+0xD0` list (cleared + rebuilt :25-53).
+    bullet_contacts_now: Vec<crate::triggers::BulletContact>,
+    /// Last tick's `bullet_contacts_now` — the set `Trigger_Hit` reads this tick (see above).
+    bullet_contacts_prev: Vec<crate::triggers::BulletContact>,
     /// The route-node → door binding (`NDrone_InitDoorNodes` 0x139a70: each door-flagged node binds
     /// its nearest door object), keyed (nav path, node id) → `Doors::list` index. Computed lazily on
     /// the first tick that needs it (the doors' positions are static).
@@ -11208,6 +11217,8 @@ impl Drones {
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            bullet_contacts_now: Vec::new(),
+            bullet_contacts_prev: Vec::new(),
             // fix-06-alarm (fields on their own lines — merge lesson 4).
             sound_triggers: Default::default(),
             // task 845: the shared target registry (NPCGlobals DAT_00299110).
@@ -12428,6 +12439,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let ray = [b.dir[0] * l, b.dir[1] * l, b.dir[2] * l];
             let end = [b.pos[0] + ray[0], b.pos[1] + ray[1], b.pos[2] + ray[2]];
             self.bullet_paths.push((b.pos, end));
+            // The class-5 trigger contact (`Trigger_Hit` 0x1b1fc8:124-163's input): the round's
+            // per-tick swept segment + its weapon-definition id (`weapon_data+0x02` — what :147
+            // reads off `*(*(obj+0xE0)+0x44)+2`). Consumed by Trigger_Calc next tick (the game's
+            // own phase — see tick_inner's rotation).
+            let bid = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x02], r[0x03]]));
+            self.bullet_contacts_now.push(crate::triggers::BulletContact { a: b.pos, b: end, id: bid });
             // The searchlight contact feed (U-041 ported): the segment, the HITTEST's damage (the
             // weapon's contact damage — `Bullet_update` 0x12e7b0's per-tick +0x90 write) and the pick
             // mode (the slow-tick point arm when the raw step is under the 0.125 threshold — the
@@ -13956,6 +13973,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let _prof_all = crate::prof::scope("drones.tick (total)");
         let prof_pre = crate::prof::scope("drones: shared passes");
         self.frame += 1;
+        // The trigger contacts' phase rotation: `Trigger_Hit` reads the PREVIOUS tick's collide
+        // contacts (`Trigger_Calc` 0x1336f8:24 runs before the update walk :62-63 and Collide_Update
+        // :238; the lists are cleared + rebuilt in Collide_Update 0x1ea398:25-53). Everything that
+        // moves after this line pushes into `bullet_contacts_now`; the trigger passes below consume
+        // `bullet_contacts_prev`.
+        self.bullet_contacts_prev = std::mem::take(&mut self.bullet_contacts_now);
         self.player_pos = player.pos;
         // `Drone_InitComms` 0x139520:263-273: the latch `0x298f84 = 0x298fa0` then `0x298fa0 = 0` —
         // the per-frame sight counter becomes "saw last frame"; this tick's sight accumulates below.
@@ -14897,7 +14920,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true }))
             .collect();
         drop(prof_pre);
-        { let _p = crate::prof::scope("drones: Trigger_Calc"); crate::triggers::calc(d.level, &mut self.triggers, &mut self.channels, &touchers, frame); }
+        { let _p = crate::prof::scope("drones: Trigger_Calc"); crate::triggers::calc(d.level, &mut self.triggers, &mut self.channels, &touchers, &self.bullet_contacts_prev, frame); }
         // level-0c-complete: the deferred use-key trigger half — the game's E press fires at
         // Bond's turn in the object walk, AFTER Trigger_Calc's touch clear and BEFORE the later
         // muxes' updates in the same walk [M 0x1336f8's loop; Player_Activate 0x1a5170]. Consumed
@@ -15158,7 +15181,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let drone_pre: Vec<V3> = self.list.iter().map(|x| x.pos).collect();
         for &(_, what, index) in &order {
             if what == 1 { let _pw = crate::prof::scope("ctl: kind 1");
-                self.triggers[index].update(&mut self.channels, &touchers, frame);
+                self.triggers[index].update(&mut self.channels, &touchers, &self.bullet_contacts_prev, frame);
                 // `LOAD_LEVEL` (0xE8): when the exit trigger fires, carry the next level's hashcode for the main loop
                 // to reload (`Trigger_Activate` 0x1b2318 → `ResetMap_LevelToLoad`). Also post `Music_Event(3, 1)`
                 // (the end-sting) and `GS_PauseGame(1)` (the pause during transition) [M 0x1b2318:108-110].
@@ -16191,6 +16214,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let viewer = player.pos;
         for b in &mut self.bullets {
             let (from, dir) = (b.pos, b.dir);
+            let alive_in = b.state < 2;
             if let Some(ev) = b.update(d.world, &vol, viewer, &mut self.rng) {
                 match ev {
                     crate::bullet::BulletEvent::World(p) => {
@@ -16322,6 +16346,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
                 self.impacts.push(ev);
             }
+            // The class-5 trigger contact for a drone round that flew this tick (`Trigger_Hit`
+            // 0x1b1fc8:124-163's input — same shape as the player bullets' push in
+            // `update_player_bullets`; consumed next tick). A round that died on the world this
+            // tick moved no further (the port's Bullet::update returns before the move), so its
+            // contact is the residual from its earlier segments [*deviation*: the game's picker
+            // still sweeps the death tick's partial step — Collide_Update runs on the just-moved
+            // path before the handler kills the round; the port's world trace and the move are
+            // one decision].
+            if alive_in {
+                let bid = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x02], r[0x03]]));
+                self.bullet_contacts_now.push(crate::triggers::BulletContact { a: from, b: b.pos, id: bid });
+            }
         }
         self.bullets.retain(|b| b.state < 2);
         // fix-gas-rng4: the player bullets' impact draws at the game's collide pass — after the
@@ -16372,6 +16408,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             out
         } else { Vec::new() };
         for g in &mut self.grenades {
+            // The class-5 trigger contact (Trigger_Hit 0x1b1fc8:124-163's input): the grenade's
+            // per-tick swept segment with its weapon-def id (`Grenade.weapon_type` IS
+            // `weapon_data+0x02` [M the throw site's `[wd[2], wd[3]]`]). A STUCK gadget (state ≥ 2
+            // or the stuck phase) contributes nothing: the game's picker gate ht+0x94 is written
+            // only while state < 2 [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f03c — `slti
+            // v0, state, 2` closes it otherwise], and a zero-length segment touches no triangle.
+            let gprev = g.pos;
+            let galive = g.state < 2;
             // fix-oddjob-hat: the hat's homing — `Bullet_update` 0x12e7b0:476-478 runs
             // `Bullet_homing` 0x12f358 after every flying tick for bullets whose `+0x6C` carries
             // 0x20000. The hat's record does — +0x6C = 0x20C08, the only 0x20000 carrier among the
@@ -16643,6 +16687,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         break;
                     }
                 }
+            }
+            // The class-5 trigger contact push (after the update moved `g.pos`; see the loop head's
+            // note). Alive through the tick = the swept segment; the death tick still swept its
+            // path (the game picks the moved segment before the handler kills the object).
+            if galive {
+                self.bullet_contacts_now.push(crate::triggers::BulletContact { a: gprev, b: g.pos, id: g.weapon_type });
             }
         }
         // The queued blasts (`Explode_Create` 0x17cbd0): the full blast — propagate, the 0x6000052
