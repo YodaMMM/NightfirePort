@@ -11017,6 +11017,9 @@ pub struct Drones {
     /// The helicopter (`Copter_Create` 0x17d340, placement 0x2F; fix-objects2): 07000008's
     /// extraction copter — gated on ch 5, its arrival writes ch 0x4B (the last mission objective).
     pub copters: Vec<crate::copter::Copter>,
+    /// `CopterPaths` — the 0x1c route nodes `Copter_Create` builds from every 0x2F placement
+    /// (`LList_Add(0x316fe0, node)` [M 0x17d340:42]; copter-path-flight).
+    pub copter_paths: Vec<crate::copter::CopterPath>,
     /// The locks (`Lock_Create` 0x1ae1f8, placement 0x2E; fix-objects2): the laser-burn targets —
     /// 07000008's safe bolts (chs 134/135 → mux 136 → the safe door).
     pub locks: Vec<crate::lock::Lock>,
@@ -11354,7 +11357,7 @@ impl Drones {
             movie_request: None,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             // fix-06-alarm (fields on their own lines — merge lesson 4).
             sound_triggers: Default::default(),
             // task 845: the shared target registry (NPCGlobals DAT_00299110).
@@ -11672,8 +11675,11 @@ impl Drones {
         // RNG draw): the security-camera cone detectors; keys from the same 0x19 blocks.
         self.sensors = crate::sensor::Sensors::create(&level.maps[m].placements, &path_blocks);
         // The helicopter (`Copter_Create` 0x17d340, placement 0x2F) and the locks (`Lock_Create`
-        // 0x1ae1f8, placement 0x2E) (fix-objects2). Neither draws RNG at create.
-        self.copters = crate::copter::Copter::create(&level.maps[m].placements, self.difficulty);
+        // 0x1ae1f8, placement 0x2E) (fix-objects2). Neither draws RNG at create. The route nodes
+        // come first — every 0x2F placement makes one (`LList_Add(0x316fe0, ..)` [M 0x17d340:42]),
+        // and the kind-0 ones then own their node as rec+0x54 (copter-path-flight).
+        self.copter_paths = crate::copter::CopterPath::create(&level.maps[m].placements, &path_blocks);
+        self.copters = crate::copter::Copter::create(&level.maps[m].placements, &self.copter_paths, self.difficulty);
         self.locks = crate::lock::Lock::create(&level.maps[m].placements, self.difficulty, |p| {
             let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
                 else { level.maps[m].objects.get(p.index as usize) };
@@ -12215,6 +12221,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // open live check in the report).
         let drones: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
             .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, 0.4)).collect();
+        // copter-hitdata-damage: the parts' world spheres for the case-0 sweep (the SP part
+        // targets, the same volumes the bullet pass tests).
+        let copter_parts: Vec<(usize, Vec<(V3, f32)>)> = self.copters.iter().enumerate()
+            .map(|(ci, c)| {
+                let (targets, present) = self.scripts.copter_part_targets(c.placement, d);
+                (ci, targets.iter().enumerate()
+                    .filter(|(i, _)| present & (1u16 << i) != 0)
+                    .filter_map(|(_, v)| *v).collect())
+            }).collect();
         // mp-site-damage-offline: the blast reaches the scenario site — `Explode_Propagate`'s
         // case 0x35 applies `MP_ApplyDamage(falloff, mpobj, owner)` directly, one store per blast,
         // the falloff the shared exact form [M 0x17c518:82-85,:187]. Queued for the driver (the
@@ -12225,7 +12240,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if a > 0.0 { self.site_blast_hits.push((a, owner)); }
         }
         let hits = crate::explode::propagate(pos, radius, damage, owner,
-            &crate::explode::Targets { drones: &drones, player: player_pos, breaks: &[], destroys: &[] });
+            &crate::explode::Targets { drones: &drones, player: player_pos, breaks: &[], destroys: &[],
+                // copter-hitdata-damage: the blast sweeps the copter's parts — Explode_Propagate's
+                // case 0 adds the falloff straight into rec+0x64 and rec+0x6c, no Bits scaling,
+                // no filter [M 0x17c518:86-105]. The parts are the class-0 script entities, so
+                // the sweep is over the SP part targets' spheres.
+                copters: &copter_parts });
         // Bond: `Player_Hurt` (the difficulty factor is applied in `explode_propagate`).
         if let Some(ph) = hits.player.filter(|_| !self.net_no_self_hurt) {
             let before = self.health.health;
@@ -12247,6 +12267,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // (the playtest's "grenades stagger nobody"). A guard whose state has no case 9 (Attack/
         // Combat/WaitSwitch…) drops the message and takes nothing — the game's own routing
         // [M 0x1469b8 case 9 + 0x15b830].
+        // copter-hitdata-damage [M 0x17c518 case 0]: the blast's summed part falloff lands
+        // straight into rec+0x64 and rec+0x6c.
+        for (ci, dmg) in hits.copters {
+            if let Some(c) = self.copters.get_mut(ci) { c.damage += dmg; c.attack_acc += dmg; }
+        }
         for (di, ddmg) in hits.drones {
             if let Some(dr) = self.list.get_mut(di) {
                 dr.last_damage = ddmg;
@@ -12512,6 +12537,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The held hit-point scripts' stream objects — `SP_GetHitDamage` 0x1dc5f8's read set
         // (GAPS G-047: the 0700001b solar panels). Each bullet contact below adds its damage.
         let held_targets = self.scripts.held_hit_targets(d);
+        // copter-hitdata-damage: the copters' 9 part slots' world spheres, resolved once per
+        // tick (the parts pose with the SP player — the documented one-tick script-entity lag;
+        // the game's collide pass reads the same last-walk poses [M 0x1336f8:238]).
+        let copter_targets: Vec<([Option<([f32; 3], f32)>; 9], u16)> = self.copters.iter()
+            .map(|c| self.scripts.copter_part_targets(c.placement, d)).collect();
         let frame = self.frame;
         let mut bullets = std::mem::take(&mut self.player_bullets);
         // fix-0c-hatch-latches2: this tick's bullet-vs-SS-part Operate contacts (bit 1), recorded
@@ -12730,6 +12760,29 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     .map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
                 if cat & 1 == 0 && Self::segment_hits_sphere(b.pos, end, c, r) {
                     self.site_bullet_damage += b.damage;
+                }
+            }
+            // copter-hitdata-damage [M Copter_Update 0x17dbb8:277-320]: the game's collide pass
+            // appends the contact to the hit PART's obj+0xD0 chain (the parts are the SP's
+            // class-0 script entities) and the walk consumes the chains with the per-slot Bits
+            // scale and the weapon-class filter (`Collide_FilterBullets`). The port registers
+            // the contact per slot here — the damage is the weapon's contact damage (the same
+            // HITTEST amount the searchlight feed carries), the class the record's +0x10 word —
+            // and `Copter::update`'s walk does the filter + scaling. Multiple slots on one ray
+            // all count (the game's chains are per object, no dedup).
+            {
+                let bclass = d.weapons.records.get(b.weapon as usize)
+                    .map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+                let bcontact = d.weapons.bullet_contact_damage(b.weapon);
+                for (ci, (targets, present)) in copter_targets.iter().enumerate() {
+                    if *present == 0 { continue; }
+                    let c = &mut self.copters[ci];
+                    for slot in 0..9usize {
+                        let Some((centre, r)) = targets[slot] else { continue };
+                        if Self::segment_hits_sphere(b.pos, end, centre, r) {
+                            c.part_hits.push(crate::copter::PartHit { slot: slot as u8, damage: bcontact, class: bclass });
+                        }
+                    }
                 }
             }
             // The lazer watch's beam burns the locks (`Lock_Update` 0x1ae3d8 case 0, record word 1):
@@ -15072,15 +15125,28 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // invisible to the edge test.
         self.doors.end_tick(&self.channels);
         // The helicopter (`Copter_Update` 0x17dbb8, fix-objects2): the gate check (with the head's
-        // unhide + the +0x70 zeroing), the countdown pulse and the arrival write. The flight no
-        // longer spawns a synthetic one-shot player: the copter's real ScriptPlayer exists from
+        // unhide + the +0x70 zeroing), the countdown pulse, the state machine and `Copter_Move`'s
+        // CopterPaths flight (copter-path-flight). The copter's real ScriptPlayer exists from
         // the create beat (`spawn_copter_sp` above — the game's `SP_Create` inside
         // `Copter_Create` 0x17d340), primed looping, hidden until this edge unhides it
-        // (`SP_HideObj(sp, 0)` [M 0x17dbb8 head]; docs/systems/copter-sp-hide.md).
+        // (`SP_HideObj(sp, 0)` [M 0x17dbb8 head]; docs/systems/copter-sp-hide.md). While the
+        // flight flies, `SP_SetPosRot(*(rec+0x2c), obj+0x90)` [M Copter_Move 0x17d628:115] puts
+        // the copter matrix on the SP player — its stream entities ride it.
+        // `explode_level` = GameState+0x12 ∈ {0x0700000b, 0x07000012} — the death goes to state 6
+        // there [M Copter_Update 0x17dbb8:360-363].
+        let explode_level = matches!(d.level, 0x0700_000b | 0x0700_0012);
+        let paths = self.copter_paths.clone();
         for c in &mut self.copters {
-            let len = self.scripts.lib.get(&c.scripts[1]).map(|n| n.length as u32).unwrap_or(0);
-            let (_, _, unhide) = c.tick(&mut self.channels, len, frame);
+            // copter-hitdata-damage: the slot-3 emitter's position (the gas branch's gate
+            // `rec+0x3c != 0` + its obj+0x80) refreshes from the SP part targets each tick.
+            let (targets, _) = self.scripts.copter_part_targets(c.placement, d);
+            c.slot3_pos = targets[3].map(|(p, _)| p);
+            let (unhide, posed) = c.update(&paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng);
             if unhide { self.scripts.unhide_sp(c.placement); }
+            if posed { self.scripts.pose_copter_sp(c.placement, c.matrix); }
+            // PlrStat_LogShotHitEnemy(0) [M 0x17dbb8:314-316, jal 0x199840]: the walk's roll is
+            // per tick; the stats fold below counts it exactly once (the flag holds until the
+            // next update overwrites it).
         }
         // The script players' tick head (the create-time load beat — the game does it during the
         // level load [M 0x1db9a8:81-86]): the players THEMSELVES update from the control walk
@@ -17014,6 +17080,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if dr.surrender_logged { dr.surrender_logged = false; surrendered += 1; }
                 hit += dr.hit_log; dr.hit_log = 0;
             }
+            // copter-hitdata-damage: the copter walk's `PlrStat_LogShotHitEnemy(0)` roll [M
+            // 0x17dbb8:314-316] folds here like the drones' outboxes — this tick's update set
+            // the flag before this block runs.
+            for c in &self.copters { if c.shot_hit_enemy { hit += 1; } }
             for _ in 0..dispatched { self.progress.log_enemy_dispatched(ms); }
             for _ in 0..disabled { self.progress.log_enemy_disabled(ms); }
             for _ in 0..surrendered { self.progress.log_enemy_surrender(ms); }

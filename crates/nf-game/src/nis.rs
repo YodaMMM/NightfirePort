@@ -1678,6 +1678,48 @@ impl Scripts {
         if let Some(p) = self.players.get_mut(player) { p.tick_damage += dmg; }
     }
 
+    /// The copter's 9 part slots (`Copter_Register` 0x17e530:6 — the SP callback writes each
+    /// created script entity into `rec+0x30 + index·4`, 9 slots, and flags every one but slot 2
+    /// with obj+0xF0 bit 0x20). The port resolves slot i from the SP player's current script's
+    /// stream i — the same stream the game's entity-creation callback fires for — with the
+    /// `held_hit_targets` volume shape (the glist sphere through the object matrix, the
+    /// `Control_BuildWorldSph` test volume [M 0x133070:36-48]; an anim object carries its skin's
+    /// glist; no glist → the translation + 0.1). Returns the per-slot spheres and a presence
+    /// mask (bit i = slot i registered, the game's non-zero `rec+0x30+4i`). A hidden SP resolves
+    /// to nothing (the `Script_HideObj` cascade, the view's own read) — the game's collide pass
+    /// tests the hidden parts too [S unverified], but Bond cannot reach them before the gate.
+    pub fn copter_part_targets(&self, placement: usize, w: &dyn World) -> ([Option<([f32; 3], f32)>; 9], u16) {
+        let mut out: [Option<([f32; 3], f32)>; 9] = [None; 9];
+        let mut present = 0u16;
+        let Some(p) = self.players.iter().find(|p| p.placement == placement && !p.deleted) else { return (out, present) };
+        if p.hidden { return (out, present); }
+        let Some(s) = p.info[p.cur].as_ref() else { return (out, present) };
+        for i in 0..s.streams.len().min(9) {
+            if !matches!(s.streams[i].kind, 1 | 2) { continue; }
+            let vol = match (s.streams[i].obj, self.objects.list.get(s.streams[i].obj.unwrap_or(usize::MAX)).and_then(|o| o.as_ref())) {
+                (Some(o), Some(Obj::Entity { hash, matrix, .. })) => {
+                    let (c, r) = w.glist_sphere(*hash).unwrap_or(([0.0; 3], 0.1));
+                    Some(([matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
+                          matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
+                          matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]], r))
+                }
+                (Some(_), Some(Obj::Anim { skin, .. })) => {
+                    let Some(m) = s.stream_matrix(i, &self.objects, w) else { continue };
+                    let (c, r) = w.glist_sphere(*skin).unwrap_or(([0.0; 3], 0.1));
+                    Some(([m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
+                          m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
+                          m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]], r))
+                }
+                _ => {
+                    let Some(m) = s.stream_matrix(i, &self.objects, w) else { continue };
+                    Some(([m[3][0], m[3][1], m[3][2]], 0.1))
+                }
+            };
+            if let Some(v) = vol { out[i] = Some(v); present |= 1 << i; }
+        }
+        (out, present)
+    }
+
     /// A synthetic one-shot player (fix-objects2): mode 1 (plays once from spawn), no gate, no
     /// trigger — the game's hidden `SP_Create` inside `Copter_Create` 0x17d340 plays the copter's
     /// flight script the same way once its gate channel opens [M 0x1dbc08's mode dispatch].
@@ -1759,6 +1801,20 @@ impl Scripts {
     pub fn unhide_sp(&mut self, placement: usize) {
         for p in &mut self.players {
             if p.placement == placement { p.hidden = false; }
+        }
+    }
+
+    /// `SP_SetPosRot(*(copter+0x2c), obj+0x90)` [M `Copter_Move` 0x17d628:115]: every flown tick
+    /// the copter's SP player takes the copter object's matrix — the stream entities (the body,
+    /// the parts, the sub-script spawns) pose relative to it and so ride the CopterPaths route
+    /// (copter-path-flight). The playing script's base (`Script::load`'s matrix, what
+    /// `Script_Interp` concats [M 0x1d9a08:106-133's tail-Concat; nis.rs interp `mul(&m,
+    /// &self.matrix)`]) is the port's SP-object matrix — both fields move.
+    pub fn pose_copter_sp(&mut self, placement: usize, matrix: Mat4) {
+        for p in &mut self.players {
+            if p.placement != placement { continue; }
+            p.matrix = matrix;
+            if let Some(s) = p.info[p.cur].as_mut() { s.matrix = matrix; }
         }
     }
 

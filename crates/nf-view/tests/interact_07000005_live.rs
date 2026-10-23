@@ -294,9 +294,9 @@ fn the_sc3_plate_starts_the_gated_copter() {
     let mut w = load(&iso);
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.copters.iter().find(|c| c.gate == 0).expect("#241").started,
+        assert!(sim.drones.copters.iter().find(|c| c.gate == 0).expect("#241").state != 0,
             "the gate-0 copter runs from the first tick [M Copter_Update: a zero gate never blocks]");
-        assert!(!sim.drones.copters.iter().find(|c| c.gate == 66).expect("#242").started,
+        assert!(!sim.drones.copters.iter().find(|c| c.gate == 66).expect("#242").state != 0,
             "sister: the ch-0x42 copter is idle before the plate");
         assert!(!sim.drones.channels.on(0x42), "sister: no plate, no ch 0x42");
     }
@@ -314,7 +314,7 @@ fn the_sc3_plate_starts_the_gated_copter() {
     assert!(sim.drones.channels.on(0x42), "the plate raises ch 0x42 [D out 66]");
     // The gate's first ON tick zeroes record+0x70 [M Copter_Update 0x17dbb8 head] — find #242 by placement.
     let c = sim.drones.copters.iter().find(|c| c.placement == 242).expect("#242");
-    assert!(c.started && c.gate == 0, "the gate opens, +0x70 is zeroed and #242's flight starts [M Copter_Update]");
+    assert!(c.state != 0 && c.gate == 0, "the gate opens, +0x70 is zeroed and #242's flight starts [M Copter_Update]");
 }
 
 /// KIND: SoundTrigger 0xF9 — #254 (trigger ch 139 → the sound 368 [D params (0,139),(2,368);

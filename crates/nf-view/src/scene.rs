@@ -11238,11 +11238,11 @@ impl Sim {
                 if self.mp_dead_ticks[slot] > 0 { continue; }
                 let Some(v) = self.net_body(slot) else { continue };
                 let hits = nf_game::explode::propagate(c, radius, blast_damage, shooter,
-                    &nf_game::explode::Targets { drones: &[], player: v.pos, breaks: &[], destroys: &[] });
+                    &nf_game::explode::Targets { drones: &[], player: v.pos, breaks: &[], destroys: &[], copters: &[] });
                 if let Some(ph) = hits.player { self.net_world_pain(slot, ph, 0, Some(shooter)); }
             }
             let hits = nf_game::explode::propagate(c, radius, blast_damage, shooter,
-                &nf_game::explode::Targets { drones: &bots, player: [0.0, -1.0e9, 0.0], breaks: &[], destroys: &[] });
+                &nf_game::explode::Targets { drones: &bots, player: [0.0, -1.0e9, 0.0], breaks: &[], destroys: &[], copters: &[] });
             for (j, dmg) in hits.drones {
                 let Some(m) = self.mp.as_mut() else { break };
                 let bt = &mut m.bots[j];

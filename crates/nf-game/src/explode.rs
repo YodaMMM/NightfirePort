@@ -163,6 +163,11 @@ pub struct PropagateHits {
     /// Case 0x21 (destroyables): `Destroy_Smash(obj, attacker, 0x20)` when damage ≥ 1 and
     /// `*(u16*)(obj->data+0x14) & 0x20 == 0` [M 0x17c6a8-0x17c6c0].
     pub destroys: Vec<usize>,
+    /// Case 0 (the copter): `(copter index, summed damage)` — the blast sweeps the copter's 9
+    /// part slots; every part inside the sphere adds its falloff amount to rec+0x64 AND rec+0x6c
+    /// DIRECTLY — no Bits scaling, no weapon filter, no HITDATA chain [M Explode_Propagate
+    /// 0x17c518 case 0, the `CopterList` walk over `rec+0x30..0x54`].
+    pub copters: Vec<(usize, f32)>,
 }
 
 /// The targets one `Explode_Propagate` sweep can hit, as the port's Sim sees them. The game gets them
@@ -174,6 +179,11 @@ pub struct Targets<'a> {
     pub player: V3,
     /// Case 0x20 — the breakables `(index, pos, hit radius)`.
     pub breaks: &'a [(usize, V3, f32)],
+    /// Case 0 — the copter parts `(copter index, [(pos, radius); ≤9])`, the port's read of the
+    /// game's `Collide_SphereIntersect` sweep over the script-entity parts (the parts are class-0
+    /// objects; the copter itself is 0x3b and never matches case 0 [M Copter_Create 0x17d340
+    /// sets obj+0xFF = 0x3b, the parts are the SP's class-0 entities]).
+    pub copters: &'a [(usize, Vec<(V3, f32)>)],
     /// Case 0x21 — the destroyables `(index, pos, hit radius, smashed already)`.
     pub destroys: &'a [(usize, V3, f32, bool)],
 }
@@ -222,6 +232,18 @@ pub fn propagate(pos: V3, radius: f32, damage: f32, attacker: usize, t: &Targets
         // Case 0x21's own gate: the smash needs at least 1.0 [M 0x17c6a8].
         if d >= 1.0 { out.destroys.push(i); }
     }
+    // Case 0 [M 0x17c518:86-105]: the class-0 part sweep — per matching part the amount adds to
+    // both accumulators, so the copter's total is the SUM over its hit parts (the game adds per
+    // slot match with no dedup).
+    for (ci, parts) in t.copters {
+        let mut total = 0.0f32;
+        for &(p, r) in parts {
+            let mut d = 0.0f32;
+            sweep(p, r, &mut |a| d = a);
+            total += d;
+        }
+        if total > 0.0 { out.copters.push((*ci, total)); }
+    }
     let _ = attacker;
     out
 }
@@ -246,16 +268,16 @@ mod tests {
     fn propagate_falloff_truncates_the_distance() {
         // Radius 10, damage 100: a drone at distance 5.7 − radius 1 = 4.7 → (int) 4 → 100·(1−4/10) = 60.
         // A smooth falloff would give 57; the game's integer truncation gives 60 [M 0x17c61c-0x17c628].
-        let t = Targets { drones: &[(0, [5.7, 0.0, 0.0], 1.0)], player: [1000.0; 3], breaks: &[], destroys: &[] };
+        let t = Targets { drones: &[(0, [5.7, 0.0, 0.0], 1.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
         assert_eq!(h.drones.len(), 1);
         assert!((h.drones[0].1 - 60.0).abs() < 1e-4, "truncated falloff, got {}", h.drones[0].1);
         // Inside the object's own sphere (dist − radius < 0): full damage, not negative.
-        let t = Targets { drones: &[(0, [0.5, 0.0, 0.0], 1.0)], player: [1000.0; 3], breaks: &[], destroys: &[] };
+        let t = Targets { drones: &[(0, [0.5, 0.0, 0.0], 1.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
         assert!((h.drones[0].1 - 100.0).abs() < 1e-4, "inside the sphere: full, got {}", h.drones[0].1);
         // Below the 0.0002 cutoff: nothing.
-        let t = Targets { drones: &[(0, [9.999, 0.0, 0.0], 0.0)], player: [1000.0; 3], breaks: &[], destroys: &[] };
+        let t = Targets { drones: &[(0, [9.999, 0.0, 0.0], 0.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
         assert!(h.drones.is_empty() || h.drones[0].1 >= 0.0002);
     }
@@ -265,7 +287,7 @@ mod tests {
         // The smoke grenade's record is radius 0 / damage 0 [L weapon 0x36 +0x08/+0x0C 'Smoke Grenade']:
         // the early return [M 0x17c550] means the smoke damages NOBODY through Propagate (and the stun
         // 0x35 never reaches Propagate at all — the `& 0x2000` flash branch).
-        let t = Targets { drones: &[(0, [0.1, 0.0, 0.0], 0.0)], player: [0.1, 0.0, 0.0], breaks: &[], destroys: &[] };
+        let t = Targets { drones: &[(0, [0.1, 0.0, 0.0], 0.0)], player: [0.1, 0.0, 0.0], breaks: &[], destroys: &[], copters: &[] };
         let h = propagate([0.0; 3], 0.0, 100.0, usize::MAX, &t);
         assert!(h.drones.is_empty() && h.player.is_none() && h.breaks.is_empty() && h.destroys.is_empty());
         let h = propagate([0.0; 3], 10.0, 0.0, usize::MAX, &t);
@@ -278,11 +300,11 @@ mod tests {
         // integer truncation the amounts jump in damage/radius steps: damage 5, radius 10 → a target at
         // 9.5 (truncated 9) takes 5·(1−9/10) = 0.5 → no smash; at 4.5 (truncated 4) it takes 3 → smash.
         let far = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
-            destroys: &[(0, [9.5, 0.0, 0.0], 0.0, false)] };
+            destroys: &[(0, [9.5, 0.0, 0.0], 0.0, false)], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 5.0, usize::MAX, &far);
         assert!(h.destroys.is_empty(), "0.5 damage must not smash");
         let near = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
-            destroys: &[(0, [4.5, 0.0, 0.0], 0.0, false), (1, [4.5, 0.0, 0.0], 0.0, true)] };
+            destroys: &[(0, [4.5, 0.0, 0.0], 0.0, false), (1, [4.5, 0.0, 0.0], 0.0, true)], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 5.0, usize::MAX, &near);
         assert_eq!(h.destroys, vec![0], "3 damage smashes the unsmashed one only");
     }
