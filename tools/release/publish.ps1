@@ -1,12 +1,10 @@
-# Publishes the next NightfirePort release from a lane checked out at a GREEN master commit (the user's rule,
-# 2026-10-19: a release after every fully green merge batch; players' launchers install it automatically on launch).
+# Publishes the next NightfirePort release from a lane checked out at a GREEN master commit (a release after every fully green merge batch; players' launchers install it automatically on launch).
 #
 #   powershell -File tools\release\publish.ps1 -NotesFile <notes.md> [-Lane <checkout>] [-Version 0.1.7] [-Draft]
 #   (or -Notes <text>; prefer -NotesFile: straight double quotes in -Notes break `powershell -File` argument passing)
 #
 # Version: the newest release's tag + 1 patch unless given. The tag is created on the lane's HEAD (which must be on
-# origin/master). The notes are required: a short plain-English summary of what changed for players (the user's choice,
-# 2026-10-19 — not the merge log's jargon), nothing appended. Assets: NightfirePort.exe + .sha256 (v0.1.3 also the bridge zip). Needs `gh` signed in with release rights.
+# origin/master). The notes are required: a short plain-English summary of what changed for players (not the merge log's jargon), nothing appended. Assets: NightfirePort.exe + .sha256 (v0.1.3 also the bridge zip). Needs `gh` signed in with release rights.
 param(
     [string]$Notes = "",
     [string]$NotesFile = "",
@@ -71,7 +69,7 @@ $exe = Join-Path $out "NightfirePort.exe"
 $assets = @($exe, "$exe.sha256")
 if ($bridge) { $zip = Join-Path $out "NightfirePort-$tag-windows.zip"; $assets += @($zip, "$zip.sha256") }
 
-# The notes are the plain-English summary only (the user: the old install line was pointless).
+# The notes are the plain-English summary only.
 $notesFile = Join-Path (Split-Path $out) "notes-$tag.md"
 [IO.File]::WriteAllText($notesFile, $Notes, (New-Object System.Text.UTF8Encoding $false))  # no BOM (5.1's utf8 adds one)
 $ghArgs = @("release", "create", $tag) + $assets + @("--repo", $repo, "--target", $head, "--title", "NightfirePort $Version", "--notes-file", $notesFile)
