@@ -10,10 +10,15 @@
 //! The real-path fall: Bond walks off the gondola boarding platform (x ≈ 111.4, z ≈ −127.2, the
 //! carriage's board pose [D the ride script's stream-1 keys]) — the plunge TouchOnce #54's floor
 //! quad fires the falling cut-scene (ch 0x7C, the game's F5 law) on the way down, and the death
-//! NIS (SP #307, 0x06000991 — `Script_IsDeathNIS` [M nis.rs]) then HOLDS the body mid-air: the
-//! port has no death after a death NIS (the game fails the mission [M 0x182c60:21-43]), so the
-//! kill floor cannot be reached end-to-end through this path yet. The hold is pinned here as the
-//! recorded symptom (docs/levels/07000008.md §7, the finding); the volumes stay armed below.
+//! NIS (SP #307, 0x06000991 — `Script_IsDeathNIS` [M nis.rs]) HOLDS the body mid-air — the
+//! game's own law: the NIS's event 4 disables the player [M Script_EventHandler 0x1d94c0:119;
+//! Player_Update 0x193600:80-89 returns on the 0 byte] and the stream carries no event 6, so
+//! `Script_Free`'s 0x100-gated enable [M 0x1da880:44-49] never runs. The death itself is the
+//! NIS's OWN stream write: event 0xD params (62, 1) at the script's tick 89 [D the NIS stream,
+//! decoded on the real walk] — `Mission_Update`'s ch-0x62 arm fails the mission from there
+//! [M 0x182c60:21-43; pinned end-to-end in decomp_audit_07000008_live]. The old "the port has
+//! no death after a death NIS" note in this file was WRONG — the test below pins the hold, and
+//! the fail path is pinned in decomp_audit_07000008_live (996-level-08-decomp-audit).
 //!
 //! Opt-in via NF_ISO.
 
@@ -53,7 +58,7 @@ fn the_real_walk_off_the_platform_falls_and_the_death_nis_holds_the_body() {
         assert!(min_y < 20.0, "the fall descended past the platform lip (min y {min_y:.2})");
         assert!(crossed_plunge, "the plunge TouchOnce fired on the way down (the game's F5 law [D #54])");
         let held = (0..300).all(|_| { let p = sim.bond.pos; sim.step_bond(Input::default(), false, false, false); p == sim.bond.pos });
-        assert!(held, "the death NIS holds the body (the port's missing post-death-NIS fail — the finding)");
+        assert!(held, "the death NIS holds the body — the game's own disable law [M 0x1d94c0:119 + 0x1da880:44-49]");
         let hurt_hits: u32 = sim.hurts.iter().map(|h| h.hits).sum();
         assert_eq!(hurt_hits, 0, "the held body never reaches the y −24.1 kill floor (the volumes stay armed)");
     }

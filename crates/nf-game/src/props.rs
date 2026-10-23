@@ -13,9 +13,15 @@
 //!   health (+0x04 = placement param 3 [M 0x12c318:36]); at health < 0 it writes
 //!   `switch_channels[tag+0x12] = 1` (tag+0x12 = placement param 0 [M 0x12c318:35]) and smashes.
 //!   The 0700000d "C5" doors (#93/#96 `bigdoor01/02`) carry ch 0x1f and health 1000/10000
-//!   [D placements; Destroy_Update 0x12c4f8's second arm — an external channel kill — and the
-//!   p6 countdown arm are not ported: both are inert here, p6 = 0 and no writer for the tag+0x10
-//!   channel exists on the disc's placements [D]].
+//!   [D placements; Destroy_Update 0x12c4f8's p6 countdown arm is not ported — inert there, p6 = 0].
+//!   The second arm IS ported (`Destroy::kill_channel`, `Props::channel_kills`): every tick a live
+//!   destroyable whose +0x10 word (placement param 1 [M 0x12c318:36 — `piVar1+4 = tag+0x30`]) names
+//!   an ON channel smashes (the word then clears [M 0x12c4f8:32]). It is inert on 0700000d (no
+//!   writer for the tag+0x10 channel exists on that disc's placements [D]) but NOT on 07000008:
+//!   the GuardRoom SmallExplosionBox #234 carries +0x10 = 137 [D the census p1 = 0x89] and the
+//!   FUSEBOX_GuardRoomDoorLock #219 writes ch 137 [D the census] — cutting the fusebox smashes the
+//!   box (996-level-08-decomp-audit; the old "out ch 137" reading of #234 in
+//!   docs/levels/07000008.md had the direction reversed: +0x12/param 0 = 0 is its death write).
 //!
 //! The port checks the bullet's flight segment against each prop's bounds box (the glist bounds
 //! the collision pass would register) in `Drones::update_player_bullets` — one check per tick per
@@ -56,6 +62,10 @@ pub struct Destroy {
     /// damage [M 0x12bd04 `lwc1 f13,8(s1)`]). The disc's destroyables all carry small positive
     /// ints here (10…3000 [D census]), the only branch the port decodes.
     pub blast_damage: f32,
+    /// `tag+0x10` — the external-kill channel (placement param 1 [M 0x12c318:36]): the second arm
+    /// of `Destroy_Update` 0x12c4f8:30-35 smashes the tag when the channel is ON and clears the
+    /// word. 0 = inert. #234 on 07000008 carries 137 (the fusebox's channel) [D the census].
+    pub kill_channel: u16,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -122,7 +132,8 @@ impl Props {
                 // `Destroy_Create` 0x12c318: tag+0x12 = param 0, tag+0x04 (health) = param 3
                 // (as f32; the tag holds a float the handler subtracts into), tag+0x16 (kind) =
                 // param 2's low byte, tag+0x08 (smash blast damage) = param 5 [M disasm].
-                0xe1 => props.destroy.push(Destroy { placement: i, lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32 }),
+                0xe1 => props.destroy.push(Destroy { placement: i, lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32,
+                    kill_channel: param(1) as u16 }),
                 // `GunImp_Create` 0x131f20 (placement 0x34, class 0x47): the SP arm mounts the
                 // TurretGuns[0xb] hardware (the laser) [M 0x131f20:52-63]; the base transform is
                 // the placement's (0x225's rotation is identity [D]).
@@ -229,6 +240,26 @@ impl Props {
         }
         smashes
     }
+
+    /// `Destroy_Update` 0x12c4f8's second arm (30-35): every tick a live destroyable whose +0x10
+    /// word names an ON channel smashes and the word clears. Returns the same blast tuples as
+    /// `bullet_hit` (the smash is `Destroy_Smash` 0x12bb60 — the same blast routing).
+    pub fn channel_kills(&mut self, ch: &Channels) -> Vec<(V3, f32, f32, u8)> {
+        let mut smashes = Vec::new();
+        for d in self.destroy.iter_mut().filter(|d| !d.dead && d.kill_channel != 0) {
+            if !ch.on(d.kill_channel as u32) { continue; }
+            d.kill_channel = 0; // the game clears the word [M 0x12c4f8:32]
+            d.dead = true;
+            if d.kind != 0 {
+                let c = [(d.lo[0] + d.hi[0]) / 2.0, (d.lo[1] + d.hi[1]) / 2.0, (d.lo[2] + d.hi[2]) / 2.0];
+                let ext = [(d.hi[0] - d.lo[0]) / 2.0, (d.hi[1] - d.lo[1]) / 2.0, (d.hi[2] - d.lo[2]) / 2.0];
+                let sphere = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt();
+                let mult = match d.kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
+                smashes.push((c, sphere * mult, d.blast_damage, d.kind));
+            }
+        }
+        smashes
+    }
 }
 
 #[cfg(test)]
@@ -239,7 +270,7 @@ mod tests {
         Props {
             subjects: vec![CamSubject { placement: 0, lo: [4.0, 7.0, -111.0], hi: [6.0, 9.0, -109.0], channel: 0x1c, hit: false }],
             destroy: vec![Destroy { placement: 1, lo: [133.0, 4.0, -270.0], hi: [137.0, 7.0, -268.0], channel: 0x1f, health: 100.0, dead: false,
-            kind: 1, blast_damage: 100.0 }],
+            kind: 1, blast_damage: 100.0, kill_channel: 0 }],
             gunimps: Vec::new(),
         }
     }
@@ -295,5 +326,32 @@ mod tests {
         let mut ch = Channels::default();
         p.bullet_hit([20.0, 5.5, -270.5], [20.0, 5.5, -267.5], 0x1e, 10.0, &mut ch, 1);
         assert!(!ch.on(0x1f) && !p.destroy[0].dead, "a miss never damages the door");
+    }
+
+    /// `Destroy_Update` 0x12c4f8's second arm (30-35): a live destroyable whose +0x10 word
+    /// (placement param 1 [M 0x12c318:36 `piVar1+4 = tag+0x30`]) names an ON channel smashes and
+    /// the word clears. 07000008's GuardRoom SmallExplosionBox #234 carries +0x10 = 137 [D the
+    /// census p1 = 0x89] — the FUSEBOX_GuardRoomDoorLock's channel [D the census].
+    #[test]
+    fn the_external_kill_channel_smashes_the_tag_and_clears() {
+        let mut p = box_props();
+        p.destroy[0].kill_channel = 137;
+        let mut ch = Channels::default();
+        // The channel off: the tag stands (the arm reads the channel every tick).
+        let s = p.channel_kills(&ch);
+        assert!(s.is_empty() && !p.destroy[0].dead, "the channel off — the tag stands [M 0x12c4f8:30-31's ON read]");
+        // The channel on: the smash, with the type-1 blast (the same routing the bullet smash uses).
+        ch.set(137, 1, 10);
+        let s = p.channel_kills(&ch);
+        assert_eq!(s.len(), 1, "the channel kill smashes [M 0x12c4f8:32-35 → Destroy_Smash]");
+        assert_eq!(s[0].3, 1, "the kind rides the blast tuple (the type-1 script 0x06000027 ×4 radius [M 0x12bc70-0x12bc98])");
+        assert!(p.destroy[0].dead, "the tag is dead");
+        // The word cleared: a second pass never re-smashes [M 0x12c4f8:32's `+0x10 = 0`].
+        let s = p.channel_kills(&ch);
+        assert!(s.is_empty(), "the word cleared — no re-smash [M 0x12c4f8:32]");
+        // A zero word is inert (every disc box without the listener).
+        let mut p = box_props();
+        let s = p.channel_kills(&ch);
+        assert!(s.is_empty() && !p.destroy[0].dead, "kill_channel 0 is inert");
     }
 }
