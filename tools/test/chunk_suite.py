@@ -1,7 +1,7 @@
-"""Chunked full-suite runner for sandboxes that kill background jobs (task 715c).
+"""Chunked full-suite runner for environments that kill long-running or background jobs.
 
 Same build + per-binary runs as tools/test/suite.py, but results land in a state file as each
-binary finishes and a chunk stops before the tool-call window kills it. Re-invoke until it
+binary finishes and a chunk stops before the environment's time limit kills it. Re-invoke until it
 prints ALL DONE, then the summed tally is the suite's total line.
 
 Usage: python3 tools/test/chunk_suite.py [state.json] [--limit S] [--chunk-budget S]

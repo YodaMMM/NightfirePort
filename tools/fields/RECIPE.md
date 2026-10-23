@@ -67,7 +67,7 @@ after `(int)` casts:
    instance in `work/ee_start_05.bin` (walk the object list to a matching class byte; instance =
    the u32 at obj+0xE0) and read the field's bytes (little-endian; floats are f32). Record
    address + raw value + interpreted value. Use python3 one-liners; do NOT commit any dump.
-6. **Live checks for the main agent.** End the doc with a "Live checks" section: for fields the
+6. **Live checks.** End the doc with a "Live checks" section: for fields the
    port relies on visibly or for gameplay, write the exact probe:
    `python -I tools/trace/fieldprobe.py poke <addr> <width> <value> --shot out.png` or
    `watch`/`diff`, how to find the instance live (pointer chain from a global, e.g.

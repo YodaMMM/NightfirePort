@@ -1,4 +1,4 @@
-"""The full four-crate test suite with a per-binary time limit (workers and the main agent use the same runner).
+"""The full four-crate test suite with a per-binary time limit.
 
 Builds every test binary of the four crates once (`cargo test --no-run --message-format=json`), then runs each
 binary on its own with `--test-threads=1` under a wall-clock limit, so a hung test fails that binary after LIMIT
@@ -27,7 +27,7 @@ LOG = args[args.index("--log") + 1] if "--log" in args else os.path.join(repo, "
 env = dict(os.environ)
 env["CARGO_TARGET_DIR"] = target
 # No test may play through the speakers: nf_audio::Output::open() and the movie audio return None
-# under NF_SILENT (the weapon-sound tests once fired bursts of shots at full volume on the user's PC).
+# under NF_SILENT (the weapon-sound tests once fired bursts of shots at full volume).
 env["NF_SILENT"] = "1"
 if not env.get("NF_ISO"):
     print("warning: NF_ISO is not set; the ISO-reading tests will skip", flush=True)

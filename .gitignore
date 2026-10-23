@@ -6,12 +6,12 @@
 *.ELF
 *.bin
 *.BIN
-# The sandbox's audio/Vulkan prefix and env wrapper (WORKLOG 0071/0074): extracted .deb binaries,
+# A local audio/Vulkan prefix and env wrapper: extracted .deb binaries,
 # re-derivable, machine-specific.
 /tools-bin
 /scripts
 /nf-view-crash.log
-# Worker sandbox logs (map-mayhew).
+# Local build/test logs.
 build.log
 fmt_audio.log
 nf_*.log

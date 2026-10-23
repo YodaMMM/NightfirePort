@@ -1,4 +1,4 @@
-"""Record a reference trace from the real game in PCSX2 while the user plays (our own code; plan v2 §3).
+"""Record a reference trace from the real game in PCSX2 while someone plays (our own code).
 
 Every in-game frame (GameState+0x34) it writes one line of numbers: the frame, the level, the pad (held buttons and
 the four analog bytes, tSlot+0x122/+0x128), Bond's position and yaw (player obj+0x30/+0x54), health and armour
@@ -7,7 +7,7 @@ the four analog bytes, tSlot+0x122/+0x128), Bond's position and yaw (player obj+
 no game bytes are stored.
 
 --god keeps Bond alive by writing full health (100.0) and armour (50.0) into emulated RAM every frame, and refills
-every owned weapon's clip to the fullest seen every 30 frames, so the user can play through without dying. That changes the run (damage reactions still happen, death never does), so the
+every owned weapon's clip to the fullest seen every 30 frames, so the player can play through without dying. That changes the run (damage reactions still happen, death never does), so the
 trace header records it.
 
 Usage: python -I tools/trace/trace_record.py <out.trace> [--god] [--ammo] [--alert] [--seconds N]
