@@ -528,12 +528,41 @@ no longer lists any of the nine.
 | `NDrone2_BondTalk` 0x1446b0 | `Drone::bond_talk`, called from the Civilian / CivilianMission / PartyGirl / CivilianGuard update arms ([M 0x15d118:47-49 / 0x15d860:36-38 / 0x160140:41-46 / 0x1603a8:39-45]) and the `+0xCD8`/`+0xCDC` enters ([M 0x15d118/0x15d860/0x15dbb0/0x160140/0x1603a8]); gates: drawn (`obj+0xFC`), within 3.0 of Bond (the port reads the live Bond position for `+0x1A0` [S stand-in for `Drone_GetOpponentInfo` 0x138f68's record magnitude]), facing Bond (|`+0x1D4`| [S same]), unarmed (`obj_armed` = ObjectIsArmed 0x178768 on the drone's own byte; speech.md §2.3), level 0x7000007; per set 9 / 0xd / 0xe / 0x10 / 0x11 / 0x12 with the game's draws (Rand(2), 0x58 + 4·Rand(11) + variant by `+0xE0`, Rand(9) → DoBondTalk(0x84 + r, 480), Rand(4), Rand(60) cooldowns) |
 | `DroneFunc_DoBondTalk` 0x144488 | `Drone::do_bond_talk` (the case-0xe form: `+0x2A` latch, `now ≥ +0xCDC`, `+0xCE0 == 0 or again`; success → `+0xCD8 += 1`, `+0xCDC = now + delay`, `+0xCE0 += 1` [M]); the type-0x12 seven-step dialogue (fixed lines 0x52..0x57, no draws — [D ACTION.ELF 0x2f5310 jump table + a disasm scan of the seven blocks]) keys one step per cooldown; per-step timing [S] |
 | `NDrone2_TalkToMissionObj` 0x14a8b8 | `Drone::talk_to_mission_obj`, wired as the `HOSTAGE` state's msg 0x1A arm (`msg::MISSION_TALK`, [M 0x15cb78 case 0x1A]); kind `+0xC5` 4 → 0x29 + Rand(6), 5 → 0x2f + Rand(4). The HostageKiller call site (0x15c728 case 0x1A) has no ported state — the captor stays a `Drones`-tick binding; the sender (`NDrone2_MonitorTalkToMissionObj` 0x144340's script-driven sequencer) is unported, so nothing delivers 0x1A yet |
-| `DroneFunc_InjuredTalk` 0x13fa20 | cited at `NDrone2_BulletImpact` (`Drone::bullet_impact` doc): the whole body is gated on MP != 0 ([M decompile; speech.md §2.3 disasm note]) and SpeechSFX refuses in MP → no observable SP effect (no RNG draw, no state change); the port runs nothing, as the shipped build |
-| `DroneFunc_RunForCoverTalk` 0x13fd08 | cited at the `RUN_FOR_COVER` handler ([M 0x169150:21-25 call site]); MP-gated dead, as above |
-| `DroneFunc_UnderCoverTalk` 0x13fe80 | cited at the `UNDER_COVER_INIT` / `UNDER_COVER_RETURN` enters ([M 0x169cc0:19 / 0x16a9c0:25]); MP-gated dead, as above |
+| `DroneFunc_InjuredTalk` 0x13fa20 | `Drone::mp_chatter_talk(Injured)` at the `bullet_impact` survival path ([M 0x1461c8:55 call site]): the `mp_gate` (MPSettings+0x184 == 0 in SP [L ee_start_05.bin @0x2a4924]) refuses before any draw; the per-level tables are the game's ([M] 0x0c/0d 0xcc+Rand(6), 0x11–0x13/0x4a 0xb9, 0x14–0x16 0x133+Rand(5)) |
+| `DroneFunc_RunForCoverTalk` 0x13fd08 | `Drone::mp_chatter_talk(RunForCover)` at the `RUN_FOR_COVER` enter with a claimed cover node ([M 0x169150:21-25]); MP-gated dead as above (0x0c/0d 0xd0+Rand(2), 0x11–0x13/0x4a 0xbd, 0x14–0x16 0x11b+Rand(7)) |
+| `DroneFunc_UnderCoverTalk` 0x13fe80 | `Drone::mp_chatter_talk(UnderCover)` at the `UNDER_COVER_INIT` / `UNDER_COVER_RETURN` enters ([M 0x169cc0:19 / 0x16a9c0:25]); MP-gated dead as above (0x0c/0d 0xcf+Rand(3), 0x11–0x13/0x4a 0xbd+Rand(2)) |
+| `DroneFunc_UnderCoverAimTalk` 0x13fb98 | `Drone::mp_chatter_talk(UnderCoverAim)` at the `UNDER_COVER_AIM` enter ([M 0x16a2d0's call, 0013fb98:7-9 the gate]); MP-gated dead as above (0x0c/0d 0xd0+Rand(2), 0x11–0x13/0x4a 0xba+Rand(2)) |
 
 New per-drone fields (own lines): `last_voice` (+0x4D4, written by `speech`/`foley` where the game's
 PlaySFX writes it [M 0x141848]), `bond_talk_count/cooldown/done` (+0xCD8/+0xCDC/+0xCE0),
-`saw_opp_last_frame` (the 0x298f84 latch, lent by `Drones` like `patrol_cooldown`). The Bond-talk
-SpeechSFX calls are facialOnly=1 — nothing is audible without a loaded facial script (§1.3), so the
-observable port surface is the RNG draw sequence and the +0xCD8/+0xCDC bookkeeping.
+`saw_opp_last_frame` (the 0x298f84 latch, lent by `Drones` like `patrol_cooldown`),
+`alert_pending` (+0x4F8 & 0x70000000, the first-alert route below). The Bond-talk SpeechSFX calls
+are facialOnly=1 — nothing is audible without a loaded facial script (§1.3), so the observable port
+surface is the RNG draw sequence and the +0xCD8/+0xCDC bookkeeping.
+
+## 6. The first-alert route (guard-barks-first-alert-2)
+
+`DroneFunc_FirstAttack` 0x148010:22-27 consults `DroneFunc_FirstAlertState` 0x147f58 when the first
+attack is NOT the drone's own sighting (`+0x4F8 & 0x8000000` clear) and a pending alert stands
+(`+0x4F8 & 0x70000000`); a non-zero pick becomes the next state instead of the combat tail.
+
+- The pick [M 0x147f58:8-44]: any of the receiver's +0x4FC bits 2/0x10/0x20/0x20000/0x40000/0x80000/
+  0x100000 → 0; bit 0x200000 (the interrogating source's 0x20 shifted by 16, `DroneVision_
+  ConsiderAlerted` 0x176250:226) → state 0x39 on levels {0x07000005, 0x07000007, 0x07000041} only.
+  Port: `Drone::first_alert_state` (the pure pick + the unit table).
+- The pending bits [M]: 0x20000000 stamped by `DroneFunc_DoForcedAttack` 0x148c60:28 (the receiver
+  gate `(word & 0x2020000) == 0x20000` — the alerted-by-other latch with the first attack still
+  pending — clears the latch, stamps, SetState 0x56; the MP/level-07 party gate sits at the sender
+  0x148c60:13-15), 0x10000000 by the sound alerts (AlertToPosition 0x165270 case 0x14 share > 0.2,
+  HeardNoiseSuspect 0x16b0e0:123 share > 0.1), 0x40000000 by the alarm (EnemyAlerts 0x177c18:114).
+  No decomp writer clears them; a later consult is neutralised by the receiver's own +0x4FC markers
+  (EndInterogateAssist's 0x10 among them) — the game's own mechanism. Port: `Drone::alert_pending`.
+- The assist states [M, task 856's port kept]: 0x39 `NDrone2_DSTATE_InterogateAssist` 0x1616c0
+  (ENTER: SetInterogateAssist +0x4FC |= 0x20 [M 0x178308], timer C at now + Rand(120); TIMER_C: the
+  goal at the opponent's object with the 10-unit arrival radius — `SetupGoalPositionToObj` 10.0
+  [M 0x15add0], `MoveToGoalPosition` arrives under it [M 0x1517d8:80-83] — reachable → GoToGoal
+  with return state 0x3a, else 0x3a directly) and 0x3a `InterogateAssistWait` 0x161860 (UPDATE:
+  `TestEndInterogationAssist` 0x178348 ends the assist into Attack; EXIT: `EndInterogateAssist`
+  0x178318, +0x4FC = (& 0xffdfffdf) | 0x10).
+- Tests: `crates/nf-game/tests/guard_barks_live.rs` (4; the route, the suppress list, the chatter
+  silence, the spot bark).
