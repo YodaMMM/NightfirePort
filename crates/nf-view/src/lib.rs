@@ -7508,4 +7508,35 @@ mod headless_app_harness {
         sim.step_bond(inp(false, false), false, false, false);
         assert!(!sim.bond.crouched, "hold: released stands [M 0x1924c0:84-88]");
     }
+
+    // profile-options-2 (the re-land of 610's volume test on master's drain path): the AV page's
+    // two sliders reach the audio driver's masters. The game commits slider·5 on the page's
+    // exit-confirm [M P_CNAVOPTIONS_Handler 0x214818:70-75] into SFXMusicSetVolume 0x116cf8 /
+    // SFXSetVolume 0x116d98 (MusicMasterVolume 0x30c958 / SfxMasterVolume 0x30c95c); the port's
+    // per-frame drain writes the same two statics (docs/systems/options-census.md).
+    #[test]
+    fn the_av_volume_rows_reach_the_driver_masters() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        let mut fe = menu::FrontEnd::new();
+        fe.opts = menu::default_opts();
+        fe.opts.insert(0x1000_0135, 100); // the music slider's 20 · 5
+        fe.opts.insert(0x1000_0134, 55);  // the effects slider's 11 · 5
+        h.app.fe = Some(fe);
+        h.app.drain_options();
+        {
+            let s = h.app.sound.as_ref().expect("the harness boots a silent driver");
+            assert_eq!(s.driver.music_master, 100, "the music slider lands on MusicMasterVolume [M 0x116cf8]");
+            assert_eq!(s.driver.master, 55, "the effects slider lands on SfxMasterVolume [M 0x116d98]");
+        }
+        // Sister: a lowered slider re-syncs on the next drain (the game commits on page exit;
+        // the per-frame drain is the same net effect through the persisted profile).
+        h.app.fe.as_mut().unwrap().opts.insert(0x1000_0135, 0);
+        h.app.drain_options();
+        assert_eq!(h.app.sound.as_ref().unwrap().driver.music_master, 0, "the lowered music slider re-syncs");
+        // Sister 2: the driver's own boot defaults are the game's [L MusicMasterVolume 70 /
+        // SfxMasterVolume 100 at 0x30c958/0x30c95c — Driver::new carries them].
+        assert_eq!(nf_audio::sfx::Driver::new().music_master, 70);
+        assert_eq!(nf_audio::sfx::Driver::new().master, 100);
+    }
 }
