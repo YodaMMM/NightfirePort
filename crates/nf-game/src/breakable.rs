@@ -21,13 +21,28 @@
 //! every other kind runs the debris loop over the collision block's leaf records — the sources
 //! are built here at create (`Source`).
 //!
+//! The script-created panes (`Script_CreateEntity` 0x1d8968's 0x20 arm — the gondola's 16 cabin
+//! windows ride the carriage in 07000008's ride script 0x0600004C, streams 7-18/23-26, params
+//! [2, 1, 0] [D decode]): the op-7 params land in the shared level_tag 0x349948's +0x2C/+0x30/
+//! +0x34 slots (`Script_EntityStart` 0x1d8d78:80-87 writes param k at 0x349948+0x2C+4k;
+//! `Pickup_Create`'s :159 reads the same slots), so `Break_Create` reads kind/health/filter from
+//! the Entity params exactly as from a placement's. The pane is created at the origin with the
+//! Entity's glist [M 0x1d8968:120-123] and POSED BY THE SCRIPT: `Script_Interp` 0x1d9a08:94-112
+//! rewrites obj+0x90 every tick from the parent chain × the stream keys (the windows are parented
+//! to the carriage stream), and the bullet's `Collide_Intersect` 0x1ebaa8:157-177 tests the
+//! segment against the pane's CURRENT local space — the ride carries the hit surface. The port's
+//! pane row therefore re-derives its bounds from the live `Obj::Entity` matrix every tick
+//! (`script_pane`), and `Break_Kill` on a script pane gives the dead bit + the kind sound and NO
+//! pieces: the shatter tri list comes from `psiCreateBreakableData`, whose only caller is the
+//! placement path (parsemap case 0x20 kind == 2 [M 0x1d04f0:70-73]) — `psiGetTriList` reads
+//! count 0 and the `ShatterPolyRecurse` loop never runs [M 0x12b970:78-133]. The entity's
+//! deletion (obj+0xFE bit 0's world+draw effect [M 0x12b970:60]) is the caller's.
+//!
 //! Port deviations (documented, none tested as game behaviour):
 //! - the pieces' draw presentation (matrices, models, look) is the renderer's work; the sim
 //!   exposes the piece lists (`Shatter`) the draw layer reads (break-debris.md).
 //! - the 41% sound variant needs the game's `Rand_Rand` draw-order context; the port keeps the
 //!   deterministic 0x5F3 arm and does not consume the shared RNG (`// [S] unverified`).
-//! - the filter word's weapon-bit layout is not evidenced (all 55 placements on 07000001 carry
-//!   param 2 = 0 [D]); the port applies the mask as an exclude filter only when non-zero.
 
 use crate::drone::Rng;
 use crate::shatter::{self, DebrisRec, GlassTri, ShardVert, Source};
@@ -40,6 +55,9 @@ use nf_formats::placement::{object_matrix, transform};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BreakEffect {
     pub placement: usize,
+    /// The script-entity panes: the killed object's index in `Scripts::objects` (the caller
+    /// removes the entity — `Break_Kill`'s obj+0xFE delete flag [M 0x12b970:60]); `None` = placed.
+    pub script_obj: Option<usize>,
     /// The kill position (the bounds centre — the port's stand-in for obj+0x80).
     pub pos: V3,
     /// tag+0x00: 2 = glass (shatter + sound 0x2E), other = debris (sound 0x5F3; the 41% 0x5F2
@@ -67,8 +85,13 @@ pub struct Break {
     pub matrix: [[f32; 4]; 4],
     /// The kill-piece sources (shatter::Source): the collision leaf records (every kind) and
     /// the draw model's triangles (kind 2). Built at create; empty records = the silent kill
-    /// [M 0x12b970:61-63].
+    /// [M 0x12b970:61-63]. A script pane carries none — see the module header.
     pub src: Source,
+    /// The script-entity panes (`Script_CreateEntity` 0x1d8968's 0x20 arm): the object index in
+    /// `Scripts::objects` whose live matrix carries the pane (the gondola's windows ride the
+    /// carriage); `None` = a placed pane. `placement` carries the same index for these rows
+    /// (there is no placement).
+    pub script_obj: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -176,40 +199,69 @@ impl Breaks {
                 lo,
                 hi,
                 kind,
-                health: f32::from_bits(param(1)),
+                // tag+0x04 = (f32)(i32) param 1 — the SIGNED INT→FLOAT conversion [M 0x12c230
+                // disasm 0x12c2a8-0x12c2c4: `lw 0x30($s3)` → `mtc1` → `cvt.s.w` → `swc1 4($s1)`;
+                // the old f32::from_bits read the bits raw (param 1 = 1 was 1e-45, the gondola's
+                // authored health 1 is 1.0)].
+                health: (param(1) as i32) as f32,
                 filter: if p2 == 0 { 0 } else { !(p2 as u16) },
                 dead: false,
                 matrix: object_matrix(p.rotation, p.translation),
                 src,
+                script_obj: None,
             });
         }
         Breaks { list, shatter: shatter::Shatter::default() }
     }
 
     fn seg_box(a: V3, b: V3, lo: V3, hi: V3) -> bool {
-        // Same rule as crate::props::seg_box: the bullet segment's AABB against the bounds grown
-        // by 0.1 (the contact registers on the sphere touching the glist bounds).
+        // The bullet segment must actually cross the pane's bounds (grown 0.1 — the
+        // sphere-touch stand-in), not merely overlap them with its AABB.
         Self::seg_box_grow(a, b, lo, hi, 0.1)
     }
 
     fn seg_box_grow(a: V3, b: V3, lo: V3, hi: V3, g: f32) -> bool {
-        let (_, mut mn, mut mx) = (g, [0.0; 3], [0.0; 3]);
+        // A true segment-vs-box intersection (the slab method). The game's class-5 contact is
+        // the collision pass's HITDATA — the bullet sphere touching the pane's collision
+        // triangles [M 0x12bfd8:15, 36-48] — so a segment whose axis-aligned bounding BOX
+        // overlaps the bounds but which flies PAST the sheet must not register (the 3b evidence:
+        // 07000006's one pane died to a spread shot whose AABB spanned the slab while the
+        // segment crossed the wall plane 1.9 units to its right, b9dfe235). The gondola's 16
+        // windows sit side by side on the carriage — the same phantom would kill neighbours.
+        // Degenerate segments (a == b: do_break's point probe, a collision-stopped body's zero
+        // net step) fall out as the point-in-box check.
+        let mut t0 = 0.0f32;
+        let mut t1 = 1.0f32;
         for k in 0..3 {
-            mn[k] = a[k].min(b[k]);
-            mx[k] = a[k].max(b[k]);
-            if mx[k] < lo[k] - g || mn[k] > hi[k] + g { return false; }
+            let d = b[k] - a[k];
+            let (lo_k, hi_k) = (lo[k] - g, hi[k] + g);
+            if d == 0.0 {
+                if a[k] < lo_k || a[k] > hi_k { return false; }
+            } else {
+                let (mut tn, mut tf) = ((lo_k - a[k]) / d, (hi_k - a[k]) / d);
+                if tn > tf { std::mem::swap(&mut tn, &mut tf); }
+                t0 = t0.max(tn);
+                t1 = t1.min(tf);
+                if t0 > t1 { return false; }
+            }
         }
         true
     }
 
     /// The bullet flight this tick against the breakables ([M Break_Update 0x12bfd8:44-48 — the
-    /// class-5 contact subtracts its damage; the filter word is an exclude mask, inert on
-    /// 07000001 where every param 2 is 0 [D]]). Returns the kills for presentation; each kill
-    /// spawns its pieces (crate::shatter).
-    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon: u16, damage: f32, rng: &mut Rng) -> Vec<BreakEffect> {
+    /// class-5 contact subtracts its damage]). `weapon_mask` is the bullet's weapon-definition
+    /// word at `weapon_definition+0x10` (the caller reads `weapons.records[weapon][0x10..0x12]`,
+    /// like the game): `Collide_FilterBullets(list, filter | 0x106)` drops a hitter whose word
+    /// ANDs the mask non-zero [M 0x12bfd8:15 + 0x1ece30:24-33] — the base 0x106 rejects the
+    /// laser (0x0002) and watch (0x0100) classes even on a no-filter pane, guns (0x0008) pass
+    /// [L dump]. Returns the kills for presentation; each kill spawns its pieces (crate::shatter).
+    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon_mask: u16, damage: f32, rng: &mut Rng) -> Vec<BreakEffect> {
         let mut hits = Vec::new();
         for (i, br) in self.list.iter_mut().enumerate().filter(|(_, b)| !b.dead) {
-            if br.filter != 0 && br.filter & (1u16 << (weapon & 15)) != 0 { continue; }
+            // `Collide_FilterBullets` [M 0x1ece30:24-33]: the weapon word against the pane's
+            // mask | 0x106 — non-zero AND = the hit is dropped (the contact's distance is set
+            // to the 1e8 sentinel and discarded).
+            if weapon_mask & (br.filter | 0x106) != 0 { continue; }
             if Self::seg_box(a, b, br.lo, br.hi) {
                 br.health -= damage;
                 if br.health < 0.0 {
@@ -276,11 +328,16 @@ impl Breaks {
     /// Intersect_RayGeom 0x10a8c8 — the same plane-backface skip, the surface byte →
     /// hitdata+0x50]); no crossing falls back to the bounds centre and the first record's
     /// plane [*port choice*]. Kind 2 shatters the draw triangles, every other kind spawns the
-    /// debris records with `EffectInfo[material & 0x3F]` [M 0x12b970:78-141].
+    /// debris records with `EffectInfo[material & 0x3F]` [M 0x12b970:78-141]. A script pane's
+    /// kill is the dead bit + the kind sound and NO pieces (see the module header —
+    /// `psiCreateBreakableData` never ran on its glist); the entity's deletion is the caller's.
     pub fn kill(&mut self, i: usize, a: V3, b: V3, rng: &mut Rng) -> Option<BreakEffect> {
         let br = &mut self.list[i];
         if br.dead { return None; }
         br.dead = true;
+        if br.script_obj.is_some() {
+            return Some(Self::effect(br));
+        }
         if br.src.records.is_empty() { return None; }
         let trans = [br.matrix[3][0], br.matrix[3][1], br.matrix[3][2]];
         let centre = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
@@ -346,7 +403,60 @@ impl Breaks {
     fn effect(br: &Break) -> BreakEffect {
         let pos = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
         let sound = if br.kind == 2 { 0x2E } else { 0x5F3 };
-        BreakEffect { placement: br.placement, pos, kind: br.kind, sound }
+        BreakEffect { placement: br.placement, script_obj: br.script_obj, pos, kind: br.kind, sound }
+    }
+
+    /// Upsert one script-created pane (`Script_CreateEntity` 0x1d8968's 0x20 arm; the caller's
+    /// per-tick sync — see the module header): kind/health/filter from the Entity params (the
+    /// op-7 param block [M 0x1d8d78:80-87] is `Break_Create`'s level_tag [M 0x12c230:21-35]),
+    /// bounds the glist's collision triangles transformed by the LIVE entity matrix (the game's
+    /// per-tick obj+0x90 pose [M 0x1d9a08:94-112]; the port's stand-in for the current-local-space
+    /// tri test [M 0x1ebaa8:157-177]). A same-object re-run only refreshes (the reuse path only
+    /// re-points the gfx [M 0x1d8968:92-101]); the state (health) survives a re-point.
+    /// No shape (the glist has no collision) never registers — the game's pane would be
+    /// unhittable and its kill silent [M 0x12b970:61-63].
+    pub fn script_pane(&mut self, obj: usize, params: &[u32], shape: &[[V3; 3]], matrix: [[f32; 4]; 4]) {
+        let (lo, hi) = Self::shape_bounds(shape, &matrix);
+        if let Some(br) = self.list.iter_mut().find(|b| b.script_obj == Some(obj)) {
+            br.lo = lo;
+            br.hi = hi;
+            br.matrix = matrix;
+            return;
+        }
+        let p = |k: usize| params.get(k).copied().unwrap_or(0);
+        let p2 = p(2);
+        self.list.push(Break {
+            placement: obj,
+            lo,
+            hi,
+            kind: (p(0) & 0xff) as u8,
+            // (f32)(i32) param 1 [M 0x12c230 disasm 0x12c2a8-0x12c2c4 — the cvt.s.w, see create].
+            health: (p(1) as i32) as f32,
+            filter: if p2 == 0 { 0 } else { !(p2 as u16) },
+            dead: false,
+            matrix,
+            src: Source::default(),
+            script_obj: Some(obj),
+        });
+    }
+
+    /// The sync's retain: a script pane whose object is gone (the kill's deletion, a
+    /// `Script_KillStream`) drops its row — the pane left the world with the object
+    /// [M 0x12b970:60].
+    pub fn retain_script_panes(&mut self, live_objs: &[usize]) {
+        self.list.retain(|b| b.script_obj.is_none_or(|o| live_objs.contains(&o)));
+    }
+
+    /// The world-space bounds of a shape's triangles under `matrix`.
+    fn shape_bounds(shape: &[[V3; 3]], matrix: &[[f32; 4]; 4]) -> (V3, V3) {
+        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for t in shape {
+            for v in t {
+                let v = transform(matrix, *v);
+                for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); }
+            }
+        }
+        (lo, hi)
     }
 }
 
@@ -373,17 +483,23 @@ mod tests {
                     records: vec![DebrisRec { v: [[4.5, 7.5, -2.5], [5.5, 7.5, -2.5], [5.0, 8.5, -2.5]], n: [0.0, 0.0, -1.0], mat: 0x10 }],
                     glass: Vec::new(),
                 },
+                script_obj: None,
             }],
             shatter: Default::default(),
         }
     }
+
+    // The weapon argument of every `bullet_hit` call below is the weapon-DEFINITION word
+    // (`weapon_definition+0x10`, what `Collide_FilterBullets` compares [M 0x12bfd8:15 +
+    // 0x1ece30:24-33]) — a gun's 0x0008 passes the base 0x106 mask [L dump].
+    const GUN: u16 = 0x0008;
 
     #[test]
     fn the_first_bullet_kills_a_zero_health_vase_with_the_debris_sound() {
         // The 07000001 vases carry params [(2,0)] only — kind 0, health 0.0 [D placements dump].
         let mut b = one(0, 0.0);
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert!(b.list[0].dead, "health 0 - damage < 0 → Break_Kill [M 0x12bfd8:44-50]");
         assert_eq!(kills.len(), 1);
         assert_eq!(kills[0].sound, 0x5F3, "non-glass → 0x5F3 (the 41% 0x5F2 variant is unported, [S])");
@@ -398,12 +514,12 @@ mod tests {
         // radioroom_glass/comroom_glass carry params [(0,2),(1,0),(2,0)] — kind 2 [D placements].
         let mut b = one(2, 0.0);
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert_eq!(kills[0].sound, 0x2E, "glass → sound 0x2E [M 0x12b970: uVar5 = 0x2e]");
         // Sister: a shot wide of the box never touches the health and spawns nothing.
         let mut b = one(2, 0.0);
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([50.0, 8.0, -4.0], [50.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([50.0, 8.0, -4.0], [50.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert!(kills.is_empty() && !b.list[0].dead, "a miss never damages the breakable");
         assert!(b.shatter.debris.is_empty() && b.shatter.shards.is_empty(), "an unshot breakable spawns nothing");
     }
@@ -414,10 +530,10 @@ mod tests {
         let mut b = one(0, 50.0);
         let mut rng = Rng::new(1);
         for i in 0..5 {
-            let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 10.0, &mut rng);
+            let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 10.0, &mut rng);
             assert!(kills.is_empty() && !b.list[0].dead, "hit {}: {} left", i, 50 - 10 * (i + 1));
         }
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 10.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 10.0, &mut rng);
         assert_eq!(kills.len(), 1, "the 6th crosses below zero");
     }
 
@@ -464,7 +580,7 @@ mod tests {
         let mut b = one(0, 0.0);
         b.list[0].src.records.clear();
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert!(b.list[0].dead, "the dead bit is still set [M 0x12b970:60]");
         assert!(kills.is_empty(), "no effect (no sound) [M 0x12b970:61-63]");
         assert!(b.shatter.debris.is_empty() && b.shatter.shards.is_empty(), "no pieces");
@@ -479,7 +595,7 @@ mod tests {
         let mut b = one(0, 0.0);
         let mut rng = Rng::new(0x5eed);
         let draws_before = rng.draws;
-        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         let d = &b.shatter.debris[0];
         let info = EFFECT_INFO[0x10];
         let speed = info.spread * 0.5 * crate::grenade::REC_FRAME_RATE;
@@ -520,7 +636,7 @@ mod tests {
         b.list[0].src.glass = vec![mk(-2.5), mk(-2.4), mk(-2.3)];
         let mut rng = Rng::new(0x5eed);
         let draws_before = rng.draws;
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert_eq!(kills.len(), 1);
         assert_eq!(b.shatter.shards.len(), 3, "one leaf shard per small source triangle [M 0x12b270]");
         for s in &b.shatter.shards {
@@ -554,7 +670,7 @@ mod tests {
             material: 1,
         }];
         let mut rng = Rng::new(3);
-        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert!(b.shatter.shards.len() >= 2, "the split recursed until every piece was a leaf");
         // Every shard's verts stay within the source triangle's span (the bisection conserves;
         // the recomposition carries ~1e-7 of float dust).
@@ -573,7 +689,7 @@ mod tests {
         // at life < 1 [M Debris_Update 0x1aac00:21-56].
         let mut b = one(0, 0.0);
         let mut rng = Rng::new(5);
-        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         let life0 = b.shatter.debris[0].life;
         let pos0 = b.shatter.debris[0].pos;
         let vel0 = b.shatter.debris[0].vel;
@@ -590,5 +706,122 @@ mod tests {
             b.shatter.update();
         }
         assert!(b.shatter.debris.is_empty(), "dead on the game's timer (life < 1 at entry) [M 0x1aac00:14]");
+    }
+
+    #[test]
+    fn a_script_pane_dies_to_one_bullet_with_the_glass_sound_no_pieces_and_the_object_id() {
+        // The gondola's windows: script 0x0600004C streams 7-18/23-26, Entity params [2, 1, 0]
+        // [D decode] — kind 2, health 1.0, filter 0 (Break_Create's tag reads [M 0x12c230:21-35
+        // via 0x1d8d78:80-87]). Break_Kill on a script pane: dead bit + sound 0x2E, NO pieces —
+        // psiCreateBreakableData's only caller is the placement path [M 0x1d04f0:70-73], so
+        // psiGetTriList reads count 0 [M 0x12b970:78-133]. No RNG draw either (the sound arm for
+        // kind 2 has none [M 0x12b970:64-76]).
+        let mut b = Breaks::default();
+        let shape: [[[f32; 3]; 3]; 2] = [
+            [[2.0, 30.0, -128.0], [2.0, 34.0, -128.0], [2.0, 30.0, -126.0]],
+            [[2.0, 34.0, -128.0], [2.0, 34.0, -126.0], [2.0, 30.0, -126.0]],
+        ];
+        b.script_pane(7, &[2, 1, 0], &shape, [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]);
+        assert_eq!(b.list.len(), 1, "the pane registered");
+        assert_eq!(b.list[0].kind, 2, "param 0 → tag+0x00 [M 0x12c230:21]");
+        assert_eq!(b.list[0].health, 1.0, "param 1's bits [M 0x12c230:22-28]");
+        assert_eq!(b.list[0].filter, 0, "param 2 == 0 → filter 0 [M 0x12c230:29-35]");
+        let mut rng = Rng::new(0x5eed);
+        let draws_before = rng.draws;
+        // The pane is the x=2 plane (degenerate in x): the shot runs along −x through it.
+        let kills = b.bullet_hit([5.0, 32.0, -127.0], [-1.0, 32.0, -127.0], GUN, 25.0, &mut rng);
+        assert!(b.list[0].dead, "health 1.0 - 25 < 0 → Break_Kill [M 0x12bfd8:36-50]");
+        assert_eq!(kills.len(), 1, "the kill reports (the sound plays)");
+        assert_eq!(kills[0].sound, 0x2E, "kind 2 → 0x2E [M 0x12b970:64-76]");
+        assert_eq!(kills[0].kind, 2);
+        assert_eq!(kills[0].script_obj, Some(7), "the caller deletes the entity [M 0x12b970:60]");
+        assert!(b.shatter.shards.is_empty() && b.shatter.debris.is_empty(), "a script pane spawns NO pieces [M 0x12b970:78-133 + 0x1d04f0:70-73]");
+        assert_eq!(rng.draws - draws_before, 0, "no shared-RNG draws on a script-pane kill");
+        // A second shot finds a dead pane — no repeat kill.
+        let more = b.bullet_hit([5.0, 32.0, -127.0], [-1.0, 32.0, -127.0], GUN, 25.0, &mut rng);
+        assert!(more.is_empty(), "dead panes are skipped [M 0x12bfd8:12]");
+    }
+
+    #[test]
+    fn a_script_pane_rides_its_object_the_refreshed_bounds_take_the_hit() {
+        // The windows are parented to the carriage stream: Script_Interp re-poses obj+0x90 every
+        // tick [M 0x1d9a08:94-112] and Collide_Intersect tests the CURRENT local space [M
+        // 0x1ebaa8:157-177]. The port's refresh: a re-upsert moves the row's bounds; a shot at
+        // the OLD position misses, a shot at the NEW position hits.
+        let mut b = Breaks::default();
+        let unit: [[[f32; 3]; 3]; 1] = [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]];
+        let id = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+        let moved = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, -10.0, 0.0, 1.0]];
+        b.script_pane(3, &[2, 1, 0], &unit, id);
+        let mut rng = Rng::new(1);
+        // The ride moved the object 10 down: the refresh (the caller's per-tick sync).
+        b.script_pane(3, &[2, 1, 0], &unit, moved);
+        assert!((b.list[0].hi[1] - (-9.0)).abs() < 1.0e-5, "the bounds followed the matrix");
+        // A shot at the pre-ride position: no hit (the slab test — the segment crosses nothing).
+        assert!(b.bullet_hit([0.5, 0.5, 5.0], [0.5, 0.5, -5.0], GUN, 25.0, &mut rng).is_empty(),
+            "the stale position is gone after the refresh");
+        // The same segment at the new position kills.
+        let kills = b.bullet_hit([0.5, -9.5, 5.0], [0.5, -9.5, -5.0], GUN, 25.0, &mut rng);
+        assert_eq!(kills.len(), 1, "the riding pane takes the hit at its new bounds");
+    }
+
+    #[test]
+    fn a_script_pane_dies_with_its_object_and_a_reregistered_pane_is_fresh() {
+        // The kill deletes the object (the caller's removal); the next sync's retain drops the
+        // row [M 0x12b970:60 — the object left the world]. A script re-run of the stream creates
+        // a fresh entity (and pane) with fresh health.
+        let mut b = Breaks::default();
+        let shape: [[[f32; 3]; 3]; 1] = [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]];
+        let id = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+        b.script_pane(5, &[2, 1, 0], &shape, id);
+        b.retain_script_panes(&[]);
+        assert!(b.list.is_empty(), "the killed object's pane dropped at the sync");
+        b.script_pane(5, &[2, 1, 0], &shape, id);
+        assert_eq!(b.list.len(), 1, "a re-run stream re-registers");
+        assert_eq!(b.list[0].health, 1.0, "fresh health [M 0x1d8968:92-102 — the delete+fresh path]");
+    }
+
+    #[test]
+    fn the_filter_is_the_weapon_word_against_mask_or_0x106() {
+        // Collide_FilterBullets [M 0x1ece30:24-33]: a class-5 hitter whose weapon_definition+0x10
+        // word ANDs (filter | 0x106) non-zero is dropped. Disc words [L dump]: guns 0x0008,
+        // Laser 0x0002, watch 0x0100. On a no-filter pane the laser and the watch are rejected,
+        // the gun passes. The 07000006 security-room pane carries p2 = 0xf8 → filter 0xff07
+        // [D placements] — the gun still passes (0xff07's bit 3 is clear).
+        let mut b = one(2, 0.0);
+        let mut rng = Rng::new(1);
+        assert!(b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0002, 25.0, &mut rng).is_empty(),
+            "the laser (0x0002) is rejected by the base mask [M 0x1ece30:26-31]");
+        let mut b = one(2, 0.0);
+        let mut rng = Rng::new(1);
+        assert!(b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0100, 25.0, &mut rng).is_empty(),
+            "the watch (0x0100) is rejected by the base mask [M 0x1ece30:26-31]");
+        let mut b = one(2, 0.0);
+        let mut rng = Rng::new(1);
+        assert_eq!(b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng).len(), 1,
+            "the gun (0x0008) passes [M 0x1ece30 — 0x0008 & 0x106 == 0]");
+        let mut b = one(2, 0.0);
+        b.list[0].filter = 0xff07; // !0xf8 [D 07000006 #376 param 2; M 0x12c230:29-35]
+        let mut rng = Rng::new(1);
+        assert_eq!(b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng).len(), 1,
+            "the 06 pane's own filter keeps the guns");
+        let mut b = one(2, 0.0);
+        b.list[0].filter = 0xff07;
+        let mut rng = Rng::new(1);
+        assert!(b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0002, 25.0, &mut rng).is_empty(),
+            "the pane's filter word still rejects its own classes");
+    }
+
+    #[test]
+    fn a_segment_past_the_sheet_does_not_register_the_adjacent_pane() {
+        // The slab rule (b9dfe235): a segment whose AABB spans the bounds but which flies past
+        // the sheet is no contact — with the gondola's 16 windows side by side, the old
+        // AABB-overlap would kill neighbours. Pane at x 2, segment crossing z -16.33 at x 3.9.
+        let mut b = one(2, 0.0);
+        b.list[0].lo = [1.9, 30.0, -17.0];
+        b.list[0].hi = [2.1, 34.0, -15.0];
+        let mut rng = Rng::new(1);
+        let kills = b.bullet_hit([3.9, 32.0, -20.0], [3.9, 32.0, -10.0], GUN, 25.0, &mut rng);
+        assert!(kills.is_empty() && !b.list[0].dead, "the segment flies past the sheet");
     }
 }

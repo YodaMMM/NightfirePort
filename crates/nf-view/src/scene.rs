@@ -11166,8 +11166,13 @@ impl Sim {
             }
             // The nearest live breakable / destroyable box (grown 0.1, the props' contact rule).
             let mut best: Option<(f32, bool, usize)> = None; // (t, destroyable, index)
+            // The evidenced reject [M 0x12bfd8:15 + 0x1ece30:24-33]: the weapon-definition word
+            // against (filter | 0x106), dropped when the AND is non-zero (the laser 0x0002 and
+            // the watch 0x0100 classes are rejected even on a no-filter pane; guns 0x0008 pass).
+            let weapon_word = self.weapons.records.get(row[shooter].held as usize)
+                .map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
             for (i, br) in self.drones.breaks.list.iter().enumerate().filter(|(_, b)| !b.dead) {
-                if br.filter != 0 && br.filter & (1u16 << (row[shooter].held & 15)) != 0 { continue; }
+                if weapon_word & (br.filter | 0x106) != 0 { continue; }
                 if let Some(t) = seg_aabb(head, end, br.lo, br.hi, 0.1) { if best.is_none_or(|(bt, _, _)| t < bt) { best = Some((t, false, i)); } }
             }
             for (i, de) in self.drones.props.destroy.iter().enumerate().filter(|(_, d)| !d.dead) {
