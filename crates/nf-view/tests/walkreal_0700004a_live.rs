@@ -47,7 +47,7 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 //    t2188..2312, grounded t2313 at y −75.50, 0.4 below the key line, riding on to the lobby).
 //    The ride-loop scrape check exempts the disabled window plus the fall (until 5 grounded ticks).
 #[test]
-#[ignore = "level-4a-lift-landing: the handback matrix itself is RESOLVED (fix_landing_matrix_live pins it green): the event-6 snapshot = SP #289's base [D (0,-53.534,-3.377), rot 0] composed onto the unparented marker's key [D (1.799,-54.128,-3.453)] = (1.799,-107.662,-6.830) — the base-concat flag is (stream parent == -1) at Script_Interp's GetInterp calls [M disasm 0x1d9ab4/0x1d9c10], the camera's is 1 always [M 0x1da054]; the port composes it (scriptlog: snapshot (1.80,-107.66,-6.83)) and Player_Enable applies it. The ride -> lobby walk stays parked on the POST-enable behaviour: the game re-enables Bond 54 BELOW the parked cab (the cab sits at -53.76 during the hold) at the shaft's mid-landing level (guards #250/#251 stand at y -102.8/-106.8 [D census] — real floors the port's rays miss at x 1.80/z -6.83, probe fb6g), then the cab resumes on ch 0x22. Whether the game lands him on that mid-landing geometry or the fall carries him to the cab/bottom needs the fresh-boot PCSX2 measurement (gdbwatch Bond's y through t2190..2500 and the floor at (1.80,-6.83,-107.66)); the walkreal's scrape/fall-exempt logic must be reworked around whatever the game does before the walk can pin the ride -> landing -> lobby route"]
+#[ignore = "level-4a-lift-landing: the POST-enable handback is the blocker, now narrowed to one question. NEW EVIDENCE (2026-10-23): (a) the old fall-exempt hole let the walk PASS VACUOUSLY - Bond re-enabled at the composed marker (1.799,-107.662,-6.830) fell past the platform (its z span -5.58..-1.30 [D o0 raw bbox] misses z -6.83) into the void (y -388 at t2698 [L probe fb6 rerun], -2571 in the walk) while the exemption ran ungrounded forever; the exemption is now TIME-CAPPED (300 ticks) so the void fall trips the scrape check. (b) [D dump_060006cf_marker_stream_raw] the marker stream s25's RAW key at t575 = (1.79945, -54.12811, -3.45340), quat yaw ~15 deg - a STANDING ROOT on the HELD platform: the platform floor -55.16 [L fb6: Bond grounded -54.13 root, platform row3 -46.12, floor local -9.04] + cc 1.0347 [M 0x194df0] = -54.13 = the key y; z -3.453 = the platform z centre (-5.58..-1.30 -> -3.44); x 1.8 on the platform (0.89..5.21). (c) [M disasm 0x1d9a7c-0x1d9a98 (case 1) + 0x1d9be4-0x1d9c0c (case 6)] Script_Interp's GetInterp base-concat flag = (stream+0x25 parent == -1) sltiu/nor pair - the base composes EXACTLY ONCE either way (unparented: inside GetInterp [M 0x1da158 tail]; parented: at the chain end [M 0x1d9a08:133/:270]) - the port's interp rule is CORRECT. (d) [D all-map scan] the composed pose (1.799,-107.662,-6.830) is a VOID in all 42 maps' collision (only the LiftShaft shells z -6.0..-0.75 exist at that y; nothing at z < -6.0 below y -90). CONTRADICTION: composing the SP #289 base (0,-53.534,-3.377 [D placement]) onto the world-space key doubles the landing level; the raw key is the designer's handback ON the platform. THE OPEN QUESTION: does the game's SP #289 SCRIPTINFO+0x00 carry the placement translation when the marker interp runs (the port's assumption [Script_Load 0x1d8248 reads the SP obj+0x30/0x50])? If it reads identity/near-zero the handback = the raw key and the port's SP base seeding is the bug. Live check: fieldprobe the 060006cf SCRIPTINFO+0x00 row3 at t2180..2190 + gdbwatch Bond's y t2190..2500 (docs/reports/level-4a-lift-lobby.md). The walk stays ignored until the handback is settled; then the want-line must shift by the hold ticks (575) after the resume."]
 fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700004a.bin", false).unwrap());
@@ -95,6 +95,7 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
     let mut scrape: Option<(u32, f32, f32)> = None;
     let mut reground = 0u32;
     let mut fall_exempt = false;
+    let mut fall_exempt_ticks = 0u32;
     for k in 0..5400u32 {
         w.tick(Default::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
@@ -106,14 +107,25 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
         let y = sim.bond.pos[1];
         // While the landing cut-scene has Bond disabled he legitimately freezes (the game's
         // Player_CollisionHandler early-returns [M 0x1949a8:24]) — and the enable drops him at
-        // his freeze pose to fall ~21 onto the still-descending cab (the header ④; probe
-        // walkreal_probe_fb6i: airborne t2188..2312, grounded t2313 0.4 under the line). The
-        // scrape check resumes only once he is riding again (5 straight grounded ticks).
+        // his freeze pose to fall onto the still-descending cab (the header ④). The scrape check
+        // resumes only once he is riding again (5 straight grounded ticks). The exemption is
+        // TIME-CAPPED at 300 ticks: the game's re-enable must ground him (the ④ fall took ~125
+        // ticks); an endless ungrounded fall is the void handback — the check trips (this was
+        // the vacuous pass: the old exemption ran while ungrounded forever and the walk
+        // "arrived" at y −2571 in free fall).
         if sim.disabled {
             fall_exempt = true;
+            fall_exempt_ticks = 0;
             reground = 0;
         } else if fall_exempt {
-            if sim.bond.grounded { reground += 1; if reground >= 5 { fall_exempt = false; } } else { reground = 0; }
+            fall_exempt_ticks += 1;
+            if sim.bond.grounded {
+                reground += 1;
+                if reground >= 5 { fall_exempt = false; }
+            } else {
+                reground = 0;
+                if fall_exempt_ticks > 300 { fall_exempt = false; }
+            }
         }
         if scrape.is_none() && t > 150 && !sim.disabled && !fall_exempt && (y - want).abs() > 5.0 {
             scrape = Some((t, y, want));
