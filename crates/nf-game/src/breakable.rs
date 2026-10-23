@@ -257,6 +257,27 @@ impl Breaks {
     /// the first solid node takes the contact and kills the round [M 0x1ea398:216-229 +
     /// Bullet_CollisionHandler 0x12ce80 disasm 0x12cff0-4].
     pub fn seg_box_t(a: V3, b: V3, lo: V3, hi: V3) -> Option<f32> {
+        // Degenerate bounds (the script-keyed regions parse to a point — the port has no glist
+        // shape for them): the game's pick shape for such an object is its world sphere [M
+        // Collide_PickObj 0x1eae80 — the closest point on the query line vs the object's
+        // +0x80/+0x8c sphere], but the port cannot know the real region's extent here. The old
+        // segment-AABB overlap stands for these until the shape lands — the port's own coarse
+        // stand-in, documented [S] (a long step's AABB covers the point's neighbourhood even when
+        // the ray misses; the real region shape is a live check for the main agent).
+        if lo == hi {
+            let mut over = true;
+            for k in 0..3 {
+                let (mn, mx) = (a[k].min(b[k]), a[k].max(b[k]));
+                if mx < lo[k] - 0.1 || mn > hi[k] + 0.1 { over = false; break; }
+            }
+            if !over { return None; }
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+            let ap = [lo[0] - a[0], lo[1] - a[1], lo[2] - a[2]];
+            let t = if ab2 > 1.0e-9 { (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2 } else { 0.0 }
+                .clamp(0.0, 1.0);
+            return Some(t);
+        }
         let mut t0 = 0.0f32;
         let mut t1 = 1.0f32;
         for k in 0..3 {

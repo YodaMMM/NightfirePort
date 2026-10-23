@@ -12892,7 +12892,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // — bullet_contact_damage, not the raw record word — which BOTH victim handlers
             // subtract (Break_Update 0x12bfd8:37, Destroy_CollisionHandler 0x12bd48:31).
             let contact_dmg = d.weapons.bullet_contact_damage(b.weapon);
-            let mut contact: Option<(f32, bool, usize)> = None;
+            let mut contact: Option<(f32, usize)> = None;
             // The drone candidate — part of the SAME sorted collide list [M 0x1ea398:120-158] —
             // queried here (pure), applied in the match below.
             let mut best: Option<(usize, i16, f32)> = None;
@@ -12903,74 +12903,42 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // against the pane's mask | 0x106 — non-zero AND drops the contact.
                     if weapon_word & (br.filter | 0x106) != 0 { continue; }
                     if let Some(t) = crate::breakable::Breaks::seg_box_t(b.pos, end, br.lo, br.hi) {
-                        if contact.is_none_or(|(bt, _, _)| t < bt) { contact = Some((t, false, i)); }
+                        if contact.is_none_or(|(bt, _)| t < bt) { contact = Some((t, i)); }
                     }
                 }
-                for (i, de) in self.props.destroy.iter().enumerate().filter(|(_, x)| !x.dead) {
-                    if let Some(t) = crate::breakable::Breaks::seg_box_t(b.pos, end, de.lo, de.hi) {
-                        if contact.is_none_or(|(bt, _, _)| t < bt) { contact = Some((t, true, i)); }
-                    }
-                }
-                if let Some((t, _, _)) = contact {
+                if let Some((t, _)) = contact {
                     // The drone candidate is part of the SAME sorted list — a guard nearer than
                     // the scenery takes the round instead [M 0x1ea398:216-229]. The application
                     // (the hit + the AI message) stays in the match below.
                     if !best.as_ref().is_none_or(|(_, _, bt)| t < *bt) { contact = None; }
                     else if !tstop.is_none_or(|ts| t <= ts) { contact = None; }
                 }
-                if let Some((_, destroyable, i)) = contact {
-                    // The round dies on the first solid object hit — the glass/window absorbs it
+                if let Some((_, i)) = contact {
+                    // The round dies on the first solid object hit — the glass absorbs it
                     // [M 0x12cff0-4]; nothing behind it scores or stops it this tick.
                     b.dead = true;
-                    if !destroyable {
-                        let br = &mut self.breaks.list[i];
-                        br.health -= contact_dmg;
-                        if br.health < 0.0 {
-                            if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
-                                self.break_kills.push((k.placement, k.kind, k.sound));
-                                // A script pane's kill deletes its object (Break_Kill's obj+0xFE
-                                // bit 0 [M 0x12b970:60]): the pane leaves the collision set and
-                                // the draw — the same removal the fusebox wire cuts do.
-                                if let Some(o) = k.script_obj {
-                                    if let Some(slot) = self.scripts.objects.list.get_mut(o) { *slot = None; }
-                                }
-                                // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
-                                // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
-                                // audio voice plus the hearing entry (the level's sfx-table data, the shape the
-                                // script sounds use); the shatter/debris stays on the view queue. The effect's
-                                // pos is obj+0x80, the bounds centre — the game's own argument in BOTH sound arms
-                                // [M 0x12b970:69,75; M-dis 0x12b9f4 `addiu $a1,$s0,0x80` → Sound_Play3D].
-                                let id = u32::from(k.sound);
-                                self.audio.play3d(id, k.pos, None);
-                                if let Some(t) = d.sfx {
-                                    let e = t.get(id);
-                                    if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
-                                }
+                    let br = &mut self.breaks.list[i];
+                    br.health -= contact_dmg;
+                    if br.health < 0.0 {
+                        if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
+                            self.break_kills.push((k.placement, k.kind, k.sound));
+                            // A script pane's kill deletes its object (Break_Kill's obj+0xFE
+                            // bit 0 [M 0x12b970:60]): the pane leaves the collision set and
+                            // the draw — the same removal the fusebox wire cuts do.
+                            if let Some(o) = k.script_obj {
+                                if let Some(slot) = self.scripts.objects.list.get_mut(o) { *slot = None; }
                             }
-                        }
-                    } else {
-                        let de = &mut self.props.destroy[i];
-                        de.health -= contact_dmg;
-                        if de.health < 0.0 {
-                            de.dead = true;
-                            let (channel, kind, blast_damage, lo, hi) = (de.channel, de.kind, de.blast_damage, de.lo, de.hi);
-                            self.channels.set(channel as u32, 1, frame);
-                            if kind != 0 {
-                                // `Destroy_Smash` 0x12bb60: the blast only for a non-zero type byte [M
-                                // 0x12bc50]. Radius [M 0x12bcdc `lwc1 f12,140(s0)` × the type mult 4/2/3
-                                // (0x12bc74/0x12bc84/0x12bc94)] reads the placed obj's +0x8C sphere — a field
-                                // the port doesn't parse; the bounds' half-diagonal stands in [*suggested*],
-                                // open live check. Position: the obj's own `+0x80` [M 0x12bd08 a1 =
-                                // s3 = obj+0x80]; the port uses the bounds centre.
-                                let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
-                                let ext = [(hi[0] - lo[0]) / 2.0, (hi[1] - lo[1]) / 2.0, (hi[2] - lo[2]) / 2.0];
-                                let sphere = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt();
-                                let mult = match kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
-                                let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
-                                // fix-blast-scripts2: Destroy_Smash's f12 reads the tag's +0x8c [M 0x12bcdc `lwc1
-                                // $f12, 140($16)`] — the port keeps the historical scale = radius here (no disc
-                                // contradiction surfaced; the green destroy test pins the script, not the scale).
-                                self.pending_blasts.push((c, sphere * mult, blast_damage, usize::MAX, 0, script, sphere * mult));
+                            // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
+                            // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the
+                            // audio voice plus the hearing entry (the level's sfx-table data, the shape the
+                            // script sounds use); the shatter/debris stays on the view queue. The effect's
+                            // pos is obj+0x80, the bounds centre — the game's own argument in BOTH sound arms
+                            // [M 0x12b970:69,75; M-dis 0x12b9f4 `addiu $a1,$s0,0x80` → Sound_Play3D].
+                            let id = u32::from(k.sound);
+                            self.audio.play3d(id, k.pos, None);
+                            if let Some(t) = d.sfx {
+                                let e = t.get(id);
+                                if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
                             }
                         }
                     }
@@ -12993,6 +12961,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // contact — it does not consume the round [M props.rs camera_shot_hit]).
             if !net_world {
                 self.props.camera_shot_hit(b.pos, end, b.weapon, &mut self.channels, frame);
+            }
+            for (pos, radius, damage, kind) in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.channels, frame) } {
+                let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
+                // fix-blast-scripts2: Destroy_Smash's f12 reads the tag's +0x8c [M 0x12bcdc `lwc1
+                // $f12, 140($16)`] — the port keeps the historical scale = radius here (no disc
+                // contradiction surfaced; the green destroy test pins the script, not the scale).
+                self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius));
             }
             // The fusebox wires see the bullet this tick (`Collide_Update` 0x1ea398 pushes the pick
             // onto the hit object's `obj+0xD0`; `FuseBox_Update` 0x1adfe8:88 filters the list with
@@ -13146,7 +13121,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The first solid node wins the round [M 0x1ea398:216-229 + 0x12cff0-4]: a scenery
             // contact taken above (contact.is_some) kills the walk — nothing farther applies.
             match (best, tw) {
-                (Some((i, part, t)), w) if w.is_none_or(|w| t < w) && contact.is_none_or(|(ct, _, _)| t < ct) => {
+                (Some((i, part, t)), w) if w.is_none_or(|w| t < w) && contact.is_none_or(|(ct, _)| t < ct) => {
                     b.dead = true;
                     let hit = Hit { part, ray, point: at(t), damage: b.damage, weapon: b.weapon };
                     self.player_impacts.push(PlayerImpact::Drone { drone: i, part, at: hit.point });
@@ -13233,7 +13208,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         }
                     }
                 }
-                (_, Some(w)) if contact.is_none_or(|(ct, _, _)| w < ct) => {
+                (_, Some(w)) if contact.is_none_or(|(ct, _)| w < ct) => {
                     // The walk stopped at the scenery contact (nearer than the wall) — the round
                     // never reached the static node behind it [M 0x1ea398:216-229].
                     // fix-gas-rng4 (111d3's deferral ported onto the G-041 walk): the world hit's
