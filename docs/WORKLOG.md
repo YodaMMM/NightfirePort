@@ -138,3 +138,25 @@ the port — no event 6 in 0x060008f0's parsed streams) and
 interactables_0700001b_live::drake_defeat_by_real_fire_ends_the_mission. Find where the game's
 player carry comes from (script stream, event kind, channel) [D][M]; port it from the decompile;
 un-ignore with a sister that can fail. Real input only via step_bond.
+
+### level-1b-drake-2 (20:00-21:20 UTC)
+
+- Found the event-6 player carries [D dump]: 0x0600085c stream 7 (SP#147, the level-start
+  intro cinema, pack 0780001b.bin — ev0x04[]+ev0x06[0x2], mode 2) and 0x0600085f stream 6
+  (pack 0790001b.bin, ev0x06[0x0], no SP player found). NOT in 0x060008f0 (SP#211's B script)
+  — the "event-6 in the fly-by" premise is refuted on the disc data; the port's event-6 path
+  (snapshot at event time → PlayerEnable at Script_Free, flags 0x100) is already ported
+  [M 0x1d94c0 case 6; nis.rs event()/free()].
+- The route finding: the void crossing is the zero-G float. The level's script chain pulses
+  ch 0x4b [D 06000971 s2/s3, played by 060008a3 s6 and 060008f0 s8/9/11] and
+  C_CHCHZEROG_Handler 0x216388 folds Player_ChangeSubState(9) on it [M]. Ported the entry
+  (scene.rs, the round-1 block with its citations). The disc trigger chain above the pulse is
+  unreachable (ch 19 has no writer — the level doc §6), so the tests drive the pulse as the
+  documented stand-in, same class as the ch 0x0a drive.
+- walkreal walk_arrival_to_drakes_defeat rewritten: the real deck walk → ch 0x0a (Drake
+  spawns from the deck — the spawner's min_dist screen [M 0x137cb0:30] is why the arena-floor
+  gate drive of the interactables test could never spawn) → the slit → the 0x4b pulse →
+  substate 9 (verified grabbed) → steered thruster float south around the island → BLOCKED on
+  an invisible wall at x ≈ 4.98 spanning at least z −1.5..−3.8 (the "sealed shaft") — the
+  next step is mapping the wall (a westward segment scan over y/z) to find the game's opening
+  (over the top, or the SP#141/#142 shaft rides at z ±8.82).

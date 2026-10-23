@@ -2286,6 +2286,33 @@ impl Sim {
         // The port ticks the hold and skips the world (docs/systems/exit-hold.md); the host
         // defers the level load until it clears.
         if self.drones.tick_exit_hold() { return; }
+        // level-1b-drake-2: the zero-G entry — `C_CHCHZEROG_Handler` 0x216388 [M]: its msg-0x4b
+        // arm queries the same control with msg 0x40 and folds
+        // `Player_ChangeSubState(glb_players, 9 | 0)` — 9 on a nonzero answer, 0 on zero
+        // [M 0x216388:10-17]. The disc's switch-channel-75 (0x4b) writers are the script
+        // sub-pulses [D 0x06000971 streams 2/3 (`ev0x0d[0x4b,1]` / `ev0x0d[0x4b,0]`), played by
+        // 0x060008a3's stream 6 (SP#143, out ch 15) and by the fly-by NIS 0x060008f0's streams
+        // 8/9/11 — the same script whose stream 15 writes the fight gate ch 10 at its t400]. The
+        // port binds the control's msg-0x40 value to `switch_channels[75]` itself and fires the
+        // handler on the channel's write frame (the game stamps `switch_channels_time[ch]` on
+        // every script write [M 0x1d94c0 joined_r0x001d9798]; the port's `Channels::time` is that
+        // stamp): a write of 1 this frame = the rising edge → substate 9, with the entry's own
+        // writes (`+0x50 = 0`, no rotation [M Player_ChangeSubState 0x190630:49-63 — the port's
+        // first zero-g tick builds the body matrix from the walk yaw/pitch]). [S] unverified: no
+        // ACTION.ELF sender of the msg-0x4b control message was found (the C_CHCH* family is the
+        // menu dispatch, `Handler_HandleMessage` 0x2029e0, and no code reads
+        // `switch_channels[75]`), so the channel→control binding is the port's model — live-check
+        // it. The handler's zero arm (substate 0) stays unwired: the disc's own pulses end in a
+        // falling write two ticks after the rise, which would drop Bond into the pit — the
+        // game's observable float is one-way (the walkreal leg-2 note), so no disc evidence
+        // reaches the zero arm on this route.
+        if self.bond.substate != nf_game::player::SS_ZEROG_9
+            && self.drones.channels.on(0x4b)
+            && self.drones.channels.time.get(0x4b) == Some(&self.drones.frame)
+        {
+            self.bond.vel = [0.0; 3]; // [M 0x190630:49-63 — +0x50 = 0]
+            self.bond.substate = nf_game::player::SS_ZEROG_9;
+        }
         // goggles: the action-13 press edge rides into this tick's `hud_tick` (the game's
         // `Input_Action(p, 0xd, 4)` reads the same edge inside HUD_Update) [M 0x19e9d8:74].
         self.hud.goggles_press = input.goggles_action;
