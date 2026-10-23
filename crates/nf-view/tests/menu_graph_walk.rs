@@ -290,7 +290,7 @@ fn apply(fe: &mut FrontEnd, e: Edge, armed: &mut Option<u32>, problems: &mut Vec
         Edge::MissionEnded(o) => {
             fe.mission_ended(
                 o,
-                Stats { shots_fired: 120, shots_hit: 40, accuracy_pct: 33, time_s: 754 },
+                Stats { shots_fired: 120, shots_hit: 40, accuracy_pct: 33, time_s: 754, ..Stats::default() },
             );
             // reward-after-outro: a COMPLETE end queues the page — the load tail's
             // MenuManager_Create opens it [M 0x1d6360:160-163] (the BFS stands in for the host).

@@ -280,7 +280,7 @@ fn the_results_pages_split_complete_from_failed() {
     fe.mission = 1;
     // A mission ends: the game records the results page 0x40000036 and fades [M 0x182c60:74 sets
     // +0x1c = 0x40000036 and pushes a 60-frame fade].
-    fe.mission_ended(Outcome::Complete, Stats { shots_fired: 120, shots_hit: 40, accuracy_pct: 33, time_s: 754 });
+    fe.mission_ended(Outcome::Complete, Stats { shots_fired: 120, shots_hit: 40, accuracy_pct: 33, time_s: 754, ..Stats::default() });
     assert_eq!(fe.flow.page, 0x4000_0036);
     // reward-after-outro [M 0x182c60:72-74 / 0x1d6360:160-163]: the page QUEUES at the end — no
     // MenuManager runs until the load's tail (the old assert pinned the playtest bug: the reward
@@ -544,7 +544,7 @@ fn the_menu_overlay_produces_font_quads_for_every_page() {
     // The results page renders the stats line and the outcome head.
     fe.page = Page::Results;
     fe.outcome = Outcome::Complete;
-    fe.stats = Stats { shots_fired: 10, shots_hit: 5, accuracy_pct: 50, time_s: 61 };
+    fe.stats = Stats { shots_fired: 10, shots_hit: 5, accuracy_pct: 50, time_s: 61, ..Stats::default() };
     let before = menu::menu_overlay(&fe, &font, &font, None, &textures, 4.0 / 3.0).v.len();
     fe.outcome = Outcome::Failed;
     let after = menu::menu_overlay(&fe, &font, &font, None, &textures, 4.0 / 3.0).v.len();
