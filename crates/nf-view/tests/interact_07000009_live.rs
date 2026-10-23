@@ -125,9 +125,21 @@ fn shooting_the_lobby_roof_glass_breaks_it() {
             let head = sim.bond.head();
             let dir = [target[0] - head[0], target[1] - head[1], target[2] - head[2]];
             let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
-            sim.bond.yaw = dir[0].atan2(dir[2]);
-            sim.bond.pitch = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2;
-            sim.step_bond(Input::default(), t % 16 == 0, false, false);
+            // The aim rides the INPUT (turn/look — the game's own aim path): the gun's bullets
+            // take their direction from the processed aim state, not a direct yaw/pitch write
+            // (the gondola-windows live tests showed direct writes miss the pane).
+            let desired_yaw = dir[0].atan2(dir[2]);
+            let desired_pitch = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+            let dy = desired_yaw - sim.bond.yaw;
+            let dy = dy - std::f32::consts::TAU * (dy / std::f32::consts::TAU).round();
+            let input = Input {
+                turn: dy.clamp(-0.08, 0.08),
+                look: (desired_pitch - sim.bond.pitch).clamp(-0.05, 0.05),
+                ..Default::default()
+            };
+            // Burst cadence: the port's gun fires on the trigger edge (the held trigger fires
+            // once); every press is a fresh shot.
+            sim.step_bond(input, t % 10 < 3, false, false);
         }
     }
     let sim = scene.sim.as_ref().unwrap();

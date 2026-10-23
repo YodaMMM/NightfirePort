@@ -18,10 +18,12 @@ pub struct Bullet {
     /// via the state jump table at 0x2f4300) kills the round when `weapon+0x1C < BU+0xF4`
     /// (0x12e95c-0x12e984); the step clamps to the +0x1C boundary (0x12f014-0x12f02c) and
     /// `BU+0xF4` keeps the overshoot, so the next tick kills it]. NOT `BU+0xFC` — that is the
-    /// fuse/arm clock `Bullet_init` 0x12c5a0:103 writes (210.0, per-id overrides :255-283) and
+    /// fuse/arm clock `Bullet_init` 0x12c5a0:103 writes (210.0, per-id overrides :199-228) and
     /// `Bullet_update` counts down only for `+0x70 & 0x80000` records (0x12ee08) and id 0x45
-    /// (0x12efa4, 1.0/tick). The one deliberate deviation: the Laser watch 0x4E/0x4F keeps 210.0
-    /// at its spawn sites [S unverified — a port choice; the disc +0x1C is 4.0/8.0].
+    /// (0x12efa4, 1.0/tick). laser-watch-0c: no id deviates any more — the Laser watch 0x4E/0x4F
+    /// also flies its record's +0x1C = 4.0/8.0 [L weapon_data 0x2bf150]; the old 210.0 spawn-site
+    /// stand-in is removed (the per-tick refire's state-0 segments cover [0, +0x1C] from the
+    /// muzzle, which is what reaches the locks).
     pub range: f32,
     /// Damage after `Drone_ModBulletDamage` (applied when it hits Bond).
     pub damage: f32,
@@ -318,6 +320,38 @@ mod tests {
         let mut rng3 = crate::drone::Rng::new(3);
         for _ in 0..80 { if slow.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng3).is_some() { break } }
         assert!((slow.pos[2] - 50.0).abs() < 1.01, "the clamped boundary: {} vs 50.0", slow.pos[2]);
+    }
+
+    /// laser-watch-0c: the Laser watch's own +0x1C — 4.0 (0x4E) / 8.0 (0x4F) [L weapon_data
+    /// 0x2bf150 + id·0x10C; the census pins them in nf-formats' bullet_range_census] — is the
+    /// watch round's death range like any other id [M 0x12e95c-0x12e984; the 831-era 210.0
+    /// spawn-site stand-in is removed]. The watch's speed is 33.33 (+0x20 [L]) and its refire
+    /// spawns one round per held tick [L +0x40 = 1; M 0x1a5460:653-658], so the state-0 step
+    /// (0.5 + FRand(0.5))·33.33 clamps onto the 4.0 boundary: the FIRST segment covers
+    /// [0, 4.0] from the muzzle and the round is dead by the next tick's head check — no watch
+    /// segment ever reaches past 4.0 (0x4E). A lock sphere at 4.5 along the ray can never be
+    /// contacted; the repro hinge at 1.34 [D probe] is inside the first segment.
+    #[test]
+    fn the_watch_round_dies_at_plus_1c_after_the_first_segment() {
+        let world = CollisionWorld::empty();
+        let vol = PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
+        // 0x4E: range 4.0, speed 33.33 [L weapon_data 0x2bf150 + 0x4E·0x10C: +0x1C, +0x20].
+        let mut w = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 4.0,
+            damage: 0.0, owner: 0, state: 0, weapon: 0x4e, flyby: false, bounces: 0 };
+        let mut rng = crate::drone::Rng::new(3);
+        // The first (state-0) tick: the step clamps onto the +0x1C boundary.
+        w.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng);
+        assert!((w.pos[2] - 4.0).abs() < 1e-3, "the state-0 segment lands ON the 4.0 boundary [M 0x12f014-0x12f02c], got {}", w.pos[2]);
+        assert!(w.travelled > 4.0, "BU+0xF4 keeps the overshoot [M 0x12f010], got {}", w.travelled);
+        // The next tick's head check kills the round: no further segment.
+        w.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng);
+        assert_eq!(w.state, 2, "the watch round dies at the +0x1C = 4.0 death [M 0x12e95c-0x12e984]");
+        // 0x4F's 8.0: the same law, the boundary at 8.0.
+        let mut w2 = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 8.0,
+            damage: 0.0, owner: 0, state: 0, weapon: 0x4f, flyby: false, bounces: 0 };
+        let mut rng2 = crate::drone::Rng::new(3);
+        w2.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng2);
+        assert!((w2.pos[2] - 8.0).abs() < 1e-3, "the 0x4F boundary is 8.0 [L +0x1C], got {}", w2.pos[2]);
     }
 
     /// fields-player: the armour gate of `Player_HandlePain`'s pain-type switch

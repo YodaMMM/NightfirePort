@@ -819,7 +819,7 @@ fn guard_surrenders_to_bond_behind_him() {
             let a = dr.yaw + off + da;
             let p = [dr.pos[0] + r * a.sin(), dr.pos[1], dr.pos[2] + r * a.cos()];
             let f = l.world.floor_below(p, 2.0)?;
-            ((p[1] - f - 1.0).abs() < 0.4 && l.world.line_of_sight([dr.pos[0], dr.pos[1] + 0.6, dr.pos[2]], [p[0], p[1] + 0.5, p[2]])).then_some(p)
+            ((p[1] - f - 1.0).abs() < 0.4 && l.world.line_of_sight([dr.pos[0], dr.pos[1] + 0.6, dr.pos[2]], [p[0], p[1] + 0.5, p[2]], nf_game::world::LOS_GUARD_VISION)).then_some(p)
         })
     };
     let w = warm();

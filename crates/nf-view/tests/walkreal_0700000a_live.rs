@@ -224,7 +224,7 @@ fn walk_leg_watched(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> b
 }
 
 #[test]
-#[ignore = "the 1022w tree disproves the 826e premise (a dropped floor-brush class): the office floor at the west doorway IS y≈0 in the port's build and the game's own [D 0700000a ai_network: the patrol nodes 9/10/17/28 cross the doorway at disc y 0.0] — the '≈1.1 office slab' was the door pivot y (placements #83/#84/#536 all 1.09986, the door mesh spans ±1.1) misread as a floor. The ring legs walk clean (west_doorway_repro, 0 falls). The real residue: the walker's stuck→E-toggle closes the starts-open door #4 mid-leg and Bond hangs grounded=false at (+0.06 displaced rest) — the floor band [M Player_FeetOnPoint 0x194188:106: HITDATA+0xC − 0.1 <= BLData+0xCC] has only ~1.5 cm of margin at rest, so the door-slab push unhooks him; instrumented in the wedge dump, unfixed. Same threshold-strip class confirmed still missing on 07000001 (x 4.4..5.6, z 8.6..11.0 within 8.0)"]
+#[ignore = "the route rides the game's own ai lanes, the west crossing passes, and the floor bridge is fixed (Level::instances folds the non-main map37 mesh pieces in [D disc tris; L the sweep reads ~0]) — but the ring's south legs still trip the mission fail: the alarm guard's 60-tick reaction window fires during any leg that wedges or dallies in his cone reach (the N-S x −8.5 lane attempt died the same way at +5336 ticks). The mouth's guard slot is 0.5 wide (the jamb corner (−10.60, −18.66) [L the bridge-edge sister]) and cannot take the player's 1.1 capsule, so the mouth crossing needs either the guard-timing solution (walk the legs steadily, no wedges) or the route's south-leg geometry re-derived at the player's radius. The bridge-edge sister pins the band at a genuine ledge edge."]
 fn walk_office_floor_qworm_keyboard_hatch() {
     let mut w = load_carry(None);
     {
@@ -323,12 +323,30 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // player's legal ring route: south through the west offices, the west corridor, the south
     // corridor, and up the east side to the hatch — the corners below, walked steadily (a real
     // player's stealth timing: no stops inside a civilian's reach).
-    let ring: [([f32; 3], &str); 36] = [
+    let ring: [([f32; 3], &str); 43] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
         ([-7.5, 1.3, 16.5], "ring: the west hall north"),
         ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
         ([-20.5, 1.3, 5.5], "ring: down the west office block"),
-        ([-17.5, 1.3, 5.5], "ring: east of the west door (its threshold floor gap drops the player — the collision owner's residue)"),
+        // The crossing rides the game's own ai lane: the patrol nodes 17/28 cross at z 5.54/5.60
+        // [D 0700000a ai_network, disc y 0.0]. The swing door opened to the pos01-0 end leaves
+        // its leaf across x −19.53..−18.32 at z 4.44..4.70 ([L probe979_floor_sweep — the door's
+        // dynamic tris at the open pose]); the old straight x −17.5 leg cut the corner at
+        // z 4.87 and the capsule (r 0.55) grazed the leaf's east face — the micro-pushes rode
+        // the rest dy onto the floor band's f32 edge [M 0x194188:106] and the grounded flag
+        // flickered (the 941 floating wedge). The lane entry arrives tight (r 0.7) so the south
+        // turn starts clear of the leaf.
+        ([-17.6, 1.3, 5.5], "ring: the ai node 17 east of the door"),
+        // The game's own path-3 lane round the desk block: the nodes 27/26 run east along
+        // z 5.7-5.8, then 32/33/34 run south at x −14.8/−14.5 [D 0700000a ai_network] — the
+        // desk block (x −17.53..−16.59, z 3.29..4.79 [L tris dump]) and the swung leaf's box
+        // (x −19.53..−18.32, z 4.44..4.70 [L]) leave only a 0.79 gap the capsule (r 0.55, 1.1
+        // wide) cannot pass — the game's graph routes around the desks' east side.
+        ([-16.2, 1.3, 5.8], "ring: the ai node 27 east"),
+        ([-15.0, 1.3, 5.7], "ring: the ai node 26 east"),
+        ([-14.8, 1.3, 4.0], "ring: the ai node 32 south"),
+        ([-14.8, 1.3, 2.9], "ring: the ai node 33 south"),
+        ([-14.5, 1.3, 2.4], "ring: the ai node 34 south"),
         ([-17.5, 1.3, 2.5], "ring: down past the west door"),
         ([-18.5, 1.3, 2.5], "ring: the door jink west"),
         ([-18.5, 1.3, 0.5], "ring: down"),
@@ -341,8 +359,14 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         ([-17.5, 1.3, -9.5], "ring: jink 5"),
         ([-17.5, 1.3, -13.5], "ring: the south-west corner approach"),
         ([-11.5, 1.3, -13.5], "ring: east past the alarm-panel corridor"),
-        ([-11.5, 1.3, -18.5], "ring: south past the wall stub"),
-        ([-6.5, 1.3, -18.5], "ring: the south corridor mouth"),
+        // The player's route south rides the game's N-S lane at x −8.5 (the ai nodes 132
+        // (−8.52, −18.47) / 130 (−8.52, −15.39) / 0 (−8.76, −21.55) [D]) — the mouth's guard
+        // slot east of the bridge is 0.5 wide (the jamb's corner at (−10.60, −18.66) [L the
+        // bridge-edge sister's segment probe]) and cannot take the player's 1.1 capsule.
+        ([-8.6, 1.3, -14.2], "ring: the ai lane to the N-S corridor"),
+        ([-8.5, 1.3, -15.4], "ring: the ai node 130 south"),
+        ([-8.5, 1.3, -18.5], "ring: the ai node 132 south"),
+        ([-8.7, 1.3, -21.5], "ring: the ai node 0 into the south corridor"),
         ([-6.5, 1.3, -22.5], "ring: the south corridor"),
         ([9.5, 1.3, -22.5], "ring: the south corridor's east run"),
         ([9.5, 1.3, -13.5], "ring: up the east side south"),
@@ -362,7 +386,10 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         ([21.5, 1.3, 19.4], "ring: the hatch mouth"),
     ];
     for (wp, label) in ring {
-        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(1.2), label);
+        // The alarm guard's cone covers the south corridor mouth (the route note above) — the
+        // watch between the legs catches his run the way walk_leg_watched does below.
+        watch_and_clear(&mut w, 16.0);
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
     }
     // Diagnostic (this task): the office floor's LOAD_LEVEL triggers — the reload (next == this
@@ -432,12 +459,17 @@ fn walk_office_floor_qworm_keyboard_hatch() {
 #[test]
 fn west_doorway_repro() {
     let mut w = load_carry(None);
-    let legs: [([f32; 3], &str); 10] = [
+    let legs: [([f32; 3], &str); 15] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
         ([-7.5, 1.3, 16.5], "ring: the west hall north"),
         ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
         ([-20.5, 1.3, 5.5], "ring: down the west office block"),
         ([-17.5, 1.3, 5.5], "ring: east of the west door"),
+        ([-16.2, 1.3, 5.8], "ring: the ai node 27 east"),
+        ([-15.0, 1.3, 5.7], "ring: the ai node 26 east"),
+        ([-14.8, 1.3, 4.0], "ring: the ai node 32 south"),
+        ([-14.8, 1.3, 2.9], "ring: the ai node 33 south"),
+        ([-14.5, 1.3, 2.4], "ring: the ai node 34 south"),
         ([-17.5, 1.3, 2.5], "ring: down past the west door"),
         ([-18.5, 1.3, 2.5], "ring: the door jink west"),
         ([-18.5, 1.3, 0.5], "ring: down"),
@@ -454,6 +486,48 @@ fn west_doorway_repro() {
         for f in &w.report.falls { eprintln!("[repro]   fall: {f}"); }
         assert!(sim.drones.level_exit.is_none(), "the mission failed at '{label}'");
     }
+}
+
+/// The band-edge sister: Bond walks onto the south-corridor mouth's floor bridge (the map37
+/// mesh strip the instances fix folded in — x −11.43..−10.39, z −19.36..−18.03 [D the disc tri
+/// dump]) and stands AT its west edge. The floor band [M Player_FeetOnPoint 0x194188:106] holds
+/// him grounded at the edge — the honest edge case the floating wedge was not: no box grazes, the
+/// band passes, and he stays put. CAN FAIL if the band constants drift or the bridge drops out
+/// again (the instances fix's regression pin).
+#[test]
+fn bond_stands_at_the_mouth_bridge_edge() {
+    let mut w = load_carry(None);
+    // Reach: a REACH teleport onto the bridge's west end (the walk there crosses the wedging
+    // mouth legs — see the walk test's ignore note); the standing itself is the real input.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-11.35, 1.12, -18.6];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = std::f32::consts::FRAC_PI_2;
+        sim.bond.grounded = true;
+    }
+    w.wait(10);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let floor = sim.world.floor_below(p, 3.0);
+        assert!(floor.is_some(), "the bridge's floor must read under Bond [D map37 plc286/287]");
+        let dy = p[1] - floor.unwrap();
+        assert!(dy > 1.0 && dy < 1.1347, "the rest dy {} sits inside the band's game window (cc 1.0347 + 0.1 [M 0x194188:106])", dy);
+    }
+    // Step east to the bridge's mid span and settle — the real-input walk (short, no door zone).
+    w.walk_to(Wp::new(-11.0, 1.12, -18.55).r(0.35), "the bridge mid span");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let floor = sim.world.floor_below(p, 3.0);
+        assert!(floor.is_some() && (p[1] - floor.unwrap()) > 1.0 && (p[1] - floor.unwrap()) < 1.1347,
+            "the band holds on the bridge's mid span (dy {:?} [M 0x194188:106])", floor.map(|f| p[1] - f));
+        assert!(sim.bond.grounded, "Bond stands grounded on the bridge (the band holds [M 0x194188:106])");
+    }
+    // The mouth's passage east of the bridge is a 0.5-wide guard slot (the jamb's corner at
+    // (−10.60, −18.66) [L the sister's first run: the segment hit 0.48 ahead]) — the player's
+    // route does NOT cross it; the walk test's mouth leg carries that finding.
 }
 
 /// The wedge diagnosis: walk leg-5 then leg-6 with per-10-tick dumps of Bond's state, the cel,

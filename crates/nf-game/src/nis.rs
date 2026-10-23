@@ -217,6 +217,34 @@ pub struct Objects {
     /// 07000005's truck script 0x06000A22 stream 2 (glist 0x0200040C, params [0]) is the disc's
     /// only script-created volume [D the 289 census].
     pub pending_volumes: Vec<PendingVolume>,
+    /// `Script_CreateEntity` 0x1d8968's obj_type 0x20 arm: `Break_Create` (0x12c230) with the
+    /// shared level_tag 0x349948 whose param slots the op-7 write filled [M 0x1d8d78:80-87;
+    /// 0x1d8968:120-123] — kind/health/filter from the Entity params [0]/[1]/[2]. Created at the
+    /// scratch origin, POSED BY THE SCRIPT from the same tick on (obj+0x90 keyed per
+    /// `Script_Interp` 0x1d9a08:94-112 — the gondola's 16 windows ride the carriage [D decode]).
+    /// The game emits this only on the CREATE path (an existing same-class stream object is
+    /// re-pointed without a new breakable [M 0x1d8a68-0x1d8a80]). The sim drains it after the
+    /// scripts tick.
+    pub pending_breaks: Vec<PendingBreak>,
+}
+
+/// One queued `Break_Create` from a script's Entity command obj_type 0x20 — see
+/// `Objects::pending_breaks`.
+#[derive(Clone, Debug)]
+pub struct PendingBreak {
+    pub script: u32,
+    pub stream: u8,
+    /// The Entity command's glist hashcode (`hashtable_hashcode_to_celglist`, [M 0x1d8968:121]).
+    pub hash: u32,
+    /// The stream object's index in `Objects::list` — the created pane IS the stream's entity
+    /// (`Script_EntityStart` 0x1d8d78:96-100 stores it at stream+0x10), so `Script_Interp`
+    /// re-poses it every tick the stream runs; the breakable's bounds follow it.
+    pub obj: usize,
+    /// The Entity command's parameters: [0] the break kind, [1] the health bits, [2] the filter
+    /// word [M 0x1d8d78:80-87 → 0x12c230:21-35].
+    pub params: Vec<u32>,
+    /// The stream's posed matrix at the creation tick.
+    pub matrix: Mat4,
 }
 
 /// One queued `Drone_AIVolume_Create` (0x1376c0) from a script's Entity command obj_type 0xF5 —
@@ -718,6 +746,21 @@ impl Script {
             if let Some(Some(Obj::Entity { matrix, .. })) = objs.list.get(pos) {
                 objs.pending_volumes.push(PendingVolume {
                     script: self.nis.hashcode, stream: i as u8, hash, matrix: *matrix, params: params.clone(),
+                });
+            }
+        }
+        // `Script_CreateEntity` 0x1d8968's 0x20 arm: `Break_Create` with the op-7 param block —
+        // the gondola's 16 cabin windows (07000008's ride script 0x0600004C streams 7-18/23-26,
+        // params [2, 1, 0], parented to the carriage stream 2 [D decode]) and every other
+        // script-created pane. The pane is created at the origin and keyed by the stream from
+        // this tick on [M 0x1d8968:120-123 + Script_EntityStart's interp tail]; the sim drains
+        // into `Breaks` (breakable.rs, the per-tick bounds sync).
+        if obj_type == 0x20 && fresh {
+            let pos = match self.streams[i].obj { Some(p) => p, None => 0 };
+            if let Some(Some(Obj::Entity { matrix, .. })) = objs.list.get(pos) {
+                objs.pending_breaks.push(PendingBreak {
+                    script: self.nis.hashcode, stream: i as u8, hash, obj: pos,
+                    params: params.clone(), matrix: *matrix,
                 });
             }
         }
@@ -1814,6 +1857,15 @@ impl Scripts {
             if p.placement != placement { continue; }
             p.matrix = matrix;
             if let Some(s) = p.info[p.cur].as_mut() { s.matrix = matrix; }
+        }
+    }
+
+    /// `Copter_Delete` 0x17e568's `SP_Delete(*(rec+0x2c))` [M :8]: the copter `placement`'s SP
+    /// player goes to its delete state (state 5 frees both scripts on its next update — the
+    /// same path the script ops' SP_Delete takes).
+    pub fn delete_copter_sp(&mut self, placement: usize) {
+        for p in &mut self.players {
+            if p.placement == placement { p.state = 5; }
         }
     }
 

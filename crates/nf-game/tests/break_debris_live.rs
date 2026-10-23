@@ -1,7 +1,7 @@
 //! The kill pieces through the real level data (a breakable shatters into smaller
 //! pieces). A shot vase spawns the game's debris — one object per
 //! stride-3 collision record of every leaf box [M Debris_Create_Loop 0x1ed548 + disasm
-//! 0x1ed638], dressed by EffectInfo[hit material & 0x3f] [D ACTION.ELF 0x3037c0] with the
+//! 0x0008d638], dressed by EffectInfo[hit material & 0x3f] [D ACTION.ELF 0x3037c0] with the
 //! game's launch numbers (velocity = spread·0.5 · record plane normal · REC_FRAME_RATE, the
 //! hit-velocity term zeroed by Break_Kill [M 0x12b970:140, Debris_Create 0x1aaa00:38-49]); a
 //! shot window spawns one shard per small source triangle (psiCreateBreakableData's draw-model
@@ -34,7 +34,7 @@ fn level(id: u32) -> Option<Level> {
 
 /// The game's stride-3 record count over a collision block, computed here from the raw parsed
 /// data (independent of the port's `Source` build): per leaf box, `i` from `tris.start` while
-/// `i < tris.end` step 3 [M disasm 0x1ed5f8-0x1ed838].
+/// `i < tris.end` step 3 [M disasm 0x0008d5f8-0x0008d838].
 fn stride3_count(level: &Level, object: (usize, usize)) -> usize {
     let c = level.maps[object.0].objects[object.1].collision.as_ref().unwrap();
     c.boxes.iter().filter(|b| b.children.is_none())
@@ -59,7 +59,10 @@ fn a_shot_vase_spawns_the_games_debris_count_and_launch_numbers() {
     } else { unreachable!() };
     let count = stride3_count(&level, object);
     assert!(count >= 1, "the vase's leaves carry records");
-    // One bullet through the bounds centre kills it.
+    // One bullet through the bounds centre kills it. The weapon argument is the
+    // weapon-definition word (`weapon_definition+0x10`, what Collide_FilterBullets compares
+    // [M 0x12bfd8:15 + 0x1ece30:24-33]) — a gun's 0x0008 passes the base 0x106 mask [L dump];
+    // the old 0x0008 here was a weapon ID, and 0x0008 & 0x106 != 0 drops the shot.
     let a = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, hi[2] + 2.0];
     let b = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2] - 2.0];
     let mut rng = Rng::new(0x5eed);

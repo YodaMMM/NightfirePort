@@ -113,7 +113,7 @@ fn sensor_trips_after_two_seconds_of_sight_and_the_empty_sister_does_not() {
     let mut bond = Player { pos: [at[0], at[1] - 0.9, at[2]], ..Default::default() };
     bond.target = bond.pos;
     bond.sph = at; // the world-sphere centre the cone test reads [M 0x1af4f0:61]
-    assert!(l.world.line_of_sight(s164.pos, bond.pos) && l.world.line_of_sight(s164.pos, at),
+    assert!(l.world.line_of_sight(s164.pos, bond.pos, nf_game::world::LOS_SENSOR) && l.world.line_of_sight(s164.pos, at, nf_game::world::LOS_SENSOR),
         "the bisector point needs clear static LOS [M 0x1af4f0:84-87]");
 
     // Sister: park the player far away first — neither sensor may trip (the "empty volume"

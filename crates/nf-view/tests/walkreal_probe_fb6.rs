@@ -130,3 +130,37 @@ fn dump_cutscene289_streams_and_matrices() {
         if t >= 2700 { break; }
     }
 }
+
+#[test]
+fn dump_060006cf_marker_stream_raw() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700004a.bin", false).unwrap());
+    w.skip_cutscenes = false;
+    // fast-forward: settle + ride with no input until the cut-scene script is loaded
+    for k in 0..84 { w.tick(nf_game::player::Input::default(), false); }
+    let mut found: Option<std::sync::Arc<nf_formats::nis::Nis>> = None;
+    for k in 0..1800u32 {
+        w.tick(Default::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        for pl in &sim.drones.scripts.players {
+            for slot in pl.info.iter().flatten() {
+                if slot.nis.hashcode == 0x0600_06cf { found = Some(slot.nis.clone()); }
+            }
+        }
+        if found.is_some() { break; }
+    }
+    let Some(nis) = found else { eprintln!("060006cf never started"); return };
+    println!("060006cf: streams {} keys {} length {}", nis.streams.len(), nis.keys.len(), nis.length);
+    for (i, s) in nis.streams.iter().enumerate() {
+        let head: Vec<String> = s.commands.iter().take(8).map(|b| format!("{b:02x}")).collect();
+        println!("s{i}: keys {}..{} cmds {:02x?}", s.first_key, s.last_key, head);
+    }
+    // every key of the marker-ish streams (the last few streams) at their last key + first key
+    for (i, s) in nis.streams.iter().enumerate() {
+        if s.last_key < s.first_key { continue; }
+        for k in [s.first_key, s.last_key] {
+            let key = &nis.keys[k as usize];
+            println!("s{i} key {k}: pos {:?} quat {:?} scale {:.3} time {:.1} w24 {:?} w28 {:.3}", key.pos, key.quat, key.scale, key.time, key.w24, key.w28);
+        }
+    }
+}

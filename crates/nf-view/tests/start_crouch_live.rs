@@ -29,7 +29,7 @@ fn level_14_starts_crouched_inside_the_vent() {
     assert!((b.pos[1] - 3.01).abs() < 0.1, "the crouched rest height, got {}", b.pos[1]);
     // The eye is inside the duct: something solid within 0.6 above it (the duct roof).
     let eye = b.head();
-    assert!(!sim.world.line_of_sight(eye, [eye[0], eye[1] + 0.6, eye[2]]), "the duct roof sits just above the eye {eye:?}");
+    assert!(!sim.world.line_of_sight(eye, [eye[0], eye[1] + 0.6, eye[2]], nf_game::world::LOS_PLAYER_HEADROOM), "the duct roof sits just above the eye {eye:?}");
 }
 
 /// Sister: a level whose start has p3 == 0 still starts standing (the fix is keyed on p3, not on 14).

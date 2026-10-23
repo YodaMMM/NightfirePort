@@ -65,7 +65,7 @@ fn take_test_line(sim: &nf_view::scene::Sim, k: usize) {
     let c = p.centre();
     let r = p.bounds.radius + 1.1;
     let d2: f32 = (c[0] - sim.bond.pos[0]).powi(2) + (c[1] - sim.bond.pos[1]).powi(2) + (c[2] - sim.bond.pos[2]).powi(2);
-    let los = sim.world.line_of_sight(sim.bond.sphere_centre(), c);
+    let los = sim.world.line_of_sight(sim.bond.sphere_centre(), c, nf_game::world::LOS_PROBE_8);
     eprintln!("[take-test] tick {} pickup {k} weapon {:#x} kind {} state {}: bond {:?} centre {:?} dist {:.3} vs r {:.3} los {}",
         sim.drones.frame, p.weapon, p.kind, p.state, sim.bond.pos, c, d2.sqrt(), r, los);
 }

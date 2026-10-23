@@ -232,7 +232,7 @@ pub struct MonitorOutput {
     /// The goggle mode after this tick.
     pub mode: u16,
     /// The item-class write the game makes at `item+0x63` (`0x5d` — select switches to the
-    /// goggles item) when the cycle is not armed [M 0x19e9d8:56-58].
+    /// goggles item) when the cycle is not armed [M 0x19e9d8:82-83].
     pub item_class_override: Option<u8>,
     pub night_pane_on: bool,
     pub xray_pane_on: bool,

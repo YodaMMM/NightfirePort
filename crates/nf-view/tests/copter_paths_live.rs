@@ -119,18 +119,26 @@ fn the_flight_body_rides_the_copter_matrix() {
     assert!(d < 1.0, "the SP base rides the copter matrix ({bp:?} vs {c1:?}) [M 0x17d628:115]");
 }
 
-/// The 07000005 patrols: the +0x74 == 100 latch (helicopter-2's [L]) keeps them looping and the
-/// case-0 scan still finds each group's arrival path.
+/// The 07000005 patrols carry +0x74 = 100 (placement param 8 [D]). At the end of its route a
+/// +0x74 == 100 copter sets obj+0xFE bit 0 [M Copter_Move 0x17d628:63-65] — the object loop's
+/// delete flag [M 0x1336f8:77-87 -> control_delete_object] — so it flies its route ONCE and is
+/// removed with its SP (`Copter_Delete` 0x17e568). No patrol writes its arrival channel.
 #[test]
-fn the_07000005_patrols_carry_the_latch_and_scan_their_groups() {
+fn the_07000005_patrols_fly_their_route_once_and_are_deleted() {
     let Some(iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
     let sim = scene.sim.as_mut().unwrap();
-    assert!(sim.drones.copters.iter().any(|c| c.arrival == 100), "the Mayhew patrols' +0x74 = 100 [L helicopter-2]");
-    for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
-    for c in &sim.drones.copters {
-        // The gate is closed on both (the courtyard copters are ch-gated; #242's channel never
-        // opens in the window) — but an ungated one scans at once. Either way: no arrival write.
-        assert!(!sim.drones.channels.on(c.out as u32), "no patrol fired its arrival channel");
+    assert!(sim.drones.copters.iter().any(|c| c.arrival == 100), "the Mayhew patrols' +0x74 = 100 [D placement param 8]");
+    let flying: Vec<usize> = sim.drones.copters.iter().filter(|c| c.arrival == 100 && c.gate == 0).map(|c| c.placement).collect();
+    assert!(!flying.is_empty(), "an ungated patrol flies from the load [D gate 0]");
+    let outs: Vec<u16> = sim.drones.copters.iter().map(|c| c.out).collect();
+    let mut gone_at = None;
+    for t in 0..40_000u32 {
+        sim.step_bond(Default::default(), false, false, false);
+        for &o in &outs { assert!(o == 0 || !sim.drones.channels.on(o as u32), "no patrol fired its arrival channel"); }
+        if !sim.drones.copters.iter().any(|c| flying.contains(&c.placement)) { gone_at = Some(t); break; }
     }
+    assert!(gone_at.is_some(), "the ungated patrol is deleted at its route end [M 0x17d628:63-65, 0x1336f8:77-87]");
+    // Sister: before the route end it was flying (not deleted at once).
+    assert!(gone_at.unwrap() > 60, "it flew its route first (deleted at tick {gone_at:?})");
 }

@@ -158,7 +158,7 @@ fn the_captor_and_hostage_alternate_mission_lines() {
         if open.is_none() {
             if gap_after == Some(hi) { gap_killer_voice |= k.voice.is_some(); }
         }
-        // Expect the killer's reply once the hostage's mission period closes [M 0x144340:58-73].
+        // Expect the killer's reply once the hostage's mission period closes [M 0x144340:42-64].
         if let Some((d, st, _)) = open { if d == hi && h.voice.is_none() { expect = Some((ki, t + 3)); let _ = st; } }
         // Close the open period when its voice clears (both drones first, then opens — the
         // killer's reply lands the same tick the hostage's finished voice is cleared).
@@ -204,7 +204,7 @@ fn the_captor_and_hostage_alternate_mission_lines() {
         assert!(overlap.is_none(), "mission voices overlapped — each waits on the other's +0x4D0 [M 0x144340:10-24, 47-56]");
         assert!(hostage_sends >= 2, "the step machine keeps sending 0x1A to the hostage (the bug: never any send); got {hostage_sends}");
         assert!(periods.len() >= 4, "both sides speak twice — the dialogue runs; periods {periods:?}");
-        assert_eq!(periods[0].2, ki, "the opener is the captor's own line [M 0x144340:19-21]");
+        assert_eq!(periods[0].2, ki, "the opener is the captor's own line [M 0x144340:34-40]");
         for i in 1..periods.len() {
             // Strict alternation with the one proven exception (the silent-0x2E roll — see the
             // header comment): a same-side repeat is accepted only across a gap where the
@@ -219,7 +219,7 @@ fn the_captor_and_hostage_alternate_mission_lines() {
 }
 
 /// bathhouse-conversation-loop (2026-10-22): the conversation LOOPS. The game's monitor has no
-/// terminal step — step 2 sends 0x1A to the captor and steps back to **1** [M 0x144340:58-73],
+/// terminal step — step 2 sends 0x1A to the captor and steps back to **1** [M 0x144340:42-64],
 /// step 1 re-sends to the hostage once his own voice is done [M :10-29], and the 0x1A handler
 /// re-rolls a fresh random line every turn (+0xC5 4 → 0x29+Rand(6), 5 → 0x2F+Rand(4) [M
 /// 0x14a8b8:8-21]) — so the pair alternates lines indefinitely while the killer stays in
@@ -343,7 +343,7 @@ fn the_captor_and_hostage_conversations_loop_on_both_pairs() {
             p.hostage_sends);
         assert!(p.periods.len() >= 8, "{name}: the conversation loops — 4 full alternations expected, got {} periods {periods:?}",
             p.periods.len(), periods = p.periods);
-        assert_eq!(p.periods[0].2, p.ki, "{name}: the opener is the captor's own line [M 0x144340:19-21]");
+        assert_eq!(p.periods[0].2, p.ki, "{name}: the opener is the captor's own line [M 0x144340:34-40]");
         for i in 1..p.periods.len() {
             // Strict alternation, with one game-proven exception: a 1-in-6 killer turn rolls the
             // pool's silent line 0x2E (sfxId 0 [D Drone_SfxInfo]; SpeechSFX no-ops an sfx-0 entry
@@ -360,7 +360,7 @@ fn the_captor_and_hostage_conversations_loop_on_both_pairs() {
             assert!(p.periods[i].0 >= p.periods[i - 1].1, "{name} period {i} starts only after the previous ended [M 0x144340 busy tests]");
         }
         assert!(p.steps_seen.contains(&1) && p.steps_seen.contains(&2),
-            "{name}: the step machine wrapped 2 → 1 (the loop itself [M 0x144340:58-73]); seen {steps:?}",
+            "{name}: the step machine wrapped 2 → 1 (the loop itself [M 0x144340:42-64]); seen {steps:?}",
             steps = p.steps_seen);
         let _ = (name, x, z, k, sim);
     }

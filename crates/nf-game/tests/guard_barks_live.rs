@@ -129,22 +129,23 @@ fn spot_bark_plays_once_within_cooldown() {
         for c in sim.audio.take_commands() { if let Cmd::Start { id, .. } = c { if seen_ids.contains(&id) { seen_heard.push((t, id)); } } }
     }
     eprintln!("seen barks: {seen_heard:?} (ids {seen_ids:?})");
-    // The bark fires once on the first spotting; the later lines in the 1500-tick fight are the
-    // game's CombatNewSighting re-enters (0x5b, each re-gated by the 1-in-3 roll), which need a
-    // full lose-and-regain cycle in between — the re-sight calendar is the AI's (observed 406/942
-    // on master 2026-10-22, 1032/1269 on the task-731 tree), so the once-pin is the initial
-    // engagement window (t < 300: the first sighting and the fight's opening, before any
-    // lose-and-regain cycle) rather than an absolute tick.
+    // `SeenPlayerTalk` 0x13f1d0:33-36 rolls `Rand(3)` on EVERY call (the first sighting included)
+    // and returns silent on a non-zero roll, so whether the opening sighting barks at all is the
+    // RNG's: the game pins at most one bark per sighting, not "exactly one". The pins: at most one
+    // line in the opening window, after the 30-frame post-load gate, and only SeenPlayerTalk ids.
     let first_window: Vec<(u32, u32)> = seen_heard.iter().copied().filter(|(t, _)| *t < 300).collect();
-    assert_eq!(first_window.len(), 1, "the spotting bark plays exactly once on the first sighting: {seen_heard:?}");
-    assert!(first_window[0].0 >= 30, "inside the 30-frame post-load gate");
-    assert!(seen_ids.contains(&first_window[0].1), "a SeenPlayerTalk line");
-    // Every re-bark sits at least a lose/regain cycle apart (the game's re-sight rule).
-    for w in seen_heard.windows(2) { assert!(w[1].0 > w[0].0 + 16, "no re-bark inside the 16-tick loss gate: {seen_heard:?}"); }
+    assert!(first_window.len() <= 1, "at most one spotting bark in the opening sighting [M 0x13f1d0:33-36]: {seen_heard:?}");
+    if let Some(&(t, id)) = first_window.first() {
+        assert!(t >= 30, "inside the 30-frame post-load gate");
+        assert!(seen_ids.contains(&id), "a SeenPlayerTalk line");
+    }
+    // The spacing between re-barks (the lose/regain cycle) is not pinned: no decompile line
+    // establishes a fixed gate. // [S] unverified — logged only.
+    for w in seen_heard.windows(2) { if w[1].0 <= w[0].0 + 16 { eprintln!("[S] re-bark {} ticks apart: {seen_heard:?}", w[1].0 - w[0].0); } }
 }
 
 /// A guard's first alert goes through state 0x39 with the game's timing. The precondition is the
-/// game's ConsiderAlerted copy: `DroneVision_ConsiderAlerted` (0x176250:226) shifts the
+/// game's ConsiderAlerted copy: `DroneVision_ConsiderAlerted` (0x176250:201-208) shifts the
 /// interrogating source's `+0x4FC` 0x20 into the receiver's 0x200000 and msg 0x1f
 /// (`DroneFunc_DoForcedAttack` 0x148c60) leaves the forced-attack pending bit (`+0x4F8` 0x20000000);
 /// `DroneFunc_FirstAttack` (0x148010:24-38) — not the drone's own sight — consults
@@ -180,7 +181,7 @@ fn first_alert_routes_through_state_0x39() {
     // (the game's forced attack always arrives through it) — modelled with a neighbouring guard
     // holding the interrogate marker 0x20.
     r.ever_seen = true;
-    r.assist_src = Some(if gi == 0 { 1 } else { 0 }); // ConsiderAlerted 0x176250:226's +0x528 stamp
+    r.assist_src = Some(if gi == 0 { 1 } else { 0 }); // ConsiderAlerted 0x176250:201-208's +0x528 stamp
     }
     let src_i = if gi == 0 { 1 } else { 0 };
     sim.list[src_i].alert_bits = 0x20;      // the interrogator's +0x4FC marker
@@ -223,8 +224,9 @@ fn first_alert_routes_through_state_0x39() {
     let b = sim.list[gi].alert_bits;
     assert!(b & 0x20 == 0 && b & 0x20_0000 == 0 && b & 0x10 != 0, "EndInterogateAssist: (& 0xffdfffdf) | 0x10, got {b:#x}");
     // The within-10 branch: a fresh receiver; Bond steps to 8 units a tick before the armed
-    // timer fires, so TIMER_C sees dist ≤ 10 and lands straight in the wait state (the 10-unit
-    // arrival radius, [M 0x15add0 + 0x1517d8:80-83]). Two ticks at 8 units cannot clear the
+    // timer fires. TIMER_C goes through GoToGoal 0x63 with return state 0x3a [M 0x1616c0:46-51]
+    // and, the route distance already under the 10-unit radius, arrives at once
+    // [M 0x15add0 + 0x1517d8:51-53] — then the wait state. Two ticks at 8 units cannot clear the
     // ~61-tick sighting floor, so the assist is never broken by sight.
     let (drones2, gi2, rng2) = l.drones_seeded(None, 61.342, 2);
     let mut sim2 = l.sim(drones2, rng2);
@@ -246,8 +248,11 @@ fn first_alert_routes_through_state_0x39() {
     let timer2 = sim2.list[gi2].timer_c.expect("timer armed");
     while sim2.frame + 2 < timer2 { sim2.tick(&d, &away); }
     let near = bond_at([sim2.list[gi2].pos[0] + 8.0, sim2.list[gi2].pos[1], sim2.list[gi2].pos[2]]);
+    // GoToGoal arrives inside the tick that enters it (the route distance is under the radius),
+    // so the pass through 0x63 shows as the wait state's predecessor.
     for _ in 0..3 { sim2.tick(&d, &near); }
-    assert_eq!(sim2.list[gi2].state, nf_game::drone::state::INTEROGATE_ASSIST_WAIT, "within 10 units the TIMER_C lands in the wait state");
+    assert_eq!(sim2.list[gi2].state, nf_game::drone::state::INTEROGATE_ASSIST_WAIT, "GoToGoal's return state 0x3a [M 0x1616c0:49]");
+    assert_eq!(sim2.list[gi2].prev_state, nf_game::drone::state::GO_TO_GOAL, "TIMER_C goes through GoToGoal 0x63 first [M 0x1616c0:46-51]");
 }
 
 /// The first-alert route's suppress list: a source that ATTACKED (`+0x4FC` 0x10 → the receiver's

@@ -26,7 +26,7 @@ fn granted_scene(iso: &str) -> nf_view::scene::Scene {
         // port's inventory seam holds owned/clip per weapon id (pickup.rs Inventory).
         sim.drones.inventory.owned[0x5d] = true;
         for _ in 0..3000 { sim.step_bond(Input::default(), false, false, false); if !sim.disabled { break; } }
-        // The goggles key press: with the latch clear it requests the item [M 0x19e9d8:56-58].
+        // The goggles key press: with the latch clear it requests the item [M 0x19e9d8:82-83].
         let mut press = Input::default();
         press.goggles_action = true;
         sim.step_bond(press, false, false, false);
@@ -124,7 +124,7 @@ fn a_level_without_the_goggles_never_arms_from_the_request_alone() {
     assert_eq!(sim.goggle_mode(), 0, "fresh level: mode 0");
     assert!(!sim.hud.goggles.was_goggles, "the latch is clear [M: only the arm path sets BL+0x961]");
 
-    // With the latch clear the key's edge only REQUESTS the item [M 0x19e9d8:56-58, disasm
+    // With the latch clear the key's edge only REQUESTS the item [M 0x19e9d8:82-83, disasm
     // 0x19eb40-0x19eb50: weapon+0x63 = 0x5d] — it does not touch the mode or the latch.
     let mut press = Input::default();
     press.goggles_action = true;
