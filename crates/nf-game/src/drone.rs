@@ -6354,7 +6354,6 @@ impl Drone {
             self.damage_taken = 1.0; // the hit-effect multiplier +0x14C resets on every change [M-dis 0x17207c-88]
             self.entered = frame;
             self.log.push((frame, n));
-            if std::env::var("TASE_DBG").is_ok() { eprintln!("[st] f{} i{} skin {:x} {:#x}->{:#x} at ({:.1},{:.1},{:.1})", frame, self.index, self.skin, self.prev_state, n, self.pos[0], self.pos[1], self.pos[2]); }
             if state::UNAWARE.contains(&n) { self.watching = true; } // the new state's ENTER arm re-sets it [M case 1]
             self.handle(d, rng, frame, n, msg::ENTER);
             if let Some(m2) = self.self_msg.take() { self.send(d, rng, frame, m2); }
@@ -7890,12 +7889,11 @@ impl Drone {
                 self.timer_c = Some(frame + 60);
                 true
             }
-            // [M 0x1650a0:30-49] case 3: `+0x170 != 0` returns to Attack 0x56. A team-2 ally holds a
-            // drone opponent (FindOpponent's drone arm, `has_opponent` incl. the +0x238 grace); every
-            // other drone's opponent is Bond, re-pointed only by a fresh sighting (`seen`) — the old
-            // bond_alive fold bounced a living-Bond 0x60 straight back out.
+            // [M 0x1650a0:30-49] case 3: `+0x170 != 0` returns to Attack 0x56 — the port's
+            // `has_opponent` (the drone opponent or the +0x238 grace for team 2). Which writer
+            // re-points +0x170 for a team-1 guard is not yet ported [S].
             (NO_OPPONENT, msg::UPDATE) => {
-                if (self.team == 2 && self.has_opponent(frame)) || (self.team != 2 && self.seen) { self.set_state(ATTACK); }
+                if self.has_opponent(frame) { self.set_state(ATTACK); }
                 true
             }
             (NO_OPPONENT, msg::TIMER_C) => {
@@ -9727,7 +9725,9 @@ impl Drone {
         // Without this exit the port's 0x5c (whose UPDATE is ONLY SeenAndAttacking + the
         // router [M 0x164838:26-35]) parks a sight-lost guard forever — the 07000001 hall
         // guard's 56k-tick COMBAT_NO_SIGHT freeze that stalled both escort walks.
-        if matches!(from, COMBAT | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | AIM_STAND_FIRE | AIM_CROUCH_FIRE)
+        // Off [S]: with the 15-tick stand-in for the +0x238 hold, this exit stalled searchlight,
+        // abseil, door-chase and bathhouse guards on 06/09/16. It returns with the game's own hold.
+        if false && matches!(from, COMBAT | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | AIM_STAND_FIRE | AIM_CROUCH_FIRE)
             && !self.seen && self.unseen_ticks > 15
         {
             return NO_OPPONENT;
@@ -10856,6 +10856,10 @@ pub struct Drones {
     pub health: crate::bullet::PlayerHealth,
     /// Every hit on Bond: (tick, shooting drone, health lost).
     pub player_hits: Vec<(u32, usize, f32)>,
+    /// The fusebox live-wire hurts on Bond (`Player_Hurt(5.0, …)` at a dying group-1 wire
+    /// [M 0x1adfe8:99-101]), counted apart from `player_hits` because blasts also record there
+    /// with no drone attacker.
+    pub fusebox_hurts: u32,
     /// Impacts this tick (for effects).
     pub impacts: Vec<crate::bullet::BulletEvent>,
     /// fix-impacts: bullet impact effects — the 200-decal FIFO and the debris
@@ -11568,6 +11572,7 @@ impl Drones {
             // fix-restart-target: the fail-menu Restart's warm arm + the current level (GameState+0xC).
             level_exit_restart: false,
             pending_blasts: Vec::new(),
+            fusebox_hurts: 0,
             level_current: 0,
             // fix-safe08: (script hash, stream) → the reserved pickup slot the renderer built for the
             // script's obj_type-0xF0 Entity (`Script_CreateEntity` 0x1d8968's Pickup_Create arm);
@@ -15528,9 +15533,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // BEFORE Break_Kill takes the collision away (the contact list is the collide pass's
             // product, Break_Update walks it same tick), so the tick's deferred HITDATA re-trace
             // still sees the sheet.
-            parts.extend(drones.breaks.list.iter().enumerate()
+            // NOT ridden yet [S]: with these parts in the set, real-path walks, guard sight and
+            // dropped items on 01/09/0a/0b/14 stop at shapes where no pane stands in the game
+            // (the shape-key/matrix pairing is unresolved), so the panes stay out of the
+            // collision world until that pairing is proven.
+            let _pane_parts = drones.breaks.list.iter().enumerate()
                 .filter(|(_, b)| (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
-                .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix)));
+                .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix));
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,
@@ -15582,6 +15591,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         }
                         // options-census: damage resets the pane fade [M 0x1902c8:27].
                         self.pain_alpha = 1.0;
+                        self.fusebox_hurts += 1;
                         self.player_hits.push((frame, usize::MAX, before - self.health.health));
                         let _ = at;
                     }
@@ -17500,7 +17510,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let level_01 = d.level == 0x0700_0001;
         for (dr, from) in self.list.iter().zip(drone_from) {
             if !dr.present || dr.corpse { continue; }
-            for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, dr.blocked_reach, &mut self.rng) {
+            for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, 0.0 /* the rejected-step drain waits on the pane ride [S] */, &mut self.rng) {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 if std::env::var("TASE_DBG").is_ok() { eprintln!("[brk-contact] f{} placement {} kind {} sound {} at ({:.1},{:.1},{:.1})", self.frame, k.placement, k.kind, k.sound, k.pos[0], k.pos[1], k.pos[2]); }
                 let id = u32::from(k.sound);

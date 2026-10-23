@@ -60,7 +60,8 @@ pub struct Destroy {
     /// `tag+0x08` — the smash blast's damage float (placement param 5 [M 0x12c424 disasm
     /// `lw v0,64(s0)` → decoded → tag+8]; `Destroy_Smash` passes it as `Explode_Create`'s f13-slot
     /// damage [M 0x12bd04 `lwc1 f13,8(s1)`]). The disc's destroyables all carry small positive
-    /// ints here (10…3000 [D census]), the only branch the port decodes.
+    /// ints here (10…3000 [D census]), the only branch the port decodes. `Destroy_Create` stores
+    /// them ×0.01 (`tag+8 = (float)param5 * 0.01` [M 0x12c318:48]), so the blasts deal 0.1…30.
     pub blast_damage: f32,
     /// `tag+0x10` — the external-kill channel (placement param 1 [M 0x12c318:36]): the second arm
     /// of `Destroy_Update` 0x12c4f8:30-35 smashes the tag when the channel is ON and clears the
@@ -132,7 +133,7 @@ impl Props {
                 // `Destroy_Create` 0x12c318: tag+0x12 = param 0, tag+0x04 (health) = param 3
                 // (as f32; the tag holds a float the handler subtracts into), tag+0x16 (kind) =
                 // param 2's low byte, tag+0x08 (smash blast damage) = param 5 [M disasm].
-                0xe1 => props.destroy.push(Destroy { placement: i, lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32,
+                0xe1 => props.destroy.push(Destroy { placement: i, lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32 * 0.01,
                     kill_channel: param(1) as u16 }),
                 // `GunImp_Create` 0x131f20 (placement 0x34, class 0x47): the SP arm mounts the
                 // TurretGuns[0xb] hardware (the laser) [M 0x131f20:52-63]; the base transform is

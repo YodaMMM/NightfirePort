@@ -2305,8 +2305,11 @@ impl Sim {
         // it. The handler's zero arm (substate 0) stays unwired: the disc's own pulses end in a
         // falling write two ticks after the rise, which would drop Bond into the pit — the
         // game's observable float is one-way (the walkreal leg-2 note), so no disc evidence
-        // reaches the zero arm on this route.
-        if self.bond.substate != nf_game::player::SS_ZEROG_9
+        // reaches the zero arm on this route. The binding is applied on 0700001b only: that is the
+        // level whose disc scripts are cited above, and other levels' scripts write ch 0x4b for
+        // their own purposes (on 15/16/0b/02 the channel-only binding floated Bond mid-walk).
+        if self.level == 0x0700_001b
+            && self.bond.substate != nf_game::player::SS_ZEROG_9
             && self.drones.channels.on(0x4b)
             && self.drones.channels.time.get(0x4b) == Some(&self.drones.frame)
         {

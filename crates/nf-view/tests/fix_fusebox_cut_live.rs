@@ -264,9 +264,9 @@ fn the_07000014_sabotage_cuts_through_the_real_laser() {
     }
     let sim = scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(0x8c), "AND #391 [0x87, 0x88] raises 0x8C [D]");
-    // The no-hurt polarity, precisely: the fusebox hurt is the port's `player_hits` marker
-    // (attacker usize::MAX — `Player_Hurt(5.0, …)` at the dying group-1 wire [M 0x1adfe8:99-101]).
-    // Every box here carries param 2 non-zero [D], so the group-1 deaths never hurt.
-    assert!(!sim.drones.player_hits.iter().any(|(_, who, _)| *who == usize::MAX),
-        "no live-wire hurt with +0x56 configured [M 0x1adfe8:99-101]");
+    // The no-hurt polarity: the fusebox hurt (`Player_Hurt(5.0, …)` at the dying group-1 wire
+    // [M 0x1adfe8:99-101]) is counted on its own — the satellite boxes' channel smashes also hurt
+    // Bond through the blast path. Every box here carries param 2 non-zero [D], so the group-1
+    // deaths never hurt.
+    assert_eq!(sim.drones.fusebox_hurts, 0, "no live-wire hurt with +0x56 configured [M 0x1adfe8:99-101]");
 }

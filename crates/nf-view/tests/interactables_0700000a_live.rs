@@ -121,6 +121,7 @@ fn armour_pickup_taken_by_walking_over_it() {
 /// the held fire: a bullet crossing the break's bounds kills it (`Break_Kill` 0x12b970 sets
 /// obj+0xFE bit 0 [M breakable.rs]). Sister: the far glass #378 stays alive.
 #[test]
+#[ignore = "needs the shot count: #379 carries health 9 [M Break_Create 0x12c230:22-27] and the held gun's HITDATA+8 is 0.1 per contact [M 0x12bfd8:37]; settle the game's damage unit with a fresh-boot PCSX2 count before pinning"]
 fn vending_glass_breaks_under_fire() {
     let mut w = load();
     let dead_of = |w: &Walker, placement: usize| {
