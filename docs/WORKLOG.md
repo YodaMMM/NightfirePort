@@ -167,3 +167,14 @@ exactly. Real input only via step_bond; port what the game does from the decompi
   my concurrent runs' fault); did not finish inside the window. The round's deliverable stands:
   the hand-back position settled [M chain], the open-air column census, the sister green, two
   exact live checks named for the main agent.
+
+### level-4a-lift-3 (started 23:05 UTC, 2026-10-23)
+
+Task: walkreal_0700004a_live::ride_the_lift_from_the_spawn_and_walk_into_the_lobby is still
+#[ignore]. The driver's FRESH-boot live data redefines the hand-back: control returns at the
+lift stop y −54.1971 (substate 0, ~560-frame window); with no input a script RE-ATTACHES Bond
+(substate 1) at (1.7994, −55.09, −3.4534) — the marker key's x/z WITHOUT the SP-base
+composition — and carries him down; at y −95.80 his health drops 100→0 and the mission fails.
+Make the port match all of that (stop height + window, the stay-on re-attach, the kill), fix
+the hand-back composition, rewrite the walk to step off during the stop window (real input
+only), un-ignore it; sister: staying on the lift ends in the death.
