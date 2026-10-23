@@ -3,9 +3,22 @@
 //!
 //! The game's callers: `NDrone2_DefaultInit` 0x14b300 (tail — unconditional for every guard
 //! spawn, result → `DIVars+0x10` [M; docs/atlas/drone.md:51]), `Player_Init` 0x1910f8:184
-//! (result → player data +0x88C [M; docs/atlas/player.md:102]), and the debug anim viewer
-//! `AnimDebugCreate` 0x1bcfa8 (kind 0x15 object, not the shipped path). The call-tree audit
-//! reaches it through the ported guard-spawn states.
+//! (result → player data +0x88C [M; docs/atlas/player.md:102]), and `AnimDebugCreate`
+//! 0x1bcfa8's 0x7000041 arm (kind 0x15 object). The call-tree audit reaches it through the
+//! ported guard-spawn states.
+//!
+//! calltree-main-26 — the `AnimDebugCreate` subtree: `AnimDebugCreate` 0x1bcfa8 itself is
+//! called UNGATED from `Player_Init` 0x1910f8:117, but its body returns unless GameState is
+//! 0x7000043 / 0x7000049 (the anim ring arm, which calls `AnimObjectInitialPose` 0x1c64e0 per
+//! ring object [M 0x1bcfa8:66-115]) or 0x7000041 (the briefing display-model arm [M :116-155];
+//! no InitialPose there). The levels 0x7000043/0x7000049 appear in NO shipped level list (the
+//! campaign `mission::LEVELS`, the MP arenas 0x07000023..0x29 + 0x0700004b [D
+//! docs/atlas/multiplayer.md §1]) and in NO loader — the binary's only references to those
+//! GameState values are AnimDebugCreate and `Env_Tree_Create` 0x17c200's per-level branch [M
+//! the decompile-wide grep] — so the 0x7000043/49 arm (and `AnimObjectInitialPose`) is
+//! unreachable on the shipped path; the 0x7000041 arm IS the shipped briefing display model
+//! (the port's stand-in documented in docs/reports). The full citation chain also lives in
+//! crates/nf-view/src/menu.rs's calltree-main-26 block.
 //!
 //! Behaviour [M 001ac158]:
 //! - gate: owner == 0 or the global `switch_NO_DRONES` != 0 → return 0 (no glow).

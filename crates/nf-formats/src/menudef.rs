@@ -588,7 +588,13 @@ pub struct MenuRuntime<'a> {
 
 impl<'a> MenuRuntime<'a> {
     /// `Script_PrepareScripting` 0x220ed8 for every control (the page itself included — the page
-    /// is a type-8 control [M `Page_Init` 0x21f1c0:23]) + the parse-time colour defaults.
+    /// itself is a type-8 control [M `Page_Init` 0x21f1c0:23]) + the parse-time colour defaults.
+    /// The scripting runtime's process-list bookends, calltree-main-26: `Process_Init` 0x21f780
+    /// (the delayed-process list's head init that the prepare's +0x5c list rides; called from
+    /// Script_PrepareScripting) and `Process_Destroy` 0x21f860 (the teardown, called from
+    /// `Script_DelAllScripts` 0x220f30 and the C_RBMPSTART/C_RBMPFINISH page handlers) — the
+    /// port's Vec-backed process list replaces both (push = the create, drop/clear = the
+    /// destroy).
     pub fn new(page: &'a PageDef) -> MenuRuntime<'a> {
         let mut state = Vec::new();
         // The page itself first; children follow in tag order.

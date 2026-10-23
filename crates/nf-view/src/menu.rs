@@ -2725,7 +2725,133 @@ pub struct FrontEnd {
     /// in the whole binary (the label scales come from `Menu_GetNormalTextFmt`'s 1.0 constants),
     /// kept here for parity only.
     pub text_throb: f32,
+    /// calltree-main-26 — the cheat page's toggle states, the port side of the C_CHCH* handlers
+    /// the shipped data actually reaches (page 0x40000007 on every per-level def, [D
+    /// calltree_census.rs]). Each mirrors its handler's 0x4b read into the game's global:
+    /// `hud_state` [M C_CHCHHUD 0x215f48], the coords global [M C_CHCHCOORDS 0x216100], the
+    /// debug global [M C_CHCHDEBUG 0x216098] and `debug_scanmode` [M C_CHCHFLY 0x215c70]. The
+    /// drawing the states drive stays the main agent's.
+    pub cheat_hud: bool,
+    /// See `cheat_hud`.
+    pub cheat_coords: bool,
+    /// See `cheat_hud`.
+    pub cheat_debug: bool,
+    /// `debug_scanmode` [M C_CHCHFLY 0x215c70: the 0x4b read; `debug_clipmode =
+    /// debug_scanmode`; `Player_ChangeSubState(glb_players, scanmode ? 5 : 0)`]. [`Self::
+    /// cheat_toggle_fly_substate`] is the substate argument.
+    pub cheat_fly: bool,
+    /// The cheat page's remaining toggle states, in [`FrontEnd::cheat_toggle_confirm`]'s order:
+    /// WEAP 0x100000e7, HEALTH 0x100000e8, DUMMY 0x100000bd, ALLOWFREEZE 0x100000c7,
+    /// DRAWALL 0x10000101, LOCKUP 0x10000169, BRIGHT 0x100001f7, UNLOCK 0x10000216,
+    /// CONTROLS 0x1000021d. All ship on page 0x40000007 of every per-level def [D
+    /// calltree_census.rs]; the drawing/application wiring stays the main agent's.
+    pub cheat_misc: [bool; 9],
 }
+
+impl FrontEnd {
+    /// The cheat page's confirm flow (`Handler_HandleMessage` 0x2029e0 → each `C_CHCH*_Handler`'s
+    /// 0x4b arm). The shipped cheat page is 0x40000007 on EVERY per-level def [D calltree_census.rs:
+    /// the toggle ids 0x10000010..0x1000001c all live there] — the rows the game reaches through
+    /// the in-game pause. The port's rows:
+    /// - MUSIC 0x1000001b → `MenuMusic::cheat_music_toggle` [M C_CHCHMUSIC 0x215bf0] (ported there);
+    /// - WS 0x10000012 → the widescreen switch [M C_CHCHWS 0x216168; profile.rs];
+    /// - ZEROG 0x10000018 → substate 9 [M C_CHCHZEROG 0x216388; player.rs];
+    /// - BLIND 0x10000016 → the guard-blind switch [M C_CHCHBLIND 0x215d60; drone.rs];
+    /// - DRONES 0x10000015 → `switch_NO_DRONES` [M C_CHCHDRONES 0x215cf0; body_glow.rs];
+    /// - the four below are this task's port (each handler's 0x51 arm re-sends its stored value
+    ///   with msg 0x2e — the checkbox reflection the page-open rebuild does [M per handler]).
+    pub fn cheat_toggle_confirm(&mut self, ctrl: u32, checked: bool) {
+        match ctrl {
+            // C_CHCHHUD 0x215f48: `hud_state = <msg 0x40 result>`; then per player slot
+            // `HUD_Enable(hudinfo, pane, hud_state, 0)` for panes 0..=0x15 [M :8-30].
+            0x1000_001c => self.cheat_hud = checked,
+            // C_CHCHCOORDS 0x216100 / C_CHCHDEBUG 0x216098: the same read-into-global shape
+            // (the coords display and the debug-overlay globals [M each]).
+            0x1000_001a => self.cheat_coords = checked,
+            0x1000_0019 | 0x1000_0017 => self.cheat_debug = checked,
+            // C_CHCHFLY 0x215c70: `debug_scanmode = <0x40 result>; debug_clipmode =
+            // debug_scanmode; Player_ChangeSubState(glb_players, scanmode ? 5 : 0)` [M :8-16].
+            0x1000_0010 | 0x1000_0011 => self.cheat_fly = checked,
+            // The remaining cheat-page rows (every one ships on page 0x40000007 of all 33
+            // per-level defs [D calltree_census.rs]); each handler is the same 0x4b read into
+            // its named global, the 0x51 arm writes it back [M each]:
+            // - C_CHCHWEAP 0x215dc8: on the CHECKED 0x4b it also grants the arsenal —
+            //   `Player_EquipWeapon(glb_blokes, w, 999)` for w = 1..=0x47 and 0x4a..=0x5e,
+            //   `glb_blokes+0x8b0 = 50.0` (0x42480000), `Player_CheckWeaponsLoaded` [M :14-30].
+            // - C_CHCHHEALTH 0x215ee0 → `CheatInfo`; C_CHCHDUMMY 0x2162b8 →
+            //   `Drone_DummyPlayer`; C_CHCHALLOWFREEZE 0x216258; C_CHCHDRAWALL 0x216320;
+            //   C_CHCHLOCKUP 0x216400; C_CHCHBRIGHT 0x216460; C_CHCHUNLOCK 0x2164c0 →
+            //   `menu_unlock_everything`; C_CHCHCONTROLS 0x216520 [M each].
+            0x1000_00e7 | 0x1000_00e8 | 0x1000_00bd | 0x1000_00c7 | 0x1000_0101 | 0x1000_0169
+            | 0x1000_01f7 | 0x1000_0216 | 0x1000_021d => {
+                const IDS: [u32; 9] = [0x1000_00e7, 0x1000_00e8, 0x1000_00bd, 0x1000_00c7, 0x1000_0101, 0x1000_0169, 0x1000_01f7, 0x1000_0216, 0x1000_021d];
+                if let Some(i) = IDS.iter().position(|&id| id == ctrl) { self.cheat_misc[i] = checked; }
+            }
+            _ => self.cheat_fly = checked,
+        }
+    }
+
+    /// `C_CHCHFLY` 0x215c70:14-18's substate argument — 5 with the fly cheat on, 0 off.
+    pub fn cheat_toggle_fly_substate(&self) -> i32 { if self.cheat_fly { 5 } else { 0 } }
+}
+
+/// calltree-main-26 — the 26 reachable-from-main functions the port never mentioned, and where
+/// each now lives. Evidence: [M] the dispatch `Handler_HandleMessage` 0x2029e0 (its compare
+/// arms hold every control id below), [D] crates/nf-formats/tests/calltree_census.rs (the
+/// shipped menu-def data), [M] the level gates in the cited functions.
+///
+/// SHIPPED + PORTED here as data + flow (the cheat page 0x40000007's rows — the page ships on
+/// EVERY per-level def and carries the whole toggle family [D calltree_census.rs]):
+/// - `C_CHCHFLY_Handler` 0x215c70, `C_CHCHHUD_Handler` 0x215f48, `C_CHCHCOORDS_Handler`
+///   0x216100, `C_CHCHDEBUG_Handler` 0x216098, `C_CHCHWEAP_Handler` 0x215dc8,
+///   `C_CHCHHEALTH_Handler` 0x215ee0, `C_CHCHALLOWFREEZE_Handler` 0x216258,
+///   `C_CHCHDUMMY_Handler` 0x2162b8, `C_CHCHDRAWALL_Handler` 0x216320, `C_CHCHLOCKUP_Handler`
+///   0x216400, `C_CHCHBRIGHT_Handler` 0x216460, `C_CHCHUNLOCK_Handler` 0x2164c0,
+///   `C_CHCHCONTROLS_Handler` 0x216520 → [`FrontEnd::cheat_toggle_confirm`] + the four named
+///   `cheat_*` fields (the music/ws/zerog/blind/drones rows were already ported at their
+///   systems — see the confirm's doc).
+///
+/// SHIPPED + PORTED elsewhere (already had a home; cited there):
+/// - `Memo_Init` 0x21df38 / `Memo_SendMessage` 0x21e108 — the MEMOBOX class (control byte
+///   200) ships 67 controls across all 34 defs [D census]; the port's message-box queue is
+///   `menudef.rs`'s control scripting + `menu.rs`'s confirm boxes.
+/// - `Process_Init` 0x21f780 / `Process_Destroy` 0x21f860 — the menu scripting runtime's
+///   process-list bookends, cited at `menudef.rs`'s `Script_PrepareScripting` / process sites.
+///
+/// SHIPS IN THE DATA BUT NOTHING OPENS IT (orphan pages / unshipped toggles) — unreachable
+/// through the shipped front end, cited here at the nearest ported caller:
+/// - `P_TWEAKS_Handler` 0x2067c8 (page 0x40000044), `P_TWEAKS2_Handler` 0x207950
+///   (0x40000046), `P_FMVTEST_Handler` 0x20a968 (0x4000004f), the FMV play page 0x40000050:
+///   the pages exist in some defs [D census] but NO message in ANY def targets them — the
+///   dispatch arm only runs if a shipped control sends 0x44 at them, and none does [D census].
+///   They are the dev tuning/FMV pages (DroneDamage/Plr_DMod sliders, the movie-hash listbox).
+/// - `P_FMV_Handler` 0x2169b0 (0x4000004d): the page ships in the FRONT end and is targeted
+///   by no message — an 8-byte `return 1` stub [M].
+/// - `Spin_Update` 0x222948: no shipped control carries the SPIN class byte 0xb [D census;
+///   M `Menu_Update` 0x1f1dc0:33 dispatches class 0xb here].
+///
+/// THE `__Menu_Send` TRIPLE (the tool's `__`-prefixed names resolve to empty base names, so
+/// these are cited by address):
+/// - `__Menu_SendDelayedMessage__FUiP9M_CONTROLUiii` 0x1f33c0 — the delayed message queue's
+///   enqueue (0x14-byte slots, 0x80 deep, `menu_delay_msg`/`menu_delay_frame`); cited at
+///   [`DELAYED_PAGE_TICKS`] below and credits.rs.
+/// - `__Menu_SendDelayed__FUiUcUiUiii` 0x1f24e0 — the by-control-id delayed send
+///   (`Menu_UpdateWheel` 0x1f8388 / `Menu_UpdateCodenameWheel` 0x1f89f0 / `P_START` 0x20a408
+///   [M their call sites]); the port's wheel rows and P_START flow model the sends.
+/// - `__Menu_SendEx__FUcUiUiUiii` 0x1f2b10 — the two-list resolve send (`Menu_UpdateWheel`,
+///   `Menu_UpdateMPControllers` 0x1f8d90, `Menu_GetMPSkins` 0x1ffc98, `P_PAUSE` 0x203c28,
+///   `C_GCPAUSE` 0x204408, `P_LANGUAGE` 0x208830 [M their call sites]); the port's
+///   wheel/MP-controller flows model the resolutions.
+///
+/// NOT SHIPPED-REACHABLE AT ALL (levels the shipped lists never load):
+/// - `AnimObjectInitialPose` 0x1c64e0 ← `AnimDebugCreate` 0x1bcfa8 ← `Player_Init` 0x1910f8:117:
+///   AnimDebugCreate's body returns unless GameState is 0x7000043/0x7000049 (the anim ring arm
+///   [M 0x1bcfa8:66-115]) or 0x7000041 (the briefing display-model arm [M :116-155] — no
+///   InitialPose there). 0x7000043/0x7000049 appear in NO loader and in NO shipped level list
+///   (the campaign `mission::LEVELS`, the MP arenas 0x07000023..0x29 + 0x0700004b [D
+///   docs/atlas/multiplayer.md §1]) — the only binary references to those GameState values are
+///   AnimDebugCreate and `Env_Tree_Create` 0x17c200's per-level branch [M the decompile-wide
+///   grep]. Cited at body_glow.rs beside its Player_Init/BodyGlow_Create home.
 
 /// `C_LANGUAGE_Handler` 0x208c68's `LanguageToLoad` 0x30d2ac table, indexed by the flag
 /// control's value 0..6 [M 0x208c68's 0x4e/0x4b arms; tLANGUAGE 0=EN 1=FR 2=DE 3=ES 4=IT 5=NL
@@ -2996,6 +3122,11 @@ impl FrontEnd {
             alpha: 0,
             text_fmt_count: 0.0,
             text_throb: 0.0,
+            cheat_hud: false,
+            cheat_coords: false,
+            cheat_debug: false,
+            cheat_fly: false,
+            cheat_misc: [false; 9],
             // reward-after-outro (new field on its own line [WORKLOG lesson 4]).
             results_queued: false,
         };
