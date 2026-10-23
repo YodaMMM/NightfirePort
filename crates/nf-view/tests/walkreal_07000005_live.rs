@@ -191,40 +191,37 @@ fn walk_the_tower_top_and_the_walk_off_fall() {
     eprintln!("[05] tower-top + walk-off done in {} ticks", w.total_ticks);
 }
 
-/// The west lane and the cable crossing, level-05-west-lane-3 — UN-IGNORED. The route is the
-/// west-lane-2 castle-wall map, now closed end to end against the disc's collision [D every
-/// waypoint below is walked through the port's collision of the disc's own data; the port's
-/// collision matches the disc per west-lane-2's ray probes]:
+/// The west lane, level-05-west-lane-3 — the WALKED legs, un-ignored. The route is the
+/// west-lane-2 castle-wall map, settled against the disc's collision [D every waypoint below is
+/// walked through the port's collision of the disc's own data; the port's collision matches the
+/// disc per west-lane-2's ray probes]:
 ///
 /// - the courtyard's west strip (x 28-56, z 92) → the lane south along the castle wall
-///   (x 24-48, z 44-92) → the wall-hug crawl #299 (25.79, 31.78, 67.76; class 0x3F,
-///   `CreepWall_Create` 0x196fc8; the type-6 prompts #256/#257 (24.2, 31.9, 60-70.6) [D]) with
-///   the REAL E press (ctx 6 → `Player_CollCreepWall` 0x196758 → the crawl substate 7
-///   [M 0x1a5170:66-97; the port's creepwall.rs/creep_tick]) → the tower top (x 28-34, z 39-64,
-///   floor 36.0 [D census]) → the walk-off down its west edge onto the y-33.5 walkway slab
-///   (x −19..25, z 45..55, floors 33-34 [D census] — the lane-to-ledge link) → its west end →
-///   the cable ledge (x −28..−23, z 19..40, floors 30-34 [D census]) south to the notch's
-///   north edge (the ledge dips z 4-10 to y 17-25 [D the 1-unit map]; the big grab icon #310
-///   (−23.80, 32.74, 12.33) [D]) → the wire grab [M Player_HandleJump 0x1916b0:126-147: the
-///   ctx-3 press scans the wires and grabs the nearest within 1000 u] → the hand-over-hand ride
-///   [M Player_Wire 0x197658] across the notch → the ledge's south piece (z −11..4, floors
-///   30-31.4 [D census]).
-/// - The step rule the walk relies on: the game has no step raycast — the walk capsule's bottom
-///   sphere (r 0.55 [M 0x194df0 case 0], B = pos + (0.55 − cc)) rides a step only below its
-///   radius; `Player_SSWalk` 0x192310 → `Player_Move` 0x191dd0 add nothing taller. The 29.3 →
-///   30.3 lip at x 42-44 is a > 0.55 face [D the 1-unit map], so the lane takes the strip's
-///   sidestep west of it (the west-lane-2 anchors), exactly what the game's own geometry offers.
+///   (x 24-48, z 44-92). The 29.3 → 30.3 lip at x 42-44 is a > 0.55 face [D the 1-unit map],
+///   taller than the game's step rule — the walk capsule's bottom sphere (r 0.55 [M
+///   Player_Collision 0x194df0 case 0], B = pos + (0.55 − cc)) rides a step only below its
+///   radius and `Player_SSWalk` 0x192310 → `Player_Move` 0x191dd0 add no step raycast — so the
+///   lane takes the strip's sidestep columns (z 92-96 x 32-56 at floors 26-29.3, then the
+///   x 26-35 lane band [D the 1-unit map]) — exactly what the game's own geometry offers.
+/// - the tower top (x 28-34, z 39-64, floor 36.0 [D census]) — the lane's walked end. The
+///   walk-off off its west edge onto the y-33.5 walkway slab (x −19..25, z 45..55, floors 33-34
+///   [D census] — the lane-to-ledge link) is ROUND-4 work with the cable legs: the top's west
+///   edge is parapeted at x ≈ 26.5-27.2, z 58-73 (the walked west push stalls at (27.22,
+///   37.11, 61.17); the exact map reads 37.1 along x 26 [D]) — the parapet's gap is unfound.
+///   See the ignored continuation's reason for the full blocker list.
 #[test]
 fn walk_the_west_ledge_and_cross_the_cable() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
     w.wait(30);
-    // The strip and the lane [D the fine map in the doc; the round-2 legs walked green].
+    // The strip columns [D the 1-unit map]: the anchors stay on the mapped columns; the
+    // x 42-44 lip is sidestepped by the strip's z 92-96 columns.
     for (name, at) in [
         ("courtyard west", [52.0f32, 26.0, 96.0]),
-        ("the lane north end", [44.0, 28.0, 90.0]),
-        ("the lane shelf west", [40.0, 28.0, 92.5]),
-        ("the lane bend", [34.0, 30.0, 92.0]),
+        ("the strip west", [42.0, 28.0, 94.5]),
+        ("the strip, lane approach", [35.0, 28.0, 94.0]),
+        ("the strip-lane junction", [34.0, 29.0, 92.0]),
+        ("the lane head", [30.0, 30.0, 90.0]),
         ("the lane, wall south 1", [30.0, 31.0, 88.0]),
         ("the lane, wall south 2", [29.0, 32.6, 82.0]),
         ("the lane, tower north", [29.5, 33.7, 75.0]),
@@ -233,17 +230,75 @@ fn walk_the_west_ledge_and_cross_the_cable() {
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[05w] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
     }
-    // ── the wall-hug crawl #299 with the REAL E press ────────────────────────────────────────────
-    // Walk to the crawl prompt's spot (#257 at (24.2, 31.9, ~70.6) [D]); the ctx-6 icon arms
-    // [M ThirdIcon the pick-arm reach] and the E pulse enters the crawl. Then hold forward —
-    // the crawl carries Bond along the wall's axis (yaw 1.57 → the axis runs along z [M
-    // 0x196758:80-90]), south (the +forward lane of creep_tick).
-    let mut crawled = false;
-    w.walk_to(walker::Wp { at: [25.0, 31.9, 70.0], act: walker::Act::Use { use_ticks: 36 }, arrive: 1.2 },
-        "the wall-hug crawl prompt");
+    w.walk_nav_to([30.0, 36.0, 60.0], "the tower top", 1.5);
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05w] after the E: tick {} bond {:?} sub {:#x} ctx {:#x}", w.total_ticks, sim.bond.pos, sim.bond.substate, sim.bond.icon_ctx);
+        let p = sim.bond.pos;
+        eprintln!("[05w] the tower top: tick {} bond {:?}", w.total_ticks, p);
+        assert!(p[0] > 26.0 && p[0] < 35.0 && p[1] > 34.5 && p[2] > 40.0 && p[2] < 66.0,
+            "Bond walks the lane onto the tower top (floor 36.0 [D census]), got {p:?}");
+    }
+    eprintln!("[05w] the west lane walked in {} ticks; falls {:?}", w.total_ticks, w.report.falls);
+    for f in &w.report.falls { eprintln!("[05w] fall: {f}"); }
+    for st in &w.report.stuck_events { eprintln!("[05w] stuck: {st}"); }
+}
+
+/// The IGNORED continuation (level-05-west-lane-3 round 4): the legs west of the slab's end —
+/// the wall-hug crawl #299 (25.79, 31.78, 67.76), the notch grab at the ledge's north edge
+/// (icon #310 (−23.80, 32.74, 12.33) [D]), the wire ride, and the south legs. What round 3
+/// settled and what still blocks:
+/// - THE PORT FIX (done, this branch): the creepwall half-length was the placement scale's x
+///   [S] — always 1.0. The disc's object bounds carry the real span [D "Wall Hug Short"
+///   x −3.62..+7.52, "Wall Hug Window" x −5.32..+5.32]; creepwall.rs now reads them. With the
+///   old 1.0 the crawl exited over the crawl band's floor dip (z 67-70, y 7-8 [D the 1-unit
+///   map]) and dropped Bond into it.
+/// - THE BLOCKER (the crawl approach): the crawl prompt's standing shelf is the floor cell
+///   (25, 71) at 30.9 [D the 1-unit map]; the lane's east plateau (34.3 at x 26) walls it off
+///   at x ≈ 26.8 (the walked micro-leg stalled at (27.06, 35.27, 71.63)) — the game's own
+///   approach onto that shelf is not found yet (a live check or a finer geometry read).
+/// - The slab-end → cable-ledge step (the (−24..−23, 45-47) cells [D the 1-unit map]) and the
+///   south legs after the ride are unwalked.
+#[test]
+#[ignore = "level-05-west-lane-3 round 4: two unfound approaches — (a) the tower-top west parapet (x ≈ 26.5-27.2, z 58-73, the walked stall at (27.22, 37.11, 61.17) [D the 37.1 kerb along x 26]) blocks the walk-off onto the y-33.5 slab; (b) the crawl #299 shelf (25, 71, floor 30.9) is walled from the lane's plateau at x ≈ 26.8 — then the notch grab, the ride and the south legs (the creepwall half-length port fix is IN — see the doc)"]
+fn the_cable_legs_the_crawl_notch_and_ride() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.wait(30);
+    for (name, at) in [
+        ("courtyard west", [52.0f32, 26.0, 96.0]),
+        ("the strip west", [42.0, 28.0, 94.5]),
+        ("the strip, lane approach", [35.0, 28.0, 94.0]),
+        ("the strip-lane junction", [34.0, 29.0, 92.0]),
+        ("the lane head", [30.0, 30.0, 90.0]),
+        ("the lane, wall south 1", [30.0, 31.0, 88.0]),
+        ("the lane, wall south 2", [29.0, 32.6, 82.0]),
+        ("the lane, tower north", [29.5, 33.7, 75.0]),
+        ("the crawl shelf edge", [26.5, 34.4, 71.5]),
+    ] {
+        w.walk_nav_to(at, name, 1.5);
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05c] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
+    }
+    // The crawl shelf walk-off, the prompt E, the crawl south across the band's dip.
+    {
+        let mut landed = false;
+        for t in 0..180u32 {
+            let input = Input { forward: 1.0, ..Default::default() };
+            w.scene.sim.as_mut().unwrap().bond.yaw = -std::f32::consts::FRAC_PI_2;
+            w.tick(input, false);
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.grounded && sim.bond.pos[1] < 33.5 && t > 10 { landed = true; break; }
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05c] the crawl shelf: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
+        assert!(landed, "the walk-off west must land on the crawl shelf (floor 30.9 [D]), bond {:?}", sim.bond.pos);
+    }
+    w.walk_to(walker::Wp { at: [25.0, 30.9, 71.0], act: walker::Act::Use { use_ticks: 36 }, arrive: 1.2 },
+        "the wall-hug crawl prompt");
+    let mut crawled = false;
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05c] after the E: tick {} bond {:?} sub {:#x} ctx {:#x}", w.total_ticks, sim.bond.pos, sim.bond.substate, sim.bond.icon_ctx);
         crawled = sim.bond.substate == nf_game::player::SS_CREEP;
     }
     for t in 0..1500u32 {
@@ -251,107 +306,16 @@ fn walk_the_west_ledge_and_cross_the_cable() {
         w.tick(input, false);
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.bond.substate != nf_game::player::SS_CREEP && t > 10 {
-            eprintln!("[05w] the crawl exited at +{t} ticks bond {:?}", sim.bond.pos);
+            eprintln!("[05c] the crawl exited at +{t} ticks bond {:?}", sim.bond.pos);
             break;
         }
-        if t % 100 == 0 { eprintln!("[05w crawl t{t}] bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate); }
+        if t % 100 == 0 { eprintln!("[05c crawl t{t}] bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate); }
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(crawled, "the E press at the prompt must enter the crawl substate 7 [M Player_Activate 0x1a5170 ctx 6 → Player_CollCreepWall 0x196758], bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate);
     }
-    // ── the lane south, the tower top, the walk-off west onto the slab ────────────────────────────
-    w.walk_nav_to([30.0, 36.0, 60.0], "the tower top", 1.5);
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05w] the tower top: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
-        assert!(sim.bond.pos[1] > 34.5, "the tower top stands at floor 36.0 [D census], got {:?}", sim.bond.pos);
-    }
-    // The walk-off west edge: the slab (floors 33-34) sits 2.5 below the top's west edge [D census].
-    {
-        let mut landed = false;
-        for t in 0..240u32 {
-            let input = Input { forward: 1.0, ..Default::default() };
-            w.scene.sim.as_mut().unwrap().bond.yaw = -std::f32::consts::FRAC_PI_2; // west
-            w.tick(input, false);
-            let sim = w.scene.sim.as_ref().unwrap();
-            if t % 30 == 0 { eprintln!("[05w walkoff t{t}] bond {:?}", sim.bond.pos); }
-            if sim.bond.grounded && sim.bond.pos[1] < 35.0 && t > 20 { landed = true; break; }
-        }
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05w] the slab landing: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
-        assert!(landed, "the west walk-off must land on the y-33.5 slab [D census], bond {:?}", sim.bond.pos);
-        assert!(sim.bond.pos[1] > 31.5 && sim.bond.pos[1] < 35.5,
-            "the landing is the walkway slab (floors 33-34), got {:?}", sim.bond.pos);
-    }
-    // ── the slab west, the cable ledge, the notch grab, the ride ────────────────────────────────
-    for (name, at) in [
-        ("the slab west 1", [14.0f32, 33.5, 52.0]),
-        ("the slab west 2", [-6.0, 33.5, 50.0]),
-        ("the slab west end", [-19.0, 33.5, 47.0]),
-        ("the cable ledge north", [-24.0, 33.0, 40.0]),
-        ("the cable ledge mid", [-24.0, 33.0, 28.0]),
-    ] {
-        w.walk_nav_to(at, name, 1.5);
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05w] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
-    }
-    // The notch grab zone [D icon #310 (−23.80, 32.74, 12.33); the ledge's north piece floors
-    // 28.2-31.3 at z 10..22 [D census]].
-    w.walk_nav_to([-23.8, 31.0, 14.0], "the notch north edge", 1.2);
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        eprintln!("[05w] the notch edge: tick {} bond {:?} ctx {:#x}", w.total_ticks, p, sim.bond.icon_ctx);
-        assert!(p[2] > 9.0 && p[2] < 17.0 && p[1] > 28.0 && p[1] < 34.0,
-            "Bond stands at the notch's north edge (icon #310 spot), got {p:?}");
-    }
-    // The grab: the JUMP press in the ctx-3 zone [M Player_HandleJump 0x1916b0:126-147].
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.yaw = (-23.49 - sim.bond.pos[0]).atan2(6.26 - sim.bond.pos[2]);
-        sim.bond.vel = [0.0; 3];
-    }
-    let mut grabbed = false;
-    for t in 0..60u32 {
-        let input = Input { jump: t == 5, ..Default::default() };
-        w.tick(input, false);
-        if w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_WIRE
-            || w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_ZIPLINE {
-            grabbed = true;
-            break;
-        }
-    }
-    assert!(grabbed, "the jump press at the notch edge must grab the wire [M Player_HandleJump 0x1916b0:126-147]");
-    eprintln!("[05w] the wire grabbed at tick {}", w.total_ticks);
-    // The hand-over-hand ride south across the notch [M Player_Wire 0x197658; the travel
-    // segment z 2.72..9.8 0x1976f8-0x197724].
-    let grab_tick = w.total_ticks;
-    let mut rode = false;
-    for _ in 0..1200u32 {
-        let input = Input { forward: 1.0, ..Default::default() };
-        w.tick(input, false);
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.bond.substate != nf_game::player::SS_WIRE && sim.bond.substate != nf_game::player::SS_ZIPLINE
-            && w.total_ticks - grab_tick > 10 {
-            rode = true;
-            break;
-        }
-        if w.total_ticks % 100 == 0 {
-            eprintln!("[05w ride] bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate);
-        }
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05w] after the ride: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
-        assert!(rode, "the ride must run and end (the cable's far side)");
-        let p = sim.bond.pos;
-        assert!(p[2] < 8.0 && p[1] > 24.0,
-            "the crossing must land Bond south of the notch on the cable ledge (z −11..4, floors 30-31.4 [D census]), got {p:?}");
-    }
-    eprintln!("[05w] the west lane and the cable done in {} ticks; falls {:?}", w.total_ticks, w.report.falls);
-    for f in &w.report.falls { eprintln!("[05w] fall: {f}"); }
-    for st in &w.report.stuck_events { eprintln!("[05w] stuck: {st}"); }
+    eprintln!("[05c] the crawl legs done at tick {}", w.total_ticks);
 }
 
 /// Sister: the notch is a real obstacle and the grab needs its zone. From the notch's north
@@ -368,9 +332,10 @@ fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
     // the notch's south edge only).
     for (name, at) in [
         ("courtyard west", [52.0f32, 26.0, 96.0]),
-        ("the lane north end", [44.0, 28.0, 90.0]),
-        ("the lane shelf west", [40.0, 28.0, 92.5]),
-        ("the lane bend", [34.0, 30.0, 92.0]),
+        ("the strip west", [42.0, 28.0, 94.5]),
+        ("the strip, lane approach", [35.0, 28.0, 94.0]),
+        ("the strip-lane junction", [34.0, 29.0, 92.0]),
+        ("the lane head", [30.0, 30.0, 90.0]),
         ("the lane, wall south 1", [30.0, 31.0, 88.0]),
         ("the lane, wall south 2", [29.0, 32.6, 82.0]),
         ("the lane, tower north", [29.5, 33.7, 75.0]),
