@@ -24,8 +24,14 @@
 //! Port deviations (documented, none tested as game behaviour):
 //! - the pieces' draw presentation (matrices, models, look) is the renderer's work; the sim
 //!   exposes the piece lists (`Shatter`) the draw layer reads (break-debris.md).
-//! - the 41% sound variant needs the game's `Rand_Rand` draw-order context; the port keeps the
-//!   deterministic 0x5F3 arm and does not consume the shared RNG (`// [S] unverified`).
+//! - the kill's position in the shared RNG stream: the game draws the roll inside
+//!   `Break_Update`'s control-walk slot — the frame AFTER the bullet's flight registered the
+//!   contact (the game's contact comes from `Collide_Update` 0x1ea398, the last step of
+//!   `control_movement_object_handler` 0x1336f8 [M]; `Break_Update` consumes it in the NEXT
+//!   frame's walk). The port compresses the two frames into its bullet pass, so the roll (and
+//!   the debris draws) land one AI-frame earlier in the port's stream than the game's — the
+//!   same standing compression every bullet-impact consumer already carries. Within the kill
+//!   the order is the game's: roll, then the pieces' draws.
 //! - the filter word's weapon-bit layout is not evidenced (all 55 placements on 07000001 carry
 //!   param 2 = 0 [D]); the port applies the mask as an exclude filter only when non-zero.
 
@@ -42,8 +48,8 @@ pub struct BreakEffect {
     pub placement: usize,
     /// The kill position (the bounds centre — the port's stand-in for obj+0x80).
     pub pos: V3,
-    /// tag+0x00: 2 = glass (shatter + sound 0x2E), other = debris (sound 0x5F3; the 41% 0x5F2
-    /// variant is `// [S] unverified` — see the module header).
+    /// tag+0x00: 2 = glass (shatter + sound 0x2E), other = debris (0x5F2 on
+    /// `Rand_Rand(100) < 0x29`, else 0x5F3 [M 0x12b970:65-76]).
     pub kind: u8,
     pub sound: u16,
 }
@@ -284,6 +290,18 @@ impl Breaks {
         if br.src.records.is_empty() { return None; }
         let trans = [br.matrix[3][0], br.matrix[3][1], br.matrix[3][2]];
         let centre = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
+        // Break_Kill's sound, in the game's order: kind 2 plays 0x2E with NO draw; every other
+        // kind draws `Rand_Rand(100)` — < 0x29 (41) → 0x5F2, else 0x5F3 — after the records
+        // gate, BEFORE the shatter/debris draws [M 0x12b970:59-76: the `*piVar14 != 2` branch
+        // draws at 0x12b9b4, both sound arms play at 0x12b9f0/0x12ba40, the pieces come at
+        // 0x12ba48+; the debris/shatter draws are 0x1aaa00/0x12b270's, inside the loop].
+        let sound = if br.kind == 2 {
+            0x2E
+        } else if rng.rand(100) < 0x29 {
+            0x5F2
+        } else {
+            0x5F3
+        };
         let (hit, normal, mat) = Self::contact(&br.src.records, a, b, trans, centre);
         // Break_Kill defaults the hit material's low 6 bits to 0x10 when zero — the debris
         // table's breakable row [M 0x12b970:137-138 `if ((hitdata+0x50 & 0x3f) == 0) = 0x10`].
@@ -293,7 +311,7 @@ impl Breaks {
         } else {
             self.shatter.spawn_debris(&br.src.records, trans, mat, rng);
         }
-        Some(Self::effect(&self.list[i]))
+        Some(Self::effect(&self.list[i], sound))
     }
 
     /// The kill contact: the closest record the segment crosses (Möller–Trumbore, local space —
@@ -343,9 +361,8 @@ impl Breaks {
         }
     }
 
-    fn effect(br: &Break) -> BreakEffect {
+    fn effect(br: &Break, sound: u16) -> BreakEffect {
         let pos = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
-        let sound = if br.kind == 2 { 0x2E } else { 0x5F3 };
         BreakEffect { placement: br.placement, pos, kind: br.kind, sound }
     }
 }
@@ -379,27 +396,49 @@ mod tests {
     }
 
     #[test]
-    fn the_first_bullet_kills_a_zero_health_vase_with_the_debris_sound() {
+    fn the_first_bullet_kills_a_zero_health_vase_with_the_debris_roll() {
         // The 07000001 vases carry params [(2,0)] only — kind 0, health 0.0 [D placements dump].
         let mut b = one(0, 0.0);
         let mut rng = Rng::new(1);
+        let draws0 = rng.draws;
         let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
         assert!(b.list[0].dead, "health 0 - damage < 0 → Break_Kill [M 0x12bfd8:44-50]");
         assert_eq!(kills.len(), 1);
-        assert_eq!(kills[0].sound, 0x5F3, "non-glass → 0x5F3 (the 41% 0x5F2 variant is unported, [S])");
         assert_eq!(kills[0].kind, 0);
+        // The kill's FIRST draw is the sound roll: Rand_Rand(100) < 0x29 → 0x5F2, else 0x5F3
+        // [M 0x12b970:65-76 — the roll at 0x12b9b4 sits in the `*piVar14 != 2` branch, after
+        // the records gate, before both Sound_Play3D arms and Debris_Create_Loop].
+        let mut probe = Rng::new(1);
+        let want = if probe.rand(100) < 0x29 { 0x5F2 } else { 0x5F3 };
+        assert_eq!(kills[0].sound, want, "the kill rolled Rand_Rand(100) < 0x29 → 0x5f2 else 0x5f3 [M 0x12b970:65-76]");
         // The kill spawned the game's debris: one record → one piece, EffectInfo[0x10].
         assert_eq!(b.shatter.debris.len(), 1, "Debris_Create_Loop: one object per stride-3 record [M 0x1ed548]");
         assert_eq!(b.shatter.debris[0].model, EFFECT_INFO[0x10].model, "EffectInfo[hitdata+0x50 & 0x3f = 0x10] [M 0x12b970:137-141]");
+        // The kill's draw stream is the game's, bit-exact: the roll, then Debris_Create's eight
+        // per-record draws — FRand(0.1), Rand_Rand(half_life), FRandHalf(spread)×3,
+        // FRandHalf_Vec(spin)×3 [M 0x1aaa00:30-50].
+        let info = &EFFECT_INFO[0x10];
+        let half_life = (info.life_base >> 1) as u32;
+        let _ = probe.frand(0.1);
+        let _ = probe.rand(half_life);
+        for _ in 0..3 { let _ = probe.frand_half(info.spread); }
+        for _ in 0..3 { let _ = probe.frand_half(info.spin); }
+        assert_eq!((rng.x, rng.y), (probe.x, probe.y),
+            "the kill's stream is the roll then the debris draws, bit-exact [M 0x12b970:65-76 + 0x1aaa00:30-50]");
+        assert_eq!(rng.draws - draws0, 9, "one roll draw + eight debris draws [M 0x12b970:66 + 0x1aaa00:30-50]");
     }
 
     #[test]
-    fn glass_shatters_with_sound_0x2e_and_the_sister_vase_survives_a_miss() {
+    fn glass_shatters_with_sound_0x2e_and_consumes_no_roll_draw() {
         // radioroom_glass/comroom_glass carry params [(0,2),(1,0),(2,0)] — kind 2 [D placements].
         let mut b = one(2, 0.0);
         let mut rng = Rng::new(1);
+        let draws0 = rng.draws;
         let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
         assert_eq!(kills[0].sound, 0x2E, "glass → sound 0x2E [M 0x12b970: uVar5 = 0x2e]");
+        // The roll lives inside the `*piVar14 != 2` branch — a glass kill consumes NO draw
+        // (the shatter's draws come per real triangle; this source has none) [M 0x12b970:59-66].
+        assert_eq!(rng.draws - draws0, 0, "kind 2 → no roll, no debris draws [M 0x12b970:59-66]");
         // Sister: a shot wide of the box never touches the health and spawns nothing.
         let mut b = one(2, 0.0);
         let mut rng = Rng::new(1);
@@ -495,7 +534,7 @@ mod tests {
             assert!(d.spin[k] >= -info.spin / 2.0 && d.spin[k] < info.spin / 2.0,
                 "spin[{}] in ±spin/2 (Rand_FRandHalf_Vec [M 0x1dfef0])", k);
         }
-        assert_eq!(rng.draws - draws_before, 8, "eight shared draws per debris object [M 0x1aaa00:30-50]");
+        assert_eq!(rng.draws - draws_before, 9, "the sound roll + eight shared draws per debris object [M 0x12b970:66 the roll precedes the debris loop + 0x1aaa00:30-50]");
         // The centre: avg(local verts) + the object position [M 0x1ed548:126-131] — the ray hit
         // at (5, 8, −2.5) is not the piece centre; the piece centre is the record triangle's
         // average (5.0, 7.833…, −2.5).
