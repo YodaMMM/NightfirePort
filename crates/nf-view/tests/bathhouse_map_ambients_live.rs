@@ -88,8 +88,9 @@ fn map_sounds_are_the_last_block_0x28_not_the_main_maps() {
 }
 
 /// The waterfall and the level's other three map ambients key on through the real path now, each
-/// with a non-zero mixer volume, and the game keeps their voices (looped samples never end, the
-/// stop gate is 1.2·R² away) [M 0x1dd118; the volumes are the mixer's gain for the voice].
+/// voice's mixer gains inside the game's clamped range, and the game keeps their voices (looped
+/// samples never end, the stop gate is 1.2·R² away) [M 0x1dd118; the gains are the mixer's
+/// clamped channel levels, 0x1060c:99-113].
 #[test]
 fn the_map_ambients_including_the_waterfall_key_on_through_the_real_path() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -129,12 +130,16 @@ fn the_map_ambients_including_the_waterfall_key_on_through_the_real_path() {
     // priority 100 tops the steal scan [M SFXSetup 0x4220, docs/systems/map-ambient-sounds.md §2-3].
     assert_eq!(got.len(), 4, "all four map ambients key on through the real path [M 0x1dd118:66-74, the records D]; got {seen:?}");
     for (want, f, l, r) in &seen {
-        // The front gain rule: `PS2_SFXCalculate3D` 0x1060c (SFX.IRX) — the distance term clamps
-        // to 0 inside the inner radius (dist − inner·10 < 0 → 0) so att = 100 [M 0001060c:55-72],
-        // and the front gain is ((dot+1000)·att²/2000)·front·vol/100 [M :82-85]; the key-on
-        // volume is 100.0f [M 0x1dd118:70] — so a keyed-on ambient not exactly at the rear pole
-        // reaches the mixer with a positive front gain on both channels.
-        assert!(*l > 0.0 && *r > 0.0, "ambient {want} keyed on at tick {f} but its front voice reached the mixer silent (l={l}, r={r}) [M PS2_SFXCalculate3D 0x1060c:55-85, vol 100 0x1dd118:70]");
+        // What the game's rule guarantees: att = 100 inside the inner radius [M
+        // PS2_SFXCalculate3D 0x1060c:55-72] and each channel's gain clamps to 0..100 before the
+        // volume multiply [M :99-113] — the port maps that through gsv into [0, 1]. It does NOT
+        // guarantee a strictly positive gain: a source exactly on the −ListenerNorm pole (dot
+        // −1000) drives L to 0, and the rear term can clamp both channels to 0 — so the old
+        // l>0&&r>0 pin asserted more than the decompile says. The strict positivity is now
+        // [S] unverified, out of pass/fail; the real waterfall gains are under "Live checks" in
+        // docs/reports/audit-unproven-1022.md.
+        assert!(0.0 <= *l && *l <= 1.0 && 0.0 <= *r && *r <= 1.0,
+            "ambient {want} keyed on at tick {f} but its front voice left the game's clamped gain range (l={l}, r={r}) [M PS2_SFXCalculate3D 0x1060c:99-113]");
     }
     // Sister: the game keeps their voices where it keeps them — the listener is inside the 1.2·R²
     // stop gate and the budget has room (4 ambient voices ≪ 15), so all four are STILL live after

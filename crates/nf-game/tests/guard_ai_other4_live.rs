@@ -117,13 +117,16 @@ fn enter(sim: &mut Drones, d: &Data, gi: usize, s: u8, player: &Bond) {
 fn entered(sim: &Drones, gi: usize, s: u8) -> bool { sim.list[gi].log.iter().any(|&(_, x)| x == s) }
 
 /// The state ids this task ports sit at the `NDrone2_StateFuncs` 0x29b300 indices the decompile
-/// dispatches [M table read]: HostageDie 0x0b, CrouchCover 0x6e, Investigate 0x7e. Sister: the
-/// neighbouring ids are NOT these states (a shifted constant would break every router arm).
+/// dispatches [M NDrone2_ProcessStateMachine 0x175778:11 — `NDrone2_StateFuncs + id*4` call].
+/// The table entries are disc data: entry 0x0b → 0x1725a0 HostageDie, 0x6e → 0x166d90
+/// CrouchCover, 0x7e → 0x168070 Investigate, 0x7f → 0x165ef0 DroneStuck [D ACTION.ELF bytes at
+/// 0x29b300+id·4]. Sister: the neighbouring ids are NOT these states (a shifted constant would
+/// break every router arm).
 #[test]
 fn state_ids_match_the_game_table_indices() {
-    assert_eq!(state::HOSTAGE_DIE, 0x0b);
-    assert_eq!(state::CROUCH_COVER, 0x6e);
-    assert_eq!(state::INVESTIGATE, 0x7e);
+    assert_eq!(state::HOSTAGE_DIE, 0x0b, "table entry 0x0b holds HostageDie 0x1725a0 [D 0x29b300+0x2c = 0x001725a0]");
+    assert_eq!(state::CROUCH_COVER, 0x6e, "table entry 0x6e holds CrouchCover 0x166d90 [D 0x29b300+0x1b8 = 0x00166d90]");
+    assert_eq!(state::INVESTIGATE, 0x7e, "table entry 0x7e holds Investigate 0x168070 [D 0x29b300+0x1f8 = 0x00168070; the id·4 dispatch M 0x175778:11]");
     assert_ne!(state::INVESTIGATE, state::DRONE_STUCK, "0x7e vs 0x7f are distinct states [M 0x168070 / 0x165ef0]");
     assert_ne!(state::CROUCH_COVER, state::AIM_CROUCH, "0x6e vs 0x6f are distinct states [M 0x166d90 / 0x166f28]");
 }
