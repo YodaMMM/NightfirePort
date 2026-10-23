@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-10-23T16:51Z
+
+---
+## Report (done, 2026-10-23T18:29Z)
+
+Closed by the driver: the report is on `s/enemy-mission-kind8` (docs/reports/enemy-mission-kind8.md); the worker didn't run finish.sh.
