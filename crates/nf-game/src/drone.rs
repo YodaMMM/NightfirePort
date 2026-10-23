@@ -15572,6 +15572,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             Some(bodies) => { self.update_pickups_net(d, &bodies, frame); self.net_bodies = Some(bodies); }
             None => self.update_pickups(d, player, frame),
         } }
+        // `Destroy_Update` 0x12c4f8's second arm (30-35): a live destroyable whose +0x10 word
+        // (placement param 1 [M 0x12c318:36]) names an ON channel smashes, the word clears. 07000008's
+        // GuardRoom SmallExplosionBox #234 carries +0x10 = 137 — the FUSEBOX_GuardRoomDoorLock's
+        // channel [D the census] — so the fusebox cut smashes it (996-level-08-decomp-audit; the
+        // "out ch 137" reading in docs/levels/07000008.md had the direction reversed). The blast
+        // rides the same queue the bullet-path smash uses (Destroy_Smash 0x12bb60's Explode_Create,
+        // the damage = param 5 × 0.01 [M 0x12c424]).
+        for (pos, radius, damage, kind) in self.props.channel_kills(&self.channels) {
+            let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
+            self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius));
+        }
         // The actor list `Door_Update`'s proximity test (`dist² < (r1+r2)²·2` over classes
         // 2/3/0x12, skipping `obj+0xF0 & 0x10` candidates [M 0x136678-0x136684]) sees: the player
         // first (`glb_players`, the activator of every auto-activation) with radius 0.4, then every

@@ -93,6 +93,13 @@ fn the_facility_chain_runs_to_the_delta_sector_exit() {
     // which survives `Collide_FilterBullets`'s 0xfffd [L weapon_data; M 0x1ece30]) cut them and
     // `FuseBox_Update` writes the channels [M 0x1adfe8]. `Player_Activate` 0x1a5170 has no
     // class-0x3C arm — E does nothing [M 0x1a5170:95-160].
+    // 996-audit note: the room's DESTROY_BoxSatellite boxes listen on the wire-group channels
+    // (p1 = 0x71/0xd8/0xe1… [D the census]) and `Destroy_Update` 0x12c4f8's second arm smashes
+    // them when it rises — with real blasts (p5·0.01 = 1…10 damage [M 0x12c424; Control_SetGList
+    // 0x134960:11 pins obj+0xD8 = the glist POINTER, so the arm's cel compare is always-open
+    // [M]]). The game's player eats those blasts; the harness re-tops the walker's health per
+    // wire (the Walker::top_up_health law — `drones.health.health = 100.0`) so the pin stays
+    // about the cut, not the accumulated splash.
     for want in [0x87u32, 0x88] {
         let (fb, wires) = {
             let sim = scene.sim.as_ref().unwrap();
@@ -108,6 +115,7 @@ fn the_facility_chain_runs_to_the_delta_sector_exit() {
             {   // settle near the box (floor pre-screened — never over a void), close inside the
                 // Laser's 4.0 range [L weapon_data 0x4E +0x1C], draw, aim through the wire, burn.
                 let sim = scene.sim.as_mut().unwrap();
+                sim.drones.health.health = 100.0; // the Walker::top_up_health law (the satellite-box splash, the 996 note)
                 let bp = sim.drones.fuseboxes[fb].pos;
                 let cands = [[0.6f32, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6]];
                 let mut stood = false;
