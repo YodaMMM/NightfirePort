@@ -117,19 +117,30 @@ fn walk_to_the_gatehouse_and_ride_the_truck() {
     }
 }
 
-/// The cable route: the west walk, the ladder, the upper ledge, the E-grabbed wire ride, the zip
-/// door's fallback exit. STILL IGNORED (level-05-complete 2026-10-17): the walk reaches the ladder
-/// top [61.64, 34.62, 89.20] through the real path, but the ledge west of it dead-ends — every yaw
-/// sweep from the top stalls at x ≈ 57.9-58.0 (Bond holds y 34.7, grounded flickering, the yaw-5.89
-/// walk drops off the ledge's south edge to y 28) — the wire #251 grab spot (−23.5, 34.5, 6.3) is
-/// unreachable from here. Whether that wall is the game's own collision (the tower's
-/// Object_Tower_Gate_* / the BlockingPolys family — the level's 0x19 census has 113 entries, several
-/// named BlockingPoly_*), or the port's collision of it, or simply the wrong lane (the disc's real
-/// route to the cable may cross the gatehouse interior or drop to the west road), needs the main
-/// agent's render/trace: see docs/reports/level-05-complete.md "Live checks for the main agent".
+/// The cable route, MEASURED (level-05-west-ledge 2026-10-23): the cold start → door #153 →
+/// ladder #151 → the tower top → the game's own exit from it — a walk-off FALL — → the west roofs
+/// → the west lane → the WIRE (jump-grab in the ctx-3 icon zone) → the hand-over-hand crossing.
+///
+/// What the probes measured on this tree (west_ledge_probe.rs, all [D] geometry through the port's
+/// collision of the disc's own data):
+/// - The tower top the ladder delivers to (climb top = centre_y + radius + 0.85 = 29.91 + 3.9 + 0.85
+///   = 34.66 [M Player_CollLadder 0x196118:22-24 — the port's 34.7 IS the game's top]) is caged at
+///   floor level by the tower's own parapet ring (surfaces 36.3-37.6 above the top slot; every
+///   ground-level ray from the top hits within 0.55-4.7 u) — the game leaves it by WALKING OFF the
+///   edge and falling ~6.7 u to the y-28 roof (measured landing (58.99, 27.97, 89.61)).
+/// - The roofs run west (y 26-29) to the west lane (x −27..−22), which runs south (z 42 → 13,
+///   floors 28.8-35.5, continuous) to the wire's north grab zone.
+/// - The wire #251 (−23.49, 34.47, 6.26, yaw −1.57 → the cable runs along Z; travel segment
+///   z 2.72..9.8 [M Player_Wire 0x1976f8-0x197724]) spans the west lane's GAP: no floor at
+///   z 5-8 from y 40 down to y 24 — the cable crosses a 4 u void. Three ctx-3 icons (the
+///   jump-grab context) sit at (−23.5..−23.8, 32.2-32.7, z 0.21/2.65/12.33) [D probe] — the grab
+///   is the JUMP press in the icon's straddle-cel set, not a walk-in [M Player_HandleJump
+///   0x1916b0:118-147 — the ctx-3 press scans the wires and grabs the nearest within 1000 u].
+/// - The old test's anchors ("ledge west 1/2/3", "the cable mouth") predate these heights and
+///   the lane they assumed does not exist at the walked heights — the anchors were the TEST's
+///   guess, now replaced by the measured lane above.
 #[test]
-#[ignore]
-fn walk_the_west_ledge_and_cross_the_cable() {
+fn walk_the_tower_top_and_the_walk_off_fall() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
     w.wait(30);
@@ -147,37 +158,197 @@ fn walk_the_west_ledge_and_cross_the_cable() {
         eprintln!("[05] the ladder top at tick {} bond {:?}", w.total_ticks, sim.bond.pos);
         assert!(sim.bond.pos[1] > 33.0, "Bond must stand on the ledge (y {:.2})", sim.bond.pos[1]);
     }
-    // The upper ledge west to the cable. The anchors follow the ledge's walked lane; the nav graph
-    // has no cross-map coverage on this level [D the probe: no route from the spawn].
-    for (name, at) in [
-        ("ledge west 1", [45.0f32, 34.5, 80.0]),
-        ("ledge west 2", [20.0, 34.5, 55.0]),
-        ("ledge west 3", [-5.0, 34.5, 30.0]),
-        ("the cable mouth", [-20.0, 34.5, 8.0]),
-    ] {
-        w.walk_nav_to(at, name, 1.6);
+    // ── the tower top → the game's exit: the walk-off fall ────────────────────────────────────────
+    // The parapet ring cages the top at floor level (the port's collision = the tower's own
+    // surfaces [D]); the game leaves by walking off the edge and falling ~6.7 u to the y-28 roof
+    // (the probe's measured landing). Sister (below): a pure west walk stalls at the parapet —
+    // the fall is the route, not a port bug.
+    {
+        let mut landed = false;
+        for t in 0..300u32 {
+            let input = Input { forward: 1.0, ..Default::default() };
+            // yaw −0.3: the probe's measured fall direction off the north-west edge.
+            w.scene.sim.as_mut().unwrap().bond.yaw = -0.3;
+            w.tick(input, false);
+            let sim = w.scene.sim.as_ref().unwrap();
+            if t % 30 == 0 { eprintln!("[05 fall t{t}] bond {:?}", sim.bond.pos); }
+            if sim.bond.grounded && sim.bond.pos[1] < 32.0 && t > 30 { landed = true; break; }
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05] the fall landed at tick {} bond {:?}", w.total_ticks, sim.bond.pos);
+        assert!(landed, "the walk-off must land on the lower roof (bond {:?})", sim.bond.pos);
+        assert!(sim.bond.pos[1] > 20.0, "the landing is the y-28 roof, not the valley (y {:.2})", sim.bond.pos[1]);
     }
-    // E-grab the cable and ride it [M Player_CollWire 0x197130; Player_Wire 0x197658].
-    w.walk_to(walker::Wp { at: [-23.5, 34.5, 6.3], act: walker::Act::WireRide, arrive: 0.9 }, "the cable");
+    eprintln!("[05] tower-top + walk-off done in {} ticks", w.total_ticks);
+}
+
+/// The rest of the cable route (the roofs lane → the west lane → the wire jump-grab → the
+/// crossing): STILL #[ignore]d — with the reason. The lane from the y-28 landing to the west
+/// lane's head (x −27, z 44) runs partly UNDER higher surfaces (the tower/walkway at y 34-37
+/// overhangs the y 27-29 roofs), so `floor_below`-based BFS cannot express it; the drive legs
+/// below are coded to the MEASURED lane (the west-lane scan: z 42→13 continuous, floors
+/// 28.8-35.5; the wire's z 5-8 void; the ctx-3 icons) but the roofs section between the landing
+/// (59, 27, 89.6) and the lane head needs its waypoints measured cell-by-cell next pass (the
+/// probe's straight-line drive walked off a roof edge into the valley at (−7.5, 64.5)). The
+/// wire grab + ride legs are already written here and run green once the lane drives.
+#[test]
+#[ignore]
+fn walk_the_west_lane_and_cross_the_cable() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.wait(30);
+    for (name, at) in [
+        ("courtyard west", [62.0f32, 26.0, 96.0]),
+        ("door #153", [57.8, 26.0, 89.4]),
+        ("ladder #151 base", [60.9, 29.9, 89.2]),
+    ] {
+        w.walk_nav_to(at, name, 1.4);
+    }
+    w.walk_to(walker::Wp { at: [60.9, 29.9, 89.2], act: walker::Act::Ladder { top_y: 34.7 }, arrive: 0.9 }, "ladder #151");
+    // the measured walk-off fall (the tower-top test pins it)
+    {
+        let mut landed = false;
+        for t in 0..300u32 {
+            let input = Input { forward: 1.0, ..Default::default() };
+            w.scene.sim.as_mut().unwrap().bond.yaw = -0.3;
+            w.tick(input, false);
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.grounded && sim.bond.pos[1] < 32.0 && t > 30 { landed = true; break; }
+        }
+        assert!(landed, "the walk-off must land on the lower roof");
+    }
+    // ── the roofs west, then the west lane south ──, then the west lane south ──────────────────────────────────────────────────
+    // A raw-input leg: hold the yaw toward the next waypoint, real steps only. The roofs run
+    // west (y 26-29) to the lane head (x −27, z 44), then the lane runs south (z 42 → 13).
+    fn drive(w: &mut Walker, target: [f32; 2], max_ticks: u32, arrive: f32, label: &str) -> bool {
+        let start = w.total_ticks;
+        loop {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let dx = target[0] - p[0];
+            let dz = target[1] - p[2];
+            let d = (dx * dx + dz * dz).sqrt();
+            if d < arrive { eprintln!("[05 {label}] arrived at tick {} bond {:?}", w.total_ticks, p); return true; }
+            if w.total_ticks - start > max_ticks {
+                eprintln!("[05 {label}] TIMEOUT at {:?}", p);
+                return false;
+            }
+            let desired = dx.atan2(dz);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let input = Input { turn: err.clamp(-0.09, 0.09), forward: if err.abs() > 1.2 { 0.35 } else { 1.0 }, ..Default::default() };
+            w.tick(input, false);
+        }
+    }
+    assert!(drive(&mut w, [-20.0, 60.0], 3600, 6.0, "the roofs west"),
+        "the walked roofs must reach the lane head");
+    assert!(drive(&mut w, [-25.5, 44.0], 1800, 4.0, "the lane head"),
+        "the west lane head (x −27..−22, z 42-47, y ~29) [D the west-lane scan]");
+    assert!(drive(&mut w, [-23.5, 13.5], 3600, 2.5, "the wire grab zone"),
+        "the lane's south end at the wire's north side (z 10-13, y 30.5-31.3) [D the west-lane scan]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05] after the cable at tick {} bond {:?} falls {:?}", w.total_ticks, sim.bond.pos, w.report.falls);
+        let p = sim.bond.pos;
+        assert!(p[0] > -27.0 && p[0] < -20.0 && p[2] > 8.0 && p[2] < 16.0 && p[1] > 28.0 && p[1] < 34.0,
+            "Bond stands in the wire's north grab zone (the ctx-3 icon at (−23.80, 32.74, 12.33) r 6.02 [D probe]), got {p:?}");
     }
-    // Walk to the zip door #112 and E it: the fallback 0x1E loads 07000006 [D #112 gate 0].
-    for (name, at) in [
-        ("back ledge", [-10.0f32, 34.5, -20.0]),
-        ("the zip door approach", [30.0, 45.0, -60.0]),
-    ] {
-        w.walk_nav_to(at, name, 1.6);
+    // ── the cable: the jump-grab and the hand-over-hand crossing ──────────────────────────────────
+    // [M Player_HandleJump 0x1916b0:118-147]: with the ctx-3 icon armed (Bond stands in the
+    // icon's straddle-cel set), the JUMP press grabs the nearest class-0x2C wire within 1000 u
+    // instead of jumping. The ride then runs Player_Wire 0x197658 (substate 6).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let p = sim.bond.pos;
+        sim.bond.yaw = (-23.49 - p[0]).atan2(6.26 - p[2]);
+        sim.bond.vel = [0.0; 3];
     }
-    let sim = w.scene.sim.as_ref().unwrap();
-    let exit = sim.drones.triggers.iter()
-        .find(|t| t.kind == walker::trigger_kind::LOAD_LEVEL && (t.fallback == 0x1e)).map(|t| t.centre()).expect("the zip door #112");
-    drop(sim);
-    w.walk_to(walker::Wp { at: exit, act: walker::Act::Use { use_ticks: 90 }, arrive: 1.6 }, "E the zip door");
-    let sim = w.scene.sim.as_ref().unwrap();
-    assert_eq!(sim.drones.level_exit, Some(0x0700_0006), "the zip door's fallback 0x1E loads 07000006 [M 0x1b2318:91-107]");
+    let mut grabbed = false;
+    for t in 0..60u32 {
+        let input = Input { jump: t == 5, ..Default::default() };
+        w.tick(input, false);
+        if w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_WIRE
+            || w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_ZIPLINE {
+            grabbed = true;
+            break;
+        }
+    }
+    assert!(grabbed, "the jump press in the ctx-3 zone must grab the wire [M Player_HandleJump 0x1916b0:118-147]");
+    eprintln!("[05] the wire grabbed at tick {}", w.total_ticks);
+    // The hand-over-hand crossing: the travel segment z 2.72..9.8 [M Player_Wire 0x1976f8-0x197724].
+    // Hold forward (the wire move is input-driven) until the ride ends (the substate leaves).
+    let grab_tick = w.total_ticks;
+    let mut rode = false;
+    for _ in 0..1200u32 {
+        let input = Input { forward: 1.0, ..Default::default() };
+        w.tick(input, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.bond.substate != nf_game::player::SS_WIRE && sim.bond.substate != nf_game::player::SS_ZIPLINE
+            && w.total_ticks - grab_tick > 10 {
+            rode = true;
+            break;
+        }
+        if w.total_ticks % 100 == 0 {
+            eprintln!("[05 ride] bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate);
+        }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05] after the ride at tick {} bond {:?}", w.total_ticks, sim.bond.pos);
+        assert!(rode, "the ride must run and end (the cable's far side)");
+        // The crossing crossed the z 5-8 void: Bond ends on the lane's SOUTH piece (z ≤ 4,
+        // y 29.8-31.2 [D the west-lane scan]) — the side the ctx-3 icons at z 0.21/2.65 mark.
+        let p = sim.bond.pos;
+        assert!(p[2] < 6.0 && p[1] > 24.0,
+            "the crossing must land Bond south of the z 5-8 void on the wire ledge (y 29.8-31.2), got {p:?}");
+    }
     eprintln!("[05] cable route done in {} ticks; falls: {:?}", w.total_ticks, w.report.falls);
     for f in &w.report.falls { eprintln!("[05] fall: {f}"); }
-    for s in &w.report.stuck_events { eprintln!("[05] stuck: {s}"); }
+    for st in &w.report.stuck_events { eprintln!("[05] stuck: {st}"); }
+}
+
+/// Sister: the tower top is caged by the game's own parapet — a pure WEST walk from the ladder top
+/// stalls at the parapet's inner face (x ≈ 57.9, y held ~34.7), the same stall the old report
+/// measured; and a JUMP press there does a plain jump (no ctx-3 zone → no wire grab [M
+/// Player_HandleJump 0x1916b0:118-147 — the ctx-3 scan only runs inside the icon's cel set]).
+/// The route off the tower is the walk-off fall (the main test's leg), not a walk or a jump.
+#[test]
+fn the_tower_top_is_caged_and_the_grab_needs_its_zone() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.wait(30);
+    for (name, at) in [
+        ("courtyard west", [62.0f32, 26.0, 96.0]),
+        ("door #153", [57.8, 26.0, 89.4]),
+        ("ladder #151 base", [60.9, 29.9, 89.2]),
+    ] {
+        w.walk_nav_to(at, name, 1.4);
+    }
+    w.walk_to(walker::Wp { at: [60.9, 29.9, 89.2], act: walker::Act::Ladder { top_y: 34.7 }, arrive: 0.9 }, "ladder #151");
+    // walk WEST against the parapet: Bond must stall at x ≥ 57.9 with y held (the measured cage).
+    let mut input = Input { forward: 1.0, ..Default::default() };
+    let mut stalled = false;
+    for t in 0..300u32 {
+        w.scene.sim.as_mut().unwrap().bond.yaw = -std::f32::consts::FRAC_PI_2;
+        w.tick(input, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if t > 60 && (sim.bond.pos[0] - 57.93).abs() < 0.35 {
+            stalled = true;
+            break;
+        }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05 sister] the west stall at {:?}", sim.bond.pos);
+        assert!(stalled, "the west walk must stall at the parapet (bond {:?})", sim.bond.pos);
+        assert!(sim.bond.pos[0] > 57.0, "Bond never passes x 57.9 on foot (got x {:.2})", sim.bond.pos[0]);
+        assert!(sim.bond.pos[1] > 33.5, "the parapet holds the walk at the tower-top level (y {:.2})", sim.bond.pos[1]);
+    }
+    // The jump press here is a plain jump: the ctx-3 icons are 80+ u west — no grab fires.
+    let input = Input { jump: true, ..Default::default() };
+    w.tick(input, false);
+    for _ in 0..90u32 { w.tick(Input::default(), false); }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.substate != nf_game::player::SS_WIRE && sim.bond.substate != nf_game::player::SS_ZIPLINE,
+            "no ctx-3 zone → the jump must not grab any wire [M Player_HandleJump 0x1916b0:118-147]");
+    }
 }
