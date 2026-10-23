@@ -192,3 +192,18 @@ Plan:
 2. Wall triangles at x 4.43, z -8..0: owning object + flags; capsule admission per [M].
 3. Shaft mouths at z ±8.82; SP#141/#142 entry route.
 4. Un-ignore walk + interactables with sisters; run the touched crates; full suite.py.
+- (22:15-22:30) branch start merged (master's drake-fight versions taken for the conflicted
+  shared files, drake-2's probe1b_float superset kept); the background suite runner dies at
+  every tool-call boundary in this sandbox (also documented by the previous round) — suite
+  chunks must run in the foreground.
+- (22:30-23:00) probe1b_wall [D dump]: the x 4.43 wall = plc #128 OBJECT_Boundary_1 (kind 0x8019,
+  mat 0x40, two east-facing tris, y −16.56..+16.74 z −20.4..20.4); the z ±8.82 mouths = iris-door
+  booths (SP#141/#142 ScriptPlayer_IrisDoorOpen at (5.23,9.45,∓8.82), glass mat 0x40 at x 5.91).
+  DECISION [M]: the boundary stops the game's body (the 0x40 drop is the bit-0x8 bullet queries
+  only, Collide_Intersect 0x1ebff0-0x1ec010; CylGeom 0x109da0 has no side rejection; ZeroG
+  0x192ab0 adds no bypass) — the port's capsule stop is the game's.
+- (23:00-23:30) walkreal pins: the_boundary_wall_stops_the_float_and_passes_bullets (green) and
+  the_iris_doors_are_load_time_loopers (green): the doors are load-time loopers [M 0x1db9a8 tail +
+  0x1dbc08:46-48], the missile-channel rise restarts nothing [M 0x1dbda8 case 6's other-slot
+  guard] — the earlier "doors open on the missile channels" reading is refuted and the 0x18/0x1c
+  writes are per-loop CLEARS [D streams 12/13].
