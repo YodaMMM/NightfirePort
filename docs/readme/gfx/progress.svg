@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="640" viewBox="0 0 880 640" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
-  <title>NightfirePort status as of 2026-10-16</title>
+  <title>Nightfire Rust status as of 2026-10-22</title>
   <!-- self-contained card so it reads on both GitHub themes -->
   <rect x="0.5" y="0.5" width="879" height="639" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 
-  <text x="24" y="38" font-size="18" font-weight="600" fill="#1f2328">NightfirePort — status at a glance</text>
-  <text x="856" y="38" font-size="12" fill="#656d76" text-anchor="end">as of 2026-10-16</text>
+  <text x="24" y="38" font-size="18" font-weight="600" fill="#1f2328">Nightfire Rust — status at a glance</text>
+  <text x="856" y="38" font-size="12" fill="#656d76" text-anchor="end">as of 2026-10-22 (coverage bars: 2026-10-16)</text>
 
   <!-- ===== Decompile coverage ===== -->
   <text x="24" y="76" font-size="13" font-weight="600" fill="#1f2328">Decompile coverage: functions of each PS2 program cited in the Rust crates or docs</text>
@@ -66,12 +66,12 @@
     <g font-size="11.5" fill="#1f2328">
       <text x="14" y="54">27 archives on the disc; all 27 load and</text>
       <text x="14" y="70">run 1,800 headless ticks without a panic.</text>
-      <text x="14" y="92">Headless walkthroughs complete the story</text>
-      <text x="14" y="108">levels, with 2 documented stand-ins.</text>
+      <text x="14" y="92">Headless walkthroughs reach every story</text>
+      <text x="14" y="108">level's exit; 7 real-input walks still stop.</text>
       <text x="14" y="130">Menus, briefing, level, outro and results</text>
       <text x="14" y="146">run end to end.</text>
-      <text x="14" y="168" fill="#656d76">Still unported per level: some placement</text>
-      <text x="14" y="184" fill="#656d76">creators (rigid bodies, cars, particles, weather).</text>
+      <text x="14" y="168" fill="#656d76">Open items per level: docs/GAPS.md and</text>
+      <text x="14" y="184" fill="#656d76">each level page in docs/levels/.</text>
     </g>
   </g>
 
@@ -83,13 +83,13 @@
     <text x="206" y="26" font-size="11" font-weight="600" fill="#1f2328" text-anchor="middle">not playable</text>
     <g font-size="11.5" fill="#1f2328">
       <text x="14" y="54">5 of the 12 campaign rows are driving.</text>
-      <text x="14" y="70">The menu shows a notice and skips them.</text>
-      <text x="14" y="92">Merged as model code only: vehicle</text>
-      <text x="14" y="108">physics, road network, AI traffic, HUD</text>
+      <text x="14" y="70">Picking one shows a notice and unlocks.</text>
+      <text x="14" y="92">Model code only: vehicle physics, road</text>
+      <text x="14" y="108">network, AI traffic, input mapping, HUD</text>
       <text x="14" y="124">data, mission scripts.</text>
       <text x="14" y="146">DRIVING.ELF is a second, stripped engine;</text>
       <text x="14" y="162">3.1 % of its functions are cited.</text>
-      <text x="14" y="184" fill="#656d76">8-phase plan; input mapping designed only.</text>
+      <text x="14" y="184" fill="#656d76">Phased plan in docs/atlas/driving.md.</text>
     </g>
   </g>
 
@@ -100,15 +100,15 @@
     <rect x="150" y="12" width="104" height="20" rx="10" fill="#2f6fcf"/>
     <text x="202" y="26" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">local + online</text>
     <g font-size="11.5" fill="#1f2328">
-      <text x="14" y="54">Local Quick Game to arena, end to end.</text>
-      <text x="14" y="70">Online host / join over UDP lockstep,</text>
-      <text x="14" y="86">direct IP:port, no relay.</text>
+      <text x="14" y="54">Local matches with bots, one screen.</text>
+      <text x="14" y="70">Online: UDP lockstep, up to 16 incl. bots;</text>
+      <text x="14" y="86">join by code, public list or IP:port.</text>
       <text x="14" y="108">8 on-foot arenas parse; 13 modes mapped.</text>
-      <text x="14" y="130" fill="#656d76">Bots: data and state merged, not wired</text>
-      <text x="14" y="146" fill="#656d76">into the sim yet (mp-bots feature).</text>
-      <text x="14" y="168" fill="#656d76">Split screen: planned, not implemented.</text>
+      <text x="14" y="130" fill="#656d76">Online play is the port's addition: the</text>
+      <text x="14" y="146" fill="#656d76">PS2 game was four-pad couch play.</text>
+      <text x="14" y="168" fill="#656d76">Split screen: not implemented.</text>
     </g>
   </g>
 
-  <text x="24" y="616" font-size="11.5" fill="#656d76">Test suite on master: 2,055 passed, 0 failed, 74 ignored. Decompile counts are from the Ghidra index and a grep of 1,300 source and doc files.</text>
+  <text x="24" y="616" font-size="11.5" fill="#656d76">Test suite on master (2026-10-22): 3,190 passed, 0 failed, 147 ignored. Decompile counts are from the Ghidra index and a grep of 1,300 source and doc files.</text>
 </svg>
