@@ -2,7 +2,7 @@
 
 `crates/nf-view/tests/interact_07000009_live.rs::shooting_the_lobby_roof_glass_breaks_it` is `#[ignore]`: since the bullet filter `filter | 0x106` [M 0x12bfd8:15 + 0x1ece30:24-33] landed, the test's fire harness cannot land a gun round on pane #123. Find whether the game's round reaches that pane from where the player can stand (the pane's filter param, the weapon word, the route of the shot) and fix the harness or the port accordingly.
 
-The previous attempt's findings are in the test's own `#[ignore = "..."]` message on master — read it first; it names the blocker exactly. Real input only (`step_bond`: movement/aim/fire/use; no teleports past the blocker, no channel or state pokes, no debug or cheat paths). Port what the game does at the blocker from the decompile [M] / the disc [D]. If a live number is needed, say exactly which address the main agent should read in PCSX2 on a fresh boot, and stop there rather than guess. Un-ignore the test when it passes, with a sister that can fail.
+The previous attempt's findings are in the test's own `#[ignore = "..."]` message on master — read it first; it names the blocker exactly. Real input only (`step_bond`: movement/aim/fire/use; no teleports past the blocker, no channel or state pokes, no debug or cheat paths). Port what the game does at the blocker from the decompile [M] / the disc [D]. If a live number is needed, say exactly which address to read in PCSX2 on a fresh boot, and stop there rather than guess. Un-ignore the test when it passes, with a sister that can fail.
 
 **Tests pin only proven behaviour.** Every assertion about what the game does cites its evidence: [M] a decompile
 address that actually says it, [D] disc bytes, or [L] a live PCSX2 measurement from a FRESH boot (a save-state resume

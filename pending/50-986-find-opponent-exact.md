@@ -1,6 +1,6 @@
 ## Your task: `find-opponent-exact`, NDrone2_FindOpponent's team-2 scan: the exact alive filter and the per-frame LOS budget
 
-ally-heard-noise-attack (task 957, merged in batch 1022ab) ported the team-2 opponent pick (`Drones::team2_opponent_picks` in drone.rs) with two approximations:
+The port has the team-2 opponent pick (`Drones::team2_opponent_picks` in drone.rs) with two approximations:
 
 - **The alive filter.** The game's candidate test is the +0xE0 record's +0x4F8 flags (0x600 clear, 0x100 set), health +0xAC > 0, class +0xFF != 0x11, and the +0xFE & 1 death bit [M 0x1424e0:210-226, and the held-opponent re-check :157-166]. The port uses present && enabled && !corpse. Port the exact test.
 - **The LOS budget.** The scan stops on `uVar1 < DAT_00299092` [M 0x1424e0:259-262], a per-frame CanSeeObject counter shared by all drones. The port uses one LOS per drone per tick. Find what DAT_00299092 is, where it is reset and incremented (CanSeeObject 0x?), and port the shared budget.
