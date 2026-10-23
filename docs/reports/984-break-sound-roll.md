@@ -65,19 +65,20 @@ changed except `crates/nf-game/src/breakable.rs` (`Breaks::kill`).
   and were corrected with the addresses: the lib debris-launch test 8 → 9, and
   `break_debris_live`'s twin-vase pin 8n → 1+8n [M 0x12b970:66].
 - Run: `nf-game` lib 522/0; break_debris_live 2/2, breakables_live 2/2, glass_breach_live 1/1,
-  interact_07000001_live 10/10, escort_follow_07000001_live 1/1, walkreal_07000001_live 3/3.
+  interact_07000001_live 10/10, escort_follow_07000001_live 1/1, walkreal_07000001_live 3/3,
+  rocket_glass08_live 3/3, fix_missing_objects_live 3/3.
 
 ## Suite result
 
-`tools/test/suite.py` was started on the final tree at 17:22 UTC (build-verify then all 730
-binaries, `--test-threads=1`). The sandbox window closes ~18:12 UTC and the full pass needs
-~70 min, so the total line is not reached in this window. Baseline (same sandbox, master
-tree, 16:21-16:57 UTC): 4 FAILED disc/identity tests (the slim-ISO golden misses, the task's
-documented exception) + 5 OOM CRASHes (mp_stress_explosives_live, mp_bots_moving_live,
-net_match_end_clients_live, walkreal_probe13, mp_online_failures — the box's 4 GB kills the
-2.9 GB MP tests; environmental, present on master too). The roll-tree run's progress and its
-FAILED/TIMEOUT lines are in `suite.out` (not committed); the covered portion matched the
-baseline's classes when this report was written.
+`tools/test/suite.py` was started on the final tree at 17:22 UTC (build-verify 737 s, then
+all 730 binaries, `--test-threads=1`). The sandbox window closes ~18:12 UTC and a full pass
+needs ~70 min, so the total line is not reached in this window — the next message reads
+`tail suite.out` / `~/suite.log` for the FAILED/TIMEOUT lines and the run's final count.
+Baseline (same sandbox, master tree, 16:21-16:57 UTC): 4 FAILED disc/identity tests (the
+slim-ISO golden misses, the task's documented exception) + 5 OOM CRASHes
+(mp_stress_explosives_live, mp_bots_moving_live, net_match_end_clients_live,
+walkreal_probe13, mp_online_failures — the box's 4 GB kills the 2.9 GB MP tests;
+environmental, present on master too).
 
 ## What's left
 

@@ -49,3 +49,26 @@ Work log (continued):
   "Bond in the level-01 class-2 contact pass" + the intact-pane set_dynamic injection (its own
   revert note says the injection stalled walkreal), so the stall blame lands on those, not the
   roll draw.
+- (17:30) The report at docs/reports/984-break-sound-roll.md: the census, the roll at the
+  game's in-kill position, the 959 stall re-attribution (the roll alone does not stall the
+  escort — the 959 branch's class-2-contact + injection changes do), the SEED_X/SEED_Y live
+  check (0x30d0a0/0x30d0a4). The final-tree suite (tools/test/suite.py) started 17:22 UTC —
+  build-verify 737 s; the window closes before the total line, the next message reads the tail.
+- (17:35) rocket_glass08_live 3/3, fix_missing_objects_live 3/3 — the 959 guard set green on
+  the roll tree.
+
+Stage summary:
+- `Break_Kill`'s sound roll is ported at the game's in-kill draw position: kind 2 → 0x2E with
+  no draw, other kinds draw `Rand_Rand(100) < 0x29 → 0x5F2 else 0x5F3` before the pieces'
+  draws [M 0x12b970:59-76]. The deterministic-0x5F3 [S] deviation is gone. The kill-frame
+  census: contact frame N (`Collide_Update` 0x1ea398), kill frame N+1 (`Break_Update`
+  0x12bfd8 = class-0x20 update [L ee_start_05.bin@0x26f890+0x20·12]); between the hit and the
+  kill: Env_Update's per-frame `Rand_Rand(20000)`, other bullets' `FRand(0.5)` each, the
+  drones' AI rolls; inside the kill: roll → (Drone_BrokenObject: 0 draws) → 8 per-record
+  debris draws / the shatter's glass draws. Port placement: the roll rides the established
+  bullet-pass compression (one AI-frame earlier than the game's stream position, like the
+  already-shipped debris draws) — documented in the module header.
+- Tests: the roll outcome pinned seeded+bit-exact (probe stream), kind 2 pinned 0 draws, two
+  contradicting draw-count pins fixed with addresses (8 → 9, 8n → 1+8n). Canary set green:
+  nf-game lib 522/0, escort_follow 1/1, walkreal 3/3, breakables 2/2, glass_breach 1/1,
+  interact01 10/10, break_debris 2/2, rocket_glass08 3/3, fix_missing 3/3.
