@@ -454,6 +454,102 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     for f in &w.report.falls { eprintln!("[0a] fall: {f}"); }
 }
 
+/// level-0a-office-hatch-3: the game's own spawn height vs the port's. The game stands Bond at
+/// build_PointOnFloor's down-ray + 1.1 [M Player_StandAtNewPosition 0x190d88 disasm 0x190ee0-
+/// 0x190f18: `build_FindCel` from pos + 0.1f, then the ray (0,−1,0)·3.0 through
+/// `Collide_RayIntersect` [M build_PointOnFloor 0x1c95a8 disasm 0x1c95b0-0x1c9644], then
+/// `y += 1.1f` (0x3f8ccccd)]. The fresh-boot snapshot reads the game's root at 1.0891 [L
+/// ee_start_0700000a.bin 0x18694e0: (−3.9319, 1.0891, 10.3978)] ⇒ the game's spawn ray found the
+/// floor at −0.0109 under the cab interior. The port's `Bond::stand_at` (player.rs:506) runs the
+/// same +1.1 rule over `world.floor_below` — but the port's floor under the cab interior reads
+/// 0.0000 [D port world: Room-M_lifts obj458's tris cover the cab interior at y≈0; no −0.0109
+/// surface exists in the port's static or dynamic sets at the spawn], so the port spawns at
+/// 1.1000 — 0.0109 high, the exact offset that later separates the hall glides (the game settles
+/// 1.1147 after the x≈−8 doorway base climb; the port glides its 1.1000 spawn height; the 0.0256
+/// climb minus the 0.0109 spawn = the measured 0.0147 gap). This test pins the game's number and
+/// stays ignored until the port's spawn ray sees what the game's cel-scoped ray sees.
+#[test]
+#[ignore = "the port spawns at 1.1000 (its floor_below reads 0.0000 under the cab interior) while the game's snapshot reads 1.0891 [L ee_start_0700000a.bin 0x18694e0] = −0.0109 + 1.1 [M 0x190d88:0x190ee0-0x190f18] — the port's world lacks the −0.0109 surface the game's cel-scoped spawn ray finds (the cab's own floor/shaft piece); un-ignore when stand_at's floor matches"]
+fn the_spawn_height_matches_the_game_snapshot() {
+    let mut w = load_carry(None);
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!((p[0] + 3.9319).abs() < 0.01 && (p[2] - 10.3978).abs() < 0.01, "the start #0 xz [D placement map37 plc 0]");
+    // The game's root at t0 [L ee_start_0700000a.bin 0x18694e0] = 1.0891 within half a cm.
+    assert!((p[1] - 1.0891).abs() <= 0.005,
+        "the spawn root must read the game's 1.0891 [L] (= the spawn floor −0.0109 + 1.1 [M 0x190d88]), got {p:?}");
+}
+
+/// level-0a-office-hatch-3: the west-hall glide height. The game walks out of the cab at its spawn
+/// height 1.0891 [L], brushes the 0.1622-tall wall base at x −8.304 (z 14.3..16.3 [D port world tris,
+/// the same geometry the port's world carries]), climbs (peak 1.18 [L driver, fresh boot]) and
+/// settles to a steady 1.1147 along the west hall to (−11.39, 16.29) [L driver]. The port's real-path
+/// walk holds its spawn height 1.1000 flat the whole way (scratch probe: no y change > 0.004 from
+/// the cab mouth to (−10.79, 16.26)) — its glide clears the base without touching it. 1.1147 − 1.1000
+/// = 0.0147 = the 0.0256 climb settle minus the 0.0109 spawn gap, which closes the ledger.
+#[test]
+#[ignore = "the port's hall glide reads its spawn height 1.1000; the game holds 1.1147 [L driver, fresh boot] after the doorway base climb — needs the spawn floor fix (the_spawn_height_matches_the_game_snapshot) plus the port's walk to take the same doorway line"]
+fn the_west_hall_glide_height_matches_the_game() {
+    let mut w = load_carry(None);
+    // Wait out the SS door sweep (the same guard the main walk runs).
+    for _ in 0..150 {
+        let done = w.scene.sim.as_ref().unwrap().drones.sss.list.iter()
+            .filter(|s| s.placement == 524 || s.placement == 525)
+            .all(|s| s.state == 0 || s.state == 0x40);
+        if done { break; }
+        w.wait(5);
+    }
+    w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
+    w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
+    w.walk_to(Wp::new(-10.0, 0.4, 16.0).r(0.8), "the west hall");
+    // Read the glide y in the hall's steady window (x −9.5..−11.39 on the walked line).
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(p[0] < -9.0, "walked into the west hall, at {p:?}");
+    // The game's steady hall glide [L driver, fresh boot]: 1.1147 within 0.003.
+    assert!((p[1] - 1.1147).abs() <= 0.003,
+        "the west hall glide must read the game's 1.1147 [L], got {:.4} at ({:.3},{:.3})",
+        p[1], p[0], p[2]);
+}
+
+/// level-0a-office-hatch-3: the corner crossing. The game, placed at (−17.87, 4.87) fresh-boot and
+/// holding forward toward (−17.5, 2.5), walks straight through to (−17.78, 1.120, 2.92) in about 25
+/// frames, y 1.127 then 1.120 — no dither, no wedge [L driver, fresh boot]. The port's same leg
+/// wedges: its y dithers across the band edge 1.1347 (the -2 session's 1.1336↔1.2019; this
+/// session's repro 1.1297 → 1.1957 at (−17.87, 4.87)) because the below-B edge lifts (+0.0165/tick
+/// [L the -2 per-tick probe]) unhooks the band at its entry height.
+#[test]
+#[ignore = "the port wedges at the corner (y dithers 1.13↔1.20 across the band edge 1.1347); the game walks through at y 1.127→1.120 [L driver] — needs the hall glide at the game's 1.1147 (0.02 under the edge) and the corner push landing re-derived (the -2 report's open item: Player_CollisionHandler 0x1949a8:136-140)"]
+fn the_corner_crosses_like_the_game() {
+    let mut w = load_carry(None);
+    for _ in 0..150 {
+        let done = w.scene.sim.as_ref().unwrap().drones.sss.list.iter()
+            .filter(|s| s.placement == 524 || s.placement == 525)
+            .all(|s| s.state == 0 || s.state == 0x40);
+        if done { break; }
+        w.wait(5);
+    }
+    // Walk the proven west legs to the wedge corner (the ring's own anchors).
+    for (to, label) in [
+        ([-3.9, 0.0, 13.2], "out of the lift"),
+        ([-3.9, 0.0, 15.5], "lobby south"),
+        ([-10.0, 0.4, 16.0], "the west hall"),
+        ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
+        ([-20.5, 1.3, 5.5], "ring: down the west office block"),
+        ([-17.6, 1.3, 5.5], "ring: the ai node 17 east of the door"),
+    ] {
+        w.walk_to(Wp::new(to[0], to[1], to[2]).r(0.8), label);
+    }
+    // The wedge point, then the game's own hold-forward line to (−17.5, 2.5).
+    w.walk_to(Wp::new(-17.87, 1.3, 4.87).r(0.4), "the wedge corner");
+    let start_ticks = w.total_ticks;
+    let arrived = w.try_walk_to(Wp::new(-17.5, 1.3, 2.5).r(0.35), "the game's corner line");
+    assert!(arrived, "the game walks the corner in ~25 frames [L driver]; the port wedged at {:?}",
+        w.scene.sim.as_ref().unwrap().bond.pos);
+    assert!(w.total_ticks - start_ticks <= 300, "the crossing must be walk-speed, took {} ticks", w.total_ticks - start_ticks);
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    // The game's exit y 1.120 within 0.01 [L driver] (still settling toward the hall glide).
+    assert!((p[1] - 1.120).abs() <= 0.01, "the corner exit y must read the game's 1.120 [L], got {:.4}", p[1]);
+}
+
 /// The task's repro (collision-0a-west-doorway-floor): walk the ring's west legs one by one and
 /// watch where Bond actually loses the floor — the real-path answer to the static probes.
 #[test]
