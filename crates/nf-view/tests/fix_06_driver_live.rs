@@ -176,6 +176,10 @@ fn the_scared_cower_keeps_him_in_place_on_the_floor() {
 
     // Armed Bond 4 units ahead in his facing cone: NearArmedBond(6.0) fails on prop 0x51 (normal block) —
     // he stays idle [M 0x160ed0 case 3, 0x178678:10-13; D the placement block].
+    // The subject is the driver's own reaction to armed Bond, so the other drones leave the scene:
+    // the 06 guards walk their prop-0x1D mission routes [M 0x15e1e8] and can reach the truck and
+    // engage Bond, and the driver's reaction to that fight is a different subject.
+    for (i, o) in sim.drones.list.iter_mut().enumerate() { if i != di { o.present = false; o.enabled = false; } }
     let dyaw = sim.drones.list[di].yaw;
     stand_armed_at(sim, [before[0] + dyaw.sin() * 4.0, before[1], before[2] + dyaw.cos() * 4.0], before);
     tick_idle(sim, 180);

@@ -75,6 +75,10 @@ fn the_truck_driver_reaches_his_idle_state_and_never_twists() {
     // 0x51 [M 0x160ed0 case 3, 0x178678:10-13]; his live block is the placement's normal block, which lacks 0x51
     // [D drone-props 07000006 (66.1, 39.2, 28.9); M 0x14c600:61-70] — so he stays idle (review 2026-10-21: this
     // test used to expect the scare the port had invented). The subject stands: no torso twist, grounded.
+    // The subject is the driver's own reaction to armed Bond, so the other drones leave the scene:
+    // the 06 guards walk their prop-0x1D mission routes [M 0x15e1e8] and can reach the truck and
+    // engage Bond, and the driver's reaction to that fight is a different subject.
+    for (i, o) in sim.drones.list.iter_mut().enumerate() { if i != di { o.present = false; o.enabled = false; } }
     let dp = sim.drones.list[di].pos;
     let dy = sim.drones.list[di].yaw;
     stand_armed_at(sim, [dp[0] + dy.sin() * 4.0, dp[1], dp[2] + dy.cos() * 4.0], dp);
