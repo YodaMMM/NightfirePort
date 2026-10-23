@@ -8082,12 +8082,31 @@ impl Drone {
             }
             // UPDATE (case 3): no armed person near → BondTalk and hold the wait (the game's BondTalk
             // 0x1446b0 is unported like the other civilian talk — fix-drone4's note); an armed person
-            // → the own-sighting flag, then the voice-0x10 team switch + Attack 0x56 (with +0x44 = 1)
-            // or CivilianScared 0x12. The prop-0x33 armed-intruder alert chain (0x15dbb0:45-62) is
-            // unmodelled, matching the sibling CivilianMission UPDATE [M 0x1787c8 dead arg].
+            // → the own-sighting flag, the prop-0x33 armed-intruder shout ONCE (0x982), then the
+            // voice-0x10 team switch + Attack 0x56 (with +0x44 = 1) or CivilianScared 0x12.
             (CIVILIAN_MISSION_WAIT, msg::UPDATE) => {
                 if !self.near_armed_person(d) { return true; } // [M 0x15dbb0:39-44 — BondTalk + stay]
-                self.sighted = true; // +0x4F8 |= 0x8000000 [M 0x15dbb0:45]
+                self.own_sight = true; // +0x4F8 |= 0x8000000, the OWN-sighting bit [M 0x15dbb0:45; the +0x4F8 field split — drone.rs +0x4F8 doc]
+                // The prop-0x33 armed-intruder alert, once per drone life: `+0x4FC |= 1`, then
+                // `NDrone2_DroneAlertToObject(dc, 0x11, NDrone2_Player(), 20.0, 20.0, 0.76)` — the
+                // float order is the disasm's [M 0x15dd3c call site: a0=dcv, a1=0x11, a2=Player,
+                // f12/f13=0x41a00000, f14=0x3f428f5c], and `+0x4F8 |= 0x200000` the once-only latch
+                // [M 0x15dbb0:46-58]. The game delivers msg 0x11 (the alert type IS the broadcast
+                // message) with the alert record whose position is the OBJECT's — the player's —
+                // +0x30 [M 0x14a538 callee prologue + :18-21 body], and points the shared alert
+                // target at it [M 0x155d48:6-11]; the receivers run `DroneVision_EnemyAlerts` case
+                // 0x11: the +0x5a0/+0x5b0/+0x5c0 bookkeeping then the prop-0x28 gate →
+                // `DroneVision_ShoutFromOtherDrone` (returns 0 in this shipped build — no state
+                // switch from the shout itself) [M 0x177c18:24-48]. The port's existing alert path
+                // (the PartyGirl/DoorGuard/Patrol shout, `pending_shout` → the consume pass
+                // broadcasting msg::SHOUT within 20 of the source pos) is exactly that delivery;
+                // its receiver half is the pre-dispatch SHOUT arm (prop 0x28 → guard
+                // `enemy_alerts`, civilian → CivilianScared).
+                if self.prop(d, 0x33) && !self.scare_shouted {
+                    self.alert_bits |= 1; // `+0x4FC |= 1` [M 0x15dbb0:54]
+                    self.pending_shout = Some((msg::SHOUT, self.target.pos)); // the alert source is BOND [M 0x14a538:18-21]
+                    self.scare_shouted = true; // `+0x4F8 |= 0x200000` — the once-only latch [M 0x15dbb0:53-58]
+                }
                 if self.voice_type == 0x10 { self.team = 1; self.set_state(ATTACK); } // +0x44 = 1 [M 0x15dbb0:63-67]
                 else { self.set_state(CIVILIAN_SCARED); }
                 true
