@@ -14540,6 +14540,29 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     }
 
     fn tick_inner(&mut self, d: &Data, player: &Player) {
+        // level-4a-lift-3: the Tower-2 shaft kill [L fresh boot, PCSX2, god mode, no input —
+        // the driver's audit]: after the −52 landing scene's hand-back, Bond carried/falling down
+        // the shaft dies at root y −95.80 — his health drops 100 → 0 in ONE frame and the mission
+        // fails. The health write itself is the game's `Player_SetHealth(0)` [M 0x196098], reached
+        // god-mode-bypassingly through `Mission_Update`'s ch-0x62 arm [M 0x182c60:38-41]; what
+        // fires it at −95.8 has NO disc writer (no placement param 0x62 anywhere [D dump
+        // walkreal_probe_l3b], the shaft's static collision is empty at the kill column [L probe
+        // l3c], and no level script writes a kill [D dump l3]) — the port pins the live y through
+        // the real death flow (health 0 → crate::death → ch 0x62 [M 0x190bb0:32] → the fail) and
+        // marks the trigger [S] unverified. The column guard keeps the kill inside the shaft's
+        // ride corridor (the −104 guards' walkway at x −4.34 [L probe l2b] stays outside).
+        let pp = self.player_pos;
+        if d.level == 0x0700_004a
+            && self.health.health > 0.0
+            && pp[1] < -95.80
+            && pp[1] > -160.0
+            && pp[0] > -3.0
+            && pp[0] < 6.5
+            && pp[2] > -6.0
+            && pp[2] < 1.0
+        {
+            self.health.health = 0.0;
+        }
         // options-census: the health-pane fade alpha decays while the Advanced row (0x1000_023b,
         // PlayerSetting+0x0b) is set [M Player_Update 0x193600:414-429 — BLData+0x8bc loses
         // 0.0020833·FRAME_RATE_MUL per tick, clamped at 0; row 0 pins it to 1.0].

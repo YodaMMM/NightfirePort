@@ -987,7 +987,18 @@ impl Script {
                     p = self.streams[p as usize].parent;
                     n += 1;
                 }
-                m = mul(&m, &self.matrix);
+                // level-4a-lift-3: the HASH-0 marker class (obj_type 0x19, `Script_EntityStart`
+                // hash 00000000 [D 0780004a.bin 0x060006cf s25 — the event-6 handback source])
+                // takes NO script-base compose: the fresh-boot live hand-back lands Bond at the
+                // marker key's RAW x/z (1.7994, −3.4534) [L PCSX2 god-mode no-input audit — the
+                // composed z would be −6.830, the live z is −3.4534 = the key's own]. The old
+                // "compose everything" reading (the landing-matrix round) is FIXED here: the
+                // render-verified base cases (07000014's fusebox wire, 07000008's safe) all carry
+                // real hashes; the discriminator the live data pins is the no-object marker class.
+                // (`Script_Interp`'s case-1 GetInterp base flag [M 0x1d9a7c-0x1d9a98] composed for
+                // both — the game's marker path must skip it; the port models the class.)
+                let base_applies = !matches!(objs.list.get(o), Some(Some(Obj::Entity { hash, .. })) if *hash == 0);
+                if base_applies { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
             4 => {

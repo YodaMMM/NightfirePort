@@ -1,7 +1,16 @@
 //! fix-landing-matrix: the 0700004a −52 landing cut-scene's event-6 handback matrix, resolved.
 //!
-//! The parked walkreal_0700004a note called the marker evidence "contradictory" (base-relative NIS
-//! keys vs the raw placement). THE RESOLUTION (this task):
+//! level-4a-lift-3 REVISION (2026-10-23): the FRESH-BOOT live audit [L PCSX2, god mode, no input]
+//! settled the compose question the disasm left open — the hand-back lands Bond at the marker
+//! key's RAW x/z (1.7994, −3.4534) [L: the live re-attach pos equals key 1409's x/z exactly; the
+//! composed z would be −6.830]. The disasm chain below is real [M 0x1d9ab4/0x1d9c10 + 0x1da158],
+//! but the game's marker path skips the base: the port now skips the compose for the HASH-0
+//! marker class (nis.rs case 1, [L]-pinned), and this test asserts the RAW key through the real
+//! path. The earlier "the snapshot carries the base" assertion contradicted the live measurement
+//! and was fixed (the test was wrong, not the code — the live y −55.09 is the key y −54.128 a
+//! few ticks into the post-enable fall).
+//!
+//! The pre-live reading, kept for the record:
 //! - **[M disasm 0x1d9ab4 + 0x1d9c10]** `Script_Interp`'s `Script_GetInterp` calls pass the 10th
 //!   (base-concat) argument = `(stream parent == -1)` — `nor $v1, $zero, $v1; sltiu $v1, $v1, 1;
 //!   sw $v1, ($sp)` — the SCRIPT BASE composes INSIDE the interp for UNPARENTED streams, and at
@@ -41,7 +50,7 @@ const BASE: [f32; 3] = [0.0, -53.53418, -3.37652];
 const KEY: [f32; 3] = [1.799, -54.128, -3.453];
 
 #[test]
-fn the_landing_handback_matrix_is_the_base_composed_marker() {
+fn the_landing_handback_matrix_is_the_raw_marker_key() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "0700004a.bin", false).expect("load 0700004a");
     // The [D] decode pins: the marker stream is unparented and its key is the disc's own.
@@ -103,7 +112,14 @@ fn the_landing_handback_matrix_is_the_base_composed_marker() {
         }
     }
     let p = landed.expect("the enable places Bond at the handback matrix right after the scene's end (t2187)");
-    // Sister: the composition is NOT the raw key (the raw-key reading would place the handback
-    // on the parked platform — the pre-blockers2 reading the marker contradiction came from).
-    assert!((p[1] - KEY[1]).abs() > 1.0, "the snapshot carries the base ({:.3} ≠ the raw {:.3})", p[1], KEY[1]);
+    // level-4a-lift-3: the hand-back = the RAW marker key [L fresh boot — the live re-attach
+    // x/z equals key 1409's x/z (1.7994, −3.4534); the composed spot (1.799, −107.662, −6.830)
+    // is refuted]. The enable applies the marker's matrix verbatim [M 0x195498:60-63]; the
+    // marker's matrix is the raw key (the hash-0 class skips the base compose, nis.rs case 1).
+    // The y tolerance covers one tick of the post-enable fall (the live's −55.09 sample was
+    // ~26 ticks in; the enable itself is the key y −54.128).
+    assert!((p[0] - KEY[0]).abs() < 0.1 && (p[2] - KEY[2]).abs() < 0.1,
+        "the hand-back x/z = the marker key's RAW x/z [L], got {p:?}");
+    assert!((p[1] - KEY[1]).abs() < 0.5, "the hand-back y = the marker key's y within the first-fall ticks [L], got {p:?}");
+    assert!((p[1] - (KEY[1] + BASE[1])).abs() > 1.0, "the composed spot (y {:.3}) is NOT the hand-back [L refutes it]", KEY[1] + BASE[1]);
 }
