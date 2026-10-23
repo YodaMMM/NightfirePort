@@ -273,27 +273,104 @@ fn the_mine_explodes_when_bond_walks_into_its_beam() {
         "the blast carries the disc's radius 10 / damage 80 [D p1/p0]");
 }
 
-/// The ladder: the east ladder #382-52 (84.53, 31.73, −2.29 [D]) takes the real climb hold —
-/// Bond's walk into it engages the climb substate and he rises [M Player_CollLadder].
+/// The ladder: the east ladder #382-52 (84.53, 31.73, −2.29 [D]) is DEAD in the game's own pick
+/// admission — the grab cannot fire from ANY spot, and the port matches. The chain [M]:
+/// - `Ladder_Create` 0x1966c0 links the ladder only through `build_LinkToRoom` 0x1c9680 →
+///   `build_FindCel` 0x1c8cb0, whose candidate test is the room cel's entity-params bounds box
+///   (`parsemap_block_entity_params` 0x1d1508 fills the celglist slot's box from the entity
+///   params — slot+0x20 min / slot+0x30 max, the same records the port's MapObject.min/max
+///   parse; 0x1c8cb0:103-119 keeps cels whose box holds the point, 0 cels → miss).
+/// - The ladder's world-sphere centre (84.529, 31.733, −2.288 — MapObject.centre (0,0,0) through
+///   the placement [M Control_BuildWorldSph 0x133070]) sits inside NO room cel's box: the east
+///   room's box spans y 39.28..45.14 (the centre y 31.73 is 7.5 below its floor) and every shaft
+///   cel's box ends at x 81.87 (the ladder x 84.53) [D the 07000015 entity params]. FindCel
+///   misses → `build_LinkToRoom` 0x1c9680 links nothing and leaves obj+0x20 = 0
+///   [M control_create_object 0x1344e0 memsets it; the miss path adds no ForcedList entry].
+/// - `Controls_StraddleTest` 0x134778 [M disasm 0x1347b8-0x1347d0: a2 = `obj+0x20`, delay-slot
+///   `sw $a2, 0x80($sp)` — the BFS start] then runs from cel 0, so `Collide_StraddleCels`
+///   0x1eac98 returns just the start cel (count 1 < 2) and the ladder is NOT forced onto
+///   `Collide_Pick`'s ForcedList.
+/// - `Collide_Pick` 0x1eb320's candidates are the straddled cels' object chains (:125-134) plus
+///   the ForcedList (LAB_001eba38) — the ladder is in neither, so `Collide_PickObj` never runs
+///   for it, `Player_DealWithObjHit` 0x194458 never sees class 0x2D, and `Player_CollLadder`
+///   0x196118 never fires. Ladders #900 (84.53, 31.73, 69.07) and #901 (−13.34, 31.73, 73.33)
+///   miss FindCel the same way [D the same boxes] — no ladder on this level is grabbable.
+///
+/// The walk below is real input to the closest possible approach: across the east room's south
+/// ledge (its top strip y ≈ 40.5 spans z −2.13..−1.8 [D floor tris]) onto the south walkway
+/// (y ≈ 40.4, z −2.86..−2.13, x 82..90.7 [D]) and west INTO the ladder plane (x 84.529, the
+/// 2-tri z-degenerate mesh [D]). Bond's pre-push-out spot penetrates the plane's pick reach
+/// (the sister pins the mesh actually reaches), yet the climb never engages — the admission
+/// chain, not the geometry, is the blocker. The old assertion (the walk-in grabs [M
+/// Player_CollLadder]) contradicted this chain: the TEST was wrong, fixed here (round 2).
 #[test]
-#[ignore = "the route: the ladder's base is on the LOWER deck (y 23.8) at x 84.5 and the teleport drops Bond in the wall — needs the deck's spawn-side approach; the climb mechanic is family-proven (07000006/09); owner: the walker's deck route"]
-fn the_ladder_takes_the_climb() {
+fn the_dead_ladder_never_grabs_at_point_blank() {
     let mut w = load15();
-    w.scene.sim.as_mut().unwrap().bond.pos = [83.4, 23.9, -2.29];
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let world = &sim.world;
+        // The premise, per ladder [D entity params; M the box test 0x1c8cb0]: FindCel misses at
+        // every ladder's world-sphere centre, so the create-time link (the port resolves the
+        // same call at load, scene.rs `lad.cell = world.find_cel(lad.centre)`) leaves them all
+        // unlinked — the game's obj+0x20 = 0 state.
+        for (name, c) in [("#382", [84.529f32, 31.733, -2.288]), ("#900", [84.529, 31.733, 69.066]), ("#901", [-13.342, 31.733, 73.332])] {
+            assert_eq!(world.find_cel(c), None, "no room cel's entity-params box holds ladder {name}'s centre [D boxes; M 0x1c8cb0]");
+        }
+        assert!(sim.ladders.iter().all(|l| l.cell.is_none()),
+            "every ladder loads unlinked — the game's FindCel miss at create [M 0x1c9680]");
+    }
+    // Reach: the south walkway east of the ladder plane (the walkway is real floor — cel 123,
+    // y ≈ 40.35 [D floor tris] — but the room's south wall slides the walker east off the direct
+    // line, the same wall the round-1 probes reported; the teleport only REACHES the spot, the
+    // file's standing convention). The grab attempt itself is the real walk.
+    w.scene.sim.as_mut().unwrap().bond.pos = [85.2, 40.5, -2.4];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.substate != nf_game::player::SS_CLIMB, "sister: not climbing before the hold");
+        assert!(sim.bond.substate != nf_game::player::SS_CLIMB, "sister: not climbing before the approach");
     }
-    let mut climbing = false;
-    for _ in 0..200 {
+    // West into the ladder plane, facing WEST — the grab-favourable facing
+    // (|AngleDiff(−π/2, ladder yaw π/2)| = π > π/2 [M 0x196118:20]), so the angle gate would
+    // pass if the pick ever ran.
+    w.scene.sim.as_mut().unwrap().bond.yaw = -std::f32::consts::FRAC_PI_2;
+    {
         let sim = w.scene.sim.as_ref().unwrap();
-        if sim.bond.substate == nf_game::player::SS_CLIMB { climbing = true; break; }
-        let input = nf_game::player::Input { forward: 1.0, ..Default::default() };
-        w.tick(input, false);
+        assert!(sim.bond.pos[1] > 40.2 && sim.bond.pos[1] < 40.7,
+            "sister: Bond stands on the south walkway (y {:?}, the floor ≈ 40.35 [D floor tris])", sim.bond.pos[1]);
     }
-    assert!(climbing, "the walk into the ladder never engaged the climb [M Player_CollLadder]");
+    let mut climb_ticks = 0;
+    let mut min_x = f32::MAX;
+    for _ in 0..70 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.bond.substate == nf_game::player::SS_CLIMB { climb_ticks += 1; }
+        min_x = min_x.min(sim.bond.pre_collide[0]);
+        w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(climb_ticks == 0, "the walk into the ladder plane never engages the climb — the game's pick admission excludes it (unlinked + not forced [M 0x1c9680/0x134778/0x1eb320])");
+    assert!(min_x < 84.6, "the walk crossed the ladder plane's x 84.529 (min pre-push x {min_x}) — the plane is no movement wall [M the movement pass tests the cel world, Player_Collision 0x194df0] and Bond's capsule passed THROUGH the pick's reach, yet no climb: the admission chain, not the geometry, is the blocker");
+}
+
+/// Sister (can fail): the exclusion is the ADMISSION, not the geometry. At the point-blank stop
+/// the ladder's own pick WOULD hit — the default walk arm's capsule against the ladder's 0x2E
+/// triangles [M Collide_PickObj 0x1eae80 ×1.5 sphere + the mesh refine 0x109da0 strict < r, the
+/// port's `capsule_hits_default`] — so a change that relinks the ladders (bigger boxes, a
+/// ForcedList port) flips the main test too, and a change to the ladder's parsed mesh or the
+/// pick math fails here.
+#[test]
+fn sister_the_dead_ladder_mesh_reaches_the_point_blank_stander() {
+    let mut w = load15();
+    w.scene.sim.as_mut().unwrap().bond.pos = [85.08, 40.4, -2.4];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.scene.sim.as_mut().unwrap().bond.yaw = -std::f32::consts::FRAC_PI_2;
+    w.wait(10);
+    let sim = w.scene.sim.as_ref().unwrap();
+    let lad = &sim.ladders[0];
+    assert!((lad.centre[0] - 84.529).abs() < 0.01 && (lad.centre[1] - 31.733).abs() < 0.01,
+        "sister: ladder #382 is the east ladder at the probed spot [D placement]");
+    assert!(lad.capsule_hits_default(sim.bond.pre_collide, nf_game::player::RADIUS, sim.bond.cc),
+        "the walk arm's pick DOES reach the point-blank stander [D the 2-tri plane; M 0x1eae80/0x109da0] — the blocker is the admission chain, not the geometry");
 }
 
 /// Every placement's model resolves on this level — zero missing hashes/indices of the 968
